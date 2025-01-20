@@ -14,28 +14,23 @@ mod tests;
 /// meaning: having power-of-2 order).
 #[derive(Clone, Debug)]
 pub struct Radix2Coset<F: TwoAdicField> {
-    root_of_unity: F,
     generator: F,
     generator_inv: F,
     shift: F,
     log_size: usize,
 }
 
-impl<F: TwoAdicField> Iterator for Radix2Iterator<F> {
-    type Item = F;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let next = self.current;
-        self.current = self.current * self.generator;
-        Some(next)
-    }
+pub struct Radix2Iterator<F: TwoAdicField> {
+    current: F,
+    generator: F,
+    shift: F,
+    consumed: bool,
 }
 
 impl<F: TwoAdicField> Radix2Coset<F> {
     pub fn new(shift: F, log_size: usize) -> Self {
         let generator = F::two_adic_generator(log_size);
         Self {
-            root_of_unity: generator.clone(),
             generator,
             generator_inv: generator.inverse(),
             shift,
@@ -43,11 +38,22 @@ impl<F: TwoAdicField> Radix2Coset<F> {
         }
     }
 
+    pub fn generator(&self) -> F {
+        self.generator
+    }
+
+    pub fn shift(&self) -> F {
+        self.shift
+    }
+
+    pub fn generator_inv(&self) -> F {
+        self.generator_inv
+    }
+
     pub fn new_from_degree_and_rate(log_degree: usize, log_rate: usize) -> Self {
         let log_size = log_degree + log_rate;
         let generator = F::two_adic_generator(log_size);
         Self {
-            root_of_unity: generator.clone(),
             generator,
             generator_inv: generator.inverse(),
             shift: F::ONE,
@@ -66,9 +72,8 @@ impl<F: TwoAdicField> Radix2Coset<F> {
         Radix2Coset {
             generator,
             generator_inv: generator.inverse(),
-            log_size: self.log_size - log_scale_factor,
             shift: self.shift,
-            root_of_unity: self.root_of_unity,
+            log_size: self.log_size - log_scale_factor,
         }
     }
 
@@ -79,7 +84,6 @@ impl<F: TwoAdicField> Radix2Coset<F> {
         let generator = self.generator.exp_power_of_2(log_scale_factor);
         let shift = self.shift.exp_power_of_2(log_scale_factor);
         Radix2Coset {
-            root_of_unity: self.root_of_unity,
             generator,
             generator_inv: generator.inverse(),
             shift,
@@ -91,12 +95,6 @@ impl<F: TwoAdicField> Radix2Coset<F> {
     pub fn shift_by(&self, shift: F) -> Radix2Coset<F> {
         let mut shifted = self.clone();
         shifted.shift = self.shift * shift;
-        shifted
-    }
-
-    pub fn shift_by_root_of_unity(&self) -> Radix2Coset<F> {
-        let mut shifted = self.clone();
-        shifted.shift = self.shift * self.root_of_unity;
         shifted
     }
 
@@ -112,7 +110,7 @@ impl<F: TwoAdicField> Radix2Coset<F> {
         // Note that a subgroup of order n of the group of units of a field is
         // necessarily the group of n-th roots of unity. Therefore, testing for
         // belonging to that group can be done by raising to its order.
-        element.exp_power_of_2(self.log_size) == F::ONE
+        (self.shift.inverse() * element).exp_power_of_2(self.log_size) == F::ONE
     }
 
     pub fn evaluate_interpolation<Mat>(&self, coset_evals: &Mat, point: F) -> Vec<F>
@@ -148,21 +146,40 @@ impl<F: TwoAdicField> Radix2Coset<F> {
         Radix2Iterator {
             current: self.shift,
             generator: self.generator,
+            shift: self.shift,
+            consumed: false,
         }
     }
 }
 
 impl<F: TwoAdicField> PartialEq for Radix2Coset<F> {
     fn eq(&self, other: &Self) -> bool {
+        // The first equality assumes generators are chosen canonically. If not,
+        // simply assert self.generator has the same order as other.generator
+        // (this is enough by the cyclicity of the group of units)
         self.generator == other.generator && other.contains(self.shift)
     }
 }
 
 impl<F: TwoAdicField> Eq for Radix2Coset<F> {}
 
-pub struct Radix2Iterator<F: TwoAdicField> {
-    current: F,
-    generator: F,
+impl<F: TwoAdicField> Iterator for Radix2Iterator<F> {
+    type Item = F;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.consumed {
+            return None;
+        }
+
+        let current = self.current;
+        self.current = self.current * self.generator;
+
+        if self.current == self.shift {
+            self.consumed = true;
+        }
+
+        Some(current)
+    }
 }
 
 impl<F: TwoAdicField> IntoIterator for Radix2Coset<F> {
@@ -173,6 +190,8 @@ impl<F: TwoAdicField> IntoIterator for Radix2Coset<F> {
         Radix2Iterator {
             current: self.shift,
             generator: self.generator,
+            shift: self.shift,
+            consumed: false,
         }
     }
 }

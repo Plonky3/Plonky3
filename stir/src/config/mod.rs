@@ -1,8 +1,7 @@
 use alloc::vec::Vec;
 use core::fmt::Debug;
-use itertools::Itertools;
 
-use p3_field::Field;
+use p3_field::{Field, TwoAdicField};
 use p3_matrix::Matrix;
 
 use crate::utils::compute_pow;
@@ -117,14 +116,14 @@ pub(crate) struct RoundConfig {
     pub(crate) num_queries: usize,
 
     /// Number of out of domain samples in this round
-    pub(crate) ood_samples: usize,
+    pub(crate) num_ood_samples: usize,
 
     /// log of the inverse of the rate of the current RS codeword
     pub(crate) log_inv_rate: usize,
 }
 
 #[derive(Debug, Clone)]
-pub struct StirConfig<M: Clone> {
+pub struct StirConfig<F: TwoAdicField, M: Clone> {
     /// Input parameters for the STIR protocol.
     parameters: StirParameters<M>,
 
@@ -149,11 +148,15 @@ pub struct StirConfig<M: Clone> {
 
     /// Final of PoW bits (for the queries).
     final_pow_bits: f64,
+
+    // / Generator of the (subgroup whose shift is the) initial domain, kept
+    // throughout rounds for shifting purposes
+    subgroup_generator: F,
 }
 
-impl<M: Clone> StirConfig<M> {
+impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
     /// Expand STIR parameters into a full STIR configuration.
-    pub fn new<F: Field>(parameters: StirParameters<M>) -> Self {
+    pub fn new(parameters: StirParameters<M>) -> Self {
         let StirParameters {
             security_level,
             security_assumption,
@@ -267,7 +270,7 @@ impl<M: Clone> StirConfig<M> {
             ); */
 
             // Compute the ood samples required
-            let ood_samples = security_assumption.determine_ood_samples(
+            let num_ood_samples = security_assumption.determine_ood_samples(
                 security_level,
                 current_log_degree,
                 next_rate,
@@ -285,13 +288,18 @@ impl<M: Clone> StirConfig<M> {
                 );
             } */
 
+            // NP TODO ask Giacomo: How to check (and what to do) if the field
+            // is too small for the targeted sec level/polynomial degree? E. g.
+            // Start with deg' 1 << 3, this wants ~128 queries; the code doesn't
+            // complain
+
             // Compute the number of queries required
             let num_queries = security_assumption.queries(protocol_security_level, log_inv_rate);
 
             // We need to compute the errors, to compute the according PoW
             let query_error = security_assumption.queries_error(log_inv_rate, num_queries);
 
-            let num_terms = num_queries + ood_samples;
+            let num_terms = num_queries + num_ood_samples;
             let prox_gaps_error_1 = parameters.security_assumption.prox_gaps_error(
                 current_log_degree,
                 next_rate,
@@ -318,7 +326,7 @@ impl<M: Clone> StirConfig<M> {
                 log_next_folding_factor,
                 num_queries,
                 pow_bits,
-                ood_samples,
+                num_ood_samples,
                 log_inv_rate,
             };
             round_parameters.push(round_config);
@@ -348,6 +356,7 @@ impl<M: Clone> StirConfig<M> {
             log_final_inv_rate: log_inv_rate,
             final_num_queries,
             final_pow_bits,
+            subgroup_generator: F::two_adic_generator(starting_domain_log_size),
         }
     }
 
@@ -421,11 +430,15 @@ impl<M: Clone> StirConfig<M> {
         self.parameters.pow_bits
     }
 
+    pub fn subgroup_generator(&self) -> F {
+        self.subgroup_generator
+    }
+
     pub fn mmcs_config(&self) -> &M {
         &self.parameters.mmcs_config
     }
 }
-// NO TODO why is this here/necessary?/rename
+// NP TODO why is this here/necessary?/rename
 /// Whereas `FriConfig` encompasses parameters the end user can set, `FriGenericConfig` is
 /// set by the PCS calling FRI, and abstracts over implementation details of the PCS.
 pub trait FriGenericConfig<F: Field> {

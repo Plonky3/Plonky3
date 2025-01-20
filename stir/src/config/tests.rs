@@ -1,5 +1,5 @@
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_commit::{ExtensionMmcs, Mmcs};
+use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
 use p3_merkle_tree::MerkleTreeMmcs;
@@ -49,7 +49,7 @@ fn test_config() {
         test_mmcs_config(),
     );
 
-    let config = StirConfig::new::<Challenge>(parameters);
+    let config: StirConfig<Challenge, ChallengeMmcs> = StirConfig::new(parameters);
 
     assert_eq!(config.starting_domain_log_size(), 19);
     assert_eq!(
@@ -70,7 +70,7 @@ fn test_config() {
 
     for (
         round_config,
-        (log_folding_factor, log_domain_size, num_queries, log_inv_rate, pow_bits, ood_samples),
+        (log_folding_factor, log_domain_size, num_queries, log_inv_rate, pow_bits, num_ood_samples),
     ) in config.round_configs().iter().zip(expected_round_configs)
     {
         assert_eq!(round_config.log_folding_factor, log_folding_factor);
@@ -78,6 +78,6 @@ fn test_config() {
         assert_eq!(round_config.num_queries, num_queries);
         assert_eq!(round_config.log_inv_rate, log_inv_rate);
         assert_eq!(format!("{}", round_config.pow_bits), pow_bits);
-        assert_eq!(round_config.ood_samples, ood_samples);
+        assert_eq!(round_config.num_ood_samples, num_ood_samples);
     }
 }

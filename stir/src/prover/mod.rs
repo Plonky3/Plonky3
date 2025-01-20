@@ -21,15 +21,17 @@ mod tests;
 
 pub struct StirWitness<F: TwoAdicField, M: Mmcs<F>> {
     pub(crate) domain: Radix2Coset<F>,
+    // Polynomial f_i
     pub(crate) polynomial: Polynomial<F>,
     pub(crate) merkle_tree: M::ProverData<RowMajorMatrix<F>>,
+    // Stacked evaluations of g_i = Fold(f_i, ...)
     pub(crate) stacked_evals: RowMajorMatrix<F>,
     pub(crate) round: usize,
     pub(crate) folding_randomness: F,
 }
 
 pub fn commit<F, M>(
-    config: &StirConfig<M>,
+    config: &StirConfig<F, M>,
     polynomial: Polynomial<F>,
 ) -> (StirWitness<F, M>, M::Commitment)
 where
@@ -62,7 +64,7 @@ where
 // NP TODO pub fn prove_on_evals
 // NP TODO commit_and_prove
 pub fn prove<F, M, Challenger>(
-    config: &StirConfig<M>,
+    config: &StirConfig<F, M>,
     polynomial: Polynomial<F>,
     challenger: &mut Challenger,
 ) -> StirProof<F, M, Challenger::Witness>
@@ -133,7 +135,7 @@ where
 }
 
 fn prove_round<F, M, Challenger>(
-    config: &StirConfig<M>,
+    config: &StirConfig<F, M>,
     witness: StirWitness<F, M>,
     challenger: &mut Challenger,
 ) -> (StirWitness<F, M>, RoundProof<F, M, Challenger::Witness>)
@@ -150,7 +152,7 @@ where
         log_evaluation_domain_size,
         pow_bits,
         num_queries,
-        ood_samples,
+        num_ood_samples,
         // NP TODO why is this not used?
         log_inv_rate,
     } = config.round_config(witness.round).clone();
@@ -194,7 +196,7 @@ where
     // domain_2 = [omega * (omega^2 * shift^4)] * <omega^4>     //  omega^3 * <omega^4>
 
     // NP TODO maybe keep root of unity separate
-    let new_domain = domain.shrink_coset(1).shift_by_root_of_unity();
+    let new_domain = domain.shrink_coset(1).shift_by(config.subgroup_generator());
 
     // NP TODO can this be done more efficiently using stacked_evals? If not,
     // remove stacked_evals from the witness?
@@ -215,7 +217,7 @@ where
     // NP TODO: Sample from the extension field like in FRI
 
     // NP TODO Ask THESE ARE NOT OUT OF THE DOMAIN!
-    let ood_samples: Vec<F> = (0..ood_samples)
+    let ood_samples: Vec<F> = (0..num_ood_samples)
         .map(|_| challenger.sample_ext_element())
         .collect();
 
@@ -319,14 +321,27 @@ where
         Polynomial::<F>::lagrange_interpolation(quotient_answers.clone().collect_vec());
 
     // Compute the shake polynomial
+    // NP TODO probably quotient_answers need to be deduped (either before calling or inside)
     let shake_polynomial = compute_shake_polynomial(&ans_polynomial, quotient_answers);
 
     // Compute the quotient polynomial
     // NP TODO: Remove the clone
     let vanishing_polynomial = Polynomial::vanishing_polynomial(quotient_set.clone());
 
+    // NP TODO remove
+    // deg(ans_polynomial) <= (queried_indices + num_ood_samples) - 1 (in general, =)
+    // deg(folded_polynomial) = ?
+
+    // NP TODO remove
+    println!("deg(folded_polynomial): {:?}", folded_polynomial.degree());
+    println!(
+        "queried_indices + num_ood_samples - 1: {:?}",
+        num_queries + num_ood_samples - 1
+    );
+
     let quotient_polynomial = &(&folded_polynomial - &ans_polynomial) / &vanishing_polynomial;
 
+    // NP TODO remove
     println!("folded_polynomial: {:?}", folded_polynomial.coeffs());
     println!("ans_polynomial: {:?}", ans_polynomial.coeffs());
 
@@ -341,7 +356,12 @@ where
 
     let witness_polynomial = &quotient_polynomial * &scaling_polynomial;
 
-    assert_eq!(witness_polynomial.degree(), folded_polynomial.degree());
+    // NP TODO remove/fix
+    if quotient_polynomial.is_zero() {
+        dbg!("Warning: quotient polynomial is zero. Reconsider your parameters");
+    } else {
+        assert_eq!(witness_polynomial.degree(), folded_polynomial.degree());
+    }
 
     (
         StirWitness {
