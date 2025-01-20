@@ -224,10 +224,10 @@ pub fn split_32<SF: PrimeField, TF: PrimeField32>(val: SF, n: usize) -> Vec<TF> 
         let mask: BigUint = po2.clone() - BigUint::from(1u128);
         let digit: BigUint = val.clone() & mask;
         let digit_u64s = digit.to_u64_digits();
-        if !digit_u64s.is_empty() {
-            result.push(TF::from_wrapped_u64(digit_u64s[0]));
-        } else {
+        if digit_u64s.is_empty() {
             result.push(TF::ZERO)
+        } else {
+            result.push(TF::from_wrapped_u64(digit_u64s[0]));
         }
         val /= po2.clone();
     }

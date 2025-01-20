@@ -480,11 +480,7 @@ pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base> {
     }
 
     fn as_base(&self) -> Option<Base> {
-        if self.is_in_basefield() {
-            Some(self.as_base_slice()[0])
-        } else {
-            None
-        }
+        self.is_in_basefield().then(|| self.as_base_slice()[0])
     }
 
     /// Construct an iterator which returns powers of `self` packed into `ExtensionPacking` elements.

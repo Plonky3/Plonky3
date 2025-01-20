@@ -7,6 +7,9 @@ license = "MIT OR Apache-2.0"
 [features]
 nightly-features = []
 
+[lints]
+workspace = true
+
 [dependencies]
 itertools.workspace = true
 p3-dft.workspace = true

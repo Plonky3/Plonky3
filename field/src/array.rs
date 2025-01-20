@@ -38,10 +38,10 @@ impl<F: Field, const N: usize> From<[F; N]> for FieldArray<F, N> {
 impl<F: Field, const N: usize> FieldAlgebra for FieldArray<F, N> {
     type F = F;
 
-    const ZERO: Self = FieldArray([F::ZERO; N]);
-    const ONE: Self = FieldArray([F::ONE; N]);
-    const TWO: Self = FieldArray([F::TWO; N]);
-    const NEG_ONE: Self = FieldArray([F::NEG_ONE; N]);
+    const ZERO: Self = Self([F::ZERO; N]);
+    const ONE: Self = Self([F::ONE; N]);
+    const TWO: Self = Self([F::TWO; N]);
+    const NEG_ONE: Self = Self([F::NEG_ONE; N]);
 
     #[inline]
     fn from_f(f: Self::F) -> Self {

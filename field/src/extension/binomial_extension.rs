@@ -552,12 +552,12 @@ where
 impl<F: BinomiallyExtendable<D>, const D: usize> Distribution<BinomialExtensionField<F, D>>
     for Standard
 where
-    Standard: Distribution<F>,
+    Self: Distribution<F>,
 {
     fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> BinomialExtensionField<F, D> {
         let mut res = [F::ZERO; D];
-        for r in res.iter_mut() {
-            *r = Standard.sample(rng);
+        for r in &mut res {
+            *r = Self.sample(rng);
         }
         BinomialExtensionField::<F, D>::from_base_slice(&res)
     }

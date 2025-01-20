@@ -42,7 +42,7 @@ impl Mersenne31 {
     /// has the advantage of being able to be used in `const` environments.
     #[inline]
     pub const fn new_array<const N: usize>(input: [u32; N]) -> [Self; N] {
-        let mut output = [Mersenne31::ZERO; N];
+        let mut output = [Self::ZERO; N];
         let mut i = 0;
         loop {
             if i == N {
@@ -122,7 +122,7 @@ impl<'a> Deserialize<'a> for Mersenne31 {
         let val = u32::deserialize(d)?;
         // Ensure that `val` satisfies our invariant. i.e. Not necessarily canonical, but must fit in 31 bits.
         if val <= P {
-            Ok(Mersenne31::new(val))
+            Ok(Self::new(val))
         } else {
             Err(D::Error::custom("Value is out of range"))
         }
@@ -210,6 +210,7 @@ impl FieldAlgebra for Mersenne31 {
     }
 
     #[inline]
+    #[allow(clippy::transmute_undefined_repr)]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: repr(transparent) ensures transmutation safety.
         unsafe { transmute(vec![0u32; len]) }
@@ -296,7 +297,7 @@ impl Field for Mersenne31 {
 
     #[inline]
     fn halve(&self) -> Self {
-        Mersenne31::new(halve_u32::<P>(self.value))
+        Self::new(halve_u32::<P>(self.value))
     }
 
     #[inline]
