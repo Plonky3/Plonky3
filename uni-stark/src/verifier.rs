@@ -41,6 +41,10 @@ where
     let quotient_domain =
         trace_domain.create_disjoint_domain(1 << (degree_bits + log_quotient_degree));
     let quotient_chunks_domains = quotient_domain.split_domains(quotient_degree);
+    let randomized_quotient_chunks_domains = quotient_chunks_domains
+        .iter()
+        .map(|domain| pcs.natural_domain_for_degree(domain.size() * 2))
+        .collect_vec();
 
     let air_width = <A as BaseAir<Val<SC>>>::width(air);
     let valid_shape = opened_values.trace_local.len() == air_width
@@ -84,7 +88,8 @@ where
             ),
             (
                 commitments.quotient_chunks.clone(),
-                quotient_chunks_domains
+                // Check the commitment on the randomized domains.
+                randomized_quotient_chunks_domains
                     .iter()
                     .zip(&opened_values.quotient_chunks)
                     .map(|(domain, values)| (*domain, vec![(zeta, values.clone())]))

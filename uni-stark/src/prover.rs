@@ -5,6 +5,7 @@ use itertools::{izip, Itertools};
 use p3_air::Air;
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
+use p3_field::Field;
 use p3_field::{FieldAlgebra, FieldExtensionAlgebra, PackedValue};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
@@ -78,13 +79,106 @@ where
         alpha,
         constraint_count,
     );
-    let quotient_flat = RowMajorMatrix::new_col(quotient_values).flatten_to_base();
+    let quotient_flat = RowMajorMatrix::new_col(quotient_values.clone()).flatten_to_base();
     let quotient_chunks = quotient_domain.split_evals(quotient_degree, quotient_flat);
     let qc_domains = quotient_domain.split_domains(quotient_degree);
 
-    let (quotient_commit, quotient_data) = info_span!("commit to quotient poly chunks")
-        .in_scope(|| pcs.commit_quotient(izip!(qc_domains, quotient_chunks).collect_vec()));
+    // Compute the vanishing polynomial normalizing constants, based on the verifier's check.
+    let zp_cis = qc_domains
+        .iter()
+        .enumerate()
+        .map(|(i, domain)| {
+            qc_domains
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != i)
+                .map(|(_, other_domain)| other_domain.zp_at_point(domain.first_point()).inverse())
+                .product()
+        })
+        .collect_vec();
+    let (quotient_commit, quotient_data) =
+        info_span!("commit to quotient poly chunks").in_scope(|| {
+            pcs.commit_quotient(
+                izip!(qc_domains.clone(), quotient_chunks.clone()).collect_vec(),
+                zp_cis,
+            )
+        });
     challenger.observe(quotient_commit.clone());
+
+    /////////////////////////// Linda debug
+    // Check whether the final verification check would pass: Checking that
+    // the sum of quotients * vanishing polynomial would give the same result for the original and current values.
+    let first_domain_point = SC::Challenge::from_base(qc_domains[0].first_point());
+    let generator = SC::Challenge::from_base(trace_domain.first_point());
+    let (_, orig_quotient_data) =
+        pcs.commit(izip!(qc_domains.clone(), quotient_chunks).collect_vec());
+    let (opened_vals_quo, _) = pcs.open(
+        vec![
+            (
+                &orig_quotient_data,
+                (0..quotient_degree).map(|_| vec![generator]).collect_vec(),
+            ),
+            (
+                &quotient_data,
+                (0..quotient_degree).map(|_| vec![generator]).collect_vec(),
+            ),
+        ],
+        challenger,
+    );
+
+    let zps = qc_domains
+        .iter()
+        .enumerate()
+        .map(|(i, domain)| {
+            qc_domains
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != i)
+                .map(|(_, other_domain)| {
+                    other_domain.zp_at_point(generator)
+                        * other_domain.zp_at_point(domain.first_point()).inverse()
+                })
+                .product::<SC::Challenge>()
+        })
+        .collect_vec();
+
+    let opened_1 = opened_vals_quo[0]
+        .iter()
+        .map(|v| v[0].clone())
+        .collect_vec();
+    let opened_2 = opened_vals_quo[1]
+        .iter()
+        .map(|v| v[0].clone())
+        .collect_vec();
+    let quotient_orig = opened_1
+        .iter()
+        .enumerate()
+        .map(|(ch_i, ch)| {
+            ch.iter()
+                .enumerate()
+                .map(|(e_i, &c)| zps[ch_i] * SC::Challenge::monomial(e_i) * c)
+                .sum::<SC::Challenge>()
+        })
+        .sum::<SC::Challenge>();
+
+    // assert!(1 == 2, "opened {}", opened_1.len(),);
+    let quotient_rand = opened_2
+        .iter()
+        .enumerate()
+        .map(|(ch_i, ch)| {
+            ch.iter()
+                .enumerate()
+                .map(|(e_i, &c)| zps[ch_i] * SC::Challenge::monomial(e_i) * c)
+                .sum::<SC::Challenge>()
+        })
+        .sum::<SC::Challenge>();
+
+    assert_eq!(
+        quotient_orig, quotient_rand,
+        "orig val {:?}, rand val {:?}",
+        quotient_orig, quotient_rand,
+    );
+    ////////////////////////////////////
 
     let commitments = Commitments {
         trace: trace_commit,

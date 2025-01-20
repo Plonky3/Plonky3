@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::fmt::Debug;
@@ -95,7 +96,9 @@ where
     fn commit_quotient(
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
+        cis: Vec<Val>,
     ) -> (Self::Commitment, Self::ProverData) {
+        let last_chunk = evaluations.len() - 1;
         let randomized_evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)> = evaluations
             .into_iter()
             .map(|(domain, mat)| {
@@ -105,16 +108,42 @@ where
                 )
             })
             .collect();
+        // let last_chunk = randomized_evaluations.len() - 1;
         // First, add random values as described in https://eprint.iacr.org/2024/1037.pdf.
         // If we have `d` chunks, let q'_i(X) = q_i(X) + v_H_i(X) * t_i(X) where t(X) is random, for 1 <= i < d.
         // q'_d(X) = q_d(X) - v_H_d(X) c_i \sum t_i(X) where c_i is a Lagrange normalization constant.
+        let h = randomized_evaluations[0].1.height();
+        let w = randomized_evaluations[0].1.width();
+        let all_random_values =
+            vec![self.rng.borrow_mut().gen(); (randomized_evaluations.len() - 1) * h];
         let ldes: Vec<_> = randomized_evaluations
             .into_iter()
-            .map(|(domain, evals)| {
+            .enumerate()
+            .map(|(i, (domain, evals))| {
                 assert_eq!(domain.size(), evals.height());
                 let shift = Val::GENERATOR / domain.shift;
-                let random_values =
-                    vec![self.rng.borrow_mut().gen(); evals.height() * evals.width()];
+
+                // Select random values, and set the random values for the final chunk accordingly.
+                let random_values = if i == last_chunk {
+                    let mut added_values = Val::zero_vec(h);
+                    for j in 0..last_chunk {
+                        // for k in 0..h * w {
+                        for k in 0..h {
+                            // added_values[k] -= all_random_values[j * h * w + k] // Maybe the added values should be turned into basis, as for quotient elements?
+                            added_values[k] -=
+                                all_random_values[j * h + k] * cis[j] * cis[last_chunk].inverse();
+                        }
+                    }
+                    added_values
+                } else {
+                    // all_random_values[i * h * w..(i + 1) * h * w].to_vec()
+                    all_random_values[i * h..(i + 1) * h]
+                        .iter()
+                        .map(|v| *v * cis[i])
+                        .collect()
+                };
+
+                // CHeck the evaluation as the verifier would here, but on challenge = 1, to see whether it works? (and compare it with non random value)
                 // Commit to the bit-reversed LDE.
                 self.inner
                     .dft
@@ -246,34 +275,4 @@ where
             new_row[old_w..].iter_mut().for_each(|v| *v = rng.gen());
         });
     result
-}
-
-use alloc::vec;
-
-fn randomize_quotients<Val, R>(
-    h: usize,
-    evals: RowMajorMatrix<Val>,
-    mut rng: R,
-) -> RowMajorMatrix<Val>
-where
-    Val: TwoAdicField,
-    R: Rng + Send + Sync,
-    Standard: Distribution<Val>,
-{
-    let orig_height = evals.height();
-    let mut new_evals = RowMajorMatrix::new(
-        vec![Val::ZERO; evals.width * (orig_height + h)],
-        evals.width(),
-    );
-
-    let new_evals_height = new_evals.height();
-    let all_random_vals = vec![rng.gen(); (evals.width() - 1) * h];
-    for i in 0..evals.width() - 1 {
-        new_evals.values[i * new_evals_height..i * new_evals_height + orig_height]
-            .copy_from_slice(&evals.values[i * orig_height..(i + 1) * orig_height]);
-        new_evals.values[(i + 1) * orig_height..(i + 1) * new_evals_height]
-            .copy_from_slice(&vec![rng.gen(); h]);
-    }
-
-    new_evals
 }

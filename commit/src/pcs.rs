@@ -45,6 +45,7 @@ where
     fn commit_quotient(
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
+        _cis: Vec<Val<Self::Domain>>,
     ) -> (Self::Commitment, Self::ProverData) {
         self.commit(evaluations)
     }
