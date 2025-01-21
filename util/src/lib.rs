@@ -535,9 +535,10 @@ mod tests {
                 vec![16, 17, 18, 19, 20]
             ]
         );
-  }
-  
-      fn test_reverse_slice_index_bits_random() {
+    }
+
+    #[test]
+    fn test_reverse_slice_index_bits_random() {
         let lengths = [32, 128, 1 << 16];
         let mut rng = OsRng;
         for _ in 0..32 {
