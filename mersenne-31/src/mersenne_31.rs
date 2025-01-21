@@ -517,7 +517,9 @@ pub const fn to_mersenne31_array<const N: usize>(input: [u32; N]) -> [Mersenne31
 #[cfg(test)]
 mod tests {
     use p3_field::{Field, FieldAlgebra, InjectiveMonomial, PermutationMonomial, PrimeField32};
-    use p3_field_testing::{test_field, test_prime_field, test_prime_field_32};
+    use p3_field_testing::{
+        test_field, test_prime_field, test_prime_field_32, test_prime_field_64,
+    };
 
     use crate::Mersenne31;
 
@@ -574,5 +576,6 @@ mod tests {
 
     test_field!(crate::Mersenne31);
     test_prime_field!(crate::Mersenne31);
+    test_prime_field_64!(crate::Mersenne31);
     test_prime_field_32!(crate::Mersenne31);
 }

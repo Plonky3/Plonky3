@@ -111,7 +111,8 @@ mod tests {
         InjectiveMonomial, PermutationMonomial, PrimeField32, PrimeField64, TwoAdicField,
     };
     use p3_field_testing::{
-        test_field, test_field_dft, test_prime_field, test_prime_field_32, test_two_adic_field,
+        test_field, test_field_dft, test_prime_field, test_prime_field_32, test_prime_field_64,
+        test_two_adic_field,
     };
 
     use super::*;
@@ -230,5 +231,6 @@ mod tests {
         p3_monty_31::dft::RecursiveDft<_>
     );
     test_prime_field!(crate::KoalaBear);
+    test_prime_field_64!(crate::KoalaBear);
     test_prime_field_32!(crate::KoalaBear);
 }

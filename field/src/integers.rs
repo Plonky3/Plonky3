@@ -77,7 +77,8 @@ pub trait QuotientMap<Int>: Sized {
 }
 
 /// This allows us to avoid some duplication which arises when working with fields which contain a generic parameter.
-/// See `quotient_map_small_int` to see what this will expand to.
+/// See `quotient_map_small_int` to see what this will expand to/how to call it. This is not intended for use outside of
+/// that macro.
 #[macro_export]
 macro_rules! quotient_map_small_internals {
     ($field:ty, $field_size:ty, $small_int:ty) => {
@@ -124,7 +125,7 @@ macro_rules! quotient_map_small_internals {
 ///
 /// This macro accepts 3 inputs.
 /// - The name of the prime field `P`
-/// - The natural integer type `Int` in which the field characteristic lives.
+/// - The larger integer type `Int` which inputs should be cast to.
 /// - A list of smaller integer types to auto implement `QuotientMap<SmallInt>`.
 ///
 /// Then `from_int`, `from_canonical_checked`, `from_canonical_unchecked` are all
@@ -202,8 +203,8 @@ macro_rules! quotient_map_small_int {
 ///
 /// This macro accepts 6 inputs.
 /// - The name of the prime field `P`
-/// - The natural integer type `Int` in which the field characteristic lives.
-/// - The order of the field.
+/// - The smallest natural integer type large enough to contain the field characteristic.
+/// - The characteristic of the field.
 /// - A string giving the range for which from_canonical_checked produces the correct result.
 /// - A string giving the range for which from_canonical_unchecked produces the correct result.
 /// - A list of large integer types to auto implement `QuotientMap<LargeInt>`.
@@ -301,7 +302,7 @@ macro_rules! quotient_map_large_uint {
 ///
 /// This macro accepts 4 inputs.
 /// - The name of the prime field `P`.
-/// - The natural signed integer type `Int` in which elements of the live.
+/// - The smallest natural integer type large enough to contain the field characteristic.
 /// - A string giving the range for which from_canonical_checked produces the correct result.
 /// - A string giving the range for which from_canonical_unchecked produces the correct result.
 /// - A list of pairs of large sign and unsigned integer types to auto implement `QuotientMap<LargeSignInt>`.
