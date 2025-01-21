@@ -245,7 +245,7 @@ mod tests {
         let sample = hash_challenger.sample();
         // Length of initial state
         assert_eq!(sample, F::from_canonical_u8(2));
-        // Sum of initial state
+        // Check that the output buffer contains the sum of the initial state
         assert_eq!(
             hash_challenger.output_buffer,
             vec![F::from_canonical_u8(15)]
