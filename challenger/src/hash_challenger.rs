@@ -183,7 +183,7 @@ mod tests {
         let first_sample = hash_challenger.sample();
         let second_sample = hash_challenger.sample();
 
-        // Sum of 1 to 10
+        // Verify that the first sample is the length of 1..11, (i.e. 10).
         assert_eq!(first_sample, F::from_canonical_u8(10));
         // Length of 1 to 10
         assert_eq!(second_sample, F::from_canonical_u8(55));
