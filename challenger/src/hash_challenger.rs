@@ -197,7 +197,7 @@ mod tests {
 
         // Observe a single value
         let value = F::from_canonical_u8(42);
-        hash_challenger.observe(value.clone());
+        hash_challenger.observe(value);
 
         // Check that the input buffer contains the value
         assert_eq!(
