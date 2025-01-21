@@ -101,7 +101,7 @@ impl HasTwoAdicComplexBinomialExtension<3> for Mersenne31 {
     const COMPLEX_EXT_TWO_ADICITY: usize = 32;
 
     fn complex_ext_two_adic_generator(bits: usize) -> [Complex<Self>; 3] {
-        field_to_array::<Complex<Self>, 3>(Complex::two_adic_generator(bits))
+        field_to_array(Complex::two_adic_generator(bits))
     }
 }
 

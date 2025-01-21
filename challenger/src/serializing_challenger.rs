@@ -100,7 +100,7 @@ where
         let pow_of_two_bound = ((1u64 << log_size) - 1) as u32;
         // Perform rejection sampling over the uniform range (0..log2_ceil(p))
         let sample_base = |inner: &mut Inner| loop {
-            let value = u32::from_le_bytes(inner.sample_array::<4>());
+            let value = u32::from_le_bytes(inner.sample_array());
             let value = value & pow_of_two_bound;
             if value < modulus {
                 return F::from_canonical_u32(value);
@@ -119,7 +119,7 @@ where
         debug_assert!(bits < (usize::BITS as usize));
         // Limiting the number of bits to the field size
         debug_assert!((1 << bits) <= F::ORDER_U64 as usize);
-        let rand_usize = u32::from_le_bytes(self.inner.sample_array::<4>()) as usize;
+        let rand_usize = u32::from_le_bytes(self.inner.sample_array()) as usize;
         rand_usize & ((1 << bits) - 1)
     }
 }
@@ -210,7 +210,7 @@ where
 
         // Perform rejection sampling over the uniform range (0..log2_ceil(p))
         let sample_base = |inner: &mut Inner| loop {
-            let value = u64::from_le_bytes(inner.sample_array::<8>());
+            let value = u64::from_le_bytes(inner.sample_array());
             let value = value & pow_of_two_bound;
             if value < modulus {
                 return F::from_canonical_u64(value);
@@ -229,7 +229,7 @@ where
         debug_assert!(bits < (usize::BITS as usize));
         // Limiting the number of bits to the field size
         debug_assert!((1 << bits) <= F::ORDER_U64 as usize);
-        let rand_usize = u64::from_le_bytes(self.inner.sample_array::<8>()) as usize;
+        let rand_usize = u64::from_le_bytes(self.inner.sample_array()) as usize;
         rand_usize & ((1 << bits) - 1)
     }
 }
