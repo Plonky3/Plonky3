@@ -13,7 +13,6 @@
 extern crate alloc;
 
 mod config;
-// mod fold_even_odd;
 mod coset;
 mod polynomial;
 mod proof;
@@ -26,6 +25,5 @@ pub use config::{StirConfig, StirParameters};
 pub use proof::StirProof;
 pub use proximity_gaps::*;
 
-// NP pub use fold_even_odd::*;
 // NP pub use proof::*;
 // NP pub use two_adic_pcs::*;

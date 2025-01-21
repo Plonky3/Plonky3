@@ -170,11 +170,13 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
 
         assert!(
             log_folding_factors.iter().all(|&x| x != 0),
-            "Folding factors should be non zero"
+            "The logarithm of each folding factor should be positive"
         );
         assert_eq!(log_folding_factors.len(), log_inv_rates.len());
 
         // log(degree + 1) can not be reduced past 0
+        // This also ensures the domain is large enough to be (actually) shrunk
+        // by raising to the subsequent folding factors
         let total_reduction = log_folding_factors.iter().sum::<usize>();
         assert!(total_reduction <= log_starting_degree);
 
@@ -259,15 +261,6 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
 
             // This is the size of the new evaluation domain
             let new_evaluation_domain_size = current_log_degree + next_rate;
-
-            // Send the new oracle
-            // NP TODO Merkle tree / MMCS
-            /* let next_merkle_tree = MerkleTree::new(
-                new_evaluation_domain_size - folding_factor,
-                ldt_parameters.field,
-                1 << folding_factor,
-                true,
-            ); */
 
             // Compute the ood samples required
             let num_ood_samples = security_assumption.determine_ood_samples(
@@ -437,29 +430,4 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
     pub fn mmcs_config(&self) -> &M {
         &self.parameters.mmcs_config
     }
-}
-// NP TODO why is this here/necessary?/rename
-/// Whereas `FriConfig` encompasses parameters the end user can set, `FriGenericConfig` is
-/// set by the PCS calling FRI, and abstracts over implementation details of the PCS.
-pub trait FriGenericConfig<F: Field> {
-    type InputProof;
-    type InputError: Debug;
-
-    /// We can ask FRI to sample extra query bits (LSB) for our own purposes.
-    /// They will be passed to our callbacks, but ignored (shifted off) by FRI.
-    fn extra_query_index_bits(&self) -> usize;
-
-    /// Fold a row, returning a single column.
-    /// Right now the input row will always be 2 columns wide,
-    /// but we may support higher folding arity in the future.
-    fn fold_row(
-        &self,
-        index: usize,
-        log_height: usize,
-        beta: F,
-        evals: impl Iterator<Item = F>,
-    ) -> F;
-
-    /// Same as applying fold_row to every row, possibly faster.
-    fn fold_matrix<M: Matrix<F>>(&self, beta: F, m: M) -> Vec<F>;
 }

@@ -95,7 +95,7 @@ mod tests {
         let folding_randomness: F = rng.gen();
 
         let folds = (0..folding_factor)
-            .map(|_| rand_poly::<F>(fold_degree))
+            .map(|_| rand_poly::<F>(fold_degree - 1))
             .collect_vec();
 
         let powers_of_x = iter::successors(Some(Polynomial::one()), |p| {

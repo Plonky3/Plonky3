@@ -2,19 +2,17 @@ use itertools::Itertools;
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::MockChallenger;
 use p3_commit::Mmcs;
-use p3_field::{extension::BinomialExtensionField, Field, FieldAlgebra, TwoAdicField};
-use p3_matrix::{dense::RowMajorMatrix, Dimensions, Matrix};
+use p3_field::{Field, FieldAlgebra};
+use p3_matrix::{dense::RowMajorMatrix, Dimensions};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use rand::{distributions::Standard, Rng, SeedableRng};
+use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-use tracing::field;
 
 use crate::{
     coset::Radix2Coset,
     polynomial::{rand_poly, Polynomial},
     proof::RoundProof,
-    prover::commit,
     utils::field_element_from_isize,
     utils::fold_polynomial,
     SecurityAssumption, StirConfig, StirParameters,
@@ -63,8 +61,9 @@ fn test_stir_config(
     StirConfig::new(parameters)
 }
 
+// NP TODO either remove the manual values or use them by reducing the soundness
 #[test]
-fn test_prove_round() {
+fn test_prove_round_zero() {
     let config = test_stir_config(3, 1, 1);
 
     let round = 0;
@@ -114,9 +113,9 @@ fn test_prove_round() {
 
     let f = Polynomial::from_coeffs(coeffs);
 
-    let original_domain = Radix2Coset::new_from_degree_and_rate(
-        config.log_starting_degree(),
-        config.log_starting_inv_rate(),
+    let original_domain = Radix2Coset::new(
+        BB::ONE,
+        config.log_starting_degree() + config.log_starting_inv_rate(),
     );
 
     let original_evals = original_domain.evaluate_polynomial(&f);
@@ -199,61 +198,57 @@ fn test_prove_round() {
     }
 }
 
+#[test]
 fn test_prove_round_large() {
     let mut rng = rand::thread_rng();
 
-    let config = test_stir_config(10, 2, 3);
+    let config = test_stir_config(10, 3, 2);
 
     let round = 0;
 
     let round_config = config.round_config(round);
 
-    println!("Num_queries: {}", round_config.num_queries);
-
     let RoundConfig {
         log_folding_factor,
         log_inv_rate,
-        log_evaluation_domain_size,
         num_ood_samples,
         num_queries,
         ..
     } = round_config.clone();
 
-    // Field randomness
-    let folding_randomness: BB = rng.gen();
-    let stir_randomness: Vec<BB> = (0..num_queries).map(|_| rng.gen()).collect();
+    let r_0: BB = rng.gen(); // Initial folding randomness
+
+    // Field randomness produced by the sponge
+    let r_1: BB = rng.gen(); // Folding randomness for round 2 (which never happens)
     let ood_randomness: Vec<BB> = (0..num_ood_samples).map(|_| rng.gen()).collect();
     let comb_randomness = rng.gen();
+    let _shake_randomness = rng.gen();
 
-    let mut field_replies = vec![folding_randomness];
-    field_replies.extend(ood_randomness);
-    field_replies.extend(stir_randomness);
+    let mut field_replies = ood_randomness.clone();
     field_replies.push(comb_randomness);
+    field_replies.push(r_1);
+    field_replies.push(_shake_randomness);
 
     // Index randomness
-    let log_size_second_codeword = config.log_starting_degree() + config.log_starting_inv_rate()
-        - config.log_starting_folding_factor();
+    let log_size_second_codeword = config.log_starting_degree() - log_folding_factor + log_inv_rate;
 
     let bit_replies = (0..num_queries)
-        .map(|i| i % (1 << log_size_second_codeword))
+        .map(|_| rng.gen())
+        .map(|i: usize| i % (1 << log_size_second_codeword))
         .collect::<Vec<_>>();
 
     // Preloading fake randomness
-    let mut challenger = MockChallenger::new(field_replies, bit_replies);
+    let mut challenger = MockChallenger::new(field_replies, bit_replies.clone());
 
     // Starting polynomial
-    // As usual, this really means log(degree bound + 1)
-    let log_degree_bound = log_evaluation_domain_size - log_folding_factor;
-    let f = rand_poly(1 << log_degree_bound);
+    let f_0 = rand_poly((1 << config.log_starting_degree()) - 1);
 
-    let original_domain = Radix2Coset::new_from_degree_and_rate(
-        config.log_starting_degree(),
-        config.log_starting_inv_rate(),
+    let original_domain = Radix2Coset::new(
+        BB::ONE,
+        config.log_starting_degree() + config.log_starting_inv_rate(),
     );
 
-    let original_evals = original_domain.evaluate_polynomial(&f);
-
-    // let g = fold_polynomial(&f, folding_randomness, log_folding_factor);
+    let original_evals = original_domain.evaluate_polynomial(&f_0);
 
     let stacked_original_evals =
         RowMajorMatrix::new(original_evals, 1 << config.log_starting_folding_factor());
@@ -264,46 +259,61 @@ fn test_prove_round_large() {
 
     let witness = StirWitness {
         domain: original_domain.clone(),
-        polynomial: f,
+        polynomial: f_0.clone(),
         merkle_tree,
         stacked_evals: stacked_original_evals,
         round,
-        folding_randomness: BB::from_canonical_usize(2),
+        folding_randomness: r_0,
     };
 
-    let (witness, round_proof) = prove_round(&config, witness, &mut challenger);
+    let (witness, _) = prove_round(&config, witness, &mut challenger);
 
     // =============== Witness Checks ===============
+
+    let StirWitness {
+        domain,
+        polynomial: f_1,
+        folding_randomness,
+        round,
+        ..
+    } = witness;
 
     // expected_shift = omega * original_shift^2 (with original_shift = 1)
     let expected_shift = original_domain.generator() * original_domain.shift().square();
     let expected_domain = original_domain.shrink_subgroup(1).set_shift(expected_shift);
 
     let expected_round = 1;
-    let expected_folding_randomness = BB::ONE;
-
-    let StirWitness {
-        domain,
-        polynomial,
-        merkle_tree,
-        stacked_evals,
-        folding_randomness,
-        round,
-    } = witness;
 
     // Domain testing
     assert_eq!(domain, expected_domain);
-    assert_eq!(folding_randomness, expected_folding_randomness);
+    assert_eq!(r_1, folding_randomness);
 
     // Round-number testing
     assert_eq!(round, expected_round);
 
-    // Polynomial testing In this case, the security level means the
-    // interpolator has the same degree as the folded polynomial
-    assert!(polynomial.is_zero());
+    // Polynomial testing
+    let g_1 = fold_polynomial(&f_0, r_0, log_folding_factor);
 
-    // Polynomial-evaluation testing
-    assert!(domain.iter().all(|x| polynomial.evaluate(&x) == BB::ZERO));
+    // NP TODO repeat points
+    let original_domain_pow_k = original_domain.shrink_coset(log_folding_factor);
+    let stir_randomness = bit_replies
+        .iter()
+        .map(|&i| original_domain_pow_k.element(i as u64));
+    let quotient_set = stir_randomness
+        .chain(ood_randomness.into_iter())
+        .unique()
+        .collect_vec();
+    let quotient_set_points = quotient_set
+        .iter()
+        .map(|x| (*x, g_1.evaluate(x)))
+        .collect_vec();
+    let ans_polynomial = Polynomial::lagrange_interpolation(quotient_set_points);
+    let quotient_polynomial =
+        &(&g_1 - &ans_polynomial) / &Polynomial::vanishing_polynomial(quotient_set.clone());
+    let expected_f_1 =
+        &Polynomial::power_polynomial(comb_randomness, quotient_set.len()) * &quotient_polynomial;
+
+    assert_eq!(f_1, expected_f_1);
 }
 
 // NP TODO discuss with Giacomo Every round needs two: this round's, to know how
@@ -326,3 +336,37 @@ fn test_prove_round_large() {
 // NP TODO polynomial with degree strictly lower than the bound
 
 // NP TODO failed config creation where the num of rounds is too large for the starting degree and folding factor (maybe in /config)
+
+// L0 = shift <w>
+// L1 = shift² <w²>
+// L0^(2^logk) \cap L1 = empty
+
+// L2 = w^2 * L1^2 = w^2 * w^2 * <w^2^2> = w^4 * <w^4> = <w^4>
+
+// L0 = 1 * <w>
+//
+// L_i.gen = L_(i - 1).gen^2
+// L_i.shift = if L_(i - 1).shift == 1 { w } else { 1 }
+
+// L_2j = 1 * <w^{2^{2j}}>
+// L_{2j + 1} = w * <w^{2^{2j + 1}}>
+// L_2j^k
+
+// o^2 * <w^2> \cap o * <w^2>
+// LHS: {o^2 * w^(2i): i...}
+// RHS: {o * w^(2i): i...}
+
+// Take any i, j. The shift o = w^(2i - 2j) = w^(2i) / w^(2j) gives you an intersection point
+
+// j-th element of the LHS: o^2 * w^(2j) = o * w^(2i)
+// i-th element of the RHS: o * w^(2i)
+
+// L0 = w * <w>
+// L1 = w * <w^2>
+// L2 = w * <w^4>
+// L3 = w * <w^8>
+
+// L0 = w * <w>
+// L1 = w * <w^2>
+// L2 = w * <w^4>
+// L3 = w * <w^8>

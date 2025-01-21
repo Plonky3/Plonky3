@@ -1,7 +1,7 @@
 use core::clone::Clone;
+use core::iter;
 use core::iter::Product;
 use core::ops::{Add, AddAssign, Div, Mul, Neg, Sub};
-use std::collections::{BTreeSet, HashMap};
 
 use itertools::Itertools;
 use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
@@ -203,11 +203,11 @@ impl<F: TwoAdicField> Polynomial<F> {
     ///
     /// This function uses naive Lagrange interpolation and is not optimal (cost
     /// `O(n^2)`)
-    pub fn lagrange_interpolation(mut point_to_evals: Vec<(F, F)>) -> Polynomial<F> {
+    pub fn lagrange_interpolation(point_to_evals: Vec<(F, F)>) -> Polynomial<F> {
         // Testing for consistency and removing duplicate points
         let point_to_evals = point_to_evals.into_iter().unique().collect_vec();
 
-        let mut points = point_to_evals
+        let points = point_to_evals
             .iter()
             .map(|(x, _)| *x)
             .unique()
@@ -238,6 +238,15 @@ impl<F: TwoAdicField> Polynomial<F> {
             coeffs[i * exponent] = *coeff;
         }
         Polynomial::from_coeffs(coeffs)
+    }
+
+    // Compute the scaling polynomial, 1 + rx + r^2 x^2 + ... + r^n x^n with n = |quotient_set|
+    pub fn power_polynomial(r: F, degree: usize) -> Polynomial<F> {
+        Polynomial::from_coeffs(
+            iter::successors(Some(F::ONE), |&prev| Some(prev * r))
+                .take(degree + 1)
+                .collect_vec(),
+        )
     }
 }
 

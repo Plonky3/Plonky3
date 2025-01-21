@@ -50,24 +50,24 @@ impl<F: TwoAdicField> Radix2Coset<F> {
         self.generator_inv
     }
 
-    pub fn new_from_degree_and_rate(log_degree: usize, log_rate: usize) -> Self {
-        let log_size = log_degree + log_rate;
-        let generator = F::two_adic_generator(log_size);
-        Self {
-            generator,
-            generator_inv: generator.inverse(),
-            shift: F::ONE,
-            log_size,
-        }
-    }
-
     pub fn log_size(&self) -> usize {
         self.log_size
+    }
+
+    pub fn size(&self) -> usize {
+        1 << self.log_size
     }
 
     /// Reduce the size of the subgroup by a factor of 2^log_scale_factor
     /// this leaves the shift untouched
     pub fn shrink_subgroup(&self, log_scale_factor: usize) -> Radix2Coset<F> {
+        assert!(
+            log_scale_factor <= self.log_size,
+            "The domain size (2 ^ {}) is not large enough to be shrunk by a factor of 2^{}",
+            self.log_size,
+            log_scale_factor
+        );
+
         let generator = self.generator.exp_power_of_2(log_scale_factor);
         Radix2Coset {
             generator,
@@ -81,6 +81,13 @@ impl<F: TwoAdicField> Radix2Coset<F> {
     /// the shift is raised to the power of 2^log_scale_factor
     // NP TODO shrink_and_shift
     pub fn shrink_coset(&self, log_scale_factor: usize) -> Radix2Coset<F> {
+        assert!(
+            log_scale_factor <= self.log_size,
+            "The domain size (2 ^ {}) is not large enough to be shrunk by a factor of 2^{}",
+            self.log_size,
+            log_scale_factor
+        );
+
         let generator = self.generator.exp_power_of_2(log_scale_factor);
         let shift = self.shift.exp_power_of_2(log_scale_factor);
         Radix2Coset {
@@ -110,7 +117,12 @@ impl<F: TwoAdicField> Radix2Coset<F> {
         // Note that a subgroup of order n of the group of units of a field is
         // necessarily the group of n-th roots of unity. Therefore, testing for
         // belonging to that group can be done by raising to its order.
+        // NP TODO think about early termination either here or in field: exp_power_of_2
         (self.shift.inverse() * element).exp_power_of_2(self.log_size) == F::ONE
+
+        // Is e^(2^log_size) == 1?
+
+        //
     }
 
     pub fn evaluate_interpolation<Mat>(&self, coset_evals: &Mat, point: F) -> Vec<F>
@@ -130,7 +142,10 @@ impl<F: TwoAdicField> Radix2Coset<F> {
         Polynomial::from_coeffs(dft)
     }
 
-    /// NP TODO: No optimization here
+    /// Give the `i`-th element of the coset: `shift * generator^i` (this wraps
+    /// around `2^log_size`)
+    // We are limited to u64 because of the `TwoAdicField` interface. If the
+    // latter is expanded, this function can be so as well.
     pub fn element(&self, index: u64) -> F {
         self.shift * self.generator.exp_u64(index)
     }

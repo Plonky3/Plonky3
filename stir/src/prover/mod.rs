@@ -38,10 +38,21 @@ where
     F: TwoAdicField,
     M: Mmcs<F>,
 {
-    let domain = Radix2Coset::new_from_degree_and_rate(
-        config.log_starting_degree(),
-        config.log_starting_inv_rate(),
-    );
+    let log_size = config.log_starting_degree() + config.log_starting_inv_rate();
+
+    // Initial domain L_0. The chosen sequence of domains is:
+    // - L_0 = w * <w> = <w>
+    // - L_1 = w * <w^2>
+    // - L_2 = w * <w^4>
+    // ...
+    // - L_i = w * <w^{2^i}>
+    // This guarantees that, for all i >= 0, (L_i)^{2^l_i} doesn't intersect
+    // L_{i + 1} (where l_i > 0 is the log_folding_factor of the i-th round),
+    // as required for the optimisation mentioned in the paper (avoiding the use
+    // of the Fill polynomials).
+    // Defining L_0 with shift w or 1 is equivalent mathematically, but the
+    // former allows one to always use shrink_subgroup in the next rounds.
+    let domain = Radix2Coset::new(F::two_adic_generator(log_size), log_size);
 
     let evals = domain.evaluate_polynomial(&polynomial);
     let stacked_evals = RowMajorMatrix::new(evals, 1 << config.log_starting_folding_factor());
@@ -108,7 +119,6 @@ where
 
     let scaling_factor = 1 << (witness.domain.log_size() - log_last_folding_factor);
 
-    // NP TODO: Unsafe cast to u64
     // NP TODO: No index deduplication
     let queried_indices: Vec<u64> = (0..final_queries)
         .map(|_| challenger.sample_bits(scaling_factor).try_into().unwrap())
@@ -180,23 +190,8 @@ where
     // Fold the polynomial and the evaluations
     let folded_polynomial = fold_polynomial(&polynomial, folding_randomness, log_folding_factor);
 
-    // Compute L' = omega * <omega^2>
-    // Shrink the evaluation domain by a factor of 2 (log_scale_factor = 1)
-    // NP TODO: Does this make sense? It's equivalent to Giacomo's code but note that root_of_unity is never updated
-    // So this is not really omega * <omega^2> but initial_omega * <omega^2>
-
-    // NP TODO remove
-    // domain_0 = shift * <omega>                               // o = shift                // shift * <omega>
-    // domain_1 = [omega * (shift^2)] * <omega^2>               // o = omega * shift^2      // omega * shift^2 * <omega^2>
-    // domain_2 = [omega * (omega^2 * shift^4)] * <omega^4>     // o = omega^3 * shift^4    // omega^3 * shift^4 * <omega^4>
-    // domain_3 = [omega * (omega^6 * shift^8)] * <omega^8>     // o = omega^7 * shift^8    // omega^7 * shift^8 * <omega^8>
-
-    // shift = 1
-    // domain_1 = [omega * (shift^2)] * <omega^2>               //  omega * <omega^2>
-    // domain_2 = [omega * (omega^2 * shift^4)] * <omega^4>     //  omega^3 * <omega^4>
-
-    // NP TODO maybe keep root of unity separate
-    let new_domain = domain.shrink_coset(1).shift_by(config.subgroup_generator());
+    // Compute the i-th domain L_i = w * <w^{2^i}>
+    let new_domain = domain.shrink_subgroup(1);
 
     // NP TODO can this be done more efficiently using stacked_evals? If not,
     // remove stacked_evals from the witness?
@@ -216,12 +211,15 @@ where
 
     // NP TODO: Sample from the extension field like in FRI
 
-    // NP TODO Ask THESE ARE NOT OUT OF THE DOMAIN!
-    let ood_samples: Vec<F> = (0..num_ood_samples)
-        .map(|_| challenger.sample_ext_element())
-        .collect();
+    let mut ood_samples = Vec::new();
 
-    println!("ood_samples: {:?}", ood_samples);
+    while ood_samples.len() < num_ood_samples {
+        let el: F = challenger.sample_ext_element();
+        if !new_domain.contains(el) {
+            ood_samples.push(el);
+        }
+    }
+
     // Evaluate the polynomial at the OOD samples
     let betas: Vec<F> = ood_samples
         .iter()
@@ -239,12 +237,8 @@ where
     // Sample folding randomness for the next round
     let new_folding_randomness = challenger.sample_ext_element();
 
-    // Sample queried indices of elements in L^k
-    let log_scaling_factor = domain.log_size() - log_folding_factor;
-
     // Sample queried indices of elements in L^k_{i-1}
-    // NP TODO: Currently no index deduplication
-    // NP TODO: Unsafe cast to u64, need u64 here because domain.element() requires u64
+    let log_scaling_factor = domain.log_size() - log_folding_factor;
     let queried_indices: Vec<u64> = (0..num_queries)
         .map(|_| {
             challenger
@@ -252,6 +246,7 @@ where
                 .try_into()
                 .unwrap()
         })
+        .unique()
         .collect();
 
     // Proof of work witness
@@ -260,6 +255,9 @@ where
     let pow_witness = challenger.grind(pow_bits.ceil() as usize);
 
     // Shake randomness
+    // NP TODO ask Giacomo: shouldn't this be generated internally by the
+    // verifier and not squeezed from the sponge? That's not what the FS
+    // transform does
     let _shake_randomnes: F = challenger.sample_ext_element();
 
     // ========= QUERY PROOFS =========
@@ -283,8 +281,7 @@ where
     // interactive but the order of the interaction is not shown in the paper,
     // yet it is important for FS
 
-    // Compute the domain L^k = shift^k * <omega^k>
-    // NP TODO ask Giacomo: should this also scale the shift?
+    // Compute the domain L_{i-1}^k = w^k * <w^{2^{i-1} * k}>
     let domain_k = domain.shrink_coset(log_folding_factor);
 
     // Get the elements in L^k corresponding to the queried indices
@@ -300,60 +297,34 @@ where
         .map(|x| folded_polynomial.evaluate(x))
         .collect();
 
-    // Compute the quotient set, i.e \mathcal{G}_i in the paper
-    let quotient_set = ood_samples
-        .iter()
-        .chain(stir_randomness.iter())
-        .cloned()
-        .collect_vec();
-
-    // Compute the quotient set evaluations
-    let beta_answers = ood_samples.into_iter().zip(betas.clone());
+    // Stir answers has (implicitly) been dedup-ed, whereas beta_answers has not yet
     let stir_answers = stir_randomness.into_iter().zip(stir_randomness_evals);
-    let quotient_answers = beta_answers.chain(stir_answers);
+    let beta_answers = ood_samples
+        .into_iter()
+        .zip(betas.clone())
+        .into_iter()
+        .unique();
+    let quotient_answers = beta_answers.chain(stir_answers).collect_vec();
 
-    println!(
-        "quotient_answers: {:?}",
-        quotient_answers.clone().collect_vec()
-    );
+    // Compute the quotient set, i.e \mathcal{G}_i in the paper
+    let quotient_set = quotient_answers.iter().map(|(x, _)| *x).collect_vec();
+    let quotient_set_size = quotient_set.len();
+
     // Compute the answer polynomial
-    let ans_polynomial =
-        Polynomial::<F>::lagrange_interpolation(quotient_answers.clone().collect_vec());
+    let ans_polynomial = Polynomial::<F>::lagrange_interpolation(quotient_answers.clone());
 
     // Compute the shake polynomial
-    // NP TODO probably quotient_answers need to be deduped (either before calling or inside)
-    let shake_polynomial = compute_shake_polynomial(&ans_polynomial, quotient_answers);
+    let shake_polynomial = compute_shake_polynomial(&ans_polynomial, quotient_answers.into_iter());
 
     // Compute the quotient polynomial
-    // NP TODO: Remove the clone
-    let vanishing_polynomial = Polynomial::vanishing_polynomial(quotient_set.clone());
-
-    // NP TODO remove
-    // deg(ans_polynomial) <= (queried_indices + num_ood_samples) - 1 (in general, =)
-    // deg(folded_polynomial) = ?
-
-    // NP TODO remove
-    println!("deg(folded_polynomial): {:?}", folded_polynomial.degree());
-    println!(
-        "queried_indices + num_ood_samples - 1: {:?}",
-        num_queries + num_ood_samples - 1
-    );
-
+    let vanishing_polynomial = Polynomial::vanishing_polynomial(quotient_set);
     let quotient_polynomial = &(&folded_polynomial - &ans_polynomial) / &vanishing_polynomial;
 
-    // NP TODO remove
-    println!("folded_polynomial: {:?}", folded_polynomial.coeffs());
-    println!("ans_polynomial: {:?}", ans_polynomial.coeffs());
-
     // Compute the scaling polynomial, 1 + rx + r^2 x^2 + ... + r^n x^n with n = |quotient_set|
-    // NP TODO: From the call with Giacomo, it seems that this computation might be wrong
-    // NP TODO: Don't use std
-    let scaling_polynomial = Polynomial::from_coeffs(
-        iter::successors(Some(F::ONE), |&prev| Some(prev * comb_randomness))
-            .take(quotient_set.len() + 1)
-            .collect_vec(),
-    );
+    // NP TODO this will be removed
+    let scaling_polynomial = Polynomial::power_polynomial(comb_randomness, quotient_set_size);
 
+    // NP TODO make more efficient
     let witness_polynomial = &quotient_polynomial * &scaling_polynomial;
 
     // NP TODO remove/fix
