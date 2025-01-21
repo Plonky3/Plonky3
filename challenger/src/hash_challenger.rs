@@ -243,7 +243,7 @@ mod tests {
         let mut hash_challenger = HashChallenger::new(initial_state.clone(), test_hasher);
 
         let sample = hash_challenger.sample();
-        // Length of initial state
+        // Verify that the sample is the length of the initial state
         assert_eq!(sample, F::from_canonical_u8(2));
         // Check that the output buffer contains the sum of the initial state
         assert_eq!(
