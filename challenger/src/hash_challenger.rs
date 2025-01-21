@@ -181,12 +181,16 @@ mod tests {
 
         // Sample twice to ensure flush happens
         let first_sample = hash_challenger.sample();
+
         let second_sample = hash_challenger.sample();
 
         // Verify that the first sample is the length of 1..11, (i.e. 10).
         assert_eq!(first_sample, F::from_canonical_u8(10));
         //  Verify that the second sample is the sum of numbers from 1 to 10 (i.e. 55)
         assert_eq!(second_sample, F::from_canonical_u8(55));
+
+        // Verify that the output buffer is now empty
+        assert!(hash_challenger.output_buffer.is_empty());
     }
 
     #[test]
@@ -331,5 +335,23 @@ mod tests {
             hash_challenger.output_buffer,
             vec![F::from_canonical_u8(42)]
         );
+    }
+
+    #[test]
+    fn test_output_buffer_cleared_on_observe() {
+        let test_hasher = TestHasher {};
+        let mut hash_challenger = HashChallenger::new(vec![], test_hasher);
+
+        // Populate artificially the output buffer
+        hash_challenger.output_buffer.push(F::from_canonical_u8(42));
+
+        // Ensure the output buffer is populated
+        assert!(!hash_challenger.output_buffer.is_empty());
+
+        // Observe a new value
+        hash_challenger.observe(F::from_canonical_u8(3));
+
+        // Verify that the output buffer is cleared after observing
+        assert!(hash_challenger.output_buffer.is_empty());
     }
 }
