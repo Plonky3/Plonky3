@@ -68,7 +68,7 @@ where
 {
     #[inline(always)]
     fn observe(&mut self, value: T) {
-        (**self).observe(value)
+        (*self).observe(value)
     }
 
     #[inline(always)]
@@ -76,7 +76,7 @@ where
     where
         T: Clone,
     {
-        (**self).observe_slice(values)
+        (*self).observe_slice(values)
     }
 }
 
@@ -86,17 +86,17 @@ where
 {
     #[inline(always)]
     fn sample(&mut self) -> T {
-        (**self).sample()
+        (*self).sample()
     }
 
     #[inline(always)]
     fn sample_array<const N: usize>(&mut self) -> [T; N] {
-        (**self).sample_array()
+        (*self).sample_array()
     }
 
     #[inline(always)]
     fn sample_vec(&mut self, n: usize) -> Vec<T> {
-        (**self).sample_vec(n)
+        (*self).sample_vec(n)
     }
 }
 
@@ -106,7 +106,7 @@ where
 {
     #[inline(always)]
     fn sample_bits(&mut self, bits: usize) -> T {
-        (**self).sample_bits(bits)
+        (*self).sample_bits(bits)
     }
 }
 
@@ -116,11 +116,11 @@ where
 {
     #[inline(always)]
     fn observe_ext_element<EF: FieldExtensionAlgebra<F>>(&mut self, ext: EF) {
-        (**self).observe_ext_element(ext)
+        (*self).observe_ext_element(ext)
     }
 
     #[inline(always)]
     fn sample_ext_element<EF: FieldExtensionAlgebra<F>>(&mut self) -> EF {
-        (**self).sample_ext_element()
+        (*self).sample_ext_element()
     }
 }
