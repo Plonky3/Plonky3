@@ -260,7 +260,7 @@ mod tests {
         // Flush empty buffer
         hash_challenger.flush();
 
-        // Check that the input buffer contains the sum and length of the empty buffer
+        // Check that the input and output buffers contain the sum and length of the empty buffer
         assert_eq!(hash_challenger.input_buffer, vec![F::ZERO, F::ZERO]);
         assert_eq!(hash_challenger.output_buffer, vec![F::ZERO, F::ZERO]);
     }
