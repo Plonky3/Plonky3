@@ -94,7 +94,7 @@ where
     Inner: CanSample<u8>,
 {
     fn sample(&mut self) -> EF {
-        let modulus = F::ORDER_U64 as u32;
+        let modulus = F::ORDER_U32;
         let log_size = log2_ceil_u64(F::ORDER_U64);
         // We use u64 to avoid overflow in the case that log_size = 32.
         let pow_of_two_bound = ((1u64 << log_size) - 1) as u32;
@@ -103,7 +103,10 @@ where
             let value = u32::from_le_bytes(inner.sample_array::<4>());
             let value = value & pow_of_two_bound;
             if value < modulus {
-                return F::from_canonical_u32(value);
+                return unsafe {
+                    // This is safe as value < F::ORDER_U32.
+                    F::from_canonical_unchecked(value)
+                };
             }
         };
         EF::from_base_fn(|_| sample_base(&mut self.inner))
@@ -133,9 +136,12 @@ where
 
     #[instrument(name = "grind for proof-of-work witness", skip_all)]
     fn grind(&mut self, bits: usize) -> Self::Witness {
-        let witness = (0..F::ORDER_U64)
+        let witness = (0..F::ORDER_U32)
             .into_par_iter()
-            .map(|i| F::from_canonical_u64(i))
+            .map(|i| unsafe {
+                // i < F::ORDER_U32 by construction so this is safe.
+                F::from_canonical_unchecked(i)
+            })
             .find_any(|witness| self.clone().check_witness(bits, *witness))
             .expect("failed to find witness");
         assert!(self.check_witness(bits, witness));
@@ -203,7 +209,10 @@ where
             let value = u64::from_le_bytes(inner.sample_array::<8>());
             let value = value & pow_of_two_bound;
             if value < modulus {
-                return F::from_canonical_u64(value);
+                return unsafe {
+                    // This is safe as value < F::ORDER_U64.
+                    F::from_canonical_unchecked(value)
+                };
             }
         };
         EF::from_base_fn(|_| sample_base(&mut self.inner))
@@ -235,7 +244,10 @@ where
     fn grind(&mut self, bits: usize) -> Self::Witness {
         let witness = (0..F::ORDER_U64)
             .into_par_iter()
-            .map(|i| F::from_canonical_u64(i))
+            .map(|i| unsafe {
+                // i < F::ORDER_U64 by construction so this is safe.
+                F::from_canonical_unchecked(i)
+            })
             .find_any(|witness| self.clone().check_witness(bits, *witness))
             .expect("failed to find witness");
         assert!(self.check_witness(bits, witness));

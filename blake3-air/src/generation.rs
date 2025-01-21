@@ -60,17 +60,12 @@ fn generate_trace_rows_for_perm<F: PrimeField64>(
 
     row.initial_row0 = array::from_fn(|i| {
         [
-            F::from_canonical_u16(input[16 + i] as u16),
-            F::from_canonical_u32(input[16 + i] >> 16),
+            F::from_u16(input[16 + i] as u16),
+            F::from_u16((input[16 + i] >> 16) as u16),
         ]
     });
 
-    row.initial_row2 = array::from_fn(|i| {
-        [
-            F::from_canonical_u32(IV[i][0]),
-            F::from_canonical_u32(IV[i][1]),
-        ]
-    });
+    row.initial_row2 = array::from_fn(|i| [F::from_u16(IV[i][0]), F::from_u16(IV[i][1])]);
 
     // We save the state and m_vec as u_32's we will quickly compute the hash using these whilst saving
     // the appropriate data in the trace as we go.
@@ -79,10 +74,10 @@ fn generate_trace_rows_for_perm<F: PrimeField64>(
         [input[16], input[16 + 1], input[16 + 2], input[16 + 3]],
         [input[16 + 4], input[16 + 5], input[16 + 6], input[16 + 7]],
         [
-            IV[0][0] + (IV[0][1] << 16),
-            IV[1][0] + (IV[1][1] << 16),
-            IV[2][0] + (IV[2][1] << 16),
-            IV[3][0] + (IV[3][1] << 16),
+            (IV[0][0] as u32) + ((IV[0][1] as u32) << 16),
+            (IV[1][0] as u32) + ((IV[1][1] as u32) << 16),
+            (IV[2][0] as u32) + ((IV[2][1] as u32) << 16),
+            (IV[3][0] as u32) + ((IV[3][1] as u32) << 16),
         ],
         [counter as u32, (counter >> 32) as u32, block_len as u32, 0],
     ];
@@ -223,15 +218,15 @@ fn verifiable_half_round(
 fn save_state_to_trace<FA: FieldAlgebra>(trace: &mut Blake3State<FA>, state: &[[u32; 4]; 4]) {
     trace.row0 = array::from_fn(|i| {
         [
-            FA::from_canonical_u16(state[0][i] as u16), // Store the bottom 16 bits packed.
-            FA::from_canonical_u32(state[0][i] >> 16),  // Store the top 16 bits packed.
+            FA::from_u16(state[0][i] as u16), // Store the bottom 16 bits packed.
+            FA::from_u16((state[0][i] >> 16) as u16), // Store the top 16 bits packed.
         ]
     });
     trace.row1 = array::from_fn(|i| u32_to_bits_le(state[1][i])); // Store all 32 bits unpacked.
     trace.row2 = array::from_fn(|i| {
         [
-            FA::from_canonical_u16(state[2][i] as u16), // Store the bottom 16 bits packed.
-            FA::from_canonical_u32(state[2][i] >> 16),  // Store the top 16 bits packed.
+            FA::from_u16(state[2][i] as u16), // Store the bottom 16 bits packed.
+            FA::from_u16((state[2][i] >> 16) as u16), // Store the top 16 bits packed.
         ]
     });
     trace.row3 = array::from_fn(|i| u32_to_bits_le(state[3][i])); // Store all 32 bits unpacked.

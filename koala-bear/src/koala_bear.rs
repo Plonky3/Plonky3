@@ -110,7 +110,10 @@ mod tests {
     use p3_field::{
         InjectiveMonomial, PermutationMonomial, PrimeField32, PrimeField64, TwoAdicField,
     };
-    use p3_field_testing::{test_field, test_field_dft, test_two_adic_field};
+    use p3_field_testing::{
+        test_field, test_field_dft, test_prime_field, test_prime_field_32, test_prime_field_64,
+        test_two_adic_field,
+    };
 
     use super::*;
 
@@ -118,7 +121,7 @@ mod tests {
 
     #[test]
     fn test_koala_bear_two_adicity_generators() {
-        let base = KoalaBear::from_canonical_u32(0x6ac49f88);
+        let base = KoalaBear::from_u32(0x6ac49f88);
         for bits in 0..=KoalaBear::TWO_ADICITY {
             assert_eq!(
                 KoalaBear::two_adic_generator(bits),
@@ -129,17 +132,17 @@ mod tests {
 
     #[test]
     fn test_koala_bear() {
-        let f = F::from_canonical_u32(100);
+        let f = F::from_u32(100);
         assert_eq!(f.as_canonical_u64(), 100);
 
-        let f = F::from_canonical_u32(0);
+        let f = F::from_u32(0);
         assert!(f.is_zero());
 
-        let f = F::from_wrapped_u32(F::ORDER_U32);
+        let f = F::from_u32(F::ORDER_U32);
         assert!(f.is_zero());
 
         let f_1 = F::ONE;
-        let f_1_copy = F::from_canonical_u32(1);
+        let f_1_copy = F::from_u32(1);
 
         let expected_result = F::ZERO;
         assert_eq!(f_1 - f_1_copy, expected_result);
@@ -147,22 +150,22 @@ mod tests {
         let expected_result = F::TWO;
         assert_eq!(f_1 + f_1_copy, expected_result);
 
-        let f_2 = F::from_canonical_u32(2);
-        let expected_result = F::from_canonical_u32(3);
+        let f_2 = F::from_u32(2);
+        let expected_result = F::from_u32(3);
         assert_eq!(f_1 + f_1_copy * f_2, expected_result);
 
-        let expected_result = F::from_canonical_u32(5);
+        let expected_result = F::from_u32(5);
         assert_eq!(f_1 + f_2 * f_2, expected_result);
 
-        let f_p_minus_1 = F::from_canonical_u32(F::ORDER_U32 - 1);
+        let f_p_minus_1 = F::from_u32(F::ORDER_U32 - 1);
         let expected_result = F::ZERO;
         assert_eq!(f_1 + f_p_minus_1, expected_result);
 
-        let f_p_minus_2 = F::from_canonical_u32(F::ORDER_U32 - 2);
-        let expected_result = F::from_canonical_u32(F::ORDER_U32 - 3);
+        let f_p_minus_2 = F::from_u32(F::ORDER_U32 - 2);
+        let expected_result = F::from_u32(F::ORDER_U32 - 3);
         assert_eq!(f_p_minus_1 + f_p_minus_2, expected_result);
 
-        let expected_result = F::from_canonical_u32(1);
+        let expected_result = F::from_u32(1);
         assert_eq!(f_p_minus_1 - f_p_minus_2, expected_result);
 
         let expected_result = f_p_minus_1;
@@ -171,9 +174,9 @@ mod tests {
         let expected_result = f_p_minus_2;
         assert_eq!(f_p_minus_1 - f_1, expected_result);
 
-        let m1 = F::from_canonical_u32(0x34167c58);
-        let m2 = F::from_canonical_u32(0x61f3207b);
-        let expected_prod = F::from_canonical_u32(0x54b46b81);
+        let m1 = F::from_u32(0x34167c58);
+        let m2 = F::from_u32(0x61f3207b);
+        let expected_prod = F::from_u32(0x54b46b81);
         assert_eq!(m1 * m2, expected_prod);
 
         assert_eq!(m1.injective_exp_n().injective_exp_root_n(), m1);
@@ -227,4 +230,7 @@ mod tests {
         crate::KoalaBear,
         p3_monty_31::dft::RecursiveDft<_>
     );
+    test_prime_field!(crate::KoalaBear);
+    test_prime_field_64!(crate::KoalaBear);
+    test_prime_field_32!(crate::KoalaBear);
 }

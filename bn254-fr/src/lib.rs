@@ -2,17 +2,21 @@
 
 mod poseidon2;
 
-use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::{fmt, stringify};
 
 use ff::{Field as FFField, PrimeField as FFPrimeField};
 pub use halo2curves::bn256::Fr as FFBn254Fr;
 use halo2curves::serde::SerdeObject;
 use num_bigint::BigUint;
-use p3_field::{Field, FieldAlgebra, InjectiveMonomial, Packable, PrimeField, TwoAdicField};
+use p3_field::integers::QuotientMap;
+use p3_field::{
+    quotient_map_small_int, Field, FieldAlgebra, InjectiveMonomial, Packable, PrimeField,
+    TwoAdicField,
+};
 pub use poseidon2::Poseidon2Bn254;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -91,6 +95,7 @@ impl Debug for Bn254Fr {
 
 impl FieldAlgebra for Bn254Fr {
     type F = Self;
+    type PrimeSubfield = Self;
 
     const ZERO: Self = Self::new(FFBn254Fr::ZERO);
     const ONE: Self = Self::new(FFBn254Fr::ONE);
@@ -109,36 +114,9 @@ impl FieldAlgebra for Bn254Fr {
         f
     }
 
-    fn from_bool(b: bool) -> Self {
-        Self::new(FFBn254Fr::from(b as u64))
-    }
-
-    fn from_canonical_u8(n: u8) -> Self {
-        Self::new(FFBn254Fr::from(n as u64))
-    }
-
-    fn from_canonical_u16(n: u16) -> Self {
-        Self::new(FFBn254Fr::from(n as u64))
-    }
-
-    fn from_canonical_u32(n: u32) -> Self {
-        Self::new(FFBn254Fr::from(n as u64))
-    }
-
-    fn from_canonical_u64(n: u64) -> Self {
-        Self::new(FFBn254Fr::from(n))
-    }
-
-    fn from_canonical_usize(n: usize) -> Self {
-        Self::new(FFBn254Fr::from(n as u64))
-    }
-
-    fn from_wrapped_u32(n: u32) -> Self {
-        Self::new(FFBn254Fr::from(n as u64))
-    }
-
-    fn from_wrapped_u64(n: u64) -> Self {
-        Self::new(FFBn254Fr::from(n))
+    #[inline]
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
+        f
     }
 }
 
@@ -191,6 +169,54 @@ impl Field for Bn254Fr {
             (BigUint::from(1670836401704629u64), 1),
             (BigUint::from(13818364434197438864469338081u128), 1),
         ]
+    }
+}
+
+quotient_map_small_int!(Bn254Fr, u128, [u8, u16, u32, u64]);
+quotient_map_small_int!(Bn254Fr, i128, [i8, i16, i32, i64]);
+
+impl QuotientMap<u128> for Bn254Fr {
+    /// Due to the size of the `BN254` prime, the input value is always canonical.
+    #[inline]
+    fn from_int(int: u128) -> Bn254Fr {
+        Self::new(FFBn254Fr::from_raw([int as u64, (int >> 64) as u64, 0, 0]))
+    }
+
+    /// Due to the size of the `BN254` prime, the input value is always canonical.
+    #[inline]
+    fn from_canonical_checked(int: u128) -> Option<Bn254Fr> {
+        Some(Self::from_int(int))
+    }
+
+    /// Due to the size of the `BN254` prime, the input value is always canonical.
+    #[inline]
+    unsafe fn from_canonical_unchecked(int: u128) -> Bn254Fr {
+        Self::from_int(int)
+    }
+}
+
+impl QuotientMap<i128> for Bn254Fr {
+    /// Due to the size of the `BN254` prime, the input value is always canonical.
+    #[inline]
+    fn from_int(int: i128) -> Bn254Fr {
+        // Nothing better than just branching based on the sign of int.
+        if int >= 0 {
+            Self::from_int(int as u128)
+        } else {
+            -Self::from_int((-int) as u128)
+        }
+    }
+
+    /// Due to the size of the `BN254` prime, the input value is always canonical.
+    #[inline]
+    fn from_canonical_checked(int: i128) -> Option<Bn254Fr> {
+        Some(Self::from_int(int))
+    }
+
+    /// Due to the size of the `BN254` prime, the input value is always canonical.
+    #[inline]
+    unsafe fn from_canonical_unchecked(int: i128) -> Bn254Fr {
+        Self::from_int(int)
     }
 }
 
@@ -295,7 +321,7 @@ impl TwoAdicField for Bn254Fr {
 #[cfg(test)]
 mod tests {
     use num_traits::One;
-    use p3_field_testing::test_field;
+    use p3_field_testing::{test_field, test_prime_field};
 
     use super::*;
 
@@ -306,7 +332,7 @@ mod tests {
         let f = F::new(FFBn254Fr::from_u128(100));
         assert_eq!(f.as_canonical_biguint(), BigUint::new(vec![100]));
 
-        let f = F::from_canonical_u64(0);
+        let f = F::from_u64(0);
         assert!(f.is_zero());
 
         let f = F::new(FFBn254Fr::from_str_vartime(&F::order().to_str_radix(10)).unwrap());
@@ -387,4 +413,6 @@ mod tests {
     }
 
     test_field!(crate::Bn254Fr);
+
+    test_prime_field!(crate::Bn254Fr);
 }

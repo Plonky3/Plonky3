@@ -45,7 +45,7 @@ pub fn apply_circulant<FA: FieldAlgebra, const N: usize>(
     circ_matrix: &[u64; N],
     input: [FA; N],
 ) -> [FA; N] {
-    let mut matrix: [FA; N] = circ_matrix.map(FA::from_canonical_u64);
+    let mut matrix: [FA; N] = circ_matrix.map(FA::from_u64);
 
     let mut output = array::from_fn(|_| FA::ZERO);
     for out_i in output.iter_mut().take(N - 1) {
@@ -93,7 +93,7 @@ pub fn apply_circulant_fft<F: TwoAdicField, const N: usize, FFT: TwoAdicSubgroup
     column: [u64; N],
     input: &[F; N],
 ) -> [F; N] {
-    let column = column.map(F::from_canonical_u64).to_vec();
+    let column = column.map(F::from_u64).to_vec();
     let matrix = fft.dft(column);
     let input = fft.dft(input.to_vec());
 

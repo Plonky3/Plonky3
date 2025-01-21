@@ -103,20 +103,14 @@ mod tests {
     #[test]
     fn flat_matrix() {
         let values = vec![
-            EF::from_base_fn(|i| F::from_canonical_usize(i + 10)),
-            EF::from_base_fn(|i| F::from_canonical_usize(i + 20)),
-            EF::from_base_fn(|i| F::from_canonical_usize(i + 30)),
-            EF::from_base_fn(|i| F::from_canonical_usize(i + 40)),
+            EF::from_base_fn(|i| F::from_u8(i as u8 + 10)),
+            EF::from_base_fn(|i| F::from_u8(i as u8 + 20)),
+            EF::from_base_fn(|i| F::from_u8(i as u8 + 30)),
+            EF::from_base_fn(|i| F::from_u8(i as u8 + 40)),
         ];
         let ext = RowMajorMatrix::<EF>::new(values, 2);
         let flat = FlatMatrixView::<F, EF, _>::new(ext);
-        assert_eq!(
-            &*flat.row_slice(0),
-            &[10, 11, 20, 21].map(F::from_canonical_usize)
-        );
-        assert_eq!(
-            &*flat.row_slice(1),
-            &[30, 31, 40, 41].map(F::from_canonical_usize)
-        );
+        assert_eq!(&*flat.row_slice(0), &[10, 11, 20, 21].map(F::from_u8));
+        assert_eq!(&*flat.row_slice(1), &[30, 31, 40, 41].map(F::from_u8));
     }
 }

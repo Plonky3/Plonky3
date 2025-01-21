@@ -1,15 +1,15 @@
 //! As the security analysis of Poseidon2 is identical to that of Poseidon,
 //! the relevant constraints regarding the number of full/partial rounds required can be found in
-//! the original paper: https://eprint.iacr.org/2019/458.pdf and the associated codebase:
-//! https://extgit.iaik.tugraz.at/krypto/hadeshash (See generate_params_poseidon.sage)
+//! the original paper: `<https://eprint.iacr.org/2019/458.pdf>` and the associated codebase:
+//! `<https://extgit.iaik.tugraz.at/krypto/hadeshash>` (See generate_params_poseidon.sage)
 //!
 //! These constraints are broken down into 6 equations:
 //! statistical, interpolation, groebner 1, 2, 3 and
-//! an extra constraint coming from the paper https://eprint.iacr.org/2023/537.pdf.
+//! an extra constraint coming from the paper `<https://eprint.iacr.org/2023/537.pdf>`.
 //!
 //! For our parameters (M = 128, p > 2^30, WIDTH = t >= 8, D = alpha < 12),
 //! the statistical constraint always simplifies to requiring RF >= 6.
-//! Additionally p does not appear in Groebner 3 or the constraint coming from https://eprint.iacr.org/2023/537.pdf.
+//! Additionally p does not appear in Groebner 3 or the constraint coming from `<https://eprint.iacr.org/2023/537.pdf>`.
 //! The remaining 3 constraints all can be rearranged into the form:
 //! F(RF, RP) >= G(p) where G is a function which is non-decreasing with respect to p.
 //!
@@ -20,7 +20,7 @@
 //! they will also be optimal for (M, r, WIDTH, D) for any q < r < p.
 //!
 //! We compute the optimal required number of external (full) and internal (partial) rounds using:
-//! https://github.com/0xPolygonZero/hash-constants/blob/master/calc_round_numbers.py
+//! `<https://github.com/0xPolygonZero/hash-constants/blob/master/calc_round_numbers.py>`
 //! Using the above analysis we can conclude that the round numbers are equal
 //! for all 31 bit primes and 64 bit primes respectively.
 

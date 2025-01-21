@@ -161,6 +161,7 @@ impl Product for PackedGoldilocksAVX512 {
 
 impl FieldAlgebra for PackedGoldilocksAVX512 {
     type F = Goldilocks;
+    type PrimeSubfield = Goldilocks;
 
     const ZERO: Self = Self([Goldilocks::ZERO; WIDTH]);
     const ONE: Self = Self([Goldilocks::ONE; WIDTH]);
@@ -173,37 +174,8 @@ impl FieldAlgebra for PackedGoldilocksAVX512 {
     }
 
     #[inline]
-    fn from_bool(b: bool) -> Self {
-        Goldilocks::from_bool(b).into()
-    }
-    #[inline]
-    fn from_canonical_u8(n: u8) -> Self {
-        Goldilocks::from_canonical_u8(n).into()
-    }
-    #[inline]
-    fn from_canonical_u16(n: u16) -> Self {
-        Goldilocks::from_canonical_u16(n).into()
-    }
-    #[inline]
-    fn from_canonical_u32(n: u32) -> Self {
-        Goldilocks::from_canonical_u32(n).into()
-    }
-    #[inline]
-    fn from_canonical_u64(n: u64) -> Self {
-        Goldilocks::from_canonical_u64(n).into()
-    }
-    #[inline]
-    fn from_canonical_usize(n: usize) -> Self {
-        Goldilocks::from_canonical_usize(n).into()
-    }
-
-    #[inline]
-    fn from_wrapped_u32(n: u32) -> Self {
-        Goldilocks::from_wrapped_u32(n).into()
-    }
-    #[inline]
-    fn from_wrapped_u64(n: u64) -> Self {
-        Goldilocks::from_wrapped_u64(n).into()
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
+        f.into()
     }
 
     #[inline]

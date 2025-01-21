@@ -9,9 +9,11 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
 use p3_field::exponentiation::exp_10540996611094048183;
+use p3_field::integers::QuotientMap;
 use p3_field::{
-    halve_u64, Field, FieldAlgebra, InjectiveMonomial, Packable, PermutationMonomial, PrimeField,
-    PrimeField64, TwoAdicField,
+    halve_u64, quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int, Field,
+    FieldAlgebra, InjectiveMonomial, Packable, PermutationMonomial, PrimeField, PrimeField64,
+    TwoAdicField,
 };
 use p3_util::{assume, branch_hint};
 use rand::distributions::{Distribution, Standard};
@@ -94,6 +96,7 @@ impl Distribution<Goldilocks> for Standard {
 
 impl FieldAlgebra for Goldilocks {
     type F = Self;
+    type PrimeSubfield = Self;
 
     const ZERO: Self = Self::new(0);
     const ONE: Self = Self::new(1);
@@ -105,41 +108,13 @@ impl FieldAlgebra for Goldilocks {
         f
     }
 
+    #[inline]
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
+        f
+    }
+
     fn from_bool(b: bool) -> Self {
         Self::new(b.into())
-    }
-
-    fn from_canonical_u8(n: u8) -> Self {
-        Self::new(n.into())
-    }
-
-    fn from_canonical_u16(n: u16) -> Self {
-        Self::new(n.into())
-    }
-
-    fn from_canonical_u32(n: u32) -> Self {
-        Self::new(n.into())
-    }
-
-    #[inline(always)]
-    fn from_canonical_u64(n: u64) -> Self {
-        Self::new(n)
-    }
-
-    fn from_canonical_usize(n: usize) -> Self {
-        Self::new(n as u64)
-    }
-
-    fn from_wrapped_u32(n: u32) -> Self {
-        // A u32 must be canonical, plus we don't store canonical encodings anyway, so there's no
-        // need for a reduction.
-        Self::new(n.into())
-    }
-
-    fn from_wrapped_u64(n: u64) -> Self {
-        // There's no need to reduce `n` to canonical form, as our internal encoding is
-        // non-canonical, so there's no need for a reduction.
-        Self::new(n)
     }
 
     #[inline]
@@ -254,6 +229,97 @@ impl Field for Goldilocks {
     #[inline]
     fn order() -> BigUint {
         P.into()
+    }
+}
+
+// We can use some macros to implement QuotientMap<Int> for all integer types except for u64, i64, and i128's.
+quotient_map_small_int!(Goldilocks, u64, [u8, u16, u32]);
+quotient_map_small_int!(Goldilocks, i64, [i8, i16, i32]);
+quotient_map_large_uint!(
+    Goldilocks,
+    u64,
+    Goldilocks::ORDER_U64,
+    "`[0, 2^64 - 2^32]`",
+    "`[0, 2^64 - 1]`",
+    [u128]
+);
+quotient_map_large_iint!(
+    Goldilocks,
+    i64,
+    "`[-(2^63 - 2^31), 2^63 - 2^31]`",
+    "`[1 + 2^32 - 2^64, 2^64 - 1]`",
+    [(i128, u128)]
+);
+
+// We are left with writing some custom impls for the final three types.
+impl QuotientMap<u64> for Goldilocks {
+    /// Convert a given `u64` integer into an element of the `Goldilocks` field.
+    ///
+    /// No reduction is needed as the internal value is allowed
+    /// to be any u64.
+    #[inline]
+    fn from_int(int: u64) -> Self {
+        Self::new(int)
+    }
+
+    /// Convert a given `u64` integer into an element of the `Goldilocks` field.
+    ///
+    /// Return `None` if the given integer is greater than `p = 2^64 - 2^32 + 1`.
+    #[inline]
+    fn from_canonical_checked(int: u64) -> Option<Self> {
+        if int < Self::ORDER_U64 {
+            Some(Self::new(int))
+        } else {
+            None
+        }
+    }
+
+    /// Convert a given `u64` integer into an element of the `Goldilocks` field.
+    ///
+    /// # Safety
+    /// In this case this function is actually always safe as the internal
+    /// value is allowed to be any u64.
+    #[inline(always)]
+    unsafe fn from_canonical_unchecked(int: u64) -> Goldilocks {
+        Self::new(int)
+    }
+}
+
+impl QuotientMap<i64> for Goldilocks {
+    /// Convert a given `i64` integer into an element of the `Goldilocks` field.
+    ///
+    /// We simply need to deal with the sign.
+    #[inline]
+    fn from_int(int: i64) -> Self {
+        if int >= 0 {
+            Self::new(int as u64)
+        } else {
+            Self::new(Self::ORDER_U64.wrapping_add_signed(int))
+        }
+    }
+
+    /// Convert a given `i64` integer into an element of the `Goldilocks` field.
+    ///
+    /// Returns none if the input does not lie in the range `(-(2^63 - 2^31), 2^63 - 2^31)`.
+    #[inline]
+    fn from_canonical_checked(int: i64) -> Option<Goldilocks> {
+        const POS_BOUND: i64 = (P >> 1) as i64;
+        const NEG_BOUND: i64 = -POS_BOUND;
+        match int {
+            0..=POS_BOUND => Some(Self::new(int as u64)),
+            NEG_BOUND..0 => Some(Self::new(Self::ORDER_U64.wrapping_add_signed(int))),
+            _ => None,
+        }
+    }
+
+    /// Convert a given `i64` integer into an element of the `Goldilocks` field.
+    ///
+    /// # Safety
+    /// In this case this function is actually always safe as the internal
+    /// value is allowed to be any u64.
+    #[inline(always)]
+    unsafe fn from_canonical_unchecked(int: i64) -> Goldilocks {
+        Self::from_int(int)
     }
 }
 
@@ -485,7 +551,9 @@ pub(crate) const fn to_goldilocks_array<const N: usize>(input: [u64; N]) -> [Gol
 
 #[cfg(test)]
 mod tests {
-    use p3_field_testing::{test_field, test_field_dft, test_two_adic_field};
+    use p3_field_testing::{
+        test_field, test_field_dft, test_prime_field, test_prime_field_64, test_two_adic_field,
+    };
 
     use super::*;
 
@@ -503,13 +571,13 @@ mod tests {
         let f = F::new(u64::MAX);
         assert_eq!(f.as_canonical_u64(), u32::MAX as u64 - 1);
 
-        let f = F::from_canonical_u64(u64::MAX);
+        let f = F::from_u64(u64::MAX);
         assert_eq!(f.as_canonical_u64(), u32::MAX as u64 - 1);
 
-        let f = F::from_canonical_u64(0);
+        let f = F::from_u64(0);
         assert!(f.is_zero());
 
-        let f = F::from_canonical_u64(F::ORDER_U64);
+        let f = F::from_u64(F::ORDER_U64);
         assert!(f.is_zero());
 
         assert_eq!(F::GENERATOR.as_canonical_u64(), 7_u64);
@@ -530,12 +598,12 @@ mod tests {
         let expected_result = F::new(5);
         assert_eq!(f_1 + f_2 * f_2, expected_result);
 
-        let f_p_minus_1 = F::from_canonical_u64(F::ORDER_U64 - 1);
+        let f_p_minus_1 = F::from_u64(F::ORDER_U64 - 1);
         let expected_result = F::ZERO;
         assert_eq!(f_1 + f_p_minus_1, expected_result);
 
-        let f_p_minus_2 = F::from_canonical_u64(F::ORDER_U64 - 2);
-        let expected_result = F::from_canonical_u64(F::ORDER_U64 - 3);
+        let f_p_minus_2 = F::from_u64(F::ORDER_U64 - 2);
+        let expected_result = F::from_u64(F::ORDER_U64 - 3);
         assert_eq!(f_p_minus_1 + f_p_minus_2, expected_result);
 
         let expected_result = F::new(1);
@@ -574,6 +642,8 @@ mod tests {
     }
 
     test_field!(crate::Goldilocks);
+    test_prime_field!(crate::Goldilocks);
+    test_prime_field_64!(crate::Goldilocks);
     test_two_adic_field!(crate::Goldilocks);
 
     test_field_dft!(radix2dit, crate::Goldilocks, p3_dft::Radix2Dit<_>);
