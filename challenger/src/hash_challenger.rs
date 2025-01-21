@@ -185,7 +185,7 @@ mod tests {
 
         // Verify that the first sample is the length of 1..11, (i.e. 10).
         assert_eq!(first_sample, F::from_canonical_u8(10));
-        // Length of 1 to 10
+        //  Verify that the second sample is the sum of numbers from 1 to 10 (i.e. 55)
         assert_eq!(second_sample, F::from_canonical_u8(55));
     }
 
