@@ -199,7 +199,7 @@ mod tests {
         let value = F::from_canonical_u8(42);
         hash_challenger.observe(value);
 
-        // Check that the input buffer contains the value
+        // Check that the input buffer contains the initial and observed values
         assert_eq!(
             hash_challenger.input_buffer,
             vec![F::from_canonical_u8(123), F::from_canonical_u8(42)]
