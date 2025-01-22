@@ -32,6 +32,16 @@ pub struct CirclePcs<Val: Field, InputMmcs, FriMmcs> {
     pub _phantom: PhantomData<Val>,
 }
 
+impl<Val: Field, InputMmcs, FriMmcs> CirclePcs<Val, InputMmcs, FriMmcs> {
+    pub fn new(mmcs: InputMmcs, fri_config: FriConfig<FriMmcs>) -> Self {
+        Self {
+            mmcs,
+            fri_config,
+            _phantom: PhantomData,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(bound = "")]
 pub struct BatchOpening<Val: Field, InputMmcs: Mmcs<Val>> {
