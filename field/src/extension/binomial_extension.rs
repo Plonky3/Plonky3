@@ -41,7 +41,7 @@ impl<F: Field, const D: usize> Default for BinomialExtensionField<F, D> {
 impl<F: Field, const D: usize> From<F> for BinomialExtensionField<F, D> {
     fn from(x: F) -> Self {
         Self {
-            value: field_to_array::<F, D>(x),
+            value: field_to_array(x),
         }
     }
 }
@@ -117,28 +117,28 @@ impl<F, const D: usize> FieldAlgebra for BinomialExtensionField<F, D>
 where
     F: BinomiallyExtendable<D>,
 {
-    type F = BinomialExtensionField<FA::F, D>;
-    type PrimeSubfield = <FA::F as FieldAlgebra>::PrimeSubfield;
+    type F = BinomialExtensionField<F, D>;
+    type PrimeSubfield = <F as FieldAlgebra>::PrimeSubfield;
 
     const ZERO: Self = Self {
         value: [F::ZERO; D],
     };
 
     const ONE: Self = Self {
-        value: field_to_array::<F, D>(F::ONE),
+        value: field_to_array(F::ONE),
     };
 
     const TWO: Self = Self {
-        value: field_to_array::<F, D>(F::TWO),
+        value: field_to_array(F::TWO),
     };
 
     const NEG_ONE: Self = Self {
-        value: field_to_array::<F, D>(F::NEG_ONE),
+        value: field_to_array(F::NEG_ONE),
     };
 
     #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
-        FA::from_f(<FA::F as FieldAlgebra>::from_prime_subfield(f)).into()
+        <F as FieldAlgebra>::from_prime_subfield(f).into()
     }
 
     #[inline(always)]
@@ -476,7 +476,7 @@ where
         for r in res.iter_mut() {
             *r = Standard.sample(rng);
         }
-        BinomialExtensionField::<F, D>::from_base_slice(&res)
+        BinomialExtensionField::from_base_slice(&res)
     }
 }
 
