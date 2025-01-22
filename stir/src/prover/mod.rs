@@ -362,3 +362,5 @@ fn compute_shake_polynomial<F: TwoAdicField>(
 }
 
 // NP TODO degree separation in sponge
+
+// NP TODO when evaluating in the original domain w * <w>, detect this and evaluate over <w>, then cyclically shift (make sure this is correct)

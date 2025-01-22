@@ -35,7 +35,7 @@ fn test_config() {
     let log_starting_folding_factor = 4;
     let log_starting_inv_rate = 1;
     let security_assumption = SecurityAssumption::CapacityBound;
-    let num_rounds = 3;
+    let num_rounds = 4;
     let pow_bits = 20;
 
     let parameters = StirParameters::fixed_domain_shift(

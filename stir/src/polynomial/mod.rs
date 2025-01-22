@@ -34,8 +34,13 @@ impl<F: Field> Polynomial<F> {
 
     /// Returns the constant polynomial 1
     pub fn one() -> Self {
+        Self::constant(F::ONE)
+    }
+
+    // Returns the constant polynomial with the given constant term
+    pub fn constant(constant: F) -> Self {
         Self {
-            coeffs: vec![F::ONE],
+            coeffs: vec![constant],
         }
     }
 
@@ -51,6 +56,24 @@ impl<F: Field> Polynomial<F> {
         Self {
             coeffs: vec![-point, F::ONE],
         }
+    }
+
+    /// Returns the quotient and remainder of the division of `polynomial` by `x
+    /// - point`. The remainder is the constant polynomial `polynomial(point)`,
+    /// and it is returned as an element of the field for convenience.
+    pub fn divide_by_vanishing_linear_polynomial(polynomial: &Self, point: F) -> (Self, F) {
+        let mut quotient_coeffs = polynomial.coeffs().to_vec();
+
+        let mut last = *quotient_coeffs.iter().last().unwrap();
+
+        for new_c in quotient_coeffs.iter_mut().rev().skip(1) {
+            *new_c += point * last;
+            last = *new_c;
+        }
+
+        let remainder = quotient_coeffs.remove(0);
+
+        (Polynomial::from_coeffs(quotient_coeffs), remainder)
     }
 
     pub fn from_coeffs(coeffs: Vec<F>) -> Self {
@@ -171,11 +194,10 @@ impl<F: TwoAdicField> Polynomial<F> {
     // mention empty lists are mapped to zero
     // mention dedup, careful with the expected degree!
     pub fn vanishing_polynomial(points: impl IntoIterator<Item = F>) -> Polynomial<F> {
-        let mut points = points.into_iter().collect_vec();
-        points.dedup();
+        let mut points = points.into_iter().unique().collect_vec();
 
         if points.is_empty() {
-            return Polynomial::zero();
+            panic!("The vanishing polynomial of an empty set is undefined");
         }
 
         let mut coeffs = vec![-points.pop().unwrap(), F::ONE];

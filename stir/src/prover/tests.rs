@@ -3,7 +3,7 @@ use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::MockChallenger;
 use p3_commit::Mmcs;
 use p3_field::{Field, FieldAlgebra};
-use p3_matrix::{dense::RowMajorMatrix, Dimensions};
+use p3_matrix::{dense::RowMajorMatrix, Dimensions, Matrix};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use rand::{Rng, SeedableRng};
@@ -71,7 +71,6 @@ fn test_prove_round_zero() {
     let round_config = config.round_config(round);
 
     let RoundConfig {
-        log_evaluation_domain_size,
         num_ood_samples,
         num_queries,
         log_folding_factor,
@@ -118,12 +117,14 @@ fn test_prove_round_zero() {
         config.log_starting_degree() + config.log_starting_inv_rate(),
     );
 
+    let original_domain = original_domain.set_shift(original_domain.generator());
+
     let original_evals = original_domain.evaluate_polynomial(&f);
 
     let stacked_original_evals =
         RowMajorMatrix::new(original_evals, 1 << config.log_starting_folding_factor());
 
-    let (_, merkle_tree) = config
+    let (root, merkle_tree) = config
         .mmcs_config()
         .commit_matrix(stacked_original_evals.clone());
 
@@ -139,10 +140,7 @@ fn test_prove_round_zero() {
     let (witness, round_proof) = prove_round(&config, witness, &mut challenger);
 
     // =============== Witness Checks ===============
-
-    // expected_shift = omega * original_shift^2 (with original_shift = 1)
-    let expected_shift = original_domain.generator() * original_domain.shift().square();
-    let expected_domain = original_domain.shrink_subgroup(1).set_shift(expected_shift);
+    let expected_domain = original_domain.shrink_subgroup(1);
 
     let expected_round = 1;
     let expected_folding_randomness = BB::ONE;
@@ -150,10 +148,9 @@ fn test_prove_round_zero() {
     let StirWitness {
         domain,
         polynomial,
-        merkle_tree,
-        stacked_evals,
         folding_randomness,
         round,
+        ..
     } = witness;
 
     // Domain testing
@@ -172,20 +169,13 @@ fn test_prove_round_zero() {
 
     // ============== Round Proof Checks ===============
 
-    let RoundProof {
-        g_root,
-        betas,
-        ans_polynomial,
-        query_proofs,
-        shake_polynomial,
-        pow_witness,
-    } = round_proof;
+    let RoundProof { query_proofs, .. } = round_proof;
 
-    for (&i, (leaf, proof)) in bit_replies.iter().zip(query_proofs) {
+    for (&i, (leaf, proof)) in bit_replies.iter().unique().zip(query_proofs) {
         config
             .mmcs_config()
             .verify_batch(
-                &g_root,
+                &root,
                 &[Dimensions {
                     width: 1 << log_folding_factor,
                     height: 1 << (original_domain.log_size() - log_folding_factor),
@@ -248,12 +238,24 @@ fn test_prove_round_large() {
         config.log_starting_degree() + config.log_starting_inv_rate(),
     );
 
+    let original_domain = original_domain.set_shift(original_domain.generator());
+
     let original_evals = original_domain.evaluate_polynomial(&f_0);
+
+    // NP TODO remove
+    // for (i, e) in original_evals.iter().enumerate() {
+    //     println!("{}: {}", i, e);
+    // }
+    // let new_original_domain = original_domain.set_shift(original_domain.generator());
+    // let new_original_evals = new_original_domain.evaluate_polynomial(&f_0);
+    // assert_eq!(original_evals, new_original_evals);
 
     let stacked_original_evals =
         RowMajorMatrix::new(original_evals, 1 << config.log_starting_folding_factor());
 
-    let (_, merkle_tree) = config
+    let dimensions = stacked_original_evals.dimensions();
+
+    let (root, merkle_tree) = config
         .mmcs_config()
         .commit_matrix(stacked_original_evals.clone());
 
@@ -266,7 +268,7 @@ fn test_prove_round_large() {
         folding_randomness: r_0,
     };
 
-    let (witness, _) = prove_round(&config, witness, &mut challenger);
+    let (witness, round_proof) = prove_round(&config, witness, &mut challenger);
 
     // =============== Witness Checks ===============
 
@@ -278,9 +280,7 @@ fn test_prove_round_large() {
         ..
     } = witness;
 
-    // expected_shift = omega * original_shift^2 (with original_shift = 1)
-    let expected_shift = original_domain.generator() * original_domain.shift().square();
-    let expected_domain = original_domain.shrink_subgroup(1).set_shift(expected_shift);
+    let expected_domain = original_domain.shrink_subgroup(1);
 
     let expected_round = 1;
 
@@ -299,74 +299,62 @@ fn test_prove_round_large() {
     let stir_randomness = bit_replies
         .iter()
         .map(|&i| original_domain_pow_k.element(i as u64));
+
     let quotient_set = stir_randomness
         .chain(ood_randomness.into_iter())
         .unique()
         .collect_vec();
+
     let quotient_set_points = quotient_set
         .iter()
         .map(|x| (*x, g_1.evaluate(x)))
         .collect_vec();
-    let ans_polynomial = Polynomial::lagrange_interpolation(quotient_set_points);
-    let quotient_polynomial =
-        &(&g_1 - &ans_polynomial) / &Polynomial::vanishing_polynomial(quotient_set.clone());
+
+    let expected_ans_polynomial = Polynomial::lagrange_interpolation(quotient_set_points.clone());
+
+    let quotient_polynomial = &(&g_1 - &expected_ans_polynomial)
+        / &Polynomial::vanishing_polynomial(quotient_set.clone());
+
     let expected_f_1 =
         &Polynomial::power_polynomial(comb_randomness, quotient_set.len()) * &quotient_polynomial;
 
     assert_eq!(f_1, expected_f_1);
+
+    // ================= Round Proof Checks ==================
+
+    let RoundProof {
+        query_proofs,
+        ans_polynomial,
+        shake_polynomial,
+        ..
+    } = round_proof;
+
+    for (&i, (leaf, proof)) in bit_replies.iter().unique().zip(query_proofs) {
+        config
+            .mmcs_config()
+            .verify_batch(&root, &[dimensions], i, &leaf, &proof)
+            .unwrap();
+    }
+
+    let expected_shake_polynomial = quotient_set_points
+        .into_iter()
+        .map(|(x, y)| {
+            let (quotient, _) = Polynomial::divide_by_vanishing_linear_polynomial(
+                &(&ans_polynomial - &Polynomial::constant(y)),
+                x,
+            );
+            quotient
+        })
+        .fold(Polynomial::zero(), |sum, next_poly| &sum + &next_poly);
+
+    assert_eq!(ans_polynomial, expected_ans_polynomial);
+    assert_eq!(shake_polynomial, expected_shake_polynomial);
 }
 
 // NP TODO discuss with Giacomo Every round needs two: this round's, to know how
 // to fold; and next round's, to know how to stack the evaluations of the final
 // polynomial f' produced by this round
 
-// Original word: 2^10
-
-// Starting folding factor: 2^1
-// Next folding factors: [2^2, 2^3, ...]
-
-// Prepare witness for the first round:
-// Evaluations of the original word
-// Have to stack the evaluations in rows of 2^1 elements
-
-// Round 1:
-//   Fold the polynomial with arity 2^1
-//   Open and prove folding
-
 // NP TODO polynomial with degree strictly lower than the bound
 
 // NP TODO failed config creation where the num of rounds is too large for the starting degree and folding factor (maybe in /config)
-
-// L0 = shift <w>
-// L1 = shift² <w²>
-// L0^(2^logk) \cap L1 = empty
-
-// L2 = w^2 * L1^2 = w^2 * w^2 * <w^2^2> = w^4 * <w^4> = <w^4>
-
-// L0 = 1 * <w>
-//
-// L_i.gen = L_(i - 1).gen^2
-// L_i.shift = if L_(i - 1).shift == 1 { w } else { 1 }
-
-// L_2j = 1 * <w^{2^{2j}}>
-// L_{2j + 1} = w * <w^{2^{2j + 1}}>
-// L_2j^k
-
-// o^2 * <w^2> \cap o * <w^2>
-// LHS: {o^2 * w^(2i): i...}
-// RHS: {o * w^(2i): i...}
-
-// Take any i, j. The shift o = w^(2i - 2j) = w^(2i) / w^(2j) gives you an intersection point
-
-// j-th element of the LHS: o^2 * w^(2j) = o * w^(2i)
-// i-th element of the RHS: o * w^(2i)
-
-// L0 = w * <w>
-// L1 = w * <w^2>
-// L2 = w * <w^4>
-// L3 = w * <w^8>
-
-// L0 = w * <w>
-// L1 = w * <w^2>
-// L2 = w * <w^4>
-// L3 = w * <w^8>

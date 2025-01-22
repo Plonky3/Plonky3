@@ -211,10 +211,10 @@ fn test_vanishing_random() {
     let max_num_points = 100;
 
     let mut rng = rand::thread_rng();
-    let mut points = (0..max_num_points)
+    let points = (0..max_num_points)
         .map(|_| field_element_from_isize(rng.gen::<i16>() as isize))
+        .unique()
         .collect_vec();
-    points.dedup();
     let num_points = points.len();
 
     let vanishing_poly = Polynomial::<BB>::vanishing_polynomial(points.clone());
@@ -230,10 +230,10 @@ fn test_vanishing_and_lagrange_interpolation() {
     let max_num_points = 100;
 
     let mut rng = rand::thread_rng();
-    let mut points = (0..max_num_points)
+    let points = (0..max_num_points)
         .map(|_| field_element_from_isize(rng.gen::<i16>() as isize))
+        .unique()
         .collect_vec();
-    points.dedup();
 
     let vanishing_poly = Polynomial::<BB>::vanishing_polynomial(points.clone());
 
