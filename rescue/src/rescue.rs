@@ -2,7 +2,7 @@ use alloc::format;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use num::{BigUint, One};
+use num_bigint::BigUint;
 use num_integer::binomial;
 use p3_field::{FieldAlgebra, PrimeField, PrimeField64};
 use p3_mds::MdsPermutation;
@@ -42,7 +42,7 @@ where
             (0.5 * ((alpha - 1) * WIDTH as u64 * (n as u64 - 1)) as f64 + 2.0).floor() as usize
         };
         let v = |n: usize| WIDTH * (n - 1) + rate;
-        let target = BigUint::one() << sec_level;
+        let target = BigUint::from(1u32) << sec_level;
 
         let is_sufficient = |l1: &usize| {
             let n = BigUint::from(v(*l1) + dcon(*l1));

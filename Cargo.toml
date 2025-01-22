@@ -5,7 +5,7 @@ members = [
     "baby-bear",
     "blake3",
     "blake3-air",
-    "bn254-fr",
+#    "bn254-fr",
     "challenger",
     "circle",
     "commit",
@@ -43,14 +43,15 @@ criterion = "0.5.1"
 ff = "0.13"
 gcd = "2.3.0"
 generic-array = "1.0"
-halo2curves = "0.8.0"
+#halo2curves = "0.8.0"
 hashbrown = "0.15.0"
 hex-literal = "0.4.1"
-itertools = "0.14.0"
+itertools = { version = "0.14.0", features = ["use_std", "use_alloc"] }
 modinverse = "0.1.1"
-num = "0.4.0"
+#num = "0.4.0"
+num = { version = "0.4.0", default-features = false }
 num-bigint = { version = "0.4.3", default-features = false }
-num-integer = "0.1.46"
+num-integer = { version = "0.1.46", default-features = false }
 num-traits = { version = "0.2.19", default-features = false }
 nums = "0.1.0"
 postcard = { version = "1.0.0", default-features = false }
@@ -63,9 +64,9 @@ serde_json = "1.0.113"
 sha2 = { version = "0.10.8", default-features = false }
 sha3 = "0.10.8"
 tiny-keccak = "2.0.2"
-tracing = "0.1.37"
+tracing = { version = "0.1.37", default-features = false }
 tracing-forest = "0.1.6"
-tracing-subscriber = "0.3.17"
+tracing-subscriber = { version = "0.3.17", default-features = false, features = ["alloc"] }
 transpose = "0.2.3"
 zkhash = { git = "https://github.com/HorizenLabs/poseidon2" }
 
@@ -74,7 +75,7 @@ p3-air = { path = "air", version = "0.1.0" }
 p3-baby-bear = { path = "baby-bear", version = "0.1.0" }
 p3-blake3 = { path = "blake3", version = "0.1.0" }
 p3-blake3-air = { path = "blake3-air", version = "0.1.0" }
-p3-bn254-fr = { path = "bn254-fr", version = "0.1.0" }
+#p3-bn254-fr = { path = "bn254-fr", version = "0.1.0" }
 p3-challenger = { path = "challenger", version = "0.1.0" }
 p3-circle = { path = "circle", version = "0.1.0" }
 p3-commit = { path = "commit", version = "0.1.0" }

@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_bn254_fr::{Bn254Fr, Poseidon2Bn254};
+//use p3_bn254_fr::{Bn254Fr, Poseidon2Bn254};
 use p3_field::{Field, FieldAlgebra};
 use p3_goldilocks::{Goldilocks, Poseidon2Goldilocks};
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
@@ -34,9 +34,9 @@ fn bench_poseidon2(c: &mut Criterion) {
     let poseidon2_gold_16 = Poseidon2Goldilocks::<16>::new_from_rng_128(&mut rng);
     poseidon2::<Goldilocks, Poseidon2Goldilocks<16>, 16>(c, poseidon2_gold_16);
 
-    // We hard code the round numbers for Bn254Fr.
-    let poseidon2_bn254 = Poseidon2Bn254::<3>::new_from_rng(8, 22, &mut rng);
-    poseidon2::<Bn254Fr, Poseidon2Bn254<3>, 3>(c, poseidon2_bn254);
+    // // We hard code the round numbers for Bn254Fr.
+    // let poseidon2_bn254 = Poseidon2Bn254::<3>::new_from_rng(8, 22, &mut rng);
+    // poseidon2::<Bn254Fr, Poseidon2Bn254<3>, 3>(c, poseidon2_bn254);
 }
 
 fn poseidon2<F, Perm, const WIDTH: usize>(c: &mut Criterion, poseidon2: Perm)

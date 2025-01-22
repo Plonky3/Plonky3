@@ -10,7 +10,6 @@ p3-field.workspace = true
 p3-matrix = { path="../matrix" }
 rand = { workspace = true, features = ["min_const_gen"] }
 rand_chacha.workspace = true
-criterion.workspace = true
 num-bigint.workspace = true
 num-traits.workspace = true
 

@@ -23,7 +23,7 @@ rand = { workspace = true, features = ["min_const_gen"] }
 p3-mersenne-31.workspace = true
 p3-baby-bear.workspace = true
 p3-koala-bear.workspace = true
-p3-bn254-fr.workspace = true
+#p3-bn254-fr.workspace = true
 p3-goldilocks.workspace = true
 p3-util.workspace = true
 criterion.workspace = true

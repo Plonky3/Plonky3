@@ -1,3 +1,5 @@
+#![no_std]
+
 #[cfg(feature = "parallel")]
 pub mod prelude {
     pub use rayon::prelude::*;
