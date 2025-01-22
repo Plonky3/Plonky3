@@ -59,7 +59,7 @@ fn do_test_fri_pcs<Val, Challenge, Challenger, P>(
     assert_eq!(data_by_round.len(), num_rounds);
     p_challenger.observe_slice(&commits_by_round);
 
-    let zeta: Challenge = p_challenger.sample_ext_element();
+    let zeta: Challenge = p_challenger.sample_algebra_element();
 
     let points_by_round = log_degrees_by_round
         .iter()
@@ -72,7 +72,7 @@ fn do_test_fri_pcs<Val, Challenge, Challenger, P>(
     // Verify the proof.
     let mut v_challenger = challenger.clone();
     v_challenger.observe_slice(&commits_by_round);
-    let verifier_zeta: Challenge = v_challenger.sample_ext_element();
+    let verifier_zeta: Challenge = v_challenger.sample_algebra_element();
     assert_eq!(verifier_zeta, zeta);
 
     let commits_and_claims_by_round = izip!(

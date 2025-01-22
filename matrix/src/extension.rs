@@ -57,7 +57,7 @@ where
         self.0
             .row_slice(r)
             .iter()
-            .flat_map(|val| val.as_base_slice())
+            .flat_map(|val| val.serialize_as_slice())
             .copied()
             .collect::<Vec<_>>()
     }
@@ -81,7 +81,7 @@ where
             self.idx = 0;
             self.inner.next();
         }
-        let value = self.inner.peek()?.as_base_slice()[self.idx];
+        let value = self.inner.peek()?.serialize_as_slice()[self.idx];
         self.idx += 1;
         Some(value)
     }
@@ -92,7 +92,7 @@ mod tests {
     use alloc::vec;
 
     use p3_field::extension::Complex;
-    use p3_field::{FieldAlgebra, FieldExtensionAlgebra};
+    use p3_field::{FieldAlgebra, Serializable};
     use p3_mersenne_31::Mersenne31;
 
     use super::*;
@@ -103,10 +103,10 @@ mod tests {
     #[test]
     fn flat_matrix() {
         let values = vec![
-            EF::from_base_fn(|i| F::from_u8(i as u8 + 10)),
-            EF::from_base_fn(|i| F::from_u8(i as u8 + 20)),
-            EF::from_base_fn(|i| F::from_u8(i as u8 + 30)),
-            EF::from_base_fn(|i| F::from_u8(i as u8 + 40)),
+            EF::deserialize_fn(|i| F::from_u8(i as u8 + 10)),
+            EF::deserialize_fn(|i| F::from_u8(i as u8 + 20)),
+            EF::deserialize_fn(|i| F::from_u8(i as u8 + 30)),
+            EF::deserialize_fn(|i| F::from_u8(i as u8 + 40)),
         ];
         let ext = RowMajorMatrix::<EF>::new(values, 2);
         let flat = FlatMatrixView::<F, EF, _>::new(ext);
