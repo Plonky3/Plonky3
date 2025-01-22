@@ -418,6 +418,7 @@ impl Product for PackedMersenne31AVX512 {
 
 impl FieldAlgebra for PackedMersenne31AVX512 {
     type F = Mersenne31;
+    type PrimeSubfield = Mersenne31;
 
     const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
     const ONE: Self = Self::broadcast(Mersenne31::ONE);
@@ -425,37 +426,8 @@ impl FieldAlgebra for PackedMersenne31AVX512 {
     const NEG_ONE: Self = Self::broadcast(Mersenne31::NEG_ONE);
 
     #[inline]
-    fn from_bool(b: bool) -> Self {
-        Mersenne31::from_bool(b).into()
-    }
-    #[inline]
-    fn from_canonical_u8(n: u8) -> Self {
-        Mersenne31::from_canonical_u8(n).into()
-    }
-    #[inline]
-    fn from_canonical_u16(n: u16) -> Self {
-        Mersenne31::from_canonical_u16(n).into()
-    }
-    #[inline]
-    fn from_canonical_u32(n: u32) -> Self {
-        Mersenne31::from_canonical_u32(n).into()
-    }
-    #[inline]
-    fn from_canonical_u64(n: u64) -> Self {
-        Mersenne31::from_canonical_u64(n).into()
-    }
-    #[inline]
-    fn from_canonical_usize(n: usize) -> Self {
-        Mersenne31::from_canonical_usize(n).into()
-    }
-
-    #[inline]
-    fn from_wrapped_u32(n: u32) -> Self {
-        Mersenne31::from_wrapped_u32(n).into()
-    }
-    #[inline]
-    fn from_wrapped_u64(n: u64) -> Self {
-        Mersenne31::from_wrapped_u64(n).into()
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
+        f.into()
     }
 
     #[inline(always)]

@@ -59,6 +59,8 @@ where
 {
     type F = BinomialExtensionField<F, D>;
 
+    type PrimeSubfield = PF::PrimeSubfield;
+
     const ZERO: Self = Self {
         value: [PF::ZERO; D],
     };
@@ -76,43 +78,13 @@ where
     };
 
     #[inline]
+    fn from_prime_subfield(val: Self::PrimeSubfield) -> Self {
+        PF::from_prime_subfield(val).into()
+    }
+
+    #[inline]
     fn from_bool(b: bool) -> Self {
         PF::from_bool(b).into()
-    }
-
-    #[inline]
-    fn from_canonical_u8(n: u8) -> Self {
-        PF::from_canonical_u8(n).into()
-    }
-
-    #[inline]
-    fn from_canonical_u16(n: u16) -> Self {
-        PF::from_canonical_u16(n).into()
-    }
-
-    #[inline]
-    fn from_canonical_u32(n: u32) -> Self {
-        PF::from_canonical_u32(n).into()
-    }
-
-    #[inline]
-    fn from_canonical_u64(n: u64) -> Self {
-        PF::from_canonical_u64(n).into()
-    }
-
-    #[inline]
-    fn from_canonical_usize(n: usize) -> Self {
-        PF::from_canonical_usize(n).into()
-    }
-
-    #[inline]
-    fn from_wrapped_u32(n: u32) -> Self {
-        PF::from_wrapped_u32(n).into()
-    }
-
-    #[inline]
-    fn from_wrapped_u64(n: u64) -> Self {
-        PF::from_wrapped_u64(n).into()
     }
 
     #[inline(always)]

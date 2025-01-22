@@ -117,7 +117,8 @@ impl<F, const D: usize> FieldAlgebra for BinomialExtensionField<F, D>
 where
     F: BinomiallyExtendable<D>,
 {
-    type F = Self;
+    type F = BinomialExtensionField<FA::F, D>;
+    type PrimeSubfield = <FA::F as FieldAlgebra>::PrimeSubfield;
 
     const ZERO: Self = Self {
         value: [F::ZERO; D],
@@ -136,43 +137,8 @@ where
     };
 
     #[inline]
-    fn from_bool(b: bool) -> Self {
-        F::from_bool(b).into()
-    }
-
-    #[inline]
-    fn from_canonical_u8(n: u8) -> Self {
-        F::from_canonical_u8(n).into()
-    }
-
-    #[inline]
-    fn from_canonical_u16(n: u16) -> Self {
-        F::from_canonical_u16(n).into()
-    }
-
-    #[inline]
-    fn from_canonical_u32(n: u32) -> Self {
-        F::from_canonical_u32(n).into()
-    }
-
-    #[inline]
-    fn from_canonical_u64(n: u64) -> Self {
-        F::from_canonical_u64(n).into()
-    }
-
-    #[inline]
-    fn from_canonical_usize(n: usize) -> Self {
-        F::from_canonical_usize(n).into()
-    }
-
-    #[inline]
-    fn from_wrapped_u32(n: u32) -> Self {
-        F::from_wrapped_u32(n).into()
-    }
-
-    #[inline]
-    fn from_wrapped_u64(n: u64) -> Self {
-        F::from_wrapped_u64(n).into()
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
+        FA::from_f(<FA::F as FieldAlgebra>::from_prime_subfield(f)).into()
     }
 
     #[inline(always)]

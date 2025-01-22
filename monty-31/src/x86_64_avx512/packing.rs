@@ -587,6 +587,7 @@ impl<FP: FieldParameters> Product for PackedMontyField31AVX512<FP> {
 
 impl<FP: FieldParameters> FieldAlgebra for PackedMontyField31AVX512<FP> {
     type F = MontyField31<FP>;
+    type PrimeSubfield = MontyField31<FP>;
 
     const ZERO: Self = Self::broadcast(MontyField31::ZERO);
     const ONE: Self = Self::broadcast(MontyField31::ONE);
@@ -594,37 +595,8 @@ impl<FP: FieldParameters> FieldAlgebra for PackedMontyField31AVX512<FP> {
     const NEG_ONE: Self = Self::broadcast(MontyField31::NEG_ONE);
 
     #[inline]
-    fn from_bool(b: bool) -> Self {
-        MontyField31::from_bool(b).into()
-    }
-    #[inline]
-    fn from_canonical_u8(n: u8) -> Self {
-        MontyField31::from_canonical_u8(n).into()
-    }
-    #[inline]
-    fn from_canonical_u16(n: u16) -> Self {
-        MontyField31::from_canonical_u16(n).into()
-    }
-    #[inline]
-    fn from_canonical_u32(n: u32) -> Self {
-        MontyField31::from_canonical_u32(n).into()
-    }
-    #[inline]
-    fn from_canonical_u64(n: u64) -> Self {
-        MontyField31::from_canonical_u64(n).into()
-    }
-    #[inline]
-    fn from_canonical_usize(n: usize) -> Self {
-        MontyField31::from_canonical_usize(n).into()
-    }
-
-    #[inline]
-    fn from_wrapped_u32(n: u32) -> Self {
-        MontyField31::from_wrapped_u32(n).into()
-    }
-    #[inline]
-    fn from_wrapped_u64(n: u64) -> Self {
-        MontyField31::from_wrapped_u64(n).into()
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
+        f.into()
     }
 
     #[inline(always)]

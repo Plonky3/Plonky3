@@ -14,6 +14,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::exponentiation::bits_u64;
+use crate::integers::{from_integer_types, QuotientMap};
 use crate::packed::{PackedField, PackedValue};
 use crate::Packable;
 
@@ -54,6 +55,10 @@ pub trait FieldAlgebra:
     + Debug
 {
     type F: Field;
+
+    /// The field `ℤ/p` where the characteristic of this ring is p.
+    type PrimeSubfield: PrimeField;
+
     /// The additive identity of the algebra.
     ///
     /// For every element `a` in the algebra we require the following properties:
@@ -91,41 +96,25 @@ pub trait FieldAlgebra:
     /// If the field has characteristic 2 this is equal to ONE.
     const NEG_ONE: Self;
 
-    /// Convert from a `bool`.
-    fn from_bool(b: bool) -> Self;
-
-    /// Convert from a canonical `u8`.
+    /// Embed an element of the prime field `ℤ/p` into the ring `R`.
     ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_u8(n: u8) -> Self;
-
-    /// Convert from a canonical `u16`.
+    /// Given any element `r ∈ ℤ/p`, represented as an integer between `0` and `p - 1`
+    /// `from_prime_subfield(r)` will be equal to:
     ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_u16(n: u16) -> Self;
+    /// `Self::ONE + ... + Self::ONE (r times)`
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self;
 
-    /// Convert from a canonical `u32`.
-    ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_u32(n: u32) -> Self;
+    /// Return `Self::ONE` if `b` is `true` and `Self::ZERO` if `b` is `false`.
+    fn from_bool(b: bool) -> Self {
+        // Some rings might reimplement this to avoid the branch.
+        if b {
+            Self::ONE
+        } else {
+            Self::ZERO
+        }
+    }
 
-    /// Convert from a canonical `u64`.
-    ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_u64(n: u64) -> Self;
-
-    /// Convert from a canonical `usize`.
-    ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_usize(n: usize) -> Self;
-
-    fn from_wrapped_u32(n: u32) -> Self;
-    fn from_wrapped_u64(n: u64) -> Self;
+    from_integer_types!(u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize);
 
     /// The elementary function `double(a) = 2*a`.
     ///
@@ -374,7 +363,22 @@ pub trait Field:
     }
 }
 
-pub trait PrimeField: Field + Ord {
+pub trait PrimeField:
+    Field
+    + Ord
+    + QuotientMap<u8>
+    + QuotientMap<u16>
+    + QuotientMap<u32>
+    + QuotientMap<u64>
+    + QuotientMap<u128>
+    + QuotientMap<usize>
+    + QuotientMap<i8>
+    + QuotientMap<i16>
+    + QuotientMap<i32>
+    + QuotientMap<i64>
+    + QuotientMap<i128>
+    + QuotientMap<isize>
+{
     fn as_canonical_biguint(&self) -> BigUint;
 }
 
@@ -436,10 +440,10 @@ pub trait FieldExtensionAlgebra<Base: FieldAlgebra>:
     fn from_base(b: Base) -> Self;
 
     /// Suppose this field extension is represented by the quotient
-    /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
+    /// ring `B[X]/(f(X))` where B is `Base` and f is an irreducible
     /// polynomial of degree `D`. This function takes a slice `bs` of
     /// length at exactly D, and constructs the field element
-    /// \sum_i bs[i] * X^i.
+    /// `\sum_i bs[i] * X^i`.
     ///
     /// NB: The value produced by this function fundamentally depends
     /// on the choice of irreducible polynomial f. Care must be taken
@@ -454,9 +458,9 @@ pub trait FieldExtensionAlgebra<Base: FieldAlgebra>:
     fn from_base_iter<I: Iterator<Item = Base>>(iter: I) -> Self;
 
     /// Suppose this field extension is represented by the quotient
-    /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
+    /// ring `B[X]/(f(X))` where B is `Base` and f is an irreducible
     /// polynomial of degree `D`. This function takes a field element
-    /// \sum_i bs[i] * X^i and returns the coefficients as a slice
+    /// `\sum_i bs[i] * X^i` and returns the coefficients as a slice
     /// `bs` of length at most D containing, from lowest degree to
     /// highest.
     ///
@@ -468,7 +472,7 @@ pub trait FieldExtensionAlgebra<Base: FieldAlgebra>:
     fn as_base_slice(&self) -> &[Base];
 
     /// Suppose this field extension is represented by the quotient
-    /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
+    /// ring `B[X]/(f(X))` where B is `Base` and f is an irreducible
     /// polynomial of degree `D`. This function returns the field
     /// element `X^exponent` if `exponent < D` and panics otherwise.
     /// (The fact that f is not known at the point that this function

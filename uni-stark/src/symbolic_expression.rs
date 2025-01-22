@@ -76,42 +76,20 @@ impl<F: Field> From<F> for SymbolicExpression<F> {
 
 impl<F: Field> FieldAlgebra for SymbolicExpression<F> {
     type F = F;
+    type PrimeSubfield = F::PrimeSubfield;
 
     const ZERO: Self = Self::Constant(F::ZERO);
     const ONE: Self = Self::Constant(F::ONE);
     const TWO: Self = Self::Constant(F::TWO);
     const NEG_ONE: Self = Self::Constant(F::NEG_ONE);
 
+    #[inline]
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
+        F::from_prime_subfield(f).into()
+    }
+
     fn from_bool(b: bool) -> Self {
         Self::Constant(F::from_bool(b))
-    }
-
-    fn from_canonical_u8(n: u8) -> Self {
-        Self::Constant(F::from_canonical_u8(n))
-    }
-
-    fn from_canonical_u16(n: u16) -> Self {
-        Self::Constant(F::from_canonical_u16(n))
-    }
-
-    fn from_canonical_u32(n: u32) -> Self {
-        Self::Constant(F::from_canonical_u32(n))
-    }
-
-    fn from_canonical_u64(n: u64) -> Self {
-        Self::Constant(F::from_canonical_u64(n))
-    }
-
-    fn from_canonical_usize(n: usize) -> Self {
-        Self::Constant(F::from_canonical_usize(n))
-    }
-
-    fn from_wrapped_u32(n: u32) -> Self {
-        Self::Constant(F::from_wrapped_u32(n))
-    }
-
-    fn from_wrapped_u64(n: u64) -> Self {
-        Self::Constant(F::from_wrapped_u64(n))
     }
 }
 
