@@ -67,7 +67,7 @@ where
     };
     let sum = coset_evals.columnwise_dot_product(&col_scale);
 
-    let zerofier = two_adic_coset_zerofier::<EF>(log_height, EF::from_base(shift), point);
+    let zerofier = two_adic_coset_zerofier::<EF>(log_height, shift.into(), point);
 
     // In principle, height could be bigger than the characteristic of F.
     let denominator = shift

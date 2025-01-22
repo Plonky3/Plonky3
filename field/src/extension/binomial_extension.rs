@@ -91,12 +91,6 @@ impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F>
         }
     }
 
-    fn from_base(val: F) -> Self {
-        Self {
-            value: field_to_array(val),
-        }
-    }
-
     fn ext_powers_packed(&self) -> crate::Powers<Self::ExtensionPacking> {
         let width = F::Packing::WIDTH;
         let powers = self.powers().take(width + 1).collect_vec();

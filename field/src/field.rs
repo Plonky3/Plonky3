@@ -547,7 +547,7 @@ pub trait FieldExtensionAlgebra<Base: FieldAlgebra>:
     const D: usize;
 }
 
-pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base> {
+pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base> + From<Base> {
     type ExtensionPacking: FieldExtensionAlgebra<Base::Packing, F = Self>
         + 'static
         + Copy
@@ -557,8 +557,6 @@ pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base> {
     fn is_in_basefield(&self) -> bool;
 
     fn as_base(&self) -> Option<Base>;
-
-    fn from_base(val: Base) -> Self;
 
     /// Construct an iterator which returns powers of `self` packed into `ExtensionPacking` elements.
     ///
@@ -576,10 +574,6 @@ impl<F: Field> ExtensionField<F> for F {
 
     fn as_base(&self) -> Option<F> {
         Some(*self)
-    }
-
-    fn from_base(val: F) -> Self {
-        val
     }
 
     fn ext_powers_packed(&self) -> Powers<Self::ExtensionPacking> {
