@@ -84,11 +84,6 @@ impl<F: Field> FieldAlgebra for SymbolicExpression<F> {
     const NEG_ONE: Self = Self::Constant(F::NEG_ONE);
 
     #[inline]
-    fn from_f(f: Self::F) -> Self {
-        f.into()
-    }
-
-    #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         F::from_prime_subfield(f).into()
     }

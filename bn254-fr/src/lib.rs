@@ -110,11 +110,6 @@ impl FieldAlgebra for Bn254Fr {
     ]));
 
     #[inline]
-    fn from_f(f: Self::F) -> Self {
-        f
-    }
-
-    #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f
     }

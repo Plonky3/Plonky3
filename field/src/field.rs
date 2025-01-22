@@ -36,6 +36,13 @@ pub trait FieldAlgebra:
     Sized
     + Default
     + Clone
+    + From<Self::F>
+    + Add<Self::F, Output = Self>
+    + AddAssign<Self::F>
+    + Sub<Self::F, Output = Self>
+    + SubAssign<Self::F>
+    + Mul<Self::F, Output = Self>
+    + MulAssign<Self::F>
     + Add<Output = Self>
     + AddAssign
     + Sub<Output = Self>
@@ -88,13 +95,6 @@ pub trait FieldAlgebra:
     ///
     /// If the field has characteristic 2 this is equal to ONE.
     const NEG_ONE: Self;
-
-    /// Interpret a field element as a commutative algebra element.
-    ///
-    /// Mathematically speaking, this map is a ring homomorphism from the base field
-    /// to the commutative algebra. The existence of this map makes this structure
-    /// an algebra and not simply a commutative ring.
-    fn from_f(f: Self::F) -> Self;
 
     /// Embed an element of the prime field `ℤ/p` into the ring `R`.
     ///
@@ -227,14 +227,14 @@ pub trait FieldAlgebra:
     /// E.g. if `PACKING::WIDTH = 4` this returns the elements:
     /// `[start, start*self, start*self^2, start*self^3], [start*self^4, start*self^5, start*self^6, start*self^7], ...`.
     fn shifted_powers_packed<P: PackedField<Scalar = Self>>(&self, start: Self) -> Powers<P> {
-        let mut current = P::from_f(start);
+        let mut current: P = start.into();
         let slice = current.as_slice_mut();
         for i in 1..P::WIDTH {
             slice[i] = slice[i - 1].clone() * self.clone();
         }
 
         Powers {
-            base: P::from_f(self.clone()).exp_u64(P::WIDTH as u64),
+            base: self.clone().exp_u64(P::WIDTH as u64).into(),
             current,
         }
     }

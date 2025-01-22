@@ -104,11 +104,6 @@ impl FieldAlgebra for Goldilocks {
     const NEG_ONE: Self = Self::new(Self::ORDER_U64 - 1);
 
     #[inline]
-    fn from_f(f: Self::F) -> Self {
-        f
-    }
-
-    #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f
     }

@@ -125,11 +125,6 @@ impl FieldAlgebra for Mersenne31 {
     };
 
     #[inline]
-    fn from_f(f: Self::F) -> Self {
-        f
-    }
-
-    #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f
     }

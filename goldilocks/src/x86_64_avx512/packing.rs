@@ -169,11 +169,6 @@ impl FieldAlgebra for PackedGoldilocksAVX512 {
     const NEG_ONE: Self = Self([Goldilocks::NEG_ONE; WIDTH]);
 
     #[inline]
-    fn from_f(f: Self::F) -> Self {
-        f.into()
-    }
-
-    #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f.into()
     }

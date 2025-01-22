@@ -455,11 +455,6 @@ impl<FP: FieldParameters> FieldAlgebra for PackedMontyField31Neon<FP> {
     const NEG_ONE: Self = Self::broadcast(MontyField31::NEG_ONE);
 
     #[inline]
-    fn from_f(f: Self::F) -> Self {
-        f.into()
-    }
-
-    #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f.into()
     }

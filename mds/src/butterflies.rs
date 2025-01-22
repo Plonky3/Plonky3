@@ -9,7 +9,7 @@ pub(crate) fn dit_butterfly<FA: FieldAlgebra, const N: usize>(
     twiddle: FA::F,
 ) {
     let val_1 = values[idx_1].clone();
-    let val_2 = values[idx_2].clone() * FA::from_f(twiddle);
+    let val_2 = values[idx_2].clone() * twiddle;
     values[idx_1] = val_1.clone() + val_2.clone();
     values[idx_2] = val_1 - val_2;
 }
@@ -25,7 +25,7 @@ pub(crate) fn dif_butterfly<FA: FieldAlgebra, const N: usize>(
     let val_1 = values[idx_1].clone();
     let val_2 = values[idx_2].clone();
     values[idx_1] = val_1.clone() + val_2.clone();
-    values[idx_2] = (val_1 - val_2) * FA::from_f(twiddle);
+    values[idx_2] = (val_1 - val_2) * twiddle;
 }
 
 /// Butterfly with twiddle factor 1 (works in either DIT or DIF).

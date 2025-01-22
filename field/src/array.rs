@@ -45,11 +45,6 @@ impl<F: Field, const N: usize> FieldAlgebra for FieldArray<F, N> {
     const NEG_ONE: Self = FieldArray([F::NEG_ONE; N]);
 
     #[inline]
-    fn from_f(f: Self::F) -> Self {
-        f.into()
-    }
-
-    #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         F::from_prime_subfield(f).into()
     }
