@@ -13,7 +13,7 @@ use crate::config::RoundConfig;
 use crate::coset::Radix2Coset;
 use crate::polynomial::Polynomial;
 use crate::proof::RoundProof;
-use crate::utils::fold_polynomial;
+use crate::utils::{fold_polynomial, multiply_by_power_polynomial};
 use crate::{StirConfig, StirProof};
 
 #[cfg(test)]
@@ -121,7 +121,7 @@ where
 
     // NP TODO: No index deduplication
     let queried_indices: Vec<u64> = (0..final_queries)
-        .map(|_| challenger.sample_bits(scaling_factor).try_into().unwrap())
+        .map(|_| challenger.sample_bits(scaling_factor) as u64)
         .collect();
 
     let queries_to_final: Vec<(Vec<Vec<F>>, M::Proof)> = queried_indices
@@ -240,12 +240,7 @@ where
     // Sample queried indices of elements in L^k_{i-1}
     let log_scaling_factor = domain.log_size() - log_folding_factor;
     let queried_indices: Vec<u64> = (0..num_queries)
-        .map(|_| {
-            challenger
-                .sample_bits(log_scaling_factor)
-                .try_into()
-                .unwrap()
-        })
+        .map(|_| challenger.sample_bits(log_scaling_factor) as u64)
         .unique()
         .collect();
 
@@ -253,12 +248,6 @@ where
     // NP TODO: Is this correct? Can we just take the ceil?
     // NP TODO unsafe cast to usize
     let pow_witness = challenger.grind(pow_bits.ceil() as usize);
-
-    // Shake randomness
-    // NP TODO ask Giacomo: shouldn't this be generated internally by the
-    // verifier and not squeezed from the sponge? That's not what the FS
-    // transform does
-    let _shake_randomnes: F = challenger.sample_ext_element();
 
     // ========= QUERY PROOFS =========
 
@@ -310,22 +299,27 @@ where
     let quotient_set = quotient_answers.iter().map(|(x, _)| *x).collect_vec();
     let quotient_set_size = quotient_set.len();
 
-    // Compute the answer polynomial
+    // Compute the answer polynomial and add it to the transcript
     let ans_polynomial = Polynomial::<F>::lagrange_interpolation(quotient_answers.clone());
+    challenger.observe_slice(ans_polynomial.coeffs());
 
-    // Compute the shake polynomial
+    // Compute the shake polynomial and add it to the transcript
     let shake_polynomial = compute_shake_polynomial(&ans_polynomial, quotient_answers.into_iter());
+    challenger.observe_slice(shake_polynomial.coeffs());
+
+    // Shake randomness This is only used by the verifier, but it doesn't need
+    // to be kept private. Therefore, the verifier can squeeze it from the
+    // sponge, in which case the prover must follow suit to keep the sponges
+    // in sync.
+    let _shake_randomness: F = challenger.sample_ext_element();
 
     // Compute the quotient polynomial
     let vanishing_polynomial = Polynomial::vanishing_polynomial(quotient_set);
     let quotient_polynomial = &(&folded_polynomial - &ans_polynomial) / &vanishing_polynomial;
 
-    // Compute the scaling polynomial, 1 + rx + r^2 x^2 + ... + r^n x^n with n = |quotient_set|
-    // NP TODO this will be removed
-    let scaling_polynomial = Polynomial::power_polynomial(comb_randomness, quotient_set_size);
-
-    // NP TODO make more efficient
-    let witness_polynomial = &quotient_polynomial * &scaling_polynomial;
+    // Degree-correct by multiplying by the scaling polynomial, 1 + rx + r^2 x^2 + ... + r^n x^n with n = |quotient_set|
+    let witness_polynomial =
+        multiply_by_power_polynomial(&quotient_polynomial, comb_randomness, quotient_set_size);
 
     // NP TODO remove/fix
     if quotient_polynomial.is_zero() {
@@ -361,8 +355,10 @@ fn compute_shake_polynomial<F: TwoAdicField>(
     let mut shake_polynomial = Polynomial::zero();
     for (x, y) in quotient_answers {
         let numerator = ans_polynomial - &y;
-        let denominator = Polynomial::monomial(-x);
+        let denominator = Polynomial::vanishing_linear_polynomial(x);
         shake_polynomial = &shake_polynomial + &(&numerator / &denominator);
     }
     shake_polynomial
 }
+
+// NP TODO degree separation in sponge

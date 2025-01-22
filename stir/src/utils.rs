@@ -44,6 +44,46 @@ pub(crate) fn field_element_from_isize<F: Field>(x: isize) -> F {
     sign * value
 }
 
+/// Multiply `polynomial` by `1 + coeff * x + coeff^2 * x^2 + ... + coeff^degee * x^degree`
+pub(crate) fn multiply_by_power_polynomial<F: Field>(
+    polynomial: &Polynomial<F>,
+    coeff: F,
+    degree: usize,
+) -> Polynomial<F> {
+    // NP TODO check this works for degree = 0, or early stop, or panic
+
+    //  Let (c, d) = (coeff, degree). Polynomial needs to be multiplied by
+    //  ((c*x)^(d + 1) - 1) / (c*x - 1).
+
+    // We first compute polynomial * ((c*x)^(d + 1) - 1), i. e.:
+    //   [0 ... 0] || c^(d + 1) * coeffs
+    // - coeffs || [0 ... 0]
+    let coeff_pow_n_1 = coeff.exp_u64((degree + 1) as u64);
+    let mut new_coeffs = vec![F::ZERO; degree + 1];
+    new_coeffs.extend(
+        polynomial
+            .coeffs()
+            .iter()
+            .map(|&coeff| coeff * coeff_pow_n_1),
+    );
+    for (c1, c2) in new_coeffs.iter_mut().zip(polynomial.coeffs().iter()) {
+        *c1 -= *c2;
+    }
+
+    // Now we divide by c*x - 1 by dividing by x - (1/c) and multiplying by c afterwards
+    let mut last = *new_coeffs.iter().last().unwrap();
+    let coeff_inv = coeff.inverse();
+    for new_c in new_coeffs.iter_mut().rev().skip(1) {
+        *new_c += coeff_inv * last;
+        last = *new_c;
+    }
+
+    assert!(new_coeffs.remove(0) == F::ZERO);
+
+    new_coeffs.iter_mut().for_each(|c| *c *= coeff_inv);
+    Polynomial::from_coeffs(new_coeffs)
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -98,11 +138,9 @@ mod tests {
             .map(|_| rand_poly::<F>(fold_degree - 1))
             .collect_vec();
 
-        let powers_of_x = iter::successors(Some(Polynomial::one()), |p| {
-            Some(&Polynomial::monomial(F::ZERO) * p)
-        })
-        .take(folding_factor)
-        .collect_vec();
+        let powers_of_x = iter::successors(Some(Polynomial::one()), |p| Some(&Polynomial::x() * p))
+            .take(folding_factor)
+            .collect_vec();
 
         let polynomial = folds
             .iter()
@@ -127,6 +165,23 @@ mod tests {
         assert_eq!(
             fold_polynomial(&polynomial, folding_randomness, log_folding_factor),
             expected_folded_polynomial
+        );
+    }
+
+    #[test]
+    fn test_multiply_by_power_polynomial() {
+        let degree_polynomial = 5;
+        let degree_power_polynomial = 6;
+
+        let mut rng = rand::thread_rng();
+        let coeff: F = rng.gen();
+        let polynomial = rand_poly(degree_polynomial);
+
+        let expected = &Polynomial::power_polynomial(coeff, degree_power_polynomial) * &polynomial;
+
+        assert_eq!(
+            multiply_by_power_polynomial(&polynomial, coeff, degree_power_polynomial),
+            expected
         );
     }
 }

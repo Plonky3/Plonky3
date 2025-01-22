@@ -27,24 +27,38 @@ impl<F: Field> Polynomial<F> {
         &self.coeffs
     }
 
+    /// Returns the zero polynomial
     pub fn zero() -> Self {
         Self { coeffs: vec![] }
     }
 
+    /// Returns the constant polynomial 1
     pub fn one() -> Self {
         Self {
             coeffs: vec![F::ONE],
         }
     }
 
-    pub fn monomial(coeff: F) -> Self {
+    /// Returns the monic polynomial of degree 1 with no constant term
+    pub fn x() -> Self {
         Self {
-            coeffs: vec![coeff, F::ONE],
+            coeffs: vec![F::ZERO, F::ONE],
+        }
+    }
+
+    /// Returns the linear polynomial x - point
+    pub fn vanishing_linear_polynomial(point: F) -> Self {
+        Self {
+            coeffs: vec![-point, F::ONE],
         }
     }
 
     pub fn from_coeffs(coeffs: Vec<F>) -> Self {
         Self { coeffs }.truncate_leading_zeros()
+    }
+
+    pub fn constant_term(&self) -> F {
+        *self.coeffs.first().unwrap_or(&F::ZERO)
     }
 
     fn truncate_leading_zeros(mut self) -> Self {
@@ -223,7 +237,7 @@ impl<F: TwoAdicField> Polynomial<F> {
         let mut result = Polynomial::zero();
 
         for (point, eval) in point_to_evals.into_iter() {
-            let polynomial = &vanishing_poly / &Polynomial::monomial(-point);
+            let polynomial = &vanishing_poly / &Polynomial::vanishing_linear_polynomial(point);
             let denominator = polynomial.evaluate(&point);
             result += &(&polynomial * &(eval / denominator));
         }
