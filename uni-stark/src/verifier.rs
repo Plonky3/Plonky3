@@ -47,6 +47,7 @@ where
         .collect_vec();
 
     let air_width = <A as BaseAir<Val<SC>>>::width(air);
+    // TODO Linda: include random poly here.
     let valid_shape = opened_values.trace_local.len() == air_width
         && opened_values.trace_next.len() == air_width
         && opened_values.quotient_chunks.len() == quotient_degree

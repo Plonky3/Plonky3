@@ -131,13 +131,16 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         mat: RowMajorMatrix<F>,
         added_bits: usize,
         shift: F,
+        actual_s: F,
         added_values: &[F],
     ) -> Self::Evaluations {
         let h = mat.height();
         let l_h = log2_strict_usize(h);
         let w = mat.width();
+
         let mut coeffs = self.idft_batch(mat.clone());
         assert!(added_values.len() == h);
+        let orig_coeffs = coeffs.clone();
         // coeffs.values.extend(added_values);
 
         // The quotient matrix corresponds to the decomposition of the quotient poly on the extended basis.
@@ -146,24 +149,27 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         // This adds v_H * r(X). So on H, the evaluation is not affected by this change.
         for i in 0..added_values.len() {
             coeffs.values[i * w] -= added_values[i];
-            coeffs.values[h * w + i * w] = added_values[i] / shift;
+            coeffs.values[h * w + i * w] = added_values[i] / actual_s.exp_u64(h as u64);
         }
 
         // Debugging.
+        // let interp0 = self.coset_dft_batch(orig_coeffs, shift);
         // let sub1 = RowMajorMatrix::new(coeffs.values[..h * w].to_vec(), w);
         // let sub2 = RowMajorMatrix::new(coeffs.values[h * w..].to_vec(), w);
 
+        // assert!(sub1.height() == sub2.height());
         // let interp1 = self.coset_dft_batch(sub1, shift);
 
         // let interp2 = self.coset_dft_batch(sub2, shift);
         // for i in 0..h {
         //     for j in 0..w {
         //         assert!(
-        //             interp1.get(i, j) + interp2.get(i, j) == mat.get(i, j),
+        //             interp1.get(i, j) + actual_s.exp_u64(h as u64) * interp2.get(i, j)
+        //                 == interp0.get(i, j),
         //             "interp1 {}, interp2 {}, mat {}",
         //             interp1.get(i, j),
         //             interp2.get(i, j),
-        //             mat.get(i, j)
+        //             interp0.get(i, j)
         //         );
         //     }
         // }

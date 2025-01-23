@@ -110,7 +110,7 @@ fn main() -> Result<(), impl Debug> {
         mmcs: challenge_mmcs,
     };
     type Pcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, StdRng>;
-    let pcs = Pcs::new(dft, val_mmcs, fri_config, 4, StdRng::from_entropy());
+    let pcs = Pcs::new(dft, val_mmcs, fri_config, 0, StdRng::from_entropy());
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs);

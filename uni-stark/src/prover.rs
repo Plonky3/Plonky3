@@ -92,23 +92,58 @@ where
                 .iter()
                 .enumerate()
                 .filter(|(j, _)| *j != i)
-                .map(|(_, other_domain)| other_domain.zp_at_point(domain.first_point()).inverse())
+                .map(|(j, other_domain)| {
+                    tracing::info!(
+                        "domain first point {:?} eval {:?}, j {}, i {}",
+                        domain.first_point(),
+                        other_domain.zp_at_point(domain.first_point()),
+                        j,
+                        i
+                    );
+                    other_domain.zp_at_point(domain.first_point()).inverse()
+                })
                 .product()
         })
         .collect_vec();
+    tracing::info!("zp cis {:?}", zp_cis);
     let (quotient_commit, quotient_data) =
         info_span!("commit to quotient poly chunks").in_scope(|| {
             pcs.commit_quotient(
                 izip!(qc_domains.clone(), quotient_chunks.clone()).collect_vec(),
-                zp_cis,
+                zp_cis.clone(),
             )
         });
     challenger.observe(quotient_commit.clone());
 
+    let mut random_vals = if pcs.is_zk() {
+        Some(pcs.generate_random_vals(trace_domain.size()))
+        // None
+    } else {
+        None
+    };
+    random_vals = None;
+
+    let opt_random_commit = if let Some(r_vs) = random_vals {
+        let extended_domain = pcs.natural_domain_for_degree(trace_domain.size() * 2);
+        Some(pcs.commit(vec![(extended_domain, r_vs)]))
+        // None
+    } else {
+        None
+    };
     /////////////////////////// Linda debug
     // Check whether the final verification check would pass: Checking that
     // the sum of quotients * vanishing polynomial would give the same result for the original and current values.
-    let first_domain_point = SC::Challenge::from_base(qc_domains[0].first_point());
+
+    let lde_quotient_coeffs = pcs.compute_idft(pcs.get_evals(
+        izip!(qc_domains.clone(), quotient_chunks.clone()).collect_vec(),
+        zp_cis.clone(),
+        true,
+    ));
+    let lde_orig_quotients_coeffs = pcs.compute_idft(pcs.get_evals(
+        izip!(qc_domains.clone(), quotient_chunks.clone()).collect_vec(),
+        zp_cis.clone(),
+        false,
+    ));
     let generator = SC::Challenge::from_base(trace_domain.first_point());
     let (_, orig_quotient_data) =
         pcs.commit(izip!(qc_domains.clone(), quotient_chunks).collect_vec());
@@ -126,6 +161,8 @@ where
         challenger,
     );
 
+    tracing::info!("generator {:?}", Val::<SC>::GENERATOR);
+
     let zps = qc_domains
         .iter()
         .enumerate()
@@ -135,6 +172,7 @@ where
                 .enumerate()
                 .filter(|(j, _)| *j != i)
                 .map(|(_, other_domain)| {
+                    // ((generator * other_domain.first_point().inverse()).exp_u64(other_domain.size() as u64) - SC::Challenge::ONE)
                     other_domain.zp_at_point(generator)
                         * other_domain.zp_at_point(domain.first_point()).inverse()
                 })
@@ -142,6 +180,56 @@ where
         })
         .collect_vec();
 
+    let eval_pt = |vals_pt: (Val<SC>, Vec<RowMajorMatrix<Val<SC>>>)| {
+        let pt = vals_pt.0;
+        let mats = vals_pt.1;
+
+        let mut evs = vec![];
+        for mat in mats {
+            let mut s = Val::<SC>::ZERO;
+            for i in 0..mat.height() {
+                s += mat.get(i, 0) * pt.exp_u64(i as u64);
+            }
+            evs.push(s);
+        }
+        evs
+    };
+
+    let domain0 = qc_domains[0];
+    let g0 = qc_domains[0].first_point();
+    let g0_squared = qc_domains[0].next_point(g0).unwrap();
+    let g0_next_next = domain0.next_point(g0_squared).unwrap();
+    tracing::info!(
+        "g0 {:?}  actual second point {:?} third point {:?}",
+        g0,
+        g0_squared,
+        g0_next_next
+    );
+    let domain1 = qc_domains[1];
+    let g1 = domain1.first_point();
+    let g1_next = domain1.next_point(g1).unwrap();
+    let g1_next_next = domain1.next_point(g1_next).unwrap();
+    tracing::info!(
+        "g1 {:?}  actual second point {:?} third point {:?}",
+        g1,
+        g1_next,
+        g1_next_next
+    );
+    let lh0 = |x: Val<SC>| zp_cis[0] * domain1.zp_at_point(x);
+    let lh1 = |x: Val<SC>| zp_cis[1] * domain0.zp_at_point(x);
+
+    let evals_orig_g0 = eval_pt((g0_next_next, lde_orig_quotients_coeffs.clone()));
+    let evals_orig_g1 = eval_pt((g1_next_next, lde_orig_quotients_coeffs));
+    let evals_g0 = eval_pt((g0_next_next, lde_quotient_coeffs.clone()));
+    let evals_g1 = eval_pt((g1_next_next, lde_quotient_coeffs));
+
+    tracing::info!(
+        "eval orig g0 {:?} evals g1 {:?} eval orig g0 {:?} evals g1 {:?}",
+        evals_orig_g0,
+        evals_g0,
+        evals_orig_g1,
+        evals_g1
+    );
     let opened_1 = opened_vals_quo[0]
         .iter()
         .map(|v| v[0].clone())
@@ -161,7 +249,6 @@ where
         })
         .sum::<SC::Challenge>();
 
-    // assert!(1 == 2, "opened {}", opened_1.len(),);
     let quotient_rand = opened_2
         .iter()
         .enumerate()
@@ -173,10 +260,12 @@ where
         })
         .sum::<SC::Challenge>();
 
+    let diff = quotient_rand - quotient_orig;
+
     assert_eq!(
         quotient_orig, quotient_rand,
-        "orig val {:?}, rand val {:?}",
-        quotient_orig, quotient_rand,
+        "orig val {:?}, rand val {:?}, diff {:?}",
+        quotient_orig, quotient_rand, diff
     );
     ////////////////////////////////////
 
@@ -189,17 +278,32 @@ where
     let zeta_next = trace_domain.next_point(zeta).unwrap();
 
     let (opened_values, opening_proof) = info_span!("open").in_scope(|| {
-        pcs.open(
-            vec![
-                (&trace_data, vec![vec![zeta, zeta_next]]),
-                (
-                    &quotient_data,
-                    // open every chunk at zeta
-                    (0..quotient_degree).map(|_| vec![zeta]).collect_vec(),
-                ),
-            ],
-            challenger,
-        )
+        if let Some((r_commit, r_data)) = opt_random_commit {
+            pcs.open(
+                vec![
+                    (&trace_data, vec![vec![zeta, zeta_next]]),
+                    (
+                        &quotient_data,
+                        // open every chunk at zeta
+                        (0..quotient_degree).map(|_| vec![zeta]).collect_vec(),
+                    ),
+                    (&r_data, vec![vec![zeta]]),
+                ],
+                challenger,
+            )
+        } else {
+            pcs.open(
+                vec![
+                    (&trace_data, vec![vec![zeta, zeta_next]]),
+                    (
+                        &quotient_data,
+                        // open every chunk at zeta
+                        (0..quotient_degree).map(|_| vec![zeta]).collect_vec(),
+                    ),
+                ],
+                challenger,
+            )
+        }
     });
     let trace_local = opened_values[0][0][0].clone();
     let trace_next = opened_values[0][0][1].clone();
