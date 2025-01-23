@@ -91,6 +91,8 @@ impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F>
         }
     }
 
+    // This is just here as a placeholder for now. Going to move this function to packed_binomial_extension
+    // in a future PR (before this is merged onto the main branch.)
     fn ext_powers_packed(&self) -> crate::Powers<Self::ExtensionPacking> {
         let width = F::Packing::WIDTH;
         let powers = self.powers().take(width + 1).collect_vec();

@@ -322,16 +322,6 @@ pub trait Serializable<F: FieldAlgebra>: Sized {
     /// different basis might have been used.
     fn deserialize_fn<Fn: FnMut(usize) -> F>(f: Fn) -> Self;
 
-    fn ith_basis_element(i: usize) -> Self {
-        Self::deserialize_fn(|j| {
-            if i == j {
-                F::ONE.clone()
-            } else {
-                F::ZERO.clone()
-            }
-        })
-    }
-
     /// Fixes a basis for the algebra `A` and uses this to
     /// map `n` `F` elements to an element of `A`.
     ///
@@ -343,23 +333,41 @@ pub trait Serializable<F: FieldAlgebra>: Sized {
     /// (or rederived within) another compilation environment where a
     /// different basis might have been used.
     fn deserialize_iter<I: Iterator<Item = F>>(iter: I) -> Self;
+
+    /// Given a basis for the Algebra `A`, return the i'th basis element.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
+    fn ith_basis_element(i: usize) -> Self {
+        Self::deserialize_fn(|j| {
+            if i == j {
+                F::ONE.clone()
+            } else {
+                F::ZERO.clone()
+            }
+        })
+    }
 }
 
 impl<F: FieldAlgebra> Serializable<F> for F {
     const DIMENSION: usize = 1;
 
+    #[inline]
     fn serialize_as_slice(&self) -> &[F] {
         slice::from_ref(self)
     }
 
-    fn deserialize_slice(slice: &[F]) -> Self {
-        slice[0].clone()
-    }
-
+    #[inline]
     fn deserialize_fn<Fn: FnMut(usize) -> F>(mut f: Fn) -> Self {
         f(0)
     }
 
+    #[inline]
     fn deserialize_iter<I: Iterator<Item = F>>(mut iter: I) -> Self {
         iter.next().unwrap()
     }
@@ -533,6 +541,9 @@ pub trait PrimeField32: PrimeField64 {
 /// really the result of applying extension of scalars to a FieldAlgebra `FA` to lift `FA`
 /// from an algebra over `F` to an algebra over `EF` and so `FEA = EF ⊗ FA` where the tensor
 /// product is over `F`.
+///
+/// This will be deleted in a future PR. It's currently only needed to give some traits for
+/// ExtensionPacking and so we will soon replace it by a new packed extension field trait.
 pub trait FieldExtensionAlgebra<Base: FieldAlgebra>:
     FieldAlgebra
     + From<Base>
@@ -562,6 +573,8 @@ pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base> + Fro
     ///
     /// E.g. if `PACKING::WIDTH = 4` this returns the elements:
     /// `[self^0, self^1, self^2, self^3], [self^4, self^5, self^6, self^7], ...`.
+    ///
+    /// Once we create the new packed extension field trait, this function will be moved there.
     fn ext_powers_packed(&self) -> Powers<Self::ExtensionPacking>;
 }
 
