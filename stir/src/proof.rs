@@ -17,8 +17,7 @@ pub struct StirProof<F: Field, M: Mmcs<F>, Witness> {
     pub(crate) pow_witness: Witness,
 
     // NP TODO path pruning/batch opening
-    // pub(crate) queries_to_final: (Vec<Vec<F>>, MultiPath<MerkleConfig>),
-    pub(crate) queries_to_final: Vec<(Vec<Vec<F>>, M::Proof)>,
+    pub(crate) final_round_queries: Vec<(Vec<Vec<F>>, M::Proof)>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

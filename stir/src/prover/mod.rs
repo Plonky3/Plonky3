@@ -30,6 +30,7 @@ pub struct StirWitness<F: TwoAdicField, M: Mmcs<F>> {
     pub(crate) folding_randomness: F,
 }
 
+// NP TODO maybe have this and prove() receive &polynomial instead
 pub fn commit<F, M>(
     config: &StirConfig<F, M>,
     polynomial: Polynomial<F>,
@@ -101,18 +102,20 @@ where
     witness.folding_randomness = folding_randomness;
 
     let mut round_proofs = vec![];
-    for _ in 0..config.num_rounds() {
+    for _ in 0..config.num_rounds() - 1 {
         let (new_witness, round_proof) = prove_round(config, witness, challenger);
         witness = new_witness;
         round_proofs.push(round_proof);
     }
 
-    let log_last_folding_factor = config.log_folding_factors().last().unwrap();
+    // Final round
+
+    let log_last_folding_factor = config.log_last_folding_factor();
 
     let final_polynomial = fold_polynomial(
         &witness.polynomial,
         witness.folding_randomness,
-        1 << log_last_folding_factor,
+        log_last_folding_factor,
     );
 
     let final_queries = config.final_num_queries();
@@ -140,7 +143,7 @@ where
         round_proofs,
         final_polynomial,
         pow_witness,
-        queries_to_final,
+        final_round_queries: queries_to_final,
     }
 }
 

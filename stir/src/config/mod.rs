@@ -16,6 +16,14 @@ pub use tests::*;
 /// STIR-related parameters defined by the user. These get expanded into a full `StirConfig`.
 #[derive(Debug, Clone)]
 pub struct StirParameters<M: Clone> {
+    // There is/are
+    // - num_rounds rounds: num_rounds - 1 of them happen inside the main loop,
+    //   and the final one happens after it.
+    // - one folded polynomial per round.
+    // - num_rounds codewords:
+    //   - one encoding the original polynomial's, which is not folded
+    //   - num_rounds - 1 ones encoding folded polynomials (note that, in the
+    //     last round, the folded polynomialis sent in plain).
     /// Security level desired in bits.
     pub(crate) security_level: usize,
 
@@ -27,13 +35,13 @@ pub struct StirParameters<M: Clone> {
     // 1". Comments are more accurate: "degree" means "degree bound (<=)"
     pub(crate) log_starting_degree: usize,
 
-    /// log of the folding factor in each round.
+    /// log of the folding factor in each round (incl. final).
     pub(crate) log_folding_factors: Vec<usize>,
 
     /// log of the inverse of the starting rate used in the protocol.
     pub(crate) log_starting_inv_rate: usize,
 
-    /// log of the inverses of the rates in non-first protocol rounds.
+    /// log of the inverses of the rates in non-first protocol codewords (incl. final). There are num_rounds - 1 of these.
     pub(crate) log_inv_rates: Vec<usize>,
 
     /// Number of PoW bits used to reduce query error.
@@ -124,6 +132,10 @@ pub(crate) struct RoundConfig {
 
 #[derive(Debug, Clone)]
 pub struct StirConfig<F: TwoAdicField, M: Clone> {
+    // See the comment at the start of StirParameters for the convention on the
+    // number of rounds, codewords, etc. In this structure there are
+    // num_rounds - 1 round configs as the last round happening outside the
+    // main loop doesn't have one.
     /// Input parameters for the STIR protocol.
     parameters: StirParameters<M>,
 
@@ -135,6 +147,7 @@ pub struct StirConfig<F: TwoAdicField, M: Clone> {
     starting_folding_pow_bits: f64,
 
     /// Round-specific parameters.
+    // There are num_rounds - 1 of these (see above)
     round_parameters: Vec<RoundConfig>,
 
     /// log of the (degree + 1) of the final polynomial sent in plain.
@@ -363,15 +376,28 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
     }
 
     pub fn num_rounds(&self) -> usize {
-        self.round_parameters.len()
+        // See the comment at the start of StirParameters for the convention
+        self.round_parameters.len() + 1
     }
 
+    /// Configurations of non-final rounds (i. e. the ones which happen inside
+    /// the main loop)
     pub(crate) fn round_configs(&self) -> &[RoundConfig] {
         &self.round_parameters
     }
 
     pub(crate) fn round_config(&self, i: usize) -> &RoundConfig {
-        &self.round_parameters[i]
+        self.round_parameters
+            .get(i)
+            // More optimal than .expect(format!...)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Index out of bounds: there are {} rounds, but only {} round \
+                    configurations (the final round does not have one)",
+                    self.num_rounds(),
+                    self.round_parameters.len(),
+                )
+            })
     }
 
     pub fn log_stopping_degree(&self) -> usize {
@@ -409,6 +435,10 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
 
     pub fn log_folding_factors(&self) -> &[usize] {
         &self.parameters.log_folding_factors
+    }
+
+    pub fn log_last_folding_factor(&self) -> usize {
+        *self.parameters.log_folding_factors.last().unwrap()
     }
 
     pub fn log_starting_inv_rate(&self) -> usize {

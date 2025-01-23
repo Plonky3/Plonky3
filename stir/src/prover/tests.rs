@@ -1,6 +1,6 @@
 use itertools::Itertools;
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_challenger::MockChallenger;
+use p3_challenger::{DuplexChallenger, HashChallenger, MockChallenger};
 use p3_commit::Mmcs;
 use p3_field::{Field, FieldAlgebra};
 use p3_matrix::{dense::RowMajorMatrix, Dimensions, Matrix};
@@ -13,9 +13,9 @@ use crate::{
     coset::Radix2Coset,
     polynomial::{rand_poly, Polynomial},
     proof::RoundProof,
-    utils::field_element_from_isize,
-    utils::fold_polynomial,
-    SecurityAssumption, StirConfig, StirParameters,
+    prover::prove,
+    utils::{field_element_from_isize, fold_polynomial},
+    SecurityAssumption, StirConfig, StirParameters, StirProof,
 };
 
 use super::{prove_round, RoundConfig, StirWitness};
@@ -28,6 +28,7 @@ type BBHash = PaddingFreeSponge<BBPerm, 16, 8, 8>;
 type BBCompress = TruncatedPermutation<BBPerm, 2, 8, 16>;
 type BBPacking = <BB as Field>::Packing;
 type BBMMCS = MerkleTreeMmcs<BBPacking, BBPacking, BBHash, BBCompress, 8>;
+type BBChallenger = DuplexChallenger<BB, BBPerm, 16, 8>;
 
 pub fn test_mmcs_config() -> BBMMCS {
     let mut rng = ChaCha20Rng::from_entropy();
@@ -37,14 +38,20 @@ pub fn test_mmcs_config() -> BBMMCS {
     BBMMCS::new(hash, compress)
 }
 
+pub fn test_challenger() -> BBChallenger {
+    let mut rng = ChaCha20Rng::from_entropy();
+    let perm = BBPerm::new_from_rng_128(&mut rng);
+    BBChallenger::new(perm)
+}
+
 fn test_stir_config(
     log_starting_degree: usize,
     log_starting_inv_rate: usize,
     log_folding_factor: usize,
+    num_rounds: usize,
 ) -> StirConfig<BB, BBMMCS> {
     let security_level = 128;
     let security_assumption = SecurityAssumption::CapacityBound;
-    let num_rounds = 2;
     let pow_bits = 20;
 
     let parameters = StirParameters::fixed_domain_shift(
@@ -64,7 +71,7 @@ fn test_stir_config(
 // NP TODO either remove the manual values or use them by reducing the soundness
 #[test]
 fn test_prove_round_zero() {
-    let config = test_stir_config(3, 1, 1);
+    let config = test_stir_config(3, 1, 1, 2);
 
     let round = 0;
 
@@ -192,7 +199,7 @@ fn test_prove_round_zero() {
 fn test_prove_round_large() {
     let mut rng = rand::thread_rng();
 
-    let config = test_stir_config(10, 3, 2);
+    let config = test_stir_config(10, 3, 2, 2);
 
     let round = 0;
 
@@ -350,6 +357,33 @@ fn test_prove_round_large() {
     assert_eq!(ans_polynomial, expected_ans_polynomial);
     assert_eq!(shake_polynomial, expected_shake_polynomial);
 }
+
+#[test]
+fn test_prove() {
+    // Note this performs no checks against the expected final polynomial - it
+    // is only meant to check prove() runs from beginning to end.
+
+    let config = test_stir_config(14, 1, 4, 3);
+
+    let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
+
+    let mut challenger = test_challenger();
+
+    let proof = prove(&config, polynomial, &mut challenger);
+
+    let StirProof {
+        round_proofs,
+        final_polynomial,
+        pow_witness,
+        final_round_queries,
+    } = proof;
+
+    // Final-degree testing
+    assert_eq!(config.log_stopping_degree(), 2);
+    assert!(final_polynomial.degree() < 1 << 2);
+}
+
+// NP TODO test two subsequent rounds by hand
 
 // NP TODO discuss with Giacomo Every round needs two: this round's, to know how
 // to fold; and next round's, to know how to stack the evaluations of the final
