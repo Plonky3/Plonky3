@@ -1,7 +1,6 @@
+use alloc::vec::Vec;
 use core::array;
 use core::mem::transmute;
-
-use alloc::vec::Vec;
 
 use p3_air::utils::{u64_to_16_bit_limbs, u64_to_bits_le};
 use p3_field::PrimeField64;
