@@ -12,8 +12,8 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
 use p3_field::{
-    quotient_map_small_int, Field, FieldAlgebra, InjectiveMonomial, Packable, PermutationMonomial,
-    PrimeField, PrimeField32, PrimeField64, TwoAdicField,
+    quotient_map_small_int, Field, InjectiveMonomial, Packable, PermutationMonomial,
+    PrimeCharacteristicRing, PrimeField, PrimeField32, PrimeField64, TwoAdicField,
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -167,8 +167,7 @@ impl<'de, FP: FieldParameters> Deserialize<'de> for MontyField31<FP> {
 
 impl<FP: FieldParameters> Packable for MontyField31<FP> {}
 
-impl<FP: FieldParameters> FieldAlgebra for MontyField31<FP> {
-    type F = Self;
+impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
     type PrimeSubfield = Self;
 
     const ZERO: Self = FP::MONTY_ZERO;
@@ -177,7 +176,7 @@ impl<FP: FieldParameters> FieldAlgebra for MontyField31<FP> {
     const NEG_ONE: Self = FP::MONTY_NEG_ONE;
 
     #[inline(always)]
-    fn from_prime_subfield(f: Self::F) -> Self {
+    fn from_prime_subfield(f: Self) -> Self {
         f
     }
 

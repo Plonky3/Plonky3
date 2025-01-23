@@ -4,7 +4,7 @@
 
 use std::sync::OnceLock;
 
-use p3_field::FieldAlgebra;
+use p3_field::PrimeCharacteristicRing;
 use p3_poseidon2::{
     add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
     internal_permute_state, matmul_internal, ExternalLayer, ExternalLayerConstants,
@@ -22,6 +22,7 @@ const BN254_S_BOX_DEGREE: u64 = 5;
 ///
 /// It acts on arrays of the form `[Bn254Fr; WIDTH]`.
 pub type Poseidon2Bn254<const WIDTH: usize> = Poseidon2<
+    Bn254Fr,
     Bn254Fr,
     Poseidon2ExternalLayerBn254<WIDTH>,
     Poseidon2InternalLayerBn254,
@@ -43,7 +44,7 @@ pub struct Poseidon2InternalLayerBn254 {
     internal_constants: Vec<Bn254Fr>,
 }
 
-impl InternalLayerConstructor<Bn254Fr> for Poseidon2InternalLayerBn254 {
+impl InternalLayerConstructor<Bn254Fr, Bn254Fr> for Poseidon2InternalLayerBn254 {
     fn new_from_constants(internal_constants: Vec<Bn254Fr>) -> Self {
         Self { internal_constants }
     }
@@ -52,7 +53,7 @@ impl InternalLayerConstructor<Bn254Fr> for Poseidon2InternalLayerBn254 {
 impl InternalLayer<Bn254Fr, BN254_WIDTH, BN254_S_BOX_DEGREE> for Poseidon2InternalLayerBn254 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
     fn permute_state(&self, state: &mut [Bn254Fr; BN254_WIDTH]) {
-        internal_permute_state::<Bn254Fr, BN254_WIDTH, BN254_S_BOX_DEGREE>(
+        internal_permute_state(
             state,
             |x| matmul_internal(x, *get_diffusion_matrix_3()),
             &self.internal_constants,
@@ -62,7 +63,7 @@ impl InternalLayer<Bn254Fr, BN254_WIDTH, BN254_S_BOX_DEGREE> for Poseidon2Intern
 
 pub type Poseidon2ExternalLayerBn254<const WIDTH: usize> = ExternalLayerConstants<Bn254Fr, WIDTH>;
 
-impl<const WIDTH: usize> ExternalLayerConstructor<Bn254Fr, WIDTH>
+impl<const WIDTH: usize> ExternalLayerConstructor<Bn254Fr, Bn254Fr, WIDTH>
     for Poseidon2ExternalLayerBn254<WIDTH>
 {
     fn new_from_constants(external_constants: ExternalLayerConstants<Bn254Fr, WIDTH>) -> Self {
@@ -78,7 +79,7 @@ impl<const WIDTH: usize> ExternalLayer<Bn254Fr, WIDTH, BN254_S_BOX_DEGREE>
         external_initial_permute_state(
             state,
             self.get_initial_constants(),
-            add_rc_and_sbox_generic::<_, BN254_S_BOX_DEGREE>,
+            add_rc_and_sbox_generic,
             &HLMDSMat4,
         );
     }
@@ -88,7 +89,7 @@ impl<const WIDTH: usize> ExternalLayer<Bn254Fr, WIDTH, BN254_S_BOX_DEGREE>
         external_terminal_permute_state(
             state,
             self.get_terminal_constants(),
-            add_rc_and_sbox_generic::<_, BN254_S_BOX_DEGREE>,
+            add_rc_and_sbox_generic,
             &HLMDSMat4,
         );
     }

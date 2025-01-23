@@ -1,7 +1,7 @@
 use core::marker::PhantomData;
 use core::ops::Mul;
 
-use p3_field::{FieldAlgebra, InjectiveMonomial};
+use p3_field::{InjectiveMonomial, PrimeCharacteristicRing};
 use p3_poseidon2::{
     add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
     ExternalLayer, GenericPoseidon2LinearLayers, InternalLayer, MDSMat4,
@@ -32,7 +32,9 @@ pub trait InternalLayerBaseParameters<MP: MontyParameters, const WIDTH: usize>:
 
     /// Perform the internal matrix multiplication for any Abstract field
     /// which implements multiplication by MontyField31 elements.
-    fn generic_internal_linear_layer<FA: FieldAlgebra + Mul<MontyField31<MP>, Output = FA>>(
+    fn generic_internal_linear_layer<
+        FA: PrimeCharacteristicRing + Mul<MontyField31<MP>, Output = FA>,
+    >(
         state: &mut [FA; WIDTH],
     );
 }
@@ -107,7 +109,7 @@ where
         external_initial_permute_state(
             state,
             self.external_constants.get_initial_constants(),
-            add_rc_and_sbox_generic::<_, D>,
+            add_rc_and_sbox_generic,
             &MDSMat4,
         );
     }
@@ -117,7 +119,7 @@ where
         external_terminal_permute_state(
             state,
             self.external_constants.get_terminal_constants(),
-            add_rc_and_sbox_generic::<_, D>,
+            add_rc_and_sbox_generic,
             &MDSMat4,
         );
     }
@@ -137,7 +139,7 @@ impl<FP, FA, ILBP, const WIDTH: usize> GenericPoseidon2LinearLayers<FA, WIDTH>
     for GenericPoseidon2LinearLayersMonty31<FP, ILBP>
 where
     FP: FieldParameters,
-    FA: FieldAlgebra + Mul<MontyField31<FP>, Output = FA>,
+    FA: PrimeCharacteristicRing + Mul<MontyField31<FP>, Output = FA>,
     ILBP: InternalLayerBaseParameters<FP, WIDTH>,
 {
     /// Perform the external matrix multiplication for any Abstract field

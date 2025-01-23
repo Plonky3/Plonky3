@@ -8,7 +8,7 @@ use num_bigint::BigUint;
 use p3_maybe_rayon::prelude::{IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::field::Field;
-use crate::{FieldAlgebra, PackedValue, PrimeField, PrimeField32, TwoAdicField};
+use crate::{PackedValue, PrimeCharacteristicRing, PrimeField, PrimeField32, TwoAdicField};
 
 /// Computes `Z_H(x)`, where `Z_H` is the zerofier of a multiplicative subgroup of order `2^log_n`.
 pub fn two_adic_subgroup_zerofier<F: TwoAdicField>(log_n: usize, x: F) -> F {
@@ -78,7 +78,7 @@ where
 // to allow us to convert FA constants to BinomialExtensionField<FA, D> constants.
 //
 // The natural approach would be:
-// fn field_to_array<FA: FieldAlgebra, const D: usize>(x: FA) -> [FA; D]
+// fn field_to_array<FA: PrimeCharacteristicRing, const D: usize>(x: FA) -> [FA; D]
 //      let mut arr: [FA; D] = [FA::ZERO; D];
 //      arr[0] = x
 //      arr
@@ -122,7 +122,7 @@ impl<T, const D: usize> HackyWorkAround<T, D> {
 /// Extend a field `FA` element `x` to an array of length `D`
 /// by filling zeros.
 #[inline]
-pub const fn field_to_array<FA: FieldAlgebra, const D: usize>(x: FA) -> [FA; D] {
+pub const fn field_to_array<FA: PrimeCharacteristicRing, const D: usize>(x: FA) -> [FA; D] {
     let mut arr: [MaybeUninit<FA>; D] = unsafe { MaybeUninit::uninit().assume_init() };
 
     arr[0] = MaybeUninit::new(x);
@@ -141,7 +141,7 @@ pub const fn field_to_array<FA: FieldAlgebra, const D: usize>(x: FA) -> [FA; D] 
 }
 
 /// Naive polynomial multiplication.
-pub fn naive_poly_mul<FA: FieldAlgebra>(a: &[FA], b: &[FA]) -> Vec<FA> {
+pub fn naive_poly_mul<FA: PrimeCharacteristicRing>(a: &[FA], b: &[FA]) -> Vec<FA> {
     // Grade school algorithm
     let mut product = vec![FA::ZERO; a.len() + b.len() - 1];
     for (i, c1) in a.iter().enumerate() {
@@ -153,7 +153,7 @@ pub fn naive_poly_mul<FA: FieldAlgebra>(a: &[FA], b: &[FA]) -> Vec<FA> {
 }
 
 /// Expand a product of binomials `(x - roots[0])(x - roots[1])..` into polynomial coefficients.
-pub fn binomial_expand<FA: FieldAlgebra>(roots: &[FA]) -> Vec<FA> {
+pub fn binomial_expand<FA: PrimeCharacteristicRing>(roots: &[FA]) -> Vec<FA> {
     let mut coeffs = vec![FA::ZERO; roots.len() + 1];
     coeffs[0] = FA::ONE;
     for (i, x) in roots.iter().enumerate() {
@@ -165,7 +165,7 @@ pub fn binomial_expand<FA: FieldAlgebra>(roots: &[FA]) -> Vec<FA> {
     coeffs
 }
 
-pub fn eval_poly<FA: FieldAlgebra>(poly: &[FA], x: FA) -> FA {
+pub fn eval_poly<FA: PrimeCharacteristicRing>(poly: &[FA], x: FA) -> FA {
     let mut acc = FA::ZERO;
     for coeff in poly.iter().rev() {
         acc *= x.clone();

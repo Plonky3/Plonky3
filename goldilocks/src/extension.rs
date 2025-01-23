@@ -1,5 +1,5 @@
 use p3_field::extension::{BinomiallyExtendable, HasTwoAdicBionmialExtension};
-use p3_field::{FieldAlgebra, TwoAdicField};
+use p3_field::{PrimeCharacteristicRing, TwoAdicField};
 
 use crate::Goldilocks;
 

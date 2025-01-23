@@ -3,7 +3,7 @@ use std::array;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::{BabyBear, MdsMatrixBabyBear};
-use p3_field::{Field, FieldAlgebra, PermutationMonomial, PrimeField64};
+use p3_field::{Field, FieldAlgebra, PermutationMonomial, PrimeCharacteristicRing, PrimeField64};
 use p3_goldilocks::{Goldilocks, MdsMatrixGoldilocks};
 use p3_mds::integrated_coset_mds::IntegratedCosetMds;
 use p3_mds::MdsPermutation;
@@ -14,24 +14,24 @@ use rand::distributions::{Distribution, Standard};
 use rand::{thread_rng, Rng};
 
 fn bench_rescue(c: &mut Criterion) {
-    rescue::<BabyBear, IntegratedCosetMds<_, 16>, 16, 7>(c);
-    rescue::<<BabyBear as Field>::Packing, IntegratedCosetMds<_, 16>, 16, 7>(c);
-    rescue::<BabyBear, MdsMatrixBabyBear, 24, 7>(c);
-    rescue::<BabyBear, MdsMatrixBabyBear, 32, 7>(c);
+    rescue::<BabyBear, BabyBear, IntegratedCosetMds<_, 16>, 16, 7>(c);
+    rescue::<BabyBear, <BabyBear as Field>::Packing, IntegratedCosetMds<BabyBear, 16>, 16, 7>(c);
+    rescue::<BabyBear, BabyBear, MdsMatrixBabyBear, 24, 7>(c);
+    rescue::<BabyBear, BabyBear, MdsMatrixBabyBear, 32, 7>(c);
 
-    rescue::<Goldilocks, MdsMatrixGoldilocks, 8, 7>(c);
-    rescue::<Goldilocks, MdsMatrixGoldilocks, 12, 7>(c);
-    rescue::<Goldilocks, MdsMatrixGoldilocks, 16, 7>(c);
+    rescue::<Goldilocks, Goldilocks, MdsMatrixGoldilocks, 8, 7>(c);
+    rescue::<Goldilocks, Goldilocks, MdsMatrixGoldilocks, 12, 7>(c);
+    rescue::<Goldilocks, Goldilocks, MdsMatrixGoldilocks, 16, 7>(c);
 
-    rescue::<Mersenne31, MdsMatrixMersenne31, 16, 5>(c);
-    rescue::<Mersenne31, MdsMatrixMersenne31, 32, 5>(c);
+    rescue::<Mersenne31, Mersenne31, MdsMatrixMersenne31, 16, 5>(c);
+    rescue::<Mersenne31, Mersenne31, MdsMatrixMersenne31, 32, 5>(c);
 }
 
-fn rescue<FA, Mds, const WIDTH: usize, const ALPHA: u64>(c: &mut Criterion)
+fn rescue<F, FA, Mds, const WIDTH: usize, const ALPHA: u64>(c: &mut Criterion)
 where
-    FA: FieldAlgebra + PermutationMonomial<ALPHA>,
-    FA::F: PrimeField64 + PermutationMonomial<ALPHA>,
-    Standard: Distribution<FA::F>,
+    F: PrimeField64 + PermutationMonomial<ALPHA>,
+    FA: PrimeCharacteristicRing + FieldAlgebra<F> + PermutationMonomial<ALPHA>,
+    Standard: Distribution<F>,
     Mds: MdsPermutation<FA, WIDTH> + Default,
 {
     // 8 rounds seems to work for the configs we use in practice. For benchmarking purposes we will
@@ -42,7 +42,7 @@ where
     let num_constants = 2 * WIDTH * NUM_ROUNDS;
     let round_constants = rng.sample_iter(Standard).take(num_constants).collect();
     let mds = Mds::default();
-    let rescue = Rescue::<FA::F, Mds, WIDTH, ALPHA>::new(NUM_ROUNDS, round_constants, mds);
+    let rescue = Rescue::<F, Mds, WIDTH, ALPHA>::new(NUM_ROUNDS, round_constants, mds);
     let input: [FA; WIDTH] = array::from_fn(|_| FA::ZERO);
     let name = format!("rescue::<{}, {}>", type_name::<FA>(), ALPHA);
     let id = BenchmarkId::new(name, WIDTH);

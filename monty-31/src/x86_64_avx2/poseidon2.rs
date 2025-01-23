@@ -120,7 +120,7 @@ pub struct Poseidon2InternalLayerMonty31<
 }
 
 impl<FP: FieldParameters, const WIDTH: usize, ILP: InternalLayerParametersAVX2<FP, WIDTH>>
-    InternalLayerConstructor<PackedMontyField31AVX2<FP>>
+    InternalLayerConstructor<MontyField31<FP>, PackedMontyField31AVX2<FP>>
     for Poseidon2InternalLayerMonty31<FP, WIDTH, ILP>
 {
     /// Construct an instance of Poseidon2InternalLayerMersenne31AVX2 from a vector containing
@@ -152,7 +152,7 @@ pub struct Poseidon2ExternalLayerMonty31<PMP: PackedMontyParameters, const WIDTH
 }
 
 impl<FP: FieldParameters, const WIDTH: usize>
-    ExternalLayerConstructor<PackedMontyField31AVX2<FP>, WIDTH>
+    ExternalLayerConstructor<MontyField31<FP>, PackedMontyField31AVX2<FP>, WIDTH>
     for Poseidon2ExternalLayerMonty31<FP, WIDTH>
 {
     /// Construct an instance of Poseidon2ExternalLayerMersenne31AVX2 from a array of

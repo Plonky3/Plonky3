@@ -3,7 +3,7 @@
 use core::array;
 
 use p3_field::integers::QuotientMap;
-use p3_field::{Field, FieldAlgebra};
+use p3_field::{Field, PrimeCharacteristicRing};
 
 use crate::AirBuilder;
 
@@ -13,7 +13,7 @@ use crate::AirBuilder;
 #[inline]
 pub fn pack_bits_le<FA, Var, I>(iter: I) -> FA
 where
-    FA: FieldAlgebra,
+    FA: PrimeCharacteristicRing,
     Var: Into<FA> + Clone,
     I: DoubleEndedIterator<Item = Var>,
 {
@@ -29,7 +29,7 @@ where
 ///
 /// For boolean inputs, `x ^ y = x + y - 2 xy`.
 #[inline(always)]
-pub fn xor<FA: FieldAlgebra>(x: FA, y: FA) -> FA {
+pub fn xor<FA: PrimeCharacteristicRing>(x: FA, y: FA) -> FA {
     x.clone() + y.clone() - x * y.double()
 }
 
@@ -37,7 +37,7 @@ pub fn xor<FA: FieldAlgebra>(x: FA, y: FA) -> FA {
 ///
 /// For boolean inputs `x ^ y ^ z = x + y + z - 2(xy + xz + yz) + 4xyz`.
 #[inline(always)]
-pub fn xor3<FA: FieldAlgebra>(x: FA, y: FA, z: FA) -> FA {
+pub fn xor3<FA: PrimeCharacteristicRing>(x: FA, y: FA, z: FA) -> FA {
     // The cheapest way to implement this polynomial is to simply apply xor twice.
     // This costs 2 adds, 2 subs, 2 muls and 2 doubles.
     xor(x, xor(y, z))
@@ -47,7 +47,7 @@ pub fn xor3<FA: FieldAlgebra>(x: FA, y: FA, z: FA) -> FA {
 ///
 /// For boolean inputs `(!x) & y = (1 - x)y`
 #[inline(always)]
-pub fn andn<FA: FieldAlgebra>(x: FA, y: FA) -> FA {
+pub fn andn<FA: PrimeCharacteristicRing>(x: FA, y: FA) -> FA {
     (FA::ONE - x) * y
 }
 
@@ -76,7 +76,7 @@ pub fn checked_andn<F: Field>(x: F, y: F) -> F {
 ///
 /// The output array is in little-endian order.
 #[inline]
-pub fn u32_to_bits_le<FA: FieldAlgebra>(val: u32) -> [FA; 32] {
+pub fn u32_to_bits_le<FA: PrimeCharacteristicRing>(val: u32) -> [FA; 32] {
     // We do this over F::from_u32 as from_u32 can be slow
     // like in the case of monty field.
     array::from_fn(|i| {
@@ -131,7 +131,8 @@ pub fn add3<AB: AirBuilder>(
     // By assumption P > 3*2^16 so 1 << 16 will be less than P. We use the checked version just to be safe.
     // The compiler should optimize it away.
     let two_16 =
-        <AB::Expr as FieldAlgebra>::PrimeSubfield::from_canonical_checked(1 << 16).unwrap();
+        <AB::Expr as PrimeCharacteristicRing>::PrimeSubfield::from_canonical_checked(1 << 16)
+            .unwrap();
     let two_32 = two_16.square();
 
     let acc_16 = a[0] - b[0] - c[0].clone() - d[0].clone();
@@ -192,7 +193,8 @@ pub fn add2<AB: AirBuilder>(
     // By assumption P > 2^17 so 1 << 16 will be less than P. We use the checked version just to be safe.
     // The compiler should optimize it away.
     let two_16 =
-        <AB::Expr as FieldAlgebra>::PrimeSubfield::from_canonical_checked(1 << 16).unwrap();
+        <AB::Expr as PrimeCharacteristicRing>::PrimeSubfield::from_canonical_checked(1 << 16)
+            .unwrap();
     let two_32 = two_16.square();
 
     let acc_16 = a[0] - b[0] - c[0].clone();

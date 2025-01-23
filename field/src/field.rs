@@ -32,17 +32,10 @@ use crate::Packable;
 /// respectively). Furthermore, multiplication must distribute over
 /// addition. Finally, the scalar multiplication must be realized by
 /// a ring homomorphism from the field to the algebra.
-pub trait FieldAlgebra:
+pub trait PrimeCharacteristicRing:
     Sized
     + Default
     + Clone
-    + From<Self::F>
-    + Add<Self::F, Output = Self>
-    + AddAssign<Self::F>
-    + Sub<Self::F, Output = Self>
-    + SubAssign<Self::F>
-    + Mul<Self::F, Output = Self>
-    + MulAssign<Self::F>
     + Add<Output = Self>
     + AddAssign
     + Sub<Output = Self>
@@ -54,8 +47,6 @@ pub trait FieldAlgebra:
     + Product
     + Debug
 {
-    type F: Field;
-
     /// The field `ℤ/p` where the characteristic of this ring is p.
     type PrimeSubfield: PrimeField;
 
@@ -267,7 +258,7 @@ pub trait FieldAlgebra:
 /// then `f(x) = x^N` will be injective if and only if it is invertible and so in
 /// such cases this monomial acts as a permutation. Moreover, this will occur
 /// exactly when `N` and `q - 1` are relatively prime i.e. `gcd(N, q - 1) = 1`.
-pub trait InjectiveMonomial<const N: u64>: FieldAlgebra {
+pub trait InjectiveMonomial<const N: u64>: PrimeCharacteristicRing {
     /// Compute `x -> x^n` for a given `n > 1` such that this
     /// map is injective.
     fn injective_exp_n(&self) -> Self {
@@ -286,9 +277,45 @@ pub trait PermutationMonomial<const N: u64>: InjectiveMonomial<N> {
     fn injective_exp_root_n(&self) -> Self;
 }
 
+/// A ring `R` implements `FieldAlgebra<F>` if there is a natural
+/// map from `F` into `R` such that the only element which maps
+/// to `R::ZERO` is `F::ZERO`.
+///
+/// For the most part, we will usually expect `F` to be a field but there
+/// are a few cases where it is handy to allow it to just be a ring.
+///
+/// ### Mathematical Description
+///
+/// Let `x` and `y` denote arbitrary elements of the `S`. Then
+/// by "natural" map we require that our map `from`
+/// has the following properties:
+/// - Preserves Identity: `from(F::ONE) = R::ONE`
+/// - Commutes with Addition: `from(x + y) = from(x) + from(y)`
+/// - Commutes with Multiplication: `from(x * y) = from(x) * from(y)`
+///
+/// Such maps are known as ring homomorphisms and are injective if the
+/// only element which maps to `R::ZERO` is `F::ZERO`.
+///
+/// The existence of this map makes `R` into an `F`-module. If `F` is a field
+/// then this makes `R` into an `F`-Algebra and if `R` is also a field then
+/// this means that `R` is a field extension of `F`.
+pub trait FieldAlgebra<F>:
+    From<F>
+    + Add<F, Output = Self>
+    + AddAssign<F>
+    + Sub<F, Output = Self>
+    + SubAssign<F>
+    + Mul<F, Output = Self>
+    + MulAssign<F>
+{
+}
+
+impl<R: PrimeCharacteristicRing> FieldAlgebra<R> for R {}
+
 /// An element of a finite field.
 pub trait Field:
-    FieldAlgebra<F = Self>
+    FieldAlgebra<Self>
+    + PrimeCharacteristicRing
     + Packable
     + 'static
     + Copy
@@ -425,15 +452,8 @@ pub trait PrimeField32: PrimeField64 {
 /// really the result of applying extension of scalars to a FieldAlgebra `FA` to lift `FA`
 /// from an algebra over `F` to an algebra over `EF` and so `FEA = EF ⊗ FA` where the tensor
 /// product is over `F`.
-pub trait FieldExtensionAlgebra<Base: FieldAlgebra>:
-    FieldAlgebra
-    + From<Base>
-    + Add<Base, Output = Self>
-    + AddAssign<Base>
-    + Sub<Base, Output = Self>
-    + SubAssign<Base>
-    + Mul<Base, Output = Self>
-    + MulAssign<Base>
+pub trait FieldExtensionAlgebra<Base: PrimeCharacteristicRing>:
+    PrimeCharacteristicRing + FieldAlgebra<Base>
 {
     const D: usize;
 
@@ -493,7 +513,8 @@ pub trait FieldExtensionAlgebra<Base: FieldAlgebra>:
 }
 
 pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base> {
-    type ExtensionPacking: FieldExtensionAlgebra<Base::Packing, F = Self>
+    type ExtensionPacking: FieldExtensionAlgebra<Base::Packing>
+        + FieldAlgebra<Self>
         + 'static
         + Copy
         + Send
@@ -538,7 +559,7 @@ impl<F: Field> ExtensionField<F> for F {
     type ExtensionPacking = F::Packing;
 }
 
-impl<FA: FieldAlgebra> FieldExtensionAlgebra<FA> for FA {
+impl<FA: PrimeCharacteristicRing> FieldExtensionAlgebra<FA> for FA {
     const D: usize = 1;
 
     fn from_base(b: FA) -> Self {
@@ -583,7 +604,7 @@ pub struct Powers<F> {
     pub current: F,
 }
 
-impl<FA: FieldAlgebra> Iterator for Powers<FA> {
+impl<FA: PrimeCharacteristicRing> Iterator for Powers<FA> {
     type Item = FA;
 
     fn next(&mut self) -> Option<FA> {

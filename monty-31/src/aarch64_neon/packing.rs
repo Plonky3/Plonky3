@@ -7,8 +7,8 @@ use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::{
-    Field, FieldAlgebra, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial,
+    Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue, PermutationMonomial,
+    PrimeCharacteristicRing,
 };
 use p3_util::convert_vec;
 use rand::distributions::{Distribution, Standard};
@@ -445,7 +445,7 @@ impl<FP: FieldParameters> Product for PackedMontyField31Neon<FP> {
     }
 }
 
-impl<FP: FieldParameters> FieldAlgebra for PackedMontyField31Neon<FP> {
+impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31Neon<FP> {
     type F = MontyField31<FP>;
     type PrimeSubfield = MontyField31<FP>;
 

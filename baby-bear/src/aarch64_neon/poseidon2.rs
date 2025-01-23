@@ -5,7 +5,7 @@
 
 #[cfg(test)]
 mod tests {
-    use p3_field::FieldAlgebra;
+    use p3_field::PrimeCharacteristicRing;
     use p3_symmetric::Permutation;
     use rand::Rng;
 

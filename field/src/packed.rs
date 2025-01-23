@@ -3,7 +3,7 @@ use core::ops::Div;
 use core::slice;
 
 use crate::field::Field;
-use crate::FieldAlgebra;
+use crate::{FieldAlgebra, PrimeCharacteristicRing};
 
 /// A trait to constrain types that can be packed into a packed value.
 ///
@@ -130,7 +130,7 @@ unsafe impl<T: Packable, const WIDTH: usize> PackedValue for [T; WIDTH] {
 
 /// # Safety
 /// - See `PackedValue` above.
-pub unsafe trait PackedField: FieldAlgebra<F = Self::Scalar>
+pub unsafe trait PackedField: PrimeCharacteristicRing + FieldAlgebra<Self::Scalar>
     + PackedValue<Value = Self::Scalar>
     // TODO: Implement packed / packed division
     + Div<Self::Scalar, Output = Self>

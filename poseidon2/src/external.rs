@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_field::FieldAlgebra;
+use p3_field::{Field, FieldAlgebra, PrimeCharacteristicRing};
 use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
 use rand::distributions::{Distribution, Standard};
@@ -16,7 +16,7 @@ use rand::Rng;
 #[inline(always)]
 fn apply_hl_mat4<FA>(x: &mut [FA; 4])
 where
-    FA: FieldAlgebra,
+    FA: PrimeCharacteristicRing,
 {
     let t0 = x[0].clone() + x[1].clone();
     let t1 = x[2].clone() + x[3].clone();
@@ -42,7 +42,7 @@ where
 #[inline(always)]
 fn apply_mat4<FA>(x: &mut [FA; 4])
 where
-    FA: FieldAlgebra,
+    FA: PrimeCharacteristicRing,
 {
     let t01 = x[0].clone() + x[1].clone();
     let t23 = x[2].clone() + x[3].clone();
@@ -62,7 +62,7 @@ where
 #[derive(Clone, Default)]
 pub struct HLMDSMat4;
 
-impl<FA: FieldAlgebra> Permutation<[FA; 4]> for HLMDSMat4 {
+impl<FA: PrimeCharacteristicRing> Permutation<[FA; 4]> for HLMDSMat4 {
     #[inline(always)]
     fn permute(&self, input: [FA; 4]) -> [FA; 4] {
         let mut output = input;
@@ -75,7 +75,7 @@ impl<FA: FieldAlgebra> Permutation<[FA; 4]> for HLMDSMat4 {
         apply_hl_mat4(input)
     }
 }
-impl<FA: FieldAlgebra> MdsPermutation<FA, 4> for HLMDSMat4 {}
+impl<FA: PrimeCharacteristicRing> MdsPermutation<FA, 4> for HLMDSMat4 {}
 
 /// The fastest 4x4 MDS matrix.
 ///
@@ -83,7 +83,7 @@ impl<FA: FieldAlgebra> MdsPermutation<FA, 4> for HLMDSMat4 {}
 #[derive(Clone, Default)]
 pub struct MDSMat4;
 
-impl<FA: FieldAlgebra> Permutation<[FA; 4]> for MDSMat4 {
+impl<FA: PrimeCharacteristicRing> Permutation<[FA; 4]> for MDSMat4 {
     #[inline(always)]
     fn permute(&self, input: [FA; 4]) -> [FA; 4] {
         let mut output = input;
@@ -96,7 +96,7 @@ impl<FA: FieldAlgebra> Permutation<[FA; 4]> for MDSMat4 {
         apply_mat4(input)
     }
 }
-impl<FA: FieldAlgebra> MdsPermutation<FA, 4> for MDSMat4 {}
+impl<FA: PrimeCharacteristicRing> MdsPermutation<FA, 4> for MDSMat4 {}
 
 /// Implement the matrix multiplication used by the external layer.
 ///
@@ -104,7 +104,7 @@ impl<FA: FieldAlgebra> MdsPermutation<FA, 4> for MDSMat4 {}
 /// `[[2M M  ... M], [M  2M ... M], ..., [M  M ... 2M]]`.
 #[inline(always)]
 pub fn mds_light_permutation<
-    FA: FieldAlgebra,
+    FA: PrimeCharacteristicRing,
     MdsPerm4: MdsPermutation<FA, 4>,
     const WIDTH: usize,
 >(
@@ -211,19 +211,20 @@ impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
 }
 
 /// Initialize an external layer from a set of constants.
-pub trait ExternalLayerConstructor<FA, const WIDTH: usize>
+pub trait ExternalLayerConstructor<F, FA, const WIDTH: usize>
 where
-    FA: FieldAlgebra,
+    F: Field,
+    FA: FieldAlgebra<F> + PrimeCharacteristicRing,
 {
     /// A constructor which internally will convert the supplied
     /// constants into the appropriate form for the implementation.
-    fn new_from_constants(external_constants: ExternalLayerConstants<FA::F, WIDTH>) -> Self;
+    fn new_from_constants(external_constants: ExternalLayerConstants<F, WIDTH>) -> Self;
 }
 
 /// A trait containing all data needed to implement the external layers of Poseidon2.
 pub trait ExternalLayer<FA, const WIDTH: usize, const D: u64>: Sync + Clone
 where
-    FA: FieldAlgebra,
+    FA: PrimeCharacteristicRing,
 {
     // permute_state_initial, permute_state_terminal are split as the Poseidon2 specifications are slightly different
     // with the initial rounds involving an extra matrix multiplication.
@@ -238,7 +239,7 @@ where
 /// A helper method which allow any field to easily implement the terminal External Layer.
 #[inline]
 pub fn external_terminal_permute_state<
-    FA: FieldAlgebra,
+    FA: PrimeCharacteristicRing,
     CT: Copy, // Whatever type the constants are stored as.
     MdsPerm4: MdsPermutation<FA, 4>,
     const WIDTH: usize,
@@ -260,7 +261,7 @@ pub fn external_terminal_permute_state<
 /// A helper method which allow any field to easily implement the initial External Layer.
 #[inline]
 pub fn external_initial_permute_state<
-    FA: FieldAlgebra,
+    FA: PrimeCharacteristicRing,
     CT: Copy, // Whatever type the constants are stored as.
     MdsPerm4: MdsPermutation<FA, 4>,
     const WIDTH: usize,

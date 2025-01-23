@@ -7,7 +7,7 @@
 //! database.
 
 use p3_field::integers::QuotientMap;
-use p3_field::FieldAlgebra;
+use p3_field::PrimeCharacteristicRing;
 use p3_mds::karatsuba_convolution::Convolve;
 use p3_mds::util::{dot_product, first_row_to_first_col};
 use p3_mds::MdsPermutation;

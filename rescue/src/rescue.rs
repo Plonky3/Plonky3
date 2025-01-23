@@ -4,7 +4,9 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use num::{BigUint, One};
 use num_integer::binomial;
-use p3_field::{FieldAlgebra, PermutationMonomial, PrimeField, PrimeField64};
+use p3_field::{
+    FieldAlgebra, PermutationMonomial, PrimeCharacteristicRing, PrimeField, PrimeField64,
+};
 use p3_mds::MdsPermutation;
 use p3_symmetric::{CryptographicPermutation, Permutation};
 use rand::distributions::Standard;
@@ -97,11 +99,11 @@ where
     }
 }
 
-impl<FA, Mds, const WIDTH: usize, const ALPHA: u64> Permutation<[FA; WIDTH]>
-    for Rescue<FA::F, Mds, WIDTH, ALPHA>
+impl<F, FA, Mds, const WIDTH: usize, const ALPHA: u64> Permutation<[FA; WIDTH]>
+    for Rescue<F, Mds, WIDTH, ALPHA>
 where
-    FA: FieldAlgebra + PermutationMonomial<ALPHA>,
-    FA::F: PrimeField + PermutationMonomial<ALPHA>,
+    F: PrimeField + PermutationMonomial<ALPHA>,
+    FA: FieldAlgebra<F> + PrimeCharacteristicRing + PermutationMonomial<ALPHA>,
     Mds: MdsPermutation<FA, WIDTH>,
 {
     fn permute_mut(&self, state: &mut [FA; WIDTH]) {
@@ -137,18 +139,18 @@ where
     }
 }
 
-impl<FA, Mds, const WIDTH: usize, const ALPHA: u64> CryptographicPermutation<[FA; WIDTH]>
-    for Rescue<FA::F, Mds, WIDTH, ALPHA>
+impl<F, FA, Mds, const WIDTH: usize, const ALPHA: u64> CryptographicPermutation<[FA; WIDTH]>
+    for Rescue<F, Mds, WIDTH, ALPHA>
 where
-    FA: FieldAlgebra + PermutationMonomial<ALPHA>,
-    FA::F: PrimeField + PermutationMonomial<ALPHA>,
+    F: PrimeField + PermutationMonomial<ALPHA>,
+    FA: FieldAlgebra<F> + PrimeCharacteristicRing + PermutationMonomial<ALPHA>,
     Mds: MdsPermutation<FA, WIDTH>,
 {
 }
 
 #[cfg(test)]
 mod tests {
-    use p3_field::FieldAlgebra;
+    use p3_field::PrimeCharacteristicRing;
     use p3_mersenne_31::{MdsMatrixMersenne31, Mersenne31};
     use p3_symmetric::{CryptographicHasher, PaddingFreeSponge, Permutation};
 

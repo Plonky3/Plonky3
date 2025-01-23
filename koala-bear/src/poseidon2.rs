@@ -15,7 +15,7 @@
 
 use core::ops::Mul;
 
-use p3_field::{Field, FieldAlgebra, PrimeField32};
+use p3_field::{Field, PrimeCharacteristicRing, PrimeField32};
 use p3_monty_31::{
     GenericPoseidon2LinearLayersMonty31, InternalLayerBaseParameters, InternalLayerParameters,
     MontyField31, Poseidon2ExternalLayerMonty31, Poseidon2InternalLayerMonty31,
@@ -41,6 +41,7 @@ const KOALABEAR_S_BOX_DEGREE: u64 = 3;
 /// It acts on arrays of the form either `[KoalaBear::Packing; WIDTH]` or `[KoalaBear; WIDTH]`. For speed purposes,
 /// wherever possible, input arrays should of the form `[KoalaBear::Packing; WIDTH]`.
 pub type Poseidon2KoalaBear<const WIDTH: usize> = Poseidon2<
+    KoalaBear,
     <KoalaBear as Field>::Packing,
     Poseidon2ExternalLayerKoalaBear<WIDTH>,
     Poseidon2InternalLayerKoalaBear<WIDTH>,
@@ -154,7 +155,7 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 16> for KoalaBearInternalL
 
     fn generic_internal_linear_layer<FA>(state: &mut [FA; 16])
     where
-        FA: FieldAlgebra + Mul<KoalaBear, Output = FA>,
+        FA: PrimeCharacteristicRing + Mul<KoalaBear, Output = FA>,
     {
         let part_sum: FA = state[1..].iter().cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();
@@ -232,7 +233,7 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 24> for KoalaBearInternalL
 
     fn generic_internal_linear_layer<FA>(state: &mut [FA; 24])
     where
-        FA: FieldAlgebra + core::ops::Mul<KoalaBear, Output = FA>,
+        FA: PrimeCharacteristicRing + core::ops::Mul<KoalaBear, Output = FA>,
     {
         let part_sum: FA = state[1..].iter().cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();

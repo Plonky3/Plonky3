@@ -15,7 +15,7 @@
 
 use core::ops::Mul;
 
-use p3_field::{Field, FieldAlgebra, PrimeField32};
+use p3_field::{Field, PrimeCharacteristicRing, PrimeField32};
 use p3_monty_31::{
     GenericPoseidon2LinearLayersMonty31, InternalLayerBaseParameters, InternalLayerParameters,
     MontyField31, Poseidon2ExternalLayerMonty31, Poseidon2InternalLayerMonty31,
@@ -41,6 +41,7 @@ const BABYBEAR_S_BOX_DEGREE: u64 = 7;
 /// It acts on arrays of the form either `[BabyBear::Packing; WIDTH]` or `[BabyBear; WIDTH]`. For speed purposes,
 /// wherever possible, input arrays should of the form `[BabyBear::Packing; WIDTH]`.
 pub type Poseidon2BabyBear<const WIDTH: usize> = Poseidon2<
+    BabyBear,
     <BabyBear as Field>::Packing,
     Poseidon2ExternalLayerBabyBear<WIDTH>,
     Poseidon2InternalLayerBabyBear<WIDTH>,
@@ -154,7 +155,7 @@ impl InternalLayerBaseParameters<BabyBearParameters, 16> for BabyBearInternalLay
 
     fn generic_internal_linear_layer<FA>(state: &mut [FA; 16])
     where
-        FA: FieldAlgebra + Mul<BabyBear, Output = FA>,
+        FA: PrimeCharacteristicRing + Mul<BabyBear, Output = FA>,
     {
         let part_sum: FA = state[1..].iter().cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();
@@ -232,7 +233,7 @@ impl InternalLayerBaseParameters<BabyBearParameters, 24> for BabyBearInternalLay
 
     fn generic_internal_linear_layer<FA>(state: &mut [FA; 24])
     where
-        FA: FieldAlgebra + Mul<BabyBear, Output = FA>,
+        FA: PrimeCharacteristicRing + Mul<BabyBear, Output = FA>,
     {
         let part_sum: FA = state[1..].iter().cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();

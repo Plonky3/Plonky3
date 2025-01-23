@@ -1,7 +1,7 @@
 use p3_field::extension::{
     BinomiallyExtendable, Complex, HasComplexBinomialExtension, HasTwoAdicComplexBinomialExtension,
 };
-use p3_field::{field_to_array, FieldAlgebra, TwoAdicField};
+use p3_field::{field_to_array, PrimeCharacteristicRing, TwoAdicField};
 
 use crate::Mersenne31;
 

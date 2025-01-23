@@ -1,6 +1,8 @@
 use core::ops::{Add, Mul, Sub};
 
-use p3_field::{ExtensionField, Field, FieldAlgebra, FieldExtensionAlgebra};
+use p3_field::{
+    ExtensionField, Field, FieldAlgebra, FieldExtensionAlgebra, PrimeCharacteristicRing,
+};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 
@@ -29,14 +31,11 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
 pub trait AirBuilder: Sized {
     type F: Field;
 
-    type Expr: FieldAlgebra
-        + From<Self::F>
+    type Expr: PrimeCharacteristicRing
+        + FieldAlgebra<Self::F>
         + Add<Self::Var, Output = Self::Expr>
-        + Add<Self::F, Output = Self::Expr>
         + Sub<Self::Var, Output = Self::Expr>
-        + Sub<Self::F, Output = Self::Expr>
-        + Mul<Self::Var, Output = Self::Expr>
-        + Mul<Self::F, Output = Self::Expr>;
+        + Mul<Self::Var, Output = Self::Expr>;
 
     type Var: Into<Self::Expr>
         + Copy
@@ -136,7 +135,7 @@ pub trait PairBuilder: AirBuilder {
 pub trait ExtensionBuilder: AirBuilder {
     type EF: ExtensionField<Self::F>;
 
-    type ExprEF: FieldExtensionAlgebra<Self::Expr, F = Self::EF>;
+    type ExprEF: FieldExtensionAlgebra<Self::Expr> + FieldAlgebra<Self::EF>;
 
     type VarEF: Into<Self::ExprEF> + Copy + Send + Sync;
 

@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use super::{binomial_mul, cubic_square, vector_add, vector_sub, BinomialExtensionField};
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
-use crate::{field_to_array, FieldAlgebra, FieldExtensionAlgebra, PackedField};
+use crate::{
+    field_to_array, FieldAlgebra, FieldExtensionAlgebra, PackedField, PrimeCharacteristicRing,
+};
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
 #[repr(transparent)] // to make the zero_vec implementation safe
@@ -52,13 +54,21 @@ impl<F: Field, PF: PackedField<Scalar = F>, const D: usize> From<PF>
     }
 }
 
-impl<F, PF, const D: usize> FieldAlgebra for PackedBinomialExtensionField<F, PF, D>
+impl<F: BinomiallyExtendable<D>, PF: PackedField<Scalar = F>, const D: usize>
+    FieldAlgebra<BinomialExtensionField<F, D>> for PackedBinomialExtensionField<F, PF, D>
+{
+}
+
+impl<F: BinomiallyExtendable<D>, PF: PackedField<Scalar = F>, const D: usize> FieldAlgebra<PF>
+    for PackedBinomialExtensionField<F, PF, D>
+{
+}
+
+impl<F, PF, const D: usize> PrimeCharacteristicRing for PackedBinomialExtensionField<F, PF, D>
 where
     F: BinomiallyExtendable<D>,
     PF: PackedField<Scalar = F>,
 {
-    type F = BinomialExtensionField<F, D>;
-
     type PrimeSubfield = PF::PrimeSubfield;
 
     const ZERO: Self = Self {
@@ -99,7 +109,7 @@ where
             }
             3 => {
                 let mut res = Self::default();
-                cubic_square(&self.value, &mut res.value, F::W);
+                cubic_square(&self.value, &mut res.value);
                 res
             }
             _ => <Self as Mul<Self>>::mul(*self, *self),

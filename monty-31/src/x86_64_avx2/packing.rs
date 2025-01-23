@@ -6,7 +6,7 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::{
     Field, FieldAlgebra, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial,
+    PermutationMonomial, PrimeCharacteristicRing,
 };
 use p3_util::convert_vec;
 use rand::distributions::{Distribution, Standard};
@@ -472,8 +472,7 @@ impl<FP: FieldParameters> Product for PackedMontyField31AVX2<FP> {
     }
 }
 
-impl<FP: FieldParameters> FieldAlgebra for PackedMontyField31AVX2<FP> {
-    type F = MontyField31<FP>;
+impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX2<FP> {
     type PrimeSubfield = MontyField31<FP>;
 
     const ZERO: Self = Self::broadcast(MontyField31::ZERO);
@@ -532,9 +531,11 @@ impl<FP: FieldParameters> FieldAlgebra for PackedMontyField31AVX2<FP> {
     #[inline(always)]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { convert_vec(Self::F::zero_vec(len * WIDTH)) }
+        unsafe { convert_vec(MontyField31::<FP>::zero_vec(len * WIDTH)) }
     }
 }
+
+impl<FP: FieldParameters> FieldAlgebra<MontyField31<FP>> for PackedMontyField31AVX2<FP> {}
 
 impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> InjectiveMonomial<D>
     for PackedMontyField31AVX2<FP>

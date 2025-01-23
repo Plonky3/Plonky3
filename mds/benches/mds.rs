@@ -2,7 +2,7 @@ use std::any::type_name;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::{BabyBear, MdsMatrixBabyBear};
-use p3_field::{Field, FieldAlgebra};
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_goldilocks::{Goldilocks, MdsMatrixGoldilocks};
 use p3_mds::coset_mds::CosetMds;
 use p3_mds::integrated_coset_mds::IntegratedCosetMds;
@@ -39,7 +39,7 @@ fn bench_all_mds(c: &mut Criterion) {
 
 fn bench_mds<FA, Mds, const WIDTH: usize>(c: &mut Criterion)
 where
-    FA: FieldAlgebra,
+    FA: PrimeCharacteristicRing,
     Standard: Distribution<FA>,
     Mds: MdsPermutation<FA, WIDTH> + Default,
 {

@@ -2,7 +2,7 @@ use alloc::format;
 use alloc::vec::Vec;
 
 use criterion::{black_box, BatchSize, Criterion};
-use p3_field::{Field, FieldAlgebra};
+use p3_field::{Field, PrimeCharacteristicRing};
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::Rng;
@@ -53,8 +53,10 @@ pub fn benchmark_iter_sum<F: Field, const N: usize, const REPS: usize>(
     });
 }
 
-pub fn benchmark_add_latency<FA: FieldAlgebra + Copy, const N: usize>(c: &mut Criterion, name: &str)
-where
+pub fn benchmark_add_latency<FA: PrimeCharacteristicRing + Copy, const N: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
     Standard: Distribution<FA>,
 {
     c.bench_function(&format!("add-latency/{} {}", N, name), |b| {
@@ -73,7 +75,7 @@ where
     });
 }
 
-pub fn benchmark_add_throughput<FA: FieldAlgebra + Copy, const N: usize>(
+pub fn benchmark_add_throughput<FA: PrimeCharacteristicRing + Copy, const N: usize>(
     c: &mut Criterion,
     name: &str,
 ) where
@@ -118,8 +120,10 @@ pub fn benchmark_add_throughput<FA: FieldAlgebra + Copy, const N: usize>(
     });
 }
 
-pub fn benchmark_sub_latency<FA: FieldAlgebra + Copy, const N: usize>(c: &mut Criterion, name: &str)
-where
+pub fn benchmark_sub_latency<FA: PrimeCharacteristicRing + Copy, const N: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
     Standard: Distribution<FA>,
 {
     c.bench_function(&format!("sub-latency/{} {}", N, name), |b| {
@@ -138,7 +142,7 @@ where
     });
 }
 
-pub fn benchmark_sub_throughput<FA: FieldAlgebra + Copy, const N: usize>(
+pub fn benchmark_sub_throughput<FA: PrimeCharacteristicRing + Copy, const N: usize>(
     c: &mut Criterion,
     name: &str,
 ) where
@@ -183,8 +187,10 @@ pub fn benchmark_sub_throughput<FA: FieldAlgebra + Copy, const N: usize>(
     });
 }
 
-pub fn benchmark_mul_latency<FA: FieldAlgebra + Copy, const N: usize>(c: &mut Criterion, name: &str)
-where
+pub fn benchmark_mul_latency<FA: PrimeCharacteristicRing + Copy, const N: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
     Standard: Distribution<FA>,
 {
     c.bench_function(&format!("mul-latency/{} {}", N, name), |b| {
@@ -203,7 +209,7 @@ where
     });
 }
 
-pub fn benchmark_mul_throughput<FA: FieldAlgebra + Copy, const N: usize>(
+pub fn benchmark_mul_throughput<FA: PrimeCharacteristicRing + Copy, const N: usize>(
     c: &mut Criterion,
     name: &str,
 ) where

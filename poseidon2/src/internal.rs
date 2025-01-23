@@ -29,22 +29,27 @@
 
 use alloc::vec::Vec;
 
-use p3_field::{Field, FieldAlgebra, InjectiveMonomial};
+use p3_field::{Field, FieldAlgebra, InjectiveMonomial, PrimeCharacteristicRing};
 
 use crate::add_rc_and_sbox_generic;
 
 /// Initialize an internal layer from a set of constants.
-pub trait InternalLayerConstructor<FA>
+pub trait InternalLayerConstructor<F, FA>
 where
-    FA: FieldAlgebra,
+    F: Field,
+    FA: FieldAlgebra<F> + PrimeCharacteristicRing,
 {
     /// A constructor which internally will convert the supplied
     /// constants into the appropriate form for the implementation.
-    fn new_from_constants(internal_constants: Vec<FA::F>) -> Self;
+    fn new_from_constants(internal_constants: Vec<F>) -> Self;
 }
 
 /// Given a vector v compute the matrix vector product (1 + diag(v))state with 1 denoting the constant matrix of ones.
-pub fn matmul_internal<F: Field, FA: FieldAlgebra<F = F>, const WIDTH: usize>(
+pub fn matmul_internal<
+    F: Field,
+    FA: FieldAlgebra<F> + PrimeCharacteristicRing,
+    const WIDTH: usize,
+>(
     state: &mut [FA; WIDTH],
     mat_internal_diag_m_1: [F; WIDTH],
 ) {
@@ -58,7 +63,7 @@ pub fn matmul_internal<F: Field, FA: FieldAlgebra<F = F>, const WIDTH: usize>(
 /// A trait containing all data needed to implement the internal layers of Poseidon2.
 pub trait InternalLayer<FA, const WIDTH: usize, const D: u64>: Sync + Clone
 where
-    FA: FieldAlgebra,
+    FA: PrimeCharacteristicRing,
 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
     fn permute_state(&self, state: &mut [FA; WIDTH]);
@@ -68,16 +73,17 @@ where
 /// This should only be used in places where performance is not critical.
 #[inline]
 pub fn internal_permute_state<
-    FA: FieldAlgebra + InjectiveMonomial<D>,
+    F: Field,
+    FA: FieldAlgebra<F> + PrimeCharacteristicRing + InjectiveMonomial<D>,
     const WIDTH: usize,
     const D: u64,
 >(
     state: &mut [FA; WIDTH],
     diffusion_mat: fn(&mut [FA; WIDTH]),
-    internal_constants: &[FA::F],
+    internal_constants: &[F],
 ) {
     for elem in internal_constants.iter() {
-        add_rc_and_sbox_generic::<FA, D>(&mut state[0], *elem);
+        add_rc_and_sbox_generic(&mut state[0], *elem);
         diffusion_mat(state);
     }
 }
@@ -85,7 +91,7 @@ pub fn internal_permute_state<
 /// The compiler doesn't realize that add is associative
 /// so we help it out and minimize the dependency chains by hand.
 #[inline(always)]
-fn sum_7<FA: FieldAlgebra + Copy>(state: &[FA]) -> FA {
+fn sum_7<FA: PrimeCharacteristicRing + Copy>(state: &[FA]) -> FA {
     assert_eq!(state.len(), 7);
 
     let s01 = state[0] + state[1];
@@ -100,7 +106,7 @@ fn sum_7<FA: FieldAlgebra + Copy>(state: &[FA]) -> FA {
 /// The compiler doesn't realize that add is associative
 /// so we help it out and minimize the dependency chains by hand.
 #[inline(always)]
-fn sum_8<FA: FieldAlgebra + Copy>(state: &[FA]) -> FA {
+fn sum_8<FA: PrimeCharacteristicRing + Copy>(state: &[FA]) -> FA {
     assert_eq!(state.len(), 8);
 
     let s01 = state[0] + state[1];
@@ -116,7 +122,7 @@ fn sum_8<FA: FieldAlgebra + Copy>(state: &[FA]) -> FA {
 /// The compiler doesn't realize that add is associative
 /// so we help it out and minimize the dependency chains by hand.
 #[inline(always)]
-pub fn sum_15<FA: FieldAlgebra + Copy>(state: &[FA]) -> FA {
+pub fn sum_15<FA: PrimeCharacteristicRing + Copy>(state: &[FA]) -> FA {
     assert_eq!(state.len(), 15);
 
     let bot_sum = sum_8(&state[..8]);
@@ -128,7 +134,7 @@ pub fn sum_15<FA: FieldAlgebra + Copy>(state: &[FA]) -> FA {
 /// The compiler doesn't realize that add is associative
 /// so we help it out and minimize the dependency chains by hand.
 #[inline(always)]
-pub fn sum_23<FA: FieldAlgebra + Copy>(state: &[FA]) -> FA {
+pub fn sum_23<FA: PrimeCharacteristicRing + Copy>(state: &[FA]) -> FA {
     assert_eq!(state.len(), 23);
 
     let bot_sum = sum_8(&state[..8]);

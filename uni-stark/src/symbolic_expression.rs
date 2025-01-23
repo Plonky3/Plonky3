@@ -4,7 +4,7 @@ use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{Field, FieldAlgebra, InjectiveMonomial};
+use p3_field::{Field, FieldAlgebra, InjectiveMonomial, PrimeCharacteristicRing};
 
 use crate::symbolic_variable::SymbolicVariable;
 
@@ -74,8 +74,7 @@ impl<F: Field> From<F> for SymbolicExpression<F> {
     }
 }
 
-impl<F: Field> FieldAlgebra for SymbolicExpression<F> {
-    type F = F;
+impl<F: Field> PrimeCharacteristicRing for SymbolicExpression<F> {
     type PrimeSubfield = F::PrimeSubfield;
 
     const ZERO: Self = Self::Constant(F::ZERO);
@@ -92,6 +91,8 @@ impl<F: Field> FieldAlgebra for SymbolicExpression<F> {
         Self::Constant(F::from_bool(b))
     }
 }
+
+impl<F: Field> FieldAlgebra<F> for SymbolicExpression<F> {}
 
 impl<F: Field + InjectiveMonomial<N>, const N: u64> InjectiveMonomial<N> for SymbolicExpression<F> {}
 

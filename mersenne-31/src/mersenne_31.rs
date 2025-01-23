@@ -12,8 +12,8 @@ use p3_field::exponentiation::exp_1717986917;
 use p3_field::integers::QuotientMap;
 use p3_field::{
     halve_u32, quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int, Field,
-    FieldAlgebra, InjectiveMonomial, Packable, PermutationMonomial, PrimeField, PrimeField32,
-    PrimeField64,
+    InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
+    PrimeField32, PrimeField64,
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -113,8 +113,7 @@ impl<'a> Deserialize<'a> for Mersenne31 {
     }
 }
 
-impl FieldAlgebra for Mersenne31 {
-    type F = Self;
+impl PrimeCharacteristicRing for Mersenne31 {
     type PrimeSubfield = Self;
 
     const ZERO: Self = Self { value: 0 };
@@ -511,7 +510,9 @@ pub const fn to_mersenne31_array<const N: usize>(input: [u32; N]) -> [Mersenne31
 
 #[cfg(test)]
 mod tests {
-    use p3_field::{Field, FieldAlgebra, InjectiveMonomial, PermutationMonomial, PrimeField32};
+    use p3_field::{
+        Field, InjectiveMonomial, PermutationMonomial, PrimeCharacteristicRing, PrimeField32,
+    };
     use p3_field_testing::{
         test_field, test_prime_field, test_prime_field_32, test_prime_field_64,
     };

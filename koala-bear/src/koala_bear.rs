@@ -1,5 +1,5 @@
 use p3_field::exponentiation::exp_1420470955;
-use p3_field::{Field, FieldAlgebra};
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_monty_31::{
     BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
     PackedMontyParameters, RelativelyPrimePower, TwoAdicData,
@@ -61,7 +61,7 @@ impl RelativelyPrimePower<3> for KoalaBearParameters {
     /// In the field `KoalaBear`, `a^{1/3}` is equal to a^{1420470955}.
     ///
     /// This follows from the calculation `3 * 1420470955 = 2*(2^31 - 2^24) + 1 = 1 mod (p - 1)`.
-    fn exp_root_d<FA: FieldAlgebra>(val: FA) -> FA {
+    fn exp_root_d<FA: PrimeCharacteristicRing>(val: FA) -> FA {
         // We use a custom addition chain.
         // This could possibly by further optimised.
         exp_1420470955(val)

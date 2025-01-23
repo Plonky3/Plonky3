@@ -3,7 +3,7 @@ use core::array;
 use core::ops::{AddAssign, Mul};
 
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{FieldAlgebra, TwoAdicField};
+use p3_field::{PrimeCharacteristicRing, TwoAdicField};
 
 // NB: These are all MDS for M31, BabyBear and Goldilocks
 // const MATRIX_CIRC_MDS_8_2EXP: [u64; 8] = [1, 1, 2, 1, 8, 32, 4, 256];
@@ -41,7 +41,7 @@ where
 /// NB: This function is a naive implementation of the n²
 /// evaluation. It is a placeholder until we have FFT implementations
 /// for all combinations of field and size.
-pub fn apply_circulant<FA: FieldAlgebra, const N: usize>(
+pub fn apply_circulant<FA: PrimeCharacteristicRing, const N: usize>(
     circ_matrix: &[u64; N],
     input: [FA; N],
 ) -> [FA; N] {

@@ -163,7 +163,7 @@ macro_rules! test_prime_field {
     ($field:ty) => {
         mod from_integer_small_tests {
             use p3_field::integers::QuotientMap;
-            use p3_field::{Field, FieldAlgebra};
+            use p3_field::{Field, PrimeCharacteristicRing};
 
             #[test]
             fn test_small_integer_conversions() {
@@ -189,7 +189,7 @@ macro_rules! test_prime_field_64 {
     ($field:ty) => {
         mod from_integer_tests_prime_field_64 {
             use p3_field::integers::QuotientMap;
-            use p3_field::{Field, FieldAlgebra, PrimeField64};
+            use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
 
             #[test]
             fn test_large_unsigned_integer_conversions() {
@@ -209,7 +209,7 @@ macro_rules! test_prime_field_32 {
     ($field:ty) => {
         mod from_integer_tests_prime_field_32 {
             use p3_field::integers::QuotientMap;
-            use p3_field::{Field, FieldAlgebra, PrimeField32};
+            use p3_field::{Field, PrimeCharacteristicRing, PrimeField32};
 
             #[test]
             fn test_large_unsigned_integer_conversions() {
@@ -276,7 +276,7 @@ mod tests {
 
     use p3_baby_bear::BabyBear;
     use p3_field::extension::{BinomialExtensionField, HasFrobenius};
-    use p3_field::{binomial_expand, eval_poly, FieldAlgebra, FieldExtensionAlgebra};
+    use p3_field::{binomial_expand, eval_poly, FieldExtensionAlgebra, PrimeCharacteristicRing};
     use rand::random;
 
     use super::*;

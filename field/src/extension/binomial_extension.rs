@@ -17,7 +17,8 @@ use super::{HasFrobenius, HasTwoAdicBionmialExtension, PackedBinomialExtensionFi
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{
-    field_to_array, ExtensionField, FieldAlgebra, FieldExtensionAlgebra, Packable, TwoAdicField,
+    field_to_array, ExtensionField, FieldAlgebra, FieldExtensionAlgebra, Packable,
+    PrimeCharacteristicRing, TwoAdicField,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
@@ -113,12 +114,11 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
     }
 }
 
-impl<F, const D: usize> FieldAlgebra for BinomialExtensionField<F, D>
+impl<F, const D: usize> PrimeCharacteristicRing for BinomialExtensionField<F, D>
 where
     F: BinomiallyExtendable<D>,
 {
-    type F = BinomialExtensionField<F, D>;
-    type PrimeSubfield = <F as FieldAlgebra>::PrimeSubfield;
+    type PrimeSubfield = <F as PrimeCharacteristicRing>::PrimeSubfield;
 
     const ZERO: Self = Self {
         value: [F::ZERO; D],
@@ -138,7 +138,7 @@ where
 
     #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
-        <F as FieldAlgebra>::from_prime_subfield(f).into()
+        <F as PrimeCharacteristicRing>::from_prime_subfield(f).into()
     }
 
     #[inline(always)]
@@ -153,7 +153,7 @@ where
             }
             3 => {
                 let mut res = Self::default();
-                cubic_square(&self.value, &mut res.value, F::W);
+                cubic_square(&self.value, &mut res.value);
                 res
             }
             _ => <Self as Mul<Self>>::mul(*self, *self),
@@ -166,6 +166,8 @@ where
         unsafe { convert_vec(F::zero_vec(len * D)) }
     }
 }
+
+impl<F: BinomiallyExtendable<D>, const D: usize> FieldAlgebra<F> for BinomialExtensionField<F, D> {}
 
 impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionField<F, D> {
     type Packing = Self;
@@ -495,7 +497,11 @@ impl<F: Field + HasTwoAdicBionmialExtension<D>, const D: usize> TwoAdicField
 
 /// Add two vectors element wise.
 #[inline]
-pub(crate) fn vector_add<FA: FieldAlgebra + Add<FA2, Output = FA>, FA2: Clone, const D: usize>(
+pub(crate) fn vector_add<
+    FA: PrimeCharacteristicRing + Add<FA2, Output = FA>,
+    FA2: Clone,
+    const D: usize,
+>(
     a: &[FA; D],
     b: &[FA2; D],
 ) -> [FA; D] {
@@ -504,7 +510,11 @@ pub(crate) fn vector_add<FA: FieldAlgebra + Add<FA2, Output = FA>, FA2: Clone, c
 
 /// Subtract two vectors element wise.
 #[inline]
-pub(crate) fn vector_sub<FA: FieldAlgebra + Sub<FA2, Output = FA>, FA2: Clone, const D: usize>(
+pub(crate) fn vector_sub<
+    FA: PrimeCharacteristicRing + Sub<FA2, Output = FA>,
+    FA2: Clone,
+    const D: usize,
+>(
     a: &[FA; D],
     b: &[FA2; D],
 ) -> [FA; D] {
@@ -514,7 +524,7 @@ pub(crate) fn vector_sub<FA: FieldAlgebra + Sub<FA2, Output = FA>, FA2: Clone, c
 /// Multiply two vectors representing elements in a binomial extension.
 #[inline]
 pub(super) fn binomial_mul<
-    FA: FieldAlgebra + Mul<FA2, Output = FA>,
+    FA: PrimeCharacteristicRing + Mul<FA2, Output = FA>,
     FA2: Add<Output = FA2> + Clone,
     const D: usize,
 >(
@@ -576,7 +586,7 @@ fn cubic_inv<F: Field>(a: &[F], w: F) -> [F; 3] {
 /// karatsuba multiplication for cubic extension field
 #[inline]
 pub(crate) fn cubic_mul<
-    FA: FieldAlgebra + Mul<FA2, Output = FA>,
+    FA: PrimeCharacteristicRing + Mul<FA2, Output = FA>,
     FA2: Add<Output = FA2> + Clone,
     const D: usize,
 >(
@@ -605,14 +615,17 @@ pub(crate) fn cubic_mul<
 
 /// Section 11.3.6a in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
-pub(crate) fn cubic_square<FA: FieldAlgebra, const D: usize>(
+pub fn cubic_square<
+    F: BinomiallyExtendable<D>,
+    FA: FieldAlgebra<F> + PrimeCharacteristicRing,
+    const D: usize,
+>(
     a: &[FA; D],
     res: &mut [FA; D],
-    w: FA::F,
 ) {
     assert_eq!(D, 3);
 
-    let w_a2 = a[2].clone() * w;
+    let w_a2 = a[2].clone() * Into::<FA>::into(F::W);
 
     res[0] = a[0].square() + (a[1].clone() * w_a2.clone()).double();
     res[1] = w_a2 * a[2].clone() + (a[0].clone() * a[1].clone()).double();
