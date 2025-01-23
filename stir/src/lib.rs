@@ -19,7 +19,7 @@ mod proof;
 pub mod prover;
 mod proximity_gaps;
 mod utils;
-// NP pub mod verifier;
+pub mod verifier;
 
 pub use config::{StirConfig, StirParameters};
 pub use proof::StirProof;

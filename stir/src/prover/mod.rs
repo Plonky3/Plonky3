@@ -20,14 +20,36 @@ use crate::{StirConfig, StirProof};
 mod tests;
 
 pub struct StirWitness<F: TwoAdicField, M: Mmcs<F>> {
+    // The indices are given in the following frame of reference: Self is
+    // produced inside prove_round for round i (in {1, ..., num_rounds}). The
+    // final round, with index num_rounds + 1, does not produce a StirWitness.
+
+    // Domain L_i
     pub(crate) domain: Radix2Coset<F>,
+
     // Polynomial f_i
     pub(crate) polynomial: Polynomial<F>,
-    pub(crate) merkle_tree: M::ProverData<RowMajorMatrix<F>>,
-    // Stacked evaluations of g_i = Fold(f_i, ...)
+
+    // Stacked evaluations of g_i = Fold(f_{i - 1}, ...)
+    // merkle_tree above is a commitment to this
     pub(crate) stacked_evals: RowMajorMatrix<F>,
+
+    // Commitment to stacked_evals
+    pub(crate) merkle_tree: M::ProverData<RowMajorMatrix<F>>,
+
+    // Round number i
     pub(crate) round: usize,
+
+    // Folding randomness r_i to be used in the next round
     pub(crate) folding_randomness: F,
+    // Exceptionally, the first witness (passed to prove_round for round 1) is to be understood as follows:
+    // - domain: L_0 = w * <w> = <w>
+    // - polynomial: f_0
+    // - stacked_evals: stacked evals of f_0
+    // - merkle_tree = commitment to staked_evals
+    // - round = 0
+    // NP TODO remove comment in brackets if this changes to an option
+    // - folding_randomness: r_0 (set to 1 in commit, then overwritten)
 }
 
 // NP TODO maybe have this and prove() receive &polynomial instead
@@ -75,15 +97,15 @@ where
 
 // NP TODO pub fn prove_on_evals
 // NP TODO commit_and_prove
-pub fn prove<F, M, Challenger>(
+pub fn prove<F, M, C>(
     config: &StirConfig<F, M>,
     polynomial: Polynomial<F>,
-    challenger: &mut Challenger,
-) -> StirProof<F, M, Challenger::Witness>
+    challenger: &mut C,
+) -> StirProof<F, M, C::Witness>
 where
     F: TwoAdicField,
     M: Mmcs<F>,
-    Challenger: FieldChallenger<F> + GrindingChallenger + CanObserve<M::Commitment>,
+    C: FieldChallenger<F> + GrindingChallenger + CanObserve<M::Commitment>,
 {
     assert!(
         polynomial.degree() - 1
@@ -112,6 +134,7 @@ where
 
     let log_last_folding_factor = config.log_last_folding_factor();
 
+    // p in the article
     let final_polynomial = fold_polynomial(
         &witness.polynomial,
         witness.folding_randomness,
@@ -120,11 +143,12 @@ where
 
     let final_queries = config.final_num_queries();
 
-    let scaling_factor = 1 << (witness.domain.log_size() - log_last_folding_factor);
+    // Logarithm of |(L_{i - 1})^k_{i - 1}|
+    let log_query_domain_size = 1 << (witness.domain.log_size() - log_last_folding_factor);
 
-    // NP TODO: No index deduplication
     let queried_indices: Vec<u64> = (0..final_queries)
-        .map(|_| challenger.sample_bits(scaling_factor) as u64)
+        .map(|_| challenger.sample_bits(log_query_domain_size) as u64)
+        .unique()
         .collect();
 
     let queries_to_final: Vec<(Vec<Vec<F>>, M::Proof)> = queried_indices
@@ -240,10 +264,11 @@ where
     // Sample folding randomness for the next round
     let new_folding_randomness = challenger.sample_ext_element();
 
-    // Sample queried indices of elements in L^k_{i-1}
-    let log_scaling_factor = domain.log_size() - log_folding_factor;
+    // Sample queried indices of elements in L_{i - 1}^k_{i-1}
+    let log_query_domain_size = domain.log_size() - log_folding_factor;
+
     let queried_indices: Vec<u64> = (0..num_queries)
-        .map(|_| challenger.sample_bits(log_scaling_factor) as u64)
+        .map(|_| challenger.sample_bits(log_query_domain_size) as u64)
         .unique()
         .collect();
 
