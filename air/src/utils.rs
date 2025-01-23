@@ -87,6 +87,32 @@ pub fn u32_to_bits_le<FA: FieldAlgebra>(val: u32) -> [FA; 32] {
     })
 }
 
+/// Convert a 64-bit integer into an array of 64 0 or 1 field elements.
+///
+/// The output array is in little-endian order.
+#[inline]
+pub fn u64_to_bits_le<FA: FieldAlgebra>(val: u64) -> [FA; 64] {
+    // We do this over F::from_canonical_u64 as from_canonical_u64 can be slow
+    // like in the case of monty field.
+    array::from_fn(|i| {
+        if val & (1 << i) != 0 {
+            FA::ONE
+        } else {
+            FA::ZERO
+        }
+    })
+}
+
+/// Convert a 64-bit integer into an array of four field elements representing the 16 bit limb decomposition.
+///
+/// The output array is in little-endian order.
+#[inline]
+pub fn u64_to_16_bit_limbs<FA: FieldAlgebra>(val: u64) -> [FA; 4] {
+    // We do this over F::from_canonical_u64 as from_canonical_u64 can be slow
+    // like in the case of monty field.
+    array::from_fn(|i| FA::from_canonical_u16((val >> (16 * i)) as u16))
+}
+
 /// Verify that `a = b + c + d mod 2^32`
 ///
 /// We assume that a, b, c, d are all given as `2, 16` bit limbs (e.g. `a = a[0] + 2^16 a[1]`) and
