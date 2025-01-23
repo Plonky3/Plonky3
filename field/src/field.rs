@@ -303,6 +303,10 @@ pub trait Serializable<F: FieldAlgebra>: Sized {
     /// to ensure portability if these values might ever be passed to
     /// (or rederived within) another compilation environment where a
     /// different basis might have been used.
+    ///
+    /// The user should ensure that the slice has length `DIMENSION`. If
+    /// it is shorter than this, the function will panic, if it is longer the
+    /// extra elements will be ignored.
     #[inline]
     fn deserialize_slice(slice: &[F]) -> Self {
         Self::deserialize_fn(|i| slice[i].clone())
@@ -332,6 +336,9 @@ pub trait Serializable<F: FieldAlgebra>: Sized {
     /// to ensure portability if these values might ever be passed to
     /// (or rederived within) another compilation environment where a
     /// different basis might have been used.
+    ///
+    /// If the iterator contains more than `DIMENSION` many elements,
+    /// the rest will be ignored.
     fn deserialize_iter<I: Iterator<Item = F>>(iter: I) -> Self;
 
     /// Given a basis for the Algebra `A`, return the i'th basis element.
