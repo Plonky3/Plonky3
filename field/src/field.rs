@@ -344,13 +344,7 @@ pub trait Serializable<F: FieldAlgebra>: Sized {
     /// (or rederived within) another compilation environment where a
     /// different basis might have been used.
     fn ith_basis_element(i: usize) -> Self {
-        Self::deserialize_fn(|j| {
-            if i == j {
-                F::ONE.clone()
-            } else {
-                F::ZERO.clone()
-            }
-        })
+        Self::deserialize_fn(|j| F::from_bool(i == j))
     }
 }
 
