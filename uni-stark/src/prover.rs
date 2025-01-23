@@ -134,6 +134,7 @@ where
     // Check whether the final verification check would pass: Checking that
     // the sum of quotients * vanishing polynomial would give the same result for the original and current values.
 
+    // Get the coefficients from the original and randomized LDE evaluations.
     let lde_quotient_coeffs = pcs.compute_idft(pcs.get_evals(
         izip!(qc_domains.clone(), quotient_chunks.clone()).collect_vec(),
         zp_cis.clone(),
@@ -144,6 +145,8 @@ where
         zp_cis.clone(),
         false,
     ));
+
+    // Get opened values for original and randomized quotient chunks.
     let generator = SC::Challenge::from_base(trace_domain.first_point());
     let (_, orig_quotient_data) =
         pcs.commit(izip!(qc_domains.clone(), quotient_chunks).collect_vec());
@@ -195,6 +198,7 @@ where
         evs
     };
 
+    // Get domain points.
     let domain0 = qc_domains[0];
     let g0 = qc_domains[0].first_point();
     let g0_squared = qc_domains[0].next_point(g0).unwrap();
@@ -218,6 +222,7 @@ where
     let lh0 = |x: Val<SC>| zp_cis[0] * domain1.zp_at_point(x);
     let lh1 = |x: Val<SC>| zp_cis[1] * domain0.zp_at_point(x);
 
+    // evaluate on LDE quotient chunks.
     let evals_orig_g0 = eval_pt((g0_next_next, lde_orig_quotients_coeffs.clone()));
     let evals_orig_g1 = eval_pt((g1_next_next, lde_orig_quotients_coeffs));
     let evals_g0 = eval_pt((g0_next_next, lde_quotient_coeffs.clone()));
