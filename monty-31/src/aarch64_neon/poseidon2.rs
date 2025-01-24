@@ -39,7 +39,7 @@ pub struct Poseidon2ExternalLayerMonty31<MP: MontyParameters, const WIDTH: usize
 }
 
 impl<FP: FieldParameters, const WIDTH: usize, ILP: InternalLayerBaseParameters<FP, WIDTH>>
-    InternalLayerConstructor<PackedMontyField31Neon<FP>>
+    InternalLayerConstructor<MontyField31<FP>, PackedMontyField31Neon<FP>>
     for Poseidon2InternalLayerMonty31<FP, WIDTH, ILP>
 {
     fn new_from_constants(internal_constants: Vec<MontyField31<FP>>) -> Self {
@@ -51,7 +51,7 @@ impl<FP: FieldParameters, const WIDTH: usize, ILP: InternalLayerBaseParameters<F
 }
 
 impl<FP: FieldParameters, const WIDTH: usize>
-    ExternalLayerConstructor<PackedMontyField31Neon<FP>, WIDTH>
+    ExternalLayerConstructor<MontyField31<FP>, PackedMontyField31Neon<FP>, WIDTH>
     for Poseidon2ExternalLayerMonty31<FP, WIDTH>
 {
     fn new_from_constants(

@@ -31,11 +31,7 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
 pub trait AirBuilder: Sized {
     type F: Field;
 
-    type Expr: PrimeCharacteristicRing
-        + FieldAlgebra<Self::F>
-        + Add<Self::Var, Output = Self::Expr>
-        + Sub<Self::Var, Output = Self::Expr>
-        + Mul<Self::Var, Output = Self::Expr>;
+    type Expr: PrimeCharacteristicRing + FieldAlgebra<Self::F> + FieldAlgebra<Self::Var>;
 
     type Var: Into<Self::Expr>
         + Copy

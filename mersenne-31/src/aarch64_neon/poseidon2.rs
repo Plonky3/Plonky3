@@ -28,13 +28,15 @@ pub struct Poseidon2ExternalLayerMersenne31<const WIDTH: usize> {
     pub(crate) external_constants: ExternalLayerConstants<Mersenne31, WIDTH>,
 }
 
-impl InternalLayerConstructor<PackedMersenne31Neon> for Poseidon2InternalLayerMersenne31 {
+impl InternalLayerConstructor<Mersenne31, PackedMersenne31Neon>
+    for Poseidon2InternalLayerMersenne31
+{
     fn new_from_constants(internal_constants: Vec<Mersenne31>) -> Self {
         Self { internal_constants }
     }
 }
 
-impl<const WIDTH: usize> ExternalLayerConstructor<PackedMersenne31Neon, WIDTH>
+impl<const WIDTH: usize> ExternalLayerConstructor<Mersenne31, PackedMersenne31Neon, WIDTH>
     for Poseidon2ExternalLayerMersenne31<WIDTH>
 {
     fn new_from_constants(external_constants: ExternalLayerConstants<Mersenne31, WIDTH>) -> Self {
@@ -83,7 +85,6 @@ impl<const D: u64, const WIDTH: usize> ExternalLayer<PackedMersenne31Neon, WIDTH
 
 #[cfg(test)]
 mod tests {
-    use p3_field::PrimeCharacteristicRing;
     use p3_symmetric::Permutation;
     use rand::Rng;
 

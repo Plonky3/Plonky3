@@ -20,13 +20,13 @@ pub struct Poseidon2ExternalLayerMersenne31<const WIDTH: usize> {
     pub(crate) external_constants: ExternalLayerConstants<Mersenne31, WIDTH>,
 }
 
-impl InternalLayerConstructor<Mersenne31> for Poseidon2InternalLayerMersenne31 {
+impl InternalLayerConstructor<Mersenne31, Mersenne31> for Poseidon2InternalLayerMersenne31 {
     fn new_from_constants(internal_constants: Vec<Mersenne31>) -> Self {
         Self { internal_constants }
     }
 }
 
-impl<const WIDTH: usize> ExternalLayerConstructor<Mersenne31, WIDTH>
+impl<const WIDTH: usize> ExternalLayerConstructor<Mersenne31, Mersenne31, WIDTH>
     for Poseidon2ExternalLayerMersenne31<WIDTH>
 {
     fn new_from_constants(external_constants: ExternalLayerConstants<Mersenne31, WIDTH>) -> Self {

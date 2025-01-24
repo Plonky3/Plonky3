@@ -123,7 +123,6 @@ impl InternalLayerParametersAVX512<BabyBearParameters, 24> for BabyBearInternalL
 
 #[cfg(test)]
 mod tests {
-    use p3_field::PrimeCharacteristicRing;
     use p3_symmetric::Permutation;
     use rand::Rng;
 

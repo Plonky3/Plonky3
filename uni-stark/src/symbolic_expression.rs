@@ -94,6 +94,8 @@ impl<F: Field> PrimeCharacteristicRing for SymbolicExpression<F> {
 
 impl<F: Field> FieldAlgebra<F> for SymbolicExpression<F> {}
 
+impl<F: Field> FieldAlgebra<SymbolicVariable<F>> for SymbolicExpression<F> {}
+
 impl<F: Field + InjectiveMonomial<N>, const N: u64> InjectiveMonomial<N> for SymbolicExpression<F> {}
 
 impl<F: Field, T> Add<T> for SymbolicExpression<F>

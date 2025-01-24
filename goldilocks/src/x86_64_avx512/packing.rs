@@ -8,8 +8,8 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::{
-    Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue, PermutationMonomial,
-    PrimeCharacteristicRing, PrimeField64,
+    Field, FieldAlgebra, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
+    PermutationMonomial, PrimeCharacteristicRing, PrimeField64,
 };
 use p3_util::convert_vec;
 use rand::distributions::{Distribution, Standard};
@@ -160,7 +160,6 @@ impl Product for PackedGoldilocksAVX512 {
 }
 
 impl PrimeCharacteristicRing for PackedGoldilocksAVX512 {
-    type F = Goldilocks;
     type PrimeSubfield = Goldilocks;
 
     const ZERO: Self = Self([Goldilocks::ZERO; WIDTH]);
@@ -181,9 +180,11 @@ impl PrimeCharacteristicRing for PackedGoldilocksAVX512 {
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { convert_vec(Self::F::zero_vec(len * WIDTH)) }
+        unsafe { convert_vec(Goldilocks::zero_vec(len * WIDTH)) }
     }
 }
+
+impl FieldAlgebra<Goldilocks> for PackedGoldilocksAVX512 {}
 
 // Degree of the smallest permutation polynomial for Goldilocks.
 //
