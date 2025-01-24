@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FriConfig<M> {
     pub log_blowup: usize,
     pub num_queries: usize,
