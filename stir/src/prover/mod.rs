@@ -151,13 +151,14 @@ where
         .unique()
         .collect();
 
-    let queries_to_final: Vec<(Vec<Vec<F>>, M::Proof)> = queried_indices
-        .iter()
+    let queries_to_final: Vec<(Vec<F>, M::Proof)> = queried_indices
+        .into_iter()
         .map(|index| {
             config
                 .mmcs_config()
-                .open_batch(*index as usize, &witness.merkle_tree)
+                .open_batch(index as usize, &witness.merkle_tree)
         })
+        .map(|(mut k, v)| (k.remove(0), v))
         .collect();
 
     // NP TODO: Is this correct? Can we just take the ceil?
@@ -280,13 +281,15 @@ where
     // ========= QUERY PROOFS =========
 
     // Open the Merkle paths for the queried indices
-    let query_proofs: Vec<(Vec<Vec<F>>, M::Proof)> = queried_indices
-        .iter()
+    let query_proofs: Vec<(Vec<F>, M::Proof)> = queried_indices
+        .clone()
+        .into_iter()
         .map(|index| {
             config
                 .mmcs_config()
-                .open_batch(*index as usize, &merkle_tree)
+                .open_batch(index as usize, &merkle_tree)
         })
+        .map(|(mut k, v)| (k.remove(0), v))
         .collect();
 
     // ========= POLY QUOTIENT =========

@@ -188,7 +188,7 @@ fn test_prove_round_zero() {
                     height: 1 << (original_domain.log_size() - log_folding_factor),
                 }],
                 i,
-                &leaf,
+                &vec![leaf],
                 &proof,
             )
             .unwrap();
@@ -339,7 +339,7 @@ fn test_prove_round_large() {
     for (&i, (leaf, proof)) in bit_replies.iter().unique().zip(query_proofs) {
         config
             .mmcs_config()
-            .verify_batch(&root, &[dimensions], i, &leaf, &proof)
+            .verify_batch(&root, &[dimensions], i, &vec![leaf], &proof)
             .unwrap();
     }
 
