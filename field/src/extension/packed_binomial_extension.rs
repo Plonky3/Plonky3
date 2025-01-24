@@ -12,7 +12,7 @@ use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{
     field_to_array, FieldAlgebra, FieldExtensionAlgebra, PackedField, PrimeCharacteristicRing,
-};
+, Serializable};
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
 #[repr(transparent)] // to make the zero_vec implementation safe
@@ -123,45 +123,38 @@ where
     }
 }
 
-impl<F, PF, const D: usize> FieldExtensionAlgebra<PF> for PackedBinomialExtensionField<F, PF, D>
+impl<F, PF, const D: usize> Serializable<PF> for PackedBinomialExtensionField<F, PF, D>
 where
     F: BinomiallyExtendable<D>,
     PF: PackedField<Scalar = F>,
 {
-    const D: usize = D;
+    const DIMENSION: usize = D;
 
-    #[inline]
-    fn from_base(b: PF) -> Self {
-        Self {
-            value: field_to_array(b),
-        }
+    fn serialize_as_slice(&self) -> &[PF] {
+        &self.value
     }
 
-    #[inline]
-    fn from_base_slice(bs: &[PF]) -> Self {
-        Self::from_base_fn(|i| bs[i])
-    }
-
-    #[inline]
-    fn from_base_fn<Fn: FnMut(usize) -> PF>(f: Fn) -> Self {
+    fn deserialize_fn<Fn: FnMut(usize) -> PF>(f: Fn) -> Self {
         Self {
             value: array::from_fn(f),
         }
     }
 
-    #[inline]
-    fn from_base_iter<I: Iterator<Item = PF>>(iter: I) -> Self {
+    fn deserialize_iter<I: Iterator<Item = PF>>(iter: I) -> Self {
         let mut res = Self::default();
         for (i, b) in iter.enumerate() {
             res.value[i] = b;
         }
         res
     }
+}
 
-    #[inline(always)]
-    fn as_base_slice(&self) -> &[PF] {
-        &self.value
-    }
+impl<F, PF, const D: usize> FieldExtensionAlgebra<PF> for PackedBinomialExtensionField<F, PF, D>
+where
+    F: BinomiallyExtendable<D>,
+    PF: PackedField<Scalar = F>,
+{
+    const D: usize = D;
 }
 
 impl<F, PF, const D: usize> Neg for PackedBinomialExtensionField<F, PF, D>

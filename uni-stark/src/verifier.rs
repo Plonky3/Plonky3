@@ -64,7 +64,7 @@ where
 
     challenger.observe(commitments.trace.clone());
     challenger.observe_slice(public_values);
-    let alpha: SC::Challenge = challenger.sample_ext_element();
+    let alpha: SC::Challenge = challenger.sample_algebra_element();
     challenger.observe(commitments.quotient_chunks.clone());
 
     let zeta: SC::Challenge = challenger.sample();
@@ -119,7 +119,7 @@ where
         .map(|(ch_i, ch)| {
             ch.iter()
                 .enumerate()
-                .map(|(e_i, &c)| zps[ch_i] * SC::Challenge::monomial(e_i) * c)
+                .map(|(e_i, &c)| zps[ch_i] * SC::Challenge::ith_basis_element(e_i) * c)
                 .sum::<SC::Challenge>()
         })
         .sum::<SC::Challenge>();

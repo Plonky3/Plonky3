@@ -6,7 +6,6 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::slice;
 
-use itertools::Itertools;
 use num_bigint::BigUint;
 use num_traits::One;
 use nums::{Factorizer, FactorizerFromSplitter, MillerRabin, PollardRho};
@@ -15,7 +14,7 @@ use serde::Serialize;
 
 use crate::exponentiation::bits_u64;
 use crate::integers::{from_integer_types, QuotientMap};
-use crate::packed::{PackedField, PackedValue};
+use crate::packed::PackedField;
 use crate::Packable;
 
 /// A commutative ring `(R)` with prime characteristic `(p)`.
@@ -264,6 +263,124 @@ pub trait PrimeCharacteristicRing:
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         vec![Self::ZERO; len]
+    }
+}
+
+/// A field algebra which can be serialized into and out of a
+/// collection of field elements.
+///
+/// We make no guarantees about consistency of this Serialization/Deserialization
+/// across different versions of Plonky3.
+///
+/// ### Mathematical Description
+///
+/// Mathematically a more accurate name for this trait would be BasedFreeVectorSpace.
+///
+/// As `F` is a field, every field algebra `A`, over `F` is an `F`-vector space.
+/// This means we can pick a basis of elements `B = {b_0, ..., b_{n-1}}` in `A`
+/// such that, given any element `a`, we can find a unique set of `n` elements of `F`,
+/// `f_0, ..., f_{n - 1}` satisfying `a = f_0 b_0 + ... + f_{n - 1} b_{n - 1}`.
+///
+/// Thus choosing this basis `B` allows us to map between elements of `A` and
+/// arrays of `n` elements of `F`. Clearly this map depends entirely on the
+/// choice of basis `B` which may change across versions of Plonky3.
+pub trait Serializable<F: FieldAlgebra>: Sized {
+    // We could alternatively call this BasedAlgebra?
+    // The name is currently trying to indicate what this is meant to be
+    // used for as opposed to being mathematically accurate.
+
+    const DIMENSION: usize;
+
+    /// Fixes a basis for the algebra `A` and uses this to
+    /// map an element of `A` to a vector of `n` `F` elements.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
+    fn serialize_as_slice(&self) -> &[F];
+
+    /// Fixes a basis for the algebra `A` and uses this to
+    /// map `n` `F` elements to an element of `A`.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
+    ///
+    /// The user should ensure that the slice has length `DIMENSION`. If
+    /// it is shorter than this, the function will panic, if it is longer the
+    /// extra elements will be ignored.
+    #[inline]
+    fn deserialize_slice(slice: &[F]) -> Self {
+        Self::deserialize_fn(|i| slice[i].clone())
+    }
+
+    /// Fixes a basis for the algebra `A` and uses this to
+    /// map `n` `F` elements to an element of `A`. Similar
+    /// to `core:array::from_fn`, the `n` `F` elements are
+    /// given by `Fn(0), ..., Fn(n - 1)`.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
+    fn deserialize_fn<Fn: FnMut(usize) -> F>(f: Fn) -> Self;
+
+    /// Fixes a basis for the algebra `A` and uses this to
+    /// map `n` `F` elements to an element of `A`.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
+    ///
+    /// If the iterator contains more than `DIMENSION` many elements,
+    /// the rest will be ignored.
+    fn deserialize_iter<I: Iterator<Item = F>>(iter: I) -> Self;
+
+    /// Given a basis for the Algebra `A`, return the i'th basis element.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
+    fn ith_basis_element(i: usize) -> Self {
+        Self::deserialize_fn(|j| F::from_bool(i == j))
+    }
+}
+
+impl<F: FieldAlgebra> Serializable<F> for F {
+    const DIMENSION: usize = 1;
+
+    #[inline]
+    fn serialize_as_slice(&self) -> &[F] {
+        slice::from_ref(self)
+    }
+
+    #[inline]
+    fn deserialize_fn<Fn: FnMut(usize) -> F>(mut f: Fn) -> Self {
+        f(0)
+    }
+
+    #[inline]
+    fn deserialize_iter<I: Iterator<Item = F>>(mut iter: I) -> Self {
+        iter.next().unwrap()
     }
 }
 
@@ -548,39 +665,17 @@ pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base> {
         + Send
         + Sync;
 
-    #[inline(always)]
-    fn is_in_basefield(&self) -> bool {
-        self.as_base_slice()[1..].iter().all(Field::is_zero)
-    }
+    fn is_in_basefield(&self) -> bool;
 
-    fn as_base(&self) -> Option<Base> {
-        if self.is_in_basefield() {
-            Some(self.as_base_slice()[0])
-        } else {
-            None
-        }
-    }
+    fn as_base(&self) -> Option<Base>;
 
     /// Construct an iterator which returns powers of `self` packed into `ExtensionPacking` elements.
     ///
     /// E.g. if `PACKING::WIDTH = 4` this returns the elements:
     /// `[self^0, self^1, self^2, self^3], [self^4, self^5, self^6, self^7], ...`.
-    fn ext_powers_packed(&self) -> Powers<Self::ExtensionPacking> {
-        let powers = self.powers().take(Base::Packing::WIDTH + 1).collect_vec();
-        // Transpose first WIDTH powers
-        let current = Self::ExtensionPacking::from_base_fn(|i| {
-            Base::Packing::from_fn(|j| powers[j].as_base_slice()[i])
-        });
-        // Broadcast self^WIDTH
-        let multiplier = Self::ExtensionPacking::from_base_fn(|i| {
-            Base::Packing::from(powers[Base::Packing::WIDTH].as_base_slice()[i])
-        });
-
-        Powers {
-            base: multiplier,
-            current,
-        }
-    }
+    ///
+    /// Once we create the new packed extension field trait, this function will be moved there.
+    fn ext_powers_packed(&self) -> Powers<Self::ExtensionPacking>;
 }
 
 impl<F: Field> ExtensionField<F> for F {

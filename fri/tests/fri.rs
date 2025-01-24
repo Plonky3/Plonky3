@@ -61,7 +61,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
     let (proof, p_sample) = {
         // Prover world
         let mut chal = Challenger::new(perm.clone());
-        let alpha: Challenge = chal.sample_ext_element();
+        let alpha: Challenge = chal.sample_algebra_element();
 
         let input: [_; 32] = core::array::from_fn(|log_height| {
             let matrices_with_log_height: Vec<&RowMajorMatrix<Val>> = ldes
@@ -109,7 +109,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
     };
 
     let mut v_challenger = Challenger::new(perm);
-    let _alpha: Challenge = v_challenger.sample_ext_element();
+    let _alpha: Challenge = v_challenger.sample_algebra_element();
     verifier::verify(
         &TwoAdicFriGenericConfig::<Vec<(usize, Challenge)>, ()>(PhantomData),
         &fc,

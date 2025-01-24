@@ -63,7 +63,7 @@ where
 
     challenger.observe(trace_commit.clone());
     challenger.observe_slice(public_values);
-    let alpha: SC::Challenge = challenger.sample_ext_element();
+    let alpha: SC::Challenge = challenger.sample_algebra_element();
 
     let quotient_domain =
         trace_domain.create_disjoint_domain(1 << (log_degree + log_quotient_degree));
@@ -192,8 +192,8 @@ where
 
             // "Transpose" D packed base coefficients into WIDTH scalar extension coefficients.
             (0..core::cmp::min(quotient_size, PackedVal::<SC>::WIDTH)).map(move |idx_in_packing| {
-                SC::Challenge::from_base_fn(|coeff_idx| {
-                    quotient.as_base_slice()[coeff_idx].as_slice()[idx_in_packing]
+                SC::Challenge::deserialize_fn(|coeff_idx| {
+                    quotient.serialize_as_slice()[coeff_idx].as_slice()[idx_in_packing]
                 })
             })
         })

@@ -129,7 +129,7 @@ pub fn test_ef_two_adic_generator_consistency<
     EF: TwoAdicField + ExtensionField<F>,
 >() {
     assert_eq!(
-        EF::from_base(F::two_adic_generator(F::TWO_ADICITY)),
+        Into::<EF>::into(F::two_adic_generator(F::TWO_ADICITY)),
         EF::two_adic_generator(F::TWO_ADICITY)
     );
 }
@@ -287,7 +287,7 @@ mod tests {
         type EF = BinomialExtensionField<F, 4>;
         for _ in 0..1024 {
             let x: EF = random();
-            let m: Vec<EF> = x.minimal_poly().into_iter().map(EF::from_base).collect();
+            let m: Vec<EF> = x.minimal_poly().into_iter().map(Into::<EF>::into).collect();
             assert!(eval_poly(&m, x).is_zero());
         }
     }

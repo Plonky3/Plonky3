@@ -47,7 +47,7 @@ where
         let (opened_base_values, proof) = self.inner.open_batch(index, prover_data);
         let opened_ext_values = opened_base_values
             .into_iter()
-            .map(|row| row.chunks(EF::D).map(EF::from_base_slice).collect())
+            .map(|row| row.chunks(EF::D).map(EF::deserialize_slice).collect())
             .collect();
         (opened_ext_values, proof)
     }
@@ -72,7 +72,7 @@ where
             .iter()
             .map(|row| {
                 row.iter()
-                    .flat_map(|el| el.as_base_slice())
+                    .flat_map(|el| el.serialize_as_slice())
                     .copied()
                     .collect()
             })

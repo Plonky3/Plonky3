@@ -17,8 +17,8 @@ use super::{HasFrobenius, HasTwoAdicBionmialExtension, PackedBinomialExtensionFi
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{
-    field_to_array, ExtensionField, FieldAlgebra, FieldExtensionAlgebra, Packable,
-    PrimeCharacteristicRing, TwoAdicField,
+    field_to_array, ExtensionField, FieldAlgebra, FieldExtensionAlgebra, Packable, PackedValue,
+    Powers, PrimeCharacteristicRing, Serializable, TwoAdicField,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
@@ -49,10 +49,77 @@ impl<F: Field, const D: usize> From<F> for BinomialExtensionField<F, D> {
 
 impl<F: BinomiallyExtendable<D>, const D: usize> Packable for BinomialExtensionField<F, D> {}
 
+impl<F: BinomiallyExtendable<D>, const D: usize> Serializable<F> for BinomialExtensionField<F, D> {
+    const DIMENSION: usize = D;
+
+    #[inline]
+    fn serialize_as_slice(&self) -> &[F] {
+        &self.value
+    }
+
+    #[inline]
+    fn deserialize_fn<Fn: FnMut(usize) -> F>(f: Fn) -> Self {
+        Self {
+            value: array::from_fn(f),
+        }
+    }
+
+    #[inline]
+    fn deserialize_iter<I: Iterator<Item = F>>(iter: I) -> Self {
+        let mut res = Self::default();
+        for (i, b) in iter.enumerate() {
+            res.value[i] = b;
+        }
+        res
+    }
+}
+
 impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F>
     for BinomialExtensionField<F, D>
 {
     type ExtensionPacking = PackedBinomialExtensionField<F, F::Packing, D>;
+
+    fn is_in_basefield(&self) -> bool {
+        self.value[1..].iter().all(F::is_zero)
+    }
+
+    fn as_base(&self) -> Option<F> {
+        if <Self as ExtensionField<F>>::is_in_basefield(self) {
+            Some(self.value[0])
+        } else {
+            None
+        }
+    }
+
+    // This is just here as a placeholder for now. Going to move this function to packed_binomial_extension
+    // in a future PR (before this is merged onto the main branch.)
+    fn ext_powers_packed(&self) -> crate::Powers<Self::ExtensionPacking> {
+        let width = F::Packing::WIDTH;
+        let powers = self.powers().take(width + 1).collect_vec();
+        // Transpose first WIDTH powers
+        let mut packed_powers = PackedBinomialExtensionField::<F, F::Packing, D> {
+            value: [F::Packing::ZERO; D],
+        };
+        packed_powers
+            .value
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, row_i)| {
+                let row_i = row_i.as_slice_mut();
+                powers[..width]
+                    .iter()
+                    .enumerate()
+                    .for_each(|(j, vec_j)| row_i[j] = vec_j.value[i])
+            });
+
+        // Broadcast self^WIDTH
+        let multiplier = powers[width].into();
+
+        Powers {
+            base: multiplier,
+            current: packed_powers,
+        }
+    }
 }
 
 impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExtensionField<F, D> {
@@ -73,7 +140,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
             // x^(n^(count % D))
             return self.repeated_frobenius(count % D);
         }
-        let arr: &[F] = self.as_base_slice();
+        let arr: &[F] = self.serialize_as_slice();
 
         // z0 = DTH_ROOT^count = W^(k * count) where k = floor((n-1)/D)
         let mut z0 = F::DTH_ROOT;
@@ -86,7 +153,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
             res[i] = arr[i] * z;
         }
 
-        Self::from_base_slice(&res)
+        Self::deserialize_slice(&res)
     }
 
     /// Algorithm 11.3.4 in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
@@ -182,8 +249,8 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
         }
 
         match D {
-            2 => Some(Self::from_base_slice(&qudratic_inv(&self.value, F::W))),
-            3 => Some(Self::from_base_slice(&cubic_inv(&self.value, F::W))),
+            2 => Some(Self::deserialize_slice(&qudratic_inv(&self.value, F::W))),
+            3 => Some(Self::deserialize_slice(&cubic_inv(&self.value, F::W))),
             _ => Some(self.frobenius_inv()),
         }
     }
@@ -433,39 +500,6 @@ where
     F: BinomiallyExtendable<D>,
 {
     const D: usize = D;
-
-    #[inline]
-    fn from_base(b: F) -> Self {
-        Self {
-            value: field_to_array(b),
-        }
-    }
-
-    #[inline]
-    fn from_base_slice(bs: &[F]) -> Self {
-        Self::from_base_fn(|i| bs[i])
-    }
-
-    #[inline]
-    fn from_base_fn<Fn: FnMut(usize) -> F>(f: Fn) -> Self {
-        Self {
-            value: array::from_fn(f),
-        }
-    }
-
-    #[inline]
-    fn from_base_iter<I: Iterator<Item = F>>(iter: I) -> Self {
-        let mut res = Self::default();
-        for (i, b) in iter.enumerate() {
-            res.value[i] = b;
-        }
-        res
-    }
-
-    #[inline(always)]
-    fn as_base_slice(&self) -> &[F] {
-        &self.value
-    }
 }
 
 impl<F: BinomiallyExtendable<D>, const D: usize> Distribution<BinomialExtensionField<F, D>>
@@ -478,7 +512,7 @@ where
         for r in res.iter_mut() {
             *r = Standard.sample(rng);
         }
-        BinomialExtensionField::from_base_slice(&res)
+        BinomialExtensionField::deserialize_slice(&res)
     }
 }
 

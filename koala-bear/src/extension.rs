@@ -23,7 +23,7 @@ mod test_quartic_extension {
         assert_eq!(
             format!(
                 "{}",
-                EF::from_base_slice(&[F::TWO, F::ONE, F::ZERO, F::TWO])
+                EF::deserialize_slice(&[F::TWO, F::ONE, F::ZERO, F::TWO])
             ),
             "2 + X + 2 X^3"
         );

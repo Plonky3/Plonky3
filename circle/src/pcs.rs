@@ -155,7 +155,7 @@ where
         challenger: &mut Challenger,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
         // Batch combination challenge
-        let alpha: Challenge = challenger.sample_ext_element();
+        let alpha: Challenge = challenger.sample_algebra_element();
 
         /*
         We are reducing columns ("ro" = reduced opening) with powers of alpha:
@@ -248,7 +248,7 @@ where
         let (first_layer_commitment, first_layer_data) =
             self.fri_config.mmcs.commit(first_layer_mats);
         challenger.observe(first_layer_commitment.clone());
-        let bivariate_beta: Challenge = challenger.sample_ext_element();
+        let bivariate_beta: Challenge = challenger.sample_algebra_element();
 
         // Fold all first layers at bivariate_beta.
 
@@ -335,9 +335,9 @@ where
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
         // Batch combination challenge
-        let alpha: Challenge = challenger.sample_ext_element();
+        let alpha: Challenge = challenger.sample_algebra_element();
         challenger.observe(proof.first_layer_commitment.clone());
-        let bivariate_beta: Challenge = challenger.sample_ext_element();
+        let bivariate_beta: Challenge = challenger.sample_algebra_element();
 
         // +1 to account for first layer
         let log_global_max_height =

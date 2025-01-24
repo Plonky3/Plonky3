@@ -10,7 +10,7 @@ use core::ops::Deref;
 
 use itertools::{izip, Itertools};
 use p3_field::{
-    dot_product, ExtensionField, Field, FieldExtensionAlgebra, PackedValue, PrimeCharacteristicRing,
+    dot_product, ExtensionField, Field, PackedValue, PrimeCharacteristicRing, Serializable,
 };
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
@@ -233,8 +233,8 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
             .par_fold_reduce(
                 || EF::ExtensionPacking::zero_vec(packed_width),
                 |mut acc, (row, &scale)| {
-                    let scale = EF::ExtensionPacking::from_base_fn(|i| {
-                        T::Packing::from(scale.as_base_slice()[i])
+                    let scale = EF::ExtensionPacking::deserialize_fn(|i| {
+                        T::Packing::from(scale.serialize_as_slice()[i])
                     });
                     izip!(&mut acc, row).for_each(|(l, r)| *l += scale * r);
                     acc
@@ -249,7 +249,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
             .into_iter()
             .flat_map(|p| {
                 (0..T::Packing::WIDTH)
-                    .map(move |i| EF::from_base_fn(|j| p.as_base_slice()[j].as_slice()[i]))
+                    .map(move |i| EF::deserialize_fn(|j| p.serialize_as_slice()[j].as_slice()[i]))
             })
             .take(self.width())
             .collect()
@@ -269,8 +269,8 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
             .map(move |row_packed| {
                 let packed_sum_of_packed: EF::ExtensionPacking =
                     dot_product(powers_packed.iter().copied(), row_packed);
-                let sum_of_packed: EF = EF::from_base_fn(|i| {
-                    packed_sum_of_packed.as_base_slice()[i]
+                let sum_of_packed: EF = EF::deserialize_fn(|i| {
+                    packed_sum_of_packed.serialize_as_slice()[i]
                         .as_slice()
                         .iter()
                         .copied()
