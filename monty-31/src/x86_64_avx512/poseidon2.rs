@@ -121,8 +121,7 @@ pub struct Poseidon2InternalLayerMonty31<
 }
 
 impl<FP: FieldParameters, const WIDTH: usize, ILP: InternalLayerParametersAVX512<FP, WIDTH>>
-    InternalLayerConstructor<MontyField31<FP>, PackedMontyField31AVX512<FP>>
-    for Poseidon2InternalLayerMonty31<FP, WIDTH, ILP>
+    InternalLayerConstructor<MontyField31<FP>> for Poseidon2InternalLayerMonty31<FP, WIDTH, ILP>
 {
     /// Construct an instance of Poseidon2InternalLayerMersenne31AVX2 from a vector containing
     /// the constants for each round. Internally, the constants are transformed into the
@@ -152,8 +151,7 @@ pub struct Poseidon2ExternalLayerMonty31<PMP: PackedMontyParameters, const WIDTH
     packed_terminal_external_constants: Vec<[__m512i; WIDTH]>,
 }
 
-impl<FP: FieldParameters, const WIDTH: usize>
-    ExternalLayerConstructor<MontyField31<FP>, PackedMontyField31AVX512<FP>, WIDTH>
+impl<FP: FieldParameters, const WIDTH: usize> ExternalLayerConstructor<MontyField31<FP>, WIDTH>
     for Poseidon2ExternalLayerMonty31<FP, WIDTH>
 {
     /// Construct an instance of Poseidon2ExternalLayerMersenne31AVX2 from a array of

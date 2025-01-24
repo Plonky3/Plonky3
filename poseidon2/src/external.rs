@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_field::{Field, FieldAlgebra, PrimeCharacteristicRing};
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
 use rand::distributions::{Distribution, Standard};
@@ -211,10 +211,9 @@ impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
 }
 
 /// Initialize an external layer from a set of constants.
-pub trait ExternalLayerConstructor<F, FA, const WIDTH: usize>
+pub trait ExternalLayerConstructor<F, const WIDTH: usize>
 where
     F: Field,
-    FA: FieldAlgebra<F> + PrimeCharacteristicRing,
 {
     /// A constructor which internally will convert the supplied
     /// constants into the appropriate form for the implementation.

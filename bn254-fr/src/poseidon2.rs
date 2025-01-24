@@ -44,7 +44,7 @@ pub struct Poseidon2InternalLayerBn254 {
     internal_constants: Vec<Bn254Fr>,
 }
 
-impl InternalLayerConstructor<Bn254Fr, Bn254Fr> for Poseidon2InternalLayerBn254 {
+impl InternalLayerConstructor<Bn254Fr> for Poseidon2InternalLayerBn254 {
     fn new_from_constants(internal_constants: Vec<Bn254Fr>) -> Self {
         Self { internal_constants }
     }
@@ -63,7 +63,7 @@ impl InternalLayer<Bn254Fr, BN254_WIDTH, BN254_S_BOX_DEGREE> for Poseidon2Intern
 
 pub type Poseidon2ExternalLayerBn254<const WIDTH: usize> = ExternalLayerConstants<Bn254Fr, WIDTH>;
 
-impl<const WIDTH: usize> ExternalLayerConstructor<Bn254Fr, Bn254Fr, WIDTH>
+impl<const WIDTH: usize> ExternalLayerConstructor<Bn254Fr, WIDTH>
     for Poseidon2ExternalLayerBn254<WIDTH>
 {
     fn new_from_constants(external_constants: ExternalLayerConstants<Bn254Fr, WIDTH>) -> Self {

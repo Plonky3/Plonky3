@@ -34,10 +34,9 @@ use p3_field::{Field, FieldAlgebra, InjectiveMonomial, PrimeCharacteristicRing};
 use crate::add_rc_and_sbox_generic;
 
 /// Initialize an internal layer from a set of constants.
-pub trait InternalLayerConstructor<F, FA>
+pub trait InternalLayerConstructor<F>
 where
     F: Field,
-    FA: FieldAlgebra<F> + PrimeCharacteristicRing,
 {
     /// A constructor which internally will convert the supplied
     /// constants into the appropriate form for the implementation.

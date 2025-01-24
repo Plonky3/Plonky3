@@ -127,9 +127,7 @@ pub struct Poseidon2InternalLayerGoldilocks {
     internal_constants: Vec<Goldilocks>,
 }
 
-impl<FA: FieldAlgebra<Goldilocks> + PrimeCharacteristicRing>
-    InternalLayerConstructor<Goldilocks, FA> for Poseidon2InternalLayerGoldilocks
-{
+impl InternalLayerConstructor<Goldilocks> for Poseidon2InternalLayerGoldilocks {
     fn new_from_constants(internal_constants: Vec<Goldilocks>) -> Self {
         Self { internal_constants }
     }
@@ -205,8 +203,8 @@ pub struct Poseidon2ExternalLayerGoldilocks<const WIDTH: usize> {
     pub(crate) external_constants: ExternalLayerConstants<Goldilocks, WIDTH>,
 }
 
-impl<FA: PrimeCharacteristicRing + FieldAlgebra<Goldilocks>, const WIDTH: usize>
-    ExternalLayerConstructor<Goldilocks, FA, WIDTH> for Poseidon2ExternalLayerGoldilocks<WIDTH>
+impl<const WIDTH: usize> ExternalLayerConstructor<Goldilocks, WIDTH>
+    for Poseidon2ExternalLayerGoldilocks<WIDTH>
 {
     fn new_from_constants(external_constants: ExternalLayerConstants<Goldilocks, WIDTH>) -> Self {
         Self { external_constants }
@@ -248,8 +246,8 @@ pub struct Poseidon2ExternalLayerGoldilocksHL<const WIDTH: usize> {
     pub(crate) external_constants: ExternalLayerConstants<Goldilocks, WIDTH>,
 }
 
-impl<FA: PrimeCharacteristicRing + FieldAlgebra<Goldilocks>, const WIDTH: usize>
-    ExternalLayerConstructor<Goldilocks, FA, WIDTH> for Poseidon2ExternalLayerGoldilocksHL<WIDTH>
+impl<const WIDTH: usize> ExternalLayerConstructor<Goldilocks, WIDTH>
+    for Poseidon2ExternalLayerGoldilocksHL<WIDTH>
 {
     fn new_from_constants(external_constants: ExternalLayerConstants<Goldilocks, WIDTH>) -> Self {
         Self { external_constants }
