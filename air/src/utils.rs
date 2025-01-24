@@ -76,15 +76,7 @@ pub fn checked_andn<F: Field>(x: F, y: F) -> F {
 /// The output array is in little-endian order.
 #[inline]
 pub fn u32_to_bits_le<FA: FieldAlgebra>(val: u32) -> [FA; 32] {
-    // We do this over F::from_canonical_u32 as from_canonical_u32 can be slow
-    // like in the case of monty field.
-    array::from_fn(|i| {
-        if val & (1 << i) != 0 {
-            FA::ONE
-        } else {
-            FA::ZERO
-        }
-    })
+    array::from_fn(|i| FA::from_bool(val & (1 << i) != 0))
 }
 
 /// Convert a 64-bit integer into an array of 64 0 or 1 field elements.
@@ -92,15 +84,7 @@ pub fn u32_to_bits_le<FA: FieldAlgebra>(val: u32) -> [FA; 32] {
 /// The output array is in little-endian order.
 #[inline]
 pub fn u64_to_bits_le<FA: FieldAlgebra>(val: u64) -> [FA; 64] {
-    // We do this over F::from_canonical_u64 as from_canonical_u64 can be slow
-    // like in the case of monty field.
-    array::from_fn(|i| {
-        if val & (1 << i) != 0 {
-            FA::ONE
-        } else {
-            FA::ZERO
-        }
-    })
+    array::from_fn(|i| FA::from_bool(val & (1 << i) != 0))
 }
 
 /// Convert a 64-bit integer into an array of four field elements representing the 16 bit limb decomposition.
@@ -108,8 +92,6 @@ pub fn u64_to_bits_le<FA: FieldAlgebra>(val: u64) -> [FA; 64] {
 /// The output array is in little-endian order.
 #[inline]
 pub fn u64_to_16_bit_limbs<FA: FieldAlgebra>(val: u64) -> [FA; 4] {
-    // We do this over F::from_canonical_u64 as from_canonical_u64 can be slow
-    // like in the case of monty field.
     array::from_fn(|i| FA::from_canonical_u16((val >> (16 * i)) as u16))
 }
 

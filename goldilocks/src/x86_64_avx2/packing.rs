@@ -170,10 +170,6 @@ impl FieldAlgebra for PackedGoldilocksAVX2 {
     }
 
     #[inline]
-    fn from_bool(b: bool) -> Self {
-        Goldilocks::from_bool(b).into()
-    }
-    #[inline]
     fn from_canonical_u8(n: u8) -> Self {
         Goldilocks::from_canonical_u8(n).into()
     }

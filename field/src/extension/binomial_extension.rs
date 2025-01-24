@@ -144,11 +144,6 @@ where
     }
 
     #[inline]
-    fn from_bool(b: bool) -> Self {
-        FA::from_bool(b).into()
-    }
-
-    #[inline]
     fn from_canonical_u8(n: u8) -> Self {
         FA::from_canonical_u8(n).into()
     }
