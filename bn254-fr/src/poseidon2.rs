@@ -23,7 +23,6 @@ const BN254_S_BOX_DEGREE: u64 = 5;
 /// It acts on arrays of the form `[Bn254Fr; WIDTH]`.
 pub type Poseidon2Bn254<const WIDTH: usize> = Poseidon2<
     Bn254Fr,
-    Bn254Fr,
     Poseidon2ExternalLayerBn254<WIDTH>,
     Poseidon2InternalLayerBn254,
     WIDTH,

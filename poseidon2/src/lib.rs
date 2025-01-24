@@ -30,22 +30,20 @@ const SUPPORTED_WIDTHS: [usize; 8] = [2, 3, 4, 8, 12, 16, 20, 24];
 
 /// The Poseidon2 permutation.
 #[derive(Clone, Debug)]
-pub struct Poseidon2<F, FA, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64> {
+pub struct Poseidon2<F, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64> {
     /// The permutations used in External Rounds.
     external_layer: ExternalPerm,
 
     /// The permutation used in Internal Rounds.
     internal_layer: InternalPerm,
 
-    _phantom1: PhantomData<F>,
-    _phantom2: PhantomData<FA>,
+    _phantom: PhantomData<F>,
 }
 
-impl<F, FA, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>
-    Poseidon2<F, FA, ExternalPerm, InternalPerm, WIDTH, D>
+impl<F, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>
+    Poseidon2<F, ExternalPerm, InternalPerm, WIDTH, D>
 where
     F: PrimeField,
-    FA: FieldAlgebra<F> + PrimeCharacteristicRing,
     ExternalPerm: ExternalLayerConstructor<F, WIDTH>,
     InternalPerm: InternalLayerConstructor<F>,
 {
@@ -62,8 +60,7 @@ where
         Self {
             external_layer,
             internal_layer,
-            _phantom1: PhantomData,
-            _phantom2: PhantomData,
+            _phantom: PhantomData,
         }
     }
 
@@ -79,11 +76,10 @@ where
     }
 }
 
-impl<F, FA, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>
-    Poseidon2<F, FA, ExternalPerm, InternalPerm, WIDTH, D>
+impl<F, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>
+    Poseidon2<F, ExternalPerm, InternalPerm, WIDTH, D>
 where
     F: PrimeField64,
-    FA: PrimeCharacteristicRing + FieldAlgebra<F>,
     ExternalPerm: ExternalLayerConstructor<F, WIDTH>,
     InternalPerm: InternalLayerConstructor<F>,
 {
@@ -98,7 +94,7 @@ where
 }
 
 impl<F, FA, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64> Permutation<[FA; WIDTH]>
-    for Poseidon2<F, F::Packing, ExternalPerm, InternalPerm, WIDTH, D>
+    for Poseidon2<F, ExternalPerm, InternalPerm, WIDTH, D>
 where
     F: PrimeField + InjectiveMonomial<D>,
     FA: FieldAlgebra<F> + PrimeCharacteristicRing + Sync + InjectiveMonomial<D>,
@@ -113,8 +109,7 @@ where
 }
 
 impl<F, FA, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>
-    CryptographicPermutation<[FA; WIDTH]>
-    for Poseidon2<F, F::Packing, ExternalPerm, InternalPerm, WIDTH, D>
+    CryptographicPermutation<[FA; WIDTH]> for Poseidon2<F, ExternalPerm, InternalPerm, WIDTH, D>
 where
     F: PrimeField + InjectiveMonomial<D>,
     FA: FieldAlgebra<F> + PrimeCharacteristicRing + Sync + InjectiveMonomial<D>,

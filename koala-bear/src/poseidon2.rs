@@ -42,7 +42,6 @@ const KOALABEAR_S_BOX_DEGREE: u64 = 3;
 /// wherever possible, input arrays should of the form `[KoalaBear::Packing; WIDTH]`.
 pub type Poseidon2KoalaBear<const WIDTH: usize> = Poseidon2<
     KoalaBear,
-    <KoalaBear as Field>::Packing,
     Poseidon2ExternalLayerKoalaBear<WIDTH>,
     Poseidon2InternalLayerKoalaBear<WIDTH>,
     WIDTH,

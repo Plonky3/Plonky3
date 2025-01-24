@@ -42,7 +42,6 @@ const BABYBEAR_S_BOX_DEGREE: u64 = 7;
 /// wherever possible, input arrays should of the form `[BabyBear::Packing; WIDTH]`.
 pub type Poseidon2BabyBear<const WIDTH: usize> = Poseidon2<
     BabyBear,
-    <BabyBear as Field>::Packing,
     Poseidon2ExternalLayerBabyBear<WIDTH>,
     Poseidon2InternalLayerBabyBear<WIDTH>,
     WIDTH,

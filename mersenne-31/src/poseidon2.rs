@@ -15,7 +15,7 @@
 
 use core::ops::Mul;
 
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::PrimeCharacteristicRing;
 use p3_poseidon2::{
     add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
     internal_permute_state, ExternalLayer, GenericPoseidon2LinearLayers, InternalLayer, MDSMat4,
@@ -39,7 +39,6 @@ pub(crate) const MERSENNE31_S_BOX_DEGREE: u64 = 5;
 /// wherever possible, input arrays should of the form `[Mersenne31::Packing; WIDTH]`.
 pub type Poseidon2Mersenne31<const WIDTH: usize> = Poseidon2<
     Mersenne31,
-    <Mersenne31 as Field>::Packing,
     Poseidon2ExternalLayerMersenne31<WIDTH>,
     Poseidon2InternalLayerMersenne31,
     WIDTH,

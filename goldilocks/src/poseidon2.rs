@@ -9,7 +9,7 @@
 //! Long term we will use more optimised internal and external linear layers.
 use alloc::vec::Vec;
 
-use p3_field::{Field, FieldAlgebra, InjectiveMonomial, PrimeCharacteristicRing};
+use p3_field::{FieldAlgebra, InjectiveMonomial, PrimeCharacteristicRing};
 use p3_poseidon2::{
     add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
     internal_permute_state, matmul_internal, ExternalLayer, ExternalLayerConstants,
@@ -31,7 +31,6 @@ const GOLDILOCKS_S_BOX_DEGREE: u64 = 7;
 /// how it was done for Monty31 fields.
 pub type Poseidon2Goldilocks<const WIDTH: usize> = Poseidon2<
     Goldilocks,
-    <Goldilocks as Field>::Packing,
     Poseidon2ExternalLayerGoldilocks<WIDTH>,
     Poseidon2InternalLayerGoldilocks,
     WIDTH,
@@ -46,7 +45,6 @@ pub type Poseidon2Goldilocks<const WIDTH: usize> = Poseidon2<
 /// for the external rounds.
 pub type Poseidon2GoldilocksHL<const WIDTH: usize> = Poseidon2<
     Goldilocks,
-    <Goldilocks as Field>::Packing,
     Poseidon2ExternalLayerGoldilocksHL<WIDTH>,
     Poseidon2InternalLayerGoldilocks,
     WIDTH,
