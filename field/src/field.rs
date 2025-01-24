@@ -18,20 +18,39 @@ use crate::integers::{from_integer_types, QuotientMap};
 use crate::packed::{PackedField, PackedValue};
 use crate::Packable;
 
-/// A commutative algebra over a finite field.
+/// A commutative ring `(R)` with prime characteristic `(p)`.
 ///
 /// This permits elements like:
-/// - an actual field element
+/// - A single finite field element
 /// - a symbolic expression which would evaluate to a field element
-/// - an array of field elements
+/// - an array of finite field elements
 ///
-/// Mathematically speaking, this is an algebraic structure with addition,
-/// multiplication and scalar multiplication. The addition and multiplication
-/// maps must be both commutative and associative, and there must
-/// exist identity elements for both (named `ZERO` and `ONE`
-/// respectively). Furthermore, multiplication must distribute over
-/// addition. Finally, the scalar multiplication must be realized by
-/// a ring homomorphism from the field to the algebra.
+/// ### Mathematical Description
+///
+/// Mathematically, a commutative ring is a set of objects which supports an addition-like
+/// like operation, `+`, and a multiplication-like operation `*`.
+///  Let `x, y, z` denote arbitrary elements of the set.
+///
+/// Then, an operation is addition-like if it satisfies the following properties:
+/// - Commutativity => `x + y = y + x`
+/// - Associativity => `x + (y + z) = (x + y) + z`
+/// - Unit => There exists an identity element `ZERO` satisfying `x + ZERO = x`.
+/// - Inverses => For every `x` there exists a unique inverse `(-x)` satisfying `x + (-x) = ZERO`
+///
+/// Similarly, an operation is multiplication-like if it satisfies the following properties:
+/// - Commutativity => `x * y = y * x`
+/// - Associativity => `x * (y * z) = (x * y) * z`
+/// - Unit => There exists an identity element `ONE` satisfying `x * ONE = x`.
+/// - Distributivity => The two operations `+` and `*` must together satisfy `x * (y + z) = (x * y) + (x * z)`
+///
+/// Unlike in the addition case, we do not require inverses to exist with respect to `*`.
+///
+/// The simplest examples of commutative rings are the integers (`ℤ`), and the integers mod `N` (`ℤ/N`).
+///
+/// The characteristic of a ring is the smallest positive integer `r` such that `0 = r . 1 = 1 + 1 + ... + 1 (r times)`.
+/// For example, the characteristic of the modulo ring `ℤ/N` is `N`.
+///
+/// Rings with prime characteristic are particularly special due to their close relationship with finite fields.
 pub trait PrimeCharacteristicRing:
     Sized
     + Default
@@ -50,23 +69,23 @@ pub trait PrimeCharacteristicRing:
     /// The field `ℤ/p` where the characteristic of this ring is p.
     type PrimeSubfield: PrimeField;
 
-    /// The additive identity of the algebra.
+    /// The additive identity of the ring.
     ///
-    /// For every element `a` in the algebra we require the following properties:
+    /// For every element `a` in the ring we require the following properties:
     ///
     /// `a + ZERO = ZERO + a = a,`
     ///
     /// `a + (-a) = (-a) + a = ZERO.`
     const ZERO: Self;
 
-    /// The multiplicative identity of the Algebra
+    /// The multiplicative identity of the ring.
     ///
-    /// For every element `a` in the algebra we require the following property:
+    /// For every element `a` in the ring we require the following property:
     ///
     /// `a*ONE = ONE*a = a.`
     const ONE: Self;
 
-    /// The element in the algebra given by `ONE + ONE`.
+    /// The element in the ring given by `ONE + ONE`.
     ///
     /// This is provided as a convenience as `TWO` occurs regularly in
     /// the proving system. This also is slightly faster than computing
@@ -76,7 +95,7 @@ pub trait PrimeCharacteristicRing:
     /// If the field has characteristic 2 this is equal to ZERO.
     const TWO: Self;
 
-    /// The element in the algebra given by `-ONE`.
+    /// The element in the ring given by `-ONE`.
     ///
     /// This is provided as a convenience as `NEG_ONE` occurs regularly in
     /// the proving system. This also is slightly faster than computing
@@ -109,7 +128,7 @@ pub trait PrimeCharacteristicRing:
 
     /// The elementary function `double(a) = 2*a`.
     ///
-    /// This function should be preferred over calling `a + a` or `TWO * a` as a faster implementation may be available for some algebras.
+    /// This function should be preferred over calling `a + a` or `TWO * a` as a faster implementation may be available for some rings.
     /// If the field has characteristic 2 then this returns 0.
     #[must_use]
     fn double(&self) -> Self {
@@ -118,7 +137,7 @@ pub trait PrimeCharacteristicRing:
 
     /// The elementary function `square(a) = a^2`.
     ///
-    /// This function should be preferred over calling `a * a`, as a faster implementation may be available for some algebras.
+    /// This function should be preferred over calling `a * a`, as a faster implementation may be available for some rings.
     #[must_use]
     fn square(&self) -> Self {
         self.clone() * self.clone()
@@ -126,7 +145,7 @@ pub trait PrimeCharacteristicRing:
 
     /// The elementary function `cube(a) = a^3`.
     ///
-    /// This function should be preferred over calling `a * a * a`, as a faster implementation may be available for some algebras.
+    /// This function should be preferred over calling `a * a * a`, as a faster implementation may be available for some rings.
     #[must_use]
     fn cube(&self) -> Self {
         self.square() * self.clone()
@@ -282,7 +301,8 @@ pub trait PermutationMonomial<const N: u64>: InjectiveMonomial<N> {
 /// to `R::ZERO` is `F::ZERO`.
 ///
 /// For the most part, we will usually expect `F` to be a field but there
-/// are a few cases where it is handy to allow it to just be a ring.
+/// are a few cases where it is handy to allow it to just be a ring. In
+/// particular, every ring naturally implements FieldAlgebra<Self>.
 ///
 /// ### Mathematical Description
 ///
@@ -390,6 +410,12 @@ pub trait Field:
     }
 }
 
+/// A field isomorphic to `ℤ/p` for some prime `p`.
+///
+/// There is a natural map from `ℤ` to `ℤ/p` which sends an integer `r` to its conjugacy class `[r]`.
+/// Canonically, each conjugacy class `[r]` can be represented by the unique integer `s` in `[0, p - 1)`
+/// satisfying `s = r mod p`. This however is often not the most convenient computational representation
+/// and so internal representations of field elements might differ from this and may change over time.
 pub trait PrimeField:
     Field
     + Ord
@@ -409,11 +435,12 @@ pub trait PrimeField:
     fn as_canonical_biguint(&self) -> BigUint;
 }
 
-/// A prime field of order less than `2^64`.
+/// A prime field `ℤ/p` with order, `p < 2^64`.
 pub trait PrimeField64: PrimeField {
     const ORDER_U64: u64;
 
-    /// Return the representative of `value` that is less than `ORDER_U64`.
+    /// Return the representative of `value` in canonical form
+    /// which lies in the range `0 <= x < ORDER_U64`.
     fn as_canonical_u64(&self) -> u64;
 
     /// Convert a field element to a `u64` such that any two field elements
@@ -427,11 +454,12 @@ pub trait PrimeField64: PrimeField {
     }
 }
 
-/// A prime field of order less than `2^32`.
+/// A prime field `ℤ/p` with order `p < 2^32`.
 pub trait PrimeField32: PrimeField64 {
     const ORDER_U32: u32;
 
-    /// Return the representative of `value` that is less than `ORDER_U32`.
+    /// Return the representative of `value` in canonical form
+    /// which lies in the range `0 <= x < ORDER_U64`.
     fn as_canonical_u32(&self) -> u32;
 
     /// Convert a field element to a `u32` such that any two field elements
