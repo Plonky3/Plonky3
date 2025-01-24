@@ -183,11 +183,6 @@ impl<FP: FieldParameters> FieldAlgebra for MontyField31<FP> {
     }
 
     #[inline(always)]
-    fn from_bool(b: bool) -> Self {
-        Self::from_canonical_u32(b as u32)
-    }
-
-    #[inline(always)]
     fn from_canonical_u8(n: u8) -> Self {
         Self::from_canonical_u32(n as u32)
     }
