@@ -1,32 +1,22 @@
-use alloc::collections::btree_map::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::fmt::Debug;
-use core::marker::PhantomData;
-use itertools::izip;
 use p3_commit::PolynomialSpace;
-use p3_matrix::bitrev::{BitReversableMatrix, BitReversalPerm};
-use p3_maybe_rayon::prelude::{IntoParallelRefIterator, IntoParallelRefMutIterator};
-use p3_util::{log2_strict_usize, reverse_bits_len};
+use p3_matrix::bitrev::BitReversableMatrix;
 
-use crate::verifier::{self, FriError};
-use crate::{
-    compute_inverse_denominators, prover, BatchOpening, FriConfig, FriProof,
-    TwoAdicFriGenericConfig, TwoAdicFriGenericConfigForMmcs, TwoAdicFriPcs,
-};
+use crate::verifier::FriError;
+use crate::{BatchOpening, FriConfig, FriProof, TwoAdicFriPcs};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, TwoAdicMultiplicativeCoset};
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{dot_product, ExtensionField, Field, TwoAdicField};
-use p3_interpolation::interpolate_coset;
+use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::horizontally_truncated::HorizontallyTruncated;
-use p3_matrix::{Dimensions, Matrix};
-use p3_util::VecExt;
+use p3_matrix::Matrix;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
-use tracing::{info_span, instrument};
+use tracing::instrument;
 
 /// A hiding FRI PCS. Both MMCSs must also be hiding; this is not enforced at compile time so it's
 /// the user's responsibility to configure.
@@ -83,107 +73,6 @@ where
             &self.inner, degree)
     }
 
-    fn compute_idft(&self, values: Vec<RowMajorMatrix<Val>>) -> Vec<RowMajorMatrix<Val>> {
-        let mut mats = vec![];
-
-        for mat in values {
-            mats.push(self.inner.dft.idft_batch(mat));
-        }
-        mats
-    }
-
-    fn get_evals(
-        &self,
-        evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
-        cis: Vec<Val>,
-        is_zk: bool,
-    ) -> Vec<RowMajorMatrix<Val>> {
-        if is_zk {
-            let last_chunk = evaluations.len() - 1;
-            let randomized_evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)> = evaluations
-                .into_iter()
-                .map(|(domain, mat)| {
-                    (
-                        domain,
-                        add_random_cols(
-                            mat,
-                            self.num_random_codewords,
-                            &mut *self.rng.borrow_mut(),
-                        ),
-                    )
-                })
-                .collect();
-            // let last_chunk = randomized_evaluations.len() - 1;
-            // First, add random values as described in https://eprint.iacr.org/2024/1037.pdf.
-            // If we have `d` chunks, let q'_i(X) = q_i(X) + v_H_i(X) * t_i(X) where t(X) is random, for 1 <= i < d.
-            // q'_d(X) = q_d(X) - v_H_d(X) c_i \sum t_i(X) where c_i is a Lagrange normalization constant.
-            let h = randomized_evaluations[0].1.height();
-            let w = randomized_evaluations[0].1.width();
-
-            // let all_random_values =
-            //     vec![self.rng.borrow_mut().gen(); (randomized_evaluations.len() - 1) * h];
-            let all_random_values = vec![Val::ONE; (randomized_evaluations.len() - 1) * h];
-            randomized_evaluations
-                .into_iter()
-                .enumerate()
-                .map(|(i, (domain, evals))| {
-                    assert_eq!(domain.size(), evals.height());
-                    let shift = Val::GENERATOR / domain.shift;
-                    let s = Val::ONE;
-                    tracing::info!("shift {:?}", shift);
-
-                    // Select random values, and set the random values for the final chunk accordingly.
-                    let random_values = if i == last_chunk {
-                        let mut added_values = Val::zero_vec(h);
-                        for j in 0..last_chunk {
-                            // for k in 0..h * w {
-                            for k in 0..h {
-                                // added_values[k] -= all_random_values[j * h * w + k] // Maybe the added values should be turned into basis, as for quotient elements?
-                                // added_values[k] -= all_random_values[j * h + k];
-                                added_values[k] -= all_random_values[j * h + k]
-                                    * cis[j]
-                                    * cis[last_chunk].inverse();
-                            }
-                        }
-                        added_values
-                    } else {
-                        // all_random_values[i * h * w..(i + 1) * h * w].to_vec()
-                        all_random_values[i * h..(i + 1) * h]
-                            .iter()
-                            .map(|v| *v)
-                            .collect()
-                    };
-
-                    // CHeck the evaluation as the verifier would here, but on challenge = 1, to see whether it works? (and compare it with non random value)
-                    // Commit to the bit-reversed LDE.
-                    self.inner
-                        .dft
-                        .coset_lde_batch_zk(
-                            evals,
-                            self.inner.fri.log_blowup,
-                            shift,
-                            s,
-                            &random_values,
-                        )
-                        .to_row_major_matrix()
-                })
-                .collect()
-        } else {
-            evaluations
-                .into_iter()
-                .map(|(domain, evals)| {
-                    assert_eq!(domain.size(), evals.height());
-                    let shift = Val::GENERATOR / domain.shift;
-                    // Commit to the bit-reversed LDE.
-                    self.inner
-                        .dft
-                        .coset_lde_batch(evals, self.inner.fri.log_blowup, shift)
-                        .to_row_major_matrix()
-                })
-                .collect()
-        }
-    }
-
     fn commit(
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
@@ -223,28 +112,22 @@ where
         // If we have `d` chunks, let q'_i(X) = q_i(X) + v_H_i(X) * t_i(X) where t(X) is random, for 1 <= i < d.
         // q'_d(X) = q_d(X) - v_H_d(X) c_i \sum t_i(X) where c_i is a Lagrange normalization constant.
         let h = randomized_evaluations[0].1.height();
-        let w = randomized_evaluations[0].1.width();
 
-        // let all_random_values =
-        //     vec![self.rng.borrow_mut().gen(); (randomized_evaluations.len() - 1) * h];
-        let all_random_values = vec![Val::ONE; (randomized_evaluations.len() - 1) * h];
+        let all_random_values =
+            vec![self.rng.borrow_mut().gen(); (randomized_evaluations.len() - 1) * h];
         let ldes: Vec<_> = randomized_evaluations
             .into_iter()
             .enumerate()
             .map(|(i, (domain, evals))| {
                 assert_eq!(domain.size(), evals.height());
                 let shift = Val::GENERATOR / domain.shift;
-                let s = Val::ONE;
-                tracing::info!("shift {:?}", shift);
+                let s = domain.shift;
 
                 // Select random values, and set the random values for the final chunk accordingly.
                 let random_values = if i == last_chunk {
                     let mut added_values = Val::zero_vec(h);
                     for j in 0..last_chunk {
-                        // for k in 0..h * w {
                         for k in 0..h {
-                            // added_values[k] -= all_random_values[j * h * w + k] // Maybe the added values should be turned into basis, as for quotient elements?
-                            // added_values[k] -= all_random_values[j * h + k];
                             added_values[k] -=
                                 all_random_values[j * h + k] * cis[j] * cis[last_chunk].inverse();
                         }
@@ -267,20 +150,6 @@ where
                     .to_row_major_matrix()
             })
             .collect();
-
-        // let no_rev_pair = ldes_other
-        //     .into_iter()
-        //     .map(|no_rev| no_rev.to_row_major_matrix())
-        //     .collect::<Vec<_>>();
-
-        // // let ldes = no_rev_pair
-        // //     .iter()
-        // //     .map(|pair| pair.0.clone())
-        // //     .collect::<Vec<_>>();
-        // // let no_rev = no_rev_pair
-        // //     .iter()
-        // //     .map(|pair| pair.1.clone())
-        // //     .collect::<Vec<_>>();
 
         self.inner.mmcs.commit(ldes)
     }

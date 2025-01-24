@@ -92,20 +92,10 @@ where
                 .iter()
                 .enumerate()
                 .filter(|(j, _)| *j != i)
-                .map(|(j, other_domain)| {
-                    tracing::info!(
-                        "domain first point {:?} eval {:?}, j {}, i {}",
-                        domain.first_point(),
-                        other_domain.zp_at_point(domain.first_point()),
-                        j,
-                        i
-                    );
-                    other_domain.zp_at_point(domain.first_point()).inverse()
-                })
+                .map(|(j, other_domain)| other_domain.zp_at_point(domain.first_point()).inverse())
                 .product()
         })
         .collect_vec();
-    tracing::info!("zp cis {:?}", zp_cis);
     let (quotient_commit, quotient_data) =
         info_span!("commit to quotient poly chunks").in_scope(|| {
             pcs.commit_quotient(
@@ -133,38 +123,23 @@ where
     /////////////////////////// Linda debug
     // Check whether the final verification check would pass: Checking that
     // the sum of quotients * vanishing polynomial would give the same result for the original and current values.
-
-    // Get the coefficients from the original and randomized LDE evaluations.
-    let lde_quotient_coeffs = pcs.compute_idft(pcs.get_evals(
-        izip!(qc_domains.clone(), quotient_chunks.clone()).collect_vec(),
-        zp_cis.clone(),
-        true,
-    ));
-    let lde_orig_quotients_coeffs = pcs.compute_idft(pcs.get_evals(
-        izip!(qc_domains.clone(), quotient_chunks.clone()).collect_vec(),
-        zp_cis.clone(),
-        false,
-    ));
-
     // Get opened values for original and randomized quotient chunks.
-    let generator = SC::Challenge::from_base(trace_domain.first_point());
+    let pt: SC::Challenge = challenger.sample();
     let (_, orig_quotient_data) =
         pcs.commit(izip!(qc_domains.clone(), quotient_chunks).collect_vec());
     let (opened_vals_quo, _) = pcs.open(
         vec![
             (
                 &orig_quotient_data,
-                (0..quotient_degree).map(|_| vec![generator]).collect_vec(),
+                (0..quotient_degree).map(|_| vec![pt]).collect_vec(),
             ),
             (
                 &quotient_data,
-                (0..quotient_degree).map(|_| vec![generator]).collect_vec(),
+                (0..quotient_degree).map(|_| vec![pt]).collect_vec(),
             ),
         ],
         challenger,
     );
-
-    tracing::info!("generator {:?}", Val::<SC>::GENERATOR);
 
     let zps = qc_domains
         .iter()
@@ -176,65 +151,12 @@ where
                 .filter(|(j, _)| *j != i)
                 .map(|(_, other_domain)| {
                     // ((generator * other_domain.first_point().inverse()).exp_u64(other_domain.size() as u64) - SC::Challenge::ONE)
-                    other_domain.zp_at_point(generator)
+                    other_domain.zp_at_point(pt)
                         * other_domain.zp_at_point(domain.first_point()).inverse()
                 })
                 .product::<SC::Challenge>()
         })
         .collect_vec();
-
-    let eval_pt = |vals_pt: (Val<SC>, Vec<RowMajorMatrix<Val<SC>>>)| {
-        let pt = vals_pt.0;
-        let mats = vals_pt.1;
-
-        let mut evs = vec![];
-        for mat in mats {
-            let mut s = Val::<SC>::ZERO;
-            for i in 0..mat.height() {
-                s += mat.get(i, 0) * pt.exp_u64(i as u64);
-            }
-            evs.push(s);
-        }
-        evs
-    };
-
-    // Get domain points.
-    let domain0 = qc_domains[0];
-    let g0 = qc_domains[0].first_point();
-    let g0_squared = qc_domains[0].next_point(g0).unwrap();
-    let g0_next_next = domain0.next_point(g0_squared).unwrap();
-    tracing::info!(
-        "g0 {:?}  actual second point {:?} third point {:?}",
-        g0,
-        g0_squared,
-        g0_next_next
-    );
-    let domain1 = qc_domains[1];
-    let g1 = domain1.first_point();
-    let g1_next = domain1.next_point(g1).unwrap();
-    let g1_next_next = domain1.next_point(g1_next).unwrap();
-    tracing::info!(
-        "g1 {:?}  actual second point {:?} third point {:?}",
-        g1,
-        g1_next,
-        g1_next_next
-    );
-    let lh0 = |x: Val<SC>| zp_cis[0] * domain1.zp_at_point(x);
-    let lh1 = |x: Val<SC>| zp_cis[1] * domain0.zp_at_point(x);
-
-    // evaluate on LDE quotient chunks.
-    let evals_orig_g0 = eval_pt((g0_next_next, lde_orig_quotients_coeffs.clone()));
-    let evals_orig_g1 = eval_pt((g1_next_next, lde_orig_quotients_coeffs));
-    let evals_g0 = eval_pt((g0_next_next, lde_quotient_coeffs.clone()));
-    let evals_g1 = eval_pt((g1_next_next, lde_quotient_coeffs));
-
-    tracing::info!(
-        "eval orig g0 {:?} evals g1 {:?} eval orig g0 {:?} evals g1 {:?}",
-        evals_orig_g0,
-        evals_g0,
-        evals_orig_g1,
-        evals_g1
-    );
     let opened_1 = opened_vals_quo[0]
         .iter()
         .map(|v| v[0].clone())
@@ -243,6 +165,7 @@ where
         .iter()
         .map(|v| v[0].clone())
         .collect_vec();
+
     let quotient_orig = opened_1
         .iter()
         .enumerate()

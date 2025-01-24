@@ -41,22 +41,6 @@ where
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
     ) -> (Self::Commitment, Self::ProverData);
 
-    fn compute_idft(
-        &self,
-        values: Vec<RowMajorMatrix<Val<Self::Domain>>>,
-    ) -> Vec<RowMajorMatrix<Val<Self::Domain>>> {
-        values
-    }
-
-    fn get_evals(
-        &self,
-        evaluations: Vec<(Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
-        _cis: Vec<Val<Self::Domain>>,
-        _is_zk: bool,
-    ) -> Vec<RowMajorMatrix<Val<Self::Domain>>> {
-        evaluations.into_iter().map(|(d, e)| e).collect::<Vec<_>>()
-    }
-
     #[allow(clippy::type_complexity)]
     fn commit_quotient(
         &self,

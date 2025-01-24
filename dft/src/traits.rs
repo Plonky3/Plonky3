@@ -5,7 +5,6 @@ use p3_matrix::bitrev::BitReversableMatrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::swap_rows;
 use p3_matrix::Matrix;
-use p3_util::log2_strict_usize;
 
 use crate::util::{coset_shift_cols, divide_by_height};
 
@@ -135,44 +134,22 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         added_values: &[F],
     ) -> Self::Evaluations {
         let h = mat.height();
-        let l_h = log2_strict_usize(h);
         let w = mat.width();
 
         let mut coeffs = self.idft_batch(mat.clone());
+        assert!(coeffs.values.len() == h * w);
         assert!(added_values.len() == h);
-        let orig_coeffs = coeffs.clone();
-        // coeffs.values.extend(added_values);
 
         // The quotient matrix corresponds to the decomposition of the quotient poly on the extended basis.
         // For now, I'm only adding random values to the first polynomial, for simplicity and debugging purposes.
         coeffs.values.extend(F::zero_vec(h * w));
         // This adds v_H * r(X). So on H, the evaluation is not affected by this change.
         for i in 0..added_values.len() {
-            coeffs.values[i * w] -= added_values[i];
-            coeffs.values[h * w + i * w] = added_values[i] / actual_s.exp_u64(h as u64);
+            for j in 0..w {
+                coeffs.values[i * w + j] -= added_values[i] * actual_s.exp_u64(i as u64);
+                coeffs.values[h * w + i * w + j] = added_values[i] * actual_s.exp_u64(i as u64);
+            }
         }
-
-        // Debugging.
-        // let interp0 = self.coset_dft_batch(orig_coeffs, shift);
-        // let sub1 = RowMajorMatrix::new(coeffs.values[..h * w].to_vec(), w);
-        // let sub2 = RowMajorMatrix::new(coeffs.values[h * w..].to_vec(), w);
-
-        // assert!(sub1.height() == sub2.height());
-        // let interp1 = self.coset_dft_batch(sub1, shift);
-
-        // let interp2 = self.coset_dft_batch(sub2, shift);
-        // for i in 0..h {
-        //     for j in 0..w {
-        //         assert!(
-        //             interp1.get(i, j) + actual_s.exp_u64(h as u64) * interp2.get(i, j)
-        //                 == interp0.get(i, j),
-        //             "interp1 {}, interp2 {}, mat {}",
-        //             interp1.get(i, j),
-        //             interp2.get(i, j),
-        //             interp0.get(i, j)
-        //         );
-        //     }
-        // }
 
         // PANICS: possible panic if the new resized length overflows
         coeffs.values.resize(
