@@ -238,7 +238,7 @@ where
         */
 
         // Batch combination challenge
-        let alpha: Challenge = challenger.sample_ext_element();
+        let alpha: Challenge = challenger.sample_algebra_element();
 
         let mats_and_points = rounds
             .iter()
@@ -364,7 +364,7 @@ where
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
         // Batch combination challenge
-        let alpha: Challenge = challenger.sample_ext_element();
+        let alpha: Challenge = challenger.sample_algebra_element();
 
         let log_global_max_height = proof.commit_phase_commits.len() + self.fri.log_blowup;
 

@@ -6,7 +6,6 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::slice;
 
-use itertools::Itertools;
 use num_bigint::BigUint;
 use num_traits::One;
 use nums::{Factorizer, FactorizerFromSplitter, MillerRabin, PollardRho};
@@ -15,7 +14,7 @@ use serde::Serialize;
 
 use crate::exponentiation::bits_u64;
 use crate::integers::{from_integer_types, QuotientMap};
-use crate::packed::{PackedField, PackedValue};
+use crate::packed::PackedField;
 use crate::Packable;
 
 /// A commutative algebra over a finite field.
@@ -257,6 +256,124 @@ pub trait FieldAlgebra:
     }
 }
 
+/// A field algebra which can be serialized into and out of a
+/// collection of field elements.
+///
+/// We make no guarantees about consistency of this Serialization/Deserialization
+/// across different versions of Plonky3.
+///
+/// ### Mathematical Description
+///
+/// Mathematically a more accurate name for this trait would be BasedFreeVectorSpace.
+///
+/// As `F` is a field, every field algebra `A`, over `F` is an `F`-vector space.
+/// This means we can pick a basis of elements `B = {b_0, ..., b_{n-1}}` in `A`
+/// such that, given any element `a`, we can find a unique set of `n` elements of `F`,
+/// `f_0, ..., f_{n - 1}` satisfying `a = f_0 b_0 + ... + f_{n - 1} b_{n - 1}`.
+///
+/// Thus choosing this basis `B` allows us to map between elements of `A` and
+/// arrays of `n` elements of `F`. Clearly this map depends entirely on the
+/// choice of basis `B` which may change across versions of Plonky3.
+pub trait Serializable<F: FieldAlgebra>: Sized {
+    // We could alternatively call this BasedAlgebra?
+    // The name is currently trying to indicate what this is meant to be
+    // used for as opposed to being mathematically accurate.
+
+    const DIMENSION: usize;
+
+    /// Fixes a basis for the algebra `A` and uses this to
+    /// map an element of `A` to a vector of `n` `F` elements.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
+    fn serialize_as_slice(&self) -> &[F];
+
+    /// Fixes a basis for the algebra `A` and uses this to
+    /// map `n` `F` elements to an element of `A`.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
+    ///
+    /// The user should ensure that the slice has length `DIMENSION`. If
+    /// it is shorter than this, the function will panic, if it is longer the
+    /// extra elements will be ignored.
+    #[inline]
+    fn deserialize_slice(slice: &[F]) -> Self {
+        Self::deserialize_fn(|i| slice[i].clone())
+    }
+
+    /// Fixes a basis for the algebra `A` and uses this to
+    /// map `n` `F` elements to an element of `A`. Similar
+    /// to `core:array::from_fn`, the `n` `F` elements are
+    /// given by `Fn(0), ..., Fn(n - 1)`.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
+    fn deserialize_fn<Fn: FnMut(usize) -> F>(f: Fn) -> Self;
+
+    /// Fixes a basis for the algebra `A` and uses this to
+    /// map `n` `F` elements to an element of `A`.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
+    ///
+    /// If the iterator contains more than `DIMENSION` many elements,
+    /// the rest will be ignored.
+    fn deserialize_iter<I: Iterator<Item = F>>(iter: I) -> Self;
+
+    /// Given a basis for the Algebra `A`, return the i'th basis element.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
+    fn ith_basis_element(i: usize) -> Self {
+        Self::deserialize_fn(|j| F::from_bool(i == j))
+    }
+}
+
+impl<F: FieldAlgebra> Serializable<F> for F {
+    const DIMENSION: usize = 1;
+
+    #[inline]
+    fn serialize_as_slice(&self) -> &[F] {
+        slice::from_ref(self)
+    }
+
+    #[inline]
+    fn deserialize_fn<Fn: FnMut(usize) -> F>(mut f: Fn) -> Self {
+        f(0)
+    }
+
+    #[inline]
+    fn deserialize_iter<I: Iterator<Item = F>>(mut iter: I) -> Self {
+        iter.next().unwrap()
+    }
+}
+
 /// A ring implements `InjectiveMonomial<N>` if the algebraic function
 /// `f(x) = x^N` is an injective map on elements of the ring.
 ///
@@ -425,6 +542,9 @@ pub trait PrimeField32: PrimeField64 {
 /// really the result of applying extension of scalars to a FieldAlgebra `FA` to lift `FA`
 /// from an algebra over `F` to an algebra over `EF` and so `FEA = EF ⊗ FA` where the tensor
 /// product is over `F`.
+///
+/// This will be deleted in a future PR. It's currently only needed to give some traits for
+/// ExtensionPacking and so we will soon replace it by a new packed extension field trait.
 pub trait FieldExtensionAlgebra<Base: FieldAlgebra>:
     FieldAlgebra
     + From<Base>
@@ -434,134 +554,49 @@ pub trait FieldExtensionAlgebra<Base: FieldAlgebra>:
     + SubAssign<Base>
     + Mul<Base, Output = Self>
     + MulAssign<Base>
+    + Serializable<Base>
 {
     const D: usize;
-
-    fn from_base(b: Base) -> Self;
-
-    /// Suppose this field extension is represented by the quotient
-    /// ring `B[X]/(f(X))` where B is `Base` and f is an irreducible
-    /// polynomial of degree `D`. This function takes a slice `bs` of
-    /// length at exactly D, and constructs the field element
-    /// `\sum_i bs[i] * X^i`.
-    ///
-    /// NB: The value produced by this function fundamentally depends
-    /// on the choice of irreducible polynomial f. Care must be taken
-    /// to ensure portability if these values might ever be passed to
-    /// (or rederived within) another compilation environment where a
-    /// different f might have been used.
-    fn from_base_slice(bs: &[Base]) -> Self;
-
-    /// Similar to `core:array::from_fn`, with the same caveats as
-    /// `from_base_slice`.
-    fn from_base_fn<F: FnMut(usize) -> Base>(f: F) -> Self;
-    fn from_base_iter<I: Iterator<Item = Base>>(iter: I) -> Self;
-
-    /// Suppose this field extension is represented by the quotient
-    /// ring `B[X]/(f(X))` where B is `Base` and f is an irreducible
-    /// polynomial of degree `D`. This function takes a field element
-    /// `\sum_i bs[i] * X^i` and returns the coefficients as a slice
-    /// `bs` of length at most D containing, from lowest degree to
-    /// highest.
-    ///
-    /// NB: The value produced by this function fundamentally depends
-    /// on the choice of irreducible polynomial f. Care must be taken
-    /// to ensure portability if these values might ever be passed to
-    /// (or rederived within) another compilation environment where a
-    /// different f might have been used.
-    fn as_base_slice(&self) -> &[Base];
-
-    /// Suppose this field extension is represented by the quotient
-    /// ring `B[X]/(f(X))` where B is `Base` and f is an irreducible
-    /// polynomial of degree `D`. This function returns the field
-    /// element `X^exponent` if `exponent < D` and panics otherwise.
-    /// (The fact that f is not known at the point that this function
-    /// is defined prevents implementing exponentiation of higher
-    /// powers since the reduction cannot be performed.)
-    ///
-    /// NB: The value produced by this function fundamentally depends
-    /// on the choice of irreducible polynomial f. Care must be taken
-    /// to ensure portability if these values might ever be passed to
-    /// (or rederived within) another compilation environment where a
-    /// different f might have been used.
-    fn monomial(exponent: usize) -> Self {
-        assert!(exponent < Self::D, "requested monomial of too high degree");
-        let mut vec = vec![Base::ZERO; Self::D];
-        vec[exponent] = Base::ONE;
-        Self::from_base_slice(&vec)
-    }
 }
 
-pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base> {
+pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base> + From<Base> {
     type ExtensionPacking: FieldExtensionAlgebra<Base::Packing, F = Self>
         + 'static
         + Copy
         + Send
         + Sync;
 
-    #[inline(always)]
-    fn is_in_basefield(&self) -> bool {
-        self.as_base_slice()[1..].iter().all(Field::is_zero)
-    }
+    fn is_in_basefield(&self) -> bool;
 
-    fn as_base(&self) -> Option<Base> {
-        if self.is_in_basefield() {
-            Some(self.as_base_slice()[0])
-        } else {
-            None
-        }
-    }
+    fn as_base(&self) -> Option<Base>;
 
     /// Construct an iterator which returns powers of `self` packed into `ExtensionPacking` elements.
     ///
     /// E.g. if `PACKING::WIDTH = 4` this returns the elements:
     /// `[self^0, self^1, self^2, self^3], [self^4, self^5, self^6, self^7], ...`.
-    fn ext_powers_packed(&self) -> Powers<Self::ExtensionPacking> {
-        let powers = self.powers().take(Base::Packing::WIDTH + 1).collect_vec();
-        // Transpose first WIDTH powers
-        let current = Self::ExtensionPacking::from_base_fn(|i| {
-            Base::Packing::from_fn(|j| powers[j].as_base_slice()[i])
-        });
-        // Broadcast self^WIDTH
-        let multiplier = Self::ExtensionPacking::from_base_fn(|i| {
-            Base::Packing::from(powers[Base::Packing::WIDTH].as_base_slice()[i])
-        });
-
-        Powers {
-            base: multiplier,
-            current,
-        }
-    }
+    ///
+    /// Once we create the new packed extension field trait, this function will be moved there.
+    fn ext_powers_packed(&self) -> Powers<Self::ExtensionPacking>;
 }
 
 impl<F: Field> ExtensionField<F> for F {
     type ExtensionPacking = F::Packing;
+
+    fn is_in_basefield(&self) -> bool {
+        true
+    }
+
+    fn as_base(&self) -> Option<F> {
+        Some(*self)
+    }
+
+    fn ext_powers_packed(&self) -> Powers<Self::ExtensionPacking> {
+        self.powers_packed()
+    }
 }
 
 impl<FA: FieldAlgebra> FieldExtensionAlgebra<FA> for FA {
     const D: usize = 1;
-
-    fn from_base(b: FA) -> Self {
-        b
-    }
-
-    fn from_base_slice(bs: &[FA]) -> Self {
-        assert_eq!(bs.len(), 1);
-        bs[0].clone()
-    }
-
-    fn from_base_iter<I: Iterator<Item = FA>>(mut iter: I) -> Self {
-        iter.next().unwrap()
-    }
-
-    fn from_base_fn<F: FnMut(usize) -> FA>(mut f: F) -> Self {
-        f(0)
-    }
-
-    #[inline(always)]
-    fn as_base_slice(&self) -> &[FA] {
-        slice::from_ref(self)
-    }
 }
 
 /// A field which supplies information like the two-adicity of its multiplicative group, and methods
