@@ -73,10 +73,12 @@ fn main() {
             trace_height
         }
         ProofOptions::Poseidon2Permutations => {
+            assert!(P2_VECTOR_LEN.is_power_of_two());
+            let log_p2_vector_len: u8 = P2_VECTOR_LEN.trailing_zeros() as u8;
             println!("Proving 2^{} native Poseidon-2 permutations", {
-                args.log_trace_length + 3
+                args.log_trace_length + log_p2_vector_len
             });
-            trace_height << 3
+            trace_height << log_p2_vector_len
         }
         ProofOptions::KeccakFPermutations => {
             let num_hashes = trace_height / 24;
