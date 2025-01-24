@@ -25,7 +25,8 @@ use tracing_subscriber::{EnvFilter, Registry};
 // General constants for constructing the Poseidon2 AIR.
 const P2_WIDTH: usize = 16;
 const P2_HALF_FULL_ROUNDS: usize = 4;
-const P2_VECTOR_LEN: usize = 1 << 3;
+const P2_LOG_VECTOR_LEN: u8 = 3;
+const P2_VECTOR_LEN: usize = 1 << P2_LOG_VECTOR_LEN;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -73,12 +74,10 @@ fn main() {
             trace_height
         }
         ProofOptions::Poseidon2Permutations => {
-            assert!(P2_VECTOR_LEN.is_power_of_two());
-            let log_p2_vector_len: u8 = P2_VECTOR_LEN.trailing_zeros() as u8;
             println!("Proving 2^{} native Poseidon-2 permutations", {
-                args.log_trace_length + log_p2_vector_len
+                args.log_trace_length + P2_LOG_VECTOR_LEN
             });
-            trace_height << log_p2_vector_len
+            trace_height << P2_LOG_VECTOR_LEN
         }
         ProofOptions::KeccakFPermutations => {
             let num_hashes = trace_height / 24;
