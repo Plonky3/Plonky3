@@ -12,7 +12,8 @@ use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{
     field_to_array, FieldAlgebra, FieldExtensionAlgebra, PackedField, PrimeCharacteristicRing,
-, Serializable};
+    Serializable,
+};
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
 #[repr(transparent)] // to make the zero_vec implementation safe

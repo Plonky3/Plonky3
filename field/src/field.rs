@@ -284,7 +284,7 @@ pub trait PrimeCharacteristicRing:
 /// Thus choosing this basis `B` allows us to map between elements of `A` and
 /// arrays of `n` elements of `F`. Clearly this map depends entirely on the
 /// choice of basis `B` which may change across versions of Plonky3.
-pub trait Serializable<F: FieldAlgebra>: Sized {
+pub trait Serializable<F: PrimeCharacteristicRing>: Sized {
     // We could alternatively call this BasedAlgebra?
     // The name is currently trying to indicate what this is meant to be
     // used for as opposed to being mathematically accurate.
@@ -365,7 +365,7 @@ pub trait Serializable<F: FieldAlgebra>: Sized {
     }
 }
 
-impl<F: FieldAlgebra> Serializable<F> for F {
+impl<F: PrimeCharacteristicRing> Serializable<F> for F {
     const DIMENSION: usize = 1;
 
     #[inline]
@@ -598,63 +598,9 @@ pub trait PrimeField32: PrimeField64 {
 /// from an algebra over `F` to an algebra over `EF` and so `FEA = EF ⊗ FA` where the tensor
 /// product is over `F`.
 pub trait FieldExtensionAlgebra<Base: PrimeCharacteristicRing>:
-    PrimeCharacteristicRing + FieldAlgebra<Base>
+    PrimeCharacteristicRing + FieldAlgebra<Base> + Serializable<Base>
 {
     const D: usize;
-
-    fn from_base(b: Base) -> Self;
-
-    /// Suppose this field extension is represented by the quotient
-    /// ring `B[X]/(f(X))` where B is `Base` and f is an irreducible
-    /// polynomial of degree `D`. This function takes a slice `bs` of
-    /// length at exactly D, and constructs the field element
-    /// `\sum_i bs[i] * X^i`.
-    ///
-    /// NB: The value produced by this function fundamentally depends
-    /// on the choice of irreducible polynomial f. Care must be taken
-    /// to ensure portability if these values might ever be passed to
-    /// (or rederived within) another compilation environment where a
-    /// different f might have been used.
-    fn from_base_slice(bs: &[Base]) -> Self;
-
-    /// Similar to `core:array::from_fn`, with the same caveats as
-    /// `from_base_slice`.
-    fn from_base_fn<F: FnMut(usize) -> Base>(f: F) -> Self;
-    fn from_base_iter<I: Iterator<Item = Base>>(iter: I) -> Self;
-
-    /// Suppose this field extension is represented by the quotient
-    /// ring `B[X]/(f(X))` where B is `Base` and f is an irreducible
-    /// polynomial of degree `D`. This function takes a field element
-    /// `\sum_i bs[i] * X^i` and returns the coefficients as a slice
-    /// `bs` of length at most D containing, from lowest degree to
-    /// highest.
-    ///
-    /// NB: The value produced by this function fundamentally depends
-    /// on the choice of irreducible polynomial f. Care must be taken
-    /// to ensure portability if these values might ever be passed to
-    /// (or rederived within) another compilation environment where a
-    /// different f might have been used.
-    fn as_base_slice(&self) -> &[Base];
-
-    /// Suppose this field extension is represented by the quotient
-    /// ring `B[X]/(f(X))` where B is `Base` and f is an irreducible
-    /// polynomial of degree `D`. This function returns the field
-    /// element `X^exponent` if `exponent < D` and panics otherwise.
-    /// (The fact that f is not known at the point that this function
-    /// is defined prevents implementing exponentiation of higher
-    /// powers since the reduction cannot be performed.)
-    ///
-    /// NB: The value produced by this function fundamentally depends
-    /// on the choice of irreducible polynomial f. Care must be taken
-    /// to ensure portability if these values might ever be passed to
-    /// (or rederived within) another compilation environment where a
-    /// different f might have been used.
-    fn monomial(exponent: usize) -> Self {
-        assert!(exponent < Self::D, "requested monomial of too high degree");
-        let mut vec = vec![Base::ZERO; Self::D];
-        vec[exponent] = Base::ONE;
-        Self::from_base_slice(&vec)
-    }
 }
 
 pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base> {
@@ -680,32 +626,22 @@ pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base> {
 
 impl<F: Field> ExtensionField<F> for F {
     type ExtensionPacking = F::Packing;
+
+    fn is_in_basefield(&self) -> bool {
+        true
+    }
+
+    fn as_base(&self) -> Option<F> {
+        Some(*self)
+    }
+
+    fn ext_powers_packed(&self) -> Powers<Self::ExtensionPacking> {
+        self.powers_packed()
+    }
 }
 
-impl<FA: PrimeCharacteristicRing> FieldExtensionAlgebra<FA> for FA {
+impl<PCR: PrimeCharacteristicRing> FieldExtensionAlgebra<PCR> for PCR {
     const D: usize = 1;
-
-    fn from_base(b: FA) -> Self {
-        b
-    }
-
-    fn from_base_slice(bs: &[FA]) -> Self {
-        assert_eq!(bs.len(), 1);
-        bs[0].clone()
-    }
-
-    fn from_base_iter<I: Iterator<Item = FA>>(mut iter: I) -> Self {
-        iter.next().unwrap()
-    }
-
-    fn from_base_fn<F: FnMut(usize) -> FA>(mut f: F) -> Self {
-        f(0)
-    }
-
-    #[inline(always)]
-    fn as_base_slice(&self) -> &[FA] {
-        slice::from_ref(self)
-    }
 }
 
 /// A field which supplies information like the two-adicity of its multiplicative group, and methods

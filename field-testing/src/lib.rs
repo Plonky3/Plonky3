@@ -276,7 +276,7 @@ mod tests {
 
     use p3_baby_bear::BabyBear;
     use p3_field::extension::{BinomialExtensionField, HasFrobenius};
-    use p3_field::{binomial_expand, eval_poly, FieldExtensionAlgebra, PrimeCharacteristicRing};
+    use p3_field::{binomial_expand, eval_poly, PrimeCharacteristicRing};
     use rand::random;
 
     use super::*;

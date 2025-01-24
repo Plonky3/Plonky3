@@ -5,7 +5,7 @@ use itertools::Itertools;
 use p3_air::{Air, BaseAir};
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{Field, FieldExtensionAlgebra, PrimeCharacteristicRing};
+use p3_field::{Field, FieldExtensionAlgebra, PrimeCharacteristicRing, Serializable};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use tracing::instrument;

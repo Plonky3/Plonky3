@@ -5,7 +5,7 @@ use itertools::{izip, Itertools};
 use p3_air::Air;
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{FieldExtensionAlgebra, PackedValue, PrimeCharacteristicRing};
+use p3_field::{PackedValue, PrimeCharacteristicRing, Serializable};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
