@@ -3,7 +3,7 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use crate::batch_inverse::batch_multiplicative_inverse_general;
-use crate::{Field, PackedValue, PrimeCharacteristicRing};
+use crate::{Field, FieldAlgebra, PackedValue, PrimeCharacteristicRing};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(transparent)] // This needed to make `transmute`s safe.
@@ -48,6 +48,8 @@ impl<F: Field, const N: usize> PrimeCharacteristicRing for FieldArray<F, N> {
         F::from_prime_subfield(f).into()
     }
 }
+
+impl<F: Field, const N: usize> FieldAlgebra<F> for FieldArray<F, N> {}
 
 unsafe impl<F: Field, const N: usize> PackedValue for FieldArray<F, N> {
     type Value = F;

@@ -447,6 +447,7 @@ pub trait FieldAlgebra<F>:
 {
 }
 
+// Every ring is an algebra over itself.
 impl<R: PrimeCharacteristicRing> FieldAlgebra<R> for R {}
 
 /// An element of a finite field.
