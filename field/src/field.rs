@@ -413,9 +413,9 @@ pub trait PermutationMonomial<const N: u64>: InjectiveMonomial<N> {
     fn injective_exp_root_n(&self) -> Self;
 }
 
-/// A ring `R` implements `FieldAlgebra<F>` if there is a natural
-/// map from `F` into `R` such that the only element which maps
-/// to `R::ZERO` is `F::ZERO`.
+/// A ring `R` implements `FieldAlgebra<F>` if there is an injective
+/// homomorphism from `F` into `R`; in particular only `F::ZERO` maps to
+/// `R::ZERO`.
 ///
 /// For the most part, we will usually expect `F` to be a field but there
 /// are a few cases where it is handy to allow it to just be a ring. In
