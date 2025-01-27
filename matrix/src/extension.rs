@@ -92,7 +92,7 @@ mod tests {
     use alloc::vec;
 
     use p3_field::extension::Complex;
-    use p3_field::{FieldAlgebra, Serializable};
+    use p3_field::{PrimeCharacteristicRing, Serializable};
     use p3_mersenne_31::Mersenne31;
 
     use super::*;

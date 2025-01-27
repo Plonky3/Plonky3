@@ -6,8 +6,8 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::exponentiation::exp_1717986917;
 use p3_field::{
-    Field, FieldAlgebra, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial,
+    Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
+    PermutationMonomial, PrimeCharacteristicRing,
 };
 use p3_util::convert_vec;
 use rand::distributions::{Distribution, Standard};
@@ -312,8 +312,7 @@ impl Product for PackedMersenne31Neon {
     }
 }
 
-impl FieldAlgebra for PackedMersenne31Neon {
-    type F = Mersenne31;
+impl PrimeCharacteristicRing for PackedMersenne31Neon {
     type PrimeSubfield = Mersenne31;
 
     const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
@@ -329,9 +328,11 @@ impl FieldAlgebra for PackedMersenne31Neon {
     #[inline(always)]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { convert_vec(Self::F::zero_vec(len * WIDTH)) }
+        unsafe { convert_vec(Mersenne31::zero_vec(len * WIDTH)) }
     }
 }
+
+impl Algebra<Mersenne31> for PackedMersenne31Neon {}
 
 // Degree of the smallest permutation polynomial for Mersenne31.
 //

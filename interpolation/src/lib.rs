@@ -82,7 +82,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_field::{batch_multiplicative_inverse, Field, FieldAlgebra};
+    use p3_field::{batch_multiplicative_inverse, Field, PrimeCharacteristicRing};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_util::log2_strict_usize;
 

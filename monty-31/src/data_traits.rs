@@ -1,7 +1,7 @@
 use core::fmt::Debug;
 use core::hash::Hash;
 
-use p3_field::{Field, FieldAlgebra};
+use p3_field::{Field, PrimeCharacteristicRing};
 
 use crate::MontyField31;
 
@@ -64,7 +64,7 @@ pub trait BarrettParameters: MontyParameters {
     const MASK: i64 = !((1 << 10) - 1); // Lets us 0 out the bottom 10 digits of an i64.
 }
 
-/// FieldParameters contains constants and methods needed to imply FieldAlgebra, Field and PrimeField32 for MontyField31.
+/// FieldParameters contains constants and methods needed to imply PrimeCharacteristicRing, Field and PrimeField32 for MontyField31.
 pub trait FieldParameters: PackedMontyParameters + Sized {
     // Simple field constants.
     const MONTY_ZERO: MontyField31<Self> = MontyField31::new(0);
@@ -84,7 +84,7 @@ pub trait FieldParameters: PackedMontyParameters + Sized {
 pub trait RelativelyPrimePower<const D: u64> {
     /// Compute `x -> x^{1/D}` using the modular inverse
     /// of `D mod p - 1`.
-    fn exp_root_d<FA: FieldAlgebra>(val: FA) -> FA;
+    fn exp_root_d<R: PrimeCharacteristicRing>(val: R) -> R;
 }
 
 /// TwoAdicData contains constants needed to imply TwoAdicField for Monty31 fields.

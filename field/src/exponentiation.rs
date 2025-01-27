@@ -1,4 +1,4 @@
-use crate::FieldAlgebra;
+use crate::PrimeCharacteristicRing;
 
 pub(crate) const fn bits_u64(n: u64) -> usize {
     (64 - n.leading_zeros()) as usize
@@ -8,7 +8,7 @@ pub(crate) const fn bits_u64(n: u64) -> usize {
 ///
 /// This map computes the fifth root of `x` if `x` is a member of the field `Mersenne31`.
 /// This follows from the computation: `5 * 1717986917 = 4*(2^31 - 2) + 1 = 1 mod p - 1`.
-pub fn exp_1717986917<FA: FieldAlgebra>(val: FA) -> FA {
+pub fn exp_1717986917<R: PrimeCharacteristicRing>(val: R) -> R {
     // Note the binary expansion: 1717986917 = 1100110011001100110011001100101_2
     // This uses 30 Squares + 7 Multiplications => 37 Operations total.
     // Suspect it's possible to improve this with enough effort. For example 1717986918 takes only 4 Multiplications.
@@ -32,7 +32,7 @@ pub fn exp_1717986917<FA: FieldAlgebra>(val: FA) -> FA {
 ///
 /// This map computes the third root of `x` if `x` is a member of the field `KoalaBear`.
 /// This follows from the computation: `3 * 1420470955 = 2*(2^31 - 2^24) + 1 = 1 mod (p - 1)`.
-pub fn exp_1420470955<FA: FieldAlgebra>(val: FA) -> FA {
+pub fn exp_1420470955<R: PrimeCharacteristicRing>(val: R) -> R {
     // Note the binary expansion: 1420470955 = 1010100101010101010101010101011_2
     // This uses 29 Squares + 7 Multiplications => 36 Operations total.
     // Suspect it's possible to improve this with enough effort.
@@ -56,7 +56,7 @@ pub fn exp_1420470955<FA: FieldAlgebra>(val: FA) -> FA {
 ///
 /// This map computes the seventh root of `x` if `x` is a member of the field `BabyBear`.
 /// This follows from the computation: `7 * 1725656503 = 6*(2^31 - 2^27) + 1 = 1 mod (p - 1)`.
-pub fn exp_1725656503<FA: FieldAlgebra>(val: FA) -> FA {
+pub fn exp_1725656503<R: PrimeCharacteristicRing>(val: R) -> R {
     // Note the binary expansion: 1725656503 = 1100110110110110110110110110111_2
     // This uses 29 Squares + 8 Multiplications => 37 Operations total.
     // Suspect it's possible to improve this with enough effort.
@@ -82,7 +82,7 @@ pub fn exp_1725656503<FA: FieldAlgebra>(val: FA) -> FA {
 ///
 /// This map computes the seventh root of `x` if `x` is a member of the field `Goldilocks`.
 /// This follows from the computation: `7 * 10540996611094048183 = 4*(2^64 - 2**32) + 1 = 1 mod (p - 1)`.
-pub fn exp_10540996611094048183<FA: FieldAlgebra>(val: FA) -> FA {
+pub fn exp_10540996611094048183<R: PrimeCharacteristicRing>(val: R) -> R {
     // Note the binary expansion: 10540996611094048183 = 1001001001001001001001001001000110110110110110110110110110110111_2.
     // This uses 63 Squares + 8 Multiplications => 71 Operations total.
     // Suspect it's possible to improve this a little with enough effort.

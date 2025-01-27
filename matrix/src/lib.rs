@@ -9,7 +9,9 @@ use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
 
 use itertools::{izip, Itertools};
-use p3_field::{dot_product, ExtensionField, Field, FieldAlgebra, PackedValue, Serializable};
+use p3_field::{
+    dot_product, ExtensionField, Field, PackedValue, PrimeCharacteristicRing, Serializable,
+};
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
 use tracing::instrument;
@@ -287,7 +289,7 @@ mod tests {
     use itertools::izip;
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::FieldAlgebra;
+    use p3_field::PrimeCharacteristicRing;
     use rand::thread_rng;
 
     use super::*;

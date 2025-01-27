@@ -8,8 +8,8 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::{
-    Field, FieldAlgebra, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeField64,
+    Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
+    PermutationMonomial, PrimeCharacteristicRing, PrimeField64,
 };
 use p3_util::convert_vec;
 use rand::distributions::{Distribution, Standard};
@@ -160,8 +160,7 @@ impl Product for PackedGoldilocksAVX2 {
     }
 }
 
-impl FieldAlgebra for PackedGoldilocksAVX2 {
-    type F = Goldilocks;
+impl PrimeCharacteristicRing for PackedGoldilocksAVX2 {
     type PrimeSubfield = Goldilocks;
 
     const ZERO: Self = Self([Goldilocks::ZERO; WIDTH]);
@@ -182,7 +181,7 @@ impl FieldAlgebra for PackedGoldilocksAVX2 {
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { convert_vec(Self::F::zero_vec(len * WIDTH)) }
+        unsafe { convert_vec(Goldilocks::zero_vec(len * WIDTH)) }
     }
 }
 
@@ -200,6 +199,8 @@ impl PermutationMonomial<7> for PackedGoldilocksAVX2 {
         exp_10540996611094048183(*self)
     }
 }
+
+impl Algebra<Goldilocks> for PackedGoldilocksAVX2 {}
 
 unsafe impl PackedValue for PackedGoldilocksAVX2 {
     type Value = Goldilocks;

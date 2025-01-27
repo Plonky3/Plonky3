@@ -14,8 +14,8 @@ use halo2curves::serde::SerdeObject;
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
 use p3_field::{
-    quotient_map_small_int, Field, FieldAlgebra, InjectiveMonomial, Packable, PrimeField,
-    TwoAdicField,
+    quotient_map_small_int, Field, InjectiveMonomial, Packable, PrimeCharacteristicRing,
+    PrimeField, TwoAdicField,
 };
 pub use poseidon2::Poseidon2Bn254;
 use rand::distributions::{Distribution, Standard};
@@ -93,8 +93,7 @@ impl Debug for Bn254Fr {
     }
 }
 
-impl FieldAlgebra for Bn254Fr {
-    type F = Self;
+impl PrimeCharacteristicRing for Bn254Fr {
     type PrimeSubfield = Self;
 
     const ZERO: Self = Self::new(FFBn254Fr::ZERO);

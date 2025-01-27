@@ -2,8 +2,8 @@
 mod test_quartic_extension {
     use alloc::format;
 
-    use p3_field::FieldAlgebra;
-    use p3_field::{extension::BinomialExtensionField, Serializable};
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::{PrimeCharacteristicRing, Serializable};
     use p3_field_testing::{test_field, test_two_adic_extension_field};
 
     use crate::KoalaBear;
