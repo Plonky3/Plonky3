@@ -1,7 +1,7 @@
 use super::{BinomialExtensionField, BinomiallyExtendable, HasTwoAdicBionmialExtension};
 use crate::{Field, FieldExtensionAlgebra, PrimeCharacteristicRing};
 
-pub type Complex<FA> = BinomialExtensionField<FA, 2>;
+pub type Complex<F> = BinomialExtensionField<F, 2>;
 
 /// A field for which `p = 3 (mod 4)`. Equivalently, `-1` is not a square,
 /// so the complex extension can be defined `F[i] = F[X]/(X^2+1)`.
@@ -25,31 +25,31 @@ impl<F: ComplexExtendable> BinomiallyExtendable<2> for F {
 }
 
 /// Convenience methods for complex extensions
-impl<FA: PrimeCharacteristicRing> Complex<FA> {
+impl<R: PrimeCharacteristicRing> Complex<R> {
     #[inline(always)]
-    pub const fn new(real: FA, imag: FA) -> Self {
+    pub const fn new(real: R, imag: R) -> Self {
         Self {
             value: [real, imag],
         }
     }
 
     #[inline(always)]
-    pub const fn new_real(real: FA) -> Self {
-        Self::new(real, FA::ZERO)
+    pub const fn new_real(real: R) -> Self {
+        Self::new(real, R::ZERO)
     }
 
     #[inline(always)]
-    pub const fn new_imag(imag: FA) -> Self {
-        Self::new(FA::ZERO, imag)
+    pub const fn new_imag(imag: R) -> Self {
+        Self::new(R::ZERO, imag)
     }
 
     #[inline(always)]
-    pub fn real(&self) -> FA {
+    pub fn real(&self) -> R {
         self.value[0].clone()
     }
 
     #[inline(always)]
-    pub fn imag(&self) -> FA {
+    pub fn imag(&self) -> R {
         self.value[1].clone()
     }
 
@@ -59,18 +59,18 @@ impl<FA: PrimeCharacteristicRing> Complex<FA> {
     }
 
     #[inline]
-    pub fn norm(&self) -> FA {
+    pub fn norm(&self) -> R {
         self.real().square() + self.imag().square()
     }
 
     #[inline(always)]
-    pub fn to_array(&self) -> [FA; 2] {
+    pub fn to_array(&self) -> [R; 2] {
         self.value.clone()
     }
 
     // Sometimes we want to rotate over an extension that's not necessarily ComplexExtendable,
     // but still on the circle.
-    pub fn rotate<Ext: FieldExtensionAlgebra<FA>>(&self, rhs: Complex<Ext>) -> Complex<Ext> {
+    pub fn rotate<Ext: FieldExtensionAlgebra<R>>(&self, rhs: Complex<Ext>) -> Complex<Ext> {
         Complex::<Ext>::new(
             rhs.real() * self.real() - rhs.imag() * self.imag(),
             rhs.imag() * self.real() + rhs.real() * self.imag(),

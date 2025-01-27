@@ -152,11 +152,11 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 16> for KoalaBearInternalL
         state[15] = sum - state[15];
     }
 
-    fn generic_internal_linear_layer<FA>(state: &mut [FA; 16])
+    fn generic_internal_linear_layer<R>(state: &mut [R; 16])
     where
-        FA: PrimeCharacteristicRing + Mul<KoalaBear, Output = FA>,
+        R: PrimeCharacteristicRing + Mul<KoalaBear, Output = R>,
     {
-        let part_sum: FA = state[1..].iter().cloned().sum();
+        let part_sum: R = state[1..].iter().cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();
 
         // The first three diagonal elements are -2, 1, 2 so we do something custom.
@@ -230,11 +230,11 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 24> for KoalaBearInternalL
         state[23] = sum - state[23];
     }
 
-    fn generic_internal_linear_layer<FA>(state: &mut [FA; 24])
+    fn generic_internal_linear_layer<R>(state: &mut [R; 24])
     where
-        FA: PrimeCharacteristicRing + core::ops::Mul<KoalaBear, Output = FA>,
+        R: PrimeCharacteristicRing + core::ops::Mul<KoalaBear, Output = R>,
     {
-        let part_sum: FA = state[1..].iter().cloned().sum();
+        let part_sum: R = state[1..].iter().cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();
 
         // The first three diagonal elements are -2, 1, 2 so we do something custom.

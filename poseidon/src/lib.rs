@@ -69,10 +69,10 @@ where
         }
     }
 
-    fn half_full_rounds<FA>(&self, state: &mut [FA; WIDTH], round_ctr: &mut usize)
+    fn half_full_rounds<R>(&self, state: &mut [R; WIDTH], round_ctr: &mut usize)
     where
-        FA: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
-        Mds: MdsPermutation<FA, WIDTH>,
+        R: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
+        Mds: MdsPermutation<R, WIDTH>,
     {
         for _ in 0..self.half_num_full_rounds {
             self.constant_layer(state, *round_ctr);
@@ -82,10 +82,10 @@ where
         }
     }
 
-    fn partial_rounds<FA>(&self, state: &mut [FA; WIDTH], round_ctr: &mut usize)
+    fn partial_rounds<R>(&self, state: &mut [R; WIDTH], round_ctr: &mut usize)
     where
-        FA: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
-        Mds: MdsPermutation<FA, WIDTH>,
+        R: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
+        Mds: MdsPermutation<R, WIDTH>,
     {
         for _ in 0..self.num_partial_rounds {
             self.constant_layer(state, *round_ctr);
@@ -95,25 +95,25 @@ where
         }
     }
 
-    fn full_sbox_layer<FA>(state: &mut [FA; WIDTH])
+    fn full_sbox_layer<R>(state: &mut [R; WIDTH])
     where
-        FA: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
+        R: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
     {
         for x in state.iter_mut() {
             *x = x.injective_exp_n();
         }
     }
 
-    fn partial_sbox_layer<FA>(state: &mut [FA; WIDTH])
+    fn partial_sbox_layer<R>(state: &mut [R; WIDTH])
     where
-        FA: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
+        R: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
     {
         state[0] = state[0].injective_exp_n();
     }
 
-    fn constant_layer<FA>(&self, state: &mut [FA; WIDTH], round: usize)
+    fn constant_layer<R>(&self, state: &mut [R; WIDTH], round: usize)
     where
-        FA: Algebra<F> + PrimeCharacteristicRing,
+        R: Algebra<F> + PrimeCharacteristicRing,
     {
         for (i, x) in state.iter_mut().enumerate() {
             *x += self.constants[round * WIDTH + i];
@@ -121,14 +121,14 @@ where
     }
 }
 
-impl<F, FA, Mds, const WIDTH: usize, const ALPHA: u64> Permutation<[FA; WIDTH]>
+impl<F, R, Mds, const WIDTH: usize, const ALPHA: u64> Permutation<[R; WIDTH]>
     for Poseidon<F, Mds, WIDTH, ALPHA>
 where
     F: PrimeField + InjectiveMonomial<ALPHA>,
-    FA: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
-    Mds: MdsPermutation<FA, WIDTH>,
+    R: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
+    Mds: MdsPermutation<R, WIDTH>,
 {
-    fn permute_mut(&self, state: &mut [FA; WIDTH]) {
+    fn permute_mut(&self, state: &mut [R; WIDTH]) {
         let mut round_ctr = 0;
         self.half_full_rounds(state, &mut round_ctr);
         self.partial_rounds(state, &mut round_ctr);
@@ -136,11 +136,11 @@ where
     }
 }
 
-impl<F, FA, Mds, const WIDTH: usize, const ALPHA: u64> CryptographicPermutation<[FA; WIDTH]>
+impl<F, R, Mds, const WIDTH: usize, const ALPHA: u64> CryptographicPermutation<[R; WIDTH]>
     for Poseidon<F, Mds, WIDTH, ALPHA>
 where
     F: PrimeField + InjectiveMonomial<ALPHA>,
-    FA: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
-    Mds: MdsPermutation<FA, WIDTH>,
+    R: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
+    Mds: MdsPermutation<R, WIDTH>,
 {
 }

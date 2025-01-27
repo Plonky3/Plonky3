@@ -532,40 +532,40 @@ impl<F: Field + HasTwoAdicBionmialExtension<D>, const D: usize> TwoAdicField
 /// Add two vectors element wise.
 #[inline]
 pub(crate) fn vector_add<
-    FA: PrimeCharacteristicRing + Add<FA2, Output = FA>,
-    FA2: Clone,
+    R: PrimeCharacteristicRing + Add<R2, Output = R>,
+    R2: Clone,
     const D: usize,
 >(
-    a: &[FA; D],
-    b: &[FA2; D],
-) -> [FA; D] {
+    a: &[R; D],
+    b: &[R2; D],
+) -> [R; D] {
     array::from_fn(|i| a[i].clone() + b[i].clone())
 }
 
 /// Subtract two vectors element wise.
 #[inline]
 pub(crate) fn vector_sub<
-    FA: PrimeCharacteristicRing + Sub<FA2, Output = FA>,
-    FA2: Clone,
+    R: PrimeCharacteristicRing + Sub<R2, Output = R>,
+    R2: Clone,
     const D: usize,
 >(
-    a: &[FA; D],
-    b: &[FA2; D],
-) -> [FA; D] {
+    a: &[R; D],
+    b: &[R2; D],
+) -> [R; D] {
     array::from_fn(|i| a[i].clone() - b[i].clone())
 }
 
 /// Multiply two vectors representing elements in a binomial extension.
 #[inline]
 pub(super) fn binomial_mul<
-    FA: PrimeCharacteristicRing + Mul<FA2, Output = FA>,
-    FA2: Add<Output = FA2> + Clone,
+    R: PrimeCharacteristicRing + Mul<R2, Output = R>,
+    R2: Add<Output = R2> + Clone,
     const D: usize,
 >(
-    a: &[FA; D],
-    b: &[FA2; D],
-    res: &mut [FA; D],
-    w: FA,
+    a: &[R; D],
+    b: &[R2; D],
+    res: &mut [R; D],
+    w: R,
 ) {
     match D {
         2 => {
@@ -620,14 +620,14 @@ fn cubic_inv<F: Field>(a: &[F], w: F) -> [F; 3] {
 /// karatsuba multiplication for cubic extension field
 #[inline]
 pub(crate) fn cubic_mul<
-    FA: PrimeCharacteristicRing + Mul<FA2, Output = FA>,
-    FA2: Add<Output = FA2> + Clone,
+    R: PrimeCharacteristicRing + Mul<R2, Output = R>,
+    R2: Add<Output = R2> + Clone,
     const D: usize,
 >(
-    a: &[FA; D],
-    b: &[FA2; D],
-    res: &mut [FA; D],
-    w: FA,
+    a: &[R; D],
+    b: &[R2; D],
+    res: &mut [R; D],
+    w: R,
 ) {
     assert_eq!(D, 3);
 
@@ -651,11 +651,11 @@ pub(crate) fn cubic_mul<
 #[inline]
 pub fn cubic_square<
     F: BinomiallyExtendable<D>,
-    FA: Algebra<F> + PrimeCharacteristicRing,
+    R: PrimeCharacteristicRing + Algebra<F>,
     const D: usize,
 >(
-    a: &[FA; D],
-    res: &mut [FA; D],
+    a: &[R; D],
+    res: &mut [R; D],
 ) {
     assert_eq!(D, 3);
 

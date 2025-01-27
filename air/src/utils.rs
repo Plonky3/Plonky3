@@ -11,13 +11,13 @@ use crate::AirBuilder;
 ///
 /// Given vec = [v0, v1, ..., v_n] returns v0 + 2v_1 + ... + 2^n v_n
 #[inline]
-pub fn pack_bits_le<FA, Var, I>(iter: I) -> FA
+pub fn pack_bits_le<R, Var, I>(iter: I) -> R
 where
-    FA: PrimeCharacteristicRing,
-    Var: Into<FA> + Clone,
+    R: PrimeCharacteristicRing,
+    Var: Into<R> + Clone,
     I: DoubleEndedIterator<Item = Var>,
 {
-    let mut output = FA::ZERO;
+    let mut output = R::ZERO;
     for elem in iter.rev() {
         output = output.double();
         output += elem.clone().into();
@@ -29,7 +29,7 @@ where
 ///
 /// For boolean inputs, `x ^ y = x + y - 2 xy`.
 #[inline(always)]
-pub fn xor<FA: PrimeCharacteristicRing>(x: FA, y: FA) -> FA {
+pub fn xor<R: PrimeCharacteristicRing>(x: R, y: R) -> R {
     x.clone() + y.clone() - x * y.double()
 }
 
@@ -37,7 +37,7 @@ pub fn xor<FA: PrimeCharacteristicRing>(x: FA, y: FA) -> FA {
 ///
 /// For boolean inputs `x ^ y ^ z = x + y + z - 2(xy + xz + yz) + 4xyz`.
 #[inline(always)]
-pub fn xor3<FA: PrimeCharacteristicRing>(x: FA, y: FA, z: FA) -> FA {
+pub fn xor3<R: PrimeCharacteristicRing>(x: R, y: R, z: R) -> R {
     // The cheapest way to implement this polynomial is to simply apply xor twice.
     // This costs 2 adds, 2 subs, 2 muls and 2 doubles.
     xor(x, xor(y, z))
@@ -47,8 +47,8 @@ pub fn xor3<FA: PrimeCharacteristicRing>(x: FA, y: FA, z: FA) -> FA {
 ///
 /// For boolean inputs `(!x) & y = (1 - x)y`
 #[inline(always)]
-pub fn andn<FA: PrimeCharacteristicRing>(x: FA, y: FA) -> FA {
-    (FA::ONE - x) * y
+pub fn andn<R: PrimeCharacteristicRing>(x: R, y: R) -> R {
+    (R::ONE - x) * y
 }
 
 /// Compute `xor` on a list of boolean field elements.
@@ -76,16 +76,10 @@ pub fn checked_andn<F: Field>(x: F, y: F) -> F {
 ///
 /// The output array is in little-endian order.
 #[inline]
-pub fn u32_to_bits_le<FA: PrimeCharacteristicRing>(val: u32) -> [FA; 32] {
+pub fn u32_to_bits_le<R: PrimeCharacteristicRing>(val: u32) -> [R; 32] {
     // We do this over F::from_u32 as from_u32 can be slow
     // like in the case of monty field.
-    array::from_fn(|i| {
-        if val & (1 << i) != 0 {
-            FA::ONE
-        } else {
-            FA::ZERO
-        }
-    })
+    array::from_fn(|i| if val & (1 << i) != 0 { R::ONE } else { R::ZERO })
 }
 
 /// Verify that `a = b + c + d mod 2^32`

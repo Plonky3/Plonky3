@@ -61,7 +61,7 @@ impl RelativelyPrimePower<7> for BabyBearParameters {
     /// In the field `BabyBear`, `a^{1/7}` is equal to a^{1725656503}.
     ///
     /// This follows from the calculation `7 * 1725656503 = 6*(2^31 - 2^27) + 1 = 1 mod (p - 1)`.
-    fn exp_root_d<FA: PrimeCharacteristicRing>(val: FA) -> FA {
+    fn exp_root_d<R: PrimeCharacteristicRing>(val: R) -> R {
         // We use a custom addition chain.
         // This could possibly by further optimised.
         exp_1725656503(val)

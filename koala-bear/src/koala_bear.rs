@@ -61,7 +61,7 @@ impl RelativelyPrimePower<3> for KoalaBearParameters {
     /// In the field `KoalaBear`, `a^{1/3}` is equal to a^{1420470955}.
     ///
     /// This follows from the calculation `3 * 1420470955 = 2*(2^31 - 2^24) + 1 = 1 mod (p - 1)`.
-    fn exp_root_d<FA: PrimeCharacteristicRing>(val: FA) -> FA {
+    fn exp_root_d<R: PrimeCharacteristicRing>(val: R) -> R {
         // We use a custom addition chain.
         // This could possibly by further optimised.
         exp_1420470955(val)

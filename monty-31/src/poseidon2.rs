@@ -33,9 +33,9 @@ pub trait InternalLayerBaseParameters<MP: MontyParameters, const WIDTH: usize>:
     /// Perform the internal matrix multiplication for any Abstract field
     /// which implements multiplication by MontyField31 elements.
     fn generic_internal_linear_layer<
-        FA: PrimeCharacteristicRing + Mul<MontyField31<MP>, Output = FA>,
+        R: PrimeCharacteristicRing + Mul<MontyField31<MP>, Output = R>,
     >(
-        state: &mut [FA; WIDTH],
+        state: &mut [R; WIDTH],
     );
 }
 
@@ -135,16 +135,16 @@ pub struct GenericPoseidon2LinearLayersMonty31<FP, ILBP> {
     _phantom2: PhantomData<ILBP>,
 }
 
-impl<FP, FA, ILBP, const WIDTH: usize> GenericPoseidon2LinearLayers<FA, WIDTH>
+impl<FP, R, ILBP, const WIDTH: usize> GenericPoseidon2LinearLayers<R, WIDTH>
     for GenericPoseidon2LinearLayersMonty31<FP, ILBP>
 where
     FP: FieldParameters,
-    FA: PrimeCharacteristicRing + Mul<MontyField31<FP>, Output = FA>,
+    R: PrimeCharacteristicRing + Mul<MontyField31<FP>, Output = R>,
     ILBP: InternalLayerBaseParameters<FP, WIDTH>,
 {
     /// Perform the external matrix multiplication for any Abstract field
     /// which implements multiplication by MontyField31 elements.
-    fn internal_linear_layer(state: &mut [FA; WIDTH]) {
+    fn internal_linear_layer(state: &mut [R; WIDTH]) {
         ILBP::generic_internal_linear_layer(state);
     }
 }

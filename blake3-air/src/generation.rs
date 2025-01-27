@@ -215,21 +215,21 @@ fn verifiable_half_round(
     (a, b, c, d)
 }
 
-fn save_state_to_trace<FA: PrimeCharacteristicRing>(
-    trace: &mut Blake3State<FA>,
+fn save_state_to_trace<R: PrimeCharacteristicRing>(
+    trace: &mut Blake3State<R>,
     state: &[[u32; 4]; 4],
 ) {
     trace.row0 = array::from_fn(|i| {
         [
-            FA::from_u16(state[0][i] as u16), // Store the bottom 16 bits packed.
-            FA::from_u16((state[0][i] >> 16) as u16), // Store the top 16 bits packed.
+            R::from_u16(state[0][i] as u16), // Store the bottom 16 bits packed.
+            R::from_u16((state[0][i] >> 16) as u16), // Store the top 16 bits packed.
         ]
     });
     trace.row1 = array::from_fn(|i| u32_to_bits_le(state[1][i])); // Store all 32 bits unpacked.
     trace.row2 = array::from_fn(|i| {
         [
-            FA::from_u16(state[2][i] as u16), // Store the bottom 16 bits packed.
-            FA::from_u16((state[2][i] >> 16) as u16), // Store the top 16 bits packed.
+            R::from_u16(state[2][i] as u16), // Store the bottom 16 bits packed.
+            R::from_u16((state[2][i] >> 16) as u16), // Store the top 16 bits packed.
         ]
     });
     trace.row3 = array::from_fn(|i| u32_to_bits_le(state[3][i])); // Store all 32 bits unpacked.

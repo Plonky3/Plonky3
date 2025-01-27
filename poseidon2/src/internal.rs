@@ -29,7 +29,7 @@
 
 use alloc::vec::Vec;
 
-use p3_field::{Field, Algebra, InjectiveMonomial, PrimeCharacteristicRing};
+use p3_field::{Algebra, Field, InjectiveMonomial, PrimeCharacteristicRing};
 
 use crate::add_rc_and_sbox_generic;
 
@@ -44,15 +44,11 @@ where
 }
 
 /// Given a vector v compute the matrix vector product (1 + diag(v))state with 1 denoting the constant matrix of ones.
-pub fn matmul_internal<
-    F: Field,
-    FA: Algebra<F> + PrimeCharacteristicRing,
-    const WIDTH: usize,
->(
-    state: &mut [FA; WIDTH],
+pub fn matmul_internal<F: Field, R: Algebra<F> + PrimeCharacteristicRing, const WIDTH: usize>(
+    state: &mut [R; WIDTH],
     mat_internal_diag_m_1: [F; WIDTH],
 ) {
-    let sum: FA = state.iter().cloned().sum();
+    let sum: R = state.iter().cloned().sum();
     for i in 0..WIDTH {
         state[i] *= mat_internal_diag_m_1[i];
         state[i] += sum.clone();
@@ -60,12 +56,12 @@ pub fn matmul_internal<
 }
 
 /// A trait containing all data needed to implement the internal layers of Poseidon2.
-pub trait InternalLayer<FA, const WIDTH: usize, const D: u64>: Sync + Clone
+pub trait InternalLayer<R, const WIDTH: usize, const D: u64>: Sync + Clone
 where
-    FA: PrimeCharacteristicRing,
+    R: PrimeCharacteristicRing,
 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
-    fn permute_state(&self, state: &mut [FA; WIDTH]);
+    fn permute_state(&self, state: &mut [R; WIDTH]);
 }
 
 /// A helper method which allows any field to easily implement Internal Layer.
@@ -73,12 +69,12 @@ where
 #[inline]
 pub fn internal_permute_state<
     F: Field,
-    FA: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<D>,
+    R: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<D>,
     const WIDTH: usize,
     const D: u64,
 >(
-    state: &mut [FA; WIDTH],
-    diffusion_mat: fn(&mut [FA; WIDTH]),
+    state: &mut [R; WIDTH],
+    diffusion_mat: fn(&mut [R; WIDTH]),
     internal_constants: &[F],
 ) {
     for elem in internal_constants.iter() {
@@ -90,7 +86,7 @@ pub fn internal_permute_state<
 /// The compiler doesn't realize that add is associative
 /// so we help it out and minimize the dependency chains by hand.
 #[inline(always)]
-fn sum_7<FA: PrimeCharacteristicRing + Copy>(state: &[FA]) -> FA {
+fn sum_7<R: PrimeCharacteristicRing + Copy>(state: &[R]) -> R {
     assert_eq!(state.len(), 7);
 
     let s01 = state[0] + state[1];
@@ -105,7 +101,7 @@ fn sum_7<FA: PrimeCharacteristicRing + Copy>(state: &[FA]) -> FA {
 /// The compiler doesn't realize that add is associative
 /// so we help it out and minimize the dependency chains by hand.
 #[inline(always)]
-fn sum_8<FA: PrimeCharacteristicRing + Copy>(state: &[FA]) -> FA {
+fn sum_8<R: PrimeCharacteristicRing + Copy>(state: &[R]) -> R {
     assert_eq!(state.len(), 8);
 
     let s01 = state[0] + state[1];
@@ -121,7 +117,7 @@ fn sum_8<FA: PrimeCharacteristicRing + Copy>(state: &[FA]) -> FA {
 /// The compiler doesn't realize that add is associative
 /// so we help it out and minimize the dependency chains by hand.
 #[inline(always)]
-pub fn sum_15<FA: PrimeCharacteristicRing + Copy>(state: &[FA]) -> FA {
+pub fn sum_15<R: PrimeCharacteristicRing + Copy>(state: &[R]) -> R {
     assert_eq!(state.len(), 15);
 
     let bot_sum = sum_8(&state[..8]);
@@ -133,7 +129,7 @@ pub fn sum_15<FA: PrimeCharacteristicRing + Copy>(state: &[FA]) -> FA {
 /// The compiler doesn't realize that add is associative
 /// so we help it out and minimize the dependency chains by hand.
 #[inline(always)]
-pub fn sum_23<FA: PrimeCharacteristicRing + Copy>(state: &[FA]) -> FA {
+pub fn sum_23<R: PrimeCharacteristicRing + Copy>(state: &[R]) -> R {
     assert_eq!(state.len(), 23);
 
     let bot_sum = sum_8(&state[..8]);

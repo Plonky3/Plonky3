@@ -6,13 +6,11 @@
 //! - A power map x -> x^n.
 //! - Multiplication by an F valued matrix.
 //!
-//! This means that it is possible to define a Poseidon2 over any abstract field FA which has implementations of:
-//! - Add<F, Output = FA>
-//! - Mul<F, Output = FA>
+//! This means that it is possible to define a Poseidon2 over any algebra A over F.
 //!
 //! This file implements the two matrix multiplications methods from which Poseidon2 can be built.
 
-use p3_field::{Field, Algebra, InjectiveMonomial, PrimeCharacteristicRing};
+use p3_field::{Algebra, Field, InjectiveMonomial, PrimeCharacteristicRing};
 
 use crate::{mds_light_permutation, MDSMat4};
 
@@ -25,24 +23,24 @@ use crate::{mds_light_permutation, MDSMat4};
 #[inline(always)]
 pub fn add_rc_and_sbox_generic<
     F: Field,
-    FA: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<D>,
+    R: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<D>,
     const D: u64,
 >(
-    val: &mut FA,
+    val: &mut R,
     rc: F,
 ) {
     *val += rc;
     *val = val.injective_exp_n();
 }
 
-pub trait GenericPoseidon2LinearLayers<FA: PrimeCharacteristicRing, const WIDTH: usize>:
+pub trait GenericPoseidon2LinearLayers<R: PrimeCharacteristicRing, const WIDTH: usize>:
     Sync
 {
     /// A generic implementation of the internal linear layer.
-    fn internal_linear_layer(state: &mut [FA; WIDTH]);
+    fn internal_linear_layer(state: &mut [R; WIDTH]);
 
     /// A generic implementation of the external linear layer.
-    fn external_linear_layer(state: &mut [FA; WIDTH]) {
+    fn external_linear_layer(state: &mut [R; WIDTH]) {
         mds_light_permutation(state, &MDSMat4);
     }
 }

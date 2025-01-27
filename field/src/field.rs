@@ -664,10 +664,10 @@ pub struct Powers<F> {
     pub current: F,
 }
 
-impl<FA: PrimeCharacteristicRing> Iterator for Powers<FA> {
-    type Item = FA;
+impl<R: PrimeCharacteristicRing> Iterator for Powers<R> {
+    type Item = R;
 
-    fn next(&mut self) -> Option<FA> {
+    fn next(&mut self) -> Option<R> {
         let result = self.current.clone();
         self.current *= self.base.clone();
         Some(result)

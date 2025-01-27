@@ -41,18 +41,18 @@ where
 /// NB: This function is a naive implementation of the n²
 /// evaluation. It is a placeholder until we have FFT implementations
 /// for all combinations of field and size.
-pub fn apply_circulant<FA: PrimeCharacteristicRing, const N: usize>(
+pub fn apply_circulant<R: PrimeCharacteristicRing, const N: usize>(
     circ_matrix: &[u64; N],
-    input: [FA; N],
-) -> [FA; N] {
-    let mut matrix: [FA; N] = circ_matrix.map(FA::from_u64);
+    input: [R; N],
+) -> [R; N] {
+    let mut matrix: [R; N] = circ_matrix.map(R::from_u64);
 
-    let mut output = array::from_fn(|_| FA::ZERO);
+    let mut output = array::from_fn(|_| R::ZERO);
     for out_i in output.iter_mut().take(N - 1) {
-        *out_i = FA::dot_product(&matrix, &input);
+        *out_i = R::dot_product(&matrix, &input);
         matrix.rotate_right(1);
     }
-    output[N - 1] = FA::dot_product(&matrix, &input);
+    output[N - 1] = R::dot_product(&matrix, &input);
     output
 }
 

@@ -84,7 +84,7 @@ pub trait FieldParameters: PackedMontyParameters + Sized {
 pub trait RelativelyPrimePower<const D: u64> {
     /// Compute `x -> x^{1/D}` using the modular inverse
     /// of `D mod p - 1`.
-    fn exp_root_d<FA: PrimeCharacteristicRing>(val: FA) -> FA;
+    fn exp_root_d<R: PrimeCharacteristicRing>(val: R) -> R;
 }
 
 /// TwoAdicData contains constants needed to imply TwoAdicField for Monty31 fields.
