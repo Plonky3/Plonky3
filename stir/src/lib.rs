@@ -21,6 +21,9 @@ mod proximity_gaps;
 mod utils;
 pub mod verifier;
 
+#[cfg(test)]
+pub mod test_utils;
+
 pub use config::{StirConfig, StirParameters};
 pub use proof::StirProof;
 pub use proximity_gaps::*;

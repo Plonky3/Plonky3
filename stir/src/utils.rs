@@ -84,7 +84,7 @@ pub(crate) fn multiply_by_power_polynomial<F: Field>(
     Polynomial::from_coeffs(new_coeffs)
 }
 
-fn fold_evaluations<F: TwoAdicField>(
+pub fn fold_evaluations<F: TwoAdicField>(
     evals: Vec<F>,
     point_root: F,
     log_arity: usize,
@@ -167,19 +167,19 @@ mod tests {
     use super::*;
     use crate::{coset::Radix2Coset, polynomial::rand_poly};
 
-    type F = BabyBear;
+    type BB = BabyBear;
 
     #[test]
     fn test_fold_polynomial() {
-        let polynomial = Polynomial::<F>::from_coeffs(vec![F::ONE; 16]);
-        let folding_randomness = F::from_canonical_u32(3);
+        let polynomial = Polynomial::<BB>::from_coeffs(vec![BB::ONE; 16]);
+        let folding_randomness = BB::from_canonical_u32(3);
 
         // log_folding_factor = 1
         assert_eq!(
             fold_polynomial(&polynomial, folding_randomness, 1).coeffs(),
             vec![4, 4, 4, 4, 4, 4, 4, 4]
                 .into_iter()
-                .map(F::from_canonical_u32)
+                .map(BB::from_canonical_u32)
                 .collect_vec()
         );
 
@@ -188,7 +188,7 @@ mod tests {
             fold_polynomial(&polynomial, folding_randomness, 2).coeffs(),
             vec![40, 40, 40, 40]
                 .into_iter()
-                .map(F::from_canonical_u32)
+                .map(BB::from_canonical_u32)
                 .collect_vec()
         );
     }
@@ -202,10 +202,10 @@ mod tests {
 
         let mut rng = rand::thread_rng();
 
-        let folding_randomness: F = rng.gen();
+        let folding_randomness: BB = rng.gen();
 
         let folds = (0..folding_factor)
-            .map(|_| rand_poly::<F>(fold_degree - 1))
+            .map(|_| rand_poly::<BB>(fold_degree - 1))
             .collect_vec();
 
         let powers_of_x = iter::successors(Some(Polynomial::one()), |p| Some(&Polynomial::x() * p))
@@ -222,7 +222,7 @@ mod tests {
                 &acc + &(&raised_fold * power_of_x)
             });
 
-        let powers_of_r = iter::successors(Some(F::ONE), |&x| Some(x * folding_randomness))
+        let powers_of_r = iter::successors(Some(BB::ONE), |&x| Some(x * folding_randomness))
             .take(folding_factor)
             .collect_vec();
 
@@ -244,7 +244,7 @@ mod tests {
         let degree_power_polynomial = 6;
 
         let mut rng = rand::thread_rng();
-        let coeff: F = rng.gen();
+        let coeff: BB = rng.gen();
         let polynomial = rand_poly(degree_polynomial);
 
         let expected = &Polynomial::power_polynomial(coeff, degree_power_polynomial) * &polynomial;
@@ -257,8 +257,12 @@ mod tests {
 
     macro_rules! test_fold_evals_with_log_arity {
         ($log_arity:expr, $polynomial:expr, $folding_randomness:expr) => {{
-            let domain = Radix2Coset::new(F::two_adic_generator(10), $log_arity);
-            let evaluations = domain.evaluate_polynomial(&$polynomial);
+            let mut rng = rand::thread_rng();
+            let domain = Radix2Coset::new(rng.gen(), $log_arity);
+            let evaluations = domain
+                .iter()
+                .map(|x| $polynomial.evaluate(&x))
+                .collect_vec();
             let folded_evaluation = fold_evaluations(
                 evaluations,
                 domain.shift(),
@@ -269,7 +273,9 @@ mod tests {
             let folded_polynomial = fold_polynomial(&$polynomial, $folding_randomness, $log_arity);
             assert_eq!(
                 folded_evaluation,
-                folded_polynomial.evaluate(&domain.shift().exp_power_of_2($log_arity))
+                folded_polynomial.evaluate(&domain.shift().exp_power_of_2($log_arity)),
+                "log_arity = {}",
+                $log_arity
             );
         }};
     }
@@ -278,10 +284,59 @@ mod tests {
     fn test_fold_evaluations() {
         let polynomial = rand_poly(1 << 10 - 1);
         let rng = &mut rand::thread_rng();
-        let folding_randomness: F = rng.gen();
+        let folding_randomness: BB = rng.gen();
 
         for log_arity in 1..10 {
             test_fold_evals_with_log_arity!(log_arity, polynomial, folding_randomness)
         }
+    }
+
+    #[test]
+    fn test_fold_evaluations_binary() {
+        let log_domain_size = 4;
+        let poly_deg = 7;
+
+        let rng = &mut rand::thread_rng();
+
+        let polynomial = rand_poly(poly_deg);
+
+        // Folding coefficient
+        let c = rng.gen();
+
+        // Points with the same 16-th power
+        let point_root: BB = rng.gen();
+        let point = point_root.exp_power_of_2(log_domain_size);
+        let omega = BB::two_adic_generator(log_domain_size);
+        let roots = iterate(point_root, |&x| x * omega)
+            .take(1 << log_domain_size)
+            .collect_vec();
+
+        assert!(roots
+            .iter()
+            .all(|&x| x.exp_power_of_2(log_domain_size) == point));
+
+        // Folding evaluations using the method
+        let gammas = roots[0..(1 << log_domain_size) / 2]
+            .iter()
+            .map(|&root| c * root.inverse())
+            .collect_vec();
+        let evals = roots
+            .iter()
+            .map(|&root| polynomial.evaluate(&root))
+            .collect_vec();
+        let folded_evals = fold_evaluations_binary(evals.clone(), &gammas);
+
+        // Computing folded evaluations by hand
+        let folded_poly = fold_polynomial(&polynomial, c, 1);
+        let roots_squared = roots[0..(1 << log_domain_size) / 2]
+            .iter()
+            .map(|&root| root.square())
+            .collect_vec();
+        let expected_folded_evals = roots_squared
+            .iter()
+            .map(|root| folded_poly.evaluate(root))
+            .collect_vec();
+
+        assert_eq!(folded_evals, expected_folded_evals);
     }
 }

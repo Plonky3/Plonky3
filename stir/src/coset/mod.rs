@@ -151,6 +151,9 @@ impl<F: TwoAdicField> Radix2Coset<F> {
     }
 
     pub fn evaluate_polynomial(&self, polynomial: &Polynomial<F>) -> Vec<F> {
+        // NP TODO
+        assert!(polynomial.degree() < (1 << self.log_size), "TODO");
+
         let mut coeffs = polynomial.coeffs().to_vec();
         coeffs.resize(1 << self.log_size, F::ZERO);
         let dft = NaiveDft.coset_dft(coeffs, self.shift);

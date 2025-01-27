@@ -117,7 +117,7 @@ where
     let (mut witness, commitment) = commit(config, polynomial);
 
     // Observe the commitment
-    challenger.observe(commitment);
+    challenger.observe(commitment.clone());
     let folding_randomness = challenger.sample_ext_element();
 
     // NP TODO: Handle more elegantly?
@@ -165,6 +165,7 @@ where
     let pow_witness = challenger.grind(config.final_pow_bits().ceil() as usize);
 
     StirProof {
+        commitment,
         round_proofs,
         final_polynomial,
         pow_witness,

@@ -12,6 +12,8 @@ use crate::polynomial::Polynomial;
     deserialize = "Witness: Deserialize<'de>, RoundProof<F, M, Witness>: Deserialize<'de>, Polynomial<F>: Deserialize<'de>"
 ))]
 pub struct StirProof<F: Field, M: Mmcs<F>, Witness> {
+    // NP TODO move commitment, possibly split commit() and prove()
+    pub(crate) commitment: M::Commitment,
     pub(crate) round_proofs: Vec<RoundProof<F, M, Witness>>,
     pub(crate) final_polynomial: Polynomial<F>,
     pub(crate) pow_witness: Witness,
@@ -50,4 +52,10 @@ pub struct RoundProof<F: Field, M: Mmcs<F>, Witness> {
 
     // Solution to the PoW challenge in round i
     pub(crate) pow_witness: Witness,
+}
+
+impl<F: Field, M: Mmcs<F>, Witness> StirProof<F, M, Witness> {
+    pub fn commitment(&self) -> &M::Commitment {
+        &self.commitment
+    }
 }
