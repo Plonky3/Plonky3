@@ -433,9 +433,8 @@ pub trait PermutationMonomial<const N: u64>: InjectiveMonomial<N> {
 /// Such maps are known as ring homomorphisms and are injective if the
 /// only element which maps to `R::ZERO` is `F::ZERO`.
 ///
-/// The existence of this map makes `R` into an `F`-module. If `F` is a field
-/// then this makes `R` into an `F`-Algebra and if `R` is also a field then
-/// this means that `R` is a field extension of `F`.
+/// The existence of this map makes `R` into an `F`-module and hence an `F`-algebra, 
+/// and if moreover `R` is a field, then `R` is a field extension of `F`.
 pub trait FieldAlgebra<F>:
     From<F>
     + Add<F, Output = Self>
