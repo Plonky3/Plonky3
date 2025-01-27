@@ -4,7 +4,7 @@ use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{Field, Algebra, InjectiveMonomial, PrimeCharacteristicRing};
+use p3_field::{Algebra, Field, InjectiveMonomial, PrimeCharacteristicRing};
 
 use crate::symbolic_variable::SymbolicVariable;
 
