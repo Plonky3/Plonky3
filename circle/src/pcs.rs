@@ -164,6 +164,37 @@ where
         )>,
         challenger: &mut Challenger,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
+        // Open matrices at points
+        let values: OpenedValues<Challenge> = rounds
+            .iter()
+            .map(|(data, points_for_mats)| {
+                let mats = self.mmcs.get_matrices(data);
+                izip!(mats, points_for_mats)
+                    .map(|(mat, points_for_mat)| {
+                        let log_height = log2_strict_usize(mat.height());
+                        // It was committed in cfft order.
+                        let evals = CircleEvaluations::from_cfft_order(
+                            CircleDomain::standard(log_height),
+                            mat.as_view(),
+                        );
+                        points_for_mat
+                            .iter()
+                            .map(|&zeta| {
+                                let zeta = Point::from_projective_line(zeta);
+                                let ps_at_zeta =
+                                    info_span!("compute opened values with Lagrange interpolation")
+                                        .in_scope(|| evals.evaluate_at_point(zeta));
+                                ps_at_zeta
+                                    .iter()
+                                    .for_each(|&p| challenger.observe_ext_element(p));
+                                ps_at_zeta
+                            })
+                            .collect()
+                    })
+                    .collect()
+            })
+            .collect();
+
         // Batch combination challenge
         let alpha: Challenge = challenger.sample_ext_element();
 
@@ -180,57 +211,46 @@ where
         // log_height -> (alpha offset, reduced openings column)
         let mut reduced_openings: BTreeMap<usize, (Challenge, Vec<Challenge>)> = BTreeMap::new();
 
-        let values: OpenedValues<Challenge> = rounds
+        rounds
             .iter()
-            .map(|(data, points_for_mats)| {
+            .zip(values.iter())
+            .for_each(|((data, points_for_mats), values)| {
                 let mats = self.mmcs.get_matrices(data);
-                izip!(mats, points_for_mats)
-                    .map(|(mat, points_for_mat)| {
-                        let log_height = log2_strict_usize(mat.height());
-                        // It was committed in cfft order.
-                        let evals = CircleEvaluations::from_cfft_order(
-                            CircleDomain::standard(log_height),
-                            mat.as_view(),
-                        );
+                izip!(mats, points_for_mats, values).for_each(|(mat, points_for_mat, values)| {
+                    let log_height = log2_strict_usize(mat.height());
+                    // It was committed in cfft order.
+                    let evals = CircleEvaluations::from_cfft_order(
+                        CircleDomain::standard(log_height),
+                        mat.as_view(),
+                    );
 
-                        let (alpha_offset, reduced_opening_for_log_height) =
-                            reduced_openings.entry(log_height).or_insert_with(|| {
-                                (Challenge::ONE, vec![Challenge::ZERO; 1 << log_height])
-                            });
+                    let (alpha_offset, reduced_opening_for_log_height) =
+                        reduced_openings.entry(log_height).or_insert_with(|| {
+                            (Challenge::ONE, vec![Challenge::ZERO; 1 << log_height])
+                        });
 
-                        points_for_mat
-                            .iter()
-                            .map(|&zeta| {
-                                let zeta = Point::from_projective_line(zeta);
+                    points_for_mat
+                        .iter()
+                        .zip(values.iter())
+                        .for_each(|(&zeta, ps_at_zeta)| {
+                            let zeta = Point::from_projective_line(zeta);
 
-                                // Staying in evaluation form, we lagrange interpolate to get the value of
-                                // each p at zeta.
-                                // todo: we only need half of the values to interpolate, but how?
-                                let ps_at_zeta: Vec<Challenge> =
-                                    info_span!("compute opened values with Lagrange interpolation")
-                                        .in_scope(|| evals.evaluate_at_point(zeta));
+                            // Reduce this matrix, as a deep quotient, into one column with powers of α.
+                            let mat_ros = evals.deep_quotient_reduce(alpha, zeta, ps_at_zeta);
 
-                                // Reduce this matrix, as a deep quotient, into one column with powers of α.
-                                let mat_ros = evals.deep_quotient_reduce(alpha, zeta, &ps_at_zeta);
+                            // Fold it into our running reduction, offset by alpha_offset.
+                            reduced_opening_for_log_height
+                                .par_iter_mut()
+                                .zip(mat_ros)
+                                .for_each(|(ro, mat_ro)| {
+                                    *ro += *alpha_offset * mat_ro;
+                                });
 
-                                // Fold it into our running reduction, offset by alpha_offset.
-                                reduced_opening_for_log_height
-                                    .par_iter_mut()
-                                    .zip(mat_ros)
-                                    .for_each(|(ro, mat_ro)| {
-                                        *ro += *alpha_offset * mat_ro;
-                                    });
-
-                                // Update alpha_offset from α^i -> α^(i + 2 * width)
-                                *alpha_offset *= alpha.exp_u64(2 * evals.values.width() as u64);
-
-                                ps_at_zeta
-                            })
-                            .collect()
-                    })
-                    .collect()
-            })
-            .collect();
+                            // Update alpha_offset from α^i -> α^(i + 2 * width)
+                            *alpha_offset *= alpha.exp_u64(2 * evals.values.width() as u64);
+                        });
+                });
+            });
 
         // Iterate over our reduced columns and extract lambda - the multiple of the vanishing polynomial
         // which may appear in the reduced quotient due to CFFT dimension gap.
@@ -344,6 +364,17 @@ where
         proof: &Self::Proof,
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
+        // Write evaluations to challenger
+        for (_, round) in rounds.iter() {
+            for (_, mat) in round.iter() {
+                for (_, point) in mat.iter() {
+                    point
+                        .iter()
+                        .for_each(|&opening| challenger.observe_ext_element(opening));
+                }
+            }
+        }
+
         // Batch combination challenge
         let alpha: Challenge = challenger.sample_ext_element();
         challenger.observe(proof.first_layer_commitment.clone());
