@@ -659,7 +659,7 @@ pub fn cubic_square<
 ) {
     assert_eq!(D, 3);
 
-    let w_a2 = a[2].clone() * Into::<FA>::into(F::W);
+    let w_a2 = a[2].clone() * F::W;
 
     res[0] = a[0].square() + (a[1].clone() * w_a2.clone()).double();
     res[1] = w_a2 * a[2].clone() + (a[0].clone() * a[1].clone()).double();
