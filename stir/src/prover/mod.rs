@@ -265,7 +265,7 @@ where
     // Sample folding randomness for the next round
     let new_folding_randomness = challenger.sample_ext_element();
 
-    // Sample queried indices of elements in L_{i - 1}^k_{i-1}
+    // Sample queried indices of elements in L_{i - 1}^k_{i - 1}
     let log_query_domain_size = domain.log_size() - log_folding_factor;
 
     let queried_indices: Vec<u64> = (0..num_queries)

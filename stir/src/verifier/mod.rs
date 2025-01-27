@@ -4,8 +4,8 @@ use core::convert::TryInto;
 use core::iter;
 use p3_matrix::Dimensions;
 
-use itertools::iterate;
 use itertools::Itertools;
+use itertools::{iterate, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::TwoAdicField;
@@ -227,11 +227,20 @@ where
     );
 
     // Compute the evaluations of p (which one could call g_{M + 1}) given those of f_M
-    let p_evals = compute_folded_evaluations(
-        &verification_state,
-        final_randomness_indexes,
-        final_oracle_answers,
-    );
+
+    // let p_evals = compute_folded_evaluations(
+    //     f_m,
+    //     final_queried_indices.into_iter().map(|i| domain.element(i)).collect_vec(),
+    //     log_arity: usize,
+    //     c: F,
+    //     omega: F
+    // );
+
+    // let p_evals = compute_folded_evaluations(
+    //     &verification_state,
+    //     final_randomness_indexes,
+    //     final_oracle_answers,
+    // );
 
     if !folded_answers
         .into_iter()
@@ -454,11 +463,25 @@ fn compute_f_oracle_from_g<F: TwoAdicField>(
         .collect_vec()
 }
 
+// Let p_1, ..., p_n be a list of points. For each p_i, given the evaluations of
+// a polynomial h at the set of points
+//   Y_i = {y in F: y^(arity) = p_i^(arity)},
+// compute Fold(h, arity, c)(p_i^(arity)).
 fn compute_folded_evaluations<F: TwoAdicField>(
-    oracle: &Oracle<F>,
-    previous_f_values: Vec<Vec<F>>,
-    verification_state: VerificationState<F>,
-    queried_indices: Vec<u64>,
+    // The i-th element is the list of evaluations of h at Y_i
+    unfolded_evaluation_lists: Vec<Vec<F>>,
+    // The list of p_i's
+    point_roots: Vec<F>,
+    // The folding arity is 2 raised to this value
+    log_arity: usize,
+    // The folding coefficient
+    c: F,
+    // Canonical generator of the subgroup of arity-th roots of unity in F
+    omega: F,
 ) -> Vec<F> {
-    todo!()
+    unfolded_evaluation_lists
+        .into_iter()
+        .zip(point_roots.into_iter())
+        .map(|(evals, point_root)| fold_evaluations(evals, point_root, log_arity, omega, c))
+        .collect()
 }

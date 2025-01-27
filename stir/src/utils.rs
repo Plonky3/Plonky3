@@ -1,7 +1,7 @@
 use core::iter;
 
 use crate::polynomial::Polynomial;
-use itertools::Itertools;
+use itertools::{iterate, izip, Itertools};
 use p3_field::{Field, TwoAdicField};
 
 pub(crate) fn compute_pow(security_level: usize, error: f64) -> f64 {
@@ -84,6 +84,76 @@ pub(crate) fn multiply_by_power_polynomial<F: Field>(
     Polynomial::from_coeffs(new_coeffs)
 }
 
+fn fold_evaluations<F: TwoAdicField>(
+    evals: Vec<F>,
+    point_root: F,
+    log_arity: usize,
+    // Generator of the coset whose evaluations we are receiving
+    omega: F,
+    c: F,
+) -> F {
+    // Let Fold2(g, b) denote the binary (i. e. arity = one) folding of g with
+    // coefficient b. Then
+    //   Fold(h, 2^arity, coeff) = Fold2(..., Fold2(h, c), c^2, c^4, ..., )
+    // where the ellipses denote the arity-fold composition of Fold2.
+
+    // NP TODO remove or change to dbg assert
+
+    let arity = 1 << log_arity;
+    assert!(evals.len() == arity);
+
+    // We first construct the list "gammas" of values y_j * c, where y_j runs over half the
+    // y_j in Y (i. e. the list of points whose arity-th power is
+    // point_root^(arity)). For each {y_j, -y_j} in Y, we only store one of
+    // the two. If w is a generator of the unique subgroup of units(F) of order
+    // = arity, the list "gammas" has the form
+    // {
+    //   c * point_root^(-1),
+    //   c * (point_root * w)^(-1),
+    //   ...,
+    //   c * (point_root * w^(arity/2 - 1))^(-1)
+    // }
+
+    let inv_point_root = point_root.inverse();
+    let inv_omega = omega.inverse();
+
+    let mut gammas = iterate(inv_point_root * c, |&x| x * inv_omega)
+        .take(arity / 2)
+        .collect_vec();
+
+    let mut result = evals;
+
+    while result.len() > 1 {
+        result = fold_evaluations_binary(result, &gammas);
+        gammas = gammas[..(gammas.len() / 2)]
+            .iter()
+            .map(|&gamma| gamma.square())
+            .collect_vec();
+    }
+
+    result.pop().unwrap()
+}
+
+fn fold_evaluations_binary<F: TwoAdicField>(
+    evals: Vec<F>,
+    // NP TODO think if gammas can be an iter
+    gammas: &[F],
+) -> Vec<F> {
+    let cutoff = evals.len() / 2;
+    let low_evals = evals[..cutoff].iter();
+    let high_evals = evals[cutoff..].iter();
+
+    izip!(low_evals, high_evals, gammas.iter())
+        .map(|(&eval, &eval_inv, &gamma)| fold_evaluation_pair(eval, eval_inv, gamma))
+        .collect_vec()
+}
+
+fn fold_evaluation_pair<F: TwoAdicField>(eval: F, eval_inv: F, gamma: F) -> F {
+    // TODO two inverse
+    let inv_two = F::TWO.inverse();
+    inv_two * ((F::ONE + gamma) * eval + (F::ONE - gamma) * eval_inv)
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -95,7 +165,7 @@ mod tests {
     use rand::Rng;
 
     use super::*;
-    use crate::polynomial::rand_poly;
+    use crate::{coset::Radix2Coset, polynomial::rand_poly};
 
     type F = BabyBear;
 
@@ -183,5 +253,35 @@ mod tests {
             multiply_by_power_polynomial(&polynomial, coeff, degree_power_polynomial),
             expected
         );
+    }
+
+    macro_rules! test_fold_evals_with_log_arity {
+        ($log_arity:expr, $polynomial:expr, $folding_randomness:expr) => {{
+            let domain = Radix2Coset::new(F::two_adic_generator(10), $log_arity);
+            let evaluations = domain.evaluate_polynomial(&$polynomial);
+            let folded_evaluation = fold_evaluations(
+                evaluations,
+                domain.shift(),
+                $log_arity,
+                domain.generator(),
+                $folding_randomness,
+            );
+            let folded_polynomial = fold_polynomial(&$polynomial, $folding_randomness, $log_arity);
+            assert_eq!(
+                folded_evaluation,
+                folded_polynomial.evaluate(&domain.shift().exp_power_of_2($log_arity))
+            );
+        }};
+    }
+
+    #[test]
+    fn test_fold_evaluations() {
+        let polynomial = rand_poly(1 << 10 - 1);
+        let rng = &mut rand::thread_rng();
+        let folding_randomness: F = rng.gen();
+
+        for log_arity in 1..10 {
+            test_fold_evals_with_log_arity!(log_arity, polynomial, folding_randomness)
+        }
     }
 }
