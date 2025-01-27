@@ -9,7 +9,7 @@
 //! Long term we will use more optimised internal and external linear layers.
 use alloc::vec::Vec;
 
-use p3_field::{FieldAlgebra, InjectiveMonomial, PrimeCharacteristicRing};
+use p3_field::{Algebra, InjectiveMonomial, PrimeCharacteristicRing};
 use p3_poseidon2::{
     add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
     internal_permute_state, matmul_internal, ExternalLayer, ExternalLayerConstants,
@@ -132,7 +132,7 @@ impl InternalLayerConstructor<Goldilocks> for Poseidon2InternalLayerGoldilocks {
 }
 
 impl<
-        FA: FieldAlgebra<Goldilocks>
+        FA: Algebra<Goldilocks>
             + PrimeCharacteristicRing
             + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>,
     > InternalLayer<FA, 8, GOLDILOCKS_S_BOX_DEGREE> for Poseidon2InternalLayerGoldilocks
@@ -148,7 +148,7 @@ impl<
 }
 
 impl<
-        FA: FieldAlgebra<Goldilocks>
+        FA: Algebra<Goldilocks>
             + PrimeCharacteristicRing
             + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>,
     > InternalLayer<FA, 12, GOLDILOCKS_S_BOX_DEGREE> for Poseidon2InternalLayerGoldilocks
@@ -164,7 +164,7 @@ impl<
 }
 
 impl<
-        FA: FieldAlgebra<Goldilocks>
+        FA: Algebra<Goldilocks>
             + PrimeCharacteristicRing
             + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>,
     > InternalLayer<FA, 16, GOLDILOCKS_S_BOX_DEGREE> for Poseidon2InternalLayerGoldilocks
@@ -180,7 +180,7 @@ impl<
 }
 
 impl<
-        FA: FieldAlgebra<Goldilocks>
+        FA: Algebra<Goldilocks>
             + PrimeCharacteristicRing
             + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>,
     > InternalLayer<FA, 20, GOLDILOCKS_S_BOX_DEGREE> for Poseidon2InternalLayerGoldilocks
@@ -211,7 +211,7 @@ impl<const WIDTH: usize> ExternalLayerConstructor<Goldilocks, WIDTH>
 
 impl<
         FA: PrimeCharacteristicRing
-            + FieldAlgebra<Goldilocks>
+            + Algebra<Goldilocks>
             + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>,
         const WIDTH: usize,
     > ExternalLayer<FA, WIDTH, GOLDILOCKS_S_BOX_DEGREE>
@@ -254,7 +254,7 @@ impl<const WIDTH: usize> ExternalLayerConstructor<Goldilocks, WIDTH>
 
 impl<
         FA: PrimeCharacteristicRing
-            + FieldAlgebra<Goldilocks>
+            + Algebra<Goldilocks>
             + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>,
         const WIDTH: usize,
     > ExternalLayer<FA, WIDTH, GOLDILOCKS_S_BOX_DEGREE>

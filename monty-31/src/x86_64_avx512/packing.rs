@@ -7,7 +7,7 @@ use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::{
-    Field, FieldAlgebra, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
+    Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
     PermutationMonomial, PrimeCharacteristicRing,
 };
 use p3_util::convert_vec;
@@ -648,7 +648,7 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX512<F
     }
 }
 
-impl<FP: FieldParameters> FieldAlgebra<MontyField31<FP>> for PackedMontyField31AVX512<FP> {}
+impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31AVX512<FP> {}
 
 impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> InjectiveMonomial<D>
     for PackedMontyField31AVX512<FP>

@@ -8,7 +8,7 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::{
-    Field, FieldAlgebra, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
+    Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
     PermutationMonomial, PrimeCharacteristicRing, PrimeField64,
 };
 use p3_util::convert_vec;
@@ -184,7 +184,7 @@ impl PrimeCharacteristicRing for PackedGoldilocksAVX512 {
     }
 }
 
-impl FieldAlgebra<Goldilocks> for PackedGoldilocksAVX512 {}
+impl Algebra<Goldilocks> for PackedGoldilocksAVX512 {}
 
 // Degree of the smallest permutation polynomial for Goldilocks.
 //

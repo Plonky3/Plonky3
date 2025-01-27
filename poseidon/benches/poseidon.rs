@@ -3,7 +3,7 @@ use std::array;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::{BabyBear, MdsMatrixBabyBear};
-use p3_field::{Field, FieldAlgebra, InjectiveMonomial, PrimeCharacteristicRing, PrimeField};
+use p3_field::{Field, Algebra, InjectiveMonomial, PrimeCharacteristicRing, PrimeField};
 use p3_goldilocks::{Goldilocks, MdsMatrixGoldilocks};
 use p3_mds::coset_mds::CosetMds;
 use p3_mds::MdsPermutation;
@@ -30,7 +30,7 @@ fn bench_poseidon(c: &mut Criterion) {
 fn poseidon<F, FA, Mds, const WIDTH: usize, const ALPHA: u64>(c: &mut Criterion)
 where
     F: PrimeField + InjectiveMonomial<ALPHA>,
-    FA: FieldAlgebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
+    FA: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
     Standard: Distribution<F>,
     Mds: MdsPermutation<FA, WIDTH> + Default,
 {

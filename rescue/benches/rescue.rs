@@ -3,7 +3,7 @@ use std::array;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::{BabyBear, MdsMatrixBabyBear};
-use p3_field::{Field, FieldAlgebra, PermutationMonomial, PrimeCharacteristicRing, PrimeField64};
+use p3_field::{Field, Algebra, PermutationMonomial, PrimeCharacteristicRing, PrimeField64};
 use p3_goldilocks::{Goldilocks, MdsMatrixGoldilocks};
 use p3_mds::integrated_coset_mds::IntegratedCosetMds;
 use p3_mds::MdsPermutation;
@@ -30,7 +30,7 @@ fn bench_rescue(c: &mut Criterion) {
 fn rescue<F, FA, Mds, const WIDTH: usize, const ALPHA: u64>(c: &mut Criterion)
 where
     F: PrimeField64 + PermutationMonomial<ALPHA>,
-    FA: PrimeCharacteristicRing + FieldAlgebra<F> + PermutationMonomial<ALPHA>,
+    FA: PrimeCharacteristicRing + Algebra<F> + PermutationMonomial<ALPHA>,
     Standard: Distribution<F>,
     Mds: MdsPermutation<FA, WIDTH> + Default,
 {

@@ -1,10 +1,10 @@
-use p3_field::{Field, FieldAlgebra, PrimeCharacteristicRing};
+use p3_field::{Field, Algebra, PrimeCharacteristicRing};
 
 /// DIT butterfly.
 #[inline]
 pub(crate) fn dit_butterfly<
     F: Field,
-    FA: PrimeCharacteristicRing + FieldAlgebra<F>,
+    FA: PrimeCharacteristicRing + Algebra<F>,
     const N: usize,
 >(
     values: &mut [FA; N],
@@ -22,7 +22,7 @@ pub(crate) fn dit_butterfly<
 #[inline]
 pub(crate) fn dif_butterfly<
     F: Field,
-    FA: PrimeCharacteristicRing + FieldAlgebra<F>,
+    FA: PrimeCharacteristicRing + Algebra<F>,
     const N: usize,
 >(
     values: &mut [FA; N],
@@ -40,7 +40,7 @@ pub(crate) fn dif_butterfly<
 #[inline]
 pub(crate) fn twiddle_free_butterfly<
     F: Field,
-    FA: PrimeCharacteristicRing + FieldAlgebra<F>,
+    FA: PrimeCharacteristicRing + Algebra<F>,
     const N: usize,
 >(
     values: &mut [FA; N],

@@ -19,7 +19,7 @@ pub use external::*;
 pub use generic::*;
 pub use internal::*;
 use p3_field::{
-    FieldAlgebra, InjectiveMonomial, PrimeCharacteristicRing, PrimeField, PrimeField64,
+    Algebra, InjectiveMonomial, PrimeCharacteristicRing, PrimeField, PrimeField64,
 };
 use p3_symmetric::{CryptographicPermutation, Permutation};
 use rand::distributions::{Distribution, Standard};
@@ -97,7 +97,7 @@ impl<F, FA, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64> Permut
     for Poseidon2<F, ExternalPerm, InternalPerm, WIDTH, D>
 where
     F: PrimeField + InjectiveMonomial<D>,
-    FA: FieldAlgebra<F> + PrimeCharacteristicRing + Sync + InjectiveMonomial<D>,
+    FA: Algebra<F> + PrimeCharacteristicRing + Sync + InjectiveMonomial<D>,
     ExternalPerm: ExternalLayer<FA, WIDTH, D>,
     InternalPerm: InternalLayer<FA, WIDTH, D>,
 {
@@ -112,7 +112,7 @@ impl<F, FA, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>
     CryptographicPermutation<[FA; WIDTH]> for Poseidon2<F, ExternalPerm, InternalPerm, WIDTH, D>
 where
     F: PrimeField + InjectiveMonomial<D>,
-    FA: FieldAlgebra<F> + PrimeCharacteristicRing + Sync + InjectiveMonomial<D>,
+    FA: Algebra<F> + PrimeCharacteristicRing + Sync + InjectiveMonomial<D>,
     ExternalPerm: ExternalLayer<FA, WIDTH, D>,
     InternalPerm: InternalLayer<FA, WIDTH, D>,
 {

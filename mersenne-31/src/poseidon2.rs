@@ -47,7 +47,7 @@ pub type Poseidon2Mersenne31<const WIDTH: usize> = Poseidon2<
 
 /// An implementation of the the matrix multiplications in the internal and external layers of Poseidon2.
 ///
-/// This can act on [FA; WIDTH] for any FieldAlgebra which implements multiplication by Mersenne31 field elements.
+/// This can act on `[A; WIDTH]` for any algebra which implements multiplication by Mersenne31 field elements.
 /// If you have either `[Mersenne31::Packing; WIDTH]` or `[Mersenne31; WIDTH]` it will be much faster
 /// to use `Poseidon2Mersenne31<WIDTH>` instead of building a Poseidon2 permutation using this.
 pub struct GenericPoseidon2LinearLayersMersenne31 {}

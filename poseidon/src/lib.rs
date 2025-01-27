@@ -6,7 +6,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use p3_field::{FieldAlgebra, InjectiveMonomial, PrimeCharacteristicRing, PrimeField};
+use p3_field::{Algebra, InjectiveMonomial, PrimeCharacteristicRing, PrimeField};
 use p3_mds::MdsPermutation;
 use p3_symmetric::{CryptographicPermutation, Permutation};
 use rand::distributions::Standard;
@@ -71,7 +71,7 @@ where
 
     fn half_full_rounds<FA>(&self, state: &mut [FA; WIDTH], round_ctr: &mut usize)
     where
-        FA: FieldAlgebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
+        FA: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
         Mds: MdsPermutation<FA, WIDTH>,
     {
         for _ in 0..self.half_num_full_rounds {
@@ -84,7 +84,7 @@ where
 
     fn partial_rounds<FA>(&self, state: &mut [FA; WIDTH], round_ctr: &mut usize)
     where
-        FA: FieldAlgebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
+        FA: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
         Mds: MdsPermutation<FA, WIDTH>,
     {
         for _ in 0..self.num_partial_rounds {
@@ -97,7 +97,7 @@ where
 
     fn full_sbox_layer<FA>(state: &mut [FA; WIDTH])
     where
-        FA: FieldAlgebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
+        FA: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
     {
         for x in state.iter_mut() {
             *x = x.injective_exp_n();
@@ -106,14 +106,14 @@ where
 
     fn partial_sbox_layer<FA>(state: &mut [FA; WIDTH])
     where
-        FA: FieldAlgebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
+        FA: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
     {
         state[0] = state[0].injective_exp_n();
     }
 
     fn constant_layer<FA>(&self, state: &mut [FA; WIDTH], round: usize)
     where
-        FA: FieldAlgebra<F> + PrimeCharacteristicRing,
+        FA: Algebra<F> + PrimeCharacteristicRing,
     {
         for (i, x) in state.iter_mut().enumerate() {
             *x += self.constants[round * WIDTH + i];
@@ -125,7 +125,7 @@ impl<F, FA, Mds, const WIDTH: usize, const ALPHA: u64> Permutation<[FA; WIDTH]>
     for Poseidon<F, Mds, WIDTH, ALPHA>
 where
     F: PrimeField + InjectiveMonomial<ALPHA>,
-    FA: FieldAlgebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
+    FA: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
     Mds: MdsPermutation<FA, WIDTH>,
 {
     fn permute_mut(&self, state: &mut [FA; WIDTH]) {
@@ -140,7 +140,7 @@ impl<F, FA, Mds, const WIDTH: usize, const ALPHA: u64> CryptographicPermutation<
     for Poseidon<F, Mds, WIDTH, ALPHA>
 where
     F: PrimeField + InjectiveMonomial<ALPHA>,
-    FA: FieldAlgebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
+    FA: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
     Mds: MdsPermutation<FA, WIDTH>,
 {
 }

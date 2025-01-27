@@ -12,7 +12,7 @@
 //!
 //! This file implements the two matrix multiplications methods from which Poseidon2 can be built.
 
-use p3_field::{Field, FieldAlgebra, InjectiveMonomial, PrimeCharacteristicRing};
+use p3_field::{Field, Algebra, InjectiveMonomial, PrimeCharacteristicRing};
 
 use crate::{mds_light_permutation, MDSMat4};
 
@@ -25,7 +25,7 @@ use crate::{mds_light_permutation, MDSMat4};
 #[inline(always)]
 pub fn add_rc_and_sbox_generic<
     F: Field,
-    FA: FieldAlgebra<F> + PrimeCharacteristicRing + InjectiveMonomial<D>,
+    FA: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<D>,
     const D: u64,
 >(
     val: &mut FA,

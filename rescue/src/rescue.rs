@@ -5,7 +5,7 @@ use itertools::Itertools;
 use num::{BigUint, One};
 use num_integer::binomial;
 use p3_field::{
-    FieldAlgebra, PermutationMonomial, PrimeCharacteristicRing, PrimeField, PrimeField64,
+    Algebra, PermutationMonomial, PrimeCharacteristicRing, PrimeField, PrimeField64,
 };
 use p3_mds::MdsPermutation;
 use p3_symmetric::{CryptographicPermutation, Permutation};
@@ -103,7 +103,7 @@ impl<F, FA, Mds, const WIDTH: usize, const ALPHA: u64> Permutation<[FA; WIDTH]>
     for Rescue<F, Mds, WIDTH, ALPHA>
 where
     F: PrimeField + PermutationMonomial<ALPHA>,
-    FA: FieldAlgebra<F> + PrimeCharacteristicRing + PermutationMonomial<ALPHA>,
+    FA: Algebra<F> + PrimeCharacteristicRing + PermutationMonomial<ALPHA>,
     Mds: MdsPermutation<FA, WIDTH>,
 {
     fn permute_mut(&self, state: &mut [FA; WIDTH]) {
@@ -143,7 +143,7 @@ impl<F, FA, Mds, const WIDTH: usize, const ALPHA: u64> CryptographicPermutation<
     for Rescue<F, Mds, WIDTH, ALPHA>
 where
     F: PrimeField + PermutationMonomial<ALPHA>,
-    FA: FieldAlgebra<F> + PrimeCharacteristicRing + PermutationMonomial<ALPHA>,
+    FA: Algebra<F> + PrimeCharacteristicRing + PermutationMonomial<ALPHA>,
     Mds: MdsPermutation<FA, WIDTH>,
 {
 }

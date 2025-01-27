@@ -6,7 +6,7 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::exponentiation::exp_1717986917;
 use p3_field::{
-    Field, FieldAlgebra, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
+    Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
     PermutationMonomial, PrimeCharacteristicRing,
 };
 use p3_util::convert_vec;
@@ -463,7 +463,7 @@ impl PrimeCharacteristicRing for PackedMersenne31AVX512 {
     }
 }
 
-impl FieldAlgebra<Mersenne31> for PackedMersenne31AVX512 {}
+impl Algebra<Mersenne31> for PackedMersenne31AVX512 {}
 
 // Degree of the smallest permutation polynomial for Mersenne31.
 //

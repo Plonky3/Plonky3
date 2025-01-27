@@ -29,7 +29,7 @@
 
 use alloc::vec::Vec;
 
-use p3_field::{Field, FieldAlgebra, InjectiveMonomial, PrimeCharacteristicRing};
+use p3_field::{Field, Algebra, InjectiveMonomial, PrimeCharacteristicRing};
 
 use crate::add_rc_and_sbox_generic;
 
@@ -46,7 +46,7 @@ where
 /// Given a vector v compute the matrix vector product (1 + diag(v))state with 1 denoting the constant matrix of ones.
 pub fn matmul_internal<
     F: Field,
-    FA: FieldAlgebra<F> + PrimeCharacteristicRing,
+    FA: Algebra<F> + PrimeCharacteristicRing,
     const WIDTH: usize,
 >(
     state: &mut [FA; WIDTH],
@@ -73,7 +73,7 @@ where
 #[inline]
 pub fn internal_permute_state<
     F: Field,
-    FA: FieldAlgebra<F> + PrimeCharacteristicRing + InjectiveMonomial<D>,
+    FA: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<D>,
     const WIDTH: usize,
     const D: u64,
 >(

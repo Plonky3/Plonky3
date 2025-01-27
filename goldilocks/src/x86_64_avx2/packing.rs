@@ -8,7 +8,7 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::{
-    Field, FieldAlgebra, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
+    Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
     PermutationMonomial, PrimeCharacteristicRing, PrimeField64,
 };
 use p3_util::convert_vec;
@@ -200,7 +200,7 @@ impl PermutationMonomial<7> for PackedGoldilocksAVX2 {
     }
 }
 
-impl FieldAlgebra<Goldilocks> for PackedGoldilocksAVX2 {}
+impl Algebra<Goldilocks> for PackedGoldilocksAVX2 {}
 
 unsafe impl PackedValue for PackedGoldilocksAVX2 {
     type Value = Goldilocks;

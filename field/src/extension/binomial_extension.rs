@@ -17,8 +17,8 @@ use super::{HasFrobenius, HasTwoAdicBionmialExtension, PackedBinomialExtensionFi
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{
-    field_to_array, ExtensionField, FieldAlgebra, FieldExtensionAlgebra, Packable, PackedValue,
-    Powers, PrimeCharacteristicRing, Serializable, TwoAdicField,
+    field_to_array, Algebra, ExtensionField, FieldExtensionAlgebra, Packable, PackedValue, Powers,
+    PrimeCharacteristicRing, Serializable, TwoAdicField,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
@@ -234,7 +234,7 @@ where
     }
 }
 
-impl<F: BinomiallyExtendable<D>, const D: usize> FieldAlgebra<F> for BinomialExtensionField<F, D> {}
+impl<F: BinomiallyExtendable<D>, const D: usize> Algebra<F> for BinomialExtensionField<F, D> {}
 
 impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionField<F, D> {
     type Packing = Self;
@@ -651,7 +651,7 @@ pub(crate) fn cubic_mul<
 #[inline]
 pub fn cubic_square<
     F: BinomiallyExtendable<D>,
-    FA: FieldAlgebra<F> + PrimeCharacteristicRing,
+    FA: Algebra<F> + PrimeCharacteristicRing,
     const D: usize,
 >(
     a: &[FA; D],

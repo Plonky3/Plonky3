@@ -11,7 +11,7 @@ use super::{binomial_mul, cubic_square, vector_add, vector_sub, BinomialExtensio
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{
-    field_to_array, FieldAlgebra, FieldExtensionAlgebra, PackedField, PrimeCharacteristicRing,
+    field_to_array, Algebra, FieldExtensionAlgebra, PackedField, PrimeCharacteristicRing,
     Serializable,
 };
 
@@ -56,11 +56,11 @@ impl<F: Field, PF: PackedField<Scalar = F>, const D: usize> From<PF>
 }
 
 impl<F: BinomiallyExtendable<D>, PF: PackedField<Scalar = F>, const D: usize>
-    FieldAlgebra<BinomialExtensionField<F, D>> for PackedBinomialExtensionField<F, PF, D>
+    Algebra<BinomialExtensionField<F, D>> for PackedBinomialExtensionField<F, PF, D>
 {
 }
 
-impl<F: BinomiallyExtendable<D>, PF: PackedField<Scalar = F>, const D: usize> FieldAlgebra<PF>
+impl<F: BinomiallyExtendable<D>, PF: PackedField<Scalar = F>, const D: usize> Algebra<PF>
     for PackedBinomialExtensionField<F, PF, D>
 {
 }

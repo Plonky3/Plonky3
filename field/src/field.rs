@@ -266,29 +266,29 @@ pub trait PrimeCharacteristicRing:
     }
 }
 
-/// A field algebra which can be serialized into and out of a
-/// collection of field elements.
+/// A vector space over `F` which can be serialized into and out of a collection of `F` elements.
+///
+/// For the most part, we will usually expect `F` to be a field but there
+/// are a few cases where it is handy to allow it to just be a ring. In
+/// particular, every ring implements `Serializable<Self>`.
 ///
 /// We make no guarantees about consistency of this Serialization/Deserialization
 /// across different versions of Plonky3.
 ///
 /// ### Mathematical Description
 ///
-/// Mathematically a more accurate name for this trait would be BasedFreeVectorSpace.
+/// Mathematically a more accurate name for this trait would be `BasedVectorSpace` or
+/// even more generally `BasedFreeModule` if you want to account for cases where `F` is
+/// not a field.
 ///
-/// As `F` is a field, every field algebra `A`, over `F` is an `F`-vector space.
-/// This means we can pick a basis of elements `B = {b_0, ..., b_{n-1}}` in `A`
-/// such that, given any element `a`, we can find a unique set of `n` elements of `F`,
+/// Given a vector space, `A` over `F`, we can pick a basis of elements `B = {b_0, ..., b_{n-1}}`
+/// in `A` such that, given any element `a`, we can find a unique set of `n` elements of `F`,
 /// `f_0, ..., f_{n - 1}` satisfying `a = f_0 b_0 + ... + f_{n - 1} b_{n - 1}`.
 ///
 /// Thus choosing this basis `B` allows us to map between elements of `A` and
 /// arrays of `n` elements of `F`. Clearly this map depends entirely on the
 /// choice of basis `B` which may change across versions of Plonky3.
 pub trait Serializable<F: PrimeCharacteristicRing>: Sized {
-    // We could alternatively call this BasedAlgebra?
-    // The name is currently trying to indicate what this is meant to be
-    // used for as opposed to being mathematically accurate.
-
     const DIMENSION: usize;
 
     /// Fixes a basis for the algebra `A` and uses this to
@@ -413,17 +413,16 @@ pub trait PermutationMonomial<const N: u64>: InjectiveMonomial<N> {
     fn injective_exp_root_n(&self) -> Self;
 }
 
-/// A ring `R` implements `FieldAlgebra<F>` if there is an injective
-/// homomorphism from `F` into `R`; in particular only `F::ZERO` maps to
-/// `R::ZERO`.
+/// A ring `R` implements `Algebra<F>` if there is an injective homomorphism
+///  from `F` into `R`; in particular only `F::ZERO` maps to `R::ZERO`.
 ///
 /// For the most part, we will usually expect `F` to be a field but there
 /// are a few cases where it is handy to allow it to just be a ring. In
-/// particular, every ring naturally implements FieldAlgebra<Self>.
+/// particular, every ring naturally implements `Algebra<Self>`.
 ///
 /// ### Mathematical Description
 ///
-/// Let `x` and `y` denote arbitrary elements of the `S`. Then
+/// Let `x` and `y` denote arbitrary elements of `F`. Then
 /// we require that our map `from` has the properties:
 /// - Preserves Identity: `from(F::ONE) = R::ONE`
 /// - Commutes with Addition: `from(x + y) = from(x) + from(y)`
@@ -432,9 +431,9 @@ pub trait PermutationMonomial<const N: u64>: InjectiveMonomial<N> {
 /// Such maps are known as ring homomorphisms and are injective if the
 /// only element which maps to `R::ZERO` is `F::ZERO`.
 ///
-/// The existence of this map makes `R` into an `F`-module and hence an `F`-algebra, 
-/// and if moreover `R` is a field, then `R` is a field extension of `F`.
-pub trait FieldAlgebra<F>:
+/// The existence of this map makes `R` into an `F`-module and hence an `F`-algebra.
+/// If, additionally, `R` is a field, then this makes `R` a field extension of `F`.
+pub trait Algebra<F>:
     From<F>
     + Add<F, Output = Self>
     + AddAssign<F>
@@ -446,11 +445,11 @@ pub trait FieldAlgebra<F>:
 }
 
 // Every ring is an algebra over itself.
-impl<R: PrimeCharacteristicRing> FieldAlgebra<R> for R {}
+impl<R: PrimeCharacteristicRing> Algebra<R> for R {}
 
 /// An element of a finite field.
 pub trait Field:
-    FieldAlgebra<Self>
+    Algebra<Self>
     + PrimeCharacteristicRing
     + Packable
     + 'static
@@ -593,18 +592,21 @@ pub trait PrimeField32: PrimeField64 {
 ///
 /// Mathematically, this trait captures a slightly more interesting structure than the above one liner.
 /// As implemented here, A FieldExtensionAlgebra `FEA` over and extension field `EF` is
-/// really the result of applying extension of scalars to a FieldAlgebra `FA` to lift `FA`
+/// really the result of applying extension of scalars to a algebra `FA` to lift `FA`
 /// from an algebra over `F` to an algebra over `EF` and so `FEA = EF ⊗ FA` where the tensor
 /// product is over `F`.
+///
+/// This will be deleted in a future PR. It's currently only needed to give some traits for
+/// ExtensionPacking and so we will soon replace it by a new packed extension field trait.
 pub trait FieldExtensionAlgebra<Base: PrimeCharacteristicRing>:
-    PrimeCharacteristicRing + FieldAlgebra<Base> + Serializable<Base>
+    PrimeCharacteristicRing + Algebra<Base> + Serializable<Base>
 {
     const D: usize;
 }
 
 pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base> {
     type ExtensionPacking: FieldExtensionAlgebra<Base::Packing>
-        + FieldAlgebra<Self>
+        + Algebra<Self>
         + 'static
         + Copy
         + Send

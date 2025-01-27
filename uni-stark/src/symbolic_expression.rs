@@ -4,7 +4,7 @@ use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{Field, FieldAlgebra, InjectiveMonomial, PrimeCharacteristicRing};
+use p3_field::{Field, Algebra, InjectiveMonomial, PrimeCharacteristicRing};
 
 use crate::symbolic_variable::SymbolicVariable;
 
@@ -92,9 +92,9 @@ impl<F: Field> PrimeCharacteristicRing for SymbolicExpression<F> {
     }
 }
 
-impl<F: Field> FieldAlgebra<F> for SymbolicExpression<F> {}
+impl<F: Field> Algebra<F> for SymbolicExpression<F> {}
 
-impl<F: Field> FieldAlgebra<SymbolicVariable<F>> for SymbolicExpression<F> {}
+impl<F: Field> Algebra<SymbolicVariable<F>> for SymbolicExpression<F> {}
 
 impl<F: Field + InjectiveMonomial<N>, const N: u64> InjectiveMonomial<N> for SymbolicExpression<F> {}
 

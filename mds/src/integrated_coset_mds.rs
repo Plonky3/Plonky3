@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_field::{Field, FieldAlgebra, Powers, PrimeCharacteristicRing, TwoAdicField};
+use p3_field::{Field, Algebra, Powers, PrimeCharacteristicRing, TwoAdicField};
 use p3_symmetric::Permutation;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
@@ -48,7 +48,7 @@ impl<F: TwoAdicField, const N: usize> Default for IntegratedCosetMds<F, N> {
     }
 }
 
-impl<F: Field, FA: PrimeCharacteristicRing + FieldAlgebra<F>, const N: usize> Permutation<[FA; N]>
+impl<F: Field, FA: PrimeCharacteristicRing + Algebra<F>, const N: usize> Permutation<[FA; N]>
     for IntegratedCosetMds<F, N>
 {
     fn permute(&self, mut input: [FA; N]) -> [FA; N] {
@@ -71,13 +71,13 @@ impl<F: Field, FA: PrimeCharacteristicRing + FieldAlgebra<F>, const N: usize> Pe
     }
 }
 
-impl<F: Field, FA: PrimeCharacteristicRing + FieldAlgebra<F>, const N: usize> MdsPermutation<FA, N>
+impl<F: Field, FA: PrimeCharacteristicRing + Algebra<F>, const N: usize> MdsPermutation<FA, N>
     for IntegratedCosetMds<F, N>
 {
 }
 
 #[inline]
-fn bowers_g_layer<F: Field, FA: PrimeCharacteristicRing + FieldAlgebra<F>, const N: usize>(
+fn bowers_g_layer<F: Field, FA: PrimeCharacteristicRing + Algebra<F>, const N: usize>(
     values: &mut [FA; N],
     log_half_block_size: usize,
     twiddles: &[F],
@@ -102,7 +102,7 @@ fn bowers_g_layer<F: Field, FA: PrimeCharacteristicRing + FieldAlgebra<F>, const
 }
 
 #[inline]
-fn bowers_g_t_layer<F: Field, FA: PrimeCharacteristicRing + FieldAlgebra<F>, const N: usize>(
+fn bowers_g_t_layer<F: Field, FA: PrimeCharacteristicRing + Algebra<F>, const N: usize>(
     values: &mut [FA; N],
     log_half_block_size: usize,
     twiddles: &[F],
