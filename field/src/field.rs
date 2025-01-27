@@ -424,8 +424,7 @@ pub trait PermutationMonomial<const N: u64>: InjectiveMonomial<N> {
 /// ### Mathematical Description
 ///
 /// Let `x` and `y` denote arbitrary elements of the `S`. Then
-/// by "natural" map we require that our map `from`
-/// has the following properties:
+/// we require that our map `from` has the properties:
 /// - Preserves Identity: `from(F::ONE) = R::ONE`
 /// - Commutes with Addition: `from(x + y) = from(x) + from(y)`
 /// - Commutes with Multiplication: `from(x * y) = from(x) * from(y)`
