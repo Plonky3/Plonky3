@@ -1,9 +1,9 @@
-use p3_field::{Algebra, Field, PrimeCharacteristicRing};
+use p3_field::{Algebra, Field};
 
 /// DIT butterfly.
 #[inline]
-pub(crate) fn dit_butterfly<F: Field, R: PrimeCharacteristicRing + Algebra<F>, const N: usize>(
-    values: &mut [R; N],
+pub(crate) fn dit_butterfly<F: Field, A: Algebra<F>, const N: usize>(
+    values: &mut [A; N],
     idx_1: usize,
     idx_2: usize,
     twiddle: F,
@@ -16,8 +16,8 @@ pub(crate) fn dit_butterfly<F: Field, R: PrimeCharacteristicRing + Algebra<F>, c
 
 /// DIF butterfly.
 #[inline]
-pub(crate) fn dif_butterfly<F: Field, R: PrimeCharacteristicRing + Algebra<F>, const N: usize>(
-    values: &mut [R; N],
+pub(crate) fn dif_butterfly<F: Field, A: Algebra<F>, const N: usize>(
+    values: &mut [A; N],
     idx_1: usize,
     idx_2: usize,
     twiddle: F,
@@ -30,12 +30,8 @@ pub(crate) fn dif_butterfly<F: Field, R: PrimeCharacteristicRing + Algebra<F>, c
 
 /// Butterfly with twiddle factor 1 (works in either DIT or DIF).
 #[inline]
-pub(crate) fn twiddle_free_butterfly<
-    F: Field,
-    R: PrimeCharacteristicRing + Algebra<F>,
-    const N: usize,
->(
-    values: &mut [R; N],
+pub(crate) fn twiddle_free_butterfly<F: Field, A: Algebra<F>, const N: usize>(
+    values: &mut [A; N],
     idx_1: usize,
     idx_2: usize,
 ) {

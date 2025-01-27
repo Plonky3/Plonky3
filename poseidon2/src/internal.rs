@@ -44,11 +44,11 @@ where
 }
 
 /// Given a vector v compute the matrix vector product (1 + diag(v))state with 1 denoting the constant matrix of ones.
-pub fn matmul_internal<F: Field, R: Algebra<F> + PrimeCharacteristicRing, const WIDTH: usize>(
-    state: &mut [R; WIDTH],
+pub fn matmul_internal<F: Field, A: Algebra<F>, const WIDTH: usize>(
+    state: &mut [A; WIDTH],
     mat_internal_diag_m_1: [F; WIDTH],
 ) {
-    let sum: R = state.iter().cloned().sum();
+    let sum: A = state.iter().cloned().sum();
     for i in 0..WIDTH {
         state[i] *= mat_internal_diag_m_1[i];
         state[i] += sum.clone();
@@ -69,12 +69,12 @@ where
 #[inline]
 pub fn internal_permute_state<
     F: Field,
-    R: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<D>,
+    A: Algebra<F> + InjectiveMonomial<D>,
     const WIDTH: usize,
     const D: u64,
 >(
-    state: &mut [R; WIDTH],
-    diffusion_mat: fn(&mut [R; WIDTH]),
+    state: &mut [A; WIDTH],
+    diffusion_mat: fn(&mut [A; WIDTH]),
     internal_constants: &[F],
 ) {
     for elem in internal_constants.iter() {

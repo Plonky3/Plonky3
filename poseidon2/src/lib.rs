@@ -18,7 +18,7 @@ use core::marker::PhantomData;
 pub use external::*;
 pub use generic::*;
 pub use internal::*;
-use p3_field::{Algebra, InjectiveMonomial, PrimeCharacteristicRing, PrimeField, PrimeField64};
+use p3_field::{Algebra, InjectiveMonomial, PrimeField, PrimeField64};
 use p3_symmetric::{CryptographicPermutation, Permutation};
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -91,27 +91,27 @@ where
     }
 }
 
-impl<F, R, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64> Permutation<[R; WIDTH]>
+impl<F, A, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64> Permutation<[A; WIDTH]>
     for Poseidon2<F, ExternalPerm, InternalPerm, WIDTH, D>
 where
     F: PrimeField + InjectiveMonomial<D>,
-    R: Algebra<F> + PrimeCharacteristicRing + Sync + InjectiveMonomial<D>,
-    ExternalPerm: ExternalLayer<R, WIDTH, D>,
-    InternalPerm: InternalLayer<R, WIDTH, D>,
+    A: Algebra<F> + Sync + InjectiveMonomial<D>,
+    ExternalPerm: ExternalLayer<A, WIDTH, D>,
+    InternalPerm: InternalLayer<A, WIDTH, D>,
 {
-    fn permute_mut(&self, state: &mut [R; WIDTH]) {
+    fn permute_mut(&self, state: &mut [A; WIDTH]) {
         self.external_layer.permute_state_initial(state);
         self.internal_layer.permute_state(state);
         self.external_layer.permute_state_terminal(state);
     }
 }
 
-impl<F, R, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>
-    CryptographicPermutation<[R; WIDTH]> for Poseidon2<F, ExternalPerm, InternalPerm, WIDTH, D>
+impl<F, A, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>
+    CryptographicPermutation<[A; WIDTH]> for Poseidon2<F, ExternalPerm, InternalPerm, WIDTH, D>
 where
     F: PrimeField + InjectiveMonomial<D>,
-    R: Algebra<F> + PrimeCharacteristicRing + Sync + InjectiveMonomial<D>,
-    ExternalPerm: ExternalLayer<R, WIDTH, D>,
-    InternalPerm: InternalLayer<R, WIDTH, D>,
+    A: Algebra<F> + Sync + InjectiveMonomial<D>,
+    ExternalPerm: ExternalLayer<A, WIDTH, D>,
+    InternalPerm: InternalLayer<A, WIDTH, D>,
 {
 }

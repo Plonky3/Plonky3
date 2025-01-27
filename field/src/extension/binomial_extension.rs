@@ -649,13 +649,9 @@ pub(crate) fn cubic_mul<
 
 /// Section 11.3.6a in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
-pub fn cubic_square<
-    F: BinomiallyExtendable<D>,
-    R: PrimeCharacteristicRing + Algebra<F>,
-    const D: usize,
->(
-    a: &[R; D],
-    res: &mut [R; D],
+pub fn cubic_square<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: usize>(
+    a: &[A; D],
+    res: &mut [A; D],
 ) {
     assert_eq!(D, 3);
 

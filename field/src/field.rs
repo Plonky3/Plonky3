@@ -434,7 +434,8 @@ pub trait PermutationMonomial<const N: u64>: InjectiveMonomial<N> {
 /// The existence of this map makes `R` into an `F`-module and hence an `F`-algebra.
 /// If, additionally, `R` is a field, then this makes `R` a field extension of `F`.
 pub trait Algebra<F>:
-    From<F>
+    PrimeCharacteristicRing
+    + From<F>
     + Add<F, Output = Self>
     + AddAssign<F>
     + Sub<F, Output = Self>
@@ -450,7 +451,6 @@ impl<R: PrimeCharacteristicRing> Algebra<R> for R {}
 /// An element of a finite field.
 pub trait Field:
     Algebra<Self>
-    + PrimeCharacteristicRing
     + Packable
     + 'static
     + Copy
@@ -599,7 +599,7 @@ pub trait PrimeField32: PrimeField64 {
 /// This will be deleted in a future PR. It's currently only needed to give some traits for
 /// ExtensionPacking and so we will soon replace it by a new packed extension field trait.
 pub trait FieldExtensionAlgebra<Base: PrimeCharacteristicRing>:
-    PrimeCharacteristicRing + Algebra<Base> + Serializable<Base>
+    Algebra<Base> + Serializable<Base>
 {
     const D: usize;
 }
@@ -641,7 +641,7 @@ impl<F: Field> ExtensionField<F> for F {
     }
 }
 
-impl<PCR: PrimeCharacteristicRing> FieldExtensionAlgebra<PCR> for PCR {
+impl<R: PrimeCharacteristicRing> FieldExtensionAlgebra<R> for R {
     const D: usize = 1;
 }
 

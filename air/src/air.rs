@@ -29,7 +29,7 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
 pub trait AirBuilder: Sized {
     type F: Field;
 
-    type Expr: PrimeCharacteristicRing + Algebra<Self::F> + Algebra<Self::Var>;
+    type Expr: Algebra<Self::F> + Algebra<Self::Var>;
 
     type Var: Into<Self::Expr>
         + Copy

@@ -21,12 +21,8 @@ use crate::{mds_light_permutation, MDSMat4};
 /// This is a little slower than field specific implementations (particularly for packed fields) so should
 /// only be used in non performance critical places.
 #[inline(always)]
-pub fn add_rc_and_sbox_generic<
-    F: Field,
-    R: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<D>,
-    const D: u64,
->(
-    val: &mut R,
+pub fn add_rc_and_sbox_generic<F: Field, A: Algebra<F> + InjectiveMonomial<D>, const D: u64>(
+    val: &mut A,
     rc: F,
 ) {
     *val += rc;

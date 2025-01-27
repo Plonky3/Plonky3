@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_field::{Algebra, Field, PrimeCharacteristicRing, TwoAdicField};
+use p3_field::{Algebra, Field, TwoAdicField};
 use p3_symmetric::Permutation;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
@@ -50,17 +50,13 @@ where
     }
 }
 
-impl<F, R, const N: usize> Permutation<[R; N]> for CosetMds<F, N>
-where
-    F: TwoAdicField,
-    R: PrimeCharacteristicRing + Algebra<F>,
-{
-    fn permute(&self, mut input: [R; N]) -> [R; N] {
+impl<F: TwoAdicField, A: Algebra<F>, const N: usize> Permutation<[A; N]> for CosetMds<F, N> {
+    fn permute(&self, mut input: [A; N]) -> [A; N] {
         self.permute_mut(&mut input);
         input
     }
 
-    fn permute_mut(&self, values: &mut [R; N]) {
+    fn permute_mut(&self, values: &mut [A; N]) {
         // Inverse DFT, except we skip bit reversal and rescaling by 1/N.
         bowers_g_t(values, &self.ifft_twiddles);
 
@@ -74,20 +70,12 @@ where
     }
 }
 
-impl<F, R, const N: usize> MdsPermutation<R, N> for CosetMds<F, N>
-where
-    F: TwoAdicField,
-    R: PrimeCharacteristicRing + Algebra<F>,
-{
-}
+impl<F: TwoAdicField, A: Algebra<F>, const N: usize> MdsPermutation<A, N> for CosetMds<F, N> {}
 
 /// Executes the Bowers G network. This is like a DFT, except it assumes the input is in
 /// bit-reversed order.
 #[inline]
-fn bowers_g<F: Field, R: PrimeCharacteristicRing + Algebra<F>, const N: usize>(
-    values: &mut [R; N],
-    twiddles: &[F],
-) {
+fn bowers_g<F: Field, A: Algebra<F>, const N: usize>(values: &mut [A; N], twiddles: &[F]) {
     let log_n = log2_strict_usize(N);
     for log_half_block_size in 0..log_n {
         bowers_g_layer(values, log_half_block_size, twiddles);
@@ -97,10 +85,7 @@ fn bowers_g<F: Field, R: PrimeCharacteristicRing + Algebra<F>, const N: usize>(
 /// Executes the Bowers G^T network. This is like an inverse DFT, except we skip rescaling by
 /// `1/N`, and the output is bit-reversed.
 #[inline]
-fn bowers_g_t<F: Field, R: PrimeCharacteristicRing + Algebra<F>, const N: usize>(
-    values: &mut [R; N],
-    twiddles: &[F],
-) {
+fn bowers_g_t<F: Field, A: Algebra<F>, const N: usize>(values: &mut [A; N], twiddles: &[F]) {
     let log_n = log2_strict_usize(N);
     for log_half_block_size in (0..log_n).rev() {
         bowers_g_t_layer(values, log_half_block_size, twiddles);
@@ -109,8 +94,8 @@ fn bowers_g_t<F: Field, R: PrimeCharacteristicRing + Algebra<F>, const N: usize>
 
 /// One layer of a Bowers G network. Equivalent to `bowers_g_t_layer` except for the butterfly.
 #[inline]
-fn bowers_g_layer<F: Field, R: PrimeCharacteristicRing + Algebra<F>, const N: usize>(
-    values: &mut [R; N],
+fn bowers_g_layer<F: Field, A: Algebra<F>, const N: usize>(
+    values: &mut [A; N],
     log_half_block_size: usize,
     twiddles: &[F],
 ) {
@@ -135,8 +120,8 @@ fn bowers_g_layer<F: Field, R: PrimeCharacteristicRing + Algebra<F>, const N: us
 
 /// One layer of a Bowers G^T network. Equivalent to `bowers_g_layer` except for the butterfly.
 #[inline]
-fn bowers_g_t_layer<F: Field, R: PrimeCharacteristicRing + Algebra<F>, const N: usize>(
-    values: &mut [R; N],
+fn bowers_g_t_layer<F: Field, A: Algebra<F>, const N: usize>(
+    values: &mut [A; N],
     log_half_block_size: usize,
     twiddles: &[F],
 ) {

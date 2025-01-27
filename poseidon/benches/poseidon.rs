@@ -3,7 +3,7 @@ use std::array;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_baby_bear::{BabyBear, MdsMatrixBabyBear};
-use p3_field::{Algebra, Field, InjectiveMonomial, PrimeCharacteristicRing, PrimeField};
+use p3_field::{Algebra, Field, InjectiveMonomial, PrimeField};
 use p3_goldilocks::{Goldilocks, MdsMatrixGoldilocks};
 use p3_mds::coset_mds::CosetMds;
 use p3_mds::MdsPermutation;
@@ -27,12 +27,12 @@ fn bench_poseidon(c: &mut Criterion) {
     poseidon::<Mersenne31, Mersenne31, MdsMatrixMersenne31, 32, 5>(c);
 }
 
-fn poseidon<F, R, Mds, const WIDTH: usize, const ALPHA: u64>(c: &mut Criterion)
+fn poseidon<F, A, Mds, const WIDTH: usize, const ALPHA: u64>(c: &mut Criterion)
 where
     F: PrimeField + InjectiveMonomial<ALPHA>,
-    R: Algebra<F> + PrimeCharacteristicRing + InjectiveMonomial<ALPHA>,
+    A: Algebra<F> + InjectiveMonomial<ALPHA>,
     Standard: Distribution<F>,
-    Mds: MdsPermutation<R, WIDTH> + Default,
+    Mds: MdsPermutation<A, WIDTH> + Default,
 {
     let mut rng = thread_rng();
     let mds = Mds::default();
@@ -47,8 +47,8 @@ where
         mds,
         &mut rng,
     );
-    let input: [R; WIDTH] = array::from_fn(|_| R::ZERO);
-    let name = format!("poseidon::<{}, {}>", type_name::<R>(), ALPHA);
+    let input: [A; WIDTH] = array::from_fn(|_| A::ZERO);
+    let name = format!("poseidon::<{}, {}>", type_name::<A>(), ALPHA);
     let id = BenchmarkId::new(name, WIDTH);
     c.bench_with_input(id, &input, |b, input| {
         b.iter(|| poseidon.permute(input.clone()))

@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use num::{BigUint, One};
 use num_integer::binomial;
-use p3_field::{Algebra, PermutationMonomial, PrimeCharacteristicRing, PrimeField, PrimeField64};
+use p3_field::{Algebra, PermutationMonomial, PrimeField, PrimeField64};
 use p3_mds::MdsPermutation;
 use p3_symmetric::{CryptographicPermutation, Permutation};
 use rand::distributions::Standard;
@@ -97,14 +97,14 @@ where
     }
 }
 
-impl<F, R, Mds, const WIDTH: usize, const ALPHA: u64> Permutation<[R; WIDTH]>
+impl<F, A, Mds, const WIDTH: usize, const ALPHA: u64> Permutation<[A; WIDTH]>
     for Rescue<F, Mds, WIDTH, ALPHA>
 where
     F: PrimeField + PermutationMonomial<ALPHA>,
-    R: Algebra<F> + PrimeCharacteristicRing + PermutationMonomial<ALPHA>,
-    Mds: MdsPermutation<R, WIDTH>,
+    A: Algebra<F> + PermutationMonomial<ALPHA>,
+    Mds: MdsPermutation<A, WIDTH>,
 {
-    fn permute_mut(&self, state: &mut [R; WIDTH]) {
+    fn permute_mut(&self, state: &mut [A; WIDTH]) {
         for round in 0..self.num_rounds {
             // S-box
             state.iter_mut().for_each(|x| *x = x.injective_exp_n());
@@ -137,12 +137,12 @@ where
     }
 }
 
-impl<F, R, Mds, const WIDTH: usize, const ALPHA: u64> CryptographicPermutation<[R; WIDTH]>
+impl<F, A, Mds, const WIDTH: usize, const ALPHA: u64> CryptographicPermutation<[A; WIDTH]>
     for Rescue<F, Mds, WIDTH, ALPHA>
 where
     F: PrimeField + PermutationMonomial<ALPHA>,
-    R: Algebra<F> + PrimeCharacteristicRing + PermutationMonomial<ALPHA>,
-    Mds: MdsPermutation<R, WIDTH>,
+    A: Algebra<F> + PermutationMonomial<ALPHA>,
+    Mds: MdsPermutation<A, WIDTH>,
 {
 }
 
