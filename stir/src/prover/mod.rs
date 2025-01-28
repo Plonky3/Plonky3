@@ -112,6 +112,9 @@ where
             <= 1 << (config.log_starting_degree() + config.log_starting_inv_rate())
     );
 
+    // NP TODO remove
+    println!("GETS 0");
+
     // NP TODO: Should the prover call commit like in Plonky3's FRI?
     // or should be called separately like in Giacomo's code?
     let (mut witness, commitment) = commit(config, polynomial);
@@ -119,6 +122,9 @@ where
     // Observe the commitment
     challenger.observe(commitment.clone());
     let folding_randomness = challenger.sample_ext_element();
+
+    // NP TODO remove
+    println!("GETS 1");
 
     // NP TODO: Handle more elegantly?
     witness.folding_randomness = folding_randomness;
@@ -141,10 +147,16 @@ where
         log_last_folding_factor,
     );
 
+    // NP TODO remove
+    println!("GETS 1.5");
+
     let final_queries = config.final_num_queries();
 
     // Logarithm of |(L_{i - 1})^k_{i - 1}|
     let log_query_domain_size = 1 << (witness.domain.log_size() - log_last_folding_factor);
+
+    // NP TODO remove
+    println!("GETS 2");
 
     let queried_indices: Vec<u64> = (0..final_queries)
         .map(|_| challenger.sample_bits(log_query_domain_size) as u64)
@@ -161,8 +173,16 @@ where
         .map(|(mut k, v)| (k.remove(0), v))
         .collect();
 
+    // NP TODO remove
+    println!("GETS 3");
+
+    println!("Grinding {} bits", config.final_pow_bits().ceil() as usize);
+
     // NP TODO: Is this correct? Can we just take the ceil?
     let pow_witness = challenger.grind(config.final_pow_bits().ceil() as usize);
+
+    // NP TODO remove
+    println!("GETS 4");
 
     StirProof {
         commitment,
@@ -219,6 +239,9 @@ where
     // Fold the polynomial and the evaluations
     let folded_polynomial = fold_polynomial(&polynomial, folding_randomness, log_folding_factor);
 
+    // NP TODO remove
+    println!("prove_round: GETS 1");
+
     // Compute the i-th domain L_i = w * <w^{2^i}>
     let new_domain = domain.shrink_subgroup(1);
 
@@ -249,6 +272,9 @@ where
         }
     }
 
+    // NP TODO remove
+    println!("prove_round: GETS 2");
+
     // Evaluate the polynomial at the OOD samples
     let betas: Vec<F> = ood_samples
         .iter()
@@ -274,10 +300,16 @@ where
         .unique()
         .collect();
 
+    // NP TODO remove
+    println!("prove_round: GETS 3");
+
     // Proof of work witness
     // NP TODO: Is this correct? Can we just take the ceil?
     // NP TODO unsafe cast to usize
+
+    println!("Grinding {} bits", pow_bits.ceil() as usize);
     let pow_witness = challenger.grind(pow_bits.ceil() as usize);
+    panic!();
 
     // ========= QUERY PROOFS =========
 
@@ -292,6 +324,9 @@ where
         })
         .map(|(mut k, v)| (k.remove(0), v))
         .collect();
+
+    // NP TODO remove
+    println!("prove_round: GETS 4");
 
     // ========= POLY QUOTIENT =========
 
@@ -331,9 +366,15 @@ where
     let quotient_set = quotient_answers.iter().map(|(x, _)| *x).collect_vec();
     let quotient_set_size = quotient_set.len();
 
+    // NP TODO remove
+    println!("prove_round: GETS 5");
+
     // Compute the answer polynomial and add it to the transcript
     let ans_polynomial = Polynomial::<F>::lagrange_interpolation(quotient_answers.clone());
     challenger.observe_slice(ans_polynomial.coeffs());
+
+    // NP TODO remove
+    println!("prove_round: GETS 6");
 
     // Compute the shake polynomial and add it to the transcript
     let shake_polynomial = compute_shake_polynomial(&ans_polynomial, quotient_answers.into_iter());
@@ -349,9 +390,15 @@ where
     let vanishing_polynomial = Polynomial::vanishing_polynomial(quotient_set);
     let quotient_polynomial = &(&folded_polynomial - &ans_polynomial) / &vanishing_polynomial;
 
+    // NP TODO remove
+    println!("prove_round: GETS 7");
+
     // Degree-correct by multiplying by the scaling polynomial, 1 + rx + r^2 x^2 + ... + r^n x^n with n = |quotient_set|
     let witness_polynomial =
         multiply_by_power_polynomial(&quotient_polynomial, comb_randomness, quotient_set_size);
+
+    // NP TODO remove
+    println!("prove_round: GETS 8");
 
     // NP TODO remove/fix
     if quotient_polynomial.is_zero() {

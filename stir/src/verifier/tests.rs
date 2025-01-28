@@ -45,15 +45,18 @@ fn test_compute_folded_evals() {
 
 #[test]
 fn test_verify() {
-    let config = test_stir_config(12, 1, 4, 2);
+    // let config = test_stir_config(10, 1, 2, 3);
+    // let config = test_stir_config(10, 1, 4, 2);
+    let config = test_stir_config(14, 1, 4, 3);
 
     let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
 
-    let mut challenger = test_challenger();
+    let mut prover_challenger = test_challenger();
+    let mut verifier_challenger = prover_challenger.clone();
 
     println!("Proving...");
-    let proof = prove(&config, polynomial, &mut challenger.clone());
+    let proof = prove(&config, polynomial, &mut prover_challenger);
 
     println!("Verifying...");
-    assert!(verify(&config, proof, &mut challenger));
+    assert!(verify(&config, proof, &mut verifier_challenger));
 }

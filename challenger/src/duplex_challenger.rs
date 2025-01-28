@@ -149,6 +149,14 @@ where
 {
     fn sample_bits(&mut self, bits: usize) -> usize {
         debug_assert!(bits < (usize::BITS as usize));
+        // NP TODO remove
+        println!(
+            "bits: {}, 1 << bits: {}, F::ORDER_U64: {}, (1 << bits) < F::ORDER_U64? {}",
+            bits,
+            1 << bits,
+            F::ORDER_U64,
+            (1 << bits) < F::ORDER_U64
+        );
         debug_assert!((1 << bits) < F::ORDER_U64);
         let rand_f: F = self.sample();
         let rand_usize = rand_f.as_canonical_u64() as usize;
