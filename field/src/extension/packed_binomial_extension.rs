@@ -390,7 +390,7 @@ where
         let a = self.value;
         let b = rhs.value;
         let mut res = Self::default();
-        let w: PF = F::W.into();
+        let w = F::W;
 
         binomial_mul(&a, &b, &mut res.value, w);
 
@@ -411,7 +411,7 @@ where
         let a = self.value;
         let b = rhs.value;
         let mut res = Self::default();
-        let w: PF = F::W.into();
+        let w = F::W;
 
         binomial_mul(&a, &b, &mut res.value, w);
 
