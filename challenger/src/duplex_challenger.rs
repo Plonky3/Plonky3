@@ -160,6 +160,8 @@ where
 mod tests {
     use core::iter;
 
+    use crate::grinding_challenger::GrindingChallenger;
+    use p3_baby_bear::BabyBear;
     use p3_field::FieldAlgebra;
     use p3_goldilocks::Goldilocks;
     use p3_symmetric::Permutation;
@@ -169,36 +171,72 @@ mod tests {
     const WIDTH: usize = 24;
     const RATE: usize = 16;
 
-    type TestArray = [F; WIDTH];
-    type F = Goldilocks;
+    type G = Goldilocks;
+    type BB = BabyBear;
 
     #[derive(Clone)]
     struct TestPermutation {}
 
-    impl Permutation<TestArray> for TestPermutation {
-        fn permute_mut(&self, input: &mut TestArray) {
+    impl<F: Clone> Permutation<[F; WIDTH]> for TestPermutation {
+        fn permute_mut(&self, input: &mut [F; WIDTH]) {
             input.reverse()
         }
     }
 
-    impl CryptographicPermutation<TestArray> for TestPermutation {}
+    impl<F: Clone> CryptographicPermutation<[F; WIDTH]> for TestPermutation {}
 
     #[test]
     fn test_duplex_challenger() {
-        type Chal = DuplexChallenger<F, TestPermutation, WIDTH, RATE>;
+        type Chal = DuplexChallenger<G, TestPermutation, WIDTH, RATE>;
         let permutation = TestPermutation {};
         let mut duplex_challenger = DuplexChallenger::new(permutation);
 
         // Observe 12 elements.
-        (0..12).for_each(|element| duplex_challenger.observe(F::from_canonical_u8(element as u8)));
+        (0..12).for_each(|element| duplex_challenger.observe(G::from_canonical_u8(element as u8)));
 
-        let state_after_duplexing: Vec<_> = iter::repeat(F::ZERO)
+        let state_after_duplexing: Vec<_> = iter::repeat(G::ZERO)
             .take(12)
-            .chain((0..12).map(F::from_canonical_u8).rev())
+            .chain((0..12).map(G::from_canonical_u8).rev())
             .collect();
 
-        let expected_samples: Vec<F> = state_after_duplexing[..16].iter().copied().rev().collect();
-        let samples = <Chal as CanSample<F>>::sample_vec(&mut duplex_challenger, 16);
+        let expected_samples: Vec<G> = state_after_duplexing[..16].iter().copied().rev().collect();
+        let samples = <Chal as CanSample<G>>::sample_vec(&mut duplex_challenger, 16);
         assert_eq!(samples, expected_samples);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_duplex_challenger_sample_bits_security() {
+        type GoldilocksChal = DuplexChallenger<G, TestPermutation, WIDTH, RATE>;
+        let permutation = TestPermutation {};
+        let mut duplex_challenger = GoldilocksChal::new(permutation);
+
+        for _ in 0..100 {
+            assert!(duplex_challenger.sample_bits(129) < 4);
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_duplex_challenger_sample_bits_security_small_field() {
+        type BabyBearChal = DuplexChallenger<BB, TestPermutation, WIDTH, RATE>;
+        let permutation = TestPermutation {};
+        let mut duplex_challenger = BabyBearChal::new(permutation);
+
+        for _ in 0..100 {
+            assert!(duplex_challenger.sample_bits(40) < 1 << 31);
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_duplex_challenger_grind_security() {
+        type GoldilocksChal = DuplexChallenger<G, TestPermutation, WIDTH, RATE>;
+        let permutation = TestPermutation {};
+        let mut duplex_challenger = GoldilocksChal::new(permutation);
+
+        // This grinding should never finish on a regular machine
+        let witness = duplex_challenger.grind(129);
+        assert!(duplex_challenger.check_witness(129, witness));
     }
 }
