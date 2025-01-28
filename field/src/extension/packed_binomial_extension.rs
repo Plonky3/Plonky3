@@ -3,8 +3,8 @@ use core::array;
 use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
-use itertools::Itertools;
 
+use itertools::Itertools;
 use p3_util::convert_vec;
 use serde::{Deserialize, Serialize};
 
