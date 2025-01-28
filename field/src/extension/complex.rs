@@ -1,5 +1,5 @@
 use super::{BinomialExtensionField, BinomiallyExtendable, HasTwoAdicBionmialExtension};
-use crate::{Field, FieldExtensionAlgebra, PrimeCharacteristicRing};
+use crate::{Algebra, Field, PrimeCharacteristicRing};
 
 pub type Complex<F> = BinomialExtensionField<F, 2>;
 
@@ -70,7 +70,7 @@ impl<R: PrimeCharacteristicRing> Complex<R> {
 
     // Sometimes we want to rotate over an extension that's not necessarily ComplexExtendable,
     // but still on the circle.
-    pub fn rotate<Ext: FieldExtensionAlgebra<R>>(&self, rhs: Complex<Ext>) -> Complex<Ext> {
+    pub fn rotate<Ext: Algebra<R>>(&self, rhs: Complex<Ext>) -> Complex<Ext> {
         Complex::<Ext>::new(
             rhs.real() * self.real() - rhs.imag() * self.imag(),
             rhs.imag() * self.real() + rhs.real() * self.imag(),

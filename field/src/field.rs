@@ -15,7 +15,7 @@ use serde::Serialize;
 use crate::exponentiation::bits_u64;
 use crate::integers::{from_integer_types, QuotientMap};
 use crate::packed::PackedField;
-use crate::Packable;
+use crate::{Packable, PackedFieldExtension};
 
 /// A commutative ring `(R)` with prime characteristic `(p)`.
 ///
@@ -219,32 +219,6 @@ pub trait PrimeCharacteristicRing:
         Powers {
             base: self.clone(),
             current: start,
-        }
-    }
-
-    /// Construct an iterator which returns powers of `self` packed into `PackedField` elements.
-    ///
-    /// E.g. if `PACKING::WIDTH = 4` this returns the elements:
-    /// `[self^0, self^1, self^2, self^3], [self^4, self^5, self^6, self^7], ...`.
-    fn powers_packed<P: PackedField<Scalar = Self>>(&self) -> Powers<P> {
-        self.shifted_powers_packed(Self::ONE)
-    }
-
-    /// Construct an iterator which returns powers of `self` shifted by start
-    /// and packed into `PackedField` elements.
-    ///
-    /// E.g. if `PACKING::WIDTH = 4` this returns the elements:
-    /// `[start, start*self, start*self^2, start*self^3], [start*self^4, start*self^5, start*self^6, start*self^7], ...`.
-    fn shifted_powers_packed<P: PackedField<Scalar = Self>>(&self, start: Self) -> Powers<P> {
-        let mut current: P = start.into();
-        let slice = current.as_slice_mut();
-        for i in 1..P::WIDTH {
-            slice[i] = slice[i - 1].clone() * self.clone();
-        }
-
-        Powers {
-            base: self.clone().exp_u64(P::WIDTH as u64).into(),
-            current,
         }
     }
 
@@ -588,45 +562,23 @@ pub trait PrimeField32: PrimeField64 {
     }
 }
 
-/// A commutative algebra over an extension field.
-///
-/// Mathematically, this trait captures a slightly more interesting structure than the above one liner.
-/// As implemented here, A FieldExtensionAlgebra `FEA` over and extension field `EF` is
-/// really the result of applying extension of scalars to a algebra `FA` to lift `FA`
-/// from an algebra over `F` to an algebra over `EF` and so `FEA = EF ⊗ FA` where the tensor
-/// product is over `F`.
-///
-/// This will be deleted in a future PR. It's currently only needed to give some traits for
-/// ExtensionPacking and so we will soon replace it by a new packed extension field trait.
-pub trait FieldExtensionAlgebra<Base: PrimeCharacteristicRing>:
-    Algebra<Base> + Serializable<Base>
-{
+pub trait ExtensionField<Base: Field>: Field + Algebra<Base> + Serializable<Base> {
+    type ExtensionPacking: PackedFieldExtension<Base, Self> + 'static + Copy + Send + Sync;
+
     const D: usize;
-}
 
-pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base> {
-    type ExtensionPacking: FieldExtensionAlgebra<Base::Packing>
-        + Algebra<Self>
-        + 'static
-        + Copy
-        + Send
-        + Sync;
-
+    /// Determine if the given element lies in the base field.
     fn is_in_basefield(&self) -> bool;
 
+    /// If the element lies in the base field project it down.
+    /// Otherwise return None.
     fn as_base(&self) -> Option<Base>;
-
-    /// Construct an iterator which returns powers of `self` packed into `ExtensionPacking` elements.
-    ///
-    /// E.g. if `PACKING::WIDTH = 4` this returns the elements:
-    /// `[self^0, self^1, self^2, self^3], [self^4, self^5, self^6, self^7], ...`.
-    ///
-    /// Once we create the new packed extension field trait, this function will be moved there.
-    fn ext_powers_packed(&self) -> Powers<Self::ExtensionPacking>;
 }
 
 impl<F: Field> ExtensionField<F> for F {
     type ExtensionPacking = F::Packing;
+
+    const D: usize = 1;
 
     fn is_in_basefield(&self) -> bool {
         true
@@ -635,14 +587,6 @@ impl<F: Field> ExtensionField<F> for F {
     fn as_base(&self) -> Option<F> {
         Some(*self)
     }
-
-    fn ext_powers_packed(&self) -> Powers<Self::ExtensionPacking> {
-        self.powers_packed()
-    }
-}
-
-impl<R: PrimeCharacteristicRing> FieldExtensionAlgebra<R> for R {
-    const D: usize = 1;
 }
 
 /// A field which supplies information like the two-adicity of its multiplicative group, and methods

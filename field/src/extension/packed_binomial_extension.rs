@@ -3,16 +3,16 @@ use core::array;
 use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+use itertools::Itertools;
 
 use p3_util::convert_vec;
 use serde::{Deserialize, Serialize};
 
 use super::{binomial_mul, cubic_square, vector_add, vector_sub, BinomialExtensionField};
 use crate::extension::BinomiallyExtendable;
-use crate::field::Field;
 use crate::{
-    field_to_array, Algebra, FieldExtensionAlgebra, PackedField, PrimeCharacteristicRing,
-    Serializable,
+    field_to_array, Algebra, Field, PackedField, PackedFieldExtension, PackedValue, Powers,
+    PrimeCharacteristicRing, Serializable,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
@@ -23,6 +23,12 @@ pub struct PackedBinomialExtensionField<F: Field, PF: PackedField<Scalar = F>, c
         bound(serialize = "PF: Serialize", deserialize = "PF: Deserialize<'de>")
     )]
     pub(crate) value: [PF; D],
+}
+
+impl<F: Field, PF: PackedField<Scalar = F>, const D: usize> PackedBinomialExtensionField<F, PF, D> {
+    fn new(value: [PF; D]) -> Self {
+        Self { value }
+    }
 }
 
 impl<F: Field, PF: PackedField<Scalar = F>, const D: usize> Default
@@ -150,12 +156,42 @@ where
     }
 }
 
-impl<F, PF, const D: usize> FieldExtensionAlgebra<PF> for PackedBinomialExtensionField<F, PF, D>
+impl<F, const D: usize> PackedFieldExtension<F, BinomialExtensionField<F, D>>
+    for PackedBinomialExtensionField<F, F::Packing, D>
 where
     F: BinomiallyExtendable<D>,
-    PF: PackedField<Scalar = F>,
 {
-    const D: usize = D;
+    fn from_ext_slice(ext_slice: &[BinomialExtensionField<F, D>]) -> Self {
+        let width = F::Packing::WIDTH;
+        assert_eq!(ext_slice.len(), width);
+
+        let mut res = [F::Packing::ZERO; D];
+
+        res.iter_mut().enumerate().for_each(|(i, row_i)| {
+            let row_i = row_i.as_slice_mut();
+            ext_slice
+                .iter()
+                .enumerate()
+                .for_each(|(j, vec_j)| row_i[j] = vec_j.value[i])
+        });
+
+        Self::new(res)
+    }
+
+    fn packed_ext_powers(base: BinomialExtensionField<F, D>) -> crate::Powers<Self> {
+        let width = F::Packing::WIDTH;
+        let powers = base.powers().take(width + 1).collect_vec();
+        // Transpose first WIDTH powers
+        let current = Self::from_ext_slice(&powers[..width]);
+
+        // Broadcast self^WIDTH
+        let multiplier = powers[width].into();
+
+        Powers {
+            base: multiplier,
+            current,
+        }
+    }
 }
 
 impl<F, PF, const D: usize> Neg for PackedBinomialExtensionField<F, PF, D>
