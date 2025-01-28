@@ -47,7 +47,11 @@ where
         let (opened_base_values, proof) = self.inner.open_batch(index, prover_data);
         let opened_ext_values = opened_base_values
             .into_iter()
-            .map(|row| row.chunks(EF::D).map(EF::deserialize_slice).collect())
+            .map(|row| {
+                row.chunks(EF::DIMENSION)
+                    .map(EF::deserialize_slice)
+                    .collect()
+            })
             .collect();
         (opened_ext_values, proof)
     }
@@ -80,7 +84,7 @@ where
         let base_dimensions = dimensions
             .iter()
             .map(|dim| Dimensions {
-                width: dim.width * EF::D,
+                width: dim.width * EF::DIMENSION,
                 height: dim.height,
             })
             .collect::<Vec<_>>();

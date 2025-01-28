@@ -33,7 +33,7 @@ where
     Inner: Matrix<EF>,
 {
     fn width(&self) -> usize {
-        self.0.width() * EF::D
+        self.0.width() * EF::DIMENSION
     }
 
     fn height(&self) -> usize {
@@ -77,7 +77,7 @@ where
 {
     type Item = F;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.idx == EF::D {
+        if self.idx == EF::DIMENSION {
             self.idx = 0;
             self.inner.next();
         }

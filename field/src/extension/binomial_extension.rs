@@ -77,8 +77,6 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Serializable<F> for BinomialExt
 impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F>
     for BinomialExtensionField<F, D>
 {
-    const D: usize = D;
-
     type ExtensionPacking = PackedBinomialExtensionField<F, F::Packing, D>;
 
     fn is_in_basefield(&self) -> bool {

@@ -565,8 +565,6 @@ pub trait PrimeField32: PrimeField64 {
 pub trait ExtensionField<Base: Field>: Field + Algebra<Base> + Serializable<Base> {
     type ExtensionPacking: PackedFieldExtension<Base, Self> + 'static + Copy + Send + Sync;
 
-    const D: usize;
-
     /// Determine if the given element lies in the base field.
     fn is_in_basefield(&self) -> bool;
 
@@ -577,8 +575,6 @@ pub trait ExtensionField<Base: Field>: Field + Algebra<Base> + Serializable<Base
 
 impl<F: Field> ExtensionField<F> for F {
     type ExtensionPacking = F::Packing;
-
-    const D: usize = 1;
 
     fn is_in_basefield(&self) -> bool {
         true
