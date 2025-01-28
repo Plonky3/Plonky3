@@ -190,7 +190,6 @@ macro_rules! test_prime_field_64 {
         mod from_integer_tests_prime_field_64 {
             use p3_field::integers::QuotientMap;
             use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
-
             use rand::Rng;
 
             #[test]
@@ -253,7 +252,6 @@ macro_rules! test_prime_field_32 {
         mod from_integer_tests_prime_field_32 {
             use p3_field::integers::QuotientMap;
             use p3_field::{Field, PrimeCharacteristicRing, PrimeField32};
-
             use rand::Rng;
 
             #[test]
