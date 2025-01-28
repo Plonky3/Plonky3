@@ -17,8 +17,8 @@ use super::{HasFrobenius, HasTwoAdicBionmialExtension, PackedBinomialExtensionFi
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{
-    field_to_array, Algebra, ExtensionField, FieldExtensionAlgebra, Packable, PackedValue, Powers,
-    PrimeCharacteristicRing, Serializable, TwoAdicField,
+    field_to_array, Algebra, ExtensionField, Packable, PrimeCharacteristicRing, Serializable,
+    TwoAdicField,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
@@ -88,36 +88,6 @@ impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F>
             Some(self.value[0])
         } else {
             None
-        }
-    }
-
-    // This is just here as a placeholder for now. Going to move this function to packed_binomial_extension
-    // in a future PR (before this is merged onto the main branch.)
-    fn ext_powers_packed(&self) -> crate::Powers<Self::ExtensionPacking> {
-        let width = F::Packing::WIDTH;
-        let powers = self.powers().take(width + 1).collect_vec();
-        // Transpose first WIDTH powers
-        let mut packed_powers = PackedBinomialExtensionField::<F, F::Packing, D> {
-            value: [F::Packing::ZERO; D],
-        };
-        packed_powers
-            .value
-            .iter_mut()
-            .enumerate()
-            .for_each(|(i, row_i)| {
-                let row_i = row_i.as_slice_mut();
-                powers[..width]
-                    .iter()
-                    .enumerate()
-                    .for_each(|(j, vec_j)| row_i[j] = vec_j.value[i])
-            });
-
-        // Broadcast self^WIDTH
-        let multiplier = powers[width].into();
-
-        Powers {
-            base: multiplier,
-            current: packed_powers,
         }
     }
 }
@@ -493,13 +463,6 @@ where
     fn mul_assign(&mut self, rhs: F) {
         *self = *self * rhs;
     }
-}
-
-impl<F, const D: usize> FieldExtensionAlgebra<F> for BinomialExtensionField<F, D>
-where
-    F: BinomiallyExtendable<D>,
-{
-    const D: usize = D;
 }
 
 impl<F: BinomiallyExtendable<D>, const D: usize> Distribution<BinomialExtensionField<F, D>>

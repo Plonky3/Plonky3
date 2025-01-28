@@ -115,7 +115,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     where
         T: ExtensionField<F>,
     {
-        let width = self.width * T::D;
+        let width = self.width * T::DIMENSION;
         let values = self
             .values
             .borrow()

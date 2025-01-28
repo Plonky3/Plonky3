@@ -10,7 +10,8 @@ use core::ops::Deref;
 
 use itertools::{izip, Itertools};
 use p3_field::{
-    dot_product, ExtensionField, Field, PackedValue, PrimeCharacteristicRing, Serializable,
+    dot_product, ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
+    Serializable,
 };
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
@@ -261,8 +262,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         T: Field,
         EF: ExtensionField<T>,
     {
-        let powers_packed = base
-            .ext_powers_packed()
+        let powers_packed = EF::ExtensionPacking::packed_ext_powers(base)
             .take(self.width().next_multiple_of(T::Packing::WIDTH))
             .collect_vec();
         self.par_padded_horizontally_packed_rows::<T::Packing>()
