@@ -87,10 +87,6 @@ impl<F: Field> FieldAlgebra for SymbolicExpression<F> {
         f.into()
     }
 
-    fn from_bool(b: bool) -> Self {
-        Self::Constant(F::from_bool(b))
-    }
-
     fn from_canonical_u8(n: u8) -> Self {
         Self::Constant(F::from_canonical_u8(n))
     }

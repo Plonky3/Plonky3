@@ -93,7 +93,13 @@ pub trait FieldAlgebra:
     fn from_f(f: Self::F) -> Self;
 
     /// Convert from a `bool`.
-    fn from_bool(b: bool) -> Self;
+    fn from_bool(b: bool) -> Self {
+        if b {
+            Self::ONE
+        } else {
+            Self::ZERO
+        }
+    }
 
     /// Convert from a canonical `u8`.
     ///

@@ -594,11 +594,6 @@ impl<FP: FieldParameters> FieldAlgebra for PackedMontyField31AVX512<FP> {
     fn from_f(f: Self::F) -> Self {
         f.into()
     }
-
-    #[inline]
-    fn from_bool(b: bool) -> Self {
-        MontyField31::from_bool(b).into()
-    }
     #[inline]
     fn from_canonical_u8(n: u8) -> Self {
         MontyField31::from_canonical_u8(n).into()

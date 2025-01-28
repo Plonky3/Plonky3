@@ -9,6 +9,7 @@ p3-air.workspace = true
 p3-blake3-air.workspace = true
 p3-field.workspace = true
 p3-challenger.workspace = true
+p3-circle.workspace = true
 p3-commit.workspace = true
 p3-dft.workspace = true
 p3-fri.workspace = true
@@ -17,6 +18,7 @@ p3-keccak-air.workspace = true
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
 p3-merkle-tree.workspace = true
+p3-mersenne-31.workspace = true
 p3-monty-31.workspace = true
 p3-poseidon2.workspace = true
 p3-poseidon2-air.workspace = true
@@ -32,13 +34,11 @@ serde = { workspace = true, features = ["derive", "alloc"] }
 p3-baby-bear.workspace = true
 p3-blake3.workspace = true
 p3-commit = { workspace = true, features = ["test-utils"] }
-p3-circle.workspace = true
 p3-challenger.workspace = true
 p3-dft.workspace = true
 p3-koala-bear.workspace = true
 p3-mds.workspace = true
 p3-matrix.workspace = true
-p3-mersenne-31.workspace = true
 p3-sha256.workspace = true
 clap_derive.workspace = true
 postcard = { workspace = true, features = ["alloc"] }
