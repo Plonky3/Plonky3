@@ -322,17 +322,9 @@ fn test_prove() {
 
     let proof = prove(&config, polynomial, &mut challenger);
 
-    let StirProof {
-        round_proofs,
-        final_polynomial,
-        pow_witness,
-        final_round_queries,
-        commitment,
-    } = proof;
-
     // Final-degree testing
     assert_eq!(config.log_stopping_degree(), 2);
-    assert!(final_polynomial.degree() < 1 << 2);
+    assert!(proof.final_polynomial.degree() < 1 << 2);
 }
 
 // NP TODO test two subsequent rounds by hand

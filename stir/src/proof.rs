@@ -53,9 +53,3 @@ pub struct RoundProof<F: Field, M: Mmcs<F>, Witness> {
     // Solution to the PoW challenge in round i
     pub(crate) pow_witness: Witness,
 }
-
-impl<F: Field, M: Mmcs<F>, Witness> StirProof<F, M, Witness> {
-    pub fn commitment(&self) -> &M::Commitment {
-        &self.commitment
-    }
-}

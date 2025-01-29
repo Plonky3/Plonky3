@@ -93,7 +93,7 @@ impl<F: TwoAdicField> Oracle<F> {
 }
 
 /// Input to verify_round
-pub struct VerificationState<F: TwoAdicField> {
+pub struct VerificationState<F: TwoAdicField, M: Mmcs<F>> {
     // The indices are given in the following frame of reference: Self is
     // produced inside verify_round for round i (in {1, ..., num_rounds}). The
     // final round ("consistency with the final polynomial"), with index
@@ -113,6 +113,9 @@ pub struct VerificationState<F: TwoAdicField> {
     // Index i in the main loop - starts at 0 with the verification state computed before
     // the first round (round 1)
     round: usize,
+
+    // Root of the Merkle tree comitting to g_i
+    root: M::Commitment,
 }
 
 pub fn verify<F, M, C>(
@@ -133,6 +136,9 @@ where
         final_round_queries,
     } = proof;
 
+    // NP TODO remove
+    println!("GETS 0");
+
     // NP TODO return meaningful verification error
 
     if final_polynomial.degree() >= 1 << config.log_stopping_degree() {
@@ -140,10 +146,13 @@ where
     }
 
     // NP TODO verify merkle paths (inside main loop instead of separately PLUS final round)
-    challenger.observe(commitment);
+    challenger.observe(commitment.clone());
     let folding_randomness = challenger.sample_ext_element();
 
     let log_size = config.log_starting_degree() + config.log_starting_inv_rate();
+
+    // NP TODO remove
+    println!("GETS 1");
 
     // Cf. prover/mod.rs for an explanation on the chosen sequence of domain
     // sizes
@@ -154,13 +163,19 @@ where
         domain,
         folding_randomness,
         round: 0,
+        root: commitment,
     };
 
-    // Saving the root of contained in the last round proof (that of the tree of evaluations of g_M)
-    let g_m_eval_root = round_proofs.last().unwrap().g_root.clone();
+    // NP TODO remove
+    println!("GETS 3");
+    let mut round_n = 1;
 
     // Verifying each round
     for round_proof in round_proofs {
+        // NP TODO remove
+        println!("GETS 4 round {}", round_n);
+        round_n += 1;
+
         verification_state =
             if let Some(vs) = verify_round(config, verification_state, round_proof, challenger) {
                 vs
@@ -173,6 +188,7 @@ where
         oracle: final_oracle,
         domain: final_domain,
         folding_randomness: final_folding_randomness,
+        root: g_m_root,
         ..
     } = verification_state;
 
@@ -198,7 +214,7 @@ where
         if config
             .mmcs_config()
             .verify_batch(
-                &g_m_eval_root,
+                &g_m_root,
                 // NP TODO verify this is correct
                 &[Dimensions {
                     width: 1 << log_last_folding_factor,
@@ -213,6 +229,8 @@ where
             return false;
         }
     }
+
+    println!("GETS 5");
 
     // Recover the evaluations of g_M needed to compute the values of f_M at
     // points which are relevant to evaluate p(r_i) = Fold(f_M, ...)(r_i), where
@@ -258,19 +276,20 @@ where
         return false;
     }
 
-    if !challenger.check_witness(config.final_pow_bits().ceil() as usize, pow_witness) {
-        return false;
-    }
+    // NP TODO verify pow_witness
+    // if !challenger.check_witness(config.final_pow_bits().ceil() as usize, pow_witness) {
+    //     return false;
+    // }
 
     return true;
 }
 
 fn verify_round<F, M, C>(
     config: &StirConfig<F, M>,
-    verification_state: VerificationState<F>,
+    verification_state: VerificationState<F, M>,
     round_proof: RoundProof<F, M, C::Witness>,
     challenger: &mut C,
-) -> Option<VerificationState<F>>
+) -> Option<VerificationState<F, M>>
 where
     F: TwoAdicField,
     M: Mmcs<F>,
@@ -287,11 +306,15 @@ where
         log_inv_rate,
     } = config.round_config(verification_state.round).clone();
 
+    // NP TODO remove
+    println!("verify_round GETS 0");
+
     let VerificationState {
         oracle,
         domain,
         folding_randomness,
         round,
+        root: prev_root,
     } = verification_state;
 
     let RoundProof {
@@ -306,6 +329,9 @@ where
     // Update the transcript with the root of the Merkle tree
     challenger.observe(g_root.clone());
 
+    // NP TODO remove
+    println!("verify_round GETS 1");
+
     // Rejection sampling on the out of domain samples
     let mut ood_samples = Vec::new();
 
@@ -315,6 +341,9 @@ where
             ood_samples.push(el);
         }
     }
+
+    // NP TODO remove
+    println!("verify_round GETS 2");
 
     // Observe the betas
     challenger.observe_slice(&betas);
@@ -328,15 +357,22 @@ where
     // Sample queried indices of elements in L_{i - 1}^k_{i-1}
     let log_query_domain_size = domain.log_size() - log_folding_factor;
 
+    // NP TODO remove
+    println!("verify_round GETS 3");
+
     let queried_indices: Vec<u64> = (0..num_queries)
         .map(|_| challenger.sample_bits(log_query_domain_size) as u64)
         .unique()
         .collect();
 
-    // Verify proof of work
-    if !challenger.check_witness(pow_bits.ceil() as usize, pow_witness) {
-        return None;
-    }
+    // NP TODO verify proof of work
+    // // Verify proof of work
+    // if !challenger.check_witness(pow_bits.ceil() as usize, pow_witness) {
+    //     return None;
+    // }
+
+    // NP TODO remove
+    println!("verify_round GETS 4");
 
     // Update the transcript with the coefficients of the answer and shake polynomials
     challenger.observe_slice(ans_polynomial.coeffs());
@@ -344,12 +380,15 @@ where
 
     let shake_randomness: F = challenger.sample_ext_element();
 
+    // NP TODO remove
+    println!("verify_round GETS 5");
+
     // Verify Merkle paths
     for (&i, (leaf, proof)) in queried_indices.iter().unique().zip(query_proofs.iter()) {
         if config
             .mmcs_config()
             .verify_batch(
-                &g_root,
+                &prev_root,
                 // NP TODO verify this is correct
                 &[Dimensions {
                     width: 1 << log_folding_factor,
@@ -365,11 +404,22 @@ where
         }
     }
 
+    // NP TODO remove
+    println!("verify_round GETS 6");
+
     // The j-th element of this vector is the list of values of g_{i - 1} which
     // result in the list of values of f_{i - 1} (by virtue of f_{i - 1} being
     // a virtual function reliant on g_{i - 1}) which get folded into
     // g_i(r_{i, j}^shift)
     let previous_g_values = query_proofs.into_iter().map(|(leaf, _)| leaf).collect_vec();
+
+    // NP TODO remove
+    println!("verify_round GETS 7");
+
+    // NP TODO remove
+    if round == 0 {
+        println!("g_evals_before_oracle: {:?}", previous_g_values[0]);
+    }
 
     // Compute the values of f_{i - 1} from those of g_{i - 1}
     let previous_f_values = compute_f_oracle_from_g(
@@ -393,8 +443,16 @@ where
         &queried_point_roots,
         log_folding_factor,
         folding_randomness,
-        domain.generator(),
+        domain.generator().exp_power_of_2(log_query_domain_size),
     );
+
+    // NP TODO remove
+    if round == 0 {
+        println!("FOLDED_EVAL: {:?}", folded_evals[0]);
+    }
+
+    // NP TODO remove
+    println!("verify_round GETS 8");
 
     let folded_answers = queried_point_roots
         .into_iter()
@@ -417,12 +475,37 @@ where
         return None;
     }
 
+    // NP TODO remove
+    println!("verify_round GETS 9");
+
+    // NP TODO remove
+    let (quotient_answers_ood, quotient_answers_stir) = quotient_answers.split_at(num_ood_samples);
+
+    // NP TODO remove
+    for (point, eval) in quotient_answers_ood {
+        if ans_polynomial.evaluate(point) != *eval {
+            println!("ans poly does not interpolate quotient answers ood");
+        } else {
+            println!("ans poly ood point okay");
+        }
+    }
+    for (point, eval) in quotient_answers_stir {
+        if ans_polynomial.evaluate(point) != *eval {
+            println!("ans poly does not interpolate quotient answers stir");
+        } else {
+            println!("ans poly stir point okay");
+        }
+    }
+
     if quotient_answers
         .iter()
         .any(|(point, eval)| ans_polynomial.evaluate(point) != *eval)
     {
         return None;
     }
+
+    // NP TODO remove
+    println!("verify_round GETS 10");
 
     let quotient_set = quotient_answers.into_iter().map(|(x, _)| x).collect_vec();
 
@@ -437,6 +520,7 @@ where
         domain: domain.shrink_subgroup(1),
         folding_randomness: new_folding_randomness,
         round: round + 1,
+        root: g_root,
     })
 }
 
@@ -492,7 +576,8 @@ fn compute_f_oracle_from_g<F: TwoAdicField>(
 // a polynomial h at the set of points
 //   Y_i = {y in F: y^(arity) = p_i^(arity)},
 // compute Fold(h, arity, c)(p_i^(arity)).
-fn compute_folded_evaluations<F: TwoAdicField>(
+// NP TODO make this private
+pub fn compute_folded_evaluations<F: TwoAdicField>(
     // The i-th element is the list of evaluations of h at Y_i
     unfolded_evaluation_lists: Vec<Vec<F>>,
     // The list of p_i's
@@ -510,3 +595,48 @@ fn compute_folded_evaluations<F: TwoAdicField>(
         .map(|(evals, point_root)| fold_evaluations(evals, *point_root, log_arity, omega, c))
         .collect()
 }
+
+// NOW
+// Prover
+// generate w0 (containing c0) absorb c0
+// Loop
+//  i = 1: use w0, produce (round_proof_1 (containing c1), w1 (containing c1), absorb c1)
+//  i = 2: use w1, produce (round_proof_2 (..), w2)
+
+// PROPOSED
+// Prover
+// generate w0 (containing c0) absorb c0, squeeze r_0
+// Loop
+//  i = 1: use w0, produce (round_proof_1 (containing c0), w1 (containing c1), absorb c1)
+// ...
+//  i = M: use w_{M-1}, produce (round_proof_M (containing c_{M-1}), w_M (containing c_M) absorb c_M)
+
+// Verifier
+// Loop
+// i = 1: use round_proof_1, absorb c_0, squeeze r_0
+
+// PROVER
+// - outside loop -   ---------------------------------------- loop i = 1 -----------------------------------------------
+// A_g_0,  S_fold_0,  A_g_1,  S_ood_1,  A_betas_1,  S_comb_cor_1,  S_fold_1,  S_stir_1,  A_ans_1,  A_shake_1,  S_shaker_1,
+//
+//                    ---------------------------------------- loop i = 2 -----------------------------------------------
+//                    A_g_2,  S_ood_2,  A_betas_2,  S_comb_cor_2,  S_fold_2,  S_stir_2,  A_ans_2,  A_shake_2,  S_shaker_2,
+//
+//                    ...
+//                    ---------------------------------------- loop i = M -----------------------------------------------
+//                    A_g_M,  S_ood_M,  A_betas_M,  S_comb_cor_M,  S_fold_M,  S_stir_M,  A_ans_M,  A_shake_M,  S_shaker_M,
+//
+// S_stir_{M + 1}
+
+// VERIFIER
+// - outside loop -   ---------------------------------------- loop i = 1 -----------------------------------------------
+// A_g_0,  S_fold_0,  A_g_1,  S_ood_1,  A_betas_1,  S_comb_cor_1,  S_fold_1,  S_stir_1,  A_ans_1,  A_shake_1,  S_shaker_1,
+//
+//                    ---------------------------------------- loop i = 2 -----------------------------------------------
+//                    A_g_2,  S_ood_2,  A_betas_2,  S_comb_cor_2,  S_fold_2,  S_stir_2,  A_ans_2,  A_shake_2,  S_shaker_2,
+//
+//                    ...
+//                    ---------------------------------------- loop i = M -----------------------------------------------
+//                    A_g_M,  S_ood_M,  A_betas_M,  S_comb_cor_M,  S_fold_M,  S_stir_M,  A_ans_M,  A_shake_M,  S_shaker_M,
+//
+// S_stir_{M + 1}

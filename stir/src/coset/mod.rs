@@ -77,8 +77,8 @@ impl<F: TwoAdicField> Radix2Coset<F> {
         }
     }
 
-    /// Reduce the size of the coset by a factor of 2^log_scale_factor
-    /// the shift is raised to the power of 2^log_scale_factor
+    /// Reduce the size of the coset by a factor of 2^log_scale_factor.
+    /// The shift is raised to the power of 2^log_scale_factor.
     // NP TODO shrink_and_shift
     pub fn shrink_coset(&self, log_scale_factor: usize) -> Radix2Coset<F> {
         assert!(

@@ -2,18 +2,20 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::convert::TryInto;
 use core::iter;
+use std::collections::HashSet;
 
 use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::TwoAdicField;
+use p3_field::{FieldAlgebra, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 
 use crate::config::RoundConfig;
 use crate::coset::Radix2Coset;
 use crate::polynomial::Polynomial;
 use crate::proof::RoundProof;
-use crate::utils::{fold_polynomial, multiply_by_power_polynomial};
+use crate::utils::{fold_evaluations, fold_polynomial, multiply_by_power_polynomial};
+use crate::verifier::compute_folded_evaluations;
 use crate::{StirConfig, StirProof};
 
 #[cfg(test)]
@@ -34,7 +36,7 @@ pub struct StirWitness<F: TwoAdicField, M: Mmcs<F>> {
     // merkle_tree above is a commitment to this
     pub(crate) stacked_evals: RowMajorMatrix<F>,
 
-    // Commitment to stacked_evals
+    // Merkle tree whose leaves are stacked_evals
     pub(crate) merkle_tree: M::ProverData<RowMajorMatrix<F>>,
 
     // Round number i
@@ -78,7 +80,14 @@ where
     let domain = Radix2Coset::new(F::two_adic_generator(log_size), log_size);
 
     let evals = domain.evaluate_polynomial(&polynomial);
-    let stacked_evals = RowMajorMatrix::new(evals, 1 << config.log_starting_folding_factor());
+
+    // NP TODO create function to collate which only moves stuff around in memory once
+    let stacked_evals = RowMajorMatrix::new(
+        evals,
+        1 << (log_size - config.log_starting_folding_factor()),
+    )
+    .transpose();
+
     let (commitment, merkle_tree) = config.mmcs_config().commit_matrix(stacked_evals.clone());
 
     (
@@ -137,7 +146,6 @@ where
     }
 
     // Final round
-
     let log_last_folding_factor = config.log_last_folding_factor();
 
     // p in the article
@@ -153,7 +161,7 @@ where
     let final_queries = config.final_num_queries();
 
     // Logarithm of |(L_{i - 1})^k_{i - 1}|
-    let log_query_domain_size = 1 << (witness.domain.log_size() - log_last_folding_factor);
+    let log_query_domain_size = witness.domain.log_size() - log_last_folding_factor;
 
     // NP TODO remove
     println!("GETS 2");
@@ -179,7 +187,9 @@ where
     println!("Grinding {} bits", config.final_pow_bits().ceil() as usize);
 
     // NP TODO: Is this correct? Can we just take the ceil?
-    let pow_witness = challenger.grind(config.final_pow_bits().ceil() as usize);
+    // NP TODO reintroduce
+    // let pow_witness = challenger.grind(config.final_pow_bits().ceil() as usize);
+    let pow_witness = C::Witness::ONE;
 
     // NP TODO remove
     println!("GETS 4");
@@ -193,15 +203,15 @@ where
     }
 }
 
-fn prove_round<F, M, Challenger>(
+fn prove_round<F, M, C>(
     config: &StirConfig<F, M>,
     witness: StirWitness<F, M>,
-    challenger: &mut Challenger,
-) -> (StirWitness<F, M>, RoundProof<F, M, Challenger::Witness>)
+    challenger: &mut C,
+) -> (StirWitness<F, M>, RoundProof<F, M, C::Witness>)
 where
     F: TwoAdicField,
     M: Mmcs<F>,
-    Challenger: FieldChallenger<F> + GrindingChallenger + CanObserve<M::Commitment>,
+    C: FieldChallenger<F> + GrindingChallenger + CanObserve<M::Commitment>,
 {
     // De-structure the round-specific configuration and the witness
     let RoundConfig {
@@ -252,7 +262,13 @@ where
     // Stack the new folded evaluations, commit and observe the commitment (in
     // preparation for next-round folding verification and hence with the
     // folding factor of the next round)
-    let new_stacked_evals = RowMajorMatrix::new(folded_evals, 1 << log_next_folding_factor);
+    // NP TODO create function to collate which only moves stuff around in memory once
+    let new_stacked_evals = RowMajorMatrix::new(
+        folded_evals,
+        1 << (new_domain.log_size() - log_next_folding_factor),
+    )
+    .transpose();
+
     let (new_commitment, new_merkle_tree) = config
         .mmcs_config()
         .commit_matrix(new_stacked_evals.clone());
@@ -306,10 +322,10 @@ where
     // Proof of work witness
     // NP TODO: Is this correct? Can we just take the ceil?
     // NP TODO unsafe cast to usize
-
     println!("Grinding {} bits", pow_bits.ceil() as usize);
-    let pow_witness = challenger.grind(pow_bits.ceil() as usize);
-    panic!();
+    // NP TODO reintroduce
+    //let pow_witness = challenger.grind(pow_bits.ceil() as usize);
+    let pow_witness = C::Witness::ONE;
 
     // ========= QUERY PROOFS =========
 
@@ -339,6 +355,94 @@ where
 
     // Compute the domain L_{i-1}^k = w^k * <w^{2^{i-1} * k}>
     let domain_k = domain.shrink_coset(log_folding_factor);
+
+    // NP TODO remove
+    if round == 0 {
+        let first_queried_index = queried_indices.first().unwrap();
+        let alpha = domain_k.element(*first_queried_index);
+        let alpha_root = domain.element(*first_queried_index);
+        let new_gen = domain.generator().exp_power_of_2(log_query_domain_size); // w^(s / k)
+                                                                                // alpha_roots = [alpha_root, alpha_root * generator ^ (size / k), alpha_root * generator ^ (2 * size / k), ...]
+        let alpha_roots = (0..(1 << log_folding_factor))
+            .map(|i| alpha_root * new_gen.exp_u64(i))
+            .collect_vec();
+        assert!(alpha_roots
+            .iter()
+            .all(|root| root.exp_power_of_2(log_folding_factor) == alpha));
+        // V is going to check the folding of some positions of f_0 into a position of g_1
+        // The first queried point alpha is in L_0^k_0 = {x^k | x \in L_0}
+        let g_1_alpha = folded_polynomial.evaluate(&alpha);
+        let f_0_evals = alpha_roots
+            .iter()
+            .map(|root| polynomial.evaluate(root))
+            .collect_vec();
+        use p3_matrix::Matrix;
+        let unfolded_evals_in_tree = config.mmcs_config().get_matrices(&merkle_tree)[0];
+        assert_eq!(domain.element(0), domain.generator());
+        assert_eq!(
+            polynomial.evaluate(&domain.generator()),
+            unfolded_evals_in_tree.row(0).collect_vec()[0]
+        );
+
+        // f(p0), f(p1), f(p2), f(p3), f(p4), f(p5), f(p6), f(p7)
+
+        // folding factor 4
+        // first_queried_index = 1
+
+        // Stacked
+        // f(p0), f(p2), f(p4), f(p6),
+        // f(p1), f(p3), f(p5), f(p7),
+
+        assert_eq!(alpha_roots[0], alpha_root);
+        assert_eq!(domain.element(*first_queried_index), alpha_roots[0]);
+        assert_eq!(
+            polynomial.evaluate(&domain.element(log_query_domain_size as u64)),
+            unfolded_evals_in_tree.row(0).collect_vec()[1]
+        );
+        assert_eq!(
+            polynomial.evaluate(&domain.element(first_queried_index * (1 << log_folding_factor))),
+            unfolded_evals_in_tree
+                .row(*first_queried_index as usize)
+                .collect_vec()[0]
+        );
+        assert_eq!(
+            polynomial.evaluate(&domain.element(first_queried_index * (1 << log_folding_factor))),
+            f_0_evals[0]
+        );
+
+        println!("FIRST_QUERIED_INDEX: {}", queried_indices.first().unwrap());
+        println!("UNFOLDED_EVALS: {:?}", f_0_evals);
+        println!(
+            "UNFOLDED_EVALS_IN_TREE: {:?}",
+            unfolded_evals_in_tree
+                .row(*first_queried_index as usize)
+                .collect_vec()
+        );
+        println!("FOLD_RANDOMNESS: {:?}", folding_randomness);
+        assert!(new_gen.exp_power_of_2(log_folding_factor) == F::ONE);
+        use std::collections::HashSet;
+        assert!(
+            HashSet::<F>::from_iter(
+                (0..1 << log_folding_factor).map(|i| new_gen.exp_u64(i as u64))
+            )
+            .len()
+                == 1 << log_folding_factor
+        );
+        let expected_folded_eval = compute_folded_evaluations(
+            vec![f_0_evals],
+            &[alpha_root],
+            log_folding_factor,
+            folding_randomness,
+            new_gen,
+        )[0];
+        println!("FOLDED_EVAL: {:?}", expected_folded_eval);
+        assert_eq!(g_1_alpha, expected_folded_eval);
+        // p    p_2    p_3  ... p_8 which have the same k-th power
+        // domain:      a1, a2, a3, a4, a5, a6, a7, a8
+        // k = 4
+        // domain_k:    a1^4,           a4^5
+        // sample i
+    }
 
     // Get the elements in L^k corresponding to the queried indices
     // (i.e r^{shift}_i in the paper)

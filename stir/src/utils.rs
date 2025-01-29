@@ -159,6 +159,7 @@ mod tests {
 
     use p3_baby_bear::BabyBear;
     use p3_field::FieldAlgebra;
+    use p3_matrix::Matrix;
 
     use core::assert_eq;
     use iter::Iterator;
