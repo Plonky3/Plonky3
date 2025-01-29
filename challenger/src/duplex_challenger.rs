@@ -160,13 +160,13 @@ where
 mod tests {
     use core::iter;
 
-    use crate::grinding_challenger::GrindingChallenger;
     use p3_baby_bear::BabyBear;
     use p3_field::FieldAlgebra;
     use p3_goldilocks::Goldilocks;
     use p3_symmetric::Permutation;
 
     use super::*;
+    use crate::grinding_challenger::GrindingChallenger;
 
     const WIDTH: usize = 24;
     const RATE: usize = 16;
@@ -235,8 +235,13 @@ mod tests {
         let permutation = TestPermutation {};
         let mut duplex_challenger = GoldilocksChal::new(permutation);
 
-        // This grinding should never finish on a regular machine
-        let witness = duplex_challenger.grind(129);
-        assert!(duplex_challenger.check_witness(129, witness));
+        // This should cause sample_bits (and hence grind and check_witness) to
+        // panic. If bit sizes were not constrained correctly inside the
+        // challenger, (1 << too_many_bits) would loop around, incorrectly
+        // grinding and accepting a 1-bit PoW.
+        let too_many_bits = usize::BITS as usize;
+
+        let witness = duplex_challenger.grind(too_many_bits);
+        assert!(duplex_challenger.check_witness(too_many_bits, witness));
     }
 }
