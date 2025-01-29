@@ -388,26 +388,30 @@ where
 
         // folding factor 4
         // first_queried_index = 1
+        // log_query_domain_size = 1, query_domain_size = 2
 
         // Stacked
         // f(p0), f(p2), f(p4), f(p6),
         // f(p1), f(p3), f(p5), f(p7),
 
+        println!(
+            "Matrix_dimensions: {} rows x {} columns",
+            unfolded_evals_in_tree.rows().count(),
+            unfolded_evals_in_tree.first_row().len()
+        );
+        println!("log_query_domain_size: {}", log_query_domain_size);
+        println!("domain log size: {}", domain.log_size());
+        println!("log_folding_factor: {}", log_folding_factor);
+
         assert_eq!(alpha_roots[0], alpha_root);
         assert_eq!(domain.element(*first_queried_index), alpha_roots[0]);
         assert_eq!(
-            polynomial.evaluate(&domain.element(log_query_domain_size as u64)),
+            polynomial.evaluate(&domain.element((1 << log_query_domain_size) as u64)),
             unfolded_evals_in_tree.row(0).collect_vec()[1]
         );
         assert_eq!(
-            polynomial.evaluate(&domain.element(first_queried_index * (1 << log_folding_factor))),
-            unfolded_evals_in_tree
-                .row(*first_queried_index as usize)
-                .collect_vec()[0]
-        );
-        assert_eq!(
-            polynomial.evaluate(&domain.element(first_queried_index * (1 << log_folding_factor))),
-            f_0_evals[0]
+            polynomial.evaluate(&domain.element(1)),
+            unfolded_evals_in_tree.row(1).collect_vec()[0]
         );
 
         println!("FIRST_QUERIED_INDEX: {}", queried_indices.first().unwrap());
