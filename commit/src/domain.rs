@@ -1,4 +1,4 @@
-use alloc::vec::Vec;
+use alloc::vec::{self, Vec};
 
 use itertools::Itertools;
 use p3_field::{
@@ -48,10 +48,11 @@ pub trait PolynomialSpace: Copy {
     fn selectors_at_point<Ext: ExtensionField<Self::Val>>(
         &self,
         point: Ext,
+        is_zk: bool,
     ) -> LagrangeSelectors<Ext>;
 
     // Unnormalized
-    fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>>;
+    fn selectors_on_coset(&self, coset: Self, is_zk: bool) -> LagrangeSelectors<Vec<Self::Val>>;
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -63,6 +64,10 @@ pub struct TwoAdicMultiplicativeCoset<Val: TwoAdicField> {
 impl<Val: TwoAdicField> TwoAdicMultiplicativeCoset<Val> {
     fn gen(&self) -> Val {
         Val::two_adic_generator(self.log_n)
+    }
+
+    fn gen_zk(&self, is_zk: bool) -> Val {
+        Val::two_adic_generator(self.log_n - is_zk as usize)
     }
 }
 
@@ -115,24 +120,33 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         (point * self.shift.inverse()).exp_power_of_2(self.log_n) - Ext::ONE
     }
 
-    fn selectors_at_point<Ext: ExtensionField<Val>>(&self, point: Ext) -> LagrangeSelectors<Ext> {
+    fn selectors_at_point<Ext: ExtensionField<Val>>(
+        &self,
+        point: Ext,
+        is_zk: bool,
+    ) -> LagrangeSelectors<Ext> {
         let unshifted_point = point * self.shift.inverse();
-        let z_h = unshifted_point.exp_power_of_2(self.log_n) - Ext::ONE;
+
+        let z_h = unshifted_point.exp_power_of_2(self.log_n - is_zk as usize) - Ext::ONE;
         LagrangeSelectors {
             is_first_row: z_h / (unshifted_point - Ext::ONE),
-            is_last_row: z_h / (unshifted_point - self.gen().inverse()),
-            is_transition: unshifted_point - self.gen().inverse(),
+            is_last_row: z_h / (unshifted_point - self.gen_zk(is_zk).inverse()),
+            // is_transition: (unshifted_point - self.gen_zk(is_zk).inverse()) * other_zh / z_h,
+            is_transition: unshifted_point - self.gen_zk(is_zk).inverse(),
             inv_zeroifier: z_h.inverse(),
         }
     }
 
-    fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Val>> {
+    fn selectors_on_coset(&self, coset: Self, is_zk: bool) -> LagrangeSelectors<Vec<Val>> {
         assert_eq!(self.shift, Val::ONE);
         assert_ne!(coset.shift, Val::ONE);
         assert!(coset.log_n >= self.log_n);
-        let rate_bits = coset.log_n - self.log_n;
-
-        let s_pow_n = coset.shift.exp_power_of_2(self.log_n);
+        // tracing::info!("coset logn {} self logn {}", coset.log_n, self.log_n);
+        // In the zk case, the trace has double the original size due to randomization. We need the original size here.
+        let zk_logn = self.log_n - is_zk as usize;
+        tracing::info!("zk logn {:?}", zk_logn);
+        let rate_bits = coset.log_n - zk_logn;
+        let s_pow_n = coset.shift.exp_power_of_2(zk_logn);
         // evals of Z_H(X) = X^n - 1
         let evals = Val::two_adic_generator(rate_bits)
             .powers()
@@ -143,8 +157,13 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         let xs = cyclic_subgroup_coset_known_order(coset.gen(), coset.shift, 1 << coset.log_n)
             .collect_vec();
 
+        // let other_evals = xs
+        //     .iter()
+        //     .map(|x| x.exp_power_of_2(self.log_n) - Val::ONE)
+        //     .collect::<Vec<_>>();
+
         let single_point_selector = |i: u64| {
-            let coset_i = self.gen().exp_u64(i);
+            let coset_i = self.gen_zk(is_zk).exp_u64(i);
             let denoms = xs.iter().map(|&x| x - coset_i).collect_vec();
             let invs = batch_multiplicative_inverse(&denoms);
             evals
@@ -155,12 +174,39 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
                 .collect_vec()
         };
 
-        let subgroup_last = self.gen().inverse();
+        // let inv_zeros = batch_multiplicative_inverse(&evals)
+        //     .into_iter()
+        //     .cycle()
+        //     .take(1 << coset.log_n)
+        //     .collect::<Vec<_>>();
+        // use alloc::vec;
+        let subgroup_last = self.gen_zk(is_zk).inverse();
+        tracing::info!("inv g coset {:?}", subgroup_last);
+        // let p = xs.len() - (1 << (self.log_n - is_zk as usize));
+        // let mut vals = xs[..1 << (self.log_n - is_zk as usize)]
+        // let mut vals = xs.iter().map(|x| *x - subgroup_last).collect::<Vec<_>>();
+        // let mut vals = vec![Val::ZERO; 1 << self.log_n - is_zk as usize];
+        // vals.extend(Val::zero_vec(p));
 
         LagrangeSelectors {
             is_first_row: single_point_selector(0),
-            is_last_row: single_point_selector((1 << self.log_n) - 1),
-            is_transition: xs.into_iter().map(|x| x - subgroup_last).collect(),
+            is_last_row: single_point_selector((1 << zk_logn) - 1),
+            is_transition: xs
+                .into_iter()
+                .enumerate()
+                .map(|(i, x)| {
+                    // tracing::info!(
+                    //     "unshifted zh {:?}, zh {:?}, unshifted transition {:?} nb i {:?}",
+                    //     (x * coset.shift.inverse()).exp_power_of_2(zk_logn) - Val::ONE,
+                    //     x.exp_power_of_2(zk_logn),
+                    //     (x * coset.shift.inverse() - subgroup_last)
+                    //         * ((x * coset.shift.inverse()).exp_power_of_2(self.log_n) - Val::ONE),
+                    //     i
+                    // );
+                    // (x - subgroup_last) * other_evals[i] * inv_zeros[i]
+                    x - subgroup_last
+                })
+                .collect(),
             inv_zeroifier: batch_multiplicative_inverse(&evals)
                 .into_iter()
                 .cycle()

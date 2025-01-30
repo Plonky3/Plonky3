@@ -38,8 +38,17 @@ where
     #[cfg(debug_assertions)]
     crate::check_constraints::check_constraints(air, &trace, public_values);
 
+    let pcs = config.pcs();
+
     let degree = trace.height();
     let log_degree = log2_strict_usize(degree);
+    let ext_degree = if pcs.is_zk() { degree * 2 } else { degree };
+    let log_ext_degree = log2_strict_usize(ext_degree);
+    // tracing::info!(
+    //     "log degree {} ext log degree {}",
+    //     log_degree,
+    //     log_ext_degree
+    // );
 
     let symbolic_constraints = get_symbolic_constraints::<Val<SC>, A>(air, 0, public_values.len());
     let constraint_count = symbolic_constraints.len();
@@ -51,14 +60,14 @@ where
     let log_quotient_degree = log2_ceil_usize(constraint_degree - 1);
     let quotient_degree = 1 << log_quotient_degree;
 
-    let pcs = config.pcs();
     let trace_domain = pcs.natural_domain_for_degree(degree);
+    let ext_trace_domain = pcs.natural_domain_for_degree(ext_degree);
 
     let (trace_commit, trace_data) =
-        info_span!("commit to trace data").in_scope(|| pcs.commit(vec![(trace_domain, trace)]));
+        info_span!("commit to trace data").in_scope(|| pcs.commit(vec![(ext_trace_domain, trace)]));
 
     // Observe the instance.
-    challenger.observe(Val::<SC>::from_canonical_usize(log_degree));
+    challenger.observe(Val::<SC>::from_canonical_usize(log_ext_degree));
     // TODO: Might be best practice to include other instance data here; see verifier comment.
 
     challenger.observe(trace_commit.clone());
@@ -66,23 +75,35 @@ where
     let alpha: SC::Challenge = challenger.sample_ext_element();
 
     let quotient_domain =
-        trace_domain.create_disjoint_domain(1 << (log_degree + log_quotient_degree));
+        ext_trace_domain.create_disjoint_domain(1 << (log_ext_degree + log_quotient_degree));
 
     let trace_on_quotient_domain = pcs.get_evaluations_on_domain(&trace_data, 0, quotient_domain);
 
     let quotient_values = quotient_values(
         air,
         public_values,
-        trace_domain,
+        ext_trace_domain,
         quotient_domain,
         trace_on_quotient_domain,
         alpha,
         constraint_count,
+        pcs.is_zk(),
     );
+    let nb_chunks = if pcs.is_zk() {
+        quotient_degree * 2
+    } else {
+        quotient_degree
+    };
     let quotient_flat = RowMajorMatrix::new_col(quotient_values.clone()).flatten_to_base();
-    let quotient_chunks = quotient_domain.split_evals(quotient_degree, quotient_flat);
-    let qc_domains = quotient_domain.split_domains(quotient_degree);
+    let quotient_chunks = quotient_domain.split_evals(nb_chunks, quotient_flat);
+    let qc_domains = quotient_domain.split_domains(nb_chunks);
 
+    // tracing::info!(
+    //     "nb quotient chunks {}, degree {} log quotient degree {}",
+    //     quotient_chunks.len(),
+    //     quotient_chunks[0].height(),
+    //     log_quotient_degree
+    // );
     // Compute the vanishing polynomial normalizing constants, based on the verifier's check.
     let zp_cis = qc_domains
         .iter()
@@ -164,7 +185,7 @@ where
                 (
                     &quotient_data,
                     // open every chunk at zeta
-                    (0..quotient_degree).map(|_| vec![zeta]).collect_vec(),
+                    (0..nb_chunks).map(|_| vec![zeta]).collect_vec(),
                 ),
             ],
             challenger,
@@ -182,7 +203,7 @@ where
         commitments,
         opened_values,
         opening_proof,
-        degree_bits: log_degree,
+        degree_bits: log_ext_degree,
     }
 }
 
@@ -195,6 +216,7 @@ fn quotient_values<SC, A, Mat>(
     trace_on_quotient_domain: Mat,
     alpha: SC::Challenge,
     constraint_count: usize,
+    is_zk: bool,
 ) -> Vec<SC::Challenge>
 where
     SC: StarkGenericConfig,
@@ -203,7 +225,13 @@ where
 {
     let quotient_size = quotient_domain.size();
     let width = trace_on_quotient_domain.width();
-    let mut sels = trace_domain.selectors_on_coset(quotient_domain);
+    let mut sels = trace_domain.selectors_on_coset(quotient_domain, is_zk);
+    // tracing::info!(
+    //     "is_transition prover {:?} is_first_row {:?}, is_last_row {:?}",
+    //     sels.is_transition,
+    //     sels.is_first_row,
+    //     sels.is_last_row
+    // );
 
     let qdb = log2_strict_usize(quotient_domain.size()) - log2_strict_usize(trace_domain.size());
     let next_step = 1 << qdb;
@@ -219,7 +247,6 @@ where
 
     let mut alpha_powers = alpha.powers().take(constraint_count).collect_vec();
     alpha_powers.reverse();
-
     (0..quotient_size)
         .into_par_iter()
         .step_by(PackedVal::<SC>::WIDTH)

@@ -30,3 +30,5 @@ p3-poseidon2 = { path = "../poseidon2" }
 p3-symmetric = { path = "../symmetric" }
 rand = "0.8.5"
 postcard = { version = "1.0.0", default-features = false, features = ["alloc"] }
+tracing-subscriber = { version = "0.3.17", features = ["std", "env-filter"] }
+tracing-forest = { version = "0.1.6", features = ["ansi", "smallvec"] }

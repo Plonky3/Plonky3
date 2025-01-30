@@ -174,6 +174,7 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
     fn selectors_at_point<Ext: ExtensionField<Self::Val>>(
         &self,
         point: Ext,
+        _is_zk: bool,
     ) -> LagrangeSelectors<Ext> {
         let point = Point::from_projective_line(point);
         LagrangeSelectors {
@@ -203,10 +204,10 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
     // wow, really slow!
     // todo: batch inverses
     #[instrument(skip_all, fields(log_n = %coset.log_n))]
-    fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>> {
+    fn selectors_on_coset(&self, coset: Self, _is_zk: bool) -> LagrangeSelectors<Vec<Self::Val>> {
         let sels = coset
             .points()
-            .map(|p| self.selectors_at_point(p.to_projective_line().unwrap()))
+            .map(|p| self.selectors_at_point(p.to_projective_line().unwrap(), false))
             .collect_vec();
         LagrangeSelectors {
             is_first_row: sels.iter().map(|s| s.is_first_row).collect(),
@@ -336,12 +337,12 @@ mod tests {
 
         let d = CircleDomain::<F>::standard(log_n);
         let coset = d.create_disjoint_domain(n);
-        let sels = d.selectors_on_coset(coset);
+        let sels = d.selectors_on_coset(coset, false);
 
         // selectors_on_coset matches selectors_at_point
         let mut pt = coset.first_point();
         for i in 0..coset.size() {
-            let pt_sels = d.selectors_at_point(pt);
+            let pt_sels = d.selectors_at_point(pt, false);
             assert_eq!(sels.is_first_row[i], pt_sels.is_first_row);
             assert_eq!(sels.is_last_row[i], pt_sels.is_last_row);
             assert_eq!(sels.is_transition[i], pt_sels.is_transition);

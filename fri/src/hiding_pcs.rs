@@ -77,7 +77,7 @@ where
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
-        let randomized_evaluations = evaluations
+        let randomized_evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)> = evaluations
             .into_iter()
             .map(|(domain, mat)| {
                 (
@@ -86,10 +86,29 @@ where
                 )
             })
             .collect();
-        <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as Pcs<Challenge, Challenger>>::commit(
-            &self.inner,
-            randomized_evaluations,
-        )
+        let h = randomized_evaluations[0].1.height();
+        let ldes: Vec<_> = randomized_evaluations
+            .into_iter()
+            .map(|(domain, evals)| {
+                assert_eq!(domain.size(), evals.height() * 2);
+                let shift = Val::GENERATOR / domain.shift;
+                let s = domain.shift;
+
+                let random_values = vec![self.rng.borrow_mut().gen(); h];
+                // let random_values = vec![Val::ZERO; h];
+
+                self.inner
+                    .dft
+                    .coset_lde_batch_zk(evals, self.inner.fri.log_blowup, shift, s, &random_values)
+                    .bit_reverse_rows()
+                    .to_row_major_matrix()
+            })
+            .collect();
+        self.inner.mmcs.commit(ldes)
+        // <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as Pcs<Challenge, Challenger>>::commit(
+        //     &self.inner,
+        //     randomized_evaluations,
+        // )
     }
 
     fn commit_quotient(

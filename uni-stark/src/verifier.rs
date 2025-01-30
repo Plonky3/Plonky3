@@ -38,19 +38,42 @@ where
 
     let pcs = config.pcs();
     let trace_domain = pcs.natural_domain_for_degree(degree);
+    let init_trace_domain = if pcs.is_zk() {
+        pcs.natural_domain_for_degree(degree / 2)
+    } else {
+        trace_domain
+    };
+    let nb_chunks = if pcs.is_zk() {
+        quotient_degree * 2
+    } else {
+        quotient_degree
+    };
     let quotient_domain =
         trace_domain.create_disjoint_domain(1 << (degree_bits + log_quotient_degree));
-    let quotient_chunks_domains = quotient_domain.split_domains(quotient_degree);
+    let quotient_chunks_domains = quotient_domain.split_domains(nb_chunks);
+
     let randomized_quotient_chunks_domains = quotient_chunks_domains
         .iter()
-        .map(|domain| pcs.natural_domain_for_degree(domain.size() * 2))
+        .map(|domain| {
+            let randomized_domain_size = if pcs.is_zk() {
+                domain.size() * 2
+            } else {
+                domain.size()
+            };
+            pcs.natural_domain_for_degree(randomized_domain_size)
+        })
         .collect_vec();
 
+    let nb_chunks = if pcs.is_zk() {
+        quotient_degree * 2
+    } else {
+        quotient_degree
+    };
     let air_width = <A as BaseAir<Val<SC>>>::width(air);
     // TODO Linda: include random poly here.
     let valid_shape = opened_values.trace_local.len() == air_width
         && opened_values.trace_next.len() == air_width
-        && opened_values.quotient_chunks.len() == quotient_degree
+        && opened_values.quotient_chunks.len() == nb_chunks
         && opened_values
             .quotient_chunks
             .iter()
@@ -73,7 +96,7 @@ where
     challenger.observe(commitments.quotient_chunks.clone());
 
     let zeta: SC::Challenge = challenger.sample();
-    let zeta_next = trace_domain.next_point(zeta).unwrap();
+    let zeta_next = init_trace_domain.next_point(zeta).unwrap();
 
     pcs.verify(
         vec![
@@ -130,7 +153,21 @@ where
         })
         .sum::<SC::Challenge>();
 
-    let sels = trace_domain.selectors_at_point(zeta);
+    tracing::info!(
+        "quotient chunks len {}",
+        opened_values.quotient_chunks.len()
+    );
+    let g = trace_domain
+        .next_point(trace_domain.first_point())
+        .unwrap()
+        .exp_u64(14);
+    tracing::info!("Entering with g {:?} degree bits {:?}", g, degree_bits);
+    tracing::info!(
+        "last pt eval {:?}",
+        trace_domain.selectors_at_point(g, pcs.is_zk())
+    );
+
+    let sels = trace_domain.selectors_at_point(zeta, pcs.is_zk());
 
     let main = VerticalPair::new(
         RowMajorMatrixView::new_row(&opened_values.trace_local),

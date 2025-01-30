@@ -2,18 +2,27 @@ use std::borrow::Borrow;
 
 use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_challenger::DuplexChallenger;
+use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, FieldAlgebra, PrimeField64};
-use p3_fri::{FriConfig, TwoAdicFriPcs};
+use p3_fri::{FriConfig, HidingFriPcs, TwoAdicFriPcs};
+use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
-use p3_merkle_tree::MerkleTreeMmcs;
-use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
+use p3_symmetric::{
+    CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32To64, TruncatedPermutation,
+};
 use p3_uni_stark::{prove, verify, StarkConfig};
-use rand::thread_rng;
+use rand::rngs::{StdRng, ThreadRng};
+use rand::{thread_rng, SeedableRng};
+use tracing::level_filters::LevelFilter;
+use tracing_forest::ForestLayer;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Registry};
 
 /// For testing the public values feature
 pub struct FibonacciAir {}
@@ -27,6 +36,7 @@ impl<F> BaseAir<F> for FibonacciAir {
 impl<AB: AirBuilderWithPublicValues> Air<AB> for FibonacciAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
+
         let pis = builder.public_values();
 
         let a = pis[0];
@@ -136,6 +146,104 @@ fn test_public_value_impl(n: usize, x: u64) {
     ];
     let proof = prove(&config, &FibonacciAir {}, &mut challenger, trace, &pis);
     let mut challenger = Challenger::new(perm);
+    verify(&config, &FibonacciAir {}, &mut challenger, &proof, &pis).expect("verification failed");
+}
+
+#[test]
+fn test_zk() {
+    let env_filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
+
+    Registry::default()
+        .with(env_filter)
+        .with(ForestLayer::default())
+        .init();
+    // type Val = BabyBear;
+    // type Challenge = BinomialExtensionField<Val, 4>;
+
+    // type ByteHash = Keccak256Hash;
+    // let byte_hash = ByteHash {};
+
+    // type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
+    // let u64_hash = MyHash::new(KeccakF {});
+
+    // type FieldHash = SerializingHasher32To64<U64Hash>;
+    // let field_hash = FieldHash::new(u64_hash);
+
+    // type MyCompress = CompressionFunctionFromHasher<U64Hash, 2, 4>;
+    // let compress = MyCompress::new(u64_hash);
+
+    type Val = BabyBear;
+    type Challenge = BinomialExtensionField<Val, 4>;
+
+    type ByteHash = Keccak256Hash;
+    let byte_hash = ByteHash {};
+
+    type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
+    let u64_hash = U64Hash::new(KeccakF {});
+
+    type FieldHash = SerializingHasher32To64<U64Hash>;
+    let field_hash = FieldHash::new(u64_hash);
+
+    type MyCompress = CompressionFunctionFromHasher<U64Hash, 2, 4>;
+    let compress = MyCompress::new(u64_hash);
+
+    type ValHidingMmcs = MerkleTreeHidingMmcs<
+        [Val; p3_keccak::VECTOR_LEN],
+        [u64; p3_keccak::VECTOR_LEN],
+        FieldHash,
+        MyCompress,
+        ThreadRng,
+        4,
+        4,
+    >;
+    let val_mmcs = ValHidingMmcs::new(field_hash, compress, thread_rng());
+
+    type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
+    // type ValHidingMmcs = MerkleTreeHidingMmcs<
+    //     <Val as Field>::Packing,
+    //     <Val as Field>::Packing,
+    //     MyHash,
+    //     MyCompress,
+    //     ThreadRng,
+    //     4,
+    //     4,
+    // >;
+    // let val_mmcs = ValHidingMmcs::new(field_hash, compress, thread_rng());
+
+    type ChallengeHidingMmcs = ExtensionMmcs<Val, Challenge, ValHidingMmcs>;
+    // type MyCompress = CompressionFunctionFromHasher<Perm, 2, 4>;
+    // let challenge_mmcs = ChallengeHidingMmcs::new(val_mmcs.clone());
+
+    // type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
+    let n = 1 << 3;
+    let x = 21;
+    // let perm = KeccakF::new_from_rng_128(&mut thread_rng());
+    // let hash = MyHash::new(perm.clone());
+    // let compress = MyCompress::new(perm.clone());
+    // let val_mmcs = ValHidingMmcs::new(hash, compress, thread_rng());
+    let challenge_mmcs = ChallengeHidingMmcs::new(val_mmcs.clone());
+    let dft = Dft::default();
+    let trace = generate_trace_rows::<Val>(0, 1, n);
+    let fri_config = FriConfig {
+        log_blowup: 2,
+        num_queries: 28,
+        proof_of_work_bits: 8,
+        mmcs: challenge_mmcs,
+    };
+    type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, StdRng>;
+    type MyHidingConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
+    let pcs = HidingPcs::new(dft, val_mmcs, fri_config, 4, StdRng::from_entropy());
+    let config = MyHidingConfig::new(pcs);
+    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
+    let pis = vec![
+        BabyBear::from_canonical_u64(0),
+        BabyBear::from_canonical_u64(1),
+        BabyBear::from_canonical_u64(x),
+    ];
+    let proof = prove(&config, &FibonacciAir {}, &mut challenger, trace, &pis);
+    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
     verify(&config, &FibonacciAir {}, &mut challenger, &proof, &pis).expect("verification failed");
 }
 
