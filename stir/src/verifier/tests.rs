@@ -1,15 +1,14 @@
 use crate::{
     coset::Radix2Coset,
-    polynomial::{rand_poly, Polynomial},
+    polynomial::rand_poly,
     prover::prove,
-    test_utils::{test_challenger, test_stir_config},
-    utils::{fold_evaluations, fold_polynomial},
+    test_utils::{test_challenger, test_stir_config, test_stir_config_folding_factors},
+    utils::fold_polynomial,
     verifier::{compute_folded_evaluations, verify},
-    StirProof,
 };
 use itertools::Itertools;
 use p3_baby_bear::BabyBear;
-use p3_field::{Field, FieldAlgebra};
+use p3_field::FieldAlgebra;
 use rand::thread_rng;
 use rand::Rng;
 
@@ -45,8 +44,6 @@ fn test_compute_folded_evals() {
 
 #[test]
 fn test_verify() {
-    // let config = test_stir_config(10, 1, 2, 3);
-    // let config = test_stir_config(10, 1, 4, 2);
     let config = test_stir_config(14, 1, 4, 3);
 
     let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
@@ -54,9 +51,19 @@ fn test_verify() {
     let mut prover_challenger = test_challenger();
     let mut verifier_challenger = prover_challenger.clone();
 
-    println!("Proving...");
     let proof = prove(&config, polynomial, &mut prover_challenger);
+    assert!(verify(&config, proof, &mut verifier_challenger));
+}
 
-    println!("Verifying...");
+#[test]
+fn test_verify_variable_folding_factor() {
+    let config = test_stir_config_folding_factors(14, 1, vec![5, 4, 3]);
+
+    let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
+
+    let mut prover_challenger = test_challenger();
+    let mut verifier_challenger = prover_challenger.clone();
+
+    let proof = prove(&config, polynomial, &mut prover_challenger);
     assert!(verify(&config, proof, &mut verifier_challenger));
 }

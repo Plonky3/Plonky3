@@ -78,8 +78,7 @@ impl<F: TwoAdicField> Radix2Coset<F> {
     }
 
     /// Reduce the size of the coset by a factor of 2^log_scale_factor.
-    /// The shift is raised to the power of 2^log_scale_factor.
-    // NP TODO shrink_and_shift
+    /// The shift is also raised to the power of 2^log_scale_factor.
     pub fn shrink_coset(&self, log_scale_factor: usize) -> Radix2Coset<F> {
         assert!(
             log_scale_factor <= self.log_size,
@@ -114,15 +113,13 @@ impl<F: TwoAdicField> Radix2Coset<F> {
 
     /// Checks if a given element is in the coset
     pub fn contains(&self, element: F) -> bool {
-        // Note that a subgroup of order n of the group of units of a field is
-        // necessarily the group of n-th roots of unity. Therefore, testing for
-        // belonging to that group can be done by raising to its order.
+        // Note that, in a field (this is not true of a general commutative
+        // ring), there is exactly one subgroup of |F^*| of order n for each
+        // divisor n of |F| - 1, and its elements e are uniquely caracterised by
+        // the condition e^n = 1.
+
         // NP TODO think about early termination either here or in field: exp_power_of_2
         (self.shift.inverse() * element).exp_power_of_2(self.log_size) == F::ONE
-
-        // Is e^(2^log_size) == 1?
-
-        //
     }
 
     pub fn evaluate_interpolation<Mat>(&self, coset_evals: &Mat, point: F) -> Vec<F>
@@ -133,8 +130,7 @@ impl<F: TwoAdicField> Radix2Coset<F> {
         interpolate_coset(coset_evals, self.shift, point, None)
     }
 
-    // NP interpolate(
-    pub fn interpolate_evals(&self, evals: Vec<F>) -> Polynomial<F> {
+    pub fn interpolate(&self, evals: Vec<F>) -> Polynomial<F> {
         let mut evals = evals;
         evals.resize(1 << self.log_size, F::ZERO);
         // NP TODO is there a better impl?

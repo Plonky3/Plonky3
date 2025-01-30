@@ -22,15 +22,6 @@ pub(crate) fn fold_polynomial<F: TwoAdicField>(
 
     let mut folded_coeffs = vec![F::ZERO; fold_size];
 
-    // NP TODO remove or move:
-    // Example:
-    // 1 + 2*x + 3*x^2 + 4*x^3 + 5*x^4 + 6*x^5 + 7*x^6 + 8*x^7
-    // folding_factor = 4
-    // fold_size = 2
-    // folding_powers = [1, r, r^2, r^3]
-    // folded_polynomial = (1 + 5x) + r * (2 + 6x) + r^2 * (3 + 7x) + r^3 * (4 + 8x)
-    //                   = (1 + 2r + 3r^2 + 4r^3) + (5 + 6r + 7r^2 + 8r^3)x
-
     for (i, coeff) in polynomial.coeffs().iter().enumerate() {
         folded_coeffs[i / folding_factor] += *coeff * folding_powers[i % folding_factor];
     }
@@ -96,8 +87,6 @@ pub fn fold_evaluations<F: TwoAdicField>(
     // coefficient b. Then
     //   Fold(h, 2^arity, coeff) = Fold2(..., Fold2(h, c), c^2, c^4, ..., )
     // where the ellipses denote the arity-fold composition of Fold2.
-
-    // NP TODO remove or change to dbg assert
 
     let arity = 1 << log_arity;
     assert!(evals.len() == arity);

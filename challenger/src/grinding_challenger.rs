@@ -32,12 +32,7 @@ where
         let witness = (0..F::ORDER_U64)
             .into_par_iter()
             .map(|i| F::from_canonical_u64(i))
-            // NP TODO reintroduce
-            // .find_any(|witness| self.clone().check_witness(bits, *witness))
-            .find_any(|witness| {
-                println!("w: {}", witness);
-                self.clone().check_witness(bits, *witness)
-            })
+            .find_any(|witness| self.clone().check_witness(bits, *witness))
             .expect("failed to find witness");
         assert!(self.check_witness(bits, witness));
         witness

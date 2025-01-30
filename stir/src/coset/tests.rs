@@ -23,7 +23,7 @@ fn test_interpolate_evals() {
         .map(|i| polynomial.evaluate(&(coset.generator.clone().exp_u64(i) * coset.shift)))
         .collect_vec();
 
-    let interpolation = coset.interpolate_evals(evals);
+    let interpolation = coset.interpolate(evals);
 
     assert_eq!(interpolation.coeffs(), coeffs);
 }

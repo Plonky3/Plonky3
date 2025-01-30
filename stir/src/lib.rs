@@ -10,10 +10,12 @@
 // - Batching (fold multiple words)
 // - Protocol builder
 
+// NP TODO profusely add documentation
+
 extern crate alloc;
 
 mod config;
-mod coset;
+pub mod coset;
 mod polynomial;
 mod proof;
 pub mod prover;
@@ -27,6 +29,3 @@ pub mod test_utils;
 pub use config::{StirConfig, StirParameters};
 pub use proof::StirProof;
 pub use proximity_gaps::*;
-
-// NP pub use proof::*;
-// NP pub use two_adic_pcs::*;

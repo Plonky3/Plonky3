@@ -200,14 +200,6 @@ fn test_prove_round_large() {
 
     let original_evals = original_domain.evaluate_polynomial(&f_0);
 
-    // NP TODO remove
-    // for (i, e) in original_evals.iter().enumerate() {
-    //     println!("{}: {}", i, e);
-    // }
-    // let new_original_domain = original_domain.set_shift(original_domain.generator());
-    // let new_original_evals = new_original_domain.evaluate_polynomial(&f_0);
-    // assert_eq!(original_evals, new_original_evals);
-
     let stacked_original_evals =
         RowMajorMatrix::new(original_evals, 1 << config.log_starting_folding_factor());
 

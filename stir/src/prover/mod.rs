@@ -121,9 +121,6 @@ where
             <= 1 << (config.log_starting_degree() + config.log_starting_inv_rate())
     );
 
-    // NP TODO remove
-    println!("GETS 0");
-
     // NP TODO: Should the prover call commit like in Plonky3's FRI?
     // or should be called separately like in Giacomo's code?
     let (mut witness, commitment) = commit(config, polynomial);
@@ -131,9 +128,6 @@ where
     // Observe the commitment
     challenger.observe(commitment.clone());
     let folding_randomness = challenger.sample_ext_element();
-
-    // NP TODO remove
-    println!("GETS 1");
 
     // NP TODO: Handle more elegantly?
     witness.folding_randomness = folding_randomness;
@@ -155,16 +149,10 @@ where
         log_last_folding_factor,
     );
 
-    // NP TODO remove
-    println!("GETS 1.5");
-
     let final_queries = config.final_num_queries();
 
-    // Logarithm of |(L_{i - 1})^k_{i - 1}|
+    // Logarithm of |(L_M)^(k_M)|
     let log_query_domain_size = witness.domain.log_size() - log_last_folding_factor;
-
-    // NP TODO remove
-    println!("GETS 2");
 
     let queried_indices: Vec<u64> = (0..final_queries)
         .map(|_| challenger.sample_bits(log_query_domain_size) as u64)
@@ -181,18 +169,12 @@ where
         .map(|(mut k, v)| (k.remove(0), v))
         .collect();
 
-    // NP TODO remove
-    println!("GETS 3");
-
     println!("Grinding {} bits", config.final_pow_bits().ceil() as usize);
 
     // NP TODO: Is this correct? Can we just take the ceil?
     // NP TODO reintroduce
     // let pow_witness = challenger.grind(config.final_pow_bits().ceil() as usize);
     let pow_witness = C::Witness::ONE;
-
-    // NP TODO remove
-    println!("GETS 4");
 
     StirProof {
         commitment,
@@ -235,9 +217,6 @@ where
         folding_randomness,
     } = witness;
 
-    // NP Remove
-    // assert!(log_evaluation_domain_size == domain.log_size());
-
     // ========= FOLDING =========
 
     // NP TODO ask This folding factor uses the folding factor for this round.
@@ -248,9 +227,6 @@ where
 
     // Fold the polynomial and the evaluations
     let folded_polynomial = fold_polynomial(&polynomial, folding_randomness, log_folding_factor);
-
-    // NP TODO remove
-    println!("prove_round: GETS 1");
 
     // Compute the i-th domain L_i = w * <w^{2^i}>
     let new_domain = domain.shrink_subgroup(1);
@@ -288,9 +264,6 @@ where
         }
     }
 
-    // NP TODO remove
-    println!("prove_round: GETS 2");
-
     // Evaluate the polynomial at the OOD samples
     let betas: Vec<F> = ood_samples
         .iter()
@@ -316,9 +289,6 @@ where
         .unique()
         .collect();
 
-    // NP TODO remove
-    println!("prove_round: GETS 3");
-
     // Proof of work witness
     // NP TODO: Is this correct? Can we just take the ceil?
     // NP TODO unsafe cast to usize
@@ -341,9 +311,6 @@ where
         .map(|(mut k, v)| (k.remove(0), v))
         .collect();
 
-    // NP TODO remove
-    println!("prove_round: GETS 4");
-
     // ========= POLY QUOTIENT =========
 
     // NP TODO revise FS in general
@@ -355,98 +322,6 @@ where
 
     // Compute the domain L_{i-1}^k = w^k * <w^{2^{i-1} * k}>
     let domain_k = domain.shrink_coset(log_folding_factor);
-
-    // NP TODO remove
-    if round == 0 {
-        let first_queried_index = queried_indices.first().unwrap();
-        let alpha = domain_k.element(*first_queried_index);
-        let alpha_root = domain.element(*first_queried_index);
-        let new_gen = domain.generator().exp_power_of_2(log_query_domain_size); // w^(s / k)
-                                                                                // alpha_roots = [alpha_root, alpha_root * generator ^ (size / k), alpha_root * generator ^ (2 * size / k), ...]
-        let alpha_roots = (0..(1 << log_folding_factor))
-            .map(|i| alpha_root * new_gen.exp_u64(i))
-            .collect_vec();
-        assert!(alpha_roots
-            .iter()
-            .all(|root| root.exp_power_of_2(log_folding_factor) == alpha));
-        // V is going to check the folding of some positions of f_0 into a position of g_1
-        // The first queried point alpha is in L_0^k_0 = {x^k | x \in L_0}
-        let g_1_alpha = folded_polynomial.evaluate(&alpha);
-        let f_0_evals = alpha_roots
-            .iter()
-            .map(|root| polynomial.evaluate(root))
-            .collect_vec();
-        use p3_matrix::Matrix;
-        let unfolded_evals_in_tree = config.mmcs_config().get_matrices(&merkle_tree)[0];
-        assert_eq!(domain.element(0), domain.generator());
-        assert_eq!(
-            polynomial.evaluate(&domain.generator()),
-            unfolded_evals_in_tree.row(0).collect_vec()[0]
-        );
-
-        // f(p0), f(p1), f(p2), f(p3), f(p4), f(p5), f(p6), f(p7)
-
-        // folding factor 4
-        // first_queried_index = 1
-        // log_query_domain_size = 1, query_domain_size = 2
-
-        // Stacked
-        // f(p0), f(p2), f(p4), f(p6),
-        // f(p1), f(p3), f(p5), f(p7),
-
-        println!(
-            "Matrix_dimensions: {} rows x {} columns",
-            unfolded_evals_in_tree.rows().count(),
-            unfolded_evals_in_tree.first_row().len()
-        );
-        println!("log_query_domain_size: {}", log_query_domain_size);
-        println!("domain log size: {}", domain.log_size());
-        println!("log_folding_factor: {}", log_folding_factor);
-
-        assert_eq!(alpha_roots[0], alpha_root);
-        assert_eq!(domain.element(*first_queried_index), alpha_roots[0]);
-        assert_eq!(
-            polynomial.evaluate(&domain.element((1 << log_query_domain_size) as u64)),
-            unfolded_evals_in_tree.row(0).collect_vec()[1]
-        );
-        assert_eq!(
-            polynomial.evaluate(&domain.element(1)),
-            unfolded_evals_in_tree.row(1).collect_vec()[0]
-        );
-
-        println!("FIRST_QUERIED_INDEX: {}", queried_indices.first().unwrap());
-        println!("UNFOLDED_EVALS: {:?}", f_0_evals);
-        println!(
-            "UNFOLDED_EVALS_IN_TREE: {:?}",
-            unfolded_evals_in_tree
-                .row(*first_queried_index as usize)
-                .collect_vec()
-        );
-        println!("FOLD_RANDOMNESS: {:?}", folding_randomness);
-        assert!(new_gen.exp_power_of_2(log_folding_factor) == F::ONE);
-        use std::collections::HashSet;
-        assert!(
-            HashSet::<F>::from_iter(
-                (0..1 << log_folding_factor).map(|i| new_gen.exp_u64(i as u64))
-            )
-            .len()
-                == 1 << log_folding_factor
-        );
-        let expected_folded_eval = compute_folded_evaluations(
-            vec![f_0_evals],
-            &[alpha_root],
-            log_folding_factor,
-            folding_randomness,
-            new_gen,
-        )[0];
-        println!("FOLDED_EVAL: {:?}", expected_folded_eval);
-        assert_eq!(g_1_alpha, expected_folded_eval);
-        // p    p_2    p_3  ... p_8 which have the same k-th power
-        // domain:      a1, a2, a3, a4, a5, a6, a7, a8
-        // k = 4
-        // domain_k:    a1^4,           a4^5
-        // sample i
-    }
 
     // Get the elements in L^k corresponding to the queried indices
     // (i.e r^{shift}_i in the paper)
@@ -474,15 +349,9 @@ where
     let quotient_set = quotient_answers.iter().map(|(x, _)| *x).collect_vec();
     let quotient_set_size = quotient_set.len();
 
-    // NP TODO remove
-    println!("prove_round: GETS 5");
-
     // Compute the answer polynomial and add it to the transcript
     let ans_polynomial = Polynomial::<F>::lagrange_interpolation(quotient_answers.clone());
     challenger.observe_slice(ans_polynomial.coeffs());
-
-    // NP TODO remove
-    println!("prove_round: GETS 6");
 
     // Compute the shake polynomial and add it to the transcript
     let shake_polynomial = compute_shake_polynomial(&ans_polynomial, quotient_answers.into_iter());
@@ -498,15 +367,9 @@ where
     let vanishing_polynomial = Polynomial::vanishing_polynomial(quotient_set);
     let quotient_polynomial = &(&folded_polynomial - &ans_polynomial) / &vanishing_polynomial;
 
-    // NP TODO remove
-    println!("prove_round: GETS 7");
-
     // Degree-correct by multiplying by the scaling polynomial, 1 + rx + r^2 x^2 + ... + r^n x^n with n = |quotient_set|
     let witness_polynomial =
         multiply_by_power_polynomial(&quotient_polynomial, comb_randomness, quotient_set_size);
-
-    // NP TODO remove
-    println!("prove_round: GETS 8");
 
     // NP TODO remove/fix
     if quotient_polynomial.is_zero() {
@@ -548,6 +411,6 @@ fn compute_shake_polynomial<F: TwoAdicField>(
     shake_polynomial
 }
 
-// NP TODO degree separation in sponge
+// NP TODO domain separation in sponge
 
 // NP TODO when evaluating in the original domain w * <w>, detect this and evaluate over <w>, then cyclically shift (make sure this is correct)
