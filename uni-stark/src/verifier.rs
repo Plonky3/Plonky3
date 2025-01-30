@@ -157,15 +157,15 @@ where
         "quotient chunks len {}",
         opened_values.quotient_chunks.len()
     );
-    let g = trace_domain
-        .next_point(trace_domain.first_point())
-        .unwrap()
-        .exp_u64(14);
-    tracing::info!("Entering with g {:?} degree bits {:?}", g, degree_bits);
-    tracing::info!(
-        "last pt eval {:?}",
-        trace_domain.selectors_at_point(g, pcs.is_zk())
-    );
+    // let g = trace_domain
+    //     .next_point(trace_domain.first_point())
+    //     .unwrap()
+    //     .exp_u64(14);
+    // tracing::info!("Entering with g {:?} degree bits {:?}", g, degree_bits);
+    // tracing::info!(
+    //     "last pt eval {:?}",
+    //     trace_domain.selectors_at_point(g, pcs.is_zk())
+    // );
 
     let sels = trace_domain.selectors_at_point(zeta, pcs.is_zk());
 

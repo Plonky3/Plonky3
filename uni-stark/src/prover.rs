@@ -226,14 +226,9 @@ where
     let quotient_size = quotient_domain.size();
     let width = trace_on_quotient_domain.width();
     let mut sels = trace_domain.selectors_on_coset(quotient_domain, is_zk);
-    // tracing::info!(
-    //     "is_transition prover {:?} is_first_row {:?}, is_last_row {:?}",
-    //     sels.is_transition,
-    //     sels.is_first_row,
-    //     sels.is_last_row
-    // );
 
-    let qdb = log2_strict_usize(quotient_domain.size()) - log2_strict_usize(trace_domain.size());
+    let qdb = log2_strict_usize(quotient_domain.size()) - log2_strict_usize(trace_domain.size())
+        + is_zk as usize;
     let next_step = 1 << qdb;
 
     // We take PackedVal::<SC>::WIDTH worth of values at a time from a quotient_size slice, so we need to
