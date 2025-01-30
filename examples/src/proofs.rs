@@ -77,7 +77,7 @@ where
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     let fri_config = create_benchmark_fri_config(challenge_mmcs);
 
-    let trace = proof_goal.generate_trace_rows(num_hashes);
+    let trace = proof_goal.generate_trace_rows(num_hashes, fri_config.log_blowup);
 
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_config);
 
@@ -119,7 +119,7 @@ where
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     let fri_config = create_benchmark_fri_config(challenge_mmcs);
 
-    let trace = proof_goal.generate_trace_rows(num_hashes);
+    let trace = proof_goal.generate_trace_rows(num_hashes, fri_config.log_blowup);
 
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_config);
 
@@ -155,7 +155,7 @@ pub fn prove_m31_keccak<
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     let fri_config = create_benchmark_fri_config(challenge_mmcs);
 
-    let trace = proof_goal.generate_trace_rows(num_hashes);
+    let trace = proof_goal.generate_trace_rows(num_hashes, fri_config.log_blowup);
 
     let pcs = CirclePcs::new(val_mmcs, fri_config);
 
@@ -195,7 +195,7 @@ where
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     let fri_config = create_benchmark_fri_config(challenge_mmcs);
 
-    let trace = proof_goal.generate_trace_rows(num_hashes);
+    let trace = proof_goal.generate_trace_rows(num_hashes, fri_config.log_blowup);
 
     let pcs = CirclePcs::new(val_mmcs, fri_config);
 

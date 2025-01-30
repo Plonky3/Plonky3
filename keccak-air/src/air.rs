@@ -18,9 +18,13 @@ use crate::{generate_trace_rows, BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS};
 pub struct KeccakAir {}
 
 impl KeccakAir {
-    pub fn generate_trace_rows<F: PrimeField64>(&self, num_hashes: usize) -> RowMajorMatrix<F> {
+    pub fn generate_trace_rows<F: PrimeField64>(
+        &self,
+        num_hashes: usize,
+        extra_capacity_bits: usize,
+    ) -> RowMajorMatrix<F> {
         let inputs = (0..num_hashes).map(|_| random()).collect::<Vec<_>>();
-        generate_trace_rows(inputs)
+        generate_trace_rows(inputs, extra_capacity_bits)
     }
 }
 

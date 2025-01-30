@@ -23,6 +23,7 @@ pub fn generate_vectorized_trace_rows<
 >(
     inputs: Vec<[F; WIDTH]>,
     round_constants: &RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
+    extra_capacity_bits: usize,
 ) -> RowMajorMatrix<F> {
     let n = inputs.len();
     assert!(
@@ -33,7 +34,7 @@ pub fn generate_vectorized_trace_rows<
     let nrows = n.div_ceil(VECTOR_LEN);
     let ncols = num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>()
         * VECTOR_LEN;
-    let mut vec = Vec::with_capacity(nrows * ncols * 2);
+    let mut vec = Vec::with_capacity((nrows * ncols) << extra_capacity_bits);
     let trace: &mut [MaybeUninit<F>] = &mut vec.spare_capacity_mut()[..nrows * ncols];
     let trace: RowMajorMatrixViewMut<MaybeUninit<F>> = RowMajorMatrixViewMut::new(trace, ncols);
 

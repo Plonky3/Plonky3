@@ -60,10 +60,11 @@ fn main() -> Result<(), impl Debug> {
 
     type Challenger = SerializingChallenger64<Val, HashChallenger<u8, ByteHash, 32>>;
 
-    let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
-    let trace = generate_trace_rows::<Val>(inputs);
-
     let fri_config = create_benchmark_fri_config(challenge_mmcs);
+
+    let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
+    let trace = generate_trace_rows::<Val>(inputs, fri_config.log_blowup);
+
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
 

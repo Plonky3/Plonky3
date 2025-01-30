@@ -14,9 +14,18 @@ use crate::{NUM_ROUNDS, R, RC, U64_LIMBS};
 
 // TODO: Take generic iterable
 #[instrument(name = "generate Keccak trace", skip_all)]
-pub fn generate_trace_rows<F: PrimeField64>(inputs: Vec<[u64; 25]>) -> RowMajorMatrix<F> {
+pub fn generate_trace_rows<F: PrimeField64>(
+    inputs: Vec<[u64; 25]>,
+    extra_capacity_bits: usize,
+) -> RowMajorMatrix<F> {
     let num_rows = (inputs.len() * NUM_ROUNDS).next_power_of_two();
-    let mut trace = RowMajorMatrix::new(F::zero_vec(num_rows * NUM_KECCAK_COLS), NUM_KECCAK_COLS);
+    let trace_length = num_rows * NUM_KECCAK_COLS;
+
+    // We allocate extra_capacity_bits now as this will be needed by the dft.
+    let mut long_trace = F::zero_vec(trace_length << extra_capacity_bits);
+    long_trace.truncate(trace_length);
+
+    let mut trace = RowMajorMatrix::new(long_trace, NUM_KECCAK_COLS);
     let (prefix, rows, suffix) = unsafe { trace.values.align_to_mut::<KeccakCols<F>>() };
     assert!(prefix.is_empty(), "Alignment should match");
     assert!(suffix.is_empty(), "Alignment should match");
