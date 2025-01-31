@@ -24,17 +24,17 @@ use crate::{
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
 #[repr(transparent)] // to make the zero_vec implementation safe
-pub struct BinomialExtensionField<F, const D: usize, FA = F> {
+pub struct BinomialExtensionField<F, const D: usize, A = F> {
     #[serde(
         with = "p3_util::array_serialization",
-        bound(serialize = "FA: Serialize", deserialize = "FA: Deserialize<'de>")
+        bound(serialize = "A: Serialize", deserialize = "A: Deserialize<'de>")
     )]
-    pub(crate) value: [FA; D],
+    pub(crate) value: [A; D],
     _phantom: PhantomData<F>,
 }
 
-impl<F, FA, const D: usize> BinomialExtensionField<F, D, FA> {
-    pub(crate) const fn new(value: [FA; D]) -> Self {
+impl<F, A, const D: usize> BinomialExtensionField<F, D, A> {
+    pub(crate) const fn new(value: [A; D]) -> Self {
         Self {
             value,
             _phantom: PhantomData,
