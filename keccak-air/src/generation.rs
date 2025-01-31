@@ -54,7 +54,6 @@ fn generate_trace_rows_for_perm<F: PrimeField64>(rows: &mut [KeccakCols<F>], inp
 
     // Populate the round input for the first round.
     rows[0].a = initial_state;
-
     rows[0].preimage = initial_state;
 
     generate_trace_row_for_round(&mut rows[0], 0, &mut current_state);
