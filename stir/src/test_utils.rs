@@ -56,6 +56,7 @@ pub fn test_stir_config(
     StirConfig::new(parameters)
 }
 
+// NP TODO ask Giacomo if the computation is okay
 pub fn test_stir_config_folding_factors(
     log_starting_degree: usize,
     log_starting_inv_rate: usize,
