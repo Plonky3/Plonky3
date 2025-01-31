@@ -181,7 +181,11 @@ impl<
         }
     }
 
-    pub fn generate_vectorized_trace_rows(&self, num_hashes: usize) -> RowMajorMatrix<F>
+    pub fn generate_vectorized_trace_rows(
+        &self,
+        num_hashes: usize,
+        extra_capacity_bits: usize,
+    ) -> RowMajorMatrix<F>
     where
         F: PrimeField,
         LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>,
@@ -197,7 +201,7 @@ impl<
             HALF_FULL_ROUNDS,
             PARTIAL_ROUNDS,
             VECTOR_LEN,
-        >(inputs, &self.air.constants)
+        >(inputs, &self.air.constants, extra_capacity_bits)
     }
 }
 

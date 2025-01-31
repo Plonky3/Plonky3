@@ -18,9 +18,13 @@ use crate::{generate_trace_rows, Blake3State, FullRound, QuarterRound};
 pub struct Blake3Air {}
 
 impl Blake3Air {
-    pub fn generate_trace_rows<F: PrimeField64>(&self, num_hashes: usize) -> RowMajorMatrix<F> {
+    pub fn generate_trace_rows<F: PrimeField64>(
+        &self,
+        num_hashes: usize,
+        extra_capacity_bits: usize,
+    ) -> RowMajorMatrix<F> {
         let inputs = (0..num_hashes).map(|_| random()).collect::<Vec<_>>();
-        generate_trace_rows(inputs)
+        generate_trace_rows(inputs, extra_capacity_bits)
     }
 
     /// Verify that the quarter round function has been correctly computed.
