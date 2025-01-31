@@ -190,6 +190,48 @@ macro_rules! test_prime_field_64 {
         mod from_integer_tests_prime_field_64 {
             use p3_field::integers::QuotientMap;
             use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
+            use rand::Rng;
+
+            #[test]
+            fn test_as_canonical_u64() {
+                let mut rng = rand::thread_rng();
+                let x: u64 = rng.gen();
+                let x_mod_order = x % <$field>::ORDER_U64;
+
+                assert_eq!(<$field>::ZERO.as_canonical_u64(), 0);
+                assert_eq!(<$field>::ONE.as_canonical_u64(), 1);
+                assert_eq!(<$field>::TWO.as_canonical_u64(), 2 % <$field>::ORDER_U64);
+                assert_eq!(
+                    <$field>::NEG_ONE.as_canonical_u64(),
+                    <$field>::ORDER_U64 - 1
+                );
+
+                assert_eq!(
+                    <$field>::from_int(<$field>::ORDER_U64).as_canonical_u64(),
+                    0
+                );
+                assert_eq!(<$field>::from_int(x).as_canonical_u64(), x_mod_order);
+                assert_eq!(
+                    unsafe { <$field>::from_canonical_unchecked(x_mod_order).as_canonical_u64() },
+                    x_mod_order
+                );
+            }
+
+            #[test]
+            fn test_as_unique_u64() {
+                assert_ne!(
+                    <$field>::ZERO.to_unique_u64(),
+                    <$field>::ONE.to_unique_u64()
+                );
+                assert_ne!(
+                    <$field>::ZERO.to_unique_u64(),
+                    <$field>::NEG_ONE.to_unique_u64()
+                );
+                assert_eq!(
+                    <$field>::from_int(<$field>::ORDER_U64).to_unique_u64(),
+                    <$field>::ZERO.to_unique_u64()
+                );
+            }
 
             #[test]
             fn test_large_unsigned_integer_conversions() {
@@ -210,6 +252,47 @@ macro_rules! test_prime_field_32 {
         mod from_integer_tests_prime_field_32 {
             use p3_field::integers::QuotientMap;
             use p3_field::{Field, PrimeCharacteristicRing, PrimeField32};
+            use rand::Rng;
+
+            #[test]
+            fn test_as_canonical_u32() {
+                let mut rng = rand::thread_rng();
+                let x: u32 = rng.gen();
+                let x_mod_order = x % <$field>::ORDER_U32;
+
+                assert_eq!(<$field>::ZERO.as_canonical_u32(), 0);
+                assert_eq!(<$field>::ONE.as_canonical_u32(), 1);
+                assert_eq!(<$field>::TWO.as_canonical_u32(), 2 % <$field>::ORDER_U32);
+                assert_eq!(
+                    <$field>::NEG_ONE.as_canonical_u32(),
+                    <$field>::ORDER_U32 - 1
+                );
+                assert_eq!(
+                    <$field>::from_int(<$field>::ORDER_U32).as_canonical_u32(),
+                    0
+                );
+                assert_eq!(<$field>::from_int(x).as_canonical_u32(), x_mod_order);
+                assert_eq!(
+                    unsafe { <$field>::from_canonical_unchecked(x_mod_order).as_canonical_u32() },
+                    x_mod_order
+                );
+            }
+
+            #[test]
+            fn test_as_unique_u32() {
+                assert_ne!(
+                    <$field>::ZERO.to_unique_u32(),
+                    <$field>::ONE.to_unique_u32()
+                );
+                assert_ne!(
+                    <$field>::ZERO.to_unique_u32(),
+                    <$field>::NEG_ONE.to_unique_u32()
+                );
+                assert_eq!(
+                    <$field>::from_int(<$field>::ORDER_U32).to_unique_u32(),
+                    <$field>::ZERO.to_unique_u32()
+                );
+            }
 
             #[test]
             fn test_large_unsigned_integer_conversions() {
