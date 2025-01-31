@@ -116,9 +116,9 @@ where
     Inner: CanSample<u8>,
 {
     fn sample_bits(&mut self, bits: usize) -> usize {
-        debug_assert!(bits < (usize::BITS as usize));
+        assert!(bits < (usize::BITS as usize));
         // Limiting the number of bits to the field size
-        debug_assert!((1 << bits) <= F::ORDER_U64 as usize);
+        assert!((1 << bits) <= F::ORDER_U64 as usize);
         let rand_usize = u32::from_le_bytes(self.inner.sample_array()) as usize;
         rand_usize & ((1 << bits) - 1)
     }
@@ -133,6 +133,8 @@ where
 
     #[instrument(name = "grind for proof-of-work witness", skip_all)]
     fn grind(&mut self, bits: usize) -> Self::Witness {
+        assert!(bits < (usize::BITS as usize));
+        assert!((1 << bits) < F::ORDER_U64);
         let witness = (0..F::ORDER_U64)
             .into_par_iter()
             .map(|i| F::from_canonical_u64(i))
@@ -226,9 +228,9 @@ where
     Inner: CanSample<u8>,
 {
     fn sample_bits(&mut self, bits: usize) -> usize {
-        debug_assert!(bits < (usize::BITS as usize));
+        assert!(bits < (usize::BITS as usize));
         // Limiting the number of bits to the field size
-        debug_assert!((1 << bits) <= F::ORDER_U64 as usize);
+        assert!((1 << bits) <= F::ORDER_U64 as usize);
         let rand_usize = u64::from_le_bytes(self.inner.sample_array()) as usize;
         rand_usize & ((1 << bits) - 1)
     }
@@ -243,6 +245,8 @@ where
 
     #[instrument(name = "grind for proof-of-work witness", skip_all)]
     fn grind(&mut self, bits: usize) -> Self::Witness {
+        assert!(bits < (usize::BITS as usize));
+        assert!((1 << bits) < F::ORDER_U64);
         let witness = (0..F::ORDER_U64)
             .into_par_iter()
             .map(|i| F::from_canonical_u64(i))
