@@ -128,6 +128,8 @@ unsafe impl<T: Packable, const WIDTH: usize> PackedValue for [T; WIDTH] {
     }
 }
 
+/// An array of field elements which can be packed into a vector for SIMD operations.
+///
 /// # Safety
 /// - See `PackedValue` above.
 pub unsafe trait PackedField: Algebra<Self::Scalar>
