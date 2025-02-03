@@ -14,7 +14,7 @@ use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
 
-use super::{HasFrobenius, HasTwoAdicBionmialExtension, PackedBinomialExtensionField};
+use super::{HasFrobenius, HasTwoAdicBinomialExtension, PackedBinomialExtensionField};
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{

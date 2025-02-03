@@ -136,7 +136,7 @@ where
 
     // Observe all coefficients of the final polynomial.
     for &x in &final_poly {
-        challenger.observe_ext_element(x);
+        challenger.observe_algebra_element(x);
     }
 
     CommitPhaseResult {

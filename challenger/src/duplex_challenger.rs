@@ -160,6 +160,7 @@ where
 mod tests {
     use core::iter;
 
+    use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
     use p3_goldilocks::Goldilocks;
     use p3_symmetric::Permutation;
@@ -191,11 +192,11 @@ mod tests {
         let mut duplex_challenger = DuplexChallenger::new(permutation);
 
         // Observe 12 elements.
-        (0..12).for_each(|element| duplex_challenger.observe(F::from_u8(element as u8)));
+        (0..12).for_each(|element| duplex_challenger.observe(G::from_u8(element as u8)));
 
         let state_after_duplexing: Vec<_> = iter::repeat(G::ZERO)
             .take(12)
-            .chain((0..12).map(F::from_u8).rev())
+            .chain((0..12).map(G::from_u8).rev())
             .collect();
 
         let expected_samples: Vec<G> = state_after_duplexing[..16].iter().copied().rev().collect();

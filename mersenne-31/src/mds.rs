@@ -271,7 +271,6 @@ mod tests {
     use p3_symmetric::Permutation;
 
     use super::{MdsMatrixMersenne31, Mersenne31};
-    use crate::to_mersenne31_array;
 
     #[test]
     fn mersenne8() {

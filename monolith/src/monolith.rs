@@ -187,6 +187,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use core::array;
+
     use p3_field::PrimeCharacteristicRing;
     use p3_mersenne_31::Mersenne31;
 
@@ -198,14 +200,14 @@ mod tests {
         let mds = MonolithMdsMatrixMersenne31::<6>;
         let monolith: MonolithMersenne31<_, 16, 5> = MonolithMersenne31::new(mds);
 
-        let mut input = array::from_fn(Mersenne31::from_canonical_usize);
+        let mut input = array::from_fn(Mersenne31::from_usize);
 
         let expected = [
             609156607, 290107110, 1900746598, 1734707571, 2050994835, 1648553244, 1307647296,
             1941164548, 1707113065, 1477714255, 1170160793, 93800695, 769879348, 375548503,
             1989726444, 1349325635,
         ]
-        .map(Mersenne31::from_canonical_u32);
+        .map(Mersenne31::from_u32);
 
         monolith.permutation(&mut input);
 

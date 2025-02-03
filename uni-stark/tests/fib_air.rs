@@ -7,7 +7,7 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
-use p3_fri::{FriConfig, TwoAdicFriPcs};
+use p3_fri::{create_test_fri_config, TwoAdicFriPcs};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_merkle_tree::MerkleTreeMmcs;

@@ -233,7 +233,6 @@ mod tests {
     use p3_symmetric::Permutation;
 
     use super::{Goldilocks, MdsMatrixGoldilocks};
-    use crate::to_goldilocks_array;
 
     #[test]
     fn goldilocks8() {

@@ -189,7 +189,7 @@ where
                                         .in_scope(|| evals.evaluate_at_point(zeta));
                                 ps_at_zeta
                                     .iter()
-                                    .for_each(|&p| challenger.observe_ext_element(p));
+                                    .for_each(|&p| challenger.observe_algebra_element(p));
                                 ps_at_zeta
                             })
                             .collect()
@@ -373,7 +373,7 @@ where
                 for (_, point) in mat.iter() {
                     point
                         .iter()
-                        .for_each(|&opening| challenger.observe_ext_element(opening));
+                        .for_each(|&opening| challenger.observe_algebra_element(opening));
                 }
             }
         }
