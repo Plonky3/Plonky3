@@ -27,20 +27,18 @@ impl<F: ComplexExtendable> BinomiallyExtendable<2> for F {
 /// Convenience methods for complex extensions
 impl<R: PrimeCharacteristicRing> Complex<R> {
     #[inline(always)]
-    pub const fn new(real: R, imag: R) -> Self {
-        Self {
-            value: [real, imag],
-        }
+    pub const fn new_complex(real: R, imag: R) -> Self {
+        Self::new([real, imag])
     }
 
     #[inline(always)]
     pub const fn new_real(real: R) -> Self {
-        Self::new(real, R::ZERO)
+        Self::new_complex(real, R::ZERO)
     }
 
     #[inline(always)]
     pub const fn new_imag(imag: R) -> Self {
-        Self::new(R::ZERO, imag)
+        Self::new_complex(R::ZERO, imag)
     }
 
     #[inline(always)]
@@ -55,7 +53,7 @@ impl<R: PrimeCharacteristicRing> Complex<R> {
 
     #[inline(always)]
     pub fn conjugate(&self) -> Self {
-        Self::new(self.real(), self.imag().neg())
+        Self::new_complex(self.real(), self.imag().neg())
     }
 
     #[inline]
@@ -71,7 +69,7 @@ impl<R: PrimeCharacteristicRing> Complex<R> {
     // Sometimes we want to rotate over an extension that's not necessarily ComplexExtendable,
     // but still on the circle.
     pub fn rotate<Ext: Algebra<R>>(&self, rhs: Complex<Ext>) -> Complex<Ext> {
-        Complex::<Ext>::new(
+        Complex::<Ext>::new_complex(
             rhs.real() * self.real() - rhs.imag() * self.imag(),
             rhs.imag() * self.real() + rhs.real() * self.imag(),
         )

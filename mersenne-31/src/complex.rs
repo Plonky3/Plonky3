@@ -18,7 +18,8 @@ impl ComplexExtendable for Mersenne31 {
     // sage: F2.<u> = F.extension(x^2 + 1)
     // sage: F2.multiplicative_generator()
     // u + 12
-    const COMPLEX_GENERATOR: Complex<Self> = Complex::new(Mersenne31::new(12), Mersenne31::ONE);
+    const COMPLEX_GENERATOR: Complex<Self> =
+        Complex::new_complex(Mersenne31::new(12), Mersenne31::ONE);
 
     fn circle_two_adic_generator(bits: usize) -> Complex<Self> {
         // Generator of the whole 2^TWO_ADICITY group
@@ -30,7 +31,8 @@ impl ComplexExtendable for Mersenne31 {
         // 1584694829*u + 311014874
         // sage: assert(g.multiplicative_order() == 2^31)
         // sage: assert(g.norm() == 1)
-        let base = Complex::new(Mersenne31::new(311_014_874), Mersenne31::new(1_584_694_829));
+        let base =
+            Complex::new_complex(Mersenne31::new(311_014_874), Mersenne31::new(1_584_694_829));
         base.exp_power_of_2(Self::CIRCLE_TWO_ADICITY - bits)
     }
 }
@@ -49,7 +51,7 @@ impl HasTwoAdicBionmialExtension<2> for Mersenne31 {
         // sage: g = F2.multiplicative_generator()^((p^2 - 1) / 2^32); g
         // 1117296306*u + 1166849849
         // sage: assert(g.multiplicative_order() == 2^32)
-        let base = Complex::<Self>::new(
+        let base = Complex::<Self>::new_complex(
             Mersenne31::new(1_166_849_849),
             Mersenne31::new(1_117_296_306),
         );
@@ -95,16 +97,16 @@ mod tests {
 
         // further tests
         assert_eq!(
-            Fi::new(F::ONE, F::TWO) + Fi::new(F::ONE, F::ONE),
-            Fi::new(F::TWO, F::new(3))
+            Fi::new_complex(F::ONE, F::TWO) + Fi::new_complex(F::ONE, F::ONE),
+            Fi::new_complex(F::TWO, F::new(3))
         );
         assert_eq!(
-            Fi::new(F::NEG_ONE, F::NEG_ONE) + Fi::new(F::ONE, F::ONE),
+            Fi::new_complex(F::NEG_ONE, F::NEG_ONE) + Fi::new_complex(F::ONE, F::ONE),
             Fi::ZERO
         );
         assert_eq!(
-            Fi::new(F::NEG_ONE, F::ONE) + Fi::new(F::TWO, F::new(F::ORDER_U32 - 2)),
-            Fi::new(F::ONE, F::NEG_ONE)
+            Fi::new_complex(F::NEG_ONE, F::ONE) + Fi::new_complex(F::TWO, F::new(F::ORDER_U32 - 2)),
+            Fi::new_complex(F::ONE, F::NEG_ONE)
         );
     }
 
@@ -137,8 +139,8 @@ mod tests {
     #[test]
     fn mul() {
         assert_eq!(
-            Fi::new(F::TWO, F::TWO) * Fi::new(F::new(4), F::new(5)),
-            Fi::new(-F::TWO, F::new(18))
+            Fi::new_complex(F::TWO, F::TWO) * Fi::new_complex(F::new(4), F::new(5)),
+            Fi::new_complex(-F::TWO, F::new(18))
         );
     }
 
