@@ -33,7 +33,7 @@ pub struct SerializingChallenger32<F, Inner> {
 /// -  Takes a field element will serialize it into a byte array and observe each byte.
 ///
 /// **Sampling**:
-/// -  Samples a field element in a prime field of size `p` by sampling unofrmly an element in the
+/// -  Samples a field element in a prime field of size `p` by sampling uniformly an element in the
 ///    range (0..1 << log_2(p)). This avoids modulo bias.
 #[derive(Clone, Debug)]
 pub struct SerializingChallenger64<F, Inner> {
@@ -100,7 +100,7 @@ where
         let pow_of_two_bound = ((1u64 << log_size) - 1) as u32;
         // Perform rejection sampling over the uniform range (0..log2_ceil(p))
         let sample_base = |inner: &mut Inner| loop {
-            let value = u32::from_le_bytes(inner.sample_array::<4>());
+            let value = u32::from_le_bytes(inner.sample_array());
             let value = value & pow_of_two_bound;
             if value < modulus {
                 return unsafe {
@@ -119,10 +119,10 @@ where
     Inner: CanSample<u8>,
 {
     fn sample_bits(&mut self, bits: usize) -> usize {
-        debug_assert!(bits < (usize::BITS as usize));
+        assert!(bits < (usize::BITS as usize));
         // Limiting the number of bits to the field size
-        debug_assert!((1 << bits) <= F::ORDER_U64 as usize);
-        let rand_usize = u32::from_le_bytes(self.inner.sample_array::<4>()) as usize;
+        assert!((1 << bits) <= F::ORDER_U64 as usize);
+        let rand_usize = u32::from_le_bytes(self.inner.sample_array()) as usize;
         rand_usize & ((1 << bits) - 1)
     }
 }
@@ -136,6 +136,9 @@ where
 
     #[instrument(name = "grind for proof-of-work witness", skip_all)]
     fn grind(&mut self, bits: usize) -> Self::Witness {
+        assert!(bits < (usize::BITS as usize));
+        assert!((1 << bits) < F::ORDER_U64);
+        let witness = (0..F::ORDER_U64)
         let witness = (0..F::ORDER_U32)
             .into_par_iter()
             .map(|i| unsafe {
@@ -192,6 +195,16 @@ impl<F: PrimeField64, const N: usize, Inner: CanObserve<u8>> CanObserve<Hash<F, 
     }
 }
 
+impl<F: PrimeField64, const N: usize, Inner: CanObserve<u8>> CanObserve<Hash<F, u64, N>>
+    for SerializingChallenger64<F, Inner>
+{
+    fn observe(&mut self, values: Hash<F, u64, N>) {
+        for value in values {
+            self.inner.observe_slice(&value.to_le_bytes());
+        }
+    }
+}
+
 impl<F, EF, Inner> CanSample<EF> for SerializingChallenger64<F, Inner>
 where
     F: PrimeField64,
@@ -206,7 +219,7 @@ where
 
         // Perform rejection sampling over the uniform range (0..log2_ceil(p))
         let sample_base = |inner: &mut Inner| loop {
-            let value = u64::from_le_bytes(inner.sample_array::<8>());
+            let value = u64::from_le_bytes(inner.sample_array());
             let value = value & pow_of_two_bound;
             if value < modulus {
                 return unsafe {
@@ -225,10 +238,10 @@ where
     Inner: CanSample<u8>,
 {
     fn sample_bits(&mut self, bits: usize) -> usize {
-        debug_assert!(bits < (usize::BITS as usize));
+        assert!(bits < (usize::BITS as usize));
         // Limiting the number of bits to the field size
-        debug_assert!((1 << bits) <= F::ORDER_U64 as usize);
-        let rand_usize = u64::from_le_bytes(self.inner.sample_array::<8>()) as usize;
+        assert!((1 << bits) <= F::ORDER_U64 as usize);
+        let rand_usize = u64::from_le_bytes(self.inner.sample_array()) as usize;
         rand_usize & ((1 << bits) - 1)
     }
 }
@@ -242,6 +255,8 @@ where
 
     #[instrument(name = "grind for proof-of-work witness", skip_all)]
     fn grind(&mut self, bits: usize) -> Self::Witness {
+        assert!(bits < (usize::BITS as usize));
+        assert!((1 << bits) < F::ORDER_U64);
         let witness = (0..F::ORDER_U64)
             .into_par_iter()
             .map(|i| unsafe {

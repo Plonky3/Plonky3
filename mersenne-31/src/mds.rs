@@ -275,14 +275,14 @@ mod tests {
 
     #[test]
     fn mersenne8() {
-        let input: [Mersenne31; 8] = to_mersenne31_array([
+        let input: [Mersenne31; 8] = Mersenne31::new_array([
             1741044457, 327154658, 318297696, 1528828225, 468360260, 1271368222, 1906288587,
             1521884224,
         ]);
 
         let output = MdsMatrixMersenne31.permute(input);
 
-        let expected: [Mersenne31; 8] = to_mersenne31_array([
+        let expected: [Mersenne31; 8] = Mersenne31::new_array([
             895992680, 1343855369, 2107796831, 266468728, 846686506, 252887121, 205223309,
             260248790,
         ]);
@@ -292,14 +292,14 @@ mod tests {
 
     #[test]
     fn mersenne12() {
-        let input: [Mersenne31; 12] = to_mersenne31_array([
+        let input: [Mersenne31; 12] = Mersenne31::new_array([
             1232740094, 661555540, 11024822, 1620264994, 471137070, 276755041, 1316882747,
             1023679816, 1675266989, 743211887, 44774582, 1990989306,
         ]);
 
         let output = MdsMatrixMersenne31.permute(input);
 
-        let expected: [Mersenne31; 12] = to_mersenne31_array([
+        let expected: [Mersenne31; 12] = Mersenne31::new_array([
             860812289, 399778981, 1228500858, 798196553, 673507779, 1116345060, 829764188,
             138346433, 578243475, 553581995, 578183208, 1527769050,
         ]);
@@ -309,7 +309,7 @@ mod tests {
 
     #[test]
     fn mersenne16() {
-        let input: [Mersenne31; 16] = to_mersenne31_array([
+        let input: [Mersenne31; 16] = Mersenne31::new_array([
             1431168444, 963811518, 88067321, 381314132, 908628282, 1260098295, 980207659,
             150070493, 357706876, 2014609375, 387876458, 1621671571, 183146044, 107201572,
             166536524, 2078440788,
@@ -317,7 +317,7 @@ mod tests {
 
         let output = MdsMatrixMersenne31.permute(input);
 
-        let expected: [Mersenne31; 16] = to_mersenne31_array([
+        let expected: [Mersenne31; 16] = Mersenne31::new_array([
             1858869691, 1607793806, 1200396641, 1400502985, 1511630695, 187938132, 1332411488,
             2041577083, 2014246632, 802022141, 796807132, 1647212930, 813167618, 1867105010,
             508596277, 1457551581,
@@ -328,7 +328,7 @@ mod tests {
 
     #[test]
     fn mersenne32() {
-        let input: [Mersenne31; 32] = to_mersenne31_array([
+        let input: [Mersenne31; 32] = Mersenne31::new_array([
             873912014, 1112497426, 300405095, 4255553, 1234979949, 156402357, 1952135954,
             718195399, 1041748465, 683604342, 184275751, 1184118518, 214257054, 1293941921,
             64085758, 710448062, 1133100009, 350114887, 1091675272, 671421879, 1226105999,
@@ -338,7 +338,7 @@ mod tests {
 
         let output = MdsMatrixMersenne31.permute(input);
 
-        let expected: [Mersenne31; 32] = to_mersenne31_array([
+        let expected: [Mersenne31; 32] = Mersenne31::new_array([
             1439049928, 890642852, 694402307, 713403244, 553213342, 1049445650, 321709533,
             1195683415, 2118492257, 623077773, 96734062, 990488164, 1674607608, 749155000,
             353377854, 966432998, 1114654884, 1370359248, 1624965859, 685087760, 1631836645,
@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn mersenne64() {
-        let input: [Mersenne31; 64] = to_mersenne31_array([
+        let input: [Mersenne31; 64] = Mersenne31::new_array([
             837269696, 1509031194, 413915480, 1889329185, 315502822, 1529162228, 1454661012,
             1015826742, 973381409, 1414676304, 1449029961, 1968715566, 2027226497, 1721820509,
             434042616, 1436005045, 1680352863, 651591867, 260585272, 1078022153, 703990572,
@@ -366,7 +366,7 @@ mod tests {
 
         let output = MdsMatrixMersenne31.permute(input);
 
-        let expected: [Mersenne31; 64] = to_mersenne31_array([
+        let expected: [Mersenne31; 64] = Mersenne31::new_array([
             1599981950, 252630853, 1171557270, 116468420, 1269245345, 666203050, 46155642,
             1701131520, 530845775, 508460407, 630407239, 1731628135, 1199144768, 295132047,
             77536342, 1472377703, 30752443, 1300339617, 18647556, 1267774380, 1194573079,

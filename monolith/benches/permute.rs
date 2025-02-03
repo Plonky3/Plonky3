@@ -1,3 +1,5 @@
+use std::array;
+
 use criterion::{criterion_group, criterion_main, Criterion};
 use p3_field::PrimeCharacteristicRing;
 use p3_mds::MdsPermutation;
@@ -15,10 +17,7 @@ where
 {
     let monolith: MonolithMersenne31<_, WIDTH, 5> = MonolithMersenne31::new(mds);
 
-    let mut input: [Mersenne31; WIDTH] = [Mersenne31::ZERO; WIDTH];
-    for (i, inp) in input.iter_mut().enumerate() {
-        *inp = Mersenne31::from_usize(i);
-    }
+    let mut input = array::from_fn(Mersenne31::from_canonical_usize);
 
     let name = format!("monolith::<Mersenne31, {}>", WIDTH);
     c.bench_function(name.as_str(), |b| {

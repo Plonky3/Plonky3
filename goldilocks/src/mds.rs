@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn goldilocks8() {
-        let input: [Goldilocks; 8] = to_goldilocks_array([
+        let input: [Goldilocks; 8] = Goldilocks::new_array([
             2434589605738284713,
             4817685620989478889,
             13397079175138649456,
@@ -250,7 +250,7 @@ mod tests {
 
         let output = MdsMatrixGoldilocks.permute(input);
 
-        let expected: [Goldilocks; 8] = to_goldilocks_array([
+        let expected: [Goldilocks; 8] = Goldilocks::new_array([
             16726687146516531007,
             14721040752765534861,
             15566838577475948790,
@@ -266,7 +266,7 @@ mod tests {
 
     #[test]
     fn goldilocks12() {
-        let input: [Goldilocks; 12] = to_goldilocks_array([
+        let input: [Goldilocks; 12] = Goldilocks::new_array([
             14847187883725400244,
             969392934980971521,
             6996647758016470432,
@@ -283,7 +283,7 @@ mod tests {
 
         let output = MdsMatrixGoldilocks.permute(input);
 
-        let expected: [Goldilocks; 12] = to_goldilocks_array([
+        let expected: [Goldilocks; 12] = Goldilocks::new_array([
             9322351889214742299,
             8700136572060418355,
             4881757876459003977,
@@ -303,7 +303,7 @@ mod tests {
 
     #[test]
     fn goldilocks16() {
-        let input: [Goldilocks; 16] = to_goldilocks_array([
+        let input: [Goldilocks; 16] = Goldilocks::new_array([
             13216135600341032847,
             15626390207663319651,
             2052474569300149934,
@@ -324,7 +324,7 @@ mod tests {
 
         let output = MdsMatrixGoldilocks.permute(input);
 
-        let expected: [Goldilocks; 16] = to_goldilocks_array([
+        let expected: [Goldilocks; 16] = Goldilocks::new_array([
             9484392671298797780,
             149770626972189150,
             12125722600598304117,
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn goldilocks24() {
-        let input: [Goldilocks; 24] = to_goldilocks_array([
+        let input: [Goldilocks; 24] = Goldilocks::new_array([
             11426771245122339662,
             5975488243963332229,
             11441424994503305651,
@@ -377,7 +377,7 @@ mod tests {
 
         let output = MdsMatrixGoldilocks.permute(input);
 
-        let expected: [Goldilocks; 24] = to_goldilocks_array([
+        let expected: [Goldilocks; 24] = Goldilocks::new_array([
             18431075688485197060,
             14823984346528185622,
             7262979358411339215,
@@ -409,7 +409,7 @@ mod tests {
 
     #[test]
     fn goldilocks32() {
-        let input: [Goldilocks; 32] = to_goldilocks_array([
+        let input: [Goldilocks; 32] = Goldilocks::new_array([
             8401806579759049284,
             14709608922272986544,
             8130995604641968478,
@@ -446,7 +446,7 @@ mod tests {
 
         let output = MdsMatrixGoldilocks.permute(input);
 
-        let expected: [Goldilocks; 32] = to_goldilocks_array([
+        let expected: [Goldilocks; 32] = Goldilocks::new_array([
             1179701925859507209,
             5543239597787055637,
             5978278622530964070,
@@ -486,7 +486,7 @@ mod tests {
 
     #[test]
     fn goldilocks64() {
-        let input: [Goldilocks; 64] = to_goldilocks_array([
+        let input: [Goldilocks; 64] = Goldilocks::new_array([
             3471075506106776899,
             4817046918282259009,
             3480368692354016145,
@@ -555,7 +555,7 @@ mod tests {
 
         let output = MdsMatrixGoldilocks.permute(input);
 
-        let expected: [Goldilocks; 64] = to_goldilocks_array([
+        let expected: [Goldilocks; 64] = Goldilocks::new_array([
             9158798369861934356,
             9224859686427886689,
             16948559910286211274,
@@ -627,7 +627,7 @@ mod tests {
 
     #[test]
     fn goldilocks68() {
-        let input: [Goldilocks; 68] = to_goldilocks_array([
+        let input: [Goldilocks; 68] = Goldilocks::new_array([
             16450563043143968653,
             3688080826640678185,
             133253417037384537,
@@ -700,7 +700,7 @@ mod tests {
 
         let output = MdsMatrixGoldilocks.permute(input);
 
-        let expected: [Goldilocks; 68] = to_goldilocks_array([
+        let expected: [Goldilocks; 68] = Goldilocks::new_array([
             4984914285749049383,
             10397959071664799177,
             3331616814639908945,

@@ -37,7 +37,7 @@ impl ComplexExtendable for Mersenne31 {
     }
 }
 
-impl HasTwoAdicBionmialExtension<2> for Mersenne31 {
+impl HasTwoAdicBinomialExtension<2> for Mersenne31 {
     const EXT_TWO_ADICITY: usize = 32;
 
     fn ext_two_adic_generator(bits: usize) -> [Self; 2] {

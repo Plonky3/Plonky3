@@ -198,27 +198,17 @@ mod tests {
         let mds = MonolithMdsMatrixMersenne31::<6>;
         let monolith: MonolithMersenne31<_, 16, 5> = MonolithMersenne31::new(mds);
 
-        let mut input: [Mersenne31; 16] = [Mersenne31::ZERO; 16];
-        for (i, inp) in input.iter_mut().enumerate() {
-            *inp = Mersenne31::from_usize(i);
-        }
+        let mut input = array::from_fn(Mersenne31::from_canonical_usize);
+
+        let expected = [
+            609156607, 290107110, 1900746598, 1734707571, 2050994835, 1648553244, 1307647296,
+            1941164548, 1707113065, 1477714255, 1170160793, 93800695, 769879348, 375548503,
+            1989726444, 1349325635,
+        ]
+        .map(Mersenne31::from_canonical_u32);
+
         monolith.permutation(&mut input);
 
-        assert_eq!(input[0], Mersenne31::from_u64(609156607));
-        assert_eq!(input[1], Mersenne31::from_u64(290107110));
-        assert_eq!(input[2], Mersenne31::from_u64(1900746598));
-        assert_eq!(input[3], Mersenne31::from_u64(1734707571));
-        assert_eq!(input[4], Mersenne31::from_u64(2050994835));
-        assert_eq!(input[5], Mersenne31::from_u64(1648553244));
-        assert_eq!(input[6], Mersenne31::from_u64(1307647296));
-        assert_eq!(input[7], Mersenne31::from_u64(1941164548));
-        assert_eq!(input[8], Mersenne31::from_u64(1707113065));
-        assert_eq!(input[9], Mersenne31::from_u64(1477714255));
-        assert_eq!(input[10], Mersenne31::from_u64(1170160793));
-        assert_eq!(input[11], Mersenne31::from_u64(93800695));
-        assert_eq!(input[12], Mersenne31::from_u64(769879348));
-        assert_eq!(input[13], Mersenne31::from_u64(375548503));
-        assert_eq!(input[14], Mersenne31::from_u64(1989726444));
-        assert_eq!(input[15], Mersenne31::from_u64(1349325635));
+        assert_eq!(input, expected);
     }
 }

@@ -1,13 +1,18 @@
+use alloc::vec::Vec;
 use core::borrow::{Borrow, BorrowMut};
 
 use p3_air::{Air, AirBuilder, BaseAir};
-use p3_field::Field;
+use p3_field::{Field, PrimeField};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
+use rand::distributions::Standard;
+use rand::prelude::Distribution;
+use rand::random;
 
 use crate::air::eval;
 use crate::constants::RoundConstants;
-use crate::{Poseidon2Air, Poseidon2Cols};
+use crate::{generate_vectorized_trace_rows, Poseidon2Air, Poseidon2Cols};
 
 /// A "vectorized" version of Poseidon2Cols, for computing multiple Poseidon2 permutations per row.
 #[repr(C)]
@@ -138,7 +143,7 @@ pub struct VectorizedPoseidon2Air<
     const PARTIAL_ROUNDS: usize,
     const VECTOR_LEN: usize,
 > {
-    air: Poseidon2Air<
+    pub(crate) air: Poseidon2Air<
         F,
         LinearLayers,
         WIDTH,
@@ -174,6 +179,29 @@ impl<
         Self {
             air: Poseidon2Air::new(constants),
         }
+    }
+
+    pub fn generate_vectorized_trace_rows(
+        &self,
+        num_hashes: usize,
+        extra_capacity_bits: usize,
+    ) -> RowMajorMatrix<F>
+    where
+        F: PrimeField,
+        LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>,
+        Standard: Distribution<[F; WIDTH]>,
+    {
+        let inputs = (0..num_hashes).map(|_| random()).collect::<Vec<_>>();
+        generate_vectorized_trace_rows::<
+            F,
+            LinearLayers,
+            WIDTH,
+            SBOX_DEGREE,
+            SBOX_REGISTERS,
+            HALF_FULL_ROUNDS,
+            PARTIAL_ROUNDS,
+            VECTOR_LEN,
+        >(inputs, &self.air.constants, extra_capacity_bits)
     }
 }
 

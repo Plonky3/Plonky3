@@ -120,12 +120,7 @@ fn test_public_value_impl(n: usize, x: u64) {
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
     let trace = generate_trace_rows::<Val>(0, 1, n);
-    let fri_config = FriConfig {
-        log_blowup: 2,
-        num_queries: 28,
-        proof_of_work_bits: 8,
-        mmcs: challenge_mmcs,
-    };
+    let fri_config = create_test_fri_config(challenge_mmcs);
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
     let config = MyConfig::new(pcs);
     let mut challenger = Challenger::new(perm.clone());
@@ -155,12 +150,7 @@ fn test_incorrect_public_value() {
     let val_mmcs = ValMmcs::new(hash, compress);
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
-    let fri_config = FriConfig {
-        log_blowup: 2,
-        num_queries: 28,
-        proof_of_work_bits: 8,
-        mmcs: challenge_mmcs,
-    };
+    let fri_config = create_test_fri_config(challenge_mmcs);
     let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
     let config = MyConfig::new(pcs);

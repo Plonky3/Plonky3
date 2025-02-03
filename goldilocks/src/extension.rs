@@ -17,7 +17,7 @@ impl BinomiallyExtendable<2> for Goldilocks {
     ];
 }
 
-impl HasTwoAdicBionmialExtension<2> for Goldilocks {
+impl HasTwoAdicBinomialExtension<2> for Goldilocks {
     const EXT_TWO_ADICITY: usize = 33;
 
     fn ext_two_adic_generator(bits: usize) -> [Self; 2] {

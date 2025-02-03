@@ -110,7 +110,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         let lagrange_den = compute_lagrange_den_batched(&permuted_points, point, self.domain.log_n);
 
         // The columnwise_dot_product here consumes about 5% of the runtime for example prove_poseidon2_m31_keccak.
-        // Definately something worth optimising further.
+        // Definitely something worth optimising further.
         self.values
             .columnwise_dot_product(&lagrange_den)
             .into_iter()

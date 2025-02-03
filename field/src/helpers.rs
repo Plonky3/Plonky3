@@ -135,7 +135,7 @@ pub const fn field_to_array<R: PrimeCharacteristicRing, const D: usize>(x: R) ->
         acc += 1;
     }
     // If the code has reached this point every element of arr is correctly initialized.
-    // Hence we are safe to reintepret the array as [R; D].
+    // Hence we are safe to reinterpret the array as [R; D].
 
     unsafe { HackyWorkAround::transpose(arr).assume_init() }
 }

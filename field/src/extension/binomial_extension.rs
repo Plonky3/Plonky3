@@ -488,7 +488,7 @@ where
     }
 }
 
-impl<F: Field + HasTwoAdicBionmialExtension<D>, const D: usize> TwoAdicField
+impl<F: Field + HasTwoAdicBinomialExtension<D>, const D: usize> TwoAdicField
     for BinomialExtensionField<F, D>
 {
     const TWO_ADICITY: usize = F::EXT_TWO_ADICITY;

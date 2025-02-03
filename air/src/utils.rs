@@ -76,6 +76,24 @@ pub fn checked_andn<F: Field>(x: F, y: F) -> F {
 ///
 /// The output array is in little-endian order.
 #[inline]
+pub fn u32_to_bits_le<FA: FieldAlgebra>(val: u32) -> [FA; 32] {
+    array::from_fn(|i| FA::from_bool(val & (1 << i) != 0))
+}
+
+/// Convert a 64-bit integer into an array of 64 0 or 1 field elements.
+///
+/// The output array is in little-endian order.
+#[inline]
+pub fn u64_to_bits_le<FA: FieldAlgebra>(val: u64) -> [FA; 64] {
+    array::from_fn(|i| FA::from_bool(val & (1 << i) != 0))
+}
+
+/// Convert a 64-bit integer into an array of four field elements representing the 16 bit limb decomposition.
+///
+/// The output array is in little-endian order.
+#[inline]
+pub fn u64_to_16_bit_limbs<FA: FieldAlgebra>(val: u64) -> [FA; 4] {
+    array::from_fn(|i| FA::from_canonical_u16((val >> (16 * i)) as u16))
 pub fn u32_to_bits_le<R: PrimeCharacteristicRing>(val: u32) -> [R; 32] {
     // We do this over F::from_u32 as from_u32 can be slow
     // like in the case of monty field.

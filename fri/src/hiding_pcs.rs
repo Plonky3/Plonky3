@@ -6,8 +6,10 @@ use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, TwoAdicMultiplicativeCoset};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, Field, TwoAdicField};
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::bitrev::BitReversalPerm;
+use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
 use p3_matrix::horizontally_truncated::HorizontallyTruncated;
+use p3_matrix::row_index_mapped::RowIndexMappedView;
 use p3_matrix::Matrix;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -58,6 +60,10 @@ where
     type Domain = TwoAdicMultiplicativeCoset<Val>;
     type Commitment = InputMmcs::Commitment;
     type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
+    type EvaluationsOnDomain<'a> = HorizontallyTruncated<
+        Val,
+        RowIndexMappedView<BitReversalPerm, DenseMatrix<Val, &'a [Val]>>,
+    >;
     /// The first item contains the openings of the random polynomials added by this wrapper.
     /// The second item is the usual FRI proof.
     type Proof = (
@@ -95,7 +101,7 @@ where
         prover_data: &'a Self::ProverData,
         idx: usize,
         domain: Self::Domain,
-    ) -> impl Matrix<Val> + 'a {
+    ) -> Self::EvaluationsOnDomain<'a> {
         let inner_evals = <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as Pcs<
             Challenge,
             Challenger,

@@ -111,7 +111,7 @@ pub trait HasTwoAdicComplexBinomialExtension<const D: usize>:
     fn complex_ext_two_adic_generator(bits: usize) -> [Complex<Self>; D];
 }
 
-impl<F, const D: usize> HasTwoAdicBionmialExtension<D> for Complex<F>
+impl<F, const D: usize> HasTwoAdicBinomialExtension<D> for Complex<F>
 where
     F: HasTwoAdicComplexBinomialExtension<D>,
 {

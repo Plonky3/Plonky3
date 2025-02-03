@@ -59,18 +59,19 @@ Hashes
 
 ## Benchmarks
 
-Many variations are possible, with different fields, hashes and so forth, but here are a couple examples of Plonky3 benchmarks.
+Many variations are possible, with different fields, hashes and so forth, which can be controlled through the command line.
 
-Prove 2^19 Poseidon2 permutations of width 16, using the `KoalaBear` field and Keccak in the Merkle tree:
-Poseidon2
+For example, to prove 2^20 Poseidon2 permutations of width 16, using the `KoalaBear` field, `Radix2DitParallel` DFT and `KeccakF` as the Merkle tree hash:
 ```
-RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_poseidon2_koala_bear_keccak --release --features parallel
+RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_prime_field_31 --release --features parallel -- --field koala-bear --objective poseidon-2-permutations --log-trace-length 17 --discrete-fourier-transform radix-2-dit-parallel --merkle-hash keccak-f
 ```
 
-Prove 1365 Keccak-f permutations, using the `BabyBear` field and Keccak in the Merkle tree.
-```
-RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_baby_bear_keccak --release --features parallel
-```
+Currently the options for the command line arguments are:
+- `--field` (`-f`): `mersenne-31` or `koala-bear` or `baby-bear`.
+- `--objective` (`-o`): `blake-3-permutations, poseidon-2-permutations, keccak-f-permutations`.
+- `--log-trace-length` (`-l`): Accepts any integer between `0` and `255`. The number of permutations proven is `trace_length, 8*trace_length` and `trace_length/24` for `blake3, poseidon2` and `keccakf` respectively. 
+- `--discrete-fourier-transform` (`-d`): `radix-2-dit-parallel, recursive-dft`. This option should be omitted if the field choice is `mersenne-31` as the circle stark currently only supports a single discrete fourier transform.
+- `--merkle-hash` (`-m`): `poseidon-2, keccak-f`.
 
 Extra speedups may be possible with some configuration changes:
 - `JEMALLOC_SYS_WITH_MALLOC_CONF=retain:true,dirty_decay_ms:-1,muzzy_decay_ms:-1` will cause jemalloc to hang on to virtual memory. This may not affect the very first proof much, but can help significantly with subsequent proofs as fewer pages (if any) will need to be newly assigned by the OS. These settings might not be suitable for all production environments, e.g. if the process' virtual memory is limited by `ulimit` or `max_map_count`.
