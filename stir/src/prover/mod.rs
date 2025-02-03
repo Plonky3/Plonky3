@@ -15,7 +15,6 @@ use crate::coset::Radix2Coset;
 use crate::polynomial::Polynomial;
 use crate::proof::RoundProof;
 use crate::utils::{fold_evaluations, fold_polynomial, multiply_by_power_polynomial};
-use crate::verifier::compute_folded_evaluations;
 use crate::{StirConfig, StirProof};
 
 #[cfg(test)]

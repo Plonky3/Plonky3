@@ -8,7 +8,7 @@ use itertools::Itertools;
 use itertools::{iterate, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::TwoAdicField;
+use p3_field::{batch_multiplicative_inverse, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 
 use crate::config::RoundConfig;
@@ -68,12 +68,14 @@ impl<F: TwoAdicField> Oracle<F> {
                     "The virtual function is undefined at points in its quotient set"
                 );
 
+                // NP TODO optimise?
                 let quotient_num = f_x - virtual_function.interpolating_polynomial.evaluate(&x);
                 let quotient_denom: F = virtual_function
                     .quotient_set
                     .iter()
                     .map(|q| x - *q)
                     .product();
+
                 let quotient_evalution = quotient_num * quotient_denom.inverse();
 
                 let num_terms = virtual_function.quotient_set.len();
@@ -249,8 +251,7 @@ where
             .exp_power_of_2(log_final_query_domain_size),
     );
 
-    // NP TODO think if this is the most efficient way
-
+    // NP TODO ask Giacomo why no shake polynomial in the last round
     if !p_evals
         .into_iter()
         .zip(final_queried_point_roots)
@@ -416,23 +417,21 @@ where
         .chain(folded_answers)
         .collect();
 
-    // NP TODO replace by shake-poly machinery
-
-    // Check that Ans interpolates the expected values
+    // Check that Ans interpolates the expected values using the shake polynomial
     if ans_polynomial.degree() >= quotient_answers.len() {
         return None;
     }
 
-    if quotient_answers
-        .iter()
-        .any(|(point, eval)| ans_polynomial.evaluate(point) != *eval)
-    {
+    let quotient_set = quotient_answers.iter().map(|(x, _)| *x).collect_vec();
+
+    if !verify_evaluations(
+        &ans_polynomial,
+        &shake_polynomial,
+        shake_randomness,
+        quotient_answers,
+    ) {
         return None;
     }
-
-    let quotient_set = quotient_answers.into_iter().map(|(x, _)| x).collect_vec();
-
-    // NP TODO degree-test ans poly and shake_poly
 
     Some(VerificationState {
         oracle: Oracle::Virtual(VirtualFunction {
@@ -495,19 +494,18 @@ fn compute_f_oracle_from_g<F: TwoAdicField>(
         .collect_vec()
 }
 
-/// Let p_1, ..., p_n be a list of points. For each p_i, given the evaluations of
-/// a polynomial h at the set of points
-///   Y_i = {y in F: y^(arity) = p_i^(arity)},
-/// compute Fold(h, arity, c)(p_i^(arity)).
-///
-/// Parameters
-/// - unfolded_evaluation_lists: The i-th element is the list of evaluations of h at Y_i
-/// - point_roots: The list of p_i's
-/// - log_arity: The folding arity is 2 raised to this value
-/// - c: The folding coefficient
-/// - omega: The generator of the subgroup of arity-th roots of unity in F
-// NP TODO make this private
-pub fn compute_folded_evaluations<F: TwoAdicField>(
+// Let p_1, ..., p_n be a list of points. For each p_i, given the evaluations of
+// a polynomial h at the set of points
+//   Y_i = {y in F: y^(arity) = p_i^(arity)},
+// compute Fold(h, arity, c)(p_i^(arity)).
+//
+// Parameters
+// - unfolded_evaluation_lists: The i-th element is the list of evaluations of h at Y_i
+// - point_roots: The list of p_i's
+// - log_arity: The folding arity is 2 raised to this value
+// - c: The folding coefficient
+// - omega: The generator of the subgroup of arity-th roots of unity in F
+fn compute_folded_evaluations<F: TwoAdicField>(
     unfolded_evaluation_lists: Vec<Vec<F>>,
     point_roots: &[F],
     log_arity: usize,
@@ -519,4 +517,35 @@ pub fn compute_folded_evaluations<F: TwoAdicField>(
         .zip(point_roots.iter())
         .map(|(evals, point_root)| fold_evaluations(evals, *point_root, log_arity, omega, c))
         .collect()
+}
+
+// Verify that f takes the values y_1, ..., y_n at x_1, ..., x_n (resp.)
+// using the technique of "shake polynomials". The prover has sent the verifier
+// an auxiliary shake polynomial q defined (in the honest case) as
+//     q(x) = (f(x) - y_1) / (x - x_1) + ... + (f(x) - y_n) / (x - x_n)
+// The verifier then has sampled a random field element r and now checks the
+// above equation there
+fn verify_evaluations<F: TwoAdicField>(
+    // Polynomial whose evaluations are being checked
+    f: &Polynomial<F>,
+    // Shale polynomial q
+    shake_polynomial: &Polynomial<F>,
+    // Random field element where the equation is checked
+    r: F,
+    // Vector of (x_i, y_i)
+    points: Vec<(F, F)>,
+) -> bool {
+    let f_eval = f.evaluate(&r);
+    let shake_eval = shake_polynomial.evaluate(&r);
+
+    let (xs, ys): (Vec<F>, Vec<F>) = points.into_iter().unzip();
+
+    let denominators = batch_multiplicative_inverse(&xs.into_iter().map(|x| r - x).collect_vec());
+
+    shake_eval
+        == ys
+            .into_iter()
+            .zip(denominators)
+            .map(|(y, denom)| (f_eval - y) * denom)
+            .sum()
 }

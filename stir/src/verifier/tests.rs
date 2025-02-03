@@ -67,3 +67,5 @@ fn test_verify_variable_folding_factor() {
     let proof = prove(&config, polynomial, &mut prover_challenger);
     assert!(verify(&config, proof, &mut verifier_challenger));
 }
+
+// NP TODO failing tests
