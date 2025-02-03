@@ -56,7 +56,7 @@ nums = "0.1.0"
 postcard = { version = "1.0.0", default-features = false }
 rand = "0.8.5"
 rand_chacha = "0.3.1"
-rand_xoshiro = "0.6.0"
+rand_xoshiro = "0.7.0"
 rayon = "1.7.0"
 serde = { version = "1.0", default-features = false }
 serde_json = "1.0.113"
