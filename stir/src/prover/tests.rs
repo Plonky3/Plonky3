@@ -5,10 +5,8 @@ use crate::{
     prover::prove,
     test_utils::*,
     utils::{field_element_from_isize, fold_polynomial},
-    StirProof,
 };
 use itertools::Itertools;
-use p3_baby_bear::BabyBear;
 use p3_challenger::MockChallenger;
 use p3_commit::Mmcs;
 use p3_field::FieldAlgebra;
@@ -17,12 +15,10 @@ use rand::Rng;
 
 use super::{prove_round, RoundConfig, StirWitness};
 
-type BB = BabyBear;
-
 // NP TODO either remove the manual values or use them by reducing the soundness
 #[test]
 fn test_prove_round_zero() {
-    let config = test_stir_config(3, 1, 1, 2);
+    let config = test_bb_stir_config(3, 1, 1, 2);
 
     let round = 0;
 
@@ -38,15 +34,15 @@ fn test_prove_round_zero() {
     let field_replies = [
         // ood_samples
         (0..num_ood_samples)
-            .map(|x| BB::from_canonical_usize(3) * BB::from_canonical_usize(x))
+            .map(|x| BBExt::from_canonical_usize(3) * BBExt::from_canonical_usize(x))
             .collect_vec(),
         vec![
             // comb_randomness
-            BB::ONE,
+            BBExt::ONE,
             // folding_randomness
-            BB::ONE,
+            BBExt::ONE,
             // shake_randomness (unused)
-            BB::ONE,
+            BBExt::ONE,
         ],
     ]
     .concat();
@@ -63,7 +59,7 @@ fn test_prove_round_zero() {
     let mut challenger = MockChallenger::new(field_replies, bit_replies.clone());
 
     // Starting polynomial: -2 + 17x + 42x^2 + 3x^3 - x^4 - x^5 + 4x^6 + 5x^7
-    let coeffs: Vec<BB> = vec![-2, 17, 42, 3, -1, -1, 4, 5]
+    let coeffs: Vec<BBExt> = vec![-2, 17, 42, 3, -1, -1, 4, 5]
         .into_iter()
         .map(field_element_from_isize)
         .collect_vec();
@@ -71,7 +67,7 @@ fn test_prove_round_zero() {
     let f = Polynomial::from_coeffs(coeffs);
 
     let original_domain = Radix2Coset::new(
-        BB::ONE,
+        BBExt::ONE,
         config.log_starting_degree() + config.log_starting_inv_rate(),
     );
 
@@ -92,7 +88,7 @@ fn test_prove_round_zero() {
         merkle_tree,
         stacked_evals: stacked_original_evals,
         round,
-        folding_randomness: BB::from_canonical_usize(2),
+        folding_randomness: BBExt::from_canonical_usize(2),
     };
 
     let (witness, round_proof) = prove_round(&config, witness, &mut challenger);
@@ -101,7 +97,7 @@ fn test_prove_round_zero() {
     let expected_domain = original_domain.shrink_subgroup(1);
 
     let expected_round = 1;
-    let expected_folding_randomness = BB::ONE;
+    let expected_folding_randomness = BBExt::ONE;
 
     let StirWitness {
         domain,
@@ -123,7 +119,9 @@ fn test_prove_round_zero() {
     assert!(polynomial.is_zero());
 
     // Polynomial-evaluation testing
-    assert!(domain.iter().all(|x| polynomial.evaluate(&x) == BB::ZERO));
+    assert!(domain
+        .iter()
+        .all(|x| polynomial.evaluate(&x) == BBExt::ZERO));
 
     // ============== Round Proof Checks ===============
 
@@ -150,7 +148,7 @@ fn test_prove_round_zero() {
 fn test_prove_round_large() {
     let mut rng = rand::thread_rng();
 
-    let config = test_stir_config(10, 3, 2, 2);
+    let config = test_bb_stir_config(10, 3, 2, 2);
 
     let round = 0;
 
@@ -164,11 +162,11 @@ fn test_prove_round_large() {
         ..
     } = round_config.clone();
 
-    let r_0: BB = rng.gen(); // Initial folding randomness
+    let r_0: BBExt = rng.gen(); // Initial folding randomness
 
     // Field randomness produced by the sponge
-    let r_1: BB = rng.gen(); // Folding randomness for round 2 (which never happens)
-    let ood_randomness: Vec<BB> = (0..num_ood_samples).map(|_| rng.gen()).collect();
+    let r_1: BBExt = rng.gen(); // Folding randomness for round 2 (which never happens)
+    let ood_randomness: Vec<BBExt> = (0..num_ood_samples).map(|_| rng.gen()).collect();
     let comb_randomness = rng.gen();
     let _shake_randomness = rng.gen();
 
@@ -192,7 +190,7 @@ fn test_prove_round_large() {
     let f_0 = rand_poly((1 << config.log_starting_degree()) - 1);
 
     let original_domain = Radix2Coset::new(
-        BB::ONE,
+        BBExt::ONE,
         config.log_starting_degree() + config.log_starting_inv_rate(),
     );
 
@@ -306,11 +304,11 @@ fn test_prove() {
     // Note this performs no checks against the expected final polynomial - it
     // is only meant to check prove() runs from beginning to end.
 
-    let config = test_stir_config(14, 1, 4, 3);
+    let config = test_bb_stir_config(14, 1, 4, 3);
 
     let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
 
-    let mut challenger = test_challenger();
+    let mut challenger = test_bb_challenger();
 
     let proof = prove(&config, polynomial, &mut challenger);
 

@@ -1,22 +1,22 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::convert::TryInto;
-use core::iter;
+use error::{FullRoundVerificationError, VerificationError};
 use p3_matrix::Dimensions;
 
+use itertools::iterate;
 use itertools::Itertools;
-use itertools::{iterate, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{batch_multiplicative_inverse, TwoAdicField};
-use p3_matrix::dense::RowMajorMatrix;
+use p3_field::{batch_multiplicative_inverse, ExtensionField, Field, TwoAdicField};
 
 use crate::config::RoundConfig;
 use crate::coset::Radix2Coset;
 use crate::polynomial::Polynomial;
 use crate::proof::RoundProof;
-use crate::utils::{fold_evaluations, fold_polynomial, multiply_by_power_polynomial};
+use crate::utils::fold_evaluations;
 use crate::{StirConfig, StirProof};
+
+mod error;
 
 #[cfg(test)]
 mod tests;
@@ -120,14 +120,15 @@ pub struct VerificationState<F: TwoAdicField, M: Mmcs<F>> {
     root: M::Commitment,
 }
 
-pub fn verify<F, M, C>(
-    config: &StirConfig<F, M>,
-    proof: StirProof<F, M, C::Witness>,
+pub fn verify<F, EF, M, C>(
+    config: &StirConfig<EF, M>,
+    proof: StirProof<EF, M, C::Witness>,
     challenger: &mut C,
-) -> bool
+) -> Result<(), VerificationError>
 where
-    F: TwoAdicField,
-    M: Mmcs<F>,
+    F: Field,
+    EF: TwoAdicField + ExtensionField<F>,
+    M: Mmcs<EF>,
     C: FieldChallenger<F> + GrindingChallenger + CanObserve<M::Commitment>,
 {
     let StirProof {
@@ -138,10 +139,8 @@ where
         final_round_queries,
     } = proof;
 
-    // NP TODO return meaningful verification error
-
-    if final_polynomial.degree() >= 1 << config.log_stopping_degree() {
-        return false;
+    if final_polynomial.degree() + 1 > 1 << config.log_stopping_degree() {
+        return Err(VerificationError::FinalPolynomialDegree);
     }
 
     // NP TODO verify merkle paths (inside main loop instead of separately PLUS final round)
@@ -152,7 +151,7 @@ where
 
     // Cf. prover/mod.rs for an explanation on the chosen sequence of domain
     // sizes
-    let domain = Radix2Coset::new(F::two_adic_generator(log_size), log_size);
+    let domain = Radix2Coset::new(EF::two_adic_generator(log_size), log_size);
 
     let mut verification_state = VerificationState {
         oracle: Oracle::Transparent,
@@ -163,13 +162,9 @@ where
     };
 
     // Verifying each round
-    for round_proof in round_proofs {
-        verification_state =
-            if let Some(vs) = verify_round(config, verification_state, round_proof, challenger) {
-                vs
-            } else {
-                return false;
-            };
+    for (i, round_proof) in round_proofs.into_iter().enumerate() {
+        verification_state = verify_round(config, verification_state, round_proof, challenger)
+            .map_err(|e| VerificationError::Round(i, e))?;
     }
 
     let VerificationState {
@@ -213,7 +208,7 @@ where
             )
             .is_err()
         {
-            return false;
+            return Err(VerificationError::FinalQueryPath);
         }
     }
 
@@ -259,37 +254,36 @@ where
             final_polynomial.evaluate(&root.exp_power_of_2(log_last_folding_factor)) == eval
         })
     {
-        return false;
+        return Err(VerificationError::FinalPolynomialEvaluations);
     }
 
     // NP TODO verify pow_witness
-    // if !challenger.check_witness(config.final_pow_bits().ceil() as usize, pow_witness) {
-    //     return false;
-    // }
+    if !challenger.check_witness(config.final_pow_bits().ceil() as usize, pow_witness) {
+        return Err(VerificationError::FinalProofOfWork);
+    }
 
-    return true;
+    Ok(())
 }
 
-fn verify_round<F, M, C>(
-    config: &StirConfig<F, M>,
-    verification_state: VerificationState<F, M>,
-    round_proof: RoundProof<F, M, C::Witness>,
+fn verify_round<F, EF, M, C>(
+    config: &StirConfig<EF, M>,
+    verification_state: VerificationState<EF, M>,
+    round_proof: RoundProof<EF, M, C::Witness>,
     challenger: &mut C,
-) -> Option<VerificationState<F, M>>
+) -> Result<VerificationState<EF, M>, FullRoundVerificationError>
 where
-    F: TwoAdicField,
-    M: Mmcs<F>,
+    F: Field,
+    EF: TwoAdicField + ExtensionField<F>,
+    M: Mmcs<EF>,
     C: FieldChallenger<F> + GrindingChallenger + CanObserve<M::Commitment>,
 {
     // De-structure the round-specific configuration and the verification state
     let RoundConfig {
         log_folding_factor,
-        log_next_folding_factor,
-        log_evaluation_domain_size,
         pow_bits,
         num_queries,
         num_ood_samples,
-        log_inv_rate,
+        ..
     } = config.round_config(verification_state.round).clone();
 
     let VerificationState {
@@ -316,14 +310,16 @@ where
     let mut ood_samples = Vec::new();
 
     while ood_samples.len() < num_ood_samples {
-        let el: F = challenger.sample_ext_element();
+        let el: EF = challenger.sample_ext_element();
         if !domain.contains(el) {
             ood_samples.push(el);
         }
     }
 
     // Observe the betas
-    challenger.observe_slice(&betas);
+    betas
+        .iter()
+        .for_each(|&beta| challenger.observe_ext_element(beta));
 
     // Sample ramdomness used for degree correction
     let comb_randomness = challenger.sample_ext_element();
@@ -339,17 +335,22 @@ where
         .unique()
         .collect();
 
-    // NP TODO verify proof of work
-    // // Verify proof of work
-    // if !challenger.check_witness(pow_bits.ceil() as usize, pow_witness) {
-    //     return None;
-    // }
+    // Verify proof of work
+    if !challenger.check_witness(pow_bits.ceil() as usize, pow_witness) {
+        return Err(FullRoundVerificationError::ProofOfWork);
+    }
 
     // Update the transcript with the coefficients of the answer and shake polynomials
-    challenger.observe_slice(ans_polynomial.coeffs());
-    challenger.observe_slice(shake_polynomial.coeffs());
+    ans_polynomial
+        .coeffs()
+        .iter()
+        .for_each(|&c| challenger.observe_ext_element(c));
+    shake_polynomial
+        .coeffs()
+        .iter()
+        .for_each(|&c| challenger.observe_ext_element(c));
 
-    let shake_randomness: F = challenger.sample_ext_element();
+    let shake_randomness: EF = challenger.sample_ext_element();
 
     // Verify Merkle paths
     for (&i, (leaf, proof)) in queried_indices.iter().unique().zip(query_proofs.iter()) {
@@ -368,7 +369,7 @@ where
             )
             .is_err()
         {
-            return None;
+            return Err(FullRoundVerificationError::QueryPath);
         }
     }
 
@@ -419,7 +420,7 @@ where
 
     // Check that Ans interpolates the expected values using the shake polynomial
     if ans_polynomial.degree() >= quotient_answers.len() {
-        return None;
+        return Err(FullRoundVerificationError::AnsPolynomialDegree);
     }
 
     let quotient_set = quotient_answers.iter().map(|(x, _)| *x).collect_vec();
@@ -430,10 +431,10 @@ where
         shake_randomness,
         quotient_answers,
     ) {
-        return None;
+        return Err(FullRoundVerificationError::AnsPolynomialEvaluations);
     }
 
-    Some(VerificationState {
+    Ok(VerificationState {
         oracle: Oracle::Virtual(VirtualFunction {
             comb_randomness,
             interpolating_polynomial: ans_polynomial,

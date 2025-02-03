@@ -12,6 +12,13 @@
 
 // NP TODO profusely add documentation
 
+// NP TODO remove
+// - Large-field sponge, re-introduce PoW
+// - new type VerificationError
+// - optimisations for fold_evaluations
+// - optimisations for oracle computation
+// - More tests
+
 extern crate alloc;
 
 mod config;

@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{FieldAlgebra, TwoAdicField};
+use p3_field::{ExtensionField, Field, FieldAlgebra, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 
 use crate::config::RoundConfig;
@@ -105,14 +105,15 @@ where
 
 // NP TODO pub fn prove_on_evals
 // NP TODO commit_and_prove
-pub fn prove<F, M, C>(
-    config: &StirConfig<F, M>,
-    polynomial: Polynomial<F>,
+pub fn prove<F, EF, M, C>(
+    config: &StirConfig<EF, M>,
+    polynomial: Polynomial<EF>,
     challenger: &mut C,
-) -> StirProof<F, M, C::Witness>
+) -> StirProof<EF, M, C::Witness>
 where
-    F: TwoAdicField,
-    M: Mmcs<F>,
+    F: Field,
+    EF: TwoAdicField + ExtensionField<F>,
+    M: Mmcs<EF>,
     C: FieldChallenger<F> + GrindingChallenger + CanObserve<M::Commitment>,
 {
     assert!(
@@ -158,7 +159,7 @@ where
         .unique()
         .collect();
 
-    let queries_to_final: Vec<(Vec<F>, M::Proof)> = queried_indices
+    let queries_to_final: Vec<(Vec<EF>, M::Proof)> = queried_indices
         .into_iter()
         .map(|index| {
             config
@@ -171,9 +172,7 @@ where
     println!("Grinding {} bits", config.final_pow_bits().ceil() as usize);
 
     // NP TODO: Is this correct? Can we just take the ceil?
-    // NP TODO reintroduce
-    // let pow_witness = challenger.grind(config.final_pow_bits().ceil() as usize);
-    let pow_witness = C::Witness::ONE;
+    let pow_witness = challenger.grind(config.final_pow_bits().ceil() as usize);
 
     StirProof {
         commitment,
@@ -184,14 +183,15 @@ where
     }
 }
 
-fn prove_round<F, M, C>(
-    config: &StirConfig<F, M>,
-    witness: StirWitness<F, M>,
+fn prove_round<F, EF, M, C>(
+    config: &StirConfig<EF, M>,
+    witness: StirWitness<EF, M>,
     challenger: &mut C,
-) -> (StirWitness<F, M>, RoundProof<F, M, C::Witness>)
+) -> (StirWitness<EF, M>, RoundProof<EF, M, C::Witness>)
 where
-    F: TwoAdicField,
-    M: Mmcs<F>,
+    F: Field,
+    EF: TwoAdicField + ExtensionField<F>,
+    M: Mmcs<EF>,
     C: FieldChallenger<F> + GrindingChallenger + CanObserve<M::Commitment>,
 {
     // De-structure the round-specific configuration and the witness
@@ -257,20 +257,22 @@ where
     let mut ood_samples = Vec::new();
 
     while ood_samples.len() < num_ood_samples {
-        let el: F = challenger.sample_ext_element();
+        let el: EF = challenger.sample_ext_element();
         if !new_domain.contains(el) {
             ood_samples.push(el);
         }
     }
 
     // Evaluate the polynomial at the OOD samples
-    let betas: Vec<F> = ood_samples
+    let betas: Vec<EF> = ood_samples
         .iter()
         .map(|x| folded_polynomial.evaluate(x))
         .collect();
 
     // Observe the betas
-    challenger.observe_slice(&betas);
+    betas
+        .iter()
+        .for_each(|&beta| challenger.observe_ext_element(beta));
 
     // ========= STIR MESSAGE =========
 
@@ -288,18 +290,17 @@ where
         .unique()
         .collect();
 
-    // Proof of work witness
+    // Proof-of-work witness
     // NP TODO: Is this correct? Can we just take the ceil?
     // NP TODO unsafe cast to usize
     println!("Grinding {} bits", pow_bits.ceil() as usize);
-    // NP TODO reintroduce
-    //let pow_witness = challenger.grind(pow_bits.ceil() as usize);
-    let pow_witness = C::Witness::ONE;
+
+    let pow_witness = challenger.grind(pow_bits.ceil() as usize);
 
     // ========= QUERY PROOFS =========
 
     // Open the Merkle paths for the queried indices
-    let query_proofs: Vec<(Vec<F>, M::Proof)> = queried_indices
+    let query_proofs: Vec<(Vec<EF>, M::Proof)> = queried_indices
         .clone()
         .into_iter()
         .map(|index| {
@@ -325,12 +326,12 @@ where
     // Get the elements in L^k corresponding to the queried indices
     // (i.e r^{shift}_i in the paper)
     // Evaluate the polynomial at the queried indices
-    let stir_randomness: Vec<F> = queried_indices
+    let stir_randomness: Vec<EF> = queried_indices
         .iter()
         .map(|index| domain_k.element(*index))
         .collect();
 
-    let stir_randomness_evals: Vec<F> = stir_randomness
+    let stir_randomness_evals: Vec<EF> = stir_randomness
         .iter()
         .map(|x| folded_polynomial.evaluate(x))
         .collect();
@@ -349,18 +350,23 @@ where
     let quotient_set_size = quotient_set.len();
 
     // Compute the answer polynomial and add it to the transcript
-    let ans_polynomial = Polynomial::<F>::lagrange_interpolation(quotient_answers.clone());
-    challenger.observe_slice(ans_polynomial.coeffs());
-
+    let ans_polynomial = Polynomial::<EF>::lagrange_interpolation(quotient_answers.clone());
+    ans_polynomial
+        .coeffs()
+        .iter()
+        .for_each(|&c| challenger.observe_ext_element(c));
     // Compute the shake polynomial and add it to the transcript
     let shake_polynomial = compute_shake_polynomial(&ans_polynomial, quotient_answers.into_iter());
-    challenger.observe_slice(shake_polynomial.coeffs());
+    shake_polynomial
+        .coeffs()
+        .iter()
+        .for_each(|&c| challenger.observe_ext_element(c));
 
     // Shake randomness This is only used by the verifier, but it doesn't need
     // to be kept private. Therefore, the verifier can squeeze it from the
     // sponge, in which case the prover must follow suit to keep the sponges
     // in sync.
-    let _shake_randomness: F = challenger.sample_ext_element();
+    let _shake_randomness: EF = challenger.sample_ext_element();
 
     // Compute the quotient polynomial
     let vanishing_polynomial = Polynomial::vanishing_polynomial(quotient_set);

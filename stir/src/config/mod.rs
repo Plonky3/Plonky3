@@ -1,8 +1,8 @@
 use alloc::vec::Vec;
-use core::fmt::Debug;
+use core::fmt::{Debug, Display, Formatter, Result};
+use itertools::Itertools;
 
-use p3_field::{Field, TwoAdicField};
-use p3_matrix::Matrix;
+use p3_field::TwoAdicField;
 
 use crate::utils::compute_pow;
 use crate::SecurityAssumption;
@@ -382,7 +382,7 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
 
     /// Configurations of non-final rounds (i. e. the ones which happen inside
     /// the main loop)
-    pub(crate) fn round_configs(&self) -> &[RoundConfig] {
+    pub fn round_configs(&self) -> &[RoundConfig] {
         &self.round_parameters
     }
 
@@ -459,5 +459,90 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
 
     pub fn mmcs_config(&self) -> &M {
         &self.parameters.mmcs_config
+    }
+}
+
+impl<M: Clone> Display for StirParameters<M> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        write!(
+            f,
+            "StirParameters\n\
+            \t- security level: {} bits\n\
+            \t- security assumption for the code: {}\n\
+            \t- log of (starting degree bound + 1): {}\n\
+            \t- log of the folding factors: {}\n\
+            \t- log of the starting inverse rate: {}\n\
+            \t- log of inverse rates for non-first codewords: {}\n\
+            \t- proof-of-work bits: {}\n",
+            self.security_level,
+            self.security_assumption,
+            self.log_starting_degree,
+            self.log_folding_factors
+                .iter()
+                .map(|x| format!("{}", x))
+                .collect_vec()
+                .join(", "),
+            self.log_starting_inv_rate,
+            self.log_inv_rates
+                .iter()
+                .map(|x| format!("{}", x))
+                .collect_vec()
+                .join(", "),
+            self.pow_bits
+        )
+    }
+}
+
+impl<F: TwoAdicField, M: Clone> Display for StirConfig<F, M> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        write!(
+            f,
+            "StirConfig with:\n* {}\n\
+            * Other parameters:\n\
+            \t- starting domain log size: {}\n\
+            \t- starting folding pow bits: {}\n\
+            \t- log of (stopping degree bound + 1): {}\n\n\
+            {}\n\n\
+            * Final round parameters:\n\n\
+            \t- log of final inverse rate: {}\n\
+            \t- final number of queries: {}\n\
+            \t- final proof-of-work bits: {}\n\n",
+            self.parameters,
+            self.starting_domain_log_size,
+            self.starting_folding_pow_bits,
+            self.log_stopping_degree,
+            self.round_parameters
+                .iter()
+                .enumerate()
+                .map(|(i, x)| format!("* Round i = {} parameters: {}", i + 1, x))
+                .collect_vec()
+                .join("\n\n"),
+            self.log_final_inv_rate,
+            self.final_num_queries,
+            self.final_pow_bits,
+        )
+    }
+}
+
+impl Display for RoundConfig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        write!(
+            f,
+            "RoundConfig\n\n\
+            \t- log of folding factor: {}\n\
+            \t- log of next folding factor: {}\n\
+            \t- log of evaluation domain size: {}\n\
+            \t- number of queries: {}\n\
+            \t- number of OOD samples: {}\n\
+            \t- log of inverse rate: {}\n\
+            \t- proof of work bits: {}\n",
+            self.log_folding_factor,
+            self.log_next_folding_factor,
+            self.log_evaluation_domain_size,
+            self.num_queries,
+            self.num_ood_samples,
+            self.log_inv_rate,
+            self.pow_bits
+        )
     }
 }

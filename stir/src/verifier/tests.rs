@@ -2,17 +2,17 @@ use crate::{
     coset::Radix2Coset,
     polynomial::rand_poly,
     prover::prove,
-    test_utils::{test_challenger, test_stir_config, test_stir_config_folding_factors},
+    test_utils::{
+        test_bb_challenger, test_bb_stir_config, test_stir_config_folding_factors, BBExt,
+    },
     utils::fold_polynomial,
     verifier::{compute_folded_evaluations, verify},
 };
 use itertools::Itertools;
 use p3_baby_bear::BabyBear;
-use p3_field::FieldAlgebra;
+use p3_field::{extension::BinomialExtensionField, FieldAlgebra};
 use rand::thread_rng;
 use rand::Rng;
-
-type BB = BabyBear;
 
 #[test]
 fn test_compute_folded_evals() {
@@ -24,8 +24,8 @@ fn test_compute_folded_evals() {
     // TODO change thread_rngs to test RNGs which are deterministic
     let mut rng = thread_rng();
 
-    let root: BB = rng.gen();
-    let c: BB = rng.gen();
+    let root: BBExt = rng.gen();
+    let c: BBExt = rng.gen();
 
     let domain = Radix2Coset::new(root, log_arity);
 
@@ -39,33 +39,34 @@ fn test_compute_folded_evals() {
     let expected_folded_eval =
         fold_polynomial(&polynomial, c, log_arity).evaluate(&root.exp_power_of_2(log_arity));
 
-    assert_eq!(folded_eval, expected_folded_eval,);
+    assert_eq!(folded_eval, expected_folded_eval);
 }
 
 #[test]
 fn test_verify() {
-    let config = test_stir_config(14, 1, 4, 3);
+    let config = test_bb_stir_config(14, 1, 4, 3);
 
     let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
 
-    let mut prover_challenger = test_challenger();
+    let mut prover_challenger = test_bb_challenger();
     let mut verifier_challenger = prover_challenger.clone();
 
     let proof = prove(&config, polynomial, &mut prover_challenger);
-    assert!(verify(&config, proof, &mut verifier_challenger));
+    verify(&config, proof, &mut verifier_challenger).unwrap();
 }
 
 #[test]
 fn test_verify_variable_folding_factor() {
-    let config = test_stir_config_folding_factors(14, 1, vec![5, 4, 3]);
+    let config = test_stir_config_folding_factors(14, 1, vec![4, 5, 3]);
 
     let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
 
-    let mut prover_challenger = test_challenger();
+    let mut prover_challenger = test_bb_challenger();
     let mut verifier_challenger = prover_challenger.clone();
 
     let proof = prove(&config, polynomial, &mut prover_challenger);
-    assert!(verify(&config, proof, &mut verifier_challenger));
+
+    verify(&config, proof, &mut verifier_challenger).unwrap();
 }
 
 // NP TODO failing tests
