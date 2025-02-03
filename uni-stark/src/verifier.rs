@@ -32,11 +32,13 @@ where
         degree_bits,
     } = proof;
 
+    let pcs = config.pcs();
+
     let degree = 1 << degree_bits;
-    let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(air, 0, public_values.len());
+    let log_quotient_degree =
+        get_log_quotient_degree::<Val<SC>, A>(air, 0, public_values.len(), pcs.is_zk());
     let quotient_degree = 1 << log_quotient_degree;
 
-    let pcs = config.pcs();
     let trace_domain = pcs.natural_domain_for_degree(degree);
     let init_trace_domain = if pcs.is_zk() {
         pcs.natural_domain_for_degree(degree / 2)
@@ -64,11 +66,6 @@ where
         })
         .collect_vec();
 
-    let nb_chunks = if pcs.is_zk() {
-        quotient_degree * 2
-    } else {
-        quotient_degree
-    };
     let air_width = <A as BaseAir<Val<SC>>>::width(air);
     // TODO Linda: include random poly here.
     let valid_shape = opened_values.trace_local.len() == air_width
@@ -152,20 +149,6 @@ where
                 .sum::<SC::Challenge>()
         })
         .sum::<SC::Challenge>();
-
-    tracing::info!(
-        "quotient chunks len {}",
-        opened_values.quotient_chunks.len()
-    );
-    // let g = trace_domain
-    //     .next_point(trace_domain.first_point())
-    //     .unwrap()
-    //     .exp_u64(14);
-    // tracing::info!("Entering with g {:?} degree bits {:?}", g, degree_bits);
-    // tracing::info!(
-    //     "last pt eval {:?}",
-    //     trace_domain.selectors_at_point(g, pcs.is_zk())
-    // );
 
     let sels = trace_domain.selectors_at_point(zeta, pcs.is_zk());
 

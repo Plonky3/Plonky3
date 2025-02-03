@@ -138,16 +138,17 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
 
         let mut coeffs = self.idft_batch(mat.clone());
         assert!(coeffs.values.len() == h * w);
-        assert!(added_values.len() == h);
+        assert!(added_values.len() == h * w);
 
         // The quotient matrix corresponds to the decomposition of the quotient poly on the extended basis.
         // For now, I'm only adding random values to the first polynomial, for simplicity and debugging purposes.
         coeffs.values.extend(F::zero_vec(h * w));
         // This adds v_H * r(X). So on H, the evaluation is not affected by this change.
-        for i in 0..added_values.len() {
+        for i in 0..h {
             for j in 0..w {
-                coeffs.values[i * w + j] -= added_values[i] * actual_s.exp_u64(i as u64);
-                coeffs.values[h * w + i * w + j] = added_values[i] * actual_s.exp_u64(i as u64);
+                coeffs.values[i * w + j] -= added_values[i * w + j] * actual_s.exp_u64(i as u64);
+                coeffs.values[h * w + i * w + j] =
+                    added_values[i * w + j] * actual_s.exp_u64(i as u64);
             }
         }
 

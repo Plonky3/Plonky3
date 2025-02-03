@@ -159,20 +159,6 @@ fn test_zk() {
         .with(env_filter)
         .with(ForestLayer::default())
         .init();
-    // type Val = BabyBear;
-    // type Challenge = BinomialExtensionField<Val, 4>;
-
-    // type ByteHash = Keccak256Hash;
-    // let byte_hash = ByteHash {};
-
-    // type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
-    // let u64_hash = MyHash::new(KeccakF {});
-
-    // type FieldHash = SerializingHasher32To64<U64Hash>;
-    // let field_hash = FieldHash::new(u64_hash);
-
-    // type MyCompress = CompressionFunctionFromHasher<U64Hash, 2, 4>;
-    // let compress = MyCompress::new(u64_hash);
 
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
@@ -201,28 +187,12 @@ fn test_zk() {
     let val_mmcs = ValHidingMmcs::new(field_hash, compress, thread_rng());
 
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
-    // type ValHidingMmcs = MerkleTreeHidingMmcs<
-    //     <Val as Field>::Packing,
-    //     <Val as Field>::Packing,
-    //     MyHash,
-    //     MyCompress,
-    //     ThreadRng,
-    //     4,
-    //     4,
-    // >;
-    // let val_mmcs = ValHidingMmcs::new(field_hash, compress, thread_rng());
 
     type ChallengeHidingMmcs = ExtensionMmcs<Val, Challenge, ValHidingMmcs>;
-    // type MyCompress = CompressionFunctionFromHasher<Perm, 2, 4>;
-    // let challenge_mmcs = ChallengeHidingMmcs::new(val_mmcs.clone());
 
-    // type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
     let n = 1 << 3;
     let x = 21;
-    // let perm = KeccakF::new_from_rng_128(&mut thread_rng());
-    // let hash = MyHash::new(perm.clone());
-    // let compress = MyCompress::new(perm.clone());
-    // let val_mmcs = ValHidingMmcs::new(hash, compress, thread_rng());
+
     let challenge_mmcs = ChallengeHidingMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
     let trace = generate_trace_rows::<Val>(0, 1, n);

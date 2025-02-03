@@ -87,6 +87,7 @@ where
             })
             .collect();
         let h = randomized_evaluations[0].1.height();
+        let w = randomized_evaluations[0].1.width();
         let ldes: Vec<_> = randomized_evaluations
             .into_iter()
             .map(|(domain, evals)| {
@@ -94,8 +95,7 @@ where
                 let shift = Val::GENERATOR / domain.shift;
                 let s = domain.shift;
 
-                let random_values = vec![self.rng.borrow_mut().gen(); h];
-                // let random_values = vec![Val::ZERO; h];
+                let random_values = vec![self.rng.borrow_mut().gen(); h * w];
 
                 self.inner
                     .dft
@@ -105,10 +105,6 @@ where
             })
             .collect();
         self.inner.mmcs.commit(ldes)
-        // <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as Pcs<Challenge, Challenger>>::commit(
-        //     &self.inner,
-        //     randomized_evaluations,
-        // )
     }
 
     fn commit_quotient(
@@ -126,14 +122,14 @@ where
                 )
             })
             .collect();
-        // let last_chunk = randomized_evaluations.len() - 1;
         // First, add random values as described in https://eprint.iacr.org/2024/1037.pdf.
         // If we have `d` chunks, let q'_i(X) = q_i(X) + v_H_i(X) * t_i(X) where t(X) is random, for 1 <= i < d.
         // q'_d(X) = q_d(X) - v_H_d(X) c_i \sum t_i(X) where c_i is a Lagrange normalization constant.
         let h = randomized_evaluations[0].1.height();
+        let w = randomized_evaluations[0].1.width();
 
         let all_random_values =
-            vec![self.rng.borrow_mut().gen(); (randomized_evaluations.len() - 1) * h];
+            vec![self.rng.borrow_mut().gen(); (randomized_evaluations.len() - 1) * h * w];
         let ldes: Vec<_> = randomized_evaluations
             .into_iter()
             .enumerate()
@@ -144,23 +140,26 @@ where
 
                 // Select random values, and set the random values for the final chunk accordingly.
                 let random_values = if i == last_chunk {
-                    let mut added_values = Val::zero_vec(h);
+                    let mut added_values = Val::zero_vec(h * w);
                     for j in 0..last_chunk {
                         for k in 0..h {
-                            added_values[k] -=
-                                all_random_values[j * h + k] * cis[j] * cis[last_chunk].inverse();
+                            for l in 0..w {
+                                added_values[k * w + l] -= all_random_values[j * h * w + k * w + l]
+                                    * cis[j]
+                                    * cis[last_chunk].inverse();
+                            }
                         }
                     }
                     added_values
                 } else {
                     // all_random_values[i * h * w..(i + 1) * h * w].to_vec()
-                    all_random_values[i * h..(i + 1) * h]
+                    all_random_values[i * h * w..(i + 1) * h * w]
                         .iter()
                         .map(|v| *v)
                         .collect()
                 };
 
-                // CHeck the evaluation as the verifier would here, but on challenge = 1, to see whether it works? (and compare it with non random value)
+                // Check the evaluation as the verifier would here, but on challenge = 1, to see whether it works? (and compare it with non random value)
                 // Commit to the bit-reversed LDE.
                 self.inner
                     .dft

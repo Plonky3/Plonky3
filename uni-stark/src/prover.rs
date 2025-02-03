@@ -41,14 +41,8 @@ where
     let pcs = config.pcs();
 
     let degree = trace.height();
-    let log_degree = log2_strict_usize(degree);
     let ext_degree = if pcs.is_zk() { degree * 2 } else { degree };
     let log_ext_degree = log2_strict_usize(ext_degree);
-    // tracing::info!(
-    //     "log degree {} ext log degree {}",
-    //     log_degree,
-    //     log_ext_degree
-    // );
 
     let symbolic_constraints = get_symbolic_constraints::<Val<SC>, A>(air, 0, public_values.len());
     let constraint_count = symbolic_constraints.len();
@@ -57,7 +51,7 @@ where
         .map(SymbolicExpression::degree_multiple)
         .max()
         .unwrap_or(0);
-    let log_quotient_degree = log2_ceil_usize(constraint_degree - 1);
+    let log_quotient_degree = log2_ceil_usize(constraint_degree - 1 + pcs.is_zk() as usize);
     let quotient_degree = 1 << log_quotient_degree;
 
     let trace_domain = pcs.natural_domain_for_degree(degree);
@@ -98,12 +92,6 @@ where
     let quotient_chunks = quotient_domain.split_evals(nb_chunks, quotient_flat);
     let qc_domains = quotient_domain.split_domains(nb_chunks);
 
-    // tracing::info!(
-    //     "nb quotient chunks {}, degree {} log quotient degree {}",
-    //     quotient_chunks.len(),
-    //     quotient_chunks[0].height(),
-    //     log_quotient_degree
-    // );
     // Compute the vanishing polynomial normalizing constants, based on the verifier's check.
     let zp_cis = qc_domains
         .iter()
@@ -113,7 +101,7 @@ where
                 .iter()
                 .enumerate()
                 .filter(|(j, _)| *j != i)
-                .map(|(j, other_domain)| other_domain.zp_at_point(domain.first_point()).inverse())
+                .map(|(_, other_domain)| other_domain.zp_at_point(domain.first_point()).inverse())
                 .product()
         })
         .collect_vec();
