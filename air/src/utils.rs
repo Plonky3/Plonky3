@@ -17,12 +17,10 @@ where
     Var: Into<R> + Clone,
     I: DoubleEndedIterator<Item = Var>,
 {
-    let mut output = R::ZERO;
-    for elem in iter.rev() {
-        output = output.double();
-        output += elem.clone().into();
-    }
-    output
+    iter.rev()
+        .map(Into::<R>::into)
+        .reduce(|acc, elem| acc.double() + elem)
+        .unwrap_or(R::ZERO)
 }
 
 /// Computes the arithmetic generalization of boolean `xor`.

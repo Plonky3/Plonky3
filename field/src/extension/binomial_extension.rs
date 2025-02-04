@@ -329,7 +329,7 @@ where
     A: Algebra<F>,
 {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.fold(Self::ZERO, |acc, x| acc + x)
+        iter.reduce(|acc, x| acc + x).unwrap_or(Self::ZERO)
     }
 }
 
@@ -447,7 +447,7 @@ where
     A: Algebra<F>,
 {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.fold(Self::ONE, |acc, x| acc * x)
+        iter.reduce(|acc, x| acc * x).unwrap_or(Self::ONE)
     }
 }
 
