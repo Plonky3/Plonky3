@@ -1,8 +1,8 @@
 use core::iter;
 
-use crate::polynomial::Polynomial;
 use itertools::{iterate, izip, Itertools};
 use p3_field::{Field, TwoAdicField};
+use p3_poly::Polynomial;
 
 pub(crate) fn compute_pow(security_level: usize, error: f64) -> f64 {
     0f64.max(security_level as f64 - error)
@@ -13,8 +13,14 @@ pub(crate) fn fold_polynomial<F: TwoAdicField>(
     folding_randomness: F,
     log_folding_factor: usize,
 ) -> Polynomial<F> {
+    let deg = if let Some(d) = polynomial.degree() {
+        d
+    } else {
+        return Polynomial::zero();
+    };
+
     let folding_factor = 1 << log_folding_factor;
-    let fold_size = (polynomial.degree() + 1).div_ceil(folding_factor);
+    let fold_size = (deg + 1).div_ceil(folding_factor);
 
     let folding_powers = iter::successors(Some(F::ONE), |&x| Some(x * folding_randomness))
         .take(folding_factor)
@@ -147,15 +153,15 @@ fn fold_evaluation_pair<F: TwoAdicField>(eval: F, eval_inv: F, gamma: F) -> F {
 mod tests {
 
     use p3_baby_bear::BabyBear;
+    use p3_coset::TwoAdicCoset;
     use p3_field::FieldAlgebra;
-    use p3_matrix::Matrix;
+    use p3_poly::{test_utils::rand_poly, Polynomial};
 
     use core::assert_eq;
     use iter::Iterator;
     use rand::Rng;
 
     use super::*;
-    use crate::{coset::Radix2Coset, polynomial::rand_poly};
 
     type BB = BabyBear;
 
@@ -248,7 +254,7 @@ mod tests {
     macro_rules! test_fold_evals_with_log_arity {
         ($log_arity:expr, $polynomial:expr, $folding_randomness:expr) => {{
             let mut rng = rand::thread_rng();
-            let domain = Radix2Coset::new(rng.gen(), $log_arity);
+            let domain = TwoAdicCoset::new(rng.gen(), $log_arity);
             let evaluations = domain
                 .iter()
                 .map(|x| $polynomial.evaluate(&x))

@@ -1,6 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use error::{FullRoundVerificationError, VerificationError};
+use p3_coset::TwoAdicCoset;
 use p3_matrix::Dimensions;
 
 use itertools::iterate;
@@ -8,10 +9,9 @@ use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{batch_multiplicative_inverse, ExtensionField, Field, TwoAdicField};
+use p3_poly::Polynomial;
 
 use crate::config::RoundConfig;
-use crate::coset::Radix2Coset;
-use crate::polynomial::Polynomial;
 use crate::proof::RoundProof;
 use crate::utils::fold_evaluations;
 use crate::{StirConfig, StirProof};
@@ -107,7 +107,7 @@ pub struct VerificationState<F: TwoAdicField, M: Mmcs<F>> {
     // NP TODO maybe move to the config or somewehre else (this is proof-independent)
 
     // Domain L_i
-    domain: Radix2Coset<F>,
+    domain: TwoAdicCoset<F>,
 
     // Folding randomness r_i to be used in the next round
     folding_randomness: F,
@@ -139,7 +139,10 @@ where
         final_round_queries,
     } = proof;
 
-    if final_polynomial.degree() + 1 > 1 << config.log_stopping_degree() {
+    if final_polynomial
+        .degree()
+        .is_some_and(|d| d + 1 > 1 << config.log_stopping_degree())
+    {
         return Err(VerificationError::FinalPolynomialDegree);
     }
 
@@ -151,7 +154,7 @@ where
 
     // Cf. prover/mod.rs for an explanation on the chosen sequence of domain
     // sizes
-    let domain = Radix2Coset::new(EF::two_adic_generator(log_size), log_size);
+    let domain = TwoAdicCoset::new(EF::two_adic_generator(log_size), log_size);
 
     let mut verification_state = VerificationState {
         oracle: Oracle::Transparent,
@@ -419,7 +422,10 @@ where
         .collect();
 
     // Check that Ans interpolates the expected values using the shake polynomial
-    if ans_polynomial.degree() >= quotient_answers.len() {
+    if ans_polynomial
+        .degree()
+        .is_some_and(|d| d >= quotient_answers.len())
+    {
         return Err(FullRoundVerificationError::AnsPolynomialDegree);
     }
 
@@ -455,7 +461,7 @@ fn compute_f_oracle_from_g<F: TwoAdicField>(
     // The queried indices of L_i^{k_i}
     queried_indices: &[u64],
     // The domain L_i
-    domain: &Radix2Coset<F>,
+    domain: &TwoAdicCoset<F>,
     // The log of the folding factor k_i
     log_folding_factor: usize,
 ) -> Vec<Vec<F>> {

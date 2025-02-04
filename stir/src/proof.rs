@@ -2,9 +2,8 @@ use alloc::vec::Vec;
 
 use p3_commit::Mmcs;
 use p3_field::Field;
+use p3_poly::Polynomial;
 use serde::{Deserialize, Serialize};
-
-use crate::polynomial::Polynomial;
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(bound(

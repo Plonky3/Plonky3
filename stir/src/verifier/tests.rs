@@ -1,6 +1,4 @@
 use crate::{
-    coset::Radix2Coset,
-    polynomial::rand_poly,
     prover::prove,
     test_utils::{
         test_bb_challenger, test_bb_stir_config, test_stir_config_folding_factors, BBExt,
@@ -9,8 +7,9 @@ use crate::{
     verifier::{compute_folded_evaluations, verify},
 };
 use itertools::Itertools;
-use p3_baby_bear::BabyBear;
-use p3_field::{extension::BinomialExtensionField, FieldAlgebra};
+use p3_coset::TwoAdicCoset;
+use p3_field::FieldAlgebra;
+use p3_poly::test_utils::rand_poly;
 use rand::thread_rng;
 use rand::Rng;
 
@@ -27,7 +26,7 @@ fn test_compute_folded_evals() {
     let root: BBExt = rng.gen();
     let c: BBExt = rng.gen();
 
-    let domain = Radix2Coset::new(root, log_arity);
+    let domain = TwoAdicCoset::new(root, log_arity);
 
     let evaluations = vec![domain.iter().map(|x| polynomial.evaluate(&x)).collect_vec()];
 
@@ -44,7 +43,8 @@ fn test_compute_folded_evals() {
 
 #[test]
 fn test_verify() {
-    let config = test_bb_stir_config(14, 1, 4, 3);
+    // NP TODO make bigger after more efficient FFT is introduced
+    let config = test_bb_stir_config(10, 1, 4, 2);
 
     let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
 
@@ -57,14 +57,21 @@ fn test_verify() {
 
 #[test]
 fn test_verify_variable_folding_factor() {
-    let config = test_stir_config_folding_factors(14, 1, vec![4, 5, 3]);
+    // NP TODO make bigger after more efficient FFT is introduced
+    let config = test_stir_config_folding_factors(10, 1, vec![4, 5]);
 
     let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
 
     let mut prover_challenger = test_bb_challenger();
     let mut verifier_challenger = prover_challenger.clone();
 
+    // NP TODO remove
+    println!("Proving");
+
     let proof = prove(&config, polynomial, &mut prover_challenger);
+
+    // NP TODO remove
+    println!("Verifying");
 
     verify(&config, proof, &mut verifier_challenger).unwrap();
 }

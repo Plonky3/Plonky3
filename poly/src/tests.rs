@@ -1,33 +1,17 @@
+use alloc::vec;
 use itertools::Itertools;
 use p3_baby_bear::BabyBear;
 use p3_field::{Field, FieldAlgebra};
-use rand::distributions::Standard;
-use rand::prelude::Distribution;
 use rand::Rng;
 
-use crate::polynomial::Polynomial;
-use crate::utils::field_element_from_isize;
+use crate::Polynomial;
+
 type BB = BabyBear;
 
-// NP TODO move?
-// NP TODO receive Option<random generator>?
-pub fn rand_poly<F: Field>(degree: usize) -> Polynomial<F>
-where
-    Standard: Distribution<F>,
-{
-    let mut rng = rand::thread_rng();
-
-    let mut coeffs: Vec<F> = (0..degree).map(|_| rng.gen()).collect();
-
-    let mut leading_coeff = F::ZERO;
-
-    while leading_coeff == F::ZERO {
-        leading_coeff = rng.gen();
-    }
-
-    coeffs.push(leading_coeff);
-
-    Polynomial::from_coeffs(coeffs)
+fn field_element_from_isize<F: Field>(x: isize) -> F {
+    let sign = if x >= 0 { F::ONE } else { -F::ONE };
+    let value = F::from_canonical_u32(x.abs() as u32);
+    sign * value
 }
 
 #[test]
@@ -219,7 +203,7 @@ fn test_vanishing_random() {
 
     let vanishing_poly = Polynomial::<BB>::vanishing_polynomial(points.clone());
 
-    assert_eq!(vanishing_poly.degree(), num_points);
+    assert_eq!(vanishing_poly.degree().unwrap(), num_points);
     assert!(points
         .iter()
         .all(|p| vanishing_poly.evaluate(p) == BB::ZERO));
@@ -237,7 +221,7 @@ fn test_vanishing_and_lagrange_interpolation() {
 
     let vanishing_poly = Polynomial::<BB>::vanishing_polynomial(points.clone());
 
-    assert_eq!(vanishing_poly.degree(), points.len());
+    assert_eq!(vanishing_poly.degree().unwrap(), points.len());
 
     // In order to recover the same polynomial through interpolation, we need
     // one more value

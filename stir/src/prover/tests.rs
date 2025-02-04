@@ -1,6 +1,4 @@
 use crate::{
-    coset::Radix2Coset,
-    polynomial::{rand_poly, Polynomial},
     proof::RoundProof,
     prover::prove,
     test_utils::*,
@@ -9,8 +7,10 @@ use crate::{
 use itertools::Itertools;
 use p3_challenger::MockChallenger;
 use p3_commit::Mmcs;
+use p3_coset::TwoAdicCoset;
 use p3_field::FieldAlgebra;
 use p3_matrix::{dense::RowMajorMatrix, Dimensions, Matrix};
+use p3_poly::{test_utils::rand_poly, Polynomial};
 use rand::Rng;
 
 use super::{prove_round, RoundConfig, StirWitness};
@@ -66,7 +66,7 @@ fn test_prove_round_zero() {
 
     let f = Polynomial::from_coeffs(coeffs);
 
-    let original_domain = Radix2Coset::new(
+    let original_domain = TwoAdicCoset::new(
         BBExt::ONE,
         config.log_starting_degree() + config.log_starting_inv_rate(),
     );
@@ -189,7 +189,7 @@ fn test_prove_round_large() {
     // Starting polynomial
     let f_0 = rand_poly((1 << config.log_starting_degree()) - 1);
 
-    let original_domain = Radix2Coset::new(
+    let original_domain = TwoAdicCoset::new(
         BBExt::ONE,
         config.log_starting_degree() + config.log_starting_inv_rate(),
     );
@@ -314,7 +314,7 @@ fn test_prove() {
 
     // Final-degree testing
     assert_eq!(config.log_stopping_degree(), 2);
-    assert!(proof.final_polynomial.degree() < 1 << 2);
+    assert!(proof.final_polynomial.degree().is_none_or(|d| d < 1 << 2));
 }
 
 // NP TODO test two subsequent rounds by hand

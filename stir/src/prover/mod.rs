@@ -1,21 +1,18 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::convert::TryInto;
-use core::iter;
-use std::collections::HashSet;
 
 use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{ExtensionField, Field, FieldAlgebra, TwoAdicField};
+use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 
 use crate::config::RoundConfig;
-use crate::coset::Radix2Coset;
-use crate::polynomial::Polynomial;
 use crate::proof::RoundProof;
-use crate::utils::{fold_evaluations, fold_polynomial, multiply_by_power_polynomial};
+use crate::utils::{fold_polynomial, multiply_by_power_polynomial};
 use crate::{StirConfig, StirProof};
+use p3_coset::TwoAdicCoset;
+use p3_poly::Polynomial;
 
 #[cfg(test)]
 mod tests;
@@ -26,7 +23,7 @@ pub struct StirWitness<F: TwoAdicField, M: Mmcs<F>> {
     // final round, with index num_rounds + 1, does not produce a StirWitness.
 
     // Domain L_i
-    pub(crate) domain: Radix2Coset<F>,
+    pub(crate) domain: TwoAdicCoset<F>,
 
     // Polynomial f_i
     pub(crate) polynomial: Polynomial<F>,
@@ -76,7 +73,7 @@ where
     // of the Fill polynomials).
     // Defining L_0 with shift w or 1 is equivalent mathematically, but the
     // former allows one to always use shrink_subgroup in the next rounds.
-    let domain = Radix2Coset::new(F::two_adic_generator(log_size), log_size);
+    let domain = TwoAdicCoset::new(F::two_adic_generator(log_size), log_size);
 
     let evals = domain.evaluate_polynomial(&polynomial);
 
@@ -116,10 +113,9 @@ where
     M: Mmcs<EF>,
     C: FieldChallenger<F> + GrindingChallenger + CanObserve<M::Commitment>,
 {
-    assert!(
-        polynomial.degree() - 1
-            <= 1 << (config.log_starting_degree() + config.log_starting_inv_rate())
-    );
+    assert!(polynomial
+        .degree()
+        .is_none_or(|d| d < 1 << (config.log_starting_degree() + config.log_starting_inv_rate())));
 
     // NP TODO: Should the prover call commit like in Plonky3's FRI?
     // or should be called separately like in Giacomo's code?

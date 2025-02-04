@@ -1,0 +1,18 @@
+[package]
+name = "p3-poly"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+p3-dft.workspace = true
+p3-field.workspace = true
+p3-matrix.workspace = true
+itertools.workspace = true
+rand = { workspace = true, optional = true }
+
+[dev-dependencies]
+p3-baby-bear.workspace = true
+
+[features]
+test-utils = ["dep:rand"]

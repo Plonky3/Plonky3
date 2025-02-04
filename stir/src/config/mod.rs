@@ -10,9 +10,6 @@ use crate::SecurityAssumption;
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
-pub use tests::*;
-
 /// STIR-related parameters defined by the user. These get expanded into a full `StirConfig`.
 #[derive(Debug, Clone)]
 pub struct StirParameters<M: Clone> {
@@ -104,9 +101,12 @@ impl<M: Clone> StirParameters<M> {
     }
 }
 
+// NP TODO either create getters for this or make it (alongside the method
+// round_config) private
+
 /// Round specific configuration
 #[derive(Debug, Clone)]
-pub(crate) struct RoundConfig {
+pub struct RoundConfig {
     /// log of the folding factor for this round.
     pub(crate) log_folding_factor: usize,
 

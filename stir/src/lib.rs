@@ -22,8 +22,6 @@
 extern crate alloc;
 
 mod config;
-pub mod coset;
-mod polynomial;
 mod proof;
 pub mod prover;
 mod proximity_gaps;

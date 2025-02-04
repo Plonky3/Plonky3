@@ -1,8 +1,13 @@
+#![no_std]
+
+extern crate alloc;
+
 use core::clone::Clone;
 use core::iter;
 use core::iter::Product;
 use core::ops::{Add, AddAssign, Div, Mul, Neg, Sub};
 
+use alloc::{vec, vec::Vec};
 use itertools::Itertools;
 use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
 use p3_field::{Field, TwoAdicField};
@@ -12,10 +17,10 @@ use p3_matrix::Matrix;
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
-pub use tests::rand_poly;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_utils;
 
-/// Stores a polynomial in coefficient form.
+/// Polynomial stored as a list of coefficients
 #[derive(Clone, PartialEq, Eq, Hash, Default, Debug)]
 pub struct Polynomial<F: Field> {
     // The coefficient of `x^i` is stored at location `i` in `self.coeffs`.
@@ -118,13 +123,12 @@ impl<F: Field> Polynomial<F> {
         Self::horner_evaluate(&self.coeffs, point)
     }
 
-    pub fn degree(&self) -> usize {
-        // NP TODO Option
+    pub fn degree(&self) -> Option<usize> {
         if self.is_zero() {
-            panic!("The degree of the zero polynomial is undefined");
+            None
+        } else {
+            Some(self.coeffs.len() - 1)
         }
-        // All operations internally ensure that the result has no leading zeros
-        self.coeffs.len() - 1
     }
 
     pub fn is_zero(&self) -> bool {
@@ -136,7 +140,9 @@ impl<F: Field> Polynomial<F> {
     }
 
     pub fn divide_with_q_and_r(&self, divisor: &Self) -> (Self, Self) {
-        assert!(!divisor.is_zero());
+        assert!(!divisor.is_zero(), "Divisor is zero");
+
+        let d_deg = divisor.degree().unwrap();
 
         if self.is_zero() {
             return (Self::zero(), Self::zero());
@@ -144,14 +150,15 @@ impl<F: Field> Polynomial<F> {
             return (Self::zero(), self.clone());
         }
 
-        let mut quotient_coeffs = vec![F::ZERO; self.degree() - divisor.degree() + 1];
+        let mut quotient_coeffs =
+            vec![F::ZERO; self.degree().unwrap() - divisor.degree().unwrap() + 1];
         let mut remainder = self.clone();
 
         let divisor_leading_coeff_inv = divisor.coeffs.last().unwrap().inverse();
 
-        while !remainder.is_zero() && remainder.degree() >= divisor.degree() {
+        while !remainder.is_zero() && remainder.degree().unwrap() >= d_deg {
             let cur_q_coeff = *remainder.coeffs.last().unwrap() * divisor_leading_coeff_inv;
-            let cur_q_degree = remainder.degree() - divisor.degree();
+            let cur_q_degree = remainder.degree().unwrap() - d_deg;
             quotient_coeffs[cur_q_degree] = cur_q_coeff;
 
             for (i, div_coeff) in divisor.coeffs.iter().cloned().enumerate() {
@@ -269,7 +276,13 @@ impl<F: TwoAdicField> Polynomial<F> {
 
     /// Given f(x) and e, returns f(x^e)
     pub fn compose_with_exponent(&self, exponent: usize) -> Polynomial<F> {
-        let mut coeffs = vec![F::ZERO; self.degree() * exponent + 1];
+        let d = if let Some(d) = self.degree() {
+            d
+        } else {
+            return Polynomial::zero();
+        };
+
+        let mut coeffs = vec![F::ZERO; d * exponent + 1];
         for (i, coeff) in self.coeffs.iter().enumerate() {
             coeffs[i * exponent] = *coeff;
         }

@@ -7,7 +7,7 @@ use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger, GrindingChall
 /// or grinding queries using preloaded answers (grinding is not checked). This
 /// is useful, for instance, when constructing hand-crafted test cases for
 /// Fiat-Shamired protocols. Replies are given in FIFO order, that is, the first
-/// element of the provided vector is the first reply. The Challenger panics if
+/// element of the provided vector is the first reply. The challenger panics if
 /// asked for more items or bits than were preloaded.
 #[derive(Clone, Debug)]
 pub struct MockChallenger<T> {

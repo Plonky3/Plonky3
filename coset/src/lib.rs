@@ -1,33 +1,37 @@
-use alloc::vec::Vec;
+//! Interface for handling smooth cosets in the group of units of finite fields.
+
+#![no_std]
+
+extern crate alloc;
+
+use alloc::{vec, vec::Vec};
 
 use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
 use p3_field::TwoAdicField;
 use p3_interpolation::interpolate_coset;
 use p3_matrix::Matrix;
-
-use crate::polynomial::Polynomial;
+use p3_poly::Polynomial;
 
 #[cfg(test)]
 mod tests;
 
-/// Coset of a smooth subgroup of the group of units of a finite field (smooth
-/// meaning: having power-of-2 order).
+/// Coset of a subgroup of the group of units of a finite field of order equal to a power of two.
 #[derive(Clone, Debug)]
-pub struct Radix2Coset<F: TwoAdicField> {
+pub struct TwoAdicCoset<F: TwoAdicField> {
     generator: F,
     generator_inv: F,
     shift: F,
     log_size: usize,
 }
 
-pub struct Radix2Iterator<F: TwoAdicField> {
+pub struct TwoAdicCosetIterator<F: TwoAdicField> {
     current: F,
     generator: F,
     shift: F,
     consumed: bool,
 }
 
-impl<F: TwoAdicField> Radix2Coset<F> {
+impl<F: TwoAdicField> TwoAdicCoset<F> {
     pub fn new(shift: F, log_size: usize) -> Self {
         let generator = F::two_adic_generator(log_size);
         Self {
@@ -60,7 +64,7 @@ impl<F: TwoAdicField> Radix2Coset<F> {
 
     /// Reduce the size of the subgroup by a factor of 2^log_scale_factor
     /// this leaves the shift untouched
-    pub fn shrink_subgroup(&self, log_scale_factor: usize) -> Radix2Coset<F> {
+    pub fn shrink_subgroup(&self, log_scale_factor: usize) -> TwoAdicCoset<F> {
         assert!(
             log_scale_factor <= self.log_size,
             "The domain size (2 ^ {}) is not large enough to be shrunk by a factor of 2^{}",
@@ -69,7 +73,7 @@ impl<F: TwoAdicField> Radix2Coset<F> {
         );
 
         let generator = self.generator.exp_power_of_2(log_scale_factor);
-        Radix2Coset {
+        TwoAdicCoset {
             generator,
             generator_inv: generator.inverse(),
             shift: self.shift,
@@ -79,7 +83,7 @@ impl<F: TwoAdicField> Radix2Coset<F> {
 
     /// Reduce the size of the coset by a factor of 2^log_scale_factor.
     /// The shift is also raised to the power of 2^log_scale_factor.
-    pub fn shrink_coset(&self, log_scale_factor: usize) -> Radix2Coset<F> {
+    pub fn shrink_coset(&self, log_scale_factor: usize) -> TwoAdicCoset<F> {
         assert!(
             log_scale_factor <= self.log_size,
             "The domain size (2 ^ {}) is not large enough to be shrunk by a factor of 2^{}",
@@ -89,7 +93,7 @@ impl<F: TwoAdicField> Radix2Coset<F> {
 
         let generator = self.generator.exp_power_of_2(log_scale_factor);
         let shift = self.shift.exp_power_of_2(log_scale_factor);
-        Radix2Coset {
+        TwoAdicCoset {
             generator,
             generator_inv: generator.inverse(),
             shift,
@@ -98,14 +102,14 @@ impl<F: TwoAdicField> Radix2Coset<F> {
     }
 
     /// Shift the coset by an element of the field
-    pub fn shift_by(&self, shift: F) -> Radix2Coset<F> {
+    pub fn shift_by(&self, shift: F) -> TwoAdicCoset<F> {
         let mut shifted = self.clone();
         shifted.shift = self.shift * shift;
         shifted
     }
 
     /// Set the shift of the coset to a given element
-    pub fn set_shift(&self, shift: F) -> Radix2Coset<F> {
+    pub fn set_shift(&self, shift: F) -> TwoAdicCoset<F> {
         let mut shifted = self.clone();
         shifted.shift = shift;
         shifted
@@ -147,17 +151,25 @@ impl<F: TwoAdicField> Radix2Coset<F> {
     }
 
     pub fn evaluate_polynomial(&self, polynomial: &Polynomial<F>) -> Vec<F> {
-        // NP TODO
-        assert!(polynomial.degree() < (1 << self.log_size), "TODO");
+        let coeffs = polynomial.coeffs();
 
-        let mut coeffs = polynomial.coeffs().to_vec();
+        if coeffs.len() == 0 {
+            return vec![F::ZERO; 1 << self.log_size];
+        } else if coeffs.len() == 1 {
+            return vec![coeffs[0]; 1 << self.log_size];
+        }
+
+        // NP TODO
+        assert!(polynomial.degree().unwrap() < (1 << self.log_size), "TODO");
+
+        let mut coeffs = coeffs.to_vec();
         coeffs.resize(1 << self.log_size, F::ZERO);
         let dft = NaiveDft.coset_dft(coeffs, self.shift);
         dft
     }
 
-    pub fn iter(&self) -> Radix2Iterator<F> {
-        Radix2Iterator {
+    pub fn iter(&self) -> TwoAdicCosetIterator<F> {
+        TwoAdicCosetIterator {
             current: self.shift,
             generator: self.generator,
             shift: self.shift,
@@ -166,7 +178,7 @@ impl<F: TwoAdicField> Radix2Coset<F> {
     }
 }
 
-impl<F: TwoAdicField> PartialEq for Radix2Coset<F> {
+impl<F: TwoAdicField> PartialEq for TwoAdicCoset<F> {
     fn eq(&self, other: &Self) -> bool {
         // The first equality assumes generators are chosen canonically. If not,
         // simply assert self.generator has the same order as other.generator
@@ -175,9 +187,9 @@ impl<F: TwoAdicField> PartialEq for Radix2Coset<F> {
     }
 }
 
-impl<F: TwoAdicField> Eq for Radix2Coset<F> {}
+impl<F: TwoAdicField> Eq for TwoAdicCoset<F> {}
 
-impl<F: TwoAdicField> Iterator for Radix2Iterator<F> {
+impl<F: TwoAdicField> Iterator for TwoAdicCosetIterator<F> {
     type Item = F;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -196,12 +208,12 @@ impl<F: TwoAdicField> Iterator for Radix2Iterator<F> {
     }
 }
 
-impl<F: TwoAdicField> IntoIterator for Radix2Coset<F> {
+impl<F: TwoAdicField> IntoIterator for TwoAdicCoset<F> {
     type Item = F;
-    type IntoIter = Radix2Iterator<F>;
+    type IntoIter = TwoAdicCosetIterator<F>;
 
     fn into_iter(self) -> Self::IntoIter {
-        Radix2Iterator {
+        TwoAdicCosetIterator {
             current: self.shift,
             generator: self.generator,
             shift: self.shift,
