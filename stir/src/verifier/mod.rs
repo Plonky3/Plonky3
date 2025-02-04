@@ -172,7 +172,7 @@ where
 
     let VerificationState {
         oracle: final_oracle,
-        domain: final_domain,
+        domain: mut final_domain,
         folding_randomness: final_folding_randomness,
         root: g_m_root,
         ..
@@ -186,8 +186,8 @@ where
     // Logarithm of |(L_M)^k_M|
     let log_final_query_domain_size = final_domain.log_size() - log_last_folding_factor;
 
-    let final_queried_indices: Vec<u64> = (0..config.final_num_queries())
-        .map(|_| challenger.sample_bits(log_final_query_domain_size) as u64)
+    let final_queried_indices: Vec<usize> = (0..config.final_num_queries())
+        .map(|_| challenger.sample_bits(log_final_query_domain_size))
         .unique()
         .collect();
 
@@ -228,7 +228,7 @@ where
         &final_oracle,
         g_m_evals,
         &final_queried_indices,
-        &final_domain,
+        &mut final_domain,
         log_last_folding_factor,
     );
 
@@ -291,7 +291,7 @@ where
 
     let VerificationState {
         oracle,
-        domain,
+        mut domain,
         folding_randomness,
         round,
         root: prev_root,
@@ -333,8 +333,8 @@ where
     // Sample queried indices of elements in L_{i - 1}^k_{i-1}
     let log_query_domain_size = domain.log_size() - log_folding_factor;
 
-    let queried_indices: Vec<u64> = (0..num_queries)
-        .map(|_| challenger.sample_bits(log_query_domain_size) as u64)
+    let queried_indices: Vec<usize> = (0..num_queries)
+        .map(|_| challenger.sample_bits(log_query_domain_size))
         .unique()
         .collect();
 
@@ -387,7 +387,7 @@ where
         &oracle,
         previous_g_values,
         &queried_indices,
-        &domain,
+        &mut domain,
         log_folding_factor,
     );
 
@@ -459,9 +459,9 @@ fn compute_f_oracle_from_g<F: TwoAdicField>(
     // Evaluations of g_i at the lists of points relevant to each queried point
     g_eval_batches: Vec<Vec<F>>,
     // The queried indices of L_i^{k_i}
-    queried_indices: &[u64],
+    queried_indices: &[usize],
     // The domain L_i
-    domain: &TwoAdicCoset<F>,
+    domain: &mut TwoAdicCoset<F>,
     // The log of the folding factor k_i
     log_folding_factor: usize,
 ) -> Vec<Vec<F>> {

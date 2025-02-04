@@ -281,8 +281,8 @@ where
     // Sample queried indices of elements in L_{i - 1}^k_{i - 1}
     let log_query_domain_size = domain.log_size() - log_folding_factor;
 
-    let queried_indices: Vec<u64> = (0..num_queries)
-        .map(|_| challenger.sample_bits(log_query_domain_size) as u64)
+    let queried_indices: Vec<usize> = (0..num_queries)
+        .map(|_| challenger.sample_bits(log_query_domain_size))
         .unique()
         .collect();
 
@@ -317,7 +317,7 @@ where
     // yet it is important for FS
 
     // Compute the domain L_{i-1}^k = w^k * <w^{2^{i-1} * k}>
-    let domain_k = domain.shrink_coset(log_folding_factor);
+    let mut domain_k = domain.shrink_coset(log_folding_factor);
 
     // Get the elements in L^k corresponding to the queried indices
     // (i.e r^{shift}_i in the paper)

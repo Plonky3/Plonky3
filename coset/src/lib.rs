@@ -1,6 +1,7 @@
 //! Interface for handling smooth cosets in the group of units of finite fields.
 
-#![no_std]
+// NP TODO re-introduce
+// #![no_std]
 
 extern crate alloc;
 
@@ -22,6 +23,10 @@ pub struct TwoAdicCoset<F: TwoAdicField> {
     generator_inv: F,
     shift: F,
     log_size: usize,
+    // The i-th element, if present, is generator^2^i. The vector starts off as
+    // vec![generator] and is expanded every time a higher iterated square is
+    // computed.
+    generator_iter_squares: Vec<F>,
 }
 
 pub struct TwoAdicCosetIterator<F: TwoAdicField> {
@@ -39,6 +44,7 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
             generator_inv: generator.inverse(),
             shift,
             log_size,
+            generator_iter_squares: vec![generator],
         }
     }
 
@@ -67,38 +73,40 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
     pub fn shrink_subgroup(&self, log_scale_factor: usize) -> TwoAdicCoset<F> {
         assert!(
             log_scale_factor <= self.log_size,
-            "The domain size (2 ^ {}) is not large enough to be shrunk by a factor of 2^{}",
+            "The domain size (2^{}) is not large enough to be shrunk by a factor of 2^{}",
             self.log_size,
             log_scale_factor
         );
 
-        let generator = self.generator.exp_power_of_2(log_scale_factor);
+        // If we had already computed some iterated squares of the generator, we
+        // can keep the relevant ones (and spare ourselves the computation of
+        // the new generator)
+        let (generator, generator_iter_squares) = {
+            if self.generator_iter_squares.len() > log_scale_factor {
+                let iter_squares = self.generator_iter_squares[log_scale_factor..].to_vec();
+                let generator = iter_squares[0];
+                (generator, iter_squares)
+            } else {
+                let generator = self.generator.exp_power_of_2(log_scale_factor);
+                let iter_squares = vec![generator];
+                (generator, iter_squares)
+            }
+        };
+
         TwoAdicCoset {
             generator,
             generator_inv: generator.inverse(),
             shift: self.shift,
             log_size: self.log_size - log_scale_factor,
+            generator_iter_squares,
         }
     }
 
     /// Reduce the size of the coset by a factor of 2^log_scale_factor.
     /// The shift is also raised to the power of 2^log_scale_factor.
     pub fn shrink_coset(&self, log_scale_factor: usize) -> TwoAdicCoset<F> {
-        assert!(
-            log_scale_factor <= self.log_size,
-            "The domain size (2 ^ {}) is not large enough to be shrunk by a factor of 2^{}",
-            self.log_size,
-            log_scale_factor
-        );
-
-        let generator = self.generator.exp_power_of_2(log_scale_factor);
-        let shift = self.shift.exp_power_of_2(log_scale_factor);
-        TwoAdicCoset {
-            generator,
-            generator_inv: generator.inverse(),
-            shift,
-            log_size: self.log_size - log_scale_factor,
-        }
+        let new_coset = self.shrink_subgroup(log_scale_factor);
+        new_coset.set_shift(self.shift.exp_power_of_2(log_scale_factor))
     }
 
     /// Shift the coset by an element of the field
@@ -144,10 +152,16 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
 
     /// Give the `i`-th element of the coset: `shift * generator^i` (this wraps
     /// around `2^log_size`)
+    // NP TODO change this comment, now we are handling it
     // We are limited to u64 because of the `TwoAdicField` interface. If the
     // latter is expanded, this function can be so as well.
-    pub fn element(&self, index: u64) -> F {
-        self.shift * self.generator.exp_u64(index)
+    pub fn element(&mut self, exp: usize) -> F {
+        self.shift * self.generator_exp_usize(exp)
+    }
+
+    // NP TODO explain this
+    pub fn element_immutable(&self, exp: u64) -> F {
+        self.shift * self.generator.exp_u64(exp)
     }
 
     pub fn evaluate_polynomial(&self, polynomial: &Polynomial<F>) -> Vec<F> {
@@ -168,6 +182,37 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
         dft
     }
 
+    pub fn generator_exp_usize(&mut self, exp: usize) -> F {
+        // This case needs to be handled separately: otherwise msb_index would
+        // be ill defined and could trigger a panic
+        if exp == 0 {
+            return self.shift;
+        }
+
+        let mut exp = exp;
+        let msb_index = (usize::BITS - exp.leading_zeros() - 1) as usize;
+
+        // We make use of the available iterated squares of the generator and
+        // compute the rest
+        for i in self.generator_iter_squares.len()..=msb_index {
+            self.generator_iter_squares
+                .push(self.generator_iter_squares[i - 1].square());
+        }
+
+        let mut gen_power = F::ONE;
+        let mut gen_squares = self.generator_iter_squares.iter();
+
+        while exp > 0 {
+            let gen_square = gen_squares.next().unwrap();
+            if exp & 1 != 0 {
+                gen_power *= *gen_square;
+            }
+            exp >>= 1;
+        }
+
+        gen_power
+    }
+
     pub fn iter(&self) -> TwoAdicCosetIterator<F> {
         TwoAdicCosetIterator {
             current: self.shift,
@@ -180,9 +225,10 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
 
 impl<F: TwoAdicField> PartialEq for TwoAdicCoset<F> {
     fn eq(&self, other: &Self) -> bool {
-        // The first equality assumes generators are chosen canonically. If not,
-        // simply assert self.generator has the same order as other.generator
-        // (this is enough by the cyclicity of the group of units)
+        // The first equality assumes generators are chosen canonically (as
+        // ensured by the TwoAdicField interface). If not, one could simply
+        // assert self.generator has the same order as other.generator (this is
+        // enough by the cyclicity of the group of units)
         self.generator == other.generator && other.contains(self.shift)
     }
 }

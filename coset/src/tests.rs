@@ -36,7 +36,7 @@ fn test_coset_iterator() {
     let shift: BB = rng.gen();
     let log_size = 3;
 
-    let coset = TwoAdicCoset::<BB>::new(shift, log_size);
+    let mut coset = TwoAdicCoset::<BB>::new(shift, log_size);
 
     assert_eq!(coset.clone().into_iter().count(), 1 << log_size);
     for (i, e) in coset.iter().enumerate() {

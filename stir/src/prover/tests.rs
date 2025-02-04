@@ -243,10 +243,10 @@ fn test_prove_round_large() {
     let g_1 = fold_polynomial(&f_0, r_0, log_folding_factor);
 
     // NP TODO repeat points
-    let original_domain_pow_k = original_domain.shrink_coset(log_folding_factor);
+    let mut original_domain_pow_k = original_domain.shrink_coset(log_folding_factor);
     let stir_randomness = bit_replies
         .iter()
-        .map(|&i| original_domain_pow_k.element(i as u64));
+        .map(|&i| original_domain_pow_k.element(i));
 
     let quotient_set = stir_randomness
         .chain(ood_randomness.into_iter())
