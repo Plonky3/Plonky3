@@ -172,6 +172,11 @@ where
             .iter()
             .map(|(data, points_for_mats)| {
                 let mats = self.mmcs.get_matrices(data);
+                debug_assert_eq!(
+                    mats.len(),
+                    points_for_mats.len(),
+                    "Mismatched number of matrices and points"
+                );
                 izip!(mats, points_for_mats)
                     .map(|(mat, points_for_mat)| {
                         let log_height = log2_strict_usize(mat.height());
