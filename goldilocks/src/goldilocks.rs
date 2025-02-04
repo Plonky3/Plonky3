@@ -136,9 +136,9 @@ impl PrimeCharacteristicRing for Goldilocks {
     }
 }
 
-// Degree of the smallest permutation polynomial for Goldilocks.
-//
-// As p - 1 = 2^32 * 3 * 5 * 17 * ... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 7.
+/// Degree of the smallest permutation polynomial for Goldilocks.
+///
+/// As p - 1 = 2^32 * 3 * 5 * 17 * ... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 7.
 impl InjectiveMonomial<7> for Goldilocks {}
 
 impl PermutationMonomial<7> for Goldilocks {
@@ -244,7 +244,7 @@ impl Field for Goldilocks {
     }
 }
 
-// We can use some macros to implement QuotientMap<Int> for all integer types except for u64, i64, and i128's.
+// We use macros to implement QuotientMap<Int> for all integer types except for u64 and i64.
 quotient_map_small_int!(Goldilocks, u64, [u8, u16, u32]);
 quotient_map_small_int!(Goldilocks, i64, [i8, i16, i32]);
 quotient_map_large_uint!(
@@ -263,7 +263,6 @@ quotient_map_large_iint!(
     [(i128, u128)]
 );
 
-// We are left with writing some custom impls for the final three types.
 impl QuotientMap<u64> for Goldilocks {
     /// Convert a given `u64` integer into an element of the `Goldilocks` field.
     ///
@@ -570,53 +569,10 @@ mod tests {
         let f = F::from_u64(u64::MAX);
         assert_eq!(f.as_canonical_u64(), u32::MAX as u64 - 1);
 
-        let f = F::from_u64(0);
-        assert!(f.is_zero());
-
-        let f = F::from_u64(F::ORDER_U64);
-        assert!(f.is_zero());
-
-        assert_eq!(F::GENERATOR.as_canonical_u64(), 7_u64);
-
-        let f_1 = F::new(1);
-        let f_1_copy = F::new(1);
-
-        let expected_result = F::ZERO;
-        assert_eq!(f_1 - f_1_copy, expected_result);
-
-        let expected_result = F::new(2);
-        assert_eq!(f_1 + f_1_copy, expected_result);
-
-        let f_2 = F::new(2);
-        let expected_result = F::new(3);
-        assert_eq!(f_1 + f_1_copy * f_2, expected_result);
-
-        let expected_result = F::new(5);
-        assert_eq!(f_1 + f_2 * f_2, expected_result);
-
-        let f_p_minus_1 = F::from_u64(F::ORDER_U64 - 1);
-        let expected_result = F::ZERO;
-        assert_eq!(f_1 + f_p_minus_1, expected_result);
-
-        let f_p_minus_2 = F::from_u64(F::ORDER_U64 - 2);
-        let expected_result = F::from_u64(F::ORDER_U64 - 3);
-        assert_eq!(f_p_minus_1 + f_p_minus_2, expected_result);
-
-        let expected_result = F::new(1);
-        assert_eq!(f_p_minus_1 - f_p_minus_2, expected_result);
-
-        let expected_result = f_p_minus_1;
-        assert_eq!(f_p_minus_2 - f_p_minus_1, expected_result);
-
-        let expected_result = f_p_minus_2;
-        assert_eq!(f_p_minus_1 - f_1, expected_result);
-
-        let expected_result = F::new(3);
-        assert_eq!(f_2 * f_2 - f_1, expected_result);
-
         // Generator check
         let expected_multiplicative_group_generator = F::new(7);
         assert_eq!(F::GENERATOR, expected_multiplicative_group_generator);
+        assert_eq!(F::GENERATOR.as_canonical_u64(), 7_u64);
 
         // Check on `reduce_u128`
         let x = u128::MAX;
@@ -629,12 +585,13 @@ mod tests {
         //           = 2^64 - 2^33
         //           = 2^32 - 1 - 2^33
         //           = - 2^32 - 1
-        let expected_result = -F::new(2_u64.pow(32)) - F::new(1);
+        let expected_result = -F::TWO.exp_power_of_2(5) - F::ONE;
         assert_eq!(y, expected_result);
 
+        let f = F::new(100);
         assert_eq!(f.injective_exp_n().injective_exp_root_n(), f);
         assert_eq!(y.injective_exp_n().injective_exp_root_n(), y);
-        assert_eq!(f_2.injective_exp_n().injective_exp_root_n(), f_2);
+        assert_eq!(F::TWO.injective_exp_n().injective_exp_root_n(), F::TWO);
     }
 
     test_field!(crate::Goldilocks);

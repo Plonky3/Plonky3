@@ -117,9 +117,7 @@ impl BinomialExtensionData<5> for BabyBearParameters {
 mod tests {
     use core::array;
 
-    use p3_field::{
-        InjectiveMonomial, PermutationMonomial, PrimeField32, PrimeField64, TwoAdicField,
-    };
+    use p3_field::{InjectiveMonomial, PermutationMonomial, PrimeField64, TwoAdicField};
     use p3_field_testing::{
         test_field, test_field_dft, test_prime_field, test_prime_field_32, test_prime_field_64,
         test_two_adic_field,
@@ -154,45 +152,10 @@ mod tests {
         let f = F::from_u32(100);
         assert_eq!(f.as_canonical_u64(), 100);
 
-        let f = F::from_u32(0);
-        assert!(f.is_zero());
-
-        let f = F::from_u32(F::ORDER_U32);
-        assert!(f.is_zero());
-
         let f_1 = F::ONE;
-        let f_1_copy = F::from_u32(1);
-
-        let expected_result = F::ZERO;
-        assert_eq!(f_1 - f_1_copy, expected_result);
-
-        let expected_result = F::TWO;
-        assert_eq!(f_1 + f_1_copy, expected_result);
-
-        let f_2 = F::from_u32(2);
-        let expected_result = F::from_u32(3);
-        assert_eq!(f_1 + f_1_copy * f_2, expected_result);
-
-        let expected_result = F::from_u32(5);
-        assert_eq!(f_1 + f_2 * f_2, expected_result);
-
-        let f_p_minus_1 = F::from_u32(F::ORDER_U32 - 1);
-        let expected_result = F::ZERO;
-        assert_eq!(f_1 + f_p_minus_1, expected_result);
-
-        let f_p_minus_2 = F::from_u32(F::ORDER_U32 - 2);
-        let expected_result = F::from_u32(F::ORDER_U32 - 3);
-        assert_eq!(f_p_minus_1 + f_p_minus_2, expected_result);
-
-        let expected_result = F::from_u32(1);
-        assert_eq!(f_p_minus_1 - f_p_minus_2, expected_result);
-
-        let expected_result = f_p_minus_1;
-        assert_eq!(f_p_minus_2 - f_p_minus_1, expected_result);
-
-        let expected_result = f_p_minus_2;
-        assert_eq!(f_p_minus_1 - f_1, expected_result);
-
+        let f_2 = F::TWO;
+        let f_p_minus_1 = F::NEG_ONE;
+        let f_p_minus_2 = F::NEG_ONE + F::NEG_ONE;
         let m1 = F::from_u32(0x34167c58);
         let m2 = F::from_u32(0x61f3207b);
         let expected_prod = F::from_u32(0x1b5c8046);
@@ -200,7 +163,7 @@ mod tests {
 
         assert_eq!(m1.injective_exp_n().injective_exp_root_n(), m1);
         assert_eq!(m2.injective_exp_n().injective_exp_root_n(), m2);
-        assert_eq!(f_2.injective_exp_n().injective_exp_root_n(), f_2);
+        assert_eq!(F::TWO.injective_exp_n().injective_exp_root_n(), F::TWO);
 
         let f_serialized = serde_json::to_string(&f).unwrap();
         let f_deserialized: F = serde_json::from_str(&f_serialized).unwrap();

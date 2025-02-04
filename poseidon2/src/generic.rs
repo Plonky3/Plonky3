@@ -1,14 +1,14 @@
 //! Whilst high speed implementations of Poseidon2 rely on a detailed understanding of the underlying field structure
-//! it is also useful to have a generic constructor which works for a much larger range of fields.
+//! it is also useful to have a generic constructor which works for a much larger range of rings.
 //!
 //! Indeed, for a fixed field F, the Poseidon2 permutation consists of three basic operations:
 //! - Addition by elements in F.
 //! - A power map x -> x^n.
 //! - Multiplication by an F valued matrix.
 //!
-//! This means that it is possible to define a Poseidon2 over any algebra A over F.
+//! This means that it is possible to define a Poseidon2 over any ring implementing `Algebra<F>`.
 //!
-//! This file implements the two matrix multiplications methods from which Poseidon2 can be built.
+//! This file implements the generic methods from which Poseidon2 can be built.
 
 use p3_field::{Algebra, Field, InjectiveMonomial, PrimeCharacteristicRing};
 

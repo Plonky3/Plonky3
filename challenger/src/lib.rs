@@ -116,11 +116,11 @@ where
 {
     #[inline(always)]
     fn observe_algebra_element<EF: Serializable<F>>(&mut self, ext: EF) {
-        (**self).observe_algebra_element(ext)
+        (*self).observe_algebra_element(ext)
     }
 
     #[inline(always)]
     fn sample_algebra_element<EF: Serializable<F>>(&mut self) -> EF {
-        (**self).sample_algebra_element()
+        (*self).sample_algebra_element()
     }
 }

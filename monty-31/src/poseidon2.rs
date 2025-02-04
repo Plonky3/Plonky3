@@ -1,7 +1,6 @@
 use core::marker::PhantomData;
-use core::ops::Mul;
 
-use p3_field::{InjectiveMonomial, PrimeCharacteristicRing};
+use p3_field::{Algebra, InjectiveMonomial};
 use p3_poseidon2::{
     add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
     ExternalLayer, GenericPoseidon2LinearLayers, InternalLayer, MDSMat4,
@@ -32,11 +31,7 @@ pub trait InternalLayerBaseParameters<MP: MontyParameters, const WIDTH: usize>:
 
     /// Perform the internal matrix multiplication for any Abstract field
     /// which implements multiplication by MontyField31 elements.
-    fn generic_internal_linear_layer<
-        R: PrimeCharacteristicRing + Mul<MontyField31<MP>, Output = R>,
-    >(
-        state: &mut [R; WIDTH],
-    );
+    fn generic_internal_linear_layer<A: Algebra<MontyField31<MP>>>(state: &mut [A; WIDTH]);
 }
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
@@ -127,7 +122,7 @@ where
 
 /// An implementation of the matrix multiplications in the internal and external layers of Poseidon2.
 ///
-/// This can act on `[A; WIDTH]` for any algebra which implements multiplication by `Monty<31>` field elements.
+/// This can act on `[A; WIDTH]` for any ring implementing `Algebra<MontyField31<FP>>`.
 /// This will usually be slower than the Poseidon2 permutation built from `Poseidon2InternalLayerMonty31` and
 /// `Poseidon2ExternalLayerMonty31` but it does work in more cases.
 pub struct GenericPoseidon2LinearLayersMonty31<FP, ILBP> {
@@ -135,16 +130,16 @@ pub struct GenericPoseidon2LinearLayersMonty31<FP, ILBP> {
     _phantom2: PhantomData<ILBP>,
 }
 
-impl<FP, R, ILBP, const WIDTH: usize> GenericPoseidon2LinearLayers<R, WIDTH>
+impl<FP, A, ILBP, const WIDTH: usize> GenericPoseidon2LinearLayers<A, WIDTH>
     for GenericPoseidon2LinearLayersMonty31<FP, ILBP>
 where
     FP: FieldParameters,
-    R: PrimeCharacteristicRing + Mul<MontyField31<FP>, Output = R>,
+    A: Algebra<MontyField31<FP>>,
     ILBP: InternalLayerBaseParameters<FP, WIDTH>,
 {
     /// Perform the external matrix multiplication for any Abstract field
     /// which implements multiplication by MontyField31 elements.
-    fn internal_linear_layer(state: &mut [R; WIDTH]) {
+    fn internal_linear_layer(state: &mut [A; WIDTH]) {
         ILBP::generic_internal_linear_layer(state);
     }
 }

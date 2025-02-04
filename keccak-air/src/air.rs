@@ -1,10 +1,10 @@
 use alloc::vec::Vec;
 use core::borrow::Borrow;
-use p3_matrix::dense::RowMajorMatrix;
 
 use p3_air::utils::{andn, xor, xor3};
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use rand::random;
 

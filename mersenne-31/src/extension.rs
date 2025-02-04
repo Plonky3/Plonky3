@@ -22,7 +22,7 @@ impl BinomiallyExtendable<3> for Mersenne31 {
     // ```sage
     // F.extension(x^3 - 5, 'u').multiplicative_generator()
     // ```
-    const EXT_GENERATOR: [Self; 3] = [Self::new(10), Self::new(1), Self::ZERO];
+    const EXT_GENERATOR: [Self; 3] = [Self::new(10), Self::ONE, Self::ZERO];
 }
 
 impl HasComplexBinomialExtension<2> for Mersenne31 {
@@ -36,7 +36,7 @@ impl HasComplexBinomialExtension<2> for Mersenne31 {
     // f2 = y^2 - i - 2
     // assert f2.is_irreducible()
     // ```
-    const W: Complex<Self> = Complex::new_complex(Mersenne31::new(2), Mersenne31::ONE);
+    const W: Complex<Self> = Complex::new_complex(Mersenne31::TWO, Mersenne31::ONE);
 
     // DTH_ROOT = W^((p^2 - 1)/2).
     const DTH_ROOT: Complex<Self> = Complex::new_real(Mersenne31::new(2147483646));

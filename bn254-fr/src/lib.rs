@@ -314,7 +314,6 @@ impl TwoAdicField for Bn254Fr {
 
 #[cfg(test)]
 mod tests {
-    use num_traits::One;
     use p3_field_testing::{test_field, test_prime_field};
 
     use super::*;
@@ -326,61 +325,18 @@ mod tests {
         let f = F::new(FFBn254Fr::from_u128(100));
         assert_eq!(f.as_canonical_biguint(), BigUint::new(vec![100]));
 
-        let f = F::from_u64(0);
-        assert!(f.is_zero());
-
         let f = F::new(FFBn254Fr::from_str_vartime(&F::order().to_str_radix(10)).unwrap());
         assert!(f.is_zero());
-
-        assert_eq!(F::GENERATOR.as_canonical_biguint(), BigUint::new(vec![5]));
-
-        let f_1 = F::new(FFBn254Fr::from_u128(1));
-        let f_1_copy = F::new(FFBn254Fr::from_u128(1));
-
-        let expected_result = F::ZERO;
-        assert_eq!(f_1 - f_1_copy, expected_result);
-
-        let expected_result = F::new(FFBn254Fr::from_u128(2));
-        assert_eq!(f_1 + f_1_copy, expected_result);
-
-        let f_2 = F::new(FFBn254Fr::from_u128(2));
-        let expected_result = F::new(FFBn254Fr::from_u128(3));
-        assert_eq!(f_1 + f_1_copy * f_2, expected_result);
-
-        let expected_result = F::new(FFBn254Fr::from_u128(5));
-        assert_eq!(f_1 + f_2 * f_2, expected_result);
-
-        let f_r_minus_1 = F::new(
-            FFBn254Fr::from_str_vartime(&(F::order() - BigUint::one()).to_str_radix(10)).unwrap(),
-        );
-        let expected_result = F::ZERO;
-        assert_eq!(f_1 + f_r_minus_1, expected_result);
-
-        let f_r_minus_2 = F::new(
-            FFBn254Fr::from_str_vartime(&(F::order() - BigUint::new(vec![2])).to_str_radix(10))
-                .unwrap(),
-        );
-        let expected_result = F::new(
-            FFBn254Fr::from_str_vartime(&(F::order() - BigUint::new(vec![3])).to_str_radix(10))
-                .unwrap(),
-        );
-        assert_eq!(f_r_minus_1 + f_r_minus_2, expected_result);
-
-        let expected_result = F::new(FFBn254Fr::from_u128(1));
-        assert_eq!(f_r_minus_1 - f_r_minus_2, expected_result);
-
-        let expected_result = f_r_minus_1;
-        assert_eq!(f_r_minus_2 - f_r_minus_1, expected_result);
-
-        let expected_result = f_r_minus_2;
-        assert_eq!(f_r_minus_1 - f_1, expected_result);
-
-        let expected_result = F::new(FFBn254Fr::from_u128(3));
-        assert_eq!(f_2 * f_2 - f_1, expected_result);
 
         // Generator check
         let expected_multiplicative_group_generator = F::new(FFBn254Fr::from_u128(5));
         assert_eq!(F::GENERATOR, expected_multiplicative_group_generator);
+        assert_eq!(F::GENERATOR.as_canonical_biguint(), BigUint::new(vec![5]));
+
+        let f_1 = F::ONE;
+        let f_2 = F::TWO;
+        let f_r_minus_1 = F::NEG_ONE;
+        let f_r_minus_2 = F::NEG_ONE + F::NEG_ONE;
 
         let f_serialized = serde_json::to_string(&f).unwrap();
         let f_deserialized: F = serde_json::from_str(&f_serialized).unwrap();

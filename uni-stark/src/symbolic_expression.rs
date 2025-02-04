@@ -86,16 +86,14 @@ impl<F: Field> PrimeCharacteristicRing for SymbolicExpression<F> {
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         F::from_prime_subfield(f).into()
     }
-
-    fn from_bool(b: bool) -> Self {
-        Self::Constant(F::from_bool(b))
-    }
 }
 
 impl<F: Field> Algebra<F> for SymbolicExpression<F> {}
 
 impl<F: Field> Algebra<SymbolicVariable<F>> for SymbolicExpression<F> {}
 
+// Note we cannot implement PermutationMonomial due to the degree_multiple part which makes
+// operations non invertible.
 impl<F: Field + InjectiveMonomial<N>, const N: u64> InjectiveMonomial<N> for SymbolicExpression<F> {}
 
 impl<F: Field, T> Add<T> for SymbolicExpression<F>

@@ -13,9 +13,7 @@
 //! [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/2^7, 1/2^9, 1/2^27, -1/2^8, -1/4, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^27]
 //! See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
 
-use core::ops::Mul;
-
-use p3_field::{Field, PrimeCharacteristicRing, PrimeField32};
+use p3_field::{Algebra, Field, PrimeCharacteristicRing, PrimeField32};
 use p3_monty_31::{
     GenericPoseidon2LinearLayersMonty31, InternalLayerBaseParameters, InternalLayerParameters,
     MontyField31, Poseidon2ExternalLayerMonty31, Poseidon2InternalLayerMonty31,
@@ -50,7 +48,7 @@ pub type Poseidon2BabyBear<const WIDTH: usize> = Poseidon2<
 
 /// An implementation of the matrix multiplications in the internal and external layers of Poseidon2.
 ///
-/// This can act on `[A; WIDTH]` for any algebra which implements multiplication by BabyBear field elements.
+/// This can act on `[A; WIDTH]` for any ring implementing `Algebra<BabyBear>`.
 /// If you have either `[BabyBear::Packing; WIDTH]` or `[BabyBear; WIDTH]` it will be much faster
 /// to use `Poseidon2BabyBear<WIDTH>` instead of building a Poseidon2 permutation using this.
 pub type GenericPoseidon2LinearLayersBabyBear =
@@ -152,11 +150,8 @@ impl InternalLayerBaseParameters<BabyBearParameters, 16> for BabyBearInternalLay
         state[15] = sum - state[15];
     }
 
-    fn generic_internal_linear_layer<R>(state: &mut [R; 16])
-    where
-        R: PrimeCharacteristicRing + Mul<BabyBear, Output = R>,
-    {
-        let part_sum: R = state[1..].iter().cloned().sum();
+    fn generic_internal_linear_layer<A: Algebra<BabyBear>>(state: &mut [A; 16]) {
+        let part_sum: A = state[1..].iter().cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();
 
         // The first three diagonal elements are -2, 1, 2 so we do something custom.
@@ -230,11 +225,8 @@ impl InternalLayerBaseParameters<BabyBearParameters, 24> for BabyBearInternalLay
         state[23] = sum - state[23];
     }
 
-    fn generic_internal_linear_layer<R>(state: &mut [R; 24])
-    where
-        R: PrimeCharacteristicRing + Mul<BabyBear, Output = R>,
-    {
-        let part_sum: R = state[1..].iter().cloned().sum();
+    fn generic_internal_linear_layer<A: Algebra<BabyBear>>(state: &mut [A; 24]) {
+        let part_sum: A = state[1..].iter().cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();
 
         // The first three diagonal elements are -2, 1, 2 so we do something custom.
