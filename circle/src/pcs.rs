@@ -102,6 +102,7 @@ where
     fn commit(
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
+        _is_random_poly: bool,
     ) -> (Self::Commitment, Self::ProverData) {
         let ldes = evaluations
             .into_iter()
@@ -534,7 +535,7 @@ mod tests {
         let evals = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
 
         let (comm, data) =
-            <Pcs as p3_commit::Pcs<Challenge, Challenger>>::commit(&pcs, vec![(d, evals)]);
+            <Pcs as p3_commit::Pcs<Challenge, Challenger>>::commit(&pcs, vec![(d, evals)], false);
 
         let zeta: Challenge = rng.gen();
 

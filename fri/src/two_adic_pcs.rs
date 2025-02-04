@@ -157,6 +157,7 @@ where
     fn commit(
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
+        _is_random_poly: bool,
     ) -> (Self::Commitment, Self::ProverData) {
         let ldes: Vec<_> = evaluations
             .into_iter()

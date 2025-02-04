@@ -39,6 +39,7 @@ where
     fn commit(
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
+        is_random_poly: bool,
     ) -> (Self::Commitment, Self::ProverData);
 
     #[allow(clippy::type_complexity)]
@@ -47,7 +48,7 @@ where
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
         _cis: Vec<Val<Self::Domain>>,
     ) -> (Self::Commitment, Self::ProverData) {
-        self.commit(evaluations)
+        self.commit(evaluations, false)
     }
 
     fn generate_random_vals(&self, _random_len: usize) -> RowMajorMatrix<Val<Self::Domain>> {

@@ -57,8 +57,8 @@ where
     let trace_domain = pcs.natural_domain_for_degree(degree);
     let ext_trace_domain = pcs.natural_domain_for_degree(ext_degree);
 
-    let (trace_commit, trace_data) =
-        info_span!("commit to trace data").in_scope(|| pcs.commit(vec![(ext_trace_domain, trace)]));
+    let (trace_commit, trace_data) = info_span!("commit to trace data")
+        .in_scope(|| pcs.commit(vec![(ext_trace_domain, trace)], false));
 
     // Observe the instance.
     challenger.observe(Val::<SC>::from_canonical_usize(log_ext_degree));
@@ -114,78 +114,76 @@ where
         });
     challenger.observe(quotient_commit.clone());
 
-    // let mut random_vals = if pcs.is_zk() {
-    //     Some(pcs.generate_random_vals(trace_domain.size()))
-    //     // None
-    // } else {
-    //     None
-    // };
-    // random_vals = None;
-
-    // let opt_random_commit = if let Some(r_vs) = random_vals {
-    //     let extended_domain = pcs.natural_domain_for_degree(trace_domain.size() * 2);
-    //     Some(pcs.commit(vec![(extended_domain, r_vs)]))
-    //     // None
-    // } else {
-    //     None
-    // };
+    let (opt_r_commit, opt_r_data) = if pcs.is_zk() {
+        // We generate random values of size that of the extended trace domain. Since we need `R` of degree that of the extended
+        // trace -1, we can provide `R` as is to FRI, and the random polynomial will be `(R(X) - R(z)) / (X - z)`.
+        let random_vals = pcs.generate_random_vals(ext_trace_domain.size());
+        let extended_domain = pcs.natural_domain_for_degree(ext_trace_domain.size());
+        let (r_commit, r_data) = pcs.commit(vec![(extended_domain, random_vals)], true);
+        (Some(r_commit), Some(r_data))
+    } else {
+        (None, None)
+    };
 
     let commitments = Commitments {
         trace: trace_commit,
         quotient_chunks: quotient_commit,
+        random: opt_r_commit.clone(),
     };
+
+    if let Some(r_commit) = opt_r_commit {
+        challenger.observe(r_commit);
+    }
 
     let zeta: SC::Challenge = challenger.sample();
     let zeta_next = trace_domain.next_point(zeta).unwrap();
 
-    // let (opened_values, opening_proof) = info_span!("open").in_scope(|| {
-    //     if let Some((r_commit, r_data)) = opt_random_commit {
-    //         pcs.open(
-    //             vec![
-    //                 (&trace_data, vec![vec![zeta, zeta_next]]),
-    //                 (
-    //                     &quotient_data,
-    //                     // open every chunk at zeta
-    //                     (0..quotient_degree).map(|_| vec![zeta]).collect_vec(),
-    //                 ),
-    //                 (&r_data, vec![vec![zeta]]),
-    //             ],
-    //             challenger,
-    //         )
-    //     } else {
-    //         pcs.open(
-    //             vec![
-    //                 (&trace_data, vec![vec![zeta, zeta_next]]),
-    //                 (
-    //                     &quotient_data,
-    //                     // open every chunk at zeta
-    //                     (0..quotient_degree).map(|_| vec![zeta]).collect_vec(),
-    //                 ),
-    //             ],
-    //             challenger,
-    //         )
-    //     }
-    // });
     let (opened_values, opening_proof) = info_span!("open").in_scope(|| {
-        pcs.open(
-            vec![
-                (&trace_data, vec![vec![zeta, zeta_next]]),
-                (
-                    &quotient_data,
-                    // open every chunk at zeta
-                    (0..nb_chunks).map(|_| vec![zeta]).collect_vec(),
-                ),
-            ],
-            challenger,
-        )
+        if let Some(r_data) = opt_r_data {
+            pcs.open(
+                vec![
+                    (&r_data, vec![vec![zeta]]),
+                    (&trace_data, vec![vec![zeta, zeta_next]]),
+                    (
+                        &quotient_data,
+                        // open every chunk at zeta
+                        (0..nb_chunks).map(|_| vec![zeta]).collect_vec(),
+                    ),
+                ],
+                challenger,
+            )
+        } else {
+            pcs.open(
+                vec![
+                    (&trace_data, vec![vec![zeta, zeta_next]]),
+                    (
+                        &quotient_data,
+                        // open every chunk at zeta
+                        (0..nb_chunks).map(|_| vec![zeta]).collect_vec(),
+                    ),
+                ],
+                challenger,
+            )
+        }
     });
-    let trace_local = opened_values[0][0][0].clone();
-    let trace_next = opened_values[0][0][1].clone();
-    let quotient_chunks = opened_values[1].iter().map(|v| v[0].clone()).collect_vec();
+    let trace_idx = if pcs.is_zk() { 1 } else { 0 };
+    let quotient_idx = if pcs.is_zk() { 2 } else { 1 };
+    let trace_local = opened_values[trace_idx][0][0].clone();
+    let trace_next = opened_values[trace_idx][0][1].clone();
+    let quotient_chunks = opened_values[quotient_idx]
+        .iter()
+        .map(|v| v[0].clone())
+        .collect_vec();
+    let random = if pcs.is_zk() {
+        Some(opened_values[0][0][0].clone())
+    } else {
+        None
+    };
     let opened_values = OpenedValues {
         trace_local,
         trace_next,
         quotient_chunks,
+        random,
     };
     Proof {
         commitments,
