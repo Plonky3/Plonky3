@@ -186,7 +186,7 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
         // This case needs to be handled separately: otherwise msb_index would
         // be ill defined and could trigger a panic
         if exp == 0 {
-            return self.shift;
+            return F::ONE;
         }
 
         let mut exp = exp;
