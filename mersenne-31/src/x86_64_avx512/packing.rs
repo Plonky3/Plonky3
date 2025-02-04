@@ -475,7 +475,7 @@ impl PermutationMonomial<5> for PackedMersenne31AVX512 {
     ///
     /// This follows from the calculation `5 * 1717986917 = 4*(2^31 - 2) + 1 = 1 mod p - 1`.
     fn injective_exp_root_n(&self) -> Self {
-        // This could likely by further optimised.
+        // This could likely be further optimised.
         exp_1717986917(*self)
     }
 }
