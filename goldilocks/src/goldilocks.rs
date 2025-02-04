@@ -146,7 +146,7 @@ impl PermutationMonomial<7> for Goldilocks {
     ///
     /// This follows from the calculation `7*10540996611094048183 = 4*(2^64 - 2**32) + 1 = 1 mod (p - 1)`.
     fn injective_exp_root_n(&self) -> Self {
-        // This could likely by further optimised.
+        // This could likely be further optimised.
         exp_10540996611094048183(*self)
     }
 }
