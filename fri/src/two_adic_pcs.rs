@@ -241,14 +241,18 @@ where
         let mats_and_points = rounds
             .iter()
             .map(|(data, points)| {
-                (
-                    self.mmcs
-                        .get_matrices(data)
-                        .into_iter()
-                        .map(|m| m.as_view())
-                        .collect_vec(),
-                    points,
-                )
+                let mats = self
+                    .mmcs
+                    .get_matrices(data)
+                    .into_iter()
+                    .map(|m| m.as_view())
+                    .collect_vec();
+                debug_assert_eq!(
+                    mats.len(),
+                    points.len(),
+                    "each matrix should have a corresponding set of evaluation points"
+                );
+                (mats, points)
             })
             .collect_vec();
         let mats = mats_and_points
