@@ -115,6 +115,12 @@ pub trait AirBuilder: Sized {
         let x = x.into();
         self.assert_zero(x.clone() * (x - Self::Expr::ONE));
     }
+
+    /// Assert that `x` is ternary, i.e. either 0, 1 or 2.
+    fn assert_tern<I: Into<Self::Expr>>(&mut self, x: I) {
+        let x = x.into();
+        self.assert_zero(x.clone() * (x.clone() - Self::Expr::ONE) * (x - Self::Expr::TWO));
+    }
 }
 
 pub trait AirBuilderWithPublicValues: AirBuilder {
@@ -170,13 +176,13 @@ pub struct FilteredAirBuilder<'a, AB: AirBuilder> {
     condition: AB::Expr,
 }
 
-impl<'a, AB: AirBuilder> FilteredAirBuilder<'a, AB> {
+impl<AB: AirBuilder> FilteredAirBuilder<'_, AB> {
     pub fn condition(&self) -> AB::Expr {
         self.condition.clone()
     }
 }
 
-impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
+impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
     type F = AB::F;
     type Expr = AB::Expr;
     type Var = AB::Var;
@@ -203,7 +209,7 @@ impl<'a, AB: AirBuilder> AirBuilder for FilteredAirBuilder<'a, AB> {
     }
 }
 
-impl<'a, AB: ExtensionBuilder> ExtensionBuilder for FilteredAirBuilder<'a, AB> {
+impl<AB: ExtensionBuilder> ExtensionBuilder for FilteredAirBuilder<'_, AB> {
     type EF = AB::EF;
     type ExprEF = AB::ExprEF;
     type VarEF = AB::VarEF;
@@ -216,7 +222,7 @@ impl<'a, AB: ExtensionBuilder> ExtensionBuilder for FilteredAirBuilder<'a, AB> {
     }
 }
 
-impl<'a, AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder<'a, AB> {
+impl<AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder<'_, AB> {
     type MP = AB::MP;
 
     type RandomVar = AB::RandomVar;

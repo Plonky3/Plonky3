@@ -21,6 +21,8 @@ use serde::{Deserialize, Serialize};
 const P: u64 = 0xFFFF_FFFF_0000_0001;
 
 /// The prime field known as Goldilocks, defined as `F_p` where `p = 2^64 - 2^32 + 1`.
+///
+/// Note that the safety of deriving `Serialize` and `Deserialize` relies on the fact that the internal value can be any u64.
 #[derive(Copy, Clone, Default, Serialize, Deserialize)]
 #[repr(transparent)] // Packed field implementations rely on this!
 pub struct Goldilocks {
@@ -31,6 +33,24 @@ pub struct Goldilocks {
 impl Goldilocks {
     pub(crate) const fn new(value: u64) -> Self {
         Self { value }
+    }
+
+    /// Convert a constant u64 array into a constant Goldilocks array.
+    ///
+    /// This is a const version of `.map(Goldilocks::new)`.
+    #[inline]
+    #[must_use]
+    pub(crate) const fn new_array<const N: usize>(input: [u64; N]) -> [Goldilocks; N] {
+        let mut output = [Goldilocks::ZERO; N];
+        let mut i = 0;
+        loop {
+            if i == N {
+                break;
+            }
+            output[i].value = input[i];
+            i += 1;
+        }
+        output
     }
 
     /// Two's complement of `ORDER`, i.e. `2^64 - ORDER = 2^32 - 1`.
@@ -455,22 +475,6 @@ unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
     let (res_wrapped, carry) = x.overflowing_add(y);
     // Below cannot overflow unless the assumption if x + y < 2**64 + ORDER is incorrect.
     res_wrapped + Goldilocks::NEG_ORDER * u64::from(carry)
-}
-
-/// Convert a constant u64 array into a constant Goldilocks array.
-#[inline]
-#[must_use]
-pub(crate) const fn to_goldilocks_array<const N: usize>(input: [u64; N]) -> [Goldilocks; N] {
-    let mut output = [Goldilocks { value: 0 }; N];
-    let mut i = 0;
-    loop {
-        if i == N {
-            break;
-        }
-        output[i].value = input[i];
-        i += 1;
-    }
-    output
 }
 
 #[cfg(test)]

@@ -99,7 +99,7 @@ where
     }
 }
 
-impl<'a, F: Field> AirBuilderWithPublicValues for DebugConstraintBuilder<'a, F> {
+impl<F: Field> AirBuilderWithPublicValues for DebugConstraintBuilder<'_, F> {
     type PublicVar = Self::F;
 
     fn public_values(&self) -> &[Self::F] {

@@ -4,11 +4,13 @@ members = [
     "air",
     "baby-bear",
     "blake3",
+    "blake3-air",
     "bn254-fr",
     "challenger",
     "circle",
     "commit",
     "dft",
+    "examples",
     "field",
     "field-testing",
     "fri",
@@ -32,6 +34,74 @@ members = [
     "util",
     "uni-stark",
 ]
+
+[workspace.dependencies]
+blake3 = "1.5"
+clap = { version = "4.5.23", features = ["derive"] }
+clap_derive = "4.5.18"
+criterion = "0.5.1"
+ff = "0.13"
+gcd = "2.3.0"
+generic-array = "1.0"
+halo2curves = "0.8.0"
+hashbrown = "0.15.0"
+hex-literal = "0.4.1"
+itertools = "0.14.0"
+modinverse = "0.1.1"
+num = "0.4.0"
+num-bigint = { version = "0.4.3", default-features = false }
+num-integer = "0.1.46"
+num-traits = { version = "0.2.19", default-features = false }
+nums = "0.1.0"
+postcard = { version = "1.0.0", default-features = false }
+rand = "0.8.5"
+rand_chacha = "0.3.1"
+rand_xoshiro = "0.6.0"
+rayon = "1.7.0"
+serde = { version = "1.0", default-features = false }
+serde_json = "1.0.113"
+sha2 = { version = "0.10.8", default-features = false }
+sha3 = "0.10.8"
+tiny-keccak = "2.0.2"
+tracing = "0.1.37"
+tracing-forest = "0.1.6"
+tracing-subscriber = "0.3.17"
+transpose = "0.2.3"
+zkhash = { git = "https://github.com/HorizenLabs/poseidon2" }
+
+# Local dependencies
+p3-air = { path = "air", version = "0.1.0" }
+p3-baby-bear = { path = "baby-bear", version = "0.1.0" }
+p3-blake3 = { path = "blake3", version = "0.1.0" }
+p3-blake3-air = { path = "blake3-air", version = "0.1.0" }
+p3-bn254-fr = { path = "bn254-fr", version = "0.1.0" }
+p3-challenger = { path = "challenger", version = "0.1.0" }
+p3-circle = { path = "circle", version = "0.1.0" }
+p3-commit = { path = "commit", version = "0.1.0" }
+p3-dft = { path = "dft", version = "0.1.0" }
+p3-examples = { path = "examples", version = "0.1.0" }
+p3-field = { path = "field", version = "0.1.0" }
+p3-field-testing = { path = "field-testing", version = "0.1.0" }
+p3-fri = { path = "fri", version = "0.1.0" }
+p3-goldilocks = { path = "goldilocks", version = "0.1.0" }
+p3-interpolation = { path = "interpolation", version = "0.1.0" }
+p3-keccak = { path = "keccak", version = "0.1.0" }
+p3-keccak-air = { path = "keccak-air", version = "0.1.0" }
+p3-koala-bear = { path = "koala-bear", version = "0.1.0" }
+p3-matrix = { path = "matrix", version = "0.1.0" }
+p3-maybe-rayon = { path = "maybe-rayon", version = "0.1.0" }
+p3-mds = { path = "mds", version = "0.1.0" }
+p3-merkle-tree = { path = "merkle-tree", version = "0.1.0" }
+p3-mersenne-31 = { path = "mersenne-31", version = "0.1.0" }
+p3-monty-31 = { path = "monty-31", version = "0.1.0" }
+p3-poseidon = { path = "poseidon", version = "0.1.0" }
+p3-poseidon2 = { path = "poseidon2", version = "0.1.0" }
+p3-poseidon2-air = { path = "poseidon2-air", version = "0.1.0" }
+p3-rescue = { path = "rescue", version = "0.0.1" }
+p3-sha256 = { path = "sha256", version = "0.1.0" }
+p3-symmetric = { path = "symmetric", version = "0.1.0" }
+p3-uni-stark = { path = "uni-stark", version = "0.1.0" }
+p3-util = { path = "util", version = "0.1.0" }
 
 [profile.profiling]
 inherits = "release"

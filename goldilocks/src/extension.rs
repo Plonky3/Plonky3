@@ -1,4 +1,4 @@
-use p3_field::extension::{BinomiallyExtendable, HasTwoAdicBionmialExtension};
+use p3_field::extension::{BinomiallyExtendable, HasTwoAdicBinomialExtension};
 use p3_field::{FieldAlgebra, TwoAdicField};
 
 use crate::Goldilocks;
@@ -17,7 +17,7 @@ impl BinomiallyExtendable<2> for Goldilocks {
     ];
 }
 
-impl HasTwoAdicBionmialExtension<2> for Goldilocks {
+impl HasTwoAdicBinomialExtension<2> for Goldilocks {
     const EXT_TWO_ADICITY: usize = 33;
 
     fn ext_two_adic_generator(bits: usize) -> [Self; 2] {

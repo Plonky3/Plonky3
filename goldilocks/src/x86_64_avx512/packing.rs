@@ -167,11 +167,6 @@ impl FieldAlgebra for PackedGoldilocksAVX512 {
     fn from_f(f: Self::F) -> Self {
         f.into()
     }
-
-    #[inline]
-    fn from_bool(b: bool) -> Self {
-        Goldilocks::from_bool(b).into()
-    }
     #[inline]
     fn from_canonical_u8(n: u8) -> Self {
         Goldilocks::from_canonical_u8(n).into()
@@ -474,9 +469,8 @@ mod tests {
     use p3_field_testing::test_packed_field;
 
     use super::{Goldilocks, WIDTH};
-    use crate::to_goldilocks_array;
 
-    const SPECIAL_VALS: [Goldilocks; WIDTH] = to_goldilocks_array([
+    const SPECIAL_VALS: [Goldilocks; WIDTH] = Goldilocks::new_array([
         0xFFFF_FFFF_0000_0001,
         0xFFFF_FFFF_0000_0000,
         0xFFFF_FFFE_FFFF_FFFF,

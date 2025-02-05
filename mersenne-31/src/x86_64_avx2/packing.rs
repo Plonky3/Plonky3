@@ -404,11 +404,6 @@ impl FieldAlgebra for PackedMersenne31AVX2 {
     fn from_f(f: Self::F) -> Self {
         f.into()
     }
-
-    #[inline]
-    fn from_bool(b: bool) -> Self {
-        Mersenne31::from_bool(b).into()
-    }
     #[inline]
     fn from_canonical_u8(n: u8) -> Self {
         Mersenne31::from_canonical_u8(n).into()
@@ -743,15 +738,14 @@ mod tests {
     use p3_field_testing::test_packed_field;
 
     use super::{Mersenne31, WIDTH};
-    use crate::to_mersenne31_array;
 
     /// Zero has a redundant representation, so let's test both.
-    const ZEROS: [Mersenne31; WIDTH] = to_mersenne31_array([
+    const ZEROS: [Mersenne31; WIDTH] = Mersenne31::new_array([
         0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000,
         0x7fffffff,
     ]);
 
-    const SPECIAL_VALS: [Mersenne31; WIDTH] = to_mersenne31_array([
+    const SPECIAL_VALS: [Mersenne31; WIDTH] = Mersenne31::new_array([
         0x00000000, 0x7fffffff, 0x00000001, 0x7ffffffe, 0x00000002, 0x7ffffffd, 0x40000000,
         0x3fffffff,
     ]);

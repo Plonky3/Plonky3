@@ -32,7 +32,7 @@ pub type Poseidon2ExternalLayerKoalaBear<const WIDTH: usize> =
 
 /// Degree of the chosen permutation polynomial for KoalaBear, used as the Poseidon2 S-Box.
 ///
-/// As p - 1 = 127 * 2^{24} we have a a lot of choice in degree D satisfying gcd(p - 1, D) = 1.
+/// As p - 1 = 127 * 2^{24} we have a lot of choice in degree D satisfying gcd(p - 1, D) = 1.
 /// Experimentation suggests that the optimal choice is the smallest available one, namely 3.
 const KOALABEAR_S_BOX_DEGREE: u64 = 3;
 
@@ -48,7 +48,7 @@ pub type Poseidon2KoalaBear<const WIDTH: usize> = Poseidon2<
     KOALABEAR_S_BOX_DEGREE,
 >;
 
-/// An implementation of the the matrix multiplications in the internal and external layers of Poseidon2.
+/// An implementation of the matrix multiplications in the internal and external layers of Poseidon2.
 ///
 /// This can act on [FA; WIDTH] for any FieldAlgebra which implements multiplication by KoalaBear field elements.
 /// If you have either `[KoalaBear::Packing; WIDTH]` or `[KoalaBear; WIDTH]` it will be much faster

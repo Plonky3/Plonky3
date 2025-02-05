@@ -164,10 +164,11 @@ where
         .iter()
         .enumerate()
         .map(|(ch_i, ch)| {
-            ch.iter()
-                .enumerate()
-                .map(|(e_i, &c)| zps[ch_i] * SC::Challenge::monomial(e_i) * c)
-                .sum::<SC::Challenge>()
+            zps[ch_i]
+                * ch.iter()
+                    .enumerate()
+                    .map(|(e_i, &c)| SC::Challenge::monomial(e_i) * c)
+                    .sum::<SC::Challenge>()
         })
         .sum::<SC::Challenge>();
 

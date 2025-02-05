@@ -5,25 +5,25 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-p3-field = { path = "../field" }
-p3-matrix = { path = "../matrix" }
-p3-maybe-rayon = { path = "../maybe-rayon" }
-p3-symmetric = { path = "../symmetric" }
-p3-commit = { path = "../commit" }
-p3-util = { path = "../util" }
-itertools = "0.13.0"
-rand = "0.8.5"
-serde = { version = "1.0", default-features = false, features = ["alloc"] }
-tracing = "0.1.37"
+p3-field.workspace = true
+p3-matrix.workspace = true
+p3-maybe-rayon.workspace = true
+p3-symmetric.workspace = true
+p3-commit.workspace = true
+p3-util.workspace = true
+itertools.workspace = true
+rand.workspace = true
+serde = { workspace = true, features = ["alloc"] }
+tracing.workspace = true
 
 [dev-dependencies]
-p3-blake3 = { path = "../blake3" }
-p3-keccak = { path = "../keccak" }
-p3-baby-bear = { path = "../baby-bear" }
-p3-mds = { path = "../mds" }
-p3-poseidon2 = { path = "../poseidon2" }
-p3-rescue = { path = "../rescue" }
-criterion = "0.5.1"
+p3-blake3.workspace = true
+p3-keccak.workspace = true
+p3-baby-bear.workspace = true
+p3-mds.workspace = true
+p3-poseidon2.workspace = true
+p3-rescue.workspace = true
+criterion.workspace = true
 
 [[bench]]
 name = "merkle_tree"

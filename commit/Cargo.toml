@@ -5,21 +5,22 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [features]
-test-utils = ["dep:p3-dft"]
+default = ["test-utils"]
+test-utils = ["p3-challenger", "p3-dft"]
 
 [dependencies]
-p3-challenger = { path = "../challenger" }
-p3-field = { path = "../field" }
-p3-matrix = { path = "../matrix" }
-p3-util = { path = "../util" }
-tracing = "0.1.37"
+p3-field.workspace = true
+p3-matrix.workspace = true
+p3-util.workspace = true
 
-itertools = "0.13.0"
-serde = { version = "1.0", default-features = false }
+itertools.workspace = true
+serde.workspace = true
 
 # for testing
-p3-dft = { path = "../dft", optional = true }
+p3-challenger = { workspace = true, optional = true }
+p3-dft = { workspace = true, optional = true }
 
 [dev-dependencies]
-p3-dft = { path = "../dft" }
-rand = "0.8.5"
+p3-challenger.workspace = true
+p3-dft.workspace = true
+rand.workspace = true

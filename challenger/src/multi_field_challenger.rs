@@ -182,10 +182,10 @@ where
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
     fn sample_bits(&mut self, bits: usize) -> usize {
-        debug_assert!(bits < (usize::BITS as usize));
-        debug_assert!((1 << bits) < F::ORDER_U64);
+        assert!(bits < (usize::BITS as usize));
+        assert!((1 << bits) < F::ORDER_U32);
         let rand_f: F = self.sample();
-        let rand_usize = rand_f.as_canonical_u64() as usize;
+        let rand_usize = rand_f.as_canonical_u32() as usize;
         rand_usize & ((1 << bits) - 1)
     }
 }

@@ -11,7 +11,7 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, FieldAlgebra};
-use p3_fri::{FriConfig, HidingFriPcs, TwoAdicFriPcs};
+use p3_fri::{create_benchmark_fri_config_zk, FriConfig, HidingFriPcs, TwoAdicFriPcs};
 use p3_keccak::Keccak256Hash;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
@@ -217,6 +217,7 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
 
     let fri_config = FriConfig {
         log_blowup,
+        log_final_poly_len: 5,
         num_queries: 40,
         proof_of_work_bits: 8,
         mmcs: challenge_mmcs,
@@ -274,12 +275,7 @@ fn prove_bb_twoadic_deg2_zk() -> Result<(), impl Debug> {
 
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 
-    let fri_config = FriConfig {
-        log_blowup: 2,
-        num_queries: 40,
-        proof_of_work_bits: 8,
-        mmcs: challenge_mmcs,
-    };
+    let fri_config = create_benchmark_fri_config_zk(challenge_mmcs);
     type HidingPcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, StdRng>;
     let pcs = HidingPcs::new(dft, val_mmcs, fri_config, 4, StdRng::from_entropy());
     type MyConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
@@ -329,6 +325,7 @@ fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
 
     let fri_config = FriConfig {
         log_blowup,
+        log_final_poly_len: 0,
         num_queries: 40,
         proof_of_work_bits: 8,
         mmcs: challenge_mmcs,

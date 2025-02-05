@@ -1,18 +1,32 @@
+use alloc::vec::Vec;
 use core::borrow::Borrow;
 
+use p3_air::utils::{andn, xor, xor3};
 use p3_air::{Air, AirBuilder, BaseAir};
-use p3_field::FieldAlgebra;
+use p3_field::{FieldAlgebra, PrimeField64};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
+use rand::random;
 
 use crate::columns::{KeccakCols, NUM_KECCAK_COLS};
 use crate::constants::rc_value_bit;
-use crate::logic::{andn_gen, xor3_gen, xor_gen};
 use crate::round_flags::eval_round_flags;
-use crate::{BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS};
+use crate::{generate_trace_rows, BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS};
 
 /// Assumes the field size is at least 16 bits.
 #[derive(Debug)]
 pub struct KeccakAir {}
+
+impl KeccakAir {
+    pub fn generate_trace_rows<F: PrimeField64>(
+        &self,
+        num_hashes: usize,
+        extra_capacity_bits: usize,
+    ) -> RowMajorMatrix<F> {
+        let inputs = (0..num_hashes).map(|_| random()).collect::<Vec<_>>();
+        generate_trace_rows(inputs, extra_capacity_bits)
+    }
+}
 
 impl<F> BaseAir<F> for KeccakAir {
     fn width(&self) -> usize {
@@ -45,14 +59,6 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
             }
         }
 
-        // The export flag must be 0 or 1.
-        builder.assert_bool(local.export);
-
-        // If this is not the final step, the export flag must be off.
-        builder
-            .when(not_final_step.clone())
-            .assert_zero(local.export);
-
         // If this is not the final step, the local and next preimages must match.
         for y in 0..5 {
             for x in 0..5 {
@@ -65,11 +71,23 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
             }
         }
 
+        // The export flag must be 0 or 1.
+        builder.assert_bool(local.export);
+
+        // If this is not the final step, the export flag must be off.
+        builder
+            .when(not_final_step.clone())
+            .assert_zero(local.export);
+
         // C'[x, z] = xor(C[x, z], C[x - 1, z], C[x + 1, z - 1]).
+        // Note that if all entries of C are boolean, the arithmetic generalization
+        // xor3 function only outputs 0, 1 and so this check also ensures that all
+        // entries of C'[x, z] are boolean.
         for x in 0..5 {
             for z in 0..64 {
+                // Check to ensure all entries of C are bools.
                 builder.assert_bool(local.c[x][z]);
-                let xor = xor3_gen::<AB::Expr>(
+                let xor = xor3::<AB::Expr>(
                     local.c[x][z].into(),
                     local.c[(x + 4) % 5][z].into(),
                     local.c[(x + 1) % 5][(z + 63) % 64].into(),
@@ -85,13 +103,15 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         //            = xor(A'[x, y, z], C[x, z], C'[x, z]).
         // The last step is valid based on the identity we checked above.
         // It isn't required, but makes this check a bit cleaner.
+        // We also check that all entires of A' are bools.
+        // This has the side effect of also range checking the limbs of A.
         for y in 0..5 {
             for x in 0..5 {
                 let get_bit = |z| {
                     let a_prime: AB::Var = local.a_prime[y][x][z];
                     let c: AB::Var = local.c[x][z];
                     let c_prime: AB::Var = local.c_prime[x][z];
-                    xor3_gen::<AB::Expr>(a_prime.into(), c.into(), c_prime.into())
+                    xor3::<AB::Expr>(a_prime.into(), c.into(), c_prime.into())
                 };
 
                 for limb in 0..U64_LIMBS {
@@ -99,6 +119,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                     let computed_limb = (limb * BITS_PER_LIMB..(limb + 1) * BITS_PER_LIMB)
                         .rev()
                         .fold(AB::Expr::ZERO, |acc, z| {
+                            // Check to ensure all entries of A' are bools.
                             builder.assert_bool(local.a_prime[y][x][z]);
                             acc.double() + get_bit(z)
                         });
@@ -114,20 +135,23 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
             for z in 0..64 {
                 let sum: AB::Expr = (0..5).map(|y| local.a_prime[y][x][z].into()).sum();
                 let diff = sum - local.c_prime[x][z];
-                let four = AB::Expr::from_canonical_u8(4);
+                // This should be slightly faster than from_canonical_u8(4) for some fields.
+                let four = AB::Expr::TWO.double();
                 builder.assert_zero(diff.clone() * (diff.clone() - AB::Expr::TWO) * (diff - four));
             }
         }
 
         // A''[x, y] = xor(B[x, y], andn(B[x + 1, y], B[x + 2, y])).
+        // As B is a rotation of A', all entries must be bools and so
+        // this check also range checks A''.
         for y in 0..5 {
             for x in 0..5 {
                 let get_bit = |z| {
-                    let andn = andn_gen::<AB::Expr>(
+                    let andn = andn::<AB::Expr>(
                         local.b((x + 1) % 5, y, z).into(),
                         local.b((x + 2) % 5, y, z).into(),
                     );
-                    xor_gen::<AB::Expr>(local.b(x, y, z).into(), andn)
+                    xor::<AB::Expr>(local.b(x, y, z).into(), andn)
                 };
 
                 for limb in 0..U64_LIMBS {
@@ -145,6 +169,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                 ..(limb + 1) * BITS_PER_LIMB)
                 .rev()
                 .fold(AB::Expr::ZERO, |acc, z| {
+                    // Check to ensure the bits of A''[0, 0] are boolean.
                     builder.assert_bool(local.a_prime_prime_0_0_bits[z]);
                     acc.double() + local.a_prime_prime_0_0_bits[z]
                 });
@@ -156,11 +181,11 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
             let mut rc_bit_i = AB::Expr::ZERO;
             for r in 0..NUM_ROUNDS {
                 let this_round = local.step_flags[r];
-                let this_round_constant = AB::Expr::from_canonical_u8(rc_value_bit(r, i));
+                let this_round_constant = AB::Expr::from_bool(rc_value_bit(r, i) != 0);
                 rc_bit_i += this_round * this_round_constant;
             }
 
-            xor_gen::<AB::Expr>(local.a_prime_prime_0_0_bits[i].into(), rc_bit_i)
+            xor::<AB::Expr>(local.a_prime_prime_0_0_bits[i].into(), rc_bit_i)
         };
 
         for limb in 0..U64_LIMBS {

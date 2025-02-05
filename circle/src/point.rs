@@ -50,7 +50,7 @@ impl<F: Field> Point<F> {
     /// and a simple pole at (-1,0), which in the paper is called v_0
     /// Circle STARKs, Section 5.1, Lemma 11 (page 21 of the first revision PDF)
     pub fn to_projective_line(self) -> Option<F> {
-        self.y.try_div(self.x + F::ONE)
+        (self.x + F::ONE).try_inverse().map(|x| x * self.y)
     }
 
     /// The "squaring map", or doubling in additive notation, denoted π(x,y)
@@ -71,7 +71,7 @@ impl<F: Field> Point<F> {
 
     /// Compute a product of successive `v_n`'s.
     ///
-    /// More explicitely this computes `(1..log_n).map(|i| self.v_n(i)).product()`
+    /// More explicitly this computes `(1..log_n).map(|i| self.v_n(i)).product()`
     /// but uses far fewer `self.x.square().double() - F::ONE` steps compared to the naive implementation.
     pub fn v_n_prod(mut self, log_n: usize) -> F {
         let mut output = self.x;

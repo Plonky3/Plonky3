@@ -460,7 +460,7 @@ pub(crate) unsafe fn apply_func_to_even_odd<MPAVX512: MontyParametersAVX512>(
     let input_evn = input;
     let input_odd = movehdup_epi32(input);
 
-    // Unlike the mul function, we need to recieve back values the reduced
+    // Unlike the mul function, we need to receive back values the reduced
     let output_even = func(input_evn);
     let output_odd = func(input_odd);
 
@@ -593,11 +593,6 @@ impl<FP: FieldParameters> FieldAlgebra for PackedMontyField31AVX512<FP> {
     #[inline]
     fn from_f(f: Self::F) -> Self {
         f.into()
-    }
-
-    #[inline]
-    fn from_bool(b: bool) -> Self {
-        MontyField31::from_bool(b).into()
     }
     #[inline]
     fn from_canonical_u8(n: u8) -> Self {

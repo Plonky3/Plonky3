@@ -45,7 +45,7 @@ pub type Poseidon2Mersenne31<const WIDTH: usize> = Poseidon2<
     MERSENNE31_S_BOX_DEGREE,
 >;
 
-/// An implementation of the the matrix multiplications in the internal and external layers of Poseidon2.
+/// An implementation of the matrix multiplications in the internal and external layers of Poseidon2.
 ///
 /// This can act on [FA; WIDTH] for any FieldAlgebra which implements multiplication by Mersenne31 field elements.
 /// If you have either `[Mersenne31::Packing; WIDTH]` or `[Mersenne31; WIDTH]` it will be much faster
@@ -174,7 +174,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use p3_field::FieldAlgebra;
     use p3_symmetric::Permutation;
     use rand::SeedableRng;
     use rand_xoshiro::Xoroshiro128Plus;
@@ -192,19 +191,17 @@ mod tests {
     /// vector([M31.random_element() for t in range(16)]).
     #[test]
     fn test_poseidon2_width_16_random() {
-        let mut input: [F; 16] = [
+        let mut input: [F; 16] = Mersenne31::new_array([
             894848333, 1437655012, 1200606629, 1690012884, 71131202, 1749206695, 1717947831,
             120589055, 19776022, 42382981, 1831865506, 724844064, 171220207, 1299207443, 227047920,
             1783754913,
-        ]
-        .map(F::from_canonical_u32);
+        ]);
 
-        let expected: [F; 16] = [
+        let expected: [F; 16] = Mersenne31::new_array([
             1124552602, 2127602268, 1834113265, 1207687593, 1891161485, 245915620, 981277919,
             627265710, 1534924153, 1580826924, 887997842, 1526280482, 547791593, 1028672510,
             1803086471, 323071277,
-        ]
-        .map(F::from_canonical_u32);
+        ]);
 
         let mut rng = Xoroshiro128Plus::seed_from_u64(1);
         let perm = Poseidon2Mersenne31::new_from_rng_128(&mut rng);
@@ -219,21 +216,19 @@ mod tests {
     /// vector([M31.random_element() for t in range(24)]).
     #[test]
     fn test_poseidon2_width_24_random() {
-        let mut input: [F; 24] = [
+        let mut input: [F; 24] = Mersenne31::new_array([
             886409618, 1327899896, 1902407911, 591953491, 648428576, 1844789031, 1198336108,
             355597330, 1799586834, 59617783, 790334801, 1968791836, 559272107, 31054313,
             1042221543, 474748436, 135686258, 263665994, 1962340735, 1741539604, 2026927696,
             449439011, 1131357108, 50869465,
-        ]
-        .map(F::from_canonical_u32);
+        ]);
 
-        let expected: [F; 24] = [
+        let expected: [F; 24] = Mersenne31::new_array([
             87189408, 212775836, 954807335, 1424761838, 1222521810, 1264950009, 1891204592,
             710452896, 957091834, 1776630156, 1091081383, 786687731, 1101902149, 1281649821,
             436070674, 313565599, 1961711763, 2002894460, 2040173120, 854107426, 25198245,
             1967213543, 604802266, 2086190331,
-        ]
-        .map(F::from_canonical_u32);
+        ]);
 
         let mut rng = Xoroshiro128Plus::seed_from_u64(1);
         let perm = Poseidon2Mersenne31::new_from_rng_128(&mut rng);

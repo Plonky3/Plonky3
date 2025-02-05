@@ -56,7 +56,7 @@ pub trait HasFrobenius<F: Field>: ExtensionField<F> {
 }
 
 /// Optional trait for implementing Two Adic Binomial Extension Field.
-pub trait HasTwoAdicBionmialExtension<const D: usize>: BinomiallyExtendable<D> {
+pub trait HasTwoAdicBinomialExtension<const D: usize>: BinomiallyExtendable<D> {
     const EXT_TWO_ADICITY: usize;
 
     /// Assumes the multiplicative group size has at least `bits` powers of two, otherwise the

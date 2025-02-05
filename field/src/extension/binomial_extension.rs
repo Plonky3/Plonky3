@@ -13,7 +13,7 @@ use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
 
-use super::{HasFrobenius, HasTwoAdicBionmialExtension};
+use super::{HasFrobenius, HasTwoAdicBinomialExtension};
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{
@@ -41,7 +41,7 @@ impl<FA: FieldAlgebra, const D: usize> Default for BinomialExtensionField<FA, D>
 impl<FA: FieldAlgebra, const D: usize> From<FA> for BinomialExtensionField<FA, D> {
     fn from(x: FA) -> Self {
         Self {
-            value: field_to_array::<FA, D>(x),
+            value: field_to_array(x),
         }
     }
 }
@@ -125,15 +125,15 @@ where
     };
 
     const ONE: Self = Self {
-        value: field_to_array::<FA, D>(FA::ONE),
+        value: field_to_array(FA::ONE),
     };
 
     const TWO: Self = Self {
-        value: field_to_array::<FA, D>(FA::TWO),
+        value: field_to_array(FA::TWO),
     };
 
     const NEG_ONE: Self = Self {
-        value: field_to_array::<FA, D>(FA::NEG_ONE),
+        value: field_to_array(FA::NEG_ONE),
     };
 
     #[inline]
@@ -141,11 +141,6 @@ where
         Self {
             value: f.value.map(FA::from_f),
         }
-    }
-
-    #[inline]
-    fn from_bool(b: bool) -> Self {
-        FA::from_bool(b).into()
     }
 
     #[inline]
@@ -563,7 +558,7 @@ where
     }
 }
 
-impl<F: Field + HasTwoAdicBionmialExtension<D>, const D: usize> TwoAdicField
+impl<F: Field + HasTwoAdicBinomialExtension<D>, const D: usize> TwoAdicField
     for BinomialExtensionField<F, D>
 {
     const TWO_ADICITY: usize = F::EXT_TWO_ADICITY;

@@ -109,10 +109,6 @@ impl FieldAlgebra for Bn254Fr {
         f
     }
 
-    fn from_bool(b: bool) -> Self {
-        Self::new(FFBn254Fr::from(b as u64))
-    }
-
     fn from_canonical_u8(n: u8) -> Self {
         Self::new(FFBn254Fr::from(n as u64))
     }

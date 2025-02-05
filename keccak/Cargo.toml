@@ -8,15 +8,15 @@ license = "MIT OR Apache-2.0"
 nightly-features = []
 
 [dependencies]
-p3-field = { path = "../field" }
-p3-symmetric = { path = "../symmetric" }
-p3-util = { path = "../util" }
-itertools = "0.13.0"
-tiny-keccak = { version = "2.0.2", features = ["keccak"] }
+p3-field.workspace = true
+p3-symmetric.workspace = true
+p3-util.workspace = true
+itertools.workspace = true
+tiny-keccak = { workspace = true, features = ["keccak"] }
 
 [dev-dependencies]
-p3-mersenne-31 = { path = "../mersenne-31" }
-criterion = "0.5.1"
+p3-mersenne-31.workspace = true
+criterion.workspace = true
 
 [[bench]]
 name = "bench_keccak"

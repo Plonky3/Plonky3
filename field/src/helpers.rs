@@ -35,7 +35,7 @@ pub fn cyclic_subgroup_coset_known_order<F: Field>(
     shift: F,
     order: usize,
 ) -> impl Iterator<Item = F> + Clone {
-    cyclic_subgroup_known_order(generator, order).map(move |x| x * shift)
+    generator.shifted_powers(shift).take(order)
 }
 
 #[must_use]
@@ -135,7 +135,7 @@ pub const fn field_to_array<FA: FieldAlgebra, const D: usize>(x: FA) -> [FA; D] 
         acc += 1;
     }
     // If the code has reached this point every element of arr is correctly initialized.
-    // Hence we are safe to reintepret the array as [FA; D].
+    // Hence we are safe to reinterpret the array as [FA; D].
 
     unsafe { HackyWorkAround::transpose(arr).assume_init() }
 }

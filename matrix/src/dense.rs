@@ -37,17 +37,17 @@ impl<T: Clone + Send + Sync> DenseStorage<T> for Vec<T> {
         self
     }
 }
-impl<'a, T: Clone + Send + Sync> DenseStorage<T> for &'a [T] {
+impl<T: Clone + Send + Sync> DenseStorage<T> for &[T] {
     fn to_vec(self) -> Vec<T> {
         <[T]>::to_vec(self)
     }
 }
-impl<'a, T: Clone + Send + Sync> DenseStorage<T> for &'a mut [T] {
+impl<T: Clone + Send + Sync> DenseStorage<T> for &mut [T] {
     fn to_vec(self) -> Vec<T> {
         <[T]>::to_vec(self)
     }
 }
-impl<'a, T: Clone + Send + Sync> DenseStorage<T> for Cow<'a, [T]> {
+impl<T: Clone + Send + Sync> DenseStorage<T> for Cow<'_, [T]> {
     fn to_vec(self) -> Vec<T> {
         self.into_owned()
     }

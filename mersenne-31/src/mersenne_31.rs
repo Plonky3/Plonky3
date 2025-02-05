@@ -14,13 +14,14 @@ use p3_field::{
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
-use serde::{Deserialize, Serialize};
+use serde::de::Error;
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// The Mersenne31 prime
 const P: u32 = (1 << 31) - 1;
 
 /// The prime field `F_p` where `p = 2^31 - 1`.
-#[derive(Copy, Clone, Default, Serialize, Deserialize)]
+#[derive(Copy, Clone, Default)]
 #[repr(transparent)] // Packed field implementations rely on this!
 pub struct Mersenne31 {
     /// Not necessarily canonical, but must fit in 31 bits.
@@ -32,6 +33,25 @@ impl Mersenne31 {
     pub const fn new(value: u32) -> Self {
         debug_assert!((value >> 31) == 0);
         Self { value }
+    }
+
+    /// Convert a constant `u32` array into a constant array of field elements.
+    /// This allows inputs to be `> 2^31`, and just reduces them `mod P`.
+    ///
+    /// This means that this will be slower than `array.map(Mersenne31::new)` but
+    /// has the advantage of being able to be used in `const` environments.
+    #[inline]
+    pub const fn new_array<const N: usize>(input: [u32; N]) -> [Self; N] {
+        let mut output = [Mersenne31::ZERO; N];
+        let mut i = 0;
+        loop {
+            if i == N {
+                break;
+            }
+            output[i].value = input[i] % P;
+            i += 1;
+        }
+        output
     }
 }
 
@@ -48,7 +68,7 @@ impl Packable for Mersenne31 {}
 
 impl Hash for Mersenne31 {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write_u32(self.as_canonical_u32());
+        state.write_u32(self.to_unique_u32());
     }
 }
 
@@ -86,6 +106,25 @@ impl Distribution<Mersenne31> for Standard {
             if is_canonical {
                 return Mersenne31::new(next_u31);
             }
+        }
+    }
+}
+
+impl Serialize for Mersenne31 {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // No need to convert to canonical.
+        serializer.serialize_u32(self.value)
+    }
+}
+
+impl<'a> Deserialize<'a> for Mersenne31 {
+    fn deserialize<D: Deserializer<'a>>(d: D) -> Result<Self, D::Error> {
+        let val = u32::deserialize(d)?;
+        // Ensure that `val` satisfies our invariant. i.e. Not necessarily canonical, but must fit in 31 bits.
+        if val <= P {
+            Ok(Mersenne31::new(val))
+        } else {
+            Err(D::Error::custom("Value is out of range"))
         }
     }
 }
@@ -239,7 +278,7 @@ impl Field for Mersenne31 {
         }
 
         // From Fermat's little theorem, in a prime field `F_p`, the inverse of `a` is `a^(p-2)`.
-        // Here p-2 = 2147483646 = 1111111111111111111111111111101_2.
+        // Here p-2 = 2147483645 = 1111111111111111111111111111101_2.
         // Uses 30 Squares + 7 Multiplications => 37 Operations total.
 
         let p1 = *self;
@@ -411,23 +450,6 @@ pub(crate) fn from_u62(input: u64) -> Mersenne31 {
     let input_lo = (input & ((1 << 31) - 1)) as u32;
     let input_high = (input >> 31) as u32;
     Mersenne31::new(input_lo) + Mersenne31::new(input_high)
-}
-
-/// Convert a constant u32 array into a constant Mersenne31 array.
-#[inline]
-#[must_use]
-pub const fn to_mersenne31_array<const N: usize>(input: [u32; N]) -> [Mersenne31; N] {
-    // This is currently used only in the test crates of the vectorized implementations.
-    let mut output = [Mersenne31 { value: 0 }; N];
-    let mut i = 0;
-    loop {
-        if i == N {
-            break;
-        }
-        output[i].value = input[i] % P;
-        i += 1;
-    }
-    output
 }
 
 #[cfg(test)]

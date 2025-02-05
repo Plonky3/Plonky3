@@ -4,14 +4,14 @@ use p3_baby_bear::{BabyBear, GenericPoseidon2LinearLayersBabyBear};
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
-use p3_fri::{FriConfig, HidingFriPcs};
+use p3_fri::{create_benchmark_fri_config_zk, HidingFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_merkle_tree::MerkleTreeHidingMmcs;
-use p3_poseidon2_air::{generate_vectorized_trace_rows, RoundConstants, VectorizedPoseidon2Air};
+use p3_poseidon2_air::{RoundConstants, VectorizedPoseidon2Air};
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32To64};
 use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::rngs::{StdRng, ThreadRng};
-use rand::{random, thread_rng, SeedableRng};
+use rand::{thread_rng, SeedableRng};
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
 use tracing_forest::util::LevelFilter;
@@ -78,18 +78,6 @@ fn main() -> Result<(), impl Debug> {
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
     let constants = RoundConstants::from_rng(&mut thread_rng());
-    let inputs = (0..NUM_PERMUTATIONS).map(|_| random()).collect::<Vec<_>>();
-    let trace = generate_vectorized_trace_rows::<
-        Val,
-        GenericPoseidon2LinearLayersBabyBear,
-        WIDTH,
-        SBOX_DEGREE,
-        SBOX_REGISTERS,
-        HALF_FULL_ROUNDS,
-        PARTIAL_ROUNDS,
-        VECTOR_LEN,
-    >(inputs, &constants);
-
     let air: VectorizedPoseidon2Air<
         Val,
         GenericPoseidon2LinearLayersBabyBear,
@@ -101,14 +89,12 @@ fn main() -> Result<(), impl Debug> {
         VECTOR_LEN,
     > = VectorizedPoseidon2Air::new(constants);
 
+    let fri_config = create_benchmark_fri_config_zk(challenge_mmcs);
+
+    let trace = air.generate_vectorized_trace_rows(NUM_PERMUTATIONS, fri_config.log_blowup);
+
     let dft = Dft::default();
 
-    let fri_config = FriConfig {
-        log_blowup: 2,
-        num_queries: 100,
-        proof_of_work_bits: 16,
-        mmcs: challenge_mmcs,
-    };
     type Pcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, StdRng>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config, 4, StdRng::from_entropy());
 
