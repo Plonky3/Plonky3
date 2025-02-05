@@ -117,7 +117,8 @@ where
         // We generate random extension field values of the size of the randomized trace randomized. Since we need `R` of degree that of the extended
         // trace -1, we can provide `R` as is to FRI, and the random polynomial will be `(R(X) - R(z)) / (X - z)`.
         // Since we need a random polynomial defined over the extension field, we actually need to commit to `SC::CHallenge::D`
-        // random polynomials. This is equivalent to flattening on the base field a polynomial over the extension field.
+        // random polynomials. This is similar to flattening on the base field a polynomial over the extension field.
+        // TODO: This approach is only statistically zk. To make it perfectly zk, `R` would have to truly be an extension field polynomial.
         let random_vals = pcs.generate_random_vals(ext_trace_domain.size());
         let extended_domain = pcs.natural_domain_for_degree(ext_trace_domain.size());
         let (r_commit, r_data) = pcs.commit(vec![(extended_domain, random_vals)], true);
