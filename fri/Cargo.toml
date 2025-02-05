@@ -17,6 +17,7 @@ itertools.workspace = true
 rand.workspace = true
 tracing.workspace = true
 serde = { workspace = true, features = ["derive", "alloc"] }
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
 p3-baby-bear.workspace = true
