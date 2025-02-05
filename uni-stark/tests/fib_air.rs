@@ -18,11 +18,6 @@ use p3_symmetric::{
 use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::rngs::{StdRng, ThreadRng};
 use rand::{thread_rng, SeedableRng};
-use tracing::level_filters::LevelFilter;
-use tracing_forest::ForestLayer;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{EnvFilter, Registry};
 
 /// For testing the public values feature
 pub struct FibonacciAir {}
@@ -151,15 +146,6 @@ fn test_public_value_impl(n: usize, x: u64) {
 
 #[test]
 fn test_zk() {
-    let env_filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy();
-
-    Registry::default()
-        .with(env_filter)
-        .with(ForestLayer::default())
-        .init();
-
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 

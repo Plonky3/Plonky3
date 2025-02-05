@@ -159,7 +159,6 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
             mat = mat.bit_reversed_zero_pad(1);
             h = mat.height();
             log_h = log2_strict_usize(h);
-            // tracing::info!("all mat values {:?} len {}", mat.values, mat.values.len());
             // Add random values here.
             for i in 0..h / 2 {
                 let rev_i = reverse_bits_len(i, log_h);

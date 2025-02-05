@@ -24,11 +24,6 @@ use p3_uni_stark::{prove, verify, StarkConfig, StarkGenericConfig, Val};
 use rand::distributions::{Distribution, Standard};
 use rand::rngs::{StdRng, ThreadRng};
 use rand::{thread_rng, Rng, SeedableRng};
-use tracing_forest::util::LevelFilter;
-use tracing_forest::ForestLayer;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{EnvFilter, Registry};
 
 /// How many `a * b = c` operations to do per row in the AIR.
 const REPETITIONS: usize = 20;
@@ -247,15 +242,6 @@ fn prove_bb_twoadic_deg2() -> Result<(), impl Debug> {
 
 #[test]
 fn prove_bb_twoadic_deg2_zk() -> Result<(), impl Debug> {
-    let env_filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy();
-
-    Registry::default()
-        .with(env_filter)
-        .with(ForestLayer::default())
-        .init();
-
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 

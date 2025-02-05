@@ -92,9 +92,10 @@ where
         let ldes: Vec<_> = randomized_evaluations
             .into_iter()
             .map(|(domain, evals)| {
+                let shift = Val::GENERATOR / domain.shift;
+                // We do not need to randomize the randomizing poly.
                 if is_random_poly {
-                    assert_eq!(domain.size(), evals.height(), "is random");
-                    let shift = Val::GENERATOR / domain.shift;
+                    assert_eq!(domain.size(), evals.height());
 
                     self.inner
                         .dft
@@ -103,7 +104,6 @@ where
                         .to_row_major_matrix()
                 } else {
                     assert_eq!(domain.size(), evals.height() * 2);
-                    let shift = Val::GENERATOR / domain.shift;
 
                     let random_values = vec![self.rng.borrow_mut().gen(); h * w];
 
@@ -157,12 +157,10 @@ where
                 let random_values = if i == last_chunk {
                     let mut added_values = Val::zero_vec(h * w);
                     for j in 0..last_chunk {
-                        for k in 0..h {
-                            for l in 0..w {
-                                added_values[k * w + l] -= all_random_values[j * h * w + k * w + l]
-                                    * cis[j]
-                                    * cis[last_chunk].inverse();
-                            }
+                        for k in 0..h * w {
+                            added_values[k] -= all_random_values[j * h * w + k]
+                                * cis[j]
+                                * cis[last_chunk].inverse();
                         }
                     }
                     added_values
