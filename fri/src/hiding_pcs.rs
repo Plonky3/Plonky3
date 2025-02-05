@@ -104,19 +104,12 @@ where
                 } else {
                     assert_eq!(domain.size(), evals.height() * 2);
                     let shift = Val::GENERATOR / domain.shift;
-                    let s = domain.shift;
 
                     let random_values = vec![self.rng.borrow_mut().gen(); h * w];
 
                     self.inner
                         .dft
-                        .coset_lde_batch_zk(
-                            evals,
-                            self.inner.fri.log_blowup,
-                            shift,
-                            s,
-                            &random_values,
-                        )
+                        .coset_lde_batch_zk(evals, self.inner.fri.log_blowup, shift, &random_values)
                         .bit_reverse_rows()
                         .to_row_major_matrix()
                 }
@@ -154,7 +147,6 @@ where
             .map(|(i, (domain, evals))| {
                 assert_eq!(domain.size(), evals.height());
                 let shift = Val::GENERATOR / domain.shift;
-                let s = domain.shift;
 
                 // Select random values, and set the random values for the final chunk accordingly.
                 let random_values = if i == last_chunk {
@@ -181,7 +173,7 @@ where
                 // Commit to the bit-reversed LDE.
                 self.inner
                     .dft
-                    .coset_lde_batch_zk(evals, self.inner.fri.log_blowup, shift, s, &random_values)
+                    .coset_lde_batch_zk(evals, self.inner.fri.log_blowup, shift, &random_values)
                     .bit_reverse_rows()
                     .to_row_major_matrix()
             })

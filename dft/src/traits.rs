@@ -130,12 +130,12 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         mat: RowMajorMatrix<F>,
         added_bits: usize,
         shift: F,
-        actual_s: F,
         added_values: &[F],
     ) -> Self::Evaluations {
         let h = mat.height();
         let w = mat.width();
 
+        let actual_s = F::GENERATOR / shift;
         let mut coeffs = self.idft_batch(mat.clone());
         assert!(coeffs.values.len() == h * w);
         assert!(added_values.len() == h * w);

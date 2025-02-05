@@ -289,4 +289,88 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
 
         RowMajorMatrix::new(output, ncols).bit_reverse_rows()
     }
+
+    #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
+    fn coset_lde_batch_zk(
+        &self,
+        mat: RowMajorMatrix<MontyField31<MP>>,
+        added_bits: usize,
+        shift: MontyField31<MP>,
+        added_values: &[MontyField31<MP>],
+    ) -> Self::Evaluations {
+        let nrows = mat.height();
+        let ncols = mat.width();
+        let result_nrows = nrows << (added_bits + 1);
+
+        let actual_s = MontyField31::GENERATOR / shift;
+
+        if nrows == 1 {
+            let dupd_rows = core::iter::repeat(mat.values)
+                .take(result_nrows)
+                .flatten()
+                .collect();
+            return RowMajorMatrix::new(dupd_rows, ncols).bit_reverse_rows();
+        }
+
+        let input_size = nrows * ncols;
+        let output_size = result_nrows * ncols;
+
+        let mat = mat.bit_reverse_rows().to_row_major_matrix();
+
+        // Allocate space for the output and the intermediate state.
+        let (mut output, mut padded) = debug_span!("allocate scratch space").in_scope(|| {
+            // Safety: These are pretty dodgy, but work because MontyField31 is #[repr(transparent)]
+            let output = MontyField31::<MP>::zero_vec(output_size);
+            let padded = MontyField31::<MP>::zero_vec(output_size);
+            (output, padded)
+        });
+
+        // `coeffs` will hold the result of the inverse FFT; use the
+        // output storage as scratch space.
+        let coeffs = &mut output[..input_size];
+
+        debug_span!("pre-transpose", nrows, ncols)
+            .in_scope(|| transpose::transpose(&mat.values, coeffs, ncols, nrows));
+
+        // Apply inverse DFT; result is not yet normalised.
+        self.update_twiddles(result_nrows);
+        let inv_twiddles = self.inv_twiddles.borrow();
+        debug_span!("inverse dft batch", n_dfts = ncols, fft_len = nrows)
+            .in_scope(|| Self::decimation_in_time_dft(coeffs, nrows, &inv_twiddles));
+
+        // At this point the inverse FFT of each column of `mat` appears
+        // as a row in `coeffs`.
+
+        // Normalise inverse DFT and coset shift in one go.
+        let inv_len = MontyField31::from_canonical_usize(nrows).inverse();
+        coset_shift_and_scale_rows(&mut padded, result_nrows, coeffs, nrows, shift, inv_len);
+
+        // TODO: parallelize/optimize.
+        for i in 0..ncols {
+            for j in 0..nrows {
+                padded[i * result_nrows + j] -= added_values[j * ncols + i]
+                    * actual_s.exp_u64(j as u64)
+                    * inv_len
+                    * shift.exp_u64(j as u64);
+                padded[i * result_nrows + j + nrows] = added_values[j * ncols + i]
+                    * actual_s.exp_u64(j as u64)
+                    * inv_len
+                    * shift.exp_u64((nrows + j) as u64);
+            }
+        }
+        // `padded` is implicitly zero padded since it was initialised
+        // to zeros when declared above.
+
+        let twiddles = self.twiddles.borrow();
+
+        // Apply DFT
+        debug_span!("dft batch", n_dfts = ncols, fft_len = result_nrows)
+            .in_scope(|| Self::decimation_in_freq_dft(&mut padded, result_nrows, &twiddles));
+
+        // transpose output
+        debug_span!("post-transpose", nrows = ncols, ncols = result_nrows)
+            .in_scope(|| transpose::transpose(&padded, &mut output, result_nrows, ncols));
+
+        RowMajorMatrix::new(output, ncols).bit_reverse_rows()
+    }
 }
