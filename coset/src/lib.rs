@@ -1,7 +1,6 @@
 //! Interface for handling smooth cosets in the group of units of finite fields.
 
-// NP TODO re-introduce
-// #![no_std]
+#![no_std]
 
 extern crate alloc;
 

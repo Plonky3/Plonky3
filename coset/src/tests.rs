@@ -14,17 +14,22 @@ type GL = Goldilocks;
 type GLExt = BinomialExtensionField<GL, 2>;
 
 #[test]
+// Checks that a coset of the maximum size allwed by the field (implementation)
+// can indeed be constructed
 fn test_coset_limit() {
     TwoAdicCoset::<BB>::new(BB::ONE, BB::TWO_ADICITY);
 }
 
 #[test]
 #[should_panic = "bits <= Self::TWO_ADICITY"]
+// Checks that attemtping to construct a field larger than allowed by the field
+// implementation is disallowed
 fn test_coset_too_large() {
     TwoAdicCoset::<BB>::new(BB::ONE, BB::TWO_ADICITY + 1);
 }
 
 #[test]
+// Checks that interpolation over the coset works as expected
 fn test_interpolate_evals() {
     let coset = TwoAdicCoset::<BB>::new(BB::ONE, 3);
 
@@ -46,6 +51,8 @@ fn test_interpolate_evals() {
 
 #[test]
 #[should_panic = "is not large enough to be shrunk by a factor of 2^6"]
+// Checks that attemtping to shrink a coset by any divisor of its size is
+// allowed, but doing so by the next power of two is not
 fn test_shrink_too_much() {
     let coset = TwoAdicCoset::<GL>::new(GL::from_canonical_u16(42), 5);
 
@@ -55,6 +62,7 @@ fn test_shrink_too_much() {
 }
 
 #[test]
+// Checks that shrinking by a factor of 2^0 = 1 does nothing
 fn test_shrink_nothing() {
     let coset = TwoAdicCoset::<BB>::new(BB::ZERO, 7);
 
@@ -65,6 +73,7 @@ fn test_shrink_nothing() {
 }
 
 #[test]
+// Checks that shrinking the whole coset results in the expected new shift
 fn test_shrink_shift() {
     let mut rng = rand::thread_rng();
     let shift: BB = rng.gen();
@@ -76,6 +85,8 @@ fn test_shrink_shift() {
 }
 
 #[test]
+// Checks that shrinking the coset by a factor of k results in a new coset whose
+// i-th element is the original coset's (i * k)-th element
 fn test_shrink_contained() {
     let mut rng = rand::thread_rng();
     let shift: GL = rng.gen();
@@ -91,6 +102,8 @@ fn test_shrink_contained() {
 }
 
 #[test]
+// Checks that the coset iterator yields the expected elements (in the expected
+// order)
 fn test_coset_iterator() {
     let mut rng = rand::thread_rng();
     let shift: BB = rng.gen();
@@ -106,12 +119,15 @@ fn test_coset_iterator() {
 
 #[test]
 #[should_panic = "exp must be less than the size of the coset."]
+// Checks that attemtping to access an element at an index larger than the coset's
+// size is disallowed (motivation in lib.rs/element)
 fn test_element_exp_too_large() {
     let mut coset = TwoAdicCoset::<BB>::new(BB::ONE, 3);
     coset.element(1 << 3);
 }
 
 #[test]
+// Checks that the element method returns the expected values
 fn test_element() {
     let mut rng = rand::thread_rng();
 
@@ -126,9 +142,9 @@ fn test_element() {
 }
 
 #[test]
+// Checks that the coset stores the expected number of iterated squares of the
+// generator
 fn test_stored_values() {
-    // Check the iterated squares of the generator are stored appropriately
-
     let mut rng = rand::thread_rng();
 
     let mut coset = TwoAdicCoset::<GLExt>::new(GLExt::from_canonical_u32(424242), 20);
@@ -145,6 +161,7 @@ fn test_stored_values() {
 }
 
 #[test]
+// Checks that a coset is equal to itself
 fn test_equality_reflexive() {
     let mut rng = rand::thread_rng();
     let shift = rng.gen();
@@ -154,6 +171,8 @@ fn test_equality_reflexive() {
 }
 
 #[test]
+// Checks that shrinking a coset keeps the relevant iterated squares of the
+// generator
 fn test_stored_values_shrink() {
     let mut coset = TwoAdicCoset::<GL>::new(GL::ONE, 16);
 
@@ -169,6 +188,7 @@ fn test_stored_values_shrink() {
 }
 
 #[test]
+// Checks inequality between two arbitrary cosets
 fn test_equality_shift() {
     let mut rng = rand::thread_rng();
     let shift = rng.gen();
@@ -180,6 +200,8 @@ fn test_equality_shift() {
 }
 
 #[test]
+// Checks that coset equality is invariant under translation by any element of
+// the group, as expected
 fn test_equality_translation() {
     let mut rng = rand::thread_rng();
     let shift = rng.gen();
@@ -191,6 +213,7 @@ fn test_equality_translation() {
 }
 
 #[test]
+// Checks that the contains method returns true on all elements of the coset
 fn test_contains() {
     let mut rng = rand::thread_rng();
     let shift = rng.gen();
