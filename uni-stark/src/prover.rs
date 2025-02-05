@@ -5,8 +5,7 @@ use itertools::{izip, Itertools};
 use p3_air::Air;
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::Field;
-use p3_field::{FieldAlgebra, FieldExtensionAlgebra, PackedValue};
+use p3_field::{Field, FieldAlgebra, FieldExtensionAlgebra, PackedValue};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
@@ -196,6 +195,8 @@ where
 }
 
 #[instrument(name = "compute quotient polynomial", skip_all)]
+// TODO: Group some arguments to remove the `allow`?
+#[allow(clippy::too_many_arguments)]
 fn quotient_values<SC, A, Mat>(
     air: &A,
     public_values: &Vec<Val<SC>>,

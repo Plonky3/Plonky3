@@ -2,21 +2,21 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::fmt::Debug;
-use p3_commit::PolynomialSpace;
-use p3_matrix::bitrev::BitReversableMatrix;
 
-use crate::verifier::FriError;
-use crate::{BatchOpening, FriConfig, FriProof, TwoAdicFriPcs};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{Mmcs, OpenedValues, Pcs, TwoAdicMultiplicativeCoset};
+use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace, TwoAdicMultiplicativeCoset};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_matrix::bitrev::BitReversableMatrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::horizontally_truncated::HorizontallyTruncated;
 use p3_matrix::Matrix;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use tracing::instrument;
+
+use crate::verifier::FriError;
+use crate::{BatchOpening, FriConfig, FriProof, TwoAdicFriPcs};
 
 /// A hiding FRI PCS. Both MMCSs must also be hiding; this is not enforced at compile time so it's
 /// the user's responsibility to configure.
@@ -167,11 +167,7 @@ where
                     }
                     added_values
                 } else {
-                    // all_random_values[i * h * w..(i + 1) * h * w].to_vec()
-                    all_random_values[i * h * w..(i + 1) * h * w]
-                        .iter()
-                        .map(|v| *v)
-                        .collect()
+                    all_random_values[i * h * w..(i + 1) * h * w].to_vec()
                 };
 
                 // Check the evaluation as the verifier would here, but on challenge = 1, to see whether it works? (and compare it with non random value)
