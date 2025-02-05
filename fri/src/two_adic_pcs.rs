@@ -166,7 +166,7 @@ where
                 let shift = Val::GENERATOR / domain.shift;
                 // Commit to the bit-reversed LDE.
                 self.dft
-                    .coset_lde_batch(evals, self.fri.log_blowup, shift)
+                    .coset_lde_batch(evals, self.fri.log_blowup, shift, None)
                     .bit_reverse_rows()
                     .to_row_major_matrix()
             })

@@ -48,6 +48,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
         mut mat: RowMajorMatrix<F>,
         added_bits: usize,
         shift: F,
+        opt_added_values: Option<&[F]>,
     ) -> RowMajorMatrix<F> {
         let h = mat.height();
         let h_inv = F::from_canonical_usize(h).inverse();
@@ -67,58 +68,27 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
             mat.scale_row(reverse_bits(row, h), weight);
         }
 
-        mat = mat.bit_reversed_zero_pad(added_bits);
-
-        bowers_g(&mut mat.as_view_mut());
-
-        mat
-    }
-
-    #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
-    fn coset_lde_batch_zk(
-        &self,
-        mut mat: RowMajorMatrix<F>,
-        added_bits: usize,
-        shift: F,
-        added_values: &[F],
-    ) -> RowMajorMatrix<F> {
-        let h = mat.height();
-        let w = mat.width();
-        let h_inv = F::from_canonical_usize(h).inverse();
-
-        let actual_s = F::GENERATOR / shift;
-
-        bowers_g_t(&mut mat.as_view_mut());
-
-        // Rescale coefficients in two ways:
-        // - divide by height (since we're doing an inverse DFT)
-        // - multiply by powers of the coset shift (see default coset LDE impl for an explanation)
-        let weights = Powers {
-            base: shift,
-            current: h_inv,
-        }
-        .take(h);
-        for (row, weight) in weights.enumerate() {
-            // reverse_bits because mat is encoded in bit-reversed order
-            mat.scale_row(reverse_bits(row, h), weight);
-        }
-
-        mat = mat.bit_reversed_zero_pad(added_bits + 1);
+        let is_zk = opt_added_values.is_some();
+        mat = mat.bit_reversed_zero_pad(added_bits + is_zk as usize);
 
         // Add a random polynomial that is a multiple of the vanishing polynomial.
-        let new_h = mat.height();
-        for i in 0..h {
-            let rev_i = reverse_bits(i, new_h);
-            let upper_rev_i = reverse_bits(h + i, new_h);
-            for j in 0..w {
-                mat.values[rev_i * w + j] -= added_values[i * w + j]
-                    * actual_s.exp_u64(i as u64)
-                    * h_inv
-                    * shift.exp_u64(i as u64);
-                mat.values[upper_rev_i * w + j] = added_values[i * w + j]
-                    * actual_s.exp_u64(i as u64)
-                    * h_inv
-                    * shift.exp_u64((h + i) as u64);
+        if let Some(added_values) = opt_added_values {
+            let actual_s = F::GENERATOR / shift;
+            let w = mat.width();
+            let new_h = mat.height();
+            for i in 0..h {
+                let rev_i = reverse_bits(i, new_h);
+                let upper_rev_i = reverse_bits(h + i, new_h);
+                for j in 0..w {
+                    mat.values[rev_i * w + j] -= added_values[i * w + j]
+                        * actual_s.exp_u64(i as u64)
+                        * h_inv
+                        * shift.exp_u64(i as u64);
+                    mat.values[upper_rev_i * w + j] = added_values[i * w + j]
+                        * actual_s.exp_u64(i as u64)
+                        * h_inv
+                        * shift.exp_u64((h + i) as u64);
+                }
             }
         }
 

@@ -52,7 +52,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R) {
     let ldes: Vec<RowMajorMatrix<Val>> = (3..10)
         .map(|deg_bits| {
             let evals = RowMajorMatrix::<Val>::rand_nonzero(rng, 1 << deg_bits, 16);
-            let mut lde = dft.coset_lde_batch(evals, 1, shift);
+            let mut lde = dft.coset_lde_batch(evals, 1, shift, None);
             reverse_matrix_index_bits(&mut lde);
             lde
         })

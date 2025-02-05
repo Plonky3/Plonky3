@@ -151,7 +151,7 @@ where
         let dft = Dft::default();
         group.bench_with_input(BenchmarkId::from_parameter(n), &dft, |b, dft| {
             b.iter(|| {
-                dft.coset_lde_batch(messages.clone(), 1, F::GENERATOR);
+                dft.coset_lde_batch(messages.clone(), 1, F::GENERATOR, None);
             });
         });
     }

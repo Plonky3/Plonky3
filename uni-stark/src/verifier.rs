@@ -75,7 +75,7 @@ where
             .iter()
             .all(|qc| qc.len() == <SC::Challenge as FieldExtensionAlgebra<Val<SC>>>::D)
         && if let Some(r_comm) = opened_values.random.clone() {
-            r_comm.len() == 1
+            r_comm.len() == SC::Challenge::D
         } else {
             true
         };

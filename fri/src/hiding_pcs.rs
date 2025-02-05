@@ -98,7 +98,7 @@ where
 
                     self.inner
                         .dft
-                        .coset_lde_batch(evals, self.inner.fri.log_blowup, shift)
+                        .coset_lde_batch(evals, self.inner.fri.log_blowup, shift, None)
                         .bit_reverse_rows()
                         .to_row_major_matrix()
                 } else {
@@ -109,7 +109,12 @@ where
 
                     self.inner
                         .dft
-                        .coset_lde_batch_zk(evals, self.inner.fri.log_blowup, shift, &random_values)
+                        .coset_lde_batch(
+                            evals,
+                            self.inner.fri.log_blowup,
+                            shift,
+                            Some(&random_values),
+                        )
                         .bit_reverse_rows()
                         .to_row_major_matrix()
                 }
@@ -173,7 +178,12 @@ where
                 // Commit to the bit-reversed LDE.
                 self.inner
                     .dft
-                    .coset_lde_batch_zk(evals, self.inner.fri.log_blowup, shift, &random_values)
+                    .coset_lde_batch(
+                        evals,
+                        self.inner.fri.log_blowup,
+                        shift,
+                        Some(&random_values),
+                    )
                     .bit_reverse_rows()
                     .to_row_major_matrix()
             })
@@ -204,14 +214,13 @@ where
     }
 
     fn generate_random_vals(&self, random_len: usize) -> RowMajorMatrix<Val> {
-        let random_vals = vec![self.rng.borrow_mut().gen(); random_len];
+        let random_vals = vec![self.rng.borrow_mut().gen(); random_len * Challenge::D];
         assert!(
             random_len.is_power_of_two(),
-            "random size incorrect {}",
+            "Provided random size for the random bacth FRI polynomial is not a power of 2: {}",
             random_len
         );
-        // let random_vals = self.inner.dft.coset_dft(random_coeffs, Val::ONE);
-        RowMajorMatrix::new(random_vals, 1)
+        RowMajorMatrix::new(random_vals, Challenge::D)
     }
 
     fn open(

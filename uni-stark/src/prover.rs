@@ -115,8 +115,10 @@ where
     challenger.observe(quotient_commit.clone());
 
     let (opt_r_commit, opt_r_data) = if pcs.is_zk() {
-        // We generate random values of size that of the extended trace domain. Since we need `R` of degree that of the extended
+        // We generate random extension field values of the size of the randomized trace randomized. Since we need `R` of degree that of the extended
         // trace -1, we can provide `R` as is to FRI, and the random polynomial will be `(R(X) - R(z)) / (X - z)`.
+        // Since we need a random polynomial defined over the extension field, we actually need to commit to `SC::CHallenge::D`
+        // random polynomials. This is equivalent to flattening on the base field a polynomial over the extension field.
         let random_vals = pcs.generate_random_vals(ext_trace_domain.size());
         let extended_domain = pcs.natural_domain_for_degree(ext_trace_domain.size());
         let (r_commit, r_data) = pcs.commit(vec![(extended_domain, random_vals)], true);

@@ -131,10 +131,11 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         mut mat: RowMajorMatrix<F>,
         added_bits: usize,
         shift: F,
+        opt_added_values: Option<&[F]>,
     ) -> Self::Evaluations {
         let w = mat.width;
-        let h = mat.height();
-        let log_h = log2_strict_usize(h);
+        let mut h = mat.height();
+        let mut log_h = log2_strict_usize(h);
         let mid = log_h.div_ceil(2);
 
         let mut inverse_twiddles_ref_mut = self.inverse_twiddles.borrow_mut();
@@ -153,83 +154,22 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         second_half(&mut mat, mid, &inverse_twiddles.bitrev_twiddles, scale);
         // We skip the final bit-reversal, since the next FFT expects bit-reversed input.
 
-        let lde_elems = w * (h << added_bits);
-        let elems_to_add = lde_elems - w * h;
-        debug_span!("reserve_exact").in_scope(|| mat.values.reserve_exact(elems_to_add));
-
-        let g_big = F::two_adic_generator(log_h + added_bits);
-
-        let mat_ptr = mat.values.as_mut_ptr();
-        let rest_ptr = unsafe { (mat_ptr as *mut MaybeUninit<F>).add(w * h) };
-        let first_slice: &mut [F] = unsafe { slice::from_raw_parts_mut(mat_ptr, w * h) };
-        let rest_slice: &mut [MaybeUninit<F>] =
-            unsafe { slice::from_raw_parts_mut(rest_ptr, lde_elems - w * h) };
-        let mut first_coset_mat = RowMajorMatrixViewMut::new(first_slice, w);
-        let mut rest_cosets_mat = rest_slice
-            .chunks_exact_mut(w * h)
-            .map(|slice| RowMajorMatrixViewMut::new(slice, w))
-            .collect_vec();
-
-        for coset_idx in 1..(1 << added_bits) {
-            let total_shift = g_big.exp_u64(coset_idx as u64) * shift;
-            let coset_idx = reverse_bits_len(coset_idx, added_bits);
-            let dest = &mut rest_cosets_mat[coset_idx - 1]; // - 1 because we removed the first matrix.
-            coset_dft_oop(self, &first_coset_mat.as_view(), dest, total_shift);
-        }
-
-        // Now run a forward DFT on the very first coset, this time in-place.
-        coset_dft(self, &mut first_coset_mat.as_view_mut(), shift);
-
-        // SAFETY: We wrote all values above.
-        unsafe {
-            mat.values.set_len(lde_elems);
-        }
-        BitReversalPerm::new_view(mat)
-    }
-
-    #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits = added_bits))]
-    fn coset_lde_batch_zk(
-        &self,
-        mut mat: RowMajorMatrix<F>,
-        added_bits: usize,
-        shift: F,
-        added_values: &[F],
-    ) -> Self::Evaluations {
-        let w = mat.width;
-        let h = mat.height();
-        let log_h = log2_strict_usize(h);
-        let mid = log_h.div_ceil(2);
-
-        let actual_s = F::GENERATOR / shift;
-        let mut inverse_twiddles_ref_mut = self.inverse_twiddles.borrow_mut();
-        let inverse_twiddles = inverse_twiddles_ref_mut
-            .entry(log_h)
-            .or_insert_with(|| compute_inverse_twiddles(log_h));
-
-        // The first half looks like a normal DIT.
-        reverse_matrix_index_bits(&mut mat);
-        first_half(&mut mat, mid, &inverse_twiddles.twiddles);
-
-        // For the second half, we flip the DIT, working in bit-reversed order.
-        reverse_matrix_index_bits(&mut mat);
-        // We'll also scale by 1/h, as per the usual inverse DFT algorithm.
-        let scale = Some(F::from_canonical_usize(h).inverse());
-        second_half(&mut mat, mid, &inverse_twiddles.bitrev_twiddles, scale);
-        // We skip the final bit-reversal, since the next FFT expects bit-reversed input.
-
-        // In the zk case, double the matrix height so as to randomize polynomials.
-        mat = mat.bit_reversed_zero_pad(1);
-        let h = mat.height();
-        let log_h = log2_strict_usize(h);
-        // tracing::info!("all mat values {:?} len {}", mat.values, mat.values.len());
-        // Add random values here.
-        for i in 0..h / 2 {
-            let rev_i = reverse_bits_len(i, log_h);
-            let upper_rev_i = reverse_bits_len(h / 2 + i, log_h);
-            for j in 0..w {
-                mat.values[rev_i * w + j] -= added_values[i * w + j] * actual_s.exp_u64(i as u64);
-                mat.values[upper_rev_i * w + j] =
-                    added_values[i * w + j] * actual_s.exp_u64(i as u64);
+        if let Some(added_values) = opt_added_values {
+            let actual_s = F::GENERATOR / shift;
+            mat = mat.bit_reversed_zero_pad(1);
+            h = mat.height();
+            log_h = log2_strict_usize(h);
+            // tracing::info!("all mat values {:?} len {}", mat.values, mat.values.len());
+            // Add random values here.
+            for i in 0..h / 2 {
+                let rev_i = reverse_bits_len(i, log_h);
+                let upper_rev_i = reverse_bits_len(h / 2 + i, log_h);
+                for j in 0..w {
+                    mat.values[rev_i * w + j] -=
+                        added_values[i * w + j] * actual_s.exp_u64(i as u64);
+                    mat.values[upper_rev_i * w + j] =
+                        added_values[i * w + j] * actual_s.exp_u64(i as u64);
+                }
             }
         }
 
