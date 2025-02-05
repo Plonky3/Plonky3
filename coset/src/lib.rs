@@ -20,10 +20,9 @@ mod tests;
 #[derive(Clone, Debug)]
 pub struct TwoAdicCoset<F: TwoAdicField> {
     generator: F,
-    generator_inv: F,
     shift: F,
     log_size: usize,
-    // The i-th element, if present, is generator^2^i. The vector starts off as
+    // The i-th element, if present, is generator^(2^i). The vector starts off as
     // vec![generator] and is expanded every time a higher iterated square is
     // computed.
     generator_iter_squares: Vec<F>,
@@ -41,7 +40,6 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
         let generator = F::two_adic_generator(log_size);
         Self {
             generator,
-            generator_inv: generator.inverse(),
             shift,
             log_size,
             generator_iter_squares: vec![generator],
@@ -54,10 +52,6 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
 
     pub fn shift(&self) -> F {
         self.shift
-    }
-
-    pub fn generator_inv(&self) -> F {
-        self.generator_inv
     }
 
     pub fn log_size(&self) -> usize {
@@ -95,7 +89,6 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
 
         TwoAdicCoset {
             generator,
-            generator_inv: generator.inverse(),
             shift: self.shift,
             log_size: self.log_size - log_scale_factor,
             generator_iter_squares,
@@ -109,7 +102,7 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
         new_coset.set_shift(self.shift.exp_power_of_2(log_scale_factor))
     }
 
-    /// Shift the coset by an element of the field
+    /// Shift the coset by an element of the field (multiplicatively)
     pub fn shift_by(&self, shift: F) -> TwoAdicCoset<F> {
         let mut shifted = self.clone();
         shifted.shift = self.shift * shift;
@@ -125,13 +118,23 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
 
     /// Checks if a given element is in the coset
     pub fn contains(&self, element: F) -> bool {
-        // Note that, in a field (this is not true of a general commutative
-        // ring), there is exactly one subgroup of |F^*| of order n for each
-        // divisor n of |F| - 1, and its elements e are uniquely caracterised by
-        // the condition e^n = 1.
+        // Note that, in a finite field F (this is not true of a general finite
+        // commutative ring), there is exactly one subgroup of |F^*| of order n
+        // for each divisor n of |F| - 1, and its elements e are uniquely
+        // caracterised by the condition e^n = 1.
 
-        // NP TODO think about early termination either here or in field: exp_power_of_2
-        (self.shift.inverse() * element).exp_power_of_2(self.log_size) == F::ONE
+        // We check (shift * element)^(2^log_size) = 1, terminating early if
+        // possible.
+        let mut e = self.shift.inverse() * element;
+
+        for _ in 0..self.log_size {
+            if e == F::ONE {
+                return true;
+            }
+            e = e.square();
+        }
+
+        e == F::ONE
     }
 
     pub fn evaluate_interpolation<Mat>(&self, coset_evals: &Mat, point: F) -> Vec<F>
@@ -150,12 +153,18 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
         Polynomial::from_coeffs(dft)
     }
 
-    /// Give the `i`-th element of the coset: `shift * generator^i` (this wraps
-    /// around `2^log_size`)
-    // NP TODO change this comment, now we are handling it
-    // We are limited to u64 because of the `TwoAdicField` interface. If the
-    // latter is expanded, this function can be so as well.
+    /// Returns the `exp`-th element of the coset `shift * generator^exp`. To prevent
+    /// unnecessary computation, `exp` is asserted to be < `2^log_size`.
     pub fn element(&mut self, exp: usize) -> F {
+        // Transferring the responsibility of the modular reduction to the
+        // caller spares handling cases where self.log_size >= usize::BITS here,
+        // which would come at an unnecessary performance cost in the vast
+        // majority of use cases.
+        assert!(
+            exp < 1 << self.log_size,
+            "exp must be less than the size of the coset.\
+            Consider passing the equivalent exp % (1 << log_size) instead"
+        );
         self.shift * self.generator_exp_usize(exp)
     }
 
@@ -182,7 +191,7 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
         dft
     }
 
-    pub fn generator_exp_usize(&mut self, exp: usize) -> F {
+    fn generator_exp_usize(&mut self, exp: usize) -> F {
         // This case needs to be handled separately: otherwise msb_index would
         // be ill defined and could trigger a panic
         if exp == 0 {
@@ -223,8 +232,15 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
     }
 }
 
+/// This asserts the equality of the two cosets as mathematical objects: the
+/// amount of look-up iterated squares of the generator stored in each one is
+/// not considered.
 impl<F: TwoAdicField> PartialEq for TwoAdicCoset<F> {
     fn eq(&self, other: &Self) -> bool {
+        if self.generator == other.generator && self.shift == other.shift {
+            return true;
+        }
+
         // The first equality assumes generators are chosen canonically (as
         // ensured by the TwoAdicField interface). If not, one could simply
         // assert self.generator has the same order as other.generator (this is
