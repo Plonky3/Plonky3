@@ -14,7 +14,6 @@ pub struct VirtualPairCol<F: Field> {
 
 /// A column in a PAIR, i.e. either a preprocessed column or a main trace column.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
-#[serde(bound = "")]
 pub enum PairCol {
     Preprocessed(usize),
     Main(usize),
