@@ -1,6 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Mul;
+use serde::{Deserialize, Serialize};
 
 use p3_field::{AbstractField, Field};
 
@@ -12,7 +13,7 @@ pub struct VirtualPairCol<F: Field> {
 }
 
 /// A column in a PAIR, i.e. either a preprocessed column or a main trace column.
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub enum PairCol {
     Preprocessed(usize),
     Main(usize),
