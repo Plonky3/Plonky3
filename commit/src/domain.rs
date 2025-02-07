@@ -9,58 +9,110 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 
+/// Given a `PolynomialSpace`, `S`, and a subset `R`, a lagrange selector `P_R` is
+/// a polynomial which is not equal to `0` for every element in `R` but is equal
+/// to `0` for every element of `S` not in `R`.
+///
+/// This struct contains either a single or a collection of evaluations of a
+/// collection of simple lagrange selector over a particular `PolynomialSpace`.
+///
+/// The Lagrange selector is normalized if it is equal to `1` for every element in `R`.
+/// Note that the LagrangeSelectors given here are usually not normalized.
 #[derive(Debug)]
 pub struct LagrangeSelectors<T> {
+    /// A Lagrange selector corresponding to the first point in the space.
     pub is_first_row: T,
+    /// A Lagrange selector corresponding to the last point in the space.
     pub is_last_row: T,
+    /// A Lagrange selector corresponding the subset of all but the last point.
     pub is_transition: T,
+    /// The inverse of the zerofier which is a lagrange selector corresponding to the empty set
     pub inv_zeroifier: T,
 }
 
+/// Fixing a field `F`, `PolynomialSpace<Val = F>` is an abstract indexed subset of `F^n`
+/// with some additional algebraic structure.
+///
+/// We do not expect `PolynomialSpace` to store this subset, instead it stores
+/// some associated data which will allow it to generate the subset or pieces of
+/// it when desired.
+///
+/// Each `PolynomialSpace` should be part of a generic family of similar spaces
+/// such that we can decompose the space into `2` smaller spaces down to
+/// either single or two point sets. There should be a disjoint collection of
+/// `PolynomialSpaces` for any given size which partition some sensible
+/// subgroup of `F^n`.
+///
+/// The canonical example of a `PolynomialSpace` is the a cosets `gH` of
+/// a two-adic subgroup `H` of the multiplicative group `F*`.
+///
+/// Another example is a twin-cosets of subgroups of the circle group
+/// contained in `F^2`.
 pub trait PolynomialSpace: Copy {
+    /// The base field `F`.
     type Val: Field;
 
+    /// The number of elements of the space.
     fn size(&self) -> usize;
 
+    /// The first point in the space.
     fn first_point(&self) -> Self::Val;
 
-    // This is only defined for cosets.
+    /// An algebraic function which takes the i'th element of the space and returns
+    /// the (i+1)'th. When `PolynomialSpace` corresponds to a coset, `gH` this
+    /// function is multiplication by `h` for a chosen generator `h` of `H`.
+    ///
+    /// It may or may not exist for other `PolynomialSpaces`.
     fn next_point<Ext: ExtensionField<Self::Val>>(&self, x: Ext) -> Option<Ext>;
 
-    // There are many choices for this, but we must pick a canonical one
-    // for both prover/verifier determinism and LDE caching.
+    /// Return another `PolynomialSpace` with size `min_size` disjoint from this space.
+    ///
+    /// This fixes a canonical choice for prover/verifier determinism and LDE caching.
     fn create_disjoint_domain(&self, min_size: usize) -> Self;
 
-    /// Split this domain into `num_chunks` even chunks.
-    /// `num_chunks` is assumed to be a power of two.
+    /// Split the `PolynomialSpaces` into `num_chunks` smaller `PolynomialSpaces` of equal size.
+    ///
+    /// `num_chunks` is assumed to be a power of two and must divide `self.size()`
     fn split_domains(&self, num_chunks: usize) -> Vec<Self>;
-    // Split the evals into chunks of evals, corresponding to each domain
-    // from `split_domains`.
+
+    /// Split a set of polynomial evaluations over this `PolynomialSpace` into a vector
+    /// of polynomial evaluations over each `PolynomialSpace` generated from `split_domains`.
     fn split_evals(
         &self,
         num_chunks: usize,
         evals: RowMajorMatrix<Self::Val>,
     ) -> Vec<RowMajorMatrix<Self::Val>>;
 
+    /// Compute the zerofier of the space at the given point.
     fn zp_at_point<Ext: ExtensionField<Self::Val>>(&self, point: Ext) -> Ext;
 
-    // Unnormalized
+    /// Compute several lagrange selectors at a given point.
+    ///
+    /// Note that these may be unnormalized.
     fn selectors_at_point<Ext: ExtensionField<Self::Val>>(
         &self,
         point: Ext,
     ) -> LagrangeSelectors<Ext>;
 
-    // Unnormalized
+    /// Compute several lagrange selectors at all points in the given coset.
+    ///
+    /// Note that these may be unnormalized.
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>>;
 }
 
+/// A coset of the form `gH` where `H` is the unique multiplicative subgroup of order `n = 2^{log_n}`.
+///
+/// Fixing a generator `h` of `H`, we index this subgroup by `{g, gh, gh^2, ..., gh^{-1}}`.
 #[derive(Copy, Clone, Debug)]
 pub struct TwoAdicMultiplicativeCoset<Val: TwoAdicField> {
+    /// The log of the order of the subgroup.
     pub log_n: usize,
+    /// The shift defining the coset.
     pub shift: Val,
 }
 
 impl<Val: TwoAdicField> TwoAdicMultiplicativeCoset<Val> {
+    /// Return the element `h` which generates the subgroup `H`.
     fn gen(&self) -> Val {
         Val::two_adic_generator(self.log_n)
     }
@@ -76,6 +128,8 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     fn first_point(&self) -> Self::Val {
         self.shift
     }
+
+    /// Getting the next point corresponds to multiplication by the generator.
     fn next_point<Ext: ExtensionField<Val>>(&self, x: Ext) -> Option<Ext> {
         Some(x * self.gen())
     }
@@ -111,10 +165,21 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
             })
             .collect()
     }
+
+    /// Compute the zerofier polynomial at the given point:
+    ///
+    /// `Z_{gH}(X) = g^{-|H|}\prod_{h \in H} (X - gh) = (g^{-1}X)^|H| - 1`
     fn zp_at_point<Ext: ExtensionField<Val>>(&self, point: Ext) -> Ext {
         (point * self.shift.inverse()).exp_power_of_2(self.log_n) - Ext::ONE
     }
 
+    /// Compute some lagrange selectors at the given point:
+    ///
+    /// Defining the zerofier by `Z_{gH}(X) = g^{-|H|}\prod_{h \in H} (X - gh) = (g^{-1}X)^|H| - 1` return:
+    /// - `Z_{gH}(X)/(g^{-1}X - 1)`: The lagrange selector of the point `g`.
+    /// - `Z_{gH}(X)/(g^{-1}X - h^{-1})`: The lagrange selector of the point `gh^{-1}` where `h` is the generator of `H`.
+    /// - `(g^{-1}X - h^{-1})`: The lagrange selector of the subset consisting of everything but the point `gh^{-1}`.
+    /// - `1/Z_{gH}(X)`: The inverse of the zerofier.
     fn selectors_at_point<Ext: ExtensionField<Val>>(&self, point: Ext) -> LagrangeSelectors<Ext> {
         let unshifted_point = point * self.shift.inverse();
         let z_h = unshifted_point.exp_power_of_2(self.log_n) - Ext::ONE;
@@ -126,6 +191,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         }
     }
 
+    /// Compute the lagrange selectors of our space at every point in the coset.
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Val>> {
         assert_eq!(self.shift, Val::ONE);
         assert_ne!(coset.shift, Val::ONE);

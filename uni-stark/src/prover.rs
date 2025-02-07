@@ -10,7 +10,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
-use tracing::{info_span, instrument};
+use tracing::{debug_span, info_span, instrument};
 
 use crate::{
     get_symbolic_constraints, Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, Proof,
@@ -140,7 +140,8 @@ where
 {
     let quotient_size = quotient_domain.size();
     let width = trace_on_quotient_domain.width();
-    let mut sels = trace_domain.selectors_on_coset(quotient_domain);
+    let mut sels = debug_span!("Compute Selectors")
+        .in_scope(|| trace_domain.selectors_on_coset(quotient_domain));
 
     let qdb = log2_strict_usize(quotient_domain.size()) - log2_strict_usize(trace_domain.size());
     let next_step = 1 << qdb;
