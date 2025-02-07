@@ -207,7 +207,7 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
         // majority of use cases.
         assert!(
             index < 1 << self.log_size,
-            "index must be less than the size of the coset.\
+            "index must be less than the size of the coset. \
             Consider passing the equivalent index % (1 << log_size) instead"
         );
         self.shift * self.generator_exp_usize(index)
@@ -227,7 +227,7 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
     pub fn element_immutable(&self, index: u64) -> F {
         assert!(
             index < 1 << self.log_size,
-            "index must be less than the size of the coset.\
+            "index must be less than the size of the coset. \
             Consider passing the equivalent index % (1 << log_size) instead"
         );
 

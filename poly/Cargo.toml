@@ -13,6 +13,7 @@ rand = { workspace = true, optional = true }
 
 [dev-dependencies]
 p3-baby-bear.workspace = true
+rand.workspace = true
 
 [features]
 test-utils = ["dep:rand"]

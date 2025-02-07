@@ -1,7 +1,8 @@
 use core::iter;
 
 use itertools::{iterate, izip, Itertools};
-use p3_field::{Field, TwoAdicField};
+use p3_challenger::{CanObserve, FieldChallenger};
+use p3_field::{ExtensionField, Field, FieldExtensionAlgebra, TwoAdicField};
 use p3_poly::Polynomial;
 
 pub(crate) fn compute_pow(security_level: usize, error: f64) -> f64 {
@@ -147,6 +148,34 @@ fn fold_evaluation_pair<F: TwoAdicField>(eval: F, eval_inv: F, gamma: F) -> F {
     // TODO two inverse
     let inv_two = F::TWO.inverse();
     inv_two * ((F::ONE + gamma) * eval + (F::ONE - gamma) * eval_inv)
+}
+
+pub(crate) fn observe_ext_slice_with_size<F: Field, E: ExtensionField<F>, C: FieldChallenger<F>>(
+    challenger: &mut C,
+    values: &[E],
+) {
+    let size: u64 = values.len().try_into().expect("Slice too long to observe");
+    challenger.observe_ext_element(E::from_wrapped_u64(size));
+    values
+        .iter()
+        .for_each(|&v| challenger.observe_ext_element(v));
+}
+
+pub(crate) fn observe_small_usize_slice<F: Field, C: CanObserve<F>>(
+    challenger: &mut C,
+    values: &[usize],
+    absorb_size: bool,
+) {
+    if absorb_size {
+        let size: u64 = values.len().try_into().expect("Slice too long to observe");
+        challenger.observe(F::from_wrapped_u64(size));
+    }
+
+    values.iter().for_each(|&v| {
+        challenger.observe(F::from_wrapped_u64(
+            v.try_into().expect("Value too large to observe"),
+        ))
+    });
 }
 
 #[cfg(test)]

@@ -118,10 +118,10 @@ fn test_coset_iterator() {
 }
 
 #[test]
-#[should_panic = "exp must be less than the size of the coset."]
+#[should_panic = "index must be less than the size of the coset."]
 // Checks that attemtping to access an element at an index larger than the coset's
 // size is disallowed (motivation in lib.rs/element)
-fn test_element_exp_too_large() {
+fn test_element_index_too_large() {
     let mut coset = TwoAdicCoset::<BB>::new(BB::ONE, 3);
     coset.element(1 << 3);
 }

@@ -18,6 +18,12 @@ p3-util.workspace = true
 itertools.workspace = true
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
 
+p3-baby-bear = { workspace = true, optional = true }
+p3-symmetric = { workspace = true, optional = true }
+p3-merkle-tree = { workspace = true, optional = true }
+rand = { version = "0.8.5", optional = true }
+rand_chacha = { version = "0.3.1", optional = true }
+
 [dev-dependencies]
 p3-baby-bear.workspace = true
 p3-bn254-fr.workspace = true
@@ -34,3 +40,10 @@ p3-symmetric.workspace = true
 criterion = "0.5.1"
 rand = "0.8.5"
 rand_chacha = "0.3.1"
+
+[[bench]]
+name = "prover"
+harness = false
+
+[features]
+test-utils = ["dep:rand", "dep:rand_chacha", "dep:p3-baby-bear", "dep:p3-symmetric", "dep:p3-merkle-tree"]

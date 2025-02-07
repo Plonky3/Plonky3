@@ -7,30 +7,42 @@ use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 
-use crate::config::RoundConfig;
-use crate::proof::RoundProof;
-use crate::utils::{fold_polynomial, multiply_by_power_polynomial};
-use crate::{StirConfig, StirProof};
+use crate::{
+    config::{observe_public_parameters, RoundConfig},
+    proof::RoundProof,
+    utils::{fold_polynomial, multiply_by_power_polynomial, observe_ext_slice_with_size},
+    Messages, StirConfig, StirProof,
+};
 use p3_coset::TwoAdicCoset;
 use p3_poly::Polynomial;
 
 #[cfg(test)]
 mod tests;
 
+/// Witness for the STIR protocol produced by the `commit` method.
 pub struct StirWitness<F: TwoAdicField, M: Mmcs<F>> {
+    // Domain L_0
+    pub(crate) domain: TwoAdicCoset<F>,
+
+    // Polynomial f_0 which was committed to
+    pub(crate) polynomial: Polynomial<F>,
+
+    // Merkle tree whose leaves are stacked_evals
+    pub(crate) merkle_tree: M::ProverData<RowMajorMatrix<F>>,
+}
+
+// Witness enriched with additional information (round number and folding
+// randomness) received and produced by the method prove_round
+struct StirRoundWitness<F: TwoAdicField, M: Mmcs<F>> {
     // The indices are given in the following frame of reference: Self is
-    // produced inside prove_round for round i (in {1, ..., num_rounds}). The
-    // final round, with index num_rounds + 1, does not produce a StirWitness.
+    // produced inside prove_round for round i (in {1, ..., M}).
+    // final round, with index M + 1, does not produce a StirRoundWitness.
 
     // Domain L_i
     pub(crate) domain: TwoAdicCoset<F>,
 
     // Polynomial f_i
     pub(crate) polynomial: Polynomial<F>,
-
-    // Stacked evaluations of g_i = Fold(f_{i - 1}, ...)
-    // merkle_tree above is a commitment to this
-    pub(crate) stacked_evals: RowMajorMatrix<F>,
 
     // Merkle tree whose leaves are stacked_evals
     pub(crate) merkle_tree: M::ProverData<RowMajorMatrix<F>>,
@@ -40,25 +52,22 @@ pub struct StirWitness<F: TwoAdicField, M: Mmcs<F>> {
 
     // Folding randomness r_i to be used in the next round
     pub(crate) folding_randomness: F,
-    // Exceptionally, the first witness (passed to prove_round for round 1) is to be understood as follows:
-    // - domain: L_0 = w * <w> = <w>
-    // - polynomial: f_0
-    // - stacked_evals: stacked evals of f_0
-    // - merkle_tree = commitment to staked_evals
-    // - round = 0
-    // NP TODO remove comment in brackets if this changes to an option
-    // - folding_randomness: r_0 (set to 1 in commit, then overwritten)
 }
 
 // NP TODO maybe have this and prove() receive &polynomial instead
 pub fn commit<F, M>(
     config: &StirConfig<F, M>,
+    // afsdfsfdsdfsfssd
     polynomial: Polynomial<F>,
 ) -> (StirWitness<F, M>, M::Commitment)
 where
     F: TwoAdicField,
     M: Mmcs<F>,
 {
+    assert!(polynomial
+        .degree()
+        .is_none_or(|d| d < 1 << (config.log_starting_degree() + config.log_starting_inv_rate())));
+
     let log_size = config.log_starting_degree() + config.log_starting_inv_rate();
 
     // Initial domain L_0. The chosen sequence of domains is:
@@ -91,20 +100,16 @@ where
             domain,
             polynomial,
             merkle_tree,
-            stacked_evals,
-            round: 0,
-            // NP TODO handle more elegantly? Use Option<F>
-            folding_randomness: F::ONE,
         },
         commitment,
     )
 }
 
 // NP TODO pub fn prove_on_evals
-// NP TODO commit_and_prove
 pub fn prove<F, EF, M, C>(
     config: &StirConfig<EF, M>,
-    polynomial: Polynomial<EF>,
+    witness: StirWitness<EF, M>,
+    commitment: M::Commitment,
     challenger: &mut C,
 ) -> StirProof<EF, M, C::Witness>
 where
@@ -113,20 +118,24 @@ where
     M: Mmcs<EF>,
     C: FieldChallenger<F> + GrindingChallenger + CanObserve<M::Commitment>,
 {
-    assert!(polynomial
-        .degree()
-        .is_none_or(|d| d < 1 << (config.log_starting_degree() + config.log_starting_inv_rate())));
-
-    // NP TODO: Should the prover call commit like in Plonky3's FRI?
-    // or should be called separately like in Giacomo's code?
-    let (mut witness, commitment) = commit(config, polynomial);
+    // Observe public parameters
+    observe_public_parameters(config.parameters(), challenger);
 
     // Observe the commitment
+    challenger.observe(F::from_canonical_u8(Messages::Commitment as u8));
     challenger.observe(commitment.clone());
+
+    // Sample the folding randomness
+    challenger.observe(F::from_canonical_u8(Messages::FoldingRandomness as u8));
     let folding_randomness = challenger.sample_ext_element();
 
-    // NP TODO: Handle more elegantly?
-    witness.folding_randomness = folding_randomness;
+    let mut witness = StirRoundWitness {
+        domain: witness.domain,
+        polynomial: witness.polynomial,
+        merkle_tree: witness.merkle_tree,
+        round: 0,
+        folding_randomness,
+    };
 
     let mut round_proofs = vec![];
     for _ in 0..config.num_rounds() - 1 {
@@ -138,7 +147,7 @@ where
     // Final round
     let log_last_folding_factor = config.log_last_folding_factor();
 
-    // p in the article
+    // p in the article, which could also be understood as g_{M + 1}
     let final_polynomial = fold_polynomial(
         &witness.polynomial,
         witness.folding_randomness,
@@ -150,6 +159,12 @@ where
     // Logarithm of |(L_M)^(k_M)|
     let log_query_domain_size = witness.domain.log_size() - log_last_folding_factor;
 
+    // Absorb the final polynomial
+    challenger.observe(F::from_canonical_u8(Messages::FinalPolynomial as u8));
+    observe_ext_slice_with_size(challenger, final_polynomial.coeffs());
+
+    // Sample the queried indices
+    challenger.observe(F::from_canonical_u8(Messages::FinalQueryIndices as u8));
     let queried_indices: Vec<u64> = (0..final_queries)
         .map(|_| challenger.sample_bits(log_query_domain_size) as u64)
         .unique()
@@ -181,9 +196,9 @@ where
 
 fn prove_round<F, EF, M, C>(
     config: &StirConfig<EF, M>,
-    witness: StirWitness<EF, M>,
+    witness: StirRoundWitness<EF, M>,
     challenger: &mut C,
-) -> (StirWitness<EF, M>, RoundProof<EF, M, C::Witness>)
+) -> (StirRoundWitness<EF, M>, RoundProof<EF, M, C::Witness>)
 where
     F: Field,
     EF: TwoAdicField + ExtensionField<F>,
@@ -203,11 +218,10 @@ where
         log_inv_rate,
     } = config.round_config(witness.round).clone();
 
-    let StirWitness {
+    let StirRoundWitness {
         domain,
         polynomial,
         merkle_tree,
-        stacked_evals,
         round,
         folding_randomness,
     } = witness;
@@ -244,6 +258,8 @@ where
         .mmcs_config()
         .commit_matrix(new_stacked_evals.clone());
 
+    // Absorb the commitment
+    challenger.observe(F::from_canonical_u8(Messages::RoundCommitment as u8));
     challenger.observe(new_commitment.clone());
 
     // ========= OOD SAMPLING =========
@@ -252,6 +268,7 @@ where
 
     let mut ood_samples = Vec::new();
 
+    challenger.observe(F::from_canonical_u8(Messages::OodSamples as u8));
     while ood_samples.len() < num_ood_samples {
         let el: EF = challenger.sample_ext_element();
         if !new_domain.contains(el) {
@@ -266,6 +283,7 @@ where
         .collect();
 
     // Observe the betas
+    challenger.observe(F::from_canonical_u8(Messages::Betas as u8));
     betas
         .iter()
         .for_each(|&beta| challenger.observe_ext_element(beta));
@@ -273,14 +291,17 @@ where
     // ========= STIR MESSAGE =========
 
     // Sample ramdomness for degree correction
+    challenger.observe(F::from_canonical_u8(Messages::CombRandomness as u8));
     let comb_randomness = challenger.sample_ext_element();
 
     // Sample folding randomness for the next round
+    challenger.observe(F::from_canonical_u8(Messages::FoldingRandomness as u8));
     let new_folding_randomness = challenger.sample_ext_element();
 
     // Sample queried indices of elements in L_{i - 1}^k_{i - 1}
     let log_query_domain_size = domain.log_size() - log_folding_factor;
 
+    challenger.observe(F::from_canonical_u8(Messages::QueryIndices as u8));
     let queried_indices: Vec<usize> = (0..num_queries)
         .map(|_| challenger.sample_bits(log_query_domain_size))
         .unique()
@@ -347,21 +368,19 @@ where
 
     // Compute the answer polynomial and add it to the transcript
     let ans_polynomial = Polynomial::<EF>::lagrange_interpolation(quotient_answers.clone());
-    ans_polynomial
-        .coeffs()
-        .iter()
-        .for_each(|&c| challenger.observe_ext_element(c));
+    challenger.observe(F::from_canonical_u8(Messages::AnsPolynomial as u8));
+    observe_ext_slice_with_size(challenger, ans_polynomial.coeffs());
+
     // Compute the shake polynomial and add it to the transcript
     let shake_polynomial = compute_shake_polynomial(&ans_polynomial, quotient_answers.into_iter());
-    shake_polynomial
-        .coeffs()
-        .iter()
-        .for_each(|&c| challenger.observe_ext_element(c));
+    challenger.observe(F::from_canonical_u8(Messages::ShakePolynomial as u8));
+    observe_ext_slice_with_size(challenger, shake_polynomial.coeffs());
 
     // Shake randomness This is only used by the verifier, but it doesn't need
     // to be kept private. Therefore, the verifier can squeeze it from the
     // sponge, in which case the prover must follow suit to keep the sponges
     // in sync.
+    challenger.observe(F::from_canonical_u8(Messages::ShakeRandomness as u8));
     let _shake_randomness: EF = challenger.sample_ext_element();
 
     // Compute the quotient polynomial
@@ -380,11 +399,10 @@ where
     }
 
     (
-        StirWitness {
+        StirRoundWitness {
             domain: new_domain,
             polynomial: witness_polynomial,
             merkle_tree: new_merkle_tree,
-            stacked_evals: new_stacked_evals,
             folding_randomness: new_folding_randomness,
             round: round + 1,
         },

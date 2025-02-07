@@ -1,6 +1,6 @@
 use crate::{
     proof::RoundProof,
-    prover::prove,
+    prover::{commit, prove, StirRoundWitness},
     test_utils::*,
     utils::{field_element_from_isize, fold_polynomial},
 };
@@ -13,7 +13,7 @@ use p3_matrix::{dense::RowMajorMatrix, Dimensions, Matrix};
 use p3_poly::{test_utils::rand_poly, Polynomial};
 use rand::Rng;
 
-use super::{prove_round, RoundConfig, StirWitness};
+use super::{prove_round, RoundConfig};
 
 // NP TODO either remove the manual values or use them by reducing the soundness
 #[test]
@@ -82,11 +82,10 @@ fn test_prove_round_zero() {
         .mmcs_config()
         .commit_matrix(stacked_original_evals.clone());
 
-    let witness = StirWitness {
+    let witness = StirRoundWitness {
         domain: original_domain.clone(),
         polynomial: f,
         merkle_tree,
-        stacked_evals: stacked_original_evals,
         round,
         folding_randomness: BBExt::from_canonical_usize(2),
     };
@@ -99,7 +98,7 @@ fn test_prove_round_zero() {
     let expected_round = 1;
     let expected_folding_randomness = BBExt::ONE;
 
-    let StirWitness {
+    let StirRoundWitness {
         domain,
         polynomial,
         folding_randomness,
@@ -207,11 +206,10 @@ fn test_prove_round_large() {
         .mmcs_config()
         .commit_matrix(stacked_original_evals.clone());
 
-    let witness = StirWitness {
+    let witness = StirRoundWitness {
         domain: original_domain.clone(),
         polynomial: f_0.clone(),
         merkle_tree,
-        stacked_evals: stacked_original_evals,
         round,
         folding_randomness: r_0,
     };
@@ -220,7 +218,7 @@ fn test_prove_round_large() {
 
     // =============== Witness Checks ===============
 
-    let StirWitness {
+    let StirRoundWitness {
         domain,
         polynomial: f_1,
         folding_randomness,
@@ -287,10 +285,8 @@ fn test_prove_round_large() {
     let expected_shake_polynomial = quotient_set_points
         .into_iter()
         .map(|(x, y)| {
-            let (quotient, _) = Polynomial::divide_by_vanishing_linear_polynomial(
-                &(&ans_polynomial - &Polynomial::constant(y)),
-                x,
-            );
+            let (quotient, _) = (&ans_polynomial - &Polynomial::constant(y))
+                .divide_by_vanishing_linear_polynomial(x);
             quotient
         })
         .fold(Polynomial::zero(), |sum, next_poly| &sum + &next_poly);
@@ -308,9 +304,11 @@ fn test_prove() {
 
     let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
 
+    let (witness, commitment) = commit(&config, polynomial);
+
     let mut challenger = test_bb_challenger();
 
-    let proof = prove(&config, polynomial, &mut challenger);
+    let proof = prove(&config, witness, commitment, &mut challenger);
 
     // Final-degree testing
     assert_eq!(config.log_stopping_degree(), 2);

@@ -1,18 +1,20 @@
+//! Interface for working with dense univariate polynomials
+
 #![no_std]
 
 extern crate alloc;
 
-use core::clone::Clone;
-use core::iter;
-use core::iter::Product;
-use core::ops::{Add, AddAssign, Div, Mul, Neg, Sub};
+use core::{
+    clone::Clone,
+    iter::Product,
+    ops::{Add, AddAssign, Div, Mul, Neg, Sub},
+};
 
 use alloc::{vec, vec::Vec};
-use itertools::Itertools;
-use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
+use itertools::{iterate, Itertools};
+use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::{Field, TwoAdicField};
-use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::Matrix;
+use p3_matrix::{dense::RowMajorMatrix, Matrix};
 
 #[cfg(test)]
 mod tests;
@@ -28,7 +30,10 @@ pub struct Polynomial<F: Field> {
 }
 
 impl<F: Field> Polynomial<F> {
+    /// Returns the coefficients of the polynomial in increasing-degree order
+    /// with no leading zeros
     pub fn coeffs(&self) -> &[F] {
+        // This never has leading zeros for users of the public interface
         &self.coeffs
     }
 
@@ -42,36 +47,52 @@ impl<F: Field> Polynomial<F> {
         Self::constant(F::ONE)
     }
 
-    // Returns the constant polynomial with the given constant term
+    /// Returns the polynomial with the given coefficients
+    pub fn from_coeffs(coeffs: Vec<F>) -> Self {
+        Self { coeffs }.truncate_leading_zeros()
+    }
+
+    /// Returns the constant term of the polynomial
+    pub fn constant_term(&self) -> F {
+        *self.coeffs.first().unwrap_or(&F::ZERO)
+    }
+
+    /// Returns the constant polynomial with the given constant term
     pub fn constant(constant: F) -> Self {
         Self {
             coeffs: vec![constant],
         }
     }
 
-    /// Returns the monic polynomial of degree 1 with no constant term
+    /// Returns the unique monic polynomial of degree 1 with no constant term
     pub fn x() -> Self {
         Self {
             coeffs: vec![F::ZERO, F::ONE],
         }
     }
 
-    /// Returns the linear polynomial x - point
+    /// Returns the linear polynomial `x - point`
     pub fn vanishing_linear_polynomial(point: F) -> Self {
         Self {
             coeffs: vec![-point, F::ONE],
         }
     }
 
-    /// Returns the quotient and remainder of the division of `polynomial` by `x
-    /// - point`. The remainder is the constant polynomial `polynomial(point)`,
-    /// and it is returned as an element of the field for convenience.
-    pub fn divide_by_vanishing_linear_polynomial(polynomial: &Self, point: F) -> (Self, F) {
-        let mut quotient_coeffs = polynomial.coeffs().to_vec();
+    /// Returns the quotient and remainder of the division of `self` by
+    /// `x - point`. Since the remainder is the constant polynomial with value
+    /// `self(point)`, it is returned as field element for convenience.
+    pub fn divide_by_vanishing_linear_polynomial(&self, point: F) -> (Self, F) {
+        if self.is_zero() {
+            return (Self::zero(), F::ZERO);
+        }
 
-        let mut last = *quotient_coeffs.iter().last().unwrap();
+        let mut quotient_coeffs = self.coeffs.clone();
 
-        for new_c in quotient_coeffs.iter_mut().rev().skip(1) {
+        let mut quotient_coeffs_iter = quotient_coeffs.iter_mut().rev();
+
+        let mut last = *quotient_coeffs_iter.next().unwrap();
+
+        for new_c in quotient_coeffs_iter {
             *new_c += point * last;
             last = *new_c;
         }
@@ -81,14 +102,8 @@ impl<F: Field> Polynomial<F> {
         (Polynomial::from_coeffs(quotient_coeffs), remainder)
     }
 
-    pub fn from_coeffs(coeffs: Vec<F>) -> Self {
-        Self { coeffs }.truncate_leading_zeros()
-    }
-
-    pub fn constant_term(&self) -> F {
-        *self.coeffs.first().unwrap_or(&F::ZERO)
-    }
-
+    // Internal method which eliminates leading zeros from the polynomial,
+    // mutating the polynomial and returning it.
     fn truncate_leading_zeros(mut self) -> Self {
         if self.is_zero() || !self.coeffs.last().unwrap().is_zero() {
             return self;
@@ -109,20 +124,15 @@ impl<F: Field> Polynomial<F> {
         self
     }
 
-    // Horner's method for polynomial evaluation
-    fn horner_evaluate(poly_coeffs: &[F], point: &F) -> F {
-        poly_coeffs
+    /// Evaluates `self` at the given `point` using Horner's method
+    pub fn evaluate(&self, point: &F) -> F {
+        self.coeffs
             .iter()
             .rfold(F::ZERO, move |result, coeff| result * *point + *coeff)
     }
 
-    pub fn evaluate(&self, point: &F) -> F {
-        if self.is_zero() {
-            return F::ZERO;
-        }
-        Self::horner_evaluate(&self.coeffs, point)
-    }
-
+    /// Returns `None` if self is the zero polynomial and `Some(d)` if `self` is
+    /// a (non-zero) polynomial of degree `d`
     pub fn degree(&self) -> Option<usize> {
         if self.is_zero() {
             None
@@ -131,27 +141,41 @@ impl<F: Field> Polynomial<F> {
         }
     }
 
+    /// Returns `true` if and only if `self` is the zero polynomial
     pub fn is_zero(&self) -> bool {
         self.coeffs.is_empty()
     }
 
+    /// Returns `true` if and only if `self` is a constant polynomial
     pub fn is_constant(&self) -> bool {
         self.coeffs.len() <= 1
     }
 
-    pub fn divide_with_q_and_r(&self, divisor: &Self) -> (Self, Self) {
-        assert!(!divisor.is_zero(), "Divisor is zero");
+    /// Returns the unique polynomials `q` and `r` such that
+    /// `self = q * divisor + r` and `r` (is zero or) has degree less than
+    /// `divisor`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `divisor` is the zero polynomial
+    // ** Credit to Arkworks/algebra **
+    pub fn divide_with_remainder(&self, divisor: &Self) -> (Self, Self) {
+        let d_deg = divisor
+            .degree()
+            .expect("Cannot divide by the zero polynomial");
 
-        let d_deg = divisor.degree().unwrap();
-
+        // Trivial division cases
         if self.is_zero() {
             return (Self::zero(), Self::zero());
-        } else if self.degree() < divisor.degree() {
+        }
+
+        let d_self = self.degree().unwrap();
+
+        if d_self < d_deg {
             return (Self::zero(), self.clone());
         }
 
-        let mut quotient_coeffs =
-            vec![F::ZERO; self.degree().unwrap() - divisor.degree().unwrap() + 1];
+        let mut quotient_coeffs = vec![F::ZERO; d_self - d_deg + 1];
         let mut remainder = self.clone();
 
         let divisor_leading_coeff_inv = divisor.coeffs.last().unwrap().inverse();
@@ -169,44 +193,33 @@ impl<F: Field> Polynomial<F> {
             }
         }
 
-        (Polynomial::from_coeffs(quotient_coeffs), remainder)
+        (
+            Polynomial::from_coeffs(quotient_coeffs),
+            remainder.truncate_leading_zeros(),
+        )
     }
-}
 
-impl<F: TwoAdicField> Polynomial<F> {
-    // NP TODO: Confirm the naive algorithm is best
-    // 1 (naive)
-    // (x - x_0)(x - x_1): four products, results in 3 coefficients
-    // [(x - x_0)(x - x_1)] * (x - x_1): six products, results in 4 coefficients
-    // [[(x - x_0)(x - x_1)] * (x - x_1)] * (x - x_2): eight products, results in 5 coefficients
-
-    // 2 (as it works now)
-    // (x - x_0)(x - x_1): 2 FFT of size 4, 4 products, 1 IDFT of size 4                                (4
-    // [(x - x_0)(x - x_1)] * (x - x_1): 2 FFT of size 4, 4 products, 1 IDFT of size 4                  (4
-    // [[(x - x_0)(x - x_1)] * (x - x_1)] * (x - x_2): 2 FFT of size 8, 8 products, 1 IDFT of size 8    (8
-    // another 3 times: 2 FFT of size 8, 8 products, 1 IDFT of size 8
-
-    // 2.5:
-    // (worse)
-
-    // 2.75: Tree version of 2.5
-
-    // 3 (bad)
-    // FFT:
-    // n times FFT of size n = n * n * log(n)
-    // n products each of size n = n^2
-    // one time FFT of size n = n * log(n)
-
-    // NP TODO doc
-    // mention empty lists are mapped to zero
-    // mention dedup, careful with the expected degree!
+    /// Returns the unique monic polynomial of degree equal to the number
+    /// of _distinct_ elements in `points` that vanishes at each
+    /// of those elements, that is, (x - distinct_points[0]) * (x -
+    /// distinct_points[1]) * ... * (x - distinct_points[n - 1]), where
+    /// `distinct_points` contains the distinct elements of `points` and `n` is
+    /// its length.
+    ///     
+    /// # Panics
+    ///
+    /// Panics if `points` is empty
     pub fn vanishing_polynomial(points: impl IntoIterator<Item = F>) -> Polynomial<F> {
+        // Deduplicating the points
         let mut points = points.into_iter().unique().collect_vec();
 
-        if points.is_empty() {
-            panic!("The vanishing polynomial of an empty set is undefined");
-        }
+        assert!(
+            !points.is_empty(),
+            "The vanishing polynomial of an empty set is undefined"
+        );
 
+        // We iteratively multiply the polynomial (x - points[0]) 1 by each of the
+        // vanishing polynomials (x - points[i]) for i > 0
         let mut coeffs = vec![-points.pop().unwrap(), F::ONE];
 
         while let Some(point) = points.pop() {
@@ -230,22 +243,26 @@ impl<F: TwoAdicField> Polynomial<F> {
         Polynomial::from_coeffs(coeffs)
     }
 
-    // NP TODO lagrange_interpolate_and_eval(
-
-    /// Returns the unique polynomial of degree less than `point_to_evals.len()`
-    /// that evaluates to `y_i` at `x_i`, where `(x_i, y_i)` refers to
-    /// `point_to_evals[i]`. If two points in `point_to_evals` have the same x
-    /// coordinate, the following happens:
+    /// Returns the unique polynomial of degree less than the number of
+    /// (distinct) pairs in `point_to_evals` that evaluates to `y_i` at `x_i`
+    /// for all `i`, where `(x_i, y_i)` denotes `point_to_evals[i]`. If two
+    /// points in `point_to_evals` have the same x coordinate, the following
+    /// happens:
     /// - If their evaluations do not match, the function `panic`s.
     /// - If their evaluations match, the function proceeds normally (note that
     ///   this reduces expected degree by one).
     ///
-    /// This allows the function to be called in situations where, for instance,
-    /// the x coordinates are generated randomly and the evaluations come from
-    /// evaluating a (larger-degree) polynomial.
+    /// This distinction allows the function to be called transparently in
+    /// situations where, for instance, the x coordinates are generated randomly
+    /// and the evaluations come from evaluating a (larger-degree) polynomial.
     ///
-    /// This function uses naive Lagrange interpolation and is not optimal (cost
-    /// `O(n^2)`)
+    /// This method uses Lagrange interpolation, which has quadratic runtime in
+    /// the number of (distinct) pairs in `point_to_evals`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `point_to_evals` has two points with the same x coordinate and
+    /// different y coordinate
     pub fn lagrange_interpolation(point_to_evals: Vec<(F, F)>) -> Polynomial<F> {
         // Testing for consistency and removing duplicate points
         let point_to_evals = point_to_evals.into_iter().unique().collect_vec();
@@ -257,16 +274,15 @@ impl<F: TwoAdicField> Polynomial<F> {
             .collect_vec();
 
         if points.len() != point_to_evals.len() {
-            panic!("Two points with the same x coordinate have different evaluations");
+            panic!("Two points with the same x coordinate have different requested evaluations");
         }
 
-        // Computing interpolator
         let vanishing_poly = Self::vanishing_polynomial(points);
 
         let mut result = Polynomial::zero();
 
         for (point, eval) in point_to_evals.into_iter() {
-            let polynomial = &vanishing_poly / &Polynomial::vanishing_linear_polynomial(point);
+            let (polynomial, _) = vanishing_poly.divide_by_vanishing_linear_polynomial(point);
             let denominator = polynomial.evaluate(&point);
             result += &(&polynomial * &(eval / denominator));
         }
@@ -274,7 +290,8 @@ impl<F: TwoAdicField> Polynomial<F> {
         result
     }
 
-    /// Given f(x) and e, returns f(x^e)
+    /// Returns the composition of `self` with the polynomial `x^exponent`. In
+    /// other words, if `self` is given by `f(x)`, the result is `f(x^exponent)`.
     pub fn compose_with_exponent(&self, exponent: usize) -> Polynomial<F> {
         let d = if let Some(d) = self.degree() {
             d
@@ -289,13 +306,29 @@ impl<F: TwoAdicField> Polynomial<F> {
         Polynomial::from_coeffs(coeffs)
     }
 
-    // Compute the scaling polynomial, 1 + rx + r^2 x^2 + ... + r^n x^n with n = |quotient_set|
+    /// Returns the polynomial `1 + r * x + r^2 * x^2 + ... + r^degree * x^degree`
     pub fn power_polynomial(r: F, degree: usize) -> Polynomial<F> {
-        Polynomial::from_coeffs(
-            iter::successors(Some(F::ONE), |&prev| Some(prev * r))
-                .take(degree + 1)
-                .collect_vec(),
-        )
+        Polynomial::from_coeffs(iterate(F::ONE, |&prev| prev * r).take(degree + 1).collect())
+    }
+
+    /// Multiplies `self` and `other` using the standard naive algorithm.
+    /// If `F: TwoAdicField`, instead consider using [`mul`] or, equivalently,
+    /// the operator `*`, which selects the naive algorithm or the FFT depending
+    /// on the degrees of the two factors.
+    pub fn mul_naive(&self, other: &Self) -> Self {
+        if self.is_zero() || other.is_zero() {
+            return Self::zero();
+        }
+
+        let mut coeffs = vec![F::ZERO; self.coeffs.len() + other.coeffs.len() - 1];
+
+        for (i, &c1) in self.coeffs.iter().enumerate() {
+            for (j, &c2) in other.coeffs.iter().enumerate() {
+                coeffs[i + j] += c1 * c2;
+            }
+        }
+
+        Polynomial::from_coeffs(coeffs)
     }
 }
 
@@ -315,8 +348,8 @@ impl<'a, 'b, F: Field> Add<&'a Polynomial<F>> for &'b Polynomial<F> {
             (other.clone(), self.clone())
         };
 
-        high.coeffs.iter_mut().zip(&low.coeffs).for_each(|(a, b)| {
-            *a += *b;
+        high.coeffs.iter_mut().zip(&low.coeffs).for_each(|(a, &b)| {
+            *a += b;
         });
 
         high.truncate_leading_zeros()
@@ -335,7 +368,7 @@ impl<F: Field> Neg for &Polynomial<F> {
     #[inline]
     fn neg(self) -> Polynomial<F> {
         Polynomial {
-            coeffs: self.coeffs.iter().map(|c| -*c).collect(),
+            coeffs: self.coeffs.iter().map(|&c| -c).collect(),
         }
     }
 }
@@ -348,75 +381,78 @@ impl<F: Field> Sub<&Polynomial<F>> for &Polynomial<F> {
     }
 }
 
+/// Multiply the two polynomials using FFTs or the naive multiplication
+/// algorithm depending on what is expected to be faster based on their
+/// degrees.
 impl<F: TwoAdicField> Mul<&Polynomial<F>> for &Polynomial<F> {
     type Output = Polynomial<F>;
 
-    // NP TODO: Definitely a better way to do this
     fn mul(self, other: &Polynomial<F>) -> Polynomial<F> {
         if self.is_zero() || other.is_zero() {
             return Polynomial::zero();
         }
 
-        if self.is_constant() {
-            return Polynomial::from_coeffs(
-                other
-                    .coeffs
-                    .iter()
-                    .map(|c| *c * self.coeffs[0])
-                    .collect_vec(),
-            );
+        let d_self = self.degree().unwrap();
+        let d_other = other.degree().unwrap();
+
+        let fft_domain_size = (d_self + d_other + 1).next_power_of_two();
+        let fft_domain_size_log = fft_domain_size.ilog2() as usize;
+
+        // This is only a rough estimate to avoid doing three [i]FFTs in very
+        // imbalanced cases (such as large poly times constant or deg-two poly)
+        let fft_cost = 3 * fft_domain_size * fft_domain_size_log + fft_domain_size;
+        let naive_cost = (d_self + 1) * (d_other + 1);
+
+        // We also use the naive algorithm in the unlikely case the poylnomials
+        // are so large that the two-adicity of F* does not support an FFT
+        // therein
+        if fft_cost < naive_cost || fft_domain_size_log > F::TWO_ADICITY {
+            return self.mul_naive(other);
         }
 
-        if other.is_constant() {
-            return Polynomial::from_coeffs(
-                self.coeffs
-                    .iter()
-                    .map(|c| *c * other.coeffs[0])
-                    .collect_vec(),
-            );
-        }
-
-        // NP TODO add check that FFT fits into field; ow use traditional algorithm
         let mut extended_self = self.coeffs.clone();
         let mut extended_other = other.coeffs.clone();
 
-        let domain_size = (self.coeffs.len() + other.coeffs.len() - 1).next_power_of_two();
-        extended_self.resize(domain_size, F::ZERO);
-        extended_other.resize(domain_size, F::ZERO);
+        extended_self.resize(fft_domain_size, F::ZERO);
+        extended_other.resize(fft_domain_size, F::ZERO);
 
-        // NP TODO transposing?
         let coeffs = RowMajorMatrix::new(
             extended_self.into_iter().chain(extended_other).collect(),
-            domain_size,
+            fft_domain_size,
         )
         .transpose();
 
-        let dft: RowMajorMatrix<F> = NaiveDft.dft_batch(coeffs).transpose();
+        let fft = Radix2Dit::default();
 
-        let (first_row, second_row) = (dft.first_row(), dft.last_row());
-        let pointwise_multiplication = first_row
-            .zip(second_row)
+        // Evaluate the polynomials over the domain
+        let dft: RowMajorMatrix<F> = fft.dft_batch(coeffs).transpose();
+
+        // Multiply the polynomial evaluations pointwise
+        let eval_products = dft
+            .first_row()
+            .zip(dft.last_row())
             .map(|(a, b): (F, F)| a * b)
             .collect_vec();
 
-        let pointwise_multiplication =
-            RowMajorMatrix::new(pointwise_multiplication, domain_size).transpose();
-
-        let inverse_dft = NaiveDft.idft_batch(pointwise_multiplication);
-
-        Polynomial::from_coeffs(inverse_dft.values.clone())
+        // Interpolating the evaluations with an inverse FFT
+        Polynomial::from_coeffs(fft.idft(eval_products))
     }
 }
 
+/// Exact polynomial division (using the classical algorithm).
+///
+/// # Panics
+///
+/// Panics if the remainder is not zero. If this is not guaranteed, use
+/// [`divide_with_remainder`] instead.
 impl<F: TwoAdicField> Div<&Polynomial<F>> for &Polynomial<F> {
     type Output = Polynomial<F>;
 
-    // NP TODO think about FFT
     fn div(self, other: &Polynomial<F>) -> Polynomial<F> {
-        let (q, r) = self.divide_with_q_and_r(other);
+        let (q, r) = self.divide_with_remainder(other);
         assert!(
             r.is_zero(),
-            "Polynomial division failed, remainder is not zero"
+            "Non-zero remainder is not zero. Consider using `divide_with_remainder` instead."
         );
         q
     }
@@ -444,10 +480,10 @@ impl<F: Field> Sub<&F> for &Polynomial<F> {
     }
 }
 
-impl<F: TwoAdicField> Mul<&F> for &Polynomial<F> {
+impl<F: Field> Mul<&F> for &Polynomial<F> {
     type Output = Polynomial<F>;
 
     fn mul(self, other: &F) -> Polynomial<F> {
-        self * &Polynomial::from_coeffs(vec![*other])
+        Polynomial::from_coeffs(self.coeffs.iter().map(|c| *c * *other).collect())
     }
 }

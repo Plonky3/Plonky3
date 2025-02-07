@@ -28,9 +28,25 @@ mod proximity_gaps;
 mod utils;
 pub mod verifier;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
 
 pub use config::{StirConfig, StirParameters};
 pub use proof::StirProof;
 pub use proximity_gaps::*;
+
+// Used for domain separation in the Fiat-Shamir transcript
+pub(crate) enum Messages {
+    Commitment,
+    RoundCommitment,
+    FoldingRandomness,
+    OodSamples,
+    Betas,
+    CombRandomness,
+    QueryIndices,
+    AnsPolynomial,
+    ShakePolynomial,
+    ShakeRandomness,
+    FinalPolynomial,
+    FinalQueryIndices,
+}

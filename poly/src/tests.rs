@@ -119,7 +119,7 @@ fn test_divide() {
     let a = Polynomial::from_coeffs(a_coeffs);
     let b = Polynomial::from_coeffs(b_coeffs);
 
-    let (q, r) = &a.divide_with_q_and_r(&b);
+    let (q, r) = &a.divide_with_remainder(&b);
 
     assert_eq!(q.coeffs, q_coeffs);
     assert_eq!(r.coeffs, r_coeffs);
@@ -240,3 +240,29 @@ fn test_vanishing_and_lagrange_interpolation() {
 }
 
 // NP TODO add tests for vanishing with duplicate points
+
+// NP TODO remove or polish
+#[test]
+fn test_add() {
+    let a = Polynomial::from_coeffs(
+        vec![1, 2, 3, 4]
+            .into_iter()
+            .map(BB::from_canonical_u32)
+            .collect_vec(),
+    );
+    let b = Polynomial::from_coeffs(
+        vec![4, 5, 6]
+            .into_iter()
+            .map(BB::from_canonical_u32)
+            .collect_vec(),
+    );
+
+    let c = &a + &b;
+    assert_eq!(
+        c.coeffs,
+        vec![5, 7, 9, 4]
+            .into_iter()
+            .map(BB::from_canonical_u32)
+            .collect_vec()
+    );
+}

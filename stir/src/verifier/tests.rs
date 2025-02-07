@@ -1,8 +1,6 @@
 use crate::{
-    prover::prove,
-    test_utils::{
-        test_bb_challenger, test_bb_stir_config, test_stir_config_folding_factors, BBExt,
-    },
+    prover::{commit, prove},
+    test_utils::*,
     utils::fold_polynomial,
     verifier::{compute_folded_evaluations, verify},
 };
@@ -51,7 +49,9 @@ fn test_verify() {
     let mut prover_challenger = test_bb_challenger();
     let mut verifier_challenger = prover_challenger.clone();
 
-    let proof = prove(&config, polynomial, &mut prover_challenger);
+    let (witness, commitment) = commit(&config, polynomial);
+
+    let proof = prove(&config, witness, commitment, &mut prover_challenger);
     verify(&config, proof, &mut verifier_challenger).unwrap();
 }
 
@@ -65,10 +65,12 @@ fn test_verify_variable_folding_factor() {
     let mut prover_challenger = test_bb_challenger();
     let mut verifier_challenger = prover_challenger.clone();
 
+    let (witness, commitment) = commit(&config, polynomial);
+
     // NP TODO remove
     println!("Proving");
 
-    let proof = prove(&config, polynomial, &mut prover_challenger);
+    let proof = prove(&config, witness, commitment, &mut prover_challenger);
 
     // NP TODO remove
     println!("Verifying");
@@ -77,3 +79,5 @@ fn test_verify_variable_folding_factor() {
 }
 
 // NP TODO failing tests
+
+// NP TODO test that the sponge is consistent at the end

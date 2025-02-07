@@ -1,10 +1,10 @@
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter, Result};
 use itertools::Itertools;
+use p3_challenger::FieldChallenger;
+use p3_field::{Field, TwoAdicField};
 
-use p3_field::TwoAdicField;
-
-use crate::utils::compute_pow;
+use crate::utils::{compute_pow, observe_small_usize_slice};
 use crate::SecurityAssumption;
 
 #[cfg(test)]
@@ -367,6 +367,10 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
     }
 
     // Getters for all internal fields
+    pub fn parameters(&self) -> &StirParameters<M> {
+        &self.parameters
+    }
+
     pub fn starting_domain_log_size(&self) -> usize {
         self.starting_domain_log_size
     }
@@ -545,4 +549,30 @@ impl Display for RoundConfig {
             self.pow_bits
         )
     }
+}
+
+// Have the challenger observe the public parameters
+pub(crate) fn observe_public_parameters<F, M>(
+    parameters: &StirParameters<M>,
+    challenger: &mut impl FieldChallenger<F>,
+) where
+    F: Field,
+    M: Clone,
+{
+    observe_small_usize_slice(
+        challenger,
+        &[
+            parameters.security_level,
+            parameters.security_assumption as usize,
+            parameters.log_starting_degree,
+            parameters.log_starting_inv_rate,
+            parameters.pow_bits,
+        ],
+        false,
+    );
+    observe_small_usize_slice(challenger, &parameters.log_folding_factors, false);
+    observe_small_usize_slice(challenger, &parameters.log_inv_rates, false);
+
+    // We do not absorb the MMCS configuration, as it would require stringent
+    // trait bounds
 }
