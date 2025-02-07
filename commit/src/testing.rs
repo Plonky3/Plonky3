@@ -52,6 +52,7 @@ where
     type EvaluationsOnDomain<'a> = Dft::Evaluations;
     type Proof = ();
     type Error = ();
+    const ZK: bool = false;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         TwoAdicMultiplicativeCoset {
@@ -63,7 +64,6 @@ where
     fn commit(
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
-        _is_random_poly: bool,
     ) -> (Self::Commitment, Self::ProverData) {
         let coeffs: Vec<_> = evaluations
             .into_iter()

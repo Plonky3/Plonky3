@@ -128,10 +128,20 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
     #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits = added_bits))]
     fn coset_lde_batch(
         &self,
+        mat: RowMajorMatrix<F>,
+        added_bits: usize,
+        shift: F,
+    ) -> Self::Evaluations {
+        self.randomized_coset_lde_batch(mat, added_bits, shift, None)
+    }
+
+    #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits = added_bits))]
+    fn randomized_coset_lde_batch(
+        &self,
         mut mat: RowMajorMatrix<F>,
         added_bits: usize,
         shift: F,
-        opt_added_values: Option<&[F]>,
+        opt_random_coeffs: Option<&[F]>,
     ) -> Self::Evaluations {
         let w = mat.width;
         let mut h = mat.height();
@@ -154,22 +164,25 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         second_half(&mut mat, mid, &inverse_twiddles.bitrev_twiddles, scale);
         // We skip the final bit-reversal, since the next FFT expects bit-reversed input.
 
-        if let Some(added_values) = opt_added_values {
+        if let Some(random_coeffs) = opt_random_coeffs {
             let actual_s = F::GENERATOR / shift;
             mat = mat.bit_reversed_zero_pad(1);
             h = mat.height();
             log_h = log2_strict_usize(h);
             // Add random values here.
-            for i in 0..h / 2 {
-                let rev_i = reverse_bits_len(i, log_h);
-                let upper_rev_i = reverse_bits_len(h / 2 + i, log_h);
-                for j in 0..w {
-                    mat.values[rev_i * w + j] -=
-                        added_values[i * w + j] * actual_s.exp_u64(i as u64);
-                    mat.values[upper_rev_i * w + j] =
-                        added_values[i * w + j] * actual_s.exp_u64(i as u64);
-                }
-            }
+            actual_s
+                .powers()
+                .take(h / 2)
+                .enumerate()
+                .for_each(|(i, actual_s_i)| {
+                    let rev_i = reverse_bits_len(i, log_h);
+                    let upper_rev_i = reverse_bits_len(h / 2 + i, log_h);
+                    for j in 0..w {
+                        let random_coeff = random_coeffs[i * w + j] * actual_s_i;
+                        mat.values[rev_i * w + j] -= random_coeff;
+                        mat.values[upper_rev_i * w + j] = random_coeff;
+                    }
+                })
         }
 
         let lde_elems = w * (h << added_bits);

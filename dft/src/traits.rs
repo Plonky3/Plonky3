@@ -99,7 +99,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
 
     /// Compute the low-degree extension of each column in `mat` onto a coset of a larger subgroup.
     fn coset_lde(&self, vec: Vec<F>, added_bits: usize, shift: F) -> Vec<F> {
-        self.coset_lde_batch(RowMajorMatrix::new(vec, 1), added_bits, shift, None)
+        self.coset_lde_batch(RowMajorMatrix::new(vec, 1), added_bits, shift)
             .to_row_major_matrix()
             .values
     }
@@ -110,25 +110,38 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         mat: RowMajorMatrix<F>,
         added_bits: usize,
         shift: F,
-        opt_added_values: Option<&[F]>,
+    ) -> Self::Evaluations {
+        self.randomized_coset_lde_batch(mat, added_bits, shift, None)
+    }
+
+    /// Compute the low-degree extension of each column in `mat` onto a coset of a larger subgroup, in the `zk` case.
+    /// When evaluating the coset over `H_i`, this adds `v_{H_i}(X) * r(X)` where `v_{H_i}` is the vanishing polynomial
+    /// over `H_i` and `r` is a random polynomial whose coefficients are in `random_coeffs`.
+    fn randomized_coset_lde_batch(
+        &self,
+        mat: RowMajorMatrix<F>,
+        added_bits: usize,
+        shift: F,
+        opt_random_coeffs: Option<&[F]>,
     ) -> Self::Evaluations {
         let mut coeffs = self.idft_batch(mat);
-
-        // The quotient matrix corresponds to the decomposition of the quotient poly on the extended basis.
-        if let Some(added_values) = opt_added_values {
+        // This adds v_H * r(X) in the `zk` case. So on H, the evaluation is not affected by this change.
+        if let Some(random_coeffs) = opt_random_coeffs {
             let actual_s = F::GENERATOR / shift;
             let h = coeffs.height();
             let w = coeffs.width();
             coeffs.values.extend(F::zero_vec(h * w));
-            // This adds v_H * r(X). So on H, the evaluation is not affected by this change.
-            for i in 0..h {
-                for j in 0..w {
-                    coeffs.values[i * w + j] -=
-                        added_values[i * w + j] * actual_s.exp_u64(i as u64);
-                    coeffs.values[h * w + i * w + j] =
-                        added_values[i * w + j] * actual_s.exp_u64(i as u64);
-                }
-            }
+            actual_s
+                .powers()
+                .take(h)
+                .enumerate()
+                .for_each(|(i, actual_s_power_i)| {
+                    for j in 0..w {
+                        let updating_coeffs = random_coeffs[i * w + j] * actual_s_power_i;
+                        coeffs.values[i * w + j] -= updating_coeffs;
+                        coeffs.values[(h + i) * w + j] = updating_coeffs;
+                    }
+                });
         }
 
         // PANICS: possible panic if the new resized length overflows

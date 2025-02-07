@@ -1,4 +1,3 @@
-use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::fmt::Debug;
@@ -73,6 +72,8 @@ where
     );
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
 
+    const ZK: bool = true;
+
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
             &self.inner, degree)
@@ -81,7 +82,18 @@ where
     fn commit(
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
-        is_random_poly: bool,
+    ) -> (Self::Commitment, Self::ProverData) {
+        <HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R> as Pcs<Challenge, Challenger>>::commit_zk(
+            self,
+            evaluations,
+            false,
+        )
+    }
+
+    fn commit_zk(
+        &self,
+        evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
+        use_randomization: bool,
     ) -> (Self::Commitment, Self::ProverData) {
         let randomized_evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)> = evaluations
             .into_iter()
@@ -99,27 +111,29 @@ where
             .map(|(domain, evals)| {
                 let shift = Val::GENERATOR / domain.shift;
                 // We do not need to randomize the randomizing poly.
-                if is_random_poly {
-                    assert_eq!(domain.size(), evals.height());
-
-                    self.inner
-                        .dft
-                        .coset_lde_batch(evals, self.inner.fri.log_blowup, shift, None)
-                        .bit_reverse_rows()
-                        .to_row_major_matrix()
-                } else {
+                if use_randomization {
                     assert_eq!(domain.size(), evals.height() * 2);
 
-                    let random_values = vec![self.rng.borrow_mut().gen(); h * w];
+                    let random_values = (0..h * w)
+                        .map(|_| self.rng.borrow_mut().gen())
+                        .collect::<Vec<_>>();
 
                     self.inner
                         .dft
-                        .coset_lde_batch(
+                        .randomized_coset_lde_batch(
                             evals,
                             self.inner.fri.log_blowup,
                             shift,
                             Some(&random_values),
                         )
+                        .bit_reverse_rows()
+                        .to_row_major_matrix()
+                } else {
+                    assert_eq!(domain.size(), evals.height());
+
+                    self.inner
+                        .dft
+                        .coset_lde_batch(evals, self.inner.fri.log_blowup, shift)
                         .bit_reverse_rows()
                         .to_row_major_matrix()
                 }
@@ -149,39 +163,42 @@ where
         let h = randomized_evaluations[0].1.height();
         let w = randomized_evaluations[0].1.width();
 
-        let all_random_values =
-            vec![self.rng.borrow_mut().gen(); (randomized_evaluations.len() - 1) * h * w];
+        let mut rng = self.rng.borrow_mut();
+        let all_random_values = (0..(randomized_evaluations.len() - 1) * h * w)
+            .map(|_| rng.gen())
+            .collect::<Vec<_>>();
+        let last_chunk_ci_inv = cis[last_chunk].inverse();
+
         let ldes: Vec<_> = randomized_evaluations
             .into_iter()
             .enumerate()
             .map(|(i, (domain, evals))| {
                 assert_eq!(domain.size(), evals.height());
                 let shift = Val::GENERATOR / domain.shift;
-
                 // Select random values, and set the random values for the final chunk accordingly.
+                let mut added_values: Vec<Val>;
                 let random_values = if i == last_chunk {
-                    let mut added_values = Val::zero_vec(h * w);
+                    added_values = Val::zero_vec(h * w);
                     for j in 0..last_chunk {
+                        let mul_coeff = cis[j] * last_chunk_ci_inv;
                         for k in 0..h * w {
-                            added_values[k] -= all_random_values[j * h * w + k]
-                                * cis[j]
-                                * cis[last_chunk].inverse();
+                            added_values[k] -= all_random_values[j * h * w + k] * mul_coeff;
                         }
                     }
-                    added_values
+                    added_values.as_slice()
                 } else {
-                    all_random_values[i * h * w..(i + 1) * h * w].to_vec()
+                    &all_random_values[i * h * w..(i + 1) * h * w]
                 };
 
                 // Check the evaluation as the verifier would here, but on challenge = 1, to see whether it works? (and compare it with non random value)
                 // Commit to the bit-reversed LDE.
                 self.inner
                     .dft
-                    .coset_lde_batch(
+                    .randomized_coset_lde_batch(
                         evals,
                         self.inner.fri.log_blowup,
                         shift,
-                        Some(&random_values),
+                        Some(random_values),
                     )
                     .bit_reverse_rows()
                     .to_row_major_matrix()
@@ -189,10 +206,6 @@ where
             .collect();
 
         self.inner.mmcs.commit(ldes)
-    }
-
-    fn is_zk(&self) -> bool {
-        true
     }
 
     fn get_evaluations_on_domain<'a>(
@@ -213,10 +226,12 @@ where
     }
 
     fn generate_random_vals(&self, random_len: usize) -> RowMajorMatrix<Val> {
-        let random_vals = vec![self.rng.borrow_mut().gen(); random_len * Challenge::D];
+        let random_vals = (0..random_len * Challenge::D)
+            .map(|_| self.rng.borrow_mut().gen())
+            .collect::<Vec<_>>();
         assert!(
             random_len.is_power_of_two(),
-            "Provided random size for the random bacth FRI polynomial is not a power of 2: {}",
+            "Provided size for the random batch FRI polynomial is not a power of 2: {}",
             random_len
         );
         RowMajorMatrix::new(random_vals, Challenge::D)

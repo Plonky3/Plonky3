@@ -146,6 +146,7 @@ where
     type EvaluationsOnDomain<'a> = BitReversedMatrixView<DenseMatrix<Val, &'a [Val]>>;
     type Proof = FriProof<Challenge, FriMmcs, Val, Vec<BatchOpening<Val, InputMmcs>>>;
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
+    const ZK: bool = false;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         let log_n = log2_strict_usize(degree);
@@ -158,7 +159,6 @@ where
     fn commit(
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
-        _is_random_poly: bool,
     ) -> (Self::Commitment, Self::ProverData) {
         let ldes: Vec<_> = evaluations
             .into_iter()
@@ -167,7 +167,7 @@ where
                 let shift = Val::GENERATOR / domain.shift;
                 // Commit to the bit-reversed LDE.
                 self.dft
-                    .coset_lde_batch(evals, self.fri.log_blowup, shift, None)
+                    .coset_lde_batch(evals, self.fri.log_blowup, shift)
                     .bit_reverse_rows()
                     .to_row_major_matrix()
             })

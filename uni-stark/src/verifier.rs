@@ -33,19 +33,20 @@ where
     } = proof;
 
     let pcs = config.pcs();
+    let is_zk = <SC as StarkGenericConfig>::Pcs::ZK;
 
     let degree = 1 << degree_bits;
     let log_quotient_degree =
-        get_log_quotient_degree::<Val<SC>, A>(air, 0, public_values.len(), pcs.is_zk());
+        get_log_quotient_degree::<Val<SC>, A>(air, 0, public_values.len(), is_zk);
     let quotient_degree = 1 << log_quotient_degree;
 
     let trace_domain = pcs.natural_domain_for_degree(degree);
-    let init_trace_domain = if pcs.is_zk() {
+    let init_trace_domain = if is_zk {
         pcs.natural_domain_for_degree(degree / 2)
     } else {
         trace_domain
     };
-    let nb_chunks = if pcs.is_zk() {
+    let nb_chunks = if is_zk {
         quotient_degree * 2
     } else {
         quotient_degree
@@ -57,7 +58,7 @@ where
     let randomized_quotient_chunks_domains = quotient_chunks_domains
         .iter()
         .map(|domain| {
-            let randomized_domain_size = if pcs.is_zk() {
+            let randomized_domain_size = if is_zk {
                 domain.size() * 2
             } else {
                 domain.size()
@@ -102,7 +103,7 @@ where
     let zeta: SC::Challenge = challenger.sample();
     let zeta_next = init_trace_domain.next_point(zeta).unwrap();
 
-    let mut coms_to_verify = if pcs.is_zk() {
+    let mut coms_to_verify = if is_zk {
         let random_commit = commitments
             .random
             .clone()
@@ -172,7 +173,7 @@ where
         })
         .sum::<SC::Challenge>();
 
-    let sels = trace_domain.selectors_at_point(zeta, pcs.is_zk());
+    let sels = trace_domain.selectors_at_point(zeta, is_zk);
 
     let main = VerticalPair::new(
         RowMajorMatrixView::new_row(&opened_values.trace_local),

@@ -234,11 +234,21 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         mat: RowMajorMatrix<MontyField31<MP>>,
         added_bits: usize,
         shift: MontyField31<MP>,
-        opt_added_values: Option<&[MontyField31<MP>]>,
+    ) -> Self::Evaluations {
+        self.randomized_coset_lde_batch(mat, added_bits, shift, None)
+    }
+
+    #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
+    fn randomized_coset_lde_batch(
+        &self,
+        mat: RowMajorMatrix<MontyField31<MP>>,
+        added_bits: usize,
+        shift: MontyField31<MP>,
+        opt_random_coeffs: Option<&[MontyField31<MP>]>,
     ) -> Self::Evaluations {
         let nrows = mat.height();
         let ncols = mat.width();
-        let result_nrows = nrows << (added_bits + opt_added_values.is_some() as usize);
+        let result_nrows = nrows << (added_bits + opt_random_coeffs.is_some() as usize);
 
         if nrows == 1 {
             let dupd_rows = core::iter::repeat(mat.values)
@@ -281,21 +291,31 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         let inv_len = MontyField31::from_canonical_usize(nrows).inverse();
         coset_shift_and_scale_rows(&mut padded, result_nrows, coeffs, nrows, shift, inv_len);
 
-        // TODO: parallelize/optimize.
-        if let Some(added_values) = opt_added_values {
+        let shift_powers = shift.powers();
+        let shift_power_pairs = shift_powers
+            .clone()
+            .take(nrows)
+            .zip(shift_powers.skip(nrows).take(nrows));
+        if let Some(random_coeffs) = opt_random_coeffs {
+            // TODO: parallelize/optimize.
             let actual_s = MontyField31::GENERATOR / shift;
-            for i in 0..ncols {
-                for j in 0..nrows {
-                    padded[i * result_nrows + j] -= added_values[j * ncols + i]
-                        * actual_s.exp_u64(j as u64)
-                        * inv_len
-                        * shift.exp_u64(j as u64);
-                    padded[i * result_nrows + j + nrows] = added_values[j * ncols + i]
-                        * actual_s.exp_u64(j as u64)
-                        * inv_len
-                        * shift.exp_u64((nrows + j) as u64);
-                }
-            }
+
+            actual_s
+                .powers()
+                .take(nrows)
+                .enumerate()
+                .zip(shift_power_pairs)
+                .for_each(
+                    |((j, actual_s_power_j), (shift_power_j, shift_power_h_j))| {
+                        let mul_coeff = actual_s_power_j * inv_len;
+                        for i in 0..ncols {
+                            padded[i * result_nrows + j] -=
+                                random_coeffs[j * ncols + i] * mul_coeff * shift_power_j;
+                            padded[i * result_nrows + j + nrows] =
+                                random_coeffs[j * ncols + i] * mul_coeff * shift_power_h_j;
+                        }
+                    },
+                )
         }
 
         // `padded` is implicitly zero padded since it was initialised

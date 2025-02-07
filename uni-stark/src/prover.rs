@@ -39,8 +39,10 @@ where
 
     let pcs = config.pcs();
 
+    let is_zk = <SC as StarkGenericConfig>::Pcs::ZK;
+
     let degree = trace.height();
-    let ext_degree = if pcs.is_zk() { degree * 2 } else { degree };
+    let ext_degree = if is_zk { degree * 2 } else { degree };
     let log_ext_degree = log2_strict_usize(ext_degree);
 
     let symbolic_constraints = get_symbolic_constraints::<Val<SC>, A>(air, 0, public_values.len());
@@ -50,14 +52,14 @@ where
         .map(SymbolicExpression::degree_multiple)
         .max()
         .unwrap_or(0);
-    let log_quotient_degree = log2_ceil_usize(constraint_degree - 1 + pcs.is_zk() as usize);
+    let log_quotient_degree = log2_ceil_usize(constraint_degree - 1 + is_zk as usize);
     let quotient_degree = 1 << log_quotient_degree;
 
     let trace_domain = pcs.natural_domain_for_degree(degree);
     let ext_trace_domain = pcs.natural_domain_for_degree(ext_degree);
 
     let (trace_commit, trace_data) = info_span!("commit to trace data")
-        .in_scope(|| pcs.commit(vec![(ext_trace_domain, trace)], false));
+        .in_scope(|| pcs.commit_zk(vec![(ext_trace_domain, trace)], true));
 
     // Observe the instance.
     challenger.observe(Val::<SC>::from_canonical_usize(log_ext_degree));
@@ -80,9 +82,9 @@ where
         trace_on_quotient_domain,
         alpha,
         constraint_count,
-        pcs.is_zk(),
+        is_zk,
     );
-    let nb_chunks = if pcs.is_zk() {
+    let nb_chunks = if is_zk {
         quotient_degree * 2
     } else {
         quotient_degree
@@ -113,7 +115,7 @@ where
         });
     challenger.observe(quotient_commit.clone());
 
-    let (opt_r_commit, opt_r_data) = if pcs.is_zk() {
+    let (opt_r_commit, opt_r_data) = if is_zk {
         // We generate random extension field values of the size of the randomized trace randomized. Since we need `R` of degree that of the extended
         // trace -1, we can provide `R` as is to FRI, and the random polynomial will be `(R(X) - R(z)) / (X - z)`.
         // Since we need a random polynomial defined over the extension field, we actually need to commit to `SC::CHallenge::D`
@@ -121,7 +123,7 @@ where
         // TODO: This approach is only statistically zk. To make it perfectly zk, `R` would have to truly be an extension field polynomial.
         let random_vals = pcs.generate_random_vals(ext_trace_domain.size());
         let extended_domain = pcs.natural_domain_for_degree(ext_trace_domain.size());
-        let (r_commit, r_data) = pcs.commit(vec![(extended_domain, random_vals)], true);
+        let (r_commit, r_data) = pcs.commit(vec![(extended_domain, random_vals)]);
         (Some(r_commit), Some(r_data))
     } else {
         (None, None)
@@ -168,15 +170,15 @@ where
             )
         }
     });
-    let trace_idx = if pcs.is_zk() { 1 } else { 0 };
-    let quotient_idx = if pcs.is_zk() { 2 } else { 1 };
+    let trace_idx = if is_zk { 1 } else { 0 };
+    let quotient_idx = if is_zk { 2 } else { 1 };
     let trace_local = opened_values[trace_idx][0][0].clone();
     let trace_next = opened_values[trace_idx][0][1].clone();
     let quotient_chunks = opened_values[quotient_idx]
         .iter()
         .map(|v| v[0].clone())
         .collect_vec();
-    let random = if pcs.is_zk() {
+    let random = if is_zk {
         Some(opened_values[0][0][0].clone())
     } else {
         None
