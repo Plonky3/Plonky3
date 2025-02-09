@@ -214,14 +214,14 @@ fn verifiable_half_round(
     let (rot_1, rot_2) = if flag { (8, 7) } else { (16, 12) };
 
     // The first summation:
-    a += b;
-    a += m;
+    a = a.wrapping_add(b);
+    a = a.wrapping_add(m);
 
     // The first xor:
     d = (d ^ a).rotate_right(rot_1);
 
     // The second summation:
-    c += d;
+    c = c.wrapping_add(d);
 
     // The second xor:
     b = (b ^ c).rotate_right(rot_2);
