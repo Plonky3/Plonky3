@@ -54,12 +54,12 @@ impl<P, PW, H, C, const DIGEST_ELEMS: usize> Mmcs<P::Value>
 where
     P: PackedValue,
     PW: PackedValue,
-    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>,
-    H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
-    H: Sync,
-    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>,
-    C: PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
-    C: Sync,
+    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>
+        + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+        + Sync,
+    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>
+        + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>
+        + Sync,
     PW::Value: Eq,
     [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
 {
@@ -165,14 +165,14 @@ where
                 .map(|(i, _)| opened_values[i].as_slice()),
         );
 
-        for &sibling in proof.iter() {
+        for &sibling in proof {
             let (left, right) = if index & 1 == 0 {
                 (root, sibling)
             } else {
                 (sibling, root)
             };
 
-            root = self.compress.compress([left, right]);
+            root = self.compress.compress(<[_; 2]>::from((left, right)));
             index >>= 1;
             curr_height_padded >>= 1;
 
@@ -262,12 +262,12 @@ mod tests {
         let perm = Perm::new_from_rng_128(&mut thread_rng());
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash.clone(), compress.clone());
+        let mmcs = MyMmcs::new(hash.clone(), compress);
 
         let mat = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1, 8);
         let (commit, _) = mmcs.commit(vec![mat.clone()]);
 
-        let expected_result = hash.hash_iter(mat.clone().vertically_packed_row(0));
+        let expected_result = hash.hash_iter(mat.vertically_packed_row(0));
         assert_eq!(commit, expected_result);
     }
 

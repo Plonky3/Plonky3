@@ -59,12 +59,12 @@ where
     P: PackedValue,
     P::Value: Serialize + DeserializeOwned,
     PW: PackedValue,
-    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>,
-    H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
-    H: Sync,
-    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>,
-    C: PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
-    C: Sync,
+    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>
+        + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+        + Sync,
+    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>
+        + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>
+        + Sync,
     R: Rng + Clone,
     PW::Value: Eq,
     [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
@@ -96,10 +96,7 @@ where
         &self,
         index: usize,
         prover_data: &Self::ProverData<M>,
-    ) -> (
-        Vec<Vec<P::Value>>,
-        (Vec<Vec<P::Value>>, Vec<[PW::Value; DIGEST_ELEMS]>),
-    ) {
+    ) -> (Vec<Vec<P::Value>>, Self::Proof) {
         let (salted_openings, siblings) = self.inner.open_batch(index, prover_data);
         let (openings, salts): (Vec<_>, Vec<_>) = salted_openings
             .into_iter()
