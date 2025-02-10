@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::fmt::Debug;
 
+use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace, TwoAdicMultiplicativeCoset};
 use p3_dft::TwoAdicSubgroupDft;
@@ -98,45 +99,39 @@ where
         let randomized_evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)> = evaluations
             .into_iter()
             .map(|(domain, mat)| {
-                (
-                    domain,
-                    add_random_cols(mat, self.num_random_codewords, &mut *self.rng.borrow_mut()),
-                )
+                let mut random_evaluation =
+                    add_random_cols(mat, self.num_random_codewords, &mut *self.rng.borrow_mut());
+                if use_randomization {
+                    let h = random_evaluation.height();
+                    let w = random_evaluation.width();
+                    // Interleave random values: if `g` is the generator of the new (doubled) trace, then the generator of the original
+                    // trace is g^2.
+                    let random_values = (0..h * w)
+                        .map(|_| self.rng.borrow_mut().gen())
+                        .collect::<Vec<_>>();
+                    random_evaluation.values = random_evaluation
+                        .values
+                        .chunks_exact(w)
+                        .interleave(random_values.chunks_exact(w))
+                        .flatten()
+                        .copied()
+                        .collect::<Vec<_>>();
+                }
+
+                (domain, random_evaluation)
             })
             .collect();
-        let h = randomized_evaluations[0].1.height();
-        let w = randomized_evaluations[0].1.width();
         let ldes: Vec<_> = randomized_evaluations
             .into_iter()
             .map(|(domain, evals)| {
                 let shift = Val::GENERATOR / domain.shift;
-                // We do not need to randomize the randomizing poly.
-                if use_randomization {
-                    assert_eq!(domain.size(), evals.height() * 2);
+                assert_eq!(domain.size(), evals.height());
 
-                    let random_values = (0..h * w)
-                        .map(|_| self.rng.borrow_mut().gen())
-                        .collect::<Vec<_>>();
-
-                    self.inner
-                        .dft
-                        .randomized_coset_lde_batch(
-                            evals,
-                            self.inner.fri.log_blowup,
-                            shift,
-                            Some(&random_values),
-                        )
-                        .bit_reverse_rows()
-                        .to_row_major_matrix()
-                } else {
-                    assert_eq!(domain.size(), evals.height());
-
-                    self.inner
-                        .dft
-                        .coset_lde_batch(evals, self.inner.fri.log_blowup, shift)
-                        .bit_reverse_rows()
-                        .to_row_major_matrix()
-                }
+                self.inner
+                    .dft
+                    .coset_lde_batch(evals, self.inner.fri.log_blowup, shift)
+                    .bit_reverse_rows()
+                    .to_row_major_matrix()
             })
             .collect();
         self.inner.mmcs.commit(ldes)
@@ -148,26 +143,25 @@ where
         cis: Vec<Val>,
     ) -> (Self::Commitment, Self::ProverData) {
         let last_chunk = evaluations.len() - 1;
+        let last_chunk_ci_inv = cis[last_chunk].inverse();
+        let mut rng = self.rng.borrow_mut();
         let randomized_evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)> = evaluations
             .into_iter()
             .map(|(domain, mat)| {
                 (
                     domain,
-                    add_random_cols(mat, self.num_random_codewords, &mut *self.rng.borrow_mut()),
+                    add_random_cols(mat, self.num_random_codewords, &mut *rng),
                 )
             })
             .collect();
-        // First, add random values as described in https://eprint.iacr.org/2024/1037.pdf.
+        // Add random values to the LDE evaluations as described in https://eprint.iacr.org/2024/1037.pdf.
         // If we have `d` chunks, let q'_i(X) = q_i(X) + v_H_i(X) * t_i(X) where t(X) is random, for 1 <= i < d.
         // q'_d(X) = q_d(X) - v_H_d(X) c_i \sum t_i(X) where c_i is a Lagrange normalization constant.
         let h = randomized_evaluations[0].1.height();
         let w = randomized_evaluations[0].1.width();
-
-        let mut rng = self.rng.borrow_mut();
         let all_random_values = (0..(randomized_evaluations.len() - 1) * h * w)
             .map(|_| rng.gen())
             .collect::<Vec<_>>();
-        let last_chunk_ci_inv = cis[last_chunk].inverse();
 
         let ldes: Vec<_> = randomized_evaluations
             .into_iter()
@@ -190,18 +184,42 @@ where
                     &all_random_values[i * h * w..(i + 1) * h * w]
                 };
 
-                // Check the evaluation as the verifier would here, but on challenge = 1, to see whether it works? (and compare it with non random value)
                 // Commit to the bit-reversed LDE.
-                self.inner
+                let mut lde_evals = self
+                    .inner
                     .dft
-                    .randomized_coset_lde_batch(
-                        evals,
-                        self.inner.fri.log_blowup,
-                        shift,
-                        Some(random_values),
-                    )
-                    .bit_reverse_rows()
-                    .to_row_major_matrix()
+                    .coset_lde_batch(evals, self.inner.fri.log_blowup + 1, shift)
+                    .to_row_major_matrix();
+
+                // Evaluate `v_H(X) * r(X)` over the LDE, where:
+                // - `v_H` is the coset vanishing polynomial, here equal to (GENERATOR * X / domain.shift)^n - 1,
+                // - and `r` is a random polynomial.
+                let mut vanishing_poly_coeffs =
+                    Val::zero_vec((h * w) << (self.inner.fri.log_blowup + 1));
+                let p = (Val::GENERATOR / domain.shift).exp_u64(h as u64);
+                Val::GENERATOR
+                    .powers()
+                    .take(h)
+                    .enumerate()
+                    .for_each(|(i, p_i)| {
+                        for j in 0..w {
+                            let mul_coeff = p_i * random_values[i * w + j];
+                            vanishing_poly_coeffs[i * w + j] -= mul_coeff;
+                            vanishing_poly_coeffs[(h + i) * w + j] = p * mul_coeff;
+                        }
+                    });
+                let random_eval = self
+                    .inner
+                    .dft
+                    .dft_batch(DenseMatrix::new(vanishing_poly_coeffs, w))
+                    .to_row_major_matrix();
+
+                // Add the quotient chunk evaluations over the LDE to the evaluations of `v_H(X) * r(X)`.
+                for i in 0..h * w * (1 << (self.inner.fri.log_blowup + 1)) {
+                    lde_evals.values[i] += random_eval.values[i];
+                }
+
+                lde_evals.bit_reverse_rows().to_row_major_matrix()
             })
             .collect();
 

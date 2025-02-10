@@ -235,20 +235,9 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         added_bits: usize,
         shift: MontyField31<MP>,
     ) -> Self::Evaluations {
-        self.randomized_coset_lde_batch(mat, added_bits, shift, None)
-    }
-
-    #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
-    fn randomized_coset_lde_batch(
-        &self,
-        mat: RowMajorMatrix<MontyField31<MP>>,
-        added_bits: usize,
-        shift: MontyField31<MP>,
-        opt_random_coeffs: Option<&[MontyField31<MP>]>,
-    ) -> Self::Evaluations {
         let nrows = mat.height();
         let ncols = mat.width();
-        let result_nrows = nrows << (added_bits + opt_random_coeffs.is_some() as usize);
+        let result_nrows = nrows << added_bits;
 
         if nrows == 1 {
             let dupd_rows = core::iter::repeat(mat.values)
@@ -290,33 +279,6 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         // Normalise inverse DFT and coset shift in one go.
         let inv_len = MontyField31::from_canonical_usize(nrows).inverse();
         coset_shift_and_scale_rows(&mut padded, result_nrows, coeffs, nrows, shift, inv_len);
-
-        let shift_powers = shift.powers();
-        let shift_power_pairs = shift_powers
-            .clone()
-            .take(nrows)
-            .zip(shift_powers.skip(nrows).take(nrows));
-        if let Some(random_coeffs) = opt_random_coeffs {
-            // TODO: parallelize/optimize.
-            let actual_s = MontyField31::GENERATOR / shift;
-
-            actual_s
-                .powers()
-                .take(nrows)
-                .enumerate()
-                .zip(shift_power_pairs)
-                .for_each(
-                    |((j, actual_s_power_j), (shift_power_j, shift_power_h_j))| {
-                        let mul_coeff = actual_s_power_j * inv_len;
-                        for i in 0..ncols {
-                            padded[i * result_nrows + j] -=
-                                random_coeffs[j * ncols + i] * mul_coeff * shift_power_j;
-                            padded[i * result_nrows + j + nrows] =
-                                random_coeffs[j * ncols + i] * mul_coeff * shift_power_h_j;
-                        }
-                    },
-                )
-        }
 
         // `padded` is implicitly zero padded since it was initialised
         // to zeros when declared above.

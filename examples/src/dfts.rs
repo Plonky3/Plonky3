@@ -61,22 +61,4 @@ where
             }
         }
     }
-
-    #[inline]
-    fn randomized_coset_lde_batch(
-        &self,
-        mat: RowMajorMatrix<F>,
-        added_bits: usize,
-        shift: F,
-        opt_random_coeffs: Option<&[F]>,
-    ) -> Self::Evaluations {
-        match self {
-            DftChoice::<F>::Recursive(inner_dft) => {
-                inner_dft.randomized_coset_lde_batch(mat, added_bits, shift, opt_random_coeffs)
-            }
-            DftChoice::<F>::Parallel(inner_dft) => {
-                inner_dft.randomized_coset_lde_batch(mat, added_bits, shift, opt_random_coeffs)
-            }
-        }
-    }
 }

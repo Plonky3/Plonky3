@@ -45,20 +45,9 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
     #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
     fn coset_lde_batch(
         &self,
-        mat: RowMajorMatrix<F>,
-        added_bits: usize,
-        shift: F,
-    ) -> RowMajorMatrix<F> {
-        self.randomized_coset_lde_batch(mat, added_bits, shift, None)
-    }
-
-    #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
-    fn randomized_coset_lde_batch(
-        &self,
         mut mat: RowMajorMatrix<F>,
         added_bits: usize,
         shift: F,
-        opt_random_coeffs: Option<&[F]>,
     ) -> RowMajorMatrix<F> {
         let h = mat.height();
         let h_inv = F::from_canonical_usize(h).inverse();
@@ -78,37 +67,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
             mat.scale_row(reverse_bits(row, h), weight);
         }
 
-        let is_zk = opt_random_coeffs.is_some();
-        mat = mat.bit_reversed_zero_pad(added_bits + is_zk as usize);
-
-        if let Some(random_coeffs) = opt_random_coeffs {
-            // Add a random polynomial that is a multiple of the vanishing polynomial.
-            let actual_s = F::GENERATOR / shift;
-            let shift_powers = shift.powers();
-            let shift_power_pairs = shift_powers
-                .clone()
-                .take(h)
-                .zip(shift_powers.skip(h).take(h));
-            let w = mat.width();
-            let new_h = mat.height();
-            actual_s
-                .powers()
-                .take(h)
-                .enumerate()
-                .zip(shift_power_pairs)
-                .for_each(
-                    |((i, actual_s_power_i), (shift_power_i, shift_power_h_i))| {
-                        let rev_i = reverse_bits(i, new_h);
-                        let upper_rev_i = reverse_bits(h + i, new_h);
-
-                        for j in 0..w {
-                            let mul_coeff = actual_s_power_i * h_inv * random_coeffs[i * w + j];
-                            mat.values[rev_i * w + j] -= mul_coeff * shift_power_i;
-                            mat.values[upper_rev_i * w + j] = mul_coeff * shift_power_h_i;
-                        }
-                    },
-                )
-        }
+        mat = mat.bit_reversed_zero_pad(added_bits);
 
         bowers_g(&mut mat.as_view_mut());
 
