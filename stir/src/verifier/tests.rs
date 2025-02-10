@@ -42,7 +42,7 @@ fn test_compute_folded_evals() {
 #[test]
 fn test_verify() {
     // NP TODO make bigger after more efficient FFT is introduced
-    let config = test_bb_stir_config(10, 1, 4, 2);
+    let config = test_bb_stir_config(20, 2, 4, 3);
 
     let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
 
@@ -52,13 +52,14 @@ fn test_verify() {
     let (witness, commitment) = commit(&config, polynomial);
 
     let proof = prove(&config, witness, commitment, &mut prover_challenger);
+
     verify(&config, proof, &mut verifier_challenger).unwrap();
 }
 
 #[test]
 fn test_verify_variable_folding_factor() {
     // NP TODO make bigger after more efficient FFT is introduced
-    let config = test_stir_config_folding_factors(10, 1, vec![4, 5]);
+    let config = test_stir_config_folding_factors(14, 1, vec![4, 3, 5]);
 
     let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
 

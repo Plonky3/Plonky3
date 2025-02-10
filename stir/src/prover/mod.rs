@@ -180,8 +180,6 @@ where
         .map(|(mut k, v)| (k.remove(0), v))
         .collect();
 
-    println!("Grinding {} bits", config.final_pow_bits().ceil() as usize);
-
     // NP TODO: Is this correct? Can we just take the ceil?
     let pow_witness = challenger.grind(config.final_pow_bits().ceil() as usize);
 
@@ -310,8 +308,6 @@ where
     // Proof-of-work witness
     // NP TODO: Is this correct? Can we just take the ceil?
     // NP TODO unsafe cast to usize
-    println!("Grinding {} bits", pow_bits.ceil() as usize);
-
     let pow_witness = challenger.grind(pow_bits.ceil() as usize);
 
     // ========= QUERY PROOFS =========

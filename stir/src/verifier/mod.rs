@@ -4,8 +4,7 @@ use error::{FullRoundVerificationError, VerificationError};
 use p3_coset::TwoAdicCoset;
 use p3_matrix::Dimensions;
 
-use itertools::iterate;
-use itertools::Itertools;
+use itertools::{iterate, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{batch_multiplicative_inverse, ExtensionField, Field, TwoAdicField};
@@ -56,6 +55,9 @@ impl<F: TwoAdicField> Oracle<F> {
         &self,
         x: F,
         f_x: F,
+        // Since each call to `evaluate` involves dividing by a denominator, we
+        // can batch-invert many of them outside and feed them to the function
+        quotient_denom_inverse_hint: Option<F>,
         // NP TODO optimise
         // common_factors_inverse: F,
         // denom_hint: F,
@@ -72,15 +74,18 @@ impl<F: TwoAdicField> Oracle<F> {
                     "The virtual function is undefined at points in its quotient set"
                 );
 
-                // NP TODO optimise?
                 let quotient_num = f_x - virtual_function.interpolating_polynomial.evaluate(&x);
-                let quotient_denom: F = virtual_function
-                    .quotient_set
-                    .iter()
-                    .map(|q| x - *q)
-                    .product();
 
-                let quotient_evalution = quotient_num * quotient_denom.inverse();
+                let quotient_denom_inverse = quotient_denom_inverse_hint.unwrap_or_else(|| {
+                    virtual_function
+                        .quotient_set
+                        .iter()
+                        .map(|q| x - *q)
+                        .product::<F>()
+                        .inverse()
+                });
+
+                let quotient_evalution = quotient_num * quotient_denom_inverse;
 
                 let num_terms = virtual_function.quotient_set.len();
                 let common_factor = x * virtual_function.comb_randomness;
@@ -97,6 +102,12 @@ impl<F: TwoAdicField> Oracle<F> {
         }
     }
 }
+
+// NP TODO remove
+//            *   %   *   %   *   %     *     %
+// L_i        0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
+// L_i^4      0       4       8         12
+// query *0, %8
 
 /// Input to verify_round
 pub struct VerificationState<F: TwoAdicField, M: Mmcs<F>> {
@@ -511,14 +522,53 @@ fn compute_f_oracle_from_g<F: TwoAdicField>(
     // NP TODO this can maybe be optimized
 
     // Compute the values of f_i at the points using those of g_i
+
+    // Each call to the oracle involves a division by an evaluation of the
+    // vanishing polynomial at the query set. We can batch-invert those
+    // denominators outside to reduce the number of costly calls to invert()
+    let denom_inverse_hints = match oracle {
+        Oracle::Transparent => vec![vec![None; folding_factor]; queried_point_preimages.len()],
+        Oracle::Virtual(virtual_function) => {
+            let flat_denoms: Vec<F> = queried_point_preimages
+                .iter()
+                .flat_map(|points| {
+                    points
+                        .iter()
+                        .map(|point| {
+                            virtual_function
+                                .quotient_set
+                                .iter()
+                                .map(|q| *point - *q)
+                                .product()
+                        })
+                        .collect_vec()
+                })
+                .collect_vec();
+
+            let flat_denom_invs = batch_multiplicative_inverse(&flat_denoms)
+                .into_iter()
+                .map(|x| Some(x))
+                .collect_vec();
+
+            flat_denom_invs
+                .chunks_exact(folding_factor)
+                .map(|chunk| chunk.to_vec())
+                .collect_vec()
+        }
+    };
+
     queried_point_preimages
         .into_iter()
         .zip(g_eval_batches.into_iter())
-        .map(|(points, g_eval_batch)| {
+        .zip(denom_inverse_hints.into_iter())
+        .map(|((points, g_eval_batch), denom_inverse_hints)| {
             points
                 .into_iter()
                 .zip(g_eval_batch.into_iter())
-                .map(|(point, g_eval)| oracle.evaluate(point, g_eval))
+                .zip(denom_inverse_hints.into_iter())
+                .map(|((point, g_eval), denom_inverse_hint)| {
+                    oracle.evaluate(point, g_eval, denom_inverse_hint)
+                })
                 .collect_vec()
         })
         .collect_vec()
