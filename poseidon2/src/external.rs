@@ -64,13 +64,6 @@ pub struct HLMDSMat4;
 
 impl<R: PrimeCharacteristicRing> Permutation<[R; 4]> for HLMDSMat4 {
     #[inline(always)]
-    fn permute(&self, input: [R; 4]) -> [R; 4] {
-        let mut output = input;
-        self.permute_mut(&mut output);
-        output
-    }
-
-    #[inline(always)]
     fn permute_mut(&self, input: &mut [R; 4]) {
         apply_hl_mat4(input)
     }
@@ -84,13 +77,6 @@ impl<R: PrimeCharacteristicRing> MdsPermutation<R, 4> for HLMDSMat4 {}
 pub struct MDSMat4;
 
 impl<R: PrimeCharacteristicRing> Permutation<[R; 4]> for MDSMat4 {
-    #[inline(always)]
-    fn permute(&self, input: [R; 4]) -> [R; 4] {
-        let mut output = input;
-        self.permute_mut(&mut output);
-        output
-    }
-
     #[inline(always)]
     fn permute_mut(&self, input: &mut [R; 4]) {
         apply_mat4(input)

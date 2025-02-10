@@ -122,6 +122,8 @@ where
             rounds
                 .into_iter()
                 .map(|(coeffs_for_round, points_for_round)| {
+                    // ensure that each matrix corresponds to a set of opening points
+                    debug_assert_eq!(coeffs_for_round.len(), points_for_round.len());
                     coeffs_for_round
                         .iter()
                         .zip(points_for_round)
