@@ -296,7 +296,8 @@ where
                                                 Some(&inv_denoms),
                                             )
                                         });
-                                ys.iter().for_each(|&y| challenger.observe_ext_element(y));
+                                ys.iter()
+                                    .for_each(|&y| challenger.observe_algebra_element(y));
                                 ys
                             })
                             .collect_vec()
@@ -306,7 +307,7 @@ where
             .collect_vec();
 
         // Batch combination challenge
-        let alpha: Challenge = challenger.sample_ext_element();
+        let alpha: Challenge = challenger.sample_algebra_element();
 
         let mut num_reduced = [0; 32];
         let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None);
@@ -402,13 +403,13 @@ where
                 for (_, point) in mat.iter() {
                     point
                         .iter()
-                        .for_each(|&opening| challenger.observe_ext_element(opening));
+                        .for_each(|&opening| challenger.observe_algebra_element(opening));
                 }
             }
         }
 
         // Batch combination challenge
-        let alpha: Challenge = challenger.sample_ext_element();
+        let alpha: Challenge = challenger.sample_algebra_element();
 
         let log_global_max_height =
             proof.commit_phase_commits.len() + self.fri.log_blowup + self.fri.log_final_poly_len;

@@ -70,7 +70,6 @@ impl MdsPermutation<PackedGoldilocksAVX512, 24> for MdsMatrixGoldilocks {}
 
 #[cfg(test)]
 mod tests {
-    use p3_field::FieldAlgebra;
     use p3_poseidon::Poseidon;
     use p3_symmetric::Permutation;
     use rand::Rng;
@@ -89,7 +88,7 @@ mod tests {
         let mut expected = input;
         poseidon.permute_mut(&mut expected);
 
-        let mut avx2_input = input.map(PackedGoldilocksAVX512::from_f);
+        let mut avx2_input = input.map(Into::<PackedGoldilocksAVX512>::into);
         poseidon.permute_mut(&mut avx2_input);
 
         let avx2_output = avx2_input.map(|x| x.0[0]);
@@ -108,7 +107,7 @@ mod tests {
         let mut expected = input;
         poseidon.permute_mut(&mut expected);
 
-        let mut avx2_input = input.map(PackedGoldilocksAVX512::from_f);
+        let mut avx2_input = input.map(Into::<PackedGoldilocksAVX512>::into);
         poseidon.permute_mut(&mut avx2_input);
 
         let avx2_output = avx2_input.map(|x| x.0[0]);
@@ -127,7 +126,7 @@ mod tests {
         let mut expected = input;
         poseidon.permute_mut(&mut expected);
 
-        let mut avx2_input = input.map(PackedGoldilocksAVX512::from_f);
+        let mut avx2_input = input.map(Into::<PackedGoldilocksAVX512>::into);
         poseidon.permute_mut(&mut avx2_input);
 
         let avx2_output = avx2_input.map(|x| x.0[0]);
@@ -146,7 +145,7 @@ mod tests {
         let mut expected = input;
         poseidon.permute_mut(&mut expected);
 
-        let mut avx2_input = input.map(PackedGoldilocksAVX512::from_f);
+        let mut avx2_input = input.map(Into::<PackedGoldilocksAVX512>::into);
         poseidon.permute_mut(&mut avx2_input);
 
         let avx2_output = avx2_input.map(|x| x.0[0]);

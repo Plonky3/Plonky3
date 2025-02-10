@@ -206,7 +206,7 @@ mod tests {
     use itertools::Itertools;
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_commit::Mmcs;
-    use p3_field::{Field, FieldAlgebra};
+    use p3_field::{Field, PrimeCharacteristicRing};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_matrix::{Dimensions, Matrix};
     use p3_symmetric::{
@@ -440,12 +440,8 @@ mod tests {
         let mmcs = MyMmcs::new(hash, compress);
 
         // attempt to commit to a mat with 8 rows and a mat with 7 rows. this should panic.
-        let large_mat = RowMajorMatrix::new(
-            [1, 2, 3, 4, 5, 6, 7, 8].map(F::from_canonical_u8).to_vec(),
-            1,
-        );
-        let small_mat =
-            RowMajorMatrix::new([1, 2, 3, 4, 5, 6, 7].map(F::from_canonical_u8).to_vec(), 1);
+        let large_mat = RowMajorMatrix::new([1, 2, 3, 4, 5, 6, 7, 8].map(F::from_u8).to_vec(), 1);
+        let small_mat = RowMajorMatrix::new([1, 2, 3, 4, 5, 6, 7].map(F::from_u8).to_vec(), 1);
         let _ = mmcs.commit(vec![large_mat, small_mat]);
     }
 

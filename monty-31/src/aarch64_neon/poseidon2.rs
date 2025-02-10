@@ -14,7 +14,7 @@ use p3_poseidon2::{
 
 use crate::{
     FieldParameters, InternalLayerBaseParameters, MontyField31, MontyParameters,
-    PackedMontyField31Neon,
+    PackedMontyField31Neon, RelativelyPrimePower,
 };
 
 /// The internal layers of the Poseidon2 permutation for Monty31 fields.
@@ -39,8 +39,7 @@ pub struct Poseidon2ExternalLayerMonty31<MP: MontyParameters, const WIDTH: usize
 }
 
 impl<FP: FieldParameters, const WIDTH: usize, ILP: InternalLayerBaseParameters<FP, WIDTH>>
-    InternalLayerConstructor<PackedMontyField31Neon<FP>>
-    for Poseidon2InternalLayerMonty31<FP, WIDTH, ILP>
+    InternalLayerConstructor<MontyField31<FP>> for Poseidon2InternalLayerMonty31<FP, WIDTH, ILP>
 {
     fn new_from_constants(internal_constants: Vec<MontyField31<FP>>) -> Self {
         Self {
@@ -50,8 +49,7 @@ impl<FP: FieldParameters, const WIDTH: usize, ILP: InternalLayerBaseParameters<F
     }
 }
 
-impl<FP: FieldParameters, const WIDTH: usize>
-    ExternalLayerConstructor<PackedMontyField31Neon<FP>, WIDTH>
+impl<FP: FieldParameters, const WIDTH: usize> ExternalLayerConstructor<MontyField31<FP>, WIDTH>
     for Poseidon2ExternalLayerMonty31<FP, WIDTH>
 {
     fn new_from_constants(
@@ -64,7 +62,7 @@ impl<FP: FieldParameters, const WIDTH: usize>
 impl<FP, ILP, const WIDTH: usize, const D: u64> InternalLayer<PackedMontyField31Neon<FP>, WIDTH, D>
     for Poseidon2InternalLayerMonty31<FP, WIDTH, ILP>
 where
-    FP: FieldParameters,
+    FP: FieldParameters + RelativelyPrimePower<D>,
     ILP: InternalLayerBaseParameters<FP, WIDTH>,
 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
@@ -79,7 +77,7 @@ where
 impl<FP, const D: u64, const WIDTH: usize> ExternalLayer<PackedMontyField31Neon<FP>, WIDTH, D>
     for Poseidon2ExternalLayerMonty31<FP, WIDTH>
 where
-    FP: FieldParameters,
+    FP: FieldParameters + RelativelyPrimePower<D>,
 {
     /// Perform the initial external layers of the Poseidon2 permutation on the given state.
     fn permute_state_initial(&self, state: &mut [PackedMontyField31Neon<FP>; WIDTH]) {

@@ -6,7 +6,7 @@ use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, FieldAlgebra, PrimeField64};
+use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
 use p3_fri::{create_test_fri_config, TwoAdicFriPcs};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
@@ -64,7 +64,7 @@ pub fn generate_trace_rows<F: PrimeField64>(a: u64, b: u64, n: usize) -> RowMajo
     assert!(suffix.is_empty(), "Alignment should match");
     assert_eq!(rows.len(), n);
 
-    rows[0] = FibonacciRow::new(F::from_canonical_u64(a), F::from_canonical_u64(b));
+    rows[0] = FibonacciRow::new(F::from_u64(a), F::from_u64(b));
 
     for i in 1..n {
         rows[i].left = rows[i - 1].right;
@@ -124,11 +124,7 @@ fn test_public_value_impl(n: usize, x: u64) {
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
     let config = MyConfig::new(pcs);
     let mut challenger = Challenger::new(perm.clone());
-    let pis = vec![
-        BabyBear::from_canonical_u64(0),
-        BabyBear::from_canonical_u64(1),
-        BabyBear::from_canonical_u64(x),
-    ];
+    let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(x)];
     let proof = prove(&config, &FibonacciAir {}, &mut challenger, trace, &pis);
     let mut challenger = Challenger::new(perm);
     verify(&config, &FibonacciAir {}, &mut challenger, &proof, &pis).expect("verification failed");
@@ -160,9 +156,9 @@ fn test_incorrect_public_value() {
     let config = MyConfig::new(pcs);
     let mut challenger = Challenger::new(perm.clone());
     let pis = vec![
-        BabyBear::from_canonical_u64(0),
-        BabyBear::from_canonical_u64(1),
-        BabyBear::from_canonical_u64(123_123), // incorrect result
+        BabyBear::ZERO,
+        BabyBear::ONE,
+        BabyBear::from_u32(123_123), // incorrect result
     ];
     prove(&config, &FibonacciAir {}, &mut challenger, trace, &pis);
 }

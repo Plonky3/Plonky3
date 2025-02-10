@@ -229,7 +229,7 @@ mod tests {
 
     use hashbrown::HashSet;
     use itertools::izip;
-    use p3_field::{batch_multiplicative_inverse, FieldAlgebra};
+    use p3_field::{batch_multiplicative_inverse, PrimeCharacteristicRing};
     use p3_mersenne_31::Mersenne31;
     use rand::thread_rng;
 

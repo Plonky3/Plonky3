@@ -41,6 +41,7 @@ clap = { version = "4.5.23", features = ["derive"] }
 clap_derive = "4.5.18"
 criterion = "0.5.1"
 ff = "0.13"
+forward_ref = "1.0.0"
 gcd = "2.3.0"
 generic-array = "1.0"
 halo2curves = "0.8.0"
@@ -53,6 +54,7 @@ num-bigint = { version = "0.4.3", default-features = false }
 num-integer = "0.1.46"
 num-traits = { version = "0.2.19", default-features = false }
 nums = "0.1.0"
+paste = "1.0.15"
 postcard = { version = "1.0.0", default-features = false }
 rand = "0.8.5"
 rand_chacha = "0.3.1"

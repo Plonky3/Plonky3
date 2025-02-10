@@ -33,7 +33,7 @@ where
     Inner: Matrix<EF>,
 {
     fn width(&self) -> usize {
-        self.0.width() * EF::D
+        self.0.width() * EF::DIMENSION
     }
 
     fn height(&self) -> usize {
@@ -57,7 +57,7 @@ where
         self.0
             .row_slice(r)
             .iter()
-            .flat_map(|val| val.as_base_slice())
+            .flat_map(|val| val.as_basis_coefficients_slice())
             .copied()
             .collect::<Vec<_>>()
     }
@@ -77,11 +77,11 @@ where
 {
     type Item = F;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.idx == EF::D {
+        if self.idx == EF::DIMENSION {
             self.idx = 0;
             self.inner.next();
         }
-        let value = self.inner.peek()?.as_base_slice()[self.idx];
+        let value = self.inner.peek()?.as_basis_coefficients_slice()[self.idx];
         self.idx += 1;
         Some(value)
     }
@@ -92,7 +92,7 @@ mod tests {
     use alloc::vec;
 
     use p3_field::extension::Complex;
-    use p3_field::{FieldAlgebra, FieldExtensionAlgebra};
+    use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
     use p3_mersenne_31::Mersenne31;
 
     use super::*;
@@ -103,20 +103,14 @@ mod tests {
     #[test]
     fn flat_matrix() {
         let values = vec![
-            EF::from_base_fn(|i| F::from_canonical_usize(i + 10)),
-            EF::from_base_fn(|i| F::from_canonical_usize(i + 20)),
-            EF::from_base_fn(|i| F::from_canonical_usize(i + 30)),
-            EF::from_base_fn(|i| F::from_canonical_usize(i + 40)),
+            EF::from_basis_coefficients_fn(|i| F::from_u8(i as u8 + 10)),
+            EF::from_basis_coefficients_fn(|i| F::from_u8(i as u8 + 20)),
+            EF::from_basis_coefficients_fn(|i| F::from_u8(i as u8 + 30)),
+            EF::from_basis_coefficients_fn(|i| F::from_u8(i as u8 + 40)),
         ];
         let ext = RowMajorMatrix::<EF>::new(values, 2);
         let flat = FlatMatrixView::<F, EF, _>::new(ext);
-        assert_eq!(
-            &*flat.row_slice(0),
-            &[10, 11, 20, 21].map(F::from_canonical_usize)
-        );
-        assert_eq!(
-            &*flat.row_slice(1),
-            &[30, 31, 40, 41].map(F::from_canonical_usize)
-        );
+        assert_eq!(&*flat.row_slice(0), &[10, 11, 20, 21].map(F::from_u8));
+        assert_eq!(&*flat.row_slice(1), &[30, 31, 40, 41].map(F::from_u8));
     }
 }

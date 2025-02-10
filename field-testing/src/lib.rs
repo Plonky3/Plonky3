@@ -6,6 +6,7 @@ extern crate alloc;
 
 pub mod bench_func;
 pub mod dft_testing;
+pub mod from_integer_tests;
 pub mod packedfield_testing;
 
 pub use bench_func::*;
@@ -128,7 +129,7 @@ pub fn test_ef_two_adic_generator_consistency<
     EF: TwoAdicField + ExtensionField<F>,
 >() {
     assert_eq!(
-        EF::from_base(F::two_adic_generator(F::TWO_ADICITY)),
+        Into::<EF>::into(F::two_adic_generator(F::TWO_ADICITY)),
         EF::two_adic_generator(F::TWO_ADICITY)
     );
 }
@@ -152,6 +153,163 @@ macro_rules! test_field {
             #[test]
             fn test_multiplicative_group_factors() {
                 $crate::test_multiplicative_group_factors::<$field>();
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! test_prime_field {
+    ($field:ty) => {
+        mod from_integer_small_tests {
+            use p3_field::integers::QuotientMap;
+            use p3_field::{Field, PrimeCharacteristicRing};
+
+            #[test]
+            fn test_small_integer_conversions() {
+                $crate::generate_from_small_int_tests!(
+                    $field,
+                    [u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize]
+                );
+            }
+
+            #[test]
+            fn test_small_signed_integer_conversions() {
+                $crate::generate_from_small_neg_int_tests!(
+                    $field,
+                    [i8, i16, i32, i64, i128, isize]
+                );
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! test_prime_field_64 {
+    ($field:ty) => {
+        mod from_integer_tests_prime_field_64 {
+            use p3_field::integers::QuotientMap;
+            use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
+            use rand::Rng;
+
+            #[test]
+            fn test_as_canonical_u64() {
+                let mut rng = rand::thread_rng();
+                let x: u64 = rng.gen();
+                let x_mod_order = x % <$field>::ORDER_U64;
+
+                assert_eq!(<$field>::ZERO.as_canonical_u64(), 0);
+                assert_eq!(<$field>::ONE.as_canonical_u64(), 1);
+                assert_eq!(<$field>::TWO.as_canonical_u64(), 2 % <$field>::ORDER_U64);
+                assert_eq!(
+                    <$field>::NEG_ONE.as_canonical_u64(),
+                    <$field>::ORDER_U64 - 1
+                );
+
+                assert_eq!(
+                    <$field>::from_int(<$field>::ORDER_U64).as_canonical_u64(),
+                    0
+                );
+                assert_eq!(<$field>::from_int(x).as_canonical_u64(), x_mod_order);
+                assert_eq!(
+                    unsafe { <$field>::from_canonical_unchecked(x_mod_order).as_canonical_u64() },
+                    x_mod_order
+                );
+            }
+
+            #[test]
+            fn test_as_unique_u64() {
+                assert_ne!(
+                    <$field>::ZERO.to_unique_u64(),
+                    <$field>::ONE.to_unique_u64()
+                );
+                assert_ne!(
+                    <$field>::ZERO.to_unique_u64(),
+                    <$field>::NEG_ONE.to_unique_u64()
+                );
+                assert_eq!(
+                    <$field>::from_int(<$field>::ORDER_U64).to_unique_u64(),
+                    <$field>::ZERO.to_unique_u64()
+                );
+            }
+
+            #[test]
+            fn test_large_unsigned_integer_conversions() {
+                $crate::generate_from_large_u_int_tests!($field, <$field>::ORDER_U64, [u64, u128]);
+            }
+
+            #[test]
+            fn test_large_signed_integer_conversions() {
+                $crate::generate_from_large_i_int_tests!($field, <$field>::ORDER_U64, [i64, i128]);
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! test_prime_field_32 {
+    ($field:ty) => {
+        mod from_integer_tests_prime_field_32 {
+            use p3_field::integers::QuotientMap;
+            use p3_field::{Field, PrimeCharacteristicRing, PrimeField32};
+            use rand::Rng;
+
+            #[test]
+            fn test_as_canonical_u32() {
+                let mut rng = rand::thread_rng();
+                let x: u32 = rng.gen();
+                let x_mod_order = x % <$field>::ORDER_U32;
+
+                assert_eq!(<$field>::ZERO.as_canonical_u32(), 0);
+                assert_eq!(<$field>::ONE.as_canonical_u32(), 1);
+                assert_eq!(<$field>::TWO.as_canonical_u32(), 2 % <$field>::ORDER_U32);
+                assert_eq!(
+                    <$field>::NEG_ONE.as_canonical_u32(),
+                    <$field>::ORDER_U32 - 1
+                );
+                assert_eq!(
+                    <$field>::from_int(<$field>::ORDER_U32).as_canonical_u32(),
+                    0
+                );
+                assert_eq!(<$field>::from_int(x).as_canonical_u32(), x_mod_order);
+                assert_eq!(
+                    unsafe { <$field>::from_canonical_unchecked(x_mod_order).as_canonical_u32() },
+                    x_mod_order
+                );
+            }
+
+            #[test]
+            fn test_as_unique_u32() {
+                assert_ne!(
+                    <$field>::ZERO.to_unique_u32(),
+                    <$field>::ONE.to_unique_u32()
+                );
+                assert_ne!(
+                    <$field>::ZERO.to_unique_u32(),
+                    <$field>::NEG_ONE.to_unique_u32()
+                );
+                assert_eq!(
+                    <$field>::from_int(<$field>::ORDER_U32).to_unique_u32(),
+                    <$field>::ZERO.to_unique_u32()
+                );
+            }
+
+            #[test]
+            fn test_large_unsigned_integer_conversions() {
+                $crate::generate_from_large_u_int_tests!(
+                    $field,
+                    <$field>::ORDER_U32,
+                    [u32, u64, u128]
+                );
+            }
+
+            #[test]
+            fn test_large_signed_integer_conversions() {
+                $crate::generate_from_large_i_int_tests!(
+                    $field,
+                    <$field>::ORDER_U32,
+                    [i32, i64, i128]
+                );
             }
         }
     };
@@ -201,7 +359,7 @@ mod tests {
 
     use p3_baby_bear::BabyBear;
     use p3_field::extension::{BinomialExtensionField, HasFrobenius};
-    use p3_field::{binomial_expand, eval_poly, FieldAlgebra, FieldExtensionAlgebra};
+    use p3_field::{binomial_expand, eval_poly, PrimeCharacteristicRing};
     use rand::random;
 
     use super::*;
@@ -212,7 +370,7 @@ mod tests {
         type EF = BinomialExtensionField<F, 4>;
         for _ in 0..1024 {
             let x: EF = random();
-            let m: Vec<EF> = x.minimal_poly().into_iter().map(EF::from_base).collect();
+            let m: Vec<EF> = x.minimal_poly().into_iter().map(Into::<EF>::into).collect();
             assert!(eval_poly(&m, x).is_zero());
         }
     }
@@ -223,7 +381,7 @@ mod tests {
         // (x - 1)(x - 2) = x^2 - 3x + 2
         assert_eq!(
             binomial_expand(&[F::ONE, F::TWO]),
-            vec![F::TWO, -F::from_canonical_usize(3), F::ONE]
+            vec![F::TWO, -F::from_u8(3), F::ONE]
         );
     }
 }

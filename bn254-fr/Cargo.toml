@@ -11,6 +11,7 @@ p3-symmetric.workspace = true
 
 ff = { workspace = true, features = ["derive", "derive_bits"] }
 num-bigint.workspace = true
+paste.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 halo2curves = { workspace = true, features = ["bits", "derive_serde"] }

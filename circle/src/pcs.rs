@@ -194,7 +194,7 @@ where
                                         .in_scope(|| evals.evaluate_at_point(zeta));
                                 ps_at_zeta
                                     .iter()
-                                    .for_each(|&p| challenger.observe_ext_element(p));
+                                    .for_each(|&p| challenger.observe_algebra_element(p));
                                 ps_at_zeta
                             })
                             .collect()
@@ -204,7 +204,7 @@ where
             .collect();
 
         // Batch combination challenge
-        let alpha: Challenge = challenger.sample_ext_element();
+        let alpha: Challenge = challenger.sample_algebra_element();
 
         /*
         We are reducing columns ("ro" = reduced opening) with powers of alpha:
@@ -286,7 +286,7 @@ where
         let (first_layer_commitment, first_layer_data) =
             self.fri_config.mmcs.commit(first_layer_mats);
         challenger.observe(first_layer_commitment.clone());
-        let bivariate_beta: Challenge = challenger.sample_ext_element();
+        let bivariate_beta: Challenge = challenger.sample_algebra_element();
 
         // Fold all first layers at bivariate_beta.
 
@@ -378,15 +378,15 @@ where
                 for (_, point) in mat.iter() {
                     point
                         .iter()
-                        .for_each(|&opening| challenger.observe_ext_element(opening));
+                        .for_each(|&opening| challenger.observe_algebra_element(opening));
                 }
             }
         }
 
         // Batch combination challenge
-        let alpha: Challenge = challenger.sample_ext_element();
+        let alpha: Challenge = challenger.sample_algebra_element();
         challenger.observe(proof.first_layer_commitment.clone());
-        let bivariate_beta: Challenge = challenger.sample_ext_element();
+        let bivariate_beta: Challenge = challenger.sample_algebra_element();
 
         // +1 to account for first layer
         let log_global_max_height =

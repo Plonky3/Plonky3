@@ -6,7 +6,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use p3_field::{FieldAlgebra, PrimeField};
+use p3_field::{Algebra, InjectiveMonomial, PrimeField};
 use p3_mds::MdsPermutation;
 use p3_symmetric::{CryptographicPermutation, Permutation};
 use rand::distributions::Standard;
@@ -24,7 +24,7 @@ pub struct Poseidon<F, Mds, const WIDTH: usize, const ALPHA: u64> {
 
 impl<F, Mds, const WIDTH: usize, const ALPHA: u64> Poseidon<F, Mds, WIDTH, ALPHA>
 where
-    F: PrimeField,
+    F: PrimeField + InjectiveMonomial<ALPHA>,
 {
     /// Create a new Poseidon configuration.
     ///
@@ -69,10 +69,10 @@ where
         }
     }
 
-    fn half_full_rounds<FA>(&self, state: &mut [FA; WIDTH], round_ctr: &mut usize)
+    fn half_full_rounds<A>(&self, state: &mut [A; WIDTH], round_ctr: &mut usize)
     where
-        FA: FieldAlgebra<F = F>,
-        Mds: MdsPermutation<FA, WIDTH>,
+        A: Algebra<F> + InjectiveMonomial<ALPHA>,
+        Mds: MdsPermutation<A, WIDTH>,
     {
         for _ in 0..self.half_num_full_rounds {
             self.constant_layer(state, *round_ctr);
@@ -82,10 +82,10 @@ where
         }
     }
 
-    fn partial_rounds<FA>(&self, state: &mut [FA; WIDTH], round_ctr: &mut usize)
+    fn partial_rounds<A>(&self, state: &mut [A; WIDTH], round_ctr: &mut usize)
     where
-        FA: FieldAlgebra<F = F>,
-        Mds: MdsPermutation<FA, WIDTH>,
+        A: Algebra<F> + InjectiveMonomial<ALPHA>,
+        Mds: MdsPermutation<A, WIDTH>,
     {
         for _ in 0..self.num_partial_rounds {
             self.constant_layer(state, *round_ctr);
@@ -95,40 +95,40 @@ where
         }
     }
 
-    fn full_sbox_layer<FA>(state: &mut [FA; WIDTH])
+    fn full_sbox_layer<A>(state: &mut [A; WIDTH])
     where
-        FA: FieldAlgebra<F = F>,
+        A: Algebra<F> + InjectiveMonomial<ALPHA>,
     {
         for x in state.iter_mut() {
-            *x = x.exp_const_u64::<ALPHA>();
+            *x = x.injective_exp_n();
         }
     }
 
-    fn partial_sbox_layer<FA>(state: &mut [FA; WIDTH])
+    fn partial_sbox_layer<A>(state: &mut [A; WIDTH])
     where
-        FA: FieldAlgebra<F = F>,
+        A: Algebra<F> + InjectiveMonomial<ALPHA>,
     {
-        state[0] = state[0].exp_const_u64::<ALPHA>();
+        state[0] = state[0].injective_exp_n();
     }
 
-    fn constant_layer<FA>(&self, state: &mut [FA; WIDTH], round: usize)
+    fn constant_layer<A>(&self, state: &mut [A; WIDTH], round: usize)
     where
-        FA: FieldAlgebra<F = F>,
+        A: Algebra<F>,
     {
         for (i, x) in state.iter_mut().enumerate() {
-            *x += FA::from_f(self.constants[round * WIDTH + i]);
+            *x += self.constants[round * WIDTH + i];
         }
     }
 }
 
-impl<FA, Mds, const WIDTH: usize, const ALPHA: u64> Permutation<[FA; WIDTH]>
-    for Poseidon<FA::F, Mds, WIDTH, ALPHA>
+impl<F, A, Mds, const WIDTH: usize, const ALPHA: u64> Permutation<[A; WIDTH]>
+    for Poseidon<F, Mds, WIDTH, ALPHA>
 where
-    FA: FieldAlgebra,
-    FA::F: PrimeField,
-    Mds: MdsPermutation<FA, WIDTH>,
+    F: PrimeField + InjectiveMonomial<ALPHA>,
+    A: Algebra<F> + InjectiveMonomial<ALPHA>,
+    Mds: MdsPermutation<A, WIDTH>,
 {
-    fn permute_mut(&self, state: &mut [FA; WIDTH]) {
+    fn permute_mut(&self, state: &mut [A; WIDTH]) {
         let mut round_ctr = 0;
         self.half_full_rounds(state, &mut round_ctr);
         self.partial_rounds(state, &mut round_ctr);
@@ -136,11 +136,11 @@ where
     }
 }
 
-impl<FA, Mds, const WIDTH: usize, const ALPHA: u64> CryptographicPermutation<[FA; WIDTH]>
-    for Poseidon<FA::F, Mds, WIDTH, ALPHA>
+impl<F, A, Mds, const WIDTH: usize, const ALPHA: u64> CryptographicPermutation<[A; WIDTH]>
+    for Poseidon<F, Mds, WIDTH, ALPHA>
 where
-    FA: FieldAlgebra,
-    FA::F: PrimeField,
-    Mds: MdsPermutation<FA, WIDTH>,
+    F: PrimeField + InjectiveMonomial<ALPHA>,
+    A: Algebra<F> + InjectiveMonomial<ALPHA>,
+    Mds: MdsPermutation<A, WIDTH>,
 {
 }

@@ -1,9 +1,9 @@
 use core::mem::MaybeUninit;
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Sub, SubAssign};
+use core::ops::Div;
 use core::slice;
 
 use crate::field::Field;
-use crate::FieldAlgebra;
+use crate::{Algebra, BasedVectorSpace, ExtensionField, Powers, PrimeCharacteristicRing};
 
 /// A trait to constrain types that can be packed into a packed value.
 ///
@@ -128,21 +128,41 @@ unsafe impl<T: Packable, const WIDTH: usize> PackedValue for [T; WIDTH] {
     }
 }
 
+/// An array of field elements which can be packed into a vector for SIMD operations.
+///
 /// # Safety
 /// - See `PackedValue` above.
-pub unsafe trait PackedField: FieldAlgebra<F = Self::Scalar>
+pub unsafe trait PackedField: Algebra<Self::Scalar>
     + PackedValue<Value = Self::Scalar>
-    + From<Self::Scalar>
-    + Add<Self::Scalar, Output = Self>
-    + AddAssign<Self::Scalar>
-    + Sub<Self::Scalar, Output = Self>
-    + SubAssign<Self::Scalar>
-    + Mul<Self::Scalar, Output = Self>
-    + MulAssign<Self::Scalar>
     // TODO: Implement packed / packed division
     + Div<Self::Scalar, Output = Self>
 {
     type Scalar: Field;
+
+    /// Construct an iterator which returns powers of `base` packed into packed field elements.
+    /// 
+    /// E.g. if `Self::WIDTH = 4`, returns: `[base^0, base^1, base^2, base^3], [base^4, base^5, base^6, base^7], ...`.
+    #[must_use]
+    fn packed_powers(base: Self::Scalar) -> Powers<Self> {
+        Self::packed_shifted_powers(base, Self::Scalar::ONE)
+    }
+
+    /// Construct an iterator which returns powers of `base` multiplied by `start` and packed into packed field elements.
+    /// 
+    /// E.g. if `Self::WIDTH = 4`, returns: `[start, start*base, start*base^2, start*base^3], [start*base^4, start*base^5, start*base^6, start*base^7], ...`.
+    #[must_use]
+    fn packed_shifted_powers(base: Self::Scalar, start: Self::Scalar) -> Powers<Self> {
+        let mut current: Self = start.into();
+        let slice = current.as_slice_mut();
+        for i in 1..Self::WIDTH {
+            slice[i] = slice[i - 1] * base;
+        }
+
+        Powers {
+            base: base.exp_u64(Self::WIDTH as u64).into(),
+            current,
+        }
+    }
 }
 
 /// # Safety
@@ -185,6 +205,29 @@ pub unsafe trait PackedFieldPow2: PackedField {
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self);
 }
 
+/// Fix a field `F` a packing width `W` and an extension field `EF` of `F`.
+///
+/// By choosing a basis `B`, `EF` can be transformed into an array `[F; D]`.
+///
+/// A type should implement PackedFieldExtension if it can be transformed into `[F::Packing; D] ~ [[F; W]; D]`
+///
+/// This is interpreted by taking a transpose to get `[[F; D]; W]` which can then be reinterpreted
+/// as `[EF; W]` by making use of the chosen basis `B` again.
+pub trait PackedFieldExtension<
+    BaseField: Field,
+    ExtField: ExtensionField<BaseField, ExtensionPacking = Self>,
+>: Algebra<ExtField> + Algebra<BaseField::Packing> + BasedVectorSpace<BaseField::Packing>
+{
+    /// Given a slice of extension field `EF` elements of length `W`,
+    /// convert into the array `[[F; D]; W]` transpose to
+    /// `[[F; W]; D]` and then pack to get `[PF; D]`.
+    fn from_ext_slice(ext_slice: &[ExtField]) -> Self;
+
+    /// Similar to packed_powers, construct an iterator which returns
+    /// powers of `base` packed into `PackedFieldExtension` elements.
+    fn packed_ext_powers(base: ExtField) -> Powers<Self>;
+}
+
 unsafe impl<T: Packable> PackedValue for T {
     type Value = Self;
 
@@ -224,6 +267,16 @@ unsafe impl<F: Field> PackedFieldPow2 for F {
             1 => (*self, other),
             _ => panic!("unsupported block length"),
         }
+    }
+}
+
+impl<F: Field> PackedFieldExtension<F, F> for F::Packing {
+    fn from_ext_slice(ext_slice: &[F]) -> Self {
+        ext_slice[0].into()
+    }
+
+    fn packed_ext_powers(base: F) -> Powers<Self> {
+        F::Packing::packed_powers(base)
     }
 }
 

@@ -4,7 +4,7 @@ use core::borrow::Borrow;
 use itertools::izip;
 use p3_air::utils::{add2, add3, pack_bits_le, xor, xor_32_shift};
 use p3_air::{Air, AirBuilder, BaseAir};
-use p3_field::{FieldAlgebra, PrimeField64};
+use p3_field::{PrimeCharacteristicRing, PrimeField64};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use rand::random;
@@ -270,8 +270,8 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
             .iter()
             .zip(IV)
             .for_each(|(row_elem, constant)| {
-                builder.assert_eq(row_elem[0], AB::Expr::from_canonical_u32(constant[0]));
-                builder.assert_eq(row_elem[1], AB::Expr::from_canonical_u32(constant[1]));
+                builder.assert_eq(row_elem[0], AB::Expr::from_u16(constant[0]));
+                builder.assert_eq(row_elem[1], AB::Expr::from_u16(constant[1]));
             });
 
         let mut m_values: [[AB::Expr; 2]; 16] = local.inputs.map(|bits| {

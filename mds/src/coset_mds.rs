@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_field::{FieldAlgebra, TwoAdicField};
+use p3_field::{Algebra, Field, TwoAdicField};
 use p3_symmetric::Permutation;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
@@ -50,23 +50,19 @@ where
     }
 }
 
-impl<FA, const N: usize> Permutation<[FA; N]> for CosetMds<FA::F, N>
-where
-    FA: FieldAlgebra,
-    FA::F: TwoAdicField,
-{
-    fn permute(&self, mut input: [FA; N]) -> [FA; N] {
+impl<F: TwoAdicField, A: Algebra<F>, const N: usize> Permutation<[A; N]> for CosetMds<F, N> {
+    fn permute(&self, mut input: [A; N]) -> [A; N] {
         self.permute_mut(&mut input);
         input
     }
 
-    fn permute_mut(&self, values: &mut [FA; N]) {
+    fn permute_mut(&self, values: &mut [A; N]) {
         // Inverse DFT, except we skip bit reversal and rescaling by 1/N.
         bowers_g_t(values, &self.ifft_twiddles);
 
         // Multiply by powers of the coset shift (see default coset LDE impl for an explanation)
         for (value, weight) in values.iter_mut().zip(self.weights) {
-            *value = value.clone() * FA::from_f(weight);
+            *value = value.clone() * weight;
         }
 
         // DFT, assuming bit-reversed input.
@@ -74,17 +70,12 @@ where
     }
 }
 
-impl<FA, const N: usize> MdsPermutation<FA, N> for CosetMds<FA::F, N>
-where
-    FA: FieldAlgebra,
-    FA::F: TwoAdicField,
-{
-}
+impl<F: TwoAdicField, A: Algebra<F>, const N: usize> MdsPermutation<A, N> for CosetMds<F, N> {}
 
 /// Executes the Bowers G network. This is like a DFT, except it assumes the input is in
 /// bit-reversed order.
 #[inline]
-fn bowers_g<FA: FieldAlgebra, const N: usize>(values: &mut [FA; N], twiddles: &[FA::F]) {
+fn bowers_g<F: Field, A: Algebra<F>, const N: usize>(values: &mut [A; N], twiddles: &[F]) {
     let log_n = log2_strict_usize(N);
     for log_half_block_size in 0..log_n {
         bowers_g_layer(values, log_half_block_size, twiddles);
@@ -94,7 +85,7 @@ fn bowers_g<FA: FieldAlgebra, const N: usize>(values: &mut [FA; N], twiddles: &[
 /// Executes the Bowers G^T network. This is like an inverse DFT, except we skip rescaling by
 /// `1/N`, and the output is bit-reversed.
 #[inline]
-fn bowers_g_t<FA: FieldAlgebra, const N: usize>(values: &mut [FA; N], twiddles: &[FA::F]) {
+fn bowers_g_t<F: Field, A: Algebra<F>, const N: usize>(values: &mut [A; N], twiddles: &[F]) {
     let log_n = log2_strict_usize(N);
     for log_half_block_size in (0..log_n).rev() {
         bowers_g_t_layer(values, log_half_block_size, twiddles);
@@ -103,10 +94,10 @@ fn bowers_g_t<FA: FieldAlgebra, const N: usize>(values: &mut [FA; N], twiddles: 
 
 /// One layer of a Bowers G network. Equivalent to `bowers_g_t_layer` except for the butterfly.
 #[inline]
-fn bowers_g_layer<FA: FieldAlgebra, const N: usize>(
-    values: &mut [FA; N],
+fn bowers_g_layer<F: Field, A: Algebra<F>, const N: usize>(
+    values: &mut [A; N],
     log_half_block_size: usize,
-    twiddles: &[FA::F],
+    twiddles: &[F],
 ) {
     let log_block_size = log_half_block_size + 1;
     let half_block_size = 1 << log_half_block_size;
@@ -129,10 +120,10 @@ fn bowers_g_layer<FA: FieldAlgebra, const N: usize>(
 
 /// One layer of a Bowers G^T network. Equivalent to `bowers_g_layer` except for the butterfly.
 #[inline]
-fn bowers_g_t_layer<FA: FieldAlgebra, const N: usize>(
-    values: &mut [FA; N],
+fn bowers_g_t_layer<F: Field, A: Algebra<F>, const N: usize>(
+    values: &mut [A; N],
     log_half_block_size: usize,
-    twiddles: &[FA::F],
+    twiddles: &[F],
 ) {
     let log_block_size = log_half_block_size + 1;
     let half_block_size = 1 << log_half_block_size;
@@ -157,7 +148,7 @@ fn bowers_g_t_layer<FA: FieldAlgebra, const N: usize>(
 mod tests {
     use p3_baby_bear::BabyBear;
     use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
-    use p3_field::{Field, FieldAlgebra};
+    use p3_field::{Field, PrimeCharacteristicRing};
     use p3_symmetric::Permutation;
     use rand::{thread_rng, Rng};
 
@@ -175,7 +166,7 @@ mod tests {
         let mut coset_lde_naive = NaiveDft.coset_lde(arr.to_vec(), 0, shift);
         coset_lde_naive
             .iter_mut()
-            .for_each(|x| *x *= F::from_canonical_usize(N));
+            .for_each(|x| *x *= F::from_u8(N as u8));
         CosetMds::default().permute_mut(&mut arr);
         assert_eq!(coset_lde_naive, arr);
     }
