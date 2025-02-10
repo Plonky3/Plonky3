@@ -11,7 +11,7 @@ use p3_uni_stark::{
     DebugConstraintBuilder, ProverConstraintFolder, StarkGenericConfig, SymbolicAirBuilder,
     SymbolicExpression, VerifierConstraintFolder,
 };
-use rand::distributions::Standard;
+use rand::distr::Standard;
 use rand::prelude::Distribution;
 
 /// An enum containing the three different AIR's.

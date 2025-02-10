@@ -8,7 +8,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::stack::HorizontalPair;
 use p3_matrix::{Dimensions, Matrix};
 use p3_symmetric::{CryptographicHasher, Hash, PseudoCompressionFunction};
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -68,7 +68,7 @@ where
     R: Rng + Clone,
     PW::Value: Eq,
     [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
-    Standard: Distribution<P::Value>,
+    StandardUniform: Distribution<P::Value>,
 {
     type ProverData<M> =
         MerkleTree<P::Value, PW::Value, HorizontalPair<M, RowMajorMatrix<P::Value>>, DIGEST_ELEMS>;

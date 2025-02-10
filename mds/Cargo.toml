@@ -10,7 +10,7 @@ p3-field.workspace = true
 p3-matrix.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
-rand = { workspace = true, features = ["min_const_gen"] }
+rand.workspace = true
 itertools.workspace = true
 
 [dev-dependencies]

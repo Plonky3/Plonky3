@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
 
 /// Multiply a 4-element vector x by
@@ -161,7 +161,7 @@ impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
 
     pub fn new_from_rng<R: Rng>(external_round_number: usize, rng: &mut R) -> Self
     where
-        Standard: Distribution<[T; WIDTH]>,
+        StandardUniform: Distribution<[T; WIDTH]>,
     {
         let half_f = external_round_number / 2;
         assert_eq!(
@@ -169,8 +169,8 @@ impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
             external_round_number,
             "The total number of external rounds should be even"
         );
-        let initial_constants = rng.sample_iter(Standard).take(half_f).collect();
-        let terminal_constants = rng.sample_iter(Standard).take(half_f).collect();
+        let initial_constants = rng.sample_iter(StandardUniform).take(half_f).collect();
+        let terminal_constants = rng.sample_iter(StandardUniform).take(half_f).collect();
 
         Self::new(initial_constants, terminal_constants)
     }

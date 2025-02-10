@@ -8,7 +8,7 @@ use core::{iter, slice};
 
 use p3_field::{scale_slice_in_place, ExtensionField, Field, PackedValue};
 use p3_maybe_rayon::prelude::*;
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -418,19 +418,19 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T, Vec<T>> {
 
     pub fn rand<R: Rng>(rng: &mut R, rows: usize, cols: usize) -> Self
     where
-        Standard: Distribution<T>,
+        StandardUniform: Distribution<T>,
     {
-        let values = rng.sample_iter(Standard).take(rows * cols).collect();
+        let values = rng.sample_iter(StandardUniform).take(rows * cols).collect();
         Self::new(values, cols)
     }
 
     pub fn rand_nonzero<R: Rng>(rng: &mut R, rows: usize, cols: usize) -> Self
     where
         T: Field,
-        Standard: Distribution<T>,
+        StandardUniform: Distribution<T>,
     {
         let values = rng
-            .sample_iter(Standard)
+            .sample_iter(StandardUniform)
             .filter(|x| !x.is_zero())
             .take(rows * cols)
             .collect();

@@ -11,7 +11,7 @@ use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHasher32To64};
 use p3_uni_stark::{prove, verify, StarkConfig};
-use rand::distributions::Standard;
+use rand::distr::Standard;
 use rand::prelude::Distribution;
 
 use crate::airs::ExampleHashAir;

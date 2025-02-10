@@ -8,7 +8,7 @@ use p3_mds::coset_mds::CosetMds;
 use p3_mds::integrated_coset_mds::IntegratedCosetMds;
 use p3_mds::MdsPermutation;
 use p3_mersenne_31::{MdsMatrixMersenne31, Mersenne31};
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::{thread_rng, Rng};
 
 fn bench_all_mds(c: &mut Criterion) {

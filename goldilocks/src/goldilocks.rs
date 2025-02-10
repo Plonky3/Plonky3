@@ -16,7 +16,7 @@ use p3_field::{
     PrimeField64, TwoAdicField,
 };
 use p3_util::{assume, branch_hint};
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 

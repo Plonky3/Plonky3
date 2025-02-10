@@ -7,7 +7,7 @@ use num_integer::binomial;
 use p3_field::{Algebra, PermutationMonomial, PrimeField, PrimeField64};
 use p3_mds::MdsPermutation;
 use p3_symmetric::{CryptographicPermutation, Permutation};
-use rand::distributions::Standard;
+use rand::distr::Standard;
 use rand::prelude::Distribution;
 use rand::Rng;
 

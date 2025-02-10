@@ -8,7 +8,7 @@ use p3_field::TwoAdicField;
 use p3_fri::fold_even_odd;
 use p3_goldilocks::Goldilocks;
 use p3_mersenne_31::Mersenne31;
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::{thread_rng, Rng};
 
 fn bench<F: TwoAdicField>(c: &mut Criterion, log_sizes: &[usize])

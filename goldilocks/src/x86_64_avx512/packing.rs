@@ -12,7 +12,7 @@ use p3_field::{
     PermutationMonomial, PrimeCharacteristicRing, PrimeField64,
 };
 use p3_util::convert_vec;
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
 
 use crate::Goldilocks;

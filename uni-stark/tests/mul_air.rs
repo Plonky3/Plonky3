@@ -21,7 +21,7 @@ use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32, TruncatedPermutation,
 };
 use p3_uni_stark::{prove, verify, StarkConfig, StarkGenericConfig, Val};
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::{thread_rng, Rng};
 
 /// How many `a * b = c` operations to do per row in the AIR.

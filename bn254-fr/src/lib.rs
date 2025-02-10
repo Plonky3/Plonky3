@@ -18,7 +18,7 @@ use p3_field::{
     PrimeField, TwoAdicField,
 };
 pub use poseidon2::Poseidon2Bn254;
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
 

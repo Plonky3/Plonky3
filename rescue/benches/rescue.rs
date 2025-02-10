@@ -10,7 +10,7 @@ use p3_mds::MdsPermutation;
 use p3_mersenne_31::{MdsMatrixMersenne31, Mersenne31};
 use p3_rescue::Rescue;
 use p3_symmetric::Permutation;
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::{thread_rng, Rng};
 
 fn bench_rescue(c: &mut Criterion) {

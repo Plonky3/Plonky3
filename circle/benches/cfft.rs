@@ -7,7 +7,7 @@ use p3_field::TwoAdicField;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_mersenne_31::Mersenne31;
 use p3_util::pretty_name;
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::thread_rng;
 
 fn bench_lde(c: &mut Criterion) {

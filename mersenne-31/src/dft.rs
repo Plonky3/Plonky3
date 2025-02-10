@@ -173,7 +173,7 @@ impl Mersenne31Dft {
 
 #[cfg(test)]
 mod tests {
-    use rand::distributions::{Distribution, Standard};
+    use rand::distr::{Distribution, StandardUniform};
     use rand::{thread_rng, Rng};
 
     use super::*;

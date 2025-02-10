@@ -18,18 +18,18 @@ use p3_field::{
     two_adic_subgroup_zerofier, ExtensionField, Field, TwoAdicField,
 };
 pub use packedfield_testing::*;
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
 
 #[allow(clippy::eq_op)]
 pub fn test_add_neg_sub_mul<F: Field>()
 where
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
-    let mut rng = rand::thread_rng();
-    let x = rng.gen::<F>();
-    let y = rng.gen::<F>();
-    let z = rng.gen::<F>();
+    let mut rng = rand::rng();
+    let x = rng.random::<F>();
+    let y = rng.random::<F>();
+    let z = rng.random::<F>();
     assert_eq!(F::ONE + F::NEG_ONE, F::ZERO);
     assert_eq!(x + (-x), F::ZERO);
     assert_eq!(F::ONE + F::ONE, F::TWO);
@@ -54,12 +54,12 @@ where
 
 pub fn test_inv_div<F: Field>()
 where
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
-    let mut rng = rand::thread_rng();
-    let x = rng.gen::<F>();
-    let y = rng.gen::<F>();
-    let z = rng.gen::<F>();
+    let mut rng = rand::rng();
+    let x = rng.random::<F>();
+    let y = rng.random::<F>();
+    let z = rng.random::<F>();
     assert_eq!(x * x.inverse(), F::ONE);
     assert_eq!(x.inverse() * x, F::ONE);
     assert_eq!(x.square().inverse(), x.inverse().square());
@@ -70,15 +70,15 @@ where
 
 pub fn test_inverse<F: Field>()
 where
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
     assert_eq!(None, F::ZERO.try_inverse());
 
     assert_eq!(Some(F::ONE), F::ONE.try_inverse());
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     for _ in 0..1000 {
-        let x = rng.gen::<F>();
+        let x = rng.random::<F>();
         if !x.is_zero() && !x.is_one() {
             let z = x.inverse();
             assert_ne!(x, z);
@@ -194,8 +194,8 @@ macro_rules! test_prime_field_64 {
 
             #[test]
             fn test_as_canonical_u64() {
-                let mut rng = rand::thread_rng();
-                let x: u64 = rng.gen();
+                let mut rng = rand::rng();
+                let x: u64 = rng.random();
                 let x_mod_order = x % <$field>::ORDER_U64;
 
                 assert_eq!(<$field>::ZERO.as_canonical_u64(), 0);
@@ -256,8 +256,8 @@ macro_rules! test_prime_field_32 {
 
             #[test]
             fn test_as_canonical_u32() {
-                let mut rng = rand::thread_rng();
-                let x: u32 = rng.gen();
+                let mut rng = rand::rng();
+                let x: u32 = rng.random();
                 let x_mod_order = x % <$field>::ORDER_U32;
 
                 assert_eq!(<$field>::ZERO.as_canonical_u32(), 0);

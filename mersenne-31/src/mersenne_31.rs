@@ -15,7 +15,7 @@ use p3_field::{
     InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
     PrimeField32, PrimeField64,
 };
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize};

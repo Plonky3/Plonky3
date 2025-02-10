@@ -15,7 +15,7 @@ use p3_symmetric::{
     CompressionFunctionFromHasher, CryptographicHasher, PaddingFreeSponge,
     PseudoCompressionFunction, SerializingHasher32, TruncatedPermutation,
 };
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::thread_rng;
 use serde::de::DeserializeOwned;
 use serde::Serialize;

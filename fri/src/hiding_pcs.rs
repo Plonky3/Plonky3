@@ -11,7 +11,7 @@ use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
 use p3_matrix::horizontally_truncated::HorizontallyTruncated;
 use p3_matrix::row_index_mapped::RowIndexMappedView;
 use p3_matrix::Matrix;
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
 use tracing::instrument;
 
@@ -48,7 +48,7 @@ impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger, R> Pcs<Challenge, Chal
     for HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R>
 where
     Val: TwoAdicField,
-    Standard: Distribution<Val>,
+    StandardUniform: Distribution<Val>,
     Dft: TwoAdicSubgroupDft<Val>,
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
@@ -197,7 +197,7 @@ fn add_random_cols<Val, R>(
 where
     Val: Field,
     R: Rng + Send + Sync,
-    Standard: Distribution<Val>,
+    StandardUniform: Distribution<Val>,
 {
     let old_w = mat.width();
     let new_w = old_w + num_random_codewords;
@@ -212,7 +212,7 @@ where
         .zip(mat.row_slices())
         .for_each(|(new_row, old_row)| {
             new_row[..old_w].copy_from_slice(old_row);
-            new_row[old_w..].iter_mut().for_each(|v| *v = rng.gen());
+            new_row[old_w..].iter_mut().for_each(|v| *v = rng.random());
         });
     result
 }

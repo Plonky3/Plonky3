@@ -8,7 +8,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_mersenne_31::{Mersenne31, Mersenne31ComplexRadix2Dit, Mersenne31Dft};
 use p3_monty_31::dft::RecursiveDft;
 use p3_util::pretty_name;
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::thread_rng;
 
 fn bench_fft(c: &mut Criterion) {

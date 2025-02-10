@@ -15,7 +15,7 @@ use p3_field::{
     quotient_map_small_int, Field, InjectiveMonomial, Packable, PermutationMonomial,
     PrimeCharacteristicRing, PrimeField, PrimeField32, PrimeField64, TwoAdicField,
 };
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
 

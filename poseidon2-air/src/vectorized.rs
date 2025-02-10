@@ -6,7 +6,7 @@ use p3_field::{Field, PrimeField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
-use rand::distributions::Standard;
+use rand::distr::Standard;
 use rand::prelude::Distribution;
 use rand::random;
 
