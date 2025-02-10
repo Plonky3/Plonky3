@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use super::{binomial_mul, cubic_square, vector_add, vector_sub, BinomialExtensionField};
 use crate::extension::BinomiallyExtendable;
 use crate::{
-    field_to_array, Algebra, Field, PackedField, PackedFieldExtension, PackedValue, Powers,
-    PrimeCharacteristicRing, Serializable,
+    field_to_array, Algebra, BasedVectorSpace, Field, PackedField, PackedFieldExtension,
+    PackedValue, Powers, PrimeCharacteristicRing,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
@@ -130,24 +130,24 @@ where
     }
 }
 
-impl<F, PF, const D: usize> Serializable<PF> for PackedBinomialExtensionField<F, PF, D>
+impl<F, PF, const D: usize> BasedVectorSpace<PF> for PackedBinomialExtensionField<F, PF, D>
 where
     F: BinomiallyExtendable<D>,
     PF: PackedField<Scalar = F>,
 {
     const DIMENSION: usize = D;
 
-    fn serialize_as_slice(&self) -> &[PF] {
+    fn as_basis_coefficients_slice(&self) -> &[PF] {
         &self.value
     }
 
-    fn deserialize_fn<Fn: FnMut(usize) -> PF>(f: Fn) -> Self {
+    fn from_basis_coefficients_fn<Fn: FnMut(usize) -> PF>(f: Fn) -> Self {
         Self {
             value: array::from_fn(f),
         }
     }
 
-    fn deserialize_iter<I: Iterator<Item = PF>>(iter: I) -> Self {
+    fn from_basis_coefficients_iter<I: Iterator<Item = PF>>(iter: I) -> Self {
         let mut res = Self::default();
         for (i, b) in iter.enumerate() {
             res.value[i] = b;

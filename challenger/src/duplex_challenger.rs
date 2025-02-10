@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::{Field, PrimeField64, Serializable};
+use p3_field::{BasedVectorSpace, Field, PrimeField64};
 use p3_symmetric::{CryptographicPermutation, Hash};
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
@@ -123,11 +123,11 @@ impl<F, EF, P, const WIDTH: usize, const RATE: usize> CanSample<EF>
     for DuplexChallenger<F, P, WIDTH, RATE>
 where
     F: Field,
-    EF: Serializable<F>,
+    EF: BasedVectorSpace<F>,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
     fn sample(&mut self) -> EF {
-        EF::deserialize_fn(|_| {
+        EF::from_basis_coefficients_fn(|_| {
             // If we have buffered inputs, we must perform a duplexing so that the challenge will
             // reflect them. Or if we've run out of outputs, we must perform a duplexing to get more.
             if !self.input_buffer.is_empty() || self.output_buffer.is_empty() {

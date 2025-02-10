@@ -17,7 +17,7 @@ pub use duplex_challenger::*;
 pub use grinding_challenger::*;
 pub use hash_challenger::*;
 pub use multi_field_challenger::*;
-use p3_field::{Field, Serializable};
+use p3_field::{Field, BasedVectorSpace};
 pub use serializing_challenger::*;
 
 pub trait CanObserve<T> {
@@ -52,13 +52,13 @@ pub trait CanSampleBits<T> {
 pub trait FieldChallenger<F: Field>:
     CanObserve<F> + CanSample<F> + CanSampleBits<usize> + Sync
 {
-    fn observe_algebra_element<A: Serializable<F>>(&mut self, alg_elem: A) {
-        self.observe_slice(alg_elem.serialize_as_slice());
+    fn observe_algebra_element<A: BasedVectorSpace<F>>(&mut self, alg_elem: A) {
+        self.observe_slice(alg_elem.as_basis_coefficients_slice());
     }
 
-    fn sample_algebra_element<A: Serializable<F>>(&mut self) -> A {
+    fn sample_algebra_element<A: BasedVectorSpace<F>>(&mut self) -> A {
         let vec = self.sample_vec(A::DIMENSION);
-        A::deserialize_slice(&vec)
+        A::from_basis_coefficients_slice(&vec)
     }
 }
 
@@ -115,12 +115,12 @@ where
     C: FieldChallenger<F>,
 {
     #[inline(always)]
-    fn observe_algebra_element<EF: Serializable<F>>(&mut self, ext: EF) {
+    fn observe_algebra_element<EF: BasedVectorSpace<F>>(&mut self, ext: EF) {
         (*self).observe_algebra_element(ext)
     }
 
     #[inline(always)]
-    fn sample_algebra_element<EF: Serializable<F>>(&mut self) -> EF {
+    fn sample_algebra_element<EF: BasedVectorSpace<F>>(&mut self) -> EF {
         (*self).sample_algebra_element()
     }
 }

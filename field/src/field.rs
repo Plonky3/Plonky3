@@ -252,34 +252,37 @@ pub trait PrimeCharacteristicRing:
     }
 }
 
-/// A vector space over `F` which can be serialized into and out of a collection of `F` elements.
+/// A vector space `V` over `F` with a fixed basis. Fixing the basis allows elements of `V` to be
+/// converted to and from `DIMENSION` many elements of `F` which are interpreted as basis coefficients.
 ///
-/// We usually expect `F` to be a field but there are a few cases where it
-/// is handy to allow it to be just a ring. In particular, every ring implements `Serializable<Self>`.
+/// We usually expect `F` to be a field but do not enforce this and so allow it to be just a ring.
+/// This lets every ring implement `BasedVectorSpace<Self>` and is useful in a couple of other cases.
 ///
-/// We make no guarantees about consistency of this Serialization/Deserialization
-/// across different versions of Plonky3.
+/// ## Safety
+/// We make no guarantees about consistency of the choice of basis across different versions of Plonky3.
+/// If this choice of basis changes, the behaviour of `BasedVectorSpace` will also change. Due to this,
+/// we recommend avoiding using this trait unless absolutely necessary.
 ///
 /// ### Mathematical Description
-///
-/// Mathematically a more accurate name for this trait would be `BasedVectorSpace` or
-/// even more generally `BasedFreeModule` if you want to account for cases where `F` is
-/// not a field.
-///
-/// Given a vector space, `A` over `F`, we can pick a basis of elements `B = {b_0, ..., b_{n-1}}`
+/// Given a vector space, `A` over `F`, a basis is a set of elements `B = {b_0, ..., b_{n-1}}`
 /// in `A` such that, given any element `a`, we can find a unique set of `n` elements of `F`,
-/// `f_0, ..., f_{n - 1}` satisfying `a = f_0 b_0 + ... + f_{n - 1} b_{n - 1}`.
+/// `f_0, ..., f_{n - 1}` satisfying `a = f_0 b_0 + ... + f_{n - 1} b_{n - 1}`. Thus the choice
+/// of `B` gives rise to a natural linear map between the vector space `A` and the canonical
+/// `n` dimensional vector space `F^n`.
 ///
-/// Thus choosing this basis `B` allows us to map between elements of `A` and
-/// arrays of `n` elements of `F`. Clearly this map depends entirely on the
-/// choice of basis `B` which may change across versions of Plonky3.
-pub trait Serializable<F: PrimeCharacteristicRing>: Sized {
+/// This allows us to map between elements of `A` and arrays of `n` elements of `F`.
+/// Clearly this map depends entirely on the choice of basis `B` which may change
+/// across versions of Plonky3.
+///
+/// The situation is slightly more complicated in cases where `F` is not a field but boils down
+/// to an identical description once we enforce that `A` is a free module over `F`.
+pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     /// The dimension of the vector space, i.e. the number of elements in
     /// its basis.
     const DIMENSION: usize;
 
     /// Fixes a basis for the algebra `A` and uses this to
-    /// map an element of `A` to a vector of `DIMENSION` `F` elements.
+    /// map an element of `A` to a slice of `DIMENSION` `F` elements.
     ///
     /// # Safety
     ///
@@ -288,7 +291,7 @@ pub trait Serializable<F: PrimeCharacteristicRing>: Sized {
     /// to ensure portability if these values might ever be passed to
     /// (or rederived within) another compilation environment where a
     /// different basis might have been used.
-    fn serialize_as_slice(&self) -> &[F];
+    fn as_basis_coefficients_slice(&self) -> &[F];
 
     /// Fixes a basis for the algebra `A` and uses this to
     /// map `DIMENSION` `F` elements to an element of `A`.
@@ -305,8 +308,8 @@ pub trait Serializable<F: PrimeCharacteristicRing>: Sized {
     /// it is shorter than this, the function will panic, if it is longer the
     /// extra elements will be ignored.
     #[inline]
-    fn deserialize_slice(slice: &[F]) -> Self {
-        Self::deserialize_fn(|i| slice[i].clone())
+    fn from_basis_coefficients_slice(slice: &[F]) -> Self {
+        Self::from_basis_coefficients_fn(|i| slice[i].clone())
     }
 
     /// Fixes a basis for the algebra `A` and uses this to
@@ -321,7 +324,7 @@ pub trait Serializable<F: PrimeCharacteristicRing>: Sized {
     /// to ensure portability if these values might ever be passed to
     /// (or rederived within) another compilation environment where a
     /// different basis might have been used.
-    fn deserialize_fn<Fn: FnMut(usize) -> F>(f: Fn) -> Self;
+    fn from_basis_coefficients_fn<Fn: FnMut(usize) -> F>(f: Fn) -> Self;
 
     /// Fixes a basis for the algebra `A` and uses this to
     /// map `DIMENSION` `F` elements to an element of `A`.
@@ -336,7 +339,7 @@ pub trait Serializable<F: PrimeCharacteristicRing>: Sized {
     ///
     /// If the iterator contains more than `DIMENSION` many elements,
     /// the rest will be ignored.
-    fn deserialize_iter<I: Iterator<Item = F>>(iter: I) -> Self;
+    fn from_basis_coefficients_iter<I: Iterator<Item = F>>(iter: I) -> Self;
 
     /// Given a basis for the Algebra `A`, return the i'th basis element.
     ///
@@ -348,25 +351,25 @@ pub trait Serializable<F: PrimeCharacteristicRing>: Sized {
     /// (or rederived within) another compilation environment where a
     /// different basis might have been used.
     fn ith_basis_element(i: usize) -> Self {
-        Self::deserialize_fn(|j| F::from_bool(i == j))
+        Self::from_basis_coefficients_fn(|j| F::from_bool(i == j))
     }
 }
 
-impl<F: PrimeCharacteristicRing> Serializable<F> for F {
+impl<F: PrimeCharacteristicRing> BasedVectorSpace<F> for F {
     const DIMENSION: usize = 1;
 
     #[inline]
-    fn serialize_as_slice(&self) -> &[F] {
+    fn as_basis_coefficients_slice(&self) -> &[F] {
         slice::from_ref(self)
     }
 
     #[inline]
-    fn deserialize_fn<Fn: FnMut(usize) -> F>(mut f: Fn) -> Self {
+    fn from_basis_coefficients_fn<Fn: FnMut(usize) -> F>(mut f: Fn) -> Self {
         f(0)
     }
 
     #[inline]
-    fn deserialize_iter<I: Iterator<Item = F>>(mut iter: I) -> Self {
+    fn from_basis_coefficients_iter<I: Iterator<Item = F>>(mut iter: I) -> Self {
         iter.next().unwrap()
     }
 }
@@ -608,10 +611,10 @@ pub trait PrimeField32: PrimeField64 {
 /// A field `EF` which is also an algebra over a field `F`.
 ///
 /// This provides a couple of convenience methods on top of the
-/// standard methods provided by `Field`, `Algebra<F>` and `Serializable<F>`.
+/// standard methods provided by `Field`, `Algebra<F>` and `BasedVectorSpace<F>`.
 ///
 /// It also provides a type which handles packed vectors of extension field elements.
-pub trait ExtensionField<Base: Field>: Field + Algebra<Base> + Serializable<Base> {
+pub trait ExtensionField<Base: Field>: Field + Algebra<Base> + BasedVectorSpace<Base> {
     type ExtensionPacking: PackedFieldExtension<Base, Self> + 'static + Copy + Send + Sync;
 
     /// Determine if the given element lies in the base field.

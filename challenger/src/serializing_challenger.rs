@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_field::{PrimeField32, PrimeField64, Serializable};
+use p3_field::{PrimeField32, PrimeField64, BasedVectorSpace};
 use p3_maybe_rayon::prelude::*;
 use p3_symmetric::{CryptographicHasher, Hash};
 use p3_util::log2_ceil_u64;
@@ -90,7 +90,7 @@ impl<F: PrimeField32, const N: usize, Inner: CanObserve<u8>> CanObserve<Hash<F, 
 impl<F, EF, Inner> CanSample<EF> for SerializingChallenger32<F, Inner>
 where
     F: PrimeField32,
-    EF: Serializable<F>,
+    EF: BasedVectorSpace<F>,
     Inner: CanSample<u8>,
 {
     fn sample(&mut self) -> EF {
@@ -109,7 +109,7 @@ where
                 };
             }
         };
-        EF::deserialize_fn(|_| sample_base(&mut self.inner))
+        EF::from_basis_coefficients_fn(|_| sample_base(&mut self.inner))
     }
 }
 
@@ -207,7 +207,7 @@ impl<F: PrimeField64, const N: usize, Inner: CanObserve<u8>> CanObserve<Hash<F, 
 impl<F, EF, Inner> CanSample<EF> for SerializingChallenger64<F, Inner>
 where
     F: PrimeField64,
-    EF: Serializable<F>,
+    EF: BasedVectorSpace<F>,
     Inner: CanSample<u8>,
 {
     fn sample(&mut self) -> EF {
@@ -227,7 +227,7 @@ where
                 };
             }
         };
-        EF::deserialize_fn(|_| sample_base(&mut self.inner))
+        EF::from_basis_coefficients_fn(|_| sample_base(&mut self.inner))
     }
 }
 

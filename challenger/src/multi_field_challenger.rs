@@ -2,7 +2,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::{reduce_32, split_32, Field, PrimeField, PrimeField32, Serializable};
+use p3_field::{reduce_32, split_32, Field, PrimeField, PrimeField32, BasedVectorSpace};
 use p3_symmetric::{CryptographicPermutation, Hash};
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
@@ -155,12 +155,12 @@ impl<F, EF, PF, P, const WIDTH: usize, const RATE: usize> CanSample<EF>
     for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
     F: PrimeField32,
-    EF: Serializable<F>,
+    EF: BasedVectorSpace<F>,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
     fn sample(&mut self) -> EF {
-        EF::deserialize_fn(|_| {
+        EF::from_basis_coefficients_fn(|_| {
             // If we have buffered inputs, we must perform a duplexing so that the challenge will
             // reflect them. Or if we've run out of outputs, we must perform a duplexing to get more.
             if !self.input_buffer.is_empty() || self.output_buffer.is_empty() {

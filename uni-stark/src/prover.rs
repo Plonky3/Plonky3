@@ -5,7 +5,7 @@ use itertools::{izip, Itertools};
 use p3_air::Air;
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{PackedValue, PrimeCharacteristicRing, Serializable};
+use p3_field::{BasedVectorSpace, PackedValue, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
@@ -192,8 +192,8 @@ where
 
             // "Transpose" D packed base coefficients into WIDTH scalar extension coefficients.
             (0..core::cmp::min(quotient_size, PackedVal::<SC>::WIDTH)).map(move |idx_in_packing| {
-                SC::Challenge::deserialize_fn(|coeff_idx| {
-                    quotient.serialize_as_slice()[coeff_idx].as_slice()[idx_in_packing]
+                SC::Challenge::from_basis_coefficients_fn(|coeff_idx| {
+                    quotient.as_basis_coefficients_slice()[coeff_idx].as_slice()[idx_in_packing]
                 })
             })
         })

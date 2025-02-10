@@ -120,7 +120,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
             .values
             .borrow()
             .iter()
-            .flat_map(|x| x.serialize_as_slice().iter().copied())
+            .flat_map(|x| x.as_basis_coefficients_slice().iter().copied())
             .collect();
         RowMajorMatrix::new(values, width)
     }

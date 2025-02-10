@@ -49,7 +49,7 @@ where
             .into_iter()
             .map(|row| {
                 row.chunks(EF::DIMENSION)
-                    .map(EF::deserialize_slice)
+                    .map(EF::from_basis_coefficients_slice)
                     .collect()
             })
             .collect();
@@ -76,7 +76,7 @@ where
             .iter()
             .map(|row| {
                 row.iter()
-                    .flat_map(|el| el.serialize_as_slice())
+                    .flat_map(|el| el.as_basis_coefficients_slice())
                     .copied()
                     .collect()
             })

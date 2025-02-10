@@ -18,7 +18,7 @@ use super::{HasFrobenius, HasTwoAdicBinomialExtension, PackedBinomialExtensionFi
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{
-    field_to_array, Algebra, ExtensionField, Packable, PrimeCharacteristicRing, Serializable,
+    field_to_array, Algebra, BasedVectorSpace, ExtensionField, Packable, PrimeCharacteristicRing,
     TwoAdicField,
 };
 
@@ -56,23 +56,23 @@ impl<F: Field, A: Algebra<F>, const D: usize> From<A> for BinomialExtensionField
 
 impl<F: BinomiallyExtendable<D>, const D: usize> Packable for BinomialExtensionField<F, D> {}
 
-impl<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: usize> Serializable<A>
+impl<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: usize> BasedVectorSpace<A>
     for BinomialExtensionField<F, D, A>
 {
     const DIMENSION: usize = D;
 
     #[inline]
-    fn serialize_as_slice(&self) -> &[A] {
+    fn as_basis_coefficients_slice(&self) -> &[A] {
         &self.value
     }
 
     #[inline]
-    fn deserialize_fn<Fn: FnMut(usize) -> A>(f: Fn) -> Self {
+    fn from_basis_coefficients_fn<Fn: FnMut(usize) -> A>(f: Fn) -> Self {
         Self::new(array::from_fn(f))
     }
 
     #[inline]
-    fn deserialize_iter<I: Iterator<Item = A>>(iter: I) -> Self {
+    fn from_basis_coefficients_iter<I: Iterator<Item = A>>(iter: I) -> Self {
         let mut res = Self::default();
         for (i, b) in iter.enumerate() {
             res.value[i] = b;
@@ -117,7 +117,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
             // x^(n^(count % D))
             return self.repeated_frobenius(count % D);
         }
-        let arr: &[F] = self.serialize_as_slice();
+        let arr: &[F] = self.as_basis_coefficients_slice();
 
         // z0 = DTH_ROOT^count = W^(k * count) where k = floor((n-1)/D)
         let mut z0 = F::DTH_ROOT;
@@ -130,7 +130,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
             res[i] = arr[i] * z;
         }
 
-        Self::deserialize_slice(&res)
+        Self::from_basis_coefficients_slice(&res)
     }
 
     /// Algorithm 11.3.4 in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
@@ -217,8 +217,14 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
         }
 
         match D {
-            2 => Some(Self::deserialize_slice(&qudratic_inv(&self.value, F::W))),
-            3 => Some(Self::deserialize_slice(&cubic_inv(&self.value, F::W))),
+            2 => Some(Self::from_basis_coefficients_slice(&qudratic_inv(
+                &self.value,
+                F::W,
+            ))),
+            3 => Some(Self::from_basis_coefficients_slice(&cubic_inv(
+                &self.value,
+                F::W,
+            ))),
             _ => Some(self.frobenius_inv()),
         }
     }
@@ -484,7 +490,7 @@ where
         for r in res.iter_mut() {
             *r = Standard.sample(rng);
         }
-        BinomialExtensionField::deserialize_slice(&res)
+        BinomialExtensionField::from_basis_coefficients_slice(&res)
     }
 }
 

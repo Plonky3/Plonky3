@@ -5,6 +5,7 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+forward_ref.workspace = true
 p3-util.workspace = true
 p3-maybe-rayon.workspace = true
 num-bigint.workspace = true
