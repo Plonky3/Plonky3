@@ -3,27 +3,32 @@ use p3_field::Field;
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger, GrindingChallenger};
 
-/// Mocked Challenger structure which replies to item (e. g. field-element), bit
-/// or grinding queries using preloaded answers (grinding is not checked). This
-/// is useful, for instance, when constructing hand-crafted test cases for
-/// Fiat-Shamired protocols. Replies are given in FIFO order, that is, the first
-/// element of the provided vector is the first reply. The challenger panics if
-/// asked for more items or bits than were preloaded.
+/// Mocked Challenger structure which replies to item (e. g. field-element) or
+/// bit queries using preloaded answers, and produces and accepts trivial
+/// grinding witnesses. This is useful, for instance, when constructing
+/// hand-crafted test cases for Fiat-Shamired protocols.
+///
+/// Replies are given in FIFO order, that is, the first element of the provided
+/// vector is the first reply. The challenger panics if asked for more items or
+/// bits than were preloaded.
 #[derive(Clone, Debug)]
 pub struct MockChallenger<T> {
     item_replies: Vec<T>,
     bit_replies: Vec<usize>,
 }
 
+/// Mocked Challenger with empty element type `T = ()`, which therefore exposes
+/// only a bit-sampling/grinding interface.
 pub type MockBitChallenger = MockChallenger<()>;
 
 impl<T> MockChallenger<T> {
     /// Create a new MockChallenger with the given replies.
     /// - `item_replies` are the replies for the `FieldChallenger` interface
-    /// - `bit_replies` are the replies for the `CanSampleBits` interface (the `bits` argument is ignored)
+    /// - `bit_replies` are the replies for the `CanSampleBits` interface
+    ///   (which, when used, ignores the `bits` argument)
     pub fn new(item_replies: Vec<T>, bit_replies: Vec<usize>) -> Self {
         // We reverse here so that replies are obtained by pop()ing, as that is
-        // cheaper than removing elements from the front of a Vector
+        // cheaper than removing elements from the front of a vector
         Self {
             item_replies: item_replies.into_iter().rev().collect(),
             bit_replies: bit_replies.into_iter().rev().collect(),
