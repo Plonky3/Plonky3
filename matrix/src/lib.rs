@@ -10,8 +10,8 @@ use core::ops::Deref;
 
 use itertools::{izip, Itertools};
 use p3_field::{
-    dot_product, ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
-    BasedVectorSpace,
+    dot_product, BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue,
+    PrimeCharacteristicRing,
 };
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
@@ -249,8 +249,11 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         packed_result
             .into_iter()
             .flat_map(|p| {
-                (0..T::Packing::WIDTH)
-                    .map(move |i| EF::from_basis_coefficients_fn(|j| p.as_basis_coefficients_slice()[j].as_slice()[i]))
+                (0..T::Packing::WIDTH).map(move |i| {
+                    EF::from_basis_coefficients_fn(|j| {
+                        p.as_basis_coefficients_slice()[j].as_slice()[i]
+                    })
+                })
             })
             .take(self.width())
             .collect()

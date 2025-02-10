@@ -2,7 +2,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::{reduce_32, split_32, Field, PrimeField, PrimeField32, BasedVectorSpace};
+use p3_field::{reduce_32, split_32, BasedVectorSpace, Field, PrimeField, PrimeField32};
 use p3_symmetric::{CryptographicPermutation, Hash};
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};

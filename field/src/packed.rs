@@ -3,7 +3,7 @@ use core::ops::Div;
 use core::slice;
 
 use crate::field::Field;
-use crate::{Algebra, ExtensionField, Powers, PrimeCharacteristicRing, BasedVectorSpace};
+use crate::{Algebra, BasedVectorSpace, ExtensionField, Powers, PrimeCharacteristicRing};
 
 /// A trait to constrain types that can be packed into a packed value.
 ///
