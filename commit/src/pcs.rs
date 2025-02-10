@@ -35,6 +35,7 @@ where
 
     type Error: Debug;
 
+    /// Set to true to activate randomization and achieve zero-knowledge.
     const ZK: bool;
 
     /// This should return a coset domain (s.t. Domain::next_point returns Some)
