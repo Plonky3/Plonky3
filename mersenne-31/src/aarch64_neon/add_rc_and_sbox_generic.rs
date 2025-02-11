@@ -11,7 +11,10 @@ use p3_poseidon2::{
     InternalLayer, InternalLayerConstructor, MDSMat4,
 };
 
-use crate::{GenericPoseidon2LinearLayersMersenne31, Mersenne31, PackedMersenne31Neon};
+use crate::{
+    GenericPoseidon2LinearLayersMersenne31, Mersenne31, PackedMersenne31Neon,
+    MERSENNE31_S_BOX_DEGREE,
+};
 
 /// The internal layers of the Poseidon2 permutation.
 #[derive(Debug, Clone)]
