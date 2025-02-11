@@ -103,12 +103,12 @@ fn bench_merkle_tree<P, PW, H, C, const DIGEST_ELEMS: usize>(criterion: &mut Cri
 where
     P: PackedField,
     PW: PackedValue,
-    H: CryptographicHasher<P::Scalar, [PW::Value; DIGEST_ELEMS]>,
-    H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
-    H: Sync,
-    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>,
-    C: PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
-    C: Sync,
+    H: CryptographicHasher<P::Scalar, [PW::Value; DIGEST_ELEMS]>
+        + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+        + Sync,
+    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>
+        + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>
+        + Sync,
     [PW::Value; DIGEST_ELEMS]: Serialize + DeserializeOwned,
     StandardUniform: Distribution<P::Scalar>,
 {
@@ -139,12 +139,12 @@ fn bench_mmcs<P, PW, H, C, const DIGEST_ELEMS: usize>(criterion: &mut Criterion,
 where
     P: PackedField,
     PW: PackedValue,
-    H: CryptographicHasher<P::Scalar, [PW::Value; DIGEST_ELEMS]>,
-    H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
-    H: Sync,
-    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>,
-    C: PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
-    C: Sync,
+    H: CryptographicHasher<P::Scalar, [PW::Value; DIGEST_ELEMS]>
+        + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+        + Sync,
+    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>
+        + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>
+        + Sync,
     [PW::Value; DIGEST_ELEMS]: Serialize + DeserializeOwned,
     StandardUniform: Distribution<P::Scalar>,
 {

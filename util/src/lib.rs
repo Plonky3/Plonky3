@@ -91,6 +91,7 @@ const BIG_T_SIZE: usize = 1 << 14;
 const SMALL_ARR_SIZE: usize = 1 << 16;
 
 /// Permutes `arr` such that each index is mapped to its reverse in binary.
+///
 /// If the whole array fits in fast cache, then the trivial algorithm is cache friendly. Also, if
 /// `T` is really big, then the trivial algorithm is cache-friendly, no matter the size of the array.
 pub fn reverse_slice_index_bits<F>(vals: &mut [F]) {

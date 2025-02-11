@@ -68,7 +68,7 @@ where
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
     fn permute_state(&self, state: &mut [PackedMontyField31Neon<FP>; WIDTH]) {
         self.internal_constants.iter().for_each(|&rc| {
-            add_rc_and_sbox_generic::<_, D>(&mut state[0], rc);
+            add_rc_and_sbox_generic(&mut state[0], rc);
             ILP::generic_internal_linear_layer(state);
         })
     }
@@ -84,7 +84,7 @@ where
         external_initial_permute_state(
             state,
             self.external_constants.get_initial_constants(),
-            add_rc_and_sbox_generic::<_, D>,
+            add_rc_and_sbox_generic,
             &MDSMat4,
         );
     }
@@ -94,7 +94,7 @@ where
         external_terminal_permute_state(
             state,
             self.external_constants.get_terminal_constants(),
-            add_rc_and_sbox_generic::<_, D>,
+            add_rc_and_sbox_generic,
             &MDSMat4,
         );
     }
