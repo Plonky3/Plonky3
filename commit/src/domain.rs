@@ -9,15 +9,15 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 
-/// Given a `PolynomialSpace`, `S`, and a subset `R`, a lagrange selector `P_R` is
+/// Given a `PolynomialSpace`, `S`, and a subset `R`, a Lagrange Selector `P_R` is
 /// a polynomial which is not equal to `0` for every element in `R` but is equal
 /// to `0` for every element of `S` not in `R`.
 ///
-/// This struct contains either a single or a collection of evaluations of a
-/// collection of simple lagrange selector over a particular `PolynomialSpace`.
+/// This struct contains either a single or a collection of evaluations of
+/// several lagrange selector over a particular `PolynomialSpace`.
 ///
 /// The Lagrange selector is normalized if it is equal to `1` for every element in `R`.
-/// Note that the LagrangeSelectors given here are usually not normalized.
+/// The LagrangeSelectors given here are not normalized.
 #[derive(Debug)]
 pub struct LagrangeSelectors<T> {
     /// A Lagrange selector corresponding to the first point in the space.
@@ -33,21 +33,19 @@ pub struct LagrangeSelectors<T> {
 /// Fixing a field `F`, `PolynomialSpace<Val = F>` is an abstract indexed subset of `F^n`
 /// with some additional algebraic structure.
 ///
-/// We do not expect `PolynomialSpace` to store this subset, instead it stores
-/// some associated data which will allow it to generate the subset or pieces of
-/// it when desired.
+/// We do not expect `PolynomialSpace` to store this subset, instead it usually contains
+/// some associated data which allows it to generate the subset or pieces of it.
 ///
-/// Each `PolynomialSpace` should be part of a generic family of similar spaces
-/// such that we can decompose the space into `2` smaller spaces down to
-/// either single or two point sets. There should be a disjoint collection of
-/// `PolynomialSpaces` for any given size which partition some sensible
-/// subgroup of `F^n`.
+/// Each `PolynomialSpace` should be part of a generic family of similar spaces for some
+/// collection of sizes (usually powers of two). Any space other than at the smallest size
+/// should be decomposable into a disjoint collection of smaller spaces. Additionally, the
+/// set of all `PolynomialSpace` of a given size should form a disjoint partition of some
+/// subset of `F^n` which supports a group structure.
 ///
-/// The canonical example of a `PolynomialSpace` is the a cosets `gH` of
-/// a two-adic subgroup `H` of the multiplicative group `F*`.
-///
-/// Another example is a twin-cosets of subgroups of the circle group
-/// contained in `F^2`.
+/// The canonical example of a `PolynomialSpace` is a coset `gH` of
+/// a two-adic subgroup `H` of the multiplicative group `F*`. This satisfies the properties
+/// above as cosets partition the group and decompose as `gH = g(H^2) u gh(H^2)` for `h` a
+/// generator of `H`.
 pub trait PolynomialSpace: Copy {
     /// The base field `F`.
     type Val: Field;
@@ -59,10 +57,13 @@ pub trait PolynomialSpace: Copy {
     fn first_point(&self) -> Self::Val;
 
     /// An algebraic function which takes the i'th element of the space and returns
-    /// the (i+1)'th. When `PolynomialSpace` corresponds to a coset, `gH` this
+    /// the (i+1)'th evaluated on the given point.
+    ///
+    /// When `PolynomialSpace` corresponds to a coset, `gH` this
     /// function is multiplication by `h` for a chosen generator `h` of `H`.
     ///
-    /// It may or may not exist for other `PolynomialSpaces`.
+    /// This function may not exist for other classes of `PolynomialSpace` in which
+    /// case this will return `None`.
     fn next_point<Ext: ExtensionField<Self::Val>>(&self, x: Ext) -> Option<Ext>;
 
     /// Return another `PolynomialSpace` with size `min_size` disjoint from this space.
@@ -70,9 +71,9 @@ pub trait PolynomialSpace: Copy {
     /// This fixes a canonical choice for prover/verifier determinism and LDE caching.
     fn create_disjoint_domain(&self, min_size: usize) -> Self;
 
-    /// Split the `PolynomialSpaces` into `num_chunks` smaller `PolynomialSpaces` of equal size.
+    /// Split the `PolynomialSpace` into `num_chunks` smaller `PolynomialSpaces` of equal size.
     ///
-    /// `num_chunks` is assumed to be a power of two and must divide `self.size()`
+    /// `num_chunks` must divide `self.size()` (which usually forces it to be a power of 2.)
     fn split_domains(&self, num_chunks: usize) -> Vec<Self>;
 
     /// Split a set of polynomial evaluations over this `PolynomialSpace` into a vector
@@ -83,7 +84,7 @@ pub trait PolynomialSpace: Copy {
         evals: RowMajorMatrix<Self::Val>,
     ) -> Vec<RowMajorMatrix<Self::Val>>;
 
-    /// Compute the zerofier of the space at the given point.
+    /// Compute the zerofier of the space, evaluated at the given point.
     fn zp_at_point<Ext: ExtensionField<Self::Val>>(&self, point: Ext) -> Ext;
 
     /// Compute several lagrange selectors at a given point.
@@ -94,7 +95,7 @@ pub trait PolynomialSpace: Copy {
         point: Ext,
     ) -> LagrangeSelectors<Ext>;
 
-    /// Compute several lagrange selectors at all points in the given coset.
+    /// Compute several lagrange selectors at all points of the given disjoint `PolynomialSpace`.
     ///
     /// Note that these may be unnormalized.
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>>;
@@ -134,12 +135,29 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         Some(x * self.gen())
     }
 
+    /// Given the coset `gH`, return the disjoint coset `gfK` where `f`
+    /// is a fixed generator of `F^*` and `K` is the unique two-adic subgroup
+    /// of with size `2^(ceil(log_2(min_size)))`.
     fn create_disjoint_domain(&self, min_size: usize) -> Self {
+        // We provide a short proof that these cosets are always disjoint:
+        //
+        // Assume without loss of generality that `|H| <= min_size <= |K|`.
+        // Then we know that `gH` is entirely contained in `gK`. As cosets are
+        // either equal or disjoint, this means that `gH` is disjoint from `g'K`
+        // for every `g'` not contained in `gK`. As `f` is a generator of `F^*`
+        // it does not lie in `K` and so `gf` cannot lie in `gK`.
+        //
+        // Thus `gH` and `gfK` are disjoint.
         Self {
             log_n: log2_ceil_usize(min_size),
             shift: self.shift * Val::GENERATOR,
         }
     }
+
+    /// Given the coset `gH` and generator `h` of `H`, let `K = H^{num_chunks}`
+    /// be the unique group of order `|H|/num_chunks`.
+    ///
+    /// Then we decompose `gH` into `gK, ghK, gh^2K, ..., gh^{num_chunks}K`.
     fn split_domains(&self, num_chunks: usize) -> Vec<Self> {
         let log_chunks = log2_strict_usize(num_chunks);
         (0..num_chunks)
@@ -192,6 +210,9 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     }
 
     /// Compute the lagrange selectors of our space at every point in the coset.
+    ///
+    /// This will error if our space is not the group `H` and if the given
+    /// coset is not disjoint from `H`.
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Val>> {
         assert_eq!(self.shift, Val::ONE);
         assert_ne!(coset.shift, Val::ONE);
