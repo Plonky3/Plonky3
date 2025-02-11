@@ -297,15 +297,16 @@ impl Distribution<Bn254Fr> for StandardUniform {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Bn254Fr {
         let max = Bn254Fr::order();
+        // Simple implementation of rejection sampling:
         loop {
             // This is little endian.
             let mut trial_element: [u64; 4] = rng.random();
 
-            // Set top 2 bits to 0 as bn254 is a 254-bit number.
+            // Set top 2 bits to 0 as bn254 is a 254-bit field.
             trial_element[3] &= (1_u64 << 62) - 1;
 
             // convert from the u64 array to a u32 list for BigUint.
-            let trial_u32_list: Vec<u32> = trial_element
+            let trial_u32_list = trial_element
                 .iter()
                 .flat_map(|&x| [x as u32, (x >> 32) as u32])
                 .collect();
