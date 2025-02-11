@@ -533,8 +533,6 @@ fn compute_f_oracle_from_g<F: TwoAdicField>(
         })
         .collect_vec();
 
-    // NP TODO this can maybe be optimized
-
     // 2. Compute the values of f_i at the each element of each S_j using the
     // values of g_i therein
 
@@ -574,10 +572,11 @@ fn compute_f_oracle_from_g<F: TwoAdicField>(
 
     // A similar phenomenon occurs with the degree-correction factor
     // (1 - rx)^(e - 1)/(1 - rx) in the notation of the paper (sec. 2.3): we can
-
     // batch-invert the denominators to save on invert() calls. Since this
-    // already necessitates rx, we also store the latter and pass it
-    // to the oracle-computing function.
+    // already necessitates rx, we also store the latter and pass it to the
+    // oracle-computing function. Note that this batch inversion could be lumped
+    // together with the one above for maximum savings at the cost of code
+    // clarity.
     let deg_cor_hints = match oracle {
         Oracle::Transparent => vec![vec![None; folding_factor]; queried_point_preimages.len()],
         Oracle::Virtual(virtual_function) => {
@@ -650,10 +649,28 @@ fn compute_folded_evaluations<F: TwoAdicField>(
     c: F,
     omega: F,
 ) -> Vec<F> {
+    let point_roots_invs = batch_multiplicative_inverse(&point_roots);
+
+    // This is called once per round and could be further amortised by passing
+    // it as a hint, at the cost of a less clean interface of verify_round()
+    let two_inv = F::TWO.inverse();
+
     unfolded_evaluation_lists
         .into_iter()
         .zip(point_roots.iter())
-        .map(|(evals, point_root)| fold_evaluations(evals, *point_root, log_arity, omega, c))
+        .zip(point_roots_invs.into_iter())
+        .map(|((evals, &point_root), point_root_inv)| {
+            fold_evaluations(
+                evals,
+                point_root,
+                log_arity,
+                omega,
+                c,
+                Some(omega.inverse()),
+                Some(point_root_inv),
+                Some(two_inv),
+            )
+        })
         .collect()
 }
 

@@ -11,7 +11,8 @@ pub(crate) fn compute_pow(security_level: usize, error: f64) -> f64 {
 
 pub(crate) fn fold_polynomial<F: TwoAdicField>(
     polynomial: &Polynomial<F>,
-    folding_randomness: F,
+    // The folding coefficient
+    c: F,
     log_folding_factor: usize,
 ) -> Polynomial<F> {
     let deg = if let Some(d) = polynomial.degree() {
@@ -23,7 +24,7 @@ pub(crate) fn fold_polynomial<F: TwoAdicField>(
     let folding_factor = 1 << log_folding_factor;
     let fold_size = (deg + 1).div_ceil(folding_factor);
 
-    let folding_powers = iter::successors(Some(F::ONE), |&x| Some(x * folding_randomness))
+    let folding_powers = iter::successors(Some(F::ONE), |&x| Some(x * c))
         .take(folding_factor)
         .collect_vec();
 
@@ -89,6 +90,13 @@ pub fn fold_evaluations<F: TwoAdicField>(
     // Generator of the coset whose evaluations we are receiving
     omega: F,
     c: F,
+    // The inverse of the generator can be supplied in order to amortise the
+    // call to inverse() across calls to fold_evaluations()
+    omega_inv_hint: Option<F>,
+    // The inverse of point_root can be supplied to make use of batch inversion
+    point_root_inv_hint: Option<F>,
+    // The inverse of 2 can be supplied avoid recomputation in every call
+    two_inv_hint: Option<F>,
 ) -> F {
     // Let Fold2(g, b) denote the binary (i. e. arity = one) folding of g with
     // coefficient b. Then
@@ -110,8 +118,8 @@ pub fn fold_evaluations<F: TwoAdicField>(
     //   c * (point_root * w^(arity/2 - 1))^(-1)
     // }
 
-    let inv_point_root = point_root.inverse();
-    let inv_omega = omega.inverse();
+    let inv_omega = omega_inv_hint.unwrap_or_else(|| omega.inverse());
+    let inv_point_root = point_root_inv_hint.unwrap_or_else(|| point_root.inverse());
 
     let mut gammas = iterate(inv_point_root * c, |&x| x * inv_omega)
         .take(arity / 2)
@@ -120,7 +128,7 @@ pub fn fold_evaluations<F: TwoAdicField>(
     let mut result = evals;
 
     while result.len() > 1 {
-        result = fold_evaluations_binary(result, &gammas);
+        result = fold_evaluations_binary(result, &gammas, two_inv_hint);
         gammas = gammas[..(gammas.len() / 2)]
             .iter()
             .map(|&gamma| gamma.square())
@@ -134,20 +142,32 @@ fn fold_evaluations_binary<F: TwoAdicField>(
     evals: Vec<F>,
     // NP TODO think if gammas can be an iter
     gammas: &[F],
+    // The inverse of 2 can be supplied to avoid recomputation in every call
+    two_inv_hint: Option<F>,
 ) -> Vec<F> {
     let cutoff = evals.len() / 2;
     let low_evals = evals[..cutoff].iter();
     let high_evals = evals[cutoff..].iter();
 
     izip!(low_evals, high_evals, gammas.iter())
-        .map(|(&eval, &eval_inv, &gamma)| fold_evaluation_pair(eval, eval_inv, gamma))
+        .map(|(&eval_1, &eval_2, &gamma)| fold_evaluation_pair(eval_1, eval_2, gamma, two_inv_hint))
         .collect_vec()
 }
 
-fn fold_evaluation_pair<F: TwoAdicField>(eval: F, eval_inv: F, gamma: F) -> F {
-    // TODO two inverse
-    let inv_two = F::TWO.inverse();
-    inv_two * ((F::ONE + gamma) * eval + (F::ONE - gamma) * eval_inv)
+fn fold_evaluation_pair<F: TwoAdicField>(
+    // f(w), where w^2 is the point we are evaluating fold(f) at
+    eval_1: F,
+    // f(-w), with w as above
+    eval_2: F,
+    // c / w, where c is the folding coefficient
+    gamma: F,
+    // The inverse of 2 can be supplied to avoid recomputation in every call
+    two_inv_hint: Option<F>,
+) -> F {
+    let two_inv = two_inv_hint.unwrap_or_else(|| F::TWO.inverse());
+    // This expression uses to multiplications, as opposed to three in the more
+    // symmetric 1/2 * ((1 + gamma) * eval_1 + (1 - gamma) * eval_2)
+    two_inv * (eval_1 + eval_2 + gamma * (eval_1 - eval_2))
 }
 
 pub(crate) fn observe_ext_slice_with_size<F: Field, E: ExtensionField<F>, C: FieldChallenger<F>>(
@@ -294,6 +314,9 @@ mod tests {
                 $log_arity,
                 domain.generator(),
                 $folding_randomness,
+                None,
+                None,
+                None,
             );
             let folded_polynomial = fold_polynomial(&$polynomial, $folding_randomness, $log_arity);
             assert_eq!(
@@ -349,7 +372,7 @@ mod tests {
             .iter()
             .map(|&root| polynomial.evaluate(&root))
             .collect_vec();
-        let folded_evals = fold_evaluations_binary(evals.clone(), &gammas);
+        let folded_evals = fold_evaluations_binary(evals.clone(), &gammas, None);
 
         // Computing folded evaluations by hand
         let folded_poly = fold_polynomial(&polynomial, c, 1);
