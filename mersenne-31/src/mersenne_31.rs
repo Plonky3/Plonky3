@@ -47,10 +47,7 @@ impl Mersenne31 {
     pub const fn new_array<const N: usize>(input: [u32; N]) -> [Self; N] {
         let mut output = [Mersenne31::ZERO; N];
         let mut i = 0;
-        loop {
-            if i == N {
-                break;
-            }
+        while i < N {
             output[i].value = input[i] % P;
             i += 1;
         }
