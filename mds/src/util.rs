@@ -155,7 +155,7 @@ mod tests {
     fn test_basic_dot_product() {
         let u = [1, 2, 3];
         let v = [4, 5, 6];
-        assert_eq!(dot_product(u, v), 1 * 4 + 2 * 5 + 3 * 6);
+        assert_eq!(dot_product(u, v), 4 + 2 * 5 + 3 * 6);
     }
 
     #[test]
