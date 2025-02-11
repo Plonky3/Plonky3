@@ -1,5 +1,3 @@
-use alloc::vec::Vec;
-
 use p3_field::Field;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -20,7 +18,7 @@ pub struct RoundConstants<
 impl<F: Field, const WIDTH: usize, const HALF_FULL_ROUNDS: usize, const PARTIAL_ROUNDS: usize>
     RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>
 {
-    pub fn new(
+    pub const fn new(
         beginning_full_round_constants: [[F; WIDTH]; HALF_FULL_ROUNDS],
         partial_round_constants: [F; PARTIAL_ROUNDS],
         ending_full_round_constants: [[F; WIDTH]; HALF_FULL_ROUNDS],
@@ -36,28 +34,10 @@ impl<F: Field, const WIDTH: usize, const HALF_FULL_ROUNDS: usize, const PARTIAL_
     where
         Standard: Distribution<F> + Distribution<[F; WIDTH]>,
     {
-        let beginning_full_round_constants = rng
-            .sample_iter(Standard)
-            .take(HALF_FULL_ROUNDS)
-            .collect::<Vec<[F; WIDTH]>>()
-            .try_into()
-            .unwrap();
-        let partial_round_constants = rng
-            .sample_iter(Standard)
-            .take(PARTIAL_ROUNDS)
-            .collect::<Vec<F>>()
-            .try_into()
-            .unwrap();
-        let ending_full_round_constants = rng
-            .sample_iter(Standard)
-            .take(HALF_FULL_ROUNDS)
-            .collect::<Vec<[F; WIDTH]>>()
-            .try_into()
-            .unwrap();
         Self {
-            beginning_full_round_constants,
-            partial_round_constants,
-            ending_full_round_constants,
+            beginning_full_round_constants: core::array::from_fn(|_| rng.sample(Standard)),
+            partial_round_constants: core::array::from_fn(|_| rng.sample(Standard)),
+            ending_full_round_constants: core::array::from_fn(|_| rng.sample(Standard)),
         }
     }
 }
