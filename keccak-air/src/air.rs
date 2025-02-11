@@ -84,9 +84,13 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         // xor3 function only outputs 0, 1 and so this check also ensures that all
         // entries of C'[x, z] are boolean.
         for x in 0..5 {
+            builder.assert_zeroes(
+                local.c[x]
+                    .iter()
+                    .map(|&z| -> AB::Expr { z * (z.into() - AB::Expr::ONE) }),
+            );
             for z in 0..64 {
                 // Check to ensure all entries of C are bools.
-                builder.assert_bool(local.c[x][z]);
                 let xor = xor3::<AB::Expr>(
                     local.c[x][z].into(),
                     local.c[(x + 4) % 5][z].into(),
