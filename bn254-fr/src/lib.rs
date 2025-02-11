@@ -296,16 +296,25 @@ impl Div for Bn254Fr {
 impl Distribution<Bn254Fr> for StandardUniform {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Bn254Fr {
+        let max = Bn254Fr::order();
         loop {
-            let mut next_data: [u64; 4] = rng.random;
-            next_data[3] = next_data[3] & ((1_u64 << 62) - 1);
+            // This is little endian.
+            let mut trial_element: [u64; 4] = rng.random();
 
-            let is_canonical = next_u31 != Mersenne31::ORDER_U32;
-            if is_canonical {
-                return Mersenne31::new(next_u31);
+            // Set top 2 bits to 0 as bn254 is a 254-bit number.
+            trial_element[3] &= (1_u64 << 62) - 1;
+
+            // convert from the u64 array to a u32 list for BigUint.
+            let trial_u32_list: Vec<u32> = trial_element
+                .iter()
+                .flat_map(|&x| [x as u32, (x >> 32) as u32])
+                .collect();
+
+            let rand_element = BigUint::new(trial_u32_list);
+            if rand_element < max {
+                return Bn254Fr::new(FFBn254Fr::from_raw(trial_element));
             }
         }
-        Bn254Fr::new(FFBn254Fr::random(rng))
     }
 }
 

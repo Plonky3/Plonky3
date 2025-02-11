@@ -48,7 +48,7 @@ fn fft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
 where
     F: TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
-    StandardUniform:Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
     let mut group = c.benchmark_group(format!(
         "fft/{}/{}/ncols={}",
@@ -76,7 +76,7 @@ where
 fn m31_fft<Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
 where
     Dft: TwoAdicSubgroupDft<Complex<Mersenne31>>,
-    StandardUniform:Distribution<Mersenne31>,
+    StandardUniform: Distribution<Mersenne31>,
 {
     let mut group = c.benchmark_group(format!(
         "m31_fft::<{}, {}>",
@@ -103,7 +103,7 @@ fn ifft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
 where
     F: TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
-    StandardUniform:Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
     let mut group = c.benchmark_group(format!(
         "ifft/{}/{}/ncols={}",
@@ -132,7 +132,7 @@ fn coset_lde<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[us
 where
     F: TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
-    StandardUniform:Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
     let mut group = c.benchmark_group(format!(
         "coset_lde/{}/{}/ncols={}",

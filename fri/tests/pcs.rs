@@ -24,7 +24,7 @@ fn do_test_fri_pcs<Val, Challenge, Challenger, P>(
     P: Pcs<Challenge, Challenger>,
     P::Domain: PolynomialSpace<Val = Val>,
     Val: Field,
-    StandardUniform:Distribution<Val>,
+    StandardUniform: Distribution<Val>,
     Challenge: ExtensionField<Val>,
     Challenger: Clone + CanObserve<P::Commitment> + FieldChallenger<Val>,
 {

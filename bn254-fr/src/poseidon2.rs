@@ -97,6 +97,7 @@ impl<const WIDTH: usize> ExternalLayer<Bn254Fr, WIDTH, BN254_S_BOX_DEGREE>
 #[cfg(test)]
 mod tests {
     use ff::PrimeField;
+    use num_bigint::BigUint;
     use p3_poseidon2::ExternalLayerConstants;
     use p3_symmetric::Permutation;
     use rand::Rng;
@@ -126,6 +127,12 @@ mod tests {
         } else {
             panic!("Invalid field element")
         }
+    }
+
+    fn ark_ff_from_bn254(input: Bn254Fr) -> ark_FpBN256 {
+        let bigint = BigUint::from_bytes_le(&input.value.to_bytes());
+
+        ark_FpBN256::from(bigint)
     }
 
     #[test]
@@ -168,14 +175,8 @@ mod tests {
         let poseidon2 = Poseidon2Bn254::new(external_round_constants, internal_round_constants);
 
         // Generate random input and convert to both Goldilocks field formats.
-        let input_ark_ff = rng.random::<[ark_FpBN256; WIDTH]>();
-        let input: [Bn254Fr; 3] = input_ark_ff
-            .iter()
-            .cloned()
-            .map(bn254_from_ark_ff)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let input = rng.random::<[Bn254Fr; WIDTH]>();
+        let input_ark_ff = input.map(ark_ff_from_bn254);
 
         // Run reference implementation.
         let output_ref = poseidon2_ref.permutation(&input_ark_ff);
