@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_field::FieldAlgebra;
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
 use rand::distributions::{Distribution, Standard};
@@ -14,9 +14,9 @@ use rand::Rng;
 /// This uses the formula from the start of Appendix B in the Poseidon2 paper, with multiplications unrolled into additions.
 /// It is also the matrix used by the Horizon Labs implementation.
 #[inline(always)]
-fn apply_hl_mat4<FA>(x: &mut [FA; 4])
+fn apply_hl_mat4<R>(x: &mut [R; 4])
 where
-    FA: FieldAlgebra,
+    R: PrimeCharacteristicRing,
 {
     let t0 = x[0].clone() + x[1].clone();
     let t1 = x[2].clone() + x[3].clone();
@@ -40,9 +40,9 @@ where
 /// [ 1 1 2 3 ]
 /// [ 3 1 1 2 ].
 #[inline(always)]
-fn apply_mat4<FA>(x: &mut [FA; 4])
+fn apply_mat4<R>(x: &mut [R; 4])
 where
-    FA: FieldAlgebra,
+    R: PrimeCharacteristicRing,
 {
     let t01 = x[0].clone() + x[1].clone();
     let t23 = x[2].clone() + x[3].clone();
@@ -62,20 +62,13 @@ where
 #[derive(Clone, Default)]
 pub struct HLMDSMat4;
 
-impl<FA: FieldAlgebra> Permutation<[FA; 4]> for HLMDSMat4 {
+impl<R: PrimeCharacteristicRing> Permutation<[R; 4]> for HLMDSMat4 {
     #[inline(always)]
-    fn permute(&self, input: [FA; 4]) -> [FA; 4] {
-        let mut output = input;
-        self.permute_mut(&mut output);
-        output
-    }
-
-    #[inline(always)]
-    fn permute_mut(&self, input: &mut [FA; 4]) {
+    fn permute_mut(&self, input: &mut [R; 4]) {
         apply_hl_mat4(input)
     }
 }
-impl<FA: FieldAlgebra> MdsPermutation<FA, 4> for HLMDSMat4 {}
+impl<R: PrimeCharacteristicRing> MdsPermutation<R, 4> for HLMDSMat4 {}
 
 /// The fastest 4x4 MDS matrix.
 ///
@@ -83,20 +76,13 @@ impl<FA: FieldAlgebra> MdsPermutation<FA, 4> for HLMDSMat4 {}
 #[derive(Clone, Default)]
 pub struct MDSMat4;
 
-impl<FA: FieldAlgebra> Permutation<[FA; 4]> for MDSMat4 {
+impl<R: PrimeCharacteristicRing> Permutation<[R; 4]> for MDSMat4 {
     #[inline(always)]
-    fn permute(&self, input: [FA; 4]) -> [FA; 4] {
-        let mut output = input;
-        self.permute_mut(&mut output);
-        output
-    }
-
-    #[inline(always)]
-    fn permute_mut(&self, input: &mut [FA; 4]) {
+    fn permute_mut(&self, input: &mut [R; 4]) {
         apply_mat4(input)
     }
 }
-impl<FA: FieldAlgebra> MdsPermutation<FA, 4> for MDSMat4 {}
+impl<R: PrimeCharacteristicRing> MdsPermutation<R, 4> for MDSMat4 {}
 
 /// Implement the matrix multiplication used by the external layer.
 ///
@@ -104,11 +90,11 @@ impl<FA: FieldAlgebra> MdsPermutation<FA, 4> for MDSMat4 {}
 /// `[[2M M  ... M], [M  2M ... M], ..., [M  M ... 2M]]`.
 #[inline(always)]
 pub fn mds_light_permutation<
-    FA: FieldAlgebra,
-    MdsPerm4: MdsPermutation<FA, 4>,
+    R: PrimeCharacteristicRing,
+    MdsPerm4: MdsPermutation<R, 4>,
     const WIDTH: usize,
 >(
-    state: &mut [FA; WIDTH],
+    state: &mut [R; WIDTH],
     mdsmat: &MdsPerm4,
 ) {
     match WIDTH {
@@ -134,11 +120,11 @@ pub fn mds_light_permutation<
             // Now, we apply the outer circulant matrix (to compute the y_i values).
 
             // We first precompute the four sums of every four elements.
-            let sums: [FA; 4] = core::array::from_fn(|k| {
+            let sums: [R; 4] = core::array::from_fn(|k| {
                 (0..WIDTH)
                     .step_by(4)
                     .map(|j| state[j + k].clone())
-                    .sum::<FA>()
+                    .sum::<R>()
             });
 
             // The formula for each y_i involves 2x_i' term and x_j' terms for each j that equals i mod 4.
@@ -211,41 +197,41 @@ impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
 }
 
 /// Initialize an external layer from a set of constants.
-pub trait ExternalLayerConstructor<FA, const WIDTH: usize>
+pub trait ExternalLayerConstructor<F, const WIDTH: usize>
 where
-    FA: FieldAlgebra,
+    F: Field,
 {
     /// A constructor which internally will convert the supplied
     /// constants into the appropriate form for the implementation.
-    fn new_from_constants(external_constants: ExternalLayerConstants<FA::F, WIDTH>) -> Self;
+    fn new_from_constants(external_constants: ExternalLayerConstants<F, WIDTH>) -> Self;
 }
 
 /// A trait containing all data needed to implement the external layers of Poseidon2.
-pub trait ExternalLayer<FA, const WIDTH: usize, const D: u64>: Sync + Clone
+pub trait ExternalLayer<R, const WIDTH: usize, const D: u64>: Sync + Clone
 where
-    FA: FieldAlgebra,
+    R: PrimeCharacteristicRing,
 {
     // permute_state_initial, permute_state_terminal are split as the Poseidon2 specifications are slightly different
     // with the initial rounds involving an extra matrix multiplication.
 
     /// Perform the initial external layers of the Poseidon2 permutation on the given state.
-    fn permute_state_initial(&self, state: &mut [FA; WIDTH]);
+    fn permute_state_initial(&self, state: &mut [R; WIDTH]);
 
     /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
-    fn permute_state_terminal(&self, state: &mut [FA; WIDTH]);
+    fn permute_state_terminal(&self, state: &mut [R; WIDTH]);
 }
 
 /// A helper method which allow any field to easily implement the terminal External Layer.
 #[inline]
 pub fn external_terminal_permute_state<
-    FA: FieldAlgebra,
+    R: PrimeCharacteristicRing,
     CT: Copy, // Whatever type the constants are stored as.
-    MdsPerm4: MdsPermutation<FA, 4>,
+    MdsPerm4: MdsPermutation<R, 4>,
     const WIDTH: usize,
 >(
-    state: &mut [FA; WIDTH],
+    state: &mut [R; WIDTH],
     terminal_external_constants: &[[CT; WIDTH]],
-    add_rc_and_sbox: fn(&mut FA, CT),
+    add_rc_and_sbox: fn(&mut R, CT),
     mat4: &MdsPerm4,
 ) {
     for elem in terminal_external_constants.iter() {
@@ -260,14 +246,14 @@ pub fn external_terminal_permute_state<
 /// A helper method which allow any field to easily implement the initial External Layer.
 #[inline]
 pub fn external_initial_permute_state<
-    FA: FieldAlgebra,
+    R: PrimeCharacteristicRing,
     CT: Copy, // Whatever type the constants are stored as.
-    MdsPerm4: MdsPermutation<FA, 4>,
+    MdsPerm4: MdsPermutation<R, 4>,
     const WIDTH: usize,
 >(
-    state: &mut [FA; WIDTH],
+    state: &mut [R; WIDTH],
     initial_external_constants: &[[CT; WIDTH]],
-    add_rc_and_sbox: fn(&mut FA, CT),
+    add_rc_and_sbox: fn(&mut R, CT),
     mat4: &MdsPerm4,
 ) {
     mds_light_permutation(state, mat4);

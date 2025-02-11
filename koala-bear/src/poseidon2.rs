@@ -13,9 +13,7 @@
 //! [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/32, 1/64, 1/2^24, -1/2^8, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^9, -1/2^24]
 //! See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
 
-use core::ops::Mul;
-
-use p3_field::{Field, FieldAlgebra, PrimeField32};
+use p3_field::{Algebra, Field, PrimeCharacteristicRing, PrimeField32};
 use p3_monty_31::{
     GenericPoseidon2LinearLayersMonty31, InternalLayerBaseParameters, InternalLayerParameters,
     MontyField31, Poseidon2ExternalLayerMonty31, Poseidon2InternalLayerMonty31,
@@ -41,7 +39,7 @@ const KOALABEAR_S_BOX_DEGREE: u64 = 3;
 /// It acts on arrays of the form either `[KoalaBear::Packing; WIDTH]` or `[KoalaBear; WIDTH]`. For speed purposes,
 /// wherever possible, input arrays should of the form `[KoalaBear::Packing; WIDTH]`.
 pub type Poseidon2KoalaBear<const WIDTH: usize> = Poseidon2<
-    <KoalaBear as Field>::Packing,
+    KoalaBear,
     Poseidon2ExternalLayerKoalaBear<WIDTH>,
     Poseidon2InternalLayerKoalaBear<WIDTH>,
     WIDTH,
@@ -50,7 +48,7 @@ pub type Poseidon2KoalaBear<const WIDTH: usize> = Poseidon2<
 
 /// An implementation of the matrix multiplications in the internal and external layers of Poseidon2.
 ///
-/// This can act on [FA; WIDTH] for any FieldAlgebra which implements multiplication by KoalaBear field elements.
+/// This can act on `[A; WIDTH]` for any ring implementing `Algebra<BabyBear>`.
 /// If you have either `[KoalaBear::Packing; WIDTH]` or `[KoalaBear; WIDTH]` it will be much faster
 /// to use `Poseidon2KoalaBear<WIDTH>` instead of building a Poseidon2 permutation using this.
 pub type GenericPoseidon2LinearLayersKoalaBear =
@@ -152,11 +150,8 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 16> for KoalaBearInternalL
         state[15] = sum - state[15];
     }
 
-    fn generic_internal_linear_layer<FA>(state: &mut [FA; 16])
-    where
-        FA: FieldAlgebra + Mul<KoalaBear, Output = FA>,
-    {
-        let part_sum: FA = state[1..].iter().cloned().sum();
+    fn generic_internal_linear_layer<A: Algebra<KoalaBear>>(state: &mut [A; 16]) {
+        let part_sum: A = state[1..].iter().cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();
 
         // The first three diagonal elements are -2, 1, 2 so we do something custom.
@@ -166,7 +161,7 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 16> for KoalaBearInternalL
 
         // For the remaining elements we use multiplication.
         // This could probably be improved slightly by making use of the
-        // mul_2exp_u64 and div_2exp_u64 but this would involve porting div_2exp_u64 to FieldAlgebra.
+        // mul_2exp_u64 and div_2exp_u64 but this would involve porting div_2exp_u64 to PrimeCharacteristicRing.
         state
             .iter_mut()
             .zip(INTERNAL_DIAG_MONTY_16)
@@ -230,11 +225,8 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 24> for KoalaBearInternalL
         state[23] = sum - state[23];
     }
 
-    fn generic_internal_linear_layer<FA>(state: &mut [FA; 24])
-    where
-        FA: FieldAlgebra + core::ops::Mul<KoalaBear, Output = FA>,
-    {
-        let part_sum: FA = state[1..].iter().cloned().sum();
+    fn generic_internal_linear_layer<A: Algebra<KoalaBear>>(state: &mut [A; 24]) {
+        let part_sum: A = state[1..].iter().cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();
 
         // The first three diagonal elements are -2, 1, 2 so we do something custom.
@@ -244,7 +236,7 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 24> for KoalaBearInternalL
 
         // For the remaining elements we use multiplication.
         // This could probably be improved slightly by making use of the
-        // mul_2exp_u64 and div_2exp_u64 but this would involve porting div_2exp_u64 to FieldAlgebra.
+        // mul_2exp_u64 and div_2exp_u64 but this would involve porting div_2exp_u64 to PrimeCharacteristicRing.
         state
             .iter_mut()
             .zip(INTERNAL_DIAG_MONTY_24)
@@ -260,7 +252,6 @@ impl InternalLayerParameters<KoalaBearParameters, 24> for KoalaBearInternalLayer
 
 #[cfg(test)]
 mod tests {
-    use p3_field::FieldAlgebra;
     use p3_symmetric::Permutation;
     use rand::{Rng, SeedableRng};
     use rand_xoshiro::Xoroshiro128Plus;
@@ -278,19 +269,17 @@ mod tests {
     /// vector([KB.random_element() for t in range(16)]).
     #[test]
     fn test_poseidon2_width_16_random() {
-        let mut input: [F; 16] = [
+        let mut input: [F; 16] = KoalaBear::new_array([
             894848333, 1437655012, 1200606629, 1690012884, 71131202, 1749206695, 1717947831,
             120589055, 19776022, 42382981, 1831865506, 724844064, 171220207, 1299207443, 227047920,
             1783754913,
-        ]
-        .map(F::from_canonical_u32);
+        ]);
 
-        let expected: [F; 16] = [
+        let expected: [F; 16] = KoalaBear::new_array([
             652590279, 1200629963, 1013089423, 1840372851, 19101828, 561050015, 1714865585,
             994637181, 498949829, 729884572, 1957973925, 263012103, 535029297, 2121808603,
             964663675, 1473622080,
-        ]
-        .map(F::from_canonical_u32);
+        ]);
 
         let mut rng = Xoroshiro128Plus::seed_from_u64(1);
         let perm = Poseidon2KoalaBear::new_from_rng_128(&mut rng);
@@ -305,21 +294,19 @@ mod tests {
     /// vector([KB.random_element() for t in range(24)]).
     #[test]
     fn test_poseidon2_width_24_random() {
-        let mut input: [F; 24] = [
+        let mut input: [F; 24] = KoalaBear::new_array([
             886409618, 1327899896, 1902407911, 591953491, 648428576, 1844789031, 1198336108,
             355597330, 1799586834, 59617783, 790334801, 1968791836, 559272107, 31054313,
             1042221543, 474748436, 135686258, 263665994, 1962340735, 1741539604, 2026927696,
             449439011, 1131357108, 50869465,
-        ]
-        .map(F::from_canonical_u32);
+        ]);
 
-        let expected: [F; 24] = [
+        let expected: [F; 24] = KoalaBear::new_array([
             3825456, 486989921, 613714063, 282152282, 1027154688, 1171655681, 879344953,
             1090688809, 1960721991, 1604199242, 1329947150, 1535171244, 781646521, 1156559780,
             1875690339, 368140677, 457503063, 304208551, 1919757655, 835116474, 1293372648,
             1254825008, 810923913, 1773631109,
-        ]
-        .map(F::from_canonical_u32);
+        ]);
 
         let mut rng = Xoroshiro128Plus::seed_from_u64(1);
         let perm = Poseidon2KoalaBear::new_from_rng_128(&mut rng);

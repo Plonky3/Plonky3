@@ -20,7 +20,7 @@ pub struct Poseidon2InternalLayerMersenne31 {
     packed_internal_constants: Vec<__m512i>,
 }
 
-impl InternalLayerConstructor<PackedMersenne31AVX512> for Poseidon2InternalLayerMersenne31 {
+impl InternalLayerConstructor<Mersenne31> for Poseidon2InternalLayerMersenne31 {
     /// We save the round constants in the {-P, ..., 0} representation instead of the standard
     /// {0, ..., P} one. This saves several instructions later.
     fn new_from_constants(internal_constants: Vec<Mersenne31>) -> Self {
@@ -40,7 +40,7 @@ pub struct Poseidon2ExternalLayerMersenne31<const WIDTH: usize> {
     packed_terminal_external_constants: Vec<[__m512i; WIDTH]>,
 }
 
-impl<const WIDTH: usize> ExternalLayerConstructor<PackedMersenne31AVX512, WIDTH>
+impl<const WIDTH: usize> ExternalLayerConstructor<Mersenne31, WIDTH>
     for Poseidon2ExternalLayerMersenne31<WIDTH>
 {
     fn new_from_constants(external_constants: ExternalLayerConstants<Mersenne31, WIDTH>) -> Self {
@@ -284,7 +284,6 @@ impl<const WIDTH: usize> ExternalLayer<PackedMersenne31AVX512, WIDTH, 5>
 
 #[cfg(test)]
 mod tests {
-    use p3_field::FieldAlgebra;
     use p3_symmetric::Permutation;
     use rand::Rng;
 
@@ -308,7 +307,7 @@ mod tests {
         let mut expected = input;
         poseidon2.permute_mut(&mut expected);
 
-        let mut avx512_input = input.map(PackedMersenne31AVX512::from_f);
+        let mut avx512_input = input.map(Into::<PackedMersenne31AVX512>::into);
         poseidon2.permute_mut(&mut avx512_input);
 
         let avx512_output = avx512_input.map(|x| x.0[0]);
@@ -329,7 +328,7 @@ mod tests {
         let mut expected = input;
         poseidon2.permute_mut(&mut expected);
 
-        let mut avx512_input = input.map(PackedMersenne31AVX512::from_f);
+        let mut avx512_input = input.map(Into::<PackedMersenne31AVX512>::into);
         poseidon2.permute_mut(&mut avx512_input);
 
         let avx512_output = avx512_input.map(|x| x.0[0]);

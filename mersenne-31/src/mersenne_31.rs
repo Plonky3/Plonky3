@@ -8,8 +8,11 @@ use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
+use p3_field::exponentiation::exp_1717986917;
+use p3_field::integers::QuotientMap;
 use p3_field::{
-    exp_1717986917, exp_u64_by_squaring, halve_u32, Field, FieldAlgebra, Packable, PrimeField,
+    halve_u32, quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int, Field,
+    InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
     PrimeField32, PrimeField64,
 };
 use rand::distributions::{Distribution, Standard};
@@ -129,8 +132,8 @@ impl<'a> Deserialize<'a> for Mersenne31 {
     }
 }
 
-impl FieldAlgebra for Mersenne31 {
-    type F = Self;
+impl PrimeCharacteristicRing for Mersenne31 {
+    type PrimeSubfield = Self;
 
     const ZERO: Self = Self { value: 0 };
     const ONE: Self = Self { value: 1 };
@@ -140,63 +143,13 @@ impl FieldAlgebra for Mersenne31 {
     };
 
     #[inline]
-    fn from_f(f: Self::F) -> Self {
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f
     }
 
     #[inline]
     fn from_bool(b: bool) -> Self {
         Self::new(b as u32)
-    }
-
-    #[inline]
-    fn from_canonical_u8(n: u8) -> Self {
-        Self::new(n.into())
-    }
-
-    #[inline]
-    fn from_canonical_u16(n: u16) -> Self {
-        Self::new(n.into())
-    }
-
-    #[inline]
-    fn from_canonical_u32(n: u32) -> Self {
-        debug_assert!(n < Self::ORDER_U32);
-        Self::new(n)
-    }
-
-    /// Convert from `u64`. Undefined behavior if the input is outside the canonical range.
-    #[inline]
-    fn from_canonical_u64(n: u64) -> Self {
-        Self::from_canonical_u32(
-            n.try_into()
-                .expect("Too large to be a canonical Mersenne31 encoding"),
-        )
-    }
-
-    /// Convert from `usize`. Undefined behavior if the input is outside the canonical range.
-    #[inline]
-    fn from_canonical_usize(n: usize) -> Self {
-        Self::from_canonical_u32(
-            n.try_into()
-                .expect("Too large to be a canonical Mersenne31 encoding"),
-        )
-    }
-
-    #[inline]
-    fn from_wrapped_u32(n: u32) -> Self {
-        // To reduce `n` to 31 bits, we clear its MSB, then add it back in its reduced form.
-        let msb = n & (1 << 31);
-        let msb_reduced = msb >> 31;
-        Self::new(n ^ msb) + Self::new(msb_reduced)
-    }
-
-    #[inline]
-    fn from_wrapped_u64(n: u64) -> Self {
-        // NB: Experiments suggest that it's faster to just use the
-        // builtin remainder operator rather than split the input into
-        // 32-bit chunks and reduce using 2^32 = 2 (mod Mersenne31).
-        Self::from_canonical_u32((n % Self::ORDER_U64) as u32)
     }
 
     #[inline]
@@ -213,6 +166,20 @@ impl FieldAlgebra for Mersenne31 {
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: repr(transparent) ensures transmutation safety.
         unsafe { transmute(vec![0u32; len]) }
+    }
+}
+
+// Degree of the smallest permutation polynomial for Mersenne31.
+//
+// As p - 1 = 2×3^2×7×11×... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
+impl InjectiveMonomial<5> for Mersenne31 {}
+
+impl PermutationMonomial<5> for Mersenne31 {
+    /// In the field `Mersenne31`, `a^{1/5}` is equal to a^{1717986917}.
+    ///
+    /// This follows from the calculation `5 * 1717986917 = 4*(2^31 - 2) + 1 = 1 mod p - 1`.
+    fn injective_exp_root_n(&self) -> Self {
+        exp_1717986917(*self)
     }
 }
 
@@ -264,14 +231,6 @@ impl Field for Mersenne31 {
         Self::new(rotated)
     }
 
-    #[inline]
-    fn exp_u64_generic<FA: FieldAlgebra<F = Self>>(val: FA, power: u64) -> FA {
-        match power {
-            1717986917 => exp_1717986917(val), // used in x^{1/5}
-            _ => exp_u64_by_squaring(val, power),
-        }
-    }
-
     fn try_inverse(&self) -> Option<Self> {
         if self.is_zero() {
             return None;
@@ -302,6 +261,103 @@ impl Field for Mersenne31 {
     #[inline]
     fn order() -> BigUint {
         P.into()
+    }
+}
+
+// We can use some macros to implement QuotientMap<Int> for all integer types except for u32 and i32's.
+quotient_map_small_int!(Mersenne31, u32, [u8, u16]);
+quotient_map_small_int!(Mersenne31, i32, [i8, i16]);
+quotient_map_large_uint!(
+    Mersenne31,
+    u32,
+    Mersenne31::ORDER_U32,
+    "`[0, 2^31 - 2]`",
+    "`[0, 2^31 - 1]`",
+    [u64, u128]
+);
+quotient_map_large_iint!(
+    Mersenne31,
+    i32,
+    "`[-2^30, 2^30]`",
+    "`[1 - 2^31, 2^31 - 1]`",
+    [(i64, u64), (i128, u128)]
+);
+
+// We simple need to prove custom Mersenne31 impls for QuotientMap<u32> and QuotientMap<i32>
+impl QuotientMap<u32> for Mersenne31 {
+    /// Convert a given `u32` integer into an element of the `Mersenne31` field.
+    #[inline]
+    fn from_int(int: u32) -> Self {
+        // To reduce `n` to 31 bits, we clear its MSB, then add it back in its reduced form.
+        let msb = int & (1 << 31);
+        let msb_reduced = msb >> 31;
+        Self::new(int ^ msb) + Self::new(msb_reduced)
+    }
+
+    /// Convert a given `u32` integer into an element of the `Mersenne31` field.
+    ///
+    /// Returns none if the input does not lie in the range `[0, 2^31 - 1]`.
+    #[inline]
+    fn from_canonical_checked(int: u32) -> Option<Mersenne31> {
+        if int < Self::ORDER_U32 {
+            Some(Self::new(int))
+        } else {
+            None
+        }
+    }
+
+    /// Convert a given `u32` integer into an element of the `Mersenne31` field.
+    ///
+    /// # Safety
+    /// The input must lie in the range: `[0, 2^31 - 1]`.
+    #[inline(always)]
+    unsafe fn from_canonical_unchecked(int: u32) -> Mersenne31 {
+        debug_assert!(int < Self::ORDER_U32);
+        Self::new(int)
+    }
+}
+
+impl QuotientMap<i32> for Mersenne31 {
+    /// Convert a given `i32` integer into an element of the `Mersenne31` field.
+    #[inline]
+    fn from_int(int: i32) -> Self {
+        if int >= 0 {
+            Self::new(int as u32)
+        } else if int > (-1 << 31) {
+            Self::new(Mersenne31::ORDER_U32.wrapping_add_signed(int))
+        } else {
+            // The only other option is int = -(2^31) = -1 mod p.
+            Self::NEG_ONE
+        }
+    }
+
+    /// Convert a given `i32` integer into an element of the `Mersenne31` field.
+    ///
+    /// Returns none if the input does not lie in the range `(-2^30, 2^30)`.
+    #[inline]
+    fn from_canonical_checked(int: i32) -> Option<Mersenne31> {
+        const TWO_EXP_30: i32 = 1 << 30;
+        const NEG_TWO_EXP_30_PLUS_1: i32 = (-1 << 30) + 1;
+        match int {
+            0..TWO_EXP_30 => Some(Self::new(int as u32)),
+            NEG_TWO_EXP_30_PLUS_1..0 => {
+                Some(Self::new(Mersenne31::ORDER_U32.wrapping_add_signed(int)))
+            }
+            _ => None,
+        }
+    }
+
+    /// Convert a given `i32` integer into an element of the `Mersenne31` field.
+    ///
+    /// # Safety
+    /// The input must lie in the range: `[1 - 2^31, 2^31 - 1]`.
+    #[inline(always)]
+    unsafe fn from_canonical_unchecked(int: i32) -> Mersenne31 {
+        if int >= 0 {
+            Self::new(int as u32)
+        } else {
+            Self::new(Mersenne31::ORDER_U32.wrapping_add_signed(int))
+        }
     }
 }
 
@@ -454,29 +510,14 @@ pub(crate) fn from_u62(input: u64) -> Mersenne31 {
 
 #[cfg(test)]
 mod tests {
-    use p3_field::{Field, FieldAlgebra, PrimeField32};
-    use p3_field_testing::test_field;
+    use p3_field::{Field, InjectiveMonomial, PermutationMonomial, PrimeCharacteristicRing};
+    use p3_field_testing::{
+        test_field, test_prime_field, test_prime_field_32, test_prime_field_64,
+    };
 
     use crate::Mersenne31;
 
     type F = Mersenne31;
-
-    #[test]
-    fn add() {
-        assert_eq!(F::ONE + F::ONE, F::TWO);
-        assert_eq!(F::NEG_ONE + F::ONE, F::ZERO);
-        assert_eq!(F::NEG_ONE + F::TWO, F::ONE);
-        assert_eq!(F::NEG_ONE + F::NEG_ONE, F::new(F::ORDER_U32 - 2));
-    }
-
-    #[test]
-    fn sub() {
-        assert_eq!(F::ONE - F::ONE, F::ZERO);
-        assert_eq!(F::TWO - F::TWO, F::ZERO);
-        assert_eq!(F::NEG_ONE - F::NEG_ONE, F::ZERO);
-        assert_eq!(F::TWO - F::ONE, F::ONE);
-        assert_eq!(F::NEG_ONE - F::ZERO, F::NEG_ONE);
-    }
 
     #[test]
     fn mul_2exp_u64() {
@@ -502,13 +543,16 @@ mod tests {
     fn exp_root() {
         // Confirm that (x^{1/5})^5 = x
 
-        let m1 = F::from_canonical_u32(0x34167c58);
-        let m2 = F::from_canonical_u32(0x61f3207b);
+        let m1 = F::from_u32(0x34167c58);
+        let m2 = F::from_u32(0x61f3207b);
 
-        assert_eq!(m1.exp_u64(1717986917).exp_const_u64::<5>(), m1);
-        assert_eq!(m2.exp_u64(1717986917).exp_const_u64::<5>(), m2);
-        assert_eq!(F::TWO.exp_u64(1717986917).exp_const_u64::<5>(), F::TWO);
+        assert_eq!(m1.injective_exp_n().injective_exp_root_n(), m1);
+        assert_eq!(m2.injective_exp_n().injective_exp_root_n(), m2);
+        assert_eq!(F::TWO.injective_exp_n().injective_exp_root_n(), F::TWO);
     }
 
     test_field!(crate::Mersenne31);
+    test_prime_field!(crate::Mersenne31);
+    test_prime_field_64!(crate::Mersenne31);
+    test_prime_field_32!(crate::Mersenne31);
 }

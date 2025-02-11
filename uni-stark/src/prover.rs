@@ -5,7 +5,7 @@ use itertools::{izip, Itertools};
 use p3_air::Air;
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{FieldAlgebra, FieldExtensionAlgebra, PackedValue};
+use p3_field::{BasedVectorSpace, PackedValue, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
@@ -57,12 +57,13 @@ where
         info_span!("commit to trace data").in_scope(|| pcs.commit(vec![(trace_domain, trace)]));
 
     // Observe the instance.
-    challenger.observe(Val::<SC>::from_canonical_usize(log_degree));
+    // degree < 2^255 so we can safely cast log_degree to a u8.
+    challenger.observe(Val::<SC>::from_u8(log_degree as u8));
     // TODO: Might be best practice to include other instance data here; see verifier comment.
 
     challenger.observe(trace_commit.clone());
     challenger.observe_slice(public_values);
-    let alpha: SC::Challenge = challenger.sample_ext_element();
+    let alpha: SC::Challenge = challenger.sample_algebra_element();
 
     let quotient_domain =
         trace_domain.create_disjoint_domain(1 << (log_degree + log_quotient_degree));
@@ -192,8 +193,8 @@ where
 
             // "Transpose" D packed base coefficients into WIDTH scalar extension coefficients.
             (0..core::cmp::min(quotient_size, PackedVal::<SC>::WIDTH)).map(move |idx_in_packing| {
-                SC::Challenge::from_base_fn(|coeff_idx| {
-                    quotient.as_base_slice()[coeff_idx].as_slice()[idx_in_packing]
+                SC::Challenge::from_basis_coefficients_fn(|coeff_idx| {
+                    quotient.as_basis_coefficients_slice()[coeff_idx].as_slice()[idx_in_packing]
                 })
             })
         })

@@ -1,7 +1,8 @@
-use p3_field::{exp_1725656503, exp_u64_by_squaring, Field, FieldAlgebra};
+use p3_field::exponentiation::exp_1725656503;
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_monty_31::{
     BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
-    PackedMontyParameters, TwoAdicData,
+    PackedMontyParameters, RelativelyPrimePower, TwoAdicData,
 };
 
 /// The prime field `2^31 - 2^27 + 1`, a.k.a. the Baby Bear field.
@@ -25,13 +26,6 @@ impl BarrettParameters for BabyBearParameters {}
 
 impl FieldParameters for BabyBearParameters {
     const MONTY_GEN: BabyBear = BabyBear::new(31);
-
-    fn exp_u64_generic<FA: FieldAlgebra>(val: FA, power: u64) -> FA {
-        match power {
-            1725656503 => exp_1725656503(val), // used to compute x^{1/7}
-            _ => exp_u64_by_squaring(val, power),
-        }
-    }
 
     fn try_inverse<F: Field>(p1: F) -> Option<F> {
         if p1.is_zero() {
@@ -60,6 +54,15 @@ impl FieldParameters for BabyBearParameters {
             p1110000111100001111000011110000 * p111000011110000111100001111;
 
         Some(p1110111111111111111111111111111)
+    }
+}
+
+impl RelativelyPrimePower<7> for BabyBearParameters {
+    /// In the field `BabyBear`, `a^{1/7}` is equal to a^{1725656503}.
+    ///
+    /// This follows from the calculation `7 * 1725656503 = 6*(2^31 - 2^27) + 1 = 1 mod (p - 1)`.
+    fn exp_root_d<R: PrimeCharacteristicRing>(val: R) -> R {
+        exp_1725656503(val)
     }
 }
 
@@ -112,8 +115,11 @@ impl BinomialExtensionData<5> for BabyBearParameters {
 mod tests {
     use core::array;
 
-    use p3_field::{PrimeField32, PrimeField64, TwoAdicField};
-    use p3_field_testing::{test_field, test_field_dft, test_two_adic_field};
+    use p3_field::{InjectiveMonomial, PermutationMonomial, PrimeField64, TwoAdicField};
+    use p3_field_testing::{
+        test_field, test_field_dft, test_prime_field, test_prime_field_32, test_prime_field_64,
+        test_two_adic_field,
+    };
 
     use super::*;
 
@@ -121,7 +127,7 @@ mod tests {
 
     #[test]
     fn test_baby_bear_two_adicity_generators() {
-        let base = BabyBear::from_canonical_u32(0x1a427a41);
+        let base = BabyBear::from_u32(0x1a427a41);
         for bits in 0..=BabyBear::TWO_ADICITY {
             assert_eq!(
                 BabyBear::two_adic_generator(bits),
@@ -135,62 +141,27 @@ mod tests {
         let range_array: [u32; 32] = array::from_fn(|i| i as u32);
         assert_eq!(
             BabyBear::new_array(range_array),
-            range_array.map(F::from_canonical_u32)
+            range_array.map(F::from_u32)
         )
     }
 
     #[test]
     fn test_baby_bear() {
-        let f = F::from_canonical_u32(100);
+        let f = F::from_u32(100);
         assert_eq!(f.as_canonical_u64(), 100);
 
-        let f = F::from_canonical_u32(0);
-        assert!(f.is_zero());
-
-        let f = F::from_wrapped_u32(F::ORDER_U32);
-        assert!(f.is_zero());
-
         let f_1 = F::ONE;
-        let f_1_copy = F::from_canonical_u32(1);
-
-        let expected_result = F::ZERO;
-        assert_eq!(f_1 - f_1_copy, expected_result);
-
-        let expected_result = F::TWO;
-        assert_eq!(f_1 + f_1_copy, expected_result);
-
-        let f_2 = F::from_canonical_u32(2);
-        let expected_result = F::from_canonical_u32(3);
-        assert_eq!(f_1 + f_1_copy * f_2, expected_result);
-
-        let expected_result = F::from_canonical_u32(5);
-        assert_eq!(f_1 + f_2 * f_2, expected_result);
-
-        let f_p_minus_1 = F::from_canonical_u32(F::ORDER_U32 - 1);
-        let expected_result = F::ZERO;
-        assert_eq!(f_1 + f_p_minus_1, expected_result);
-
-        let f_p_minus_2 = F::from_canonical_u32(F::ORDER_U32 - 2);
-        let expected_result = F::from_canonical_u32(F::ORDER_U32 - 3);
-        assert_eq!(f_p_minus_1 + f_p_minus_2, expected_result);
-
-        let expected_result = F::from_canonical_u32(1);
-        assert_eq!(f_p_minus_1 - f_p_minus_2, expected_result);
-
-        let expected_result = f_p_minus_1;
-        assert_eq!(f_p_minus_2 - f_p_minus_1, expected_result);
-
-        let expected_result = f_p_minus_2;
-        assert_eq!(f_p_minus_1 - f_1, expected_result);
-
-        let m1 = F::from_canonical_u32(0x34167c58);
-        let m2 = F::from_canonical_u32(0x61f3207b);
-        let expected_prod = F::from_canonical_u32(0x1b5c8046);
+        let f_2 = F::TWO;
+        let f_p_minus_1 = F::NEG_ONE;
+        let f_p_minus_2 = F::NEG_ONE + F::NEG_ONE;
+        let m1 = F::from_u32(0x34167c58);
+        let m2 = F::from_u32(0x61f3207b);
+        let expected_prod = F::from_u32(0x1b5c8046);
         assert_eq!(m1 * m2, expected_prod);
 
-        assert_eq!(m1.exp_u64(1725656503).exp_const_u64::<7>(), m1);
-        assert_eq!(m2.exp_u64(1725656503).exp_const_u64::<7>(), m2);
-        assert_eq!(f_2.exp_u64(1725656503).exp_const_u64::<7>(), f_2);
+        assert_eq!(m1.injective_exp_n().injective_exp_root_n(), m1);
+        assert_eq!(m2.injective_exp_n().injective_exp_root_n(), m2);
+        assert_eq!(F::TWO.injective_exp_n().injective_exp_root_n(), F::TWO);
 
         let f_serialized = serde_json::to_string(&f).unwrap();
         let f_deserialized: F = serde_json::from_str(&f_serialized).unwrap();
@@ -235,4 +206,7 @@ mod tests {
         crate::BabyBear,
         p3_monty_31::dft::RecursiveDft<_>
     );
+    test_prime_field!(crate::BabyBear);
+    test_prime_field_64!(crate::BabyBear);
+    test_prime_field_32!(crate::BabyBear);
 }

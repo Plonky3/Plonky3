@@ -6,7 +6,8 @@ extern crate alloc;
 use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
-use p3_field::{FieldAlgebra, PrimeField32};
+use p3_field::integers::QuotientMap;
+use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_mds::MdsPermutation;
 use p3_mersenne_31::Mersenne31;
 use sha3::digest::{ExtendableOutput, Update};
@@ -93,7 +94,10 @@ where
             val = get_random_u32(shake);
         }
 
-        Mersenne31::from_canonical_u32(val)
+        unsafe {
+            // Safety: By construction, val is now < 2^31 - 1.
+            Mersenne31::from_canonical_unchecked(val)
+        }
     }
 
     fn init_shake() -> Shake128Reader {
@@ -153,7 +157,10 @@ where
             *val = (high as u32) << 16 | low as u32
         }
 
-        Mersenne31::from_canonical_u32(*val)
+        unsafe {
+            // Safety: low + high < 2^31 as low < 2^16 and high < 2^15.
+            Mersenne31::from_canonical_unchecked(*val)
+        }
     }
 
     #[inline]
@@ -182,7 +189,7 @@ where
 mod tests {
     use core::array;
 
-    use p3_field::FieldAlgebra;
+    use p3_field::PrimeCharacteristicRing;
     use p3_mersenne_31::Mersenne31;
 
     use crate::monolith::MonolithMersenne31;
@@ -193,14 +200,14 @@ mod tests {
         let mds = MonolithMdsMatrixMersenne31::<6>;
         let monolith: MonolithMersenne31<_, 16, 5> = MonolithMersenne31::new(mds);
 
-        let mut input = array::from_fn(Mersenne31::from_canonical_usize);
+        let mut input = array::from_fn(Mersenne31::from_usize);
 
         let expected = [
             609156607, 290107110, 1900746598, 1734707571, 2050994835, 1648553244, 1307647296,
             1941164548, 1707113065, 1477714255, 1170160793, 93800695, 769879348, 375548503,
             1989726444, 1349325635,
         ]
-        .map(Mersenne31::from_canonical_u32);
+        .map(Mersenne31::from_u32);
 
         monolith.permutation(&mut input);
 

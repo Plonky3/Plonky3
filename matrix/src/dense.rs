@@ -115,12 +115,12 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     where
         T: ExtensionField<F>,
     {
-        let width = self.width * T::D;
+        let width = self.width * T::DIMENSION;
         let values = self
             .values
             .borrow()
             .iter()
-            .flat_map(|x| x.as_base_slice().iter().copied())
+            .flat_map(|x| x.as_basis_coefficients_slice().iter().copied())
             .collect();
         RowMajorMatrix::new(values, width)
     }

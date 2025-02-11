@@ -4,12 +4,15 @@ use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{Field, FieldAlgebra, PackedField, PackedFieldPow2, PackedValue};
+use p3_field::{
+    Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
+    PermutationMonomial, PrimeCharacteristicRing,
+};
 use p3_util::convert_vec;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 
-use crate::{FieldParameters, MontyField31, PackedMontyParameters};
+use crate::{FieldParameters, MontyField31, PackedMontyParameters, RelativelyPrimePower};
 
 const WIDTH: usize = 8;
 
@@ -469,8 +472,8 @@ impl<FP: FieldParameters> Product for PackedMontyField31AVX2<FP> {
     }
 }
 
-impl<FP: FieldParameters> FieldAlgebra for PackedMontyField31AVX2<FP> {
-    type F = MontyField31<FP>;
+impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX2<FP> {
+    type PrimeSubfield = MontyField31<FP>;
 
     const ZERO: Self = Self::broadcast(MontyField31::ZERO);
     const ONE: Self = Self::broadcast(MontyField31::ONE);
@@ -478,37 +481,8 @@ impl<FP: FieldParameters> FieldAlgebra for PackedMontyField31AVX2<FP> {
     const NEG_ONE: Self = Self::broadcast(MontyField31::NEG_ONE);
 
     #[inline]
-    fn from_f(f: Self::F) -> Self {
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f.into()
-    }
-    #[inline]
-    fn from_canonical_u8(n: u8) -> Self {
-        MontyField31::from_canonical_u8(n).into()
-    }
-    #[inline]
-    fn from_canonical_u16(n: u16) -> Self {
-        MontyField31::from_canonical_u16(n).into()
-    }
-    #[inline]
-    fn from_canonical_u32(n: u32) -> Self {
-        MontyField31::from_canonical_u32(n).into()
-    }
-    #[inline]
-    fn from_canonical_u64(n: u64) -> Self {
-        MontyField31::from_canonical_u64(n).into()
-    }
-    #[inline]
-    fn from_canonical_usize(n: usize) -> Self {
-        MontyField31::from_canonical_usize(n).into()
-    }
-
-    #[inline]
-    fn from_wrapped_u32(n: u32) -> Self {
-        MontyField31::from_wrapped_u32(n).into()
-    }
-    #[inline]
-    fn from_wrapped_u64(n: u64) -> Self {
-        MontyField31::from_wrapped_u64(n).into()
     }
 
     #[inline]
@@ -557,7 +531,22 @@ impl<FP: FieldParameters> FieldAlgebra for PackedMontyField31AVX2<FP> {
     #[inline(always)]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { convert_vec(Self::F::zero_vec(len * WIDTH)) }
+        unsafe { convert_vec(MontyField31::<FP>::zero_vec(len * WIDTH)) }
+    }
+}
+
+impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31AVX2<FP> {}
+
+impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> InjectiveMonomial<D>
+    for PackedMontyField31AVX2<FP>
+{
+}
+
+impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> PermutationMonomial<D>
+    for PackedMontyField31AVX2<FP>
+{
+    fn injective_exp_root_n(&self) -> Self {
+        FP::exp_root_d(*self)
     }
 }
 

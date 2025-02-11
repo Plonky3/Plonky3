@@ -54,12 +54,12 @@ impl<P, PW, H, C, const DIGEST_ELEMS: usize> Mmcs<P::Value>
 where
     P: PackedValue,
     PW: PackedValue,
-    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>,
-    H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
-    H: Sync,
-    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>,
-    C: PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
-    C: Sync,
+    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>
+        + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+        + Sync,
+    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>
+        + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>
+        + Sync,
     PW::Value: Eq,
     [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
 {
@@ -165,7 +165,7 @@ where
                 .map(|(i, _)| opened_values[i].as_slice()),
         );
 
-        for &sibling in proof.iter() {
+        for &sibling in proof {
             let (left, right) = if index & 1 == 0 {
                 (root, sibling)
             } else {
@@ -206,7 +206,7 @@ mod tests {
     use itertools::Itertools;
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_commit::Mmcs;
-    use p3_field::{Field, FieldAlgebra};
+    use p3_field::{Field, PrimeCharacteristicRing};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_matrix::{Dimensions, Matrix};
     use p3_symmetric::{
@@ -262,12 +262,12 @@ mod tests {
         let perm = Perm::new_from_rng_128(&mut thread_rng());
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash.clone(), compress.clone());
+        let mmcs = MyMmcs::new(hash.clone(), compress);
 
         let mat = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1, 8);
         let (commit, _) = mmcs.commit(vec![mat.clone()]);
 
-        let expected_result = hash.hash_iter(mat.clone().vertically_packed_row(0));
+        let expected_result = hash.hash_iter(mat.vertically_packed_row(0));
         assert_eq!(commit, expected_result);
     }
 
@@ -440,12 +440,8 @@ mod tests {
         let mmcs = MyMmcs::new(hash, compress);
 
         // attempt to commit to a mat with 8 rows and a mat with 7 rows. this should panic.
-        let large_mat = RowMajorMatrix::new(
-            [1, 2, 3, 4, 5, 6, 7, 8].map(F::from_canonical_u8).to_vec(),
-            1,
-        );
-        let small_mat =
-            RowMajorMatrix::new([1, 2, 3, 4, 5, 6, 7].map(F::from_canonical_u8).to_vec(), 1);
+        let large_mat = RowMajorMatrix::new([1, 2, 3, 4, 5, 6, 7, 8].map(F::from_u8).to_vec(), 1);
+        let small_mat = RowMajorMatrix::new([1, 2, 3, 4, 5, 6, 7].map(F::from_u8).to_vec(), 1);
         let _ = mmcs.commit(vec![large_mat, small_mat]);
     }
 

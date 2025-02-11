@@ -10,7 +10,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_mds::integrated_coset_mds::IntegratedCosetMds;
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_rescue::{BasicSboxLayer, Rescue};
+use p3_rescue::Rescue;
 use p3_symmetric::{
     CompressionFunctionFromHasher, CryptographicHasher, PaddingFreeSponge,
     PseudoCompressionFunction, SerializingHasher32, TruncatedPermutation,
@@ -53,9 +53,9 @@ fn bench_bb_rescue(criterion: &mut Criterion) {
     type Mds = IntegratedCosetMds<F, 16>;
     let mds = Mds::default();
 
-    type Perm = Rescue<F, Mds, BasicSboxLayer<F>, 16>;
+    type Perm = Rescue<F, Mds, 16, 7>;
     let round_constants = Perm::get_round_constants_from_rng(8, &mut thread_rng());
-    let perm = Perm::new(8, round_constants, mds, BasicSboxLayer::for_alpha(7));
+    let perm = Perm::new(8, round_constants, mds);
 
     type H = PaddingFreeSponge<Perm, 16, 8, 8>;
     let h = H::new(perm.clone());
@@ -103,12 +103,12 @@ fn bench_merkle_tree<P, PW, H, C, const DIGEST_ELEMS: usize>(criterion: &mut Cri
 where
     P: PackedField,
     PW: PackedValue,
-    H: CryptographicHasher<P::Scalar, [PW::Value; DIGEST_ELEMS]>,
-    H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
-    H: Sync,
-    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>,
-    C: PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
-    C: Sync,
+    H: CryptographicHasher<P::Scalar, [PW::Value; DIGEST_ELEMS]>
+        + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+        + Sync,
+    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>
+        + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>
+        + Sync,
     [PW::Value; DIGEST_ELEMS]: Serialize + DeserializeOwned,
     Standard: Distribution<P::Scalar>,
 {
@@ -139,12 +139,12 @@ fn bench_mmcs<P, PW, H, C, const DIGEST_ELEMS: usize>(criterion: &mut Criterion,
 where
     P: PackedField,
     PW: PackedValue,
-    H: CryptographicHasher<P::Scalar, [PW::Value; DIGEST_ELEMS]>,
-    H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
-    H: Sync,
-    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>,
-    C: PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
-    C: Sync,
+    H: CryptographicHasher<P::Scalar, [PW::Value; DIGEST_ELEMS]>
+        + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+        + Sync,
+    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>
+        + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>
+        + Sync,
     [PW::Value; DIGEST_ELEMS]: Serialize + DeserializeOwned,
     Standard: Distribution<P::Scalar>,
 {

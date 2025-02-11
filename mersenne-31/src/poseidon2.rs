@@ -1,4 +1,4 @@
-//! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
+//! Implementation of Poseidon2, see: `<https://eprint.iacr.org/2023/323>`
 //!
 //! For the diffusion matrix, 1 + Diag(V), we perform a search to find an optimized
 //! vector V composed of elements with efficient multiplication algorithms in AVX2/AVX512/NEON.
@@ -13,9 +13,7 @@
 //! [-2, 2^0, 2, 4, 8, 16, 32, 64, 2^7, 2^8, 2^9, 2^10, 2^11, 2^12, 2^13,  2^14,  2^15,  2^16,   2^17,   2^18,   2^19,    2^20,    2^21,    2^22]
 //! See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
 
-use core::ops::Mul;
-
-use p3_field::{Field, FieldAlgebra};
+use p3_field::Algebra;
 use p3_poseidon2::{
     add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
     internal_permute_state, ExternalLayer, GenericPoseidon2LinearLayers, InternalLayer, MDSMat4,
@@ -38,7 +36,7 @@ pub(crate) const MERSENNE31_S_BOX_DEGREE: u64 = 5;
 /// It acts on arrays of the form either `[Mersenne31::Packing; WIDTH]` or `[Mersenne31; WIDTH]`. For speed purposes,
 /// wherever possible, input arrays should of the form `[Mersenne31::Packing; WIDTH]`.
 pub type Poseidon2Mersenne31<const WIDTH: usize> = Poseidon2<
-    <Mersenne31 as Field>::Packing,
+    Mersenne31,
     Poseidon2ExternalLayerMersenne31<WIDTH>,
     Poseidon2InternalLayerMersenne31,
     WIDTH,
@@ -47,7 +45,7 @@ pub type Poseidon2Mersenne31<const WIDTH: usize> = Poseidon2<
 
 /// An implementation of the matrix multiplications in the internal and external layers of Poseidon2.
 ///
-/// This can act on [FA; WIDTH] for any FieldAlgebra which implements multiplication by Mersenne31 field elements.
+/// This can act on `[A; WIDTH]` for any ring implementing `Algebra<Mersenne31>`.
 /// If you have either `[Mersenne31::Packing; WIDTH]` or `[Mersenne31; WIDTH]` it will be much faster
 /// to use `Poseidon2Mersenne31<WIDTH>` instead of building a Poseidon2 permutation using this.
 pub struct GenericPoseidon2LinearLayersMersenne31 {}
@@ -77,7 +75,7 @@ fn permute_mut<const N: usize>(state: &mut [Mersenne31; N], shifts: &[u8]) {
 impl InternalLayer<Mersenne31, 16, MERSENNE31_S_BOX_DEGREE> for Poseidon2InternalLayerMersenne31 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
     fn permute_state(&self, state: &mut [Mersenne31; 16]) {
-        internal_permute_state::<Mersenne31, 16, MERSENNE31_S_BOX_DEGREE>(
+        internal_permute_state(
             state,
             |x| permute_mut(x, &POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS),
             &self.internal_constants,
@@ -88,7 +86,7 @@ impl InternalLayer<Mersenne31, 16, MERSENNE31_S_BOX_DEGREE> for Poseidon2Interna
 impl InternalLayer<Mersenne31, 24, MERSENNE31_S_BOX_DEGREE> for Poseidon2InternalLayerMersenne31 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
     fn permute_state(&self, state: &mut [Mersenne31; 24]) {
-        internal_permute_state::<Mersenne31, 24, MERSENNE31_S_BOX_DEGREE>(
+        internal_permute_state(
             state,
             |x| permute_mut(x, &POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS),
             &self.internal_constants,
@@ -104,7 +102,7 @@ impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, MERSENNE31_S_BOX_DEGRE
         external_initial_permute_state(
             state,
             self.external_constants.get_initial_constants(),
-            add_rc_and_sbox_generic::<_, MERSENNE31_S_BOX_DEGREE>,
+            add_rc_and_sbox_generic,
             &MDSMat4,
         );
     }
@@ -114,18 +112,17 @@ impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, MERSENNE31_S_BOX_DEGRE
         external_terminal_permute_state(
             state,
             self.external_constants.get_terminal_constants(),
-            add_rc_and_sbox_generic::<_, MERSENNE31_S_BOX_DEGREE>,
+            add_rc_and_sbox_generic,
             &MDSMat4,
         );
     }
 }
 
-impl<FA> GenericPoseidon2LinearLayers<FA, 16> for GenericPoseidon2LinearLayersMersenne31
-where
-    FA: FieldAlgebra + Mul<Mersenne31, Output = FA>,
+impl<A: Algebra<Mersenne31>> GenericPoseidon2LinearLayers<A, 16>
+    for GenericPoseidon2LinearLayersMersenne31
 {
-    fn internal_linear_layer(state: &mut [FA; 16]) {
-        let part_sum: FA = state[1..].iter().cloned().sum();
+    fn internal_linear_layer(state: &mut [A; 16]) {
+        let part_sum: A = state[1..].iter().cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();
 
         // The first three diagonal elements are -2, 1, 2 so we do something custom.
@@ -146,12 +143,11 @@ where
     }
 }
 
-impl<FA> GenericPoseidon2LinearLayers<FA, 24> for GenericPoseidon2LinearLayersMersenne31
-where
-    FA: FieldAlgebra + Mul<Mersenne31, Output = FA>,
+impl<A: Algebra<Mersenne31>> GenericPoseidon2LinearLayers<A, 24>
+    for GenericPoseidon2LinearLayersMersenne31
 {
-    fn internal_linear_layer(state: &mut [FA; 24]) {
-        let part_sum: FA = state[1..].iter().cloned().sum();
+    fn internal_linear_layer(state: &mut [A; 24]) {
+        let part_sum: A = state[1..].iter().cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();
 
         // The first three diagonal elements are -2, 1, 2 so we do something custom.
