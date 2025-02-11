@@ -58,22 +58,22 @@ impl<F: TwoAdicField> Oracle<F> {
         // Since each call to `evaluate` involves dividing by a denominator, we
         // can batch-invert many of them outside and feed them to the function
         quotient_denom_inverse_hint: Option<F>,
-        // NP TODO optimise
-        // common_factors_inverse: F,
-        // denom_hint: F,
-        // ans_eval: F,
+        // A similar phenomenon occurs for the
+        deg_cor_hint: Option<(F, F)>,
     ) -> F {
         match self {
             // In this case, the oracle contains the values of f_0 = g_0
             Oracle::Transparent => f_x,
 
-            // In this case, we need to apply degree correction and the quotient
+            // In this case, we need to evaluate the quotient and
+            // degree-correction factor
             Oracle::Virtual(virtual_function) => {
                 assert!(
                     virtual_function.quotient_set.iter().all(|&q| q != x),
                     "The virtual function is undefined at points in its quotient set"
                 );
 
+                // Computing the quotient (Quot in the article)
                 let quotient_num = f_x - virtual_function.interpolating_polynomial.evaluate(&x);
 
                 let quotient_denom_inverse = quotient_denom_inverse_hint.unwrap_or_else(|| {
@@ -87,16 +87,27 @@ impl<F: TwoAdicField> Oracle<F> {
 
                 let quotient_evalution = quotient_num * quotient_denom_inverse;
 
-                let num_terms = virtual_function.quotient_set.len();
-                let common_factor = x * virtual_function.comb_randomness;
+                // Computing the degree-correction factor (1 - rx)^(e + 1)/(1 - rx)
+                let (rx, denom_inverse) = deg_cor_hint.unwrap_or_else(|| {
+                    let rx = x * virtual_function.comb_randomness;
+                    let denom_inverse = if rx == F::ONE {
+                        F::ONE
+                    } else {
+                        (F::ONE - rx).inverse()
+                    };
+                    (rx, denom_inverse)
+                });
 
-                let scale_factor = if common_factor != F::ONE {
-                    (F::ONE - common_factor.exp_u64((num_terms + 1) as u64))
-                        * (F::ONE - common_factor).inverse()
+                let num_terms = virtual_function.quotient_set.len();
+
+                let scale_factor = if rx != F::ONE {
+                    (F::ONE - rx.exp_u64((num_terms + 1) as u64)) * denom_inverse
                 } else {
                     F::from_canonical_usize(num_terms + 1)
                 };
 
+                // Putting the quotient and degree correction together into the
+                // desired virtual-function evaluation
                 quotient_evalution * scale_factor
             }
         }
@@ -499,17 +510,20 @@ fn compute_f_oracle_from_g<F: TwoAdicField>(
     // The log of the folding factor k_i
     log_folding_factor: usize,
 ) -> Vec<Vec<F>> {
-    // 1. Computing the coset of points of L_i relevant to each queried point of L_i^k_i
+    // 1. Computing the set S_j of k_i-th roots of r_j for each sampled point
+    // r_j from L_i^k_i. S_j is the coset (s_j) * {1, c, ..., c^{k_i - 1}},
+    // where s_j is any one k_i-th root and c is the generator of the kernel of
+    // k: L_i ->> L_i^{k_i}, i. e. c = g_i^(|L_i| / k_i) (where g_i is the
+    // chosen generator of L_i)
 
-    // This is the length of each coset
+    // This is the length of each coset S_j
     let folding_factor = 1 << log_folding_factor;
 
-    // This is the generator of each coset
+    // This is the generator c of (the subgroup defining) each coset S_j
     let log_scaling_factor = domain.log_size() - log_folding_factor;
     let generator = domain.generator().exp_power_of_2(log_scaling_factor);
 
-    // The j-th element of this vector is the set of preimages of points of the
-    // j-th element of L_i under the map x \mapsto x^{k_i}
+    // The j-th element of this vector is S_i, the set of k_i-th roots of r_j
     let queried_point_preimages = queried_indices
         .into_iter()
         .map(|index| {
@@ -521,12 +535,13 @@ fn compute_f_oracle_from_g<F: TwoAdicField>(
 
     // NP TODO this can maybe be optimized
 
-    // Compute the values of f_i at the points using those of g_i
+    // 2. Compute the values of f_i at the each element of each S_j using the
+    // values of g_i therein
 
     // Each call to the oracle involves a division by an evaluation of the
     // vanishing polynomial at the query set. We can batch-invert those
     // denominators outside to reduce the number of costly calls to invert()
-    let denom_inverse_hints = match oracle {
+    let denom_inv_hints = match oracle {
         Oracle::Transparent => vec![vec![None; folding_factor]; queried_point_preimages.len()],
         Oracle::Virtual(virtual_function) => {
             let flat_denoms: Vec<F> = queried_point_preimages
@@ -557,20 +572,63 @@ fn compute_f_oracle_from_g<F: TwoAdicField>(
         }
     };
 
+    // A similar phenomenon occurs with the degree-correction factor
+    // (1 - rx)^(e - 1)/(1 - rx) in the notation of the paper (sec. 2.3): we can
+
+    // batch-invert the denominators to save on invert() calls. Since this
+    // already necessitates rx, we also store the latter and pass it
+    // to the oracle-computing function.
+    let deg_cor_hints = match oracle {
+        Oracle::Transparent => vec![vec![None; folding_factor]; queried_point_preimages.len()],
+        Oracle::Virtual(virtual_function) => {
+            let (flat_rx_s, flat_denoms): (Vec<F>, Vec<F>) = queried_point_preimages
+                .iter()
+                .flat_map(|points| {
+                    points.iter().map(|point| {
+                        let rx = *point * virtual_function.comb_randomness;
+
+                        if rx == F::ONE {
+                            (F::ONE, F::ONE)
+                        } else {
+                            (rx, (F::ONE - rx))
+                        }
+                    })
+                })
+                .unzip();
+
+            let flat_denom_invs = batch_multiplicative_inverse(&flat_denoms);
+
+            flat_rx_s
+                .into_iter()
+                .zip(flat_denom_invs)
+                .map(|(rx, denom_inv)| Some((rx, denom_inv)))
+                .collect_vec()
+                .chunks_exact(folding_factor)
+                .map(|chunk| chunk.to_vec())
+                .collect_vec()
+        }
+    };
+
+    // Compute the values of f_i at the each element of each S_j using the
+    // precomputed hints
     queried_point_preimages
         .into_iter()
         .zip(g_eval_batches.into_iter())
-        .zip(denom_inverse_hints.into_iter())
-        .map(|((points, g_eval_batch), denom_inverse_hints)| {
-            points
-                .into_iter()
-                .zip(g_eval_batch.into_iter())
-                .zip(denom_inverse_hints.into_iter())
-                .map(|((point, g_eval), denom_inverse_hint)| {
-                    oracle.evaluate(point, g_eval, denom_inverse_hint)
-                })
-                .collect_vec()
-        })
+        .zip(denom_inv_hints.into_iter())
+        .zip(deg_cor_hints.into_iter())
+        .map(
+            |(((points, g_eval_batch), denom_inverse_hints), deg_cor_hints)| {
+                points
+                    .into_iter()
+                    .zip(g_eval_batch.into_iter())
+                    .zip(denom_inverse_hints.into_iter())
+                    .zip(deg_cor_hints.into_iter())
+                    .map(|(((point, g_eval), denom_inverse_hint), deg_cor_hint)| {
+                        oracle.evaluate(point, g_eval, denom_inverse_hint, deg_cor_hint)
+                    })
+                    .collect_vec()
+            },
+        )
         .collect_vec()
 }
 

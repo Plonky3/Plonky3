@@ -82,3 +82,5 @@ fn test_verify_variable_folding_factor() {
 // NP TODO failing tests
 
 // NP TODO test that the sponge is consistent at the end
+
+// Benchmarks with and without the hints
