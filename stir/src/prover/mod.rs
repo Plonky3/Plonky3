@@ -54,7 +54,6 @@ struct StirRoundWitness<F: TwoAdicField, M: Mmcs<F>> {
     pub(crate) folding_randomness: F,
 }
 
-// NP TODO maybe have this and prove() receive &polynomial instead
 pub fn commit<F, M>(
     config: &StirConfig<F, M>,
     // afsdfsfdsdfsfssd
@@ -71,22 +70,24 @@ where
     let log_size = config.log_starting_degree() + config.log_starting_inv_rate();
 
     // Initial domain L_0. The chosen sequence of domains is:
-    // - L_0 = w * <w> = <w>
-    // - L_1 = w * <w^2>
-    // - L_2 = w * <w^4>
-    // ...
-    // - L_i = w * <w^{2^i}>
+    //   - L_0 = w * <w> = <w>
+    //   - L_1 = w * <w^2>
+    //   - L_2 = w * <w^4>
+    //     ...
+    //   - L_i = w * <w^{2^i}>
     // This guarantees that, for all i >= 0, (L_i)^{2^l_i} doesn't intersect
     // L_{i + 1} (where l_i > 0 is the log_folding_factor of the i-th round),
-    // as required for the optimisation mentioned in the paper (avoiding the use
-    // of the Fill polynomials).
-    // Defining L_0 with shift w or 1 is equivalent mathematically, but the
-    // former allows one to always use shrink_subgroup in the next rounds.
+    // as required for the optimisation mentioned in the article (i. e. avoiding
+    // the use of the Fill polynomials).
+    //
+    // N.B.: Defining L_0 with shift w or 1 is equivalent mathematically, but
+    // the former allows one to always use the method shrink_subgroup in the
+    // following rounds.
     let domain = TwoAdicCoset::new(F::two_adic_generator(log_size), log_size);
 
+    // NP TODO check if this is cheaper because of the unnecessary shift
     let evals = domain.evaluate_polynomial(&polynomial);
 
-    // NP TODO create function to collate which only moves stuff around in memory once
     let stacked_evals = RowMajorMatrix::new(
         evals,
         1 << (log_size - config.log_starting_folding_factor()),
@@ -105,7 +106,6 @@ where
     )
 }
 
-// NP TODO pub fn prove_on_evals
 pub fn prove<F, EF, M, C>(
     config: &StirConfig<EF, M>,
     witness: StirWitness<EF, M>,
@@ -226,12 +226,6 @@ where
 
     // ========= FOLDING =========
 
-    // NP TODO ask This folding factor uses the folding factor for this round.
-    // The stacking a few lines below ("new_stacked_evals =
-    // RowMajorMatrix::new(folded_evals, 1 << log_folding_factor)") uses the
-    // folding factor of the next round. Correct? Giacomo's code is not very
-    // well suited for this since only one folding factor is passed
-
     // Fold the polynomial and the evaluations
     let folded_polynomial = fold_polynomial(&polynomial, folding_randomness, log_folding_factor);
 
@@ -245,7 +239,6 @@ where
     // Stack the new folded evaluations, commit and observe the commitment (in
     // preparation for next-round folding verification and hence with the
     // folding factor of the next round)
-    // NP TODO create function to collate which only moves stuff around in memory once
     let new_stacked_evals = RowMajorMatrix::new(
         folded_evals,
         1 << (new_domain.log_size() - log_next_folding_factor),
@@ -261,8 +254,6 @@ where
     challenger.observe(new_commitment.clone());
 
     // ========= OOD SAMPLING =========
-
-    // NP TODO: Sample from the extension field like in FRI
 
     let mut ood_samples = Vec::new();
 
@@ -326,13 +317,6 @@ where
 
     // ========= POLY QUOTIENT =========
 
-    // NP TODO revise FS in general
-
-    // NP TODO ask Giacomo: is this division (prover step 5) computed before or
-    // after the verifier queries f_{i - 1} (verifier step 1)? The protocol is
-    // interactive but the order of the interaction is not shown in the paper,
-    // yet it is important for FS
-
     // Compute the domain L_{i-1}^k = w^k * <w^{2^{i-1} * k}>
     let mut domain_k = domain.shrink_coset(log_folding_factor);
 
@@ -362,6 +346,8 @@ where
     let quotient_set = quotient_answers.iter().map(|(x, _)| *x).collect_vec();
     let quotient_set_size = quotient_set.len();
 
+    // NP TODO if quotient_set_size is > deg + 1, terminate early or at least handle accordingly - otherwise panics can happen
+
     // Compute the answer polynomial and add it to the transcript
     let ans_polynomial = Polynomial::<EF>::lagrange_interpolation(quotient_answers.clone());
     challenger.observe(F::from_canonical_u8(Messages::AnsPolynomial as u8));
@@ -389,7 +375,13 @@ where
 
     // NP TODO remove/fix
     if quotient_polynomial.is_zero() {
-        dbg!("Warning: quotient polynomial is zero. Reconsider your parameters");
+        // This happens when the quotient set has deg(g_i) + 1 elements or more,
+        // in which case the interpolator ans_i coincides with g_i, causing
+        // f_i to be 0. A potential cause is the combination of a small field,
+        // low-degree initial polynomial and large number of security bits
+        // required. This does not make the protocol vulnerable, but perhaps
+        // less efficient than it could be.
+        dbg!("Warning: quotient polynomial is zero");
     } else {
         assert_eq!(witness_polynomial.degree(), folded_polynomial.degree());
     }
@@ -425,7 +417,5 @@ fn compute_shake_polynomial<F: TwoAdicField>(
     }
     shake_polynomial
 }
-
-// NP TODO domain separation in sponge
 
 // NP TODO when evaluating in the original domain w * <w>, detect this and evaluate over <w>, then cyclically shift (make sure this is correct)

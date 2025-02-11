@@ -101,16 +101,12 @@ impl<M: Clone> StirParameters<M> {
     }
 }
 
-// NP TODO either create getters for this or make it (alongside the method
-// round_config) private
-
 /// Round specific configuration
 #[derive(Debug, Clone)]
 pub struct RoundConfig {
     /// log of the folding factor for this round.
     pub(crate) log_folding_factor: usize,
 
-    // NP TODO think if this should be external
     /// log of the folding factor for the next round.
     pub(crate) log_next_folding_factor: usize,
 
@@ -234,7 +230,6 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
                 .end_round();
         } */
 
-        // NP TODO prepare Merkle tree / MMCS with domain separation, if possible and necessary
         /* let mut current_merkle_tree = MerkleTree::new(
             starting_domain_log_size - log_starting_folding_factor,
             ldt_parameters.field,

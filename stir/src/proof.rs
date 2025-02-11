@@ -11,13 +11,10 @@ use serde::{Deserialize, Serialize};
     deserialize = "Witness: Deserialize<'de>, RoundProof<F, M, Witness>: Deserialize<'de>, Polynomial<F>: Deserialize<'de>"
 ))]
 pub struct StirProof<F: Field, M: Mmcs<F>, Witness> {
-    // NP TODO move commitment, possibly split commit() and prove()
     pub(crate) commitment: M::Commitment,
     pub(crate) round_proofs: Vec<RoundProof<F, M, Witness>>,
     pub(crate) final_polynomial: Polynomial<F>,
     pub(crate) pow_witness: Witness,
-
-    // NP TODO path pruning/batch opening
     pub(crate) final_round_queries: Vec<(Vec<F>, M::Proof)>,
 }
 

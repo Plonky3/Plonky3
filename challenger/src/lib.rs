@@ -1,7 +1,6 @@
 //! Utilities for generating Fiat-Shamir challenges based on an IOP's transcript.
 
-// NP TODO reintroduce
-// #![no_std]
+#![no_std]
 
 extern crate alloc;
 

@@ -114,13 +114,7 @@ impl<F: TwoAdicField> Oracle<F> {
     }
 }
 
-// NP TODO remove
-//            *   %   *   %   *   %     *     %
-// L_i        0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
-// L_i^4      0       4       8         12
-// query *0, %8
-
-/// Input to verify_round
+/// Input to and output of round verification
 pub struct VerificationState<F: TwoAdicField, M: Mmcs<F>> {
     // The indices are given in the following frame of reference: Self is
     // produced inside verify_round for round i (in {1, ..., num_rounds}). The
@@ -288,7 +282,6 @@ where
             .exp_power_of_2(log_final_query_domain_size),
     );
 
-    // NP TODO ask Giacomo why no shake polynomial in the last round
     if !p_evals
         .into_iter()
         .zip(final_queried_point_roots)
@@ -299,7 +292,6 @@ where
         return Err(VerificationError::FinalPolynomialEvaluations);
     }
 
-    // NP TODO verify pow_witness
     if !challenger.check_witness(config.final_pow_bits().ceil() as usize, pow_witness) {
         return Err(VerificationError::FinalProofOfWork);
     }
@@ -406,7 +398,6 @@ where
             .mmcs_config()
             .verify_batch(
                 &prev_root,
-                // NP TODO verify this is correct
                 &[Dimensions {
                     width: 1 << log_folding_factor,
                     height: 1 << (domain.log_size() - log_folding_factor),

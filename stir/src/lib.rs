@@ -1,21 +1,10 @@
-//! An implementation of the STIR low-degree test (LDT).
-//! https://eprint.iacr.org/2024/390.
+//! An implementation of the STIR low-degree test. Based on the article
+//! https://eprint.iacr.org/2024/390 and the
+//! [implementation](https://github.com/WizardOfMenlo/stir) by the co-author
+//! Giacomo Fenzi.
 
 // NP TODO re-introduce no_std
 // #![no_std]
-
-// NP TODOs
-// - Credit Giacomo and link to his code
-// - Think about MMCS
-// - Batching (fold multiple words)
-// - Protocol builder
-
-// NP TODO profusely add documentation
-
-// NP TODO remove
-// - optimisations for fold_evaluations
-// - optimisations for oracle computation
-// - More tests
 
 extern crate alloc;
 

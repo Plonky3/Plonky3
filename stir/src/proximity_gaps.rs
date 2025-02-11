@@ -2,7 +2,10 @@ use std::f64::consts::LOG2_10;
 use std::fmt::Display;
 use std::str::FromStr;
 
-// NP TODO credit Giacomo's original file
+/// This module, used to determine proximity gaps in the relevant Reed-Solomon
+/// codes based on various security assumptions, is directly taken from the
+/// co-author Giacomo Fenzi's
+/// [implementation](https://github.com/WizardOfMenlo/stir-whir-scripts/blob/main/src/errors.rs)
 
 /// Security assumptions determines which proximity parameters and conjectures are assumed by the error computation.
 #[derive(Debug, Clone, Copy)]

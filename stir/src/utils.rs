@@ -51,11 +51,13 @@ pub(crate) fn multiply_by_power_polynomial<F: Field>(
 ) -> Polynomial<F> {
     // NP TODO check this works for degree = 0, or early stop, or panic
 
-    //  Let (c, d) = (coeff, degree). Polynomial needs to be multiplied by
-    //  ((c*x)^(d + 1) - 1) / (c*x - 1).
+    //  Let (c, d) = (coeff, degree). The power polynomial we need to multiply
+    //  polynomial by coincides with ((c*x)^(d + 1) - 1) / (c*x - 1), and this
+    //  can be done more efficiently by a special-case multiplication followed
+    //  by a special-case division.
 
-    // We first compute polynomial * ((c*x)^(d + 1) - 1), i. e.:
-    //   [0 ... 0] || c^(d + 1) * coeffs
+    // We first compute polynomial * ((coeff*x)^(degree + 1) - 1), i. e.:
+    //   [0 ... 0] || coeff^(degree + 1) * coeffs
     // - coeffs || [0 ... 0]
     let coeff_pow_n_1 = coeff.exp_u64((degree + 1) as u64);
     let mut new_coeffs = vec![F::ZERO; degree + 1];
@@ -140,7 +142,6 @@ pub fn fold_evaluations<F: TwoAdicField>(
 
 fn fold_evaluations_binary<F: TwoAdicField>(
     evals: Vec<F>,
-    // NP TODO think if gammas can be an iter
     gammas: &[F],
     // The inverse of 2 can be supplied to avoid recomputation in every call
     two_inv_hint: Option<F>,
@@ -262,8 +263,6 @@ mod tests {
             .map(|fold| fold.compose_with_exponent(folding_factor))
             .zip(powers_of_x.iter())
             .fold(Polynomial::zero(), |acc, (raised_fold, power_of_x)| {
-                // NP TODO maybe method multiply_by_xn(exp)? or have * detect
-                // which situation it is
                 &acc + &(&raised_fold * power_of_x)
             });
 
