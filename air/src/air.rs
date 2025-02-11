@@ -95,6 +95,12 @@ pub trait AirBuilder: Sized {
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I);
 
+    fn assert_zeroes<J: Iterator<Item = I>, I: Into<Self::Expr>>(&mut self, iter: J) {
+        for elem in iter {
+            self.assert_zero(elem);
+        }
+    }
+
     fn assert_one<I: Into<Self::Expr>>(&mut self, x: I) {
         self.assert_zero(x.into() - Self::Expr::ONE);
     }

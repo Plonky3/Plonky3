@@ -163,6 +163,18 @@ pub unsafe trait PackedField: Algebra<Self::Scalar>
             current,
         }
     }
+
+    /// Compute the dot product of two iterators of packed elements.
+    fn iter_dot_product<'a, Inner1: Into<Self> + 'a + Copy, Inner2: Into<Self> + 'a + Copy, I: Iterator<Item = &'a Inner1>, J: Iterator<Item = &'a Inner2>>(
+        iter_1: I,
+        iter_2: J,
+    ) -> Self {
+        let mut acc = Self::ZERO;
+        iter_1
+            .zip(iter_2)
+            .for_each(|(&elem_1, &elem_2)| acc += elem_1.into() * elem_2.into());
+        acc
+    }
 }
 
 /// # Safety
@@ -226,6 +238,19 @@ pub trait PackedFieldExtension<
     /// Similar to packed_powers, construct an iterator which returns
     /// powers of `base` packed into `PackedFieldExtension` elements.
     fn packed_ext_powers(base: ExtField) -> Powers<Self>;
+
+    /// Compute the dot product of an iterator of packed extension field elements
+    /// and an iterator of packed base field elements.
+    fn base_dot_product<I: Iterator<Item = Self>, J: Iterator<Item = BaseField::Packing>>(
+        ext_iter: I,
+        base_iter: J,
+    ) -> Self {
+        let mut acc = Self::ZERO;
+        ext_iter
+            .zip(base_iter)
+            .for_each(|(ext, base)| acc += ext * base);
+        acc
+    }
 }
 
 unsafe impl<T: Packable> PackedValue for T {

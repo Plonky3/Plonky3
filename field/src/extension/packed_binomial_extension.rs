@@ -192,6 +192,24 @@ where
             current,
         }
     }
+
+    fn base_dot_product<I: Iterator<Item = Self>, J: Iterator<Item = <F as Field>::Packing>>(
+        ext_iter: I,
+        base_iter: J,
+    ) -> Self {
+        let mut acc = Self::ZERO;
+        let base_vector = base_iter.collect_vec();
+        let length = base_vector.len();
+        let ext_vec = ext_iter.take(length).collect_vec();
+
+        for (i, acc_val) in acc.value.iter_mut().enumerate() {
+            *acc_val = <<F as Field>::Packing as PackedField>::iter_dot_product(
+                (0..length).map(|j| &ext_vec[i].value[j]),
+                base_vector.iter(),
+            );
+        }
+        acc
+    }
 }
 
 impl<F, PF, const D: usize> Neg for PackedBinomialExtensionField<F, PF, D>
