@@ -44,7 +44,7 @@ macro_rules! from_integer_types {
 /// should implement this for all primitive integer types.
 pub trait QuotientMap<Int>: Sized {
     /// Convert a given integer into an element of the field `ℤ/p`.
-    ///   
+    ///
     /// This is the most generic method which makes no assumptions on the size of the input.
     /// Where possible, this method should be used with the smallest possible integer type.
     /// For example, if a 32-bit integer `x` is known to be less than `2^16`, then
@@ -77,6 +77,7 @@ pub trait QuotientMap<Int>: Sized {
 }
 
 /// This allows us to avoid some duplication which arises when working with fields which contain a generic parameter.
+///
 /// See `quotient_map_small_int` to see what this will expand to/how to call it. This is not intended for use outside of
 /// that macro.
 #[macro_export]
@@ -298,7 +299,9 @@ macro_rules! quotient_map_large_uint {
 }
 
 /// For large signed integer types, a simple method which is usually good enough is to simply check the sign and use this to
-/// pass to the equivalent unsigned method. This will often not be the fastest implementation but should be good enough for most cases.
+/// pass to the equivalent unsigned method.
+///
+/// This will often not be the fastest implementation but should be good enough for most cases.
 ///
 /// This macro accepts 4 inputs.
 /// - The name of the prime field `P`.

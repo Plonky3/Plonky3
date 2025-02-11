@@ -11,10 +11,7 @@ use p3_poseidon2::{
     InternalLayer, InternalLayerConstructor, MDSMat4,
 };
 
-use crate::{
-    GenericPoseidon2LinearLayersMersenne31, Mersenne31, PackedMersenne31Neon,
-    MERSENNE31_S_BOX_DEGREE,
-};
+use crate::{GenericPoseidon2LinearLayersMersenne31, Mersenne31, PackedMersenne31Neon};
 
 /// The internal layers of the Poseidon2 permutation.
 #[derive(Debug, Clone)]
@@ -51,7 +48,7 @@ where
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
     fn permute_state(&self, state: &mut [PackedMersenne31Neon; WIDTH]) {
         self.internal_constants.iter().for_each(|&rc| {
-            add_rc_and_sbox_generic::<_, _, MERSENNE31_S_BOX_DEGREE>(&mut state[0], rc);
+            add_rc_and_sbox_generic(&mut state[0], rc);
             GenericPoseidon2LinearLayersMersenne31::internal_linear_layer(state);
         })
     }
@@ -65,7 +62,7 @@ impl<const D: u64, const WIDTH: usize> ExternalLayer<PackedMersenne31Neon, WIDTH
         external_initial_permute_state(
             state,
             self.external_constants.get_initial_constants(),
-            add_rc_and_sbox_generic::<_, _, MERSENNE31_S_BOX_DEGREE>,
+            add_rc_and_sbox_generic,
             &MDSMat4,
         );
     }
@@ -75,7 +72,7 @@ impl<const D: u64, const WIDTH: usize> ExternalLayer<PackedMersenne31Neon, WIDTH
         external_terminal_permute_state(
             state,
             self.external_constants.get_terminal_constants(),
-            add_rc_and_sbox_generic::<_, _, MERSENNE31_S_BOX_DEGREE>,
+            add_rc_and_sbox_generic,
             &MDSMat4,
         );
     }
