@@ -7,7 +7,7 @@ use num_integer::binomial;
 use p3_field::{Algebra, PermutationMonomial, PrimeField, PrimeField64};
 use p3_mds::MdsPermutation;
 use p3_symmetric::{CryptographicPermutation, Permutation};
-use rand::distr::Standard;
+use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 use rand::Rng;
 
@@ -54,10 +54,12 @@ where
     // For a general field, we provide a generic constructor for the round constants.
     pub fn get_round_constants_from_rng<R: Rng>(num_rounds: usize, rng: &mut R) -> Vec<F>
     where
-        Standard: Distribution<F>,
+        StandardUniform: Distribution<F>,
     {
         let num_constants = 2 * WIDTH * num_rounds;
-        rng.sample_iter(Standard).take(num_constants).collect()
+        rng.sample_iter(StandardUniform)
+            .take(num_constants)
+            .collect()
     }
 
     fn get_round_constants_rescue_prime(

@@ -150,7 +150,7 @@ mod tests {
     use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
     use p3_field::{Field, PrimeCharacteristicRing};
     use p3_symmetric::Permutation;
-    use rand::{thread_rng, Rng};
+    use rand::{rng, Rng};
 
     use crate::coset_mds::CosetMds;
 
@@ -159,8 +159,8 @@ mod tests {
         type F = BabyBear;
         const N: usize = 8;
 
-        let mut rng = thread_rng();
-        let mut arr: [F; N] = rng.gen();
+        let mut rng = rng();
+        let mut arr: [F; N] = rng.random();
 
         let shift = F::GENERATOR;
         let mut coset_lde_naive = NaiveDft.coset_lde(arr.to_vec(), 0, shift);

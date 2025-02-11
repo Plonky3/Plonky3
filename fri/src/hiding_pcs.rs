@@ -206,7 +206,7 @@ where
     let new_values = Val::zero_vec(new_w * h);
     let mut result = RowMajorMatrix::new(new_values, new_w);
     // Can be parallelized by adding par_, but there are some complications with the RNG.
-    // We could just use thread_rng(), but ideally we want to keep it generic...
+    // We could just use rng(), but ideally we want to keep it generic...
     result
         .rows_mut()
         .zip(mat.row_slices())

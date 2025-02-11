@@ -407,7 +407,6 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use rand::rngs::OsRng;
     use rand::Rng;
 
     use super::*;
@@ -540,11 +539,11 @@ mod tests {
     #[test]
     fn test_reverse_slice_index_bits_random() {
         let lengths = [32, 128, 1 << 16];
-        let mut rng = OsRng;
+        let mut rng = rand::rng();
         for _ in 0..32 {
             for &length in &lengths {
                 let mut rand_list: Vec<u32> = Vec::with_capacity(length);
-                rand_list.resize_with(length, || rng.gen());
+                rand_list.resize_with(length, || rng.random());
                 let expect = reverse_index_bits_naive(&rand_list);
 
                 let mut actual = rand_list.clone();

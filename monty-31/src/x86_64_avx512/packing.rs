@@ -761,10 +761,10 @@ impl<PMP: PackedMontyParameters> Sub<PackedMontyField31AVX512<PMP>> for MontyFie
     }
 }
 
-impl<PMP: PackedMontyParameters> Distribution<PackedMontyField31AVX512<PMP>> for Standard {
+impl<PMP: PackedMontyParameters> Distribution<PackedMontyField31AVX512<PMP>> for StandardUniform {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMontyField31AVX512<PMP> {
-        PackedMontyField31AVX512::<PMP>(rng.gen())
+        PackedMontyField31AVX512::<PMP>(rng.random())
     }
 }
 

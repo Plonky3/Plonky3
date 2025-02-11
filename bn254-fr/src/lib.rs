@@ -293,9 +293,18 @@ impl Div for Bn254Fr {
     }
 }
 
-impl Distribution<Bn254Fr> for Standard {
+impl Distribution<Bn254Fr> for StandardUniform {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Bn254Fr {
+        loop {
+            let mut next_data: [u64; 4] = rng.random;
+            next_data[3] = next_data[3] & ((1_u64 << 62) - 1);
+
+            let is_canonical = next_u31 != Mersenne31::ORDER_U32;
+            if is_canonical {
+                return Mersenne31::new(next_u31);
+            }
+        }
         Bn254Fr::new(FFBn254Fr::random(rng))
     }
 }

@@ -100,7 +100,7 @@ impl Debug for Goldilocks {
     }
 }
 
-impl Distribution<Goldilocks> for Standard {
+impl Distribution<Goldilocks> for StandardUniform {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Goldilocks {
         loop {
             let next_u64 = rng.next_u64();

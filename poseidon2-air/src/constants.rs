@@ -34,22 +34,22 @@ impl<F: Field, const WIDTH: usize, const HALF_FULL_ROUNDS: usize, const PARTIAL_
 
     pub fn from_rng<R: Rng>(rng: &mut R) -> Self
     where
-        Standard: Distribution<F> + Distribution<[F; WIDTH]>,
+        StandardUniform: Distribution<F> + Distribution<[F; WIDTH]>,
     {
         let beginning_full_round_constants = rng
-            .sample_iter(Standard)
+            .sample_iter(StandardUniform)
             .take(HALF_FULL_ROUNDS)
             .collect::<Vec<[F; WIDTH]>>()
             .try_into()
             .unwrap();
         let partial_round_constants = rng
-            .sample_iter(Standard)
+            .sample_iter(StandardUniform)
             .take(PARTIAL_ROUNDS)
             .collect::<Vec<F>>()
             .try_into()
             .unwrap();
         let ending_full_round_constants = rng
-            .sample_iter(Standard)
+            .sample_iter(StandardUniform)
             .take(HALF_FULL_ROUNDS)
             .collect::<Vec<[F; WIDTH]>>()
             .try_into()

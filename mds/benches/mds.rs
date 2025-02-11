@@ -9,7 +9,7 @@ use p3_mds::integrated_coset_mds::IntegratedCosetMds;
 use p3_mds::MdsPermutation;
 use p3_mersenne_31::{MdsMatrixMersenne31, Mersenne31};
 use rand::distr::{Distribution, StandardUniform};
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 
 fn bench_all_mds(c: &mut Criterion) {
     bench_mds::<BabyBear, IntegratedCosetMds<BabyBear, 16>, 16>(c);
@@ -40,13 +40,13 @@ fn bench_all_mds(c: &mut Criterion) {
 fn bench_mds<R, Mds, const WIDTH: usize>(c: &mut Criterion)
 where
     R: PrimeCharacteristicRing,
-    Standard: Distribution<R>,
+    StandardUniform: Distribution<R>,
     Mds: MdsPermutation<R, WIDTH> + Default,
 {
     let mds = Mds::default();
 
-    let mut rng = thread_rng();
-    let input = rng.gen::<[R; WIDTH]>();
+    let mut rng = rng();
+    let input = rng.random::<[R; WIDTH]>();
     let id = BenchmarkId::new(type_name::<Mds>(), WIDTH);
     c.bench_with_input(id, &input, |b, input| b.iter(|| mds.permute(input.clone())));
 }

@@ -24,7 +24,7 @@ fn do_test_fri_pcs<Val, Challenge, Challenger, P>(
     P: Pcs<Challenge, Challenger>,
     P::Domain: PolynomialSpace<Val = Val>,
     Val: Field,
-    Standard: Distribution<Val>,
+    StandardUniform:Distribution<Val>,
     Challenge: ExtensionField<Val>,
     Challenger: Clone + CanObserve<P::Commitment> + FieldChallenger<Val>,
 {
@@ -41,7 +41,7 @@ fn do_test_fri_pcs<Val, Challenge, Challenger, P>(
                 .map(|&log_degree| {
                     let d = 1 << log_degree;
                     // random width 5-15
-                    let width = 5 + rng.gen_range(0..=10);
+                    let width = 5 + rng.random_range(0..=10);
                     (
                         pcs.natural_domain_for_degree(d),
                         RowMajorMatrix::<Val>::rand(&mut rng, d, width),

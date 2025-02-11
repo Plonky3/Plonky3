@@ -293,7 +293,7 @@ mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::PrimeCharacteristicRing;
-    use rand::thread_rng;
+    use rand::rng;
 
     use super::*;
 
@@ -302,8 +302,8 @@ mod tests {
         type F = BabyBear;
         type EF = BinomialExtensionField<BabyBear, 4>;
 
-        let m = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << 8, 1 << 4);
-        let v = RowMajorMatrix::<EF>::rand(&mut thread_rng(), 1 << 8, 1).values;
+        let m = RowMajorMatrix::<F>::rand(&mut rng(), 1 << 8, 1 << 4);
+        let v = RowMajorMatrix::<EF>::rand(&mut rng(), 1 << 8, 1).values;
 
         let mut expected = vec![EF::ZERO; m.width()];
         for (row, &scale) in izip!(m.rows(), &v) {

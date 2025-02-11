@@ -9,11 +9,11 @@ use p3_fri::fold_even_odd;
 use p3_goldilocks::Goldilocks;
 use p3_mersenne_31::Mersenne31;
 use rand::distr::{Distribution, StandardUniform};
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 
 fn bench<F: TwoAdicField>(c: &mut Criterion, log_sizes: &[usize])
 where
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
     let name = format!("fold_even_odd::<{}>", type_name::<F>(),);
     let mut group = c.benchmark_group(&name);
@@ -22,9 +22,9 @@ where
     for log_size in log_sizes {
         let n = 1 << log_size;
 
-        let mut rng = thread_rng();
-        let beta = rng.sample(Standard);
-        let poly = rng.sample_iter(Standard).take(n).collect_vec();
+        let mut rng = rng();
+        let beta = rng.sample(StandardUniform);
+        let poly = rng.sample_iter(StandardUniform).take(n).collect_vec();
 
         group.bench_function(BenchmarkId::from_parameter(n), |b| {
             b.iter(|| {

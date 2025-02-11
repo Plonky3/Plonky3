@@ -292,10 +292,10 @@ impl Sum for PackedGoldilocksAVX512 {
     }
 }
 
-impl Distribution<PackedGoldilocksAVX512> for Standard {
+impl Distribution<PackedGoldilocksAVX512> for StandardUniform {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedGoldilocksAVX512 {
-        PackedGoldilocksAVX512(rng.gen())
+        PackedGoldilocksAVX512(rng.random())
     }
 }
 

@@ -78,12 +78,12 @@ mod tests {
 
     #[test]
     fn test_avx512_poseidon_width_8() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         type F = Goldilocks;
         type Perm = Poseidon<F, MdsMatrixGoldilocks, 8, 7>;
-        let poseidon = Perm::new_from_rng(4, 22, MdsMatrixGoldilocks, &mut rand::thread_rng());
+        let poseidon = Perm::new_from_rng(4, 22, MdsMatrixGoldilocks, &mut rand::rng());
 
-        let input: [F; 8] = rng.gen();
+        let input: [F; 8] = rng.random();
 
         let mut expected = input;
         poseidon.permute_mut(&mut expected);
@@ -97,12 +97,12 @@ mod tests {
 
     #[test]
     fn test_avx512_poseidon_width_12() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         type F = Goldilocks;
         type Perm = Poseidon<F, MdsMatrixGoldilocks, 12, 7>;
-        let poseidon = Perm::new_from_rng(4, 22, MdsMatrixGoldilocks, &mut rand::thread_rng());
+        let poseidon = Perm::new_from_rng(4, 22, MdsMatrixGoldilocks, &mut rand::rng());
 
-        let input: [F; 12] = rng.gen();
+        let input: [F; 12] = rng.random();
 
         let mut expected = input;
         poseidon.permute_mut(&mut expected);
@@ -116,12 +116,12 @@ mod tests {
 
     #[test]
     fn test_avx512_poseidon_width_16() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         type F = Goldilocks;
         type Perm = Poseidon<F, MdsMatrixGoldilocks, 16, 7>;
-        let poseidon = Perm::new_from_rng(4, 22, MdsMatrixGoldilocks, &mut rand::thread_rng());
+        let poseidon = Perm::new_from_rng(4, 22, MdsMatrixGoldilocks, &mut rand::rng());
 
-        let input: [F; 16] = rng.gen();
+        let input: [F; 16] = rng.random();
 
         let mut expected = input;
         poseidon.permute_mut(&mut expected);
@@ -135,12 +135,12 @@ mod tests {
 
     #[test]
     fn test_avx512_poseidon_width_24() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         type F = Goldilocks;
         type Perm = Poseidon<F, MdsMatrixGoldilocks, 24, 7>;
-        let poseidon = Perm::new_from_rng(4, 22, MdsMatrixGoldilocks, &mut rand::thread_rng());
+        let poseidon = Perm::new_from_rng(4, 22, MdsMatrixGoldilocks, &mut rand::rng());
 
-        let input: [F; 24] = rng.gen();
+        let input: [F; 24] = rng.random();
 
         let mut expected = input;
         poseidon.permute_mut(&mut expected);

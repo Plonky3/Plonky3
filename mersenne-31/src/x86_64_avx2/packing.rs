@@ -557,10 +557,10 @@ impl Sub<PackedMersenne31AVX2> for Mersenne31 {
     }
 }
 
-impl Distribution<PackedMersenne31AVX2> for Standard {
+impl Distribution<PackedMersenne31AVX2> for StandardUniform {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMersenne31AVX2 {
-        PackedMersenne31AVX2(rng.gen())
+        PackedMersenne31AVX2(rng.random())
     }
 }
 

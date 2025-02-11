@@ -101,7 +101,7 @@ impl Debug for Mersenne31 {
     }
 }
 
-impl Distribution<Mersenne31> for Standard {
+impl Distribution<Mersenne31> for StandardUniform {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Mersenne31 {
         loop {
             let next_u31 = rng.next_u32() >> 1;

@@ -136,7 +136,7 @@ mod tests {
 
         type F = Bn254Fr;
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         // Poiseidon2 reference implementation from zkhash repo.
         let poseidon2_ref = Poseidon2Ref::new(&POSEIDON2_BN256_PARAMS);
@@ -168,7 +168,7 @@ mod tests {
         let poseidon2 = Poseidon2Bn254::new(external_round_constants, internal_round_constants);
 
         // Generate random input and convert to both Goldilocks field formats.
-        let input_ark_ff = rng.gen::<[ark_FpBN256; WIDTH]>();
+        let input_ark_ff = rng.random::<[ark_FpBN256; WIDTH]>();
         let input: [Bn254Fr; 3] = input_ark_ff
             .iter()
             .cloned()

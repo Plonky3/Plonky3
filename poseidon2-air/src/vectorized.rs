@@ -6,7 +6,7 @@ use p3_field::{Field, PrimeField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
-use rand::distr::Standard;
+use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 use rand::random;
 
@@ -189,7 +189,7 @@ impl<
     where
         F: PrimeField,
         LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>,
-        Standard: Distribution<[F; WIDTH]>,
+        StandardUniform: Distribution<[F; WIDTH]>,
     {
         let inputs = (0..num_hashes).map(|_| random()).collect::<Vec<_>>();
         generate_vectorized_trace_rows::<

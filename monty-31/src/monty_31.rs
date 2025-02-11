@@ -137,7 +137,7 @@ impl<FP: MontyParameters> Debug for MontyField31<FP> {
     }
 }
 
-impl<FP: MontyParameters> Distribution<MontyField31<FP>> for Standard {
+impl<FP: MontyParameters> Distribution<MontyField31<FP>> for StandardUniform {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> MontyField31<FP> {
         loop {
