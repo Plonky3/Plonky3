@@ -172,7 +172,7 @@ where
                 (sibling, root)
             };
 
-            root = self.compress.compress(<[_; 2]>::from((left, right)));
+            root = self.compress.compress([left, right]);
             index >>= 1;
             curr_height_padded >>= 1;
 
