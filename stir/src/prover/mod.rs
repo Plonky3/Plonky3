@@ -54,7 +54,6 @@ pub(crate) struct StirRoundWitness<F: TwoAdicField, M: Mmcs<F>> {
 
 pub fn commit<F, M>(
     config: &StirConfig<F, M>,
-    // afsdfsfdsdfsfssd
     polynomial: Polynomial<F>,
 ) -> (StirWitness<F, M>, M::Commitment)
 where
