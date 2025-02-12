@@ -11,7 +11,7 @@ use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHasher32To64};
 use p3_uni_stark::{prove, verify, StarkConfig};
-use rand::distributions::Standard;
+use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 
 use crate::airs::ExampleHashAir;
@@ -70,7 +70,7 @@ pub fn prove_monty31_keccak<
     num_hashes: usize,
 ) -> Result<(), impl Debug>
 where
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
     let val_mmcs = get_keccak_mmcs();
 
@@ -112,7 +112,7 @@ pub fn prove_monty31_poseidon2<
     perm24: Perm24,
 ) -> Result<(), impl Debug>
 where
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
     let val_mmcs = get_poseidon2_mmcs::<F, _, _>(perm16, perm24.clone());
 
@@ -188,7 +188,7 @@ pub fn prove_m31_poseidon2<
     perm24: Perm24,
 ) -> Result<(), impl Debug>
 where
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
     let val_mmcs = get_poseidon2_mmcs::<F, _, _>(perm16, perm24.clone());
 

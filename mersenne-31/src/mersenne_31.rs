@@ -15,7 +15,7 @@ use p3_field::{
     InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
     PrimeField32, PrimeField64,
 };
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -98,7 +98,7 @@ impl Debug for Mersenne31 {
     }
 }
 
-impl Distribution<Mersenne31> for Standard {
+impl Distribution<Mersenne31> for StandardUniform {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Mersenne31 {
         loop {
             let next_u31 = rng.next_u32() >> 1;

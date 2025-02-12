@@ -12,7 +12,7 @@ use p3_field::{
     PermutationMonomial, PrimeCharacteristicRing, PrimeField64,
 };
 use p3_util::convert_vec;
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
 
 use crate::Goldilocks;
@@ -292,10 +292,10 @@ impl Sum for PackedGoldilocksAVX512 {
     }
 }
 
-impl Distribution<PackedGoldilocksAVX512> for Standard {
+impl Distribution<PackedGoldilocksAVX512> for StandardUniform {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedGoldilocksAVX512 {
-        PackedGoldilocksAVX512(rng.gen())
+        PackedGoldilocksAVX512(rng.random())
     }
 }
 

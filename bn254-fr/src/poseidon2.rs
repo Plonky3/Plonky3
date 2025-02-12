@@ -96,7 +96,7 @@ impl<const WIDTH: usize> ExternalLayer<Bn254Fr, WIDTH, BN254_S_BOX_DEGREE>
 
 #[cfg(test)]
 mod tests {
-    use ff::PrimeField;
+    use num_bigint::BigUint;
     use p3_poseidon2::ExternalLayerConstants;
     use p3_symmetric::Permutation;
     use rand::Rng;
@@ -109,15 +109,10 @@ mod tests {
     use crate::FFBn254Fr;
 
     fn bn254_from_ark_ff(input: ark_FpBN256) -> Bn254Fr {
+        let mut full_bytes = [0; 32];
         let bytes = input.into_bigint().to_bytes_le();
-
-        let mut res = <FFBn254Fr as PrimeField>::Repr::default();
-
-        for (i, digit) in res.as_mut().iter_mut().enumerate() {
-            *digit = bytes[i];
-        }
-
-        let value = FFBn254Fr::from_repr(res);
+        full_bytes[..bytes.len()].copy_from_slice(&bytes);
+        let value = FFBn254Fr::from_bytes(&full_bytes);
 
         if value.is_some().into() {
             Bn254Fr {
@@ -128,6 +123,11 @@ mod tests {
         }
     }
 
+    fn ark_ff_from_bn254(input: Bn254Fr) -> ark_FpBN256 {
+        let bigint = BigUint::from_bytes_le(&input.value.to_bytes());
+        ark_FpBN256::from(bigint)
+    }
+
     #[test]
     fn test_poseidon2_bn254() {
         const WIDTH: usize = 3;
@@ -136,7 +136,7 @@ mod tests {
 
         type F = Bn254Fr;
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         // Poiseidon2 reference implementation from zkhash repo.
         let poseidon2_ref = Poseidon2Ref::new(&POSEIDON2_BN256_PARAMS);
@@ -167,26 +167,14 @@ mod tests {
         // Our Poseidon2 implementation.
         let poseidon2 = Poseidon2Bn254::new(external_round_constants, internal_round_constants);
 
-        // Generate random input and convert to both Goldilocks field formats.
-        let input_ark_ff = rng.gen::<[ark_FpBN256; WIDTH]>();
-        let input: [Bn254Fr; 3] = input_ark_ff
-            .iter()
-            .cloned()
-            .map(bn254_from_ark_ff)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        // Generate random input and convert to both field formats.
+        let input = rng.random::<[F; WIDTH]>();
+        let input_ark_ff = input.map(ark_ff_from_bn254);
 
         // Run reference implementation.
-        let output_ref = poseidon2_ref.permutation(&input_ark_ff);
-
-        let expected: [F; WIDTH] = output_ref
-            .iter()
-            .cloned()
-            .map(bn254_from_ark_ff)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let output_ref: [ark_FpBN256; WIDTH] =
+            poseidon2_ref.permutation(&input_ark_ff).try_into().unwrap();
+        let expected: [F; WIDTH] = output_ref.map(bn254_from_ark_ff);
 
         // Run our implementation.
         let mut output = input;

@@ -11,7 +11,7 @@ use p3_uni_stark::{
     DebugConstraintBuilder, ProverConstraintFolder, StarkGenericConfig, SymbolicAirBuilder,
     SymbolicExpression, VerifierConstraintFolder,
 };
-use rand::distributions::Standard;
+use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 
 /// An enum containing the three different AIR's.
@@ -60,7 +60,7 @@ pub trait ExampleHashAir<F: Field, SC: StarkGenericConfig>:
         extra_capacity_bits: usize,
     ) -> RowMajorMatrix<F>
     where
-        Standard: Distribution<F>;
+        StandardUniform: Distribution<F>;
 }
 
 impl<
@@ -161,7 +161,7 @@ impl<
         extra_capacity_bits: usize,
     ) -> RowMajorMatrix<F>
     where
-        Standard: Distribution<F>,
+        StandardUniform: Distribution<F>,
     {
         match self {
             ProofObjective::Blake3(b3_air) => {

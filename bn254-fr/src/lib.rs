@@ -18,7 +18,7 @@ use p3_field::{
     PrimeField, TwoAdicField,
 };
 pub use poseidon2::Poseidon2Bn254;
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -293,10 +293,23 @@ impl Div for Bn254Fr {
     }
 }
 
-impl Distribution<Bn254Fr> for Standard {
+impl Distribution<Bn254Fr> for StandardUniform {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Bn254Fr {
-        Bn254Fr::new(FFBn254Fr::random(rng))
+        // Simple implementation of rejection sampling:
+        loop {
+            let mut trial_element: [u8; 32] = rng.random();
+
+            // Set top 2 bits to 0 as bn254 is a 254-bit field.
+            // `from_bytes` expects little endian input, so we adjust byte 31:
+            trial_element[31] &= (1_u8 << 6) - 1;
+
+            let x = FFBn254Fr::from_bytes(&trial_element);
+            if x.is_some().into() {
+                // x.unwrap() is safe because x.is_some() is true
+                return Bn254Fr::new(x.unwrap());
+            }
+        }
     }
 }
 

@@ -1,5 +1,5 @@
 use p3_field::Field;
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
 
 /// Round constants for Poseidon2, in a format that's convenient for the AIR.
@@ -32,12 +32,12 @@ impl<F: Field, const WIDTH: usize, const HALF_FULL_ROUNDS: usize, const PARTIAL_
 
     pub fn from_rng<R: Rng>(rng: &mut R) -> Self
     where
-        Standard: Distribution<F> + Distribution<[F; WIDTH]>,
+        StandardUniform: Distribution<F> + Distribution<[F; WIDTH]>,
     {
         Self {
-            beginning_full_round_constants: core::array::from_fn(|_| rng.sample(Standard)),
-            partial_round_constants: core::array::from_fn(|_| rng.sample(Standard)),
-            ending_full_round_constants: core::array::from_fn(|_| rng.sample(Standard)),
+            beginning_full_round_constants: core::array::from_fn(|_| rng.sample(StandardUniform)),
+            partial_round_constants: core::array::from_fn(|_| rng.sample(StandardUniform)),
+            ending_full_round_constants: core::array::from_fn(|_| rng.sample(StandardUniform)),
         }
     }
 }
