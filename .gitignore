@@ -1,4 +1,4 @@
 /target
 Cargo.lock
 flamegraph.svg
-stir/test_data
+stir/test_data/*
