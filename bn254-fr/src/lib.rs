@@ -296,24 +296,18 @@ impl Div for Bn254Fr {
 impl Distribution<Bn254Fr> for StandardUniform {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Bn254Fr {
-        let max = Bn254Fr::order();
         // Simple implementation of rejection sampling:
         loop {
-            // This is little endian.
-            let mut trial_element: [u64; 4] = rng.random();
+            let mut trial_element: [u8; 32] = rng.random();
 
             // Set top 2 bits to 0 as bn254 is a 254-bit field.
-            trial_element[3] &= (1_u64 << 62) - 1;
+            // `from_bytes` expects little endian input, so we adjust byte 31:
+            trial_element[31] &= (1_u8 << 6) - 1;
 
-            // convert from the u64 array to a u32 list for BigUint.
-            let trial_u32_list = trial_element
-                .iter()
-                .flat_map(|&x| [x as u32, (x >> 32) as u32])
-                .collect();
-
-            let rand_element = BigUint::new(trial_u32_list);
-            if rand_element < max {
-                return Bn254Fr::new(FFBn254Fr::from_raw(trial_element));
+            let x = FFBn254Fr::from_bytes(&trial_element);
+            if x.is_some().into() {
+                // x.unwrap() is safe because x.is_some() is true
+                return Bn254Fr::new(x.unwrap());
             }
         }
     }
