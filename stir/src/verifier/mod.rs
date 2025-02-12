@@ -168,8 +168,6 @@ where
         return Err(VerificationError::FinalPolynomialDegree);
     }
 
-    // NP TODO verify merkle paths (inside main loop instead of separately PLUS final round)
-
     // Observe the commitment
     challenger.observe(F::from_canonical_u8(Messages::Commitment as u8));
     challenger.observe(commitment.clone());
@@ -292,7 +290,7 @@ where
         return Err(VerificationError::FinalPolynomialEvaluations);
     }
 
-    if !challenger.check_witness(config.final_pow_bits().ceil() as usize, pow_witness) {
+    if !challenger.check_witness(config.final_pow_bits(), pow_witness) {
         return Err(VerificationError::FinalProofOfWork);
     }
 
@@ -311,6 +309,8 @@ where
     M: Mmcs<EF>,
     C: FieldChallenger<F> + GrindingChallenger + CanObserve<M::Commitment>,
 {
+    let round = verification_state.round + 1;
+
     // De-structure the round-specific configuration and the verification state
     let RoundConfig {
         log_folding_factor,
@@ -318,14 +318,14 @@ where
         num_queries,
         num_ood_samples,
         ..
-    } = config.round_config(verification_state.round).clone();
+    } = config.round_config(round).clone();
 
     let VerificationState {
         oracle,
         mut domain,
         folding_randomness,
-        round,
         root: prev_root,
+        ..
     } = verification_state;
 
     let RoundProof {
@@ -378,7 +378,7 @@ where
         .collect();
 
     // Verify proof of work
-    if !challenger.check_witness(pow_bits.ceil() as usize, pow_witness) {
+    if !challenger.check_witness(pow_bits, pow_witness) {
         return Err(FullRoundVerificationError::ProofOfWork);
     }
 
@@ -484,7 +484,7 @@ where
         }),
         domain: domain.shrink_subgroup(1),
         folding_randomness: new_folding_randomness,
-        round: round + 1,
+        round: round,
         root: g_root,
     })
 }
@@ -646,6 +646,8 @@ fn compute_folded_evaluations<F: TwoAdicField>(
     // it as a hint, at the cost of a less clean interface of verify_round()
     let two_inv = F::TWO.inverse();
 
+    let omega_inv = omega.inverse();
+
     unfolded_evaluation_lists
         .into_iter()
         .zip(point_roots.iter())
@@ -657,7 +659,7 @@ fn compute_folded_evaluations<F: TwoAdicField>(
                 log_arity,
                 omega,
                 c,
-                Some(omega.inverse()),
+                Some(omega_inv),
                 Some(point_root_inv),
                 Some(two_inv),
             )

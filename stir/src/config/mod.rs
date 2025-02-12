@@ -114,7 +114,7 @@ pub struct RoundConfig {
     pub(crate) log_evaluation_domain_size: usize,
 
     /// Number of PoW bits used to reduce query error.
-    pub(crate) pow_bits: f64,
+    pub(crate) pow_bits: usize,
 
     /// Number of queries in this round
     pub(crate) num_queries: usize,
@@ -139,11 +139,10 @@ pub struct StirConfig<F: TwoAdicField, M: Clone> {
     starting_domain_log_size: usize,
 
     /// Initial pow bits used in the first fold.
-    // NP TODO can this be a usize?
-    starting_folding_pow_bits: f64,
+    starting_folding_pow_bits: usize,
 
-    /// Round-specific parameters.
-    // There are num_rounds - 1 of these (see above)
+    /// Round-specific parameters. There are `num_rounds - 1` of these (the last
+    /// round works differently)
     round_parameters: Vec<RoundConfig>,
 
     /// log of the (degree + 1) of the final polynomial sent in plain.
@@ -156,7 +155,7 @@ pub struct StirConfig<F: TwoAdicField, M: Clone> {
     final_num_queries: usize,
 
     /// Final of PoW bits (for the queries).
-    final_pow_bits: f64,
+    final_pow_bits: usize,
 
     // / Generator of the (subgroup whose shift is the) initial domain, kept
     // throughout rounds for shifting purposes
@@ -252,7 +251,7 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
         );
 
         let starting_folding_pow_bits =
-            compute_pow(security_level, starting_folding_prox_gaps_error);
+            compute_pow(security_level, starting_folding_prox_gaps_error).ceil() as usize;
 
         let mut round_parameters = Vec::with_capacity(num_rounds);
 
@@ -319,7 +318,8 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
             let pow_bits = compute_pow(
                 security_level,
                 query_error.min(prox_gaps_error_1).min(prox_gaps_error_2),
-            );
+            )
+            .ceil() as usize;
 
             let round_config = RoundConfig {
                 log_evaluation_domain_size: new_evaluation_domain_size,
@@ -346,7 +346,7 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
             .queries_error(log_inv_rate, final_num_queries);
 
         // Now compute the PoW
-        let final_pow_bits = compute_pow(security_level, query_error);
+        let final_pow_bits = compute_pow(security_level, query_error).ceil() as usize;
 
         StirConfig {
             parameters,
@@ -370,7 +370,7 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
         self.starting_domain_log_size
     }
 
-    pub fn starting_folding_pow_bits(&self) -> f64 {
+    pub fn starting_folding_pow_bits(&self) -> usize {
         self.starting_folding_pow_bits
     }
 
@@ -385,9 +385,13 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
         &self.round_parameters
     }
 
+    /// Returns the configuration of the i-th round (from 1 to `num_rounds - 1`:
+    /// the last round has no `RoundConfig`)
     pub(crate) fn round_config(&self, i: usize) -> &RoundConfig {
+        assert!(i > 0, "Rounds are numbered starting at i = 1");
+
         self.round_parameters
-            .get(i)
+            .get(i - 1)
             // More optimal than .expect(format!...)
             .unwrap_or_else(|| {
                 panic!(
@@ -411,7 +415,7 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
         self.final_num_queries
     }
 
-    pub fn final_pow_bits(&self) -> f64 {
+    pub fn final_pow_bits(&self) -> usize {
         self.final_pow_bits
     }
 

@@ -11,7 +11,7 @@ use crate::{SecurityAssumption, StirConfig, StirParameters};
 
 // This configuration is insecure (the field is too small). Use for testing
 // purposes only!
-type BB = BabyBear;
+pub type BB = BabyBear;
 pub type BBExt = BinomialExtensionField<BB, 5>;
 
 type BBPerm = Poseidon2BabyBear<16>;
@@ -20,12 +20,12 @@ type BBCompress = TruncatedPermutation<BBPerm, 2, 8, 16>;
 type BBPacking = <BB as Field>::Packing;
 
 type BBMMCS = MerkleTreeMmcs<BBPacking, BBPacking, BBHash, BBCompress, 8>;
-type BBExtMMCS = ExtensionMmcs<BB, BBExt, BBMMCS>;
+pub type BBExtMMCS = ExtensionMmcs<BB, BBExt, BBMMCS>;
 
 type BBChallenger = DuplexChallenger<BB, BBPerm, 16, 8>;
 
 pub fn test_bb_mmcs_config() -> BBExtMMCS {
-    let mut rng = ChaCha20Rng::from_entropy();
+    let mut rng = ChaCha20Rng::seed_from_u64(0);
     let perm = BBPerm::new_from_rng_128(&mut rng);
     let hash = BBHash::new(perm.clone());
     let compress = BBCompress::new(perm.clone());
@@ -33,7 +33,7 @@ pub fn test_bb_mmcs_config() -> BBExtMMCS {
 }
 
 pub fn test_bb_challenger() -> BBChallenger {
-    let mut rng = ChaCha20Rng::from_entropy();
+    let mut rng = ChaCha20Rng::seed_from_u64(0);
     let perm = BBPerm::new_from_rng_128(&mut rng);
     BBChallenger::new(perm)
 }

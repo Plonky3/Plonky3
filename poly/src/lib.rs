@@ -20,6 +20,7 @@ use itertools::{iterate, Itertools};
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::{Field, TwoAdicField};
 use p3_matrix::{dense::RowMajorMatrix, Matrix};
+use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
 mod tests;
@@ -28,7 +29,8 @@ mod tests;
 pub mod test_utils;
 
 /// Polynomial stored as a dense list of coefficients
-#[derive(Clone, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Default, Debug, Serialize, Deserialize)]
+#[serde(bound(deserialize = "Vec<F>: Deserialize<'de>",))]
 pub struct Polynomial<F: Field> {
     // The coefficient of `x^i` is stored at location `i` in `self.coeffs`.
     coeffs: Vec<F>,

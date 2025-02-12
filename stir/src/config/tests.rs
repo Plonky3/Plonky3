@@ -52,20 +52,17 @@ fn test_config() {
     let config: StirConfig<Challenge, ChallengeMmcs> = StirConfig::new(parameters);
 
     assert_eq!(config.starting_domain_log_size(), 19);
-    assert_eq!(
-        format!("{}", config.starting_folding_pow_bits()),
-        "29.228818690495885"
-    );
+    assert_eq!(config.starting_folding_pow_bits(), 30);
     assert_eq!(config.log_stopping_degree(), 2);
     assert_eq!(config.final_log_inv_rate(), 10);
     assert_eq!(config.final_num_queries(), 11);
-    assert_eq!(format!("{}", config.final_pow_bits()), "18.77428260680469");
+    assert_eq!(config.final_pow_bits(), 19);
 
     // (folding_factor, log_domain_size, queries, log_inv_rate, pow_bits, ood_samples)
     let expected_round_configs = vec![
-        (4, 18, 117, 1, "41.2045711442492", 2),
-        (4, 17, 28, 4, "44.17990909001493", 2),
-        (4, 16, 16, 7, "48.4093909361377", 2),
+        (4, 18, 117, 1, 42, 2),
+        (4, 17, 28, 4, 45, 2),
+        (4, 16, 16, 7, 49, 2),
     ];
 
     for (
@@ -77,7 +74,7 @@ fn test_config() {
         assert_eq!(round_config.log_evaluation_domain_size, log_domain_size);
         assert_eq!(round_config.num_queries, num_queries);
         assert_eq!(round_config.log_inv_rate, log_inv_rate);
-        assert_eq!(format!("{}", round_config.pow_bits), pow_bits);
+        assert_eq!(round_config.pow_bits, pow_bits);
         assert_eq!(round_config.num_ood_samples, num_ood_samples);
     }
 }

@@ -1,6 +1,6 @@
 use core::fmt::Debug;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum VerificationError {
     // The degree (plus 1) of the final polynomial p sent in plain is greater than
     // the bound starting_degree / product(folding_factors)
@@ -18,7 +18,7 @@ pub enum VerificationError {
     Round(usize, FullRoundVerificationError),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum FullRoundVerificationError {
     // The proof of work for this round is incorrect
     ProofOfWork,

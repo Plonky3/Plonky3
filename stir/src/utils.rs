@@ -37,19 +37,16 @@ pub(crate) fn fold_polynomial<F: TwoAdicField>(
     Polynomial::from_coeffs(folded_coeffs)
 }
 
-pub(crate) fn field_element_from_isize<F: Field>(x: isize) -> F {
-    let sign = if x >= 0 { F::ONE } else { -F::ONE };
-    let value = F::from_canonical_u32(x.abs() as u32);
-    sign * value
-}
-
 /// Multiply `polynomial` by `1 + coeff * x + coeff^2 * x^2 + ... + coeff^degee * x^degree`
 pub(crate) fn multiply_by_power_polynomial<F: Field>(
     polynomial: &Polynomial<F>,
     coeff: F,
     degree: usize,
 ) -> Polynomial<F> {
-    // NP TODO check this works for degree = 0, or early stop, or panic
+    // The power polynomial is 1
+    if degree == 0 {
+        return polynomial.clone();
+    }
 
     //  Let (c, d) = (coeff, degree). The power polynomial we need to multiply
     //  polynomial by coincides with ((c*x)^(d + 1) - 1) / (c*x - 1), and this

@@ -180,8 +180,7 @@ where
         .map(|(mut k, v)| (k.remove(0), v))
         .collect();
 
-    // NP TODO: Is this correct? Can we just take the ceil?
-    let pow_witness = challenger.grind(config.final_pow_bits().ceil() as usize);
+    let pow_witness = challenger.grind(config.final_pow_bits());
 
     StirProof {
         commitment,
@@ -203,6 +202,8 @@ where
     M: Mmcs<EF>,
     C: FieldChallenger<F> + GrindingChallenger + CanObserve<M::Commitment>,
 {
+    let round = witness.round + 1;
+
     // De-structure the round-specific configuration and the witness
     let RoundConfig {
         log_folding_factor,
@@ -214,14 +215,14 @@ where
         num_ood_samples,
         // NP TODO why is this not used?
         log_inv_rate,
-    } = config.round_config(witness.round).clone();
+    } = config.round_config(round).clone();
 
     let StirRoundWitness {
         domain,
         polynomial,
         merkle_tree,
-        round,
         folding_randomness,
+        ..
     } = witness;
 
     // ========= FOLDING =========
@@ -297,9 +298,7 @@ where
         .collect();
 
     // Proof-of-work witness
-    // NP TODO: Is this correct? Can we just take the ceil?
-    // NP TODO unsafe cast to usize
-    let pow_witness = challenger.grind(pow_bits.ceil() as usize);
+    let pow_witness = challenger.grind(pow_bits);
 
     // ========= QUERY PROOFS =========
 
@@ -392,7 +391,7 @@ where
             polynomial: witness_polynomial,
             merkle_tree: new_merkle_tree,
             folding_randomness: new_folding_randomness,
-            round: round + 1,
+            round,
         },
         RoundProof {
             g_root: new_commitment,
