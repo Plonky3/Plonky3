@@ -4,7 +4,7 @@ use std::fs::File;
 use std::path::Path;
 
 use itertools::Itertools;
-use p3_challenger::{CanObserve, CanSample, CanSampleBits, FieldChallenger, GrindingChallenger};
+use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_coset::TwoAdicCoset;
 use p3_field::FieldAlgebra;
@@ -42,6 +42,33 @@ fn generate_proof_with_config(
     proof
 }
 
+pub fn test_verify_with_config(config: &StirConfig<BBExt, BBExtMMCS>) {
+    let (mut prover_challenger, mut verifier_challenger) =
+        (test_bb_challenger(), test_bb_challenger());
+
+    let proof = generate_proof_with_config(config, &mut prover_challenger);
+    verify(config, proof, &mut verifier_challenger).unwrap();
+
+    // Check that the sponge is consistent at the end
+    assert_eq!(
+        prover_challenger.sample_ext_element::<BBExt>(),
+        verifier_challenger.sample_ext_element::<BBExt>()
+    );
+}
+
+macro_rules! test_verify_failing_case {
+    ($config:expr, $modify_proof:expr, $expected_error:expr) => {{
+        let mut verifier_challenger = test_bb_challenger();
+        let mut invalid_proof =
+            serde_json::from_reader(File::open("test_data/proof.json").unwrap()).unwrap();
+        $modify_proof(&mut invalid_proof);
+        assert_eq!(
+            verify(&$config, invalid_proof, &mut verifier_challenger),
+            Err($expected_error)
+        );
+    }};
+}
+
 #[test]
 fn test_compute_folded_evals() {
     let log_arity = 11;
@@ -73,47 +100,14 @@ fn test_compute_folded_evals() {
 #[test]
 fn test_verify() {
     let config = test_bb_stir_config(20, 2, 4, 3);
-    let (mut prover_challenger, mut verifier_challenger) =
-        (test_bb_challenger(), test_bb_challenger());
-
-    let proof = generate_proof_with_config(&config, &mut prover_challenger);
-    verify(&config, proof, &mut verifier_challenger).unwrap();
-
-    // Check that the sponge is consistent at the end
-    assert_eq!(
-        prover_challenger.sample_ext_element::<BBExt>(),
-        verifier_challenger.sample_ext_element::<BBExt>()
-    );
+    test_verify_with_config(&config);
 }
 
 #[test]
 fn test_verify_variable_folding_factor() {
     // NP TODO make bigger after more efficient FFT is introduced
     let config = test_stir_config_folding_factors(14, 1, vec![4, 3, 5]);
-    let (mut prover_challenger, mut verifier_challenger) =
-        (test_bb_challenger(), test_bb_challenger());
-
-    let proof = generate_proof_with_config(&config, &mut prover_challenger);
-    verify(&config, proof, &mut verifier_challenger).unwrap();
-
-    // Check that the sponge is consistent at the end
-    assert_eq!(
-        prover_challenger.sample_ext_element::<BBExt>(),
-        verifier_challenger.sample_ext_element::<BBExt>()
-    );
-}
-
-macro_rules! check_failing_case {
-    ($config:expr, $modify_proof:expr, $expected_error:expr) => {{
-        let mut verifier_challenger = test_bb_challenger();
-        let mut invalid_proof =
-            serde_json::from_reader(File::open("test_data/proof.json").unwrap()).unwrap();
-        $modify_proof(&mut invalid_proof);
-        assert_eq!(
-            verify(&$config, invalid_proof, &mut verifier_challenger),
-            Err($expected_error)
-        );
-    }};
+    test_verify_with_config(&config);
 }
 
 #[test]
@@ -124,7 +118,7 @@ fn test_verify_failing_cases() {
 
     // ---------------- ROUND PROOF OF WORK -----------------
 
-    check_failing_case!(
+    test_verify_failing_case!(
         config,
         |invalid_proof: &mut Proof| {
             invalid_proof.round_proofs[0].pow_witness = rng.gen();
@@ -134,7 +128,7 @@ fn test_verify_failing_cases() {
 
     // ---------------- ROUND QUERY PATH -------------------
 
-    check_failing_case!(
+    test_verify_failing_case!(
         config,
         |invalid_proof: &mut Proof| {
             let query_proof = proof.round_proofs[0].query_proofs[0].clone();
@@ -148,7 +142,7 @@ fn test_verify_failing_cases() {
 
     // ------------ ANS POLYNOMIAL DEGREE --------------
 
-    check_failing_case!(
+    test_verify_failing_case!(
         config,
         |invalid_proof: &mut Proof| {
             let original_degree = invalid_proof.round_proofs[0]
@@ -162,7 +156,7 @@ fn test_verify_failing_cases() {
 
     // ---------- ANS POLYNOMIAL EVALUATIONS -----------
 
-    check_failing_case!(
+    test_verify_failing_case!(
         config,
         |invalid_proof: &mut Proof| {
             let original_degree = invalid_proof.round_proofs[0]
@@ -176,7 +170,7 @@ fn test_verify_failing_cases() {
 
     // ----------- FINAL POLYNOMIAL DEGREE -------------
 
-    check_failing_case!(
+    test_verify_failing_case!(
         config,
         |invalid_proof: &mut Proof| {
             let original_degree = invalid_proof.final_polynomial.degree().unwrap();
@@ -200,7 +194,7 @@ fn test_verify_failing_cases() {
 
     // --------------- FINAL QUERY PATH -----------------
 
-    check_failing_case!(
+    test_verify_failing_case!(
         config,
         |invalid_proof: &mut Proof| {
             let query_proof = proof.final_round_queries[0].clone();
@@ -214,7 +208,7 @@ fn test_verify_failing_cases() {
 
     // -------------- FINAL PROOF OF WORK ----------------
 
-    check_failing_case!(
+    test_verify_failing_case!(
         config,
         |invalid_proof: &mut Proof| {
             invalid_proof.pow_witness = rng.gen();
