@@ -10,7 +10,7 @@ use p3_fri::{create_benchmark_fri_config, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHasher32To64};
-use p3_uni_stark::{prove, verify, Proof, StarkConfig};
+use p3_uni_stark::{prove, verify, Proof, StarkConfig, StarkGenericConfig};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 
@@ -235,8 +235,7 @@ pub fn report_result(result: Result<(), impl Debug>) {
 #[inline]
 pub fn report_proof_size<SC>(proof: &Proof<SC>)
 where
-    SC: p3_uni_stark::StarkGenericConfig,
-    Proof<SC>: serde::Serialize,
+    SC: StarkGenericConfig,
 {
     let proof_bytes = bincode::serialize(proof).expect("Failed to serialize proof");
     println!("Proof size: {} bytes", proof_bytes.len());
