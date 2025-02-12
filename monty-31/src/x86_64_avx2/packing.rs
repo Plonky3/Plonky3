@@ -18,6 +18,7 @@ const WIDTH: usize = 8;
 
 pub trait MontyParametersAVX2 {
     const PACKED_P: __m256i;
+    const PACKED_P_HIGH: __m256i;
     const PACKED_MU: __m256i;
 }
 
@@ -287,6 +288,219 @@ fn mul<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     }
 }
 
+/// Compute the elementary function `l0*r0 + l1*r1` given four inputs
+/// in canonical form.
+///
+/// If the inputs are not in canonical form, the result is undefined.
+#[inline]
+#[must_use]
+fn dot_product_2<MPAVX2: MontyParametersAVX2>(
+    lhs0: __m256i,
+    lhs1: __m256i,
+    rhs0: __m256i,
+    rhs1: __m256i,
+) -> __m256i {
+    // The naive method involves two multiplications and a summation taking
+    // (14)*2 + 3 = 31 instructions with:
+    // throughput: 10.33 cyc/vec (0.77 els/cyc)
+    // latency: 24 cyc
+    //
+    // We improve the throughput by combining the monty reductions together. As all inputs are
+    // `< P < 2^{31}`, `l0*r0 + l1*r1 < 2P^2 < 2^{32}P` so the montgomery reduction
+    // algorithm can be applied to the sum of the products instead of to each product individually.
+    //
+    // We want this to compile to:
+    //      vmovshdup  lhs_odd0, lhs0
+    //      vmovshdup  rhs_odd0, rhs0
+    //      vmovshdup  lhs_odd1, lhs1
+    //      vmovshdup  rhs_odd1, rhs1
+    //      vpmuludq   prod_evn0, lhs0, rhs0
+    //      vpmuludq   prod_odd0, lhs_odd0, rhs_odd0
+    //      vpmuludq   prod_evn1, lhs1, rhs1
+    //      vpmuludq   prod_odd1, lhs_odd1, rhs_odd1
+    //      vpaddq     prod_evn, prod_evn0, prod_evn1
+    //      vpaddq     prod_odd, prod_odd0, prod_odd1
+    //      vpmuludq   q_evn, prod_evn, MU
+    //      vpmuludq   q_odd, prod_odd, MU
+    //      vpmuludq   q_P_evn, q_evn, P
+    //      vpmuludq   q_P_odd, q_odd, P
+    //      vpsubq     d_evn, prod_evn, q_P_evn
+    //      vpsubq     d_odd, prod_odd, q_P_odd
+    //      vmovshdup  d_evn_hi, d_evn
+    //      vpblendd   t, d_evn_hi, d_odd, aah
+    //      vpaddd     u, t, P
+    //      vpminud    res, t, u
+    // throughput: 6.67 cyc/vec (1.20 els/cyc)
+    // latency: 22 cyc
+    unsafe {
+        let lhs_evn0 = lhs0;
+        let rhs_evn0 = rhs0;
+        let lhs_odd0 = movehdup_epi32(lhs0);
+        let rhs_odd0 = movehdup_epi32(rhs0);
+
+        let lhs_evn1 = lhs1;
+        let rhs_evn1 = rhs1;
+        let lhs_odd1 = movehdup_epi32(lhs1);
+        let rhs_odd1 = movehdup_epi32(rhs1);
+
+        let mul_evn0 = x86_64::_mm256_mul_epu32(lhs_evn0, rhs_evn0);
+        let mul_evn1 = x86_64::_mm256_mul_epu32(lhs_evn1, rhs_evn1);
+        let mul_odd0 = x86_64::_mm256_mul_epu32(lhs_odd0, rhs_odd0);
+        let mul_odd1 = x86_64::_mm256_mul_epu32(lhs_odd1, rhs_odd1);
+
+        let dot_evn = x86_64::_mm256_add_epi64(mul_evn0, mul_evn1);
+        let dot_odd = x86_64::_mm256_add_epi64(mul_odd0, mul_odd1);
+
+        let red_evn = partial_monty_red_unsigned_to_signed::<MPAVX2>(dot_evn);
+        let red_odd = partial_monty_red_unsigned_to_signed::<MPAVX2>(dot_odd);
+
+        let red_evn_hi = movehdup_epi32(red_evn);
+        let t = x86_64::_mm256_blend_epi32::<0b10101010>(red_evn_hi, red_odd);
+
+        let u = x86_64::_mm256_add_epi32(t, MPAVX2::PACKED_P);
+        x86_64::_mm256_min_epu32(t, u)
+    }
+}
+
+/// Compute the elementary function `l0*r0 + l1*r1 + l2*r2 + l3*r3` given eight inputs
+/// in canonical form.
+///
+/// If the inputs are not in canonical form, the result is undefined.
+#[inline]
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+fn dot_product_4<MPAVX2: MontyParametersAVX2>(
+    lhs0: __m256i,
+    lhs1: __m256i,
+    lhs2: __m256i,
+    lhs3: __m256i,
+    rhs0: __m256i,
+    rhs1: __m256i,
+    rhs2: __m256i,
+    rhs3: __m256i,
+) -> __m256i {
+    // The naive method involves calling dot_product_2 twice and a summation taking
+    // (20)*2 + 3 = 43 instructions with:
+    // throughput: 14.33 cyc/vec (0.56 els/cyc)
+    // latency: 25 cyc
+    //
+    // We improve the throughput by combining the monty reductions together. This is a little more
+    // complicated than in the dot_product_2 case as we will need to slightly adjust the reduction algorithm.
+    //
+    // As all inputs are `< P < 2^{31}`, the sum satisfies: `l0*r0 + l1*r1 + l2*r2 + l3*r3 < 4P^2 < 2*2^{32}P`.
+    // Now compute Q as usual:
+    //
+    // Q := μ C mod B
+    //
+    // We can't proceed as normal however as C - Q P now lies in the range 2*2^{32}P > C - QP > -2^{32}P which
+    // doesn't fit into an i64. Moreover, AVX2 does not support u64 comparisons, only i64. We can bootstrap
+    // i64 comparisons to u64 ones but it takes some extra instructions so instead of testing C and QP we test
+    // C >= 2^{32}P where we can now save 2^{32}P as a constant in the appropriate form. This lets us define
+    //
+    // C' = if C < 2^{32}P: {C} else {C - 2^{32}P}
+    //
+    // And we can proceed with the standard identical montgomery reduction on C'. Note that
+    // C = C' mod B so we can compute Q while the C check is going on.
+    //
+    // (2^{32}P, 2^{63})
+    //
+    // We want this to compile to:
+    //      vmovshdup  lhs_odd0, lhs0
+    //      vmovshdup  rhs_odd0, rhs0
+    //      vmovshdup  lhs_odd1, lhs1
+    //      vmovshdup  rhs_odd1, rhs1
+    //      vmovshdup  lhs_odd2, lhs2
+    //      vmovshdup  rhs_odd2, rhs2
+    //      vmovshdup  lhs_odd3, lhs3
+    //      vmovshdup  rhs_odd3, rhs3
+    //      vpmuludq   prod_evn0, lhs0, rhs0
+    //      vpmuludq   prod_odd0, lhs_odd0, rhs_odd0
+    //      vpmuludq   prod_evn1, lhs1, rhs1
+    //      vpmuludq   prod_odd1, lhs_odd1, rhs_odd1
+    //      vpmuludq   prod_evn2, lhs2, rhs2
+    //      vpmuludq   prod_odd2, lhs_odd2, rhs_odd2
+    //      vpmuludq   prod_evn3, lhs3, rhs3
+    //      vpmuludq   prod_odd3, lhs_odd3, rhs_odd3
+    //      vpaddq     prod_evn01, prod_evn0, prod_evn1
+    //      vpaddq     prod_odd01, prod_odd0, prod_odd1
+    //      vpaddq     prod_evn23, prod_evn2, prod_evn3
+    //      vpaddq     prod_odd23, prod_odd2, prod_odd3
+    //      vpaddq     prod_evn, prod_evn01, prod_evn23
+    //      vpaddq     prod_odd, prod_odd01, prod_odd23
+    //      vpmuludq   q_evn, prod_evn, MU
+    //      vpmuludq   q_odd, prod_odd, MU
+    //      vpmuludq   q_P_evn, q_evn, P
+    //      vpmuludq   q_P_odd, q_odd, P
+    //      vpsubq     prod_evn_sub, prod_evn, 2^32P
+    //      vpminud    prod_evn_prime, prod_evn, prod_evn_sub
+    //      vpsubq     prod_odd_sub, prod_odd, 2^32P
+    //      vpminud    prod_odd_prime, prod_odd, prod_odd_sub
+    //      vpsubq     d_evn, prod_evn_prime, q_P_evn
+    //      vpsubq     d_odd, prod_odd_prime, q_P_odd
+    //      vmovshdup  d_evn_hi, d_evn
+    //      vpblendd   t, d_evn_hi, d_odd, aah
+    //      vpaddd     u, t, P
+    //      vpminud    res, t, u
+    // throughput: 12 cyc/vec (0.67 els/cyc)
+    // latency: 23 cyc
+    unsafe {
+        let lhs_evn0 = lhs0;
+        let rhs_evn0 = rhs0;
+        let lhs_odd0 = movehdup_epi32(lhs0);
+        let rhs_odd0 = movehdup_epi32(rhs0);
+
+        let lhs_evn1 = lhs1;
+        let rhs_evn1 = rhs1;
+        let lhs_odd1 = movehdup_epi32(lhs1);
+        let rhs_odd1 = movehdup_epi32(rhs1);
+
+        let lhs_evn2 = lhs2;
+        let rhs_evn2 = rhs2;
+        let lhs_odd2 = movehdup_epi32(lhs2);
+        let rhs_odd2 = movehdup_epi32(rhs2);
+
+        let lhs_evn3 = lhs3;
+        let rhs_evn3 = rhs3;
+        let lhs_odd3 = movehdup_epi32(lhs3);
+        let rhs_odd3 = movehdup_epi32(rhs3);
+
+        let mul_evn0 = x86_64::_mm256_mul_epu32(lhs_evn0, rhs_evn0);
+        let mul_evn1 = x86_64::_mm256_mul_epu32(lhs_evn1, rhs_evn1);
+        let mul_evn2 = x86_64::_mm256_mul_epu32(lhs_evn2, rhs_evn2);
+        let mul_evn3 = x86_64::_mm256_mul_epu32(lhs_evn3, rhs_evn3);
+        let mul_odd0 = x86_64::_mm256_mul_epu32(lhs_odd0, rhs_odd0);
+        let mul_odd1 = x86_64::_mm256_mul_epu32(lhs_odd1, rhs_odd1);
+        let mul_odd2 = x86_64::_mm256_mul_epu32(lhs_odd2, rhs_odd2);
+        let mul_odd3 = x86_64::_mm256_mul_epu32(lhs_odd3, rhs_odd3);
+
+        let dot_evn01 = x86_64::_mm256_add_epi64(mul_evn0, mul_evn1);
+        let dot_odd01 = x86_64::_mm256_add_epi64(mul_odd0, mul_odd1);
+        let dot_evn23 = x86_64::_mm256_add_epi64(mul_evn2, mul_evn3);
+        let dot_odd23 = x86_64::_mm256_add_epi64(mul_odd2, mul_odd3);
+
+        let dot_evn = x86_64::_mm256_add_epi64(dot_evn01, dot_evn23);
+        let dot_odd = x86_64::_mm256_add_epi64(dot_odd01, dot_odd23);
+
+        let q_evn = x86_64::_mm256_mul_epu32(dot_evn, MPAVX2::PACKED_MU);
+        let q_p_evn = x86_64::_mm256_mul_epu32(q_evn, MPAVX2::PACKED_P);
+        let dot_evn_sub = x86_64::_mm256_sub_epi64(dot_evn, MPAVX2::PACKED_P_HIGH);
+        let dot_evn_prime = x86_64::_mm256_min_epu32(dot_evn, dot_evn_sub);
+        let red_evn = x86_64::_mm256_sub_epi64(dot_evn_prime, q_p_evn);
+
+        let q_odd = x86_64::_mm256_mul_epu32(dot_odd, MPAVX2::PACKED_MU);
+        let q_p_odd = x86_64::_mm256_mul_epu32(q_odd, MPAVX2::PACKED_P);
+        let dot_odd_sub = x86_64::_mm256_sub_epi64(dot_odd, MPAVX2::PACKED_P_HIGH);
+        let dot_odd_prime = x86_64::_mm256_min_epu32(dot_odd, dot_odd_sub);
+        let red_odd = x86_64::_mm256_sub_epi64(dot_odd_prime, q_p_odd);
+
+        let red_evn_hi = movehdup_epi32(red_evn);
+        let t = x86_64::_mm256_blend_epi32::<0b10101010>(red_evn_hi, red_odd);
+
+        let u = x86_64::_mm256_add_epi32(t, MPAVX2::PACKED_P);
+        x86_64::_mm256_min_epu32(t, u)
+    }
+}
+
 /// Square the MontyField31 field elements in the even index entries.
 /// Inputs must be signed 32-bit integers.
 /// Outputs will be a signed integer in (-P, ..., P) copied into both the even and odd indices.
@@ -525,6 +739,69 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX2<FP>
                 }
             }
             _ => self.exp_u64(POWER),
+        }
+    }
+
+    #[inline(always)]
+    fn dot_product<const N: usize, I1, I2>(u: &[I1; N], v: &[I2; N]) -> Self
+    where
+        I1: Into<Self> + Clone,
+        I2: Into<Self> + Clone,
+    {
+        match N {
+            1 => u[0].clone().into() * v[0].clone().into(),
+            2 => {
+                let lhs0 = u[0].clone().into().to_vector();
+                let lhs1 = u[1].clone().into().to_vector();
+                let rhs0 = v[0].clone().into().to_vector();
+                let rhs1 = v[1].clone().into().to_vector();
+                unsafe {
+                    // Safety: `dot_product_2` returns values in canonical form when given values in canonical form.
+                    let res = dot_product_2::<FP>(lhs0, lhs1, rhs0, rhs1);
+                    Self::from_vector(res)
+                }
+            }
+            3 => {
+                let lhs0 = u[0].clone().into().to_vector();
+                let lhs1 = u[1].clone().into().to_vector();
+                let lhs2 = u[2].clone().into();
+                let rhs0 = v[0].clone().into().to_vector();
+                let rhs1 = v[1].clone().into().to_vector();
+                let rhs2 = v[2].clone().into();
+                unsafe {
+                    // Safety: `dot_product_2` returns values in canonical form when given values in canonical form.
+                    let res = dot_product_2::<FP>(lhs0, lhs1, rhs0, rhs1);
+                    Self::from_vector(res) + lhs2 * rhs2
+                }
+            }
+            4 => {
+                let lhs0 = u[0].clone().into().to_vector();
+                let lhs1 = u[1].clone().into().to_vector();
+                let lhs2 = u[2].clone().into().to_vector();
+                let lhs3 = u[3].clone().into().to_vector();
+                let rhs0 = v[0].clone().into().to_vector();
+                let rhs1 = v[1].clone().into().to_vector();
+                let rhs2 = v[2].clone().into().to_vector();
+                let rhs3 = v[3].clone().into().to_vector();
+                unsafe {
+                    // Safety: `dot_product_2` returns values in canonical form when given values in canonical form.
+                    let res = dot_product_4::<FP>(lhs0, lhs1, lhs2, lhs3, rhs0, rhs1, rhs2, rhs3);
+                    Self::from_vector(res)
+                }
+            }
+            _ => {
+                let mut acc = Self::ZERO;
+                for i in (0..N).step_by(4) {
+                    let lhs = u[i..i + 4].try_into().unwrap();
+                    let rhs = v[i..i + 4].try_into().unwrap();
+                    acc += Self::dot_product::<4, I1, I2>(lhs, rhs);
+                }
+                let remainder = N % 4;
+                for i in (N - remainder)..N {
+                    acc += u[i].clone().into() * v[i].clone().into()
+                }
+                acc
+            }
         }
     }
 

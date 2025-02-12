@@ -85,9 +85,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         // entries of C'[x, z] are boolean.
         for x in 0..5 {
             builder.assert_zeroes(
-                local.c[x]
-                    .iter()
-                    .map(|&z| -> AB::Expr { z * (z.into() - AB::Expr::ONE) }),
+                &local.c[x].map(|elem| -> AB::Expr { elem * (elem.into() - AB::Expr::ONE) }),
             );
             for z in 0..64 {
                 // Check to ensure all entries of C are bools.
@@ -118,13 +116,18 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                     xor3::<AB::Expr>(a_prime.into(), c.into(), c_prime.into())
                 };
 
+                // Check that all entries of A'[y][x] are boolean.
+                builder.assert_zeroes(
+                    &local.a_prime[y][x]
+                        .map(|elem| -> AB::Expr { elem * (elem.into() - AB::Expr::ONE) }),
+                );
+
                 for limb in 0..U64_LIMBS {
                     let a_limb = local.a[y][x][limb];
                     let computed_limb = (limb * BITS_PER_LIMB..(limb + 1) * BITS_PER_LIMB)
                         .rev()
                         .fold(AB::Expr::ZERO, |acc, z| {
                             // Check to ensure all entries of A' are bools.
-                            builder.assert_bool(local.a_prime[y][x][z]);
                             acc.double() + get_bit(z)
                         });
                     builder.assert_eq(computed_limb, a_limb);
@@ -168,13 +171,17 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         }
 
         // A'''[0, 0] = A''[0, 0] XOR RC
+        // Check to ensure the bits of A''[0, 0] are boolean.
+        builder.assert_zeroes(
+            &local
+                .a_prime_prime_0_0_bits
+                .map(|elem| -> AB::Expr { elem * (elem.into() - AB::Expr::ONE) }),
+        );
         for limb in 0..U64_LIMBS {
             let computed_a_prime_prime_0_0_limb = (limb * BITS_PER_LIMB
                 ..(limb + 1) * BITS_PER_LIMB)
                 .rev()
                 .fold(AB::Expr::ZERO, |acc, z| {
-                    // Check to ensure the bits of A''[0, 0] are boolean.
-                    builder.assert_bool(local.a_prime_prime_0_0_bits[z]);
                     acc.double() + local.a_prime_prime_0_0_bits[z]
                 });
             let a_prime_prime_0_0_limb = local.a_prime_prime[0][0][limb];

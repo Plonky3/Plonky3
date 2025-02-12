@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use p3_air::{AirBuilder, AirBuilderWithPublicValues};
-use p3_field::{BasedVectorSpace, PackedField};
+use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 
@@ -72,18 +72,15 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
     }
 
     #[inline]
-    fn assert_zeroes<J: Iterator<Item = I>, I: Into<Self::Expr>>(&mut self, iter: J) {
-        let vec: Vec<PackedVal<SC>> = iter.map(|elem| elem.into()).collect();
-        let leng = vec.len();
+    fn assert_zeroes<const N: usize>(&mut self, array: &[Self::Expr; N]) {
         self.accumulator += PackedChallenge::<SC>::from_basis_coefficients_fn(|i| {
-            PackedVal::<SC>::iter_dot_product(
-                self.decomposed_alpha_powers[i]
-                    [self.constraint_index..(self.constraint_index + leng)]
-                    .iter(),
-                vec.iter(),
-            )
+            let alpha_powers = self.decomposed_alpha_powers[i]
+                [self.constraint_index..(self.constraint_index + N)]
+                .try_into()
+                .unwrap();
+            PackedVal::<SC>::dot_product(&alpha_powers, array)
         });
-        self.constraint_index += leng;
+        self.constraint_index += N;
     }
 }
 

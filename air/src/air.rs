@@ -95,9 +95,9 @@ pub trait AirBuilder: Sized {
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I);
 
-    fn assert_zeroes<J: Iterator<Item = I>, I: Into<Self::Expr>>(&mut self, iter: J) {
-        for elem in iter {
-            self.assert_zero(elem);
+    fn assert_zeroes<const N: usize>(&mut self, array: &[Self::Expr; N]) {
+        for elem in array {
+            self.assert_zero(elem.clone());
         }
     }
 
