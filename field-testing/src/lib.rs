@@ -15,7 +15,7 @@ use num_bigint::BigUint;
 use num_traits::identities::One;
 use p3_field::{
     cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order, two_adic_coset_zerofier,
-    two_adic_subgroup_zerofier, ExtensionField, Field, TwoAdicField,
+    two_adic_subgroup_zerofier, ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField,
 };
 pub use packedfield_testing::*;
 use rand::distributions::{Distribution, Standard};
@@ -85,6 +85,15 @@ where
             assert_eq!(x * z, F::ONE);
         }
     }
+}
+
+pub fn test_dot_product<const N: usize, R: PrimeCharacteristicRing + Eq + Copy>(
+    u: &[R; N],
+    v: &[R; N],
+) {
+    let output = R::dot_product(u, v);
+    let expected = u.iter().zip(v).map(|(&x, &y)| x * y).sum();
+    assert_eq!(output, expected)
 }
 
 pub fn test_multiplicative_group_factors<F: Field>() {

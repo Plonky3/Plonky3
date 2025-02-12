@@ -789,6 +789,17 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX2<FP>
                     Self::from_vector(res)
                 }
             }
+            64 => {
+                let mut acc = Self::ZERO;
+                unsafe {
+                    let u_arr: &[[I1; 4]; 16] = transmute(u);
+                    let v_arr: &[[I1; 4]; 16] = transmute(v);
+                    for (u_4, v_4) in u_arr.iter().zip(v_arr) {
+                        acc += Self::dot_product(u_4, v_4);
+                    }
+                }
+                acc
+            }
             _ => {
                 let mut acc = Self::ZERO;
                 for i in (0..N).step_by(4) {

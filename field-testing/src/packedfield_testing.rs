@@ -464,6 +464,38 @@ macro_rules! test_packed_field {
             fn test_multiplicative_inverse() {
                 $crate::test_multiplicative_inverse::<$packedfield>();
             }
+            #[test]
+            fn test_dot_product() {
+                let u = [
+                    <$packedfield>::ONE,
+                    <$packedfield>::ONE,
+                    <$packedfield>::ONE,
+                    <$packedfield>::ONE,
+                ];
+                let v = [
+                    <$packedfield>::ONE,
+                    <$packedfield>::ONE,
+                    <$packedfield>::ONE,
+                    <$packedfield>::ONE,
+                ];
+                $crate::test_dot_product::<0, $packedfield>(&[], &[]);
+                $crate::test_dot_product(
+                    TryInto::<&[$packedfield; 1]>::try_into(&u[..1]).unwrap(),
+                    &v[..1].try_into().unwrap(),
+                );
+                $crate::test_dot_product(
+                    TryInto::<&[$packedfield; 2]>::try_into(&u[..2]).unwrap(),
+                    &v[..2].try_into().unwrap(),
+                );
+                $crate::test_dot_product(
+                    TryInto::<&[$packedfield; 3]>::try_into(&u[..3]).unwrap(),
+                    &v[..3].try_into().unwrap(),
+                );
+                $crate::test_dot_product(&u, &v);
+                let u_64 = [<$packedfield>::ONE; 64];
+                let v_64 = [<$packedfield>::ONE; 64];
+                $crate::test_dot_product(&u_64, &v_64);
+            }
         }
     };
 }
