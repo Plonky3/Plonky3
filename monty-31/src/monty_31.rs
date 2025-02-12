@@ -67,13 +67,10 @@ impl<MP: MontyParameters> MontyField31<MP> {
     /// Constant version of array.map(MontyField31::new).
     #[inline]
     pub const fn new_array<const N: usize>(input: [u32; N]) -> [Self; N] {
-        let mut output = [MontyField31::new_monty(0); N];
+        let mut output = [Self::new_monty(0); N];
         let mut i = 0;
-        loop {
-            if i == N {
-                break;
-            }
-            output[i] = MontyField31::new(input[i]);
+        while i < N {
+            output[i] = Self::new(input[i]);
             i += 1;
         }
         output
@@ -85,13 +82,10 @@ impl<MP: MontyParameters> MontyField31<MP> {
     pub const fn new_2d_array<const N: usize, const M: usize>(
         input: [[u32; N]; M],
     ) -> [[Self; N]; M] {
-        let mut output = [[MontyField31::new_monty(0); N]; M];
+        let mut output = [[Self::new_monty(0); N]; M];
         let mut i = 0;
-        loop {
-            if i == M {
-                break;
-            }
-            output[i] = MontyField31::new_array(input[i]);
+        while i < M {
+            output[i] = Self::new_array(input[i]);
             i += 1;
         }
         output
@@ -127,13 +121,13 @@ impl<FP: MontyParameters> PartialOrd for MontyField31<FP> {
 
 impl<FP: MontyParameters> Display for MontyField31<FP> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Display::fmt(&MontyField31::to_u32(self), f)
+        Display::fmt(&Self::to_u32(self), f)
     }
 }
 
 impl<FP: MontyParameters> Debug for MontyField31<FP> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Debug::fmt(&MontyField31::to_u32(self), f)
+        Debug::fmt(&Self::to_u32(self), f)
     }
 }
 
@@ -161,7 +155,7 @@ impl<'de, FP: FieldParameters> Deserialize<'de> for MontyField31<FP> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         // It's faster to Serialize and Deserialize in monty form.
         let val = u32::deserialize(d)?;
-        Ok(MontyField31::new_monty(val))
+        Ok(Self::new_monty(val))
     }
 }
 
@@ -461,7 +455,7 @@ impl<FP: FieldParameters> PrimeField32 for MontyField31<FP> {
 
     #[inline]
     fn as_canonical_u32(&self) -> u32 {
-        MontyField31::to_u32(self)
+        Self::to_u32(self)
     }
 
     #[inline]

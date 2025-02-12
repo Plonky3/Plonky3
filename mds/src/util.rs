@@ -1,5 +1,3 @@
-use alloc::vec::Vec;
-use core::array;
 use core::ops::{AddAssign, Mul};
 
 use p3_dft::TwoAdicSubgroupDft;
@@ -45,9 +43,9 @@ pub fn apply_circulant<R: PrimeCharacteristicRing, const N: usize>(
     circ_matrix: &[u64; N],
     input: [R; N],
 ) -> [R; N] {
-    let mut matrix: [R; N] = circ_matrix.map(R::from_u64);
+    let mut matrix = circ_matrix.map(R::from_u64);
 
-    let mut output = array::from_fn(|_| R::ZERO);
+    let mut output = [R::ZERO; N];
     for out_i in output.iter_mut().take(N - 1) {
         *out_i = R::dot_product(&matrix, &input);
         matrix.rotate_right(1);
@@ -69,13 +67,10 @@ pub fn apply_circulant<R: PrimeCharacteristicRing, const N: usize>(
 /// function can be declared `const`, and that is the intended context
 /// for use.
 pub const fn first_row_to_first_col<const N: usize, T: Copy>(v: &[T; N]) -> [T; N] {
-    // Can do this to get a simple Default value. Might be better ways?
-    let mut output = [v[0]; N];
+    let mut output = *v;
     let mut i = 1;
-    loop {
-        if i >= N {
-            break;
-        }
+    while i < N {
+        // Reverse elements
         output[i] = v[N - i];
         i += 1;
     }
@@ -98,11 +93,7 @@ pub fn apply_circulant_fft<F: TwoAdicField, const N: usize, FFT: TwoAdicSubgroup
     let input = fft.dft(input.to_vec());
 
     // point-wise product
-    let product = matrix
-        .iter()
-        .zip(input)
-        .map(|(&x, y)| x * y)
-        .collect::<Vec<_>>();
+    let product = matrix.iter().zip(input).map(|(&x, y)| x * y).collect();
 
     let output = fft.idft(product);
     output.try_into().unwrap()
@@ -110,13 +101,91 @@ pub fn apply_circulant_fft<F: TwoAdicField, const N: usize, FFT: TwoAdicSubgroup
 
 #[cfg(test)]
 mod tests {
-    use super::first_row_to_first_col;
+    use super::*;
 
     #[test]
-    fn rotation() {
+    fn test_first_row_to_first_col_even_length() {
         let input = [0, 1, 2, 3, 4, 5];
         let output = [0, 5, 4, 3, 2, 1];
 
         assert_eq!(first_row_to_first_col(&input), output);
+    }
+
+    #[test]
+    fn test_first_row_to_first_col_odd_length() {
+        let input = [10, 20, 30, 40, 50];
+        let output = [10, 50, 40, 30, 20];
+
+        assert_eq!(first_row_to_first_col(&input), output);
+    }
+
+    #[test]
+    fn test_first_row_to_first_col_single_element() {
+        let input = [42];
+        let output = [42];
+
+        assert_eq!(first_row_to_first_col(&input), output);
+    }
+
+    #[test]
+    fn test_first_row_to_first_col_all_zeroes() {
+        let input = [0; 6];
+        let output = [0; 6];
+
+        assert_eq!(first_row_to_first_col(&input), output);
+    }
+
+    #[test]
+    fn test_first_row_to_first_col_negative_numbers() {
+        let input = [-1, -2, -3, -4];
+        let output = [-1, -4, -3, -2];
+
+        assert_eq!(first_row_to_first_col(&input), output);
+    }
+
+    #[test]
+    fn test_first_row_to_first_col_large_numbers() {
+        let input = [1_000_000, 2_000_000, 3_000_000, 4_000_000];
+        let output = [1_000_000, 4_000_000, 3_000_000, 2_000_000];
+
+        assert_eq!(first_row_to_first_col(&input), output);
+    }
+
+    #[test]
+    fn test_basic_dot_product() {
+        let u = [1, 2, 3];
+        let v = [4, 5, 6];
+        assert_eq!(dot_product(u, v), 4 + 2 * 5 + 3 * 6);
+    }
+
+    #[test]
+    fn test_single_element() {
+        let u = [7];
+        let v = [8];
+        assert_eq!(dot_product(u, v), 7 * 8);
+    }
+
+    #[test]
+    fn test_all_zeroes() {
+        let u = [0; 4];
+        let v = [0; 4];
+        assert_eq!(dot_product(u, v), 0);
+    }
+
+    #[test]
+    fn test_negative_numbers() {
+        let u = [-1, -2, -3];
+        let v = [-4, -5, -6];
+        assert_eq!(dot_product(u, v), (-1) * (-4) + (-2) * (-5) + (-3) * (-6));
+    }
+
+    #[test]
+    fn test_large_numbers() {
+        let u = [1_000_000, 2_000_000, 3_000_000];
+        let v = [4, 5, 6];
+        assert_eq!(
+            dot_product(u, v),
+            1_000_000 * 4 + 2_000_000 * 5 + 3_000_000 * 6
+        );
     }
 }

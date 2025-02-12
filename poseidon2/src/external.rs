@@ -234,7 +234,7 @@ pub fn external_terminal_permute_state<
     add_rc_and_sbox: fn(&mut R, CT),
     mat4: &MdsPerm4,
 ) {
-    for elem in terminal_external_constants.iter() {
+    for elem in terminal_external_constants {
         state
             .iter_mut()
             .zip(elem.iter())
