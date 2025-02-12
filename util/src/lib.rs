@@ -403,6 +403,45 @@ pub unsafe fn convert_vec<T, U>(mut vec: Vec<T>) -> Vec<U> {
     Vec::from_raw_parts(ptr, new_len, new_cap)
 }
 
+#[inline(always)]
+pub const fn gcd_u64(mut u: u64, mut v: u64) -> u64 {
+    if u == 0 {
+        return v;
+    }
+    if v == 0 {
+        return u;
+    }
+
+    // Find power of 2 common factor
+    let shift = (u | v).trailing_zeros();
+
+    // Remove common power-of-2 factor
+    u >>= shift;
+    v >>= shift;
+
+    // Remove factors of 2 from `u`
+    u >>= u.trailing_zeros();
+
+    while v != 0 {
+        // Remove factors of 2 from `v`
+        v >>= v.trailing_zeros();
+
+        // Ensure `u <= v`
+        // Const swap not table yet: https://github.com/rust-lang/rust/issues/134695
+        if u > v {
+            let temp = u;
+            u = v;
+            v = temp;
+        }
+
+        // Subtract smaller from larger
+        v -= u;
+    }
+
+    // Restore power-of-2 factor
+    u << shift
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec;
@@ -621,5 +660,54 @@ mod tests {
         }
 
         out.into_iter().map(|x| x.unwrap()).collect()
+    }
+
+    #[test]
+    fn test_gcd_u64() {
+        // Zero cases
+        assert_eq!(gcd_u64(0, 0), 0);
+        assert_eq!(gcd_u64(10, 0), 10);
+        assert_eq!(gcd_u64(0, 10), 10);
+        assert_eq!(gcd_u64(0, 123456789), 123456789);
+
+        // Number with itself
+        assert_eq!(gcd_u64(1, 1), 1);
+        assert_eq!(gcd_u64(10, 10), 10);
+        assert_eq!(gcd_u64(99999, 99999), 99999);
+
+        // Powers of 2
+        assert_eq!(gcd_u64(2, 4), 2);
+        assert_eq!(gcd_u64(16, 32), 16);
+        assert_eq!(gcd_u64(64, 128), 64);
+        assert_eq!(gcd_u64(1024, 4096), 1024);
+        assert_eq!(gcd_u64(u64::MAX, u64::MAX), u64::MAX);
+
+        // One number is a multiple of the other
+        assert_eq!(gcd_u64(5, 10), 5);
+        assert_eq!(gcd_u64(12, 36), 12);
+        assert_eq!(gcd_u64(15, 45), 15);
+        assert_eq!(gcd_u64(100, 500), 100);
+
+        // Co-prime numbers
+        assert_eq!(gcd_u64(17, 31), 1);
+        assert_eq!(gcd_u64(97, 43), 1);
+        assert_eq!(gcd_u64(7919, 65537), 1);
+        assert_eq!(gcd_u64(15485863, 32452843), 1);
+
+        // Small prime numbers
+        assert_eq!(gcd_u64(13, 17), 1);
+        assert_eq!(gcd_u64(101, 103), 1);
+        assert_eq!(gcd_u64(1009, 1013), 1);
+
+        // Larg numbers
+        assert_eq!(gcd_u64(190266297176832000, 10430732356495263744), 6144);
+        assert_eq!(gcd_u64(2040134905096275968, 5701159354248194048), 2048);
+        assert_eq!(gcd_u64(16611311494648745984, 7514969329383038976), 4096);
+        assert_eq!(gcd_u64(14863931409971066880, 7911906750992527360), 10240);
+
+        // Max values
+        assert_eq!(gcd_u64(u64::MAX, 1), 1);
+        assert_eq!(gcd_u64(u64::MAX, u64::MAX - 1), 1);
+        assert_eq!(gcd_u64(u64::MAX, u64::MAX), u64::MAX);
     }
 }

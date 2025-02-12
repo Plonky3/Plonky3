@@ -24,13 +24,15 @@
 //! Using the above analysis we can conclude that the round numbers are equal
 //! for all 31 bit primes and 64 bit primes respectively.
 
-use gcd::Gcd;
 use p3_field::PrimeField64;
+use p3_util::gcd_u64;
 
 /// Given a field, a width and an D return the number of full and partial rounds needed to achieve 128 bit security.
-pub fn poseidon2_round_numbers_128<F: PrimeField64>(width: usize, d: u64) -> (usize, usize) {
+pub const fn poseidon2_round_numbers_128<F: PrimeField64>(width: usize, d: u64) -> (usize, usize) {
     // Start by checking that d is a valid permutation.
-    assert_eq!(d.gcd(F::ORDER_U64 - 1), 1);
+    if gcd_u64(d, F::ORDER_U64 - 1) != 1 {
+        panic!("Invalid permutation: gcd(d, F::ORDER_U64 - 1) must be 1");
+    }
 
     // Next compute the number of bits in p.
     let prime_bit_number = F::ORDER_U64.ilog2() + 1;
