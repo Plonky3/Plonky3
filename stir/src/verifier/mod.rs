@@ -11,13 +11,13 @@ use p3_field::{batch_multiplicative_inverse, ExtensionField, Field, TwoAdicField
 use p3_poly::Polynomial;
 
 use crate::utils::observe_ext_slice_with_size;
-use crate::Messages;
 use crate::{
     config::{observe_public_parameters, RoundConfig},
     proof::RoundProof,
     utils::fold_evaluations,
     StirConfig, StirProof,
 };
+use crate::{Messages, POW_BITS_WARNING};
 
 mod error;
 
@@ -151,6 +151,17 @@ where
     M: Mmcs<EF>,
     C: FieldChallenger<F> + GrindingChallenger + CanObserve<M::Commitment>,
 {
+    if config
+        .pow_bits_all_rounds()
+        .iter()
+        .any(|&x| x > POW_BITS_WARNING)
+    {
+        tracing::warn!(
+            "The configuration requires the verifier to compute a proof of work of more than {} bits",
+            POW_BITS_WARNING
+        );
+    }
+
     observe_public_parameters(config.parameters(), challenger);
 
     let StirProof {

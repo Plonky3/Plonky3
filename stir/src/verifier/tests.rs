@@ -69,154 +69,6 @@ macro_rules! test_verify_failing_case {
     }};
 }
 
-#[test]
-fn test_compute_folded_evals() {
-    let log_arity = 11;
-
-    let poly_degree = 42;
-    let polynomial = rand_poly(poly_degree);
-
-    // TODO change thread_rngs to test RNGs which are deterministic
-    let mut rng = thread_rng();
-
-    let root: BBExt = rng.gen();
-    let c: BBExt = rng.gen();
-
-    let domain = TwoAdicCoset::new(root, log_arity);
-
-    let evaluations = vec![domain.iter().map(|x| polynomial.evaluate(&x)).collect_vec()];
-
-    let folded_eval =
-        compute_folded_evaluations(evaluations, &[root], log_arity, c, domain.generator())
-            .pop()
-            .unwrap();
-
-    let expected_folded_eval =
-        fold_polynomial(&polynomial, c, log_arity).evaluate(&root.exp_power_of_2(log_arity));
-
-    assert_eq!(folded_eval, expected_folded_eval);
-}
-
-#[test]
-fn test_verify() {
-    let config = test_bb_stir_config(20, 2, 4, 3);
-    test_verify_with_config(&config);
-}
-
-#[test]
-fn test_verify_variable_folding_factor() {
-    // NP TODO make bigger after more efficient FFT is introduced
-    let config = test_stir_config_folding_factors(14, 1, vec![4, 3, 5]);
-    test_verify_with_config(&config);
-}
-
-#[test]
-fn test_verify_failing_cases() {
-    let mut rng = thread_rng();
-    let config = test_bb_stir_config(20, 2, 4, 3);
-    let proof = generate_proof_with_config(&config, &mut test_bb_challenger());
-
-    // ---------------- ROUND PROOF OF WORK -----------------
-
-    test_verify_failing_case!(
-        config,
-        |invalid_proof: &mut Proof| {
-            invalid_proof.round_proofs[0].pow_witness = rng.gen();
-        },
-        VerificationError::Round(0, FullRoundVerificationError::ProofOfWork)
-    );
-
-    // ---------------- ROUND QUERY PATH -------------------
-
-    test_verify_failing_case!(
-        config,
-        |invalid_proof: &mut Proof| {
-            let query_proof = proof.round_proofs[0].query_proofs[0].clone();
-            let mut invalid_leaf = query_proof.0.clone();
-            invalid_leaf[0] = rng.gen();
-            let invalid_query_proof = (invalid_leaf, query_proof.1.clone());
-            invalid_proof.round_proofs[0].query_proofs[0] = invalid_query_proof;
-        },
-        VerificationError::Round(0, FullRoundVerificationError::QueryPath)
-    );
-
-    // ------------ ANS POLYNOMIAL DEGREE --------------
-
-    test_verify_failing_case!(
-        config,
-        |invalid_proof: &mut Proof| {
-            let original_degree = invalid_proof.round_proofs[0]
-                .ans_polynomial
-                .degree()
-                .unwrap();
-            invalid_proof.round_proofs[0].ans_polynomial = rand_poly(original_degree + 1);
-        },
-        VerificationError::Round(0, FullRoundVerificationError::AnsPolynomialDegree)
-    );
-
-    // ---------- ANS POLYNOMIAL EVALUATIONS -----------
-
-    test_verify_failing_case!(
-        config,
-        |invalid_proof: &mut Proof| {
-            let original_degree = invalid_proof.round_proofs[0]
-                .ans_polynomial
-                .degree()
-                .unwrap();
-            invalid_proof.round_proofs[0].ans_polynomial = rand_poly(original_degree);
-        },
-        VerificationError::Round(0, FullRoundVerificationError::AnsPolynomialEvaluations)
-    );
-
-    // ----------- FINAL POLYNOMIAL DEGREE -------------
-
-    test_verify_failing_case!(
-        config,
-        |invalid_proof: &mut Proof| {
-            let original_degree = invalid_proof.final_polynomial.degree().unwrap();
-            invalid_proof.final_polynomial = rand_poly(original_degree + 1);
-        },
-        VerificationError::FinalPolynomialDegree
-    );
-
-    // --------- FINAL POLYNOMIAL EVALUATIONS -----------
-
-    // TODO NP: To trigger this error, consider replacing the final polynomial
-    // with a random one before the challenger can observe it (before verifier.rs: 215)
-    // This will allow the path verification to succeed, but the code must fail during the
-    // final polynomial evaluation check.
-
-    let tampered_proof = tamper_with_final_polynomial(&config);
-    assert_eq!(
-        verify(&config, tampered_proof, &mut test_bb_challenger()),
-        Err(VerificationError::FinalPolynomialEvaluations)
-    );
-
-    // --------------- FINAL QUERY PATH -----------------
-
-    test_verify_failing_case!(
-        config,
-        |invalid_proof: &mut Proof| {
-            let query_proof = proof.final_round_queries[0].clone();
-            let mut invalid_leaf = query_proof.0.clone();
-            invalid_leaf[0] = rng.gen();
-            let invalid_query_proof = (invalid_leaf, query_proof.1.clone());
-            invalid_proof.final_round_queries[0] = invalid_query_proof;
-        },
-        VerificationError::FinalQueryPath
-    );
-
-    // -------------- FINAL PROOF OF WORK ----------------
-
-    test_verify_failing_case!(
-        config,
-        |invalid_proof: &mut Proof| {
-            invalid_proof.pow_witness = rng.gen();
-        },
-        VerificationError::FinalProofOfWork
-    );
-}
-
 fn tamper_with_final_polynomial(config: &StirConfig<BBExt, BBExtMMCS>) -> Proof {
     let mut challenger = test_bb_challenger();
     let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
@@ -291,6 +143,162 @@ fn tamper_with_final_polynomial(config: &StirConfig<BBExt, BBExtMMCS>) -> Proof 
         pow_witness,
         final_round_queries: queries_to_final,
     }
+}
+
+#[test]
+fn test_compute_folded_evals() {
+    let log_arity = 11;
+
+    let poly_degree = 42;
+    let polynomial = rand_poly(poly_degree);
+
+    let mut rng = thread_rng();
+
+    let root: BBExt = rng.gen();
+    let c: BBExt = rng.gen();
+
+    let domain = TwoAdicCoset::new(root, log_arity);
+
+    let evaluations = vec![domain.iter().map(|x| polynomial.evaluate(&x)).collect_vec()];
+
+    let folded_eval =
+        compute_folded_evaluations(evaluations, &[root], log_arity, c, domain.generator())
+            .pop()
+            .unwrap();
+
+    let expected_folded_eval =
+        fold_polynomial(&polynomial, c, log_arity).evaluate(&root.exp_power_of_2(log_arity));
+
+    assert_eq!(folded_eval, expected_folded_eval);
+}
+
+#[test]
+fn test_verify() {
+    let config = test_bb_stir_config(20, 2, 4, 3);
+    test_verify_with_config(&config);
+}
+
+#[test]
+fn test_verify_variable_folding_factor() {
+    // NP TODO make bigger after more efficient FFT is introduced
+    let config = test_stir_config_folding_factors(20, 1, vec![4, 3, 5]);
+    test_verify_with_config(&config);
+}
+
+#[test]
+fn test_verify_failing_cases() {
+    let mut rng = thread_rng();
+    let config = test_bb_stir_config(20, 2, 4, 3);
+    let proof = generate_proof_with_config(&config, &mut test_bb_challenger());
+
+    // ============================== ProofOfWork ==============================
+
+    test_verify_failing_case!(
+        config,
+        |invalid_proof: &mut Proof| {
+            invalid_proof.round_proofs[0].pow_witness = rng.gen();
+        },
+        VerificationError::Round(0, FullRoundVerificationError::ProofOfWork)
+    );
+
+    // ============================== QueryPath ===============================
+
+    test_verify_failing_case!(
+        config,
+        |invalid_proof: &mut Proof| {
+            let query_proof = proof.round_proofs[0].query_proofs[0].clone();
+            let mut invalid_leaf = query_proof.0.clone();
+            invalid_leaf[0] = rng.gen();
+            let invalid_query_proof = (invalid_leaf, query_proof.1.clone());
+            invalid_proof.round_proofs[0].query_proofs[0] = invalid_query_proof;
+        },
+        VerificationError::Round(0, FullRoundVerificationError::QueryPath)
+    );
+
+    // ========================== AnsPolynomialDegree ==========================
+
+    test_verify_failing_case!(
+        config,
+        |invalid_proof: &mut Proof| {
+            let original_degree = invalid_proof.round_proofs[0]
+                .ans_polynomial
+                .degree()
+                .unwrap();
+            invalid_proof.round_proofs[0].ans_polynomial = rand_poly(original_degree + 1);
+        },
+        VerificationError::Round(0, FullRoundVerificationError::AnsPolynomialDegree)
+    );
+
+    // ======================= AnsPolynomialEvaluations =======================
+
+    test_verify_failing_case!(
+        config,
+        |invalid_proof: &mut Proof| {
+            let original_degree = invalid_proof.round_proofs[0]
+                .ans_polynomial
+                .degree()
+                .unwrap();
+            invalid_proof.round_proofs[0].ans_polynomial = rand_poly(original_degree);
+        },
+        VerificationError::Round(0, FullRoundVerificationError::AnsPolynomialEvaluations)
+    );
+
+    // ========================= FinalPolynomialDegree =========================
+
+    test_verify_failing_case!(
+        config,
+        |invalid_proof: &mut Proof| {
+            let original_degree = invalid_proof.final_polynomial.degree().unwrap();
+            invalid_proof.final_polynomial = rand_poly(original_degree + 1);
+        },
+        VerificationError::FinalPolynomialDegree
+    );
+
+    // ====================== FinalPolynomialEvaluations ======================
+
+    // This case is substantially more difficult to trigger, as in the protocol,
+    // the final polynomial is observed by the challenger *before* the queried
+    // indices are sampled. If we modify the final polynomial after proof
+    // generation, we'll always trigger a `FinalQueryPath` error instead of
+    // `FinalPolynomialEvaluations`. This is because the queried indices (and
+    // thus, the queried paths) are sampled by the verifier after the original
+    // (untampered) polynomial has been observed by the challenger, but the
+    // original prover sampled them after having its challenger observe the
+    // honest final polynomial. To properly test this error case, we need to
+    // tamper with the final polynomial during the proof-generation process
+    // itself, before the indices are sampled. The
+    // tamper_with_final_polynomial() function does this by injecting a random
+    // polynomial at the correct point in the protocol flow.
+
+    let tampered_proof = tamper_with_final_polynomial(&config);
+    assert_eq!(
+        verify(&config, tampered_proof, &mut test_bb_challenger()),
+        Err(VerificationError::FinalPolynomialEvaluations)
+    );
+
+    // ============================ FinalQueryPath ============================
+
+    test_verify_failing_case!(
+        config,
+        |invalid_proof: &mut Proof| {
+            let query_proof = proof.final_round_queries[0].clone();
+            let mut invalid_leaf = query_proof.0.clone();
+            invalid_leaf[0] = rng.gen();
+            let invalid_query_proof = (invalid_leaf, query_proof.1.clone());
+            invalid_proof.final_round_queries[0] = invalid_query_proof;
+        },
+        VerificationError::FinalQueryPath
+    );
+
+    // =========================== FinalProofOfWork ===========================
+
+    test_verify_failing_case!(
+        config,
+        |invalid_proof: &mut Proof| {
+            invalid_proof.pow_witness = rng.gen();
+        },
+        VerificationError::FinalProofOfWork
+    );
 }
 
 // Benchmarks with and without the hints

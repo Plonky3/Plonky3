@@ -12,7 +12,7 @@ use p3_poly::Polynomial;
 use crate::config::{observe_public_parameters, RoundConfig};
 use crate::proof::RoundProof;
 use crate::utils::{fold_polynomial, multiply_by_power_polynomial, observe_ext_slice_with_size};
-use crate::{Messages, StirConfig, StirProof};
+use crate::{Messages, StirConfig, StirProof, POW_BITS_WARNING};
 
 #[cfg(test)]
 mod tests;
@@ -62,7 +62,12 @@ where
 {
     assert!(polynomial
         .degree()
-        .is_none_or(|d| d < 1 << (config.log_starting_degree() + config.log_starting_inv_rate())));
+        .is_none_or(|d| d < (1 << config.log_starting_degree())),
+        "The degree of the polynomial ({}) is too large: the configuration only supports polynomials of degree at most 2^{} - 1 = {}",
+        polynomial.degree().unwrap(),
+        config.log_starting_degree(),
+        (1 << config.log_starting_degree()) - 1
+    );
 
     let log_size = config.log_starting_degree() + config.log_starting_inv_rate();
 
@@ -115,6 +120,17 @@ where
     M: Mmcs<EF>,
     C: FieldChallenger<F> + GrindingChallenger + CanObserve<M::Commitment>,
 {
+    if config
+        .pow_bits_all_rounds()
+        .iter()
+        .any(|&x| x > POW_BITS_WARNING)
+    {
+        tracing::warn!(
+            "The configuration requires the prover to compute a proof of work of more than {} bits",
+            POW_BITS_WARNING
+        );
+    }
+
     // Observe public parameters
     observe_public_parameters(config.parameters(), challenger);
 

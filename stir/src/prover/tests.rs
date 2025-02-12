@@ -29,7 +29,7 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
     // NP TODO reintroduce
     let config = test_bb_stir_config(20, 2, 3, 4);
 
-    // =============== Committing ===============
+    // ============================== Committing ==============================
 
     // Starting polynomial. We allow it to have lower degree than the maximum
     // bound proved by the LDT, i. e. 2^log_starting_degree - 1
@@ -64,7 +64,7 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
         folding_randomness: r_0,
     };
 
-    // ============ Preparing fake randomness ============
+    // ======================= Preparing fake randomness =======================
 
     let round = 1;
     let round_config = config.round_config(round);
@@ -116,11 +116,11 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
     // Preloading fake randomness
     let mut challenger = MockChallenger::new(field_replies, bit_replies.clone());
 
-    // ============ prove_round for round i = 1 ============
+    // ====================== prove_round for round i = 1 ======================
 
     let (witness, round_proof) = prove_round(&config, witness, &mut challenger);
 
-    // =============== Witness Checks ===============
+    // ============================ Witness Checks ============================
 
     let StirRoundWitness {
         domain,
@@ -251,7 +251,7 @@ fn test_prove_final_polynomial() {
 
     let log_initial_codeword_size = log_starting_degree + config.log_starting_inv_rate();
 
-    // =============== Preparing fake randomness ===============
+    // ======================= Preparing fake randomness =======================
     let mut field_replies = Vec::new();
     let mut bit_replies = Vec::new();
 
@@ -326,7 +326,7 @@ fn test_prove_final_polynomial() {
     // Preloading fake randomness
     let mut challenger = MockChallenger::new(field_replies, bit_replies);
 
-    // =============== Proving ===============
+    // ================================ Proving ================================
     let mut polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
 
     let (witness, commitment) = commit(&config, polynomial.clone());
@@ -335,7 +335,7 @@ fn test_prove_final_polynomial() {
 
     let proof = prove(&config, witness, commitment, &mut challenger);
 
-    // =========== Computing expected final polynomial g_3 ==========
+    // ================ Computing expected final polynomial g_3 ===============
     for round in 1..=2 {
         let g_i = fold_polynomial(&polynomial, round_r_replies[round - 1], log_folding_factor);
 
@@ -378,4 +378,14 @@ fn test_prove_final_polynomial() {
     assert_eq!(proof.final_polynomial, expected_final_polynomial);
 }
 
-// NP TODO failed config creation where the num of rounds is too large for the starting degree and folding factor (maybe in /config)
+#[test]
+#[should_panic(expected = "The degree of the polynomial (16384) is too large")]
+// Checks that the commit method rejects if the polynomial is larger than
+// specified in the configuration
+fn test_incorrect_polynomial() {
+    let config = test_bb_stir_config(14, 1, 4, 3);
+
+    let polynomial = rand_poly(1 << config.log_starting_degree());
+
+    commit(&config, polynomial);
+}

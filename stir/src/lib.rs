@@ -22,6 +22,10 @@ pub use config::{StirConfig, StirParameters};
 pub use proof::StirProof;
 pub use proximity_gaps::*;
 
+// If the configuration requires the prover to compute a proof of works of more
+// than these limit, executing the prover will print a warning message
+const POW_BITS_WARNING: usize = 40;
+
 // Used for domain separation in the Fiat-Shamir transcript
 pub(crate) enum Messages {
     Commitment,

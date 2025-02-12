@@ -457,6 +457,13 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
         self.parameters.pow_bits
     }
 
+    pub fn pow_bits_all_rounds(&self) -> Vec<usize> {
+        let mut pow_bits = vec![self.starting_folding_pow_bits];
+        pow_bits.extend(self.round_parameters.iter().map(|x| x.pow_bits));
+        pow_bits.push(self.final_pow_bits);
+        pow_bits
+    }
+
     pub fn subgroup_generator(&self) -> F {
         self.subgroup_generator
     }
