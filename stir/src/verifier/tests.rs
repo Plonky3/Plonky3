@@ -1,20 +1,23 @@
-use crate::{
-    prover::{commit, prove},
-    test_utils::*,
-    utils::fold_polynomial,
-    verifier::{
-        compute_folded_evaluations,
-        error::{FullRoundVerificationError, VerificationError},
-        verify,
-    },
-    StirConfig, StirProof,
-};
+use core::iter::Iterator;
+use std::fs;
+use std::fs::File;
+use std::path::Path;
+
 use itertools::Itertools;
+use p3_challenger::{CanObserve, CanSample, CanSampleBits, FieldChallenger, GrindingChallenger};
+use p3_commit::Mmcs;
 use p3_coset::TwoAdicCoset;
 use p3_field::FieldAlgebra;
 use p3_poly::test_utils::rand_poly;
 use rand::{thread_rng, Rng};
-use std::{fs, fs::File, path::Path};
+
+use crate::config::observe_public_parameters;
+use crate::prover::{commit, prove, prove_round, StirRoundWitness};
+use crate::test_utils::*;
+use crate::utils::{fold_polynomial, observe_ext_slice_with_size};
+use crate::verifier::error::{FullRoundVerificationError, VerificationError};
+use crate::verifier::{compute_folded_evaluations, verify};
+use crate::{Messages, StirConfig, StirProof};
 
 type Proof = StirProof<BBExt, BBExtMMCS, BB>;
 
@@ -25,10 +28,13 @@ fn init_file() -> File {
     File::create(path).unwrap()
 }
 
-fn generate_proof_with_config(config: &StirConfig<BBExt, BBExtMMCS>) -> Proof {
+fn generate_proof_with_config(
+    config: &StirConfig<BBExt, BBExtMMCS>,
+    challenger: &mut BBChallenger,
+) -> Proof {
     let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
     let (witness, commitment) = commit(&config, polynomial);
-    let proof = prove(&config, witness, commitment, &mut test_bb_challenger());
+    let proof = prove(&config, witness, commitment, challenger);
 
     // Serialize the proof to a file
     serde_json::to_writer(init_file(), &proof).unwrap();
@@ -67,18 +73,34 @@ fn test_compute_folded_evals() {
 #[test]
 fn test_verify() {
     let config = test_bb_stir_config(20, 2, 4, 3);
-    let proof = generate_proof_with_config(&config);
+    let (mut prover_challenger, mut verifier_challenger) =
+        (test_bb_challenger(), test_bb_challenger());
 
-    verify(&config, proof, &mut test_bb_challenger()).unwrap();
+    let proof = generate_proof_with_config(&config, &mut prover_challenger);
+    verify(&config, proof, &mut verifier_challenger).unwrap();
+
+    // Check that the sponge is consistent at the end
+    assert_eq!(
+        prover_challenger.sample_ext_element::<BBExt>(),
+        verifier_challenger.sample_ext_element::<BBExt>()
+    );
 }
 
 #[test]
 fn test_verify_variable_folding_factor() {
     // NP TODO make bigger after more efficient FFT is introduced
     let config = test_stir_config_folding_factors(14, 1, vec![4, 3, 5]);
-    let proof = generate_proof_with_config(&config);
+    let (mut prover_challenger, mut verifier_challenger) =
+        (test_bb_challenger(), test_bb_challenger());
 
-    verify(&config, proof, &mut test_bb_challenger()).unwrap();
+    let proof = generate_proof_with_config(&config, &mut prover_challenger);
+    verify(&config, proof, &mut verifier_challenger).unwrap();
+
+    // Check that the sponge is consistent at the end
+    assert_eq!(
+        prover_challenger.sample_ext_element::<BBExt>(),
+        verifier_challenger.sample_ext_element::<BBExt>()
+    );
 }
 
 macro_rules! check_failing_case {
@@ -98,7 +120,7 @@ macro_rules! check_failing_case {
 fn test_verify_failing_cases() {
     let mut rng = thread_rng();
     let config = test_bb_stir_config(20, 2, 4, 3);
-    let proof = generate_proof_with_config(&config);
+    let proof = generate_proof_with_config(&config, &mut test_bb_challenger());
 
     // ---------------- ROUND PROOF OF WORK -----------------
 
@@ -170,6 +192,12 @@ fn test_verify_failing_cases() {
     // This will allow the path verification to succeed, but the code must fail during the
     // final polynomial evaluation check.
 
+    let tampered_proof = tamper_with_final_polynomial(&config);
+    assert_eq!(
+        verify(&config, tampered_proof, &mut test_bb_challenger()),
+        Err(VerificationError::FinalPolynomialEvaluations)
+    );
+
     // --------------- FINAL QUERY PATH -----------------
 
     check_failing_case!(
@@ -194,6 +222,81 @@ fn test_verify_failing_cases() {
         VerificationError::FinalProofOfWork
     );
 }
-// NP TODO test that the sponge is consistent at the end
+
+fn tamper_with_final_polynomial(config: &StirConfig<BBExt, BBExtMMCS>) -> Proof {
+    let mut challenger = test_bb_challenger();
+    let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
+    let (witness, commitment) = commit(&config, polynomial);
+
+    // Observe public parameters
+    observe_public_parameters(config.parameters(), &mut challenger);
+
+    // Observe the commitment
+    challenger.observe(BB::from_canonical_u8(Messages::Commitment as u8));
+    challenger.observe(commitment.clone());
+
+    // Sample the folding randomness
+    challenger.observe(BB::from_canonical_u8(Messages::FoldingRandomness as u8));
+    let folding_randomness = challenger.sample_ext_element();
+
+    let mut witness = StirRoundWitness {
+        domain: witness.domain,
+        polynomial: witness.polynomial,
+        merkle_tree: witness.merkle_tree,
+        round: 0,
+        folding_randomness,
+    };
+
+    let mut round_proofs = vec![];
+    for _ in 0..config.num_rounds() - 1 {
+        let (new_witness, round_proof) = prove_round(config, witness, &mut challenger);
+        witness = new_witness;
+        round_proofs.push(round_proof);
+    }
+
+    // Final round
+    let log_last_folding_factor = config.log_last_folding_factor();
+
+    // Tamper with the final polynomial
+    let final_polynomial = rand_poly(
+        witness.polynomial.degree().unwrap() / 2_usize.pow(log_last_folding_factor as u32) as usize,
+    );
+
+    let final_queries = config.final_num_queries();
+
+    // Logarithm of |(L_M)^(k_M)|
+    let log_query_domain_size = witness.domain.log_size() - log_last_folding_factor;
+
+    // Absorb the final polynomial
+    challenger.observe(BB::from_canonical_u8(Messages::FinalPolynomial as u8));
+    observe_ext_slice_with_size(&mut challenger, final_polynomial.coeffs());
+
+    // Sample the queried indices
+    challenger.observe(BB::from_canonical_u8(Messages::FinalQueryIndices as u8));
+    let queried_indices: Vec<u64> = (0..final_queries)
+        .map(|_| challenger.sample_bits(log_query_domain_size) as u64)
+        .unique()
+        .collect();
+
+    let queries_to_final: Vec<(Vec<BBExt>, _)> = queried_indices
+        .into_iter()
+        .map(|index| {
+            config
+                .mmcs_config()
+                .open_batch(index as usize, &witness.merkle_tree)
+        })
+        .map(|(mut k, v)| (k.remove(0), v))
+        .collect();
+
+    let pow_witness = challenger.grind(config.final_pow_bits());
+
+    StirProof {
+        commitment,
+        round_proofs,
+        final_polynomial,
+        pow_witness,
+        final_round_queries: queries_to_final,
+    }
+}
 
 // Benchmarks with and without the hints

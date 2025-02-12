@@ -4,17 +4,15 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
+use p3_coset::TwoAdicCoset;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
-
-use crate::{
-    config::{observe_public_parameters, RoundConfig},
-    proof::RoundProof,
-    utils::{fold_polynomial, multiply_by_power_polynomial, observe_ext_slice_with_size},
-    Messages, StirConfig, StirProof,
-};
-use p3_coset::TwoAdicCoset;
 use p3_poly::Polynomial;
+
+use crate::config::{observe_public_parameters, RoundConfig};
+use crate::proof::RoundProof;
+use crate::utils::{fold_polynomial, multiply_by_power_polynomial, observe_ext_slice_with_size};
+use crate::{Messages, StirConfig, StirProof};
 
 #[cfg(test)]
 mod tests;
@@ -33,7 +31,7 @@ pub struct StirWitness<F: TwoAdicField, M: Mmcs<F>> {
 
 // Witness enriched with additional information (round number and folding
 // randomness) received and produced by the method prove_round
-struct StirRoundWitness<F: TwoAdicField, M: Mmcs<F>> {
+pub(crate) struct StirRoundWitness<F: TwoAdicField, M: Mmcs<F>> {
     // The indices are given in the following frame of reference: Self is
     // produced inside prove_round for round i (in {1, ..., M}).
     // final round, with index M + 1, does not produce a StirRoundWitness.
@@ -191,7 +189,7 @@ where
     }
 }
 
-fn prove_round<F, EF, M, C>(
+pub(crate) fn prove_round<F, EF, M, C>(
     config: &StirConfig<EF, M>,
     witness: StirRoundWitness<EF, M>,
     challenger: &mut C,

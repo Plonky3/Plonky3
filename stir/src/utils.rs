@@ -2,7 +2,7 @@ use core::iter;
 
 use itertools::{iterate, izip, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger};
-use p3_field::{ExtensionField, Field, FieldExtensionAlgebra, TwoAdicField};
+use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_poly::Polynomial;
 
 pub(crate) fn compute_pow(security_level: usize, error: f64) -> f64 {
@@ -199,13 +199,14 @@ pub(crate) fn observe_small_usize_slice<F: Field, C: CanObserve<F>>(
 #[cfg(test)]
 mod tests {
 
+    use core::assert_eq;
+
+    use iter::Iterator;
     use p3_baby_bear::BabyBear;
     use p3_coset::TwoAdicCoset;
     use p3_field::FieldAlgebra;
-    use p3_poly::{test_utils::rand_poly, Polynomial};
-
-    use core::assert_eq;
-    use iter::Iterator;
+    use p3_poly::test_utils::rand_poly;
+    use p3_poly::Polynomial;
     use rand::Rng;
 
     use super::*;

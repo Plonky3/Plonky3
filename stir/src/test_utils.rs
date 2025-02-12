@@ -22,7 +22,7 @@ type BBPacking = <BB as Field>::Packing;
 type BBMMCS = MerkleTreeMmcs<BBPacking, BBPacking, BBHash, BBCompress, 8>;
 pub type BBExtMMCS = ExtensionMmcs<BB, BBExt, BBMMCS>;
 
-type BBChallenger = DuplexChallenger<BB, BBPerm, 16, 8>;
+pub type BBChallenger = DuplexChallenger<BB, BBPerm, 16, 8>;
 
 pub fn test_bb_mmcs_config() -> BBExtMMCS {
     let mut rng = ChaCha20Rng::seed_from_u64(0);

@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter, Result};
+
 use itertools::Itertools;
 use p3_challenger::FieldChallenger;
 use p3_field::{Field, TwoAdicField};
