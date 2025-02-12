@@ -167,7 +167,7 @@ mod tests {
         // Our Poseidon2 implementation.
         let poseidon2 = Poseidon2Bn254::new(external_round_constants, internal_round_constants);
 
-        // Generate random input and convert to both Goldilocks field formats.
+        // Generate random input and convert to both field formats.
         let input = rng.random::<[F; WIDTH]>();
         let input_ark_ff = input.map(ark_ff_from_bn254);
 
