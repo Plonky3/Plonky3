@@ -172,7 +172,7 @@ mod tests {
         let input_ark_ff = input.map(ark_ff_from_bn254);
 
         // Run reference implementation.
-        let output_ref: [ark_FpBN256; 3] =
+        let output_ref: [ark_FpBN256; WIDTH] =
             poseidon2_ref.permutation(&input_ark_ff).try_into().unwrap();
         let expected: [F; WIDTH] = output_ref.map(bn254_from_ark_ff);
 
