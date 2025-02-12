@@ -17,7 +17,7 @@ pub use duplex_challenger::*;
 pub use grinding_challenger::*;
 pub use hash_challenger::*;
 pub use multi_field_challenger::*;
-use p3_field::{Field, FieldExtensionAlgebra};
+use p3_field::{BasedVectorSpace, Field};
 pub use serializing_challenger::*;
 
 pub trait CanObserve<T> {
@@ -52,13 +52,13 @@ pub trait CanSampleBits<T> {
 pub trait FieldChallenger<F: Field>:
     CanObserve<F> + CanSample<F> + CanSampleBits<usize> + Sync
 {
-    fn observe_ext_element<EF: FieldExtensionAlgebra<F>>(&mut self, ext: EF) {
-        self.observe_slice(ext.as_base_slice());
+    fn observe_algebra_element<A: BasedVectorSpace<F>>(&mut self, alg_elem: A) {
+        self.observe_slice(alg_elem.as_basis_coefficients_slice());
     }
 
-    fn sample_ext_element<EF: FieldExtensionAlgebra<F>>(&mut self) -> EF {
-        let vec = self.sample_vec(EF::D);
-        EF::from_base_slice(&vec)
+    fn sample_algebra_element<A: BasedVectorSpace<F>>(&mut self) -> A {
+        let vec = self.sample_vec(A::DIMENSION);
+        A::from_basis_coefficients_slice(&vec)
     }
 }
 
@@ -68,7 +68,7 @@ where
 {
     #[inline(always)]
     fn observe(&mut self, value: T) {
-        (**self).observe(value)
+        (*self).observe(value)
     }
 
     #[inline(always)]
@@ -76,7 +76,7 @@ where
     where
         T: Clone,
     {
-        (**self).observe_slice(values)
+        (*self).observe_slice(values)
     }
 }
 
@@ -86,17 +86,17 @@ where
 {
     #[inline(always)]
     fn sample(&mut self) -> T {
-        (**self).sample()
+        (*self).sample()
     }
 
     #[inline(always)]
     fn sample_array<const N: usize>(&mut self) -> [T; N] {
-        (**self).sample_array()
+        (*self).sample_array()
     }
 
     #[inline(always)]
     fn sample_vec(&mut self, n: usize) -> Vec<T> {
-        (**self).sample_vec(n)
+        (*self).sample_vec(n)
     }
 }
 
@@ -106,7 +106,7 @@ where
 {
     #[inline(always)]
     fn sample_bits(&mut self, bits: usize) -> T {
-        (**self).sample_bits(bits)
+        (*self).sample_bits(bits)
     }
 }
 
@@ -115,12 +115,12 @@ where
     C: FieldChallenger<F>,
 {
     #[inline(always)]
-    fn observe_ext_element<EF: FieldExtensionAlgebra<F>>(&mut self, ext: EF) {
-        (**self).observe_ext_element(ext)
+    fn observe_algebra_element<EF: BasedVectorSpace<F>>(&mut self, ext: EF) {
+        (*self).observe_algebra_element(ext)
     }
 
     #[inline(always)]
-    fn sample_ext_element<EF: FieldExtensionAlgebra<F>>(&mut self) -> EF {
-        (**self).sample_ext_element()
+    fn sample_algebra_element<EF: BasedVectorSpace<F>>(&mut self) -> EF {
+        (*self).sample_algebra_element()
     }
 }

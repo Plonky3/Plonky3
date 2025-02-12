@@ -8,14 +8,14 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use itertools::izip;
-use p3_field::{Field, FieldAlgebra, PackedFieldPow2, PackedValue};
+use p3_field::{Field, PackedFieldPow2, PackedValue, PrimeCharacteristicRing};
 use p3_util::log2_strict_usize;
 
 use crate::utils::monty_reduce;
 use crate::{FieldParameters, MontyField31, TwoAdicData};
 
 #[inline(always)]
-fn backward_butterfly<T: FieldAlgebra + Copy>(x: T, y: T, roots: T) -> (T, T) {
+fn backward_butterfly<T: PrimeCharacteristicRing + Copy>(x: T, y: T, roots: T) -> (T, T) {
     let t = y * roots;
     (x + t, x - t)
 }

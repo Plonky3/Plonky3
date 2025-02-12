@@ -2,19 +2,23 @@
 
 mod poseidon2;
 
-use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::{fmt, stringify};
 
 use ff::{Field as FFField, PrimeField as FFPrimeField};
 pub use halo2curves::bn256::Fr as FFBn254Fr;
 use halo2curves::serde::SerdeObject;
 use num_bigint::BigUint;
-use p3_field::{Field, FieldAlgebra, Packable, PrimeField, TwoAdicField};
+use p3_field::integers::QuotientMap;
+use p3_field::{
+    quotient_map_small_int, Field, InjectiveMonomial, Packable, PrimeCharacteristicRing,
+    PrimeField, TwoAdicField,
+};
 pub use poseidon2::Poseidon2Bn254;
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -89,8 +93,8 @@ impl Debug for Bn254Fr {
     }
 }
 
-impl FieldAlgebra for Bn254Fr {
-    type F = Self;
+impl PrimeCharacteristicRing for Bn254Fr {
+    type PrimeSubfield = Self;
 
     const ZERO: Self = Self::new(FFBn254Fr::ZERO);
     const ONE: Self = Self::new(FFBn254Fr::ONE);
@@ -105,42 +109,18 @@ impl FieldAlgebra for Bn254Fr {
     ]));
 
     #[inline]
-    fn from_f(f: Self::F) -> Self {
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f
     }
-
-    fn from_bool(b: bool) -> Self {
-        Self::new(FFBn254Fr::from(b as u64))
-    }
-
-    fn from_canonical_u8(n: u8) -> Self {
-        Self::new(FFBn254Fr::from(n as u64))
-    }
-
-    fn from_canonical_u16(n: u16) -> Self {
-        Self::new(FFBn254Fr::from(n as u64))
-    }
-
-    fn from_canonical_u32(n: u32) -> Self {
-        Self::new(FFBn254Fr::from(n as u64))
-    }
-
-    fn from_canonical_u64(n: u64) -> Self {
-        Self::new(FFBn254Fr::from(n))
-    }
-
-    fn from_canonical_usize(n: usize) -> Self {
-        Self::new(FFBn254Fr::from(n as u64))
-    }
-
-    fn from_wrapped_u32(n: u32) -> Self {
-        Self::new(FFBn254Fr::from(n as u64))
-    }
-
-    fn from_wrapped_u64(n: u64) -> Self {
-        Self::new(FFBn254Fr::from(n))
-    }
 }
+
+/// Degree of the smallest permutation polynomial for BN254.
+///
+/// As p - 1 is divisible by 2 and 3 the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
+impl InjectiveMonomial<5> for Bn254Fr {}
+
+// TODO: Implement PermutationMonomial<5> for Bn254Fr.
+// Not a priority given how slow (and unused) this will be.
 
 impl Field for Bn254Fr {
     type Packing = Self;
@@ -183,6 +163,54 @@ impl Field for Bn254Fr {
             (BigUint::from(1670836401704629u64), 1),
             (BigUint::from(13818364434197438864469338081u128), 1),
         ]
+    }
+}
+
+quotient_map_small_int!(Bn254Fr, u128, [u8, u16, u32, u64]);
+quotient_map_small_int!(Bn254Fr, i128, [i8, i16, i32, i64]);
+
+impl QuotientMap<u128> for Bn254Fr {
+    /// Due to the size of the `BN254` prime, the input value is always canonical.
+    #[inline]
+    fn from_int(int: u128) -> Bn254Fr {
+        Self::new(FFBn254Fr::from_raw([int as u64, (int >> 64) as u64, 0, 0]))
+    }
+
+    /// Due to the size of the `BN254` prime, the input value is always canonical.
+    #[inline]
+    fn from_canonical_checked(int: u128) -> Option<Bn254Fr> {
+        Some(Self::from_int(int))
+    }
+
+    /// Due to the size of the `BN254` prime, the input value is always canonical.
+    #[inline]
+    unsafe fn from_canonical_unchecked(int: u128) -> Bn254Fr {
+        Self::from_int(int)
+    }
+}
+
+impl QuotientMap<i128> for Bn254Fr {
+    /// Due to the size of the `BN254` prime, the input value is always canonical.
+    #[inline]
+    fn from_int(int: i128) -> Bn254Fr {
+        // Nothing better than just branching based on the sign of int.
+        if int >= 0 {
+            Self::from_int(int as u128)
+        } else {
+            -Self::from_int((-int) as u128)
+        }
+    }
+
+    /// Due to the size of the `BN254` prime, the input value is always canonical.
+    #[inline]
+    fn from_canonical_checked(int: i128) -> Option<Bn254Fr> {
+        Some(Self::from_int(int))
+    }
+
+    /// Due to the size of the `BN254` prime, the input value is always canonical.
+    #[inline]
+    unsafe fn from_canonical_unchecked(int: i128) -> Bn254Fr {
+        Self::from_int(int)
     }
 }
 
@@ -265,10 +293,23 @@ impl Div for Bn254Fr {
     }
 }
 
-impl Distribution<Bn254Fr> for Standard {
+impl Distribution<Bn254Fr> for StandardUniform {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Bn254Fr {
-        Bn254Fr::new(FFBn254Fr::random(rng))
+        // Simple implementation of rejection sampling:
+        loop {
+            let mut trial_element: [u8; 32] = rng.random();
+
+            // Set top 2 bits to 0 as bn254 is a 254-bit field.
+            // `from_bytes` expects little endian input, so we adjust byte 31:
+            trial_element[31] &= (1_u8 << 6) - 1;
+
+            let x = FFBn254Fr::from_bytes(&trial_element);
+            if x.is_some().into() {
+                // x.unwrap() is safe because x.is_some() is true
+                return Bn254Fr::new(x.unwrap());
+            }
+        }
     }
 }
 
@@ -286,8 +327,7 @@ impl TwoAdicField for Bn254Fr {
 
 #[cfg(test)]
 mod tests {
-    use num_traits::One;
-    use p3_field_testing::test_field;
+    use p3_field_testing::{test_field, test_prime_field};
 
     use super::*;
 
@@ -298,61 +338,18 @@ mod tests {
         let f = F::new(FFBn254Fr::from_u128(100));
         assert_eq!(f.as_canonical_biguint(), BigUint::new(vec![100]));
 
-        let f = F::from_canonical_u64(0);
-        assert!(f.is_zero());
-
         let f = F::new(FFBn254Fr::from_str_vartime(&F::order().to_str_radix(10)).unwrap());
         assert!(f.is_zero());
-
-        assert_eq!(F::GENERATOR.as_canonical_biguint(), BigUint::new(vec![5]));
-
-        let f_1 = F::new(FFBn254Fr::from_u128(1));
-        let f_1_copy = F::new(FFBn254Fr::from_u128(1));
-
-        let expected_result = F::ZERO;
-        assert_eq!(f_1 - f_1_copy, expected_result);
-
-        let expected_result = F::new(FFBn254Fr::from_u128(2));
-        assert_eq!(f_1 + f_1_copy, expected_result);
-
-        let f_2 = F::new(FFBn254Fr::from_u128(2));
-        let expected_result = F::new(FFBn254Fr::from_u128(3));
-        assert_eq!(f_1 + f_1_copy * f_2, expected_result);
-
-        let expected_result = F::new(FFBn254Fr::from_u128(5));
-        assert_eq!(f_1 + f_2 * f_2, expected_result);
-
-        let f_r_minus_1 = F::new(
-            FFBn254Fr::from_str_vartime(&(F::order() - BigUint::one()).to_str_radix(10)).unwrap(),
-        );
-        let expected_result = F::ZERO;
-        assert_eq!(f_1 + f_r_minus_1, expected_result);
-
-        let f_r_minus_2 = F::new(
-            FFBn254Fr::from_str_vartime(&(F::order() - BigUint::new(vec![2])).to_str_radix(10))
-                .unwrap(),
-        );
-        let expected_result = F::new(
-            FFBn254Fr::from_str_vartime(&(F::order() - BigUint::new(vec![3])).to_str_radix(10))
-                .unwrap(),
-        );
-        assert_eq!(f_r_minus_1 + f_r_minus_2, expected_result);
-
-        let expected_result = F::new(FFBn254Fr::from_u128(1));
-        assert_eq!(f_r_minus_1 - f_r_minus_2, expected_result);
-
-        let expected_result = f_r_minus_1;
-        assert_eq!(f_r_minus_2 - f_r_minus_1, expected_result);
-
-        let expected_result = f_r_minus_2;
-        assert_eq!(f_r_minus_1 - f_1, expected_result);
-
-        let expected_result = F::new(FFBn254Fr::from_u128(3));
-        assert_eq!(f_2 * f_2 - f_1, expected_result);
 
         // Generator check
         let expected_multiplicative_group_generator = F::new(FFBn254Fr::from_u128(5));
         assert_eq!(F::GENERATOR, expected_multiplicative_group_generator);
+        assert_eq!(F::GENERATOR.as_canonical_biguint(), BigUint::new(vec![5]));
+
+        let f_1 = F::ONE;
+        let f_2 = F::TWO;
+        let f_r_minus_1 = F::NEG_ONE;
+        let f_r_minus_2 = F::NEG_ONE + F::NEG_ONE;
 
         let f_serialized = serde_json::to_string(&f).unwrap();
         let f_deserialized: F = serde_json::from_str(&f_serialized).unwrap();
@@ -379,4 +376,6 @@ mod tests {
     }
 
     test_field!(crate::Bn254Fr);
+
+    test_prime_field!(crate::Bn254Fr);
 }

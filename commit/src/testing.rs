@@ -49,6 +49,7 @@ where
     type Domain = TwoAdicMultiplicativeCoset<Val>;
     type Commitment = Vec<Vec<Val>>;
     type ProverData = Vec<RowMajorMatrix<Val>>;
+    type EvaluationsOnDomain<'a> = Dft::Evaluations;
     type Proof = ();
     type Error = ();
 
@@ -94,7 +95,7 @@ where
         prover_data: &'a Self::ProverData,
         idx: usize,
         domain: Self::Domain,
-    ) -> impl Matrix<Val> + 'a {
+    ) -> Self::EvaluationsOnDomain<'a> {
         let mut coeffs = prover_data[idx].clone();
         assert!(domain.log_n >= self.log_n);
         coeffs.values.resize(
@@ -121,6 +122,8 @@ where
             rounds
                 .into_iter()
                 .map(|(coeffs_for_round, points_for_round)| {
+                    // ensure that each matrix corresponds to a set of opening points
+                    debug_assert_eq!(coeffs_for_round.len(), points_for_round.len());
                     coeffs_for_round
                         .iter()
                         .zip(points_for_round)

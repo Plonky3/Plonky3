@@ -6,32 +6,53 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::slice;
 
-use itertools::Itertools;
 use num_bigint::BigUint;
 use num_traits::One;
 use nums::{Factorizer, FactorizerFromSplitter, MillerRabin, PollardRho};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-use crate::exponentiation::exp_u64_by_squaring;
-use crate::packed::{PackedField, PackedValue};
-use crate::Packable;
+use crate::exponentiation::bits_u64;
+use crate::integers::{from_integer_types, QuotientMap};
+use crate::packed::PackedField;
+use crate::{Packable, PackedFieldExtension};
 
-/// A commutative algebra over a finite field.
+/// A commutative ring, `R`, with prime characteristic, `p`.
 ///
 /// This permits elements like:
-/// - an actual field element
-/// - a symbolic expression which would evaluate to a field element
-/// - an array of field elements
+/// - A single finite field element.
+/// - A symbolic expression which would evaluate to a field element.
+/// - An array of finite field elements.
+/// - A polynomial with coefficients in a finite field.
 ///
-/// Mathematically speaking, this is an algebraic structure with addition,
-/// multiplication and scalar multiplication. The addition and multiplication
-/// maps must be both commutative and associative, and there must
-/// exist identity elements for both (named `ZERO` and `ONE`
-/// respectively). Furthermore, multiplication must distribute over
-/// addition. Finally, the scalar multiplication must be realized by
-/// a ring homomorphism from the field to the algebra.
-pub trait FieldAlgebra:
+/// ### Mathematical Description
+///
+/// Mathematically, a commutative ring is a set of objects which supports an addition-like
+/// like operation, `+`, and a multiplication-like operation `*`.
+///
+/// Let `x, y, z` denote arbitrary elements of the set.
+///
+/// Then, an operation is addition-like if it satisfies the following properties:
+/// - Commutativity => `x + y = y + x`
+/// - Associativity => `x + (y + z) = (x + y) + z`
+/// - Unit => There exists an identity element `ZERO` satisfying `x + ZERO = x`.
+/// - Inverses => For every `x` there exists a unique inverse `(-x)` satisfying `x + (-x) = ZERO`
+///
+/// Similarly, an operation is multiplication-like if it satisfies the following properties:
+/// - Commutativity => `x * y = y * x`
+/// - Associativity => `x * (y * z) = (x * y) * z`
+/// - Unit => There exists an identity element `ONE` satisfying `x * ONE = x`.
+/// - Distributivity => The two operations `+` and `*` must together satisfy `x * (y + z) = (x * y) + (x * z)`
+///
+/// Unlike in the addition case, we do not require inverses to exist with respect to `*`.
+///
+/// The simplest examples of commutative rings are the integers (`ℤ`), and the integers mod `N` (`ℤ/N`).
+///
+/// The characteristic of a ring is the smallest positive integer `r` such that `0 = r . 1 = 1 + 1 + ... + 1 (r times)`.
+/// For example, the characteristic of the modulo ring `ℤ/N` is `N`.
+///
+/// Rings with prime characteristic are particularly special due to their close relationship with finite fields.
+pub trait PrimeCharacteristicRing:
     Sized
     + Default
     + Clone
@@ -46,25 +67,26 @@ pub trait FieldAlgebra:
     + Product
     + Debug
 {
-    type F: Field;
+    /// The field `ℤ/p` where the characteristic of this ring is p.
+    type PrimeSubfield: PrimeField;
 
-    /// The additive identity of the algebra.
+    /// The additive identity of the ring.
     ///
-    /// For every element `a` in the algebra we require the following properties:
+    /// For every element `a` in the ring we require the following properties:
     ///
     /// `a + ZERO = ZERO + a = a,`
     ///
     /// `a + (-a) = (-a) + a = ZERO.`
     const ZERO: Self;
 
-    /// The multiplicative identity of the Algebra
+    /// The multiplicative identity of the ring.
     ///
-    /// For every element `a` in the algebra we require the following property:
+    /// For every element `a` in the ring we require the following property:
     ///
     /// `a*ONE = ONE*a = a.`
     const ONE: Self;
 
-    /// The element in the algebra given by `ONE + ONE`.
+    /// The element in the ring given by `ONE + ONE`.
     ///
     /// This is provided as a convenience as `TWO` occurs regularly in
     /// the proving system. This also is slightly faster than computing
@@ -74,7 +96,7 @@ pub trait FieldAlgebra:
     /// If the field has characteristic 2 this is equal to ZERO.
     const TWO: Self;
 
-    /// The element in the algebra given by `-ONE`.
+    /// The element in the ring given by `-ONE`.
     ///
     /// This is provided as a convenience as `NEG_ONE` occurs regularly in
     /// the proving system. This also is slightly faster than computing
@@ -85,52 +107,29 @@ pub trait FieldAlgebra:
     /// If the field has characteristic 2 this is equal to ONE.
     const NEG_ONE: Self;
 
-    /// Interpret a field element as a commutative algebra element.
+    /// Embed an element of the prime field `ℤ/p` into the ring `R`.
     ///
-    /// Mathematically speaking, this map is a ring homomorphism from the base field
-    /// to the commutative algebra. The existence of this map makes this structure
-    /// an algebra and not simply a commutative ring.
-    fn from_f(f: Self::F) -> Self;
-
-    /// Convert from a `bool`.
-    fn from_bool(b: bool) -> Self;
-
-    /// Convert from a canonical `u8`.
+    /// Given any element `[r] ∈ ℤ/p`, represented by an integer `r` between `0` and `p - 1`
+    /// `from_prime_subfield([r])` will be equal to:
     ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_u8(n: u8) -> Self;
+    /// `Self::ONE + ... + Self::ONE (r times)`
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self;
 
-    /// Convert from a canonical `u16`.
-    ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_u16(n: u16) -> Self;
+    /// Return `Self::ONE` if `b` is `true` and `Self::ZERO` if `b` is `false`.
+    fn from_bool(b: bool) -> Self {
+        // Some rings might reimplement this to avoid the branch.
+        if b {
+            Self::ONE
+        } else {
+            Self::ZERO
+        }
+    }
 
-    /// Convert from a canonical `u32`.
-    ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_u32(n: u32) -> Self;
-
-    /// Convert from a canonical `u64`.
-    ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_u64(n: u64) -> Self;
-
-    /// Convert from a canonical `usize`.
-    ///
-    /// If the input is not canonical, i.e. if it exceeds the field's characteristic, then the
-    /// behavior is undefined.
-    fn from_canonical_usize(n: usize) -> Self;
-
-    fn from_wrapped_u32(n: u32) -> Self;
-    fn from_wrapped_u64(n: u64) -> Self;
+    from_integer_types!(u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize);
 
     /// The elementary function `double(a) = 2*a`.
     ///
-    /// This function should be preferred over calling `a + a` or `TWO * a` as a faster implementation may be available for some algebras.
+    /// This function should be preferred over calling `a + a` or `TWO * a` as a faster implementation may be available for some rings.
     /// If the field has characteristic 2 then this returns 0.
     #[must_use]
     fn double(&self) -> Self {
@@ -139,7 +138,7 @@ pub trait FieldAlgebra:
 
     /// The elementary function `square(a) = a^2`.
     ///
-    /// This function should be preferred over calling `a * a`, as a faster implementation may be available for some algebras.
+    /// This function should be preferred over calling `a * a`, as a faster implementation may be available for some rings.
     #[must_use]
     fn square(&self) -> Self {
         self.clone() * self.clone()
@@ -147,7 +146,7 @@ pub trait FieldAlgebra:
 
     /// The elementary function `cube(a) = a^3`.
     ///
-    /// This function should be preferred over calling `a * a * a`, as a faster implementation may be available for some algebras.
+    /// This function should be preferred over calling `a * a * a`, as a faster implementation may be available for some rings.
     #[must_use]
     fn cube(&self) -> Self {
         self.square() * self.clone()
@@ -155,20 +154,30 @@ pub trait FieldAlgebra:
 
     /// Exponentiation by a `u64` power.
     ///
-    /// The default implementation calls `exp_u64_generic`, which by default performs exponentiation
-    /// by squaring. Rather than override this method, it is generally recommended to have the
-    /// concrete field type override `exp_u64_generic`, so that any optimizations will apply to all
-    /// abstract fields.
+    /// This uses the standard square and multiply approach.
+    /// For specific powers regularly used and known in advance,
+    /// this will be slower than custom addition chain exponentiation.
     #[must_use]
     #[inline]
     fn exp_u64(&self, power: u64) -> Self {
-        Self::F::exp_u64_generic(self.clone(), power)
+        let mut current = self.clone();
+        let mut product = Self::ONE;
+
+        for j in 0..bits_u64(power) {
+            if (power >> j & 1) != 0 {
+                product *= current.clone();
+            }
+            current = current.square();
+        }
+        product
     }
 
-    /// Exponentiation by a constant power.
+    /// Exponentiation by a small constant power.
     ///
     /// For a collection of small values we implement custom multiplication chain circuits which can be faster than the
     /// simpler square and multiply approach.
+    ///
+    /// For large values this defaults back to `self.exp_u64`.
     #[must_use]
     #[inline(always)]
     fn exp_const_u64<const POWER: u64>(&self) -> Self {
@@ -190,7 +199,9 @@ pub trait FieldAlgebra:
         }
     }
 
-    /// Compute self^{2^power_log} by repeated squaring.
+    /// The elementary function `exp_power_of_2(a, power_log) = a^{2^power_log}`.
+    ///
+    /// Computed via repeated squaring.
     #[must_use]
     fn exp_power_of_2(&self, power_log: usize) -> Self {
         let mut res = self.clone();
@@ -200,50 +211,26 @@ pub trait FieldAlgebra:
         res
     }
 
-    /// self * 2^exp
+    /// The elementary function `mul_2exp_u64(a, exp) = a * 2^{exp}`.
+    ///
+    /// Here `2^{exp}` is computed using the square and multiply approach.
     #[must_use]
     #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
         self.clone() * Self::TWO.exp_u64(exp)
     }
 
-    /// Construct an iterator which returns powers of `self: self^0, self^1, self^2, ...`.
+    /// Construct an iterator which returns powers of `self`: `self^0, self^1, self^2, ...`.
     #[must_use]
     fn powers(&self) -> Powers<Self> {
         self.shifted_powers(Self::ONE)
     }
 
-    /// Construct an iterator which returns powers of `self` shifted by `start: start, start*self^1, start*self^2, ...`.
+    /// Construct an iterator which returns powers of `self` shifted by `start`: `start, start*self^1, start*self^2, ...`.
     fn shifted_powers(&self, start: Self) -> Powers<Self> {
         Powers {
             base: self.clone(),
             current: start,
-        }
-    }
-
-    /// Construct an iterator which returns powers of `self` packed into `PackedField` elements.
-    ///
-    /// E.g. if `PACKING::WIDTH = 4` this returns the elements:
-    /// `[self^0, self^1, self^2, self^3], [self^4, self^5, self^6, self^7], ...`.
-    fn powers_packed<P: PackedField<Scalar = Self>>(&self) -> Powers<P> {
-        self.shifted_powers_packed(Self::ONE)
-    }
-
-    /// Construct an iterator which returns powers of `self` shifted by start
-    /// and packed into `PackedField` elements.
-    ///
-    /// E.g. if `PACKING::WIDTH = 4` this returns the elements:
-    /// `[start, start*self, start*self^2, start*self^3], [start*self^4, start*self^5, start*self^6, start*self^7], ...`.
-    fn shifted_powers_packed<P: PackedField<Scalar = Self>>(&self, start: Self) -> Powers<P> {
-        let mut current = P::from_f(start);
-        let slice = current.as_slice_mut();
-        for i in 1..P::WIDTH {
-            slice[i] = slice[i - 1].clone() * self.clone();
-        }
-
-        Powers {
-            base: P::from_f(self.clone()).exp_u64(P::WIDTH as u64),
-            current,
         }
     }
 
@@ -265,9 +252,198 @@ pub trait FieldAlgebra:
     }
 }
 
-/// An element of a finite field.
+/// A vector space `V` over `F` with a fixed basis. Fixing the basis allows elements of `V` to be
+/// converted to and from `DIMENSION` many elements of `F` which are interpreted as basis coefficients.
+///
+/// We usually expect `F` to be a field but do not enforce this and so allow it to be just a ring.
+/// This lets every ring implement `BasedVectorSpace<Self>` and is useful in a couple of other cases.
+///
+/// ## Safety
+/// We make no guarantees about consistency of the choice of basis across different versions of Plonky3.
+/// If this choice of basis changes, the behaviour of `BasedVectorSpace` will also change. Due to this,
+/// we recommend avoiding using this trait unless absolutely necessary.
+///
+/// ### Mathematical Description
+/// Given a vector space, `A` over `F`, a basis is a set of elements `B = {b_0, ..., b_{n-1}}`
+/// in `A` such that, given any element `a`, we can find a unique set of `n` elements of `F`,
+/// `f_0, ..., f_{n - 1}` satisfying `a = f_0 b_0 + ... + f_{n - 1} b_{n - 1}`. Thus the choice
+/// of `B` gives rise to a natural linear map between the vector space `A` and the canonical
+/// `n` dimensional vector space `F^n`.
+///
+/// This allows us to map between elements of `A` and arrays of `n` elements of `F`.
+/// Clearly this map depends entirely on the choice of basis `B` which may change
+/// across versions of Plonky3.
+///
+/// The situation is slightly more complicated in cases where `F` is not a field but boils down
+/// to an identical description once we enforce that `A` is a free module over `F`.
+pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
+    /// The dimension of the vector space, i.e. the number of elements in
+    /// its basis.
+    const DIMENSION: usize;
+
+    /// Fixes a basis for the algebra `A` and uses this to
+    /// map an element of `A` to a slice of `DIMENSION` `F` elements.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
+    fn as_basis_coefficients_slice(&self) -> &[F];
+
+    /// Fixes a basis for the algebra `A` and uses this to
+    /// map `DIMENSION` `F` elements to an element of `A`.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
+    ///
+    /// The user should ensure that the slice has length `DIMENSION`. If
+    /// it is shorter than this, the function will panic, if it is longer the
+    /// extra elements will be ignored.
+    #[inline]
+    fn from_basis_coefficients_slice(slice: &[F]) -> Self {
+        Self::from_basis_coefficients_fn(|i| slice[i].clone())
+    }
+
+    /// Fixes a basis for the algebra `A` and uses this to
+    /// map `DIMENSION` `F` elements to an element of `A`. Similar
+    /// to `core:array::from_fn`, the `DIMENSION` `F` elements are
+    /// given by `Fn(0), ..., Fn(DIMENSION - 1)`.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
+    fn from_basis_coefficients_fn<Fn: FnMut(usize) -> F>(f: Fn) -> Self;
+
+    /// Fixes a basis for the algebra `A` and uses this to
+    /// map `DIMENSION` `F` elements to an element of `A`.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
+    ///
+    /// If the iterator contains more than `DIMENSION` many elements,
+    /// the rest will be ignored.
+    fn from_basis_coefficients_iter<I: Iterator<Item = F>>(iter: I) -> Self;
+
+    /// Given a basis for the Algebra `A`, return the i'th basis element.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
+    fn ith_basis_element(i: usize) -> Self {
+        Self::from_basis_coefficients_fn(|j| F::from_bool(i == j))
+    }
+}
+
+impl<F: PrimeCharacteristicRing> BasedVectorSpace<F> for F {
+    const DIMENSION: usize = 1;
+
+    #[inline]
+    fn as_basis_coefficients_slice(&self) -> &[F] {
+        slice::from_ref(self)
+    }
+
+    #[inline]
+    fn from_basis_coefficients_fn<Fn: FnMut(usize) -> F>(mut f: Fn) -> Self {
+        f(0)
+    }
+
+    #[inline]
+    fn from_basis_coefficients_iter<I: Iterator<Item = F>>(mut iter: I) -> Self {
+        iter.next().unwrap()
+    }
+}
+
+/// A ring implements `InjectiveMonomial<N>` if the algebraic function
+/// `f(x) = x^N` is an injective map on elements of the ring.
+///
+/// We do not enforce that this map be invertible as there are useful
+/// cases such as polynomials or symbolic expressions where no inverse exists.
+///
+/// However, if the ring is a field with order `q` or an array of such field elements,
+/// then `f(x) = x^N` will be injective if and only if it is invertible and so in
+/// such cases this monomial acts as a permutation. Moreover, this will occur
+/// exactly when `N` and `q - 1` are relatively prime i.e. `gcd(N, q - 1) = 1`.
+pub trait InjectiveMonomial<const N: u64>: PrimeCharacteristicRing {
+    /// Compute `x -> x^n` for a given `n > 1` such that this
+    /// map is injective.
+    fn injective_exp_n(&self) -> Self {
+        self.exp_const_u64::<N>()
+    }
+}
+
+/// A ring implements `PermutationMonomial<N>` if the algebraic function
+/// `f(x) = x^N` is invertible and thus acts as a permutation on elements of the ring.
+///
+/// In all cases we care about, this means that we can find another integer `K` such
+/// that `x = x^{NK}` for all elements of our ring.
+pub trait PermutationMonomial<const N: u64>: InjectiveMonomial<N> {
+    /// Compute `x -> x^K` for a given `K > 1` such that
+    /// `x^{NK} = x` for all elements `x`.
+    fn injective_exp_root_n(&self) -> Self;
+}
+
+/// A ring `R` implements `Algebra<F>` if there is an injective homomorphism
+///  from `F` into `R`; in particular only `F::ZERO` maps to `R::ZERO`.
+///
+/// For the most part, we will usually expect `F` to be a field but there
+/// are a few cases where it is handy to allow it to just be a ring. In
+/// particular, every ring naturally implements `Algebra<Self>`.
+///
+/// ### Mathematical Description
+///
+/// Let `x` and `y` denote arbitrary elements of `F`. Then
+/// we require that our map `from` has the properties:
+/// - Preserves Identity: `from(F::ONE) = R::ONE`
+/// - Commutes with Addition: `from(x + y) = from(x) + from(y)`
+/// - Commutes with Multiplication: `from(x * y) = from(x) * from(y)`
+///
+/// Such maps are known as ring homomorphisms and are injective if the
+/// only element which maps to `R::ZERO` is `F::ZERO`.
+///
+/// The existence of this map makes `R` into an `F`-module and hence an `F`-algebra.
+/// If, additionally, `R` is a field, then this makes `R` a field extension of `F`.
+pub trait Algebra<F>:
+    PrimeCharacteristicRing
+    + From<F>
+    + Add<F, Output = Self>
+    + AddAssign<F>
+    + Sub<F, Output = Self>
+    + SubAssign<F>
+    + Mul<F, Output = Self>
+    + MulAssign<F>
+{
+}
+
+// Every ring is an algebra over itself.
+impl<R: PrimeCharacteristicRing> Algebra<R> for R {}
+
+/// A field `F`. This permits both modular fields `ℤ/p` along with their field extensions.
+///
+/// A ring is a field if every element `x` has a unique multiplicative inverse `x^{-1}`
+/// which satisfies `x * x^{-1} = F::ONE`.
 pub trait Field:
-    FieldAlgebra<F = Self>
+    Algebra<Self>
     + Packable
     + 'static
     + Copy
@@ -282,33 +458,17 @@ pub trait Field:
 {
     type Packing: PackedField<Scalar = Self>;
 
-    /// A generator of this field's entire multiplicative group.
+    /// A generator of this field's multiplicative group.
     const GENERATOR: Self;
 
+    /// Check if the given field element is equal to the unique additive identity (ZERO).
     fn is_zero(&self) -> bool {
         *self == Self::ZERO
     }
 
+    /// Check if the given field element is equal to the unique multiplicative identity (ONE).
     fn is_one(&self) -> bool {
         *self == Self::ONE
-    }
-
-    /// self / 2^exp
-    #[must_use]
-    #[inline]
-    fn div_2exp_u64(&self, exp: u64) -> Self {
-        *self / Self::TWO.exp_u64(exp)
-    }
-
-    /// Exponentiation by a `u64` power. This is similar to `exp_u64`, but more general in that it
-    /// can be used with `FieldAlgebra`s, not just this concrete field.
-    ///
-    /// The default implementation uses naive square and multiply. Implementations may want to
-    /// override this and handle certain powers with more optimal addition chains.
-    #[must_use]
-    #[inline]
-    fn exp_u64_generic<FA: FieldAlgebra<F = Self>>(val: FA, power: u64) -> FA {
-        exp_u64_by_squaring(val, power)
     }
 
     /// The multiplicative inverse of this field element, if it exists.
@@ -317,22 +477,48 @@ pub trait Field:
     #[must_use]
     fn try_inverse(&self) -> Option<Self>;
 
+    /// The multiplicative inverse of this field element.
+    ///
+    /// NOTE: The inverse of `0` is undefined and will error.
     #[must_use]
     fn inverse(&self) -> Self {
         self.try_inverse().expect("Tried to invert zero")
     }
 
-    /// Computes input/2.
-    /// Should be overwritten by most field implementations to use bitshifts.
+    /// The elementary function `halve(a) = a/2`.
+    ///
     /// Will error if the field characteristic is 2.
     #[must_use]
     fn halve(&self) -> Self {
-        let half = Self::TWO
-            .try_inverse()
-            .expect("Cannot divide by 2 in fields with characteristic 2");
+        // This should be overwritten by most field implementations.
+        let half = Self::from_prime_subfield(
+            Self::PrimeSubfield::TWO
+                .try_inverse()
+                .expect("Cannot divide by 2 in fields with characteristic 2"),
+        );
         *self * half
     }
 
+    /// Divide by a given power of two. `div_2exp_u64(a, exp) = a/2^exp`
+    ///
+    /// Will error if the field characteristic is 2.
+    #[must_use]
+    #[inline]
+    fn div_2exp_u64(&self, exp: u64) -> Self {
+        // This should be overwritten by most field implementations.
+        *self
+            * Self::from_prime_subfield(
+                Self::PrimeSubfield::TWO
+                    .try_inverse()
+                    .expect("Cannot divide by 2 in fields with characteristic 2")
+                    .exp_u64(exp),
+            )
+    }
+
+    /// The number of elements in the field.
+    ///
+    /// This will either be prime if the field is a PrimeField or a power of a
+    /// prime if the field is an extension field.
     fn order() -> BigUint;
 
     /// A list of (factor, exponent) pairs.
@@ -347,21 +533,49 @@ pub trait Field:
         factorizer.factor_counts(&n)
     }
 
+    /// The number of bits required to define an element of this field.
+    ///
+    /// Usually due to storage and practical reasons the memory size of
+    /// a field element will be a little larger than bits().
     #[inline]
     fn bits() -> usize {
         Self::order().bits() as usize
     }
 }
 
-pub trait PrimeField: Field + Ord {
+/// A field isomorphic to `ℤ/p` for some prime `p`.
+///
+/// There is a natural map from `ℤ` to `ℤ/p` which sends an integer `r` to its conjugacy class `[r]`.
+/// Canonically, each conjugacy class `[r]` can be represented by the unique integer `s` in `[0, p - 1)`
+/// satisfying `s = r mod p`. This however is often not the most convenient computational representation
+/// and so internal representations of field elements might differ from this and may change over time.
+pub trait PrimeField:
+    Field
+    + Ord
+    + QuotientMap<u8>
+    + QuotientMap<u16>
+    + QuotientMap<u32>
+    + QuotientMap<u64>
+    + QuotientMap<u128>
+    + QuotientMap<usize>
+    + QuotientMap<i8>
+    + QuotientMap<i16>
+    + QuotientMap<i32>
+    + QuotientMap<i64>
+    + QuotientMap<i128>
+    + QuotientMap<isize>
+{
+    /// Return the representative of `value` in canonical form
+    /// which lies in the range `0 <= x < self.order()`.
     fn as_canonical_biguint(&self) -> BigUint;
 }
 
-/// A prime field of order less than `2^64`.
+/// A prime field `ℤ/p` with order, `p < 2^64`.
 pub trait PrimeField64: PrimeField {
     const ORDER_U64: u64;
 
-    /// Return the representative of `value` that is less than `ORDER_U64`.
+    /// Return the representative of `value` in canonical form
+    /// which lies in the range `0 <= x < ORDER_U64`.
     fn as_canonical_u64(&self) -> u64;
 
     /// Convert a field element to a `u64` such that any two field elements
@@ -375,11 +589,12 @@ pub trait PrimeField64: PrimeField {
     }
 }
 
-/// A prime field of order less than `2^32`.
+/// A prime field `ℤ/p` with order `p < 2^32`.
 pub trait PrimeField32: PrimeField64 {
     const ORDER_U32: u32;
 
-    /// Return the representative of `value` that is less than `ORDER_U32`.
+    /// Return the representative of `value` in canonical form
+    /// which lies in the range `0 <= x < ORDER_U64`.
     fn as_canonical_u32(&self) -> u32;
 
     /// Convert a field element to a `u32` such that any two field elements
@@ -393,145 +608,33 @@ pub trait PrimeField32: PrimeField64 {
     }
 }
 
-/// A commutative algebra over an extension field.
+/// A field `EF` which is also an algebra over a field `F`.
 ///
-/// Mathematically, this trait captures a slightly more interesting structure than the above one liner.
-/// As implemented here, A FieldExtensionAlgebra `FEA` over and extension field `EF` is
-/// really the result of applying extension of scalars to a FieldAlgebra `FA` to lift `FA`
-/// from an algebra over `F` to an algebra over `EF` and so `FEA = EF ⊗ FA` where the tensor
-/// product is over `F`.
-pub trait FieldExtensionAlgebra<Base: FieldAlgebra>:
-    FieldAlgebra
-    + From<Base>
-    + Add<Base, Output = Self>
-    + AddAssign<Base>
-    + Sub<Base, Output = Self>
-    + SubAssign<Base>
-    + Mul<Base, Output = Self>
-    + MulAssign<Base>
-{
-    const D: usize;
+/// This provides a couple of convenience methods on top of the
+/// standard methods provided by `Field`, `Algebra<F>` and `BasedVectorSpace<F>`.
+///
+/// It also provides a type which handles packed vectors of extension field elements.
+pub trait ExtensionField<Base: Field>: Field + Algebra<Base> + BasedVectorSpace<Base> {
+    type ExtensionPacking: PackedFieldExtension<Base, Self> + 'static + Copy + Send + Sync;
 
-    fn from_base(b: Base) -> Self;
+    /// Determine if the given element lies in the base field.
+    fn is_in_basefield(&self) -> bool;
 
-    /// Suppose this field extension is represented by the quotient
-    /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
-    /// polynomial of degree `D`. This function takes a slice `bs` of
-    /// length at exactly D, and constructs the field element
-    /// \sum_i bs[i] * X^i.
-    ///
-    /// NB: The value produced by this function fundamentally depends
-    /// on the choice of irreducible polynomial f. Care must be taken
-    /// to ensure portability if these values might ever be passed to
-    /// (or rederived within) another compilation environment where a
-    /// different f might have been used.
-    fn from_base_slice(bs: &[Base]) -> Self;
-
-    /// Similar to `core:array::from_fn`, with the same caveats as
-    /// `from_base_slice`.
-    fn from_base_fn<F: FnMut(usize) -> Base>(f: F) -> Self;
-    fn from_base_iter<I: Iterator<Item = Base>>(iter: I) -> Self;
-
-    /// Suppose this field extension is represented by the quotient
-    /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
-    /// polynomial of degree `D`. This function takes a field element
-    /// \sum_i bs[i] * X^i and returns the coefficients as a slice
-    /// `bs` of length at most D containing, from lowest degree to
-    /// highest.
-    ///
-    /// NB: The value produced by this function fundamentally depends
-    /// on the choice of irreducible polynomial f. Care must be taken
-    /// to ensure portability if these values might ever be passed to
-    /// (or rederived within) another compilation environment where a
-    /// different f might have been used.
-    fn as_base_slice(&self) -> &[Base];
-
-    /// Suppose this field extension is represented by the quotient
-    /// ring B[X]/(f(X)) where B is `Base` and f is an irreducible
-    /// polynomial of degree `D`. This function returns the field
-    /// element `X^exponent` if `exponent < D` and panics otherwise.
-    /// (The fact that f is not known at the point that this function
-    /// is defined prevents implementing exponentiation of higher
-    /// powers since the reduction cannot be performed.)
-    ///
-    /// NB: The value produced by this function fundamentally depends
-    /// on the choice of irreducible polynomial f. Care must be taken
-    /// to ensure portability if these values might ever be passed to
-    /// (or rederived within) another compilation environment where a
-    /// different f might have been used.
-    fn monomial(exponent: usize) -> Self {
-        assert!(exponent < Self::D, "requested monomial of too high degree");
-        let mut vec = vec![Base::ZERO; Self::D];
-        vec[exponent] = Base::ONE;
-        Self::from_base_slice(&vec)
-    }
+    /// If the element lies in the base field project it down.
+    /// Otherwise return None.
+    fn as_base(&self) -> Option<Base>;
 }
 
-pub trait ExtensionField<Base: Field>: Field + FieldExtensionAlgebra<Base> {
-    type ExtensionPacking: FieldExtensionAlgebra<Base::Packing, F = Self>
-        + 'static
-        + Copy
-        + Send
-        + Sync;
-
-    #[inline(always)]
-    fn is_in_basefield(&self) -> bool {
-        self.as_base_slice()[1..].iter().all(Field::is_zero)
-    }
-
-    fn as_base(&self) -> Option<Base> {
-        self.is_in_basefield().then(|| self.as_base_slice()[0])
-    }
-
-    /// Construct an iterator which returns powers of `self` packed into `ExtensionPacking` elements.
-    ///
-    /// E.g. if `PACKING::WIDTH = 4` this returns the elements:
-    /// `[self^0, self^1, self^2, self^3], [self^4, self^5, self^6, self^7], ...`.
-    fn ext_powers_packed(&self) -> Powers<Self::ExtensionPacking> {
-        let powers = self.powers().take(Base::Packing::WIDTH + 1).collect_vec();
-        // Transpose first WIDTH powers
-        let current = Self::ExtensionPacking::from_base_fn(|i| {
-            Base::Packing::from_fn(|j| powers[j].as_base_slice()[i])
-        });
-        // Broadcast self^WIDTH
-        let multiplier = Self::ExtensionPacking::from_base_fn(|i| {
-            Base::Packing::from(powers[Base::Packing::WIDTH].as_base_slice()[i])
-        });
-
-        Powers {
-            base: multiplier,
-            current,
-        }
-    }
-}
-
+// Every field is trivially a one dimensional extension over itself.
 impl<F: Field> ExtensionField<F> for F {
     type ExtensionPacking = F::Packing;
-}
 
-impl<FA: FieldAlgebra> FieldExtensionAlgebra<FA> for FA {
-    const D: usize = 1;
-
-    fn from_base(b: FA) -> Self {
-        b
+    fn is_in_basefield(&self) -> bool {
+        true
     }
 
-    fn from_base_slice(bs: &[FA]) -> Self {
-        assert_eq!(bs.len(), 1);
-        bs[0].clone()
-    }
-
-    fn from_base_iter<I: Iterator<Item = FA>>(mut iter: I) -> Self {
-        iter.next().unwrap()
-    }
-
-    fn from_base_fn<F: FnMut(usize) -> FA>(mut f: F) -> Self {
-        f(0)
-    }
-
-    #[inline(always)]
-    fn as_base_slice(&self) -> &[FA] {
-        slice::from_ref(self)
+    fn as_base(&self) -> Option<F> {
+        Some(*self)
     }
 }
 
@@ -554,10 +657,10 @@ pub struct Powers<F> {
     pub current: F,
 }
 
-impl<FA: FieldAlgebra> Iterator for Powers<FA> {
-    type Item = FA;
+impl<R: PrimeCharacteristicRing> Iterator for Powers<R> {
+    type Item = R;
 
-    fn next(&mut self) -> Option<FA> {
+    fn next(&mut self) -> Option<R> {
         let result = self.current.clone();
         self.current *= self.base.clone();
         Some(result)

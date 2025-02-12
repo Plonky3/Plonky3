@@ -13,9 +13,7 @@
 //! [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/2^7, 1/2^9, 1/2^27, -1/2^8, -1/4, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^27]
 //! See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
 
-use core::ops::Mul;
-
-use p3_field::{Field, FieldAlgebra, PrimeField32};
+use p3_field::{Algebra, Field, PrimeCharacteristicRing, PrimeField32};
 use p3_monty_31::{
     GenericPoseidon2LinearLayersMonty31, InternalLayerBaseParameters, InternalLayerParameters,
     MontyField31, Poseidon2ExternalLayerMonty31, Poseidon2InternalLayerMonty31,
@@ -41,7 +39,7 @@ const BABYBEAR_S_BOX_DEGREE: u64 = 7;
 /// It acts on arrays of the form either `[BabyBear::Packing; WIDTH]` or `[BabyBear; WIDTH]`. For speed purposes,
 /// wherever possible, input arrays should of the form `[BabyBear::Packing; WIDTH]`.
 pub type Poseidon2BabyBear<const WIDTH: usize> = Poseidon2<
-    <BabyBear as Field>::Packing,
+    BabyBear,
     Poseidon2ExternalLayerBabyBear<WIDTH>,
     Poseidon2InternalLayerBabyBear<WIDTH>,
     WIDTH,
@@ -50,7 +48,7 @@ pub type Poseidon2BabyBear<const WIDTH: usize> = Poseidon2<
 
 /// An implementation of the matrix multiplications in the internal and external layers of Poseidon2.
 ///
-/// This can act on [FA; WIDTH] for any FieldAlgebra which implements multiplication by BabyBear field elements.
+/// This can act on `[A; WIDTH]` for any ring implementing `Algebra<BabyBear>`.
 /// If you have either `[BabyBear::Packing; WIDTH]` or `[BabyBear; WIDTH]` it will be much faster
 /// to use `Poseidon2BabyBear<WIDTH>` instead of building a Poseidon2 permutation using this.
 pub type GenericPoseidon2LinearLayersBabyBear =
@@ -152,11 +150,8 @@ impl InternalLayerBaseParameters<BabyBearParameters, 16> for BabyBearInternalLay
         state[15] = sum - state[15];
     }
 
-    fn generic_internal_linear_layer<FA>(state: &mut [FA; 16])
-    where
-        FA: FieldAlgebra + Mul<BabyBear, Output = FA>,
-    {
-        let part_sum: FA = state[1..].iter().cloned().sum();
+    fn generic_internal_linear_layer<A: Algebra<BabyBear>>(state: &mut [A; 16]) {
+        let part_sum: A = state[1..].iter().cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();
 
         // The first three diagonal elements are -2, 1, 2 so we do something custom.
@@ -166,7 +161,7 @@ impl InternalLayerBaseParameters<BabyBearParameters, 16> for BabyBearInternalLay
 
         // For the remaining elements we use multiplication.
         // This could probably be improved slightly by making use of the
-        // mul_2exp_u64 and div_2exp_u64 but this would involve porting div_2exp_u64 to FieldAlgebra.
+        // mul_2exp_u64 and div_2exp_u64 but this would involve porting div_2exp_u64 to PrimeCharacteristicRing.
         state
             .iter_mut()
             .zip(INTERNAL_DIAG_MONTY_16)
@@ -230,11 +225,8 @@ impl InternalLayerBaseParameters<BabyBearParameters, 24> for BabyBearInternalLay
         state[23] = sum - state[23];
     }
 
-    fn generic_internal_linear_layer<FA>(state: &mut [FA; 24])
-    where
-        FA: FieldAlgebra + Mul<BabyBear, Output = FA>,
-    {
-        let part_sum: FA = state[1..].iter().cloned().sum();
+    fn generic_internal_linear_layer<A: Algebra<BabyBear>>(state: &mut [A; 24]) {
+        let part_sum: A = state[1..].iter().cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();
 
         // The first three diagonal elements are -2, 1, 2 so we do something custom.
@@ -244,7 +236,7 @@ impl InternalLayerBaseParameters<BabyBearParameters, 24> for BabyBearInternalLay
 
         // For the remaining elements we use multiplication.
         // This could probably be improved slightly by making use of the
-        // mul_2exp_u64 and div_2exp_u64 but this would involve porting div_2exp_u64 to FieldAlgebra.
+        // mul_2exp_u64 and div_2exp_u64 but this would involve porting div_2exp_u64 to PrimeCharacteristicRing.
         state
             .iter_mut()
             .zip(INTERNAL_DIAG_MONTY_24)
@@ -260,7 +252,6 @@ impl InternalLayerParameters<BabyBearParameters, 24> for BabyBearInternalLayerPa
 
 #[cfg(test)]
 mod tests {
-    use p3_field::FieldAlgebra;
     use p3_symmetric::Permutation;
     use rand::{Rng, SeedableRng};
     use rand_xoshiro::Xoroshiro128Plus;
@@ -278,19 +269,17 @@ mod tests {
     /// vector([BB.random_element() for t in range(16)]).
     #[test]
     fn test_poseidon2_width_16_random() {
-        let mut input: [F; 16] = [
+        let mut input: [F; 16] = BabyBear::new_array([
             894848333, 1437655012, 1200606629, 1690012884, 71131202, 1749206695, 1717947831,
             120589055, 19776022, 42382981, 1831865506, 724844064, 171220207, 1299207443, 227047920,
             1783754913,
-        ]
-        .map(F::from_canonical_u32);
+        ]);
 
-        let expected: [F; 16] = [
+        let expected: [F; 16] = BabyBear::new_array([
             1255099308, 941729227, 93609187, 112406640, 492658670, 1824768948, 812517469,
             1055381989, 670973674, 1407235524, 891397172, 1003245378, 1381303998, 1564172645,
             1399931635, 1005462965,
-        ]
-        .map(F::from_canonical_u32);
+        ]);
 
         let mut rng = Xoroshiro128Plus::seed_from_u64(1);
         let perm = Poseidon2BabyBear::new_from_rng_128(&mut rng);
@@ -305,21 +294,19 @@ mod tests {
     /// vector([BB.random_element() for t in range(24)]).
     #[test]
     fn test_poseidon2_width_24_random() {
-        let mut input: [F; 24] = [
+        let mut input: [F; 24] = BabyBear::new_array([
             886409618, 1327899896, 1902407911, 591953491, 648428576, 1844789031, 1198336108,
             355597330, 1799586834, 59617783, 790334801, 1968791836, 559272107, 31054313,
             1042221543, 474748436, 135686258, 263665994, 1962340735, 1741539604, 449439011,
             1131357108, 50869465, 1589724894,
-        ]
-        .map(F::from_canonical_u32);
+        ]);
 
-        let expected: [F; 24] = [
+        let expected: [F; 24] = BabyBear::new_array([
             249424342, 562262148, 757431114, 354243402, 57767055, 976981973, 1393169022,
             1774550827, 1527742125, 1019514605, 1776327602, 266236737, 1412355182, 1070239213,
             426390978, 1775539440, 1527732214, 1101406020, 1417710778, 1699632661, 413672313,
             820348291, 1067197851, 1669055675,
-        ]
-        .map(F::from_canonical_u32);
+        ]);
 
         let mut rng = Xoroshiro128Plus::seed_from_u64(1);
         let perm = Poseidon2BabyBear::new_from_rng_128(&mut rng);
@@ -333,8 +320,8 @@ mod tests {
     /// for a random input of width 16.
     #[test]
     fn test_generic_internal_linear_layer_16() {
-        let mut rng = rand::thread_rng();
-        let mut input1: [F; 16] = rng.gen();
+        let mut rng = rand::rng();
+        let mut input1: [F; 16] = rng.random();
         let mut input2 = input1;
 
         let part_sum: F = input1[1..].iter().cloned().sum();
@@ -352,8 +339,8 @@ mod tests {
     /// for a random input of width 24.
     #[test]
     fn test_generic_internal_linear_layer_24() {
-        let mut rng = rand::thread_rng();
-        let mut input1: [F; 24] = rng.gen();
+        let mut rng = rand::rng();
+        let mut input1: [F; 24] = rng.random();
         let mut input2 = input1;
 
         let part_sum: F = input1[1..].iter().cloned().sum();

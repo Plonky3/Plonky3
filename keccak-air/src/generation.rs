@@ -1,6 +1,8 @@
 use alloc::vec::Vec;
+use core::array;
+use core::mem::transmute;
 
-use p3_air::utils::{checked_andn, checked_xor};
+use p3_air::utils::{u64_to_16_bit_limbs, u64_to_bits_le};
 use p3_field::PrimeField64;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::iter::repeat;
@@ -8,14 +10,22 @@ use p3_maybe_rayon::prelude::*;
 use tracing::instrument;
 
 use crate::columns::{KeccakCols, NUM_KECCAK_COLS};
-use crate::constants::rc_value_limb;
-use crate::{BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS};
+use crate::{NUM_ROUNDS, R, RC, U64_LIMBS};
 
 // TODO: Take generic iterable
 #[instrument(name = "generate Keccak trace", skip_all)]
-pub fn generate_trace_rows<F: PrimeField64>(inputs: Vec<[u64; 25]>) -> RowMajorMatrix<F> {
+pub fn generate_trace_rows<F: PrimeField64>(
+    inputs: Vec<[u64; 25]>,
+    extra_capacity_bits: usize,
+) -> RowMajorMatrix<F> {
     let num_rows = (inputs.len() * NUM_ROUNDS).next_power_of_two();
-    let mut trace = RowMajorMatrix::new(F::zero_vec(num_rows * NUM_KECCAK_COLS), NUM_KECCAK_COLS);
+    let trace_length = num_rows * NUM_KECCAK_COLS;
+
+    // We allocate extra_capacity_bits now as this will be needed by the dft.
+    let mut long_trace = F::zero_vec(trace_length << extra_capacity_bits);
+    long_trace.truncate(trace_length);
+
+    let mut trace = RowMajorMatrix::new(long_trace, NUM_KECCAK_COLS);
     let (prefix, rows, suffix) = unsafe { trace.values.align_to_mut::<KeccakCols<F>>() };
     assert!(prefix.is_empty(), "Alignment should match");
     assert!(suffix.is_empty(), "Alignment should match");
@@ -37,32 +47,20 @@ pub fn generate_trace_rows<F: PrimeField64>(inputs: Vec<[u64; 25]>) -> RowMajorM
 
 /// `rows` will normally consist of 24 rows, with an exception for the final row.
 fn generate_trace_rows_for_perm<F: PrimeField64>(rows: &mut [KeccakCols<F>], input: [u64; 25]) {
-    // Populate the preimage for each row.
-    for row in rows.iter_mut() {
-        for y in 0..5 {
-            for x in 0..5 {
-                let input_xy = input[y * 5 + x];
-                for limb in 0..U64_LIMBS {
-                    row.preimage[y][x][limb] =
-                        F::from_canonical_u64((input_xy >> (16 * limb)) & 0xFFFF);
-                }
-            }
-        }
-    }
+    let mut current_state: [[u64; 5]; 5] = unsafe { transmute(input) };
+
+    let initial_state: [[[F; 4]; 5]; 5] =
+        array::from_fn(|y| array::from_fn(|x| u64_to_16_bit_limbs(current_state[x][y])));
 
     // Populate the round input for the first round.
-    for y in 0..5 {
-        for x in 0..5 {
-            let input_xy = input[y * 5 + x];
-            for limb in 0..U64_LIMBS {
-                rows[0].a[y][x][limb] = F::from_canonical_u64((input_xy >> (16 * limb)) & 0xFFFF);
-            }
-        }
-    }
+    rows[0].a = initial_state;
+    rows[0].preimage = initial_state;
 
-    generate_trace_row_for_round(&mut rows[0], 0);
+    generate_trace_row_for_round(&mut rows[0], 0, &mut current_state);
 
     for round in 1..rows.len() {
+        rows[round].preimage = initial_state;
+
         // Copy previous row's output to next row's input.
         for y in 0..5 {
             for x in 0..5 {
@@ -72,92 +70,68 @@ fn generate_trace_rows_for_perm<F: PrimeField64>(rows: &mut [KeccakCols<F>], inp
             }
         }
 
-        generate_trace_row_for_round(&mut rows[round], round);
+        generate_trace_row_for_round(&mut rows[round], round, &mut current_state);
     }
 }
 
-fn generate_trace_row_for_round<F: PrimeField64>(row: &mut KeccakCols<F>, round: usize) {
+fn generate_trace_row_for_round<F: PrimeField64>(
+    row: &mut KeccakCols<F>,
+    round: usize,
+    current_state: &mut [[u64; 5]; 5],
+) {
     row.step_flags[round] = F::ONE;
 
     // Populate C[x] = xor(A[x, 0], A[x, 1], A[x, 2], A[x, 3], A[x, 4]).
-    for x in 0..5 {
-        for z in 0..64 {
-            let limb = z / BITS_PER_LIMB;
-            let bit_in_limb = z % BITS_PER_LIMB;
-            let a = (0..5).map(|y| {
-                let a_limb = row.a[y][x][limb].as_canonical_u64() as u16;
-                ((a_limb >> bit_in_limb) & 1) != 0
-            });
-            row.c[x][z] = F::from_bool(a.fold(false, |acc, x| acc ^ x));
-        }
+    let state_c: [u64; 5] = current_state.map(|row| row.iter().fold(0, |acc, y| acc ^ y));
+    for (x, elem) in state_c.iter().enumerate() {
+        row.c[x] = u64_to_bits_le(*elem);
     }
 
     // Populate C'[x, z] = xor(C[x, z], C[x - 1, z], C[x + 1, z - 1]).
-    for x in 0..5 {
-        for z in 0..64 {
-            row.c_prime[x][z] = checked_xor([
-                row.c[x][z],
-                row.c[(x + 4) % 5][z],
-                row.c[(x + 1) % 5][(z + 63) % 64],
-            ]);
-        }
+    let state_c_prime: [u64; 5] =
+        array::from_fn(|x| state_c[x] ^ state_c[(x + 4) % 5] ^ state_c[(x + 1) % 5].rotate_left(1));
+    for (x, elem) in state_c_prime.iter().enumerate() {
+        row.c_prime[x] = u64_to_bits_le(*elem);
     }
 
     // Populate A'. To avoid shifting indices, we rewrite
     //     A'[x, y, z] = xor(A[x, y, z], C[x - 1, z], C[x + 1, z - 1])
     // as
     //     A'[x, y, z] = xor(A[x, y, z], C[x, z], C'[x, z]).
-    for x in 0..5 {
-        for y in 0..5 {
-            for z in 0..64 {
-                let limb = z / BITS_PER_LIMB;
-                let bit_in_limb = z % BITS_PER_LIMB;
-                let a_limb = row.a[y][x][limb].as_canonical_u64() as u16;
-                let a_bit = F::from_bool(((a_limb >> bit_in_limb) & 1) != 0);
-                row.a_prime[y][x][z] = checked_xor([a_bit, row.c[x][z], row.c_prime[x][z]]);
-            }
+    *current_state =
+        array::from_fn(|i| array::from_fn(|j| current_state[i][j] ^ state_c[i] ^ state_c_prime[i]));
+    for (x, x_row) in current_state.iter().enumerate() {
+        for (y, elem) in x_row.iter().enumerate() {
+            row.a_prime[y][x] = u64_to_bits_le(*elem);
         }
     }
+
+    // Rotate the current state to get the B array.
+    *current_state = array::from_fn(|i| {
+        array::from_fn(|j| {
+            let new_i = (i + 3 * j) % 5;
+            let new_j = i;
+            current_state[new_i][new_j].rotate_left(R[new_i][new_j] as u32)
+        })
+    });
 
     // Populate A''.
     // A''[x, y] = xor(B[x, y], andn(B[x + 1, y], B[x + 2, y])).
-    for y in 0..5 {
-        for x in 0..5 {
-            for limb in 0..U64_LIMBS {
-                row.a_prime_prime[y][x][limb] = (limb * BITS_PER_LIMB..(limb + 1) * BITS_PER_LIMB)
-                    .rev()
-                    .fold(F::ZERO, |acc, z| {
-                        let bit = checked_xor([
-                            row.b(x, y, z),
-                            checked_andn(row.b((x + 1) % 5, y, z), row.b((x + 2) % 5, y, z)),
-                        ]);
-                        acc.double() + bit
-                    });
-            }
+    *current_state = array::from_fn(|i| {
+        array::from_fn(|j| {
+            current_state[i][j] ^ ((!current_state[(i + 1) % 5][j]) & current_state[(i + 2) % 5][j])
+        })
+    });
+    for (x, x_row) in current_state.iter().enumerate() {
+        for (y, elem) in x_row.iter().enumerate() {
+            row.a_prime_prime[y][x] = u64_to_16_bit_limbs(*elem);
         }
     }
 
-    // For the XOR, we split A''[0, 0] to bits.
-    let mut val = 0;
-    for limb in 0..U64_LIMBS {
-        let val_limb = row.a_prime_prime[0][0][limb].as_canonical_u64();
-        val |= val_limb << (limb * BITS_PER_LIMB);
-    }
-    let val_bits: Vec<bool> = (0..64)
-        .scan(val, |acc, _| {
-            let bit = (*acc & 1) != 0;
-            *acc >>= 1;
-            Some(bit)
-        })
-        .collect();
-    for (i, bit) in row.a_prime_prime_0_0_bits.iter_mut().enumerate() {
-        *bit = F::from_bool(val_bits[i]);
-    }
+    row.a_prime_prime_0_0_bits = u64_to_bits_le(current_state[0][0]);
 
     // A''[0, 0] is additionally xor'd with RC.
-    for limb in 0..U64_LIMBS {
-        let rc_lo = rc_value_limb(round, limb);
-        row.a_prime_prime_prime_0_0_limbs[limb] =
-            F::from_canonical_u16(row.a_prime_prime[0][0][limb].as_canonical_u64() as u16 ^ rc_lo);
-    }
+    current_state[0][0] ^= RC[round];
+
+    row.a_prime_prime_prime_0_0_limbs = u64_to_16_bit_limbs(current_state[0][0]);
 }

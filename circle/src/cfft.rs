@@ -280,7 +280,7 @@ mod tests {
     use itertools::iproduct;
     use p3_field::extension::BinomialExtensionField;
     use p3_mersenne_31::Mersenne31;
-    use rand::{random, thread_rng};
+    use rand::{random, rng};
 
     use super::*;
 
@@ -290,9 +290,9 @@ mod tests {
     #[test]
     fn test_cfft_icfft() {
         for (log_n, width) in iproduct!(2..5, [1, 4, 11]) {
-            let shift = Point::generator(F::CIRCLE_TWO_ADICITY) * random();
+            let shift = Point::generator(F::CIRCLE_TWO_ADICITY) * (random::<u16>() as usize);
             let domain = CircleDomain::<F>::new(log_n, shift);
-            let trace = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << log_n, width);
+            let trace = RowMajorMatrix::<F>::rand(&mut rng(), 1 << log_n, width);
             let coeffs = CircleEvaluations::from_natural_order(domain, trace.clone()).interpolate();
             assert_eq!(
                 CircleEvaluations::evaluate(domain, coeffs.clone())
@@ -316,7 +316,7 @@ mod tests {
         for (log_n, log_blowup) in iproduct!(2..5, [1, 2, 3]) {
             let evals = CircleEvaluations::<F>::from_natural_order(
                 CircleDomain::standard(log_n),
-                RowMajorMatrix::rand(&mut thread_rng(), 1 << log_n, 11),
+                RowMajorMatrix::rand(&mut rng(), 1 << log_n, 11),
             );
             let lde = evals
                 .clone()
@@ -339,7 +339,7 @@ mod tests {
         for (log_n, width) in iproduct!(2..5, [1, 4, 11]) {
             let evals = CircleEvaluations::<F>::from_natural_order(
                 CircleDomain::standard(log_n),
-                RowMajorMatrix::rand(&mut thread_rng(), 1 << log_n, width),
+                RowMajorMatrix::rand(&mut rng(), 1 << log_n, width),
             );
 
             let pt = Point::<EF>::from_projective_line(random());
@@ -358,7 +358,7 @@ mod tests {
         for (log_n, width, log_blowup) in iproduct!(2..8, [1, 4, 11], [1, 2]) {
             let evals = CircleEvaluations::<F>::from_natural_order(
                 CircleDomain::standard(log_n),
-                RowMajorMatrix::rand(&mut thread_rng(), 1 << log_n, width),
+                RowMajorMatrix::rand(&mut rng(), 1 << log_n, width),
             );
             let lde = evals
                 .clone()

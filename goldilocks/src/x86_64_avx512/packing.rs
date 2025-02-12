@@ -6,9 +6,13 @@ use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{Field, FieldAlgebra, PackedField, PackedFieldPow2, PackedValue, PrimeField64};
+use p3_field::exponentiation::exp_10540996611094048183;
+use p3_field::{
+    Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
+    PermutationMonomial, PrimeCharacteristicRing, PrimeField64,
+};
 use p3_util::convert_vec;
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
 
 use crate::Goldilocks;
@@ -155,8 +159,8 @@ impl Product for PackedGoldilocksAVX512 {
     }
 }
 
-impl FieldAlgebra for PackedGoldilocksAVX512 {
-    type F = Goldilocks;
+impl PrimeCharacteristicRing for PackedGoldilocksAVX512 {
+    type PrimeSubfield = Goldilocks;
 
     const ZERO: Self = Self([Goldilocks::ZERO; WIDTH]);
     const ONE: Self = Self([Goldilocks::ONE; WIDTH]);
@@ -164,42 +168,8 @@ impl FieldAlgebra for PackedGoldilocksAVX512 {
     const NEG_ONE: Self = Self([Goldilocks::NEG_ONE; WIDTH]);
 
     #[inline]
-    fn from_f(f: Self::F) -> Self {
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f.into()
-    }
-
-    #[inline]
-    fn from_bool(b: bool) -> Self {
-        Goldilocks::from_bool(b).into()
-    }
-    #[inline]
-    fn from_canonical_u8(n: u8) -> Self {
-        Goldilocks::from_canonical_u8(n).into()
-    }
-    #[inline]
-    fn from_canonical_u16(n: u16) -> Self {
-        Goldilocks::from_canonical_u16(n).into()
-    }
-    #[inline]
-    fn from_canonical_u32(n: u32) -> Self {
-        Goldilocks::from_canonical_u32(n).into()
-    }
-    #[inline]
-    fn from_canonical_u64(n: u64) -> Self {
-        Goldilocks::from_canonical_u64(n).into()
-    }
-    #[inline]
-    fn from_canonical_usize(n: usize) -> Self {
-        Goldilocks::from_canonical_usize(n).into()
-    }
-
-    #[inline]
-    fn from_wrapped_u32(n: u32) -> Self {
-        Goldilocks::from_wrapped_u32(n).into()
-    }
-    #[inline]
-    fn from_wrapped_u64(n: u64) -> Self {
-        Goldilocks::from_wrapped_u64(n).into()
     }
 
     #[inline]
@@ -210,7 +180,23 @@ impl FieldAlgebra for PackedGoldilocksAVX512 {
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { convert_vec(Self::F::zero_vec(len * WIDTH)) }
+        unsafe { convert_vec(Goldilocks::zero_vec(len * WIDTH)) }
+    }
+}
+
+impl Algebra<Goldilocks> for PackedGoldilocksAVX512 {}
+
+// Degree of the smallest permutation polynomial for Goldilocks.
+//
+// As p - 1 = 2^32 * 3 * 5 * 17 * ... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 7.
+impl InjectiveMonomial<7> for PackedGoldilocksAVX512 {}
+
+impl PermutationMonomial<7> for PackedGoldilocksAVX512 {
+    /// In the field `Goldilocks`, `a^{1/7}` is equal to a^{10540996611094048183}.
+    ///
+    /// This follows from the calculation `7*10540996611094048183 = 4*(2^64 - 2**32) + 1 = 1 mod (p - 1)`.
+    fn injective_exp_root_n(&self) -> Self {
+        exp_10540996611094048183(*self)
     }
 }
 
@@ -306,10 +292,10 @@ impl Sum for PackedGoldilocksAVX512 {
     }
 }
 
-impl Distribution<PackedGoldilocksAVX512> for Standard {
+impl Distribution<PackedGoldilocksAVX512> for StandardUniform {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedGoldilocksAVX512 {
-        PackedGoldilocksAVX512(rng.gen())
+        PackedGoldilocksAVX512(rng.random())
     }
 }
 

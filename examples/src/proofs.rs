@@ -1,88 +1,94 @@
 use std::fmt::Debug;
-use std::marker::PhantomData;
 
 use p3_challenger::{DuplexChallenger, SerializingChallenger32};
+use p3_circle::CirclePcs;
 use p3_commit::ExtensionMmcs;
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{ExtensionField, PrimeField32, TwoAdicField};
+use p3_field::extension::{BinomialExtensionField, ComplexExtendable};
+use p3_field::{ExtensionField, Field, PrimeField32, PrimeField64, TwoAdicField};
 use p3_fri::{create_benchmark_fri_config, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
-use p3_merkle_tree::MerkleTreeMmcs;
-use p3_poseidon2::GenericPoseidon2LinearLayers;
-use p3_symmetric::{
-    CompressionFunctionFromHasher, CryptographicPermutation, PaddingFreeSponge,
-    SerializingHasher32To64, TruncatedPermutation,
-};
-use p3_uni_stark::{prove, verify, StarkConfig, SymbolicExpression};
-use rand::distributions::Standard;
+use p3_mersenne_31::Mersenne31;
+use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHasher32To64};
+use p3_uni_stark::{prove, verify, Proof, StarkConfig, StarkGenericConfig};
+use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 
-use crate::airs::ProofObjective;
+use crate::airs::ExampleHashAir;
+use crate::types::{
+    KeccakCircleStarkConfig, KeccakCompressionFunction, KeccakMerkleMmcs, KeccakStarkConfig,
+    Poseidon2CircleStarkConfig, Poseidon2Compression, Poseidon2MerkleMmcs, Poseidon2Sponge,
+    Poseidon2StarkConfig,
+};
+
+/// Produce a MerkleTreeMmcs which uses the KeccakF permutation.
+fn get_keccak_mmcs<F: Field>() -> KeccakMerkleMmcs<F> {
+    let u64_hash = PaddingFreeSponge::<KeccakF, 25, 17, 4>::new(KeccakF {});
+
+    let field_hash = SerializingHasher32To64::new(u64_hash);
+
+    let compress = KeccakCompressionFunction::new(u64_hash);
+
+    KeccakMerkleMmcs::new(field_hash, compress)
+}
+
+/// Produce a MerkleTreeMmcs from a pair of cryptographic field permutations.
+///
+/// The first permutation will be used for compression and the second for more sponge hashing.
+/// Currently this is only intended to be used with a pair of Poseidon2 hashes of with 16 and 24
+/// but this can easily be generalised in future if we desire.
+fn get_poseidon2_mmcs<
+    F: Field,
+    Perm16: CryptographicPermutation<[F; 16]> + CryptographicPermutation<[F::Packing; 16]>,
+    Perm24: CryptographicPermutation<[F; 24]> + CryptographicPermutation<[F::Packing; 24]>,
+>(
+    perm16: Perm16,
+    perm24: Perm24,
+) -> Poseidon2MerkleMmcs<F, Perm16, Perm24> {
+    let hash = Poseidon2Sponge::new(perm24.clone());
+
+    let compress = Poseidon2Compression::new(perm16.clone());
+
+    Poseidon2MerkleMmcs::<F, _, _>::new(hash, compress)
+}
 
 /// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.
 ///
 /// This allows the user to choose:
 /// - The Field
-/// - The Proof Goal (Choice of Hash function and number of hashes to prove)
+/// - The Proof Goal (Choice of both hash function and desired number of hashes to prove)
 /// - The DFT
 #[inline]
-pub fn prove_hashes_keccak<
+pub fn prove_monty31_keccak<
     F: PrimeField32 + TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
     DFT: TwoAdicSubgroupDft<F>,
-    LinearLayers: GenericPoseidon2LinearLayers<F, P2_WIDTH>
-        + GenericPoseidon2LinearLayers<SymbolicExpression<F>, P2_WIDTH>
-        + GenericPoseidon2LinearLayers<F::Packing, P2_WIDTH>
-        + GenericPoseidon2LinearLayers<EF, P2_WIDTH>,
-    const P2_WIDTH: usize,
-    const P2_SBOX_DEGREE: u64,
-    const P2_SBOX_REGISTERS: usize,
-    const P2_PARTIAL_ROUNDS: usize,
-    const P2_HALF_FULL_ROUNDS: usize,
-    const P2_VECTOR_LEN: usize,
+    PG: ExampleHashAir<F, KeccakStarkConfig<F, EF, DFT>>,
 >(
-    proof_goal: ProofObjective<
-        F,
-        LinearLayers,
-        P2_WIDTH,
-        P2_SBOX_DEGREE,
-        P2_SBOX_REGISTERS,
-        P2_HALF_FULL_ROUNDS,
-        P2_PARTIAL_ROUNDS,
-        P2_VECTOR_LEN,
-    >,
+    proof_goal: PG,
     dft: DFT,
     num_hashes: usize,
-    _ef: PhantomData<EF>, // A simple workaround allowing the compiler to determine all generic parameters
 ) -> Result<(), impl Debug>
 where
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
-    let byte_hash = Keccak256Hash {};
-    let u64_hash = PaddingFreeSponge::<KeccakF, 25, 17, 4>::new(KeccakF {});
-    let field_hash = SerializingHasher32To64::new(u64_hash);
-
-    let compress = CompressionFunctionFromHasher::<_, 2, 4>::new(u64_hash);
-
-    let val_mmcs =
-        MerkleTreeMmcs::<[F; p3_keccak::VECTOR_LEN], [u64; p3_keccak::VECTOR_LEN], _, _, 4>::new(
-            field_hash, compress,
-        );
+    let val_mmcs = get_keccak_mmcs();
 
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
-
-    let trace = proof_goal.generate_trace_rows(num_hashes);
-
     let fri_config = create_benchmark_fri_config(challenge_mmcs);
+
+    let trace = proof_goal.generate_trace_rows(num_hashes, fri_config.log_blowup);
 
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_config);
 
-    let config = StarkConfig::new(pcs);
+    let config = KeccakStarkConfig::new(pcs);
 
-    let mut proof_challenger = SerializingChallenger32::from_hasher(vec![], byte_hash);
-    let mut verif_challenger = SerializingChallenger32::from_hasher(vec![], byte_hash);
+    let mut proof_challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
+    let mut verif_challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
 
     let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
+    report_proof_size(&proof);
+
     verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
 }
 
@@ -93,65 +99,126 @@ where
 /// - The Proof Goal (Choice of Hash function and number of hashes to prove)
 /// - The DFT
 #[inline]
-pub fn prove_hashes_poseidon2<
+pub fn prove_monty31_poseidon2<
     F: PrimeField32 + TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
     DFT: TwoAdicSubgroupDft<F>,
-    LinearLayers: GenericPoseidon2LinearLayers<F, P2_WIDTH>
-        + GenericPoseidon2LinearLayers<SymbolicExpression<F>, P2_WIDTH>
-        + GenericPoseidon2LinearLayers<F::Packing, P2_WIDTH>
-        + GenericPoseidon2LinearLayers<EF, P2_WIDTH>,
     Perm16: CryptographicPermutation<[F; 16]> + CryptographicPermutation<[F::Packing; 16]>,
     Perm24: CryptographicPermutation<[F; 24]> + CryptographicPermutation<[F::Packing; 24]>,
-    const P2_WIDTH: usize,
-    const P2_SBOX_DEGREE: u64,
-    const P2_SBOX_REGISTERS: usize,
-    const P2_PARTIAL_ROUNDS: usize,
-    const P2_HALF_FULL_ROUNDS: usize,
-    const P2_VECTOR_LEN: usize,
+    PG: ExampleHashAir<F, Poseidon2StarkConfig<F, EF, DFT, Perm16, Perm24>>,
 >(
-    proof_goal: ProofObjective<
-        F,
-        LinearLayers,
-        P2_WIDTH,
-        P2_SBOX_DEGREE,
-        P2_SBOX_REGISTERS,
-        P2_HALF_FULL_ROUNDS,
-        P2_PARTIAL_ROUNDS,
-        P2_VECTOR_LEN,
-    >,
+    proof_goal: PG,
     dft: DFT,
     num_hashes: usize,
     perm16: Perm16,
     perm24: Perm24,
-    _ef: PhantomData<EF>, // A simple workaround allowing the compiler to determine all generic parameters
 ) -> Result<(), impl Debug>
 where
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
-    let hash = PaddingFreeSponge::<_, 24, 16, 8>::new(perm24.clone());
-
-    let compress = TruncatedPermutation::new(perm16.clone());
-
-    let val_mmcs = MerkleTreeMmcs::<F::Packing, F::Packing, _, _, 8>::new(hash, compress);
+    let val_mmcs = get_poseidon2_mmcs::<F, _, _>(perm16, perm24.clone());
 
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
-
-    let trace = proof_goal.generate_trace_rows(num_hashes);
-
     let fri_config = create_benchmark_fri_config(challenge_mmcs);
+
+    let trace = proof_goal.generate_trace_rows(num_hashes, fri_config.log_blowup);
 
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_config);
 
     let config = StarkConfig::new(pcs);
 
-    let mut proof_challenger = DuplexChallenger::<_, _, 24, 16>::new(perm24.clone());
+    let mut proof_challenger = DuplexChallenger::new(perm24.clone());
     let mut verif_challenger = DuplexChallenger::new(perm24.clone());
 
     let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
+    report_proof_size(&proof);
+
     verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
 }
 
+/// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.
+///
+/// This fixes the field and Mersenne31 and makes use of the circle stark.
+///
+/// It currently allows the user to choose:
+/// - The Proof Goal (Choice of Hash function and number of hashes to prove)
+#[inline]
+pub fn prove_m31_keccak<
+    PG: ExampleHashAir<
+        Mersenne31,
+        KeccakCircleStarkConfig<Mersenne31, BinomialExtensionField<Mersenne31, 3>>,
+    >,
+>(
+    proof_goal: PG,
+    num_hashes: usize,
+) -> Result<(), impl Debug> {
+    type F = Mersenne31;
+    type EF = BinomialExtensionField<Mersenne31, 3>;
+
+    let val_mmcs = get_keccak_mmcs();
+    let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
+    let fri_config = create_benchmark_fri_config(challenge_mmcs);
+
+    let trace = proof_goal.generate_trace_rows(num_hashes, fri_config.log_blowup);
+
+    let pcs = CirclePcs::new(val_mmcs, fri_config);
+
+    let config = KeccakCircleStarkConfig::new(pcs);
+
+    let mut proof_challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
+    let mut verif_challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
+
+    let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
+    report_proof_size(&proof);
+
+    verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
+}
+
+/// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.
+///
+/// This fixes the field and Mersenne31 and makes use of the circle stark.
+///
+/// It currently allows the user to choose:
+/// - The Proof Goal (Choice of Hash function and number of hashes to prove)
+#[inline]
+pub fn prove_m31_poseidon2<
+    F: PrimeField64 + ComplexExtendable,
+    EF: ExtensionField<F>,
+    Perm16: CryptographicPermutation<[F; 16]> + CryptographicPermutation<[F::Packing; 16]>,
+    Perm24: CryptographicPermutation<[F; 24]> + CryptographicPermutation<[F::Packing; 24]>,
+    PG: ExampleHashAir<F, Poseidon2CircleStarkConfig<F, EF, Perm16, Perm24>>,
+>(
+    proof_goal: PG,
+    num_hashes: usize,
+    perm16: Perm16,
+    perm24: Perm24,
+) -> Result<(), impl Debug>
+where
+    StandardUniform: Distribution<F>,
+{
+    let val_mmcs = get_poseidon2_mmcs::<F, _, _>(perm16, perm24.clone());
+
+    let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
+    let fri_config = create_benchmark_fri_config(challenge_mmcs);
+
+    let trace = proof_goal.generate_trace_rows(num_hashes, fri_config.log_blowup);
+
+    let pcs = CirclePcs::new(val_mmcs, fri_config);
+
+    let config = Poseidon2CircleStarkConfig::new(pcs);
+
+    let mut proof_challenger = DuplexChallenger::new(perm24.clone());
+    let mut verif_challenger = DuplexChallenger::new(perm24.clone());
+
+    let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
+    report_proof_size(&proof);
+
+    verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
+}
+
+/// Report the result of the proof.
+///
+/// Either print that the proof was successful or panic and return the error.
 #[inline]
 pub fn report_result(result: Result<(), impl Debug>) {
     if let Err(e) = result {
@@ -159,4 +226,17 @@ pub fn report_result(result: Result<(), impl Debug>) {
     } else {
         println!("Proof Verified Successfully")
     }
+}
+
+/// Report the size of the serialized proof.
+///
+/// Serializes the given proof instance using bincode and prints the size in bytes.
+/// Panics if serialization fails.
+#[inline]
+pub fn report_proof_size<SC>(proof: &Proof<SC>)
+where
+    SC: StarkGenericConfig,
+{
+    let proof_bytes = bincode::serialize(proof).expect("Failed to serialize proof");
+    println!("Proof size: {} bytes", proof_bytes.len());
 }

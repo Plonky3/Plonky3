@@ -16,12 +16,13 @@ p3-util.workspace = true
 p3-poseidon.workspace = true
 p3-poseidon2.workspace = true
 num-bigint.workspace = true
+paste.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 p3-field-testing.workspace = true
-rand = { workspace = true, features = ["min_const_gen"] }
+rand.workspace = true
 criterion.workspace = true
 
 [[bench]]

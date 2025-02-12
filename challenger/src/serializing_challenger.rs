@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_field::{ExtensionField, PrimeField32, PrimeField64};
+use p3_field::{BasedVectorSpace, PrimeField32, PrimeField64};
 use p3_maybe_rayon::prelude::*;
 use p3_symmetric::{CryptographicHasher, Hash};
 use p3_util::log2_ceil_u64;
@@ -90,23 +90,26 @@ impl<F: PrimeField32, const N: usize, Inner: CanObserve<u8>> CanObserve<Hash<F, 
 impl<F, EF, Inner> CanSample<EF> for SerializingChallenger32<F, Inner>
 where
     F: PrimeField32,
-    EF: ExtensionField<F>,
+    EF: BasedVectorSpace<F>,
     Inner: CanSample<u8>,
 {
     fn sample(&mut self) -> EF {
-        let modulus = F::ORDER_U64 as u32;
+        let modulus = F::ORDER_U32;
         let log_size = log2_ceil_u64(F::ORDER_U64);
         // We use u64 to avoid overflow in the case that log_size = 32.
         let pow_of_two_bound = ((1u64 << log_size) - 1) as u32;
         // Perform rejection sampling over the uniform range (0..log2_ceil(p))
         let sample_base = |inner: &mut Inner| loop {
-            let value = u32::from_le_bytes(inner.sample_array::<4>());
+            let value = u32::from_le_bytes(inner.sample_array());
             let value = value & pow_of_two_bound;
             if value < modulus {
-                return F::from_canonical_u32(value);
+                return unsafe {
+                    // This is safe as value < F::ORDER_U32.
+                    F::from_canonical_unchecked(value)
+                };
             }
         };
-        EF::from_base_fn(|_| sample_base(&mut self.inner))
+        EF::from_basis_coefficients_fn(|_| sample_base(&mut self.inner))
     }
 }
 
@@ -116,10 +119,10 @@ where
     Inner: CanSample<u8>,
 {
     fn sample_bits(&mut self, bits: usize) -> usize {
-        debug_assert!(bits < (usize::BITS as usize));
+        assert!(bits < (usize::BITS as usize));
         // Limiting the number of bits to the field size
-        debug_assert!((1 << bits) <= F::ORDER_U64 as usize);
-        let rand_usize = u32::from_le_bytes(self.inner.sample_array::<4>()) as usize;
+        assert!((1 << bits) <= F::ORDER_U64 as usize);
+        let rand_usize = u32::from_le_bytes(self.inner.sample_array()) as usize;
         rand_usize & ((1 << bits) - 1)
     }
 }
@@ -133,9 +136,14 @@ where
 
     #[instrument(name = "grind for proof-of-work witness", skip_all)]
     fn grind(&mut self, bits: usize) -> Self::Witness {
-        let witness = (0..F::ORDER_U64)
+        assert!(bits < (usize::BITS as usize));
+        assert!((1 << bits) < F::ORDER_U32);
+        let witness = (0..F::ORDER_U32)
             .into_par_iter()
-            .map(|i| F::from_canonical_u64(i))
+            .map(|i| unsafe {
+                // i < F::ORDER_U32 by construction so this is safe.
+                F::from_canonical_unchecked(i)
+            })
             .find_any(|witness| self.clone().check_witness(bits, *witness))
             .expect("failed to find witness");
         assert!(self.check_witness(bits, witness));
@@ -199,7 +207,7 @@ impl<F: PrimeField64, const N: usize, Inner: CanObserve<u8>> CanObserve<Hash<F, 
 impl<F, EF, Inner> CanSample<EF> for SerializingChallenger64<F, Inner>
 where
     F: PrimeField64,
-    EF: ExtensionField<F>,
+    EF: BasedVectorSpace<F>,
     Inner: CanSample<u8>,
 {
     fn sample(&mut self) -> EF {
@@ -210,13 +218,16 @@ where
 
         // Perform rejection sampling over the uniform range (0..log2_ceil(p))
         let sample_base = |inner: &mut Inner| loop {
-            let value = u64::from_le_bytes(inner.sample_array::<8>());
+            let value = u64::from_le_bytes(inner.sample_array());
             let value = value & pow_of_two_bound;
             if value < modulus {
-                return F::from_canonical_u64(value);
+                return unsafe {
+                    // This is safe as value < F::ORDER_U64.
+                    F::from_canonical_unchecked(value)
+                };
             }
         };
-        EF::from_base_fn(|_| sample_base(&mut self.inner))
+        EF::from_basis_coefficients_fn(|_| sample_base(&mut self.inner))
     }
 }
 
@@ -226,10 +237,10 @@ where
     Inner: CanSample<u8>,
 {
     fn sample_bits(&mut self, bits: usize) -> usize {
-        debug_assert!(bits < (usize::BITS as usize));
+        assert!(bits < (usize::BITS as usize));
         // Limiting the number of bits to the field size
-        debug_assert!((1 << bits) <= F::ORDER_U64 as usize);
-        let rand_usize = u64::from_le_bytes(self.inner.sample_array::<8>()) as usize;
+        assert!((1 << bits) <= F::ORDER_U64 as usize);
+        let rand_usize = u64::from_le_bytes(self.inner.sample_array()) as usize;
         rand_usize & ((1 << bits) - 1)
     }
 }
@@ -243,9 +254,14 @@ where
 
     #[instrument(name = "grind for proof-of-work witness", skip_all)]
     fn grind(&mut self, bits: usize) -> Self::Witness {
+        assert!(bits < (usize::BITS as usize));
+        assert!((1 << bits) < F::ORDER_U64);
         let witness = (0..F::ORDER_U64)
             .into_par_iter()
-            .map(|i| F::from_canonical_u64(i))
+            .map(|i| unsafe {
+                // i < F::ORDER_U64 by construction so this is safe.
+                F::from_canonical_unchecked(i)
+            })
             .find_any(|witness| self.clone().check_witness(bits, *witness))
             .expect("failed to find witness");
         assert!(self.check_witness(bits, witness));

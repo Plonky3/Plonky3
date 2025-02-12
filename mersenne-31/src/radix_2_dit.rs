@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::extension::Complex;
-use p3_field::{FieldAlgebra, PrimeField64, TwoAdicField};
+use p3_field::{PrimeCharacteristicRing, PrimeField64, TwoAdicField};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_matrix::Matrix;
@@ -112,7 +112,7 @@ fn dit_butterfly(mat: &mut RowMajorMatrixViewMut<'_, C>, row_1: usize, row_2: us
 #[inline]
 fn dit_butterfly_inner(x: &mut C, y: &mut C, twiddle: C) {
     // Adding any multiple of P doesn't change the result modulo P;
-    // we use this to ensure that the inputs to `from_wrapped_u64`
+    // we use this to ensure that the inputs to `from_u64`
     // below are non-negative.
     const P_SQR: i64 = (F::ORDER_U64 * F::ORDER_U64) as i64;
     const TWO_P_SQR: i64 = 2 * P_SQR;
@@ -139,19 +139,19 @@ fn dit_butterfly_inner(x: &mut C, y: &mut C, twiddle: C) {
     // NB: 2*P^2 + P < 2^63
 
     // -P^2 <= x1 + z1 <= P^2 + P
-    let a1 = F::from_wrapped_u64((P_SQR + x1 + z1) as u64);
+    let a1 = F::from_u64((P_SQR + x1 + z1) as u64);
     // -P^2 <= x1 - z1 <= P^2 + P
-    let b1 = F::from_wrapped_u64((P_SQR + x1 - z1) as u64);
+    let b1 = F::from_u64((P_SQR + x1 - z1) as u64);
 
     // SAFE: multiplying `u64` values within the range of `Mersennes31` doesn't overflow:
     // 2 * (2^31 - 1) * (2^31 - 1) = 2 * (2^62 - 2^32 + 1) < 2^64 - 1
     let z2 = y2 * w1 + y1 * w2; // 0 <= z2 <= 2*P^2
 
     // 0 <= x2 + z2 <= 2*P^2 + P
-    let a2 = F::from_wrapped_u64((x2 + z2) as u64);
+    let a2 = F::from_u64((x2 + z2) as u64);
     // -2*P^2 <= x2 - z2 <= P
-    let b2 = F::from_wrapped_u64((TWO_P_SQR + x2 - z2) as u64);
+    let b2 = F::from_u64((TWO_P_SQR + x2 - z2) as u64);
 
-    *x = C::new(a1, a2);
-    *y = C::new(b1, b2);
+    *x = C::new_complex(a1, a2);
+    *y = C::new_complex(b1, b2);
 }

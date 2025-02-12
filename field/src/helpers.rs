@@ -8,7 +8,7 @@ use num_bigint::BigUint;
 use p3_maybe_rayon::prelude::{IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::field::Field;
-use crate::{FieldAlgebra, PackedValue, PrimeField, PrimeField32, TwoAdicField};
+use crate::{PackedValue, PrimeCharacteristicRing, PrimeField, PrimeField32, TwoAdicField};
 
 /// Computes `Z_H(x)`, where `Z_H` is the zerofier of a multiplicative subgroup of order `2^log_n`.
 pub fn two_adic_subgroup_zerofier<F: TwoAdicField>(log_n: usize, x: F) -> F {
@@ -75,15 +75,15 @@ where
 // https://github.com/rust-lang/rust/issues/115403#issuecomment-1701000117
 
 // The goal is to want to make field_to_array a const function in order
-// to allow us to convert FA constants to BinomialExtensionField<FA, D> constants.
+// to allow us to convert R constants to BinomialExtensionField<R, D> constants.
 //
 // The natural approach would be:
-// fn field_to_array<FA: FieldAlgebra, const D: usize>(x: FA) -> [FA; D]
-//      let mut arr: [FA; D] = [FA::ZERO; D];
+// fn field_to_array<R: PrimeCharacteristicRing, const D: usize>(x: R) -> [R; D]
+//      let mut arr: [R; D] = [R::ZERO; D];
 //      arr[0] = x
 //      arr
 //
-// Unfortunately this doesn't compile as FA does not implement Copy and so instead
+// Unfortunately this doesn't compile as R does not implement Copy and so instead
 // implements Drop which cannot be run in constant contexts. Clearly nothing should
 // actually be dropped by the above function but the compiler is unable to determine this.
 // There is a rust issue for this: https://github.com/rust-lang/rust/issues/73255
@@ -119,11 +119,11 @@ impl<T, const D: usize> HackyWorkAround<T, D> {
     }
 }
 
-/// Extend a field `FA` element `x` to an array of length `D`
+/// Extend a ring `R` element `x` to an array of length `D`
 /// by filling zeros.
 #[inline]
-pub const fn field_to_array<FA: FieldAlgebra, const D: usize>(x: FA) -> [FA; D] {
-    let mut arr: [MaybeUninit<FA>; D] = unsafe { MaybeUninit::uninit().assume_init() };
+pub const fn field_to_array<R: PrimeCharacteristicRing, const D: usize>(x: R) -> [R; D] {
+    let mut arr: [MaybeUninit<R>; D] = unsafe { MaybeUninit::uninit().assume_init() };
 
     arr[0] = MaybeUninit::new(x);
     let mut acc = 1;
@@ -131,19 +131,19 @@ pub const fn field_to_array<FA: FieldAlgebra, const D: usize>(x: FA) -> [FA; D] 
         if acc == D {
             break;
         }
-        arr[acc] = MaybeUninit::new(FA::ZERO);
+        arr[acc] = MaybeUninit::new(R::ZERO);
         acc += 1;
     }
     // If the code has reached this point every element of arr is correctly initialized.
-    // Hence we are safe to reinterpret the array as [FA; D].
+    // Hence we are safe to reinterpret the array as [R; D].
 
     unsafe { HackyWorkAround::transpose(arr).assume_init() }
 }
 
 /// Naive polynomial multiplication.
-pub fn naive_poly_mul<FA: FieldAlgebra>(a: &[FA], b: &[FA]) -> Vec<FA> {
+pub fn naive_poly_mul<R: PrimeCharacteristicRing>(a: &[R], b: &[R]) -> Vec<R> {
     // Grade school algorithm
-    let mut product = vec![FA::ZERO; a.len() + b.len() - 1];
+    let mut product = vec![R::ZERO; a.len() + b.len() - 1];
     for (i, c1) in a.iter().enumerate() {
         for (j, c2) in b.iter().enumerate() {
             product[i + j] += c1.clone() * c2.clone();
@@ -152,10 +152,10 @@ pub fn naive_poly_mul<FA: FieldAlgebra>(a: &[FA], b: &[FA]) -> Vec<FA> {
     product
 }
 
-/// Expand a product of binomials (x - roots[0])(x - roots[1]).. into polynomial coefficients.
-pub fn binomial_expand<FA: FieldAlgebra>(roots: &[FA]) -> Vec<FA> {
-    let mut coeffs = vec![FA::ZERO; roots.len() + 1];
-    coeffs[0] = FA::ONE;
+/// Expand a product of binomials `(x - roots[0])(x - roots[1])..` into polynomial coefficients.
+pub fn binomial_expand<R: PrimeCharacteristicRing>(roots: &[R]) -> Vec<R> {
+    let mut coeffs = vec![R::ZERO; roots.len() + 1];
+    coeffs[0] = R::ONE;
     for (i, x) in roots.iter().enumerate() {
         for j in (1..i + 2).rev() {
             coeffs[j] = coeffs[j - 1].clone() - x.clone() * coeffs[j].clone();
@@ -165,8 +165,8 @@ pub fn binomial_expand<FA: FieldAlgebra>(roots: &[FA]) -> Vec<FA> {
     coeffs
 }
 
-pub fn eval_poly<FA: FieldAlgebra>(poly: &[FA], x: FA) -> FA {
-    let mut acc = FA::ZERO;
+pub fn eval_poly<R: PrimeCharacteristicRing>(poly: &[R], x: R) -> R {
+    let mut acc = R::ZERO;
     for coeff in poly.iter().rev() {
         acc *= x.clone();
         acc += coeff.clone();
@@ -203,11 +203,15 @@ pub fn halve_u64<const P: u64>(input: u64) -> u64 {
 }
 
 /// Given a slice of SF elements, reduce them to a TF element using a 2^32-base decomposition.
+///
+/// This is optimised assuming that the characteristic of TF is greater than 2^64.
 pub fn reduce_32<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
-    let po2 = TF::from_canonical_u64(1u64 << 32);
+    // If the characteristic of TF is > 2^64, from_int and from_canonical_unchecked act identically
+    // on u64 and u32 inputs so we use the safer option.
+    let po2 = TF::from_int(1u64 << 32);
     let mut result = TF::ZERO;
     for val in vals.iter().rev() {
-        result = result * po2 + TF::from_canonical_u32(val.as_canonical_u32());
+        result = result * po2 + TF::from_int(val.as_canonical_u32());
     }
     result
 }
@@ -224,7 +228,9 @@ pub fn split_32<SF: PrimeField, TF: PrimeField32>(val: SF, n: usize) -> Vec<TF> 
         let mask: BigUint = po2.clone() - BigUint::from(1u128);
         let digit: BigUint = val.clone() & mask;
         let digit_u64s = digit.to_u64_digits();
-        if digit_u64s.is_empty() {
+        if !digit_u64s.is_empty() {
+            result.push(TF::from_int(digit_u64s[0]));
+        } else {
             result.push(TF::ZERO)
         } else {
             result.push(TF::from_wrapped_u64(digit_u64s[0]));

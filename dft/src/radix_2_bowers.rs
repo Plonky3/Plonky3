@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 
+use p3_field::integers::QuotientMap;
 use p3_field::{Field, Powers, TwoAdicField};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
@@ -50,7 +51,10 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
         shift: F,
     ) -> RowMajorMatrix<F> {
         let h = mat.height();
-        let h_inv = F::from_canonical_usize(h).inverse();
+        // If F isn't a PrimeField, (and is thus an extension field) it's much cheaper to
+        // invert in F::PrimeSubfield.
+        let h_inv_subfield = F::PrimeSubfield::from_int(h).inverse();
+        let h_inv = F::from_prime_subfield(h_inv_subfield);
 
         bowers_g_t(&mut mat.as_view_mut());
 

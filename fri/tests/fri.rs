@@ -6,7 +6,7 @@ use p3_challenger::{CanSampleBits, DuplexChallenger, FieldChallenger};
 use p3_commit::ExtensionMmcs;
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, FieldAlgebra};
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_fri::{prover, verifier, FriConfig, TwoAdicFriGenericConfig};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::reverse_matrix_index_bits;
@@ -62,7 +62,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
     let (proof, p_sample) = {
         // Prover world
         let mut chal = Challenger::new(perm.clone());
-        let alpha: Challenge = chal.sample_ext_element();
+        let alpha: Challenge = chal.sample_algebra_element();
 
         let input: [_; 32] = core::array::from_fn(|log_height| {
             let matrices_with_log_height: Vec<&RowMajorMatrix<Val>> = ldes
@@ -110,7 +110,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
     };
 
     let mut v_challenger = Challenger::new(perm);
-    let _alpha: Challenge = v_challenger.sample_ext_element();
+    let _alpha: Challenge = v_challenger.sample_algebra_element();
     verifier::verify(
         &TwoAdicFriGenericConfig::<Vec<(usize, Challenge)>, ()>(PhantomData),
         &fc,

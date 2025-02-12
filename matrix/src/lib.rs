@@ -10,7 +10,8 @@ use core::ops::Deref;
 
 use itertools::{izip, Itertools};
 use p3_field::{
-    dot_product, ExtensionField, Field, FieldAlgebra, FieldExtensionAlgebra, PackedValue,
+    dot_product, BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue,
+    PrimeCharacteristicRing,
 };
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
@@ -233,8 +234,8 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
             .par_fold_reduce(
                 || EF::ExtensionPacking::zero_vec(packed_width),
                 |mut acc, (row, &scale)| {
-                    let scale = EF::ExtensionPacking::from_base_fn(|i| {
-                        T::Packing::from(scale.as_base_slice()[i])
+                    let scale = EF::ExtensionPacking::from_basis_coefficients_fn(|i| {
+                        T::Packing::from(scale.as_basis_coefficients_slice()[i])
                     });
                     izip!(&mut acc, row).for_each(|(l, r)| *l += scale * r);
                     acc
@@ -248,8 +249,11 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         packed_result
             .into_iter()
             .flat_map(|p| {
-                (0..T::Packing::WIDTH)
-                    .map(move |i| EF::from_base_fn(|j| p.as_base_slice()[j].as_slice()[i]))
+                (0..T::Packing::WIDTH).map(move |i| {
+                    EF::from_basis_coefficients_fn(|j| {
+                        p.as_basis_coefficients_slice()[j].as_slice()[i]
+                    })
+                })
             })
             .take(self.width())
             .collect()
@@ -261,16 +265,15 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         T: Field,
         EF: ExtensionField<T>,
     {
-        let powers_packed = base
-            .ext_powers_packed()
+        let powers_packed = EF::ExtensionPacking::packed_ext_powers(base)
             .take(self.width().next_multiple_of(T::Packing::WIDTH))
             .collect_vec();
         self.par_padded_horizontally_packed_rows::<T::Packing>()
             .map(move |row_packed| {
                 let packed_sum_of_packed: EF::ExtensionPacking =
                     dot_product(powers_packed.iter().copied(), row_packed);
-                let sum_of_packed: EF = EF::from_base_fn(|i| {
-                    packed_sum_of_packed.as_base_slice()[i]
+                let sum_of_packed: EF = EF::from_basis_coefficients_fn(|i| {
+                    packed_sum_of_packed.as_basis_coefficients_slice()[i]
                         .as_slice()
                         .iter()
                         .copied()
@@ -289,8 +292,8 @@ mod tests {
     use itertools::izip;
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::FieldAlgebra;
-    use rand::thread_rng;
+    use p3_field::PrimeCharacteristicRing;
+    use rand::rng;
 
     use super::*;
 
@@ -299,8 +302,8 @@ mod tests {
         type F = BabyBear;
         type EF = BinomialExtensionField<BabyBear, 4>;
 
-        let m = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << 8, 1 << 4);
-        let v = RowMajorMatrix::<EF>::rand(&mut thread_rng(), 1 << 8, 1).values;
+        let m = RowMajorMatrix::<F>::rand(&mut rng(), 1 << 8, 1 << 4);
+        let v = RowMajorMatrix::<EF>::rand(&mut rng(), 1 << 8, 1).values;
 
         let mut expected = vec![EF::ZERO; m.width()];
         for (row, &scale) in izip!(m.rows(), &v) {
