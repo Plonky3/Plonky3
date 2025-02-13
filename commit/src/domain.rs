@@ -45,8 +45,12 @@ pub struct LagrangeSelectors<T> {
 ///
 /// The canonical example of a `PolynomialSpace` is a coset `gH` of
 /// a two-adic subgroup `H` of the multiplicative group `F*`. This satisfies the properties
-/// above as cosets partition the group and decompose as `gH = g(H^2) u gh(H^2)` for `h` a
+/// above as cosets partition the group and decompose as `gH = g(H^2) u gh(H^2)` for `h` any
 /// generator of `H`.
+///
+/// The other example in this code base is twin cosets which are sets of the form `gH u g^{-1}H`.
+/// The decomposition above extends easily to this case as `h` is a generator if and only if `h^{-1}`
+/// is and so `gH u g^{-1}H = (g(H^2) u g^{-1}(H^2)) u (gh(H^2) u (gh)^{-1}(H^2))`.
 pub trait PolynomialSpace: Copy {
     /// The base field `F`.
     type Val: Field;
