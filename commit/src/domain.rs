@@ -109,7 +109,7 @@ pub trait PolynomialSpace: Copy {
 pub struct TwoAdicMultiplicativeCoset<Val: TwoAdicField> {
     /// The log of the order of the subgroup.
     pub log_n: usize,
-    /// The shift defining the coset.
+    /// The shift `g` defining the coset.
     pub shift: Val,
 }
 
