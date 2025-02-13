@@ -19,7 +19,8 @@ use crate::verifier::error::{FullRoundVerificationError, VerificationError};
 use crate::verifier::{compute_folded_evaluations, verify};
 use crate::{Messages, StirConfig, StirProof};
 
-type Proof = StirProof<BBExt, BBExtMMCS, BB>;
+type BBProof = StirProof<BBExt, BBExtMMCS, BB>;
+type GLProof = StirProof<GLExt, GLExtMMCS, GL>;
 
 fn init_file() -> File {
     let path = Path::new("test_data/proof.json");
@@ -28,33 +29,70 @@ fn init_file() -> File {
     File::create(path).unwrap()
 }
 
-fn generate_proof_with_config(
-    config: &StirConfig<BBExt, BBExtMMCS>,
-    challenger: &mut BBChallenger,
-) -> Proof {
-    let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
-    let (witness, commitment) = commit(&config, polynomial);
-    let proof = prove(&config, witness, commitment, challenger);
+macro_rules! impl_generate_proof_with_config {
+    ($name:ident, $ext:ty, $ext_mmcs:ty, $proof:ty, $challenger:ty) => {
+        pub fn $name(config: &StirConfig<$ext, $ext_mmcs>, challenger: &mut $challenger) -> $proof {
+            let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
+            let (witness, commitment) = commit(&config, polynomial);
+            let proof = prove(&config, witness, commitment, challenger);
 
-    // Serialize the proof to a file
-    serde_json::to_writer(init_file(), &proof).unwrap();
+            // Serialize the proof to a file
+            serde_json::to_writer(init_file(), &proof).unwrap();
 
-    proof
+            proof
+        }
+    };
 }
 
-pub fn test_verify_with_config(config: &StirConfig<BBExt, BBExtMMCS>) {
-    let (mut prover_challenger, mut verifier_challenger) =
-        (test_bb_challenger(), test_bb_challenger());
+macro_rules! impl_test_verify_with_config {
+    ($name:ident, $ext:ty, $ext_mmcs:ty, $challenger_fn:ident, $proof_fn:ident) => {
+        pub fn $name(config: &StirConfig<$ext, $ext_mmcs>) {
+            let (mut prover_challenger, mut verifier_challenger) =
+                ($challenger_fn(), $challenger_fn());
 
-    let proof = generate_proof_with_config(config, &mut prover_challenger);
-    verify(config, proof, &mut verifier_challenger).unwrap();
+            let proof = $proof_fn(config, &mut prover_challenger);
+            verify(config, proof, &mut verifier_challenger).unwrap();
 
-    // Check that the sponge is consistent at the end
-    assert_eq!(
-        prover_challenger.sample_ext_element::<BBExt>(),
-        verifier_challenger.sample_ext_element::<BBExt>()
-    );
+            // Check that the sponge is consistent at the end
+            assert_eq!(
+                prover_challenger.sample_ext_element::<$ext>(),
+                verifier_challenger.sample_ext_element::<$ext>()
+            );
+        }
+    };
 }
+
+impl_generate_proof_with_config!(
+    generate_bb_proof_with_config,
+    BBExt,
+    BBExtMMCS,
+    BBProof,
+    BBChallenger
+);
+
+impl_generate_proof_with_config!(
+    generate_gl_proof_with_config,
+    GLExt,
+    GLExtMMCS,
+    GLProof,
+    GLChallenger
+);
+
+impl_test_verify_with_config!(
+    test_bb_verify_with_config,
+    BBExt,
+    BBExtMMCS,
+    test_bb_challenger,
+    generate_bb_proof_with_config
+);
+
+impl_test_verify_with_config!(
+    test_gl_verify_with_config,
+    GLExt,
+    GLExtMMCS,
+    test_gl_challenger,
+    generate_gl_proof_with_config
+);
 
 macro_rules! test_verify_failing_case {
     ($config:expr, $modify_proof:expr, $expected_error:expr) => {{
@@ -69,7 +107,7 @@ macro_rules! test_verify_failing_case {
     }};
 }
 
-fn tamper_with_final_polynomial(config: &StirConfig<BBExt, BBExtMMCS>) -> Proof {
+fn tamper_with_final_polynomial(config: &StirConfig<BBExt, BBExtMMCS>) -> BBProof {
     let mut challenger = test_bb_challenger();
     let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
     let (witness, commitment) = commit(&config, polynomial);
@@ -173,29 +211,41 @@ fn test_compute_folded_evals() {
 }
 
 #[test]
-fn test_verify() {
+fn test_bb_verify() {
     let config = test_bb_stir_config(20, 2, 4, 3);
-    test_verify_with_config(&config);
+    test_bb_verify_with_config(&config);
 }
 
 #[test]
-fn test_verify_variable_folding_factor() {
+fn test_bb_verify_variable_folding_factor() {
     // NP TODO make bigger after more efficient FFT is introduced
-    let config = test_stir_config_folding_factors(20, 1, vec![4, 3, 5]);
-    test_verify_with_config(&config);
+    let config = test_bb_stir_config_folding_factors(20, 1, vec![4, 3, 5]);
+    test_bb_verify_with_config(&config);
+}
+
+#[test]
+fn test_gl_verify() {
+    let config = test_gl_stir_config(20, 2, 4, 3);
+    test_gl_verify_with_config(&config);
+}
+
+#[test]
+fn test_gl_verify_variable_folding_factor() {
+    let config = test_gl_stir_config_folding_factors(20, 1, vec![4, 3, 5]);
+    test_gl_verify_with_config(&config);
 }
 
 #[test]
 fn test_verify_failing_cases() {
     let mut rng = thread_rng();
     let config = test_bb_stir_config(20, 2, 4, 3);
-    let proof = generate_proof_with_config(&config, &mut test_bb_challenger());
+    let proof = generate_bb_proof_with_config(&config, &mut test_bb_challenger());
 
     // ============================== ProofOfWork ==============================
 
     test_verify_failing_case!(
         config,
-        |invalid_proof: &mut Proof| {
+        |invalid_proof: &mut BBProof| {
             invalid_proof.round_proofs[0].pow_witness = rng.gen();
         },
         VerificationError::Round(0, FullRoundVerificationError::ProofOfWork)
@@ -205,7 +255,7 @@ fn test_verify_failing_cases() {
 
     test_verify_failing_case!(
         config,
-        |invalid_proof: &mut Proof| {
+        |invalid_proof: &mut BBProof| {
             let query_proof = proof.round_proofs[0].query_proofs[0].clone();
             let mut invalid_leaf = query_proof.0.clone();
             invalid_leaf[0] = rng.gen();
@@ -219,7 +269,7 @@ fn test_verify_failing_cases() {
 
     test_verify_failing_case!(
         config,
-        |invalid_proof: &mut Proof| {
+        |invalid_proof: &mut BBProof| {
             let original_degree = invalid_proof.round_proofs[0]
                 .ans_polynomial
                 .degree()
@@ -233,7 +283,7 @@ fn test_verify_failing_cases() {
 
     test_verify_failing_case!(
         config,
-        |invalid_proof: &mut Proof| {
+        |invalid_proof: &mut BBProof| {
             let original_degree = invalid_proof.round_proofs[0]
                 .ans_polynomial
                 .degree()
@@ -247,7 +297,7 @@ fn test_verify_failing_cases() {
 
     test_verify_failing_case!(
         config,
-        |invalid_proof: &mut Proof| {
+        |invalid_proof: &mut BBProof| {
             let original_degree = invalid_proof.final_polynomial.degree().unwrap();
             invalid_proof.final_polynomial = rand_poly(original_degree + 1);
         },
@@ -280,7 +330,7 @@ fn test_verify_failing_cases() {
 
     test_verify_failing_case!(
         config,
-        |invalid_proof: &mut Proof| {
+        |invalid_proof: &mut BBProof| {
             let query_proof = proof.final_round_queries[0].clone();
             let mut invalid_leaf = query_proof.0.clone();
             invalid_leaf[0] = rng.gen();
@@ -294,7 +344,7 @@ fn test_verify_failing_cases() {
 
     test_verify_failing_case!(
         config,
-        |invalid_proof: &mut Proof| {
+        |invalid_proof: &mut BBProof| {
             invalid_proof.pow_witness = rng.gen();
         },
         VerificationError::FinalProofOfWork
