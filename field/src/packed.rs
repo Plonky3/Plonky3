@@ -164,16 +164,13 @@ pub unsafe trait PackedField: Algebra<Self::Scalar>
         }
     }
 
-    /// Compute the dot product of two iterators of packed elements.
-    fn iter_dot_product<'a, Inner1: Into<Self> + 'a + Copy, Inner2: Into<Self> + 'a + Copy, I: Iterator<Item = &'a Inner1>, J: Iterator<Item = &'a Inner2>>(
-        iter_1: I,
-        iter_2: J,
-    ) -> Self {
-        let mut acc = Self::ZERO;
-        iter_1
-            .zip(iter_2)
-            .for_each(|(&elem_1, &elem_2)| acc += elem_1.into() * elem_2.into());
-        acc
+    /// Compute the dot product of two vectors.
+    /// 
+    /// The elements of the first vector should be elements of the scalar field.
+    /// The elements of the second vector should vectors of elements packed into the packed field.
+    fn dot_product_scalar_packed(scalar_slice: &[Self::Scalar], packed_slice: &[Self]) -> Self {
+        debug_assert_eq!(scalar_slice.len(), packed_slice.len());
+        scalar_slice.iter().zip(packed_slice).map(|(&x, &y)| y * x).sum()
     }
 }
 
@@ -228,7 +225,14 @@ pub unsafe trait PackedFieldPow2: PackedField {
 pub trait PackedFieldExtension<
     BaseField: Field,
     ExtField: ExtensionField<BaseField, ExtensionPacking = Self>,
->: Algebra<ExtField> + Algebra<BaseField::Packing> + BasedVectorSpace<BaseField::Packing>
+>:
+    'static
+    + Copy
+    + Send
+    + Sync
+    + Algebra<ExtField>
+    + Algebra<BaseField::Packing>
+    + BasedVectorSpace<BaseField::Packing>
 {
     /// Given a slice of extension field `EF` elements of length `W`,
     /// convert into the array `[[F; D]; W]` transpose to
@@ -238,19 +242,6 @@ pub trait PackedFieldExtension<
     /// Similar to packed_powers, construct an iterator which returns
     /// powers of `base` packed into `PackedFieldExtension` elements.
     fn packed_ext_powers(base: ExtField) -> Powers<Self>;
-
-    /// Compute the dot product of an iterator of packed extension field elements
-    /// and an iterator of packed base field elements.
-    fn base_dot_product<I: Iterator<Item = Self>, J: Iterator<Item = BaseField::Packing>>(
-        ext_iter: I,
-        base_iter: J,
-    ) -> Self {
-        let mut acc = Self::ZERO;
-        ext_iter
-            .zip(base_iter)
-            .for_each(|(ext, base)| acc += ext * base);
-        acc
-    }
 }
 
 unsafe impl<T: Packable> PackedValue for T {

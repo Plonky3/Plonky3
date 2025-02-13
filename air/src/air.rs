@@ -95,10 +95,20 @@ pub trait AirBuilder: Sized {
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I);
 
-    fn assert_zeroes<const N: usize>(&mut self, array: &[Self::Expr; N]) {
+    /// Assert that every element of a given array is 0.
+    fn assert_zeroes<const N: usize>(&mut self, array: [Self::Expr; N]) {
         for elem in array {
-            self.assert_zero(elem.clone());
+            self.assert_zero(elem);
         }
+    }
+
+    /// Assert that a given array consists of only boolen values.
+    fn assert_bools<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
+        let zero_array = array.map(|x| {
+            let x = x.into();
+            x.clone() * (x - Self::Expr::ONE)
+        });
+        self.assert_zeroes(zero_array);
     }
 
     fn assert_one<I: Into<Self::Expr>>(&mut self, x: I) {

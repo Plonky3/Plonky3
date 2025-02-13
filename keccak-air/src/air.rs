@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use core::array;
 use core::borrow::Borrow;
 
 use p3_air::utils::{andn, xor, xor3};
@@ -51,23 +52,23 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         // If this is the first step, the input A must match the preimage.
         for y in 0..5 {
             for x in 0..5 {
-                for limb in 0..U64_LIMBS {
-                    builder
-                        .when(first_step)
-                        .assert_eq(local.preimage[y][x][limb], local.a[y][x][limb]);
-                }
+                builder
+                    .when(first_step)
+                    .assert_zeroes::<U64_LIMBS>(array::from_fn(|limb| {
+                        local.preimage[y][x][limb] - local.a[y][x][limb]
+                    }));
             }
         }
 
         // If this is not the final step, the local and next preimages must match.
         for y in 0..5 {
             for x in 0..5 {
-                for limb in 0..U64_LIMBS {
-                    builder
-                        .when(not_final_step.clone())
-                        .when_transition()
-                        .assert_eq(local.preimage[y][x][limb], next.preimage[y][x][limb]);
-                }
+                builder
+                    .when(not_final_step.clone())
+                    .when_transition()
+                    .assert_zeroes::<U64_LIMBS>(array::from_fn(|limb| {
+                        local.preimage[y][x][limb] - next.preimage[y][x][limb]
+                    }));
             }
         }
 
@@ -84,19 +85,15 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         // xor3 function only outputs 0, 1 and so this check also ensures that all
         // entries of C'[x, z] are boolean.
         for x in 0..5 {
-            builder.assert_zeroes(
-                &local.c[x].map(|elem| -> AB::Expr { elem * (elem.into() - AB::Expr::ONE) }),
-            );
-            for z in 0..64 {
-                // Check to ensure all entries of C are bools.
+            builder.assert_bools(local.c[x]);
+            builder.assert_zeroes::<64>(array::from_fn(|z| {
                 let xor = xor3::<AB::Expr>(
                     local.c[x][z].into(),
                     local.c[(x + 4) % 5][z].into(),
                     local.c[(x + 1) % 5][(z + 63) % 64].into(),
                 );
-                let c_prime = local.c_prime[x][z];
-                builder.assert_eq(c_prime, xor);
-            }
+                local.c_prime[x][z] - xor
+            }));
         }
 
         // Check that the input limbs are consistent with A' and D.
@@ -117,21 +114,17 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                 };
 
                 // Check that all entries of A'[y][x] are boolean.
-                builder.assert_zeroes(
-                    &local.a_prime[y][x]
-                        .map(|elem| -> AB::Expr { elem * (elem.into() - AB::Expr::ONE) }),
-                );
+                builder.assert_bools(local.a_prime[y][x]);
 
-                for limb in 0..U64_LIMBS {
-                    let a_limb = local.a[y][x][limb];
+                builder.assert_zeroes::<U64_LIMBS>(array::from_fn(|limb| {
                     let computed_limb = (limb * BITS_PER_LIMB..(limb + 1) * BITS_PER_LIMB)
                         .rev()
                         .fold(AB::Expr::ZERO, |acc, z| {
                             // Check to ensure all entries of A' are bools.
                             acc.double() + get_bit(z)
                         });
-                    builder.assert_eq(computed_limb, a_limb);
-                }
+                    computed_limb - local.a[y][x][limb]
+                }));
             }
         }
 
@@ -139,13 +132,12 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         // diff * (diff - 2) * (diff - 4) = 0, where
         // diff = sum_{i=0}^4 A'[x, i, z] - C'[x, z]
         for x in 0..5 {
-            for z in 0..64 {
+            let four = AB::Expr::TWO.double();
+            builder.assert_zeroes::<64>(array::from_fn(|z| {
                 let sum: AB::Expr = (0..5).map(|y| local.a_prime[y][x][z].into()).sum();
                 let diff = sum - local.c_prime[x][z];
-                // This should be slightly faster than from_canonical_u8(4) for some fields.
-                let four = AB::Expr::TWO.double();
-                builder.assert_zero(diff.clone() * (diff.clone() - AB::Expr::TWO) * (diff - four));
-            }
+                diff.clone() * (diff.clone() - AB::Expr::TWO) * (diff - four.clone())
+            }));
         }
 
         // A''[x, y] = xor(B[x, y], andn(B[x + 1, y], B[x + 2, y])).
@@ -160,33 +152,27 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                     );
                     xor::<AB::Expr>(local.b(x, y, z).into(), andn)
                 };
-
-                for limb in 0..U64_LIMBS {
+                builder.assert_zeroes::<U64_LIMBS>(array::from_fn(|limb| {
                     let computed_limb = (limb * BITS_PER_LIMB..(limb + 1) * BITS_PER_LIMB)
                         .rev()
                         .fold(AB::Expr::ZERO, |acc, z| acc.double() + get_bit(z));
-                    builder.assert_eq(computed_limb, local.a_prime_prime[y][x][limb]);
-                }
+                    computed_limb - local.a_prime_prime[y][x][limb]
+                }));
             }
         }
 
         // A'''[0, 0] = A''[0, 0] XOR RC
         // Check to ensure the bits of A''[0, 0] are boolean.
-        builder.assert_zeroes(
-            &local
-                .a_prime_prime_0_0_bits
-                .map(|elem| -> AB::Expr { elem * (elem.into() - AB::Expr::ONE) }),
-        );
-        for limb in 0..U64_LIMBS {
+        builder.assert_bools(local.a_prime_prime_0_0_bits);
+        builder.assert_zeroes::<U64_LIMBS>(array::from_fn(|limb| {
             let computed_a_prime_prime_0_0_limb = (limb * BITS_PER_LIMB
                 ..(limb + 1) * BITS_PER_LIMB)
                 .rev()
                 .fold(AB::Expr::ZERO, |acc, z| {
                     acc.double() + local.a_prime_prime_0_0_bits[z]
                 });
-            let a_prime_prime_0_0_limb = local.a_prime_prime[0][0][limb];
-            builder.assert_eq(computed_a_prime_prime_0_0_limb, a_prime_prime_0_0_limb);
-        }
+            computed_a_prime_prime_0_0_limb - local.a_prime_prime[0][0][limb]
+        }));
 
         let get_xored_bit = |i| {
             let mut rc_bit_i = AB::Expr::ZERO;
@@ -199,29 +185,23 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
             xor::<AB::Expr>(local.a_prime_prime_0_0_bits[i].into(), rc_bit_i)
         };
 
-        for limb in 0..U64_LIMBS {
-            let a_prime_prime_prime_0_0_limb = local.a_prime_prime_prime_0_0_limbs[limb];
+        builder.assert_zeroes::<U64_LIMBS>(array::from_fn(|limb| {
             let computed_a_prime_prime_prime_0_0_limb = (limb * BITS_PER_LIMB
                 ..(limb + 1) * BITS_PER_LIMB)
                 .rev()
                 .fold(AB::Expr::ZERO, |acc, z| acc.double() + get_xored_bit(z));
-            builder.assert_eq(
-                computed_a_prime_prime_prime_0_0_limb,
-                a_prime_prime_prime_0_0_limb,
-            );
-        }
+            computed_a_prime_prime_prime_0_0_limb - local.a_prime_prime_prime_0_0_limbs[limb]
+        }));
 
         // Enforce that this round's output equals the next round's input.
         for x in 0..5 {
             for y in 0..5 {
-                for limb in 0..U64_LIMBS {
-                    let output = local.a_prime_prime_prime(y, x, limb);
-                    let input = next.a[y][x][limb];
-                    builder
-                        .when_transition()
-                        .when(not_final_step.clone())
-                        .assert_eq(output, input);
-                }
+                builder
+                    .when_transition()
+                    .when(not_final_step.clone())
+                    .assert_zeroes::<U64_LIMBS>(array::from_fn(|limb| {
+                        local.a_prime_prime_prime(y, x, limb) - next.a[y][x][limb]
+                    }));
             }
         }
     }

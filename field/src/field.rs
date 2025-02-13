@@ -235,15 +235,8 @@ pub trait PrimeCharacteristicRing:
     }
 
     /// Compute the dot product of two vectors.
-    fn dot_product<const N: usize, I1, I2>(u: &[I1; N], v: &[I2; N]) -> Self
-    where
-        I1: Into<Self> + Clone,
-        I2: Into<Self> + Clone,
-    {
-        u.iter()
-            .zip(v)
-            .map(|(x, y)| x.clone().into() * y.clone().into())
-            .sum()
+    fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
+        u.iter().zip(v).map(|(x, y)| x.clone() * y.clone()).sum()
     }
 
     /// Allocates a vector of zero elements of length `len`. Many operating systems zero pages
