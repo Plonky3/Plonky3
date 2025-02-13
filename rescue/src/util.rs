@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 
 use modinverse::modinverse;
 use p3_field::PrimeField64;
-use p3_util::gcd_u64;
+use p3_util::relatively_prime_u64;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::Shake256;
 
@@ -13,7 +13,7 @@ pub(crate) const fn get_alpha<F: PrimeField64>() -> u64 {
     let mut a = 3;
 
     while a < p {
-        if gcd_u64(a, p - 1) == 1 {
+        if relatively_prime_u64(a, p - 1) {
             return a;
         }
         a += 1;
