@@ -1,17 +1,25 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use gcd::Gcd;
 use modinverse::modinverse;
 use p3_field::PrimeField64;
+use p3_util::relatively_prime_u64;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::Shake256;
 
 /// Generate alpha, the smallest integer relatively prime to `p − 1`.
-pub(crate) fn get_alpha<F: PrimeField64>() -> u64 {
+pub(crate) const fn get_alpha<F: PrimeField64>() -> u64 {
     let p = F::ORDER_U64;
+    let mut a = 3;
 
-    (3..p).find(|&a| a.gcd(p - 1) == 1).unwrap()
+    while a < p {
+        if relatively_prime_u64(a, p - 1) {
+            return a;
+        }
+        a += 1;
+    }
+
+    panic!("No valid alpha found. Rescue does not support fields of order 2 or 3.");
 }
 
 /// Given alpha, find its multiplicative inverse in `Z/⟨p − 1⟩`.

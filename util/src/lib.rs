@@ -403,6 +403,51 @@ pub unsafe fn convert_vec<T, U>(mut vec: Vec<T>) -> Vec<U> {
     Vec::from_raw_parts(ptr, new_len, new_cap)
 }
 
+#[inline(always)]
+pub const fn relatively_prime_u64(mut u: u64, mut v: u64) -> bool {
+    // Check that neither input is 0.
+    if u == 0 || v == 0 {
+        return false;
+    }
+
+    // Check divisibility by 2.
+    if (u | v) & 1 == 0 {
+        return false;
+    }
+
+    // Remove factors of 2 from `u` and `v`
+    u >>= u.trailing_zeros();
+    if u == 1 {
+        return true;
+    }
+
+    while v != 0 {
+        v >>= v.trailing_zeros();
+        if v == 1 {
+            return true;
+        }
+
+        // Ensure u <= v
+        if u > v {
+            // Simpler to use
+            // core::mem::swap(&mut u, &mut v);
+            // This will be stable once rust 1.85.0 hits.
+            // Until then we do it manually.
+            let temp = u;
+            u = v;
+            v = temp;
+        }
+
+        // This looks inefficient for v >> u but thanks to the fact that we remove
+        // trailing_zeros of v in every iteration, it ends up much more performative
+        // than first glance implies.
+        v -= u
+    }
+    // If we made it through the loop, at no point is u or v equal to 1 and so the gcd
+    // must be greater than 1.
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec;
@@ -620,5 +665,66 @@ mod tests {
         }
 
         out.into_iter().map(|x| x.unwrap()).collect()
+    }
+
+    #[test]
+    fn test_relatively_prime_u64() {
+        // Zero cases (should always return false)
+        assert!(!relatively_prime_u64(0, 0));
+        assert!(!relatively_prime_u64(10, 0));
+        assert!(!relatively_prime_u64(0, 10));
+        assert!(!relatively_prime_u64(0, 123456789));
+
+        // Number with itself (if greater than 1, not relatively prime)
+        assert!(relatively_prime_u64(1, 1));
+        assert!(!relatively_prime_u64(10, 10));
+        assert!(!relatively_prime_u64(99999, 99999));
+
+        // Powers of 2 (always false since they share factor 2)
+        assert!(!relatively_prime_u64(2, 4));
+        assert!(!relatively_prime_u64(16, 32));
+        assert!(!relatively_prime_u64(64, 128));
+        assert!(!relatively_prime_u64(1024, 4096));
+        assert!(!relatively_prime_u64(u64::MAX, u64::MAX));
+
+        // One number is a multiple of the other (always false)
+        assert!(!relatively_prime_u64(5, 10));
+        assert!(!relatively_prime_u64(12, 36));
+        assert!(!relatively_prime_u64(15, 45));
+        assert!(!relatively_prime_u64(100, 500));
+
+        // Co-prime numbers (should be true)
+        assert!(relatively_prime_u64(17, 31));
+        assert!(relatively_prime_u64(97, 43));
+        assert!(relatively_prime_u64(7919, 65537));
+        assert!(relatively_prime_u64(15485863, 32452843));
+
+        // Small prime numbers (should be true)
+        assert!(relatively_prime_u64(13, 17));
+        assert!(relatively_prime_u64(101, 103));
+        assert!(relatively_prime_u64(1009, 1013));
+
+        // Large numbers (some cases where they are relatively prime or not)
+        assert!(!relatively_prime_u64(
+            190266297176832000,
+            10430732356495263744
+        ));
+        assert!(!relatively_prime_u64(
+            2040134905096275968,
+            5701159354248194048
+        ));
+        assert!(!relatively_prime_u64(
+            16611311494648745984,
+            7514969329383038976
+        ));
+        assert!(!relatively_prime_u64(
+            14863931409971066880,
+            7911906750992527360
+        ));
+
+        // Max values
+        assert!(relatively_prime_u64(u64::MAX, 1));
+        assert!(relatively_prime_u64(u64::MAX, u64::MAX - 1));
+        assert!(!relatively_prime_u64(u64::MAX, u64::MAX));
     }
 }
