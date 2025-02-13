@@ -104,6 +104,7 @@ pub trait PolynomialSpace: Copy {
 /// A coset of the form `gH` where `H` is the unique multiplicative subgroup of order `n = 2^{log_n}`.
 ///
 /// Fixing a generator `h` of `H`, we index this subgroup by `{g, gh, gh^2, ..., gh^{-1}}`.
+/// We refer to `g` as the "shift" of the coset.
 #[derive(Copy, Clone, Debug)]
 pub struct TwoAdicMultiplicativeCoset<Val: TwoAdicField> {
     /// The log of the order of the subgroup.
