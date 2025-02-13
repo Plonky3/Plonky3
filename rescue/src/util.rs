@@ -19,8 +19,7 @@ pub(crate) const fn get_alpha<F: PrimeField64>() -> u64 {
         a += 1;
     }
 
-    // This should never happen
-    unreachable!();
+    panic!("No valid alpha found. Rescue does not support fields of order 2 or 3.");
 }
 
 /// Given alpha, find its multiplicative inverse in `Z/⟨p − 1⟩`.
