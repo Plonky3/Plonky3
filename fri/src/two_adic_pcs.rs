@@ -159,18 +159,19 @@ where
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
-        let ldes: Vec<_> = evaluations
-            .into_iter()
-            .map(|(domain, evals)| {
-                assert_eq!(domain.size(), evals.height());
-                let shift = Val::GENERATOR / domain.shift;
-                // Commit to the bit-reversed LDE.
+        // Preallocate to avoid multiple resizes
+        let mut ldes = Vec::with_capacity(evaluations.len());
+
+        for (domain, evals) in evaluations {
+            assert_eq!(domain.size(), evals.height());
+            let shift = Val::GENERATOR / domain.shift;
+            ldes.push(
                 self.dft
                     .coset_lde_batch(evals, self.fri.log_blowup, shift)
                     .bit_reverse_rows()
-                    .to_row_major_matrix()
-            })
-            .collect();
+                    .to_row_major_matrix(),
+            );
+        }
 
         self.mmcs.commit(ldes)
     }
