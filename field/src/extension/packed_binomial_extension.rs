@@ -26,7 +26,7 @@ pub struct PackedBinomialExtensionField<F: Field, PF: PackedField<Scalar = F>, c
 }
 
 impl<F: Field, PF: PackedField<Scalar = F>, const D: usize> PackedBinomialExtensionField<F, PF, D> {
-    fn new(value: [PF; D]) -> Self {
+    const fn new(value: [PF; D]) -> Self {
         Self { value }
     }
 }

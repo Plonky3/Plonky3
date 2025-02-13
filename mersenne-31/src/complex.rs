@@ -19,7 +19,7 @@ impl ComplexExtendable for Mersenne31 {
     // sage: F2.multiplicative_generator()
     // u + 12
     const COMPLEX_GENERATOR: Complex<Self> =
-        Complex::new_complex(Mersenne31::new(12), Mersenne31::ONE);
+        Complex::new_complex(Self::new(12), Self::ONE);
 
     fn circle_two_adic_generator(bits: usize) -> Complex<Self> {
         // Generator of the whole 2^TWO_ADICITY group
@@ -32,7 +32,7 @@ impl ComplexExtendable for Mersenne31 {
         // sage: assert(g.multiplicative_order() == 2^31)
         // sage: assert(g.norm() == 1)
         let base =
-            Complex::new_complex(Mersenne31::new(311_014_874), Mersenne31::new(1_584_694_829));
+            Complex::new_complex(Self::new(311_014_874), Self::new(1_584_694_829));
         base.exp_power_of_2(Self::CIRCLE_TWO_ADICITY - bits)
     }
 }
@@ -52,8 +52,8 @@ impl HasTwoAdicBinomialExtension<2> for Mersenne31 {
         // 1117296306*u + 1166849849
         // sage: assert(g.multiplicative_order() == 2^32)
         let base = Complex::<Self>::new_complex(
-            Mersenne31::new(1_166_849_849),
-            Mersenne31::new(1_117_296_306),
+            Self::new(1_166_849_849),
+            Self::new(1_117_296_306),
         );
         base.exp_power_of_2(Self::EXT_TWO_ADICITY - bits).to_array()
     }
