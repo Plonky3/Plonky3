@@ -404,42 +404,48 @@ pub unsafe fn convert_vec<T, U>(mut vec: Vec<T>) -> Vec<U> {
 }
 
 #[inline(always)]
-pub const fn gcd_u64(mut u: u64, mut v: u64) -> u64 {
-    if u == 0 {
-        return v;
-    }
-    if v == 0 {
-        return u;
+pub const fn relatively_prime_u64(mut u: u64, mut v: u64) -> bool {
+    // Check that neither input is 0.
+    if u == 0 || v == 0 {
+        return false;
     }
 
-    // Find power of 2 common factor
-    let shift = (u | v).trailing_zeros();
+    // Check divisibility by 2.
+    if (u | v) & 1 == 0 {
+        return false;
+    }
 
-    // Remove common power-of-2 factor
-    u >>= shift;
-    v >>= shift;
-
-    // Remove factors of 2 from `u`
+    // Remove factors of 2 from `u` and `v`
     u >>= u.trailing_zeros();
+    if u == 1 {
+        return true
+    }
 
     while v != 0 {
-        // Remove factors of 2 from `v`
         v >>= v.trailing_zeros();
+        if v == 1 {
+            return true
+        }
 
-        // Ensure `u <= v`
-        // Const swap not table yet: https://github.com/rust-lang/rust/issues/134695
+        // Ensure u <= v
         if u > v {
+            // Simpler to use
+            // core::mem::swap(&mut u, &mut v);
+            // This will be stable once rust 1.85.0 hits.
+            // Until then we do it manually.
             let temp = u;
             u = v;
             v = temp;
         }
 
-        // Subtract smaller from larger
-        v -= u;
+        // This looks inefficient for v >> u but thanks to the fact that we remove 
+        // trailing_zeros of v in every iteration, it ends up much more performative
+        // than first glance implies. 
+        v -= u
     }
-
-    // Restore power-of-2 factor
-    u << shift
+    // If we made it through the loop, at no point is u or v equal to 1 and so the gcd
+    // must be greater than 1.
+    false
 }
 
 #[cfg(test)]
