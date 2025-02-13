@@ -9,12 +9,13 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 
-/// Given a `PolynomialSpace`, `S`, and a subset `R`, a Lagrange Selector `P_R` is
+/// Given a `PolynomialSpace`, `S`, and a subset `R`, a Lagrange selector `P_R` is
 /// a polynomial which is not equal to `0` for every element in `R` but is equal
 /// to `0` for every element of `S` not in `R`.
 ///
-/// This struct contains either a single or a collection of evaluations of
-/// several lagrange selector over a particular `PolynomialSpace`.
+/// This struct contains evaluations of several Lagrange selectors for a fixed
+/// `PolynomialSpace` over some collection of points disjoint from that
+/// `PolynomialSpace`.
 ///
 /// The Lagrange selector is normalized if it is equal to `1` for every element in `R`.
 /// The LagrangeSelectors given here are not normalized.
@@ -26,17 +27,17 @@ pub struct LagrangeSelectors<T> {
     pub is_last_row: T,
     /// A Lagrange selector corresponding the subset of all but the last point.
     pub is_transition: T,
-    /// The inverse of the zerofier which is a lagrange selector corresponding to the empty set
+    /// The inverse of the zerofier which is a Lagrange selector corresponding to the empty set
     pub inv_zeroifier: T,
 }
 
-/// Fixing a field `F`, `PolynomialSpace<Val = F>` is an abstract indexed subset of `F^n`
+/// Fixing a field, `F`, `PolynomialSpace<Val = F>` denotes an indexed subset of `F^n`
 /// with some additional algebraic structure.
 ///
 /// We do not expect `PolynomialSpace` to store this subset, instead it usually contains
 /// some associated data which allows it to generate the subset or pieces of it.
 ///
-/// Each `PolynomialSpace` should be part of a generic family of similar spaces for some
+/// Each `PolynomialSpace` should be part of a family of similar spaces for some
 /// collection of sizes (usually powers of two). Any space other than at the smallest size
 /// should be decomposable into a disjoint collection of smaller spaces. Additionally, the
 /// set of all `PolynomialSpace` of a given size should form a disjoint partition of some
@@ -66,7 +67,7 @@ pub trait PolynomialSpace: Copy {
     /// case this will return `None`.
     fn next_point<Ext: ExtensionField<Self::Val>>(&self, x: Ext) -> Option<Ext>;
 
-    /// Return another `PolynomialSpace` with size `min_size` disjoint from this space.
+    /// Return another `PolynomialSpace` with size at least `min_size` disjoint from this space.
     ///
     /// This fixes a canonical choice for prover/verifier determinism and LDE caching.
     fn create_disjoint_domain(&self, min_size: usize) -> Self;
@@ -78,6 +79,8 @@ pub trait PolynomialSpace: Copy {
 
     /// Split a set of polynomial evaluations over this `PolynomialSpace` into a vector
     /// of polynomial evaluations over each `PolynomialSpace` generated from `split_domains`.
+    ///
+    /// `evals.height()` must equal `self.size()` and `num_chunks` must divide `self.size()`.
     fn split_evals(
         &self,
         num_chunks: usize,
@@ -85,19 +88,31 @@ pub trait PolynomialSpace: Copy {
     ) -> Vec<RowMajorMatrix<Self::Val>>;
 
     /// Compute the zerofier of the space, evaluated at the given point.
+    ///
+    /// The zerofier is a polynomial which evaluates to `0` on every point of the
+    /// space `self` and has degree equal to `self.size()`. For univariate spaces
+    /// this means that it will not be equal to `0` at any point not in the `self`.
     fn zp_at_point<Ext: ExtensionField<Self::Val>>(&self, point: Ext) -> Ext;
 
-    /// Compute several lagrange selectors at a given point.
+    /// Compute several Lagrange selectors at a given point.
+    /// - The Lagrange selector of the first point.
+    /// - The Lagrange selector of the last point.
+    /// - The Lagrange selector of everything but the last point.
+    /// - The inverse of the zerofier.
     ///
-    /// Note that these may be unnormalized.
+    /// Note that these may not be normalized.
     fn selectors_at_point<Ext: ExtensionField<Self::Val>>(
         &self,
         point: Ext,
     ) -> LagrangeSelectors<Ext>;
 
-    /// Compute several lagrange selectors at all points of the given disjoint `PolynomialSpace`.
+    /// Compute several Lagrange selectors at all points of the given disjoint `PolynomialSpace`.
+    /// - The Lagrange selector of the first point.
+    /// - The Lagrange selector of the last point.
+    /// - The Lagrange selector of everything but the last point.
+    /// - The inverse of the zerofier.
     ///
-    /// Note that these may be unnormalized.
+    /// Note that these may not be normalized.
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>>;
 }
 
@@ -191,12 +206,12 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         (point * self.shift.inverse()).exp_power_of_2(self.log_n) - Ext::ONE
     }
 
-    /// Compute some lagrange selectors at the given point:
+    /// Compute several Lagrange selectors at the given point:
     ///
     /// Defining the zerofier by `Z_{gH}(X) = g^{-|H|}\prod_{h \in H} (X - gh) = (g^{-1}X)^|H| - 1` return:
-    /// - `Z_{gH}(X)/(g^{-1}X - 1)`: The lagrange selector of the point `g`.
-    /// - `Z_{gH}(X)/(g^{-1}X - h^{-1})`: The lagrange selector of the point `gh^{-1}` where `h` is the generator of `H`.
-    /// - `(g^{-1}X - h^{-1})`: The lagrange selector of the subset consisting of everything but the point `gh^{-1}`.
+    /// - `Z_{gH}(X)/(g^{-1}X - 1)`: The Lagrange selector of the point `g`.
+    /// - `Z_{gH}(X)/(g^{-1}X - h^{-1})`: The Lagrange selector of the point `gh^{-1}` where `h` is the generator of `H`.
+    /// - `(g^{-1}X - h^{-1})`: The Lagrange selector of the subset consisting of everything but the point `gh^{-1}`.
     /// - `1/Z_{gH}(X)`: The inverse of the zerofier.
     fn selectors_at_point<Ext: ExtensionField<Val>>(&self, point: Ext) -> LagrangeSelectors<Ext> {
         let unshifted_point = point * self.shift.inverse();
@@ -209,7 +224,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         }
     }
 
-    /// Compute the lagrange selectors of our space at every point in the coset.
+    /// Compute the Lagrange selectors of our space at every point in the coset.
     ///
     /// This will error if our space is not the group `H` and if the given
     /// coset is not disjoint from `H`.
