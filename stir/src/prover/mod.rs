@@ -389,7 +389,7 @@ where
         // less efficient than it could be. In the future, early termination can
         // be designed and implemented for this case, but this is unexplored as
         // of yet.
-        dbg!("Warning: quotient polynomial is zero");
+        tracing::info!("Warning: quotient polynomial is zero in round {}", round);
     }
 
     (

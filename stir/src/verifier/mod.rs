@@ -324,6 +324,8 @@ where
         pow_bits,
         num_queries,
         num_ood_samples,
+        log_evaluation_domain_size,
+        log_inv_rate,
         ..
     } = config.round_config(round).clone();
 
@@ -456,7 +458,6 @@ where
         .map(|(root, eval)| (root.exp_power_of_2(log_folding_factor), eval));
 
     // The quotient definining the function
-    // NP Ans_i in Verifier/Main loop/(b)
     let quotient_answers: Vec<_> = ood_samples
         .into_iter()
         .zip(betas)
@@ -473,6 +474,19 @@ where
     }
 
     let quotient_set = quotient_answers.iter().map(|(x, _)| *x).collect_vec();
+
+    // This is the degree bound (plus 1) for g_i:
+    let degree_bound = 1 << (log_evaluation_domain_size - log_inv_rate);
+    if quotient_set.len() >= degree_bound {
+        // In this case, the interpolator ans_i coincides with g_i, causing f_i
+        // to be 0. A potential cause is the combination of a small field,
+        // low-degree initial polynomial and large number of security bits
+        // required. This does not make the protocol vulnerable, but perhaps
+        // less efficient than it could be. In the future, early termination can
+        // be designed and implemented for this case, but this is unexplored as
+        // of yet.
+        tracing::info!("Warning: quotient polynomial is zero in round {}", round);
+    }
 
     if !verify_evaluations(
         &ans_polynomial,

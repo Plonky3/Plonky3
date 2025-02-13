@@ -229,6 +229,20 @@ fn test_gl_verify() {
 }
 
 #[test]
+fn test_verify_zero() {
+    tracing_subscriber::fmt::init();
+    let config = test_bb_stir_config(8, 2, 2, 3);
+    test_verify_with_config(&config);
+}
+
+#[test]
+fn test_verify_zero() {
+    tracing_subscriber::fmt::init();
+    let config = test_bb_stir_config(8, 2, 2, 3);
+    test_verify_with_config(&config);
+}
+
+#[test]
 fn test_gl_verify_variable_folding_factor() {
     let config = test_gl_stir_config_folding_factors(20, 1, vec![4, 3, 5]);
     test_gl_verify_with_config(&config);

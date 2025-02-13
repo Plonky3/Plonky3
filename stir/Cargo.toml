@@ -18,6 +18,7 @@ p3-util.workspace = true
 itertools.workspace = true
 serde.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
 
 p3-baby-bear = { workspace = true, optional = true }
 p3-symmetric = { workspace = true, optional = true }
