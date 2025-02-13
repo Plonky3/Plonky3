@@ -14,10 +14,12 @@ mod baby_bear;
 mod extension;
 mod mds;
 mod poseidon2;
+mod poseidon2_air;
 
 pub use baby_bear::*;
 pub use mds::*;
 pub use poseidon2::*;
+pub use poseidon2_air::*;
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 mod aarch64_neon;
