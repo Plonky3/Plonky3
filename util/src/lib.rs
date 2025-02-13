@@ -670,61 +670,61 @@ mod tests {
     #[test]
     fn test_relatively_prime_u64() {
         // Zero cases (should always return false)
-        assert_eq!(relatively_prime_u64(0, 0), false);
-        assert_eq!(relatively_prime_u64(10, 0), false);
-        assert_eq!(relatively_prime_u64(0, 10), false);
-        assert_eq!(relatively_prime_u64(0, 123456789), false);
+        assert!(!relatively_prime_u64(0, 0));
+        assert!(!relatively_prime_u64(10, 0));
+        assert!(!relatively_prime_u64(0, 10));
+        assert!(!relatively_prime_u64(0, 123456789));
 
         // Number with itself (if greater than 1, not relatively prime)
-        assert_eq!(relatively_prime_u64(1, 1), true);
-        assert_eq!(relatively_prime_u64(10, 10), false);
-        assert_eq!(relatively_prime_u64(99999, 99999), false);
+        assert!(relatively_prime_u64(1, 1));
+        assert!(!relatively_prime_u64(10, 10));
+        assert!(!relatively_prime_u64(99999, 99999));
 
         // Powers of 2 (always false since they share factor 2)
-        assert_eq!(relatively_prime_u64(2, 4), false);
-        assert_eq!(relatively_prime_u64(16, 32), false);
-        assert_eq!(relatively_prime_u64(64, 128), false);
-        assert_eq!(relatively_prime_u64(1024, 4096), false);
-        assert_eq!(relatively_prime_u64(u64::MAX, u64::MAX), false);
+        assert!(!relatively_prime_u64(2, 4));
+        assert!(!relatively_prime_u64(16, 32));
+        assert!(!relatively_prime_u64(64, 128));
+        assert!(!relatively_prime_u64(1024, 4096));
+        assert!(!relatively_prime_u64(u64::MAX, u64::MAX));
 
         // One number is a multiple of the other (always false)
-        assert_eq!(relatively_prime_u64(5, 10), false);
-        assert_eq!(relatively_prime_u64(12, 36), false);
-        assert_eq!(relatively_prime_u64(15, 45), false);
-        assert_eq!(relatively_prime_u64(100, 500), false);
+        assert!(!relatively_prime_u64(5, 10));
+        assert!(!relatively_prime_u64(12, 36));
+        assert!(!relatively_prime_u64(15, 45));
+        assert!(!relatively_prime_u64(100, 500));
 
         // Co-prime numbers (should be true)
-        assert_eq!(relatively_prime_u64(17, 31), true);
-        assert_eq!(relatively_prime_u64(97, 43), true);
-        assert_eq!(relatively_prime_u64(7919, 65537), true);
-        assert_eq!(relatively_prime_u64(15485863, 32452843), true);
+        assert!(relatively_prime_u64(17, 31));
+        assert!(relatively_prime_u64(97, 43));
+        assert!(relatively_prime_u64(7919, 65537));
+        assert!(relatively_prime_u64(15485863, 32452843));
 
         // Small prime numbers (should be true)
-        assert_eq!(relatively_prime_u64(13, 17), true);
-        assert_eq!(relatively_prime_u64(101, 103), true);
-        assert_eq!(relatively_prime_u64(1009, 1013), true);
+        assert!(relatively_prime_u64(13, 17));
+        assert!(relatively_prime_u64(101, 103));
+        assert!(relatively_prime_u64(1009, 1013));
 
         // Large numbers (some cases where they are relatively prime or not)
-        assert_eq!(
-            relatively_prime_u64(190266297176832000, 10430732356495263744),
-            false
-        );
-        assert_eq!(
-            relatively_prime_u64(2040134905096275968, 5701159354248194048),
-            false
-        );
-        assert_eq!(
-            relatively_prime_u64(16611311494648745984, 7514969329383038976),
-            false
-        );
-        assert_eq!(
-            relatively_prime_u64(14863931409971066880, 7911906750992527360),
-            false
-        );
+        assert!(!relatively_prime_u64(
+            190266297176832000,
+            10430732356495263744
+        ));
+        assert!(!relatively_prime_u64(
+            2040134905096275968,
+            5701159354248194048
+        ));
+        assert!(!relatively_prime_u64(
+            16611311494648745984,
+            7514969329383038976
+        ));
+        assert!(!relatively_prime_u64(
+            14863931409971066880,
+            7911906750992527360
+        ));
 
         // Max values
-        assert_eq!(relatively_prime_u64(u64::MAX, 1), true);
-        assert_eq!(relatively_prime_u64(u64::MAX, u64::MAX - 1), true);
-        assert_eq!(relatively_prime_u64(u64::MAX, u64::MAX), false);
+        assert!(relatively_prime_u64(u64::MAX, 1));
+        assert!(relatively_prime_u64(u64::MAX, u64::MAX - 1));
+        assert!(!relatively_prime_u64(u64::MAX, u64::MAX));
     }
 }
