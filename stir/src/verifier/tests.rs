@@ -33,8 +33,19 @@ macro_rules! impl_generate_proof_with_config {
     ($name:ident, $ext:ty, $ext_mmcs:ty, $proof:ty, $challenger:ty) => {
         pub fn $name(config: &StirConfig<$ext, $ext_mmcs>, challenger: &mut $challenger) -> $proof {
             let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
+
+            // NP TODO remove
+            println!("Committing...");
+
             let (witness, commitment) = commit(&config, polynomial);
+
+            // NP TODO remove
+            println!("Proving...");
+
             let proof = prove(&config, witness, commitment, challenger);
+
+            // NP TODO remove
+            println!("Proved...");
 
             // Serialize the proof to a file
             serde_json::to_writer(init_file(), &proof).unwrap();
@@ -221,7 +232,6 @@ fn test_bb_verify_variable_folding_factor() {
     let config = test_bb_stir_config_folding_factors(20, 1, vec![4, 3, 5]);
     test_bb_verify_with_config(&config);
 }
-
 #[test]
 fn test_gl_verify() {
     let config = test_gl_stir_config(20, 2, 4, 3);
@@ -229,23 +239,16 @@ fn test_gl_verify() {
 }
 
 #[test]
-fn test_verify_zero() {
-    tracing_subscriber::fmt::init();
-    let config = test_bb_stir_config(8, 2, 2, 3);
-    test_verify_with_config(&config);
-}
-
-#[test]
-fn test_verify_zero() {
-    tracing_subscriber::fmt::init();
-    let config = test_bb_stir_config(8, 2, 2, 3);
-    test_verify_with_config(&config);
-}
-
-#[test]
 fn test_gl_verify_variable_folding_factor() {
     let config = test_gl_stir_config_folding_factors(20, 1, vec![4, 3, 5]);
     test_gl_verify_with_config(&config);
+}
+
+#[test]
+fn test_verify_zero() {
+    tracing_subscriber::fmt::init();
+    let config = test_bb_stir_config(8, 2, 2, 3);
+    test_bb_verify_with_config(&config);
 }
 
 #[test]

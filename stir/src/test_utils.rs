@@ -138,7 +138,6 @@ impl_test_mmcs_config!(
     BBCompress,
     BBMMCS
 );
-
 impl_test_mmcs_config!(
     test_gl_mmcs_config,
     GLExtMMCS,
@@ -160,7 +159,6 @@ impl_test_stir_config_folding_factors!(
     BBExtMMCS,
     test_bb_mmcs_config
 );
-
 impl_test_stir_config_folding_factors!(
     test_gl_stir_config_folding_factors,
     GLExt,
