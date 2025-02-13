@@ -33,4 +33,3 @@ harness = false
 #[[bench]]
 #name = "bench_avx2split"
 #harness = false
-

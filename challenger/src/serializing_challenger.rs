@@ -55,7 +55,7 @@ where
     F: PrimeField32,
     H: CryptographicHasher<u8, [u8; 32]>,
 {
-    pub fn from_hasher(initial_state: Vec<u8>, hasher: H) -> Self {
+    pub const fn from_hasher(initial_state: Vec<u8>, hasher: H) -> Self {
         Self::new(HashChallenger::new(initial_state, hasher))
     }
 }
@@ -172,7 +172,7 @@ where
     F: PrimeField64,
     H: CryptographicHasher<u8, [u8; 32]>,
 {
-    pub fn from_hasher(initial_state: Vec<u8>, hasher: H) -> Self {
+    pub const fn from_hasher(initial_state: Vec<u8>, hasher: H) -> Self {
         Self::new(HashChallenger::new(initial_state, hasher))
     }
 }

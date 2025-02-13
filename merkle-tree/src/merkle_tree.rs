@@ -89,7 +89,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
 
             let next_digests = compress_and_inject::<P, PW, H, C, M, DIGEST_ELEMS>(
                 prev_layer,
-                matrices_to_inject,
+                &matrices_to_inject,
                 h,
                 c,
             );
@@ -167,7 +167,7 @@ where
 /// some leaf data, if there are input matrices with (padded) height `n/2`.
 fn compress_and_inject<P, PW, H, C, M, const DIGEST_ELEMS: usize>(
     prev_layer: &[[PW::Value; DIGEST_ELEMS]],
-    matrices_to_inject: Vec<&M>,
+    matrices_to_inject: &[&M],
     h: &H,
     c: &C,
 ) -> Vec<[PW::Value; DIGEST_ELEMS]>

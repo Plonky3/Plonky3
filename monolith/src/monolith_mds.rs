@@ -27,14 +27,14 @@ impl<const WIDTH: usize, const NUM_ROUNDS: usize> Permutation<[Mersenne31; WIDTH
             let matrix: [u64; WIDTH] = MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH[..]
                 .try_into()
                 .unwrap();
-            apply_circulant(&matrix, input)
+            apply_circulant(&matrix, &input)
         } else {
             let mut shake = Shake128::default();
-            shake.update("Monolith".as_bytes());
+            shake.update(b"Monolith");
             shake.update(&[WIDTH as u8, NUM_ROUNDS as u8]);
             shake.update(&Mersenne31::ORDER_U32.to_le_bytes());
             shake.update(&[16, 15]);
-            shake.update("MDS".as_bytes());
+            shake.update(b"MDS");
             let mut shake_finalized = shake.finalize_xof();
             apply_cauchy_mds_matrix(&mut shake_finalized, input)
         }

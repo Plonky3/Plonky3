@@ -63,7 +63,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> BitReversableMatrix<T>
 }
 
 impl<T: Clone + Send + Sync, S: DenseStorage<T>> BitReversableMatrix<T> for DenseMatrix<T, S> {
-    type BitRev = BitReversedMatrixView<DenseMatrix<T, S>>;
+    type BitRev = BitReversedMatrixView<Self>;
     fn bit_reverse_rows(self) -> Self::BitRev {
         BitReversalPerm::new_view(self)
     }

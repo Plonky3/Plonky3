@@ -90,7 +90,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                 let xor = xor3::<AB::Expr>(
                     local.c[x][z].into(),
                     local.c[(x + 4) % 5][z].into(),
-                    local.c[(x + 1) % 5][(z + 63) % 64].into(),
+                    &local.c[(x + 1) % 5][(z + 63) % 64].into(),
                 );
                 let c_prime = local.c_prime[x][z];
                 builder.assert_eq(c_prime, xor);
@@ -111,7 +111,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                     let a_prime: AB::Var = local.a_prime[y][x][z];
                     let c: AB::Var = local.c[x][z];
                     let c_prime: AB::Var = local.c_prime[x][z];
-                    xor3::<AB::Expr>(a_prime.into(), c.into(), c_prime.into())
+                    xor3::<AB::Expr>(a_prime.into(), c.into(), &c_prime.into())
                 };
 
                 for limb in 0..U64_LIMBS {
@@ -151,7 +151,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                         local.b((x + 1) % 5, y, z).into(),
                         local.b((x + 2) % 5, y, z).into(),
                     );
-                    xor::<AB::Expr>(local.b(x, y, z).into(), andn)
+                    xor::<AB::Expr>(local.b(x, y, z).into(), &andn)
                 };
 
                 for limb in 0..U64_LIMBS {
@@ -185,7 +185,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                 rc_bit_i += this_round * this_round_constant;
             }
 
-            xor::<AB::Expr>(local.a_prime_prime_0_0_bits[i].into(), rc_bit_i)
+            xor::<AB::Expr>(local.a_prime_prime_0_0_bits[i].into(), &rc_bit_i)
         };
 
         for limb in 0..U64_LIMBS {

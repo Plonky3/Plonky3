@@ -82,8 +82,8 @@ pub struct FibonacciRow<F> {
 }
 
 impl<F> FibonacciRow<F> {
-    const fn new(left: F, right: F) -> FibonacciRow<F> {
-        FibonacciRow { left, right }
+    const fn new(left: F, right: F) -> Self {
+        Self { left, right }
     }
 }
 
@@ -154,7 +154,7 @@ fn test_incorrect_public_value() {
     let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
     let config = MyConfig::new(pcs);
-    let mut challenger = Challenger::new(perm.clone());
+    let mut challenger = Challenger::new(perm);
     let pis = vec![
         BabyBear::ZERO,
         BabyBear::ONE,

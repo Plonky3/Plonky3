@@ -43,8 +43,8 @@ impl Goldilocks {
     /// This is a const version of `.map(Goldilocks::new)`.
     #[inline]
     #[must_use]
-    pub(crate) const fn new_array<const N: usize>(input: [u64; N]) -> [Goldilocks; N] {
-        let mut output = [Goldilocks::ZERO; N];
+    pub(crate) const fn new_array<const N: usize>(input: [u64; N]) -> [Self; N] {
+        let mut output = [Self::ZERO; N];
         let mut i = 0;
         while i < N {
             output[i].value = input[i];
@@ -231,7 +231,7 @@ impl Field for Goldilocks {
 
     #[inline]
     fn halve(&self) -> Self {
-        Goldilocks::new(halve_u64::<P>(self.value))
+        Self::new(halve_u64::<P>(self.value))
     }
 
     #[inline]
@@ -274,11 +274,7 @@ impl QuotientMap<u64> for Goldilocks {
     /// Return `None` if the given integer is greater than `p = 2^64 - 2^32 + 1`.
     #[inline]
     fn from_canonical_checked(int: u64) -> Option<Self> {
-        if int < Self::ORDER_U64 {
-            Some(Self::new(int))
-        } else {
-            None
-        }
+        (int < Self::ORDER_U64).then(|| Self::new(int))
     }
 
     /// Convert a given `u64` integer into an element of the `Goldilocks` field.
@@ -287,7 +283,7 @@ impl QuotientMap<u64> for Goldilocks {
     /// In this case this function is actually always safe as the internal
     /// value is allowed to be any u64.
     #[inline(always)]
-    unsafe fn from_canonical_unchecked(int: u64) -> Goldilocks {
+    unsafe fn from_canonical_unchecked(int: u64) -> Self {
         Self::new(int)
     }
 }
@@ -309,7 +305,7 @@ impl QuotientMap<i64> for Goldilocks {
     ///
     /// Returns none if the input does not lie in the range `(-(2^63 - 2^31), 2^63 - 2^31)`.
     #[inline]
-    fn from_canonical_checked(int: i64) -> Option<Goldilocks> {
+    fn from_canonical_checked(int: i64) -> Option<Self> {
         const POS_BOUND: i64 = (P >> 1) as i64;
         const NEG_BOUND: i64 = -POS_BOUND;
         match int {
@@ -325,7 +321,7 @@ impl QuotientMap<i64> for Goldilocks {
     /// In this case this function is actually always safe as the internal
     /// value is allowed to be any u64.
     #[inline(always)]
-    unsafe fn from_canonical_unchecked(int: i64) -> Goldilocks {
+    unsafe fn from_canonical_unchecked(int: i64) -> Self {
         Self::from_int(int)
     }
 }

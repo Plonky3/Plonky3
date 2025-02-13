@@ -31,7 +31,7 @@ impl CryptographicHasher<u8, [u8; 32]> for Sha256 {
         I: IntoIterator<Item = &'a [u8]>,
     {
         let mut hasher = sha2::Sha256::new();
-        for chunk in input.into_iter() {
+        for chunk in input {
             hasher.update(chunk);
         }
         hasher.finalize().into()

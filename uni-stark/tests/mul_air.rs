@@ -43,7 +43,7 @@ pub struct MulAir {
 
 impl Default for MulAir {
     fn default() -> Self {
-        MulAir {
+        Self {
             degree: 3,
             uses_boundary_constraints: true,
             uses_transition_constraints: true,
@@ -113,8 +113,8 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
 }
 
 fn do_test<SC: StarkGenericConfig>(
-    config: SC,
-    air: MulAir,
+    config: &SC,
+    air: &MulAir,
     log_height: usize,
     challenger: SC::Challenger,
 ) -> Result<(), impl Debug>
@@ -125,7 +125,7 @@ where
     let trace = air.random_valid_trace(log_height, true);
 
     let mut p_challenger = challenger.clone();
-    let proof = prove(&config, &air, &mut p_challenger, trace, &vec![]);
+    let proof = prove(config, air, &mut p_challenger, trace, &vec![]);
 
     let serialized_proof = postcard::to_allocvec(&proof).expect("unable to serialize proof");
     tracing::debug!("serialized_proof len: {} bytes", serialized_proof.len());
@@ -133,14 +133,8 @@ where
     let deserialized_proof =
         postcard::from_bytes(&serialized_proof).expect("unable to deserialize proof");
 
-    let mut v_challenger = challenger.clone();
-    verify(
-        &config,
-        &air,
-        &mut v_challenger,
-        &deserialized_proof,
-        &vec![],
-    )
+    let mut v_challenger = challenger;
+    verify(config, air, &mut v_challenger, &deserialized_proof, &vec![])
 }
 
 fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), impl Debug> {
@@ -170,7 +164,7 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), impl Debug> {
         ..Default::default()
     };
 
-    do_test(config, air, 1 << log_n, Challenger::new(perm))
+    do_test(&config, &air, 1 << log_n, Challenger::new(perm))
 }
 
 #[test]
@@ -231,7 +225,7 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
         ..Default::default()
     };
 
-    do_test(config, air, 1 << log_n, Challenger::new(perm))
+    do_test(&config, &air, 1 << log_n, Challenger::new(perm))
 }
 
 #[test]
@@ -299,8 +293,8 @@ fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     };
 
     do_test(
-        config,
-        air,
+        &config,
+        &air,
         1 << log_n,
         Challenger::from_hasher(vec![], byte_hash),
     )

@@ -33,7 +33,7 @@ pub trait DenseStorage<T>: Borrow<[T]> + Send + Sync {
 }
 // Cow doesn't impl IntoOwned so we can't blanket it
 impl<T: Clone + Send + Sync> DenseStorage<T> for Vec<T> {
-    fn to_vec(self) -> Vec<T> {
+    fn to_vec(self) -> Self {
         self
     }
 }
@@ -391,7 +391,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
     {
         let buf = &self.values.borrow()[r * self.width..(r + 1) * self.width];
         let (packed, sfx) = P::pack_slice_with_suffix(buf);
-        (packed.iter().cloned(), sfx.iter().cloned())
+        (packed.iter().copied(), sfx.iter().cloned())
     }
 
     #[inline]
@@ -405,7 +405,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
     {
         let buf = &self.values.borrow()[r * self.width..(r + 1) * self.width];
         let (packed, sfx) = P::pack_slice_with_suffix(buf);
-        packed.iter().cloned().chain(iter::once(P::from_fn(|i| {
+        packed.iter().copied().chain(iter::once(P::from_fn(|i| {
             sfx.get(i).cloned().unwrap_or_default()
         })))
     }
@@ -524,7 +524,7 @@ mod tests {
 
         let matrix_values = (START_INDEX..=VALUE_LEN).collect::<Vec<_>>();
         let matrix = RowMajorMatrix::new(matrix_values, WIDTH);
-        let transposed = matrix.clone().transpose();
+        let transposed = matrix.transpose();
 
         assert_eq!(transposed.width(), HEIGHT);
         assert_eq!(transposed.height(), WIDTH);
@@ -548,7 +548,7 @@ mod tests {
 
         let matrix_values = (START_INDEX..=VALUE_LEN).collect::<Vec<_>>();
         let matrix = RowMajorMatrix::new(matrix_values, WIDTH);
-        let transposed = matrix.clone().transpose();
+        let transposed = matrix.transpose();
 
         assert_eq!(transposed.width(), HEIGHT);
         assert_eq!(transposed.height(), WIDTH);

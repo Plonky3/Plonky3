@@ -87,9 +87,9 @@ impl<
     #[inline]
     fn width(&self) -> usize {
         match self {
-            ProofObjective::Blake3(b3_air) => <Blake3Air as BaseAir<F>>::width(b3_air),
-            ProofObjective::Poseidon2(p2_air) => p2_air.width(),
-            ProofObjective::Keccak(k_air) => <KeccakAir as BaseAir<F>>::width(k_air),
+            Self::Blake3(b3_air) => <Blake3Air as BaseAir<F>>::width(b3_air),
+            Self::Poseidon2(p2_air) => p2_air.width(),
+            Self::Keccak(k_air) => <KeccakAir as BaseAir<F>>::width(k_air),
         }
     }
 }
@@ -118,9 +118,9 @@ impl<
     #[inline]
     fn eval(&self, builder: &mut AB) {
         match self {
-            ProofObjective::Blake3(b3_air) => b3_air.eval(builder),
-            ProofObjective::Poseidon2(p2_air) => p2_air.eval(builder),
-            ProofObjective::Keccak(k_air) => k_air.eval(builder),
+            Self::Blake3(b3_air) => b3_air.eval(builder),
+            Self::Poseidon2(p2_air) => p2_air.eval(builder),
+            Self::Keccak(k_air) => k_air.eval(builder),
         }
     }
 }
@@ -164,15 +164,11 @@ impl<
         StandardUniform: Distribution<F>,
     {
         match self {
-            ProofObjective::Blake3(b3_air) => {
-                b3_air.generate_trace_rows(num_hashes, extra_capacity_bits)
-            }
-            ProofObjective::Poseidon2(p2_air) => {
+            Self::Blake3(b3_air) => b3_air.generate_trace_rows(num_hashes, extra_capacity_bits),
+            Self::Poseidon2(p2_air) => {
                 p2_air.generate_vectorized_trace_rows(num_hashes, extra_capacity_bits)
             }
-            ProofObjective::Keccak(k_air) => {
-                k_air.generate_trace_rows(num_hashes, extra_capacity_bits)
-            }
+            Self::Keccak(k_air) => k_air.generate_trace_rows(num_hashes, extra_capacity_bits),
         }
     }
 }

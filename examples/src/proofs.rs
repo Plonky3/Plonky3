@@ -22,7 +22,7 @@ use crate::types::{
 };
 
 /// Produce a MerkleTreeMmcs which uses the KeccakF permutation.
-fn get_keccak_mmcs<F: Field>() -> KeccakMerkleMmcs<F> {
+const fn get_keccak_mmcs<F: Field>() -> KeccakMerkleMmcs<F> {
     let u64_hash = PaddingFreeSponge::<KeccakF, 25, 17, 4>::new(KeccakF {});
 
     let field_hash = SerializingHasher32To64::new(u64_hash);
@@ -37,7 +37,7 @@ fn get_keccak_mmcs<F: Field>() -> KeccakMerkleMmcs<F> {
 /// The first permutation will be used for compression and the second for more sponge hashing.
 /// Currently this is only intended to be used with a pair of Poseidon2 hashes of with 16 and 24
 /// but this can easily be generalised in future if we desire.
-fn get_poseidon2_mmcs<
+const fn get_poseidon2_mmcs<
     F: Field,
     Perm16: CryptographicPermutation<[F; 16]> + CryptographicPermutation<[F::Packing; 16]>,
     Perm24: CryptographicPermutation<[F; 24]> + CryptographicPermutation<[F::Packing; 24]>,
@@ -45,9 +45,9 @@ fn get_poseidon2_mmcs<
     perm16: Perm16,
     perm24: Perm24,
 ) -> Poseidon2MerkleMmcs<F, Perm16, Perm24> {
-    let hash = Poseidon2Sponge::new(perm24.clone());
+    let hash = Poseidon2Sponge::new(perm24);
 
-    let compress = Poseidon2Compression::new(perm16.clone());
+    let compress = Poseidon2Compression::new(perm16);
 
     Poseidon2MerkleMmcs::<F, _, _>::new(hash, compress)
 }
@@ -65,7 +65,7 @@ pub fn prove_monty31_keccak<
     DFT: TwoAdicSubgroupDft<F>,
     PG: ExampleHashAir<F, KeccakStarkConfig<F, EF, DFT>>,
 >(
-    proof_goal: PG,
+    proof_goal: &PG,
     dft: DFT,
     num_hashes: usize,
 ) -> Result<(), impl Debug>
@@ -86,10 +86,10 @@ where
     let mut proof_challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
     let mut verif_challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
 
-    let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
+    let proof = prove(&config, proof_goal, &mut proof_challenger, trace, &vec![]);
     report_proof_size(&proof);
 
-    verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
+    verify(&config, proof_goal, &mut verif_challenger, &proof, &vec![])
 }
 
 /// Prove the given ProofGoal using the Poseidon2 hash function to build the merkle tree.
@@ -107,7 +107,7 @@ pub fn prove_monty31_poseidon2<
     Perm24: CryptographicPermutation<[F; 24]> + CryptographicPermutation<[F::Packing; 24]>,
     PG: ExampleHashAir<F, Poseidon2StarkConfig<F, EF, DFT, Perm16, Perm24>>,
 >(
-    proof_goal: PG,
+    proof_goal: &PG,
     dft: DFT,
     num_hashes: usize,
     perm16: Perm16,
@@ -128,12 +128,12 @@ where
     let config = StarkConfig::new(pcs);
 
     let mut proof_challenger = DuplexChallenger::new(perm24.clone());
-    let mut verif_challenger = DuplexChallenger::new(perm24.clone());
+    let mut verif_challenger = DuplexChallenger::new(perm24);
 
-    let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
+    let proof = prove(&config, proof_goal, &mut proof_challenger, trace, &vec![]);
     report_proof_size(&proof);
 
-    verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
+    verify(&config, proof_goal, &mut verif_challenger, &proof, &vec![])
 }
 
 /// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.
@@ -149,7 +149,7 @@ pub fn prove_m31_keccak<
         KeccakCircleStarkConfig<Mersenne31, BinomialExtensionField<Mersenne31, 3>>,
     >,
 >(
-    proof_goal: PG,
+    proof_goal: &PG,
     num_hashes: usize,
 ) -> Result<(), impl Debug> {
     type F = Mersenne31;
@@ -168,10 +168,10 @@ pub fn prove_m31_keccak<
     let mut proof_challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
     let mut verif_challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
 
-    let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
+    let proof = prove(&config, proof_goal, &mut proof_challenger, trace, &vec![]);
     report_proof_size(&proof);
 
-    verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
+    verify(&config, proof_goal, &mut verif_challenger, &proof, &vec![])
 }
 
 /// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.
@@ -188,7 +188,7 @@ pub fn prove_m31_poseidon2<
     Perm24: CryptographicPermutation<[F; 24]> + CryptographicPermutation<[F::Packing; 24]>,
     PG: ExampleHashAir<F, Poseidon2CircleStarkConfig<F, EF, Perm16, Perm24>>,
 >(
-    proof_goal: PG,
+    proof_goal: &PG,
     num_hashes: usize,
     perm16: Perm16,
     perm24: Perm24,
@@ -208,12 +208,12 @@ where
     let config = Poseidon2CircleStarkConfig::new(pcs);
 
     let mut proof_challenger = DuplexChallenger::new(perm24.clone());
-    let mut verif_challenger = DuplexChallenger::new(perm24.clone());
+    let mut verif_challenger = DuplexChallenger::new(perm24);
 
-    let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
+    let proof = prove(&config, proof_goal, &mut proof_challenger, trace, &vec![]);
     report_proof_size(&proof);
 
-    verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
+    verify(&config, proof_goal, &mut verif_challenger, &proof, &vec![])
 }
 
 /// Report the result of the proof.
