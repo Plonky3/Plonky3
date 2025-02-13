@@ -25,7 +25,7 @@ where
     T: Clone,
     H: CryptographicHasher<T, [T; OUT_LEN]>,
 {
-    pub fn new(initial_state: Vec<T>, hasher: H) -> Self {
+    pub const fn new(initial_state: Vec<T>, hasher: H) -> Self {
         Self {
             input_buffer: initial_state,
             output_buffer: vec![],
