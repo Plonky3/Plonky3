@@ -31,7 +31,7 @@ fn test_coset_too_large() {
 #[test]
 // Checks that interpolation over the coset works as expected
 fn test_interpolate_evals() {
-    let coset = TwoAdicCoset::<BB>::new(BB::ONE, 3);
+    let mut coset = TwoAdicCoset::<BB>::new(BB::ONE, 3);
 
     let coeffs = vec![3, 5, 6, 7, 9]
         .into_iter()

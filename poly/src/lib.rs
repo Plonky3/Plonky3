@@ -32,7 +32,9 @@ pub mod test_utils;
 #[derive(Clone, PartialEq, Eq, Hash, Default, Debug, Serialize, Deserialize)]
 #[serde(bound(deserialize = "Vec<F>: Deserialize<'de>",))]
 pub struct Polynomial<F: Field> {
-    // The coefficient of `x^i` is stored at location `i` in `self.coeffs`.
+    // The coefficient of `x^i` is stored at location `i` in `self.coeffs`. It
+    // is important for this field to remain private, as leading-zeroes trimming
+    // is handled internally and is abstracted from the user.
     coeffs: Vec<F>,
 }
 

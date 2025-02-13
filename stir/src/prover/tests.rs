@@ -26,7 +26,6 @@ use super::{prove_round, RoundConfig};
 fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
     let mut rng = rand::thread_rng();
 
-    // NP TODO reintroduce
     let config = test_bb_stir_config(20, 2, 3, 4);
 
     // ============================== Committing ==============================
@@ -41,7 +40,7 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
         config.log_starting_degree() + config.log_starting_inv_rate(),
     );
 
-    let original_domain = original_domain.set_shift(original_domain.generator());
+    let mut original_domain = original_domain.set_shift(original_domain.generator());
 
     let original_evals = original_domain.evaluate_polynomial(&f_0);
 

@@ -16,3 +16,9 @@ p3-baby-bear.workspace = true
 p3-goldilocks.workspace = true
 itertools.workspace = true
 rand.workspace = true
+criterion.workspace = true
+p3-poly = { workspace = true, features = ["test-utils"] }
+
+[[bench]]
+name = "coset"
+harness = false

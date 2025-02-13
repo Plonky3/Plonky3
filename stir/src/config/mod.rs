@@ -158,7 +158,7 @@ pub struct StirConfig<F: TwoAdicField, M: Clone> {
     /// Final of PoW bits (for the queries).
     final_pow_bits: usize,
 
-    // / Generator of the (subgroup whose shift is the) initial domain, kept
+    /// Generator of the (subgroup whose shift is the) initial domain, kept
     // throughout rounds for shifting purposes
     subgroup_generator: F,
 }
@@ -206,37 +206,6 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
         let starting_domain_log_size =
             parameters.log_starting_degree + parameters.log_starting_inv_rate;
 
-        // NP TODO batching
-        /*
-        // PoW bits for the batching steps
-        let mut batching_pow_bits = 0.;
-
-        if ldt_parameters.batch_size > 1 {
-            let prox_gaps_error_batching = parameters.security_assumption.prox_gaps_error(
-                ldt_parameters.log_degree,
-                parameters.starting_log_inv_rate,
-                ldt_parameters.field.extension_bit_size(),
-                ldt_parameters.batch_size,
-            ); // We now start, the initial folding pow bits
-            batching_pow_bits = pow_util(security_level, prox_gaps_error_batching);
-
-            // Add the round for the batching
-            protocol_builder = protocol_builder
-                .start_round("batching_round")
-                .verifier_message(VerifierMessage::new(
-                    vec![RbRError::new("batching_error", prox_gaps_error_batching)],
-                    batching_pow_bits,
-                ))
-                .end_round();
-        } */
-
-        /* let mut current_merkle_tree = MerkleTree::new(
-            starting_domain_log_size - log_starting_folding_factor,
-            ldt_parameters.field,
-            (1 << log_starting_folding_factor) * ldt_parameters.batch_size,
-            false, // First tree is over the base
-        ); */
-
         // Degree of next polynomial to send
         let mut current_log_degree = log_starting_degree - log_starting_folding_factor;
         let mut log_inv_rate = log_starting_inv_rate;
@@ -277,22 +246,6 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
                 next_rate,
                 field_bits,
             );
-
-            // Add OOD rounds to protocol
-            // NP re-introduce depending on FS/ProtocolBuilder/absorption of public parameters
-            /* if ood_samples > 0 {
-                let ood_error = parameters.security_assumption.ood_error(
-                    current_log_degree,
-                    next_rate,
-                    field_bits,
-                    ood_samples,
-                );
-            } */
-
-            // NP TODO ask Giacomo: How to check (and what to do) if the field
-            // is too small for the targeted sec level/polynomial degree? E. g.
-            // Start with deg' 1 << 3, this wants ~128 queries; the code doesn't
-            // complain
 
             // Compute the number of queries required
             let num_queries = security_assumption.queries(protocol_security_level, log_inv_rate);

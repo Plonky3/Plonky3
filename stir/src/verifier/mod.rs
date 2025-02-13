@@ -37,8 +37,6 @@ struct VirtualFunction<F: TwoAdicField> {
     quotient_set: Vec<F>,
 }
 
-// NP TODO rethink generality of description
-
 // Oracle allowing the verifier to compute values of f_i, either directly for
 // the original codeword, or using the combination (i. e. degree-correction)
 // and folding randomness and the values of g_i.
@@ -123,8 +121,6 @@ pub struct VerificationState<F: TwoAdicField, M: Mmcs<F>> {
 
     // Oracle used to compute the value of the virtual function f_i
     oracle: Oracle<F>,
-
-    // NP TODO maybe move to the config or somewehre else (this is proof-independent)
 
     // Domain L_i
     domain: TwoAdicCoset<F>,

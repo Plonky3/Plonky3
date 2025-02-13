@@ -218,7 +218,6 @@ fn test_bb_verify() {
 
 #[test]
 fn test_bb_verify_variable_folding_factor() {
-    // NP TODO make bigger after more efficient FFT is introduced
     let config = test_bb_stir_config_folding_factors(20, 1, vec![4, 3, 5]);
     test_bb_verify_with_config(&config);
 }
@@ -350,5 +349,3 @@ fn test_verify_failing_cases() {
         VerificationError::FinalProofOfWork
     );
 }
-
-// Benchmarks with and without the hints

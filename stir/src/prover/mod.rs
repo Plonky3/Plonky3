@@ -85,9 +85,8 @@ where
     // N.B.: Defining L_0 with shift w or 1 is equivalent mathematically, but
     // the former allows one to always use the method shrink_subgroup in the
     // following rounds.
-    let domain = TwoAdicCoset::new(F::two_adic_generator(log_size), log_size);
+    let mut domain = TwoAdicCoset::new(F::two_adic_generator(log_size), log_size);
 
-    // NP TODO check if this is cheaper because of the unnecessary shift
     let evals = domain.evaluate_polynomial(&polynomial);
 
     let stacked_evals = RowMajorMatrix::new(
@@ -221,13 +220,10 @@ where
     let RoundConfig {
         log_folding_factor,
         log_next_folding_factor,
-        // NP TODO why is this not used?
-        log_evaluation_domain_size,
         pow_bits,
         num_queries,
         num_ood_samples,
-        // NP TODO why is this not used?
-        log_inv_rate,
+        ..
     } = config.round_config(round).clone();
 
     let StirRoundWitness {
@@ -238,16 +234,15 @@ where
         ..
     } = witness;
 
-    // ========= FOLDING =========
+    // ================================ Folding ================================
 
-    // Fold the polynomial and the evaluations
+    // Obtain g_i as the folding of f_{i - 1}
     let folded_polynomial = fold_polynomial(&polynomial, folding_randomness, log_folding_factor);
 
     // Compute the i-th domain L_i = w * <w^{2^i}>
-    let new_domain = domain.shrink_subgroup(1);
+    let mut new_domain = domain.shrink_subgroup(1);
 
-    // NP TODO can this be done more efficiently using stacked_evals? If not,
-    // remove stacked_evals from the witness?
+    // Evaluate g_i over L_i
     let folded_evals = new_domain.evaluate_polynomial(&folded_polynomial);
 
     // Stack the new folded evaluations, commit and observe the commitment (in
@@ -267,7 +262,7 @@ where
     challenger.observe(F::from_canonical_u8(Messages::RoundCommitment as u8));
     challenger.observe(new_commitment.clone());
 
-    // ========= OOD SAMPLING =========
+    // ============================= Odd Sampling =============================
 
     let mut ood_samples = Vec::new();
 
@@ -291,7 +286,7 @@ where
         .iter()
         .for_each(|&beta| challenger.observe_ext_element(beta));
 
-    // ========= STIR MESSAGE =========
+    // ============================= STIR Message =============================
 
     // Sample ramdomness for degree correction
     challenger.observe(F::from_canonical_u8(Messages::CombRandomness as u8));
@@ -313,7 +308,7 @@ where
     // Proof-of-work witness
     let pow_witness = challenger.grind(pow_bits);
 
-    // ========= QUERY PROOFS =========
+    // ============================= Query Proofs =============================
 
     // Open the Merkle paths for the queried indices
     let query_proofs: Vec<(Vec<EF>, M::Proof)> = queried_indices
@@ -327,7 +322,7 @@ where
         .map(|(mut k, v)| (k.remove(0), v))
         .collect();
 
-    // ========= POLY QUOTIENT =========
+    // ============================= PolyQuotient =============================
 
     // Compute the domain L_{i-1}^k = w^k * <w^{2^{i-1} * k}>
     let mut domain_k = domain.shrink_coset(log_folding_factor);
@@ -385,17 +380,16 @@ where
     let witness_polynomial =
         multiply_by_power_polynomial(&quotient_polynomial, comb_randomness, quotient_set_size);
 
-    // NP TODO remove/fix
     if quotient_polynomial.is_zero() {
         // This happens when the quotient set has deg(g_i) + 1 elements or more,
-        // in which case the interpolator ans_i coincides with g_i, causing
-        // f_i to be 0. A potential cause is the combination of a small field,
+        // in which case the interpolator ans_i coincides with g_i, causing f_i
+        // to be 0. A potential cause is the combination of a small field,
         // low-degree initial polynomial and large number of security bits
         // required. This does not make the protocol vulnerable, but perhaps
-        // less efficient than it could be.
+        // less efficient than it could be. In the future, early termination can
+        // be designed and implemented for this case, but this is unexplored as
+        // of yet.
         dbg!("Warning: quotient polynomial is zero");
-    } else {
-        assert_eq!(witness_polynomial.degree(), folded_polynomial.degree());
     }
 
     (
@@ -429,5 +423,3 @@ fn compute_shake_polynomial<F: TwoAdicField>(
     }
     shake_polynomial
 }
-
-// NP TODO when evaluating in the original domain w * <w>, detect this and evaluate over <w>, then cyclically shift (make sure this is correct)
