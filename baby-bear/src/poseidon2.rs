@@ -109,7 +109,7 @@ const INTERNAL_DIAG_MONTY_24: [BabyBear; 24] = BabyBear::new_array([
     15,
 ]);
 
-/// A defaul Poseidon2 for BabyBear using the round constants from the Horizon Labs implementation.
+/// A default Poseidon2 for BabyBear using the round constants from the Horizon Labs implementation.
 ///
 /// See https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_babybear.rs
 pub fn default_babybear_poseidon2_16() -> Poseidon2BabyBear<16> {
@@ -170,7 +170,7 @@ pub fn default_babybear_poseidon2_16() -> Poseidon2BabyBear<16> {
     )
 }
 
-/// A defaul Poseidon2 for BabyBear using the round constants from the Horizon Labs implementation.
+/// A default Poseidon2 for BabyBear using the round constants from the Horizon Labs implementation.
 ///
 /// See https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_babybear.rs
 pub fn default_babybear_poseidon2_24() -> Poseidon2BabyBear<24> {
