@@ -9,7 +9,7 @@ use p3_field::{
     PermutationMonomial, PrimeCharacteristicRing,
 };
 use p3_util::convert_vec;
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
 
 use crate::{FieldParameters, MontyField31, PackedMontyParameters, RelativelyPrimePower};
@@ -648,10 +648,10 @@ impl<PMP: PackedMontyParameters> Sub<PackedMontyField31AVX2<PMP>> for MontyField
     }
 }
 
-impl<PMP: PackedMontyParameters> Distribution<PackedMontyField31AVX2<PMP>> for Standard {
+impl<PMP: PackedMontyParameters> Distribution<PackedMontyField31AVX2<PMP>> for StandardUniform {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMontyField31AVX2<PMP> {
-        PackedMontyField31AVX2::<PMP>(rng.gen())
+        PackedMontyField31AVX2::<PMP>(rng.random())
     }
 }
 

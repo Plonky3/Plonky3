@@ -16,7 +16,7 @@ use p3_field::{
     PrimeField64, TwoAdicField,
 };
 use p3_util::{assume, branch_hint};
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
@@ -97,7 +97,7 @@ impl Debug for Goldilocks {
     }
 }
 
-impl Distribution<Goldilocks> for Standard {
+impl Distribution<Goldilocks> for StandardUniform {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Goldilocks {
         loop {
             let next_u64 = rng.next_u64();

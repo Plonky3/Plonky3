@@ -173,8 +173,8 @@ impl Mersenne31Dft {
 
 #[cfg(test)]
 mod tests {
-    use rand::distributions::{Distribution, Standard};
-    use rand::{thread_rng, Rng};
+    use rand::distr::{Distribution, StandardUniform};
+    use rand::{rng, Rng};
 
     use super::*;
     use crate::Mersenne31ComplexRadix2Dit;
@@ -185,11 +185,11 @@ mod tests {
     #[test]
     fn consistency()
     where
-        Standard: Distribution<Base>,
+        StandardUniform: Distribution<Base>,
     {
         const N: usize = 1 << 12;
-        let input = thread_rng()
-            .sample_iter(Standard)
+        let input = rng()
+            .sample_iter(StandardUniform)
             .take(N)
             .collect::<Vec<Base>>();
         let input = RowMajorMatrix::new_col(input);
@@ -201,16 +201,16 @@ mod tests {
     #[test]
     fn convolution()
     where
-        Standard: Distribution<Base>,
+        StandardUniform: Distribution<Base>,
     {
         const N: usize = 1 << 6;
-        let a = thread_rng()
-            .sample_iter(Standard)
+        let a = rng()
+            .sample_iter(StandardUniform)
             .take(N)
             .collect::<Vec<Base>>();
         let a = RowMajorMatrix::new_col(a);
-        let b = thread_rng()
-            .sample_iter(Standard)
+        let b = rng()
+            .sample_iter(StandardUniform)
             .take(N)
             .collect::<Vec<Base>>();
         let b = RowMajorMatrix::new_col(b);

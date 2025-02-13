@@ -590,7 +590,7 @@ mod tests {
         let (comm, data) =
             <Pcs as p3_commit::Pcs<Challenge, Challenger>>::commit(&pcs, vec![(d, evals)]);
 
-        let zeta: Challenge = rng.gen();
+        let zeta: Challenge = rng.random();
 
         let mut chal = Challenger::from_hasher(vec![], byte_hash);
         let (values, proof) = pcs.open(vec![(&data, vec![vec![zeta]])], &mut chal);

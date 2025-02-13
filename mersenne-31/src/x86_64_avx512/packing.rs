@@ -10,7 +10,7 @@ use p3_field::{
     PermutationMonomial, PrimeCharacteristicRing,
 };
 use p3_util::convert_vec;
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
 
 use crate::Mersenne31;
@@ -577,10 +577,10 @@ impl Sub<PackedMersenne31AVX512> for Mersenne31 {
     }
 }
 
-impl Distribution<PackedMersenne31AVX512> for Standard {
+impl Distribution<PackedMersenne31AVX512> for StandardUniform {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMersenne31AVX512 {
-        PackedMersenne31AVX512(rng.gen())
+        PackedMersenne31AVX512(rng.random())
     }
 }
 

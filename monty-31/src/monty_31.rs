@@ -15,7 +15,7 @@ use p3_field::{
     quotient_map_small_int, Field, InjectiveMonomial, Packable, PermutationMonomial,
     PrimeCharacteristicRing, PrimeField, PrimeField32, PrimeField64, TwoAdicField,
 };
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -131,7 +131,7 @@ impl<FP: MontyParameters> Debug for MontyField31<FP> {
     }
 }
 
-impl<FP: MontyParameters> Distribution<MontyField31<FP>> for Standard {
+impl<FP: MontyParameters> Distribution<MontyField31<FP>> for StandardUniform {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> MontyField31<FP> {
         loop {

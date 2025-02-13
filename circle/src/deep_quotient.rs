@@ -127,7 +127,7 @@ mod tests {
     use p3_field::PrimeCharacteristicRing;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_mersenne_31::Mersenne31;
-    use rand::{random, thread_rng};
+    use rand::{random, rng};
 
     use super::*;
 
@@ -139,7 +139,7 @@ mod tests {
         let domain = CircleDomain::standard(5);
         let evals = CircleEvaluations::from_cfft_order(
             domain,
-            RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << domain.log_n, 1 << 3),
+            RowMajorMatrix::<F>::rand(&mut rng(), 1 << domain.log_n, 1 << 3),
         );
 
         let alpha: EF = random();
@@ -164,7 +164,7 @@ mod tests {
         let log_blowup = 1;
         let evals = CircleEvaluations::from_cfft_order(
             CircleDomain::standard(log_n),
-            RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << log_n, 1 << 3),
+            RowMajorMatrix::<F>::rand(&mut rng(), 1 << log_n, 1 << 3),
         );
         let lde = evals
             .clone()
@@ -205,7 +205,7 @@ mod tests {
         for _ in 0..4 {
             let evals = CircleEvaluations::from_cfft_order(
                 domain,
-                RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << domain.log_n, 1 << 3),
+                RowMajorMatrix::<F>::rand(&mut rng(), 1 << domain.log_n, 1 << 3),
             );
             let ps_at_zeta = evals.evaluate_at_point(zeta);
             let lde = evals.extrapolate(lde_domain);
@@ -228,7 +228,7 @@ mod tests {
     fn test_extract_lambda() {
         let log_n = 5;
         for log_blowup in [1, 2, 3] {
-            let mut coeffs = RowMajorMatrix::<F>::rand(&mut thread_rng(), (1 << log_n) + 1, 1);
+            let mut coeffs = RowMajorMatrix::<F>::rand(&mut rng(), (1 << log_n) + 1, 1);
             coeffs.pad_to_height(1 << (log_n + log_blowup), F::ZERO);
 
             let domain = CircleDomain::standard(log_n + log_blowup);

@@ -13,7 +13,7 @@ use p3_matrix::Matrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{prove, verify, StarkConfig};
-use rand::thread_rng;
+use rand::rng;
 
 /// For testing the public values feature
 pub struct FibonacciAir {}
@@ -113,7 +113,7 @@ type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
 
 /// n-th Fibonacci number expected to be x
 fn test_public_value_impl(n: usize, x: u64) {
-    let perm = Perm::new_from_rng_128(&mut thread_rng());
+    let perm = Perm::new_from_rng_128(&mut rng());
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
     let val_mmcs = ValMmcs::new(hash, compress);
@@ -144,7 +144,7 @@ fn test_public_value() {
 #[test]
 #[should_panic(expected = "assertion `left == right` failed: constraints had nonzero value")]
 fn test_incorrect_public_value() {
-    let perm = Perm::new_from_rng_128(&mut thread_rng());
+    let perm = Perm::new_from_rng_128(&mut rng());
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
     let val_mmcs = ValMmcs::new(hash, compress);

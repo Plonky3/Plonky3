@@ -10,7 +10,7 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use itertools::Itertools;
 use num_bigint::BigUint;
 use p3_util::convert_vec;
-use rand::distributions::Standard;
+use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
 
@@ -481,14 +481,14 @@ where
 }
 
 impl<F: BinomiallyExtendable<D>, const D: usize> Distribution<BinomialExtensionField<F, D>>
-    for Standard
+    for StandardUniform
 where
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
     fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> BinomialExtensionField<F, D> {
         let mut res = [F::ZERO; D];
         for r in res.iter_mut() {
-            *r = Standard.sample(rng);
+            *r = StandardUniform.sample(rng);
         }
         BinomialExtensionField::from_basis_coefficients_slice(&res)
     }
