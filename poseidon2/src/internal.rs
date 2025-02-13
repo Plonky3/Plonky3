@@ -77,7 +77,7 @@ pub fn internal_permute_state<
     diffusion_mat: fn(&mut [A; WIDTH]),
     internal_constants: &[F],
 ) {
-    for elem in internal_constants.iter() {
+    for elem in internal_constants {
         add_rc_and_sbox_generic(&mut state[0], *elem);
         diffusion_mat(state);
     }

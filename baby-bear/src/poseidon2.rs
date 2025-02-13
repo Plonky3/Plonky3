@@ -324,7 +324,7 @@ mod tests {
         let mut input1: [F; 16] = rng.random();
         let mut input2 = input1;
 
-        let part_sum: F = input1[1..].iter().cloned().sum();
+        let part_sum: F = input1[1..].iter().copied().sum();
         let full_sum = part_sum + input1[0];
 
         input1[0] = part_sum - input1[0];
@@ -343,7 +343,7 @@ mod tests {
         let mut input1: [F; 24] = rng.random();
         let mut input2 = input1;
 
-        let part_sum: F = input1[1..].iter().cloned().sum();
+        let part_sum: F = input1[1..].iter().copied().sum();
         let full_sum = part_sum + input1[0];
 
         input1[0] = part_sum - input1[0];
