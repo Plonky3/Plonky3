@@ -14,7 +14,7 @@ pub(crate) fn compute_pow(security_level: usize, error: f64) -> f64 {
 // Given a polynomial f and a folding coefficient c, this function computes the usual folding
 // (same as in FRI) of the requested arity/folding factor:
 //   folded(x) = f_0(x) + c * f_1(x) + ... + c^(arity - 1) * f_(arity - 1)(x)
-// where f_i is the polynomial whose j_th coefficient is the i + j * arity-th
+// where f_i is the polynomial whose j_th coefficient is the (i + j * arity)-th
 // coefficient of f.
 pub(crate) fn fold_polynomial<F: TwoAdicField>(
     // The polynomial to fold
@@ -24,8 +24,8 @@ pub(crate) fn fold_polynomial<F: TwoAdicField>(
     // The log2 of the folding factor
     log_folding_factor: usize,
 ) -> Polynomial<F> {
-    let deg = if let Some(d) = polynomial.degree() {
-        d
+    let deg = if let Some(deg) = polynomial.degree() {
+        deg
     } else {
         return Polynomial::zero();
     };
@@ -33,12 +33,14 @@ pub(crate) fn fold_polynomial<F: TwoAdicField>(
     let folding_factor = 1 << log_folding_factor;
     let fold_size = (deg + 1).div_ceil(folding_factor);
 
+    // Powers of c
     let folding_powers = iter::successors(Some(F::ONE), |&x| Some(x * c))
         .take(folding_factor)
         .collect_vec();
 
     let mut folded_coeffs = vec![F::ZERO; fold_size];
 
+    // Computing the folded coefficients as described above
     for (i, coeff) in polynomial.coeffs().iter().enumerate() {
         folded_coeffs[i / folding_factor] += *coeff * folding_powers[i % folding_factor];
     }
@@ -46,85 +48,90 @@ pub(crate) fn fold_polynomial<F: TwoAdicField>(
     Polynomial::from_coeffs(folded_coeffs)
 }
 
-/// Multiply `polynomial` by `1 + coeff * x + coeff^2 * x^2 + ... + coeff^degee * x^degree`
+// Multiply the given polynomial by the power polynomial
+//   1 + c * x + c^2 * x^2 + ... + c^d * x^d
+// using the more efficient method of multiplying by
+// (c * x - 1)^(d + 1) and then dividing by (c * x - 1).
 pub(crate) fn multiply_by_power_polynomial<F: Field>(
+    // The polynomial to multiply
     polynomial: &Polynomial<F>,
-    coeff: F,
+    // The coefficient c defining the power polynomial
+    c: F,
+    // The degree d of the desired power polynomial
     degree: usize,
 ) -> Polynomial<F> {
-    // The power polynomial is 1
+    // The power polynomial of degree 0 is identically 1
     if degree == 0 {
         return polynomial.clone();
     }
 
-    //  Let (c, d) = (coeff, degree). The power polynomial we need to multiply
-    //  polynomial by coincides with ((c*x)^(d + 1) - 1) / (c*x - 1), and this
-    //  can be done more efficiently by a special-case multiplication followed
-    //  by a special-case division.
+    // Multiplication by ((c * x)^(d + 1) - 1) / (c * x - 1) can be done more efficiently
+    // by a special-case multiplication followed by a special-case division.
 
-    // We first compute polynomial * ((coeff*x)^(degree + 1) - 1), i. e.:
-    //   [0 ... 0] || coeff^(degree + 1) * coeffs
-    // - coeffs || [0 ... 0]
-    let coeff_pow_n_1 = coeff.exp_u64((degree + 1) as u64);
+    // We first compute polynomial * ((c * x)^(d + 1) - 1), i. e.:
+    //   [0 ... 0] || [c^(degree + 1) * coeffs]
+    // -  coeffs   || [0         ...         0]
+    let c_pow_n_1 = c.exp_u64((degree + 1) as u64);
     let mut new_coeffs = vec![F::ZERO; degree + 1];
-    new_coeffs.extend(
-        polynomial
-            .coeffs()
-            .iter()
-            .map(|&coeff| coeff * coeff_pow_n_1),
-    );
+    new_coeffs.extend(polynomial.coeffs().iter().map(|&coeff| coeff * c_pow_n_1));
     for (c1, c2) in new_coeffs.iter_mut().zip(polynomial.coeffs().iter()) {
         *c1 -= *c2;
     }
 
     // Now we divide by c*x - 1 by dividing by x - (1/c) and multiplying by c afterwards
     let mut last = *new_coeffs.iter().last().unwrap();
-    let coeff_inv = coeff.inverse();
+    let c_inv = c.inverse();
     for new_c in new_coeffs.iter_mut().rev().skip(1) {
-        *new_c += coeff_inv * last;
+        *new_c += c_inv * last;
         last = *new_c;
     }
 
     assert!(new_coeffs.remove(0) == F::ZERO);
 
-    new_coeffs.iter_mut().for_each(|c| *c *= coeff_inv);
+    new_coeffs.iter_mut().for_each(|c| *c *= c_inv);
+
     Polynomial::from_coeffs(new_coeffs)
 }
 
-pub fn fold_evaluations<F: TwoAdicField>(
+// Compute the evaluation of a folded polynomial at a point given the
+// evaluations of the original polynomial at the k-th roots of that point, where
+// k is the folding factor
+pub(crate) fn fold_evaluations<F: TwoAdicField>(
+    // The evaluations of the original polynomial
     evals: Vec<F>,
+    // A k-th root of the point where we evaluate the folded polynomial
     point_root: F,
-    log_arity: usize,
-    // Generator of the coset whose evaluations we are receiving
+    // The log2 of the folding factor
+    log_folding_factor: usize,
+    // Generator of the coset of k-th roots of the point - in other words, this
+    // is simply a primitive k-th root of unity.
     omega: F,
+    // The folding coefficient
     c: F,
     // The inverse of the generator can be supplied in order to amortise the
-    // call to inverse() across calls to fold_evaluations()
+    // call to inverse() across calls to fold_evaluations() with the same
+    // folding factor
     omega_inv_hint: Option<F>,
     // The inverse of point_root can be supplied to make use of batch inversion
+    // outside of this function
     point_root_inv_hint: Option<F>,
-    // The inverse of 2 can be supplied avoid recomputation in every call
+    // The inverse of 2 can be supplied to avoid recomputation in every call
     two_inv_hint: Option<F>,
 ) -> F {
-    // Let Fold2(g, b) denote the binary (i. e. arity = one) folding of g with
-    // coefficient b. Then
-    //   Fold(h, 2^arity, coeff) = Fold2(..., Fold2(h, c), c^2, c^4, ..., )
-    // where the ellipses denote the arity-fold composition of Fold2.
+    // Let fold_k(g, b) denote the k-ary folding of a polynomial g with
+    // coefficient b. Then one has:
+    //   fold_k(h, coeff) = fold_2(..., fold_2(h, c), c^2, c^4, ..., ),
+    // where the ellipses denote the log2(k)-fold composition of fold_2. The
+    // same applies to the evaluations, i. e. one can compute the k-ary folding
+    // of evals through repeated binary foldings.
 
-    let arity = 1 << log_arity;
+    let arity = 1 << log_folding_factor;
     assert!(evals.len() == arity);
 
-    // We first construct the list "gammas" of values y_j * c, where y_j runs over half the
-    // y_j in Y (i. e. the list of points whose arity-th power is
-    // point_root^(arity)). For each {y_j, -y_j} in Y, we only store one of
-    // the two. If w is a generator of the unique subgroup of units(F) of order
-    // = arity, the list "gammas" has the form
-    // {
-    //   c * point_root^(-1),
-    //   c * (point_root * w)^(-1),
-    //   ...,
-    //   c * (point_root * w^(arity/2 - 1))^(-1)
-    // }
+    // We first construct the list `gammas` of values c / y_j, where y_j runs
+    // over half the k-th roots of point_root^k. In particular, for each pair
+    // of roots {y_j, -y_j} (note that k is even), we only store one of the
+    // two.
 
     let inv_omega = omega_inv_hint.unwrap_or_else(|| omega.inverse());
     let inv_point_root = point_root_inv_hint.unwrap_or_else(|| point_root.inverse());
@@ -135,8 +142,12 @@ pub fn fold_evaluations<F: TwoAdicField>(
 
     let mut result = evals;
 
+    // Repeatedly binary-fold until only one evaluation is left
     while result.len() > 1 {
         result = fold_evaluations_binary(result, &gammas, two_inv_hint);
+
+        // The gammas for the next step are half the squares of the current
+        // gammas
         gammas = gammas[..(gammas.len() / 2)]
             .iter()
             .map(|&gamma| gamma.square())
@@ -146,8 +157,11 @@ pub fn fold_evaluations<F: TwoAdicField>(
     result.pop().unwrap()
 }
 
+// Compute the binary folding of the given list of evaluations
 fn fold_evaluations_binary<F: TwoAdicField>(
+    // The evaluations to fold
     evals: Vec<F>,
+    // The list of c / y_j with y_j as in fold_evaluations()
     gammas: &[F],
     // The inverse of 2 can be supplied to avoid recomputation in every call
     two_inv_hint: Option<F>,
@@ -161,10 +175,13 @@ fn fold_evaluations_binary<F: TwoAdicField>(
         .collect_vec()
 }
 
+// Compute the binary folding of the evaluations of a polynomial at a point and
+// its additive inverse
+#[inline]
 fn fold_evaluation_pair<F: TwoAdicField>(
-    // f(w), where w^2 is the point we are evaluating fold(f) at
+    // f(w), where w^2 is the point we are evaluating fold_2(f) at
     eval_1: F,
-    // f(-w), with w as above
+    // f(-w) with w as above
     eval_2: F,
     // c / w, where c is the folding coefficient
     gamma: F,
@@ -172,11 +189,13 @@ fn fold_evaluation_pair<F: TwoAdicField>(
     two_inv_hint: Option<F>,
 ) -> F {
     let two_inv = two_inv_hint.unwrap_or_else(|| F::TWO.inverse());
-    // This expression uses to multiplications, as opposed to three in the more
+    // This expression uses two multiplications, as opposed to three in the more
     // symmetric 1/2 * ((1 + gamma) * eval_1 + (1 - gamma) * eval_2)
     two_inv * (eval_1 + eval_2 + gamma * (eval_1 - eval_2))
 }
 
+// Observe a list of extension field elements, preceded by its length for
+// security
 pub(crate) fn observe_ext_slice_with_size<F: Field, E: ExtensionField<F>, C: FieldChallenger<F>>(
     challenger: &mut C,
     values: &[E],
@@ -188,7 +207,8 @@ pub(crate) fn observe_ext_slice_with_size<F: Field, E: ExtensionField<F>, C: Fie
         .for_each(|&v| challenger.observe_ext_element(v));
 }
 
-pub(crate) fn observe_small_usize_slice<F: Field, C: CanObserve<F>>(
+// Observe a list of usize, preceded by its length for security.
+pub(crate) fn observe_usize_slice<F: Field, C: CanObserve<F>>(
     challenger: &mut C,
     values: &[usize],
     absorb_size: bool,
@@ -223,11 +243,14 @@ mod tests {
     type BB = BabyBear;
 
     #[test]
+    // Checks that fold_polynomial returns the correct polynomial computed
+    // manually. All polynomials are hard-coded, but the folding randomness is
+    // not.
     fn test_fold_polynomial() {
         let polynomial = Polynomial::<BB>::from_coeffs(vec![BB::ONE; 16]);
         let folding_randomness = BB::from_canonical_u32(3);
 
-        // log_folding_factor = 1
+        // folding_factor = 2
         assert_eq!(
             fold_polynomial(&polynomial, folding_randomness, 1).coeffs(),
             vec![4, 4, 4, 4, 4, 4, 4, 4]
@@ -236,7 +259,7 @@ mod tests {
                 .collect_vec()
         );
 
-        // log_folding_factor = 2
+        // folding_factor = 4
         assert_eq!(
             fold_polynomial(&polynomial, folding_randomness, 2).coeffs(),
             vec![40, 40, 40, 40]
@@ -247,6 +270,10 @@ mod tests {
     }
 
     #[test]
+    // Checks that fold_polynomial returns the correct polynomial. The
+    // polynomial to be folded is constructed by collating its
+    // randomly-generated limbs, which are also used to compute the expected
+    // folded polynomial.
     fn test_fold_backwards() {
         let fold_degree = 5;
         let log_folding_factor = 4;
@@ -257,6 +284,7 @@ mod tests {
 
         let folding_randomness: BB = rng.gen();
 
+        // Generating the limbs
         let folds = (0..folding_factor)
             .map(|_| rand_poly::<BB>(fold_degree - 1))
             .collect_vec();
@@ -265,6 +293,7 @@ mod tests {
             .take(folding_factor)
             .collect_vec();
 
+        // Constructing the polynomial to be folded
         let polynomial = folds
             .iter()
             .map(|fold| fold.compose_with_exponent(folding_factor))
@@ -277,6 +306,8 @@ mod tests {
             .take(folding_factor)
             .collect_vec();
 
+        // Constructing the expected folded polynomial as the linear combination
+        // of the limbs with coefficients equal to the list of powers of r
         let expected_folded_polynomial = folds
             .iter()
             .zip(powers_of_r.iter())
@@ -290,6 +321,9 @@ mod tests {
     }
 
     #[test]
+    // Checks that multiply_by_power_polynomial returns the same as
+    // multiplication by power_polynomial() (the latter being more transparent,
+    // but less efficient)
     fn test_multiply_by_power_polynomial() {
         let degree_polynomial = 5;
         let degree_power_polynomial = 6;
@@ -306,14 +340,20 @@ mod tests {
         );
     }
 
+    // Macro to test evaluation folding with various parameters
     macro_rules! test_fold_evals_with_log_arity {
         ($log_arity:expr, $polynomial:expr, $folding_randomness:expr) => {{
             let mut rng = rand::thread_rng();
             let domain = TwoAdicCoset::new(rng.gen(), $log_arity);
+
+            // Evaluating the polynomial over the domain
             let evaluations = domain
                 .iter()
                 .map(|x| $polynomial.evaluate(&x))
                 .collect_vec();
+
+            // We first compute the folded evaluations using the method
+            // fold_evaluations()
             let folded_evaluation = fold_evaluations(
                 evaluations,
                 domain.shift(),
@@ -324,10 +364,15 @@ mod tests {
                 None,
                 None,
             );
+
+            // The above needs to coincide with the result of evaluating the
+            // folded polynomial at shift^k
             let folded_polynomial = fold_polynomial(&$polynomial, $folding_randomness, $log_arity);
+            let expected_folded_evaluation =
+                folded_polynomial.evaluate(&domain.shift().exp_power_of_2($log_arity));
+
             assert_eq!(
-                folded_evaluation,
-                folded_polynomial.evaluate(&domain.shift().exp_power_of_2($log_arity)),
+                folded_evaluation, expected_folded_evaluation,
                 "log_arity = {}",
                 $log_arity
             );
@@ -335,6 +380,8 @@ mod tests {
     }
 
     #[test]
+    // Checks that fold_evaluations() returns the expected results for arities
+    // k = 2^1, ..., 2^9
     fn test_fold_evaluations() {
         let polynomial = rand_poly(1 << 10 - 1);
         let rng = &mut rand::thread_rng();
@@ -346,6 +393,7 @@ mod tests {
     }
 
     #[test]
+    // Checks that fold_evaluations_binary() returns the expected results
     fn test_fold_evaluations_binary() {
         let log_domain_size = 4;
         let poly_deg = 7;
@@ -369,7 +417,7 @@ mod tests {
             .iter()
             .all(|&x| x.exp_power_of_2(log_domain_size) == point));
 
-        // Folding evaluations using the method
+        // Computing folded evaluations using the method fold_evaluations_binary
         let gammas = roots[0..(1 << log_domain_size) / 2]
             .iter()
             .map(|&root| c * root.inverse())
@@ -380,7 +428,7 @@ mod tests {
             .collect_vec();
         let folded_evals = fold_evaluations_binary(evals.clone(), &gammas, None);
 
-        // Computing folded evaluations by hand
+        // Computing folded evaluations by evaluating the folded polynomial
         let folded_poly = fold_polynomial(&polynomial, c, 1);
         let roots_squared = roots[0..(1 << log_domain_size) / 2]
             .iter()

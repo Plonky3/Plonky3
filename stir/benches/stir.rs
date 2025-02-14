@@ -86,7 +86,7 @@ impl_bench_field!(
 );
 
 fn bench(c: &mut Criterion) {
-    for log_degree in (18..=30).step_by(2) {
+    for log_degree in (14..=22).step_by(2) {
         bench_bb_with_log_degree(c, log_degree);
         bench_gl_with_log_degree(c, log_degree);
     }

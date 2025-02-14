@@ -5,7 +5,7 @@ use itertools::Itertools;
 use p3_challenger::FieldChallenger;
 use p3_field::Field;
 
-use crate::utils::{compute_pow, observe_small_usize_slice};
+use crate::utils::{compute_pow, observe_usize_slice};
 use crate::SecurityAssumption;
 
 #[cfg(test)]
@@ -575,7 +575,7 @@ pub(crate) fn observe_public_parameters<F, M>(
     F: Field,
     M: Clone,
 {
-    observe_small_usize_slice(
+    observe_usize_slice(
         challenger,
         &[
             parameters.security_level,
@@ -586,8 +586,8 @@ pub(crate) fn observe_public_parameters<F, M>(
         ],
         false,
     );
-    observe_small_usize_slice(challenger, &parameters.log_folding_factors, false);
-    observe_small_usize_slice(challenger, &parameters.log_inv_rates, false);
+    observe_usize_slice(challenger, &parameters.log_folding_factors, false);
+    observe_usize_slice(challenger, &parameters.log_inv_rates, false);
 
     // We do not absorb the MMCS configuration, as it would require stringent
     // trait bounds
