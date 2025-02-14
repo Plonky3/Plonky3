@@ -205,12 +205,26 @@ fn generate_full_round<
     full_round: &mut FullRound<MaybeUninit<F>, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>,
     round_constants: &[F; WIDTH],
 ) {
-    for (state_i, const_i) in state.iter_mut().zip(round_constants) {
+    // Combine addition of round constants and S-box application in a single loop
+    for ((state_i, const_i), sbox_i) in state
+        .iter_mut()
+        .zip(round_constants.iter())
+        .zip(full_round.sbox.iter_mut())
+    {
         *state_i += *const_i;
-    }
-    for (state_i, sbox_i) in state.iter_mut().zip(full_round.sbox.iter_mut()) {
         generate_sbox(sbox_i, state_i);
     }
+
+    // // Combine addition of round constants and S-box application in a single pass
+    // state
+    //     .iter_mut()
+    //     .zip(round_constants.iter())
+    //     .zip(full_round.sbox.iter_mut())
+    //     .for_each(|((state_i, const_i), sbox_i)| {
+    //         *state_i += *const_i;
+    //         generate_sbox(sbox_i, state_i);
+    //     });
+
     LinearLayers::external_linear_layer(state);
     full_round
         .post
