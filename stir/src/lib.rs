@@ -24,7 +24,8 @@ pub use proximity_gaps::SecurityAssumption;
 pub use verifier::verify;
 
 // If the configuration requires the prover to compute a proof of work of more
-// bits than this limit, executing the prover will display a warning message
+// bits than this limit, calling prove() or verify() will log a WARN message (as
+// long as the tracing logger has been init()iated)
 const POW_BITS_WARNING: usize = 25;
 
 // Used for domain separation in the Fiat-Shamir transcript

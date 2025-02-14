@@ -6,7 +6,8 @@ use core::{
 };
 
 /// This module, used to determine proximity gaps in the relevant Reed-Solomon
-/// codes based on various security assumptions, is directly taken from the
+/// codes based on various security assumptions (and therefore the necessary
+/// number of queries and proof-of-work bits), is directly taken from the
 /// co-author Giacomo Fenzi's
 /// [implementation](https://github.com/WizardOfMenlo/stir-whir-scripts/blob/main/src/errors.rs)
 

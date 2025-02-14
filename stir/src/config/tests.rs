@@ -29,6 +29,9 @@ pub fn test_mmcs_config() -> BBExtMMCS {
 }
 
 #[test]
+// Checks the output configuration against one obtained from the co-author's
+// repository:
+// https://github.com/WizardOfMenlo/stir-whir-scripts/blob/main/src/stir.rs
 fn test_config() {
     let security_level = 128;
     let log_starting_degree = 18;

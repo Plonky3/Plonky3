@@ -12,13 +12,27 @@ use rand_chacha::ChaCha20Rng;
 
 use crate::{SecurityAssumption, StirConfig, StirParameters};
 
+// Security levels used in the tests in bits.
+
+/// The quintic extension of BabyBear is large enough that, using the
+/// `CapacityBound` assumption, one gets manageable proof-of-work bit numbers
+/// even when requiring 128 bits of security
 pub const BB_EXT_SEC_LEVEL: usize = 128;
+
+/// For unconditional (i. e. without relying on any assumptions) security,
+/// setting the security level to 100 bits produces more palatable proof-of-work
+/// challenges.
 pub const BB_EXT_SEC_LEVEL_LOWER: usize = 100;
+
+/// The quadratic extension of Goldilocks is smaller than the other two fields,
+/// so we set the tests to 80 bits of security to get reasonable proof-of-work
+/// challenges.
 pub const GL_EXT_SEC_LEVEL: usize = 80;
 
-// This configuration is insecure (the field is too small). Use for testing
-// purposes only!
+/// The BabyBear field
 pub type BB = BabyBear;
+
+/// A quintic extension of BabyBear
 pub type BBExt = BinomialExtensionField<BB, 5>;
 
 type BBPerm = Poseidon2BabyBear<16>;
@@ -27,11 +41,17 @@ type BBCompress = TruncatedPermutation<BBPerm, 2, 8, 16>;
 type BBPacking = <BB as Field>::Packing;
 
 type BBMMCS = MerkleTreeMmcs<BBPacking, BBPacking, BBHash, BBCompress, 8>;
+
+/// A Mixed Matrix Commitment Scheme over the quintic extension of BabyBear
 pub type BBExtMMCS = ExtensionMmcs<BB, BBExt, BBMMCS>;
 
+/// A challenger for the BabyBear field and its quintic extension
 pub type BBChallenger = DuplexChallenger<BB, BBPerm, 16, 8>;
 
+/// The Goldilocks field
 pub type GL = Goldilocks;
+
+/// A quadratic extension of Goldilocks
 pub type GLExt = BinomialExtensionField<GL, 2>;
 
 type GLPerm = Poseidon2Goldilocks<8>;
@@ -40,10 +60,16 @@ type GLCompress = TruncatedPermutation<GLPerm, 2, 4, 8>;
 type GLPacking = <GL as Field>::Packing;
 
 type GLMMCS = MerkleTreeMmcs<GLPacking, GLPacking, GLHash, GLCompress, 4>;
+
+/// A Mixed Matrix Commitment Scheme over the quadratic extension of Goldilocks
 pub type GLExtMMCS = ExtensionMmcs<GL, GLExt, GLMMCS>;
 
+/// A challenger for the Goldilocks field and its quadratic extension
 pub type GLChallenger = DuplexChallenger<GL, GLPerm, 8, 4>;
 
+// This produces an MMCS for the chosen field. Computing it in a macro avoids
+// some generic-related pains. We seed the generator in order to make the tests
+// deterministic, but this is not necessary.
 macro_rules! impl_test_mmcs_config {
     ($name:ident, $ext_mmcs:ty, $perm:ty, $hash:ty, $compress:ty, $mmcs:ty) => {
         pub fn $name() -> $ext_mmcs {
@@ -56,6 +82,9 @@ macro_rules! impl_test_mmcs_config {
     };
 }
 
+// This produces a challenger for the chosen field and its extension. We seed
+// the generator in order to make the tests deterministic, but this is not
+// necessary.
 macro_rules! impl_test_challenger {
     ($name:ident, $challenger:ty, $perm:ty) => {
         pub fn $name() -> $challenger {
@@ -66,6 +95,7 @@ macro_rules! impl_test_challenger {
     };
 }
 
+// Simple wrapper around StirParameters::constant_folding_factor
 macro_rules! impl_test_stir_config {
     ($name:ident, $ext:ty, $ext_mmcs:ty, $mmcs_config_fn:ident) => {
         pub fn $name(
@@ -94,6 +124,7 @@ macro_rules! impl_test_stir_config {
     };
 }
 
+// Simple wrapper around StirParameters::variable_folding_factor
 macro_rules! impl_test_stir_config_folding_factors {
     ($name:ident, $ext:ty, $ext_mmcs:ty, $mmcs_config_fn:ident) => {
         pub fn $name(
@@ -128,6 +159,7 @@ impl_test_mmcs_config!(
     BBCompress,
     BBMMCS
 );
+
 impl_test_mmcs_config!(
     test_gl_mmcs_config,
     GLExtMMCS,

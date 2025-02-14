@@ -5,14 +5,23 @@ use p3_challenger::{CanObserve, FieldChallenger};
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_poly::Polynomial;
 
+// Syntactic sugar for the proof-of-work computation
+#[inline]
 pub(crate) fn compute_pow(security_level: usize, error: f64) -> f64 {
     0f64.max(security_level as f64 - error)
 }
 
+// Given a polynomial f and a folding coefficient c, this function computes the usual folding
+// (same as in FRI) of the requested arity/folding factor:
+//   folded(x) = f_0(x) + c * f_1(x) + ... + c^(arity - 1) * f_(arity - 1)(x)
+// where f_i is the polynomial whose j_th coefficient is the i + j * arity-th
+// coefficient of f.
 pub(crate) fn fold_polynomial<F: TwoAdicField>(
+    // The polynomial to fold
     polynomial: &Polynomial<F>,
     // The folding coefficient
     c: F,
+    // The log2 of the folding factor
     log_folding_factor: usize,
 ) -> Polynomial<F> {
     let deg = if let Some(d) = polynomial.degree() {
