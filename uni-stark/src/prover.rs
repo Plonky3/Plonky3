@@ -167,10 +167,10 @@ where
         .collect();
 
     (0..quotient_size)
-        // .into_par_iter()
+        .into_par_iter()
         .step_by(PackedVal::<SC>::WIDTH)
-        // .flat_map_iter(|i_start| {
-        .flat_map(|i_start| {
+        .flat_map_iter(|i_start| {
+            // .flat_map(|i_start| {
             let i_range = i_start..i_start + PackedVal::<SC>::WIDTH;
 
             let is_first_row = *PackedVal::<SC>::from_slice(&sels.is_first_row[i_range.clone()]);
@@ -195,7 +195,8 @@ where
                 accumulator,
                 constraint_index: 0,
             };
-            info_span!("Get Evals").in_scope(|| air.eval(&mut folder));
+            air.eval(&mut folder);
+            // info_span!("Get Evals").in_scope(|| air.eval(&mut folder));
 
             // quotient(x) = constraints(x) / Z_H(x)
             let quotient = folder.accumulator * inv_zeroifier;
