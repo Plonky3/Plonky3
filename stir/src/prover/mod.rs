@@ -17,7 +17,6 @@ use crate::{Messages, StirConfig, StirProof, POW_BITS_WARNING};
 #[cfg(test)]
 mod tests;
 
-#[derive(Clone)]
 /// Witness for the STIR protocol produced by the `commit` method.
 pub struct StirWitness<F: TwoAdicField, M: Mmcs<F>> {
     // Domain L_0
@@ -54,7 +53,7 @@ pub(crate) struct StirRoundWitness<F: TwoAdicField, M: Mmcs<F>> {
 }
 
 pub fn commit<F, M>(
-    config: &StirConfig<F, M>,
+    config: &StirConfig<M>,
     polynomial: Polynomial<F>,
 ) -> (StirWitness<F, M>, M::Commitment)
 where
@@ -109,7 +108,7 @@ where
 }
 
 pub fn prove<F, EF, M, C>(
-    config: &StirConfig<EF, M>,
+    config: &StirConfig<M>,
     witness: StirWitness<EF, M>,
     commitment: M::Commitment,
     challenger: &mut C,
@@ -206,7 +205,7 @@ where
 }
 
 pub(crate) fn prove_round<F, EF, M, C>(
-    config: &StirConfig<EF, M>,
+    config: &StirConfig<M>,
     witness: StirRoundWitness<EF, M>,
     challenger: &mut C,
 ) -> (StirRoundWitness<EF, M>, RoundProof<EF, M, C::Witness>)

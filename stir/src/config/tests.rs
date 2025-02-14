@@ -10,23 +10,22 @@ use rand_chacha::ChaCha20Rng;
 
 use crate::{SecurityAssumption, StirConfig, StirParameters};
 
-type Val = BabyBear;
-type Challenge = BinomialExtensionField<Val, 4>;
+type BB = BabyBear;
+type BBExt = BinomialExtensionField<BB, 4>;
 
-type Perm = Poseidon2BabyBear<16>;
-type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
-type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+type BBPerm = Poseidon2BabyBear<16>;
+type BBHash = PaddingFreeSponge<BBPerm, 16, 8, 8>;
+type BBCompress = TruncatedPermutation<BBPerm, 2, 8, 16>;
 
-type ValMmcs =
-    MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
-type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+type BBMMCS = MerkleTreeMmcs<<BB as Field>::Packing, <BB as Field>::Packing, BBHash, BBCompress, 8>;
+type BBExtMMCS = ExtensionMmcs<BB, BBExt, BBMMCS>;
 
-pub fn test_mmcs_config() -> ChallengeMmcs {
+pub fn test_mmcs_config() -> BBExtMMCS {
     let mut rng = ChaCha20Rng::from_entropy();
-    let perm = Perm::new_from_rng_128(&mut rng);
-    let hash = MyHash::new(perm.clone());
-    let compress = MyCompress::new(perm.clone());
-    ChallengeMmcs::new(ValMmcs::new(hash, compress))
+    let perm = BBPerm::new_from_rng_128(&mut rng);
+    let hash = BBHash::new(perm.clone());
+    let compress = BBCompress::new(perm.clone());
+    BBExtMMCS::new(BBMMCS::new(hash, compress))
 }
 
 #[test]
@@ -50,7 +49,7 @@ fn test_config() {
         test_mmcs_config(),
     );
 
-    let config: StirConfig<Challenge, ChallengeMmcs> = StirConfig::new(parameters);
+    let config: StirConfig<BBExtMMCS> = StirConfig::new::<BBExt>(parameters);
 
     assert_eq!(config.starting_domain_log_size(), 19);
     assert_eq!(config.starting_folding_pow_bits(), 30);

@@ -1,4 +1,3 @@
-#![cfg(feature = "test-utils")]
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use p3_poly::test_utils::rand_poly;
 use p3_stir::prover::{commit, prove};

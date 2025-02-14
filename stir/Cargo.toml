@@ -48,6 +48,7 @@ serde_json = "1.0.113"
 [[bench]]
 name = "stir"
 harness = false
+required-features = ["test-utils"]
 
 [features]
 test-utils = ["dep:rand", "dep:rand_chacha", "dep:p3-baby-bear", "dep:p3-symmetric", "dep:p3-merkle-tree", "dep:p3-goldilocks"]

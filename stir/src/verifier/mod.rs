@@ -137,7 +137,7 @@ pub struct VerificationState<F: TwoAdicField, M: Mmcs<F>> {
 }
 
 pub fn verify<F, EF, M, C>(
-    config: &StirConfig<EF, M>,
+    config: &StirConfig<M>,
     proof: StirProof<EF, M, C::Witness>,
     challenger: &mut C,
 ) -> Result<(), VerificationError>
@@ -305,7 +305,7 @@ where
 }
 
 fn verify_round<F, EF, M, C>(
-    config: &StirConfig<EF, M>,
+    config: &StirConfig<M>,
     verification_state: VerificationState<EF, M>,
     round_proof: RoundProof<EF, M, C::Witness>,
     challenger: &mut C,

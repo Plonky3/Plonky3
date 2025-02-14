@@ -3,7 +3,7 @@ use core::fmt::{Debug, Display, Formatter, Result};
 
 use itertools::Itertools;
 use p3_challenger::FieldChallenger;
-use p3_field::{Field, TwoAdicField};
+use p3_field::Field;
 
 use crate::utils::{compute_pow, observe_small_usize_slice};
 use crate::SecurityAssumption;
@@ -34,9 +34,9 @@ pub struct StirParameters<M: Clone> {
     /// more details.
     pub security_assumption: SecurityAssumption,
 
-    /// log2 of the purported degree bound (plus 1) of the initial polynomial.
-    /// For instance, setting this to 3 allows the prover to convince the
-    /// verifier that the polynomial has degree at most `(2^3 - 1) = 7`.
+    /// log2 of the purported degree-plus-1 bound of the initial polynomial. For
+    /// instance, setting this to 3 allows the prover to convince the verifier
+    /// that the polynomial has degree at most `(2^3 - 1) = 7`.
     // N. B.: In variable or field names, "degree" refers to "degree bound + 1".
     // Comments and documentation are more accurate: "degree" means "degree
     // bound"
@@ -83,7 +83,7 @@ impl<M: Clone> StirParameters<M> {
         mmcs_config: M,
     ) -> Self {
         // With each subsequent round, the size of the evaluation domain is
-        // decreased by a factor of 2 whereas the degree bound (plus 1) of the
+        // decreased by a factor of 2 whereas the degree-plus-1 bound of the
         // polynomial is decreased by a factor of 2^log_folding_factor. Thus,
         // the logarithm of the inverse of the rate increases by log_k - 1.
         let mut i_th_log_rate = log_starting_inv_rate;
@@ -143,61 +143,58 @@ pub struct RoundConfig {
     pub(crate) log_next_folding_factor: usize,
 
     // log2 of the size of the evaluation domain of the oracle *sent this
-    // round*
+    // round*.
     pub(crate) log_evaluation_domain_size: usize,
 
-    // Number of PoW bits used to reduce query error.
+    // Number of proof-of-work bits used to reduce query error in this round.
     pub(crate) pow_bits: usize,
 
-    // Number of queries in this round
+    // Number of domain points queried in this round.
     pub(crate) num_queries: usize,
 
-    // Number of out of domain samples in this round
+    // Number of out-of-domain points queried in this round.
     pub(crate) num_ood_samples: usize,
 
-    // log of the inverse of the rate of the current RS codeword
+    // log of the inverse of the rate of the codeword sent this round.
     pub(crate) log_inv_rate: usize,
 }
 
+/// Full STIR configuration.
 #[derive(Debug, Clone)]
-pub struct StirConfig<F: TwoAdicField, M: Clone> {
+pub struct StirConfig<M: Clone> {
     // See the comment at the start of StirParameters for the convention on the
-    // number of rounds, codewords, etc. In this structure there are
-    // num_rounds - 1 round configs as the last round happening outside the
-    // main loop doesn't have one.
-    /// Input parameters for the STIR protocol.
+    // number of rounds, codewords, etc.
+
+    // User-defined parameters.
     parameters: StirParameters<M>,
 
-    /// log of the size of the initial domain.
+    // log2 of the size of the initial domain L_0.
     starting_domain_log_size: usize,
 
-    /// Initial pow bits used in the first fold.
+    // Initial proof-of-work bits used in the first folding.
     starting_folding_pow_bits: usize,
 
-    /// Round-specific parameters. There are `num_rounds - 1` of these (the last
-    /// round works differently)
+    // Round-specific parameters. There are `num_rounds - 1` of these (the last
+    // round works differently)
     round_parameters: Vec<RoundConfig>,
 
-    /// log of the (degree + 1) of the final polynomial sent in plain.
+    // log2 of the degree-plus-1 bound of the final polynomial p = g_{M + 1}
+    // sent in plain.
     log_stopping_degree: usize,
 
-    /// log of the inverse of therate of the final RS codeword.
+    // log2 of the inverse of therate of the final RS codeword.
     log_final_inv_rate: usize,
 
-    /// Number of queries in the last round.
+    // Number of domain points queried in the last round.
     final_num_queries: usize,
 
-    /// Final of PoW bits (for the queries).
+    // Number of proof-of-work bits for the last round.
     final_pow_bits: usize,
-
-    /// Generator of the (subgroup whose shift is the) initial domain, kept
-    // throughout rounds for shifting purposes
-    subgroup_generator: F,
 }
 
-impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
+impl<M: Clone> StirConfig<M> {
     /// Expand STIR parameters into a full STIR configuration.
-    pub fn new(parameters: StirParameters<M>) -> Self {
+    pub fn new<F: Field>(parameters: StirParameters<M>) -> Self {
         let StirParameters {
             security_level,
             security_assumption,
@@ -209,15 +206,16 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
             ..
         } = parameters.clone();
 
+        // The polynomial has to be folded with arity at least 2 in each round
         assert!(
             log_folding_factors.iter().all(|&x| x != 0),
             "The logarithm of each folding factor should be positive"
         );
         assert_eq!(log_folding_factors.len(), log_inv_rates.len());
 
-        // log(degree + 1) can not be reduced past 0
-        // This also ensures the domain is large enough to be (actually) shrunk
-        // by raising to the subsequent folding factors
+        // log2(degree + 1) can not be reduced past 0. This also ensures the
+        // domain is large enough to be shrunk by raising it to all of the
+        // subsequent folding factors iteratively.
         let total_reduction = log_folding_factors.iter().sum::<usize>();
         assert!(total_reduction <= log_starting_degree);
 
@@ -227,11 +225,13 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
         // should send the polynomial directly instead
         assert!(log_starting_degree >= log_starting_folding_factor);
 
-        // Compute the log of (final degree + 1) as well as the number of (non-final) rounds
+        // Compute the log of (final-degree-plus-1 bound) as well as the number
+        // of (non-final) rounds
         let log_stopping_degree = log_starting_degree - total_reduction;
-        let num_rounds = log_folding_factors.len();
+        let num_full_rounds = log_folding_factors.len();
 
-        // Compute the security level
+        // Compute the security level afforded by the actual protocol without
+        // grinding
         let protocol_security_level = 0.max(security_level - pow_bits);
 
         // Initial domain size
@@ -242,7 +242,7 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
         let mut current_log_degree = log_starting_degree - log_starting_folding_factor;
         let mut log_inv_rate = log_starting_inv_rate;
 
-        // We now start, the initial folding pow bits
+        // Computing the proof-of-work bits for the initial folding
         let field_bits = F::bits();
 
         let starting_folding_prox_gaps_error = security_assumption.prox_gaps_error(
@@ -255,7 +255,7 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
         let starting_folding_pow_bits =
             compute_pow(security_level, starting_folding_prox_gaps_error).ceil() as usize;
 
-        let mut round_parameters = Vec::with_capacity(num_rounds);
+        let mut round_parameters = Vec::with_capacity(num_full_rounds);
 
         // If folding factors has length (i. e. num_rounds) 1, the only round is
         // by definition the last one, which is treated separately; In that
@@ -282,7 +282,8 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
             // Compute the number of queries required
             let num_queries = security_assumption.queries(protocol_security_level, log_inv_rate);
 
-            // We need to compute the errors, to compute the according PoW
+            // We need to compute the three errors from which the number of
+            // proof-of-work bits is derived
             let query_error = security_assumption.queries_error(log_inv_rate, num_queries);
 
             let num_terms = num_queries + num_ood_samples;
@@ -300,7 +301,7 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
                 1 << log_curr_folding_factor,
             );
 
-            // Now compute the PoW
+            // Now compute the proof-of-work bits
             let pow_bits = compute_pow(
                 security_level,
                 query_error.min(prox_gaps_error_1).min(prox_gaps_error_2),
@@ -316,7 +317,9 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
                 num_ood_samples,
                 log_inv_rate,
             };
+
             round_parameters.push(round_config);
+
             log_inv_rate = next_rate;
             current_log_degree -= log_curr_folding_factor;
         }
@@ -326,12 +329,13 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
             .security_assumption
             .queries(protocol_security_level, log_inv_rate);
 
-        // We need to compute the errors, to compute the according PoW
+        // We need to compute the three errors from which the final number of
+        // proof-of-work bits is derived
         let query_error = parameters
             .security_assumption
             .queries_error(log_inv_rate, final_num_queries);
 
-        // Now compute the PoW
+        // Now compute actual number of final proof-of-work bits
         let final_pow_bits = compute_pow(security_level, query_error).ceil() as usize;
 
         StirConfig {
@@ -343,42 +347,45 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
             log_final_inv_rate: log_inv_rate,
             final_num_queries,
             final_pow_bits,
-            subgroup_generator: F::two_adic_generator(starting_domain_log_size),
         }
     }
 
-    // Getters for all internal fields
+    /// User-defined parameters of the configuration.
     pub fn parameters(&self) -> &StirParameters<M> {
         &self.parameters
     }
 
+    /// log2 of the size of the initial domain.
     pub fn starting_domain_log_size(&self) -> usize {
         self.starting_domain_log_size
     }
 
+    /// Number of proof-of-work bits used in the initial folding.
     pub fn starting_folding_pow_bits(&self) -> usize {
         self.starting_folding_pow_bits
     }
 
+    /// Number of rounds `M + 1` (`M` full and one final).
     pub fn num_rounds(&self) -> usize {
         // See the comment at the start of StirParameters for the convention
         self.round_parameters.len() + 1
     }
 
-    /// Configurations of non-final rounds (i. e. the ones which happen inside
-    /// the main loop)
+    /// Configurations of the `M` full rounds (the ones happening inside the
+    /// the main prover/verifier loop)
     pub fn round_configs(&self) -> &[RoundConfig] {
         &self.round_parameters
     }
 
-    /// Returns the configuration of the i-th round (from 1 to `num_rounds - 1`:
-    /// the last round has no `RoundConfig`)
+    /// Configuration of the i-th full round (from 1 to `M` = `num_rounds() -
+    /// 1`)
     pub(crate) fn round_config(&self, i: usize) -> &RoundConfig {
         assert!(i > 0, "Rounds are numbered starting at i = 1");
 
         self.round_parameters
             .get(i - 1)
-            // More optimal than .expect(format!...)
+            // Using a closure avoids formatting the string when there is no
+            // panic!, unlike expect()
             .unwrap_or_else(|| {
                 panic!(
                     "Index out of bounds: there are {} rounds, but only {} round \
@@ -389,59 +396,76 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
             })
     }
 
+    /// log2 of the degree-plus-1 bound of the final polynomial `p = g_{M + 1}`
     pub fn log_stopping_degree(&self) -> usize {
         self.log_stopping_degree
     }
 
+    /// log2 of the inverse of the rate of the final codeword.
     pub fn final_log_inv_rate(&self) -> usize {
         self.log_final_inv_rate
     }
 
+    /// Number of domain points queried in the final round.
     pub fn final_num_queries(&self) -> usize {
         self.final_num_queries
     }
 
+    /// Number of proof-of-work bits for the final round.
     pub fn final_pow_bits(&self) -> usize {
         self.final_pow_bits
     }
 
-    // Getters for all fields of the internal StirParameters
+    // ========= Getters for all fields of the internal StirParameters =========
+
+    /// Security level of the protocol (including grinding).
     pub fn security_level(&self) -> usize {
         self.parameters.security_level
     }
 
+    /// Code-distance assumption to configure STIR with. The more assumptions,
+    /// the fewer queries and proof-of-work bits. Cf. [`SecurityAssumption`] for
+    /// more details.
     pub fn security_assumption(&self) -> SecurityAssumption {
         self.parameters.security_assumption
     }
 
+    /// log2 of the starting degree-plus-1 bound() of the initial polynomial.
     pub fn log_starting_degree(&self) -> usize {
         self.parameters.log_starting_degree
     }
 
+    /// log2 of the folding factor `k_1` of the first round.
     pub fn log_starting_folding_factor(&self) -> usize {
         self.parameters.log_folding_factors[0]
     }
 
+    /// log2 of the folding factors `k_1, ..., k_{M - 1}`.
     pub fn log_folding_factors(&self) -> &[usize] {
         &self.parameters.log_folding_factors
     }
 
+    /// log2 of the folding factor `k_{M + 1}` used in the final round.
     pub fn log_last_folding_factor(&self) -> usize {
         *self.parameters.log_folding_factors.last().unwrap()
     }
 
+    /// log2 of the inverse of the rate of the initial codeword.
     pub fn log_starting_inv_rate(&self) -> usize {
         self.parameters.log_starting_inv_rate
     }
 
+    /// log2 of the inverses of the rates of the non-initial codewords.
     pub fn log_inv_rates(&self) -> &[usize] {
         &self.parameters.log_inv_rates
     }
 
+    /// Number of proof-of-work bits used in the protocol.
     pub fn pow_bits(&self) -> usize {
         self.parameters.pow_bits
     }
 
+    /// Number of proof-of-work bits used throughout all rounds.
     pub fn pow_bits_all_rounds(&self) -> Vec<usize> {
         let mut pow_bits = vec![self.starting_folding_pow_bits];
         pow_bits.extend(self.round_parameters.iter().map(|x| x.pow_bits));
@@ -449,10 +473,9 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
         pow_bits
     }
 
-    pub fn subgroup_generator(&self) -> F {
-        self.subgroup_generator
-    }
-
+    /// Configuration of the Mixed Matrix Commitment Scheme (hasher and
+    /// compressor) used to commit to the initial polynomial `f_0` and
+    /// full-round polynomials `g_1, ... g_M`.
     pub fn mmcs_config(&self) -> &M {
         &self.parameters.mmcs_config
     }
@@ -489,7 +512,7 @@ impl<M: Clone> Display for StirParameters<M> {
     }
 }
 
-impl<F: TwoAdicField, M: Clone> Display for StirConfig<F, M> {
+impl<M: Clone> Display for StirConfig<M> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(
             f,
@@ -543,7 +566,8 @@ impl Display for RoundConfig {
     }
 }
 
-// Have the challenger observe the public parameters
+// Have the challenger observe the public parameters at the start of the
+// Fiat-Shamired interaction
 pub(crate) fn observe_public_parameters<F, M>(
     parameters: &StirParameters<M>,
     challenger: &mut impl FieldChallenger<F>,

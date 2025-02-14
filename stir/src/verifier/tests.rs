@@ -21,8 +21,8 @@ type BBProof = StirProof<BBExt, BBExtMMCS, BB>;
 type GLProof = StirProof<GLExt, GLExtMMCS, GL>;
 
 macro_rules! impl_generate_proof_with_config {
-    ($name:ident, $ext:ty, $ext_mmcs:ty, $proof:ty, $challenger:ty) => {
-        pub fn $name(config: &StirConfig<$ext, $ext_mmcs>, challenger: &mut $challenger) -> $proof {
+    ($name:ident, $ext_mmcs:ty, $proof:ty, $challenger:ty) => {
+        pub fn $name(config: &StirConfig<$ext_mmcs>, challenger: &mut $challenger) -> $proof {
             let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
             let (witness, commitment) = commit(&config, polynomial);
             prove(&config, witness, commitment, challenger)
@@ -32,7 +32,7 @@ macro_rules! impl_generate_proof_with_config {
 
 macro_rules! impl_test_verify_with_config {
     ($name:ident, $ext:ty, $ext_mmcs:ty, $challenger_fn:ident, $proof_fn:ident) => {
-        pub fn $name(config: &StirConfig<$ext, $ext_mmcs>) {
+        pub fn $name(config: &StirConfig<$ext_mmcs>) {
             let (mut prover_challenger, mut verifier_challenger) =
                 ($challenger_fn(), $challenger_fn());
 
@@ -50,7 +50,6 @@ macro_rules! impl_test_verify_with_config {
 
 impl_generate_proof_with_config!(
     generate_bb_proof_with_config,
-    BBExt,
     BBExtMMCS,
     BBProof,
     BBChallenger
@@ -58,7 +57,6 @@ impl_generate_proof_with_config!(
 
 impl_generate_proof_with_config!(
     generate_gl_proof_with_config,
-    GLExt,
     GLExtMMCS,
     GLProof,
     GLChallenger
@@ -80,7 +78,7 @@ impl_test_verify_with_config!(
     generate_gl_proof_with_config
 );
 
-fn tamper_with_final_polynomial(config: &StirConfig<BBExt, BBExtMMCS>) -> BBProof {
+fn tamper_with_final_polynomial(config: &StirConfig<BBExtMMCS>) -> BBProof {
     let mut challenger = test_bb_challenger();
     let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
     let (witness, commitment) = commit(&config, polynomial);
