@@ -1,5 +1,5 @@
+use alloc::{vec, vec::Vec};
 use core::iter;
-
 use itertools::{iterate, izip, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_field::{ExtensionField, Field, TwoAdicField};

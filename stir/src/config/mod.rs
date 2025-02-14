@@ -1,4 +1,4 @@
-use alloc::vec::Vec;
+use alloc::{format, vec, vec::Vec};
 use core::fmt::{Debug, Display, Formatter, Result};
 
 use itertools::Itertools;
@@ -11,61 +11,95 @@ use crate::SecurityAssumption;
 #[cfg(test)]
 mod tests;
 
-/// STIR-related parameters defined by the user. These get expanded into a full `StirConfig`.
+/// STIR-related parameters chosen by the user. These get expanded into a full
+/// [`StirConfig`] by the function [`StirConfig::new`].
+///
+/// In STIR, there are:
+/// - `M + 1` rounds (in the notation of the article): `M` full rounds happen
+///   inside the main loop, and the final, shorter one happens after it. Rounds
+///   are numbered from 1 to `M + 1`.
+/// - one folded polynomial `g_i` per round. The last polynomial `g_{M + 1}` is
+///   denoted `p` in the article.
+/// - `M` codewords:
+///   - One encoding the original polynomial `f_0`, which is not folded.
+///   - `M - 1` encoding folded polynomials (note that, in the last round, the
+///     folded polynomial is sent in plain).
 #[derive(Debug, Clone)]
 pub struct StirParameters<M: Clone> {
-    // There is/are
-    // - num_rounds rounds: num_rounds - 1 of them happen inside the main loop,
-    //   and the final one happens after it.
-    // - one folded polynomial per round.
-    // - num_rounds codewords:
-    //   - one encoding the original polynomial's, which is not folded
-    //   - num_rounds - 1 ones encoding folded polynomials (note that, in the
-    //     last round, the folded polynomialis sent in plain).
-    /// Security level desired in bits.
-    pub(crate) security_level: usize,
+    /// Desired number of bits of security.
+    pub security_level: usize,
 
-    /// Security assumption under which to configure FRI.
-    pub(crate) security_assumption: SecurityAssumption,
+    /// Code-distance assumption to configure STIR with. The more assumptions,
+    /// the fewer queries and proof-of-work bits. Cf. [`SecurityAssumption`] for
+    /// more details.
+    pub security_assumption: SecurityAssumption,
 
-    /// log of the purported (degree + 1) of the initial polynomial.
-    // Note: In variable or field names, "degree" refers to "degree bound (<=) +
-    // 1". Comments are more accurate: "degree" means "degree bound (<=)"
-    pub(crate) log_starting_degree: usize,
+    /// log2 of the purported degree bound (plus 1) of the initial polynomial.
+    /// For instance, setting this to 3 allows the prover to convince the
+    /// verifier that the polynomial has degree at most `(2^3 - 1) = 7`.
+    // N. B.: In variable or field names, "degree" refers to "degree bound + 1".
+    // Comments and documentation are more accurate: "degree" means "degree
+    // bound"
+    pub log_starting_degree: usize,
 
-    /// log of the folding factor in each round (incl. final).
-    pub(crate) log_folding_factors: Vec<usize>,
+    /// log2 of the folding factor `k_i` in each round (incl. final) `i = 1,
+    /// ..., M + 1`.
+    pub log_folding_factors: Vec<usize>,
 
-    /// log of the inverse of the starting rate used in the protocol.
-    pub(crate) log_starting_inv_rate: usize,
+    /// log2 of the inverse of the rate used to encode the initial polynomial
+    /// `f_0`.
+    pub log_starting_inv_rate: usize,
 
-    /// log of the inverses of the rates in non-first protocol codewords (incl. final). There are num_rounds - 1 of these.
-    pub(crate) log_inv_rates: Vec<usize>,
+    /// log2 of the inverses of the rates in non-first protocol codewords (incl.
+    /// the final one). There are M of these.
+    ///
+    /// In this implementation of STIR, between each round and the next, the
+    /// domain size is reduced by a factor of 2 and the `degree + 1` bound is
+    /// reduced by a factor of `k_i`. This means that the inverse of the rate
+    /// increases by a factor of `k_i / 2`.
+    pub log_inv_rates: Vec<usize>,
 
-    /// Number of PoW bits used to reduce query error.
-    pub(crate) pow_bits: usize,
+    /// Number of proof-of-work bits used to reduce the query error.
+    pub pow_bits: usize,
 
-    /// Configuration of the Mixed Matrix Commitment Scheme (hasher and compressor).
-    pub(crate) mmcs_config: M,
+    /// Configuration of the Mixed Matrix Commitment Scheme (hasher and
+    /// compressor) used to commit to the initial polynomial `f_0` and round
+    /// polynomials `g_1, ... g_M`.
+    pub mmcs_config: M,
 }
 
 // Convenience methods to create STIR parameters with typical features
 impl<M: Clone> StirParameters<M> {
-    /// Create a STIR configuration with constant folding factor.
-    pub fn fixed_rate(
+    /// Create a STIR configuration where each round has a potentially different
+    /// folding factor. For a description of each parameter, cf.
+    /// [`StirParameters`].
+    pub fn variable_folding_factor(
         log_starting_degree: usize,
         log_starting_inv_rate: usize,
-        log_inv_rates: Vec<usize>,
-        log_folding_factor: usize,
+        log_folding_factors: Vec<usize>,
         security_assumption: SecurityAssumption,
         security_level: usize,
         pow_bits: usize,
         mmcs_config: M,
     ) -> Self {
+        // With each subsequent round, the size of the evaluation domain is
+        // decreased by a factor of 2 whereas the degree bound (plus 1) of the
+        // polynomial is decreased by a factor of 2^log_folding_factor. Thus,
+        // the logarithm of the inverse of the rate increases by log_k - 1.
+        let mut i_th_log_rate = log_starting_inv_rate;
+
+        let log_inv_rates = log_folding_factors
+            .iter()
+            .map(|log_k| {
+                i_th_log_rate = i_th_log_rate + log_k - 1;
+                i_th_log_rate
+            })
+            .collect();
+
         StirParameters {
             log_starting_degree,
+            log_folding_factors,
             log_starting_inv_rate,
-            log_folding_factors: vec![log_folding_factor; log_inv_rates.len()],
             log_inv_rates,
             security_assumption,
             security_level,
@@ -74,10 +108,10 @@ impl<M: Clone> StirParameters<M> {
         }
     }
 
-    /// Create a STIR configuration where, in each round,
-    /// - the size of the (shifted) domain is reduced by a factor of 2.
-    /// - the degree is reduced by a factor of 2^log_folding_factor.
-    pub fn fixed_domain_shift(
+    /// Create a STIR configuration where all rounds use the same folding factor
+    /// `k_i = 2^log_folding_factor`. For a description of each parameter, cf.
+    /// [`StirParameters`].
+    pub fn constant_folding_factor(
         log_starting_degree: usize,
         log_starting_inv_rate: usize,
         log_folding_factor: usize,
@@ -87,43 +121,41 @@ impl<M: Clone> StirParameters<M> {
         pow_bits: usize,
         mmcs_config: M,
     ) -> Self {
-        StirParameters {
+        Self::variable_folding_factor(
             log_starting_degree,
-            log_folding_factors: vec![log_folding_factor; num_rounds],
             log_starting_inv_rate,
-            log_inv_rates: (0..num_rounds)
-                .map(|i| log_starting_inv_rate + (i + 1) * (log_folding_factor - 1))
-                .collect(),
+            vec![log_folding_factor; num_rounds],
             security_assumption,
             security_level,
             pow_bits,
             mmcs_config,
-        }
+        )
     }
 }
 
-/// Round specific configuration
+/// Configuration parameters specific to one round of STIR.
 #[derive(Debug, Clone)]
 pub struct RoundConfig {
-    /// log of the folding factor for this round.
+    // log2 of the folding factor for this round.
     pub(crate) log_folding_factor: usize,
 
-    /// log of the folding factor for the next round.
+    // log2 of the folding factor for the next round.
     pub(crate) log_next_folding_factor: usize,
 
-    /// log of the size of the evaluation domain of the oracle *sent this round*
+    // log2 of the size of the evaluation domain of the oracle *sent this
+    // round*
     pub(crate) log_evaluation_domain_size: usize,
 
-    /// Number of PoW bits used to reduce query error.
+    // Number of PoW bits used to reduce query error.
     pub(crate) pow_bits: usize,
 
-    /// Number of queries in this round
+    // Number of queries in this round
     pub(crate) num_queries: usize,
 
-    /// Number of out of domain samples in this round
+    // Number of out of domain samples in this round
     pub(crate) num_ood_samples: usize,
 
-    /// log of the inverse of the rate of the current RS codeword
+    // log of the inverse of the rate of the current RS codeword
     pub(crate) log_inv_rate: usize,
 }
 

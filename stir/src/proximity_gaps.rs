@@ -1,6 +1,9 @@
-use std::f64::consts::LOG2_10;
-use std::fmt::Display;
-use std::str::FromStr;
+use alloc::{format, string::String};
+use core::{
+    f64::consts::LOG2_10,
+    fmt::{Debug, Display},
+    str::FromStr,
+};
 
 /// This module, used to determine proximity gaps in the relevant Reed-Solomon
 /// codes based on various security assumptions, is directly taken from the
@@ -180,7 +183,7 @@ impl SecurityAssumption {
 }
 
 impl Display for SecurityAssumption {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
             "{}",

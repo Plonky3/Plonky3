@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
@@ -10,6 +11,10 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 
 use crate::{SecurityAssumption, StirConfig, StirParameters};
+
+pub const BB_EXT_SEC_LEVEL: usize = 128;
+pub const BB_EXT_SEC_LEVEL_LOWER: usize = 100;
+pub const GL_EXT_SEC_LEVEL: usize = 80;
 
 // This configuration is insecure (the field is too small). Use for testing
 // purposes only!
@@ -64,16 +69,16 @@ macro_rules! impl_test_challenger {
 macro_rules! impl_test_stir_config {
     ($name:ident, $ext:ty, $ext_mmcs:ty, $mmcs_config_fn:ident) => {
         pub fn $name(
+            security_level: usize,
+            security_assumption: SecurityAssumption,
             log_starting_degree: usize,
             log_starting_inv_rate: usize,
             log_folding_factor: usize,
             num_rounds: usize,
         ) -> StirConfig<$ext, $ext_mmcs> {
-            let security_level = 128;
-            let security_assumption = SecurityAssumption::CapacityBound;
             let pow_bits = 20;
 
-            let parameters = StirParameters::fixed_domain_shift(
+            let parameters = StirParameters::constant_folding_factor(
                 log_starting_degree,
                 log_starting_inv_rate,
                 log_folding_factor,
@@ -92,38 +97,23 @@ macro_rules! impl_test_stir_config {
 macro_rules! impl_test_stir_config_folding_factors {
     ($name:ident, $ext:ty, $ext_mmcs:ty, $mmcs_config_fn:ident) => {
         pub fn $name(
+            security_level: usize,
+            security_assumption: SecurityAssumption,
             log_starting_degree: usize,
             log_starting_inv_rate: usize,
             log_folding_factors: Vec<usize>,
         ) -> StirConfig<$ext, $ext_mmcs> {
-            let security_level = 128;
-            let security_assumption = SecurityAssumption::CapacityBound;
             let pow_bits = 20;
 
-            // With each subsequent round, the size of the evaluation domain is
-            // decreased by a factor of 2 whereas the degree bound (plus 1) of the
-            // polynomial is decreased by a factor of 2^log_folding_factor. Thus,
-            // the logarithm of the inverse of the rate increases by log_k - 1.
-            let mut i_th_log_rate = log_starting_inv_rate;
-
-            let log_inv_rates = log_folding_factors
-                .iter()
-                .map(|log_k| {
-                    i_th_log_rate = i_th_log_rate + log_k - 1;
-                    i_th_log_rate
-                })
-                .collect();
-
-            let parameters = StirParameters {
+            let parameters = StirParameters::variable_folding_factor(
                 log_starting_degree,
                 log_starting_inv_rate,
                 log_folding_factors,
-                log_inv_rates,
                 security_assumption,
                 security_level,
                 pow_bits,
-                mmcs_config: $mmcs_config_fn(),
-            };
+                $mmcs_config_fn(),
+            );
 
             StirConfig::new(parameters)
         }
@@ -159,6 +149,7 @@ impl_test_stir_config_folding_factors!(
     BBExtMMCS,
     test_bb_mmcs_config
 );
+
 impl_test_stir_config_folding_factors!(
     test_gl_stir_config_folding_factors,
     GLExt,

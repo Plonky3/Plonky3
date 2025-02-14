@@ -3,7 +3,9 @@ use crate::{
     prover::{commit, prove, StirRoundWitness},
     test_utils::*,
     utils::fold_polynomial,
+    SecurityAssumption,
 };
+use alloc::{vec, vec::Vec};
 use itertools::Itertools;
 use p3_challenger::MockChallenger;
 use p3_commit::Mmcs;
@@ -26,7 +28,14 @@ use super::{prove_round, RoundConfig};
 fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
     let mut rng = rand::thread_rng();
 
-    let config = test_bb_stir_config(20, 2, 3, 4);
+    let config = test_bb_stir_config(
+        BB_EXT_SEC_LEVEL,
+        SecurityAssumption::CapacityBound,
+        20,
+        2,
+        3,
+        4,
+    );
 
     // ============================== Committing ==============================
 
@@ -217,7 +226,14 @@ fn test_prove_round_degree_slack() {
 // the final polynomial p = g_{num_rounds} (where num_rounds = M + 1 in the
 // notation of the article)
 fn test_prove() {
-    let config = test_bb_stir_config(14, 1, 4, 3);
+    let config = test_bb_stir_config(
+        BB_EXT_SEC_LEVEL,
+        SecurityAssumption::CapacityBound,
+        14,
+        1,
+        4,
+        3,
+    );
 
     let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
 
@@ -246,7 +262,14 @@ fn test_prove_final_polynomial() {
     //  - f_1, g_1: 2^16 - 1
     //  - f_2, g_2: 2^12 - 1
     //  - g_3:      2^8 - 1
-    let config = test_bb_stir_config(log_starting_degree, 2, log_folding_factor, 3);
+    let config = test_bb_stir_config(
+        BB_EXT_SEC_LEVEL,
+        SecurityAssumption::CapacityBound,
+        log_starting_degree,
+        2,
+        log_folding_factor,
+        3,
+    );
 
     let log_initial_codeword_size = log_starting_degree + config.log_starting_inv_rate();
 
@@ -382,7 +405,14 @@ fn test_prove_final_polynomial() {
 // Checks that the commit method rejects if the polynomial is larger than
 // specified in the configuration
 fn test_incorrect_polynomial() {
-    let config = test_bb_stir_config(14, 1, 4, 3);
+    let config = test_bb_stir_config(
+        BB_EXT_SEC_LEVEL,
+        SecurityAssumption::CapacityBound,
+        14,
+        1,
+        4,
+        3,
+    );
 
     let polynomial = rand_poly(1 << config.log_starting_degree());
 

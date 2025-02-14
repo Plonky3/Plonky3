@@ -1,3 +1,4 @@
+use alloc::vec;
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
@@ -38,7 +39,7 @@ fn test_config() {
     let num_rounds = 4;
     let pow_bits = 20;
 
-    let parameters = StirParameters::fixed_domain_shift(
+    let parameters = StirParameters::constant_folding_factor(
         log_starting_degree,
         log_starting_inv_rate,
         log_starting_folding_factor,

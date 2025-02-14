@@ -21,6 +21,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 p3-baby-bear = { workspace = true, optional = true }
+p3-goldilocks = { workspace = true, optional = true }
 p3-symmetric = { workspace = true, optional = true }
 p3-merkle-tree = { workspace = true, optional = true }
 rand = { version = "0.8.5", optional = true }
@@ -45,8 +46,8 @@ rand_chacha = "0.3.1"
 serde_json = "1.0.113"
 
 [[bench]]
-name = "prover"
+name = "stir"
 harness = false
 
 [features]
-test-utils = ["dep:rand", "dep:rand_chacha", "dep:p3-baby-bear", "dep:p3-symmetric", "dep:p3-merkle-tree"]
+test-utils = ["dep:rand", "dep:rand_chacha", "dep:p3-baby-bear", "dep:p3-symmetric", "dep:p3-merkle-tree", "dep:p3-goldilocks"]

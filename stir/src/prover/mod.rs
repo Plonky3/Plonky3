@@ -17,6 +17,7 @@ use crate::{Messages, StirConfig, StirProof, POW_BITS_WARNING};
 #[cfg(test)]
 mod tests;
 
+#[derive(Clone)]
 /// Witness for the STIR protocol produced by the `commit` method.
 pub struct StirWitness<F: TwoAdicField, M: Mmcs<F>> {
     // Domain L_0
@@ -150,8 +151,9 @@ where
     };
 
     let mut round_proofs = vec![];
-    for _ in 0..config.num_rounds() - 1 {
+    for _ in 1..=config.num_rounds() - 1 {
         let (new_witness, round_proof) = prove_round(config, witness, challenger);
+
         witness = new_witness;
         round_proofs.push(round_proof);
     }
@@ -352,8 +354,6 @@ where
     // Compute the quotient set, i.e \mathcal{G}_i in the paper
     let quotient_set = quotient_answers.iter().map(|(x, _)| *x).collect_vec();
     let quotient_set_size = quotient_set.len();
-
-    // NP TODO if quotient_set_size is > deg + 1, terminate early or at least handle accordingly - otherwise panics can happen
 
     // Compute the answer polynomial and add it to the transcript
     let ans_polynomial = Polynomial::<EF>::lagrange_interpolation(quotient_answers.clone());

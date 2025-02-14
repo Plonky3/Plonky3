@@ -3,12 +3,11 @@
 //! [implementation](https://github.com/WizardOfMenlo/stir) by the co-author
 //! Giacomo Fenzi.
 
-// NP TODO re-introduce no_std
-// #![no_std]
+#![no_std]
 
 extern crate alloc;
 
-mod config;
+pub mod config;
 mod proof;
 pub mod prover;
 mod proximity_gaps;
@@ -20,11 +19,13 @@ pub mod test_utils;
 
 pub use config::{StirConfig, StirParameters};
 pub use proof::StirProof;
-pub use proximity_gaps::*;
+pub use prover::{commit, prove};
+pub use proximity_gaps::SecurityAssumption;
+pub use verifier::verify;
 
-// If the configuration requires the prover to compute a proof of works of more
-// than these limit, executing the prover will print a warning message
-const POW_BITS_WARNING: usize = 40;
+// If the configuration requires the prover to compute a proof of work of more
+// bits than this limit, executing the prover will display a warning message
+const POW_BITS_WARNING: usize = 25;
 
 // Used for domain separation in the Fiat-Shamir transcript
 pub(crate) enum Messages {
