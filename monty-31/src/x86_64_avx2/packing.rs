@@ -513,17 +513,21 @@ fn dot_product_4<PMP: PackedMontyParameters, LHS: InToM256Vector<PMP>, RHS: InTo
         let dot_evn = x86_64::_mm256_add_epi64(dot_evn01, dot_evn23);
         let dot_odd = x86_64::_mm256_add_epi64(dot_odd01, dot_odd23);
 
+        // In dot_evn_sub, red_evn, dot_odd_sub, red_odd:
+        // _mm256_sub_epi32 and _mm256_sub_epi64 should act identically.
+        // However for some reason, the compiler gets confused if we use _mm256_sub_epi64.
+        // and outputs a load of nonsense.
         let q_evn = x86_64::_mm256_mul_epu32(dot_evn, PMP::PACKED_MU);
         let q_p_evn = x86_64::_mm256_mul_epu32(q_evn, PMP::PACKED_P);
-        let dot_evn_sub = x86_64::_mm256_sub_epi64(dot_evn, PMP::PACKED_P_HIGH);
+        let dot_evn_sub = x86_64::_mm256_sub_epi32(dot_evn, PMP::PACKED_P_HIGH);
         let dot_evn_prime = x86_64::_mm256_min_epu32(dot_evn, dot_evn_sub);
-        let red_evn = x86_64::_mm256_sub_epi64(dot_evn_prime, q_p_evn);
+        let red_evn = x86_64::_mm256_sub_epi32(dot_evn_prime, q_p_evn);
 
         let q_odd = x86_64::_mm256_mul_epu32(dot_odd, PMP::PACKED_MU);
         let q_p_odd = x86_64::_mm256_mul_epu32(q_odd, PMP::PACKED_P);
-        let dot_odd_sub = x86_64::_mm256_sub_epi64(dot_odd, PMP::PACKED_P_HIGH);
+        let dot_odd_sub = x86_64::_mm256_sub_epi32(dot_odd, PMP::PACKED_P_HIGH);
         let dot_odd_prime = x86_64::_mm256_min_epu32(dot_odd, dot_odd_sub);
-        let red_odd = x86_64::_mm256_sub_epi64(dot_odd_prime, q_p_odd);
+        let red_odd = x86_64::_mm256_sub_epi32(dot_odd_prime, q_p_odd);
 
         let red_evn_hi = movehdup_epi32(red_evn);
         let t = x86_64::_mm256_blend_epi32::<0b10101010>(red_evn_hi, red_odd);
@@ -541,52 +545,73 @@ fn general_dot_product<FP: FieldParameters, LHS: InToM256Vector<FP>, RHS: InToM2
     rhs: &[RHS],
 ) -> PackedMontyField31AVX2<FP> {
     let n = lhs.len();
-    match n {
-        1 => lhs[0].into() * rhs[0].into(),
-        2 => {
-            let res = dot_product_2([lhs[0], lhs[1]], [rhs[0], rhs[1]]);
-            unsafe {
+    assert_eq!(lhs.len(), rhs.len());
+    unsafe {
+        match n {
+            1 => (*lhs.get_unchecked(0)).into() * (*rhs.get_unchecked(0)).into(),
+            2 => {
+                let res = dot_product_2(
+                    [*lhs.get_unchecked(0), *lhs.get_unchecked(1)],
+                    [*rhs.get_unchecked(0), *rhs.get_unchecked(1)],
+                );
                 // Safety: `dot_product_2` returns values in canonical form when given values in canonical form.
 
                 PackedMontyField31AVX2::<FP>::from_vector(res)
             }
-        }
-        3 => {
-            let lhs2 = lhs[2];
-            let rhs2 = rhs[2];
-            let res = dot_product_2([lhs[0], lhs[1]], [rhs[0], rhs[1]]);
-            unsafe {
+            3 => {
+                let lhs2 = *lhs.get_unchecked(2);
+                let rhs2 = *rhs.get_unchecked(2);
+                let res = dot_product_2(
+                    [*lhs.get_unchecked(0), *lhs.get_unchecked(1)],
+                    [*rhs.get_unchecked(0), *rhs.get_unchecked(1)],
+                );
                 // Safety: `dot_product_2` returns values in canonical form when given values in canonical form.
                 PackedMontyField31AVX2::<FP>::from_vector(res) + (lhs2.into() * rhs2.into())
             }
-        }
-        4 => {
-            let res = dot_product_4(
-                [lhs[0], lhs[1], lhs[2], lhs[3]],
-                [rhs[0], rhs[1], rhs[2], rhs[3]],
-            );
-            unsafe {
+            4 => {
+                let res = dot_product_4(
+                    [
+                        *lhs.get_unchecked(0),
+                        *lhs.get_unchecked(1),
+                        *lhs.get_unchecked(2),
+                        *lhs.get_unchecked(3),
+                    ],
+                    [
+                        *rhs.get_unchecked(0),
+                        *rhs.get_unchecked(1),
+                        *rhs.get_unchecked(2),
+                        *rhs.get_unchecked(3),
+                    ],
+                );
                 // Safety: `dot_product_4` returns values in canonical form when given values in canonical form.
                 PackedMontyField31AVX2::<FP>::from_vector(res)
             }
-        }
-        _ => {
-            let mut acc = PackedMontyField31AVX2::<FP>::ZERO;
-            for i in (0..n).step_by(4) {
-                let res = dot_product_4(
-                    [lhs[i], lhs[i + 1], lhs[i + 2], lhs[i + 3]],
-                    [rhs[i], rhs[i + 1], rhs[i + 2], rhs[i + 3]],
-                );
-                unsafe {
+            _ => {
+                let mut acc = PackedMontyField31AVX2::<FP>::ZERO;
+                for i in (0..n).step_by(4) {
+                    let res = dot_product_4(
+                        [
+                            *lhs.get_unchecked(i),
+                            *lhs.get_unchecked(i + 1),
+                            *lhs.get_unchecked(i + 2),
+                            *lhs.get_unchecked(i + 3),
+                        ],
+                        [
+                            *rhs.get_unchecked(i),
+                            *rhs.get_unchecked(i + 1),
+                            *rhs.get_unchecked(i + 2),
+                            *rhs.get_unchecked(i + 3),
+                        ],
+                    );
                     // Safety: `dot_product_4` returns values in canonical form when given values in canonical form.
                     acc += PackedMontyField31AVX2::<FP>::from_vector(res)
                 }
+                let remainder = n % 4;
+                for i in (n - remainder)..n {
+                    acc += (*lhs.get_unchecked(i)).into() * (*rhs.get_unchecked(i)).into()
+                }
+                acc
             }
-            let remainder = n % 4;
-            for i in (n - remainder)..n {
-                acc += lhs[i].into() * rhs[i].into()
-            }
-            acc
         }
     }
 }
@@ -1106,6 +1131,11 @@ unsafe impl<FP: FieldParameters> PackedField for PackedMontyField31AVX2<FP> {
     type Scalar = MontyField31<FP>;
 
     fn dot_product_scalar_packed(scalar_slice: &[Self::Scalar], packed_slice: &[Self]) -> Self {
+        // let mut acc = Self::ZERO;
+        // for (&scalar, &packed) in scalar_slice.iter().zip(packed_slice) {
+        //     acc += packed * scalar
+        // }
+        // acc
         general_dot_product(scalar_slice, packed_slice)
     }
 }
