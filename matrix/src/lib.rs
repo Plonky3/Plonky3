@@ -10,12 +10,12 @@ use core::ops::Deref;
 
 use itertools::{izip, Itertools};
 use p3_field::{
-    dot_product, BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue,
-    PrimeCharacteristicRing,
+    dot_product, BasedVectorSpace, ExtensionField, Field, PackedField, PackedFieldExtension,
+    PackedValue, PrimeCharacteristicRing,
 };
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
-use tracing::instrument;
+use tracing::{info_span, instrument};
 
 use crate::dense::RowMajorMatrix;
 
@@ -189,8 +189,8 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     #[inline]
     fn vertically_packed_row_pair<P>(&self, r: usize, step: usize) -> Vec<P>
     where
-        T: Copy,
-        P: PackedValue<Value = T>,
+        T: Field,
+        P: PackedField<Scalar = T>,
     {
         // Whilst it would appear that this can be replaced by two calls to vertically_packed_row
         // tests seem to indicate that combining them in the same function is slightly faster.
@@ -204,10 +204,15 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
             .map(|c| self.row_slice((r + c + step) % self.height()))
             .collect_vec();
 
-        (0..self.width())
-            .map(|c| P::from_fn(|i| rows[i][c]))
-            .chain((0..self.width()).map(|c| P::from_fn(|i| next_rows[i][c])))
-            .collect_vec()
+        let mut output = <P as PrimeCharacteristicRing>::zero_vec(2 * self.width());
+
+        info_span!("Pack Rows").in_scope(|| {
+            (0..self.width()).for_each(|c| {
+                output[c] = P::from_fn(|i| rows[i][c]);
+                output[c + self.width()] = P::from_fn(|i| next_rows[i][c]);
+            })
+        });
+        output
     }
 
     fn vertically_strided(self, stride: usize, offset: usize) -> VerticallyStridedMatrixView<Self>
