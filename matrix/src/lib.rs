@@ -173,10 +173,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         T: Copy,
         P: PackedValue<Value = T>,
     {
-        let rows = (0..(P::WIDTH))
-            .map(|c| self.row_slice((r + c) % self.height()))
-            .collect_vec();
-        (0..self.width()).map(move |c| P::from_fn(|i| rows[i][c]))
+        (0..self.width()).map(move |c| P::from_fn(|i| self.row_slice((r + i) % self.height())[c]))
     }
 
     /// Pack together a collection of rows and "next" rows from the matrix.
