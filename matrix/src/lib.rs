@@ -173,7 +173,13 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         T: Copy,
         P: PackedValue<Value = T>,
     {
-        (0..self.width()).map(move |c| P::from_fn(|i| self.row_slice((r + i) % self.height())[c]))
+        // Precompute row slices once to minimize redundant calls and improve performance.
+        let rows = (0..P::WIDTH)
+            .map(|c| self.row_slice((r + c) % self.height()))
+            .collect_vec();
+
+        // Using precomputed rows avoids repeatedly calling `row_slice`, which is costly.
+        (0..self.width()).map(move |c| P::from_fn(|i| rows[i][c]))
     }
 
     /// Pack together a collection of rows and "next" rows from the matrix.
