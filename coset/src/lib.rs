@@ -4,17 +4,68 @@
 
 extern crate alloc;
 
-use alloc::{vec, vec::Vec};
+use alloc::vec;
+use alloc::vec::Vec;
 
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::TwoAdicField;
-use p3_poly::Polynomial;
-
 #[cfg(test)]
 mod tests;
 
 /// Coset of a subgroup of the group of units of a finite field of order equal
 /// to a power of two.
+///
+/// # Examples
+///
+/// ```
+/// # use p3_coset::TwoAdicCoset;
+/// # use p3_field::{TwoAdicField, FieldAlgebra};
+/// # use itertools::Itertools;
+/// # use p3_baby_bear::BabyBear;
+///
+/// type F = BabyBear;
+/// let log_size = 3;
+/// let shift = F::from_canonical_u64(7);
+/// let mut coset = TwoAdicCoset::new(shift, log_size);
+/// let generator = coset.generator();
+///
+/// // Given the coefficients/evaluations of a polynomial, we can
+/// // evaluate/interpolate it over the coset
+/// let coeffs = vec![3, 1, 4, 5].into_iter().map(F::from_canonical_u64).collect_vec();
+/// let evals = (0..1 << log_size)
+///     .map(|i| {
+///         coeffs.iter().rfold(F::ZERO, |result, coeff| {
+///             result * (generator.exp_u64(i) * shift) + *coeff
+///         })
+///     })
+///     .collect_vec();
+///
+/// assert_eq!(evals, coset.evaluate_polynomial(coeffs.clone()));
+///
+/// // Interpolation returns a vector of coefficients of length 2^log_size with
+/// // 2^log_size - coeffs.len() leading zeros, so we need to trim it to the
+/// // length of the input before comparing
+/// assert_eq!(
+///     coeffs,
+///     coset.interpolate(evals).into_iter().take(coeffs.len()).collect_vec()
+/// );
+///
+/// // Coset elements can be queried by index, with or without memoising the
+/// // iterated squares of the generator.
+/// assert_eq!(coset.element(4), shift * generator.exp_u64(4));
+/// assert_eq!(coset.element_immutable(5), shift * generator.exp_u64(5));
+///
+/// // Coset elements can be iterated over in the canonical order
+/// assert_eq!(
+///     coset.iter().collect_vec(),
+///     (0..1 << log_size).map(|i| shift * generator.exp_u64(i)).collect_vec()
+/// );
+///
+/// // Coset elements can be raised to a power of 2, with or without raising
+/// // the shift to the same power
+/// assert_eq!(coset.shrink_coset(2), TwoAdicCoset::new(shift.exp_power_of_2(2), log_size - 2));
+/// assert_eq!(coset.shrink_subgroup(2), TwoAdicCoset::new(shift, log_size - 2));
+/// ```
 #[derive(Clone, Debug)]
 pub struct TwoAdicCoset<F: TwoAdicField> {
     // Letting s = shift, and g = generator (of order 2^log_size), the coset in
@@ -176,25 +227,31 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
         e == F::ONE
     }
 
-    /// Returns the unique polynomial of degree less than `2^log_size` that
-    /// interpolates the given evaluations on the coset (with the canonical
-    /// order "shift * g^0, shift * g^1, ...`).
+    /// Returns the coefficients of the unique polynomial of degree less than
+    /// `2^log_size` that interpolates the given evaluations on the coset (with
+    /// the canonical order "shift * g^0, shift * g^1, ...`).
     ///
     /// This function receives a mutable reference to `self` because it memoises
     /// the FFT machinery internally if not previously set.
+    ///
+    /// Note that the vector of coefficients returned by this function might
+    /// contain leading zeros. However, [`Polynomial::from_coeffs`] will
+    /// automatically remove them.
     ///
     /// # Panics
     ///
     /// Panics if the number of evaluations is greater than the size of the
     /// coset.
-    pub fn interpolate(&mut self, evals: Vec<F>) -> Polynomial<F> {
+    pub fn interpolate(&mut self, evals: Vec<F>) -> Vec<F> {
+        let size = 1 << self.log_size;
+
         assert!(
-            evals.len() == 1 << self.log_size,
+            evals.len() == size,
             "The number of evaluations must be equal to the size of the coset."
         );
+
         let dft = self.dft.get_or_insert_with(|| Radix2Dit::default());
-        let coeffs = dft.coset_idft(evals, self.shift);
-        Polynomial::from_coeffs(coeffs)
+        dft.coset_idft(evals, self.shift)
     }
 
     /// Returns the `index`-th element of the coset `shift * g^index`. To prevent
@@ -243,9 +300,9 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
         self.shift * self.generator.exp_u64(index)
     }
 
-    /// Returns the list of evaluations over the coset, that is,
-    /// `polynomial(shift * g^0), polynomial(shift * g^1), ..., polynomial(shift
-    /// * g^(2^log_size - 1))`.
+    /// Returns the list of evaluations of the polynomial with given coefficients
+    /// over the coset, that is, `polynomial(shift * g^0), polynomial(shift * g^1),
+    /// ..., polynomial(shift * g^(2^log_size - 1))`.
     ///
     /// This function receives a mutable reference to `self` because it memoises
     /// the FFT machinery internally if not previously set.
@@ -254,28 +311,27 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
     ///
     /// Panics if the degree of the polynomial is greater than or equal to the
     /// size of the coset. In this case, a larger domain should be used instead.
-    pub fn evaluate_polynomial(&mut self, polynomial: &Polynomial<F>) -> Vec<F> {
+    pub fn evaluate_polynomial(&mut self, poly_coeffs: Vec<F>) -> Vec<F> {
         let size = 1 << self.log_size;
 
         assert!(
-            polynomial.degree().is_none_or(|d| d < size),
-            "The degree of the polynomial must be less than the size of the \
-            coset. Consider constructing a larger coset, evaluating therein \
-            and retaining the appropriate evaluations (which will be \
-            interleaved with those in the rest of the large domain)"
+            poly_coeffs.len() <= size,
+            "More coefficients were supplied than the size of the coset (note \
+            that leading zeros are not removed inside this function). Consider \
+            constructing a larger coset, evaluating therein and retaining the \
+            appropriate evaluations (which will be interleaved with those in \
+            the rest of the large domain)."
         );
 
-        let coeffs = polynomial.coeffs();
-
-        if coeffs.len() == 0 {
+        if poly_coeffs.len() == 0 {
             return vec![F::ZERO; size];
-        } else if coeffs.len() == 1 {
-            return vec![coeffs[0]; size];
+        } else if poly_coeffs.len() == 1 {
+            return vec![poly_coeffs[0]; size];
         }
 
         let dft = self.dft.get_or_insert_with(|| Radix2Dit::default());
 
-        let mut coeffs = coeffs.to_vec();
+        let mut coeffs = poly_coeffs;
         coeffs.resize(size, F::ZERO);
 
         if self.shift == self.generator {

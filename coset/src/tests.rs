@@ -1,9 +1,9 @@
 use alloc::vec;
+
 use itertools::Itertools;
-
 use p3_baby_bear::BabyBear;
-use p3_field::{extension::BinomialExtensionField, FieldAlgebra};
-
+use p3_field::extension::BinomialExtensionField;
+use p3_field::FieldAlgebra;
 use p3_goldilocks::Goldilocks;
 use rand::Rng;
 
@@ -29,24 +29,55 @@ fn test_coset_too_large() {
 }
 
 #[test]
+// Checks that the evaluation of a polynomial over a coset works as expected
+fn test_evaluate_polynomial() {
+    let mut rng = rand::thread_rng();
+    let shift = rng.gen();
+    let mut coset = TwoAdicCoset::<BB>::new(shift, 3);
+
+    let coeffs = vec![5, 6, 7, 8, 9]
+        .into_iter()
+        .map(BB::from_canonical_u32)
+        .collect_vec();
+
+    let evals = (0..1 << 3)
+        .map(|i| {
+            coeffs.iter().rfold(BB::ZERO, |result, coeff| {
+                result * (coset.generator().exp_u64(i) * shift) + *coeff
+            })
+        })
+        .collect_vec();
+
+    assert_eq!(coset.evaluate_polynomial(coeffs), evals);
+}
+
+#[test]
 // Checks that interpolation over the coset works as expected
 fn test_interpolate_evals() {
-    let mut coset = TwoAdicCoset::<BB>::new(BB::ONE, 3);
+    let mut rng = rand::thread_rng();
+    let shift = rng.gen();
+    let mut coset = TwoAdicCoset::<BB>::new(shift, 3);
 
     let coeffs = vec![3, 5, 6, 7, 9]
         .into_iter()
         .map(BB::from_canonical_u32)
         .collect_vec();
 
-    let polynomial = Polynomial::<BB>::from_coeffs(coeffs.clone());
-
     let evals = (0..1 << 3)
-        .map(|i| polynomial.evaluate(&(coset.generator.clone().exp_u64(i) * coset.shift)))
+        .map(|i| {
+            coeffs.iter().rfold(BB::ZERO, |result, coeff| {
+                result * (coset.generator().exp_u64(i) * coset.shift) + *coeff
+            })
+        })
         .collect_vec();
 
-    let interpolation = coset.interpolate(evals);
+    let interpolation_coeffs = coset.interpolate(evals);
 
-    assert_eq!(interpolation.coeffs(), coeffs);
+    // The interpolation coefficients are not trimmed, so we need to add zeros
+    // to the end to make the comparison work
+    let expected_interpolation_coeffs =
+        [coeffs.clone(), vec![BB::ZERO; (1 << 3) - coeffs.len()]].concat();
+    assert_eq!(interpolation_coeffs, expected_interpolation_coeffs);
 }
 
 #[test]

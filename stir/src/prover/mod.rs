@@ -104,7 +104,7 @@ where
     let mut domain = TwoAdicCoset::new(F::two_adic_generator(log_size), log_size);
 
     // Committing to the evaluations of f_0 over L_0.
-    let evals = domain.evaluate_polynomial(&polynomial);
+    let evals = domain.evaluate_polynomial(polynomial.coeffs().to_vec());
 
     // The stacking width is
     //   k_0 = 2^{log_size - config.log_starting_folding_factor},
@@ -287,7 +287,7 @@ where
     let mut new_domain = domain.shrink_subgroup(1);
 
     // Evaluate g_i over L_i
-    let folded_evals = new_domain.evaluate_polynomial(&folded_polynomial);
+    let folded_evals = new_domain.evaluate_polynomial(folded_polynomial.coeffs().to_vec());
 
     // Stack the new folded evaluations, commit and observe the commitment (in
     // preparation for next-round folding verification and hence with the

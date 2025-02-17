@@ -6,7 +6,6 @@ use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::TwoAdicField;
 use p3_goldilocks::Goldilocks;
-use p3_poly::Polynomial;
 use rand::distributions::{Distribution, Standard};
 use rand::{thread_rng, Rng};
 
@@ -40,7 +39,6 @@ where
 
         let rng = thread_rng();
         let poly_coeffs = rng.sample_iter(&Standard).take(1 << log_size).collect_vec();
-        let poly = Polynomial::from_coeffs(poly_coeffs.clone());
 
         // Sanity check
         let res_1 = dft.coset_dft(poly_coeffs.clone(), generator);
@@ -49,7 +47,7 @@ where
             res.rotate_left(1);
             res
         };
-        let res_3 = coset.evaluate_polynomial(&poly);
+        let res_3 = coset.evaluate_polynomial(poly_coeffs.clone());
         assert_eq!(res_1, res_2);
         assert_eq!(res_1, res_3);
 
@@ -75,7 +73,7 @@ where
 
         // TwoAdicCoset does the more efficient of the two
         group.bench_function(BenchmarkId::new("TwoAdicCoset", log_size), |b| {
-            b.iter(|| coset.evaluate_polynomial(&poly))
+            b.iter(|| coset.evaluate_polynomial(poly_coeffs.clone()))
         });
     }
 }

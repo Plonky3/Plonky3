@@ -9,17 +9,17 @@
 
 extern crate alloc;
 
-use core::{
-    clone::Clone,
-    iter::Product,
-    ops::{Add, AddAssign, Div, Mul, Neg, Sub},
-};
+use alloc::vec;
+use alloc::vec::Vec;
+use core::clone::Clone;
+use core::iter::Product;
+use core::ops::{Add, AddAssign, Div, Mul, Neg, Sub};
 
-use alloc::{vec, vec::Vec};
 use itertools::{iterate, Itertools};
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::{Field, TwoAdicField};
-use p3_matrix::{dense::RowMajorMatrix, Matrix};
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::Matrix;
 use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
@@ -29,6 +29,85 @@ mod tests;
 pub mod test_utils;
 
 /// Polynomial stored as a dense list of coefficients
+///
+/// # Examples
+///
+/// ```
+/// use p3_poly::Polynomial;
+/// use p3_field::{Field, TwoAdicField, FieldAlgebra};
+/// use p3_baby_bear::BabyBear;
+/// use rand::Rng;
+///
+/// type F = BabyBear;
+/// let mut rng = rand::thread_rng();
+/// let poly = Polynomial::from_coeffs(
+///     (0..10).map(|_| rng.gen()).collect()
+/// );
+///
+/// // Polynomial evaluation
+/// let point = rng.gen();
+/// assert_eq!(
+///     poly.evaluate(&point),
+///     poly.coeffs().iter().rfold(F::ZERO, |result, coeff| result * point + *coeff)
+/// );
+///
+/// // Polynomials support arithmetic operations with polynomials and field elements
+/// // Note that the operations are implemented on references to polynomials and field elements
+/// let other_poly = Polynomial::from_coeffs((0..10).map(|_| rng.gen()).collect());
+/// let constant: F = rng.gen();
+///
+/// let _ = &poly + &other_poly;
+/// let _ = &poly - &other_poly;
+/// let _ = &poly + &constant;
+/// let _ = &poly - &constant;
+/// let _ = &poly * &constant;
+/// let _ = &poly / &constant;
+///
+/// // Multiplication can be done using [`mul_naive`](Mul::mul_naive) which uses the
+/// // naive multiplication algorithm, and [`mul`](Mul::mul) which can be used if the
+/// // base field is two-adic. Based on the size of the polynomials, the latter might
+/// // internally use DFTs.
+/// assert_eq!(&poly * &other_poly, poly.mul_naive(&other_poly));
+///
+/// // Division can be done using [`divide_with_remainder`](Polynomial::divide_with_remainder)
+/// // or [`Div::div`](Div::div) methods. Note that [`Div::div`](Div::div) will panic
+/// // if the remainder is not zero.
+/// let (quotient, remainder) = poly.divide_with_remainder(&other_poly);
+/// assert_eq!(quotient, &(&poly - &remainder) / &other_poly);
+///
+/// // Polynomials can be interpolated in an arbitrary set of points using
+/// // [`lagrange_interpolation`](Polynomial::lagrange_interpolation).
+/// assert_eq!(
+///     Polynomial::lagrange_interpolation(
+///         vec![(F::ONE, F::ONE), (F::TWO, F::ZERO), (F::ZERO, F::ONE)]
+///     ),
+///     Polynomial::from_coeffs(
+///         vec![F::ONE, F::TWO.inverse(), F::TWO.inverse() - F::ONE]
+///     )
+/// );
+///
+/// // Other utility methods
+/// assert_eq!(
+///     Polynomial::vanishing_linear_polynomial(constant),
+///     Polynomial::from_coeffs(vec![-constant, F::ONE])
+/// );
+/// assert_eq!(poly.compose_with_exponent(2).degree(), Some(18));
+///
+/// let (quotient, remainder) = poly.divide_with_remainder(
+///     &Polynomial::from_coeffs(vec![-constant, F::ONE])
+/// );
+/// assert_eq!(
+///     poly.divide_by_vanishing_linear_polynomial(constant),
+///     (quotient, remainder.coeffs()[0])
+/// );
+/// assert_eq!(
+///     Polynomial::power_polynomial(constant, 3).degree(),
+///     Polynomial::from_coeffs(
+///         vec![F::ONE, constant, constant.exp_const_u64::<2>(), constant.exp_const_u64::<3>()]
+///     )
+///     .degree()
+/// );
+/// ```
 #[derive(Clone, PartialEq, Eq, Hash, Default, Debug, Serialize, Deserialize)]
 #[serde(bound(deserialize = "Vec<F>: Deserialize<'de>",))]
 pub struct Polynomial<F: Field> {

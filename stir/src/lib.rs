@@ -7,12 +7,12 @@
 
 extern crate alloc;
 
-pub mod config;
+mod config;
 mod proof;
-pub mod prover;
+mod prover;
 mod proximity_gaps;
 mod utils;
-pub mod verifier;
+mod verifier;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;

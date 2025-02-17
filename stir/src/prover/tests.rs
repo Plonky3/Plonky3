@@ -51,7 +51,7 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
 
     let mut original_domain = original_domain.set_shift(original_domain.generator());
 
-    let original_evals = original_domain.evaluate_polynomial(&f_0);
+    let original_evals = original_domain.evaluate_polynomial(f_0.coeffs().to_vec());
 
     let stacked_original_evals =
         RowMajorMatrix::new(original_evals, 1 << config.log_starting_folding_factor());
