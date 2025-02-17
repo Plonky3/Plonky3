@@ -21,38 +21,48 @@ mod error;
 mod tests;
 
 // The virtual function
-//     `DegCor(Quotient(f, interpolating_polynomial), quotient_set)`
-// in the notation of the paper, where `f` is the underlying function.
+//   DegCor(Quot(f, interpolating_polynomial), quotient_set)
+// in the notation of the paper, where `f` is the underlying function. In the
+// case of interest to STIR,
+// - f is g_i
+// - interpolating_polynomial is Ans_i
+// - quotient_set is \mathcal{G}_i
 struct VirtualFunction<F: TwoAdicField> {
-    // In in the case of interest,
-    // - f is g_i
-    // - interpolating_polynomial is Ans_i
-    // - quotient_set is G_i
+    // The degree-correction randomness r^comb_i
     comb_randomness: F,
+    // The polynomial interpolating the purported values of f at certain queried
+    // points
     interpolating_polynomial: Polynomial<F>,
+    // The quotient set \mathcal{G}_i containing the queried points
     quotient_set: Vec<F>,
 }
 
 // Oracle allowing the verifier to compute values of f_i, either directly for
-// the original codeword, or using the combination (i. e. degree-correction)
-// and folding randomness and the values of g_i.
+// the initial codeword using a virtual function
 enum Oracle<F: TwoAdicField> {
     // Transparent oracle: it takes the same value as the underlying function
     Transparent,
-    // Virtual oracle: it takes the value of the virtual function over the underlying function
+    // Virtual oracle: it takes the value of a virtual function over some
+    // underlying function
     Virtual(VirtualFunction<F>),
 }
 
 impl<F: TwoAdicField> Oracle<F> {
-    // Compute the value v(x) of the oracle v at the point x given the value f(x) of the underlying function
+    // Compute the value of the oracle at the point x given the value f(x) of
+    // the underlying function.
+    //
+    // Panics if the point x is one of the points in the quosient set defining
+    // the oracle.
     fn evaluate(
         &self,
+        // The point at which the oracle is evaluated
         x: F,
+        // The value of the underlying function f at the point x
         f_x: F,
-        // Since each call to `evaluate` involves dividing by a denominator, we
+        // Since each call to evaluate involves dividing by a denominator, we
         // can batch-invert many of them outside and feed them to the function
         quotient_denom_inverse_hint: Option<F>,
-        // A similar phenomenon occurs for the
+        // A similar phenomenon occurs for the degree-correction factor
         deg_cor_hint: Option<(F, F)>,
     ) -> F {
         match self {
@@ -108,12 +118,13 @@ impl<F: TwoAdicField> Oracle<F> {
     }
 }
 
-/// Input to and output of round verification
+/// Auxiliary verifier information which is passed to and received from round
+/// verification
 pub struct VerificationState<F: TwoAdicField, M: Mmcs<F>> {
     // The indices are given in the following frame of reference: Self is
-    // produced inside verify_round for round i (in {1, ..., num_rounds}). The
-    // final round ("consistency with the final polynomial"), with index
-    // num_rounds + 1, does not produce a StirWitness.
+    // produced inside verify_round for round i (for 1 <= i <= M). The final
+    // round does not call verify_round. The first verification state, with
+    // index 0, is constructed directly by the verifier.
 
     // Oracle used to compute the value of the virtual function f_i
     oracle: Oracle<F>,
@@ -121,19 +132,30 @@ pub struct VerificationState<F: TwoAdicField, M: Mmcs<F>> {
     // Domain L_i
     domain: TwoAdicCoset<F>,
 
-    // Folding randomness r_i to be used in the next round
+    // Folding randomness r_i to be used in the *next* round
     folding_randomness: F,
 
-    // Index i in the main loop - starts at 0 with the verification state computed before
-    // the first round (round 1)
+    // Round index i
     round: usize,
 
-    // Root of the Merkle tree comitting to g_i
+    // Root of the Merkle tree comitting to g_i (or f_0 in the case i = 0)
     root: M::Commitment,
 }
 
+/// Verifies the proof that the committed codeword satisfies the low-degreeness
+/// bound specified in the configuration.
+///
+/// # Parameters
+///
+/// - `config`: The full STIR configuration, including the degree bound.
+/// - `commitment`: The commitment to the codeword encoding the polynomial of interest.
+/// - `proof`: The proof to verify, which includes the committed .
+/// - `challenger`: The challenger to use for the proof verification.
+///
+/// # Returns
 pub fn verify<F, EF, M, C>(
     config: &StirConfig<M>,
+    commitment: M::Commitment,
     proof: StirProof<EF, M, C::Witness>,
     challenger: &mut C,
 ) -> Result<(), VerificationError>
@@ -143,27 +165,31 @@ where
     M: Mmcs<EF>,
     C: FieldChallenger<F> + GrindingChallenger + CanObserve<M::Commitment>,
 {
+    // Inform the verifier if the configuration requires a proof of work from
+    // the prover larger than the POW_BITS_WARNING constant. This is only logged
+    // if the tracing module has been init()ialised.
     if config
         .pow_bits_all_rounds()
         .iter()
         .any(|&x| x > POW_BITS_WARNING)
     {
         tracing::warn!(
-            "The configuration requires the verifier to compute a proof of work of more than {} bits",
+            "The configuration requires the prover to compute a proof of work of more than {} bits",
             POW_BITS_WARNING
         );
     }
 
+    // Observe the public parameters
     observe_public_parameters(config.parameters(), challenger);
 
     let StirProof {
-        commitment,
         round_proofs,
         final_polynomial,
         pow_witness,
         final_round_queries,
     } = proof;
 
+    // Degree check on p = g_{M + 1}
     if final_polynomial
         .degree()
         .is_some_and(|d| d + 1 > 1 << config.log_stopping_degree())
@@ -175,15 +201,17 @@ where
     challenger.observe(F::from_u8(Messages::Commitment as u8));
     challenger.observe(commitment.clone());
 
+    // Sample the folding randomness r_0
     challenger.observe(F::from_u8(Messages::FoldingRandomness as u8));
     let folding_randomness = challenger.sample_algebra_element();
 
     let log_size = config.log_starting_degree() + config.log_starting_inv_rate();
 
-    // Cf. prover/mod.rs for an explanation on the chosen sequence of domain
-    // sizes
+    // Cf. the commit method in prover/mod.rs for an explanation on the chosen
+    // domain sequence L_0, L_1, ...
     let domain = TwoAdicCoset::new(EF::two_adic_generator(log_size), log_size);
 
+    // Preparing the initial verification state manually
     let mut verification_state = VerificationState {
         oracle: Oracle::Transparent,
         domain,
@@ -192,10 +220,10 @@ where
         root: commitment,
     };
 
-    // Verifying each round
+    // ====================== Verification of full rounds ======================
     for (i, round_proof) in round_proofs.into_iter().enumerate() {
         verification_state = verify_round(config, verification_state, round_proof, challenger)
-            .map_err(|e| VerificationError::Round(i, e))?;
+            .map_err(|e| VerificationError::Round(i + 1, e))?;
     }
 
     let VerificationState {
@@ -206,26 +234,27 @@ where
         ..
     } = verification_state;
 
-    // Step 2: Consistency with final polynomial
+    // ==================== Verification of the final round ====================
 
-    // log(k_M)
+    // log2(k_M)
     let log_last_folding_factor = config.log_last_folding_factor();
 
-    // Logarithm of |(L_M)^k_M|
+    // Logarithm of |(L_M)^{k_M}|
     let log_final_query_domain_size = final_domain.log_size() - log_last_folding_factor;
 
-    // Absorb the final polynomial
+    // Observe the final polynomial
     challenger.observe(F::from_u8(Messages::FinalPolynomial as u8));
     observe_ext_slice_with_size(challenger, final_polynomial.coeffs());
 
-    // Squeeze the final indices
+    // Sample the final queried indices
     challenger.observe(F::from_u8(Messages::FinalQueryIndices as u8));
     let final_queried_indices: Vec<usize> = (0..config.final_num_queries())
         .map(|_| challenger.sample_bits(log_final_query_domain_size))
         .unique()
         .collect();
 
-    // Verifying paths of those evaluations of g_M
+    // Verifying paths of the evaluations of g_M at the k_M-th roots of the
+    // final queried points
     for (&i, (leaf, proof)) in final_queried_indices
         .iter()
         .unique()
@@ -249,15 +278,15 @@ where
         }
     }
 
-    // Recover the evaluations of g_M needed to compute the values of f_M at
-    // points which are relevant to evaluate p(r_i) = Fold(f_M, ...)(r_i), where
-    // r_i runs over the final queried indices
+    // Recover the evaluations of g_M needed to compute the values of f_M the
+    // k_M-th roots of the final queried points
     let g_m_evals = final_round_queries
         .into_iter()
         .map(|(eval_batch, _)| eval_batch)
         .collect_vec();
 
-    // Compute the values of f_M at the relevant points given the evaluations of g_M
+    // Compute the values of f_M at the relevant points given the evaluations of
+    // g_M
     let f_m_evals = compute_f_oracle_from_g(
         &final_oracle,
         g_m_evals,
@@ -266,15 +295,16 @@ where
         log_last_folding_factor,
     );
 
+    // The j-th element of this vector is a distinguished the k_M-th root of the
+    // j-th queried point r^shift_{M, j}
     let final_queried_point_roots = final_queried_indices
         .iter()
         .map(|&i| final_domain.element(i))
         .collect_vec();
 
-    // Compute the evaluations of p (which one could call g_{M + 1}) given those of f_M
+    // Fold the evaluations of f_M at the roots of the queried points
     let p_evals = compute_folded_evaluations(
         f_m_evals,
-        // These are some k_M-th roots of the queried points
         &final_queried_point_roots,
         log_last_folding_factor,
         final_folding_randomness,
@@ -283,6 +313,8 @@ where
             .exp_power_of_2(log_final_query_domain_size),
     );
 
+    // Match the evaluations of the final polynomial p = g_{M + 1} sent by the
+    // prover against the expected ones computed above
     if !p_evals
         .into_iter()
         .zip(final_queried_point_roots)
@@ -293,6 +325,7 @@ where
         return Err(VerificationError::FinalPolynomialEvaluations);
     }
 
+    // Check the final proof of work
     if !challenger.check_witness(config.final_pow_bits(), pow_witness) {
         return Err(VerificationError::FinalProofOfWork);
     }
@@ -300,10 +333,17 @@ where
     Ok(())
 }
 
+// Verifies the proof of a single full round i = 1, ..., M of STIR
 fn verify_round<F, EF, M, C>(
+    // The full STIR configuration from which the round-specific configuration
+    // is extracted
     config: &StirConfig<M>,
+    // The verification state produced by the previous full round (or the
+    // initial one computed manually)
     verification_state: VerificationState<EF, M>,
+    // The proof for the current round
     round_proof: RoundProof<EF, M, C::Witness>,
+    // Challenger for the transcript
     challenger: &mut C,
 ) -> Result<VerificationState<EF, M>, FullRoundVerificationError>
 where
@@ -314,7 +354,8 @@ where
 {
     let round = verification_state.round + 1;
 
-    // De-structure the round-specific configuration and the verification state
+    // De-structure the round-specific configuration, verification state and
+    // round proof
     let RoundConfig {
         log_folding_factor,
         pow_bits,
@@ -342,34 +383,34 @@ where
         pow_witness,
     } = round_proof;
 
-    // Update the transcript with the root of the Merkle tree
-
-    // Observe the commitment
+    // Observe the commitment to g_{i - 1}
     challenger.observe(F::from_u8(Messages::RoundCommitment as u8));
     challenger.observe(g_root.clone());
 
-    // Rejection sampling on the out of domain samples
+    // Sampling the out-of-domain points
     let mut ood_samples = Vec::new();
 
     challenger.observe(F::from_u8(Messages::OodSamples as u8));
     while ood_samples.len() < num_ood_samples {
         let el: EF = challenger.sample_algebra_element();
+
+        // Rejection sampling: these points have to be outside L_{i - 1}
         if !domain.contains(el) {
             ood_samples.push(el);
         }
     }
 
-    // Observe the betas
+    // Observe the betas, i. e. the replies to the out-of-domain queries
     challenger.observe(F::from_u8(Messages::Betas as u8));
     betas
         .iter()
         .for_each(|&beta| challenger.observe_algebra_element(beta));
 
-    // Sample ramdomness used for degree correction
+    // Sample the degree-correction randomness
     challenger.observe(F::from_u8(Messages::CombRandomness as u8));
     let comb_randomness = challenger.sample_algebra_element();
 
-    // Sample folding randomness for the next round
+    // Sample the folding randomness for the next round
     challenger.observe(F::from_u8(Messages::FoldingRandomness as u8));
     let new_folding_randomness = challenger.sample_algebra_element();
 
@@ -382,22 +423,23 @@ where
         .unique()
         .collect();
 
-    // Verify proof of work
+    // Check the proof of work for this round
     if !challenger.check_witness(pow_bits, pow_witness) {
         return Err(FullRoundVerificationError::ProofOfWork);
     }
 
-    // Update the transcript with the coefficients of the answer and shake polynomials
+    // Observe the Ans and shake polynomials
     challenger.observe(F::from_u8(Messages::AnsPolynomial as u8));
     observe_ext_slice_with_size(challenger, ans_polynomial.coeffs());
 
     challenger.observe(F::from_u8(Messages::ShakePolynomial as u8));
     observe_ext_slice_with_size(challenger, shake_polynomial.coeffs());
 
+    // Sample the shake randomness
     challenger.observe(F::from_u8(Messages::ShakeRandomness as u8));
     let shake_randomness: EF = challenger.sample_algebra_element();
 
-    // Verify Merkle paths
+    // Verify the Merkle proofs of the evaluations of g_{i - 1}
     for (&i, (leaf, proof)) in queried_indices.iter().unique().zip(query_proofs.iter()) {
         if config
             .mmcs_config()
@@ -417,10 +459,10 @@ where
         }
     }
 
-    // The j-th element of this vector is the list of values of g_{i - 1} which
-    // result in the list of values of f_{i - 1} (by virtue of f_{i - 1} being
-    // a virtual function reliant on g_{i - 1}) which get folded into
-    // g_i(r_{i, j}^shift)
+    // The j-th element of this vector is the list of evaluations of g_{i - 1}
+    // at the k_{i - 1}-th roots of the j-th sampled point r^shift_{i, j}.
+    // These give rise to the values of f_{i - 1} at the same points, which got
+    // folded into g_i(r^shift_{i, j}).
     let previous_g_values = query_proofs.into_iter().map(|(leaf, _)| leaf).collect_vec();
 
     // Compute the values of f_{i - 1} from those of g_{i - 1}
@@ -432,16 +474,16 @@ where
         log_folding_factor,
     );
 
+    // For each r^shift_{i, j} in L_{i - 1}^{k_{i - 1}}, we compute one
+    // distinguished k_{i - 1}-th root in L_{i - 1}
     let queried_point_roots = queried_indices
         .iter()
         .map(|&i| domain.element(i))
         .collect_vec();
 
-    // Now, for each of the selected random points, we need to compute the folding of the
-    // previous oracle
+    // We can now fold the evaluations of f_{i - 1} using the oracle
     let folded_evals = compute_folded_evaluations(
         previous_f_values,
-        // These are some k_{i - 1}-th roots of queried points
         &queried_point_roots,
         log_folding_factor,
         folding_randomness,
@@ -484,6 +526,8 @@ where
         tracing::info!("Warning: quotient polynomial is zero in round {}", round);
     }
 
+    // Check that the Ans polynomial interpolates the expected values using
+    // the shake polynomial
     if !verify_evaluations(
         &ans_polynomial,
         &shake_polynomial,
@@ -493,6 +537,7 @@ where
         return Err(FullRoundVerificationError::AnsPolynomialEvaluations);
     }
 
+    // Produce the new verification state
     Ok(VerificationState {
         oracle: Oracle::Virtual(VirtualFunction {
             comb_randomness,
@@ -506,32 +551,34 @@ where
     })
 }
 
+// Compute the values of the oracle f_i given its underlying function g_i
+// (or f_i itself in the case of a transparent oracle)
 fn compute_f_oracle_from_g<F: TwoAdicField>(
     // Oracle relating f_i to its underlying function g_i
     oracle: &Oracle<F>,
-    // Evaluations of g_i at the lists of points relevant to each queried point
+    // Evaluations of g_i at the points of interest
     g_eval_batches: Vec<Vec<F>>,
-    // The queried indices of L_i^{k_i}
+    // The indices of the queried elements of L_i^{k_i}
     queried_indices: &[usize],
     // The domain L_i
     domain: &mut TwoAdicCoset<F>,
     // The log of the folding factor k_i
     log_folding_factor: usize,
 ) -> Vec<Vec<F>> {
-    // 1. Computing the set S_j of k_i-th roots of r_j for each sampled point
-    // r_j from L_i^k_i. S_j is the coset (s_j) * {1, c, ..., c^{k_i - 1}},
-    // where s_j is any one k_i-th root and c is the generator of the kernel of
-    // k: L_i ->> L_i^{k_i}, i. e. c = g_i^(|L_i| / k_i) (where g_i is the
-    // chosen generator of L_i)
+    // 1. Compute the set of k_i-th roots of r^shift_{i, j} for each sampled
+    // point r^shift_{i, j} from L_i^k_i. This is simply the coset
+    //   (s_j) * {1, c, ..., c^{k_i - 1}},
+    // where s_j is any particular k_i-th root of the point r^shift_{i, j} and
+    // c is a primitive k_i-th root of unity of the field.
 
-    // This is the length of each coset S_j
+    // This is the size k_i of each coset of roots
     let folding_factor = 1 << log_folding_factor;
 
-    // This is the generator c of (the subgroup defining) each coset S_j
+    // This is the generator c of (the subgroup defining) each coset
     let log_scaling_factor = domain.log_size() - log_folding_factor;
     let generator = domain.generator().exp_power_of_2(log_scaling_factor);
 
-    // The j-th element of this vector is S_i, the set of k_i-th roots of r_j
+    // The j-th element of this vector is the set of k_i-th roots of r^shift_{i, j}
     let queried_point_preimages = queried_indices
         .into_iter()
         .map(|index| {
@@ -541,18 +588,21 @@ fn compute_f_oracle_from_g<F: TwoAdicField>(
         })
         .collect_vec();
 
-    // 2. Compute the values of f_i at the each element of each S_j using the
+    // 2. Compute the values of f_i at the each element of each coset using the
     // values of g_i therein
 
     // Each call to the oracle involves a division by an evaluation of the
     // vanishing polynomial at the query set. We can batch-invert those
-    // denominators outside to reduce the number of costly calls to invert()
+    // denominators outside the oracle-evaluation function in order to reduce the
+    // number of costly calls to invert()
     let denom_inv_hints = match oracle {
         Oracle::Transparent => vec![vec![None; folding_factor]; queried_point_preimages.len()],
         Oracle::Virtual(virtual_function) => {
             let flat_denoms: Vec<F> = queried_point_preimages
                 .iter()
                 .flat_map(|points| {
+                    // Computing the denominator, i. e. the value of the vanishing
+                    // polynomial of the quotient set at the point
                     points
                         .iter()
                         .map(|point| {
@@ -566,6 +616,7 @@ fn compute_f_oracle_from_g<F: TwoAdicField>(
                 })
                 .collect_vec();
 
+            // Batch-inverting the denominators
             let flat_denom_invs = batch_multiplicative_inverse(&flat_denoms)
                 .into_iter()
                 .map(|x| Some(x))
@@ -579,10 +630,10 @@ fn compute_f_oracle_from_g<F: TwoAdicField>(
     };
 
     // A similar phenomenon occurs with the degree-correction factor
-    // (1 - rx)^(e - 1)/(1 - rx) in the notation of the paper (sec. 2.3): we can
-    // batch-invert the denominators to save on invert() calls. Since this
+    // (1 - rx)^(e - 1)/(1 - rx) in the notation of the article (sec. 2.3): we
+    // can batch-invert the denominators to save on invert() calls. Since this
     // already necessitates rx, we also store the latter and pass it to the
-    // oracle-computing function. Note that this batch inversion could be lumped
+    // oracle-evaluation function. Note that this batch inversion could be lumped
     // together with the one above for maximum savings at the cost of code
     // clarity.
     let deg_cor_hints = match oracle {
@@ -616,7 +667,7 @@ fn compute_f_oracle_from_g<F: TwoAdicField>(
         }
     };
 
-    // Compute the values of f_i at the each element of each S_j using the
+    // Compute the values of f_i at the each element of each coset using the
     // precomputed hints
     queried_point_preimages
         .into_iter()
@@ -639,24 +690,24 @@ fn compute_f_oracle_from_g<F: TwoAdicField>(
         .collect_vec()
 }
 
-// Let p_1, ..., p_n be a list of points. For each p_i, given the evaluations of
-// a polynomial h at the set of points
-//   Y_i = {y in F: y^(arity) = p_i^(arity)},
-// compute Fold(h, arity, c)(p_i^(arity)).
-//
-// Parameters
-// - unfolded_evaluation_lists: The i-th element is the list of evaluations of h at Y_i
-// - point_roots: The list of p_i's
-// - log_arity: The folding arity is 2 raised to this value
-// - c: The folding coefficient
-// - omega: The generator of the subgroup of arity-th roots of unity in F
+// Given the evaluations of a polynomial at the set of k-th roots of a point,
+// compute the evaluation of the k-ary folding of that polynomial at the point.
 fn compute_folded_evaluations<F: TwoAdicField>(
-    unfolded_evaluation_lists: Vec<Vec<F>>,
+    // The j-th element of this list is the list of evaluations of the original
+    // polynomial at the k-th roots of the j-th point of interest
+    unfolded_evaluations: Vec<Vec<F>>,
+    // The j-th element of this list is a k-th root of the j-th point of
+    // interest
     point_roots: &[F],
-    log_arity: usize,
+    // The log2 of the folding factor k (i. e. of the arity)
+    log_folding_factor: usize,
+    // The folding coefficient
     c: F,
+    // A primitive k-th root of unity (passed for efficiency reasons)
     omega: F,
 ) -> Vec<F> {
+    // We need the inverses of each root received, so we batch-invert them to
+    // save on calls to invert()
     let point_roots_invs = batch_multiplicative_inverse(&point_roots);
 
     // This is called once per round and could be further amortised by passing
@@ -665,7 +716,8 @@ fn compute_folded_evaluations<F: TwoAdicField>(
 
     let omega_inv = omega.inverse();
 
-    unfolded_evaluation_lists
+    // For each list of evaluations, we call the method fold_evaluations() once
+    unfolded_evaluations
         .into_iter()
         .zip(point_roots.iter())
         .zip(point_roots_invs.into_iter())
@@ -673,7 +725,7 @@ fn compute_folded_evaluations<F: TwoAdicField>(
             fold_evaluations(
                 evals,
                 point_root,
-                log_arity,
+                log_folding_factor,
                 omega,
                 c,
                 Some(omega_inv),
@@ -685,19 +737,17 @@ fn compute_folded_evaluations<F: TwoAdicField>(
 }
 
 // Verify that f takes the values y_1, ..., y_n at x_1, ..., x_n (resp.)
-// using the technique of "shake polynomials". The prover has sent the verifier
-// an auxiliary shake polynomial q defined (in the honest case) as
-//     q(x) = (f(x) - y_1) / (x - x_1) + ... + (f(x) - y_n) / (x - x_n)
-// The verifier then has sampled a random field element r and now checks the
-// above equation there
+// using the auxiliary shake polynomial
+//     q(x) = (f(x) - y_1) / (x - x_1) + ... + (f(x) - y_n) / (x - x_n).
+// The above equation is checked at a uniformly sampled random point r.
 fn verify_evaluations<F: TwoAdicField>(
     // Polynomial whose evaluations are being checked
     f: &Polynomial<F>,
-    // Shale polynomial q
+    // Shake polynomial q
     shake_polynomial: &Polynomial<F>,
     // Random field element where the equation is checked
     r: F,
-    // Vector of (x_i, y_i)
+    // Vector of point-evaluation pairs (x_i, y_i)
     points: Vec<(F, F)>,
 ) -> bool {
     let f_eval = f.evaluate(&r);
@@ -705,6 +755,7 @@ fn verify_evaluations<F: TwoAdicField>(
 
     let (xs, ys): (Vec<F>, Vec<F>) = points.into_iter().unzip();
 
+    // Batch-invert all the denominators for efficiency
     let denominators = batch_multiplicative_inverse(&xs.into_iter().map(|x| r - x).collect_vec());
 
     shake_eval

@@ -8,6 +8,7 @@ use p3_commit::Mmcs;
 use p3_coset::TwoAdicCoset;
 use p3_field::PrimeCharacteristicRing;
 use p3_poly::test_utils::rand_poly;
+use p3_symmetric::Hash;
 use rand::{rng, Rng};
 
 use crate::config::observe_public_parameters;
@@ -21,24 +22,57 @@ use crate::{Messages, SecurityAssumption, StirConfig, StirProof};
 type BBProof = StirProof<BBExt, BBExtMMCS, BB>;
 type GLProof = StirProof<GLExt, GLExtMMCS, GL>;
 
+// This macro creates a function that commits to a random polynomial and
+// produces a STIR proof for it given a configuration
 macro_rules! impl_generate_proof_with_config {
-    ($name:ident, $ext_mmcs:ty, $proof:ty, $challenger:ty) => {
-        pub fn $name(config: &StirConfig<$ext_mmcs>, challenger: &mut $challenger) -> $proof {
+    (
+        // Name of the function to create
+        $name:ident,
+        // MMCS
+        $ext_mmcs:ty,
+        // Type of the proof
+        $proof_type:ty,
+        // Type of the commitment
+        $commitment_type:ty,
+        // Type of the challenger
+        $challenger:ty
+    ) => {
+        pub fn $name(
+            config: &StirConfig<$ext_mmcs>,
+            challenger: &mut $challenger,
+        ) -> ($proof_type, $commitment_type) {
             let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
             let (witness, commitment) = commit(&config, polynomial);
-            prove(&config, witness, commitment, challenger)
+            (
+                prove(&config, witness, commitment, challenger),
+                commitment.clone(),
+            )
         }
     };
 }
 
+// This macro creates a function that tests the verification of a STIR proof
+// given a configuration. It also checks that the prover and verifier
+// challengers are synchronised at the end of the proving/verification process.
 macro_rules! impl_test_verify_with_config {
-    ($name:ident, $ext:ty, $ext_mmcs:ty, $challenger_fn:ident, $proof_fn:ident) => {
+    (
+        // Name of the function to create
+        $name:ident,
+        // Field over which STIR takes place
+        $ext:ty,
+        // MMCS
+        $ext_mmcs:ty,
+        // Challenger function
+        $challenger_fn:ident,
+        // Name of the function which generates the proof
+        $proof_fn:ident
+    ) => {
         pub fn $name(config: &StirConfig<$ext_mmcs>) {
             let (mut prover_challenger, mut verifier_challenger) =
                 ($challenger_fn(), $challenger_fn());
 
-            let proof = $proof_fn(config, &mut prover_challenger);
-            verify(config, proof, &mut verifier_challenger).unwrap();
+            let (proof, commitment) = $proof_fn(config, &mut prover_challenger);
+            verify(config, commitment, proof, &mut verifier_challenger).unwrap();
 
             // Check that the sponge is consistent at the end
             assert_eq!(
@@ -49,20 +83,25 @@ macro_rules! impl_test_verify_with_config {
     };
 }
 
+// Create the function generate_bb_proof_with_config
 impl_generate_proof_with_config!(
     generate_bb_proof_with_config,
     BBExtMMCS,
     BBProof,
+    Hash<BB, BB, 8>,
     BBChallenger
 );
 
+// Create the function generate_gl_proof_with_config
 impl_generate_proof_with_config!(
     generate_gl_proof_with_config,
     GLExtMMCS,
     GLProof,
+    Hash<GL, GL, 4>,
     GLChallenger
 );
 
+// Create the function test_bb_verify_with_config
 impl_test_verify_with_config!(
     test_bb_verify_with_config,
     BBExt,
@@ -71,6 +110,7 @@ impl_test_verify_with_config!(
     generate_bb_proof_with_config
 );
 
+// Create the function test_gl_verify_with_config
 impl_test_verify_with_config!(
     test_gl_verify_with_config,
     GLExt,
@@ -79,12 +119,16 @@ impl_test_verify_with_config!(
     generate_gl_proof_with_config
 );
 
-fn tamper_with_final_polynomial(config: &StirConfig<BBExtMMCS>) -> BBProof {
+// Auxiliary function to trigger a tricky verification error which mimics the
+// honest proving procedure but modifies the final polynomial near the end.
+fn tamper_with_final_polynomial(config: &StirConfig<BBExtMMCS>) -> (BBProof, Hash<BB, BB, 8>) {
+    // ========================== Honest proving =============================
+
+    // This is documented in prover.rs
     let mut challenger = test_bb_challenger();
     let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
     let (witness, commitment) = commit(&config, polynomial);
 
-    // Observe public parameters
     observe_public_parameters(config.parameters(), &mut challenger);
 
     // Observe the commitment
@@ -110,17 +154,17 @@ fn tamper_with_final_polynomial(config: &StirConfig<BBExtMMCS>) -> BBProof {
         round_proofs.push(round_proof);
     }
 
-    // Final round
     let log_last_folding_factor = config.log_last_folding_factor();
 
-    // Tamper with the final polynomial
+    // ===================== Dishonest final polynomial ========================
+
     let final_polynomial = rand_poly(
         witness.polynomial.degree().unwrap() / 2_usize.pow(log_last_folding_factor as u32) as usize,
     );
 
+    // ===================== Continuing honest proving ========================
     let final_queries = config.final_num_queries();
 
-    // Logarithm of |(L_M)^(k_M)|
     let log_query_domain_size = witness.domain.log_size() - log_last_folding_factor;
 
     // Absorb the final polynomial
@@ -146,16 +190,20 @@ fn tamper_with_final_polynomial(config: &StirConfig<BBExtMMCS>) -> BBProof {
 
     let pow_witness = challenger.grind(config.final_pow_bits());
 
-    StirProof {
+    (
+        StirProof {
+            round_proofs,
+            final_polynomial,
+            pow_witness,
+            final_round_queries: queries_to_final,
+        },
         commitment,
-        round_proofs,
-        final_polynomial,
-        pow_witness,
-        final_round_queries: queries_to_final,
-    }
+    )
 }
 
 #[test]
+// Check that compute_folded_evaluations returns the correct result by comparing
+// it with the result of evaluating the output of fold_polynomial
 fn test_compute_folded_evals() {
     let log_arity = 11;
 
@@ -183,6 +231,8 @@ fn test_compute_folded_evals() {
 }
 
 #[test]
+// Check that verification of a honest proof over the quintic extension of
+// BabyBear with fixed folding factor 2^4 works
 fn test_bb_verify() {
     let config = test_bb_stir_config(
         BB_EXT_SEC_LEVEL,
@@ -196,6 +246,8 @@ fn test_bb_verify() {
 }
 
 #[test]
+// Check that verification of a honest proof over the quintic extension of
+// BabyBear with variable folding factor works
 fn test_bb_verify_variable_folding_factor() {
     let config = test_bb_stir_config_folding_factors(
         BB_EXT_SEC_LEVEL,
@@ -208,9 +260,14 @@ fn test_bb_verify_variable_folding_factor() {
 }
 
 #[test]
+// Check that verification of a honest proof over the quintic extension of
+// BabyBear with variable folding factor works when the unconditionally true
+// security configuration JohnsonBound is used. This requires lowering the bits
+// of security to 100 in order to get prohibitively high proof-of-work bit
+// numbers.
 fn test_bb_verify_variable_folding_factor_unconditional() {
     let config = test_bb_stir_config_folding_factors(
-        100,
+        BB_EXT_SEC_LEVEL_LOWER,
         SecurityAssumption::JohnsonBound,
         16,
         1,
@@ -220,6 +277,10 @@ fn test_bb_verify_variable_folding_factor_unconditional() {
 }
 
 #[test]
+// Check that verification of a honest proof over the quartic extension of
+// Goldilocks with fixed folding factor 2^4 works. This requires lowering the
+// bits of security to 80 in order to get prohibitively high proof-of-work bit
+// numbers.
 fn test_gl_verify() {
     let config = test_gl_stir_config(
         GL_EXT_SEC_LEVEL,
@@ -233,6 +294,9 @@ fn test_gl_verify() {
 }
 
 #[test]
+// Check that verification of a honest proof over the quartic extension of
+// Goldilocks with variable folding factor works. As above, we need to lower
+// the bits of security to 80.
 fn test_gl_verify_variable_folding_factor() {
     let config = test_gl_stir_config_folding_factors(
         GL_EXT_SEC_LEVEL,
@@ -245,13 +309,15 @@ fn test_gl_verify_variable_folding_factor() {
 }
 
 #[test]
+// Check that the warning "The quotient polynomial is zero" is logged correctly
+// (cf. prover.rs or verifier.rs for more details)
 fn test_verify_zero() {
     tracing_subscriber::fmt::init();
 
     // Since we deliberately use a small polynomial to trigger the cancellation
-    // of g_i, we drastically the security level to avoid getting the unrelated
-    // warning "he configuration requires the prover to compute a proof of work
-    // of more than 25 bits"
+    // of g_i, we drastically reduce the security level to avoid getting the
+    // unrelated warning "The configuration requires the prover to compute a proof
+    // of work of more than 25 bits"
     let security_level = 60;
 
     let config = test_bb_stir_config(
@@ -266,6 +332,7 @@ fn test_verify_zero() {
 }
 
 #[test]
+// Check that proofs can be serialized and deserialized, then verified correctly
 fn test_serialize_deserialize_proof() {
     let config = test_bb_stir_config(
         BB_EXT_SEC_LEVEL,
@@ -275,15 +342,23 @@ fn test_serialize_deserialize_proof() {
         4,
         3,
     );
-    let proof = generate_bb_proof_with_config(&config, &mut test_bb_challenger());
+    let (proof, commitment) = generate_bb_proof_with_config(&config, &mut test_bb_challenger());
 
     let serialized_proof = serde_json::to_string(&proof).unwrap();
     let deserialized_proof: BBProof = serde_json::from_str(&serialized_proof).unwrap();
 
-    assert!(verify(&config, deserialized_proof, &mut test_bb_challenger()).is_ok());
+    assert!(verify(
+        &config,
+        commitment,
+        deserialized_proof,
+        &mut test_bb_challenger()
+    )
+    .is_ok());
 }
 
 #[test]
+// Check that each possible VerificationError is triggered correctly by
+// producing various dishonest proofs
 fn test_verify_failing_cases() {
     let mut rng = rng();
     let config = test_bb_stir_config(
@@ -294,7 +369,9 @@ fn test_verify_failing_cases() {
         4,
         3,
     );
-    let proof = generate_bb_proof_with_config(&config, &mut test_bb_challenger());
+
+    // This is the honest proof we will tamper with
+    let (proof, commitment) = generate_bb_proof_with_config(&config, &mut test_bb_challenger());
 
     // ============================== ProofOfWork ==============================
 
@@ -302,9 +379,14 @@ fn test_verify_failing_cases() {
     invalid_proof.round_proofs[0].pow_witness = rng.random();
 
     assert_eq!(
-        verify(&config, invalid_proof, &mut test_bb_challenger()),
+        verify(
+            &config,
+            commitment,
+            invalid_proof,
+            &mut test_bb_challenger()
+        ),
         Err(VerificationError::Round(
-            0,
+            1,
             FullRoundVerificationError::ProofOfWork
         ))
     );
@@ -319,9 +401,14 @@ fn test_verify_failing_cases() {
     invalid_proof.round_proofs[0].query_proofs[0] = invalid_query_proof;
 
     assert_eq!(
-        verify(&config, invalid_proof, &mut test_bb_challenger()),
+        verify(
+            &config,
+            commitment,
+            invalid_proof,
+            &mut test_bb_challenger()
+        ),
         Err(VerificationError::Round(
-            0,
+            1,
             FullRoundVerificationError::QueryPath
         ))
     );
@@ -336,9 +423,14 @@ fn test_verify_failing_cases() {
     invalid_proof.round_proofs[0].ans_polynomial = rand_poly(original_degree + 1);
 
     assert_eq!(
-        verify(&config, invalid_proof, &mut test_bb_challenger()),
+        verify(
+            &config,
+            commitment,
+            invalid_proof,
+            &mut test_bb_challenger()
+        ),
         Err(VerificationError::Round(
-            0,
+            1,
             FullRoundVerificationError::AnsPolynomialDegree
         ))
     );
@@ -353,9 +445,14 @@ fn test_verify_failing_cases() {
     invalid_proof.round_proofs[0].ans_polynomial = rand_poly(original_degree);
 
     assert_eq!(
-        verify(&config, invalid_proof, &mut test_bb_challenger()),
+        verify(
+            &config,
+            commitment,
+            invalid_proof,
+            &mut test_bb_challenger()
+        ),
         Err(VerificationError::Round(
-            0,
+            1,
             FullRoundVerificationError::AnsPolynomialEvaluations
         ))
     );
@@ -367,7 +464,12 @@ fn test_verify_failing_cases() {
     invalid_proof.final_polynomial = rand_poly(original_degree + 1);
 
     assert_eq!(
-        verify(&config, invalid_proof, &mut test_bb_challenger()),
+        verify(
+            &config,
+            commitment,
+            invalid_proof,
+            &mut test_bb_challenger()
+        ),
         Err(VerificationError::FinalPolynomialDegree)
     );
 
@@ -387,9 +489,14 @@ fn test_verify_failing_cases() {
     // tamper_with_final_polynomial() function does this by injecting a random
     // polynomial at the correct point in the protocol flow.
 
-    let tampered_proof = tamper_with_final_polynomial(&config);
+    let (tampered_proof, _commitment) = tamper_with_final_polynomial(&config);
     assert_eq!(
-        verify(&config, tampered_proof, &mut test_bb_challenger()),
+        verify(
+            &config,
+            _commitment,
+            tampered_proof,
+            &mut test_bb_challenger()
+        ),
         Err(VerificationError::FinalPolynomialEvaluations)
     );
 
@@ -403,7 +510,12 @@ fn test_verify_failing_cases() {
     invalid_proof.final_round_queries[0] = invalid_query_proof;
 
     assert_eq!(
-        verify(&config, invalid_proof, &mut test_bb_challenger()),
+        verify(
+            &config,
+            commitment,
+            invalid_proof,
+            &mut test_bb_challenger()
+        ),
         Err(VerificationError::FinalQueryPath)
     );
 
@@ -413,7 +525,12 @@ fn test_verify_failing_cases() {
     invalid_proof.pow_witness = rng.random();
 
     assert_eq!(
-        verify(&config, invalid_proof, &mut test_bb_challenger()),
+        verify(
+            &config,
+            commitment,
+            invalid_proof,
+            &mut test_bb_challenger()
+        ),
         Err(VerificationError::FinalProofOfWork)
     );
 }

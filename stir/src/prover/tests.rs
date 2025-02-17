@@ -90,10 +90,10 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
     // Prepare the field randomness produced by the mock challenger
     let r_1: BBExt = rng.random();
 
-    // Out of domain randomness
+    // Out-of-domain randomness
     let ood_randomness: Vec<BBExt> = (0..num_ood_samples).map(|_| rng.random()).collect();
 
-    // Comb randomness
+    // Degree-correction randomness
     let comb_randomness = rng.random();
 
     // Shake randomness (which is squeezed but not used by the prover)
@@ -104,7 +104,7 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
     field_replies.push(r_1);
     field_replies.push(shake_randomness);
 
-    // Queried-index randomness (in the form of bits, not field elements)
+    // Random queried indices (in the form of bits, not field elements)
     let log_size_second_codeword = config.log_starting_degree() - log_folding_factor + log_inv_rate;
 
     let mut bit_replies = (0..num_queries)
@@ -115,7 +115,8 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
     // We incorporate this possibility to test the case where some elements of
     // L_i^{k_i} are sampled more than once, in which case the prover and
     // verifier should remove the duplicate queries and work with an Ans
-    // polynomial of consequently lower degree
+    // polynomial of consequently lower degree (which also affets degree
+    // correction)
     if repeat_queries {
         for _ in 0..num_queries / 4 {
             let (i, j) = (
@@ -133,7 +134,7 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
 
     let (witness, round_proof) = prove_round(&config, witness, &mut challenger);
 
-    // ============================ Witness Checks ============================
+    // ============================ Witness checks ============================
 
     let StirRoundWitness {
         domain,
@@ -180,9 +181,10 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
     let expected_f_1 =
         &Polynomial::power_polynomial(comb_randomness, quotient_set.len()) * &quotient_polynomial;
 
+    // Main check of this entire function
     assert_eq!(f_1, expected_f_1);
 
-    // ================= Round Proof Checks ==================
+    // =================== Ans- and shake-polynomial checks ===================
 
     let RoundProof {
         query_proofs,
@@ -212,16 +214,22 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
 }
 
 #[test]
+// Checks that prove_round produces the expected witness and round proof, most
+// importantly the correct witness, Ans and shake polynomials
 fn test_prove_round_no_repeat() {
     test_prove_round_aux(false, 0);
 }
 
 #[test]
+// Checks the same as test_prove_round_no_repeat, but includes duplicates in the
+// in-domain queried points
 fn test_prove_round_repeat() {
     test_prove_round_aux(true, 0);
 }
 
 #[test]
+// Checks the same as test_prove_round_no_repeat, but operates on a polynomial
+// with degree lower than the maximum allowed by the configuration
 fn test_prove_round_degree_slack() {
     test_prove_round_aux(false, 10);
 }
@@ -254,7 +262,8 @@ fn test_prove() {
 }
 
 #[test]
-// Checks that the final polynomial f_3 is the expected one after three rounds
+// Checks that the final polynomial p = g_3 is the expected one in three-round
+// STIR
 fn test_prove_final_polynomial() {
     let mut rng = rand::rng();
 
@@ -324,8 +333,9 @@ fn test_prove_final_polynomial() {
         round_r_replies.push(r);
         round_shake_replies.push(shake_randomness);
 
-        // Queried-index randomness (in the form of bits, not field elements)
-        // log2 of |L_{i - 1}^{k_{i - 1}}|
+        // Random queried indices (in the form of bits, not field elements)
+
+        // This is the log2 of |L_{i - 1}^{k_{i - 1}}|
         let log_prev_domain_size = log_initial_codeword_size - (round - 1) - log_folding_factor;
 
         let new_bit_replies = (0..num_queries)
@@ -363,6 +373,8 @@ fn test_prove_final_polynomial() {
     let proof = prove(&config, witness, commitment, &mut challenger);
 
     // ================ Computing expected final polynomial g_3 ===============
+
+    // Computing f_1 and f_2 manually
     for round in 1..=2 {
         let g_i = fold_polynomial(&polynomial, round_r_replies[round - 1], log_folding_factor);
 
@@ -399,7 +411,7 @@ fn test_prove_final_polynomial() {
 
     let f_2 = polynomial.clone();
 
-    // Final round
+    // Computing the expected final polynomial p = g_3
     let expected_final_polynomial = fold_polynomial(&f_2, round_r_replies[2], 4);
 
     assert_eq!(proof.final_polynomial, expected_final_polynomial);
@@ -407,8 +419,8 @@ fn test_prove_final_polynomial() {
 
 #[test]
 #[should_panic(expected = "The degree of the polynomial (16384) is too large")]
-// Checks that the commit method rejects if the polynomial is larger than
-// specified in the configuration
+// Checks that the commit method panics if the polynomial is larger than allowed
+// by the configuration
 fn test_incorrect_polynomial() {
     let config = test_bb_stir_config(
         BB_EXT_SEC_LEVEL,

@@ -58,8 +58,10 @@ macro_rules! impl_bench_field {
 
             group.bench_function(BenchmarkId::new("verify", log_degree), |b| {
                 b.iter_batched(
-                    || (proof.clone(), challenger.clone()),
-                    |(proof, mut challenger)| verify(&config, proof, &mut challenger),
+                    || (proof.clone(), commitment.clone(), challenger.clone()),
+                    |(proof, commitment, mut challenger)| {
+                        verify(&config, commitment, proof, &mut challenger)
+                    },
                     criterion::BatchSize::SmallInput,
                 );
             });

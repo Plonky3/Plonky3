@@ -59,7 +59,8 @@ pub(crate) struct StirRoundWitness<F: TwoAdicField, M: Mmcs<F>> {
 /// asserted. Returns the witness for the prover and the commitment to the
 /// evaluations to be shared with the verifier.
 ///
-/// Parameters:
+/// # Parameters
+///
 /// - `config`: Full STIR configuration
 /// - `polynomial`: Initial polynomial `f_0`
 ///
@@ -131,7 +132,8 @@ where
 /// Prove that the committed polynomial satisfies the low-degreeness bound
 /// specified in the configuration.
 ///
-/// Parameters:
+/// # Parameters
+///
 /// - `config`: Full STIR configuration, including the degree bound
 /// - `witness`: Witness for the prover containing the polynomial and MMCS
 ///   prover data
@@ -175,7 +177,7 @@ where
     challenger.observe(F::from_u8(Messages::FoldingRandomness as u8));
     let folding_randomness: EF = challenger.sample_algebra_element();
 
-    // Enriching the initial witness into an full round witness that prove_round
+    // Enriching the initial witness into a full round witness that prove_round
     // can receive.
     let mut witness = StirRoundWitness {
         domain: witness.domain,
@@ -237,7 +239,6 @@ where
     let pow_witness = challenger.grind(config.final_pow_bits());
 
     StirProof {
-        commitment,
         round_proofs,
         final_polynomial,
         pow_witness,
@@ -248,8 +249,12 @@ where
 /// Prove a single full round, taking in a witness for the previous round and
 /// returning a witness for the new one as well as the round proof.
 pub(crate) fn prove_round<F, EF, M, C>(
+    // Full STIR configuration from which the round-specific configuration is
+    // extracted
     config: &StirConfig<M>,
+    // Witness for the previous round (referring to f_{i - 1} if this is round i)
     witness: StirRoundWitness<EF, M>,
+    // FS challenger
     challenger: &mut C,
 ) -> (StirRoundWitness<EF, M>, RoundProof<EF, M, C::Witness>)
 where
@@ -283,15 +288,15 @@ where
     // Obtain g_i as the folding of f_{i - 1}
     let folded_polynomial = fold_polynomial(&polynomial, folding_randomness, log_folding_factor);
 
-    // Compute the i-th domain L_i = w * <w^{2^i}>
+    // Compute the i-th domain L_i = w * <w^{2^i}> = w * (w^{-1} * L_{i - 1})^2
     let mut new_domain = domain.shrink_subgroup(1);
 
     // Evaluate g_i over L_i
     let folded_evals = new_domain.evaluate_polynomial(folded_polynomial.coeffs().to_vec());
 
-    // Stack the new folded evaluations, commit and observe the commitment (in
-    // preparation for next-round folding verification and hence with the
-    // folding factor of the next round)
+    // Stack the evaluations, commit to them (in preparation for
+    // next-round-folding verification, and therefore with width equal to the
+    // folding factor of the next round) and then observe the commitment
     let new_stacked_evals = RowMajorMatrix::new(
         folded_evals,
         1 << (new_domain.log_size() - log_next_folding_factor),
@@ -302,11 +307,11 @@ where
         .mmcs_config()
         .commit_matrix(new_stacked_evals.clone());
 
-    // Absorb the commitment
+    // Observe the commitment
     challenger.observe(F::from_u8(Messages::RoundCommitment as u8));
     challenger.observe(new_commitment.clone());
 
-    // ============================= Odd Sampling =============================
+    // ======================== Out-of-domain sampling ========================
 
     let mut ood_samples = Vec::new();
 
@@ -318,19 +323,19 @@ where
         }
     }
 
-    // Evaluate the polynomial at the OOD samples
+    // Evaluate the polynomial at the out-of-domain sampled points
     let betas: Vec<EF> = ood_samples
         .iter()
         .map(|x| folded_polynomial.evaluate(x))
         .collect();
 
-    // Observe the betas
+    // Observe the evaluations
     challenger.observe(F::from_u8(Messages::Betas as u8));
     betas
         .iter()
         .for_each(|&beta| challenger.observe_algebra_element(beta));
 
-    // ============================= STIR Message =============================
+    // ========================== Sampling randomness ==========================
 
     // Sample ramdomness for degree correction
     challenger.observe(F::from_u8(Messages::CombRandomness as u8));
@@ -349,10 +354,10 @@ where
         .unique()
         .collect();
 
-    // Proof-of-work witness
+    // Compute the proof-of-work for the current round
     let pow_witness = challenger.grind(pow_bits);
 
-    // ============================= Query Proofs =============================
+    // ======================= Open queried evaluations =======================
 
     // Open the Merkle paths for the queried indices
     let query_proofs: Vec<(Vec<EF>, M::Proof)> = queried_indices
@@ -366,25 +371,24 @@ where
         .map(|(mut k, v)| (k.remove(0), v))
         .collect();
 
-    // ============================= PolyQuotient =============================
+    // ============= Computing the Quot, Ans and shake polynomials =============
 
-    // Compute the domain L_{i-1}^k = w^k * <w^{2^{i-1} * k}>
+    // Compute the domain L_{i - 1}^{k_{i - 1}}
     let mut domain_k = domain.shrink_coset(log_folding_factor);
 
-    // Get the elements in L^k corresponding to the queried indices
-    // (i.e r^{shift}_i in the paper)
-    // Evaluate the polynomial at the queried indices
+    // Get the domain elements at the queried indices (i.e r^shift_i in the paper)
     let stir_randomness: Vec<EF> = queried_indices
         .iter()
         .map(|index| domain_k.element(*index))
         .collect();
 
+    // Evaluate the polynomial at those points
     let stir_randomness_evals: Vec<EF> = stir_randomness
         .iter()
         .map(|x| folded_polynomial.evaluate(x))
         .collect();
 
-    // Stir answers has (implicitly) been dedup-ed, whereas beta_answers has not yet
+    // stir_answers has been dedup-ed but beta_answers has not yet:
     let stir_answers = stir_randomness.into_iter().zip(stir_randomness_evals);
     let beta_answers = ood_samples
         .into_iter()
@@ -393,11 +397,11 @@ where
         .unique();
     let quotient_answers = beta_answers.chain(stir_answers).collect_vec();
 
-    // Compute the quotient set, i.e \mathcal{G}_i in the paper
+    // Compute the quotient set, \mathcal{G}_i in the notation of the article
     let quotient_set = quotient_answers.iter().map(|(x, _)| *x).collect_vec();
     let quotient_set_size = quotient_set.len();
 
-    // Compute the answer polynomial and add it to the transcript
+    // Compute the Ans polynomial and add it to the transcript
     let ans_polynomial = Polynomial::<EF>::lagrange_interpolation(quotient_answers.clone());
     challenger.observe(F::from_u8(Messages::AnsPolynomial as u8));
     observe_ext_slice_with_size(challenger, ans_polynomial.coeffs());
@@ -407,18 +411,20 @@ where
     challenger.observe(F::from_u8(Messages::ShakePolynomial as u8));
     observe_ext_slice_with_size(challenger, shake_polynomial.coeffs());
 
-    // Shake randomness This is only used by the verifier, but it doesn't need
-    // to be kept private. Therefore, the verifier can squeeze it from the
-    // sponge, in which case the prover must follow suit to keep the sponges
-    // in sync.
+    // Shake randomness: this is only used by the verifier, but it doesn't need
+    // to be kept private. Therefore, the verifier can sample it from the
+    // challenger, in which case the prover must follow suit to keep the
+    // challengers in sync.
     challenger.observe(F::from_u8(Messages::ShakeRandomness as u8));
     let _shake_randomness: EF = challenger.sample_algebra_element();
 
-    // Compute the quotient polynomial
+    // Compute the Quot polynomial
     let vanishing_polynomial = Polynomial::vanishing_polynomial(quotient_set);
     let quotient_polynomial = &(&folded_polynomial - &ans_polynomial) / &vanishing_polynomial;
 
-    // Degree-correct by multiplying by the scaling polynomial, 1 + rx + r^2 x^2 + ... + r^n x^n with n = |quotient_set|
+    // Correct the degree by multiplying by the scaling polynomial,
+    //   1 + rx + r^2 x^2 + ... + r^n x^n
+    // with n = |quotient_set|
     let witness_polynomial =
         multiply_by_power_polynomial(&quotient_polynomial, comb_randomness, quotient_set_size);
 
@@ -431,7 +437,7 @@ where
         // less efficient than it could be. In the future, early termination can
         // be designed and implemented for this case, but this is unexplored as
         // of yet.
-        tracing::info!("Warning: quotient polynomial is zero in round {}", round);
+        tracing::info!("The quotient polynomial is zero in round {}", round);
     }
 
     (
@@ -453,10 +459,14 @@ where
     )
 }
 
+// Compute the shake polynomial which allows the verifier to evaluate the Ans
+// polynomial at all points which it purportedly interpolates.
 fn compute_shake_polynomial<F: TwoAdicField>(
     ans_polynomial: &Polynomial<F>,
     quotient_answers: impl Iterator<Item = (F, F)>,
 ) -> Polynomial<F> {
+    // The shake polynomial is defined as:
+    //   sum_{y in quotient_answers} (ans_polynomial - y) / (x - y)
     let mut shake_polynomial = Polynomial::zero();
     for (x, y) in quotient_answers {
         let numerator = ans_polynomial - &y;
