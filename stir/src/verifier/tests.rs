@@ -277,7 +277,7 @@ fn test_bb_verify_variable_folding_factor_unconditional() {
 }
 
 #[test]
-// Check that verification of a honest proof over the quartic extension of
+// Check that verification of a honest proof over the quadratic extension of
 // Goldilocks with fixed folding factor 2^4 works. This requires lowering the
 // bits of security to 80 in order to get prohibitively high proof-of-work bit
 // numbers.
@@ -294,9 +294,9 @@ fn test_gl_verify() {
 }
 
 #[test]
-// Check that verification of a honest proof over the quartic extension of
-// Goldilocks with variable folding factor works. As above, we need to lower
-// the bits of security to 80.
+// Check that verification of a honest proof over the quadratic extension of
+// Goldilocks with variable folding factor works. As above, we need to lower the
+// bits of security to 80.
 fn test_gl_verify_variable_folding_factor() {
     let config = test_gl_stir_config_folding_factors(
         GL_EXT_SEC_LEVEL,
