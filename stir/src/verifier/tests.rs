@@ -1,21 +1,22 @@
+use alloc::vec;
+use alloc::vec::Vec;
 use core::iter::Iterator;
 
-use alloc::{vec, vec::Vec};
 use itertools::Itertools;
 use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_coset::TwoAdicCoset;
-use p3_field::FieldAlgebra;
+use p3_field::PrimeCharacteristicRing;
 use p3_poly::test_utils::rand_poly;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 
 use crate::config::observe_public_parameters;
 use crate::prover::{commit, prove, prove_round, StirRoundWitness};
+use crate::test_utils::*;
 use crate::utils::{fold_polynomial, observe_ext_slice_with_size};
 use crate::verifier::error::{FullRoundVerificationError, VerificationError};
 use crate::verifier::{compute_folded_evaluations, verify};
-use crate::{test_utils::*, SecurityAssumption};
-use crate::{Messages, StirConfig, StirProof};
+use crate::{Messages, SecurityAssumption, StirConfig, StirProof};
 
 type BBProof = StirProof<BBExt, BBExtMMCS, BB>;
 type GLProof = StirProof<GLExt, GLExtMMCS, GL>;
@@ -41,8 +42,8 @@ macro_rules! impl_test_verify_with_config {
 
             // Check that the sponge is consistent at the end
             assert_eq!(
-                prover_challenger.sample_ext_element::<$ext>(),
-                verifier_challenger.sample_ext_element::<$ext>()
+                prover_challenger.sample_algebra_element::<$ext>(),
+                verifier_challenger.sample_algebra_element::<$ext>()
             );
         }
     };
@@ -87,12 +88,12 @@ fn tamper_with_final_polynomial(config: &StirConfig<BBExtMMCS>) -> BBProof {
     observe_public_parameters(config.parameters(), &mut challenger);
 
     // Observe the commitment
-    challenger.observe(BB::from_canonical_u8(Messages::Commitment as u8));
+    challenger.observe(BB::from_u8(Messages::Commitment as u8));
     challenger.observe(commitment.clone());
 
     // Sample the folding randomness
-    challenger.observe(BB::from_canonical_u8(Messages::FoldingRandomness as u8));
-    let folding_randomness = challenger.sample_ext_element();
+    challenger.observe(BB::from_u8(Messages::FoldingRandomness as u8));
+    let folding_randomness = challenger.sample_algebra_element();
 
     let mut witness = StirRoundWitness {
         domain: witness.domain,
@@ -123,11 +124,11 @@ fn tamper_with_final_polynomial(config: &StirConfig<BBExtMMCS>) -> BBProof {
     let log_query_domain_size = witness.domain.log_size() - log_last_folding_factor;
 
     // Absorb the final polynomial
-    challenger.observe(BB::from_canonical_u8(Messages::FinalPolynomial as u8));
+    challenger.observe(BB::from_u8(Messages::FinalPolynomial as u8));
     observe_ext_slice_with_size(&mut challenger, final_polynomial.coeffs());
 
     // Sample the queried indices
-    challenger.observe(BB::from_canonical_u8(Messages::FinalQueryIndices as u8));
+    challenger.observe(BB::from_u8(Messages::FinalQueryIndices as u8));
     let queried_indices: Vec<u64> = (0..final_queries)
         .map(|_| challenger.sample_bits(log_query_domain_size) as u64)
         .unique()
@@ -161,10 +162,10 @@ fn test_compute_folded_evals() {
     let poly_degree = 42;
     let polynomial = rand_poly(poly_degree);
 
-    let mut rng = thread_rng();
+    let mut rng = rng();
 
-    let root: BBExt = rng.gen();
-    let c: BBExt = rng.gen();
+    let root: BBExt = rng.random();
+    let c: BBExt = rng.random();
 
     let domain = TwoAdicCoset::new(root, log_arity);
 
@@ -284,7 +285,7 @@ fn test_serialize_deserialize_proof() {
 
 #[test]
 fn test_verify_failing_cases() {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     let config = test_bb_stir_config(
         BB_EXT_SEC_LEVEL,
         SecurityAssumption::CapacityBound,
@@ -298,7 +299,7 @@ fn test_verify_failing_cases() {
     // ============================== ProofOfWork ==============================
 
     let mut invalid_proof = proof.clone();
-    invalid_proof.round_proofs[0].pow_witness = rng.gen();
+    invalid_proof.round_proofs[0].pow_witness = rng.random();
 
     assert_eq!(
         verify(&config, invalid_proof, &mut test_bb_challenger()),
@@ -313,7 +314,7 @@ fn test_verify_failing_cases() {
     let mut invalid_proof = proof.clone();
     let query_proof = proof.round_proofs[0].query_proofs[0].clone();
     let mut invalid_leaf = query_proof.0.clone();
-    invalid_leaf[0] = rng.gen();
+    invalid_leaf[0] = rng.random();
     let invalid_query_proof = (invalid_leaf, query_proof.1.clone());
     invalid_proof.round_proofs[0].query_proofs[0] = invalid_query_proof;
 
@@ -397,7 +398,7 @@ fn test_verify_failing_cases() {
     let mut invalid_proof = proof.clone();
     let query_proof = proof.final_round_queries[0].clone();
     let mut invalid_leaf = query_proof.0.clone();
-    invalid_leaf[0] = rng.gen();
+    invalid_leaf[0] = rng.random();
     let invalid_query_proof = (invalid_leaf, query_proof.1.clone());
     invalid_proof.final_round_queries[0] = invalid_query_proof;
 
@@ -409,7 +410,7 @@ fn test_verify_failing_cases() {
     // =========================== FinalProofOfWork ===========================
 
     let mut invalid_proof = proof.clone();
-    invalid_proof.pow_witness = rng.gen();
+    invalid_proof.pow_witness = rng.random();
 
     assert_eq!(
         verify(&config, invalid_proof, &mut test_bb_challenger()),

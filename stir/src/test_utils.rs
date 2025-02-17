@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;

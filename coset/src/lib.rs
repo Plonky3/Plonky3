@@ -19,19 +19,19 @@ mod tests;
 ///
 /// ```
 /// # use p3_coset::TwoAdicCoset;
-/// # use p3_field::{TwoAdicField, FieldAlgebra};
+/// # use p3_field::{TwoAdicField, PrimeCharacteristicRing};
 /// # use itertools::Itertools;
 /// # use p3_baby_bear::BabyBear;
 ///
 /// type F = BabyBear;
 /// let log_size = 3;
-/// let shift = F::from_canonical_u64(7);
+/// let shift = F::from_u64(7);
 /// let mut coset = TwoAdicCoset::new(shift, log_size);
 /// let generator = coset.generator();
 ///
 /// // Given the coefficients/evaluations of a polynomial, we can
 /// // evaluate/interpolate it over the coset
-/// let coeffs = vec![3, 1, 4, 5].into_iter().map(F::from_canonical_u64).collect_vec();
+/// let coeffs = vec![3, 1, 4, 5].into_iter().map(F::from_u64).collect_vec();
 /// let evals = (0..1 << log_size)
 ///     .map(|i| {
 ///         coeffs.iter().rfold(F::ZERO, |result, coeff| {

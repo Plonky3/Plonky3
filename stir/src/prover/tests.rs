@@ -1,21 +1,23 @@
-use crate::{
-    proof::RoundProof,
-    prover::{commit, prove, StirRoundWitness},
-    test_utils::*,
-    utils::fold_polynomial,
-    SecurityAssumption,
-};
-use alloc::{vec, vec::Vec};
+use alloc::vec;
+use alloc::vec::Vec;
+
 use itertools::Itertools;
 use p3_challenger::MockChallenger;
 use p3_commit::Mmcs;
 use p3_coset::TwoAdicCoset;
-use p3_field::FieldAlgebra;
-use p3_matrix::{dense::RowMajorMatrix, Matrix};
-use p3_poly::{test_utils::rand_poly, Polynomial};
-use rand::Rng;
+use p3_field::PrimeCharacteristicRing;
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::Matrix;
+use p3_poly::test_utils::rand_poly;
+use p3_poly::Polynomial;
+use rand::{rng, Rng};
 
 use super::{prove_round, RoundConfig};
+use crate::proof::RoundProof;
+use crate::prover::{commit, prove, StirRoundWitness};
+use crate::test_utils::*;
+use crate::utils::fold_polynomial;
+use crate::SecurityAssumption;
 
 // Auxiliary test function which checks that prove_round transforms the round
 // polynomial f_i into the expected polynomial f_{i + 1} and produces the right
@@ -26,7 +28,7 @@ use super::{prove_round, RoundConfig};
 //  - degree_slack: difference between the degree of the starting polynomial f_0
 //    and the maximum degree ensured by the LDT, i. e. 2^log_starting_degree - 1
 fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
-    let mut rng = rand::thread_rng();
+    let mut rng = rng();
 
     let config = test_bb_stir_config(
         BB_EXT_SEC_LEVEL,
@@ -62,7 +64,7 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
         .mmcs_config()
         .commit_matrix(stacked_original_evals.clone());
 
-    let r_0: BBExt = rng.gen();
+    let r_0: BBExt = rng.random();
 
     let witness = StirRoundWitness {
         domain: original_domain.clone(),
@@ -86,16 +88,16 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
     } = round_config.clone();
 
     // Prepare the field randomness produced by the mock challenger
-    let r_1: BBExt = rng.gen();
+    let r_1: BBExt = rng.random();
 
     // Out of domain randomness
-    let ood_randomness: Vec<BBExt> = (0..num_ood_samples).map(|_| rng.gen()).collect();
+    let ood_randomness: Vec<BBExt> = (0..num_ood_samples).map(|_| rng.random()).collect();
 
     // Comb randomness
-    let comb_randomness = rng.gen();
+    let comb_randomness = rng.random();
 
     // Shake randomness (which is squeezed but not used by the prover)
-    let shake_randomness = rng.gen();
+    let shake_randomness = rng.random();
 
     let mut field_replies = ood_randomness.clone();
     field_replies.push(comb_randomness);
@@ -106,7 +108,7 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
     let log_size_second_codeword = config.log_starting_degree() - log_folding_factor + log_inv_rate;
 
     let mut bit_replies = (0..num_queries)
-        .map(|_| rng.gen())
+        .map(|_| rng.random_range(0..usize::MAX))
         .map(|i: usize| i % (1 << log_size_second_codeword))
         .collect::<Vec<_>>();
 
@@ -116,7 +118,10 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
     // polynomial of consequently lower degree
     if repeat_queries {
         for _ in 0..num_queries / 4 {
-            let (i, j) = (rng.gen_range(0..num_queries), rng.gen_range(0..num_queries));
+            let (i, j) = (
+                rng.random_range(0..num_queries),
+                rng.random_range(0..num_queries),
+            );
             bit_replies[i] = bit_replies[j];
         }
     }
@@ -251,7 +256,7 @@ fn test_prove() {
 #[test]
 // Checks that the final polynomial f_3 is the expected one after three rounds
 fn test_prove_final_polynomial() {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     let log_starting_degree = 20;
     let log_folding_factor = 4;
@@ -283,7 +288,7 @@ fn test_prove_final_polynomial() {
     let mut round_shake_replies = Vec::new();
     let mut round_bit_replies = Vec::new();
 
-    let r_0 = rng.gen();
+    let r_0 = rng.random();
     field_replies.push(r_0);
     round_r_replies.push(r_0);
 
@@ -298,16 +303,16 @@ fn test_prove_final_polynomial() {
         } = round_config.clone();
 
         // Out of domain randomness
-        let ood_randomness: Vec<BBExt> = (0..num_ood_samples).map(|_| rng.gen()).collect();
+        let ood_randomness: Vec<BBExt> = (0..num_ood_samples).map(|_| rng.random()).collect();
 
         // Comb randomness
-        let comb_randomness = rng.gen();
+        let comb_randomness = rng.random();
 
         // Folding randomness
-        let r: BBExt = rng.gen();
+        let r: BBExt = rng.random();
 
         // Shake randomness (which is squeezed but not used by the prover)
-        let shake_randomness = rng.gen();
+        let shake_randomness = rng.random();
 
         field_replies.extend(ood_randomness.clone());
         field_replies.push(comb_randomness);
@@ -324,7 +329,7 @@ fn test_prove_final_polynomial() {
         let log_prev_domain_size = log_initial_codeword_size - (round - 1) - log_folding_factor;
 
         let new_bit_replies = (0..num_queries)
-            .map(|_| rng.gen())
+            .map(|_| rng.random_range(0..usize::MAX))
             .map(|i: usize| i % (1 << log_prev_domain_size))
             .collect::<Vec<_>>();
 
@@ -339,7 +344,7 @@ fn test_prove_final_polynomial() {
     let log_final_domain_size = log_initial_codeword_size - 4 - log_folding_factor;
 
     let final_bit_replies = (0..config.final_num_queries())
-        .map(|_| rng.gen())
+        .map(|_| rng.random_range(0..usize::MAX))
         .map(|i: usize| i % (1 << log_final_domain_size))
         .collect::<Vec<_>>();
 

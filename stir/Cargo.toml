@@ -18,8 +18,8 @@ serde.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
-rand = { version = "0.8.5", optional = true }
-rand_chacha = { version = "0.3.1", optional = true }
+rand = { workspace = true, optional = true }
+rand_chacha = { workspace = true, optional = true }
 p3-baby-bear = { workspace = true, optional = true }
 p3-goldilocks = { workspace = true, optional = true }
 p3-symmetric = { workspace = true, optional = true }
@@ -33,9 +33,9 @@ p3-poly = { workspace = true, features = ["test-utils"] }
 p3-merkle-tree.workspace = true
 p3-poseidon2.workspace = true
 p3-symmetric.workspace = true
-criterion = "0.5.1"
-rand = "0.8.5"
-rand_chacha = "0.3.1"
+criterion.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
 serde_json = "1.0.113"
 
 [[bench]]

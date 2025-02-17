@@ -1,4 +1,5 @@
-use alloc::{format, vec, vec::Vec};
+use alloc::vec::Vec;
+use alloc::{format, vec};
 use core::fmt::{Debug, Display, Formatter, Result};
 
 use itertools::Itertools;

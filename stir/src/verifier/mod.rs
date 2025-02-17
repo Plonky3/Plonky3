@@ -1,23 +1,19 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use error::{FullRoundVerificationError, VerificationError};
-use p3_coset::TwoAdicCoset;
-use p3_matrix::Dimensions;
 
+use error::{FullRoundVerificationError, VerificationError};
 use itertools::{iterate, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
+use p3_coset::TwoAdicCoset;
 use p3_field::{batch_multiplicative_inverse, ExtensionField, Field, TwoAdicField};
+use p3_matrix::Dimensions;
 use p3_poly::Polynomial;
 
-use crate::utils::observe_ext_slice_with_size;
-use crate::{
-    config::{observe_public_parameters, RoundConfig},
-    proof::RoundProof,
-    utils::fold_evaluations,
-    StirConfig, StirProof,
-};
-use crate::{Messages, POW_BITS_WARNING};
+use crate::config::{observe_public_parameters, RoundConfig};
+use crate::proof::RoundProof;
+use crate::utils::{fold_evaluations, observe_ext_slice_with_size};
+use crate::{Messages, StirConfig, StirProof, POW_BITS_WARNING};
 
 mod error;
 
@@ -101,7 +97,7 @@ impl<F: TwoAdicField> Oracle<F> {
                 let scale_factor = if rx != F::ONE {
                     (F::ONE - rx.exp_u64((num_terms + 1) as u64)) * denom_inverse
                 } else {
-                    F::from_canonical_usize(num_terms + 1)
+                    F::from_usize(num_terms + 1)
                 };
 
                 // Putting the quotient and degree correction together into the
@@ -176,11 +172,11 @@ where
     }
 
     // Observe the commitment
-    challenger.observe(F::from_canonical_u8(Messages::Commitment as u8));
+    challenger.observe(F::from_u8(Messages::Commitment as u8));
     challenger.observe(commitment.clone());
 
-    challenger.observe(F::from_canonical_u8(Messages::FoldingRandomness as u8));
-    let folding_randomness = challenger.sample_ext_element();
+    challenger.observe(F::from_u8(Messages::FoldingRandomness as u8));
+    let folding_randomness = challenger.sample_algebra_element();
 
     let log_size = config.log_starting_degree() + config.log_starting_inv_rate();
 
@@ -219,11 +215,11 @@ where
     let log_final_query_domain_size = final_domain.log_size() - log_last_folding_factor;
 
     // Absorb the final polynomial
-    challenger.observe(F::from_canonical_u8(Messages::FinalPolynomial as u8));
+    challenger.observe(F::from_u8(Messages::FinalPolynomial as u8));
     observe_ext_slice_with_size(challenger, final_polynomial.coeffs());
 
     // Squeeze the final indices
-    challenger.observe(F::from_canonical_u8(Messages::FinalQueryIndices as u8));
+    challenger.observe(F::from_u8(Messages::FinalQueryIndices as u8));
     let final_queried_indices: Vec<usize> = (0..config.final_num_queries())
         .map(|_| challenger.sample_bits(log_final_query_domain_size))
         .unique()
@@ -349,38 +345,38 @@ where
     // Update the transcript with the root of the Merkle tree
 
     // Observe the commitment
-    challenger.observe(F::from_canonical_u8(Messages::RoundCommitment as u8));
+    challenger.observe(F::from_u8(Messages::RoundCommitment as u8));
     challenger.observe(g_root.clone());
 
     // Rejection sampling on the out of domain samples
     let mut ood_samples = Vec::new();
 
-    challenger.observe(F::from_canonical_u8(Messages::OodSamples as u8));
+    challenger.observe(F::from_u8(Messages::OodSamples as u8));
     while ood_samples.len() < num_ood_samples {
-        let el: EF = challenger.sample_ext_element();
+        let el: EF = challenger.sample_algebra_element();
         if !domain.contains(el) {
             ood_samples.push(el);
         }
     }
 
     // Observe the betas
-    challenger.observe(F::from_canonical_u8(Messages::Betas as u8));
+    challenger.observe(F::from_u8(Messages::Betas as u8));
     betas
         .iter()
-        .for_each(|&beta| challenger.observe_ext_element(beta));
+        .for_each(|&beta| challenger.observe_algebra_element(beta));
 
     // Sample ramdomness used for degree correction
-    challenger.observe(F::from_canonical_u8(Messages::CombRandomness as u8));
-    let comb_randomness = challenger.sample_ext_element();
+    challenger.observe(F::from_u8(Messages::CombRandomness as u8));
+    let comb_randomness = challenger.sample_algebra_element();
 
     // Sample folding randomness for the next round
-    challenger.observe(F::from_canonical_u8(Messages::FoldingRandomness as u8));
-    let new_folding_randomness = challenger.sample_ext_element();
+    challenger.observe(F::from_u8(Messages::FoldingRandomness as u8));
+    let new_folding_randomness = challenger.sample_algebra_element();
 
     // Sample queried indices of elements in L_{i - 1}^k_{i-1}
     let log_query_domain_size = domain.log_size() - log_folding_factor;
 
-    challenger.observe(F::from_canonical_u8(Messages::QueryIndices as u8));
+    challenger.observe(F::from_u8(Messages::QueryIndices as u8));
     let queried_indices: Vec<usize> = (0..num_queries)
         .map(|_| challenger.sample_bits(log_query_domain_size))
         .unique()
@@ -392,14 +388,14 @@ where
     }
 
     // Update the transcript with the coefficients of the answer and shake polynomials
-    challenger.observe(F::from_canonical_u8(Messages::AnsPolynomial as u8));
+    challenger.observe(F::from_u8(Messages::AnsPolynomial as u8));
     observe_ext_slice_with_size(challenger, ans_polynomial.coeffs());
 
-    challenger.observe(F::from_canonical_u8(Messages::ShakePolynomial as u8));
+    challenger.observe(F::from_u8(Messages::ShakePolynomial as u8));
     observe_ext_slice_with_size(challenger, shake_polynomial.coeffs());
 
-    challenger.observe(F::from_canonical_u8(Messages::ShakeRandomness as u8));
-    let shake_randomness: EF = challenger.sample_ext_element();
+    challenger.observe(F::from_u8(Messages::ShakeRandomness as u8));
+    let shake_randomness: EF = challenger.sample_algebra_element();
 
     // Verify Merkle paths
     for (&i, (leaf, proof)) in queried_indices.iter().unique().zip(query_proofs.iter()) {

@@ -3,7 +3,7 @@ use alloc::vec;
 use itertools::Itertools;
 use p3_baby_bear::BabyBear;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::FieldAlgebra;
+use p3_field::PrimeCharacteristicRing;
 use p3_goldilocks::Goldilocks;
 use rand::Rng;
 
@@ -31,13 +31,13 @@ fn test_coset_too_large() {
 #[test]
 // Checks that the evaluation of a polynomial over a coset works as expected
 fn test_evaluate_polynomial() {
-    let mut rng = rand::thread_rng();
-    let shift = rng.gen();
+    let mut rng = rand::rng();
+    let shift = rng.random();
     let mut coset = TwoAdicCoset::<BB>::new(shift, 3);
 
     let coeffs = vec![5, 6, 7, 8, 9]
         .into_iter()
-        .map(BB::from_canonical_u32)
+        .map(BB::from_u32)
         .collect_vec();
 
     let evals = (0..1 << 3)
@@ -54,13 +54,13 @@ fn test_evaluate_polynomial() {
 #[test]
 // Checks that interpolation over the coset works as expected
 fn test_interpolate_evals() {
-    let mut rng = rand::thread_rng();
-    let shift = rng.gen();
+    let mut rng = rand::rng();
+    let shift = rng.random();
     let mut coset = TwoAdicCoset::<BB>::new(shift, 3);
 
     let coeffs = vec![3, 5, 6, 7, 9]
         .into_iter()
-        .map(BB::from_canonical_u32)
+        .map(BB::from_u32)
         .collect_vec();
 
     let evals = (0..1 << 3)
@@ -85,7 +85,7 @@ fn test_interpolate_evals() {
 // Checks that attemtping to shrink a coset by any divisor of its size is
 // allowed, but doing so by the next power of two is not
 fn test_shrink_too_much() {
-    let coset = TwoAdicCoset::<GL>::new(GL::from_canonical_u16(42), 5);
+    let coset = TwoAdicCoset::<GL>::new(GL::from_u16(42), 5);
 
     for _ in 0..=6 {
         coset.shrink_subgroup(6);
@@ -106,8 +106,8 @@ fn test_shrink_nothing() {
 #[test]
 // Checks that shrinking the whole coset results in the expected new shift
 fn test_shrink_shift() {
-    let mut rng = rand::thread_rng();
-    let shift: BB = rng.gen();
+    let mut rng = rand::rng();
+    let shift: BB = rng.random();
 
     let coset = TwoAdicCoset::<BB>::new(shift, 4);
     let shrunk = coset.shrink_coset(2);
@@ -119,8 +119,8 @@ fn test_shrink_shift() {
 // Checks that shrinking the coset by a factor of k results in a new coset whose
 // i-th element is the original coset's (i * k)-th element
 fn test_shrink_contained() {
-    let mut rng = rand::thread_rng();
-    let shift: GL = rng.gen();
+    let mut rng = rand::rng();
+    let shift: GL = rng.random();
 
     let log_shrinking_factor = 3;
 
@@ -136,8 +136,8 @@ fn test_shrink_contained() {
 // Checks that the coset iterator yields the expected elements (in the expected
 // order)
 fn test_coset_iterator() {
-    let mut rng = rand::thread_rng();
-    let shift: BB = rng.gen();
+    let mut rng = rand::rng();
+    let shift: BB = rng.random();
     let log_size = 3;
 
     let mut coset = TwoAdicCoset::<BB>::new(shift, log_size);
@@ -160,13 +160,13 @@ fn test_element_index_too_large() {
 #[test]
 // Checks that the element method returns the expected values
 fn test_element() {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
-    let shift: GL = rng.gen();
+    let shift: GL = rng.random();
     let mut coset = TwoAdicCoset::<GL>::new(shift, GL::TWO_ADICITY);
 
     for _ in 0..100 {
-        let exp = rng.gen::<u64>() % (1 << GL::TWO_ADICITY);
+        let exp = rng.random::<u64>() % (1 << GL::TWO_ADICITY);
         let expected = coset.shift * coset.generator.exp_u64(exp);
         assert_eq!(coset.element(exp as usize), expected);
     }
@@ -176,14 +176,14 @@ fn test_element() {
 // Checks that the coset stores the expected number of iterated squares of the
 // generator
 fn test_stored_values() {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
-    let mut coset = TwoAdicCoset::<GLExt>::new(GLExt::from_canonical_u32(424242), 20);
+    let mut coset = TwoAdicCoset::<GLExt>::new(GLExt::from_u32(424242), 20);
 
     let n_bits = 11;
 
     // Some number with its MSB at the n_bits-th bit
-    let index = (1 << n_bits) - 1 - rng.gen::<u8>() as usize;
+    let index = (1 << n_bits) - 1 - rng.random::<u8>() as usize;
 
     let expected = coset.shift * coset.generator.exp_u64(index as u64);
     assert_eq!(coset.element(index), expected);
@@ -194,8 +194,8 @@ fn test_stored_values() {
 #[test]
 // Checks that a coset is equal to itself
 fn test_equality_reflexive() {
-    let mut rng = rand::thread_rng();
-    let shift = rng.gen();
+    let mut rng = rand::rng();
+    let shift = rng.random();
 
     let coset1 = TwoAdicCoset::<GLExt>::new(shift, 8);
     assert_eq!(coset1, coset1.clone());
@@ -221,8 +221,8 @@ fn test_stored_values_shrink() {
 #[test]
 // Checks inequality between two arbitrary cosets
 fn test_equality_shift() {
-    let mut rng = rand::thread_rng();
-    let shift = rng.gen();
+    let mut rng = rand::rng();
+    let shift = rng.random();
 
     let coset1 = TwoAdicCoset::<GLExt>::new(shift, 10);
     let coset2 = coset1.set_shift(coset1.shift + GLExt::ONE);
@@ -234,8 +234,8 @@ fn test_equality_shift() {
 // Checks that coset equality is invariant under translation by any element of
 // the group, as expected
 fn test_equality_translation() {
-    let mut rng = rand::thread_rng();
-    let shift = rng.gen();
+    let mut rng = rand::rng();
+    let shift = rng.random();
 
     let coset1 = TwoAdicCoset::<GLExt>::new(shift, 10);
     let coset2 = coset1.shift_by(coset1.generator.exp_u64(22));
@@ -246,8 +246,8 @@ fn test_equality_translation() {
 #[test]
 // Checks that the contains method returns true on all elements of the coset
 fn test_contains() {
-    let mut rng = rand::thread_rng();
-    let shift = rng.gen();
+    let mut rng = rand::rng();
+    let shift = rng.random();
 
     let log_size = 8;
 

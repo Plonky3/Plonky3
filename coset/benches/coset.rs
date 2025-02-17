@@ -6,9 +6,8 @@ use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::TwoAdicField;
 use p3_goldilocks::Goldilocks;
-use rand::distributions::{Distribution, Standard};
-use rand::{thread_rng, Rng};
-
+use rand::distr::{Distribution, StandardUniform};
+use rand::{rng, Rng};
 type BB = BabyBear;
 type BBExt = BinomialExtensionField<BB, 5>;
 type GL = Goldilocks;
@@ -22,7 +21,7 @@ type GLExt = BinomialExtensionField<GL, 2>;
 // the alternative.
 fn bench_field<F: NamedField + TwoAdicField>(c: &mut Criterion, log_sizes: &[usize])
 where
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
     let mut group = c.benchmark_group(format!("coset_evaluation_{}", F::name()));
     group.sample_size(10);
@@ -37,8 +36,11 @@ where
         let mut coset = TwoAdicCoset::new(generator, log_size);
         coset.initialise_fft();
 
-        let rng = thread_rng();
-        let poly_coeffs = rng.sample_iter(&Standard).take(1 << log_size).collect_vec();
+        let rng = rng();
+        let poly_coeffs = rng
+            .sample_iter(&StandardUniform)
+            .take(1 << log_size)
+            .collect_vec();
 
         // Sanity check
         let res_1 = dft.coset_dft(poly_coeffs.clone(), generator);

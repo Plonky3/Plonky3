@@ -168,12 +168,12 @@ where
     observe_public_parameters(config.parameters(), challenger);
 
     // Observe the commitment
-    challenger.observe(F::from_canonical_u8(Messages::Commitment as u8));
+    challenger.observe(F::from_u8(Messages::Commitment as u8));
     challenger.observe(commitment.clone());
 
     // Sample the folding randomness r_0
-    challenger.observe(F::from_canonical_u8(Messages::FoldingRandomness as u8));
-    let folding_randomness = challenger.sample_ext_element();
+    challenger.observe(F::from_u8(Messages::FoldingRandomness as u8));
+    let folding_randomness: EF = challenger.sample_algebra_element();
 
     // Enriching the initial witness into an full round witness that prove_round
     // can receive.
@@ -211,11 +211,11 @@ where
     let log_query_domain_size = witness.domain.log_size() - log_last_folding_factor;
 
     // Observe the final polynomial g_{M + 1}
-    challenger.observe(F::from_canonical_u8(Messages::FinalPolynomial as u8));
+    challenger.observe(F::from_u8(Messages::FinalPolynomial as u8));
     observe_ext_slice_with_size(challenger, final_polynomial.coeffs());
 
     // Sample the indices to query verify the folding of f_M into g_{M + 1} at
-    challenger.observe(F::from_canonical_u8(Messages::FinalQueryIndices as u8));
+    challenger.observe(F::from_u8(Messages::FinalQueryIndices as u8));
     let queried_indices: Vec<u64> = (0..final_queries)
         .map(|_| challenger.sample_bits(log_query_domain_size) as u64)
         .unique()
@@ -303,16 +303,16 @@ where
         .commit_matrix(new_stacked_evals.clone());
 
     // Absorb the commitment
-    challenger.observe(F::from_canonical_u8(Messages::RoundCommitment as u8));
+    challenger.observe(F::from_u8(Messages::RoundCommitment as u8));
     challenger.observe(new_commitment.clone());
 
     // ============================= Odd Sampling =============================
 
     let mut ood_samples = Vec::new();
 
-    challenger.observe(F::from_canonical_u8(Messages::OodSamples as u8));
+    challenger.observe(F::from_u8(Messages::OodSamples as u8));
     while ood_samples.len() < num_ood_samples {
-        let el: EF = challenger.sample_ext_element();
+        let el: EF = challenger.sample_algebra_element();
         if !new_domain.contains(el) {
             ood_samples.push(el);
         }
@@ -325,25 +325,25 @@ where
         .collect();
 
     // Observe the betas
-    challenger.observe(F::from_canonical_u8(Messages::Betas as u8));
+    challenger.observe(F::from_u8(Messages::Betas as u8));
     betas
         .iter()
-        .for_each(|&beta| challenger.observe_ext_element(beta));
+        .for_each(|&beta| challenger.observe_algebra_element(beta));
 
     // ============================= STIR Message =============================
 
     // Sample ramdomness for degree correction
-    challenger.observe(F::from_canonical_u8(Messages::CombRandomness as u8));
-    let comb_randomness = challenger.sample_ext_element();
+    challenger.observe(F::from_u8(Messages::CombRandomness as u8));
+    let comb_randomness = challenger.sample_algebra_element();
 
     // Sample folding randomness for the next round
-    challenger.observe(F::from_canonical_u8(Messages::FoldingRandomness as u8));
-    let new_folding_randomness = challenger.sample_ext_element();
+    challenger.observe(F::from_u8(Messages::FoldingRandomness as u8));
+    let new_folding_randomness = challenger.sample_algebra_element();
 
     // Sample queried indices of elements in L_{i - 1}^k_{i - 1}
     let log_query_domain_size = domain.log_size() - log_folding_factor;
 
-    challenger.observe(F::from_canonical_u8(Messages::QueryIndices as u8));
+    challenger.observe(F::from_u8(Messages::QueryIndices as u8));
     let queried_indices: Vec<usize> = (0..num_queries)
         .map(|_| challenger.sample_bits(log_query_domain_size))
         .unique()
@@ -399,20 +399,20 @@ where
 
     // Compute the answer polynomial and add it to the transcript
     let ans_polynomial = Polynomial::<EF>::lagrange_interpolation(quotient_answers.clone());
-    challenger.observe(F::from_canonical_u8(Messages::AnsPolynomial as u8));
+    challenger.observe(F::from_u8(Messages::AnsPolynomial as u8));
     observe_ext_slice_with_size(challenger, ans_polynomial.coeffs());
 
     // Compute the shake polynomial and add it to the transcript
     let shake_polynomial = compute_shake_polynomial(&ans_polynomial, quotient_answers.into_iter());
-    challenger.observe(F::from_canonical_u8(Messages::ShakePolynomial as u8));
+    challenger.observe(F::from_u8(Messages::ShakePolynomial as u8));
     observe_ext_slice_with_size(challenger, shake_polynomial.coeffs());
 
     // Shake randomness This is only used by the verifier, but it doesn't need
     // to be kept private. Therefore, the verifier can squeeze it from the
     // sponge, in which case the prover must follow suit to keep the sponges
     // in sync.
-    challenger.observe(F::from_canonical_u8(Messages::ShakeRandomness as u8));
-    let _shake_randomness: EF = challenger.sample_ext_element();
+    challenger.observe(F::from_u8(Messages::ShakeRandomness as u8));
+    let _shake_randomness: EF = challenger.sample_algebra_element();
 
     // Compute the quotient polynomial
     let vanishing_polynomial = Polynomial::vanishing_polynomial(quotient_set);

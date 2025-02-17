@@ -33,19 +33,19 @@ pub mod test_utils;
 /// # Examples
 ///
 /// ```
-/// use p3_poly::Polynomial;
-/// use p3_field::{Field, TwoAdicField, FieldAlgebra};
-/// use p3_baby_bear::BabyBear;
-/// use rand::Rng;
+/// # use p3_poly::Polynomial;
+/// # use p3_field::{Field, TwoAdicField, PrimeCharacteristicRing};
+/// # use p3_baby_bear::BabyBear;
+/// # use rand::Rng;
 ///
 /// type F = BabyBear;
-/// let mut rng = rand::thread_rng();
+/// let mut rng = rand::rng();
 /// let poly = Polynomial::from_coeffs(
-///     (0..10).map(|_| rng.gen()).collect()
+///     (0..10).map(|_| rng.random()).collect()
 /// );
 ///
 /// // Polynomial evaluation
-/// let point = rng.gen();
+/// let point = rng.random();
 /// assert_eq!(
 ///     poly.evaluate(&point),
 ///     poly.coeffs().iter().rfold(F::ZERO, |result, coeff| result * point + *coeff)
@@ -53,8 +53,8 @@ pub mod test_utils;
 ///
 /// // Polynomials support arithmetic operations with polynomials and field elements
 /// // Note that the operations are implemented on references to polynomials and field elements
-/// let other_poly = Polynomial::from_coeffs((0..10).map(|_| rng.gen()).collect());
-/// let constant: F = rng.gen();
+/// let other_poly = Polynomial::from_coeffs((0..10).map(|_| rng.random()).collect());
+/// let constant: F = rng.random();
 ///
 /// let _ = &poly + &other_poly;
 /// let _ = &poly - &other_poly;

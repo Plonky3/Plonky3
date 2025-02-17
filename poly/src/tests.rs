@@ -1,13 +1,17 @@
-use alloc::{vec, vec::Vec};
+use alloc::vec;
+use alloc::vec::Vec;
+
 use itertools::Itertools;
 use p3_baby_bear::BabyBear;
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
-use p3_field::{Field, FieldAlgebra, TwoAdicField};
+use p3_field::{Field, PrimeCharacteristicRing, TwoAdicField};
 use p3_goldilocks::Goldilocks;
-use p3_matrix::{dense::RowMajorMatrix, Matrix};
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::Matrix;
 use rand::Rng;
 
-use crate::{test_utils::rand_poly, Polynomial};
+use crate::test_utils::rand_poly;
+use crate::Polynomial;
 
 type BB = BabyBear;
 type GL = Goldilocks;
@@ -16,7 +20,7 @@ const TEST_ITERATIONS: usize = 30;
 
 fn field_element_from_i64<F: Field>(x: i64) -> F {
     let sign = if x >= 0 { F::ONE } else { -F::ONE };
-    let value = F::from_wrapped_u64(x.abs() as u64);
+    let value = F::from_u64(x.abs() as u64);
     sign * value
 }
 
@@ -50,7 +54,7 @@ fn test_evaluate() {
     let a = Polynomial::from_coeffs(a_coeffs.clone());
     let x = GL::ONE;
     let y = a.evaluate(&x);
-    assert_eq!(y, GL::from_canonical_u32(24));
+    assert_eq!(y, GL::from_u32(24));
 
     a_coeffs.resize(8, GL::ZERO);
     let dft = Radix2Dit::default();
@@ -128,13 +132,13 @@ fn test_ops_manual() {
 // Checks addition, subtraction, multiplication, and division where both operands
 // are polynomials. Correctness is checked by evaluating at ()(degree + 1) points.
 fn test_ops_random() {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     for _ in 0..TEST_ITERATIONS {
-        let deg_a: usize = rng.gen_range(0..100);
+        let deg_a: usize = rng.random_range(0..100);
         let a = rand_poly::<GL>(100);
 
-        let deg_b: usize = rng.gen_range(0..100);
+        let deg_b: usize = rng.random_range(0..100);
         let b = rand_poly::<GL>(100);
 
         let add = &a + &b;
@@ -146,7 +150,7 @@ fn test_ops_random() {
         // at more points than necessary (which would be degree + 1), but these
         // checks are cheap
         for i in 0..(deg_a + deg_b + 1) {
-            let i_f = GL::from_canonical_u32(i as u32);
+            let i_f = GL::from_u32(i as u32);
             assert_eq!(add.evaluate(&i_f), a.evaluate(&i_f) + b.evaluate(&i_f));
             assert_eq!(sub.evaluate(&i_f), a.evaluate(&i_f) - b.evaluate(&i_f));
             assert_eq!(mul.evaluate(&i_f), a.evaluate(&i_f) * b.evaluate(&i_f));
@@ -192,13 +196,13 @@ fn test_ops_leading_zeros() {
 // Checks addition, subtraction, multiplication, and division where the right operand is
 // a random constant. Correctness is checked by manually computing the expected result.
 fn test_ops_constants() {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     for _ in 0..TEST_ITERATIONS {
-        let deg = rng.gen_range(1..20);
+        let deg = rng.random_range(1..20);
 
         let polynomial: Polynomial<GL> = rand_poly(deg);
-        let constant = GL::from_canonical_u32(rng.gen_range(1..100));
+        let constant = GL::from_u32(rng.random_range(1..100));
 
         let expected_add = {
             let mut coeffs = polynomial.coeffs.clone();
@@ -239,12 +243,12 @@ fn test_ops_constants() {
 // Checks that operations where one of the polynomials is zero (in the case of
 // division: always the dividend) yields the expected results
 fn test_ops_zero() {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     let zero_poly: Polynomial<GL> = Polynomial::zero();
 
     for _ in 0..TEST_ITERATIONS {
-        let deg = rng.gen_range(0..20);
+        let deg = rng.random_range(0..20);
 
         // op can never be the zero polynomial (degree 0 corresponds to non-zero constants)
         let op = rand_poly(deg);
@@ -297,17 +301,17 @@ fn test_mul_fft_naive_consistency() {
 #[test]
 // Checks that Lagrange interpolation yields the expected polynomial
 fn test_lagrange_interpolation() {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     for _ in 0..TEST_ITERATIONS {
-        let deg = rng.gen_range(15..20);
+        let deg = rng.random_range(15..20);
 
         let polynomial = rand_poly::<GL>(deg);
 
         let mut points = Vec::new();
 
         while points.len() < deg + 1 {
-            let point = field_element_from_i64(rng.gen::<i64>());
+            let point = field_element_from_i64(rng.random::<i64>());
             if !points.contains(&point) {
                 points.push(point);
             }
@@ -343,11 +347,11 @@ fn test_lagrange_interpolation_empty() {
 // Checks that Lagrange interpolation correctly handles duplicate (point,
 // evaluation) pairs
 fn test_lagrange_interpolation_duplicates() {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     for _ in 0..10 * TEST_ITERATIONS {
-        let num_points = rng.gen_range(15..20);
-        let num_duplicates = rng.gen_range(1..num_points);
+        let num_points = rng.random_range(15..20);
+        let num_duplicates = rng.random_range(1..num_points);
 
         let deg = num_points - num_duplicates - 1;
 
@@ -357,7 +361,7 @@ fn test_lagrange_interpolation_duplicates() {
 
         // Creating a list of distinct points
         while points.len() < deg + 1 {
-            let point = field_element_from_i64(rng.gen::<i64>());
+            let point = field_element_from_i64(rng.random::<i64>());
             if !points.contains(&point) {
                 points.push(point);
             }
@@ -365,7 +369,7 @@ fn test_lagrange_interpolation_duplicates() {
 
         // Adding duplicate points
         for _ in 0..num_duplicates {
-            let index = rng.gen_range(0..points.len());
+            let index = rng.random_range(0..points.len());
             points.push(points[index]);
         }
 
@@ -382,14 +386,14 @@ fn test_lagrange_interpolation_duplicates() {
 // expected result. Ensures the output matches the input when given a constant
 // or zero polynomial as input.
 fn test_compose_with_exponent() {
-    let rng = &mut rand::thread_rng();
+    let rng = &mut rand::rng();
 
     // p(x) = 3 + 2x + 6x^2 + 7x^3 + 9x^4
     let polynomial = Polynomial::<BB>::from_coeffs(field_elements_from_i64(vec![3, 2, 6, 7, 9]));
 
     let zero_poly = Polynomial::<BB>::zero();
 
-    let constant_poly = Polynomial::<BB>::constant(BB::from_wrapped_u32(rng.gen()));
+    let constant_poly = Polynomial::<BB>::constant(BB::from_u32(rng.random()));
 
     let exponent = 3;
 
@@ -426,10 +430,10 @@ fn test_vanishing_manual() {
 fn test_vanishing_random() {
     let max_num_points = 100;
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let points = field_elements_from_i64(
         (0..max_num_points)
-            .map(|_| rng.gen::<i64>())
+            .map(|_| rng.random::<i64>())
             .unique()
             .collect_vec(),
     );
@@ -457,9 +461,12 @@ fn test_vanishing_empty() {
 fn test_vanishing_and_lagrange_interpolation() {
     let max_num_points = 100;
 
-    let mut rng = rand::thread_rng();
-    let points =
-        field_elements_from_i64((0..max_num_points).map(|_| rng.gen::<i64>()).collect_vec());
+    let mut rng = rand::rng();
+    let points = field_elements_from_i64(
+        (0..max_num_points)
+            .map(|_| rng.random::<i64>())
+            .collect_vec(),
+    );
 
     let vanishing_poly = Polynomial::<BB>::vanishing_polynomial(points.clone());
 
@@ -471,7 +478,7 @@ fn test_vanishing_and_lagrange_interpolation() {
 
     let mut new_point = BB::ZERO;
     while new_point.is_zero() {
-        new_point = field_element_from_i64(rng.gen::<i64>());
+        new_point = field_element_from_i64(rng.random::<i64>());
     }
     let new_eval = vanishing_poly.evaluate(&new_point);
     point_evals.push((new_point, new_eval));
@@ -485,12 +492,12 @@ fn test_vanishing_and_lagrange_interpolation() {
 // Checks that division by a linear polynomial yields the expected quotient and
 // evaluation
 fn test_division_by_linear_polynomial() {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     for _ in 0..TEST_ITERATIONS {
-        let deg = rng.gen_range(1..100);
+        let deg = rng.random_range(1..100);
         let polynomial: Polynomial<GL> = rand_poly(deg);
-        let point = rng.gen();
+        let point = rng.random();
 
         let divisor = Polynomial::vanishing_linear_polynomial(point);
         let (expected_q, _) = polynomial.divide_with_remainder(&divisor);
@@ -508,14 +515,14 @@ fn test_division_by_linear_polynomial() {
 fn test_division_by_linear_polynomial_vanishing() {
     let max_num_points = 20;
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     let poly_one = Polynomial::<GL>::constant(GL::ONE);
 
     for _ in 0..TEST_ITERATIONS {
         let points = field_elements_from_i64(
             (0..max_num_points)
-                .map(|_| rng.gen::<i64>())
+                .map(|_| rng.random::<i64>())
                 .unique()
                 .collect_vec(),
         );
@@ -532,14 +539,14 @@ fn test_division_by_linear_polynomial_vanishing() {
 
 #[test]
 fn test_power_polynomial() {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
-    let degree = rng.gen_range(50..100);
+    let degree = rng.random_range(50..100);
 
     let mut r = GL::ZERO;
 
     while r == GL::ZERO {
-        r = rng.gen();
+        r = rng.random();
     }
 
     // (1 + rx + ... + (rx)^n) * (rx - 1) = (rx)^(n + 1) - 1

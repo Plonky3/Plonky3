@@ -1,4 +1,5 @@
 use alloc::vec;
+
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
@@ -21,7 +22,7 @@ type BBMMCS = MerkleTreeMmcs<<BB as Field>::Packing, <BB as Field>::Packing, BBH
 type BBExtMMCS = ExtensionMmcs<BB, BBExt, BBMMCS>;
 
 pub fn test_mmcs_config() -> BBExtMMCS {
-    let mut rng = ChaCha20Rng::from_entropy();
+    let mut rng = ChaCha20Rng::from_os_rng();
     let perm = BBPerm::new_from_rng_128(&mut rng);
     let hash = BBHash::new(perm.clone());
     let compress = BBCompress::new(perm.clone());

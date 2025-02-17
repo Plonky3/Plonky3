@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+
 use p3_field::Field;
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger, GrindingChallenger};
@@ -68,14 +69,16 @@ impl<F: Field> GrindingChallenger for MockChallenger<F> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloc::vec;
-    use p3_field::FieldAlgebra;
+
+    use p3_field::PrimeCharacteristicRing;
     use p3_goldilocks::Goldilocks;
+
+    use super::*;
 
     #[test]
     fn test_mock_challenger() {
-        let item_replies: Vec<_> = (0..10).map(Goldilocks::from_canonical_usize).collect();
+        let item_replies: Vec<_> = (0..10).map(Goldilocks::from_usize).collect();
         let bit_replies = vec![1, 2, 3, 4, 5, 6];
 
         let mut challenger = MockChallenger::new(item_replies.clone(), bit_replies.clone());
@@ -93,7 +96,7 @@ mod tests {
         // Test grinding (remember this is not checked)
         assert_eq!(challenger.grind(4242), Goldilocks::ZERO);
         assert_eq!(
-            challenger.check_witness(234, Goldilocks::from_canonical_usize(2424)),
+            challenger.check_witness(234, Goldilocks::from_usize(2424)),
             true
         );
     }
@@ -101,7 +104,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "No item replies left")]
     fn test_mock_challenger_item_panic() {
-        let field_els: Vec<_> = (42..47).map(Goldilocks::from_canonical_usize).collect();
+        let field_els: Vec<_> = (42..47).map(Goldilocks::from_usize).collect();
         let mut challenger = MockChallenger::<Goldilocks>::new(field_els, vec![]);
         (0..6).for_each(|_| {
             challenger.sample();
