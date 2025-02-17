@@ -204,7 +204,7 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
     /// `g^(2^1)`, ... of `g` (so that subsequent element queries do not require
     /// recomputing those squares), this function might modify the internal
     /// vector of memoised values - hence the `mut` requirement. In situations
-    /// where `mut` is not available, consider [`element_immutable`]
+    /// where `mut` is not available, consider [`element_immutable`](Self::element_immutable).
     ///
     /// # Panics
     ///
@@ -227,7 +227,7 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
     /// `2^log_size`.
     ///
     /// *Note*: If `self` is `mut` and several elements will be queried,
-    /// consider the more optimal [`element`] which memoizes intermediate
+    /// consider the more optimal [`element`](Self::element) which memoizes intermediate
     /// computations.
     ///
     /// # Panics

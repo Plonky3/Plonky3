@@ -358,7 +358,7 @@ impl<F: Field> Polynomial<F> {
 
     /// Multiplies `self` and `other` using the standard naive algorithm (i. e.
     /// the Cauchy product of the coefficients). If `F: TwoAdicField`, instead
-    /// consider using [`mul`] or, equivalently, the operator `*`, which selects
+    /// consider using [`mul`](Mul::mul) or, equivalently, the operator `*`, which selects
     /// the naive algorithm or the FFT depending on the degrees of the two
     /// factors.
     pub fn mul_naive(&self, other: &Self) -> Self {
@@ -491,7 +491,7 @@ impl<F: TwoAdicField> Mul<&Polynomial<F>> for &Polynomial<F> {
 /// # Panics
 ///
 /// Panics if the remainder is not zero. If this is not guaranteed, use
-/// [`divide_with_remainder`] instead.
+/// [`divide_with_remainder`](Polynomial::divide_with_remainder) instead.
 impl<F: TwoAdicField> Div<&Polynomial<F>> for &Polynomial<F> {
     type Output = Polynomial<F>;
 

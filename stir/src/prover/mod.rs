@@ -17,7 +17,7 @@ use crate::{Messages, StirConfig, StirProof, POW_BITS_WARNING};
 #[cfg(test)]
 mod tests;
 
-/// Witness for the STIR protocol produced by the `commit` method.
+/// Prover witness for the STIR protocol produced by the [`commit`] method.
 pub struct StirWitness<F: TwoAdicField, M: Mmcs<F>> {
     // Domain L_0
     pub(crate) domain: TwoAdicCoset<F>,
@@ -25,33 +25,48 @@ pub struct StirWitness<F: TwoAdicField, M: Mmcs<F>> {
     // Polynomial f_0 which was committed to
     pub(crate) polynomial: Polynomial<F>,
 
-    // Merkle tree whose leaves are stacked_evals
+    // Merkle tree whose leaves are the stacked evaluations of f_0. Its root is
+    // the commitment shared with the verifier.
     pub(crate) merkle_tree: M::ProverData<RowMajorMatrix<F>>,
 }
 
-// Witness enriched with additional information (round number and folding
+// STIR witness enriched with additional information (round number and folding
 // randomness) received and produced by the method prove_round
 pub(crate) struct StirRoundWitness<F: TwoAdicField, M: Mmcs<F>> {
     // The indices are given in the following frame of reference: Self is
-    // produced inside prove_round for round i (in {1, ..., M}).
-    // final round, with index M + 1, does not produce a StirRoundWitness.
+    // produced inside prove_round for round i (in {1, ..., M}). The final
+    // round, with index M + 1, does not produce a StirRoundWitness.
 
-    // Domain L_i
+    // Domain L_i. The chosen sequence of domains L_0, L_1, ... is documented
+    // at the start of the method commit.
     pub(crate) domain: TwoAdicCoset<F>,
 
     // Polynomial f_i
     pub(crate) polynomial: Polynomial<F>,
 
-    // Merkle tree whose leaves are stacked_evals
+    // Merkle tree whose leaves are the stacked evaluations of g_i
     pub(crate) merkle_tree: M::ProverData<RowMajorMatrix<F>>,
 
     // Round number i
     pub(crate) round: usize,
 
-    // Folding randomness r_i to be used in the next round
+    // Folding randomness r_i to be used *in the next round* (g_{i + 1} will be
+    // the folding of f_i with randomness r_i)
     pub(crate) folding_randomness: F,
 }
 
+/// Commit to the initial polynomial `f_0` whose low-degreeness is being
+/// asserted. Returns the witness for the prover and the commitment to the
+/// evaluations to be shared with the verifier.
+///
+/// Parameters:
+/// - `config`: Full STIR configuration
+/// - `polynomial`: Initial polynomial `f_0`
+///
+/// # Panics
+///
+/// Panics if the degree of `polynomial` is too large (the configuration supports
+/// degree at most `2^{config.log_starting_degree()} - 1`).
 pub fn commit<F, M>(
     config: &StirConfig<M>,
     polynomial: Polynomial<F>,
@@ -60,10 +75,12 @@ where
     F: TwoAdicField,
     M: Mmcs<F>,
 {
-    assert!(polynomial
-        .degree()
-        .is_none_or(|d| d < (1 << config.log_starting_degree())),
-        "The degree of the polynomial ({}) is too large: the configuration only supports polynomials of degree at most 2^{} - 1 = {}",
+    assert!(
+        polynomial
+            .degree()
+            .is_none_or(|d| d < (1 << config.log_starting_degree())),
+        "The degree of the polynomial ({}) is too large: the configuration \
+        only supports polynomials of degree up to 2^{} - 1 = {}",
         polynomial.degree().unwrap(),
         config.log_starting_degree(),
         (1 << config.log_starting_degree()) - 1
@@ -74,21 +91,25 @@ where
     // Initial domain L_0. The chosen sequence of domains is:
     //   - L_0 = w * <w> = <w>
     //   - L_1 = w * <w^2>
-    //   - L_2 = w * <w^4>
-    //     ...
-    //   - L_i = w * <w^{2^i}>
-    // This guarantees that, for all i >= 0, (L_i)^{2^l_i} doesn't intersect
-    // L_{i + 1} (where l_i > 0 is the log_folding_factor of the i-th round),
-    // as required for the optimisation mentioned in the article (i. e. avoiding
-    // the use of the Fill polynomials).
+    //   - L_2 = w * <w^4> ...
+    //   - L_i = w * <w^{2^i}> This guarantees that, for all i >= 0, (L_i)^{k_i}
+    // is disjoint from L_{i + 1} (where k_i is the folding factor of the i-th
+    // round), as required for the optimisation mentioned in the article (i. e.
+    // avoiding the use of the Fill polynomials).
     //
     // N.B.: Defining L_0 with shift w or 1 is equivalent mathematically, but
     // the former allows one to always use the method shrink_subgroup in the
-    // following rounds.
+    // following rounds. This shift does not cause significant extra work in
+    // coset.evaluate as it is treated as a special case therein.
     let mut domain = TwoAdicCoset::new(F::two_adic_generator(log_size), log_size);
 
+    // Committing to the evaluations of f_0 over L_0.
     let evals = domain.evaluate_polynomial(&polynomial);
 
+    // The stacking width is
+    //   k_0 = 2^{log_size - config.log_starting_folding_factor},
+    // which facilitates opening values so that the prover can verify the first
+    // folding
     let stacked_evals = RowMajorMatrix::new(
         evals,
         1 << (log_size - config.log_starting_folding_factor()),
@@ -107,6 +128,16 @@ where
     )
 }
 
+/// Prove that the committed polynomial satisfies the low-degreeness bound
+/// specified in the configuration.
+///
+/// Parameters:
+/// - `config`: Full STIR configuration, including the degree bound
+/// - `witness`: Witness for the prover containing the polynomial and MMCS
+///   prover data
+/// - `commitment`: Commitment to the evaluations of the polynomial over L_0
+/// - `challenger`: Challenger which produces the transcript of the
+///   Fiat-Shamired interaction
 pub fn prove<F, EF, M, C>(
     config: &StirConfig<M>,
     witness: StirWitness<EF, M>,
@@ -119,6 +150,9 @@ where
     M: Mmcs<EF>,
     C: FieldChallenger<F> + GrindingChallenger + CanObserve<M::Commitment>,
 {
+    // Inform the prover if the configuration requires a proof of work larger
+    // than the POW_BITS_WARNING constant. This is only logged if the tracing
+    // module has been init()ialised.
     if config
         .pow_bits_all_rounds()
         .iter()
@@ -130,17 +164,19 @@ where
         );
     }
 
-    // Observe public parameters
+    // Observe the public parameters
     observe_public_parameters(config.parameters(), challenger);
 
     // Observe the commitment
     challenger.observe(F::from_canonical_u8(Messages::Commitment as u8));
     challenger.observe(commitment.clone());
 
-    // Sample the folding randomness
+    // Sample the folding randomness r_0
     challenger.observe(F::from_canonical_u8(Messages::FoldingRandomness as u8));
     let folding_randomness = challenger.sample_ext_element();
 
+    // Enriching the initial witness into an full round witness that prove_round
+    // can receive.
     let mut witness = StirRoundWitness {
         domain: witness.domain,
         polynomial: witness.polynomial,
@@ -149,6 +185,7 @@ where
         folding_randomness,
     };
 
+    // Prove each full round i = 1, ..., M of the protocol
     let mut round_proofs = vec![];
     for _ in 1..=config.num_rounds() - 1 {
         let (new_witness, round_proof) = prove_round(config, witness, challenger);
@@ -157,10 +194,11 @@ where
         round_proofs.push(round_proof);
     }
 
-    // Final round
+    // Final round i = M + 1
     let log_last_folding_factor = config.log_last_folding_factor();
 
-    // p in the article, which could also be understood as g_{M + 1}
+    // Computing the final polynomial p in the notation of the article (which we
+    // also refer to as g_{M + 1})
     let final_polynomial = fold_polynomial(
         &witness.polynomial,
         witness.folding_randomness,
@@ -172,17 +210,19 @@ where
     // Logarithm of |(L_M)^(k_M)|
     let log_query_domain_size = witness.domain.log_size() - log_last_folding_factor;
 
-    // Absorb the final polynomial
+    // Observe the final polynomial g_{M + 1}
     challenger.observe(F::from_canonical_u8(Messages::FinalPolynomial as u8));
     observe_ext_slice_with_size(challenger, final_polynomial.coeffs());
 
-    // Sample the queried indices
+    // Sample the indices to query verify the folding of f_M into g_{M + 1} at
     challenger.observe(F::from_canonical_u8(Messages::FinalQueryIndices as u8));
     let queried_indices: Vec<u64> = (0..final_queries)
         .map(|_| challenger.sample_bits(log_query_domain_size) as u64)
         .unique()
         .collect();
 
+    // Opening the cosets of evaluations of g_M at each k_M-th root of the
+    // points queried
     let queries_to_final: Vec<(Vec<EF>, M::Proof)> = queried_indices
         .into_iter()
         .map(|index| {
@@ -193,6 +233,7 @@ where
         .map(|(mut k, v)| (k.remove(0), v))
         .collect();
 
+    // Compute the proof-of-work for the final round
     let pow_witness = challenger.grind(config.final_pow_bits());
 
     StirProof {
@@ -204,6 +245,8 @@ where
     }
 }
 
+/// Prove a single full round, taking in a witness for the previous round and
+/// returning a witness for the new one as well as the round proof.
 pub(crate) fn prove_round<F, EF, M, C>(
     config: &StirConfig<M>,
     witness: StirRoundWitness<EF, M>,

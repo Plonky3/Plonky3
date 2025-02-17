@@ -1,5 +1,5 @@
 //! An implementation of the STIR low-degree test. Based on the article
-//! https://eprint.iacr.org/2024/390 and the
+//! <https://eprint.iacr.org/2024/390> and the
 //! [implementation](https://github.com/WizardOfMenlo/stir) by the co-author
 //! Giacomo Fenzi.
 
