@@ -7,6 +7,7 @@ use p3_field::extension::Complex;
 use p3_field::TwoAdicField;
 use p3_fri::fold_even_odd;
 use p3_goldilocks::Goldilocks;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_mersenne_31::Mersenne31;
 use rand::distributions::{Distribution, Standard};
 use rand::{thread_rng, Rng};
@@ -25,10 +26,11 @@ where
         let mut rng = thread_rng();
         let beta = rng.sample(Standard);
         let poly = rng.sample_iter(Standard).take(n).collect_vec();
+        let m = RowMajorMatrix::new(poly, 2);
 
         group.bench_function(BenchmarkId::from_parameter(n), |b| {
             b.iter(|| {
-                fold_even_odd(poly.clone(), beta);
+                fold_even_odd(m.clone(), beta);
             })
         });
     }

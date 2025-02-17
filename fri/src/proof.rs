@@ -12,8 +12,21 @@ use serde::{Deserialize, Serialize};
 pub struct FriProof<F: Field, M: Mmcs<F>, Witness, InputProof> {
     pub commit_phase_commits: Vec<M::Commitment>,
     pub query_proofs: Vec<QueryProof<F, M, InputProof>>,
+
+    // Fold each input so that it has the length of (2^log_arity * k) for some k.
+    pub normalize_phase_commits: Vec<(M::Commitment, usize)>,
+    pub normalize_query_proofs: Vec<NormalizeQueryProof<F, M>>,
+
     pub final_poly: Vec<F>,
     pub pow_witness: Witness,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(bound = "")]
+pub struct NormalizeQueryProof<F: Field, M: Mmcs<F>> {
+    /// For each of the words that needs to be normalized, we do a single FRI fold step and open the
+    /// commitment at the queried index.
+    pub normalize_phase_openings: Vec<CommitPhaseProofStep<F, M>>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -28,13 +41,12 @@ pub struct QueryProof<F: Field, M: Mmcs<F>, InputProof> {
     pub commit_phase_openings: Vec<CommitPhaseProofStep<F, M>>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(bound = "")]
 pub struct CommitPhaseProofStep<F: Field, M: Mmcs<F>> {
-    /// The opening of the commit phase codeword at the sibling location.
-    // This may change to Vec<FC::Challenge> if the library is generalized to support other FRI
-    // folding arities besides 2, meaning that there can be multiple siblings.
-    pub sibling_value: F,
+    /// The opening of the commit phase codeword at the sibling locations (usually has length
+    /// 1<<config.log_arity).
+    pub sibling_values: Vec<F>,
 
     pub opening_proof: M::Proof,
 }

@@ -37,13 +37,14 @@ impl<F: ComplexExtendable, EF: ExtensionField<F>, InputProof, InputError: Debug>
         &self,
         index: usize,
         log_folded_height: usize,
+        _num_folds: usize,
         beta: EF,
-        evals: impl Iterator<Item = EF>,
+        evals: Vec<EF>,
     ) -> EF {
         fold_x_row(index, log_folded_height, beta, evals)
     }
 
-    fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, m: M) -> Vec<EF> {
+    fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, m: M, _num_folds: usize) -> Vec<EF> {
         fold_x(beta, m)
     }
 }
@@ -112,9 +113,8 @@ pub(crate) fn fold_x_row<F: ComplexExtendable, EF: ExtensionField<F>>(
     index: usize,
     log_folded_height: usize,
     beta: EF,
-    evals: impl Iterator<Item = EF>,
+    evals: Vec<EF>,
 ) -> EF {
-    let evals = evals.collect_vec();
     assert_eq!(evals.len(), 2);
     let log_arity = log2_strict_usize(evals.len());
 
@@ -155,7 +155,7 @@ mod tests {
 
         let mat_x_folded = fold_x::<F, EF>(beta, m.as_view());
         let row_x_folded = (0..(1 << log_folded_height))
-            .map(|i| fold_x_row::<F, EF>(i, log_folded_height, beta, m.row(i)))
+            .map(|i| fold_x_row::<F, EF>(i, log_folded_height, beta, m.row(i).collect()))
             .collect_vec();
         assert_eq!(mat_x_folded, row_x_folded);
     }

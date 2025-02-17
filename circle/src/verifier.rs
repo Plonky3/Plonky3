@@ -126,7 +126,7 @@ where
 
         index = index_pair;
 
-        folded_eval = g.fold_row(index, log_folded_height, beta, evals.into_iter());
+        folded_eval = g.fold_row(index, log_folded_height, 1, beta, evals);
     }
 
     debug_assert!(index < config.blowup(), "index was {}", index);

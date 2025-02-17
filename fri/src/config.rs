@@ -7,6 +7,7 @@ use p3_matrix::Matrix;
 #[derive(Debug)]
 pub struct FriConfig<M> {
     pub log_blowup: usize,
+    pub log_arity: usize,
     // TODO: This parameter and FRI early stopping are not yet implemented in `CirclePcs`.
     pub log_final_poly_len: usize,
     pub num_queries: usize,
@@ -17,6 +18,10 @@ pub struct FriConfig<M> {
 impl<M> FriConfig<M> {
     pub const fn blowup(&self) -> usize {
         1 << self.log_blowup
+    }
+
+    pub const fn arity(&self) -> usize {
+        1 << self.log_arity
     }
 
     pub const fn final_poly_len(&self) -> usize {
@@ -50,12 +55,13 @@ pub trait FriGenericConfig<F: Field> {
         &self,
         index: usize,
         log_height: usize,
+        num_folds: usize,
         beta: F,
-        evals: impl Iterator<Item = F>,
+        evals: Vec<F>,
     ) -> F;
 
     /// Same as applying fold_row to every row, possibly faster.
-    fn fold_matrix<M: Matrix<F>>(&self, beta: F, m: M) -> Vec<F>;
+    fn fold_matrix<M: Matrix<F>>(&self, beta: F, m: M, num_folds: usize) -> Vec<F>;
 }
 
 /// Creates a minimal `FriConfig` for testing purposes.
@@ -63,6 +69,7 @@ pub trait FriGenericConfig<F: Field> {
 pub fn create_test_fri_config<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
     FriConfig {
         log_blowup: 1,
+        log_arity: 1,
         log_final_poly_len: 0,
         num_queries: 2,
         proof_of_work_bits: 1,
@@ -75,6 +82,7 @@ pub fn create_test_fri_config<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
 pub fn create_benchmark_fri_config<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
     FriConfig {
         log_blowup: 1,
+        log_arity: 1,
         log_final_poly_len: 0,
         num_queries: 100,
         proof_of_work_bits: 16,
