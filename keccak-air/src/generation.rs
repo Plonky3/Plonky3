@@ -14,9 +14,18 @@ use crate::{NUM_ROUNDS, R, RC, U64_LIMBS};
 
 // TODO: Take generic iterable
 #[instrument(name = "generate Keccak trace", skip_all)]
-pub fn generate_trace_rows<F: PrimeField64>(inputs: Vec<[u64; 25]>) -> RowMajorMatrix<F> {
+pub fn generate_trace_rows<F: PrimeField64>(
+    inputs: Vec<[u64; 25]>,
+    extra_capacity_bits: usize,
+) -> RowMajorMatrix<F> {
     let num_rows = (inputs.len() * NUM_ROUNDS).next_power_of_two();
-    let mut trace = RowMajorMatrix::new(F::zero_vec(num_rows * NUM_KECCAK_COLS), NUM_KECCAK_COLS);
+    let trace_length = num_rows * NUM_KECCAK_COLS;
+
+    // We allocate extra_capacity_bits now as this will be needed by the dft.
+    let mut long_trace = F::zero_vec(trace_length << extra_capacity_bits);
+    long_trace.truncate(trace_length);
+
+    let mut trace = RowMajorMatrix::new(long_trace, NUM_KECCAK_COLS);
     let (prefix, rows, suffix) = unsafe { trace.values.align_to_mut::<KeccakCols<F>>() };
     assert!(prefix.is_empty(), "Alignment should match");
     assert!(suffix.is_empty(), "Alignment should match");
@@ -38,18 +47,20 @@ pub fn generate_trace_rows<F: PrimeField64>(inputs: Vec<[u64; 25]>) -> RowMajorM
 
 /// `rows` will normally consist of 24 rows, with an exception for the final row.
 fn generate_trace_rows_for_perm<F: PrimeField64>(rows: &mut [KeccakCols<F>], input: [u64; 25]) {
-    // Populate the round input for the first round.
     let mut current_state: [[u64; 5]; 5] = unsafe { transmute(input) };
 
-    for y in 0..5 {
-        for (x, row) in current_state.iter().enumerate() {
-            rows[0].a[y][x] = u64_to_16_bit_limbs(row[y]);
-        }
-    }
+    let initial_state: [[[F; 4]; 5]; 5] =
+        array::from_fn(|y| array::from_fn(|x| u64_to_16_bit_limbs(current_state[x][y])));
+
+    // Populate the round input for the first round.
+    rows[0].a = initial_state;
+    rows[0].preimage = initial_state;
 
     generate_trace_row_for_round(&mut rows[0], 0, &mut current_state);
 
     for round in 1..rows.len() {
+        rows[round].preimage = initial_state;
+
         // Copy previous row's output to next row's input.
         for y in 0..5 {
             for x in 0..5 {

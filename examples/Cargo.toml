@@ -29,6 +29,7 @@ clap.workspace = true
 itertools.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive", "alloc"] }
+bincode = "1.3.3"
 
 [dev-dependencies]
 p3-baby-bear.workspace = true

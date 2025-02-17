@@ -10,7 +10,7 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_poseidon2_air::{RoundConstants, VectorizedPoseidon2Air};
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32To64};
 use p3_uni_stark::{prove, verify, StarkConfig};
-use rand::thread_rng;
+use rand::rng;
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
 use tracing_forest::util::LevelFilter;
@@ -85,7 +85,7 @@ fn prove_and_verify() -> Result<(), impl Debug> {
 
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
-    let constants = RoundConstants::from_rng(&mut thread_rng());
+    let constants = RoundConstants::from_rng(&mut rng());
     let air: VectorizedPoseidon2Air<
         Val,
         GenericPoseidon2LinearLayersKoalaBear,
@@ -97,11 +97,12 @@ fn prove_and_verify() -> Result<(), impl Debug> {
         VECTOR_LEN,
     > = VectorizedPoseidon2Air::new(constants);
 
-    let trace = air.generate_vectorized_trace_rows(NUM_PERMUTATIONS);
+    let fri_config = create_benchmark_fri_config(challenge_mmcs);
+
+    let trace = air.generate_vectorized_trace_rows(NUM_PERMUTATIONS, fri_config.log_blowup);
 
     let dft = Dft::default();
 
-    let fri_config = create_benchmark_fri_config(challenge_mmcs);
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
 

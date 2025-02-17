@@ -11,7 +11,7 @@ use p3_poseidon2_air::{RoundConstants, VectorizedPoseidon2Air};
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32To64};
 use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::rngs::{StdRng, ThreadRng};
-use rand::{thread_rng, SeedableRng};
+use rand::{rng, SeedableRng};
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
 use tracing_forest::util::LevelFilter;
@@ -70,14 +70,14 @@ fn main() -> Result<(), impl Debug> {
         4,
         4,
     >;
-    let val_mmcs = ValMmcs::new(field_hash, compress, thread_rng());
+    let val_mmcs = ValMmcs::new(field_hash, compress, rng());
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
-    let constants = RoundConstants::from_rng(&mut thread_rng());
+    let constants = RoundConstants::from_rng(&mut rng());
     let air: VectorizedPoseidon2Air<
         Val,
         GenericPoseidon2LinearLayersBabyBear,
@@ -89,13 +89,14 @@ fn main() -> Result<(), impl Debug> {
         VECTOR_LEN,
     > = VectorizedPoseidon2Air::new(constants);
 
-    let trace = air.generate_vectorized_trace_rows(NUM_PERMUTATIONS);
+    let fri_config = create_benchmark_fri_config(challenge_mmcs);
+
+    let trace = air.generate_vectorized_trace_rows(NUM_PERMUTATIONS, fri_config.log_blowup);
 
     let dft = Dft::default();
 
-    let fri_config = create_benchmark_fri_config(challenge_mmcs);
     type Pcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, StdRng>;
-    let pcs = Pcs::new(dft, val_mmcs, fri_config, 4, StdRng::from_entropy());
+    let pcs = Pcs::new(dft, val_mmcs, fri_config, 4, StdRng::from_os_rng());
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs);

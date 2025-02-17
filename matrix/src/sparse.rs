@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use core::iter;
 use core::ops::Range;
 
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
 
 use crate::Matrix;
@@ -45,9 +45,9 @@ impl<T: Clone + Default + Send + Sync> CsrMatrix<T> {
     ) -> Self
     where
         T: Default,
-        Standard: Distribution<T>,
+        StandardUniform: Distribution<T>,
     {
-        let nonzero_values = iter::repeat_with(|| (rng.gen_range(0..cols), rng.gen()))
+        let nonzero_values = iter::repeat_with(|| (rng.random_range(0..cols), rng.random()))
             .take(rows * row_weight)
             .collect();
         let row_indices = (0..=rows).map(|r| r * row_weight).collect();

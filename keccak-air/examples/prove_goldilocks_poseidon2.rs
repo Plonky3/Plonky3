@@ -11,7 +11,7 @@ use p3_keccak_air::{generate_trace_rows, KeccakAir};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{prove, verify, StarkConfig};
-use rand::{random, thread_rng};
+use rand::{random, rng};
 use tracing_forest::util::LevelFilter;
 use tracing_forest::ForestLayer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -34,7 +34,7 @@ fn main() -> Result<(), impl Debug> {
     type Challenge = BinomialExtensionField<Val, 2>;
 
     type Perm = Poseidon2Goldilocks<8>;
-    let perm = Perm::new_from_rng_128(&mut thread_rng());
+    let perm = Perm::new_from_rng_128(&mut rng());
 
     type MyHash = PaddingFreeSponge<Perm, 8, 4, 4>;
     let hash = MyHash::new(perm.clone());
@@ -54,10 +54,11 @@ fn main() -> Result<(), impl Debug> {
 
     type Challenger = DuplexChallenger<Val, Perm, 8, 4>;
 
-    let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
-    let trace = generate_trace_rows::<Val>(inputs);
-
     let fri_config = create_benchmark_fri_config(challenge_mmcs);
+
+    let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
+    let trace = generate_trace_rows::<Val>(inputs, fri_config.log_blowup);
+
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
 

@@ -2,17 +2,17 @@ use alloc::format;
 use alloc::vec::Vec;
 
 use criterion::{black_box, BatchSize, Criterion};
-use p3_field::{Field, FieldAlgebra};
-use rand::distributions::Standard;
+use p3_field::{Field, PrimeCharacteristicRing};
+use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 use rand::Rng;
 
 pub fn benchmark_square<F: Field>(c: &mut Criterion, name: &str)
 where
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
-    let mut rng = rand::thread_rng();
-    let x = rng.gen::<F>();
+    let mut rng = rand::rng();
+    let x = rng.random::<F>();
     c.bench_function(&format!("{} square", name), |b| {
         b.iter(|| black_box(black_box(x).square()))
     });
@@ -20,10 +20,10 @@ where
 
 pub fn benchmark_inv<F: Field>(c: &mut Criterion, name: &str)
 where
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
-    let mut rng = rand::thread_rng();
-    let x = rng.gen::<F>();
+    let mut rng = rand::rng();
+    let x = rng.random::<F>();
     c.bench_function(&format!("{} inv", name), |b| {
         b.iter(|| black_box(black_box(x)).inverse())
     });
@@ -35,12 +35,12 @@ pub fn benchmark_iter_sum<F: Field, const N: usize, const REPS: usize>(
     c: &mut Criterion,
     name: &str,
 ) where
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut input = Vec::new();
     for _ in 0..REPS {
-        input.push(rng.gen::<[F; N]>())
+        input.push(rng.random::<[F; N]>())
     }
     let mut output = [F::ZERO; REPS];
     c.bench_function(&format!("{} sum/{}, {}", name, REPS, N), |b| {
@@ -53,47 +53,49 @@ pub fn benchmark_iter_sum<F: Field, const N: usize, const REPS: usize>(
     });
 }
 
-pub fn benchmark_add_latency<FA: FieldAlgebra + Copy, const N: usize>(c: &mut Criterion, name: &str)
-where
-    Standard: Distribution<FA>,
+pub fn benchmark_add_latency<R: PrimeCharacteristicRing + Copy, const N: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
+    StandardUniform: Distribution<R>,
 {
     c.bench_function(&format!("add-latency/{} {}", N, name), |b| {
         b.iter_batched(
             || {
-                let mut rng = rand::thread_rng();
+                let mut rng = rand::rng();
                 let mut vec = Vec::new();
                 for _ in 0..N {
-                    vec.push(rng.gen::<FA>())
+                    vec.push(rng.random::<R>())
                 }
                 vec
             },
-            |x| x.iter().fold(FA::ZERO, |x, y| x + *y),
+            |x| x.iter().fold(R::ZERO, |x, y| x + *y),
             BatchSize::SmallInput,
         )
     });
 }
 
-pub fn benchmark_add_throughput<FA: FieldAlgebra + Copy, const N: usize>(
+pub fn benchmark_add_throughput<R: PrimeCharacteristicRing + Copy, const N: usize>(
     c: &mut Criterion,
     name: &str,
 ) where
-    Standard: Distribution<FA>,
+    StandardUniform: Distribution<R>,
 {
     c.bench_function(&format!("add-throughput/{} {}", N, name), |b| {
         b.iter_batched(
             || {
-                let mut rng = rand::thread_rng();
+                let mut rng = rand::rng();
                 (
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
                 )
             },
             |(mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h, mut i, mut j)| {
@@ -118,47 +120,49 @@ pub fn benchmark_add_throughput<FA: FieldAlgebra + Copy, const N: usize>(
     });
 }
 
-pub fn benchmark_sub_latency<FA: FieldAlgebra + Copy, const N: usize>(c: &mut Criterion, name: &str)
-where
-    Standard: Distribution<FA>,
+pub fn benchmark_sub_latency<R: PrimeCharacteristicRing + Copy, const N: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
+    StandardUniform: Distribution<R>,
 {
     c.bench_function(&format!("sub-latency/{} {}", N, name), |b| {
         b.iter_batched(
             || {
-                let mut rng = rand::thread_rng();
+                let mut rng = rand::rng();
                 let mut vec = Vec::new();
                 for _ in 0..N {
-                    vec.push(rng.gen::<FA>())
+                    vec.push(rng.random::<R>())
                 }
                 vec
             },
-            |x| x.iter().fold(FA::ZERO, |x, y| x - *y),
+            |x| x.iter().fold(R::ZERO, |x, y| x - *y),
             BatchSize::SmallInput,
         )
     });
 }
 
-pub fn benchmark_sub_throughput<FA: FieldAlgebra + Copy, const N: usize>(
+pub fn benchmark_sub_throughput<R: PrimeCharacteristicRing + Copy, const N: usize>(
     c: &mut Criterion,
     name: &str,
 ) where
-    Standard: Distribution<FA>,
+    StandardUniform: Distribution<R>,
 {
     c.bench_function(&format!("sub-throughput/{} {}", N, name), |b| {
         b.iter_batched(
             || {
-                let mut rng = rand::thread_rng();
+                let mut rng = rand::rng();
                 (
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
                 )
             },
             |(mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h, mut i, mut j)| {
@@ -183,47 +187,49 @@ pub fn benchmark_sub_throughput<FA: FieldAlgebra + Copy, const N: usize>(
     });
 }
 
-pub fn benchmark_mul_latency<FA: FieldAlgebra + Copy, const N: usize>(c: &mut Criterion, name: &str)
-where
-    Standard: Distribution<FA>,
+pub fn benchmark_mul_latency<R: PrimeCharacteristicRing + Copy, const N: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
+    StandardUniform: Distribution<R>,
 {
     c.bench_function(&format!("mul-latency/{} {}", N, name), |b| {
         b.iter_batched(
             || {
-                let mut rng = rand::thread_rng();
+                let mut rng = rand::rng();
                 let mut vec = Vec::new();
                 for _ in 0..N {
-                    vec.push(rng.gen::<FA>())
+                    vec.push(rng.random::<R>())
                 }
                 vec
             },
-            |x| x.iter().fold(FA::ZERO, |x, y| x * *y),
+            |x| x.iter().fold(R::ZERO, |x, y| x * *y),
             BatchSize::SmallInput,
         )
     });
 }
 
-pub fn benchmark_mul_throughput<FA: FieldAlgebra + Copy, const N: usize>(
+pub fn benchmark_mul_throughput<R: PrimeCharacteristicRing + Copy, const N: usize>(
     c: &mut Criterion,
     name: &str,
 ) where
-    Standard: Distribution<FA>,
+    StandardUniform: Distribution<R>,
 {
     c.bench_function(&format!("mul-throughput/{} {}", N, name), |b| {
         b.iter_batched(
             || {
-                let mut rng = rand::thread_rng();
+                let mut rng = rand::rng();
                 (
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
-                    rng.gen::<FA>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
                 )
             },
             |(mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h, mut i, mut j)| {

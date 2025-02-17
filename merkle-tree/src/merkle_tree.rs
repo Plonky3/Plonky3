@@ -174,12 +174,12 @@ fn compress_and_inject<P, PW, H, C, M, const DIGEST_ELEMS: usize>(
 where
     P: PackedValue,
     PW: PackedValue,
-    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>,
-    H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
-    H: Sync,
-    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>,
-    C: PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
-    C: Sync,
+    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>
+        + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+        + Sync,
+    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>
+        + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>
+        + Sync,
     M: Matrix<P::Value>,
 {
     if matrices_to_inject.is_empty() {
@@ -246,9 +246,9 @@ fn compress<P, C, const DIGEST_ELEMS: usize>(
 ) -> Vec<[P::Value; DIGEST_ELEMS]>
 where
     P: PackedValue,
-    C: PseudoCompressionFunction<[P::Value; DIGEST_ELEMS], 2>,
-    C: PseudoCompressionFunction<[P; DIGEST_ELEMS], 2>,
-    C: Sync,
+    C: PseudoCompressionFunction<[P::Value; DIGEST_ELEMS], 2>
+        + PseudoCompressionFunction<[P; DIGEST_ELEMS], 2>
+        + Sync,
 {
     let width = P::WIDTH;
     // Always return an even number of digests, except when it's the root.

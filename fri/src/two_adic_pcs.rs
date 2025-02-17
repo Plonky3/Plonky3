@@ -13,8 +13,8 @@ use p3_field::{
     Field, TwoAdicField,
 };
 use p3_interpolation::interpolate_coset;
-use p3_matrix::bitrev::{BitReversableMatrix, BitReversalPerm};
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::bitrev::{BitReversableMatrix, BitReversalPerm, BitReversedMatrixView};
+use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
 use p3_matrix::{Dimensions, Matrix};
 use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
@@ -143,6 +143,7 @@ where
     type Domain = TwoAdicMultiplicativeCoset<Val>;
     type Commitment = InputMmcs::Commitment;
     type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
+    type EvaluationsOnDomain<'a> = BitReversedMatrixView<DenseMatrix<Val, &'a [Val]>>;
     type Proof = FriProof<Challenge, FriMmcs, Val, Vec<BatchOpening<Val, InputMmcs>>>;
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
 
@@ -179,7 +180,7 @@ where
         prover_data: &'a Self::ProverData,
         idx: usize,
         domain: Self::Domain,
-    ) -> impl Matrix<Val> + 'a {
+    ) -> Self::EvaluationsOnDomain<'a> {
         // todo: handle extrapolation for LDEs we don't have
         assert_eq!(domain.shift, Val::GENERATOR);
         let lde = self.mmcs.get_matrices(prover_data)[idx];
@@ -240,14 +241,18 @@ where
         let mats_and_points = rounds
             .iter()
             .map(|(data, points)| {
-                (
-                    self.mmcs
-                        .get_matrices(data)
-                        .into_iter()
-                        .map(|m| m.as_view())
-                        .collect_vec(),
-                    points,
-                )
+                let mats = self
+                    .mmcs
+                    .get_matrices(data)
+                    .into_iter()
+                    .map(|m| m.as_view())
+                    .collect_vec();
+                debug_assert_eq!(
+                    mats.len(),
+                    points.len(),
+                    "each matrix should have a corresponding set of evaluation points"
+                );
+                (mats, points)
             })
             .collect_vec();
         let mats = mats_and_points
@@ -291,7 +296,8 @@ where
                                                 Some(&inv_denoms),
                                             )
                                         });
-                                ys.iter().for_each(|&y| challenger.observe_ext_element(y));
+                                ys.iter()
+                                    .for_each(|&y| challenger.observe_algebra_element(y));
                                 ys
                             })
                             .collect_vec()
@@ -301,7 +307,7 @@ where
             .collect_vec();
 
         // Batch combination challenge
-        let alpha: Challenge = challenger.sample_ext_element();
+        let alpha: Challenge = challenger.sample_algebra_element();
 
         let mut num_reduced = [0; 32];
         let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None);
@@ -320,21 +326,25 @@ where
                     .get_or_insert_with(|| vec![Challenge::ZERO; mat.height()]);
                 debug_assert_eq!(reduced_opening_for_log_height.len(), mat.height());
 
+                let mat_compressed = info_span!("compress mat")
+                    .in_scope(|| mat.dot_ext_powers(alpha).collect::<Vec<_>>());
+
                 for (&point, openings) in points_for_mat.iter().zip(openings_for_mat) {
                     let alpha_pow_offset = alpha.exp_u64(num_reduced[log_height] as u64);
                     let reduced_openings: Challenge =
                         dot_product(alpha.powers(), openings.iter().copied());
 
                     info_span!("reduce rows").in_scope(|| {
-                        mat.dot_ext_powers(alpha)
+                        mat_compressed
+                            .par_iter()
                             .zip(reduced_opening_for_log_height.par_iter_mut())
                             // This might be longer, but zip will truncate to smaller subgroup
                             // (which is ok because it's bitrev)
                             .zip(inv_denoms.get(&point).unwrap().par_iter())
-                            .for_each(|((reduced_row, ro), &inv_denom)| {
+                            .for_each(|((&reduced_row, ro), &inv_denom)| {
                                 *ro +=
                                     alpha_pow_offset * (reduced_openings - reduced_row) * inv_denom
-                            })
+                            });
                     });
 
                     num_reduced[log_height] += mat.width();
@@ -393,13 +403,13 @@ where
                 for (_, point) in mat.iter() {
                     point
                         .iter()
-                        .for_each(|&opening| challenger.observe_ext_element(opening));
+                        .for_each(|&opening| challenger.observe_algebra_element(opening));
                 }
             }
         }
 
         // Batch combination challenge
-        let alpha: Challenge = challenger.sample_ext_element();
+        let alpha: Challenge = challenger.sample_algebra_element();
 
         let log_global_max_height =
             proof.commit_phase_commits.len() + self.fri.log_blowup + self.fri.log_final_poly_len;

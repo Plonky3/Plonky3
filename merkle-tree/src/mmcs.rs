@@ -54,12 +54,12 @@ impl<P, PW, H, C, const DIGEST_ELEMS: usize> Mmcs<P::Value>
 where
     P: PackedValue,
     PW: PackedValue,
-    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>,
-    H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
-    H: Sync,
-    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>,
-    C: PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
-    C: Sync,
+    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>
+        + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+        + Sync,
+    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>
+        + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>
+        + Sync,
     PW::Value: Eq,
     [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
 {
@@ -165,7 +165,7 @@ where
                 .map(|(i, _)| opened_values[i].as_slice()),
         );
 
-        for &sibling in proof.iter() {
+        for &sibling in proof {
             let (left, right) = if index & 1 == 0 {
                 (root, sibling)
             } else {
@@ -206,13 +206,13 @@ mod tests {
     use itertools::Itertools;
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_commit::Mmcs;
-    use p3_field::{Field, FieldAlgebra};
+    use p3_field::{Field, PrimeCharacteristicRing};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_matrix::{Dimensions, Matrix};
     use p3_symmetric::{
         CryptographicHasher, PaddingFreeSponge, PseudoCompressionFunction, TruncatedPermutation,
     };
-    use rand::thread_rng;
+    use rand::rng;
 
     use super::MerkleTreeMmcs;
 
@@ -226,7 +226,7 @@ mod tests {
 
     #[test]
     fn commit_single_1x8() {
-        let perm = Perm::new_from_rng_128(&mut thread_rng());
+        let perm = Perm::new_from_rng_128(&mut rng());
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash.clone(), compress.clone());
@@ -259,21 +259,21 @@ mod tests {
 
     #[test]
     fn commit_single_8x1() {
-        let perm = Perm::new_from_rng_128(&mut thread_rng());
+        let perm = Perm::new_from_rng_128(&mut rng());
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash.clone(), compress.clone());
+        let mmcs = MyMmcs::new(hash.clone(), compress);
 
-        let mat = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1, 8);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng(), 1, 8);
         let (commit, _) = mmcs.commit(vec![mat.clone()]);
 
-        let expected_result = hash.hash_iter(mat.clone().vertically_packed_row(0));
+        let expected_result = hash.hash_iter(mat.vertically_packed_row(0));
         assert_eq!(commit, expected_result);
     }
 
     #[test]
     fn commit_single_2x2() {
-        let perm = Perm::new_from_rng_128(&mut thread_rng());
+        let perm = Perm::new_from_rng_128(&mut rng());
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash.clone(), compress.clone());
@@ -295,7 +295,7 @@ mod tests {
 
     #[test]
     fn commit_single_2x3() {
-        let perm = Perm::new_from_rng_128(&mut thread_rng());
+        let perm = Perm::new_from_rng_128(&mut rng());
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash.clone(), compress.clone());
@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn commit_mixed() {
-        let perm = Perm::new_from_rng_128(&mut thread_rng());
+        let perm = Perm::new_from_rng_128(&mut rng());
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash.clone(), compress.clone());
@@ -416,7 +416,7 @@ mod tests {
 
     #[test]
     fn commit_either_order() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
@@ -433,37 +433,32 @@ mod tests {
     #[test]
     #[should_panic]
     fn mismatched_heights() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash, compress);
 
         // attempt to commit to a mat with 8 rows and a mat with 7 rows. this should panic.
-        let large_mat = RowMajorMatrix::new(
-            [1, 2, 3, 4, 5, 6, 7, 8].map(F::from_canonical_u8).to_vec(),
-            1,
-        );
-        let small_mat =
-            RowMajorMatrix::new([1, 2, 3, 4, 5, 6, 7].map(F::from_canonical_u8).to_vec(), 1);
+        let large_mat = RowMajorMatrix::new([1, 2, 3, 4, 5, 6, 7, 8].map(F::from_u8).to_vec(), 1);
+        let small_mat = RowMajorMatrix::new([1, 2, 3, 4, 5, 6, 7].map(F::from_u8).to_vec(), 1);
         let _ = mmcs.commit(vec![large_mat, small_mat]);
     }
 
     #[test]
     fn verify_tampered_proof_fails() {
-        let mut rng = thread_rng();
-        let perm = Perm::new_from_rng_128(&mut rng);
+        let perm = Perm::new_from_rng_128(&mut rng());
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash, compress);
 
         // 4 8x1 matrixes, 4 8x2 matrixes
-        let large_mats = (0..4).map(|_| RowMajorMatrix::<F>::rand(&mut thread_rng(), 8, 1));
+        let large_mats = (0..4).map(|_| RowMajorMatrix::<F>::rand(&mut rng(), 8, 1));
         let large_mat_dims = (0..4).map(|_| Dimensions {
             height: 8,
             width: 1,
         });
-        let small_mats = (0..4).map(|_| RowMajorMatrix::<F>::rand(&mut thread_rng(), 8, 2));
+        let small_mats = (0..4).map(|_| RowMajorMatrix::<F>::rand(&mut rng(), 8, 2));
         let small_mat_dims = (0..4).map(|_| Dimensions {
             height: 8,
             width: 2,
@@ -486,35 +481,34 @@ mod tests {
 
     #[test]
     fn size_gaps() {
-        let mut rng = thread_rng();
-        let perm = Perm::new_from_rng_128(&mut rng);
+        let perm = Perm::new_from_rng_128(&mut rng());
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash, compress);
 
         // 4 mats with 1000 rows, 8 columns
-        let large_mats = (0..4).map(|_| RowMajorMatrix::<F>::rand(&mut thread_rng(), 1000, 8));
+        let large_mats = (0..4).map(|_| RowMajorMatrix::<F>::rand(&mut rng(), 1000, 8));
         let large_mat_dims = (0..4).map(|_| Dimensions {
             height: 1000,
             width: 8,
         });
 
         // 5 mats with 70 rows, 8 columns
-        let medium_mats = (0..5).map(|_| RowMajorMatrix::<F>::rand(&mut thread_rng(), 70, 8));
+        let medium_mats = (0..5).map(|_| RowMajorMatrix::<F>::rand(&mut rng(), 70, 8));
         let medium_mat_dims = (0..5).map(|_| Dimensions {
             height: 70,
             width: 8,
         });
 
         // 6 mats with 8 rows, 8 columns
-        let small_mats = (0..6).map(|_| RowMajorMatrix::<F>::rand(&mut thread_rng(), 8, 8));
+        let small_mats = (0..6).map(|_| RowMajorMatrix::<F>::rand(&mut rng(), 8, 8));
         let small_mat_dims = (0..6).map(|_| Dimensions {
             height: 8,
             width: 8,
         });
 
         // 7 tiny mat with 1 row, 8 columns
-        let tiny_mats = (0..7).map(|_| RowMajorMatrix::<F>::rand(&mut thread_rng(), 1, 8));
+        let tiny_mats = (0..7).map(|_| RowMajorMatrix::<F>::rand(&mut rng(), 1, 8));
         let tiny_mat_dims = (0..7).map(|_| Dimensions {
             height: 1,
             width: 8,
@@ -546,15 +540,14 @@ mod tests {
 
     #[test]
     fn different_widths() {
-        let mut rng = thread_rng();
-        let perm = Perm::new_from_rng_128(&mut rng);
+        let perm = Perm::new_from_rng_128(&mut rng());
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash, compress);
 
         // 10 mats with 32 rows where the ith mat has i + 1 cols
         let mats = (0..10)
-            .map(|i| RowMajorMatrix::<F>::rand(&mut thread_rng(), 32, i + 1))
+            .map(|i| RowMajorMatrix::<F>::rand(&mut rng(), 32, i + 1))
             .collect_vec();
         let dims = mats.iter().map(|m| m.dimensions()).collect_vec();
 

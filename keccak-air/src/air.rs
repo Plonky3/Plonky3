@@ -3,7 +3,7 @@ use core::borrow::Borrow;
 
 use p3_air::utils::{andn, xor, xor3};
 use p3_air::{Air, AirBuilder, BaseAir};
-use p3_field::{FieldAlgebra, PrimeField64};
+use p3_field::{PrimeCharacteristicRing, PrimeField64};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use rand::random;
@@ -18,9 +18,13 @@ use crate::{generate_trace_rows, BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS};
 pub struct KeccakAir {}
 
 impl KeccakAir {
-    pub fn generate_trace_rows<F: PrimeField64>(&self, num_hashes: usize) -> RowMajorMatrix<F> {
+    pub fn generate_trace_rows<F: PrimeField64>(
+        &self,
+        num_hashes: usize,
+        extra_capacity_bits: usize,
+    ) -> RowMajorMatrix<F> {
         let inputs = (0..num_hashes).map(|_| random()).collect::<Vec<_>>();
-        generate_trace_rows(inputs)
+        generate_trace_rows(inputs, extra_capacity_bits)
     }
 }
 
@@ -40,8 +44,40 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         let local: &KeccakCols<AB::Var> = (*local).borrow();
         let next: &KeccakCols<AB::Var> = (*next).borrow();
 
+        let first_step = local.step_flags[0];
         let final_step = local.step_flags[NUM_ROUNDS - 1];
         let not_final_step = AB::Expr::ONE - final_step;
+
+        // If this is the first step, the input A must match the preimage.
+        for y in 0..5 {
+            for x in 0..5 {
+                for limb in 0..U64_LIMBS {
+                    builder
+                        .when(first_step)
+                        .assert_eq(local.preimage[y][x][limb], local.a[y][x][limb]);
+                }
+            }
+        }
+
+        // If this is not the final step, the local and next preimages must match.
+        for y in 0..5 {
+            for x in 0..5 {
+                for limb in 0..U64_LIMBS {
+                    builder
+                        .when(not_final_step.clone())
+                        .when_transition()
+                        .assert_eq(local.preimage[y][x][limb], next.preimage[y][x][limb]);
+                }
+            }
+        }
+
+        // The export flag must be 0 or 1.
+        builder.assert_bool(local.export);
+
+        // If this is not the final step, the export flag must be off.
+        builder
+            .when(not_final_step.clone())
+            .assert_zero(local.export);
 
         // C'[x, z] = xor(C[x, z], C[x - 1, z], C[x + 1, z - 1]).
         // Note that if all entries of C are boolean, the arithmetic generalization

@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::{ExtensionField, Field, PrimeField64};
+use p3_field::{BasedVectorSpace, Field, PrimeField64};
 use p3_symmetric::{CryptographicPermutation, Hash};
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
@@ -123,11 +123,11 @@ impl<F, EF, P, const WIDTH: usize, const RATE: usize> CanSample<EF>
     for DuplexChallenger<F, P, WIDTH, RATE>
 where
     F: Field,
-    EF: ExtensionField<F>,
+    EF: BasedVectorSpace<F>,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
     fn sample(&mut self) -> EF {
-        EF::from_base_fn(|_| {
+        EF::from_basis_coefficients_fn(|_| {
             // If we have buffered inputs, we must perform a duplexing so that the challenge will
             // reflect them. Or if we've run out of outputs, we must perform a duplexing to get more.
             if !self.input_buffer.is_empty() || self.output_buffer.is_empty() {
@@ -160,45 +160,88 @@ where
 mod tests {
     use core::iter;
 
-    use p3_field::FieldAlgebra;
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
     use p3_goldilocks::Goldilocks;
     use p3_symmetric::Permutation;
 
     use super::*;
+    use crate::grinding_challenger::GrindingChallenger;
 
     const WIDTH: usize = 24;
     const RATE: usize = 16;
 
-    type TestArray = [F; WIDTH];
-    type F = Goldilocks;
+    type G = Goldilocks;
+    type BB = BabyBear;
 
     #[derive(Clone)]
     struct TestPermutation {}
 
-    impl Permutation<TestArray> for TestPermutation {
-        fn permute_mut(&self, input: &mut TestArray) {
+    impl<F: Clone> Permutation<[F; WIDTH]> for TestPermutation {
+        fn permute_mut(&self, input: &mut [F; WIDTH]) {
             input.reverse()
         }
     }
 
-    impl CryptographicPermutation<TestArray> for TestPermutation {}
+    impl<F: Clone> CryptographicPermutation<[F; WIDTH]> for TestPermutation {}
 
     #[test]
     fn test_duplex_challenger() {
-        type Chal = DuplexChallenger<F, TestPermutation, WIDTH, RATE>;
+        type Chal = DuplexChallenger<G, TestPermutation, WIDTH, RATE>;
         let permutation = TestPermutation {};
         let mut duplex_challenger = DuplexChallenger::new(permutation);
 
         // Observe 12 elements.
-        (0..12).for_each(|element| duplex_challenger.observe(F::from_canonical_u8(element as u8)));
+        (0..12).for_each(|element| duplex_challenger.observe(G::from_u8(element as u8)));
 
-        let state_after_duplexing: Vec<_> = iter::repeat(F::ZERO)
+        let state_after_duplexing: Vec<_> = iter::repeat(G::ZERO)
             .take(12)
-            .chain((0..12).map(F::from_canonical_u8).rev())
+            .chain((0..12).map(G::from_u8).rev())
             .collect();
 
-        let expected_samples: Vec<F> = state_after_duplexing[..16].iter().copied().rev().collect();
-        let samples = <Chal as CanSample<F>>::sample_vec(&mut duplex_challenger, 16);
+        let expected_samples: Vec<G> = state_after_duplexing[..16].iter().copied().rev().collect();
+        let samples = <Chal as CanSample<G>>::sample_vec(&mut duplex_challenger, 16);
         assert_eq!(samples, expected_samples);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_duplex_challenger_sample_bits_security() {
+        type GoldilocksChal = DuplexChallenger<G, TestPermutation, WIDTH, RATE>;
+        let permutation = TestPermutation {};
+        let mut duplex_challenger = GoldilocksChal::new(permutation);
+
+        for _ in 0..100 {
+            assert!(duplex_challenger.sample_bits(129) < 4);
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_duplex_challenger_sample_bits_security_small_field() {
+        type BabyBearChal = DuplexChallenger<BB, TestPermutation, WIDTH, RATE>;
+        let permutation = TestPermutation {};
+        let mut duplex_challenger = BabyBearChal::new(permutation);
+
+        for _ in 0..100 {
+            assert!(duplex_challenger.sample_bits(40) < 1 << 31);
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_duplex_challenger_grind_security() {
+        type GoldilocksChal = DuplexChallenger<G, TestPermutation, WIDTH, RATE>;
+        let permutation = TestPermutation {};
+        let mut duplex_challenger = GoldilocksChal::new(permutation);
+
+        // This should cause sample_bits (and hence grind and check_witness) to
+        // panic. If bit sizes were not constrained correctly inside the
+        // challenger, (1 << too_many_bits) would loop around, incorrectly
+        // grinding and accepting a 1-bit PoW.
+        let too_many_bits = usize::BITS as usize;
+
+        let witness = duplex_challenger.grind(too_many_bits);
+        assert!(duplex_challenger.check_witness(too_many_bits, witness));
     }
 }

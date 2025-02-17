@@ -11,7 +11,7 @@ use p3_uni_stark::{
     DebugConstraintBuilder, ProverConstraintFolder, StarkGenericConfig, SymbolicAirBuilder,
     SymbolicExpression, VerifierConstraintFolder,
 };
-use rand::distributions::Standard;
+use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 
 /// An enum containing the three different AIR's.
@@ -54,9 +54,13 @@ pub trait ExampleHashAir<F: Field, SC: StarkGenericConfig>:
     + for<'a> Air<ProverConstraintFolder<'a, SC>>
     + for<'a> Air<VerifierConstraintFolder<'a, SC>>
 {
-    fn generate_trace_rows(&self, num_hashes: usize) -> RowMajorMatrix<F>
+    fn generate_trace_rows(
+        &self,
+        num_hashes: usize,
+        extra_capacity_bits: usize,
+    ) -> RowMajorMatrix<F>
     where
-        Standard: Distribution<F>;
+        StandardUniform: Distribution<F>;
 }
 
 impl<
@@ -151,14 +155,24 @@ impl<
     >
 {
     #[inline]
-    fn generate_trace_rows(&self, num_hashes: usize) -> RowMajorMatrix<F>
+    fn generate_trace_rows(
+        &self,
+        num_hashes: usize,
+        extra_capacity_bits: usize,
+    ) -> RowMajorMatrix<F>
     where
-        Standard: Distribution<F>,
+        StandardUniform: Distribution<F>,
     {
         match self {
-            ProofObjective::Blake3(b3_air) => b3_air.generate_trace_rows(num_hashes),
-            ProofObjective::Poseidon2(p2_air) => p2_air.generate_vectorized_trace_rows(num_hashes),
-            ProofObjective::Keccak(k_air) => k_air.generate_trace_rows(num_hashes),
+            ProofObjective::Blake3(b3_air) => {
+                b3_air.generate_trace_rows(num_hashes, extra_capacity_bits)
+            }
+            ProofObjective::Poseidon2(p2_air) => {
+                p2_air.generate_vectorized_trace_rows(num_hashes, extra_capacity_bits)
+            }
+            ProofObjective::Keccak(k_air) => {
+                k_air.generate_trace_rows(num_hashes, extra_capacity_bits)
+            }
         }
     }
 }

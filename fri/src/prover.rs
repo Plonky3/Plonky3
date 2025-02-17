@@ -99,7 +99,7 @@ where
         let (commit, prover_data) = config.mmcs.commit_matrix(leaves);
         challenger.observe(commit.clone());
 
-        let beta: Challenge = challenger.sample_ext_element();
+        let beta: Challenge = challenger.sample_algebra_element();
         // We passed ownership of `current` to the MMCS, so get a reference to it
         let leaves = config.mmcs.get_matrices(&prover_data).pop().unwrap();
         folded = g.fold_matrix(beta, leaves.as_view());
@@ -136,7 +136,7 @@ where
 
     // Observe all coefficients of the final polynomial.
     for &x in &final_poly {
-        challenger.observe_ext_element(x);
+        challenger.observe_algebra_element(x);
     }
 
     CommitPhaseResult {
