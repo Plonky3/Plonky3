@@ -1,4 +1,5 @@
-//! Interface for handling smooth cosets in the group of units of finite fields.
+//! Convenience methods to work with smooth cosets in the group of units of
+//! finite fields.
 
 #![no_std]
 
@@ -22,7 +23,7 @@ mod tests;
 /// # use p3_field::{TwoAdicField, PrimeCharacteristicRing};
 /// # use itertools::Itertools;
 /// # use p3_baby_bear::BabyBear;
-///
+/// #
 /// type F = BabyBear;
 /// let log_size = 3;
 /// let shift = F::from_u64(7);
@@ -61,8 +62,8 @@ mod tests;
 ///     (0..1 << log_size).map(|i| shift * generator.exp_u64(i)).collect_vec()
 /// );
 ///
-/// // Coset elements can be raised to a power of 2, with or without raising
-/// // the shift to the same power
+/// // Cosets can be (element-wise) raised to a power of 2, either maintaining
+/// // the shift and raising only the subgroup, or raising both.
 /// assert_eq!(coset.shrink_coset(2), TwoAdicCoset::new(shift.exp_power_of_2(2), log_size - 2));
 /// assert_eq!(coset.shrink_subgroup(2), TwoAdicCoset::new(shift, log_size - 2));
 /// ```
@@ -83,7 +84,7 @@ pub struct TwoAdicCoset<F: TwoAdicField> {
     dft: Option<Radix2Dit<F>>,
 }
 
-/// Iterator over the elements of a two-adic coset.
+/// Iterator over the elements of a `TwoAdicCoset`.
 pub struct TwoAdicCosetIterator<F: TwoAdicField> {
     current: F,
     generator: F,
@@ -235,8 +236,8 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
     /// the FFT machinery internally if not previously set.
     ///
     /// Note that the vector of coefficients returned by this function might
-    /// contain leading zeros. However, [`Polynomial::from_coeffs`] will
-    /// automatically remove them.
+    /// contain leading zeros. However, `Polynomial::from_coeffs` (in `p3-poly`)
+    /// will automatically remove them.
     ///
     /// # Panics
     ///
@@ -250,7 +251,7 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
             "The number of evaluations must be equal to the size of the coset."
         );
 
-        let dft = self.dft.get_or_insert_with(|| Radix2Dit::default());
+        let dft = self.dft.get_or_insert_with(Radix2Dit::default);
         dft.coset_idft(evals, self.shift)
     }
 
@@ -323,13 +324,13 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
             the rest of the large domain)."
         );
 
-        if poly_coeffs.len() == 0 {
+        if poly_coeffs.is_empty() {
             return vec![F::ZERO; size];
         } else if poly_coeffs.len() == 1 {
             return vec![poly_coeffs[0]; size];
         }
 
-        let dft = self.dft.get_or_insert_with(|| Radix2Dit::default());
+        let dft = self.dft.get_or_insert_with(Radix2Dit::default);
 
         let mut coeffs = poly_coeffs;
         coeffs.resize(size, F::ZERO);
@@ -441,7 +442,7 @@ impl<F: TwoAdicField> Iterator for TwoAdicCosetIterator<F> {
         }
 
         let current = self.current;
-        self.current = self.current * self.generator;
+        self.current *= self.generator;
 
         if self.current == self.shift {
             self.consumed = true;

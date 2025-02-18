@@ -101,22 +101,18 @@ pub(crate) fn multiply_by_power_polynomial<F: Field>(
 pub(crate) fn fold_evaluations<F: TwoAdicField>(
     // The evaluations of the original polynomial
     evals: Vec<F>,
-    // A k-th root of the point where we evaluate the folded polynomial
-    point_root: F,
+    // point_root is a k-th root of the point where we evaluate the folded
+    // polynomial. Its inverse can be supplied to make use of batch inversion
+    // outside of this function.
+    (point_root, point_root_inv_hint): (F, Option<F>),
     // The log2 of the folding factor
     log_folding_factor: usize,
-    // Generator of the coset of k-th roots of the point - in other words, this
-    // is simply a primitive k-th root of unity.
-    omega: F,
+    // omega is the generator of the coset of k-th roots of the point - in other
+    // words, this is simply a primitive k-th root of unity. Its inverse can be
+    // suplied for efficiency, since it will be used across many calls.
+    (omega, omega_inv_hint): (F, Option<F>),
     // The folding coefficient
     c: F,
-    // The inverse of the generator can be supplied in order to amortise the
-    // call to inverse() across calls to fold_evaluations() with the same
-    // folding factor
-    omega_inv_hint: Option<F>,
-    // The inverse of point_root can be supplied to make use of batch inversion
-    // outside of this function
-    point_root_inv_hint: Option<F>,
     // The inverse of 2 can be supplied to avoid recomputation in every call
     two_inv_hint: Option<F>,
 ) -> F {
@@ -358,12 +354,10 @@ mod tests {
             // fold_evaluations()
             let folded_evaluation = fold_evaluations(
                 evaluations,
-                domain.shift(),
+                (domain.shift(), None),
                 $log_arity,
-                domain.generator(),
+                (domain.generator(), None),
                 $folding_randomness,
-                None,
-                None,
                 None,
             );
 
@@ -385,7 +379,7 @@ mod tests {
     // Checks that fold_evaluations() returns the expected results for arities
     // k = 2^1, ..., 2^9
     fn test_fold_evaluations() {
-        let polynomial = rand_poly(1 << 10 - 1);
+        let polynomial = rand_poly((1 << 10) - 1);
         let rng = &mut rand::rng();
         let folding_randomness: BB = rng.random();
 

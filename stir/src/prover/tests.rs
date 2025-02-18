@@ -1,4 +1,3 @@
-use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
@@ -47,7 +46,7 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
     let f_0 = rand_poly(degree);
 
     let original_domain = TwoAdicCoset::new(
-        BBExt::ONE,
+        BbExt::ONE,
         config.log_starting_degree() + config.log_starting_inv_rate(),
     );
 
@@ -64,7 +63,7 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
         .mmcs_config()
         .commit_matrix(stacked_original_evals.clone());
 
-    let r_0: BBExt = rng.random();
+    let r_0: BbExt = rng.random();
 
     let witness = StirRoundWitness {
         domain: original_domain.clone(),
@@ -88,10 +87,10 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
     } = round_config.clone();
 
     // Prepare the field randomness produced by the mock challenger
-    let r_1: BBExt = rng.random();
+    let r_1: BbExt = rng.random();
 
     // Out-of-domain randomness
-    let ood_randomness: Vec<BBExt> = (0..num_ood_samples).map(|_| rng.random()).collect();
+    let ood_randomness: Vec<BbExt> = (0..num_ood_samples).map(|_| rng.random()).collect();
 
     // Degree-correction randomness
     let comb_randomness = rng.random();
@@ -163,10 +162,7 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
         .iter()
         .map(|&i| original_domain_pow_k.element(i));
 
-    let quotient_set = stir_randomness
-        .chain(ood_randomness.into_iter())
-        .unique()
-        .collect_vec();
+    let quotient_set = stir_randomness.chain(ood_randomness).unique().collect_vec();
 
     let quotient_set_points = quotient_set
         .iter()
@@ -196,7 +192,7 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
     for (&i, (leaf, proof)) in bit_replies.iter().unique().zip(query_proofs) {
         config
             .mmcs_config()
-            .verify_batch(&root, &[dimensions], i, &vec![leaf], &proof)
+            .verify_batch(&root, &[dimensions], i, &[leaf], &proof)
             .unwrap();
     }
 
@@ -313,13 +309,13 @@ fn test_prove_final_polynomial() {
         } = round_config.clone();
 
         // Out of domain randomness
-        let ood_randomness: Vec<BBExt> = (0..num_ood_samples).map(|_| rng.random()).collect();
+        let ood_randomness: Vec<BbExt> = (0..num_ood_samples).map(|_| rng.random()).collect();
 
         // Comb randomness
         let comb_randomness = rng.random();
 
         // Folding randomness
-        let r: BBExt = rng.random();
+        let r: BbExt = rng.random();
 
         // Shake randomness (which is squeezed but not used by the prover)
         let shake_randomness = rng.random();

@@ -144,7 +144,7 @@ fn test_coset_iterator() {
 
     assert_eq!(coset.clone().into_iter().count(), 1 << log_size);
     for (i, e) in coset.iter().enumerate() {
-        assert_eq!(coset.element(i.try_into().unwrap()), e);
+        assert_eq!(coset.element(i), e);
     }
 }
 

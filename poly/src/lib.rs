@@ -2,8 +2,9 @@
 //! polynomial arithmetic, Lagrange interpolation, vanishing polynomials and
 //! many other convenience methods.
 //!
-//! N. B.: The standard operators are implemented on references to polynomials
-//! only.
+
+// N. B.: The standard operators are implemented on references to polynomials
+// only.
 
 #![no_std]
 
@@ -37,7 +38,7 @@ pub mod test_utils;
 /// # use p3_field::{Field, TwoAdicField, PrimeCharacteristicRing};
 /// # use p3_baby_bear::BabyBear;
 /// # use rand::Rng;
-///
+/// #
 /// type F = BabyBear;
 /// let mut rng = rand::rng();
 /// let poly = Polynomial::from_coeffs(
@@ -63,20 +64,21 @@ pub mod test_utils;
 /// let _ = &poly * &constant;
 /// let _ = &poly / &constant;
 ///
-/// // Multiplication can be done using [`mul_naive`](Mul::mul_naive) which uses the
-/// // naive multiplication algorithm, and [`mul`](Mul::mul) which can be used if the
-/// // base field is two-adic. Based on the size of the polynomials, the latter might
-/// // internally use DFTs.
+/// // Multiplication can be done using `mul_naive` which uses the
+/// // naive multiplication algorithm, and `mul` which can be used if the
+/// // base field is two-adic. The latter internally chooses whether to use
+/// // FFTs or the naive algorithm depending on the degrees of the polynomials.
 /// assert_eq!(&poly * &other_poly, poly.mul_naive(&other_poly));
 ///
-/// // Division can be done using [`divide_with_remainder`](Polynomial::divide_with_remainder)
-/// // or [`Div::div`](Div::div) methods. Note that [`Div::div`](Div::div) will panic
+/// // Division can be done using `divide_with_remainder`
+/// // or `Div::div` (i. e. the operator `/`). Note that `Div::div` will panic
 /// // if the remainder is not zero.
 /// let (quotient, remainder) = poly.divide_with_remainder(&other_poly);
 /// assert_eq!(quotient, &(&poly - &remainder) / &other_poly);
 ///
-/// // Polynomials can be interpolated in an arbitrary set of points using
-/// // [`lagrange_interpolation`](Polynomial::lagrange_interpolation).
+/// // Polynomials can be interpolated at an arbitrary set of points using
+/// // `lagrange_interpolation`. For efficient interpolation over two-adic cosets,
+/// // cf. the `p3-coset` crate.
 /// assert_eq!(
 ///     Polynomial::lagrange_interpolation(
 ///         vec![(F::ONE, F::ONE), (F::TWO, F::ZERO), (F::ZERO, F::ONE)]
@@ -140,7 +142,7 @@ impl<F: Field> Polynomial<F> {
         Self::constant(F::ONE)
     }
 
-    /// Returns the polynomial with the given coefficients
+    /// Returns the polynomial with the given coefficients. Leading zeros are automatically trimmed.
     pub fn from_coeffs(coeffs: Vec<F>) -> Self {
         Self { coeffs }.truncate_leading_zeros()
     }
@@ -457,7 +459,7 @@ impl<F: Field> Polynomial<F> {
     }
 }
 
-impl<'a, 'b, F: Field> Add<&'a Polynomial<F>> for &'b Polynomial<F> {
+impl<'a, F: Field> Add<&'a Polynomial<F>> for &Polynomial<F> {
     type Output = Polynomial<F>;
 
     fn add(self, other: &'a Polynomial<F>) -> Polynomial<F> {

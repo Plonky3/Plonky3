@@ -268,9 +268,9 @@ where
                     width: 1 << log_last_folding_factor,
                     height: 1 << (final_domain.log_size() - log_last_folding_factor),
                 }],
-                i as usize,
-                &vec![leaf.clone()],
-                &proof,
+                i,
+                &[leaf.clone()],
+                proof,
             )
             .is_err()
         {
@@ -449,8 +449,8 @@ where
                     width: 1 << log_folding_factor,
                     height: 1 << (domain.log_size() - log_folding_factor),
                 }],
-                i as usize,
-                &vec![leaf.clone()],
+                i,
+                &[leaf.clone()],
                 proof,
             )
             .is_err()
@@ -499,7 +499,6 @@ where
     let quotient_answers: Vec<_> = ood_samples
         .into_iter()
         .zip(betas)
-        .map(|(alpha, beta)| (alpha, beta))
         .chain(folded_answers)
         .collect();
 
@@ -546,7 +545,7 @@ where
         }),
         domain: domain.shrink_subgroup(1),
         folding_randomness: new_folding_randomness,
-        round: round,
+        round,
         root: g_root,
     })
 }
@@ -580,7 +579,7 @@ fn compute_f_oracle_from_g<F: TwoAdicField>(
 
     // The j-th element of this vector is the set of k_i-th roots of r^shift_{i, j}
     let queried_point_preimages = queried_indices
-        .into_iter()
+        .iter()
         .map(|index| {
             iterate(domain.element(*index), |&x| x * generator)
                 .take(folding_factor)
@@ -671,16 +670,16 @@ fn compute_f_oracle_from_g<F: TwoAdicField>(
     // precomputed hints
     queried_point_preimages
         .into_iter()
-        .zip(g_eval_batches.into_iter())
-        .zip(denom_inv_hints.into_iter())
-        .zip(deg_cor_hints.into_iter())
+        .zip(g_eval_batches)
+        .zip(denom_inv_hints)
+        .zip(deg_cor_hints)
         .map(
             |(((points, g_eval_batch), denom_inverse_hints), deg_cor_hints)| {
                 points
                     .into_iter()
-                    .zip(g_eval_batch.into_iter())
-                    .zip(denom_inverse_hints.into_iter())
-                    .zip(deg_cor_hints.into_iter())
+                    .zip(g_eval_batch)
+                    .zip(denom_inverse_hints)
+                    .zip(deg_cor_hints)
                     .map(|(((point, g_eval), denom_inverse_hint), deg_cor_hint)| {
                         oracle.evaluate(point, g_eval, denom_inverse_hint, deg_cor_hint)
                     })
@@ -708,7 +707,7 @@ fn compute_folded_evaluations<F: TwoAdicField>(
 ) -> Vec<F> {
     // We need the inverses of each root received, so we batch-invert them to
     // save on calls to invert()
-    let point_roots_invs = batch_multiplicative_inverse(&point_roots);
+    let point_roots_invs = batch_multiplicative_inverse(point_roots);
 
     // This is called once per round and could be further amortised by passing
     // it as a hint, at the cost of a less clean interface of verify_round()
@@ -720,16 +719,14 @@ fn compute_folded_evaluations<F: TwoAdicField>(
     unfolded_evaluations
         .into_iter()
         .zip(point_roots.iter())
-        .zip(point_roots_invs.into_iter())
+        .zip(point_roots_invs)
         .map(|((evals, &point_root), point_root_inv)| {
             fold_evaluations(
                 evals,
-                point_root,
+                (point_root, Some(point_root_inv)),
                 log_folding_factor,
-                omega,
+                (omega, Some(omega_inv)),
                 c,
-                Some(omega_inv),
-                Some(point_root_inv),
                 Some(two_inv),
             )
         })

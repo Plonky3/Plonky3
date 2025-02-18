@@ -363,11 +363,7 @@ where
     let query_proofs: Vec<(Vec<EF>, M::Proof)> = queried_indices
         .clone()
         .into_iter()
-        .map(|index| {
-            config
-                .mmcs_config()
-                .open_batch(index as usize, &merkle_tree)
-        })
+        .map(|index| config.mmcs_config().open_batch(index, &merkle_tree))
         .map(|(mut k, v)| (k.remove(0), v))
         .collect();
 
@@ -390,11 +386,7 @@ where
 
     // stir_answers has been dedup-ed but beta_answers has not yet:
     let stir_answers = stir_randomness.into_iter().zip(stir_randomness_evals);
-    let beta_answers = ood_samples
-        .into_iter()
-        .zip(betas.clone())
-        .into_iter()
-        .unique();
+    let beta_answers = ood_samples.into_iter().zip(betas.clone()).unique();
     let quotient_answers = beta_answers.chain(stir_answers).collect_vec();
 
     // Compute the quotient set, \mathcal{G}_i in the notation of the article

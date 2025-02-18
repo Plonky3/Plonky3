@@ -11,22 +11,22 @@ use rand_chacha::ChaCha20Rng;
 
 use crate::{SecurityAssumption, StirConfig, StirParameters};
 
-type BB = BabyBear;
-type BBExt = BinomialExtensionField<BB, 4>;
+type Bb = BabyBear;
+type BbExt = BinomialExtensionField<Bb, 4>;
 
-type BBPerm = Poseidon2BabyBear<16>;
-type BBHash = PaddingFreeSponge<BBPerm, 16, 8, 8>;
-type BBCompress = TruncatedPermutation<BBPerm, 2, 8, 16>;
+type BbPerm = Poseidon2BabyBear<16>;
+type BbHash = PaddingFreeSponge<BbPerm, 16, 8, 8>;
+type BbCompress = TruncatedPermutation<BbPerm, 2, 8, 16>;
 
-type BBMMCS = MerkleTreeMmcs<<BB as Field>::Packing, <BB as Field>::Packing, BBHash, BBCompress, 8>;
-type BBExtMMCS = ExtensionMmcs<BB, BBExt, BBMMCS>;
+type BbMmcs = MerkleTreeMmcs<<Bb as Field>::Packing, <Bb as Field>::Packing, BbHash, BbCompress, 8>;
+type BbExtMmcs = ExtensionMmcs<Bb, BbExt, BbMmcs>;
 
-pub fn test_mmcs_config() -> BBExtMMCS {
+pub fn test_mmcs_config() -> BbExtMmcs {
     let mut rng = ChaCha20Rng::from_os_rng();
-    let perm = BBPerm::new_from_rng_128(&mut rng);
-    let hash = BBHash::new(perm.clone());
-    let compress = BBCompress::new(perm.clone());
-    BBExtMMCS::new(BBMMCS::new(hash, compress))
+    let perm = BbPerm::new_from_rng_128(&mut rng);
+    let hash = BbHash::new(perm.clone());
+    let compress = BbCompress::new(perm.clone());
+    BbExtMmcs::new(BbMmcs::new(hash, compress))
 }
 
 #[test]
@@ -43,17 +43,16 @@ fn test_config() {
     let pow_bits = 20;
 
     let parameters = StirParameters::constant_folding_factor(
+        (security_level, security_assumption),
         log_starting_degree,
         log_starting_inv_rate,
         log_starting_folding_factor,
         num_rounds,
-        security_assumption,
-        security_level,
         pow_bits,
         test_mmcs_config(),
     );
 
-    let config: StirConfig<BBExtMMCS> = StirConfig::new::<BBExt>(parameters);
+    let config: StirConfig<BbExtMmcs> = StirConfig::new::<BbExt>(parameters);
 
     assert_eq!(config.starting_domain_log_size(), 19);
     assert_eq!(config.starting_folding_pow_bits(), 30);

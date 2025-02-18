@@ -19,8 +19,8 @@ use crate::verifier::error::{FullRoundVerificationError, VerificationError};
 use crate::verifier::{compute_folded_evaluations, verify};
 use crate::{Messages, SecurityAssumption, StirConfig, StirProof};
 
-type BBProof = StirProof<BBExt, BBExtMMCS, BB>;
-type GLProof = StirProof<GLExt, GLExtMMCS, GL>;
+type BBProof = StirProof<BbExt, BbExtMmcs, Bb>;
+type GLProof = StirProof<GlExt, GlExtMmcs, Gl>;
 
 // This macro creates a function that commits to a random polynomial and
 // produces a STIR proof for it given a configuration
@@ -86,26 +86,26 @@ macro_rules! impl_test_verify_with_config {
 // Create the function generate_bb_proof_with_config
 impl_generate_proof_with_config!(
     generate_bb_proof_with_config,
-    BBExtMMCS,
+    BbExtMmcs,
     BBProof,
-    Hash<BB, BB, 8>,
-    BBChallenger
+    Hash<Bb, Bb, 8>,
+    BbChallenger
 );
 
 // Create the function generate_gl_proof_with_config
 impl_generate_proof_with_config!(
     generate_gl_proof_with_config,
-    GLExtMMCS,
+    GlExtMmcs,
     GLProof,
-    Hash<GL, GL, 4>,
-    GLChallenger
+    Hash<Gl, Gl, 4>,
+    GlChallenger
 );
 
 // Create the function test_bb_verify_with_config
 impl_test_verify_with_config!(
     test_bb_verify_with_config,
-    BBExt,
-    BBExtMMCS,
+    BbExt,
+    BbExtMmcs,
     test_bb_challenger,
     generate_bb_proof_with_config
 );
@@ -113,30 +113,30 @@ impl_test_verify_with_config!(
 // Create the function test_gl_verify_with_config
 impl_test_verify_with_config!(
     test_gl_verify_with_config,
-    GLExt,
-    GLExtMMCS,
+    GlExt,
+    GlExtMmcs,
     test_gl_challenger,
     generate_gl_proof_with_config
 );
 
 // Auxiliary function to trigger a tricky verification error which mimics the
 // honest proving procedure but modifies the final polynomial near the end.
-fn tamper_with_final_polynomial(config: &StirConfig<BBExtMMCS>) -> (BBProof, Hash<BB, BB, 8>) {
+fn tamper_with_final_polynomial(config: &StirConfig<BbExtMmcs>) -> (BBProof, Hash<Bb, Bb, 8>) {
     // ========================== Honest proving =============================
 
     // This is documented in prover.rs
     let mut challenger = test_bb_challenger();
     let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
-    let (witness, commitment) = commit(&config, polynomial);
+    let (witness, commitment) = commit(config, polynomial);
 
     observe_public_parameters(config.parameters(), &mut challenger);
 
     // Observe the commitment
-    challenger.observe(BB::from_u8(Messages::Commitment as u8));
-    challenger.observe(commitment.clone());
+    challenger.observe(Bb::from_u8(Messages::Commitment as u8));
+    challenger.observe(commitment);
 
     // Sample the folding randomness
-    challenger.observe(BB::from_u8(Messages::FoldingRandomness as u8));
+    challenger.observe(Bb::from_u8(Messages::FoldingRandomness as u8));
     let folding_randomness = challenger.sample_algebra_element();
 
     let mut witness = StirRoundWitness {
@@ -159,7 +159,7 @@ fn tamper_with_final_polynomial(config: &StirConfig<BBExtMMCS>) -> (BBProof, Has
     // ===================== Dishonest final polynomial ========================
 
     let final_polynomial = rand_poly(
-        witness.polynomial.degree().unwrap() / 2_usize.pow(log_last_folding_factor as u32) as usize,
+        witness.polynomial.degree().unwrap() / 2_usize.pow(log_last_folding_factor as u32),
     );
 
     // ===================== Continuing honest proving ========================
@@ -168,17 +168,17 @@ fn tamper_with_final_polynomial(config: &StirConfig<BBExtMMCS>) -> (BBProof, Has
     let log_query_domain_size = witness.domain.log_size() - log_last_folding_factor;
 
     // Absorb the final polynomial
-    challenger.observe(BB::from_u8(Messages::FinalPolynomial as u8));
+    challenger.observe(Bb::from_u8(Messages::FinalPolynomial as u8));
     observe_ext_slice_with_size(&mut challenger, final_polynomial.coeffs());
 
     // Sample the queried indices
-    challenger.observe(BB::from_u8(Messages::FinalQueryIndices as u8));
+    challenger.observe(Bb::from_u8(Messages::FinalQueryIndices as u8));
     let queried_indices: Vec<u64> = (0..final_queries)
         .map(|_| challenger.sample_bits(log_query_domain_size) as u64)
         .unique()
         .collect();
 
-    let queries_to_final: Vec<(Vec<BBExt>, _)> = queried_indices
+    let queries_to_final: Vec<(Vec<BbExt>, _)> = queried_indices
         .into_iter()
         .map(|index| {
             config
@@ -212,8 +212,8 @@ fn test_compute_folded_evals() {
 
     let mut rng = rng();
 
-    let root: BBExt = rng.random();
-    let c: BBExt = rng.random();
+    let root: BbExt = rng.random();
+    let c: BbExt = rng.random();
 
     let domain = TwoAdicCoset::new(root, log_arity);
 

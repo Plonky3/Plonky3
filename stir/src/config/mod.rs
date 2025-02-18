@@ -72,14 +72,29 @@ pub struct StirParameters<M: Clone> {
 // Convenience methods to create STIR parameters with typical features
 impl<M: Clone> StirParameters<M> {
     /// Create a STIR configuration where each round has a potentially different
-    /// folding factor. For a description of each parameter, cf.
-    /// [`StirParameters`].
+    /// folding factor.
+    ///
+    /// # Parameters
+    ///
+    /// - `security_level`: Desired number of bits of security.
+    /// - `security_assumption`: Code-distance assumption. Cf.
+    ///   [`SecurityAssumption`].
+    /// - `log_starting_degree`: log2 of the bound of the degree (plus one) of
+    ///   the initial polynomial.
+    /// - `log_starting_inv_rate`: log2 of the inverse of the rate of the
+    ///   initial codeword (i. e. of the blowup factor).
+    /// - `log_folding_factors`: log2 of the folding factors for each round.
+    /// - `pow_bits`: Number of proof-of-work bits used to reduce the query
+    ///   error.
+    /// - `mmcs_config`: Configuration of the Mixed Matrix Commitment Scheme
+    ///   used to commit to the initial and round polynomials.
     pub fn variable_folding_factor(
+        // This is paired due to clippy disallowing functions with > 7 arguments
+        // (causing ci.workflows to reject it)
+        (security_level, security_assumption): (usize, SecurityAssumption),
         log_starting_degree: usize,
         log_starting_inv_rate: usize,
         log_folding_factors: Vec<usize>,
-        security_assumption: SecurityAssumption,
-        security_level: usize,
         pow_bits: usize,
         mmcs_config: M,
     ) -> Self {
@@ -110,24 +125,39 @@ impl<M: Clone> StirParameters<M> {
     }
 
     /// Create a STIR configuration where all rounds use the same folding factor
-    /// `k_i = 2^log_folding_factor`. For a description of each parameter, cf.
-    /// [`StirParameters`].
+    /// `k_i = 2^log_folding_factor`.
+    ///
+    /// # Parameters
+    ///
+    /// - `security_level`: Desired number of bits of security.
+    /// - `security_assumption`: Code-distance assumption. Cf.
+    ///   [`SecurityAssumption`].
+    /// - `log_starting_degree`: log2 of the bound of the degree (plus one) of
+    ///   the initial polynomial.
+    /// - `log_starting_inv_rate`: log2 of the inverse of the rate of the
+    ///   initial codeword.
+    /// - `log_folding_factor`: log2 of the folding factor for each round.
+    /// - `num_rounds`: Number of rounds.
+    /// - `pow_bits`: Number of proof-of-work bits used to reduce the query
+    ///   error.
+    /// - `mmcs_config`: Configuration of the Mixed Matrix Commitment Scheme
+    ///   used to commit to the initial and round polynomials.
     pub fn constant_folding_factor(
+        // This is paired due to clippy disallowing functions with > 7 arguments
+        // (causing ci.workflows to reject it)
+        (security_level, security_assumption): (usize, SecurityAssumption),
         log_starting_degree: usize,
         log_starting_inv_rate: usize,
         log_folding_factor: usize,
         num_rounds: usize,
-        security_assumption: SecurityAssumption,
-        security_level: usize,
         pow_bits: usize,
         mmcs_config: M,
     ) -> Self {
         Self::variable_folding_factor(
+            (security_level, security_assumption),
             log_starting_degree,
             log_starting_inv_rate,
             vec![log_folding_factor; num_rounds],
-            security_assumption,
-            security_level,
             pow_bits,
             mmcs_config,
         )
@@ -261,10 +291,8 @@ impl<M: Clone> StirConfig<M> {
         // If folding factors has length (i. e. num_rounds) 1, the only round is
         // by definition the last one, which is treated separately; In that
         // case, windows(2) returns no elements, as desired.
-        for (log_folding_factor_pair, next_rate) in log_folding_factors
-            .windows(2)
-            .into_iter()
-            .zip(log_inv_rates)
+        for (log_folding_factor_pair, next_rate) in
+            log_folding_factors.windows(2).zip(log_inv_rates)
         {
             let (log_curr_folding_factor, log_next_folding_factor) =
                 (log_folding_factor_pair[0], log_folding_factor_pair[1]);

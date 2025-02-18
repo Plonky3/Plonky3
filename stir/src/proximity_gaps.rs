@@ -5,11 +5,11 @@ use core::{
     str::FromStr,
 };
 
-/// This module, used to determine proximity gaps in the relevant Reed-Solomon
-/// codes based on various security assumptions (and therefore the necessary
-/// number of queries and proof-of-work bits), is directly taken from the
-/// co-author Giacomo Fenzi's
-/// [implementation](https://github.com/WizardOfMenlo/stir-whir-scripts/blob/main/src/errors.rs)
+// This module, used to determine proximity gaps in the relevant Reed-Solomon
+// codes based on various security assumptions (and therefore the necessary
+// number of queries and proof-of-work bits), is directly taken from the
+// co-author Giacomo Fenzi's
+// [implementation](https://github.com/WizardOfMenlo/stir-whir-scripts/blob/main/src/errors.rs)
 
 /// Security assumptions determines which proximity parameters and conjectures are assumed by the error computation.
 #[derive(Debug, Clone, Copy)]
@@ -96,7 +96,7 @@ impl SecurityAssumption {
 
         // Error is  (num_functions - 1) * error/|F|;
         let num_functions_1_log = (num_functions as f64 - 1.).log2();
-        field_size_bits as f64 - (error + num_functions_1_log as f64)
+        field_size_bits as f64 - (error + num_functions_1_log)
     }
 
     /// The query error is (1 - delta)^t where t is the number of queries.

@@ -20,7 +20,7 @@ const TEST_ITERATIONS: usize = 30;
 
 fn field_element_from_i64<F: Field>(x: i64) -> F {
     let sign = if x >= 0 { F::ONE } else { -F::ONE };
-    let value = F::from_u64(x.abs() as u64);
+    let value = F::from_u64(x.unsigned_abs());
     sign * value
 }
 

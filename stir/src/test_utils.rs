@@ -31,42 +31,42 @@ pub const BB_EXT_SEC_LEVEL_LOWER: usize = 100;
 pub const GL_EXT_SEC_LEVEL: usize = 80;
 
 /// The BabyBear field
-pub type BB = BabyBear;
+pub type Bb = BabyBear;
 
 /// A quintic extension of BabyBear
-pub type BBExt = BinomialExtensionField<BB, 5>;
+pub type BbExt = BinomialExtensionField<Bb, 5>;
 
-type BBPerm = Poseidon2BabyBear<16>;
-type BBHash = PaddingFreeSponge<BBPerm, 16, 8, 8>;
-type BBCompress = TruncatedPermutation<BBPerm, 2, 8, 16>;
-type BBPacking = <BB as Field>::Packing;
+type BbPerm = Poseidon2BabyBear<16>;
+type BbHash = PaddingFreeSponge<BbPerm, 16, 8, 8>;
+type BbCompress = TruncatedPermutation<BbPerm, 2, 8, 16>;
+type BbPacking = <Bb as Field>::Packing;
 
-type BBMMCS = MerkleTreeMmcs<BBPacking, BBPacking, BBHash, BBCompress, 8>;
+type BbMmcs = MerkleTreeMmcs<BbPacking, BbPacking, BbHash, BbCompress, 8>;
 
 /// A Mixed Matrix Commitment Scheme over the quintic extension of BabyBear
-pub type BBExtMMCS = ExtensionMmcs<BB, BBExt, BBMMCS>;
+pub type BbExtMmcs = ExtensionMmcs<Bb, BbExt, BbMmcs>;
 
 /// A challenger for the BabyBear field and its quintic extension
-pub type BBChallenger = DuplexChallenger<BB, BBPerm, 16, 8>;
+pub type BbChallenger = DuplexChallenger<Bb, BbPerm, 16, 8>;
 
 /// The Goldilocks field
-pub type GL = Goldilocks;
+pub type Gl = Goldilocks;
 
 /// A quadratic extension of Goldilocks
-pub type GLExt = BinomialExtensionField<GL, 2>;
+pub type GlExt = BinomialExtensionField<Gl, 2>;
 
-type GLPerm = Poseidon2Goldilocks<8>;
-type GLHash = PaddingFreeSponge<GLPerm, 8, 4, 4>;
-type GLCompress = TruncatedPermutation<GLPerm, 2, 4, 8>;
-type GLPacking = <GL as Field>::Packing;
+type GlPerm = Poseidon2Goldilocks<8>;
+type GlHash = PaddingFreeSponge<GlPerm, 8, 4, 4>;
+type GlCompress = TruncatedPermutation<GlPerm, 2, 4, 8>;
+type GlPacking = <Gl as Field>::Packing;
 
-type GLMMCS = MerkleTreeMmcs<GLPacking, GLPacking, GLHash, GLCompress, 4>;
+type GlMmcs = MerkleTreeMmcs<GlPacking, GlPacking, GlHash, GlCompress, 4>;
 
 /// A Mixed Matrix Commitment Scheme over the quadratic extension of Goldilocks
-pub type GLExtMMCS = ExtensionMmcs<GL, GLExt, GLMMCS>;
+pub type GlExtMmcs = ExtensionMmcs<Gl, GlExt, GlMmcs>;
 
 /// A challenger for the Goldilocks field and its quadratic extension
-pub type GLChallenger = DuplexChallenger<GL, GLPerm, 8, 4>;
+pub type GlChallenger = DuplexChallenger<Gl, GlPerm, 8, 4>;
 
 // This produces an MMCS for the chosen field. Computing it in a macro avoids
 // some generic-related pains. We seed the generator in order to make the tests
@@ -110,12 +110,11 @@ macro_rules! impl_test_stir_config {
             let pow_bits = 20;
 
             let parameters = StirParameters::constant_folding_factor(
+                (security_level, security_assumption),
                 log_starting_degree,
                 log_starting_inv_rate,
                 log_folding_factor,
                 num_rounds,
-                security_assumption,
-                security_level,
                 pow_bits,
                 $mmcs_config_fn(),
             );
@@ -138,11 +137,10 @@ macro_rules! impl_test_stir_config_folding_factors {
             let pow_bits = 20;
 
             let parameters = StirParameters::variable_folding_factor(
+                (security_level, security_assumption),
                 log_starting_degree,
                 log_starting_inv_rate,
                 log_folding_factors,
-                security_assumption,
-                security_level,
                 pow_bits,
                 $mmcs_config_fn(),
             );
@@ -154,38 +152,38 @@ macro_rules! impl_test_stir_config_folding_factors {
 
 impl_test_mmcs_config!(
     test_bb_mmcs_config,
-    BBExtMMCS,
-    BBPerm,
-    BBHash,
-    BBCompress,
-    BBMMCS
+    BbExtMmcs,
+    BbPerm,
+    BbHash,
+    BbCompress,
+    BbMmcs
 );
 
 impl_test_mmcs_config!(
     test_gl_mmcs_config,
-    GLExtMMCS,
-    GLPerm,
-    GLHash,
-    GLCompress,
-    GLMMCS
+    GlExtMmcs,
+    GlPerm,
+    GlHash,
+    GlCompress,
+    GlMmcs
 );
 
-impl_test_challenger!(test_bb_challenger, BBChallenger, BBPerm);
-impl_test_challenger!(test_gl_challenger, GLChallenger, GLPerm);
+impl_test_challenger!(test_bb_challenger, BbChallenger, BbPerm);
+impl_test_challenger!(test_gl_challenger, GlChallenger, GlPerm);
 
-impl_test_stir_config!(test_bb_stir_config, BBExt, BBExtMMCS, test_bb_mmcs_config);
-impl_test_stir_config!(test_gl_stir_config, GLExt, GLExtMMCS, test_gl_mmcs_config);
+impl_test_stir_config!(test_bb_stir_config, BbExt, BbExtMmcs, test_bb_mmcs_config);
+impl_test_stir_config!(test_gl_stir_config, GlExt, GlExtMmcs, test_gl_mmcs_config);
 
 impl_test_stir_config_folding_factors!(
     test_bb_stir_config_folding_factors,
-    BBExt,
-    BBExtMMCS,
+    BbExt,
+    BbExtMmcs,
     test_bb_mmcs_config
 );
 
 impl_test_stir_config_folding_factors!(
     test_gl_stir_config_folding_factors,
-    GLExt,
-    GLExtMMCS,
+    GlExt,
+    GlExtMmcs,
     test_gl_mmcs_config
 );

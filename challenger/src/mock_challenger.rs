@@ -95,10 +95,7 @@ mod tests {
 
         // Test grinding (remember this is not checked)
         assert_eq!(challenger.grind(4242), Goldilocks::ZERO);
-        assert_eq!(
-            challenger.check_witness(234, Goldilocks::from_usize(2424)),
-            true
-        );
+        assert!(challenger.check_witness(234, Goldilocks::from_usize(2424)));
     }
 
     #[test]
