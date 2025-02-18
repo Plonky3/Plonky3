@@ -93,7 +93,7 @@ where
 
         group.bench_function(BenchmarkId::from_parameter(n), |b| {
             b.iter(|| {
-                Mersenne31Dft::dft_batch::<Dft>(&messages);
+                Mersenne31Dft::dft_batch::<Dft>(messages.clone());
             });
         });
     }

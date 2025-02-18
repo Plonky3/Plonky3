@@ -165,7 +165,7 @@ pub fn binomial_expand<R: PrimeCharacteristicRing>(roots: &[R]) -> Vec<R> {
     coeffs
 }
 
-pub fn eval_poly<R: PrimeCharacteristicRing>(poly: &[R], x: &R) -> R {
+pub fn eval_poly<R: PrimeCharacteristicRing>(poly: &[R], x: R) -> R {
     let mut acc = R::ZERO;
     for coeff in poly.iter().rev() {
         acc *= x.clone();

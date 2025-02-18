@@ -371,7 +371,7 @@ mod tests {
         for _ in 0..1024 {
             let x: EF = random();
             let m: Vec<EF> = x.minimal_poly().into_iter().map(Into::<EF>::into).collect();
-            assert!(eval_poly(&m, &x).is_zero());
+            assert!(eval_poly(&m, x).is_zero());
         }
     }
 

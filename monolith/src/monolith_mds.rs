@@ -27,7 +27,7 @@ impl<const WIDTH: usize, const NUM_ROUNDS: usize> Permutation<[Mersenne31; WIDTH
             let matrix: [u64; WIDTH] = MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH[..]
                 .try_into()
                 .unwrap();
-            apply_circulant(&matrix, &input)
+            apply_circulant(&matrix, input)
         } else {
             let mut shake = Shake128::default();
             shake.update(b"Monolith");

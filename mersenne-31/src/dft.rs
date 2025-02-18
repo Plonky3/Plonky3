@@ -36,7 +36,7 @@ type C = Complex<Mersenne31>;
 /// This packing is suitable as input to a Fourier Transform over the
 /// domain Mersenne31Complex; it is inverse to `idft_postprocess()`
 /// below.
-fn dft_preprocess(input: &RowMajorMatrix<F>) -> RowMajorMatrix<C> {
+fn dft_preprocess(input: RowMajorMatrix<F>) -> RowMajorMatrix<C> {
     assert!(input.height() % 2 == 0, "input height must be even");
     RowMajorMatrix::new(
         input
@@ -60,7 +60,7 @@ fn dft_preprocess(input: &RowMajorMatrix<F>) -> RowMajorMatrix<C> {
 /// Source: https://www.robinscheibler.org/2013/02/13/real-fft.html
 ///
 /// NB: This function and `idft_preprocess()` are inverses.
-fn dft_postprocess(input: &RowMajorMatrix<C>) -> RowMajorMatrix<C> {
+fn dft_postprocess(input: RowMajorMatrix<C>) -> RowMajorMatrix<C> {
     let h = input.height();
     let log2_h = log2_strict_usize(h); // checks that h is a power of two
 
@@ -94,7 +94,7 @@ fn dft_postprocess(input: &RowMajorMatrix<C>) -> RowMajorMatrix<C> {
 /// Source: https://www.robinscheibler.org/2013/02/13/real-fft.html
 ///
 /// NB: This function and `dft_postprocess()` are inverses.
-fn idft_preprocess(input: &RowMajorMatrix<C>) -> RowMajorMatrix<C> {
+fn idft_preprocess(input: RowMajorMatrix<C>) -> RowMajorMatrix<C> {
     let h = input.height() - 1;
     let log2_h = log2_strict_usize(h); // checks that h is a power of two
 
@@ -123,7 +123,7 @@ fn idft_preprocess(input: &RowMajorMatrix<C>) -> RowMajorMatrix<C> {
 /// entry is a_{i/2,j} if i is even and b_{(i-1)/2,j} if i is odd.
 ///
 /// This function is inverse to `dft_preprocess()` above.
-fn idft_postprocess(input: &RowMajorMatrix<C>) -> RowMajorMatrix<F> {
+fn idft_postprocess(input: RowMajorMatrix<C>) -> RowMajorMatrix<F> {
     // Allocate necessary `Vec`s upfront:
     //   1) The actual output,
     //   2) A temporary buf to store the imaginary parts.
@@ -157,17 +157,17 @@ impl Mersenne31Dft {
     /// a `Mersenne31Complex` and doing a (half-length) DFT on the
     /// result. In particular, the type of the result elements are in
     /// the extension field, not the domain field.
-    pub fn dft_batch<Dft: TwoAdicSubgroupDft<C>>(mat: &RowMajorMatrix<F>) -> RowMajorMatrix<C> {
+    pub fn dft_batch<Dft: TwoAdicSubgroupDft<C>>(mat: RowMajorMatrix<F>) -> RowMajorMatrix<C> {
         let dft = Dft::default();
-        dft_postprocess(&dft.dft_batch(dft_preprocess(mat)).to_row_major_matrix())
+        dft_postprocess(dft.dft_batch(dft_preprocess(mat)).to_row_major_matrix())
     }
 
     /// Compute the inverse DFT of each column of `mat`.
     ///
     /// NB: See comment on `dft_batch()` for information on packing.
-    pub fn idft_batch<Dft: TwoAdicSubgroupDft<C>>(mat: &RowMajorMatrix<C>) -> RowMajorMatrix<F> {
+    pub fn idft_batch<Dft: TwoAdicSubgroupDft<C>>(mat: RowMajorMatrix<C>) -> RowMajorMatrix<F> {
         let dft = Dft::default();
-        idft_postprocess(&dft.idft_batch(idft_preprocess(mat)))
+        idft_postprocess(dft.idft_batch(idft_preprocess(mat)))
     }
 }
 
@@ -193,8 +193,8 @@ mod tests {
             .take(N)
             .collect::<Vec<Base>>();
         let input = RowMajorMatrix::new_col(input);
-        let fft_input = Mersenne31Dft::dft_batch::<Dft>(&input);
-        let output = Mersenne31Dft::idft_batch::<Dft>(&fft_input);
+        let fft_input = Mersenne31Dft::dft_batch::<Dft>(input.clone());
+        let output = Mersenne31Dft::idft_batch::<Dft>(fft_input);
         assert_eq!(input, output);
     }
 
@@ -215,8 +215,8 @@ mod tests {
             .collect::<Vec<Base>>();
         let b = RowMajorMatrix::new_col(b);
 
-        let fft_a = Mersenne31Dft::dft_batch::<Dft>(&a);
-        let fft_b = Mersenne31Dft::dft_batch::<Dft>(&b);
+        let fft_a = Mersenne31Dft::dft_batch::<Dft>(a.clone());
+        let fft_b = Mersenne31Dft::dft_batch::<Dft>(b.clone());
 
         let fft_c = fft_a
             .values
@@ -226,7 +226,7 @@ mod tests {
             .collect();
         let fft_c = RowMajorMatrix::new_col(fft_c);
 
-        let c = Mersenne31Dft::idft_batch::<Dft>(&fft_c);
+        let c = Mersenne31Dft::idft_batch::<Dft>(fft_c);
 
         let mut conv = Vec::with_capacity(N);
         for i in 0..N {
