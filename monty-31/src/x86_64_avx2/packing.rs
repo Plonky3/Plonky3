@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 use core::arch::x86_64::{self, __m256i};
+use core::array;
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -537,6 +538,34 @@ fn dot_product_4<PMP: PackedMontyParameters, LHS: InToM256Vector<PMP>, RHS: InTo
     }
 }
 
+/// The compiler doesn't realize that add is associative
+/// so we help it out and minimize the dependency chains by hand.
+#[inline(always)]
+fn sum_8<R: PrimeCharacteristicRing + Copy>(state: &[R]) -> R {
+    assert_eq!(state.len(), 8);
+
+    let s01 = state[0] + state[1];
+    let s23 = state[2] + state[3];
+    let s45 = state[4] + state[5];
+    let s67 = state[6] + state[7];
+
+    let s0123 = s01 + s23;
+    let s4567 = s45 + s67;
+    s0123 + s4567
+}
+
+/// The compiler doesn't realize that add is associative
+/// so we help it out and minimize the dependency chains by hand.
+#[inline(always)]
+fn sum_16<R: PrimeCharacteristicRing + Copy>(state: &[R]) -> R {
+    assert_eq!(state.len(), 16);
+
+    let bottom_half = sum_8(&state[..8]);
+    let top_half = sum_8(&state[8..]);
+
+    bottom_half + top_half
+}
+
 /// For larger dot products we want to repeat calling dot product 4 as
 /// many times as possible.
 #[inline(always)]
@@ -573,6 +602,16 @@ fn general_dot_product<FP: FieldParameters, LHS: InToM256Vector<FP>, RHS: InToM2
                 // Safety: `dot_product_4` returns values in canonical form when given values in canonical form.
                 PackedMontyField31AVX2::<FP>::from_vector(res)
             }
+        }
+        64 => {
+            let sum_4s: [PackedMontyField31AVX2<FP>; 16] = array::from_fn(|i| {
+                let res = dot_product_4(
+                    [lhs[4 * i], lhs[4 * i + 1], lhs[4 * i + 2], lhs[4 * i + 3]],
+                    [rhs[4 * i], rhs[4 * i + 1], rhs[4 * i + 2], rhs[4 * i + 3]],
+                );
+                unsafe { PackedMontyField31AVX2::<FP>::from_vector(res) }
+            });
+            sum_16(&sum_4s)
         }
         _ => {
             let mut acc = PackedMontyField31AVX2::<FP>::ZERO;
