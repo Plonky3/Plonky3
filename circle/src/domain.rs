@@ -135,6 +135,7 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
     fn split_domains(&self, num_chunks: usize) -> Vec<Self> {
         assert!(self.is_standard());
         let log_chunks = log2_strict_usize(num_chunks);
+        assert!(log_chunks <= self.log_n);
         self.points()
             .take(num_chunks)
             .map(|shift| CircleDomain {
