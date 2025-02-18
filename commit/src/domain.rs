@@ -73,12 +73,17 @@ pub trait PolynomialSpace: Copy {
 
     /// Return another `PolynomialSpace` with size at least `min_size` disjoint from this space.
     ///
+    /// When working with spaces of power of two size, this will return a space of size `2^ceil(log_2(min_size))`.
+    /// This will fail if `min_size` is too large. In particular, `log_2(min_size)` should be
+    /// smaller than the `2`-adicity of the field.
+    ///
     /// This fixes a canonical choice for prover/verifier determinism and LDE caching.
     fn create_disjoint_domain(&self, min_size: usize) -> Self;
 
     /// Split the `PolynomialSpace` into `num_chunks` smaller `PolynomialSpaces` of equal size.
     ///
-    /// `num_chunks` must divide `self.size()` (which usually forces it to be a power of 2.)
+    /// `num_chunks` must divide `self.size()` (which usually forces it to be a power of 2.) or
+    /// this function will panic.
     fn split_domains(&self, num_chunks: usize) -> Vec<Self>;
 
     /// Split a set of polynomial evaluations over this `PolynomialSpace` into a vector
@@ -94,8 +99,13 @@ pub trait PolynomialSpace: Copy {
     /// Compute the zerofier of the space, evaluated at the given point.
     ///
     /// The zerofier is a polynomial which evaluates to `0` on every point of the
-    /// space `self` and has degree equal to `self.size()`. For univariate spaces
-    /// this means that it will not be equal to `0` at any point not in the `self`.
+    /// space `self` and has degree equal to `self.size()`. In other words it is
+    /// a choice of element of the defining ideal of the given set with this extra
+    /// degree property.
+    ///
+    /// In the univariate case, it is equal, up to a linear factor, to the product over
+    /// all elements `x`, of `(X - x)`. In particular this implies it will not evaluate
+    /// to `0` at any point not in `self`.
     fn zp_at_point<Ext: ExtensionField<Self::Val>>(&self, point: Ext) -> Ext;
 
     /// Compute several Lagrange selectors at a given point.
@@ -180,6 +190,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     /// Then we decompose `gH` into `gK, ghK, gh^2K, ..., gh^{num_chunks}K`.
     fn split_domains(&self, num_chunks: usize) -> Vec<Self> {
         let log_chunks = log2_strict_usize(num_chunks);
+        debug_assert!(log_chunks <= self.log_n);
         (0..num_chunks)
             .map(|i| Self {
                 log_n: self.log_n - log_chunks,
@@ -193,6 +204,8 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         num_chunks: usize,
         evals: RowMajorMatrix<Self::Val>,
     ) -> Vec<RowMajorMatrix<Self::Val>> {
+        debug_assert_eq!(evals.height(), self.size());
+        debug_assert!(log2_strict_usize(num_chunks) <= self.log_n);
         // todo less copy
         (0..num_chunks)
             .map(|i| {
