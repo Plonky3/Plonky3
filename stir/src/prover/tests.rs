@@ -33,10 +33,10 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
     let config = test_bb_stir_config(
         BB_EXT_SEC_LEVEL,
         SecurityAssumption::CapacityBound,
-        20,
+        15,
         2,
         3,
-        4,
+        2,
     );
 
     // ============================== Committing ==============================
@@ -267,20 +267,21 @@ fn test_prove() {
 fn test_prove_final_polynomial() {
     let mut rng = rand::rng();
 
-    let log_starting_degree = 20;
-    let log_folding_factor = 4;
+    let log_starting_degree = 15;
+    let log_inv_rate = 2;
+    let log_folding_factor = 3;
 
     // We use a config that will result in the following polynomials and degree
     // bounds:
-    //  - f_0:      2^20 - 1
-    //  - f_1, g_1: 2^16 - 1
-    //  - f_2, g_2: 2^12 - 1
-    //  - g_3:      2^8 - 1
+    //  - f_0:      2^15 - 1
+    //  - f_1, g_1: 2^12 - 1
+    //  - f_2, g_2: 2^9 - 1
+    //  - g_3:      2^6 - 1
     let config = test_bb_stir_config(
         BB_EXT_SEC_LEVEL,
         SecurityAssumption::CapacityBound,
         log_starting_degree,
-        2,
+        log_inv_rate,
         log_folding_factor,
         3,
     );
@@ -351,7 +352,7 @@ fn test_prove_final_polynomial() {
     // polynomial p = g_3, but sampled from the challenger by the prover)
 
     // log2 of |L_2^{k_2}|
-    let log_final_domain_size = log_initial_codeword_size - 4 - log_folding_factor;
+    let log_final_domain_size = log_initial_codeword_size - 2 - log_folding_factor;
 
     let final_bit_replies = (0..config.final_num_queries())
         .map(|_| rng.random_range(0..usize::MAX))
@@ -412,7 +413,7 @@ fn test_prove_final_polynomial() {
     let f_2 = polynomial.clone();
 
     // Computing the expected final polynomial p = g_3
-    let expected_final_polynomial = fold_polynomial(&f_2, round_r_replies[2], 4);
+    let expected_final_polynomial = fold_polynomial(&f_2, round_r_replies[2], log_folding_factor);
 
     assert_eq!(proof.final_polynomial, expected_final_polynomial);
 }

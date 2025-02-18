@@ -237,9 +237,9 @@ fn test_bb_verify() {
     let config = test_bb_stir_config(
         BB_EXT_SEC_LEVEL,
         SecurityAssumption::CapacityBound,
-        20,
-        2,
-        4,
+        13,
+        1,
+        3,
         3,
     );
     test_bb_verify_with_config(&config);
@@ -252,9 +252,9 @@ fn test_bb_verify_variable_folding_factor() {
     let config = test_bb_stir_config_folding_factors(
         BB_EXT_SEC_LEVEL,
         SecurityAssumption::CapacityBound,
-        20,
-        1,
-        vec![4, 3, 5],
+        12,
+        2,
+        vec![2, 3, 1],
     );
     test_bb_verify_with_config(&config);
 }
@@ -269,9 +269,9 @@ fn test_bb_verify_variable_folding_factor_unconditional() {
     let config = test_bb_stir_config_folding_factors(
         BB_EXT_SEC_LEVEL_LOWER,
         SecurityAssumption::JohnsonBound,
-        16,
+        12,
         1,
-        vec![4, 3, 5],
+        vec![2, 3, 1],
     );
     test_bb_verify_with_config(&config);
 }
@@ -285,10 +285,10 @@ fn test_gl_verify() {
     let config = test_gl_stir_config(
         GL_EXT_SEC_LEVEL,
         SecurityAssumption::JohnsonBound,
-        16,
+        11,
         1,
-        4,
         3,
+        2,
     );
     test_gl_verify_with_config(&config);
 }
@@ -301,9 +301,9 @@ fn test_gl_verify_variable_folding_factor() {
     let config = test_gl_stir_config_folding_factors(
         GL_EXT_SEC_LEVEL,
         SecurityAssumption::JohnsonBound,
-        15,
-        2,
-        vec![2, 3, 2, 1, 2],
+        12,
+        1,
+        vec![1, 3, 1, 2],
     );
     test_gl_verify_with_config(&config);
 }
@@ -312,20 +312,20 @@ fn test_gl_verify_variable_folding_factor() {
 // Check that the warning "The quotient polynomial is zero" is logged correctly
 // (cf. prover.rs or verifier.rs for more details)
 fn test_verify_zero() {
-    tracing_subscriber::fmt::init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     // Since we deliberately use a small polynomial to trigger the cancellation
     // of g_i, we drastically reduce the security level to avoid getting the
     // unrelated warning "The configuration requires the prover to compute a proof
     // of work of more than 25 bits"
-    let security_level = 60;
+    let security_level = 100;
 
     let config = test_bb_stir_config(
         security_level,
-        SecurityAssumption::CapacityBound,
-        8,
-        2,
-        2,
+        SecurityAssumption::JohnsonBound,
+        12,
+        1,
+        4,
         3,
     );
     test_bb_verify_with_config(&config);
@@ -337,9 +337,9 @@ fn test_serialize_deserialize_proof() {
     let config = test_bb_stir_config(
         BB_EXT_SEC_LEVEL,
         SecurityAssumption::CapacityBound,
-        20,
+        10,
+        1,
         2,
-        4,
         3,
     );
     let (proof, commitment) = generate_bb_proof_with_config(&config, &mut test_bb_challenger());
@@ -364,9 +364,9 @@ fn test_verify_failing_cases() {
     let config = test_bb_stir_config(
         BB_EXT_SEC_LEVEL,
         SecurityAssumption::CapacityBound,
-        20,
+        10,
+        1,
         2,
-        4,
         3,
     );
 

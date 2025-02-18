@@ -61,7 +61,11 @@ A full end-to-end example (on a single machine) could look as follows:
 
 ## Tests
 
-Thorough tests have been created of both the low-level, core functionality as well as the end-to-end prover and verifier APIs. Due to the considerable size of the polynomials used, it is recommended to run these in `release` mode:
+Thorough tests have been created of both the low-level, core functionality as well as the end-to-end prover and verifier APIs. The polynomials used for end-to-end tests are only of moderate size (of degree at most 2^15 - 1), unlike the larger ones in the provided benchmark. To execute the tests, run:
+
+```cargo test```
+
+Note that running the tests in release mode is orders of magnitude faster:
 
 ```cargo test --release```
 
@@ -73,7 +77,7 @@ A benchmark is available which checks the performance of `commit`, `prove` and `
 
 ## Features
 
-The crate provides the feature `test-utils`, which exposes convenience methods to create MMCS configurations, challengers and STIR parameters for the two fields mentioned above. For an example of how these can be used, see the prover or verifier tests or the file `benches/stir.rs`.
+The crate is `no_std`. It provides the feature `test-utils`, which exposes convenience methods to create MMCS configurations, challengers and STIR parameters for the two fields mentioned above. For an example of how these can be used, see the prover or verifier tests or the file `benches/stir.rs`.
 
 ## Implementation notes
 
