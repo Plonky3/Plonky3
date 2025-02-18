@@ -123,7 +123,7 @@ fn main() {
 
             match args.merkle_hash {
                 MerkleHashOptions::KeccakF => {
-                    let result = prove_monty31_keccak::<_, EF, _, _>(&proof_goal, dft, num_hashes);
+                    let result = prove_monty31_keccak::<_, EF, _, _>(proof_goal, dft, num_hashes);
                     report_result(result);
                 }
                 MerkleHashOptions::Poseidon2 => {
@@ -176,7 +176,7 @@ fn main() {
 
             match args.merkle_hash {
                 MerkleHashOptions::KeccakF => {
-                    let result = prove_monty31_keccak::<_, EF, _, _>(&proof_goal, dft, num_hashes);
+                    let result = prove_monty31_keccak::<_, EF, _, _>(proof_goal, dft, num_hashes);
                     report_result(result);
                 }
                 MerkleHashOptions::Poseidon2 => {
@@ -228,7 +228,7 @@ fn main() {
 
             match args.merkle_hash {
                 MerkleHashOptions::KeccakF => {
-                    let result = prove_m31_keccak(&proof_goal, num_hashes);
+                    let result = prove_m31_keccak(proof_goal, num_hashes);
                     report_result(result);
                 }
                 MerkleHashOptions::Poseidon2 => {

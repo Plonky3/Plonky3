@@ -65,7 +65,7 @@ pub fn prove_monty31_keccak<
     DFT: TwoAdicSubgroupDft<F>,
     PG: ExampleHashAir<F, KeccakStarkConfig<F, EF, DFT>>,
 >(
-    proof_goal: &PG,
+    proof_goal: PG,
     dft: DFT,
     num_hashes: usize,
 ) -> Result<(), impl Debug>
@@ -86,10 +86,10 @@ where
     let mut proof_challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
     let mut verif_challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
 
-    let proof = prove(&config, proof_goal, &mut proof_challenger, trace, &vec![]);
+    let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
     report_proof_size(&proof);
 
-    verify(&config, proof_goal, &mut verif_challenger, &proof, &vec![])
+    verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
 }
 
 /// Prove the given ProofGoal using the Poseidon2 hash function to build the merkle tree.
@@ -149,7 +149,7 @@ pub fn prove_m31_keccak<
         KeccakCircleStarkConfig<Mersenne31, BinomialExtensionField<Mersenne31, 3>>,
     >,
 >(
-    proof_goal: &PG,
+    proof_goal: PG,
     num_hashes: usize,
 ) -> Result<(), impl Debug> {
     type F = Mersenne31;
@@ -168,10 +168,10 @@ pub fn prove_m31_keccak<
     let mut proof_challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
     let mut verif_challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
 
-    let proof = prove(&config, proof_goal, &mut proof_challenger, trace, &vec![]);
+    let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
     report_proof_size(&proof);
 
-    verify(&config, proof_goal, &mut verif_challenger, &proof, &vec![])
+    verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
 }
 
 /// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.

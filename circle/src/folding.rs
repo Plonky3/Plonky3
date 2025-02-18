@@ -44,12 +44,12 @@ impl<F: ComplexExtendable, EF: ExtensionField<F>, InputProof, InputError: Debug>
     }
 
     fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, m: M) -> Vec<EF> {
-        fold_x(beta, &m)
+        fold_x(beta, m)
     }
 }
 
 fn fold<F: ComplexExtendable, EF: ExtensionField<F>>(
-    evals: &impl Matrix<EF>,
+    evals: impl Matrix<EF>,
     beta: EF,
     twiddles: &[F],
 ) -> Vec<EF> {
@@ -67,7 +67,7 @@ fn fold<F: ComplexExtendable, EF: ExtensionField<F>>(
 
 pub(crate) fn fold_y<F: ComplexExtendable, EF: ExtensionField<F>>(
     beta: EF,
-    evals: &impl Matrix<EF>,
+    evals: impl Matrix<EF>,
 ) -> Vec<EF> {
     assert_eq!(evals.width(), 2);
     let log_n = log2_strict_usize(evals.height()) + 1;
@@ -96,7 +96,7 @@ pub(crate) fn fold_y_row<F: ComplexExtendable, EF: ExtensionField<F>>(
 
 pub(crate) fn fold_x<F: ComplexExtendable, EF: ExtensionField<F>>(
     beta: EF,
-    evals: &impl Matrix<EF>,
+    evals: impl Matrix<EF>,
 ) -> Vec<EF> {
     let log_n = log2_strict_usize(evals.width() * evals.height());
     // +1 because twiddles after the first layer come from the x coordinates of the larger domain.
@@ -147,13 +147,13 @@ mod tests {
         let m = RowMajorMatrix::<EF>::rand(&mut rng(), 1 << log_folded_height, 2);
         let beta: EF = random();
 
-        let mat_y_folded = fold_y::<F, EF>(beta, &m.as_view());
+        let mat_y_folded = fold_y::<F, EF>(beta, m.as_view());
         let row_y_folded = (0..(1 << log_folded_height))
             .map(|i| fold_y_row::<F, EF>(i, log_folded_height, beta, m.row(i)))
             .collect_vec();
         assert_eq!(mat_y_folded, row_y_folded);
 
-        let mat_x_folded = fold_x::<F, EF>(beta, &m.as_view());
+        let mat_x_folded = fold_x::<F, EF>(beta, m.as_view());
         let row_x_folded = (0..(1 << log_folded_height))
             .map(|i| fold_x_row::<F, EF>(i, log_folded_height, beta, m.row(i)))
             .collect_vec();
@@ -178,10 +178,10 @@ mod tests {
             .to_cfft_order()
             .values;
 
-            values = fold_y(random(), &RowMajorMatrix::new(values, 2));
+            values = fold_y(random(), RowMajorMatrix::new(values, 2));
             assert_eq!(vec_dim(&values), values.len() >> log_blowup);
             for _ in 0..(log_n - 1) {
-                values = fold_x(random(), &RowMajorMatrix::new(values, 2));
+                values = fold_x(random(), RowMajorMatrix::new(values, 2));
                 assert_eq!(vec_dim(&values), values.len() >> log_blowup);
             }
         }
