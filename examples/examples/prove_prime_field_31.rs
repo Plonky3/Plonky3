@@ -130,11 +130,7 @@ fn main() {
                     let perm16 = Poseidon2KoalaBear::<16>::new_from_rng_128(&mut rng());
                     let perm24 = Poseidon2KoalaBear::<24>::new_from_rng_128(&mut rng());
                     let result = prove_monty31_poseidon2::<_, EF, _, _, _, _>(
-                        &proof_goal,
-                        dft,
-                        num_hashes,
-                        perm16,
-                        perm24,
+                        proof_goal, dft, num_hashes, perm16, perm24,
                     );
                     report_result(result);
                 }
@@ -183,11 +179,7 @@ fn main() {
                     let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng());
                     let perm24 = Poseidon2BabyBear::<24>::new_from_rng_128(&mut rng());
                     let result = prove_monty31_poseidon2::<_, EF, _, _, _, _>(
-                        &proof_goal,
-                        dft,
-                        num_hashes,
-                        perm16,
-                        perm24,
+                        proof_goal, dft, num_hashes, perm16, perm24,
                     );
                     report_result(result);
                 }

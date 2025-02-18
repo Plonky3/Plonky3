@@ -107,7 +107,7 @@ pub fn prove_monty31_poseidon2<
     Perm24: CryptographicPermutation<[F; 24]> + CryptographicPermutation<[F::Packing; 24]>,
     PG: ExampleHashAir<F, Poseidon2StarkConfig<F, EF, DFT, Perm16, Perm24>>,
 >(
-    proof_goal: &PG,
+    proof_goal: PG,
     dft: DFT,
     num_hashes: usize,
     perm16: Perm16,
@@ -130,10 +130,10 @@ where
     let mut proof_challenger = DuplexChallenger::new(perm24.clone());
     let mut verif_challenger = DuplexChallenger::new(perm24);
 
-    let proof = prove(&config, proof_goal, &mut proof_challenger, trace, &vec![]);
+    let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
     report_proof_size(&proof);
 
-    verify(&config, proof_goal, &mut verif_challenger, &proof, &vec![])
+    verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
 }
 
 /// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.
