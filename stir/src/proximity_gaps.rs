@@ -1,9 +1,8 @@
-use alloc::{format, string::String};
-use core::{
-    f64::consts::LOG2_10,
-    fmt::{Debug, Display},
-    str::FromStr,
-};
+use alloc::format;
+use alloc::string::String;
+use core::f64::consts::LOG2_10;
+use core::fmt::{Debug, Display};
+use core::str::FromStr;
 
 // This module, used to determine proximity gaps in the relevant Reed-Solomon
 // codes based on various security assumptions (and therefore the necessary
