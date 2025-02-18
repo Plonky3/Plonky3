@@ -188,7 +188,7 @@ pub fn prove_m31_poseidon2<
     Perm24: CryptographicPermutation<[F; 24]> + CryptographicPermutation<[F::Packing; 24]>,
     PG: ExampleHashAir<F, Poseidon2CircleStarkConfig<F, EF, Perm16, Perm24>>,
 >(
-    proof_goal: &PG,
+    proof_goal: PG,
     num_hashes: usize,
     perm16: Perm16,
     perm24: Perm24,
@@ -210,10 +210,10 @@ where
     let mut proof_challenger = DuplexChallenger::new(perm24.clone());
     let mut verif_challenger = DuplexChallenger::new(perm24);
 
-    let proof = prove(&config, proof_goal, &mut proof_challenger, trace, &vec![]);
+    let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
     report_proof_size(&proof);
 
-    verify(&config, proof_goal, &mut verif_challenger, &proof, &vec![])
+    verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
 }
 
 /// Report the result of the proof.

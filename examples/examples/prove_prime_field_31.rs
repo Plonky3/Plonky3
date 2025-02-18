@@ -227,10 +227,7 @@ fn main() {
                     let perm16 = Poseidon2Mersenne31::<16>::new_from_rng_128(&mut rng());
                     let perm24 = Poseidon2Mersenne31::<24>::new_from_rng_128(&mut rng());
                     let result = prove_m31_poseidon2::<_, EF, _, _, _>(
-                        &proof_goal,
-                        num_hashes,
-                        perm16,
-                        perm24,
+                        proof_goal, num_hashes, perm16, perm24,
                     );
                     report_result(result);
                 }
