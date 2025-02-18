@@ -6,7 +6,7 @@ use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, FieldAlgebra, PrimeField64};
+use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
 use p3_fri::{create_benchmark_fri_config, create_test_fri_config, HidingFriPcs, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_matrix::dense::RowMajorMatrix;
@@ -17,7 +17,7 @@ use p3_symmetric::{
 };
 use p3_uni_stark::{prove, verify, StarkConfig};
 use rand::rngs::{StdRng, ThreadRng};
-use rand::{thread_rng, SeedableRng};
+use rand::{rng, SeedableRng};
 
 /// For testing the public values feature
 pub struct FibonacciAir {}
@@ -69,7 +69,7 @@ pub fn generate_trace_rows<F: PrimeField64>(a: u64, b: u64, n: usize) -> RowMajo
     assert!(suffix.is_empty(), "Alignment should match");
     assert_eq!(rows.len(), n);
 
-    rows[0] = FibonacciRow::new(F::from_canonical_u64(a), F::from_canonical_u64(b));
+    rows[0] = FibonacciRow::new(F::from_u64(a), F::from_u64(b));
 
     for i in 1..n {
         rows[i].left = rows[i - 1].right;
@@ -118,7 +118,7 @@ type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
 
 /// n-th Fibonacci number expected to be x
 fn test_public_value_impl(n: usize, x: u64) {
-    let perm = Perm::new_from_rng_128(&mut thread_rng());
+    let perm = Perm::new_from_rng_128(&mut rng());
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
     let val_mmcs = ValMmcs::new(hash, compress);
@@ -129,11 +129,7 @@ fn test_public_value_impl(n: usize, x: u64) {
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
     let config = MyConfig::new(pcs);
     let mut challenger = Challenger::new(perm.clone());
-    let pis = vec![
-        BabyBear::from_canonical_u64(0),
-        BabyBear::from_canonical_u64(1),
-        BabyBear::from_canonical_u64(x),
-    ];
+    let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(x)];
     let proof = prove(&config, &FibonacciAir {}, &mut challenger, trace, &pis);
     let mut challenger = Challenger::new(perm);
     verify(&config, &FibonacciAir {}, &mut challenger, &proof, &pis).expect("verification failed");
@@ -141,9 +137,6 @@ fn test_public_value_impl(n: usize, x: u64) {
 
 #[test]
 fn test_zk() {
-    type Val = BabyBear;
-    type Challenge = BinomialExtensionField<Val, 4>;
-
     type ByteHash = Keccak256Hash;
     let byte_hash = ByteHash {};
 
@@ -165,7 +158,7 @@ fn test_zk() {
         4,
         4,
     >;
-    let val_mmcs = ValHidingMmcs::new(field_hash, compress, thread_rng());
+    let val_mmcs = ValHidingMmcs::new(field_hash, compress, rng());
 
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
@@ -180,14 +173,10 @@ fn test_zk() {
     let fri_config = create_benchmark_fri_config(challenge_mmcs);
     type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, StdRng>;
     type MyHidingConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
-    let pcs = HidingPcs::new(dft, val_mmcs, fri_config, 4, StdRng::from_entropy());
+    let pcs = HidingPcs::new(dft, val_mmcs, fri_config, 4, StdRng::from_os_rng());
     let config = MyHidingConfig::new(pcs);
     let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-    let pis = vec![
-        BabyBear::from_canonical_u64(0),
-        BabyBear::from_canonical_u64(1),
-        BabyBear::from_canonical_u64(x),
-    ];
+    let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(x)];
     let proof = prove(&config, &FibonacciAir {}, &mut challenger, trace, &pis);
     let mut challenger = Challenger::from_hasher(vec![], byte_hash);
     verify(&config, &FibonacciAir {}, &mut challenger, &proof, &pis).expect("verification failed");
@@ -207,7 +196,7 @@ fn test_public_value() {
 #[test]
 #[should_panic(expected = "assertion `left == right` failed: constraints had nonzero value")]
 fn test_incorrect_public_value() {
-    let perm = Perm::new_from_rng_128(&mut thread_rng());
+    let perm = Perm::new_from_rng_128(&mut rng());
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
     let val_mmcs = ValMmcs::new(hash, compress);
@@ -219,9 +208,9 @@ fn test_incorrect_public_value() {
     let config = MyConfig::new(pcs);
     let mut challenger = Challenger::new(perm.clone());
     let pis = vec![
-        BabyBear::from_canonical_u64(0),
-        BabyBear::from_canonical_u64(1),
-        BabyBear::from_canonical_u64(123_123), // incorrect result
+        BabyBear::ZERO,
+        BabyBear::ONE,
+        BabyBear::from_u32(123_123), // incorrect result
     ];
     prove(&config, &FibonacciAir {}, &mut challenger, trace, &pis);
 }

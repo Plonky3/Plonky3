@@ -14,7 +14,7 @@ use p3_poseidon2::{
 use crate::{
     add, apply_func_to_even_odd, halve_avx2, packed_exp_3, packed_exp_5, packed_exp_7,
     signed_add_avx2, sub, FieldParameters, InternalLayerBaseParameters, MontyField31,
-    MontyParameters, PackedMontyField31AVX2, PackedMontyParameters,
+    MontyParameters, PackedMontyField31AVX2, PackedMontyParameters, RelativelyPrimePower,
 };
 
 // In the internal layers, it is valuable to treat the first entry of the state differently
@@ -120,8 +120,7 @@ pub struct Poseidon2InternalLayerMonty31<
 }
 
 impl<FP: FieldParameters, const WIDTH: usize, ILP: InternalLayerParametersAVX2<FP, WIDTH>>
-    InternalLayerConstructor<PackedMontyField31AVX2<FP>>
-    for Poseidon2InternalLayerMonty31<FP, WIDTH, ILP>
+    InternalLayerConstructor<MontyField31<FP>> for Poseidon2InternalLayerMonty31<FP, WIDTH, ILP>
 {
     /// Construct an instance of Poseidon2InternalLayerMersenne31AVX2 from a vector containing
     /// the constants for each round. Internally, the constants are transformed into the
@@ -151,8 +150,7 @@ pub struct Poseidon2ExternalLayerMonty31<PMP: PackedMontyParameters, const WIDTH
     packed_terminal_external_constants: Vec<[__m256i; WIDTH]>,
 }
 
-impl<FP: FieldParameters, const WIDTH: usize>
-    ExternalLayerConstructor<PackedMontyField31AVX2<FP>, WIDTH>
+impl<FP: FieldParameters, const WIDTH: usize> ExternalLayerConstructor<MontyField31<FP>, WIDTH>
     for Poseidon2ExternalLayerMonty31<FP, WIDTH>
 {
     /// Construct an instance of Poseidon2ExternalLayerMersenne31AVX2 from a array of
@@ -390,7 +388,7 @@ where
 impl<FP, ILP, const D: u64> InternalLayer<PackedMontyField31AVX2<FP>, 24, D>
     for Poseidon2InternalLayerMonty31<FP, 24, ILP>
 where
-    FP: FieldParameters,
+    FP: FieldParameters + RelativelyPrimePower<D>,
     ILP: InternalLayerParametersAVX2<FP, 24, ArrayLike = [__m256i; 23]>
         + InternalLayerBaseParameters<FP, 24>,
 {
@@ -441,7 +439,7 @@ where
 impl<FP, const D: u64, const WIDTH: usize> ExternalLayer<PackedMontyField31AVX2<FP>, WIDTH, D>
     for Poseidon2ExternalLayerMonty31<FP, WIDTH>
 where
-    FP: FieldParameters,
+    FP: FieldParameters + RelativelyPrimePower<D>,
 {
     /// Perform the initial external layers of the Poseidon2 permutation on the given state.
     fn permute_state_initial(&self, state: &mut [PackedMontyField31AVX2<FP>; WIDTH]) {

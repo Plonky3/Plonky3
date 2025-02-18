@@ -10,7 +10,7 @@ use p3_commit::testing::TrivialPcs;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, FieldAlgebra};
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_fri::{create_benchmark_fri_config_zk, FriConfig, HidingFriPcs, TwoAdicFriPcs};
 use p3_keccak::Keccak256Hash;
 use p3_matrix::dense::RowMajorMatrix;
@@ -21,12 +21,12 @@ use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32, TruncatedPermutation,
 };
 use p3_uni_stark::{prove, verify, StarkConfig, StarkGenericConfig, Val};
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::{StdRng, ThreadRng};
-use rand::{thread_rng, Rng, SeedableRng};
+use rand::{rng, Rng, SeedableRng};
 
 /// How many `a * b = c` operations to do per row in the AIR.
-const REPETITIONS: usize = 20;
+const REPETITIONS: usize = 20; // This should be < 255 so it can fit into a u8.
 const TRACE_WIDTH: usize = REPETITIONS * 3;
 
 /*
@@ -55,22 +55,21 @@ impl Default for MulAir {
 impl MulAir {
     pub fn random_valid_trace<F: Field>(&self, rows: usize, valid: bool) -> RowMajorMatrix<F>
     where
-        Standard: Distribution<F>,
+        StandardUniform: Distribution<F>,
     {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let mut trace_values = F::zero_vec(rows * TRACE_WIDTH);
         for (i, (a, b, c)) in trace_values.iter_mut().tuples().enumerate() {
             let row = i / REPETITIONS;
-
             *a = if self.uses_transition_constraints {
-                F::from_canonical_usize(i)
+                F::from_usize(i)
             } else {
-                rng.gen()
+                rng.random()
             };
             *b = if self.uses_boundary_constraints && row == 0 {
                 a.square() + F::ONE
             } else {
-                rng.gen()
+                rng.random()
             };
             *c = a.exp_u64(self.degree - 1) * *b;
 
@@ -108,7 +107,7 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
                 let next_a = main_next[start];
                 builder
                     .when_transition()
-                    .assert_eq(a + AB::Expr::from_canonical_usize(REPETITIONS), next_a);
+                    .assert_eq(a + AB::Expr::from_u8(REPETITIONS as u8), next_a);
             }
         }
     }
@@ -122,7 +121,7 @@ fn do_test<SC: StarkGenericConfig>(
 ) -> Result<(), impl Debug>
 where
     SC::Challenger: Clone,
-    Standard: Distribution<Val<SC>>,
+    StandardUniform: Distribution<Val<SC>>,
 {
     let trace = air.random_valid_trace(log_height, true);
 
@@ -150,7 +149,7 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), impl Debug> {
     type Challenge = BinomialExtensionField<Val, 4>;
 
     type Perm = Poseidon2BabyBear<16>;
-    let perm = Perm::new_from_rng_128(&mut thread_rng());
+    let perm = Perm::new_from_rng_128(&mut rng());
 
     type Dft = Radix2DitParallel<Val>;
     let dft = Dft::default();
@@ -195,7 +194,7 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     type Challenge = BinomialExtensionField<Val, 4>;
 
     type Perm = Poseidon2BabyBear<16>;
-    let perm = Perm::new_from_rng_128(&mut thread_rng());
+    let perm = Perm::new_from_rng_128(&mut rng());
 
     type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
     let hash = MyHash::new(perm.clone());
@@ -247,7 +246,7 @@ fn prove_bb_twoadic_deg2_zk() -> Result<(), impl Debug> {
     type Challenge = BinomialExtensionField<Val, 4>;
 
     type Perm = Poseidon2BabyBear<16>;
-    let perm = Perm::new_from_rng_128(&mut thread_rng());
+    let perm = Perm::new_from_rng_128(&mut rng());
 
     type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
     let hash = MyHash::new(perm.clone());
@@ -265,7 +264,7 @@ fn prove_bb_twoadic_deg2_zk() -> Result<(), impl Debug> {
         4,
     >;
 
-    let val_mmcs = ValMmcs::new(hash, compress, thread_rng());
+    let val_mmcs = ValMmcs::new(hash, compress, rng());
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
@@ -277,7 +276,7 @@ fn prove_bb_twoadic_deg2_zk() -> Result<(), impl Debug> {
 
     let fri_config = create_benchmark_fri_config_zk(challenge_mmcs);
     type HidingPcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, StdRng>;
-    let pcs = HidingPcs::new(dft, val_mmcs, fri_config, 4, StdRng::from_entropy());
+    let pcs = HidingPcs::new(dft, val_mmcs, fri_config, 4, StdRng::from_os_rng());
     type MyConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs);
 

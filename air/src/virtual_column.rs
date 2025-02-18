@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Mul;
 
-use p3_field::{Field, FieldAlgebra};
+use p3_field::{Field, PrimeCharacteristicRing};
 
 /// An affine function over columns in a PAIR.
 #[derive(Clone, Debug)]
@@ -110,7 +110,7 @@ impl<F: Field> VirtualPairCol<F> {
     pub fn apply<Expr, Var>(&self, preprocessed: &[Var], main: &[Var]) -> Expr
     where
         F: Into<Expr>,
-        Expr: FieldAlgebra + Mul<F, Output = Expr>,
+        Expr: PrimeCharacteristicRing + Mul<F, Output = Expr>,
         Var: Into<Expr> + Copy,
     {
         let mut result = self.constant.into();

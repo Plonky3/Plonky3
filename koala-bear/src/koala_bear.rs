@@ -1,7 +1,8 @@
-use p3_field::{exp_1420470955, exp_u64_by_squaring, Field, FieldAlgebra};
+use p3_field::exponentiation::exp_1420470955;
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_monty_31::{
     BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
-    PackedMontyParameters, TwoAdicData,
+    PackedMontyParameters, RelativelyPrimePower, TwoAdicData,
 };
 
 /// The prime field `2^31 - 2^24 + 1`, a.k.a. the Koala Bear field.
@@ -29,13 +30,6 @@ impl BarrettParameters for KoalaBearParameters {}
 impl FieldParameters for KoalaBearParameters {
     const MONTY_GEN: KoalaBear = KoalaBear::new(3);
 
-    fn exp_u64_generic<FA: FieldAlgebra>(val: FA, power: u64) -> FA {
-        match power {
-            1420470955 => exp_1420470955(val), // used to compute x^{1/7}
-            _ => exp_u64_by_squaring(val, power),
-        }
-    }
-
     fn try_inverse<F: Field>(p1: F) -> Option<F> {
         if p1.is_zero() {
             return None;
@@ -60,6 +54,15 @@ impl FieldParameters for KoalaBearParameters {
         let p1111110111111111111111111111111 = p1111110111111111111110000000000 * p1111111111;
 
         Some(p1111110111111111111111111111111)
+    }
+}
+
+impl RelativelyPrimePower<3> for KoalaBearParameters {
+    /// In the field `KoalaBear`, `a^{1/3}` is equal to a^{1420470955}.
+    ///
+    /// This follows from the calculation `3 * 1420470955 = 2*(2^31 - 2^24) + 1 = 1 mod (p - 1)`.
+    fn exp_root_d<R: PrimeCharacteristicRing>(val: R) -> R {
+        exp_1420470955(val)
     }
 }
 
@@ -102,8 +105,11 @@ impl BinomialExtensionData<4> for KoalaBearParameters {
 
 #[cfg(test)]
 mod tests {
-    use p3_field::{PrimeField32, PrimeField64, TwoAdicField};
-    use p3_field_testing::{test_field, test_field_dft, test_two_adic_field};
+    use p3_field::{InjectiveMonomial, PermutationMonomial, PrimeField64, TwoAdicField};
+    use p3_field_testing::{
+        test_field, test_field_dft, test_prime_field, test_prime_field_32, test_prime_field_64,
+        test_two_adic_field,
+    };
 
     use super::*;
 
@@ -111,7 +117,7 @@ mod tests {
 
     #[test]
     fn test_koala_bear_two_adicity_generators() {
-        let base = KoalaBear::from_canonical_u32(0x6ac49f88);
+        let base = KoalaBear::from_u32(0x6ac49f88);
         for bits in 0..=KoalaBear::TWO_ADICITY {
             assert_eq!(
                 KoalaBear::two_adic_generator(bits),
@@ -122,56 +128,21 @@ mod tests {
 
     #[test]
     fn test_koala_bear() {
-        let f = F::from_canonical_u32(100);
+        let f = F::from_u32(100);
         assert_eq!(f.as_canonical_u64(), 100);
 
-        let f = F::from_canonical_u32(0);
-        assert!(f.is_zero());
-
-        let f = F::from_wrapped_u32(F::ORDER_U32);
-        assert!(f.is_zero());
-
         let f_1 = F::ONE;
-        let f_1_copy = F::from_canonical_u32(1);
-
-        let expected_result = F::ZERO;
-        assert_eq!(f_1 - f_1_copy, expected_result);
-
-        let expected_result = F::TWO;
-        assert_eq!(f_1 + f_1_copy, expected_result);
-
-        let f_2 = F::from_canonical_u32(2);
-        let expected_result = F::from_canonical_u32(3);
-        assert_eq!(f_1 + f_1_copy * f_2, expected_result);
-
-        let expected_result = F::from_canonical_u32(5);
-        assert_eq!(f_1 + f_2 * f_2, expected_result);
-
-        let f_p_minus_1 = F::from_canonical_u32(F::ORDER_U32 - 1);
-        let expected_result = F::ZERO;
-        assert_eq!(f_1 + f_p_minus_1, expected_result);
-
-        let f_p_minus_2 = F::from_canonical_u32(F::ORDER_U32 - 2);
-        let expected_result = F::from_canonical_u32(F::ORDER_U32 - 3);
-        assert_eq!(f_p_minus_1 + f_p_minus_2, expected_result);
-
-        let expected_result = F::from_canonical_u32(1);
-        assert_eq!(f_p_minus_1 - f_p_minus_2, expected_result);
-
-        let expected_result = f_p_minus_1;
-        assert_eq!(f_p_minus_2 - f_p_minus_1, expected_result);
-
-        let expected_result = f_p_minus_2;
-        assert_eq!(f_p_minus_1 - f_1, expected_result);
-
-        let m1 = F::from_canonical_u32(0x34167c58);
-        let m2 = F::from_canonical_u32(0x61f3207b);
-        let expected_prod = F::from_canonical_u32(0x54b46b81);
+        let f_2 = F::TWO;
+        let f_p_minus_1 = F::NEG_ONE;
+        let f_p_minus_2 = F::NEG_ONE + F::NEG_ONE;
+        let m1 = F::from_u32(0x34167c58);
+        let m2 = F::from_u32(0x61f3207b);
+        let expected_prod = F::from_u32(0x54b46b81);
         assert_eq!(m1 * m2, expected_prod);
 
-        assert_eq!(m1.exp_u64(1420470955).exp_const_u64::<3>(), m1);
-        assert_eq!(m2.exp_u64(1420470955).exp_const_u64::<3>(), m2);
-        assert_eq!(f_2.exp_u64(1420470955).exp_const_u64::<3>(), f_2);
+        assert_eq!(m1.injective_exp_n().injective_exp_root_n(), m1);
+        assert_eq!(m2.injective_exp_n().injective_exp_root_n(), m2);
+        assert_eq!(f_2.injective_exp_n().injective_exp_root_n(), f_2);
 
         let f_serialized = serde_json::to_string(&f).unwrap();
         let f_deserialized: F = serde_json::from_str(&f_serialized).unwrap();
@@ -220,4 +191,7 @@ mod tests {
         crate::KoalaBear,
         p3_monty_31::dft::RecursiveDft<_>
     );
+    test_prime_field!(crate::KoalaBear);
+    test_prime_field_64!(crate::KoalaBear);
+    test_prime_field_32!(crate::KoalaBear);
 }

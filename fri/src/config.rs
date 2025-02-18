@@ -28,7 +28,7 @@ impl<M> FriConfig<M> {
     ///
     /// Certain users may instead want to look at proven soundness, a more complex calculation which
     /// isn't currently supported by this crate.
-    pub fn conjectured_soundness_bits(&self) -> usize {
+    pub const fn conjectured_soundness_bits(&self) -> usize {
         self.log_blowup * self.num_queries + self.proof_of_work_bits
     }
 }
@@ -60,7 +60,7 @@ pub trait FriGenericConfig<F: Field> {
 
 /// Creates a minimal `FriConfig` for testing purposes.
 /// This configuration is designed to reduce computational cost during tests.
-pub fn create_test_fri_config<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
+pub const fn create_test_fri_config<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
     FriConfig {
         log_blowup: 1,
         log_final_poly_len: 0,
@@ -72,7 +72,7 @@ pub fn create_test_fri_config<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
 
 /// Creates a `FriConfig` suitable for benchmarking.
 /// This configuration represents typical settings used in production-like scenarios.
-pub fn create_benchmark_fri_config<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
+pub const fn create_benchmark_fri_config<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
     FriConfig {
         log_blowup: 1,
         log_final_poly_len: 0,

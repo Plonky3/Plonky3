@@ -10,8 +10,8 @@ use p3_fri::{create_benchmark_fri_config, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHasher32To64};
-use p3_uni_stark::{prove, verify, StarkConfig};
-use rand::distributions::Standard;
+use p3_uni_stark::{prove, verify, Proof, StarkConfig, StarkGenericConfig};
+use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 
 use crate::airs::ExampleHashAir;
@@ -70,7 +70,7 @@ pub fn prove_monty31_keccak<
     num_hashes: usize,
 ) -> Result<(), impl Debug>
 where
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
     let val_mmcs = get_keccak_mmcs();
 
@@ -87,6 +87,8 @@ where
     let mut verif_challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
 
     let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
+    report_proof_size(&proof);
+
     verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
 }
 
@@ -112,7 +114,7 @@ pub fn prove_monty31_poseidon2<
     perm24: Perm24,
 ) -> Result<(), impl Debug>
 where
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
     let val_mmcs = get_poseidon2_mmcs::<F, _, _>(perm16, perm24.clone());
 
@@ -129,6 +131,8 @@ where
     let mut verif_challenger = DuplexChallenger::new(perm24.clone());
 
     let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
+    report_proof_size(&proof);
+
     verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
 }
 
@@ -165,6 +169,8 @@ pub fn prove_m31_keccak<
     let mut verif_challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
 
     let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
+    report_proof_size(&proof);
+
     verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
 }
 
@@ -188,7 +194,7 @@ pub fn prove_m31_poseidon2<
     perm24: Perm24,
 ) -> Result<(), impl Debug>
 where
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
     let val_mmcs = get_poseidon2_mmcs::<F, _, _>(perm16, perm24.clone());
 
@@ -205,6 +211,8 @@ where
     let mut verif_challenger = DuplexChallenger::new(perm24.clone());
 
     let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
+    report_proof_size(&proof);
+
     verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
 }
 
@@ -218,4 +226,17 @@ pub fn report_result(result: Result<(), impl Debug>) {
     } else {
         println!("Proof Verified Successfully")
     }
+}
+
+/// Report the size of the serialized proof.
+///
+/// Serializes the given proof instance using bincode and prints the size in bytes.
+/// Panics if serialization fails.
+#[inline]
+pub fn report_proof_size<SC>(proof: &Proof<SC>)
+where
+    SC: StarkGenericConfig,
+{
+    let proof_bytes = bincode::serialize(proof).expect("Failed to serialize proof");
+    println!("Proof size: {} bytes", proof_bytes.len());
 }

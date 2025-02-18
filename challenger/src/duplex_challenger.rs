@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::{ExtensionField, Field, PrimeField64};
+use p3_field::{BasedVectorSpace, Field, PrimeField64};
 use p3_symmetric::{CryptographicPermutation, Hash};
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
@@ -123,11 +123,11 @@ impl<F, EF, P, const WIDTH: usize, const RATE: usize> CanSample<EF>
     for DuplexChallenger<F, P, WIDTH, RATE>
 where
     F: Field,
-    EF: ExtensionField<F>,
+    EF: BasedVectorSpace<F>,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
     fn sample(&mut self) -> EF {
-        EF::from_base_fn(|_| {
+        EF::from_basis_coefficients_fn(|_| {
             // If we have buffered inputs, we must perform a duplexing so that the challenge will
             // reflect them. Or if we've run out of outputs, we must perform a duplexing to get more.
             if !self.input_buffer.is_empty() || self.output_buffer.is_empty() {
@@ -161,7 +161,7 @@ mod tests {
     use core::iter;
 
     use p3_baby_bear::BabyBear;
-    use p3_field::FieldAlgebra;
+    use p3_field::PrimeCharacteristicRing;
     use p3_goldilocks::Goldilocks;
     use p3_symmetric::Permutation;
 
@@ -192,11 +192,11 @@ mod tests {
         let mut duplex_challenger = DuplexChallenger::new(permutation);
 
         // Observe 12 elements.
-        (0..12).for_each(|element| duplex_challenger.observe(G::from_canonical_u8(element as u8)));
+        (0..12).for_each(|element| duplex_challenger.observe(G::from_u8(element as u8)));
 
         let state_after_duplexing: Vec<_> = iter::repeat(G::ZERO)
             .take(12)
-            .chain((0..12).map(G::from_canonical_u8).rev())
+            .chain((0..12).map(G::from_u8).rev())
             .collect();
 
         let expected_samples: Vec<G> = state_after_duplexing[..16].iter().copied().rev().collect();
