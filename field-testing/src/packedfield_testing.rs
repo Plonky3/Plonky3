@@ -65,8 +65,14 @@ where
     assert_eq!(
         res1.as_slice(),
         &out1,
-        "Error in left output when testing interleave {}.",
-        i
+        "Error in left output when testing interleave {}. Data is: \n {:?} \n {:?} \n {:?} \n {:?} \n {:?} \n {:?}.",
+        i,
+        arr1,
+        arr2,
+        res1,
+        res2,
+        out1,
+        out2,
     );
     assert_eq!(
         res2.as_slice(),

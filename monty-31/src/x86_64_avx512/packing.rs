@@ -775,7 +775,7 @@ impl<PMP: PackedMontyParameters> Distribution<PackedMontyField31AVX512<PMP>> for
 fn interleave1_antidiagonal(x: __m512i, y: __m512i) -> __m512i {
     unsafe {
         // Safety: If this code got compiled then AVX-512VBMI2 intrinsics are available.
-        x86_64::_mm512_shrdi_epi64::<32>(y, x)
+        x86_64::_mm512_shrdi_epi64::<32>(x, y)
     }
 }
 
