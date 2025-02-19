@@ -394,65 +394,66 @@ fn mul<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
     }
 }
 
-// /// Compute the elementary arithmetic generalization of `xor`, namely `xor(l, r) = l + r - 2lr` of
-// /// vectors in canonical form.
-// ///
-// /// Inputs are assumed to be in canonical form, if the inputs are not in canonical form, the result is undefined.
-// #[inline]
-// #[must_use]
-// fn xor<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
-//     /*
-//         We refactor the expression as r + 2l(1/2 - r).
-//         As we are working with MONTY_CONSTANT = 2^32, the internal representation
-//         of 1/2 is 2^31 mod P. Hence let us compute 2l(2^31 - r). As, 0 < l, r < P < 2^31
-//         we find that 2l(2^31 - r) < 2^32P so we can apply our monty reduction to this product.
+/// Compute the elementary arithmetic generalization of `xor`, namely `xor(l, r) = l + r - 2lr` of
+/// vectors in canonical form.
+///
+/// Inputs are assumed to be in canonical form, if the inputs are not in canonical form, the result is undefined.
+#[inline]
+#[must_use]
+fn xor<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
+    /*
+        We refactor the expression as r + 2l(1/2 - r).
+        As we are working with MONTY_CONSTANT = 2^32, the internal representation
+        of 1/2 is 2^31 mod P. Hence let us compute 2l(2^31 - r). As, 0 < l, r < P < 2^31
+        we find that 2l(2^31 - r) < 2^32P so we can apply our monty reduction to this product.
 
-//         Moreover, as 2l, 2^31 - r are both < 2^32 we can compute these before we
-//         split into even and odd parts for the multiplication.
+        Moreover, as 2l, 2^31 - r are both < 2^32 we can compute these before we
+        split into even and odd parts for the multiplication.
 
-//         All together we save 5 instructions (~25%) over the naive implementation.
+        All together we save 4 instructions (~25%) over the naive implementation.
 
-//         We want this to compile to:
-//             vpaddd     lhs_double, lhs, lhs
-//             vpsubd     sub_rhs, rhs, (1 << 31)
-//             vmovshdup  lhs_odd, lhs_double
-//             vmovshdup  rhs_odd, sub_rhs
-//             vpmuludq   prod_evn, lhs_double, sub_rhs
-//             vpmuludq   prod_odd, lhs_odd, rhs_odd
-//             vpmuludq   q_evn, prod_evn, MU
-//             vpmuludq   q_odd, prod_odd, MU
-//             vpmuludq   q_P_evn, q_evn, P
-//             vpmuludq   q_P_odd, q_odd, P
-//             vpsubq     d_evn, prod_evn, q_P_evn
-//             vpsubq     d_odd, prod_odd, q_P_odd
-//             vmovshdup  d_evn_hi, d_evn
-//             vpblendd   t, d_evn_hi, d_odd, aah
-//             vpsignd    pos_neg_P,  P,     t
-//             vpaddd     sum,        rhs,   t
-//             vpsubd     sum_corr,   sum,   pos_neg_P
-//             vpminud    res,        sum,   sum_corr
-//         throughput: 6 cyc/vec (1.33 els/cyc)
-//         latency: 22 cyc
-//     */
-//     unsafe {
-//         // 0 <= 2*lhs < 2P
-//         let double_lhs = x86_64::_mm256_add_epi32(lhs, lhs);
+        We want this to compile to:
+            vpaddd     lhs_double, lhs, lhs
+            vpsubd     sub_rhs, rhs, (1 << 31)
+            vmovshdup  lhs_odd, lhs_double
+            vmovshdup  rhs_odd, sub_rhs
+            vpmuludq   prod_evn, lhs_double, sub_rhs
+            vpmuludq   prod_hi, lhs_odd, rhs_odd
+            vpmuludq   q_evn, prod_evn, MU
+            vpmuludq   q_odd, prod_hi, MU
+            vmovshdup  prod_hi{EVENS}, prod_evn
+            vpmuludq   q_p_evn, q_evn, P
+            vpmuludq   q_p_hi, q_odd, P
+            vmovshdup  q_p_hi{EVENS}, q_p_evn
+            vpcmpltud  underflow, prod_hi, q_p_hi
+            vpsubd     res, prod_hi, q_p_hi
+            vpaddd     res{underflow}, res, P
+            vpaddd     sum,        rhs,   t
+            vpsubd     sum_corr,   sum,   pos_neg_P
+            vpminud    res,        sum,   sum_corr
+        throughput: 9 cyc/vec (1.77 els/cyc)
+        latency: 25 cyc
+    */
+    unsafe {
+        // 0 <= 2*lhs < 2P
+        let double_lhs = x86_64::_mm512_add_epi32(lhs, lhs);
 
-//         // Note that 2^31 is represented as an i_32 as (-2^31).
-//         // Compiler should realise this is a constant.
-//         let half = x86_64::_mm256_set1_epi32(-1 << 31);
+        // Note that 2^31 is represented as an i_32 as (-2^31).
+        // Compiler should realise this is a constant.
+        let half = x86_64::_mm512_set1_epi32(-1 << 31);
 
-//         // 0 < 2^31 - rhs < 2^31
-//         let half_sub_rhs = x86_64::_mm256_sub_epi32(half, rhs);
+        // 0 < 2^31 - rhs < 2^31
+        let half_sub_rhs = x86_64::_mm512_sub_epi32(half, rhs);
 
-//         // 2*lhs (2^31 - rhs) < 2P 2^31 < 2^32P so we can use the multiplication function.
-//         let mul_res = mul::<MPAVX2>(double_lhs, half_sub_rhs);
+        // 2*lhs (2^31 - rhs) < 2P 2^31 < 2^32P so we can use the multiplication function.
+        let mul_res = mul::<MPAVX512>(double_lhs, half_sub_rhs);
 
-//         // As -P < mul_res < P and 0 <= rhs < P, we can use signed add
-//         // which saves an instruction over reducing mul_res and adding in the usual way.
-//         signed_add_avx2::<MPAVX2>(rhs, mul_res)
-//     }
-// }
+        // Unfortunately, AVX512 has no equivalent of vpsignd so we can't do the same 
+        // signed_add trick as in the AVX2 case. Instead we get a reduced value from mul
+        // and add on rhs in the standard way.
+        add::<MPAVX512>(rhs, mul_res)
+    }
+}
 
 /// Compute the elementary arithmetic generalization of `andnot`, namely `andn(l, r) = (1 - l)r` of
 /// vectors in canonical form.
@@ -473,19 +474,18 @@ fn andn<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i 
             vmovshdup  lhs_odd, neg_lhs
             vmovshdup  rhs_odd, rhs
             vpmuludq   prod_evn, neg_lhs, rhs
-            vpmuludq   prod_odd, lhs_odd, rhs_odd
+            vpmuludq   prod_hi, lhs_odd, rhs_odd
             vpmuludq   q_evn, prod_evn, MU
-            vpmuludq   q_odd, prod_odd, MU
-            vpmuludq   q_P_evn, q_evn, P
-            vpmuludq   q_P_odd, q_odd, P
-            vpsubq     d_evn, prod_evn, q_P_evn
-            vpsubq     d_odd, prod_odd, q_P_odd
-            vmovshdup  d_evn_hi, d_evn
-            vpblendd   t, d_evn_hi, d_odd, aah
-            vpaddd     corr, t, P
-            vpminud    res, t, corr
-        throughput: 5 cyc/vec (1.6 els/cyc)
-        latency: 20 cyc
+            vpmuludq   q_odd, prod_hi, MU
+            vmovshdup  prod_hi{EVENS}, prod_evn
+            vpmuludq   q_p_evn, q_evn, P
+            vpmuludq   q_p_hi, q_odd, P
+            vmovshdup  q_p_hi{EVENS}, q_p_evn
+            vpcmpltud  underflow, prod_hi, q_p_hi
+            vpsubd     res, prod_hi, q_p_hi
+            vpaddd     res{underflow}, res, P
+        throughput: 7 cyc/vec (2.3 els/cyc)
+        latency: 22 cyc
     */
     unsafe {
         // We use 2^32 - P instead of 2^32 to avoid having to worry about 0's in lhs.
@@ -722,16 +722,16 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX512<F
         }
     }
 
-    // #[inline]
-    // fn xor(&self, rhs: &Self) -> Self {
-    //     let lhs = self.to_vector();
-    //     let rhs = rhs.to_vector();
-    //     let res = xor::<FP>(lhs, rhs);
-    //     unsafe {
-    //         // Safety: `xor` returns values in canonical form when given values in canonical form.
-    //         Self::from_vector(res)
-    //     }
-    // }
+    #[inline]
+    fn xor(&self, rhs: &Self) -> Self {
+        let lhs = self.to_vector();
+        let rhs = rhs.to_vector();
+        let res = xor::<FP>(lhs, rhs);
+        unsafe {
+            // Safety: `xor` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
+    }
 
     #[inline]
     fn andn(&self, rhs: &Self) -> Self {
@@ -739,7 +739,7 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX512<F
         let rhs = rhs.to_vector();
         let res = andn::<FP>(lhs, rhs);
         unsafe {
-            // Safety: `xor` returns values in canonical form when given values in canonical form.
+            // Safety: `andn` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }

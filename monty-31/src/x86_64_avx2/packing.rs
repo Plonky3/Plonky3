@@ -638,7 +638,7 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX2<FP>
         let rhs = rhs.to_vector();
         let res = andn::<FP>(lhs, rhs);
         unsafe {
-            // Safety: `xor` returns values in canonical form when given values in canonical form.
+            // Safety: `andn` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
