@@ -13,10 +13,22 @@ pub struct VirtualPairCol<F: Field> {
 }
 
 /// A column in a PAIR, i.e. either a preprocessed column or a main trace column.
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PairCol {
     Preprocessed(usize),
     Main(usize),
+}
+
+impl PartialOrd for PairCol {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PairCol {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.cmp(other)
+    }
 }
 
 impl PairCol {
@@ -24,6 +36,14 @@ impl PairCol {
         match self {
             PairCol::Preprocessed(i) => preprocessed[*i],
             PairCol::Main(i) => main[*i],
+        }
+    }
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        match (self, other) {
+            (PairCol::Preprocessed(a), PairCol::Preprocessed(b)) => a.cmp(b),
+            (PairCol::Preprocessed(_), PairCol::Main(_)) => core::cmp::Ordering::Less,
+            (PairCol::Main(_), PairCol::Preprocessed(_)) => core::cmp::Ordering::Greater,
+            (PairCol::Main(a), PairCol::Main(b)) => a.cmp(b),
         }
     }
 }
