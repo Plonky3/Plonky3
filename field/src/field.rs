@@ -152,6 +152,25 @@ pub trait PrimeCharacteristicRing:
         self.square() * self.clone()
     }
 
+    /// The arithmetic generalization of `xor`, namely `xor(x, y) = x + y - 2xy`
+    fn xor(&self, y: &Self) -> Self {
+        self.clone() + y.clone() - self.clone() * y.clone().double()
+    }
+
+    /// The arithmetic generalization of a three way `xor`.
+    ///
+    /// `xor3(x, y, z) = x + y + z - (xy + xz + yz) + 4xyz`
+    fn xor3(&self, y: &Self, z: &Self) -> Self {
+        self.xor(y).xor(z)
+    }
+
+    /// The arithmetic generalization of `andnot`, namely `andn(x, y) = (1 - x)y`
+    ///
+    /// Note that when `y = x`, this evaluates to `0` if and only if `x` is boolean.
+    fn andn(&self, y: &Self) -> Self {
+        (Self::ONE - self.clone()) * y.clone()
+    }
+
     /// Exponentiation by a `u64` power.
     ///
     /// This uses the standard square and multiply approach.

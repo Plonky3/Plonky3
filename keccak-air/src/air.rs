@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use core::borrow::Borrow;
 
-use p3_air::utils::{andn, xor, xor3};
+use p3_air::utils::andn;
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
 use p3_matrix::dense::RowMajorMatrix;
@@ -87,10 +87,9 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
             for z in 0..64 {
                 // Check to ensure all entries of C are bools.
                 builder.assert_bool(local.c[x][z]);
-                let xor = xor3::<AB::Expr>(
-                    local.c[x][z].into(),
-                    local.c[(x + 4) % 5][z].into(),
-                    local.c[(x + 1) % 5][(z + 63) % 64].into(),
+                let xor = local.c[x][z].into().xor3(
+                    &local.c[(x + 4) % 5][z].into(),
+                    &local.c[(x + 1) % 5][(z + 63) % 64].into(),
                 );
                 let c_prime = local.c_prime[x][z];
                 builder.assert_eq(c_prime, xor);
@@ -108,10 +107,10 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         for y in 0..5 {
             for x in 0..5 {
                 let get_bit = |z| {
-                    let a_prime: AB::Var = local.a_prime[y][x][z];
-                    let c: AB::Var = local.c[x][z];
-                    let c_prime: AB::Var = local.c_prime[x][z];
-                    xor3::<AB::Expr>(a_prime.into(), c.into(), c_prime.into())
+                    Into::<AB::Expr>::into(local.a_prime[y][x][z]).xor3(
+                        &Into::<AB::Expr>::into(local.c[x][z]),
+                        &Into::<AB::Expr>::into(local.c_prime[x][z]),
+                    )
                 };
 
                 for limb in 0..U64_LIMBS {
@@ -151,7 +150,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                         local.b((x + 1) % 5, y, z).into(),
                         local.b((x + 2) % 5, y, z).into(),
                     );
-                    xor::<AB::Expr>(local.b(x, y, z).into(), andn)
+                    andn.xor(&local.b(x, y, z).into())
                 };
 
                 for limb in 0..U64_LIMBS {
@@ -185,7 +184,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                 rc_bit_i += this_round * this_round_constant;
             }
 
-            xor::<AB::Expr>(local.a_prime_prime_0_0_bits[i].into(), rc_bit_i)
+            rc_bit_i.xor(&local.a_prime_prime_0_0_bits[i].into())
         };
 
         for limb in 0..U64_LIMBS {

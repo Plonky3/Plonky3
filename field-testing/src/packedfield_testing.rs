@@ -225,6 +225,46 @@ where
     );
 }
 
+pub fn test_binary_ops<PF>(zeros: PF)
+where
+    PF: PackedField + Eq,
+    StandardUniform: Distribution<PF::Scalar>,
+{
+    let vec0 = packed_from_random::<PF>(0x0b1ee4d7c979d50c);
+    let vec1 = packed_from_random::<PF>(0x39faa0844a36e45a);
+    let vec2 = packed_from_random::<PF>(0x08fac4ee76260e44);
+
+    assert_eq!(PF::ONE.xor(&PF::ONE), PF::ZERO, "Error when testing xor.");
+    assert_eq!(PF::ZERO.xor(&PF::ONE), PF::ONE, "Error when testing xor.");
+    assert_eq!(PF::ONE.xor(&PF::ZERO), PF::ONE, "Error when testing xor.");
+    assert_eq!(PF::ZERO.xor(&PF::ZERO), PF::ZERO, "Error when testing xor.");
+    assert_eq!(
+        PF::ONE.xor(&PF::NEG_ONE),
+        PF::TWO,
+        "Error when testing xor."
+    );
+    assert_eq!(
+        PF::NEG_ONE.xor(&PF::ONE),
+        PF::TWO,
+        "Error when testing xor."
+    );
+
+    assert_eq!(
+        vec0.xor(&vec1),
+        vec0 + vec1 - vec0 * vec1.double(),
+        "Error when testing xor."
+    );
+
+    assert_eq!(vec0.xor(&zeros), vec0, "Error when testing xor.");
+
+    assert_eq!(
+        vec0.xor3(&vec1, &vec2),
+        vec0 + vec1 + vec2 - (vec0 * vec1 + vec0 * vec2 + vec1 * vec2).double()
+            + vec0 * vec1 * vec2.double().double(),
+        "Error when testing xor3."
+    );
+}
+
 pub fn test_distributivity<PF>()
 where
     PF: PackedField + Eq,
@@ -451,6 +491,10 @@ macro_rules! test_packed_field {
             #[test]
             fn test_mul() {
                 $crate::test_mul::<$packedfield>($zeros);
+            }
+            #[test]
+            fn test_binary_ops() {
+                $crate::test_binary_ops::<$packedfield>($zeros);
             }
             #[test]
             fn test_distributivity() {

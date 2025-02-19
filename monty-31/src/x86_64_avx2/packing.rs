@@ -12,7 +12,9 @@ use p3_util::convert_vec;
 use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
 
-use crate::{FieldParameters, MontyField31, PackedMontyParameters, RelativelyPrimePower};
+use crate::{
+    signed_add_avx2, FieldParameters, MontyField31, PackedMontyParameters, RelativelyPrimePower,
+};
 
 const WIDTH: usize = 8;
 
@@ -302,6 +304,56 @@ fn shifted_square<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
     }
 }
 
+/// Compute the elementary arithmetic generalization of `xor`, namely `xor(l, r) = l + r - 2lr`
+/// Inputs are assumed to be in canonical form, if the inputs are not in canonical form, the result is undefined.
+#[inline]
+#[must_use]
+fn xor<FP: FieldParameters>(lhs: __m256i, rhs: __m256i) -> __m256i {
+    // We refactor the expression as r + 2l(1/2 - r).
+
+    // We want this to compile to:
+    //      vmovshdup  lhs_odd, lhs
+    //      vmovshdup  rhs_odd, rhs
+    //      vpmuludq   prod_evn, lhs, rhs
+    //      vpmuludq   prod_odd, lhs_odd, rhs_odd
+    //      vpmuludq   q_evn, prod_evn, MU
+    //      vpmuludq   q_odd, prod_odd, MU
+    //      vpmuludq   q_P_evn, q_evn, P
+    //      vpmuludq   q_P_odd, q_odd, P
+    //      vpsubq     d_evn, prod_evn, q_P_evn
+    //      vpsubq     d_odd, prod_odd, q_P_odd
+    //      vmovshdup  d_evn_hi, d_evn
+    //      vpblendd   t, d_evn_hi, d_odd, aah
+    //      vpaddd     u, t, P
+    //      vpminud    res, t, u
+    // throughput: 4.67 cyc/vec (1.71 els/cyc)
+    // latency: 21 cyc
+    unsafe {
+        // 0 <= rhs < P
+        let double_lhs = x86_64::_mm256_slli_epi32::<1>(lhs);
+        // 0 <= 2*lhs < 2P
+
+        // This issue is that we can't use 1!! We need to use it's monty form!.
+        let half = x86_64::_mm256_set1_epi32(-1 << 31);
+        let half_sub_rhs = x86_64::_mm256_sub_epi32(half, rhs);
+        // -P < (1 - 2 * rhs) <= P + 1
+
+        let lhs_prime_odd = movehdup_epi32(double_lhs);
+        let rhs_prime_odd = movehdup_epi32(half_sub_rhs);
+
+        // 2l(1/2 - r) < 2 * P * 2^31 < 2^32P
+        let d_evn = monty_mul::<FP>(double_lhs, half_sub_rhs);
+        let d_odd = monty_mul::<FP>(lhs_prime_odd, rhs_prime_odd);
+
+        let d_evn_hi = movehdup_epi32(d_evn);
+        let t = x86_64::_mm256_blend_epi32::<0b10101010>(d_evn_hi, d_odd);
+        // -P < t < P
+        // use signed add.
+
+        signed_add_avx2::<FP>(rhs, t)
+    }
+}
+
 /// Cube the MontyField31 field elements in the even index entries.
 /// Inputs must be signed 32-bit integers in [-P, ..., P].
 /// Outputs will be a signed integer in (-P, ..., P) stored in the odd indices.
@@ -491,6 +543,17 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX2<FP>
         unsafe {
             // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
             let res = apply_func_to_even_odd::<FP>(val, packed_exp_3::<FP>);
+            Self::from_vector(res)
+        }
+    }
+
+    #[inline]
+    fn xor(&self, rhs: &Self) -> Self {
+        let lhs = self.to_vector();
+        let rhs = rhs.to_vector();
+        let res = xor::<FP>(lhs, rhs);
+        unsafe {
+            // Safety: `xor` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
