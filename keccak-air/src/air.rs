@@ -1,7 +1,6 @@
 use alloc::vec::Vec;
 use core::borrow::Borrow;
 
-use p3_air::utils::andn;
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
 use p3_matrix::dense::RowMajorMatrix;
@@ -146,10 +145,10 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         for y in 0..5 {
             for x in 0..5 {
                 let get_bit = |z| {
-                    let andn = andn::<AB::Expr>(
-                        local.b((x + 1) % 5, y, z).into(),
-                        local.b((x + 2) % 5, y, z).into(),
-                    );
+                    let andn = local
+                        .b((x + 1) % 5, y, z)
+                        .into()
+                        .andn(&local.b((x + 2) % 5, y, z).into());
                     andn.xor(&local.b(x, y, z).into())
                 };
 

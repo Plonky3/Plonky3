@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::borrow::Borrow;
 
 use itertools::izip;
-use p3_air::utils::{add2, add3, pack_bits_le, xor, xor_32_shift};
+use p3_air::utils::{add2, add3, pack_bits_le, xor_32_shift};
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
 use p3_matrix::dense::RowMajorMatrix;
@@ -406,7 +406,7 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
             local.full_rounds[6].state_output.row3
         ) {
             for (out_bit, left_bit, right_bit) in izip!(out_bits, left_bits, right_bits) {
-                builder.assert_eq(out_bit, xor(left_bit.into(), right_bit.into()));
+                builder.assert_eq(out_bit, left_bit.into().xor(&right_bit.into()));
             }
         }
 
@@ -422,7 +422,7 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
             local.final_round_helpers
         ) {
             for (out_bit, left_bit, right_bit) in izip!(out_bits, left_bits, right_bits) {
-                builder.assert_eq(out_bit, xor(left_bit.into(), right_bit.into()));
+                builder.assert_eq(out_bit, left_bit.into().xor(&right_bit.into()));
             }
         }
 
@@ -435,7 +435,7 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
             local.full_rounds[6].state_output.row3
         ) {
             for (out_bit, left_bit, right_bit) in izip!(out_bits, left_bits, right_bits) {
-                builder.assert_eq(out_bit, xor(left_bit.into(), right_bit.into()));
+                builder.assert_eq(out_bit, left_bit.into().xor(&right_bit.into()));
             }
         }
     }

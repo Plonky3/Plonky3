@@ -184,6 +184,27 @@ pub trait PrimeCharacteristicRing:
         (Self::ONE - self.clone()) * y.clone()
     }
 
+    /// The zerofier of boolean values: `x * (1 - x)`.
+    ///
+    /// This is a polynomial of degree `2` evaluates to `0` if the input is `0` or `1`.
+    /// If our space is a field, then this will be non `0` on all other inputs.
+    #[must_use]
+    #[inline(always)]
+    fn bool_check(&self) -> Self {
+        // We use `x * (1 - x)` instead of `x * (x - 1)` as this lets us reuse the `andn` function.
+        self.andn(self)
+    }
+
+    /// The zerofier of ternary values: `x * (1 - x) * (2 - x)`.
+    ///
+    /// This is a polynomial of degree `2` which evaluates to `0` if the input is `0, 1` or `2`.
+    /// If our space is a field, then this will be non `0` on all other inputs.
+    #[must_use]
+    #[inline(always)]
+    fn tern_check(&self) -> Self {
+        self.andn(self) * (Self::TWO - self.clone())
+    }
+
     /// Exponentiation by a `u64` power.
     ///
     /// This uses the standard square and multiply approach.
