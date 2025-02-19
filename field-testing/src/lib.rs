@@ -48,7 +48,7 @@ where
     assert_eq!(x * (y + z), x * y + x * z);
     assert_eq!(
         x + y + z + x + y + z,
-        [x, x, y, y, z, z].iter().copied().sum()
+        [x, x, y, y, z, z].into_iter().sum()
     );
 }
 
