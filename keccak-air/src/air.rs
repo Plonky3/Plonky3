@@ -103,7 +103,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         //            = xor(A'[x, y, z], C[x, z], C'[x, z]).
         // The last step is valid based on the identity we checked above.
         // It isn't required, but makes this check a bit cleaner.
-        // We also check that all entires of A' are bools.
+        // We also check that all entries of A' are bools.
         // This has the side effect of also range checking the limbs of A.
         for y in 0..5 {
             for x in 0..5 {
