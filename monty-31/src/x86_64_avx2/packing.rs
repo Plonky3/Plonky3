@@ -278,7 +278,7 @@ fn movehdup_epi32(x: __m256i) -> __m256i {
     }
 }
 
-/// Multiply unsigned vectors of field elements returning a vector of signed integers lying in (-P, ..., P).
+/// Multiply unsigned vectors of field elements returning a vector of signed integers lying in (-P, P).
 ///
 /// Inputs are allowed to not be in canonical form however they must obey the bound `lhs*rhs < 2^32P`. If this bound
 /// is broken, the output is undefined.

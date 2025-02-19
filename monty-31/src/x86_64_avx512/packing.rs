@@ -315,8 +315,11 @@ fn mask_movehdup_epi32(src: __m512i, k: __mmask16, a: __m512i) -> __m512i {
     }
 }
 
-/// Multiply vectors of MontyField31 elements in canonical form.
-/// If the inputs are not in canonical form, the result is undefined.
+/// Multiply a vector of unsigned field elements return a vector of unsigned field elements lying in [0, P).
+///
+/// Note that the input does not need to be in canonical form but must satisfy
+/// the bound `lhs * rhs < 2^32 * P`. If this bound is not satisfied, the result
+/// is undefined.
 #[inline]
 #[must_use]
 fn mul<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
@@ -388,6 +391,111 @@ fn mul<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
         let underflow = x86_64::_mm512_cmplt_epu32_mask(prod_hi, q_p_hi);
         let t = x86_64::_mm512_sub_epi32(prod_hi, q_p_hi);
         x86_64::_mm512_mask_add_epi32(t, underflow, t, MPAVX512::PACKED_P)
+    }
+}
+
+// /// Compute the elementary arithmetic generalization of `xor`, namely `xor(l, r) = l + r - 2lr` of
+// /// vectors in canonical form.
+// ///
+// /// Inputs are assumed to be in canonical form, if the inputs are not in canonical form, the result is undefined.
+// #[inline]
+// #[must_use]
+// fn xor<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
+//     /*
+//         We refactor the expression as r + 2l(1/2 - r).
+//         As we are working with MONTY_CONSTANT = 2^32, the internal representation
+//         of 1/2 is 2^31 mod P. Hence let us compute 2l(2^31 - r). As, 0 < l, r < P < 2^31
+//         we find that 2l(2^31 - r) < 2^32P so we can apply our monty reduction to this product.
+
+//         Moreover, as 2l, 2^31 - r are both < 2^32 we can compute these before we
+//         split into even and odd parts for the multiplication.
+
+//         All together we save 5 instructions (~25%) over the naive implementation.
+
+//         We want this to compile to:
+//             vpaddd     lhs_double, lhs, lhs
+//             vpsubd     sub_rhs, rhs, (1 << 31)
+//             vmovshdup  lhs_odd, lhs_double
+//             vmovshdup  rhs_odd, sub_rhs
+//             vpmuludq   prod_evn, lhs_double, sub_rhs
+//             vpmuludq   prod_odd, lhs_odd, rhs_odd
+//             vpmuludq   q_evn, prod_evn, MU
+//             vpmuludq   q_odd, prod_odd, MU
+//             vpmuludq   q_P_evn, q_evn, P
+//             vpmuludq   q_P_odd, q_odd, P
+//             vpsubq     d_evn, prod_evn, q_P_evn
+//             vpsubq     d_odd, prod_odd, q_P_odd
+//             vmovshdup  d_evn_hi, d_evn
+//             vpblendd   t, d_evn_hi, d_odd, aah
+//             vpsignd    pos_neg_P,  P,     t
+//             vpaddd     sum,        rhs,   t
+//             vpsubd     sum_corr,   sum,   pos_neg_P
+//             vpminud    res,        sum,   sum_corr
+//         throughput: 6 cyc/vec (1.33 els/cyc)
+//         latency: 22 cyc
+//     */
+//     unsafe {
+//         // 0 <= 2*lhs < 2P
+//         let double_lhs = x86_64::_mm256_add_epi32(lhs, lhs);
+
+//         // Note that 2^31 is represented as an i_32 as (-2^31).
+//         // Compiler should realise this is a constant.
+//         let half = x86_64::_mm256_set1_epi32(-1 << 31);
+
+//         // 0 < 2^31 - rhs < 2^31
+//         let half_sub_rhs = x86_64::_mm256_sub_epi32(half, rhs);
+
+//         // 2*lhs (2^31 - rhs) < 2P 2^31 < 2^32P so we can use the multiplication function.
+//         let mul_res = mul::<MPAVX2>(double_lhs, half_sub_rhs);
+
+//         // As -P < mul_res < P and 0 <= rhs < P, we can use signed add
+//         // which saves an instruction over reducing mul_res and adding in the usual way.
+//         signed_add_avx2::<MPAVX2>(rhs, mul_res)
+//     }
+// }
+
+/// Compute the elementary arithmetic generalization of `andnot`, namely `andn(l, r) = (1 - l)r` of
+/// vectors in canonical form.
+///
+/// Inputs are assumed to be in canonical form, if the inputs are not in canonical form, the result is undefined.
+#[inline]
+#[must_use]
+fn andn<MPAVX512: MontyParametersAVX512>(lhs: __m256i, rhs: __m256i) -> __m256i {
+    /*
+        As we are working with MONTY_CONSTANT = 2^32, the internal representation
+        of 1 is 2^32 mod P = 2^32 - P mod P. Hence let us compute (2^32 - P - l)r.
+        This product is clearly less than 2^32P so we can apply our monty reduction to this.
+
+        All together we save 2 instructions (~12%) over the naive implementation.
+
+        We want this to compile to:
+            vpsubd     neg_lhs, -P, lhs
+            vmovshdup  lhs_odd, neg_lhs
+            vmovshdup  rhs_odd, rhs
+            vpmuludq   prod_evn, neg_lhs, rhs
+            vpmuludq   prod_odd, lhs_odd, rhs_odd
+            vpmuludq   q_evn, prod_evn, MU
+            vpmuludq   q_odd, prod_odd, MU
+            vpmuludq   q_P_evn, q_evn, P
+            vpmuludq   q_P_odd, q_odd, P
+            vpsubq     d_evn, prod_evn, q_P_evn
+            vpsubq     d_odd, prod_odd, q_P_odd
+            vmovshdup  d_evn_hi, d_evn
+            vpblendd   t, d_evn_hi, d_odd, aah
+            vpaddd     corr, t, P
+            vpminud    res, t, corr
+        throughput: 5 cyc/vec (1.6 els/cyc)
+        latency: 20 cyc
+    */
+    unsafe {
+        // We use 2^32 - P instead of 2^32 to avoid having to worry about 0's in lhs.
+
+        // Compiler should realise that this is a constant.
+        let neg_p = x86_64::_mm512_sub_epi32(x86_64::_mm512_setzero(), MPAVX512::PACKED_P);
+        let neg_lhs = x86_64::_mm512_sub_epi32(neg_p, lhs);
+
+        // 2*lhs (2^31 - rhs) < 2P 2^31 < 2^32P so we can use the multiplication function.
+        mul::<MPAVX512>(neg_lhs, rhs);
     }
 }
 
