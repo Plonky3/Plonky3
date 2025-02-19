@@ -225,7 +225,7 @@ where
     );
 }
 
-pub fn test_binary_ops<PF>(zeros: PF)
+pub fn test_binary_ops<PF>(special_values: PF)
 where
     PF: PackedField + Eq,
     StandardUniform: Distribution<PF::Scalar>,
@@ -234,19 +234,76 @@ where
     let vec1 = packed_from_random::<PF>(0x39faa0844a36e45a);
     let vec2 = packed_from_random::<PF>(0x08fac4ee76260e44);
 
-    assert_eq!(PF::ONE.xor(&PF::ONE), PF::ZERO, "Error when testing xor.");
-    assert_eq!(PF::ZERO.xor(&PF::ONE), PF::ONE, "Error when testing xor.");
-    assert_eq!(PF::ONE.xor(&PF::ZERO), PF::ONE, "Error when testing xor.");
-    assert_eq!(PF::ZERO.xor(&PF::ZERO), PF::ZERO, "Error when testing xor.");
+    assert_eq!(
+        PF::ONE.xor(&PF::ONE),
+        PF::ZERO,
+        "Error when testing xor(0, 0) = 0."
+    );
+    assert_eq!(
+        PF::ZERO.xor(&PF::ONE),
+        PF::ONE,
+        "Error when testing xor(0, 1) = 1."
+    );
+    assert_eq!(
+        PF::ONE.xor(&PF::ZERO),
+        PF::ONE,
+        "Error when testing xor(1, 0) = 1."
+    );
+    assert_eq!(
+        PF::ZERO.xor(&PF::ZERO),
+        PF::ZERO,
+        "Error when testing xor(1, 1) = 0."
+    );
+    assert_eq!(
+        PF::ONE.andn(&PF::ONE),
+        PF::ZERO,
+        "Error when testing andn(0, 0) = 0."
+    );
+    assert_eq!(
+        PF::ZERO.andn(&PF::ONE),
+        PF::ONE,
+        "Error when testing andn(0, 1) = 1."
+    );
+    assert_eq!(
+        PF::ONE.andn(&PF::ZERO),
+        PF::ZERO,
+        "Error when testing andn(1, 0) = 0."
+    );
+    assert_eq!(
+        PF::ZERO.andn(&PF::ZERO),
+        PF::ZERO,
+        "Error when testing andn(1, 1) = 0."
+    );
+
     assert_eq!(
         PF::ONE.xor(&PF::NEG_ONE),
         PF::TWO,
-        "Error when testing xor."
+        "Error when testing xor(1, -1) = 2."
     );
     assert_eq!(
         PF::NEG_ONE.xor(&PF::ONE),
         PF::TWO,
-        "Error when testing xor."
+        "Error when testing xor(-1, 1) = 2."
+    );
+    assert_eq!(
+        PF::NEG_ONE.xor(&PF::NEG_ONE),
+        PF::from_i8(-4),
+        "Error when testing xor(-1, -1) = -4."
+    );
+    assert_eq!(
+        PF::ONE.andn(&PF::NEG_ONE),
+        PF::ZERO,
+        "Error when testing andn(1, -1) = 0."
+    );
+    assert_eq!(
+        PF::NEG_ONE.andn(&PF::ONE),
+        PF::TWO,
+        "Error when testing andn(-1, 1) = 2."
+    );
+    assert_eq!(
+        PF::NEG_ONE.andn(&PF::NEG_ONE),
+        -PF::TWO,
+        "Error when testing andn(-1, -1) = -4."
     );
 
     assert_eq!(
@@ -254,8 +311,22 @@ where
         vec0 + vec1 - vec0 * vec1.double(),
         "Error when testing xor."
     );
+    assert_eq!(
+        vec0.xor(&special_values),
+        vec0 + special_values - vec0 * special_values.double(),
+        "Error when testing xor on special_values vector."
+    );
 
-    assert_eq!(vec0.xor(&zeros), vec0, "Error when testing xor.");
+    assert_eq!(
+        vec0.andn(&vec1),
+        (PF::ONE - vec0) * vec1,
+        "Error when testing andn."
+    );
+    assert_eq!(
+        vec0.andn(&special_values),
+        (PF::ONE - vec0) * special_values,
+        "Error when testing andn on special_values vector."
+    );
 
     assert_eq!(
         vec0.xor3(&vec1, &vec2),
@@ -494,7 +565,7 @@ macro_rules! test_packed_field {
             }
             #[test]
             fn test_binary_ops() {
-                $crate::test_binary_ops::<$packedfield>($zeros);
+                $crate::test_binary_ops::<$packedfield>($specials);
             }
             #[test]
             fn test_distributivity() {
