@@ -137,7 +137,7 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
 /// _row-major_ input. This is awkward for memory coherence, so the
 /// algorithm here transposes the input and operates on the rows in
 /// the typical way, then transposes back again for the output. Even
-/// for modestly large inputs, the cost of the two tranposes
+/// for modestly large inputs, the cost of the two transposes
 /// outweighed by the improved performance from operating row-wise.
 ///
 /// The choice of DIT for inverse and DIF for "forward" transform mean
