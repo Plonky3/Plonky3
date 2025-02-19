@@ -240,8 +240,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         let result_nrows = nrows << added_bits;
 
         if nrows == 1 {
-            let dupd_rows = core::iter::repeat(mat.values)
-                .take(result_nrows)
+            let dupd_rows = core::iter::repeat_n(mat.values, result_nrows)
                 .flatten()
                 .collect();
             return RowMajorMatrix::new(dupd_rows, ncols).bit_reverse_rows();
