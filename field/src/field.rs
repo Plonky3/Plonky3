@@ -116,6 +116,8 @@ pub trait PrimeCharacteristicRing:
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self;
 
     /// Return `Self::ONE` if `b` is `true` and `Self::ZERO` if `b` is `false`.
+    #[must_use]
+    #[inline(always)]
     fn from_bool(b: bool) -> Self {
         // Some rings might reimplement this to avoid the branch.
         if b {
@@ -132,6 +134,7 @@ pub trait PrimeCharacteristicRing:
     /// This function should be preferred over calling `a + a` or `TWO * a` as a faster implementation may be available for some rings.
     /// If the field has characteristic 2 then this returns 0.
     #[must_use]
+    #[inline(always)]
     fn double(&self) -> Self {
         self.clone() + self.clone()
     }
@@ -140,6 +143,7 @@ pub trait PrimeCharacteristicRing:
     ///
     /// This function should be preferred over calling `a * a`, as a faster implementation may be available for some rings.
     #[must_use]
+    #[inline(always)]
     fn square(&self) -> Self {
         self.clone() * self.clone()
     }
@@ -148,25 +152,34 @@ pub trait PrimeCharacteristicRing:
     ///
     /// This function should be preferred over calling `a * a * a`, as a faster implementation may be available for some rings.
     #[must_use]
+    #[inline(always)]
     fn cube(&self) -> Self {
         self.square() * self.clone()
     }
 
-    /// The arithmetic generalization of `xor`, namely `xor(x, y) = x + y - 2xy`
+    /// Computes the arithmetic generalization of boolean `xor`.
+    ///
+    /// For boolean inputs, `x ^ y = x + y - 2 xy`.
+    #[must_use]
+    #[inline(always)]
     fn xor(&self, y: &Self) -> Self {
         self.clone() + y.clone() - self.clone() * y.clone().double()
     }
 
-    /// The arithmetic generalization of a three way `xor`.
+    /// Computes the arithmetic generalization of a triple `xor`.
     ///
-    /// `xor3(x, y, z) = x + y + z - (xy + xz + yz) + 4xyz`
+    /// For boolean inputs `x ^ y ^ z = x + y + z - 2(xy + xz + yz) + 4xyz`.
+    #[must_use]
+    #[inline(always)]
     fn xor3(&self, y: &Self, z: &Self) -> Self {
         self.xor(y).xor(z)
     }
 
-    /// The arithmetic generalization of `andnot`, namely `andn(x, y) = (1 - x)y`
+    /// Computes the arithmetic generalization of `andnot`.
     ///
-    /// Note that when `y = x`, this evaluates to `0` if and only if `x` is boolean.
+    /// For boolean inputs `(!x) & y = (1 - x)y`.
+    #[must_use]
+    #[inline(always)]
     fn andn(&self, y: &Self) -> Self {
         (Self::ONE - self.clone()) * y.clone()
     }
@@ -222,6 +235,7 @@ pub trait PrimeCharacteristicRing:
     ///
     /// Computed via repeated squaring.
     #[must_use]
+    #[inline]
     fn exp_power_of_2(&self, power_log: usize) -> Self {
         let mut res = self.clone();
         for _ in 0..power_log {
@@ -241,11 +255,14 @@ pub trait PrimeCharacteristicRing:
 
     /// Construct an iterator which returns powers of `self`: `self^0, self^1, self^2, ...`.
     #[must_use]
+    #[inline]
     fn powers(&self) -> Powers<Self> {
         self.shifted_powers(Self::ONE)
     }
 
     /// Construct an iterator which returns powers of `self` shifted by `start`: `start, start*self^1, start*self^2, ...`.
+    #[must_use]
+    #[inline]
     fn shifted_powers(&self, start: Self) -> Powers<Self> {
         Powers {
             base: self.clone(),
@@ -254,6 +271,8 @@ pub trait PrimeCharacteristicRing:
     }
 
     /// Compute the dot product of two vectors.
+    #[must_use]
+    #[inline]
     fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
         u.iter().zip(v).map(|(x, y)| x.clone() * y.clone()).sum()
     }
