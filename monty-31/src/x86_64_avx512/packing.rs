@@ -460,7 +460,7 @@ fn mul<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
 /// Inputs are assumed to be in canonical form, if the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn andn<MPAVX512: MontyParametersAVX512>(lhs: __m256i, rhs: __m256i) -> __m256i {
+fn andn<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
     /*
         As we are working with MONTY_CONSTANT = 2^32, the internal representation
         of 1 is 2^32 mod P = 2^32 - P mod P. Hence let us compute (2^32 - P - l)r.
@@ -491,11 +491,11 @@ fn andn<MPAVX512: MontyParametersAVX512>(lhs: __m256i, rhs: __m256i) -> __m256i 
         // We use 2^32 - P instead of 2^32 to avoid having to worry about 0's in lhs.
 
         // Compiler should realise that this is a constant.
-        let neg_p = x86_64::_mm512_sub_epi32(x86_64::_mm512_setzero(), MPAVX512::PACKED_P);
+        let neg_p = x86_64::_mm512_sub_epi32(x86_64::_mm512_setzero_epi32(), MPAVX512::PACKED_P);
         let neg_lhs = x86_64::_mm512_sub_epi32(neg_p, lhs);
 
         // 2*lhs (2^31 - rhs) < 2P 2^31 < 2^32P so we can use the multiplication function.
-        mul::<MPAVX512>(neg_lhs, rhs);
+        mul::<MPAVX512>(neg_lhs, rhs)
     }
 }
 
@@ -718,6 +718,28 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX512<F
         unsafe {
             // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
             let res = apply_func_to_even_odd::<FP>(val, packed_exp_3::<FP>);
+            Self::from_vector(res)
+        }
+    }
+
+    // #[inline]
+    // fn xor(&self, rhs: &Self) -> Self {
+    //     let lhs = self.to_vector();
+    //     let rhs = rhs.to_vector();
+    //     let res = xor::<FP>(lhs, rhs);
+    //     unsafe {
+    //         // Safety: `xor` returns values in canonical form when given values in canonical form.
+    //         Self::from_vector(res)
+    //     }
+    // }
+
+    #[inline]
+    fn andn(&self, rhs: &Self) -> Self {
+        let lhs = self.to_vector();
+        let rhs = rhs.to_vector();
+        let res = andn::<FP>(lhs, rhs);
+        unsafe {
+            // Safety: `xor` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
