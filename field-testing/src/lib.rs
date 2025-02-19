@@ -46,10 +46,7 @@ where
     assert_eq!(x - (y + z), (x - y) - z);
     assert_eq!((x + y) - z, x + (y - z));
     assert_eq!(x * (y + z), x * y + x * z);
-    assert_eq!(
-        x + y + z + x + y + z,
-        [x, x, y, y, z, z].into_iter().sum()
-    );
+    assert_eq!(x + y + z + x + y + z, [x, x, y, y, z, z].into_iter().sum());
 }
 
 pub fn test_inv_div<F: Field>()
