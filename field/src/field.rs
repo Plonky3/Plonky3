@@ -284,6 +284,7 @@ pub trait PrimeCharacteristicRing:
     /// In particular, `vec![Self::ZERO; len]` appears to result in redundant userspace zeroing.
     /// This is the default implementation, but implementors may wish to provide their own
     /// implementation which transmutes something like `vec![0u32; len]`.
+    #[must_use]
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         vec![Self::ZERO; len]
@@ -329,6 +330,7 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     /// to ensure portability if these values might ever be passed to
     /// (or rederived within) another compilation environment where a
     /// different basis might have been used.
+    #[must_use]
     fn as_basis_coefficients_slice(&self) -> &[F];
 
     /// Fixes a basis for the algebra `A` and uses this to
@@ -345,6 +347,7 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     /// The user should ensure that the slice has length `DIMENSION`. If
     /// it is shorter than this, the function will panic, if it is longer the
     /// extra elements will be ignored.
+    #[must_use]
     #[inline]
     fn from_basis_coefficients_slice(slice: &[F]) -> Self {
         Self::from_basis_coefficients_fn(|i| slice[i].clone())
@@ -362,6 +365,7 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     /// to ensure portability if these values might ever be passed to
     /// (or rederived within) another compilation environment where a
     /// different basis might have been used.
+    #[must_use]
     fn from_basis_coefficients_fn<Fn: FnMut(usize) -> F>(f: Fn) -> Self;
 
     /// Fixes a basis for the algebra `A` and uses this to
@@ -377,6 +381,7 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     ///
     /// If the iterator contains more than `DIMENSION` many elements,
     /// the rest will be ignored.
+    #[must_use]
     fn from_basis_coefficients_iter<I: Iterator<Item = F>>(iter: I) -> Self;
 
     /// Given a basis for the Algebra `A`, return the i'th basis element.
@@ -388,6 +393,8 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     /// to ensure portability if these values might ever be passed to
     /// (or rederived within) another compilation environment where a
     /// different basis might have been used.
+    #[must_use]
+    #[inline]
     fn ith_basis_element(i: usize) -> Self {
         Self::from_basis_coefficients_fn(|j| F::from_bool(i == j))
     }
@@ -396,16 +403,19 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
 impl<F: PrimeCharacteristicRing> BasedVectorSpace<F> for F {
     const DIMENSION: usize = 1;
 
+    #[must_use]
     #[inline]
     fn as_basis_coefficients_slice(&self) -> &[F] {
         slice::from_ref(self)
     }
 
+    #[must_use]
     #[inline]
     fn from_basis_coefficients_fn<Fn: FnMut(usize) -> F>(mut f: Fn) -> Self {
         f(0)
     }
 
+    #[must_use]
     #[inline]
     fn from_basis_coefficients_iter<I: Iterator<Item = F>>(mut iter: I) -> Self {
         iter.next().unwrap()
@@ -425,6 +435,8 @@ impl<F: PrimeCharacteristicRing> BasedVectorSpace<F> for F {
 pub trait InjectiveMonomial<const N: u64>: PrimeCharacteristicRing {
     /// Compute `x -> x^n` for a given `n > 1` such that this
     /// map is injective.
+    #[must_use]
+    #[inline]
     fn injective_exp_n(&self) -> Self {
         self.exp_const_u64::<N>()
     }
@@ -438,6 +450,7 @@ pub trait InjectiveMonomial<const N: u64>: PrimeCharacteristicRing {
 pub trait PermutationMonomial<const N: u64>: InjectiveMonomial<N> {
     /// Compute `x -> x^K` for a given `K > 1` such that
     /// `x^{NK} = x` for all elements `x`.
+    #[must_use]
     fn injective_exp_root_n(&self) -> Self;
 }
 
@@ -500,11 +513,15 @@ pub trait Field:
     const GENERATOR: Self;
 
     /// Check if the given field element is equal to the unique additive identity (ZERO).
+    #[must_use]
+    #[inline]
     fn is_zero(&self) -> bool {
         *self == Self::ZERO
     }
 
     /// Check if the given field element is equal to the unique multiplicative identity (ONE).
+    #[must_use]
+    #[inline]
     fn is_one(&self) -> bool {
         *self == Self::ONE
     }
@@ -557,6 +574,7 @@ pub trait Field:
     ///
     /// This will either be prime if the field is a PrimeField or a power of a
     /// prime if the field is an extension field.
+    #[must_use]
     fn order() -> BigUint;
 
     /// A list of (factor, exponent) pairs.
@@ -575,6 +593,7 @@ pub trait Field:
     ///
     /// Usually due to storage and practical reasons the memory size of
     /// a field element will be a little larger than bits().
+    #[must_use]
     #[inline]
     fn bits() -> usize {
         Self::order().bits() as usize
@@ -605,6 +624,7 @@ pub trait PrimeField:
 {
     /// Return the representative of `value` in canonical form
     /// which lies in the range `0 <= x < self.order()`.
+    #[must_use]
     fn as_canonical_biguint(&self) -> BigUint;
 }
 
@@ -614,6 +634,7 @@ pub trait PrimeField64: PrimeField {
 
     /// Return the representative of `value` in canonical form
     /// which lies in the range `0 <= x < ORDER_U64`.
+    #[must_use]
     fn as_canonical_u64(&self) -> u64;
 
     /// Convert a field element to a `u64` such that any two field elements
@@ -621,6 +642,8 @@ pub trait PrimeField64: PrimeField {
     ///
     /// This will be the fastest way to convert a field element to a `u64` and
     /// is intended for use in hashing. It will also be consistent across different targets.
+    #[must_use]
+    #[inline(always)]
     fn to_unique_u64(&self) -> u64 {
         // A simple default which is optimal for some fields.
         self.as_canonical_u64()
@@ -633,6 +656,7 @@ pub trait PrimeField32: PrimeField64 {
 
     /// Return the representative of `value` in canonical form
     /// which lies in the range `0 <= x < ORDER_U64`.
+    #[must_use]
     fn as_canonical_u32(&self) -> u32;
 
     /// Convert a field element to a `u32` such that any two field elements
@@ -640,6 +664,8 @@ pub trait PrimeField32: PrimeField64 {
     ///
     /// This will be the fastest way to convert a field element to a `u32` and
     /// is intended for use in hashing. It will also be consistent across different targets.
+    #[must_use]
+    #[inline(always)]
     fn to_unique_u32(&self) -> u32 {
         // A simple default which is optimal for some fields.
         self.as_canonical_u32()
@@ -656,10 +682,12 @@ pub trait ExtensionField<Base: Field>: Field + Algebra<Base> + BasedVectorSpace<
     type ExtensionPacking: PackedFieldExtension<Base, Self> + 'static + Copy + Send + Sync;
 
     /// Determine if the given element lies in the base field.
+    #[must_use]
     fn is_in_basefield(&self) -> bool;
 
     /// If the element lies in the base field project it down.
     /// Otherwise return None.
+    #[must_use]
     fn as_base(&self) -> Option<Base>;
 }
 
@@ -667,10 +695,14 @@ pub trait ExtensionField<Base: Field>: Field + Algebra<Base> + BasedVectorSpace<
 impl<F: Field> ExtensionField<F> for F {
     type ExtensionPacking = F::Packing;
 
+    #[must_use]
+    #[inline]
     fn is_in_basefield(&self) -> bool {
         true
     }
 
+    #[must_use]
+    #[inline]
     fn as_base(&self) -> Option<F> {
         Some(*self)
     }
@@ -698,6 +730,7 @@ pub struct Powers<F> {
 impl<R: PrimeCharacteristicRing> Iterator for Powers<R> {
     type Item = R;
 
+    #[must_use]
     fn next(&mut self) -> Option<R> {
         let result = self.current.clone();
         self.current *= self.base.clone();
