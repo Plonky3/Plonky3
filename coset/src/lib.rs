@@ -7,9 +7,10 @@ extern crate alloc;
 
 use alloc::vec;
 use alloc::vec::Vec;
+use core::iter::Take;
 
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
-use p3_field::TwoAdicField;
+use p3_field::{Powers, TwoAdicField};
 #[cfg(test)]
 mod tests;
 
@@ -79,17 +80,9 @@ pub struct TwoAdicCoset<F: TwoAdicField> {
     // vec![generator] and is expanded every time a higher iterated square is
     // computed.
     generator_iter_squares: Vec<F>,
-    // Optional FFFT machinery, which gets initialised the first time a
+    // Optional FFT machinery, which gets initialised the first time a
     // polynomial is interpolated or evaluated using the coset
     dft: Option<Radix2Dit<F>>,
-}
-
-/// Iterator over the elements of a `TwoAdicCoset`.
-pub struct TwoAdicCosetIterator<F: TwoAdicField> {
-    current: F,
-    generator: F,
-    shift: F,
-    consumed: bool,
 }
 
 impl<F: TwoAdicField> TwoAdicCoset<F> {
@@ -395,13 +388,10 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
     /// Returns an iterator over the elements of the coset in the canonical order
     /// "shift * generator^0, shift * generator^1, ...,
     /// shift * generator^(2^log_size - 1)`.
-    pub fn iter(&self) -> TwoAdicCosetIterator<F> {
-        TwoAdicCosetIterator {
-            current: self.shift,
-            generator: self.generator,
-            shift: self.shift,
-            consumed: false,
-        }
+    pub fn iter(&self) -> Take<Powers<F>> {
+        self.generator
+            .shifted_powers(self.shift)
+            .take(1 << self.log_size)
     }
 }
 
@@ -431,37 +421,16 @@ impl<F: TwoAdicField> PartialEq for TwoAdicCoset<F> {
 ///
 /// *Note*: The iterated squares of the generator memoised in each coset are
 /// not taken into consideration.
+// This falls back to PartialEq
 impl<F: TwoAdicField> Eq for TwoAdicCoset<F> {}
-
-impl<F: TwoAdicField> Iterator for TwoAdicCosetIterator<F> {
-    type Item = F;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.consumed {
-            return None;
-        }
-
-        let current = self.current;
-        self.current *= self.generator;
-
-        if self.current == self.shift {
-            self.consumed = true;
-        }
-
-        Some(current)
-    }
-}
 
 impl<F: TwoAdicField> IntoIterator for TwoAdicCoset<F> {
     type Item = F;
-    type IntoIter = TwoAdicCosetIterator<F>;
+    type IntoIter = Take<Powers<F>>;
 
     fn into_iter(self) -> Self::IntoIter {
-        TwoAdicCosetIterator {
-            current: self.shift,
-            generator: self.generator,
-            shift: self.shift,
-            consumed: false,
-        }
+        self.generator
+            .shifted_powers(self.shift)
+            .take(1 << self.log_size)
     }
 }
