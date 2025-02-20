@@ -466,7 +466,501 @@ impl<'a, T: Clone + Default + Send + Sync> DenseMatrix<T, &'a [T]> {
 
 #[cfg(test)]
 mod tests {
+    use p3_baby_bear::BabyBear;
+    use p3_field::FieldArray;
+
     use super::*;
+
+    #[test]
+    fn test_new() {
+        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
+        assert_eq!(matrix.width, 2);
+        assert_eq!(matrix.height(), 3);
+        assert_eq!(matrix.values, vec![1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn test_new_row() {
+        let matrix = RowMajorMatrix::new_row(vec![1, 2, 3]);
+        assert_eq!(matrix.width, 3);
+        assert_eq!(matrix.height(), 1);
+    }
+
+    #[test]
+    fn test_new_col() {
+        let matrix = RowMajorMatrix::new_col(vec![1, 2, 3]);
+        assert_eq!(matrix.width, 1);
+        assert_eq!(matrix.height(), 3);
+    }
+
+    #[test]
+    fn test_height_with_zero_width() {
+        let matrix: DenseMatrix<i32> = RowMajorMatrix::new(vec![], 0);
+        assert_eq!(matrix.height(), 0);
+    }
+
+    #[test]
+    fn test_get() {
+        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
+        assert_eq!(matrix.get(0, 0), 1);
+        assert_eq!(matrix.get(1, 1), 4);
+        assert_eq!(matrix.get(2, 0), 5);
+    }
+
+    #[test]
+    fn test_row_slice() {
+        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
+        assert_eq!(matrix.row_slice(0).deref(), &[1, 2]);
+        assert_eq!(matrix.row_slice(2).deref(), &[5, 6]);
+    }
+
+    #[test]
+    fn test_row_slices() {
+        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
+        let rows: Vec<&[i32]> = matrix.row_slices().collect();
+        assert_eq!(rows, vec![&[1, 2], &[3, 4], &[5, 6]]);
+    }
+
+    #[test]
+    fn test_as_view() {
+        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4], 2);
+        let view = matrix.as_view();
+        assert_eq!(view.values, &[1, 2, 3, 4]);
+        assert_eq!(view.width, 2);
+    }
+
+    #[test]
+    fn test_as_view_mut() {
+        let mut matrix = RowMajorMatrix::new(vec![1, 2, 3, 4], 2);
+        let view = matrix.as_view_mut();
+        view.values[0] = 10;
+        assert_eq!(matrix.values, vec![10, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_copy_from() {
+        let mut matrix1 = RowMajorMatrix::new(vec![0, 0, 0, 0], 2);
+        let matrix2 = RowMajorMatrix::new(vec![1, 2, 3, 4], 2);
+        matrix1.copy_from(&matrix2);
+        assert_eq!(matrix1.values, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_split_rows() {
+        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
+        let (top, bottom) = matrix.split_rows(1);
+        assert_eq!(top.values, vec![1, 2]);
+        assert_eq!(bottom.values, vec![3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn test_split_rows_mut() {
+        let mut matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
+        let (top, bottom) = matrix.split_rows_mut(1);
+        assert_eq!(top.values, vec![1, 2]);
+        assert_eq!(bottom.values, vec![3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn test_row_mut() {
+        let mut matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
+        matrix.row_mut(1)[0] = 10;
+        assert_eq!(matrix.values, vec![1, 2, 10, 4, 5, 6]);
+    }
+
+    #[test]
+    fn test_bit_reversed_zero_pad() {
+        let matrix = RowMajorMatrix::new(
+            vec![
+                BabyBear::new(1),
+                BabyBear::new(2),
+                BabyBear::new(3),
+                BabyBear::new(4),
+            ],
+            2,
+        );
+        let padded = matrix.bit_reversed_zero_pad(1);
+        assert_eq!(padded.width, 2);
+        assert_eq!(
+            padded.values,
+            vec![
+                BabyBear::new(1),
+                BabyBear::new(2),
+                BabyBear::new(0),
+                BabyBear::new(0),
+                BabyBear::new(3),
+                BabyBear::new(4),
+                BabyBear::new(0),
+                BabyBear::new(0)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_bit_reversed_zero_pad_no_change() {
+        let matrix = RowMajorMatrix::new(
+            vec![
+                BabyBear::new(1),
+                BabyBear::new(2),
+                BabyBear::new(3),
+                BabyBear::new(4),
+            ],
+            2,
+        );
+        let padded = matrix.bit_reversed_zero_pad(0);
+
+        assert_eq!(padded.width, 2);
+        assert_eq!(
+            padded.values,
+            vec![
+                BabyBear::new(1),
+                BabyBear::new(2),
+                BabyBear::new(3),
+                BabyBear::new(4),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_scale() {
+        let mut matrix = RowMajorMatrix::new(
+            vec![
+                BabyBear::new(1),
+                BabyBear::new(2),
+                BabyBear::new(3),
+                BabyBear::new(4),
+                BabyBear::new(5),
+                BabyBear::new(6),
+            ],
+            2,
+        );
+        matrix.scale(BabyBear::new(2));
+        assert_eq!(
+            matrix.values,
+            vec![
+                BabyBear::new(2),
+                BabyBear::new(4),
+                BabyBear::new(6),
+                BabyBear::new(8),
+                BabyBear::new(10),
+                BabyBear::new(12)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_scale_row() {
+        let mut matrix = RowMajorMatrix::new(
+            vec![
+                BabyBear::new(1),
+                BabyBear::new(2),
+                BabyBear::new(3),
+                BabyBear::new(4),
+                BabyBear::new(5),
+                BabyBear::new(6),
+            ],
+            2,
+        );
+        matrix.scale_row(1, BabyBear::new(3));
+        assert_eq!(
+            matrix.values,
+            vec![
+                BabyBear::new(1),
+                BabyBear::new(2),
+                BabyBear::new(9),
+                BabyBear::new(12),
+                BabyBear::new(5),
+                BabyBear::new(6),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_row() {
+        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4], 2);
+        let row: Vec<_> = matrix.row(1).collect();
+        assert_eq!(row, vec![3, 4]);
+    }
+
+    #[test]
+    fn test_to_row_major_matrix() {
+        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
+        let converted = matrix.to_row_major_matrix();
+
+        // The converted matrix should have the same values and width
+        assert_eq!(converted.width, 2);
+        assert_eq!(converted.height(), 3);
+        assert_eq!(converted.values, vec![1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn test_horizontally_packed_row() {
+        use p3_baby_bear::BabyBear;
+
+        type Packed = FieldArray<BabyBear, 2>;
+
+        let matrix = RowMajorMatrix::new(
+            vec![
+                BabyBear::new(1),
+                BabyBear::new(2),
+                BabyBear::new(3),
+                BabyBear::new(4),
+                BabyBear::new(5),
+                BabyBear::new(6),
+            ],
+            3,
+        );
+
+        let (packed_iter, suffix_iter) = matrix.horizontally_packed_row::<Packed>(1);
+
+        let packed: Vec<_> = packed_iter.collect();
+        let suffix: Vec<_> = suffix_iter.collect();
+
+        assert_eq!(
+            packed,
+            vec![Packed::from([BabyBear::new(4), BabyBear::new(5)])]
+        );
+        assert_eq!(suffix, vec![BabyBear::new(6)]);
+    }
+
+    #[test]
+    fn test_padded_horizontally_packed_row() {
+        use p3_baby_bear::BabyBear;
+
+        type Packed = FieldArray<BabyBear, 2>;
+
+        let matrix = RowMajorMatrix::new(
+            vec![
+                BabyBear::new(1),
+                BabyBear::new(2),
+                BabyBear::new(3),
+                BabyBear::new(4),
+                BabyBear::new(5),
+                BabyBear::new(6),
+            ],
+            3,
+        );
+
+        let packed_iter = matrix.padded_horizontally_packed_row::<Packed>(1);
+        let packed: Vec<_> = packed_iter.collect();
+
+        assert_eq!(
+            packed,
+            vec![
+                Packed::from([BabyBear::new(4), BabyBear::new(5)]),
+                Packed::from([BabyBear::new(6), BabyBear::new(0)])
+            ]
+        );
+    }
+
+    #[test]
+    fn test_pad_to_height() {
+        let mut matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 3);
+
+        // Original matrix:
+        // [ 1  2  3 ]
+        // [ 4  5  6 ] (height = 2)
+
+        matrix.pad_to_height(4, 9);
+
+        // Expected matrix after padding:
+        // [ 1  2  3 ]
+        // [ 4  5  6 ]
+        // [ 9  9  9 ]  <-- Newly added row
+        // [ 9  9  9 ]  <-- Newly added row
+
+        assert_eq!(matrix.height(), 4);
+        assert_eq!(matrix.values, vec![1, 2, 3, 4, 5, 6, 9, 9, 9, 9, 9, 9]);
+    }
+
+    #[test]
+    fn test_transpose_into() {
+        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 3);
+
+        // Original matrix:
+        // [ 1  2  3 ]
+        // [ 4  5  6 ]
+
+        let mut transposed = RowMajorMatrix::new(vec![0; 6], 2);
+
+        matrix.transpose_into(&mut transposed);
+
+        // Expected transposed matrix:
+        // [ 1  4 ]
+        // [ 2  5 ]
+        // [ 3  6 ]
+
+        assert_eq!(transposed.width, 2);
+        assert_eq!(transposed.height(), 3);
+        assert_eq!(transposed.values, vec![1, 4, 2, 5, 3, 6]);
+    }
+
+    #[test]
+    fn test_flatten_to_base() {
+        let matrix = RowMajorMatrix::new(
+            vec![
+                BabyBear::new(2),
+                BabyBear::new(3),
+                BabyBear::new(4),
+                BabyBear::new(5),
+            ],
+            2,
+        );
+
+        let flattened: RowMajorMatrix<BabyBear> = matrix.flatten_to_base();
+
+        assert_eq!(flattened.width, 2);
+        assert_eq!(
+            flattened.values,
+            vec![
+                BabyBear::new(2),
+                BabyBear::new(3),
+                BabyBear::new(4),
+                BabyBear::new(5),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_horizontally_packed_row_mut() {
+        use p3_baby_bear::BabyBear;
+        use p3_field::FieldArray;
+
+        type Packed = FieldArray<BabyBear, 2>;
+
+        let mut matrix = RowMajorMatrix::new(
+            vec![
+                BabyBear::new(1),
+                BabyBear::new(2),
+                BabyBear::new(3),
+                BabyBear::new(4),
+                BabyBear::new(5),
+                BabyBear::new(6),
+            ],
+            3,
+        );
+
+        let (packed, suffix) = matrix.horizontally_packed_row_mut::<Packed>(1);
+        packed[0] = Packed::from([BabyBear::new(9), BabyBear::new(10)]);
+        suffix[0] = BabyBear::new(11);
+
+        assert_eq!(
+            matrix.values,
+            vec![
+                BabyBear::new(1),
+                BabyBear::new(2),
+                BabyBear::new(3),
+                BabyBear::new(9),
+                BabyBear::new(10),
+                BabyBear::new(11),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_par_row_chunks() {
+        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6, 7, 8], 2);
+
+        let chunks: Vec<_> = matrix.par_row_chunks(2).collect();
+
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].values, vec![1, 2, 3, 4]);
+        assert_eq!(chunks[1].values, vec![5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn test_par_row_chunks_exact() {
+        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
+
+        let chunks: Vec<_> = matrix.par_row_chunks_exact(1).collect();
+
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].values, vec![1, 2]);
+        assert_eq!(chunks[1].values, vec![3, 4]);
+        assert_eq!(chunks[2].values, vec![5, 6]);
+    }
+
+    #[test]
+    fn test_par_row_chunks_mut() {
+        let mut matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6, 7, 8], 2);
+
+        matrix
+            .par_row_chunks_mut(2)
+            .for_each(|chunk| chunk.values.iter_mut().for_each(|x| *x += 10));
+
+        assert_eq!(matrix.values, vec![11, 12, 13, 14, 15, 16, 17, 18]);
+    }
+
+    #[test]
+    fn test_row_chunks_exact_mut() {
+        let mut matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
+
+        for chunk in matrix.row_chunks_exact_mut(1) {
+            chunk.values.iter_mut().for_each(|x| *x *= 2);
+        }
+
+        assert_eq!(matrix.values, vec![2, 4, 6, 8, 10, 12]);
+    }
+
+    #[test]
+    fn test_par_row_chunks_exact_mut() {
+        let mut matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
+
+        matrix
+            .par_row_chunks_exact_mut(1)
+            .for_each(|chunk| chunk.values.iter_mut().for_each(|x| *x += 5));
+
+        assert_eq!(matrix.values, vec![6, 7, 8, 9, 10, 11]);
+    }
+
+    #[test]
+    fn test_row_pair_mut() {
+        let mut matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
+
+        let (row1, row2) = matrix.row_pair_mut(0, 2);
+        row1[0] = 9;
+        row2[1] = 10;
+
+        assert_eq!(matrix.values, vec![9, 2, 3, 4, 5, 10]);
+    }
+
+    #[test]
+    fn test_packed_row_pair_mut() {
+        use p3_baby_bear::BabyBear;
+        use p3_field::FieldArray;
+
+        type Packed = FieldArray<BabyBear, 2>;
+
+        let mut matrix = RowMajorMatrix::new(
+            vec![
+                BabyBear::new(1),
+                BabyBear::new(2),
+                BabyBear::new(3),
+                BabyBear::new(4),
+                BabyBear::new(5),
+                BabyBear::new(6),
+            ],
+            3,
+        );
+
+        let ((packed1, sfx1), (packed2, sfx2)) = matrix.packed_row_pair_mut::<Packed>(0, 1);
+        packed1[0] = Packed::from([BabyBear::new(7), BabyBear::new(8)]);
+        packed2[0] = Packed::from([BabyBear::new(33), BabyBear::new(44)]);
+        sfx1[0] = BabyBear::new(99);
+        sfx2[0] = BabyBear::new(9);
+
+        assert_eq!(
+            matrix.values,
+            vec![
+                BabyBear::new(7),
+                BabyBear::new(8),
+                BabyBear::new(99),
+                BabyBear::new(33),
+                BabyBear::new(44),
+                BabyBear::new(9),
+            ]
+        );
+    }
 
     #[test]
     fn test_transpose_square_matrix() {
