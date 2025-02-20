@@ -207,7 +207,7 @@ impl<F: TwoAdicField> TwoAdicCoset<F> {
         // for each divisor n of |F| - 1, and its elements e are uniquely
         // caracterised by the condition e^n = 1.
 
-        // We check (shift * element)^(2^log_size) = 1, terminating early if
+        // We check (shift^{-1} * element)^(2^log_size) = 1, terminating early if
         // possible.
         let mut e = self.shift.inverse() * element;
 
