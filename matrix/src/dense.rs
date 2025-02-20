@@ -1056,4 +1056,66 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_vertically_packed_row_pair() {
+        use p3_baby_bear::BabyBear;
+        use p3_field::FieldArray;
+
+        type Packed = FieldArray<BabyBear, 2>;
+
+        let matrix = RowMajorMatrix::new(
+            vec![
+                BabyBear::new(1),
+                BabyBear::new(2),
+                BabyBear::new(3),
+                BabyBear::new(4), // Row 0
+                BabyBear::new(5),
+                BabyBear::new(6),
+                BabyBear::new(7),
+                BabyBear::new(8), // Row 1
+                BabyBear::new(9),
+                BabyBear::new(10),
+                BabyBear::new(11),
+                BabyBear::new(12), // Row 2
+                BabyBear::new(13),
+                BabyBear::new(14),
+                BabyBear::new(15),
+                BabyBear::new(16), // Row 3
+            ],
+            4,
+        );
+
+        // Calling the function with r = 0 and step = 2
+        let packed = matrix.vertically_packed_row_pair::<Packed>(0, 2);
+
+        // Matrix visualization:
+        //
+        // [  1   2   3   4  ]  <-- Row 0
+        // [  5   6   7   8  ]  <-- Row 1
+        // [  9  10  11  12  ]  <-- Row 2
+        // [ 13  14  15  16  ]  <-- Row 3
+        //
+        // Packing rows 0-1 together, then rows 2-3 together:
+        //
+        // Packed result:
+        // [
+        //   (1, 5), (2, 6), (3, 7), (4, 8),   // First packed row (Row 0 & Row 1)
+        //   (9, 13), (10, 14), (11, 15), (12, 16),   // Second packed row (Row 2 & Row 3)
+        // ]
+
+        assert_eq!(
+            packed,
+            vec![
+                Packed::from([BabyBear::new(1), BabyBear::new(5)]),
+                Packed::from([BabyBear::new(2), BabyBear::new(6)]),
+                Packed::from([BabyBear::new(3), BabyBear::new(7)]),
+                Packed::from([BabyBear::new(4), BabyBear::new(8)]),
+                Packed::from([BabyBear::new(9), BabyBear::new(13)]),
+                Packed::from([BabyBear::new(10), BabyBear::new(14)]),
+                Packed::from([BabyBear::new(11), BabyBear::new(15)]),
+                Packed::from([BabyBear::new(12), BabyBear::new(16)])
+            ]
+        );
+    }
 }
