@@ -164,7 +164,7 @@ pub trait PrimeCharacteristicRing:
         let mut product = Self::ONE;
 
         for j in 0..bits_u64(power) {
-            if (power >> j & 1) != 0 {
+            if (power >> j) & 1 != 0 {
                 product *= current.clone();
             }
             current = current.square();
