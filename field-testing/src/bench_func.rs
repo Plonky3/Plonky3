@@ -46,7 +46,7 @@ pub fn benchmark_iter_sum<F: Field, const N: usize, const REPS: usize>(
     c.bench_function(&format!("{} sum/{}, {}", name, REPS, N), |b| {
         b.iter(|| {
             for i in 0..REPS {
-                output[i] = input[i].iter().cloned().sum()
+                output[i] = input[i].iter().copied().sum()
             }
             output
         })

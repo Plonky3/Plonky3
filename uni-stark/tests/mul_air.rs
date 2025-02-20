@@ -43,7 +43,7 @@ pub struct MulAir {
 
 impl Default for MulAir {
     fn default() -> Self {
-        MulAir {
+        Self {
             degree: 3,
             uses_boundary_constraints: true,
             uses_transition_constraints: true,
@@ -133,7 +133,7 @@ where
     let deserialized_proof =
         postcard::from_bytes(&serialized_proof).expect("unable to deserialize proof");
 
-    let mut v_challenger = challenger.clone();
+    let mut v_challenger = challenger;
     verify(
         &config,
         &air,

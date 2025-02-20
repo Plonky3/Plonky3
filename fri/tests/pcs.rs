@@ -185,7 +185,7 @@ mod babybear_fri_pcs {
         };
 
         let pcs = MyPcs::new(Dft::default(), val_mmcs, fri_config);
-        (pcs, Challenger::new(perm.clone()))
+        (pcs, Challenger::new(perm))
     }
 
     mod blowup_1 {

@@ -44,7 +44,7 @@ impl<F: Copy + Send + Sync, M: Matrix<F>> CircleEvaluations<F, M> {
 impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
     #[instrument(skip_all, fields(dims = %self.values.dimensions()))]
     pub fn interpolate(self) -> RowMajorMatrix<F> {
-        let CircleEvaluations { domain, values } = self;
+        let Self { domain, values } = self;
         let mut values = debug_span!("to_rmm").in_scope(|| values.to_row_major_matrix());
 
         let mut twiddles = debug_span!("twiddles").in_scope(|| {

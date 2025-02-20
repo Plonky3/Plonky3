@@ -52,7 +52,7 @@ impl<K: Eq, V> LinearMap<K, V> {
 impl<K: Eq, V> FromIterator<(K, V)> for LinearMap<K, V> {
     /// This calls `insert` in a loop, so is O(n^2)!!
     fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
-        let mut me = LinearMap::default();
+        let mut me = Self::default();
         for (k, v) in iter {
             me.insert(k, v);
         }

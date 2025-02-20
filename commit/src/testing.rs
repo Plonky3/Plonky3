@@ -28,7 +28,7 @@ pub fn eval_coeffs_at_pt<F: Field, EF: ExtensionField<F>>(
     let mut acc = vec![EF::ZERO; coeffs.width()];
     for r in (0..coeffs.height()).rev() {
         let row = coeffs.row_slice(r);
-        for (acc_c, row_c) in acc.iter_mut().zip(row.as_ref().iter()) {
+        for (acc_c, row_c) in acc.iter_mut().zip(row.iter()) {
             *acc_c *= x;
             *acc_c += *row_c;
         }

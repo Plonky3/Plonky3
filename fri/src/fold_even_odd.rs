@@ -74,10 +74,10 @@ mod tests {
         let dft = Radix2Dit::default();
         let evals = dft.dft(coeffs.clone());
 
-        let even_coeffs = coeffs.iter().cloned().step_by(2).collect_vec();
+        let even_coeffs = coeffs.iter().copied().step_by(2).collect_vec();
         let even_evals = dft.dft(even_coeffs);
 
-        let odd_coeffs = coeffs.iter().cloned().skip(1).step_by(2).collect_vec();
+        let odd_coeffs = coeffs.iter().copied().skip(1).step_by(2).collect_vec();
         let odd_evals = dft.dft(odd_coeffs);
 
         let beta = rng.random::<F>();

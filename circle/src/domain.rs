@@ -138,7 +138,7 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         assert!(log_chunks <= self.log_n);
         self.points()
             .take(num_chunks)
-            .map(|shift| CircleDomain {
+            .map(|shift| Self {
                 log_n: self.log_n - log_chunks,
                 shift,
             })
@@ -215,7 +215,7 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
 }
 
 // 0 1 2 .. len-1 len len len-1 .. 1 0 0 1 ..
-fn forward_backward_index(mut i: usize, len: usize) -> usize {
+const fn forward_backward_index(mut i: usize, len: usize) -> usize {
     i %= 2 * len;
     if i < len {
         i

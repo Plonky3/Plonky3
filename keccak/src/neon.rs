@@ -117,7 +117,7 @@ fn theta_rho(state: [[uint64x2_t; 5]; 5]) -> [[uint64x2_t; 5]; 5] {
 }
 
 #[inline(always)]
-fn pi(state: [[uint64x2_t; 5]; 5]) -> [[uint64x2_t; 5]; 5] {
+const fn pi(state: [[uint64x2_t; 5]; 5]) -> [[uint64x2_t; 5]; 5] {
     [
         [
             state[0][0],

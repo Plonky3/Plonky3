@@ -35,7 +35,7 @@ pub struct CirclePcs<Val: Field, InputMmcs, FriMmcs> {
 }
 
 impl<Val: Field, InputMmcs, FriMmcs> CirclePcs<Val, InputMmcs, FriMmcs> {
-    pub fn new(mmcs: InputMmcs, fri_config: FriConfig<FriMmcs>) -> Self {
+    pub const fn new(mmcs: InputMmcs, fri_config: FriConfig<FriMmcs>) -> Self {
         Self {
             mmcs,
             fri_config,
@@ -373,9 +373,9 @@ where
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
         // Write evaluations to challenger
-        for (_, round) in rounds.iter() {
-            for (_, mat) in round.iter() {
-                for (_, point) in mat.iter() {
+        for (_, round) in &rounds {
+            for (_, mat) in round {
+                for (_, point) in mat {
                     point
                         .iter()
                         .for_each(|&opening| challenger.observe_algebra_element(opening));
@@ -496,7 +496,7 @@ where
                                     // - 1 here is log_arity.
                                     log_height - 1,
                                     bivariate_beta,
-                                    fl_values.iter().cloned(),
+                                    fl_values.iter().copied(),
                                 ),
                             );
 

@@ -13,7 +13,7 @@ use crate::Matrix;
 pub struct FlatMatrixView<F, EF, Inner>(Inner, PhantomData<(F, EF)>);
 
 impl<F, EF, Inner> FlatMatrixView<F, EF, Inner> {
-    pub fn new(inner: Inner) -> Self {
+    pub const fn new(inner: Inner) -> Self {
         Self(inner, PhantomData)
     }
 }

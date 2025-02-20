@@ -25,7 +25,7 @@ impl<F, Mds, const WIDTH: usize, const ALPHA: u64> Rescue<F, Mds, WIDTH, ALPHA>
 where
     F: PrimeField + PermutationMonomial<ALPHA>,
 {
-    pub fn new(num_rounds: usize, round_constants: Vec<F>, mds: Mds) -> Self {
+    pub const fn new(num_rounds: usize, round_constants: Vec<F>, mds: Mds) -> Self {
         Self {
             num_rounds,
             mds,

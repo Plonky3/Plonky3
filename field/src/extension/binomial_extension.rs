@@ -91,11 +91,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F>
     }
 
     fn as_base(&self) -> Option<F> {
-        if <Self as ExtensionField<F>>::is_in_basefield(self) {
-            Some(self.value[0])
-        } else {
-            None
-        }
+        <Self as ExtensionField<F>>::is_in_basefield(self).then(|| self.value[0])
     }
 }
 
@@ -483,12 +479,12 @@ where
 impl<F: BinomiallyExtendable<D>, const D: usize> Distribution<BinomialExtensionField<F, D>>
     for StandardUniform
 where
-    StandardUniform: Distribution<F>,
+    Self: Distribution<F>,
 {
     fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> BinomialExtensionField<F, D> {
         let mut res = [F::ZERO; D];
-        for r in res.iter_mut() {
-            *r = StandardUniform.sample(rng);
+        for r in &mut res {
+            *r = Self.sample(rng);
         }
         BinomialExtensionField::from_basis_coefficients_slice(&res)
     }

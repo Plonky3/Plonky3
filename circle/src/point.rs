@@ -17,9 +17,9 @@ pub struct Point<F> {
 
 impl<F: Field> Point<F> {
     #[inline]
-    pub fn new(x: F, y: F) -> Point<F> {
+    pub fn new(x: F, y: F) -> Self {
         debug_assert_eq!(x.square() + y.square(), F::ONE);
-        Point { x, y, _private: () }
+        Self { x, y, _private: () }
     }
 
     const ZERO: Self = Self {

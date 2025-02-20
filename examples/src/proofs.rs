@@ -22,7 +22,7 @@ use crate::types::{
 };
 
 /// Produce a MerkleTreeMmcs which uses the KeccakF permutation.
-fn get_keccak_mmcs<F: Field>() -> KeccakMerkleMmcs<F> {
+const fn get_keccak_mmcs<F: Field>() -> KeccakMerkleMmcs<F> {
     let u64_hash = PaddingFreeSponge::<KeccakF, 25, 17, 4>::new(KeccakF {});
 
     let field_hash = SerializingHasher32To64::new(u64_hash);
@@ -37,7 +37,7 @@ fn get_keccak_mmcs<F: Field>() -> KeccakMerkleMmcs<F> {
 /// The first permutation will be used for compression and the second for more sponge hashing.
 /// Currently this is only intended to be used with a pair of Poseidon2 hashes of with 16 and 24
 /// but this can easily be generalised in future if we desire.
-fn get_poseidon2_mmcs<
+const fn get_poseidon2_mmcs<
     F: Field,
     Perm16: CryptographicPermutation<[F; 16]> + CryptographicPermutation<[F::Packing; 16]>,
     Perm24: CryptographicPermutation<[F; 24]> + CryptographicPermutation<[F::Packing; 24]>,
@@ -45,9 +45,9 @@ fn get_poseidon2_mmcs<
     perm16: Perm16,
     perm24: Perm24,
 ) -> Poseidon2MerkleMmcs<F, Perm16, Perm24> {
-    let hash = Poseidon2Sponge::new(perm24.clone());
+    let hash = Poseidon2Sponge::new(perm24);
 
-    let compress = Poseidon2Compression::new(perm16.clone());
+    let compress = Poseidon2Compression::new(perm16);
 
     Poseidon2MerkleMmcs::<F, _, _>::new(hash, compress)
 }
@@ -128,7 +128,7 @@ where
     let config = StarkConfig::new(pcs);
 
     let mut proof_challenger = DuplexChallenger::new(perm24.clone());
-    let mut verif_challenger = DuplexChallenger::new(perm24.clone());
+    let mut verif_challenger = DuplexChallenger::new(perm24);
 
     let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
     report_proof_size(&proof);
@@ -208,7 +208,7 @@ where
     let config = Poseidon2CircleStarkConfig::new(pcs);
 
     let mut proof_challenger = DuplexChallenger::new(perm24.clone());
-    let mut verif_challenger = DuplexChallenger::new(perm24.clone());
+    let mut verif_challenger = DuplexChallenger::new(perm24);
 
     let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
     report_proof_size(&proof);

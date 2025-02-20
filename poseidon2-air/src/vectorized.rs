@@ -1,4 +1,3 @@
-use alloc::vec::Vec;
 use core::borrow::{Borrow, BorrowMut};
 
 use p3_air::{Air, AirBuilder, BaseAir};
@@ -175,7 +174,9 @@ impl<
         VECTOR_LEN,
     >
 {
-    pub fn new(constants: RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>) -> Self {
+    pub const fn new(
+        constants: RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
+    ) -> Self {
         Self {
             air: Poseidon2Air::new(constants),
         }
@@ -191,9 +192,9 @@ impl<
         LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>,
         StandardUniform: Distribution<[F; WIDTH]>,
     {
-        let inputs = (0..num_hashes).map(|_| random()).collect::<Vec<_>>();
+        let inputs = (0..num_hashes).map(|_| random()).collect();
         generate_vectorized_trace_rows::<
-            F,
+            _,
             LinearLayers,
             WIDTH,
             SBOX_DEGREE,
@@ -257,7 +258,7 @@ impl<
         let main = builder.main();
         let local = main.row_slice(0);
         let local: &VectorizedPoseidon2Cols<
-            AB::Var,
+            _,
             WIDTH,
             SBOX_DEGREE,
             SBOX_REGISTERS,
