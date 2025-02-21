@@ -191,13 +191,16 @@ fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
 }
 
 #[cfg(target_arch = "aarch64")]
-fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
+pub const fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
     // Aarch64 can reverse bits in one instruction, so the trivial version works best.
-    for src in 0..vals.len() {
+    let mut src = 0;
+
+    while src < vals.len() {
         let dst = src.reverse_bits().wrapping_shr(usize::BITS - lb_n as u32);
         if src < dst {
             vals.swap(src, dst);
         }
+        src += 1;
     }
 }
 
@@ -726,5 +729,82 @@ mod tests {
         assert!(relatively_prime_u64(u64::MAX, 1));
         assert!(relatively_prime_u64(u64::MAX, u64::MAX - 1));
         assert!(!relatively_prime_u64(u64::MAX, u64::MAX));
+    }
+
+    #[test]
+    fn test_reverse_slice_index_bits_small_basic() {
+        let mut vals = [0, 1, 2, 3];
+
+        // We apply bit-reversed index permutation on this array.
+        // - The input array is `[0, 1, 2, 3]`
+        // - The `lb_n = 2` means we consider 2-bit indices.
+        //
+        // Indices before bit-reversal:
+        //     Index 0 -> 00 (binary)
+        //     Index 1 -> 01 (binary)
+        //     Index 2 -> 10 (binary)
+        //     Index 3 -> 11 (binary)
+        //
+        // Bit-reversed indices (taking only the last `lb_n = 2` bits):
+        //     00 -> 00  (0 -> 0)
+        //     01 -> 10  (1 -> 2)
+        //     10 -> 01  (2 -> 1)
+        //     11 -> 11  (3 -> 3)
+        //
+        // Final expected output: `[0, 2, 1, 3]`
+
+        reverse_slice_index_bits_small(&mut vals, 2);
+
+        assert_eq!(vals, [0, 2, 1, 3]);
+    }
+
+    #[test]
+    fn test_reverse_slice_index_bits_small_larger_power_of_two() {
+        let mut vals = [0, 1, 2, 3, 4, 5, 6, 7];
+
+        // We apply bit-reversed index permutation on this array.
+        // - The input array is `[0, 1, 2, 3, 4, 5, 6, 7]`
+        // - The `lb_n = 3` means we consider 3-bit indices.
+        //
+        // Indices before bit-reversal:
+        //     Index 0 -> 000 (binary)
+        //     Index 1 -> 001 (binary)
+        //     Index 2 -> 010 (binary)
+        //     Index 3 -> 011 (binary)
+        //     Index 4 -> 100 (binary)
+        //     Index 5 -> 101 (binary)
+        //     Index 6 -> 110 (binary)
+        //     Index 7 -> 111 (binary)
+        //
+        // Bit-reversed indices (taking only the last `lb_n = 3` bits):
+        //     000 -> 000  (0 -> 0)
+        //     001 -> 100  (1 -> 4)
+        //     010 -> 010  (2 -> 2)
+        //     011 -> 110  (3 -> 6)
+        //     100 -> 001  (4 -> 1)
+        //     101 -> 101  (5 -> 5)
+        //     110 -> 011  (6 -> 3)
+        //     111 -> 111  (7 -> 7)
+        //
+        // Final expected output: `[0, 4, 2, 6, 1, 5, 3, 7]`
+
+        reverse_slice_index_bits_small(&mut vals, 3);
+
+        // Verify that the elements are now in the expected bit-reversed order.
+        assert_eq!(vals, [0, 4, 2, 6, 1, 5, 3, 7]);
+    }
+
+    #[test]
+    fn test_reverse_slice_index_bits_small_empty() {
+        let mut vals: [i32; 0] = [];
+        reverse_slice_index_bits_small(&mut vals, 2);
+        assert_eq!(vals, []);
+    }
+
+    #[test]
+    fn test_reverse_slice_index_bits_small_single_element() {
+        let mut vals = [42];
+        reverse_slice_index_bits_small(&mut vals, 1);
+        assert_eq!(vals, [42]);
     }
 }
