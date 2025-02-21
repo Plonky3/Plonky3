@@ -429,13 +429,7 @@ pub const fn relatively_prime_u64(mut u: u64, mut v: u64) -> bool {
 
         // Ensure u <= v
         if u > v {
-            // Simpler to use
-            // core::mem::swap(&mut u, &mut v);
-            // This will be stable once rust 1.85.0 hits.
-            // Until then we do it manually.
-            let temp = u;
-            u = v;
-            v = temp;
+            core::mem::swap(&mut u, &mut v);
         }
 
         // This looks inefficient for v >> u but thanks to the fact that we remove
