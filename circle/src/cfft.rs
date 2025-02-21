@@ -227,9 +227,9 @@ impl<F: ComplexExtendable> CircleDomain<F> {
         self.nth_point(cfft_permute_index(index << 1, self.log_n)).y
     }
     pub(crate) fn x_twiddles(&self, layer: usize) -> Vec<F> {
-        let r#gen = self.r#gen() * (1 << layer);
+        let generator = self.subgroup_generator() * (1 << layer);
         let shift = self.shift * (1 << layer);
-        let mut xs = iterate(shift, move |&p| p + r#gen)
+        let mut xs = iterate(shift, move |&p| p + generator)
             .map(|p| p.x)
             .take(1 << (self.log_n - layer - 2))
             .collect_vec();
@@ -237,7 +237,7 @@ impl<F: ComplexExtendable> CircleDomain<F> {
         xs
     }
     pub(crate) fn nth_x_twiddle(&self, index: usize) -> F {
-        (self.shift + self.r#gen() * index).x
+        (self.shift + self.subgroup_generator() * index).x
     }
 }
 

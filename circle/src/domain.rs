@@ -57,15 +57,15 @@ impl<F: ComplexExtendable> CircleDomain<F> {
     fn is_standard(&self) -> bool {
         self.shift == Point::generator(self.log_n + 1)
     }
-    pub(crate) fn r#gen(&self) -> Point<F> {
+    pub(crate) fn subgroup_generator(&self) -> Point<F> {
         Point::generator(self.log_n - 1)
     }
     pub(crate) fn coset0(&self) -> impl Iterator<Item = Point<F>> + use<F> {
-        let g = self.r#gen();
+        let g = self.subgroup_generator();
         iterate(self.shift, move |&p| p + g).take(1 << (self.log_n - 1))
     }
     fn coset1(&self) -> impl Iterator<Item = Point<F>> + use<F> {
-        let g = self.r#gen();
+        let g = self.subgroup_generator();
         iterate(g - self.shift, move |&p| p + g).take(1 << (self.log_n - 1))
     }
     pub(crate) fn points(&self) -> impl Iterator<Item = Point<F>> + use<F> {
@@ -74,9 +74,9 @@ impl<F: ComplexExtendable> CircleDomain<F> {
     pub(crate) fn nth_point(&self, idx: usize) -> Point<F> {
         let (idx, lsb) = (idx >> 1, idx & 1);
         if lsb == 0 {
-            self.shift + self.r#gen() * idx
+            self.shift + self.subgroup_generator() * idx
         } else {
-            -self.shift + self.r#gen() * (idx + 1)
+            -self.shift + self.subgroup_generator() * (idx + 1)
         }
     }
 

@@ -211,9 +211,9 @@ mod tests {
         assert_eq!(one * 7, -one);
         assert_eq!(one * 8, Pt::ZERO);
 
-        let r#gen = Pt::generator(10);
+        let generator = Pt::generator(10);
         let log_n = 10;
-        let vn_prod_gen = (1..log_n).map(|i| r#gen.v_n(i)).product();
-        assert_eq!(r#gen.v_n_prod(log_n), vn_prod_gen);
+        let vn_prod_gen = (1..log_n).map(|i| generator.v_n(i)).product();
+        assert_eq!(generator.v_n_prod(log_n), vn_prod_gen);
     }
 }
