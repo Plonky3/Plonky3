@@ -2,8 +2,8 @@ use core::arch::x86_64::{self, __m256i};
 use core::mem::transmute;
 
 use p3_monty_31::{
-    mul_2exp_neg_n_avx2, mul_2exp_neg_two_adicity_avx2, mul_neg_2exp_neg_n_avx2,
-    mul_neg_2exp_neg_two_adicity_avx2, InternalLayerParametersAVX2,
+    InternalLayerParametersAVX2, mul_2exp_neg_n_avx2, mul_2exp_neg_two_adicity_avx2,
+    mul_neg_2exp_neg_n_avx2, mul_neg_2exp_neg_two_adicity_avx2,
 };
 
 use crate::{KoalaBearInternalLayerParameters, KoalaBearParameters};
