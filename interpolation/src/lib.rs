@@ -7,7 +7,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use p3_field::{
-    batch_multiplicative_inverse, scale_vec, two_adic_coset_zerofier, ExtensionField, TwoAdicField,
+    ExtensionField, TwoAdicField, batch_multiplicative_inverse, scale_vec, two_adic_coset_zerofier,
 };
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
@@ -82,7 +82,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_field::{batch_multiplicative_inverse, Field, PrimeCharacteristicRing};
+    use p3_field::{Field, PrimeCharacteristicRing, batch_multiplicative_inverse};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_util::log2_strict_usize;
 

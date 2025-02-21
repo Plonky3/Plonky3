@@ -4,13 +4,13 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace};
 use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, Field};
-use p3_fri::verifier::FriError;
 use p3_fri::FriConfig;
+use p3_fri::verifier::FriError;
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
 use p3_matrix::row_index_mapped::RowIndexMappedView;
 use p3_matrix::{Dimensions, Matrix};
@@ -21,11 +21,11 @@ use tracing::info_span;
 
 use crate::deep_quotient::{deep_quotient_reduce_row, extract_lambda};
 use crate::domain::CircleDomain;
-use crate::folding::{fold_y, fold_y_row, CircleFriConfig, CircleFriGenericConfig};
+use crate::folding::{CircleFriConfig, CircleFriGenericConfig, fold_y, fold_y_row};
 use crate::point::Point;
 use crate::prover::prove;
 use crate::verifier::verify;
-use crate::{cfft_permute_index, CfftPerm, CfftPermutable, CircleEvaluations, CircleFriProof};
+use crate::{CfftPerm, CfftPermutable, CircleEvaluations, CircleFriProof, cfft_permute_index};
 
 #[derive(Debug)]
 pub struct CirclePcs<Val: Field, InputMmcs, FriMmcs> {

@@ -2,8 +2,8 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_field::TwoAdicField;
-use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 use tracing::instrument;
@@ -57,7 +57,7 @@ mod tests {
     use itertools::izip;
     use p3_baby_bear::BabyBear;
     use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
-    use rand::{rng, Rng};
+    use rand::{Rng, rng};
 
     use super::*;
 

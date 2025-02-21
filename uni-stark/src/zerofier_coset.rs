@@ -2,8 +2,8 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_field::{
-    batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, Field, PackedField,
-    TwoAdicField,
+    Field, PackedField, TwoAdicField, batch_multiplicative_inverse,
+    cyclic_subgroup_coset_known_order,
 };
 
 /// Precomputations of the evaluation of `Z_H(X) = X^n - 1` on a coset `s K` with `H <= K`.

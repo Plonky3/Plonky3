@@ -4,14 +4,14 @@ use core::borrow::Borrow;
 use p3_air::utils::{andn, xor, xor3};
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
-use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 use rand::random;
 
 use crate::columns::{KeccakCols, NUM_KECCAK_COLS};
 use crate::constants::rc_value_bit;
 use crate::round_flags::eval_round_flags;
-use crate::{generate_trace_rows, BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS};
+use crate::{BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS, generate_trace_rows};
 
 /// Assumes the field size is at least 16 bits.
 #[derive(Debug)]

@@ -2,8 +2,8 @@ use core::marker::PhantomData;
 
 use p3_field::{Algebra, InjectiveMonomial};
 use p3_poseidon2::{
-    add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
-    ExternalLayer, GenericPoseidon2LinearLayers, InternalLayer, MDSMat4,
+    ExternalLayer, GenericPoseidon2LinearLayers, InternalLayer, MDSMat4, add_rc_and_sbox_generic,
+    external_initial_permute_state, external_terminal_permute_state,
 };
 
 use crate::{

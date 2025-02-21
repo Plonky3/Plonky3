@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_bn254_fr::{Bn254Fr, Poseidon2Bn254};
 use p3_field::{Field, PrimeCharacteristicRing};

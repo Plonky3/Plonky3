@@ -5,8 +5,8 @@
 //!
 //! For most of the enums, this allows the user to
 
-use clap::builder::PossibleValue;
 use clap::ValueEnum;
+use clap::builder::PossibleValue;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum FieldOptions {

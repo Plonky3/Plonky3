@@ -6,11 +6,11 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::extension::{BinomialExtensionField, ComplexExtendable};
 use p3_field::{ExtensionField, Field, PrimeField32, PrimeField64, TwoAdicField};
-use p3_fri::{create_benchmark_fri_config, TwoAdicFriPcs};
+use p3_fri::{TwoAdicFriPcs, create_benchmark_fri_config};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHasher32To64};
-use p3_uni_stark::{prove, verify, Proof, StarkConfig, StarkGenericConfig};
+use p3_uni_stark::{Proof, StarkConfig, StarkGenericConfig, prove, verify};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 
@@ -145,9 +145,9 @@ where
 #[inline]
 pub fn prove_m31_keccak<
     PG: ExampleHashAir<
-        Mersenne31,
-        KeccakCircleStarkConfig<Mersenne31, BinomialExtensionField<Mersenne31, 3>>,
-    >,
+            Mersenne31,
+            KeccakCircleStarkConfig<Mersenne31, BinomialExtensionField<Mersenne31, 3>>,
+        >,
 >(
     proof_goal: PG,
     num_hashes: usize,
@@ -221,10 +221,13 @@ where
 /// Either print that the proof was successful or panic and return the error.
 #[inline]
 pub fn report_result(result: Result<(), impl Debug>) {
-    if let Err(e) = result {
-        panic!("{:?}", e);
-    } else {
-        println!("Proof Verified Successfully")
+    match result {
+        Err(e) => {
+            panic!("{:?}", e);
+        }
+        _ => {
+            println!("Proof Verified Successfully")
+        }
     }
 }
 

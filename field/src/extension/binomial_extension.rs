@@ -18,8 +18,8 @@ use super::{HasFrobenius, HasTwoAdicBinomialExtension, PackedBinomialExtensionFi
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{
-    field_to_array, Algebra, BasedVectorSpace, ExtensionField, Packable, PrimeCharacteristicRing,
-    TwoAdicField,
+    Algebra, BasedVectorSpace, ExtensionField, Packable, PrimeCharacteristicRing, TwoAdicField,
+    field_to_array,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]

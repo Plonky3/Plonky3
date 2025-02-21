@@ -2,8 +2,8 @@
 //! With significant inspiration from https://extgit.iaik.tugraz.at/krypto/zkfriendlyhashzoo/
 
 use p3_field::PrimeField32;
-use p3_mds::util::apply_circulant;
 use p3_mds::MdsPermutation;
+use p3_mds::util::apply_circulant;
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::Permutation;
 use sha3::digest::{ExtendableOutput, Update};

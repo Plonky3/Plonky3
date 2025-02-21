@@ -25,10 +25,10 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     /// packed and non-packed variants.
     pub fn roots_of_unity_table(n: usize) -> Vec<Vec<Self>> {
         let lg_n = log2_strict_usize(n);
-        let gen = Self::two_adic_generator(lg_n);
+        let r#gen = Self::two_adic_generator(lg_n);
         let half_n = 1 << (lg_n - 1);
         // nth_roots = [1, g, g^2, g^3, ..., g^{n/2 - 1}]
-        let nth_roots: Vec<_> = gen.powers().take(half_n).collect();
+        let nth_roots: Vec<_> = r#gen.powers().take(half_n).collect();
 
         (0..(lg_n - 1))
             .map(|i| nth_roots.iter().step_by(1 << i).copied().collect())

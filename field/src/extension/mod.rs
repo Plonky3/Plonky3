@@ -1,7 +1,7 @@
 use core::{debug_assert, debug_assert_eq, iter};
 
 use crate::field::Field;
-use crate::{naive_poly_mul, ExtensionField};
+use crate::{ExtensionField, naive_poly_mul};
 
 mod binomial_extension;
 mod complex;

@@ -347,12 +347,14 @@ where
             "Error when testing sub consistency of packed and scalar at location {}.",
             i
         );
-        assert_eq!(arr_special_sub_left[i],
+        assert_eq!(
+            arr_special_sub_left[i],
             special_vals[i] - arr0[i],
             "Error when testing consistency of left sub for special values for packed and scalar at location {}.",
             i
         );
-        assert_eq!(arr_special_sub_right[i],
+        assert_eq!(
+            arr_special_sub_right[i],
             arr1[i] - special_vals[i],
             "Error when testing consistency of right sub for special values for packed and scalar at location {}.",
             i
@@ -364,12 +366,14 @@ where
             "Error when testing mul consistency of packed and scalar at location {}.",
             i
         );
-        assert_eq!(arr_special_mul_left[i],
+        assert_eq!(
+            arr_special_mul_left[i],
             special_vals[i] * arr0[i],
             "Error when testing consistency of left mul for special values for packed and scalar at location {}.",
             i
         );
-        assert_eq!(arr_special_mul_right[i],
+        assert_eq!(
+            arr_special_mul_right[i],
             arr1[i] * special_vals[i],
             "Error when testing consistency of right mul for special values for packed and scalar at location {}.",
             i
@@ -380,37 +384,43 @@ where
             "Error when testing neg consistency of packed and scalar at location {}.",
             i
         );
-        assert_eq!(arr_special_neg[i],
-            -special_vals[i],
+        assert_eq!(
+            arr_special_neg[i], -special_vals[i],
             "Error when testing consistency of neg for special values for packed and scalar at location {}.",
             i
         );
-        assert_eq!(arr_exp_3[i],
+        assert_eq!(
+            arr_exp_3[i],
             arr0[i].exp_const_u64::<3>(),
             "Error when testing exp_const_u64::<3> consistency of packed and scalar at location {}.",
             i
         );
-        assert_eq!(arr_special_exp_3[i],
+        assert_eq!(
+            arr_special_exp_3[i],
             special_vals[i].exp_const_u64::<3>(),
             "Error when testing consistency of exp_const_u64::<3> for special values for packed and scalar at location {}.",
             i
         );
-        assert_eq!(arr_exp_5[i],
+        assert_eq!(
+            arr_exp_5[i],
             arr0[i].exp_const_u64::<5>(),
             "Error when testing exp_const_u64::<5> consistency of packed and scalar at location {}.",
             i
         );
-        assert_eq!(arr_special_exp_5[i],
+        assert_eq!(
+            arr_special_exp_5[i],
             special_vals[i].exp_const_u64::<5>(),
             "Error when testing consistency of exp_const_u64::<5> for special values for packed and scalar at location {}.",
             i
         );
-        assert_eq!(arr_exp_7[i],
+        assert_eq!(
+            arr_exp_7[i],
             arr0[i].exp_const_u64::<7>(),
             "Error when testing exp_const_u64::<7> consistency of packed and scalar at location {}.",
             i
         );
-        assert_eq!(arr_special_exp_7[i],
+        assert_eq!(
+            arr_special_exp_7[i],
             special_vals[i].exp_const_u64::<7>(),
             "Error when testing consistency of exp_const_u64::<7> for special values for packed and scalar at location {}.",
             i

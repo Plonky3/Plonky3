@@ -2,21 +2,21 @@ use alloc::collections::BTreeMap;
 use alloc::slice;
 use alloc::vec::Vec;
 use core::cell::RefCell;
-use core::mem::{transmute, MaybeUninit};
+use core::mem::{MaybeUninit, transmute};
 
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
 use p3_field::integers::QuotientMap;
 use p3_field::{Field, Powers, TwoAdicField};
+use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversableMatrix, BitReversalPerm, BitReversedMatrixView};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
-use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
 use tracing::{debug_span, instrument};
 
-use crate::butterflies::{Butterfly, DitButterfly};
 use crate::TwoAdicSubgroupDft;
+use crate::butterflies::{Butterfly, DitButterfly};
 
 /// A parallel FFT algorithm which divides a butterfly network's layers into two halves.
 ///

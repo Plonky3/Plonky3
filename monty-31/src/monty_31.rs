@@ -12,11 +12,11 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
 use p3_field::{
-    quotient_map_small_int, Field, InjectiveMonomial, Packable, PermutationMonomial,
-    PrimeCharacteristicRing, PrimeField, PrimeField32, PrimeField64, TwoAdicField,
+    Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
+    PrimeField32, PrimeField64, TwoAdicField, quotient_map_small_int,
 };
-use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::utils::{

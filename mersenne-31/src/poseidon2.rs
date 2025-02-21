@@ -15,13 +15,13 @@
 
 use p3_field::Algebra;
 use p3_poseidon2::{
+    ExternalLayer, GenericPoseidon2LinearLayers, InternalLayer, MDSMat4, Poseidon2,
     add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
-    internal_permute_state, ExternalLayer, GenericPoseidon2LinearLayers, InternalLayer, MDSMat4,
-    Poseidon2,
+    internal_permute_state,
 };
 
 use crate::{
-    from_u62, Mersenne31, Poseidon2ExternalLayerMersenne31, Poseidon2InternalLayerMersenne31,
+    Mersenne31, Poseidon2ExternalLayerMersenne31, Poseidon2InternalLayerMersenne31, from_u62,
 };
 
 /// Degree of the chosen permutation polynomial for Mersenne31, used as the Poseidon2 S-Box.

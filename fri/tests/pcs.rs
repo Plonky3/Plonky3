@@ -1,4 +1,4 @@
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{CanObserve, DuplexChallenger, FieldChallenger};
 use p3_commit::{ExtensionMmcs, Pcs, PolynomialSpace};

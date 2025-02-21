@@ -14,12 +14,12 @@ use halo2curves::serde::SerdeObject;
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
 use p3_field::{
-    quotient_map_small_int, Field, InjectiveMonomial, Packable, PrimeCharacteristicRing,
-    PrimeField, TwoAdicField,
+    Field, InjectiveMonomial, Packable, PrimeCharacteristicRing, PrimeField, TwoAdicField,
+    quotient_map_small_int,
 };
 pub use poseidon2::Poseidon2Bn254;
-use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// The BN254 curve scalar field prime, defined as `F_r` where `r = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.

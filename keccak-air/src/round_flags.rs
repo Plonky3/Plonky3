@@ -3,8 +3,8 @@ use core::borrow::Borrow;
 use p3_air::AirBuilder;
 use p3_matrix::Matrix;
 
-use crate::columns::KeccakCols;
 use crate::NUM_ROUNDS;
+use crate::columns::KeccakCols;
 
 #[inline]
 pub(crate) fn eval_round_flags<AB: AirBuilder>(builder: &mut AB) {

@@ -7,9 +7,9 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_poseidon2::{
-    add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, InternalLayer,
-    InternalLayerConstructor, MDSMat4,
+    InternalLayerConstructor, MDSMat4, add_rc_and_sbox_generic, external_initial_permute_state,
+    external_terminal_permute_state,
 };
 
 use crate::{

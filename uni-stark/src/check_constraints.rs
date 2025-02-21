@@ -2,9 +2,9 @@ use alloc::vec::Vec;
 
 use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues};
 use p3_field::Field;
+use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::VerticalPair;
-use p3_matrix::Matrix;
 use tracing::instrument;
 
 #[instrument(name = "check constraints", skip_all)]

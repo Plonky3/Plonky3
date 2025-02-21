@@ -8,7 +8,7 @@ use p3_maybe_rayon::prelude::*;
 use tracing::instrument;
 
 use crate::columns::{Blake3Cols, NUM_BLAKE3_COLS};
-use crate::constants::{permute, IV};
+use crate::constants::{IV, permute};
 use crate::{Blake3State, FullRound};
 
 // TODO: Take generic iterable

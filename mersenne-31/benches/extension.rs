@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use p3_field::extension::{BinomialExtensionField, Complex};
 use p3_field_testing::bench_func::{
     benchmark_inv, benchmark_mul_latency, benchmark_mul_throughput, benchmark_square,

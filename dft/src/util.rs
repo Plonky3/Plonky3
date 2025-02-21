@@ -1,9 +1,9 @@
 use core::borrow::BorrowMut;
 
-use p3_field::integers::QuotientMap;
 use p3_field::Field;
-use p3_matrix::dense::{DenseMatrix, DenseStorage, RowMajorMatrix};
+use p3_field::integers::QuotientMap;
 use p3_matrix::Matrix;
+use p3_matrix::dense::{DenseMatrix, DenseStorage, RowMajorMatrix};
 use tracing::instrument;
 
 /// Divide each coefficient of the given matrix by its height.

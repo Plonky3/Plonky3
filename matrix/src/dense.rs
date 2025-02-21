@@ -6,10 +6,10 @@ use core::marker::PhantomData;
 use core::ops::Deref;
 use core::{iter, slice};
 
-use p3_field::{scale_slice_in_place, ExtensionField, Field, PackedValue};
+use p3_field::{ExtensionField, Field, PackedValue, scale_slice_in_place};
 use p3_maybe_rayon::prelude::*;
-use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 

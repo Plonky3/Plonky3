@@ -2,7 +2,7 @@ use alloc::string::String;
 use core::marker::PhantomData;
 
 use itertools::Itertools;
-use p3_field::{reduce_32, Field, PrimeField, PrimeField32};
+use p3_field::{Field, PrimeField, PrimeField32, reduce_32};
 
 use crate::hasher::CryptographicHasher;
 use crate::permutation::CryptographicPermutation;
@@ -41,13 +41,16 @@ where
         // hence the more manual loop.
         'outer: loop {
             for i in 0..RATE {
-                if let Some(x) = input.next() {
-                    state[i] = x;
-                } else {
-                    if i != 0 {
-                        self.permutation.permute_mut(&mut state);
+                match input.next() {
+                    Some(x) => {
+                        state[i] = x;
                     }
-                    break 'outer;
+                    _ => {
+                        if i != 0 {
+                            self.permutation.permute_mut(&mut state);
+                        }
+                        break 'outer;
+                    }
                 }
             }
             self.permutation.permute_mut(&mut state);

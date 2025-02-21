@@ -11,12 +11,12 @@ use num_bigint::BigUint;
 use p3_field::exponentiation::exp_1717986917;
 use p3_field::integers::QuotientMap;
 use p3_field::{
-    halve_u32, quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int, Field,
-    InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField32, PrimeField64,
+    Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
+    PrimeField32, PrimeField64, halve_u32, quotient_map_large_iint, quotient_map_large_uint,
+    quotient_map_small_int,
 };
-use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize};
 

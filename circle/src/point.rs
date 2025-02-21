@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::ops::{Add, AddAssign, Mul, Neg, Sub};
 
 use p3_field::extension::ComplexExtendable;
-use p3_field::{batch_multiplicative_inverse, ExtensionField, Field};
+use p3_field::{ExtensionField, Field, batch_multiplicative_inverse};
 
 /// Affine representation of a point on the circle.
 /// x^2 + y^2 == 1
@@ -211,9 +211,9 @@ mod tests {
         assert_eq!(one * 7, -one);
         assert_eq!(one * 8, Pt::ZERO);
 
-        let gen = Pt::generator(10);
+        let r#gen = Pt::generator(10);
         let log_n = 10;
-        let vn_prod_gen = (1..log_n).map(|i| gen.v_n(i)).product();
-        assert_eq!(gen.v_n_prod(log_n), vn_prod_gen);
+        let vn_prod_gen = (1..log_n).map(|i| r#gen.v_n(i)).product();
+        assert_eq!(r#gen.v_n_prod(log_n), vn_prod_gen);
     }
 }

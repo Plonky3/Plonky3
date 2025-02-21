@@ -11,7 +11,7 @@
 )]
 
 use p3_symmetric::{CryptographicHasher, CryptographicPermutation, Permutation};
-use tiny_keccak::{keccakf, Hasher, Keccak};
+use tiny_keccak::{Hasher, Keccak, keccakf};
 
 #[cfg(all(
     feature = "nightly-features",

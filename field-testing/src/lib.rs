@@ -14,12 +14,12 @@ pub use dft_testing::*;
 use num_bigint::BigUint;
 use num_traits::identities::One;
 use p3_field::{
-    cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order, two_adic_coset_zerofier,
-    two_adic_subgroup_zerofier, ExtensionField, Field, TwoAdicField,
+    ExtensionField, Field, TwoAdicField, cyclic_subgroup_coset_known_order,
+    cyclic_subgroup_known_order, two_adic_coset_zerofier, two_adic_subgroup_zerofier,
 };
 pub use packedfield_testing::*;
-use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 
 #[allow(clippy::eq_op)]
 pub fn test_add_neg_sub_mul<F: Field>()
@@ -166,7 +166,9 @@ macro_rules! test_prime_field {
             fn test_small_integer_conversions() {
                 $crate::generate_from_small_int_tests!(
                     $field,
-                    [u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize]
+                    [
+                        u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize
+                    ]
                 );
             }
 
@@ -356,7 +358,7 @@ mod tests {
 
     use p3_baby_bear::BabyBear;
     use p3_field::extension::{BinomialExtensionField, HasFrobenius};
-    use p3_field::{binomial_expand, eval_poly, PrimeCharacteristicRing};
+    use p3_field::{PrimeCharacteristicRing, binomial_expand, eval_poly};
     use rand::random;
 
     use super::*;

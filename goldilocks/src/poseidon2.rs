@@ -11,10 +11,10 @@ use alloc::vec::Vec;
 
 use p3_field::{Algebra, InjectiveMonomial};
 use p3_poseidon2::{
-    add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
-    internal_permute_state, matmul_internal, ExternalLayer, ExternalLayerConstants,
-    ExternalLayerConstructor, HLMDSMat4, InternalLayer, InternalLayerConstructor, MDSMat4,
-    Poseidon2,
+    ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, HLMDSMat4, InternalLayer,
+    InternalLayerConstructor, MDSMat4, Poseidon2, add_rc_and_sbox_generic,
+    external_initial_permute_state, external_terminal_permute_state, internal_permute_state,
+    matmul_internal,
 };
 
 use crate::Goldilocks;

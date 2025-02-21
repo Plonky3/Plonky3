@@ -6,7 +6,7 @@ use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
 
-use crate::columns::{num_cols, Poseidon2Cols};
+use crate::columns::{Poseidon2Cols, num_cols};
 use crate::constants::RoundConstants;
 use crate::{FullRound, PartialRound, SBox};
 
@@ -26,14 +26,14 @@ pub struct Poseidon2Air<
 }
 
 impl<
-        F: Field,
-        LinearLayers,
-        const WIDTH: usize,
-        const SBOX_DEGREE: u64,
-        const SBOX_REGISTERS: usize,
-        const HALF_FULL_ROUNDS: usize,
-        const PARTIAL_ROUNDS: usize,
-    >
+    F: Field,
+    LinearLayers,
+    const WIDTH: usize,
+    const SBOX_DEGREE: u64,
+    const SBOX_REGISTERS: usize,
+    const HALF_FULL_ROUNDS: usize,
+    const PARTIAL_ROUNDS: usize,
+>
     Poseidon2Air<
         F,
         LinearLayers,
@@ -55,14 +55,14 @@ impl<
 }
 
 impl<
-        F: Field,
-        LinearLayers: Sync,
-        const WIDTH: usize,
-        const SBOX_DEGREE: u64,
-        const SBOX_REGISTERS: usize,
-        const HALF_FULL_ROUNDS: usize,
-        const PARTIAL_ROUNDS: usize,
-    > BaseAir<F>
+    F: Field,
+    LinearLayers: Sync,
+    const WIDTH: usize,
+    const SBOX_DEGREE: u64,
+    const SBOX_REGISTERS: usize,
+    const HALF_FULL_ROUNDS: usize,
+    const PARTIAL_ROUNDS: usize,
+> BaseAir<F>
     for Poseidon2Air<
         F,
         LinearLayers,
@@ -139,14 +139,14 @@ pub(crate) fn eval<
 }
 
 impl<
-        AB: AirBuilder,
-        LinearLayers: GenericPoseidon2LinearLayers<AB::Expr, WIDTH>,
-        const WIDTH: usize,
-        const SBOX_DEGREE: u64,
-        const SBOX_REGISTERS: usize,
-        const HALF_FULL_ROUNDS: usize,
-        const PARTIAL_ROUNDS: usize,
-    > Air<AB>
+    AB: AirBuilder,
+    LinearLayers: GenericPoseidon2LinearLayers<AB::Expr, WIDTH>,
+    const WIDTH: usize,
+    const SBOX_DEGREE: u64,
+    const SBOX_REGISTERS: usize,
+    const HALF_FULL_ROUNDS: usize,
+    const PARTIAL_ROUNDS: usize,
+> Air<AB>
     for Poseidon2Air<
         AB::F,
         LinearLayers,
