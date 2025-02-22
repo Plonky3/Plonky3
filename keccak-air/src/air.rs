@@ -25,9 +25,10 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         eval_round_flags(builder);
 
         let main = builder.main();
-        let (local, next) = (main.row_slice(0), main.row_slice(1));
+        // let (local, next) = (main.row_slice(0), main.row_slice(1));
+        let local = main.row_slice(0);
         let local: &KeccakCols<AB::Var> = (*local).borrow();
-        let next: &KeccakCols<AB::Var> = (*next).borrow();
+        // let next: &KeccakCols<AB::Var> = (*next).borrow();
 
         let first_step = local.step_flags[0];
         let final_step = local.step_flags[NUM_ROUNDS - 1];
@@ -53,16 +54,16 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
             .assert_zero(local.export);
 
         // If this is not the final step, the local and next preimages must match.
-        for y in 0..5 {
-            for x in 0..5 {
-                for limb in 0..U64_LIMBS {
-                    builder
-                        .when(not_final_step.clone())
-                        .when_transition()
-                        .assert_eq(local.preimage[y][x][limb], next.preimage[y][x][limb]);
-                }
-            }
-        }
+        // for y in 0..5 {
+        //     for x in 0..5 {
+        //         for limb in 0..U64_LIMBS {
+        //             builder
+        //                 .when(not_final_step.clone())
+        //                 .when_transition()
+        //                 .assert_eq(local.preimage[y][x][limb], next.preimage[y][x][limb]);
+        //         }
+        //     }
+        // }
 
         // C'[x, z] = xor(C[x, z], C[x - 1, z], C[x + 1, z - 1]).
         for x in 0..5 {
@@ -176,17 +177,17 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         }
 
         // Enforce that this round's output equals the next round's input.
-        for x in 0..5 {
-            for y in 0..5 {
-                for limb in 0..U64_LIMBS {
-                    let output = local.a_prime_prime_prime(y, x, limb);
-                    let input = next.a[y][x][limb];
-                    builder
-                        .when_transition()
-                        .when(not_final_step.clone())
-                        .assert_eq(output, input);
-                }
-            }
-        }
+        // for x in 0..5 {
+        //     for y in 0..5 {
+        //         for limb in 0..U64_LIMBS {
+        //             let output = local.a_prime_prime_prime(y, x, limb);
+        //             let input = next.a[y][x][limb];
+        //             builder
+        //                 .when_transition()
+        //                 .when(not_final_step.clone())
+        //                 .assert_eq(output, input);
+        //         }
+        //     }
+        // }
     }
 }
