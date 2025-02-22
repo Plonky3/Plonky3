@@ -22,7 +22,7 @@ impl<F> BaseAir<F> for KeccakAir {
 
 impl<AB: AirBuilder> Air<AB> for KeccakAir {
     fn eval(&self, builder: &mut AB) {
-        eval_round_flags(builder);
+        // eval_round_flags(builder);
 
         let main = builder.main();
         // let (local, next) = (main.row_slice(0), main.row_slice(1));
