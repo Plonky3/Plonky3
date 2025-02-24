@@ -12,6 +12,7 @@
 
 extern crate alloc;
 
+mod data_traits;
 mod extension;
 mod goldilocks;
 mod mds;
