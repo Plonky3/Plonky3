@@ -450,7 +450,7 @@ fn xor<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
         // 2*lhs (2^31 - rhs) < 2P 2^31 < 2^32P so we can use the multiplication function.
         let mul_res = mul::<MPAVX512>(double_lhs, half_sub_rhs);
 
-        // Unfortunately, AVX512 has no equivalent of vpsignd so we can't do the same 
+        // Unfortunately, AVX512 has no equivalent of vpsignd so we can't do the same
         // signed_add trick as in the AVX2 case. Instead we get a reduced value from mul
         // and add on rhs in the standard way.
         add::<MPAVX512>(rhs, mul_res)

@@ -9,11 +9,11 @@ use p3_field::{
     PermutationMonomial, PrimeCharacteristicRing,
 };
 use p3_util::convert_vec;
-use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 
 use crate::{
-    signed_add_avx2, FieldParameters, MontyField31, PackedMontyParameters, RelativelyPrimePower,
+    FieldParameters, MontyField31, PackedMontyParameters, RelativelyPrimePower, signed_add_avx2,
 };
 
 const WIDTH: usize = 8;
