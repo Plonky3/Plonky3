@@ -213,7 +213,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
         }
 
         match D {
-            2 => Some(Self::from_basis_coefficients_slice(&qudratic_inv(
+            2 => Some(Self::from_basis_coefficients_slice(&quadratic_inv(
                 &self.value,
                 F::W,
             ))),
@@ -564,7 +564,7 @@ pub(super) fn binomial_mul<
 
 ///Section 11.3.6b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
-fn qudratic_inv<F: Field>(a: &[F], w: F) -> [F; 2] {
+fn quadratic_inv<F: Field>(a: &[F], w: F) -> [F; 2] {
     let scalar = (a[0].square() - w * a[1].square()).inverse();
     [a[0] * scalar, -a[1] * scalar]
 }
