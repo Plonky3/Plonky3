@@ -4,6 +4,7 @@
 
 extern crate alloc;
 
+use crate::transpose::transpose_in_place_square;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::any::type_name;
@@ -226,17 +227,6 @@ unsafe fn reverse_slice_index_bits_chunks<F>(
     }
 }
 
-/// Transpose a square matrix in place.
-/// SAFETY: ensure that `arr.len() == 1 << lb_chunk_size + lb_num_chunks`.
-unsafe fn transpose_in_place_square<T>(
-    arr: &mut [T],
-    lb_chunk_size: usize,
-    lb_num_chunks: usize,
-    offset: usize,
-) {
-    unsafe { transpose::transpose_in_place_square(arr, lb_chunk_size, lb_num_chunks, offset) }
-}
-
 #[inline(always)]
 pub fn assume(p: bool) {
     debug_assert!(p);
@@ -276,39 +266,6 @@ pub fn branch_hint() {
     unsafe {
         core::arch::asm!("", options(nomem, nostack, preserves_flags));
     }
-}
-
-/// Convenience methods for Vec.
-pub trait VecExt<T> {
-    /// Push `elem` and return a reference to it.
-    fn pushed_ref(&mut self, elem: T) -> &T;
-    /// Push `elem` and return a mutable reference to it.
-    fn pushed_mut(&mut self, elem: T) -> &mut T;
-}
-
-impl<T> VecExt<T> for alloc::vec::Vec<T> {
-    fn pushed_ref(&mut self, elem: T) -> &T {
-        self.push(elem);
-        self.last().unwrap()
-    }
-    fn pushed_mut(&mut self, elem: T) -> &mut T {
-        self.push(elem);
-        self.last_mut().unwrap()
-    }
-}
-
-pub fn transpose_vec<T>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
-    assert!(!v.is_empty());
-    let len = v[0].len();
-    let mut iters: Vec<_> = v.into_iter().map(|n| n.into_iter()).collect();
-    (0..len)
-        .map(|_| {
-            iters
-                .iter_mut()
-                .map(|n| n.next().unwrap())
-                .collect::<Vec<T>>()
-        })
-        .collect()
 }
 
 /// Return a String containing the name of T but with all the crate
