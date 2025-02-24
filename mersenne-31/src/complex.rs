@@ -4,8 +4,8 @@
 //! Note that X^2 + 1 is irreducible over p = Mersenne31 field because
 //! kronecker(-1, p) = -1, that is, -1 is not square in F_p.
 
-use p3_field::extension::{Complex, ComplexExtendable, HasTwoAdicBinomialExtension};
 use p3_field::PrimeCharacteristicRing;
+use p3_field::extension::{Complex, ComplexExtendable, HasTwoAdicBinomialExtension};
 
 use crate::Mersenne31;
 

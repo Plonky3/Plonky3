@@ -1,8 +1,8 @@
 use core::marker::PhantomData;
 
+use p3_mds::MdsPermutation;
 use p3_mds::karatsuba_convolution::Convolve;
 use p3_mds::util::dot_product;
-use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
 
 use crate::{BarrettParameters, MontyField31, MontyParameters};

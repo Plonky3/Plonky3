@@ -8,10 +8,10 @@ use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
 
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
 use p3_field::{
-    dot_product, BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue,
-    PrimeCharacteristicRing,
+    BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue,
+    PrimeCharacteristicRing, dot_product,
 };
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
@@ -294,8 +294,8 @@ mod tests {
 
     use itertools::izip;
     use p3_baby_bear::BabyBear;
-    use p3_field::extension::BinomialExtensionField;
     use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
     use rand::rng;
 
     use super::*;

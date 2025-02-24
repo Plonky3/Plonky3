@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion, Throughput};
+use criterion::{BenchmarkGroup, Criterion, Throughput, criterion_group, criterion_main};
 use p3_matrix::dense::RowMajorMatrix;
 use rand::rng;
 

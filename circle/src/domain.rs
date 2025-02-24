@@ -1,12 +1,12 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use itertools::{iterate, Itertools};
+use itertools::{Itertools, iterate};
 use p3_commit::{LagrangeSelectors, PolynomialSpace};
-use p3_field::extension::ComplexExtendable;
 use p3_field::ExtensionField;
-use p3_matrix::dense::RowMajorMatrix;
+use p3_field::extension::ComplexExtendable;
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use tracing::instrument;
 
@@ -57,15 +57,15 @@ impl<F: ComplexExtendable> CircleDomain<F> {
     fn is_standard(&self) -> bool {
         self.shift == Point::generator(self.log_n + 1)
     }
-    pub(crate) fn gen(&self) -> Point<F> {
+    pub(crate) fn subgroup_generator(&self) -> Point<F> {
         Point::generator(self.log_n - 1)
     }
     pub(crate) fn coset0(&self) -> impl Iterator<Item = Point<F>> {
-        let g = self.gen();
+        let g = self.subgroup_generator();
         iterate(self.shift, move |&p| p + g).take(1 << (self.log_n - 1))
     }
     fn coset1(&self) -> impl Iterator<Item = Point<F>> {
-        let g = self.gen();
+        let g = self.subgroup_generator();
         iterate(g - self.shift, move |&p| p + g).take(1 << (self.log_n - 1))
     }
     pub(crate) fn points(&self) -> impl Iterator<Item = Point<F>> {
@@ -74,9 +74,9 @@ impl<F: ComplexExtendable> CircleDomain<F> {
     pub(crate) fn nth_point(&self, idx: usize) -> Point<F> {
         let (idx, lsb) = (idx >> 1, idx & 1);
         if lsb == 0 {
-            self.shift + self.gen() * idx
+            self.shift + self.subgroup_generator() * idx
         } else {
-            -self.shift + self.gen() * (idx + 1)
+            -self.shift + self.subgroup_generator() * (idx + 1)
         }
     }
 
@@ -217,11 +217,7 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
 // 0 1 2 .. len-1 len len len-1 .. 1 0 0 1 ..
 const fn forward_backward_index(mut i: usize, len: usize) -> usize {
     i %= 2 * len;
-    if i < len {
-        i
-    } else {
-        2 * len - 1 - i
-    }
+    if i < len { i } else { 2 * len - 1 - i }
 }
 
 #[cfg(test)]
@@ -230,7 +226,7 @@ mod tests {
 
     use hashbrown::HashSet;
     use itertools::izip;
-    use p3_field::{batch_multiplicative_inverse, PrimeCharacteristicRing};
+    use p3_field::{PrimeCharacteristicRing, batch_multiplicative_inverse};
     use p3_mersenne_31::Mersenne31;
     use rand::rng;
 

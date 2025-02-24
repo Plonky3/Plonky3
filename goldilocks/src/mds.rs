@@ -7,12 +7,12 @@
 //! database.
 
 use p3_dft::Radix2Bowers;
+use p3_mds::MdsPermutation;
 use p3_mds::karatsuba_convolution::Convolve;
 use p3_mds::util::{apply_circulant, apply_circulant_fft, first_row_to_first_col};
-use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
 
-use crate::{reduce128, Goldilocks};
+use crate::{Goldilocks, reduce128};
 
 #[derive(Clone, Debug, Default)]
 pub struct MdsMatrixGoldilocks;

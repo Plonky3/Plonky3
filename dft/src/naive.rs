@@ -1,8 +1,8 @@
 use alloc::vec;
 
 use p3_field::TwoAdicField;
-use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_strict_usize;
 
 use crate::TwoAdicSubgroupDft;

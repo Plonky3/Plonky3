@@ -1,20 +1,20 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use itertools::{iterate, izip, Itertools};
+use itertools::{Itertools, iterate, izip};
 use p3_commit::PolynomialSpace;
-use p3_dft::{divide_by_height, Butterfly, DifButterfly, DitButterfly};
+use p3_dft::{Butterfly, DifButterfly, DitButterfly, divide_by_height};
 use p3_field::extension::ComplexExtendable;
-use p3_field::{batch_multiplicative_inverse, ExtensionField, Field};
-use p3_matrix::dense::RowMajorMatrix;
+use p3_field::{ExtensionField, Field, batch_multiplicative_inverse};
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_ceil_usize, log2_strict_usize, reverse_slice_index_bits};
 use tracing::{debug_span, instrument};
 
 use crate::domain::CircleDomain;
-use crate::point::{compute_lagrange_den_batched, Point};
-use crate::{cfft_permute_index, cfft_permute_slice, CfftPermutable, CfftView};
+use crate::point::{Point, compute_lagrange_den_batched};
+use crate::{CfftPermutable, CfftView, cfft_permute_index, cfft_permute_slice};
 
 #[derive(Clone)]
 pub struct CircleEvaluations<F, M = RowMajorMatrix<F>> {
@@ -227,9 +227,9 @@ impl<F: ComplexExtendable> CircleDomain<F> {
         self.nth_point(cfft_permute_index(index << 1, self.log_n)).y
     }
     pub(crate) fn x_twiddles(&self, layer: usize) -> Vec<F> {
-        let gen = self.gen() * (1 << layer);
+        let generator = self.subgroup_generator() * (1 << layer);
         let shift = self.shift * (1 << layer);
-        let mut xs = iterate(shift, move |&p| p + gen)
+        let mut xs = iterate(shift, move |&p| p + generator)
             .map(|p| p.x)
             .take(1 << (self.log_n - layer - 2))
             .collect_vec();
@@ -237,7 +237,7 @@ impl<F: ComplexExtendable> CircleDomain<F> {
         xs
     }
     pub(crate) fn nth_x_twiddle(&self, index: usize) -> F {
-        (self.shift + self.gen() * index).x
+        (self.shift + self.subgroup_generator() * index).x
     }
 }
 

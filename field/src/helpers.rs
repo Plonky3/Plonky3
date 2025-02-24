@@ -181,11 +181,7 @@ pub fn halve_u32<const P: u32>(input: u32) -> u32 {
     let shr = input >> 1;
     let lo_bit = input & 1;
     let shr_corr = shr + shift;
-    if lo_bit == 0 {
-        shr
-    } else {
-        shr_corr
-    }
+    if lo_bit == 0 { shr } else { shr_corr }
 }
 
 /// Given an element x from a 64 bit field F_P compute x/2.
@@ -195,11 +191,7 @@ pub fn halve_u64<const P: u64>(input: u64) -> u64 {
     let shr = input >> 1;
     let lo_bit = input & 1;
     let shr_corr = shr + shift;
-    if lo_bit == 0 {
-        shr
-    } else {
-        shr_corr
-    }
+    if lo_bit == 0 { shr } else { shr_corr }
 }
 
 /// Given a slice of SF elements, reduce them to a TF element using a 2^32-base decomposition.

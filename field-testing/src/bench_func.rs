@@ -1,11 +1,11 @@
 use alloc::format;
 use alloc::vec::Vec;
 
-use criterion::{black_box, BatchSize, Criterion};
+use criterion::{BatchSize, Criterion, black_box};
 use p3_field::{Field, PrimeCharacteristicRing};
+use rand::Rng;
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
-use rand::Rng;
 
 pub fn benchmark_square<F: Field>(c: &mut Criterion, name: &str)
 where
