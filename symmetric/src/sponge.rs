@@ -157,6 +157,15 @@ mod tests {
         let input = [1, 2, 3, 4, 5];
         let output = sponge.hash_iter(input);
 
+        // Explanation of why the final state results in [44, 44, 44, 44]:
+        // Initial state: [0, 0, 0, 0]
+        // First input chunk [1, 2] overwrites first two positions: [1, 2, 0, 0]
+        // Apply permutation (sum all elements and overwrite): [3, 3, 3, 3]
+        // Second input chunk [3, 4] overwrites first two positions: [3, 4, 3, 3]
+        // Apply permutation: [13, 13, 13, 13] (3 + 4 + 3 + 3 = 13)
+        // Third input chunk [5] overwrites first position: [5, 13, 13, 13]
+        // Apply permutation: [44, 44, 44, 44] (5 + 13 + 13 + 13 = 44)
+
         assert_eq!(output, [44; OUT]);
     }
 
