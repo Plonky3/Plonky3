@@ -4,13 +4,14 @@
 
 extern crate alloc;
 
-use crate::transpose::transpose_in_place_square;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::any::type_name;
 use core::hint::unreachable_unchecked;
 use core::mem;
 use core::mem::MaybeUninit;
+
+use crate::transpose::transpose_in_place_square;
 
 pub mod array_serialization;
 pub mod linear_map;
