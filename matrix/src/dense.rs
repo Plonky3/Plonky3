@@ -695,8 +695,6 @@ mod tests {
 
     #[test]
     fn test_horizontally_packed_row() {
-        use p3_baby_bear::BabyBear;
-
         type Packed = FieldArray<BabyBear, 2>;
 
         let matrix = RowMajorMatrix::new(
@@ -823,9 +821,6 @@ mod tests {
 
     #[test]
     fn test_horizontally_packed_row_mut() {
-        use p3_baby_bear::BabyBear;
-        use p3_field::FieldArray;
-
         type Packed = FieldArray<BabyBear, 2>;
 
         let mut matrix = RowMajorMatrix::new(
@@ -926,9 +921,6 @@ mod tests {
 
     #[test]
     fn test_packed_row_pair_mut() {
-        use p3_baby_bear::BabyBear;
-        use p3_field::FieldArray;
-
         type Packed = FieldArray<BabyBear, 2>;
 
         let mut matrix = RowMajorMatrix::new(
@@ -1055,5 +1047,115 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_vertically_packed_row_pair() {
+        type Packed = FieldArray<BabyBear, 2>;
+
+        let matrix = RowMajorMatrix::new((1..17).map(BabyBear::new).collect::<Vec<_>>(), 4);
+
+        // Calling the function with r = 0 and step = 2
+        let packed = matrix.vertically_packed_row_pair::<Packed>(0, 2);
+
+        // Matrix visualization:
+        //
+        // [  1   2   3   4  ]  <-- Row 0
+        // [  5   6   7   8  ]  <-- Row 1
+        // [  9  10  11  12  ]  <-- Row 2
+        // [ 13  14  15  16  ]  <-- Row 3
+        //
+        // Packing rows 0-1 together, then rows 2-3 together:
+        //
+        // Packed result:
+        // [
+        //   (1, 5), (2, 6), (3, 7), (4, 8),   // First packed row (Row 0 & Row 1)
+        //   (9, 13), (10, 14), (11, 15), (12, 16),   // Second packed row (Row 2 & Row 3)
+        // ]
+
+        assert_eq!(
+            packed,
+            (1..5)
+                .chain(9..13)
+                .map(|i| [BabyBear::new(i), BabyBear::new(i + 4)].into())
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn test_vertically_packed_row_pair_overlap() {
+        type Packed = FieldArray<BabyBear, 2>;
+
+        let matrix = RowMajorMatrix::new((1..17).map(BabyBear::new).collect::<Vec<_>>(), 4);
+
+        // Original matrix visualization:
+        //
+        // [  1   2   3   4  ]  <-- Row 0
+        // [  5   6   7   8  ]  <-- Row 1
+        // [  9  10  11  12  ]  <-- Row 2
+        // [ 13  14  15  16  ]  <-- Row 3
+        //
+        // Packing rows 0-1 together, then rows 1-2 together:
+        //
+        // Expected packed result:
+        // [
+        //   (1, 5), (2, 6), (3, 7), (4, 8),   // First packed row (Row 0 & Row 1)
+        //   (5, 9), (6, 10), (7, 11), (8, 12) // Second packed row (Row 1 & Row 2)
+        // ]
+
+        // Calling the function with overlapping rows (r = 0 and step = 1)
+        let packed = matrix.vertically_packed_row_pair::<Packed>(0, 1);
+
+        assert_eq!(
+            packed,
+            (1..5)
+                .chain(5..9)
+                .map(|i| [BabyBear::new(i), BabyBear::new(i + 4)].into())
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn test_vertically_packed_row_pair_wraparound_start_1() {
+        use p3_baby_bear::BabyBear;
+        use p3_field::FieldArray;
+
+        type Packed = FieldArray<BabyBear, 2>;
+
+        let matrix = RowMajorMatrix::new((1..17).map(BabyBear::new).collect::<Vec<_>>(), 4);
+
+        // Original matrix visualization:
+        //
+        // [  1   2   3   4  ]  <-- Row 0
+        // [  5   6   7   8  ]  <-- Row 1
+        // [  9  10  11  12  ]  <-- Row 2
+        // [ 13  14  15  16  ]  <-- Row 3
+        //
+        // Packing starts from row 1, skipping 2 rows (step = 2):
+        // - The first packed row should contain row 1 & row 2.
+        // - The second packed row should contain row 3 & row 1 (wraparound case).
+        //
+        // Expected packed result:
+        // [
+        //   (5, 9), (6, 10), (7, 11), (8, 12),   // Packed row (Row 1 & Row 2)
+        //   (13, 1), (14, 2), (15, 3), (16, 4)    // Packed row (Row 3 & Row 1)
+        // ]
+
+        // Calling the function with wraparound scenario (starting at r = 1 with step = 2)
+        let packed = matrix.vertically_packed_row_pair::<Packed>(1, 2);
+
+        assert_eq!(
+            packed,
+            vec![
+                Packed::from([BabyBear::new(5), BabyBear::new(9)]),
+                Packed::from([BabyBear::new(6), BabyBear::new(10)]),
+                Packed::from([BabyBear::new(7), BabyBear::new(11)]),
+                Packed::from([BabyBear::new(8), BabyBear::new(12)]),
+                Packed::from([BabyBear::new(13), BabyBear::new(1)]),
+                Packed::from([BabyBear::new(14), BabyBear::new(2)]),
+                Packed::from([BabyBear::new(15), BabyBear::new(3)]),
+                Packed::from([BabyBear::new(16), BabyBear::new(4)]),
+            ]
+        );
     }
 }

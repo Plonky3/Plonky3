@@ -20,6 +20,8 @@ use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 
+use crate::data_traits::TwoAdicData;
+
 /// The Goldilocks prime
 const P: u64 = 0xFFFF_FFFF_0000_0001;
 
@@ -346,13 +348,52 @@ impl PrimeField64 for Goldilocks {
     }
 }
 
+impl TwoAdicData for Goldilocks {
+    type ArrayLike = &'static [Goldilocks];
+
+    const TWO_ADIC_GENERATORS: Self::ArrayLike = &Goldilocks::new_array([
+        0x0000000000000001,
+        0xffffffff00000000,
+        0x0001000000000000,
+        0xfffffffeff000001,
+        0xefffffff00000001,
+        0x00003fffffffc000,
+        0x0000008000000000,
+        0xf80007ff08000001,
+        0xbf79143ce60ca966,
+        0x1905d02a5c411f4e,
+        0x9d8f2ad78bfed972,
+        0x0653b4801da1c8cf,
+        0xf2c35199959dfcb6,
+        0x1544ef2335d17997,
+        0xe0ee099310bba1e2,
+        0xf6b2cffe2306baac,
+        0x54df9630bf79450e,
+        0xabd0a6e8aa3d8a0e,
+        0x81281a7b05f9beac,
+        0xfbd41c6b8caa3302,
+        0x30ba2ecd5e93e76d,
+        0xf502aef532322654,
+        0x4b2a18ade67246b5,
+        0xea9d5a1336fbc98b,
+        0x86cdcc31c307e171,
+        0x4bbaf5976ecfefd8,
+        0xed41d05b78d6e286,
+        0x10d78dd8915a171d,
+        0x59049500004a4485,
+        0xdfa8c93ba46d2666,
+        0x7e9bd009b86a0845,
+        0x400a7f755588e659,
+        0x185629dcda58878c,
+    ]);
+}
+
 impl TwoAdicField for Goldilocks {
     const TWO_ADICITY: usize = 32;
 
     fn two_adic_generator(bits: usize) -> Self {
         assert!(bits <= Self::TWO_ADICITY);
-        let base = Self::new(1_753_635_133_440_165_772); // generates the whole 2^TWO_ADICITY group
-        base.exp_power_of_2(Self::TWO_ADICITY - bits)
+        Self::TWO_ADIC_GENERATORS[bits]
     }
 }
 
