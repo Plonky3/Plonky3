@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 use itertools::Itertools;
 use p3_commit::Mmcs;
 use p3_field::extension::ComplexExtendable;
-use p3_field::{batch_multiplicative_inverse, ExtensionField};
+use p3_field::{ExtensionField, batch_multiplicative_inverse};
 use p3_fri::FriGenericConfig;
 use p3_matrix::Matrix;
 use p3_util::{log2_strict_usize, reverse_bits_len};
@@ -133,7 +133,7 @@ mod tests {
     use p3_field::extension::BinomialExtensionField;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_mersenne_31::Mersenne31;
-    use rand::{random, thread_rng};
+    use rand::{random, rng};
 
     use super::*;
     use crate::CircleEvaluations;
@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn fold_matrix_same_as_row() {
         let log_folded_height = 5;
-        let m = RowMajorMatrix::<EF>::rand(&mut thread_rng(), 1 << log_folded_height, 2);
+        let m = RowMajorMatrix::<EF>::rand(&mut rng(), 1 << log_folded_height, 2);
         let beta: EF = random();
 
         let mat_y_folded = fold_y::<F, EF>(beta, m.as_view());
@@ -173,7 +173,7 @@ mod tests {
         for (log_n, log_blowup) in iproduct!(3..6, 1..4) {
             let mut values = CircleEvaluations::evaluate(
                 CircleDomain::standard(log_n + log_blowup),
-                RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << log_n, 1),
+                RowMajorMatrix::<F>::rand(&mut rng(), 1 << log_n, 1),
             )
             .to_cfft_order()
             .values;

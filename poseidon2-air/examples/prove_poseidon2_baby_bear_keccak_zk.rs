@@ -4,18 +4,18 @@ use p3_baby_bear::{BabyBear, GenericPoseidon2LinearLayersBabyBear};
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
-use p3_fri::{create_benchmark_fri_config, HidingFriPcs};
+use p3_fri::{HidingFriPcs, create_benchmark_fri_config};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_merkle_tree::MerkleTreeHidingMmcs;
 use p3_poseidon2_air::{RoundConstants, VectorizedPoseidon2Air};
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32To64};
-use p3_uni_stark::{prove, verify, StarkConfig};
+use p3_uni_stark::{StarkConfig, prove, verify};
 use rand::rngs::{StdRng, ThreadRng};
-use rand::{thread_rng, SeedableRng};
+use rand::{SeedableRng, rng};
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
-use tracing_forest::util::LevelFilter;
 use tracing_forest::ForestLayer;
+use tracing_forest::util::LevelFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
@@ -70,14 +70,14 @@ fn main() -> Result<(), impl Debug> {
         4,
         4,
     >;
-    let val_mmcs = ValMmcs::new(field_hash, compress, thread_rng());
+    let val_mmcs = ValMmcs::new(field_hash, compress, rng());
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
-    let constants = RoundConstants::from_rng(&mut thread_rng());
+    let constants = RoundConstants::from_rng(&mut rng());
     let air: VectorizedPoseidon2Air<
         Val,
         GenericPoseidon2LinearLayersBabyBear,
@@ -96,7 +96,7 @@ fn main() -> Result<(), impl Debug> {
     let dft = Dft::default();
 
     type Pcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, StdRng>;
-    let pcs = Pcs::new(dft, val_mmcs, fri_config, 4, StdRng::from_entropy());
+    let pcs = Pcs::new(dft, val_mmcs, fri_config, 4, StdRng::from_os_rng());
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs);

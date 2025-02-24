@@ -6,9 +6,9 @@
 use alloc::vec::Vec;
 
 use p3_poseidon2::{
-    add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, GenericPoseidon2LinearLayers,
-    InternalLayer, InternalLayerConstructor, MDSMat4,
+    InternalLayer, InternalLayerConstructor, MDSMat4, add_rc_and_sbox_generic,
+    external_initial_permute_state, external_terminal_permute_state,
 };
 
 use crate::{GenericPoseidon2LinearLayersMersenne31, Mersenne31, PackedMersenne31Neon};
@@ -93,12 +93,12 @@ mod tests {
     /// Test that the output is the same as the scalar version on a random input.
     #[test]
     fn test_neon_poseidon2_width_16() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         // Our Poseidon2 implementation.
         let poseidon2 = Perm16::new_from_rng_128(&mut rng);
 
-        let input: [F; 16] = rng.gen();
+        let input: [F; 16] = rng.random();
 
         let mut expected = input;
         poseidon2.permute_mut(&mut expected);
@@ -114,12 +114,12 @@ mod tests {
     /// Test that the output is the same as the scalar version on a random input.
     #[test]
     fn test_neon_poseidon2_width_24() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         // Our Poseidon2 implementation.
         let poseidon2 = Perm24::new_from_rng_128(&mut rng);
 
-        let input: [F; 24] = rng.gen();
+        let input: [F; 24] = rng.random();
 
         let mut expected = input;
         poseidon2.permute_mut(&mut expected);

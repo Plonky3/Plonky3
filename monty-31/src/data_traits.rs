@@ -124,7 +124,7 @@ pub trait TwoAdicData: MontyParameters {
 /// TODO: This should be deleted long term once we have improved our API for defining extension fields.
 /// This allows us to implement Binomial Extensions over Monty31 fields.
 pub trait BinomialExtensionData<const DEG: usize>: MontyParameters + Sized {
-    /// W is a value such that (x^DEG - WN) is irreducible.
+    /// W is a value such that (x^DEG - W) is irreducible.
     const W: MontyField31<Self>;
 
     /// DTH_ROOT = W^((p - 1)/DEG)

@@ -1,4 +1,4 @@
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{CanObserve, DuplexChallenger, FieldChallenger};
 use p3_commit::{ExtensionMmcs, Pcs, PolynomialSpace};
@@ -9,7 +9,7 @@ use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 
@@ -24,7 +24,7 @@ fn do_test_fri_pcs<Val, Challenge, Challenger, P>(
     P: Pcs<Challenge, Challenger>,
     P::Domain: PolynomialSpace<Val = Val>,
     Val: Field,
-    Standard: Distribution<Val>,
+    StandardUniform: Distribution<Val>,
     Challenge: ExtensionField<Val>,
     Challenger: Clone + CanObserve<P::Commitment> + FieldChallenger<Val>,
 {
@@ -41,7 +41,7 @@ fn do_test_fri_pcs<Val, Challenge, Challenger, P>(
                 .map(|&log_degree| {
                     let d = 1 << log_degree;
                     // random width 5-15
-                    let width = 5 + rng.gen_range(0..=10);
+                    let width = 5 + rng.random_range(0..=10);
                     (
                         pcs.natural_domain_for_degree(d),
                         RowMajorMatrix::<Val>::rand(&mut rng, d, width),
@@ -185,7 +185,7 @@ mod babybear_fri_pcs {
         };
 
         let pcs = MyPcs::new(Dft::default(), val_mmcs, fri_config);
-        (pcs, Challenger::new(perm.clone()))
+        (pcs, Challenger::new(perm))
     }
 
     mod blowup_1 {

@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use p3_field::PrimeCharacteristicRing;
 use p3_keccak::{KeccakF, VECTOR_LEN};
 use p3_mersenne_31::Mersenne31;

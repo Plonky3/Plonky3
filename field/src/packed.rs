@@ -140,7 +140,7 @@ pub unsafe trait PackedField: Algebra<Self::Scalar>
     type Scalar: Field;
 
     /// Construct an iterator which returns powers of `base` packed into packed field elements.
-    /// 
+    ///
     /// E.g. if `Self::WIDTH = 4`, returns: `[base^0, base^1, base^2, base^3], [base^4, base^5, base^6, base^7], ...`.
     #[must_use]
     fn packed_powers(base: Self::Scalar) -> Powers<Self> {
@@ -148,7 +148,7 @@ pub unsafe trait PackedField: Algebra<Self::Scalar>
     }
 
     /// Construct an iterator which returns powers of `base` multiplied by `start` and packed into packed field elements.
-    /// 
+    ///
     /// E.g. if `Self::WIDTH = 4`, returns: `[start, start*base, start*base^2, start*base^3], [start*base^4, start*base^5, start*base^6, start*base^7], ...`.
     #[must_use]
     fn packed_shifted_powers(base: Self::Scalar, start: Self::Scalar) -> Powers<Self> {

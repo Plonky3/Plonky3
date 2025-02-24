@@ -12,11 +12,11 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
 use p3_field::{
-    quotient_map_small_int, Field, InjectiveMonomial, Packable, PermutationMonomial,
-    PrimeCharacteristicRing, PrimeField, PrimeField32, PrimeField64, TwoAdicField,
+    Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
+    PrimeField32, PrimeField64, TwoAdicField, quotient_map_small_int,
 };
-use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::utils::{
@@ -59,7 +59,7 @@ impl<MP: MontyParameters> MontyField31<MP> {
 
     /// Produce a u32 in range [0, P) from a field element corresponding to the true value.
     #[inline(always)]
-    pub(crate) fn to_u32(elem: &Self) -> u32 {
+    pub(crate) const fn to_u32(elem: &Self) -> u32 {
         from_monty::<MP>(elem.value)
     }
 
@@ -101,14 +101,14 @@ impl<MP: MontyParameters> MontyField31<MP> {
     pub const fn mul_2exp_neg_n(&self, n: u32) -> Self {
         assert!(n < 33);
         let value_mul_2exp_neg_n = (self.value as u64) << (32 - n);
-        MontyField31::new_monty(monty_reduce::<MP>(value_mul_2exp_neg_n))
+        Self::new_monty(monty_reduce::<MP>(value_mul_2exp_neg_n))
     }
 }
 
 impl<FP: MontyParameters> Ord for MontyField31<FP> {
     #[inline]
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        MontyField31::to_u32(self).cmp(&MontyField31::to_u32(other))
+        Self::to_u32(self).cmp(&Self::to_u32(other))
     }
 }
 
@@ -131,7 +131,7 @@ impl<FP: MontyParameters> Debug for MontyField31<FP> {
     }
 }
 
-impl<FP: MontyParameters> Distribution<MontyField31<FP>> for Standard {
+impl<FP: MontyParameters> Distribution<MontyField31<FP>> for StandardUniform {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> MontyField31<FP> {
         loop {
@@ -263,11 +263,7 @@ impl<FP: FieldParameters> QuotientMap<u32> for MontyField31<FP> {
     /// Returns `None` if the given integer is greater than the Prime.
     #[inline]
     fn from_canonical_checked(int: u32) -> Option<Self> {
-        if int < FP::PRIME {
-            Some(Self::new(int))
-        } else {
-            None
-        }
+        (int < FP::PRIME).then(|| Self::new(int))
     }
 
     /// Convert a given `u32` integer into an element of the `MontyField31` field.
@@ -294,11 +290,7 @@ impl<FP: FieldParameters> QuotientMap<i32> for MontyField31<FP> {
     fn from_canonical_checked(int: i32) -> Option<Self> {
         let bound = (FP::PRIME >> 1) as i32;
         if int <= bound {
-            if int >= (-bound) {
-                Some(Self::new_monty(to_monty_signed::<FP>(int)))
-            } else {
-                None
-            }
+            (int >= (-bound)).then(|| Self::new_monty(to_monty_signed::<FP>(int)))
         } else {
             None
         }
@@ -324,11 +316,7 @@ impl<FP: FieldParameters> QuotientMap<u64> for MontyField31<FP> {
     ///
     /// Returns `None` if the given integer is greater than the Prime.
     fn from_canonical_checked(int: u64) -> Option<Self> {
-        if int < FP::PRIME as u64 {
-            Some(Self::new(int as u32))
-        } else {
-            None
-        }
+        (int < FP::PRIME as u64).then(|| Self::new(int as u32))
     }
 
     /// Convert a given `u64` integer into an element of the `MontyField31` field.
@@ -352,11 +340,7 @@ impl<FP: FieldParameters> QuotientMap<i64> for MontyField31<FP> {
     fn from_canonical_checked(int: i64) -> Option<Self> {
         let bound = (FP::PRIME >> 1) as i64;
         if int <= bound {
-            if int >= (-bound) {
-                Some(Self::new_monty(to_monty_signed::<FP>(int as i32)))
-            } else {
-                None
-            }
+            (int >= (-bound)).then(|| Self::new_monty(to_monty_signed::<FP>(int as i32)))
         } else {
             None
         }
@@ -381,11 +365,7 @@ impl<FP: FieldParameters> QuotientMap<u128> for MontyField31<FP> {
     ///
     /// Returns `None` if the given integer is greater than the Prime.
     fn from_canonical_checked(int: u128) -> Option<Self> {
-        if int < FP::PRIME as u128 {
-            Some(Self::new(int as u32))
-        } else {
-            None
-        }
+        (int < FP::PRIME as u128).then(|| Self::new(int as u32))
     }
 
     /// Convert a given `u128` integer into an element of the `MontyField31` field.
@@ -409,11 +389,7 @@ impl<FP: FieldParameters> QuotientMap<i128> for MontyField31<FP> {
     fn from_canonical_checked(int: i128) -> Option<Self> {
         let bound = (FP::PRIME >> 1) as i128;
         if int <= bound {
-            if int >= (-bound) {
-                Some(Self::new_monty(to_monty_signed::<FP>(int as i32)))
-            } else {
-                None
-            }
+            (int >= (-bound)).then(|| Self::new_monty(to_monty_signed::<FP>(int as i32)))
         } else {
             None
         }

@@ -1,8 +1,8 @@
 use alloc::vec;
 
 use p3_field::TwoAdicField;
-use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_strict_usize;
 
 use crate::TwoAdicSubgroupDft;
@@ -39,7 +39,7 @@ mod tests {
     use p3_field::{Field, PrimeCharacteristicRing};
     use p3_goldilocks::Goldilocks;
     use p3_matrix::dense::RowMajorMatrix;
-    use rand::thread_rng;
+    use rand::rng;
 
     use crate::{NaiveDft, TwoAdicSubgroupDft};
 
@@ -87,7 +87,7 @@ mod tests {
     #[test]
     fn dft_idft_consistency() {
         type F = Goldilocks;
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let original = RowMajorMatrix::<F>::rand(&mut rng, 8, 3);
         let dft = NaiveDft.dft_batch(original.clone());
         let idft = NaiveDft.idft_batch(dft);
@@ -98,7 +98,7 @@ mod tests {
     fn coset_dft_idft_consistency() {
         type F = Goldilocks;
         let generator = F::GENERATOR;
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let original = RowMajorMatrix::<F>::rand(&mut rng, 8, 3);
         let dft = NaiveDft.coset_dft_batch(original.clone(), generator);
         let idft = NaiveDft.coset_idft_batch(dft, generator);

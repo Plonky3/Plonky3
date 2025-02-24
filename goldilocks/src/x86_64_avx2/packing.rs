@@ -12,8 +12,8 @@ use p3_field::{
     PermutationMonomial, PrimeCharacteristicRing, PrimeField64,
 };
 use p3_util::convert_vec;
-use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 
 use crate::Goldilocks;
 
@@ -292,10 +292,10 @@ impl Sum for PackedGoldilocksAVX2 {
     }
 }
 
-impl Distribution<PackedGoldilocksAVX2> for Standard {
+impl Distribution<PackedGoldilocksAVX2> for StandardUniform {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedGoldilocksAVX2 {
-        PackedGoldilocksAVX2(rng.gen())
+        PackedGoldilocksAVX2(rng.random())
     }
 }
 
@@ -359,7 +359,7 @@ const EPSILON: __m256i = unsafe { transmute([Goldilocks::ORDER_U64.wrapping_neg(
 /// TODO
 #[inline]
 pub unsafe fn shift(x: __m256i) -> __m256i {
-    _mm256_xor_si256(x, SIGN_BIT)
+    unsafe { _mm256_xor_si256(x, SIGN_BIT) }
 }
 
 /// Convert to canonical representation.
@@ -368,194 +368,218 @@ pub unsafe fn shift(x: __m256i) -> __m256i {
 ///   where 0 <= y < FIELD_ORDER).
 #[inline]
 unsafe fn canonicalize_s(x_s: __m256i) -> __m256i {
-    // If x >= FIELD_ORDER then corresponding mask bits are all 0; otherwise all 1.
-    let mask = _mm256_cmpgt_epi64(SHIFTED_FIELD_ORDER, x_s);
-    // wrapback_amt is -FIELD_ORDER if mask is 0; otherwise 0.
-    let wrapback_amt = _mm256_andnot_si256(mask, EPSILON);
-    _mm256_add_epi64(x_s, wrapback_amt)
+    unsafe {
+        // If x >= FIELD_ORDER then corresponding mask bits are all 0; otherwise all 1.
+        let mask = _mm256_cmpgt_epi64(SHIFTED_FIELD_ORDER, x_s);
+        // wrapback_amt is -FIELD_ORDER if mask is 0; otherwise 0.
+        let wrapback_amt = _mm256_andnot_si256(mask, EPSILON);
+        _mm256_add_epi64(x_s, wrapback_amt)
+    }
 }
 
 /// Addition u64 + u64 -> u64. Assumes that x + y < 2^64 + FIELD_ORDER. The second argument is
 /// pre-shifted by 1 << 63. The result is similarly shifted.
 #[inline]
 unsafe fn add_no_double_overflow_64_64s_s(x: __m256i, y_s: __m256i) -> __m256i {
-    let res_wrapped_s = _mm256_add_epi64(x, y_s);
-    let mask = _mm256_cmpgt_epi64(y_s, res_wrapped_s); // -1 if overflowed else 0.
-    let wrapback_amt = _mm256_srli_epi64::<32>(mask); // -FIELD_ORDER if overflowed else 0.
-    _mm256_add_epi64(res_wrapped_s, wrapback_amt)
+    unsafe {
+        let res_wrapped_s = _mm256_add_epi64(x, y_s);
+        let mask = _mm256_cmpgt_epi64(y_s, res_wrapped_s); // -1 if overflowed else 0.
+        let wrapback_amt = _mm256_srli_epi64::<32>(mask); // -FIELD_ORDER if overflowed else 0.
+        _mm256_add_epi64(res_wrapped_s, wrapback_amt)
+    }
 }
 
 #[inline]
 unsafe fn add(x: __m256i, y: __m256i) -> __m256i {
-    let y_s = shift(y);
-    let res_s = add_no_double_overflow_64_64s_s(x, canonicalize_s(y_s));
-    shift(res_s)
+    unsafe {
+        let y_s = shift(y);
+        let res_s = add_no_double_overflow_64_64s_s(x, canonicalize_s(y_s));
+        shift(res_s)
+    }
 }
 
 #[inline]
 unsafe fn sub(x: __m256i, y: __m256i) -> __m256i {
-    let mut y_s = shift(y);
-    y_s = canonicalize_s(y_s);
-    let x_s = shift(x);
-    let mask = _mm256_cmpgt_epi64(y_s, x_s); // -1 if sub will underflow (y > x) else 0.
-    let wrapback_amt = _mm256_srli_epi64::<32>(mask); // -FIELD_ORDER if underflow else 0.
-    let res_wrapped = _mm256_sub_epi64(x_s, y_s);
-    _mm256_sub_epi64(res_wrapped, wrapback_amt)
+    unsafe {
+        let mut y_s = shift(y);
+        y_s = canonicalize_s(y_s);
+        let x_s = shift(x);
+        let mask = _mm256_cmpgt_epi64(y_s, x_s); // -1 if sub will underflow (y > x) else 0.
+        let wrapback_amt = _mm256_srli_epi64::<32>(mask); // -FIELD_ORDER if underflow else 0.
+        let res_wrapped = _mm256_sub_epi64(x_s, y_s);
+        _mm256_sub_epi64(res_wrapped, wrapback_amt)
+    }
 }
 
 #[inline]
 unsafe fn neg(y: __m256i) -> __m256i {
-    let y_s = shift(y);
-    _mm256_sub_epi64(SHIFTED_FIELD_ORDER, canonicalize_s(y_s))
+    unsafe {
+        let y_s = shift(y);
+        _mm256_sub_epi64(SHIFTED_FIELD_ORDER, canonicalize_s(y_s))
+    }
 }
 
 /// Full 64-bit by 64-bit multiplication. This emulated multiplication is 1.33x slower than the
 /// scalar instruction, but may be worth it if we want our data to live in vector registers.
 #[inline]
 unsafe fn mul64_64(x: __m256i, y: __m256i) -> (__m256i, __m256i) {
-    // We want to move the high 32 bits to the low position. The multiplication instruction ignores
-    // the high 32 bits, so it's ok to just duplicate it into the low position. This duplication can
-    // be done on port 5; bitshifts run on ports 0 and 1, competing with multiplication.
-    //   This instruction is only provided for 32-bit floats, not integers. Idk why Intel makes the
-    // distinction; the casts are free and it guarantees that the exact bit pattern is preserved.
-    // Using a swizzle instruction of the wrong domain (float vs int) does not increase latency
-    // since Haswell.
-    let x_hi = _mm256_castps_si256(_mm256_movehdup_ps(_mm256_castsi256_ps(x)));
-    let y_hi = _mm256_castps_si256(_mm256_movehdup_ps(_mm256_castsi256_ps(y)));
+    unsafe {
+        // We want to move the high 32 bits to the low position. The multiplication instruction ignores
+        // the high 32 bits, so it's ok to just duplicate it into the low position. This duplication can
+        // be done on port 5; bitshifts run on ports 0 and 1, competing with multiplication.
+        //   This instruction is only provided for 32-bit floats, not integers. Idk why Intel makes the
+        // distinction; the casts are free and it guarantees that the exact bit pattern is preserved.
+        // Using a swizzle instruction of the wrong domain (float vs int) does not increase latency
+        // since Haswell.
+        let x_hi = _mm256_castps_si256(_mm256_movehdup_ps(_mm256_castsi256_ps(x)));
+        let y_hi = _mm256_castps_si256(_mm256_movehdup_ps(_mm256_castsi256_ps(y)));
 
-    // All four pairwise multiplications
-    let mul_ll = _mm256_mul_epu32(x, y);
-    let mul_lh = _mm256_mul_epu32(x, y_hi);
-    let mul_hl = _mm256_mul_epu32(x_hi, y);
-    let mul_hh = _mm256_mul_epu32(x_hi, y_hi);
+        // All four pairwise multiplications
+        let mul_ll = _mm256_mul_epu32(x, y);
+        let mul_lh = _mm256_mul_epu32(x, y_hi);
+        let mul_hl = _mm256_mul_epu32(x_hi, y);
+        let mul_hh = _mm256_mul_epu32(x_hi, y_hi);
 
-    // Bignum addition
-    // Extract high 32 bits of mul_ll and add to mul_hl. This cannot overflow.
-    let mul_ll_hi = _mm256_srli_epi64::<32>(mul_ll);
-    let t0 = _mm256_add_epi64(mul_hl, mul_ll_hi);
-    // Extract low 32 bits of t0 and add to mul_lh. Again, this cannot overflow.
-    // Also, extract high 32 bits of t0 and add to mul_hh.
-    let t0_lo = _mm256_and_si256(t0, EPSILON);
-    let t0_hi = _mm256_srli_epi64::<32>(t0);
-    let t1 = _mm256_add_epi64(mul_lh, t0_lo);
-    let t2 = _mm256_add_epi64(mul_hh, t0_hi);
-    // Lastly, extract the high 32 bits of t1 and add to t2.
-    let t1_hi = _mm256_srli_epi64::<32>(t1);
-    let res_hi = _mm256_add_epi64(t2, t1_hi);
+        // Bignum addition
+        // Extract high 32 bits of mul_ll and add to mul_hl. This cannot overflow.
+        let mul_ll_hi = _mm256_srli_epi64::<32>(mul_ll);
+        let t0 = _mm256_add_epi64(mul_hl, mul_ll_hi);
+        // Extract low 32 bits of t0 and add to mul_lh. Again, this cannot overflow.
+        // Also, extract high 32 bits of t0 and add to mul_hh.
+        let t0_lo = _mm256_and_si256(t0, EPSILON);
+        let t0_hi = _mm256_srli_epi64::<32>(t0);
+        let t1 = _mm256_add_epi64(mul_lh, t0_lo);
+        let t2 = _mm256_add_epi64(mul_hh, t0_hi);
+        // Lastly, extract the high 32 bits of t1 and add to t2.
+        let t1_hi = _mm256_srli_epi64::<32>(t1);
+        let res_hi = _mm256_add_epi64(t2, t1_hi);
 
-    // Form res_lo by combining the low half of mul_ll with the low half of t1 (shifted into high
-    // position).
-    let t1_lo = _mm256_castps_si256(_mm256_moveldup_ps(_mm256_castsi256_ps(t1)));
-    let res_lo = _mm256_blend_epi32::<0xaa>(mul_ll, t1_lo);
+        // Form res_lo by combining the low half of mul_ll with the low half of t1 (shifted into high
+        // position).
+        let t1_lo = _mm256_castps_si256(_mm256_moveldup_ps(_mm256_castsi256_ps(t1)));
+        let res_lo = _mm256_blend_epi32::<0xaa>(mul_ll, t1_lo);
 
-    (res_hi, res_lo)
+        (res_hi, res_lo)
+    }
 }
 
 /// Full 64-bit squaring. This routine is 1.2x faster than the scalar instruction.
 #[inline]
 unsafe fn square64(x: __m256i) -> (__m256i, __m256i) {
-    // Get high 32 bits of x. See comment in mul64_64_s.
-    let x_hi = _mm256_castps_si256(_mm256_movehdup_ps(_mm256_castsi256_ps(x)));
+    unsafe {
+        // Get high 32 bits of x. See comment in mul64_64_s.
+        let x_hi = _mm256_castps_si256(_mm256_movehdup_ps(_mm256_castsi256_ps(x)));
 
-    // All pairwise multiplications.
-    let mul_ll = _mm256_mul_epu32(x, x);
-    let mul_lh = _mm256_mul_epu32(x, x_hi);
-    let mul_hh = _mm256_mul_epu32(x_hi, x_hi);
+        // All pairwise multiplications.
+        let mul_ll = _mm256_mul_epu32(x, x);
+        let mul_lh = _mm256_mul_epu32(x, x_hi);
+        let mul_hh = _mm256_mul_epu32(x_hi, x_hi);
 
-    // Bignum addition, but mul_lh is shifted by 33 bits (not 32).
-    let mul_ll_hi = _mm256_srli_epi64::<33>(mul_ll);
-    let t0 = _mm256_add_epi64(mul_lh, mul_ll_hi);
-    let t0_hi = _mm256_srli_epi64::<31>(t0);
-    let res_hi = _mm256_add_epi64(mul_hh, t0_hi);
+        // Bignum addition, but mul_lh is shifted by 33 bits (not 32).
+        let mul_ll_hi = _mm256_srli_epi64::<33>(mul_ll);
+        let t0 = _mm256_add_epi64(mul_lh, mul_ll_hi);
+        let t0_hi = _mm256_srli_epi64::<31>(t0);
+        let res_hi = _mm256_add_epi64(mul_hh, t0_hi);
 
-    // Form low result by adding the mul_ll and the low 31 bits of mul_lh (shifted to the high
-    // position).
-    let mul_lh_lo = _mm256_slli_epi64::<33>(mul_lh);
-    let res_lo = _mm256_add_epi64(mul_ll, mul_lh_lo);
+        // Form low result by adding the mul_ll and the low 31 bits of mul_lh (shifted to the high
+        // position).
+        let mul_lh_lo = _mm256_slli_epi64::<33>(mul_lh);
+        let res_lo = _mm256_add_epi64(mul_ll, mul_lh_lo);
 
-    (res_hi, res_lo)
+        (res_hi, res_lo)
+    }
 }
 
 /// Goldilocks addition of a "small" number. `x_s` is pre-shifted by 2**63. `y` is assumed to be <=
 /// `0xffffffff00000000`. The result is shifted by 2**63.
 #[inline]
 unsafe fn add_small_64s_64_s(x_s: __m256i, y: __m256i) -> __m256i {
-    let res_wrapped_s = _mm256_add_epi64(x_s, y);
-    // 32-bit compare is faster than 64-bit. It's safe as long as x > res_wrapped iff x >> 32 >
-    // res_wrapped >> 32. The case of x >> 32 > res_wrapped >> 32 is trivial and so is <. The case
-    // where x >> 32 = res_wrapped >> 32 remains. If x >> 32 = res_wrapped >> 32, then y >> 32 =
-    // 0xffffffff and the addition of the low 32 bits generated a carry. This can never occur if y
-    // <= 0xffffffff00000000: if y >> 32 = 0xffffffff, then no carry can occur.
-    let mask = _mm256_cmpgt_epi32(x_s, res_wrapped_s); // -1 if overflowed else 0.
-                                                       // The mask contains 0xffffffff in the high 32 bits if wraparound occurred and 0 otherwise.
-    let wrapback_amt = _mm256_srli_epi64::<32>(mask); // -FIELD_ORDER if overflowed else 0.
-    _mm256_add_epi64(res_wrapped_s, wrapback_amt)
+    unsafe {
+        let res_wrapped_s = _mm256_add_epi64(x_s, y);
+        // 32-bit compare is faster than 64-bit. It's safe as long as x > res_wrapped iff x >> 32 >
+        // res_wrapped >> 32. The case of x >> 32 > res_wrapped >> 32 is trivial and so is <. The case
+        // where x >> 32 = res_wrapped >> 32 remains. If x >> 32 = res_wrapped >> 32, then y >> 32 =
+        // 0xffffffff and the addition of the low 32 bits generated a carry. This can never occur if y
+        // <= 0xffffffff00000000: if y >> 32 = 0xffffffff, then no carry can occur.
+        let mask = _mm256_cmpgt_epi32(x_s, res_wrapped_s); // -1 if overflowed else 0.
+        // The mask contains 0xffffffff in the high 32 bits if wraparound occurred and 0 otherwise.
+        let wrapback_amt = _mm256_srli_epi64::<32>(mask); // -FIELD_ORDER if overflowed else 0.
+        _mm256_add_epi64(res_wrapped_s, wrapback_amt)
+    }
 }
 
 /// Goldilocks subtraction of a "small" number. `x_s` is pre-shifted by 2**63. `y` is assumed to be
 /// <= `0xffffffff00000000`. The result is shifted by 2**63.
 #[inline]
 unsafe fn sub_small_64s_64_s(x_s: __m256i, y: __m256i) -> __m256i {
-    let res_wrapped_s = _mm256_sub_epi64(x_s, y);
-    // 32-bit compare is faster than 64-bit. It's safe as long as res_wrapped > x iff res_wrapped >>
-    // 32 > x >> 32. The case of res_wrapped >> 32 > x >> 32 is trivial and so is <. The case where
-    // res_wrapped >> 32 = x >> 32 remains. If res_wrapped >> 32 = x >> 32, then y >> 32 =
-    // 0xffffffff and the subtraction of the low 32 bits generated a borrow. This can never occur if
-    // y <= 0xffffffff00000000: if y >> 32 = 0xffffffff, then no borrow can occur.
-    let mask = _mm256_cmpgt_epi32(res_wrapped_s, x_s); // -1 if underflowed else 0.
-                                                       // The mask contains 0xffffffff in the high 32 bits if wraparound occurred and 0 otherwise.
-    let wrapback_amt = _mm256_srli_epi64::<32>(mask); // -FIELD_ORDER if underflowed else 0.
-    _mm256_sub_epi64(res_wrapped_s, wrapback_amt)
+    unsafe {
+        let res_wrapped_s = _mm256_sub_epi64(x_s, y);
+        // 32-bit compare is faster than 64-bit. It's safe as long as res_wrapped > x iff res_wrapped >>
+        // 32 > x >> 32. The case of res_wrapped >> 32 > x >> 32 is trivial and so is <. The case where
+        // res_wrapped >> 32 = x >> 32 remains. If res_wrapped >> 32 = x >> 32, then y >> 32 =
+        // 0xffffffff and the subtraction of the low 32 bits generated a borrow. This can never occur if
+        // y <= 0xffffffff00000000: if y >> 32 = 0xffffffff, then no borrow can occur.
+        let mask = _mm256_cmpgt_epi32(res_wrapped_s, x_s); // -1 if underflowed else 0.
+        // The mask contains 0xffffffff in the high 32 bits if wraparound occurred and 0 otherwise.
+        let wrapback_amt = _mm256_srli_epi64::<32>(mask); // -FIELD_ORDER if underflowed else 0.
+        _mm256_sub_epi64(res_wrapped_s, wrapback_amt)
+    }
 }
 
 #[inline]
 unsafe fn reduce128(x: (__m256i, __m256i)) -> __m256i {
-    let (hi0, lo0) = x;
-    let lo0_s = shift(lo0);
-    let hi_hi0 = _mm256_srli_epi64::<32>(hi0);
-    let lo1_s = sub_small_64s_64_s(lo0_s, hi_hi0);
-    let t1 = _mm256_mul_epu32(hi0, EPSILON);
-    let lo2_s = add_small_64s_64_s(lo1_s, t1);
-    shift(lo2_s)
+    unsafe {
+        let (hi0, lo0) = x;
+        let lo0_s = shift(lo0);
+        let hi_hi0 = _mm256_srli_epi64::<32>(hi0);
+        let lo1_s = sub_small_64s_64_s(lo0_s, hi_hi0);
+        let t1 = _mm256_mul_epu32(hi0, EPSILON);
+        let lo2_s = add_small_64s_64_s(lo1_s, t1);
+        shift(lo2_s)
+    }
 }
 
 /// Multiply two integers modulo FIELD_ORDER.
 #[inline]
 unsafe fn mul(x: __m256i, y: __m256i) -> __m256i {
-    reduce128(mul64_64(x, y))
+    unsafe { reduce128(mul64_64(x, y)) }
 }
 
 /// Square an integer modulo FIELD_ORDER.
 #[inline]
 unsafe fn square(x: __m256i) -> __m256i {
-    reduce128(square64(x))
+    unsafe { reduce128(square64(x)) }
 }
 
 #[inline]
 unsafe fn interleave1(x: __m256i, y: __m256i) -> (__m256i, __m256i) {
-    let a = _mm256_unpacklo_epi64(x, y);
-    let b = _mm256_unpackhi_epi64(x, y);
-    (a, b)
+    unsafe {
+        let a = _mm256_unpacklo_epi64(x, y);
+        let b = _mm256_unpackhi_epi64(x, y);
+        (a, b)
+    }
 }
 
 #[inline]
 unsafe fn interleave2(x: __m256i, y: __m256i) -> (__m256i, __m256i) {
-    let y_lo = _mm256_castsi256_si128(y); // This has 0 cost.
+    unsafe {
+        let y_lo = _mm256_castsi256_si128(y); // This has 0 cost.
 
-    // 1 places y_lo in the high half of x; 0 would place it in the lower half.
-    let a = _mm256_inserti128_si256::<1>(x, y_lo);
-    // NB: _mm256_permute2x128_si256 could be used here as well but _mm256_inserti128_si256 has
-    // lower latency on Zen 3 processors.
+        // 1 places y_lo in the high half of x; 0 would place it in the lower half.
+        let a = _mm256_inserti128_si256::<1>(x, y_lo);
+        // NB: _mm256_permute2x128_si256 could be used here as well but _mm256_inserti128_si256 has
+        // lower latency on Zen 3 processors.
 
-    // Each nibble of the constant has the following semantics:
-    // 0 => src1[low 128 bits]
-    // 1 => src1[high 128 bits]
-    // 2 => src2[low 128 bits]
-    // 3 => src2[high 128 bits]
-    // The low (resp. high) nibble chooses the low (resp. high) 128 bits of the result.
-    let b = _mm256_permute2x128_si256::<0x31>(x, y);
+        // Each nibble of the constant has the following semantics:
+        // 0 => src1[low 128 bits]
+        // 1 => src1[high 128 bits]
+        // 2 => src2[low 128 bits]
+        // 3 => src2[high 128 bits]
+        // The low (resp. high) nibble chooses the low (resp. high) 128 bits of the result.
+        let b = _mm256_permute2x128_si256::<0x31>(x, y);
 
-    (a, b)
+        (a, b)
+    }
 }
 
 #[cfg(test)]

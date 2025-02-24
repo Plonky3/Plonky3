@@ -111,7 +111,9 @@ macro_rules! quotient_map_small_internals {
         unsafe fn from_canonical_unchecked(int: $small_int) -> Self {
             // We use debug_assert to ensure this is removed by the compiler in release mode.
             debug_assert!(size_of::<$small_int>() < size_of::<$field_size>());
-            Self::from_canonical_unchecked(int as $field_size)
+            unsafe {
+                Self::from_canonical_unchecked(int as $field_size)
+            }
         }
     };
 }
@@ -168,7 +170,9 @@ macro_rules! quotient_map_small_internals {
 ///     unsafe fn from_canonical_unchecked(int: u8) -> Mersenne31 {
 ///         // We use debug_assert to ensure this is removed by the compiler in release mode.
 ///         debug_assert!(size_of::<u8>() < size_of::<u32>());
-///         Self::from_canonical_unchecked(int as u32)
+///         unsafe {
+///             Self::from_canonical_unchecked(int as u32)
+///         }
 ///     }
 /// }
 ///```
@@ -250,7 +254,9 @@ macro_rules! quotient_map_small_int {
 ///     /// The input mut lie in the range:", [0, 2^31 - 1].
 ///     #[inline]
 ///     unsafe fn from_canonical_unchecked(int: u128) -> Mersenne31 {
-///         Self::from_canonical_unchecked(int as u32)
+///         unsafe {
+///             Self::from_canonical_unchecked(int as u32)
+///         }
 ///     }
 /// }
 ///```
@@ -291,7 +297,9 @@ macro_rules! quotient_map_large_uint {
             #[doc = concat!("The input mut lie in the range:", $unchecked_bounds, ".")]
             #[inline]
             unsafe fn from_canonical_unchecked(int: $large_int) -> $field {
-                Self::from_canonical_unchecked(int as $field_size)
+                unsafe {
+                    Self::from_canonical_unchecked(int as $field_size)
+                }
             }
         }
         )*
@@ -347,7 +355,9 @@ macro_rules! quotient_map_large_uint {
 ///     /// The input mut lie in the range:", `[1 - 2^31, 2^31 - 1]`.
 ///     #[inline]
 ///     unsafe fn from_canonical_unchecked(int: i128) -> Mersenne31 {
-///         Self::from_canonical_unchecked(int as i32)
+///         unsafe {
+///             Self::from_canonical_unchecked(int as i32)
+///         }
 ///     }
 /// }
 ///```
@@ -385,7 +395,9 @@ macro_rules! quotient_map_large_iint {
             #[doc = concat!("The input mut lie in the range:", $unchecked_bounds, ".")]
             #[inline]
             unsafe fn from_canonical_unchecked(int: $large_signed_int) -> $field {
-                Self::from_canonical_unchecked(int as $field_size)
+                unsafe {
+                    Self::from_canonical_unchecked(int as $field_size)
+                }
             }
         }
         )*
@@ -433,13 +445,15 @@ macro_rules! impl_u_i_size {
 
             #[doc = concat!("We use the `from_canonical_unchecked` method of the primitive integer type identical to `", stringify!($intsize), "` on this machine")]
             unsafe fn from_canonical_unchecked(int: $intsize) -> Self {
-                match size_of::<$intsize>() {
-                    1 => Self::from_canonical_unchecked(int as $int8),
-                    2 => Self::from_canonical_unchecked(int as $int16),
-                    4 => Self::from_canonical_unchecked(int as $int32),
-                    8 => Self::from_canonical_unchecked(int as $int64),
-                    16 => Self::from_canonical_unchecked(int as $int128),
-                    _ => panic!(concat!(stringify!($intsize), "is not equivalent to any primitive integer types.")),
+                unsafe {
+                    match size_of::<$intsize>() {
+                        1 => Self::from_canonical_unchecked(int as $int8),
+                        2 => Self::from_canonical_unchecked(int as $int16),
+                        4 => Self::from_canonical_unchecked(int as $int32),
+                        8 => Self::from_canonical_unchecked(int as $int64),
+                        16 => Self::from_canonical_unchecked(int as $int128),
+                        _ => panic!(concat!(stringify!($intsize), "is not equivalent to any primitive integer types.")),
+                    }
                 }
             }
         }

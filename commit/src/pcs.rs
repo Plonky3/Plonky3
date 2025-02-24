@@ -4,10 +4,10 @@ use alloc::vec::Vec;
 use core::fmt::Debug;
 
 use p3_field::ExtensionField;
-use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
-use serde::de::DeserializeOwned;
+use p3_matrix::dense::RowMajorMatrix;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 use crate::PolynomialSpace;
 

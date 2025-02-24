@@ -3,8 +3,8 @@ use alloc::vec::Vec;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
-use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 
 /// Multiply a 4-element vector x by
 /// [ 5 7 1 3 ]
@@ -48,7 +48,7 @@ where
     let t23 = x[2].clone() + x[3].clone();
     let t0123 = t01.clone() + t23.clone();
     let t01123 = t0123.clone() + x[1].clone();
-    let t01233 = t0123.clone() + x[3].clone();
+    let t01233 = t0123 + x[3].clone();
     // The order here is important. Need to overwrite x[0] and x[2] after x[1] and x[3].
     x[3] = t01233.clone() + x[0].double(); // 3*x[0] + x[1] + x[2] + 2*x[3]
     x[1] = t01123.clone() + x[2].double(); // x[0] + 2*x[1] + 3*x[2] + x[3]
@@ -161,7 +161,7 @@ impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
 
     pub fn new_from_rng<R: Rng>(external_round_number: usize, rng: &mut R) -> Self
     where
-        Standard: Distribution<[T; WIDTH]>,
+        StandardUniform: Distribution<[T; WIDTH]>,
     {
         let half_f = external_round_number / 2;
         assert_eq!(
@@ -169,8 +169,8 @@ impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
             external_round_number,
             "The total number of external rounds should be even"
         );
-        let initial_constants = rng.sample_iter(Standard).take(half_f).collect();
-        let terminal_constants = rng.sample_iter(Standard).take(half_f).collect();
+        let initial_constants = rng.sample_iter(StandardUniform).take(half_f).collect();
+        let terminal_constants = rng.sample_iter(StandardUniform).take(half_f).collect();
 
         Self::new(initial_constants, terminal_constants)
     }
@@ -187,11 +187,11 @@ impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
         Self::new(initial_consts, terminal_consts)
     }
 
-    pub fn get_initial_constants(&self) -> &Vec<[T; WIDTH]> {
+    pub const fn get_initial_constants(&self) -> &Vec<[T; WIDTH]> {
         &self.initial
     }
 
-    pub fn get_terminal_constants(&self) -> &Vec<[T; WIDTH]> {
+    pub const fn get_terminal_constants(&self) -> &Vec<[T; WIDTH]> {
         &self.terminal
     }
 }
@@ -234,7 +234,7 @@ pub fn external_terminal_permute_state<
     add_rc_and_sbox: fn(&mut R, CT),
     mat4: &MdsPerm4,
 ) {
-    for elem in terminal_external_constants.iter() {
+    for elem in terminal_external_constants {
         state
             .iter_mut()
             .zip(elem.iter())

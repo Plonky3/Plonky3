@@ -15,9 +15,9 @@ use p3_koala_bear::{GenericPoseidon2LinearLayersKoalaBear, KoalaBear, Poseidon2K
 use p3_mersenne_31::{GenericPoseidon2LinearLayersMersenne31, Mersenne31, Poseidon2Mersenne31};
 use p3_monty_31::dft::RecursiveDft;
 use p3_poseidon2_air::{RoundConstants, VectorizedPoseidon2Air};
-use rand::thread_rng;
-use tracing_forest::util::LevelFilter;
+use rand::rng;
 use tracing_forest::ForestLayer;
+use tracing_forest::util::LevelFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
@@ -94,7 +94,7 @@ fn main() {
                 ProofOptions::Blake3Permutations => ProofObjective::Blake3(Blake3Air {}),
                 ProofOptions::KeccakFPermutations => ProofObjective::Keccak(KeccakAir {}),
                 ProofOptions::Poseidon2Permutations => {
-                    let constants = RoundConstants::from_rng(&mut thread_rng());
+                    let constants = RoundConstants::from_rng(&mut rng());
 
                     // Field specific constants for constructing the Poseidon2 AIR.
                     const SBOX_DEGREE: u64 = 3;
@@ -116,9 +116,13 @@ fn main() {
             };
 
             let dft = match args.discrete_fourier_transform {
-                DftOptions::RecursiveDft => DftChoice::Recursive(RecursiveDft::new(trace_height << 1)),
+                DftOptions::RecursiveDft => {
+                    DftChoice::Recursive(RecursiveDft::new(trace_height << 1))
+                }
                 DftOptions::Radix2DitParallel => DftChoice::Parallel(Radix2DitParallel::default()),
-                DftOptions::None => panic!("Please specify what dft to use. Options are recursive-dft and radix-2-dit-parallel"),
+                DftOptions::None => panic!(
+                    "Please specify what dft to use. Options are recursive-dft and radix-2-dit-parallel"
+                ),
             };
 
             match args.merkle_hash {
@@ -127,8 +131,8 @@ fn main() {
                     report_result(result);
                 }
                 MerkleHashOptions::Poseidon2 => {
-                    let perm16 = Poseidon2KoalaBear::<16>::new_from_rng_128(&mut thread_rng());
-                    let perm24 = Poseidon2KoalaBear::<24>::new_from_rng_128(&mut thread_rng());
+                    let perm16 = Poseidon2KoalaBear::<16>::new_from_rng_128(&mut rng());
+                    let perm24 = Poseidon2KoalaBear::<24>::new_from_rng_128(&mut rng());
                     let result = prove_monty31_poseidon2::<_, EF, _, _, _, _>(
                         proof_goal, dft, num_hashes, perm16, perm24,
                     );
@@ -143,7 +147,7 @@ fn main() {
                 ProofOptions::Blake3Permutations => ProofObjective::Blake3(Blake3Air {}),
                 ProofOptions::KeccakFPermutations => ProofObjective::Keccak(KeccakAir {}),
                 ProofOptions::Poseidon2Permutations => {
-                    let constants = RoundConstants::from_rng(&mut thread_rng());
+                    let constants = RoundConstants::from_rng(&mut rng());
 
                     // Field specific constants for constructing the Poseidon2 AIR.
                     const SBOX_DEGREE: u64 = 7;
@@ -165,9 +169,13 @@ fn main() {
             };
 
             let dft = match args.discrete_fourier_transform {
-                DftOptions::RecursiveDft => DftChoice::Recursive(RecursiveDft::new(trace_height << 1)),
+                DftOptions::RecursiveDft => {
+                    DftChoice::Recursive(RecursiveDft::new(trace_height << 1))
+                }
                 DftOptions::Radix2DitParallel => DftChoice::Parallel(Radix2DitParallel::default()),
-                DftOptions::None => panic!("Please specify what dft to use. Options are recursive-dft and radix-2-dit-parallel"),
+                DftOptions::None => panic!(
+                    "Please specify what dft to use. Options are recursive-dft and radix-2-dit-parallel"
+                ),
             };
 
             match args.merkle_hash {
@@ -176,8 +184,8 @@ fn main() {
                     report_result(result);
                 }
                 MerkleHashOptions::Poseidon2 => {
-                    let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut thread_rng());
-                    let perm24 = Poseidon2BabyBear::<24>::new_from_rng_128(&mut thread_rng());
+                    let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng());
+                    let perm24 = Poseidon2BabyBear::<24>::new_from_rng_128(&mut rng());
                     let result = prove_monty31_poseidon2::<_, EF, _, _, _, _>(
                         proof_goal, dft, num_hashes, perm16, perm24,
                     );
@@ -192,7 +200,7 @@ fn main() {
                 ProofOptions::Blake3Permutations => ProofObjective::Blake3(Blake3Air {}),
                 ProofOptions::KeccakFPermutations => ProofObjective::Keccak(KeccakAir {}),
                 ProofOptions::Poseidon2Permutations => {
-                    let constants = RoundConstants::from_rng(&mut thread_rng());
+                    let constants = RoundConstants::from_rng(&mut rng());
 
                     // Field specific constants for constructing the Poseidon2 AIR.
                     const SBOX_DEGREE: u64 = 5;
@@ -215,7 +223,9 @@ fn main() {
 
             match args.discrete_fourier_transform {
                 DftOptions::None => {}
-                _ => panic!("Currently there are no available DFT options when using Mersenne31. Please remove the --discrete_fourier_transform flag."),
+                _ => panic!(
+                    "Currently there are no available DFT options when using Mersenne31. Please remove the --discrete_fourier_transform flag."
+                ),
             };
 
             match args.merkle_hash {
@@ -224,8 +234,8 @@ fn main() {
                     report_result(result);
                 }
                 MerkleHashOptions::Poseidon2 => {
-                    let perm16 = Poseidon2Mersenne31::<16>::new_from_rng_128(&mut thread_rng());
-                    let perm24 = Poseidon2Mersenne31::<24>::new_from_rng_128(&mut thread_rng());
+                    let perm16 = Poseidon2Mersenne31::<16>::new_from_rng_128(&mut rng());
+                    let perm24 = Poseidon2Mersenne31::<24>::new_from_rng_128(&mut rng());
                     let result = prove_m31_poseidon2::<_, EF, _, _, _>(
                         proof_goal, num_hashes, perm16, perm24,
                     );

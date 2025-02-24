@@ -3,17 +3,17 @@ use std::fmt::Debug;
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
-use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
-use p3_fri::{create_benchmark_fri_config, TwoAdicFriPcs};
+use p3_field::extension::BinomialExtensionField;
+use p3_fri::{TwoAdicFriPcs, create_benchmark_fri_config};
 use p3_goldilocks::{Goldilocks, Poseidon2Goldilocks};
-use p3_keccak_air::{generate_trace_rows, KeccakAir};
+use p3_keccak_air::{KeccakAir, generate_trace_rows};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use p3_uni_stark::{prove, verify, StarkConfig};
-use rand::{random, thread_rng};
-use tracing_forest::util::LevelFilter;
+use p3_uni_stark::{StarkConfig, prove, verify};
+use rand::{random, rng};
 use tracing_forest::ForestLayer;
+use tracing_forest::util::LevelFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
@@ -34,7 +34,7 @@ fn main() -> Result<(), impl Debug> {
     type Challenge = BinomialExtensionField<Val, 2>;
 
     type Perm = Poseidon2Goldilocks<8>;
-    let perm = Perm::new_from_rng_128(&mut thread_rng());
+    let perm = Perm::new_from_rng_128(&mut rng());
 
     type MyHash = PaddingFreeSponge<Perm, 8, 4, 4>;
     let hash = MyHash::new(perm.clone());

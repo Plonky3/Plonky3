@@ -6,13 +6,13 @@ use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, TwoAdicMultiplicativeCoset};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_matrix::Matrix;
 use p3_matrix::bitrev::BitReversalPerm;
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
 use p3_matrix::horizontally_truncated::HorizontallyTruncated;
 use p3_matrix::row_index_mapped::RowIndexMappedView;
-use p3_matrix::Matrix;
-use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 use tracing::instrument;
 
 use crate::verifier::FriError;
@@ -48,7 +48,7 @@ impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger, R> Pcs<Challenge, Chal
     for HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R>
 where
     Val: TwoAdicField,
-    Standard: Distribution<Val>,
+    StandardUniform: Distribution<Val>,
     Dft: TwoAdicSubgroupDft<Val>,
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
@@ -197,7 +197,7 @@ fn add_random_cols<Val, R>(
 where
     Val: Field,
     R: Rng + Send + Sync,
-    Standard: Distribution<Val>,
+    StandardUniform: Distribution<Val>,
 {
     let old_w = mat.width();
     let new_w = old_w + num_random_codewords;
@@ -206,13 +206,13 @@ where
     let new_values = Val::zero_vec(new_w * h);
     let mut result = RowMajorMatrix::new(new_values, new_w);
     // Can be parallelized by adding par_, but there are some complications with the RNG.
-    // We could just use thread_rng(), but ideally we want to keep it generic...
+    // We could just use rng(), but ideally we want to keep it generic...
     result
         .rows_mut()
         .zip(mat.row_slices())
         .for_each(|(new_row, old_row)| {
             new_row[..old_w].copy_from_slice(old_row);
-            new_row[old_w..].iter_mut().for_each(|v| *v = rng.gen());
+            new_row[old_w..].iter_mut().for_each(|v| *v = rng.random());
         });
     result
 }

@@ -9,9 +9,9 @@ use alloc::vec::Vec;
 use p3_field::{Algebra, InjectiveMonomial, PrimeField};
 use p3_mds::MdsPermutation;
 use p3_symmetric::{CryptographicPermutation, Permutation};
-use rand::distributions::Standard;
-use rand::prelude::Distribution;
 use rand::Rng;
+use rand::distr::StandardUniform;
+use rand::prelude::Distribution;
 
 /// The Poseidon permutation.
 #[derive(Clone, Debug)]
@@ -53,12 +53,12 @@ where
         rng: &mut R,
     ) -> Self
     where
-        Standard: Distribution<F>,
+        StandardUniform: Distribution<F>,
     {
         let num_rounds = 2 * half_num_full_rounds + num_partial_rounds;
         let num_constants = WIDTH * num_rounds;
         let constants = rng
-            .sample_iter(Standard)
+            .sample_iter(StandardUniform)
             .take(num_constants)
             .collect::<Vec<_>>();
         Self {

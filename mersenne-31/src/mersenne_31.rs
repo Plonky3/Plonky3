@@ -11,12 +11,12 @@ use num_bigint::BigUint;
 use p3_field::exponentiation::exp_1717986917;
 use p3_field::integers::QuotientMap;
 use p3_field::{
-    halve_u32, quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int, Field,
-    InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField32, PrimeField64,
+    Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
+    PrimeField32, PrimeField64, halve_u32, quotient_map_large_iint, quotient_map_large_uint,
+    quotient_map_small_int,
 };
-use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -45,12 +45,9 @@ impl Mersenne31 {
     /// has the advantage of being able to be used in `const` environments.
     #[inline]
     pub const fn new_array<const N: usize>(input: [u32; N]) -> [Self; N] {
-        let mut output = [Mersenne31::ZERO; N];
+        let mut output = [Self::ZERO; N];
         let mut i = 0;
-        loop {
-            if i == N {
-                break;
-            }
+        while i < N {
             output[i].value = input[i] % P;
             i += 1;
         }
@@ -101,7 +98,7 @@ impl Debug for Mersenne31 {
     }
 }
 
-impl Distribution<Mersenne31> for Standard {
+impl Distribution<Mersenne31> for StandardUniform {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Mersenne31 {
         loop {
             let next_u31 = rng.next_u32() >> 1;
@@ -125,7 +122,7 @@ impl<'a> Deserialize<'a> for Mersenne31 {
         let val = u32::deserialize(d)?;
         // Ensure that `val` satisfies our invariant. i.e. Not necessarily canonical, but must fit in 31 bits.
         if val <= P {
-            Ok(Mersenne31::new(val))
+            Ok(Self::new(val))
         } else {
             Err(D::Error::custom("Value is out of range"))
         }
@@ -255,7 +252,7 @@ impl Field for Mersenne31 {
 
     #[inline]
     fn halve(&self) -> Self {
-        Mersenne31::new(halve_u32::<P>(self.value))
+        Self::new(halve_u32::<P>(self.value))
     }
 
     #[inline]
@@ -298,12 +295,8 @@ impl QuotientMap<u32> for Mersenne31 {
     ///
     /// Returns none if the input does not lie in the range `[0, 2^31 - 1]`.
     #[inline]
-    fn from_canonical_checked(int: u32) -> Option<Mersenne31> {
-        if int < Self::ORDER_U32 {
-            Some(Self::new(int))
-        } else {
-            None
-        }
+    fn from_canonical_checked(int: u32) -> Option<Self> {
+        (int < Self::ORDER_U32).then(|| Self::new(int))
     }
 
     /// Convert a given `u32` integer into an element of the `Mersenne31` field.
@@ -311,7 +304,7 @@ impl QuotientMap<u32> for Mersenne31 {
     /// # Safety
     /// The input must lie in the range: `[0, 2^31 - 1]`.
     #[inline(always)]
-    unsafe fn from_canonical_unchecked(int: u32) -> Mersenne31 {
+    unsafe fn from_canonical_unchecked(int: u32) -> Self {
         debug_assert!(int < Self::ORDER_U32);
         Self::new(int)
     }
@@ -324,7 +317,7 @@ impl QuotientMap<i32> for Mersenne31 {
         if int >= 0 {
             Self::new(int as u32)
         } else if int > (-1 << 31) {
-            Self::new(Mersenne31::ORDER_U32.wrapping_add_signed(int))
+            Self::new(Self::ORDER_U32.wrapping_add_signed(int))
         } else {
             // The only other option is int = -(2^31) = -1 mod p.
             Self::NEG_ONE
@@ -335,14 +328,12 @@ impl QuotientMap<i32> for Mersenne31 {
     ///
     /// Returns none if the input does not lie in the range `(-2^30, 2^30)`.
     #[inline]
-    fn from_canonical_checked(int: i32) -> Option<Mersenne31> {
+    fn from_canonical_checked(int: i32) -> Option<Self> {
         const TWO_EXP_30: i32 = 1 << 30;
         const NEG_TWO_EXP_30_PLUS_1: i32 = (-1 << 30) + 1;
         match int {
             0..TWO_EXP_30 => Some(Self::new(int as u32)),
-            NEG_TWO_EXP_30_PLUS_1..0 => {
-                Some(Self::new(Mersenne31::ORDER_U32.wrapping_add_signed(int)))
-            }
+            NEG_TWO_EXP_30_PLUS_1..0 => Some(Self::new(Self::ORDER_U32.wrapping_add_signed(int))),
             _ => None,
         }
     }
@@ -352,11 +343,11 @@ impl QuotientMap<i32> for Mersenne31 {
     /// # Safety
     /// The input must lie in the range: `[1 - 2^31, 2^31 - 1]`.
     #[inline(always)]
-    unsafe fn from_canonical_unchecked(int: i32) -> Mersenne31 {
+    unsafe fn from_canonical_unchecked(int: i32) -> Self {
         if int >= 0 {
             Self::new(int as u32)
         } else {
-            Self::new(Mersenne31::ORDER_U32.wrapping_add_signed(int))
+            Self::new(Self::ORDER_U32.wrapping_add_signed(int))
         }
     }
 }

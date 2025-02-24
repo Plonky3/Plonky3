@@ -10,14 +10,14 @@ use p3_maybe_rayon::prelude::{IntoParallelRefMutIterator, ParallelIterator};
 use crate::field::Field;
 use crate::{PackedValue, PrimeCharacteristicRing, PrimeField, PrimeField32, TwoAdicField};
 
-/// Computes `Z_H(x)`, where `Z_H` is the zerofier of a multiplicative subgroup of order `2^log_n`.
-pub fn two_adic_subgroup_zerofier<F: TwoAdicField>(log_n: usize, x: F) -> F {
+/// Computes `Z_H(x)`, where `Z_H` is the vanishing polynomial of a multiplicative subgroup of order `2^log_n`.
+pub fn two_adic_subgroup_vanishing_polynomial<F: TwoAdicField>(log_n: usize, x: F) -> F {
     x.exp_power_of_2(log_n) - F::ONE
 }
 
-/// Computes `Z_{sH}(x)`, where `Z_{sH}` is the zerofier of the given coset of a multiplicative
+/// Computes `Z_{sH}(x)`, where `Z_{sH}` is the vanishing polynomial of the given coset of a multiplicative
 /// subgroup of order `2^log_n`.
-pub fn two_adic_coset_zerofier<F: TwoAdicField>(log_n: usize, shift: F, x: F) -> F {
+pub fn two_adic_coset_vanishing_polynomial<F: TwoAdicField>(log_n: usize, shift: F, x: F) -> F {
     x.exp_power_of_2(log_n) - shift.exp_power_of_2(log_n)
 }
 
@@ -96,7 +96,7 @@ where
 // that has stabilized (More details in Rust issue: https://github.com/rust-lang/rust/issues/96097).
 //
 // Annoyingly, both transmute and transmute_copy fail here. The first because it cannot handle
-// const generics and the second due to interior mutability and the unability to use &mut in const
+// const generics and the second due to interior mutability and the inability to use &mut in const
 // functions.
 //
 // The solution is to implement the map [MaybeUninit<T>; D]) -> MaybeUninit<[T; D]>
@@ -176,30 +176,22 @@ pub fn eval_poly<R: PrimeCharacteristicRing>(poly: &[R], x: R) -> R {
 
 /// Given an element x from a 32 bit field F_P compute x/2.
 #[inline]
-pub fn halve_u32<const P: u32>(input: u32) -> u32 {
+pub const fn halve_u32<const P: u32>(input: u32) -> u32 {
     let shift = (P + 1) >> 1;
     let shr = input >> 1;
     let lo_bit = input & 1;
     let shr_corr = shr + shift;
-    if lo_bit == 0 {
-        shr
-    } else {
-        shr_corr
-    }
+    if lo_bit == 0 { shr } else { shr_corr }
 }
 
 /// Given an element x from a 64 bit field F_P compute x/2.
 #[inline]
-pub fn halve_u64<const P: u64>(input: u64) -> u64 {
+pub const fn halve_u64<const P: u64>(input: u64) -> u64 {
     let shift = (P + 1) >> 1;
     let shr = input >> 1;
     let lo_bit = input & 1;
     let shr_corr = shr + shift;
-    if lo_bit == 0 {
-        shr
-    } else {
-        shr_corr
-    }
+    if lo_bit == 0 { shr } else { shr_corr }
 }
 
 /// Given a slice of SF elements, reduce them to a TF element using a 2^32-base decomposition.
@@ -228,10 +220,10 @@ pub fn split_32<SF: PrimeField, TF: PrimeField32>(val: SF, n: usize) -> Vec<TF> 
         let mask: BigUint = po2.clone() - BigUint::from(1u128);
         let digit: BigUint = val.clone() & mask;
         let digit_u64s = digit.to_u64_digits();
-        if !digit_u64s.is_empty() {
-            result.push(TF::from_int(digit_u64s[0]));
-        } else {
+        if digit_u64s.is_empty() {
             result.push(TF::ZERO)
+        } else {
+            result.push(TF::from_int(digit_u64s[0]));
         }
         val /= po2.clone();
     }

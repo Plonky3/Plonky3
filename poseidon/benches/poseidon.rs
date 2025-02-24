@@ -1,17 +1,17 @@
 use std::any::type_name;
 use std::array;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, MdsMatrixBabyBear};
 use p3_field::{Algebra, Field, InjectiveMonomial, PrimeField};
 use p3_goldilocks::{Goldilocks, MdsMatrixGoldilocks};
-use p3_mds::coset_mds::CosetMds;
 use p3_mds::MdsPermutation;
+use p3_mds::coset_mds::CosetMds;
 use p3_mersenne_31::{MdsMatrixMersenne31, Mersenne31};
 use p3_poseidon::Poseidon;
 use p3_symmetric::Permutation;
-use rand::distributions::{Distribution, Standard};
-use rand::thread_rng;
+use rand::distr::{Distribution, StandardUniform};
+use rand::rng;
 
 fn bench_poseidon(c: &mut Criterion) {
     poseidon::<BabyBear, BabyBear, MdsMatrixBabyBear, 16, 7>(c);
@@ -31,10 +31,10 @@ fn poseidon<F, A, Mds, const WIDTH: usize, const ALPHA: u64>(c: &mut Criterion)
 where
     F: PrimeField + InjectiveMonomial<ALPHA>,
     A: Algebra<F> + InjectiveMonomial<ALPHA>,
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
     Mds: MdsPermutation<A, WIDTH> + Default,
 {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     let mds = Mds::default();
 
     // TODO: Should be calculated for the particular field, width and ALPHA.

@@ -2,8 +2,8 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_field::TwoAdicField;
-use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 use tracing::instrument;
@@ -57,7 +57,7 @@ mod tests {
     use itertools::izip;
     use p3_baby_bear::BabyBear;
     use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
-    use rand::{thread_rng, Rng};
+    use rand::{Rng, rng};
 
     use super::*;
 
@@ -65,22 +65,22 @@ mod tests {
     fn test_fold_even_odd() {
         type F = BabyBear;
 
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
         let log_n = 10;
         let n = 1 << log_n;
-        let coeffs = (0..n).map(|_| rng.gen::<F>()).collect::<Vec<_>>();
+        let coeffs = (0..n).map(|_| rng.random::<F>()).collect::<Vec<_>>();
 
         let dft = Radix2Dit::default();
         let evals = dft.dft(coeffs.clone());
 
-        let even_coeffs = coeffs.iter().cloned().step_by(2).collect_vec();
+        let even_coeffs = coeffs.iter().copied().step_by(2).collect_vec();
         let even_evals = dft.dft(even_coeffs);
 
-        let odd_coeffs = coeffs.iter().cloned().skip(1).step_by(2).collect_vec();
+        let odd_coeffs = coeffs.iter().copied().skip(1).step_by(2).collect_vec();
         let odd_evals = dft.dft(odd_coeffs);
 
-        let beta = rng.gen::<F>();
+        let beta = rng.random::<F>();
         let expected = izip!(even_evals, odd_evals)
             .map(|(even, odd)| even + beta * odd)
             .collect::<Vec<_>>();

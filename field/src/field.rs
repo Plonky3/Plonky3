@@ -9,11 +9,11 @@ use core::slice;
 use num_bigint::BigUint;
 use num_traits::One;
 use nums::{Factorizer, FactorizerFromSplitter, MillerRabin, PollardRho};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 use crate::exponentiation::bits_u64;
-use crate::integers::{from_integer_types, QuotientMap};
+use crate::integers::{QuotientMap, from_integer_types};
 use crate::packed::PackedField;
 use crate::{Packable, PackedFieldExtension};
 
@@ -118,14 +118,12 @@ pub trait PrimeCharacteristicRing:
     /// Return `Self::ONE` if `b` is `true` and `Self::ZERO` if `b` is `false`.
     fn from_bool(b: bool) -> Self {
         // Some rings might reimplement this to avoid the branch.
-        if b {
-            Self::ONE
-        } else {
-            Self::ZERO
-        }
+        if b { Self::ONE } else { Self::ZERO }
     }
 
-    from_integer_types!(u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize);
+    from_integer_types!(
+        u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize
+    );
 
     /// The elementary function `double(a) = 2*a`.
     ///
@@ -164,7 +162,7 @@ pub trait PrimeCharacteristicRing:
         let mut product = Self::ONE;
 
         for j in 0..bits_u64(power) {
-            if (power >> j & 1) != 0 {
+            if (power >> j) & 1 != 0 {
                 product *= current.clone();
             }
             current = current.square();

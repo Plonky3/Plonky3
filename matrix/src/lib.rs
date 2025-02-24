@@ -8,10 +8,10 @@ use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
 
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
 use p3_field::{
-    dot_product, BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue,
-    PrimeCharacteristicRing,
+    BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue,
+    PrimeCharacteristicRing, dot_product,
 };
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
@@ -173,9 +173,12 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         T: Copy,
         P: PackedValue<Value = T>,
     {
-        let rows = (0..(P::WIDTH))
+        // Precompute row slices once to minimize redundant calls and improve performance.
+        let rows = (0..P::WIDTH)
             .map(|c| self.row_slice((r + c) % self.height()))
             .collect_vec();
+
+        // Using precomputed rows avoids repeatedly calling `row_slice`, which is costly.
         (0..self.width()).map(move |c| P::from_fn(|i| rows[i][c]))
     }
 
@@ -291,9 +294,9 @@ mod tests {
 
     use itertools::izip;
     use p3_baby_bear::BabyBear;
-    use p3_field::extension::BinomialExtensionField;
     use p3_field::PrimeCharacteristicRing;
-    use rand::thread_rng;
+    use p3_field::extension::BinomialExtensionField;
+    use rand::rng;
 
     use super::*;
 
@@ -302,8 +305,8 @@ mod tests {
         type F = BabyBear;
         type EF = BinomialExtensionField<BabyBear, 4>;
 
-        let m = RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << 8, 1 << 4);
-        let v = RowMajorMatrix::<EF>::rand(&mut thread_rng(), 1 << 8, 1).values;
+        let m = RowMajorMatrix::<F>::rand(&mut rng(), 1 << 8, 1 << 4);
+        let v = RowMajorMatrix::<EF>::rand(&mut rng(), 1 << 8, 1).values;
 
         let mut expected = vec![EF::ZERO; m.width()];
         for (row, &scale) in izip!(m.rows(), &v) {

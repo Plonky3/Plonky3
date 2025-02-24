@@ -14,22 +14,23 @@ pub use dft_testing::*;
 use num_bigint::BigUint;
 use num_traits::identities::One;
 use p3_field::{
-    cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order, two_adic_coset_zerofier,
-    two_adic_subgroup_zerofier, ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField,
+    ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField,
+    cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order,
+    two_adic_coset_vanishing_polynomial, two_adic_subgroup_vanishing_polynomial,
 };
 pub use packedfield_testing::*;
-use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 
 #[allow(clippy::eq_op)]
 pub fn test_add_neg_sub_mul<F: Field>()
 where
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
-    let mut rng = rand::thread_rng();
-    let x = rng.gen::<F>();
-    let y = rng.gen::<F>();
-    let z = rng.gen::<F>();
+    let mut rng = rand::rng();
+    let x = rng.random::<F>();
+    let y = rng.random::<F>();
+    let z = rng.random::<F>();
     assert_eq!(F::ONE + F::NEG_ONE, F::ZERO);
     assert_eq!(x + (-x), F::ZERO);
     assert_eq!(F::ONE + F::ONE, F::TWO);
@@ -46,20 +47,17 @@ where
     assert_eq!(x - (y + z), (x - y) - z);
     assert_eq!((x + y) - z, x + (y - z));
     assert_eq!(x * (y + z), x * y + x * z);
-    assert_eq!(
-        x + y + z + x + y + z,
-        [x, x, y, y, z, z].iter().cloned().sum()
-    );
+    assert_eq!(x + y + z + x + y + z, [x, x, y, y, z, z].into_iter().sum());
 }
 
 pub fn test_inv_div<F: Field>()
 where
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
-    let mut rng = rand::thread_rng();
-    let x = rng.gen::<F>();
-    let y = rng.gen::<F>();
-    let z = rng.gen::<F>();
+    let mut rng = rand::rng();
+    let x = rng.random::<F>();
+    let y = rng.random::<F>();
+    let z = rng.random::<F>();
     assert_eq!(x * x.inverse(), F::ONE);
     assert_eq!(x.inverse() * x, F::ONE);
     assert_eq!(x.square().inverse(), x.inverse().square());
@@ -70,15 +68,15 @@ where
 
 pub fn test_inverse<F: Field>()
 where
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
     assert_eq!(None, F::ZERO.try_inverse());
 
     assert_eq!(Some(F::ONE), F::ONE.try_inverse());
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     for _ in 0..1000 {
-        let x = rng.gen::<F>();
+        let x = rng.random::<F>();
         if !x.is_zero() && !x.is_one() {
             let z = x.inverse();
             assert_ne!(x, z);
@@ -104,23 +102,23 @@ pub fn test_multiplicative_group_factors<F: Field>() {
     assert_eq!(product + BigUint::one(), F::order());
 }
 
-pub fn test_two_adic_subgroup_zerofier<F: TwoAdicField>() {
+pub fn test_two_adic_subgroup_vanishing_polynomial<F: TwoAdicField>() {
     for log_n in 0..5 {
         let g = F::two_adic_generator(log_n);
         for x in cyclic_subgroup_known_order(g, 1 << log_n) {
-            let zerofier_eval = two_adic_subgroup_zerofier(log_n, x);
-            assert_eq!(zerofier_eval, F::ZERO);
+            let vanishing_polynomial_eval = two_adic_subgroup_vanishing_polynomial(log_n, x);
+            assert_eq!(vanishing_polynomial_eval, F::ZERO);
         }
     }
 }
 
-pub fn test_two_adic_coset_zerofier<F: TwoAdicField>() {
+pub fn test_two_adic_coset_vanishing_polynomial<F: TwoAdicField>() {
     for log_n in 0..5 {
         let g = F::two_adic_generator(log_n);
         let shift = F::GENERATOR;
         for x in cyclic_subgroup_coset_known_order(g, shift, 1 << log_n) {
-            let zerofier_eval = two_adic_coset_zerofier(log_n, shift, x);
-            assert_eq!(zerofier_eval, F::ZERO);
+            let vanishing_polynomial_eval = two_adic_coset_vanishing_polynomial(log_n, shift, x);
+            assert_eq!(vanishing_polynomial_eval, F::ZERO);
         }
     }
 }
@@ -178,7 +176,9 @@ macro_rules! test_prime_field {
             fn test_small_integer_conversions() {
                 $crate::generate_from_small_int_tests!(
                     $field,
-                    [u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize]
+                    [
+                        u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize
+                    ]
                 );
             }
 
@@ -203,8 +203,8 @@ macro_rules! test_prime_field_64 {
 
             #[test]
             fn test_as_canonical_u64() {
-                let mut rng = rand::thread_rng();
-                let x: u64 = rng.gen();
+                let mut rng = rand::rng();
+                let x: u64 = rng.random();
                 let x_mod_order = x % <$field>::ORDER_U64;
 
                 assert_eq!(<$field>::ZERO.as_canonical_u64(), 0);
@@ -265,8 +265,8 @@ macro_rules! test_prime_field_32 {
 
             #[test]
             fn test_as_canonical_u32() {
-                let mut rng = rand::thread_rng();
-                let x: u32 = rng.gen();
+                let mut rng = rand::rng();
+                let x: u32 = rng.random();
                 let x_mod_order = x % <$field>::ORDER_U32;
 
                 assert_eq!(<$field>::ZERO.as_canonical_u32(), 0);
@@ -329,15 +329,15 @@ macro_rules! test_two_adic_field {
     ($field:ty) => {
         mod two_adic_field_tests {
             #[test]
-            fn test_two_adic_field_subgroup_zerofier() {
-                $crate::test_two_adic_subgroup_zerofier::<$field>();
+            fn test_two_adic_field_subgroup_vanishing_polynomial() {
+                $crate::test_two_adic_subgroup_vanishing_polynomial::<$field>();
             }
             #[test]
-            fn test_two_adic_coset_zerofier() {
-                $crate::test_two_adic_coset_zerofier::<$field>();
+            fn test_two_adic_coset_vanishing_polynomial() {
+                $crate::test_two_adic_coset_vanishing_polynomial::<$field>();
             }
             #[test]
-            fn test_two_adic_consisitency() {
+            fn test_two_adic_consistency() {
                 $crate::test_two_adic_generator_consistency::<$field>();
             }
         }
@@ -368,7 +368,7 @@ mod tests {
 
     use p3_baby_bear::BabyBear;
     use p3_field::extension::{BinomialExtensionField, HasFrobenius};
-    use p3_field::{binomial_expand, eval_poly, PrimeCharacteristicRing};
+    use p3_field::{PrimeCharacteristicRing, binomial_expand, eval_poly};
     use rand::random;
 
     use super::*;

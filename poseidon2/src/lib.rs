@@ -20,8 +20,8 @@ pub use generic::*;
 pub use internal::*;
 use p3_field::{Algebra, InjectiveMonomial, PrimeField, PrimeField64};
 use p3_symmetric::{CryptographicPermutation, Permutation};
-use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 pub use round_numbers::poseidon2_round_numbers_128;
 
 const SUPPORTED_WIDTHS: [usize; 8] = [2, 3, 4, 8, 12, 16, 20, 24];
@@ -65,10 +65,10 @@ where
     /// Create a new Poseidon2 configuration with random parameters.
     pub fn new_from_rng<R: Rng>(rounds_f: usize, rounds_p: usize, rng: &mut R) -> Self
     where
-        Standard: Distribution<F> + Distribution<[F; WIDTH]>,
+        StandardUniform: Distribution<F> + Distribution<[F; WIDTH]>,
     {
         let external_constants = ExternalLayerConstants::new_from_rng(rounds_f, rng);
-        let internal_constants = rng.sample_iter(Standard).take(rounds_p).collect();
+        let internal_constants = rng.sample_iter(StandardUniform).take(rounds_p).collect();
 
         Self::new(external_constants, internal_constants)
     }
@@ -84,7 +84,7 @@ where
     /// Create a new Poseidon2 configuration with 128 bit security and random rounds constants.
     pub fn new_from_rng_128<R: Rng>(rng: &mut R) -> Self
     where
-        Standard: Distribution<F> + Distribution<[F; WIDTH]>,
+        StandardUniform: Distribution<F> + Distribution<[F; WIDTH]>,
     {
         let (rounds_f, rounds_p) = poseidon2_round_numbers_128::<F>(WIDTH, D);
         Self::new_from_rng(rounds_f, rounds_p, rng)

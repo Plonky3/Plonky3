@@ -1,10 +1,10 @@
 use alloc::vec::Vec;
 
 use p3_field::TwoAdicField;
+use p3_matrix::Matrix;
 use p3_matrix::bitrev::BitReversableMatrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::swap_rows;
-use p3_matrix::Matrix;
 
 use crate::util::{coset_shift_cols, divide_by_height};
 
