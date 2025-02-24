@@ -96,7 +96,7 @@ where
 // that has stabilized (More details in Rust issue: https://github.com/rust-lang/rust/issues/96097).
 //
 // Annoyingly, both transmute and transmute_copy fail here. The first because it cannot handle
-// const generics and the second due to interior mutability and the unability to use &mut in const
+// const generics and the second due to interior mutability and the inability to use &mut in const
 // functions.
 //
 // The solution is to implement the map [MaybeUninit<T>; D]) -> MaybeUninit<[T; D]>

@@ -612,7 +612,7 @@ mod tests {
         // Check on `reduce_u128`
         let x = u128::MAX;
         let y = reduce128(x);
-        // The following equalitiy sequence holds, modulo p = 2^64 - 2^32 + 1
+        // The following equality sequence holds, modulo p = 2^64 - 2^32 + 1
         // 2^128 - 1 = (2^64 - 1) * (2^64 + 1)
         //           = (2^32 - 1 - 1) * (2^32 - 1 + 1)
         //           = (2^32 - 2) * (2^32)

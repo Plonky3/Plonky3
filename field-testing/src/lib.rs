@@ -328,7 +328,7 @@ macro_rules! test_two_adic_field {
                 $crate::test_two_adic_coset_vanishing_polynomial::<$field>();
             }
             #[test]
-            fn test_two_adic_consisitency() {
+            fn test_two_adic_consistency() {
                 $crate::test_two_adic_generator_consistency::<$field>();
             }
         }

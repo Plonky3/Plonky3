@@ -8,7 +8,7 @@ use p3_field::{
 
 /// Precomputations of the evaluation of `Z_H(X) = X^n - 1` on a coset `s K` with `H <= K`.
 #[derive(Debug)]
-pub struct ZerofierOnCoset<F: Field> {
+pub struct VanishingPolynomialOnCoset<F: Field> {
     /// `n = |H|`.
     log_n: usize,
     /// `rate = |K|/|H|`.
@@ -21,7 +21,7 @@ pub struct ZerofierOnCoset<F: Field> {
     inverses: Vec<F>,
 }
 
-impl<F: TwoAdicField> ZerofierOnCoset<F> {
+impl<F: TwoAdicField> VanishingPolynomialOnCoset<F> {
     pub fn new(log_n: usize, rate_bits: usize, coset_shift: F) -> Self {
         let s_pow_n = coset_shift.exp_power_of_2(log_n);
         let evals = F::two_adic_generator(rate_bits)

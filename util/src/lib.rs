@@ -72,7 +72,7 @@ pub const fn reverse_bits_len(x: usize, bit_len: usize) -> usize {
 }
 
 // Lookup table of 6-bit reverses.
-// NB: 2^6=64 bytes is a cacheline. A smaller table wastes cache space.
+// NB: 2^6=64 bytes is a cache line. A smaller table wastes cache space.
 #[cfg(not(target_arch = "aarch64"))]
 #[rustfmt::skip]
 const BIT_REVERSE_6BIT: &[u8] = &[

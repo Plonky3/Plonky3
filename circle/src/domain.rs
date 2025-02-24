@@ -374,7 +374,7 @@ mod tests {
         assert_ne!(&is_transition[..n - 1], &vec![F::ZERO; n - 1]);
         assert_eq!(is_transition[n - 1], F::ZERO);
 
-        // Zeroifier coefficients look like [0.. (n times), 1, 0.. (n-1 times)]
+        // Vanishing polynomial coefficients look like [0.. (n times), 1, 0.. (n-1 times)]
         let z_coeffs = CircleEvaluations::from_natural_order(
             coset,
             RowMajorMatrix::new_col(batch_multiplicative_inverse(&sels.inv_vanishing)),
