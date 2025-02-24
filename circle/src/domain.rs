@@ -80,16 +80,16 @@ impl<F: ComplexExtendable> CircleDomain<F> {
         }
     }
 
-    pub(crate) fn zeroifier<EF: ExtensionField<F>>(&self, at: Point<EF>) -> EF {
+    pub(crate) fn vanishing_poly<EF: ExtensionField<F>>(&self, at: Point<EF>) -> EF {
         at.v_n(self.log_n) - self.shift.v_n(self.log_n)
     }
 
     pub(crate) fn s_p<EF: ExtensionField<F>>(&self, p: Point<F>, at: Point<EF>) -> EF {
-        self.zeroifier(at) / p.v_tilde_p(at)
+        self.vanishing_poly(at) / p.v_tilde_p(at)
     }
 
     pub(crate) fn s_p_normalized<EF: ExtensionField<F>>(&self, p: Point<F>, at: Point<EF>) -> EF {
-        self.zeroifier(at) / (p.v_tilde_p(at) * p.s_p_at_p(self.log_n))
+        self.vanishing_poly(at) / (p.v_tilde_p(at) * p.s_p_at_p(self.log_n))
     }
 }
 
@@ -164,8 +164,8 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             .collect()
     }
 
-    fn zp_at_point<Ext: ExtensionField<Self::Val>>(&self, point: Ext) -> Ext {
-        self.zeroifier(Point::from_projective_line(point))
+    fn vanishing_poly_at_point<Ext: ExtensionField<Self::Val>>(&self, point: Ext) -> Ext {
+        self.vanishing_poly(Point::from_projective_line(point))
     }
 
     fn selectors_at_point<Ext: ExtensionField<Self::Val>>(
@@ -177,7 +177,7 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             is_first_row: self.s_p(self.shift, point),
             is_last_row: self.s_p(-self.shift, point),
             is_transition: Ext::ONE - self.s_p_normalized(-self.shift, point),
-            inv_zeroifier: self.zeroifier(point).inverse(),
+            inv_vanishing: self.vanishing_poly(point).inverse(),
         }
     }
 
@@ -209,7 +209,7 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             is_first_row: sels.iter().map(|s| s.is_first_row).collect(),
             is_last_row: sels.iter().map(|s| s.is_last_row).collect(),
             is_transition: sels.iter().map(|s| s.is_transition).collect(),
-            inv_zeroifier: sels.iter().map(|s| s.inv_zeroifier).collect(),
+            inv_vanishing: sels.iter().map(|s| s.inv_vanishing).collect(),
         }
     }
 }
@@ -277,7 +277,10 @@ mod tests {
 
         // zp is zero
         for p in d.points() {
-            assert_eq!(d.zp_at_point(p.to_projective_line().unwrap()), F::ZERO);
+            assert_eq!(
+                d.vanishing_poly_at_point(p.to_projective_line().unwrap()),
+                F::ZERO
+            );
         }
 
         // split domains
@@ -338,7 +341,7 @@ mod tests {
             assert_eq!(sels.is_first_row[i], pt_sels.is_first_row);
             assert_eq!(sels.is_last_row[i], pt_sels.is_last_row);
             assert_eq!(sels.is_transition[i], pt_sels.is_transition);
-            assert_eq!(sels.inv_zeroifier[i], pt_sels.inv_zeroifier);
+            assert_eq!(sels.inv_vanishing[i], pt_sels.inv_vanishing);
             pt = coset.next_point(pt).unwrap();
         }
 
@@ -374,7 +377,7 @@ mod tests {
         // Zeroifier coefficients look like [0.. (n times), 1, 0.. (n-1 times)]
         let z_coeffs = CircleEvaluations::from_natural_order(
             coset,
-            RowMajorMatrix::new_col(batch_multiplicative_inverse(&sels.inv_zeroifier)),
+            RowMajorMatrix::new_col(batch_multiplicative_inverse(&sels.inv_vanishing)),
         )
         .interpolate()
         .to_row_major_matrix()

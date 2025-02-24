@@ -153,7 +153,7 @@ where
         sels.is_first_row.push(Val::<SC>::default());
         sels.is_last_row.push(Val::<SC>::default());
         sels.is_transition.push(Val::<SC>::default());
-        sels.inv_zeroifier.push(Val::<SC>::default());
+        sels.inv_vanishing.push(Val::<SC>::default());
     }
 
     let mut alpha_powers = alpha.powers().take(constraint_count).collect_vec();
@@ -168,7 +168,7 @@ where
             let is_first_row = *PackedVal::<SC>::from_slice(&sels.is_first_row[i_range.clone()]);
             let is_last_row = *PackedVal::<SC>::from_slice(&sels.is_last_row[i_range.clone()]);
             let is_transition = *PackedVal::<SC>::from_slice(&sels.is_transition[i_range.clone()]);
-            let inv_zeroifier = *PackedVal::<SC>::from_slice(&sels.inv_zeroifier[i_range]);
+            let inv_vanishing = *PackedVal::<SC>::from_slice(&sels.inv_vanishing[i_range]);
 
             let main = RowMajorMatrix::new(
                 trace_on_quotient_domain.vertically_packed_row_pair(i_start, next_step),
@@ -189,7 +189,7 @@ where
             air.eval(&mut folder);
 
             // quotient(x) = constraints(x) / Z_H(x)
-            let quotient = folder.accumulator * inv_zeroifier;
+            let quotient = folder.accumulator * inv_vanishing;
 
             // "Transpose" D packed base coefficients into WIDTH scalar extension coefficients.
             (0..core::cmp::min(quotient_size, PackedVal::<SC>::WIDTH)).map(move |idx_in_packing| {

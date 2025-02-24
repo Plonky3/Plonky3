@@ -105,8 +105,10 @@ where
                 .enumerate()
                 .filter(|(j, _)| *j != i)
                 .map(|(_, other_domain)| {
-                    other_domain.zp_at_point(zeta)
-                        * other_domain.zp_at_point(domain.first_point()).inverse()
+                    other_domain.vanishing_poly_at_point(zeta)
+                        * other_domain
+                            .vanishing_poly_at_point(domain.first_point())
+                            .inverse()
                 })
                 .product::<SC::Challenge>()
         })
@@ -146,7 +148,7 @@ where
 
     // Finally, check that
     //     folded_constraints(zeta) / Z_H(zeta) = quotient(zeta)
-    if folded_constraints * sels.inv_zeroifier != quotient {
+    if folded_constraints * sels.inv_vanishing != quotient {
         return Err(VerificationError::OodEvaluationMismatch);
     }
 
