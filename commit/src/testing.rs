@@ -52,6 +52,7 @@ where
     type EvaluationsOnDomain<'a> = Dft::Evaluations;
     type Proof = ();
     type Error = ();
+    const ZK: bool = false;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         TwoAdicMultiplicativeCoset {

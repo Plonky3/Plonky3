@@ -11,18 +11,19 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_fri::{FriConfig, TwoAdicFriPcs};
+use p3_fri::{create_benchmark_fri_config_zk, FriConfig, HidingFriPcs, TwoAdicFriPcs};
 use p3_keccak::Keccak256Hash;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
-use p3_merkle_tree::MerkleTreeMmcs;
+use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32, TruncatedPermutation,
 };
 use p3_uni_stark::{prove, verify, StarkConfig, StarkGenericConfig, Val};
 use rand::distr::{Distribution, StandardUniform};
-use rand::{rng, Rng};
+use rand::rngs::{StdRng, ThreadRng};
+use rand::{rng, Rng, SeedableRng};
 
 /// How many `a * b = c` operations to do per row in the AIR.
 const REPETITIONS: usize = 20; // This should be < 255 so it can fit into a u8.
@@ -237,6 +238,53 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
 #[test]
 fn prove_bb_twoadic_deg2() -> Result<(), impl Debug> {
     do_test_bb_twoadic(1, 2, 7)
+}
+
+#[test]
+fn prove_bb_twoadic_deg2_zk() -> Result<(), impl Debug> {
+    type Val = BabyBear;
+    type Challenge = BinomialExtensionField<Val, 4>;
+
+    type Perm = Poseidon2BabyBear<16>;
+    let perm = Perm::new_from_rng_128(&mut rng());
+
+    type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    let hash = MyHash::new(perm.clone());
+
+    type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+    let compress = MyCompress::new(perm.clone());
+
+    type ValMmcs = MerkleTreeHidingMmcs<
+        <Val as Field>::Packing,
+        <Val as Field>::Packing,
+        MyHash,
+        MyCompress,
+        ThreadRng,
+        8,
+        4,
+    >;
+
+    let val_mmcs = ValMmcs::new(hash, compress, rng());
+
+    type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+
+    type Dft = Radix2DitParallel<Val>;
+    let dft = Dft::default();
+
+    type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
+
+    let fri_config = create_benchmark_fri_config_zk(challenge_mmcs);
+    type HidingPcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, StdRng>;
+    let pcs = HidingPcs::new(dft, val_mmcs, fri_config, 4, StdRng::from_os_rng());
+    type MyConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
+    let config = MyConfig::new(pcs);
+
+    let air = MulAir {
+        degree: 3,
+        ..Default::default()
+    };
+    do_test(config, air, 1 << 8, Challenger::new(perm))
 }
 
 #[test]

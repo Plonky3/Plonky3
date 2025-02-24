@@ -81,3 +81,14 @@ pub const fn create_benchmark_fri_config<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
         mmcs,
     }
 }
+
+/// Creates a `FriConfig` suitable for benchmarking with zk enabled.
+pub fn create_benchmark_fri_config_zk<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
+    FriConfig {
+        log_blowup: 2,
+        log_final_poly_len: 0,
+        num_queries: 100,
+        proof_of_work_bits: 16,
+        mmcs,
+    }
+}

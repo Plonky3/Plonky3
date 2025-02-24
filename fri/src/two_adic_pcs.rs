@@ -27,9 +27,9 @@ use crate::{prover, FriConfig, FriGenericConfig, FriProof};
 
 #[derive(Debug)]
 pub struct TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
-    dft: Dft,
-    mmcs: InputMmcs,
-    fri: FriConfig<FriMmcs>,
+    pub(crate) dft: Dft,
+    pub(crate) mmcs: InputMmcs,
+    pub(crate) fri: FriConfig<FriMmcs>,
     _phantom: PhantomData<Val>,
 }
 
@@ -146,6 +146,7 @@ where
     type EvaluationsOnDomain<'a> = BitReversedMatrixView<DenseMatrix<Val, &'a [Val]>>;
     type Proof = FriProof<Challenge, FriMmcs, Val, Vec<BatchOpening<Val, InputMmcs>>>;
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
+    const ZK: bool = false;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         let log_n = log2_strict_usize(degree);
@@ -504,7 +505,7 @@ where
 }
 
 #[instrument(skip_all)]
-fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matrix<F>>(
+pub(crate) fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matrix<F>>(
     mats_and_points: &[(Vec<M>, &Vec<Vec<EF>>)],
     coset_shift: F,
 ) -> LinearMap<EF, Vec<EF>> {

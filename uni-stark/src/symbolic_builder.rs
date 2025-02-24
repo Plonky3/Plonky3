@@ -16,6 +16,7 @@ pub fn get_log_quotient_degree<F, A>(
     air: &A,
     preprocessed_width: usize,
     num_public_values: usize,
+    is_zk: bool,
 ) -> usize
 where
     F: Field,
@@ -28,7 +29,7 @@ where
     // The quotient's actual degree is approximately (max_constraint_degree - 1) n,
     // where subtracting 1 comes from division by the zerofier.
     // But we pad it to a power of two so that we can efficiently decompose the quotient.
-    log2_ceil_usize(constraint_degree - 1)
+    log2_ceil_usize(constraint_degree - 1 + is_zk as usize)
 }
 
 #[instrument(name = "infer constraint degree", skip_all, level = "debug")]

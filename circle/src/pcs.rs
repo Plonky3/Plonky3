@@ -107,6 +107,7 @@ where
     type EvaluationsOnDomain<'a> = RowIndexMappedView<CfftPerm, DenseMatrix<Val, Cow<'a, [Val]>>>;
     type Proof = CirclePcsProof<Val, Challenge, InputMmcs, FriMmcs, Challenger::Witness>;
     type Error = FriError<FriMmcs::Error, InputError<InputMmcs::Error, FriMmcs::Error>>;
+    const ZK: bool = false;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         CircleDomain::standard(log2_strict_usize(degree))
