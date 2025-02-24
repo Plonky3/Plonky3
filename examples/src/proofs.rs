@@ -221,13 +221,10 @@ where
 /// Either print that the proof was successful or panic and return the error.
 #[inline]
 pub fn report_result(result: Result<(), impl Debug>) {
-    match result {
-        Err(e) => {
-            panic!("{:?}", e);
-        }
-        _ => {
-            println!("Proof Verified Successfully")
-        }
+    if let Err(e) = result {
+        panic!("{:?}", e);
+    } else {
+        println!("Proof Verified Successfully")
     }
 }
 

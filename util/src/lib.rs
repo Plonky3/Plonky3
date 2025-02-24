@@ -209,13 +209,13 @@ unsafe fn reverse_slice_index_bits_chunks<F>(
     lb_num_chunks: usize,
     lb_chunk_size: usize,
 ) {
-    unsafe {
-        for i in 0..1usize << lb_num_chunks {
-            // `wrapping_shr` handles the silly case when `lb_num_chunks == 0`.
-            let j = i
-                .reverse_bits()
-                .wrapping_shr(usize::BITS - lb_num_chunks as u32);
-            if i < j {
+    for i in 0..1usize << lb_num_chunks {
+        // `wrapping_shr` handles the silly case when `lb_num_chunks == 0`.
+        let j = i
+            .reverse_bits()
+            .wrapping_shr(usize::BITS - lb_num_chunks as u32);
+        if i < j {
+            unsafe {
                 core::ptr::swap_nonoverlapping(
                     vals.get_unchecked_mut(i << lb_chunk_size),
                     vals.get_unchecked_mut(j << lb_chunk_size),
@@ -391,20 +391,18 @@ where
 /// the two types have the same alignment, that one of their sizes is a multiple of the other.
 #[inline(always)]
 pub unsafe fn convert_vec<T, U>(mut vec: Vec<T>) -> Vec<U> {
-    unsafe {
-        let ptr = vec.as_mut_ptr() as *mut U;
-        let len_bytes = vec.len() * size_of::<T>();
-        let cap_bytes = vec.capacity() * size_of::<T>();
+    let ptr = vec.as_mut_ptr() as *mut U;
+    let len_bytes = vec.len() * size_of::<T>();
+    let cap_bytes = vec.capacity() * size_of::<T>();
 
-        assert_eq!(align_of::<T>(), align_of::<U>());
-        assert_eq!(len_bytes % size_of::<U>(), 0);
-        assert_eq!(cap_bytes % size_of::<U>(), 0);
+    assert_eq!(align_of::<T>(), align_of::<U>());
+    assert_eq!(len_bytes % size_of::<U>(), 0);
+    assert_eq!(cap_bytes % size_of::<U>(), 0);
 
-        let new_len = len_bytes / size_of::<U>();
-        let new_cap = cap_bytes / size_of::<U>();
-        mem::forget(vec);
-        Vec::from_raw_parts(ptr, new_len, new_cap)
-    }
+    let new_len = len_bytes / size_of::<U>();
+    let new_cap = cap_bytes / size_of::<U>();
+    mem::forget(vec);
+    unsafe { Vec::from_raw_parts(ptr, new_len, new_cap) }
 }
 
 #[inline(always)]

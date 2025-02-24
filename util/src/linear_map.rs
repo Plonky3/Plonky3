@@ -27,15 +27,12 @@ impl<K: Eq, V> LinearMap<K, V> {
     }
     /// This is O(n), because we check for an existing entry.
     pub fn insert(&mut self, k: K, mut v: V) -> Option<V> {
-        match self.get_mut(&k) {
-            Some(vv) => {
-                mem::swap(&mut v, vv);
-                Some(v)
-            }
-            _ => {
-                self.0.push((k, v));
-                None
-            }
+        if let Some(vv) = self.get_mut(&k) {
+            mem::swap(&mut v, vv);
+            Some(v)
+        } else {
+            self.0.push((k, v));
+            None
         }
     }
     pub fn get_or_insert_with(&mut self, k: K, f: impl FnOnce() -> V) -> &mut V {

@@ -41,16 +41,13 @@ where
         // hence the more manual loop.
         'outer: loop {
             for i in 0..RATE {
-                match input.next() {
-                    Some(x) => {
-                        state[i] = x;
+                if let Some(x) = input.next() {
+                    state[i] = x;
+                } else {
+                    if i != 0 {
+                        self.permutation.permute_mut(&mut state);
                     }
-                    _ => {
-                        if i != 0 {
-                            self.permutation.permute_mut(&mut state);
-                        }
-                        break 'outer;
-                    }
+                    break 'outer;
                 }
             }
             self.permutation.permute_mut(&mut state);
