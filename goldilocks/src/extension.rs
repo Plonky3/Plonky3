@@ -1,8 +1,8 @@
-use p3_field::extension::{BinomiallyExtendable, HasTwoAdicBinomialExtension};
 use p3_field::PrimeCharacteristicRing;
+use p3_field::extension::{BinomiallyExtendable, HasTwoAdicBinomialExtension};
 
-use crate::data_traits::TwoAdicData;
 use crate::Goldilocks;
+use crate::data_traits::TwoAdicData;
 
 impl BinomiallyExtendable<2> for Goldilocks {
     // Verifiable in Sage with
