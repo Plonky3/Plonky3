@@ -120,3 +120,77 @@ where
         state[..OUT].try_into().unwrap()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Permutation;
+
+    #[derive(Clone)]
+    struct MockPermutation;
+
+    impl<T, const WIDTH: usize> Permutation<[T; WIDTH]> for MockPermutation
+    where
+        T: Copy + core::ops::Add<Output = T> + Default,
+    {
+        fn permute_mut(&self, input: &mut [T; WIDTH]) {
+            let sum: T = input.iter().copied().fold(T::default(), |acc, x| acc + x);
+            // Set every element to the sum
+            *input = [sum; WIDTH];
+        }
+    }
+
+    impl<T, const WIDTH: usize> CryptographicPermutation<[T; WIDTH]> for MockPermutation where
+        T: Copy + core::ops::Add<Output = T> + Default
+    {
+    }
+
+    #[test]
+    fn test_padding_free_sponge_basic() {
+        const WIDTH: usize = 4;
+        const RATE: usize = 2;
+        const OUT: usize = 2;
+
+        let permutation = MockPermutation;
+        let sponge = PaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(permutation);
+
+        let input = [1, 2, 3, 4, 5];
+        let output = sponge.hash_iter(input);
+
+        assert_eq!(output, [44; OUT]);
+    }
+
+    #[test]
+    fn test_padding_free_sponge_empty_input() {
+        const WIDTH: usize = 4;
+        const RATE: usize = 2;
+        const OUT: usize = 2;
+
+        let permutation = MockPermutation;
+        let sponge = PaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(permutation);
+
+        let input: [u64; 0] = [];
+        let output = sponge.hash_iter(input);
+
+        assert_eq!(
+            output, [0; OUT],
+            "Should return default values when input is empty."
+        );
+    }
+
+    #[test]
+    fn test_padding_free_sponge_exact_block_size() {
+        const WIDTH: usize = 6;
+        const RATE: usize = 3;
+        const OUT: usize = 2;
+
+        let permutation = MockPermutation;
+        let sponge = PaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(permutation);
+
+        let input = [10, 20, 30];
+        let output = sponge.hash_iter(input);
+
+        let expected_sum = 10 + 20 + 30;
+        assert_eq!(output, [expected_sum; OUT]);
+    }
+}
