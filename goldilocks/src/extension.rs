@@ -1,7 +1,7 @@
-use p3_field::PrimeCharacteristicRing;
 use p3_field::extension::{BinomiallyExtendable, HasTwoAdicBinomialExtension};
+use p3_field::{PrimeCharacteristicRing, TwoAdicField};
 
-use crate::{Goldilocks, TWO_ADIC_GENERATORS};
+use crate::Goldilocks;
 
 impl BinomiallyExtendable<2> for Goldilocks {
     // Verifiable in Sage with
@@ -26,7 +26,7 @@ impl HasTwoAdicBinomialExtension<2> for Goldilocks {
         if bits == 33 {
             [Self::ZERO, Self::new(15659105665374529263)]
         } else {
-            [<Self as TwoAdicField>::two_adic_generator(bits), Self::ZERO]
+            [Self::two_adic_generator(bits), Self::ZERO]
         }
     }
 }
