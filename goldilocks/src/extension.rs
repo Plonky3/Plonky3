@@ -26,7 +26,7 @@ impl HasTwoAdicBinomialExtension<2> for Goldilocks {
         if bits == 33 {
             [Self::ZERO, Self::new(15659105665374529263)]
         } else {
-            [TWO_ADIC_GENERATORS[bits], Self::ZERO]
+            [<Self as TwoAdicField>::two_adic_generator(bits), Self::ZERO]
         }
     }
 }
