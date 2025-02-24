@@ -11,7 +11,7 @@ type EF3 = BinomialExtensionField<Complex<Mersenne31>, 3>;
 const REPS: usize = 100;
 const L_REPS: usize = 10 * REPS;
 
-fn bench_qudratic_extension(c: &mut Criterion) {
+fn bench_quadratic_extension(c: &mut Criterion) {
     let name = "BinomialExtensionField<Mersenne31Complex<Mersenne31>, 2>";
     benchmark_square::<EF2>(c, name);
     benchmark_inv::<EF2>(c, name);
@@ -27,7 +27,7 @@ fn bench_cubic_extension(c: &mut Criterion) {
     benchmark_mul_latency::<EF3, L_REPS>(c, name);
 }
 
-criterion_group!(bench_mersennecomplex_ef2, bench_qudratic_extension);
+criterion_group!(bench_mersennecomplex_ef2, bench_quadratic_extension);
 criterion_group!(bench_mersennecomplex_ef3, bench_cubic_extension);
 
 criterion_main!(bench_mersennecomplex_ef2, bench_mersennecomplex_ef3);
