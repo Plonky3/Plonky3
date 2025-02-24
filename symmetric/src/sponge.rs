@@ -2,7 +2,7 @@ use alloc::string::String;
 use core::marker::PhantomData;
 
 use itertools::Itertools;
-use p3_field::{reduce_32, Field, PrimeField, PrimeField32};
+use p3_field::{Field, PrimeField, PrimeField32, reduce_32};
 
 use crate::hasher::CryptographicHasher;
 use crate::permutation::CryptographicPermutation;

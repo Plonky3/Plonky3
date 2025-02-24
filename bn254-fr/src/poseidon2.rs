@@ -6,9 +6,9 @@ use std::sync::OnceLock;
 
 use p3_field::PrimeCharacteristicRing;
 use p3_poseidon2::{
-    add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
-    internal_permute_state, matmul_internal, ExternalLayer, ExternalLayerConstants,
-    ExternalLayerConstructor, HLMDSMat4, InternalLayer, InternalLayerConstructor, Poseidon2,
+    ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, HLMDSMat4, InternalLayer,
+    InternalLayerConstructor, Poseidon2, add_rc_and_sbox_generic, external_initial_permute_state,
+    external_terminal_permute_state, internal_permute_state, matmul_internal,
 };
 
 use crate::Bn254Fr;
@@ -65,7 +65,7 @@ pub type Poseidon2ExternalLayerBn254<const WIDTH: usize> = ExternalLayerConstant
 impl<const WIDTH: usize> ExternalLayerConstructor<Bn254Fr, WIDTH>
     for Poseidon2ExternalLayerBn254<WIDTH>
 {
-    fn new_from_constants(external_constants: ExternalLayerConstants<Bn254Fr, WIDTH>) -> Self {
+    fn new_from_constants(external_constants: Self) -> Self {
         external_constants
     }
 }
@@ -146,7 +146,7 @@ mod tests {
             .iter()
             .map(|vec| {
                 vec.iter()
-                    .cloned()
+                    .copied()
                     .map(bn254_from_ark_ff)
                     .collect::<Vec<_>>()
                     .try_into()

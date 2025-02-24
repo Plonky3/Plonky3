@@ -3,8 +3,8 @@ use alloc::vec::Vec;
 use core::iter;
 use core::ops::Range;
 
-use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 
 use crate::Matrix;
 

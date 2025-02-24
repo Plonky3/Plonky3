@@ -72,7 +72,7 @@ pub const fn reverse_bits_len(x: usize, bit_len: usize) -> usize {
 }
 
 // Lookup table of 6-bit reverses.
-// NB: 2^6=64 bytes is a cacheline. A smaller table wastes cache space.
+// NB: 2^6=64 bytes is a cache line. A smaller table wastes cache space.
 #[cfg(not(target_arch = "aarch64"))]
 #[rustfmt::skip]
 const BIT_REVERSE_6BIT: &[u8] = &[
@@ -215,11 +215,13 @@ unsafe fn reverse_slice_index_bits_chunks<F>(
             .reverse_bits()
             .wrapping_shr(usize::BITS - lb_num_chunks as u32);
         if i < j {
-            core::ptr::swap_nonoverlapping(
-                vals.get_unchecked_mut(i << lb_chunk_size),
-                vals.get_unchecked_mut(j << lb_chunk_size),
-                1 << lb_chunk_size,
-            );
+            unsafe {
+                core::ptr::swap_nonoverlapping(
+                    vals.get_unchecked_mut(i << lb_chunk_size),
+                    vals.get_unchecked_mut(j << lb_chunk_size),
+                    1 << lb_chunk_size,
+                );
+            }
         }
     }
 }
@@ -232,7 +234,7 @@ unsafe fn transpose_in_place_square<T>(
     lb_num_chunks: usize,
     offset: usize,
 ) {
-    transpose::transpose_in_place_square(arr, lb_chunk_size, lb_num_chunks, offset)
+    unsafe { transpose::transpose_in_place_square(arr, lb_chunk_size, lb_num_chunks, offset) }
 }
 
 #[inline(always)]
@@ -400,7 +402,7 @@ pub unsafe fn convert_vec<T, U>(mut vec: Vec<T>) -> Vec<U> {
     let new_len = len_bytes / size_of::<U>();
     let new_cap = cap_bytes / size_of::<U>();
     mem::forget(vec);
-    Vec::from_raw_parts(ptr, new_len, new_cap)
+    unsafe { Vec::from_raw_parts(ptr, new_len, new_cap) }
 }
 
 #[inline(always)]
@@ -429,13 +431,7 @@ pub const fn relatively_prime_u64(mut u: u64, mut v: u64) -> bool {
 
         // Ensure u <= v
         if u > v {
-            // Simpler to use
-            // core::mem::swap(&mut u, &mut v);
-            // This will be stable once rust 1.85.0 hits.
-            // Until then we do it manually.
-            let temp = u;
-            u = v;
-            v = temp;
+            core::mem::swap(&mut u, &mut v);
         }
 
         // This looks inefficient for v >> u but thanks to the fact that we remove

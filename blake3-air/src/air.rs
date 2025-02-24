@@ -5,13 +5,13 @@ use itertools::izip;
 use p3_air::utils::{add2, add3, pack_bits_le, xor_32_shift};
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
-use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 use rand::random;
 
 use crate::columns::{Blake3Cols, NUM_BLAKE3_COLS};
-use crate::constants::{permute, BITS_PER_LIMB, IV};
-use crate::{generate_trace_rows, Blake3State, FullRound, QuarterRound};
+use crate::constants::{BITS_PER_LIMB, IV, permute};
+use crate::{Blake3State, FullRound, QuarterRound, generate_trace_rows};
 
 /// Assumes the field size is at least 16 bits.
 #[derive(Debug)]
@@ -105,7 +105,7 @@ impl Blake3Air {
 
     /// Given data for a full round, produce the data corresponding to a
     /// single application of the quarter round function on a column.
-    fn full_round_to_column_quarter_round<'a, T: Copy, U>(
+    const fn full_round_to_column_quarter_round<'a, T: Copy, U>(
         &self,
         input: &'a Blake3State<T>,
         round_data: &'a FullRound<T>,
@@ -136,7 +136,7 @@ impl Blake3Air {
 
     /// Given data for a full round, produce the data corresponding to a
     /// single application of the quarter round function on a diagonal.
-    fn full_round_to_diagonal_quarter_round<'a, T: Copy, U>(
+    const fn full_round_to_diagonal_quarter_round<'a, T: Copy, U>(
         &self,
         round_data: &'a FullRound<T>,
         m_vector: &'a [[U; 2]; 16],

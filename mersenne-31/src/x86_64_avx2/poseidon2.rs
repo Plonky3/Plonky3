@@ -4,12 +4,12 @@ use core::mem::transmute;
 
 use p3_field::PrimeField32;
 use p3_poseidon2::{
-    external_initial_permute_state, external_terminal_permute_state, sum_15, sum_23, ExternalLayer,
-    ExternalLayerConstants, ExternalLayerConstructor, InternalLayer, InternalLayerConstructor,
-    MDSMat4,
+    ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, InternalLayer,
+    InternalLayerConstructor, MDSMat4, external_initial_permute_state,
+    external_terminal_permute_state, sum_15, sum_23,
 };
 
-use crate::{exp5, Mersenne31, PackedMersenne31AVX2, P};
+use crate::{Mersenne31, P, PackedMersenne31AVX2, exp5};
 
 /// The internal layers of the Poseidon2 permutation for Mersenne31.
 ///

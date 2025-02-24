@@ -3,11 +3,11 @@ use core::arch::x86_64::{self, __m512i};
 
 use p3_field::PrimeField32;
 use p3_poseidon2::{
-    mds_light_permutation, sum_15, sum_23, ExternalLayer, ExternalLayerConstants,
-    ExternalLayerConstructor, InternalLayer, InternalLayerConstructor, MDSMat4,
+    ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, InternalLayer,
+    InternalLayerConstructor, MDSMat4, mds_light_permutation, sum_15, sum_23,
 };
 
-use crate::{exp5, Mersenne31, PackedMersenne31AVX512, P};
+use crate::{Mersenne31, P, PackedMersenne31AVX512, exp5};
 
 /// The internal layers of the Poseidon2 permutation for Mersenne31.
 ///

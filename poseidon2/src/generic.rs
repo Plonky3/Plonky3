@@ -12,7 +12,7 @@
 
 use p3_field::{Algebra, Field, InjectiveMonomial, PrimeCharacteristicRing};
 
-use crate::{mds_light_permutation, MDSMat4};
+use crate::{MDSMat4, mds_light_permutation};
 
 /// A generic method performing the transformation:
 ///

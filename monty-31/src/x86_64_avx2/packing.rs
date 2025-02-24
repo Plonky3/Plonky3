@@ -50,13 +50,15 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX2<PMP> {
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid `MontyField31<FP>`.
     /// In particular, each element of vector must be in `0..P` (canonical form).
     pub(crate) unsafe fn from_vector(vector: __m256i) -> Self {
-        // Safety: It is up to the user to ensure that elements of `vector` represent valid
-        // `MontyField31<FP>` values. We must only reason about memory representations. `__m256i` can be
-        // transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which can
-        // be transmuted to `[MontyField31<FP>; WIDTH]` (since `MontyField31<FP>` is `repr(transparent)`), which in
-        // turn can be transmuted to `PackedMontyField31AVX2<FP>` (since `PackedMontyField31AVX2<FP>` is also
-        // `repr(transparent)`).
-        transmute(vector)
+        unsafe {
+            // Safety: It is up to the user to ensure that elements of `vector` represent valid
+            // `MontyField31<FP>` values. We must only reason about memory representations. `__m256i` can be
+            // transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which can
+            // be transmuted to `[MontyField31<FP>; WIDTH]` (since `MontyField31<FP>` is `repr(transparent)`), which in
+            // turn can be transmuted to `PackedMontyField31AVX2<FP>` (since `PackedMontyField31AVX2<FP>` is also
+            // `repr(transparent)`).
+            transmute(vector)
+        }
     }
 
     /// Copy `value` to all positions in a packed vector. This is the same as
@@ -483,16 +485,18 @@ pub(crate) unsafe fn apply_func_to_even_odd<MPAVX2: MontyParametersAVX2>(
     input: __m256i,
     func: fn(__m256i) -> __m256i,
 ) -> __m256i {
-    let input_evn = input;
-    let input_odd = movehdup_epi32(input);
+    unsafe {
+        let input_evn = input;
+        let input_odd = movehdup_epi32(input);
 
-    let d_evn = func(input_evn);
-    let d_odd = func(input_odd);
+        let d_evn = func(input_evn);
+        let d_odd = func(input_odd);
 
-    let d_evn_hi = movehdup_epi32(d_evn);
-    let t = x86_64::_mm256_blend_epi32::<0b10101010>(d_evn_hi, d_odd);
+        let d_evn_hi = movehdup_epi32(d_evn);
+        let t = x86_64::_mm256_blend_epi32::<0b10101010>(d_evn_hi, d_odd);
 
-    red_signed_to_canonical::<MPAVX2>(t)
+        red_signed_to_canonical::<MPAVX2>(t)
+    }
 }
 
 /// Negate a vector of MontyField31 field elements in canonical form.
