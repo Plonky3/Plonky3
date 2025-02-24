@@ -27,8 +27,8 @@ pub struct LagrangeSelectors<T> {
     pub is_last_row: T,
     /// A Lagrange selector corresponding the subset of all but the last point.
     pub is_transition: T,
-    /// The inverse of the zerofier which is a Lagrange selector corresponding to the empty set
-    pub inv_zeroifier: T,
+    /// The inverse of the vanishing polynomial which is a Lagrange selector corresponding to the empty set
+    pub inv_vanishing: T,
 }
 
 /// Fixing a field, `F`, `PolynomialSpace<Val = F>` denotes an indexed subset of `F^n`
@@ -96,9 +96,9 @@ pub trait PolynomialSpace: Copy {
         evals: RowMajorMatrix<Self::Val>,
     ) -> Vec<RowMajorMatrix<Self::Val>>;
 
-    /// Compute the zerofier of the space, evaluated at the given point.
+    /// Compute the vanishing polynomial of the space, evaluated at the given point.
     ///
-    /// The zerofier is a polynomial which evaluates to `0` on every point of the
+    /// This is a polynomial which evaluates to `0` on every point of the
     /// space `self` and has degree equal to `self.size()`. In other words it is
     /// a choice of element of the defining ideal of the given set with this extra
     /// degree property.
@@ -106,13 +106,13 @@ pub trait PolynomialSpace: Copy {
     /// In the univariate case, it is equal, up to a linear factor, to the product over
     /// all elements `x`, of `(X - x)`. In particular this implies it will not evaluate
     /// to `0` at any point not in `self`.
-    fn zp_at_point<Ext: ExtensionField<Self::Val>>(&self, point: Ext) -> Ext;
+    fn vanishing_poly_at_point<Ext: ExtensionField<Self::Val>>(&self, point: Ext) -> Ext;
 
     /// Compute several Lagrange selectors at a given point.
     /// - The Lagrange selector of the first point.
     /// - The Lagrange selector of the last point.
     /// - The Lagrange selector of everything but the last point.
-    /// - The inverse of the zerofier.
+    /// - The inverse of the vanishing polynomial.
     ///
     /// Note that these may not be normalized.
     fn selectors_at_point<Ext: ExtensionField<Self::Val>>(
@@ -124,7 +124,7 @@ pub trait PolynomialSpace: Copy {
     /// - The Lagrange selector of the first point.
     /// - The Lagrange selector of the last point.
     /// - The Lagrange selector of everything but the last point.
-    /// - The inverse of the zerofier.
+    /// - The inverse of the vanishing polynomial.
     ///
     /// Note that these may not be normalized.
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>>;
@@ -217,20 +217,20 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
             .collect()
     }
 
-    /// Compute the zerofier polynomial at the given point:
+    /// Compute the vanishing polynomial at the given point:
     ///
     /// `Z_{gH}(X) = g^{-|H|}\prod_{h \in H} (X - gh) = (g^{-1}X)^|H| - 1`
-    fn zp_at_point<Ext: ExtensionField<Val>>(&self, point: Ext) -> Ext {
+    fn vanishing_poly_at_point<Ext: ExtensionField<Val>>(&self, point: Ext) -> Ext {
         (point * self.shift.inverse()).exp_power_of_2(self.log_n) - Ext::ONE
     }
 
     /// Compute several Lagrange selectors at the given point:
     ///
-    /// Defining the zerofier by `Z_{gH}(X) = g^{-|H|}\prod_{h \in H} (X - gh) = (g^{-1}X)^|H| - 1` return:
+    /// Defining the vanishing polynomial by `Z_{gH}(X) = g^{-|H|}\prod_{h \in H} (X - gh) = (g^{-1}X)^|H| - 1` return:
     /// - `Z_{gH}(X)/(g^{-1}X - 1)`: The Lagrange selector of the point `g`.
     /// - `Z_{gH}(X)/(g^{-1}X - h^{-1})`: The Lagrange selector of the point `gh^{-1}` where `h` is the generator of `H`.
     /// - `(g^{-1}X - h^{-1})`: The Lagrange selector of the subset consisting of everything but the point `gh^{-1}`.
-    /// - `1/Z_{gH}(X)`: The inverse of the zerofier.
+    /// - `1/Z_{gH}(X)`: The inverse of the vanishing polynomial.
     fn selectors_at_point<Ext: ExtensionField<Val>>(&self, point: Ext) -> LagrangeSelectors<Ext> {
         let unshifted_point = point * self.shift.inverse();
         let z_h = unshifted_point.exp_power_of_2(self.log_n) - Ext::ONE;
@@ -238,7 +238,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
             is_first_row: z_h / (unshifted_point - Ext::ONE),
             is_last_row: z_h / (unshifted_point - self.subgroup_generator().inverse()),
             is_transition: unshifted_point - self.subgroup_generator().inverse(),
-            inv_zeroifier: z_h.inverse(),
+            inv_vanishing: z_h.inverse(),
         }
     }
 
@@ -285,7 +285,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
             is_first_row: single_point_selector(0),
             is_last_row: single_point_selector((1 << self.log_n) - 1),
             is_transition: xs.into_iter().map(|x| x - subgroup_last).collect(),
-            inv_zeroifier: batch_multiplicative_inverse(&evals)
+            inv_vanishing: batch_multiplicative_inverse(&evals)
                 .into_iter()
                 .cycle()
                 .take(1 << coset.log_n)

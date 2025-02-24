@@ -101,7 +101,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
 
     pub fn evaluate_at_point<EF: ExtensionField<F>>(&self, point: Point<EF>) -> Vec<EF> {
         // Compute z_H
-        let lagrange_num = self.domain.zeroifier(point);
+        let lagrange_num = self.domain.vanishing_poly(point);
 
         // Permute the domain to get it into the right format.
         let permuted_points = cfft_permute_slice(&self.domain.points().collect_vec());

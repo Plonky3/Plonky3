@@ -10,14 +10,14 @@ use p3_maybe_rayon::prelude::{IntoParallelRefMutIterator, ParallelIterator};
 use crate::field::Field;
 use crate::{PackedValue, PrimeCharacteristicRing, PrimeField, PrimeField32, TwoAdicField};
 
-/// Computes `Z_H(x)`, where `Z_H` is the zerofier of a multiplicative subgroup of order `2^log_n`.
-pub fn two_adic_subgroup_zerofier<F: TwoAdicField>(log_n: usize, x: F) -> F {
+/// Computes `Z_H(x)`, where `Z_H` is the vanishing polynomial of a multiplicative subgroup of order `2^log_n`.
+pub fn two_adic_subgroup_vanishing_polynomial<F: TwoAdicField>(log_n: usize, x: F) -> F {
     x.exp_power_of_2(log_n) - F::ONE
 }
 
-/// Computes `Z_{sH}(x)`, where `Z_{sH}` is the zerofier of the given coset of a multiplicative
+/// Computes `Z_{sH}(x)`, where `Z_{sH}` is the vanishing polynomial of the given coset of a multiplicative
 /// subgroup of order `2^log_n`.
-pub fn two_adic_coset_zerofier<F: TwoAdicField>(log_n: usize, shift: F, x: F) -> F {
+pub fn two_adic_coset_vanishing_polynomial<F: TwoAdicField>(log_n: usize, shift: F, x: F) -> F {
     x.exp_power_of_2(log_n) - shift.exp_power_of_2(log_n)
 }
 
@@ -96,7 +96,7 @@ where
 // that has stabilized (More details in Rust issue: https://github.com/rust-lang/rust/issues/96097).
 //
 // Annoyingly, both transmute and transmute_copy fail here. The first because it cannot handle
-// const generics and the second due to interior mutability and the unability to use &mut in const
+// const generics and the second due to interior mutability and the inability to use &mut in const
 // functions.
 //
 // The solution is to implement the map [MaybeUninit<T>; D]) -> MaybeUninit<[T; D]>

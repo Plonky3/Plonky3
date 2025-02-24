@@ -15,7 +15,8 @@ use num_bigint::BigUint;
 use num_traits::identities::One;
 use p3_field::{
     ExtensionField, Field, TwoAdicField, cyclic_subgroup_coset_known_order,
-    cyclic_subgroup_known_order, two_adic_coset_zerofier, two_adic_subgroup_zerofier,
+    cyclic_subgroup_known_order, two_adic_coset_vanishing_polynomial,
+    two_adic_subgroup_vanishing_polynomial,
 };
 pub use packedfield_testing::*;
 use rand::Rng;
@@ -92,23 +93,23 @@ pub fn test_multiplicative_group_factors<F: Field>() {
     assert_eq!(product + BigUint::one(), F::order());
 }
 
-pub fn test_two_adic_subgroup_zerofier<F: TwoAdicField>() {
+pub fn test_two_adic_subgroup_vanishing_polynomial<F: TwoAdicField>() {
     for log_n in 0..5 {
         let g = F::two_adic_generator(log_n);
         for x in cyclic_subgroup_known_order(g, 1 << log_n) {
-            let zerofier_eval = two_adic_subgroup_zerofier(log_n, x);
-            assert_eq!(zerofier_eval, F::ZERO);
+            let vanishing_polynomial_eval = two_adic_subgroup_vanishing_polynomial(log_n, x);
+            assert_eq!(vanishing_polynomial_eval, F::ZERO);
         }
     }
 }
 
-pub fn test_two_adic_coset_zerofier<F: TwoAdicField>() {
+pub fn test_two_adic_coset_vanishing_polynomial<F: TwoAdicField>() {
     for log_n in 0..5 {
         let g = F::two_adic_generator(log_n);
         let shift = F::GENERATOR;
         for x in cyclic_subgroup_coset_known_order(g, shift, 1 << log_n) {
-            let zerofier_eval = two_adic_coset_zerofier(log_n, shift, x);
-            assert_eq!(zerofier_eval, F::ZERO);
+            let vanishing_polynomial_eval = two_adic_coset_vanishing_polynomial(log_n, shift, x);
+            assert_eq!(vanishing_polynomial_eval, F::ZERO);
         }
     }
 }
@@ -319,15 +320,15 @@ macro_rules! test_two_adic_field {
     ($field:ty) => {
         mod two_adic_field_tests {
             #[test]
-            fn test_two_adic_field_subgroup_zerofier() {
-                $crate::test_two_adic_subgroup_zerofier::<$field>();
+            fn test_two_adic_field_subgroup_vanishing_polynomial() {
+                $crate::test_two_adic_subgroup_vanishing_polynomial::<$field>();
             }
             #[test]
-            fn test_two_adic_coset_zerofier() {
-                $crate::test_two_adic_coset_zerofier::<$field>();
+            fn test_two_adic_coset_vanishing_polynomial() {
+                $crate::test_two_adic_coset_vanishing_polynomial::<$field>();
             }
             #[test]
-            fn test_two_adic_consisitency() {
+            fn test_two_adic_consistency() {
                 $crate::test_two_adic_generator_consistency::<$field>();
             }
         }

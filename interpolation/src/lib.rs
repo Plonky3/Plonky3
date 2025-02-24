@@ -7,7 +7,8 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use p3_field::{
-    ExtensionField, TwoAdicField, batch_multiplicative_inverse, scale_vec, two_adic_coset_zerofier,
+    ExtensionField, TwoAdicField, batch_multiplicative_inverse, scale_vec,
+    two_adic_coset_vanishing_polynomial,
 };
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
@@ -67,13 +68,14 @@ where
     };
     let sum = coset_evals.columnwise_dot_product(&col_scale);
 
-    let zerofier = two_adic_coset_zerofier::<EF>(log_height, shift.into(), point);
+    let vanishing_polynomial =
+        two_adic_coset_vanishing_polynomial::<EF>(log_height, shift.into(), point);
 
     // In principle, height could be bigger than the characteristic of F.
     let denominator = shift
         .exp_u64(height as u64 - 1)
         .mul_2exp_u64(log_height as u64);
-    scale_vec(zerofier * denominator.inverse(), sum)
+    scale_vec(vanishing_polynomial * denominator.inverse(), sum)
 }
 
 #[cfg(test)]
