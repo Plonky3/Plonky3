@@ -182,7 +182,7 @@ pub trait PrimeCharacteristicRing:
         (Self::ONE - self.clone()) * y.clone()
     }
 
-    /// The zerofier of boolean values: `x * (1 - x)`.
+    /// The vanishing polynomial for boolean values: `x * (1 - x)`.
     ///
     /// This is a polynomial of degree `2` evaluates to `0` if the input is `0` or `1`.
     /// If our space is a field, then this will be non `0` on all other inputs.
