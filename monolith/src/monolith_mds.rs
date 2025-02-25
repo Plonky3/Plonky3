@@ -2,8 +2,8 @@
 //! With significant inspiration from https://extgit.iaik.tugraz.at/krypto/zkfriendlyhashzoo/
 
 use p3_field::PrimeField32;
-use p3_mds::util::apply_circulant;
 use p3_mds::MdsPermutation;
+use p3_mds::util::apply_circulant;
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::Permutation;
 use sha3::digest::{ExtendableOutput, Update};
@@ -30,11 +30,11 @@ impl<const WIDTH: usize, const NUM_ROUNDS: usize> Permutation<[Mersenne31; WIDTH
             apply_circulant(&matrix, input)
         } else {
             let mut shake = Shake128::default();
-            shake.update("Monolith".as_bytes());
+            shake.update(b"Monolith");
             shake.update(&[WIDTH as u8, NUM_ROUNDS as u8]);
             shake.update(&Mersenne31::ORDER_U32.to_le_bytes());
             shake.update(&[16, 15]);
-            shake.update("MDS".as_bytes());
+            shake.update(b"MDS");
             let mut shake_finalized = shake.finalize_xof();
             apply_cauchy_mds_matrix(&mut shake_finalized, input)
         }
@@ -56,6 +56,8 @@ fn apply_cauchy_mds_matrix<F: PrimeField32, const WIDTH: usize>(
 ) -> [F; WIDTH] {
     let mut output: [F; WIDTH] = [F::ZERO; WIDTH];
 
+    // As F is a PrimeField, it's order is equal to its characteristic.
+    // Thus 2|F| > 2^bits > |F|.
     let bits = F::bits();
     let x_mask = (1 << (bits - 9)) - 1;
     let y_mask = ((1 << bits) - 1) >> 2;
@@ -65,8 +67,15 @@ fn apply_cauchy_mds_matrix<F: PrimeField32, const WIDTH: usize>(
     x.iter_mut().for_each(|x_i| *x_i &= x_mask);
 
     for (i, x_i) in x.iter().enumerate() {
-        for (j, yj) in y.iter().enumerate() {
-            output[i] += F::from_canonical_u32(x_i + yj).inverse() * to_multiply[j];
+        for (j, y_j) in y.iter().enumerate() {
+            let val = unsafe {
+                // Safety:
+                // x_i < x_mask < 2^{-8}|F|
+                // y_j < y_mask < 2^{-1}|F|
+                // Hence x_i + y_j < |F|.
+                F::from_canonical_unchecked(x_i + y_j).inverse()
+            };
+            output[i] += val * to_multiply[j];
         }
     }
 

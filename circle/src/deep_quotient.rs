@@ -1,8 +1,8 @@
 use alloc::vec::Vec;
 
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
 use p3_field::extension::ComplexExtendable;
-use p3_field::{batch_multiplicative_inverse, dot_product, ExtensionField};
+use p3_field::{ExtensionField, batch_multiplicative_inverse, dot_product};
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
@@ -10,7 +10,7 @@ use tracing::instrument;
 
 use crate::domain::CircleDomain;
 use crate::point::Point;
-use crate::{cfft_permute_slice, CircleEvaluations};
+use crate::{CircleEvaluations, cfft_permute_slice};
 
 /// Compute numerator and denominator of the "vanishing part" of the DEEP quotient
 /// Section 6, Remark 21 of Circle Starks (page 30 of first edition PDF)
@@ -123,11 +123,11 @@ pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
 mod tests {
     use alloc::vec;
 
+    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::FieldAlgebra;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_mersenne_31::Mersenne31;
-    use rand::{random, thread_rng};
+    use rand::{random, rng};
 
     use super::*;
 
@@ -139,7 +139,7 @@ mod tests {
         let domain = CircleDomain::standard(5);
         let evals = CircleEvaluations::from_cfft_order(
             domain,
-            RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << domain.log_n, 1 << 3),
+            RowMajorMatrix::<F>::rand(&mut rng(), 1 << domain.log_n, 1 << 3),
         );
 
         let alpha: EF = random();
@@ -164,7 +164,7 @@ mod tests {
         let log_blowup = 1;
         let evals = CircleEvaluations::from_cfft_order(
             CircleDomain::standard(log_n),
-            RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << log_n, 1 << 3),
+            RowMajorMatrix::<F>::rand(&mut rng(), 1 << log_n, 1 << 3),
         );
         let lde = evals
             .clone()
@@ -205,7 +205,7 @@ mod tests {
         for _ in 0..4 {
             let evals = CircleEvaluations::from_cfft_order(
                 domain,
-                RowMajorMatrix::<F>::rand(&mut thread_rng(), 1 << domain.log_n, 1 << 3),
+                RowMajorMatrix::<F>::rand(&mut rng(), 1 << domain.log_n, 1 << 3),
             );
             let ps_at_zeta = evals.evaluate_at_point(zeta);
             let lde = evals.extrapolate(lde_domain);
@@ -228,7 +228,7 @@ mod tests {
     fn test_extract_lambda() {
         let log_n = 5;
         for log_blowup in [1, 2, 3] {
-            let mut coeffs = RowMajorMatrix::<F>::rand(&mut thread_rng(), (1 << log_n) + 1, 1);
+            let mut coeffs = RowMajorMatrix::<F>::rand(&mut rng(), (1 << log_n) + 1, 1);
             coeffs.pad_to_height(1 << (log_n + log_blowup), F::ZERO);
 
             let domain = CircleDomain::standard(log_n + log_blowup);

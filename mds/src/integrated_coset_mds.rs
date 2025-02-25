@@ -1,11 +1,11 @@
 use alloc::vec::Vec;
 
-use p3_field::{FieldAlgebra, Powers, TwoAdicField};
+use p3_field::{Algebra, Field, Powers, TwoAdicField};
 use p3_symmetric::Permutation;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
-use crate::butterflies::{dif_butterfly, dit_butterfly, twiddle_free_butterfly};
 use crate::MdsPermutation;
+use crate::butterflies::{dif_butterfly, dit_butterfly, twiddle_free_butterfly};
 
 /// Like `CosetMds`, with a few differences:
 /// - (Bit reversed, a la Bowers) DIF + DIT rather than DIT + DIF
@@ -48,13 +48,13 @@ impl<F: TwoAdicField, const N: usize> Default for IntegratedCosetMds<F, N> {
     }
 }
 
-impl<FA: FieldAlgebra, const N: usize> Permutation<[FA; N]> for IntegratedCosetMds<FA::F, N> {
-    fn permute(&self, mut input: [FA; N]) -> [FA; N] {
+impl<F: Field, A: Algebra<F>, const N: usize> Permutation<[A; N]> for IntegratedCosetMds<F, N> {
+    fn permute(&self, mut input: [A; N]) -> [A; N] {
         self.permute_mut(&mut input);
         input
     }
 
-    fn permute_mut(&self, values: &mut [FA; N]) {
+    fn permute_mut(&self, values: &mut [A; N]) {
         let log_n = log2_strict_usize(N);
 
         // Bit-reversed DIF, aka Bowers G
@@ -69,13 +69,13 @@ impl<FA: FieldAlgebra, const N: usize> Permutation<[FA; N]> for IntegratedCosetM
     }
 }
 
-impl<FA: FieldAlgebra, const N: usize> MdsPermutation<FA, N> for IntegratedCosetMds<FA::F, N> {}
+impl<F: Field, A: Algebra<F>, const N: usize> MdsPermutation<A, N> for IntegratedCosetMds<F, N> {}
 
 #[inline]
-fn bowers_g_layer<FA: FieldAlgebra, const N: usize>(
-    values: &mut [FA; N],
+fn bowers_g_layer<F: Field, A: Algebra<F>, const N: usize>(
+    values: &mut [A; N],
     log_half_block_size: usize,
-    twiddles: &[FA::F],
+    twiddles: &[F],
 ) {
     let log_block_size = log_half_block_size + 1;
     let half_block_size = 1 << log_half_block_size;
@@ -97,10 +97,10 @@ fn bowers_g_layer<FA: FieldAlgebra, const N: usize>(
 }
 
 #[inline]
-fn bowers_g_t_layer<FA: FieldAlgebra, const N: usize>(
-    values: &mut [FA; N],
+fn bowers_g_t_layer<F: Field, A: Algebra<F>, const N: usize>(
+    values: &mut [A; N],
     log_half_block_size: usize,
-    twiddles: &[FA::F],
+    twiddles: &[F],
 ) {
     let log_block_size = log_half_block_size + 1;
     let half_block_size = 1 << log_half_block_size;
@@ -119,10 +119,10 @@ fn bowers_g_t_layer<FA: FieldAlgebra, const N: usize>(
 mod tests {
     use p3_baby_bear::BabyBear;
     use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
-    use p3_field::{Field, FieldAlgebra};
+    use p3_field::{Field, PrimeCharacteristicRing};
     use p3_symmetric::Permutation;
     use p3_util::reverse_slice_index_bits;
-    use rand::{thread_rng, Rng};
+    use rand::{Rng, rng};
 
     use crate::integrated_coset_mds::IntegratedCosetMds;
 
@@ -131,8 +131,8 @@ mod tests {
 
     #[test]
     fn matches_naive() {
-        let mut rng = thread_rng();
-        let mut arr: [F; N] = rng.gen();
+        let mut rng = rng();
+        let mut arr: [F; N] = rng.random();
 
         let mut arr_rev = arr.to_vec();
         reverse_slice_index_bits(&mut arr_rev);
@@ -142,7 +142,7 @@ mod tests {
         reverse_slice_index_bits(&mut coset_lde_naive);
         coset_lde_naive
             .iter_mut()
-            .for_each(|x| *x *= F::from_canonical_usize(N));
+            .for_each(|x| *x *= F::from_u8(N as u8));
         IntegratedCosetMds::default().permute_mut(&mut arr);
         assert_eq!(coset_lde_naive, arr);
     }

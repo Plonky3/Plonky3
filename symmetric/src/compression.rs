@@ -72,3 +72,105 @@ where
     H: CryptographicHasher<T, [T; CHUNK]>,
 {
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Permutation;
+
+    #[derive(Clone)]
+    struct MockPermutation;
+
+    impl<T, const WIDTH: usize> Permutation<[T; WIDTH]> for MockPermutation
+    where
+        T: Copy + core::ops::Add<Output = T> + Default,
+    {
+        fn permute_mut(&self, input: &mut [T; WIDTH]) {
+            let sum: T = input.iter().copied().fold(T::default(), |acc, x| acc + x);
+            // Simplest impl: set every element to the sum
+            *input = [sum; WIDTH];
+        }
+    }
+
+    impl<T, const WIDTH: usize> CryptographicPermutation<[T; WIDTH]> for MockPermutation where
+        T: Copy + core::ops::Add<Output = T> + Default
+    {
+    }
+
+    #[derive(Clone)]
+    struct MockHasher;
+
+    impl<const CHUNK: usize> CryptographicHasher<u64, [u64; CHUNK]> for MockHasher {
+        fn hash_iter<I: IntoIterator<Item = u64>>(&self, iter: I) -> [u64; CHUNK] {
+            let sum: u64 = iter.into_iter().sum();
+            // Simplest impl: set every element to the sum
+            [sum; CHUNK]
+        }
+    }
+
+    #[test]
+    fn test_truncated_permutation_compress() {
+        const N: usize = 2;
+        const CHUNK: usize = 4;
+        const WIDTH: usize = 8;
+
+        let permutation = MockPermutation;
+        let compressor = TruncatedPermutation::<MockPermutation, N, CHUNK, WIDTH>::new(permutation);
+
+        let input: [[u64; CHUNK]; N] = [[1, 2, 3, 4], [5, 6, 7, 8]];
+        let output = compressor.compress(input);
+        let expected_sum = 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8;
+
+        assert_eq!(output, [expected_sum; CHUNK]);
+    }
+
+    #[test]
+    fn test_compression_function_from_hasher_compress() {
+        const N: usize = 2;
+        const CHUNK: usize = 4;
+
+        let hasher = MockHasher;
+        let compressor = CompressionFunctionFromHasher::<MockHasher, N, CHUNK>::new(hasher);
+
+        let input = [[10, 20, 30, 40], [50, 60, 70, 80]];
+        let output = compressor.compress(input);
+        let expected_sum = 10 + 20 + 30 + 40 + 50 + 60 + 70 + 80;
+
+        assert_eq!(output, [expected_sum; CHUNK]);
+    }
+
+    #[test]
+    fn test_truncated_permutation_with_zeroes() {
+        const N: usize = 2;
+        const CHUNK: usize = 4;
+        const WIDTH: usize = 8;
+
+        let permutation = MockPermutation;
+        let compressor = TruncatedPermutation::<MockPermutation, N, CHUNK, WIDTH>::new(permutation);
+
+        let input: [[u64; CHUNK]; N] = [[0, 0, 0, 0], [0, 0, 0, 0]];
+        let output = compressor.compress(input);
+
+        assert_eq!(output, [0; CHUNK]);
+    }
+
+    #[test]
+    fn test_truncated_permutation_with_extra_width() {
+        const N: usize = 2;
+        const CHUNK: usize = 3;
+        const WIDTH: usize = 10; // More than `CHUNK * N` (6 < 10)
+
+        let permutation = MockPermutation;
+        let compressor = TruncatedPermutation::<MockPermutation, N, CHUNK, WIDTH>::new(permutation);
+
+        let input: [[u64; CHUNK]; N] = [[1, 2, 3], [4, 5, 6]];
+        let output = compressor.compress(input);
+
+        let expected_sum = 1 + 2 + 3 + 4 + 5 + 6;
+
+        assert_eq!(
+            output, [expected_sum; CHUNK],
+            "Compression should correctly handle extra WIDTH space."
+        );
+    }
+}

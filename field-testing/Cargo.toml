@@ -1,14 +1,14 @@
 [package]
 name = "p3-field-testing"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-p3-dft = { path="../dft" }
+p3-dft.workspace = true
 p3-field.workspace = true
-p3-matrix = { path="../matrix" }
-rand = { workspace = true, features = ["min_const_gen"] }
+p3-matrix.workspace = true
+rand.workspace = true
 rand_chacha.workspace = true
 criterion.workspace = true
 num-bigint.workspace = true

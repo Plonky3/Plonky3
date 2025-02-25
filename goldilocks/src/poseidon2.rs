@@ -9,15 +9,15 @@
 //! Long term we will use more optimised internal and external linear layers.
 use alloc::vec::Vec;
 
-use p3_field::{Field, FieldAlgebra};
+use p3_field::{Algebra, InjectiveMonomial};
 use p3_poseidon2::{
-    add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
-    internal_permute_state, matmul_internal, ExternalLayer, ExternalLayerConstants,
-    ExternalLayerConstructor, HLMDSMat4, InternalLayer, InternalLayerConstructor, MDSMat4,
-    Poseidon2,
+    ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, HLMDSMat4, InternalLayer,
+    InternalLayerConstructor, MDSMat4, Poseidon2, add_rc_and_sbox_generic,
+    external_initial_permute_state, external_terminal_permute_state, internal_permute_state,
+    matmul_internal,
 };
 
-use crate::{to_goldilocks_array, Goldilocks};
+use crate::Goldilocks;
 
 /// Degree of the chosen permutation polynomial for Goldilocks, used as the Poseidon2 S-Box.
 ///
@@ -30,7 +30,7 @@ const GOLDILOCKS_S_BOX_DEGREE: u64 = 7;
 /// Currently the internal layers are unoptimized. These could be sped up in a similar way to
 /// how it was done for Monty31 fields.
 pub type Poseidon2Goldilocks<const WIDTH: usize> = Poseidon2<
-    <Goldilocks as Field>::Packing,
+    Goldilocks,
     Poseidon2ExternalLayerGoldilocks<WIDTH>,
     Poseidon2InternalLayerGoldilocks,
     WIDTH,
@@ -44,14 +44,14 @@ pub type Poseidon2Goldilocks<const WIDTH: usize> = Poseidon2<
 /// This implementation is slightly slower than `Poseidon2Goldilocks` as is uses a slower matrix
 /// for the external rounds.
 pub type Poseidon2GoldilocksHL<const WIDTH: usize> = Poseidon2<
-    <Goldilocks as Field>::Packing,
+    Goldilocks,
     Poseidon2ExternalLayerGoldilocksHL<WIDTH>,
     Poseidon2InternalLayerGoldilocks,
     WIDTH,
     GOLDILOCKS_S_BOX_DEGREE,
 >;
 
-pub const MATRIX_DIAG_8_GOLDILOCKS: [Goldilocks; 8] = to_goldilocks_array([
+pub const MATRIX_DIAG_8_GOLDILOCKS: [Goldilocks; 8] = Goldilocks::new_array([
     0xa98811a1fed4e3a5,
     0x1cc48b54f377e2a0,
     0xe40cd4f6c5609a26,
@@ -62,7 +62,7 @@ pub const MATRIX_DIAG_8_GOLDILOCKS: [Goldilocks; 8] = to_goldilocks_array([
     0x3f7af9125da962fe,
 ]);
 
-pub const MATRIX_DIAG_12_GOLDILOCKS: [Goldilocks; 12] = to_goldilocks_array([
+pub const MATRIX_DIAG_12_GOLDILOCKS: [Goldilocks; 12] = Goldilocks::new_array([
     0xc3b6c08e23ba9300,
     0xd84b5de94a324fb6,
     0x0d0c371c5b35b84f,
@@ -77,7 +77,7 @@ pub const MATRIX_DIAG_12_GOLDILOCKS: [Goldilocks; 12] = to_goldilocks_array([
     0xd27dbb6944917b60,
 ]);
 
-pub const MATRIX_DIAG_16_GOLDILOCKS: [Goldilocks; 16] = to_goldilocks_array([
+pub const MATRIX_DIAG_16_GOLDILOCKS: [Goldilocks; 16] = Goldilocks::new_array([
     0xde9b91a467d6afc0,
     0xc5f16b9c76a9be17,
     0x0ab0fef2d540ac55,
@@ -96,7 +96,7 @@ pub const MATRIX_DIAG_16_GOLDILOCKS: [Goldilocks; 16] = to_goldilocks_array([
     0x774487b8c40089bb,
 ]);
 
-pub const MATRIX_DIAG_20_GOLDILOCKS: [Goldilocks; 20] = to_goldilocks_array([
+pub const MATRIX_DIAG_20_GOLDILOCKS: [Goldilocks; 20] = Goldilocks::new_array([
     0x95c381fda3b1fa57,
     0xf36fe9eb1288f42c,
     0x89f5dcdfef277944,
@@ -125,20 +125,18 @@ pub struct Poseidon2InternalLayerGoldilocks {
     internal_constants: Vec<Goldilocks>,
 }
 
-impl<FA: FieldAlgebra<F = Goldilocks>> InternalLayerConstructor<FA>
-    for Poseidon2InternalLayerGoldilocks
-{
+impl InternalLayerConstructor<Goldilocks> for Poseidon2InternalLayerGoldilocks {
     fn new_from_constants(internal_constants: Vec<Goldilocks>) -> Self {
         Self { internal_constants }
     }
 }
 
-impl<FA: FieldAlgebra<F = Goldilocks>> InternalLayer<FA, 8, GOLDILOCKS_S_BOX_DEGREE>
-    for Poseidon2InternalLayerGoldilocks
+impl<A: Algebra<Goldilocks> + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>>
+    InternalLayer<A, 8, GOLDILOCKS_S_BOX_DEGREE> for Poseidon2InternalLayerGoldilocks
 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
-    fn permute_state(&self, state: &mut [FA; 8]) {
-        internal_permute_state::<FA, 8, GOLDILOCKS_S_BOX_DEGREE>(
+    fn permute_state(&self, state: &mut [A; 8]) {
+        internal_permute_state(
             state,
             |x| matmul_internal(x, MATRIX_DIAG_8_GOLDILOCKS),
             &self.internal_constants,
@@ -146,12 +144,12 @@ impl<FA: FieldAlgebra<F = Goldilocks>> InternalLayer<FA, 8, GOLDILOCKS_S_BOX_DEG
     }
 }
 
-impl<FA: FieldAlgebra<F = Goldilocks>> InternalLayer<FA, 12, GOLDILOCKS_S_BOX_DEGREE>
-    for Poseidon2InternalLayerGoldilocks
+impl<A: Algebra<Goldilocks> + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>>
+    InternalLayer<A, 12, GOLDILOCKS_S_BOX_DEGREE> for Poseidon2InternalLayerGoldilocks
 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
-    fn permute_state(&self, state: &mut [FA; 12]) {
-        internal_permute_state::<FA, 12, GOLDILOCKS_S_BOX_DEGREE>(
+    fn permute_state(&self, state: &mut [A; 12]) {
+        internal_permute_state(
             state,
             |x| matmul_internal(x, MATRIX_DIAG_12_GOLDILOCKS),
             &self.internal_constants,
@@ -159,12 +157,12 @@ impl<FA: FieldAlgebra<F = Goldilocks>> InternalLayer<FA, 12, GOLDILOCKS_S_BOX_DE
     }
 }
 
-impl<FA: FieldAlgebra<F = Goldilocks>> InternalLayer<FA, 16, GOLDILOCKS_S_BOX_DEGREE>
-    for Poseidon2InternalLayerGoldilocks
+impl<A: Algebra<Goldilocks> + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>>
+    InternalLayer<A, 16, GOLDILOCKS_S_BOX_DEGREE> for Poseidon2InternalLayerGoldilocks
 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
-    fn permute_state(&self, state: &mut [FA; 16]) {
-        internal_permute_state::<FA, 16, GOLDILOCKS_S_BOX_DEGREE>(
+    fn permute_state(&self, state: &mut [A; 16]) {
+        internal_permute_state(
             state,
             |x| matmul_internal(x, MATRIX_DIAG_16_GOLDILOCKS),
             &self.internal_constants,
@@ -172,12 +170,12 @@ impl<FA: FieldAlgebra<F = Goldilocks>> InternalLayer<FA, 16, GOLDILOCKS_S_BOX_DE
     }
 }
 
-impl<FA: FieldAlgebra<F = Goldilocks>> InternalLayer<FA, 20, GOLDILOCKS_S_BOX_DEGREE>
-    for Poseidon2InternalLayerGoldilocks
+impl<A: Algebra<Goldilocks> + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>>
+    InternalLayer<A, 20, GOLDILOCKS_S_BOX_DEGREE> for Poseidon2InternalLayerGoldilocks
 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
-    fn permute_state(&self, state: &mut [FA; 20]) {
-        internal_permute_state::<FA, 20, GOLDILOCKS_S_BOX_DEGREE>(
+    fn permute_state(&self, state: &mut [A; 20]) {
+        internal_permute_state(
             state,
             |x| matmul_internal(x, MATRIX_DIAG_20_GOLDILOCKS),
             &self.internal_constants,
@@ -191,7 +189,7 @@ pub struct Poseidon2ExternalLayerGoldilocks<const WIDTH: usize> {
     pub(crate) external_constants: ExternalLayerConstants<Goldilocks, WIDTH>,
 }
 
-impl<FA: FieldAlgebra<F = Goldilocks>, const WIDTH: usize> ExternalLayerConstructor<FA, WIDTH>
+impl<const WIDTH: usize> ExternalLayerConstructor<Goldilocks, WIDTH>
     for Poseidon2ExternalLayerGoldilocks<WIDTH>
 {
     fn new_from_constants(external_constants: ExternalLayerConstants<Goldilocks, WIDTH>) -> Self {
@@ -199,25 +197,25 @@ impl<FA: FieldAlgebra<F = Goldilocks>, const WIDTH: usize> ExternalLayerConstruc
     }
 }
 
-impl<FA: FieldAlgebra<F = Goldilocks>, const WIDTH: usize>
-    ExternalLayer<FA, WIDTH, GOLDILOCKS_S_BOX_DEGREE> for Poseidon2ExternalLayerGoldilocks<WIDTH>
+impl<A: Algebra<Goldilocks> + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>, const WIDTH: usize>
+    ExternalLayer<A, WIDTH, GOLDILOCKS_S_BOX_DEGREE> for Poseidon2ExternalLayerGoldilocks<WIDTH>
 {
     /// Perform the initial external layers of the Poseidon2 permutation on the given state.
-    fn permute_state_initial(&self, state: &mut [FA; WIDTH]) {
+    fn permute_state_initial(&self, state: &mut [A; WIDTH]) {
         external_initial_permute_state(
             state,
             self.external_constants.get_initial_constants(),
-            add_rc_and_sbox_generic::<_, GOLDILOCKS_S_BOX_DEGREE>,
+            add_rc_and_sbox_generic,
             &MDSMat4,
         );
     }
 
     /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
-    fn permute_state_terminal(&self, state: &mut [FA; WIDTH]) {
+    fn permute_state_terminal(&self, state: &mut [A; WIDTH]) {
         external_terminal_permute_state(
             state,
             self.external_constants.get_terminal_constants(),
-            add_rc_and_sbox_generic::<_, GOLDILOCKS_S_BOX_DEGREE>,
+            add_rc_and_sbox_generic,
             &MDSMat4,
         );
     }
@@ -229,7 +227,7 @@ pub struct Poseidon2ExternalLayerGoldilocksHL<const WIDTH: usize> {
     pub(crate) external_constants: ExternalLayerConstants<Goldilocks, WIDTH>,
 }
 
-impl<FA: FieldAlgebra<F = Goldilocks>, const WIDTH: usize> ExternalLayerConstructor<FA, WIDTH>
+impl<const WIDTH: usize> ExternalLayerConstructor<Goldilocks, WIDTH>
     for Poseidon2ExternalLayerGoldilocksHL<WIDTH>
 {
     fn new_from_constants(external_constants: ExternalLayerConstants<Goldilocks, WIDTH>) -> Self {
@@ -237,26 +235,25 @@ impl<FA: FieldAlgebra<F = Goldilocks>, const WIDTH: usize> ExternalLayerConstruc
     }
 }
 
-impl<FA: FieldAlgebra<F = Goldilocks>, const WIDTH: usize>
-    ExternalLayer<FA, WIDTH, GOLDILOCKS_S_BOX_DEGREE>
-    for Poseidon2ExternalLayerGoldilocksHL<WIDTH>
+impl<A: Algebra<Goldilocks> + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>, const WIDTH: usize>
+    ExternalLayer<A, WIDTH, GOLDILOCKS_S_BOX_DEGREE> for Poseidon2ExternalLayerGoldilocksHL<WIDTH>
 {
     /// Perform the initial external layers of the Poseidon2 permutation on the given state.
-    fn permute_state_initial(&self, state: &mut [FA; WIDTH]) {
+    fn permute_state_initial(&self, state: &mut [A; WIDTH]) {
         external_initial_permute_state(
             state,
             self.external_constants.get_initial_constants(),
-            add_rc_and_sbox_generic::<_, GOLDILOCKS_S_BOX_DEGREE>,
+            add_rc_and_sbox_generic,
             &HLMDSMat4,
         );
     }
 
     /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
-    fn permute_state_terminal(&self, state: &mut [FA; WIDTH]) {
+    fn permute_state_terminal(&self, state: &mut [A; WIDTH]) {
         external_terminal_permute_state(
             state,
             self.external_constants.get_terminal_constants(),
-            add_rc_and_sbox_generic::<_, GOLDILOCKS_S_BOX_DEGREE>,
+            add_rc_and_sbox_generic,
             &HLMDSMat4,
         );
     }
@@ -377,7 +374,7 @@ pub const HL_GOLDILOCKS_8_INTERNAL_ROUND_CONSTANTS: [u64; 22] = [
 mod tests {
     use core::array;
 
-    use p3_field::FieldAlgebra;
+    use p3_field::PrimeCharacteristicRing;
     use p3_poseidon2::Poseidon2;
     use p3_symmetric::Permutation;
 
@@ -394,9 +391,9 @@ mod tests {
         let poseidon2: Poseidon2GoldilocksHL<WIDTH> = Poseidon2::new(
             ExternalLayerConstants::<Goldilocks, WIDTH>::new_from_saved_array(
                 HL_GOLDILOCKS_8_EXTERNAL_ROUND_CONSTANTS,
-                to_goldilocks_array,
+                Goldilocks::new_array,
             ),
-            to_goldilocks_array(HL_GOLDILOCKS_8_INTERNAL_ROUND_CONSTANTS).to_vec(),
+            Goldilocks::new_array(HL_GOLDILOCKS_8_INTERNAL_ROUND_CONSTANTS).to_vec(),
         );
 
         poseidon2.permute_mut(input);
@@ -405,9 +402,9 @@ mod tests {
     /// Test on the constant 0 input.
     #[test]
     fn test_poseidon2_width_8_zeroes() {
-        let mut input: [F; 8] = [0_u64; 8].map(F::from_wrapped_u64);
+        let mut input: [F; 8] = [Goldilocks::ZERO; 8];
 
-        let expected: [F; 8] = [
+        let expected: [F; 8] = Goldilocks::new_array([
             4214787979728720400,
             12324939279576102560,
             10353596058419792404,
@@ -416,8 +413,7 @@ mod tests {
             16227496357546636742,
             2959271128466640042,
             14285409611125725709,
-        ]
-        .map(F::from_canonical_u64);
+        ]);
         hl_poseidon2_goldilocks_width_8(&mut input);
         assert_eq!(input, expected);
     }
@@ -425,9 +421,9 @@ mod tests {
     /// Test on the input 0..16.
     #[test]
     fn test_poseidon2_width_8_range() {
-        let mut input: [F; 8] = array::from_fn(|i| F::from_wrapped_u64(i as u64));
+        let mut input: [F; 8] = array::from_fn(|i| F::from_u64(i as u64));
 
-        let expected: [F; 8] = [
+        let expected: [F; 8] = Goldilocks::new_array([
             14266028122062624699,
             5353147180106052723,
             15203350112844181434,
@@ -436,8 +432,7 @@ mod tests {
             10184091939013874068,
             16774100645754596496,
             12047415603622314780,
-        ]
-        .map(F::from_canonical_u64);
+        ]);
         hl_poseidon2_goldilocks_width_8(&mut input);
         assert_eq!(input, expected);
     }
@@ -448,7 +443,7 @@ mod tests {
     /// vector([ZZ.random_element(2**31) for t in range(16)])
     #[test]
     fn test_poseidon2_width_8_random() {
-        let mut input: [F; 8] = [
+        let mut input: [F; 8] = Goldilocks::new_array([
             5116996373749832116,
             8931548647907683339,
             17132360229780760684,
@@ -457,10 +452,9 @@ mod tests {
             15695650327991256125,
             17604752143022812942,
             543194415197607509,
-        ]
-        .map(F::from_wrapped_u64);
+        ]);
 
-        let expected: [F; 8] = [
+        let expected: [F; 8] = Goldilocks::new_array([
             1831346684315917658,
             13497752062035433374,
             12149460647271516589,
@@ -469,8 +463,7 @@ mod tests {
             3140092508031220630,
             4251208148861706881,
             6973971209430822232,
-        ]
-        .map(F::from_canonical_u64);
+        ]);
 
         hl_poseidon2_goldilocks_width_8(&mut input);
         assert_eq!(input, expected);

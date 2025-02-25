@@ -1,5 +1,5 @@
 use p3_field::extension::{BinomiallyExtendable, HasTwoAdicBinomialExtension};
-use p3_field::{field_to_array, TwoAdicField};
+use p3_field::{TwoAdicField, field_to_array};
 
 use crate::{BinomialExtensionData, FieldParameters, MontyField31, TwoAdicData};
 

@@ -59,18 +59,18 @@ Hashes
 
 ## Benchmarks
 
-Many variations are possible, with different fields, hashes and so forth, which can be controlled through the command line.
+Many variations are possible, with different fields, hashes, and so forth, which can be controlled through the command line.
 
-For example, to prove 2^20 Poseidon2 permutations of width 16, using the `KoalaBear` field, `Radix2DitParallel` DFT and `KeccakF` as the Merkle tree hash:
+For example, to prove 2^20 Poseidon2 permutations of width 16, using the `KoalaBear` field, `Radix2DitParallel` DFT, and `KeccakF` as the Merkle tree hash:
 ```
-RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_monty_31 --release --features parallel -- --field koala-bear --objective poseidon-2-permutations --log-trace-length 17 --discrete-fourier-transform radix-2-dit-parallel --merkle-hash keccak-f
+RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_prime_field_31 --release --features parallel -- --field koala-bear --objective poseidon-2-permutations --log-trace-length 17 --discrete-fourier-transform radix-2-dit-parallel --merkle-hash keccak-f
 ```
 
 Currently the options for the command line arguments are:
-- `--field` (`-f`): `koala-bear` or `baby-bear`.
+- `--field` (`-f`): `mersenne-31` or `koala-bear` or `baby-bear`.
 - `--objective` (`-o`): `blake-3-permutations, poseidon-2-permutations, keccak-f-permutations`.
 - `--log-trace-length` (`-l`): Accepts any integer between `0` and `255`. The number of permutations proven is `trace_length, 8*trace_length` and `trace_length/24` for `blake3, poseidon2` and `keccakf` respectively. 
-- `--discrete-fourier-transform` (`-d`): `radix-2-dit-parallel, recursive-dft`.
+- `--discrete-fourier-transform` (`-d`): `radix-2-dit-parallel, recursive-dft`. This option should be omitted if the field choice is `mersenne-31` as the circle stark currently only supports a single discrete fourier transform.
 - `--merkle-hash` (`-m`): `poseidon-2, keccak-f`.
 
 Extra speedups may be possible with some configuration changes:
@@ -79,7 +79,7 @@ Extra speedups may be possible with some configuration changes:
 
 ## CPU features
 
-Plonky3 contains optimizations that rely on newer CPU instructions that are not available in older processors. These instruction sets include x86's [BMI1 and 2](https://en.wikipedia.org/wiki/X86_Bit_manipulation_instruction_set), [AVX2](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions#Advanced_Vector_Extensions_2), and [AVX-512](https://en.wikipedia.org/wiki/AVX-512). Rustc does not emit those instructions by default; they must be explicitly enabled through the `target-feature` compiler option (or implicitly by setting `target-cpu`). To enable all features that are supported on your machine, you can set `target-cpu` to `native`. For example, to run the tests:
+Plonky3 contains optimizations that rely on newer CPU instructions unavailable in older processors. These instruction sets include x86's [BMI1 and 2](https://en.wikipedia.org/wiki/X86_Bit_manipulation_instruction_set), [AVX2](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions#Advanced_Vector_Extensions_2), and [AVX-512](https://en.wikipedia.org/wiki/AVX-512). Rustc does not emit those instructions by default; they must be explicitly enabled through the `target-feature` compiler option (or implicitly by setting `target-cpu`). To enable all features that are supported on your machine, you can set `target-cpu` to `native`. For example, to run the tests:
 ```
 RUSTFLAGS="-Ctarget-cpu=native" cargo test
 ```
@@ -115,18 +115,18 @@ at your option.
 Do you feel keen and able to help with Plonky3? That's great! We
 encourage external contributions!
 
-We want to make it easy for you to contribute, but at the same time we
+We want to make it easy for you to contribute, but at the same time, we
 must manage the burden of reviewing external contributions. We are a
 small team, and the time we spend reviewing external contributions is
 time we are not developing ourselves.
 
-We also want to help you to avoid inadvertently duplicating work that
+We also want to help you avoid inadvertently duplicating work that
 is already underway, or building something that we will not
 want to incorporate.
 
 First and foremost, please keep in mind that this is a highly
 technical piece of software and contributing is only suitable for
-experienced mathematicians, cryptographers and software engineers.
+experienced mathematicians, cryptographers, and software engineers.
 
 The Polygon Zero Team reserves the right to accept or reject any
 external contribution for any reason, including a simple lack of time
@@ -137,20 +137,20 @@ To avoid disappointment, please communicate your intention to
 contribute openly, while respecting the limited time and availability
 we have to review and provide guidance for external contributions. It
 is a good idea to drop a note in our public Discord #development
-channel of your intention to work on something, whether an issue, a
+channel about your intention to work on something, whether an issue, a
 new feature, or a performance improvement. This is probably all that's
 really required to avoid duplication of work with other contributors.
 
 What follows are some more specific requests for how to write PRs in a
 way that will make them easy for us to review. Deviating from these
-guidelines may result in your PR being rejected, ignored or forgotten.
+guidelines may result in your PR being rejected, ignored, or forgotten.
 
 
 ### General guidance for your PR
 
-Obviously PRs will not be considered unless they pass our Github
-CI. The Github CI is not executed for PRs from forks, but you can
-simulate the Github CI by running the commands in
+Obviously, PRs will not be considered unless they pass our Github
+CI. The GitHub CI is not executed for PRs from forks, but you can
+simulate the GitHub CI by running the commands in
 `.github/workflows/ci.yml`.
 
 Under no circumstances should a single PR mix different purposes: Your
@@ -159,7 +159,7 @@ never a combination. Nor should you include, for example, two
 unrelated performance improvements in one PR. Please just submit
 separate PRs. The goal is to make reviewing your PR as simple as
 possible, and you should be thinking about how to compose the PR to
-minimise the burden on the reviewer.
+minimize the burden on the reviewer.
 
 Plonky3 uses stable Rust, so any PR that depends on unstable features
 is likely to be rejected. It's possible that we may relax this policy
@@ -177,7 +177,7 @@ In the PR description, please clearly but briefly describe
 1. the bug (could be a reference to a GH issue; if it is from a
    discussion (on Discord/email/etc. for example), please copy in the
    relevant parts of the discussion);
-2. what turned out to the cause the bug; and
+2. what turned out to cause the bug; and
 3. how the PR fixes the bug.
 
 Wherever possible, PRs that fix bugs should include additional tests
@@ -186,7 +186,7 @@ that (i) trigger the original bug and (ii) pass after applying the PR.
 
 #### The PR implements a new feature
 
-If you plan to contribute an implementation of a new feature, please
+If you plan to contribute the implementation of a new feature, please
 double-check with the Polygon Zero team that it is a sufficient
 priority for us that it will be reviewed and integrated.
 

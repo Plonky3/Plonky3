@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use p3_field::extension::BinomialExtensionField;
 use p3_field_testing::bench_func::{
     benchmark_inv, benchmark_mul_latency, benchmark_mul_throughput, benchmark_square,
@@ -12,7 +12,7 @@ type EF2 = BinomialExtensionField<Goldilocks, 2>;
 const REPS: usize = 50;
 const L_REPS: usize = 10 * REPS;
 
-fn bench_qudratic_extension(c: &mut Criterion) {
+fn bench_quadratic_extension(c: &mut Criterion) {
     let name = "BinomialExtensionField<Goldilocks, 2>";
     benchmark_square::<EF2>(c, name);
     benchmark_inv::<EF2>(c, name);
@@ -20,5 +20,5 @@ fn bench_qudratic_extension(c: &mut Criterion) {
     benchmark_mul_latency::<EF2, L_REPS>(c, name);
 }
 
-criterion_group!(bench_goldilocks_ef2, bench_qudratic_extension);
+criterion_group!(bench_goldilocks_ef2, bench_quadratic_extension);
 criterion_main!(bench_goldilocks_ef2);

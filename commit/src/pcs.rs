@@ -4,10 +4,10 @@ use alloc::vec::Vec;
 use core::fmt::Debug;
 
 use p3_field::ExtensionField;
-use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
-use serde::de::DeserializeOwned;
+use p3_matrix::dense::RowMajorMatrix;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 use crate::PolynomialSpace;
 
@@ -26,6 +26,9 @@ where
 
     /// Data that the prover stores for committed polynomials, to help the prover with opening.
     type ProverData;
+
+    /// Type of the output of `get_evaluations_on_domain`.
+    type EvaluationsOnDomain<'a>: Matrix<Val<Self::Domain>> + 'a;
 
     /// The opening argument.
     type Proof: Clone + Serialize + DeserializeOwned;
@@ -46,7 +49,7 @@ where
         prover_data: &'a Self::ProverData,
         idx: usize,
         domain: Self::Domain,
-    ) -> impl Matrix<Val<Self::Domain>> + 'a;
+    ) -> Self::EvaluationsOnDomain<'a>;
 
     fn open(
         &self,

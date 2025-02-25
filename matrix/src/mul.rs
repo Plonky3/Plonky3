@@ -1,9 +1,9 @@
-use p3_field::{add_scaled_slice_in_place, Field};
+use p3_field::{Field, add_scaled_slice_in_place};
 use p3_maybe_rayon::prelude::*;
 
+use crate::Matrix;
 use crate::dense::RowMajorMatrix;
 use crate::sparse::CsrMatrix;
-use crate::Matrix;
 
 /// Compute `C = A * B`, where `A` in a CSR matrix and `B` is a dense matrix.
 ///

@@ -2,7 +2,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::{reduce_32, split_32, ExtensionField, Field, PrimeField, PrimeField32};
+use p3_field::{BasedVectorSpace, Field, PrimeField, PrimeField32, reduce_32, split_32};
 use p3_symmetric::{CryptographicPermutation, Hash};
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
@@ -66,7 +66,7 @@ where
         self.permutation.permute_mut(&mut self.sponge_state);
 
         self.output_buffer.clear();
-        for &pf_val in self.sponge_state.iter() {
+        for &pf_val in &self.sponge_state {
             let f_vals = split_32(pf_val, self.num_f_elms);
             for f_val in f_vals {
                 self.output_buffer.push(f_val);
@@ -155,12 +155,12 @@ impl<F, EF, PF, P, const WIDTH: usize, const RATE: usize> CanSample<EF>
     for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
     F: PrimeField32,
-    EF: ExtensionField<F>,
+    EF: BasedVectorSpace<F>,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
     fn sample(&mut self) -> EF {
-        EF::from_base_fn(|_| {
+        EF::from_basis_coefficients_fn(|_| {
             // If we have buffered inputs, we must perform a duplexing so that the challenge will
             // reflect them. Or if we've run out of outputs, we must perform a duplexing to get more.
             if !self.input_buffer.is_empty() || self.output_buffer.is_empty() {
@@ -182,10 +182,10 @@ where
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
     fn sample_bits(&mut self, bits: usize) -> usize {
-        debug_assert!(bits < (usize::BITS as usize));
-        debug_assert!((1 << bits) < F::ORDER_U32);
+        assert!(bits < (usize::BITS as usize));
+        assert!((1 << bits) < F::ORDER_U32);
         let rand_f: F = self.sample();
-        let rand_usize = rand_f.to_unique_u32() as usize;
+        let rand_usize = rand_f.as_canonical_u32() as usize;
         rand_usize & ((1 << bits) - 1)
     }
 }

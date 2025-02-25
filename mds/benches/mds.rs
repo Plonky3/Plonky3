@@ -1,15 +1,15 @@
 use std::any::type_name;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, MdsMatrixBabyBear};
-use p3_field::{Field, FieldAlgebra};
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_goldilocks::{Goldilocks, MdsMatrixGoldilocks};
+use p3_mds::MdsPermutation;
 use p3_mds::coset_mds::CosetMds;
 use p3_mds::integrated_coset_mds::IntegratedCosetMds;
-use p3_mds::MdsPermutation;
 use p3_mersenne_31::{MdsMatrixMersenne31, Mersenne31};
-use rand::distributions::{Distribution, Standard};
-use rand::{thread_rng, Rng};
+use rand::distr::{Distribution, StandardUniform};
+use rand::{Rng, rng};
 
 fn bench_all_mds(c: &mut Criterion) {
     bench_mds::<BabyBear, IntegratedCosetMds<BabyBear, 16>, 16>(c);
@@ -37,16 +37,16 @@ fn bench_all_mds(c: &mut Criterion) {
     bench_mds::<Mersenne31, MdsMatrixMersenne31, 64>(c);
 }
 
-fn bench_mds<FA, Mds, const WIDTH: usize>(c: &mut Criterion)
+fn bench_mds<R, Mds, const WIDTH: usize>(c: &mut Criterion)
 where
-    FA: FieldAlgebra,
-    Standard: Distribution<FA>,
-    Mds: MdsPermutation<FA, WIDTH> + Default,
+    R: PrimeCharacteristicRing,
+    StandardUniform: Distribution<R>,
+    Mds: MdsPermutation<R, WIDTH> + Default,
 {
     let mds = Mds::default();
 
-    let mut rng = thread_rng();
-    let input = rng.gen::<[FA; WIDTH]>();
+    let mut rng = rng();
+    let input = rng.random::<[R; WIDTH]>();
     let id = BenchmarkId::new(type_name::<Mds>(), WIDTH);
     c.bench_with_input(id, &input, |b, input| b.iter(|| mds.permute(input.clone())));
 }

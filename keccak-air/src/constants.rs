@@ -1,5 +1,3 @@
-use crate::BITS_PER_LIMB;
-
 pub(crate) const R: [[u8; 5]; 5] = [
     [0, 36, 3, 41, 18],
     [1, 44, 10, 45, 2],
@@ -157,10 +155,6 @@ const RC_BITS: [[u8; 64]; 24] = [
         0, 0, 0, 1,
     ],
 ];
-
-pub(crate) const fn rc_value_limb(round: usize, limb: usize) -> u16 {
-    (RC[round] >> (limb * BITS_PER_LIMB)) as u16
-}
 
 pub(crate) const fn rc_value_bit(round: usize, bit_index: usize) -> u8 {
     RC_BITS[round][bit_index]

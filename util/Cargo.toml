@@ -1,8 +1,16 @@
 [package]
 name = "p3-util"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
 serde.workspace = true
+
+[dev-dependencies]
+rand.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "bit_reverse"
+harness = false

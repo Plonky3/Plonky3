@@ -7,7 +7,7 @@ use p3_maybe_rayon::prelude::*;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
 use tracing::instrument;
 
-use crate::columns::{num_cols, Poseidon2Cols};
+use crate::columns::{Poseidon2Cols, num_cols};
 use crate::{FullRound, PartialRound, RoundConstants, SBox};
 
 #[instrument(name = "generate vectorized Poseidon2 trace", skip_all)]
@@ -23,6 +23,7 @@ pub fn generate_vectorized_trace_rows<
 >(
     inputs: Vec<[F; WIDTH]>,
     round_constants: &RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
+    extra_capacity_bits: usize,
 ) -> RowMajorMatrix<F> {
     let n = inputs.len();
     assert!(
@@ -33,9 +34,9 @@ pub fn generate_vectorized_trace_rows<
     let nrows = n.div_ceil(VECTOR_LEN);
     let ncols = num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>()
         * VECTOR_LEN;
-    let mut vec = Vec::with_capacity(nrows * ncols * 2);
-    let trace: &mut [MaybeUninit<F>] = &mut vec.spare_capacity_mut()[..nrows * ncols];
-    let trace: RowMajorMatrixViewMut<MaybeUninit<F>> = RowMajorMatrixViewMut::new(trace, ncols);
+    let mut vec = Vec::with_capacity((nrows * ncols) << extra_capacity_bits);
+    let trace = &mut vec.spare_capacity_mut()[..nrows * ncols];
+    let trace = RowMajorMatrixViewMut::new(trace, ncols);
 
     let (prefix, perms, suffix) = unsafe {
         trace.values.align_to_mut::<Poseidon2Cols<
@@ -92,8 +93,8 @@ pub fn generate_trace_rows<
 
     let ncols = num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>();
     let mut vec = Vec::with_capacity(n * ncols * 2);
-    let trace: &mut [MaybeUninit<F>] = &mut vec.spare_capacity_mut()[..n * ncols];
-    let trace: RowMajorMatrixViewMut<MaybeUninit<F>> = RowMajorMatrixViewMut::new(trace, ncols);
+    let trace = &mut vec.spare_capacity_mut()[..n * ncols];
+    let trace = RowMajorMatrixViewMut::new(trace, ncols);
 
     let (prefix, perms, suffix) = unsafe {
         trace.values.align_to_mut::<Poseidon2Cols<
@@ -164,7 +165,7 @@ fn generate_trace_rows_for_perm<
         .iter_mut()
         .zip(&constants.beginning_full_round_constants)
     {
-        generate_full_round::<F, LinearLayers, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
+        generate_full_round::<_, LinearLayers, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state, full_round, constants,
         );
     }
@@ -174,7 +175,7 @@ fn generate_trace_rows_for_perm<
         .iter_mut()
         .zip(&constants.partial_round_constants)
     {
-        generate_partial_round::<F, LinearLayers, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
+        generate_partial_round::<_, LinearLayers, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state,
             partial_round,
             *constant,
@@ -186,7 +187,7 @@ fn generate_trace_rows_for_perm<
         .iter_mut()
         .zip(&constants.ending_full_round_constants)
     {
-        generate_full_round::<F, LinearLayers, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
+        generate_full_round::<_, LinearLayers, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state, full_round, constants,
         );
     }
@@ -204,12 +205,16 @@ fn generate_full_round<
     full_round: &mut FullRound<MaybeUninit<F>, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>,
     round_constants: &[F; WIDTH],
 ) {
-    for (state_i, const_i) in state.iter_mut().zip(round_constants) {
+    // Combine addition of round constants and S-box application in a single loop
+    for ((state_i, const_i), sbox_i) in state
+        .iter_mut()
+        .zip(round_constants.iter())
+        .zip(full_round.sbox.iter_mut())
+    {
         *state_i += *const_i;
-    }
-    for (state_i, sbox_i) in state.iter_mut().zip(full_round.sbox.iter_mut()) {
         generate_sbox(sbox_i, state_i);
     }
+
     LinearLayers::external_linear_layer(state);
     full_round
         .post

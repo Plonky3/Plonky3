@@ -4,12 +4,15 @@ use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{Field, FieldAlgebra, PackedField, PackedFieldPow2, PackedValue};
+use p3_field::{
+    Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
+    PermutationMonomial, PrimeCharacteristicRing,
+};
 use p3_util::convert_vec;
-use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 
-use crate::{FieldParameters, MontyField31, PackedMontyParameters};
+use crate::{FieldParameters, MontyField31, PackedMontyParameters, RelativelyPrimePower};
 
 const WIDTH: usize = 8;
 
@@ -45,13 +48,15 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX2<PMP> {
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid `MontyField31<FP>`.
     /// In particular, each element of vector must be in `0..P` (canonical form).
     pub(crate) unsafe fn from_vector(vector: __m256i) -> Self {
-        // Safety: It is up to the user to ensure that elements of `vector` represent valid
-        // `MontyField31<FP>` values. We must only reason about memory representations. `__m256i` can be
-        // transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which can
-        // be transmuted to `[MontyField31<FP>; WIDTH]` (since `MontyField31<FP>` is `repr(transparent)`), which in
-        // turn can be transmuted to `PackedMontyField31AVX2<FP>` (since `PackedMontyField31AVX2<FP>` is also
-        // `repr(transparent)`).
-        transmute(vector)
+        unsafe {
+            // Safety: It is up to the user to ensure that elements of `vector` represent valid
+            // `MontyField31<FP>` values. We must only reason about memory representations. `__m256i` can be
+            // transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which can
+            // be transmuted to `[MontyField31<FP>; WIDTH]` (since `MontyField31<FP>` is `repr(transparent)`), which in
+            // turn can be transmuted to `PackedMontyField31AVX2<FP>` (since `PackedMontyField31AVX2<FP>` is also
+            // `repr(transparent)`).
+            transmute(vector)
+        }
     }
 
     /// Copy `value` to all positions in a packed vector. This is the same as
@@ -345,17 +350,19 @@ pub(crate) unsafe fn apply_func_to_even_odd<MPAVX2: MontyParametersAVX2>(
     input: __m256i,
     func: fn(__m256i) -> __m256i,
 ) -> __m256i {
-    let input_evn = input;
-    let input_odd = movehdup_epi32(input);
+    unsafe {
+        let input_evn = input;
+        let input_odd = movehdup_epi32(input);
 
-    let d_evn = func(input_evn);
-    let d_odd = func(input_odd);
+        let d_evn = func(input_evn);
+        let d_odd = func(input_odd);
 
-    let d_evn_hi = movehdup_epi32(d_evn);
-    let t = x86_64::_mm256_blend_epi32::<0b10101010>(d_evn_hi, d_odd);
+        let d_evn_hi = movehdup_epi32(d_evn);
+        let t = x86_64::_mm256_blend_epi32::<0b10101010>(d_evn_hi, d_odd);
 
-    let u = x86_64::_mm256_add_epi32(t, MPAVX2::PACKED_P);
-    x86_64::_mm256_min_epu32(t, u)
+        let u = x86_64::_mm256_add_epi32(t, MPAVX2::PACKED_P);
+        x86_64::_mm256_min_epu32(t, u)
+    }
 }
 
 /// Negate a vector of MontyField31 field elements in canonical form.
@@ -469,8 +476,8 @@ impl<FP: FieldParameters> Product for PackedMontyField31AVX2<FP> {
     }
 }
 
-impl<FP: FieldParameters> FieldAlgebra for PackedMontyField31AVX2<FP> {
-    type F = MontyField31<FP>;
+impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX2<FP> {
+    type PrimeSubfield = MontyField31<FP>;
 
     const ZERO: Self = Self::broadcast(MontyField31::ZERO);
     const ONE: Self = Self::broadcast(MontyField31::ONE);
@@ -478,42 +485,8 @@ impl<FP: FieldParameters> FieldAlgebra for PackedMontyField31AVX2<FP> {
     const NEG_ONE: Self = Self::broadcast(MontyField31::NEG_ONE);
 
     #[inline]
-    fn from_f(f: Self::F) -> Self {
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f.into()
-    }
-
-    #[inline]
-    fn from_bool(b: bool) -> Self {
-        MontyField31::from_bool(b).into()
-    }
-    #[inline]
-    fn from_canonical_u8(n: u8) -> Self {
-        MontyField31::from_canonical_u8(n).into()
-    }
-    #[inline]
-    fn from_canonical_u16(n: u16) -> Self {
-        MontyField31::from_canonical_u16(n).into()
-    }
-    #[inline]
-    fn from_canonical_u32(n: u32) -> Self {
-        MontyField31::from_canonical_u32(n).into()
-    }
-    #[inline]
-    fn from_canonical_u64(n: u64) -> Self {
-        MontyField31::from_canonical_u64(n).into()
-    }
-    #[inline]
-    fn from_canonical_usize(n: usize) -> Self {
-        MontyField31::from_canonical_usize(n).into()
-    }
-
-    #[inline]
-    fn from_wrapped_u32(n: u32) -> Self {
-        MontyField31::from_wrapped_u32(n).into()
-    }
-    #[inline]
-    fn from_wrapped_u64(n: u64) -> Self {
-        MontyField31::from_wrapped_u64(n).into()
     }
 
     #[inline]
@@ -562,7 +535,22 @@ impl<FP: FieldParameters> FieldAlgebra for PackedMontyField31AVX2<FP> {
     #[inline(always)]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { convert_vec(Self::F::zero_vec(len * WIDTH)) }
+        unsafe { convert_vec(MontyField31::<FP>::zero_vec(len * WIDTH)) }
+    }
+}
+
+impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31AVX2<FP> {}
+
+impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> InjectiveMonomial<D>
+    for PackedMontyField31AVX2<FP>
+{
+}
+
+impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> PermutationMonomial<D>
+    for PackedMontyField31AVX2<FP>
+{
+    fn injective_exp_root_n(&self) -> Self {
+        FP::exp_root_d(*self)
     }
 }
 
@@ -664,10 +652,10 @@ impl<PMP: PackedMontyParameters> Sub<PackedMontyField31AVX2<PMP>> for MontyField
     }
 }
 
-impl<PMP: PackedMontyParameters> Distribution<PackedMontyField31AVX2<PMP>> for Standard {
+impl<PMP: PackedMontyParameters> Distribution<PackedMontyField31AVX2<PMP>> for StandardUniform {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMontyField31AVX2<PMP> {
-        PackedMontyField31AVX2::<PMP>(rng.gen())
+        PackedMontyField31AVX2::<PMP>(rng.random())
     }
 }
 

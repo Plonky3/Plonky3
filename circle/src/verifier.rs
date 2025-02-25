@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field};
@@ -30,10 +30,10 @@ where
         .iter()
         .map(|comm| {
             challenger.observe(comm.clone());
-            challenger.sample_ext_element()
+            challenger.sample_algebra_element()
         })
         .collect();
-    challenger.observe_ext_element(proof.final_poly);
+    challenger.observe_algebra_element(proof.final_poly);
 
     if proof.query_proofs.len() != config.num_queries {
         return Err(FriError::InvalidProofShape);

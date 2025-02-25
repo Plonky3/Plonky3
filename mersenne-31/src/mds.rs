@@ -6,10 +6,11 @@
 //! work by Angus Gruen and Hamish Ivey-Law. Other sizes are from Ulrich Haböck's
 //! database.
 
-use p3_field::FieldAlgebra;
+use p3_field::PrimeCharacteristicRing;
+use p3_field::integers::QuotientMap;
+use p3_mds::MdsPermutation;
 use p3_mds::karatsuba_convolution::Convolve;
 use p3_mds::util::{dot_product, first_row_to_first_col};
-use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
 
 use crate::Mersenne31;
@@ -49,7 +50,7 @@ impl Convolve<Mersenne31, i64, i64, i64> for SmallConvolveMersenne31 {
     #[inline(always)]
     fn reduce(z: i64) -> Mersenne31 {
         debug_assert!(z >= 0);
-        Mersenne31::from_wrapped_u64(z as u64)
+        Mersenne31::from_u64(z as u64)
     }
 }
 
@@ -125,12 +126,18 @@ impl Convolve<Mersenne31, i64, i64, i64> for LargeConvolveMersenne31 {
         const MASK: i64 = (1 << 31) - 1;
         // Morally, our value is a i62 not a i64 as the top 3 bits are
         // guaranteed to be equal.
-        let low_bits = Mersenne31::from_canonical_u32((z & MASK) as u32);
+        let low_bits = unsafe {
+            // This is safe as 0 <= z & MASK < 2^31
+            Mersenne31::from_canonical_unchecked((z & MASK) as u32)
+        };
+
         let high_bits = ((z >> 31) & MASK) as i32;
         let sign_bits = (z >> 62) as i32;
 
-        // Note that high_bits + sign_bits > 0 as by assumption b[63] = b[61].
-        let high = Mersenne31::from_canonical_u32((high_bits + sign_bits) as u32);
+        let high = unsafe {
+            // This is safe as high_bits + sign_bits > 0 as by assumption b[63] = b[61].
+            Mersenne31::from_canonical_unchecked((high_bits + sign_bits) as u32)
+        };
         low_bits + high
     }
 }
@@ -261,98 +268,89 @@ impl MdsPermutation<Mersenne31, 64> for MdsMatrixMersenne31 {}
 
 #[cfg(test)]
 mod tests {
-    use p3_field::FieldAlgebra;
     use p3_symmetric::Permutation;
 
     use super::{MdsMatrixMersenne31, Mersenne31};
 
     #[test]
     fn mersenne8() {
-        let input: [Mersenne31; 8] = [
+        let input: [Mersenne31; 8] = Mersenne31::new_array([
             1741044457, 327154658, 318297696, 1528828225, 468360260, 1271368222, 1906288587,
             1521884224,
-        ]
-        .map(Mersenne31::from_canonical_u64);
+        ]);
 
         let output = MdsMatrixMersenne31.permute(input);
 
-        let expected: [Mersenne31; 8] = [
+        let expected: [Mersenne31; 8] = Mersenne31::new_array([
             895992680, 1343855369, 2107796831, 266468728, 846686506, 252887121, 205223309,
             260248790,
-        ]
-        .map(Mersenne31::from_canonical_u64);
+        ]);
 
         assert_eq!(output, expected);
     }
 
     #[test]
     fn mersenne12() {
-        let input: [Mersenne31; 12] = [
+        let input: [Mersenne31; 12] = Mersenne31::new_array([
             1232740094, 661555540, 11024822, 1620264994, 471137070, 276755041, 1316882747,
             1023679816, 1675266989, 743211887, 44774582, 1990989306,
-        ]
-        .map(Mersenne31::from_canonical_u64);
+        ]);
 
         let output = MdsMatrixMersenne31.permute(input);
 
-        let expected: [Mersenne31; 12] = [
+        let expected: [Mersenne31; 12] = Mersenne31::new_array([
             860812289, 399778981, 1228500858, 798196553, 673507779, 1116345060, 829764188,
             138346433, 578243475, 553581995, 578183208, 1527769050,
-        ]
-        .map(Mersenne31::from_canonical_u64);
+        ]);
 
         assert_eq!(output, expected);
     }
 
     #[test]
     fn mersenne16() {
-        let input: [Mersenne31; 16] = [
+        let input: [Mersenne31; 16] = Mersenne31::new_array([
             1431168444, 963811518, 88067321, 381314132, 908628282, 1260098295, 980207659,
             150070493, 357706876, 2014609375, 387876458, 1621671571, 183146044, 107201572,
             166536524, 2078440788,
-        ]
-        .map(Mersenne31::from_canonical_u64);
+        ]);
 
         let output = MdsMatrixMersenne31.permute(input);
 
-        let expected: [Mersenne31; 16] = [
+        let expected: [Mersenne31; 16] = Mersenne31::new_array([
             1858869691, 1607793806, 1200396641, 1400502985, 1511630695, 187938132, 1332411488,
             2041577083, 2014246632, 802022141, 796807132, 1647212930, 813167618, 1867105010,
             508596277, 1457551581,
-        ]
-        .map(Mersenne31::from_canonical_u64);
+        ]);
 
         assert_eq!(output, expected);
     }
 
     #[test]
     fn mersenne32() {
-        let input: [Mersenne31; 32] = [
+        let input: [Mersenne31; 32] = Mersenne31::new_array([
             873912014, 1112497426, 300405095, 4255553, 1234979949, 156402357, 1952135954,
             718195399, 1041748465, 683604342, 184275751, 1184118518, 214257054, 1293941921,
             64085758, 710448062, 1133100009, 350114887, 1091675272, 671421879, 1226105999,
             546430131, 1298443967, 1787169653, 2129310791, 1560307302, 471771931, 1191484402,
             1550203198, 1541319048, 229197040, 839673789,
-        ]
-        .map(Mersenne31::from_canonical_u64);
+        ]);
 
         let output = MdsMatrixMersenne31.permute(input);
 
-        let expected: [Mersenne31; 32] = [
+        let expected: [Mersenne31; 32] = Mersenne31::new_array([
             1439049928, 890642852, 694402307, 713403244, 553213342, 1049445650, 321709533,
             1195683415, 2118492257, 623077773, 96734062, 990488164, 1674607608, 749155000,
             353377854, 966432998, 1114654884, 1370359248, 1624965859, 685087760, 1631836645,
             1615931812, 2061986317, 1773551151, 1449911206, 1951762557, 545742785, 582866449,
             1379774336, 229242759, 1871227547, 752848413,
-        ]
-        .map(Mersenne31::from_canonical_u64);
+        ]);
 
         assert_eq!(output, expected);
     }
 
     #[test]
     fn mersenne64() {
-        let input: [Mersenne31; 64] = [
+        let input: [Mersenne31; 64] = Mersenne31::new_array([
             837269696, 1509031194, 413915480, 1889329185, 315502822, 1529162228, 1454661012,
             1015826742, 973381409, 1414676304, 1449029961, 1968715566, 2027226497, 1721820509,
             434042616, 1436005045, 1680352863, 651591867, 260585272, 1078022153, 703990572,
@@ -363,12 +361,11 @@ mod tests {
             608714758, 1553060084, 1558941605, 980281686, 2014426559, 650527801, 53015148,
             1521176057, 720530872, 713593252, 88228433, 1194162313, 1922416934, 1075145779,
             344403794,
-        ]
-        .map(Mersenne31::from_canonical_u64);
+        ]);
 
         let output = MdsMatrixMersenne31.permute(input);
 
-        let expected: [Mersenne31; 64] = [
+        let expected: [Mersenne31; 64] = Mersenne31::new_array([
             1599981950, 252630853, 1171557270, 116468420, 1269245345, 666203050, 46155642,
             1701131520, 530845775, 508460407, 630407239, 1731628135, 1199144768, 295132047,
             77536342, 1472377703, 30752443, 1300339617, 18647556, 1267774380, 1194573079,
@@ -379,8 +376,7 @@ mod tests {
             968523062, 1958918704, 1866282698, 849808680, 1193306222, 794153281, 822835360,
             135282913, 1149868448, 2068162123, 1474283743, 2039088058, 720305835, 746036736,
             671006610,
-        ]
-        .map(Mersenne31::from_canonical_u64);
+        ]);
 
         assert_eq!(output, expected);
     }

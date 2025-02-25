@@ -176,6 +176,6 @@ where
     (result_a, result_b)
 }
 
-pub fn current_num_threads() -> usize {
+pub const fn current_num_threads() -> usize {
     1
 }

@@ -14,8 +14,10 @@ pub enum DftChoice<F> {
 }
 
 impl<F: Default> Default for DftChoice<F> {
+    // We have to fix a default for the `TwoAdicSubgroupDft` trait. We choose `Radix2DitParallel` as one of the features
+    // of `RecursiveDft` is that it works better when initialized with knowledge of the expected size.
     fn default() -> Self {
-        DftChoice::<F>::Parallel(Radix2DitParallel::<F>::default())
+        Self::Parallel(Radix2DitParallel::<F>::default())
     }
 }
 
@@ -30,16 +32,16 @@ where
     #[inline]
     fn dft_batch(&self, mat: RowMajorMatrix<F>) -> Self::Evaluations {
         match self {
-            DftChoice::<F>::Recursive(inner_dft) => inner_dft.dft_batch(mat),
-            DftChoice::<F>::Parallel(inner_dft) => inner_dft.dft_batch(mat),
+            Self::Recursive(inner_dft) => inner_dft.dft_batch(mat),
+            Self::Parallel(inner_dft) => inner_dft.dft_batch(mat),
         }
     }
 
     #[inline]
     fn coset_dft_batch(&self, mat: RowMajorMatrix<F>, shift: F) -> Self::Evaluations {
         match self {
-            DftChoice::<F>::Recursive(inner_dft) => inner_dft.coset_dft_batch(mat, shift),
-            DftChoice::<F>::Parallel(inner_dft) => inner_dft.coset_dft_batch(mat, shift),
+            Self::Recursive(inner_dft) => inner_dft.coset_dft_batch(mat, shift),
+            Self::Parallel(inner_dft) => inner_dft.coset_dft_batch(mat, shift),
         }
     }
 
@@ -51,12 +53,8 @@ where
         shift: F,
     ) -> Self::Evaluations {
         match self {
-            DftChoice::<F>::Recursive(inner_dft) => {
-                inner_dft.coset_lde_batch(mat, added_bits, shift)
-            }
-            DftChoice::<F>::Parallel(inner_dft) => {
-                inner_dft.coset_lde_batch(mat, added_bits, shift)
-            }
+            Self::Recursive(inner_dft) => inner_dft.coset_lde_batch(mat, added_bits, shift),
+            Self::Parallel(inner_dft) => inner_dft.coset_lde_batch(mat, added_bits, shift),
         }
     }
 }

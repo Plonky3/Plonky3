@@ -7,7 +7,8 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use p3_field::{
-    batch_multiplicative_inverse, scale_vec, two_adic_coset_zerofier, ExtensionField, TwoAdicField,
+    ExtensionField, TwoAdicField, batch_multiplicative_inverse, scale_vec,
+    two_adic_coset_vanishing_polynomial,
 };
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
@@ -67,9 +68,14 @@ where
     };
     let sum = coset_evals.columnwise_dot_product(&col_scale);
 
-    let zerofier = two_adic_coset_zerofier::<EF>(log_height, EF::from_base(shift), point);
-    let denominator = F::from_canonical_usize(height) * shift.exp_u64(height as u64 - 1);
-    scale_vec(zerofier * denominator.inverse(), sum)
+    let vanishing_polynomial =
+        two_adic_coset_vanishing_polynomial::<EF>(log_height, shift.into(), point);
+
+    // In principle, height could be bigger than the characteristic of F.
+    let denominator = shift
+        .exp_u64(height as u64 - 1)
+        .mul_2exp_u64(log_height as u64);
+    scale_vec(vanishing_polynomial * denominator.inverse(), sum)
 }
 
 #[cfg(test)]
@@ -78,7 +84,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_field::{batch_multiplicative_inverse, Field, FieldAlgebra};
+    use p3_field::{Field, PrimeCharacteristicRing, batch_multiplicative_inverse};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_util::log2_strict_usize;
 
@@ -91,11 +97,11 @@ mod tests {
         let evals = [
             6, 886605102, 1443543107, 708307799, 2, 556938009, 569722818, 1874680944,
         ]
-        .map(F::from_canonical_u32);
+        .map(F::from_u32);
         let evals_mat = RowMajorMatrix::new(evals.to_vec(), 1);
-        let point = F::from_canonical_u32(100);
+        let point = F::from_u16(100);
         let result = interpolate_subgroup(&evals_mat, point);
-        assert_eq!(result, vec![F::from_canonical_u32(10203)]);
+        assert_eq!(result, vec![F::from_u16(10203)]);
     }
 
     #[test]
@@ -106,11 +112,11 @@ mod tests {
         let evals = [
             1026, 129027310, 457985035, 994890337, 902, 1988942953, 1555278970, 913671254,
         ]
-        .map(F::from_canonical_u32);
+        .map(F::from_u32);
         let evals_mat = RowMajorMatrix::new(evals.to_vec(), 1);
-        let point = F::from_canonical_u32(100);
+        let point = F::from_u16(100);
         let result = interpolate_coset(&evals_mat, shift, point, None);
-        assert_eq!(result, vec![F::from_canonical_u32(10203)]);
+        assert_eq!(result, vec![F::from_u16(10203)]);
 
         use p3_field::TwoAdicField;
         let n = evals.len();
@@ -124,6 +130,6 @@ mod tests {
 
         let denom = batch_multiplicative_inverse(&denom);
         let result = interpolate_coset(&evals_mat, shift, point, Some(&denom));
-        assert_eq!(result, vec![F::from_canonical_u32(10203)]);
+        assert_eq!(result, vec![F::from_u16(10203)]);
     }
 }

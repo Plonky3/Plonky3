@@ -5,12 +5,12 @@ use itertools::Itertools;
 use p3_air::{Air, BaseAir};
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{Field, FieldAlgebra, FieldExtensionAlgebra};
+use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use tracing::instrument;
 
-use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
+use crate::symbolic_builder::{SymbolicAirBuilder, get_log_quotient_degree};
 use crate::{PcsError, Proof, StarkGenericConfig, Val, VerifierConstraintFolder};
 
 #[instrument(skip_all)]
@@ -49,13 +49,13 @@ where
         && opened_values
             .quotient_chunks
             .iter()
-            .all(|qc| qc.len() == <SC::Challenge as FieldExtensionAlgebra<Val<SC>>>::D);
+            .all(|qc| qc.len() == <SC::Challenge as BasedVectorSpace<Val<SC>>>::DIMENSION);
     if !valid_shape {
         return Err(VerificationError::InvalidProofShape);
     }
 
     // Observe the instance.
-    challenger.observe(Val::<SC>::from_canonical_usize(proof.degree_bits));
+    challenger.observe(Val::<SC>::from_usize(proof.degree_bits));
     // TODO: Might be best practice to include other instance data here in the transcript, like some
     // encoding of the AIR. This protects against transcript collisions between distinct instances.
     // Practically speaking though, the only related known attack is from failing to include public
@@ -64,7 +64,7 @@ where
 
     challenger.observe(commitments.trace.clone());
     challenger.observe_slice(public_values);
-    let alpha: SC::Challenge = challenger.sample_ext_element();
+    let alpha: SC::Challenge = challenger.sample_algebra_element();
     challenger.observe(commitments.quotient_chunks.clone());
 
     let zeta: SC::Challenge = challenger.sample();
@@ -105,8 +105,10 @@ where
                 .enumerate()
                 .filter(|(j, _)| *j != i)
                 .map(|(_, other_domain)| {
-                    other_domain.zp_at_point(zeta)
-                        * other_domain.zp_at_point(domain.first_point()).inverse()
+                    other_domain.vanishing_poly_at_point(zeta)
+                        * other_domain
+                            .vanishing_poly_at_point(domain.first_point())
+                            .inverse()
                 })
                 .product::<SC::Challenge>()
         })
@@ -117,10 +119,11 @@ where
         .iter()
         .enumerate()
         .map(|(ch_i, ch)| {
-            ch.iter()
-                .enumerate()
-                .map(|(e_i, &c)| zps[ch_i] * SC::Challenge::monomial(e_i) * c)
-                .sum::<SC::Challenge>()
+            zps[ch_i]
+                * ch.iter()
+                    .enumerate()
+                    .map(|(e_i, &c)| SC::Challenge::ith_basis_element(e_i) * c)
+                    .sum::<SC::Challenge>()
         })
         .sum::<SC::Challenge>();
 
@@ -145,7 +148,7 @@ where
 
     // Finally, check that
     //     folded_constraints(zeta) / Z_H(zeta) = quotient(zeta)
-    if folded_constraints * sels.inv_zeroifier != quotient {
+    if folded_constraints * sels.inv_vanishing != quotient {
         return Err(VerificationError::OodEvaluationMismatch);
     }
 

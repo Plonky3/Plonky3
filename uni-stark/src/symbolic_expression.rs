@@ -4,7 +4,7 @@ use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{Field, FieldAlgebra};
+use p3_field::{Algebra, Field, InjectiveMonomial, PrimeCharacteristicRing};
 
 use crate::symbolic_variable::SymbolicVariable;
 
@@ -41,21 +41,19 @@ impl<F> SymbolicExpression<F> {
     /// Returns the multiple of `n` (the trace length) in this expression's degree.
     pub const fn degree_multiple(&self) -> usize {
         match self {
-            SymbolicExpression::Variable(v) => v.degree_multiple(),
-            SymbolicExpression::IsFirstRow => 1,
-            SymbolicExpression::IsLastRow => 1,
-            SymbolicExpression::IsTransition => 0,
-            SymbolicExpression::Constant(_) => 0,
-            SymbolicExpression::Add {
+            Self::Variable(v) => v.degree_multiple(),
+            Self::IsFirstRow | Self::IsLastRow => 1,
+            Self::IsTransition | Self::Constant(_) => 0,
+            Self::Add {
                 degree_multiple, ..
-            } => *degree_multiple,
-            SymbolicExpression::Sub {
+            }
+            | Self::Sub {
                 degree_multiple, ..
-            } => *degree_multiple,
-            SymbolicExpression::Neg {
+            }
+            | Self::Neg {
                 degree_multiple, ..
-            } => *degree_multiple,
-            SymbolicExpression::Mul {
+            }
+            | Self::Mul {
                 degree_multiple, ..
             } => *degree_multiple,
         }
@@ -74,8 +72,8 @@ impl<F: Field> From<F> for SymbolicExpression<F> {
     }
 }
 
-impl<F: Field> FieldAlgebra for SymbolicExpression<F> {
-    type F = F;
+impl<F: Field> PrimeCharacteristicRing for SymbolicExpression<F> {
+    type PrimeSubfield = F::PrimeSubfield;
 
     const ZERO: Self = Self::Constant(F::ZERO);
     const ONE: Self = Self::Constant(F::ONE);
@@ -83,42 +81,18 @@ impl<F: Field> FieldAlgebra for SymbolicExpression<F> {
     const NEG_ONE: Self = Self::Constant(F::NEG_ONE);
 
     #[inline]
-    fn from_f(f: Self::F) -> Self {
-        f.into()
-    }
-
-    fn from_bool(b: bool) -> Self {
-        Self::Constant(F::from_bool(b))
-    }
-
-    fn from_canonical_u8(n: u8) -> Self {
-        Self::Constant(F::from_canonical_u8(n))
-    }
-
-    fn from_canonical_u16(n: u16) -> Self {
-        Self::Constant(F::from_canonical_u16(n))
-    }
-
-    fn from_canonical_u32(n: u32) -> Self {
-        Self::Constant(F::from_canonical_u32(n))
-    }
-
-    fn from_canonical_u64(n: u64) -> Self {
-        Self::Constant(F::from_canonical_u64(n))
-    }
-
-    fn from_canonical_usize(n: usize) -> Self {
-        Self::Constant(F::from_canonical_usize(n))
-    }
-
-    fn from_wrapped_u32(n: u32) -> Self {
-        Self::Constant(F::from_wrapped_u32(n))
-    }
-
-    fn from_wrapped_u64(n: u64) -> Self {
-        Self::Constant(F::from_wrapped_u64(n))
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
+        F::from_prime_subfield(f).into()
     }
 }
+
+impl<F: Field> Algebra<F> for SymbolicExpression<F> {}
+
+impl<F: Field> Algebra<SymbolicVariable<F>> for SymbolicExpression<F> {}
+
+// Note we cannot implement PermutationMonomial due to the degree_multiple part which makes
+// operations non invertible.
+impl<F: Field + InjectiveMonomial<N>, const N: u64> InjectiveMonomial<N> for SymbolicExpression<F> {}
 
 impl<F: Field, T> Add<T> for SymbolicExpression<F>
 where

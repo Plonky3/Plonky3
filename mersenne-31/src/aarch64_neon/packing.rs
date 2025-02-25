@@ -4,10 +4,14 @@ use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{Field, FieldAlgebra, PackedField, PackedFieldPow2, PackedValue};
+use p3_field::exponentiation::exp_1717986917;
+use p3_field::{
+    Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
+    PermutationMonomial, PrimeCharacteristicRing,
+};
 use p3_util::convert_vec;
-use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 
 use crate::Mersenne31;
 
@@ -308,8 +312,8 @@ impl Product for PackedMersenne31Neon {
     }
 }
 
-impl FieldAlgebra for PackedMersenne31Neon {
-    type F = Mersenne31;
+impl PrimeCharacteristicRing for PackedMersenne31Neon {
+    type PrimeSubfield = Mersenne31;
 
     const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
     const ONE: Self = Self::broadcast(Mersenne31::ONE);
@@ -317,48 +321,30 @@ impl FieldAlgebra for PackedMersenne31Neon {
     const NEG_ONE: Self = Self::broadcast(Mersenne31::NEG_ONE);
 
     #[inline]
-    fn from_f(f: Self::F) -> Self {
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f.into()
-    }
-
-    #[inline]
-    fn from_bool(b: bool) -> Self {
-        Mersenne31::from_bool(b).into()
-    }
-    #[inline]
-    fn from_canonical_u8(n: u8) -> Self {
-        Mersenne31::from_canonical_u8(n).into()
-    }
-    #[inline]
-    fn from_canonical_u16(n: u16) -> Self {
-        Mersenne31::from_canonical_u16(n).into()
-    }
-    #[inline]
-    fn from_canonical_u32(n: u32) -> Self {
-        Mersenne31::from_canonical_u32(n).into()
-    }
-    #[inline]
-    fn from_canonical_u64(n: u64) -> Self {
-        Mersenne31::from_canonical_u64(n).into()
-    }
-    #[inline]
-    fn from_canonical_usize(n: usize) -> Self {
-        Mersenne31::from_canonical_usize(n).into()
-    }
-
-    #[inline]
-    fn from_wrapped_u32(n: u32) -> Self {
-        Mersenne31::from_wrapped_u32(n).into()
-    }
-    #[inline]
-    fn from_wrapped_u64(n: u64) -> Self {
-        Mersenne31::from_wrapped_u64(n).into()
     }
 
     #[inline(always)]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { convert_vec(Self::F::zero_vec(len * WIDTH)) }
+        unsafe { convert_vec(Mersenne31::zero_vec(len * WIDTH)) }
+    }
+}
+
+impl Algebra<Mersenne31> for PackedMersenne31Neon {}
+
+// Degree of the smallest permutation polynomial for Mersenne31.
+//
+// As p - 1 = 2×3^2×7×11×... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
+impl InjectiveMonomial<5> for PackedMersenne31Neon {}
+
+impl PermutationMonomial<5> for PackedMersenne31Neon {
+    /// In the field `Mersenne31`, `a^{1/5}` is equal to a^{1717986917}.
+    ///
+    /// This follows from the calculation `5 * 1717986917 = 4*(2^31 - 2) + 1 = 1 mod p - 1`.
+    fn injective_exp_root_n(&self) -> Self {
+        exp_1717986917(*self)
     }
 }
 
@@ -460,10 +446,10 @@ impl Sub<PackedMersenne31Neon> for Mersenne31 {
     }
 }
 
-impl Distribution<PackedMersenne31Neon> for Standard {
+impl Distribution<PackedMersenne31Neon> for StandardUniform {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMersenne31Neon {
-        PackedMersenne31Neon(rng.gen())
+        PackedMersenne31Neon(rng.random())
     }
 }
 
@@ -571,14 +557,13 @@ mod tests {
     use p3_field_testing::test_packed_field;
 
     use super::{Mersenne31, WIDTH};
-    use crate::to_mersenne31_array;
 
     /// Zero has a redundant representation, so let's test both.
     const ZEROS: [Mersenne31; WIDTH] =
-        to_mersenne31_array([0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff]);
+        Mersenne31::new_array([0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff]);
 
     const SPECIAL_VALS: [Mersenne31; WIDTH] =
-        to_mersenne31_array([0x00000000, 0x00000001, 0x00000002, 0x7ffffffe]);
+        Mersenne31::new_array([0x00000000, 0x00000001, 0x00000002, 0x7ffffffe]);
 
     test_packed_field!(
         crate::PackedMersenne31Neon,

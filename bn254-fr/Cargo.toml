@@ -1,7 +1,7 @@
 [package]
 name = "p3-bn254-fr"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
@@ -11,6 +11,7 @@ p3-symmetric.workspace = true
 
 ff = { workspace = true, features = ["derive", "derive_bits"] }
 num-bigint.workspace = true
+paste.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 halo2curves = { workspace = true, features = ["bits", "derive_serde"] }

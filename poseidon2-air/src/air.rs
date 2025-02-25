@@ -2,11 +2,11 @@ use core::borrow::Borrow;
 use core::marker::PhantomData;
 
 use p3_air::{Air, AirBuilder, BaseAir};
-use p3_field::{Field, FieldAlgebra};
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
 
-use crate::columns::{num_cols, Poseidon2Cols};
+use crate::columns::{Poseidon2Cols, num_cols};
 use crate::constants::RoundConstants;
 use crate::{FullRound, PartialRound, SBox};
 
@@ -26,14 +26,14 @@ pub struct Poseidon2Air<
 }
 
 impl<
-        F: Field,
-        LinearLayers,
-        const WIDTH: usize,
-        const SBOX_DEGREE: u64,
-        const SBOX_REGISTERS: usize,
-        const HALF_FULL_ROUNDS: usize,
-        const PARTIAL_ROUNDS: usize,
-    >
+    F: Field,
+    LinearLayers,
+    const WIDTH: usize,
+    const SBOX_DEGREE: u64,
+    const SBOX_REGISTERS: usize,
+    const HALF_FULL_ROUNDS: usize,
+    const PARTIAL_ROUNDS: usize,
+>
     Poseidon2Air<
         F,
         LinearLayers,
@@ -44,7 +44,9 @@ impl<
         PARTIAL_ROUNDS,
     >
 {
-    pub fn new(constants: RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>) -> Self {
+    pub const fn new(
+        constants: RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
+    ) -> Self {
         Self {
             constants,
             _phantom: PhantomData,
@@ -53,14 +55,14 @@ impl<
 }
 
 impl<
-        F: Field,
-        LinearLayers: Sync,
-        const WIDTH: usize,
-        const SBOX_DEGREE: u64,
-        const SBOX_REGISTERS: usize,
-        const HALF_FULL_ROUNDS: usize,
-        const PARTIAL_ROUNDS: usize,
-    > BaseAir<F>
+    F: Field,
+    LinearLayers: Sync,
+    const WIDTH: usize,
+    const SBOX_DEGREE: u64,
+    const SBOX_REGISTERS: usize,
+    const HALF_FULL_ROUNDS: usize,
+    const PARTIAL_ROUNDS: usize,
+> BaseAir<F>
     for Poseidon2Air<
         F,
         LinearLayers,
@@ -104,12 +106,12 @@ pub(crate) fn eval<
         PARTIAL_ROUNDS,
     >,
 ) {
-    let mut state: [AB::Expr; WIDTH] = local.inputs.map(|x| x.into());
+    let mut state: [_; WIDTH] = local.inputs.map(|x| x.into());
 
     LinearLayers::external_linear_layer(&mut state);
 
     for round in 0..HALF_FULL_ROUNDS {
-        eval_full_round::<AB, LinearLayers, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
+        eval_full_round::<_, LinearLayers, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state,
             &local.beginning_full_rounds[round],
             &air.constants.beginning_full_round_constants[round],
@@ -118,7 +120,7 @@ pub(crate) fn eval<
     }
 
     for round in 0..PARTIAL_ROUNDS {
-        eval_partial_round::<AB, LinearLayers, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
+        eval_partial_round::<_, LinearLayers, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state,
             &local.partial_rounds[round],
             &air.constants.partial_round_constants[round],
@@ -127,7 +129,7 @@ pub(crate) fn eval<
     }
 
     for round in 0..HALF_FULL_ROUNDS {
-        eval_full_round::<AB, LinearLayers, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
+        eval_full_round::<_, LinearLayers, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state,
             &local.ending_full_rounds[round],
             &air.constants.ending_full_round_constants[round],
@@ -137,14 +139,14 @@ pub(crate) fn eval<
 }
 
 impl<
-        AB: AirBuilder,
-        LinearLayers: GenericPoseidon2LinearLayers<AB::Expr, WIDTH>,
-        const WIDTH: usize,
-        const SBOX_DEGREE: u64,
-        const SBOX_REGISTERS: usize,
-        const HALF_FULL_ROUNDS: usize,
-        const PARTIAL_ROUNDS: usize,
-    > Air<AB>
+    AB: AirBuilder,
+    LinearLayers: GenericPoseidon2LinearLayers<AB::Expr, WIDTH>,
+    const WIDTH: usize,
+    const SBOX_DEGREE: u64,
+    const SBOX_REGISTERS: usize,
+    const HALF_FULL_ROUNDS: usize,
+    const PARTIAL_ROUNDS: usize,
+> Air<AB>
     for Poseidon2Air<
         AB::F,
         LinearLayers,
@@ -159,24 +161,11 @@ impl<
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
         let local = main.row_slice(0);
-        let local: &Poseidon2Cols<
-            AB::Var,
-            WIDTH,
-            SBOX_DEGREE,
-            SBOX_REGISTERS,
-            HALF_FULL_ROUNDS,
-            PARTIAL_ROUNDS,
-        > = (*local).borrow();
+        let local = (*local).borrow();
 
-        eval::<
-            AB,
-            LinearLayers,
-            WIDTH,
-            SBOX_DEGREE,
-            SBOX_REGISTERS,
-            HALF_FULL_ROUNDS,
-            PARTIAL_ROUNDS,
-        >(self, builder, local);
+        eval::<_, _, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>(
+            self, builder, local,
+        );
     }
 }
 
@@ -194,7 +183,7 @@ fn eval_full_round<
     builder: &mut AB,
 ) {
     for (i, (s, r)) in state.iter_mut().zip(round_constants.iter()).enumerate() {
-        *s = s.clone() + *r;
+        *s += *r;
         eval_sbox(&full_round.sbox[i], s, builder);
     }
     LinearLayers::external_linear_layer(state);
@@ -217,7 +206,7 @@ fn eval_partial_round<
     round_constant: &AB::F,
     builder: &mut AB,
 ) {
-    state[0] = state[0].clone() + *round_constant;
+    state[0] += *round_constant;
     eval_sbox(&partial_round.sbox, &mut state[0], builder);
 
     builder.assert_eq(state[0].clone(), partial_round.post_sbox);

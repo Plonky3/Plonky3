@@ -9,7 +9,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use itertools::izip;
-use p3_field::{Field, FieldAlgebra, PackedFieldPow2, PackedValue, TwoAdicField};
+use p3_field::{Field, PackedFieldPow2, PackedValue, PrimeCharacteristicRing, TwoAdicField};
 use p3_util::log2_strict_usize;
 
 use crate::utils::monty_reduce;
@@ -25,10 +25,10 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     /// packed and non-packed variants.
     pub fn roots_of_unity_table(n: usize) -> Vec<Vec<Self>> {
         let lg_n = log2_strict_usize(n);
-        let gen = Self::two_adic_generator(lg_n);
+        let generator = Self::two_adic_generator(lg_n);
         let half_n = 1 << (lg_n - 1);
         // nth_roots = [1, g, g^2, g^3, ..., g^{n/2 - 1}]
-        let nth_roots: Vec<_> = gen.powers().take(half_n).collect();
+        let nth_roots: Vec<_> = generator.powers().take(half_n).collect();
 
         (0..(lg_n - 1))
             .map(|i| nth_roots.iter().step_by(1 << i).copied().collect())
@@ -37,7 +37,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
 }
 
 #[inline(always)]
-fn forward_butterfly<T: FieldAlgebra + Copy>(x: T, y: T, roots: T) -> (T, T) {
+fn forward_butterfly<T: PrimeCharacteristicRing + Copy>(x: T, y: T, roots: T) -> (T, T) {
     let t = x - y;
     (x + y, t * roots)
 }
@@ -244,7 +244,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
 
         // Expanding the calculation of t3 saves one instruction
         let t1 = MP::PRIME + a[1].value - a[3].value;
-        let t3 = MontyField31::new_monty(monty_reduce::<MP>(
+        let t3 = Self::new_monty(monty_reduce::<MP>(
             t1 as u64 * MP::ROOTS_8.as_ref()[2].value as u64,
         ));
         let t5 = a[1] + a[3];

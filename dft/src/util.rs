@@ -1,8 +1,9 @@
 use core::borrow::BorrowMut;
 
 use p3_field::Field;
-use p3_matrix::dense::{DenseMatrix, DenseStorage, RowMajorMatrix};
+use p3_field::integers::QuotientMap;
 use p3_matrix::Matrix;
+use p3_matrix::dense::{DenseMatrix, DenseStorage, RowMajorMatrix};
 use tracing::instrument;
 
 /// Divide each coefficient of the given matrix by its height.
@@ -10,7 +11,10 @@ use tracing::instrument;
 pub fn divide_by_height<F: Field, S: DenseStorage<F> + BorrowMut<[F]>>(
     mat: &mut DenseMatrix<F, S>,
 ) {
-    mat.scale(F::from_canonical_usize(mat.height()).inverse())
+    // If F isn't a PrimeField, (and is thus an extension field) it's much cheaper to
+    // invert in F::PrimeSubfield.
+    let h_inv_subfield = F::PrimeSubfield::from_int(mat.height()).inverse();
+    mat.scale(F::from_prime_subfield(h_inv_subfield))
 }
 
 /// Multiply each element of row `i` of `mat` by `shift**i`.

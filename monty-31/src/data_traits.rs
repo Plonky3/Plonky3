@@ -1,7 +1,7 @@
 use core::fmt::Debug;
 use core::hash::Hash;
 
-use p3_field::{Field, FieldAlgebra};
+use p3_field::{Field, PrimeCharacteristicRing};
 
 use crate::MontyField31;
 
@@ -64,7 +64,7 @@ pub trait BarrettParameters: MontyParameters {
     const MASK: i64 = !((1 << 10) - 1); // Lets us 0 out the bottom 10 digits of an i64.
 }
 
-/// FieldParameters contains constants and methods needed to imply FieldAlgebra, Field and PrimeField32 for MontyField31.
+/// FieldParameters contains constants and methods needed to imply PrimeCharacteristicRing, Field and PrimeField32 for MontyField31.
 pub trait FieldParameters: PackedMontyParameters + Sized {
     // Simple field constants.
     const MONTY_ZERO: MontyField31<Self> = MontyField31::new(0);
@@ -77,8 +77,14 @@ pub trait FieldParameters: PackedMontyParameters + Sized {
 
     const HALF_P_PLUS_1: u32 = (Self::PRIME + 1) >> 1;
 
-    fn exp_u64_generic<FA: FieldAlgebra>(val: FA, power: u64) -> FA;
     fn try_inverse<F: Field>(p1: F) -> Option<F>;
+}
+
+/// An integer `D` such that `gcd(D, p - 1) = 1`.
+pub trait RelativelyPrimePower<const D: u64> {
+    /// Compute `x -> x^{1/D}` using the modular inverse
+    /// of `D mod p - 1`.
+    fn exp_root_d<R: PrimeCharacteristicRing>(val: R) -> R;
 }
 
 /// TwoAdicData contains constants needed to imply TwoAdicField for Monty31 fields.
@@ -118,7 +124,7 @@ pub trait TwoAdicData: MontyParameters {
 /// TODO: This should be deleted long term once we have improved our API for defining extension fields.
 /// This allows us to implement Binomial Extensions over Monty31 fields.
 pub trait BinomialExtensionData<const DEG: usize>: MontyParameters + Sized {
-    /// W is a value such that (x^DEG - WN) is irreducible.
+    /// W is a value such that (x^DEG - W) is irreducible.
     const W: MontyField31<Self>;
 
     /// DTH_ROOT = W^((p - 1)/DEG)

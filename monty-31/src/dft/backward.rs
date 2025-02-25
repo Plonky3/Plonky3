@@ -8,14 +8,14 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use itertools::izip;
-use p3_field::{Field, FieldAlgebra, PackedFieldPow2, PackedValue};
+use p3_field::{Field, PackedFieldPow2, PackedValue, PrimeCharacteristicRing};
 use p3_util::log2_strict_usize;
 
 use crate::utils::monty_reduce;
 use crate::{FieldParameters, MontyField31, TwoAdicData};
 
 #[inline(always)]
-fn backward_butterfly<T: FieldAlgebra + Copy>(x: T, y: T, roots: T) -> (T, T) {
+fn backward_butterfly<T: PrimeCharacteristicRing + Copy>(x: T, y: T, roots: T) -> (T, T) {
     let t = y * roots;
     (x + t, x - t)
 }
@@ -215,7 +215,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
 
         // Expanding the calculation of t3 saves one instruction
         let t1 = MP::PRIME + a1.value - a3.value;
-        let t3 = MontyField31::new_monty(monty_reduce::<MP>(
+        let t3 = Self::new_monty(monty_reduce::<MP>(
             t1 as u64 * MP::INV_ROOTS_8.as_ref()[2].value as u64,
         ));
         let t5 = a1 + a3;

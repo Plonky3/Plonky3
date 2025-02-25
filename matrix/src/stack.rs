@@ -127,8 +127,8 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            EitherRow::Left(l) => l.next(),
-            EitherRow::Right(r) => r.next(),
+            Self::Left(l) => l.next(),
+            Self::Right(r) => r.next(),
         }
     }
 }
@@ -141,8 +141,8 @@ where
     type Target = [T];
     fn deref(&self) -> &Self::Target {
         match self {
-            EitherRow::Left(l) => l,
-            EitherRow::Right(r) => r,
+            Self::Left(l) => l,
+            Self::Right(r) => r,
         }
     }
 }

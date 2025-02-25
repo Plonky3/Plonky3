@@ -8,12 +8,38 @@ pub(crate) const fn to_monty<MP: MontyParameters>(x: u32) -> u32 {
     (((x as u64) << MP::MONTY_BITS) % MP::PRIME as u64) as u32
 }
 
+/// Convert an i32 into MONTY form.
+/// There are no constraints on the input.
+/// The output will be a u32 in range [0, P).
+#[inline]
+pub(crate) const fn to_monty_signed<MP: MontyParameters>(x: i32) -> u32 {
+    let red = (((x as i64) << MP::MONTY_BITS) % MP::PRIME as i64) as i32;
+    if red >= 0 {
+        red as u32
+    } else {
+        MP::PRIME.wrapping_add_signed(red)
+    }
+}
+
 /// Convert a u64 into MONTY form.
 /// There are no constraints on the input.
 /// The output will be a u32 in range [0, P).
 #[inline]
 pub(crate) const fn to_monty_64<MP: MontyParameters>(x: u64) -> u32 {
     (((x as u128) << MP::MONTY_BITS) % MP::PRIME as u128) as u32
+}
+
+/// Convert an i64 into MONTY form.
+/// There are no constraints on the input.
+/// The output will be a u32 in range [0, P).
+#[inline]
+pub(crate) const fn to_monty_64_signed<MP: MontyParameters>(x: i64) -> u32 {
+    let red = (((x as i128) << MP::MONTY_BITS) % MP::PRIME as i128) as i32;
+    if red >= 0 {
+        red as u32
+    } else {
+        MP::PRIME.wrapping_add_signed(red)
+    }
 }
 
 /// Convert a u32 out of MONTY form.
@@ -33,11 +59,7 @@ pub(crate) const fn halve_u32<FP: FieldParameters>(input: u32) -> u32 {
     let shr = input >> 1;
     let lo_bit = input & 1;
     let shr_corr = shr + FP::HALF_P_PLUS_1;
-    if lo_bit == 0 {
-        shr
-    } else {
-        shr_corr
-    }
+    if lo_bit == 0 { shr } else { shr_corr }
 }
 
 /// Montgomery reduction of a value in `0..P << MONTY_BITS`.

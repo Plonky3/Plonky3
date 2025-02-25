@@ -8,8 +8,8 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::stack::HorizontalPair;
 use p3_matrix::{Dimensions, Matrix};
 use p3_symmetric::{CryptographicHasher, Hash, PseudoCompressionFunction};
-use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -59,16 +59,16 @@ where
     P: PackedValue,
     P::Value: Serialize + DeserializeOwned,
     PW: PackedValue,
-    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>,
-    H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
-    H: Sync,
-    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>,
-    C: PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
-    C: Sync,
+    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>
+        + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+        + Sync,
+    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>
+        + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>
+        + Sync,
     R: Rng + Clone,
     PW::Value: Eq,
     [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
-    Standard: Distribution<P::Value>,
+    StandardUniform: Distribution<P::Value>,
 {
     type ProverData<M> =
         MerkleTree<P::Value, PW::Value, HorizontalPair<M, RowMajorMatrix<P::Value>>, DIGEST_ELEMS>;
@@ -96,10 +96,7 @@ where
         &self,
         index: usize,
         prover_data: &Self::ProverData<M>,
-    ) -> (
-        Vec<Vec<P::Value>>,
-        (Vec<Vec<P::Value>>, Vec<[PW::Value; DIGEST_ELEMS]>),
-    ) {
+    ) -> (Vec<Vec<P::Value>>, Self::Proof) {
         let (salted_openings, siblings) = self.inner.open_batch(index, prover_data);
         let (openings, salts): (Vec<_>, Vec<_>) = salted_openings
             .into_iter()
@@ -146,11 +143,12 @@ mod tests {
     use itertools::Itertools;
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_commit::Mmcs;
-    use p3_field::{Field, FieldAlgebra};
-    use p3_matrix::dense::RowMajorMatrix;
+    use p3_field::{Field, PrimeCharacteristicRing};
     use p3_matrix::Matrix;
+    use p3_matrix::dense::RowMajorMatrix;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-    use rand::prelude::*;
+    use rand::prelude::ThreadRng;
+    use rand::rng;
 
     use super::MerkleTreeHidingMmcs;
     use crate::MerkleTreeError;
@@ -174,33 +172,27 @@ mod tests {
     #[test]
     #[should_panic]
     fn mismatched_heights() {
-        let mut rng = thread_rng();
-        let perm = Perm::new_from_rng_128(&mut rng);
+        let perm = Perm::new_from_rng_128(&mut rng());
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash, compress, thread_rng());
+        let mmcs = MyMmcs::new(hash, compress, rng());
 
         // attempt to commit to a mat with 8 rows and a mat with 7 rows. this should panic.
-        let large_mat = RowMajorMatrix::new(
-            [1, 2, 3, 4, 5, 6, 7, 8].map(F::from_canonical_u8).to_vec(),
-            1,
-        );
-        let small_mat =
-            RowMajorMatrix::new([1, 2, 3, 4, 5, 6, 7].map(F::from_canonical_u8).to_vec(), 1);
+        let large_mat = RowMajorMatrix::new([1, 2, 3, 4, 5, 6, 7, 8].map(F::from_u8).to_vec(), 1);
+        let small_mat = RowMajorMatrix::new([1, 2, 3, 4, 5, 6, 7].map(F::from_u8).to_vec(), 1);
         let _ = mmcs.commit(vec![large_mat, small_mat]);
     }
 
     #[test]
     fn different_widths() -> Result<(), MerkleTreeError> {
-        let mut rng = thread_rng();
-        let perm = Perm::new_from_rng_128(&mut rng);
+        let perm = Perm::new_from_rng_128(&mut rng());
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash, compress, thread_rng());
+        let mmcs = MyMmcs::new(hash, compress, rng());
 
         // 10 mats with 32 rows where the ith mat has i + 1 cols
         let mats = (0..10)
-            .map(|i| RowMajorMatrix::<F>::rand(&mut thread_rng(), 32, i + 1))
+            .map(|i| RowMajorMatrix::<F>::rand(&mut rng(), 32, i + 1))
             .collect_vec();
         let dims = mats.iter().map(|m| m.dimensions()).collect_vec();
 

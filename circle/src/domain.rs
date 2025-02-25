@@ -1,12 +1,12 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use itertools::{iterate, Itertools};
+use itertools::{Itertools, iterate};
 use p3_commit::{LagrangeSelectors, PolynomialSpace};
-use p3_field::extension::ComplexExtendable;
 use p3_field::ExtensionField;
-use p3_matrix::dense::RowMajorMatrix;
+use p3_field::extension::ComplexExtendable;
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use tracing::instrument;
 
@@ -57,15 +57,15 @@ impl<F: ComplexExtendable> CircleDomain<F> {
     fn is_standard(&self) -> bool {
         self.shift == Point::generator(self.log_n + 1)
     }
-    pub(crate) fn gen(&self) -> Point<F> {
+    pub(crate) fn subgroup_generator(&self) -> Point<F> {
         Point::generator(self.log_n - 1)
     }
     pub(crate) fn coset0(&self) -> impl Iterator<Item = Point<F>> {
-        let g = self.gen();
+        let g = self.subgroup_generator();
         iterate(self.shift, move |&p| p + g).take(1 << (self.log_n - 1))
     }
     fn coset1(&self) -> impl Iterator<Item = Point<F>> {
-        let g = self.gen();
+        let g = self.subgroup_generator();
         iterate(g - self.shift, move |&p| p + g).take(1 << (self.log_n - 1))
     }
     pub(crate) fn points(&self) -> impl Iterator<Item = Point<F>> {
@@ -74,22 +74,22 @@ impl<F: ComplexExtendable> CircleDomain<F> {
     pub(crate) fn nth_point(&self, idx: usize) -> Point<F> {
         let (idx, lsb) = (idx >> 1, idx & 1);
         if lsb == 0 {
-            self.shift + self.gen() * idx
+            self.shift + self.subgroup_generator() * idx
         } else {
-            -self.shift + self.gen() * (idx + 1)
+            -self.shift + self.subgroup_generator() * (idx + 1)
         }
     }
 
-    pub(crate) fn zeroifier<EF: ExtensionField<F>>(&self, at: Point<EF>) -> EF {
+    pub(crate) fn vanishing_poly<EF: ExtensionField<F>>(&self, at: Point<EF>) -> EF {
         at.v_n(self.log_n) - self.shift.v_n(self.log_n)
     }
 
     pub(crate) fn s_p<EF: ExtensionField<F>>(&self, p: Point<F>, at: Point<EF>) -> EF {
-        self.zeroifier(at) / p.v_tilde_p(at)
+        self.vanishing_poly(at) / p.v_tilde_p(at)
     }
 
     pub(crate) fn s_p_normalized<EF: ExtensionField<F>>(&self, p: Point<F>, at: Point<EF>) -> EF {
-        self.zeroifier(at) / (p.v_tilde_p(at) * p.s_p_at_p(self.log_n))
+        self.vanishing_poly(at) / (p.v_tilde_p(at) * p.s_p_at_p(self.log_n))
     }
 }
 
@@ -107,11 +107,7 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
     fn next_point<Ext: ExtensionField<Self::Val>>(&self, x: Ext) -> Option<Ext> {
         // Only in standard position do we have an algebraic expression to access the next point.
         if self.is_standard() {
-            Some(
-                (Point::from_projective_line(x) + Point::generator(self.log_n))
-                    .to_projective_line()
-                    .unwrap(),
-            )
+            (Point::from_projective_line(x) + Point::generator(self.log_n)).to_projective_line()
         } else {
             None
         }
@@ -139,9 +135,10 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
     fn split_domains(&self, num_chunks: usize) -> Vec<Self> {
         assert!(self.is_standard());
         let log_chunks = log2_strict_usize(num_chunks);
+        assert!(log_chunks <= self.log_n);
         self.points()
             .take(num_chunks)
-            .map(|shift| CircleDomain {
+            .map(|shift| Self {
                 log_n: self.log_n - log_chunks,
                 shift,
             })
@@ -167,8 +164,8 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             .collect()
     }
 
-    fn zp_at_point<Ext: ExtensionField<Self::Val>>(&self, point: Ext) -> Ext {
-        self.zeroifier(Point::from_projective_line(point))
+    fn vanishing_poly_at_point<Ext: ExtensionField<Self::Val>>(&self, point: Ext) -> Ext {
+        self.vanishing_poly(Point::from_projective_line(point))
     }
 
     fn selectors_at_point<Ext: ExtensionField<Self::Val>>(
@@ -180,7 +177,7 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             is_first_row: self.s_p(self.shift, point),
             is_last_row: self.s_p(-self.shift, point),
             is_transition: Ext::ONE - self.s_p_normalized(-self.shift, point),
-            inv_zeroifier: self.zeroifier(point).inverse(),
+            inv_vanishing: self.vanishing_poly(point).inverse(),
         }
     }
 
@@ -212,19 +209,15 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             is_first_row: sels.iter().map(|s| s.is_first_row).collect(),
             is_last_row: sels.iter().map(|s| s.is_last_row).collect(),
             is_transition: sels.iter().map(|s| s.is_transition).collect(),
-            inv_zeroifier: sels.iter().map(|s| s.inv_zeroifier).collect(),
+            inv_vanishing: sels.iter().map(|s| s.inv_vanishing).collect(),
         }
     }
 }
 
 // 0 1 2 .. len-1 len len len-1 .. 1 0 0 1 ..
-fn forward_backward_index(mut i: usize, len: usize) -> usize {
+const fn forward_backward_index(mut i: usize, len: usize) -> usize {
     i %= 2 * len;
-    if i < len {
-        i
-    } else {
-        2 * len - 1 - i
-    }
+    if i < len { i } else { 2 * len - 1 - i }
 }
 
 #[cfg(test)]
@@ -233,9 +226,9 @@ mod tests {
 
     use hashbrown::HashSet;
     use itertools::izip;
-    use p3_field::{batch_multiplicative_inverse, FieldAlgebra};
+    use p3_field::{PrimeCharacteristicRing, batch_multiplicative_inverse};
     use p3_mersenne_31::Mersenne31;
-    use rand::thread_rng;
+    use rand::rng;
 
     use super::*;
     use crate::CircleEvaluations;
@@ -284,11 +277,14 @@ mod tests {
 
         // zp is zero
         for p in d.points() {
-            assert_eq!(d.zp_at_point(p.to_projective_line().unwrap()), F::ZERO);
+            assert_eq!(
+                d.vanishing_poly_at_point(p.to_projective_line().unwrap()),
+                F::ZERO
+            );
         }
 
         // split domains
-        let evals = RowMajorMatrix::rand(&mut thread_rng(), n, width);
+        let evals = RowMajorMatrix::rand(&mut rng(), n, width);
         let orig: Vec<(Point<F>, Vec<F>)> = d
             .points()
             .zip(evals.rows().map(|r| r.collect_vec()))
@@ -345,7 +341,7 @@ mod tests {
             assert_eq!(sels.is_first_row[i], pt_sels.is_first_row);
             assert_eq!(sels.is_last_row[i], pt_sels.is_last_row);
             assert_eq!(sels.is_transition[i], pt_sels.is_transition);
-            assert_eq!(sels.inv_zeroifier[i], pt_sels.inv_zeroifier);
+            assert_eq!(sels.inv_vanishing[i], pt_sels.inv_vanishing);
             pt = coset.next_point(pt).unwrap();
         }
 
@@ -378,10 +374,10 @@ mod tests {
         assert_ne!(&is_transition[..n - 1], &vec![F::ZERO; n - 1]);
         assert_eq!(is_transition[n - 1], F::ZERO);
 
-        // Zeroifier coefficients look like [0.. (n times), 1, 0.. (n-1 times)]
+        // Vanishing polynomial coefficients look like [0.. (n times), 1, 0.. (n-1 times)]
         let z_coeffs = CircleEvaluations::from_natural_order(
             coset,
-            RowMajorMatrix::new_col(batch_multiplicative_inverse(&sels.inv_zeroifier)),
+            RowMajorMatrix::new_col(batch_multiplicative_inverse(&sels.inv_vanishing)),
         )
         .interpolate()
         .to_row_major_matrix()

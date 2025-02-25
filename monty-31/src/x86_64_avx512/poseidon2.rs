@@ -6,15 +6,16 @@ use core::marker::PhantomData;
 use core::mem::transmute;
 
 use p3_poseidon2::{
-    external_initial_permute_state, external_terminal_permute_state, sum_15, sum_23, ExternalLayer,
-    ExternalLayerConstants, ExternalLayerConstructor, InternalLayer, InternalLayerConstructor,
-    MDSMat4,
+    ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, InternalLayer,
+    InternalLayerConstructor, MDSMat4, external_initial_permute_state,
+    external_terminal_permute_state, sum_15, sum_23,
 };
 
 use super::{add, halve_avx512, sub};
 use crate::{
-    apply_func_to_even_odd, packed_exp_3, packed_exp_5, packed_exp_7, FieldParameters,
-    MontyField31, MontyParameters, PackedMontyField31AVX512, PackedMontyParameters,
+    FieldParameters, MontyField31, MontyParameters, PackedMontyField31AVX512,
+    PackedMontyParameters, RelativelyPrimePower, apply_func_to_even_odd, packed_exp_3,
+    packed_exp_5, packed_exp_7,
 };
 
 // In the internal layers, it is valuable to treat the first entry of the state differently
@@ -36,15 +37,17 @@ impl<PMP: PackedMontyParameters> InternalLayer16<PMP> {
     /// SAFETY: The caller must ensure that each element of `s_hi` represents a valid `MontyField31<PMP>`.
     /// In particular, each element of each vector must be in `[0, P)` (canonical form).
     unsafe fn to_packed_field_array(self) -> [PackedMontyField31AVX512<PMP>; 16] {
-        // Safety: It is up to the user to ensure that elements of `s_hi` represent valid
-        // `MontyField31<PMP>` values. We must only reason about memory representations.
-        // As described in packing.rs, PackedMontyField31AVX512<PMP> can be transmuted to and from `__m512i`.
+        unsafe {
+            // Safety: It is up to the user to ensure that elements of `s_hi` represent valid
+            // `MontyField31<PMP>` values. We must only reason about memory representations.
+            // As described in packing.rs, PackedMontyField31AVX512<PMP> can be transmuted to and from `__m512i`.
 
-        // `InternalLayer16` is `repr(C)` so its memory layout looks like:
-        // `[PackedMontyField31AVX512<PMP>, __m512i, ..., __m512i]`
-        // Thus as `__m512i` can be can be transmuted to `PackedMontyField31AVX512<FP>`,
-        // `InternalLayer16` can be transmuted to `[PackedMontyField31AVX512<FP>; 16]`.
-        transmute(self)
+            // `InternalLayer16` is `repr(C)` so its memory layout looks like:
+            // `[PackedMontyField31AVX512<PMP>, __m512i, ..., __m512i]`
+            // Thus as `__m512i` can be can be transmuted to `PackedMontyField31AVX512<FP>`,
+            // `InternalLayer16` can be transmuted to `[PackedMontyField31AVX512<FP>; 16]`.
+            transmute(self)
+        }
     }
 
     #[inline]
@@ -78,13 +81,15 @@ impl<PMP: PackedMontyParameters> InternalLayer24<PMP> {
     /// SAFETY: The caller must ensure that each element of `s_hi` represents a valid `MontyField31<PMP>`.
     /// In particular, each element of each vector must be in `[0, P)` (canonical form).
     unsafe fn to_packed_field_array(self) -> [PackedMontyField31AVX512<PMP>; 24] {
-        // Safety: As described in packing.rs, PackedMontyField31AVX512<PMP> can be transmuted to and from `__m512i`.
+        unsafe {
+            // Safety: As described in packing.rs, PackedMontyField31AVX512<PMP> can be transmuted to and from `__m512i`.
 
-        // `InternalLayer24` is `repr(C)` so its memory layout looks like:
-        // `[PackedMontyField31AVX512<PMP>, __m512i, ..., __m512i]`
-        // Thus as `__m512i` can be can be transmuted to `PackedMontyField31AVX512<FP>`,
-        // `InternalLayer24` can be transmuted to `[PackedMontyField31AVX512<FP>; 24]`.
-        transmute(self)
+            // `InternalLayer24` is `repr(C)` so its memory layout looks like:
+            // `[PackedMontyField31AVX512<PMP>, __m512i, ..., __m512i]`
+            // Thus as `__m512i` can be can be transmuted to `PackedMontyField31AVX512<FP>`,
+            // `InternalLayer24` can be transmuted to `[PackedMontyField31AVX512<FP>; 24]`.
+            transmute(self)
+        }
     }
 
     #[inline]
@@ -120,8 +125,7 @@ pub struct Poseidon2InternalLayerMonty31<
 }
 
 impl<FP: FieldParameters, const WIDTH: usize, ILP: InternalLayerParametersAVX512<FP, WIDTH>>
-    InternalLayerConstructor<PackedMontyField31AVX512<FP>>
-    for Poseidon2InternalLayerMonty31<FP, WIDTH, ILP>
+    InternalLayerConstructor<MontyField31<FP>> for Poseidon2InternalLayerMonty31<FP, WIDTH, ILP>
 {
     /// Construct an instance of Poseidon2InternalLayerMersenne31AVX2 from a vector containing
     /// the constants for each round. Internally, the constants are transformed into the
@@ -151,8 +155,7 @@ pub struct Poseidon2ExternalLayerMonty31<PMP: PackedMontyParameters, const WIDTH
     packed_terminal_external_constants: Vec<[__m512i; WIDTH]>,
 }
 
-impl<FP: FieldParameters, const WIDTH: usize>
-    ExternalLayerConstructor<PackedMontyField31AVX512<FP>, WIDTH>
+impl<FP: FieldParameters, const WIDTH: usize> ExternalLayerConstructor<MontyField31<FP>, WIDTH>
     for Poseidon2ExternalLayerMonty31<FP, WIDTH>
 {
     /// Construct an instance of Poseidon2ExternalLayerMersenne31AVX2 from a array of
@@ -243,8 +246,10 @@ pub trait InternalLayerParametersAVX512<PMP: PackedMontyParameters, const WIDTH:
     /// and have `add_sum` compute `sum - x` instead of `x + sum`.
     #[inline(always)]
     unsafe fn diagonal_mul(input: &mut Self::ArrayLike) {
-        Self::diagonal_mul_first_eight(input);
-        Self::diagonal_mul_remainder(input);
+        unsafe {
+            Self::diagonal_mul_first_eight(input);
+            Self::diagonal_mul_remainder(input);
+        }
     }
 
     /// # Safety
@@ -342,7 +347,7 @@ fn convert_to_vec_neg_form<MP: MontyParameters>(input: i32) -> __m512i {
 impl<FP, ILP, const D: u64> InternalLayer<PackedMontyField31AVX512<FP>, 16, D>
     for Poseidon2InternalLayerMonty31<FP, 16, ILP>
 where
-    FP: FieldParameters,
+    FP: FieldParameters + RelativelyPrimePower<D>,
     ILP: InternalLayerParametersAVX512<FP, 16, ArrayLike = [__m512i; 15]>,
 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
@@ -441,7 +446,7 @@ where
 impl<FP, const D: u64, const WIDTH: usize> ExternalLayer<PackedMontyField31AVX512<FP>, WIDTH, D>
     for Poseidon2ExternalLayerMonty31<FP, WIDTH>
 where
-    FP: FieldParameters,
+    FP: FieldParameters + RelativelyPrimePower<D>,
 {
     /// Perform the initial external layers of the Poseidon2 permutation on the given state.
     fn permute_state_initial(&self, state: &mut [PackedMontyField31AVX512<FP>; WIDTH]) {

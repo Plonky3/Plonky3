@@ -1,11 +1,11 @@
-use p3_mds::util::apply_circulant;
 use p3_mds::MdsPermutation;
+use p3_mds::util::apply_circulant;
 use p3_symmetric::Permutation;
 
 use crate::x86_64_avx2::packing::PackedGoldilocksAVX2;
 use crate::{
-    MdsMatrixGoldilocks, MATRIX_CIRC_MDS_12_SML_ROW, MATRIX_CIRC_MDS_16_SML_ROW,
-    MATRIX_CIRC_MDS_24_GOLDILOCKS, MATRIX_CIRC_MDS_8_SML_ROW,
+    MATRIX_CIRC_MDS_8_SML_ROW, MATRIX_CIRC_MDS_12_SML_ROW, MATRIX_CIRC_MDS_16_SML_ROW,
+    MATRIX_CIRC_MDS_24_GOLDILOCKS, MdsMatrixGoldilocks,
 };
 const fn convert_array<const N: usize>(arr: [i64; N]) -> [u64; N] {
     let mut result: [u64; N] = [0; N];
@@ -70,7 +70,6 @@ impl MdsPermutation<PackedGoldilocksAVX2, 24> for MdsMatrixGoldilocks {}
 
 #[cfg(test)]
 mod tests {
-    use p3_field::FieldAlgebra;
     use p3_poseidon::Poseidon;
     use p3_symmetric::Permutation;
     use rand::Rng;
@@ -79,17 +78,17 @@ mod tests {
 
     #[test]
     fn test_avx2_poseidon_width_8() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         type F = Goldilocks;
         type Perm = Poseidon<F, MdsMatrixGoldilocks, 8, 7>;
-        let poseidon = Perm::new_from_rng(4, 22, MdsMatrixGoldilocks, &mut rand::thread_rng());
+        let poseidon = Perm::new_from_rng(4, 22, MdsMatrixGoldilocks, &mut rand::rng());
 
-        let input: [F; 8] = rng.gen();
+        let input: [F; 8] = rng.random();
 
         let mut expected = input;
         poseidon.permute_mut(&mut expected);
 
-        let mut avx2_input = input.map(PackedGoldilocksAVX2::from_f);
+        let mut avx2_input = input.map(Into::<PackedGoldilocksAVX2>::into);
         poseidon.permute_mut(&mut avx2_input);
 
         let avx2_output = avx2_input.map(|x| x.0[0]);
@@ -98,17 +97,17 @@ mod tests {
 
     #[test]
     fn test_avx2_poseidon_width_12() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         type F = Goldilocks;
         type Perm = Poseidon<F, MdsMatrixGoldilocks, 12, 7>;
-        let poseidon = Perm::new_from_rng(4, 22, MdsMatrixGoldilocks, &mut rand::thread_rng());
+        let poseidon = Perm::new_from_rng(4, 22, MdsMatrixGoldilocks, &mut rand::rng());
 
-        let input: [F; 12] = rng.gen();
+        let input: [F; 12] = rng.random();
 
         let mut expected = input;
         poseidon.permute_mut(&mut expected);
 
-        let mut avx2_input = input.map(PackedGoldilocksAVX2::from_f);
+        let mut avx2_input = input.map(Into::<PackedGoldilocksAVX2>::into);
         poseidon.permute_mut(&mut avx2_input);
 
         let avx2_output = avx2_input.map(|x| x.0[0]);
@@ -117,17 +116,17 @@ mod tests {
 
     #[test]
     fn test_avx2_poseidon_width_16() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         type F = Goldilocks;
         type Perm = Poseidon<F, MdsMatrixGoldilocks, 16, 7>;
-        let poseidon = Perm::new_from_rng(4, 22, MdsMatrixGoldilocks, &mut rand::thread_rng());
+        let poseidon = Perm::new_from_rng(4, 22, MdsMatrixGoldilocks, &mut rand::rng());
 
-        let input: [F; 16] = rng.gen();
+        let input: [F; 16] = rng.random();
 
         let mut expected = input;
         poseidon.permute_mut(&mut expected);
 
-        let mut avx2_input = input.map(PackedGoldilocksAVX2::from_f);
+        let mut avx2_input = input.map(Into::<PackedGoldilocksAVX2>::into);
         poseidon.permute_mut(&mut avx2_input);
 
         let avx2_output = avx2_input.map(|x| x.0[0]);
@@ -136,17 +135,17 @@ mod tests {
 
     #[test]
     fn test_avx2_poseidon_width_24() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         type F = Goldilocks;
         type Perm = Poseidon<F, MdsMatrixGoldilocks, 24, 7>;
-        let poseidon = Perm::new_from_rng(4, 22, MdsMatrixGoldilocks, &mut rand::thread_rng());
+        let poseidon = Perm::new_from_rng(4, 22, MdsMatrixGoldilocks, &mut rand::rng());
 
-        let input: [F; 24] = rng.gen();
+        let input: [F; 24] = rng.random();
 
         let mut expected = input;
         poseidon.permute_mut(&mut expected);
 
-        let mut avx2_input = input.map(PackedGoldilocksAVX2::from_f);
+        let mut avx2_input = input.map(Into::<PackedGoldilocksAVX2>::into);
         poseidon.permute_mut(&mut avx2_input);
 
         let avx2_output = avx2_input.map(|x| x.0[0]);

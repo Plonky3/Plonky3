@@ -6,12 +6,15 @@ use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{Field, FieldAlgebra, PackedField, PackedFieldPow2, PackedValue};
+use p3_field::{
+    Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
+    PermutationMonomial, PrimeCharacteristicRing,
+};
 use p3_util::convert_vec;
-use rand::distributions::{Distribution, Standard};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 
-use crate::{FieldParameters, MontyField31, PackedMontyParameters};
+use crate::{FieldParameters, MontyField31, PackedMontyParameters, RelativelyPrimePower};
 
 const WIDTH: usize = 4;
 
@@ -47,13 +50,15 @@ impl<PMP: PackedMontyParameters> PackedMontyField31Neon<PMP> {
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid `MontyField31`.
     /// In particular, each element of vector must be in `0..P` (canonical form).
     unsafe fn from_vector(vector: uint32x4_t) -> Self {
-        // Safety: It is up to the user to ensure that elements of `vector` represent valid
-        // `MontyField31` values. We must only reason about memory representations. `uint32x4_t` can be
-        // transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which can
-        // be transmuted to `[MontyField31; WIDTH]` (since `MontyField31` is `repr(transparent)`), which in
-        // turn can be transmuted to `PackedMontyField31Neon` (since `PackedMontyField31Neon` is also
-        // `repr(transparent)`).
-        transmute(vector)
+        unsafe {
+            // Safety: It is up to the user to ensure that elements of `vector` represent valid
+            // `MontyField31` values. We must only reason about memory representations. `uint32x4_t` can be
+            // transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which can
+            // be transmuted to `[MontyField31; WIDTH]` (since `MontyField31` is `repr(transparent)`), which in
+            // turn can be transmuted to `PackedMontyField31Neon` (since `PackedMontyField31Neon` is also
+            // `repr(transparent)`).
+            transmute(vector)
+        }
     }
 
     /// Copy `value` to all positions in a packed vector. This is the same as
@@ -442,8 +447,8 @@ impl<FP: FieldParameters> Product for PackedMontyField31Neon<FP> {
     }
 }
 
-impl<FP: FieldParameters> FieldAlgebra for PackedMontyField31Neon<FP> {
-    type F = MontyField31<FP>;
+impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31Neon<FP> {
+    type PrimeSubfield = MontyField31<FP>;
 
     const ZERO: Self = Self::broadcast(MontyField31::ZERO);
     const ONE: Self = Self::broadcast(MontyField31::ONE);
@@ -451,42 +456,8 @@ impl<FP: FieldParameters> FieldAlgebra for PackedMontyField31Neon<FP> {
     const NEG_ONE: Self = Self::broadcast(MontyField31::NEG_ONE);
 
     #[inline]
-    fn from_f(f: Self::F) -> Self {
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f.into()
-    }
-
-    #[inline]
-    fn from_bool(b: bool) -> Self {
-        MontyField31::from_bool(b).into()
-    }
-    #[inline]
-    fn from_canonical_u8(n: u8) -> Self {
-        MontyField31::from_canonical_u8(n).into()
-    }
-    #[inline]
-    fn from_canonical_u16(n: u16) -> Self {
-        MontyField31::from_canonical_u16(n).into()
-    }
-    #[inline]
-    fn from_canonical_u32(n: u32) -> Self {
-        MontyField31::from_canonical_u32(n).into()
-    }
-    #[inline]
-    fn from_canonical_u64(n: u64) -> Self {
-        MontyField31::from_canonical_u64(n).into()
-    }
-    #[inline]
-    fn from_canonical_usize(n: usize) -> Self {
-        MontyField31::from_canonical_usize(n).into()
-    }
-
-    #[inline]
-    fn from_wrapped_u32(n: u32) -> Self {
-        MontyField31::from_wrapped_u32(n).into()
-    }
-    #[inline]
-    fn from_wrapped_u64(n: u64) -> Self {
-        MontyField31::from_wrapped_u64(n).into()
     }
 
     #[inline]
@@ -502,7 +473,22 @@ impl<FP: FieldParameters> FieldAlgebra for PackedMontyField31Neon<FP> {
     #[inline(always)]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { convert_vec(Self::F::zero_vec(len * WIDTH)) }
+        unsafe { convert_vec(MontyField31::<FP>::zero_vec(len * WIDTH)) }
+    }
+}
+
+impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31Neon<FP> {}
+
+impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> InjectiveMonomial<D>
+    for PackedMontyField31Neon<FP>
+{
+}
+
+impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> PermutationMonomial<D>
+    for PackedMontyField31Neon<FP>
+{
+    fn injective_exp_root_n(&self) -> Self {
+        FP::exp_root_d(*self)
     }
 }
 
@@ -604,10 +590,10 @@ impl<PMP: PackedMontyParameters> Sub<PackedMontyField31Neon<PMP>> for MontyField
     }
 }
 
-impl<PMP: PackedMontyParameters> Distribution<PackedMontyField31Neon<PMP>> for Standard {
+impl<PMP: PackedMontyParameters> Distribution<PackedMontyField31Neon<PMP>> for StandardUniform {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMontyField31Neon<PMP> {
-        PackedMontyField31Neon::<PMP>(rng.gen())
+        PackedMontyField31Neon::<PMP>(rng.random())
     }
 }
 

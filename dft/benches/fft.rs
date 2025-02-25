@@ -1,15 +1,15 @@
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::BabyBear;
 use p3_dft::{Radix2Bowers, Radix2Dit, Radix2DitParallel, TwoAdicSubgroupDft};
-use p3_field::extension::Complex;
 use p3_field::TwoAdicField;
+use p3_field::extension::Complex;
 use p3_goldilocks::Goldilocks;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_mersenne_31::{Mersenne31, Mersenne31ComplexRadix2Dit, Mersenne31Dft};
 use p3_monty_31::dft::RecursiveDft;
 use p3_util::pretty_name;
-use rand::distributions::{Distribution, Standard};
-use rand::thread_rng;
+use rand::distr::{Distribution, StandardUniform};
+use rand::rng;
 
 fn bench_fft(c: &mut Criterion) {
     // log_sizes correspond to the sizes of DFT we want to benchmark;
@@ -48,7 +48,7 @@ fn fft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
 where
     F: TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
     let mut group = c.benchmark_group(format!(
         "fft/{}/{}/ncols={}",
@@ -58,7 +58,7 @@ where
     ));
     group.sample_size(10);
 
-    let mut rng = thread_rng();
+    let mut rng = rng();
     for n_log in log_sizes {
         let n = 1 << n_log;
 
@@ -76,7 +76,7 @@ where
 fn m31_fft<Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
 where
     Dft: TwoAdicSubgroupDft<Complex<Mersenne31>>,
-    Standard: Distribution<Mersenne31>,
+    StandardUniform: Distribution<Mersenne31>,
 {
     let mut group = c.benchmark_group(format!(
         "m31_fft::<{}, {}>",
@@ -85,7 +85,7 @@ where
     ));
     group.sample_size(10);
 
-    let mut rng = thread_rng();
+    let mut rng = rng();
     for n_log in log_sizes {
         let n = 1 << n_log;
 
@@ -103,7 +103,7 @@ fn ifft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
 where
     F: TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
     let mut group = c.benchmark_group(format!(
         "ifft/{}/{}/ncols={}",
@@ -113,7 +113,7 @@ where
     ));
     group.sample_size(10);
 
-    let mut rng = thread_rng();
+    let mut rng = rng();
     for n_log in log_sizes {
         let n = 1 << n_log;
 
@@ -132,7 +132,7 @@ fn coset_lde<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[us
 where
     F: TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
-    Standard: Distribution<F>,
+    StandardUniform: Distribution<F>,
 {
     let mut group = c.benchmark_group(format!(
         "coset_lde/{}/{}/ncols={}",
@@ -142,7 +142,7 @@ where
     ));
     group.sample_size(10);
 
-    let mut rng = thread_rng();
+    let mut rng = rng();
     for n_log in log_sizes {
         let n = 1 << n_log;
 

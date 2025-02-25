@@ -2,20 +2,21 @@ use alloc::collections::BTreeMap;
 use alloc::slice;
 use alloc::vec::Vec;
 use core::cell::RefCell;
-use core::mem::{transmute, MaybeUninit};
+use core::mem::{MaybeUninit, transmute};
 
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
+use p3_field::integers::QuotientMap;
 use p3_field::{Field, Powers, TwoAdicField};
+use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversableMatrix, BitReversalPerm, BitReversedMatrixView};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
-use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
 use tracing::{debug_span, instrument};
 
-use crate::butterflies::{Butterfly, DitButterfly};
 use crate::TwoAdicSubgroupDft;
+use crate::butterflies::{Butterfly, DitButterfly};
 
 /// A parallel FFT algorithm which divides a butterfly network's layers into two halves.
 ///
@@ -149,7 +150,10 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         // For the second half, we flip the DIT, working in bit-reversed order.
         reverse_matrix_index_bits(&mut mat);
         // We'll also scale by 1/h, as per the usual inverse DFT algorithm.
-        let scale = Some(F::from_canonical_usize(h).inverse());
+        // If F isn't a PrimeField, (and is thus an extension field) it's much cheaper to
+        // invert in F::PrimeSubfield.
+        let h_inv_subfield = F::PrimeSubfield::from_int(h).try_inverse();
+        let scale = h_inv_subfield.map(F::from_prime_subfield);
         second_half(&mut mat, mid, &inverse_twiddles.bitrev_twiddles, scale);
         // We skip the final bit-reversal, since the next FFT expects bit-reversed input.
 

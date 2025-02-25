@@ -5,8 +5,8 @@ use core::marker::PhantomData;
 use p3_challenger::CanSample;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, Field, TwoAdicField};
-use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_strict_usize;
 use serde::{Deserialize, Serialize};
 
@@ -28,7 +28,7 @@ pub fn eval_coeffs_at_pt<F: Field, EF: ExtensionField<F>>(
     let mut acc = vec![EF::ZERO; coeffs.width()];
     for r in (0..coeffs.height()).rev() {
         let row = coeffs.row_slice(r);
-        for (acc_c, row_c) in acc.iter_mut().zip(row.as_ref().iter()) {
+        for (acc_c, row_c) in acc.iter_mut().zip(row.iter()) {
             *acc_c *= x;
             *acc_c += *row_c;
         }
@@ -41,14 +41,13 @@ where
     Val: TwoAdicField,
     Challenge: ExtensionField<Val>,
     Challenger: CanSample<Challenge>,
-
     Dft: TwoAdicSubgroupDft<Val>,
-
     Vec<Vec<Val>>: Serialize + for<'de> Deserialize<'de>,
 {
     type Domain = TwoAdicMultiplicativeCoset<Val>;
     type Commitment = Vec<Vec<Val>>;
     type ProverData = Vec<RowMajorMatrix<Val>>;
+    type EvaluationsOnDomain<'a> = Dft::Evaluations;
     type Proof = ();
     type Error = ();
 
@@ -94,7 +93,7 @@ where
         prover_data: &'a Self::ProverData,
         idx: usize,
         domain: Self::Domain,
-    ) -> impl Matrix<Val> + 'a {
+    ) -> Self::EvaluationsOnDomain<'a> {
         let mut coeffs = prover_data[idx].clone();
         assert!(domain.log_n >= self.log_n);
         coeffs.values.resize(
@@ -121,6 +120,8 @@ where
             rounds
                 .into_iter()
                 .map(|(coeffs_for_round, points_for_round)| {
+                    // ensure that each matrix corresponds to a set of opening points
+                    debug_assert_eq!(coeffs_for_round.len(), points_for_round.len());
                     coeffs_for_round
                         .iter()
                         .zip(points_for_round)
@@ -137,6 +138,8 @@ where
         )
     }
 
+    // This is a testing function, so we allow panics for convenience.
+    #[allow(clippy::panic_in_result_fn)]
     fn verify(
         &self,
         // For each round:
