@@ -125,7 +125,9 @@ where
     T: Into<Self>,
 {
     fn sum<I: Iterator<Item = T>>(iter: I) -> Self {
-        iter.fold(Self::ZERO, Add::add)
+        iter.map(Into::into)
+            .reduce(|x, y| x + y)
+            .unwrap_or(Self::ZERO)
     }
 }
 
@@ -193,7 +195,9 @@ where
 
 impl<F: Field, T: Into<Self>> Product<T> for SymbolicExpression<F> {
     fn product<I: Iterator<Item = T>>(iter: I) -> Self {
-        iter.fold(Self::ONE, Mul::mul)
+        iter.map(Into::into)
+            .reduce(|x, y| x * y)
+            .unwrap_or(Self::ONE)
     }
 }
 
