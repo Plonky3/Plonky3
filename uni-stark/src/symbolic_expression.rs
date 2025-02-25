@@ -8,7 +8,7 @@ use p3_field::{Algebra, Field, InjectiveMonomial, PrimeCharacteristicRing};
 use crate::symbolic_variable::SymbolicVariable;
 
 /// An expression over `SymbolicVariable`s.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub enum SymbolicExpression<F> {
     Variable(SymbolicVariable<F>),
     IsFirstRow,
@@ -391,8 +391,12 @@ mod tests {
                 y,
             } => {
                 assert_eq!(degree_multiple, 1);
-                assert_eq!(x.as_ref().clone(), a);
-                assert_eq!(y.as_ref().clone(), b);
+                assert!(
+                    matches!(*x, SymbolicExpression::Variable(ref v) if v.index == 1 && matches!(v.entry, Entry::Main { offset: 0 }))
+                );
+                assert!(
+                    matches!(*y, SymbolicExpression::Variable(ref v) if v.index == 2 && matches!(v.entry, Entry::Main { offset: 0 }))
+                );
             }
             _ => panic!("Addition did not create an Add expression"),
         }
@@ -409,17 +413,30 @@ mod tests {
             2,
         ));
         let result = a.clone() * b.clone();
+
         match result {
             SymbolicExpression::Mul {
                 degree_multiple,
                 x,
                 y,
             } => {
-                assert_eq!(degree_multiple, 2);
-                assert_eq!(x.as_ref().clone(), a);
-                assert_eq!(y.as_ref().clone(), b);
+                assert_eq!(degree_multiple, 2, "Multiplication should sum degrees");
+
+                assert!(
+                    matches!(*x, SymbolicExpression::Variable(ref v)
+                        if v.index == 1 && matches!(v.entry, Entry::Main { offset: 0 })
+                    ),
+                    "Left operand should match `a`"
+                );
+
+                assert!(
+                    matches!(*y, SymbolicExpression::Variable(ref v)
+                        if v.index == 2 && matches!(v.entry, Entry::Main { offset: 0 })
+                    ),
+                    "Right operand should match `b`"
+                );
             }
-            _ => panic!("Multiplication did not create a Mul expression"),
+            _ => panic!("Multiplication did not create a `Mul` expression"),
         }
     }
 
