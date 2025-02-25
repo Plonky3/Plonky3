@@ -189,7 +189,7 @@ pub trait PrimeCharacteristicRing:
     #[must_use]
     #[inline(always)]
     fn bool_check(&self) -> Self {
-        // We use `x * (1 - x)` instead of `x * (x - 1)` as this lets us reuse the `andn` function.
+        // We use `x * (1 - x)` instead of `x * (x - 1)` as this lets us delegate to the `andn` function.
         self.andn(self)
     }
 
