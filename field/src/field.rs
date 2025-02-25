@@ -422,19 +422,16 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
 impl<F: PrimeCharacteristicRing> BasedVectorSpace<F> for F {
     const DIMENSION: usize = 1;
 
-    #[must_use]
     #[inline]
     fn as_basis_coefficients_slice(&self) -> &[F] {
         slice::from_ref(self)
     }
 
-    #[must_use]
     #[inline]
     fn from_basis_coefficients_fn<Fn: FnMut(usize) -> F>(mut f: Fn) -> Self {
         f(0)
     }
 
-    #[must_use]
     #[inline]
     fn from_basis_coefficients_iter<I: Iterator<Item = F>>(mut iter: I) -> Self {
         iter.next().unwrap()
@@ -714,13 +711,11 @@ pub trait ExtensionField<Base: Field>: Field + Algebra<Base> + BasedVectorSpace<
 impl<F: Field> ExtensionField<F> for F {
     type ExtensionPacking = F::Packing;
 
-    #[must_use]
     #[inline]
     fn is_in_basefield(&self) -> bool {
         true
     }
 
-    #[must_use]
     #[inline]
     fn as_base(&self) -> Option<F> {
         Some(*self)
@@ -749,7 +744,6 @@ pub struct Powers<F> {
 impl<R: PrimeCharacteristicRing> Iterator for Powers<R> {
     type Item = R;
 
-    #[must_use]
     fn next(&mut self) -> Option<R> {
         let result = self.current.clone();
         self.current *= self.base.clone();
