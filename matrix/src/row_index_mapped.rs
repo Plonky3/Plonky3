@@ -2,8 +2,8 @@ use core::ops::Deref;
 
 use p3_field::PackedValue;
 
-use crate::dense::RowMajorMatrix;
 use crate::Matrix;
+use crate::dense::RowMajorMatrix;
 
 /// A RowIndexMap remaps row indices, and can change the height.
 pub trait RowIndexMap: Send + Sync {

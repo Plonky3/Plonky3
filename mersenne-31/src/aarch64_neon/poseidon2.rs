@@ -6,9 +6,9 @@
 use alloc::vec::Vec;
 
 use p3_poseidon2::{
-    add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, GenericPoseidon2LinearLayers,
-    InternalLayer, InternalLayerConstructor, MDSMat4,
+    InternalLayer, InternalLayerConstructor, MDSMat4, add_rc_and_sbox_generic,
+    external_initial_permute_state, external_terminal_permute_state,
 };
 
 use crate::{GenericPoseidon2LinearLayersMersenne31, Mersenne31, PackedMersenne31Neon};

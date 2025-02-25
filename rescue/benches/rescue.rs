@@ -1,17 +1,17 @@
 use std::any::type_name;
 use std::array;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, MdsMatrixBabyBear};
 use p3_field::{Algebra, Field, PermutationMonomial, PrimeField64};
 use p3_goldilocks::{Goldilocks, MdsMatrixGoldilocks};
-use p3_mds::integrated_coset_mds::IntegratedCosetMds;
 use p3_mds::MdsPermutation;
+use p3_mds::integrated_coset_mds::IntegratedCosetMds;
 use p3_mersenne_31::{MdsMatrixMersenne31, Mersenne31};
 use p3_rescue::Rescue;
 use p3_symmetric::Permutation;
 use rand::distr::{Distribution, StandardUniform};
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 
 fn bench_rescue(c: &mut Criterion) {
     rescue::<BabyBear, BabyBear, IntegratedCosetMds<_, 16>, 16, 7>(c);

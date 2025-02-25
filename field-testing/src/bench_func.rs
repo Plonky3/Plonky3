@@ -1,11 +1,11 @@
 use alloc::format;
 use alloc::vec::Vec;
 
-use criterion::{black_box, BatchSize, Criterion};
+use criterion::{BatchSize, Criterion, black_box};
 use p3_field::{Field, PrimeCharacteristicRing};
+use rand::Rng;
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
-use rand::Rng;
 
 pub fn benchmark_square<F: Field>(c: &mut Criterion, name: &str)
 where
@@ -46,7 +46,7 @@ pub fn benchmark_iter_sum<F: Field, const N: usize, const REPS: usize>(
     c.bench_function(&format!("{} sum/{}, {}", name, REPS, N), |b| {
         b.iter(|| {
             for i in 0..REPS {
-                output[i] = input[i].iter().cloned().sum()
+                output[i] = input[i].iter().copied().sum()
             }
             output
         })

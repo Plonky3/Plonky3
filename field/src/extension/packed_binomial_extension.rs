@@ -8,11 +8,11 @@ use itertools::Itertools;
 use p3_util::convert_vec;
 use serde::{Deserialize, Serialize};
 
-use super::{binomial_mul, cubic_square, vector_add, vector_sub, BinomialExtensionField};
+use super::{BinomialExtensionField, binomial_mul, cubic_square, vector_add, vector_sub};
 use crate::extension::BinomiallyExtendable;
 use crate::{
-    field_to_array, Algebra, BasedVectorSpace, Field, PackedField, PackedFieldExtension,
-    PackedValue, Powers, PrimeCharacteristicRing,
+    Algebra, BasedVectorSpace, Field, PackedField, PackedFieldExtension, PackedValue, Powers,
+    PrimeCharacteristicRing, field_to_array,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
@@ -26,7 +26,7 @@ pub struct PackedBinomialExtensionField<F: Field, PF: PackedField<Scalar = F>, c
 }
 
 impl<F: Field, PF: PackedField<Scalar = F>, const D: usize> PackedBinomialExtensionField<F, PF, D> {
-    fn new(value: [PF; D]) -> Self {
+    const fn new(value: [PF; D]) -> Self {
         Self { value }
     }
 }

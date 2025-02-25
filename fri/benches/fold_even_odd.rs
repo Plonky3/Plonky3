@@ -1,15 +1,15 @@
 use std::any::type_name;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use itertools::Itertools;
 use p3_baby_bear::BabyBear;
-use p3_field::extension::Complex;
 use p3_field::TwoAdicField;
+use p3_field::extension::Complex;
 use p3_fri::fold_even_odd;
 use p3_goldilocks::Goldilocks;
 use p3_mersenne_31::Mersenne31;
 use rand::distr::{Distribution, StandardUniform};
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 
 fn bench<F: TwoAdicField>(c: &mut Criterion, log_sizes: &[usize])
 where

@@ -1,5 +1,5 @@
-use crate::row_index_mapped::{RowIndexMap, RowIndexMappedView};
 use crate::Matrix;
+use crate::row_index_mapped::{RowIndexMap, RowIndexMappedView};
 
 #[derive(Debug)]
 pub struct VerticallyStridedRowIndexMap {

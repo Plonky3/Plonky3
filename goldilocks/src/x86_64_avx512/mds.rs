@@ -1,11 +1,11 @@
-use p3_mds::util::apply_circulant;
 use p3_mds::MdsPermutation;
+use p3_mds::util::apply_circulant;
 use p3_symmetric::Permutation;
 
 use crate::x86_64_avx512::packing::PackedGoldilocksAVX512;
 use crate::{
-    MdsMatrixGoldilocks, MATRIX_CIRC_MDS_12_SML_ROW, MATRIX_CIRC_MDS_16_SML_ROW,
-    MATRIX_CIRC_MDS_24_GOLDILOCKS, MATRIX_CIRC_MDS_8_SML_ROW,
+    MATRIX_CIRC_MDS_8_SML_ROW, MATRIX_CIRC_MDS_12_SML_ROW, MATRIX_CIRC_MDS_16_SML_ROW,
+    MATRIX_CIRC_MDS_24_GOLDILOCKS, MdsMatrixGoldilocks,
 };
 const fn convert_array<const N: usize>(arr: [i64; N]) -> [u64; N] {
     let mut result: [u64; N] = [0; N];

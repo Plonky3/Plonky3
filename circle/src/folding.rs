@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 use itertools::Itertools;
 use p3_commit::Mmcs;
 use p3_field::extension::ComplexExtendable;
-use p3_field::{batch_multiplicative_inverse, ExtensionField};
+use p3_field::{ExtensionField, batch_multiplicative_inverse};
 use p3_fri::FriGenericConfig;
 use p3_matrix::Matrix;
 use p3_util::{log2_strict_usize, reverse_bits_len};

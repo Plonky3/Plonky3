@@ -1,15 +1,15 @@
 use std::any::type_name;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, MdsMatrixBabyBear};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_goldilocks::{Goldilocks, MdsMatrixGoldilocks};
+use p3_mds::MdsPermutation;
 use p3_mds::coset_mds::CosetMds;
 use p3_mds::integrated_coset_mds::IntegratedCosetMds;
-use p3_mds::MdsPermutation;
 use p3_mersenne_31::{MdsMatrixMersenne31, Mersenne31};
 use rand::distr::{Distribution, StandardUniform};
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 
 fn bench_all_mds(c: &mut Criterion) {
     bench_mds::<BabyBear, IntegratedCosetMds<BabyBear, 16>, 16>(c);

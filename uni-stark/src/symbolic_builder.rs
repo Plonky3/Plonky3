@@ -7,9 +7,9 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
 
+use crate::Entry;
 use crate::symbolic_expression::SymbolicExpression;
 use crate::symbolic_variable::SymbolicVariable;
-use crate::Entry;
 
 #[instrument(name = "infer log of constraint degree", skip_all)]
 pub fn get_log_quotient_degree<F, A>(
@@ -26,7 +26,7 @@ where
         get_max_constraint_degree(air, preprocessed_width, num_public_values).max(2);
 
     // The quotient's actual degree is approximately (max_constraint_degree - 1) n,
-    // where subtracting 1 comes from division by the zerofier.
+    // where subtracting 1 comes from division by the vanishing polynomial.
     // But we pad it to a power of two so that we can efficiently decompose the quotient.
     log2_ceil_usize(constraint_degree - 1)
 }

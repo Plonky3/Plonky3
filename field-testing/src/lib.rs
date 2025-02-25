@@ -14,12 +14,13 @@ pub use dft_testing::*;
 use num_bigint::BigUint;
 use num_traits::identities::One;
 use p3_field::{
-    cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order, two_adic_coset_zerofier,
-    two_adic_subgroup_zerofier, ExtensionField, Field, TwoAdicField,
+    ExtensionField, Field, TwoAdicField, cyclic_subgroup_coset_known_order,
+    cyclic_subgroup_known_order, two_adic_coset_vanishing_polynomial,
+    two_adic_subgroup_vanishing_polynomial,
 };
 pub use packedfield_testing::*;
-use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 
 #[allow(clippy::eq_op)]
 pub fn test_add_neg_sub_mul<F: Field>()
@@ -46,10 +47,7 @@ where
     assert_eq!(x - (y + z), (x - y) - z);
     assert_eq!((x + y) - z, x + (y - z));
     assert_eq!(x * (y + z), x * y + x * z);
-    assert_eq!(
-        x + y + z + x + y + z,
-        [x, x, y, y, z, z].iter().cloned().sum()
-    );
+    assert_eq!(x + y + z + x + y + z, [x, x, y, y, z, z].into_iter().sum());
 }
 
 pub fn test_inv_div<F: Field>()
@@ -95,23 +93,23 @@ pub fn test_multiplicative_group_factors<F: Field>() {
     assert_eq!(product + BigUint::one(), F::order());
 }
 
-pub fn test_two_adic_subgroup_zerofier<F: TwoAdicField>() {
+pub fn test_two_adic_subgroup_vanishing_polynomial<F: TwoAdicField>() {
     for log_n in 0..5 {
         let g = F::two_adic_generator(log_n);
         for x in cyclic_subgroup_known_order(g, 1 << log_n) {
-            let zerofier_eval = two_adic_subgroup_zerofier(log_n, x);
-            assert_eq!(zerofier_eval, F::ZERO);
+            let vanishing_polynomial_eval = two_adic_subgroup_vanishing_polynomial(log_n, x);
+            assert_eq!(vanishing_polynomial_eval, F::ZERO);
         }
     }
 }
 
-pub fn test_two_adic_coset_zerofier<F: TwoAdicField>() {
+pub fn test_two_adic_coset_vanishing_polynomial<F: TwoAdicField>() {
     for log_n in 0..5 {
         let g = F::two_adic_generator(log_n);
         let shift = F::GENERATOR;
         for x in cyclic_subgroup_coset_known_order(g, shift, 1 << log_n) {
-            let zerofier_eval = two_adic_coset_zerofier(log_n, shift, x);
-            assert_eq!(zerofier_eval, F::ZERO);
+            let vanishing_polynomial_eval = two_adic_coset_vanishing_polynomial(log_n, shift, x);
+            assert_eq!(vanishing_polynomial_eval, F::ZERO);
         }
     }
 }
@@ -169,7 +167,9 @@ macro_rules! test_prime_field {
             fn test_small_integer_conversions() {
                 $crate::generate_from_small_int_tests!(
                     $field,
-                    [u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize]
+                    [
+                        u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize
+                    ]
                 );
             }
 
@@ -320,15 +320,15 @@ macro_rules! test_two_adic_field {
     ($field:ty) => {
         mod two_adic_field_tests {
             #[test]
-            fn test_two_adic_field_subgroup_zerofier() {
-                $crate::test_two_adic_subgroup_zerofier::<$field>();
+            fn test_two_adic_field_subgroup_vanishing_polynomial() {
+                $crate::test_two_adic_subgroup_vanishing_polynomial::<$field>();
             }
             #[test]
-            fn test_two_adic_coset_zerofier() {
-                $crate::test_two_adic_coset_zerofier::<$field>();
+            fn test_two_adic_coset_vanishing_polynomial() {
+                $crate::test_two_adic_coset_vanishing_polynomial::<$field>();
             }
             #[test]
-            fn test_two_adic_consisitency() {
+            fn test_two_adic_consistency() {
                 $crate::test_two_adic_generator_consistency::<$field>();
             }
         }
@@ -359,7 +359,7 @@ mod tests {
 
     use p3_baby_bear::BabyBear;
     use p3_field::extension::{BinomialExtensionField, HasFrobenius};
-    use p3_field::{binomial_expand, eval_poly, PrimeCharacteristicRing};
+    use p3_field::{PrimeCharacteristicRing, binomial_expand, eval_poly};
     use rand::random;
 
     use super::*;

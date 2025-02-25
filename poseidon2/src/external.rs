@@ -3,8 +3,8 @@ use alloc::vec::Vec;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
-use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 
 /// Multiply a 4-element vector x by
 /// [ 5 7 1 3 ]

@@ -1,12 +1,12 @@
 use alloc::vec::Vec;
 
+use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::row_index_mapped::{RowIndexMap, RowIndexMappedView};
-use p3_matrix::Matrix;
 use p3_util::{log2_strict_usize, reverse_bits_len};
 
 #[inline]
-pub(crate) fn cfft_permute_index(index: usize, log_n: usize) -> usize {
+pub(crate) const fn cfft_permute_index(index: usize, log_n: usize) -> usize {
     let (index, lsb) = (index >> 1, index & 1);
     reverse_bits_len(
         if lsb == 0 {

@@ -7,9 +7,9 @@ use num_integer::binomial;
 use p3_field::{Algebra, PermutationMonomial, PrimeField, PrimeField64};
 use p3_mds::MdsPermutation;
 use p3_symmetric::{CryptographicPermutation, Permutation};
+use rand::Rng;
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
-use rand::Rng;
 
 use crate::util::shake256_hash;
 
@@ -25,7 +25,7 @@ impl<F, Mds, const WIDTH: usize, const ALPHA: u64> Rescue<F, Mds, WIDTH, ALPHA>
 where
     F: PrimeField + PermutationMonomial<ALPHA>,
 {
-    pub fn new(num_rounds: usize, round_constants: Vec<F>, mds: Mds) -> Self {
+    pub const fn new(num_rounds: usize, round_constants: Vec<F>, mds: Mds) -> Self {
         Self {
             num_rounds,
             mds,

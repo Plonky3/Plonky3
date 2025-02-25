@@ -1,8 +1,8 @@
 use alloc::vec::Vec;
 
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
 use p3_field::extension::ComplexExtendable;
-use p3_field::{batch_multiplicative_inverse, dot_product, ExtensionField};
+use p3_field::{ExtensionField, batch_multiplicative_inverse, dot_product};
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
@@ -10,7 +10,7 @@ use tracing::instrument;
 
 use crate::domain::CircleDomain;
 use crate::point::Point;
-use crate::{cfft_permute_slice, CircleEvaluations};
+use crate::{CircleEvaluations, cfft_permute_slice};
 
 /// Compute numerator and denominator of the "vanishing part" of the DEEP quotient
 /// Section 6, Remark 21 of Circle Starks (page 30 of first edition PDF)
@@ -123,8 +123,8 @@ pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
 mod tests {
     use alloc::vec;
 
-    use p3_field::extension::BinomialExtensionField;
     use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_mersenne_31::Mersenne31;
     use rand::{random, rng};

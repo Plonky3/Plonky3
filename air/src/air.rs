@@ -1,8 +1,8 @@
 use core::ops::{Add, Mul, Sub};
 
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
-use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 
 /// An AIR (algebraic intermediate representation).
 pub trait BaseAir<F>: Sync {
@@ -105,14 +105,12 @@ pub trait AirBuilder: Sized {
 
     /// Assert that `x` is a boolean, i.e. either 0 or 1.
     fn assert_bool<I: Into<Self::Expr>>(&mut self, x: I) {
-        let x = x.into();
-        self.assert_zero(x.clone() * (x - Self::Expr::ONE));
+        self.assert_zero(x.into().bool_check());
     }
 
     /// Assert that `x` is ternary, i.e. either 0, 1 or 2.
     fn assert_tern<I: Into<Self::Expr>>(&mut self, x: I) {
-        let x = x.into();
-        self.assert_zero(x.clone() * (x.clone() - Self::Expr::ONE) * (x - Self::Expr::TWO));
+        self.assert_zero(x.into().trit_check());
     }
 }
 

@@ -18,8 +18,8 @@ use super::{HasFrobenius, HasTwoAdicBinomialExtension, PackedBinomialExtensionFi
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{
-    field_to_array, Algebra, BasedVectorSpace, ExtensionField, Packable, PrimeCharacteristicRing,
-    TwoAdicField,
+    Algebra, BasedVectorSpace, ExtensionField, Packable, PrimeCharacteristicRing, TwoAdicField,
+    field_to_array,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
@@ -91,11 +91,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F>
     }
 
     fn as_base(&self) -> Option<F> {
-        if <Self as ExtensionField<F>>::is_in_basefield(self) {
-            Some(self.value[0])
-        } else {
-            None
-        }
+        <Self as ExtensionField<F>>::is_in_basefield(self).then(|| self.value[0])
     }
 }
 
@@ -217,7 +213,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
         }
 
         match D {
-            2 => Some(Self::from_basis_coefficients_slice(&qudratic_inv(
+            2 => Some(Self::from_basis_coefficients_slice(&quadratic_inv(
                 &self.value,
                 F::W,
             ))),
@@ -483,12 +479,12 @@ where
 impl<F: BinomiallyExtendable<D>, const D: usize> Distribution<BinomialExtensionField<F, D>>
     for StandardUniform
 where
-    StandardUniform: Distribution<F>,
+    Self: Distribution<F>,
 {
     fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> BinomialExtensionField<F, D> {
         let mut res = [F::ZERO; D];
-        for r in res.iter_mut() {
-            *r = StandardUniform.sample(rng);
+        for r in &mut res {
+            *r = Self.sample(rng);
         }
         BinomialExtensionField::from_basis_coefficients_slice(&res)
     }
@@ -568,7 +564,7 @@ pub(super) fn binomial_mul<
 
 ///Section 11.3.6b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
-fn qudratic_inv<F: Field>(a: &[F], w: F) -> [F; 2] {
+fn quadratic_inv<F: Field>(a: &[F], w: F) -> [F; 2] {
     let scalar = (a[0].square() - w * a[1].square()).inverse();
     [a[0] * scalar, -a[1] * scalar]
 }

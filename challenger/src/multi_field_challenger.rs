@@ -2,7 +2,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::{reduce_32, split_32, BasedVectorSpace, Field, PrimeField, PrimeField32};
+use p3_field::{BasedVectorSpace, Field, PrimeField, PrimeField32, reduce_32, split_32};
 use p3_symmetric::{CryptographicPermutation, Hash};
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
@@ -66,7 +66,7 @@ where
         self.permutation.permute_mut(&mut self.sponge_state);
 
         self.output_buffer.clear();
-        for &pf_val in self.sponge_state.iter() {
+        for &pf_val in &self.sponge_state {
             let f_vals = split_32(pf_val, self.num_f_elms);
             for f_val in f_vals {
                 self.output_buffer.push(f_val);

@@ -12,8 +12,8 @@ use p3_field::{
     PermutationMonomial, PrimeCharacteristicRing, PrimeField64,
 };
 use p3_util::convert_vec;
-use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 
 use crate::Goldilocks;
 
@@ -304,37 +304,43 @@ const EPSILON: __m512i = unsafe { transmute([Goldilocks::ORDER_U64.wrapping_neg(
 
 #[inline]
 unsafe fn canonicalize(x: __m512i) -> __m512i {
-    let mask = _mm512_cmpge_epu64_mask(x, FIELD_ORDER);
-    _mm512_mask_sub_epi64(x, mask, x, FIELD_ORDER)
+    unsafe {
+        let mask = _mm512_cmpge_epu64_mask(x, FIELD_ORDER);
+        _mm512_mask_sub_epi64(x, mask, x, FIELD_ORDER)
+    }
 }
 
 #[inline]
 unsafe fn add_no_double_overflow_64_64(x: __m512i, y: __m512i) -> __m512i {
-    let res_wrapped = _mm512_add_epi64(x, y);
-    let mask = _mm512_cmplt_epu64_mask(res_wrapped, y); // mask set if add overflowed
-    _mm512_mask_sub_epi64(res_wrapped, mask, res_wrapped, FIELD_ORDER)
+    unsafe {
+        let res_wrapped = _mm512_add_epi64(x, y);
+        let mask = _mm512_cmplt_epu64_mask(res_wrapped, y); // mask set if add overflowed
+        _mm512_mask_sub_epi64(res_wrapped, mask, res_wrapped, FIELD_ORDER)
+    }
 }
 
 #[inline]
 unsafe fn sub_no_double_overflow_64_64(x: __m512i, y: __m512i) -> __m512i {
-    let mask = _mm512_cmplt_epu64_mask(x, y); // mask set if sub will underflow (x < y)
-    let res_wrapped = _mm512_sub_epi64(x, y);
-    _mm512_mask_add_epi64(res_wrapped, mask, res_wrapped, FIELD_ORDER)
+    unsafe {
+        let mask = _mm512_cmplt_epu64_mask(x, y); // mask set if sub will underflow (x < y)
+        let res_wrapped = _mm512_sub_epi64(x, y);
+        _mm512_mask_add_epi64(res_wrapped, mask, res_wrapped, FIELD_ORDER)
+    }
 }
 
 #[inline]
 unsafe fn add(x: __m512i, y: __m512i) -> __m512i {
-    add_no_double_overflow_64_64(x, canonicalize(y))
+    unsafe { add_no_double_overflow_64_64(x, canonicalize(y)) }
 }
 
 #[inline]
 unsafe fn sub(x: __m512i, y: __m512i) -> __m512i {
-    sub_no_double_overflow_64_64(x, canonicalize(y))
+    unsafe { sub_no_double_overflow_64_64(x, canonicalize(y)) }
 }
 
 #[inline]
 unsafe fn neg(y: __m512i) -> __m512i {
-    _mm512_sub_epi64(FIELD_ORDER, canonicalize(y))
+    unsafe { _mm512_sub_epi64(FIELD_ORDER, canonicalize(y)) }
 }
 
 #[allow(clippy::useless_transmute)]
@@ -342,92 +348,100 @@ const LO_32_BITS_MASK: __mmask16 = unsafe { transmute(0b0101010101010101u16) };
 
 #[inline]
 unsafe fn mul64_64(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
-    // We want to move the high 32 bits to the low position. The multiplication instruction ignores
-    // the high 32 bits, so it's ok to just duplicate it into the low position. This duplication can
-    // be done on port 5; bitshifts run on port 0, competing with multiplication.
-    //   This instruction is only provided for 32-bit floats, not integers. Idk why Intel makes the
-    // distinction; the casts are free and it guarantees that the exact bit pattern is preserved.
-    // Using a swizzle instruction of the wrong domain (float vs int) does not increase latency
-    // since Haswell.
-    let x_hi = _mm512_castps_si512(_mm512_movehdup_ps(_mm512_castsi512_ps(x)));
-    let y_hi = _mm512_castps_si512(_mm512_movehdup_ps(_mm512_castsi512_ps(y)));
+    unsafe {
+        // We want to move the high 32 bits to the low position. The multiplication instruction ignores
+        // the high 32 bits, so it's ok to just duplicate it into the low position. This duplication can
+        // be done on port 5; bitshifts run on port 0, competing with multiplication.
+        //   This instruction is only provided for 32-bit floats, not integers. Idk why Intel makes the
+        // distinction; the casts are free and it guarantees that the exact bit pattern is preserved.
+        // Using a swizzle instruction of the wrong domain (float vs int) does not increase latency
+        // since Haswell.
+        let x_hi = _mm512_castps_si512(_mm512_movehdup_ps(_mm512_castsi512_ps(x)));
+        let y_hi = _mm512_castps_si512(_mm512_movehdup_ps(_mm512_castsi512_ps(y)));
 
-    // All four pairwise multiplications
-    let mul_ll = _mm512_mul_epu32(x, y);
-    let mul_lh = _mm512_mul_epu32(x, y_hi);
-    let mul_hl = _mm512_mul_epu32(x_hi, y);
-    let mul_hh = _mm512_mul_epu32(x_hi, y_hi);
+        // All four pairwise multiplications
+        let mul_ll = _mm512_mul_epu32(x, y);
+        let mul_lh = _mm512_mul_epu32(x, y_hi);
+        let mul_hl = _mm512_mul_epu32(x_hi, y);
+        let mul_hh = _mm512_mul_epu32(x_hi, y_hi);
 
-    // Bignum addition
-    // Extract high 32 bits of mul_ll and add to mul_hl. This cannot overflow.
-    let mul_ll_hi = _mm512_srli_epi64::<32>(mul_ll);
-    let t0 = _mm512_add_epi64(mul_hl, mul_ll_hi);
-    // Extract low 32 bits of t0 and add to mul_lh. Again, this cannot overflow.
-    // Also, extract high 32 bits of t0 and add to mul_hh.
-    let t0_lo = _mm512_and_si512(t0, EPSILON);
-    let t0_hi = _mm512_srli_epi64::<32>(t0);
-    let t1 = _mm512_add_epi64(mul_lh, t0_lo);
-    let t2 = _mm512_add_epi64(mul_hh, t0_hi);
-    // Lastly, extract the high 32 bits of t1 and add to t2.
-    let t1_hi = _mm512_srli_epi64::<32>(t1);
-    let res_hi = _mm512_add_epi64(t2, t1_hi);
+        // Bignum addition
+        // Extract high 32 bits of mul_ll and add to mul_hl. This cannot overflow.
+        let mul_ll_hi = _mm512_srli_epi64::<32>(mul_ll);
+        let t0 = _mm512_add_epi64(mul_hl, mul_ll_hi);
+        // Extract low 32 bits of t0 and add to mul_lh. Again, this cannot overflow.
+        // Also, extract high 32 bits of t0 and add to mul_hh.
+        let t0_lo = _mm512_and_si512(t0, EPSILON);
+        let t0_hi = _mm512_srli_epi64::<32>(t0);
+        let t1 = _mm512_add_epi64(mul_lh, t0_lo);
+        let t2 = _mm512_add_epi64(mul_hh, t0_hi);
+        // Lastly, extract the high 32 bits of t1 and add to t2.
+        let t1_hi = _mm512_srli_epi64::<32>(t1);
+        let res_hi = _mm512_add_epi64(t2, t1_hi);
 
-    // Form res_lo by combining the low half of mul_ll with the low half of t1 (shifted into high
-    // position).
-    let t1_lo = _mm512_castps_si512(_mm512_moveldup_ps(_mm512_castsi512_ps(t1)));
-    let res_lo = _mm512_mask_blend_epi32(LO_32_BITS_MASK, t1_lo, mul_ll);
+        // Form res_lo by combining the low half of mul_ll with the low half of t1 (shifted into high
+        // position).
+        let t1_lo = _mm512_castps_si512(_mm512_moveldup_ps(_mm512_castsi512_ps(t1)));
+        let res_lo = _mm512_mask_blend_epi32(LO_32_BITS_MASK, t1_lo, mul_ll);
 
-    (res_hi, res_lo)
+        (res_hi, res_lo)
+    }
 }
 
 #[inline]
 unsafe fn square64(x: __m512i) -> (__m512i, __m512i) {
-    // Get high 32 bits of x. See comment in mul64_64_s.
-    let x_hi = _mm512_castps_si512(_mm512_movehdup_ps(_mm512_castsi512_ps(x)));
+    unsafe {
+        // Get high 32 bits of x. See comment in mul64_64_s.
+        let x_hi = _mm512_castps_si512(_mm512_movehdup_ps(_mm512_castsi512_ps(x)));
 
-    // All pairwise multiplications.
-    let mul_ll = _mm512_mul_epu32(x, x);
-    let mul_lh = _mm512_mul_epu32(x, x_hi);
-    let mul_hh = _mm512_mul_epu32(x_hi, x_hi);
+        // All pairwise multiplications.
+        let mul_ll = _mm512_mul_epu32(x, x);
+        let mul_lh = _mm512_mul_epu32(x, x_hi);
+        let mul_hh = _mm512_mul_epu32(x_hi, x_hi);
 
-    // Bignum addition, but mul_lh is shifted by 33 bits (not 32).
-    let mul_ll_hi = _mm512_srli_epi64::<33>(mul_ll);
-    let t0 = _mm512_add_epi64(mul_lh, mul_ll_hi);
-    let t0_hi = _mm512_srli_epi64::<31>(t0);
-    let res_hi = _mm512_add_epi64(mul_hh, t0_hi);
+        // Bignum addition, but mul_lh is shifted by 33 bits (not 32).
+        let mul_ll_hi = _mm512_srli_epi64::<33>(mul_ll);
+        let t0 = _mm512_add_epi64(mul_lh, mul_ll_hi);
+        let t0_hi = _mm512_srli_epi64::<31>(t0);
+        let res_hi = _mm512_add_epi64(mul_hh, t0_hi);
 
-    // Form low result by adding the mul_ll and the low 31 bits of mul_lh (shifted to the high
-    // position).
-    let mul_lh_lo = _mm512_slli_epi64::<33>(mul_lh);
-    let res_lo = _mm512_add_epi64(mul_ll, mul_lh_lo);
+        // Form low result by adding the mul_ll and the low 31 bits of mul_lh (shifted to the high
+        // position).
+        let mul_lh_lo = _mm512_slli_epi64::<33>(mul_lh);
+        let res_lo = _mm512_add_epi64(mul_ll, mul_lh_lo);
 
-    (res_hi, res_lo)
+        (res_hi, res_lo)
+    }
 }
 
 #[inline]
 unsafe fn reduce128(x: (__m512i, __m512i)) -> __m512i {
-    let (hi0, lo0) = x;
-    let hi_hi0 = _mm512_srli_epi64::<32>(hi0);
-    let lo1 = sub_no_double_overflow_64_64(lo0, hi_hi0);
-    let t1 = _mm512_mul_epu32(hi0, EPSILON);
-    add_no_double_overflow_64_64(lo1, t1)
+    unsafe {
+        let (hi0, lo0) = x;
+        let hi_hi0 = _mm512_srli_epi64::<32>(hi0);
+        let lo1 = sub_no_double_overflow_64_64(lo0, hi_hi0);
+        let t1 = _mm512_mul_epu32(hi0, EPSILON);
+        add_no_double_overflow_64_64(lo1, t1)
+    }
 }
 
 #[inline]
 unsafe fn mul(x: __m512i, y: __m512i) -> __m512i {
-    reduce128(mul64_64(x, y))
+    unsafe { reduce128(mul64_64(x, y)) }
 }
 
 #[inline]
 unsafe fn square(x: __m512i) -> __m512i {
-    reduce128(square64(x))
+    unsafe { reduce128(square64(x)) }
 }
 
 #[inline]
 unsafe fn interleave1(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
-    let a = _mm512_unpacklo_epi64(x, y);
-    let b = _mm512_unpackhi_epi64(x, y);
-    (a, b)
+    unsafe {
+        let a = _mm512_unpacklo_epi64(x, y);
+        let b = _mm512_unpackhi_epi64(x, y);
+        (a, b)
+    }
 }
 
 const INTERLEAVE2_IDX_A: __m512i = unsafe {
@@ -443,16 +457,20 @@ const INTERLEAVE2_IDX_B: __m512i = unsafe {
 
 #[inline]
 unsafe fn interleave2(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
-    let a = _mm512_permutex2var_epi64(x, INTERLEAVE2_IDX_A, y);
-    let b = _mm512_permutex2var_epi64(x, INTERLEAVE2_IDX_B, y);
-    (a, b)
+    unsafe {
+        let a = _mm512_permutex2var_epi64(x, INTERLEAVE2_IDX_A, y);
+        let b = _mm512_permutex2var_epi64(x, INTERLEAVE2_IDX_B, y);
+        (a, b)
+    }
 }
 
 #[inline]
 unsafe fn interleave4(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
-    let a = _mm512_shuffle_i64x2::<0x44>(x, y);
-    let b = _mm512_shuffle_i64x2::<0xee>(x, y);
-    (a, b)
+    unsafe {
+        let a = _mm512_shuffle_i64x2::<0x44>(x, y);
+        let b = _mm512_shuffle_i64x2::<0xee>(x, y);
+        (a, b)
+    }
 }
 
 #[cfg(test)]

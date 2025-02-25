@@ -1,13 +1,13 @@
 use std::any::type_name;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_blake3::Blake3;
 use p3_commit::Mmcs;
 use p3_field::{Field, PackedField, PackedValue};
 use p3_keccak::Keccak256Hash;
-use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_mds::integrated_coset_mds::IntegratedCosetMds;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_rescue::Rescue;
@@ -17,8 +17,8 @@ use p3_symmetric::{
 };
 use rand::distr::{Distribution, StandardUniform};
 use rand::rng;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 fn bench_merkle_trees(criterion: &mut Criterion) {
     bench_bb_poseidon2(criterion);

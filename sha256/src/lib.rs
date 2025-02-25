@@ -3,9 +3,9 @@
 #![no_std]
 
 use p3_symmetric::{CompressionFunction, CryptographicHasher, PseudoCompressionFunction};
+use sha2::Digest;
 use sha2::digest::generic_array::GenericArray;
 use sha2::digest::typenum::U64;
-use sha2::Digest;
 
 pub const H256_256: [u32; 8] = [
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
@@ -31,7 +31,7 @@ impl CryptographicHasher<u8, [u8; 32]> for Sha256 {
         I: IntoIterator<Item = &'a [u8]>,
     {
         let mut hasher = sha2::Sha256::new();
-        for chunk in input.into_iter() {
+        for chunk in input {
             hasher.update(chunk);
         }
         hasher.finalize().into()

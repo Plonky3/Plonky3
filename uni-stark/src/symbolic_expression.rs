@@ -41,21 +41,19 @@ impl<F> SymbolicExpression<F> {
     /// Returns the multiple of `n` (the trace length) in this expression's degree.
     pub const fn degree_multiple(&self) -> usize {
         match self {
-            SymbolicExpression::Variable(v) => v.degree_multiple(),
-            SymbolicExpression::IsFirstRow => 1,
-            SymbolicExpression::IsLastRow => 1,
-            SymbolicExpression::IsTransition => 0,
-            SymbolicExpression::Constant(_) => 0,
-            SymbolicExpression::Add {
+            Self::Variable(v) => v.degree_multiple(),
+            Self::IsFirstRow | Self::IsLastRow => 1,
+            Self::IsTransition | Self::Constant(_) => 0,
+            Self::Add {
                 degree_multiple, ..
-            } => *degree_multiple,
-            SymbolicExpression::Sub {
+            }
+            | Self::Sub {
                 degree_multiple, ..
-            } => *degree_multiple,
-            SymbolicExpression::Neg {
+            }
+            | Self::Neg {
                 degree_multiple, ..
-            } => *degree_multiple,
-            SymbolicExpression::Mul {
+            }
+            | Self::Mul {
                 degree_multiple, ..
             } => *degree_multiple,
         }
