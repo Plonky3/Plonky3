@@ -440,7 +440,7 @@ fn xor<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
         // 0 <= 2*lhs < 2P
         let double_lhs = x86_64::_mm512_add_epi32(lhs, lhs);
 
-        // Note that 2^31 is represented as an i_32 as (-2^31).
+        // Note that 2^31 is represented as an i32 as (-2^31).
         // Compiler should realise this is a constant.
         let half = x86_64::_mm512_set1_epi32(-1 << 31);
 
