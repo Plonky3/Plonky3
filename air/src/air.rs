@@ -110,7 +110,7 @@ pub trait AirBuilder: Sized {
 
     /// Assert that `x` is ternary, i.e. either 0, 1 or 2.
     fn assert_tern<I: Into<Self::Expr>>(&mut self, x: I) {
-        self.assert_zero(x.into().tern_check());
+        self.assert_zero(x.into().trit_check());
     }
 }
 
