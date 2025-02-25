@@ -375,7 +375,7 @@ fn xor<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
         // 0 <= 2*lhs < 2P
         let double_lhs = x86_64::_mm256_add_epi32(lhs, lhs);
 
-        // Note that 2^31 is represented as an i_32 as (-2^31).
+        // Note that 2^31 is represented as an i32 as (-2^31).
         // Compiler should realise this is a constant.
         let half = x86_64::_mm256_set1_epi32(-1 << 31);
 
