@@ -12,7 +12,9 @@ use p3_util::convert_vec;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 
-use crate::{FieldParameters, MontyField31, PackedMontyParameters, RelativelyPrimePower};
+use crate::{
+    FieldParameters, MontyField31, PackedMontyParameters, RelativelyPrimePower, signed_add_avx2,
+};
 
 const WIDTH: usize = 8;
 
@@ -88,9 +90,11 @@ impl<PMP: PackedMontyParameters> Mul for PackedMontyField31AVX2<PMP> {
     fn mul(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = mul::<PMP>(lhs, rhs);
+        let t = mul::<PMP>(lhs, rhs);
+        let res = red_signed_to_canonical::<PMP>(t);
         unsafe {
-            // Safety: `mul` returns values in canonical form when given values in canonical form.
+            // Safety: `mul` returns values in signed form when given values in canonical form.
+            // Then `red_signed_to_canonical` reduces values from signed form to canonical form.
             Self::from_vector(res)
         }
     }
@@ -214,6 +218,32 @@ fn partial_monty_red_signed_to_signed<MPAVX2: MontyParametersAVX2>(input: __m256
     }
 }
 
+/// Given a vector of signed field elements, return a vector of elements in canonical form.
+///
+/// Inputs must be signed 32-bit integers lying in (-P, ..., P). If they do not lie in
+/// this range, the output is undefined.
+#[inline]
+#[must_use]
+fn red_signed_to_canonical<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
+    unsafe {
+        // We want this to compile to:
+        //      vpaddd     corr, input, P
+        //      vpminud    res, input, corr
+        // throughput: 0.67 cyc/vec (12 els/cyc)
+        // latency: 2 cyc
+
+        // We want to return input mod P where input lies in (-2^31 <) -P + 1, ..., P - 1 (< 2^31).
+        // It suffices to return input if input >= 0 and input + P otherwise.
+        //
+        // Let corr := (input + P) mod 2^32 and res := unsigned_min(input, corr).
+        // If input is in 0, ..., P - 1, then corr is in P, ..., 2 P - 1 and res = input.
+        // Otherwise, input is in -P + 1, ..., -1; corr is in 1, ..., P - 1 (< P) and res = corr.
+        // Hence, res is input if input < P and input + P otherwise, as desired.
+        let corr = x86_64::_mm256_add_epi32(input, MPAVX2::PACKED_P);
+        x86_64::_mm256_min_epu32(input, corr)
+    }
+}
+
 /// Multiply the MontyField31 field elements in the even index entries.
 /// lhs[2i], rhs[2i] must be unsigned 32-bit integers such that
 /// lhs[2i] * rhs[2i] lies in {0, ..., 2^32P}.
@@ -250,8 +280,10 @@ fn movehdup_epi32(x: __m256i) -> __m256i {
     }
 }
 
-/// Multiply vectors of MontyField31 field elements in canonical form.
-/// If the inputs are not in canonical form, the result is undefined.
+/// Multiply unsigned vectors of field elements returning a vector of signed integers lying in (-P, P).
+///
+/// Inputs are allowed to not be in canonical form however they must obey the bound `lhs*rhs < 2^32P`. If this bound
+/// is broken, the output is undefined.
 #[inline]
 #[must_use]
 fn mul<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
@@ -268,10 +300,8 @@ fn mul<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     //      vpsubq     d_odd, prod_odd, q_P_odd
     //      vmovshdup  d_evn_hi, d_evn
     //      vpblendd   t, d_evn_hi, d_odd, aah
-    //      vpaddd     u, t, P
-    //      vpminud    res, t, u
-    // throughput: 4.67 cyc/vec (1.71 els/cyc)
-    // latency: 21 cyc
+    // throughput: 4 cyc/vec (2 els/cyc)
+    // latency: 19 cyc
     unsafe {
         let lhs_evn = lhs;
         let rhs_evn = rhs;
@@ -282,10 +312,7 @@ fn mul<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
         let d_odd = monty_mul::<MPAVX2>(lhs_odd, rhs_odd);
 
         let d_evn_hi = movehdup_epi32(d_evn);
-        let t = x86_64::_mm256_blend_epi32::<0b10101010>(d_evn_hi, d_odd);
-
-        let u = x86_64::_mm256_add_epi32(t, MPAVX2::PACKED_P);
-        x86_64::_mm256_min_epu32(t, u)
+        x86_64::_mm256_blend_epi32::<0b10101010>(d_evn_hi, d_odd)
     }
 }
 
@@ -301,6 +328,110 @@ fn shifted_square<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
         let square = x86_64::_mm256_mul_epi32(input, input);
         let square_red = partial_monty_red_unsigned_to_signed::<MPAVX2>(square);
         movehdup_epi32(square_red)
+    }
+}
+
+/// Compute the elementary arithmetic generalization of `xor`, namely `xor(l, r) = l + r - 2lr` of
+/// vectors in canonical form.
+///
+/// Inputs are assumed to be in canonical form, if the inputs are not in canonical form, the result is undefined.
+#[inline]
+#[must_use]
+fn xor<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
+    // We refactor the expression as r + 2l(1/2 - r).
+    // As we are working with MONTY_CONSTANT = 2^32, the internal representation
+    // of 1/2 is 2^31 mod P. Hence let us compute 2l(2^31 - r). As, 0 < l, r < P < 2^31
+    // we find that 2l(2^31 - r) < 2^32P so we can apply our monty reduction to this product.
+    //
+    // Moreover, as 2l, 2^31 - r are both < 2^32 we can compute these before we
+    // split into even and odd parts for the multiplication.
+    //
+    // All together we save 5 instructions (~25%) over the naive implementation.
+    //
+    // We want this to compile to:
+    //      vpaddd     lhs_double, lhs, lhs
+    //      vpsubd     sub_rhs, rhs, (1 << 31)
+    //      vmovshdup  lhs_odd, lhs_double
+    //      vmovshdup  rhs_odd, sub_rhs
+    //      vpmuludq   prod_evn, lhs_double, sub_rhs
+    //      vpmuludq   prod_odd, lhs_odd, rhs_odd
+    //      vpmuludq   q_evn, prod_evn, MU
+    //      vpmuludq   q_odd, prod_odd, MU
+    //      vpmuludq   q_P_evn, q_evn, P
+    //      vpmuludq   q_P_odd, q_odd, P
+    //      vpsubq     d_evn, prod_evn, q_P_evn
+    //      vpsubq     d_odd, prod_odd, q_P_odd
+    //      vmovshdup  d_evn_hi, d_evn
+    //      vpblendd   t, d_evn_hi, d_odd, aah
+    //      vpsignd    pos_neg_P,  P,     t
+    //      vpaddd     sum,        rhs,   t
+    //      vpsubd     sum_corr,   sum,   pos_neg_P
+    //      vpminud    res,        sum,   sum_corr
+    // throughput: 6 cyc/vec (1.33 els/cyc)
+    // latency: 22 cyc
+    unsafe {
+        // 0 <= 2*lhs < 2P
+        let double_lhs = x86_64::_mm256_add_epi32(lhs, lhs);
+
+        // Note that 2^31 is represented as an i32 as (-2^31).
+        // Compiler should realise this is a constant.
+        let half = x86_64::_mm256_set1_epi32(-1 << 31);
+
+        // 0 < 2^31 - rhs < 2^31
+        let half_sub_rhs = x86_64::_mm256_sub_epi32(half, rhs);
+
+        // 2*lhs (2^31 - rhs) < 2P 2^31 < 2^32P so we can use the multiplication function.
+        let mul_res = mul::<MPAVX2>(double_lhs, half_sub_rhs);
+
+        // As -P < mul_res < P and 0 <= rhs < P, we can use signed add
+        // which saves an instruction over reducing mul_res and adding in the usual way.
+        signed_add_avx2::<MPAVX2>(rhs, mul_res)
+    }
+}
+
+/// Compute the elementary arithmetic generalization of `andnot`, namely `andn(l, r) = (1 - l)r` of
+/// vectors in canonical form.
+///
+/// Inputs are assumed to be in canonical form, if the inputs are not in canonical form, the result is undefined.
+#[inline]
+#[must_use]
+fn andn<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
+    // As we are working with MONTY_CONSTANT = 2^32, the internal representation
+    // of 1 is 2^32 mod P = 2^32 - P mod P. Hence let us compute (2^32 - P - l)r.
+    // This product is clearly less than 2^32P so we can apply our monty reduction to this.
+    //
+    // All together we save 2 instructions (~12%) over the naive implementation.
+    //
+    // We want this to compile to:
+    //      vpsubd     neg_lhs, -P, lhs
+    //      vmovshdup  lhs_odd, neg_lhs
+    //      vmovshdup  rhs_odd, rhs
+    //      vpmuludq   prod_evn, neg_lhs, rhs
+    //      vpmuludq   prod_odd, lhs_odd, rhs_odd
+    //      vpmuludq   q_evn, prod_evn, MU
+    //      vpmuludq   q_odd, prod_odd, MU
+    //      vpmuludq   q_P_evn, q_evn, P
+    //      vpmuludq   q_P_odd, q_odd, P
+    //      vpsubq     d_evn, prod_evn, q_P_evn
+    //      vpsubq     d_odd, prod_odd, q_P_odd
+    //      vmovshdup  d_evn_hi, d_evn
+    //      vpblendd   t, d_evn_hi, d_odd, aah
+    //      vpaddd     corr, t, P
+    //      vpminud    res, t, corr
+    // throughput: 5 cyc/vec (1.6 els/cyc)
+    // latency: 20 cyc
+    unsafe {
+        // We use 2^32 - P instead of 2^32 to avoid having to worry about 0's in lhs.
+
+        // Compiler should realise that this is a constant.
+        let neg_p = x86_64::_mm256_sub_epi32(x86_64::_mm256_setzero_si256(), MPAVX2::PACKED_P);
+        let neg_lhs = x86_64::_mm256_sub_epi32(neg_p, lhs);
+
+        // 2*lhs (2^31 - rhs) < 2P 2^31 < 2^32P so we can use the multiplication function.
+        let mul_res = mul::<MPAVX2>(neg_lhs, rhs);
+
+        // As -P < mul_res < P we just need to reduce elements to canonical form.
+        red_signed_to_canonical::<MPAVX2>(mul_res)
     }
 }
 
@@ -360,8 +491,7 @@ pub(crate) unsafe fn apply_func_to_even_odd<MPAVX2: MontyParametersAVX2>(
         let d_evn_hi = movehdup_epi32(d_evn);
         let t = x86_64::_mm256_blend_epi32::<0b10101010>(d_evn_hi, d_odd);
 
-        let u = x86_64::_mm256_add_epi32(t, MPAVX2::PACKED_P);
-        x86_64::_mm256_min_epu32(t, u)
+        red_signed_to_canonical::<MPAVX2>(t)
     }
 }
 
@@ -406,18 +536,10 @@ pub(crate) fn sub<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __
     // throughput: 1 cyc/vec (8 els/cyc)
     // latency: 3 cyc
 
-    //   Let t := lhs - rhs. We want to return t mod P. Recall that lhs and rhs are in
-    // 0, ..., P - 1, so t is in (-2^31 <) -P + 1, ..., P - 1 (< 2^31). It suffices to return t if
-    // t >= 0 and t + P otherwise.
-    //   Let u := (t + P) mod 2^32 and r := unsigned_min(t, u).
-    //   If t is in 0, ..., P - 1, then u is in P, ..., 2 P - 1 and r = t.
-    // Otherwise, t is in -P + 1, ..., -1; u is in 1, ..., P - 1 (< P) and r = u. Hence, r is t if
-    // t < P and t - P otherwise, as desired.
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
         let t = x86_64::_mm256_sub_epi32(lhs, rhs);
-        let u = x86_64::_mm256_add_epi32(t, MPAVX2::PACKED_P);
-        x86_64::_mm256_min_epu32(t, u)
+        red_signed_to_canonical::<MPAVX2>(t)
     }
 }
 
@@ -495,6 +617,28 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX2<FP>
         unsafe {
             // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
             let res = apply_func_to_even_odd::<FP>(val, packed_exp_3::<FP>);
+            Self::from_vector(res)
+        }
+    }
+
+    #[inline]
+    fn xor(&self, rhs: &Self) -> Self {
+        let lhs = self.to_vector();
+        let rhs = rhs.to_vector();
+        let res = xor::<FP>(lhs, rhs);
+        unsafe {
+            // Safety: `xor` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
+    }
+
+    #[inline]
+    fn andn(&self, rhs: &Self) -> Self {
+        let lhs = self.to_vector();
+        let rhs = rhs.to_vector();
+        let res = andn::<FP>(lhs, rhs);
+        unsafe {
+            // Safety: `andn` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
