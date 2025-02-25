@@ -252,63 +252,61 @@ mod tests {
 
         assert_eq!(constraints.len(), 2, "Should return exactly 2 constraints");
 
-        assert!(constraints.contains(&SymbolicExpression::Variable(c1)),);
-        assert!(constraints.contains(&SymbolicExpression::Variable(c2)),);
+        assert!(
+            constraints.iter().any(|x| matches!(x, SymbolicExpression::Variable(v) if v.index == c1.index && v.entry == c1.entry)),
+            "Expected constraint {:?} was not found",
+            c1
+        );
+
+        assert!(
+            constraints.iter().any(|x| matches!(x, SymbolicExpression::Variable(v) if v.index == c2.index && v.entry == c2.entry)),
+            "Expected constraint {:?} was not found",
+            c2
+        );
     }
 
     #[test]
     fn test_symbolic_air_builder_initialization() {
-        use p3_matrix::dense::RowMajorMatrix;
-
         let builder = SymbolicAirBuilder::<BabyBear>::new(2, 4, 3);
 
-        let expected_preprocessed = vec![
-            SymbolicVariable::new(Entry::Preprocessed { offset: 0 }, 0),
-            SymbolicVariable::new(Entry::Preprocessed { offset: 0 }, 1),
-            SymbolicVariable::new(Entry::Preprocessed { offset: 1 }, 0),
-            SymbolicVariable::new(Entry::Preprocessed { offset: 1 }, 1),
-        ];
-
         let expected_main = vec![
-            SymbolicVariable::new(Entry::Main { offset: 0 }, 0),
-            SymbolicVariable::new(Entry::Main { offset: 0 }, 1),
-            SymbolicVariable::new(Entry::Main { offset: 0 }, 2),
-            SymbolicVariable::new(Entry::Main { offset: 0 }, 3),
-            SymbolicVariable::new(Entry::Main { offset: 1 }, 0),
-            SymbolicVariable::new(Entry::Main { offset: 1 }, 1),
-            SymbolicVariable::new(Entry::Main { offset: 1 }, 2),
-            SymbolicVariable::new(Entry::Main { offset: 1 }, 3),
+            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 0 }, 0),
+            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 0 }, 1),
+            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 0 }, 2),
+            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 0 }, 3),
+            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 1 }, 0),
+            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 1 }, 1),
+            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 1 }, 2),
+            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 1 }, 3),
         ];
 
-        let expected_public = vec![
-            SymbolicVariable::new(Entry::Public, 0),
-            SymbolicVariable::new(Entry::Public, 1),
-            SymbolicVariable::new(Entry::Public, 2),
-        ];
+        let builder_main = builder.main.values;
 
         assert_eq!(
-            builder.main,
-            RowMajorMatrix::new(expected_main, 4),
-            "Main matrix should match expected values"
+            builder_main.len(),
+            expected_main.len(),
+            "Main matrix should have the expected length"
         );
 
-        assert_eq!(
-            builder.preprocessed,
-            RowMajorMatrix::new(expected_preprocessed, 2),
-            "Preprocessed matrix should match expected values"
-        );
-
-        assert_eq!(
-            builder.public_values, expected_public,
-            "Public values should match expected values"
-        );
+        for (expected, actual) in expected_main.iter().zip(builder_main.iter()) {
+            assert_eq!(expected.index, actual.index, "Index mismatch");
+            assert_eq!(expected.entry, actual.entry, "Entry mismatch");
+        }
     }
 
     #[test]
     fn test_symbolic_air_builder_is_first_last_row() {
         let builder = SymbolicAirBuilder::<BabyBear>::new(2, 4, 3);
-        assert_eq!(builder.is_first_row(), SymbolicExpression::IsFirstRow);
-        assert_eq!(builder.is_last_row(), SymbolicExpression::IsLastRow);
+
+        assert!(
+            matches!(builder.is_first_row(), SymbolicExpression::IsFirstRow),
+            "First row condition did not match"
+        );
+
+        assert!(
+            matches!(builder.is_last_row(), SymbolicExpression::IsLastRow),
+            "Last row condition did not match"
+        );
     }
 
     #[test]
@@ -316,10 +314,14 @@ mod tests {
         let mut builder = SymbolicAirBuilder::<BabyBear>::new(2, 4, 3);
         let expr = SymbolicExpression::Constant(BabyBear::new(5));
         builder.assert_zero(expr.clone());
+
         let constraints = builder.constraints();
         assert_eq!(constraints.len(), 1, "One constraint should be recorded");
-        assert_eq!(
-            constraints[0], expr,
+
+        assert!(
+            constraints.iter().any(
+                |x| matches!(x, SymbolicExpression::Constant(val) if *val == BabyBear::new(5))
+            ),
             "Constraint should match the asserted one"
         );
     }

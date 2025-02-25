@@ -9,7 +9,7 @@ use p3_field::{Algebra, Field, InjectiveMonomial, PrimeCharacteristicRing};
 use crate::symbolic_variable::SymbolicVariable;
 
 /// An expression over `SymbolicVariable`s.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub enum SymbolicExpression<F> {
     Variable(SymbolicVariable<F>),
     IsFirstRow,
