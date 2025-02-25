@@ -193,13 +193,13 @@ pub trait PrimeCharacteristicRing:
         self.andn(self)
     }
 
-    /// The vanishing polynomial of the set {0, 1, 2}: `x * (1 - x) * (2 - x)`.
+    /// The vanishing polynomial of the set of ternary digits (trits, `{0, 1, 2}`) : `x * (1 - x) * (2 - x)`.
     ///
     /// This is a polynomial of degree `2` which evaluates to `0` if the input is `0, 1` or `2`.
     /// If our space is a field, then this will be non `0` on all other inputs.
     #[must_use]
     #[inline(always)]
-    fn tern_check(&self) -> Self {
+    fn trit_check(&self) -> Self {
         self.andn(self) * (Self::TWO - self.clone())
     }
 
