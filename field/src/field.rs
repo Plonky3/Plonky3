@@ -184,8 +184,8 @@ pub trait PrimeCharacteristicRing:
 
     /// The vanishing polynomial for boolean values: `x * (1 - x)`.
     ///
-    /// This is a polynomial of degree `2` evaluates to `0` if the input is `0` or `1`.
-    /// If our space is a field, then this will be non `0` on all other inputs.
+    /// This is a polynomial of degree `2` that evaluates to `0` if the input is `0` or `1`.
+    /// If our space is a field, then this will be nonzero on all other inputs.
     #[must_use]
     #[inline(always)]
     fn bool_check(&self) -> Self {
