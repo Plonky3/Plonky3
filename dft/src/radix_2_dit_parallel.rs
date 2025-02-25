@@ -8,7 +8,7 @@ use itertools::{Itertools, izip};
 use p3_field::integers::QuotientMap;
 use p3_field::{Field, Powers, TwoAdicField};
 use p3_matrix::Matrix;
-use p3_matrix::bitrev::{BitReversableMatrix, BitReversalPerm, BitReversedMatrixView};
+use p3_matrix::bitrev::{BitReversibleMatrix, BitReversalPerm, BitReversedMatrixView};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
