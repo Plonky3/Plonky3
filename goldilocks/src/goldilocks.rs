@@ -349,7 +349,7 @@ impl PrimeField64 for Goldilocks {
 /// A list of generators for the two-adic subgroups of the goldilocks field.
 ///
 /// These satisfy the properties that `TWO_ADIC_GENERATORS[0] = 1` and `TWO_ADIC_GENERATORS[i+1]^2 = TWO_ADIC_GENERATORS[i]`.
-const TWO_ADIC_GENERATORS: [Goldilocks; 33] = Goldilocks::new_array([
+pub const GOLDILOCKS_TWO_ADIC_GENERATORS: [Goldilocks; 33] = Goldilocks::new_array([
     0x0000000000000001,
     0xffffffff00000000,
     0x0001000000000000,
@@ -390,7 +390,7 @@ impl TwoAdicField for Goldilocks {
 
     fn two_adic_generator(bits: usize) -> Self {
         assert!(bits <= Self::TWO_ADICITY);
-        TWO_ADIC_GENERATORS[bits]
+        GOLDILOCKS_TWO_ADIC_GENERATORS[bits]
     }
 }
 
