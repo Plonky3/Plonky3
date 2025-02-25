@@ -403,39 +403,37 @@ fn mul<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
 #[inline]
 #[must_use]
 fn xor<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
-    /*
-        We refactor the expression as r + 2l(1/2 - r).
-        As we are working with MONTY_CONSTANT = 2^32, the internal representation
-        of 1/2 is 2^31 mod P. Hence let us compute 2l(2^31 - r). As, 0 < l, r < P < 2^31
-        we find that 2l(2^31 - r) < 2^32P so we can apply our monty reduction to this product.
-
-        Moreover, as 2l, 2^31 - r are both < 2^32 we can compute these before we
-        split into even and odd parts for the multiplication.
-
-        All together we save 4 instructions (~25%) over the naive implementation.
-
-        We want this to compile to:
-            vpaddd     lhs_double, lhs, lhs
-            vpsubd     sub_rhs, rhs, (1 << 31)
-            vmovshdup  lhs_odd, lhs_double
-            vmovshdup  rhs_odd, sub_rhs
-            vpmuludq   prod_evn, lhs_double, sub_rhs
-            vpmuludq   prod_hi, lhs_odd, rhs_odd
-            vpmuludq   q_evn, prod_evn, MU
-            vpmuludq   q_odd, prod_hi, MU
-            vmovshdup  prod_hi{EVENS}, prod_evn
-            vpmuludq   q_p_evn, q_evn, P
-            vpmuludq   q_p_hi, q_odd, P
-            vmovshdup  q_p_hi{EVENS}, q_p_evn
-            vpcmpltud  underflow, prod_hi, q_p_hi
-            vpsubd     res, prod_hi, q_p_hi
-            vpaddd     res{underflow}, res, P
-            vpaddd     sum,        rhs,   t
-            vpsubd     sum_corr,   sum,   pos_neg_P
-            vpminud    res,        sum,   sum_corr
-        throughput: 9 cyc/vec (1.77 els/cyc)
-        latency: 25 cyc
-    */
+    // We refactor the expression as r + 2l(1/2 - r).
+    // As we are working with MONTY_CONSTANT = 2^32, the internal representation
+    // of 1/2 is 2^31 mod P. Hence let us compute 2l(2^31 - r). As, 0 < l, r < P < 2^31
+    // we find that 2l(2^31 - r) < 2^32P so we can apply our monty reduction to this product.
+    //
+    // Moreover, as 2l, 2^31 - r are both < 2^32 we can compute these before we
+    // split into even and odd parts for the multiplication.
+    //
+    // All together we save 4 instructions (~25%) over the naive implementation.
+    //
+    // We want this to compile to:
+    //      vpaddd     lhs_double, lhs, lhs
+    //      vpsubd     sub_rhs, rhs, (1 << 31)
+    //      vmovshdup  lhs_odd, lhs_double
+    //      vmovshdup  rhs_odd, sub_rhs
+    //      vpmuludq   prod_evn, lhs_double, sub_rhs
+    //      vpmuludq   prod_hi, lhs_odd, rhs_odd
+    //      vpmuludq   q_evn, prod_evn, MU
+    //      vpmuludq   q_odd, prod_hi, MU
+    //      vmovshdup  prod_hi{EVENS}, prod_evn
+    //      vpmuludq   q_p_evn, q_evn, P
+    //      vpmuludq   q_p_hi, q_odd, P
+    //      vmovshdup  q_p_hi{EVENS}, q_p_evn
+    //      vpcmpltud  underflow, prod_hi, q_p_hi
+    //      vpsubd     res, prod_hi, q_p_hi
+    //      vpaddd     res{underflow}, res, P
+    //      vpaddd     sum,        rhs,   t
+    //      vpsubd     sum_corr,   sum,   pos_neg_P
+    //      vpminud    res,        sum,   sum_corr
+    // throughput: 9 cyc/vec (1.77 els/cyc)
+    // latency: 25 cyc
     unsafe {
         // 0 <= 2*lhs < 2P
         let double_lhs = x86_64::_mm512_add_epi32(lhs, lhs);
@@ -464,31 +462,29 @@ fn xor<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
 #[inline]
 #[must_use]
 fn andn<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
-    /*
-        As we are working with MONTY_CONSTANT = 2^32, the internal representation
-        of 1 is 2^32 mod P = 2^32 - P mod P. Hence let us compute (2^32 - P - l)r.
-        This product is clearly less than 2^32P so we can apply our monty reduction to this.
-
-        All together we save 2 instructions (~12%) over the naive implementation.
-
-        We want this to compile to:
-            vpsubd     neg_lhs, -P, lhs
-            vmovshdup  lhs_odd, neg_lhs
-            vmovshdup  rhs_odd, rhs
-            vpmuludq   prod_evn, neg_lhs, rhs
-            vpmuludq   prod_hi, lhs_odd, rhs_odd
-            vpmuludq   q_evn, prod_evn, MU
-            vpmuludq   q_odd, prod_hi, MU
-            vmovshdup  prod_hi{EVENS}, prod_evn
-            vpmuludq   q_p_evn, q_evn, P
-            vpmuludq   q_p_hi, q_odd, P
-            vmovshdup  q_p_hi{EVENS}, q_p_evn
-            vpcmpltud  underflow, prod_hi, q_p_hi
-            vpsubd     res, prod_hi, q_p_hi
-            vpaddd     res{underflow}, res, P
-        throughput: 7 cyc/vec (2.3 els/cyc)
-        latency: 22 cyc
-    */
+    // As we are working with MONTY_CONSTANT = 2^32, the internal representation
+    // of 1 is 2^32 mod P = 2^32 - P mod P. Hence let us compute (2^32 - P - l)r.
+    // This product is clearly less than 2^32P so we can apply our monty reduction to this.
+    //
+    // All together we save 2 instructions (~12%) over the naive implementation.
+    //
+    // We want this to compile to:
+    //      vpsubd     neg_lhs, -P, lhs
+    //      vmovshdup  lhs_odd, neg_lhs
+    //      vmovshdup  rhs_odd, rhs
+    //      vpmuludq   prod_evn, neg_lhs, rhs
+    //      vpmuludq   prod_hi, lhs_odd, rhs_odd
+    //      vpmuludq   q_evn, prod_evn, MU
+    //      vpmuludq   q_odd, prod_hi, MU
+    //      vmovshdup  prod_hi{EVENS}, prod_evn
+    //      vpmuludq   q_p_evn, q_evn, P
+    //      vpmuludq   q_p_hi, q_odd, P
+    //      vmovshdup  q_p_hi{EVENS}, q_p_evn
+    //      vpcmpltud  underflow, prod_hi, q_p_hi
+    //      vpsubd     res, prod_hi, q_p_hi
+    //      vpaddd     res{underflow}, res, P
+    // throughput: 7 cyc/vec (2.3 els/cyc)
+    // latency: 22 cyc
     unsafe {
         // We use 2^32 - P instead of 2^32 to avoid having to worry about 0's in lhs.
 
