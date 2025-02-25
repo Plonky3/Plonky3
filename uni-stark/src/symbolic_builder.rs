@@ -269,7 +269,7 @@ mod tests {
     fn test_symbolic_air_builder_initialization() {
         let builder = SymbolicAirBuilder::<BabyBear>::new(2, 4, 3);
 
-        let expected_main = vec![
+        let expected_main = [
             SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 0 }, 0),
             SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 0 }, 1),
             SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 0 }, 2),
