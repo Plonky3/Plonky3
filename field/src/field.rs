@@ -237,6 +237,51 @@ pub trait PrimeCharacteristicRing:
         u.iter().zip(v).map(|(x, y)| x.clone() * y.clone()).sum()
     }
 
+    /// Compute the sum of a slice of elements of known length.
+    ///
+    /// The rust compiler doesn't realize that add is associative
+    /// so we help it out and minimize the dependency chains by hand.
+    /// Thus while this function has the same throughput as `input.iter().sum()`,
+    /// it will usually have much lower latency.
+    #[inline]
+    fn tree_sum<const N: usize>(input: &[Self]) -> Self {
+        // It looks a little strange but using a const parameter here instead of
+        // using input.len() leads to a significant performance improvement.
+        assert_eq!(N, input.len());
+        match N {
+            0 => Self::ZERO,
+            1 => input[0].clone(),
+            2 => input[0].clone() + input[1].clone(),
+            3 => input[0].clone() + input[1].clone() + input[2].clone(),
+            4 => {
+                let lhs = input[0].clone() + input[1].clone();
+                let rhs = input[2].clone() + input[3].clone();
+                lhs + rhs
+            }
+            5 => Self::tree_sum::<4>(&input[..4]) + Self::tree_sum::<1>(&input[4..]),
+            6 => Self::tree_sum::<4>(&input[..4]) + Self::tree_sum::<2>(&input[4..]),
+            7 => Self::tree_sum::<4>(&input[..4]) + Self::tree_sum::<3>(&input[4..]),
+            8 => Self::tree_sum::<4>(&input[..4]) + Self::tree_sum::<4>(&input[4..]),
+            _ => {
+                let mut acc = Self::tree_sum::<8>(&input[..8]);
+                for i in 1..(N / 8) {
+                    acc += Self::tree_sum::<8>(&input[(8 * i)..(8 * (i + 1))])
+                }
+                match N - 8 * (N / 8) {
+                    0 => acc,
+                    1 => acc + Self::tree_sum::<1>(&input[(8 * (N / 8))..]),
+                    2 => acc + Self::tree_sum::<2>(&input[(8 * (N / 8))..]),
+                    3 => acc + Self::tree_sum::<3>(&input[(8 * (N / 8))..]),
+                    4 => acc + Self::tree_sum::<4>(&input[(8 * (N / 8))..]),
+                    5 => acc + Self::tree_sum::<5>(&input[(8 * (N / 8))..]),
+                    6 => acc + Self::tree_sum::<6>(&input[(8 * (N / 8))..]),
+                    7 => acc + Self::tree_sum::<7>(&input[(8 * (N / 8))..]),
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+
     /// Allocates a vector of zero elements of length `len`. Many operating systems zero pages
     /// before assigning them to a userspace process. In that case, our process should not need to
     /// write zeros, which would be redundant. However, the compiler may not always recognize this.

@@ -5,10 +5,12 @@ use core::arch::x86_64::{self, __m256i};
 use core::marker::PhantomData;
 use core::mem::transmute;
 
+use p3_field::PrimeCharacteristicRing;
+
 use p3_poseidon2::{
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, InternalLayer,
     InternalLayerConstructor, MDSMat4, external_initial_permute_state,
-    external_terminal_permute_state, sum_15, sum_23,
+    external_terminal_permute_state,
 };
 
 use crate::{
@@ -373,11 +375,12 @@ where
 
             self.packed_internal_constants.iter().for_each(|&rc| {
                 add_rc_and_sbox::<FP, D>(&mut internal_state.s0, rc); // s0 -> (s0 + rc)^D
-                let sum_non_0 = sum_15(
-                    &transmute::<[__m256i; 15], [PackedMontyField31AVX2<FP>; 15]>(
-                        internal_state.s_hi,
-                    ),
-                ); // Get the sum of all elements other than s0.
+                let sum_non_0 = PackedMontyField31AVX2::<FP>::tree_sum::<15>(&transmute::<
+                    [__m256i; 15],
+                    [PackedMontyField31AVX2<FP>; 15],
+                >(
+                    internal_state.s_hi,
+                )); // Get the sum of all elements other than s0.
                 ILP::diagonal_mul(&mut internal_state.s_hi); // si -> vi * si for all i > 0.
                 let sum = sum_non_0 + internal_state.s0; // Get the full sum.
                 internal_state.s0 = sum_non_0 - internal_state.s0; // s0 -> sum - 2*s0 = sum_non_0 - s0.
@@ -424,11 +427,12 @@ where
 
             self.packed_internal_constants.iter().for_each(|&rc| {
                 add_rc_and_sbox::<FP, D>(&mut internal_state.s0, rc); // s0 -> (s0 + rc)^D
-                let sum_non_0 = sum_23(
-                    &transmute::<[__m256i; 23], [PackedMontyField31AVX2<FP>; 23]>(
-                        internal_state.s_hi,
-                    ),
-                ); // Get the sum of all elements other than s0.
+                let sum_non_0 = PackedMontyField31AVX2::<FP>::tree_sum::<23>(&transmute::<
+                    [__m256i; 23],
+                    [PackedMontyField31AVX2<FP>; 23],
+                >(
+                    internal_state.s_hi,
+                )); // Get the sum of all elements other than s0.
                 ILP::diagonal_mul(&mut internal_state.s_hi); // si -> vi * si for all i > 0.
                 let sum = sum_non_0 + internal_state.s0; // Get the full sum.
                 internal_state.s0 = sum_non_0 - internal_state.s0; // s0 -> sum - 2*s0 = sum_non_0 - s0.
