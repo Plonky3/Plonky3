@@ -52,7 +52,7 @@ impl PackedMersenne31Neon {
         // can be transmuted to `[Mersenne31; WIDTH]` (since `Mersenne31` is `repr(transparent)`),
         // which in turn can be transmuted to `PackedMersenne31Neon` (since `PackedMersenne31Neon`
         // is also `repr(transparent)`).
-        transmute(vector)
+        unsafe { transmute(vector) }
     }
 
     /// Copy `value` to all positions in a packed vector. This is the same as
