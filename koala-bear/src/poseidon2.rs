@@ -50,7 +50,7 @@ pub type Poseidon2KoalaBear<const WIDTH: usize> = Poseidon2<
 ///
 /// This can act on `[A; WIDTH]` for any ring implementing `Algebra<BabyBear>`.
 /// If you have either `[KoalaBear::Packing; WIDTH]` or `[KoalaBear; WIDTH]` it will be much faster
-/// to use `Poseidon2KoalaBear<WIDTH>` instead of building a Poseidon2 permutation using this.
+/// to use `Poseidon2KoalaBear<WIDTH>` instead of building the Poseidon2 permutation using this.
 pub type GenericPoseidon2LinearLayersKoalaBear =
     GenericPoseidon2LinearLayersMonty31<KoalaBearParameters, KoalaBearInternalLayerParameters>;
 
