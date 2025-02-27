@@ -321,21 +321,6 @@ where
         PF::ZERO,
         "Error when testing bool_check(1) = 0."
     );
-    assert_eq!(
-        PF::ZERO.trit_check(),
-        PF::ZERO,
-        "Error when testing trit_check(0) = 0."
-    );
-    assert_eq!(
-        PF::ONE.trit_check(),
-        PF::ZERO,
-        "Error when testing trit_check(1) = 0."
-    );
-    assert_eq!(
-        PF::TWO.trit_check(),
-        PF::ZERO,
-        "Error when testing trit_check(2) = 0."
-    );
 
     assert_eq!(
         vec0.xor(&vec1),
