@@ -93,16 +93,22 @@ pub trait AirBuilder: Sized {
         self.when(self.is_transition_window(size))
     }
 
+    /// Assert that the given element is zero.
+    ///
+    /// Where possible, batching multiple assert_zero calls
+    /// into a single assert_zeroes call will improve performance.
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I);
 
     /// Assert that every element of a given array is 0.
-    fn assert_zeroes<const N: usize>(&mut self, array: [Self::Expr; N]) {
+    ///
+    /// This should be preferred over calling `assert_zero` multiple times.
+    fn assert_zeroes<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
         for elem in array {
             self.assert_zero(elem);
         }
     }
 
-    /// Assert that a given array consists of only boolen values.
+    /// Assert that a given array consists of only boolean values.
     fn assert_bools<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
         let zero_array = array.map(|x| {
             let x = x.into();
@@ -111,21 +117,26 @@ pub trait AirBuilder: Sized {
         self.assert_zeroes(zero_array);
     }
 
+    /// Assert that `x` element is equal to `1`.
     fn assert_one<I: Into<Self::Expr>>(&mut self, x: I) {
         self.assert_zero(x.into() - Self::Expr::ONE);
     }
 
+    /// Assert that the given elements are equal.
     fn assert_eq<I1: Into<Self::Expr>, I2: Into<Self::Expr>>(&mut self, x: I1, y: I2) {
         self.assert_zero(x.into() - y.into());
     }
 
-    /// Assert that `x` is a boolean, i.e. either 0 or 1.
+    /// Assert that `x` is a boolean, i.e. either `0` or `1`.
+    ///
+    /// Where possible, batching multiple assert_bool calls
+    /// into a single assert_bools call will improve performance.
     fn assert_bool<I: Into<Self::Expr>>(&mut self, x: I) {
         let x = x.into();
         self.assert_zero(x.clone() * (x - Self::Expr::ONE));
     }
 
-    /// Assert that `x` is ternary, i.e. either 0, 1 or 2.
+    /// Assert that `x` is ternary, i.e. either `0`, `1` or `2`.
     fn assert_tern<I: Into<Self::Expr>>(&mut self, x: I) {
         let x = x.into();
         self.assert_zero(x.clone() * (x.clone() - Self::Expr::ONE) * (x - Self::Expr::TWO));
