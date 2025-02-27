@@ -136,7 +136,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
 impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
     #[instrument(skip_all, fields(dims = %coeffs.dimensions()))]
     pub fn evaluate(domain: CircleDomain<F>, mut coeffs: RowMajorMatrix<F>) -> Self {
-        let log_n = log2_strict_usize(coeffs.height());
+        let log_n = coeffs.log2_height_strict();
         assert!(log_n <= domain.log_n);
 
         if log_n < domain.log_n {
