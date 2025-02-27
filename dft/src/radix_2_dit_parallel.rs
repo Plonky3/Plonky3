@@ -105,7 +105,7 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
 
     fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> Self::Evaluations {
         let h = mat.height();
-        let log_h = log2_strict_usize(h);
+        let log_h = mat.log2_height_strict();
 
         // Compute twiddle factors, or take memoized ones if already available.
         let mut twiddles_ref_mut = self.twiddles.borrow_mut();
@@ -135,7 +135,7 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
     ) -> Self::Evaluations {
         let w = mat.width;
         let h = mat.height();
-        let log_h = log2_strict_usize(h);
+        let log_h = mat.log2_height_strict();
         let mid = log_h.div_ceil(2);
 
         let mut inverse_twiddles_ref_mut = self.inverse_twiddles.borrow_mut();
@@ -198,7 +198,7 @@ fn coset_dft<F: TwoAdicField + Ord>(
     mat: &mut RowMajorMatrixViewMut<F>,
     shift: F,
 ) {
-    let log_h = log2_strict_usize(mat.height());
+    let log_h = mat.log2_height_strict();
     let mid = log_h.div_ceil(2);
 
     let mut twiddles_ref_mut = dft.coset_twiddles.borrow_mut();
@@ -225,7 +225,7 @@ fn coset_dft_oop<F: TwoAdicField + Ord>(
 ) {
     assert_eq!(src.dimensions(), dst_maybe.dimensions());
 
-    let log_h = log2_strict_usize(dst_maybe.height());
+    let log_h = dst_maybe.log2_height_strict();
 
     if log_h == 0 {
         // This is an edge case where first_half_general_oop doesn't work, as it expects there to be
@@ -263,7 +263,7 @@ fn coset_dft_oop<F: TwoAdicField + Ord>(
 /// This can be used as the first half of a DIT butterfly network.
 #[instrument(level = "debug", skip_all)]
 fn first_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F]) {
-    let log_h = log2_strict_usize(mat.height());
+    let log_h = mat.log2_height_strict();
 
     // max block size: 2^mid
     mat.par_row_chunks_exact_mut(1 << mid)
@@ -291,7 +291,7 @@ fn first_half_general<F: Field>(
     mid: usize,
     twiddles: &[Vec<F>],
 ) {
-    let log_h = log2_strict_usize(mat.height());
+    let log_h = mat.log2_height_strict();
     mat.par_row_chunks_exact_mut(1 << mid)
         .for_each(|mut submat| {
             let mut backwards = false;
@@ -319,7 +319,7 @@ fn first_half_general_oop<F: Field>(
     mid: usize,
     twiddles: &[Vec<F>],
 ) {
-    let log_h = log2_strict_usize(src.height());
+    let log_h = src.log2_height_strict();
     src.par_row_chunks_exact(1 << mid)
         .zip(dst_maybe.par_row_chunks_exact_mut(1 << mid))
         .for_each(|(src_submat, mut dst_submat_maybe)| {
@@ -370,7 +370,7 @@ fn second_half<F: Field>(
     twiddles_rev: &[F],
     scale: Option<F>,
 ) {
-    let log_h = log2_strict_usize(mat.height());
+    let log_h = mat.log2_height_strict();
 
     // max block size: 2^(log_h - mid)
     mat.par_row_chunks_exact_mut(1 << (log_h - mid))
@@ -402,7 +402,7 @@ fn second_half_general<F: Field>(
     mid: usize,
     twiddles_rev: &[Vec<F>],
 ) {
-    let log_h = log2_strict_usize(mat.height());
+    let log_h = mat.log2_height_strict();
     mat.par_row_chunks_exact_mut(1 << (log_h - mid))
         .enumerate()
         .for_each(|(thread, mut submat)| {
