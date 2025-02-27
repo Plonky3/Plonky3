@@ -285,6 +285,15 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
                 sum_of_packed
             })
     }
+
+    fn log_height(&self) -> usize {
+        let h = self.height();
+        if h <= 1 {
+            1
+        } else {
+            (h - 1).ilog2() as usize + 1
+        }
+    }
 }
 
 #[cfg(test)]
@@ -457,5 +466,29 @@ mod tests {
 
         let all_rows: Vec<Vec<u32>> = matrix.rows().map(|row| row.collect()).collect();
         assert_eq!(all_rows, vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]]);
+    }
+
+    #[test]
+    fn test_log_height() {
+        let test_cases = vec![
+            (1, 1),   // Special case for height=1
+            (2, 2),   // 2^1
+            (3, 2),   // ceil(log2(3))
+            (4, 3),   // 2^2
+            (7, 3),   // ceil(log2(7))
+            (8, 4),   // 2^3
+            (9, 4),   // ceil(log2(9))
+            (15, 4),  // ceil(log2(15))
+            (16, 5),  // 2^4
+        ];
+
+        for (height, expected_log) in test_cases {
+            let matrix = MockMatrix {
+                data: vec![vec![0; 1]; height],
+                width: 1,
+                height,
+            };
+            assert_eq!(matrix.log_height(), expected_log, "Failed for height {}", height);
+        }
     }
 }
