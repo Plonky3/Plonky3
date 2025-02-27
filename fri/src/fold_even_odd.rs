@@ -30,7 +30,7 @@ pub fn fold_even_odd<F: TwoAdicField>(poly: Vec<F>, beta: F) -> Vec<F> {
     //                    = (1/2 + beta/2 g_inv^i) p(g^i)
     //                    + (1/2 - beta/2 g_inv^i) p(g^(n/2 + i))
     let m = RowMajorMatrix::new(poly, 2);
-    let g_inv = F::two_adic_generator(log2_strict_usize(m.height()) + 1).inverse();
+    let g_inv = F::two_adic_generator(m.log2_height_strict() + 1).inverse();
     let one_half = F::TWO.inverse();
     let half_beta = beta * one_half;
 
