@@ -135,12 +135,6 @@ pub trait AirBuilder: Sized {
         let x = x.into();
         self.assert_zero(x.clone() * (x - Self::Expr::ONE));
     }
-
-    /// Assert that `x` is ternary, i.e. either `0`, `1` or `2`.
-    fn assert_tern<I: Into<Self::Expr>>(&mut self, x: I) {
-        let x = x.into();
-        self.assert_zero(x.clone() * (x.clone() - Self::Expr::ONE) * (x - Self::Expr::TWO));
-    }
 }
 
 pub trait AirBuilderWithPublicValues: AirBuilder {
