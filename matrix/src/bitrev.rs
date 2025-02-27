@@ -25,7 +25,7 @@ impl BitReversalPerm {
     ) -> BitReversedMatrixView<Inner> {
         RowIndexMappedView {
             index_map: Self {
-                log_height: log2_strict_usize(inner.height()),
+                log_height: inner.log2_height_strict(),
             },
             inner,
         }
