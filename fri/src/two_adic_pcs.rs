@@ -106,7 +106,7 @@ impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
         //     result(g^(2i)) = p_e(g^(2i)) + beta p_o(g^(2i))
         //                    = (1/2 + beta/2 g_inv^i) p(g^i)
         //                    + (1/2 - beta/2 g_inv^i) p(g^(n/2 + i))
-        let g_inv = F::two_adic_generator(log2_strict_usize(m.height()) + 1).inverse();
+        let g_inv = F::two_adic_generator(m.log2_height_strict() + 1).inverse();
         let one_half = F::ONE.halve();
         let half_beta = beta * one_half;
 
@@ -321,7 +321,7 @@ where
                 let _guard =
                     info_span!("reduce matrix quotient", dims = %mat.dimensions()).entered();
 
-                let log_height = log2_strict_usize(mat.height());
+                let log_height = mat.log2_height_strict();
                 let reduced_opening_for_log_height = reduced_openings[log_height]
                     .get_or_insert_with(|| vec![Challenge::ZERO; mat.height()]);
                 debug_assert_eq!(reduced_opening_for_log_height.len(), mat.height());
@@ -460,7 +460,7 @@ where
                 for (mat_opening, (mat_domain, mat_points_and_values)) in
                     izip!(&batch_opening.opened_values, mats)
                 {
-                    let log_height = log2_strict_usize(mat_domain.size()) + self.fri.log_blowup;
+                    let log_height = mat_domain.size() << self.fri.log_blowup;
 
                     let bits_reduced = log_global_max_height - log_height;
                     let rev_reduced_index = reverse_bits_len(index >> bits_reduced, log_height);
@@ -511,7 +511,7 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
     let mut max_log_height_for_point: LinearMap<EF, usize> = LinearMap::new();
     for (mats, points) in mats_and_points {
         for (mat, points_for_mat) in izip!(mats, *points) {
-            let log_height = log2_strict_usize(mat.height());
+            let log_height = mat.log2_height_strict();
             for &z in points_for_mat {
                 if let Some(lh) = max_log_height_for_point.get_mut(&z) {
                     *lh = core::cmp::max(*lh, log_height);
