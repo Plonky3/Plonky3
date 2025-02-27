@@ -142,7 +142,7 @@ where
         domain: Self::Domain,
     ) -> Self::EvaluationsOnDomain<'a> {
         let mat = self.mmcs.get_matrices(data)[idx].as_view();
-        let committed_domain = CircleDomain::standard(log2_strict_usize(mat.height()));
+        let committed_domain = CircleDomain::standard(mat.log2_height_strict());
         if domain == committed_domain {
             mat.as_cow().cfft_perm_rows()
         } else {
@@ -179,7 +179,7 @@ where
                 );
                 izip!(mats, points_for_mats)
                     .map(|(mat, points_for_mat)| {
-                        let log_height = log2_strict_usize(mat.height());
+                        let log_height = mat.log2_height_strict();
                         // It was committed in cfft order.
                         let evals = CircleEvaluations::from_cfft_order(
                             CircleDomain::standard(log_height),
@@ -225,7 +225,7 @@ where
             .for_each(|((data, points_for_mats), values)| {
                 let mats = self.mmcs.get_matrices(data);
                 izip!(mats, points_for_mats, values).for_each(|(mat, points_for_mat, values)| {
-                    let log_height = log2_strict_usize(mat.height());
+                    let log_height = mat.log2_height_strict();
                     // It was committed in cfft order.
                     let evals = CircleEvaluations::from_cfft_order(
                         CircleDomain::standard(log_height),
