@@ -12,24 +12,13 @@ type F = Bn254Fr;
 
 fn bench_field(c: &mut Criterion) {
     let name = "BN254Fr";
-    const REPS: usize = 100;
+    const REPS: usize = 1000;
     benchmark_inv::<F>(c, name);
-    benchmark_iter_sum::<F, 1, REPS>(c, name);
-    benchmark_tree_sum::<F, 1, REPS>(c, name);
-    benchmark_iter_sum::<F, 2, REPS>(c, name);
-    benchmark_tree_sum::<F, 2, REPS>(c, name);
-    benchmark_iter_sum::<F, 3, REPS>(c, name);
-    benchmark_tree_sum::<F, 3, REPS>(c, name);
+
     benchmark_iter_sum::<F, 4, REPS>(c, name);
     benchmark_tree_sum::<F, 4, REPS>(c, name);
-    // benchmark_iter_sum::<F, 8, REPS>(c, name);
-    // benchmark_tree_sum::<F, 8, REPS>(c, name);
-    // benchmark_iter_sum::<F, 12, REPS>(c, name);
-    // benchmark_tree_sum::<F, 12, REPS>(c, name);
-    // benchmark_iter_sum::<F, 16, REPS>(c, name);
-    // benchmark_tree_sum::<F, 16, REPS>(c, name);
-    // benchmark_iter_sum::<F, 64, REPS>(c, name);
-    // benchmark_tree_sum::<F, 64, REPS>(c, name);
+    benchmark_iter_sum::<F, 64, REPS>(c, name);
+    benchmark_tree_sum::<F, 64, REPS>(c, name);
 
     // Note that each round of throughput has 10 operations
     // So we should have 10 * more repetitions for latency tests.

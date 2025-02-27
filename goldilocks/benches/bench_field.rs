@@ -17,8 +17,6 @@ fn bench_field(c: &mut Criterion) {
     benchmark_mul_latency::<F, 100>(c, name);
     benchmark_mul_throughput::<F, 25>(c, name);
     benchmark_inv::<F>(c, name);
-    benchmark_iter_sum::<F, 1, REPS>(c, name);
-    benchmark_tree_sum::<F, 1, REPS>(c, name);
     benchmark_iter_sum::<F, 4, REPS>(c, name);
     benchmark_tree_sum::<F, 4, REPS>(c, name);
 

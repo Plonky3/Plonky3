@@ -364,13 +364,8 @@ fn dot_product_2<PMP: PackedMontyParameters, LHS: InToM256Vector<PMP>, RHS: InTo
     rhs: [RHS; 2],
 ) -> __m256i {
     // The following analysis treats all input arrays as being arrays of PackedMontyField31AVX2<FP>.
-    // The analysis is identical if one of the arrays contains MontyField31<FP>, we just get to avoid
-    // a few vmovshdup so everything is slightly cheaper.
-    //
-    // The naive method involves two multiplications and a summation taking
-    // (14)*2 + 3 = 31 instructions with:
-    // throughput: 10.33 cyc/vec (0.77 els/cyc)
-    // latency: 24 cyc
+    // If one of the arrays contains MontyField31<FP>, we get to avoid a few vmovshdup so everything
+    // is slightly cheaper.
     //
     // We improve the throughput by combining the monty reductions together. As all inputs are
     // `< P < 2^{31}`, `l0*r0 + l1*r1 < 2P^2 < 2^{32}P` so the montgomery reduction
@@ -424,8 +419,7 @@ fn dot_product_2<PMP: PackedMontyParameters, LHS: InToM256Vector<PMP>, RHS: InTo
         let red_evn_hi = movehdup_epi32(red_evn);
         let t = x86_64::_mm256_blend_epi32::<0b10101010>(red_evn_hi, red_odd);
 
-        let u = x86_64::_mm256_add_epi32(t, PMP::PACKED_P);
-        x86_64::_mm256_min_epu32(t, u)
+        red_signed_to_canonical::<PMP>(t)
     }
 }
 
@@ -440,33 +434,18 @@ fn dot_product_4<PMP: PackedMontyParameters, LHS: InToM256Vector<PMP>, RHS: InTo
     rhs: [RHS; 4],
 ) -> __m256i {
     // The following analysis treats all input arrays as being arrays of PackedMontyField31AVX2<FP>.
-    // The analysis is identical if one of the arrays contains MontyField31<FP>, we just get to avoid
-    // a few vmovshdup so everything is slightly cheaper.
+    // If one of the arrays contains MontyField31<FP>, we get to avoid a few vmovshdup so everything
+    // is slightly cheaper.
     //
-    // The naive method involves calling dot_product_2 twice and a summation taking
-    // (20)*2 + 3 = 43 instructions with:
-    // throughput: 14.33 cyc/vec (0.56 els/cyc)
-    // latency: 25 cyc
+    // Similarly to dot_product_2, we improve throughput by combining monty reductions however in this case
+    // we will need to slightly adjust the reduction algorithm.
     //
-    // We improve the throughput by combining the monty reductions together. This is a little more
-    // complicated than in the dot_product_2 case as we will need to slightly adjust the reduction algorithm.
-    //
-    // As all inputs are `< P < 2^{31}`, the sum satisfies: `l0*r0 + l1*r1 + l2*r2 + l3*r3 < 4P^2 < 2*2^{32}P`.
-    // Now compute Q as usual:
-    //
-    // Q := μ C mod B
-    //
-    // We can't proceed as normal however as C - Q P now lies in the range 2*2^{32}P > C - QP > -2^{32}P which
-    // doesn't fit into an i64. Moreover, AVX2 does not support u64 comparisons, only i64. We can bootstrap
-    // i64 comparisons to u64 ones but it takes some extra instructions so instead of testing C and QP we test
-    // C >= 2^{32}P where we can now save 2^{32}P as a constant in the appropriate form. This lets us define
-    //
-    // C' = if C < 2^{32}P: {C} else {C - 2^{32}P}
-    //
-    // And we can proceed with the standard identical montgomery reduction on C'. Note that
-    // C = C' mod B so we can compute Q while the C check is going on.
-    //
-    // (2^{32}P, 2^{63})
+    // As all inputs are `< P < 2^{31}`, the sum satisfies: `C = l0*r0 + l1*r1 + l2*r2 + l3*r3 < 4P^2 < 2*2^{32}P`.
+    // Start by computing Q := μ C mod B as usual.
+    // We can't proceed as normal however as 2*2^{32}P > C - QP > -2^{32}P which doesn't fit into an i64.
+    // Instead we do a reduction on C, defining C' = if C < 2^{32}P: {C} else {C - 2^{32}P}
+    // From here we proceed with the standard montgomery reduction with C replaced by C'. It works identically
+    // with the Q we already computed as C = C' mod B.
     //
     // We want this to compile to:
     //      vmovshdup  lhs_odd0, lhs0
@@ -562,13 +541,15 @@ fn dot_product_4<PMP: PackedMontyParameters, LHS: InToM256Vector<PMP>, RHS: InTo
         let red_evn_hi = movehdup_epi32(red_evn);
         let t = x86_64::_mm256_blend_epi32::<0b10101010>(red_evn_hi, red_odd);
 
-        let u = x86_64::_mm256_add_epi32(t, PMP::PACKED_P);
-        x86_64::_mm256_min_epu32(t, u)
+        red_signed_to_canonical::<PMP>(t)
     }
 }
 
-/// For larger dot products we want to repeat calling dot product 4 as
-/// many times as possible.
+/// A general fast dot product implementation.
+///
+/// Maximises the number of calls to `dot_product_4` for dot products involving vectors of length
+/// more than 4. The length 64 occurs commonly enough it's useful to have a custom implementation
+/// which lets it use a slightly better summation algorithm with lower latency.
 #[inline(always)]
 fn general_dot_product<FP: FieldParameters, LHS: InToM256Vector<FP>, RHS: InToM256Vector<FP>>(
     lhs: &[LHS],
@@ -1270,11 +1251,6 @@ unsafe impl<FP: FieldParameters> PackedField for PackedMontyField31AVX2<FP> {
 
     #[inline]
     fn dot_product_scalar_packed(scalar_slice: &[Self::Scalar], packed_slice: &[Self]) -> Self {
-        // let mut acc = Self::ZERO;
-        // for (&scalar, &packed) in scalar_slice.iter().zip(packed_slice) {
-        //     acc += packed * scalar
-        // }
-        // acc
         general_dot_product(scalar_slice, packed_slice)
     }
 }

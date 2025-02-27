@@ -48,6 +48,7 @@ where
     assert_eq!((x + y) - z, x + (y - z));
     assert_eq!(x * (y + z), x * y + x * z);
     assert_eq!(x + y + z + x + y + z, [x, x, y, y, z, z].into_iter().sum());
+    test_tree_sum(&[x, y, z, x, y, z, x, y, z, x, y, z, x, y, z, x]);
 }
 
 pub fn test_inv_div<F: Field>()
@@ -92,6 +93,43 @@ pub fn test_dot_product<const N: usize, R: PrimeCharacteristicRing + Eq + Copy>(
     let output = R::dot_product(u, v);
     let expected = u.iter().zip(v).map(|(&x, &y)| x * y).sum();
     assert_eq!(output, expected)
+}
+
+pub fn test_tree_sum<R: PrimeCharacteristicRing + Eq + Copy>(u: &[R; 16]) {
+    let mut sum = R::ZERO;
+    assert_eq!(sum, R::tree_sum::<0>(u[..0].try_into().unwrap()));
+    sum += u[0];
+    assert_eq!(sum, R::tree_sum::<1>(u[..1].try_into().unwrap()));
+    sum += u[1];
+    assert_eq!(sum, R::tree_sum::<2>(u[..2].try_into().unwrap()));
+    sum += u[2];
+    assert_eq!(sum, R::tree_sum::<3>(u[..3].try_into().unwrap()));
+    sum += u[3];
+    assert_eq!(sum, R::tree_sum::<4>(u[..4].try_into().unwrap()));
+    sum += u[4];
+    assert_eq!(sum, R::tree_sum::<5>(u[..5].try_into().unwrap()));
+    sum += u[5];
+    assert_eq!(sum, R::tree_sum::<6>(u[..6].try_into().unwrap()));
+    sum += u[6];
+    assert_eq!(sum, R::tree_sum::<7>(u[..7].try_into().unwrap()));
+    sum += u[7];
+    assert_eq!(sum, R::tree_sum::<8>(u[..8].try_into().unwrap()));
+    sum += u[8];
+    assert_eq!(sum, R::tree_sum::<9>(u[..9].try_into().unwrap()));
+    sum += u[9];
+    assert_eq!(sum, R::tree_sum::<10>(u[..10].try_into().unwrap()));
+    sum += u[10];
+    assert_eq!(sum, R::tree_sum::<11>(u[..11].try_into().unwrap()));
+    sum += u[11];
+    assert_eq!(sum, R::tree_sum::<12>(u[..12].try_into().unwrap()));
+    sum += u[12];
+    assert_eq!(sum, R::tree_sum::<13>(u[..13].try_into().unwrap()));
+    sum += u[13];
+    assert_eq!(sum, R::tree_sum::<14>(u[..14].try_into().unwrap()));
+    sum += u[14];
+    assert_eq!(sum, R::tree_sum::<15>(u[..15].try_into().unwrap()));
+    sum += u[15];
+    assert_eq!(sum, R::tree_sum::<16>(u));
 }
 
 pub fn test_multiplicative_group_factors<F: Field>() {

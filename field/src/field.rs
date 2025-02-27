@@ -320,40 +320,24 @@ pub trait PrimeCharacteristicRing:
             6 => Self::tree_sum::<4>(&input[..4]) + Self::tree_sum::<2>(&input[4..]),
             7 => Self::tree_sum::<4>(&input[..4]) + Self::tree_sum::<3>(&input[4..]),
             8 => Self::tree_sum::<4>(&input[..4]) + Self::tree_sum::<4>(&input[4..]),
-            9 => Self::tree_sum::<8>(&input[..8]) + Self::tree_sum::<1>(&input[8..]),
-            10 => Self::tree_sum::<8>(&input[..8]) + Self::tree_sum::<2>(&input[8..]),
-            11 => Self::tree_sum::<8>(&input[..8]) + Self::tree_sum::<3>(&input[8..]),
-            12 => Self::tree_sum::<8>(&input[..8]) + Self::tree_sum::<4>(&input[8..]),
-            13 => Self::tree_sum::<8>(&input[..8]) + Self::tree_sum::<5>(&input[8..]),
-            14 => Self::tree_sum::<8>(&input[..8]) + Self::tree_sum::<6>(&input[8..]),
-            15 => Self::tree_sum::<8>(&input[..8]) + Self::tree_sum::<7>(&input[8..]),
-            16 => Self::tree_sum::<8>(&input[..8]) + Self::tree_sum::<8>(&input[8..]),
             _ => {
                 // We know that N > 8 here so this saves an add over the usual
                 // initialisation of acc to Self::ZERO.
-                let mut acc = Self::tree_sum::<16>(&input[..16]);
-                for i in 1..(N / 16) {
-                    acc += Self::tree_sum::<16>(&input[(16 * i)..(16 * (i + 1))])
+                let mut acc = Self::tree_sum::<8>(&input[..8]);
+                for i in 1..(N / 8) {
+                    acc += Self::tree_sum::<8>(&input[(8 * i)..(8 * (i + 1))])
                 }
                 // This would be much cleaner if we could use const generic expressions but
                 // this will do for now.
-                match N & 15 {
+                match N & 7 {
                     0 => acc,
-                    1 => acc + Self::tree_sum::<1>(&input[(16 * (N / 16))..]),
-                    2 => acc + Self::tree_sum::<2>(&input[(16 * (N / 16))..]),
-                    3 => acc + Self::tree_sum::<3>(&input[(16 * (N / 16))..]),
-                    4 => acc + Self::tree_sum::<4>(&input[(16 * (N / 16))..]),
-                    5 => acc + Self::tree_sum::<5>(&input[(16 * (N / 16))..]),
-                    6 => acc + Self::tree_sum::<6>(&input[(16 * (N / 16))..]),
-                    7 => acc + Self::tree_sum::<7>(&input[(16 * (N / 16))..]),
-                    8 => acc + Self::tree_sum::<8>(&input[(16 * (N / 16))..]),
-                    9 => acc + Self::tree_sum::<9>(&input[(16 * (N / 16))..]),
-                    10 => acc + Self::tree_sum::<10>(&input[(16 * (N / 16))..]),
-                    11 => acc + Self::tree_sum::<11>(&input[(16 * (N / 16))..]),
-                    12 => acc + Self::tree_sum::<12>(&input[(16 * (N / 16))..]),
-                    13 => acc + Self::tree_sum::<13>(&input[(16 * (N / 16))..]),
-                    14 => acc + Self::tree_sum::<14>(&input[(16 * (N / 16))..]),
-                    15 => acc + Self::tree_sum::<15>(&input[(16 * (N / 16))..]),
+                    1 => acc + Self::tree_sum::<1>(&input[(8 * (N / 8))..]),
+                    2 => acc + Self::tree_sum::<2>(&input[(8 * (N / 8))..]),
+                    3 => acc + Self::tree_sum::<3>(&input[(8 * (N / 8))..]),
+                    4 => acc + Self::tree_sum::<4>(&input[(8 * (N / 8))..]),
+                    5 => acc + Self::tree_sum::<5>(&input[(8 * (N / 8))..]),
+                    6 => acc + Self::tree_sum::<6>(&input[(8 * (N / 8))..]),
+                    7 => acc + Self::tree_sum::<7>(&input[(8 * (N / 8))..]),
                     _ => unreachable!(),
                 }
             }

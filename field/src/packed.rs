@@ -225,14 +225,7 @@ pub unsafe trait PackedFieldPow2: PackedField {
 pub trait PackedFieldExtension<
     BaseField: Field,
     ExtField: ExtensionField<BaseField, ExtensionPacking = Self>,
->:
-    'static
-    + Copy
-    + Send
-    + Sync
-    + Algebra<ExtField>
-    + Algebra<BaseField::Packing>
-    + BasedVectorSpace<BaseField::Packing>
+>: Algebra<ExtField> + Algebra<BaseField::Packing> + BasedVectorSpace<BaseField::Packing>
 {
     /// Given a slice of extension field `EF` elements of length `W`,
     /// convert into the array `[[F; D]; W]` transpose to

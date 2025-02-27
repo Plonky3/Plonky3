@@ -158,6 +158,8 @@ where
 
     let mut alpha_powers = alpha.powers().take(constraint_count).collect_vec();
     alpha_powers.reverse();
+    // alpha powers looks like Vec<EF> ~ Vec<[F; D]>
+    // It's useful to also have access to the the transpose of this of form [Vec<F>; D].
     let decomposed_alpha_powers: Vec<_> = (0..SC::Challenge::DIMENSION)
         .map(|i| {
             alpha_powers
@@ -171,7 +173,6 @@ where
         .into_par_iter()
         .step_by(PackedVal::<SC>::WIDTH)
         .flat_map_iter(|i_start| {
-            // .flat_map(|i_start| {
             let i_range = i_start..i_start + PackedVal::<SC>::WIDTH;
 
             let is_first_row = *PackedVal::<SC>::from_slice(&sels.is_first_row[i_range.clone()]);
@@ -197,7 +198,6 @@ where
                 constraint_index: 0,
             };
             air.eval(&mut folder);
-            // info_span!("Get Evals").in_scope(|| air.eval(&mut folder));
 
             // quotient(x) = constraints(x) / Z_H(x)
             let quotient = folder.accumulator * inv_vanishing;
