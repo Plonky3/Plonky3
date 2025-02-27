@@ -570,7 +570,7 @@ pub(crate) unsafe fn apply_func_to_even_odd<MPAVX512: MontyParametersAVX512>(
         let input_evn = input;
         let input_odd = movehdup_epi32(input);
 
-        // Unlike the mul function, we need to receive back values the reduced
+        // Unlike the mul function, we need to receive back values that are reduced
         let output_even = func(input_evn);
         let output_odd = func(input_odd);
 
