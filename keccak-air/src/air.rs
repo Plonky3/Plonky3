@@ -2,7 +2,6 @@ use alloc::vec::Vec;
 use core::array;
 use core::borrow::Borrow;
 
-use p3_air::utils::{andn, xor, xor3};
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
 use p3_matrix::Matrix;
@@ -87,10 +86,9 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         for x in 0..5 {
             builder.assert_bools(local.c[x]);
             builder.assert_zeroes::<64, _>(array::from_fn(|z| {
-                let xor = xor3::<AB::Expr>(
-                    local.c[x][z].into(),
-                    local.c[(x + 4) % 5][z].into(),
-                    local.c[(x + 1) % 5][(z + 63) % 64].into(),
+                let xor = local.c[x][z].into().xor3(
+                    &local.c[(x + 4) % 5][z].into(),
+                    &local.c[(x + 1) % 5][(z + 63) % 64].into(),
                 );
                 local.c_prime[x][z] - xor
             }));
@@ -107,10 +105,10 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         for y in 0..5 {
             for x in 0..5 {
                 let get_bit = |z| {
-                    let a_prime: AB::Var = local.a_prime[y][x][z];
-                    let c: AB::Var = local.c[x][z];
-                    let c_prime: AB::Var = local.c_prime[x][z];
-                    xor3::<AB::Expr>(a_prime.into(), c.into(), c_prime.into())
+                    Into::<AB::Expr>::into(local.a_prime[y][x][z]).xor3(
+                        &Into::<AB::Expr>::into(local.c[x][z]),
+                        &Into::<AB::Expr>::into(local.c_prime[x][z]),
+                    )
                 };
 
                 // Check that all entries of A'[y][x] are boolean.
@@ -146,11 +144,11 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         for y in 0..5 {
             for x in 0..5 {
                 let get_bit = |z| {
-                    let andn = andn::<AB::Expr>(
-                        local.b((x + 1) % 5, y, z).into(),
-                        local.b((x + 2) % 5, y, z).into(),
-                    );
-                    xor::<AB::Expr>(local.b(x, y, z).into(), andn)
+                    let andn = local
+                        .b((x + 1) % 5, y, z)
+                        .into()
+                        .andn(&local.b((x + 2) % 5, y, z).into());
+                    andn.xor(&local.b(x, y, z).into())
                 };
                 builder.assert_zeroes::<U64_LIMBS, _>(array::from_fn(|limb| {
                     let computed_limb = (limb * BITS_PER_LIMB..(limb + 1) * BITS_PER_LIMB)
@@ -182,7 +180,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                 rc_bit_i += this_round * this_round_constant;
             }
 
-            xor::<AB::Expr>(local.a_prime_prime_0_0_bits[i].into(), rc_bit_i)
+            rc_bit_i.xor(&local.a_prime_prime_0_0_bits[i].into())
         };
 
         builder.assert_zeroes::<U64_LIMBS, _>(array::from_fn(|limb| {

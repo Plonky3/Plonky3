@@ -132,8 +132,7 @@ pub trait AirBuilder: Sized {
     /// Where possible, batching multiple assert_bool calls
     /// into a single assert_bools call will improve performance.
     fn assert_bool<I: Into<Self::Expr>>(&mut self, x: I) {
-        let x = x.into();
-        self.assert_zero(x.clone() * (x - Self::Expr::ONE));
+        self.assert_zero(x.into().bool_check());
     }
 }
 

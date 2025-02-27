@@ -317,8 +317,11 @@ fn mask_movehdup_epi32(src: __m512i, k: __mmask16, a: __m512i) -> __m512i {
     }
 }
 
-/// Multiply vectors of MontyField31 elements in canonical form.
-/// If the inputs are not in canonical form, the result is undefined.
+/// Multiply a vector of unsigned field elements return a vector of unsigned field elements lying in [0, P).
+///
+/// Note that the input does not need to be in canonical form but must satisfy
+/// the bound `lhs * rhs < 2^32 * P`. If this bound is not satisfied, the result
+/// is undefined.
 #[inline]
 #[must_use]
 fn mul<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
@@ -390,6 +393,107 @@ fn mul<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
         let underflow = x86_64::_mm512_cmplt_epu32_mask(prod_hi, q_p_hi);
         let t = x86_64::_mm512_sub_epi32(prod_hi, q_p_hi);
         x86_64::_mm512_mask_add_epi32(t, underflow, t, MPAVX512::PACKED_P)
+    }
+}
+
+/// Compute the elementary arithmetic generalization of `xor`, namely `xor(l, r) = l + r - 2lr` of
+/// vectors in canonical form.
+///
+/// Inputs are assumed to be in canonical form, if the inputs are not in canonical form, the result is undefined.
+#[inline]
+#[must_use]
+fn xor<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
+    // We refactor the expression as r + 2l(1/2 - r).
+    // As we are working with MONTY_CONSTANT = 2^32, the internal representation
+    // of 1/2 is 2^31 mod P. Hence let us compute 2l(2^31 - r). As, 0 < l, r < P < 2^31
+    // we find that 2l(2^31 - r) < 2^32P so we can apply our monty reduction to this product.
+    //
+    // Moreover, as 2l, 2^31 - r are both < 2^32 we can compute these before we
+    // split into even and odd parts for the multiplication.
+    //
+    // All together we save 4 instructions (~25%) over the naive implementation.
+    //
+    // We want this to compile to:
+    //      vpaddd     lhs_double, lhs, lhs
+    //      vpsubd     sub_rhs, rhs, (1 << 31)
+    //      vmovshdup  lhs_odd, lhs_double
+    //      vmovshdup  rhs_odd, sub_rhs
+    //      vpmuludq   prod_evn, lhs_double, sub_rhs
+    //      vpmuludq   prod_hi, lhs_odd, rhs_odd
+    //      vpmuludq   q_evn, prod_evn, MU
+    //      vpmuludq   q_odd, prod_hi, MU
+    //      vmovshdup  prod_hi{EVENS}, prod_evn
+    //      vpmuludq   q_p_evn, q_evn, P
+    //      vpmuludq   q_p_hi, q_odd, P
+    //      vmovshdup  q_p_hi{EVENS}, q_p_evn
+    //      vpcmpltud  underflow, prod_hi, q_p_hi
+    //      vpsubd     res, prod_hi, q_p_hi
+    //      vpaddd     res{underflow}, res, P
+    //      vpaddd     sum,        rhs,   t
+    //      vpsubd     sum_corr,   sum,   pos_neg_P
+    //      vpminud    res,        sum,   sum_corr
+    // throughput: 9 cyc/vec (1.77 els/cyc)
+    // latency: 25 cyc
+    unsafe {
+        // 0 <= 2*lhs < 2P
+        let double_lhs = x86_64::_mm512_add_epi32(lhs, lhs);
+
+        // Note that 2^31 is represented as an i32 as (-2^31).
+        // Compiler should realise this is a constant.
+        let half = x86_64::_mm512_set1_epi32(-1 << 31);
+
+        // 0 < 2^31 - rhs < 2^31
+        let half_sub_rhs = x86_64::_mm512_sub_epi32(half, rhs);
+
+        // 2*lhs (2^31 - rhs) < 2P 2^31 < 2^32P so we can use the multiplication function.
+        let mul_res = mul::<MPAVX512>(double_lhs, half_sub_rhs);
+
+        // Unfortunately, AVX512 has no equivalent of vpsignd so we can't do the same
+        // signed_add trick as in the AVX2 case. Instead we get a reduced value from mul
+        // and add on rhs in the standard way.
+        add::<MPAVX512>(rhs, mul_res)
+    }
+}
+
+/// Compute the elementary arithmetic generalization of `andnot`, namely `andn(l, r) = (1 - l)r` of
+/// vectors in canonical form.
+///
+/// Inputs are assumed to be in canonical form, if the inputs are not in canonical form, the result is undefined.
+#[inline]
+#[must_use]
+fn andn<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
+    // As we are working with MONTY_CONSTANT = 2^32, the internal representation
+    // of 1 is 2^32 mod P = 2^32 - P mod P. Hence let us compute (2^32 - P - l)r.
+    // This product is clearly less than 2^32P so we can apply our monty reduction to this.
+    //
+    // All together we save 2 instructions (~12%) over the naive implementation.
+    //
+    // We want this to compile to:
+    //      vpsubd     neg_lhs, -P, lhs
+    //      vmovshdup  lhs_odd, neg_lhs
+    //      vmovshdup  rhs_odd, rhs
+    //      vpmuludq   prod_evn, neg_lhs, rhs
+    //      vpmuludq   prod_hi, lhs_odd, rhs_odd
+    //      vpmuludq   q_evn, prod_evn, MU
+    //      vpmuludq   q_odd, prod_hi, MU
+    //      vmovshdup  prod_hi{EVENS}, prod_evn
+    //      vpmuludq   q_p_evn, q_evn, P
+    //      vpmuludq   q_p_hi, q_odd, P
+    //      vmovshdup  q_p_hi{EVENS}, q_p_evn
+    //      vpcmpltud  underflow, prod_hi, q_p_hi
+    //      vpsubd     res, prod_hi, q_p_hi
+    //      vpaddd     res{underflow}, res, P
+    // throughput: 7 cyc/vec (2.3 els/cyc)
+    // latency: 22 cyc
+    unsafe {
+        // We use 2^32 - P instead of 2^32 to avoid having to worry about 0's in lhs.
+
+        // Compiler should realise that this is a constant.
+        let neg_p = x86_64::_mm512_sub_epi32(x86_64::_mm512_setzero_epi32(), MPAVX512::PACKED_P);
+        let neg_lhs = x86_64::_mm512_sub_epi32(neg_p, lhs);
+
+        // 2*lhs (2^31 - rhs) < 2P 2^31 < 2^32P so we can use the multiplication function.
+        mul::<MPAVX512>(neg_lhs, rhs)
     }
 }
 
@@ -618,6 +722,28 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX512<F
         }
     }
 
+    #[inline]
+    fn xor(&self, rhs: &Self) -> Self {
+        let lhs = self.to_vector();
+        let rhs = rhs.to_vector();
+        let res = xor::<FP>(lhs, rhs);
+        unsafe {
+            // Safety: `xor` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
+    }
+
+    #[inline]
+    fn andn(&self, rhs: &Self) -> Self {
+        let lhs = self.to_vector();
+        let rhs = rhs.to_vector();
+        let res = andn::<FP>(lhs, rhs);
+        unsafe {
+            // Safety: `andn` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
+    }
+
     #[must_use]
     #[inline(always)]
     fn exp_const_u64<const POWER: u64>(&self) -> Self {
@@ -779,7 +905,7 @@ impl<PMP: PackedMontyParameters> Distribution<PackedMontyField31AVX512<PMP>> for
 fn interleave1_antidiagonal(x: __m512i, y: __m512i) -> __m512i {
     unsafe {
         // Safety: If this code got compiled then AVX-512VBMI2 intrinsics are available.
-        x86_64::_mm512_shrdi_epi64::<32>(y, x)
+        x86_64::_mm512_shrdi_epi64::<32>(x, y)
     }
 }
 
