@@ -127,6 +127,21 @@ impl PrimeCharacteristicRing for Goldilocks {
     }
 
     #[inline]
+    fn tree_sum<const N: usize>(input: &[Self]) -> Self {
+        assert_eq!(N, input.len());
+        // Benchmarking shows that for N <= 3 it's faster to sum the elements directly
+        // but for N > 3 it's faster to use the .sum() methods which passes through u128's
+        // allowing for delayed reductions.
+        match N {
+            0 => Self::ZERO,
+            1 => input[0],
+            2 => input[0] + input[1],
+            3 => input[0] + input[1] + input[2],
+            _ => input.iter().copied().sum(),
+        }
+    }
+
+    #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: repr(transparent) ensures transmutation safety.
         unsafe { transmute(vec![0u64; len]) }

@@ -243,11 +243,20 @@ pub trait PrimeCharacteristicRing:
     /// so we help it out and minimize the dependency chains by hand.
     /// Thus while this function has the same throughput as `input.iter().sum()`,
     /// it will usually have much lower latency.
+    #[must_use]
     #[inline]
     fn tree_sum<const N: usize>(input: &[Self]) -> Self {
-        // It looks a little strange but using a const parameter here instead of
+        // It looks a little strange but using a const parameter and an assert_eq! instead of
         // using input.len() leads to a significant performance improvement.
+        // We could make this input &[Self; N] but that would require sticking .try_into().unwrap() everywhere.
+        // Checking godbolt, the compiler seems to unroll everything anyway.
         assert_eq!(N, input.len());
+
+        // For `N <= 8` we implement a tree sum structure and for `N > 8` we break the input into
+        // chunks of `8`, perform a tree sum on each chunk and sum the results. The parameter `8`
+        // was determined experimentally by testing the speed of the poseidon2 internal layer computations.
+        // This is a useful benchmark as we have a mix of summations of size 15, 23 with other work in between.
+        // I only tested this on `AVX2` though so there might be a better value for other architectures.
         match N {
             0 => Self::ZERO,
             1 => input[0].clone(),
@@ -262,20 +271,40 @@ pub trait PrimeCharacteristicRing:
             6 => Self::tree_sum::<4>(&input[..4]) + Self::tree_sum::<2>(&input[4..]),
             7 => Self::tree_sum::<4>(&input[..4]) + Self::tree_sum::<3>(&input[4..]),
             8 => Self::tree_sum::<4>(&input[..4]) + Self::tree_sum::<4>(&input[4..]),
+            9 => Self::tree_sum::<8>(&input[..8]) + Self::tree_sum::<1>(&input[8..]),
+            10 => Self::tree_sum::<8>(&input[..8]) + Self::tree_sum::<2>(&input[8..]),
+            11 => Self::tree_sum::<8>(&input[..8]) + Self::tree_sum::<3>(&input[8..]),
+            12 => Self::tree_sum::<8>(&input[..8]) + Self::tree_sum::<4>(&input[8..]),
+            13 => Self::tree_sum::<8>(&input[..8]) + Self::tree_sum::<5>(&input[8..]),
+            14 => Self::tree_sum::<8>(&input[..8]) + Self::tree_sum::<6>(&input[8..]),
+            15 => Self::tree_sum::<8>(&input[..8]) + Self::tree_sum::<7>(&input[8..]),
+            16 => Self::tree_sum::<8>(&input[..8]) + Self::tree_sum::<8>(&input[8..]),
             _ => {
-                let mut acc = Self::tree_sum::<8>(&input[..8]);
-                for i in 1..(N / 8) {
-                    acc += Self::tree_sum::<8>(&input[(8 * i)..(8 * (i + 1))])
+                // We know that N > 8 here so this saves an add over the usual
+                // initialisation of acc to Self::ZERO.
+                let mut acc = Self::tree_sum::<16>(&input[..16]);
+                for i in 1..(N / 16) {
+                    acc += Self::tree_sum::<16>(&input[(16 * i)..(16 * (i + 1))])
                 }
-                match N - 8 * (N / 8) {
+                // This would be much cleaner if we could use const generic expressions but
+                // this will do for now.
+                match N & 15 {
                     0 => acc,
-                    1 => acc + Self::tree_sum::<1>(&input[(8 * (N / 8))..]),
-                    2 => acc + Self::tree_sum::<2>(&input[(8 * (N / 8))..]),
-                    3 => acc + Self::tree_sum::<3>(&input[(8 * (N / 8))..]),
-                    4 => acc + Self::tree_sum::<4>(&input[(8 * (N / 8))..]),
-                    5 => acc + Self::tree_sum::<5>(&input[(8 * (N / 8))..]),
-                    6 => acc + Self::tree_sum::<6>(&input[(8 * (N / 8))..]),
-                    7 => acc + Self::tree_sum::<7>(&input[(8 * (N / 8))..]),
+                    1 => acc + Self::tree_sum::<1>(&input[(16 * (N / 16))..]),
+                    2 => acc + Self::tree_sum::<2>(&input[(16 * (N / 16))..]),
+                    3 => acc + Self::tree_sum::<3>(&input[(16 * (N / 16))..]),
+                    4 => acc + Self::tree_sum::<4>(&input[(16 * (N / 16))..]),
+                    5 => acc + Self::tree_sum::<5>(&input[(16 * (N / 16))..]),
+                    6 => acc + Self::tree_sum::<6>(&input[(16 * (N / 16))..]),
+                    7 => acc + Self::tree_sum::<7>(&input[(16 * (N / 16))..]),
+                    8 => acc + Self::tree_sum::<8>(&input[(16 * (N / 16))..]),
+                    9 => acc + Self::tree_sum::<9>(&input[(16 * (N / 16))..]),
+                    10 => acc + Self::tree_sum::<10>(&input[(16 * (N / 16))..]),
+                    11 => acc + Self::tree_sum::<11>(&input[(16 * (N / 16))..]),
+                    12 => acc + Self::tree_sum::<12>(&input[(16 * (N / 16))..]),
+                    13 => acc + Self::tree_sum::<13>(&input[(16 * (N / 16))..]),
+                    14 => acc + Self::tree_sum::<14>(&input[(16 * (N / 16))..]),
+                    15 => acc + Self::tree_sum::<15>(&input[(16 * (N / 16))..]),
                     _ => unreachable!(),
                 }
             }
