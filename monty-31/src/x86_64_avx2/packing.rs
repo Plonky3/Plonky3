@@ -21,7 +21,6 @@ const WIDTH: usize = 8;
 
 pub trait MontyParametersAVX2 {
     const PACKED_P: __m256i;
-    const PACKED_P_HIGH: __m256i;
     const PACKED_MU: __m256i;
 }
 
@@ -220,6 +219,25 @@ fn partial_monty_red_signed_to_signed<MPAVX2: MontyParametersAVX2>(input: __m256
     }
 }
 
+/// Blend together in two vectors interleaving the 32-bit elements stored in the odd components.
+/// 
+/// This ignores whatever is stored in even positions.
+fn blend_evn_odd(evn: __m256i, odd: __m256i) -> __m256i {
+    // We want this to compile to:
+    //      vmovshdup  evn_hi, evn
+    //      vpblendd   t, evn_hi, odd, aah
+    // throughput: 0.67 cyc/vec (12 els/cyc)
+    // latency: 2 cyc
+    unsafe {
+        // We start with:
+        //   evn = [ e0  e1  e2  e3  e4  e5  e6  e7 ],
+        //   odd = [ o0  o1  o2  o3  o4  o5  o6  o7 ].
+        let evn_hi = movehdup_epi32(evn);
+        x86_64::_mm256_blend_epi32::<0b10101010>(evn_hi, odd)
+        // res = [e1, o1, e3, o3, e5, o5, e7, o7]
+    }
+}
+
 /// Given a vector of signed field elements, return a vector of elements in canonical form.
 ///
 /// Inputs must be signed 32-bit integers lying in (-P, ..., P). If they do not lie in
@@ -304,18 +322,15 @@ fn mul<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     //      vpblendd   t, d_evn_hi, d_odd, aah
     // throughput: 4 cyc/vec (2 els/cyc)
     // latency: 19 cyc
-    unsafe {
-        let lhs_evn = lhs;
-        let rhs_evn = rhs;
-        let lhs_odd = movehdup_epi32(lhs);
-        let rhs_odd = movehdup_epi32(rhs);
+    let lhs_evn = lhs;
+    let rhs_evn = rhs;
+    let lhs_odd = movehdup_epi32(lhs);
+    let rhs_odd = movehdup_epi32(rhs);
 
-        let d_evn = monty_mul::<MPAVX2>(lhs_evn, rhs_evn);
-        let d_odd = monty_mul::<MPAVX2>(lhs_odd, rhs_odd);
+    let d_evn = monty_mul::<MPAVX2>(lhs_evn, rhs_evn);
+    let d_odd = monty_mul::<MPAVX2>(lhs_odd, rhs_odd);
 
-        let d_evn_hi = movehdup_epi32(d_evn);
-        x86_64::_mm256_blend_epi32::<0b10101010>(d_evn_hi, d_odd)
-    }
+    blend_evn_odd(d_evn, d_odd)
 }
 
 /// Lets us combine some code for MontyField31<FP> and PackedMontyField31AVX2<FP> elements.
@@ -393,7 +408,7 @@ fn dot_product_2<PMP: PackedMontyParameters, LHS: InToM256Vector<PMP>, RHS: InTo
     //      vpaddd     u, t, P
     //      vpminud    res, t, u
     // throughput: 6.67 cyc/vec (1.20 els/cyc)
-    // latency: 22 cyc
+    // latency: 21 cyc
     unsafe {
         let lhs_evn0 = lhs[0].get_vector();
         let lhs_odd0 = lhs[0].get_odd_in_even_pos_vector();
@@ -416,9 +431,7 @@ fn dot_product_2<PMP: PackedMontyParameters, LHS: InToM256Vector<PMP>, RHS: InTo
         let red_evn = partial_monty_red_unsigned_to_signed::<PMP>(dot_evn);
         let red_odd = partial_monty_red_unsigned_to_signed::<PMP>(dot_odd);
 
-        let red_evn_hi = movehdup_epi32(red_evn);
-        let t = x86_64::_mm256_blend_epi32::<0b10101010>(red_evn_hi, red_odd);
-
+        let t = blend_evn_odd(red_evn, red_odd);
         red_signed_to_canonical::<PMP>(t)
     }
 }
@@ -468,24 +481,23 @@ fn dot_product_4<PMP: PackedMontyParameters, LHS: InToM256Vector<PMP>, RHS: InTo
     //      vpaddq     prod_odd01, prod_odd0, prod_odd1
     //      vpaddq     prod_evn23, prod_evn2, prod_evn3
     //      vpaddq     prod_odd23, prod_odd2, prod_odd3
-    //      vpaddq     prod_evn, prod_evn01, prod_evn23
-    //      vpaddq     prod_odd, prod_odd01, prod_odd23
-    //      vpmuludq   q_evn, prod_evn, MU
-    //      vpmuludq   q_odd, prod_odd, MU
+    //      vpaddq     dot_evn, prod_evn01, prod_evn23
+    //      vpaddq     dot_odd, prod_odd01, prod_odd23
+    //      vmovshdup  dot_evn_hi, dot_evn
+    //      vpblendd   dot, dot_evn_hi, dot_odd, aah
+    //      vpmuludq   q_evn, dot_evn, MU
+    //      vpmuludq   q_odd, dot_odd, MU
     //      vpmuludq   q_P_evn, q_evn, P
     //      vpmuludq   q_P_odd, q_odd, P
-    //      vpsubq     prod_evn_sub, prod_evn, 2^32P
-    //      vpminud    prod_evn_prime, prod_evn, prod_evn_sub
-    //      vpsubq     prod_odd_sub, prod_odd, 2^32P
-    //      vpminud    prod_odd_prime, prod_odd, prod_odd_sub
-    //      vpsubq     d_evn, prod_evn_prime, q_P_evn
-    //      vpsubq     d_odd, prod_odd_prime, q_P_odd
-    //      vmovshdup  d_evn_hi, d_evn
-    //      vpblendd   t, d_evn_hi, d_odd, aah
+    //      vmovshdup  q_P_evn_hi, q_P_evn
+    //      vpblendd   q_P, q_P_evn_hi, q_P_odd, aah
+    //      vpsubq     dot_sub, dot, P
+    //      vpminud    dot_prime, dot, dot_sub
+    //      vpsubq     t, dot_prime, q_P
     //      vpaddd     u, t, P
     //      vpminud    res, t, u
-    // throughput: 12 cyc/vec (0.67 els/cyc)
-    // latency: 23 cyc
+    // throughput: 11.67 cyc/vec (0.69 els/cyc)
+    // latency: 22 cyc
     unsafe {
         let lhs_evn0 = lhs[0].get_vector();
         let lhs_odd0 = lhs[0].get_odd_in_even_pos_vector();
@@ -522,25 +534,21 @@ fn dot_product_4<PMP: PackedMontyParameters, LHS: InToM256Vector<PMP>, RHS: InTo
         let dot_evn = x86_64::_mm256_add_epi64(dot_evn01, dot_evn23);
         let dot_odd = x86_64::_mm256_add_epi64(dot_odd01, dot_odd23);
 
-        // In dot_evn_sub, red_evn, dot_odd_sub, red_odd:
-        // _mm256_sub_epi32 and _mm256_sub_epi64 should act identically.
-        // However for some reason, the compiler gets confused if we use _mm256_sub_epi64.
-        // and outputs a load of nonsense.
+        // We only care about the top 32 bits of dot_evn/odd.
+        // They currently lie in [0, 2P] so we reduce them to [0, P)
+        let dot = blend_evn_odd(dot_evn, dot_odd);
+        let dot_sub = x86_64::_mm256_sub_epi32(dot, PMP::PACKED_P);
+        let dot_prime = x86_64::_mm256_min_epu32(dot, dot_sub);
+
         let q_evn = x86_64::_mm256_mul_epu32(dot_evn, PMP::PACKED_MU);
         let q_p_evn = x86_64::_mm256_mul_epu32(q_evn, PMP::PACKED_P);
-        let dot_evn_sub = x86_64::_mm256_sub_epi32(dot_evn, PMP::PACKED_P_HIGH);
-        let dot_evn_prime = x86_64::_mm256_min_epu32(dot_evn, dot_evn_sub);
-        let red_evn = x86_64::_mm256_sub_epi32(dot_evn_prime, q_p_evn);
-
         let q_odd = x86_64::_mm256_mul_epu32(dot_odd, PMP::PACKED_MU);
         let q_p_odd = x86_64::_mm256_mul_epu32(q_odd, PMP::PACKED_P);
-        let dot_odd_sub = x86_64::_mm256_sub_epi32(dot_odd, PMP::PACKED_P_HIGH);
-        let dot_odd_prime = x86_64::_mm256_min_epu32(dot_odd, dot_odd_sub);
-        let red_odd = x86_64::_mm256_sub_epi32(dot_odd_prime, q_p_odd);
 
-        let red_evn_hi = movehdup_epi32(red_evn);
-        let t = x86_64::_mm256_blend_epi32::<0b10101010>(red_evn_hi, red_odd);
+        // Similarly we only need to care about the top 32 bits of q_p_odd/evn
+        let q_p = blend_evn_odd(q_p_evn, q_p_odd);
 
+        let t = x86_64::_mm256_sub_epi32(dot_prime, q_p);
         red_signed_to_canonical::<PMP>(t)
     }
 }
@@ -781,18 +789,14 @@ pub(crate) unsafe fn apply_func_to_even_odd<MPAVX2: MontyParametersAVX2>(
     input: __m256i,
     func: fn(__m256i) -> __m256i,
 ) -> __m256i {
-    unsafe {
-        let input_evn = input;
-        let input_odd = movehdup_epi32(input);
+    let input_evn = input;
+    let input_odd = movehdup_epi32(input);
 
-        let d_evn = func(input_evn);
-        let d_odd = func(input_odd);
+    let d_evn = func(input_evn);
+    let d_odd = func(input_odd);
 
-        let d_evn_hi = movehdup_epi32(d_evn);
-        let t = x86_64::_mm256_blend_epi32::<0b10101010>(d_evn_hi, d_odd);
-
-        red_signed_to_canonical::<MPAVX2>(t)
-    }
+    let t = blend_evn_odd(d_evn, d_odd);
+    red_signed_to_canonical::<MPAVX2>(t)
 }
 
 /// Negate a vector of MontyField31 field elements in canonical form.

@@ -11,8 +11,6 @@ const WIDTH: usize = 8;
 
 impl MontyParametersAVX2 for KoalaBearParameters {
     const PACKED_P: __m256i = unsafe { transmute::<[u32; WIDTH], _>([0x7f000001; WIDTH]) };
-    const PACKED_P_HIGH: __m256i =
-        unsafe { transmute::<[[u32; 2]; WIDTH / 2], _>([[0, 0x7f000001]; WIDTH / 2]) };
     const PACKED_MU: __m256i = unsafe { transmute::<[u32; WIDTH], _>([0x81000001; WIDTH]) };
 }
 
