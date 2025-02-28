@@ -641,7 +641,12 @@ mod tests {
         assert_eq!(F::TWO.injective_exp_n().injective_exp_root_n(), F::TWO);
     }
 
-    test_field!(crate::Goldilocks);
+    // Goldilocks has a redundant representation for both 0 and 1.
+    const ZEROS: [Goldilocks; 2] = [Goldilocks::ZERO, Goldilocks::new(P)];
+    const ONES: [Goldilocks; 2] = [Goldilocks::ONE, Goldilocks::new(P + 1)];
+
+
+    test_field!(crate::Goldilocks, &super::ZEROS, &super::ONES);
     test_prime_field!(crate::Goldilocks);
     test_prime_field_64!(crate::Goldilocks);
     test_two_adic_field!(crate::Goldilocks);

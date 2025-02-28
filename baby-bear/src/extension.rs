@@ -11,7 +11,11 @@ mod test_quartic_extension {
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
 
-    test_field!(super::EF);
+    // MontyField31's have no redundant representations.
+    const ZEROS: [EF; 1] = [EF::ZERO];
+    const ONES: [EF; 1] = [EF::ONE];
+
+    test_field!(super::EF, &super::ZEROS, &super::ONES);
     test_two_adic_extension_field!(super::F, super::EF);
 
     #[test]
@@ -32,7 +36,7 @@ mod test_quartic_extension {
 
 #[cfg(test)]
 mod test_quintic_extension {
-    use p3_field::extension::BinomialExtensionField;
+    use p3_field::{extension::BinomialExtensionField, PrimeCharacteristicRing};
     use p3_field_testing::{test_field, test_two_adic_extension_field};
 
     use crate::BabyBear;
@@ -40,6 +44,10 @@ mod test_quintic_extension {
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 5>;
 
-    test_field!(super::EF);
+    // MontyField31's have no redundant representations.
+    const ZEROS: [EF; 1] = [EF::ZERO];
+    const ONES: [EF; 1] = [EF::ONE];
+
+    test_field!(super::EF, &super::ZEROS, &super::ONES);
     test_two_adic_extension_field!(super::F, super::EF);
 }

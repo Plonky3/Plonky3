@@ -831,24 +831,25 @@ unsafe impl PackedFieldPow2 for PackedMersenne31AVX512 {
 mod tests {
     use p3_field_testing::test_packed_field;
 
-    use super::{Mersenne31, WIDTH};
+    use super::{PackedMersenne31AVX512, Mersenne31};
 
     /// Zero has a redundant representation, so let's test both.
-    const ZEROS: [Mersenne31; WIDTH] = Mersenne31::new_array([
+    const ZEROS: PackedMersenne31AVX512 = PackedMersenne31AVX512(Mersenne31::new_array([
         0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000,
         0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff,
         0x00000000, 0x7fffffff,
-    ]);
+    ]));
 
-    const SPECIAL_VALS: [Mersenne31; WIDTH] = Mersenne31::new_array([
+    const SPECIAL_VALS: PackedMersenne31AVX512 = PackedMersenne31AVX512(Mersenne31::new_array([
         0x00000000, 0x7fffffff, 0x00000001, 0x7ffffffe, 0x00000002, 0x7ffffffd, 0x40000000,
         0x3fffffff, 0x00000000, 0x7fffffff, 0x00000001, 0x7ffffffe, 0x00000002, 0x7ffffffd,
         0x40000000, 0x3fffffff,
-    ]);
+    ]));
 
     test_packed_field!(
         crate::PackedMersenne31AVX512,
-        crate::PackedMersenne31AVX512(super::ZEROS),
-        crate::PackedMersenne31AVX512(super::SPECIAL_VALS)
+        &[super::ZEROS],
+        &[crate::PackedMersenne31AVX512::ONE],
+        super::SPECIAL_VALS
     );
 }

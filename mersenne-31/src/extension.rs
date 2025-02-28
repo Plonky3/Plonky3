@@ -107,7 +107,7 @@ impl HasTwoAdicComplexBinomialExtension<3> for Mersenne31 {
 
 #[cfg(test)]
 mod test_cubic_extension {
-    use p3_field::extension::{BinomialExtensionField, Complex};
+    use p3_field::{extension::{BinomialExtensionField, Complex}, PrimeCharacteristicRing};
     use p3_field_testing::{test_field, test_two_adic_extension_field};
 
     use crate::Mersenne31;
@@ -115,7 +115,12 @@ mod test_cubic_extension {
     type F = Complex<Mersenne31>;
     type EF = BinomialExtensionField<F, 3>;
 
-    test_field!(super::EF);
+    // There is a redundant representation of zero but we already tested it 
+    // when testing the base field.
+    const ZEROS: [EF; 1] = [EF::ZERO];
+    const ONES: [EF; 1] = [EF::ONE];
+
+    test_field!(super::EF, &super::ZEROS, &super::ONES);
 
     test_two_adic_extension_field!(super::F, super::EF);
 }
@@ -123,7 +128,7 @@ mod test_cubic_extension {
 #[cfg(test)]
 mod test_quadratic_extension {
 
-    use p3_field::extension::{BinomialExtensionField, Complex};
+    use p3_field::{extension::{BinomialExtensionField, Complex}, PrimeCharacteristicRing};
     use p3_field_testing::{test_field, test_two_adic_extension_field};
 
     use crate::Mersenne31;
@@ -131,7 +136,12 @@ mod test_quadratic_extension {
     type F = Complex<Mersenne31>;
     type EF = BinomialExtensionField<F, 2>;
 
-    test_field!(super::EF);
+    // There is a redundant representation of zero but we already tested it 
+    // when testing the base field.
+    const ZEROS: [EF; 1] = [EF::ZERO];
+    const ONES: [EF; 1] = [EF::ONE];
+
+    test_field!(super::EF, &super::ZEROS, &super::ONES);
 
     test_two_adic_extension_field!(super::F, super::EF);
 }

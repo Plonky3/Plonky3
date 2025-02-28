@@ -567,7 +567,11 @@ mod tests {
         assert_eq!(F::TWO.injective_exp_n().injective_exp_root_n(), F::TWO);
     }
 
-    test_field!(crate::Mersenne31);
+    // Mersenne31 has a redundant representation of Zero but no redundant representation of One.
+    const ZEROS: [Mersenne31; 2] = [Mersenne31::ZERO, Mersenne31::new((1_u32 << 31) - 1)];
+    const ONES: [Mersenne31; 1] = [Mersenne31::ONE];
+
+    test_field!(crate::Mersenne31, &super::ZEROS, &super::ONES);
     test_prime_field!(crate::Mersenne31);
     test_prime_field_64!(crate::Mersenne31);
     test_prime_field_32!(crate::Mersenne31);

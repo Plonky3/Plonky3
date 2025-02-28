@@ -1,13 +1,11 @@
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_field_testing::{
-    bench_func::{
-        benchmark_add_latency, benchmark_add_throughput, benchmark_inv, benchmark_iter_sum,
-        benchmark_mul_latency, benchmark_mul_throughput, benchmark_sub_latency,
-        benchmark_sub_throughput,
-    },
-    benchmark_tree_sum,
+use p3_field_testing::bench_func::{
+    benchmark_add_latency, benchmark_add_throughput, benchmark_inv, benchmark_iter_sum,
+    benchmark_mul_latency, benchmark_mul_throughput, benchmark_sub_latency,
+    benchmark_sub_throughput,
 };
+use p3_field_testing::benchmark_tree_sum;
 use p3_koala_bear::KoalaBear;
 use p3_util::pretty_name;
 

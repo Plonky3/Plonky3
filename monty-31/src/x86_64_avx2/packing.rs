@@ -220,7 +220,7 @@ fn partial_monty_red_signed_to_signed<MPAVX2: MontyParametersAVX2>(input: __m256
 }
 
 /// Blend together in two vectors interleaving the 32-bit elements stored in the odd components.
-/// 
+///
 /// This ignores whatever is stored in even positions.
 fn blend_evn_odd(evn: __m256i, odd: __m256i) -> __m256i {
     // We want this to compile to:
@@ -557,7 +557,12 @@ fn dot_product_4<PMP: PackedMontyParameters, LHS: InToM256Vector<PMP>, RHS: InTo
 /// more than 4. The length 64 occurs commonly enough it's useful to have a custom implementation
 /// which lets it use a slightly better summation algorithm with lower latency.
 #[inline(always)]
-fn general_dot_product<FP: FieldParameters, LHS: InToM256Vector<FP>, RHS: InToM256Vector<FP>, const N: usize>(
+fn general_dot_product<
+    FP: FieldParameters,
+    LHS: InToM256Vector<FP>,
+    RHS: InToM256Vector<FP>,
+    const N: usize,
+>(
     lhs: &[LHS],
     rhs: &[RHS],
 ) -> PackedMontyField31AVX2<FP> {
@@ -598,9 +603,9 @@ fn general_dot_product<FP: FieldParameters, LHS: InToM256Vector<FP>, RHS: InToM2
                     [lhs[4 * i], lhs[4 * i + 1], lhs[4 * i + 2], lhs[4 * i + 3]],
                     [rhs[4 * i], rhs[4 * i + 1], rhs[4 * i + 2], rhs[4 * i + 3]],
                 );
-                unsafe { 
+                unsafe {
                     // Safety: `dot_product_4` returns values in canonical form when given values in canonical form.
-                    PackedMontyField31AVX2::<FP>::from_vector(res) 
+                    PackedMontyField31AVX2::<FP>::from_vector(res)
                 }
             });
             PackedMontyField31AVX2::<FP>::tree_sum::<16>(&sum_4s)
@@ -628,10 +633,25 @@ fn general_dot_product<FP: FieldParameters, LHS: InToM256Vector<FP>, RHS: InToM2
             }
             match N & 3 {
                 0 => acc,
-                1 => acc + general_dot_product::<_, _, _, 1>(&lhs[(4 * (N / 4))..], &rhs[(4 * (N / 4))..]),
-                2 => acc + general_dot_product::<_, _, _, 2>(&lhs[(4 * (N / 4))..], &rhs[(4 * (N / 4))..]),
-                3 => acc + general_dot_product::<_, _, _, 3>(&lhs[(4 * (N / 4))..], &rhs[(4 * (N / 4))..]),
-                _ => unreachable!()
+                1 => {
+                    acc + general_dot_product::<_, _, _, 1>(
+                        &lhs[(4 * (N / 4))..],
+                        &rhs[(4 * (N / 4))..],
+                    )
+                }
+                2 => {
+                    acc + general_dot_product::<_, _, _, 2>(
+                        &lhs[(4 * (N / 4))..],
+                        &rhs[(4 * (N / 4))..],
+                    )
+                }
+                3 => {
+                    acc + general_dot_product::<_, _, _, 3>(
+                        &lhs[(4 * (N / 4))..],
+                        &rhs[(4 * (N / 4))..],
+                    )
+                }
+                _ => unreachable!(),
             }
         }
     }
@@ -661,7 +681,7 @@ fn shifted_square<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
 fn xor<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     // Refactor the expression as r + 2l(1/2 - r). As MONTY_CONSTANT = 2^32, the internal
     // representation 1/2 is 2^31 mod P so the product in the above expression is represented
-    // as 2l(2^31 - r). As 0 < 2l, 2^31 - r < 2^32 and 2l(2^31 - r) < 2^32P, we can compute 
+    // as 2l(2^31 - r). As 0 < 2l, 2^31 - r < 2^32 and 2l(2^31 - r) < 2^32P, we can compute
     // the factors as 32 bit integers and then multiply and monty reduce as usual.
     //
     // We want this to compile to:
@@ -1260,7 +1280,10 @@ unsafe impl<FP: FieldParameters> PackedField for PackedMontyField31AVX2<FP> {
     type Scalar = MontyField31<FP>;
 
     #[inline]
-    fn dot_product_scalar_packed<const N: usize>(scalar_slice: &[Self::Scalar], packed_slice: &[Self]) -> Self {
+    fn dot_product_scalar_packed<const N: usize>(
+        scalar_slice: &[Self::Scalar],
+        packed_slice: &[Self],
+    ) -> Self {
         general_dot_product::<_, _, _, N>(scalar_slice, packed_slice)
     }
 }

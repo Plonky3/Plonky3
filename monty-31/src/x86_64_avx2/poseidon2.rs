@@ -6,7 +6,6 @@ use core::marker::PhantomData;
 use core::mem::transmute;
 
 use p3_field::PrimeCharacteristicRing;
-
 use p3_poseidon2::{
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, InternalLayer,
     InternalLayerConstructor, MDSMat4, external_initial_permute_state,
