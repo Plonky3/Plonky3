@@ -471,7 +471,12 @@ where
                     let log_height = domain_size << self.fri.log_blowup;
 
                     // Ensure log_height doesn't exceed log_global_max_height
-                    assert!(log_height <= log_global_max_height, "log_height ({}) must not exceed log_global_max_height ({})", log_height, log_global_max_height);
+                    assert!(
+                        log_height <= log_global_max_height, 
+                        "log_height ({}) must not exceed log_global_max_height ({})", 
+                        log_height, 
+                        log_global_max_height
+                    );
                     
                     let bits_reduced = log_global_max_height - log_height;
                     let rev_reduced_index = reverse_bits_len(index >> bits_reduced, log_height);
