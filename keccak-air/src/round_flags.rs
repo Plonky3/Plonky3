@@ -20,11 +20,11 @@ pub(crate) fn eval_round_flags<AB: AirBuilder>(builder: &mut AB) {
     builder.when_first_row().assert_one(local.step_flags[0]);
     builder
         .when_first_row()
-        .assert_zeroes::<NUM_ROUNDS_MIN_1, _>(local.step_flags[1..].try_into().unwrap());
+        .assert_zeros::<NUM_ROUNDS_MIN_1, _>(local.step_flags[1..].try_into().unwrap());
 
     builder
         .when_transition()
-        .assert_zeroes::<NUM_ROUNDS, _>(array::from_fn(|i| {
+        .assert_zeros::<NUM_ROUNDS, _>(array::from_fn(|i| {
             local.step_flags[i] - next.step_flags[(i + 1) % NUM_ROUNDS]
         }));
 }

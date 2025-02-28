@@ -72,7 +72,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
     }
 
     #[inline]
-    fn assert_zeroes<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
+    fn assert_zeros<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
         let expr_array: [Self::Expr; N] = array.map(Into::into);
         self.accumulator += PackedChallenge::<SC>::from_basis_coefficients_fn(|i| {
             let alpha_powers = &self.decomposed_alpha_powers[i]

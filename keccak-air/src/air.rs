@@ -53,7 +53,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
             for x in 0..5 {
                 builder
                     .when(first_step)
-                    .assert_zeroes::<U64_LIMBS, _>(array::from_fn(|limb| {
+                    .assert_zeros::<U64_LIMBS, _>(array::from_fn(|limb| {
                         local.preimage[y][x][limb] - local.a[y][x][limb]
                     }));
             }
@@ -65,7 +65,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                 builder
                     .when(not_final_step.clone())
                     .when_transition()
-                    .assert_zeroes::<U64_LIMBS, _>(array::from_fn(|limb| {
+                    .assert_zeros::<U64_LIMBS, _>(array::from_fn(|limb| {
                         local.preimage[y][x][limb] - next.preimage[y][x][limb]
                     }));
             }
@@ -85,7 +85,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         // entries of C'[x, z] are boolean.
         for x in 0..5 {
             builder.assert_bools(local.c[x]);
-            builder.assert_zeroes::<64, _>(array::from_fn(|z| {
+            builder.assert_zeros::<64, _>(array::from_fn(|z| {
                 let xor = local.c[x][z].into().xor3(
                     &local.c[(x + 4) % 5][z].into(),
                     &local.c[(x + 1) % 5][(z + 63) % 64].into(),
@@ -114,7 +114,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                 // Check that all entries of A'[y][x] are boolean.
                 builder.assert_bools(local.a_prime[y][x]);
 
-                builder.assert_zeroes::<U64_LIMBS, _>(array::from_fn(|limb| {
+                builder.assert_zeros::<U64_LIMBS, _>(array::from_fn(|limb| {
                     let computed_limb = (limb * BITS_PER_LIMB..(limb + 1) * BITS_PER_LIMB)
                         .rev()
                         .fold(AB::Expr::ZERO, |acc, z| {
@@ -131,7 +131,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         // diff = sum_{i=0}^4 A'[x, i, z] - C'[x, z]
         for x in 0..5 {
             let four = AB::Expr::TWO.double();
-            builder.assert_zeroes::<64, _>(array::from_fn(|z| {
+            builder.assert_zeros::<64, _>(array::from_fn(|z| {
                 let sum: AB::Expr = (0..5).map(|y| local.a_prime[y][x][z].into()).sum();
                 let diff = sum - local.c_prime[x][z];
                 diff.clone() * (diff.clone() - AB::Expr::TWO) * (diff - four.clone())
@@ -150,7 +150,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                         .andn(&local.b((x + 2) % 5, y, z).into());
                     andn.xor(&local.b(x, y, z).into())
                 };
-                builder.assert_zeroes::<U64_LIMBS, _>(array::from_fn(|limb| {
+                builder.assert_zeros::<U64_LIMBS, _>(array::from_fn(|limb| {
                     let computed_limb = (limb * BITS_PER_LIMB..(limb + 1) * BITS_PER_LIMB)
                         .rev()
                         .fold(AB::Expr::ZERO, |acc, z| acc.double() + get_bit(z));
@@ -162,7 +162,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         // A'''[0, 0] = A''[0, 0] XOR RC
         // Check to ensure the bits of A''[0, 0] are boolean.
         builder.assert_bools(local.a_prime_prime_0_0_bits);
-        builder.assert_zeroes::<U64_LIMBS, _>(array::from_fn(|limb| {
+        builder.assert_zeros::<U64_LIMBS, _>(array::from_fn(|limb| {
             let computed_a_prime_prime_0_0_limb = (limb * BITS_PER_LIMB
                 ..(limb + 1) * BITS_PER_LIMB)
                 .rev()
@@ -183,7 +183,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
             rc_bit_i.xor(&local.a_prime_prime_0_0_bits[i].into())
         };
 
-        builder.assert_zeroes::<U64_LIMBS, _>(array::from_fn(|limb| {
+        builder.assert_zeros::<U64_LIMBS, _>(array::from_fn(|limb| {
             let computed_a_prime_prime_prime_0_0_limb = (limb * BITS_PER_LIMB
                 ..(limb + 1) * BITS_PER_LIMB)
                 .rev()
@@ -197,7 +197,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                 builder
                     .when_transition()
                     .when(not_final_step.clone())
-                    .assert_zeroes::<U64_LIMBS, _>(array::from_fn(|limb| {
+                    .assert_zeros::<U64_LIMBS, _>(array::from_fn(|limb| {
                         local.a_prime_prime_prime(y, x, limb) - next.a[y][x][limb]
                     }));
             }

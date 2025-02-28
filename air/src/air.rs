@@ -96,13 +96,13 @@ pub trait AirBuilder: Sized {
     /// Assert that the given element is zero.
     ///
     /// Where possible, batching multiple assert_zero calls
-    /// into a single assert_zeroes call will improve performance.
+    /// into a single assert_zeros call will improve performance.
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I);
 
     /// Assert that every element of a given array is 0.
     ///
     /// This should be preferred over calling `assert_zero` multiple times.
-    fn assert_zeroes<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
+    fn assert_zeros<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
         for elem in array {
             self.assert_zero(elem);
         }
@@ -114,7 +114,7 @@ pub trait AirBuilder: Sized {
             let x = x.into();
             x.clone() * (x - Self::Expr::ONE)
         });
-        self.assert_zeroes(zero_array);
+        self.assert_zeros(zero_array);
     }
 
     /// Assert that `x` element is equal to `1`.
