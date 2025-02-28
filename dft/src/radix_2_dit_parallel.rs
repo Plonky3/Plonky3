@@ -12,7 +12,7 @@ use p3_matrix::bitrev::{BitReversableMatrix, BitReversalPerm, BitReversedMatrixV
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
-use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
+use p3_util::{reverse_bits_len, reverse_slice_index_bits};
 use tracing::{debug_span, instrument};
 
 use crate::TwoAdicSubgroupDft;
