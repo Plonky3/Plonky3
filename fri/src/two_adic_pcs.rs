@@ -460,8 +460,19 @@ where
                 for (mat_opening, (mat_domain, mat_points_and_values)) in
                     izip!(&batch_opening.opened_values, mats)
                 {
-                    let log_height = mat_domain.size() << self.fri.log_blowup;
+                    let domain_size = mat_domain.size();
+                    // Check for potential overflow before shifting
+                    assert!(
+                        domain_size <= usize::MAX >> self.fri.log_blowup,
+                        "Domain size {} is too large for log_blowup {}", 
+                        domain_size, 
+                        self.fri.log_blowup
+                    );
+                    let log_height = domain_size << self.fri.log_blowup;
 
+                    // Ensure log_height doesn't exceed log_global_max_height
+                    assert!(log_height <= log_global_max_height, "log_height ({}) must not exceed log_global_max_height ({})", log_height, log_global_max_height);
+                    
                     let bits_reduced = log_global_max_height - log_height;
                     let rev_reduced_index = reverse_bits_len(index >> bits_reduced, log_height);
 
@@ -496,7 +507,6 @@ where
                 .into_iter()
                 .rev()
                 .map(|(log_height, (_alpha_pow, ro))| (log_height, ro))
-                .collect())
         })?;
 
         Ok(())
