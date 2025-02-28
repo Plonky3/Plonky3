@@ -89,7 +89,6 @@ fn bowers_g<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
     let mut twiddles: Vec<_> = root.powers().take(h / 2).map(DifButterfly).collect();
     reverse_slice_index_bits(&mut twiddles);
 
-    let log_h = log2_strict_usize(mat.height());
     for log_half_block_size in 0..log_h {
         butterfly_layer(mat, 1 << log_half_block_size, &twiddles)
     }
@@ -105,7 +104,6 @@ fn bowers_g_t<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
     let mut twiddles: Vec<_> = root_inv.powers().take(h / 2).map(DitButterfly).collect();
     reverse_slice_index_bits(&mut twiddles);
 
-    let log_h = log2_strict_usize(mat.height());
     for log_half_block_size in (0..log_h).rev() {
         butterfly_layer(mat, 1 << log_half_block_size, &twiddles)
     }
