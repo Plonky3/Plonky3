@@ -1,4 +1,6 @@
-use p3_util::{log2_strict_usize, reverse_bits_len};
+//! Matrix bit reversal operations.
+
+use p3_util::reverse_bits_len;
 
 use crate::Matrix;
 use crate::dense::{DenseMatrix, DenseStorage, RowMajorMatrix};
