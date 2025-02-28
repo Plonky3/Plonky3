@@ -290,7 +290,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     /// # Panics
     /// Panics if the height is not a power of two.
     fn log2_height_strict(&self) -> usize {
-        log2_strict_usize(self.height())
+         p3_util::log2_strict_usize(self.height())
     }
 }
 
