@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
 use core::arch::asm;
 use core::arch::x86_64::{self, __m512i, __mmask8, __mmask16};
+use core::array;
 use core::hint::unreachable_unchecked;
 use core::iter::{Product, Sum};
 use core::mem::transmute;
@@ -403,19 +404,14 @@ fn mul<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
 #[inline]
 #[must_use]
 fn xor<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
-    // We refactor the expression as r + 2l(1/2 - r).
-    // As we are working with MONTY_CONSTANT = 2^32, the internal representation
-    // of 1/2 is 2^31 mod P. Hence let us compute 2l(2^31 - r). As, 0 < l, r < P < 2^31
-    // we find that 2l(2^31 - r) < 2^32P so we can apply our monty reduction to this product.
-    //
-    // Moreover, as 2l, 2^31 - r are both < 2^32 we can compute these before we
-    // split into even and odd parts for the multiplication.
-    //
-    // All together we save 4 instructions (~25%) over the naive implementation.
+    // Refactor the expression as r + 2l(1/2 - r). As MONTY_CONSTANT = 2^32, the internal
+    // representation 1/2 is 2^31 mod P so the product in the above expression is represented
+    // as 2l(2^31 - r). As 0 < 2l, 2^31 - r < 2^32 and 2l(2^31 - r) < 2^32P, we can compute 
+    // the factors as 32 bit integers and then multiply and monty reduce as usual.
     //
     // We want this to compile to:
     //      vpaddd     lhs_double, lhs, lhs
-    //      vpsubd     sub_rhs, rhs, (1 << 31)
+    //      vpsubd     sub_rhs, (1 << 31), rhs
     //      vmovshdup  lhs_odd, lhs_double
     //      vmovshdup  rhs_odd, sub_rhs
     //      vpmuludq   prod_evn, lhs_double, sub_rhs
@@ -463,13 +459,11 @@ fn xor<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
 #[must_use]
 fn andn<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
     // As we are working with MONTY_CONSTANT = 2^32, the internal representation
-    // of 1 is 2^32 mod P = 2^32 - P mod P. Hence let us compute (2^32 - P - l)r.
-    // This product is clearly less than 2^32P so we can apply our monty reduction to this.
-    //
-    // All together we save 2 instructions (~12%) over the naive implementation.
+    // of 1 is 2^32 mod P = 2^32 - P mod P. Hence we compute (2^32 - P - l)r.
+    // This product is less than 2^32P so we can apply our monty reduction to this.
     //
     // We want this to compile to:
-    //      vpsubd     neg_lhs, -P, lhs
+    //      vpsubd     neg_lhs, 2^32 - P, lhs
     //      vmovshdup  lhs_odd, neg_lhs
     //      vmovshdup  rhs_odd, rhs
     //      vpmuludq   prod_evn, neg_lhs, rhs
@@ -638,6 +632,363 @@ fn neg<MPAVX512: MontyParametersAVX512>(val: __m512i) -> __m512i {
     }
 }
 
+/// Lets us combine some code for MontyField31<FP> and PackedMontyField31AVX512<FP> elements.
+trait InToM512Vector<PMP: PackedMontyParameters>: Copy + Into<PackedMontyField31AVX512<PMP>> {
+    /// Convert the input to a __m256i vector.
+    fn get_vector(&self) -> __m512i;
+
+    /// Convert the input to a __m256i vector and shift so that all elements in odd positions
+    /// lie in even positions.
+    ///
+    /// The values lying in the even positions are undefined.
+    #[inline(always)]
+    fn get_odd_in_even_pos_vector(&self) -> __m512i {
+        let vec = self.get_vector();
+        movehdup_epi32(vec)
+    }
+}
+
+impl<PMP: PackedMontyParameters> InToM512Vector<PMP> for PackedMontyField31AVX512<PMP> {
+    #[inline(always)]
+    fn get_vector(&self) -> __m512i {
+        self.to_vector()
+    }
+}
+
+impl<PMP: PackedMontyParameters> InToM512Vector<PMP> for MontyField31<PMP> {
+    #[inline(always)]
+    fn get_vector(&self) -> __m512i {
+        unsafe { x86_64::_mm512_set1_epi32(self.value as i32) }
+    }
+
+    #[inline(always)]
+    fn get_odd_in_even_pos_vector(&self) -> __m512i {
+        unsafe { x86_64::_mm512_set1_epi32(self.value as i32) }
+    }
+}
+
+/// Compute the elementary function `l0*r0 + l1*r1` given four inputs
+/// in canonical form.
+///
+/// If the inputs are not in canonical form, the result is undefined.
+#[inline]
+#[must_use]
+fn dot_product_2<PMP: PackedMontyParameters, LHS: InToM512Vector<PMP>, RHS: InToM512Vector<PMP>>(
+    lhs: [LHS; 2],
+    rhs: [RHS; 2],
+) -> __m512i {
+    // The following analysis treats all input arrays as being arrays of PackedMontyField31AVX512<FP>.
+    // If one of the arrays contains MontyField31<FP>, we get to avoid the initial vmovshdup.
+    //
+    // We improve the throughput by combining the monty reductions together. As all inputs are
+    // `< P < 2^{31}`, `l0*r0 + l1*r1 < 2P^2 < 2^{32}P` so the montgomery reduction
+    // algorithm can be applied to the sum of the products instead of to each product individually.
+    //
+    // We want this to compile to:
+    //      vmovshdup  lhs_odd0, lhs0
+    //      vmovshdup  rhs_odd0, rhs0
+    //      vmovshdup  lhs_odd1, lhs1
+    //      vmovshdup  rhs_odd1, rhs1
+    //      vpmuludq   prod_evn0, lhs0, rhs0
+    //      vpmuludq   prod_odd0, lhs_odd0, rhs_odd0
+    //      vpmuludq   prod_evn1, lhs1, rhs1
+    //      vpmuludq   prod_odd1, lhs_odd1, rhs_odd1
+    //      vpaddq     dot_evn, prod_evn0, prod_evn1
+    //      vpaddq     dot, prod_odd0, prod_odd1
+    //      vpmuludq   q_evn, prod_evn, MU
+    //      vpmuludq   q_odd, dot, MU
+    //      vpmuludq   q_P_evn, q_evn, P
+    //      vpmuludq   q_P, q_odd, P
+    //      vmovshdup  dot{EVENS} dot_evn
+    //      vmovshdup  q_P{EVENS} q_P_evn
+    //      vpcmpltud  underflow, dot, q_P
+    //      vpsubd     res, dot, q_P
+    //      vpaddd     res{underflow}, res, P
+    // throughput: 9.5 cyc/vec (1.68 els/cyc)
+    // latency: 22 cyc
+    unsafe {
+        let lhs_evn0 = lhs[0].get_vector();
+        let lhs_odd0 = lhs[0].get_odd_in_even_pos_vector();
+        let lhs_evn1 = lhs[1].get_vector();
+        let lhs_odd1 = lhs[1].get_odd_in_even_pos_vector();
+
+        let rhs_evn0 = rhs[0].get_vector();
+        let rhs_odd0 = rhs[0].get_odd_in_even_pos_vector();
+        let rhs_evn1 = rhs[1].get_vector();
+        let rhs_odd1 = rhs[1].get_odd_in_even_pos_vector();
+
+        let mul_evn0 = x86_64::_mm512_mul_epu32(lhs_evn0, rhs_evn0);
+        let mul_evn1 = x86_64::_mm512_mul_epu32(lhs_evn1, rhs_evn1);
+        let mul_odd0 = x86_64::_mm512_mul_epu32(lhs_odd0, rhs_odd0);
+        let mul_odd1 = x86_64::_mm512_mul_epu32(lhs_odd1, rhs_odd1);
+
+        let dot_evn = x86_64::_mm512_add_epi64(mul_evn0, mul_evn1);
+        let dot_odd = x86_64::_mm512_add_epi64(mul_odd0, mul_odd1);
+
+        // We throw a confuse compiler here to prevent the compiler from
+        // using vpmullq instead of vpmuludq in the computations for q_p.
+        // vpmullq has both higher latency and lower throughput.
+        let q_evn = confuse_compiler(x86_64::_mm512_mul_epu32(dot_evn, PMP::PACKED_MU));
+        let q_odd = confuse_compiler(x86_64::_mm512_mul_epu32(dot_odd, PMP::PACKED_MU));
+
+        // Get all the high halves as one vector: this is `(lhs * rhs) >> 32`.
+        // NB: `vpermt2d` may feel like a more intuitive choice here, but it has much higher
+        // latency.
+        //
+        // Annoyingly, this (and the line for computing q_p_hi) seem to compile
+        // to a vpermt2ps, see https://godbolt.org/z/489aaPhz3.
+        //
+        // Hopefully this should be only a negligible difference to throughput and so we don't
+        // fix it right now.
+        let dot = mask_movehdup_epi32(dot_odd, EVENS, dot_evn);
+
+        // Normally we'd want to mask to perform % 2**32, but the instruction below only reads the
+        // low 32 bits anyway.
+        let q_p_evn = x86_64::_mm512_mul_epu32(q_evn, PMP::PACKED_P);
+        let q_p_odd = x86_64::_mm512_mul_epu32(q_odd, PMP::PACKED_P);
+
+        // We can ignore all the low halves of `q_p` as they cancel out. Get all the high halves as
+        // one vector.
+        let q_p = mask_movehdup_epi32(q_p_odd, EVENS, q_p_evn);
+
+        // Subtraction `prod_hi - q_p_hi` modulo `P`.
+        // NB: Normally we'd `vpaddd P` and take the `vpminud`, but `vpminud` runs on port 0, which
+        // is already under a lot of pressure performing multiplications. To relieve this pressure,
+        // we check for underflow to generate a mask, and then conditionally add `P`. The underflow
+        // check runs on port 5, increasing our throughput, although it does cost us an additional
+        // cycle of latency.
+        let underflow = x86_64::_mm512_cmplt_epu32_mask(dot, q_p);
+        let t = x86_64::_mm512_sub_epi32(dot, q_p);
+        x86_64::_mm512_mask_add_epi32(t, underflow, t, PMP::PACKED_P)
+    }
+}
+
+/// Compute the elementary function `l0*r0 + l1*r1 + l2*r2 + l3*r3` given eight inputs
+/// in canonical form.
+///
+/// If the inputs are not in canonical form, the result is undefined.
+#[inline]
+#[must_use]
+fn dot_product_4<PMP: PackedMontyParameters, LHS: InToM512Vector<PMP>, RHS: InToM512Vector<PMP>>(
+    lhs: [LHS; 4],
+    rhs: [RHS; 4],
+) -> __m512i {
+    // The following analysis treats all input arrays as being arrays of PackedMontyField31AVX512<FP>.
+    // If one of the arrays contains MontyField31<FP>, we get to avoid the initial vmovshdup.
+    //
+    // Similarly to dot_product_2, we improve throughput by combining monty reductions however in this case
+    // we will need to slightly adjust the reduction algorithm.
+    //
+    // As all inputs are `< P < 2^{31}`, the sum satisfies: `C = l0*r0 + l1*r1 + l2*r2 + l3*r3 < 4P^2 < 2*2^{32}P`.
+    // Start by computing Q := μ C mod B as usual.
+    // We can't proceed as normal however as 2*2^{32}P > C - QP > -2^{32}P which doesn't fit into an i64.
+    // Instead we do a reduction on C, defining C' = if C < 2^{32}P: {C} else {C - 2^{32}P}
+    // From here we proceed with the standard montgomery reduction with C replaced by C'. It works identically
+    // with the Q we already computed as C = C' mod B.
+    //
+    // We want this to compile to:
+    //      vmovshdup  lhs_odd0, lhs0
+    //      vmovshdup  rhs_odd0, rhs0
+    //      vmovshdup  lhs_odd1, lhs1
+    //      vmovshdup  rhs_odd1, rhs1
+    //      vmovshdup  lhs_odd2, lhs2
+    //      vmovshdup  rhs_odd2, rhs2
+    //      vmovshdup  lhs_odd3, lhs3
+    //      vmovshdup  rhs_odd3, rhs3
+    //      vpmuludq   prod_evn0, lhs0, rhs0
+    //      vpmuludq   prod_odd0, lhs_odd0, rhs_odd0
+    //      vpmuludq   prod_evn1, lhs1, rhs1
+    //      vpmuludq   prod_odd1, lhs_odd1, rhs_odd1
+    //      vpmuludq   prod_evn2, lhs2, rhs2
+    //      vpmuludq   prod_odd2, lhs_odd2, rhs_odd2
+    //      vpmuludq   prod_evn3, lhs3, rhs3
+    //      vpmuludq   prod_odd3, lhs_odd3, rhs_odd3
+    //      vpaddq     dot_evn01, prod_evn0, prod_evn1
+    //      vpaddq     dot_odd01, prod_odd0, prod_odd1
+    //      vpaddq     dot_evn23, prod_evn2, prod_evn3
+    //      vpaddq     dot_odd23, prod_odd2, prod_odd3
+    //      vpaddq     dot_evn, dot_evn01, dot_evn23
+    //      vpaddq     dot, dot_odd01, dot_odd23
+    //      vpmuludq   q_evn, dot_evn, MU
+    //      vpmuludq   q_odd, dot, MU
+    //      vpmuludq   q_P_evn, q_evn, P
+    //      vpmuludq   q_P, q_odd, P
+    //      vmovshdup  dot{EVENS} dot_evn
+    //      vpcmpleud  over_P, P, dot
+    //      vpsubd     dot{underflow}, dot, P
+    //      vmovshdup  q_P{EVENS} q_P_evn
+    //      vpcmpltud  underflow, dot, q_P
+    //      vpsubd     res, dot, q_P
+    //      vpaddd     res{underflow}, res, P
+    // throughput: 16.5 cyc/vec (0.97 els/cyc)
+    // latency: 23 cyc
+    unsafe {
+        let lhs_evn0 = lhs[0].get_vector();
+        let lhs_odd0 = lhs[0].get_odd_in_even_pos_vector();
+        let lhs_evn1 = lhs[1].get_vector();
+        let lhs_odd1 = lhs[1].get_odd_in_even_pos_vector();
+        let lhs_evn2 = lhs[2].get_vector();
+        let lhs_odd2 = lhs[2].get_odd_in_even_pos_vector();
+        let lhs_evn3 = lhs[3].get_vector();
+        let lhs_odd3 = lhs[3].get_odd_in_even_pos_vector();
+
+        let rhs_evn0 = rhs[0].get_vector();
+        let rhs_odd0 = rhs[0].get_odd_in_even_pos_vector();
+        let rhs_evn1 = rhs[1].get_vector();
+        let rhs_odd1 = rhs[1].get_odd_in_even_pos_vector();
+        let rhs_evn2 = rhs[2].get_vector();
+        let rhs_odd2 = rhs[2].get_odd_in_even_pos_vector();
+        let rhs_evn3 = rhs[3].get_vector();
+        let rhs_odd3 = rhs[3].get_odd_in_even_pos_vector();
+
+        let mul_evn0 = x86_64::_mm512_mul_epu32(lhs_evn0, rhs_evn0);
+        let mul_evn1 = x86_64::_mm512_mul_epu32(lhs_evn1, rhs_evn1);
+        let mul_evn2 = x86_64::_mm512_mul_epu32(lhs_evn2, rhs_evn2);
+        let mul_evn3 = x86_64::_mm512_mul_epu32(lhs_evn3, rhs_evn3);
+        let mul_odd0 = x86_64::_mm512_mul_epu32(lhs_odd0, rhs_odd0);
+        let mul_odd1 = x86_64::_mm512_mul_epu32(lhs_odd1, rhs_odd1);
+        let mul_odd2 = x86_64::_mm512_mul_epu32(lhs_odd2, rhs_odd2);
+        let mul_odd3 = x86_64::_mm512_mul_epu32(lhs_odd3, rhs_odd3);
+
+        let dot_evn01 = x86_64::_mm512_add_epi64(mul_evn0, mul_evn1);
+        let dot_odd01 = x86_64::_mm512_add_epi64(mul_odd0, mul_odd1);
+        let dot_evn23 = x86_64::_mm512_add_epi64(mul_evn2, mul_evn3);
+        let dot_odd23 = x86_64::_mm512_add_epi64(mul_odd2, mul_odd3);
+
+        let dot_evn = x86_64::_mm512_add_epi64(dot_evn01, dot_evn23);
+        let dot_odd = x86_64::_mm512_add_epi64(dot_odd01, dot_odd23);
+
+        // We throw a confuse compiler here to prevent the compiler from
+        // using vpmullq instead of vpmuludq in the computations for q_p.
+        // vpmullq has both higher latency and lower throughput.
+        let q_evn = confuse_compiler(x86_64::_mm512_mul_epu32(dot_evn, PMP::PACKED_MU));
+        let q_odd = confuse_compiler(x86_64::_mm512_mul_epu32(dot_odd, PMP::PACKED_MU));
+
+        // Get all the high halves as one vector: this is `(lhs * rhs) >> 32`.
+        // NB: `vpermt2d` may feel like a more intuitive choice here, but it has much higher
+        // latency.
+        //
+        // Annoyingly, this (and the line for computing q_p_hi) seem to compile
+        // to a vpermt2ps, see https://godbolt.org/z/489aaPhz3.
+        //
+        // Hopefully this should be only a negligible difference to throughput and so we don't
+        // fix it right now.
+        let dot = mask_movehdup_epi32(dot_odd, EVENS, dot_evn);
+
+        // The elements in dot lie in [0, 2P) so we need to reduce them to [0, P)
+        // NB: Normally we'd `vpsubq P` and take the `vpminud`, but `vpminud` runs on port 0, which
+        // is already under a lot of pressure performing multiplications. To relieve this pressure,
+        // we check for underflow to generate a mask, and then conditionally add `P`.
+        let over_p = x86_64::_mm512_cmple_epu32_mask(PMP::PACKED_P, dot);
+        let dot_corr = x86_64::_mm512_mask_sub_epi32(dot, over_p, dot, PMP::PACKED_P);
+
+        // Normally we'd want to mask to perform % 2**32, but the instruction below only reads the
+        // low 32 bits anyway.
+        let q_p_evn = x86_64::_mm512_mul_epu32(q_evn, PMP::PACKED_P);
+        let q_p_odd = x86_64::_mm512_mul_epu32(q_odd, PMP::PACKED_P);
+
+        // We can ignore all the low halves of `q_p` as they cancel out. Get all the high halves as
+        // one vector.
+        let q_p = mask_movehdup_epi32(q_p_odd, EVENS, q_p_evn);
+
+        // Subtraction `prod_hi - q_p_hi` modulo `P`.
+        // NB: Normally we'd `vpaddd P` and take the `vpminud`, but `vpminud` runs on port 0, which
+        // is already under a lot of pressure performing multiplications. To relieve this pressure,
+        // we check for underflow to generate a mask, and then conditionally add `P`. The underflow
+        // check runs on port 5, increasing our throughput, although it does cost us an additional
+        // cycle of latency.
+        let underflow = x86_64::_mm512_cmplt_epu32_mask(dot_corr, q_p);
+        let t = x86_64::_mm512_sub_epi32(dot_corr, q_p);
+        x86_64::_mm512_mask_add_epi32(t, underflow, t, PMP::PACKED_P)
+    }
+}
+
+/// A general fast dot product implementation.
+///
+/// Maximises the number of calls to `dot_product_4` for dot products involving vectors of length
+/// more than 4. The length 64 occurs commonly enough it's useful to have a custom implementation
+/// which lets it use a slightly better summation algorithm with lower latency.
+#[inline(always)]
+fn general_dot_product<FP: FieldParameters, LHS: InToM512Vector<FP>, RHS: InToM512Vector<FP>, const N: usize>(
+    lhs: &[LHS],
+    rhs: &[RHS],
+) -> PackedMontyField31AVX512<FP> {
+    assert_eq!(lhs.len(), N);
+    assert_eq!(rhs.len(), N);
+    match N {
+        0 => PackedMontyField31AVX512::<FP>::ZERO,
+        1 => (lhs[0]).into() * (rhs[0]).into(),
+        2 => {
+            let res = dot_product_2([lhs[0], lhs[1]], [rhs[0], rhs[1]]);
+            unsafe {
+                // Safety: `dot_product_2` returns values in canonical form when given values in canonical form.
+                PackedMontyField31AVX512::<FP>::from_vector(res)
+            }
+        }
+        3 => {
+            let lhs2 = lhs[2];
+            let rhs2 = rhs[2];
+            let res = dot_product_2([lhs[0], lhs[1]], [rhs[0], rhs[1]]);
+            unsafe {
+                // Safety: `dot_product_2` returns values in canonical form when given values in canonical form.
+                PackedMontyField31AVX512::<FP>::from_vector(res) + (lhs2.into() * rhs2.into())
+            }
+        }
+        4 => {
+            let res = dot_product_4(
+                [lhs[0], lhs[1], lhs[2], lhs[3]],
+                [rhs[0], rhs[1], rhs[2], rhs[3]],
+            );
+            unsafe {
+                // Safety: `dot_product_4` returns values in canonical form when given values in canonical form.
+                PackedMontyField31AVX512::<FP>::from_vector(res)
+            }
+        }
+        64 => {
+            let sum_4s: [PackedMontyField31AVX512<FP>; 16] = array::from_fn(|i| {
+                let res = dot_product_4(
+                    [lhs[4 * i], lhs[4 * i + 1], lhs[4 * i + 2], lhs[4 * i + 3]],
+                    [rhs[4 * i], rhs[4 * i + 1], rhs[4 * i + 2], rhs[4 * i + 3]],
+                );
+                unsafe { 
+                    // Safety: `dot_product_4` returns values in canonical form when given values in canonical form.
+                    PackedMontyField31AVX512::<FP>::from_vector(res) 
+                }
+            });
+            PackedMontyField31AVX512::<FP>::tree_sum::<16>(&sum_4s)
+        }
+        _ => {
+            let mut acc = {
+                let res = dot_product_4(
+                    [lhs[0], lhs[1], lhs[2], lhs[3]],
+                    [rhs[0], rhs[1], rhs[2], rhs[3]],
+                );
+                unsafe {
+                    // Safety: `dot_product_4` returns values in canonical form when given values in canonical form.
+                    PackedMontyField31AVX512::<FP>::from_vector(res)
+                }
+            };
+            for i in (4..(N - 3)).step_by(4) {
+                let res = dot_product_4(
+                    [lhs[i], lhs[i + 1], lhs[i + 2], lhs[i + 3]],
+                    [rhs[i], rhs[i + 1], rhs[i + 2], rhs[i + 3]],
+                );
+                unsafe {
+                    // Safety: `dot_product_4` returns values in canonical form when given values in canonical form.
+                    acc += PackedMontyField31AVX512::<FP>::from_vector(res)
+                }
+            }
+            match N & 3 {
+                0 => acc,
+                1 => acc + general_dot_product::<_, _, _, 1>(&lhs[(4 * (N / 4))..], &rhs[(4 * (N / 4))..]),
+                2 => acc + general_dot_product::<_, _, _, 2>(&lhs[(4 * (N / 4))..], &rhs[(4 * (N / 4))..]),
+                3 => acc + general_dot_product::<_, _, _, 3>(&lhs[(4 * (N / 4))..], &rhs[(4 * (N / 4))..]),
+                _ => unreachable!()
+            }
+        }
+    }
+}
+
 impl<PMP: PackedMontyParameters> From<MontyField31<PMP>> for PackedMontyField31AVX512<PMP> {
     #[inline]
     fn from(value: MontyField31<PMP>) -> Self {
@@ -775,6 +1126,11 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX512<F
             }
             _ => self.exp_u64(POWER),
         }
+    }
+
+    #[inline(always)]
+    fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
+        general_dot_product::<_, _, _, N>(u, v)
     }
 }
 
@@ -1118,6 +1474,11 @@ unsafe impl<FP: FieldParameters> PackedValue for PackedMontyField31AVX512<FP> {
 
 unsafe impl<FP: FieldParameters> PackedField for PackedMontyField31AVX512<FP> {
     type Scalar = MontyField31<FP>;
+
+    #[inline]
+    fn dot_product_scalar_packed<const N: usize>(scalar_slice: &[Self::Scalar], packed_slice: &[Self]) -> Self {
+        general_dot_product::<_, _, _, N>(scalar_slice, packed_slice)
+    }
 }
 
 unsafe impl<FP: FieldParameters> PackedFieldPow2 for PackedMontyField31AVX512<FP> {

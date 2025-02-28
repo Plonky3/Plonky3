@@ -324,8 +324,8 @@ pub trait PrimeCharacteristicRing:
                 // We know that N > 8 here so this saves an add over the usual
                 // initialisation of acc to Self::ZERO.
                 let mut acc = Self::tree_sum::<8>(&input[..8]);
-                for i in 1..(N / 8) {
-                    acc += Self::tree_sum::<8>(&input[(8 * i)..(8 * (i + 1))])
+                for i in (16..(N + 1)).step_by(8) {
+                    acc += Self::tree_sum::<8>(&input[(i - 8)..i])
                 }
                 // This would be much cleaner if we could use const generic expressions but
                 // this will do for now.

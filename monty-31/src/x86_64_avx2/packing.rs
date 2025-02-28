@@ -379,8 +379,7 @@ fn dot_product_2<PMP: PackedMontyParameters, LHS: InToM256Vector<PMP>, RHS: InTo
     rhs: [RHS; 2],
 ) -> __m256i {
     // The following analysis treats all input arrays as being arrays of PackedMontyField31AVX2<FP>.
-    // If one of the arrays contains MontyField31<FP>, we get to avoid a few vmovshdup so everything
-    // is slightly cheaper.
+    // If one of the arrays contains MontyField31<FP>, we get to avoid the initial vmovshdup.
     //
     // We improve the throughput by combining the monty reductions together. As all inputs are
     // `< P < 2^{31}`, `l0*r0 + l1*r1 < 2P^2 < 2^{32}P` so the montgomery reduction
@@ -447,8 +446,7 @@ fn dot_product_4<PMP: PackedMontyParameters, LHS: InToM256Vector<PMP>, RHS: InTo
     rhs: [RHS; 4],
 ) -> __m256i {
     // The following analysis treats all input arrays as being arrays of PackedMontyField31AVX2<FP>.
-    // If one of the arrays contains MontyField31<FP>, we get to avoid a few vmovshdup so everything
-    // is slightly cheaper.
+    // If one of the arrays contains MontyField31<FP>, we get to avoid the initial vmovshdup.
     //
     // Similarly to dot_product_2, we improve throughput by combining monty reductions however in this case
     // we will need to slightly adjust the reduction algorithm.
@@ -559,13 +557,14 @@ fn dot_product_4<PMP: PackedMontyParameters, LHS: InToM256Vector<PMP>, RHS: InTo
 /// more than 4. The length 64 occurs commonly enough it's useful to have a custom implementation
 /// which lets it use a slightly better summation algorithm with lower latency.
 #[inline(always)]
-fn general_dot_product<FP: FieldParameters, LHS: InToM256Vector<FP>, RHS: InToM256Vector<FP>>(
+fn general_dot_product<FP: FieldParameters, LHS: InToM256Vector<FP>, RHS: InToM256Vector<FP>, const N: usize>(
     lhs: &[LHS],
     rhs: &[RHS],
 ) -> PackedMontyField31AVX2<FP> {
-    let n = lhs.len();
-    assert_eq!(lhs.len(), rhs.len());
-    match n {
+    assert_eq!(lhs.len(), N);
+    assert_eq!(rhs.len(), N);
+    match N {
+        0 => PackedMontyField31AVX2::<FP>::ZERO,
         1 => (lhs[0]).into() * (rhs[0]).into(),
         2 => {
             let res = dot_product_2([lhs[0], lhs[1]], [rhs[0], rhs[1]]);
@@ -599,13 +598,25 @@ fn general_dot_product<FP: FieldParameters, LHS: InToM256Vector<FP>, RHS: InToM2
                     [lhs[4 * i], lhs[4 * i + 1], lhs[4 * i + 2], lhs[4 * i + 3]],
                     [rhs[4 * i], rhs[4 * i + 1], rhs[4 * i + 2], rhs[4 * i + 3]],
                 );
-                unsafe { PackedMontyField31AVX2::<FP>::from_vector(res) }
+                unsafe { 
+                    // Safety: `dot_product_4` returns values in canonical form when given values in canonical form.
+                    PackedMontyField31AVX2::<FP>::from_vector(res) 
+                }
             });
             PackedMontyField31AVX2::<FP>::tree_sum::<16>(&sum_4s)
         }
         _ => {
-            let mut acc = PackedMontyField31AVX2::<FP>::ZERO;
-            for i in (0..n).step_by(4) {
+            let mut acc = {
+                let res = dot_product_4(
+                    [lhs[0], lhs[1], lhs[2], lhs[3]],
+                    [rhs[0], rhs[1], rhs[2], rhs[3]],
+                );
+                unsafe {
+                    // Safety: `dot_product_4` returns values in canonical form when given values in canonical form.
+                    PackedMontyField31AVX2::<FP>::from_vector(res)
+                }
+            };
+            for i in (4..(N - 3)).step_by(4) {
                 let res = dot_product_4(
                     [lhs[i], lhs[i + 1], lhs[i + 2], lhs[i + 3]],
                     [rhs[i], rhs[i + 1], rhs[i + 2], rhs[i + 3]],
@@ -615,11 +626,13 @@ fn general_dot_product<FP: FieldParameters, LHS: InToM256Vector<FP>, RHS: InToM2
                     acc += PackedMontyField31AVX2::<FP>::from_vector(res)
                 }
             }
-            let remainder = n % 4;
-            for i in (n - remainder)..n {
-                acc += (lhs[i]).into() * (rhs[i]).into()
+            match N & 3 {
+                0 => acc,
+                1 => acc + general_dot_product::<_, _, _, 1>(&lhs[(4 * (N / 4))..], &rhs[(4 * (N / 4))..]),
+                2 => acc + general_dot_product::<_, _, _, 2>(&lhs[(4 * (N / 4))..], &rhs[(4 * (N / 4))..]),
+                3 => acc + general_dot_product::<_, _, _, 3>(&lhs[(4 * (N / 4))..], &rhs[(4 * (N / 4))..]),
+                _ => unreachable!()
             }
-            acc
         }
     }
 }
@@ -646,15 +659,10 @@ fn shifted_square<MPAVX2: MontyParametersAVX2>(input: __m256i) -> __m256i {
 #[inline]
 #[must_use]
 fn xor<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
-    // We refactor the expression as r + 2l(1/2 - r).
-    // As we are working with MONTY_CONSTANT = 2^32, the internal representation
-    // of 1/2 is 2^31 mod P. Hence let us compute 2l(2^31 - r). As, 0 < l, r < P < 2^31
-    // we find that 2l(2^31 - r) < 2^32P so we can apply our monty reduction to this product.
-    //
-    // Moreover, as 2l, 2^31 - r are both < 2^32 we can compute these before we
-    // split into even and odd parts for the multiplication.
-    //
-    // All together we save 5 instructions (~25%) over the naive implementation.
+    // Refactor the expression as r + 2l(1/2 - r). As MONTY_CONSTANT = 2^32, the internal
+    // representation 1/2 is 2^31 mod P so the product in the above expression is represented
+    // as 2l(2^31 - r). As 0 < 2l, 2^31 - r < 2^32 and 2l(2^31 - r) < 2^32P, we can compute 
+    // the factors as 32 bit integers and then multiply and monty reduce as usual.
     //
     // We want this to compile to:
     //      vpaddd     lhs_double, lhs, lhs
@@ -705,10 +713,8 @@ fn xor<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
 #[must_use]
 fn andn<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
     // As we are working with MONTY_CONSTANT = 2^32, the internal representation
-    // of 1 is 2^32 mod P = 2^32 - P mod P. Hence let us compute (2^32 - P - l)r.
-    // This product is clearly less than 2^32P so we can apply our monty reduction to this.
-    //
-    // All together we save 2 instructions (~12%) over the naive implementation.
+    // of 1 is 2^32 mod P = 2^32 - P mod P. Hence we compute (2^32 - P - l)r.
+    // This product is less than 2^32P so we can apply our monty reduction to this.
     //
     // We want this to compile to:
     //      vpsubd     neg_lhs, -P, lhs
@@ -982,7 +988,7 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX2<FP>
 
     #[inline(always)]
     fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
-        general_dot_product(u, v)
+        general_dot_product::<_, _, _, N>(u, v)
     }
 
     #[inline(always)]
@@ -1254,8 +1260,8 @@ unsafe impl<FP: FieldParameters> PackedField for PackedMontyField31AVX2<FP> {
     type Scalar = MontyField31<FP>;
 
     #[inline]
-    fn dot_product_scalar_packed(scalar_slice: &[Self::Scalar], packed_slice: &[Self]) -> Self {
-        general_dot_product(scalar_slice, packed_slice)
+    fn dot_product_scalar_packed<const N: usize>(scalar_slice: &[Self::Scalar], packed_slice: &[Self]) -> Self {
+        general_dot_product::<_, _, _, N>(scalar_slice, packed_slice)
     }
 }
 

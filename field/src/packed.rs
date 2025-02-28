@@ -168,8 +168,9 @@ pub unsafe trait PackedField: Algebra<Self::Scalar>
     /// 
     /// The elements of the first vector should be elements of the scalar field.
     /// The elements of the second vector should vectors of elements packed into the packed field.
-    fn dot_product_scalar_packed(scalar_slice: &[Self::Scalar], packed_slice: &[Self]) -> Self {
-        debug_assert_eq!(scalar_slice.len(), packed_slice.len());
+    fn dot_product_scalar_packed<const N: usize>(scalar_slice: &[Self::Scalar], packed_slice: &[Self]) -> Self {
+        assert_eq!(scalar_slice.len(), N);
+        assert_eq!(packed_slice.len(), N);
         scalar_slice.iter().zip(packed_slice).map(|(&x, &y)| y * x).sum()
     }
 }
