@@ -104,7 +104,6 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
     type Evaluations = BitReversedMatrixView<RowMajorMatrix<F>>;
 
     fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> Self::Evaluations {
-        let h = mat.height();
         let log_h = mat.log2_height_strict();
 
         // Compute twiddle factors, or take memoized ones if already available.
