@@ -1,3 +1,7 @@
+//! Optimised AVX512 implementation for packed vectors of MontyFields31 elements.
+//! 
+//! We check that this compiles to the expected assembly code in: https://godbolt.org/z/Mz1WGYKWe
+
 use alloc::vec::Vec;
 use core::arch::asm;
 use core::arch::x86_64::{self, __m512i, __mmask8, __mmask16};
@@ -302,9 +306,7 @@ fn mask_movehdup_epi32(src: __m512i, k: __mmask16, a: __m512i) -> __m512i {
     // The instruction is only available in the floating-point flavor; this distinction is only for
     // historical reasons and no longer matters.
 
-    // Annoyingly, when inlined into the mul function, an intrinsic seems to compile
-    // to a vpermt2ps which has worse latency, see https://godbolt.org/z/489aaPhz3. We use inline
-    // assembly to force the compiler to do the right thing.
+    // We use inline assembly to force the compiler to do the right thing.
     unsafe {
         let dst: __m512i;
         asm!(
@@ -368,12 +370,6 @@ fn mul<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
         // Get all the high halves as one vector: this is `(lhs * rhs) >> 32`.
         // NB: `vpermt2d` may feel like a more intuitive choice here, but it has much higher
         // latency.
-        //
-        // Annoyingly, this (and the line for computing q_p_hi) seem to compile
-        // to a vpermt2ps, see https://godbolt.org/z/489aaPhz3.
-        //
-        // Hopefully this should be only a negligible difference to throughput and so we don't
-        // fix it right now. Maybe the compiler works it out when mul is inlined?
         let prod_hi = mask_movehdup_epi32(prod_odd, EVENS, prod_evn);
 
         // Normally we'd want to mask to perform % 2**32, but the instruction below only reads the
@@ -580,12 +576,6 @@ pub(crate) unsafe fn apply_func_to_even_odd<MPAVX512: MontyParametersAVX512>(
         // Get all the high halves as one vector: this is `(lhs * rhs) >> 32`.
         // NB: `vpermt2d` may feel like a more intuitive choice here, but it has much higher
         // latency.
-        //
-        // Annoyingly, this (and the line for computing q_p_hi) seem to compile
-        // to a vpermt2ps, see https://godbolt.org/z/489aaPhz3.
-        //
-        // Hopefully this should be only a negligible difference to throughput and so we don't
-        // fix it right now. Maybe the compiler works it out when apply_func_to_even_odd is inlined?
         let output_hi = mask_movehdup_epi32(output_odd, EVENS, output_even);
 
         // Normally we'd want to mask to perform % 2**32, but the instruction below only reads the
@@ -731,15 +721,9 @@ fn dot_product_2<PMP: PackedMontyParameters, LHS: InToM512Vector<PMP>, RHS: InTo
         let q_evn = confuse_compiler(x86_64::_mm512_mul_epu32(dot_evn, PMP::PACKED_MU));
         let q_odd = confuse_compiler(x86_64::_mm512_mul_epu32(dot_odd, PMP::PACKED_MU));
 
-        // Get all the high halves as one vector: this is `(lhs * rhs) >> 32`.
+        // Get all the high halves as one vector: this is `dot(lhs, rhs) >> 32`.
         // NB: `vpermt2d` may feel like a more intuitive choice here, but it has much higher
         // latency.
-        //
-        // Annoyingly, this (and the line for computing q_p_hi) seem to compile
-        // to a vpermt2ps, see https://godbolt.org/z/489aaPhz3.
-        //
-        // Hopefully this should be only a negligible difference to throughput and so we don't
-        // fix it right now.
         let dot = mask_movehdup_epi32(dot_odd, EVENS, dot_evn);
 
         // Normally we'd want to mask to perform % 2**32, but the instruction below only reads the
@@ -864,15 +848,9 @@ fn dot_product_4<PMP: PackedMontyParameters, LHS: InToM512Vector<PMP>, RHS: InTo
         let q_evn = confuse_compiler(x86_64::_mm512_mul_epu32(dot_evn, PMP::PACKED_MU));
         let q_odd = confuse_compiler(x86_64::_mm512_mul_epu32(dot_odd, PMP::PACKED_MU));
 
-        // Get all the high halves as one vector: this is `(lhs * rhs) >> 32`.
+        // Get all the high halves as one vector: this is `dot(lhs, rhs) >> 32`.
         // NB: `vpermt2d` may feel like a more intuitive choice here, but it has much higher
         // latency.
-        //
-        // Annoyingly, this (and the line for computing q_p_hi) seem to compile
-        // to a vpermt2ps, see https://godbolt.org/z/489aaPhz3.
-        //
-        // Hopefully this should be only a negligible difference to throughput and so we don't
-        // fix it right now.
         let dot = mask_movehdup_epi32(dot_odd, EVENS, dot_evn);
 
         // The elements in dot lie in [0, 2P) so we need to reduce them to [0, P)
