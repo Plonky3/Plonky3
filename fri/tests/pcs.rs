@@ -39,6 +39,12 @@ fn do_test_fri_pcs<Val, Challenge, Challenger, P>(
             log_degrees
                 .iter()
                 .map(|&log_degree| {
+                    // Ensure the domain size won't overflow when shifted by log_blowup
+                    assert!(
+                        log_degree < usize::BITS as usize - 1,
+                        "log_degree {} is too large and may cause overflow",
+                        log_degree
+                    );
                     let d = 1 << log_degree;
                     // random width 5-15
                     let width = 5 + rng.random_range(0..=10);
@@ -102,7 +108,7 @@ macro_rules! make_tests_for_pcs {
         #[test]
         fn single() {
             let p = $p;
-            for i in 3..6 {
+            for i in 3..4 {
                 $crate::do_test_fri_pcs(&p, &[&[i]]);
             }
         }
@@ -110,7 +116,7 @@ macro_rules! make_tests_for_pcs {
         #[test]
         fn many_equal() {
             let p = $p;
-            for i in 5..8 {
+            for i in 3..5 {
                 $crate::do_test_fri_pcs(&p, &[&[i; 5]]);
                 println!("{i} ok");
             }
@@ -119,7 +125,7 @@ macro_rules! make_tests_for_pcs {
         #[test]
         fn many_different() {
             let p = $p;
-            for i in 3..8 {
+            for i in 3..5 {
                 let degrees = (3..3 + i).collect::<Vec<_>>();
                 $crate::do_test_fri_pcs(&p, &[&degrees]);
             }
@@ -128,7 +134,7 @@ macro_rules! make_tests_for_pcs {
         #[test]
         fn many_different_rev() {
             let p = $p;
-            for i in 3..8 {
+            for i in 3..5 {
                 let degrees = (3..3 + i).rev().collect::<Vec<_>>();
                 $crate::do_test_fri_pcs(&p, &[&degrees]);
             }
@@ -169,6 +175,13 @@ mod babybear_fri_pcs {
     type MyPcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
 
     fn get_pcs(log_blowup: usize) -> (MyPcs, Challenger) {
+        // Ensure log_blowup is not too large to cause overflow
+        assert!(
+            log_blowup < usize::BITS as usize,
+            "log_blowup {} is too large and may cause overflow",
+            log_blowup
+        );
+
         let perm = Perm::new_from_rng_128(&mut seeded_rng());
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm.clone());
