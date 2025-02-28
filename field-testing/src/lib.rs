@@ -408,11 +408,7 @@ pub fn test_binary_ops<R: PrimeCharacteristicRing + Eq + Copy>(
             assert_eq!(one.xor(one), R::ZERO, "Error when testing xor(1, 1) = 0.");
             assert_eq!(zero.xor(one), R::ONE, "Error when testing xor(0, 1) = 1.");
             assert_eq!(one.xor(zero), R::ONE, "Error when testing xor(1, 0) = 1.");
-            assert_eq!(
-                zero.xor(zero),
-                R::ZERO,
-                "Error when testing xor(0, 0) = 0."
-            );
+            assert_eq!(zero.xor(zero), R::ZERO, "Error when testing xor(0, 0) = 0.");
             assert_eq!(one.andn(one), R::ZERO, "Error when testing andn(1, 1) = 0.");
             assert_eq!(zero.andn(one), R::ONE, "Error when testing andn(0, 1) = 1.");
             assert_eq!(

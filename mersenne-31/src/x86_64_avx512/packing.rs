@@ -831,7 +831,7 @@ unsafe impl PackedFieldPow2 for PackedMersenne31AVX512 {
 mod tests {
     use p3_field_testing::test_packed_field;
 
-    use super::{PackedMersenne31AVX512, Mersenne31};
+    use super::{Mersenne31, PackedMersenne31AVX512};
 
     /// Zero has a redundant representation, so let's test both.
     const ZEROS: PackedMersenne31AVX512 = PackedMersenne31AVX512(Mersenne31::new_array([

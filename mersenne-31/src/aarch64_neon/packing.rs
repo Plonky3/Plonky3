@@ -559,11 +559,13 @@ mod tests {
     use super::{Mersenne31, PackedMersenne31Neon};
 
     /// Zero has a redundant representation, so let's test both.
-    const ZEROS: PackedMersenne31Neon =
-    PackedMersenne31Neon(Mersenne31::new_array([0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff]));
+    const ZEROS: PackedMersenne31Neon = PackedMersenne31Neon(Mersenne31::new_array([
+        0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff,
+    ]));
 
-    const SPECIAL_VALS: PackedMersenne31Neon =
-    PackedMersenne31Neon(Mersenne31::new_array([0x00000000, 0x00000001, 0x00000002, 0x7ffffffe]));
+    const SPECIAL_VALS: PackedMersenne31Neon = PackedMersenne31Neon(Mersenne31::new_array([
+        0x00000000, 0x00000001, 0x00000002, 0x7ffffffe,
+    ]));
 
     test_packed_field!(
         crate::PackedMersenne31Neon,

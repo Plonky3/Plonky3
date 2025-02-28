@@ -164,7 +164,7 @@ mod tests {
         );
     }
 
-    // There is a redundant representation of zero but we already tested it 
+    // There is a redundant representation of zero but we already tested it
     // when testing the base field.
     const ZEROS: [Fi; 1] = [Fi::ZERO];
     const ONES: [Fi; 1] = [Fi::ONE];

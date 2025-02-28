@@ -45,12 +45,12 @@ pub trait Butterfly<F: Field>: Copy + Send + Sync {
         debug_assert_eq!(dst_shorts_1.len(), dst_shorts_2.len());
         debug_assert_eq!(dst_suffix_1.len(), dst_suffix_2.len());
         for (s_1, s_2, d_1, d_2) in izip!(src_shorts_1, src_shorts_2, dst_shorts_1, dst_shorts_2) {
-            let (res_1, res_2) = self.apply::<F::Packing>(*s_1, *s_2);
+            let (res_1, res_2) = self.apply(*s_1, *s_2);
             d_1.write(res_1);
             d_2.write(res_2);
         }
         for (s_1, s_2, d_1, d_2) in izip!(src_suffix_1, src_suffix_2, dst_suffix_1, dst_suffix_2) {
-            let (res_1, res_2) = self.apply::<F>(*s_1, *s_2);
+            let (res_1, res_2) = self.apply(*s_1, *s_2);
             d_1.write(res_1);
             d_2.write(res_2);
         }

@@ -645,7 +645,6 @@ mod tests {
     const ZEROS: [Goldilocks; 2] = [Goldilocks::ZERO, Goldilocks::new(P)];
     const ONES: [Goldilocks; 2] = [Goldilocks::ONE, Goldilocks::new(P + 1)];
 
-
     test_field!(crate::Goldilocks, &super::ZEROS, &super::ONES);
     test_prime_field!(crate::Goldilocks);
     test_prime_field_64!(crate::Goldilocks);

@@ -36,7 +36,8 @@ mod test_quartic_extension {
 
 #[cfg(test)]
 mod test_quintic_extension {
-    use p3_field::{extension::BinomialExtensionField, PrimeCharacteristicRing};
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
     use p3_field_testing::{test_field, test_two_adic_extension_field};
 
     use crate::BabyBear;
