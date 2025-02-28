@@ -222,6 +222,8 @@ fn partial_monty_red_signed_to_signed<MPAVX2: MontyParametersAVX2>(input: __m256
 /// Blend together in two vectors interleaving the 32-bit elements stored in the odd components.
 ///
 /// This ignores whatever is stored in even positions.
+#[inline]
+#[must_use]
 fn blend_evn_odd(evn: __m256i, odd: __m256i) -> __m256i {
     // We want this to compile to:
     //      vmovshdup  evn_hi, evn
