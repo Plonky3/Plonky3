@@ -602,7 +602,19 @@ pub trait Field:
             composite_splitter,
         };
         let n = Self::order() - BigUint::one();
-        factorizer.factor_counts(&n)
+        let mut factors = factorizer.prime_factors(&n).to_vec();
+        factors.sort();
+        let mut factors_iter = factors.into_iter().peekable();
+        let mut factor_counts = vec![];
+        while let Some(f) = factors_iter.next() {
+            let mut count = 1;
+            while factors_iter.peek() == Some(&f) {
+                count += 1;
+                factors_iter.next();
+            }
+            factor_counts.push((f, count));
+        }
+        factor_counts
     }
 
     /// The number of bits required to define an element of this field.
