@@ -512,6 +512,7 @@ where
                 .into_iter()
                 .rev()
                 .map(|(log_height, (_alpha_pow, ro))| (log_height, ro))
+                .collect_vec())
         })?;
 
         Ok(())
