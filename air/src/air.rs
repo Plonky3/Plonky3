@@ -111,8 +111,7 @@ pub trait AirBuilder: Sized {
     /// Assert that a given array consists of only boolean values.
     fn assert_bools<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
         let zero_array = array.map(|x| {
-            let x = x.into();
-            x.clone() * (x - Self::Expr::ONE)
+            x.into().bool_check()
         });
         self.assert_zeros(zero_array);
     }
