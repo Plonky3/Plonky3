@@ -197,7 +197,7 @@ fn exp_small<PMP: PackedMontyParameters, const D: u64>(val: __m512i) -> __m512i 
 }
 
 /// Compute val -> (val + rc)^D. Each entry of val should be represented in canonical form.
-/// Each entry of rc should be represented by an element in in [-P, 0].
+/// Each entry of rc should be represented by an element in [-P, 0].
 /// Each entry of the output will be represented by an element in canonical form.
 /// If the inputs do not conform to this representation, the result is undefined.
 #[inline(always)]
