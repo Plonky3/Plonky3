@@ -251,7 +251,7 @@ macro_rules! quotient_map_small_int {
 ///     /// Convert a given `u128` integer into an element of the `Mersenne31` field.
 ///     ///
 ///     /// # Safety
-///     /// The input mut lie in the range:", [0, 2^31 - 1].
+///     /// The input must lie in the range:", [0, 2^31 - 1].
 ///     #[inline]
 ///     unsafe fn from_canonical_unchecked(int: u128) -> Mersenne31 {
 ///         unsafe {
@@ -294,7 +294,7 @@ macro_rules! quotient_map_large_uint {
             #[doc = concat!("Convert a given `", stringify!($large_int), "` integer into an element of the `", stringify!($field), "` field.")]
             ///
             /// # Safety
-            #[doc = concat!("The input mut lie in the range:", $unchecked_bounds, ".")]
+            #[doc = concat!("The input must lie in the range:", $unchecked_bounds, ".")]
             #[inline]
             unsafe fn from_canonical_unchecked(int: $large_int) -> $field {
                 unsafe {
@@ -352,7 +352,7 @@ macro_rules! quotient_map_large_uint {
 ///     /// Convert a given `i128` integer into an element of the `Mersenne31` field.
 ///     ///
 ///     /// # Safety
-///     /// The input mut lie in the range:", `[1 - 2^31, 2^31 - 1]`.
+///     /// The input must lie in the range:", `[1 - 2^31, 2^31 - 1]`.
 ///     #[inline]
 ///     unsafe fn from_canonical_unchecked(int: i128) -> Mersenne31 {
 ///         unsafe {
@@ -392,7 +392,7 @@ macro_rules! quotient_map_large_iint {
             #[doc = concat!("Convert a given `", stringify!($large_int), "` integer into an element of the `", stringify!($field), "` field.")]
             ///
             /// # Safety
-            #[doc = concat!("The input mut lie in the range:", $unchecked_bounds, ".")]
+            #[doc = concat!("The input must lie in the range:", $unchecked_bounds, ".")]
             #[inline]
             unsafe fn from_canonical_unchecked(int: $large_signed_int) -> $field {
                 unsafe {
@@ -439,7 +439,7 @@ macro_rules! impl_u_i_size {
                     4 => Self::from_canonical_checked(int as $int32),
                     8 => Self::from_canonical_checked(int as $int64),
                     16 => Self::from_canonical_checked(int as $int128),
-                    _ => panic!(concat!(stringify!($intsize), "is not equivalent to any primitive integer types.")),
+                    _ => panic!(concat!(stringify!($intsize), " is not equivalent to any primitive integer types.")),
                 }
             }
 
@@ -452,7 +452,7 @@ macro_rules! impl_u_i_size {
                         4 => Self::from_canonical_unchecked(int as $int32),
                         8 => Self::from_canonical_unchecked(int as $int64),
                         16 => Self::from_canonical_unchecked(int as $int128),
-                        _ => panic!(concat!(stringify!($intsize), "is not equivalent to any primitive integer types.")),
+                        _ => panic!(concat!(stringify!($intsize), " is not equivalent to any primitive integer types.")),
                     }
                 }
             }
