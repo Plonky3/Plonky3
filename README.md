@@ -1,5 +1,8 @@
 ![Plonky3-powered-by-polygon](https://github.com/Plonky3/Plonky3/assets/86010/7ec356ad-b0f3-4c4c-aa1d-3a151c1065e7)
 
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/Plonky3/Plonky3/blob/main/LICENSE-MIT)
+[![License](https://img.shields.io/github/license/Plonky3/Plonky3)](https://github.com/Plonky3/Plonky3/blob/main/LICENSE-APACHE)
+
 Plonky3 is a toolkit for implementing polynomial IOPs (PIOPs), such as PLONK and STARKs. It aims to support several polynomial commitment schemes, such as Brakedown.
 
 This is the "core" repo, but the plan is to move each crate into its own repo once APIs stabilize.
@@ -14,7 +17,7 @@ Fields:
   - [x] AVX2
   - [x] AVX-512
   - [x] NEON
-- [x] BabyBear
+- [x] General 31 bit fields (BabyBear and KoalaBear)
   - [x] ~128 bit extension field
   - [x] AVX2
   - [x] AVX-512
@@ -62,7 +65,7 @@ Hashes
 Many variations are possible, with different fields, hashes, and so forth, which can be controlled through the command line.
 
 For example, to prove 2^20 Poseidon2 permutations of width 16, using the `KoalaBear` field, `Radix2DitParallel` DFT, and `KeccakF` as the Merkle tree hash:
-```
+```bash
 RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_prime_field_31 --release --features parallel -- --field koala-bear --objective poseidon-2-permutations --log-trace-length 17 --discrete-fourier-transform radix-2-dit-parallel --merkle-hash keccak-f
 ```
 
@@ -80,7 +83,7 @@ Extra speedups may be possible with some configuration changes:
 ## CPU features
 
 Plonky3 contains optimizations that rely on newer CPU instructions unavailable in older processors. These instruction sets include x86's [BMI1 and 2](https://en.wikipedia.org/wiki/X86_Bit_manipulation_instruction_set), [AVX2](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions#Advanced_Vector_Extensions_2), and [AVX-512](https://en.wikipedia.org/wiki/AVX-512). Rustc does not emit those instructions by default; they must be explicitly enabled through the `target-feature` compiler option (or implicitly by setting `target-cpu`). To enable all features that are supported on your machine, you can set `target-cpu` to `native`. For example, to run the tests:
-```
+```bash
 RUSTFLAGS="-Ctarget-cpu=native" cargo test
 ```
 
@@ -90,7 +93,7 @@ Support for some instructions, such as AVX-512, is still experimental. They are 
 ## Nightly-only optimizations
 
 Some optimizations (in particular, AVX-512-optimized math) rely on features that are currently available only in the nightly build of Rustc. To use them, you need to enable the `nightly-features` feature. For example, to run the tests:
-```
+```bash
 cargo test --features nightly-features
 ```
 
