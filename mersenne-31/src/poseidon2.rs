@@ -10,7 +10,7 @@
 //! Optimized Diagonal for Mersenne31 width 16:
 //! [-2, 2^0, 2, 4, 8, 16, 32, 64, 2^7, 2^8, 2^10, 2^12, 2^13, 2^14, 2^15, 2^16]
 //! Optimized Diagonal for Mersenne31 width 24:
-//! [-2, 2^0, 2, 4, 8, 16, 32, 64, 2^7, 2^8, 2^9, 2^10, 2^11, 2^12, 2^13, 2^14, 2^15, 2^16,  2^17,  2^18,  2^19, 2^20, 2^21, 2^22]
+//! [-2, 2^0, 2, 4, 8, 16, 32, 64, 2^7, 2^8, 2^9, 2^10, 2^11, 2^12, 2^13, 2^14, 2^15, 2^16, 2^17, 2^18, 2^19, 2^20, 2^21, 2^22]
 //! See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
 
 use p3_field::Algebra;
