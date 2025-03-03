@@ -13,7 +13,7 @@ use p3_field::{
     cyclic_subgroup_coset_known_order, dot_product,
 };
 use p3_interpolation::interpolate_coset;
-use p3_matrix::bitrev::{BitReversableMatrix, BitReversalPerm, BitReversedMatrixView};
+use p3_matrix::bitrev::{BitReversalPerm, BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
 use p3_matrix::{Dimensions, Matrix};
 use p3_maybe_rayon::prelude::*;
