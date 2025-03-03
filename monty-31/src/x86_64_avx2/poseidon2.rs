@@ -158,7 +158,7 @@ pub struct Poseidon2ExternalLayerMonty31<PMP: PackedMontyParameters, const WIDTH
 impl<FP: FieldParameters, const WIDTH: usize> ExternalLayerConstructor<MontyField31<FP>, WIDTH>
     for Poseidon2ExternalLayerMonty31<FP, WIDTH>
 {
-    /// Construct an instance of Poseidon2ExternalLayerMersenne31AVX2 from a array of
+    /// Construct an instance of Poseidon2ExternalLayerMersenne31AVX2 from an array of
     /// vectors containing the constants for each round. Internally, the constants
     ///  are transformed into the {-P, ..., 0} representation instead of the standard {0, ..., P} one.
     fn new_from_constants(
