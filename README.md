@@ -169,6 +169,10 @@ is likely to be rejected. It's possible that we may relax this policy
 in the future, but we aim to minimize the use of unstable features;
 please discuss with us before enabling any.
 
+Please do not submit any PRs consisting of minor fixes to typos. They
+will not be accepted. If you find a typo that bothers you particularly,
+make an issue and we will fix it when we find the time.
+
 Here are a few specific guidelines for the three main categories of
 PRs that we expect:
 
