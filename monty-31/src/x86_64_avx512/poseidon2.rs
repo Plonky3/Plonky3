@@ -158,7 +158,7 @@ pub struct Poseidon2ExternalLayerMonty31<PMP: PackedMontyParameters, const WIDTH
 impl<FP: FieldParameters, const WIDTH: usize> ExternalLayerConstructor<MontyField31<FP>, WIDTH>
     for Poseidon2ExternalLayerMonty31<FP, WIDTH>
 {
-    /// Construct an instance of Poseidon2ExternalLayerMersenne31AVX2 from a array of
+    /// Construct an instance of Poseidon2ExternalLayerMersenne31AVX2 from an array of
     /// vectors containing the constants for each round. Internally, the constants
     ///  are transformed into the {-P, ..., 0} representation instead of the standard {0, ..., P} one.
     fn new_from_constants(
@@ -197,7 +197,7 @@ fn exp_small<PMP: PackedMontyParameters, const D: u64>(val: __m512i) -> __m512i 
 }
 
 /// Compute val -> (val + rc)^D. Each entry of val should be represented in canonical form.
-/// Each entry of rc should be represented by an element in in [-P, 0].
+/// Each entry of rc should be represented by an element in [-P, 0].
 /// Each entry of the output will be represented by an element in canonical form.
 /// If the inputs do not conform to this representation, the result is undefined.
 #[inline(always)]

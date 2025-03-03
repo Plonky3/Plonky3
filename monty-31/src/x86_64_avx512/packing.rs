@@ -570,12 +570,11 @@ pub(crate) unsafe fn apply_func_to_even_odd<MPAVX512: MontyParametersAVX512>(
         let input_evn = input;
         let input_odd = movehdup_epi32(input);
 
-        // Unlike the mul function, we need to receive back values the reduced
         let output_even = func(input_evn);
         let output_odd = func(input_odd);
 
         // We need to recombine these even and odd parts and, at the same time reduce back to
-        // and output in [0, P).
+        // an output in [0, P).
 
         // We throw a confuse compiler here to prevent the compiler from
         // using vpmullq instead of vpmuludq in the computations for q_p.

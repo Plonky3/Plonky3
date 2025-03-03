@@ -311,7 +311,7 @@ fn partial_reduce_neg(x: __m512i) -> __m512i {
 /// Compute the square of the Mersenne-31 field elements located in the even indices.
 /// These field elements are represented as values in {-P, ..., P}. If the even inputs
 /// do not conform to this representation, the result is undefined.
-/// The top half of each 64-bit lane is is ignored.
+/// The top half of each 64-bit lane is ignored.
 /// The top half of each 64-bit lane in the result is 0.
 #[inline(always)]
 fn square_unred(x: __m512i) -> __m512i {
