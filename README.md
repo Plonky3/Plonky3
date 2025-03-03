@@ -1,9 +1,23 @@
 ![Plonky3-powered-by-polygon](https://github.com/Plonky3/Plonky3/assets/86010/7ec356ad-b0f3-4c4c-aa1d-3a151c1065e7)
 
-Plonky3 is a toolkit for implementing polynomial IOPs (PIOPs), such as PLONK and STARKs. It aims to support several polynomial commitment schemes, such as Brakedown.
+# Plonky3
+
+Plonky3 is a high-performance toolkit for implementing polynomial IOPs (PIOPs), such as PLONK and STARKs. It aims to support several polynomial commitment schemes, such as Brakedown, with a focus on efficiency and modularity.
+
+## Overview
+
+This toolkit provides the cryptographic building blocks needed to create zero-knowledge proof systems. It is designed for researchers and developers working on ZK applications, with a focus on performance and flexibility.
 
 This is the "core" repo, but the plan is to move each crate into its own repo once APIs stabilize.
 
+## Getting Started
+
+To use Plonky3, you'll need Rust installed on your system. Add Plonky3 to your project's dependencies:
+
+```toml
+[dependencies]
+plonky3 = { git = "https://github.com/Plonky3/Plonky3.git" }
+```
 
 ## Status
 
@@ -21,6 +35,7 @@ Fields:
   - [x] NEON
 - [x] Goldilocks
   - [x] ~128 bit extension field
+  - [x] KoalaBear (experimental)
 
 Generalized vector commitment schemes
 - [x] generalized Merkle tree
@@ -61,17 +76,26 @@ Hashes
 
 Many variations are possible, with different fields, hashes, and so forth, which can be controlled through the command line.
 
-For example, to prove 2^20 Poseidon2 permutations of width 16, using the `KoalaBear` field, `Radix2DitParallel` DFT, and `KeccakF` as the Merkle tree hash:
-```
+### Example Benchmark
+
+To prove 2^20 Poseidon2 permutations of width 16, using the `KoalaBear` field, `Radix2DitParallel` DFT, and `KeccakF` as the Merkle tree hash:
+```bash
 RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_prime_field_31 --release --features parallel -- --field koala-bear --objective poseidon-2-permutations --log-trace-length 17 --discrete-fourier-transform radix-2-dit-parallel --merkle-hash keccak-f
 ```
 
+### Command Line Options
+
 Currently the options for the command line arguments are:
-- `--field` (`-f`): `mersenne-31` or `koala-bear` or `baby-bear`.
-- `--objective` (`-o`): `blake-3-permutations, poseidon-2-permutations, keccak-f-permutations`.
-- `--log-trace-length` (`-l`): Accepts any integer between `0` and `255`. The number of permutations proven is `trace_length, 8*trace_length` and `trace_length/24` for `blake3, poseidon2` and `keccakf` respectively. 
-- `--discrete-fourier-transform` (`-d`): `radix-2-dit-parallel, recursive-dft`. This option should be omitted if the field choice is `mersenne-31` as the circle stark currently only supports a single discrete fourier transform.
-- `--merkle-hash` (`-m`): `poseidon-2, keccak-f`.
+- `--field` (`-f`): `mersenne-31`, `koala-bear`, or `baby-bear`
+- `--objective` (`-o`): `blake-3-permutations`, `poseidon-2-permutations`, `keccak-f-permutations`
+- `--log-trace-length` (`-l`): Accepts any integer between `0` and `255`. The number of permutations proven is:
+  - `trace_length` for Blake3
+  - `8*trace_length` for Poseidon2
+  - `trace_length/24` for KeccakF
+- `--discrete-fourier-transform` (`-d`): `radix-2-dit-parallel`, `recursive-dft`. This option should be omitted if the field choice is `mersenne-31` as the circle stark currently only supports a single discrete fourier transform.
+- `--merkle-hash` (`-m`): `poseidon-2`, `keccak-f`
+
+### Performance Optimization
 
 Extra speedups may be possible with some configuration changes:
 - `JEMALLOC_SYS_WITH_MALLOC_CONF=retain:true,dirty_decay_ms:-1,muzzy_decay_ms:-1` will cause jemalloc to hang on to virtual memory. This may not affect the very first proof much, but can help significantly with subsequent proofs as fewer pages (if any) will need to be newly assigned by the OS. These settings might not be suitable for all production environments, e.g. if the process' virtual memory is limited by `ulimit` or `max_map_count`.
@@ -79,8 +103,10 @@ Extra speedups may be possible with some configuration changes:
 
 ## CPU features
 
-Plonky3 contains optimizations that rely on newer CPU instructions unavailable in older processors. These instruction sets include x86's [BMI1 and 2](https://en.wikipedia.org/wiki/X86_Bit_manipulation_instruction_set), [AVX2](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions#Advanced_Vector_Extensions_2), and [AVX-512](https://en.wikipedia.org/wiki/AVX-512). Rustc does not emit those instructions by default; they must be explicitly enabled through the `target-feature` compiler option (or implicitly by setting `target-cpu`). To enable all features that are supported on your machine, you can set `target-cpu` to `native`. For example, to run the tests:
-```
+Plonky3 contains optimizations that rely on newer CPU instructions unavailable in older processors. These instruction sets include x86's [BMI1 and 2](https://en.wikipedia.org/wiki/X86_Bit_manipulation_instruction_set), [AVX2](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions#Advanced_Vector_Extensions_2), and [AVX-512](https://en.wikipedia.org/wiki/AVX-512). Rustc does not emit those instructions by default; they must be explicitly enabled through the `target-feature` compiler option (or implicitly by setting `target-cpu`). 
+
+To enable all features that are supported on your machine, you can set `target-cpu` to `native`. For example, to run the tests:
+```bash
 RUSTFLAGS="-Ctarget-cpu=native" cargo test
 ```
 
@@ -90,15 +116,19 @@ Support for some instructions, such as AVX-512, is still experimental. They are 
 ## Nightly-only optimizations
 
 Some optimizations (in particular, AVX-512-optimized math) rely on features that are currently available only in the nightly build of Rustc. To use them, you need to enable the `nightly-features` feature. For example, to run the tests:
-```
+```bash
 cargo test --features nightly-features
 ```
 
 
 ## Known issues
 
-The verifier might panic upon receiving certain invalid proofs.
+- The verifier might panic upon receiving certain invalid proofs.
+- Some optimizations may not work correctly on all hardware configurations.
 
+## Documentation
+
+For more detailed documentation, please refer to the [API documentation](https://docs.rs/plonky3) (coming soon).
 
 ## License
 
@@ -133,13 +163,16 @@ external contribution for any reason, including a simple lack of time
 to maintain it (now or in the future); we may even decline to review
 something that is not considered a sufficiently high priority for us.
 
+### How to Contribute
+
+1. **Communicate first**: Drop a note in our public [Discord #development channel](https://discord.gg/polygon) about your intention to work on something.
+2. **Fork the repository**: Create your own fork of the repository.
+3. **Create a branch**: Make your changes in a new branch.
+4. **Submit a PR**: Follow the guidelines below when submitting your PR.
+
 To avoid disappointment, please communicate your intention to
 contribute openly, while respecting the limited time and availability
-we have to review and provide guidance for external contributions. It
-is a good idea to drop a note in our public Discord #development
-channel about your intention to work on something, whether an issue, a
-new feature, or a performance improvement. This is probably all that's
-really required to avoid duplication of work with other contributors.
+we have to review and provide guidance for external contributions.
 
 What follows are some more specific requests for how to write PRs in a
 way that will make them easy for us to review. Deviating from these
