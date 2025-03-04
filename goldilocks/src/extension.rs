@@ -31,6 +31,30 @@ impl HasTwoAdicBinomialExtension<2> for Goldilocks {
     }
 }
 
+impl BinomiallyExtendable<5> for Goldilocks {
+    // Verifiable via:
+    //  ```sage
+    //  # Define Fp
+    //  p = 2**64 - 2**32 + 1
+    //  F = GF(p)
+
+    //  # Define Fp[z]
+    //  R.<z> = PolynomialRing(F)
+
+    //  # The polynomial x^5-3 is irreducible
+    //  assert(R(z^5-3).is_irreducible())
+    //  ```
+    const W: Self = Self::new(3);
+
+    // 5-th root = w^((p - 1)/5)
+    const DTH_ROOT: Self = Self::new(1041288259238279555);
+
+    // Generator of the extension field
+    // Obtained by finding the smallest Hamming weight vector
+    // with appropriate order, starting at [0,1,0,0,0]
+    const EXT_GENERATOR: [Self; 5] = [Self::TWO, Self::ONE, Self::ZERO, Self::ZERO, Self::ZERO];
+}
+
 #[cfg(test)]
 mod test_quadratic_extension {
 
@@ -45,4 +69,31 @@ mod test_quadratic_extension {
     test_field!(super::EF);
 
     test_two_adic_extension_field!(super::F, super::EF);
+}
+
+#[cfg(test)]
+mod test_quintic_extension {
+
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field_testing::{test_add_neg_sub_mul, test_inv_div, test_inverse};
+
+    use crate::Goldilocks;
+
+    type F = Goldilocks;
+    type EF = BinomialExtensionField<F, 5>;
+
+    #[test]
+    fn test_add_neg_sub_mul_w() {
+        test_add_neg_sub_mul::<EF>();
+    }
+
+    #[test]
+    fn test_inv_div_w() {
+        test_inv_div::<EF>();
+    }
+
+    #[test]
+    fn test_inverse_w() {
+        test_inverse::<EF>();
+    }
 }
