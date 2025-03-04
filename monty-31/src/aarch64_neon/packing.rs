@@ -57,7 +57,7 @@ impl<PMP: PackedMontyParameters> PackedMontyField31Neon<PMP> {
             // be transmuted to `[MontyField31; WIDTH]` (since `MontyField31` is `repr(transparent)`), which in
             // turn can be transmuted to `PackedMontyField31Neon` (since `PackedMontyField31Neon` is also
             // `repr(transparent)`).
-            transmute(vector)
+            unsafe { transmute(vector) }
         }
     }
 
