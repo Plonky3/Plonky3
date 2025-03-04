@@ -1,0 +1,47 @@
+[package]
+name = "p3-stir"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+p3-challenger.workspace = true
+p3-commit.workspace = true
+p3-coset.workspace = true
+p3-dft.workspace = true
+p3-field.workspace = true
+p3-interpolation.workspace = true
+p3-matrix.workspace = true
+p3-poly.workspace = true
+itertools.workspace = true
+serde.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+rand = { workspace = true, optional = true }
+rand_chacha = { workspace = true, optional = true }
+p3-baby-bear = { workspace = true, optional = true }
+p3-goldilocks = { workspace = true, optional = true }
+p3-symmetric = { workspace = true, optional = true }
+p3-merkle-tree = { workspace = true, optional = true }
+
+[dev-dependencies]
+p3-baby-bear.workspace = true
+p3-dft.workspace = true
+p3-goldilocks.workspace = true
+p3-poly = { workspace = true, features = ["test-utils"] }
+p3-merkle-tree.workspace = true
+p3-poseidon2.workspace = true
+p3-symmetric.workspace = true
+criterion.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+serde_json = "1.0.113"
+
+[[bench]]
+name = "stir"
+harness = false
+required-features = ["test-utils"]
+
+[features]
+test-utils = ["dep:rand", "dep:rand_chacha", "dep:p3-baby-bear", "dep:p3-symmetric", "dep:p3-merkle-tree", "dep:p3-goldilocks"]
