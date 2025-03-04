@@ -19,6 +19,7 @@ serde = { workspace = true, features = ["derive"] }
 [dev-dependencies]
 p3-dft.workspace = true
 p3-field-testing.workspace = true
+p3-util.workspace = true
 rand.workspace = true
 criterion.workspace = true
 rand_chacha.workspace = true

@@ -176,7 +176,11 @@ mod tests {
         assert_eq!(m2, m2_deserialized);
     }
 
-    test_field!(crate::KoalaBear);
+    // MontyField31's have no redundant representations.
+    const ZEROS: [KoalaBear; 1] = [KoalaBear::ZERO];
+    const ONES: [KoalaBear; 1] = [KoalaBear::ONE];
+
+    test_field!(crate::KoalaBear, &super::ZEROS, &super::ONES);
     test_two_adic_field!(crate::KoalaBear);
 
     test_field_dft!(radix2dit, crate::KoalaBear, p3_dft::Radix2Dit<_>);

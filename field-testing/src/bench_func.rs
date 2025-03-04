@@ -29,26 +29,56 @@ where
     });
 }
 
-/// Benchmark the time taken to sum an array [F; N] using .sum() method.
-/// Repeat the summation REPS times.
-pub fn benchmark_iter_sum<F: Field, const N: usize, const REPS: usize>(
+/// Benchmark the time taken to sum an array [[F; N]; REPS] by summing each array
+/// [F; N] using .sum() method and accumulating the sums into an accumulator.
+///
+/// Making N larger and REPS smaller (vs the opposite) leans the benchmark more sensitive towards
+/// the latency (resp throughput) of the sum method.
+pub fn benchmark_iter_sum<R: PrimeCharacteristicRing + Copy, const N: usize, const REPS: usize>(
     c: &mut Criterion,
     name: &str,
 ) where
-    StandardUniform: Distribution<F>,
+    StandardUniform: Distribution<R>,
 {
     let mut rng = rand::rng();
     let mut input = Vec::new();
     for _ in 0..REPS {
-        input.push(rng.random::<[F; N]>())
+        input.push(rng.random::<[R; N]>())
     }
-    let mut output = [F::ZERO; REPS];
     c.bench_function(&format!("{} sum/{}, {}", name, REPS, N), |b| {
         b.iter(|| {
-            for i in 0..REPS {
-                output[i] = input[i].iter().copied().sum()
+            let mut acc = R::ZERO;
+            for row in input.iter_mut() {
+                acc += row.iter().copied().sum()
             }
-            output
+            acc
+        })
+    });
+}
+
+/// Benchmark the time taken to sum an array [[F; N]; REPS] by summing each array
+/// [F; N] using tree_sum method and accumulating the sums into an accumulator.
+///
+/// Making N larger and REPS smaller (vs the opposite) leans the benchmark more sensitive towards
+/// the latency (resp throughput) of the sum method.
+pub fn benchmark_tree_sum<R: PrimeCharacteristicRing + Copy, const N: usize, const REPS: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
+    StandardUniform: Distribution<R>,
+{
+    let mut rng = rand::rng();
+    let mut input = Vec::new();
+    for _ in 0..REPS {
+        input.push(rng.random::<[R; N]>())
+    }
+    c.bench_function(&format!("{} tree sum/{}, {}", name, REPS, N), |b| {
+        b.iter(|| {
+            let mut acc = R::ZERO;
+            for row in input.iter_mut() {
+                acc += R::tree_sum::<N>(row)
+            }
+            acc
         })
     });
 }

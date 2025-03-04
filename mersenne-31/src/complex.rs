@@ -164,6 +164,11 @@ mod tests {
         );
     }
 
-    test_field!(p3_field::extension::Complex<crate::Mersenne31>);
+    // There is a redundant representation of zero but we already tested it
+    // when testing the base field.
+    const ZEROS: [Fi; 1] = [Fi::ZERO];
+    const ONES: [Fi; 1] = [Fi::ONE];
+
+    test_field!(super::Fi, &super::ZEROS, &super::ONES);
     test_two_adic_field!(p3_field::extension::Complex<crate::Mersenne31>);
 }

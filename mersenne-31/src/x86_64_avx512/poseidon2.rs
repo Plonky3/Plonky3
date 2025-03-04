@@ -1,10 +1,10 @@
 use alloc::vec::Vec;
 use core::arch::x86_64::{self, __m512i};
 
-use p3_field::PrimeField32;
+use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_poseidon2::{
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, InternalLayer,
-    InternalLayerConstructor, MDSMat4, mds_light_permutation, sum_15, sum_23,
+    InternalLayerConstructor, MDSMat4, mds_light_permutation,
 };
 
 use crate::{Mersenne31, P, PackedMersenne31AVX512, exp5};
@@ -215,7 +215,7 @@ fn add_rc_and_sbox(input: PackedMersenne31AVX512, rc: __m512i) -> PackedMersenne
 #[inline(always)]
 fn internal_16(state: &mut [PackedMersenne31AVX512; 16], rc: __m512i) {
     state[0] = add_rc_and_sbox(state[0], rc);
-    let sum_non_0 = sum_15(&state[1..]);
+    let sum_non_0 = PackedMersenne31AVX512::tree_sum::<15>(&state[1..]);
     let sum = sum_non_0 + state[0];
     state[0] = sum_non_0 - state[0];
     diagonal_mul_16(state);
@@ -235,7 +235,7 @@ impl InternalLayer<PackedMersenne31AVX512, 16, 5> for Poseidon2InternalLayerMers
 #[inline(always)]
 fn internal_24(state: &mut [PackedMersenne31AVX512; 24], rc: __m512i) {
     state[0] = add_rc_and_sbox(state[0], rc);
-    let sum_non_0 = sum_23(&state[1..]);
+    let sum_non_0 = PackedMersenne31AVX512::tree_sum::<23>(&state[1..]);
     let sum = sum_non_0 + state[0];
     state[0] = sum_non_0 - state[0];
     diagonal_mul_24(state);

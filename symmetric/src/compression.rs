@@ -140,7 +140,7 @@ mod tests {
     }
 
     #[test]
-    fn test_truncated_permutation_with_zeroes() {
+    fn test_truncated_permutation_with_zeros() {
         const N: usize = 2;
         const CHUNK: usize = 4;
         const WIDTH: usize = 8;

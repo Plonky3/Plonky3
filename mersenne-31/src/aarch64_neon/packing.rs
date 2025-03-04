@@ -556,18 +556,21 @@ unsafe impl PackedFieldPow2 for PackedMersenne31Neon {
 mod tests {
     use p3_field_testing::test_packed_field;
 
-    use super::{Mersenne31, WIDTH};
+    use super::{Mersenne31, PackedMersenne31Neon};
 
     /// Zero has a redundant representation, so let's test both.
-    const ZEROS: [Mersenne31; WIDTH] =
-        Mersenne31::new_array([0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff]);
+    const ZEROS: PackedMersenne31Neon = PackedMersenne31Neon(Mersenne31::new_array([
+        0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff,
+    ]));
 
-    const SPECIAL_VALS: [Mersenne31; WIDTH] =
-        Mersenne31::new_array([0x00000000, 0x00000001, 0x00000002, 0x7ffffffe]);
+    const SPECIAL_VALS: PackedMersenne31Neon = PackedMersenne31Neon(Mersenne31::new_array([
+        0x00000000, 0x00000001, 0x00000002, 0x7ffffffe,
+    ]));
 
     test_packed_field!(
         crate::PackedMersenne31Neon,
-        crate::PackedMersenne31Neon(super::ZEROS),
-        crate::PackedMersenne31Neon(super::SPECIAL_VALS)
+        &[super::ZEROS],
+        &[crate::PackedMersenne31Neon::ONE],
+        super::SPECIAL_VALS
     );
 }

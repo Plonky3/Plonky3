@@ -586,7 +586,7 @@ unsafe fn interleave2(x: __m256i, y: __m256i) -> (__m256i, __m256i) {
 mod tests {
     use p3_field_testing::test_packed_field;
 
-    use super::{Goldilocks, WIDTH};
+    use super::{Goldilocks, PackedGoldilocksAVX2, WIDTH};
 
     const SPECIAL_VALS: [Goldilocks; WIDTH] = Goldilocks::new_array([
         0xFFFF_FFFF_0000_0000,
@@ -595,9 +595,24 @@ mod tests {
         0xFFFF_FFFF_0000_0001,
     ]);
 
+    const ZEROS: PackedGoldilocksAVX2 = PackedGoldilocksAVX2(Goldilocks::new_array([
+        0x0000_0000_0000_0000,
+        0xFFFF_FFFF_0000_0001,
+        0x0000_0000_0000_0000,
+        0xFFFF_FFFF_0000_0001,
+    ]));
+
+    const ONES: PackedGoldilocksAVX2 = PackedGoldilocksAVX2(Goldilocks::new_array([
+        0x0000_0000_0000_0001,
+        0xFFFF_FFFF_0000_0002,
+        0x0000_0000_0000_0001,
+        0xFFFF_FFFF_0000_0002,
+    ]));
+
     test_packed_field!(
         crate::PackedGoldilocksAVX2,
-        crate::PackedGoldilocksAVX2::ZERO,
+        &[super::ZEROS],
+        &[super::ONES],
         crate::PackedGoldilocksAVX2(super::SPECIAL_VALS)
     );
 }

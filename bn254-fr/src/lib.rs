@@ -375,7 +375,9 @@ mod tests {
         assert_eq!(f_r_minus_2, f_r_minus_2_deserialized);
     }
 
-    test_field!(crate::Bn254Fr);
+    const ZERO: Bn254Fr = Bn254Fr::ZERO;
+    const ONE: Bn254Fr = Bn254Fr::ONE;
+    test_field!(crate::Bn254Fr, &[super::ZERO], &[super::ONE]);
 
     test_prime_field!(crate::Bn254Fr);
 }

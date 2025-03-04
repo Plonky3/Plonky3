@@ -11,7 +11,11 @@ mod test_quartic_extension {
     type F = KoalaBear;
     type EF = BinomialExtensionField<F, 4>;
 
-    test_field!(super::EF);
+    // MontyField31's have no redundant representations.
+    const ZEROS: [EF; 1] = [EF::ZERO];
+    const ONES: [EF; 1] = [EF::ONE];
+
+    test_field!(super::EF, &super::ZEROS, &super::ONES);
     test_two_adic_extension_field!(super::F, super::EF);
 
     #[test]
