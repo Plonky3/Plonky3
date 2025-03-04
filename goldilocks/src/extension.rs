@@ -1,5 +1,5 @@
 use p3_field::extension::{BinomiallyExtendable, HasTwoAdicBinomialExtension};
-use p3_field::{PrimeCharacteristicRing, TwoAdicField};
+use p3_field::{field_to_array, PrimeCharacteristicRing, TwoAdicField};
 
 use crate::Goldilocks;
 
@@ -55,6 +55,16 @@ impl BinomiallyExtendable<5> for Goldilocks {
     const EXT_GENERATOR: [Self; 5] = [Self::TWO, Self::ONE, Self::ZERO, Self::ZERO, Self::ZERO];
 }
 
+impl HasTwoAdicBinomialExtension<5> for Goldilocks {
+    const EXT_TWO_ADICITY: usize = 32;
+
+    fn ext_two_adic_generator(bits: usize) -> [Self; 5] {
+        assert!(bits <= 32);
+
+        field_to_array(Self::two_adic_generator(bits))
+    }
+}
+
 #[cfg(test)]
 mod test_quadratic_extension {
 
@@ -75,7 +85,7 @@ mod test_quadratic_extension {
 mod test_quintic_extension {
 
     use p3_field::extension::BinomialExtensionField;
-    use p3_field_testing::{test_add_neg_sub_mul, test_inv_div, test_inverse};
+    use p3_field_testing::{test_add_neg_sub_mul, test_inv_div, test_inverse, test_two_adic_extension_field};
 
     use crate::Goldilocks;
 
@@ -96,4 +106,6 @@ mod test_quintic_extension {
     fn test_inverse_w() {
         test_inverse::<EF>();
     }
+
+    test_two_adic_extension_field!(super::F, super::EF);
 }
