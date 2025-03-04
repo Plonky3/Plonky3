@@ -1,5 +1,5 @@
 use p3_field::extension::{BinomiallyExtendable, HasTwoAdicBinomialExtension};
-use p3_field::{field_to_array, PrimeCharacteristicRing, TwoAdicField};
+use p3_field::{PrimeCharacteristicRing, TwoAdicField, field_to_array};
 
 use crate::Goldilocks;
 
@@ -85,7 +85,9 @@ mod test_quadratic_extension {
 mod test_quintic_extension {
 
     use p3_field::extension::BinomialExtensionField;
-    use p3_field_testing::{test_add_neg_sub_mul, test_inv_div, test_inverse, test_two_adic_extension_field};
+    use p3_field_testing::{
+        test_add_neg_sub_mul, test_inv_div, test_inverse, test_two_adic_extension_field,
+    };
 
     use crate::Goldilocks;
 
