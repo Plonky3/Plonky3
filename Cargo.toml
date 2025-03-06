@@ -9,6 +9,7 @@ members = [
     "challenger",
     "circle",
     "commit",
+    "coset",
     "dft",
     "examples",
     "field",
@@ -79,6 +80,7 @@ p3-bn254-fr = { path = "bn254-fr", version = "0.1.0" }
 p3-challenger = { path = "challenger", version = "0.1.0" }
 p3-circle = { path = "circle", version = "0.1.0" }
 p3-commit = { path = "commit", version = "0.1.0" }
+p3-coset = { path = "coset", version = "0.1.0" }
 p3-dft = { path = "dft", version = "0.1.0" }
 p3-examples = { path = "examples", version = "0.1.0" }
 p3-field = { path = "field", version = "0.1.0" }
