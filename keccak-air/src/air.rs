@@ -22,7 +22,9 @@ impl KeccakAir {
         num_hashes: usize,
         extra_capacity_bits: usize,
     ) -> RowMajorMatrix<F> {
-        let inputs = (0..num_hashes).map(|_| random()).collect::<Vec<_>>();
+
+        let mut rng = rand::thread_rng();
+        let inputs = (0..num_hashes).map(|_| rng.gen()).collect::<Vec<_>>();
         generate_trace_rows(inputs, extra_capacity_bits)
     }
 }
