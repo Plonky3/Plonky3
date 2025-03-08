@@ -308,9 +308,9 @@ mod tests {
     impl PseudoCompressionFunction<[u8; 32], 2> for DummyCompressionFunction {
         fn compress(&self, input: [[u8; 32]; 2]) -> [u8; 32] {
             let mut output = [0u8; 32];
-            for i in 0..32 {
+            for (i, o) in output.iter_mut().enumerate() {
                 // Simple XOR-based compression
-                output[i] = input[0][i] ^ input[1][i];
+                *o = input[0][i] ^ input[1][i];
             }
             output
         }
@@ -349,8 +349,8 @@ mod tests {
             .chunks_exact(2)
             .map(|pair| {
                 let mut result = [0u8; 32];
-                for i in 0..32 {
-                    result[i] = pair[0][i] ^ pair[1][i];
+                for (i, r) in result.iter_mut().enumerate() {
+                    *r = pair[0][i] ^ pair[1][i];
                 }
                 result
             })
