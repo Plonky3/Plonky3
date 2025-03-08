@@ -39,12 +39,12 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
     where
         P: PackedValue<Value = F>,
         PW: PackedValue<Value = W>,
-        H: CryptographicHasher<F, [W; DIGEST_ELEMS]>,
-        H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
-        H: Sync,
-        C: PseudoCompressionFunction<[W; DIGEST_ELEMS], 2>,
-        C: PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
-        C: Sync,
+        H: CryptographicHasher<F, [W; DIGEST_ELEMS]>
+            + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+            + Sync,
+        C: PseudoCompressionFunction<[W; DIGEST_ELEMS], 2>
+            + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>
+            + Sync,
     {
         assert!(!leaves.is_empty(), "No matrices given?");
 
@@ -120,9 +120,9 @@ fn first_digest_layer<P, PW, H, M, const DIGEST_ELEMS: usize>(
 where
     P: PackedValue,
     PW: PackedValue,
-    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>,
-    H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
-    H: Sync,
+    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>
+        + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+        + Sync,
     M: Matrix<P::Value>,
 {
     let width = PW::WIDTH;
