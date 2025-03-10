@@ -294,3 +294,68 @@ fn unpack_array<P: PackedValue, const N: usize>(
 ) -> impl Iterator<Item = [P::Value; N]> {
     (0..P::WIDTH).map(move |j| packed_digest.map(|p| p.as_slice()[j]))
 }
+
+#[cfg(test)]
+mod tests {
+    use p3_symmetric::PseudoCompressionFunction;
+    use rand::Rng;
+
+    use super::*;
+
+    #[derive(Clone, Copy)]
+    struct DummyCompressionFunction;
+
+    impl PseudoCompressionFunction<[u8; 32], 2> for DummyCompressionFunction {
+        fn compress(&self, input: [[u8; 32]; 2]) -> [u8; 32] {
+            let mut output = [0u8; 32];
+            for (i, o) in output.iter_mut().enumerate() {
+                // Simple XOR-based compression
+                *o = input[0][i] ^ input[1][i];
+            }
+            output
+        }
+    }
+
+    #[test]
+    fn test_compress_even_length() {
+        let prev_layer = [[0x01; 32], [0x02; 32], [0x03; 32], [0x04; 32]];
+        let compressor = DummyCompressionFunction;
+        let expected = vec![
+            [0x03; 32], // 0x01 ^ 0x02
+            [0x07; 32], // 0x03 ^ 0x04
+        ];
+        let result = compress::<u8, DummyCompressionFunction, 32>(&prev_layer, &compressor);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_compress_odd_length() {
+        let prev_layer = [[0x05; 32], [0x06; 32], [0x07; 32]];
+        let compressor = DummyCompressionFunction;
+        let expected = vec![
+            [0x03; 32], // 0x05 ^ 0x06
+            [0x00; 32],
+        ];
+        let result = compress::<u8, DummyCompressionFunction, 32>(&prev_layer, &compressor);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_compress_random_values() {
+        let mut rng = rand::rng();
+        let prev_layer: Vec<[u8; 32]> = (0..8).map(|_| rng.random()).collect();
+        let compressor = DummyCompressionFunction;
+        let expected: Vec<[u8; 32]> = prev_layer
+            .chunks_exact(2)
+            .map(|pair| {
+                let mut result = [0u8; 32];
+                for (i, r) in result.iter_mut().enumerate() {
+                    *r = pair[0][i] ^ pair[1][i];
+                }
+                result
+            })
+            .collect();
+        let result = compress::<u8, DummyCompressionFunction, 32>(&prev_layer, &compressor);
+        assert_eq!(result, expected);
+    }
+}
