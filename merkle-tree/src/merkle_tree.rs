@@ -39,12 +39,12 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
     where
         P: PackedValue<Value = F>,
         PW: PackedValue<Value = W>,
-        H: CryptographicHasher<F, [W; DIGEST_ELEMS]>,
-        H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
-        H: Sync,
-        C: PseudoCompressionFunction<[W; DIGEST_ELEMS], 2>,
-        C: PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>,
-        C: Sync,
+        H: CryptographicHasher<F, [W; DIGEST_ELEMS]>
+            + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+            + Sync,
+        C: PseudoCompressionFunction<[W; DIGEST_ELEMS], 2>
+            + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>
+            + Sync,
     {
         assert!(!leaves.is_empty(), "No matrices given?");
 
@@ -71,7 +71,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
             .peeking_take_while(|m| m.height() == max_height)
             .collect_vec();
 
-        let mut digest_layers = vec![first_digest_layer::<P, PW, H, M, DIGEST_ELEMS>(
+        let mut digest_layers = vec![first_digest_layer::<P, _, _, _, DIGEST_ELEMS>(
             h,
             tallest_matrices,
         )];
@@ -87,7 +87,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
                 .peeking_take_while(|m| m.height().next_power_of_two() == next_layer_len)
                 .collect_vec();
 
-            let next_digests = compress_and_inject::<P, PW, H, C, M, DIGEST_ELEMS>(
+            let next_digests = compress_and_inject::<P, _, _, _, _, DIGEST_ELEMS>(
                 prev_layer,
                 matrices_to_inject,
                 h,
@@ -120,9 +120,9 @@ fn first_digest_layer<P, PW, H, M, const DIGEST_ELEMS: usize>(
 where
     P: PackedValue,
     PW: PackedValue,
-    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>,
-    H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
-    H: Sync,
+    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>
+        + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+        + Sync,
     M: Matrix<P::Value>,
 {
     let width = PW::WIDTH;
@@ -134,7 +134,7 @@ where
         max_height + max_height % 2
     };
 
-    let default_digest: [PW::Value; DIGEST_ELEMS] = [PW::Value::default(); DIGEST_ELEMS];
+    let default_digest = [PW::Value::default(); DIGEST_ELEMS];
     let mut digests = vec![default_digest; max_height_padded];
 
     digests[0..max_height]
@@ -183,7 +183,7 @@ where
     M: Matrix<P::Value>,
 {
     if matrices_to_inject.is_empty() {
-        return compress::<PW, C, DIGEST_ELEMS>(prev_layer, c);
+        return compress::<PW, _, DIGEST_ELEMS>(prev_layer, c);
     }
 
     let width = PW::WIDTH;
@@ -195,7 +195,7 @@ where
         (prev_layer.len() / 2 + 1) & !1
     };
 
-    let default_digest: [PW::Value; DIGEST_ELEMS] = [PW::Value::default(); DIGEST_ELEMS];
+    let default_digest = [PW::Value::default(); DIGEST_ELEMS];
     let mut next_digests = vec![default_digest; next_len_padded];
     next_digests[0..next_len]
         .par_chunks_exact_mut(width)
@@ -259,7 +259,7 @@ where
     };
     let next_len = prev_layer.len() / 2;
 
-    let default_digest: [P::Value; DIGEST_ELEMS] = [P::Value::default(); DIGEST_ELEMS];
+    let default_digest = [P::Value::default(); DIGEST_ELEMS];
     let mut next_digests = vec![default_digest; next_len_padded];
 
     next_digests[0..next_len]
