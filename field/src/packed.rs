@@ -1,7 +1,6 @@
-use core::array;
 use core::mem::MaybeUninit;
 use core::ops::Div;
-use core::slice;
+use core::{array, slice};
 
 use crate::field::Field;
 use crate::{Algebra, BasedVectorSpace, ExtensionField, Powers, PrimeCharacteristicRing};
