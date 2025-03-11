@@ -8,7 +8,7 @@ use itertools::{Itertools, izip};
 use p3_field::integers::QuotientMap;
 use p3_field::{Field, Powers, TwoAdicField};
 use p3_matrix::Matrix;
-use p3_matrix::bitrev::{BitReversableMatrix, BitReversalPerm, BitReversedMatrixView};
+use p3_matrix::bitrev::{BitReversalPerm, BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
@@ -360,7 +360,7 @@ fn first_half_general_oop<F: Field>(
 /// This can be used as the second half of a DIT butterfly network. It works in bit-reversed order.
 ///
 /// The optional `scale` parameter is used to scale the matrix by a constant factor. Normally that
-/// would be a separate step, but it's best to merge it into a butterfly network a just to avoid a
+/// would be a separate step, but it's best to merge it into a butterfly network to avoid a
 /// separate pass through main memory.
 #[instrument(level = "debug", skip_all)]
 #[inline(always)] // To avoid branch on scale

@@ -59,7 +59,7 @@ fn convert_to_vec_neg_form(input: i32) -> __m512i {
 
 impl Poseidon2InternalLayerMersenne31 {
     /// Construct an instance of Poseidon2InternalLayerMersenne31 from a vector containing
-    /// the constants for each round. Internally, the constants are transformed into th
+    /// the constants for each round. Internally, the constants are transformed into the
     /// {-P, ..., 0} representation instead of the standard {0, ..., P} one.
     fn new_from_constants(internal_constants: Vec<Mersenne31>) -> Self {
         let packed_internal_constants = internal_constants
@@ -74,7 +74,7 @@ impl Poseidon2InternalLayerMersenne31 {
 }
 
 impl<const WIDTH: usize> Poseidon2ExternalLayerMersenne31<WIDTH> {
-    /// Construct an instance of Poseidon2ExternalLayerMersenne31 from a array of
+    /// Construct an instance of Poseidon2ExternalLayerMersenne31 from an array of
     /// vectors containing the constants for each round. Internally, the constants
     ///  are transformed into the {-P, ..., 0} representation instead of the standard {0, ..., P} one.
     fn new_from_constants(external_constants: ExternalLayerConstants<Mersenne31, WIDTH>) -> Self {
@@ -194,7 +194,7 @@ fn diagonal_mul_24(state: &mut [PackedMersenne31AVX512; 24]) {
 
 /// Compute the map x -> (x + rc)^5 on Mersenne-31 field elements.
 /// x must be represented as a value in {0..P}.
-/// rc mut be represented as a value in {-P, ..., 0}.
+/// rc must be represented as a value in {-P, ..., 0}.
 /// If the inputs do not conform to these representations, the result is undefined.
 /// The output will be represented as a value in {0..P}.
 #[inline(always)]

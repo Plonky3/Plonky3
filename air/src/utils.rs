@@ -1,4 +1,4 @@
-//! A collection of utility functions helpful in defining AIR's.
+//! A collection of utility functions helpful in defining AIRs.
 
 use core::array;
 
@@ -9,7 +9,7 @@ use crate::AirBuilder;
 
 /// Pack a collection of bits into a number.
 ///
-/// Given vec = [v0, v1, ..., v_n] returns v0 + 2v_1 + ... + 2^n v_n
+/// Given `vec = [v_0, v_1, ..., v_n]` returns `v_0 + 2v_1 + ... + 2^n v_n`
 #[inline]
 pub fn pack_bits_le<R, Var, I>(iter: I) -> R
 where

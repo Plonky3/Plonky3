@@ -180,7 +180,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         let half_n = input.len() / 2;
         assert_eq!(roots.len(), half_n);
 
-        // Safe because 0 <= half_n < a.len()
+        // Safe because 0 <= half_n < input.len()
         let (xs, ys) = unsafe { input.split_at_mut_unchecked(half_n) };
 
         let s = xs[0] + ys[0];

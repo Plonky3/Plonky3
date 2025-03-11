@@ -36,6 +36,7 @@ members = [
 ]
 
 [workspace.dependencies]
+bincode = { version = "2.0.0", default-features = false }
 blake3 = "1.5"
 clap = { version = "4.5.23", features = ["derive"] }
 clap_derive = "4.5.18"
