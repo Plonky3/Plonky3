@@ -32,7 +32,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
             .map(|i| {
                 generator
                     .powers()
-                    .take(half_n >> i) // nth_roots = [1, g, g^2, g^3, ..., g^{n/2 - 1}]
+                    .take(half_n) // nth_roots = [1, g, g^2, g^3, ..., g^{n/2 - 1}]
                     .step_by(1 << i)
                     .collect()
             })
