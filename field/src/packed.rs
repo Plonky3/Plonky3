@@ -164,11 +164,8 @@ pub unsafe trait PackedField: Algebra<Self::Scalar>
         }
     }
 
-    /// Compute the dot product of two vectors.
-    /// 
-    /// The elements of the first vector should be elements of the scalar field.
-    /// The elements of the second vector should vectors of elements packed into the packed field.
-    fn dot_product_scalar_packed<const N: usize>(scalar_slice: &[Self::Scalar], packed_slice: &[Self]) -> Self {
+    /// Compute a linear combination of packed vectors.
+    fn packed_linear_combination<const N: usize>(coeffs: &[Self::Scalar], vecs: &[Self]) -> Self {
         assert_eq!(scalar_slice.len(), N);
         assert_eq!(packed_slice.len(), N);
         scalar_slice.iter().zip(packed_slice).map(|(&x, &y)| y * x).sum()
