@@ -92,7 +92,9 @@ mod test_quintic_extension {
 
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
-    use p3_field_testing::{test_field, test_two_adic_extension_field};
+    use p3_field_testing::{
+        test_inv_div, test_inverse, test_ring_with_eq, test_two_adic_extension_field,
+    };
 
     use crate::Goldilocks;
 
@@ -104,7 +106,20 @@ mod test_quintic_extension {
     const ZEROS: [EF; 1] = [EF::ZERO];
     const ONES: [EF; 1] = [EF::ONE];
 
-    test_field!(super::EF, &super::ZEROS, &super::ONES);
+    #[test]
+    fn test_ring_with_eq_w() {
+        test_ring_with_eq::<EF>(&ZEROS, &ONES);
+    }
+
+    #[test]
+    fn test_inv_div_w() {
+        test_inv_div::<EF>();
+    }
+
+    #[test]
+    fn test_inverse_w() {
+        test_inverse::<EF>();
+    }
 
     test_two_adic_extension_field!(super::F, super::EF);
 }
