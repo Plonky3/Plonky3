@@ -2,7 +2,7 @@ use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use p3_field::PrimeCharacteristicRing;
 use p3_field_testing::bench_func::{
     benchmark_add_latency, benchmark_add_throughput, benchmark_inv, benchmark_iter_sum,
-    benchmark_sub_latency, benchmark_sub_throughput, benchmark_tree_sum,
+    benchmark_sub_latency, benchmark_sub_throughput, benchmark_sum_array,
 };
 use p3_mersenne_31::Mersenne31;
 
@@ -13,9 +13,9 @@ fn bench_field(c: &mut Criterion) {
     const REPS: usize = 500;
     benchmark_inv::<F>(c, name);
     benchmark_iter_sum::<F, 4, REPS>(c, name);
-    benchmark_tree_sum::<F, 4, REPS>(c, name);
+    benchmark_sum_array::<F, 4, REPS>(c, name);
     benchmark_iter_sum::<F, 6, REPS>(c, name);
-    benchmark_tree_sum::<F, 6, REPS>(c, name);
+    benchmark_sum_array::<F, 6, REPS>(c, name);
 
     // Note that each round of throughput has 10 operations
     // So we should have 10 * more repetitions for latency tests.

@@ -57,11 +57,11 @@ pub fn benchmark_iter_sum<R: PrimeCharacteristicRing + Copy, const N: usize, con
 }
 
 /// Benchmark the time taken to sum an array [[F; N]; REPS] by summing each array
-/// [F; N] using tree_sum method and accumulating the sums into an accumulator.
+/// [F; N] using sum_array method and accumulating the sums into an accumulator.
 ///
 /// Making N larger and REPS smaller (vs the opposite) leans the benchmark more sensitive towards
 /// the latency (resp throughput) of the sum method.
-pub fn benchmark_tree_sum<R: PrimeCharacteristicRing + Copy, const N: usize, const REPS: usize>(
+pub fn benchmark_sum_array<R: PrimeCharacteristicRing + Copy, const N: usize, const REPS: usize>(
     c: &mut Criterion,
     name: &str,
 ) where
@@ -76,7 +76,7 @@ pub fn benchmark_tree_sum<R: PrimeCharacteristicRing + Copy, const N: usize, con
         b.iter(|| {
             let mut acc = R::ZERO;
             for row in input.iter_mut() {
-                acc += R::tree_sum::<N>(row)
+                acc += R::sum_array::<N>(row)
             }
             acc
         })

@@ -48,7 +48,7 @@ pub fn matmul_internal<F: Field, A: Algebra<F>, const WIDTH: usize>(
     state: &mut [A; WIDTH],
     mat_internal_diag_m_1: [F; WIDTH],
 ) {
-    let sum: A = A::tree_sum::<WIDTH>(state);
+    let sum: A = A::sum_array::<WIDTH>(state);
     for i in 0..WIDTH {
         state[i] *= mat_internal_diag_m_1[i];
         state[i] += sum.clone();

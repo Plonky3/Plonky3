@@ -275,9 +275,9 @@ fn add_rc_and_sbox(input: &mut PackedMersenne31AVX2, rc: __m256i) {
 #[inline(always)]
 fn internal_16(state: &mut [PackedMersenne31AVX2; 16], rc: __m256i) {
     add_rc_and_sbox(&mut state[0], rc);
-    let sum_non_0 = PackedMersenne31AVX2::tree_sum::<15>(&state[1..]);
-    let sum = sum_non_0 + state[0];
-    state[0] = sum_non_0 - state[0];
+    let sum_tail = PackedMersenne31AVX2::sum_array::<15>(&state[1..]);
+    let sum = sum_tail + state[0];
+    state[0] = sum_tail - state[0];
     diagonal_mul_16(state);
     state[1..].iter_mut().for_each(|x| *x += sum);
 }
@@ -295,9 +295,9 @@ impl InternalLayer<PackedMersenne31AVX2, 16, 5> for Poseidon2InternalLayerMersen
 #[inline(always)]
 fn internal_24(state: &mut [PackedMersenne31AVX2; 24], rc: __m256i) {
     add_rc_and_sbox(&mut state[0], rc);
-    let sum_non_0 = PackedMersenne31AVX2::tree_sum::<23>(&state[1..]);
-    let sum = sum_non_0 + state[0];
-    state[0] = sum_non_0 - state[0];
+    let sum_tail = PackedMersenne31AVX2::sum_array::<23>(&state[1..]);
+    let sum = sum_tail + state[0];
+    state[0] = sum_tail - state[0];
     diagonal_mul_24(state);
     state[1..].iter_mut().for_each(|x| *x += sum);
 }

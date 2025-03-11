@@ -160,7 +160,7 @@ impl PrimeCharacteristicRing for Mersenne31 {
     }
 
     #[inline]
-    fn tree_sum<const N: usize>(input: &[Self]) -> Self {
+    fn sum_array<const N: usize>(input: &[Self]) -> Self {
         assert_eq!(N, input.len());
         // Benchmarking shows that for N <= 5 it's faster to sum the elements directly
         // but for N > 5 it's faster to use the .sum() methods which passes through u64's
@@ -170,11 +170,7 @@ impl PrimeCharacteristicRing for Mersenne31 {
             1 => input[0],
             2 => input[0] + input[1],
             3 => input[0] + input[1] + input[2],
-            4 => {
-                let lhs = input[0] + input[1];
-                let rhs = input[2] + input[3];
-                lhs + rhs
-            }
+            4 => (input[0] + input[1]) + (input[2] + input[3]),
             5 => {
                 let lhs = input[0] + input[1];
                 let rhs = input[2] + input[3];

@@ -94,7 +94,7 @@ where
     }
 }
 
-pub fn test_dot_product_scalar_packed<PF: PackedField + Eq>()
+pub fn test_packed_linear_combination<PF: PackedField + Eq>()
 where
     StandardUniform: Distribution<PF> + Distribution<PF::Scalar>,
 {
@@ -103,45 +103,45 @@ where
     let v: [PF; 64] = rng.random();
 
     let mut dot = PF::ZERO;
-    assert_eq!(dot, PF::dot_product_scalar_packed::<0>(&u[..0], &v[..0]));
+    assert_eq!(dot, PF::packed_linear_combination::<0>(&u[..0], &v[..0]));
     dot += v[0] * u[0];
-    assert_eq!(dot, PF::dot_product_scalar_packed::<1>(&u[..1], &v[..1]));
+    assert_eq!(dot, PF::packed_linear_combination::<1>(&u[..1], &v[..1]));
     dot += v[1] * u[1];
-    assert_eq!(dot, PF::dot_product_scalar_packed::<2>(&u[..2], &v[..2]));
+    assert_eq!(dot, PF::packed_linear_combination::<2>(&u[..2], &v[..2]));
     dot += v[2] * u[2];
-    assert_eq!(dot, PF::dot_product_scalar_packed::<3>(&u[..3], &v[..3]));
+    assert_eq!(dot, PF::packed_linear_combination::<3>(&u[..3], &v[..3]));
     dot += v[3] * u[3];
-    assert_eq!(dot, PF::dot_product_scalar_packed::<4>(&u[..4], &v[..4]));
+    assert_eq!(dot, PF::packed_linear_combination::<4>(&u[..4], &v[..4]));
     dot += v[4] * u[4];
-    assert_eq!(dot, PF::dot_product_scalar_packed::<5>(&u[..5], &v[..5]));
+    assert_eq!(dot, PF::packed_linear_combination::<5>(&u[..5], &v[..5]));
     dot += v[5] * u[5];
-    assert_eq!(dot, PF::dot_product_scalar_packed::<6>(&u[..6], &v[..6]));
+    assert_eq!(dot, PF::packed_linear_combination::<6>(&u[..6], &v[..6]));
     dot += v[6] * u[6];
-    assert_eq!(dot, PF::dot_product_scalar_packed::<7>(&u[..7], &v[..7]));
+    assert_eq!(dot, PF::packed_linear_combination::<7>(&u[..7], &v[..7]));
     dot += v[7] * u[7];
-    assert_eq!(dot, PF::dot_product_scalar_packed::<8>(&u[..8], &v[..8]));
+    assert_eq!(dot, PF::packed_linear_combination::<8>(&u[..8], &v[..8]));
     dot += v[8] * u[8];
-    assert_eq!(dot, PF::dot_product_scalar_packed::<9>(&u[..9], &v[..9]));
+    assert_eq!(dot, PF::packed_linear_combination::<9>(&u[..9], &v[..9]));
     dot += v[9] * u[9];
-    assert_eq!(dot, PF::dot_product_scalar_packed::<10>(&u[..10], &v[..10]));
+    assert_eq!(dot, PF::packed_linear_combination::<10>(&u[..10], &v[..10]));
     dot += v[10] * u[10];
-    assert_eq!(dot, PF::dot_product_scalar_packed::<11>(&u[..11], &v[..11]));
+    assert_eq!(dot, PF::packed_linear_combination::<11>(&u[..11], &v[..11]));
     dot += v[11] * u[11];
-    assert_eq!(dot, PF::dot_product_scalar_packed::<12>(&u[..12], &v[..12]));
+    assert_eq!(dot, PF::packed_linear_combination::<12>(&u[..12], &v[..12]));
     dot += v[12] * u[12];
-    assert_eq!(dot, PF::dot_product_scalar_packed::<13>(&u[..13], &v[..13]));
+    assert_eq!(dot, PF::packed_linear_combination::<13>(&u[..13], &v[..13]));
     dot += v[13] * u[13];
-    assert_eq!(dot, PF::dot_product_scalar_packed::<14>(&u[..14], &v[..14]));
+    assert_eq!(dot, PF::packed_linear_combination::<14>(&u[..14], &v[..14]));
     dot += v[14] * u[14];
-    assert_eq!(dot, PF::dot_product_scalar_packed::<15>(&u[..15], &v[..15]));
+    assert_eq!(dot, PF::packed_linear_combination::<15>(&u[..15], &v[..15]));
     dot += v[15] * u[15];
-    assert_eq!(dot, PF::dot_product_scalar_packed::<16>(&u[..16], &v[..16]));
+    assert_eq!(dot, PF::packed_linear_combination::<16>(&u[..16], &v[..16]));
 
     let dot_64: PF = u
         .iter()
         .zip(v.iter())
         .fold(PF::ZERO, |acc, (&lhs, &rhs)| acc + (rhs * lhs));
-    assert_eq!(dot_64, PF::dot_product_scalar_packed::<64>(&u, &v));
+    assert_eq!(dot_64, PF::packed_linear_combination::<64>(&u, &v));
 }
 
 pub fn test_vs_scalar<PF>(special_vals: PF)
@@ -336,8 +336,8 @@ macro_rules! test_packed_field {
                 $crate::test_ring_with_eq::<$packedfield>($zeros, $ones);
             }
             #[test]
-            fn test_dot_product_scalar_packed() {
-                $crate::test_dot_product_scalar_packed::<$packedfield>();
+            fn test_packed_linear_combination() {
+                $crate::test_packed_linear_combination::<$packedfield>();
             }
             #[test]
             fn test_vs_scalar() {

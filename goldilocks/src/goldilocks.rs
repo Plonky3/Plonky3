@@ -127,7 +127,7 @@ impl PrimeCharacteristicRing for Goldilocks {
     }
 
     #[inline]
-    fn tree_sum<const N: usize>(input: &[Self]) -> Self {
+    fn sum_array<const N: usize>(input: &[Self]) -> Self {
         assert_eq!(N, input.len());
         // Benchmarking shows that for N <= 3 it's faster to sum the elements directly
         // but for N > 3 it's faster to use the .sum() methods which passes through u128's

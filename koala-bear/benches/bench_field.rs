@@ -5,7 +5,7 @@ use p3_field_testing::bench_func::{
     benchmark_mul_latency, benchmark_mul_throughput, benchmark_sub_latency,
     benchmark_sub_throughput,
 };
-use p3_field_testing::benchmark_tree_sum;
+use p3_field_testing::benchmark_sum_array;
 use p3_koala_bear::KoalaBear;
 use p3_util::pretty_name;
 
@@ -17,9 +17,9 @@ fn bench_field(c: &mut Criterion) {
     const REPS: usize = 500;
     benchmark_inv::<F>(c, name);
     benchmark_iter_sum::<F, 4, REPS>(c, name);
-    benchmark_tree_sum::<F, 4, REPS>(c, name);
+    benchmark_sum_array::<F, 4, REPS>(c, name);
     benchmark_iter_sum::<F, 8, REPS>(c, name);
-    benchmark_tree_sum::<F, 8, REPS>(c, name);
+    benchmark_sum_array::<F, 8, REPS>(c, name);
 
     // Note that each round of throughput has 10 operations
     // So we should have 10 * more repetitions for latency tests.
@@ -47,9 +47,9 @@ fn bench_packedfield(c: &mut Criterion) {
 
     // Choosing constants so that the number of summations is the same.
     benchmark_iter_sum::<PF, 64, 46>(c, name);
-    benchmark_tree_sum::<PF, 64, 46>(c, name);
+    benchmark_sum_array::<PF, 64, 46>(c, name);
     benchmark_iter_sum::<PF, 2944, 1>(c, name);
-    benchmark_tree_sum::<PF, 2944, 1>(c, name);
+    benchmark_sum_array::<PF, 2944, 1>(c, name);
 
     benchmark_add_latency::<<F as Field>::Packing, L_REPS>(c, name);
     benchmark_add_throughput::<<F as Field>::Packing, REPS>(c, name);

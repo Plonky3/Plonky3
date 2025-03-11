@@ -375,15 +375,15 @@ where
 
             self.packed_internal_constants.iter().for_each(|&rc| {
                 add_rc_and_sbox::<FP, D>(&mut internal_state.s0, rc); // s0 -> (s0 + rc)^D
-                let sum_non_0 = PackedMontyField31AVX512::<FP>::tree_sum::<15>(&transmute::<
+                let sum_tail = PackedMontyField31AVX512::<FP>::sum_array::<15>(&transmute::<
                     [__m512i; 15],
                     [PackedMontyField31AVX512<FP>; 15],
                 >(
                     internal_state.s_hi,
                 )); // Get the sum of all elements other than s0.
                 ILP::diagonal_mul(&mut internal_state.s_hi); // si -> vi * si for all i > 0.
-                let sum = sum_non_0 + internal_state.s0; // Get the full sum.
-                internal_state.s0 = sum_non_0 - internal_state.s0; // s0 -> sum - 2*s0 = sum_non_0 - s0.
+                let sum = sum_tail + internal_state.s0; // Get the full sum.
+                internal_state.s0 = sum_tail - internal_state.s0; // s0 -> sum - 2*s0 = sum_tail - s0.
                 ILP::add_sum(
                     &mut internal_state.s_hi,
                     transmute::<PackedMontyField31AVX512<FP>, __m512i>(sum),
@@ -426,15 +426,15 @@ where
 
             self.packed_internal_constants.iter().for_each(|&rc| {
                 add_rc_and_sbox::<FP, D>(&mut internal_state.s0, rc); // s0 -> (s0 + rc)^D
-                let sum_non_0 = PackedMontyField31AVX512::<FP>::tree_sum::<23>(&transmute::<
+                let sum_tail = PackedMontyField31AVX512::<FP>::sum_array::<23>(&transmute::<
                     [__m512i; 23],
                     [PackedMontyField31AVX512<FP>; 23],
                 >(
                     internal_state.s_hi,
                 )); // Get the sum of all elements other than s0.
                 ILP::diagonal_mul(&mut internal_state.s_hi); // si -> vi * si for all i > 0.
-                let sum = sum_non_0 + internal_state.s0; // Get the full sum.
-                internal_state.s0 = sum_non_0 - internal_state.s0; // s0 -> sum - 2*s0 = sum_non_0 - s0.
+                let sum = sum_tail + internal_state.s0; // Get the full sum.
+                internal_state.s0 = sum_tail - internal_state.s0; // s0 -> sum - 2*s0 = sum_tail - s0.
                 ILP::add_sum(
                     &mut internal_state.s_hi,
                     transmute::<PackedMontyField31AVX512<FP>, __m512i>(sum),

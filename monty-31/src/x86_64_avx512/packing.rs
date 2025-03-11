@@ -133,8 +133,6 @@ impl<PMP: PackedMontyParameters> Sub for PackedMontyField31AVX512<PMP> {
     }
 }
 
-// See https://godbolt.org/z/489aaPhz3 showing that this mostly compiles to what we want (Atleast on the AMD Zen 4 architecture).
-
 /// Add two vectors of MontyField31 elements in canonical form.
 ///
 /// We allow a slight loosening of the canonical form requirement. One of this inputs
@@ -622,37 +620,41 @@ fn neg<MPAVX512: MontyParametersAVX512>(val: __m512i) -> __m512i {
     }
 }
 
-/// Lets us combine some code for MontyField31<FP> and PackedMontyField31AVX512<FP> elements.
-trait InToM512Vector<PMP: PackedMontyParameters>: Copy + Into<PackedMontyField31AVX512<PMP>> {
-    /// Convert the input to a __m256i vector.
-    fn get_vector(&self) -> __m512i;
+/// Lets us combine some code for MontyField31<FP> and PackedMontyField31AVX2<FP> elements.
+///
+/// Provides methods to convert an element into a __m512i element and then shift this __m512i
+/// element so that the odd elements now lie in the even positions. Depending on the type of input,
+/// the shift might be a no-op.
+trait IntoM512<PMP: PackedMontyParameters>: Copy + Into<PackedMontyField31AVX512<PMP>> {
+    /// Convert the input into a __m512i element.
+    fn as_m512i(&self) -> __m512i;
 
-    /// Convert the input to a __m256i vector and shift so that all elements in odd positions
-    /// lie in even positions.
+    /// Convert the input to a __m512i element and shift so that all elements in odd positions
+    /// now lie in even positions.
     ///
     /// The values lying in the even positions are undefined.
     #[inline(always)]
-    fn get_odd_in_even_pos_vector(&self) -> __m512i {
-        let vec = self.get_vector();
+    fn as_shifted_m512i(&self) -> __m512i {
+        let vec = self.as_m512i();
         movehdup_epi32(vec)
     }
 }
 
-impl<PMP: PackedMontyParameters> InToM512Vector<PMP> for PackedMontyField31AVX512<PMP> {
+impl<PMP: PackedMontyParameters> IntoM512<PMP> for PackedMontyField31AVX512<PMP> {
     #[inline(always)]
-    fn get_vector(&self) -> __m512i {
+    fn as_m512i(&self) -> __m512i {
         self.to_vector()
     }
 }
 
-impl<PMP: PackedMontyParameters> InToM512Vector<PMP> for MontyField31<PMP> {
+impl<PMP: PackedMontyParameters> IntoM512<PMP> for MontyField31<PMP> {
     #[inline(always)]
-    fn get_vector(&self) -> __m512i {
+    fn as_m512i(&self) -> __m512i {
         unsafe { x86_64::_mm512_set1_epi32(self.value as i32) }
     }
 
     #[inline(always)]
-    fn get_odd_in_even_pos_vector(&self) -> __m512i {
+    fn as_shifted_m512i(&self) -> __m512i {
         unsafe { x86_64::_mm512_set1_epi32(self.value as i32) }
     }
 }
@@ -663,7 +665,7 @@ impl<PMP: PackedMontyParameters> InToM512Vector<PMP> for MontyField31<PMP> {
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn dot_product_2<PMP: PackedMontyParameters, LHS: InToM512Vector<PMP>, RHS: InToM512Vector<PMP>>(
+fn dot_product_2<PMP: PackedMontyParameters, LHS: IntoM512<PMP>, RHS: IntoM512<PMP>>(
     lhs: [LHS; 2],
     rhs: [RHS; 2],
 ) -> __m512i {
@@ -697,15 +699,15 @@ fn dot_product_2<PMP: PackedMontyParameters, LHS: InToM512Vector<PMP>, RHS: InTo
     // throughput: 9.5 cyc/vec (1.68 els/cyc)
     // latency: 22 cyc
     unsafe {
-        let lhs_evn0 = lhs[0].get_vector();
-        let lhs_odd0 = lhs[0].get_odd_in_even_pos_vector();
-        let lhs_evn1 = lhs[1].get_vector();
-        let lhs_odd1 = lhs[1].get_odd_in_even_pos_vector();
+        let lhs_evn0 = lhs[0].as_m512i();
+        let lhs_odd0 = lhs[0].as_shifted_m512i();
+        let lhs_evn1 = lhs[1].as_m512i();
+        let lhs_odd1 = lhs[1].as_shifted_m512i();
 
-        let rhs_evn0 = rhs[0].get_vector();
-        let rhs_odd0 = rhs[0].get_odd_in_even_pos_vector();
-        let rhs_evn1 = rhs[1].get_vector();
-        let rhs_odd1 = rhs[1].get_odd_in_even_pos_vector();
+        let rhs_evn0 = rhs[0].as_m512i();
+        let rhs_odd0 = rhs[0].as_shifted_m512i();
+        let rhs_evn1 = rhs[1].as_m512i();
+        let rhs_odd1 = rhs[1].as_shifted_m512i();
 
         let mul_evn0 = x86_64::_mm512_mul_epu32(lhs_evn0, rhs_evn0);
         let mul_evn1 = x86_64::_mm512_mul_epu32(lhs_evn1, rhs_evn1);
@@ -753,7 +755,7 @@ fn dot_product_2<PMP: PackedMontyParameters, LHS: InToM512Vector<PMP>, RHS: InTo
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn dot_product_4<PMP: PackedMontyParameters, LHS: InToM512Vector<PMP>, RHS: InToM512Vector<PMP>>(
+fn dot_product_4<PMP: PackedMontyParameters, LHS: IntoM512<PMP>, RHS: IntoM512<PMP>>(
     lhs: [LHS; 4],
     rhs: [RHS; 4],
 ) -> __m512i {
@@ -807,23 +809,23 @@ fn dot_product_4<PMP: PackedMontyParameters, LHS: InToM512Vector<PMP>, RHS: InTo
     // throughput: 16.5 cyc/vec (0.97 els/cyc)
     // latency: 23 cyc
     unsafe {
-        let lhs_evn0 = lhs[0].get_vector();
-        let lhs_odd0 = lhs[0].get_odd_in_even_pos_vector();
-        let lhs_evn1 = lhs[1].get_vector();
-        let lhs_odd1 = lhs[1].get_odd_in_even_pos_vector();
-        let lhs_evn2 = lhs[2].get_vector();
-        let lhs_odd2 = lhs[2].get_odd_in_even_pos_vector();
-        let lhs_evn3 = lhs[3].get_vector();
-        let lhs_odd3 = lhs[3].get_odd_in_even_pos_vector();
+        let lhs_evn0 = lhs[0].as_m512i();
+        let lhs_odd0 = lhs[0].as_shifted_m512i();
+        let lhs_evn1 = lhs[1].as_m512i();
+        let lhs_odd1 = lhs[1].as_shifted_m512i();
+        let lhs_evn2 = lhs[2].as_m512i();
+        let lhs_odd2 = lhs[2].as_shifted_m512i();
+        let lhs_evn3 = lhs[3].as_m512i();
+        let lhs_odd3 = lhs[3].as_shifted_m512i();
 
-        let rhs_evn0 = rhs[0].get_vector();
-        let rhs_odd0 = rhs[0].get_odd_in_even_pos_vector();
-        let rhs_evn1 = rhs[1].get_vector();
-        let rhs_odd1 = rhs[1].get_odd_in_even_pos_vector();
-        let rhs_evn2 = rhs[2].get_vector();
-        let rhs_odd2 = rhs[2].get_odd_in_even_pos_vector();
-        let rhs_evn3 = rhs[3].get_vector();
-        let rhs_odd3 = rhs[3].get_odd_in_even_pos_vector();
+        let rhs_evn0 = rhs[0].as_m512i();
+        let rhs_odd0 = rhs[0].as_shifted_m512i();
+        let rhs_evn1 = rhs[1].as_m512i();
+        let rhs_odd1 = rhs[1].as_shifted_m512i();
+        let rhs_evn2 = rhs[2].as_m512i();
+        let rhs_odd2 = rhs[2].as_shifted_m512i();
+        let rhs_evn3 = rhs[3].as_m512i();
+        let rhs_odd3 = rhs[3].as_shifted_m512i();
 
         let mul_evn0 = x86_64::_mm512_mul_epu32(lhs_evn0, rhs_evn0);
         let mul_evn1 = x86_64::_mm512_mul_epu32(lhs_evn1, rhs_evn1);
@@ -889,8 +891,8 @@ fn dot_product_4<PMP: PackedMontyParameters, LHS: InToM512Vector<PMP>, RHS: InTo
 #[inline(always)]
 fn general_dot_product<
     FP: FieldParameters,
-    LHS: InToM512Vector<FP>,
-    RHS: InToM512Vector<FP>,
+    LHS: IntoM512<FP>,
+    RHS: IntoM512<FP>,
     const N: usize,
 >(
     lhs: &[LHS],
@@ -938,7 +940,7 @@ fn general_dot_product<
                     PackedMontyField31AVX512::<FP>::from_vector(res)
                 }
             });
-            PackedMontyField31AVX512::<FP>::tree_sum::<16>(&sum_4s)
+            PackedMontyField31AVX512::<FP>::sum_array::<16>(&sum_4s)
         }
         _ => {
             let mut acc = {
@@ -1474,11 +1476,8 @@ unsafe impl<FP: FieldParameters> PackedField for PackedMontyField31AVX512<FP> {
     type Scalar = MontyField31<FP>;
 
     #[inline]
-    fn dot_product_scalar_packed<const N: usize>(
-        scalar_slice: &[Self::Scalar],
-        packed_slice: &[Self],
-    ) -> Self {
-        general_dot_product::<_, _, _, N>(scalar_slice, packed_slice)
+    fn packed_linear_combination<const N: usize>(coeffs: &[Self::Scalar], vecs: &[Self]) -> Self {
+        general_dot_product::<_, _, _, N>(coeffs, vecs)
     }
 }
 

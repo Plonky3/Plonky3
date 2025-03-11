@@ -286,15 +286,19 @@ pub trait PrimeCharacteristicRing:
         u.iter().zip(v).map(|(x, y)| x.clone() * y.clone()).sum()
     }
 
-    /// Compute the sum of a slice of elements of known length.
+    /// Compute the sum of a slice of elements whose length is a compile time constant.
     ///
     /// The rust compiler doesn't realize that add is associative
     /// so we help it out and minimize the dependency chains by hand.
     /// Thus while this function has the same throughput as `input.iter().sum()`,
     /// it will usually have much lower latency.
+    ///
+    /// # Panics
+    ///
+    /// May panic if the length of the input slice is not equal to `N`.
     #[must_use]
     #[inline]
-    fn tree_sum<const N: usize>(input: &[Self]) -> Self {
+    fn sum_array<const N: usize>(input: &[Self]) -> Self {
         // It looks a little strange but using a const parameter and an assert_eq! instead of
         // using input.len() leads to a significant performance improvement.
         // We could make this input &[Self; N] but that would require sticking .try_into().unwrap() everywhere.
@@ -311,33 +315,29 @@ pub trait PrimeCharacteristicRing:
             1 => input[0].clone(),
             2 => input[0].clone() + input[1].clone(),
             3 => input[0].clone() + input[1].clone() + input[2].clone(),
-            4 => {
-                let lhs = input[0].clone() + input[1].clone();
-                let rhs = input[2].clone() + input[3].clone();
-                lhs + rhs
-            }
-            5 => Self::tree_sum::<4>(&input[..4]) + Self::tree_sum::<1>(&input[4..]),
-            6 => Self::tree_sum::<4>(&input[..4]) + Self::tree_sum::<2>(&input[4..]),
-            7 => Self::tree_sum::<4>(&input[..4]) + Self::tree_sum::<3>(&input[4..]),
-            8 => Self::tree_sum::<4>(&input[..4]) + Self::tree_sum::<4>(&input[4..]),
+            4 => (input[0].clone() + input[1].clone()) + (input[2].clone() + input[3].clone()),
+            5 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<1>(&input[4..]),
+            6 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<2>(&input[4..]),
+            7 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<3>(&input[4..]),
+            8 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<4>(&input[4..]),
             _ => {
                 // We know that N > 8 here so this saves an add over the usual
                 // initialisation of acc to Self::ZERO.
-                let mut acc = Self::tree_sum::<8>(&input[..8]);
+                let mut acc = Self::sum_array::<8>(&input[..8]);
                 for i in (16..=N).step_by(8) {
-                    acc += Self::tree_sum::<8>(&input[(i - 8)..i])
+                    acc += Self::sum_array::<8>(&input[(i - 8)..i])
                 }
                 // This would be much cleaner if we could use const generic expressions but
                 // this will do for now.
                 match N & 7 {
                     0 => acc,
-                    1 => acc + Self::tree_sum::<1>(&input[(8 * (N / 8))..]),
-                    2 => acc + Self::tree_sum::<2>(&input[(8 * (N / 8))..]),
-                    3 => acc + Self::tree_sum::<3>(&input[(8 * (N / 8))..]),
-                    4 => acc + Self::tree_sum::<4>(&input[(8 * (N / 8))..]),
-                    5 => acc + Self::tree_sum::<5>(&input[(8 * (N / 8))..]),
-                    6 => acc + Self::tree_sum::<6>(&input[(8 * (N / 8))..]),
-                    7 => acc + Self::tree_sum::<7>(&input[(8 * (N / 8))..]),
+                    1 => acc + Self::sum_array::<1>(&input[(8 * (N / 8))..]),
+                    2 => acc + Self::sum_array::<2>(&input[(8 * (N / 8))..]),
+                    3 => acc + Self::sum_array::<3>(&input[(8 * (N / 8))..]),
+                    4 => acc + Self::sum_array::<4>(&input[(8 * (N / 8))..]),
+                    5 => acc + Self::sum_array::<5>(&input[(8 * (N / 8))..]),
+                    6 => acc + Self::sum_array::<6>(&input[(8 * (N / 8))..]),
+                    7 => acc + Self::sum_array::<7>(&input[(8 * (N / 8))..]),
                     _ => unreachable!(),
                 }
             }

@@ -77,7 +77,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
         self.accumulator += PackedChallenge::<SC>::from_basis_coefficients_fn(|i| {
             let alpha_powers = &self.decomposed_alpha_powers[i]
                 [self.constraint_index..(self.constraint_index + N)];
-            PackedVal::<SC>::dot_product_scalar_packed::<N>(alpha_powers, &expr_array)
+            PackedVal::<SC>::packed_linear_combination::<N>(alpha_powers, &expr_array)
         });
         self.constraint_index += N;
     }
