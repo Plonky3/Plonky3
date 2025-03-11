@@ -1,3 +1,7 @@
+use alloc::vec;
+use alloc::vec::Vec;
+
+use num_bigint::BigUint;
 use p3_field::exponentiation::exp_1725656503;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_monty_31::{
@@ -55,6 +59,14 @@ impl FieldParameters for BabyBearParameters {
 
         Some(p1110111111111111111111111111111)
     }
+
+    fn multiplicative_group_factors() -> Vec<(BigUint, usize)> {
+        vec![
+            (BigUint::from(2u8), 27),
+            (BigUint::from(3u8), 1),
+            (BigUint::from(5u8), 1),
+        ]
+    }
 }
 
 impl RelativelyPrimePower<7> for BabyBearParameters {
@@ -99,6 +111,19 @@ impl BinomialExtensionData<4> for BabyBearParameters {
     type ArrayLike = [[BabyBear; 4]; 2];
     const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike =
         BabyBear::new_2d_array([[0, 0, 1996171314, 0], [0, 0, 0, 124907976]]);
+
+    fn extension_multiplicative_group_factors() -> Vec<(BigUint, usize)> {
+        vec![
+            (BigUint::from(2u8), 29),
+            (BigUint::from(3u8), 1),
+            (BigUint::from(5u8), 1),
+            (BigUint::from(31u8), 1),
+            (BigUint::from(97u8), 1),
+            (BigUint::from(12241u16), 1),
+            (BigUint::from(32472031u32), 1),
+            (BigUint::from(1706804017873u64), 1),
+        ]
+    }
 }
 
 impl BinomialExtensionData<5> for BabyBearParameters {
@@ -109,6 +134,17 @@ impl BinomialExtensionData<5> for BabyBearParameters {
 
     type ArrayLike = [[BabyBear; 5]; 0];
     const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike = [];
+
+    fn extension_multiplicative_group_factors() -> Vec<(BigUint, usize)> {
+        vec![
+            (BigUint::from(2u8), 27),
+            (BigUint::from(3u8), 1),
+            (BigUint::from(5u8), 2),
+            (BigUint::from(26321u16), 1),
+            (BigUint::from(1081891u32), 1),
+            (BigUint::from(115384818561587951104978331u128), 1),
+        ]
+    }
 }
 
 #[cfg(test)]

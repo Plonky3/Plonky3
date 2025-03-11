@@ -1,5 +1,10 @@
+use alloc::vec::Vec;
+
+use num_bigint::BigUint;
+use num_traits::One;
+
 use super::{BinomialExtensionField, BinomiallyExtendable, HasTwoAdicBinomialExtension};
-use crate::{Algebra, Field, PrimeCharacteristicRing};
+use crate::{Algebra, Field, PrimeCharacteristicRing, prime_factorization};
 
 pub type Complex<F> = BinomialExtensionField<F, 2>;
 
@@ -89,6 +94,15 @@ pub trait HasComplexBinomialExtension<const D: usize>: ComplexExtendable {
     const DTH_ROOT: Complex<Self>;
 
     const EXT_GENERATOR: [Complex<Self>; D];
+
+    /// A list of (factor, exponent) pairs.
+    ///
+    /// If a list is not provided, we attempt to compute it but this may
+    /// be slow for large extensions.
+    fn complex_extension_multiplicative_group_factors() -> Vec<(BigUint, usize)> {
+        let multiplicative_order = Self::order().pow(D as u32) - BigUint::one();
+        prime_factorization(&multiplicative_order)
+    }
 }
 
 impl<F, const D: usize> BinomiallyExtendable<D> for Complex<F>
@@ -100,6 +114,10 @@ where
     const DTH_ROOT: Self = <F as HasComplexBinomialExtension<D>>::DTH_ROOT;
 
     const EXT_GENERATOR: [Self; D] = F::EXT_GENERATOR;
+
+    fn extension_multiplicative_group_factors() -> alloc::vec::Vec<(num_bigint::BigUint, usize)> {
+        F::complex_extension_multiplicative_group_factors()
+    }
 }
 
 /// The complex extension of this field has a two-adic binomial extension.

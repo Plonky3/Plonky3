@@ -8,6 +8,7 @@ license = "MIT OR Apache-2.0"
 nightly-features = ["p3-monty-31/nightly-features"]
 
 [dependencies]
+num-bigint.workspace = true
 p3-field.workspace = true
 p3-mds.workspace = true
 p3-monty-31.workspace = true

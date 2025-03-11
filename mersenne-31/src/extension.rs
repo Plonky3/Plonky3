@@ -1,3 +1,7 @@
+use alloc::vec;
+use alloc::vec::Vec;
+
+use num_bigint::BigUint;
 use p3_field::extension::{
     BinomiallyExtendable, Complex, HasComplexBinomialExtension, HasTwoAdicComplexBinomialExtension,
 };
@@ -23,6 +27,20 @@ impl BinomiallyExtendable<3> for Mersenne31 {
     // F.extension(x^3 - 5, 'u').multiplicative_generator()
     // ```
     const EXT_GENERATOR: [Self; 3] = [Self::new(10), Self::ONE, Self::ZERO];
+
+    fn extension_multiplicative_group_factors() -> Vec<(BigUint, usize)> {
+        vec![
+            (BigUint::from(2u8), 1),
+            (BigUint::from(3u8), 3),
+            (BigUint::from(7u8), 1),
+            (BigUint::from(11u8), 1),
+            (BigUint::from(31u8), 1),
+            (BigUint::from(151u8), 1),
+            (BigUint::from(331u16), 1),
+            (BigUint::from(529510939u32), 1),
+            (BigUint::from(2903110321u32), 1),
+        ]
+    }
 }
 
 impl HasComplexBinomialExtension<2> for Mersenne31 {
@@ -49,6 +67,22 @@ impl HasComplexBinomialExtension<2> for Mersenne31 {
     //   assert g^((p^4-1) // f) != 1
     // ```
     const EXT_GENERATOR: [Complex<Self>; 2] = [Complex::new_real(Self::new(6)), Complex::ONE];
+
+    fn complex_extension_multiplicative_group_factors() -> Vec<(BigUint, usize)> {
+        vec![
+            (BigUint::from(2u8), 33),
+            (BigUint::from(3u8), 2),
+            (BigUint::from(5u8), 1),
+            (BigUint::from(7u8), 1),
+            (BigUint::from(11u8), 1),
+            (BigUint::from(31u8), 1),
+            (BigUint::from(151u8), 1),
+            (BigUint::from(331u16), 1),
+            (BigUint::from(733u16), 1),
+            (BigUint::from(1709u16), 1),
+            (BigUint::from(368140581013u64), 1),
+        ]
+    }
 }
 
 impl HasTwoAdicComplexBinomialExtension<2> for Mersenne31 {
@@ -95,6 +129,25 @@ impl HasComplexBinomialExtension<3> for Mersenne31 {
         Complex::new_real(Self::ONE),
         Complex::ZERO,
     ];
+
+    fn complex_extension_multiplicative_group_factors() -> Vec<(BigUint, usize)> {
+        vec![
+            (BigUint::from(2u8), 32),
+            (BigUint::from(3u8), 3),
+            (BigUint::from(7u8), 1),
+            (BigUint::from(11u8), 1),
+            (BigUint::from(13u8), 1),
+            (BigUint::from(31u8), 1),
+            (BigUint::from(43u8), 2),
+            (BigUint::from(79u8), 1),
+            (BigUint::from(151u8), 1),
+            (BigUint::from(331u16), 1),
+            (BigUint::from(1381u16), 1),
+            (BigUint::from(529510939u32), 1),
+            (BigUint::from(1758566101u32), 1),
+            (BigUint::from(2903110321u32), 1),
+        ]
+    }
 }
 
 impl HasTwoAdicComplexBinomialExtension<3> for Mersenne31 {
@@ -107,6 +160,19 @@ impl HasTwoAdicComplexBinomialExtension<3> for Mersenne31 {
 
 #[cfg(test)]
 mod test_cubic_extension {
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field_testing::test_field;
+
+    use crate::Mersenne31;
+
+    type F = Mersenne31;
+    type EF = BinomialExtensionField<F, 3>;
+
+    test_field!(super::EF);
+}
+
+#[cfg(test)]
+mod test_cubic_complex_extension {
     use p3_field::extension::{BinomialExtensionField, Complex};
     use p3_field_testing::{test_field, test_two_adic_extension_field};
 
@@ -121,7 +187,7 @@ mod test_cubic_extension {
 }
 
 #[cfg(test)]
-mod test_quadratic_extension {
+mod test_quadratic_complex_extension {
 
     use p3_field::extension::{BinomialExtensionField, Complex};
     use p3_field_testing::{test_field, test_two_adic_extension_field};

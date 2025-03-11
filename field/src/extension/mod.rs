@@ -1,7 +1,7 @@
 use core::{debug_assert, debug_assert_eq, iter};
 
 use crate::field::Field;
-use crate::{ExtensionField, naive_poly_mul};
+use crate::{ExtensionField, naive_poly_mul, prime_factorization};
 
 mod binomial_extension;
 mod complex;
@@ -12,6 +12,8 @@ use alloc::vec::Vec;
 
 pub use binomial_extension::*;
 pub use complex::*;
+use num_bigint::BigUint;
+use num_traits::One;
 pub use packed_binomial_extension::*;
 
 /// Binomial extension field trait.
@@ -27,6 +29,15 @@ pub trait BinomiallyExtendable<const D: usize>: Field {
     const DTH_ROOT: Self;
 
     const EXT_GENERATOR: [Self; D];
+
+    /// A list of (factor, exponent) pairs.
+    ///
+    /// If a list is not provided, we attempt to compute it but this may
+    /// be slow for large extensions.
+    fn extension_multiplicative_group_factors() -> Vec<(BigUint, usize)> {
+        let multiplicative_order = Self::order().pow(D as u32) - BigUint::one();
+        prime_factorization(&multiplicative_order)
+    }
 }
 
 pub trait HasFrobenius<F: Field>: ExtensionField<F> {

@@ -246,6 +246,10 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
     fn order() -> BigUint {
         FP::PRIME.into()
     }
+
+    fn multiplicative_group_factors() -> Vec<(BigUint, usize)> {
+        FP::multiplicative_group_factors()
+    }
 }
 
 quotient_map_small_int!(MontyField31, u32, FieldParameters, [u8, u16]);

@@ -1,3 +1,7 @@
+use alloc::vec;
+use alloc::vec::Vec;
+
+use num_bigint::BigUint;
 use p3_field::exponentiation::exp_1420470955;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_monty_31::{
@@ -55,6 +59,10 @@ impl FieldParameters for KoalaBearParameters {
 
         Some(p1111110111111111111111111111111)
     }
+
+    fn multiplicative_group_factors() -> Vec<(BigUint, usize)> {
+        vec![(BigUint::from(2u8), 24), (BigUint::from(127u8), 1)]
+    }
 }
 
 impl RelativelyPrimePower<3> for KoalaBearParameters {
@@ -101,6 +109,18 @@ impl BinomialExtensionData<4> for KoalaBearParameters {
 
     const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike =
         KoalaBear::new_2d_array([[0, 0, 1759267465, 0], [0, 0, 0, 777715144]]);
+
+    fn extension_multiplicative_group_factors() -> Vec<(BigUint, usize)> {
+        vec![
+            (BigUint::from(2u8), 26),
+            (BigUint::from(3u8), 1),
+            (BigUint::from(5u8), 1),
+            (BigUint::from(127u8), 1),
+            (BigUint::from(283u16), 1),
+            (BigUint::from(1254833u32), 1),
+            (BigUint::from(453990990362758349u64), 1),
+        ]
+    }
 }
 
 #[cfg(test)]

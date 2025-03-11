@@ -8,14 +8,13 @@ use core::slice;
 
 use num_bigint::BigUint;
 use num_traits::One;
-use nums::{Factorizer, FactorizerFromSplitter, MillerRabin, PollardRho};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::exponentiation::bits_u64;
 use crate::integers::{QuotientMap, from_integer_types};
 use crate::packed::PackedField;
-use crate::{Packable, PackedFieldExtension};
+use crate::{Packable, PackedFieldExtension, prime_factorization};
 
 /// A commutative ring, `R`, with prime characteristic, `p`.
 ///
@@ -595,14 +594,8 @@ pub trait Field:
 
     /// A list of (factor, exponent) pairs.
     fn multiplicative_group_factors() -> Vec<(BigUint, usize)> {
-        let primality_test = MillerRabin { error_bits: 128 };
-        let composite_splitter = PollardRho;
-        let factorizer = FactorizerFromSplitter {
-            primality_test,
-            composite_splitter,
-        };
-        let n = Self::order() - BigUint::one();
-        factorizer.factor_counts(&n)
+        let multiplicative_order = Self::order() - BigUint::one();
+        prime_factorization(&multiplicative_order)
     }
 
     /// The number of bits required to define an element of this field.
