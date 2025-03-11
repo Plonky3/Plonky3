@@ -67,6 +67,7 @@ where
     // Check different representatives of One.
     for one in ones.iter().copied() {
         assert_eq!(one, R::ONE);
+        assert_eq!(one * one, one);
         assert_eq!(
             x * one,
             x,
