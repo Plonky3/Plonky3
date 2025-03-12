@@ -29,6 +29,37 @@ where
     });
 }
 
+pub fn benchmark_mul_2exp<R: PrimeCharacteristicRing + Copy, const REPS: usize>(
+    c: &mut Criterion,
+    name: &str,
+    val: u64,
+) where
+    StandardUniform: Distribution<R>,
+{
+    let mut rng = rand::rng();
+    let mut input = Vec::new();
+    for _ in 0..REPS {
+        input.push(rng.random::<R>())
+    }
+    c.bench_function(&format!("{} mul_2exp_u64 {}", name, val), |b| {
+        b.iter(|| input.iter_mut().for_each(|i| *i = i.mul_2exp_u64(val)))
+    });
+}
+
+pub fn benchmark_div_2exp<F: Field, const REPS: usize>(c: &mut Criterion, name: &str, val: u64)
+where
+    StandardUniform: Distribution<F>,
+{
+    let mut rng = rand::rng();
+    let mut input = Vec::new();
+    for _ in 0..REPS {
+        input.push(rng.random::<F>())
+    }
+    c.bench_function(&format!("{} div_2exp_u64 {}", name, val), |b| {
+        b.iter(|| input.iter_mut().for_each(|i| *i = i.div_2exp_u64(val)))
+    });
+}
+
 /// Benchmark the time taken to sum an array [[F; N]; REPS] by summing each array
 /// [F; N] using .sum() method and accumulating the sums into an accumulator.
 ///

@@ -176,9 +176,15 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
 
     #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
-        let product = (self.value as u64) << exp;
-        let value = (product % (FP::PRIME as u64)) as u32;
-        Self::new_monty(value)
+        // The array FP::MONTY_POWERS_OF_TWO contains the powers of 2
+        // from 2^0 to 2^63 in monty form. We can use this to quickly
+        // compute 2^exp.
+        if exp < 64 {
+            *self * FP::MONTY_POWERS_OF_TWO[exp as usize]
+        } else {
+            // For larger values we default back to the old method.
+            *self * Self::TWO.exp_u64(exp)
+        }
     }
 
     #[inline]
@@ -259,6 +265,21 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
     #[inline]
     fn halve(&self) -> Self {
         Self::new_monty(halve_u32::<FP>(self.value))
+    }
+
+    #[inline]
+    fn div_2exp_u64(&self, exp: u64) -> Self {
+        if exp <= 32 {
+            // Observe that, the monty form of 2^exp is 2^{32 - exp} mod P.
+            // For 0 <= exp <= 32, we implement this as a shift followed by
+            // the monty reduction.
+            let long_prod = (self.value as u64) << (32 - exp);
+            Self::new_monty(monty_reduce::<FP>(long_prod))
+        } else {
+            // For larger values we use a slower method though this is
+            // still much faster than the default method as it avoids the inverse().
+            *self * FP::HALF.exp_u64(exp)
+        }
     }
 
     #[inline]

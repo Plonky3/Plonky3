@@ -1,9 +1,9 @@
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_field_testing::bench_func::{
-    benchmark_add_latency, benchmark_add_throughput, benchmark_inv, benchmark_iter_sum,
-    benchmark_mul_latency, benchmark_mul_throughput, benchmark_sub_latency,
-    benchmark_sub_throughput,
+    benchmark_add_latency, benchmark_add_throughput, benchmark_div_2exp, benchmark_inv,
+    benchmark_iter_sum, benchmark_mul_2exp, benchmark_mul_latency, benchmark_mul_throughput,
+    benchmark_sub_latency, benchmark_sub_throughput,
 };
 use p3_field_testing::benchmark_sum_array;
 use p3_koala_bear::KoalaBear;
@@ -16,6 +16,12 @@ fn bench_field(c: &mut Criterion) {
     let name = "KoalaBear";
     const REPS: usize = 500;
     benchmark_inv::<F>(c, name);
+    benchmark_mul_2exp::<F, 100>(c, name, 16);
+    benchmark_mul_2exp::<F, 100>(c, name, 64);
+    benchmark_mul_2exp::<F, 100>(c, name, (1 << 63) - 1);
+    benchmark_div_2exp::<F, 100>(c, name, 16);
+    benchmark_div_2exp::<F, 100>(c, name, 33);
+    benchmark_div_2exp::<F, 100>(c, name, (1 << 63) - 1);
     benchmark_iter_sum::<F, 4, REPS>(c, name);
     benchmark_sum_array::<F, 4, REPS>(c, name);
     benchmark_iter_sum::<F, 8, REPS>(c, name);
