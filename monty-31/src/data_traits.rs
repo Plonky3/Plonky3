@@ -1,10 +1,7 @@
-use alloc::vec::Vec;
 use core::fmt::Debug;
 use core::hash::Hash;
 
-use num_bigint::BigUint;
-use num_traits::One;
-use p3_field::{Field, PrimeCharacteristicRing, prime_factorization};
+use p3_field::{Field, PrimeCharacteristicRing};
 
 use crate::MontyField31;
 
@@ -81,12 +78,6 @@ pub trait FieldParameters: PackedMontyParameters + Sized {
     const HALF_P_PLUS_1: u32 = (Self::PRIME + 1) >> 1;
 
     fn try_inverse<F: Field>(p1: F) -> Option<F>;
-
-    /// A list of the multiplicative group factors for the field.
-    fn multiplicative_group_factors() -> Vec<(BigUint, usize)> {
-        let multiplicative_group_order = BigUint::from(Self::PRIME - 1);
-        prime_factorization(&multiplicative_group_order)
-    }
 }
 
 /// An integer `D` such that `gcd(D, p - 1) = 1`.
@@ -149,11 +140,4 @@ pub trait BinomialExtensionData<const DEG: usize>: MontyParameters + Sized {
 
     /// A list of generators of 2-adic subgroups not contained in the base field.
     const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike;
-
-    /// A list of the multiplicative group factors for the extension field.
-    fn extension_multiplicative_group_factors() -> Vec<(BigUint, usize)> {
-        let multiplicative_group_order =
-            BigUint::from(Self::PRIME).pow(DEG as u32) - BigUint::one();
-        prime_factorization(&multiplicative_group_order)
-    }
 }

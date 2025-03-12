@@ -7,14 +7,13 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::slice;
 
 use num_bigint::BigUint;
-use num_traits::One;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::exponentiation::bits_u64;
 use crate::integers::{QuotientMap, from_integer_types};
 use crate::packed::PackedField;
-use crate::{Packable, PackedFieldExtension, prime_factorization};
+use crate::{Packable, PackedFieldExtension};
 
 /// A commutative ring, `R`, with prime characteristic, `p`.
 ///
@@ -639,12 +638,6 @@ pub trait Field:
     /// prime if the field is an extension field.
     #[must_use]
     fn order() -> BigUint;
-
-    /// A list of (factor, exponent) pairs.
-    fn multiplicative_group_factors() -> Vec<(BigUint, usize)> {
-        let multiplicative_order = Self::order() - BigUint::one();
-        prime_factorization(&multiplicative_order)
-    }
 
     /// The number of bits required to define an element of this field.
     ///

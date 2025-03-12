@@ -280,19 +280,6 @@ impl Field for Mersenne31 {
     fn order() -> BigUint {
         P.into()
     }
-
-    #[inline]
-    fn multiplicative_group_factors() -> Vec<(BigUint, usize)> {
-        vec![
-            (BigUint::from(2u8), 1),
-            (BigUint::from(3u8), 2),
-            (BigUint::from(7u8), 1),
-            (BigUint::from(11u8), 1),
-            (BigUint::from(31u8), 1),
-            (BigUint::from(151u8), 1),
-            (BigUint::from(331u16), 1),
-        ]
-    }
 }
 
 // We can use some macros to implement QuotientMap<Int> for all integer types except for u32 and i32's.

@@ -292,17 +292,6 @@ impl Field for Goldilocks {
     fn order() -> BigUint {
         P.into()
     }
-
-    fn multiplicative_group_factors() -> Vec<(num_bigint::BigUint, usize)> {
-        vec![
-            (BigUint::from(2u8), 32),
-            (BigUint::from(3u8), 1),
-            (BigUint::from(5u8), 1),
-            (BigUint::from(17u8), 1),
-            (BigUint::from(257u16), 1),
-            (BigUint::from(65537u32), 1),
-        ]
-    }
 }
 
 // We use macros to implement QuotientMap<Int> for all integer types except for u64 and i64.

@@ -149,21 +149,6 @@ impl Field for Bn254Fr {
             0x30644e72,
         ])
     }
-
-    fn multiplicative_group_factors() -> Vec<(BigUint, usize)> {
-        vec![
-            (BigUint::from(2u8), 28),
-            (BigUint::from(3u8), 2),
-            (BigUint::from(13u8), 1),
-            (BigUint::from(29u8), 1),
-            (BigUint::from(983u16), 1),
-            (BigUint::from(11003u16), 1),
-            (BigUint::from(237073u32), 1),
-            (BigUint::from(405928799u32), 1),
-            (BigUint::from(1670836401704629u64), 1),
-            (BigUint::from(13818364434197438864469338081u128), 1),
-        ]
-    }
 }
 
 quotient_map_small_int!(Bn254Fr, u128, [u8, u16, u32, u64]);

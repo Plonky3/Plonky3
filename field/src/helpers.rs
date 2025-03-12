@@ -5,7 +5,6 @@ use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Mul;
 
 use num_bigint::BigUint;
-use nums::{Factorizer, FactorizerFromSplitter, MillerRabin, PollardRho};
 use p3_maybe_rayon::prelude::{IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::field::Field;
@@ -240,16 +239,4 @@ where
     S: Sum<<LI::Item as Mul<RI::Item>>::Output>,
 {
     li.zip(ri).map(|(l, r)| l * r).sum()
-}
-
-/// Given an integer, compute it's prime factorization using
-/// MillerRabin and PollardRho.
-pub fn prime_factorization(n: &BigUint) -> Vec<(BigUint, usize)> {
-    let primality_test = MillerRabin { error_bits: 128 };
-    let composite_splitter = PollardRho;
-    let factorizer = FactorizerFromSplitter {
-        primality_test,
-        composite_splitter,
-    };
-    factorizer.factor_counts(n)
 }

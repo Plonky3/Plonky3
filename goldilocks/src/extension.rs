@@ -1,7 +1,3 @@
-use alloc::vec;
-use alloc::vec::Vec;
-
-use num_bigint::BigUint;
 use p3_field::extension::{BinomiallyExtendable, HasTwoAdicBinomialExtension};
 use p3_field::{PrimeCharacteristicRing, TwoAdicField, field_to_array};
 
@@ -19,20 +15,6 @@ impl BinomiallyExtendable<2> for Goldilocks {
         Self::new(18081566051660590251),
         Self::new(16121475356294670766),
     ];
-
-    fn extension_multiplicative_group_factors() -> Vec<(num_bigint::BigUint, usize)> {
-        vec![
-            (BigUint::from(2u8), 33),
-            (BigUint::from(3u8), 1),
-            (BigUint::from(5u8), 1),
-            (BigUint::from(7u8), 1),
-            (BigUint::from(17u8), 1),
-            (BigUint::from(179u8), 1),
-            (BigUint::from(257u16), 1),
-            (BigUint::from(65537u32), 1),
-            (BigUint::from(7361031152998637u64), 1),
-        ]
-    }
 }
 
 impl HasTwoAdicBinomialExtension<2> for Goldilocks {
@@ -71,21 +53,6 @@ impl BinomiallyExtendable<5> for Goldilocks {
     // Obtained by finding the smallest Hamming weight vector
     // with appropriate order, starting at [0,1,0,0,0]
     const EXT_GENERATOR: [Self; 5] = [Self::TWO, Self::ONE, Self::ZERO, Self::ZERO, Self::ZERO];
-
-    fn extension_multiplicative_group_factors() -> Vec<(num_bigint::BigUint, usize)> {
-        vec![
-            (BigUint::from(2u8), 32),
-            (BigUint::from(3u8), 1),
-            (BigUint::from(5u8), 2),
-            (BigUint::from(17u8), 1),
-            (BigUint::from(257u16), 1),
-            (BigUint::from(45971u16), 1),
-            (BigUint::from(65537u32), 1),
-            (BigUint::from(255006435240067831u64), 1),
-            (BigUint::from(280083648770327405561u128), 1),
-            (BigUint::from(7053197395277272939628824863222181u128), 1),
-        ]
-    }
 }
 
 impl HasTwoAdicBinomialExtension<5> for Goldilocks {

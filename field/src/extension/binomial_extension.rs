@@ -232,10 +232,6 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
     fn order() -> BigUint {
         F::order().pow(D as u32)
     }
-
-    fn multiplicative_group_factors() -> Vec<(BigUint, usize)> {
-        F::extension_multiplicative_group_factors()
-    }
 }
 
 impl<F, const D: usize> Display for BinomialExtensionField<F, D>

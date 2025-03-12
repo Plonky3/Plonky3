@@ -1,6 +1,3 @@
-use alloc::vec::Vec;
-
-use num_bigint::BigUint;
 use p3_field::extension::{BinomiallyExtendable, HasTwoAdicBinomialExtension};
 use p3_field::{TwoAdicField, field_to_array};
 
@@ -20,10 +17,6 @@ where
     const DTH_ROOT: Self = FP::DTH_ROOT;
 
     const EXT_GENERATOR: [Self; WIDTH] = FP::EXT_GENERATOR;
-
-    fn extension_multiplicative_group_factors() -> Vec<(BigUint, usize)> {
-        FP::extension_multiplicative_group_factors()
-    }
 }
 
 impl<const WIDTH: usize, FP> HasTwoAdicBinomialExtension<WIDTH> for MontyField31<FP>
