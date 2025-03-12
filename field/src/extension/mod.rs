@@ -1,13 +1,12 @@
-use core::{debug_assert, debug_assert_eq, iter};
+use core::iter;
 
+use crate::ExtensionField;
 use crate::field::Field;
-use crate::{ExtensionField, naive_poly_mul};
 
 mod binomial_extension;
 mod complex;
 mod packed_binomial_extension;
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 pub use binomial_extension::*;
@@ -34,23 +33,7 @@ pub trait HasFrobenius<F: Field>: ExtensionField<F> {
     fn repeated_frobenius(&self, count: usize) -> Self;
     fn frobenius_inv(&self) -> Self;
 
-    fn minimal_poly(mut self) -> Vec<F> {
-        let mut m = vec![Self::ONE];
-        for _ in 0..Self::DIMENSION {
-            m = naive_poly_mul(&m, &[-self, Self::ONE]);
-            self = self.frobenius();
-        }
-        let mut m_iter = m
-            .into_iter()
-            .map(|c| c.as_base().expect("Extension is not algebraic?"));
-        let m: Vec<F> = m_iter.by_ref().take(Self::DIMENSION + 1).collect();
-        debug_assert_eq!(m.len(), Self::DIMENSION + 1);
-        debug_assert_eq!(m.last(), Some(&F::ONE));
-        debug_assert!(m_iter.all(|c| c.is_zero()));
-        m
-    }
-
-    fn galois_group(self) -> Vec<Self> {
+    fn galois_orbit(self) -> Vec<Self> {
         iter::successors(Some(self), |x| Some(x.frobenius()))
             .take(Self::DIMENSION)
             .collect()

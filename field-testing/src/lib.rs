@@ -789,37 +789,3 @@ macro_rules! test_two_adic_extension_field {
         }
     };
 }
-
-#[cfg(test)]
-mod tests {
-    use alloc::vec;
-    use alloc::vec::Vec;
-
-    use p3_baby_bear::BabyBear;
-    use p3_field::extension::{BinomialExtensionField, HasFrobenius};
-    use p3_field::{PrimeCharacteristicRing, binomial_expand, eval_poly};
-    use rand::random;
-
-    use super::*;
-
-    #[test]
-    fn test_minimal_poly() {
-        type F = BabyBear;
-        type EF = BinomialExtensionField<F, 4>;
-        for _ in 0..1024 {
-            let x: EF = random();
-            let m: Vec<EF> = x.minimal_poly().into_iter().map(Into::<EF>::into).collect();
-            assert!(eval_poly(&m, x).is_zero());
-        }
-    }
-
-    #[test]
-    fn test_binomial_expand() {
-        type F = BabyBear;
-        // (x - 1)(x - 2) = x^2 - 3x + 2
-        assert_eq!(
-            binomial_expand(&[F::ONE, F::TWO]),
-            vec![F::TWO, -F::from_u8(3), F::ONE]
-        );
-    }
-}
