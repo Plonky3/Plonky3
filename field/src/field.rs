@@ -7,8 +7,6 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::slice;
 
 use num_bigint::BigUint;
-use num_traits::One;
-use nums::{Factorizer, FactorizerFromSplitter, MillerRabin, PollardRho};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -640,18 +638,6 @@ pub trait Field:
     /// prime if the field is an extension field.
     #[must_use]
     fn order() -> BigUint;
-
-    /// A list of (factor, exponent) pairs.
-    fn multiplicative_group_factors() -> Vec<(BigUint, usize)> {
-        let primality_test = MillerRabin { error_bits: 128 };
-        let composite_splitter = PollardRho;
-        let factorizer = FactorizerFromSplitter {
-            primality_test,
-            composite_splitter,
-        };
-        let n = Self::order() - BigUint::one();
-        factorizer.factor_counts(&n)
-    }
 
     /// The number of bits required to define an element of this field.
     ///

@@ -56,6 +56,7 @@ impl HasTwoAdicBinomialExtension<2> for Mersenne31 {
 
 #[cfg(test)]
 mod tests {
+    use num_bigint::BigUint;
     use p3_field::PrimeField32;
     use p3_field_testing::{test_field, test_two_adic_field};
 
@@ -169,6 +170,25 @@ mod tests {
     const ZEROS: [Fi; 1] = [Fi::ZERO];
     const ONES: [Fi; 1] = [Fi::ONE];
 
-    test_field!(super::Fi, &super::ZEROS, &super::ONES);
+    // Get the prime factorization of the order of the multiplicative group.
+    // i.e. the prime factorization of P^2 - 1.
+    fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 7] {
+        [
+            (BigUint::from(2u8), 32),
+            (BigUint::from(3u8), 2),
+            (BigUint::from(7u8), 1),
+            (BigUint::from(11u8), 1),
+            (BigUint::from(31u8), 1),
+            (BigUint::from(151u8), 1),
+            (BigUint::from(331u16), 1),
+        ]
+    }
+
+    test_field!(
+        super::Fi,
+        &super::ZEROS,
+        &super::ONES,
+        &super::multiplicative_group_prime_factorization()
+    );
     test_two_adic_field!(p3_field::extension::Complex<crate::Mersenne31>);
 }

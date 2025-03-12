@@ -17,6 +17,7 @@ rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
+num-bigint.workspace = true
 rand.workspace = true
 p3-field-testing.workspace = true
 p3-dft.workspace = true
