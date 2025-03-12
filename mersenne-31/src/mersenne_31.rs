@@ -47,9 +47,12 @@ impl Mersenne31 {
     /// # Panics
     /// This will panic if the element does not lie in the range: `[0, 2^31 - 1]`.
     #[inline]
-    pub const fn new_checked(value: u32) -> Self {
-        assert!((value >> 31) == 0);
-        Self { value }
+    pub const fn new_checked(value: u32) -> Option<Self> {
+        if (value >> 31) == 0 {
+            Some(Self { value })
+        } else {
+            None
+        }
     }
 
     /// Convert a constant `u32` array into a constant array of field elements.
