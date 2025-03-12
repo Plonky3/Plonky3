@@ -3,7 +3,7 @@ use core::hash::Hash;
 
 use p3_field::{Field, PrimeCharacteristicRing};
 
-use crate::{MontyField31, utils::to_monty_64};
+use crate::MontyField31;
 
 /// MontyParameters contains the prime P along with constants needed to convert elements into and out of MONTY form.
 /// The MONTY constant is assumed to be a power of 2.
@@ -76,17 +76,6 @@ pub trait FieldParameters: PackedMontyParameters + Sized {
     const MONTY_GEN: MontyField31<Self>;
 
     const HALF_P_PLUS_1: u32 = (Self::PRIME + 1) >> 1;
-    const HALF: MontyField31<Self> = MontyField31::new(Self::HALF_P_PLUS_1);
-
-    const MONTY_POWERS_OF_TWO: [MontyField31<Self>; 64] = {
-        let mut powers_of_two = [Self::MONTY_ONE; 64];
-        let mut i = 1;
-        while i < 64 {
-            powers_of_two[i] = MontyField31::new_monty(to_monty_64::<Self>(1 << i));
-            i += 1;
-        }
-        powers_of_two
-    };
 
     fn try_inverse<F: Field>(p1: F) -> Option<F>;
 }

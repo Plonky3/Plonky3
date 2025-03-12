@@ -347,6 +347,10 @@ macro_rules! test_packed_field {
             fn test_multiplicative_inverse() {
                 $crate::test_multiplicative_inverse::<$packedfield>();
             }
+            #[test]
+            fn test_mul_2exp_u64() {
+                $crate::test_mul_2exp_u64::<$packedfield>();
+            }
         }
     };
 }

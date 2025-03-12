@@ -90,19 +90,20 @@ impl<MP: MontyParameters> MontyField31<MP> {
         }
         output
     }
+}
 
-    /// Multiply the given MontyField31 element by `2^{-n}`.
-    ///
-    /// This makes use of the fact that, as the monty constant is `2^32`,
-    /// the monty form of `2^{-n}` is `2^{32 - n}`. Monty reduction works
-    /// provided the input is `< 2^32P` so this works for `0 <= n <= 32`.
-    #[inline]
-    #[must_use]
-    pub const fn mul_2exp_neg_n(&self, n: u32) -> Self {
-        assert!(n < 33);
-        let value_mul_2exp_neg_n = (self.value as u64) << (32 - n);
-        Self::new_monty(monty_reduce::<MP>(value_mul_2exp_neg_n))
-    }
+impl<FP: FieldParameters> MontyField31<FP> {
+    const MONTY_POWERS_OF_TWO: [Self; 64] = {
+        let mut powers_of_two = [FP::MONTY_ONE; 64];
+        let mut i = 1;
+        while i < 64 {
+            powers_of_two[i] = Self::new_monty(to_monty_64::<FP>(1 << i));
+            i += 1;
+        }
+        powers_of_two
+    };
+
+    const HALF: Self = MontyField31::new(FP::HALF_P_PLUS_1);
 }
 
 impl<FP: MontyParameters> Ord for MontyField31<FP> {
@@ -180,7 +181,7 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
         // from 2^0 to 2^63 in monty form. We can use this to quickly
         // compute 2^exp.
         if exp < 64 {
-            *self * FP::MONTY_POWERS_OF_TWO[exp as usize]
+            *self * Self::MONTY_POWERS_OF_TWO[exp as usize]
         } else {
             // For larger values we default back to the old method.
             *self * Self::TWO.exp_u64(exp)
@@ -278,7 +279,7 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
         } else {
             // For larger values we use a slower method though this is
             // still much faster than the default method as it avoids the inverse().
-            *self * FP::HALF.exp_u64(exp)
+            *self * Self::HALF.exp_u64(exp)
         }
     }
 
