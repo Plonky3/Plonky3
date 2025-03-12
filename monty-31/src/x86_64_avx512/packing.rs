@@ -304,8 +304,8 @@ fn mask_movehdup_epi32(src: __m512i, k: __mmask16, a: __m512i) -> __m512i {
     // The instruction is only available in the floating-point flavor; this distinction is only for
     // historical reasons and no longer matters.
 
-    // While we can write this using intrinsics, when inlined into the mul function, the
-    // intrinsic seems to compile to a vpermt2ps which has worse latency, see https://godbolt.org/z/489aaPhz3.
+    // While we can write this using intrinsics, when inlined, the intrinsic often compiles
+    // to a vpermt2ps which has worse latency, see https://godbolt.org/z/489aaPhz3.
     // Hence we use inline assembly to force the compiler to do the right thing.
     unsafe {
         let dst: __m512i;
