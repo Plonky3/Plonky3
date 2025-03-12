@@ -160,6 +160,7 @@ impl HasTwoAdicComplexBinomialExtension<3> for Mersenne31 {
 
 #[cfg(test)]
 mod test_cubic_extension {
+    use num_bigint::BigUint;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_field_testing::test_field;
@@ -174,11 +175,33 @@ mod test_cubic_extension {
     const ZEROS: [EF; 1] = [EF::ZERO];
     const ONES: [EF; 1] = [EF::ONE];
 
-    test_field!(super::EF, &super::ZEROS, &super::ONES);
+    // Get the prime factorization of the order of the multiplicative group.
+    // i.e. the prime factorization of P^3 - 1.
+    fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 9] {
+        [
+            (BigUint::from(2u8), 1),
+            (BigUint::from(3u8), 3),
+            (BigUint::from(7u8), 1),
+            (BigUint::from(11u8), 1),
+            (BigUint::from(31u8), 1),
+            (BigUint::from(151u8), 1),
+            (BigUint::from(331u16), 1),
+            (BigUint::from(529510939u32), 1),
+            (BigUint::from(2903110321u32), 1),
+        ]
+    }
+
+    test_field!(
+        super::EF,
+        &super::ZEROS,
+        &super::ONES,
+        &super::multiplicative_group_prime_factorization()
+    );
 }
 
 #[cfg(test)]
 mod test_cubic_complex_extension {
+    use num_bigint::BigUint;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::{BinomialExtensionField, Complex};
     use p3_field_testing::{test_field, test_two_adic_extension_field};
@@ -193,7 +216,33 @@ mod test_cubic_complex_extension {
     const ZEROS: [EF; 1] = [EF::ZERO];
     const ONES: [EF; 1] = [EF::ONE];
 
-    test_field!(super::EF, &super::ZEROS, &super::ONES);
+    // Get the prime factorization of the order of the multiplicative group.
+    // i.e. the prime factorization of P^6 - 1.
+    fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 14] {
+        [
+            (BigUint::from(2u8), 32),
+            (BigUint::from(3u8), 3),
+            (BigUint::from(7u8), 1),
+            (BigUint::from(11u8), 1),
+            (BigUint::from(13u8), 1),
+            (BigUint::from(31u8), 1),
+            (BigUint::from(43u8), 2),
+            (BigUint::from(79u8), 1),
+            (BigUint::from(151u8), 1),
+            (BigUint::from(331u16), 1),
+            (BigUint::from(1381u16), 1),
+            (BigUint::from(529510939u32), 1),
+            (BigUint::from(1758566101u32), 1),
+            (BigUint::from(2903110321u32), 1),
+        ]
+    }
+
+    test_field!(
+        super::EF,
+        &super::ZEROS,
+        &super::ONES,
+        &super::multiplicative_group_prime_factorization()
+    );
 
     test_two_adic_extension_field!(super::F, super::EF);
 }
@@ -201,6 +250,7 @@ mod test_cubic_complex_extension {
 #[cfg(test)]
 mod test_quadratic_complex_extension {
 
+    use num_bigint::BigUint;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::{BinomialExtensionField, Complex};
     use p3_field_testing::{test_field, test_two_adic_extension_field};
@@ -215,7 +265,30 @@ mod test_quadratic_complex_extension {
     const ZEROS: [EF; 1] = [EF::ZERO];
     const ONES: [EF; 1] = [EF::ONE];
 
-    test_field!(super::EF, &super::ZEROS, &super::ONES);
+    // Get the prime factorization of the order of the multiplicative group.
+    // i.e. the prime factorization of P^4 - 1.
+    fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 11] {
+        [
+            (BigUint::from(2u8), 33),
+            (BigUint::from(3u8), 2),
+            (BigUint::from(5u8), 1),
+            (BigUint::from(7u8), 1),
+            (BigUint::from(11u8), 1),
+            (BigUint::from(31u8), 1),
+            (BigUint::from(151u8), 1),
+            (BigUint::from(331u16), 1),
+            (BigUint::from(733u16), 1),
+            (BigUint::from(1709u16), 1),
+            (BigUint::from(368140581013u64), 1),
+        ]
+    }
+
+    test_field!(
+        super::EF,
+        &super::ZEROS,
+        &super::ONES,
+        &super::multiplicative_group_prime_factorization()
+    );
 
     test_two_adic_extension_field!(super::F, super::EF);
 }

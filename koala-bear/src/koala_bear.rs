@@ -200,7 +200,18 @@ mod tests {
     const ZEROS: [KoalaBear; 1] = [KoalaBear::ZERO];
     const ONES: [KoalaBear; 1] = [KoalaBear::ONE];
 
-    test_field!(crate::KoalaBear, &super::ZEROS, &super::ONES);
+    // Get the prime factorization of the order of the multiplicative group.
+    // i.e. the prime factorization of P - 1.
+    fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 2] {
+        [(BigUint::from(2u8), 24), (BigUint::from(127u8), 1)]
+    }
+
+    test_field!(
+        crate::KoalaBear,
+        &super::ZEROS,
+        &super::ONES,
+        &super::multiplicative_group_prime_factorization()
+    );
     test_two_adic_field!(crate::KoalaBear);
 
     test_field_dft!(radix2dit, crate::KoalaBear, p3_dft::Radix2Dit<_>);

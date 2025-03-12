@@ -535,6 +535,7 @@ pub(crate) fn from_u62(input: u64) -> Mersenne31 {
 
 #[cfg(test)]
 mod tests {
+    use num_bigint::BigUint;
     use p3_field::{Field, InjectiveMonomial, PermutationMonomial, PrimeCharacteristicRing};
     use p3_field_testing::{
         test_field, test_prime_field, test_prime_field_32, test_prime_field_64,
@@ -580,7 +581,26 @@ mod tests {
     const ZEROS: [Mersenne31; 2] = [Mersenne31::ZERO, Mersenne31::new((1_u32 << 31) - 1)];
     const ONES: [Mersenne31; 1] = [Mersenne31::ONE];
 
-    test_field!(crate::Mersenne31, &super::ZEROS, &super::ONES);
+    // Get the prime factorization of the order of the multiplicative group.
+    // i.e. the prime factorization of P - 1.
+    fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 7] {
+        [
+            (BigUint::from(2u8), 1),
+            (BigUint::from(3u8), 2),
+            (BigUint::from(7u8), 1),
+            (BigUint::from(11u8), 1),
+            (BigUint::from(31u8), 1),
+            (BigUint::from(151u8), 1),
+            (BigUint::from(331u16), 1),
+        ]
+    }
+
+    test_field!(
+        crate::Mersenne31,
+        &super::ZEROS,
+        &super::ONES,
+        &super::multiplicative_group_prime_factorization()
+    );
     test_prime_field!(crate::Mersenne31);
     test_prime_field_64!(crate::Mersenne31);
     test_prime_field_32!(crate::Mersenne31);

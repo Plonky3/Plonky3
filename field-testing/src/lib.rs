@@ -478,11 +478,10 @@ pub fn test_binary_ops<R: PrimeCharacteristicRing + Eq + Copy>(
     );
 }
 
-pub fn test_generator<F: Field>() {
-    let factors = F::multiplicative_group_factors();
+pub fn test_generator<F: Field>(factors: &[(BigUint, u32)]) {
     let product: BigUint = factors
         .iter()
-        .map(|(factor, exponent)| factor.pow(*exponent as u32))
+        .map(|(factor, exponent)| factor.pow(*exponent))
         .product();
     assert_eq!(product + BigUint::one(), F::order());
 
@@ -558,7 +557,7 @@ pub fn test_ef_two_adic_generator_consistency<
 
 #[macro_export]
 macro_rules! test_field {
-    ($field:ty, $zeros: expr, $ones: expr) => {
+    ($field:ty, $zeros: expr, $ones: expr, $factors: expr) => {
         mod field_tests {
             #[test]
             fn test_ring_with_eq() {
@@ -574,7 +573,7 @@ macro_rules! test_field {
             }
             #[test]
             fn test_generator() {
-                $crate::test_generator::<$field>();
+                $crate::test_generator::<$field>($factors);
             }
         }
     };

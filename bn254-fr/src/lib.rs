@@ -377,7 +377,29 @@ mod tests {
 
     const ZERO: Bn254Fr = Bn254Fr::ZERO;
     const ONE: Bn254Fr = Bn254Fr::ONE;
-    test_field!(crate::Bn254Fr, &[super::ZERO], &[super::ONE]);
+
+    // Get the prime factorization of the order of the multiplicative group.
+    // i.e. the prime factorization of P - 1.
+    fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 10] {
+        [
+            (BigUint::from(2u8), 28),
+            (BigUint::from(3u8), 2),
+            (BigUint::from(13u8), 1),
+            (BigUint::from(29u8), 1),
+            (BigUint::from(983u16), 1),
+            (BigUint::from(11003u16), 1),
+            (BigUint::from(237073u32), 1),
+            (BigUint::from(405928799u32), 1),
+            (BigUint::from(1670836401704629u64), 1),
+            (BigUint::from(13818364434197438864469338081u128), 1),
+        ]
+    }
+    test_field!(
+        crate::Bn254Fr,
+        &[super::ZERO],
+        &[super::ONE],
+        &super::multiplicative_group_prime_factorization()
+    );
 
     test_prime_field!(crate::Bn254Fr);
 }

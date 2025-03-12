@@ -101,6 +101,7 @@ impl HasTwoAdicBinomialExtension<5> for Goldilocks {
 #[cfg(test)]
 mod test_quadratic_extension {
 
+    use num_bigint::BigUint;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_field_testing::{test_field, test_two_adic_extension_field};
@@ -115,7 +116,28 @@ mod test_quadratic_extension {
     const ZEROS: [EF; 1] = [EF::ZERO];
     const ONES: [EF; 1] = [EF::ONE];
 
-    test_field!(super::EF, &super::ZEROS, &super::ONES);
+    // Get the prime factorization of the order of the multiplicative group.
+    // i.e. the prime factorization of P^2 - 1.
+    fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 9] {
+        [
+            (BigUint::from(2u8), 33),
+            (BigUint::from(3u8), 1),
+            (BigUint::from(5u8), 1),
+            (BigUint::from(7u8), 1),
+            (BigUint::from(17u8), 1),
+            (BigUint::from(179u8), 1),
+            (BigUint::from(257u16), 1),
+            (BigUint::from(65537u32), 1),
+            (BigUint::from(7361031152998637u64), 1),
+        ]
+    }
+
+    test_field!(
+        super::EF,
+        &super::ZEROS,
+        &super::ONES,
+        &super::multiplicative_group_prime_factorization()
+    );
 
     test_two_adic_extension_field!(super::F, super::EF);
 }
@@ -123,6 +145,7 @@ mod test_quadratic_extension {
 #[cfg(test)]
 mod test_quintic_extension {
 
+    use num_bigint::BigUint;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_field_testing::{test_field, test_two_adic_extension_field};
@@ -137,7 +160,29 @@ mod test_quintic_extension {
     const ZEROS: [EF; 1] = [EF::ZERO];
     const ONES: [EF; 1] = [EF::ONE];
 
-    test_field!(super::EF, &super::ZEROS, &super::ONES);
+    // Get the prime factorization of the order of the multiplicative group.
+    // i.e. the prime factorization of P^5 - 1.
+    fn multiplicative_group_prime_factorization() -> [(num_bigint::BigUint, u32); 10] {
+        [
+            (BigUint::from(2u8), 32),
+            (BigUint::from(3u8), 1),
+            (BigUint::from(5u8), 2),
+            (BigUint::from(17u8), 1),
+            (BigUint::from(257u16), 1),
+            (BigUint::from(45971u16), 1),
+            (BigUint::from(65537u32), 1),
+            (BigUint::from(255006435240067831u64), 1),
+            (BigUint::from(280083648770327405561u128), 1),
+            (BigUint::from(7053197395277272939628824863222181u128), 1),
+        ]
+    }
+
+    test_field!(
+        super::EF,
+        &super::ZEROS,
+        &super::ONES,
+        &super::multiplicative_group_prime_factorization()
+    );
 
     test_two_adic_extension_field!(super::F, super::EF);
 }
