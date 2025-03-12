@@ -479,17 +479,27 @@ pub fn test_binary_ops<R: PrimeCharacteristicRing + Eq + Copy>(
     );
 }
 
-pub fn test_generator<F: Field>(factors: &[(BigUint, u32)]) {
-    let product: BigUint = factors
+/// Given a list of the factors of the multiplicative group of a field, check
+/// that the defined generator is actually a generator of that group.
+pub fn test_generator<F: Field>(multiplicative_group_factors: &[(BigUint, u32)]) {
+    // First we check that the given factors multiply to the order of the
+    // multiplicative group (|F| - 1). Ideally this would also check that
+    // the given factors are prime but as factors can be large that check
+    // can end up being quite expensive so ignore that for now. As the factors
+    // are hardcoded and public, these prime checks can be easily done using
+    // sage or wolfram alpha.
+    let product: BigUint = multiplicative_group_factors
         .iter()
         .map(|(factor, exponent)| factor.pow(*exponent))
         .product();
     assert_eq!(product + BigUint::one(), F::order());
 
-    let mut partial_products: Vec<F> = (0..=factors.len())
+    // Given a prime factorization r = p1^e1 * p2^e2 * ... * pk^ek, an element g has order
+    // r if and only if g^r = 1 and g^(r/pi) != 1 for all pi in the prime factorization of r.
+    let mut partial_products: Vec<F> = (0..=multiplicative_group_factors.len())
         .map(|i| {
             let mut generator_power = F::GENERATOR;
-            factors
+            multiplicative_group_factors
                 .iter()
                 .enumerate()
                 .for_each(|(j, (factor, exponent))| {
@@ -497,6 +507,10 @@ pub fn test_generator<F: Field>(factors: &[(BigUint, u32)]) {
                     let digits = factor.to_u64_digits();
                     let size = digits.len();
                     for _ in 0..modified_exponent {
+                        // The main complication here is adapting our u64 code to handle BigUints.
+                        // This solution is slow (particularly when dealing with extension fields
+                        // which should really be making use of the frobenius map) but should be
+                        // fast enough for testing purposes.
                         let bases = (0..size).map(|i| generator_power.exp_power_of_2(64 * i));
                         let mut power = F::ONE;
                         digits
