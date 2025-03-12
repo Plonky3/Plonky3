@@ -25,7 +25,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 /// The BN254 curve scalar field prime, defined as `F_r` where `r = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.
 #[derive(Copy, Clone, Default, Eq, PartialEq)]
 pub struct Bn254Fr {
-    pub value: FFBn254Fr,
+    pub(crate) value: FFBn254Fr,
 }
 
 impl Bn254Fr {

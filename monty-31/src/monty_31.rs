@@ -36,8 +36,8 @@ pub struct MontyField31<MP: MontyParameters> {
 }
 
 impl<MP: MontyParameters> MontyField31<MP> {
-    // The standard way to crate a new element.
-    // Note that new converts the input into MONTY form so should be avoided in performance critical implementations.
+    /// The standard way to crate a new element.
+    /// Note that new converts the input into MONTY form so should be avoided in performance critical implementations.
     #[inline(always)]
     pub const fn new(value: u32) -> Self {
         Self {
@@ -46,9 +46,9 @@ impl<MP: MontyParameters> MontyField31<MP> {
         }
     }
 
-    // Create a new field element from something already in MONTY form.
-    // This is `pub(crate)` for tests and delayed reduction strategies. If you're using it outside of those, you're
-    // likely doing something fishy.
+    /// Create a new field element from something already in MONTY form.
+    /// This is `pub(crate)` for tests and delayed reduction strategies. If you're using it outside of those, you're
+    /// likely doing something fishy.
     #[inline(always)]
     pub(crate) const fn new_monty(value: u32) -> Self {
         Self {

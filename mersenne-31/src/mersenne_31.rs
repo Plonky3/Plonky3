@@ -33,7 +33,7 @@ pub struct Mersenne31 {
 
 impl Mersenne31 {
     #[inline]
-    pub const fn new(value: u32) -> Self {
+    pub(crate) const fn new(value: u32) -> Self {
         debug_assert!((value >> 31) == 0);
         Self { value }
     }
@@ -43,8 +43,9 @@ impl Mersenne31 {
     ///
     /// This means that this will be slower than `array.map(Mersenne31::new)` but
     /// has the advantage of being able to be used in `const` environments.
+    #[cfg(test)]
     #[inline]
-    pub const fn new_array<const N: usize>(input: [u32; N]) -> [Self; N] {
+    pub(crate) const fn new_array<const N: usize>(input: [u32; N]) -> [Self; N] {
         let mut output = [Self::ZERO; N];
         let mut i = 0;
         while i < N {
