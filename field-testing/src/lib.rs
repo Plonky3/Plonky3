@@ -9,6 +9,7 @@ pub mod dft_testing;
 pub mod from_integer_tests;
 pub mod packedfield_testing;
 
+use alloc::vec::Vec;
 pub use bench_func::*;
 pub use dft_testing::*;
 use num_bigint::BigUint;
@@ -85,12 +86,43 @@ where
     }
 }
 
-pub fn test_multiplicative_group_factors<F: Field>() {
-    let product: BigUint = F::multiplicative_group_factors()
-        .into_iter()
-        .map(|(factor, exponent)| factor.pow(exponent as u32))
+pub fn test_generator<F: Field>() {
+    let factors = F::multiplicative_group_factors();
+    let product: BigUint = factors
+        .iter()
+        .map(|(factor, exponent)| factor.pow(*exponent as u32))
         .product();
     assert_eq!(product + BigUint::one(), F::order());
+
+    let mut partial_products: Vec<F> = (0..=factors.len())
+        .map(|i| {
+            let mut generator_power = F::GENERATOR;
+            factors
+                .iter()
+                .enumerate()
+                .for_each(|(j, (factor, exponent))| {
+                    let modified_exponent = if i == j { exponent - 1 } else { *exponent };
+                    let digits = factor.to_u64_digits();
+                    let size = digits.len();
+                    for _ in 0..modified_exponent {
+                        let bases = (0..size).map(|i| generator_power.exp_power_of_2(64 * i));
+                        let mut power = F::ONE;
+                        digits
+                            .iter()
+                            .zip(bases)
+                            .for_each(|(digit, base)| power *= base.exp_u64(*digit));
+                        generator_power = power;
+                    }
+                });
+            generator_power
+        })
+        .collect();
+
+    assert_eq!(partial_products.pop().unwrap(), F::ONE);
+
+    for elem in partial_products.into_iter() {
+        assert_ne!(elem, F::ONE);
+    }
 }
 
 pub fn test_two_adic_subgroup_vanishing_polynomial<F: TwoAdicField>() {
@@ -149,8 +181,8 @@ macro_rules! test_field {
                 $crate::test_inverse::<$field>();
             }
             #[test]
-            fn test_multiplicative_group_factors() {
-                $crate::test_multiplicative_group_factors::<$field>();
+            fn test_generator() {
+                $crate::test_generator::<$field>();
             }
         }
     };
