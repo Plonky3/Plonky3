@@ -507,7 +507,7 @@ pub fn test_generator<F: Field>(multiplicative_group_factors: &[(BigUint, u32)])
                     let digits = factor.to_u64_digits();
                     let size = digits.len();
                     for _ in 0..modified_exponent {
-                        // The main complication here is adapting our u64 code to handle BigUints.
+                        // The main complication here is extending our `exp_u64` code to handle `BigUints`.
                         // This solution is slow (particularly when dealing with extension fields
                         // which should really be making use of the frobenius map) but should be
                         // fast enough for testing purposes.
