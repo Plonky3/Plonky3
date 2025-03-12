@@ -32,20 +32,33 @@ pub struct Mersenne31 {
 }
 
 impl Mersenne31 {
+    /// Convert a u32 element into a Mersenne31 element.
+    ///
+    /// # Safety
+    /// The element must lie in the range: `[0, 2^31 - 1]`.
     #[inline]
     pub(crate) const fn new(value: u32) -> Self {
         debug_assert!((value >> 31) == 0);
         Self { value }
     }
 
+    /// Convert a u32 element into a Mersenne31 element.
+    ///
+    /// # Panics
+    /// This will panic if the element does not lie in the range: `[0, 2^31 - 1]`.
+    #[inline]
+    pub const fn new_checked(value: u32) -> Self {
+        assert!((value >> 31) == 0);
+        Self { value }
+    }
+
     /// Convert a constant `u32` array into a constant array of field elements.
     /// This allows inputs to be `> 2^31`, and just reduces them `mod P`.
     ///
-    /// This means that this will be slower than `array.map(Mersenne31::new)` but
+    /// This means that this will be slower than `array.map(Mersenne31::new_checked)` but
     /// has the advantage of being able to be used in `const` environments.
-    #[cfg(test)]
     #[inline]
-    pub(crate) const fn new_array<const N: usize>(input: [u32; N]) -> [Self; N] {
+    pub const fn new_array<const N: usize>(input: [u32; N]) -> [Self; N] {
         let mut output = [Self::ZERO; N];
         let mut i = 0;
         while i < N {
