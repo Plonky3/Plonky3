@@ -29,11 +29,12 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         let half_n = 1 << (lg_n - 1);
 
         if n <= 16 {
-            let mut new_generator = generator
+            let mut new_generator = generator;
             (0..(lg_n - 1))
                 .map(|i| {
-                new_generator.powers().take(half_n >> i).collect()
-                new_generator = new_generator.square()
+                    let powers: Vec<_> = new_generator.powers().take(half_n >> i).collect();
+                    new_generator = new_generator.square();
+                    powers
                 })
                 .collect()
         } else {
