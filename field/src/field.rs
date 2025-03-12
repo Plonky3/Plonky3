@@ -604,7 +604,8 @@ pub trait Field:
 
     /// The elementary function `halve(a) = a/2`.
     ///
-    /// Will error if the field characteristic is 2.
+    /// # Panics
+    /// The function will panic if the field has characteristic 2.
     #[must_use]
     fn halve(&self) -> Self {
         // This should be overwritten by most field implementations.
@@ -618,7 +619,8 @@ pub trait Field:
 
     /// Divide by a given power of two. `div_2exp_u64(a, exp) = a/2^exp`
     ///
-    /// Will error if the field characteristic is 2.
+    /// # Panics
+    /// The function will panic if the field has characteristic 2.
     #[must_use]
     #[inline]
     fn div_2exp_u64(&self, exp: u64) -> Self {
