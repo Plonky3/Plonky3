@@ -193,16 +193,6 @@ pub trait PrimeCharacteristicRing:
         self.andn(self)
     }
 
-    /// The vanishing polynomial of the set of ternary digits (trits, `{0, 1, 2}`) : `x * (1 - x) * (2 - x)`.
-    ///
-    /// This is a polynomial of degree `2` which evaluates to `0` if the input is `0, 1` or `2`.
-    /// If our space is a field, then this will be nonzero on all other inputs.
-    #[must_use]
-    #[inline(always)]
-    fn trit_check(&self) -> Self {
-        self.andn(self) * (Self::TWO - self.clone())
-    }
-
     /// Exponentiation by a `u64` power.
     ///
     /// This uses the standard square and multiply approach.
@@ -294,6 +284,64 @@ pub trait PrimeCharacteristicRing:
     #[inline]
     fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
         u.iter().zip(v).map(|(x, y)| x.clone() * y.clone()).sum()
+    }
+
+    /// Compute the sum of a slice of elements whose length is a compile time constant.
+    ///
+    /// The rust compiler doesn't realize that add is associative
+    /// so we help it out and minimize the dependency chains by hand.
+    /// Thus while this function has the same throughput as `input.iter().sum()`,
+    /// it will usually have much lower latency.
+    ///
+    /// # Panics
+    ///
+    /// May panic if the length of the input slice is not equal to `N`.
+    #[must_use]
+    #[inline]
+    fn sum_array<const N: usize>(input: &[Self]) -> Self {
+        // It looks a little strange but using a const parameter and an assert_eq! instead of
+        // using input.len() leads to a significant performance improvement.
+        // We could make this input &[Self; N] but that would require sticking .try_into().unwrap() everywhere.
+        // Checking godbolt, the compiler seems to unroll everything anyway.
+        assert_eq!(N, input.len());
+
+        // For `N <= 8` we implement a tree sum structure and for `N > 8` we break the input into
+        // chunks of `8`, perform a tree sum on each chunk and sum the results. The parameter `8`
+        // was determined experimentally by testing the speed of the poseidon2 internal layer computations.
+        // This is a useful benchmark as we have a mix of summations of size 15, 23 with other work in between.
+        // I only tested this on `AVX2` though so there might be a better value for other architectures.
+        match N {
+            0 => Self::ZERO,
+            1 => input[0].clone(),
+            2 => input[0].clone() + input[1].clone(),
+            3 => input[0].clone() + input[1].clone() + input[2].clone(),
+            4 => (input[0].clone() + input[1].clone()) + (input[2].clone() + input[3].clone()),
+            5 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<1>(&input[4..]),
+            6 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<2>(&input[4..]),
+            7 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<3>(&input[4..]),
+            8 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<4>(&input[4..]),
+            _ => {
+                // We know that N > 8 here so this saves an add over the usual
+                // initialisation of acc to Self::ZERO.
+                let mut acc = Self::sum_array::<8>(&input[..8]);
+                for i in (16..=N).step_by(8) {
+                    acc += Self::sum_array::<8>(&input[(i - 8)..i])
+                }
+                // This would be much cleaner if we could use const generic expressions but
+                // this will do for now.
+                match N & 7 {
+                    0 => acc,
+                    1 => acc + Self::sum_array::<1>(&input[(8 * (N / 8))..]),
+                    2 => acc + Self::sum_array::<2>(&input[(8 * (N / 8))..]),
+                    3 => acc + Self::sum_array::<3>(&input[(8 * (N / 8))..]),
+                    4 => acc + Self::sum_array::<4>(&input[(8 * (N / 8))..]),
+                    5 => acc + Self::sum_array::<5>(&input[(8 * (N / 8))..]),
+                    6 => acc + Self::sum_array::<6>(&input[(8 * (N / 8))..]),
+                    7 => acc + Self::sum_array::<7>(&input[(8 * (N / 8))..]),
+                    _ => unreachable!(),
+                }
+            }
+        }
     }
 
     /// Allocates a vector of zero elements of length `len`. Many operating systems zero pages

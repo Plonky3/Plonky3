@@ -119,16 +119,14 @@ pub fn add3<AB: AirBuilder>(
     let acc_32 = a[1] - b[1] - c[1].clone() - d[1].clone();
     let acc = acc_16.clone() + AB::Expr::from_prime_subfield(two_16) * acc_32;
 
-    builder.assert_zero(
+    builder.assert_zeros([
         acc.clone()
             * (acc.clone() + AB::Expr::from_prime_subfield(two_32))
             * (acc + AB::Expr::from_prime_subfield(two_32.double())),
-    );
-    builder.assert_zero(
         acc_16.clone()
             * (acc_16.clone() + AB::Expr::from_prime_subfield(two_16))
             * (acc_16 + AB::Expr::from_prime_subfield(two_16.double())),
-    );
+    ]);
 }
 
 /// Verify that `a = b + c mod 2^32`
@@ -181,8 +179,10 @@ pub fn add2<AB: AirBuilder>(
     let acc_32 = a[1] - b[1] - c[1].clone();
     let acc = acc_16.clone() + AB::Expr::from_prime_subfield(two_16) * acc_32;
 
-    builder.assert_zero(acc.clone() * (acc + AB::Expr::from_prime_subfield(two_32)));
-    builder.assert_zero(acc_16.clone() * (acc_16 + AB::Expr::from_prime_subfield(two_16)));
+    builder.assert_zeros([
+        acc.clone() * (acc + AB::Expr::from_prime_subfield(two_32)),
+        acc_16.clone() * (acc_16 + AB::Expr::from_prime_subfield(two_16)),
+    ]);
 }
 
 /// Verify that `a = (b ^ (c << shift))`
@@ -199,7 +199,7 @@ pub fn xor_32_shift<AB: AirBuilder>(
     shift: usize,
 ) {
     // First we range check all elements of c.
-    c.iter().for_each(|&elem| builder.assert_bool(elem));
+    builder.assert_bools(*c);
 
     // Next we compute (b ^ (c << shift)) and pack the result into two 16-bit integers.
     let xor_shift_c_0_16 = b[..16]
@@ -216,6 +216,5 @@ pub fn xor_32_shift<AB: AirBuilder>(
 
     // As both b and c have been range checked to be boolean, all the (b ^ (c << shift))
     // are also boolean and so this final check additionally has the effect of range checking a[0], a[1].
-    builder.assert_eq(a[0], sum_0_16);
-    builder.assert_eq(a[1], sum_16_32);
+    builder.assert_zeros([a[0] - sum_0_16, a[1] - sum_16_32]);
 }

@@ -166,6 +166,21 @@ impl PrimeCharacteristicRing for Goldilocks {
     }
 
     #[inline]
+    fn sum_array<const N: usize>(input: &[Self]) -> Self {
+        assert_eq!(N, input.len());
+        // Benchmarking shows that for N <= 3 it's faster to sum the elements directly
+        // but for N > 3 it's faster to use the .sum() methods which passes through u128's
+        // allowing for delayed reductions.
+        match N {
+            0 => Self::ZERO,
+            1 => input[0],
+            2 => input[0] + input[1],
+            3 => input[0] + input[1] + input[2],
+            _ => input.iter().copied().sum(),
+        }
+    }
+
+    #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: repr(transparent) ensures transmutation safety.
         unsafe { transmute(vec![0u64; len]) }
@@ -626,7 +641,11 @@ mod tests {
         assert_eq!(F::TWO.injective_exp_n().injective_exp_root_n(), F::TWO);
     }
 
-    test_field!(crate::Goldilocks);
+    // Goldilocks has a redundant representation for both 0 and 1.
+    const ZEROS: [Goldilocks; 2] = [Goldilocks::ZERO, Goldilocks::new(P)];
+    const ONES: [Goldilocks; 2] = [Goldilocks::ONE, Goldilocks::new(P + 1)];
+
+    test_field!(crate::Goldilocks, &super::ZEROS, &super::ONES);
     test_prime_field!(crate::Goldilocks);
     test_prime_field_64!(crate::Goldilocks);
     test_two_adic_field!(crate::Goldilocks);

@@ -477,7 +477,7 @@ unsafe fn interleave4(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
 mod tests {
     use p3_field_testing::test_packed_field;
 
-    use super::{Goldilocks, WIDTH};
+    use super::{Goldilocks, PackedGoldilocksAVX512, WIDTH};
 
     const SPECIAL_VALS: [Goldilocks; WIDTH] = Goldilocks::new_array([
         0xFFFF_FFFF_0000_0001,
@@ -490,9 +490,32 @@ mod tests {
         0x0FFF_FFFF_F000_0000,
     ]);
 
+    const ZEROS: PackedGoldilocksAVX512 = PackedGoldilocksAVX512(Goldilocks::new_array([
+        0x0000_0000_0000_0000,
+        0xFFFF_FFFF_0000_0001,
+        0x0000_0000_0000_0000,
+        0xFFFF_FFFF_0000_0001,
+        0x0000_0000_0000_0000,
+        0xFFFF_FFFF_0000_0001,
+        0x0000_0000_0000_0000,
+        0xFFFF_FFFF_0000_0001,
+    ]));
+
+    const ONES: PackedGoldilocksAVX512 = PackedGoldilocksAVX512(Goldilocks::new_array([
+        0x0000_0000_0000_0001,
+        0xFFFF_FFFF_0000_0002,
+        0x0000_0000_0000_0001,
+        0xFFFF_FFFF_0000_0002,
+        0x0000_0000_0000_0001,
+        0xFFFF_FFFF_0000_0002,
+        0x0000_0000_0000_0001,
+        0xFFFF_FFFF_0000_0002,
+    ]));
+
     test_packed_field!(
         crate::PackedGoldilocksAVX512,
-        crate::PackedGoldilocksAVX512::ZERO,
+        &[super::ZEROS],
+        &[super::ONES],
         crate::PackedGoldilocksAVX512(super::SPECIAL_VALS)
     );
 }
