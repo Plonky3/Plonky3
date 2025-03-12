@@ -29,8 +29,12 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         let half_n = 1 << (lg_n - 1);
 
         if n <= 16 {
+            let mut new_generator = generator
             (0..(lg_n - 1))
-                .map(|i| generator.powers().take(half_n).step_by(1 << i).collect())
+                .map(|i| {
+                new_generator.powers().take(half_n >> i).collect()
+                new_generator = new_generator.square()
+                })
                 .collect()
         } else {
             // nth_roots = [1, g, g^2, g^3, ..., g^{n/2 - 1}]
