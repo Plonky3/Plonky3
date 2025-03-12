@@ -158,6 +158,16 @@ where
 
     let mut alpha_powers = alpha.powers().take(constraint_count).collect_vec();
     alpha_powers.reverse();
+    // alpha powers looks like Vec<EF> ~ Vec<[F; D]>
+    // It's useful to also have access to the the transpose of this of form [Vec<F>; D].
+    let decomposed_alpha_powers: Vec<_> = (0..SC::Challenge::DIMENSION)
+        .map(|i| {
+            alpha_powers
+                .iter()
+                .map(|x| x.as_basis_coefficients_slice()[i])
+                .collect()
+        })
+        .collect();
 
     (0..quotient_size)
         .into_par_iter()
@@ -183,6 +193,7 @@ where
                 is_last_row,
                 is_transition,
                 alpha_powers: &alpha_powers,
+                decomposed_alpha_powers: &decomposed_alpha_powers,
                 accumulator,
                 constraint_index: 0,
             };

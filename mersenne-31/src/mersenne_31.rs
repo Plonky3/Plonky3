@@ -160,6 +160,27 @@ impl PrimeCharacteristicRing for Mersenne31 {
     }
 
     #[inline]
+    fn sum_array<const N: usize>(input: &[Self]) -> Self {
+        assert_eq!(N, input.len());
+        // Benchmarking shows that for N <= 5 it's faster to sum the elements directly
+        // but for N > 5 it's faster to use the .sum() methods which passes through u64's
+        // allowing for delayed reductions.
+        match N {
+            0 => Self::ZERO,
+            1 => input[0],
+            2 => input[0] + input[1],
+            3 => input[0] + input[1] + input[2],
+            4 => (input[0] + input[1]) + (input[2] + input[3]),
+            5 => {
+                let lhs = input[0] + input[1];
+                let rhs = input[2] + input[3];
+                lhs + rhs + input[4]
+            }
+            _ => input.iter().copied().sum(),
+        }
+    }
+
+    #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: repr(transparent) ensures transmutation safety.
         unsafe { transmute(vec![0u32; len]) }
@@ -555,7 +576,11 @@ mod tests {
         assert_eq!(F::TWO.injective_exp_n().injective_exp_root_n(), F::TWO);
     }
 
-    test_field!(crate::Mersenne31);
+    // Mersenne31 has a redundant representation of Zero but no redundant representation of One.
+    const ZEROS: [Mersenne31; 2] = [Mersenne31::ZERO, Mersenne31::new((1_u32 << 31) - 1)];
+    const ONES: [Mersenne31; 1] = [Mersenne31::ONE];
+
+    test_field!(crate::Mersenne31, &super::ZEROS, &super::ONES);
     test_prime_field!(crate::Mersenne31);
     test_prime_field_64!(crate::Mersenne31);
     test_prime_field_32!(crate::Mersenne31);

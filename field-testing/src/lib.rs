@@ -15,40 +15,203 @@ pub use dft_testing::*;
 use num_bigint::BigUint;
 use num_traits::identities::One;
 use p3_field::{
-    ExtensionField, Field, TwoAdicField, cyclic_subgroup_coset_known_order,
-    cyclic_subgroup_known_order, two_adic_coset_vanishing_polynomial,
-    two_adic_subgroup_vanishing_polynomial,
+    ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField,
+    cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order,
+    two_adic_coset_vanishing_polynomial, two_adic_subgroup_vanishing_polynomial,
 };
 pub use packedfield_testing::*;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 
 #[allow(clippy::eq_op)]
-pub fn test_add_neg_sub_mul<F: Field>()
+pub fn test_ring_with_eq<R: PrimeCharacteristicRing + Copy + Eq>(zeros: &[R], ones: &[R])
 where
-    StandardUniform: Distribution<F>,
+    StandardUniform: Distribution<R> + Distribution<[R; 16]>,
 {
+    // zeros should be a vector containing differenent representatives of `R::ZERO`.
+    // ones should be a vector containing differenent representatives of `R::ONE`.
     let mut rng = rand::rng();
-    let x = rng.random::<F>();
-    let y = rng.random::<F>();
-    let z = rng.random::<F>();
-    assert_eq!(F::ONE + F::NEG_ONE, F::ZERO);
-    assert_eq!(x + (-x), F::ZERO);
-    assert_eq!(F::ONE + F::ONE, F::TWO);
-    assert_eq!(-x, F::ZERO - x);
-    assert_eq!(x + x, x * F::TWO);
-    assert_eq!(x * F::TWO, x.double());
-    assert_eq!(x, x.halve() * F::TWO);
-    assert_eq!(x * (-x), -x.square());
-    assert_eq!(x + y, y + x);
-    assert_eq!(x * F::ZERO, F::ZERO);
-    assert_eq!(x * F::ONE, x);
-    assert_eq!(x * y, y * x);
-    assert_eq!(x * (y * z), (x * y) * z);
-    assert_eq!(x - (y + z), (x - y) - z);
-    assert_eq!((x + y) - z, x + (y - z));
-    assert_eq!(x * (y + z), x * y + x * z);
-    assert_eq!(x + y + z + x + y + z, [x, x, y, y, z, z].into_iter().sum());
+    let x = rng.random::<R>();
+    let y = rng.random::<R>();
+    let z = rng.random::<R>();
+    assert_eq!(R::ONE + R::NEG_ONE, R::ZERO, "Error 1 + (-1) =/= 0");
+    assert_eq!(R::NEG_ONE + R::TWO, R::ONE, "Error -1 + 2 =/= 1");
+    assert_eq!(x + (-x), R::ZERO, "Error x + (-x) =/= 0");
+    assert_eq!(R::ONE + R::ONE, R::TWO, "Error 1 + 1 =/= 2");
+    assert_eq!(-(-x), x, "Error when testing double negation");
+    assert_eq!(x + x, x * R::TWO, "Error when comparing x * 2 to x + x");
+    assert_eq!(
+        x * R::TWO,
+        x.double(),
+        "Error when comparing x.double() to x * 2"
+    );
+
+    // Check different representatives of Zero.
+    for zero in zeros.iter().copied() {
+        assert_eq!(zero, R::ZERO);
+        assert_eq!(x + zero, x, "Error when testing additive identity right.");
+        assert_eq!(zero + x, x, "Error when testing additive identity left.");
+        assert_eq!(x - zero, x, "Error when testing subtracting zero.");
+        assert_eq!(zero - x, -x, "Error when testing subtracting  from zero.");
+        assert_eq!(
+            x * zero,
+            zero,
+            "Error when testing right multiplication by 0."
+        );
+        assert_eq!(
+            zero * x,
+            zero,
+            "Error when testing left multiplication by 0."
+        );
+    }
+
+    // Check different representatives of One.
+    for one in ones.iter().copied() {
+        assert_eq!(one, R::ONE);
+        assert_eq!(one * one, one);
+        assert_eq!(
+            x * one,
+            x,
+            "Error when testing multiplicative identity right."
+        );
+        assert_eq!(
+            one * x,
+            x,
+            "Error when testing multiplicative identity left."
+        );
+    }
+
+    assert_eq!(
+        x * R::NEG_ONE,
+        -x,
+        "Error when testing right multiplication by -1."
+    );
+    assert_eq!(
+        R::NEG_ONE * x,
+        -x,
+        "Error when testing left multiplication by -1."
+    );
+    assert_eq!(x * x, x.square(), "Error when testing x * x = x.square()");
+    assert_eq!(
+        x * x * x,
+        x.cube(),
+        "Error when testing x * x * x = x.cube()"
+    );
+    assert_eq!(x + y, y + x, "Error when testing commutativity of addition");
+    assert_eq!(
+        (x - y),
+        -(y - x),
+        "Error when testing anticommutativity of sub."
+    );
+    assert_eq!(
+        x * y,
+        y * x,
+        "Error when testing commutativity of multiplication."
+    );
+    assert_eq!(
+        x + (y + z),
+        (x + y) + z,
+        "Error when testing associativity of addition"
+    );
+    assert_eq!(
+        x * (y * z),
+        (x * y) * z,
+        "Error when testing associativity of multiplication."
+    );
+    assert_eq!(
+        x - (y - z),
+        (x - y) + z,
+        "Error when testing subtraction and addition"
+    );
+    assert_eq!(
+        x - (y + z),
+        (x - y) - z,
+        "Error when testing subtraction and addition"
+    );
+    assert_eq!(
+        (x + y) - z,
+        x + (y - z),
+        "Error when testing subtraction and addition"
+    );
+    assert_eq!(
+        x * (-y),
+        -(x * y),
+        "Error when testing distributivity of mul and right neg."
+    );
+    assert_eq!(
+        (-x) * y,
+        -(x * y),
+        "Error when testing distributivity of mul and left neg."
+    );
+
+    assert_eq!(
+        x * (y + z),
+        x * y + x * z,
+        "Error when testing distributivity of add and left mul."
+    );
+    assert_eq!(
+        (x + y) * z,
+        x * z + y * z,
+        "Error when testing distributivity of add and right mul."
+    );
+    assert_eq!(
+        x * (y - z),
+        x * y - x * z,
+        "Error when testing distributivity of sub and left mul."
+    );
+    assert_eq!(
+        (x - y) * z,
+        x * z - y * z,
+        "Error when testing distributivity of sub and right mul."
+    );
+
+    let vec1: [R; 64] = rng.random();
+    let vec2: [R; 64] = rng.random();
+    test_sums(&vec1[..16].try_into().unwrap());
+    test_dot_product(&vec1, &vec2);
+
+    assert_eq!(
+        x.exp_const_u64::<0>(),
+        R::ONE,
+        "Error when comparing x.exp_const_u64::<0> to R::ONE."
+    );
+    assert_eq!(
+        x.exp_const_u64::<1>(),
+        x,
+        "Error when comparing x.exp_const_u64::<3> to x."
+    );
+    assert_eq!(
+        x.exp_const_u64::<2>(),
+        x * x,
+        "Error when comparing x.exp_const_u64::<3> to x*x."
+    );
+    assert_eq!(
+        x.exp_const_u64::<3>(),
+        x * x * x,
+        "Error when comparing x.exp_const_u64::<3> to x*x*x."
+    );
+    assert_eq!(
+        x.exp_const_u64::<4>(),
+        x * x * x * x,
+        "Error when comparing x.exp_const_u64::<3> to x*x*x*x."
+    );
+    assert_eq!(
+        x.exp_const_u64::<5>(),
+        x * x * x * x * x,
+        "Error when comparing x.exp_const_u64::<5> to x*x*x*x*x."
+    );
+    assert_eq!(
+        x.exp_const_u64::<6>(),
+        x * x * x * x * x * x,
+        "Error when comparing x.exp_const_u64::<7> to x*x*x*x*x*x."
+    );
+    assert_eq!(
+        x.exp_const_u64::<7>(),
+        x * x * x * x * x * x * x,
+        "Error when comparing x.exp_const_u64::<7> to x*x*x*x*x*x*x."
+    );
+
+    test_binary_ops(zeros, ones, x, y, z);
 }
 
 pub fn test_inv_div<F: Field>()
@@ -59,6 +222,7 @@ where
     let x = rng.random::<F>();
     let y = rng.random::<F>();
     let z = rng.random::<F>();
+    assert_eq!(x, x.halve() * F::TWO);
     assert_eq!(x * x.inverse(), F::ONE);
     assert_eq!(x.inverse() * x, F::ONE);
     assert_eq!(x.square().inverse(), x.inverse().square());
@@ -84,6 +248,234 @@ where
             assert_eq!(x * z, F::ONE);
         }
     }
+}
+
+pub fn test_dot_product<R: PrimeCharacteristicRing + Eq + Copy>(u: &[R; 64], v: &[R; 64]) {
+    let mut dot = R::ZERO;
+    assert_eq!(
+        dot,
+        R::dot_product::<0>(u[..0].try_into().unwrap(), v[..0].try_into().unwrap())
+    );
+    dot += u[0] * v[0];
+    assert_eq!(
+        dot,
+        R::dot_product::<1>(u[..1].try_into().unwrap(), v[..1].try_into().unwrap())
+    );
+    dot += u[1] * v[1];
+    assert_eq!(
+        dot,
+        R::dot_product::<2>(u[..2].try_into().unwrap(), v[..2].try_into().unwrap())
+    );
+    dot += u[2] * v[2];
+    assert_eq!(
+        dot,
+        R::dot_product::<3>(u[..3].try_into().unwrap(), v[..3].try_into().unwrap())
+    );
+    dot += u[3] * v[3];
+    assert_eq!(
+        dot,
+        R::dot_product::<4>(u[..4].try_into().unwrap(), v[..4].try_into().unwrap())
+    );
+    dot += u[4] * v[4];
+    assert_eq!(
+        dot,
+        R::dot_product::<5>(u[..5].try_into().unwrap(), v[..5].try_into().unwrap())
+    );
+    dot += u[5] * v[5];
+    assert_eq!(
+        dot,
+        R::dot_product::<6>(u[..6].try_into().unwrap(), v[..6].try_into().unwrap())
+    );
+    dot += u[6] * v[6];
+    assert_eq!(
+        dot,
+        R::dot_product::<7>(u[..7].try_into().unwrap(), v[..7].try_into().unwrap())
+    );
+    dot += u[7] * v[7];
+    assert_eq!(
+        dot,
+        R::dot_product::<8>(u[..8].try_into().unwrap(), v[..8].try_into().unwrap())
+    );
+    dot += u[8] * v[8];
+    assert_eq!(
+        dot,
+        R::dot_product::<9>(u[..9].try_into().unwrap(), v[..9].try_into().unwrap())
+    );
+    dot += u[9] * v[9];
+    assert_eq!(
+        dot,
+        R::dot_product::<10>(u[..10].try_into().unwrap(), v[..10].try_into().unwrap())
+    );
+    dot += u[10] * v[10];
+    assert_eq!(
+        dot,
+        R::dot_product::<11>(u[..11].try_into().unwrap(), v[..11].try_into().unwrap())
+    );
+    dot += u[11] * v[11];
+    assert_eq!(
+        dot,
+        R::dot_product::<12>(u[..12].try_into().unwrap(), v[..12].try_into().unwrap())
+    );
+    dot += u[12] * v[12];
+    assert_eq!(
+        dot,
+        R::dot_product::<13>(u[..13].try_into().unwrap(), v[..13].try_into().unwrap())
+    );
+    dot += u[13] * v[13];
+    assert_eq!(
+        dot,
+        R::dot_product::<14>(u[..14].try_into().unwrap(), v[..14].try_into().unwrap())
+    );
+    dot += u[14] * v[14];
+    assert_eq!(
+        dot,
+        R::dot_product::<15>(u[..15].try_into().unwrap(), v[..15].try_into().unwrap())
+    );
+    dot += u[15] * v[15];
+    assert_eq!(
+        dot,
+        R::dot_product::<16>(u[..16].try_into().unwrap(), v[..16].try_into().unwrap())
+    );
+
+    let dot_64: R = u
+        .iter()
+        .zip(v.iter())
+        .fold(R::ZERO, |acc, (&lhs, &rhs)| acc + (lhs * rhs));
+    assert_eq!(dot_64, R::dot_product::<64>(u, v));
+}
+
+pub fn test_sums<R: PrimeCharacteristicRing + Eq + Copy>(u: &[R; 16]) {
+    let mut sum = R::ZERO;
+    assert_eq!(sum, R::sum_array::<0>(u[..0].try_into().unwrap()));
+    assert_eq!(sum, u[..0].iter().copied().sum());
+    sum += u[0];
+    assert_eq!(sum, R::sum_array::<1>(u[..1].try_into().unwrap()));
+    assert_eq!(sum, u[..1].iter().copied().sum());
+    sum += u[1];
+    assert_eq!(sum, R::sum_array::<2>(u[..2].try_into().unwrap()));
+    assert_eq!(sum, u[..2].iter().copied().sum());
+    sum += u[2];
+    assert_eq!(sum, R::sum_array::<3>(u[..3].try_into().unwrap()));
+    assert_eq!(sum, u[..3].iter().copied().sum());
+    sum += u[3];
+    assert_eq!(sum, R::sum_array::<4>(u[..4].try_into().unwrap()));
+    assert_eq!(sum, u[..4].iter().copied().sum());
+    sum += u[4];
+    assert_eq!(sum, R::sum_array::<5>(u[..5].try_into().unwrap()));
+    assert_eq!(sum, u[..5].iter().copied().sum());
+    sum += u[5];
+    assert_eq!(sum, R::sum_array::<6>(u[..6].try_into().unwrap()));
+    assert_eq!(sum, u[..6].iter().copied().sum());
+    sum += u[6];
+    assert_eq!(sum, R::sum_array::<7>(u[..7].try_into().unwrap()));
+    assert_eq!(sum, u[..7].iter().copied().sum());
+    sum += u[7];
+    assert_eq!(sum, R::sum_array::<8>(u[..8].try_into().unwrap()));
+    assert_eq!(sum, u[..8].iter().copied().sum());
+    sum += u[8];
+    assert_eq!(sum, R::sum_array::<9>(u[..9].try_into().unwrap()));
+    assert_eq!(sum, u[..9].iter().copied().sum());
+    sum += u[9];
+    assert_eq!(sum, R::sum_array::<10>(u[..10].try_into().unwrap()));
+    assert_eq!(sum, u[..10].iter().copied().sum());
+    sum += u[10];
+    assert_eq!(sum, R::sum_array::<11>(u[..11].try_into().unwrap()));
+    assert_eq!(sum, u[..11].iter().copied().sum());
+    sum += u[11];
+    assert_eq!(sum, R::sum_array::<12>(u[..12].try_into().unwrap()));
+    assert_eq!(sum, u[..12].iter().copied().sum());
+    sum += u[12];
+    assert_eq!(sum, R::sum_array::<13>(u[..13].try_into().unwrap()));
+    assert_eq!(sum, u[..13].iter().copied().sum());
+    sum += u[13];
+    assert_eq!(sum, R::sum_array::<14>(u[..14].try_into().unwrap()));
+    assert_eq!(sum, u[..14].iter().copied().sum());
+    sum += u[14];
+    assert_eq!(sum, R::sum_array::<15>(u[..15].try_into().unwrap()));
+    assert_eq!(sum, u[..15].iter().copied().sum());
+    sum += u[15];
+    assert_eq!(sum, R::sum_array::<16>(u));
+    assert_eq!(sum, u.iter().copied().sum());
+}
+
+pub fn test_binary_ops<R: PrimeCharacteristicRing + Eq + Copy>(
+    zeros: &[R],
+    ones: &[R],
+    x: R,
+    y: R,
+    z: R,
+) {
+    for zero in zeros {
+        for one in ones {
+            assert_eq!(one.xor(one), R::ZERO, "Error when testing xor(1, 1) = 0.");
+            assert_eq!(zero.xor(one), R::ONE, "Error when testing xor(0, 1) = 1.");
+            assert_eq!(one.xor(zero), R::ONE, "Error when testing xor(1, 0) = 1.");
+            assert_eq!(zero.xor(zero), R::ZERO, "Error when testing xor(0, 0) = 0.");
+            assert_eq!(one.andn(one), R::ZERO, "Error when testing andn(1, 1) = 0.");
+            assert_eq!(zero.andn(one), R::ONE, "Error when testing andn(0, 1) = 1.");
+            assert_eq!(
+                one.andn(zero),
+                R::ZERO,
+                "Error when testing andn(1, 0) = 0."
+            );
+            assert_eq!(
+                zero.andn(zero),
+                R::ZERO,
+                "Error when testing andn(0, 0) = 0."
+            );
+            assert_eq!(
+                zero.bool_check(),
+                R::ZERO,
+                "Error when testing bool_check(0) = 0."
+            );
+            assert_eq!(
+                one.bool_check(),
+                R::ZERO,
+                "Error when testing bool_check(1) = 0."
+            );
+        }
+    }
+
+    assert_eq!(
+        R::ONE.xor(&R::NEG_ONE),
+        R::TWO,
+        "Error when testing xor(1, -1) = 2."
+    );
+    assert_eq!(
+        R::NEG_ONE.xor(&R::ONE),
+        R::TWO,
+        "Error when testing xor(-1, 1) = 2."
+    );
+    assert_eq!(
+        R::NEG_ONE.xor(&R::NEG_ONE),
+        R::from_i8(-4),
+        "Error when testing xor(-1, -1) = -4."
+    );
+    assert_eq!(
+        R::ONE.andn(&R::NEG_ONE),
+        R::ZERO,
+        "Error when testing andn(1, -1) = 0."
+    );
+    assert_eq!(
+        R::NEG_ONE.andn(&R::ONE),
+        R::TWO,
+        "Error when testing andn(-1, 1) = 2."
+    );
+    assert_eq!(
+        R::NEG_ONE.andn(&R::NEG_ONE),
+        -R::TWO,
+        "Error when testing andn(-1, -1) = -2."
+    );
+
+    assert_eq!(x.xor(&y), x + y - x * y.double(), "Error when testing xor.");
+
+    assert_eq!(x.andn(&y), (R::ONE - x) * y, "Error when testing andn.");
+
+    assert_eq!(
+        x.xor3(&y, &z),
+        x + y + z - (x * y + x * z + y * z).double() + x * y * z.double().double(),
+        "Error when testing xor3."
+    );
 }
 
 pub fn test_generator<F: Field>() {
@@ -166,11 +558,11 @@ pub fn test_ef_two_adic_generator_consistency<
 
 #[macro_export]
 macro_rules! test_field {
-    ($field:ty) => {
+    ($field:ty, $zeros: expr, $ones: expr) => {
         mod field_tests {
             #[test]
-            fn test_add_neg_sub_mul() {
-                $crate::test_add_neg_sub_mul::<$field>();
+            fn test_ring_with_eq() {
+                $crate::test_ring_with_eq::<$field>($zeros, $ones);
             }
             #[test]
             fn test_inv_div() {

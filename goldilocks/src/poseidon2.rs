@@ -401,7 +401,7 @@ mod tests {
 
     /// Test on the constant 0 input.
     #[test]
-    fn test_poseidon2_width_8_zeroes() {
+    fn test_poseidon2_width_8_zeros() {
         let mut input: [F; 8] = [Goldilocks::ZERO; 8];
 
         let expected: [F; 8] = Goldilocks::new_array([

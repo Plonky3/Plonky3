@@ -101,6 +101,7 @@ impl HasTwoAdicBinomialExtension<5> for Goldilocks {
 #[cfg(test)]
 mod test_quadratic_extension {
 
+    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_field_testing::{test_field, test_two_adic_extension_field};
 
@@ -109,7 +110,12 @@ mod test_quadratic_extension {
     type F = Goldilocks;
     type EF = BinomialExtensionField<F, 2>;
 
-    test_field!(super::EF);
+    // There is a redundant representation of zero but we already tested it
+    // when testing the base field.
+    const ZEROS: [EF; 1] = [EF::ZERO];
+    const ONES: [EF; 1] = [EF::ONE];
+
+    test_field!(super::EF, &super::ZEROS, &super::ONES);
 
     test_two_adic_extension_field!(super::F, super::EF);
 }
@@ -117,6 +123,7 @@ mod test_quadratic_extension {
 #[cfg(test)]
 mod test_quintic_extension {
 
+    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_field_testing::{test_field, test_two_adic_extension_field};
 
@@ -125,7 +132,12 @@ mod test_quintic_extension {
     type F = Goldilocks;
     type EF = BinomialExtensionField<F, 5>;
 
-    test_field!(super::EF);
+    // There is a redundant representation of zero but we already tested it
+    // when testing the base field.
+    const ZEROS: [EF; 1] = [EF::ZERO];
+    const ONES: [EF; 1] = [EF::ONE];
+
+    test_field!(super::EF, &super::ZEROS, &super::ONES);
 
     test_two_adic_extension_field!(super::F, super::EF);
 }

@@ -1,6 +1,6 @@
 use core::mem::MaybeUninit;
 use core::ops::Div;
-use core::slice;
+use core::{array, slice};
 
 use crate::field::Field;
 use crate::{Algebra, BasedVectorSpace, ExtensionField, Powers, PrimeCharacteristicRing};
@@ -162,6 +162,20 @@ pub unsafe trait PackedField: Algebra<Self::Scalar>
             base: base.exp_u64(Self::WIDTH as u64).into(),
             current,
         }
+    }
+
+    /// Compute a linear combination of a slice of base field elements and
+    /// a slice of packed field elements. The slices must have equal length
+    /// and it must be a compile time constant.
+    /// 
+    /// # Panics
+    ///
+    /// May panic if the length of either slice is not equal to `N`.
+    fn packed_linear_combination<const N: usize>(coeffs: &[Self::Scalar], vecs: &[Self]) -> Self {
+        assert_eq!(coeffs.len(), N);
+        assert_eq!(vecs.len(), N);
+        let combined: [Self; N] = array::from_fn(|i| vecs[i] * coeffs[i]);
+        Self::sum_array::<N>(&combined)
     }
 }
 

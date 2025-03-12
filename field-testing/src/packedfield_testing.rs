@@ -94,319 +94,54 @@ where
     }
 }
 
-#[allow(clippy::eq_op)]
-pub fn test_add_neg<PF>(zeros: PF)
+pub fn test_packed_linear_combination<PF: PackedField + Eq>()
 where
-    PF: PackedField + Eq,
-    StandardUniform: Distribution<PF::Scalar>,
+    StandardUniform: Distribution<PF> + Distribution<PF::Scalar>,
 {
-    let vec0 = packed_from_random::<PF>(0x8b078c2b693c893f);
-    let vec1 = packed_from_random::<PF>(0x4ff5dec04791e481);
-    let vec2 = packed_from_random::<PF>(0x5806c495e9451f8e);
+    let mut rng = rand::rng();
+    let u: [PF::Scalar; 64] = rng.random();
+    let v: [PF; 64] = rng.random();
 
-    assert_eq!(
-        (vec0 + vec1) + vec2,
-        vec0 + (vec1 + vec2),
-        "Error when testing associativity of add."
-    );
-    assert_eq!(
-        vec0 + vec1,
-        vec1 + vec0,
-        "Error when testing commutativity of add."
-    );
-    assert_eq!(
-        vec0,
-        vec0 + zeros,
-        "Error when testing additive identity right."
-    );
-    assert_eq!(
-        vec0,
-        zeros + vec0,
-        "Error when testing additive identity left."
-    );
-    assert_eq!(
-        vec0 + (-vec0),
-        PF::ZERO,
-        "Error when testing additive inverse."
-    );
-    assert_eq!(
-        vec0 - vec0,
-        PF::ZERO,
-        "Error when testing subtracting of self."
-    );
-    assert_eq!(
-        vec0 - vec1,
-        -(vec1 - vec0),
-        "Error when testing anticommutativity of sub."
-    );
-    assert_eq!(vec0, vec0 - zeros, "Error when testing subtracting zero.");
-    assert_eq!(
-        -vec0,
-        zeros - vec0,
-        "Error when testing subtracting from zero"
-    );
-    assert_eq!(vec0, -(-vec0), "Error when testing double negation");
-    assert_eq!(
-        vec0 - vec1,
-        vec0 + (-vec1),
-        "Error when testing addition of negation"
-    );
-    assert_eq!(PF::ONE + PF::ONE, PF::TWO, "Error 1 + 1 =/= 2");
-    assert_eq!(PF::NEG_ONE + PF::TWO, PF::ONE, "Error -1 + 2 =/= 1");
-    assert_eq!(
-        vec0.double(),
-        vec0 + vec0,
-        "Error when comparing x.double() to x + x"
-    );
-}
+    let mut dot = PF::ZERO;
+    assert_eq!(dot, PF::packed_linear_combination::<0>(&u[..0], &v[..0]));
+    dot += v[0] * u[0];
+    assert_eq!(dot, PF::packed_linear_combination::<1>(&u[..1], &v[..1]));
+    dot += v[1] * u[1];
+    assert_eq!(dot, PF::packed_linear_combination::<2>(&u[..2], &v[..2]));
+    dot += v[2] * u[2];
+    assert_eq!(dot, PF::packed_linear_combination::<3>(&u[..3], &v[..3]));
+    dot += v[3] * u[3];
+    assert_eq!(dot, PF::packed_linear_combination::<4>(&u[..4], &v[..4]));
+    dot += v[4] * u[4];
+    assert_eq!(dot, PF::packed_linear_combination::<5>(&u[..5], &v[..5]));
+    dot += v[5] * u[5];
+    assert_eq!(dot, PF::packed_linear_combination::<6>(&u[..6], &v[..6]));
+    dot += v[6] * u[6];
+    assert_eq!(dot, PF::packed_linear_combination::<7>(&u[..7], &v[..7]));
+    dot += v[7] * u[7];
+    assert_eq!(dot, PF::packed_linear_combination::<8>(&u[..8], &v[..8]));
+    dot += v[8] * u[8];
+    assert_eq!(dot, PF::packed_linear_combination::<9>(&u[..9], &v[..9]));
+    dot += v[9] * u[9];
+    assert_eq!(dot, PF::packed_linear_combination::<10>(&u[..10], &v[..10]));
+    dot += v[10] * u[10];
+    assert_eq!(dot, PF::packed_linear_combination::<11>(&u[..11], &v[..11]));
+    dot += v[11] * u[11];
+    assert_eq!(dot, PF::packed_linear_combination::<12>(&u[..12], &v[..12]));
+    dot += v[12] * u[12];
+    assert_eq!(dot, PF::packed_linear_combination::<13>(&u[..13], &v[..13]));
+    dot += v[13] * u[13];
+    assert_eq!(dot, PF::packed_linear_combination::<14>(&u[..14], &v[..14]));
+    dot += v[14] * u[14];
+    assert_eq!(dot, PF::packed_linear_combination::<15>(&u[..15], &v[..15]));
+    dot += v[15] * u[15];
+    assert_eq!(dot, PF::packed_linear_combination::<16>(&u[..16], &v[..16]));
 
-pub fn test_mul<PF>(zeros: PF)
-where
-    PF: PackedField + Eq,
-    StandardUniform: Distribution<PF::Scalar>,
-{
-    let vec0 = packed_from_random::<PF>(0x0b1ee4d7c979d50c);
-    let vec1 = packed_from_random::<PF>(0x39faa0844a36e45a);
-    let vec2 = packed_from_random::<PF>(0x08fac4ee76260e44);
-
-    assert_eq!(
-        (vec0 * vec1) * vec2,
-        vec0 * (vec1 * vec2),
-        "Error when testing associativity of mul."
-    );
-    assert_eq!(
-        vec0 * vec1,
-        vec1 * vec0,
-        "Error when testing commutativity of mul."
-    );
-    assert_eq!(
-        vec0,
-        vec0 * PF::ONE,
-        "Error when testing multiplicative identity right."
-    );
-    assert_eq!(
-        vec0,
-        PF::ONE * vec0,
-        "Error when testing multiplicative identity left."
-    );
-    assert_eq!(
-        vec0 * zeros,
-        PF::ZERO,
-        "Error when testing right multiplication by 0."
-    );
-    assert_eq!(
-        zeros * vec0,
-        PF::ZERO,
-        "Error when testing left multiplication by 0."
-    );
-    assert_eq!(
-        vec0 * PF::NEG_ONE,
-        -(vec0),
-        "Error when testing right multiplication by -1."
-    );
-    assert_eq!(
-        PF::NEG_ONE * vec0,
-        -(vec0),
-        "Error when testing left multiplication by -1."
-    );
-    assert_eq!(
-        vec0.double(),
-        PF::TWO * vec0,
-        "Error when comparing x.double() to 2 * x."
-    );
-    assert_eq!(
-        vec0.exp_const_u64::<3>(),
-        vec0 * vec0 * vec0,
-        "Error when comparing x.exp_const_u64::<3> to x*x*x."
-    );
-    assert_eq!(
-        vec0.exp_const_u64::<5>(),
-        vec0 * vec0 * vec0 * vec0 * vec0,
-        "Error when comparing x.exp_const_u64::<5> to x*x*x*x*x."
-    );
-    assert_eq!(
-        vec0.exp_const_u64::<7>(),
-        vec0 * vec0 * vec0 * vec0 * vec0 * vec0 * vec0,
-        "Error when comparing x.exp_const_u64::<7> to x*x*x*x*x*x*x."
-    );
-}
-
-pub fn test_binary_ops<PF>(special_values: PF)
-where
-    PF: PackedField + Eq,
-    StandardUniform: Distribution<PF::Scalar>,
-{
-    let vec0 = packed_from_random::<PF>(0x0b1ee4d7c979d50c);
-    let vec1 = packed_from_random::<PF>(0x39faa0844a36e45a);
-    let vec2 = packed_from_random::<PF>(0x08fac4ee76260e44);
-
-    assert_eq!(
-        PF::ONE.xor(&PF::ONE),
-        PF::ZERO,
-        "Error when testing xor(1, 1) = 0."
-    );
-    assert_eq!(
-        PF::ZERO.xor(&PF::ONE),
-        PF::ONE,
-        "Error when testing xor(0, 1) = 1."
-    );
-    assert_eq!(
-        PF::ONE.xor(&PF::ZERO),
-        PF::ONE,
-        "Error when testing xor(1, 0) = 1."
-    );
-    assert_eq!(
-        PF::ZERO.xor(&PF::ZERO),
-        PF::ZERO,
-        "Error when testing xor(0, 0) = 0."
-    );
-    assert_eq!(
-        PF::ONE.andn(&PF::ONE),
-        PF::ZERO,
-        "Error when testing andn(1, 1) = 0."
-    );
-    assert_eq!(
-        PF::ZERO.andn(&PF::ONE),
-        PF::ONE,
-        "Error when testing andn(0, 1) = 1."
-    );
-    assert_eq!(
-        PF::ONE.andn(&PF::ZERO),
-        PF::ZERO,
-        "Error when testing andn(1, 0) = 0."
-    );
-    assert_eq!(
-        PF::ZERO.andn(&PF::ZERO),
-        PF::ZERO,
-        "Error when testing andn(0, 0) = 0."
-    );
-
-    assert_eq!(
-        PF::ONE.xor(&PF::NEG_ONE),
-        PF::TWO,
-        "Error when testing xor(1, -1) = 2."
-    );
-    assert_eq!(
-        PF::NEG_ONE.xor(&PF::ONE),
-        PF::TWO,
-        "Error when testing xor(-1, 1) = 2."
-    );
-    assert_eq!(
-        PF::NEG_ONE.xor(&PF::NEG_ONE),
-        PF::from_i8(-4),
-        "Error when testing xor(-1, -1) = -4."
-    );
-    assert_eq!(
-        PF::ONE.andn(&PF::NEG_ONE),
-        PF::ZERO,
-        "Error when testing andn(1, -1) = 0."
-    );
-    assert_eq!(
-        PF::NEG_ONE.andn(&PF::ONE),
-        PF::TWO,
-        "Error when testing andn(-1, 1) = 2."
-    );
-    assert_eq!(
-        PF::NEG_ONE.andn(&PF::NEG_ONE),
-        -PF::TWO,
-        "Error when testing andn(-1, -1) = -2."
-    );
-    assert_eq!(
-        PF::ZERO.bool_check(),
-        PF::ZERO,
-        "Error when testing bool_check(0) = 0."
-    );
-    assert_eq!(
-        PF::ONE.bool_check(),
-        PF::ZERO,
-        "Error when testing bool_check(1) = 0."
-    );
-    assert_eq!(
-        PF::ZERO.trit_check(),
-        PF::ZERO,
-        "Error when testing trit_check(0) = 0."
-    );
-    assert_eq!(
-        PF::ONE.trit_check(),
-        PF::ZERO,
-        "Error when testing trit_check(1) = 0."
-    );
-    assert_eq!(
-        PF::TWO.trit_check(),
-        PF::ZERO,
-        "Error when testing trit_check(2) = 0."
-    );
-
-    assert_eq!(
-        vec0.xor(&vec1),
-        vec0 + vec1 - vec0 * vec1.double(),
-        "Error when testing xor."
-    );
-    assert_eq!(
-        vec0.xor(&special_values),
-        vec0 + special_values - vec0 * special_values.double(),
-        "Error when testing xor on special_values vector."
-    );
-
-    assert_eq!(
-        vec0.andn(&vec1),
-        (PF::ONE - vec0) * vec1,
-        "Error when testing andn."
-    );
-    assert_eq!(
-        vec0.andn(&special_values),
-        (PF::ONE - vec0) * special_values,
-        "Error when testing andn on special_values vector."
-    );
-
-    assert_eq!(
-        vec0.xor3(&vec1, &vec2),
-        vec0 + vec1 + vec2 - (vec0 * vec1 + vec0 * vec2 + vec1 * vec2).double()
-            + vec0 * vec1 * vec2.double().double(),
-        "Error when testing xor3."
-    );
-}
-
-pub fn test_distributivity<PF>()
-where
-    PF: PackedField + Eq,
-    StandardUniform: Distribution<PF::Scalar>,
-{
-    let vec0 = packed_from_random::<PF>(0x278d9e202925a1d1);
-    let vec1 = packed_from_random::<PF>(0xf04cbac0cbad419f);
-    let vec2 = packed_from_random::<PF>(0x76976e2abdc5a056);
-
-    assert_eq!(
-        vec0 * (-vec1),
-        -(vec0 * vec1),
-        "Error when testing distributivity of mul and right neg."
-    );
-    assert_eq!(
-        (-vec0) * vec1,
-        -(vec0 * vec1),
-        "Error when testing distributivity of mul and left neg."
-    );
-
-    assert_eq!(
-        vec0 * (vec1 + vec2),
-        vec0 * vec1 + vec0 * vec2,
-        "Error when testing distributivity of add and left mul."
-    );
-    assert_eq!(
-        (vec0 + vec1) * vec2,
-        vec0 * vec2 + vec1 * vec2,
-        "Error when testing distributivity of add and right mul."
-    );
-    assert_eq!(
-        vec0 * (vec1 - vec2),
-        vec0 * vec1 - vec0 * vec2,
-        "Error when testing distributivity of sub and left mul."
-    );
-    assert_eq!(
-        (vec0 - vec1) * vec2,
-        vec0 * vec2 - vec1 * vec2,
-        "Error when testing distributivity of sub and right mul."
-    );
+    let dot_64: PF = u
+        .iter()
+        .zip(v.iter())
+        .fold(PF::ZERO, |acc, (&lhs, &rhs)| acc + (rhs * lhs));
+    assert_eq!(dot_64, PF::packed_linear_combination::<64>(&u, &v));
 }
 
 pub fn test_vs_scalar<PF>(special_vals: PF)
@@ -588,7 +323,7 @@ where
 
 #[macro_export]
 macro_rules! test_packed_field {
-    ($packedfield:ty, $zeros:expr, $specials:expr) => {
+    ($packedfield:ty, $zeros:expr, $ones:expr, $specials:expr) => {
         mod packed_field_tests {
             use p3_field::PrimeCharacteristicRing;
 
@@ -597,20 +332,12 @@ macro_rules! test_packed_field {
                 $crate::test_interleaves::<$packedfield>();
             }
             #[test]
-            fn test_add_neg() {
-                $crate::test_add_neg::<$packedfield>($zeros);
+            fn test_ring_with_eq() {
+                $crate::test_ring_with_eq::<$packedfield>($zeros, $ones);
             }
             #[test]
-            fn test_mul() {
-                $crate::test_mul::<$packedfield>($zeros);
-            }
-            #[test]
-            fn test_binary_ops() {
-                $crate::test_binary_ops::<$packedfield>($specials);
-            }
-            #[test]
-            fn test_distributivity() {
-                $crate::test_distributivity::<$packedfield>();
+            fn test_packed_linear_combination() {
+                $crate::test_packed_linear_combination::<$packedfield>();
             }
             #[test]
             fn test_vs_scalar() {
