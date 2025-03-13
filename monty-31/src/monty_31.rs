@@ -183,7 +183,7 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
         if exp < 64 {
             *self * Self::MONTY_POWERS_OF_TWO[exp as usize]
         } else {
-            // For larger values we default back to the old method.
+            // For larger values we use the default method.
             *self * Self::TWO.exp_u64(exp)
         }
     }
@@ -271,9 +271,9 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
     #[inline]
     fn div_2exp_u64(&self, exp: u64) -> Self {
         if exp <= 32 {
-            // Observe that, the monty form of 2^exp is 2^{32 - exp} mod P.
-            // For 0 <= exp <= 32, we implement this as a shift followed by
-            // the monty reduction.
+            // As the monty form of 2^{-exp} is 2^{32 - exp} mod P, for
+            // 0 <= exp <= 32, we can multiply by 2^{-exp} by doing a shift
+            // followed by a monty reduction.
             let long_prod = (self.value as u64) << (32 - exp);
             Self::new_monty(monty_reduce::<FP>(long_prod))
         } else {
