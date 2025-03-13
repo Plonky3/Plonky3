@@ -232,6 +232,40 @@ where
     assert_eq!((x * y) / z, x * (y / z));
 }
 
+pub fn test_mul_2exp_u64<R: PrimeCharacteristicRing + Eq>()
+where
+    StandardUniform: Distribution<R>,
+{
+    let mut rng = rand::rng();
+    let x = rng.random::<R>();
+    assert_eq!(x.mul_2exp_u64(0), x);
+    assert_eq!(x.mul_2exp_u64(1), x.double());
+    for i in 0..128 {
+        assert_eq!(
+            x.clone().mul_2exp_u64(i),
+            x.clone() * R::from_u128(1_u128 << i)
+        );
+    }
+}
+
+pub fn test_div_2exp_u64<F: Field>()
+where
+    StandardUniform: Distribution<F>,
+{
+    let mut rng = rand::rng();
+    let x = rng.random::<F>();
+    assert_eq!(x.div_2exp_u64(0), x);
+    assert_eq!(x.div_2exp_u64(1), x.halve());
+    for i in 0..128 {
+        assert_eq!(x.mul_2exp_u64(i).div_2exp_u64(i), x);
+        assert_eq!(
+            x.div_2exp_u64(i),
+            // Best to invert in the prime subfield in case F is an extension field.
+            x * F::from_prime_subfield(F::PrimeSubfield::from_u128(1_u128 << i).inverse())
+        );
+    }
+}
+
 pub fn test_inverse<F: Field>()
 where
     StandardUniform: Distribution<F>,
@@ -589,6 +623,14 @@ macro_rules! test_field {
             #[test]
             fn test_generator() {
                 $crate::test_generator::<$field>($factors);
+            }
+            #[test]
+            fn test_mul_2exp_u64() {
+                $crate::test_mul_2exp_u64::<$field>();
+            }
+            #[test]
+            fn test_div_2exp_u64() {
+                $crate::test_div_2exp_u64::<$field>();
             }
         }
     };

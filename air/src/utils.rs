@@ -74,6 +74,10 @@ pub fn u64_to_16_bit_limbs<R: PrimeCharacteristicRing>(val: u64) -> [R; 4] {
 /// each `16` bit limb has been range checked to ensure it contains a value in `[0, 2^16)`.
 ///
 /// This function assumes we are working over a field with characteristic `P > 3*2^16`.
+///
+/// # Panics
+///
+/// The function will panic if the characteristic of the field is less than or equal to 2^16.
 #[inline]
 pub fn add3<AB: AirBuilder>(
     builder: &mut AB,
@@ -117,7 +121,7 @@ pub fn add3<AB: AirBuilder>(
 
     let acc_16 = a[0] - b[0] - c[0].clone() - d[0].clone();
     let acc_32 = a[1] - b[1] - c[1].clone() - d[1].clone();
-    let acc = acc_16.clone() + AB::Expr::from_prime_subfield(two_16) * acc_32;
+    let acc = acc_16.clone() + acc_32.mul_2exp_u64(16);
 
     builder.assert_zeros([
         acc.clone()
@@ -135,6 +139,10 @@ pub fn add3<AB: AirBuilder>(
 /// each `16` bit limb has been range checked to ensure it contains a value in `[0, 2^16)`.
 ///
 /// This function assumes we are working over a field with characteristic `P > 2^17`.
+///
+/// # Panics
+///
+/// The function will panic if the characteristic of the field is less than or equal to 2^16.
 #[inline]
 pub fn add2<AB: AirBuilder>(
     builder: &mut AB,
@@ -177,7 +185,7 @@ pub fn add2<AB: AirBuilder>(
 
     let acc_16 = a[0] - b[0] - c[0].clone();
     let acc_32 = a[1] - b[1] - c[1].clone();
-    let acc = acc_16.clone() + AB::Expr::from_prime_subfield(two_16) * acc_32;
+    let acc = acc_16.clone() + acc_32.mul_2exp_u64(16);
 
     builder.assert_zeros([
         acc.clone() * (acc + AB::Expr::from_prime_subfield(two_32)),

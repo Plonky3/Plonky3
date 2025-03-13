@@ -540,7 +540,7 @@ pub(crate) fn from_u62(input: u64) -> Mersenne31 {
 #[cfg(test)]
 mod tests {
     use num_bigint::BigUint;
-    use p3_field::{Field, InjectiveMonomial, PermutationMonomial, PrimeCharacteristicRing};
+    use p3_field::{InjectiveMonomial, PermutationMonomial, PrimeCharacteristicRing};
     use p3_field_testing::{
         test_field, test_prime_field, test_prime_field_32, test_prime_field_64,
     };
@@ -548,26 +548,6 @@ mod tests {
     use crate::Mersenne31;
 
     type F = Mersenne31;
-
-    #[test]
-    fn mul_2exp_u64() {
-        // 1 * 2^0 = 1.
-        assert_eq!(F::ONE.mul_2exp_u64(0), F::ONE);
-        // 2 * 2^30 = 2^31 = 1.
-        assert_eq!(F::TWO.mul_2exp_u64(30), F::ONE);
-        // 5 * 2^2 = 20.
-        assert_eq!(F::new(5).mul_2exp_u64(2), F::new(20));
-    }
-
-    #[test]
-    fn div_2exp_u64() {
-        // 1 / 2^0 = 1.
-        assert_eq!(F::ONE.div_2exp_u64(0), F::ONE);
-        // 2 / 2^0 = 2.
-        assert_eq!(F::TWO.div_2exp_u64(0), F::TWO);
-        // 32 / 2^5 = 1.
-        assert_eq!(F::new(32).div_2exp_u64(5), F::new(1));
-    }
 
     #[test]
     fn exp_root() {
