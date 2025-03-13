@@ -1,4 +1,3 @@
-use alloc::vec;
 use alloc::vec::Vec;
 use core::iter::Sum;
 use core::mem::{ManuallyDrop, MaybeUninit};
@@ -36,17 +35,6 @@ pub fn cyclic_subgroup_coset_known_order<F: Field>(
     order: usize,
 ) -> impl Iterator<Item = F> + Clone {
     generator.shifted_powers(shift).take(order)
-}
-
-#[must_use]
-pub fn add_vecs<F: Field>(v: Vec<F>, w: Vec<F>) -> Vec<F> {
-    assert_eq!(v.len(), w.len());
-    v.into_iter().zip(w).map(|(x, y)| x + y).collect()
-}
-
-pub fn sum_vecs<F: Field, I: Iterator<Item = Vec<F>>>(iter: I) -> Vec<F> {
-    iter.reduce(|v, w| add_vecs(v, w))
-        .expect("sum_vecs: empty iterator")
 }
 
 pub fn scale_vec<F: Field>(s: F, vec: Vec<F>) -> Vec<F> {
@@ -138,40 +126,6 @@ pub const fn field_to_array<R: PrimeCharacteristicRing, const D: usize>(x: R) ->
     // Hence we are safe to reinterpret the array as [R; D].
 
     unsafe { HackyWorkAround::transpose(arr).assume_init() }
-}
-
-/// Naive polynomial multiplication.
-pub fn naive_poly_mul<R: PrimeCharacteristicRing>(a: &[R], b: &[R]) -> Vec<R> {
-    // Grade school algorithm
-    let mut product = vec![R::ZERO; a.len() + b.len() - 1];
-    for (i, c1) in a.iter().enumerate() {
-        for (j, c2) in b.iter().enumerate() {
-            product[i + j] += c1.clone() * c2.clone();
-        }
-    }
-    product
-}
-
-/// Expand a product of binomials `(x - roots[0])(x - roots[1])..` into polynomial coefficients.
-pub fn binomial_expand<R: PrimeCharacteristicRing>(roots: &[R]) -> Vec<R> {
-    let mut coeffs = vec![R::ZERO; roots.len() + 1];
-    coeffs[0] = R::ONE;
-    for (i, x) in roots.iter().enumerate() {
-        for j in (1..i + 2).rev() {
-            coeffs[j] = coeffs[j - 1].clone() - x.clone() * coeffs[j].clone();
-        }
-        coeffs[0] *= -x.clone();
-    }
-    coeffs
-}
-
-pub fn eval_poly<R: PrimeCharacteristicRing>(poly: &[R], x: R) -> R {
-    let mut acc = R::ZERO;
-    for coeff in poly.iter().rev() {
-        acc *= x.clone();
-        acc += coeff.clone();
-    }
-    acc
 }
 
 /// Given an element x from a 32 bit field F_P compute x/2.
