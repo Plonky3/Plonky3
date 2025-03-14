@@ -9,6 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 1
+  RUSTFLAGS: "-D warnings"
 
 jobs:
   build_and_test:
@@ -103,7 +104,10 @@ jobs:
         cargo check --verbose --package p3-air
         cargo check --verbose --package p3-baby-bear
         cargo check --verbose --package p3-blake3
+        cargo check --verbose --package p3-blake3-air
+        cargo check --verbose --package p3-bn254-fr
         cargo check --verbose --package p3-challenger
+        cargo check --verbose --package p3-circle
         cargo check --verbose --package p3-commit
         cargo check --verbose --package p3-dft
         cargo check --verbose --package p3-field
@@ -113,15 +117,57 @@ jobs:
         cargo check --verbose --package p3-interpolation
         cargo check --verbose --package p3-keccak
         cargo check --verbose --package p3-keccak-air
+        cargo check --verbose --package p3-koala-bear
         cargo check --verbose --package p3-matrix
         cargo check --verbose --package p3-maybe-rayon
         cargo check --verbose --package p3-mds
         cargo check --verbose --package p3-merkle-tree
         cargo check --verbose --package p3-mersenne-31
         cargo check --verbose --package p3-monolith
+        cargo check --verbose --package p3-monty-31
         cargo check --verbose --package p3-poseidon
         cargo check --verbose --package p3-poseidon2
+        cargo check --verbose --package p3-poseidon2-air
         cargo check --verbose --package p3-rescue
+        cargo check --verbose --package p3-sha256
         cargo check --verbose --package p3-symmetric
         cargo check --verbose --package p3-uni-stark
         cargo check --verbose --package p3-util
+
+  security_audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install cargo-audit
+      run: cargo install cargo-audit
+      
+    - name: Run cargo-audit
+      run: cargo audit
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - uses: dtolnay/rust-toolchain@stable
+      id: rs-stable
+    
+    - uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: rust-docs-${{ steps.rs-stable.outputs.rustc_hash }}-${{ hashFiles('**/Cargo.toml') }}
+    
+    - name: Check documentation
+      run: cargo doc --no-deps --document-private-items --workspace
