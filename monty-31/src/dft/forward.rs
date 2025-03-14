@@ -27,12 +27,24 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         let lg_n = log2_strict_usize(n);
         let generator = Self::two_adic_generator(lg_n);
         let half_n = 1 << (lg_n - 1);
-        // nth_roots = [1, g, g^2, g^3, ..., g^{n/2 - 1}]
-        let nth_roots: Vec<_> = generator.powers().take(half_n).collect();
 
-        (0..(lg_n - 1))
-            .map(|i| nth_roots.iter().step_by(1 << i).copied().collect())
-            .collect()
+        if n <= 16 {
+            let mut new_generator = generator;
+            (0..(lg_n - 1))
+                .map(|i| {
+                    let powers: Vec<_> = new_generator.powers().take(half_n >> i).collect();
+                    new_generator = new_generator.square();
+                    powers
+                })
+                .collect()
+        } else {
+            // nth_roots = [1, g, g^2, g^3, ..., g^{n/2 - 1}]
+            let nth_roots: Vec<_> = generator.powers().take(half_n).collect();
+
+            (0..(lg_n - 1))
+                .map(|i| nth_roots.iter().step_by(1 << i).copied().collect())
+                .collect()
+        }
     }
 }
 
