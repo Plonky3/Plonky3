@@ -54,6 +54,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
         self.is_last_row
     }
 
+    /// # Panics
+    /// This function panics if `size` is not `2`.
     #[inline]
     fn is_transition_window(&self, size: usize) -> Self::Expr {
         if size == 2 {
@@ -110,6 +112,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
         self.is_last_row
     }
 
+    /// # Panics
+    /// This function panics if `size` is not `2`.
     fn is_transition_window(&self, size: usize) -> Self::Expr {
         if size == 2 {
             self.is_transition
