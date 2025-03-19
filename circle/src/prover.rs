@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::iter;
 
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field};
@@ -29,10 +29,12 @@ where
     G: FriGenericConfig<Challenge>,
 {
     // check sorted descending
-    assert!(inputs
-        .iter()
-        .tuple_windows()
-        .all(|(l, r)| l.len() >= r.len()));
+    assert!(
+        inputs
+            .iter()
+            .tuple_windows()
+            .all(|(l, r)| l.len() >= r.len())
+    );
 
     let log_max_height = log2_strict_usize(inputs[0].len());
 

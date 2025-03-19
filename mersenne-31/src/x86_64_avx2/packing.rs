@@ -10,8 +10,8 @@ use p3_field::{
     PermutationMonomial, PrimeCharacteristicRing,
 };
 use p3_util::convert_vec;
-use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 
 use crate::Mersenne31;
 
@@ -45,13 +45,15 @@ impl PackedMersenne31AVX2 {
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid
     /// `Mersenne31`. In particular, each element of vector must be in `0..=P`.
     pub(crate) unsafe fn from_vector(vector: __m256i) -> Self {
-        // Safety: It is up to the user to ensure that elements of `vector` represent valid
-        // `Mersenne31` values. We must only reason about memory representations. `__m256i` can be
-        // transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which can
-        // be transmuted to `[Mersenne31; WIDTH]` (since `Mersenne31` is `repr(transparent)`), which
-        // in turn can be transmuted to `PackedMersenne31AVX2` (since `PackedMersenne31AVX2` is also
-        // `repr(transparent)`).
-        transmute(vector)
+        unsafe {
+            // Safety: It is up to the user to ensure that elements of `vector` represent valid
+            // `Mersenne31` values. We must only reason about memory representations. `__m256i` can be
+            // transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which can
+            // be transmuted to `[Mersenne31; WIDTH]` (since `Mersenne31` is `repr(transparent)`), which
+            // in turn can be transmuted to `PackedMersenne31AVX2` (since `PackedMersenne31AVX2` is also
+            // `repr(transparent)`).
+            transmute(vector)
+        }
     }
 
     /// Copy `value` to all positions in a packed vector. This is the same as
@@ -409,7 +411,6 @@ impl PrimeCharacteristicRing for PackedMersenne31AVX2 {
         f.into()
     }
 
-    #[must_use]
     #[inline(always)]
     fn exp_const_u64<const POWER: u64>(&self) -> Self {
         // We provide specialised code for power 5 as this turns up regularly.
@@ -728,22 +729,23 @@ unsafe impl PackedFieldPow2 for PackedMersenne31AVX2 {
 mod tests {
     use p3_field_testing::test_packed_field;
 
-    use super::{Mersenne31, WIDTH};
+    use super::{Mersenne31, PackedMersenne31AVX2};
 
     /// Zero has a redundant representation, so let's test both.
-    const ZEROS: [Mersenne31; WIDTH] = Mersenne31::new_array([
+    const ZEROS: PackedMersenne31AVX2 = PackedMersenne31AVX2(Mersenne31::new_array([
         0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000,
         0x7fffffff,
-    ]);
+    ]));
 
-    const SPECIAL_VALS: [Mersenne31; WIDTH] = Mersenne31::new_array([
+    const SPECIAL_VALS: PackedMersenne31AVX2 = PackedMersenne31AVX2(Mersenne31::new_array([
         0x00000000, 0x7fffffff, 0x00000001, 0x7ffffffe, 0x00000002, 0x7ffffffd, 0x40000000,
         0x3fffffff,
-    ]);
+    ]));
 
     test_packed_field!(
         crate::PackedMersenne31AVX2,
-        crate::PackedMersenne31AVX2(super::ZEROS),
-        crate::PackedMersenne31AVX2(super::SPECIAL_VALS)
+        &[super::ZEROS],
+        &[crate::PackedMersenne31AVX2::ONE],
+        super::SPECIAL_VALS
     );
 }

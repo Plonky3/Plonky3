@@ -1,11 +1,11 @@
 use alloc::format;
 use alloc::vec::Vec;
 
-use criterion::{black_box, BatchSize, Criterion};
+use criterion::{BatchSize, Criterion, black_box};
 use p3_field::{Field, PrimeCharacteristicRing};
+use rand::Rng;
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
-use rand::Rng;
 
 pub fn benchmark_square<F: Field>(c: &mut Criterion, name: &str)
 where
@@ -29,26 +29,87 @@ where
     });
 }
 
-/// Benchmark the time taken to sum an array [F; N] using .sum() method.
-/// Repeat the summation REPS times.
-pub fn benchmark_iter_sum<F: Field, const N: usize, const REPS: usize>(
+pub fn benchmark_mul_2exp<R: PrimeCharacteristicRing + Copy, const REPS: usize>(
     c: &mut Criterion,
     name: &str,
+    val: u64,
 ) where
+    StandardUniform: Distribution<R>,
+{
+    let mut rng = rand::rng();
+    let mut input = Vec::new();
+    for _ in 0..REPS {
+        input.push(rng.random::<R>())
+    }
+    c.bench_function(&format!("{} mul_2exp_u64 {}", name, val), |b| {
+        b.iter(|| input.iter_mut().for_each(|i| *i = i.mul_2exp_u64(val)))
+    });
+}
+
+pub fn benchmark_div_2exp<F: Field, const REPS: usize>(c: &mut Criterion, name: &str, val: u64)
+where
     StandardUniform: Distribution<F>,
 {
     let mut rng = rand::rng();
     let mut input = Vec::new();
     for _ in 0..REPS {
-        input.push(rng.random::<[F; N]>())
+        input.push(rng.random::<F>())
     }
-    let mut output = [F::ZERO; REPS];
+    c.bench_function(&format!("{} div_2exp_u64 {}", name, val), |b| {
+        b.iter(|| input.iter_mut().for_each(|i| *i = i.div_2exp_u64(val)))
+    });
+}
+
+/// Benchmark the time taken to sum an array [[F; N]; REPS] by summing each array
+/// [F; N] using .sum() method and accumulating the sums into an accumulator.
+///
+/// Making N larger and REPS smaller (vs the opposite) leans the benchmark more sensitive towards
+/// the latency (resp throughput) of the sum method.
+pub fn benchmark_iter_sum<R: PrimeCharacteristicRing + Copy, const N: usize, const REPS: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
+    StandardUniform: Distribution<R>,
+{
+    let mut rng = rand::rng();
+    let mut input = Vec::new();
+    for _ in 0..REPS {
+        input.push(rng.random::<[R; N]>())
+    }
     c.bench_function(&format!("{} sum/{}, {}", name, REPS, N), |b| {
         b.iter(|| {
-            for i in 0..REPS {
-                output[i] = input[i].iter().cloned().sum()
+            let mut acc = R::ZERO;
+            for row in input.iter_mut() {
+                acc += row.iter().copied().sum()
             }
-            output
+            acc
+        })
+    });
+}
+
+/// Benchmark the time taken to sum an array [[F; N]; REPS] by summing each array
+/// [F; N] using sum_array method and accumulating the sums into an accumulator.
+///
+/// Making N larger and REPS smaller (vs the opposite) leans the benchmark more sensitive towards
+/// the latency (resp throughput) of the sum method.
+pub fn benchmark_sum_array<R: PrimeCharacteristicRing + Copy, const N: usize, const REPS: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
+    StandardUniform: Distribution<R>,
+{
+    let mut rng = rand::rng();
+    let mut input = Vec::new();
+    for _ in 0..REPS {
+        input.push(rng.random::<[R; N]>())
+    }
+    c.bench_function(&format!("{} tree sum/{}, {}", name, REPS, N), |b| {
+        b.iter(|| {
+            let mut acc = R::ZERO;
+            for row in input.iter_mut() {
+                acc += R::sum_array::<N>(row)
+            }
+            acc
         })
     });
 }

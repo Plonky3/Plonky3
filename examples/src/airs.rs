@@ -64,15 +64,15 @@ pub trait ExampleHashAir<F: Field, SC: StarkGenericConfig>:
 }
 
 impl<
-        F: Field,
-        LinearLayers: Sync,
-        const WIDTH: usize,
-        const SBOX_DEGREE: u64,
-        const SBOX_REGISTERS: usize,
-        const HALF_FULL_ROUNDS: usize,
-        const PARTIAL_ROUNDS: usize,
-        const VECTOR_LEN: usize,
-    > BaseAir<F>
+    F: Field,
+    LinearLayers: Sync,
+    const WIDTH: usize,
+    const SBOX_DEGREE: u64,
+    const SBOX_REGISTERS: usize,
+    const HALF_FULL_ROUNDS: usize,
+    const PARTIAL_ROUNDS: usize,
+    const VECTOR_LEN: usize,
+> BaseAir<F>
     for ProofObjective<
         F,
         LinearLayers,
@@ -87,23 +87,23 @@ impl<
     #[inline]
     fn width(&self) -> usize {
         match self {
-            ProofObjective::Blake3(b3_air) => <Blake3Air as BaseAir<F>>::width(b3_air),
-            ProofObjective::Poseidon2(p2_air) => p2_air.width(),
-            ProofObjective::Keccak(k_air) => <KeccakAir as BaseAir<F>>::width(k_air),
+            Self::Blake3(b3_air) => <Blake3Air as BaseAir<F>>::width(b3_air),
+            Self::Poseidon2(p2_air) => p2_air.width(),
+            Self::Keccak(k_air) => <KeccakAir as BaseAir<F>>::width(k_air),
         }
     }
 }
 
 impl<
-        AB: AirBuilder,
-        LinearLayers: GenericPoseidon2LinearLayers<AB::Expr, WIDTH>,
-        const WIDTH: usize,
-        const SBOX_DEGREE: u64,
-        const SBOX_REGISTERS: usize,
-        const HALF_FULL_ROUNDS: usize,
-        const PARTIAL_ROUNDS: usize,
-        const VECTOR_LEN: usize,
-    > Air<AB>
+    AB: AirBuilder,
+    LinearLayers: GenericPoseidon2LinearLayers<AB::Expr, WIDTH>,
+    const WIDTH: usize,
+    const SBOX_DEGREE: u64,
+    const SBOX_REGISTERS: usize,
+    const HALF_FULL_ROUNDS: usize,
+    const PARTIAL_ROUNDS: usize,
+    const VECTOR_LEN: usize,
+> Air<AB>
     for ProofObjective<
         AB::F,
         LinearLayers,
@@ -118,31 +118,31 @@ impl<
     #[inline]
     fn eval(&self, builder: &mut AB) {
         match self {
-            ProofObjective::Blake3(b3_air) => b3_air.eval(builder),
-            ProofObjective::Poseidon2(p2_air) => p2_air.eval(builder),
-            ProofObjective::Keccak(k_air) => k_air.eval(builder),
+            Self::Blake3(b3_air) => b3_air.eval(builder),
+            Self::Poseidon2(p2_air) => p2_air.eval(builder),
+            Self::Keccak(k_air) => k_air.eval(builder),
         }
     }
 }
 
 impl<
-        F: PrimeField64,
-        Domain: PolynomialSpace<Val = F>,
-        EF: ExtensionField<F>,
-        Challenger: FieldChallenger<F>,
-        Pcs: p3_commit::Pcs<EF, Challenger, Domain = Domain>,
-        SC: StarkGenericConfig<Pcs = Pcs, Challenge = EF, Challenger = Challenger>,
-        LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>
-            + GenericPoseidon2LinearLayers<SymbolicExpression<F>, WIDTH>
-            + GenericPoseidon2LinearLayers<<F as Field>::Packing, WIDTH>
-            + GenericPoseidon2LinearLayers<EF, WIDTH>,
-        const WIDTH: usize,
-        const SBOX_DEGREE: u64,
-        const SBOX_REGISTERS: usize,
-        const HALF_FULL_ROUNDS: usize,
-        const PARTIAL_ROUNDS: usize,
-        const VECTOR_LEN: usize,
-    > ExampleHashAir<F, SC>
+    F: PrimeField64,
+    Domain: PolynomialSpace<Val = F>,
+    EF: ExtensionField<F>,
+    Challenger: FieldChallenger<F>,
+    Pcs: p3_commit::Pcs<EF, Challenger, Domain = Domain>,
+    SC: StarkGenericConfig<Pcs = Pcs, Challenge = EF, Challenger = Challenger>,
+    LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>
+        + GenericPoseidon2LinearLayers<SymbolicExpression<F>, WIDTH>
+        + GenericPoseidon2LinearLayers<<F as Field>::Packing, WIDTH>
+        + GenericPoseidon2LinearLayers<EF, WIDTH>,
+    const WIDTH: usize,
+    const SBOX_DEGREE: u64,
+    const SBOX_REGISTERS: usize,
+    const HALF_FULL_ROUNDS: usize,
+    const PARTIAL_ROUNDS: usize,
+    const VECTOR_LEN: usize,
+> ExampleHashAir<F, SC>
     for ProofObjective<
         F,
         LinearLayers,
@@ -164,15 +164,11 @@ impl<
         StandardUniform: Distribution<F>,
     {
         match self {
-            ProofObjective::Blake3(b3_air) => {
-                b3_air.generate_trace_rows(num_hashes, extra_capacity_bits)
-            }
-            ProofObjective::Poseidon2(p2_air) => {
+            Self::Blake3(b3_air) => b3_air.generate_trace_rows(num_hashes, extra_capacity_bits),
+            Self::Poseidon2(p2_air) => {
                 p2_air.generate_vectorized_trace_rows(num_hashes, extra_capacity_bits)
             }
-            ProofObjective::Keccak(k_air) => {
-                k_air.generate_trace_rows(num_hashes, extra_capacity_bits)
-            }
+            Self::Keccak(k_air) => k_air.generate_trace_rows(num_hashes, extra_capacity_bits),
         }
     }
 }

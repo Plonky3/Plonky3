@@ -4,24 +4,24 @@
 //! vector V composed of elements with efficient multiplication algorithms in AVX2/AVX512/NEON.
 //!
 //! This leads to using small values (e.g. 1, 2) where multiplication is implemented using addition
-//! and, powers of 2 where multiplication is implemented using shifts.
+//! and powers of 2 where multiplication is implemented using shifts.
 //! Additionally, for technical reasons, having the first entry be -2 is useful.
 //!
 //! Optimized Diagonal for Mersenne31 width 16:
-//! [-2, 2^0, 2, 4, 8, 16, 32, 64, 2^7, 2^8, 2^10, 2^12, 2^13,  2^14,  2^15, 2^16]
+//! [-2, 2^0, 2, 4, 8, 16, 32, 64, 2^7, 2^8, 2^10, 2^12, 2^13, 2^14, 2^15, 2^16]
 //! Optimized Diagonal for Mersenne31 width 24:
-//! [-2, 2^0, 2, 4, 8, 16, 32, 64, 2^7, 2^8, 2^9, 2^10, 2^11, 2^12, 2^13,  2^14,  2^15,  2^16,   2^17,   2^18,   2^19,    2^20,    2^21,    2^22]
+//! [-2, 2^0, 2, 4, 8, 16, 32, 64, 2^7, 2^8, 2^9, 2^10, 2^11, 2^12, 2^13, 2^14, 2^15, 2^16, 2^17, 2^18, 2^19, 2^20, 2^21, 2^22]
 //! See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
 
 use p3_field::Algebra;
 use p3_poseidon2::{
+    ExternalLayer, GenericPoseidon2LinearLayers, InternalLayer, MDSMat4, Poseidon2,
     add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
-    internal_permute_state, ExternalLayer, GenericPoseidon2LinearLayers, InternalLayer, MDSMat4,
-    Poseidon2,
+    internal_permute_state,
 };
 
 use crate::{
-    from_u62, Mersenne31, Poseidon2ExternalLayerMersenne31, Poseidon2InternalLayerMersenne31,
+    Mersenne31, Poseidon2ExternalLayerMersenne31, Poseidon2InternalLayerMersenne31, from_u62,
 };
 
 /// Degree of the chosen permutation polynomial for Mersenne31, used as the Poseidon2 S-Box.

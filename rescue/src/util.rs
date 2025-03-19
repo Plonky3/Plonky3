@@ -4,8 +4,8 @@ use alloc::vec::Vec;
 use modinverse::modinverse;
 use p3_field::PrimeField64;
 use p3_util::relatively_prime_u64;
-use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::Shake256;
+use sha3::digest::{ExtendableOutput, Update, XofReader};
 
 /// Generate alpha, the smallest integer relatively prime to `p − 1`.
 pub(crate) const fn get_alpha<F: PrimeField64>() -> u64 {

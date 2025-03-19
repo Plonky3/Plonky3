@@ -59,11 +59,7 @@ pub(crate) const fn halve_u32<FP: FieldParameters>(input: u32) -> u32 {
     let shr = input >> 1;
     let lo_bit = input & 1;
     let shr_corr = shr + FP::HALF_P_PLUS_1;
-    if lo_bit == 0 {
-        shr
-    } else {
-        shr_corr
-    }
+    if lo_bit == 0 { shr } else { shr_corr }
 }
 
 /// Montgomery reduction of a value in `0..P << MONTY_BITS`.

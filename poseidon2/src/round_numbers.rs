@@ -4,12 +4,12 @@
 //! `<https://extgit.iaik.tugraz.at/krypto/hadeshash>` (See generate_params_poseidon.sage)
 //!
 //! These constraints are broken down into 6 equations:
-//! statistical, interpolation, groebner 1, 2, 3 and
+//! statistical, interpolation, Gröbner 1, 2, 3 and
 //! an extra constraint coming from the paper `<https://eprint.iacr.org/2023/537.pdf>`.
 //!
 //! For our parameters (M = 128, p > 2^30, WIDTH = t >= 8, D = alpha < 12),
 //! the statistical constraint always simplifies to requiring RF >= 6.
-//! Additionally p does not appear in Groebner 3 or the constraint coming from `<https://eprint.iacr.org/2023/537.pdf>`.
+//! Additionally p does not appear in Gröbner 3 or the constraint coming from `<https://eprint.iacr.org/2023/537.pdf>`.
 //! The remaining 3 constraints all can be rearranged into the form:
 //! F(RF, RP) >= G(p) where G is a function which is non-decreasing with respect to p.
 //!

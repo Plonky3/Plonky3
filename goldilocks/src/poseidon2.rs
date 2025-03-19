@@ -11,10 +11,10 @@ use alloc::vec::Vec;
 
 use p3_field::{Algebra, InjectiveMonomial};
 use p3_poseidon2::{
-    add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
-    internal_permute_state, matmul_internal, ExternalLayer, ExternalLayerConstants,
-    ExternalLayerConstructor, HLMDSMat4, InternalLayer, InternalLayerConstructor, MDSMat4,
-    Poseidon2,
+    ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, HLMDSMat4, InternalLayer,
+    InternalLayerConstructor, MDSMat4, Poseidon2, add_rc_and_sbox_generic,
+    external_initial_permute_state, external_terminal_permute_state, internal_permute_state,
+    matmul_internal,
 };
 
 use crate::Goldilocks;
@@ -401,7 +401,7 @@ mod tests {
 
     /// Test on the constant 0 input.
     #[test]
-    fn test_poseidon2_width_8_zeroes() {
+    fn test_poseidon2_width_8_zeros() {
         let mut input: [F; 8] = [Goldilocks::ZERO; 8];
 
         let expected: [F; 8] = Goldilocks::new_array([

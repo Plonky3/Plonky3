@@ -128,7 +128,7 @@ mod tests {
     }
 
     #[test]
-    fn test_first_row_to_first_col_all_zeroes() {
+    fn test_first_row_to_first_col_all_zeros() {
         let input = [0; 6];
         let output = [0; 6];
 
@@ -166,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn test_all_zeroes() {
+    fn test_all_zeros() {
         let u = [0; 4];
         let v = [0; 4];
         assert_eq!(dot_product(u, v), 0);

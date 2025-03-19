@@ -4,8 +4,8 @@ use p3_field::{Algebra, Field, Powers, TwoAdicField};
 use p3_symmetric::Permutation;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
-use crate::butterflies::{dif_butterfly, dit_butterfly, twiddle_free_butterfly};
 use crate::MdsPermutation;
+use crate::butterflies::{dif_butterfly, dit_butterfly, twiddle_free_butterfly};
 
 /// Like `CosetMds`, with a few differences:
 /// - (Bit reversed, a la Bowers) DIF + DIT rather than DIT + DIF
@@ -122,7 +122,7 @@ mod tests {
     use p3_field::{Field, PrimeCharacteristicRing};
     use p3_symmetric::Permutation;
     use p3_util::reverse_slice_index_bits;
-    use rand::{rng, Rng};
+    use rand::{Rng, rng};
 
     use crate::integrated_coset_mds::IntegratedCosetMds;
 

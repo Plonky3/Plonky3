@@ -28,7 +28,8 @@ mod tests {
 
     test_packed_field!(
         crate::PackedBabyBearAVX2,
-        crate::PackedBabyBearAVX2::ZERO,
+        &[crate::PackedBabyBearAVX2::ZERO],
+        &[crate::PackedBabyBearAVX2::ONE],
         p3_monty_31::PackedMontyField31AVX2::<crate::BabyBearParameters>(super::SPECIAL_VALS)
     );
 }

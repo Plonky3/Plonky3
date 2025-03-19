@@ -1,20 +1,20 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
 use p3_air::Air;
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, Field, PackedValue, PrimeCharacteristicRing};
-use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use tracing::{debug_span, info_span, instrument};
 
 use crate::{
-    get_symbolic_constraints, Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, Proof,
-    ProverConstraintFolder, StarkGenericConfig, SymbolicAirBuilder, SymbolicExpression, Val,
+    Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, Proof, ProverConstraintFolder,
+    StarkGenericConfig, SymbolicAirBuilder, SymbolicExpression, Val, get_symbolic_constraints,
 };
 
 #[instrument(skip_all)]
@@ -103,7 +103,11 @@ where
                 .iter()
                 .enumerate()
                 .filter(|(j, _)| *j != i)
-                .map(|(_, other_domain)| other_domain.zp_at_point(domain.first_point()).inverse())
+                .map(|(_, other_domain)| {
+                    other_domain
+                        .vanishing_poly_at_point(domain.first_point())
+                        .inverse()
+                })
                 .product()
         })
         .collect_vec();
@@ -231,11 +235,21 @@ where
         sels.is_first_row.push(Val::<SC>::default());
         sels.is_last_row.push(Val::<SC>::default());
         sels.is_transition.push(Val::<SC>::default());
-        sels.inv_zeroifier.push(Val::<SC>::default());
+        sels.inv_vanishing.push(Val::<SC>::default());
     }
 
     let mut alpha_powers = alpha.powers().take(constraint_count).collect_vec();
     alpha_powers.reverse();
+    // alpha powers looks like Vec<EF> ~ Vec<[F; D]>
+    // It's useful to also have access to the the transpose of this of form [Vec<F>; D].
+    let decomposed_alpha_powers: Vec<_> = (0..SC::Challenge::DIMENSION)
+        .map(|i| {
+            alpha_powers
+                .iter()
+                .map(|x| x.as_basis_coefficients_slice()[i])
+                .collect()
+        })
+        .collect();
     (0..quotient_size)
         .into_par_iter()
         .step_by(PackedVal::<SC>::WIDTH)
@@ -245,7 +259,7 @@ where
             let is_first_row = *PackedVal::<SC>::from_slice(&sels.is_first_row[i_range.clone()]);
             let is_last_row = *PackedVal::<SC>::from_slice(&sels.is_last_row[i_range.clone()]);
             let is_transition = *PackedVal::<SC>::from_slice(&sels.is_transition[i_range.clone()]);
-            let inv_zeroifier = *PackedVal::<SC>::from_slice(&sels.inv_zeroifier[i_range.clone()]);
+            let inv_vanishing = *PackedVal::<SC>::from_slice(&sels.inv_vanishing[i_range]);
 
             let main = RowMajorMatrix::new(
                 trace_on_quotient_domain.vertically_packed_row_pair(i_start, next_step),
@@ -260,13 +274,14 @@ where
                 is_last_row,
                 is_transition,
                 alpha_powers: &alpha_powers,
+                decomposed_alpha_powers: &decomposed_alpha_powers,
                 accumulator,
                 constraint_index: 0,
             };
             air.eval(&mut folder);
 
             // quotient(x) = constraints(x) / Z_H(x)
-            let quotient = folder.accumulator * inv_zeroifier;
+            let quotient = folder.accumulator * inv_vanishing;
 
             // "Transpose" D packed base coefficients into WIDTH scalar extension coefficients.
             (0..core::cmp::min(quotient_size, PackedVal::<SC>::WIDTH)).map(move |idx_in_packing| {

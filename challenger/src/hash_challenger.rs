@@ -177,7 +177,7 @@ mod tests {
     fn test_hash_challenger_flush() {
         let initial_state = (1..11_u8).map(F::from_u8).collect::<Vec<_>>();
         let test_hasher = TestHasher {};
-        let mut hash_challenger = HashChallenger::new(initial_state.clone(), test_hasher);
+        let mut hash_challenger = HashChallenger::new(initial_state, test_hasher);
 
         // Sample twice to ensure flush happens
         let first_sample = hash_challenger.sample();
@@ -235,7 +235,7 @@ mod tests {
     fn test_sample_output_buffer() {
         let test_hasher = TestHasher {};
         let initial_state = vec![F::from_u8(5), F::from_u8(10)];
-        let mut hash_challenger = HashChallenger::new(initial_state.clone(), test_hasher);
+        let mut hash_challenger = HashChallenger::new(initial_state, test_hasher);
 
         let sample = hash_challenger.sample();
         // Verify that the sample is the length of the initial state
@@ -262,7 +262,7 @@ mod tests {
         let test_hasher = TestHasher {};
         // Initial state non-empty
         let initial_state = vec![F::from_u8(1), F::from_u8(2)];
-        let mut hash_challenger = HashChallenger::new(initial_state.clone(), test_hasher);
+        let mut hash_challenger = HashChallenger::new(initial_state, test_hasher);
 
         hash_challenger.flush();
 
@@ -282,7 +282,7 @@ mod tests {
     fn test_sample_after_observe() {
         let test_hasher = TestHasher {};
         let initial_state = vec![F::from_u8(1), F::from_u8(2)];
-        let mut hash_challenger = HashChallenger::new(initial_state.clone(), test_hasher);
+        let mut hash_challenger = HashChallenger::new(initial_state, test_hasher);
 
         // Observe will clear the output buffer
         hash_challenger.observe(F::from_u8(3));

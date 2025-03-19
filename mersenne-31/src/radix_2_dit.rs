@@ -3,9 +3,9 @@ use alloc::vec::Vec;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::extension::Complex;
 use p3_field::{PrimeCharacteristicRing, PrimeField64, TwoAdicField};
+use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
-use p3_matrix::Matrix;
 use p3_util::log2_strict_usize;
 
 use crate::Mersenne31;

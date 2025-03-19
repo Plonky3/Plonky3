@@ -9,9 +9,9 @@ use alloc::vec::Vec;
 use p3_field::{Algebra, InjectiveMonomial, PrimeField};
 use p3_mds::MdsPermutation;
 use p3_symmetric::{CryptographicPermutation, Permutation};
+use rand::Rng;
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
-use rand::Rng;
 
 /// The Poseidon permutation.
 #[derive(Clone, Debug)]

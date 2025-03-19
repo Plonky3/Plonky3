@@ -2,8 +2,8 @@ use core::marker::PhantomData;
 
 use p3_field::{Algebra, InjectiveMonomial};
 use p3_poseidon2::{
-    add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
-    ExternalLayer, GenericPoseidon2LinearLayers, InternalLayer, MDSMat4,
+    ExternalLayer, GenericPoseidon2LinearLayers, InternalLayer, MDSMat4, add_rc_and_sbox_generic,
+    external_initial_permute_state, external_terminal_permute_state,
 };
 
 use crate::{
@@ -86,7 +86,7 @@ where
         self.internal_constants.iter().for_each(|rc| {
             state[0] += *rc;
             state[0] = state[0].injective_exp_n();
-            let part_sum: MontyField31<FP> = state[1..].iter().cloned().sum();
+            let part_sum: MontyField31<FP> = state[1..].iter().copied().sum();
             let full_sum = part_sum + state[0];
             state[0] = part_sum - state[0];
             P2P::internal_layer_mat_mul(state, full_sum);

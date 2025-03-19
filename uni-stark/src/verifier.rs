@@ -10,7 +10,7 @@ use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use tracing::instrument;
 
-use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
+use crate::symbolic_builder::{SymbolicAirBuilder, get_log_quotient_degree};
 use crate::{PcsError, Proof, StarkGenericConfig, Val, VerifierConstraintFolder};
 
 #[instrument(skip_all)]
@@ -153,8 +153,10 @@ where
                 .enumerate()
                 .filter(|(j, _)| *j != i)
                 .map(|(_, other_domain)| {
-                    other_domain.zp_at_point(zeta)
-                        * other_domain.zp_at_point(domain.first_point()).inverse()
+                    other_domain.vanishing_poly_at_point(zeta)
+                        * other_domain
+                            .vanishing_poly_at_point(domain.first_point())
+                            .inverse()
                 })
                 .product::<SC::Challenge>()
         })
@@ -194,7 +196,7 @@ where
 
     // Finally, check that
     //     folded_constraints(zeta) / Z_H(zeta) = quotient(zeta)
-    if folded_constraints * sels.inv_zeroifier != quotient {
+    if folded_constraints * sels.inv_vanishing != quotient {
         return Err(VerificationError::OodEvaluationMismatch);
     }
 

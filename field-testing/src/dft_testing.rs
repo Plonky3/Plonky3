@@ -1,7 +1,7 @@
 use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
 use p3_field::TwoAdicField;
-use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rng;
 

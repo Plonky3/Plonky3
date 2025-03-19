@@ -1,7 +1,7 @@
 use core::arch::x86_64::{self, __m256i};
 use core::mem::transmute;
 
-use crate::{MontyParameters, PackedMontyParameters, TwoAdicData};
+use crate::{MontyParameters, MontyParametersAVX2, TwoAdicData};
 
 // Godbolt file showing that these all compile to the expected instructions. (Potentially plus a few memory ops):
 // https://godbolt.org/z/9P71nYrqh
@@ -44,7 +44,7 @@ pub(crate) fn halve_avx2<MP: MontyParameters>(input: __m256i) -> __m256i {
 /// conform to the expected representation. Each element of lhs must lie in [0, P) and
 /// each element of rhs in (-P, P).
 #[inline(always)]
-pub(crate) unsafe fn signed_add_avx2<PMP: PackedMontyParameters>(
+pub(crate) unsafe fn signed_add_avx2<MPAVX2: MontyParametersAVX2>(
     lhs: __m256i,
     rhs: __m256i,
 ) -> __m256i {
@@ -75,7 +75,7 @@ pub(crate) unsafe fn signed_add_avx2<PMP: PackedMontyParameters>(
     */
     unsafe {
         // If rhs > 0 set the value to P, if rhs < 0 set it to -P and if rhs = 0 set it to 0.
-        let pos_neg_p = x86_64::_mm256_sign_epi32(PMP::PACKED_P, rhs);
+        let pos_neg_p = x86_64::_mm256_sign_epi32(MPAVX2::PACKED_P, rhs);
 
         // Compute t = lhs + rhs
         let sum = x86_64::_mm256_add_epi32(lhs, rhs);

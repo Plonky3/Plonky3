@@ -180,7 +180,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         let half_n = input.len() / 2;
         assert_eq!(roots.len(), half_n);
 
-        // Safe because 0 <= half_n < a.len()
+        // Safe because 0 <= half_n < input.len()
         let (xs, ys) = unsafe { input.split_at_mut_unchecked(half_n) };
 
         let s = xs[0] + ys[0];
@@ -215,7 +215,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
 
         // Expanding the calculation of t3 saves one instruction
         let t1 = MP::PRIME + a1.value - a3.value;
-        let t3 = MontyField31::new_monty(monty_reduce::<MP>(
+        let t3 = Self::new_monty(monty_reduce::<MP>(
             t1 as u64 * MP::INV_ROOTS_8.as_ref()[2].value as u64,
         ));
         let t5 = a1 + a3;

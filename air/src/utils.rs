@@ -1,4 +1,4 @@
-//! A collection of utility functions helpful in defining AIR's.
+//! A collection of utility functions helpful in defining AIRs.
 
 use core::array;
 
@@ -9,7 +9,7 @@ use crate::AirBuilder;
 
 /// Pack a collection of bits into a number.
 ///
-/// Given vec = [v0, v1, ..., v_n] returns v0 + 2v_1 + ... + 2^n v_n
+/// Given `vec = [v_0, v_1, ..., v_n]` returns `v_0 + 2v_1 + ... + 2^n v_n`
 #[inline]
 pub fn pack_bits_le<R, Var, I>(iter: I) -> R
 where
@@ -23,40 +23,14 @@ where
         .unwrap_or(R::ZERO)
 }
 
-/// Computes the arithmetic generalization of boolean `xor`.
-///
-/// For boolean inputs, `x ^ y = x + y - 2 xy`.
-#[inline(always)]
-pub fn xor<R: PrimeCharacteristicRing>(x: R, y: R) -> R {
-    x.clone() + y.clone() - x * y.double()
-}
-
-/// Computes the arithmetic generalization of a triple `xor`.
-///
-/// For boolean inputs `x ^ y ^ z = x + y + z - 2(xy + xz + yz) + 4xyz`.
-#[inline(always)]
-pub fn xor3<R: PrimeCharacteristicRing>(x: R, y: R, z: R) -> R {
-    // The cheapest way to implement this polynomial is to simply apply xor twice.
-    // This costs 2 adds, 2 subs, 2 muls and 2 doubles.
-    xor(x, xor(y, z))
-}
-
-/// Computes the arithmetic generalization of `andnot`.
-///
-/// For boolean inputs `(!x) & y = (1 - x)y`
-#[inline(always)]
-pub fn andn<R: PrimeCharacteristicRing>(x: R, y: R) -> R {
-    (R::ONE - x) * y
-}
-
 /// Compute `xor` on a list of boolean field elements.
 ///
 /// Verifies at debug time that all inputs are boolean.
 #[inline(always)]
-pub fn checked_xor<F: Field, const N: usize>(xs: [F; N]) -> F {
-    xs.into_iter().fold(F::ZERO, |acc, x| {
+pub fn checked_xor<F: Field, const N: usize>(xs: &[F]) -> F {
+    xs.iter().fold(F::ZERO, |acc, x| {
         debug_assert!(x.is_zero() || x.is_one());
-        xor(acc, x)
+        acc.xor(x)
     })
 }
 
@@ -67,7 +41,7 @@ pub fn checked_xor<F: Field, const N: usize>(xs: [F; N]) -> F {
 pub fn checked_andn<F: Field>(x: F, y: F) -> F {
     debug_assert!(x.is_zero() || x.is_one());
     debug_assert!(y.is_zero() || y.is_one());
-    andn(x, y)
+    x.andn(&y)
 }
 
 /// Convert a 32-bit integer into an array of 32 0 or 1 field elements.
@@ -100,6 +74,10 @@ pub fn u64_to_16_bit_limbs<R: PrimeCharacteristicRing>(val: u64) -> [R; 4] {
 /// each `16` bit limb has been range checked to ensure it contains a value in `[0, 2^16)`.
 ///
 /// This function assumes we are working over a field with characteristic `P > 3*2^16`.
+///
+/// # Panics
+///
+/// The function will panic if the characteristic of the field is less than or equal to 2^16.
 #[inline]
 pub fn add3<AB: AirBuilder>(
     builder: &mut AB,
@@ -143,18 +121,16 @@ pub fn add3<AB: AirBuilder>(
 
     let acc_16 = a[0] - b[0] - c[0].clone() - d[0].clone();
     let acc_32 = a[1] - b[1] - c[1].clone() - d[1].clone();
-    let acc = acc_16.clone() + AB::Expr::from_prime_subfield(two_16) * acc_32;
+    let acc = acc_16.clone() + acc_32.mul_2exp_u64(16);
 
-    builder.assert_zero(
+    builder.assert_zeros([
         acc.clone()
             * (acc.clone() + AB::Expr::from_prime_subfield(two_32))
             * (acc + AB::Expr::from_prime_subfield(two_32.double())),
-    );
-    builder.assert_zero(
         acc_16.clone()
             * (acc_16.clone() + AB::Expr::from_prime_subfield(two_16))
             * (acc_16 + AB::Expr::from_prime_subfield(two_16.double())),
-    );
+    ]);
 }
 
 /// Verify that `a = b + c mod 2^32`
@@ -163,6 +139,10 @@ pub fn add3<AB: AirBuilder>(
 /// each `16` bit limb has been range checked to ensure it contains a value in `[0, 2^16)`.
 ///
 /// This function assumes we are working over a field with characteristic `P > 2^17`.
+///
+/// # Panics
+///
+/// The function will panic if the characteristic of the field is less than or equal to 2^16.
 #[inline]
 pub fn add2<AB: AirBuilder>(
     builder: &mut AB,
@@ -205,10 +185,12 @@ pub fn add2<AB: AirBuilder>(
 
     let acc_16 = a[0] - b[0] - c[0].clone();
     let acc_32 = a[1] - b[1] - c[1].clone();
-    let acc = acc_16.clone() + AB::Expr::from_prime_subfield(two_16) * acc_32;
+    let acc = acc_16.clone() + acc_32.mul_2exp_u64(16);
 
-    builder.assert_zero(acc.clone() * (acc + AB::Expr::from_prime_subfield(two_32)));
-    builder.assert_zero(acc_16.clone() * (acc_16 + AB::Expr::from_prime_subfield(two_16)));
+    builder.assert_zeros([
+        acc.clone() * (acc + AB::Expr::from_prime_subfield(two_32)),
+        acc_16.clone() * (acc_16 + AB::Expr::from_prime_subfield(two_16)),
+    ]);
 }
 
 /// Verify that `a = (b ^ (c << shift))`
@@ -225,23 +207,22 @@ pub fn xor_32_shift<AB: AirBuilder>(
     shift: usize,
 ) {
     // First we range check all elements of c.
-    c.iter().for_each(|&elem| builder.assert_bool(elem));
+    builder.assert_bools(*c);
 
     // Next we compute (b ^ (c << shift)) and pack the result into two 16-bit integers.
     let xor_shift_c_0_16 = b[..16]
         .iter()
         .enumerate()
-        .map(|(i, elem)| xor((*elem).into(), c[(32 + i - shift) % 32].into()));
+        .map(|(i, elem)| (*elem).into().xor(&c[(32 + i - shift) % 32].into()));
     let sum_0_16: AB::Expr = pack_bits_le(xor_shift_c_0_16);
 
     let xor_shift_c_16_32 = b[16..]
         .iter()
         .enumerate()
-        .map(|(i, elem)| xor((*elem).into(), c[(32 + (i + 16) - shift) % 32].into()));
+        .map(|(i, elem)| (*elem).into().xor(&c[(32 + (i + 16) - shift) % 32].into()));
     let sum_16_32: AB::Expr = pack_bits_le(xor_shift_c_16_32);
 
     // As both b and c have been range checked to be boolean, all the (b ^ (c << shift))
     // are also boolean and so this final check additionally has the effect of range checking a[0], a[1].
-    builder.assert_eq(a[0], sum_0_16);
-    builder.assert_eq(a[1], sum_16_32);
+    builder.assert_zeros([a[0] - sum_0_16, a[1] - sum_16_32]);
 }

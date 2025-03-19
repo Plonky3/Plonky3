@@ -1,7 +1,7 @@
 [package]
 name = "p3-goldilocks"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [features]
@@ -13,7 +13,6 @@ p3-dft.workspace = true
 p3-mds.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
-p3-poseidon.workspace = true
 p3-poseidon2.workspace = true
 num-bigint.workspace = true
 paste.workspace = true
@@ -22,6 +21,7 @@ serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 p3-field-testing.workspace = true
+p3-poseidon.workspace = true
 rand.workspace = true
 criterion.workspace = true
 
