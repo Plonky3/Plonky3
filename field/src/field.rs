@@ -596,7 +596,9 @@ pub trait Field:
 
     /// The multiplicative inverse of this field element.
     ///
-    /// NOTE: The inverse of `0` is undefined and will error.
+    /// # Panics
+    /// The function will panic if the field element is `0`.
+    /// Use try_inverse if you want to handle this case.
     #[must_use]
     fn inverse(&self) -> Self {
         self.try_inverse().expect("Tried to invert zero")
