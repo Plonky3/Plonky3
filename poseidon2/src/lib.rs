@@ -82,11 +82,17 @@ where
     InternalPerm: InternalLayerConstructor<F>,
 {
     /// Create a new Poseidon2 configuration with 128 bit security and random rounds constants.
+    ///
+    /// # Panics
+    /// This will panic if D and F::ORDER_U64 - 1 are not relatively prime.
+    /// This will panic if the optimal parameters for the given field and width have not been computed.
     pub fn new_from_rng_128<R: Rng>(rng: &mut R) -> Self
     where
         StandardUniform: Distribution<F> + Distribution<[F; WIDTH]>,
     {
-        let (rounds_f, rounds_p) = poseidon2_round_numbers_128::<F>(WIDTH, D);
+        let round_numbers = poseidon2_round_numbers_128::<F>(WIDTH, D);
+        let (rounds_f, rounds_p) =
+            round_numbers.unwrap_or_else(|_| panic!("{}", round_numbers.unwrap_err()));
         Self::new_from_rng(rounds_f, rounds_p, rng)
     }
 }
