@@ -1,10 +1,9 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::fmt::Debug;
+
 use itertools::Itertools;
-
-use alloc::vec;
-
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace, TwoAdicMultiplicativeCoset};
 use p3_dft::TwoAdicSubgroupDft;
@@ -49,12 +48,12 @@ impl<Val, Dft, InputMmcs, FriMmcs, R> HidingFriPcs<Val, Dft, InputMmcs, FriMmcs,
     fn commit_transparent<Challenge, Challenger>(
         &self,
         evaluations: Vec<(
-            <HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R> as Pcs<Challenge, Challenger>>::Domain,
+            <Self as Pcs<Challenge, Challenger>>::Domain,
             RowMajorMatrix<Val>,
         )>,
     ) -> (
-        <HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R> as Pcs<Challenge, Challenger>>::Commitment,
-        <HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R> as Pcs<Challenge, Challenger>>::ProverData,
+        <Self as Pcs<Challenge, Challenger>>::Commitment,
+        <Self as Pcs<Challenge, Challenger>>::ProverData,
     )
     where
         Val: TwoAdicField,
@@ -360,10 +359,10 @@ where
             ext_trace_domain.size(),
             self.num_random_codewords + Challenge::DIMENSION,
         );
-        let extended_domain = <HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R> as Pcs<
-            Challenge,
-            Challenger,
-        >>::natural_domain_for_degree(&self, ext_trace_domain.size());
+        let extended_domain = <Self as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
+            self,
+            ext_trace_domain.size(),
+        );
         let (r_commit, r_data) =
             self.commit_transparent::<Challenge, Challenger>(vec![(extended_domain, random_vals)]);
         (Some(r_commit), Some(r_data))
