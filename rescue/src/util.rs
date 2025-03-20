@@ -16,7 +16,7 @@ pub(crate) fn shake256_hash(seed_bytes: &[u8], num_bytes: usize) -> Vec<u8> {
     result
 }
 
-/// Return 2^x for x an f32.
+/// Return y such that |y - 2^x| < tol for x an f32.
 ///
 /// This is a replacement for f32::powf() when libm isn't available;
 /// it is slow and shouldn't be used for anything important.
@@ -25,12 +25,15 @@ pub(crate) fn shake256_hash(seed_bytes: &[u8], num_bytes: usize) -> Vec<u8> {
 /// series. As x increases, increase the precision P until the
 /// accuracy is sufficient.
 #[must_use]
-fn pow2_no_std<const P: usize>(x: f32) -> f32 {
+fn pow2_no_std(x: f32, tol: f32) -> f32 {
     let y = x * core::f32::consts::LN_2;
     let mut t = 1.0; // ith Taylor term = (x ln(2))^i/i!
     let mut two_pow_x = t;
-    for i in 1..P {
+    for i in 1.. {
         t *= y / (i as f32);
+        if t < tol {
+            break;
+        }
         two_pow_x += t;
     }
     two_pow_x
@@ -41,8 +44,9 @@ fn pow2_no_std<const P: usize>(x: f32) -> f32 {
 /// This is a replacement for f64::log2() when libm isn't available;
 /// it is slow and shouldn't be used for anything important.
 ///
-/// At least for inputs up to a few hundred the accuracy of this function
-/// is better than 0.001.
+/// At least for inputs up to a few hundred the accuracy of this
+/// function is better than 0.001. It will produce wrong answers once
+/// x exceeds about 1000.
 ///
 /// Algorithm is just three iterations of Newton-Raphson. This is
 /// sufficient for the one use in this crate. It should be generalised
@@ -51,14 +55,15 @@ fn pow2_no_std<const P: usize>(x: f32) -> f32 {
 #[must_use]
 fn log2_no_std(x: u64) -> f32 {
     const LOG2_E: f32 = core::f32::consts::LOG2_E;
+    const POW2_TOL: f32 = 0.0001;
     // Initial estimate x0 = floor(log2(x))
     let x0 = log2_ceil_u64(x + 1) - 1;
     let p0 = (1 << x0) as f32; // 2^x0
     let x1 = x0 as f32 - LOG2_E * (1.0 - x as f32 / p0);
     // precision 20 determined by experiment
-    let p1 = pow2_no_std::<20>(x1);
+    let p1 = pow2_no_std(x1, POW2_TOL);
     let x2 = x1 - LOG2_E * (1.0 - x as f32 / p1);
-    let p2 = pow2_no_std::<20>(x2);
+    let p2 = pow2_no_std(x2, POW2_TOL);
     x2 - LOG2_E * (1.0 - x as f32 / p2)
 }
 
