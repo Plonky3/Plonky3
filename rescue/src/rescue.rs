@@ -44,7 +44,7 @@ where
         // are fed into `find` which picks the first that exceed the desired
         // security level.
         let rnds = (1..)
-            .scan((rate + 2, rate), |(dcon, v), r| {
+            .scan((2, rate), |(dcon, v), r| {
                 let log2_bin = log2_binom(*v + *dcon, *v);
 
                 // ALPHA is a prime > 2, so ALPHA + 1 is even, hence this
