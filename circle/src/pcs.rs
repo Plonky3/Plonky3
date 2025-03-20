@@ -15,7 +15,7 @@ use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
 use p3_matrix::row_index_mapped::RowIndexMappedView;
 use p3_matrix::{Dimensions, Matrix};
 use p3_maybe_rayon::prelude::*;
-use p3_util::log2_strict_usize;
+use p3_util::{log2_ceil_usize, log2_strict_usize};
 use serde::{Deserialize, Serialize};
 use tracing::info_span;
 
@@ -108,9 +108,36 @@ where
     type Proof = CirclePcsProof<Val, Challenge, InputMmcs, FriMmcs, Challenger::Witness>;
     type Error = FriError<FriMmcs::Error, InputError<InputMmcs::Error, FriMmcs::Error>>;
     const ZK: bool = false;
+    const TRACE_IDX: usize = 0;
+    const QUOTIENT_IDX: usize = 1;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         CircleDomain::standard(log2_strict_usize(degree))
+    }
+
+    fn natural_domain_for_degree_zk_ext(&self, degree: usize) -> Self::Domain {
+        <Self as Pcs<Challenge, Challenger>>::natural_domain_for_degree(self, degree)
+    }
+
+    fn natural_domain_for_degree_zk_init(&self, degree: usize) -> Self::Domain {
+        <Self as Pcs<Challenge, Challenger>>::natural_domain_for_degree(self, degree)
+    }
+
+    fn log2_strict_usize(&self, degree: usize) -> (usize, usize) {
+        (log2_strict_usize(degree), log2_strict_usize(degree))
+    }
+
+    fn log_quotient_degree_nb_chunks(&self, degree: usize) -> (usize, usize) {
+        let log_ceil = log2_ceil_usize(degree);
+        (log_ceil, 1 << log_ceil)
+    }
+
+    fn get_zp_cis(&self, _qc_domains: &[Self::Domain]) -> Vec<p3_commit::Val<Self::Domain>> {
+        vec![]
+    }
+
+    fn get_num_chunks(&self, quotient_degree: usize) -> usize {
+        quotient_degree
     }
 
     fn commit(

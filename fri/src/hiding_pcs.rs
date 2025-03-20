@@ -7,12 +7,13 @@ use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace, TwoAdicMultiplicativeCoset};
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_field::{ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse};
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversalPerm, BitReversibleMatrix};
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
 use p3_matrix::horizontally_truncated::HorizontallyTruncated;
 use p3_matrix::row_index_mapped::RowIndexMappedView;
+use p3_util::log2_strict_usize;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use tracing::{info_span, instrument};
@@ -113,10 +114,55 @@ where
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
 
     const ZK: bool = true;
+    const TRACE_IDX: usize = 1;
+    const QUOTIENT_IDX: usize = 2;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
             &self.inner, degree)
+    }
+
+    fn natural_domain_for_degree_zk_ext(&self, degree: usize) -> Self::Domain {
+        <Self as Pcs<Challenge, Challenger>>::natural_domain_for_degree(self, degree * 2)
+    }
+
+    fn natural_domain_for_degree_zk_init(&self, degree: usize) -> Self::Domain {
+        <Self as Pcs<Challenge, Challenger>>::natural_domain_for_degree(self, degree / 2)
+    }
+
+    fn log2_strict_usize(&self, degree: usize) -> (usize, usize) {
+        let log_strict = log2_strict_usize(degree);
+
+        (log_strict, log_strict + 1)
+    }
+
+    fn log_quotient_degree_nb_chunks(&self, degree: usize) -> (usize, usize) {
+        let log_ceil = p3_util::log2_ceil_usize(degree + 1);
+
+        (log_ceil, 1 << (log_ceil + 1))
+    }
+
+    fn get_num_chunks(&self, quotient_degree: usize) -> usize {
+        quotient_degree * 2
+    }
+
+    fn get_zp_cis(&self, qc_domains: &[Self::Domain]) -> Vec<p3_commit::Val<Self::Domain>> {
+        batch_multiplicative_inverse(
+            &qc_domains
+                .iter()
+                .enumerate()
+                .map(|(i, domain)| {
+                    qc_domains
+                        .iter()
+                        .enumerate()
+                        .filter(|(j, _)| *j != i)
+                        .map(|(_, other_domain)| {
+                            other_domain.vanishing_poly_at_point(domain.first_point())
+                        })
+                        .product()
+                })
+                .collect::<Vec<_>>(),
+        )
     }
 
     fn commit(

@@ -33,44 +33,29 @@ where
     } = proof;
 
     let pcs = config.pcs();
-    let is_zk = <SC as StarkGenericConfig>::Pcs::ZK;
 
     let degree = 1 << degree_bits;
     let log_quotient_degree =
-        get_log_quotient_degree::<Val<SC>, A>(air, 0, public_values.len(), is_zk);
+        get_log_quotient_degree::<Val<SC>, A>(air, 0, public_values.len(), config.is_zk());
     let quotient_degree = 1 << log_quotient_degree;
 
     let trace_domain = pcs.natural_domain_for_degree(degree);
-    let init_trace_domain = if is_zk {
-        pcs.natural_domain_for_degree(degree / 2)
-    } else {
-        trace_domain
-    };
-    let nb_chunks = if is_zk {
-        quotient_degree * 2
-    } else {
-        quotient_degree
-    };
+    let init_trace_domain = pcs.natural_domain_for_degree_zk_init(degree);
+
+    let num_chunks = pcs.get_num_chunks(quotient_degree);
     let quotient_domain =
         trace_domain.create_disjoint_domain(1 << (degree_bits + log_quotient_degree));
-    let quotient_chunks_domains = quotient_domain.split_domains(nb_chunks);
+    let quotient_chunks_domains = quotient_domain.split_domains(num_chunks);
 
     let randomized_quotient_chunks_domains = quotient_chunks_domains
         .iter()
-        .map(|domain| {
-            let randomized_domain_size = if is_zk {
-                domain.size() * 2
-            } else {
-                domain.size()
-            };
-            pcs.natural_domain_for_degree(randomized_domain_size)
-        })
+        .map(|domain| pcs.natural_domain_for_degree_zk_ext(domain.size()))
         .collect_vec();
 
     let air_width = <A as BaseAir<Val<SC>>>::width(air);
     let valid_shape = opened_values.trace_local.len() == air_width
         && opened_values.trace_next.len() == air_width
-        && opened_values.quotient_chunks.len() == nb_chunks
+        && opened_values.quotient_chunks.len() == num_chunks
         && opened_values
             .quotient_chunks
             .iter()
@@ -86,7 +71,9 @@ where
 
     // Observe the instance.
     challenger.observe(Val::<SC>::from_usize(proof.degree_bits));
-    challenger.observe(Val::<SC>::from_usize(proof.degree_bits - is_zk as usize));
+    challenger.observe(Val::<SC>::from_usize(
+        proof.degree_bits - config.is_zk() as usize,
+    ));
     // TODO: Might be best practice to include other instance data here in the transcript, like some
     // encoding of the AIR. This protects against transcript collisions between distinct instances.
     // Practically speaking though, the only related known attack is from failing to include public
@@ -104,17 +91,13 @@ where
     let zeta: SC::Challenge = challenger.sample();
     let zeta_next = init_trace_domain.next_point(zeta).unwrap();
 
-    let mut coms_to_verify = if is_zk {
-        let random_commit = commitments
-            .random
-            .clone()
-            .expect("There should be a random polynomial in zk.");
+    let mut coms_to_verify = if let Some(random_commit) = &commitments.random {
         let random_values = opened_values
             .random
             .clone()
             .expect("There should be opened random values in zk.");
         vec![(
-            random_commit,
+            random_commit.clone(),
             vec![(trace_domain, vec![(zeta, random_values.clone())])],
         )]
     } else {

@@ -5,13 +5,11 @@ use itertools::{Itertools, izip};
 use p3_air::Air;
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{
-    BasedVectorSpace, PackedValue, PrimeCharacteristicRing, batch_multiplicative_inverse,
-};
+use p3_field::{BasedVectorSpace, PackedValue, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
-use p3_util::{log2_ceil_usize, log2_strict_usize};
+use p3_util::log2_strict_usize;
 use tracing::{debug_span, info_span, instrument};
 
 use crate::{
@@ -41,11 +39,8 @@ where
 
     let pcs = config.pcs();
 
-    let is_zk = <SC as StarkGenericConfig>::Pcs::ZK;
-
     let degree = trace.height();
-    let ext_degree = if is_zk { degree * 2 } else { degree };
-    let log_ext_degree = log2_strict_usize(ext_degree);
+    let (log_degree, log_ext_degree) = pcs.log2_strict_usize(degree);
 
     let symbolic_constraints = get_symbolic_constraints::<Val<SC>, A>(air, 0, public_values.len());
     let constraint_count = symbolic_constraints.len();
@@ -54,11 +49,10 @@ where
         .map(SymbolicExpression::degree_multiple)
         .max()
         .unwrap_or(0);
-    let log_quotient_degree = log2_ceil_usize(constraint_degree - 1 + is_zk as usize);
-    let quotient_degree = 1 << log_quotient_degree;
+    let (log_quotient_degree, nb_chunks) = pcs.log_quotient_degree_nb_chunks(constraint_degree - 1);
 
     let trace_domain = pcs.natural_domain_for_degree(degree);
-    let ext_trace_domain = pcs.natural_domain_for_degree(ext_degree);
+    let ext_trace_domain = pcs.natural_domain_for_degree_zk_ext(degree);
 
     let (trace_commit, trace_data) =
         info_span!("commit to trace data").in_scope(|| pcs.commit(vec![(ext_trace_domain, trace)]));
@@ -66,7 +60,7 @@ where
     // Observe the instance.
     // degree < 2^255 so we can safely cast log_degree to a u8.
     challenger.observe(Val::<SC>::from_u8(log_ext_degree as u8));
-    challenger.observe(Val::<SC>::from_u8(log2_strict_usize(degree) as u8));
+    challenger.observe(Val::<SC>::from_u8(log_degree as u8));
     // TODO: Might be best practice to include other instance data here; see verifier comment.
 
     challenger.observe(trace_commit.clone());
@@ -87,36 +81,14 @@ where
         alpha,
         constraint_count,
     );
-    let nb_chunks = if is_zk {
-        quotient_degree * 2
-    } else {
-        quotient_degree
-    };
+
     let quotient_flat = RowMajorMatrix::new_col(quotient_values.clone()).flatten_to_base();
     let quotient_chunks = quotient_domain.split_evals(nb_chunks, quotient_flat);
     let qc_domains = quotient_domain.split_domains(nb_chunks);
 
     // Compute the vanishing polynomial normalizing constants, based on the verifier's check.
-    let zp_cis = if is_zk {
-        batch_multiplicative_inverse(
-            &qc_domains
-                .iter()
-                .enumerate()
-                .map(|(i, domain)| {
-                    qc_domains
-                        .iter()
-                        .enumerate()
-                        .filter(|(j, _)| *j != i)
-                        .map(|(_, other_domain)| {
-                            other_domain.vanishing_poly_at_point(domain.first_point())
-                        })
-                        .product()
-                })
-                .collect::<Vec<_>>(),
-        )
-    } else {
-        vec![]
-    };
+    let zp_cis = pcs.get_zp_cis(&qc_domains);
+
     let (quotient_commit, quotient_data) =
         info_span!("commit to quotient poly chunks").in_scope(|| {
             pcs.commit_quotient(
@@ -126,16 +98,12 @@ where
         });
     challenger.observe(quotient_commit.clone());
 
-    let (opt_r_commit, opt_r_data) = if is_zk {
-        // We generate random extension field values of the size of the randomized trace randomized. Since we need `R` of degree that of the extended
-        // trace -1, we can provide `R` as is to FRI, and the random polynomial will be `(R(X) - R(z)) / (X - z)`.
-        // Since we need a random polynomial defined over the extension field, we actually need to commit to `SC::CHallenge::D`
-        // random polynomials. This is similar to flattening on the base field a polynomial over the extension field.
-        // TODO: This approach is only statistically zk. To make it perfectly zk, `R` would have to truly be an extension field polynomial.
-        pcs.get_opt_randomization_poly_commitment(ext_trace_domain)
-    } else {
-        (None, None)
-    };
+    // We generate random extension field values of the size of the randomized trace randomized. Since we need `R` of degree that of the extended
+    // trace -1, we can provide `R` as is to FRI, and the random polynomial will be `(R(X) - R(z)) / (X - z)`.
+    // Since we need a random polynomial defined over the extension field, we actually need to commit to `SC::CHallenge::D`
+    // random polynomials. This is similar to flattening on the base field a polynomial over the extension field.
+    // TODO: This approach is only statistically zk. To make it perfectly zk, `R` would have to truly be an extension field polynomial.
+    let (opt_r_commit, opt_r_data) = pcs.get_opt_randomization_poly_commitment(ext_trace_domain);
 
     let commitments = Commitments {
         trace: trace_commit,
@@ -150,6 +118,7 @@ where
     let zeta: SC::Challenge = challenger.sample();
     let zeta_next = trace_domain.next_point(zeta).unwrap();
 
+    let is_random = opt_r_data.is_some();
     let (opened_values, opening_proof) = info_span!("open").in_scope(|| {
         if let Some(r_data) = opt_r_data {
             pcs.open(
@@ -178,15 +147,15 @@ where
             )
         }
     });
-    let trace_idx = if is_zk { 1 } else { 0 };
-    let quotient_idx = if is_zk { 2 } else { 1 };
+    let trace_idx = <SC as StarkGenericConfig>::Pcs::TRACE_IDX;
+    let quotient_idx = <SC as StarkGenericConfig>::Pcs::QUOTIENT_IDX;
     let trace_local = opened_values[trace_idx][0][0].clone();
     let trace_next = opened_values[trace_idx][0][1].clone();
     let quotient_chunks = opened_values[quotient_idx]
         .iter()
         .map(|v| v[0].clone())
         .collect_vec();
-    let random = if is_zk {
+    let random = if is_random {
         Some(opened_values[0][0][0].clone())
     } else {
         None

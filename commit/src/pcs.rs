@@ -38,8 +38,29 @@ where
     /// Set to true to activate randomization and achieve zero-knowledge.
     const ZK: bool;
 
+    /// Index of the trace commitment in the computed opened values.
+    const TRACE_IDX: usize;
+
+    /// Index of the quotient commitments in the computed opened values.
+    const QUOTIENT_IDX: usize;
+
     /// This should return a coset domain (s.t. Domain::next_point returns Some)
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain;
+
+    /// This should return a coset domain (s.t. Domain::next_point returns Some) for `actual_degree = degree + is_zk`.
+    fn natural_domain_for_degree_zk_ext(&self, degree: usize) -> Self::Domain;
+
+    /// This should return a coset domain (s.t. Domain::next_point returns Some) for `actual_degree = degree - is_zk`.
+    fn natural_domain_for_degree_zk_init(&self, degree: usize) -> Self::Domain;
+
+    /// Computes the `log2_strict_usize` of both `degree` and of the degree after zk randomization.
+    fn log2_strict_usize(&self, degree: usize) -> (usize, usize);
+
+    /// Computes the `log2_ceil` of the quotient degree, as well as the number of quotient chunks.
+    fn log_quotient_degree_nb_chunks(&self, degree: usize) -> (usize, usize);
+
+    /// Computes the number of quotient chunks given the quotient degree.
+    fn get_num_chunks(&self, quotient_degree: usize) -> usize;
 
     /// Commit to the batch of `evaluations`. If `zk` is enabled and `is_random_poly` is false, the evaluations are
     /// first randomized as explained in Section 3 of https://eprint.iacr.org/2024/1037.pdf .
@@ -75,6 +96,9 @@ where
         idx: usize,
         domain: Self::Domain,
     ) -> Self::EvaluationsOnDomain<'a>;
+
+    /// If in zk mode, computes the normalizing constants for the Langrange selectors of the provided domains.
+    fn get_zp_cis(&self, qc_domains: &[Self::Domain]) -> Vec<Val<Self::Domain>>;
 
     fn open(
         &self,
