@@ -427,7 +427,7 @@ macro_rules! impl_u_i_size {
                     4 => Self::from_int(int as $int32),
                     8 => Self::from_int(int as $int64),
                     16 => Self::from_int(int as $int128),
-                    _ => panic!(concat!(stringify!($intsize), "is not equivalent to any primitive integer types.")),
+                    _ => unreachable!(concat!(stringify!($intsize), "is not equivalent to any primitive integer types.")),
                 }
             }
 
@@ -439,7 +439,7 @@ macro_rules! impl_u_i_size {
                     4 => Self::from_canonical_checked(int as $int32),
                     8 => Self::from_canonical_checked(int as $int64),
                     16 => Self::from_canonical_checked(int as $int128),
-                    _ => panic!(concat!(stringify!($intsize), " is not equivalent to any primitive integer types.")),
+                    _ => unreachable!(concat!(stringify!($intsize), " is not equivalent to any primitive integer types.")),
                 }
             }
 
@@ -452,7 +452,7 @@ macro_rules! impl_u_i_size {
                         4 => Self::from_canonical_unchecked(int as $int32),
                         8 => Self::from_canonical_unchecked(int as $int64),
                         16 => Self::from_canonical_unchecked(int as $int128),
-                        _ => panic!(concat!(stringify!($intsize), " is not equivalent to any primitive integer types.")),
+                        _ => unreachable!(concat!(stringify!($intsize), " is not equivalent to any primitive integer types.")),
                     }
                 }
             }

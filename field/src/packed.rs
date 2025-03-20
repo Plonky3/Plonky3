@@ -213,9 +213,11 @@ pub unsafe trait PackedFieldPow2: PackedField {
     /// We can also think about this as stacking the vectors, dividing them into 2x2 matrices, and
     /// transposing those matrices.
     ///
-    /// When `block_len = WIDTH`, this operation is a no-op. `block_len` must divide `WIDTH`. Since
-    /// `WIDTH` is specified to be a power of 2, `block_len` must also be a power of 2. It cannot be
-    /// 0 and it cannot exceed `WIDTH`.
+    /// When `block_len = WIDTH`, this operation is a no-op.
+    ///
+    /// # Panics
+    /// This may panic if `block_len` does not divide `WIDTH`. Since `WIDTH` is specified to be a power of 2,
+    /// `block_len` must also be a power of 2. It cannot be 0 and it cannot exceed `WIDTH`.
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self);
 }
 

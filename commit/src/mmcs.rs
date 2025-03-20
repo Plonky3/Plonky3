@@ -56,6 +56,9 @@ pub trait Mmcs<T: Send + Sync>: Clone {
     }
 
     /// Get the largest height of any committed matrix.
+    ///
+    /// # Panics
+    /// This may panic if there are no committed matrices.
     fn get_max_height<M: Matrix<T>>(&self, prover_data: &Self::ProverData<M>) -> usize {
         self.get_matrix_heights(prover_data)
             .into_iter()
