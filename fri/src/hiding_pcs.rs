@@ -2,7 +2,8 @@ use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::fmt::Debug;
 
-use itertools::Itertools;
+use alloc::vec;
+
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace, TwoAdicMultiplicativeCoset};
 use p3_dft::TwoAdicSubgroupDft;
@@ -42,6 +43,44 @@ impl<Val, Dft, InputMmcs, FriMmcs, R> HidingFriPcs<Val, Dft, InputMmcs, FriMmcs,
             num_random_codewords,
             rng: rng.into(),
         }
+    }
+
+    fn commit_transparent<Challenge, Challenger>(
+        &self,
+        evaluations: Vec<(
+            <HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R> as Pcs<Challenge, Challenger>>::Domain,
+            RowMajorMatrix<Val>,
+        )>,
+    ) -> (
+        <HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R> as Pcs<Challenge, Challenger>>::Commitment,
+        <HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R> as Pcs<Challenge, Challenger>>::ProverData,
+    )
+    where
+        Val: TwoAdicField,
+        StandardUniform: Distribution<Val>,
+        Dft: TwoAdicSubgroupDft<Val>,
+        InputMmcs: Mmcs<Val>,
+        FriMmcs: Mmcs<Challenge>,
+        Challenge: TwoAdicField + ExtensionField<Val>,
+        Challenger: FieldChallenger<Val>
+            + CanObserve<FriMmcs::Commitment>
+            + GrindingChallenger<Witness = Val>,
+        R: Rng + Send + Sync,
+    {
+        let ldes: Vec<_> = evaluations
+            .into_iter()
+            .map(|(domain, evals)| {
+                let shift = Val::GENERATOR / domain.shift;
+                assert_eq!(domain.size(), evals.height());
+
+                self.inner
+                    .dft
+                    .coset_lde_batch(evals, self.inner.fri.log_blowup, shift)
+                    .bit_reverse_rows()
+                    .to_row_major_matrix()
+            })
+            .collect();
+        self.inner.mmcs.commit(ldes)
     }
 }
 
@@ -84,39 +123,24 @@ where
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
-        <HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R> as Pcs<Challenge, Challenger>>::commit_zk(
-            self,
-            evaluations,
-            false,
-        )
-    }
-
-    fn commit_zk(
-        &self,
-        evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
-        use_randomization: bool,
-    ) -> (Self::Commitment, Self::ProverData) {
         let randomized_evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)> = evaluations
             .into_iter()
             .map(|(domain, mat)| {
                 let mut random_evaluation =
                     add_random_cols(mat, self.num_random_codewords, &mut *self.rng.borrow_mut());
-                if use_randomization {
-                    let h = random_evaluation.height();
-                    let w = random_evaluation.width();
-                    // Interleave random values: if `g` is the generator of the new (doubled) trace, then the generator of the original
-                    // trace is g^2.
-                    let random_values = (0..h * w)
-                        .map(|_| self.rng.borrow_mut().random())
-                        .collect::<Vec<_>>();
-                    random_evaluation.values = random_evaluation
-                        .values
-                        .chunks_exact(w)
-                        .interleave(random_values.chunks_exact(w))
-                        .flatten()
-                        .copied()
-                        .collect::<Vec<_>>();
-                }
+
+                let w = random_evaluation.width();
+                // Interleave random values: if `g` is the generator of the new (doubled) trace, then the generator of the original
+                // trace is g^2.
+                random_evaluation.values = random_evaluation
+                    .values
+                    .chunks_exact(w)
+                    .flat_map(|row| {
+                        row.iter()
+                            .copied()
+                            .chain((0..w).map(|_| self.rng.borrow_mut().random()))
+                    })
+                    .collect::<Vec<_>>();
 
                 (domain, random_evaluation)
             })
@@ -243,18 +267,6 @@ where
         HorizontallyTruncated::new(inner_evals, inner_width - self.num_random_codewords)
     }
 
-    fn generate_random_vals(&self, random_len: usize) -> RowMajorMatrix<Val> {
-        let random_vals = (0..random_len * Challenge::DIMENSION)
-            .map(|_| self.rng.borrow_mut().random())
-            .collect::<Vec<_>>();
-        assert!(
-            random_len.is_power_of_two(),
-            "Provided size for the random batch FRI polynomial is not a power of 2: {}",
-            random_len
-        );
-        RowMajorMatrix::new(random_vals, Challenge::DIMENSION)
-    }
-
     fn open(
         &self,
         // For each round,
@@ -327,6 +339,24 @@ where
             }
         }
         self.inner.verify(rounds, inner_proof, challenger)
+    }
+
+    fn get_opt_randomization_poly_commitment(
+        &self,
+        ext_trace_domain: Self::Domain,
+    ) -> (Option<Self::Commitment>, Option<Self::ProverData>) {
+        let random_vals = DenseMatrix::rand(
+            &mut *self.rng.borrow_mut(),
+            ext_trace_domain.size(),
+            self.num_random_codewords + Challenge::DIMENSION,
+        );
+        let extended_domain = <HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R> as Pcs<
+            Challenge,
+            Challenger,
+        >>::natural_domain_for_degree(&self, ext_trace_domain.size());
+        let (r_commit, r_data) =
+            self.commit_transparent::<Challenge, Challenger>(vec![(extended_domain, random_vals)]);
+        (Some(r_commit), Some(r_data))
     }
 }
 

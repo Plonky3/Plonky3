@@ -175,7 +175,7 @@ where
         })
         .sum::<SC::Challenge>();
 
-    let sels = trace_domain.selectors_at_point(zeta, is_zk);
+    let sels = init_trace_domain.selectors_at_point(zeta);
 
     let main = VerticalPair::new(
         RowMajorMatrixView::new_row(&opened_values.trace_local),

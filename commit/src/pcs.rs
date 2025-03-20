@@ -41,27 +41,17 @@ where
     /// This should return a coset domain (s.t. Domain::next_point returns Some)
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain;
 
-    /// Commit to the batch of `evaluations`, without any randomization: used when `zk` is disabled.
-    #[allow(clippy::type_complexity)]
-    fn commit(
-        &self,
-        evaluations: Vec<(Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
-    ) -> (Self::Commitment, Self::ProverData);
-
     /// Commit to the batch of `evaluations`. If `zk` is enabled and `is_random_poly` is false, the evaluations are
-    /// first randomized as explained in Section 3 of https://github.com/IrreducibleOSS/binius.git .
+    /// first randomized as explained in Section 3 of https://eprint.iacr.org/2024/1037.pdf .
     ///
     /// *** Arguments
     /// - `evaluations` are the evaluations of the polynomials we need to commit to.
     /// - `use_randomization` is set to `true` when we are randomizing the evaluations before committing to them.
     #[allow(clippy::type_complexity)]
-    fn commit_zk(
+    fn commit(
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
-        _use_randomization: bool,
-    ) -> (Self::Commitment, Self::ProverData) {
-        self.commit(evaluations)
-    }
+    ) -> (Self::Commitment, Self::ProverData);
 
     /// Commit to the quotient polynomials. If `zk` is not enabled, this is the same as `commit`.
     /// If `zk` is enabled, the quotient polynomials are randomized as explained in Section 4.2 of
@@ -69,7 +59,7 @@ where
     ///
     /// *** Arguments
     /// - `evaluations` are the evaluations of the quotient polynomial chunks we need to commit to.
-    /// - `cis[i]` is the normailizing constant for the Lagrange selector over coset `i`.
+    /// - `cis[i]` is the normalizing constant for the Lagrange selector over coset `i`.
     #[allow(clippy::type_complexity)]
     fn commit_quotient(
         &self,
@@ -77,10 +67,6 @@ where
         _cis: Vec<Val<Self::Domain>>,
     ) -> (Self::Commitment, Self::ProverData) {
         self.commit(evaluations)
-    }
-
-    fn generate_random_vals(&self, _random_len: usize) -> RowMajorMatrix<Val<Self::Domain>> {
-        RowMajorMatrix::default(0, 0)
     }
 
     fn get_evaluations_on_domain<'a>(
@@ -126,6 +112,11 @@ where
         proof: &Self::Proof,
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error>;
+
+    fn get_opt_randomization_poly_commitment(
+        &self,
+        domain: Self::Domain,
+    ) -> (Option<Self::Commitment>, Option<Self::ProverData>);
 }
 
 pub type OpenedValues<F> = Vec<OpenedValuesForRound<F>>;

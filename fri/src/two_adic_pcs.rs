@@ -502,6 +502,13 @@ where
 
         Ok(())
     }
+
+    fn get_opt_randomization_poly_commitment(
+        &self,
+        _domain: Self::Domain,
+    ) -> (Option<Self::Commitment>, Option<Self::ProverData>) {
+        (None, None)
+    }
 }
 
 #[instrument(skip_all)]

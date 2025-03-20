@@ -58,8 +58,8 @@ where
     let trace_domain = pcs.natural_domain_for_degree(degree);
     let ext_trace_domain = pcs.natural_domain_for_degree(ext_degree);
 
-    let (trace_commit, trace_data) = info_span!("commit to trace data")
-        .in_scope(|| pcs.commit_zk(vec![(ext_trace_domain, trace)], true));
+    let (trace_commit, trace_data) =
+        info_span!("commit to trace data").in_scope(|| pcs.commit(vec![(ext_trace_domain, trace)]));
 
     // Observe the instance.
     // degree < 2^255 so we can safely cast log_degree to a u8.
@@ -78,12 +78,11 @@ where
     let quotient_values = quotient_values(
         air,
         public_values,
-        ext_trace_domain,
+        trace_domain,
         quotient_domain,
         trace_on_quotient_domain,
         alpha,
         constraint_count,
-        is_zk,
     );
     let nb_chunks = if is_zk {
         quotient_degree * 2
@@ -115,7 +114,7 @@ where
         info_span!("commit to quotient poly chunks").in_scope(|| {
             pcs.commit_quotient(
                 izip!(qc_domains.clone(), quotient_chunks.clone()).collect_vec(),
-                zp_cis.clone(),
+                zp_cis,
             )
         });
     challenger.observe(quotient_commit.clone());
@@ -126,10 +125,7 @@ where
         // Since we need a random polynomial defined over the extension field, we actually need to commit to `SC::CHallenge::D`
         // random polynomials. This is similar to flattening on the base field a polynomial over the extension field.
         // TODO: This approach is only statistically zk. To make it perfectly zk, `R` would have to truly be an extension field polynomial.
-        let random_vals = pcs.generate_random_vals(ext_trace_domain.size());
-        let extended_domain = pcs.natural_domain_for_degree(ext_trace_domain.size());
-        let (r_commit, r_data) = pcs.commit(vec![(extended_domain, random_vals)]);
-        (Some(r_commit), Some(r_data))
+        pcs.get_opt_randomization_poly_commitment(ext_trace_domain)
     } else {
         (None, None)
     };
@@ -213,7 +209,6 @@ fn quotient_values<SC, A, Mat>(
     trace_on_quotient_domain: Mat,
     alpha: SC::Challenge,
     constraint_count: usize,
-    is_zk: bool,
 ) -> Vec<SC::Challenge>
 where
     SC: StarkGenericConfig,
@@ -223,10 +218,9 @@ where
     let quotient_size = quotient_domain.size();
     let width = trace_on_quotient_domain.width();
     let mut sels = debug_span!("Compute Selectors")
-        .in_scope(|| trace_domain.selectors_on_coset(quotient_domain, is_zk));
+        .in_scope(|| trace_domain.selectors_on_coset(quotient_domain));
 
-    let qdb = log2_strict_usize(quotient_domain.size()) - log2_strict_usize(trace_domain.size())
-        + is_zk as usize;
+    let qdb = log2_strict_usize(quotient_domain.size()) - log2_strict_usize(trace_domain.size());
     let next_step = 1 << qdb;
 
     // We take PackedVal::<SC>::WIDTH worth of values at a time from a quotient_size slice, so we need to
