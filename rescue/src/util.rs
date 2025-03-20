@@ -3,8 +3,7 @@ use alloc::vec::Vec;
 
 use modinverse::modinverse;
 use p3_field::PrimeField64;
-use p3_util::log2_ceil_u64;
-use p3_util::relatively_prime_u64;
+use p3_util::{log2_ceil_u64, relatively_prime_u64};
 use sha3::Shake256;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 
