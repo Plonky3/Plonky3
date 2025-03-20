@@ -54,8 +54,7 @@ pub(crate) fn shake256_hash(seed_bytes: &[u8], num_bytes: usize) -> Vec<u8> {
 /// accuracy is sufficient.
 #[must_use]
 fn pow2_no_std<const P: usize>(x: f32) -> f32 {
-    const LN_2: f32 = 0.69314718056; // log(2)
-    let y = x * LN_2;
+    let y = x * core::f32::consts::LN_2;
     let mut t = 1.0; // ith Taylor term = (x ln(2))^i/i!
     let mut two_pow_x = t;
     for i in 1..P {
@@ -79,7 +78,7 @@ fn pow2_no_std<const P: usize>(x: f32) -> f32 {
 /// passed to pow2_no_std) before being used more widely.
 #[must_use]
 fn log2_no_std(x: u64) -> f32 {
-    const LOG2_E: f32 = 1.44269504;
+    const LOG2_E: f32 = core::f32::consts::LOG2_E;
     // Initial estimate x0 = floor(log2(x))
     let x0 = log2_ceil_u64(x + 1) - 1;
     let p0 = (1 << x0) as f32; // 2^x0
@@ -88,8 +87,7 @@ fn log2_no_std(x: u64) -> f32 {
     let p1 = pow2_no_std::<20>(x1);
     let x2 = x1 - LOG2_E * (1.0 - x as f32 / p1);
     let p2 = pow2_no_std::<20>(x2);
-    let x3 = x2 - LOG2_E * (1.0 - x as f32 / p2);
-    x3
+    x2 - LOG2_E * (1.0 - x as f32 / p2)
 }
 
 /// Compute an approximation to log2(binomial(n, k)).
@@ -104,7 +102,7 @@ fn log2_no_std(x: u64) -> f32 {
 ///
 /// coming from Stirling's approximation for n!.
 pub(crate) fn log2_binom(n: u64, k: u64) -> f32 {
-    const LOG2_2PI: f32 = 2.65149613;
+    const LOG2_2PI: f32 = 2.6514961;
     let log2_n = log2_no_std(n);
     let log2_k = log2_no_std(k);
     let log2_nmk = log2_no_std(n - k);
@@ -122,30 +120,13 @@ mod test {
     #[test]
     fn test_log2_no_std() {
         let inputs = [
-            10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190,
+            11, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190,
             200,
         ];
         let expected = [
-            3.321928094887362,
-            4.321928094887363,
-            4.906890595608519,
-            5.321928094887363,
-            5.643856189774724,
-            5.906890595608519,
-            6.129283016944966,
-            6.321928094887363,
-            6.491853096329675,
-            6.643856189774724,
-            6.78135971352466,
-            6.906890595608519,
-            7.022367813028454,
-            7.129283016944966,
-            7.22881869049588,
-            7.321928094887363,
-            7.409390936137702,
-            7.491853096329675,
-            7.569855608330948,
-            7.643856189774724,
+            3.459432, 4.321928, 4.906891, 5.321928, 5.643856, 5.906891, 6.129283, 6.321928,
+            6.491853, 6.643856, 6.78136, 6.906891, 7.022368, 7.129283, 7.228819, 7.321928,
+            7.409391, 7.491853, 7.569856, 7.643856,
         ];
         for (&x, y) in inputs.iter().zip(expected) {
             assert!((log2_no_std(x) - y) < TOLERANCE);
