@@ -23,13 +23,14 @@ where
     A: Air<SymbolicAirBuilder<F>>,
 {
     // We pad to at least degree 2, since a quotient argument doesn't make sense with smaller degrees.
-    let constraint_degree =
-        get_max_constraint_degree(air, preprocessed_width, num_public_values).max(2);
+    let constraint_degree = (get_max_constraint_degree(air, preprocessed_width, num_public_values)
+        + is_zk as usize)
+        .max(2);
 
     // The quotient's actual degree is approximately (max_constraint_degree - 1) n,
     // where subtracting 1 comes from division by the vanishing polynomial.
     // But we pad it to a power of two so that we can efficiently decompose the quotient.
-    log2_ceil_usize(constraint_degree - 1 + is_zk as usize)
+    log2_ceil_usize(constraint_degree - 1)
 }
 
 #[instrument(name = "infer constraint degree", skip_all, level = "debug")]

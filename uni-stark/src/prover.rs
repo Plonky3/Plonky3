@@ -5,7 +5,9 @@ use itertools::{Itertools, izip};
 use p3_air::Air;
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{BasedVectorSpace, Field, PackedValue, PrimeCharacteristicRing};
+use p3_field::{
+    BasedVectorSpace, PackedValue, PrimeCharacteristicRing, batch_multiplicative_inverse,
+};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
@@ -64,6 +66,7 @@ where
     // Observe the instance.
     // degree < 2^255 so we can safely cast log_degree to a u8.
     challenger.observe(Val::<SC>::from_u8(log_ext_degree as u8));
+    challenger.observe(Val::<SC>::from_u8(log2_strict_usize(degree) as u8));
     // TODO: Might be best practice to include other instance data here; see verifier comment.
 
     challenger.observe(trace_commit.clone());
@@ -94,22 +97,26 @@ where
     let qc_domains = quotient_domain.split_domains(nb_chunks);
 
     // Compute the vanishing polynomial normalizing constants, based on the verifier's check.
-    let zp_cis = qc_domains
-        .iter()
-        .enumerate()
-        .map(|(i, domain)| {
-            qc_domains
+    let zp_cis = if is_zk {
+        batch_multiplicative_inverse(
+            &qc_domains
                 .iter()
                 .enumerate()
-                .filter(|(j, _)| *j != i)
-                .map(|(_, other_domain)| {
-                    other_domain
-                        .vanishing_poly_at_point(domain.first_point())
-                        .inverse()
+                .map(|(i, domain)| {
+                    qc_domains
+                        .iter()
+                        .enumerate()
+                        .filter(|(j, _)| *j != i)
+                        .map(|(_, other_domain)| {
+                            other_domain.vanishing_poly_at_point(domain.first_point())
+                        })
+                        .product()
                 })
-                .product()
-        })
-        .collect_vec();
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        vec![]
+    };
     let (quotient_commit, quotient_data) =
         info_span!("commit to quotient poly chunks").in_scope(|| {
             pcs.commit_quotient(

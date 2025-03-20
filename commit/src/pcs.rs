@@ -55,7 +55,7 @@ where
 
     /// Commit to the quotient polynomials. If `zk` is not enabled, this is the same as `commit`.
     /// If `zk` is enabled, the quotient polynomials are randomized as explained in Section 4.2 of
-    /// https://github.com/IrreducibleOSS/binius.git .
+    /// https://eprint.iacr.org/2024/1037.pdf .
     ///
     /// *** Arguments
     /// - `evaluations` are the evaluations of the quotient polynomial chunks we need to commit to.

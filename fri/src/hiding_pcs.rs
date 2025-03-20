@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::fmt::Debug;
+use itertools::Itertools;
 
 use alloc::vec;
 
@@ -15,7 +16,7 @@ use p3_matrix::horizontally_truncated::HorizontallyTruncated;
 use p3_matrix::row_index_mapped::RowIndexMappedView;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
-use tracing::instrument;
+use tracing::{info_span, instrument};
 
 use crate::verifier::FriError;
 use crate::{BatchOpening, FriConfig, FriProof, TwoAdicFriPcs};
@@ -123,28 +124,34 @@ where
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
-        let randomized_evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)> = evaluations
-            .into_iter()
-            .map(|(domain, mat)| {
-                let mut random_evaluation =
-                    add_random_cols(mat, self.num_random_codewords, &mut *self.rng.borrow_mut());
+        let randomized_evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)> =
+            info_span!("randomize polys").in_scope(|| {
+                evaluations
+                    .into_iter()
+                    .map(|(domain, mat)| {
+                        let mut random_evaluation = add_random_cols(
+                            mat,
+                            self.num_random_codewords,
+                            &mut *self.rng.borrow_mut(),
+                        );
 
-                let w = random_evaluation.width();
-                // Interleave random values: if `g` is the generator of the new (doubled) trace, then the generator of the original
-                // trace is g^2.
-                random_evaluation.values = random_evaluation
-                    .values
-                    .chunks_exact(w)
-                    .flat_map(|row| {
-                        row.iter()
-                            .copied()
-                            .chain((0..w).map(|_| self.rng.borrow_mut().random()))
+                        let w = random_evaluation.width();
+                        // Interleave random values: if `g` is the generator of the new (doubled) trace, then the generator of the original
+                        // trace is g^2.
+                        random_evaluation.values = random_evaluation
+                            .values
+                            .chunks_exact(w)
+                            .flat_map(|row| {
+                                row.iter()
+                                    .copied()
+                                    .chain((0..w).map(|_| self.rng.borrow_mut().random()))
+                            })
+                            .collect::<Vec<_>>();
+
+                        (domain, random_evaluation)
                     })
-                    .collect::<Vec<_>>();
-
-                (domain, random_evaluation)
-            })
-            .collect();
+                    .collect()
+            });
         let ldes: Vec<_> = randomized_evaluations
             .into_iter()
             .map(|(domain, evals)| {
@@ -168,6 +175,9 @@ where
     ) -> (Self::Commitment, Self::ProverData) {
         let last_chunk = evaluations.len() - 1;
         let last_chunk_ci_inv = cis[last_chunk].inverse();
+        let mul_coeffs = (0..last_chunk)
+            .map(|i| cis[i] * last_chunk_ci_inv)
+            .collect_vec();
         let mut rng = self.rng.borrow_mut();
         let randomized_evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)> = evaluations
             .into_iter()
@@ -198,7 +208,7 @@ where
                 let random_values = if i == last_chunk {
                     added_values = Val::zero_vec(h * w);
                     for j in 0..last_chunk {
-                        let mul_coeff = cis[j] * last_chunk_ci_inv;
+                        let mul_coeff = mul_coeffs[j];
                         for k in 0..h * w {
                             added_values[k] -= all_random_values[j * h * w + k] * mul_coeff;
                         }
@@ -220,7 +230,7 @@ where
                 // - and `r` is a random polynomial.
                 let mut vanishing_poly_coeffs =
                     Val::zero_vec((h * w) << (self.inner.fri.log_blowup + 1));
-                let p = (Val::GENERATOR / domain.shift).exp_u64(h as u64);
+                let p = shift.exp_u64(h as u64);
                 Val::GENERATOR
                     .powers()
                     .take(h)
