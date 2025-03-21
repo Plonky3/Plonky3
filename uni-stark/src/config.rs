@@ -34,6 +34,10 @@ pub trait StarkGenericConfig {
         + CanSample<Self::Challenge>;
 
     fn pcs(&self) -> &Self::Pcs;
+
+    fn is_zk(&self) -> bool {
+        Self::Pcs::ZK
+    }
 }
 
 #[derive(Debug)]

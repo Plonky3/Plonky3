@@ -32,30 +32,48 @@ where
         degree_bits,
     } = proof;
 
+    let pcs = config.pcs();
+
     let degree = 1 << degree_bits;
-    let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(air, 0, public_values.len());
+    let log_quotient_degree =
+        get_log_quotient_degree::<Val<SC>, A>(air, 0, public_values.len(), config.is_zk());
     let quotient_degree = 1 << log_quotient_degree;
 
-    let pcs = config.pcs();
     let trace_domain = pcs.natural_domain_for_degree(degree);
+    let init_trace_domain = pcs.natural_domain_for_degree_zk_init(degree);
+
+    let num_chunks = pcs.get_num_chunks(quotient_degree);
     let quotient_domain =
         trace_domain.create_disjoint_domain(1 << (degree_bits + log_quotient_degree));
-    let quotient_chunks_domains = quotient_domain.split_domains(quotient_degree);
+    let quotient_chunks_domains = quotient_domain.split_domains(num_chunks);
+
+    let randomized_quotient_chunks_domains = quotient_chunks_domains
+        .iter()
+        .map(|domain| pcs.natural_domain_for_degree_zk_ext(domain.size()))
+        .collect_vec();
 
     let air_width = <A as BaseAir<Val<SC>>>::width(air);
     let valid_shape = opened_values.trace_local.len() == air_width
         && opened_values.trace_next.len() == air_width
-        && opened_values.quotient_chunks.len() == quotient_degree
+        && opened_values.quotient_chunks.len() == num_chunks
         && opened_values
             .quotient_chunks
             .iter()
-            .all(|qc| qc.len() == <SC::Challenge as BasedVectorSpace<Val<SC>>>::DIMENSION);
+            .all(|qc| qc.len() == <SC::Challenge as BasedVectorSpace<Val<SC>>>::DIMENSION)
+        && if let Some(r_comm) = opened_values.random.clone() {
+            r_comm.len() == SC::Challenge::DIMENSION
+        } else {
+            true
+        };
     if !valid_shape {
         return Err(VerificationError::InvalidProofShape);
     }
 
     // Observe the instance.
     challenger.observe(Val::<SC>::from_usize(proof.degree_bits));
+    challenger.observe(Val::<SC>::from_usize(
+        proof.degree_bits - config.is_zk() as usize,
+    ));
     // TODO: Might be best practice to include other instance data here in the transcript, like some
     // encoding of the AIR. This protects against transcript collisions between distinct instances.
     // Practically speaking though, the only related known attack is from failing to include public
@@ -66,35 +84,49 @@ where
     challenger.observe_slice(public_values);
     let alpha: SC::Challenge = challenger.sample_algebra_element();
     challenger.observe(commitments.quotient_chunks.clone());
+    if let Some(r_commit) = commitments.random.clone() {
+        challenger.observe(r_commit);
+    }
 
     let zeta: SC::Challenge = challenger.sample();
-    let zeta_next = trace_domain.next_point(zeta).unwrap();
+    let zeta_next = init_trace_domain.next_point(zeta).unwrap();
 
-    pcs.verify(
-        vec![
-            (
-                commitments.trace.clone(),
-                vec![(
-                    trace_domain,
-                    vec![
-                        (zeta, opened_values.trace_local.clone()),
-                        (zeta_next, opened_values.trace_next.clone()),
-                    ],
-                )],
-            ),
-            (
-                commitments.quotient_chunks.clone(),
-                quotient_chunks_domains
-                    .iter()
-                    .zip(&opened_values.quotient_chunks)
-                    .map(|(domain, values)| (*domain, vec![(zeta, values.clone())]))
-                    .collect_vec(),
-            ),
-        ],
-        opening_proof,
-        challenger,
-    )
-    .map_err(VerificationError::InvalidOpeningArgument)?;
+    let mut coms_to_verify = if let Some(random_commit) = &commitments.random {
+        let random_values = opened_values
+            .random
+            .clone()
+            .expect("There should be opened random values in zk.");
+        vec![(
+            random_commit.clone(),
+            vec![(trace_domain, vec![(zeta, random_values.clone())])],
+        )]
+    } else {
+        vec![]
+    };
+    coms_to_verify.extend(vec![
+        (
+            commitments.trace.clone(),
+            vec![(
+                trace_domain,
+                vec![
+                    (zeta, opened_values.trace_local.clone()),
+                    (zeta_next, opened_values.trace_next.clone()),
+                ],
+            )],
+        ),
+        (
+            commitments.quotient_chunks.clone(),
+            // Check the commitment on the randomized domains.
+            randomized_quotient_chunks_domains
+                .iter()
+                .zip(&opened_values.quotient_chunks)
+                .map(|(domain, values)| (*domain, vec![(zeta, values.clone())]))
+                .collect_vec(),
+        ),
+    ]);
+
+    pcs.verify(coms_to_verify, opening_proof, challenger)
+        .map_err(VerificationError::InvalidOpeningArgument)?;
 
     let zps = quotient_chunks_domains
         .iter()
@@ -127,7 +159,7 @@ where
         })
         .sum::<SC::Challenge>();
 
-    let sels = trace_domain.selectors_at_point(zeta);
+    let sels = init_trace_domain.selectors_at_point(zeta);
 
     let main = VerticalPair::new(
         RowMajorMatrixView::new_row(&opened_values.trace_local),
