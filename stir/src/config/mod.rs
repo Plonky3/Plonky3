@@ -291,8 +291,10 @@ impl<M: Clone> StirConfig<M> {
         // If folding factors has length (i. e. num_rounds) 1, the only round is
         // by definition the last one, which is treated separately; In that
         // case, windows(2) returns no elements, as desired.
-        for (log_folding_factor_pair, next_rate) in
-            log_folding_factors.windows(2).zip(log_inv_rates)
+        for (i, (log_folding_factor_pair, next_rate)) in log_folding_factors
+            .windows(2)
+            .zip(log_inv_rates.clone())
+            .enumerate()
         {
             let (log_curr_folding_factor, log_next_folding_factor) =
                 (log_folding_factor_pair[0], log_folding_factor_pair[1]);
@@ -316,6 +318,26 @@ impl<M: Clone> StirConfig<M> {
             let query_error = security_assumption.queries_error(log_inv_rate, num_queries);
 
             let num_terms = num_queries + num_ood_samples;
+
+            // Early termination check: if the  number of queries is large
+            // enough that the quotient polynomial would be zero (i. e. greater
+            // than the deg(g_i)), the protocol should terminate early. This is
+            // identical to a protocol with stopping degree equal to deg(g_i)
+            if num_terms > 1 << current_log_degree {
+                let new_params = StirParameters {
+                    log_folding_factors: log_folding_factors[0..i + 1].to_vec(),
+                    log_inv_rates: log_inv_rates[0..i + 1].to_vec(),
+                    ..parameters
+                };
+
+                tracing::info!(
+                    "The requested configuration terminates early at round {}",
+                    i + 1,
+                );
+
+                return StirConfig::new::<F>(new_params);
+            }
+
             let prox_gaps_error_1 = parameters.security_assumption.prox_gaps_error(
                 current_log_degree,
                 next_rate,
