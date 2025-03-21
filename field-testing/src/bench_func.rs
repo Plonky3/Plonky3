@@ -106,7 +106,7 @@ pub fn benchmark_sum_array<R: PrimeCharacteristicRing + Copy, const N: usize, co
     c.bench_function(&format!("{} tree sum/{}, {}", name, REPS, N), |b| {
         b.iter(|| {
             let mut acc = R::ZERO;
-            for row in input.iter_mut() {
+            for row in &mut input {
                 acc += R::sum_array::<N>(row)
             }
             acc
