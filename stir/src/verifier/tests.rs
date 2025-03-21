@@ -309,9 +309,9 @@ fn test_gl_verify_variable_folding_factor() {
 }
 
 #[test]
-// Check that the warning "The quotient polynomial is zero" is logged correctly
-// (cf. prover.rs or verifier.rs for more details)
-fn test_verify_zero() {
+// Check that the warning "The requested configuration terminates early at round
+// 2" is logged correctly
+fn test_early_termination() {
     let _ = tracing_subscriber::fmt::try_init();
 
     // Since we deliberately use a small polynomial to trigger the cancellation
@@ -328,6 +328,7 @@ fn test_verify_zero() {
         4,
         3,
     );
+
     test_bb_verify_with_config(&config);
 }
 
