@@ -19,18 +19,26 @@ use tracing::instrument;
 /// see `MerkleTreeMmcs`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MerkleTree<F, W, M, const DIGEST_ELEMS: usize> {
-    pub(crate) leaves: Vec<M>,
+    pub leaves: Vec<M>,
     // Enable serialization for this type whenever the underlying array type supports it (len 1-32).
     #[serde(bound(serialize = "[W; DIGEST_ELEMS]: Serialize"))]
     // Enable deserialization for this type whenever the underlying array type supports it (len 1-32).
     #[serde(bound(deserialize = "[W; DIGEST_ELEMS]: Deserialize<'de>"))]
-    pub(crate) digest_layers: Vec<Vec<[W; DIGEST_ELEMS]>>,
+    pub digest_layers: Vec<Vec<[W; DIGEST_ELEMS]>>,
     _phantom: PhantomData<F>,
 }
 
 impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
     MerkleTree<F, W, M, DIGEST_ELEMS>
 {
+    pub fn from_leaves_and_digests(leaves: Vec<M>, digest_layers: Vec<Vec<[W; DIGEST_ELEMS]>>) -> Self {
+        Self {
+            leaves,
+            digest_layers,
+            _phantom: PhantomData,
+        }
+    }
+
     /// Matrix heights need not be powers of two. However, if the heights of two given matrices
     /// round up to the same power of two, they must be equal.
     #[instrument(name = "build merkle tree", level = "debug", skip_all,
