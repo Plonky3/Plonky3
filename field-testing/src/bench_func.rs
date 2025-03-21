@@ -79,7 +79,7 @@ pub fn benchmark_iter_sum<R: PrimeCharacteristicRing + Copy, const N: usize, con
     c.bench_function(&format!("{} sum/{}, {}", name, REPS, N), |b| {
         b.iter(|| {
             let mut acc = R::ZERO;
-            for row in input.iter_mut() {
+            for row in &mut input {
                 acc += row.iter().copied().sum()
             }
             acc
