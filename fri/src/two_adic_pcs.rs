@@ -89,7 +89,9 @@ impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
             .shifted_powers(subgroup_start)
             .take(arity)
             .collect_vec();
+
         reverse_slice_index_bits(&mut xs);
+
         assert_eq!(log_arity, 1, "can only interpolate two points for now");
         // interpolate and evaluate at beta
         e0 + (beta - xs[0]) * (e1 - e0) / (xs[1] - xs[0])
@@ -368,8 +370,7 @@ where
         // Batch combination challenge
         let alpha: Challenge = challenger.sample_ext_element();
 
-        let log_global_max_height =
-            proof.commit_phase_commits.len() + self.fri.log_blowup + self.fri.log_final_poly_len;
+        let log_global_max_height = proof.log_max_height;
 
         let g: TwoAdicFriGenericConfigForMmcs<Val, InputMmcs> =
             TwoAdicFriGenericConfig(PhantomData);
