@@ -181,7 +181,7 @@ mod babybear_fri_pcs {
             log_final_poly_len: 0,
             num_queries: 10,
             proof_of_work_bits: 8,
-            arity_bits: 1,
+            arity_bits,
             mmcs: challenge_mmcs,
         };
 

@@ -89,11 +89,12 @@ fn main() -> Result<(), impl Debug> {
         VECTOR_LEN,
     > = VectorizedPoseidon2Air::new(constants);
 
-    let trace = air.generate_vectorized_trace_rows(NUM_PERMUTATIONS);
+    let fri_config = create_benchmark_fri_config(challenge_mmcs);
+
+    let trace = air.generate_vectorized_trace_rows(NUM_PERMUTATIONS, fri_config.log_blowup);
 
     let dft = Dft::default();
 
-    let fri_config = create_benchmark_fri_config(challenge_mmcs);
     type Pcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, StdRng>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config, 4, StdRng::from_entropy());
 

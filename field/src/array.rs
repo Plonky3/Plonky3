@@ -48,10 +48,6 @@ impl<F: Field, const N: usize> FieldAlgebra for FieldArray<F, N> {
         f.into()
     }
 
-    fn from_bool(b: bool) -> Self {
-        [F::from_bool(b); N].into()
-    }
-
     fn from_canonical_u8(n: u8) -> Self {
         [F::from_canonical_u8(n); N].into()
     }

@@ -52,6 +52,9 @@ fn main() -> Result<(), impl Debug> {
 
     let fri_config = create_benchmark_fri_config(challenge_mmcs);
 
+    let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
+    let trace = generate_trace_rows::<Val>(inputs, fri_config.log_blowup);
+
     type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs {
         mmcs: val_mmcs,
@@ -61,9 +64,6 @@ fn main() -> Result<(), impl Debug> {
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs);
-
-    let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
-    let trace = generate_trace_rows::<Val>(inputs);
 
     let mut challenger = Challenger::from_hasher(vec![], byte_hash);
     let proof = prove(&config, &KeccakAir {}, &mut challenger, trace, &vec![]);

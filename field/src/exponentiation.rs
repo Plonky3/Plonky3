@@ -5,7 +5,7 @@ pub fn exp_u64_by_squaring<FA: FieldAlgebra>(val: FA, power: u64) -> FA {
     let mut product = FA::ONE;
 
     for j in 0..bits_u64(power) {
-        if (power >> j & 1) != 0 {
+        if ((power >> j) & 1) != 0 {
             product *= current.clone();
         }
         current = current.square();

@@ -17,7 +17,7 @@ use p3_poseidon2::{
     Poseidon2,
 };
 
-use crate::{to_goldilocks_array, Goldilocks};
+use crate::Goldilocks;
 
 /// Degree of the chosen permutation polynomial for Goldilocks, used as the Poseidon2 S-Box.
 ///
@@ -51,7 +51,7 @@ pub type Poseidon2GoldilocksHL<const WIDTH: usize> = Poseidon2<
     GOLDILOCKS_S_BOX_DEGREE,
 >;
 
-pub const MATRIX_DIAG_8_GOLDILOCKS: [Goldilocks; 8] = to_goldilocks_array([
+pub const MATRIX_DIAG_8_GOLDILOCKS: [Goldilocks; 8] = Goldilocks::new_array([
     0xa98811a1fed4e3a5,
     0x1cc48b54f377e2a0,
     0xe40cd4f6c5609a26,
@@ -62,7 +62,7 @@ pub const MATRIX_DIAG_8_GOLDILOCKS: [Goldilocks; 8] = to_goldilocks_array([
     0x3f7af9125da962fe,
 ]);
 
-pub const MATRIX_DIAG_12_GOLDILOCKS: [Goldilocks; 12] = to_goldilocks_array([
+pub const MATRIX_DIAG_12_GOLDILOCKS: [Goldilocks; 12] = Goldilocks::new_array([
     0xc3b6c08e23ba9300,
     0xd84b5de94a324fb6,
     0x0d0c371c5b35b84f,
@@ -77,7 +77,7 @@ pub const MATRIX_DIAG_12_GOLDILOCKS: [Goldilocks; 12] = to_goldilocks_array([
     0xd27dbb6944917b60,
 ]);
 
-pub const MATRIX_DIAG_16_GOLDILOCKS: [Goldilocks; 16] = to_goldilocks_array([
+pub const MATRIX_DIAG_16_GOLDILOCKS: [Goldilocks; 16] = Goldilocks::new_array([
     0xde9b91a467d6afc0,
     0xc5f16b9c76a9be17,
     0x0ab0fef2d540ac55,
@@ -96,7 +96,7 @@ pub const MATRIX_DIAG_16_GOLDILOCKS: [Goldilocks; 16] = to_goldilocks_array([
     0x774487b8c40089bb,
 ]);
 
-pub const MATRIX_DIAG_20_GOLDILOCKS: [Goldilocks; 20] = to_goldilocks_array([
+pub const MATRIX_DIAG_20_GOLDILOCKS: [Goldilocks; 20] = Goldilocks::new_array([
     0x95c381fda3b1fa57,
     0xf36fe9eb1288f42c,
     0x89f5dcdfef277944,
@@ -394,9 +394,9 @@ mod tests {
         let poseidon2: Poseidon2GoldilocksHL<WIDTH> = Poseidon2::new(
             ExternalLayerConstants::<Goldilocks, WIDTH>::new_from_saved_array(
                 HL_GOLDILOCKS_8_EXTERNAL_ROUND_CONSTANTS,
-                to_goldilocks_array,
+                Goldilocks::new_array,
             ),
-            to_goldilocks_array(HL_GOLDILOCKS_8_INTERNAL_ROUND_CONSTANTS).to_vec(),
+            Goldilocks::new_array(HL_GOLDILOCKS_8_INTERNAL_ROUND_CONSTANTS).to_vec(),
         );
 
         poseidon2.permute_mut(input);
@@ -405,9 +405,9 @@ mod tests {
     /// Test on the constant 0 input.
     #[test]
     fn test_poseidon2_width_8_zeroes() {
-        let mut input: [F; 8] = [0_u64; 8].map(F::from_wrapped_u64);
+        let mut input: [F; 8] = [Goldilocks::ZERO; 8];
 
-        let expected: [F; 8] = [
+        let expected: [F; 8] = Goldilocks::new_array([
             4214787979728720400,
             12324939279576102560,
             10353596058419792404,
@@ -416,8 +416,7 @@ mod tests {
             16227496357546636742,
             2959271128466640042,
             14285409611125725709,
-        ]
-        .map(F::from_canonical_u64);
+        ]);
         hl_poseidon2_goldilocks_width_8(&mut input);
         assert_eq!(input, expected);
     }
@@ -425,9 +424,9 @@ mod tests {
     /// Test on the input 0..16.
     #[test]
     fn test_poseidon2_width_8_range() {
-        let mut input: [F; 8] = array::from_fn(|i| F::from_wrapped_u64(i as u64));
+        let mut input: [F; 8] = array::from_fn(F::from_canonical_usize);
 
-        let expected: [F; 8] = [
+        let expected: [F; 8] = Goldilocks::new_array([
             14266028122062624699,
             5353147180106052723,
             15203350112844181434,
@@ -436,8 +435,7 @@ mod tests {
             10184091939013874068,
             16774100645754596496,
             12047415603622314780,
-        ]
-        .map(F::from_canonical_u64);
+        ]);
         hl_poseidon2_goldilocks_width_8(&mut input);
         assert_eq!(input, expected);
     }
@@ -448,7 +446,7 @@ mod tests {
     /// vector([ZZ.random_element(2**31) for t in range(16)])
     #[test]
     fn test_poseidon2_width_8_random() {
-        let mut input: [F; 8] = [
+        let mut input: [F; 8] = Goldilocks::new_array([
             5116996373749832116,
             8931548647907683339,
             17132360229780760684,
@@ -457,10 +455,9 @@ mod tests {
             15695650327991256125,
             17604752143022812942,
             543194415197607509,
-        ]
-        .map(F::from_wrapped_u64);
+        ]);
 
-        let expected: [F; 8] = [
+        let expected: [F; 8] = Goldilocks::new_array([
             1831346684315917658,
             13497752062035433374,
             12149460647271516589,
@@ -469,8 +466,7 @@ mod tests {
             3140092508031220630,
             4251208148861706881,
             6973971209430822232,
-        ]
-        .map(F::from_canonical_u64);
+        ]);
 
         hl_poseidon2_goldilocks_width_8(&mut input);
         assert_eq!(input, expected);
