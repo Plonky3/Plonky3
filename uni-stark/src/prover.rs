@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use itertools::{Itertools, izip};
+use itertools::Itertools;
 use p3_air::Air;
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
@@ -9,7 +9,7 @@ use p3_field::{BasedVectorSpace, PackedValue, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
-use p3_util::log2_strict_usize;
+use p3_util::{log2_ceil_usize, log2_strict_usize};
 use tracing::{debug_span, info_span, instrument};
 
 use crate::{
@@ -40,7 +40,7 @@ where
     let pcs = config.pcs();
 
     let degree = trace.height();
-    let (log_degree, log_ext_degree) = pcs.log2_strict_usize(degree);
+    let log_ext_degree = log2_strict_usize(degree) + config.is_zk() as usize;
 
     let symbolic_constraints = get_symbolic_constraints::<Val<SC>, A>(air, 0, public_values.len());
     let constraint_count = symbolic_constraints.len();
@@ -49,18 +49,21 @@ where
         .map(SymbolicExpression::degree_multiple)
         .max()
         .unwrap_or(0);
-    let (log_quotient_degree, nb_chunks) = pcs.log_quotient_degree_nb_chunks(constraint_degree - 1);
+    let log_quotient_degree = log2_ceil_usize(constraint_degree - 1 + config.is_zk() as usize);
+    let quotient_degree = 1 << (log_quotient_degree + config.is_zk() as usize);
 
     let trace_domain = pcs.natural_domain_for_degree(degree);
-    let ext_trace_domain = pcs.natural_domain_for_degree_zk_ext(degree);
+    let ext_trace_domain = pcs.natural_domain_for_degree(degree * (config.is_zk() as usize + 1));
 
-    let (trace_commit, trace_data) =
-        info_span!("commit to trace data").in_scope(|| pcs.commit(vec![(ext_trace_domain, trace)]));
+    let (trace_commit, trace_data) = info_span!("commit to trace data")
+        .in_scope(|| pcs.commit(vec![(ext_trace_domain, trace)].into_iter()));
 
     // Observe the instance.
     // degree < 2^255 so we can safely cast log_degree to a u8.
     challenger.observe(Val::<SC>::from_u8(log_ext_degree as u8));
-    challenger.observe(Val::<SC>::from_u8(log_degree as u8));
+    challenger.observe(Val::<SC>::from_u8(
+        log_ext_degree as u8 - config.is_zk() as u8,
+    ));
     // TODO: Might be best practice to include other instance data here; see verifier comment.
 
     challenger.observe(trace_commit.clone());
@@ -83,19 +86,11 @@ where
     );
 
     let quotient_flat = RowMajorMatrix::new_col(quotient_values.clone()).flatten_to_base();
-    let quotient_chunks = quotient_domain.split_evals(nb_chunks, quotient_flat);
-    let qc_domains = quotient_domain.split_domains(nb_chunks);
+    let quotient_chunks = quotient_domain.split_evals(quotient_degree, quotient_flat);
+    let qc_domains = quotient_domain.split_domains(quotient_degree);
 
-    // Compute the vanishing polynomial normalizing constants, based on the verifier's check.
-    let zp_cis = pcs.get_zp_cis(&qc_domains);
-
-    let (quotient_commit, quotient_data) =
-        info_span!("commit to quotient poly chunks").in_scope(|| {
-            pcs.commit_quotient(
-                izip!(qc_domains.clone(), quotient_chunks.clone()).collect_vec(),
-                zp_cis,
-            )
-        });
+    let (quotient_commit, quotient_data) = info_span!("commit to quotient poly chunks")
+        .in_scope(|| pcs.commit_quotient(qc_domains.clone(), quotient_chunks.clone()));
     challenger.observe(quotient_commit.clone());
 
     // We generate random extension field values of the size of the randomized trace randomized. Since we need `R` of degree that of the extended
@@ -103,7 +98,12 @@ where
     // Since we need a random polynomial defined over the extension field, we actually need to commit to `SC::CHallenge::D`
     // random polynomials. This is similar to flattening on the base field a polynomial over the extension field.
     // TODO: This approach is only statistically zk. To make it perfectly zk, `R` would have to truly be an extension field polynomial.
-    let (opt_r_commit, opt_r_data) = pcs.get_opt_randomization_poly_commitment(ext_trace_domain);
+    let opt_r_commit_data = pcs.get_opt_randomization_poly_commitment(ext_trace_domain);
+    let (opt_r_commit, opt_r_data) = if let Some((r_commit, r_data)) = opt_r_commit_data {
+        (Some(r_commit), Some(r_data))
+    } else {
+        (None, None)
+    };
 
     let commitments = Commitments {
         trace: trace_commit,
@@ -128,7 +128,7 @@ where
                     (
                         &quotient_data,
                         // open every chunk at zeta
-                        (0..nb_chunks).map(|_| vec![zeta]).collect_vec(),
+                        (0..quotient_degree).map(|_| vec![zeta]).collect_vec(),
                     ),
                 ],
                 challenger,
@@ -140,7 +140,7 @@ where
                     (
                         &quotient_data,
                         // open every chunk at zeta
-                        (0..nb_chunks).map(|_| vec![zeta]).collect_vec(),
+                        (0..quotient_degree).map(|_| vec![zeta]).collect_vec(),
                     ),
                 ],
                 challenger,

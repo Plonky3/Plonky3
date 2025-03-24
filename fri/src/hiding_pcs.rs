@@ -13,7 +13,6 @@ use p3_matrix::bitrev::{BitReversalPerm, BitReversibleMatrix};
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
 use p3_matrix::horizontally_truncated::HorizontallyTruncated;
 use p3_matrix::row_index_mapped::RowIndexMappedView;
-use p3_util::log2_strict_usize;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use tracing::{info_span, instrument};
@@ -83,6 +82,41 @@ impl<Val, Dft, InputMmcs, FriMmcs, R> HidingFriPcs<Val, Dft, InputMmcs, FriMmcs,
             .collect();
         self.inner.mmcs.commit(ldes)
     }
+
+    /// If in zk mode, computes the normalizing constants for the Langrange selectors of the provided domains.
+    fn get_zp_cis<Challenge, Challenger>(
+        &self,
+        qc_domains: &[<Self as Pcs<Challenge, Challenger>>::Domain],
+    ) -> Vec<p3_commit::Val<<Self as Pcs<Challenge, Challenger>>::Domain>>
+    where
+        Val: TwoAdicField,
+        StandardUniform: Distribution<Val>,
+        Dft: TwoAdicSubgroupDft<Val>,
+        InputMmcs: Mmcs<Val>,
+        FriMmcs: Mmcs<Challenge>,
+        Challenge: TwoAdicField + ExtensionField<Val>,
+        Challenger: FieldChallenger<Val>
+            + CanObserve<FriMmcs::Commitment>
+            + GrindingChallenger<Witness = Val>,
+        R: Rng + Send + Sync,
+    {
+        batch_multiplicative_inverse(
+            &qc_domains
+                .iter()
+                .enumerate()
+                .map(|(i, domain)| {
+                    qc_domains
+                        .iter()
+                        .enumerate()
+                        .filter(|(j, _)| *j != i)
+                        .map(|(_, other_domain)| {
+                            other_domain.vanishing_poly_at_point(domain.first_point())
+                        })
+                        .product()
+                })
+                .collect::<Vec<_>>(),
+        )
+    }
 }
 
 impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger, R> Pcs<Challenge, Challenger>
@@ -114,65 +148,19 @@ where
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
 
     const ZK: bool = true;
-    const TRACE_IDX: usize = 1;
-    const QUOTIENT_IDX: usize = 2;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
             &self.inner, degree)
     }
 
-    fn natural_domain_for_degree_zk_ext(&self, degree: usize) -> Self::Domain {
-        <Self as Pcs<Challenge, Challenger>>::natural_domain_for_degree(self, degree * 2)
-    }
-
-    fn natural_domain_for_degree_zk_init(&self, degree: usize) -> Self::Domain {
-        <Self as Pcs<Challenge, Challenger>>::natural_domain_for_degree(self, degree / 2)
-    }
-
-    fn log2_strict_usize(&self, degree: usize) -> (usize, usize) {
-        let log_strict = log2_strict_usize(degree);
-
-        (log_strict, log_strict + 1)
-    }
-
-    fn log_quotient_degree_nb_chunks(&self, degree: usize) -> (usize, usize) {
-        let log_ceil = p3_util::log2_ceil_usize(degree + 1);
-
-        (log_ceil, 1 << (log_ceil + 1))
-    }
-
-    fn get_num_chunks(&self, quotient_degree: usize) -> usize {
-        quotient_degree * 2
-    }
-
-    fn get_zp_cis(&self, qc_domains: &[Self::Domain]) -> Vec<p3_commit::Val<Self::Domain>> {
-        batch_multiplicative_inverse(
-            &qc_domains
-                .iter()
-                .enumerate()
-                .map(|(i, domain)| {
-                    qc_domains
-                        .iter()
-                        .enumerate()
-                        .filter(|(j, _)| *j != i)
-                        .map(|(_, other_domain)| {
-                            other_domain.vanishing_poly_at_point(domain.first_point())
-                        })
-                        .product()
-                })
-                .collect::<Vec<_>>(),
-        )
-    }
-
     fn commit(
         &self,
-        evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
+        evaluations: impl Iterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
         let randomized_evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)> =
             info_span!("randomize polys").in_scope(|| {
                 evaluations
-                    .into_iter()
                     .map(|(domain, mat)| {
                         let mut random_evaluation = add_random_cols(
                             mat,
@@ -215,35 +203,35 @@ where
 
     fn commit_quotient(
         &self,
-        evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
-        cis: Vec<Val>,
+        domains: Vec<Self::Domain>,
+        evaluations: Vec<RowMajorMatrix<Val>>,
     ) -> (Self::Commitment, Self::ProverData) {
+        // Compute the vanishing polynomial normalizing constants.
+        let cis = self.get_zp_cis::<Challenge, Challenger>(&domains);
+
         let last_chunk = evaluations.len() - 1;
         let last_chunk_ci_inv = cis[last_chunk].inverse();
         let mul_coeffs = (0..last_chunk)
             .map(|i| cis[i] * last_chunk_ci_inv)
             .collect_vec();
+
         let mut rng = self.rng.borrow_mut();
-        let randomized_evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)> = evaluations
+        let randomized_evaluations: Vec<RowMajorMatrix<Val>> = evaluations
             .into_iter()
-            .map(|(domain, mat)| {
-                (
-                    domain,
-                    add_random_cols(mat, self.num_random_codewords, &mut *rng),
-                )
-            })
+            .map(|mat| add_random_cols(mat, self.num_random_codewords, &mut *rng))
             .collect();
         // Add random values to the LDE evaluations as described in https://eprint.iacr.org/2024/1037.pdf.
         // If we have `d` chunks, let q'_i(X) = q_i(X) + v_H_i(X) * t_i(X) where t(X) is random, for 1 <= i < d.
         // q'_d(X) = q_d(X) - v_H_d(X) c_i \sum t_i(X) where c_i is a Lagrange normalization constant.
-        let h = randomized_evaluations[0].1.height();
-        let w = randomized_evaluations[0].1.width();
+        let h = randomized_evaluations[0].height();
+        let w = randomized_evaluations[0].width();
         let all_random_values = (0..(randomized_evaluations.len() - 1) * h * w)
             .map(|_| rng.random())
             .collect::<Vec<_>>();
 
-        let ldes: Vec<_> = randomized_evaluations
+        let ldes: Vec<_> = domains
             .into_iter()
+            .zip(randomized_evaluations)
             .enumerate()
             .map(|(i, (domain, evals))| {
                 assert_eq!(domain.size(), evals.height());
@@ -399,7 +387,7 @@ where
     fn get_opt_randomization_poly_commitment(
         &self,
         ext_trace_domain: Self::Domain,
-    ) -> (Option<Self::Commitment>, Option<Self::ProverData>) {
+    ) -> Option<(Self::Commitment, Self::ProverData)> {
         let random_vals = DenseMatrix::rand(
             &mut *self.rng.borrow_mut(),
             ext_trace_domain.size(),
@@ -409,9 +397,9 @@ where
             self,
             ext_trace_domain.size(),
         );
-        let (r_commit, r_data) =
+        let r_commit_and_data =
             self.commit_transparent::<Challenge, Challenger>(vec![(extended_domain, random_vals)]);
-        (Some(r_commit), Some(r_data))
+        Some(r_commit_and_data)
     }
 }
 

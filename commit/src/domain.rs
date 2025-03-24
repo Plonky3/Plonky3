@@ -231,11 +231,8 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     /// - `Z_{gH}(X)/(g^{-1}X - h^{-1})`: The Lagrange selector of the point `gh^{-1}` where `h` is the generator of `H`.
     /// - `(g^{-1}X - h^{-1})`: The Lagrange selector of the subset consisting of everything but the point `gh^{-1}`.
     /// - `1/Z_{gH}(X)`: The inverse of the vanishing polynomial.
-    ///
-    /// Note that in the zk case, `self.log_n` stores `log(2 * |H|)`.
     fn selectors_at_point<Ext: ExtensionField<Val>>(&self, point: Ext) -> LagrangeSelectors<Ext> {
         let unshifted_point = point * self.shift.inverse();
-
         let z_h = unshifted_point.exp_power_of_2(self.log_n) - Ext::ONE;
         LagrangeSelectors {
             is_first_row: z_h / (unshifted_point - Ext::ONE),
@@ -254,9 +251,9 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         assert_ne!(coset.shift, Val::ONE);
         assert!(coset.log_n >= self.log_n);
         // In the zk case, the trace has double the original size due to randomization. We need the original size here.
-        let zk_logn = self.log_n;
-        let rate_bits = coset.log_n - zk_logn;
-        let s_pow_n = coset.shift.exp_power_of_2(zk_logn);
+        let rate_bits = coset.log_n - self.log_n;
+
+        let s_pow_n = coset.shift.exp_power_of_2(self.log_n);
         // evals of Z_H(X) = X^n - 1
         let evals = Val::two_adic_generator(rate_bits)
             .powers()
@@ -287,7 +284,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
 
         LagrangeSelectors {
             is_first_row: single_point_selector(0),
-            is_last_row: single_point_selector((1 << zk_logn) - 1),
+            is_last_row: single_point_selector((1 << self.log_n) - 1),
             is_transition: xs.into_iter().map(|x| x - subgroup_last).collect(),
             inv_vanishing: batch_multiplicative_inverse(&evals)
                 .into_iter()

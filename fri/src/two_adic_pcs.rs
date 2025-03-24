@@ -18,7 +18,7 @@ use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
 use p3_matrix::{Dimensions, Matrix};
 use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
-use p3_util::{log2_ceil_usize, log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
+use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
 use serde::{Deserialize, Serialize};
 use tracing::{info_span, instrument};
 
@@ -147,8 +147,6 @@ where
     type Proof = FriProof<Challenge, FriMmcs, Val, Vec<BatchOpening<Val, InputMmcs>>>;
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
     const ZK: bool = false;
-    const TRACE_IDX: usize = 0;
-    const QUOTIENT_IDX: usize = 1;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         let log_n = log2_strict_usize(degree);
@@ -158,34 +156,9 @@ where
         }
     }
 
-    fn natural_domain_for_degree_zk_ext(&self, degree: usize) -> Self::Domain {
-        <Self as Pcs<Challenge, Challenger>>::natural_domain_for_degree(self, degree)
-    }
-
-    fn natural_domain_for_degree_zk_init(&self, degree: usize) -> Self::Domain {
-        <Self as Pcs<Challenge, Challenger>>::natural_domain_for_degree(self, degree)
-    }
-
-    fn get_zp_cis(&self, _qc_domains: &[Self::Domain]) -> Vec<p3_commit::Val<Self::Domain>> {
-        vec![]
-    }
-
-    fn log2_strict_usize(&self, degree: usize) -> (usize, usize) {
-        (log2_strict_usize(degree), log2_strict_usize(degree))
-    }
-
-    fn log_quotient_degree_nb_chunks(&self, degree: usize) -> (usize, usize) {
-        let log_ceil = log2_ceil_usize(degree);
-        (log_ceil, 1 << log_ceil)
-    }
-
-    fn get_num_chunks(&self, quotient_degree: usize) -> usize {
-        quotient_degree
-    }
-
     fn commit(
         &self,
-        evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
+        evaluations: impl Iterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
         let ldes: Vec<_> = evaluations
             .into_iter()
@@ -528,13 +501,6 @@ where
         })?;
 
         Ok(())
-    }
-
-    fn get_opt_randomization_poly_commitment(
-        &self,
-        _domain: Self::Domain,
-    ) -> (Option<Self::Commitment>, Option<Self::ProverData>) {
-        (None, None)
     }
 }
 

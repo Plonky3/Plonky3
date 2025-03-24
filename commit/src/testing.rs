@@ -7,7 +7,7 @@ use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_util::{log2_ceil_usize, log2_strict_usize};
+use p3_util::log2_strict_usize;
 use serde::{Deserialize, Serialize};
 
 use crate::{OpenedValues, Pcs, PolynomialSpace, TwoAdicMultiplicativeCoset};
@@ -51,8 +51,6 @@ where
     type Proof = ();
     type Error = ();
     const ZK: bool = false;
-    const TRACE_IDX: usize = 0;
-    const QUOTIENT_IDX: usize = 1;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         TwoAdicMultiplicativeCoset {
@@ -61,34 +59,9 @@ where
         }
     }
 
-    fn natural_domain_for_degree_zk_ext(&self, degree: usize) -> Self::Domain {
-        <Self as Pcs<Challenge, Challenger>>::natural_domain_for_degree(self, degree)
-    }
-
-    fn natural_domain_for_degree_zk_init(&self, degree: usize) -> Self::Domain {
-        <Self as Pcs<Challenge, Challenger>>::natural_domain_for_degree(self, degree)
-    }
-
-    fn get_zp_cis(&self, _qc_domains: &[Self::Domain]) -> Vec<crate::Val<Self::Domain>> {
-        vec![]
-    }
-
-    fn log2_strict_usize(&self, degree: usize) -> (usize, usize) {
-        (log2_strict_usize(degree), log2_strict_usize(degree))
-    }
-
-    fn log_quotient_degree_nb_chunks(&self, degree: usize) -> (usize, usize) {
-        let log_ceil = log2_ceil_usize(degree);
-        (log_ceil, 1 << log_ceil)
-    }
-
-    fn get_num_chunks(&self, quotient_degree: usize) -> usize {
-        quotient_degree
-    }
-
     fn commit(
         &self,
-        evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
+        evaluations: impl Iterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
         let coeffs: Vec<_> = evaluations
             .into_iter()
@@ -199,12 +172,5 @@ where
             }
         }
         Ok(())
-    }
-
-    fn get_opt_randomization_poly_commitment(
-        &self,
-        _domain: Self::Domain,
-    ) -> (Option<Self::Commitment>, Option<Self::ProverData>) {
-        (None, None)
     }
 }

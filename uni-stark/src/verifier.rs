@@ -37,25 +37,24 @@ where
     let degree = 1 << degree_bits;
     let log_quotient_degree =
         get_log_quotient_degree::<Val<SC>, A>(air, 0, public_values.len(), config.is_zk());
-    let quotient_degree = 1 << log_quotient_degree;
+    let quotient_degree = 1 << (log_quotient_degree + config.is_zk() as usize);
 
     let trace_domain = pcs.natural_domain_for_degree(degree);
-    let init_trace_domain = pcs.natural_domain_for_degree_zk_init(degree);
+    let init_trace_domain = pcs.natural_domain_for_degree(degree >> (config.is_zk() as usize));
 
-    let num_chunks = pcs.get_num_chunks(quotient_degree);
     let quotient_domain =
         trace_domain.create_disjoint_domain(1 << (degree_bits + log_quotient_degree));
-    let quotient_chunks_domains = quotient_domain.split_domains(num_chunks);
+    let quotient_chunks_domains = quotient_domain.split_domains(quotient_degree);
 
     let randomized_quotient_chunks_domains = quotient_chunks_domains
         .iter()
-        .map(|domain| pcs.natural_domain_for_degree_zk_ext(domain.size()))
+        .map(|domain| pcs.natural_domain_for_degree(domain.size() << (config.is_zk() as usize)))
         .collect_vec();
 
     let air_width = <A as BaseAir<Val<SC>>>::width(air);
     let valid_shape = opened_values.trace_local.len() == air_width
         && opened_values.trace_next.len() == air_width
-        && opened_values.quotient_chunks.len() == num_chunks
+        && opened_values.quotient_chunks.len() == quotient_degree
         && opened_values
             .quotient_chunks
             .iter()

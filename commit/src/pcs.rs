@@ -39,39 +39,23 @@ where
     const ZK: bool;
 
     /// Index of the trace commitment in the computed opened values.
-    const TRACE_IDX: usize;
+    const TRACE_IDX: usize = Self::ZK as usize;
 
     /// Index of the quotient commitments in the computed opened values.
-    const QUOTIENT_IDX: usize;
+    const QUOTIENT_IDX: usize = Self::TRACE_IDX + 1;
 
     /// This should return a coset domain (s.t. Domain::next_point returns Some)
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain;
 
-    /// This should return a coset domain (s.t. Domain::next_point returns Some) for `actual_degree = degree + is_zk`.
-    fn natural_domain_for_degree_zk_ext(&self, degree: usize) -> Self::Domain;
-
-    /// This should return a coset domain (s.t. Domain::next_point returns Some) for `actual_degree = degree - is_zk`.
-    fn natural_domain_for_degree_zk_init(&self, degree: usize) -> Self::Domain;
-
-    /// Computes the `log2_strict_usize` of both `degree` and of the degree after zk randomization.
-    fn log2_strict_usize(&self, degree: usize) -> (usize, usize);
-
-    /// Computes the `log2_ceil` of the quotient degree, as well as the number of quotient chunks.
-    fn log_quotient_degree_nb_chunks(&self, degree: usize) -> (usize, usize);
-
-    /// Computes the number of quotient chunks given the quotient degree.
-    fn get_num_chunks(&self, quotient_degree: usize) -> usize;
-
-    /// Commit to the batch of `evaluations`. If `zk` is enabled and `is_random_poly` is false, the evaluations are
+    /// Commit to the batch of `evaluations`. If `zk` is enabled, the evaluations are
     /// first randomized as explained in Section 3 of https://eprint.iacr.org/2024/1037.pdf .
     ///
     /// *** Arguments
     /// - `evaluations` are the evaluations of the polynomials we need to commit to.
-    /// - `use_randomization` is set to `true` when we are randomizing the evaluations before committing to them.
     #[allow(clippy::type_complexity)]
     fn commit(
         &self,
-        evaluations: Vec<(Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
+        evaluations: impl Iterator<Item = (Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
     ) -> (Self::Commitment, Self::ProverData);
 
     /// Commit to the quotient polynomials. If `zk` is not enabled, this is the same as `commit`.
@@ -84,10 +68,10 @@ where
     #[allow(clippy::type_complexity)]
     fn commit_quotient(
         &self,
-        evaluations: Vec<(Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
-        _cis: Vec<Val<Self::Domain>>,
+        evaluations: Vec<Self::Domain>,
+        domains: Vec<RowMajorMatrix<Val<Self::Domain>>>,
     ) -> (Self::Commitment, Self::ProverData) {
-        self.commit(evaluations)
+        self.commit(evaluations.into_iter().zip(domains))
     }
 
     fn get_evaluations_on_domain<'a>(
@@ -96,9 +80,6 @@ where
         idx: usize,
         domain: Self::Domain,
     ) -> Self::EvaluationsOnDomain<'a>;
-
-    /// If in zk mode, computes the normalizing constants for the Langrange selectors of the provided domains.
-    fn get_zp_cis(&self, qc_domains: &[Self::Domain]) -> Vec<Val<Self::Domain>>;
 
     fn open(
         &self,
@@ -139,8 +120,10 @@ where
 
     fn get_opt_randomization_poly_commitment(
         &self,
-        domain: Self::Domain,
-    ) -> (Option<Self::Commitment>, Option<Self::ProverData>);
+        _domain: Self::Domain,
+    ) -> Option<(Self::Commitment, Self::ProverData)> {
+        None
+    }
 }
 
 pub type OpenedValues<F> = Vec<OpenedValuesForRound<F>>;
