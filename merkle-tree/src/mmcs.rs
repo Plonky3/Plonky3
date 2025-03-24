@@ -1,22 +1,20 @@
 //! A MerkleTreeMmcs is a generalization of the standard MerkleTree commitment scheme which supports
-//! committing to several vectors of different sizes.
+//! committing to several matrices of different heights.
 //!
-//! Say we wish to commit to 2 vectors M0 and M1 of length 32 and 8 where we wish to reveal values in groups of 4.
+//! Say we wish to commit to 2 matrices M and N with dimensions (8, i) and (2, j) respectively.
 //! Let H denote the hash function and C the compression function for our tree.
-//! Then MerkleTreeMmcs produces a commitment to M0 and M1 using the following tree structure:
+//! Then MerkleTreeMmcs produces a commitment to M and N using the following tree structure:
 //!
-//!                                  c00 = root = C(c10, c11)                              
-//!                 //                                                    \\            
-//!          c10 = C(C(c20, c21), H(M1[..4]))                      c11 = C(C(c22, c23), H(M1[4..8]))
-//!           //                      \\                            //                          \\     
-//!       c20 = C(L, R)            c21 = C(L, R)                c22 = C(L, R)                c23 = C(L, R)  
-//!    L//            \\R      L//                \\R      L//                 \\R      L//                 \\R     
-//!  H(M0[..4]) H(M0[4..8])  H(M0[8..12]) H(M0[12..16])  H(M0[16..20]) H(M0[20..24])  H(M0[24..28]) H(M0[28..32])
+//!                                  root = c00 = C(c10, c11)                              
+//!                        //                                                  \\            
+//!           c10 = C(C(c20, c21), H(N[0]))                      c11 = C(C(c22, c23), H(N[1]))
+//!            //                    \\                          //                    \\     
+//!       c20 = C(L, R)            c21 = C(L, R)            c22 = C(L, R)            c23 = C(L, R)  
+//!    L//            \\R       L//            \\R       L//            \\R       L//            \\R     
+//!  H(M[0])         H(M[1])  H(M[2])         H(M[3])  H(M[4])         H(M[5])  H(M[6])         H(M[7])
 //!
-//! E.g. we start by making a standard MerkleTree commitment to M0 and then add in M1 by hashing when we
-//! get to the correct level.
-//!
-//! Then a proof for the values of say M0[8..12] consists of `H(M0[12..16]), c20, H(M1[..4]), c11`.
+//! E.g. we start by making a standard MerkleTree commitment for each row of M and then add in the rows of N when we
+//! get to the correct level. A proof for the values of say `M[5]` and `N[1]` consists of the siblings `H(M[4]), c23, c10`.
 
 use alloc::vec::Vec;
 use core::cmp::Reverse;
