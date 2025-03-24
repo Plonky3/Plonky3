@@ -218,13 +218,13 @@ where
             index >>= 1;
             curr_height_padded >>= 1;
 
-            // Check if there are any new entries to inject at the next height.
+            // Check if there are any new matrix rows to inject at the next height.
             let next_height = heights_tallest_first
                 .peek()
                 .map(|(_, dims)| dims.height)
                 .filter(|h| h.next_power_of_two() == curr_height_padded);
             if let Some(next_height) = next_height {
-                // If there are new entries, hash them all together and then hash with the current root.
+                // If there are new matrix rows, hash the rows together and then combine with the current root.
                 let next_height_openings_digest = self.hash.hash_iter_slices(
                     heights_tallest_first
                         .peeking_take_while(|(_, dims)| dims.height == next_height)
