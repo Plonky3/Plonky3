@@ -5,9 +5,9 @@
 //! Let H denote the hash function and C the compression function for our tree.
 //! Then MerkleTreeMmcs produces a commitment to M and N using the following tree structure:
 //!
-//!                                  root = c00 = C(c10, c11)                              
-//!                        //                                                  \\            
-//!           c10 = C(C(c20, c21), H(N[0]))                      c11 = C(C(c22, c23), H(N[1]))
+//!                                       root = c00 = C(c10, c11)                              
+//!                         //                                               \\            
+//!           c10 = C(C(c20, c21), H(N[0]))                     c11 = C(C(c22, c23), H(N[1]))
 //!            //                    \\                          //                    \\     
 //!       c20 = C(L, R)            c21 = C(L, R)            c22 = C(L, R)            c23 = C(L, R)  
 //!    L//            \\R       L//            \\R       L//            \\R       L//            \\R     
