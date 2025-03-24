@@ -5,16 +5,19 @@
 //! Let H denote the hash function and C the compression function for our tree.
 //! Then MerkleTreeMmcs produces a commitment to M and N using the following tree structure:
 //!
-//!                                       root = c00 = C(c10, c11)                              
-//!                         //                                               \\            
-//!           c10 = C(C(c20, c21), H(N[0]))                     c11 = C(C(c22, c23), H(N[1]))
-//!            //                    \\                          //                    \\     
-//!       c20 = C(L, R)            c21 = C(L, R)            c22 = C(L, R)            c23 = C(L, R)  
-//!    L//            \\R       L//            \\R       L//            \\R       L//            \\R     
-//!  H(M[0])         H(M[1])  H(M[2])         H(M[3])  H(M[4])         H(M[5])  H(M[6])         H(M[7])
-//!
+//! ```rust,ignore
+//! ///
+//! ///                                      root = c00 = C(c10, c11)                              
+//! ///                       /                                                \         
+//! ///         c10 = C(C(c20, c21), H(N[0]))                     c11 = C(C(c22, c23), H(N[1]))
+//! ///           /                      \                          /                      \     
+//! ///      c20 = C(L, R)            c21 = C(L, R)            c22 = C(L, R)            c23 = C(L, R)  
+//! ///   L/             \R        L/             \R        L/             \R        L/             \R     
+//! /// H(M[0])         H(M[1])  H(M[2])         H(M[3])  H(M[4])         H(M[5])  H(M[6])         H(M[7])
+//! ```
 //! E.g. we start by making a standard MerkleTree commitment for each row of M and then add in the rows of N when we
 //! get to the correct level. A proof for the values of say `M[5]` and `N[1]` consists of the siblings `H(M[4]), c23, c10`.
+//!
 
 use alloc::vec::Vec;
 use core::cmp::Reverse;
