@@ -1,3 +1,23 @@
+//! A MerkleTreeMmcs is a generalization of the standard MerkleTree commitment scheme which supports
+//! committing to several vectors of different sizes.
+//!
+//! Say we wish to commit to 2 vectors M0 and M1 of length 32 and 8 where we wish to reveal values in groups of 4.
+//! Let H denote the hash function and C the compression function for our tree.
+//! Then MerkleTreeMmcs produces a commitment to M0 and M1 using the following tree structure:
+//!
+//!                                  c00 = root = C(c10, c11)                              
+//!                 //                                                    \\            
+//!          c10 = C(C(c20, c21), H(M1[..4]))                      c11 = C(C(c22, c23), H(M1[4..8]))
+//!           //                      \\                            //                          \\     
+//!       c20 = C(L, R)            c21 = C(L, R)                c22 = C(L, R)                c23 = C(L, R)  
+//!    L//            \\R      L//                \\R      L//                 \\R      L//                 \\R     
+//!  H(M0[..4]) H(M0[4..8])  H(M0[8..12]) H(M0[12..16])  H(M0[16..20]) H(M0[20..24])  H(M0[24..28]) H(M0[28..32])
+//!
+//! E.g. we start by making a standard MerkleTree commitment to M0 and then add in M1 by hashing when we
+//! get to the correct level.
+//!
+//! Then a proof for the values of say M0[8..12] consists of `H(M0[12..16]), c20, H(M1[..4]), c11`.
+
 use alloc::vec::Vec;
 use core::cmp::Reverse;
 use core::marker::PhantomData;
@@ -7,11 +27,13 @@ use p3_commit::Mmcs;
 use p3_field::PackedValue;
 use p3_matrix::{Dimensions, Matrix};
 use p3_symmetric::{CryptographicHasher, Hash, PseudoCompressionFunction};
-use p3_util::log2_ceil_usize;
+use p3_util::{log2_ceil_usize, log2_strict_usize};
 use serde::{Deserialize, Serialize};
 
 use crate::MerkleTree;
-use crate::MerkleTreeError::{EmptyBatch, RootMismatch, WrongBatchSize, WrongHeight};
+use crate::MerkleTreeError::{
+    EmptyBatch, MatrixHeightError, RootMismatch, WrongBatchSize, WrongHeight,
+};
 
 /// A vector commitment scheme backed by a `MerkleTree`.
 ///
@@ -32,9 +54,10 @@ pub enum MerkleTreeError {
     WrongBatchSize,
     WrongWidth,
     WrongHeight {
-        max_height: usize,
+        log_max_height: usize,
         num_siblings: usize,
     },
+    MatrixHeightError,
     RootMismatch,
     EmptyBatch,
 }
@@ -77,6 +100,11 @@ where
         (root, tree)
     }
 
+    /// Opens a batch of rows from committed matrices.
+    ///
+    /// returns `(openings, proof)` where `openings` is a vector whose `i`th element is
+    /// the `j`th row of the ith matrix `M[i]`, with `j = index >> (log2_ceil(max_height) - log2_ceil(M[i].height))`
+    /// and `proof` is the vector of sibling merkle tree nodes allowing the verifier to reconstruct the committed root.
     fn open_batch<M: Matrix<P::Value>>(
         &self,
         index: usize,
@@ -85,6 +113,7 @@ where
         let max_height = self.get_max_height(prover_data);
         let log_max_height = log2_ceil_usize(max_height);
 
+        // Get the matrix rows encountered along the path from the root to the given leaf index.
         let openings = prover_data
             .leaves
             .iter()
@@ -96,6 +125,7 @@ where
             })
             .collect_vec();
 
+        // Get all the siblings nodes corresponding to the path from the root to the given leaf index.
         let proof = (0..log_max_height)
             .map(|i| prover_data.digest_layers[i][(index >> i) ^ 1])
             .collect();
@@ -130,33 +160,45 @@ where
         //     }
         // }
 
-        // TODO: Disabled for now, CirclePcs sometimes passes a height that's off by 1 bit.
-        let Some(max_height) = dimensions.iter().map(|dim| dim.height).max() else {
-            // dimensions is empty
-            return Err(EmptyBatch);
-        };
-        let log_max_height = log2_ceil_usize(max_height);
-        if proof.len() != log_max_height {
-            return Err(WrongHeight {
-                max_height,
-                num_siblings: proof.len(),
-            });
-        }
-
         let mut heights_tallest_first = dimensions
             .iter()
             .enumerate()
             .sorted_by_key(|(_, dims)| Reverse(dims.height))
             .peekable();
 
-        let Some(mut curr_height_padded) = heights_tallest_first
-            .peek()
-            .map(|x| x.1.height.next_power_of_two())
-        else {
-            // dimensions is empty
-            return Err(EmptyBatch);
+        // Matrix heights that round up to the same power of two must be equal
+        if !heights_tallest_first
+            .clone()
+            .map(|(_, dims)| dims.height)
+            .tuple_windows()
+            .all(|(curr, next)| {
+                curr == next || curr.next_power_of_two() != next.next_power_of_two()
+            })
+        {
+            return Err(MatrixHeightError);
+        }
+
+        // Get the initial height padded to a power of two. As heights_tallest_first is sorted,
+        // the initial height will be the maximum height.
+        // Returns an error if either:
+        //              1. proof.len() != log_max_height
+        //              2. heights_tallest_first is empty.
+        let mut curr_height_padded = match heights_tallest_first.peek() {
+            Some((_, dims)) => {
+                let max_height = dims.height.next_power_of_two();
+                let log_max_height = log2_strict_usize(max_height);
+                if proof.len() != log_max_height {
+                    return Err(WrongHeight {
+                        log_max_height,
+                        num_siblings: proof.len(),
+                    });
+                }
+                max_height
+            }
+            None => return Err(EmptyBatch),
         };
 
+        // Hash all matrix openings at the current height.
         let mut root = self.hash.hash_iter_slices(
             heights_tallest_first
                 .peeking_take_while(|(_, dims)| {
@@ -166,21 +208,25 @@ where
         );
 
         for &sibling in proof {
+            // The last bit of index informs us whether the current node is on the left or right.
             let (left, right) = if index & 1 == 0 {
                 (root, sibling)
             } else {
                 (sibling, root)
             };
 
+            // Combine the current node with the sibling node to get the parent node.
             root = self.compress.compress([left, right]);
             index >>= 1;
             curr_height_padded >>= 1;
 
+            // Check if there are any new entries to inject at the next height.
             let next_height = heights_tallest_first
                 .peek()
                 .map(|(_, dims)| dims.height)
                 .filter(|h| h.next_power_of_two() == curr_height_padded);
             if let Some(next_height) = next_height {
+                // If there are new entries, hash them all together and then hash with the current root.
                 let next_height_openings_digest = self.hash.hash_iter_slices(
                     heights_tallest_first
                         .peeking_take_while(|(_, dims)| dims.height == next_height)
@@ -191,6 +237,7 @@ where
             }
         }
 
+        // Compare the computed root with the committed one.
         if commit == &root {
             Ok(())
         } else {
