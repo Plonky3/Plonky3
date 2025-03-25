@@ -6,6 +6,7 @@ extern crate alloc;
 
 mod array;
 mod batch_inverse;
+pub mod coset;
 pub mod exponentiation;
 pub mod extension;
 mod field;

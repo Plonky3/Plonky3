@@ -6,8 +6,9 @@ use core::marker::PhantomData;
 
 use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace, TwoAdicMultiplicativeCoset};
+use p3_commit::{Mmcs, OpenedValues, Pcs};
 use p3_dft::TwoAdicSubgroupDft;
+use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
     batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, dot_product, ExtensionField,
     Field, TwoAdicField,
@@ -148,11 +149,7 @@ where
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
-        let log_n = log2_strict_usize(degree);
-        TwoAdicMultiplicativeCoset {
-            log_n,
-            shift: Val::ONE,
-        }
+        TwoAdicMultiplicativeCoset::new(Val::ONE, log2_strict_usize(degree))
     }
 
     fn commit(
@@ -163,7 +160,7 @@ where
             .into_iter()
             .map(|(domain, evals)| {
                 assert_eq!(domain.size(), evals.height());
-                let shift = Val::GENERATOR / domain.shift;
+                let shift = Val::GENERATOR / domain.shift();
                 // Commit to the bit-reversed LDE.
                 self.dft
                     .coset_lde_batch(evals, self.fri.log_blowup, shift)
@@ -182,7 +179,7 @@ where
         domain: Self::Domain,
     ) -> Self::EvaluationsOnDomain<'a> {
         // todo: handle extrapolation for LDEs we don't have
-        assert_eq!(domain.shift, Val::GENERATOR);
+        assert_eq!(domain.shift(), Val::GENERATOR);
         let lde = self.mmcs.get_matrices(prover_data)[idx];
         assert!(lde.height() >= domain.size());
         lde.split_rows(domain.size()).0.bit_reverse_rows()

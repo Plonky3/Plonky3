@@ -105,7 +105,6 @@ jobs:
         cargo check --verbose --package p3-blake3
         cargo check --verbose --package p3-challenger
         cargo check --verbose --package p3-commit
-        cargo check --verbose --package p3-coset
         cargo check --verbose --package p3-dft
         cargo check --verbose --package p3-field
         cargo check --verbose --package p3-field-testing
