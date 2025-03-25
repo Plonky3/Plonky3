@@ -67,7 +67,7 @@ macro_rules! generate_from_large_u_int_tests {
             $crate::generate_from_int_tests!($field, field_order - 1, -<$field>::ONE);
 
             let half = (field_order + 1) >> 1;
-            let field_half = (<$field>::ONE + <$field>::ONE).inverse();
+            let field_half = <$field>::ONE.halve();
             $crate::generate_from_int_tests!($field, half, field_half);
 
             // We check that from_canonical_checked returns None for large enough values
@@ -92,7 +92,7 @@ macro_rules! generate_from_large_i_int_tests {
         let neg_half = ($field_order >> 1) as $int_type;
         let half_as_neg_rep = -neg_half;
 
-        let field_half = (<$field>::ONE + <$field>::ONE).inverse();
+        let field_half = <$field>::ONE.halve();
         let field_neg_half = field_half - <$field>::ONE;
 
         $crate::generate_from_int_tests!($field, half_as_neg_rep, field_half);

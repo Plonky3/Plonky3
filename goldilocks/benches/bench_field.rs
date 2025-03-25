@@ -1,12 +1,12 @@
 use std::any::type_name;
 
-use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_field_testing::bench_func::{
     benchmark_add_latency, benchmark_add_throughput, benchmark_inv, benchmark_iter_sum,
     benchmark_sub_latency, benchmark_sub_throughput,
 };
-use p3_field_testing::{benchmark_mul_latency, benchmark_mul_throughput};
+use p3_field_testing::{benchmark_mul_latency, benchmark_mul_throughput, benchmark_sum_array};
 use p3_goldilocks::Goldilocks;
 
 type F = Goldilocks;
@@ -18,8 +18,7 @@ fn bench_field(c: &mut Criterion) {
     benchmark_mul_throughput::<F, 25>(c, name);
     benchmark_inv::<F>(c, name);
     benchmark_iter_sum::<F, 4, REPS>(c, name);
-    benchmark_iter_sum::<F, 8, REPS>(c, name);
-    benchmark_iter_sum::<F, 12, REPS>(c, name);
+    benchmark_sum_array::<F, 4, REPS>(c, name);
 
     // Note that each round of throughput has 10 operations
     // So we should have 10 * more repetitions for latency tests.

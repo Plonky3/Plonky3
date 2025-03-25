@@ -1,5 +1,5 @@
 use criterion::measurement::Measurement;
-use criterion::{criterion_group, criterion_main, BenchmarkGroup, BenchmarkId, Criterion};
+use criterion::{BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::BabyBear;
 use p3_circle::{CircleDomain, CircleEvaluations};
 use p3_dft::{Radix2Bowers, Radix2Dit, Radix2DitParallel, TwoAdicSubgroupDft};

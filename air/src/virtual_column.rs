@@ -21,8 +21,8 @@ pub enum PairCol {
 impl PairCol {
     pub const fn get<T: Copy>(&self, preprocessed: &[T], main: &[T]) -> T {
         match self {
-            PairCol::Preprocessed(i) => preprocessed[*i],
-            PairCol::Main(i) => main[*i],
+            Self::Preprocessed(i) => preprocessed[*i],
+            Self::Main(i) => main[*i],
         }
     }
 }
@@ -114,7 +114,7 @@ impl<F: Field> VirtualPairCol<F> {
         Var: Into<Expr> + Copy,
     {
         let mut result = self.constant.into();
-        for (column, weight) in self.column_weights.iter() {
+        for (column, weight) in &self.column_weights {
             result += column.get(preprocessed, main).into() * *weight;
         }
         result

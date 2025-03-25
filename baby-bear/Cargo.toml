@@ -1,7 +1,7 @@
 [package]
 name = "p3-baby-bear"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [features]
@@ -17,6 +17,7 @@ rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
+num-bigint.workspace = true
 rand.workspace = true
 p3-field-testing.workspace = true
 p3-dft.workspace = true

@@ -3,8 +3,8 @@ use alloc::vec::Vec;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
-use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 
 /// Multiply a 4-element vector x by
 /// [ 5 7 1 3 ]
@@ -88,6 +88,10 @@ impl<R: PrimeCharacteristicRing> MdsPermutation<R, 4> for MDSMat4 {}
 ///
 /// Given a 4x4 MDS matrix M, we multiply by the `4N x 4N` matrix
 /// `[[2M M  ... M], [M  2M ... M], ..., [M  M ... 2M]]`.
+///
+/// # Panics
+/// This will panic if `WIDTH` is not supported. Currently, the
+/// supported `WIDTH` values are 2, 3, 4, 8, 12, 16, 20, 24.`
 #[inline(always)]
 pub fn mds_light_permutation<
     R: PrimeCharacteristicRing,

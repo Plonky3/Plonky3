@@ -8,10 +8,11 @@ use core::iter;
 use itertools::izip;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_matrix::bitrev::{BitReversableMatrix, BitReversedMatrixView};
-use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
+use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
+use p3_util::log2_ceil_usize;
 use tracing::{debug_span, instrument};
 
 mod backward;
@@ -137,7 +138,7 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
 /// _row-major_ input. This is awkward for memory coherence, so the
 /// algorithm here transposes the input and operates on the rows in
 /// the typical way, then transposes back again for the output. Even
-/// for modestly large inputs, the cost of the two tranposes
+/// for modestly large inputs, the cost of the two transposes
 /// outweighed by the improved performance from operating row-wise.
 ///
 /// The choice of DIT for inverse and DIF for "forward" transform mean
@@ -223,7 +224,8 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         debug_span!("post-transpose", nrows = ncols, ncols = nrows)
             .in_scope(|| transpose::transpose(&scratch.values, &mut mat.values, nrows, ncols));
 
-        let inv_len = MontyField31::from_usize(nrows).inverse();
+        let log_rows = log2_ceil_usize(nrows);
+        let inv_len = MontyField31::ONE.div_2exp_u64(log_rows as u64);
         debug_span!("scale").in_scope(|| mat.scale(inv_len));
         mat
     }
@@ -240,8 +242,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         let result_nrows = nrows << added_bits;
 
         if nrows == 1 {
-            let dupd_rows = core::iter::repeat(mat.values)
-                .take(result_nrows)
+            let dupd_rows = core::iter::repeat_n(mat.values, result_nrows)
                 .flatten()
                 .collect();
             return RowMajorMatrix::new(dupd_rows, ncols).bit_reverse_rows();
@@ -277,7 +278,8 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         // as a row in `coeffs`.
 
         // Normalise inverse DFT and coset shift in one go.
-        let inv_len = MontyField31::from_usize(nrows).inverse();
+        let log_rows = log2_ceil_usize(nrows);
+        let inv_len = MontyField31::ONE.div_2exp_u64(log_rows as u64);
         coset_shift_and_scale_rows(&mut padded, result_nrows, coeffs, nrows, shift, inv_len);
 
         // `padded` is implicitly zero padded since it was initialised

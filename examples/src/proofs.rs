@@ -6,11 +6,11 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::extension::{BinomialExtensionField, ComplexExtendable};
 use p3_field::{ExtensionField, Field, PrimeField32, PrimeField64, TwoAdicField};
-use p3_fri::{create_benchmark_fri_config, TwoAdicFriPcs};
+use p3_fri::{TwoAdicFriPcs, create_benchmark_fri_config};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHasher32To64};
-use p3_uni_stark::{prove, verify, Proof, StarkConfig, StarkGenericConfig};
+use p3_uni_stark::{Proof, StarkConfig, StarkGenericConfig, prove, verify};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 
@@ -22,7 +22,7 @@ use crate::types::{
 };
 
 /// Produce a MerkleTreeMmcs which uses the KeccakF permutation.
-fn get_keccak_mmcs<F: Field>() -> KeccakMerkleMmcs<F> {
+const fn get_keccak_mmcs<F: Field>() -> KeccakMerkleMmcs<F> {
     let u64_hash = PaddingFreeSponge::<KeccakF, 25, 17, 4>::new(KeccakF {});
 
     let field_hash = SerializingHasher32To64::new(u64_hash);
@@ -37,7 +37,7 @@ fn get_keccak_mmcs<F: Field>() -> KeccakMerkleMmcs<F> {
 /// The first permutation will be used for compression and the second for more sponge hashing.
 /// Currently this is only intended to be used with a pair of Poseidon2 hashes of with 16 and 24
 /// but this can easily be generalised in future if we desire.
-fn get_poseidon2_mmcs<
+const fn get_poseidon2_mmcs<
     F: Field,
     Perm16: CryptographicPermutation<[F; 16]> + CryptographicPermutation<[F::Packing; 16]>,
     Perm24: CryptographicPermutation<[F; 24]> + CryptographicPermutation<[F::Packing; 24]>,
@@ -45,9 +45,9 @@ fn get_poseidon2_mmcs<
     perm16: Perm16,
     perm24: Perm24,
 ) -> Poseidon2MerkleMmcs<F, Perm16, Perm24> {
-    let hash = Poseidon2Sponge::new(perm24.clone());
+    let hash = Poseidon2Sponge::new(perm24);
 
-    let compress = Poseidon2Compression::new(perm16.clone());
+    let compress = Poseidon2Compression::new(perm16);
 
     Poseidon2MerkleMmcs::<F, _, _>::new(hash, compress)
 }
@@ -128,7 +128,7 @@ where
     let config = StarkConfig::new(pcs);
 
     let mut proof_challenger = DuplexChallenger::new(perm24.clone());
-    let mut verif_challenger = DuplexChallenger::new(perm24.clone());
+    let mut verif_challenger = DuplexChallenger::new(perm24);
 
     let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
     report_proof_size(&proof);
@@ -145,9 +145,9 @@ where
 #[inline]
 pub fn prove_m31_keccak<
     PG: ExampleHashAir<
-        Mersenne31,
-        KeccakCircleStarkConfig<Mersenne31, BinomialExtensionField<Mersenne31, 3>>,
-    >,
+            Mersenne31,
+            KeccakCircleStarkConfig<Mersenne31, BinomialExtensionField<Mersenne31, 3>>,
+        >,
 >(
     proof_goal: PG,
     num_hashes: usize,
@@ -208,7 +208,7 @@ where
     let config = Poseidon2CircleStarkConfig::new(pcs);
 
     let mut proof_challenger = DuplexChallenger::new(perm24.clone());
-    let mut verif_challenger = DuplexChallenger::new(perm24.clone());
+    let mut verif_challenger = DuplexChallenger::new(perm24);
 
     let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
     report_proof_size(&proof);
@@ -237,6 +237,10 @@ pub fn report_proof_size<SC>(proof: &Proof<SC>)
 where
     SC: StarkGenericConfig,
 {
-    let proof_bytes = bincode::serialize(proof).expect("Failed to serialize proof");
+    let config = bincode::config::standard()
+        .with_little_endian()
+        .with_fixed_int_encoding();
+    let proof_bytes =
+        bincode::serde::encode_to_vec(proof, config).expect("Failed to serialize proof");
     println!("Proof size: {} bytes", proof_bytes.len());
 }

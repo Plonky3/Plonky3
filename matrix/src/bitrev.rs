@@ -1,15 +1,15 @@
 use p3_util::{log2_strict_usize, reverse_bits_len};
 
+use crate::Matrix;
 use crate::dense::{DenseMatrix, DenseStorage, RowMajorMatrix};
 use crate::row_index_mapped::{RowIndexMap, RowIndexMappedView};
 use crate::util::reverse_matrix_index_bits;
-use crate::Matrix;
 
 /// A matrix whose row indices are possibly bit-reversed, enabling easily switching
 /// between orderings. Pretty much just either `RowMajorMatrix` or
 /// `BitReversedMatrixView<RowMajorMatrix>`.
-pub trait BitReversableMatrix<T: Send + Sync>: Matrix<T> {
-    type BitRev: BitReversableMatrix<T>;
+pub trait BitReversibleMatrix<T: Send + Sync>: Matrix<T> {
+    type BitRev: BitReversibleMatrix<T>;
     fn bit_reverse_rows(self) -> Self::BitRev;
 }
 
@@ -53,7 +53,7 @@ impl RowIndexMap for BitReversalPerm {
 
 pub type BitReversedMatrixView<Inner> = RowIndexMappedView<BitReversalPerm, Inner>;
 
-impl<T: Clone + Send + Sync, S: DenseStorage<T>> BitReversableMatrix<T>
+impl<T: Clone + Send + Sync, S: DenseStorage<T>> BitReversibleMatrix<T>
     for BitReversedMatrixView<DenseMatrix<T, S>>
 {
     type BitRev = DenseMatrix<T, S>;
@@ -62,8 +62,8 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> BitReversableMatrix<T>
     }
 }
 
-impl<T: Clone + Send + Sync, S: DenseStorage<T>> BitReversableMatrix<T> for DenseMatrix<T, S> {
-    type BitRev = BitReversedMatrixView<DenseMatrix<T, S>>;
+impl<T: Clone + Send + Sync, S: DenseStorage<T>> BitReversibleMatrix<T> for DenseMatrix<T, S> {
+    type BitRev = BitReversedMatrixView<Self>;
     fn bit_reverse_rows(self) -> Self::BitRev {
         BitReversalPerm::new_view(self)
     }

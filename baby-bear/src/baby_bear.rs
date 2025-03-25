@@ -115,6 +115,7 @@ impl BinomialExtensionData<5> for BabyBearParameters {
 mod tests {
     use core::array;
 
+    use num_bigint::BigUint;
     use p3_field::{InjectiveMonomial, PermutationMonomial, PrimeField64, TwoAdicField};
     use p3_field_testing::{
         test_field, test_field_dft, test_prime_field, test_prime_field_32, test_prime_field_64,
@@ -195,7 +196,26 @@ mod tests {
         assert_eq!(m2, m2_deserialized);
     }
 
-    test_field!(crate::BabyBear);
+    // MontyField31's have no redundant representations.
+    const ZEROS: [BabyBear; 1] = [BabyBear::ZERO];
+    const ONES: [BabyBear; 1] = [BabyBear::ONE];
+
+    // Get the prime factorization of the order of the multiplicative group.
+    // i.e. the prime factorization of P - 1.
+    fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 3] {
+        [
+            (BigUint::from(2u8), 27),
+            (BigUint::from(3u8), 1),
+            (BigUint::from(5u8), 1),
+        ]
+    }
+
+    test_field!(
+        crate::BabyBear,
+        &super::ZEROS,
+        &super::ONES,
+        &super::multiplicative_group_prime_factorization()
+    );
     test_two_adic_field!(crate::BabyBear);
 
     test_field_dft!(radix2dit, crate::BabyBear, p3_dft::Radix2Dit<_>);

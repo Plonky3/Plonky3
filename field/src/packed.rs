@@ -1,6 +1,6 @@
 use core::mem::MaybeUninit;
 use core::ops::Div;
-use core::slice;
+use core::{array, slice};
 
 use crate::field::Field;
 use crate::{Algebra, BasedVectorSpace, ExtensionField, Powers, PrimeCharacteristicRing};
@@ -140,7 +140,7 @@ pub unsafe trait PackedField: Algebra<Self::Scalar>
     type Scalar: Field;
 
     /// Construct an iterator which returns powers of `base` packed into packed field elements.
-    /// 
+    ///
     /// E.g. if `Self::WIDTH = 4`, returns: `[base^0, base^1, base^2, base^3], [base^4, base^5, base^6, base^7], ...`.
     #[must_use]
     fn packed_powers(base: Self::Scalar) -> Powers<Self> {
@@ -148,7 +148,7 @@ pub unsafe trait PackedField: Algebra<Self::Scalar>
     }
 
     /// Construct an iterator which returns powers of `base` multiplied by `start` and packed into packed field elements.
-    /// 
+    ///
     /// E.g. if `Self::WIDTH = 4`, returns: `[start, start*base, start*base^2, start*base^3], [start*base^4, start*base^5, start*base^6, start*base^7], ...`.
     #[must_use]
     fn packed_shifted_powers(base: Self::Scalar, start: Self::Scalar) -> Powers<Self> {
@@ -162,6 +162,20 @@ pub unsafe trait PackedField: Algebra<Self::Scalar>
             base: base.exp_u64(Self::WIDTH as u64).into(),
             current,
         }
+    }
+
+    /// Compute a linear combination of a slice of base field elements and
+    /// a slice of packed field elements. The slices must have equal length
+    /// and it must be a compile time constant.
+    /// 
+    /// # Panics
+    ///
+    /// May panic if the length of either slice is not equal to `N`.
+    fn packed_linear_combination<const N: usize>(coeffs: &[Self::Scalar], vecs: &[Self]) -> Self {
+        assert_eq!(coeffs.len(), N);
+        assert_eq!(vecs.len(), N);
+        let combined: [Self; N] = array::from_fn(|i| vecs[i] * coeffs[i]);
+        Self::sum_array::<N>(&combined)
     }
 }
 
@@ -199,9 +213,11 @@ pub unsafe trait PackedFieldPow2: PackedField {
     /// We can also think about this as stacking the vectors, dividing them into 2x2 matrices, and
     /// transposing those matrices.
     ///
-    /// When `block_len = WIDTH`, this operation is a no-op. `block_len` must divide `WIDTH`. Since
-    /// `WIDTH` is specified to be a power of 2, `block_len` must also be a power of 2. It cannot be
-    /// 0 and it cannot exceed `WIDTH`.
+    /// When `block_len = WIDTH`, this operation is a no-op.
+    ///
+    /// # Panics
+    /// This may panic if `block_len` does not divide `WIDTH`. Since `WIDTH` is specified to be a power of 2,
+    /// `block_len` must also be a power of 2. It cannot be 0 and it cannot exceed `WIDTH`.
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self);
 }
 

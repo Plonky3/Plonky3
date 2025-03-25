@@ -1,6 +1,6 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use p3_util::{reverse_bits, reverse_slice_index_bits};
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 
 fn bench_reverse_bits(c: &mut Criterion) {
     let mut group = c.benchmark_group("reverse_bits");

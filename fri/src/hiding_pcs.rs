@@ -7,13 +7,13 @@ use p3_commit::{Mmcs, OpenedValues, Pcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_matrix::Matrix;
 use p3_matrix::bitrev::BitReversalPerm;
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
 use p3_matrix::horizontally_truncated::HorizontallyTruncated;
 use p3_matrix::row_index_mapped::RowIndexMappedView;
-use p3_matrix::Matrix;
-use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 use tracing::instrument;
 
 use crate::verifier::FriError;

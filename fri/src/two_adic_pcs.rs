@@ -4,17 +4,17 @@ use alloc::vec::Vec;
 use core::fmt::Debug;
 use core::marker::PhantomData;
 
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, dot_product, ExtensionField,
-    Field, TwoAdicField,
+    ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse,
+    cyclic_subgroup_coset_known_order, dot_product,
 };
 use p3_interpolation::interpolate_coset;
-use p3_matrix::bitrev::{BitReversableMatrix, BitReversalPerm, BitReversedMatrixView};
+use p3_matrix::bitrev::{BitReversalPerm, BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
 use p3_matrix::{Dimensions, Matrix};
 use p3_maybe_rayon::prelude::*;
@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info_span, instrument};
 
 use crate::verifier::{self, FriError};
-use crate::{prover, FriConfig, FriGenericConfig, FriProof};
+use crate::{FriConfig, FriGenericConfig, FriProof, prover};
 
 #[derive(Debug)]
 pub struct TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
@@ -395,9 +395,9 @@ where
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
         // Write evaluations to challenger
-        for (_, round) in rounds.iter() {
-            for (_, mat) in round.iter() {
-                for (_, point) in mat.iter() {
+        for (_, round) in &rounds {
+            for (_, mat) in round {
+                for (_, point) in mat {
                     point
                         .iter()
                         .for_each(|&opening| challenger.observe_algebra_element(opening));

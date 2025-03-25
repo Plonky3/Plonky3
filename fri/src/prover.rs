@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::iter;
 
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};

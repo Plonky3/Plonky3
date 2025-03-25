@@ -14,18 +14,18 @@ use halo2curves::serde::SerdeObject;
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
 use p3_field::{
-    quotient_map_small_int, Field, InjectiveMonomial, Packable, PrimeCharacteristicRing,
-    PrimeField, TwoAdicField,
+    Field, InjectiveMonomial, Packable, PrimeCharacteristicRing, PrimeField, TwoAdicField,
+    quotient_map_small_int,
 };
 pub use poseidon2::Poseidon2Bn254;
-use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// The BN254 curve scalar field prime, defined as `F_r` where `r = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.
 #[derive(Copy, Clone, Default, Eq, PartialEq)]
 pub struct Bn254Fr {
-    pub value: FFBn254Fr,
+    pub(crate) value: FFBn254Fr,
 }
 
 impl Bn254Fr {
@@ -55,7 +55,7 @@ impl<'de> Deserialize<'de> for Bn254Fr {
 
         value
             .map(Self::new)
-            .ok_or(serde::de::Error::custom("Invalid field element"))
+            .ok_or_else(|| serde::de::Error::custom("Invalid field element"))
     }
 }
 
@@ -63,7 +63,7 @@ impl Packable for Bn254Fr {}
 
 impl Hash for Bn254Fr {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        for byte in self.value.to_repr().as_ref().iter() {
+        for byte in self.value.to_repr().as_ref() {
             state.write_u8(*byte);
         }
     }
@@ -149,21 +149,6 @@ impl Field for Bn254Fr {
             0x30644e72,
         ])
     }
-
-    fn multiplicative_group_factors() -> Vec<(BigUint, usize)> {
-        vec![
-            (BigUint::from(2u8), 28),
-            (BigUint::from(3u8), 2),
-            (BigUint::from(13u8), 1),
-            (BigUint::from(29u8), 1),
-            (BigUint::from(983u16), 1),
-            (BigUint::from(11003u16), 1),
-            (BigUint::from(237073u32), 1),
-            (BigUint::from(405928799u32), 1),
-            (BigUint::from(1670836401704629u64), 1),
-            (BigUint::from(13818364434197438864469338081u128), 1),
-        ]
-    }
 }
 
 quotient_map_small_int!(Bn254Fr, u128, [u8, u16, u32, u64]);
@@ -172,19 +157,19 @@ quotient_map_small_int!(Bn254Fr, i128, [i8, i16, i32, i64]);
 impl QuotientMap<u128> for Bn254Fr {
     /// Due to the size of the `BN254` prime, the input value is always canonical.
     #[inline]
-    fn from_int(int: u128) -> Bn254Fr {
+    fn from_int(int: u128) -> Self {
         Self::new(FFBn254Fr::from_raw([int as u64, (int >> 64) as u64, 0, 0]))
     }
 
     /// Due to the size of the `BN254` prime, the input value is always canonical.
     #[inline]
-    fn from_canonical_checked(int: u128) -> Option<Bn254Fr> {
+    fn from_canonical_checked(int: u128) -> Option<Self> {
         Some(Self::from_int(int))
     }
 
     /// Due to the size of the `BN254` prime, the input value is always canonical.
     #[inline]
-    unsafe fn from_canonical_unchecked(int: u128) -> Bn254Fr {
+    unsafe fn from_canonical_unchecked(int: u128) -> Self {
         Self::from_int(int)
     }
 }
@@ -192,7 +177,7 @@ impl QuotientMap<u128> for Bn254Fr {
 impl QuotientMap<i128> for Bn254Fr {
     /// Due to the size of the `BN254` prime, the input value is always canonical.
     #[inline]
-    fn from_int(int: i128) -> Bn254Fr {
+    fn from_int(int: i128) -> Self {
         // Nothing better than just branching based on the sign of int.
         if int >= 0 {
             Self::from_int(int as u128)
@@ -203,13 +188,13 @@ impl QuotientMap<i128> for Bn254Fr {
 
     /// Due to the size of the `BN254` prime, the input value is always canonical.
     #[inline]
-    fn from_canonical_checked(int: i128) -> Option<Bn254Fr> {
+    fn from_canonical_checked(int: i128) -> Option<Self> {
         Some(Self::from_int(int))
     }
 
     /// Due to the size of the `BN254` prime, the input value is always canonical.
     #[inline]
-    unsafe fn from_canonical_unchecked(int: i128) -> Bn254Fr {
+    unsafe fn from_canonical_unchecked(int: i128) -> Self {
         Self::from_int(int)
     }
 }
@@ -375,7 +360,31 @@ mod tests {
         assert_eq!(f_r_minus_2, f_r_minus_2_deserialized);
     }
 
-    test_field!(crate::Bn254Fr);
+    const ZERO: Bn254Fr = Bn254Fr::ZERO;
+    const ONE: Bn254Fr = Bn254Fr::ONE;
+
+    // Get the prime factorization of the order of the multiplicative group.
+    // i.e. the prime factorization of P - 1.
+    fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 10] {
+        [
+            (BigUint::from(2u8), 28),
+            (BigUint::from(3u8), 2),
+            (BigUint::from(13u8), 1),
+            (BigUint::from(29u8), 1),
+            (BigUint::from(983u16), 1),
+            (BigUint::from(11003u16), 1),
+            (BigUint::from(237073u32), 1),
+            (BigUint::from(405928799u32), 1),
+            (BigUint::from(1670836401704629u64), 1),
+            (BigUint::from(13818364434197438864469338081u128), 1),
+        ]
+    }
+    test_field!(
+        crate::Bn254Fr,
+        &[super::ZERO],
+        &[super::ONE],
+        &super::multiplicative_group_prime_factorization()
+    );
 
     test_prime_field!(crate::Bn254Fr);
 }
