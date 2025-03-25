@@ -144,7 +144,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
 
     /// Getting the next point corresponds to multiplication by the generator.
     fn next_point<Ext: ExtensionField<Val>>(&self, x: Ext) -> Option<Ext> {
-        Some(x * self.subgroup_generator())
+        Some(x * self.generator())
     }
 
     /// Given the coset `gH`, return the disjoint coset `gfK` where `f`
@@ -169,7 +169,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     /// Then we decompose `gH` into `gK, ghK, gh^2K, ..., gh^{num_chunks}K`.
     fn split_domains(&self, num_chunks: usize) -> Vec<Self> {
         let log_chunks = log2_strict_usize(num_chunks);
-        debug_assert!(log_chunks <= self.log_n);
+        debug_assert!(log_chunks <= self.log_size());
         (0..num_chunks)
             .map(|i| {
                 Self::new(
@@ -186,7 +186,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         evals: RowMajorMatrix<Self::Val>,
     ) -> Vec<RowMajorMatrix<Self::Val>> {
         debug_assert_eq!(evals.height(), self.size());
-        debug_assert!(log2_strict_usize(num_chunks) <= self.log_n);
+        debug_assert!(log2_strict_usize(num_chunks) <= self.log_size());
         // todo less copy
         (0..num_chunks)
             .map(|i| {
@@ -202,7 +202,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     ///
     /// `Z_{gH}(X) = g^{-|H|}\prod_{h \in H} (X - gh) = (g^{-1}X)^|H| - 1`
     fn vanishing_poly_at_point<Ext: ExtensionField<Val>>(&self, point: Ext) -> Ext {
-        (point * self.shift().inverse()).exp_power_of_2(self.log_n) - Ext::ONE
+        (point * self.shift().inverse()).exp_power_of_2(self.log_size()) - Ext::ONE
     }
 
     /// Compute several Lagrange selectors at the given point:

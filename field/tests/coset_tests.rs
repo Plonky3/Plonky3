@@ -1,183 +1,183 @@
-// use p3_baby_bear::BabyBear;
-// use crate::{extension::BinomialExtensionField, field::PrimeCharacteristicRing, TwoAdicField};
-use p3_baby_bear::BabyBear;
-use p3_field::coset::TwoAdicMultiplicativeCoset;
-use p3_field::extension::BinomialExtensionField;
-use p3_field::{PrimeCharacteristicRing, TwoAdicField};
-use p3_goldilocks::Goldilocks;
-use rand::Rng;
+mod coset {
+    use p3_baby_bear::BabyBear;
+    use p3_field::coset::TwoAdicMultiplicativeCoset;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::{PrimeCharacteristicRing, TwoAdicField};
+    use p3_goldilocks::Goldilocks;
+    use rand::Rng;
 
-type BB = BabyBear;
-type GL = Goldilocks;
-type GLExt = BinomialExtensionField<GL, 2>;
+    type BB = BabyBear;
+    type GL = Goldilocks;
+    type GLExt = BinomialExtensionField<GL, 2>;
 
-#[test]
-// Checks that a coset of the maximum size allwed by the field (implementation)
-// can indeed be constructed
-fn test_coset_limit() {
-    TwoAdicMultiplicativeCoset::<BB>::new(BB::ONE, BB::TWO_ADICITY);
-}
-
-#[test]
-#[should_panic = "log_size must be <= the two_adicity of the field (27)"]
-// Checks that attemtping to construct a field larger than allowed by the field
-// implementation is disallowed
-fn test_coset_too_large() {
-    TwoAdicMultiplicativeCoset::<BB>::new(BB::ONE, BB::TWO_ADICITY + 1);
-}
-
-#[test]
-#[should_panic = "is not large enough to be shrunk by a factor of 2^6"]
-// Checks that attemtping to shrink a coset by any divisor of its size is
-// allowed, but doing so by the next power of two is not
-fn test_shrink_too_much() {
-    let coset = TwoAdicMultiplicativeCoset::<GL>::new(GL::from_u16(42), 5);
-
-    for _ in 0..=6 {
-        coset.shrink_subgroup(6);
+    #[test]
+    // Checks that a coset of the maximum size allwed by the field (implementation)
+    // can indeed be constructed
+    fn test_coset_limit() {
+        TwoAdicMultiplicativeCoset::<BB>::new(BB::ONE, BB::TWO_ADICITY);
     }
-}
 
-#[test]
-// Checks that shrinking by a factor of 2^0 = 1 does nothing
-fn test_shrink_nothing() {
-    let coset = TwoAdicMultiplicativeCoset::<BB>::new(BB::ZERO, 7);
-
-    let shrunk = coset.shrink_subgroup(0);
-
-    assert_eq!(shrunk.generator(), coset.generator());
-    assert_eq!(shrunk.shift(), coset.shift());
-}
-
-#[test]
-// Checks that shrinking the whole coset results in the expected new shift
-fn test_shrink_shift() {
-    let mut rng = rand::rng();
-    let shift: BB = rng.random();
-
-    let coset = TwoAdicMultiplicativeCoset::<BB>::new(shift, 4);
-    let shrunk = coset.shrink_coset(2);
-
-    assert_eq!(shrunk.shift(), shift.exp_power_of_2(2));
-}
-
-#[test]
-// Checks that shrinking the coset by a factor of k results in a new coset whose
-// i-th element is the original coset's (i * k)-th element
-fn test_shrink_contained() {
-    let mut rng = rand::rng();
-    let shift: GL = rng.random();
-
-    let log_shrinking_factor = 3;
-
-    let mut coset = TwoAdicMultiplicativeCoset::<GL>::new(shift, 8);
-    let shrunk = coset.shrink_subgroup(log_shrinking_factor);
-
-    for (i, e) in shrunk.iter().enumerate() {
-        assert_eq!(coset.element(i * (1 << log_shrinking_factor)), e);
+    #[test]
+    #[should_panic = "log_size must be <= the two_adicity of the field (27)"]
+    // Checks that attemtping to construct a field larger than allowed by the field
+    // implementation is disallowed
+    fn test_coset_too_large() {
+        TwoAdicMultiplicativeCoset::<BB>::new(BB::ONE, BB::TWO_ADICITY + 1);
     }
-}
 
-#[test]
-// Checks that generator_exp (access through element() of a coset of shift 1)
-// yields the correct power of the generator
-fn test_generator_exp() {
-    let mut coset = TwoAdicMultiplicativeCoset::<BB>::new(BB::ONE, 10);
+    #[test]
+    #[should_panic = "is not large enough to be shrunk by a factor of 2^6"]
+    // Checks that attemtping to shrink a coset by any divisor of its size is
+    // allowed, but doing so by the next power of two is not
+    fn test_shrink_too_much() {
+        let coset = TwoAdicMultiplicativeCoset::<GL>::new(GL::from_u16(42), 5);
 
-    for i in 0..1 << 5 {
-        assert_eq!(coset.element(i), coset.generator().exp_u64(i as u64));
+        for _ in 0..=6 {
+            coset.shrink_subgroup(6);
+        }
     }
-}
 
-#[test]
-// Checks that the coset iterator yields the expected elements (in the expected
-// order)
-fn test_coset_iterator() {
-    let mut rng = rand::rng();
-    let shift: BB = rng.random();
-    let log_size = 3;
+    #[test]
+    // Checks that shrinking by a factor of 2^0 = 1 does nothing
+    fn test_shrink_nothing() {
+        let coset = TwoAdicMultiplicativeCoset::<BB>::new(BB::ZERO, 7);
 
-    let mut coset = TwoAdicMultiplicativeCoset::<BB>::new(shift, log_size);
+        let shrunk = coset.shrink_subgroup(0);
 
-    assert_eq!(coset.into_iter().count(), 1 << log_size);
-    for (i, e) in coset.iter().enumerate() {
-        assert_eq!(coset.element(i), e);
+        assert_eq!(shrunk.generator(), coset.generator());
+        assert_eq!(shrunk.shift(), coset.shift());
     }
-}
 
-#[test]
-#[should_panic = "index must be less than the size of the coset."]
-// Checks that attemtping to access an element at an index larger than the coset's
-// size is disallowed (motivation in lib.rs/element)
-fn test_element_index_too_large() {
-    let mut coset = TwoAdicMultiplicativeCoset::<BB>::new(BB::ONE, 3);
-    coset.element(1 << 3);
-}
+    #[test]
+    // Checks that shrinking the whole coset results in the expected new shift
+    fn test_shrink_shift() {
+        let mut rng = rand::rng();
+        let shift: BB = rng.random();
 
-#[test]
-// Checks that the element method returns the expected values
-fn test_element() {
-    let mut rng = rand::rng();
+        let coset = TwoAdicMultiplicativeCoset::<BB>::new(shift, 4);
+        let shrunk = coset.shrink_coset(2);
 
-    let shift: GL = rng.random();
-    let mut coset = TwoAdicMultiplicativeCoset::<GL>::new(shift, GL::TWO_ADICITY);
-
-    for _ in 0..100 {
-        let exp = rng.random::<u64>() % (1 << GL::TWO_ADICITY);
-        let expected = coset.shift() * coset.generator().exp_u64(exp);
-        assert_eq!(coset.element(exp as usize), expected);
+        assert_eq!(shrunk.shift(), shift.exp_power_of_2(2));
     }
-}
 
-#[test]
-// Checks that a coset is equal to itself
-fn test_equality_reflexive() {
-    let mut rng = rand::rng();
-    let shift = rng.random();
+    #[test]
+    // Checks that shrinking the coset by a factor of k results in a new coset whose
+    // i-th element is the original coset's (i * k)-th element
+    fn test_shrink_contained() {
+        let mut rng = rand::rng();
+        let shift: GL = rng.random();
 
-    let coset1 = TwoAdicMultiplicativeCoset::<GLExt>::new(shift, 8);
-    assert_eq!(coset1, coset1.clone());
-}
+        let log_shrinking_factor = 3;
 
-#[test]
-// Checks inequality between two arbitrary cosets
-fn test_equality_shift() {
-    let mut rng = rand::rng();
-    let shift = rng.random();
+        let mut coset = TwoAdicMultiplicativeCoset::<GL>::new(shift, 8);
+        let shrunk = coset.shrink_subgroup(log_shrinking_factor);
 
-    let coset1 = TwoAdicMultiplicativeCoset::<GLExt>::new(shift, 10);
-    let coset2 = coset1.set_shift(coset1.shift() + GLExt::ONE);
+        for (i, e) in shrunk.iter().enumerate() {
+            assert_eq!(coset.element(i * (1 << log_shrinking_factor)), e);
+        }
+    }
 
-    assert!(coset1 != coset2);
-}
+    #[test]
+    // Checks that generator_exp (access through element() of a coset of shift 1)
+    // yields the correct power of the generator
+    fn test_generator_exp() {
+        let mut coset = TwoAdicMultiplicativeCoset::<BB>::new(BB::ONE, 10);
 
-#[test]
-// Checks that coset equality is invariant under translation by any element of
-// the group, as expected
-fn test_equality_translation() {
-    let mut rng = rand::rng();
-    let shift = rng.random();
+        for i in 0..1 << 5 {
+            assert_eq!(coset.element(i), coset.generator().exp_u64(i as u64));
+        }
+    }
 
-    let coset1 = TwoAdicMultiplicativeCoset::<GLExt>::new(shift, 10);
-    let coset2 = coset1.shift_by(coset1.generator().exp_u64(22));
+    #[test]
+    // Checks that the coset iterator yields the expected elements (in the expected
+    // order)
+    fn test_coset_iterator() {
+        let mut rng = rand::rng();
+        let shift: BB = rng.random();
+        let log_size = 3;
 
-    assert!(coset1 == coset2);
-}
+        let mut coset = TwoAdicMultiplicativeCoset::<BB>::new(shift, log_size);
 
-#[test]
-// Checks that the contains method returns true on all elements of the coset
-fn test_contains() {
-    let mut rng = rand::rng();
-    let shift = rng.random();
+        assert_eq!(coset.into_iter().count(), 1 << log_size);
+        for (i, e) in coset.iter().enumerate() {
+            assert_eq!(coset.element(i), e);
+        }
+    }
 
-    let log_size = 8;
+    #[test]
+    #[should_panic = "index must be less than the size of the coset."]
+    // Checks that attemtping to access an element at an index larger than the coset's
+    // size is disallowed (motivation in lib.rs/element)
+    fn test_element_index_too_large() {
+        let mut coset = TwoAdicMultiplicativeCoset::<BB>::new(BB::ONE, 3);
+        coset.element(1 << 3);
+    }
 
-    let coset = TwoAdicMultiplicativeCoset::<BB>::new(shift, log_size);
+    #[test]
+    // Checks that the element method returns the expected values
+    fn test_element() {
+        let mut rng = rand::rng();
 
-    let mut d = BB::ONE;
+        let shift: GL = rng.random();
+        let mut coset = TwoAdicMultiplicativeCoset::<GL>::new(shift, GL::TWO_ADICITY);
 
-    for _ in 0..(1 << log_size) {
-        assert!(coset.contains(coset.shift() * d));
-        d *= coset.generator();
+        for _ in 0..100 {
+            let exp = rng.random::<u64>() % (1 << GL::TWO_ADICITY);
+            let expected = coset.shift() * coset.generator().exp_u64(exp);
+            assert_eq!(coset.element(exp as usize), expected);
+        }
+    }
+
+    #[test]
+    // Checks that a coset is equal to itself
+    fn test_equality_reflexive() {
+        let mut rng = rand::rng();
+        let shift = rng.random();
+
+        let coset1 = TwoAdicMultiplicativeCoset::<GLExt>::new(shift, 8);
+        assert_eq!(coset1, coset1.clone());
+    }
+
+    #[test]
+    // Checks inequality between two arbitrary cosets
+    fn test_equality_shift() {
+        let mut rng = rand::rng();
+        let shift = rng.random();
+
+        let coset1 = TwoAdicMultiplicativeCoset::<GLExt>::new(shift, 10);
+        let coset2 = coset1.set_shift(coset1.shift() + GLExt::ONE);
+
+        assert!(coset1 != coset2);
+    }
+
+    #[test]
+    // Checks that coset equality is invariant under translation by any element of
+    // the group, as expected
+    fn test_equality_translation() {
+        let mut rng = rand::rng();
+        let shift = rng.random();
+
+        let coset1 = TwoAdicMultiplicativeCoset::<GLExt>::new(shift, 10);
+        let coset2 = coset1.shift_by(coset1.generator().exp_u64(22));
+
+        assert!(coset1 == coset2);
+    }
+
+    #[test]
+    // Checks that the contains method returns true on all elements of the coset
+    fn test_contains() {
+        let mut rng = rand::rng();
+        let shift = rng.random();
+
+        let log_size = 8;
+
+        let coset = TwoAdicMultiplicativeCoset::<BB>::new(shift, log_size);
+
+        let mut d = BB::ONE;
+
+        for _ in 0..(1 << log_size) {
+            assert!(coset.contains(coset.shift() * d));
+            d *= coset.generator();
+        }
     }
 }
