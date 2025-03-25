@@ -1,3 +1,14 @@
+//! The FRI PCS protocol over two-adic fields.
+//!
+//! The following implements a slight variant of the usual FRI protocol. As usual we start
+//! with a polynomial `F(x)` of degree `n` given as evaluations over the coset `gH` with `|H| = 2^n`.
+//!
+//! Now consider the polynomial `G(x) = F(gx)`. Note that `G(x)` has the same degree as `F(x)` and
+//! the evaluations of `F(x)` over `gH` are identical to the evaluations of `G(x)` over `H`.
+//!
+//! Hence we can reinterpret our vector of evaluations as evaluations of `G(x)` over `H` and apply
+//! the standard FRI protocol to this evaluation vector.
+
 use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
