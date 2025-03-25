@@ -6,9 +6,6 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 p3-field.workspace = true
-p3-dft.workspace = true
-p3-interpolation.workspace = true
-p3-matrix.workspace = true
 
 [dev-dependencies]
 p3-baby-bear.workspace = true
@@ -16,7 +13,3 @@ p3-goldilocks.workspace = true
 itertools.workspace = true
 rand.workspace = true
 criterion.workspace = true
-
-[[bench]]
-name = "coset"
-harness = false
