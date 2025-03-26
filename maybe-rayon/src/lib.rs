@@ -4,6 +4,7 @@
 pub mod prelude {
     use core::marker::{Send, Sync};
     use core::ops::Fn;
+
     pub use rayon::prelude::*;
     pub use rayon::{current_num_threads, join};
 
