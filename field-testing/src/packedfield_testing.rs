@@ -3,6 +3,7 @@ use alloc::vec::Vec;
 
 use p3_field::{Field, PackedField, PackedFieldPow2, PackedValue, PrimeCharacteristicRing};
 use rand::distr::{Distribution, StandardUniform};
+use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 
@@ -98,7 +99,7 @@ pub fn test_packed_linear_combination<PF: PackedField + Eq>()
 where
     StandardUniform: Distribution<PF> + Distribution<PF::Scalar>,
 {
-    let mut rng = rand::rng();
+    let mut rng = SmallRng::seed_from_u64(1);
     let u: [PF::Scalar; 64] = rng.random();
     let v: [PF; 64] = rng.random();
 

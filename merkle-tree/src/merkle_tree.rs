@@ -298,7 +298,8 @@ fn unpack_array<P: PackedValue, const N: usize>(
 #[cfg(test)]
 mod tests {
     use p3_symmetric::PseudoCompressionFunction;
-    use rand::Rng;
+    use rand::rngs::SmallRng;
+    use rand::{Rng, SeedableRng};
 
     use super::*;
 
@@ -342,7 +343,7 @@ mod tests {
 
     #[test]
     fn test_compress_random_values() {
-        let mut rng = rand::rng();
+        let mut rng = SmallRng::seed_from_u64(1);
         let prev_layer: Vec<[u8; 32]> = (0..8).map(|_| rng.random()).collect();
         let compressor = DummyCompressionFunction;
         let expected: Vec<[u8; 32]> = prev_layer

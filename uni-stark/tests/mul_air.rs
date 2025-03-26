@@ -22,7 +22,8 @@ use p3_symmetric::{
 };
 use p3_uni_stark::{StarkConfig, StarkGenericConfig, Val, prove, verify};
 use rand::distr::{Distribution, StandardUniform};
-use rand::{Rng, rng};
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 
 /// How many `a * b = c` operations to do per row in the AIR.
 const REPETITIONS: usize = 20; // This should be < 255 so it can fit into a u8.
@@ -56,7 +57,7 @@ impl MulAir {
     where
         StandardUniform: Distribution<F>,
     {
-        let mut rng = rng();
+        let mut rng = SmallRng::seed_from_u64(1);
         let mut trace_values = F::zero_vec(rows * TRACE_WIDTH);
         for (i, (a, b, c)) in trace_values.iter_mut().tuples().enumerate() {
             let row = i / REPETITIONS;
@@ -148,7 +149,8 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), impl Debug> {
     type Challenge = BinomialExtensionField<Val, 4>;
 
     type Perm = Poseidon2BabyBear<16>;
-    let perm = Perm::new_from_rng_128(&mut rng());
+    let mut rng = SmallRng::seed_from_u64(1);
+    let perm = Perm::new_from_rng_128(&mut rng);
 
     type Dft = Radix2DitParallel<Val>;
     let dft = Dft::default();
@@ -193,7 +195,8 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     type Challenge = BinomialExtensionField<Val, 4>;
 
     type Perm = Poseidon2BabyBear<16>;
-    let perm = Perm::new_from_rng_128(&mut rng());
+    let mut rng = SmallRng::seed_from_u64(1);
+    let perm = Perm::new_from_rng_128(&mut rng);
 
     type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
     let hash = MyHash::new(perm.clone());

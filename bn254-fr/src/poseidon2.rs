@@ -99,7 +99,8 @@ mod tests {
     use num_bigint::BigUint;
     use p3_poseidon2::ExternalLayerConstants;
     use p3_symmetric::Permutation;
-    use rand::Rng;
+    use rand::rngs::SmallRng;
+    use rand::{Rng, SeedableRng};
     use zkhash::ark_ff::{BigInteger, PrimeField as ark_PrimeField};
     use zkhash::fields::bn256::FpBN256 as ark_FpBN256;
     use zkhash::poseidon2::poseidon2::Poseidon2 as Poseidon2Ref;
@@ -136,7 +137,7 @@ mod tests {
 
         type F = Bn254Fr;
 
-        let mut rng = rand::rng();
+        let mut rng = SmallRng::seed_from_u64(1);
 
         // Poiseidon2 reference implementation from zkhash repo.
         let poseidon2_ref = Poseidon2Ref::new(&POSEIDON2_BN256_PARAMS);
