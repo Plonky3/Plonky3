@@ -1,3 +1,5 @@
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 use std::any::type_name;
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
@@ -28,9 +30,10 @@ fn bench_field(c: &mut Criterion) {
     benchmark_sub_latency::<F, L_REPS>(c, name);
     benchmark_sub_throughput::<F, REPS>(c, name);
 
+    let mut rng = SmallRng::seed_from_u64(1);
     c.bench_function("7th_root", |b| {
         b.iter_batched(
-            rand::random::<F>,
+            || rng.random::<F>(),
             |x| x.exp_u64(10540996611094048183),
             BatchSize::SmallInput,
         )
