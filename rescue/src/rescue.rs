@@ -2,8 +2,6 @@ use alloc::format;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use num::{BigUint, One};
-use num_integer::binomial;
 use p3_field::{Algebra, PermutationMonomial, PrimeField, PrimeField64};
 use p3_mds::MdsPermutation;
 use p3_symmetric::{CryptographicPermutation, Permutation};
@@ -11,7 +9,7 @@ use rand::Rng;
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 
-use crate::util::shake256_hash;
+use crate::util::{log2_binom, shake256_hash};
 
 /// The Rescue-XLIX permutation.
 #[derive(Clone, Debug)]
@@ -33,22 +31,36 @@ where
         }
     }
 
-    fn num_rounds(capacity: usize, sec_level: usize, alpha: u64) -> usize {
-        let rate = WIDTH - capacity;
-        let dcon = |n: usize| {
-            (0.5 * ((alpha - 1) * WIDTH as u64 * (n as u64 - 1)) as f64 + 2.0).floor() as usize
-        };
-        let v = |n: usize| WIDTH * (n - 1) + rate;
-        let target = BigUint::one() << sec_level;
+    /// Calculate the number of rounds needed to attain 2^sec_level security.
+    ///
+    /// The formulas here are direct translations of those from the
+    /// Rescue Prime paper in Section 2.5 and following. See the paper
+    /// for justifications.
+    pub fn num_rounds(capacity: usize, sec_level: usize) -> usize {
+        let rate = (WIDTH - capacity) as u64;
+        // This iterator produces pairs (dcon, v) increasing by a fixed
+        // amount (determined by the formula in the paper) each iteration,
+        // together with the value log2(binomial(v + dcon, v)). These values
+        // are fed into `find` which picks the first that exceed the desired
+        // security level.
+        let rnds = (1..)
+            .scan((2, rate), |(dcon, v), r| {
+                let log2_bin = log2_binom(*v + *dcon, *v);
 
-        let is_sufficient = |l1: &usize| {
-            let n = BigUint::from(v(*l1) + dcon(*l1));
-            let k = BigUint::from(v(*l1));
-            let bin = binomial(n, k);
-            &bin * &bin > target
-        };
-        let l1 = (1..25).find(is_sufficient).unwrap();
-        (l1.max(5) as f32 * 1.5).ceil() as usize
+                // ALPHA is a prime > 2, so ALPHA + 1 is even, hence this
+                // division is exact.
+                *dcon += WIDTH as u64 * (ALPHA + 1) / 2;
+                *v += WIDTH as u64;
+
+                Some((r, log2_bin))
+            })
+            .find(|(_r, log2_bin)| 2.0 * log2_bin > sec_level as f32)
+            .unwrap(); // Guaranteed to succeed for suff. large (dcon,v).
+        let rnds = rnds.0;
+
+        // The paper mandates a minimum of 5 rounds and adds a 50%
+        // safety margin: ceil(1.5 * max{5, rnds})
+        (3 * rnds.max(5) + 1) / 2
     }
 
     // For a general field, we provide a generic constructor for the round constants.
@@ -161,7 +173,7 @@ mod tests {
     type RescuePrimeM31Default = Rescue<Mersenne31, MdsMatrixMersenne31, WIDTH, ALPHA>;
 
     fn new_rescue_prime_m31_default() -> RescuePrimeM31Default {
-        let num_rounds = RescuePrimeM31Default::num_rounds(6, 128, ALPHA);
+        let num_rounds = RescuePrimeM31Default::num_rounds(6, 128);
         let round_constants =
             RescuePrimeM31Default::get_round_constants_rescue_prime(num_rounds, 6, 128);
         let mds = MdsMatrixMersenne31 {};

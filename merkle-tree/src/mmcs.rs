@@ -81,7 +81,7 @@ where
         &self,
         index: usize,
         prover_data: &MerkleTree<P::Value, PW::Value, M, DIGEST_ELEMS>,
-    ) -> (Vec<Vec<P::Value>>, Vec<[PW::Value; DIGEST_ELEMS]>) {
+    ) -> (Vec<Vec<P::Value>>, Self::Proof) {
         let max_height = self.get_max_height(prover_data);
         let log_max_height = log2_ceil_usize(max_height);
 
@@ -96,7 +96,7 @@ where
             })
             .collect_vec();
 
-        let proof: Vec<_> = (0..log_max_height)
+        let proof = (0..log_max_height)
             .map(|i| prover_data.digest_layers[i][(index >> i) ^ 1])
             .collect();
 

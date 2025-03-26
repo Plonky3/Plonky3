@@ -46,9 +46,7 @@ halo2curves = "0.8.0"
 hashbrown = "0.15.0"
 hex-literal = "1.0.0"
 itertools = "0.14.0"
-num = "0.4.0"
 num-bigint = { version = "0.4.3", default-features = false }
-num-integer = "0.1.46"
 num-traits = { version = "0.2.19", default-features = false }
 paste = "1.0.15"
 postcard = { version = "1.0.0", default-features = false }
