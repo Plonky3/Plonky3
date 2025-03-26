@@ -2,6 +2,8 @@
 
 #[cfg(feature = "parallel")]
 pub mod prelude {
+    use core::marker::{Send, Sync};
+    use core::ops::Fn;
     pub use rayon::prelude::*;
     pub use rayon::{current_num_threads, join};
 
@@ -41,6 +43,8 @@ pub mod prelude {
     pub use core::iter::{
         ExactSizeIterator as IndexedParallelIterator, Iterator as ParallelIterator,
     };
+    use core::marker::{Send, Sync};
+    use core::ops::Fn;
 
     pub use super::serial::*;
 
