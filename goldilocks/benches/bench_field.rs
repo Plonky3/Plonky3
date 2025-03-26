@@ -1,4 +1,4 @@
-use std::any::type_name;
+use core::any::type_name;
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use p3_field::{Field, PrimeCharacteristicRing};

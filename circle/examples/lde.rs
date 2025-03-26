@@ -1,4 +1,4 @@
-use std::hint::black_box;
+use core::hint::black_box;
 use std::time::{Duration, Instant};
 
 use p3_baby_bear::BabyBear;

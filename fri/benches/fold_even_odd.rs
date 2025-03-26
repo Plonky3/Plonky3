@@ -1,4 +1,4 @@
-use std::any::type_name;
+use core::any::type_name;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use itertools::Itertools;

@@ -281,7 +281,7 @@ pub fn pretty_name<T>() -> String {
 }
 
 /// A C-style buffered input reader, similar to
-/// `std::iter::Iterator::next_chunk()` from nightly.
+/// `core::iter::Iterator::next_chunk()` from nightly.
 ///
 /// Unsafe because the returned array may contain uninitialised
 /// elements.

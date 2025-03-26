@@ -1,5 +1,5 @@
-use std::fmt::Debug;
-use std::marker::PhantomData;
+use core::fmt::Debug;
+use core::marker::PhantomData;
 
 use itertools::Itertools;
 use p3_air::{Air, AirBuilder, BaseAir};
