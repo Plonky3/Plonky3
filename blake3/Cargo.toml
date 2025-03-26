@@ -12,3 +12,4 @@ blake3.workspace = true
 [features]
 neon = ["blake3/neon"]
 parallel = ["blake3/rayon"]
+pure = ["blake3/pure"]
