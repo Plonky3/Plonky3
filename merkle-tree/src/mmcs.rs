@@ -240,7 +240,7 @@ where
             }
         }
 
-        // Compare the computed root with the committed one.
+        // The computed root should equal the committed one.
         if commit == &root {
             Ok(())
         } else {
