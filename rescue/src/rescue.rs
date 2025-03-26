@@ -5,9 +5,9 @@ use itertools::Itertools;
 use p3_field::{Algebra, PermutationMonomial, PrimeField, PrimeField64};
 use p3_mds::MdsPermutation;
 use p3_symmetric::{CryptographicPermutation, Permutation};
-use rand::Rng;
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
+use rand::Rng;
 
 use crate::util::{log2_binom, shake256_hash};
 
@@ -36,6 +36,7 @@ where
     /// The formulas here are direct translations of those from the
     /// Rescue Prime paper in Section 2.5 and following. See the paper
     /// for justifications.
+    #[allow(clippy::manual_div_ceil)]
     pub fn num_rounds(capacity: usize, sec_level: usize) -> usize {
         let rate = (WIDTH - capacity) as u64;
         // This iterator produces pairs (dcon, v) increasing by a fixed
