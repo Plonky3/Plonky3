@@ -54,29 +54,14 @@ where
     F: Field,
     Y: Iterator<Item = F>,
 {
-    let y_vec: Vec<F> = y.collect();
-    let len = y_vec.len().min(x.len());
-    
-    if len == 0 {
+    if x.len() == 0 {
         return;
     }
-    
-    let x_slice = &mut x[..len];
-    let y_slice = &y_vec[..len];
-    
-    let (packed_x, sfx_x) = F::Packing::pack_slice_with_suffix_mut(x_slice);
-    let (packed_y, sfx_y) = F::Packing::pack_slice(y_slice);
-    let packed_s: F::Packing = s.into();
-    
-    // Process packed elements in parallel
-    packed_x.par_iter_mut().zip(packed_y).for_each(|(x_i, y_i)| {
-        *x_i += y_i * packed_s;
-    });
-    
-    // Process remaining elements
-    sfx_x.iter_mut().zip(sfx_y).for_each(|(x_i, y_i)| {
+
+    // Use the iterator directly without collecting
+    for (x_i, y_i) in x.iter_mut().zip(y) {
         *x_i += y_i * s;
-    });
+    }
 }
 
 // The ideas for the following work around come from the construe crate along with
