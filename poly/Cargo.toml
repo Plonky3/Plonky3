@@ -10,12 +10,14 @@ p3-field.workspace = true
 p3-matrix.workspace = true
 itertools.workspace = true
 rand = { workspace = true, optional = true }
+rand_chacha = { workspace = true, optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
 
 [dev-dependencies]
 p3-baby-bear.workspace = true
 p3-goldilocks.workspace = true
 rand.workspace = true
+rand_chacha.workspace = true
 
 [features]
-test-utils = ["dep:rand"]
+test-utils = ["dep:rand", "dep:rand_chacha" ]

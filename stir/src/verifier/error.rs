@@ -3,6 +3,8 @@ use core::fmt::Debug;
 /// Error during the verification process which causes the proof to be rejected
 #[derive(Debug, PartialEq)]
 pub enum VerificationError {
+    /// The proof of work for the initial folding randomness is incorrect
+    InitialProofOfWork,
     /// The degree plus 1 of the final polynomial `p = g_{M + 1}` sent in plain
     /// is greater than the bound `starting_degree / product(folding_factors)`
     FinalPolynomialDegree,

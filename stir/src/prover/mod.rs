@@ -173,6 +173,9 @@ where
     challenger.observe(F::from_u8(Messages::Commitment as u8));
     challenger.observe(commitment.clone());
 
+    // Initial proof of work
+    let starting_folding_pow_witness = challenger.grind(config.starting_folding_pow_bits());
+
     // Sample the folding randomness r_0
     challenger.observe(F::from_u8(Messages::FoldingRandomness as u8));
     let folding_randomness: EF = challenger.sample_algebra_element();
@@ -236,12 +239,13 @@ where
         .collect();
 
     // Compute the proof-of-work for the final round
-    let pow_witness = challenger.grind(config.final_pow_bits());
+    let final_pow_witness = challenger.grind(config.final_pow_bits());
 
     StirProof {
         round_proofs,
         final_polynomial,
-        pow_witness,
+        starting_folding_pow_witness,
+        final_pow_witness,
         final_round_queries: queries_to_final,
     }
 }

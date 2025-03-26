@@ -19,8 +19,11 @@ pub struct StirProof<F: Field, M: Mmcs<F>, Witness> {
     // Final poylnomial `p = g_{M + 1}` in plain
     pub(crate) final_polynomial: Polynomial<F>,
 
+    // Starting proof of work
+    pub(crate) starting_folding_pow_witness: Witness,
+
     // Proof of work for the final round
-    pub(crate) pow_witness: Witness,
+    pub(crate) final_pow_witness: Witness,
 
     // Merkle proofs for the final-round openings (of g_M)
     pub(crate) final_round_queries: Vec<(Vec<F>, M::Proof)>,

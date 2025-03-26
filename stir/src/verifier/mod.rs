@@ -184,8 +184,9 @@ where
 
     let StirProof {
         round_proofs,
+        starting_folding_pow_witness,
         final_polynomial,
-        pow_witness,
+        final_pow_witness,
         final_round_queries,
     } = proof;
 
@@ -200,6 +201,14 @@ where
     // Observe the commitment
     challenger.observe(F::from_u8(Messages::Commitment as u8));
     challenger.observe(commitment.clone());
+
+    // Check the initial proof of work
+    if !challenger.check_witness(
+        config.starting_folding_pow_bits(),
+        starting_folding_pow_witness,
+    ) {
+        return Err(VerificationError::InitialProofOfWork);
+    }
 
     // Sample the folding randomness r_0
     challenger.observe(F::from_u8(Messages::FoldingRandomness as u8));
@@ -326,7 +335,7 @@ where
     }
 
     // Check the final proof of work
-    if !challenger.check_witness(config.final_pow_bits(), pow_witness) {
+    if !challenger.check_witness(config.final_pow_bits(), final_pow_witness) {
         return Err(VerificationError::FinalProofOfWork);
     }
 

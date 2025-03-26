@@ -1,15 +1,16 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::iter::Iterator;
+use rand_chacha::ChaCha20Rng;
 
 use itertools::Itertools;
 use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_coset::TwoAdicCoset;
 use p3_field::PrimeCharacteristicRing;
-use p3_poly::test_utils::rand_poly;
+use p3_poly::test_utils::{rand_poly, rand_poly_seeded};
 use p3_symmetric::Hash;
-use rand::{rng, Rng};
+use rand::{rng, Rng, SeedableRng};
 
 use crate::config::observe_public_parameters;
 use crate::prover::{commit, prove, prove_round, StirRoundWitness};
@@ -41,7 +42,7 @@ macro_rules! impl_generate_proof_with_config {
             config: &StirConfig<$ext_mmcs>,
             challenger: &mut $challenger,
         ) -> ($proof_type, $commitment_type) {
-            let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
+            let polynomial = rand_poly_seeded((1 << config.log_starting_degree()) - 1, 238567);
             let (witness, commitment) = commit(&config, polynomial);
             (
                 prove(&config, witness, commitment, challenger),
@@ -126,7 +127,7 @@ fn tamper_with_final_polynomial(config: &StirConfig<BbExtMmcs>) -> (BBProof, Has
 
     // This is documented in prover.rs
     let mut challenger = test_bb_challenger();
-    let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
+    let polynomial = rand_poly_seeded((1 << config.log_starting_degree()) - 1, 831992);
     let (witness, commitment) = commit(config, polynomial);
 
     observe_public_parameters(config.parameters(), &mut challenger);
@@ -134,6 +135,9 @@ fn tamper_with_final_polynomial(config: &StirConfig<BbExtMmcs>) -> (BBProof, Has
     // Observe the commitment
     challenger.observe(Bb::from_u8(Messages::Commitment as u8));
     challenger.observe(commitment);
+
+    // Initial proof of work
+    let starting_folding_pow_witness = challenger.grind(config.starting_folding_pow_bits());
 
     // Sample the folding randomness
     challenger.observe(Bb::from_u8(Messages::FoldingRandomness as u8));
@@ -158,8 +162,9 @@ fn tamper_with_final_polynomial(config: &StirConfig<BbExtMmcs>) -> (BBProof, Has
 
     // ===================== Dishonest final polynomial ========================
 
-    let final_polynomial = rand_poly(
+    let final_polynomial = rand_poly_seeded(
         witness.polynomial.degree().unwrap() / 2_usize.pow(log_last_folding_factor as u32),
+        25122023,
     );
 
     // ===================== Continuing honest proving ========================
@@ -188,13 +193,14 @@ fn tamper_with_final_polynomial(config: &StirConfig<BbExtMmcs>) -> (BBProof, Has
         .map(|(mut k, v)| (k.remove(0), v))
         .collect();
 
-    let pow_witness = challenger.grind(config.final_pow_bits());
+    let final_pow_witness = challenger.grind(config.final_pow_bits());
 
     (
         StirProof {
             round_proofs,
+            starting_folding_pow_witness,
             final_polynomial,
-            pow_witness,
+            final_pow_witness,
             final_round_queries: queries_to_final,
         },
         commitment,
@@ -361,18 +367,29 @@ fn test_serialize_deserialize_proof() {
 // Check that each possible VerificationError is triggered correctly by
 // producing various dishonest proofs
 fn test_verify_failing_cases() {
-    let mut rng = rng();
-    let config = test_bb_stir_config(
-        BB_EXT_SEC_LEVEL,
-        SecurityAssumption::CapacityBound,
-        10,
-        1,
-        2,
-        3,
-    );
+    // Seeding the RNG guarantees the test won't fail because of the initial PoW
+    // proving too few bits
+    let mut rng = ChaCha20Rng::seed_from_u64(42);
+
+    let config = test_bb_stir_config(145, SecurityAssumption::CapacityBound, 10, 1, 2, 3);
 
     // This is the honest proof we will tamper with
     let (proof, commitment) = generate_bb_proof_with_config(&config, &mut test_bb_challenger());
+
+    // ========================== InitialProofOfWork ==========================
+
+    let mut invalid_proof = proof.clone();
+    invalid_proof.starting_folding_pow_witness = rng.random();
+
+    assert_eq!(
+        verify(
+            &config,
+            commitment,
+            invalid_proof,
+            &mut test_bb_challenger()
+        ),
+        Err(VerificationError::InitialProofOfWork)
+    );
 
     // ============================== ProofOfWork ==============================
 
@@ -523,7 +540,7 @@ fn test_verify_failing_cases() {
     // =========================== FinalProofOfWork ===========================
 
     let mut invalid_proof = proof.clone();
-    invalid_proof.pow_witness = rng.random();
+    invalid_proof.final_pow_witness = rng.random();
 
     assert_eq!(
         verify(
