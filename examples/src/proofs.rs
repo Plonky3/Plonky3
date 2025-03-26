@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use core::fmt::Debug;
 
 use p3_challenger::{DuplexChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;

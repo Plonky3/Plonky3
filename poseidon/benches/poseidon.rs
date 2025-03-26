@@ -1,5 +1,5 @@
-use std::any::type_name;
-use std::array;
+use core::any::type_name;
+use core::array;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, MdsMatrixBabyBear};

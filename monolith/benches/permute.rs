@@ -1,4 +1,4 @@
-use std::array;
+use core::array;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use p3_field::PrimeCharacteristicRing;
