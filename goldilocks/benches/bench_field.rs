@@ -1,5 +1,3 @@
-use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
 use std::any::type_name;
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
@@ -10,6 +8,8 @@ use p3_field_testing::bench_func::{
 };
 use p3_field_testing::{benchmark_mul_latency, benchmark_mul_throughput, benchmark_sum_array};
 use p3_goldilocks::Goldilocks;
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 
 type F = Goldilocks;
 
