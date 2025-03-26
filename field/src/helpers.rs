@@ -58,10 +58,26 @@ where
         return;
     }
 
-    // Use the iterator directly without collecting
-    for (x_i, y_i) in x.iter_mut().zip(y) {
-        *x_i += y_i * s;
+    // Convert iterator to a Vec for now, while still using direct iteration
+    let y_vec: Vec<F> = y.take(x.len()).collect();
+    
+    // Check if we got enough elements
+    if y_vec.len() < x.len() {
+        return;
     }
+    
+    let (packed_x, sfx_x) = F::Packing::pack_slice_with_suffix_mut(x);
+    let (packed_y, sfx_y) = F::Packing::pack_slice_with_suffix(&y_vec);
+    
+    // Process packed elements in parallel
+    packed_x.par_iter_mut().zip(packed_y).for_each(|(x_i, y_i)| {
+        *x_i += y_i * s;
+    });
+    
+    // Process remaining elements
+    sfx_x.iter_mut().zip(sfx_y).for_each(|(x_i, y_i)| {
+        *x_i += y_i * s;
+    });
 }
 
 // The ideas for the following work around come from the construe crate along with
