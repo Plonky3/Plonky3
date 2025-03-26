@@ -103,9 +103,11 @@ where
 
     /// Opens a batch of rows from committed matrices.
     ///
-    /// returns `(openings, proof)` where `openings` is a vector whose `i`th element is
-    /// the `j`th row of the ith matrix `M[i]`, with `j = index >> (log2_ceil(max_height) - log2_ceil(M[i].height))`
-    /// and `proof` is the vector of sibling merkle tree nodes allowing the verifier to reconstruct the committed root.
+    /// Returns `(openings, proof)` where `openings` is a vector whose `i`th element is
+    /// the `j`th row of the ith matrix `M[i]`, with
+    ///     `j == index >> (log2_ceil(max_height) - log2_ceil(M[i].height))`
+    /// and `proof` is the vector of sibling Merkle tree nodes allowing the verifier to 
+    /// reconstruct the committed root.
     fn open_batch<M: Matrix<P::Value>>(
         &self,
         index: usize,
