@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::MerkleTree;
 use crate::MerkleTreeError::{
-    EmptyBatch, MatrixHeightError, RootMismatch, WrongBatchSize, WrongHeight,
+    EmptyBatch, IncompatibleHeights, RootMismatch, WrongBatchSize, WrongHeight,
 };
 
 /// A vector commitment scheme backed by a `MerkleTree`.
@@ -58,7 +58,7 @@ pub enum MerkleTreeError {
         log_max_height: usize,
         num_siblings: usize,
     },
-    MatrixHeightError,
+    IncompatibleHeights,
     RootMismatch,
     EmptyBatch,
 }
@@ -176,7 +176,7 @@ where
                 curr == next || curr.next_power_of_two() != next.next_power_of_two()
             })
         {
-            return Err(MatrixHeightError);
+            return Err(IncompatibleHeights);
         }
 
         // Get the initial height padded to a power of two. As heights_tallest_first is sorted,
