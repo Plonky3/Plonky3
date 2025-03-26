@@ -1,5 +1,5 @@
 //! A MerkleTreeMmcs is a generalization of the standard MerkleTree commitment scheme which supports
-//! committing to several matrices of different heights.
+//! committing to several matrices of different dimensions.
 //!
 //! Say we wish to commit to 2 matrices M and N with dimensions (8, i) and (2, j) respectively.
 //! Let H denote the hash function and C the compression function for our tree.
