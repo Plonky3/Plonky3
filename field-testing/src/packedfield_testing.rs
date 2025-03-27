@@ -321,6 +321,66 @@ where
     );
 }
 
+/// A naive implementation of add_scaled_slice_in_place for testing
+fn add_scaled_slice_in_place_naive<F: Field>(x: &mut [F], y: impl Iterator<Item = F>, s: F) {
+    for (x_i, y_i) in x.iter_mut().zip(y) {
+        *x_i += y_i * s;
+    }
+}
+
+/// Tests the optimized `add_scaled_slice_in_place` function against a naive implementation.
+pub fn test_add_scaled_slice_in_place<F: Field>()
+where
+    StandardUniform: Distribution<F>,
+{
+    let mut rng = rand::rng();
+    
+    // Test with various vector sizes
+    let sizes = [0, 1, 2, 4, 7, 8, 16, 32];
+    
+    for &size in &sizes {
+        // Create test vectors
+        let mut vec1: Vec<F> = (0..size).map(|_| rng.random()).collect();
+        let mut vec2 = vec1.clone();
+        
+        // Create y vector and scalar
+        let y_vec: Vec<F> = (0..size).map(|_| rng.random()).collect();
+        let s = rng.random();
+        
+        // Apply the optimized version to vec1
+        p3_field::add_scaled_slice_in_place(&mut vec1, y_vec.iter().cloned(), s);
+        
+        // Apply the naive version to vec2
+        add_scaled_slice_in_place_naive(&mut vec2, y_vec.iter().cloned(), s);
+        
+        // Verify that both vectors are identical
+        assert_eq!(vec1, vec2, "Optimized and naive implementations should produce the same result for size {}", size);
+    }
+
+    // Test edge cases where y_vec contains fewer elements than x
+    let size = 10;
+    let mut vec1: Vec<F> = (0..size).map(|_| rng.random()).collect();
+    let mut vec2 = vec1.clone();
+    
+    // Create y_vec with fewer elements
+    let y_vec: Vec<F> = (0..size-2).map(|_| rng.random()).collect();
+    let s = rng.random();
+    
+    // Apply the optimized version to vec1
+    p3_field::add_scaled_slice_in_place(&mut vec1, y_vec.iter().cloned(), s);
+    
+    // Apply the naive version to vec2 (but with the same number of elements as y_vec)
+    add_scaled_slice_in_place_naive(&mut vec2[..y_vec.len()], y_vec.iter().cloned(), s);
+    
+    // The first y_vec.len() elements should be updated, the rest should be unchanged
+    for i in 0..y_vec.len() {
+        assert_eq!(vec1[i], vec2[i], "Elements at index {} should match", i);
+    }
+    for i in y_vec.len()..size {
+        assert_eq!(vec1[i], vec2[i], "Elements beyond y_vec length should remain unchanged");
+    }
+}
+
 #[macro_export]
 macro_rules! test_packed_field {
     ($packedfield:ty, $zeros:expr, $ones:expr, $specials:expr) => {
@@ -350,6 +410,10 @@ macro_rules! test_packed_field {
             #[test]
             fn test_mul_2exp_u64() {
                 $crate::test_mul_2exp_u64::<$packedfield>();
+            }
+            #[test]
+            fn test_add_scaled_slice_in_place() {
+                $crate::test_add_scaled_slice_in_place::<$packedfield>();
             }
         }
     };
