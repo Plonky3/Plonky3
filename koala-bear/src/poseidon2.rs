@@ -253,7 +253,6 @@ impl InternalLayerParameters<KoalaBearParameters, 24> for KoalaBearInternalLayer
 #[cfg(test)]
 mod tests {
     use p3_symmetric::Permutation;
-    use rand::rngs::SmallRng;
     use rand::{Rng, SeedableRng};
     use rand_xoshiro::Xoroshiro128Plus;
 
@@ -320,7 +319,7 @@ mod tests {
     /// for a random input of width 16.
     #[test]
     fn test_generic_internal_linear_layer_16() {
-        let mut rng = SmallRng::seed_from_u64(1);
+        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
         let mut input1: [F; 16] = rng.random();
         let mut input2 = input1;
 
@@ -339,7 +338,7 @@ mod tests {
     /// for a random input of width 16.
     #[test]
     fn test_generic_internal_linear_layer_24() {
-        let mut rng = SmallRng::seed_from_u64(1);
+        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
         let mut input1: [F; 24] = rng.random();
         let mut input2 = input1;
 
