@@ -42,7 +42,8 @@ jobs:
 
     - name: Set flags
       if: ${{ matrix.features }}
-      run: export RUSTFLAGS=-Ctarget-feature=${{ matrix.features }}
+      env:
+        RUSTFLAGS: -Ctarget-feature=${{ matrix.features }}
 
     - name: Build
       run: cargo build --verbose --all-targets
