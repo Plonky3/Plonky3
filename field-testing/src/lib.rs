@@ -14,15 +14,15 @@ use alloc::vec::Vec;
 pub use bench_func::*;
 pub use dft_testing::*;
 use num_bigint::BigUint;
-use num_traits::identities::One;
 use p3_field::{
     ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField,
     cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order,
     two_adic_coset_vanishing_polynomial, two_adic_subgroup_vanishing_polynomial, add_scaled_slice_in_place,
 };
 pub use packedfield_testing::*;
-use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 
 #[allow(clippy::eq_op)]
 pub fn test_ring_with_eq<R: PrimeCharacteristicRing + Copy + Eq>(zeros: &[R], ones: &[R])
@@ -31,7 +31,7 @@ where
 {
     // zeros should be a vector containing differenent representatives of `R::ZERO`.
     // ones should be a vector containing differenent representatives of `R::ONE`.
-    let mut rng = rand::rng();
+    let mut rng = SmallRng::seed_from_u64(1);
     let x = rng.random::<R>();
     let y = rng.random::<R>();
     let z = rng.random::<R>();
@@ -219,7 +219,7 @@ pub fn test_inv_div<F: Field>()
 where
     StandardUniform: Distribution<F>,
 {
-    let mut rng = rand::rng();
+    let mut rng = SmallRng::seed_from_u64(1);
     let x = rng.random::<F>();
     let y = rng.random::<F>();
     let z = rng.random::<F>();
@@ -236,7 +236,7 @@ pub fn test_mul_2exp_u64<R: PrimeCharacteristicRing + Eq>()
 where
     StandardUniform: Distribution<R>,
 {
-    let mut rng = rand::rng();
+    let mut rng = SmallRng::seed_from_u64(1);
     let x = rng.random::<R>();
     assert_eq!(x.mul_2exp_u64(0), x);
     assert_eq!(x.mul_2exp_u64(1), x.double());
@@ -252,7 +252,7 @@ pub fn test_div_2exp_u64<F: Field>()
 where
     StandardUniform: Distribution<F>,
 {
-    let mut rng = rand::rng();
+    let mut rng = SmallRng::seed_from_u64(1);
     let x = rng.random::<F>();
     assert_eq!(x.div_2exp_u64(0), x);
     assert_eq!(x.div_2exp_u64(1), x.halve());
@@ -271,10 +271,8 @@ where
     StandardUniform: Distribution<F>,
 {
     assert_eq!(None, F::ZERO.try_inverse());
-
     assert_eq!(Some(F::ONE), F::ONE.try_inverse());
-
-    let mut rng = rand::rng();
+    let mut rng = SmallRng::seed_from_u64(1);
     for _ in 0..1000 {
         let x = rng.random::<F>();
         if !x.is_zero() && !x.is_one() {
@@ -526,7 +524,7 @@ pub fn test_generator<F: Field>(multiplicative_group_factors: &[(BigUint, u32)])
         .iter()
         .map(|(factor, exponent)| factor.pow(*exponent))
         .product();
-    assert_eq!(product + BigUint::one(), F::order());
+    assert_eq!(product + BigUint::from(1u32), F::order());
 
     // Given a prime factorization r = p1^e1 * p2^e2 * ... * pk^ek, an element g has order
     // r if and only if g^r = 1 and g^(r/pi) != 1 for all pi in the prime factorization of r.
@@ -670,11 +668,12 @@ macro_rules! test_prime_field_64 {
         mod from_integer_tests_prime_field_64 {
             use p3_field::integers::QuotientMap;
             use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
-            use rand::Rng;
+            use rand::rngs::SmallRng;
+            use rand::{Rng, SeedableRng};
 
             #[test]
             fn test_as_canonical_u64() {
-                let mut rng = rand::rng();
+                let mut rng = SmallRng::seed_from_u64(1);
                 let x: u64 = rng.random();
                 let x_mod_order = x % <$field>::ORDER_U64;
 
@@ -732,11 +731,12 @@ macro_rules! test_prime_field_32 {
         mod from_integer_tests_prime_field_32 {
             use p3_field::integers::QuotientMap;
             use p3_field::{Field, PrimeCharacteristicRing, PrimeField32};
-            use rand::Rng;
+            use rand::rngs::SmallRng;
+            use rand::{Rng, SeedableRng};
 
             #[test]
             fn test_as_canonical_u32() {
-                let mut rng = rand::rng();
+                let mut rng = SmallRng::seed_from_u64(1);
                 let x: u32 = rng.random();
                 let x_mod_order = x % <$field>::ORDER_U32;
 

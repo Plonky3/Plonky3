@@ -122,7 +122,8 @@ mod tests {
     use p3_field::{Field, PrimeCharacteristicRing};
     use p3_symmetric::Permutation;
     use p3_util::reverse_slice_index_bits;
-    use rand::{Rng, rng};
+    use rand::rngs::SmallRng;
+    use rand::{Rng, SeedableRng};
 
     use crate::integrated_coset_mds::IntegratedCosetMds;
 
@@ -131,7 +132,7 @@ mod tests {
 
     #[test]
     fn matches_naive() {
-        let mut rng = rng();
+        let mut rng = SmallRng::seed_from_u64(1);
         let mut arr: [F; N] = rng.random();
 
         let mut arr_rev = arr.to_vec();

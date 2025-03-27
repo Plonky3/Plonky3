@@ -7,7 +7,8 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
-use rand::random;
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 
 use crate::air::eval;
 use crate::constants::RoundConstants;
@@ -192,7 +193,8 @@ impl<
         LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>,
         StandardUniform: Distribution<[F; WIDTH]>,
     {
-        let inputs = (0..num_hashes).map(|_| random()).collect();
+        let mut rng = SmallRng::seed_from_u64(1);
+        let inputs = (0..num_hashes).map(|_| rng.random()).collect();
         generate_vectorized_trace_rows::<
             _,
             LinearLayers,

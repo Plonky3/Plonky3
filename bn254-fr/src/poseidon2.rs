@@ -2,13 +2,15 @@
 //!
 //! Reference: https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_bn256.rs
 
-use std::sync::OnceLock;
+extern crate alloc;
+
+use alloc::vec::Vec;
 
 use p3_field::PrimeCharacteristicRing;
 use p3_poseidon2::{
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, HLMDSMat4, InternalLayer,
     InternalLayerConstructor, Poseidon2, add_rc_and_sbox_generic, external_initial_permute_state,
-    external_terminal_permute_state, internal_permute_state, matmul_internal,
+    external_terminal_permute_state, internal_permute_state,
 };
 
 use crate::Bn254Fr;
@@ -32,12 +34,6 @@ pub type Poseidon2Bn254<const WIDTH: usize> = Poseidon2<
 /// Currently we only support a single width for Poseidon2 BN254.
 const BN254_WIDTH: usize = 3;
 
-#[inline]
-fn get_diffusion_matrix_3() -> &'static [Bn254Fr; 3] {
-    static MAT_DIAG3_M_1: OnceLock<[Bn254Fr; 3]> = OnceLock::new();
-    MAT_DIAG3_M_1.get_or_init(|| [Bn254Fr::ONE, Bn254Fr::ONE, Bn254Fr::TWO])
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct Poseidon2InternalLayerBn254 {
     internal_constants: Vec<Bn254Fr>,
@@ -49,14 +45,27 @@ impl InternalLayerConstructor<Bn254Fr> for Poseidon2InternalLayerBn254 {
     }
 }
 
+/// A faster version of `matmul_internal` making use of the fact that
+/// the internal matrix is equal to:
+/// ```ignore
+///                             [2, 1, 1]
+///     1 + Diag([1, 1, 2]) =   [1, 2, 1]
+///                             [1, 1, 3]
+/// ```
+fn bn254_matmul_internal(state: &mut [Bn254Fr; 3]) {
+    // We bracket in this way as the s-box is applied to state[0] so this lets us
+    // begin this computation before the s-box finishes.
+    let sum = state[0] + (state[1] + state[2]);
+
+    state[0] += sum;
+    state[1] += sum;
+    state[2] = state[2].double() + sum;
+}
+
 impl InternalLayer<Bn254Fr, BN254_WIDTH, BN254_S_BOX_DEGREE> for Poseidon2InternalLayerBn254 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
     fn permute_state(&self, state: &mut [Bn254Fr; BN254_WIDTH]) {
-        internal_permute_state(
-            state,
-            |x| matmul_internal(x, *get_diffusion_matrix_3()),
-            &self.internal_constants,
-        )
+        internal_permute_state(state, bn254_matmul_internal, &self.internal_constants)
     }
 }
 
@@ -99,7 +108,8 @@ mod tests {
     use num_bigint::BigUint;
     use p3_poseidon2::ExternalLayerConstants;
     use p3_symmetric::Permutation;
-    use rand::Rng;
+    use rand::rngs::SmallRng;
+    use rand::{Rng, SeedableRng};
     use zkhash::ark_ff::{BigInteger, PrimeField as ark_PrimeField};
     use zkhash::fields::bn256::FpBN256 as ark_FpBN256;
     use zkhash::poseidon2::poseidon2::Poseidon2 as Poseidon2Ref;
@@ -136,7 +146,7 @@ mod tests {
 
         type F = Bn254Fr;
 
-        let mut rng = rand::rng();
+        let mut rng = SmallRng::seed_from_u64(1);
 
         // Poiseidon2 reference implementation from zkhash repo.
         let poseidon2_ref = Poseidon2Ref::new(&POSEIDON2_BN256_PARAMS);

@@ -1,13 +1,14 @@
 use criterion::{BenchmarkGroup, Criterion, Throughput, criterion_group, criterion_main};
 use p3_matrix::dense::RowMajorMatrix;
-use rand::rng;
+use rand::SeedableRng;
+use rand::rngs::SmallRng;
 
 fn transpose_benchmark(c: &mut Criterion) {
     const SMALL_DIMS: [(usize, usize); 4] = [(4, 4), (8, 8), (10, 10), (12, 12)];
     const LARGE_DIMS: [(usize, usize); 4] = [(20, 8), (21, 8), (22, 8), (23, 8)];
 
     let inner = |g: &mut BenchmarkGroup<_>, dims: &[(usize, usize)]| {
-        let mut rng = rng();
+        let mut rng = SmallRng::seed_from_u64(1);
         for (lg_nrows, lg_ncols) in dims {
             let nrows = 1 << lg_nrows;
             let ncols = 1 << lg_ncols;

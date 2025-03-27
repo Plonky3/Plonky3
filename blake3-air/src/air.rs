@@ -7,7 +7,8 @@ use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use rand::random;
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 
 use crate::columns::{Blake3Cols, NUM_BLAKE3_COLS};
 use crate::constants::{BITS_PER_LIMB, IV, permute};
@@ -23,7 +24,8 @@ impl Blake3Air {
         num_hashes: usize,
         extra_capacity_bits: usize,
     ) -> RowMajorMatrix<F> {
-        let inputs = (0..num_hashes).map(|_| random()).collect::<Vec<_>>();
+        let mut rng = SmallRng::seed_from_u64(1);
+        let inputs = (0..num_hashes).map(|_| rng.random()).collect::<Vec<_>>();
         generate_trace_rows(inputs, extra_capacity_bits)
     }
 
