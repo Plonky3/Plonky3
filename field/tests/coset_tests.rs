@@ -3,7 +3,7 @@ mod coset {
     use p3_field::coset::TwoAdicMultiplicativeCoset;
     use p3_field::{PrimeCharacteristicRing, TwoAdicField};
     use p3_goldilocks::Goldilocks;
-    use rand::{Rng, rng};
+    use rand::Rng;
 
     type BB = BabyBear;
     type GL = Goldilocks;
@@ -49,7 +49,7 @@ mod coset {
     #[test]
     // Checks that shrinking the whole coset results in the expected new shift
     fn test_shrink_shift() {
-        let mut rng = rng();
+        let mut rng = rand::rng();
         let shift: BB = rng.random();
 
         let coset = TwoAdicMultiplicativeCoset::<BB>::new(shift, 4).unwrap();
@@ -62,7 +62,7 @@ mod coset {
     // Checks that shrinking the coset by a factor of k results in a new coset whose
     // i-th element is the original coset's (i * k)-th element
     fn test_shrink_contained() {
-        let mut rng = rng();
+        let mut rng = rand::rng();
         let shift: GL = rng.random();
 
         let log_shrinking_factor = 3;
@@ -93,7 +93,7 @@ mod coset {
     // Checks that the coset iterator yields the expected elements (in the expected
     // order)
     fn test_coset_iterator() {
-        let mut rng = rng();
+        let mut rng = rand::rng();
         let shift: BB = rng.random();
         let log_size = 3;
 
@@ -119,7 +119,7 @@ mod coset {
     #[test]
     // Checks that the element method returns the expected values
     fn test_element() {
-        let mut rng = rng();
+        let mut rng = rand::rng();
 
         let shift: GL = rng.random();
         let mut coset = TwoAdicMultiplicativeCoset::<GL>::new(shift, GL::TWO_ADICITY).unwrap();
@@ -134,7 +134,7 @@ mod coset {
     #[test]
     // Checks that the contains method returns true on all elements of the coset
     fn test_contains() {
-        let mut rng = rng();
+        let mut rng = rand::rng();
         let shift = rng.random();
 
         let log_size = 8;
