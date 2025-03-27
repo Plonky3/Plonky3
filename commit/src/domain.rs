@@ -144,7 +144,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
 
     /// Getting the next point corresponds to multiplication by the generator.
     fn next_point<Ext: ExtensionField<Val>>(&self, x: Ext) -> Option<Ext> {
-        Some(x * self.generator())
+        Some(x * self.subgroup_generator())
     }
 
     /// Given the coset `gH`, return the disjoint coset `gfK` where `f`
@@ -160,7 +160,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         // it does not lie in `K` and so `gf` cannot lie in `gK`.
         //
         // Thus `gH` and `gfK` are disjoint.
-        Self::new(self.shift() * Val::GENERATOR, log2_ceil_usize(min_size))
+        Self::new(self.shift() * Val::GENERATOR, log2_ceil_usize(min_size)).unwrap()
     }
 
     /// Given the coset `gH` and generator `h` of `H`, let `K = H^{num_chunks}`
@@ -173,9 +173,10 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         (0..num_chunks)
             .map(|i| {
                 Self::new(
-                    self.shift() * self.generator().exp_u64(i as u64),
+                    self.shift() * self.subgroup_generator().exp_u64(i as u64),
                     self.log_size() - log_chunks,
                 )
+                .unwrap()
             })
             .collect()
     }
@@ -217,8 +218,8 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         let z_h = unshifted_point.exp_power_of_2(self.log_size()) - Ext::ONE;
         LagrangeSelectors {
             is_first_row: z_h / (unshifted_point - Ext::ONE),
-            is_last_row: z_h / (unshifted_point - self.generator().inverse()),
-            is_transition: unshifted_point - self.generator().inverse(),
+            is_last_row: z_h / (unshifted_point - self.subgroup_generator().inverse()),
+            is_transition: unshifted_point - self.subgroup_generator().inverse(),
             inv_vanishing: z_h.inverse(),
         }
     }
@@ -241,11 +242,15 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
             .map(|x| s_pow_n * x - Val::ONE)
             .collect_vec();
 
-        let xs = cyclic_subgroup_coset_known_order(coset.generator(), coset.shift(), coset.size())
-            .collect_vec();
+        let xs = cyclic_subgroup_coset_known_order(
+            coset.subgroup_generator(),
+            coset.shift(),
+            coset.size(),
+        )
+        .collect_vec();
 
         let single_point_selector = |i: u64| {
-            let coset_i = self.generator().exp_u64(i);
+            let coset_i = self.subgroup_generator().exp_u64(i);
             let denoms = xs.iter().map(|&x| x - coset_i).collect_vec();
             let invs = batch_multiplicative_inverse(&denoms);
             evals
@@ -256,7 +261,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
                 .collect_vec()
         };
 
-        let subgroup_last = self.generator().inverse();
+        let subgroup_last = self.subgroup_generator().inverse();
 
         LagrangeSelectors {
             is_first_row: single_point_selector(0),

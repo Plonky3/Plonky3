@@ -53,7 +53,7 @@ where
     type Error = ();
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
-        TwoAdicMultiplicativeCoset::new(Val::ONE, log2_strict_usize(degree))
+        TwoAdicMultiplicativeCoset::new(Val::ONE, log2_strict_usize(degree)).unwrap()
     }
 
     fn commit(

@@ -19,9 +19,8 @@ use crate::{Powers, TwoAdicField};
 /// type F = BabyBear;
 /// let log_size = 3;
 /// let shift = F::from_u64(7);
-/// let mut coset = TwoAdicMultiplicativeCoset::new(shift, log_size);
-/// let generator = coset.generator();
-///
+/// let mut coset = TwoAdicMultiplicativeCoset::new(shift, log_size).unwrap();
+/// let generator = coset.subgroup_generator();
 ///
 /// // Coset elements can be queried by index
 /// assert_eq!(coset.element(4), shift * generator.exp_u64(4));
@@ -34,8 +33,25 @@ use crate::{Powers, TwoAdicField};
 ///
 /// // Cosets can be (element-wise) raised to a power of 2, either maintaining
 /// // the shift and raising only the subgroup, or raising both.
-/// assert_eq!(coset.shrink_coset(2), TwoAdicMultiplicativeCoset::new(shift.exp_power_of_2(2), log_size - 2));
-/// assert_eq!(coset.shrink_subgroup(2), TwoAdicMultiplicativeCoset::new(shift, log_size - 2));
+/// let coset_shrunk_subgroup = coset.shrink_coset(2).unwrap();
+/// assert_eq!(
+///     coset_shrunk_subgroup.subgroup_generator(),
+///     coset.subgroup_generator().exp_power_of_2(2),
+/// );
+/// assert_eq!(
+///     coset_shrunk_subgroup.shift(),
+///     coset.shift()
+/// );
+///
+/// let coset_power = coset.exp_power_of_2(2).unwrap();
+/// assert_eq!(
+///     coset_power.subgroup_generator(),
+///     coset.subgroup_generator().exp_power_of_2(2),
+/// );
+/// assert_eq!(
+///     coset_power.shift(),
+///     coset.shift().exp_power_of_2(2),
+/// );
 /// ```
 #[derive(Clone, Copy, Debug)]
 pub struct TwoAdicMultiplicativeCoset<F: TwoAdicField> {
@@ -47,9 +63,10 @@ pub struct TwoAdicMultiplicativeCoset<F: TwoAdicField> {
 }
 
 impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
-    /// Returns the coset `shift * <g>`, where g is a canonical (i. e. fixed in
-    /// the implementation of `F: TwoAdicField`) generator of the unique
-    /// subgroup of the units of `F` of order `2 ^ log_size`.
+    /// Returns the coset `shift * <generator>`, where `generator` is a
+    /// canonical (i. e. fixed in the implementation of `F: TwoAdicField`)
+    /// generator of the unique subgroup of the units of `F` of order `2 ^
+    /// log_size`. Returns `None` if `log_size > F::TWO_ADICITY`.
     ///
     /// # Arguments
     ///
@@ -57,24 +74,17 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
     ///    shifted
     ///  - `log_size`: the size of the subgroup (and hence of the coset) is `2 ^
     ///    log_size`. This determines the subgroup uniquely.
-    ///
-    /// # Panics
-    ///
-    ///  If `F: TwoAdicField` does not provide an element of order `2 ^
-    /// log_size` (e. g. if `2 ^ log_size` does not divide `|F| - 1`)
-    pub fn new(shift: F, log_size: usize) -> Self {
-        assert!(
-            log_size <= F::TWO_ADICITY,
-            "log_size must be <= the two_adicity of the field ({})",
-            F::TWO_ADICITY
-        );
-
-        Self { shift, log_size }
+    pub fn new(shift: F, log_size: usize) -> Option<Self> {
+        if log_size <= F::TWO_ADICITY {
+            Some(Self { shift, log_size })
+        } else {
+            None
+        }
     }
 
-    /// Returns the generator of the coset.
+    /// Returns the generator of the subgroup whose shift is `self`.
     #[inline]
-    pub fn generator(&self) -> F {
+    pub fn subgroup_generator(&self) -> F {
         F::two_adic_generator(self.log_size)
     }
 
@@ -99,27 +109,27 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
     /// Returns a new coset with its subgroup reduced by a factor of
     /// `2^log_scale_factor` in size (i. e. with generator equal to the
     /// `2^log_scale_factor`-th power of that of the original coset), leaving
-    /// the shift untouched
-    pub fn shrink_subgroup(&self, log_scale_factor: usize) -> TwoAdicMultiplicativeCoset<F> {
-        assert!(
-            log_scale_factor <= self.log_size,
-            "The domain size (2^{}) is not large enough to be shrunk by a factor of 2^{}",
-            self.log_size,
-            log_scale_factor
-        );
-
-        TwoAdicMultiplicativeCoset {
-            shift: self.shift,
-            log_size: self.log_size - log_scale_factor,
-        }
+    /// the shift untouched. Note that new coset is contained in the original one.
+    /// Returns `None` if `log_scale_factor` is greater than factor is larger
+    /// than size of `self.log_size()`.
+    pub fn shrink_coset(&self, log_scale_factor: usize) -> Option<Self> {
+        self.log_size
+            .checked_sub(log_scale_factor)
+            .map(|new_log_size| TwoAdicMultiplicativeCoset {
+                shift: self.shift,
+                log_size: new_log_size,
+            })
     }
 
     /// Returns the coset `self^(2^log_scale_factor)` (i. e. with shift and
-    /// generator equal to the `2^log_scale_factor`-th power of the original
-    /// ones).
-    pub fn shrink_coset(&self, log_scale_factor: usize) -> TwoAdicMultiplicativeCoset<F> {
-        let new_coset = self.shrink_subgroup(log_scale_factor);
-        new_coset.set_shift(self.shift.exp_power_of_2(log_scale_factor))
+    /// subgroup generator equal to the `2^log_scale_factor`-th power of the
+    /// original ones). Returns `None` if `log_scale_factor` is greater than
+    /// factor is larger than size of `self.log_size()`.
+    pub fn exp_power_of_2(&self, log_scale_factor: usize) -> Option<Self> {
+        self.shrink_coset(log_scale_factor).map(|mut coset| {
+            coset.shift = self.shift.exp_power_of_2(log_scale_factor);
+            coset
+        })
     }
 
     /// Returns a new coset where the shift has been set to `shift` times the
@@ -146,46 +156,38 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
         // for each divisor n of |F| - 1, and its elements e are uniquely
         // caracterised by the condition e^n = 1.
 
-        // We check (shift^{-1} * element)^(2^log_size) = 1, terminating early if
-        // possible.
-        let mut e = self.shift.inverse() * element;
+        // We check (shift^{-1} * element)^(2^log_size) = 1, which is equivalent
+        // to checking shift^(2^log_size) = element^(2^log_size) - this avoids
+        // inversion at the cost of a few squarings. The loop terminates early
+        // if possible.
+        let (mut shift, mut element) = (self.shift, element);
 
         for _ in 0..self.log_size {
-            if e == F::ONE {
+            if element == shift {
                 return true;
             }
-            e = e.square();
+            element = element.square();
+            shift = shift.square();
         }
 
-        e == F::ONE
+        element == shift
     }
 
-    /// Returns the `index`-th element of the coset `shift * g^index`. To prevent
-    /// unnecessary computation, `index` is asserted to be < `2^log_size`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `index >= 2^log_size`.
+    /// Returns the element `shift * generator^index`, which is the `index %
+    /// self.size()`-th element of `self` (and, in particular, the `index`-th
+    /// element of `self` whenever `index` < self.size()).
+    #[inline]
     pub fn element(&mut self, index: usize) -> F {
-        // Transferring the responsibility of the modular reduction to the
-        // caller spares handling cases where self.log_size >= usize::BITS here,
-        // which would come at an unnecessary performance cost in the vast
-        // majority of use cases.
-        assert!(
-            index < 1 << self.log_size,
-            "index must be less than the size of the coset. \
-            Consider passing the equivalent index % (1 << log_size) instead"
-        );
-        self.shift * self.generator_exp(index)
+        self.shift * self.generator_exp(index & ((1 << self.log_size) - 1))
     }
 
     // Internal function which computes `generator^exp`. It uses the
     // square-and-multiply algorithm with the caveat that squares of the
     // generator are queried from the field (which typically should have them
-    // stored), i. e. rather "fetch-and-multiply"
+    // stored), i. e. rather "fetch-and-multiply".
     fn generator_exp(&mut self, exp: usize) -> F {
         let mut gen_power = F::ONE;
-        let mut exp = exp;
+        let mut exp = exp & ((1 << self.log_size()) - 1);
         let mut i = self.log_size();
 
         while exp > 0 {
@@ -193,12 +195,6 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
                 gen_power *= F::two_adic_generator(i);
             }
             exp >>= 1;
-
-            // This cannot be added to the loop condition cleanly because
-            // casting it to an isize would give a different range than usize
-            if i == 0 {
-                break;
-            }
 
             i -= 1;
         }
@@ -210,43 +206,17 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
     /// "shift * generator^0, shift * generator^1, ...,
     /// shift * generator^(2^log_size - 1)`.
     pub fn iter(&self) -> Take<Powers<F>> {
-        self.generator()
+        self.subgroup_generator()
             .shifted_powers(self.shift)
             .take(1 << self.log_size)
     }
 }
-
-/// This tests the equality of the two cosets as mathematical objects, that is:
-/// whether they contain the exact same elements (not necessarily in the same
-/// order) or not.
-impl<F: TwoAdicField> PartialEq for TwoAdicMultiplicativeCoset<F> {
-    fn eq(&self, other: &Self) -> bool {
-        if self.generator() == other.generator() && self.shift == other.shift {
-            return true;
-        }
-
-        // The first equality assumes generators are chosen canonically (as
-        // ensured by the TwoAdicField interface). If not, one could simply
-        // assert self.generator has the same order as other.generator (this is
-        // enough by the cyclicity of the group of units)
-        self.generator() == other.generator() && other.contains(self.shift)
-    }
-}
-
-/// This tests the equality of the two cosets as mathematical objects, that is:
-/// whether they contain the exact same elements (not necessarily in the same
-/// order) or not.
-///
-// This falls back to PartialEq
-impl<F: TwoAdicField> Eq for TwoAdicMultiplicativeCoset<F> {}
 
 impl<F: TwoAdicField> IntoIterator for TwoAdicMultiplicativeCoset<F> {
     type Item = F;
     type IntoIter = Take<Powers<F>>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.generator()
-            .shifted_powers(self.shift)
-            .take(1 << self.log_size)
+        self.iter()
     }
 }
