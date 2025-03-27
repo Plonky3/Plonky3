@@ -1,5 +1,5 @@
-use std::fmt::Debug;
-use std::marker::PhantomData;
+use core::fmt::Debug;
+use core::marker::PhantomData;
 
 use itertools::Itertools;
 use p3_air::{Air, AirBuilder, BaseAir};
@@ -22,8 +22,8 @@ use p3_symmetric::{
 };
 use p3_uni_stark::{StarkConfig, StarkGenericConfig, Val, prove, verify};
 use rand::distr::{Distribution, StandardUniform};
-use rand::rngs::{StdRng, ThreadRng};
-use rand::{Rng, SeedableRng, rng};
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 
 /// How many `a * b = c` operations to do per row in the AIR.
 const REPETITIONS: usize = 20; // This should be < 255 so it can fit into a u8.
@@ -57,7 +57,7 @@ impl MulAir {
     where
         StandardUniform: Distribution<F>,
     {
-        let mut rng = rng();
+        let mut rng = SmallRng::seed_from_u64(1);
         let mut trace_values = F::zero_vec(rows * TRACE_WIDTH);
         for (i, (a, b, c)) in trace_values.iter_mut().tuples().enumerate() {
             let row = i / REPETITIONS;
@@ -149,7 +149,8 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), impl Debug> {
     type Challenge = BinomialExtensionField<Val, 4>;
 
     type Perm = Poseidon2BabyBear<16>;
-    let perm = Perm::new_from_rng_128(&mut rng());
+    let mut rng = SmallRng::seed_from_u64(1);
+    let perm = Perm::new_from_rng_128(&mut rng);
 
     type Dft = Radix2DitParallel<Val>;
     let dft = Dft::default();
@@ -194,7 +195,8 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     type Challenge = BinomialExtensionField<Val, 4>;
 
     type Perm = Poseidon2BabyBear<16>;
-    let perm = Perm::new_from_rng_128(&mut rng());
+    let mut rng = SmallRng::seed_from_u64(1);
+    let perm = Perm::new_from_rng_128(&mut rng);
 
     type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
     let hash = MyHash::new(perm.clone());
@@ -246,7 +248,8 @@ fn prove_bb_twoadic_deg2_zk() -> Result<(), impl Debug> {
     type Challenge = BinomialExtensionField<Val, 4>;
 
     type Perm = Poseidon2BabyBear<16>;
-    let perm = Perm::new_from_rng_128(&mut rng());
+    let mut rng = SmallRng::seed_from_u64(1);
+    let perm = Perm::new_from_rng_128(&mut rng);
 
     type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
     let hash = MyHash::new(perm.clone());
@@ -259,12 +262,12 @@ fn prove_bb_twoadic_deg2_zk() -> Result<(), impl Debug> {
         <Val as Field>::Packing,
         MyHash,
         MyCompress,
-        ThreadRng,
+        SmallRng,
         8,
         4,
     >;
 
-    let val_mmcs = ValMmcs::new(hash, compress, rng());
+    let val_mmcs = ValMmcs::new(hash, compress, rng);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
@@ -275,8 +278,8 @@ fn prove_bb_twoadic_deg2_zk() -> Result<(), impl Debug> {
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 
     let fri_config = create_test_fri_config_zk(challenge_mmcs);
-    type HidingPcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, StdRng>;
-    let pcs = HidingPcs::new(dft, val_mmcs, fri_config, 4, StdRng::from_os_rng());
+    type HidingPcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, SmallRng>;
+    let pcs = HidingPcs::new(dft, val_mmcs, fri_config, 4, SmallRng::seed_from_u64(1));
     type MyConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs);
 

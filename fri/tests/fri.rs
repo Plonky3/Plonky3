@@ -1,5 +1,5 @@
 use core::cmp::Reverse;
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{CanSampleBits, DuplexChallenger, FieldChallenger};

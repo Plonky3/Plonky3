@@ -81,7 +81,7 @@ where
         &self,
         index: usize,
         prover_data: &MerkleTree<P::Value, PW::Value, M, DIGEST_ELEMS>,
-    ) -> (Vec<Vec<P::Value>>, Vec<[PW::Value; DIGEST_ELEMS]>) {
+    ) -> (Vec<Vec<P::Value>>, Self::Proof) {
         let max_height = self.get_max_height(prover_data);
         let log_max_height = log2_ceil_usize(max_height);
 
@@ -96,7 +96,7 @@ where
             })
             .collect_vec();
 
-        let proof: Vec<_> = (0..log_max_height)
+        let proof = (0..log_max_height)
             .map(|i| prover_data.digest_layers[i][(index >> i) ^ 1])
             .collect();
 
@@ -212,7 +212,8 @@ mod tests {
     use p3_symmetric::{
         CryptographicHasher, PaddingFreeSponge, PseudoCompressionFunction, TruncatedPermutation,
     };
-    use rand::rng;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
 
     use super::MerkleTreeMmcs;
 
@@ -226,7 +227,8 @@ mod tests {
 
     #[test]
     fn commit_single_1x8() {
-        let perm = Perm::new_from_rng_128(&mut rng());
+        let mut rng = SmallRng::seed_from_u64(1);
+        let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash.clone(), compress.clone());
@@ -259,12 +261,13 @@ mod tests {
 
     #[test]
     fn commit_single_8x1() {
-        let perm = Perm::new_from_rng_128(&mut rng());
+        let mut rng = SmallRng::seed_from_u64(1);
+        let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash.clone(), compress);
 
-        let mat = RowMajorMatrix::<F>::rand(&mut rng(), 1, 8);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 1, 8);
         let (commit, _) = mmcs.commit(vec![mat.clone()]);
 
         let expected_result = hash.hash_iter(mat.vertically_packed_row(0));
@@ -273,7 +276,8 @@ mod tests {
 
     #[test]
     fn commit_single_2x2() {
-        let perm = Perm::new_from_rng_128(&mut rng());
+        let mut rng = SmallRng::seed_from_u64(1);
+        let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash.clone(), compress.clone());
@@ -295,7 +299,8 @@ mod tests {
 
     #[test]
     fn commit_single_2x3() {
-        let perm = Perm::new_from_rng_128(&mut rng());
+        let mut rng = SmallRng::seed_from_u64(1);
+        let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash.clone(), compress.clone());
@@ -322,7 +327,8 @@ mod tests {
 
     #[test]
     fn commit_mixed() {
-        let perm = Perm::new_from_rng_128(&mut rng());
+        let mut rng = SmallRng::seed_from_u64(1);
+        let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash.clone(), compress.clone());
@@ -416,7 +422,7 @@ mod tests {
 
     #[test]
     fn commit_either_order() {
-        let mut rng = rng();
+        let mut rng = SmallRng::seed_from_u64(1);
         let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
@@ -433,7 +439,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn mismatched_heights() {
-        let mut rng = rng();
+        let mut rng = SmallRng::seed_from_u64(1);
         let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
@@ -447,24 +453,27 @@ mod tests {
 
     #[test]
     fn verify_tampered_proof_fails() {
-        let perm = Perm::new_from_rng_128(&mut rng());
+        let mut rng = SmallRng::seed_from_u64(1);
+        let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash, compress);
 
         // 4 8x1 matrixes, 4 8x2 matrixes
-        let large_mats = (0..4).map(|_| RowMajorMatrix::<F>::rand(&mut rng(), 8, 1));
+        let mut mats = (0..4)
+            .map(|_| RowMajorMatrix::<F>::rand(&mut rng, 8, 1))
+            .collect_vec();
         let large_mat_dims = (0..4).map(|_| Dimensions {
             height: 8,
             width: 1,
         });
-        let small_mats = (0..4).map(|_| RowMajorMatrix::<F>::rand(&mut rng(), 8, 2));
+        mats.extend((0..4).map(|_| RowMajorMatrix::<F>::rand(&mut rng, 8, 2)));
         let small_mat_dims = (0..4).map(|_| Dimensions {
             height: 8,
             width: 2,
         });
 
-        let (commit, prover_data) = mmcs.commit(large_mats.chain(small_mats).collect_vec());
+        let (commit, prover_data) = mmcs.commit(mats);
 
         // open the 3rd row of each matrix, mess with proof, and verify
         let (opened_values, mut proof) = mmcs.open_batch(3, &prover_data);
@@ -481,46 +490,43 @@ mod tests {
 
     #[test]
     fn size_gaps() {
-        let perm = Perm::new_from_rng_128(&mut rng());
+        let mut rng = SmallRng::seed_from_u64(1);
+        let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash, compress);
 
         // 4 mats with 1000 rows, 8 columns
-        let large_mats = (0..4).map(|_| RowMajorMatrix::<F>::rand(&mut rng(), 1000, 8));
+        let mut mats = (0..4)
+            .map(|_| RowMajorMatrix::<F>::rand(&mut rng, 1000, 8))
+            .collect_vec();
         let large_mat_dims = (0..4).map(|_| Dimensions {
             height: 1000,
             width: 8,
         });
 
         // 5 mats with 70 rows, 8 columns
-        let medium_mats = (0..5).map(|_| RowMajorMatrix::<F>::rand(&mut rng(), 70, 8));
+        mats.extend((0..5).map(|_| RowMajorMatrix::<F>::rand(&mut rng, 70, 8)));
         let medium_mat_dims = (0..5).map(|_| Dimensions {
             height: 70,
             width: 8,
         });
 
         // 6 mats with 8 rows, 8 columns
-        let small_mats = (0..6).map(|_| RowMajorMatrix::<F>::rand(&mut rng(), 8, 8));
+        mats.extend((0..6).map(|_| RowMajorMatrix::<F>::rand(&mut rng, 8, 8)));
         let small_mat_dims = (0..6).map(|_| Dimensions {
             height: 8,
             width: 8,
         });
 
         // 7 tiny mat with 1 row, 8 columns
-        let tiny_mats = (0..7).map(|_| RowMajorMatrix::<F>::rand(&mut rng(), 1, 8));
+        mats.extend((0..7).map(|_| RowMajorMatrix::<F>::rand(&mut rng, 1, 8)));
         let tiny_mat_dims = (0..7).map(|_| Dimensions {
             height: 1,
             width: 8,
         });
 
-        let (commit, prover_data) = mmcs.commit(
-            large_mats
-                .chain(medium_mats)
-                .chain(small_mats)
-                .chain(tiny_mats)
-                .collect_vec(),
-        );
+        let (commit, prover_data) = mmcs.commit(mats);
 
         // open the 6th row of each matrix and verify
         let (opened_values, proof) = mmcs.open_batch(6, &prover_data);
@@ -540,14 +546,15 @@ mod tests {
 
     #[test]
     fn different_widths() {
-        let perm = Perm::new_from_rng_128(&mut rng());
+        let mut rng = SmallRng::seed_from_u64(1);
+        let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash, compress);
 
         // 10 mats with 32 rows where the ith mat has i + 1 cols
         let mats = (0..10)
-            .map(|i| RowMajorMatrix::<F>::rand(&mut rng(), 32, i + 1))
+            .map(|i| RowMajorMatrix::<F>::rand(&mut rng, 32, i + 1))
             .collect_vec();
         let dims = mats.iter().map(|m| m.dimensions()).collect_vec();
 

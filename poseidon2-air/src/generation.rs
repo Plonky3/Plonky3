@@ -243,6 +243,14 @@ fn generate_partial_round<
     LinearLayers::internal_linear_layer(state);
 }
 
+/// Computes the S-box `x -> x^{DEGREE}` and stores the partial data required to
+/// verify the computation.
+///
+/// # Panics
+///
+/// This method panics if the number of `REGISTERS` is not chosen optimally for the given
+/// `DEGREE` or if the `DEGREE` is not supported by the S-box. The supported degrees are
+/// `3`, `5`, `7`, and `11`.
 #[inline]
 fn generate_sbox<F: PrimeField, const DEGREE: u64, const REGISTERS: usize>(
     sbox: &mut SBox<MaybeUninit<F>, DEGREE, REGISTERS>,

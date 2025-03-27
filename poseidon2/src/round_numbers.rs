@@ -28,48 +28,53 @@ use p3_field::PrimeField64;
 use p3_util::relatively_prime_u64;
 
 /// Given a field, a width and an D return the number of full and partial rounds needed to achieve 128 bit security.
-pub const fn poseidon2_round_numbers_128<F: PrimeField64>(width: usize, d: u64) -> (usize, usize) {
+///
+/// If d is not a valid permutation of the given field or the optimal parameters for that size of prime
+/// have not been computed, an error is returned.
+pub const fn poseidon2_round_numbers_128<F: PrimeField64>(
+    width: usize,
+    d: u64,
+) -> Result<(usize, usize), &'static str> {
     // Start by checking that d is a valid permutation.
-    assert!(
-        relatively_prime_u64(d, F::ORDER_U64 - 1),
-        "Invalid permutation: gcd(d, F::ORDER_U64 - 1) must be 1"
-    );
+    if !relatively_prime_u64(d, F::ORDER_U64 - 1) {
+        return Err("Invalid permutation: gcd(d, F::ORDER_U64 - 1) must be 1");
+    }
 
     // Next compute the number of bits in p.
     let prime_bit_number = F::ORDER_U64.ilog2() + 1;
 
     match prime_bit_number {
         31 => match (width, d) {
-            (16, 3) => (8, 20),
-            (16, 5) => (8, 14),
-            (16, 7) => (8, 13),
-            (16, 9) => (8, 13),
-            (16, 11) => (8, 13),
-            (24, 3) => (8, 23),
-            (24, 5) => (8, 22),
-            (24, 7) => (8, 21),
-            (24, 9) => (8, 21),
-            (24, 11) => (8, 21),
-            _ => panic!("The given pair of width and D has not been checked for these fields"),
+            (16, 3) => Ok((8, 20)),
+            (16, 5) => Ok((8, 14)),
+            (16, 7) => Ok((8, 13)),
+            (16, 9) => Ok((8, 13)),
+            (16, 11) => Ok((8, 13)),
+            (24, 3) => Ok((8, 23)),
+            (24, 5) => Ok((8, 22)),
+            (24, 7) => Ok((8, 21)),
+            (24, 9) => Ok((8, 21)),
+            (24, 11) => Ok((8, 21)),
+            _ => Err("The given pair of width and D has not been checked for these fields"),
         },
         64 => match (width, d) {
-            (8, 3) => (8, 41),
-            (8, 5) => (8, 27),
-            (8, 7) => (8, 22),
-            (8, 9) => (8, 19),
-            (8, 11) => (8, 17),
-            (12, 3) => (8, 42),
-            (12, 5) => (8, 27),
-            (12, 7) => (8, 22),
-            (12, 9) => (8, 20),
-            (12, 11) => (8, 18),
-            (16, 3) => (8, 42),
-            (16, 5) => (8, 27),
-            (16, 7) => (8, 22),
-            (16, 9) => (8, 20),
-            (16, 11) => (8, 18),
-            _ => panic!("The given pair of width and D has not been checked for these fields"),
+            (8, 3) => Ok((8, 41)),
+            (8, 5) => Ok((8, 27)),
+            (8, 7) => Ok((8, 22)),
+            (8, 9) => Ok((8, 19)),
+            (8, 11) => Ok((8, 17)),
+            (12, 3) => Ok((8, 42)),
+            (12, 5) => Ok((8, 27)),
+            (12, 7) => Ok((8, 22)),
+            (12, 9) => Ok((8, 20)),
+            (12, 11) => Ok((8, 18)),
+            (16, 3) => Ok((8, 42)),
+            (16, 5) => Ok((8, 27)),
+            (16, 7) => Ok((8, 22)),
+            (16, 9) => Ok((8, 20)),
+            (16, 11) => Ok((8, 18)),
+            _ => Err("The given pair of width and D has not been checked for these fields"),
         },
-        _ => panic!("The optimal parameters for that size of prime have not been computed."),
+        _ => Err("The optimal parameters for that size of prime have not been computed."),
     }
 }

@@ -7,10 +7,11 @@ use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_mersenne_31::{Mersenne31, Poseidon2Mersenne31};
 use p3_symmetric::Permutation;
 use p3_util::pretty_name;
-use rand::rng;
+use rand::SeedableRng;
+use rand::rngs::SmallRng;
 
 fn bench_poseidon2(c: &mut Criterion) {
-    let mut rng = rng();
+    let mut rng = SmallRng::seed_from_u64(1);
 
     let poseidon2_bb_16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
     poseidon2::<BabyBear, Poseidon2BabyBear<16>, 16>(c, poseidon2_bb_16);

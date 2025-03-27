@@ -150,7 +150,8 @@ mod tests {
     use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
     use p3_field::{Field, PrimeCharacteristicRing};
     use p3_symmetric::Permutation;
-    use rand::{Rng, rng};
+    use rand::rngs::SmallRng;
+    use rand::{Rng, SeedableRng};
 
     use crate::coset_mds::CosetMds;
 
@@ -159,7 +160,7 @@ mod tests {
         type F = BabyBear;
         const N: usize = 8;
 
-        let mut rng = rng();
+        let mut rng = SmallRng::seed_from_u64(1);
         let mut arr: [F; N] = rng.random();
 
         let shift = F::GENERATOR;

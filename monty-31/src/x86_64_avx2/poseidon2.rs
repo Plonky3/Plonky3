@@ -183,9 +183,12 @@ impl<FP: FieldParameters, const WIDTH: usize> ExternalLayerConstructor<MontyFiel
     }
 }
 
-/// Use hard coded methods to compute x -> x^d for the even index entries and small d.
-/// Inputs should be signed 32-bit integers in [-P, ..., P].
-/// Outputs will also be signed integers in (-P, ..., P) stored in the odd indices.
+/// Use hard coded methods to compute `x -> x^D` for the even index entries and small `D`.
+/// Inputs should be signed 32-bit integers in `[-P, ..., P]`.
+/// Outputs will also be signed integers in `(-P, ..., P)` stored in the odd indices.
+///
+/// # Panics
+/// This function will panic if `D` is not `3, 5` or `7`.
 #[inline(always)]
 #[must_use]
 fn exp_small<PMP: PackedMontyParameters, const D: u64>(val: __m256i) -> __m256i {

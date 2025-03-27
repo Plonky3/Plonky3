@@ -197,7 +197,7 @@ mod babybear_fri_pcs {
 }
 
 mod m31_fri_pcs {
-    use std::marker::PhantomData;
+    use core::marker::PhantomData;
 
     use p3_challenger::{HashChallenger, SerializingChallenger32};
     use p3_circle::CirclePcs;

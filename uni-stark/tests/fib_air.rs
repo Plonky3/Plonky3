@@ -1,4 +1,4 @@
-use std::borrow::Borrow;
+use core::borrow::Borrow;
 
 use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
@@ -16,8 +16,8 @@ use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32To64, TruncatedPermutation,
 };
 use p3_uni_stark::{StarkConfig, prove, verify};
-use rand::rngs::{StdRng, ThreadRng};
-use rand::{SeedableRng, rng};
+use rand::SeedableRng;
+use rand::rngs::SmallRng;
 
 /// For testing the public values feature
 pub struct FibonacciAir {}
@@ -118,7 +118,8 @@ type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
 
 /// n-th Fibonacci number expected to be x
 fn test_public_value_impl(n: usize, x: u64) {
-    let perm = Perm::new_from_rng_128(&mut rng());
+    let mut rng = SmallRng::seed_from_u64(1);
+    let perm = Perm::new_from_rng_128(&mut rng);
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
     let val_mmcs = ValMmcs::new(hash, compress);
@@ -154,11 +155,13 @@ fn test_zk() {
         [u64; p3_keccak::VECTOR_LEN],
         FieldHash,
         MyCompress,
-        ThreadRng,
+        SmallRng,
         4,
         4,
     >;
-    let val_mmcs = ValHidingMmcs::new(field_hash, compress, rng());
+
+    let rng = SmallRng::seed_from_u64(1);
+    let val_mmcs = ValHidingMmcs::new(field_hash, compress, rng);
 
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
@@ -171,9 +174,9 @@ fn test_zk() {
     let dft = Dft::default();
     let trace = generate_trace_rows::<Val>(0, 1, n);
     let fri_config = create_test_fri_config(challenge_mmcs);
-    type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, StdRng>;
+    type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, SmallRng>;
     type MyHidingConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
-    let pcs = HidingPcs::new(dft, val_mmcs, fri_config, 4, StdRng::from_os_rng());
+    let pcs = HidingPcs::new(dft, val_mmcs, fri_config, 4, SmallRng::seed_from_u64(1));
     let config = MyHidingConfig::new(pcs);
     let mut challenger = Challenger::from_hasher(vec![], byte_hash);
     let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(x)];
@@ -196,7 +199,8 @@ fn test_public_value() {
 #[test]
 #[should_panic(expected = "assertion `left == right` failed: constraints had nonzero value")]
 fn test_incorrect_public_value() {
-    let perm = Perm::new_from_rng_128(&mut rng());
+    let mut rng = SmallRng::seed_from_u64(1);
+    let perm = Perm::new_from_rng_128(&mut rng);
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
     let val_mmcs = ValMmcs::new(hash, compress);

@@ -6,9 +6,6 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 itertools.workspace = true
-modinverse.workspace = true
-num.workspace = true
-num-integer.workspace = true
 p3-field.workspace = true
 p3-mds.workspace = true
 p3-symmetric.workspace = true
