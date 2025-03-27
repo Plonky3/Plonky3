@@ -73,7 +73,7 @@ impl<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: usize> BasedVectorSpace
 
     #[inline]
     fn from_basis_coefficients_iter<I: Iterator<Item = A>>(mut iter: I) -> Self {
-        Self::new(array::from_fn(|_| iter.next().unwrap_or_else(|| A::ZERO)))
+        Self::new(array::from_fn(|_| iter.next().unwrap_or(A::ZERO)))
     }
 }
 
