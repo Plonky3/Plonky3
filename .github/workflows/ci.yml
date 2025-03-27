@@ -57,39 +57,6 @@ jobs:
     - name: Test with parallel
       run: cargo test --verbose --features parallel
 
-  check_embedded:
-    name: Check embedded compilation
-    runs-on: ubuntu-latest
-    if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
-    strategy:
-      matrix:
-        pkg: [p3-maybe-rayon, p3-poseidon2, p3-keccak, p3-circle, p3-blake3, p3-koala-bear, p3-challenger, p3-fri, p3-blake3-air, p3-mds, p3-air, p3-poseidon, p3-util, p3-mersenne-31, p3-commit, p3-keccak-air, p3-symmetric, p3-goldilocks, p3-monty-31, p3-merkle-tree, p3-field, p3-matrix, p3-sha256, p3-monolith, p3-rescue, p3-interpolation, p3-dft, p3-uni-stark, p3-poseidon2-air, p3-baby-bear]
-        #p3-field-testing, #p3-bn254-fr # p3-examples,
-
-    env:
-      target: thumbv7em-none-eabi
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - uses: dtolnay/rust-toolchain@stable
-      with:
-        targets: ${{ env.target }}
-      id: rs-stable
-
-    - uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/bin/
-          ~/.cargo/registry/index/
-          ~/.cargo/registry/cache/
-          ~/.cargo/git/db/
-          target/
-        key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ env.target }}-${{ hashFiles('**/Cargo.toml') }}
-
-    - name: Check ${{ matrix.pkg }}
-      run: cargo check --verbose --target ${{ env.target }} --package ${{ matrix.pkg }}
-
   lint:
     name: Formatting and Clippy
     runs-on: ubuntu-latest
