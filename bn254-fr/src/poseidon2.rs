@@ -53,7 +53,9 @@ impl InternalLayerConstructor<Bn254Fr> for Poseidon2InternalLayerBn254 {
 ///                             [1, 1, 3]
 /// ```
 fn bn254_matmul_internal(state: &mut [Bn254Fr; 3]) {
-    let sum = state[0] + state[1] + state[2];
+    // We bracket in this way as the s-box is applied to state[0] so this lets us
+    // begin this computation before the s-box finishes.
+    let sum = state[0] + (state[1] + state[2]);
 
     state[0] += sum;
     state[1] += sum;
