@@ -31,10 +31,10 @@ where
 {
     // zeros should be a vector containing differenent representatives of `R::ZERO`.
     // ones should be a vector containing differenent representatives of `R::ONE`.
-    let mut rng = rand::rng();
-    let x = rng.random::<R>();
-    let y = rng.random::<R>();
-    let z = rng.random::<R>();
+    let mut rng = rand::thread_rng();
+    let x = rng.gen::<R>();
+    let y = rng.gen::<R>();
+    let z = rng.gen::<R>();
     assert_eq!(R::ONE + R::NEG_ONE, R::ZERO, "Error 1 + (-1) =/= 0");
     assert_eq!(R::NEG_ONE + R::TWO, R::ONE, "Error -1 + 2 =/= 1");
     assert_eq!(x + (-x), R::ZERO, "Error x + (-x) =/= 0");
@@ -166,8 +166,8 @@ where
         "Error when testing distributivity of sub and right mul."
     );
 
-    let vec1: [R; 64] = rng.random();
-    let vec2: [R; 64] = rng.random();
+    let vec1: [R; 64] = rng.gen();
+    let vec2: [R; 64] = rng.gen();
     test_sums(&vec1[..16].try_into().unwrap());
     test_dot_product(&vec1, &vec2);
 
@@ -219,10 +219,10 @@ pub fn test_inv_div<F: Field>()
 where
     StandardUniform: Distribution<F>,
 {
-    let mut rng = rand::rng();
-    let x = rng.random::<F>();
-    let y = rng.random::<F>();
-    let z = rng.random::<F>();
+    let mut rng = rand::thread_rng();
+    let x = rng.gen::<F>();
+    let y = rng.gen::<F>();
+    let z = rng.gen::<F>();
     assert_eq!(x, x.halve() * F::TWO);
     assert_eq!(x * x.inverse(), F::ONE);
     assert_eq!(x.inverse() * x, F::ONE);
@@ -236,8 +236,8 @@ pub fn test_mul_2exp_u64<R: PrimeCharacteristicRing + Eq>()
 where
     StandardUniform: Distribution<R>,
 {
-    let mut rng = rand::rng();
-    let x = rng.random::<R>();
+    let mut rng = rand::thread_rng();
+    let x = rng.gen::<R>();
     assert_eq!(x.mul_2exp_u64(0), x);
     assert_eq!(x.mul_2exp_u64(1), x.double());
     for i in 0..128 {
@@ -252,8 +252,8 @@ pub fn test_div_2exp_u64<F: Field>()
 where
     StandardUniform: Distribution<F>,
 {
-    let mut rng = rand::rng();
-    let x = rng.random::<F>();
+    let mut rng = rand::thread_rng();
+    let x = rng.gen::<F>();
     assert_eq!(x.div_2exp_u64(0), x);
     assert_eq!(x.div_2exp_u64(1), x.halve());
     for i in 0..128 {
@@ -274,9 +274,9 @@ where
 
     assert_eq!(Some(F::ONE), F::ONE.try_inverse());
 
-    let mut rng = rand::rng();
+    let mut rng = rand::thread_rng();
     for _ in 0..1000 {
-        let x = rng.random::<F>();
+        let x = rng.gen::<F>();
         if !x.is_zero() && !x.is_one() {
             let z = x.inverse();
             assert_ne!(x, z);
@@ -674,8 +674,8 @@ macro_rules! test_prime_field_64 {
 
             #[test]
             fn test_as_canonical_u64() {
-                let mut rng = rand::rng();
-                let x: u64 = rng.random();
+                let mut rng = rand::thread_rng();
+                let x: u64 = rng.gen();
                 let x_mod_order = x % <$field>::ORDER_U64;
 
                 assert_eq!(<$field>::ZERO.as_canonical_u64(), 0);
@@ -736,8 +736,8 @@ macro_rules! test_prime_field_32 {
 
             #[test]
             fn test_as_canonical_u32() {
-                let mut rng = rand::rng();
-                let x: u32 = rng.random();
+                let mut rng = rand::thread_rng();
+                let x: u32 = rng.gen();
                 let x_mod_order = x % <$field>::ORDER_U32;
 
                 assert_eq!(<$field>::ZERO.as_canonical_u32(), 0);
