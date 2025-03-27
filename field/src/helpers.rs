@@ -63,7 +63,7 @@ where
     
     // Check if we got enough elements
     if y_vec.len() < x.len() {
-        return;
+        panic!("Not enough elements in y iterator. Expected at least {} elements, got {}", x.len(), y_vec.len());
     }
     
     let (packed_x, sfx_x) = F::Packing::pack_slice_with_suffix_mut(x);
