@@ -15,7 +15,12 @@ jobs:
     name: Build and Test
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os:
+          - ubuntu-latest
+          - ubuntu-latest
+            env: RUSTFLAGS="-Ctarget-feature=+avx2"
+          - macos-latest
+          - windows-latest
     runs-on: ${{ matrix.os }}
     if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
 
