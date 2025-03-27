@@ -5,14 +5,13 @@ use p3_field::{Field, PackedField, PackedFieldPow2, PackedValue, PrimeCharacteri
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
-use rand_chacha::ChaCha20Rng;
 
 fn packed_from_random<PV>(seed: u64) -> PV
 where
     PV: PackedValue,
     StandardUniform: Distribution<PV::Value>,
 {
-    let mut rng = ChaCha20Rng::seed_from_u64(seed);
+    let mut rng = SmallRng::seed_from_u64(seed);
     PV::from_fn(|_| rng.random())
 }
 
