@@ -40,7 +40,8 @@ where
     let pcs = config.pcs();
 
     let degree = trace.height();
-    let log_ext_degree = log2_strict_usize(degree) + config.is_zk() as usize;
+    let log_degree = log2_strict_usize(degree);
+    let log_ext_degree = log_degree + config.is_zk();
 
     let symbolic_constraints = get_symbolic_constraints::<Val<SC>, A>(air, 0, public_values.len());
     let constraint_count = symbolic_constraints.len();
@@ -49,11 +50,11 @@ where
         .map(SymbolicExpression::degree_multiple)
         .max()
         .unwrap_or(0);
-    let log_quotient_degree = log2_ceil_usize(constraint_degree - 1 + config.is_zk() as usize);
-    let quotient_degree = 1 << (log_quotient_degree + config.is_zk() as usize);
+    let log_quotient_degree = log2_ceil_usize(constraint_degree - 1 + config.is_zk());
+    let quotient_degree = 1 << (log_quotient_degree + config.is_zk());
 
     let trace_domain = pcs.natural_domain_for_degree(degree);
-    let ext_trace_domain = pcs.natural_domain_for_degree(degree * (config.is_zk() as usize + 1));
+    let ext_trace_domain = pcs.natural_domain_for_degree(degree * (config.is_zk() + 1));
 
     let (trace_commit, trace_data) = info_span!("commit to trace data")
         .in_scope(|| pcs.commit(vec![(ext_trace_domain, trace)].into_iter()));
@@ -61,9 +62,7 @@ where
     // Observe the instance.
     // degree < 2^255 so we can safely cast log_degree to a u8.
     challenger.observe(Val::<SC>::from_u8(log_ext_degree as u8));
-    challenger.observe(Val::<SC>::from_u8(
-        log_ext_degree as u8 - config.is_zk() as u8,
-    ));
+    challenger.observe(Val::<SC>::from_u8(log_degree as u8));
     // TODO: Might be best practice to include other instance data here; see verifier comment.
 
     challenger.observe(trace_commit.clone());
@@ -93,13 +92,15 @@ where
         .in_scope(|| pcs.commit_quotient(qc_domains.clone(), quotient_chunks.clone()));
     challenger.observe(quotient_commit.clone());
 
-    // We generate random extension field values of the size of the randomized trace randomized. Since we need `R` of degree that of the extended
+    // If zk is enabled, we generate random extension field values of the size of the randomized trace. Since we need `R` of degree that of the extended
     // trace -1, we can provide `R` as is to FRI, and the random polynomial will be `(R(X) - R(z)) / (X - z)`.
     // Since we need a random polynomial defined over the extension field, we actually need to commit to `SC::CHallenge::D`
     // random polynomials. This is similar to flattening on the base field a polynomial over the extension field.
     // TODO: This approach is only statistically zk. To make it perfectly zk, `R` would have to truly be an extension field polynomial.
-    let opt_r_commit_data = pcs.get_opt_randomization_poly_commitment(ext_trace_domain);
-    let (opt_r_commit, opt_r_data) = if let Some((r_commit, r_data)) = opt_r_commit_data {
+    let (opt_r_commit, opt_r_data) = if config.is_zk() != 0 {
+        let (r_commit, r_data) = pcs
+            .get_opt_randomization_poly_commitment(ext_trace_domain)
+            .expect("ZK is enabled, so we should have randomization commitments");
         (Some(r_commit), Some(r_data))
     } else {
         (None, None)

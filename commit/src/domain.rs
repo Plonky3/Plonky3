@@ -250,7 +250,6 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         assert_eq!(self.shift, Val::ONE);
         assert_ne!(coset.shift, Val::ONE);
         assert!(coset.log_n >= self.log_n);
-        // In the zk case, the trace has double the original size due to randomization. We need the original size here.
         let rate_bits = coset.log_n - self.log_n;
 
         let s_pow_n = coset.shift.exp_power_of_2(self.log_n);

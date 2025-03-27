@@ -35,8 +35,9 @@ pub trait StarkGenericConfig {
 
     fn pcs(&self) -> &Self::Pcs;
 
-    fn is_zk(&self) -> bool {
-        Self::Pcs::ZK
+    /// Returns 1 if the PCS is zero-knowledge, 0 otherwise.
+    fn is_zk(&self) -> usize {
+        Self::Pcs::ZK as usize
     }
 }
 

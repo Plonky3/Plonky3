@@ -83,7 +83,7 @@ impl<Val, Dft, InputMmcs, FriMmcs, R> HidingFriPcs<Val, Dft, InputMmcs, FriMmcs,
         self.inner.mmcs.commit(ldes)
     }
 
-    /// If in zk mode, computes the normalizing constants for the Langrange selectors of the provided domains.
+    /// Compute the normalizing constants for the Langrange selectors of the provided domains. See Section 4.2 of https://eprint.iacr.org/2024/1037.pdf for more details.
     fn get_zp_cis<Challenge, Challenger>(
         &self,
         qc_domains: &[<Self as Pcs<Challenge, Challenger>>::Domain],

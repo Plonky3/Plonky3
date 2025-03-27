@@ -63,15 +63,15 @@ where
     /// https://eprint.iacr.org/2024/1037.pdf .
     ///
     /// *** Arguments
+    /// - `domains` are the domains of the quotient polynomial chunks we need to commit to.
     /// - `evaluations` are the evaluations of the quotient polynomial chunks we need to commit to.
-    /// - `cis[i]` is the normalizing constant for the Lagrange selector over coset `i`.
     #[allow(clippy::type_complexity)]
     fn commit_quotient(
         &self,
-        evaluations: Vec<Self::Domain>,
-        domains: Vec<RowMajorMatrix<Val<Self::Domain>>>,
+        domains: Vec<Self::Domain>,
+        evaluations: Vec<RowMajorMatrix<Val<Self::Domain>>>,
     ) -> (Self::Commitment, Self::ProverData) {
-        self.commit(evaluations.into_iter().zip(domains))
+        self.commit(domains.into_iter().zip(evaluations))
     }
 
     fn get_evaluations_on_domain<'a>(

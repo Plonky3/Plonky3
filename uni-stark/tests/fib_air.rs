@@ -7,7 +7,7 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
-use p3_fri::{HidingFriPcs, TwoAdicFriPcs, create_benchmark_fri_config, create_test_fri_config};
+use p3_fri::{HidingFriPcs, TwoAdicFriPcs, create_test_fri_config};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
@@ -170,7 +170,7 @@ fn test_zk() {
     let challenge_mmcs = ChallengeHidingMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
     let trace = generate_trace_rows::<Val>(0, 1, n);
-    let fri_config = create_benchmark_fri_config(challenge_mmcs);
+    let fri_config = create_test_fri_config(challenge_mmcs);
     type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, StdRng>;
     type MyHidingConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
     let pcs = HidingPcs::new(dft, val_mmcs, fri_config, 4, StdRng::from_os_rng());
