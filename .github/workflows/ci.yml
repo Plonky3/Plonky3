@@ -49,10 +49,7 @@ jobs:
 
   lint:
     name: Formatting and Clippy
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
 
     steps:
