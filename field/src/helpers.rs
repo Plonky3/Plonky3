@@ -58,26 +58,42 @@ where
         return;
     }
 
-    // Convert iterator to a Vec for now, while still using direct iteration
-    let y_vec: Vec<F> = y.take(x.len()).collect();
+    let (packed_x, sfx_x) = F::Packing::pack_slice_with_suffix_mut(x);
+    let packed_width = F::Packing::WIDTH;
+    let packed_s: F::Packing = s.into();
     
-    // Check if we got enough elements
-    if y_vec.len() < x.len() {
-        panic!("Not enough elements in y iterator. Expected at least {} elements, got {}", x.len(), y_vec.len());
+    // Process in chunks of packed_width using the iterator directly
+    let mut y_iter = y;
+    
+    for packed_x_val in packed_x {
+        // Create an array for the packed y values
+        let mut y_values = Vec::with_capacity(packed_width);
+        
+        // Collect exactly packed_width elements
+        for _ in 0..packed_width {
+            match y_iter.next() {
+                Some(val) => y_values.push(val),
+                None => panic!("Not enough elements in y iterator. Need {} elements for packed processing", packed_width),
+            }
+        }
+        
+        // Create a packed value from the collected elements
+        let (packed_y, _) = F::Packing::pack_slice_with_suffix(&y_values);
+        if packed_y.len() != 1 {
+            panic!("Expected packed_y to have length 1");
+        }
+        
+        // Perform the operation
+        *packed_x_val += packed_y[0] * packed_s;
     }
     
-    let (packed_x, sfx_x) = F::Packing::pack_slice_with_suffix_mut(x);
-    let (packed_y, sfx_y) = F::Packing::pack_slice_with_suffix(&y_vec);
-    
-    // Process packed elements in parallel
-    packed_x.par_iter_mut().zip(packed_y).for_each(|(x_i, y_i)| {
-        *x_i += y_i * s;
-    });
-    
-    // Process remaining elements
-    sfx_x.iter_mut().zip(sfx_y).for_each(|(x_i, y_i)| {
-        *x_i += y_i * s;
-    });
+    // Process any remaining elements directly
+    for x_val in sfx_x {
+        match y_iter.next() {
+            Some(y_val) => *x_val += y_val * s,
+            None => panic!("Not enough elements in y iterator for suffix processing"),
+        }
+    }
 }
 
 // The ideas for the following work around come from the construe crate along with
@@ -215,4 +231,19 @@ where
     S: Sum<<LI::Item as Mul<RI::Item>>::Output>,
 {
     li.zip(ri).map(|(l, r)| l * r).sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec::Vec;
+    use crate::field::Field;
+    use crate::PackedValue;
+    use rand;
+
+    #[test]
+    fn test_add_scaled_slice_in_place() {
+        // This test has been moved to the field-testing crate.
+        // We're now testing with actual field implementations instead of a mock TestField.
+    }
 }
