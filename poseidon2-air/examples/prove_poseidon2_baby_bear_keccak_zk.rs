@@ -12,7 +12,7 @@ use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, Serializing
 use p3_uni_stark::{StarkConfig, prove, verify};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
-#[cfg(not(target_env = "msvc"))]
+#[cfg(target_family = "unix")]
 use tikv_jemallocator::Jemalloc;
 use tracing_forest::ForestLayer;
 use tracing_forest::util::LevelFilter;
@@ -20,7 +20,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
-#[cfg(not(target_env = "msvc"))]
+#[cfg(target_family = "unix")]
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
