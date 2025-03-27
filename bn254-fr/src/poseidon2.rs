@@ -2,7 +2,9 @@
 //!
 //! Reference: https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_bn256.rs
 
-use std::sync::OnceLock;
+extern crate alloc;
+
+use alloc::vec::Vec;
 
 use p3_field::PrimeCharacteristicRing;
 use p3_poseidon2::{
@@ -32,12 +34,6 @@ pub type Poseidon2Bn254<const WIDTH: usize> = Poseidon2<
 /// Currently we only support a single width for Poseidon2 BN254.
 const BN254_WIDTH: usize = 3;
 
-#[inline]
-fn get_diffusion_matrix_3() -> &'static [Bn254Fr; 3] {
-    static MAT_DIAG3_M_1: OnceLock<[Bn254Fr; 3]> = OnceLock::new();
-    MAT_DIAG3_M_1.get_or_init(|| [Bn254Fr::ONE, Bn254Fr::ONE, Bn254Fr::TWO])
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct Poseidon2InternalLayerBn254 {
     internal_constants: Vec<Bn254Fr>,
@@ -52,9 +48,10 @@ impl InternalLayerConstructor<Bn254Fr> for Poseidon2InternalLayerBn254 {
 impl InternalLayer<Bn254Fr, BN254_WIDTH, BN254_S_BOX_DEGREE> for Poseidon2InternalLayerBn254 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
     fn permute_state(&self, state: &mut [Bn254Fr; BN254_WIDTH]) {
+        const MAT_DIAG3_M_1: [Bn254Fr; 3] = [Bn254Fr::ONE, Bn254Fr::ONE, Bn254Fr::TWO];
         internal_permute_state(
             state,
-            |x| matmul_internal(x, *get_diffusion_matrix_3()),
+            |x| matmul_internal(x, MAT_DIAG3_M_1),
             &self.internal_constants,
         )
     }

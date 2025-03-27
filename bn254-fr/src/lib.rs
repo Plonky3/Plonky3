@@ -1,15 +1,19 @@
 //! The scalar field of the BN254 curve, defined as `F_r` where `r = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.
+#![no_std]
 
 mod poseidon2;
 
+extern crate alloc;
+
+use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::{fmt, stringify};
 
-use ff::{Field as FFField, PrimeField as FFPrimeField};
 pub use halo2curves::bn256::Fr as FFBn254Fr;
+use halo2curves::ff::{Field as FFField, PrimeField as FFPrimeField};
 use halo2curves::serde::SerdeObject;
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
@@ -144,7 +148,7 @@ impl Field for Bn254Fr {
 
     /// r = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001
     fn order() -> BigUint {
-        BigUint::new(vec![
+        BigUint::from_slice(&[
             0xf0000001, 0x43e1f593, 0x79b97091, 0x2833e848, 0x8181585d, 0xb85045b6, 0xe131a029,
             0x30644e72,
         ])
@@ -321,7 +325,7 @@ mod tests {
     #[test]
     fn test_bn254fr() {
         let f = F::new(FFBn254Fr::from_u128(100));
-        assert_eq!(f.as_canonical_biguint(), BigUint::new(vec![100]));
+        assert_eq!(f.as_canonical_biguint(), BigUint::from(100u32));
 
         let f = F::new(FFBn254Fr::from_str_vartime(&F::order().to_str_radix(10)).unwrap());
         assert!(f.is_zero());
@@ -329,7 +333,7 @@ mod tests {
         // Generator check
         let expected_multiplicative_group_generator = F::new(FFBn254Fr::from_u128(5));
         assert_eq!(F::GENERATOR, expected_multiplicative_group_generator);
-        assert_eq!(F::GENERATOR.as_canonical_biguint(), BigUint::new(vec![5]));
+        assert_eq!(F::GENERATOR.as_canonical_biguint(), BigUint::from(5u32));
 
         let f_1 = F::ONE;
         let f_2 = F::TWO;
