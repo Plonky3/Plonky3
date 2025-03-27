@@ -33,7 +33,7 @@ jobs:
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
           target/
-        key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ hashFiles('**/Cargo.toml') }}
+        key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ matrix.os }}-${{ hashFiles('**/Cargo.toml') }}
 
     - name: Build
       run: cargo build --verbose --all-targets
