@@ -98,9 +98,9 @@ pub fn test_packed_linear_combination<PF: PackedField + Eq>()
 where
     StandardUniform: Distribution<PF> + Distribution<PF::Scalar>,
 {
-    let mut rng = rand::rng();
-    let u: [PF::Scalar; 64] = rng.random();
-    let v: [PF; 64] = rng.random();
+    let mut rng = rand::thread_rng();
+    let u: [PF::Scalar; 64] = rng.gen();
+    let v: [PF; 64] = rng.gen();
 
     let mut dot = PF::ZERO;
     assert_eq!(dot, PF::packed_linear_combination::<0>(&u[..0], &v[..0]));
@@ -333,19 +333,19 @@ pub fn test_add_scaled_slice_in_place<F: Field>()
 where
     StandardUniform: Distribution<F>,
 {
-    let mut rng = rand::rng();
+    let mut rng = rand::thread_rng();
     
     // Test with various vector sizes
     let sizes = [0, 1, 2, 4, 7, 8, 16, 32];
     
     for &size in &sizes {
         // Create test vectors
-        let mut vec1: Vec<F> = (0..size).map(|_| rng.random()).collect();
+        let mut vec1: Vec<F> = (0..size).map(|_| rng.gen()).collect();
         let mut vec2 = vec1.clone();
         
         // Create y vector and scalar
-        let y_vec: Vec<F> = (0..size).map(|_| rng.random()).collect();
-        let s = rng.random();
+        let y_vec: Vec<F> = (0..size).map(|_| rng.gen()).collect();
+        let s = rng.gen();
         
         // Apply the optimized version to vec1
         p3_field::add_scaled_slice_in_place(&mut vec1, y_vec.iter().cloned(), s);
@@ -359,12 +359,12 @@ where
 
     // Test edge cases where y_vec contains fewer elements than x
     let size = 10;
-    let mut vec1: Vec<F> = (0..size).map(|_| rng.random()).collect();
+    let mut vec1: Vec<F> = (0..size).map(|_| rng.gen()).collect();
     let mut vec2 = vec1.clone();
     
     // Create y_vec with fewer elements
-    let y_vec: Vec<F> = (0..size-2).map(|_| rng.random()).collect();
-    let s = rng.random();
+    let y_vec: Vec<F> = (0..size-2).map(|_| rng.gen()).collect();
+    let s = rng.gen();
     
     // Apply the optimized version to vec1
     p3_field::add_scaled_slice_in_place(&mut vec1, y_vec.iter().cloned(), s);
