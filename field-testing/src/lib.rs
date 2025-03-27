@@ -18,7 +18,7 @@ use num_traits::identities::One;
 use p3_field::{
     ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField,
     cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order,
-    two_adic_coset_vanishing_polynomial, two_adic_subgroup_vanishing_polynomial,
+    two_adic_coset_vanishing_polynomial, two_adic_subgroup_vanishing_polynomial, add_scaled_slice_in_place,
 };
 pub use packedfield_testing::*;
 use rand::Rng;
