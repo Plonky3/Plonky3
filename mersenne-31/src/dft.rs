@@ -174,8 +174,7 @@ impl Mersenne31Dft {
 #[cfg(test)]
 mod tests {
     use rand::distr::{Distribution, StandardUniform};
-    use rand::rngs::SmallRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{Rng, rng};
 
     use super::*;
     use crate::Mersenne31ComplexRadix2Dit;
@@ -189,8 +188,7 @@ mod tests {
         StandardUniform: Distribution<Base>,
     {
         const N: usize = 1 << 12;
-        let rng = SmallRng::seed_from_u64(1);
-        let input = rng
+        let input = rng()
             .sample_iter(StandardUniform)
             .take(N)
             .collect::<Vec<Base>>();
@@ -206,13 +204,16 @@ mod tests {
         StandardUniform: Distribution<Base>,
     {
         const N: usize = 1 << 6;
-        let rng = SmallRng::seed_from_u64(1);
-        let v = rng
+        let a = rng()
             .sample_iter(StandardUniform)
-            .take(2 * N)
+            .take(N)
             .collect::<Vec<Base>>();
-        let a = RowMajorMatrix::new_col(v[..N].to_vec());
-        let b = RowMajorMatrix::new_col(v[N..].to_vec());
+        let a = RowMajorMatrix::new_col(a);
+        let b = rng()
+            .sample_iter(StandardUniform)
+            .take(N)
+            .collect::<Vec<Base>>();
+        let b = RowMajorMatrix::new_col(b);
 
         let fft_a = Mersenne31Dft::dft_batch::<Dft>(a.clone());
         let fft_b = Mersenne31Dft::dft_batch::<Dft>(b.clone());

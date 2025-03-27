@@ -3,16 +3,15 @@ use alloc::vec::Vec;
 
 use criterion::{BatchSize, Criterion, black_box};
 use p3_field::{Field, PrimeCharacteristicRing};
+use rand::Rng;
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
-use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
 
 pub fn benchmark_square<F: Field>(c: &mut Criterion, name: &str)
 where
     StandardUniform: Distribution<F>,
 {
-    let mut rng = SmallRng::seed_from_u64(1);
+    let mut rng = rand::rng();
     let x = rng.random::<F>();
     c.bench_function(&format!("{} square", name), |b| {
         b.iter(|| black_box(black_box(x).square()))
@@ -23,7 +22,7 @@ pub fn benchmark_inv<F: Field>(c: &mut Criterion, name: &str)
 where
     StandardUniform: Distribution<F>,
 {
-    let mut rng = SmallRng::seed_from_u64(1);
+    let mut rng = rand::rng();
     let x = rng.random::<F>();
     c.bench_function(&format!("{} inv", name), |b| {
         b.iter(|| black_box(black_box(x)).inverse())
@@ -37,7 +36,7 @@ pub fn benchmark_mul_2exp<R: PrimeCharacteristicRing + Copy, const REPS: usize>(
 ) where
     StandardUniform: Distribution<R>,
 {
-    let mut rng = SmallRng::seed_from_u64(1);
+    let mut rng = rand::rng();
     let mut input = Vec::new();
     for _ in 0..REPS {
         input.push(rng.random::<R>())
@@ -51,7 +50,7 @@ pub fn benchmark_div_2exp<F: Field, const REPS: usize>(c: &mut Criterion, name: 
 where
     StandardUniform: Distribution<F>,
 {
-    let mut rng = SmallRng::seed_from_u64(1);
+    let mut rng = rand::rng();
     let mut input = Vec::new();
     for _ in 0..REPS {
         input.push(rng.random::<F>())
@@ -72,7 +71,7 @@ pub fn benchmark_iter_sum<R: PrimeCharacteristicRing + Copy, const N: usize, con
 ) where
     StandardUniform: Distribution<R>,
 {
-    let mut rng = SmallRng::seed_from_u64(1);
+    let mut rng = rand::rng();
     let mut input = Vec::new();
     for _ in 0..REPS {
         input.push(rng.random::<[R; N]>())
@@ -99,7 +98,7 @@ pub fn benchmark_sum_array<R: PrimeCharacteristicRing + Copy, const N: usize, co
 ) where
     StandardUniform: Distribution<R>,
 {
-    let mut rng = SmallRng::seed_from_u64(1);
+    let mut rng = rand::rng();
     let mut input = Vec::new();
     for _ in 0..REPS {
         input.push(rng.random::<[R; N]>())
@@ -124,7 +123,7 @@ pub fn benchmark_add_latency<R: PrimeCharacteristicRing + Copy, const N: usize>(
     c.bench_function(&format!("add-latency/{} {}", N, name), |b| {
         b.iter_batched(
             || {
-                let mut rng = SmallRng::seed_from_u64(1);
+                let mut rng = rand::rng();
                 let mut vec = Vec::new();
                 for _ in 0..N {
                     vec.push(rng.random::<R>())
@@ -146,7 +145,7 @@ pub fn benchmark_add_throughput<R: PrimeCharacteristicRing + Copy, const N: usiz
     c.bench_function(&format!("add-throughput/{} {}", N, name), |b| {
         b.iter_batched(
             || {
-                let mut rng = SmallRng::seed_from_u64(1);
+                let mut rng = rand::rng();
                 (
                     rng.random::<R>(),
                     rng.random::<R>(),
@@ -191,7 +190,7 @@ pub fn benchmark_sub_latency<R: PrimeCharacteristicRing + Copy, const N: usize>(
     c.bench_function(&format!("sub-latency/{} {}", N, name), |b| {
         b.iter_batched(
             || {
-                let mut rng = SmallRng::seed_from_u64(1);
+                let mut rng = rand::rng();
                 let mut vec = Vec::new();
                 for _ in 0..N {
                     vec.push(rng.random::<R>())
@@ -213,7 +212,7 @@ pub fn benchmark_sub_throughput<R: PrimeCharacteristicRing + Copy, const N: usiz
     c.bench_function(&format!("sub-throughput/{} {}", N, name), |b| {
         b.iter_batched(
             || {
-                let mut rng = SmallRng::seed_from_u64(1);
+                let mut rng = rand::rng();
                 (
                     rng.random::<R>(),
                     rng.random::<R>(),
@@ -258,7 +257,7 @@ pub fn benchmark_mul_latency<R: PrimeCharacteristicRing + Copy, const N: usize>(
     c.bench_function(&format!("mul-latency/{} {}", N, name), |b| {
         b.iter_batched(
             || {
-                let mut rng = SmallRng::seed_from_u64(1);
+                let mut rng = rand::rng();
                 let mut vec = Vec::new();
                 for _ in 0..N {
                     vec.push(rng.random::<R>())
@@ -280,7 +279,7 @@ pub fn benchmark_mul_throughput<R: PrimeCharacteristicRing + Copy, const N: usiz
     c.bench_function(&format!("mul-throughput/{} {}", N, name), |b| {
         b.iter_batched(
             || {
-                let mut rng = SmallRng::seed_from_u64(1);
+                let mut rng = rand::rng();
                 (
                     rng.random::<R>(),
                     rng.random::<R>(),

@@ -15,8 +15,7 @@ use p3_koala_bear::{GenericPoseidon2LinearLayersKoalaBear, KoalaBear, Poseidon2K
 use p3_mersenne_31::{GenericPoseidon2LinearLayersMersenne31, Mersenne31, Poseidon2Mersenne31};
 use p3_monty_31::dft::RecursiveDft;
 use p3_poseidon2_air::{RoundConstants, VectorizedPoseidon2Air};
-use rand::SeedableRng;
-use rand::rngs::SmallRng;
+use rand::rng;
 use tracing_forest::ForestLayer;
 use tracing_forest::util::LevelFilter;
 use tracing_subscriber::layer::SubscriberExt;
@@ -87,9 +86,6 @@ fn main() {
         }
     };
 
-    // WARNING: Use a real cryptographic PRNG in applications!!
-    let mut rng = SmallRng::seed_from_u64(1);
-
     match args.field {
         FieldOptions::KoalaBear => {
             type EF = BinomialExtensionField<KoalaBear, 4>;
@@ -98,7 +94,7 @@ fn main() {
                 ProofOptions::Blake3Permutations => ProofObjective::Blake3(Blake3Air {}),
                 ProofOptions::KeccakFPermutations => ProofObjective::Keccak(KeccakAir {}),
                 ProofOptions::Poseidon2Permutations => {
-                    let constants = RoundConstants::from_rng(&mut rng);
+                    let constants = RoundConstants::from_rng(&mut rng());
 
                     // Field specific constants for constructing the Poseidon2 AIR.
                     const SBOX_DEGREE: u64 = 3;
@@ -135,8 +131,8 @@ fn main() {
                     report_result(result);
                 }
                 MerkleHashOptions::Poseidon2 => {
-                    let perm16 = Poseidon2KoalaBear::<16>::new_from_rng_128(&mut rng);
-                    let perm24 = Poseidon2KoalaBear::<24>::new_from_rng_128(&mut rng);
+                    let perm16 = Poseidon2KoalaBear::<16>::new_from_rng_128(&mut rng());
+                    let perm24 = Poseidon2KoalaBear::<24>::new_from_rng_128(&mut rng());
                     let result = prove_monty31_poseidon2::<_, EF, _, _, _, _>(
                         proof_goal, dft, num_hashes, perm16, perm24,
                     );
@@ -151,7 +147,7 @@ fn main() {
                 ProofOptions::Blake3Permutations => ProofObjective::Blake3(Blake3Air {}),
                 ProofOptions::KeccakFPermutations => ProofObjective::Keccak(KeccakAir {}),
                 ProofOptions::Poseidon2Permutations => {
-                    let constants = RoundConstants::from_rng(&mut rng);
+                    let constants = RoundConstants::from_rng(&mut rng());
 
                     // Field specific constants for constructing the Poseidon2 AIR.
                     const SBOX_DEGREE: u64 = 7;
@@ -188,8 +184,8 @@ fn main() {
                     report_result(result);
                 }
                 MerkleHashOptions::Poseidon2 => {
-                    let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
-                    let perm24 = Poseidon2BabyBear::<24>::new_from_rng_128(&mut rng);
+                    let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng());
+                    let perm24 = Poseidon2BabyBear::<24>::new_from_rng_128(&mut rng());
                     let result = prove_monty31_poseidon2::<_, EF, _, _, _, _>(
                         proof_goal, dft, num_hashes, perm16, perm24,
                     );
@@ -204,7 +200,7 @@ fn main() {
                 ProofOptions::Blake3Permutations => ProofObjective::Blake3(Blake3Air {}),
                 ProofOptions::KeccakFPermutations => ProofObjective::Keccak(KeccakAir {}),
                 ProofOptions::Poseidon2Permutations => {
-                    let constants = RoundConstants::from_rng(&mut rng);
+                    let constants = RoundConstants::from_rng(&mut rng());
 
                     // Field specific constants for constructing the Poseidon2 AIR.
                     const SBOX_DEGREE: u64 = 5;
@@ -238,8 +234,8 @@ fn main() {
                     report_result(result);
                 }
                 MerkleHashOptions::Poseidon2 => {
-                    let perm16 = Poseidon2Mersenne31::<16>::new_from_rng_128(&mut rng);
-                    let perm24 = Poseidon2Mersenne31::<24>::new_from_rng_128(&mut rng);
+                    let perm16 = Poseidon2Mersenne31::<16>::new_from_rng_128(&mut rng());
+                    let perm24 = Poseidon2Mersenne31::<24>::new_from_rng_128(&mut rng());
                     let result = prove_m31_poseidon2::<_, EF, _, _, _>(
                         proof_goal, num_hashes, perm16, perm24,
                     );

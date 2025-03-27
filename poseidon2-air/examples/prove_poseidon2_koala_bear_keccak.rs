@@ -10,9 +10,8 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_poseidon2_air::{RoundConstants, VectorizedPoseidon2Air};
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32To64};
 use p3_uni_stark::{StarkConfig, prove, verify};
-use rand::SeedableRng;
-use rand::rngs::SmallRng;
-#[cfg(target_family = "unix")]
+use rand::rng;
+#[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
 use tracing_forest::ForestLayer;
 use tracing_forest::util::LevelFilter;
@@ -20,7 +19,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
-#[cfg(target_family = "unix")]
+#[cfg(not(target_env = "msvc"))]
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
@@ -86,9 +85,7 @@ fn prove_and_verify() -> Result<(), impl Debug> {
 
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
-    // WARNING: DO NOT USE SmallRng in proper applications! Use a real PRNG instead!
-    let mut rng = SmallRng::seed_from_u64(1);
-    let constants = RoundConstants::from_rng(&mut rng);
+    let constants = RoundConstants::from_rng(&mut rng());
     let air: VectorizedPoseidon2Air<
         Val,
         GenericPoseidon2LinearLayersKoalaBear,

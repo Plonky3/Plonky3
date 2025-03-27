@@ -6,8 +6,7 @@ use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::random;
 
 use crate::columns::{KeccakCols, NUM_KECCAK_COLS};
 use crate::constants::rc_value_bit;
@@ -24,8 +23,7 @@ impl KeccakAir {
         num_hashes: usize,
         extra_capacity_bits: usize,
     ) -> RowMajorMatrix<F> {
-        let mut rng = SmallRng::seed_from_u64(1);
-        let inputs = (0..num_hashes).map(|_| rng.random()).collect::<Vec<_>>();
+        let inputs = (0..num_hashes).map(|_| random()).collect::<Vec<_>>();
         generate_trace_rows(inputs, extra_capacity_bits)
     }
 }

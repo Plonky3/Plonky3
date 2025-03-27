@@ -8,8 +8,6 @@ use p3_field_testing::bench_func::{
 };
 use p3_field_testing::{benchmark_mul_latency, benchmark_mul_throughput, benchmark_sum_array};
 use p3_goldilocks::Goldilocks;
-use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
 
 type F = Goldilocks;
 
@@ -30,10 +28,9 @@ fn bench_field(c: &mut Criterion) {
     benchmark_sub_latency::<F, L_REPS>(c, name);
     benchmark_sub_throughput::<F, REPS>(c, name);
 
-    let mut rng = SmallRng::seed_from_u64(1);
     c.bench_function("7th_root", |b| {
         b.iter_batched(
-            || rng.random::<F>(),
+            rand::random::<F>,
             |x| x.exp_u64(10540996611094048183),
             BatchSize::SmallInput,
         )

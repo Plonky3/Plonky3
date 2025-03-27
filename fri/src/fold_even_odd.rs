@@ -57,8 +57,7 @@ mod tests {
     use itertools::izip;
     use p3_baby_bear::BabyBear;
     use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
-    use rand::rngs::SmallRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{Rng, rng};
 
     use super::*;
 
@@ -66,7 +65,7 @@ mod tests {
     fn test_fold_even_odd() {
         type F = BabyBear;
 
-        let mut rng = SmallRng::seed_from_u64(1);
+        let mut rng = rng();
 
         let log_n = 10;
         let n = 1 << log_n;

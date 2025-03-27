@@ -13,15 +13,7 @@ env:
 jobs:
   build_and_test:
     name: Build and Test
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-          - os: ubuntu-latest
-            features: "+avx2"
-          - os: macos-latest
-          - os: windows-latest
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
 
     steps:
@@ -38,12 +30,7 @@ jobs:
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
           target/
-        key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ matrix.os }}-${{ matrix.features }}-${{ hashFiles('**/Cargo.toml') }}
-
-    - name: Set flags
-      if: ${{ matrix.features }}
-      run: |
-        echo "RUSTFLAGS=-Ctarget-feature=${{ matrix.features }}" >> "$GITHUB_ENV"
+        key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ hashFiles('**/Cargo.toml') }}
 
     - name: Build
       run: cargo build --verbose --all-targets
@@ -89,3 +76,52 @@ jobs:
 
     - name: Format
       run: cargo +nightly fmt --all -- --check 
+
+  check_crates:
+    name: Check Crates
+    runs-on: ubuntu-latest
+    if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: dtolnay/rust-toolchain@stable
+      id: rs-stable
+
+    - uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+  
+    - name: Cargo Check Crates
+      run: |
+        cargo check --verbose --package p3-air
+        cargo check --verbose --package p3-baby-bear
+        cargo check --verbose --package p3-blake3
+        cargo check --verbose --package p3-challenger
+        cargo check --verbose --package p3-commit
+        cargo check --verbose --package p3-dft
+        cargo check --verbose --package p3-field
+        cargo check --verbose --package p3-field-testing
+        cargo check --verbose --package p3-fri
+        cargo check --verbose --package p3-goldilocks
+        cargo check --verbose --package p3-interpolation
+        cargo check --verbose --package p3-keccak
+        cargo check --verbose --package p3-keccak-air
+        cargo check --verbose --package p3-matrix
+        cargo check --verbose --package p3-maybe-rayon
+        cargo check --verbose --package p3-mds
+        cargo check --verbose --package p3-merkle-tree
+        cargo check --verbose --package p3-mersenne-31
+        cargo check --verbose --package p3-monolith
+        cargo check --verbose --package p3-poseidon
+        cargo check --verbose --package p3-poseidon2
+        cargo check --verbose --package p3-rescue
+        cargo check --verbose --package p3-symmetric
+        cargo check --verbose --package p3-uni-stark
+        cargo check --verbose --package p3-util

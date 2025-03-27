@@ -9,8 +9,10 @@ p3-dft.workspace = true
 p3-field.workspace = true
 p3-matrix.workspace = true
 rand.workspace = true
+rand_chacha.workspace = true
 criterion.workspace = true
 num-bigint.workspace = true
+num-traits.workspace = true
 
 [dev-dependencies]
 p3-baby-bear.workspace = true

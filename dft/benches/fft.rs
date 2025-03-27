@@ -8,9 +8,8 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_mersenne_31::{Mersenne31, Mersenne31ComplexRadix2Dit, Mersenne31Dft};
 use p3_monty_31::dft::RecursiveDft;
 use p3_util::pretty_name;
-use rand::SeedableRng;
 use rand::distr::{Distribution, StandardUniform};
-use rand::rngs::SmallRng;
+use rand::rng;
 
 fn bench_fft(c: &mut Criterion) {
     // log_sizes correspond to the sizes of DFT we want to benchmark;
@@ -59,7 +58,7 @@ where
     ));
     group.sample_size(10);
 
-    let mut rng = SmallRng::seed_from_u64(1);
+    let mut rng = rng();
     for n_log in log_sizes {
         let n = 1 << n_log;
 
@@ -86,7 +85,7 @@ where
     ));
     group.sample_size(10);
 
-    let mut rng = SmallRng::seed_from_u64(1);
+    let mut rng = rng();
     for n_log in log_sizes {
         let n = 1 << n_log;
 
@@ -114,7 +113,7 @@ where
     ));
     group.sample_size(10);
 
-    let mut rng = SmallRng::seed_from_u64(1);
+    let mut rng = rng();
     for n_log in log_sizes {
         let n = 1 << n_log;
 
@@ -143,7 +142,7 @@ where
     ));
     group.sample_size(10);
 
-    let mut rng = SmallRng::seed_from_u64(1);
+    let mut rng = rng();
     for n_log in log_sizes {
         let n = 1 << n_log;
 

@@ -127,8 +127,7 @@ mod tests {
     use p3_field::extension::BinomialExtensionField;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_mersenne_31::Mersenne31;
-    use rand::rngs::SmallRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{random, rng};
 
     use super::*;
 
@@ -137,15 +136,14 @@ mod tests {
 
     #[test]
     fn reduce_row_same_as_reduce_matrix() {
-        let mut rng = SmallRng::seed_from_u64(1);
         let domain = CircleDomain::standard(5);
         let evals = CircleEvaluations::from_cfft_order(
             domain,
-            RowMajorMatrix::<F>::rand(&mut rng, 1 << domain.log_n, 1 << 3),
+            RowMajorMatrix::<F>::rand(&mut rng(), 1 << domain.log_n, 1 << 3),
         );
 
-        let alpha: EF = rng.random();
-        let zeta: Point<EF> = Point::from_projective_line(rng.random());
+        let alpha: EF = random();
+        let zeta: Point<EF> = Point::from_projective_line(random());
         let ps_at_zeta = evals.evaluate_at_point(zeta);
 
         let mat_reduced = evals.deep_quotient_reduce(alpha, zeta, &ps_at_zeta);
@@ -162,20 +160,19 @@ mod tests {
 
     #[test]
     fn reduce_evaluations_low_degree() {
-        let mut rng = SmallRng::seed_from_u64(1);
         let log_n = 5;
         let log_blowup = 1;
         let evals = CircleEvaluations::from_cfft_order(
             CircleDomain::standard(log_n),
-            RowMajorMatrix::<F>::rand(&mut rng, 1 << log_n, 1 << 3),
+            RowMajorMatrix::<F>::rand(&mut rng(), 1 << log_n, 1 << 3),
         );
         let lde = evals
             .clone()
             .extrapolate(CircleDomain::standard(log_n + log_blowup));
         assert!(lde.dim() <= (1 << log_n));
 
-        let alpha: EF = rng.random();
-        let zeta: Point<EF> = Point::from_projective_line(rng.random());
+        let alpha: EF = random();
+        let zeta: Point<EF> = Point::from_projective_line(random());
 
         let ps_at_zeta = evals.evaluate_at_point(zeta);
         let reduced0 = CircleEvaluations::<F>::from_cfft_order(
@@ -196,12 +193,11 @@ mod tests {
 
     #[test]
     fn reduce_multiple_evaluations() {
-        let mut rng = SmallRng::seed_from_u64(1);
         let domain = CircleDomain::standard(5);
         let lde_domain = CircleDomain::standard(8);
 
-        let alpha: EF = rng.random();
-        let zeta: Point<EF> = Point::from_projective_line(rng.random());
+        let alpha: EF = random();
+        let zeta: Point<EF> = Point::from_projective_line(random());
 
         let mut alpha_offset = EF::ONE;
         let mut ros = vec![EF::ZERO; 1 << lde_domain.log_n];
@@ -209,7 +205,7 @@ mod tests {
         for _ in 0..4 {
             let evals = CircleEvaluations::from_cfft_order(
                 domain,
-                RowMajorMatrix::<F>::rand(&mut rng, 1 << domain.log_n, 1 << 3),
+                RowMajorMatrix::<F>::rand(&mut rng(), 1 << domain.log_n, 1 << 3),
             );
             let ps_at_zeta = evals.evaluate_at_point(zeta);
             let lde = evals.extrapolate(lde_domain);
@@ -230,10 +226,9 @@ mod tests {
 
     #[test]
     fn test_extract_lambda() {
-        let mut rng = SmallRng::seed_from_u64(1);
         let log_n = 5;
         for log_blowup in [1, 2, 3] {
-            let mut coeffs = RowMajorMatrix::<F>::rand(&mut rng, (1 << log_n) + 1, 1);
+            let mut coeffs = RowMajorMatrix::<F>::rand(&mut rng(), (1 << log_n) + 1, 1);
             coeffs.pad_to_height(1 << (log_n + log_blowup), F::ZERO);
 
             let domain = CircleDomain::standard(log_n + log_blowup);

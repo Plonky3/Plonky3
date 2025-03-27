@@ -10,9 +10,9 @@ use p3_merkle_tree::MerkleTreeHidingMmcs;
 use p3_poseidon2_air::{RoundConstants, VectorizedPoseidon2Air};
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32To64};
 use p3_uni_stark::{StarkConfig, prove, verify};
-use rand::SeedableRng;
-use rand::rngs::SmallRng;
-#[cfg(target_family = "unix")]
+use rand::rngs::{StdRng, ThreadRng};
+use rand::{SeedableRng, rng};
+#[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
 use tracing_forest::ForestLayer;
 use tracing_forest::util::LevelFilter;
@@ -20,7 +20,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
-#[cfg(target_family = "unix")]
+#[cfg(not(target_env = "msvc"))]
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
@@ -61,25 +61,23 @@ fn main() -> Result<(), impl Debug> {
     type MyCompress = CompressionFunctionFromHasher<U64Hash, 2, 4>;
     let compress = MyCompress::new(u64_hash);
 
-    // WARNING: DO NOT USE SmallRng in proper applications! Use a real PRNG instead!
     type ValMmcs = MerkleTreeHidingMmcs<
         [Val; p3_keccak::VECTOR_LEN],
         [u64; p3_keccak::VECTOR_LEN],
         FieldHash,
         MyCompress,
-        SmallRng,
+        ThreadRng,
         4,
         4,
     >;
-    let mut rng = SmallRng::seed_from_u64(1);
-    let constants = RoundConstants::from_rng(&mut rng);
-    let val_mmcs = ValMmcs::new(field_hash, compress, rng);
+    let val_mmcs = ValMmcs::new(field_hash, compress, rng());
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
+    let constants = RoundConstants::from_rng(&mut rng());
     let air: VectorizedPoseidon2Air<
         Val,
         GenericPoseidon2LinearLayersBabyBear,
@@ -97,8 +95,8 @@ fn main() -> Result<(), impl Debug> {
 
     let dft = Dft::default();
 
-    type Pcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, SmallRng>;
-    let pcs = Pcs::new(dft, val_mmcs, fri_config, 4, SmallRng::seed_from_u64(1));
+    type Pcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, StdRng>;
+    let pcs = Pcs::new(dft, val_mmcs, fri_config, 4, StdRng::from_os_rng());
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs);

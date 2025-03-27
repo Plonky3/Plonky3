@@ -7,9 +7,8 @@ use p3_field::TwoAdicField;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_mersenne_31::Mersenne31;
 use p3_util::pretty_name;
-use rand::SeedableRng;
 use rand::distr::{Distribution, StandardUniform};
-use rand::rngs::SmallRng;
+use rand::rng;
 
 fn bench_lde(c: &mut Criterion) {
     let log_n = 18;
@@ -25,8 +24,7 @@ fn bench_lde(c: &mut Criterion) {
 
 fn lde_cfft<M: Measurement>(g: &mut BenchmarkGroup<M>, log_n: usize, log_w: usize) {
     type F = Mersenne31;
-    let mut rng = SmallRng::seed_from_u64(1);
-    let m = RowMajorMatrix::<F>::rand(&mut rng, 1 << log_n, 1 << log_w);
+    let m = RowMajorMatrix::<F>::rand(&mut rng(), 1 << log_n, 1 << log_w);
     g.bench_with_input(
         BenchmarkId::new("Cfft<M31>", format!("log_n={log_n},log_w={log_w}")),
         &m,
@@ -52,8 +50,7 @@ fn lde_twoadic<F: TwoAdicField, Dft: TwoAdicSubgroupDft<F>, M: Measurement>(
     StandardUniform: Distribution<F>,
 {
     let dft = Dft::default();
-    let mut rng = SmallRng::seed_from_u64(1);
-    let m = RowMajorMatrix::<F>::rand(&mut rng, 1 << log_n, 1 << log_w);
+    let m = RowMajorMatrix::<F>::rand(&mut rng(), 1 << log_n, 1 << log_w);
     g.bench_with_input(
         BenchmarkId::new(
             format!("{},{}", pretty_name::<F>(), pretty_name::<Dft>()),

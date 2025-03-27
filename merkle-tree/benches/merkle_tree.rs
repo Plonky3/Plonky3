@@ -15,9 +15,8 @@ use p3_symmetric::{
     CompressionFunctionFromHasher, CryptographicHasher, PaddingFreeSponge,
     PseudoCompressionFunction, SerializingHasher32, TruncatedPermutation,
 };
-use rand::SeedableRng;
 use rand::distr::{Distribution, StandardUniform};
-use rand::rngs::SmallRng;
+use rand::rng;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -31,9 +30,8 @@ fn bench_merkle_trees(criterion: &mut Criterion) {
 fn bench_bb_poseidon2(criterion: &mut Criterion) {
     type F = BabyBear;
 
-    let mut rng = SmallRng::seed_from_u64(1);
     type Perm = Poseidon2BabyBear<16>;
-    let perm = Perm::new_from_rng_128(&mut rng);
+    let perm = Perm::new_from_rng_128(&mut rng());
 
     type H = PaddingFreeSponge<Perm, 16, 8, 8>;
     let h = H::new(perm.clone());
@@ -56,8 +54,7 @@ fn bench_bb_rescue(criterion: &mut Criterion) {
     let mds = Mds::default();
 
     type Perm = Rescue<F, Mds, 16, 7>;
-    let mut rng = SmallRng::seed_from_u64(1);
-    let round_constants = Perm::get_round_constants_from_rng(8, &mut rng);
+    let round_constants = Perm::get_round_constants_from_rng(8, &mut rng());
     let perm = Perm::new(8, round_constants, mds);
 
     type H = PaddingFreeSponge<Perm, 16, 8, 8>;
@@ -118,8 +115,7 @@ where
     const ROWS: usize = 1 << 15;
     const COLS: usize = 135;
 
-    let mut rng = SmallRng::seed_from_u64(1);
-    let matrix = RowMajorMatrix::<P::Scalar>::rand(&mut rng, ROWS, COLS);
+    let matrix = RowMajorMatrix::<P::Scalar>::rand(&mut rng(), ROWS, COLS);
     let dims = matrix.dimensions();
     let leaves = vec![matrix];
 
@@ -155,9 +151,8 @@ where
     const ROWS: usize = 1 << 15;
     const COLS: usize = 135;
 
-    let mut rng = SmallRng::seed_from_u64(1);
-    let matrix_1 = RowMajorMatrix::<P::Scalar>::rand(&mut rng, ROWS + 1, COLS);
-    let matrix_2 = RowMajorMatrix::<P::Scalar>::rand(&mut rng, ROWS / 2 + 1, COLS);
+    let matrix_1 = RowMajorMatrix::<P::Scalar>::rand(&mut rng(), ROWS + 1, COLS);
+    let matrix_2 = RowMajorMatrix::<P::Scalar>::rand(&mut rng(), ROWS / 2 + 1, COLS);
     let dims = vec![matrix_1.dimensions(), matrix_2.dimensions()];
     let leaves = vec![matrix_1, matrix_2];
 

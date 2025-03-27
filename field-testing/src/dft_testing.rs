@@ -2,9 +2,8 @@ use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
 use p3_field::TwoAdicField;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use rand::SeedableRng;
 use rand::distr::{Distribution, StandardUniform};
-use rand::rngs::SmallRng;
+use rand::rng;
 
 pub fn test_dft_matches_naive<F, Dft>()
 where
@@ -13,7 +12,7 @@ where
     Dft: TwoAdicSubgroupDft<F>,
 {
     let dft = Dft::default();
-    let mut rng = SmallRng::seed_from_u64(1);
+    let mut rng = rng();
     for log_h in 0..12 {
         let h = 1 << log_h;
         let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
@@ -30,7 +29,7 @@ where
     Dft: TwoAdicSubgroupDft<F>,
 {
     let dft = Dft::default();
-    let mut rng = SmallRng::seed_from_u64(1);
+    let mut rng = rng();
     for log_h in 0..5 {
         let h = 1 << log_h;
         let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
@@ -48,7 +47,7 @@ where
     Dft: TwoAdicSubgroupDft<F>,
 {
     let dft = Dft::default();
-    let mut rng = SmallRng::seed_from_u64(1);
+    let mut rng = rng();
     for log_h in 0..12 {
         let h = 1 << log_h;
         let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
@@ -65,7 +64,7 @@ where
     Dft: TwoAdicSubgroupDft<F>,
 {
     let dft = Dft::default();
-    let mut rng = SmallRng::seed_from_u64(1);
+    let mut rng = rng();
     for log_h in 0..5 {
         let h = 1 << log_h;
         let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
@@ -83,7 +82,7 @@ where
     Dft: TwoAdicSubgroupDft<F>,
 {
     let dft = Dft::default();
-    let mut rng = SmallRng::seed_from_u64(1);
+    let mut rng = rng();
     for log_h in 0..5 {
         let h = 1 << log_h;
         let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
@@ -100,7 +99,7 @@ where
     Dft: TwoAdicSubgroupDft<F>,
 {
     let dft = Dft::default();
-    let mut rng = SmallRng::seed_from_u64(1);
+    let mut rng = rng();
     for log_h in 0..5 {
         let h = 1 << log_h;
         let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
@@ -118,7 +117,7 @@ where
     Dft: TwoAdicSubgroupDft<F>,
 {
     let dft = Dft::default();
-    let mut rng = SmallRng::seed_from_u64(1);
+    let mut rng = rng();
     for log_h in 0..12 {
         let h = 1 << log_h;
         let original = RowMajorMatrix::<F>::rand(&mut rng, h, 3);

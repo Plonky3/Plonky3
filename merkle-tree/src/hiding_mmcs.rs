@@ -147,8 +147,8 @@ mod tests {
     use p3_matrix::Matrix;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-    use rand::SeedableRng;
-    use rand::rngs::SmallRng;
+    use rand::prelude::ThreadRng;
+    use rand::rng;
 
     use super::MerkleTreeHidingMmcs;
     use crate::MerkleTreeError;
@@ -164,7 +164,7 @@ mod tests {
         <F as Field>::Packing,
         MyHash,
         MyCompress,
-        SmallRng,
+        ThreadRng,
         8,
         SALT_ELEMS,
     >;
@@ -172,11 +172,10 @@ mod tests {
     #[test]
     #[should_panic]
     fn mismatched_heights() {
-        let mut rng = SmallRng::seed_from_u64(1);
-        let perm = Perm::new_from_rng_128(&mut rng);
+        let perm = Perm::new_from_rng_128(&mut rng());
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash, compress, rng);
+        let mmcs = MyMmcs::new(hash, compress, rng());
 
         // attempt to commit to a mat with 8 rows and a mat with 7 rows. this should panic.
         let large_mat = RowMajorMatrix::new([1, 2, 3, 4, 5, 6, 7, 8].map(F::from_u8).to_vec(), 1);
@@ -186,16 +185,15 @@ mod tests {
 
     #[test]
     fn different_widths() -> Result<(), MerkleTreeError> {
-        let mut rng = SmallRng::seed_from_u64(1);
-        // 10 mats with 32 rows where the ith mat has i + 1 cols
-        let mats = (0..10)
-            .map(|i| RowMajorMatrix::<F>::rand(&mut rng, 32, i + 1))
-            .collect_vec();
-        let perm = Perm::new_from_rng_128(&mut rng);
+        let perm = Perm::new_from_rng_128(&mut rng());
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash, compress, rng);
+        let mmcs = MyMmcs::new(hash, compress, rng());
 
+        // 10 mats with 32 rows where the ith mat has i + 1 cols
+        let mats = (0..10)
+            .map(|i| RowMajorMatrix::<F>::rand(&mut rng(), 32, i + 1))
+            .collect_vec();
         let dims = mats.iter().map(|m| m.dimensions()).collect_vec();
 
         let (commit, prover_data) = mmcs.commit(mats);

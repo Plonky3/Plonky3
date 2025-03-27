@@ -10,8 +10,7 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_sha256::{Sha256, Sha256Compress};
 use p3_symmetric::SerializingHasher32;
 use p3_uni_stark::{StarkConfig, prove, verify};
-use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::random;
 use tracing_forest::ForestLayer;
 use tracing_forest::util::LevelFilter;
 use tracing_subscriber::layer::SubscriberExt;
@@ -58,8 +57,7 @@ fn main() -> Result<(), impl Debug> {
 
     let fri_config = create_benchmark_fri_config(challenge_mmcs);
 
-    let mut rng = SmallRng::seed_from_u64(1);
-    let inputs = (0..NUM_HASHES).map(|_| rng.random()).collect::<Vec<_>>();
+    let inputs = (0..NUM_HASHES).map(|_| random()).collect::<Vec<_>>();
     let trace = generate_trace_rows::<Val>(inputs, fri_config.log_blowup);
 
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;

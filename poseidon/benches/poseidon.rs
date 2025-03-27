@@ -10,9 +10,8 @@ use p3_mds::coset_mds::CosetMds;
 use p3_mersenne_31::{MdsMatrixMersenne31, Mersenne31};
 use p3_poseidon::Poseidon;
 use p3_symmetric::Permutation;
-use rand::SeedableRng;
 use rand::distr::{Distribution, StandardUniform};
-use rand::rngs::SmallRng;
+use rand::rng;
 
 fn bench_poseidon(c: &mut Criterion) {
     poseidon::<BabyBear, BabyBear, MdsMatrixBabyBear, 16, 7>(c);
@@ -35,7 +34,7 @@ where
     StandardUniform: Distribution<F>,
     Mds: MdsPermutation<A, WIDTH> + Default,
 {
-    let mut rng = SmallRng::seed_from_u64(1);
+    let mut rng = rng();
     let mds = Mds::default();
 
     // TODO: Should be calculated for the particular field, width and ALPHA.

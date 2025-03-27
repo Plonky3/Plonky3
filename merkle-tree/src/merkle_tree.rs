@@ -192,7 +192,6 @@ where
     let next_len_padded = if prev_layer.len() == 2 {
         1
     } else {
-        // Round prev_layer.len() / 2 up to the next even integer.
         (prev_layer.len() / 2 + 1) & !1
     };
 
@@ -256,7 +255,6 @@ where
     let next_len_padded = if prev_layer.len() == 2 {
         1
     } else {
-        // Round prev_layer.len() / 2 up to the next even integer.
         (prev_layer.len() / 2 + 1) & !1
     };
     let next_len = prev_layer.len() / 2;
@@ -300,8 +298,7 @@ fn unpack_array<P: PackedValue, const N: usize>(
 #[cfg(test)]
 mod tests {
     use p3_symmetric::PseudoCompressionFunction;
-    use rand::rngs::SmallRng;
-    use rand::{Rng, SeedableRng};
+    use rand::Rng;
 
     use super::*;
 
@@ -345,7 +342,7 @@ mod tests {
 
     #[test]
     fn test_compress_random_values() {
-        let mut rng = SmallRng::seed_from_u64(1);
+        let mut rng = rand::rng();
         let prev_layer: Vec<[u8; 32]> = (0..8).map(|_| rng.random()).collect();
         let compressor = DummyCompressionFunction;
         let expected: Vec<[u8; 32]> = prev_layer
