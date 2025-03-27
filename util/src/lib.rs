@@ -407,7 +407,8 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use rand::Rng;
+    use rand::rngs::SmallRng;
+    use rand::{Rng, SeedableRng};
 
     use super::*;
 
@@ -539,7 +540,7 @@ mod tests {
     #[test]
     fn test_reverse_slice_index_bits_random() {
         let lengths = [32, 128, 1 << 16];
-        let mut rng = rand::rng();
+        let mut rng = SmallRng::seed_from_u64(1);
         for _ in 0..32 {
             for &length in &lengths {
                 let mut rand_list: Vec<u32> = Vec::with_capacity(length);

@@ -1,14 +1,16 @@
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use p3_util::{reverse_bits, reverse_slice_index_bits};
-use rand::{Rng, rng};
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 
 fn bench_reverse_bits(c: &mut Criterion) {
     let mut group = c.benchmark_group("reverse_bits");
+    let mut rng = SmallRng::seed_from_u64(1);
     for log_size in [1, 3, 5, 8, 16, 24] {
         let bits = 1 << log_size;
         group.bench_with_input(BenchmarkId::from_parameter(bits), &bits, |b, &bits| {
             let n = 1 << bits;
-            let x = rng().random_range(0..n);
+            let x = rng.random_range(0..n);
             b.iter(|| {
                 black_box(reverse_bits(black_box(x), black_box(n)));
             });
@@ -19,10 +21,10 @@ fn bench_reverse_bits(c: &mut Criterion) {
 
 fn bench_reverse_slice_index_bits(c: &mut Criterion) {
     let mut group = c.benchmark_group("reverse_slice_index_bits");
+    let mut rng = SmallRng::seed_from_u64(1);
     for log_size in [1, 3, 5, 8, 16, 24] {
         let size = 1 << log_size;
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
-            let mut rng = rng();
             let data: Vec<u64> = (0..size).map(|_| rng.random()).collect();
             b.iter(|| {
                 let mut test_data = data.clone();

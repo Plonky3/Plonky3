@@ -8,6 +8,8 @@ use p3_field_testing::bench_func::{
 use p3_field_testing::benchmark_sum_array;
 use p3_koala_bear::KoalaBear;
 use p3_util::pretty_name;
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 
 type F = KoalaBear;
 type PF = <KoalaBear as Field>::Packing;
@@ -35,9 +37,10 @@ fn bench_field(c: &mut Criterion) {
     benchmark_sub_latency::<F, L_REPS>(c, name);
     benchmark_sub_throughput::<F, REPS>(c, name);
 
+    let mut rng = SmallRng::seed_from_u64(1);
     c.bench_function("3rd_root", |b| {
         b.iter_batched(
-            rand::random::<F>,
+            || rng.random::<F>(),
             |x| x.exp_u64(1420470955),
             BatchSize::SmallInput,
         )

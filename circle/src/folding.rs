@@ -133,7 +133,8 @@ mod tests {
     use p3_field::extension::BinomialExtensionField;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_mersenne_31::Mersenne31;
-    use rand::{random, rng};
+    use rand::rngs::SmallRng;
+    use rand::{Rng, SeedableRng};
 
     use super::*;
     use crate::CircleEvaluations;
@@ -143,9 +144,10 @@ mod tests {
 
     #[test]
     fn fold_matrix_same_as_row() {
+        let mut rng = SmallRng::seed_from_u64(1);
         let log_folded_height = 5;
-        let m = RowMajorMatrix::<EF>::rand(&mut rng(), 1 << log_folded_height, 2);
-        let beta: EF = random();
+        let m = RowMajorMatrix::<EF>::rand(&mut rng, 1 << log_folded_height, 2);
+        let beta: EF = rng.random();
 
         let mat_y_folded = fold_y::<F, EF>(beta, m.as_view());
         let row_y_folded = (0..(1 << log_folded_height))
@@ -170,18 +172,19 @@ mod tests {
             .dim()
         };
 
+        let mut rng = SmallRng::seed_from_u64(1);
         for (log_n, log_blowup) in iproduct!(3..6, 1..4) {
             let mut values = CircleEvaluations::evaluate(
                 CircleDomain::standard(log_n + log_blowup),
-                RowMajorMatrix::<F>::rand(&mut rng(), 1 << log_n, 1),
+                RowMajorMatrix::<F>::rand(&mut rng, 1 << log_n, 1),
             )
             .to_cfft_order()
             .values;
 
-            values = fold_y(random(), RowMajorMatrix::new(values, 2));
+            values = fold_y(rng.random(), RowMajorMatrix::new(values, 2));
             assert_eq!(vec_dim(&values), values.len() >> log_blowup);
             for _ in 0..(log_n - 1) {
-                values = fold_x(random(), RowMajorMatrix::new(values, 2));
+                values = fold_x(rng.random(), RowMajorMatrix::new(values, 2));
                 assert_eq!(vec_dim(&values), values.len() >> log_blowup);
             }
         }

@@ -81,7 +81,8 @@ impl<const D: u64, const WIDTH: usize> ExternalLayer<PackedMersenne31Neon, WIDTH
 #[cfg(test)]
 mod tests {
     use p3_symmetric::Permutation;
-    use rand::Rng;
+    use rand::rngs::SmallRng;
+    use rand::{Rng, SeedableRng};
 
     use super::*;
     use crate::Poseidon2Mersenne31;
@@ -93,7 +94,7 @@ mod tests {
     /// Test that the output is the same as the scalar version on a random input.
     #[test]
     fn test_neon_poseidon2_width_16() {
-        let mut rng = rand::rng();
+        let mut rng = SmallRng::seed_from_u64(1);
 
         // Our Poseidon2 implementation.
         let poseidon2 = Perm16::new_from_rng_128(&mut rng);
@@ -114,7 +115,7 @@ mod tests {
     /// Test that the output is the same as the scalar version on a random input.
     #[test]
     fn test_neon_poseidon2_width_24() {
-        let mut rng = rand::rng();
+        let mut rng = SmallRng::seed_from_u64(1);
 
         // Our Poseidon2 implementation.
         let poseidon2 = Perm24::new_from_rng_128(&mut rng);
