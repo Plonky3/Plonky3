@@ -20,9 +20,9 @@ pub use packed_binomial_extension::*;
 pub trait BinomiallyExtendable<const D: usize>: Field {
     const W: Self;
 
-    // DTH_ROOT = W^((n - 1)/D).
-    // n is the order of base field.
-    // Only works when exists k such that n = kD + 1.
+    /// DTH_ROOT = W^((n - 1)/D).
+    /// n is the order of base field.
+    /// Only works when exists k such that n = kD + 1.
     const DTH_ROOT: Self;
 
     const EXT_GENERATOR: [Self; D];
