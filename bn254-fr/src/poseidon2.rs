@@ -10,7 +10,7 @@ use p3_field::PrimeCharacteristicRing;
 use p3_poseidon2::{
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, HLMDSMat4, InternalLayer,
     InternalLayerConstructor, Poseidon2, add_rc_and_sbox_generic, external_initial_permute_state,
-    external_terminal_permute_state, internal_permute_state, matmul_internal,
+    external_terminal_permute_state, internal_permute_state,
 };
 
 use crate::Bn254Fr;
@@ -45,15 +45,25 @@ impl InternalLayerConstructor<Bn254Fr> for Poseidon2InternalLayerBn254 {
     }
 }
 
+/// A faster version of `matmul_internal` making use of the fact that
+/// the internal matrix is equal to:
+/// ```
+///                             [2, 1, 1]
+///     1 + Diag([1, 1, 2]) =   [1, 2, 1]
+///                             [1, 1, 3]
+/// ```
+fn bn254_matmul_internal(state: &mut [Bn254Fr; 3]) {
+    let sum = state[0] + state[1] + state[2];
+
+    state[0] += sum;
+    state[1] += sum;
+    state[2] = state[2].double() + sum;
+}
+
 impl InternalLayer<Bn254Fr, BN254_WIDTH, BN254_S_BOX_DEGREE> for Poseidon2InternalLayerBn254 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
     fn permute_state(&self, state: &mut [Bn254Fr; BN254_WIDTH]) {
-        const MAT_DIAG3_M_1: [Bn254Fr; 3] = [Bn254Fr::ONE, Bn254Fr::ONE, Bn254Fr::TWO];
-        internal_permute_state(
-            state,
-            |x| matmul_internal(x, MAT_DIAG3_M_1),
-            &self.internal_constants,
-        )
+        internal_permute_state(state, bn254_matmul_internal, &self.internal_constants)
     }
 }
 
