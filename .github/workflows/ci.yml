@@ -119,6 +119,7 @@ jobs:
         cargo check --verbose --package p3-merkle-tree
         cargo check --verbose --package p3-mersenne-31
         cargo check --verbose --package p3-monolith
+        cargo check --verbose --package p3-poly
         cargo check --verbose --package p3-poseidon
         cargo check --verbose --package p3-poseidon2
         cargo check --verbose --package p3-rescue
