@@ -18,7 +18,7 @@ jobs:
         include:
           - os: ubuntu-latest
           - os: ubuntu-latest
-            env: RUSTFLAGS="-Ctarget-feature=+avx2"
+            features: "+avx2"
           - os: macos-latest
           - os: windows-latest
     runs-on: ${{ matrix.os }}
@@ -38,7 +38,11 @@ jobs:
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
           target/
-        key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ matrix.os }}-${{ hashFiles('**/Cargo.toml') }}
+        key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ matrix.os }}-${{ matrix.features }}-${{ hashFiles('**/Cargo.toml') }}
+
+    - name: Set flags
+      if: ${{ matrix.features }}
+      run: export RUSTFLAGS=-Ctarget-feature=${{ matrix.features }}
 
     - name: Build
       run: cargo build --verbose --all-targets
