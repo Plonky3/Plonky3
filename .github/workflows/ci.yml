@@ -99,9 +99,9 @@ jobs:
         cargo build --verbose --target ${{ env.target }} -p p3-fri
         cargo build --verbose --target ${{ env.target }} -p p3-goldilocks
         cargo build --verbose --target ${{ env.target }} -p p3-interpolation
-        cargo build --verbose --target ${{ env.target }} -p p3-koala-bear
         cargo build --verbose --target ${{ env.target }} -p p3-keccak
         cargo build --verbose --target ${{ env.target }} -p p3-keccak-air
+        cargo build --verbose --target ${{ env.target }} -p p3-koala-bear
         cargo build --verbose --target ${{ env.target }} -p p3-matrix
         cargo build --verbose --target ${{ env.target }} -p p3-maybe-rayon
         cargo build --verbose --target ${{ env.target }} -p p3-mds
