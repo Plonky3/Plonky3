@@ -55,9 +55,7 @@ impl<'de> Deserialize<'de> for Bn254Fr {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let bytes: Vec<u8> = Deserialize::deserialize(d)?;
 
-        let value = FFBn254Fr::from_raw_bytes(&bytes);
-
-        value
+        FFBn254Fr::from_raw_bytes(&bytes)
             .map(Self::new)
             .ok_or_else(|| serde::de::Error::custom("Invalid field element"))
     }
@@ -87,7 +85,7 @@ impl PartialOrd for Bn254Fr {
 
 impl Display for Bn254Fr {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        <FFBn254Fr as Debug>::fmt(&self.value, f)
+        self.value.fmt(f)
     }
 }
 
