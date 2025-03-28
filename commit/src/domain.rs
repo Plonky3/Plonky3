@@ -150,6 +150,10 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     /// Given the coset `gH`, return the disjoint coset `gfK` where `f`
     /// is a fixed generator of `F^*` and `K` is the unique two-adic subgroup
     /// of with size `2^(ceil(log_2(min_size)))`.
+    ///
+    /// # Panics
+    ///
+    /// This will panic if `min_size` > `1 << Val::TWO_ADICITY`.
     fn create_disjoint_domain(&self, min_size: usize) -> Self {
         // We provide a short proof that these cosets are always disjoint:
         //
@@ -160,6 +164,8 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         // it does not lie in `K` and so `gf` cannot lie in `gK`.
         //
         // Thus `gH` and `gfK` are disjoint.
+
+        // This panics if (and only if) `min_size` > `1 << Val::TWO_ADICITY`.
         Self::new(self.shift() * Val::GENERATOR, log2_ceil_usize(min_size)).unwrap()
     }
 

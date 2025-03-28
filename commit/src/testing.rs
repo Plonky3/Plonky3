@@ -53,6 +53,8 @@ where
     type Error = ();
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
+        // This panics if (and only if) `degree` is not a power of 2 or `degree`
+        // > `1 << Val::TWO_ADICITY`.
         TwoAdicMultiplicativeCoset::new(Val::ONE, log2_strict_usize(degree)).unwrap()
     }
 
