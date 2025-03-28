@@ -140,14 +140,37 @@ mod helpers {
 
         // Manual reduction process (reverse order):
         // Step 1: result = 0
-        // Step 2: result = result * po2 + 3 = 0 + 3 = 3
-        // Step 3: result = result * po2 + 2 = 3 * 1048575 + 2
-        // Step 4: result = result * po2 + 1 = (step 3) * 1048575 + 1
+        // Step 2: result = result * po2 + 3
+        // Step 3: result = result * po2 + 2
+        // Step 4: result = result * po2 + 1
 
         let step1 = BabyBear::ZERO;
-        let step2 = step1 * po2 + vals[2]; // = 0 + 3 = 3
-        let step3 = step2 * po2 + vals[1]; // = 3 * 1048575 + 2
-        let expected = step3 * po2 + vals[0]; // = ... + 1
+        let step2 = step1 * po2 + vals[2];
+        let step3 = step2 * po2 + vals[1];
+        let expected = step3 * po2 + vals[0];
+
+        let result = reduce_32::<BabyBear, BabyBear>(&vals);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_reduce_32_large_vector_high_entropy() {
+        // Input: vals = [1, 2, 3, ..., 10]
+        let vals: Vec<BabyBear> = (1..=10).map(|i| BabyBear::from_u32(i)).collect();
+
+        let po2 = BabyBear::from_u64(1u64 << 32); // base = 2^32
+
+        // Manual computation step-by-step:
+        let step10 = BabyBear::from_u32(10);
+        let step9 = step10 * po2 + BabyBear::from_u32(9);
+        let step8 = step9 * po2 + BabyBear::from_u32(8);
+        let step7 = step8 * po2 + BabyBear::from_u32(7);
+        let step6 = step7 * po2 + BabyBear::from_u32(6);
+        let step5 = step6 * po2 + BabyBear::from_u32(5);
+        let step4 = step5 * po2 + BabyBear::from_u32(4);
+        let step3 = step4 * po2 + BabyBear::from_u32(3);
+        let step2 = step3 * po2 + BabyBear::from_u32(2);
+        let expected = step2 * po2 + BabyBear::from_u32(1);
 
         let result = reduce_32::<BabyBear, BabyBear>(&vals);
         assert_eq!(result, expected);
@@ -172,6 +195,28 @@ mod helpers {
         let recomposed = reduce_32::<BabyBear, BabyBear>(&parts);
 
         // It should match the original value
+        assert_eq!(recomposed, val);
+    }
+
+    #[test]
+    fn test_split_32_multiple_chunks_then_reduce() {
+        // Choose a nontrivial BabyBear value to split
+        // Pick a large representative u64 that's well within range
+        let big_int = 981273465128374610u64;
+        let val = BabyBear::from_u64(big_int);
+
+        // Split into 4 chunks of 64-bit digits
+        let split = split_32::<BabyBear, BabyBear>(val, 4);
+
+        // Verify all elements are valid field elements
+        for chunk in &split {
+            assert!(chunk.as_canonical_u32() < BabyBear::ORDER_U32);
+        }
+
+        // Reduce back into a single BabyBear element
+        let recomposed = reduce_32::<BabyBear, BabyBear>(&split);
+
+        // Round-trip should match the original
         assert_eq!(recomposed, val);
     }
 

@@ -141,37 +141,45 @@ pub const fn halve_u64<const P: u64>(x: u64) -> u64 {
     if x & 1 == 0 { half } else { half + shift }
 }
 
-/// Given a slice of SF elements, reduce them to a TF element using a 2^32-base decomposition.
+/// Reduce a slice of 32-bit field elements into a single element of a larger field.
 ///
-/// This is optimised assuming that the characteristic of TF is greater than 2^64.
+/// Uses base-$2^{32}$ decomposition:
+///
+/// ```math
+/// \begin{equation}
+/// \text{reduce\_32}(vals) = \sum_{i=0}^{n-1} a_i \cdot 2^{32i}
+/// \end{equation}
+/// ```
+///
+/// Assumes `TF` has characteristic > $2^{64}$ to avoid overflow.
 pub fn reduce_32<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
-    // If the characteristic of TF is > 2^64, from_int and from_canonical_unchecked act identically
-    // on u64 and u32 inputs so we use the safer option.
     let base = TF::from_int(1u64 << 32);
     vals.iter().rev().fold(TF::ZERO, |acc, val| {
         acc * base + TF::from_int(val.as_canonical_u32())
     })
 }
 
-/// Given an SF element, split it to a vector of TF elements using a 2^64-base decomposition.
+/// Split a large field element into `n` base-$2^{64}$ chunks in a 32-bit field.
 ///
-/// We use a 2^64-base decomposition for a field of size ~2^32 because then the bias will be
-/// at most ~1/2^32 for each element after the reduction.
+/// Converts:
+/// ```math
+/// \begin{equation}
+/// x = \sum_{i=0}^{n-1} d_i \cdot 2^{64i}
+/// \end{equation}
+/// ```
+///
+/// Pads with zeros if needed.
 pub fn split_32<SF: PrimeField, TF: PrimeField32>(val: SF, n: usize) -> Vec<TF> {
-    let po2 = BigUint::from(1u128 << 64);
-    let mut val = val.as_canonical_biguint();
-    let mut result = Vec::with_capacity(n);
-    for _ in 0..n {
-        let mask: BigUint = po2.clone() - BigUint::from(1u128);
-        let digit: BigUint = val.clone() & mask;
-        let digit_u64s = digit.to_u64_digits();
-        if digit_u64s.is_empty() {
-            result.push(TF::ZERO)
-        } else {
-            result.push(TF::from_int(digit_u64s[0]));
-        }
-        val /= po2.clone();
-    }
+    let mut result: Vec<TF> = val
+        .as_canonical_biguint()
+        .to_u64_digits()
+        .iter()
+        .take(n)
+        .map(|d| TF::from_u64(*d))
+        .collect();
+
+    // Pad with zeros if needed
+    result.resize_with(n, || TF::ZERO);
     result
 }
 
