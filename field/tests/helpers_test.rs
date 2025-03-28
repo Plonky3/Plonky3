@@ -1,12 +1,9 @@
 mod helpers {
-    use num_bigint::BigUint;
     use p3_baby_bear::BabyBear;
-    use p3_field::extension::BinomialExtensionField;
     use p3_field::{
-        BasedVectorSpace, PrimeCharacteristicRing, PrimeField32, PrimeField64,
-        add_scaled_slice_in_place, dot_product, field_to_array, halve_u32, halve_u64, reduce_32,
-        scale_vec, split_32, two_adic_coset_vanishing_polynomial,
-        two_adic_subgroup_vanishing_polynomial,
+        PrimeCharacteristicRing, PrimeField32, PrimeField64, add_scaled_slice_in_place,
+        dot_product, field_to_array, halve_u32, halve_u64, reduce_32, scale_vec, split_32,
+        two_adic_coset_vanishing_polynomial, two_adic_subgroup_vanishing_polynomial,
     };
 
     #[test]
@@ -191,12 +188,12 @@ mod helpers {
         let a1 = BabyBear::new(2);
         let a2 = BabyBear::new(4);
         let a3 = BabyBear::new(6);
-        let a = vec![a1, a2, a3];
+        let a = [a1, a2, a3];
 
         let b1 = BabyBear::new(3);
         let b2 = BabyBear::new(5);
         let b3 = BabyBear::new(7);
-        let b = vec![b1, b2, b3];
+        let b = [b1, b2, b3];
 
         // 2*3 + 4*5 + 6*7
         let expected = a1 * b1 + a2 * b2 + a3 * b3;

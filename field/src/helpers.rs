@@ -111,30 +111,18 @@ impl<T, const D: usize> HackyWorkAround<T, D> {
 /// by filling zeros.
 #[inline]
 pub const fn field_to_array<R: PrimeCharacteristicRing, const D: usize>(x: R) -> [R; D] {
-    // let mut arr: [MaybeUninit<R>; D] = unsafe { MaybeUninit::uninit().assume_init() };
-
-    // arr[0] = MaybeUninit::new(x);
-    // let mut acc = 1;
-    // loop {
-    //     if acc == D {
-    //         break;
-    //     }
-    //     arr[acc] = MaybeUninit::new(R::ZERO);
-    //     acc += 1;
-    // }
-    // // If the code has reached this point every element of arr is correctly initialized.
-    // // Hence we are safe to reinterpret the array as [R; D].
-
-    // unsafe { HackyWorkAround::transpose(arr).assume_init() }
-
     let mut arr: [_; D] = unsafe { MaybeUninit::uninit().assume_init() };
+
     arr[0] = MaybeUninit::new(x);
-    let mut i = 1;
-    while i < D {
-        arr[i] = MaybeUninit::new(R::ZERO);
-        i += 1;
+    let mut acc = 1;
+    while acc < D {
+        arr[acc] = MaybeUninit::new(R::ZERO);
+        acc += 1;
     }
-    unsafe { core::mem::transmute_copy::<_, [R; D]>(&arr) }
+    // If the code has reached this point every element of arr is correctly initialized.
+    // Hence we are safe to reinterpret the array as [R; D].
+
+    unsafe { HackyWorkAround::transpose(arr).assume_init() }
 }
 
 /// Given an element x from a 32 bit field F_P compute x/2.
