@@ -56,7 +56,6 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
                         .map(|t| DifButterfly(t))
                         .collect_vec()
                 })
-                .peekable()
         });
 
         assert_eq!(twiddles.len(), domain.log_n);
@@ -161,7 +160,6 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
                 .map(|ts| ts.into_iter().map(|t| DitButterfly(t)).collect_vec())
                 .rev()
                 .skip(domain.log_n - log_n)
-                .peekable()
         });
 
         for ts in twiddles.peeking_take_while(|ts| ts.len() < desired_num_jobs()) {
