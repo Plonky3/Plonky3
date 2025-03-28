@@ -122,8 +122,7 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
 
     /// Returns the coset `self^(2^log_scale_factor)` (i. e. with shift and
     /// subgroup generator equal to the `2^log_scale_factor`-th power of the
-    /// original ones). Returns `None` if `log_scale_factor` is greater than
-    /// factor is larger than size of `self.log_size()`.
+    /// original ones). Returns `None` if `log_scale_factor` is greater than `self.log_size()`.
     pub fn exp_power_of_2(&self, log_scale_factor: usize) -> Option<Self> {
         self.shrink_coset(log_scale_factor).map(|mut coset| {
             coset.shift = self.shift.exp_power_of_2(log_scale_factor);
