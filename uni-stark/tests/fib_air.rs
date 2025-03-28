@@ -113,7 +113,7 @@ type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
 type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
 
 /// n-th Fibonacci number expected to be x
-fn test_public_value_impl(n: usize, x: u64) {
+fn test_public_value_impl(n: usize, x: u64, log_final_poly_len: usize) {
     let mut rng = SmallRng::seed_from_u64(1);
     let perm = Perm::new_from_rng_128(&mut rng);
     let hash = MyHash::new(perm.clone());
@@ -122,7 +122,7 @@ fn test_public_value_impl(n: usize, x: u64) {
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
     let trace = generate_trace_rows::<Val>(0, 1, n);
-    let fri_config = create_test_fri_config(challenge_mmcs);
+    let fri_config = create_test_fri_config(challenge_mmcs, log_final_poly_len);
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
     let config = MyConfig::new(pcs);
     let mut challenger = Challenger::new(perm.clone());
@@ -134,12 +134,13 @@ fn test_public_value_impl(n: usize, x: u64) {
 
 #[test]
 fn test_one_row_trace() {
-    test_public_value_impl(1, 1);
+    // Need to set log_final_poly_len to ensure log_min_height > config.log_final_poly_len + config.log_blowup
+    test_public_value_impl(1, 1, 0);
 }
 
 #[test]
 fn test_public_value() {
-    test_public_value_impl(1 << 3, 21);
+    test_public_value_impl(1 << 3, 21, 2);
 }
 
 #[cfg(debug_assertions)]
@@ -153,7 +154,7 @@ fn test_incorrect_public_value() {
     let val_mmcs = ValMmcs::new(hash, compress);
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
-    let fri_config = create_test_fri_config(challenge_mmcs);
+    let fri_config = create_test_fri_config(challenge_mmcs, 1);
     let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
     let config = MyConfig::new(pcs);

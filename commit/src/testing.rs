@@ -9,6 +9,7 @@ use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_strict_usize;
+use p3_util::zip_eq::zip_eq;
 use serde::{Deserialize, Serialize};
 
 use crate::{OpenedValues, Pcs};
@@ -161,7 +162,7 @@ where
         _challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
         for (comm, round_opening) in rounds {
-            for (coeff_vec, (domain, points_and_values)) in comm.into_iter().zip(round_opening) {
+            for (coeff_vec, (domain, points_and_values)) in zip_eq(comm, round_opening, ())? {
                 let width = coeff_vec.len() / domain.size();
                 assert_eq!(width * domain.size(), coeff_vec.len());
                 let coeffs = RowMajorMatrix::new(coeff_vec, width);

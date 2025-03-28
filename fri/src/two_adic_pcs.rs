@@ -19,6 +19,7 @@ use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
 use p3_matrix::{Dimensions, Matrix};
 use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
+use p3_util::zip_eq::zip_eq;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
 use serde::{Deserialize, Serialize};
 use tracing::{info_span, instrument};
@@ -422,7 +423,9 @@ where
             // log_height -> (alpha_pow, reduced_opening)
             let mut reduced_openings = BTreeMap::<usize, (Challenge, Challenge)>::new();
 
-            for (batch_opening, (batch_commit, mats)) in izip!(input_proof, &rounds) {
+            for (batch_opening, (batch_commit, mats)) in
+                zip_eq(input_proof, &rounds, FriError::InvalidProofShape)?
+            {
                 let batch_heights = mats
                     .iter()
                     .map(|(domain, _)| domain.size() << self.fri.log_blowup)
@@ -444,7 +447,7 @@ where
                         reduced_index,
                         &batch_opening.opened_values,
                         &batch_opening.opening_proof,
-                    )?;
+                    )
                 } else {
                     // Empty batch?
                     self.mmcs.verify_batch(
@@ -453,12 +456,15 @@ where
                         0,
                         &batch_opening.opened_values,
                         &batch_opening.opening_proof,
-                    )?;
+                    )
                 }
+                .map_err(FriError::InputError)?;
 
-                for (mat_opening, (mat_domain, mat_points_and_values)) in
-                    izip!(&batch_opening.opened_values, mats)
-                {
+                for (mat_opening, (mat_domain, mat_points_and_values)) in zip_eq(
+                    &batch_opening.opened_values,
+                    mats,
+                    FriError::InvalidProofShape,
+                )? {
                     let log_height = log2_strict_usize(mat_domain.size()) + self.fri.log_blowup;
 
                     let bits_reduced = log_global_max_height - log_height;
@@ -474,7 +480,9 @@ where
                         .or_insert((Challenge::ONE, Challenge::ZERO));
 
                     for (z, ps_at_z) in mat_points_and_values {
-                        for (&p_at_x, &p_at_z) in izip!(mat_opening, ps_at_z) {
+                        for (&p_at_x, &p_at_z) in
+                            zip_eq(mat_opening, ps_at_z, FriError::InvalidProofShape)?
+                        {
                             let quotient = (-p_at_z + p_at_x) / (-*z + x);
                             *ro += *alpha_pow * quotient;
                             *alpha_pow *= alpha;
