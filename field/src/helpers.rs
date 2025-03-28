@@ -111,41 +111,46 @@ impl<T, const D: usize> HackyWorkAround<T, D> {
 /// by filling zeros.
 #[inline]
 pub const fn field_to_array<R: PrimeCharacteristicRing, const D: usize>(x: R) -> [R; D] {
-    let mut arr: [MaybeUninit<R>; D] = unsafe { MaybeUninit::uninit().assume_init() };
+    // let mut arr: [MaybeUninit<R>; D] = unsafe { MaybeUninit::uninit().assume_init() };
 
+    // arr[0] = MaybeUninit::new(x);
+    // let mut acc = 1;
+    // loop {
+    //     if acc == D {
+    //         break;
+    //     }
+    //     arr[acc] = MaybeUninit::new(R::ZERO);
+    //     acc += 1;
+    // }
+    // // If the code has reached this point every element of arr is correctly initialized.
+    // // Hence we are safe to reinterpret the array as [R; D].
+
+    // unsafe { HackyWorkAround::transpose(arr).assume_init() }
+
+    let mut arr: [_; D] = unsafe { MaybeUninit::uninit().assume_init() };
     arr[0] = MaybeUninit::new(x);
-    let mut acc = 1;
-    loop {
-        if acc == D {
-            break;
-        }
-        arr[acc] = MaybeUninit::new(R::ZERO);
-        acc += 1;
+    let mut i = 1;
+    while i < D {
+        arr[i] = MaybeUninit::new(R::ZERO);
+        i += 1;
     }
-    // If the code has reached this point every element of arr is correctly initialized.
-    // Hence we are safe to reinterpret the array as [R; D].
-
-    unsafe { HackyWorkAround::transpose(arr).assume_init() }
+    unsafe { core::mem::transmute_copy::<_, [R; D]>(&arr) }
 }
 
 /// Given an element x from a 32 bit field F_P compute x/2.
 #[inline]
-pub const fn halve_u32<const P: u32>(input: u32) -> u32 {
+pub const fn halve_u32<const P: u32>(x: u32) -> u32 {
     let shift = (P + 1) >> 1;
-    let shr = input >> 1;
-    let lo_bit = input & 1;
-    let shr_corr = shr + shift;
-    if lo_bit == 0 { shr } else { shr_corr }
+    let half = x >> 1;
+    if x & 1 == 0 { half } else { half + shift }
 }
 
 /// Given an element x from a 64 bit field F_P compute x/2.
 #[inline]
-pub const fn halve_u64<const P: u64>(input: u64) -> u64 {
+pub const fn halve_u64<const P: u64>(x: u64) -> u64 {
     let shift = (P + 1) >> 1;
-    let shr = input >> 1;
-    let lo_bit = input & 1;
-    let shr_corr = shr + shift;
-    if lo_bit == 0 { shr } else { shr_corr }
+    let half = x >> 1;
+    if x & 1 == 0 { half } else { half + shift }
 }
 
 /// Given a slice of SF elements, reduce them to a TF element using a 2^32-base decomposition.
@@ -154,12 +159,10 @@ pub const fn halve_u64<const P: u64>(input: u64) -> u64 {
 pub fn reduce_32<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
     // If the characteristic of TF is > 2^64, from_int and from_canonical_unchecked act identically
     // on u64 and u32 inputs so we use the safer option.
-    let po2 = TF::from_int(1u64 << 32);
-    let mut result = TF::ZERO;
-    for val in vals.iter().rev() {
-        result = result * po2 + TF::from_int(val.as_canonical_u32());
-    }
-    result
+    let base = TF::from_int(1u64 << 32);
+    vals.iter().rev().fold(TF::ZERO, |acc, val| {
+        acc * base + TF::from_int(val.as_canonical_u32())
+    })
 }
 
 /// Given an SF element, split it to a vector of TF elements using a 2^64-base decomposition.
@@ -169,7 +172,7 @@ pub fn reduce_32<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
 pub fn split_32<SF: PrimeField, TF: PrimeField32>(val: SF, n: usize) -> Vec<TF> {
     let po2 = BigUint::from(1u128 << 64);
     let mut val = val.as_canonical_biguint();
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(n);
     for _ in 0..n {
         let mask: BigUint = po2.clone() - BigUint::from(1u128);
         let digit: BigUint = val.clone() & mask;
