@@ -270,7 +270,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
             inv_vanishing: batch_multiplicative_inverse(&evals)
                 .into_iter()
                 .cycle()
-                .take(1 << coset.log_size())
+                .take(coset.size())
                 .collect(),
         }
     }
