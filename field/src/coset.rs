@@ -130,11 +130,10 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
         })
     }
 
-    /// Returns a new coset where the shift has been set to `shift` times the
-    /// original shift.
-    pub fn shift_by(&self, shift: F) -> TwoAdicMultiplicativeCoset<F> {
+    /// Returns a new coset of the same size whose shift is equal to `scale * self.shift`.
+    pub fn shift_by(&self, scale: F) -> TwoAdicMultiplicativeCoset<F> {
         TwoAdicMultiplicativeCoset {
-            shift: self.shift * shift,
+            shift: self.shift * scale,
             log_size: self.log_size,
         }
     }
