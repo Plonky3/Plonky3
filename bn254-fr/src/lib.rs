@@ -98,7 +98,7 @@ impl PrimeCharacteristicRing for Bn254Fr {
     const ONE: Self = Self::new(FFBn254Fr::ONE);
     const TWO: Self = Self::new(FFBn254Fr::from_raw([2u64, 0, 0, 0]));
 
-    /// r - 1 = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000000
+    // r - 1 = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000000
     const NEG_ONE: Self = Self::new(FFBn254Fr::from_raw([
         0x43e1f593f0000000,
         0x2833e84879b97091,
