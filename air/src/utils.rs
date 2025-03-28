@@ -18,7 +18,7 @@ where
     I: DoubleEndedIterator<Item = Var>,
 {
     iter.rev()
-        .map(Into::<R>::into)
+        .map(Into::into)
         .reduce(|acc, elem| acc.double() + elem)
         .unwrap_or(R::ZERO)
 }

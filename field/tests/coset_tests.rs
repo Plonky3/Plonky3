@@ -80,7 +80,7 @@ mod coset {
     // Checks that generator_exp (access through element() of a coset of shift 1)
     // yields the correct power of the generator
     fn test_generator_exp() {
-        let mut coset = TwoAdicMultiplicativeCoset::<BB>::new(BB::ONE, 10).unwrap();
+        let mut coset = TwoAdicMultiplicativeCoset::new(BB::ONE, 10).unwrap();
 
         for i in 0..1 << 5 {
             assert_eq!(
@@ -98,7 +98,7 @@ mod coset {
         let shift: BB = rng.random();
         let log_size = 3;
 
-        let mut coset = TwoAdicMultiplicativeCoset::<BB>::new(shift, log_size).unwrap();
+        let mut coset = TwoAdicMultiplicativeCoset::new(shift, log_size).unwrap();
 
         assert_eq!(coset.into_iter().count(), 1 << log_size);
         for (i, e) in coset.iter().enumerate() {
@@ -108,7 +108,7 @@ mod coset {
 
     #[test]
     fn test_element_wrap_around() {
-        let mut coset = TwoAdicMultiplicativeCoset::<BB>::new(BB::ONE, 3).unwrap();
+        let mut coset = TwoAdicMultiplicativeCoset::new(BB::ONE, 3).unwrap();
 
         for i in [1, 2] {
             for j in 0..coset.size() {
@@ -123,7 +123,7 @@ mod coset {
         let mut rng = SmallRng::seed_from_u64(53);
 
         let shift: GL = rng.random();
-        let mut coset = TwoAdicMultiplicativeCoset::<GL>::new(shift, GL::TWO_ADICITY).unwrap();
+        let mut coset = TwoAdicMultiplicativeCoset::new(shift, GL::TWO_ADICITY).unwrap();
 
         for _ in 0..100 {
             let exp = rng.random::<u64>() % (1 << GL::TWO_ADICITY);
@@ -140,7 +140,7 @@ mod coset {
 
         let log_size = 8;
 
-        let coset = TwoAdicMultiplicativeCoset::<BB>::new(shift, log_size).unwrap();
+        let coset = TwoAdicMultiplicativeCoset::new(shift, log_size).unwrap();
 
         let mut d = BB::ONE;
 
