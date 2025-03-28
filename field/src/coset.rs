@@ -202,7 +202,7 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
     }
 
     /// Returns an iterator over the elements of the coset in the canonical order
-    /// "shift * generator^0, shift * generator^1, ...,
+    /// `shift * generator^0, shift * generator^1, ...,
     /// shift * generator^(2^log_size - 1)`.
     pub fn iter(&self) -> Take<Powers<F>> {
         self.subgroup_generator()
