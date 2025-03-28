@@ -34,6 +34,11 @@ pub trait StarkGenericConfig {
         + CanSample<Self::Challenge>;
 
     fn pcs(&self) -> &Self::Pcs;
+
+    /// Returns 1 if the PCS is zero-knowledge, 0 otherwise.
+    fn is_zk(&self) -> usize {
+        Self::Pcs::ZK as usize
+    }
 }
 
 #[derive(Debug)]
