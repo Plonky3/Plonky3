@@ -265,7 +265,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
 
         LagrangeSelectors {
             is_first_row: single_point_selector(0),
-            is_last_row: single_point_selector((1 << self.log_size()) - 1),
+            is_last_row: single_point_selector(self.size() - 1),
             is_transition: xs.into_iter().map(|x| x - subgroup_last).collect(),
             inv_vanishing: batch_multiplicative_inverse(&evals)
                 .into_iter()
