@@ -156,7 +156,7 @@ mod helpers {
     #[test]
     fn test_reduce_32_large_vector_high_entropy() {
         // Input: vals = [1, 2, 3, ..., 10]
-        let vals: Vec<BabyBear> = (1..=10).map(|i| BabyBear::from_u32(i)).collect();
+        let vals: Vec<BabyBear> = (1..=10).map(BabyBear::from_u32).collect();
 
         let po2 = BabyBear::from_u64(1u64 << 32); // base = 2^32
 

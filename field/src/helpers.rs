@@ -3,7 +3,6 @@ use core::iter::Sum;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Mul;
 
-use num_bigint::BigUint;
 use p3_maybe_rayon::prelude::{IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::field::Field;
