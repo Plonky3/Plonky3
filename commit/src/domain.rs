@@ -176,7 +176,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
                     self.shift() * self.subgroup_generator().exp_u64(i as u64),
                     self.log_size() - log_chunks,
                 )
-                .unwrap()
+                .unwrap() // This won't panic as `self.log_size() - log_chunks < self.log_size() < Val::TWO_ADICITY`
             })
             .collect()
     }
