@@ -7,11 +7,9 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 p3-dft.workspace = true
 p3-field.workspace = true
-p3-matrix.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
 rand.workspace = true
-itertools.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
