@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 use core::iter::Sum;
-use core::mem::{ManuallyDrop, MaybeUninit};
+use core::mem::MaybeUninit;
 use core::ops::Mul;
 
 use p3_maybe_rayon::prelude::{IntoParallelRefMutIterator, ParallelIterator};
@@ -57,71 +57,18 @@ where
     x.iter_mut().zip(y).for_each(|(x_i, y_i)| *x_i += y_i * s);
 }
 
-// The ideas for the following work around come from the construe crate along with
-// the playground example linked in the following comment:
-// https://github.com/rust-lang/rust/issues/115403#issuecomment-1701000117
-
-// The goal is to want to make field_to_array a const function in order
-// to allow us to convert R constants to BinomialExtensionField<R, D> constants.
-//
-// The natural approach would be:
-// fn field_to_array<R: PrimeCharacteristicRing, const D: usize>(x: R) -> [R; D]
-//      let mut arr: [R; D] = [R::ZERO; D];
-//      arr[0] = x
-//      arr
-//
-// Unfortunately this doesn't compile as R does not implement Copy and so instead
-// implements Drop which cannot be run in constant contexts. Clearly nothing should
-// actually be dropped by the above function but the compiler is unable to determine this.
-// There is a rust issue for this: https://github.com/rust-lang/rust/issues/73255
-// but it seems unlikely to be stabilized anytime soon.
-//
-// The natural workaround for this is to use MaybeUninit and set each element of the list
-// separately. This mostly works but we end up with an array of the form [MaybeUninit<T>; N]
-// and there is not currently a way in the standard library to convert this to [T; N].
-// There is a method on nightly: array_assume_init so this function should be reworked after
-// that has stabilized (More details in Rust issue: https://github.com/rust-lang/rust/issues/96097).
-//
-// Annoyingly, both transmute and transmute_copy fail here. The first because it cannot handle
-// const generics and the second due to interior mutability and the inability to use &mut in const
-// functions.
-//
-// The solution is to implement the map [MaybeUninit<T>; D]) -> MaybeUninit<[T; D]>
-// using Union types and ManuallyDrop to essentially do a manual transmute.
-
-union HackyWorkAround<T, const D: usize> {
-    complete: ManuallyDrop<MaybeUninit<[T; D]>>,
-    elements: ManuallyDrop<[MaybeUninit<T>; D]>,
-}
-
-impl<T, const D: usize> HackyWorkAround<T, D> {
-    const fn transpose(arr: [MaybeUninit<T>; D]) -> MaybeUninit<[T; D]> {
-        // This is safe as [MaybeUninit<T>; D]> and MaybeUninit<[T; D]> are
-        // the same type regardless of T. Both are an array or size equal to [T; D]
-        // with some data potentially not initialized.
-        let transpose = Self {
-            elements: ManuallyDrop::new(arr),
-        };
-        unsafe { ManuallyDrop::into_inner(transpose.complete) }
-    }
-}
-
 /// Extend a ring `R` element `x` to an array of length `D`
 /// by filling zeros.
 #[inline]
 pub const fn field_to_array<R: PrimeCharacteristicRing, const D: usize>(x: R) -> [R; D] {
     let mut arr: [_; D] = unsafe { MaybeUninit::uninit().assume_init() };
-
     arr[0] = MaybeUninit::new(x);
-    let mut acc = 1;
-    while acc < D {
-        arr[acc] = MaybeUninit::new(R::ZERO);
-        acc += 1;
+    let mut i = 1;
+    while i < D {
+        arr[i] = MaybeUninit::new(R::ZERO);
+        i += 1;
     }
-    // If the code has reached this point every element of arr is correctly initialized.
-    // Hence we are safe to reinterpret the array as [R; D].
-
-    unsafe { HackyWorkAround::transpose(arr).assume_init() }
+    unsafe { core::mem::transmute_copy::<_, [R; D]>(&arr) }
 }
 
 /// Given an element x from a 32 bit field F_P compute x/2.
