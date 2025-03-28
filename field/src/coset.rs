@@ -175,7 +175,7 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
     /// element of `self` whenever `index` < self.size()).
     #[inline]
     pub fn element(&mut self, index: usize) -> F {
-        self.shift * self.generator_exp(index & ((1 << self.log_size) - 1))
+        self.shift * self.generator_exp(index)
     }
 
     // Internal function which computes `generator^exp`. It uses the
