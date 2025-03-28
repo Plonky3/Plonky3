@@ -82,7 +82,7 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
         }
     }
 
-    /// Returns the generator of the subgroup whose shift is `self`.
+    /// Returns the generator of the subgroup of order `self.size()`.
     #[inline]
     pub fn subgroup_generator(&self) -> F {
         F::two_adic_generator(self.log_size)
