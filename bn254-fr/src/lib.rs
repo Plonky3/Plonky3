@@ -47,13 +47,11 @@ impl<'de> Deserialize<'de> for Bn254Fr {
     /// Deserializes from raw bytes, which are typically of the Montgomery representation of the field element.
     /// Performs a check that the deserialized field element corresponds to a value less than the field modulus, and
     /// returns error otherwise.
-    // See https://github.com/privacy-scaling-explorations/halo2curves/blob/d34e9e46f7daacd194739455de3b356ca6c03206/derive/src/field/mod.rs#L485
+    /// See https://github.com/privacy-scaling-explorations/halo2curves/blob/d34e9e46f7daacd194739455de3b356ca6c03206/derive/src/field/mod.rs#L485
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let bytes: Vec<u8> = Deserialize::deserialize(d)?;
 
-        let value = FFBn254Fr::from_raw_bytes(&bytes);
-
-        value
+        FFBn254Fr::from_raw_bytes(&bytes)
             .map(Self::new)
             .ok_or_else(|| serde::de::Error::custom("Invalid field element"))
     }
@@ -83,7 +81,7 @@ impl PartialOrd for Bn254Fr {
 
 impl Display for Bn254Fr {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        <FFBn254Fr as Debug>::fmt(&self.value, f)
+        self.value.fmt(f)
     }
 }
 
@@ -100,7 +98,7 @@ impl PrimeCharacteristicRing for Bn254Fr {
     const ONE: Self = Self::new(FFBn254Fr::ONE);
     const TWO: Self = Self::new(FFBn254Fr::from_raw([2u64, 0, 0, 0]));
 
-    // r - 1 = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000000
+    /// r - 1 = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000000
     const NEG_ONE: Self = Self::new(FFBn254Fr::from_raw([
         0x43e1f593f0000000,
         0x2833e84879b97091,
