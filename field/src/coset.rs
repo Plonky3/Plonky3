@@ -110,8 +110,7 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
     /// `2^log_scale_factor` in size (i. e. with generator equal to the
     /// `2^log_scale_factor`-th power of that of the original coset), leaving
     /// the shift untouched. Note that new coset is contained in the original one.
-    /// Returns `None` if `log_scale_factor` is greater than factor is larger
-    /// than size of `self.log_size()`.
+    /// Returns `None` if `log_scale_factor` is greater than `self.log_size()`.
     pub fn shrink_coset(&self, log_scale_factor: usize) -> Option<Self> {
         self.log_size
             .checked_sub(log_scale_factor)
