@@ -1,6 +1,6 @@
 /// An iterator which iterates two other iterators of the same length simultaneously.
 ///
-/// Equality of the lengths of `a` abd `b` are at construction time.
+/// Equality of the lengths of `a` and `b` are checked at construction time.
 #[must_use = "iterator adaptors are lazy and do nothing unless consumed"]
 pub struct ZipEq<A, B> {
     a: A,
