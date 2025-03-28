@@ -184,7 +184,9 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
     // stored), i. e. rather "fetch-and-multiply".
     fn generator_exp(&mut self, exp: usize) -> F {
         let mut gen_power = F::ONE;
-        let mut exp = exp & ((1 << self.log_size()) - 1);
+        // As `generator` satisfies `generator^{self.size()} == 1` we can replace `exp` by `exp mod self.size()`.
+        // As `self.size()` is a power of `2` this can be done with an `&` instead of a `%`.
+        let mut exp = exp & (self.size() - 1);
         let mut i = self.log_size();
 
         while exp > 0 {
