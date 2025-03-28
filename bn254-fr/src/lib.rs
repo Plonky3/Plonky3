@@ -47,7 +47,7 @@ impl<'de> Deserialize<'de> for Bn254Fr {
     /// Deserializes from raw bytes, which are typically of the Montgomery representation of the field element.
     /// Performs a check that the deserialized field element corresponds to a value less than the field modulus, and
     /// returns error otherwise.
-    /// See https://github.com/privacy-scaling-explorations/halo2curves/blob/d34e9e46f7daacd194739455de3b356ca6c03206/derive/src/field/mod.rs#L485
+    // See https://github.com/privacy-scaling-explorations/halo2curves/blob/d34e9e46f7daacd194739455de3b356ca6c03206/derive/src/field/mod.rs#L485
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let bytes: Vec<u8> = Deserialize::deserialize(d)?;
 
