@@ -14,3 +14,7 @@ tracing.workspace = true
 itertools.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+p3-baby-bear.workspace = true
+p3-goldilocks.workspace = true
