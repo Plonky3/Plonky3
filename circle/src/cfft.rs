@@ -96,7 +96,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         target_domain: CircleDomain<F>,
     ) -> CircleEvaluations<F, RowMajorMatrix<F>> {
         assert!(target_domain.log_n >= self.domain.log_n);
-        CircleEvaluations::<F>::evaluate(target_domain, self.interpolate())
+        CircleEvaluations::evaluate(target_domain, self.interpolate())
     }
 
     pub fn evaluate_at_point<EF: ExtensionField<F>>(&self, point: Point<EF>) -> Vec<EF> {
@@ -293,7 +293,7 @@ mod tests {
         let mut rng = SmallRng::seed_from_u64(1);
         for (log_n, width) in iproduct!(2..5, [1, 4, 11]) {
             let shift = Point::generator(F::CIRCLE_TWO_ADICITY) * (rng.random::<u16>() as usize);
-            let domain = CircleDomain::<F>::new(log_n, shift);
+            let domain = CircleDomain::new(log_n, shift);
             let trace = RowMajorMatrix::<F>::rand(&mut rng, 1 << log_n, width);
             let coeffs = CircleEvaluations::from_natural_order(domain, trace.clone()).interpolate();
             assert_eq!(

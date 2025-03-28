@@ -402,7 +402,7 @@ where
             challenger,
             |index, input_proof| {
                 // log_height -> (alpha_offset, ro)
-                let mut reduced_openings = BTreeMap::<usize, (Challenge, Challenge)>::new();
+                let mut reduced_openings = BTreeMap::new();
 
                 let CircleInputProof {
                     input_openings,
