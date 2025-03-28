@@ -5,6 +5,8 @@ use p3_field_testing::bench_func::{
     benchmark_sub_latency, benchmark_sub_throughput, benchmark_sum_array,
 };
 use p3_mersenne_31::Mersenne31;
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 
 type F = Mersenne31;
 
@@ -25,9 +27,10 @@ fn bench_field(c: &mut Criterion) {
     benchmark_sub_latency::<F, L_REPS>(c, name);
     benchmark_sub_throughput::<F, REPS>(c, name);
 
+    let mut rng = SmallRng::seed_from_u64(1);
     c.bench_function("5th_root", |b| {
         b.iter_batched(
-            rand::random::<F>,
+            || rng.random::<F>(),
             |x| x.exp_u64(1717986917),
             BatchSize::SmallInput,
         )

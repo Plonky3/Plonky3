@@ -1,4 +1,4 @@
-use std::any::type_name;
+use core::any::type_name;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, MdsMatrixBabyBear};
@@ -9,7 +9,8 @@ use p3_mds::coset_mds::CosetMds;
 use p3_mds::integrated_coset_mds::IntegratedCosetMds;
 use p3_mersenne_31::{MdsMatrixMersenne31, Mersenne31};
 use rand::distr::{Distribution, StandardUniform};
-use rand::{Rng, rng};
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 
 fn bench_all_mds(c: &mut Criterion) {
     bench_mds::<BabyBear, IntegratedCosetMds<BabyBear, 16>, 16>(c);
@@ -45,7 +46,7 @@ where
 {
     let mds = Mds::default();
 
-    let mut rng = rng();
+    let mut rng = SmallRng::seed_from_u64(1);
     let input = rng.random::<[R; WIDTH]>();
     let id = BenchmarkId::new(type_name::<Mds>(), WIDTH);
     c.bench_with_input(id, &input, |b, input| b.iter(|| mds.permute(input.clone())));

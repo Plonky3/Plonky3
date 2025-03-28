@@ -195,7 +195,7 @@ pub(crate) fn sub<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -
 
 /// No-op. Prevents the compiler from deducing the value of the vector.
 ///
-/// Similar to `std::hint::black_box`, it can be used to stop the compiler applying undesirable
+/// Similar to `core::hint::black_box`, it can be used to stop the compiler applying undesirable
 /// "optimizations". Unlike the built-in `black_box`, it does not force the value to be written to
 /// and then read from the stack.
 #[inline]

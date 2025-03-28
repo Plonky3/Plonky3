@@ -39,7 +39,8 @@ mod tests {
     use p3_field::{Field, PrimeCharacteristicRing};
     use p3_goldilocks::Goldilocks;
     use p3_matrix::dense::RowMajorMatrix;
-    use rand::rng;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
 
     use crate::{NaiveDft, TwoAdicSubgroupDft};
 
@@ -87,7 +88,7 @@ mod tests {
     #[test]
     fn dft_idft_consistency() {
         type F = Goldilocks;
-        let mut rng = rng();
+        let mut rng = SmallRng::seed_from_u64(1);
         let original = RowMajorMatrix::<F>::rand(&mut rng, 8, 3);
         let dft = NaiveDft.dft_batch(original.clone());
         let idft = NaiveDft.idft_batch(dft);
@@ -98,7 +99,7 @@ mod tests {
     fn coset_dft_idft_consistency() {
         type F = Goldilocks;
         let generator = F::GENERATOR;
-        let mut rng = rng();
+        let mut rng = SmallRng::seed_from_u64(1);
         let original = RowMajorMatrix::<F>::rand(&mut rng, 8, 3);
         let dft = NaiveDft.coset_dft_batch(original.clone(), generator);
         let idft = NaiveDft.coset_idft_batch(dft, generator);

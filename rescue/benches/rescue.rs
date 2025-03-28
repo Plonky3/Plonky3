@@ -1,5 +1,5 @@
-use std::any::type_name;
-use std::array;
+use core::any::type_name;
+use core::array;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, MdsMatrixBabyBear};
@@ -11,7 +11,8 @@ use p3_mersenne_31::{MdsMatrixMersenne31, Mersenne31};
 use p3_rescue::Rescue;
 use p3_symmetric::Permutation;
 use rand::distr::{Distribution, StandardUniform};
-use rand::{Rng, rng};
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 
 fn bench_rescue(c: &mut Criterion) {
     rescue::<BabyBear, BabyBear, IntegratedCosetMds<_, 16>, 16, 7>(c);
@@ -38,7 +39,7 @@ where
     // assume it suffices; for real usage the Sage calculation in the paper should be used.
     const NUM_ROUNDS: usize = 8;
 
-    let rng = rng();
+    let rng = SmallRng::seed_from_u64(1);
     let num_constants = 2 * WIDTH * NUM_ROUNDS;
     let round_constants = rng
         .sample_iter(StandardUniform)

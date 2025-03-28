@@ -1,4 +1,4 @@
-use std::any::type_name;
+use core::any::type_name;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use itertools::Itertools;
@@ -9,7 +9,8 @@ use p3_fri::fold_even_odd;
 use p3_goldilocks::Goldilocks;
 use p3_mersenne_31::Mersenne31;
 use rand::distr::{Distribution, StandardUniform};
-use rand::{Rng, rng};
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 
 fn bench<F: TwoAdicField>(c: &mut Criterion, log_sizes: &[usize])
 where
@@ -22,7 +23,7 @@ where
     for log_size in log_sizes {
         let n = 1 << log_size;
 
-        let mut rng = rng();
+        let mut rng = SmallRng::seed_from_u64(n as u64);
         let beta = rng.sample(StandardUniform);
         let poly = rng.sample_iter(StandardUniform).take(n).collect_vec();
 

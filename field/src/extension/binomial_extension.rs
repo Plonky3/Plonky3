@@ -490,11 +490,7 @@ where
     Self: Distribution<F>,
 {
     fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> BinomialExtensionField<F, D> {
-        let mut res = [F::ZERO; D];
-        for r in &mut res {
-            *r = Self.sample(rng);
-        }
-        BinomialExtensionField::from_basis_coefficients_slice(&res)
+        BinomialExtensionField::new(array::from_fn(|_| self.sample(rng)))
     }
 }
 

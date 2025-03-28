@@ -1,4 +1,4 @@
-use std::any::type_name;
+use core::any::type_name;
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::BabyBear;
@@ -8,6 +8,8 @@ use p3_field_testing::bench_func::{
     benchmark_mul_latency, benchmark_mul_throughput, benchmark_sub_latency,
     benchmark_sub_throughput,
 };
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 
 type F = BabyBear;
 
@@ -27,9 +29,10 @@ fn bench_field(c: &mut Criterion) {
     benchmark_sub_latency::<F, L_REPS>(c, name);
     benchmark_sub_throughput::<F, REPS>(c, name);
 
+    let mut rng = SmallRng::seed_from_u64(1);
     c.bench_function("7th_root", |b| {
         b.iter_batched(
-            rand::random::<F>,
+            || rng.random::<F>(),
             |x| x.exp_u64(1725656503),
             BatchSize::SmallInput,
         )

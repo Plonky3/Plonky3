@@ -9,20 +9,18 @@ p3-field.workspace = true
 p3-poseidon2.workspace = true
 p3-symmetric.workspace = true
 
-ff = { workspace = true, features = ["derive", "derive_bits"] }
 num-bigint.workspace = true
 paste.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
-halo2curves = { workspace = true, features = ["bits", "derive_serde"] }
+halo2curves = { version = "0.8.0", features = ["bits", "derive_serde"] }
 
 [dev-dependencies]
 p3-field-testing.workspace = true
 
 criterion.workspace = true
-num-traits.workspace = true
 serde_json.workspace = true
-zkhash.workspace = true
+zkhash = { git = "https://github.com/HorizenLabs/poseidon2" }
 
 [features]
 default = []

@@ -228,7 +228,8 @@ mod tests {
     use itertools::izip;
     use p3_field::{PrimeCharacteristicRing, batch_multiplicative_inverse};
     use p3_mersenne_31::Mersenne31;
-    use rand::rng;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
 
     use super::*;
     use crate::CircleEvaluations;
@@ -283,8 +284,10 @@ mod tests {
             );
         }
 
+        let mut rng = SmallRng::seed_from_u64(1);
+
         // split domains
-        let evals = RowMajorMatrix::rand(&mut rng(), n, width);
+        let evals = RowMajorMatrix::rand(&mut rng, n, width);
         let orig: Vec<(Point<F>, Vec<F>)> = d
             .points()
             .zip(evals.rows().map(|r| r.collect_vec()))
