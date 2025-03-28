@@ -11,7 +11,6 @@ nightly-features = []
 p3-field.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
-itertools.workspace = true
 tiny-keccak = { workspace = true, features = ["keccak"] }
 
 [dev-dependencies]

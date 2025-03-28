@@ -14,7 +14,6 @@ p3-monty-31.workspace = true
 p3-poseidon2.workspace = true
 p3-symmetric.workspace = true
 rand.workspace = true
-serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 num-bigint.workspace = true
