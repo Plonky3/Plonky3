@@ -8,6 +8,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::stack::HorizontalPair;
 use p3_matrix::{Dimensions, Matrix};
 use p3_symmetric::{CryptographicHasher, Hash, PseudoCompressionFunction};
+use p3_util::zip_eq::zip_eq;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use serde::de::DeserializeOwned;
@@ -128,9 +129,7 @@ where
     ) -> Result<(), Self::Error> {
         let (salts, siblings) = proof;
 
-        let opened_salted_values = opened_values
-            .iter()
-            .zip(salts.iter())
+        let opened_salted_values = zip_eq(opened_values, salts, MerkleTreeError::WrongBatchSize)?
             .map(|(opened, salt)| opened.iter().chain(salt.iter()).copied().collect_vec())
             .collect_vec();
 

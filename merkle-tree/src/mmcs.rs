@@ -124,7 +124,7 @@ where
         }
 
         // TODO: Disabled for now since TwoAdicFriPcs and CirclePcs currently pass 0 for width.
-        // for (dims, opened_vals) in dimensions.iter().zip(opened_values) {
+        // for (dims, opened_vals) in zip_eq(dimensions.iter(), opened_values) {
         //     if opened_vals.len() != dims.width {
         //         return Err(WrongWidth);
         //     }

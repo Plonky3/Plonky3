@@ -8,6 +8,7 @@ use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{Field, FieldAlgebra, FieldExtensionAlgebra};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
+use p3_util::zip_eq::zip_eq;
 use tracing::instrument;
 
 use crate::symbolic_builder::{get_log_quotient_degree, SymbolicAirBuilder};
@@ -84,11 +85,13 @@ where
             ),
             (
                 commitments.quotient_chunks.clone(),
-                quotient_chunks_domains
-                    .iter()
-                    .zip(&opened_values.quotient_chunks)
-                    .map(|(domain, values)| (*domain, vec![(zeta, values.clone())]))
-                    .collect_vec(),
+                zip_eq(
+                    quotient_chunks_domains.iter(),
+                    &opened_values.quotient_chunks,
+                    VerificationError::InvalidProofShape,
+                )?
+                .map(|(domain, values)| (*domain, vec![(zeta, values.clone())]))
+                .collect_vec(),
             ),
         ],
         opening_proof,

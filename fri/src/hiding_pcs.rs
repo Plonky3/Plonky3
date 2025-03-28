@@ -11,6 +11,7 @@ use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
 use p3_matrix::horizontally_truncated::HorizontallyTruncated;
 use p3_matrix::row_index_mapped::RowIndexMappedView;
 use p3_matrix::Matrix;
+use p3_util::zip_eq::zip_eq;
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
 use tracing::instrument;
@@ -177,9 +178,17 @@ where
         // Now we merge `opened_values_for_rand_cws` into the opened values in `rounds`, undoing
         // the split that we did in `open`, to get a complete set of opened values for the inner PCS
         // to check.
-        for (round, rand_round) in rounds.iter_mut().zip(opened_values_for_rand_cws) {
-            for (mat, rand_mat) in round.1.iter_mut().zip(rand_round) {
-                for (point, rand_point) in mat.1.iter_mut().zip(rand_mat) {
+        for (round, rand_round) in zip_eq(
+            rounds.iter_mut(),
+            opened_values_for_rand_cws,
+            FriError::InvalidProofShape,
+        )? {
+            for (mat, rand_mat) in
+                zip_eq(round.1.iter_mut(), rand_round, FriError::InvalidProofShape)?
+            {
+                for (point, rand_point) in
+                    zip_eq(mat.1.iter_mut(), rand_mat, FriError::InvalidProofShape)?
+                {
                     point.1.extend(rand_point);
                 }
             }
