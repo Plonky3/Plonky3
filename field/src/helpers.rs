@@ -96,9 +96,8 @@ pub const fn halve_u64<const P: u64>(x: u64) -> u64 {
 /// \text{reduce\_32}(vals) = \sum_{i=0}^{n-1} a_i \cdot 2^{32i}
 /// \end{equation}
 /// ```
-///
-/// Assumes `TF` has characteristic > $2^{64}$ to avoid overflow.
 pub fn reduce_32<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
+    // If the characteristic of TF is > 2^64, from_int and from_canonical_unchecked act identically
     let base = TF::from_int(1u64 << 32);
     vals.iter().rev().fold(TF::ZERO, |acc, val| {
         acc * base + TF::from_int(val.as_canonical_u32())
