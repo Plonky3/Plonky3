@@ -41,7 +41,7 @@ mod helpers {
     #[test]
     fn test_scale_vec() {
         // Scale [1, 2, 3] by 7
-        let v = vec![BabyBear::new(1), BabyBear::new(2), BabyBear::new(3)];
+        let v = vec![BabyBear::ONE, BabyBear::TWO, BabyBear::ONE + BabyBear::TWO];
         let s = BabyBear::new(7);
         let result = scale_vec(s, v.clone());
 
