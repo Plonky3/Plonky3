@@ -1,9 +1,9 @@
 mod helpers {
     use p3_baby_bear::BabyBear;
     use p3_field::{
-        PrimeCharacteristicRing, PrimeField32, PrimeField64, add_scaled_slice_in_place,
-        dot_product, field_to_array, halve_u32, halve_u64, reduce_32, scale_vec, split_32,
-        two_adic_coset_vanishing_polynomial, two_adic_subgroup_vanishing_polynomial,
+        PrimeCharacteristicRing, PrimeField32, add_scaled_slice_in_place, dot_product,
+        field_to_array, reduce_32, scale_vec, split_32, two_adic_coset_vanishing_polynomial,
+        two_adic_subgroup_vanishing_polynomial,
     };
 
     #[test]
@@ -45,11 +45,7 @@ mod helpers {
         let s = BabyBear::new(7);
         let result = scale_vec(s, v.clone());
 
-        let expected = vec![
-            s * BabyBear::new(1),
-            s * BabyBear::new(2),
-            s * BabyBear::new(3),
-        ];
+        let expected = vec![s * BabyBear::ONE, s * BabyBear::TWO, s * BabyBear::new(3)];
 
         assert_eq!(result, expected);
     }
@@ -57,8 +53,8 @@ mod helpers {
     #[test]
     fn test_add_scaled_slice_in_place() {
         // x = [1, 2], y = [10, 20], scale by 3
-        let x1 = BabyBear::new(1);
-        let x2 = BabyBear::new(2);
+        let x1 = BabyBear::ONE;
+        let x2 = BabyBear::TWO;
         let mut x = vec![x1, x2];
 
         let y1 = BabyBear::new(10);
@@ -106,11 +102,7 @@ mod helpers {
     #[test]
     fn test_reduce_32() {
         // Input: vals = [1, 2, 3]
-        let vals = [
-            BabyBear::from_u32(1),
-            BabyBear::from_u32(2),
-            BabyBear::from_u32(3),
-        ];
+        let vals = [BabyBear::ONE, BabyBear::TWO, BabyBear::from_u32(3)];
 
         // po2 = 2^32 mod BabyBear = 1048575
         let po2 = BabyBear::from_u64(1u64 << 32); // 2^32 mod field
@@ -146,8 +138,8 @@ mod helpers {
         let step5 = step6 * po2 + BabyBear::from_u32(5);
         let step4 = step5 * po2 + BabyBear::from_u32(4);
         let step3 = step4 * po2 + BabyBear::from_u32(3);
-        let step2 = step3 * po2 + BabyBear::from_u32(2);
-        let expected = step2 * po2 + BabyBear::from_u32(1);
+        let step2 = step3 * po2 + BabyBear::TWO;
+        let expected = step2 * po2 + BabyBear::ONE;
 
         let result = reduce_32::<BabyBear, BabyBear>(&vals);
         assert_eq!(result, expected);
@@ -207,7 +199,7 @@ mod helpers {
 
     #[test]
     fn test_dot_product() {
-        let a1 = BabyBear::new(2);
+        let a1 = BabyBear::TWO;
         let a2 = BabyBear::new(4);
         let a3 = BabyBear::new(6);
         let a = [a1, a2, a3];
@@ -234,7 +226,7 @@ mod helpers {
 
     #[test]
     fn test_dot_product_mismatched_lengths() {
-        let a1 = BabyBear::new(2);
+        let a1 = BabyBear::TWO;
         let a2 = BabyBear::new(4);
         let a = vec![a1, a2];
 
