@@ -23,7 +23,7 @@ mod helpers {
     #[test]
     fn test_two_adic_coset_vanishing_polynomial() {
         // x = 2, shift = 5, log_n = 2 → compute x^4 - shift^4
-        let x = BabyBear::from_u64(2);
+        let x = BabyBear::TWO;
         let shift = BabyBear::from_u64(5);
         let log_n = 2;
 
