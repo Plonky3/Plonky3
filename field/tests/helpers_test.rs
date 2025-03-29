@@ -9,7 +9,7 @@ mod helpers {
     #[test]
     fn test_two_adic_subgroup_vanishing_polynomial() {
         // x = 3, log_n = 3 → compute x^8 - 1
-        let x = BabyBear::from_u64(3);
+        let x = BabyBear::TWO + BabyBear::ONE;
         let log_n = 3;
 
         // x^8 = 3^8 = 6561
