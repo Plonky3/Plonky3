@@ -82,7 +82,7 @@ fn main() {
         }
         ProofOptions::KeccakFPermutations => {
             let num_hashes = trace_height / 24;
-            println!("Proving {num_hashes} Keccak-F permutations");
+            println!("Proving {} Keccak-F permutations", num_hashes);
             num_hashes
         }
     };
