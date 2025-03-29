@@ -12,8 +12,8 @@ mod helpers {
         let x = BabyBear::from_u64(3);
         let log_n = 3;
 
-        // x^8 = 3^8
-        let x_pow = x * x * x * x * x * x * x * x;
+        // x^8 = 3^8 = 6561
+        let x_pow = BabyBear::from_u16(6561);
 
         let expected = x_pow - BabyBear::ONE;
         let result = two_adic_subgroup_vanishing_polynomial(log_n, x);
