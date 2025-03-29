@@ -105,7 +105,7 @@ pub fn reduce_32<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
     })
 }
 
-/// Split a large field element into `n` base-$2^{64}$ chunks in a 32-bit field.
+/// Split a large field element into `n` base-$2^{64}$ chunks and map each into a 32-bit field.
 ///
 /// Converts:
 /// ```math
