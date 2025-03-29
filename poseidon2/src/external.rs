@@ -140,7 +140,7 @@ pub fn mds_light_permutation<
         }
 
         _ => {
-            panic!("Unsupported width");
+            panic!("Unsupported width: {} - Valid values are 2, 3, 4, 8, 12, 16, 20, 24", WIDTH);
         }
     }
 }
