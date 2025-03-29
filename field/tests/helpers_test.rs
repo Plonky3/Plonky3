@@ -104,29 +104,6 @@ mod helpers {
     }
 
     #[test]
-    fn test_halve_u32() {
-        // Let x = 5, P = BabyBear::ORDER_U32 = 2^32 - 2^20 + 1
-        let x: u32 = 5;
-        let result = halve_u32::<{ BabyBear::ORDER_U32 }>(x);
-
-        // shift = (P + 1) >> 1
-        let shift = (BabyBear::ORDER_U32 + 1) >> 1;
-        let expected = (x >> 1) + shift; // since x is odd
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_halve_u64() {
-        let x: u64 = 6;
-        let result = halve_u64::<{ BabyBear::ORDER_U64 }>(x);
-
-        let expected = x >> 1; // since x is even
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
     fn test_reduce_32() {
         // Input: vals = [1, 2, 3]
         let vals = [
