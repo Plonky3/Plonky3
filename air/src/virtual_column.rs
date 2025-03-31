@@ -115,8 +115,8 @@ impl<F: Field> VirtualPairCol<F> {
     {
         self.column_weights
             .iter()
-            .fold(self.constant.into(), |acc, (col, w)| {
-                acc + col.get(preprocessed, main).into() * *w
+            .fold(self.constant.into(), |acc, &(col, w)| {
+                acc + col.get(preprocessed, main).into() * w
             })
     }
 }
