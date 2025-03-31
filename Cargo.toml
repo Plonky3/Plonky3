@@ -9,7 +9,6 @@ members = [
     "challenger",
     "circle",
     "commit",
-    "coset",
     "dft",
     "examples",
     "field",

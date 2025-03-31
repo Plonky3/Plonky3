@@ -7,7 +7,6 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 p3-challenger.workspace = true
 p3-commit.workspace = true
-p3-coset.workspace = true
 p3-dft.workspace = true
 p3-field.workspace = true
 p3-interpolation.workspace = true

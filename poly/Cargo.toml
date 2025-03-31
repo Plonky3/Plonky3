@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 p3-dft.workspace = true
 p3-field.workspace = true
 p3-matrix.workspace = true
-itertools.workspace = true
+itertools = "0.14.0"
 rand = { workspace = true, optional = true }
 rand_chacha = { workspace = true, optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
