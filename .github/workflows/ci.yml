@@ -79,7 +79,9 @@ jobs:
         key: rust-${{ steps.rs-nightly.outputs.rustc_hash }}-ubuntu-latest-avx512-${{ hashFiles('**/Cargo.toml') }}
 
     - name: Set flags
-      run: echo "RUSTFLAGS=-Ctarget-feature=+avx512f,+avx512vbmi2" >> "$GITHUB_ENV"
+      run: |
+        cat /proc/cpuinfo
+        echo "RUSTFLAGS=-Ctarget-feature=+avx512f,+avx512vbmi2" >> "$GITHUB_ENV"
 
     - name: Build
       run: cargo +nightly build --verbose --all-targets --features nightly-features
