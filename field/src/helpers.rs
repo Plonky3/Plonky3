@@ -93,7 +93,7 @@ pub const fn halve_u64<const P: u64>(x: u64) -> u64 {
 ///
 /// ```math
 /// \begin{equation}
-/// \text{reduce\_32}(vals) = \sum_{i=0}^{n-1} a_i \cdot 2^{32i}
+///     \text{reduce\_32}(vals) = \sum_{i=0}^{n-1} a_i \cdot 2^{32i}
 /// \end{equation}
 /// ```
 pub fn reduce_32<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
@@ -109,7 +109,7 @@ pub fn reduce_32<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
 /// Converts:
 /// ```math
 /// \begin{equation}
-/// x = \sum_{i=0}^{n-1} d_i \cdot 2^{64i}
+///     x = \sum_{i=0}^{n-1} d_i \cdot 2^{64i}
 /// \end{equation}
 /// ```
 ///

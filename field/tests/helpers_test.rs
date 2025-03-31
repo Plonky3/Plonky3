@@ -1,8 +1,8 @@
 mod helpers {
     use p3_baby_bear::BabyBear;
     use p3_field::{
-        PrimeCharacteristicRing, PrimeField32, add_scaled_slice_in_place, dot_product,
-        field_to_array, reduce_32, scale_vec, split_32, two_adic_coset_vanishing_polynomial,
+        PrimeCharacteristicRing, add_scaled_slice_in_place, dot_product, field_to_array, reduce_32,
+        scale_vec, split_32, two_adic_coset_vanishing_polynomial,
         two_adic_subgroup_vanishing_polynomial,
     };
 
