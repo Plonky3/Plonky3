@@ -42,10 +42,14 @@ mod helpers {
     fn test_scale_vec() {
         // Scale [1, 2, 3] by 7
         let v = vec![BabyBear::ONE, BabyBear::TWO, BabyBear::ONE + BabyBear::TWO];
-        let s = BabyBear::new(7);
+        let s = BabyBear::from_u8(7);
         let result = scale_vec(s, v.clone());
 
-        let expected = vec![s * BabyBear::ONE, s * BabyBear::TWO, s * BabyBear::new(3)];
+        let expected = vec![
+            s * BabyBear::ONE,
+            s * BabyBear::TWO,
+            s * BabyBear::from_u8(3),
+        ];
 
         assert_eq!(result, expected);
     }
@@ -57,10 +61,10 @@ mod helpers {
         let x2 = BabyBear::TWO;
         let mut x = vec![x1, x2];
 
-        let y1 = BabyBear::new(10);
-        let y2 = BabyBear::new(20);
+        let y1 = BabyBear::from_u8(10);
+        let y2 = BabyBear::from_u8(20);
         let y = vec![y1, y2];
-        let s = BabyBear::new(3);
+        let s = BabyBear::from_u8(3);
 
         add_scaled_slice_in_place(&mut x, y.clone().into_iter(), s);
 
@@ -72,9 +76,9 @@ mod helpers {
 
     #[test]
     fn test_add_scaled_slice_in_place_zero_scale() {
-        let original = vec![BabyBear::new(4), BabyBear::new(5)];
+        let original = vec![BabyBear::from_u8(4), BabyBear::from_u8(5)];
         let mut x = original.clone();
-        let y = vec![BabyBear::new(6), BabyBear::new(7)];
+        let y = vec![BabyBear::from_u8(6), BabyBear::from_u8(7)];
         let s = BabyBear::ZERO;
 
         add_scaled_slice_in_place(&mut x, y.into_iter(), s);
@@ -85,7 +89,7 @@ mod helpers {
     #[test]
     fn test_field_to_array() {
         // Convert value 9 to array of size 4
-        let x = BabyBear::new(9);
+        let x = BabyBear::from_u8(9);
         let arr = field_to_array::<BabyBear, 4>(x);
 
         // Should yield [9, 0, 0, 0]
@@ -94,7 +98,7 @@ mod helpers {
 
     #[test]
     fn test_field_to_array_single() {
-        let x = BabyBear::new(99);
+        let x = BabyBear::from_u8(99);
         let arr = field_to_array::<BabyBear, 1>(x);
         assert_eq!(arr, [x]);
     }
@@ -200,13 +204,13 @@ mod helpers {
     #[test]
     fn test_dot_product() {
         let a1 = BabyBear::TWO;
-        let a2 = BabyBear::new(4);
-        let a3 = BabyBear::new(6);
+        let a2 = BabyBear::from_u8(4);
+        let a3 = BabyBear::from_u8(6);
         let a = [a1, a2, a3];
 
-        let b1 = BabyBear::new(3);
-        let b2 = BabyBear::new(5);
-        let b3 = BabyBear::new(7);
+        let b1 = BabyBear::from_u8(3);
+        let b2 = BabyBear::from_u8(5);
+        let b3 = BabyBear::from_u8(7);
         let b = [b1, b2, b3];
 
         // 2*3 + 4*5 + 6*7
@@ -227,12 +231,12 @@ mod helpers {
     #[test]
     fn test_dot_product_mismatched_lengths() {
         let a1 = BabyBear::TWO;
-        let a2 = BabyBear::new(4);
+        let a2 = BabyBear::from_u8(4);
         let a = vec![a1, a2];
 
-        let b1 = BabyBear::new(3);
-        let b2 = BabyBear::new(5);
-        let b3 = BabyBear::new(7);
+        let b1 = BabyBear::from_u8(3);
+        let b2 = BabyBear::from_u8(5);
+        let b3 = BabyBear::from_u8(7);
         let b = vec![b1, b2, b3];
 
         // Only first two elements will be multiplied
