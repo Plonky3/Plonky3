@@ -158,7 +158,7 @@ mod tests {
         let col = VirtualPairCol::<F>::single_main(1); // column index 1
 
         let main = [F::from_u32(9), F::from_u32(5)];
-        let pre = [F::from_u32(0)]; // ignored
+        let pre = [F::ZERO]; // ignored
 
         let result = col.apply::<F, F>(&pre, &main);
 
