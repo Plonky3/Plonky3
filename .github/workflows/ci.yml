@@ -57,6 +57,42 @@ jobs:
     - name: Test with parallel
       run: cargo test --verbose --features parallel
 
+  build_and_test_avx512:
+    name: Build and Test AVX512
+    runs-on: ubuntu-latest
+    if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: dtolnay/rust-toolchain@nightly
+      id: rs-nightly
+
+    - uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: rust-${{ steps.rs-nightly.outputs.rustc_hash }}-ubuntu-latest-avx512-${{ hashFiles('**/Cargo.toml') }}
+
+    - name: Set flags
+      run: echo "RUSTFLAGS=-Ctarget-feature=+avx512f,+avx512vbmi2" >> "$GITHUB_ENV"
+
+    - name: Build
+      run: cargo +nightly build --verbose --all-targets --features nightly-features
+
+    - name: Check with parallel
+      run: cargo +nightly check --verbose --all-targets --features nightly-features,parallel
+
+    - name: Test
+      run: cargo +nightly test --verbose --features nightly-features
+
+    - name: Test with parallel
+      run: cargo +nightly test --verbose --features nightly-features,parallel
+
   check_embedded:
     name: Build embedded
     runs-on: ubuntu-latest
