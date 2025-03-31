@@ -247,7 +247,7 @@ mod tests {
         let col = VirtualPairCol {
             column_weights: vec![
                 (PairCol::Main(1), F::from_u32(3)),
-                (PairCol::Preprocessed(0), F::from_u32(2)),
+                (PairCol::Preprocessed(0), F::TWO),
             ],
             constant: F::from_u32(5),
         };
