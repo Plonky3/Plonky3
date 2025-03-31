@@ -218,7 +218,7 @@ mod tests {
 
         let main = [
             F::from_u32(7),
-            F::from_u32(0), // ignored
+            F::ZERO, // ignored
             F::from_u32(10),
         ];
         let pre = [];
