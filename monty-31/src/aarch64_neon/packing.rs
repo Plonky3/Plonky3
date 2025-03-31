@@ -11,8 +11,8 @@ use p3_field::{
     PermutationMonomial, PrimeCharacteristicRing,
 };
 use p3_util::convert_vec;
-use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 
 use crate::{FieldParameters, MontyField31, PackedMontyParameters, RelativelyPrimePower};
 
@@ -50,13 +50,15 @@ impl<PMP: PackedMontyParameters> PackedMontyField31Neon<PMP> {
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid `MontyField31`.
     /// In particular, each element of vector must be in `0..P` (canonical form).
     unsafe fn from_vector(vector: uint32x4_t) -> Self {
-        // Safety: It is up to the user to ensure that elements of `vector` represent valid
-        // `MontyField31` values. We must only reason about memory representations. `uint32x4_t` can be
-        // transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which can
-        // be transmuted to `[MontyField31; WIDTH]` (since `MontyField31` is `repr(transparent)`), which in
-        // turn can be transmuted to `PackedMontyField31Neon` (since `PackedMontyField31Neon` is also
-        // `repr(transparent)`).
-        transmute(vector)
+        unsafe {
+            // Safety: It is up to the user to ensure that elements of `vector` represent valid
+            // `MontyField31` values. We must only reason about memory representations. `uint32x4_t` can be
+            // transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which can
+            // be transmuted to `[MontyField31; WIDTH]` (since `MontyField31` is `repr(transparent)`), which in
+            // turn can be transmuted to `PackedMontyField31Neon` (since `PackedMontyField31Neon` is also
+            // `repr(transparent)`).
+            transmute(vector)
+        }
     }
 
     /// Copy `value` to all positions in a packed vector. This is the same as
@@ -125,7 +127,7 @@ impl<PMP: PackedMontyParameters> Sub for PackedMontyField31Neon<PMP> {
 
 /// No-op. Prevents the compiler from deducing the value of the vector.
 ///
-/// Similar to `std::hint::black_box`, it can be used to stop the compiler applying undesirable
+/// Similar to `core::hint::black_box`, it can be used to stop the compiler applying undesirable
 /// "optimizations". Unlike the built-in `black_box`, it does not force the value to be written to
 /// and then read from the stack.
 #[inline]

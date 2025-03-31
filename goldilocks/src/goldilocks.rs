@@ -3,21 +3,21 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
-use core::intrinsics::transmute;
 use core::iter::{Product, Sum};
+use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
 use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::integers::QuotientMap;
 use p3_field::{
-    halve_u64, quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int, Field,
-    InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField64, TwoAdicField,
+    Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
+    PrimeField64, TwoAdicField, halve_u64, quotient_map_large_iint, quotient_map_large_uint,
+    quotient_map_small_int,
 };
 use p3_util::{assume, branch_hint};
-use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 
 /// The Goldilocks prime
@@ -43,8 +43,8 @@ impl Goldilocks {
     /// This is a const version of `.map(Goldilocks::new)`.
     #[inline]
     #[must_use]
-    pub(crate) const fn new_array<const N: usize>(input: [u64; N]) -> [Goldilocks; N] {
-        let mut output = [Goldilocks::ZERO; N];
+    pub(crate) const fn new_array<const N: usize>(input: [u64; N]) -> [Self; N] {
+        let mut output = [Self::ZERO; N];
         let mut i = 0;
         while i < N {
             output[i].value = input[i];
@@ -55,6 +55,45 @@ impl Goldilocks {
 
     /// Two's complement of `ORDER`, i.e. `2^64 - ORDER = 2^32 - 1`.
     const NEG_ORDER: u64 = Self::ORDER_U64.wrapping_neg();
+
+    /// A list of generators for the two-adic subgroups of the goldilocks field.
+    ///
+    /// These satisfy the properties that `TWO_ADIC_GENERATORS[0] = 1` and `TWO_ADIC_GENERATORS[i+1]^2 = TWO_ADIC_GENERATORS[i]`.
+    pub const TWO_ADIC_GENERATORS: [Goldilocks; 33] = Goldilocks::new_array([
+        0x0000000000000001,
+        0xffffffff00000000,
+        0x0001000000000000,
+        0xfffffffeff000001,
+        0xefffffff00000001,
+        0x00003fffffffc000,
+        0x0000008000000000,
+        0xf80007ff08000001,
+        0xbf79143ce60ca966,
+        0x1905d02a5c411f4e,
+        0x9d8f2ad78bfed972,
+        0x0653b4801da1c8cf,
+        0xf2c35199959dfcb6,
+        0x1544ef2335d17997,
+        0xe0ee099310bba1e2,
+        0xf6b2cffe2306baac,
+        0x54df9630bf79450e,
+        0xabd0a6e8aa3d8a0e,
+        0x81281a7b05f9beac,
+        0xfbd41c6b8caa3302,
+        0x30ba2ecd5e93e76d,
+        0xf502aef532322654,
+        0x4b2a18ade67246b5,
+        0xea9d5a1336fbc98b,
+        0x86cdcc31c307e171,
+        0x4bbaf5976ecfefd8,
+        0xed41d05b78d6e286,
+        0x10d78dd8915a171d,
+        0x59049500004a4485,
+        0xdfa8c93ba46d2666,
+        0x7e9bd009b86a0845,
+        0x400a7f755588e659,
+        0x185629dcda58878c,
+    ]);
 }
 
 impl PartialEq for Goldilocks {
@@ -124,6 +163,21 @@ impl PrimeCharacteristicRing for Goldilocks {
 
     fn from_bool(b: bool) -> Self {
         Self::new(b.into())
+    }
+
+    #[inline]
+    fn sum_array<const N: usize>(input: &[Self]) -> Self {
+        assert_eq!(N, input.len());
+        // Benchmarking shows that for N <= 3 it's faster to sum the elements directly
+        // but for N > 3 it's faster to use the .sum() methods which passes through u128's
+        // allowing for delayed reductions.
+        match N {
+            0 => Self::ZERO,
+            1 => input[0],
+            2 => input[0] + input[1],
+            3 => input[0] + input[1] + input[2],
+            _ => input.iter().copied().sum(),
+        }
     }
 
     #[inline]
@@ -231,7 +285,7 @@ impl Field for Goldilocks {
 
     #[inline]
     fn halve(&self) -> Self {
-        Goldilocks::new(halve_u64::<P>(self.value))
+        Self::new(halve_u64::<P>(self.value))
     }
 
     #[inline]
@@ -274,11 +328,7 @@ impl QuotientMap<u64> for Goldilocks {
     /// Return `None` if the given integer is greater than `p = 2^64 - 2^32 + 1`.
     #[inline]
     fn from_canonical_checked(int: u64) -> Option<Self> {
-        if int < Self::ORDER_U64 {
-            Some(Self::new(int))
-        } else {
-            None
-        }
+        (int < Self::ORDER_U64).then(|| Self::new(int))
     }
 
     /// Convert a given `u64` integer into an element of the `Goldilocks` field.
@@ -287,7 +337,7 @@ impl QuotientMap<u64> for Goldilocks {
     /// In this case this function is actually always safe as the internal
     /// value is allowed to be any u64.
     #[inline(always)]
-    unsafe fn from_canonical_unchecked(int: u64) -> Goldilocks {
+    unsafe fn from_canonical_unchecked(int: u64) -> Self {
         Self::new(int)
     }
 }
@@ -309,7 +359,7 @@ impl QuotientMap<i64> for Goldilocks {
     ///
     /// Returns none if the input does not lie in the range `(-(2^63 - 2^31), 2^63 - 2^31)`.
     #[inline]
-    fn from_canonical_checked(int: i64) -> Option<Goldilocks> {
+    fn from_canonical_checked(int: i64) -> Option<Self> {
         const POS_BOUND: i64 = (P >> 1) as i64;
         const NEG_BOUND: i64 = -POS_BOUND;
         match int {
@@ -325,7 +375,7 @@ impl QuotientMap<i64> for Goldilocks {
     /// In this case this function is actually always safe as the internal
     /// value is allowed to be any u64.
     #[inline(always)]
-    unsafe fn from_canonical_unchecked(int: i64) -> Goldilocks {
+    unsafe fn from_canonical_unchecked(int: i64) -> Self {
         Self::from_int(int)
     }
 }
@@ -355,8 +405,7 @@ impl TwoAdicField for Goldilocks {
 
     fn two_adic_generator(bits: usize) -> Self {
         assert!(bits <= Self::TWO_ADICITY);
-        let base = Self::new(1_753_635_133_440_165_772); // generates the whole 2^TWO_ADICITY group
-        base.exp_power_of_2(Self::TWO_ADICITY - bits)
+        Self::TWO_ADIC_GENERATORS[bits]
     }
 }
 
@@ -508,28 +557,30 @@ const fn split(x: u128) -> (u64, u64) {
 #[inline(always)]
 #[cfg(target_arch = "x86_64")]
 unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
-    let res_wrapped: u64;
-    let adjustment: u64;
-    core::arch::asm!(
-        "add {0}, {1}",
-        // Trick. The carry flag is set iff the addition overflowed.
-        // sbb x, y does x := x - y - CF. In our case, x and y are both {1:e}, so it simply does
-        // {1:e} := 0xffffffff on overflow and {1:e} := 0 otherwise. {1:e} is the low 32 bits of
-        // {1}; the high 32-bits are zeroed on write. In the end, we end up with 0xffffffff in {1}
-        // on overflow; this happens be NEG_ORDER.
-        // Note that the CPU does not realize that the result of sbb x, x does not actually depend
-        // on x. We must write the result to a register that we know to be ready. We have a
-        // dependency on {1} anyway, so let's use it.
-        "sbb {1:e}, {1:e}",
-        inlateout(reg) x => res_wrapped,
-        inlateout(reg) y => adjustment,
-        options(pure, nomem, nostack),
-    );
-    assume(x != 0 || (res_wrapped == y && adjustment == 0));
-    assume(y != 0 || (res_wrapped == x && adjustment == 0));
-    // Add NEG_ORDER == subtract ORDER.
-    // Cannot overflow unless the assumption if x + y < 2**64 + ORDER is incorrect.
-    res_wrapped + adjustment
+    unsafe {
+        let res_wrapped: u64;
+        let adjustment: u64;
+        core::arch::asm!(
+            "add {0}, {1}",
+            // Trick. The carry flag is set iff the addition overflowed.
+            // sbb x, y does x := x - y - CF. In our case, x and y are both {1:e}, so it simply does
+            // {1:e} := 0xffffffff on overflow and {1:e} := 0 otherwise. {1:e} is the low 32 bits of
+            // {1}; the high 32-bits are zeroed on write. In the end, we end up with 0xffffffff in {1}
+            // on overflow; this happens be NEG_ORDER.
+            // Note that the CPU does not realize that the result of sbb x, x does not actually depend
+            // on x. We must write the result to a register that we know to be ready. We have a
+            // dependency on {1} anyway, so let's use it.
+            "sbb {1:e}, {1:e}",
+            inlateout(reg) x => res_wrapped,
+            inlateout(reg) y => adjustment,
+            options(pure, nomem, nostack),
+        );
+        assume(x != 0 || (res_wrapped == y && adjustment == 0));
+        assume(y != 0 || (res_wrapped == x && adjustment == 0));
+        // Add NEG_ORDER == subtract ORDER.
+        // Cannot overflow unless the assumption if x + y < 2**64 + ORDER is incorrect.
+        res_wrapped + adjustment
+    }
 }
 
 #[inline(always)]
@@ -573,7 +624,7 @@ mod tests {
         // Check on `reduce_u128`
         let x = u128::MAX;
         let y = reduce128(x);
-        // The following equalitiy sequence holds, modulo p = 2^64 - 2^32 + 1
+        // The following equality sequence holds, modulo p = 2^64 - 2^32 + 1
         // 2^128 - 1 = (2^64 - 1) * (2^64 + 1)
         //           = (2^32 - 1 - 1) * (2^32 - 1 + 1)
         //           = (2^32 - 2) * (2^32)
@@ -590,7 +641,29 @@ mod tests {
         assert_eq!(F::TWO.injective_exp_n().injective_exp_root_n(), F::TWO);
     }
 
-    test_field!(crate::Goldilocks);
+    // Goldilocks has a redundant representation for both 0 and 1.
+    const ZEROS: [Goldilocks; 2] = [Goldilocks::ZERO, Goldilocks::new(P)];
+    const ONES: [Goldilocks; 2] = [Goldilocks::ONE, Goldilocks::new(P + 1)];
+
+    // Get the prime factorization of the order of the multiplicative group.
+    // i.e. the prime factorization of P - 1.
+    fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 6] {
+        [
+            (BigUint::from(2u8), 32),
+            (BigUint::from(3u8), 1),
+            (BigUint::from(5u8), 1),
+            (BigUint::from(17u8), 1),
+            (BigUint::from(257u16), 1),
+            (BigUint::from(65537u32), 1),
+        ]
+    }
+
+    test_field!(
+        crate::Goldilocks,
+        &super::ZEROS,
+        &super::ONES,
+        &super::multiplicative_group_prime_factorization()
+    );
     test_prime_field!(crate::Goldilocks);
     test_prime_field_64!(crate::Goldilocks);
     test_two_adic_field!(crate::Goldilocks);

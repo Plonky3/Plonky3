@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use core::arch::x86_64::{self, __m512i, __mmask16, __mmask8};
+use core::arch::x86_64::{self, __m512i, __mmask8, __mmask16};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -10,8 +10,8 @@ use p3_field::{
     PermutationMonomial, PrimeCharacteristicRing,
 };
 use p3_util::convert_vec;
-use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 
 use crate::Mersenne31;
 
@@ -48,13 +48,15 @@ impl PackedMersenne31AVX512 {
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid
     /// `Mersenne31`. In particular, each element of vector must be in `0..=P`.
     pub(crate) unsafe fn from_vector(vector: __m512i) -> Self {
-        // Safety: It is up to the user to ensure that elements of `vector` represent valid
-        // `Mersenne31` values. We must only reason about memory representations. `__m512i` can be
-        // transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which can
-        // be transmuted to `[Mersenne31; WIDTH]` (since `Mersenne31` is `repr(transparent)`), which
-        // in turn can be transmuted to `PackedMersenne31AVX512` (since `PackedMersenne31AVX512` is also
-        // `repr(transparent)`).
-        transmute(vector)
+        unsafe {
+            // Safety: It is up to the user to ensure that elements of `vector` represent valid
+            // `Mersenne31` values. We must only reason about memory representations. `__m512i` can be
+            // transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which can
+            // be transmuted to `[Mersenne31; WIDTH]` (since `Mersenne31` is `repr(transparent)`), which
+            // in turn can be transmuted to `PackedMersenne31AVX512` (since `PackedMersenne31AVX512` is also
+            // `repr(transparent)`).
+            transmute(vector)
+        }
     }
 
     /// Copy `value` to all positions in a packed vector. This is the same as
@@ -309,7 +311,7 @@ fn partial_reduce_neg(x: __m512i) -> __m512i {
 /// Compute the square of the Mersenne-31 field elements located in the even indices.
 /// These field elements are represented as values in {-P, ..., P}. If the even inputs
 /// do not conform to this representation, the result is undefined.
-/// The top half of each 64-bit lane is is ignored.
+/// The top half of each 64-bit lane is ignored.
 /// The top half of each 64-bit lane in the result is 0.
 #[inline(always)]
 fn square_unred(x: __m512i) -> __m512i {
@@ -591,7 +593,7 @@ impl Distribution<PackedMersenne31AVX512> for StandardUniform {
 fn interleave1_antidiagonal(x: __m512i, y: __m512i) -> __m512i {
     unsafe {
         // Safety: If this code got compiled then AVX-512VBMI2 intrinsics are available.
-        x86_64::_mm512_shrdi_epi64::<32>(y, x)
+        x86_64::_mm512_shrdi_epi64::<32>(x, y)
     }
 }
 
@@ -829,24 +831,25 @@ unsafe impl PackedFieldPow2 for PackedMersenne31AVX512 {
 mod tests {
     use p3_field_testing::test_packed_field;
 
-    use super::{Mersenne31, WIDTH};
+    use super::{Mersenne31, PackedMersenne31AVX512};
 
     /// Zero has a redundant representation, so let's test both.
-    const ZEROS: [Mersenne31; WIDTH] = Mersenne31::new_array([
+    const ZEROS: PackedMersenne31AVX512 = PackedMersenne31AVX512(Mersenne31::new_array([
         0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000,
         0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff, 0x00000000, 0x7fffffff,
         0x00000000, 0x7fffffff,
-    ]);
+    ]));
 
-    const SPECIAL_VALS: [Mersenne31; WIDTH] = Mersenne31::new_array([
+    const SPECIAL_VALS: PackedMersenne31AVX512 = PackedMersenne31AVX512(Mersenne31::new_array([
         0x00000000, 0x7fffffff, 0x00000001, 0x7ffffffe, 0x00000002, 0x7ffffffd, 0x40000000,
         0x3fffffff, 0x00000000, 0x7fffffff, 0x00000001, 0x7ffffffe, 0x00000002, 0x7ffffffd,
         0x40000000, 0x3fffffff,
-    ]);
+    ]));
 
     test_packed_field!(
         crate::PackedMersenne31AVX512,
-        crate::PackedMersenne31AVX512(super::ZEROS),
-        crate::PackedMersenne31AVX512(super::SPECIAL_VALS)
+        &[super::ZEROS],
+        &[crate::PackedMersenne31AVX512::ONE],
+        super::SPECIAL_VALS
     );
 }

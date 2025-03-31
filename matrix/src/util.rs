@@ -4,8 +4,8 @@ use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_bits_len};
 use tracing::instrument;
 
-use crate::dense::{DenseMatrix, DenseStorage, RowMajorMatrix};
 use crate::Matrix;
+use crate::dense::{DenseMatrix, DenseStorage, RowMajorMatrix};
 
 #[instrument(level = "debug", skip_all)]
 pub fn reverse_matrix_index_bits<'a, F, S>(mat: &mut DenseMatrix<F, S>)
@@ -40,7 +40,9 @@ pub fn swap_rows<F: Clone + Send + Sync>(mat: &mut RowMajorMatrix<F>, i: usize, 
 ///
 /// SAFETY: The caller must ensure `i < j < h`, where `h` is the height of the matrix.
 pub(crate) unsafe fn swap_rows_raw<F>(mat: *mut F, w: usize, i: usize, j: usize) {
-    let row_i = core::slice::from_raw_parts_mut(mat.add(i * w), w);
-    let row_j = core::slice::from_raw_parts_mut(mat.add(j * w), w);
-    row_i.swap_with_slice(row_j);
+    unsafe {
+        let row_i = core::slice::from_raw_parts_mut(mat.add(i * w), w);
+        let row_j = core::slice::from_raw_parts_mut(mat.add(j * w), w);
+        row_i.swap_with_slice(row_j);
+    }
 }

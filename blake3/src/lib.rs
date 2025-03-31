@@ -26,7 +26,7 @@ impl CryptographicHasher<u8, [u8; 32]> for Blake3 {
         I: IntoIterator<Item = &'a [u8]>,
     {
         let mut hasher = blake3::Hasher::new();
-        for chunk in input.into_iter() {
+        for chunk in input {
             hasher.update(chunk);
         }
         hasher.finalize().into()

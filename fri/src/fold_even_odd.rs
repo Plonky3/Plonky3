@@ -2,8 +2,8 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_field::TwoAdicField;
-use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 use tracing::instrument;
@@ -31,7 +31,7 @@ pub fn fold_even_odd<F: TwoAdicField>(poly: Vec<F>, beta: F) -> Vec<F> {
     //                    + (1/2 - beta/2 g_inv^i) p(g^(n/2 + i))
     let m = RowMajorMatrix::new(poly, 2);
     let g_inv = F::two_adic_generator(log2_strict_usize(m.height()) + 1).inverse();
-    let one_half = F::TWO.inverse();
+    let one_half = F::ONE.halve();
     let half_beta = beta * one_half;
 
     // TODO: vectorize this (after we have packed extension fields)
@@ -57,7 +57,8 @@ mod tests {
     use itertools::izip;
     use p3_baby_bear::BabyBear;
     use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
-    use rand::{rng, Rng};
+    use rand::rngs::SmallRng;
+    use rand::{Rng, SeedableRng};
 
     use super::*;
 
@@ -65,7 +66,7 @@ mod tests {
     fn test_fold_even_odd() {
         type F = BabyBear;
 
-        let mut rng = rng();
+        let mut rng = SmallRng::seed_from_u64(1);
 
         let log_n = 10;
         let n = 1 << log_n;
@@ -74,10 +75,10 @@ mod tests {
         let dft = Radix2Dit::default();
         let evals = dft.dft(coeffs.clone());
 
-        let even_coeffs = coeffs.iter().cloned().step_by(2).collect_vec();
+        let even_coeffs = coeffs.iter().copied().step_by(2).collect_vec();
         let even_evals = dft.dft(even_coeffs);
 
-        let odd_coeffs = coeffs.iter().cloned().skip(1).step_by(2).collect_vec();
+        let odd_coeffs = coeffs.iter().copied().skip(1).step_by(2).collect_vec();
         let odd_evals = dft.dft(odd_coeffs);
 
         let beta = rng.random::<F>();

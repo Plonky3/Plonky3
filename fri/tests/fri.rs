@@ -1,5 +1,5 @@
 use core::cmp::Reverse;
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{CanSampleBits, DuplexChallenger, FieldChallenger};
@@ -7,10 +7,10 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_fri::{prover, verifier, FriConfig, TwoAdicFriGenericConfig};
+use p3_fri::{FriConfig, TwoAdicFriGenericConfig, prover, verifier};
+use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::reverse_matrix_index_bits;
-use p3_matrix::Matrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_util::log2_strict_usize;

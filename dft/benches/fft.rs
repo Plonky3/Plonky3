@@ -1,15 +1,16 @@
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::BabyBear;
 use p3_dft::{Radix2Bowers, Radix2Dit, Radix2DitParallel, TwoAdicSubgroupDft};
-use p3_field::extension::Complex;
 use p3_field::TwoAdicField;
+use p3_field::extension::Complex;
 use p3_goldilocks::Goldilocks;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_mersenne_31::{Mersenne31, Mersenne31ComplexRadix2Dit, Mersenne31Dft};
 use p3_monty_31::dft::RecursiveDft;
 use p3_util::pretty_name;
+use rand::SeedableRng;
 use rand::distr::{Distribution, StandardUniform};
-use rand::rng;
+use rand::rngs::SmallRng;
 
 fn bench_fft(c: &mut Criterion) {
     // log_sizes correspond to the sizes of DFT we want to benchmark;
@@ -58,7 +59,7 @@ where
     ));
     group.sample_size(10);
 
-    let mut rng = rng();
+    let mut rng = SmallRng::seed_from_u64(1);
     for n_log in log_sizes {
         let n = 1 << n_log;
 
@@ -85,7 +86,7 @@ where
     ));
     group.sample_size(10);
 
-    let mut rng = rng();
+    let mut rng = SmallRng::seed_from_u64(1);
     for n_log in log_sizes {
         let n = 1 << n_log;
 
@@ -113,7 +114,7 @@ where
     ));
     group.sample_size(10);
 
-    let mut rng = rng();
+    let mut rng = SmallRng::seed_from_u64(1);
     for n_log in log_sizes {
         let n = 1 << n_log;
 
@@ -142,7 +143,7 @@ where
     ));
     group.sample_size(10);
 
-    let mut rng = rng();
+    let mut rng = SmallRng::seed_from_u64(1);
     for n_log in log_sizes {
         let n = 1 << n_log;
 

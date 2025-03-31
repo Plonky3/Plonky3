@@ -194,8 +194,7 @@ mod tests {
         // Observe 12 elements.
         (0..12).for_each(|element| duplex_challenger.observe(G::from_u8(element as u8)));
 
-        let state_after_duplexing: Vec<_> = iter::repeat(G::ZERO)
-            .take(12)
+        let state_after_duplexing: Vec<_> = iter::repeat_n(G::ZERO, 12)
             .chain((0..12).map(G::from_u8).rev())
             .collect();
 

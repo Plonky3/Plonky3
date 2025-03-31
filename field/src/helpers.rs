@@ -1,4 +1,3 @@
-use alloc::vec;
 use alloc::vec::Vec;
 use core::iter::Sum;
 use core::mem::{ManuallyDrop, MaybeUninit};
@@ -10,14 +9,14 @@ use p3_maybe_rayon::prelude::{IntoParallelRefMutIterator, ParallelIterator};
 use crate::field::Field;
 use crate::{PackedValue, PrimeCharacteristicRing, PrimeField, PrimeField32, TwoAdicField};
 
-/// Computes `Z_H(x)`, where `Z_H` is the zerofier of a multiplicative subgroup of order `2^log_n`.
-pub fn two_adic_subgroup_zerofier<F: TwoAdicField>(log_n: usize, x: F) -> F {
+/// Computes `Z_H(x)`, where `Z_H` is the vanishing polynomial of a multiplicative subgroup of order `2^log_n`.
+pub fn two_adic_subgroup_vanishing_polynomial<F: TwoAdicField>(log_n: usize, x: F) -> F {
     x.exp_power_of_2(log_n) - F::ONE
 }
 
-/// Computes `Z_{sH}(x)`, where `Z_{sH}` is the zerofier of the given coset of a multiplicative
+/// Computes `Z_{sH}(x)`, where `Z_{sH}` is the vanishing polynomial of the given coset of a multiplicative
 /// subgroup of order `2^log_n`.
-pub fn two_adic_coset_zerofier<F: TwoAdicField>(log_n: usize, shift: F, x: F) -> F {
+pub fn two_adic_coset_vanishing_polynomial<F: TwoAdicField>(log_n: usize, shift: F, x: F) -> F {
     x.exp_power_of_2(log_n) - shift.exp_power_of_2(log_n)
 }
 
@@ -36,17 +35,6 @@ pub fn cyclic_subgroup_coset_known_order<F: Field>(
     order: usize,
 ) -> impl Iterator<Item = F> + Clone {
     generator.shifted_powers(shift).take(order)
-}
-
-#[must_use]
-pub fn add_vecs<F: Field>(v: Vec<F>, w: Vec<F>) -> Vec<F> {
-    assert_eq!(v.len(), w.len());
-    v.into_iter().zip(w).map(|(x, y)| x + y).collect()
-}
-
-pub fn sum_vecs<F: Field, I: Iterator<Item = Vec<F>>>(iter: I) -> Vec<F> {
-    iter.reduce(|v, w| add_vecs(v, w))
-        .expect("sum_vecs: empty iterator")
 }
 
 pub fn scale_vec<F: Field>(s: F, vec: Vec<F>) -> Vec<F> {
@@ -96,7 +84,7 @@ where
 // that has stabilized (More details in Rust issue: https://github.com/rust-lang/rust/issues/96097).
 //
 // Annoyingly, both transmute and transmute_copy fail here. The first because it cannot handle
-// const generics and the second due to interior mutability and the unability to use &mut in const
+// const generics and the second due to interior mutability and the inability to use &mut in const
 // functions.
 //
 // The solution is to implement the map [MaybeUninit<T>; D]) -> MaybeUninit<[T; D]>
@@ -140,66 +128,24 @@ pub const fn field_to_array<R: PrimeCharacteristicRing, const D: usize>(x: R) ->
     unsafe { HackyWorkAround::transpose(arr).assume_init() }
 }
 
-/// Naive polynomial multiplication.
-pub fn naive_poly_mul<R: PrimeCharacteristicRing>(a: &[R], b: &[R]) -> Vec<R> {
-    // Grade school algorithm
-    let mut product = vec![R::ZERO; a.len() + b.len() - 1];
-    for (i, c1) in a.iter().enumerate() {
-        for (j, c2) in b.iter().enumerate() {
-            product[i + j] += c1.clone() * c2.clone();
-        }
-    }
-    product
-}
-
-/// Expand a product of binomials `(x - roots[0])(x - roots[1])..` into polynomial coefficients.
-pub fn binomial_expand<R: PrimeCharacteristicRing>(roots: &[R]) -> Vec<R> {
-    let mut coeffs = vec![R::ZERO; roots.len() + 1];
-    coeffs[0] = R::ONE;
-    for (i, x) in roots.iter().enumerate() {
-        for j in (1..i + 2).rev() {
-            coeffs[j] = coeffs[j - 1].clone() - x.clone() * coeffs[j].clone();
-        }
-        coeffs[0] *= -x.clone();
-    }
-    coeffs
-}
-
-pub fn eval_poly<R: PrimeCharacteristicRing>(poly: &[R], x: R) -> R {
-    let mut acc = R::ZERO;
-    for coeff in poly.iter().rev() {
-        acc *= x.clone();
-        acc += coeff.clone();
-    }
-    acc
-}
-
 /// Given an element x from a 32 bit field F_P compute x/2.
 #[inline]
-pub fn halve_u32<const P: u32>(input: u32) -> u32 {
+pub const fn halve_u32<const P: u32>(input: u32) -> u32 {
     let shift = (P + 1) >> 1;
     let shr = input >> 1;
     let lo_bit = input & 1;
     let shr_corr = shr + shift;
-    if lo_bit == 0 {
-        shr
-    } else {
-        shr_corr
-    }
+    if lo_bit == 0 { shr } else { shr_corr }
 }
 
 /// Given an element x from a 64 bit field F_P compute x/2.
 #[inline]
-pub fn halve_u64<const P: u64>(input: u64) -> u64 {
+pub const fn halve_u64<const P: u64>(input: u64) -> u64 {
     let shift = (P + 1) >> 1;
     let shr = input >> 1;
     let lo_bit = input & 1;
     let shr_corr = shr + shift;
-    if lo_bit == 0 {
-        shr
-    } else {
-        shr_corr
-    }
+    if lo_bit == 0 { shr } else { shr_corr }
 }
 
 /// Given a slice of SF elements, reduce them to a TF element using a 2^32-base decomposition.
@@ -228,10 +174,10 @@ pub fn split_32<SF: PrimeField, TF: PrimeField32>(val: SF, n: usize) -> Vec<TF> 
         let mask: BigUint = po2.clone() - BigUint::from(1u128);
         let digit: BigUint = val.clone() & mask;
         let digit_u64s = digit.to_u64_digits();
-        if !digit_u64s.is_empty() {
-            result.push(TF::from_int(digit_u64s[0]));
-        } else {
+        if digit_u64s.is_empty() {
             result.push(TF::ZERO)
+        } else {
+            result.push(TF::from_int(digit_u64s[0]));
         }
         val /= po2.clone();
     }

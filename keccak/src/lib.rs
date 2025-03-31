@@ -11,7 +11,7 @@
 )]
 
 use p3_symmetric::{CryptographicHasher, CryptographicPermutation, Permutation};
-use tiny_keccak::{keccakf, Hasher, Keccak};
+use tiny_keccak::{Hasher, Keccak, keccakf};
 
 #[cfg(all(
     feature = "nightly-features",
@@ -133,7 +133,7 @@ impl CryptographicHasher<u8, [u8; 32]> for Keccak256Hash {
         I: IntoIterator<Item = &'a [u8]>,
     {
         let mut hasher = Keccak::v256();
-        for chunk in input.into_iter() {
+        for chunk in input {
             hasher.update(chunk);
         }
 

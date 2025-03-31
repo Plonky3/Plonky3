@@ -4,26 +4,28 @@ use alloc::vec::Vec;
 use core::fmt::Debug;
 use core::marker::PhantomData;
 
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace, TwoAdicMultiplicativeCoset};
+use p3_commit::{Mmcs, OpenedValues, Pcs};
 use p3_dft::TwoAdicSubgroupDft;
+use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, dot_product, ExtensionField,
-    Field, TwoAdicField,
+    ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse,
+    cyclic_subgroup_coset_known_order, dot_product,
 };
 use p3_interpolation::interpolate_coset;
-use p3_matrix::bitrev::{BitReversableMatrix, BitReversalPerm, BitReversedMatrixView};
+use p3_matrix::bitrev::{BitReversalPerm, BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
 use p3_matrix::{Dimensions, Matrix};
 use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
+use p3_util::zip_eq::zip_eq;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
 use serde::{Deserialize, Serialize};
 use tracing::{info_span, instrument};
 
 use crate::verifier::{self, FriError};
-use crate::{prover, FriConfig, FriGenericConfig, FriProof};
+use crate::{FriConfig, FriGenericConfig, FriProof, prover};
 
 #[derive(Debug)]
 pub struct TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
@@ -148,11 +150,9 @@ where
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
-        let log_n = log2_strict_usize(degree);
-        TwoAdicMultiplicativeCoset {
-            log_n,
-            shift: Val::ONE,
-        }
+        // This panics if (and only if) `degree` is not a power of 2 or `degree`
+        // > `1 << Val::TWO_ADICITY`.
+        TwoAdicMultiplicativeCoset::new(Val::ONE, log2_strict_usize(degree)).unwrap()
     }
 
     fn commit(
@@ -163,7 +163,7 @@ where
             .into_iter()
             .map(|(domain, evals)| {
                 assert_eq!(domain.size(), evals.height());
-                let shift = Val::GENERATOR / domain.shift;
+                let shift = Val::GENERATOR / domain.shift();
                 // Commit to the bit-reversed LDE.
                 self.dft
                     .coset_lde_batch(evals, self.fri.log_blowup, shift)
@@ -182,7 +182,7 @@ where
         domain: Self::Domain,
     ) -> Self::EvaluationsOnDomain<'a> {
         // todo: handle extrapolation for LDEs we don't have
-        assert_eq!(domain.shift, Val::GENERATOR);
+        assert_eq!(domain.shift(), Val::GENERATOR);
         let lde = self.mmcs.get_matrices(prover_data)[idx];
         assert!(lde.height() >= domain.size());
         lde.split_rows(domain.size()).0.bit_reverse_rows()
@@ -398,9 +398,9 @@ where
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
         // Write evaluations to challenger
-        for (_, round) in rounds.iter() {
-            for (_, mat) in round.iter() {
-                for (_, point) in mat.iter() {
+        for (_, round) in &rounds {
+            for (_, mat) in round {
+                for (_, point) in mat {
                     point
                         .iter()
                         .for_each(|&opening| challenger.observe_algebra_element(opening));
@@ -423,7 +423,9 @@ where
             // log_height -> (alpha_pow, reduced_opening)
             let mut reduced_openings = BTreeMap::<usize, (Challenge, Challenge)>::new();
 
-            for (batch_opening, (batch_commit, mats)) in izip!(input_proof, &rounds) {
+            for (batch_opening, (batch_commit, mats)) in
+                zip_eq(input_proof, &rounds, FriError::InvalidProofShape)?
+            {
                 let batch_heights = mats
                     .iter()
                     .map(|(domain, _)| domain.size() << self.fri.log_blowup)
@@ -445,7 +447,7 @@ where
                         reduced_index,
                         &batch_opening.opened_values,
                         &batch_opening.opening_proof,
-                    )?;
+                    )
                 } else {
                     // Empty batch?
                     self.mmcs.verify_batch(
@@ -454,12 +456,15 @@ where
                         0,
                         &batch_opening.opened_values,
                         &batch_opening.opening_proof,
-                    )?;
+                    )
                 }
+                .map_err(FriError::InputError)?;
 
-                for (mat_opening, (mat_domain, mat_points_and_values)) in
-                    izip!(&batch_opening.opened_values, mats)
-                {
+                for (mat_opening, (mat_domain, mat_points_and_values)) in zip_eq(
+                    &batch_opening.opened_values,
+                    mats,
+                    FriError::InvalidProofShape,
+                )? {
                     let log_height = log2_strict_usize(mat_domain.size()) + self.fri.log_blowup;
 
                     let bits_reduced = log_global_max_height - log_height;
@@ -475,7 +480,9 @@ where
                         .or_insert((Challenge::ONE, Challenge::ZERO));
 
                     for (z, ps_at_z) in mat_points_and_values {
-                        for (&p_at_x, &p_at_z) in izip!(mat_opening, ps_at_z) {
+                        for (&p_at_x, &p_at_z) in
+                            zip_eq(mat_opening, ps_at_z, FriError::InvalidProofShape)?
+                        {
                             let quotient = (-p_at_z + p_at_x) / (-*z + x);
                             *ro += *alpha_pow * quotient;
                             *alpha_pow *= alpha;

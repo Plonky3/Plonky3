@@ -4,8 +4,8 @@ use p3_field::{Algebra, Field, TwoAdicField};
 use p3_symmetric::Permutation;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
-use crate::butterflies::{dif_butterfly, dit_butterfly, twiddle_free_butterfly};
 use crate::MdsPermutation;
+use crate::butterflies::{dif_butterfly, dit_butterfly, twiddle_free_butterfly};
 
 /// A Reed-Solomon based MDS permutation.
 ///
@@ -150,7 +150,8 @@ mod tests {
     use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
     use p3_field::{Field, PrimeCharacteristicRing};
     use p3_symmetric::Permutation;
-    use rand::{rng, Rng};
+    use rand::rngs::SmallRng;
+    use rand::{Rng, SeedableRng};
 
     use crate::coset_mds::CosetMds;
 
@@ -159,7 +160,7 @@ mod tests {
         type F = BabyBear;
         const N: usize = 8;
 
-        let mut rng = rng();
+        let mut rng = SmallRng::seed_from_u64(1);
         let mut arr: [F; N] = rng.random();
 
         let shift = F::GENERATOR;

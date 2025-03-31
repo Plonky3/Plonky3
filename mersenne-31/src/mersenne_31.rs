@@ -11,12 +11,12 @@ use num_bigint::BigUint;
 use p3_field::exponentiation::exp_1717986917;
 use p3_field::integers::QuotientMap;
 use p3_field::{
-    halve_u32, quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int, Field,
-    InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField32, PrimeField64,
+    Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
+    PrimeField32, PrimeField64, halve_u32, quotient_map_large_iint, quotient_map_large_uint,
+    quotient_map_small_int,
 };
-use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -32,20 +32,37 @@ pub struct Mersenne31 {
 }
 
 impl Mersenne31 {
+    /// Convert a u32 element into a Mersenne31 element.
+    ///
+    /// # Safety
+    /// The element must lie in the range: `[0, 2^31 - 1]`.
     #[inline]
-    pub const fn new(value: u32) -> Self {
+    pub(crate) const fn new(value: u32) -> Self {
         debug_assert!((value >> 31) == 0);
         Self { value }
+    }
+
+    /// Convert a u32 element into a Mersenne31 element.
+    ///
+    /// # Panics
+    /// This will panic if the element does not lie in the range: `[0, 2^31 - 1]`.
+    #[inline]
+    pub const fn new_checked(value: u32) -> Option<Self> {
+        if (value >> 31) == 0 {
+            Some(Self { value })
+        } else {
+            None
+        }
     }
 
     /// Convert a constant `u32` array into a constant array of field elements.
     /// This allows inputs to be `> 2^31`, and just reduces them `mod P`.
     ///
-    /// This means that this will be slower than `array.map(Mersenne31::new)` but
+    /// This means that this will be slower than `array.map(Mersenne31::new_checked)` but
     /// has the advantage of being able to be used in `const` environments.
     #[inline]
     pub const fn new_array<const N: usize>(input: [u32; N]) -> [Self; N] {
-        let mut output = [Mersenne31::ZERO; N];
+        let mut output = [Self::ZERO; N];
         let mut i = 0;
         while i < N {
             output[i].value = input[i] % P;
@@ -122,7 +139,7 @@ impl<'a> Deserialize<'a> for Mersenne31 {
         let val = u32::deserialize(d)?;
         // Ensure that `val` satisfies our invariant. i.e. Not necessarily canonical, but must fit in 31 bits.
         if val <= P {
-            Ok(Mersenne31::new(val))
+            Ok(Self::new(val))
         } else {
             Err(D::Error::custom("Value is out of range"))
         }
@@ -157,6 +174,27 @@ impl PrimeCharacteristicRing for Mersenne31 {
         let right = self.value >> (31 - exp);
         let rotated = left | right;
         Self::new(rotated)
+    }
+
+    #[inline]
+    fn sum_array<const N: usize>(input: &[Self]) -> Self {
+        assert_eq!(N, input.len());
+        // Benchmarking shows that for N <= 5 it's faster to sum the elements directly
+        // but for N > 5 it's faster to use the .sum() methods which passes through u64's
+        // allowing for delayed reductions.
+        match N {
+            0 => Self::ZERO,
+            1 => input[0],
+            2 => input[0] + input[1],
+            3 => input[0] + input[1] + input[2],
+            4 => (input[0] + input[1]) + (input[2] + input[3]),
+            5 => {
+                let lhs = input[0] + input[1];
+                let rhs = input[2] + input[3];
+                lhs + rhs + input[4]
+            }
+            _ => input.iter().copied().sum(),
+        }
     }
 
     #[inline]
@@ -252,7 +290,7 @@ impl Field for Mersenne31 {
 
     #[inline]
     fn halve(&self) -> Self {
-        Mersenne31::new(halve_u32::<P>(self.value))
+        Self::new(halve_u32::<P>(self.value))
     }
 
     #[inline]
@@ -295,12 +333,8 @@ impl QuotientMap<u32> for Mersenne31 {
     ///
     /// Returns none if the input does not lie in the range `[0, 2^31 - 1]`.
     #[inline]
-    fn from_canonical_checked(int: u32) -> Option<Mersenne31> {
-        if int < Self::ORDER_U32 {
-            Some(Self::new(int))
-        } else {
-            None
-        }
+    fn from_canonical_checked(int: u32) -> Option<Self> {
+        (int < Self::ORDER_U32).then(|| Self::new(int))
     }
 
     /// Convert a given `u32` integer into an element of the `Mersenne31` field.
@@ -308,7 +342,7 @@ impl QuotientMap<u32> for Mersenne31 {
     /// # Safety
     /// The input must lie in the range: `[0, 2^31 - 1]`.
     #[inline(always)]
-    unsafe fn from_canonical_unchecked(int: u32) -> Mersenne31 {
+    unsafe fn from_canonical_unchecked(int: u32) -> Self {
         debug_assert!(int < Self::ORDER_U32);
         Self::new(int)
     }
@@ -321,7 +355,7 @@ impl QuotientMap<i32> for Mersenne31 {
         if int >= 0 {
             Self::new(int as u32)
         } else if int > (-1 << 31) {
-            Self::new(Mersenne31::ORDER_U32.wrapping_add_signed(int))
+            Self::new(Self::ORDER_U32.wrapping_add_signed(int))
         } else {
             // The only other option is int = -(2^31) = -1 mod p.
             Self::NEG_ONE
@@ -332,14 +366,12 @@ impl QuotientMap<i32> for Mersenne31 {
     ///
     /// Returns none if the input does not lie in the range `(-2^30, 2^30)`.
     #[inline]
-    fn from_canonical_checked(int: i32) -> Option<Mersenne31> {
+    fn from_canonical_checked(int: i32) -> Option<Self> {
         const TWO_EXP_30: i32 = 1 << 30;
         const NEG_TWO_EXP_30_PLUS_1: i32 = (-1 << 30) + 1;
         match int {
             0..TWO_EXP_30 => Some(Self::new(int as u32)),
-            NEG_TWO_EXP_30_PLUS_1..0 => {
-                Some(Self::new(Mersenne31::ORDER_U32.wrapping_add_signed(int)))
-            }
+            NEG_TWO_EXP_30_PLUS_1..0 => Some(Self::new(Self::ORDER_U32.wrapping_add_signed(int))),
             _ => None,
         }
     }
@@ -349,11 +381,11 @@ impl QuotientMap<i32> for Mersenne31 {
     /// # Safety
     /// The input must lie in the range: `[1 - 2^31, 2^31 - 1]`.
     #[inline(always)]
-    unsafe fn from_canonical_unchecked(int: i32) -> Mersenne31 {
+    unsafe fn from_canonical_unchecked(int: i32) -> Self {
         if int >= 0 {
             Self::new(int as u32)
         } else {
-            Self::new(Mersenne31::ORDER_U32.wrapping_add_signed(int))
+            Self::new(Self::ORDER_U32.wrapping_add_signed(int))
         }
     }
 }
@@ -507,7 +539,8 @@ pub(crate) fn from_u62(input: u64) -> Mersenne31 {
 
 #[cfg(test)]
 mod tests {
-    use p3_field::{Field, InjectiveMonomial, PermutationMonomial, PrimeCharacteristicRing};
+    use num_bigint::BigUint;
+    use p3_field::{InjectiveMonomial, PermutationMonomial, PrimeCharacteristicRing};
     use p3_field_testing::{
         test_field, test_prime_field, test_prime_field_32, test_prime_field_64,
     };
@@ -515,26 +548,6 @@ mod tests {
     use crate::Mersenne31;
 
     type F = Mersenne31;
-
-    #[test]
-    fn mul_2exp_u64() {
-        // 1 * 2^0 = 1.
-        assert_eq!(F::ONE.mul_2exp_u64(0), F::ONE);
-        // 2 * 2^30 = 2^31 = 1.
-        assert_eq!(F::TWO.mul_2exp_u64(30), F::ONE);
-        // 5 * 2^2 = 20.
-        assert_eq!(F::new(5).mul_2exp_u64(2), F::new(20));
-    }
-
-    #[test]
-    fn div_2exp_u64() {
-        // 1 / 2^0 = 1.
-        assert_eq!(F::ONE.div_2exp_u64(0), F::ONE);
-        // 2 / 2^0 = 2.
-        assert_eq!(F::TWO.div_2exp_u64(0), F::TWO);
-        // 32 / 2^5 = 1.
-        assert_eq!(F::new(32).div_2exp_u64(5), F::new(1));
-    }
 
     #[test]
     fn exp_root() {
@@ -548,7 +561,30 @@ mod tests {
         assert_eq!(F::TWO.injective_exp_n().injective_exp_root_n(), F::TWO);
     }
 
-    test_field!(crate::Mersenne31);
+    // Mersenne31 has a redundant representation of Zero but no redundant representation of One.
+    const ZEROS: [Mersenne31; 2] = [Mersenne31::ZERO, Mersenne31::new((1_u32 << 31) - 1)];
+    const ONES: [Mersenne31; 1] = [Mersenne31::ONE];
+
+    // Get the prime factorization of the order of the multiplicative group.
+    // i.e. the prime factorization of P - 1.
+    fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 7] {
+        [
+            (BigUint::from(2u8), 1),
+            (BigUint::from(3u8), 2),
+            (BigUint::from(7u8), 1),
+            (BigUint::from(11u8), 1),
+            (BigUint::from(31u8), 1),
+            (BigUint::from(151u8), 1),
+            (BigUint::from(331u16), 1),
+        ]
+    }
+
+    test_field!(
+        crate::Mersenne31,
+        &super::ZEROS,
+        &super::ONES,
+        &super::multiplicative_group_prime_factorization()
+    );
     test_prime_field!(crate::Mersenne31);
     test_prime_field_64!(crate::Mersenne31);
     test_prime_field_32!(crate::Mersenne31);

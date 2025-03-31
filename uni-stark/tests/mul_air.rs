@@ -1,28 +1,29 @@
-use std::fmt::Debug;
-use std::marker::PhantomData;
+use core::fmt::Debug;
+use core::marker::PhantomData;
 
 use itertools::Itertools;
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
-use p3_commit::testing::TrivialPcs;
 use p3_commit::ExtensionMmcs;
+use p3_commit::testing::TrivialPcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_fri::{FriConfig, TwoAdicFriPcs};
 use p3_keccak::Keccak256Hash;
-use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32, TruncatedPermutation,
 };
-use p3_uni_stark::{prove, verify, StarkConfig, StarkGenericConfig, Val};
+use p3_uni_stark::{StarkConfig, StarkGenericConfig, Val, prove, verify};
 use rand::distr::{Distribution, StandardUniform};
-use rand::{rng, Rng};
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 
 /// How many `a * b = c` operations to do per row in the AIR.
 const REPETITIONS: usize = 20; // This should be < 255 so it can fit into a u8.
@@ -43,7 +44,7 @@ pub struct MulAir {
 
 impl Default for MulAir {
     fn default() -> Self {
-        MulAir {
+        Self {
             degree: 3,
             uses_boundary_constraints: true,
             uses_transition_constraints: true,
@@ -56,7 +57,7 @@ impl MulAir {
     where
         StandardUniform: Distribution<F>,
     {
-        let mut rng = rng();
+        let mut rng = SmallRng::seed_from_u64(1);
         let mut trace_values = F::zero_vec(rows * TRACE_WIDTH);
         for (i, (a, b, c)) in trace_values.iter_mut().tuples().enumerate() {
             let row = i / REPETITIONS;
@@ -133,7 +134,7 @@ where
     let deserialized_proof =
         postcard::from_bytes(&serialized_proof).expect("unable to deserialize proof");
 
-    let mut v_challenger = challenger.clone();
+    let mut v_challenger = challenger;
     verify(
         &config,
         &air,
@@ -148,7 +149,8 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), impl Debug> {
     type Challenge = BinomialExtensionField<Val, 4>;
 
     type Perm = Poseidon2BabyBear<16>;
-    let perm = Perm::new_from_rng_128(&mut rng());
+    let mut rng = SmallRng::seed_from_u64(1);
+    let perm = Perm::new_from_rng_128(&mut rng);
 
     type Dft = Radix2DitParallel<Val>;
     let dft = Dft::default();
@@ -193,7 +195,8 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     type Challenge = BinomialExtensionField<Val, 4>;
 
     type Perm = Poseidon2BabyBear<16>;
-    let perm = Perm::new_from_rng_128(&mut rng());
+    let mut rng = SmallRng::seed_from_u64(1);
+    let perm = Perm::new_from_rng_128(&mut rng);
 
     type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
     let hash = MyHash::new(perm.clone());

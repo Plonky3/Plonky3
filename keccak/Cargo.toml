@@ -1,7 +1,7 @@
 [package]
 name = "p3-keccak"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [features]
@@ -11,7 +11,6 @@ nightly-features = []
 p3-field.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
-itertools.workspace = true
 tiny-keccak = { workspace = true, features = ["keccak"] }
 
 [dev-dependencies]
@@ -33,4 +32,3 @@ harness = false
 #[[bench]]
 #name = "bench_avx2split"
 #harness = false
-

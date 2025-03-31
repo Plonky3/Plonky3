@@ -29,7 +29,8 @@ mod tests {
 
     test_packed_field!(
         crate::PackedKoalaBearAVX512,
-        crate::PackedKoalaBearAVX512::ZERO,
+        &[crate::PackedKoalaBearAVX512::ZERO],
+        &[crate::PackedKoalaBearAVX512::ONE],
         p3_monty_31::PackedMontyField31AVX512::<crate::KoalaBearParameters>(super::SPECIAL_VALS)
     );
 }

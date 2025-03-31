@@ -1,13 +1,13 @@
-use std::any::type_name;
+use core::any::type_name;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_blake3::Blake3;
 use p3_commit::Mmcs;
 use p3_field::{Field, PackedField, PackedValue};
 use p3_keccak::Keccak256Hash;
-use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_mds::integrated_coset_mds::IntegratedCosetMds;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_rescue::Rescue;
@@ -15,10 +15,11 @@ use p3_symmetric::{
     CompressionFunctionFromHasher, CryptographicHasher, PaddingFreeSponge,
     PseudoCompressionFunction, SerializingHasher32, TruncatedPermutation,
 };
+use rand::SeedableRng;
 use rand::distr::{Distribution, StandardUniform};
-use rand::rng;
-use serde::de::DeserializeOwned;
+use rand::rngs::SmallRng;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 fn bench_merkle_trees(criterion: &mut Criterion) {
     bench_bb_poseidon2(criterion);
@@ -30,8 +31,9 @@ fn bench_merkle_trees(criterion: &mut Criterion) {
 fn bench_bb_poseidon2(criterion: &mut Criterion) {
     type F = BabyBear;
 
+    let mut rng = SmallRng::seed_from_u64(1);
     type Perm = Poseidon2BabyBear<16>;
-    let perm = Perm::new_from_rng_128(&mut rng());
+    let perm = Perm::new_from_rng_128(&mut rng);
 
     type H = PaddingFreeSponge<Perm, 16, 8, 8>;
     let h = H::new(perm.clone());
@@ -54,7 +56,8 @@ fn bench_bb_rescue(criterion: &mut Criterion) {
     let mds = Mds::default();
 
     type Perm = Rescue<F, Mds, 16, 7>;
-    let round_constants = Perm::get_round_constants_from_rng(8, &mut rng());
+    let mut rng = SmallRng::seed_from_u64(1);
+    let round_constants = Perm::get_round_constants_from_rng(8, &mut rng);
     let perm = Perm::new(8, round_constants, mds);
 
     type H = PaddingFreeSponge<Perm, 16, 8, 8>;
@@ -115,7 +118,8 @@ where
     const ROWS: usize = 1 << 15;
     const COLS: usize = 135;
 
-    let matrix = RowMajorMatrix::<P::Scalar>::rand(&mut rng(), ROWS, COLS);
+    let mut rng = SmallRng::seed_from_u64(1);
+    let matrix = RowMajorMatrix::<P::Scalar>::rand(&mut rng, ROWS, COLS);
     let dims = matrix.dimensions();
     let leaves = vec![matrix];
 
@@ -151,8 +155,9 @@ where
     const ROWS: usize = 1 << 15;
     const COLS: usize = 135;
 
-    let matrix_1 = RowMajorMatrix::<P::Scalar>::rand(&mut rng(), ROWS + 1, COLS);
-    let matrix_2 = RowMajorMatrix::<P::Scalar>::rand(&mut rng(), ROWS / 2 + 1, COLS);
+    let mut rng = SmallRng::seed_from_u64(1);
+    let matrix_1 = RowMajorMatrix::<P::Scalar>::rand(&mut rng, ROWS + 1, COLS);
+    let matrix_2 = RowMajorMatrix::<P::Scalar>::rand(&mut rng, ROWS / 2 + 1, COLS);
     let dims = vec![matrix_1.dimensions(), matrix_2.dimensions()];
     let leaves = vec![matrix_1, matrix_2];
 

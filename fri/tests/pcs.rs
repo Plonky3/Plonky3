@@ -1,4 +1,4 @@
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{CanObserve, DuplexChallenger, FieldChallenger};
 use p3_commit::{ExtensionMmcs, Pcs, PolynomialSpace};
@@ -185,7 +185,7 @@ mod babybear_fri_pcs {
         };
 
         let pcs = MyPcs::new(Dft::default(), val_mmcs, fri_config);
-        (pcs, Challenger::new(perm.clone()))
+        (pcs, Challenger::new(perm))
     }
 
     mod blowup_1 {
@@ -197,7 +197,7 @@ mod babybear_fri_pcs {
 }
 
 mod m31_fri_pcs {
-    use std::marker::PhantomData;
+    use core::marker::PhantomData;
 
     use p3_challenger::{HashChallenger, SerializingChallenger32};
     use p3_circle::CirclePcs;

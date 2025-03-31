@@ -1,13 +1,13 @@
 use alloc::vec::Vec;
 use core::arch::x86_64::{self, __m512i};
 
-use p3_field::PrimeField32;
+use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_poseidon2::{
-    mds_light_permutation, sum_15, sum_23, ExternalLayer, ExternalLayerConstants,
-    ExternalLayerConstructor, InternalLayer, InternalLayerConstructor, MDSMat4,
+    ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, InternalLayer,
+    InternalLayerConstructor, MDSMat4, mds_light_permutation,
 };
 
-use crate::{exp5, Mersenne31, PackedMersenne31AVX512, P};
+use crate::{Mersenne31, P, PackedMersenne31AVX512, exp5};
 
 /// The internal layers of the Poseidon2 permutation for Mersenne31.
 ///
@@ -59,7 +59,7 @@ fn convert_to_vec_neg_form(input: i32) -> __m512i {
 
 impl Poseidon2InternalLayerMersenne31 {
     /// Construct an instance of Poseidon2InternalLayerMersenne31 from a vector containing
-    /// the constants for each round. Internally, the constants are transformed into th
+    /// the constants for each round. Internally, the constants are transformed into the
     /// {-P, ..., 0} representation instead of the standard {0, ..., P} one.
     fn new_from_constants(internal_constants: Vec<Mersenne31>) -> Self {
         let packed_internal_constants = internal_constants
@@ -74,7 +74,7 @@ impl Poseidon2InternalLayerMersenne31 {
 }
 
 impl<const WIDTH: usize> Poseidon2ExternalLayerMersenne31<WIDTH> {
-    /// Construct an instance of Poseidon2ExternalLayerMersenne31 from a array of
+    /// Construct an instance of Poseidon2ExternalLayerMersenne31 from an array of
     /// vectors containing the constants for each round. Internally, the constants
     ///  are transformed into the {-P, ..., 0} representation instead of the standard {0, ..., P} one.
     fn new_from_constants(external_constants: ExternalLayerConstants<Mersenne31, WIDTH>) -> Self {
@@ -194,7 +194,7 @@ fn diagonal_mul_24(state: &mut [PackedMersenne31AVX512; 24]) {
 
 /// Compute the map x -> (x + rc)^5 on Mersenne-31 field elements.
 /// x must be represented as a value in {0..P}.
-/// rc mut be represented as a value in {-P, ..., 0}.
+/// rc must be represented as a value in {-P, ..., 0}.
 /// If the inputs do not conform to these representations, the result is undefined.
 /// The output will be represented as a value in {0..P}.
 #[inline(always)]
@@ -215,9 +215,9 @@ fn add_rc_and_sbox(input: PackedMersenne31AVX512, rc: __m512i) -> PackedMersenne
 #[inline(always)]
 fn internal_16(state: &mut [PackedMersenne31AVX512; 16], rc: __m512i) {
     state[0] = add_rc_and_sbox(state[0], rc);
-    let sum_non_0 = sum_15(&state[1..]);
-    let sum = sum_non_0 + state[0];
-    state[0] = sum_non_0 - state[0];
+    let sum_tail = PackedMersenne31AVX512::sum_array::<15>(&state[1..]);
+    let sum = sum_tail + state[0];
+    state[0] = sum_tail - state[0];
     diagonal_mul_16(state);
     state[1..].iter_mut().for_each(|x| *x += sum);
 }
@@ -235,9 +235,9 @@ impl InternalLayer<PackedMersenne31AVX512, 16, 5> for Poseidon2InternalLayerMers
 #[inline(always)]
 fn internal_24(state: &mut [PackedMersenne31AVX512; 24], rc: __m512i) {
     state[0] = add_rc_and_sbox(state[0], rc);
-    let sum_non_0 = sum_23(&state[1..]);
-    let sum = sum_non_0 + state[0];
-    state[0] = sum_non_0 - state[0];
+    let sum_tail = PackedMersenne31AVX512::sum_array::<23>(&state[1..]);
+    let sum = sum_tail + state[0];
+    state[0] = sum_tail - state[0];
     diagonal_mul_24(state);
     state[1..].iter_mut().for_each(|x| *x += sum);
 }
@@ -285,7 +285,8 @@ impl<const WIDTH: usize> ExternalLayer<PackedMersenne31AVX512, WIDTH, 5>
 #[cfg(test)]
 mod tests {
     use p3_symmetric::Permutation;
-    use rand::Rng;
+    use rand::rngs::SmallRng;
+    use rand::{Rng, SeedableRng};
 
     use super::*;
     use crate::Poseidon2Mersenne31;
@@ -297,7 +298,7 @@ mod tests {
     /// Test that the output is the same as the scalar version on a random input of length 16.
     #[test]
     fn test_avx512_poseidon2_width_16() {
-        let mut rng = rand::rng();
+        let mut rng = SmallRng::seed_from_u64(1);
 
         // Our Poseidon2 implementation.
         let poseidon2 = Perm16::new_from_rng_128(&mut rng);
@@ -318,7 +319,7 @@ mod tests {
     /// Test that the output is the same as the scalar version on a random input of length 24.
     #[test]
     fn test_avx512_poseidon2_width_24() {
-        let mut rng = rand::rng();
+        let mut rng = SmallRng::seed_from_u64(1);
 
         // Our Poseidon2 implementation.
         let poseidon2 = Perm24::new_from_rng_128(&mut rng);

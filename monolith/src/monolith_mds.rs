@@ -2,8 +2,8 @@
 //! With significant inspiration from https://extgit.iaik.tugraz.at/krypto/zkfriendlyhashzoo/
 
 use p3_field::PrimeField32;
-use p3_mds::util::apply_circulant;
 use p3_mds::MdsPermutation;
+use p3_mds::util::apply_circulant;
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::Permutation;
 use sha3::digest::{ExtendableOutput, Update};
@@ -30,11 +30,11 @@ impl<const WIDTH: usize, const NUM_ROUNDS: usize> Permutation<[Mersenne31; WIDTH
             apply_circulant(&matrix, input)
         } else {
             let mut shake = Shake128::default();
-            shake.update("Monolith".as_bytes());
+            shake.update(b"Monolith");
             shake.update(&[WIDTH as u8, NUM_ROUNDS as u8]);
             shake.update(&Mersenne31::ORDER_U32.to_le_bytes());
             shake.update(&[16, 15]);
-            shake.update("MDS".as_bytes());
+            shake.update(b"MDS");
             let mut shake_finalized = shake.finalize_xof();
             apply_cauchy_mds_matrix(&mut shake_finalized, input)
         }

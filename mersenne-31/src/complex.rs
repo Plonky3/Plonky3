@@ -4,8 +4,8 @@
 //! Note that X^2 + 1 is irreducible over p = Mersenne31 field because
 //! kronecker(-1, p) = -1, that is, -1 is not square in F_p.
 
-use p3_field::extension::{Complex, ComplexExtendable, HasTwoAdicBinomialExtension};
 use p3_field::PrimeCharacteristicRing;
+use p3_field::extension::{Complex, ComplexExtendable, HasTwoAdicBinomialExtension};
 
 use crate::Mersenne31;
 
@@ -18,8 +18,7 @@ impl ComplexExtendable for Mersenne31 {
     // sage: F2.<u> = F.extension(x^2 + 1)
     // sage: F2.multiplicative_generator()
     // u + 12
-    const COMPLEX_GENERATOR: Complex<Self> =
-        Complex::new_complex(Mersenne31::new(12), Mersenne31::ONE);
+    const COMPLEX_GENERATOR: Complex<Self> = Complex::new_complex(Self::new(12), Self::ONE);
 
     fn circle_two_adic_generator(bits: usize) -> Complex<Self> {
         // Generator of the whole 2^TWO_ADICITY group
@@ -31,8 +30,7 @@ impl ComplexExtendable for Mersenne31 {
         // 1584694829*u + 311014874
         // sage: assert(g.multiplicative_order() == 2^31)
         // sage: assert(g.norm() == 1)
-        let base =
-            Complex::new_complex(Mersenne31::new(311_014_874), Mersenne31::new(1_584_694_829));
+        let base = Complex::new_complex(Self::new(311_014_874), Self::new(1_584_694_829));
         base.exp_power_of_2(Self::CIRCLE_TWO_ADICITY - bits)
     }
 }
@@ -51,16 +49,14 @@ impl HasTwoAdicBinomialExtension<2> for Mersenne31 {
         // sage: g = F2.multiplicative_generator()^((p^2 - 1) / 2^32); g
         // 1117296306*u + 1166849849
         // sage: assert(g.multiplicative_order() == 2^32)
-        let base = Complex::<Self>::new_complex(
-            Mersenne31::new(1_166_849_849),
-            Mersenne31::new(1_117_296_306),
-        );
+        let base = Complex::<Self>::new_complex(Self::new(1_166_849_849), Self::new(1_117_296_306));
         base.exp_power_of_2(Self::EXT_TWO_ADICITY - bits).to_array()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use num_bigint::BigUint;
     use p3_field::PrimeField32;
     use p3_field_testing::{test_field, test_two_adic_field};
 
@@ -169,6 +165,30 @@ mod tests {
         );
     }
 
-    test_field!(p3_field::extension::Complex<crate::Mersenne31>);
+    // There is a redundant representation of zero but we already tested it
+    // when testing the base field.
+    const ZEROS: [Fi; 1] = [Fi::ZERO];
+    const ONES: [Fi; 1] = [Fi::ONE];
+
+    // Get the prime factorization of the order of the multiplicative group.
+    // i.e. the prime factorization of P^2 - 1.
+    fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 7] {
+        [
+            (BigUint::from(2u8), 32),
+            (BigUint::from(3u8), 2),
+            (BigUint::from(7u8), 1),
+            (BigUint::from(11u8), 1),
+            (BigUint::from(31u8), 1),
+            (BigUint::from(151u8), 1),
+            (BigUint::from(331u16), 1),
+        ]
+    }
+
+    test_field!(
+        super::Fi,
+        &super::ZEROS,
+        &super::ONES,
+        &super::multiplicative_group_prime_factorization()
+    );
     test_two_adic_field!(p3_field::extension::Complex<crate::Mersenne31>);
 }

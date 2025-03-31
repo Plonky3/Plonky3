@@ -8,8 +8,9 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::stack::HorizontalPair;
 use p3_matrix::{Dimensions, Matrix};
 use p3_symmetric::{CryptographicHasher, Hash, PseudoCompressionFunction};
-use rand::distr::{Distribution, StandardUniform};
+use p3_util::zip_eq::zip_eq;
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -125,9 +126,7 @@ where
     ) -> Result<(), Self::Error> {
         let (salts, siblings) = proof;
 
-        let opened_salted_values = opened_values
-            .iter()
-            .zip(salts.iter())
+        let opened_salted_values = zip_eq(opened_values, salts, MerkleTreeError::WrongBatchSize)?
             .map(|(opened, salt)| opened.iter().chain(salt.iter()).copied().collect_vec())
             .collect_vec();
 
@@ -144,11 +143,11 @@ mod tests {
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_commit::Mmcs;
     use p3_field::{Field, PrimeCharacteristicRing};
-    use p3_matrix::dense::RowMajorMatrix;
     use p3_matrix::Matrix;
+    use p3_matrix::dense::RowMajorMatrix;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-    use rand::prelude::ThreadRng;
-    use rand::rng;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
 
     use super::MerkleTreeHidingMmcs;
     use crate::MerkleTreeError;
@@ -164,7 +163,7 @@ mod tests {
         <F as Field>::Packing,
         MyHash,
         MyCompress,
-        ThreadRng,
+        SmallRng,
         8,
         SALT_ELEMS,
     >;
@@ -172,10 +171,11 @@ mod tests {
     #[test]
     #[should_panic]
     fn mismatched_heights() {
-        let perm = Perm::new_from_rng_128(&mut rng());
+        let mut rng = SmallRng::seed_from_u64(1);
+        let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash, compress, rng());
+        let mmcs = MyMmcs::new(hash, compress, rng);
 
         // attempt to commit to a mat with 8 rows and a mat with 7 rows. this should panic.
         let large_mat = RowMajorMatrix::new([1, 2, 3, 4, 5, 6, 7, 8].map(F::from_u8).to_vec(), 1);
@@ -185,15 +185,16 @@ mod tests {
 
     #[test]
     fn different_widths() -> Result<(), MerkleTreeError> {
-        let perm = Perm::new_from_rng_128(&mut rng());
-        let hash = MyHash::new(perm.clone());
-        let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash, compress, rng());
-
+        let mut rng = SmallRng::seed_from_u64(1);
         // 10 mats with 32 rows where the ith mat has i + 1 cols
         let mats = (0..10)
-            .map(|i| RowMajorMatrix::<F>::rand(&mut rng(), 32, i + 1))
+            .map(|i| RowMajorMatrix::<F>::rand(&mut rng, 32, i + 1))
             .collect_vec();
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress, rng);
+
         let dims = mats.iter().map(|m| m.dimensions()).collect_vec();
 
         let (commit, prover_data) = mmcs.commit(mats);

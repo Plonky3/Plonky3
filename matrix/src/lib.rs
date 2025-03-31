@@ -8,10 +8,10 @@ use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
 
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
 use p3_field::{
-    dot_product, BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue,
-    PrimeCharacteristicRing,
+    BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue,
+    PrimeCharacteristicRing, dot_product,
 };
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
@@ -294,9 +294,10 @@ mod tests {
 
     use itertools::izip;
     use p3_baby_bear::BabyBear;
-    use p3_field::extension::BinomialExtensionField;
     use p3_field::PrimeCharacteristicRing;
-    use rand::rng;
+    use p3_field::extension::BinomialExtensionField;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
 
     use super::*;
 
@@ -305,8 +306,9 @@ mod tests {
         type F = BabyBear;
         type EF = BinomialExtensionField<BabyBear, 4>;
 
-        let m = RowMajorMatrix::<F>::rand(&mut rng(), 1 << 8, 1 << 4);
-        let v = RowMajorMatrix::<EF>::rand(&mut rng(), 1 << 8, 1).values;
+        let mut rng = SmallRng::seed_from_u64(1);
+        let m = RowMajorMatrix::<F>::rand(&mut rng, 1 << 8, 1 << 4);
+        let v = RowMajorMatrix::<EF>::rand(&mut rng, 1 << 8, 1).values;
 
         let mut expected = vec![EF::ZERO; m.width()];
         for (row, &scale) in izip!(m.rows(), &v) {

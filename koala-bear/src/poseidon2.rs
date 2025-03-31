@@ -134,19 +134,19 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 16> for KoalaBearInternalL
         state[6] = sum - state[6].halve();
         state[7] = sum - (state[7].double() + state[7]);
         state[8] = sum - state[8].double().double();
-        state[9] = state[9].mul_2exp_neg_n(8);
+        state[9] = state[9].div_2exp_u64(8);
         state[9] += sum;
-        state[10] = state[10].mul_2exp_neg_n(3);
+        state[10] = state[10].div_2exp_u64(3);
         state[10] += sum;
-        state[11] = state[11].mul_2exp_neg_n(24);
+        state[11] = state[11].div_2exp_u64(24);
         state[11] += sum;
-        state[12] = state[12].mul_2exp_neg_n(8);
+        state[12] = state[12].div_2exp_u64(8);
         state[12] = sum - state[12];
-        state[13] = state[13].mul_2exp_neg_n(3);
+        state[13] = state[13].div_2exp_u64(3);
         state[13] = sum - state[13];
-        state[14] = state[14].mul_2exp_neg_n(4);
+        state[14] = state[14].div_2exp_u64(4);
         state[14] = sum - state[14];
-        state[15] = state[15].mul_2exp_neg_n(24);
+        state[15] = state[15].div_2exp_u64(24);
         state[15] = sum - state[15];
     }
 
@@ -193,35 +193,35 @@ impl InternalLayerBaseParameters<KoalaBearParameters, 24> for KoalaBearInternalL
         state[6] = sum - state[6].halve();
         state[7] = sum - (state[7].double() + state[7]);
         state[8] = sum - state[8].double().double();
-        state[9] = state[9].mul_2exp_neg_n(8);
+        state[9] = state[9].div_2exp_u64(8);
         state[9] += sum;
-        state[10] = state[10].mul_2exp_neg_n(2);
+        state[10] = state[10].div_2exp_u64(2);
         state[10] += sum;
-        state[11] = state[11].mul_2exp_neg_n(3);
+        state[11] = state[11].div_2exp_u64(3);
         state[11] += sum;
-        state[12] = state[12].mul_2exp_neg_n(4);
+        state[12] = state[12].div_2exp_u64(4);
         state[12] += sum;
-        state[13] = state[13].mul_2exp_neg_n(5);
+        state[13] = state[13].div_2exp_u64(5);
         state[13] += sum;
-        state[14] = state[14].mul_2exp_neg_n(6);
+        state[14] = state[14].div_2exp_u64(6);
         state[14] += sum;
-        state[15] = state[15].mul_2exp_neg_n(24);
+        state[15] = state[15].div_2exp_u64(24);
         state[15] += sum;
-        state[16] = state[16].mul_2exp_neg_n(8);
+        state[16] = state[16].div_2exp_u64(8);
         state[16] = sum - state[16];
-        state[17] = state[17].mul_2exp_neg_n(3);
+        state[17] = state[17].div_2exp_u64(3);
         state[17] = sum - state[17];
-        state[18] = state[18].mul_2exp_neg_n(4);
+        state[18] = state[18].div_2exp_u64(4);
         state[18] = sum - state[18];
-        state[19] = state[19].mul_2exp_neg_n(5);
+        state[19] = state[19].div_2exp_u64(5);
         state[19] = sum - state[19];
-        state[20] = state[20].mul_2exp_neg_n(6);
+        state[20] = state[20].div_2exp_u64(6);
         state[20] = sum - state[20];
-        state[21] = state[21].mul_2exp_neg_n(7);
+        state[21] = state[21].div_2exp_u64(7);
         state[21] = sum - state[21];
-        state[22] = state[22].mul_2exp_neg_n(9);
+        state[22] = state[22].div_2exp_u64(9);
         state[22] = sum - state[22];
-        state[23] = state[23].mul_2exp_neg_n(24);
+        state[23] = state[23].div_2exp_u64(24);
         state[23] = sum - state[23];
     }
 
@@ -319,11 +319,11 @@ mod tests {
     /// for a random input of width 16.
     #[test]
     fn test_generic_internal_linear_layer_16() {
-        let mut rng = rand::rng();
+        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
         let mut input1: [F; 16] = rng.random();
         let mut input2 = input1;
 
-        let part_sum: F = input1[1..].iter().cloned().sum();
+        let part_sum: F = input1[1..].iter().copied().sum();
         let full_sum = part_sum + input1[0];
 
         input1[0] = part_sum - input1[0];
@@ -338,11 +338,11 @@ mod tests {
     /// for a random input of width 16.
     #[test]
     fn test_generic_internal_linear_layer_24() {
-        let mut rng = rand::rng();
+        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
         let mut input1: [F; 24] = rng.random();
         let mut input2 = input1;
 
-        let part_sum: F = input1[1..].iter().cloned().sum();
+        let part_sum: F = input1[1..].iter().copied().sum();
         let full_sum = part_sum + input1[0];
 
         input1[0] = part_sum - input1[0];

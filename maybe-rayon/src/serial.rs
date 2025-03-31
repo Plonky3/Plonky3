@@ -1,4 +1,7 @@
-use core::iter::FlatMap;
+use core::iter::{FlatMap, IntoIterator, Iterator};
+use core::marker::{Send, Sized, Sync};
+use core::ops::{Fn, FnOnce};
+use core::option::Option;
 use core::slice::{
     Chunks, ChunksExact, ChunksExactMut, ChunksMut, RChunks, RChunksExact, RChunksExactMut,
     RChunksMut, Split, SplitMut, Windows,
@@ -176,6 +179,6 @@ where
     (result_a, result_b)
 }
 
-pub fn current_num_threads() -> usize {
+pub const fn current_num_threads() -> usize {
     1
 }

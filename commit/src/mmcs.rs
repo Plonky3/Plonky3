@@ -4,8 +4,8 @@ use core::fmt::Debug;
 
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 /// A "Mixed Matrix Commitment Scheme" (MMCS) is a generalization of a vector commitment scheme.
 ///
@@ -56,6 +56,9 @@ pub trait Mmcs<T: Send + Sync>: Clone {
     }
 
     /// Get the largest height of any committed matrix.
+    ///
+    /// # Panics
+    /// This may panic if there are no committed matrices.
     fn get_max_height<M: Matrix<T>>(&self, prover_data: &Self::ProverData<M>) -> usize {
         self.get_matrix_heights(prover_data)
             .into_iter()
