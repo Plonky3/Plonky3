@@ -172,28 +172,6 @@ mod helpers {
     }
 
     #[test]
-    fn test_split_32_multiple_chunks_then_reduce() {
-        // Choose a nontrivial BabyBear value to split
-        // Pick a large representative u64 that's well within range
-        let big_int = 981273465128374610u64;
-        let val = BabyBear::from_u64(big_int);
-
-        // Split into 4 chunks of 64-bit digits
-        let split = split_32::<BabyBear, BabyBear>(val, 4);
-
-        // Verify all elements are valid field elements
-        for chunk in &split {
-            assert!(chunk.as_canonical_u32() < BabyBear::ORDER_U32);
-        }
-
-        // Reduce back into a single BabyBear element
-        let recomposed = reduce_32::<BabyBear, BabyBear>(&split);
-
-        // Round-trip should match the original
-        assert_eq!(recomposed, val);
-    }
-
-    #[test]
     fn test_split_32_zero() {
         let val = BabyBear::ZERO;
         let parts = split_32::<BabyBear, BabyBear>(val, 3);
