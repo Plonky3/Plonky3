@@ -184,7 +184,7 @@ mod tests {
         let col = VirtualPairCol::<F>::sum_main(vec![0, 2]);
 
         let main = [
-            F::from_u32(2),
+            F::TWO,
             F::from_u32(99), // ignored
             F::from_u32(5),
         ];
