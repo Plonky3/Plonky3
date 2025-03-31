@@ -146,8 +146,8 @@ mod tests {
         let col = VirtualPairCol::<F>::constant(F::from_u32(7));
 
         // Apply to any input: result should always be the constant
-        let pre = [F::from_u32(1)];
-        let main = [F::from_u32(1)];
+        let pre = [F::ONE];
+        let main = [F::ONE];
         let result = col.apply::<F, F>(&pre, &main);
 
         assert_eq!(result, F::from_u32(7));
