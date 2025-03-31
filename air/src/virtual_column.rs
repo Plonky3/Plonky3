@@ -260,7 +260,7 @@ mod tests {
         // result = 3*4 + 2*6 + 5
         assert_eq!(
             result,
-            F::from_u32(3) * F::from_u32(4) + F::from_u32(2) * F::from_u32(6) + F::from_u32(5)
+            F::from_u32(29)
         );
     }
 
