@@ -95,6 +95,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F>
 
 impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExtensionField<F, D> {
     /// FrobeniusField automorphisms: x -> x^n, where n is the order of BaseField.
+    #[inline]
     fn frobenius(&self) -> Self {
         self.repeated_frobenius(1)
     }
@@ -103,6 +104,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
     ///
     /// Follows precomputation suggestion in Section 11.3.3 of the
     /// Handbook of Elliptic and Hyperelliptic Curve Cryptography.
+    #[inline]
     fn repeated_frobenius(&self, count: usize) -> Self {
         if count == 0 {
             return *self;
@@ -124,6 +126,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
     }
 
     /// Algorithm 11.3.4 in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
+    #[inline]
     fn frobenius_inv(&self) -> Self {
         // Writing 'a' for self, we need to compute a^(r-1):
         // r = n^D-1/n-1 = n^(D-1)+n^(D-2)+...+n
