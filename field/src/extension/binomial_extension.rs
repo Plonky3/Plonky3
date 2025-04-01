@@ -72,14 +72,8 @@ impl<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: usize> BasedVectorSpace
     }
 
     #[inline]
-    fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = A>>(iter: I) -> Option<Self> {
-        (iter.len() == D).then(|| {
-            let mut res = Self::default();
-            for (i, b) in iter.enumerate() {
-                res.value[i] = b;
-            }
-            res
-        })
+    fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = A>>(mut iter: I) -> Option<Self> {
+        (iter.len() == D).then(|| Self::new(array::from_fn(|_| iter.next().unwrap())))
     }
 }
 
@@ -88,10 +82,12 @@ impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F>
 {
     type ExtensionPacking = PackedBinomialExtensionField<F, F::Packing, D>;
 
+    #[inline]
     fn is_in_basefield(&self) -> bool {
         self.value[1..].iter().all(F::is_zero)
     }
 
+    #[inline]
     fn as_base(&self) -> Option<F> {
         <Self as ExtensionField<F>>::is_in_basefield(self).then(|| self.value[0])
     }
@@ -195,6 +191,7 @@ where
         }
     }
 
+    #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
         Self::new(self.value.clone().map(|x| x.mul_2exp_u64(exp)))
     }
@@ -229,14 +226,17 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
         Some(res)
     }
 
+    #[inline]
     fn halve(&self) -> Self {
         Self::new(self.value.map(|x| x.halve()))
     }
 
+    #[inline]
     fn div_2exp_u64(&self, exp: u64) -> Self {
         Self::new(self.value.map(|x| x.div_2exp_u64(exp)))
     }
 
+    #[inline]
     fn order() -> BigUint {
         F::order().pow(D as u32)
     }
@@ -338,6 +338,7 @@ where
     F: BinomiallyExtendable<D>,
     A: Algebra<F>,
 {
+    #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.reduce(|acc, x| acc + x).unwrap_or(Self::ZERO)
     }
@@ -456,6 +457,7 @@ where
     F: BinomiallyExtendable<D>,
     A: Algebra<F>,
 {
+    #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.reduce(|acc, x| acc * x).unwrap_or(Self::ONE)
     }
@@ -489,6 +491,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Distribution<BinomialExtensionF
 where
     Self: Distribution<F>,
 {
+    #[inline]
     fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> BinomialExtensionField<F, D> {
         BinomialExtensionField::new(array::from_fn(|_| self.sample(rng)))
     }
