@@ -207,7 +207,7 @@ fn tamper_with_final_polynomial(
         StirProof {
             round_proofs,
             starting_folding_pow_witness,
-            final_polynomial,
+            final_polynomial: final_polynomial.coeffs().to_vec(),
             final_pow_witness,
             final_round_queries: queries_to_final,
         },
@@ -447,11 +447,10 @@ fn test_verify_failing_cases() {
     // ========================== AnsPolynomialDegree ==========================
 
     let mut invalid_proof = proof.clone();
-    let original_degree = invalid_proof.round_proofs[0]
-        .ans_polynomial
-        .degree()
-        .unwrap();
-    invalid_proof.round_proofs[0].ans_polynomial = rand_poly_rng(original_degree + 1, &mut rng);
+    let original_degree = invalid_proof.round_proofs[0].ans_polynomial.len() - 1;
+    invalid_proof.round_proofs[0].ans_polynomial = rand_poly_rng(original_degree + 1, &mut rng)
+        .coeffs()
+        .to_vec();
 
     assert_eq!(
         verify(
@@ -469,11 +468,9 @@ fn test_verify_failing_cases() {
     // ======================= AnsPolynomialEvaluations =======================
 
     let mut invalid_proof = proof.clone();
-    let original_degree = invalid_proof.round_proofs[0]
-        .ans_polynomial
-        .degree()
-        .unwrap();
-    invalid_proof.round_proofs[0].ans_polynomial = rand_poly_rng(original_degree, &mut rng);
+    let original_degree = invalid_proof.round_proofs[0].ans_polynomial.len() - 1;
+    invalid_proof.round_proofs[0].ans_polynomial =
+        rand_poly_rng(original_degree, &mut rng).coeffs().to_vec();
 
     assert_eq!(
         verify(
@@ -491,8 +488,10 @@ fn test_verify_failing_cases() {
     // ========================= FinalPolynomialDegree =========================
 
     let mut invalid_proof = proof.clone();
-    let original_degree = invalid_proof.final_polynomial.degree().unwrap();
-    invalid_proof.final_polynomial = rand_poly_rng(original_degree + 1, &mut rng);
+    let original_degree = invalid_proof.final_polynomial.len() + 1;
+    invalid_proof.final_polynomial = rand_poly_rng(original_degree + 1, &mut rng)
+        .coeffs()
+        .to_vec();
 
     assert_eq!(
         verify(

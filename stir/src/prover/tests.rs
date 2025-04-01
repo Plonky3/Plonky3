@@ -205,14 +205,18 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
     let expected_shake_polynomial = quotient_set_points
         .into_iter()
         .map(|(x, y)| {
-            let (quotient, _) = (&ans_polynomial - &Polynomial::constant(y))
+            let (quotient, _) = (&Polynomial::from_coeffs(ans_polynomial.clone())
+                - &Polynomial::constant(y))
                 .divide_by_vanishing_linear_polynomial(x);
             quotient
         })
         .fold(Polynomial::zero(), |sum, next_poly| &sum + &next_poly);
 
-    assert_eq!(ans_polynomial, expected_ans_polynomial);
-    assert_eq!(shake_polynomial, expected_shake_polynomial);
+    assert_eq!(ans_polynomial, expected_ans_polynomial.coeffs().to_vec());
+    assert_eq!(
+        shake_polynomial,
+        expected_shake_polynomial.coeffs().to_vec()
+    );
 }
 
 #[test]
@@ -260,7 +264,7 @@ fn test_prove() {
 
     // Final-degree testing
     assert_eq!(config.log_stopping_degree(), 2);
-    assert!(proof.final_polynomial.degree().is_none_or(|d| d < 1 << 2));
+    assert!(proof.final_polynomial.len() <= 1 << 2);
 }
 
 #[test]
@@ -419,7 +423,10 @@ fn test_prove_final_polynomial() {
     // Computing the expected final polynomial p = g_3
     let expected_final_polynomial = fold_polynomial(&f_2, round_r_replies[2], log_folding_factor);
 
-    assert_eq!(proof.final_polynomial, expected_final_polynomial);
+    assert_eq!(
+        proof.final_polynomial,
+        expected_final_polynomial.coeffs().to_vec()
+    );
 }
 
 #[test]

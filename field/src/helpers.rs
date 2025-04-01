@@ -194,3 +194,13 @@ where
 {
     li.zip(ri).map(|(l, r)| l * r).sum()
 }
+
+/// Evaluate a polynomial at a given point using Horner's method.
+pub fn eval_poly<F: Field>(poly: &[F], x: F) -> F {
+    let mut acc = F::ZERO;
+    for coeff in poly.iter().rev() {
+        acc *= x;
+        acc += *coeff;
+    }
+    acc
+}

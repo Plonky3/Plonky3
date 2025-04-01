@@ -16,8 +16,11 @@ pub struct StirProof<F: Field, M: Mmcs<F>, Witness> {
     // Round proofs for the full-rounds i = 1, ..., M
     pub(crate) round_proofs: Vec<RoundProof<F, M, Witness>>,
 
-    // Final poylnomial `p = g_{M + 1}` in plain
-    pub(crate) final_polynomial: Polynomial<F>,
+    // Coefficients of the final polynomial `p = g_{M + 1}`. The leading
+    // coefficient (the final element of the vector) is non-zero (this is only
+    // for efficiency and doesn't affect soundness, even if the verifier does
+    // not check it).
+    pub(crate) final_polynomial: Vec<F>,
 
     // Starting proof of work
     pub(crate) starting_folding_pow_witness: Witness,
@@ -48,18 +51,20 @@ pub(crate) struct RoundProof<F: Field, M: Mmcs<F>, Witness> {
     // Replies beta_{i, j} to the out-of-domain queries to g_i
     pub(crate) betas: Vec<F>,
 
-    // Polynomial interpolating the evaluations of g_i at the in-domain and
-    // out-of-domain queried points, r_{i, j}^shift and r_{i, j}^ood, resp.
-    pub(crate) ans_polynomial: Polynomial<F>,
+    // Coefficients of the polynomial interpolating the evaluations of g_i at
+    // the in-domain and out-of-domain queried points, r_{i, j}^shift and r_{i,
+    // j}^ood, resp. The leading coefficient is non-zero as explained above.
+    pub(crate) ans_polynomial: Vec<F>,
 
     // Merkle proofs of the committed evaluations of g_{i - 1} necessary to
     // compute f_{i - 1} at the k_i-th roots of the in-domain queried points
     // r_{i, j}^shift
     pub(crate) query_proofs: Vec<(Vec<F>, M::Proof)>,
 
-    // Auxiliary polynomial helping the verifier evaluate ans_polynomial at the
-    // queried points
-    pub(crate) shake_polynomial: Polynomial<F>,
+    // Coefficients of the auxiliary polynomial helping the verifier evaluate
+    // ans_polynomial at the queried points. The leading coefficient is non-zero
+    // as explained above.
+    pub(crate) shake_polynomial: Vec<F>,
 
     // Solution to the proof-of-work challenge in round i
     pub(crate) pow_witness: Witness,

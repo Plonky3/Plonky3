@@ -6,9 +6,8 @@ use itertools::{iterate, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
-use p3_field::{batch_multiplicative_inverse, ExtensionField, Field, TwoAdicField};
+use p3_field::{batch_multiplicative_inverse, eval_poly, ExtensionField, Field, TwoAdicField};
 use p3_matrix::Dimensions;
-use p3_poly::Polynomial;
 
 use crate::config::{observe_public_parameters, RoundConfig};
 use crate::proof::RoundProof;
@@ -30,9 +29,9 @@ mod tests;
 struct VirtualFunction<F: TwoAdicField> {
     // The degree-correction randomness r^comb_i
     comb_randomness: F,
-    // The polynomial interpolating the purported values of f at certain queried
-    // points
-    interpolating_polynomial: Polynomial<F>,
+    // The coefficients of the Ans polynomial interpolating the purported values
+    // of f at certain queried points
+    interpolating_polynomial: Vec<F>,
     // The quotient set \mathcal{G}_i containing the queried points
     quotient_set: Vec<F>,
 }
@@ -78,7 +77,7 @@ impl<F: TwoAdicField> Oracle<F> {
                 );
 
                 // Computing the quotient (Quot in the article)
-                let quotient_num = f_x - virtual_function.interpolating_polynomial.evaluate(&x);
+                let quotient_num = f_x - eval_poly(&virtual_function.interpolating_polynomial, x);
 
                 let quotient_denom_inverse = quotient_denom_inverse_hint.unwrap_or_else(|| {
                     virtual_function
@@ -191,10 +190,7 @@ where
     } = proof;
 
     // Degree check on p = g_{M + 1}
-    if final_polynomial
-        .degree()
-        .is_some_and(|d| d + 1 > 1 << config.log_stopping_degree())
-    {
+    if final_polynomial.len() > 1 << config.log_stopping_degree() {
         return Err(VerificationError::FinalPolynomialDegree);
     }
 
@@ -254,7 +250,7 @@ where
 
     // Observe the final polynomial
     challenger.observe(F::from_u8(Messages::FinalPolynomial as u8));
-    observe_ext_slice_with_size(challenger, final_polynomial.coeffs());
+    observe_ext_slice_with_size(challenger, &final_polynomial);
 
     // Sample the final queried indices
     challenger.observe(F::from_u8(Messages::FinalQueryIndices as u8));
@@ -329,7 +325,10 @@ where
         .into_iter()
         .zip(final_queried_point_roots)
         .all(|(eval, root)| {
-            final_polynomial.evaluate(&root.exp_power_of_2(log_last_folding_factor)) == eval
+            eval_poly(
+                &final_polynomial,
+                root.exp_power_of_2(log_last_folding_factor),
+            ) == eval
         })
     {
         return Err(VerificationError::FinalPolynomialEvaluations);
@@ -440,10 +439,10 @@ where
 
     // Observe the Ans and shake polynomials
     challenger.observe(F::from_u8(Messages::AnsPolynomial as u8));
-    observe_ext_slice_with_size(challenger, ans_polynomial.coeffs());
+    observe_ext_slice_with_size(challenger, &ans_polynomial);
 
     challenger.observe(F::from_u8(Messages::ShakePolynomial as u8));
-    observe_ext_slice_with_size(challenger, shake_polynomial.coeffs());
+    observe_ext_slice_with_size(challenger, &shake_polynomial);
 
     // Sample the shake randomness
     challenger.observe(F::from_u8(Messages::ShakeRandomness as u8));
@@ -515,10 +514,7 @@ where
         .collect();
 
     // Check that Ans interpolates the expected values using the shake polynomial
-    if ans_polynomial
-        .degree()
-        .is_some_and(|d| d >= quotient_answers.len())
-    {
+    if ans_polynomial.len() > quotient_answers.len() {
         return Err(FullRoundVerificationError::AnsPolynomialDegree);
     }
 
@@ -753,16 +749,16 @@ fn compute_folded_evaluations<F: TwoAdicField>(
 // The above equation is checked at a uniformly sampled random point r.
 fn verify_evaluations<F: TwoAdicField>(
     // Polynomial whose evaluations are being checked
-    f: &Polynomial<F>,
+    f: &Vec<F>,
     // Shake polynomial q
-    shake_polynomial: &Polynomial<F>,
+    shake_polynomial: &Vec<F>,
     // Random field element where the equation is checked
     r: F,
     // Vector of point-evaluation pairs (x_i, y_i)
     points: Vec<(F, F)>,
 ) -> bool {
-    let f_eval = f.evaluate(&r);
-    let shake_eval = shake_polynomial.evaluate(&r);
+    let f_eval = eval_poly(f, r);
+    let shake_eval = eval_poly(shake_polynomial, r);
 
     let (xs, ys): (Vec<F>, Vec<F>) = points.into_iter().unzip();
 

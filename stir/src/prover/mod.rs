@@ -246,7 +246,7 @@ where
 
     StirProof {
         round_proofs,
-        final_polynomial,
+        final_polynomial: final_polynomial.coeffs().to_vec(),
         starting_folding_pow_witness,
         final_pow_witness,
         final_round_queries: queries_to_final,
@@ -450,9 +450,9 @@ where
         RoundProof {
             g_root: new_commitment,
             betas,
-            ans_polynomial,
+            ans_polynomial: ans_polynomial.coeffs().to_vec(),
             query_proofs,
-            shake_polynomial,
+            shake_polynomial: shake_polynomial.coeffs().to_vec(),
             pow_witness,
         },
     )
