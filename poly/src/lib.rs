@@ -10,7 +10,6 @@
 
 extern crate alloc;
 
-use alloc::collections::btree_set::BTreeSet;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::clone::Clone;
@@ -38,10 +37,11 @@ pub mod test_utils;
 /// # use p3_poly::Polynomial;
 /// # use p3_field::{Field, TwoAdicField, PrimeCharacteristicRing};
 /// # use p3_baby_bear::BabyBear;
-/// # use rand::Rng;
+/// # use rand::{Rng, SeedableRng};
+/// # use rand::rngs::SmallRng;
 /// #
 /// type F = BabyBear;
-/// let mut rng = rand::rng();
+/// let mut rng = SmallRng::seed_from_u64(42);
 /// let poly = Polynomial::from_coeffs(
 ///     (0..10).map(|_| rng.random()).collect()
 /// );

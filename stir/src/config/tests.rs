@@ -22,7 +22,7 @@ type BbMmcs = MerkleTreeMmcs<<Bb as Field>::Packing, <Bb as Field>::Packing, BbH
 type BbExtMmcs = ExtensionMmcs<Bb, BbExt, BbMmcs>;
 
 pub fn test_mmcs_config() -> BbExtMmcs {
-    let mut rng = ChaCha20Rng::from_os_rng();
+    let mut rng = ChaCha20Rng::seed_from_u64(467);
     let perm = BbPerm::new_from_rng_128(&mut rng);
     let hash = BbHash::new(perm.clone());
     let compress = BbCompress::new(perm.clone());
@@ -52,7 +52,7 @@ fn test_config() {
         test_mmcs_config(),
     );
 
-    let config: StirConfig<BbExtMmcs> = StirConfig::new::<BbExt>(parameters);
+    let config: StirConfig<BbExt, BbExtMmcs> = StirConfig::new(parameters);
 
     assert_eq!(config.starting_domain_log_size(), 19);
     assert_eq!(config.starting_folding_pow_bits(), 30);

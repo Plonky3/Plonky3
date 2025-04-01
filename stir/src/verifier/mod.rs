@@ -5,7 +5,7 @@ use error::{FullRoundVerificationError, VerificationError};
 use itertools::{iterate, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_coset::TwoAdicCoset;
+use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{batch_multiplicative_inverse, ExtensionField, Field, TwoAdicField};
 use p3_matrix::Dimensions;
 use p3_poly::Polynomial;
@@ -130,7 +130,7 @@ pub struct VerificationState<F: TwoAdicField, M: Mmcs<F>> {
     oracle: Oracle<F>,
 
     // Domain L_i
-    domain: TwoAdicCoset<F>,
+    domain: TwoAdicMultiplicativeCoset<F>,
 
     // Folding randomness r_i to be used in the *next* round
     folding_randomness: F,
@@ -154,7 +154,7 @@ pub struct VerificationState<F: TwoAdicField, M: Mmcs<F>> {
 ///
 /// # Returns
 pub fn verify<F, EF, M, C>(
-    config: &StirConfig<M>,
+    config: &StirConfig<EF, M>,
     commitment: M::Commitment,
     proof: StirProof<EF, M, C::Witness>,
     challenger: &mut C,
@@ -218,7 +218,8 @@ where
 
     // Cf. the commit method in prover/mod.rs for an explanation on the chosen
     // domain sequence L_0, L_1, ...
-    let domain = TwoAdicCoset::new(EF::two_adic_generator(log_size), log_size);
+    let domain =
+        TwoAdicMultiplicativeCoset::new(EF::two_adic_generator(log_size), log_size).unwrap();
 
     // Preparing the initial verification state manually
     let mut verification_state = VerificationState {
@@ -237,7 +238,7 @@ where
 
     let VerificationState {
         oracle: final_oracle,
-        domain: mut final_domain,
+        domain: final_domain,
         folding_randomness: final_folding_randomness,
         root: g_m_root,
         ..
@@ -300,7 +301,7 @@ where
         &final_oracle,
         g_m_evals,
         &final_queried_indices,
-        &mut final_domain,
+        &final_domain,
         log_last_folding_factor,
     );
 
@@ -318,7 +319,7 @@ where
         log_last_folding_factor,
         final_folding_randomness,
         final_domain
-            .generator()
+            .subgroup_generator()
             .exp_power_of_2(log_final_query_domain_size),
     );
 
@@ -346,7 +347,7 @@ where
 fn verify_round<F, EF, M, C>(
     // The full STIR configuration from which the round-specific configuration
     // is extracted
-    config: &StirConfig<M>,
+    config: &StirConfig<EF, M>,
     // The verification state produced by the previous full round (or the
     // initial one computed manually)
     verification_state: VerificationState<EF, M>,
@@ -377,7 +378,7 @@ where
 
     let VerificationState {
         oracle,
-        mut domain,
+        domain,
         folding_randomness,
         root: prev_root,
         ..
@@ -479,7 +480,7 @@ where
         &oracle,
         previous_g_values,
         &queried_indices,
-        &mut domain,
+        &domain,
         log_folding_factor,
     );
 
@@ -496,7 +497,9 @@ where
         &queried_point_roots,
         log_folding_factor,
         folding_randomness,
-        domain.generator().exp_power_of_2(log_query_domain_size),
+        domain
+            .subgroup_generator()
+            .exp_power_of_2(log_query_domain_size),
     );
 
     let folded_answers = queried_point_roots
@@ -552,7 +555,7 @@ where
             interpolating_polynomial: ans_polynomial,
             quotient_set,
         }),
-        domain: domain.shrink_subgroup(1),
+        domain: domain.shrink_coset(1).unwrap(), // Can never panic due to parameter set-up
         folding_randomness: new_folding_randomness,
         round,
         root: g_root,
@@ -569,7 +572,7 @@ fn compute_f_oracle_from_g<F: TwoAdicField>(
     // The indices of the queried elements of L_i^{k_i}
     queried_indices: &[usize],
     // The domain L_i
-    domain: &mut TwoAdicCoset<F>,
+    domain: &TwoAdicMultiplicativeCoset<F>,
     // The log of the folding factor k_i
     log_folding_factor: usize,
 ) -> Vec<Vec<F>> {
@@ -584,7 +587,9 @@ fn compute_f_oracle_from_g<F: TwoAdicField>(
 
     // This is the generator c of (the subgroup defining) each coset
     let log_scaling_factor = domain.log_size() - log_folding_factor;
-    let generator = domain.generator().exp_power_of_2(log_scaling_factor);
+    let generator = domain
+        .subgroup_generator()
+        .exp_power_of_2(log_scaling_factor);
 
     // The j-th element of this vector is the set of k_i-th roots of r^shift_{i, j}
     let queried_point_preimages = queried_indices

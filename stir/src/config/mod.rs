@@ -4,7 +4,8 @@ use core::fmt::{Debug, Display, Formatter, Result};
 
 use itertools::Itertools;
 use p3_challenger::FieldChallenger;
-use p3_field::Field;
+use p3_dft::Radix2Dit;
+use p3_field::{Field, TwoAdicField};
 
 use crate::utils::{compute_pow, observe_usize_slice};
 use crate::SecurityAssumption;
@@ -192,7 +193,7 @@ pub struct RoundConfig {
 
 /// Full STIR configuration.
 #[derive(Debug, Clone)]
-pub struct StirConfig<M: Clone> {
+pub struct StirConfig<F: TwoAdicField, M: Clone> {
     // See the comment at the start of StirParameters for the convention on the
     // number of rounds, codewords, etc.
 
@@ -221,11 +222,14 @@ pub struct StirConfig<M: Clone> {
 
     // Number of proof-of-work bits for the last round.
     final_pow_bits: usize,
+
+    // Structure to compute two-adic FFTs
+    pub(crate) dft: Radix2Dit<F>,
 }
 
-impl<M: Clone> StirConfig<M> {
+impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
     /// Expand STIR parameters into a full STIR configuration.
-    pub fn new<F: Field>(parameters: StirParameters<M>) -> Self {
+    pub fn new(parameters: StirParameters<M>) -> Self {
         let StirParameters {
             security_level,
             security_assumption,
@@ -335,7 +339,7 @@ impl<M: Clone> StirConfig<M> {
                     i + 1,
                 );
 
-                return StirConfig::new::<F>(new_params);
+                return StirConfig::new(new_params);
             }
 
             let prox_gaps_error_1 = parameters.security_assumption.prox_gaps_error(
@@ -389,6 +393,8 @@ impl<M: Clone> StirConfig<M> {
         // Now compute actual number of final proof-of-work bits
         let final_pow_bits = compute_pow(security_level, query_error).ceil() as usize;
 
+        let dft = Radix2Dit::default();
+
         StirConfig {
             parameters,
             starting_domain_log_size,
@@ -398,6 +404,7 @@ impl<M: Clone> StirConfig<M> {
             log_final_inv_rate: log_inv_rate,
             final_num_queries,
             final_pow_bits,
+            dft,
         }
     }
 
@@ -563,7 +570,7 @@ impl<M: Clone> Display for StirParameters<M> {
     }
 }
 
-impl<M: Clone> Display for StirConfig<M> {
+impl<F: TwoAdicField, M: Clone> Display for StirConfig<F, M> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(
             f,

@@ -4,6 +4,8 @@ use core::iter;
 
 use itertools::{iterate, izip, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger};
+use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
+use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_poly::Polynomial;
 
@@ -223,6 +225,50 @@ pub(crate) fn observe_usize_slice<F: Field, C: CanObserve<F>>(
     });
 }
 
+// Returns the list of evaluations of the polynomial with given coefficients
+// over the coset, that is, `polynomial(shift * g^0), polynomial(shift *
+// g^1), ..., polynomial(shift * g^(2^log_size - 1))`.
+//
+// This function panics if the degree of the polynomial is greater than or
+// equal to the size of the coset. In this case, a larger domain should be
+// used instead.
+pub fn domain_dft<F: TwoAdicField>(
+    domain: TwoAdicMultiplicativeCoset<F>,
+    poly_coeffs: Vec<F>,
+    dft: &Radix2Dit<F>,
+) -> Vec<F> {
+    let size = domain.size();
+    assert!(
+        poly_coeffs.len() <= size,
+        "More coefficients were supplied than the size of the coset (note \
+            that leading zeros are not removed inside this function). Consider \
+            constructing a larger coset, evaluating therein and retaining the \
+            appropriate evaluations (which will be interleaved with those in \
+            the rest of the large domain)."
+    );
+
+    if poly_coeffs.is_empty() {
+        return vec![F::ZERO; size];
+    } else if poly_coeffs.len() == 1 {
+        return vec![poly_coeffs[0]; size];
+    }
+
+    let mut coeffs = poly_coeffs;
+    coeffs.resize(size, F::ZERO);
+
+    if domain.shift() == domain.subgroup_generator() {
+        // In this case it is more efficient to use a plain FFT without
+        // shift, and then (cyclically) rotate the resulting evaluations by
+        // one position. This case is particularly frequentNote that this case is not unusual and is, e. g.
+        // used in this repository's implementation of STIR
+        let mut evals = dft.dft(coeffs);
+        evals.rotate_left(1);
+        evals
+    } else {
+        dft.coset_dft(coeffs, domain.shift())
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -230,11 +276,12 @@ mod tests {
 
     use iter::Iterator;
     use p3_baby_bear::BabyBear;
-    use p3_coset::TwoAdicCoset;
+    use p3_field::coset::TwoAdicMultiplicativeCoset;
     use p3_field::PrimeCharacteristicRing;
-    use p3_poly::test_utils::rand_poly;
+    use p3_poly::test_utils::rand_poly_rng;
     use p3_poly::Polynomial;
-    use rand::Rng;
+    use rand::rngs::SmallRng;
+    use rand::{Rng, SeedableRng};
 
     use super::*;
 
@@ -278,13 +325,13 @@ mod tests {
 
         let folding_factor = 1 << log_folding_factor;
 
-        let mut rng = rand::rng();
+        let mut rng = SmallRng::seed_from_u64(914);
 
         let folding_randomness: BB = rng.random();
 
         // Generating the limbs
         let folds = (0..folding_factor)
-            .map(|_| rand_poly::<BB>(fold_degree - 1))
+            .map(|_| rand_poly_rng::<BB>(fold_degree - 1, &mut rng))
             .collect_vec();
 
         let powers_of_x = iter::successors(Some(Polynomial::one()), |p| Some(&Polynomial::x() * p))
@@ -326,9 +373,9 @@ mod tests {
         let degree_polynomial = 5;
         let degree_power_polynomial = 6;
 
-        let mut rng = rand::rng();
+        let mut rng = SmallRng::seed_from_u64(1923);
         let coeff: BB = rng.random();
-        let polynomial = rand_poly(degree_polynomial);
+        let polynomial = rand_poly_rng(degree_polynomial, &mut rng);
 
         let expected = &Polynomial::power_polynomial(coeff, degree_power_polynomial) * &polynomial;
 
@@ -341,8 +388,8 @@ mod tests {
     // Macro to test evaluation folding with various parameters
     macro_rules! test_fold_evals_with_log_arity {
         ($log_arity:expr, $polynomial:expr, $folding_randomness:expr) => {{
-            let mut rng = rand::rng();
-            let domain = TwoAdicCoset::new(rng.random(), $log_arity);
+            let mut rng = SmallRng::seed_from_u64(87);
+            let domain = TwoAdicMultiplicativeCoset::new(rng.random(), $log_arity).unwrap();
 
             // Evaluating the polynomial over the domain
             let evaluations = domain
@@ -356,7 +403,7 @@ mod tests {
                 evaluations,
                 (domain.shift(), None),
                 $log_arity,
-                (domain.generator(), None),
+                (domain.subgroup_generator(), None),
                 $folding_randomness,
                 None,
             );
@@ -379,8 +426,8 @@ mod tests {
     // Checks that fold_evaluations() returns the expected results for arities
     // k = 2^1, ..., 2^9
     fn test_fold_evaluations() {
-        let polynomial = rand_poly((1 << 10) - 1);
-        let rng = &mut rand::rng();
+        let mut rng = SmallRng::seed_from_u64(43);
+        let polynomial = rand_poly_rng((1 << 10) - 1, &mut rng);
         let folding_randomness: BB = rng.random();
 
         for log_arity in 1..10 {
@@ -394,9 +441,9 @@ mod tests {
         let log_domain_size = 4;
         let poly_deg = 7;
 
-        let rng = &mut rand::rng();
+        let mut rng = SmallRng::seed_from_u64(93);
 
-        let polynomial = rand_poly(poly_deg);
+        let polynomial = rand_poly_rng(poly_deg, &mut rng);
 
         // Folding coefficient
         let c = rng.random();

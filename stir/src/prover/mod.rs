@@ -4,14 +4,16 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_coset::TwoAdicCoset;
+use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_poly::Polynomial;
 
 use crate::config::{observe_public_parameters, RoundConfig};
 use crate::proof::RoundProof;
-use crate::utils::{fold_polynomial, multiply_by_power_polynomial, observe_ext_slice_with_size};
+use crate::utils::{
+    domain_dft, fold_polynomial, multiply_by_power_polynomial, observe_ext_slice_with_size,
+};
 use crate::{Messages, StirConfig, StirProof, POW_BITS_WARNING};
 
 #[cfg(test)]
@@ -20,7 +22,7 @@ mod tests;
 /// Prover witness for the STIR protocol produced by the [`commit`] method.
 pub struct StirWitness<F: TwoAdicField, M: Mmcs<F>> {
     // Domain L_0
-    pub(crate) domain: TwoAdicCoset<F>,
+    pub(crate) domain: TwoAdicMultiplicativeCoset<F>,
 
     // Polynomial f_0 which was committed to
     pub(crate) polynomial: Polynomial<F>,
@@ -39,7 +41,7 @@ pub(crate) struct StirRoundWitness<F: TwoAdicField, M: Mmcs<F>> {
 
     // Domain L_i. The chosen sequence of domains L_0, L_1, ... is documented
     // at the start of the method commit.
-    pub(crate) domain: TwoAdicCoset<F>,
+    pub(crate) domain: TwoAdicMultiplicativeCoset<F>,
 
     // Polynomial f_i
     pub(crate) polynomial: Polynomial<F>,
@@ -69,7 +71,7 @@ pub(crate) struct StirRoundWitness<F: TwoAdicField, M: Mmcs<F>> {
 /// Panics if the degree of `polynomial` is too large (the configuration supports
 /// degree at most `2^{config.log_starting_degree()} - 1`).
 pub fn commit<F, M>(
-    config: &StirConfig<M>,
+    config: &StirConfig<F, M>,
     polynomial: Polynomial<F>,
 ) -> (StirWitness<F, M>, M::Commitment)
 where
@@ -102,10 +104,11 @@ where
     // the former allows one to always use the method shrink_subgroup in the
     // following rounds. This shift does not cause significant extra work in
     // coset.evaluate as it is treated as a special case therein.
-    let mut domain = TwoAdicCoset::new(F::two_adic_generator(log_size), log_size);
+    let domain =
+        TwoAdicMultiplicativeCoset::new(F::two_adic_generator(log_size), log_size).unwrap();
 
     // Committing to the evaluations of f_0 over L_0.
-    let evals = domain.evaluate_polynomial(polynomial.coeffs().to_vec());
+    let evals = domain_dft(domain, polynomial.coeffs().to_vec(), &config.dft);
 
     // The stacking width is
     //   k_0 = 2^{log_size - config.log_starting_folding_factor},
@@ -141,7 +144,7 @@ where
 /// - `challenger`: Challenger which produces the transcript of the
 ///   Fiat-Shamired interaction
 pub fn prove<F, EF, M, C>(
-    config: &StirConfig<M>,
+    config: &StirConfig<EF, M>,
     witness: StirWitness<EF, M>,
     commitment: M::Commitment,
     challenger: &mut C,
@@ -255,7 +258,7 @@ where
 pub(crate) fn prove_round<F, EF, M, C>(
     // Full STIR configuration from which the round-specific configuration is
     // extracted
-    config: &StirConfig<M>,
+    config: &StirConfig<EF, M>,
     // Witness for the previous round (referring to f_{i - 1} if this is round i)
     witness: StirRoundWitness<EF, M>,
     // FS challenger
@@ -293,10 +296,10 @@ where
     let folded_polynomial = fold_polynomial(&polynomial, folding_randomness, log_folding_factor);
 
     // Compute the i-th domain L_i = w * <w^{2^i}> = w * (w^{-1} * L_{i - 1})^2
-    let mut new_domain = domain.shrink_subgroup(1);
+    let new_domain = domain.shrink_coset(1).unwrap(); // Can never panic due to parameter set-up
 
     // Evaluate g_i over L_i
-    let folded_evals = new_domain.evaluate_polynomial(folded_polynomial.coeffs().to_vec());
+    let folded_evals = domain_dft(new_domain, folded_polynomial.coeffs().to_vec(), &config.dft);
 
     // Stack the evaluations, commit to them (in preparation for
     // next-round-folding verification, and therefore with width equal to the
@@ -374,7 +377,7 @@ where
     // ============= Computing the Quot, Ans and shake polynomials =============
 
     // Compute the domain L_{i - 1}^{k_{i - 1}}
-    let mut domain_k = domain.shrink_coset(log_folding_factor);
+    let domain_k = domain.exp_power_of_2(log_folding_factor).unwrap(); // Can never panic due to parameter set-up
 
     // Get the domain elements at the queried indices (i.e r^shift_i in the paper)
     let stir_randomness: Vec<EF> = queried_indices

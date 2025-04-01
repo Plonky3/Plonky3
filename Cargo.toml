@@ -60,7 +60,7 @@ sha3 = { version = "0.10.8", default-features = false }
 tiny-keccak = "2.0.2"
 tracing = { version = "0.1.37", default-features = false, features = ["attributes"] }
 tracing-forest = "0.1.6"
-tracing-subscriber = { version = "0.3.17", default-features = false, features = ["alloc"] }
+tracing-subscriber = { version = "0.3.17", default-features = false, features = ["alloc", "fmt"] }
 transpose = "0.2.3"
 
 # Local dependencies

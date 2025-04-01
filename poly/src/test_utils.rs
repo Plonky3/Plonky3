@@ -1,10 +1,11 @@
 use alloc::vec::Vec;
 
-use crate::Polynomial;
 use p3_field::Field;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
+
+use crate::Polynomial;
 
 // In order to use this auxiliary functionality, activate the `test-utils`
 // feature

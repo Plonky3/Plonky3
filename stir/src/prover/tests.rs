@@ -3,19 +3,20 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_challenger::MockChallenger;
 use p3_commit::Mmcs;
-use p3_coset::TwoAdicCoset;
+use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::PrimeCharacteristicRing;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
-use p3_poly::test_utils::rand_poly;
+use p3_poly::test_utils::{rand_poly_rng, rand_poly_seeded};
 use p3_poly::Polynomial;
-use rand::{rng, Rng};
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 
 use super::{prove_round, RoundConfig};
 use crate::proof::RoundProof;
 use crate::prover::{commit, prove, StirRoundWitness};
 use crate::test_utils::*;
-use crate::utils::fold_polynomial;
+use crate::utils::{domain_dft, fold_polynomial};
 use crate::SecurityAssumption;
 
 // Auxiliary test function which checks that prove_round transforms the round
@@ -27,7 +28,7 @@ use crate::SecurityAssumption;
 //  - degree_slack: difference between the degree of the starting polynomial f_0
 //    and the maximum degree ensured by the LDT, i. e. 2^log_starting_degree - 1
 fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
-    let mut rng = rng();
+    let mut rng = SmallRng::seed_from_u64(109);
 
     let config = test_bb_stir_config(
         BB_EXT_SEC_LEVEL,
@@ -43,16 +44,17 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
     // Starting polynomial. We allow it to have lower degree than the maximum
     // bound proved by the LDT, i. e. 2^log_starting_degree - 1
     let degree = (1 << config.log_starting_degree()) - 1 - degree_slack;
-    let f_0 = rand_poly(degree);
+    let f_0 = rand_poly_rng(degree, &mut rng);
 
-    let original_domain = TwoAdicCoset::new(
+    let original_domain = TwoAdicMultiplicativeCoset::new(
         BbExt::ONE,
         config.log_starting_degree() + config.log_starting_inv_rate(),
-    );
+    )
+    .unwrap();
 
-    let mut original_domain = original_domain.set_shift(original_domain.generator());
+    let original_domain = original_domain.set_shift(original_domain.subgroup_generator());
 
-    let original_evals = original_domain.evaluate_polynomial(f_0.coeffs().to_vec());
+    let original_evals = domain_dft(original_domain, f_0.coeffs().to_vec(), &config.dft);
 
     let stacked_original_evals =
         RowMajorMatrix::new(original_evals, 1 << config.log_starting_folding_factor());
@@ -66,7 +68,7 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
     let r_0: BbExt = rng.random();
 
     let witness = StirRoundWitness {
-        domain: original_domain.clone(),
+        domain: original_domain,
         polynomial: f_0.clone(),
         merkle_tree,
         round: 0,
@@ -143,12 +145,16 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
         ..
     } = witness;
 
-    let expected_domain = original_domain.shrink_subgroup(1);
+    let expected_domain = original_domain.shrink_coset(1).unwrap();
 
     let expected_round = 1;
 
     // Domain testing
-    assert_eq!(domain, expected_domain);
+    assert_eq!(
+        domain.subgroup_generator(),
+        expected_domain.subgroup_generator()
+    );
+    assert_eq!(domain.shift(), expected_domain.shift());
     assert_eq!(r_1, folding_randomness);
 
     // Round-number testing
@@ -157,7 +163,7 @@ fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
     // Computing the expected polynomial f_1 by hand
     let g_1 = fold_polynomial(&f_0, r_0, log_folding_factor);
 
-    let mut original_domain_pow_k = original_domain.shrink_coset(log_folding_factor);
+    let original_domain_pow_k = original_domain.exp_power_of_2(log_folding_factor).unwrap();
     let stir_randomness = bit_replies
         .iter()
         .map(|&i| original_domain_pow_k.element(i));
@@ -244,7 +250,7 @@ fn test_prove() {
         3,
     );
 
-    let polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
+    let polynomial = rand_poly_seeded((1 << config.log_starting_degree()) - 1, Some(103));
 
     let (witness, commitment) = commit(&config, polynomial);
 
@@ -261,7 +267,7 @@ fn test_prove() {
 // Checks that the final polynomial p = g_3 is the expected one in three-round
 // STIR
 fn test_prove_final_polynomial() {
-    let mut rng = rand::rng();
+    let mut rng = SmallRng::seed_from_u64(101);
 
     let log_starting_degree = 15;
     let log_inv_rate = 2;
@@ -361,11 +367,11 @@ fn test_prove_final_polynomial() {
     let mut challenger = MockChallenger::new(field_replies, bit_replies);
 
     // ================================ Proving ================================
-    let mut polynomial = rand_poly((1 << config.log_starting_degree()) - 1);
+    let mut polynomial = rand_poly_rng((1 << config.log_starting_degree()) - 1, &mut rng);
 
     let (witness, commitment) = commit(&config, polynomial.clone());
 
-    let generator = witness.domain.generator();
+    let generator = witness.domain.subgroup_generator();
 
     let proof = prove(&config, witness, commitment, &mut challenger);
 
@@ -376,9 +382,11 @@ fn test_prove_final_polynomial() {
         let g_i = fold_polynomial(&polynomial, round_r_replies[round - 1], log_folding_factor);
 
         // Computing the domain L_{i - 1}^{k_{i - 1}}
-        let mut domain_pow_k =
-            TwoAdicCoset::new(generator, log_initial_codeword_size - (round - 1))
-                .shrink_coset(log_folding_factor);
+        let domain_pow_k =
+            TwoAdicMultiplicativeCoset::new(generator, log_initial_codeword_size - (round - 1))
+                .unwrap()
+                .exp_power_of_2(log_folding_factor)
+                .unwrap();
 
         let stir_randomness = round_bit_replies[round - 1]
             .iter()
@@ -428,7 +436,7 @@ fn test_incorrect_polynomial() {
         3,
     );
 
-    let polynomial = rand_poly(1 << config.log_starting_degree());
+    let polynomial = rand_poly_seeded(1 << config.log_starting_degree(), Some(107));
 
     commit(&config, polynomial);
 }
