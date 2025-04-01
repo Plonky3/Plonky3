@@ -43,33 +43,16 @@ fn batch_multiplicative_inverse_helper<F: Field>(x: &[F], result: &mut [F]) {
     // No need to re-assert this - the caller guarantees it
     debug_assert_eq!(result.len(), n);
     
-    // If array length isn't divisible by WIDTH, process as many elements as possible
-    // using the packed implementation, then handle the remainder
-    if n % WIDTH != 0 {
-        let packed_len = n - (n % WIDTH);
-        
-        if packed_len > 0 {
-            let (x_packed, x_remainder) = x.split_at(packed_len);
-            let (result_packed, result_remainder) = result.split_at_mut(packed_len);
-            
-            // Process the packed portion
-            let x_packed_arrays = FieldArray::<F, 4>::pack_slice(x_packed);
-            let result_packed_arrays = FieldArray::<F, 4>::pack_slice_mut(result_packed);
-            batch_multiplicative_inverse_general(x_packed_arrays, result_packed_arrays, |x_packed| x_packed.inverse());
-            
-            // Process the remainder
-            batch_multiplicative_inverse_general(x_remainder, result_remainder, |x| x.inverse());
-        } else {
-            // Small array, just use the serial implementation
-            batch_multiplicative_inverse_general(x, result, |x| x.inverse());
-        }
+    // If array perfectly divisible by WIDTH, use the efficient packed implementation
+    if n % WIDTH == 0 {
+        let x_packed = FieldArray::<F, 4>::pack_slice(x);
+        let result_packed = FieldArray::<F, 4>::pack_slice_mut(result);
+        batch_multiplicative_inverse_general(x_packed, result_packed, |x_packed| x_packed.inverse());
         return;
     }
-
-    // Handle the case where the length is divisible by WIDTH
-    let x_packed = FieldArray::<F, 4>::pack_slice(x);
-    let result_packed = FieldArray::<F, 4>::pack_slice_mut(result);
-    batch_multiplicative_inverse_general(x_packed, result_packed, |x_packed| x_packed.inverse());
+    
+    // For arrays not divisible by WIDTH, perform a single inversion with all elements
+    batch_multiplicative_inverse_general(x, result, |x| x.inverse());
 }
 
 /// A simple single-threaded implementation of Montgomery's trick. Since not all `PrimeCharacteristicRing`s
