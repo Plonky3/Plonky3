@@ -113,10 +113,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
         }
 
         // z0 = DTH_ROOT^count = W^(k * count) where k = floor((n-1)/D)
-        let mut z0 = F::DTH_ROOT;
-        for _ in 1..count {
-            z0 *= F::DTH_ROOT;
-        }
+        let z0 = F::DTH_ROOT.exp_u64(count as u64);
 
         let mut res = Self::ZERO;
         for (i, z) in z0.powers().take(D).enumerate() {
