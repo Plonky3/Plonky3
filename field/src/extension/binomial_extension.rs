@@ -73,7 +73,7 @@ impl<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: usize> BasedVectorSpace
 
     #[inline]
     fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = A>>(mut iter: I) -> Option<Self> {
-        (iter.len() == D).then(|| Self::new(array::from_fn(|_| iter.next().unwrap())))
+        (iter.len() == D).then(|| Self::new(array::from_fn(|_| iter.next().unwrap()))) // The unwrap is safe as we just checked the length of iter.
     }
 }
 
@@ -111,7 +111,6 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
             // x^(n^(count % D))
             return self.repeated_frobenius(count % D);
         }
-        let arr: &[F] = self.as_basis_coefficients_slice();
 
         // z0 = DTH_ROOT^count = W^(k * count) where k = floor((n-1)/D)
         let mut z0 = F::DTH_ROOT;
@@ -119,12 +118,12 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
             z0 *= F::DTH_ROOT;
         }
 
-        let mut res = [F::ZERO; D];
+        let mut res = Self::ZERO;
         for (i, z) in z0.powers().take(D).enumerate() {
-            res[i] = arr[i] * z;
+            res.value[i] = self.value[i] * z;
         }
 
-        Self::from_basis_coefficients_slice(&res).unwrap()
+        res
     }
 
     /// Algorithm 11.3.4 in Handbook of Elliptic and Hyperelliptic Curve Cryptography.

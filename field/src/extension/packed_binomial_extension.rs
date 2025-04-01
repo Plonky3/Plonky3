@@ -154,7 +154,7 @@ where
 
     #[inline]
     fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = PF>>(mut iter: I) -> Option<Self> {
-        (iter.len() == D).then(|| Self::new(array::from_fn(|_| iter.next().unwrap())))
+        (iter.len() == D).then(|| Self::new(array::from_fn(|_| iter.next().unwrap()))) // The unwrap is safe as we just checked the length of iter.
     }
 }
 
