@@ -72,12 +72,14 @@ impl<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: usize> BasedVectorSpace
     }
 
     #[inline]
-    fn from_basis_coefficients_iter<I: Iterator<Item = A>>(iter: I) -> Self {
-        let mut res = Self::default();
-        for (i, b) in iter.enumerate() {
-            res.value[i] = b;
-        }
-        res
+    fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = A>>(iter: I) -> Option<Self> {
+        (iter.len() == D).then(|| {
+            let mut res = Self::default();
+            for (i, b) in iter.enumerate() {
+                res.value[i] = b;
+            }
+            res
+        })
     }
 }
 
@@ -126,7 +128,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
             res[i] = arr[i] * z;
         }
 
-        Self::from_basis_coefficients_slice(&res)
+        Self::from_basis_coefficients_slice(&res).unwrap()
     }
 
     /// Algorithm 11.3.4 in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
@@ -216,17 +218,15 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
             return None;
         }
 
+        let mut res = Self::default();
+
         match D {
-            2 => Some(Self::from_basis_coefficients_slice(&quadratic_inv(
-                &self.value,
-                F::W,
-            ))),
-            3 => Some(Self::from_basis_coefficients_slice(&cubic_inv(
-                &self.value,
-                F::W,
-            ))),
-            _ => Some(self.frobenius_inv()),
+            2 => quadratic_inv(&self.value, &mut res.value, F::W),
+            3 => cubic_inv(&self.value, &mut res.value, F::W),
+            _ => res = self.frobenius_inv(),
         }
+
+        Some(res)
     }
 
     fn halve(&self) -> Self {
@@ -568,14 +568,17 @@ pub(super) fn binomial_mul<
 
 ///Section 11.3.6b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
-fn quadratic_inv<F: Field>(a: &[F], w: F) -> [F; 2] {
+fn quadratic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
+    assert_eq!(D, 2);
     let scalar = (a[0].square() - w * a[1].square()).inverse();
-    [a[0] * scalar, -a[1] * scalar]
+    res[0] = a[0] * scalar;
+    res[1] = -a[1] * scalar;
 }
 
 /// Section 11.3.6b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
-fn cubic_inv<F: Field>(a: &[F], w: F) -> [F; 3] {
+fn cubic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
+    assert_eq!(D, 3);
     let a0_square = a[0].square();
     let a1_square = a[1].square();
     let a2_w = w * a[2];
@@ -587,11 +590,9 @@ fn cubic_inv<F: Field>(a: &[F], w: F) -> [F; 3] {
         .inverse();
 
     //scalar*[a0^2-wa1a2, wa2^2-a0a1, a1^2-a0a2]
-    [
-        scalar * (a0_square - a[1] * a2_w),
-        scalar * (a2_w * a[2] - a0_a1),
-        scalar * (a1_square - a[0] * a[2]),
-    ]
+    res[0] = scalar * (a0_square - a[1] * a2_w);
+    res[1] = scalar * (a2_w * a[2] - a0_a1);
+    res[2] = scalar * (a1_square - a[0] * a[2]);
 }
 
 /// karatsuba multiplication for cubic extension field

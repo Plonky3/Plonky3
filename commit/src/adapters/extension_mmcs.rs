@@ -49,7 +49,7 @@ where
             .into_iter()
             .map(|row| {
                 row.chunks(EF::DIMENSION)
-                    .map(EF::from_basis_coefficients_slice)
+                    .map(|chunk| EF::from_basis_coefficients_slice(chunk).unwrap()) // unwrap is safe as each chunk has length EF::DIMENSION
                     .collect()
             })
             .collect();

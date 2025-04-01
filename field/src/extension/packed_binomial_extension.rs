@@ -147,12 +147,14 @@ where
         }
     }
 
-    fn from_basis_coefficients_iter<I: Iterator<Item = PF>>(iter: I) -> Self {
-        let mut res = Self::default();
-        for (i, b) in iter.enumerate() {
-            res.value[i] = b;
-        }
-        res
+    fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = PF>>(iter: I) -> Option<Self> {
+        (iter.len() == D).then(|| {
+            let mut res = Self::default();
+            for (i, b) in iter.enumerate() {
+                res.value[i] = b;
+            }
+            res
+        })
     }
 }
 
