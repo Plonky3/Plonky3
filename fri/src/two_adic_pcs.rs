@@ -421,7 +421,7 @@ where
             // TODO: separate this out into functions
 
             // log_height -> (alpha_pow, reduced_opening)
-            let mut reduced_openings = BTreeMap::<usize, (Challenge, Challenge)>::new();
+            let mut reduced_openings = BTreeMap::new();
 
             for (batch_opening, (batch_commit, mats)) in
                 zip_eq(input_proof, &rounds, FriError::InvalidProofShape)?
