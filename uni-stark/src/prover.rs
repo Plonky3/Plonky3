@@ -17,6 +17,47 @@ use crate::{
     StarkGenericConfig, SymbolicAirBuilder, SymbolicExpression, Val, get_symbolic_constraints,
 };
 
+/// Produce a proof that the given trace satisfies the given air.
+///
+/// Arguments:
+/// Config: A collection of public data about the shape of the proof. It includes:
+/// - The choice of Polynomial Commitment Scheme.
+/// - The Extension field from which random challenges are drawn.
+/// - The Random Challenger used for our Fiat-Shamir implementation.
+///
+/// air contains: TODO
+/// challenger contains: TODO
+/// trace: The execution trace to be proven.
+/// public_values is a list of public values related to the proof.
+///
+/// Proof Definitions:
+/// - Fix a field `F` with cryptographically large extension field `G`.
+/// - `T` is the trace of the computation. It is a matrix of height `N = 2^n` and width `l`.
+/// - `<h> = H` is the unique multiplicative subgroup of `F` of size `2^n` with chosen generator `h`.
+/// - Given the `i`th trace column `Ti`, we let `Ti(x)` denote the unique polynomial
+/// of degree `N` such that `Ti(h^j) = Ti[j]` for `j` in `0..N`. In other words, `Ti(x)` is the
+/// evaluation vector of `Ti(x)` over `H`.
+/// - Let `C(X1, ..., Xl, Y1, ..., Yl)` denote the constraint polynomial coming from the AIR.
+/// It depends on both the current row and the next row.
+/// - Given a polynomial `f` and a set `D`, let `[[f, D]]` denote a merkle commitment to
+/// the evaluation vector of `f` over `D`. Similarly, `[[{f0, ..., fk}, D]]` denotes a combined merkle
+/// commitment to the evaluation vectors of the polynomials `f0, ..., fk` over `D`.
+///
+/// The goal of the prover is to produce a proof that `C(T1(x), ..., Tl(x), T1(gx), ..., Tl(gx)) = 0` for all `x` in `H`.
+///
+/// Proof Overview:
+///
+/// We start by fixing a pair of elements `g0, g1` in `F\H` such that the cosets `g0 H` and `g1 H` are distinct.
+/// Let `D` denote the union of those two cosets and, for every column `i`, the prover computes the evaluation vectors
+/// of `Ti(x)` over `D`. The prover makes a combined merkle commitment `[[{T1, ..., Tl}, D]]`
+/// to these vectors and sends it to `V`.
+///
+/// The prover is telling the truth if and only if there exists a polynomial `Q` of degree `< deg(C) * (N - 1) - N`
+/// such that `Q(x) = C(T1(x), ..., Tl(x), T1(gx), ..., Tl(gx))/ZH(x)` where `ZH(x) = x^N - 1` is a vanishing polynomial
+/// of the subgroup `H`.
+///
+/// The prover uses `C` and `Ti` to compute the evaluations of the quotient polynomial `Q` over `D`.
+///
 #[instrument(skip_all)]
 #[allow(clippy::multiple_bound_locations)] // cfg not supported in where clauses?
 pub fn prove<
@@ -26,7 +67,6 @@ pub fn prove<
 >(
     config: &SC,
     air: &A,
-    challenger: &mut SC::Challenger,
     trace: RowMajorMatrix<Val<SC>>,
     public_values: &Vec<Val<SC>>,
 ) -> Proof<SC>
@@ -37,9 +77,11 @@ where
     #[cfg(debug_assertions)]
     crate::check_constraints::check_constraints(air, &trace, public_values);
 
+    // Compute the height `N = 2^n` and log_2(height) `n`, of the trace.
     let degree = trace.height();
     let log_degree = log2_strict_usize(degree);
 
+    // Find the degree of the constraint polynomial.
     let symbolic_constraints = get_symbolic_constraints::<Val<SC>, A>(air, 0, public_values.len());
     let constraint_count = symbolic_constraints.len();
     let constraint_degree = symbolic_constraints
@@ -47,10 +89,14 @@ where
         .map(SymbolicExpression::degree_multiple)
         .max()
         .unwrap_or(0);
+
+    // From the degree of the constraint polynomial, compute the number
+    // of quotient polynomials.
     let log_quotient_degree = log2_ceil_usize(constraint_degree - 1);
     let quotient_degree = 1 << log_quotient_degree;
 
     let pcs = config.pcs();
+    let mut challenger = config.initialise_challenger();
     let trace_domain = pcs.natural_domain_for_degree(degree);
 
     let (trace_commit, trace_data) =
@@ -105,7 +151,7 @@ where
                     (0..quotient_degree).map(|_| vec![zeta]).collect_vec(),
                 ),
             ],
-            challenger,
+            &mut challenger,
         )
     });
     let trace_local = opened_values[0][0][0].clone();

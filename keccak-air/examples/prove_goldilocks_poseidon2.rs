@@ -64,12 +64,12 @@ fn main() -> Result<(), impl Debug> {
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
 
+    let challenger = Challenger::new(perm);
+
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
-    let config = MyConfig::new(pcs);
+    let config = MyConfig::new(pcs, challenger);
 
-    let mut challenger = Challenger::new(perm.clone());
-    let proof = prove(&config, &KeccakAir {}, &mut challenger, trace, &vec![]);
+    let proof = prove(&config, &KeccakAir {}, trace, &vec![]);
 
-    let mut challenger = Challenger::new(perm);
-    verify(&config, &KeccakAir {}, &mut challenger, &proof, &vec![])
+    verify(&config, &KeccakAir {}, &proof, &vec![])
 }

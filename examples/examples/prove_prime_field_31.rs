@@ -145,7 +145,7 @@ fn main() {
             };
         }
         FieldOptions::BabyBear => {
-            type EF = BinomialExtensionField<BabyBear, 4>;
+            type EF = BinomialExtensionField<BabyBear, 5>;
 
             let proof_goal = match args.objective {
                 ProofOptions::Blake3Permutations => ProofObjective::Blake3(Blake3Air {}),
