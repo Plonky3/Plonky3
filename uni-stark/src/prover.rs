@@ -40,6 +40,7 @@
 
 use alloc::vec;
 use alloc::vec::Vec;
+use core::iter;
 
 use itertools::{Itertools, izip};
 use p3_air::Air;
@@ -238,7 +239,7 @@ where
                 (
                     &quotient_data,
                     // open every chunk at zeta
-                    (0..quotient_degree).map(|_| vec![zeta]).collect_vec(),
+                    iter::repeat_n(vec![zeta], quotient_degree).collect_vec(),
                 ),
             ],
             &mut challenger,

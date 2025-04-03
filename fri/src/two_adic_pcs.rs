@@ -238,6 +238,8 @@ where
 
         */
 
+        // Contained in each `Self::ProverData` is a list of matrices which have been committed to.
+        // We start by extracting those matrices to make them easier to work with.
         let mats_and_points = rounds
             .iter()
             .map(|(data, points)| {
@@ -255,17 +257,18 @@ where
                 (mats, points)
             })
             .collect_vec();
-        let mats = mats_and_points
-            .iter()
-            .flat_map(|(mats, _)| mats)
-            .collect_vec();
 
-        let global_max_height = mats.iter().map(|m| m.height()).max().unwrap();
+        // Find the maximum height of a matrix in the batch. TODO: This should be given by the matrices in the first round right?
+        let global_max_height = mats_and_points
+            .iter()
+            .flat_map(|(mats, _)| mats.iter().map(|m| m.height()))
+            .max()
+            .unwrap();
         let log_global_max_height = log2_strict_usize(global_max_height);
 
         // For each unique opening point z, we will find the largest degree bound
         // for that point, and precompute 1/(z - X) for the largest subgroup (in bitrev order).
-        let inv_denoms = compute_inverse_denominators(&mats_and_points, Val::GENERATOR);
+        let inv_denoms = compute_inverse_denominators(&mats_and_points, Val::GENERATOR); // TODO: We have hard coded the shift to be Val::GENERATOR.
 
         // Evaluate coset representations and write openings to the challenger
         let all_opened_values = mats_and_points
@@ -510,11 +513,13 @@ where
     }
 }
 
+/// TODO: Add doc comment
 #[instrument(skip_all)]
 fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matrix<F>>(
     mats_and_points: &[(Vec<M>, &Vec<Vec<EF>>)],
     coset_shift: F,
 ) -> LinearMap<EF, Vec<EF>> {
+    // For each point z, find the largest height of a matrix that we need to open at that point.
     let mut max_log_height_for_point: LinearMap<EF, usize> = LinearMap::new();
     for (mats, points) in mats_and_points {
         for (mat, points_for_mat) in izip!(mats, *points) {
@@ -529,15 +534,22 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
         }
     }
 
-    // Compute the largest subgroup we will use, in bitrev order.
+    // Compute the largest coset we will use, collect all
+    // of it's elements into a vector and bit reverse it.
+    // This means that the first 2^n elements will correspond
+    // to the coset of size 2^N.
+    //
+    // TODO: This seems like a possibly incorrect thing to do?
+    // Shouldn't smaller matrices lie over disjoint cosets? (E.g. Fold of gH is g^2H^2)
+    // Might be to do with our novel FRI implementation.
     let max_log_height = *max_log_height_for_point.values().max().unwrap();
-    let mut subgroup = cyclic_subgroup_coset_known_order(
+    let mut coset = cyclic_subgroup_coset_known_order(
         F::two_adic_generator(max_log_height),
         coset_shift,
         1 << max_log_height,
     )
     .collect_vec();
-    reverse_slice_index_bits(&mut subgroup);
+    reverse_slice_index_bits(&mut coset);
 
     max_log_height_for_point
         .into_iter()
@@ -545,7 +557,7 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
             (
                 z,
                 batch_multiplicative_inverse(
-                    &subgroup[..(1 << log_height)]
+                    &coset[..(1 << log_height)]
                         .iter()
                         .map(|&x| z - x)
                         .collect_vec(),
