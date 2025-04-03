@@ -129,7 +129,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     {
         let mut row_iter = self.row(r);
         let num_elems = self.width().div_ceil(P::WIDTH);
-        // array::from_fn currently always calls in order, but it's not clear whether that's guaranteed.
+        // array::from_fn is guaranteed to always call in order.
         (0..num_elems).map(move |_| P::from_fn(|_| row_iter.next().unwrap_or_default()))
     }
 
