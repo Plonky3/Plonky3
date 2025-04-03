@@ -2,7 +2,7 @@ use alloc::string::String;
 use core::marker::PhantomData;
 
 use itertools::Itertools;
-use p3_field::{Field, PrimeField, PrimeField32, reduce_32};
+use p3_field::{BasedVectorSpace, Field, PrimeField, PrimeField32, reduce_32};
 
 use crate::hasher::CryptographicHasher;
 use crate::permutation::CryptographicPermutation;
@@ -95,19 +95,24 @@ where
     }
 }
 
-impl<F, PF, P, const WIDTH: usize, const RATE: usize, const OUT: usize>
-    CryptographicHasher<F, [PF; OUT]> for MultiField32PaddingFreeSponge<F, PF, P, WIDTH, RATE, OUT>
+impl<F, V, PF, P, const WIDTH: usize, const RATE: usize, const OUT: usize>
+    CryptographicHasher<V, [PF; OUT]> for MultiField32PaddingFreeSponge<F, PF, P, WIDTH, RATE, OUT>
 where
     F: PrimeField32,
+    V: BasedVectorSpace<F> + Clone,
     PF: PrimeField + Default + Copy,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
     fn hash_iter<I>(&self, input: I) -> [PF; OUT]
     where
-        I: IntoIterator<Item = F>,
+        I: IntoIterator<Item = V>,
     {
         let mut state = [PF::default(); WIDTH];
-        for block_chunk in &input.into_iter().chunks(RATE) {
+        for block_chunk in &input
+            .into_iter()
+            .flat_map(|x| x.as_basis_coefficients_slice().to_vec()) //Would be nice to get rid of the .to_vec() here.
+            .chunks(RATE)
+        {
             for (chunk_id, chunk) in (&block_chunk.chunks(self.num_f_elms))
                 .into_iter()
                 .enumerate()
