@@ -13,13 +13,13 @@
 //! - Let `T` denote the trace of the computation. It is a matrix of height `N = 2^n` and width `l`.
 //! - Let `H = <h>` denote a multiplicative subgroup of `F` of size `2^n` with generator `h`.
 //! - Given the `i`th trace column `Ti`, we let `Ti(x)` denote the unique polynomial of degree `N`
-//!     such that `Ti(h^j) = Ti[j]` for `j` in `0..N`.
-//!     In other words, `Ti(x)` is the evaluation vector of `Ti(x)` over `H`.
+//!   such that `Ti(h^j) = Ti[j]` for `j` in `0..N`.
+//!   In other words, `Ti(x)` is the evaluation vector of `Ti(x)` over `H`.
 //! - Let `C(X1, ..., Xl, Y1, ..., Yl, Z1, ..., Zj)` denote the constraint polynomial coming from the AIR.
-//!     It depends on both the current row and the next row and a collection of selector polynomials.
+//!   It depends on both the current row and the next row and a collection of selector polynomials.
 //! - Given a polynomial `f` and a set `D`, let `[[f, D]]` denote a merkle commitment to
-//!     the evaluation vector of `f` over `D`. Similarly, `[[{f0, ..., fk}, D]]` denotes a combined merkle
-//!     commitment to the evaluation vectors of the polynomials `f0, ..., fk` over `D`.
+//!   the evaluation vector of `f` over `D`. Similarly, `[[{f0, ..., fk}, D]]` denotes a combined merkle
+//!   commitment to the evaluation vectors of the polynomials `f0, ..., fk` over `D`.
 //!
 //! The goal of the prover is to produce a proof that it knows a trace `T` such that:
 //! `C(T1(x), ..., Tl(x), T1(gx), ..., Tl(gx), selectors) = 0` for all `x` in `H`.
@@ -211,15 +211,25 @@ where
         .in_scope(|| pcs.commit(izip!(qc_domains, quotient_chunks).collect_vec()));
     challenger.observe(quotient_commit.clone());
 
-    // Combine our commitments to the trace and quotient polynomials into a single object.
+    // Combine our commitments to the trace and quotient polynomials into a single object which
+    // will be passed to the verifier.
     let commitments = Commitments {
         trace: trace_commit,
         quotient_chunks: quotient_commit,
     };
 
+    // Get the second Fiat-Shamir challenge, `zeta`, an opening point.
+    // Along with `zeta_next = next(zeta)` where next is the unique successor linear function
+    // on the initial domain. In the usual STARK case, this is `h * zeta`.
+    //
+    // TODO: What is this in the Circle STARK case?
     let zeta: SC::Challenge = challenger.sample();
     let zeta_next = initial_trace_domain.next_point(zeta).unwrap();
 
+    // The prover opens the trace polynomials at `zeta` and `zeta_next` and the
+    // and quotient polynomials at `zeta`.
+    //
+    // TODO: What are opened_values, opening_proof??
     let (opened_values, opening_proof) = info_span!("open").in_scope(|| {
         pcs.open(
             vec![
