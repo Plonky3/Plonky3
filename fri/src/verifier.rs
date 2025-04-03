@@ -37,6 +37,7 @@ where
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
     G: FriGenericConfig<Challenge>,
 {
+    // Get an extension field challenge for each commitment.
     let betas: Vec<Challenge> = proof
         .commit_phase_commits
         .iter()
@@ -56,12 +57,14 @@ where
         return Err(FriError::InvalidProofShape);
     }
 
-    // Check PoW.
+    // Check the Proof of Work witness.
     if !challenger.check_witness(config.proof_of_work_bits, proof.pow_witness) {
         return Err(FriError::InvalidPowWitness);
     }
 
-    // The log of the maximum domain size.
+    // The size of the initial evaluation domain should be equal to the log_blowup plus
+    // the log of the initial trace length (trace polynomial degree). This second quantity
+    // will be equal to the number of commit phase commits plus the log of the final polynomial length.
     let log_max_height =
         proof.commit_phase_commits.len() + config.log_blowup + config.log_final_poly_len;
 
