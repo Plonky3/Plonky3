@@ -230,6 +230,7 @@ where
     // and quotient polynomials at `zeta`.
     //
     // TODO: What are opened_values, opening_proof??
+    // This also produces a FRI proof??
     let (opened_values, opening_proof) = info_span!("open").in_scope(|| {
         pcs.open(
             vec![
