@@ -1,4 +1,5 @@
-use core::{iter, marker::PhantomData};
+use core::iter;
+use core::marker::PhantomData;
 
 use p3_field::{BasedVectorSpace, PackedValue, PrimeField32, PrimeField64};
 
