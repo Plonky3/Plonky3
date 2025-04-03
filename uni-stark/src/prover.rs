@@ -17,7 +17,7 @@ use crate::{
     StarkGenericConfig, SymbolicAirBuilder, SymbolicExpression, Val, get_symbolic_constraints,
 };
 
-#[instrument(skip_all)]
+#[instrument(skip_all, fields(degree, log_degree, constraint_count))]
 #[allow(clippy::multiple_bound_locations)] // cfg not supported in where clauses?
 pub fn prove<
     SC,
@@ -50,11 +50,23 @@ where
     let log_quotient_degree = log2_ceil_usize(constraint_degree - 1);
     let quotient_degree = 1 << log_quotient_degree;
 
+    tracing::info!(
+        degree,
+        log_degree,
+        constraint_count,
+        constraint_degree,
+        log_quotient_degree,
+        quotient_degree,
+        "Starting STARK proving"
+    );
+
     let pcs = config.pcs();
     let trace_domain = pcs.natural_domain_for_degree(degree);
 
     let (trace_commit, trace_data) =
-        info_span!("commit to trace data").in_scope(|| pcs.commit(vec![(trace_domain, trace)]));
+        info_span!("commit to trace data", trace_width = trace.width(), trace_height = trace.height())
+            .in_scope(|| pcs.commit(vec![(trace_domain, trace)]));
+    tracing::debug!("Trace commitment generated");
 
     // Observe the instance.
     // degree < 2^255 so we can safely cast log_degree to a u8.
@@ -64,11 +76,16 @@ where
     challenger.observe(trace_commit.clone());
     challenger.observe_slice(public_values);
     let alpha: SC::Challenge = challenger.sample_algebra_element();
+    tracing::debug!("Alpha challenge sampled from challenger");
 
     let quotient_domain =
         trace_domain.create_disjoint_domain(1 << (log_degree + log_quotient_degree));
 
     let trace_on_quotient_domain = pcs.get_evaluations_on_domain(&trace_data, 0, quotient_domain);
+    tracing::debug!(
+        quotient_domain_size = quotient_domain.size(),
+        "Trace evaluated on quotient domain"
+    );
 
     let quotient_values = quotient_values(
         air,
@@ -83,8 +100,9 @@ where
     let quotient_chunks = quotient_domain.split_evals(quotient_degree, quotient_flat);
     let qc_domains = quotient_domain.split_domains(quotient_degree);
 
-    let (quotient_commit, quotient_data) = info_span!("commit to quotient poly chunks")
+    let (quotient_commit, quotient_data) = info_span!("commit to quotient poly chunks", chunks_count = quotient_chunks.len())
         .in_scope(|| pcs.commit(izip!(qc_domains, quotient_chunks).collect_vec()));
+    tracing::debug!("Quotient commitment generated");
     challenger.observe(quotient_commit.clone());
 
     let commitments = Commitments {
@@ -94,8 +112,10 @@ where
 
     let zeta: SC::Challenge = challenger.sample();
     let zeta_next = trace_domain.next_point(zeta).unwrap();
+    tracing::debug!("Sampled point zeta for opening");
 
-    let (opened_values, opening_proof) = info_span!("open").in_scope(|| {
+    let (opened_values, opening_proof) = info_span!("open polynomials at evaluation points")
+        .in_scope(|| {
         pcs.open(
             vec![
                 (&trace_data, vec![vec![zeta, zeta_next]]),
@@ -108,6 +128,8 @@ where
             challenger,
         )
     });
+    tracing::debug!("Generated opening proof");
+    
     let trace_local = opened_values[0][0][0].clone();
     let trace_next = opened_values[0][0][1].clone();
     let quotient_chunks = opened_values[1].iter().map(|v| v[0].clone()).collect_vec();
@@ -116,6 +138,9 @@ where
         trace_next,
         quotient_chunks,
     };
+    
+    tracing::info!("STARK proof generated successfully");
+    
     Proof {
         commitments,
         opened_values,
@@ -124,7 +149,7 @@ where
     }
 }
 
-#[instrument(name = "compute quotient polynomial", skip_all)]
+#[instrument(name = "compute quotient polynomial", skip_all, fields(constraint_count, quotient_size))]
 fn quotient_values<SC, A, Mat>(
     air: &A,
     public_values: &Vec<Val<SC>>,
@@ -141,11 +166,19 @@ where
 {
     let quotient_size = quotient_domain.size();
     let width = trace_on_quotient_domain.width();
-    let mut sels = debug_span!("Compute Selectors")
+    tracing::debug!(
+        trace_width = width,
+        trace_domain_size = trace_domain.size(),
+        quotient_domain_size = quotient_size,
+        "Starting quotient polynomial computation"
+    );
+    
+    let mut sels = debug_span!("Compute selectors for quotient poly", domain_size = quotient_domain.size())
         .in_scope(|| trace_domain.selectors_on_coset(quotient_domain));
 
     let qdb = log2_strict_usize(quotient_domain.size()) - log2_strict_usize(trace_domain.size());
     let next_step = 1 << qdb;
+    tracing::debug!(qdb, next_step, "Computing step sizes");
 
     // We take PackedVal::<SC>::WIDTH worth of values at a time from a quotient_size slice, so we need to
     // pad with default values in the case where quotient_size is smaller than PackedVal::<SC>::WIDTH.
@@ -168,6 +201,7 @@ where
                 .collect()
         })
         .collect();
+    tracing::debug!(alpha_powers_count = alpha_powers.len(), "Prepared alpha powers");
 
     (0..quotient_size)
         .into_par_iter()
