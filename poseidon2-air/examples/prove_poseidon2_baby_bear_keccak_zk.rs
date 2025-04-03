@@ -100,12 +100,12 @@ fn main() -> Result<(), impl Debug> {
     type Pcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, SmallRng>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config, 4, SmallRng::seed_from_u64(1));
 
+    let challenger = Challenger::from_hasher(vec![], byte_hash);
+
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
-    let config = MyConfig::new(pcs);
+    let config = MyConfig::new(pcs, challenger);
 
-    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-    let proof = prove(&config, &air, &mut challenger, trace, &vec![]);
+    let proof = prove(&config, &air, trace, &vec![]);
 
-    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-    verify(&config, &air, &mut challenger, &proof, &vec![])
+    verify(&config, &air, &proof, &vec![])
 }
