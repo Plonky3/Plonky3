@@ -60,7 +60,7 @@ where
 
         // The paper mandates a minimum of 5 rounds and adds a 50%
         // safety margin: ceil(1.5 * max{5, rnds})
-        (3 * rnds.max(5) + 1) / 2
+        (3 * rnds.max(5_usize)).div_ceil(2)
     }
 
     // For a general field, we provide a generic constructor for the round constants.

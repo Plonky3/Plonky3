@@ -33,7 +33,7 @@ pub mod prelude {
 
 #[cfg(feature = "parallel")]
 pub mod iter {
-    pub use rayon::iter::repeat;
+    pub use rayon::iter::{repeat, repeatn as repeat_n};
 }
 
 #[cfg(not(feature = "parallel"))]
@@ -74,5 +74,5 @@ pub mod prelude {
 
 #[cfg(not(feature = "parallel"))]
 pub mod iter {
-    pub use core::iter::repeat;
+    pub use core::iter::{repeat, repeat_n};
 }
