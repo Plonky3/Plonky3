@@ -149,10 +149,10 @@ where
     /// - `dimensions`: A vector of the dimensions of the matrices committed to.
     /// - `index`: The index of a leaf in the tree.
     /// - `opened_values`: A vector of matrix rows. Assume that the tallest matrix committed
-    ///     to has height `2^n >= M_tall.height() > 2^{n - 1}` and the `j`th matrix has height
-    ///     `2^m >= Mj.height() > 2^{m - 1}`. Then `j`'th value of opened values must be the row `Mj[index >> (m - n)]`.
+    ///   to has height `2^n >= M_tall.height() > 2^{n - 1}` and the `j`th matrix has height
+    ///   `2^m >= Mj.height() > 2^{m - 1}`. Then `j`'th value of opened values must be the row `Mj[index >> (m - n)]`.
     /// - `proof`: A vector of sibling nodes. The `i`th element should be the node at level `i`
-    ///     with index `(index << i) ^ 1`.
+    ///   with index `(index << i) ^ 1`.
     ///
     /// Returns nothing if the verification is successful, otherwise returns an error.
     fn verify_batch(
