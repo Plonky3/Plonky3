@@ -213,6 +213,8 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
             .collect_vec()
     }
 
+    /// Given a matrix M, return a view to the sub-matrix containing the rows
+    /// `offset, offset + stride, ...` in that order.
     fn vertically_strided(self, stride: usize, offset: usize) -> VerticallyStridedMatrixView<Self>
     where
         Self: Sized,
