@@ -36,7 +36,7 @@ fn main() -> Result<(), impl Debug> {
 
     type ByteHash = Keccak256Hash;
     type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
-    type FieldHash = SerializingHasher64<U64Hash>;
+    type FieldHash = SerializingHasher64<Val, U64Hash>;
     let byte_hash = ByteHash {};
     let u64_hash = U64Hash::new(KeccakF {});
     let field_hash = FieldHash::new(u64_hash);

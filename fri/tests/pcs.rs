@@ -211,7 +211,7 @@ mod m31_fri_pcs {
     type Challenge = BinomialExtensionField<Mersenne31, 3>;
 
     type ByteHash = Keccak256Hash;
-    type FieldHash = SerializingHasher32<ByteHash>;
+    type FieldHash = SerializingHasher32<Val, ByteHash>;
 
     type MyCompress = CompressionFunctionFromHasher<ByteHash, 2, 32>;
 

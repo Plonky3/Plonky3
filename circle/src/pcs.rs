@@ -567,7 +567,7 @@ mod tests {
         type Challenge = BinomialExtensionField<Mersenne31, 3>;
 
         type ByteHash = Keccak256Hash;
-        type FieldHash = SerializingHasher32<ByteHash>;
+        type FieldHash = SerializingHasher32<Val, ByteHash>;
         let byte_hash = ByteHash {};
         let field_hash = FieldHash::new(byte_hash);
 

@@ -77,7 +77,7 @@ fn bench_bb_rescue(criterion: &mut Criterion) {
 fn bench_bb_blake3(criterion: &mut Criterion) {
     type F = BabyBear;
 
-    type H = SerializingHasher32<Blake3>;
+    type H = SerializingHasher32<F, Blake3>;
     let h = H::new(Blake3 {});
 
     type C = CompressionFunctionFromHasher<Blake3, 2, 32>;
@@ -91,7 +91,7 @@ fn bench_bb_blake3(criterion: &mut Criterion) {
 fn bench_bb_keccak(criterion: &mut Criterion) {
     type F = BabyBear;
 
-    type H = SerializingHasher32<Keccak256Hash>;
+    type H = SerializingHasher32<F, Keccak256Hash>;
     let k = Keccak256Hash {};
     let h = H::new(k);
 
