@@ -203,6 +203,7 @@ where
         &self,
         // For each round,
         rounds: Vec<(
+            // TODO: Why is this called rounds??
             &Self::ProverData,
             // for each matrix,
             Vec<
@@ -279,14 +280,16 @@ where
 
         // For each unique opening point z, we will find the largest degree bound
         // for that point, and precompute 1/(z - X) for the largest subgroup (in bitrev order).
-        let inv_denoms = compute_inverse_denominators(&mats_and_points, Val::GENERATOR); // TODO: We have hard coded the shift to be Val::GENERATOR.
+        let inv_denoms = compute_inverse_denominators(&mats_and_points, Val::GENERATOR); // TODO: We have hard coded the shift to be Val::GENERATOR. Why is this okay?
 
         // Evaluate coset representations and write openings to the challenger
         let all_opened_values = mats_and_points
             .iter()
             .map(|(mats, points)| {
+                // For each collection of matrices
                 izip!(mats.iter(), points.iter())
                     .map(|(mat, points_for_mat)| {
+                        // For each matrix and vector of opening points
                         points_for_mat
                             .iter()
                             .map(|&point| {
@@ -294,10 +297,16 @@ where
                                     info_span!("evaluate matrix", dims = %mat.dimensions())
                                         .entered();
 
-                                // Use Barycentric interpolation to evaluate the matrix at the given point.
+                                // Use Barycentric interpolation to evaluate each column of the matrix at the given point.
                                 let ys =
                                     info_span!("compute opened values with Lagrange interpolation")
                                         .in_scope(|| {
+                                            // TODO: I think this is potentially the cause of a bunch of bugs. This assumes that every input matrix has a blowup of at least self.fri.log_blowup.
+                                            // If the blow_up factor is smaller than self.fri.log_blowup. this will lead to errors. (If it is bigger, we shouldn't get any errors but it will be slightly slower.)
+
+                                            // The point of this correction is that each column of the matrix corresponds to a low degree polynomial.
+                                            // Hence we can save time by restricting the height of the matrix to be the minimal height which
+                                            // uniquely identifies the polynomial.
                                             let h = mat.height() >> self.fri.log_blowup;
                                             let (low_coset, _) = mat.split_rows(h);
                                             let mut inv_denoms =
@@ -307,7 +316,7 @@ where
                                                 &BitReversalPerm::new_view(low_coset),
                                                 Val::GENERATOR,
                                                 point,
-                                                Some(&inv_denoms),
+                                                Some(&inv_denoms), // Would be nice if interpolate_coset could accept things in bitrev order
                                             )
                                         });
                                 ys.iter()
@@ -562,13 +571,16 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
     .collect_vec();
     reverse_slice_index_bits(&mut coset);
 
+    // Compute the inverse of the polynomial (X - z) for each z in the coset using `batch_multiplicative_inverse`.
+    // This does involve calling `batch_multiplicative_inverse` for each z but there shouldn't be too many z's.
+    // If we need to speed this up, it should be possible to call `batch_multiplicative_inverse` exactly once.
     max_log_height_for_point
         .into_iter()
         .map(|(z, log_height)| {
             (
                 z,
                 batch_multiplicative_inverse(
-                    &coset[..(1 << log_height)]
+                    &coset[..(1 << log_height)] // Due to bit reversal, this gives the values of the coset gH where H is the subgroup of size 2^log_height.
                         .iter()
                         .map(|&x| z - x)
                         .collect_vec(),

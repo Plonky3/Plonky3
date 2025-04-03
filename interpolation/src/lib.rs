@@ -44,10 +44,16 @@ where
     Mat: Matrix<F>,
 {
     // Slight variation of this approach: https://hackmd.io/@vbuterin/barycentric_evaluation
+    // We start with the evaluations of a polynomial `f` over a coset `gH` of size `N` and want to compute `f(z)`.
+    // First note that `g^N - x^N` is equal to `0` at all points in the coset. Thus `(g^N - x^N)/(gh^i - x)`
+    // is equal to `0` at all points except for `gh^i` where it is equal to `N * (gh^i)^{N - 1} = N * g^{N - 1} * h^{-i}`.
+    // Hence `L_{i}(x) = h^i * (g^N - x^N)/(N * g^{N - 1} * (gh^i - x))` will be equal to `1` at `gh^i` and `0` at all other points in the coset.
+    // This means that we can compute `f(z)` as `\sum_i L_{i}(z) f(gh^i) = (g^N - x^N)/(N * g^{N - 1}) * \sum_i h^i/(gh^i - x) f(gh^i)`.
 
     let height = coset_evals.height();
     let log_height = log2_strict_usize(height);
 
+    // Compute `h^i/(gh^i - z)` for each i.
     let g = F::two_adic_generator(log_height).powers().take(height);
     let col_scale: Vec<_> = if let Some(diff_invs) = diff_invs {
         g.zip(diff_invs)
@@ -66,15 +72,21 @@ where
             .map(|(&sg, diff_inv)| diff_inv * sg)
             .collect()
     };
+
+    // For each column polynomial `fj`, compute `\sum_i h^i/(x_i - z) * fj(gh^i)`.
     let sum = coset_evals.columnwise_dot_product(&col_scale);
 
+    // Compute the vanishing polynomial of the coset.
+    // This is `Z_{sH}(z) = z^N - g^N`.
     let vanishing_polynomial =
         two_adic_coset_vanishing_polynomial::<EF>(log_height, shift.into(), point);
 
+    // Compute N * g^(N - 1)
     // In principle, height could be bigger than the characteristic of F.
     let denominator = shift
         .exp_u64(height as u64 - 1)
         .mul_2exp_u64(log_height as u64);
+
     scale_vec(vanishing_polynomial * denominator.inverse(), sum)
 }
 

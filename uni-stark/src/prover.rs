@@ -111,7 +111,7 @@ where
     // of quotient polynomials we will split Q(x) into. This is chosen to
     // always be a power of 2.
     let log_quotient_degree = log2_ceil_usize(constraint_degree - 1);
-    let quotient_degree = 1 << log_quotient_degree;
+    let num_quotient_chuncks = 1 << log_quotient_degree;
 
     // Initialize the PCS and the Challenger.
     let pcs = config.pcs();
@@ -196,8 +196,8 @@ where
     // exactly the evaluations of `Q_i(x)` on `gH` and `gkH`. Hence we can get these evaluation
     // vectors by simply splitting the evaluations of `Q_i(x)` into two halves.
     // quotient_chunks contains the evaluations of `q_{i0}(x)` and `q_{i1}(x)`.
-    let quotient_chunks = quotient_domain.split_evals(quotient_degree, quotient_flat);
-    let qc_domains = quotient_domain.split_domains(quotient_degree);
+    let quotient_chunks = quotient_domain.split_evals(num_quotient_chuncks, quotient_flat);
+    let qc_domains = quotient_domain.split_domains(num_quotient_chuncks);
 
     // TODO: This treats the all `q_ij` as if they are evaluations over the domain `H`.
     // This doesn't matter for low degree-ness but we need to be careful when checking
@@ -239,7 +239,7 @@ where
                 (
                     &quotient_data,
                     // open every chunk at zeta
-                    iter::repeat_n(vec![zeta], quotient_degree).collect_vec(),
+                    iter::repeat_n(vec![zeta], num_quotient_chuncks).collect_vec(),
                 ),
             ],
             &mut challenger,
