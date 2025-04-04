@@ -81,15 +81,14 @@ where
 
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_config);
 
-    let config = KeccakStarkConfig::new(pcs);
+    let challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
 
-    let mut proof_challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
-    let mut verif_challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
+    let config = KeccakStarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
+    let proof = prove(&config, &proof_goal, trace, &vec![]);
     report_proof_size(&proof);
 
-    verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
+    verify(&config, &proof_goal, &proof, &vec![])
 }
 
 /// Prove the given ProofGoal using the Poseidon2 hash function to build the merkle tree.
@@ -125,15 +124,14 @@ where
 
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_config);
 
-    let config = StarkConfig::new(pcs);
+    let challenger = DuplexChallenger::new(perm24);
 
-    let mut proof_challenger = DuplexChallenger::new(perm24.clone());
-    let mut verif_challenger = DuplexChallenger::new(perm24);
+    let config = StarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
+    let proof = prove(&config, &proof_goal, trace, &vec![]);
     report_proof_size(&proof);
 
-    verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
+    verify(&config, &proof_goal, &proof, &vec![])
 }
 
 /// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.
@@ -163,15 +161,14 @@ pub fn prove_m31_keccak<
 
     let pcs = CirclePcs::new(val_mmcs, fri_config);
 
-    let config = KeccakCircleStarkConfig::new(pcs);
+    let challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
 
-    let mut proof_challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
-    let mut verif_challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
+    let config = KeccakCircleStarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
+    let proof = prove(&config, &proof_goal, trace, &vec![]);
     report_proof_size(&proof);
 
-    verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
+    verify(&config, &proof_goal, &proof, &vec![])
 }
 
 /// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.
@@ -205,15 +202,14 @@ where
 
     let pcs = CirclePcs::new(val_mmcs, fri_config);
 
-    let config = Poseidon2CircleStarkConfig::new(pcs);
+    let challenger = DuplexChallenger::new(perm24.clone());
 
-    let mut proof_challenger = DuplexChallenger::new(perm24.clone());
-    let mut verif_challenger = DuplexChallenger::new(perm24);
+    let config = Poseidon2CircleStarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, &proof_goal, &mut proof_challenger, trace, &vec![]);
+    let proof = prove(&config, &proof_goal, trace, &vec![]);
     report_proof_size(&proof);
 
-    verify(&config, &proof_goal, &mut verif_challenger, &proof, &vec![])
+    verify(&config, &proof_goal, &proof, &vec![])
 }
 
 /// Report the result of the proof.

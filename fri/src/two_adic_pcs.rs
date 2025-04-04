@@ -1,3 +1,14 @@
+//! The FRI PCS protocol over two-adic fields.
+//!
+//! The following implements a slight variant of the usual FRI protocol. As usual we start
+//! with a polynomial `F(x)` of degree `n` given as evaluations over the coset `gH` with `|H| = 2^n`.
+//!
+//! Now consider the polynomial `G(x) = F(gx)`. Note that `G(x)` has the same degree as `F(x)` and
+//! the evaluations of `F(x)` over `gH` are identical to the evaluations of `G(x)` over `H`.
+//!
+//! Hence we can reinterpret our vector of evaluations as evaluations of `G(x)` over `H` and apply
+//! the standard FRI protocol to this evaluation vector.
+
 use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -192,6 +203,7 @@ where
         &self,
         // For each round,
         rounds: Vec<(
+            // TODO: Why is this called rounds??
             &Self::ProverData,
             // for each matrix,
             Vec<
@@ -238,6 +250,8 @@ where
 
         */
 
+        // Contained in each `Self::ProverData` is a list of matrices which have been committed to.
+        // We start by extracting those matrices to make them easier to work with.
         let mats_and_points = rounds
             .iter()
             .map(|(data, points)| {
@@ -255,24 +269,27 @@ where
                 (mats, points)
             })
             .collect_vec();
-        let mats = mats_and_points
-            .iter()
-            .flat_map(|(mats, _)| mats)
-            .collect_vec();
 
-        let global_max_height = mats.iter().map(|m| m.height()).max().unwrap();
+        // Find the maximum height of a matrix in the batch. TODO: This should be given by the matrices in the first round right?
+        let global_max_height = mats_and_points
+            .iter()
+            .flat_map(|(mats, _)| mats.iter().map(|m| m.height()))
+            .max()
+            .unwrap();
         let log_global_max_height = log2_strict_usize(global_max_height);
 
         // For each unique opening point z, we will find the largest degree bound
         // for that point, and precompute 1/(z - X) for the largest subgroup (in bitrev order).
-        let inv_denoms = compute_inverse_denominators(&mats_and_points, Val::GENERATOR);
+        let inv_denoms = compute_inverse_denominators(&mats_and_points, Val::GENERATOR); // TODO: We have hard coded the shift to be Val::GENERATOR. Why is this okay?
 
         // Evaluate coset representations and write openings to the challenger
         let all_opened_values = mats_and_points
             .iter()
             .map(|(mats, points)| {
+                // For each collection of matrices
                 izip!(mats.iter(), points.iter())
                     .map(|(mat, points_for_mat)| {
+                        // For each matrix and vector of opening points
                         points_for_mat
                             .iter()
                             .map(|&point| {
@@ -280,20 +297,28 @@ where
                                     info_span!("evaluate matrix", dims = %mat.dimensions())
                                         .entered();
 
-                                // Use Barycentric interpolation to evaluate the matrix at the given point.
+                                // Use Barycentric interpolation to evaluate each column of the matrix at the given point.
                                 let ys =
                                     info_span!("compute opened values with Lagrange interpolation")
                                         .in_scope(|| {
+                                            // TODO: I think this is potentially the cause of a bunch of bugs. This assumes that every input matrix has a blowup of at least self.fri.log_blowup.
+                                            // If the blow_up factor is smaller than self.fri.log_blowup. this will lead to errors. (If it is bigger, we shouldn't get any errors but it will be slightly slower.)
+
+                                            // The point of this correction is that each column of the matrix corresponds to a low degree polynomial.
+                                            // Hence we can save time by restricting the height of the matrix to be the minimal height which
+                                            // uniquely identifies the polynomial.
                                             let h = mat.height() >> self.fri.log_blowup;
                                             let (low_coset, _) = mat.split_rows(h);
                                             let mut inv_denoms =
                                                 inv_denoms.get(&point).unwrap()[..h].to_vec();
                                             reverse_slice_index_bits(&mut inv_denoms);
+
+                                            // This assumes that low_coset is `gH` for `g` the generator of the group.
                                             interpolate_coset(
                                                 &BitReversalPerm::new_view(low_coset),
                                                 Val::GENERATOR,
                                                 point,
-                                                Some(&inv_denoms),
+                                                Some(&inv_denoms), // Would be nice if interpolate_coset could accept things in bitrev order
                                             )
                                         });
                                 ys.iter()
@@ -307,10 +332,12 @@ where
             .collect_vec();
 
         // Batch combination challenge
+        // TODO: Should we be computing a different alpha for every height?
         let alpha: Challenge = challenger.sample_algebra_element();
 
-        let mut num_reduced = [0; 32];
-        let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None);
+        // Now that we have the openings, we want to: TODO??
+        let mut num_reduced = [0; 32]; // What will this contain?
+        let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None); // What will this contain?
 
         for ((mats, points), openings_for_round) in
             mats_and_points.iter().zip(all_opened_values.iter())
@@ -322,15 +349,26 @@ where
                     info_span!("reduce matrix quotient", dims = %mat.dimensions()).entered();
 
                 let log_height = log2_strict_usize(mat.height());
+
+                // If this is our first matrix at this height, initialise reduced_openings to zero.
+                // Otherwise, get a mutable reference to it.
                 let reduced_opening_for_log_height = reduced_openings[log_height]
                     .get_or_insert_with(|| vec![Challenge::ZERO; mat.height()]);
                 debug_assert_eq!(reduced_opening_for_log_height.len(), mat.height());
 
+                // Treating our matrix M as the evaluations of functions M0, M1, ...
+                // Compute the evaluations of `Mred(x) = M0(x) + alpha*M1(x) + ...`
                 let mat_compressed = info_span!("compress mat")
+                    // TODO: The collect here is just for timing purposes. (This is currently the main bottleneck in reduce matrix quotient).
+                    // It should be removed eventually as dot_ext_powers returns a parallel iterator and we use mat_compressed.par_iter() later.
                     .in_scope(|| mat.dot_ext_powers(alpha).collect::<Vec<_>>());
 
                 for (&point, openings) in points_for_mat.iter().zip(openings_for_mat) {
+                    // If we have multiple matrices at the same height, we need to scale mat to combine them.
                     let alpha_pow_offset = alpha.exp_u64(num_reduced[log_height] as u64);
+
+                    // As we have all the openings `Mi(z)`, we can combine them using `alpha`
+                    // in an identical way to before to also compute `Mred(z)`.
                     let reduced_openings: Challenge =
                         dot_product(alpha.powers(), openings.iter().copied());
 
@@ -341,6 +379,7 @@ where
                             // This might be longer, but zip will truncate to smaller subgroup
                             // (which is ok because it's bitrev)
                             .zip(inv_denoms.get(&point).unwrap().par_iter())
+                            // Map the function `Mred(x)` to `(Mred(z) - Mred(x))/(z - x)`
                             .for_each(|((&reduced_row, ro), &inv_denom)| {
                                 *ro +=
                                     alpha_pow_offset * (reduced_openings - reduced_row) * inv_denom
@@ -352,6 +391,7 @@ where
             }
         }
 
+        // It remains to prove that all out functions are low degree.
         let fri_input = reduced_openings.into_iter().rev().flatten().collect_vec();
 
         let g: TwoAdicFriGenericConfigForMmcs<Val, InputMmcs> =
@@ -421,7 +461,7 @@ where
             // TODO: separate this out into functions
 
             // log_height -> (alpha_pow, reduced_opening)
-            let mut reduced_openings = BTreeMap::<usize, (Challenge, Challenge)>::new();
+            let mut reduced_openings = BTreeMap::new();
 
             for (batch_opening, (batch_commit, mats)) in
                 zip_eq(input_proof, &rounds, FriError::InvalidProofShape)?
@@ -510,11 +550,13 @@ where
     }
 }
 
+/// TODO: Add doc comment
 #[instrument(skip_all)]
 fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matrix<F>>(
     mats_and_points: &[(Vec<M>, &Vec<Vec<EF>>)],
     coset_shift: F,
 ) -> LinearMap<EF, Vec<EF>> {
+    // For each point z, find the largest height of a matrix that we need to open at that point.
     let mut max_log_height_for_point: LinearMap<EF, usize> = LinearMap::new();
     for (mats, points) in mats_and_points {
         for (mat, points_for_mat) in izip!(mats, *points) {
@@ -529,23 +571,33 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
         }
     }
 
-    // Compute the largest subgroup we will use, in bitrev order.
+    // Compute the largest coset we will use, collect all
+    // of it's elements into a vector and bit reverse it.
+    // This means that the first 2^n elements will correspond
+    // to the coset of size 2^N.
+    //
+    // TODO: This seems like a possibly incorrect thing to do?
+    // Shouldn't smaller matrices lie over disjoint cosets? (E.g. Fold of gH is g^2H^2)
+    // Might be to do with our novel FRI implementation.
     let max_log_height = *max_log_height_for_point.values().max().unwrap();
-    let mut subgroup = cyclic_subgroup_coset_known_order(
+    let mut coset = cyclic_subgroup_coset_known_order(
         F::two_adic_generator(max_log_height),
         coset_shift,
         1 << max_log_height,
     )
     .collect_vec();
-    reverse_slice_index_bits(&mut subgroup);
+    reverse_slice_index_bits(&mut coset);
 
+    // Compute the inverse of the polynomial (X - z) for each z in the coset using `batch_multiplicative_inverse`.
+    // This does involve calling `batch_multiplicative_inverse` for each z but there shouldn't be too many z's.
+    // If we need to speed this up, it should be possible to call `batch_multiplicative_inverse` exactly once.
     max_log_height_for_point
         .into_iter()
         .map(|(z, log_height)| {
             (
                 z,
                 batch_multiplicative_inverse(
-                    &subgroup[..(1 << log_height)]
+                    &coset[..(1 << log_height)] // Due to bit reversal, this gives the values of the coset gH where H is the subgroup of size 2^log_height.
                         .iter()
                         .map(|&x| z - x)
                         .collect_vec(),

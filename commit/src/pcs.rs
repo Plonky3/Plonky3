@@ -38,12 +38,14 @@ where
     /// This should return a coset domain (s.t. Domain::next_point returns Some)
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain;
 
+    /// TODO: Needs a doc comment
     #[allow(clippy::type_complexity)]
     fn commit(
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
     ) -> (Self::Commitment, Self::ProverData);
 
+    /// TODO: Needs a doc comment
     fn get_evaluations_on_domain<'a>(
         &self,
         prover_data: &'a Self::ProverData,
@@ -51,6 +53,15 @@ where
         domain: Self::Domain,
     ) -> Self::EvaluationsOnDomain<'a>;
 
+    /// TODO: improve this doc comment.
+    ///
+    /// Arguments:
+    /// - `rounds`: Each element of rounds is a list of functions to roll in at that round of FRI (or associated low degree test).
+    ///   For each function, we provide a list of challenge points which that function should be opened at.
+    ///
+    /// Output:
+    /// - `OpenedValues`: The values opened at the challenge points.
+    /// - `Proof`: A low degree test proof.
     fn open(
         &self,
         // For each round,
@@ -65,6 +76,7 @@ where
         challenger: &mut Challenger,
     ) -> (OpenedValues<Challenge>, Self::Proof);
 
+    /// TODO: Needs a doc comment
     #[allow(clippy::type_complexity)]
     fn verify(
         &self,

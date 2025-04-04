@@ -29,23 +29,30 @@ pub trait StarkGenericConfig {
     type Challenge: ExtensionField<Val<Self>>;
 
     /// The challenger (Fiat-Shamir) implementation used.
-    type Challenger: FieldChallenger<Val<Self>>
+    type Challenger: Clone
+        + FieldChallenger<Val<Self>>
         + CanObserve<<Self::Pcs as Pcs<Self::Challenge, Self::Challenger>>::Commitment>
         + CanSample<Self::Challenge>;
 
+    /// Get the PCS used in this configuration.
     fn pcs(&self) -> &Self::Pcs;
+
+    /// Get a new initialisation of the challenger used in this configuration.
+    fn initialise_challenger(&self) -> Self::Challenger;
 }
 
 #[derive(Debug)]
 pub struct StarkConfig<Pcs, Challenge, Challenger> {
     pcs: Pcs,
-    _phantom: PhantomData<(Challenge, Challenger)>,
+    challenger: Challenger,
+    _phantom: PhantomData<Challenge>,
 }
 
 impl<Pcs, Challenge, Challenger> StarkConfig<Pcs, Challenge, Challenger> {
-    pub const fn new(pcs: Pcs) -> Self {
+    pub const fn new(pcs: Pcs, challenger: Challenger) -> Self {
         Self {
             pcs,
+            challenger,
             _phantom: PhantomData,
         }
     }
@@ -57,7 +64,8 @@ where
     Pcs: p3_commit::Pcs<Challenge, Challenger>,
     Challenger: FieldChallenger<<Pcs::Domain as PolynomialSpace>::Val>
         + CanObserve<<Pcs as p3_commit::Pcs<Challenge, Challenger>>::Commitment>
-        + CanSample<Challenge>,
+        + CanSample<Challenge>
+        + Clone,
 {
     type Pcs = Pcs;
     type Challenge = Challenge;
@@ -65,5 +73,9 @@ where
 
     fn pcs(&self) -> &Self::Pcs {
         &self.pcs
+    }
+
+    fn initialise_challenger(&self) -> Self::Challenger {
+        self.challenger.clone()
     }
 }
