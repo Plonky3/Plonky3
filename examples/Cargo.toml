@@ -26,7 +26,6 @@ p3-uni-stark.workspace = true
 bincode = { workspace = true, features = ["serde", "alloc"] }
 clap.workspace = true
 rand.workspace = true
-serde = { workspace = true, features = ["derive", "alloc"] }
 
 
 [dev-dependencies]
