@@ -312,6 +312,8 @@ where
                                             let mut inv_denoms =
                                                 inv_denoms.get(&point).unwrap()[..h].to_vec();
                                             reverse_slice_index_bits(&mut inv_denoms);
+
+                                            // This assumes that low_coset is `gH` for `g` the generator of the group.
                                             interpolate_coset(
                                                 &BitReversalPerm::new_view(low_coset),
                                                 Val::GENERATOR,

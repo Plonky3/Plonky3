@@ -4,25 +4,27 @@
 //! for simplicities sake, we focus on the regular stark proof scheme here. Information about the circle stark proof scheme
 //! can be found in the paper https://eprint.iacr.org/2024/278.pdf.
 //!
-//! TODO: Add a similar overview of the circle stark proof scheme.
+//! TODO: At some point we should write a similar overview for how the circle stark proof scheme works.
 //!
 //! Standard STARK:
 //!
 //! Definitions and Setup:
-//! - Fix a field `F` with cryptographically large extension field `G`.
+//! - Fix a field `F` with cryptographically large extension field `G` of degree `d + 1`. Additionally,
+//!   Fix a basis `{1, b1, ..., b_d}` for `G` over `F`.
 //! - Let `T` denote the trace of the computation. It is a matrix of height `N = 2^n` and width `l`.
 //! - Let `H = <h>` denote a multiplicative subgroup of `F` of size `2^n` with generator `h`.
 //! - Given the `i`th trace column `Ti`, we let `Ti(x)` denote the unique polynomial of degree `N`
 //!   such that `Ti(h^j) = Ti[j]` for `j` in `0..N`.
 //!   In other words, `Ti(x)` is the evaluation vector of `Ti(x)` over `H`.
-//! - Let `C(X1, ..., Xl, Y1, ..., Yl, Z1, ..., Zj)` denote the constraint polynomial coming from the AIR.
-//!   It depends on both the current row and the next row and a collection of selector polynomials.
+//! - Let `C_{alpha}(X1, ..., Xl, Y1, ..., Yl, Z1, ..., Zj)` denote the constraint polynomial coming from the AIR.
+//!   It can depend on the current row, the next row, a collection of selector polynomials and a challenge `alpha`.
+//!   Assume for the purpose of the proof that the degree of `C_{alpha}` is `3``.
 //! - Given a polynomial `f` and a set `D`, let `[[f, D]]` denote a merkle commitment to
 //!   the evaluation vector of `f` over `D`. Similarly, `[[{f0, ..., fk}, D]]` denotes a combined merkle
 //!   commitment to the evaluation vectors of the polynomials `f0, ..., fk` over `D`.
 //!
 //! The goal of the prover is to produce a proof that it knows a trace `T` such that:
-//! `C(T1(x), ..., Tl(x), T1(gx), ..., Tl(gx), selectors) = 0` for all `x` in `H`.
+//! `C_{alpha}(T1(x), ..., Tl(x), T1(gx), ..., Tl(gx), selectors(x)) = 0` for all choices of `alpha in G` and `x` in `H`.
 //!
 //! Proof Overview:
 //!
@@ -31,12 +33,73 @@
 //! of `Ti(x)` over `D`. The prover makes a combined merkle commitment `[[{T1, ..., Tl}, D]]`
 //! to these vectors and sends it to `V`.
 //!
-//! The prover is telling the truth if and only if there exists a polynomial `Q` of degree `< deg(C) * (N - 1) - N`
-//! such that `Q(x) = C(T1(x), ..., Tl(x), T1(gx), ..., Tl(gx))/ZH(x)` where `ZH(x) = x^N - 1` is a vanishing polynomial
+//! Next the verifier responds with it's first challenge `alpha` which the prover uses to construct the constraint polynomial `C_{alpha}`.
+//!
+//! If the prover is telling the truth, it can find a polynomial `Q` of degree `< 2N - 1` such that
+//! `Q(x) = C_{alpha}(T1(x), ..., Tl(x), T1(gx), ..., Tl(gx), selectors(x))/ZH(x)` where `ZH(x) = x^N - 1` is a vanishing polynomial
 //! of the subgroup `H`.
 //!
-//! The prover uses `C` and `Ti` to compute the evaluations of the quotient polynomial `Q` over `D`.
+//! As `alpha` is in `G`, `Q(x)` will be a polynomial with coefficients in `G`. Hence we can split `Q(x)` into `d` polynomials
+//! `Q0, ..., Q_d` such that `Q(x) = Q0(x) + b_1 Q_1(x) + ... + b_dQ_d(x)]` holds for all `x` in `F`. The polynomials
+//! `Q0, ..., Q_d` are similarly of degree `<= 2N - 1` and their evaluation vectors can be easily derived from the evaluation
+//! vector of `Q(x)`.
 //!
+//! Hence the prover now computes the evaluation vectors of `Q0, ..., Q_d` over `D` using the formula `C_{alpha}(T1(x), ..., Tl(x), T1(gx), ..., Tl(gx), selectors)/ZH(x)`
+//!
+//! Next, define `L_g0(x) = (x^N - (g1)^N)/(g0^N - (g1)^N)` and `L_{g1}(x) = (x^N - g1^N)/((g0)^N - g1^N)`.
+//! Then `L_g0` is equal to `1` on `g0H` and `0` on `g1H` and `L_{gk}` is equal to `1` on `g1H` and `0` on `g0H`.
+//!
+//! Then the prover can decompose `Qi(x) = L_{g0}(x)qi0(x) + L_{g1}(x)qi1(x)` where `qi0(x)` and `qi1(x)` are
+//! polynomials of degree `<= N - 1`. The evaluations of `qi0(x), qi1(x)` on `g0H` and `g1H` respectively are
+//! exactly equal to the evaluations of `Qi(x)` on `g0H` and `g1H`. So the prover has access to these.
+//!
+//! The prover now computes the evaluation vectors of `qij(x)` over `D` and makes another
+//! combined merkle commitment `[[{q00, q01, ..., qd0, qd1}, D]]` which it sends to `V`.
+//!
+//! Next the verifier responds with it's second challenge `zeta`. The prover responds with a list of evaluations
+//! of `T1(zeta), ..., Tl(zeta)`, `T1(g0 zeta), ..., Tl(g0 zeta)` and `qij(zeta)`.
+//!
+//! The Verifier checks that `C_{alpha}(T1(zeta), ..., Tl(zeta), T1(h zeta), ..., Tl(h zeta), selectors(zeta))/ZH(zeta)`
+//! is equal to  `L_{g0}(zeta)(q00(zeta) + b_1q_10(zeta) ... + b_dq_d0(zeta)) + L_{g1}(zeta)(q01(zeta) + b_1q_11(zeta) ... + b_dq_d1(zeta))`.
+//!
+//! Next the Verifier sends a third challenge `gamma` which the prover uses to combine all of their polynomials into
+//! the single polynomial:
+//! ```ignore
+//!     f(x) = (T1(zeta) - T1(x))/(zeta - x) + gamma (T1(g * zeta) - T1(x))/(g * zeta - x)
+//!             + ...
+//!             + gamma^{2l - 2} (Tl(zeta) - Tl(x))/(zeta - x) + gamma^{2l - 1} (Tl(g * zeta) - Tl(x))/(g * zeta - x)
+//!             + gamma^{2l} (q00(zeta) - q00(x))/(zeta - x)
+//!             + ...
+//!             + gamma^{2l + 2d + 1} (qd1(zeta) - qd1(x))/(zeta - x)
+//! ```
+//!
+//! Note that the verifier is also able to compute `f(x)` whenever they get the values of `T1(x), ..., qd1(x)`.
+//!
+//! The prover now engages in the standard FRI protocol to prover that `f(x)` is a low degree polynomial with the exception
+//! that, instead of opening values of `f(x)` it opens the values of `T1(x), ..., qd1(x)` using its previous commitments.
+//!
+//!
+//! Why Does this work?
+//!
+//! Assume that the prover is lying and so no valid trace `T` exists. The prover has to commit to
+//! the polynomials `T1, ..., Tl` before receiving `alpha` which means that, with high probability,
+//! the polynomial `C_alpha(x) = C_{alpha}T1(x), ..., Tl(x), T1(hx), ..., Tl(hx), selectors(x))` will not be `0` at
+//! all point in `H`. Hence `Q(x) = C_alpha(x)/Z_H(x)` will be a high degree polynomial.
+//!
+//! But the prover has to now commit to the polynomials `q00(x), ..., qd1(x)`. If some of the `q`'s, are high degree,
+//! this will be caught by the FRI check. So the prover must commit low degree polynomials.
+//!
+//! Hence the polynomial
+//! `Q'(x) = L_{g0}(x)(q00(x) + b_1q_10(x) ... + b_dq_d0(x)) + L_{g1}(x)(q01(x) + b_1q_11(x) ... + b_dq_d1(x))`
+//! will be incorrect and so with high probability `Q'(zeta) =\= Q(zeta)`.
+//!
+//! Hence either the prover must lie about one of the evaluations `T0(zeta), T0(h * zeta), ..., qd1(zeta)`.
+//!
+//! But, given a polynomial `B` if `B(zeta) =\= a`, `(B(x) - a)/(x - zeta)` will be a high degree polynomial.
+//!
+//! Hence if the prover lies about one of the evaluations, this will also be caught by the FRI check.
+//!
+//! Thus if the proof passes, the verifier is convinced with high probability that the claimed statement is correct.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -203,6 +266,14 @@ where
     // This doesn't matter for low degree-ness but we need to be careful when checking
     // equalities.
 
+    // When computing quotient_data, we take `q_ij` (defined on `gj H`), re-interpret it to
+    // be defined on `H`, e.g. replacing it with `q_ij'(x) = q_ij(gj x)`. Then we do a coset LDE to
+    // get it's evaluations on `(g/gj) H'` which we commit to. Then when computing opening values
+    // we again re-interpret the evaluation vector to be defined on `g H` e.g. replacing our
+    // polynomial with `q_ij''(x) = q_ij'(gj^{-1} x) = q_ij(gj gj^{-1} x) = x`.
+    // In other words our commitment does actually compute the evaluations of `q_ij(x)` over `gH`.
+    // Despite seemingly doing something else...
+
     // For each polynomial `q_ij`, compute the evaluation vector of `q_ij(x)` over `gH'`. This
     // is then hashed into a Merkle tree with it's rows bit-reversed.
     //      quotient_commit contains the root of the tree
@@ -232,6 +303,7 @@ where
     //
     // TODO: What are opened_values, opening_proof??
     // This also produces a FRI proof??
+    // Why is zeta the right point to evaluate quotient_data at?
     let (opened_values, opening_proof) = info_span!("open").in_scope(|| {
         pcs.open(
             vec![
