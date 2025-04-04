@@ -14,8 +14,8 @@ use p3_matrix::util::reverse_matrix_index_bits;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_util::log2_strict_usize;
+use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
-use rand_chacha::ChaCha20Rng;
 
 type Val = BabyBear;
 type Challenge = BinomialExtensionField<Val, 4>;
@@ -131,7 +131,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
 fn test_fri_ldt() {
     // FRI is kind of flaky depending on indexing luck
     for i in 0..4 {
-        let mut rng = ChaCha20Rng::seed_from_u64(i as u64);
+        let mut rng = SmallRng::seed_from_u64(i as u64);
         do_test_fri_ldt(&mut rng, i + 1);
     }
 }
@@ -142,7 +142,7 @@ fn test_fri_ldt() {
 fn test_fri_ldt_should_panic() {
     // FRI is kind of flaky depending on indexing luck
     for i in 0..4 {
-        let mut rng = ChaCha20Rng::seed_from_u64(i);
+        let mut rng = SmallRng::seed_from_u64(i as u64);
         do_test_fri_ldt(&mut rng, 5);
     }
 }
