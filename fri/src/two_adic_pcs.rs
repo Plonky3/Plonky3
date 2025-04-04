@@ -330,10 +330,12 @@ where
             .collect_vec();
 
         // Batch combination challenge
+        // TODO: Should we be computing a different alpha for every height?
         let alpha: Challenge = challenger.sample_algebra_element();
 
-        let mut num_reduced = [0; 32];
-        let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None);
+        // Now that we have the openings, we want to: TODO??
+        let mut num_reduced = [0; 32]; // What will this contain?
+        let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None); // What will this contain?
 
         for ((mats, points), openings_for_round) in
             mats_and_points.iter().zip(all_opened_values.iter())
@@ -345,15 +347,26 @@ where
                     info_span!("reduce matrix quotient", dims = %mat.dimensions()).entered();
 
                 let log_height = log2_strict_usize(mat.height());
+
+                // If this is our first matrix at this height, initialise reduced_openings to zero.
+                // Otherwise, get a mutable reference to it.
                 let reduced_opening_for_log_height = reduced_openings[log_height]
                     .get_or_insert_with(|| vec![Challenge::ZERO; mat.height()]);
                 debug_assert_eq!(reduced_opening_for_log_height.len(), mat.height());
 
+                // Treating our matrix M as the evaluations of functions M0, M1, ...
+                // Compute the evaluations of `Mred(x) = M0(x) + alpha*M1(x) + ...`
                 let mat_compressed = info_span!("compress mat")
+                    // TODO: The collect here is just for timing purposes. (This is currently the main bottleneck in reduce matrix quotient).
+                    // It should be removed eventually as dot_ext_powers returns a parallel iterator and we use mat_compressed.par_iter() later.
                     .in_scope(|| mat.dot_ext_powers(alpha).collect::<Vec<_>>());
 
                 for (&point, openings) in points_for_mat.iter().zip(openings_for_mat) {
+                    // If we have multiple matrices at the same height, we need to scale mat to combine them.
                     let alpha_pow_offset = alpha.exp_u64(num_reduced[log_height] as u64);
+
+                    // As we have all the openings `Mi(z)`, we can combine them using `alpha`
+                    // in an identical way to before to also compute `Mred(z)`.
                     let reduced_openings: Challenge =
                         dot_product(alpha.powers(), openings.iter().copied());
 
@@ -364,6 +377,7 @@ where
                             // This might be longer, but zip will truncate to smaller subgroup
                             // (which is ok because it's bitrev)
                             .zip(inv_denoms.get(&point).unwrap().par_iter())
+                            // Map the function `Mred(x)` to `(Mred(z) - Mred(x))/(z - x)`
                             .for_each(|((&reduced_row, ro), &inv_denom)| {
                                 *ro +=
                                     alpha_pow_offset * (reduced_openings - reduced_row) * inv_denom
@@ -375,6 +389,7 @@ where
             }
         }
 
+        // It remains to prove that all out functions are low degree.
         let fri_input = reduced_openings.into_iter().rev().flatten().collect_vec();
 
         let g: TwoAdicFriGenericConfigForMmcs<Val, InputMmcs> =

@@ -264,19 +264,30 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
             .collect()
     }
 
-    /// Multiply this matrix by the vector of powers of `base`, which is an extension element.
-    fn dot_ext_powers<EF>(&self, base: EF) -> impl IndexedParallelIterator<Item = EF>
+    /// Given the matrix `M` and extension element `beta`, compute the dot product
+    /// of each row of `M` with the vector of powers of `beta`.
+    fn dot_ext_powers<EF>(&self, beta: EF) -> impl IndexedParallelIterator<Item = EF>
     where
         T: Field,
         EF: ExtensionField<T>,
     {
-        let powers_packed = EF::ExtensionPacking::packed_ext_powers(base)
+        // Get the packed powers of `beta`. This will be reused for each row.
+        let powers_packed = EF::ExtensionPacking::packed_ext_powers(beta)
             .take(self.width().next_multiple_of(T::Packing::WIDTH))
             .collect_vec();
+
+        // We pack the rows horizontally. This means that after our dot product we need to
+        // sum the packed elements together to get the final result.
         self.par_padded_horizontally_packed_rows::<T::Packing>()
             .map(move |row_packed| {
+                // Note that this is actually a base - ext dot product.
+                // It should be possible to make use of this to speed this computation
+                // up if it ever becomes a bottleneck.
                 let packed_sum_of_packed: EF::ExtensionPacking =
                     dot_product(powers_packed.iter().copied(), row_packed);
+
+                // We use `as_basis_coefficients_slice` to convert `EF::ExtensionPacking`
+                // to a slice of `F::Packing` elements which we can then sum.
                 let sum_of_packed: EF = EF::from_basis_coefficients_fn(|i| {
                     packed_sum_of_packed.as_basis_coefficients_slice()[i]
                         .as_slice()
