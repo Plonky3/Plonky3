@@ -51,7 +51,7 @@ pub fn keccak_field_32_hash(c: &mut Criterion) {
 
     type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
     let u64_hash = U64Hash::new(KeccakF {});
-    type FieldHash = SerializingHasher32To64<U64Hash>;
+    type FieldHash = SerializingHasher32To64<F, U64Hash>;
     let field_hash = FieldHash::new(u64_hash);
 
     let mut group = c.benchmark_group("keccak field 32 hash");

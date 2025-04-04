@@ -23,7 +23,7 @@ pub(crate) type KeccakCompressionFunction =
 pub(crate) type KeccakMerkleMmcs<F> = MerkleTreeMmcs<
     [F; KECCAK_VECTOR_LEN],
     [u64; KECCAK_VECTOR_LEN],
-    SerializingHasher32To64<PaddingFreeSponge<KeccakF, 25, 17, 4>>,
+    SerializingHasher32To64<F, PaddingFreeSponge<KeccakF, 25, 17, 4>>,
     KeccakCompressionFunction,
     4,
 >;

@@ -55,7 +55,7 @@ fn main() -> Result<(), impl Debug> {
     type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
     let u64_hash = U64Hash::new(KeccakF {});
 
-    type FieldHash = SerializingHasher32To64<U64Hash>;
+    type FieldHash = SerializingHasher32To64<Val, U64Hash>;
     let field_hash = FieldHash::new(u64_hash);
 
     type MyCompress = CompressionFunctionFromHasher<U64Hash, 2, 4>;

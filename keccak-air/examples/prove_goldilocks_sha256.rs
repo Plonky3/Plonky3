@@ -35,7 +35,7 @@ fn main() -> Result<(), impl Debug> {
     type Challenge = BinomialExtensionField<Val, 2>;
 
     type ByteHash = Sha256;
-    type FieldHash = SerializingHasher64<ByteHash>;
+    type FieldHash = SerializingHasher64<Val, ByteHash>;
     let byte_hash = ByteHash {};
     let field_hash = FieldHash::new(byte_hash);
 
