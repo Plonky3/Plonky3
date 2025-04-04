@@ -97,6 +97,24 @@ pub(crate) fn multiply_by_power_polynomial<F: Field>(
     Polynomial::from_coeffs(new_coeffs)
 }
 
+pub fn fold_evaluations_at_domain<F: TwoAdicField>(
+    evals: Vec<F>,
+    domain: TwoAdicMultiplicativeCoset<F>,
+    log_folding_factor: usize,
+    c: F,
+) -> Vec<F> {
+    // NP TODO implement properly
+    use p3_dft::Radix2Dit;
+    let dft = Radix2Dit::default();
+
+    let poly = Polynomial::from_coeffs(domain_idft(evals, domain, &dft));
+    let folded_poly = fold_polynomial(&poly, c, log_folding_factor);
+    let sub_domain = domain.exp_power_of_2(log_folding_factor).unwrap();
+    let out = domain_dft(sub_domain, folded_poly.coeffs().to_vec(), &dft);
+
+    out
+}
+
 // Compute the evaluation of a folded polynomial at a point given the
 // evaluations of the original polynomial at the k-th roots of that point, where
 // k is the folding factor
@@ -232,7 +250,7 @@ pub(crate) fn observe_usize_slice<F: Field, C: CanObserve<F>>(
 // This function panics if the degree of the polynomial is greater than or
 // equal to the size of the coset. In this case, a larger domain should be
 // used instead.
-pub fn domain_dft<F: TwoAdicField>(
+pub(crate) fn domain_dft<F: TwoAdicField>(
     domain: TwoAdicMultiplicativeCoset<F>,
     poly_coeffs: Vec<F>,
     dft: &Radix2Dit<F>,
@@ -267,6 +285,16 @@ pub fn domain_dft<F: TwoAdicField>(
     } else {
         dft.coset_dft(coeffs, domain.shift())
     }
+}
+
+// NP TODO explain that this is here simply for symmetry with domain_dft
+#[inline]
+pub(crate) fn domain_idft<F: TwoAdicField>(
+    evals: Vec<F>,
+    domain: TwoAdicMultiplicativeCoset<F>,
+    dft: &Radix2Dit<F>,
+) -> Vec<F> {
+    dft.coset_idft(evals, domain.shift())
 }
 
 #[cfg(test)]

@@ -19,6 +19,10 @@ mod error;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+// NP TODO remove
+mod tests_evals;
+
 // The virtual function
 //   DegCor(Quot(f, interpolating_polynomial), quotient_set)
 // in the notation of the paper, where `f` is the underlying function. In the
@@ -772,3 +776,8 @@ fn verify_evaluations<F: TwoAdicField>(
             .map(|(y, denom)| (f_eval - y) * denom)
             .sum()
 }
+
+// NP TODO proofs might differ because before we were sending the verifier
+// polynomial.coeffs() and now we're working with coeffs directly and not
+// trimming leading coeffs; decide if we want to trim; if so, proofs should
+// match the old ones

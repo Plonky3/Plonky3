@@ -213,6 +213,35 @@ where
         log_last_folding_factor,
     );
 
+    // NP TODO remove
+    let log_size = config
+        .round_configs()
+        .last()
+        .unwrap()
+        .log_evaluation_domain_size
+        - config.round_configs().last().unwrap().log_inv_rate;
+    let K_M = TwoAdicMultiplicativeCoset::new(witness.domain.shift(), log_size).unwrap();
+    let K_M_pow = K_M.exp_power_of_2(log_last_folding_factor).unwrap();
+    println!(
+        "Poly prover:K_M gen: {:?}, shift: {:?}",
+        K_M.subgroup_generator(),
+        K_M.shift()
+    );
+    // println!("Poly prover: evals of f_M at K_M: {:?}", K_M.iter().map(|x| witness.polynomial.evaluate(&x)).collect_vec());
+    println!(
+        "Poly prover: evals of f_M at K_M: {:?}",
+        witness.polynomial.evaluate(&K_M.element(2))
+    );
+    // println!("Poly prover: evals of g_(M + 1) at K_M^(k_M): {:?}", K_M_pow.iter().map(|x| final_polynomial.evaluate(&x)).collect_vec());
+    println!(
+        "Poly prover: evals of g_(M + 1) at K_M^(k_M): {:?}",
+        final_polynomial.evaluate(&K_M_pow.element(2))
+    );
+    println!(
+        "Poly prover: coeffs of g_(M + 1): {:?}",
+        final_polynomial.coeffs()[2]
+    );
+
     let final_queries = config.final_num_queries();
 
     // Logarithm of |(L_M)^(k_M)|
@@ -294,6 +323,17 @@ where
 
     // Obtain g_i as the folding of f_{i - 1}
     let folded_polynomial = fold_polynomial(&polynomial, folding_randomness, log_folding_factor);
+
+    println!("**** Prover poly round {}", round);
+    println!("           randomness: {:?}", folding_randomness);
+    println!(
+        "           polynomial before folding at 3: {:?}",
+        polynomial.evaluate(&EF::from_u64(3))
+    );
+    println!(
+        "           folded_polynomial at 3: {:?}",
+        folded_polynomial.evaluate(&EF::from_u64(3))
+    );
 
     // Compute the i-th domain L_i = w * <w^{2^i}> = w * (w^{-1} * L_{i - 1})^2
     let new_domain = domain.shrink_coset(1).unwrap(); // Can never panic due to parameter set-up
@@ -427,6 +467,7 @@ where
     let witness_polynomial =
         multiply_by_power_polynomial(&quotient_polynomial, comb_randomness, quotient_set_size);
 
+    // NP TODO remove this?
     if quotient_polynomial.is_zero() {
         // This happens when the quotient set has deg(g_i) + 1 elements or more,
         // in which case the interpolator ans_i coincides with g_i, causing f_i

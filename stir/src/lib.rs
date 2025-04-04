@@ -3,13 +3,16 @@
 //! [implementation](https://github.com/WizardOfMenlo/stir) by the co-author
 //! Giacomo Fenzi.
 
-#![no_std]
+// NP TODO re-introduce
+// #![no_std]
 
 extern crate alloc;
 
 mod config;
 mod proof;
-mod prover;
+// NP TODO refactor once one prover is left
+pub mod prover;
+pub mod prover_eval;
 mod proximity_gaps;
 mod utils;
 mod verifier;
@@ -19,7 +22,6 @@ pub mod test_utils;
 
 pub use config::{StirConfig, StirParameters};
 pub use proof::StirProof;
-pub use prover::{commit, prove};
 pub use proximity_gaps::SecurityAssumption;
 pub use verifier::verify;
 

@@ -105,13 +105,15 @@ impl<M: Clone> StirParameters<M> {
         // the logarithm of the inverse of the rate increases by log_k - 1.
         let mut i_th_log_rate = log_starting_inv_rate;
 
-        let log_inv_rates = log_folding_factors
+        let mut log_inv_rates: Vec<usize> = log_folding_factors
             .iter()
             .map(|log_k| {
                 i_th_log_rate = i_th_log_rate + log_k - 1;
                 i_th_log_rate
             })
             .collect();
+
+        log_inv_rates.pop();
 
         StirParameters {
             log_starting_degree,
@@ -246,7 +248,7 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
             log_folding_factors.iter().all(|&x| x != 0),
             "The logarithm of each folding factor should be positive"
         );
-        assert_eq!(log_folding_factors.len(), log_inv_rates.len());
+        assert_eq!(log_folding_factors.len(), log_inv_rates.len() + 1);
 
         // log2(degree + 1) can not be reduced past 0. This also ensures the
         // domain is large enough to be shrunk by raising it to all of the
@@ -370,13 +372,13 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
                 num_queries,
                 pow_bits,
                 num_ood_samples,
-                log_inv_rate,
+                log_inv_rate: next_rate,
             };
 
             round_parameters.push(round_config);
 
             log_inv_rate = next_rate;
-            current_log_degree -= log_curr_folding_factor;
+            current_log_degree -= log_next_folding_factor;
         }
 
         // Compute the number of queries required
