@@ -287,6 +287,18 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
     fn order() -> BigUint {
         FP::PRIME.into()
     }
+
+    #[allow(refining_impl_trait)]
+    #[inline]
+    fn to_bytes(self) -> [u8; 4] {
+        self.to_unique_u32().to_le_bytes()
+    }
+
+    #[allow(refining_impl_trait)]
+    #[inline]
+    fn to_u32s(self) -> [u32; 1] {
+        [self.to_unique_u32()]
+    }
 }
 
 quotient_map_small_int!(MontyField31, u32, FieldParameters, [u8, u16]);

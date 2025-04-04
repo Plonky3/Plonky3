@@ -240,6 +240,16 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
     fn order() -> BigUint {
         F::order().pow(D as u32)
     }
+
+    #[inline]
+    fn to_bytes(self) -> impl IntoIterator<Item = u8> {
+        self.value.into_iter().flat_map(|x| x.to_bytes())
+    }
+
+    #[inline]
+    fn to_u32s(self) -> impl IntoIterator<Item = u32> {
+        self.value.into_iter().flat_map(|x| x.to_u32s())
+    }
 }
 
 impl<F, const D: usize> Display for BinomialExtensionField<F, D>

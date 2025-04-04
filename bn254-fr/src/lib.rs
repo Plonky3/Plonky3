@@ -151,6 +151,12 @@ impl Field for Bn254Fr {
             0x30644e72,
         ])
     }
+
+    #[allow(refining_impl_trait)]
+    #[inline]
+    fn to_bytes(self) -> [u8; 32] {
+        self.value.to_repr().into() // Would be better to use to_raw_bytes() but im unsure if that has a uniqueness guarantee.
+    }
 }
 
 quotient_map_small_int!(Bn254Fr, u128, [u8, u16, u32, u64]);

@@ -297,6 +297,18 @@ impl Field for Mersenne31 {
     fn order() -> BigUint {
         P.into()
     }
+
+    #[allow(refining_impl_trait)]
+    #[inline]
+    fn to_bytes(self) -> [u8; 4] {
+        self.to_unique_u32().to_le_bytes()
+    }
+
+    #[allow(refining_impl_trait)]
+    #[inline]
+    fn to_u32s(self) -> [u32; 1] {
+        [self.to_unique_u32()]
+    }
 }
 
 // We can use some macros to implement QuotientMap<Int> for all integer types except for u32 and i32's.

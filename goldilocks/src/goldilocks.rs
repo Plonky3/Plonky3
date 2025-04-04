@@ -292,6 +292,19 @@ impl Field for Goldilocks {
     fn order() -> BigUint {
         P.into()
     }
+
+    #[allow(refining_impl_trait)]
+    #[inline]
+    fn to_bytes(self) -> [u8; 8] {
+        self.to_unique_u64().to_le_bytes()
+    }
+
+    #[allow(refining_impl_trait)]
+    #[inline]
+    fn to_u32s(self) -> [u32; 2] {
+        let u64_val = self.to_unique_u64();
+        [u64_val as u32, (u64_val << 32) as u32]
+    }
 }
 
 // We use macros to implement QuotientMap<Int> for all integer types except for u64 and i64.

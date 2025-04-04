@@ -6,6 +6,7 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::slice;
 
+use itertools::Itertools;
 use num_bigint::BigUint;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -651,6 +652,19 @@ pub trait Field:
     #[inline]
     fn bits() -> usize {
         Self::order().bits() as usize
+    }
+
+    // Need to be self not &self as this need to take ownership.
+    #[must_use]
+    fn to_bytes(self) -> impl IntoIterator<Item = u8>;
+
+    // Need to be self not &self as this need to take ownership.
+    #[must_use]
+    fn to_u32s(self) -> impl IntoIterator<Item = u32> {
+        self.to_bytes()
+            .into_iter()
+            .tuples()
+            .map(|(a, b, c, d)| u32::from_le_bytes([a, b, c, d]))
     }
 }
 
