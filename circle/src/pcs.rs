@@ -551,7 +551,7 @@ mod tests {
     use p3_keccak::Keccak256Hash;
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_mersenne_31::Mersenne31;
-    use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
+    use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
     use rand::{Rng, SeedableRng};
     use rand_chacha::ChaCha8Rng;
 
@@ -567,7 +567,7 @@ mod tests {
         type Challenge = BinomialExtensionField<Mersenne31, 3>;
 
         type ByteHash = Keccak256Hash;
-        type FieldHash = SerializingHasher32<ByteHash>;
+        type FieldHash = SerializingHasher<ByteHash>;
         let byte_hash = ByteHash {};
         let field_hash = FieldHash::new(byte_hash);
 

@@ -12,7 +12,7 @@ use p3_fri::TwoAdicFriPcs;
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{
-    CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32To64, TruncatedPermutation,
+    CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
 };
 use p3_uni_stark::StarkConfig;
 
@@ -23,7 +23,7 @@ pub(crate) type KeccakCompressionFunction =
 pub(crate) type KeccakMerkleMmcs<F> = MerkleTreeMmcs<
     [F; KECCAK_VECTOR_LEN],
     [u64; KECCAK_VECTOR_LEN],
-    SerializingHasher32To64<PaddingFreeSponge<KeccakF, 25, 17, 4>>,
+    SerializingHasher<PaddingFreeSponge<KeccakF, 25, 17, 4>>,
     KeccakCompressionFunction,
     4,
 >;

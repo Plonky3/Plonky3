@@ -2,7 +2,7 @@ use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_mai
 use p3_field::PrimeCharacteristicRing;
 use p3_keccak::{KeccakF, VECTOR_LEN};
 use p3_mersenne_31::Mersenne31;
-use p3_symmetric::{CryptographicHasher, PaddingFreeSponge, Permutation, SerializingHasher32To64};
+use p3_symmetric::{CryptographicHasher, PaddingFreeSponge, Permutation, SerializingHasher};
 
 pub fn criterion_benchmark(c: &mut Criterion) {
     keccak_permutation(c);
@@ -51,7 +51,7 @@ pub fn keccak_field_32_hash(c: &mut Criterion) {
 
     type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
     let u64_hash = U64Hash::new(KeccakF {});
-    type FieldHash = SerializingHasher32To64<U64Hash>;
+    type FieldHash = SerializingHasher<U64Hash>;
     let field_hash = FieldHash::new(u64_hash);
 
     let mut group = c.benchmark_group("keccak field 32 hash");
