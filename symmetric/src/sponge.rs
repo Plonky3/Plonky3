@@ -113,10 +113,7 @@ where
             .flat_map(|x| x.as_basis_coefficients_slice().to_vec()) //Would be nice to get rid of the .to_vec() here.
             .chunks(RATE)
         {
-            for (chunk_id, chunk) in (&block_chunk.chunks(self.num_f_elms))
-                .into_iter()
-                .enumerate()
-            {
+            for (chunk_id, chunk) in block_chunk.chunks(self.num_f_elms).into_iter().enumerate() {
                 state[chunk_id] = reduce_32(&chunk.collect_vec());
             }
             state = self.permutation.permute(state);

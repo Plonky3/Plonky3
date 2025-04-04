@@ -78,7 +78,7 @@ where
                 .as_basis_coefficients_slice()
                 .to_vec()
                 .into_iter()
-                .flat_map(|x| x.to_unique_u64().to_le_bytes())
+                .flat_map(|x| x.to_unique_u32().to_le_bytes())
         }))
     }
 }
