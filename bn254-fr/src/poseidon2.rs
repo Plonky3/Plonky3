@@ -118,6 +118,34 @@ mod tests {
     use super::*;
     use crate::FFBn254Fr;
 
+    #[test]
+    fn test_bn254_matmul_internal() {
+        // Initialize a test state
+        let mut state = [
+            Bn254Fr::from_u32(1),
+            Bn254Fr::from_u32(2),
+            Bn254Fr::from_u32(3),
+        ];
+        
+        // Expected values based on the matrix:
+        // [2, 1, 1]
+        // [1, 2, 1]
+        // [1, 1, 3]
+        // Applied to [1, 2, 3] with sum = 1 + 2 + 3 = 6
+        // [1 + 6, 2 + 6, 3*2 + 6] = [7, 8, 12]
+        let expected = [
+            Bn254Fr::from_u32(7),
+            Bn254Fr::from_u32(8),
+            Bn254Fr::from_u32(12),
+        ];
+        
+        // Apply the matrix multiplication
+        bn254_matmul_internal(&mut state);
+        
+        // Verify the result
+        assert_eq!(state, expected);
+    }
+
     fn bn254_from_ark_ff(input: ark_FpBN256) -> Bn254Fr {
         let mut full_bytes = [0; 32];
         let bytes = input.into_bigint().to_bytes_le();
