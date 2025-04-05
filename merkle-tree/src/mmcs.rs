@@ -329,7 +329,7 @@ mod tests {
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash.clone(), compress);
 
-        let mat = RowMajorMatrix::<F>::rand(&mut rng, 1, 8);
+        let mat = RowMajorMatrix::rand(&mut rng, 1, 8);
         let (commit, _) = mmcs.commit(vec![mat.clone()]);
 
         let expected_result = hash.hash_iter(mat.vertically_packed_row(0));
@@ -490,8 +490,8 @@ mod tests {
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash, compress);
 
-        let input_1 = RowMajorMatrix::<F>::rand(&mut rng, 5, 8);
-        let input_2 = RowMajorMatrix::<F>::rand(&mut rng, 3, 16);
+        let input_1 = RowMajorMatrix::rand(&mut rng, 5, 8);
+        let input_2 = RowMajorMatrix::rand(&mut rng, 3, 16);
 
         let (commit_1_2, _) = mmcs.commit(vec![input_1.clone(), input_2.clone()]);
         let (commit_2_1, _) = mmcs.commit(vec![input_2, input_1]);
@@ -523,13 +523,13 @@ mod tests {
 
         // 4 8x1 matrixes, 4 8x2 matrixes
         let mut mats = (0..4)
-            .map(|_| RowMajorMatrix::<F>::rand(&mut rng, 8, 1))
+            .map(|_| RowMajorMatrix::rand(&mut rng, 8, 1))
             .collect_vec();
         let large_mat_dims = (0..4).map(|_| Dimensions {
             height: 8,
             width: 1,
         });
-        mats.extend((0..4).map(|_| RowMajorMatrix::<F>::rand(&mut rng, 8, 2)));
+        mats.extend((0..4).map(|_| RowMajorMatrix::rand(&mut rng, 8, 2)));
         let small_mat_dims = (0..4).map(|_| Dimensions {
             height: 8,
             width: 2,
@@ -560,7 +560,7 @@ mod tests {
 
         // 4 mats with 1000 rows, 8 columns
         let mut mats = (0..4)
-            .map(|_| RowMajorMatrix::<F>::rand(&mut rng, 1000, 8))
+            .map(|_| RowMajorMatrix::rand(&mut rng, 1000, 8))
             .collect_vec();
         let large_mat_dims = (0..4).map(|_| Dimensions {
             height: 1000,
@@ -568,21 +568,21 @@ mod tests {
         });
 
         // 5 mats with 70 rows, 8 columns
-        mats.extend((0..5).map(|_| RowMajorMatrix::<F>::rand(&mut rng, 70, 8)));
+        mats.extend((0..5).map(|_| RowMajorMatrix::rand(&mut rng, 70, 8)));
         let medium_mat_dims = (0..5).map(|_| Dimensions {
             height: 70,
             width: 8,
         });
 
         // 6 mats with 8 rows, 8 columns
-        mats.extend((0..6).map(|_| RowMajorMatrix::<F>::rand(&mut rng, 8, 8)));
+        mats.extend((0..6).map(|_| RowMajorMatrix::rand(&mut rng, 8, 8)));
         let small_mat_dims = (0..6).map(|_| Dimensions {
             height: 8,
             width: 8,
         });
 
         // 7 tiny mat with 1 row, 8 columns
-        mats.extend((0..7).map(|_| RowMajorMatrix::<F>::rand(&mut rng, 1, 8)));
+        mats.extend((0..7).map(|_| RowMajorMatrix::rand(&mut rng, 1, 8)));
         let tiny_mat_dims = (0..7).map(|_| Dimensions {
             height: 1,
             width: 8,
@@ -616,7 +616,7 @@ mod tests {
 
         // 10 mats with 32 rows where the ith mat has i + 1 cols
         let mats = (0..10)
-            .map(|i| RowMajorMatrix::<F>::rand(&mut rng, 32, i + 1))
+            .map(|i| RowMajorMatrix::rand(&mut rng, 32, i + 1))
             .collect_vec();
         let dims = mats.iter().map(|m| m.dimensions()).collect_vec();
 
