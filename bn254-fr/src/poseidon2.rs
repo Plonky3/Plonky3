@@ -47,7 +47,7 @@ impl InternalLayerConstructor<Bn254Fr> for Poseidon2InternalLayerBn254 {
 
 /// A faster version of `matmul_internal` making use of the fact that
 /// the internal matrix is equal to:
-/// ```ignore
+/// ```text
 ///                             [2, 1, 1]
 ///     1 + Diag([1, 1, 2]) =   [1, 2, 1]
 ///                             [1, 1, 3]
