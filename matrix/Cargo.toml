@@ -18,7 +18,6 @@ tracing.workspace = true
 criterion.workspace = true
 p3-baby-bear.workspace = true
 p3-mersenne-31.workspace = true
-rand_chacha.workspace = true
 
 [[bench]]
 name = "transpose_benchmark"

@@ -552,8 +552,8 @@ mod tests {
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_mersenne_31::Mersenne31;
     use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
+    use rand::rngs::SmallRng;
     use rand::{Rng, SeedableRng};
-    use rand_chacha::ChaCha8Rng;
 
     use super::*;
 
@@ -561,7 +561,7 @@ mod tests {
     fn circle_pcs() {
         // Very simple pcs test. More rigorous tests in p3_fri/tests/pcs.
 
-        let mut rng = ChaCha8Rng::from_seed([0; 32]);
+        let mut rng = SmallRng::seed_from_u64(0);
 
         type Val = Mersenne31;
         type Challenge = BinomialExtensionField<Mersenne31, 3>;

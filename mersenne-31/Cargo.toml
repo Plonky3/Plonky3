@@ -24,7 +24,6 @@ serde = { workspace = true, features = ["derive"] }
 [dev-dependencies]
 criterion.workspace = true
 p3-field-testing.workspace = true
-rand_chacha.workspace = true
 rand_xoshiro.workspace = true
 
 [[bench]]
