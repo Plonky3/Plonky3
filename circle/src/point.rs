@@ -4,6 +4,8 @@ use core::ops::{Add, AddAssign, Mul, Neg, Sub};
 use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, Field, batch_multiplicative_inverse};
 
+use crate::utilities::doubling_map;
+
 /// Affine representation of a point on the circle.
 /// x^2 + y^2 == 1
 // _private is to prevent construction so we can debug assert the invariant
@@ -56,7 +58,7 @@ impl<F: Field> Point<F> {
     /// The "squaring map", or doubling in additive notation, denoted π(x,y)
     /// Circle STARKs, Section 3.1, Equation 1: (page 5 of the first revision PDF)
     pub fn double(self) -> Self {
-        Self::new(self.x.square().double() - F::ONE, self.x.double() * self.y)
+        Self::new(doubling_map(self.x), self.x.double() * self.y)
     }
 
     /// Evaluate the vanishing polynomial for the standard position coset of size 2^log_n
@@ -64,7 +66,7 @@ impl<F: Field> Point<F> {
     /// Circle STARKs, Section 3.3, Equation 8 (page 10 of the first revision PDF)
     pub fn v_n(mut self, log_n: usize) -> F {
         for _ in 0..(log_n - 1) {
-            self.x = self.x.square().double() - F::ONE; // TODO: replace this by a custom field impl.
+            self.x = doubling_map(self.x);
         }
         self.x
     }
@@ -76,14 +78,14 @@ impl<F: Field> Point<F> {
     pub fn v_n_prod(mut self, log_n: usize) -> F {
         let mut output = self.x;
         for _ in 0..(log_n - 2) {
-            self.x = self.x.square().double() - F::ONE; // TODO: replace this by a custom field impl.
+            self.x = doubling_map(self.x);
             output *= self.x;
         }
         output
     }
 
     /// Evaluate the selector function which is zero at `self` and nonzero elsewhere, at `at`.
-    /// Called v_0 . T_p⁻¹ or ṽ_p(x,y) in the paper, used for constraint selectors.
+    /// Called v_0 . T_p⁻¹ or ṽ_p(x,y) in the paper, used for constraint selectors.
     /// Panics if p = -self, the pole.
     /// Section 5.1, Lemma 11 of Circle Starks (page 21 of first edition PDF)
     pub fn v_tilde_p<EF: ExtensionField<F>>(self, at: Point<EF>) -> EF {
