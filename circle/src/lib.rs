@@ -14,10 +14,13 @@ mod pcs;
 mod point;
 mod proof;
 mod prover;
+mod utilities;
 mod verifier;
 
 pub use cfft::*;
 pub use domain::*;
 pub use ordering::*;
 pub use pcs::*;
+pub use point::*;
 pub use proof::*;
+pub use utilities::*;
