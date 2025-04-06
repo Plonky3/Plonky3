@@ -254,7 +254,7 @@ fn compute_twiddles<F: ComplexExtendable>(domain: CircleDomain<F>) -> Vec<Vec<F>
             let cur = prev
                 .iter()
                 .step_by(2)
-                .map(|x| x.square().double() - F::ONE)
+                .map(|x| crate::utilities::doubling_map(*x))
                 .collect_vec();
             twiddles.push(cur);
         }
@@ -269,7 +269,7 @@ pub fn circle_basis<F: Field>(p: Point<F>, log_n: usize) -> Vec<F> {
         for i in 0..b.len() {
             b.push(b[i] * x);
         }
-        x = x.square().double() - F::ONE;
+        x = crate::utilities::doubling_map(x);
     }
     assert_eq!(b.len(), 1 << log_n);
     b
