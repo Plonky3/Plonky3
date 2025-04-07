@@ -180,9 +180,8 @@ mod tests {
         for r in 0..rows {
             let sparse = matrix.sparse_row(r);
             assert_eq!(sparse.len(), weight);
-            for (col, val) in sparse {
+            for (col, _) in sparse {
                 assert!(*col < cols);
-                let _ = val;
             }
         }
     }
