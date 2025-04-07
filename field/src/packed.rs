@@ -225,7 +225,7 @@ pub unsafe trait PackedFieldPow2: PackedField {
 ///
 /// By choosing a basis `B`, `EF` can be transformed into an array `[F; D]`.
 ///
-/// A type should implement PackedFieldExtension if it can be transformed into `[F::Packing; D] ~ [[F; W]; D]`
+/// A type should implement PackedFieldExtension if it can be transformed into `[F; D]` ~ `[[F; W]; D]`
 ///
 /// This is interpreted by taking a transpose to get `[[F; D]; W]` which can then be reinterpreted
 /// as `[EF; W]` by making use of the chosen basis `B` again.
@@ -305,3 +305,434 @@ impl Packable for u32 {}
 impl Packable for u64 {}
 
 impl Packable for u128 {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::fmt::Debug;
+    use core::mem::align_of;
+
+    #[test]
+    fn test_pack_slice() {
+        // Test with a simple array that implements PackedValue
+        struct TestPackable(u32);
+
+        impl Packable for TestPackable {}
+
+        impl Default for TestPackable {
+            fn default() -> Self {
+                Self(0)
+            }
+        }
+
+        impl Copy for TestPackable {}
+
+        impl Clone for TestPackable {
+            fn clone(&self) -> Self {
+                *self
+            }
+        }
+
+        impl PartialEq for TestPackable {
+            fn eq(&self, other: &Self) -> bool {
+                self.0 == other.0
+            }
+        }
+
+        impl Eq for TestPackable {}
+
+        // Create an array type as a PackedValue
+        unsafe impl PackedValue for [TestPackable; 4] {
+            type Value = TestPackable;
+            const WIDTH: usize = 4;
+
+            fn from_slice(slice: &[Self::Value]) -> &Self {
+                assert_eq!(slice.len(), Self::WIDTH);
+                slice.try_into().unwrap()
+            }
+
+            fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self {
+                assert_eq!(slice.len(), Self::WIDTH);
+                slice.try_into().unwrap()
+            }
+
+            fn from_fn<F>(f: F) -> Self
+            where
+                F: FnMut(usize) -> Self::Value,
+            {
+                core::array::from_fn(f)
+            }
+
+            fn as_slice(&self) -> &[Self::Value] {
+                self
+            }
+
+            fn as_slice_mut(&mut self) -> &mut [Self::Value] {
+                self
+            }
+        }
+
+        // Create a test buffer with 8 elements (2 packs of 4)
+        let mut buffer = [
+            TestPackable(1),
+            TestPackable(2),
+            TestPackable(3),
+            TestPackable(4),
+            TestPackable(5),
+            TestPackable(6),
+            TestPackable(7),
+            TestPackable(8),
+        ];
+
+        // Test pack_slice
+        let packed = <[TestPackable; 4]>::pack_slice(&buffer);
+        assert_eq!(packed.len(), 2);
+        assert_eq!(packed[0][0].0, 1);
+        assert_eq!(packed[0][3].0, 4);
+        assert_eq!(packed[1][0].0, 5);
+        assert_eq!(packed[1][3].0, 8);
+
+        // Test pack_slice_with_suffix with even length
+        let (packed, suffix) = <[TestPackable; 4]>::pack_slice_with_suffix(&buffer);
+        assert_eq!(packed.len(), 2);
+        assert_eq!(suffix.len(), 0);
+
+        // Test with a non-multiple of WIDTH
+        let buffer_odd = [
+            TestPackable(1),
+            TestPackable(2),
+            TestPackable(3),
+            TestPackable(4),
+            TestPackable(5),
+            TestPackable(6),
+        ];
+
+        // Test pack_slice_with_suffix with odd length
+        let (packed, suffix) = <[TestPackable; 4]>::pack_slice_with_suffix(&buffer_odd);
+        assert_eq!(packed.len(), 1);
+        assert_eq!(suffix.len(), 2);
+        assert_eq!(suffix[0].0, 5);
+        assert_eq!(suffix[1].0, 6);
+
+        // Test unpack_slice
+        let unpacked = <[TestPackable; 4]>::unpack_slice(packed);
+        assert_eq!(unpacked.len(), 4);
+        assert_eq!(unpacked[0].0, 1);
+        assert_eq!(unpacked[3].0, 4);
+
+        // Test mutable functions
+        let packed_mut = <[TestPackable; 4]>::pack_slice_mut(&mut buffer);
+        packed_mut[0][2] = TestPackable(30);
+        assert_eq!(buffer[2].0, 30);
+
+        // Test pack_slice_with_suffix_mut
+        let (packed_mut, suffix_mut) = <[TestPackable; 4]>::pack_slice_with_suffix_mut(&mut buffer_odd);
+        packed_mut[0][1] = TestPackable(20);
+        suffix_mut[0] = TestPackable(50);
+        assert_eq!(buffer_odd[1].0, 20);
+        assert_eq!(buffer_odd[4].0, 50);
+    }
+
+    #[test]
+    fn test_packed_linear_combination() {
+        // Use a simple mock implementation of PackedField for testing
+        struct MockPacked([u8; 4]);
+
+        impl Packable for u8 {}
+
+        unsafe impl PackedValue for MockPacked {
+            type Value = u8;
+            const WIDTH: usize = 4;
+
+            fn from_slice(slice: &[Self::Value]) -> &Self {
+                unsafe { &*(slice.as_ptr() as *const Self) }
+            }
+
+            fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self {
+                unsafe { &mut *(slice.as_mut_ptr() as *mut Self) }
+            }
+
+            fn from_fn<F>(mut f: F) -> Self
+            where
+                F: FnMut(usize) -> Self::Value,
+            {
+                MockPacked([f(0), f(1), f(2), f(3)])
+            }
+
+            fn as_slice(&self) -> &[Self::Value] {
+                &self.0
+            }
+
+            fn as_slice_mut(&mut self) -> &mut [Self::Value] {
+                &mut self.0
+            }
+        }
+
+        impl core::ops::Mul<u8> for MockPacked {
+            type Output = Self;
+
+            fn mul(self, rhs: u8) -> Self::Output {
+                MockPacked([
+                    self.0[0] * rhs,
+                    self.0[1] * rhs,
+                    self.0[2] * rhs,
+                    self.0[3] * rhs,
+                ])
+            }
+        }
+
+        // Minimal Field implementation for testing
+        impl PrimeCharacteristicRing for u8 {
+            const CHARACTERISTIC: u64 = 0;
+        }
+
+        impl Field for u8 {
+            fn inverse(&self) -> Self {
+                unimplemented!()
+            }
+
+            fn inverse_or_zero(&self) -> Self {
+                unimplemented!()
+            }
+
+            fn exp_u64(&self, _exp: u64) -> Self {
+                unimplemented!()
+            }
+
+            fn constants() -> &'static Self::Constants {
+                unimplemented!()
+            }
+
+            type Constants = ();
+        }
+
+        // Minimal implementation of required traits for MockPacked
+        impl Algebra<u8> for MockPacked {
+            fn zero() -> Self {
+                MockPacked([0, 0, 0, 0])
+            }
+
+            fn one() -> Self {
+                MockPacked([1, 1, 1, 1])
+            }
+
+            fn add(&mut self, rhs: &Self) {
+                for i in 0..Self::WIDTH {
+                    self.0[i] += rhs.0[i];
+                }
+            }
+
+            fn sub(&mut self, rhs: &Self) {
+                for i in 0..Self::WIDTH {
+                    self.0[i] -= rhs.0[i];
+                }
+            }
+
+            fn mul(&mut self, rhs: &Self) {
+                for i in 0..Self::WIDTH {
+                    self.0[i] *= rhs.0[i];
+                }
+            }
+        }
+
+        // Make sure it implements Div<u8>
+        impl core::ops::Div<u8> for MockPacked {
+            type Output = Self;
+
+            fn div(self, rhs: u8) -> Self::Output {
+                MockPacked([
+                    self.0[0] / rhs,
+                    self.0[1] / rhs,
+                    self.0[2] / rhs,
+                    self.0[3] / rhs,
+                ])
+            }
+        }
+
+        // Implement required traits to make MockPacked a PackedField
+        unsafe impl PackedField for MockPacked {
+            type Scalar = u8;
+        }
+
+        // Helper to simplify array work
+        impl MockPacked {
+            fn sum_array<const N: usize>(elements: &[Self; N]) -> Self {
+                let mut result = Self::zero();
+                for element in elements {
+                    result.add(element);
+                }
+                result
+            }
+        }
+
+        // Create test vectors
+        let vecs = [
+            MockPacked([1, 2, 3, 4]),
+            MockPacked([5, 6, 7, 8]),
+            MockPacked([9, 10, 11, 12]),
+        ];
+
+        // Create coefficients
+        let coeffs = [2u8, 3u8, 4u8];
+
+        // Calculate the linear combination
+        let result = MockPacked::packed_linear_combination::<3>(&coeffs, &vecs);
+
+        // Calculate expected result manually
+        let expected = MockPacked([
+            1 * 2 + 5 * 3 + 9 * 4,
+            2 * 2 + 6 * 3 + 10 * 4,
+            3 * 2 + 7 * 3 + 11 * 4,
+            4 * 2 + 8 * 3 + 12 * 4,
+        ]);
+
+        // Compare results
+        assert_eq!(result.0, expected.0);
+
+        // Test with different length slices
+        let shorter_coeffs = [2u8, 3u8];
+        let shorter_vecs = [MockPacked([1, 2, 3, 4]), MockPacked([5, 6, 7, 8])];
+        
+        let result2 = MockPacked::packed_linear_combination::<2>(&shorter_coeffs, &shorter_vecs);
+        
+        // Calculate expected result manually
+        let expected2 = MockPacked([
+            1 * 2 + 5 * 3,
+            2 * 2 + 6 * 3,
+            3 * 2 + 7 * 3,
+            4 * 2 + 8 * 3,
+        ]);
+        
+        assert_eq!(result2.0, expected2.0);
+    }
+
+    #[test]
+    fn test_interleave() {
+        // Define a simple implementation for testing interleave
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        struct MockPacked([u8; 4]);
+
+        impl Packable for u8 {}
+
+        unsafe impl PackedValue for MockPacked {
+            type Value = u8;
+            const WIDTH: usize = 4;
+
+            fn from_slice(slice: &[Self::Value]) -> &Self {
+                unsafe { &*(slice.as_ptr() as *const Self) }
+            }
+
+            fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self {
+                unsafe { &mut *(slice.as_mut_ptr() as *mut Self) }
+            }
+
+            fn from_fn<F>(mut f: F) -> Self
+            where
+                F: FnMut(usize) -> Self::Value,
+            {
+                MockPacked([f(0), f(1), f(2), f(3)])
+            }
+
+            fn as_slice(&self) -> &[Self::Value] {
+                &self.0
+            }
+
+            fn as_slice_mut(&mut self) -> &mut [Self::Value] {
+                &mut self.0
+            }
+        }
+
+        // Minimal implementations of required traits
+        impl PrimeCharacteristicRing for u8 {
+            const CHARACTERISTIC: u64 = 0;
+        }
+
+        impl Field for u8 {
+            fn inverse(&self) -> Self { unimplemented!() }
+            fn inverse_or_zero(&self) -> Self { unimplemented!() }
+            fn exp_u64(&self, _exp: u64) -> Self { unimplemented!() }
+            fn constants() -> &'static Self::Constants { unimplemented!() }
+            type Constants = ();
+        }
+
+        impl Algebra<u8> for MockPacked {
+            fn zero() -> Self { MockPacked([0, 0, 0, 0]) }
+            fn one() -> Self { MockPacked([1, 1, 1, 1]) }
+            fn add(&mut self, _rhs: &Self) { unimplemented!() }
+            fn sub(&mut self, _rhs: &Self) { unimplemented!() }
+            fn mul(&mut self, _rhs: &Self) { unimplemented!() }
+        }
+
+        impl core::ops::Div<u8> for MockPacked {
+            type Output = Self;
+            fn div(self, _rhs: u8) -> Self::Output { unimplemented!() }
+        }
+
+        unsafe impl PackedField for MockPacked {
+            type Scalar = u8;
+        }
+
+        unsafe impl PackedFieldPow2 for MockPacked {
+            fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
+                assert!(block_len > 0 && block_len <= Self::WIDTH);
+                assert!(Self::WIDTH % block_len == 0);
+                
+                // For WIDTH = 4, we have a few possible block_len values
+                match block_len {
+                    // block_len = 1: Interleave individual elements
+                    1 => {
+                        let result1 = MockPacked([self.0[0], other.0[0], self.0[2], other.0[2]]);
+                        let result2 = MockPacked([self.0[1], other.0[1], self.0[3], other.0[3]]);
+                        (result1, result2)
+                    },
+                    // block_len = 2: Interleave pairs of elements
+                    2 => {
+                        let result1 = MockPacked([self.0[0], self.0[1], other.0[0], other.0[1]]);
+                        let result2 = MockPacked([self.0[2], self.0[3], other.0[2], other.0[3]]);
+                        (result1, result2)
+                    },
+                    // block_len = 4: No interleaving (identity operation)
+                    4 => (*self, other),
+                    _ => panic!("Unsupported block_len for WIDTH = 4"),
+                }
+            }
+        }
+
+        // Test case 1: block_len = 1 (interleave individual elements)
+        let a = MockPacked([1, 2, 3, 4]);
+        let b = MockPacked([5, 6, 7, 8]);
+        
+        let (c, d) = a.interleave(b, 1);
+        
+        assert_eq!(c, MockPacked([1, 5, 3, 7]));
+        assert_eq!(d, MockPacked([2, 6, 4, 8]));
+        
+        // Test case 2: block_len = 2 (interleave pairs)
+        let (e, f) = a.interleave(b, 2);
+        
+        assert_eq!(e, MockPacked([1, 2, 5, 6]));
+        assert_eq!(f, MockPacked([3, 4, 7, 8]));
+        
+        // Test case 3: block_len = 4 (no interleaving)
+        let (g, h) = a.interleave(b, 4);
+        
+        assert_eq!(g, a);
+        assert_eq!(h, b);
+        
+        // Test that it panics with invalid block_len
+        let result = std::panic::catch_unwind(|| {
+            a.interleave(b, 3); // 3 doesn't divide 4
+        });
+        assert!(result.is_err());
+        
+        let result = std::panic::catch_unwind(|| {
+            a.interleave(b, 0); // 0 is invalid
+        });
+        assert!(result.is_err());
+        
+        let result = std::panic::catch_unwind(|| {
+            a.interleave(b, 8); // 8 exceeds WIDTH
+        });
+        assert!(result.is_err());
+    }
+}
