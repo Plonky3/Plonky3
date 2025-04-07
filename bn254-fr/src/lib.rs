@@ -18,7 +18,7 @@ use halo2curves::serde::SerdeObject;
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
 use p3_field::{
-    Field, InjectiveMonomial, Packable, PrimeCharacteristicRing, PrimeField, TwoAdicField,
+    Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField, TwoAdicField,
     quotient_map_small_int,
 };
 pub use poseidon2::Poseidon2Bn254;
@@ -121,8 +121,44 @@ impl PrimeCharacteristicRing for Bn254Fr {
 /// As p - 1 is divisible by 2 and 3 the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
 impl InjectiveMonomial<5> for Bn254Fr {}
 
-// TODO: Implement PermutationMonomial<5> for Bn254Fr.
-// Not a priority given how slow (and unused) this will be.
+/// Compute the exponential `x -> x^K` where K is the modular multiplicative inverse of 5 modulo (p-1).
+///
+/// In the field `Bn254Fr`, `a^{1/5}` is equal to a^K where 5*K ≡ 1 (mod p-1).
+/// For BN254, K = 0x0c192f9d784426819a21a9ea38c94f0a2a138528bc65f86944dfc7320600000
+///
+/// This follows from the calculation: `5 * K = 1 mod (p - 1)`.
+/// 
+/// The value K was computed as (p-1)/5 where p is the BN254 field order.
+/// Since 5 is coprime with p-1, this division is exact, and it gives us 
+/// the modular multiplicative inverse as required.
+fn exp_bn254_fifth_root(val: Bn254Fr) -> Bn254Fr {
+    // Since K is a very large number, we use the FFBn254Fr's native field exponentiation
+    // via the pow method, which is more efficient than manually implementing a custom algorithm
+    
+    // K = (p-1)/5, the modular multiplicative inverse of 5 modulo (p-1)
+    // K = 0x0c192f9d784426819a21a9ea38c94f0a2a138528bc65f86944dfc7320600000
+    let result = val.value.pow(&[
+        0x944dfc7320600000,
+        0x2a138528bc65f869,
+        0x9a21a9ea38c94f0a,
+        0x0c192f9d78442681,
+    ]);
+    
+    Bn254Fr::new(result)
+}
+
+impl PermutationMonomial<5> for Bn254Fr {
+    /// In the field `Bn254Fr`, `a^{1/5}` is equal to a^K where 5*K ≡ 1 (mod p-1).
+    /// 
+    /// For BN254, K = 0x0c192f9d784426819a21a9ea38c94f0a2a138528bc65f86944dfc7320600000,
+    /// which is computed as (p-1)/5 where p is the field order.
+    ///
+    /// This calculation works because 5 and p-1 are coprime, making 5 invertible modulo p-1,
+    /// and therefore the permutation monomial x^5 has an inverse operation x^K.
+    fn injective_exp_root_n(&self) -> Self {
+        exp_bn254_fifth_root(*self)
+    }
+}
 
 impl Field for Bn254Fr {
     type Packing = Self;
