@@ -49,7 +49,9 @@ where
             .into_iter()
             .map(|row| {
                 row.chunks(EF::DIMENSION)
-                    .flat_map(EF::from_basis_coefficients_slice) // unwrap is safe as each chunk has length EF::DIMENSION
+                    // As each chunk has length EF::DIMENSION, from_basis_coefficients_slice
+                    // will produce some(elem) which into_iter converts to the iterator once(elem).
+                    .flat_map(EF::from_basis_coefficients_slice)
                     .collect()
             })
             .collect();
