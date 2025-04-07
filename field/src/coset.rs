@@ -182,7 +182,7 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
     // square-and-multiply algorithm with the caveat that squares of the
     // generator are queried from the field (which typically should have them
     // stored), i. e. rather "fetch-and-multiply".
-    fn generator_exp(&mut self, exp: usize) -> F {
+    fn generator_exp(&self, exp: usize) -> F {
         let mut gen_power = F::ONE;
         // As `generator` satisfies `generator^{self.size()} == 1` we can replace `exp` by `exp mod self.size()`.
         // As `self.size()` is a power of `2` this can be done with an `&` instead of a `%`.
