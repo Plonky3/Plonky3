@@ -25,7 +25,6 @@ p3-dft.workspace = true
 p3-goldilocks.workspace = true
 p3-keccak.workspace = true
 p3-mersenne-31.workspace = true
-p3-mds.workspace = true
 p3-merkle-tree.workspace = true
 p3-poseidon2.workspace = true
 p3-symmetric.workspace = true
