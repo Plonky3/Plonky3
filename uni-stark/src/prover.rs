@@ -64,7 +64,7 @@
 //!
 //! Next the Verifier sends a third challenge `gamma` which the prover uses to combine all of their polynomials into
 //! the single polynomial:
-//! ```ignore
+//! ```text
 //!     f(x) = (T1(zeta) - T1(x))/(zeta - x) + gamma (T1(g * zeta) - T1(x))/(g * zeta - x)
 //!             + ...
 //!             + gamma^{2l - 2} (Tl(zeta) - Tl(x))/(zeta - x) + gamma^{2l - 1} (Tl(g * zeta) - Tl(x))/(g * zeta - x)
