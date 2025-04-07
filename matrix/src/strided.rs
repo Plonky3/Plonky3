@@ -11,7 +11,7 @@ pub struct VerticallyStridedRowIndexMap {
     height: usize,
     /// The step size between selected rows in the inner matrix.
     stride: usize,
-    /// The offset to start the stride from (must be < stride).
+    /// The offset to start the stride from.
     offset: usize,
 }
 
@@ -26,10 +26,7 @@ impl VerticallyStridedRowIndexMap {
     /// # Arguments
     /// - `inner`: The inner matrix to view.
     /// - `stride`: The number of rows between each selected row.
-    /// - `offset`: The initial row to start from (must be less than `stride`).
-    ///
-    /// # Panics
-    /// Panics if `stride == 0` or `offset >= stride`.
+    /// - `offset`: The initial row to start from.
     pub fn new_view<T: Send + Sync, Inner: Matrix<T>>(
         inner: Inner,
         stride: usize,
@@ -154,11 +151,25 @@ mod tests {
     }
 
     #[test]
-    fn test_vertically_strided_view_stride_greater_than_height_with_offset() {
-        let matrix = sample_matrix();
+    fn test_vertically_strided_view_stride_greater_than_height_with_valid_offset() {
+        let matrix = sample_matrix(); // height = 5
         let view = VerticallyStridedRowIndexMap::new_view(matrix, 10, 4);
 
+        // offset == 4 < height == 5 → view selects row 4
         assert_eq!(view.height(), 1);
         assert_eq!(view.get(0, 2), 52); // row 4
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_vertically_strided_view_stride_greater_than_height_with_offset_beyond_height() {
+        let matrix = sample_matrix(); // height = 5
+        let view = VerticallyStridedRowIndexMap::new_view(matrix, 10, 6);
+
+        // offset == 6 > height == 5 → no valid row
+        assert_eq!(view.height(), 0);
+
+        // Should panic when trying to access row 0
+        let _ = view.get(0, 0);
     }
 }
