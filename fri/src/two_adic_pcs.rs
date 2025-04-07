@@ -255,12 +255,13 @@ where
                 (mats, points)
             })
             .collect_vec();
-        let mats = mats_and_points
-            .iter()
-            .flat_map(|(mats, _)| mats)
-            .collect_vec();
 
-        let global_max_height = mats.iter().map(|m| m.height()).max().unwrap();
+        // Find the maximum height of a matrix in the batch.
+        let global_max_height = mats_and_points
+            .iter()
+            .flat_map(|(mats, _)| mats.iter().map(|m| m.height()))
+            .max()
+            .expect("No Matrices Supplied?");
         let log_global_max_height = log2_strict_usize(global_max_height);
 
         // For each unique opening point z, we will find the largest degree bound
