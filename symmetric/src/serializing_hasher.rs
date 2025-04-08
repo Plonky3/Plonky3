@@ -1,7 +1,4 @@
-use core::iter;
-
-use itertools::Itertools;
-use p3_field::{Field, PackedValue};
+use p3_field::Field;
 
 use crate::CryptographicHasher;
 
@@ -17,100 +14,92 @@ impl<Inner> SerializingHasher<Inner> {
     }
 }
 
-impl<F, Inner> CryptographicHasher<F, [u8; 32]> for SerializingHasher<Inner>
+// Need to support 2 types of hashing.
+// 1. Hashing a a sequence of field elements.
+// 2. Hashing a sequence of packed field elements in parallel.
+//    In this second case, the input will look like:
+//    [[t00, t01, t02, t03], [t10, t11, t12, t13], ...]
+//    but we want to be applying the hash function to the transpose:
+//    [[t00, t10, ...], [t01, t11, ...], ...].
+
+// Supporting 1 is easy:
+impl<F, Inner, const N: usize> CryptographicHasher<F, [u8; N]> for SerializingHasher<Inner>
 where
     F: Field,
-    Inner: CryptographicHasher<u8, [u8; 32]>,
+    Inner: CryptographicHasher<u8, [u8; N]>,
 {
-    fn hash_iter<I>(&self, input: I) -> [u8; 32]
+    fn hash_iter<I>(&self, input: I) -> [u8; N]
     where
         I: IntoIterator<Item = F>,
     {
-        self.inner.hash_iter(
-            input
-                .into_iter()
-                .flat_map(|elem| elem.to_bytes().into_iter()),
-        )
+        self.inner.hash_iter(F::into_byte_stream(input))
     }
 }
 
-impl<P, PW, Inner> CryptographicHasher<P, [PW; 8]> for SerializingHasher<Inner>
+impl<F, Inner, const N: usize> CryptographicHasher<F, [u32; N]> for SerializingHasher<Inner>
 where
-    P: PackedValue,
-    P::Value: Field,
-    PW: PackedValue<Value = u32>,
-    Inner: CryptographicHasher<PW, [PW; 8]>,
+    F: Field,
+    Inner: CryptographicHasher<u32, [u32; N]>,
 {
-    fn hash_iter<I>(&self, input: I) -> [PW; 8]
+    fn hash_iter<I>(&self, input: I) -> [u32; N]
     where
-        I: IntoIterator<Item = P>,
+        I: IntoIterator<Item = F>,
     {
-        // We assume that the number of bytes which P::Value maps into is a multiple of 4.
-        // This should be true for all our fields.
-        debug_assert_eq!(size_of::<P>() % 4, 0);
-
-        // We start by converting our iterator into a stream of u32s.
-        let mut u32_stream = input
-            .into_iter()
-            .flat_map(|elem| {
-                elem.as_slice()
-                    .iter()
-                    .flat_map(|&y| y.to_u32s())
-                    .collect_vec() // I suspect there should be a way to avoid this allocation.
-            })
-            .peekable();
-
-        // Now we combine the u32's into PW's. If lengths do not align we pad by zeros.
-        self.inner.hash_iter(iter::from_fn(
-            #[inline]
-            || {
-                u32_stream
-                    .peek()
-                    .is_some()
-                    .then(|| PW::from_fn(|_| u32_stream.next().unwrap_or_default()))
-            },
-        ))
+        self.inner.hash_iter(F::into_u32_stream(input))
     }
 }
 
-impl<P, PW, Inner> CryptographicHasher<P, [PW; 4]> for SerializingHasher<Inner>
+impl<F, Inner, const N: usize> CryptographicHasher<F, [u64; N]> for SerializingHasher<Inner>
 where
-    P: PackedValue,
-    P::Value: Field,
-    PW: PackedValue<Value = u64>,
-    Inner: CryptographicHasher<PW, [PW; 4]>,
+    F: Field,
+    Inner: CryptographicHasher<u64, [u64; N]>,
 {
-    fn hash_iter<I>(&self, input: I) -> [PW; 4]
+    fn hash_iter<I>(&self, input: I) -> [u64; N]
     where
-        I: IntoIterator<Item = P>,
+        I: IntoIterator<Item = F>,
     {
-        // We assume that the number of bytes which P::Value maps into is a multiple of 4.
-        // This should be true for all our fields.
-        debug_assert_eq!(size_of::<P>() % 4, 0);
+        self.inner.hash_iter(F::into_u64_stream(input))
+    }
+}
 
-        // We start by converting our iterator into a stream of u32s.
-        let mut u32_stream = input
-            .into_iter()
-            .flat_map(|elem| {
-                elem.as_slice()
-                    .iter()
-                    .flat_map(|&y| y.to_u32s())
-                    .collect_vec() // I suspect there should be a way to avoid this allocation.
-            })
-            .peekable();
+impl<F, Inner, const N: usize, const M: usize> CryptographicHasher<[F; M], [[u8; M]; N]>
+    for SerializingHasher<Inner>
+where
+    F: Field,
+    Inner: CryptographicHasher<[u8; M], [[u8; M]; N]>,
+{
+    fn hash_iter<I>(&self, input: I) -> [[u8; M]; N]
+    where
+        I: IntoIterator<Item = [F; M]>,
+    {
+        self.inner.hash_iter(F::into_parallel_byte_streams(input))
+    }
+}
 
-        // Now we combine the u32's into PW's. If lengths do not align we pad by zeros.
-        self.inner.hash_iter(iter::from_fn(
-            #[inline]
-            || {
-                u32_stream.peek().is_some().then(|| {
-                    PW::from_fn(|_| {
-                        let a = u32_stream.next().unwrap_or_default() as u64;
-                        let b = u32_stream.next().unwrap_or_default() as u64;
-                        a << 32 | b // Combine the two u32's into a u64.
-                    })
-                })
-            },
-        ))
+impl<F, Inner, const N: usize, const M: usize> CryptographicHasher<[F; M], [[u32; M]; N]>
+    for SerializingHasher<Inner>
+where
+    F: Field,
+    Inner: CryptographicHasher<[u32; M], [[u32; M]; N]>,
+{
+    fn hash_iter<I>(&self, input: I) -> [[u32; M]; N]
+    where
+        I: IntoIterator<Item = [F; M]>,
+    {
+        self.inner.hash_iter(F::into_parallel_u32_streams(input))
+    }
+}
+
+impl<F, Inner, const N: usize, const M: usize> CryptographicHasher<[F; M], [[u64; M]; N]>
+    for SerializingHasher<Inner>
+where
+    F: Field,
+    Inner: CryptographicHasher<[u64; M], [[u64; M]; N]>,
+{
+    fn hash_iter<I>(&self, input: I) -> [[u64; M]; N]
+    where
+        I: IntoIterator<Item = [F; M]>,
+    {
+        self.inner.hash_iter(F::into_parallel_u64_streams(input))
     }
 }

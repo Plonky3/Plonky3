@@ -8,12 +8,13 @@ use core::iter::{Product, Sum};
 use core::marker::PhantomData;
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::{array, iter};
 
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField32, PrimeField64, TwoAdicField, quotient_map_small_int,
+    PrimeField32, PrimeField64, RawDataSerializable, TwoAdicField, quotient_map_small_int,
 };
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
@@ -227,6 +228,73 @@ impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> PermutationMon
     }
 }
 
+impl<FP: FieldParameters> RawDataSerializable for MontyField31<FP> {
+    const NUM_BYTES: usize = 4;
+
+    #[allow(refining_impl_trait)]
+    #[inline]
+    fn into_bytes(self) -> [u8; 4] {
+        self.to_unique_u32().to_le_bytes()
+    }
+
+    #[inline]
+    fn into_u32_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u32> {
+        input.into_iter().map(|x| x.to_unique_u32())
+    }
+
+    #[inline]
+    fn into_u64_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u64> {
+        let mut input = input.into_iter();
+        iter::from_fn(move || {
+            // If the first input.next() returns None, we return None.
+            let a = input.next()?;
+            if let Some(b) = input.next() {
+                Some(a.to_unique_u64() | b.to_unique_u64() << 32)
+            } else {
+                Some(a.to_unique_u64())
+            }
+        })
+    }
+
+    #[inline]
+    fn into_parallel_byte_streams<const N: usize>(
+        input: impl IntoIterator<Item = [Self; N]>,
+    ) -> impl IntoIterator<Item = [u8; N]> {
+        input.into_iter().flat_map(|vector| {
+            let bytes = vector.map(|elem| elem.into_bytes());
+            (0..Self::NUM_BYTES).map(move |i| array::from_fn(|j| bytes[j][i]))
+        })
+    }
+
+    #[inline]
+    fn into_parallel_u32_streams<const N: usize>(
+        input: impl IntoIterator<Item = [Self; N]>,
+    ) -> impl IntoIterator<Item = [u32; N]> {
+        input.into_iter().map(|vec| vec.map(|x| x.to_unique_u32()))
+    }
+
+    #[inline]
+    fn into_parallel_u64_streams<const N: usize>(
+        input: impl IntoIterator<Item = [Self; N]>,
+    ) -> impl IntoIterator<Item = [u64; N]> {
+        let mut input = input.into_iter();
+        iter::from_fn(move || {
+            // If the first input.next() returns None, we return None.
+            let a = input.next()?;
+            if let Some(b) = input.next() {
+                let ab = array::from_fn(|i| {
+                    let ai = a[i].to_unique_u64();
+                    let bi = b[i].to_unique_u64();
+                    ai | (bi << 32)
+                });
+                Some(ab)
+            } else {
+                Some(a.map(|x| x.to_unique_u64()))
+            }
+        })
+    }
+}
+
 impl<FP: FieldParameters> Field for MontyField31<FP> {
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     type Packing = crate::PackedMontyField31Neon<FP>;
@@ -286,18 +354,6 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
     #[inline]
     fn order() -> BigUint {
         FP::PRIME.into()
-    }
-
-    #[allow(refining_impl_trait)]
-    #[inline]
-    fn to_bytes(self) -> [u8; 4] {
-        self.to_unique_u32().to_le_bytes()
-    }
-
-    #[allow(refining_impl_trait)]
-    #[inline]
-    fn to_u32s(self) -> [u32; 1] {
-        [self.to_unique_u32()]
     }
 }
 

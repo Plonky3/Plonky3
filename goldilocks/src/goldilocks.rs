@@ -12,8 +12,8 @@ use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::integers::QuotientMap;
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField64, TwoAdicField, halve_u64, quotient_map_large_iint, quotient_map_large_uint,
-    quotient_map_small_int,
+    PrimeField64, RawDataSerializable, TwoAdicField, halve_u64, quotient_map_large_iint,
+    quotient_map_large_uint, quotient_map_small_int,
 };
 use p3_util::{assume, branch_hint};
 use rand::Rng;
@@ -201,6 +201,16 @@ impl PermutationMonomial<7> for Goldilocks {
     }
 }
 
+impl RawDataSerializable for Goldilocks {
+    const NUM_BYTES: usize = 8;
+
+    #[allow(refining_impl_trait)]
+    #[inline]
+    fn into_bytes(self) -> [u8; 8] {
+        self.to_unique_u64().to_le_bytes()
+    }
+}
+
 impl Field for Goldilocks {
     // TODO: Add cfg-guarded Packing for NEON
 
@@ -291,19 +301,6 @@ impl Field for Goldilocks {
     #[inline]
     fn order() -> BigUint {
         P.into()
-    }
-
-    #[allow(refining_impl_trait)]
-    #[inline]
-    fn to_bytes(self) -> [u8; 8] {
-        self.to_unique_u64().to_le_bytes()
-    }
-
-    #[allow(refining_impl_trait)]
-    #[inline]
-    fn to_u32s(self) -> [u32; 2] {
-        let u64_val = self.to_unique_u64();
-        [u64_val as u32, (u64_val << 32) as u32]
     }
 }
 

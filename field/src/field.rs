@@ -2,11 +2,10 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display};
 use core::hash::Hash;
-use core::iter::{Product, Sum};
+use core::iter::{self, Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use core::slice;
+use core::{array, slice};
 
-use itertools::Itertools;
 use num_bigint::BigUint;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -552,12 +551,102 @@ pub trait Algebra<F>:
 // Every ring is an algebra over itself.
 impl<R: PrimeCharacteristicRing> Algebra<R> for R {}
 
+pub trait RawDataSerializable: Sized {
+    // The number of bytes which this field element occupies in memory.
+    // Must be equal to the length of self.into_bytes().
+    const NUM_BYTES: usize;
+
+    // Need to be self not &self as this need to take ownership.
+    #[must_use]
+    fn into_bytes(self) -> impl IntoIterator<Item = u8>;
+
+    /// Convert a stream of elements into a byte stream.
+    #[must_use]
+    fn into_byte_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u8> {
+        input.into_iter().flat_map(|elem| elem.into_bytes())
+    }
+
+    /// Convert a stream of elements into a u32 stream.
+    #[must_use]
+    fn into_u32_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u32> {
+        let mut bytes = Self::into_byte_stream(input).into_iter().peekable();
+
+        iter::from_fn(move || {
+            bytes.peek().is_some().then(|| {
+                let u32_bytes = array::from_fn(|_| bytes.next().unwrap_or_default());
+                u32::from_le_bytes(u32_bytes)
+            })
+        })
+    }
+
+    /// Convert a stream of elements into a u64 stream.
+    #[must_use]
+    fn into_u64_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u64> {
+        let mut bytes = Self::into_byte_stream(input).into_iter().peekable();
+
+        iter::from_fn(move || {
+            bytes.peek().is_some().then(|| {
+                let u64_bytes = array::from_fn(|_| bytes.next().unwrap_or_default());
+                u64::from_le_bytes(u64_bytes)
+            })
+        })
+    }
+
+    /// Convert a stream of elements into a byte stream.
+    #[must_use]
+    fn into_parallel_byte_streams<const N: usize>(
+        input: impl IntoIterator<Item = [Self; N]>,
+    ) -> impl IntoIterator<Item = [u8; N]> {
+        input.into_iter().flat_map(|vector| {
+            let bytes = vector.map(|elem| elem.into_bytes().into_iter().collect::<Vec<_>>());
+            (0..Self::NUM_BYTES).map(move |i| array::from_fn(|j| bytes[j][i]))
+        })
+    }
+
+    /// Convert a stream of elements into a u32 stream.
+    #[must_use]
+    fn into_parallel_u32_streams<const N: usize>(
+        input: impl IntoIterator<Item = [Self; N]>,
+    ) -> impl IntoIterator<Item = [u32; N]> {
+        let mut bytes = Self::into_parallel_byte_streams(input)
+            .into_iter()
+            .peekable();
+
+        iter::from_fn(move || {
+            bytes.peek().is_some().then(|| {
+                let u32_bytes_array: [[u8; N]; 4] =
+                    array::from_fn(|_| bytes.next().unwrap_or([0; N]));
+                array::from_fn(|i| u32::from_le_bytes(array::from_fn(|j| u32_bytes_array[j][i])))
+            })
+        })
+    }
+
+    /// Convert a stream of elements into a u64 stream.
+    #[must_use]
+    fn into_parallel_u64_streams<const N: usize>(
+        input: impl IntoIterator<Item = [Self; N]>,
+    ) -> impl IntoIterator<Item = [u64; N]> {
+        let mut bytes = Self::into_parallel_byte_streams(input)
+            .into_iter()
+            .peekable();
+
+        iter::from_fn(move || {
+            bytes.peek().is_some().then(|| {
+                let u32_bytes_array: [[u8; N]; 8] =
+                    array::from_fn(|_| bytes.next().unwrap_or([0; N]));
+                array::from_fn(|i| u64::from_le_bytes(array::from_fn(|j| u32_bytes_array[j][i])))
+            })
+        })
+    }
+}
+
 /// A field `F`. This permits both modular fields `ℤ/p` along with their field extensions.
 ///
 /// A ring is a field if every element `x` has a unique multiplicative inverse `x^{-1}`
 /// which satisfies `x * x^{-1} = F::ONE`.
 pub trait Field:
     Algebra<Self>
+    + RawDataSerializable
     + Packable
     + 'static
     + Copy
@@ -652,19 +741,6 @@ pub trait Field:
     #[inline]
     fn bits() -> usize {
         Self::order().bits() as usize
-    }
-
-    // Need to be self not &self as this need to take ownership.
-    #[must_use]
-    fn to_bytes(self) -> impl IntoIterator<Item = u8>;
-
-    // Need to be self not &self as this need to take ownership.
-    #[must_use]
-    fn to_u32s(self) -> impl IntoIterator<Item = u32> {
-        self.to_bytes()
-            .into_iter()
-            .tuples()
-            .map(|(a, b, c, d)| u32::from_le_bytes([a, b, c, d]))
     }
 }
 

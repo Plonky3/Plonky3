@@ -12,8 +12,8 @@ use p3_field::exponentiation::exp_1717986917;
 use p3_field::integers::QuotientMap;
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField32, PrimeField64, halve_u32, quotient_map_large_iint, quotient_map_large_uint,
-    quotient_map_small_int,
+    PrimeField32, PrimeField64, RawDataSerializable, halve_u32, quotient_map_large_iint,
+    quotient_map_large_uint, quotient_map_small_int,
 };
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
@@ -143,6 +143,16 @@ impl<'a> Deserialize<'a> for Mersenne31 {
         } else {
             Err(D::Error::custom("Value is out of range"))
         }
+    }
+}
+
+impl RawDataSerializable for Mersenne31 {
+    const NUM_BYTES: usize = 4;
+
+    #[allow(refining_impl_trait)]
+    #[inline]
+    fn into_bytes(self) -> [u8; 4] {
+        self.to_unique_u32().to_le_bytes()
     }
 }
 
@@ -296,18 +306,6 @@ impl Field for Mersenne31 {
     #[inline]
     fn order() -> BigUint {
         P.into()
-    }
-
-    #[allow(refining_impl_trait)]
-    #[inline]
-    fn to_bytes(self) -> [u8; 4] {
-        self.to_unique_u32().to_le_bytes()
-    }
-
-    #[allow(refining_impl_trait)]
-    #[inline]
-    fn to_u32s(self) -> [u32; 1] {
-        [self.to_unique_u32()]
     }
 }
 

@@ -18,8 +18,8 @@ use halo2curves::serde::SerdeObject;
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
 use p3_field::{
-    Field, InjectiveMonomial, Packable, PrimeCharacteristicRing, PrimeField, TwoAdicField,
-    quotient_map_small_int,
+    Field, InjectiveMonomial, Packable, PrimeCharacteristicRing, PrimeField, RawDataSerializable,
+    TwoAdicField, quotient_map_small_int,
 };
 pub use poseidon2::Poseidon2Bn254;
 use rand::Rng;
@@ -124,6 +124,16 @@ impl InjectiveMonomial<5> for Bn254Fr {}
 // TODO: Implement PermutationMonomial<5> for Bn254Fr.
 // Not a priority given how slow (and unused) this will be.
 
+impl RawDataSerializable for Bn254Fr {
+    const NUM_BYTES: usize = 32;
+
+    #[allow(refining_impl_trait)]
+    #[inline]
+    fn into_bytes(self) -> [u8; 32] {
+        self.value.to_repr().into() // Would be better to use to_raw_bytes() but I'm unsure if that has a uniqueness guarantee.
+    }
+}
+
 impl Field for Bn254Fr {
     type Packing = Self;
 
@@ -150,12 +160,6 @@ impl Field for Bn254Fr {
             0xf0000001, 0x43e1f593, 0x79b97091, 0x2833e848, 0x8181585d, 0xb85045b6, 0xe131a029,
             0x30644e72,
         ])
-    }
-
-    #[allow(refining_impl_trait)]
-    #[inline]
-    fn to_bytes(self) -> [u8; 32] {
-        self.value.to_repr().into() // Would be better to use to_raw_bytes() but im unsure if that has a uniqueness guarantee.
     }
 }
 

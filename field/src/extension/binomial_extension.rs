@@ -18,8 +18,8 @@ use super::{HasFrobenius, HasTwoAdicBinomialExtension, PackedBinomialExtensionFi
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{
-    Algebra, BasedVectorSpace, ExtensionField, Packable, PrimeCharacteristicRing, TwoAdicField,
-    field_to_array,
+    Algebra, BasedVectorSpace, ExtensionField, Packable, PrimeCharacteristicRing,
+    RawDataSerializable, TwoAdicField, field_to_array,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
@@ -206,6 +206,17 @@ where
 
 impl<F: BinomiallyExtendable<D>, const D: usize> Algebra<F> for BinomialExtensionField<F, D> {}
 
+impl<F: BinomiallyExtendable<D>, const D: usize> RawDataSerializable
+    for BinomialExtensionField<F, D>
+{
+    const NUM_BYTES: usize = F::NUM_BYTES * D;
+
+    #[inline]
+    fn into_bytes(self) -> impl IntoIterator<Item = u8> {
+        self.value.into_iter().flat_map(|x| x.into_bytes())
+    }
+}
+
 impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionField<F, D> {
     type Packing = Self;
 
@@ -239,16 +250,6 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
 
     fn order() -> BigUint {
         F::order().pow(D as u32)
-    }
-
-    #[inline]
-    fn to_bytes(self) -> impl IntoIterator<Item = u8> {
-        self.value.into_iter().flat_map(|x| x.to_bytes())
-    }
-
-    #[inline]
-    fn to_u32s(self) -> impl IntoIterator<Item = u32> {
-        self.value.into_iter().flat_map(|x| x.to_u32s())
     }
 }
 
