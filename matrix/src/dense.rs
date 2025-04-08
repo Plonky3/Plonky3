@@ -116,7 +116,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         T: ExtensionField<F>,
     {
         let width = self.width * T::DIMENSION;
-        // Depending on the way EF elements are stored internally, there
+        // TODO: Depending on the way EF elements are stored internally, there
         // should be a way to avoid the copy here.
         let values = self
             .values
