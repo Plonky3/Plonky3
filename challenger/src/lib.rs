@@ -57,8 +57,7 @@ pub trait FieldChallenger<F: Field>:
     }
 
     fn sample_algebra_element<A: BasedVectorSpace<F>>(&mut self) -> A {
-        let vec = self.sample_vec(A::DIMENSION);
-        A::from_basis_coefficients_slice(&vec)
+        A::from_basis_coefficients_fn(|_| self.sample())
     }
 }
 

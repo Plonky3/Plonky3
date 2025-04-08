@@ -48,7 +48,6 @@ num-bigint = { version = "0.4.3", default-features = false }
 paste = "1.0.15"
 postcard = { version = "1.0.0", default-features = false }
 rand = { version = "0.9.0", default-features = false, features = ["small_rng"] }
-rand_chacha = "0.9.0"
 rand_xoshiro = "0.7.0"
 rayon = "1.7.0"
 serde = { version = "1.0", default-features = false }
