@@ -2,7 +2,13 @@ use p3_field::Field;
 
 use crate::CryptographicHasher;
 
-/// Serializes field elements to bytes then hashes those bytes using some inner hasher.
+/// Converts a hasher which can hash bytes, u32's or u64's into a hasher which can hash field elements.
+///
+/// Supports two types of hashing.
+/// - Hashing a a sequence of field elements.
+/// - Hashing a sequence of arrays of field elements in parallel.
+/// This second type is used when the inner hash is able to use vectorized instructions to
+/// compute multiple hashes at once.
 #[derive(Copy, Clone, Debug)]
 pub struct SerializingHasher<Inner> {
     inner: Inner,
@@ -14,15 +20,6 @@ impl<Inner> SerializingHasher<Inner> {
     }
 }
 
-// Need to support 2 types of hashing.
-// 1. Hashing a a sequence of field elements.
-// 2. Hashing a sequence of packed field elements in parallel.
-//    In this second case, the input will look like:
-//    [[t00, t01, t02, t03], [t10, t11, t12, t13], ...]
-//    but we want to be applying the hash function to the transpose:
-//    [[t00, t10, ...], [t01, t11, ...], ...].
-
-// Supporting 1 is easy:
 impl<F, Inner, const N: usize> CryptographicHasher<F, [u8; N]> for SerializingHasher<Inner>
 where
     F: Field,
