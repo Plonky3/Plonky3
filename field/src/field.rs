@@ -551,22 +551,29 @@ pub trait Algebra<F>:
 // Every ring is an algebra over itself.
 impl<R: PrimeCharacteristicRing> Algebra<R> for R {}
 
+/// A collection of methods designed to help hash field elements.
+///
+/// Most fields will want to reimplement many/all of these methods as the default implementations
+/// are slow and involve converting to/from byte representations.
 pub trait RawDataSerializable: Sized {
-    // The number of bytes which this field element occupies in memory.
-    // Must be equal to the length of self.into_bytes().
+    /// The number of bytes which this field element occupies in memory.
+    /// Must be equal to the length of self.into_bytes().
     const NUM_BYTES: usize;
 
-    // Need to be self not &self as this need to take ownership.
+    /// Convert a field element into a collection of bytes.
     #[must_use]
     fn into_bytes(self) -> impl IntoIterator<Item = u8>;
 
-    /// Convert a stream of elements into a byte stream.
+    /// Convert an iterator of field elements into an iterator of bytes.
     #[must_use]
     fn into_byte_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u8> {
         input.into_iter().flat_map(|elem| elem.into_bytes())
     }
 
-    /// Convert a stream of elements into a u32 stream.
+    /// Convert an iterator of field elements into an iterator of u32s.
+    ///
+    /// If `NUM_BYTES` does not divide `4`, multiple `F`s may be packed together to make a single `u32`. Furthermore,
+    /// if `NUM_BYTES * input.len()` does not divide `4`, the final `u32` will involve padding bytes which are set to `0`.
     #[must_use]
     fn into_u32_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u32> {
         let mut bytes = Self::into_byte_stream(input).into_iter().peekable();
@@ -579,7 +586,10 @@ pub trait RawDataSerializable: Sized {
         })
     }
 
-    /// Convert a stream of elements into a u64 stream.
+    /// Convert an iterator of field elements into an iterator of u64s.
+    ///
+    /// If `NUM_BYTES` does not divide `8`, multiple `F`s may be packed together to make a single `u64`. Furthermore,
+    /// if `NUM_BYTES * input.len()` does not divide `8`, the final `u64` will involve padding bytes which are set to `0`.
     #[must_use]
     fn into_u64_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u64> {
         let mut bytes = Self::into_byte_stream(input).into_iter().peekable();
@@ -592,7 +602,11 @@ pub trait RawDataSerializable: Sized {
         })
     }
 
-    /// Convert a stream of elements into a byte stream.
+    /// Convert an iterator of field elements arrays into an iterator of bytes arrays.
+    ///
+    /// Converts an element `[F; N]` into the byte array `[[u8; N]; NUM_BYTES]`. This is
+    /// intended for use with vectorized hash functions which use vector operations
+    /// to compute several hashes in parallel.
     #[must_use]
     fn into_parallel_byte_streams<const N: usize>(
         input: impl IntoIterator<Item = [Self; N]>,
@@ -603,7 +617,18 @@ pub trait RawDataSerializable: Sized {
         })
     }
 
-    /// Convert a stream of elements into a u32 stream.
+    /// Convert an iterator of field elements arrays into an iterator of u32 arrays.
+    ///
+    /// Converts an element `[F; N]` into the byte array `[[u32; N]; NUM_BYTES/4]`. This is
+    /// intended for use with vectorized hash functions which use vector operations
+    /// to compute several hashes in parallel.
+    ///
+    /// This function is guaranteed to be equivalent to starting with `Iterator<[F; N]>` performing a "transpose"
+    /// operation to get `[Iterator<F>; N]`, calling `into_u32_stream` on each element to get `[Iterator<u32>; N]` and then
+    /// performing another "transpose" operation to get `Iterator<[u32; N]>`.
+    ///
+    /// If `NUM_BYTES` does not divide `4`, multiple `[F; N]`s may be packed together to make a single `[u32; N]`. Furthermore,
+    /// if `NUM_BYTES * input.len()` does not divide `4`, the final `[u32; N]` will involve padding bytes which are set to `0`.
     #[must_use]
     fn into_parallel_u32_streams<const N: usize>(
         input: impl IntoIterator<Item = [Self; N]>,
@@ -621,7 +646,18 @@ pub trait RawDataSerializable: Sized {
         })
     }
 
-    /// Convert a stream of elements into a u64 stream.
+    /// Convert an iterator of field elements arrays into an iterator of u64 arrays.
+    ///
+    /// Converts an element `[F; N]` into the byte array `[[u64; N]; NUM_BYTES/8]`. This is
+    /// intended for use with vectorized hash functions which use vector operations
+    /// to compute several hashes in parallel.
+    ///
+    /// This function is guaranteed to be equivalent to starting with `Iterator<[F; N]>` performing a "transpose"
+    /// operation to get `[Iterator<F>; N]`, calling `into_u64_stream` on each element to get `[Iterator<u64>; N]` and then
+    /// performing another "transpose" operation to get `Iterator<[u64; N]>`.
+    ///
+    /// If `NUM_BYTES` does not divide `8`, multiple `[F; N]`s may be packed together to make a single `[u64; N]`. Furthermore,
+    /// if `NUM_BYTES * input.len()` does not divide `8`, the final `[u64; N]` will involve padding bytes which are set to `0`.
     #[must_use]
     fn into_parallel_u64_streams<const N: usize>(
         input: impl IntoIterator<Item = [Self; N]>,

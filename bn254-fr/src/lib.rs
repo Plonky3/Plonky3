@@ -10,7 +10,7 @@ use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use core::{fmt, stringify};
+use core::{array, fmt, stringify};
 
 pub use halo2curves::bn256::Fr as FFBn254Fr;
 use halo2curves::ff::{Field as FFField, PrimeField as FFPrimeField};
@@ -125,12 +125,61 @@ impl InjectiveMonomial<5> for Bn254Fr {}
 // Not a priority given how slow (and unused) this will be.
 
 impl RawDataSerializable for Bn254Fr {
-    const NUM_BYTES: usize = 32;
+    const NUM_BYTES: usize = 328;
 
     #[allow(refining_impl_trait)]
     #[inline]
     fn into_bytes(self) -> [u8; 32] {
-        self.value.to_repr().into() // Would be better to use to_raw_bytes() but I'm unsure if that has a uniqueness guarantee.
+        // TODO: Would be better to use to_raw_bytes() but I'm unsure if that has a uniqueness guarantee.
+        self.value.to_repr().into()
+    }
+
+    #[inline]
+    fn into_u32_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u32> {
+        // TODO: Might be a way to use iter_u32_digits and save an allocation.
+        // Currently switching it in causes rust to throw an error about referencing temporary values.
+        // Also we don't as_canonical_biguint, (e.g. as_unique_biguint would be fine if it existed).
+        // This comment also applies to `into_u64_stream` as well as `into_parallel_u32_streams` and `into_parallel_u64_streams`.
+        input
+            .into_iter()
+            .flat_map(|x| x.as_canonical_biguint().to_u32_digits())
+    }
+
+    #[inline]
+    fn into_u64_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u64> {
+        input
+            .into_iter()
+            .flat_map(|x| x.as_canonical_biguint().to_u64_digits())
+    }
+
+    #[inline]
+    fn into_parallel_byte_streams<const N: usize>(
+        input: impl IntoIterator<Item = [Self; N]>,
+    ) -> impl IntoIterator<Item = [u8; N]> {
+        input.into_iter().flat_map(|vector| {
+            let bytes = vector.map(|elem| elem.into_bytes());
+            (0..Self::NUM_BYTES).map(move |i| array::from_fn(|j| bytes[j][i]))
+        })
+    }
+
+    #[inline]
+    fn into_parallel_u32_streams<const N: usize>(
+        input: impl IntoIterator<Item = [Self; N]>,
+    ) -> impl IntoIterator<Item = [u32; N]> {
+        input.into_iter().flat_map(|vector| {
+            let u32s = vector.map(|elem| elem.as_canonical_biguint().to_u32_digits());
+            (0..(Self::NUM_BYTES / 4)).map(move |i| array::from_fn(|j| u32s[j][i]))
+        })
+    }
+
+    #[inline]
+    fn into_parallel_u64_streams<const N: usize>(
+        input: impl IntoIterator<Item = [Self; N]>,
+    ) -> impl IntoIterator<Item = [u64; N]> {
+        input.into_iter().flat_map(|vector| {
+            let u64s = vector.map(|elem| elem.as_canonical_biguint().to_u64_digits());
+            (0..(Self::NUM_BYTES / 8)).map(move |i| array::from_fn(|j| u64s[j][i]))
+        })
     }
 }
 

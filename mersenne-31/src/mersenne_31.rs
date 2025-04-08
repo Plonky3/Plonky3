@@ -1,11 +1,11 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::{array, fmt, iter};
 
 use num_bigint::BigUint;
 use p3_field::exponentiation::exp_1717986917;
@@ -153,6 +153,63 @@ impl RawDataSerializable for Mersenne31 {
     #[inline]
     fn into_bytes(self) -> [u8; 4] {
         self.to_unique_u32().to_le_bytes()
+    }
+
+    #[inline]
+    fn into_u32_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u32> {
+        input.into_iter().map(|x| x.to_unique_u32())
+    }
+
+    #[inline]
+    fn into_u64_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u64> {
+        let mut input = input.into_iter();
+        iter::from_fn(move || {
+            // If the first input.next() returns None, we return None.
+            let a = input.next()?;
+            if let Some(b) = input.next() {
+                Some(a.to_unique_u64() | b.to_unique_u64() << 32)
+            } else {
+                Some(a.to_unique_u64())
+            }
+        })
+    }
+
+    #[inline]
+    fn into_parallel_byte_streams<const N: usize>(
+        input: impl IntoIterator<Item = [Self; N]>,
+    ) -> impl IntoIterator<Item = [u8; N]> {
+        input.into_iter().flat_map(|vector| {
+            let bytes = vector.map(|elem| elem.into_bytes());
+            (0..Self::NUM_BYTES).map(move |i| array::from_fn(|j| bytes[j][i]))
+        })
+    }
+
+    #[inline]
+    fn into_parallel_u32_streams<const N: usize>(
+        input: impl IntoIterator<Item = [Self; N]>,
+    ) -> impl IntoIterator<Item = [u32; N]> {
+        input.into_iter().map(|vec| vec.map(|x| x.to_unique_u32()))
+    }
+
+    #[inline]
+    fn into_parallel_u64_streams<const N: usize>(
+        input: impl IntoIterator<Item = [Self; N]>,
+    ) -> impl IntoIterator<Item = [u64; N]> {
+        let mut input = input.into_iter();
+        iter::from_fn(move || {
+            // If the first input.next() returns None, we return None.
+            let a = input.next()?;
+            if let Some(b) = input.next() {
+                let ab = array::from_fn(|i| {
+                    let ai = a[i].to_unique_u64();
+                    let bi = b[i].to_unique_u64();
+                    ai | (bi << 32)
+                });
+                Some(ab)
+            } else {
+                Some(a.map(|x| x.to_unique_u64()))
+            }
+        })
     }
 }
 
