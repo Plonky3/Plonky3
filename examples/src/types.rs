@@ -31,11 +31,13 @@ pub(crate) type KeccakMerkleMmcs<F> = MerkleTreeMmcs<
 pub(crate) type KeccakStarkConfig<F, EF, DFT> = StarkConfig<
     TwoAdicFriPcs<F, DFT, KeccakMerkleMmcs<F>, ExtensionMmcs<F, EF, KeccakMerkleMmcs<F>>>,
     EF,
+    (),
     SerializingChallenger32<F, HashChallenger<u8, Keccak256Hash, 32>>,
 >;
 pub(crate) type KeccakCircleStarkConfig<F, EF> = StarkConfig<
     CirclePcs<F, KeccakMerkleMmcs<F>, ExtensionMmcs<F, EF, KeccakMerkleMmcs<F>>>,
     EF,
+    (),
     SerializingChallenger32<F, HashChallenger<u8, Keccak256Hash, 32>>,
 >;
 
@@ -57,6 +59,7 @@ pub(crate) type Poseidon2StarkConfig<F, EF, DFT, Perm16, Perm24> = StarkConfig<
         ExtensionMmcs<F, EF, Poseidon2MerkleMmcs<F, Perm16, Perm24>>,
     >,
     EF,
+    Perm24,
     DuplexChallenger<F, Perm24, 24, 16>,
 >;
 pub(crate) type Poseidon2CircleStarkConfig<F, EF, Perm16, Perm24> = StarkConfig<
@@ -66,5 +69,6 @@ pub(crate) type Poseidon2CircleStarkConfig<F, EF, Perm16, Perm24> = StarkConfig<
         ExtensionMmcs<F, EF, Poseidon2MerkleMmcs<F, Perm16, Perm24>>,
     >,
     EF,
+    Perm24,
     DuplexChallenger<F, Perm24, 24, 16>,
 >;

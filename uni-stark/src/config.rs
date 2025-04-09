@@ -33,31 +33,47 @@ pub trait StarkGenericConfig {
         + CanObserve<<Self::Pcs as Pcs<Self::Challenge, Self::Challenger>>::Commitment>
         + CanSample<Self::Challenge>;
 
+    /// Get a reference to the PCS used by this proof configuration.
     fn pcs(&self) -> &Self::Pcs;
+
+    /// Get an initialisation of the challenger used by this proof configuration.
+    fn initialise_challenger(&self) -> Self::Challenger;
 }
 
 #[derive(Debug)]
-pub struct StarkConfig<Pcs, Challenge, Challenger> {
+pub struct StarkConfig<Pcs, Challenge, ChallengerConstants, Challenger> {
     pcs: Pcs,
-    _phantom: PhantomData<(Challenge, Challenger)>,
+    challenger_constants: ChallengerConstants,
+    init_challenger: fn(ChallengerConstants) -> Challenger,
+    _phantom: PhantomData<Challenge>,
 }
 
-impl<Pcs, Challenge, Challenger> StarkConfig<Pcs, Challenge, Challenger> {
-    pub const fn new(pcs: Pcs) -> Self {
+impl<Pcs, Challenge, ChallengerConstants, Challenger>
+    StarkConfig<Pcs, Challenge, ChallengerConstants, Challenger>
+{
+    pub const fn new(
+        pcs: Pcs,
+        challenger_constants: ChallengerConstants,
+        init_challenger: fn(ChallengerConstants) -> Challenger,
+    ) -> Self {
         Self {
             pcs,
+            challenger_constants,
+            init_challenger,
             _phantom: PhantomData,
         }
     }
 }
 
-impl<Pcs, Challenge, Challenger> StarkGenericConfig for StarkConfig<Pcs, Challenge, Challenger>
+impl<Pcs, Challenge, ChallengerConstants, Challenger> StarkGenericConfig
+    for StarkConfig<Pcs, Challenge, ChallengerConstants, Challenger>
 where
     Challenge: ExtensionField<<Pcs::Domain as PolynomialSpace>::Val>,
     Pcs: p3_commit::Pcs<Challenge, Challenger>,
     Challenger: FieldChallenger<<Pcs::Domain as PolynomialSpace>::Val>
         + CanObserve<<Pcs as p3_commit::Pcs<Challenge, Challenger>>::Commitment>
         + CanSample<Challenge>,
+    ChallengerConstants: Clone,
 {
     type Pcs = Pcs;
     type Challenge = Challenge;
@@ -65,5 +81,9 @@ where
 
     fn pcs(&self) -> &Self::Pcs {
         &self.pcs
+    }
+
+    fn initialise_challenger(&self) -> Self::Challenger {
+        (self.init_challenger)(self.challenger_constants.clone())
     }
 }

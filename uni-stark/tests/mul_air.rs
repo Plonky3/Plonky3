@@ -117,7 +117,6 @@ fn do_test<SC: StarkGenericConfig>(
     config: SC,
     air: MulAir,
     log_height: usize,
-    challenger: SC::Challenger,
 ) -> Result<(), impl Debug>
 where
     SC::Challenger: Clone,
@@ -125,8 +124,7 @@ where
 {
     let trace = air.random_valid_trace(log_height, true);
 
-    let mut p_challenger = challenger.clone();
-    let proof = prove(&config, &air, &mut p_challenger, trace, &vec![]);
+    let proof = prove(&config, &air, trace, &vec![]);
 
     let serialized_proof = postcard::to_allocvec(&proof).expect("unable to serialize proof");
     tracing::debug!("serialized_proof len: {} bytes", serialized_proof.len());
@@ -134,14 +132,7 @@ where
     let deserialized_proof =
         postcard::from_bytes(&serialized_proof).expect("unable to deserialize proof");
 
-    let mut v_challenger = challenger;
-    verify(
-        &config,
-        &air,
-        &mut v_challenger,
-        &deserialized_proof,
-        &vec![],
-    )
+    verify(&config, &air, &deserialized_proof, &vec![])
 }
 
 fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), impl Debug> {
@@ -157,22 +148,20 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), impl Debug> {
 
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 
-    type Pcs = TrivialPcs<Val, Radix2DitParallel<Val>>;
     let pcs = TrivialPcs {
         dft,
         log_n,
         _phantom: PhantomData,
     };
 
-    type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
-    let config = MyConfig::new(pcs);
+    let config = new(pcs, move || Challenger::new(perm.clone()));
 
     let air = MulAir {
         degree,
         ..Default::default()
     };
 
-    do_test(config, air, 1 << log_n, Challenger::new(perm))
+    do_test(config, air, 1 << log_n)
 }
 
 #[test]
@@ -226,15 +215,14 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
 
-    type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
-    let config = MyConfig::new(pcs);
+    let config = StarkConfig::<_, Challenge, _>::new(pcs, move || Challenger::new(perm.clone()));
 
     let air = MulAir {
         degree,
         ..Default::default()
     };
 
-    do_test(config, air, 1 << log_n, Challenger::new(perm))
+    do_test(config, air, 1 << log_n)
 }
 
 #[test]
@@ -292,8 +280,9 @@ fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
         _phantom: PhantomData,
     };
 
-    type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
-    let config = MyConfig::new(pcs);
+    let config = StarkConfig::<_, Challenge, _>::new(pcs, move || {
+        Challenger::from_hasher(vec![], byte_hash)
+    });
 
     let air = MulAir {
         degree,
@@ -301,12 +290,7 @@ fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
         uses_transition_constraints: true,
     };
 
-    do_test(
-        config,
-        air,
-        1 << log_n,
-        Challenger::from_hasher(vec![], byte_hash),
-    )
+    do_test(config, air, 1 << log_n)
 }
 
 #[test]
