@@ -391,7 +391,7 @@ where
             }
         }
 
-        // It remains to prove that all out functions are low degree.
+        // It remains to prove that all our functions are low degree.
         let fri_input = reduced_openings.into_iter().rev().flatten().collect_vec();
 
         let g: TwoAdicFriGenericConfigForMmcs<Val, InputMmcs> =
