@@ -275,7 +275,7 @@ where
             .iter()
             .flat_map(|(mats, _)| mats.iter().map(|m| m.height()))
             .max()
-            .unwrap();
+            .expect("No Matrices Supplied?");
         let log_global_max_height = log2_strict_usize(global_max_height);
 
         // For each unique opening point z, we will find the largest degree bound

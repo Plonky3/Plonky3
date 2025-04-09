@@ -123,10 +123,13 @@ where
         .iter()
         .enumerate()
         .map(|(ch_i, ch)| {
+            // We checked in valid_shape the length of "ch" is equal to
+            // <SC::Challenge as BasedVectorSpace<Val<SC>>>::DIMENSION. Hence
+            // the unwrap() will never panic.
             zps[ch_i]
                 * ch.iter()
                     .enumerate()
-                    .map(|(e_i, &c)| SC::Challenge::ith_basis_element(e_i) * c)
+                    .map(|(e_i, &c)| SC::Challenge::ith_basis_element(e_i).unwrap() * c)
                     .sum::<SC::Challenge>()
         })
         .sum::<SC::Challenge>();

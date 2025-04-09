@@ -23,7 +23,6 @@ p3-dft.workspace = true
 p3-fri.workspace = true
 p3-goldilocks.workspace = true
 p3-keccak.workspace = true
-p3-mds.workspace = true
 p3-merkle-tree.workspace = true
 p3-mersenne-31.workspace = true
 p3-monty-31.workspace = true
