@@ -261,7 +261,11 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
             .collect()
     }
 
-    /// Multiply this matrix by the vector of powers of `base`, which is an extension element.
+    /// Multiply this matrix by the vector `vec` containing Extension Field elements packed into
+    /// `ExtensionPacking` elements.
+    ///
+    /// Note that zip will truncate whichever iterator is longer so the user should ensure that
+    /// `vec` is longer than `self.width().div_ceil(T::Packing::WIDTH)`.
     fn dot_ext_vector<EF>(
         &self,
         vec: &[EF::ExtensionPacking],
@@ -270,6 +274,8 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         T: Field,
         EF: ExtensionField<T>,
     {
+        // TODO: This is a base - extension dot product and so it should
+        // be possible to speed this up using ideas in `packed_linear_combination`.
         self.par_padded_horizontally_packed_rows::<T::Packing>()
             .map(move |row_packed| {
                 let packed_sum_of_packed: EF::ExtensionPacking =

@@ -169,7 +169,6 @@ where
         assert_eq!(ext_slice.len(), width);
 
         let res = array::from_fn(|i| F::Packing::from_fn(|j| ext_slice[j].value[i]));
-
         Self::new(res)
     }
 
