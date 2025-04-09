@@ -256,11 +256,12 @@ where
             })
             .collect_vec();
 
-        // Find the maximum height of a matrix in the batch.
-        let global_max_height = mats_and_points
+        // Find the maximum height and the maximum width of matrices in the batch.
+        // These do not need to correspond to the same matrix.
+        let (global_max_height, global_max_width) = mats_and_points
             .iter()
-            .flat_map(|(mats, _)| mats.iter().map(|m| m.height()))
-            .max()
+            .flat_map(|(mats, _)| mats.iter().map(|m| (m.height(), m.width())))
+            .reduce(|(hmax, wmax), (h, w)| (hmax.max(h), wmax.max(w)))
             .expect("No Matrices Supplied?");
         let log_global_max_height = log2_strict_usize(global_max_height);
 
@@ -309,6 +310,7 @@ where
 
         // Batch combination challenge
         let alpha: Challenge = challenger.sample_algebra_element();
+        let alpha_powers = alpha.powers().take(global_max_width).collect_vec();
 
         let mut num_reduced = [0; 32];
         let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None);
@@ -333,7 +335,7 @@ where
                 for (&point, openings) in points_for_mat.iter().zip(openings_for_mat) {
                     let alpha_pow_offset = alpha.exp_u64(num_reduced[log_height] as u64);
                     let reduced_openings: Challenge =
-                        dot_product(alpha.powers(), openings.iter().copied());
+                        dot_product(alpha_powers.iter().copied(), openings.iter().copied());
 
                     info_span!("reduce rows").in_scope(|| {
                         mat_compressed
