@@ -181,10 +181,15 @@ where
     let degree = trace.height();
     let log_degree = log2_strict_usize(degree);
 
-    // Find deg(C), the degree of the constraint polynomial.
-    // For now let us assume that `deg(C) = 3`. TODO: Generalize this assumption.
+    // Compute the constraint polynomials as vectors of symbolic expressions.
     let symbolic_constraints = get_symbolic_constraints::<Val<SC>, A>(air, 0, public_values.len());
+
+    // Find the number of constraints.
     let constraint_count = symbolic_constraints.len();
+
+    // Find the total degree of the multivariate constraint polynomial `C`.
+    //
+    // For now in comments we assume that `deg(C) = 3`.
     let constraint_degree = symbolic_constraints
         .iter()
         .map(SymbolicExpression::degree_multiple)
@@ -223,7 +228,10 @@ where
     challenger.observe(Val::<SC>::from_u8(log_degree as u8));
     // TODO: Might be best practice to include other instance data here; see verifier comment.
 
+    // Observe the Merkle root of the trace commitment.
     challenger.observe(trace_commit.clone());
+
+    // Observe the public input values.
     challenger.observe_slice(public_values);
 
     // FIRST FIAT-SHAMIR CHALLENGE: Anything involved in the proof setup should be included by this point.
