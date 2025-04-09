@@ -184,7 +184,7 @@ where
     // Compute the constraint polynomials as vectors of symbolic expressions.
     let symbolic_constraints = get_symbolic_constraints::<Val<SC>, A>(air, 0, public_values.len());
 
-    // Find the number of constraints.
+    // Count the number of constraints that we have.
     let constraint_count = symbolic_constraints.len();
 
     // Find the total degree of the multivariate constraint polynomial `C`.
