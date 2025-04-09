@@ -56,8 +56,10 @@ where
     /// TODO: improve this doc comment.
     ///
     /// Arguments:
-    /// - `rounds`: Each element of rounds is a list of functions to roll in at that round of FRI (or associated low degree test).
-    ///   For each function, we provide a list of challenge points which that function should be opened at.
+    /// - `rounds`: Each element corresponds to a prior call to `commit` and describes the points that each
+    ///   committed polynomial should be opened at. Within one round, we have a `Vec<Vec<Challenge>>` where the inner
+    ///   `Vec<Challenge>` is associated with one matrix, i.e. batch of committed polynomials. All polynomials in a
+    ///   batch are opened at all of these points.
     ///
     /// Output:
     /// - `OpenedValues`: The values opened at the challenge points.

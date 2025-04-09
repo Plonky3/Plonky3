@@ -270,7 +270,7 @@ where
             })
             .collect_vec();
 
-        // Find the maximum height of a matrix in the batch. TODO: This should be given by the matrices in the first round right?
+        // Find the maximum height of a matrix in the batch.
         let global_max_height = mats_and_points
             .iter()
             .flat_map(|(mats, _)| mats.iter().map(|m| m.height()))
@@ -588,8 +588,8 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
     .collect_vec();
     reverse_slice_index_bits(&mut coset);
 
-    // Compute the inverse of the polynomial (X - z) for each z in the coset using `batch_multiplicative_inverse`.
-    // This does involve calling `batch_multiplicative_inverse` for each z but there shouldn't be too many z's.
+    // Compute the inverse of `(z - x)` for every `x` in the coset using `batch_multiplicative_inverse`.
+    // This does involve calling `batch_multiplicative_inverse` for each `z` but there shouldn't be too many `z`'s.
     // If we need to speed this up, it should be possible to call `batch_multiplicative_inverse` exactly once.
     max_log_height_for_point
         .into_iter()
