@@ -10,8 +10,7 @@ use core::ops::Deref;
 
 use itertools::{Itertools, izip};
 use p3_field::{
-    BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue,
-    PrimeCharacteristicRing, dot_product,
+    BasedVectorSpace, ExtensionField, Field, PackedValue, PrimeCharacteristicRing, dot_product,
 };
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
@@ -263,18 +262,18 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     }
 
     /// Multiply this matrix by the vector of powers of `base`, which is an extension element.
-    fn dot_ext_powers<EF>(&self, base: EF) -> impl IndexedParallelIterator<Item = EF>
+    fn dot_ext_vector<EF>(
+        &self,
+        vec: &[EF::ExtensionPacking],
+    ) -> impl IndexedParallelIterator<Item = EF>
     where
         T: Field,
         EF: ExtensionField<T>,
     {
-        let powers_packed = EF::ExtensionPacking::packed_ext_powers(base)
-            .take(self.width().next_multiple_of(T::Packing::WIDTH))
-            .collect_vec();
         self.par_padded_horizontally_packed_rows::<T::Packing>()
             .map(move |row_packed| {
                 let packed_sum_of_packed: EF::ExtensionPacking =
-                    dot_product(powers_packed.iter().copied(), row_packed);
+                    dot_product(vec.iter().copied(), row_packed);
                 let sum_of_packed: EF = EF::from_basis_coefficients_fn(|i| {
                     packed_sum_of_packed.as_basis_coefficients_slice()[i]
                         .as_slice()
