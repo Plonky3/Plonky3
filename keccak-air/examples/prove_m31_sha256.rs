@@ -70,6 +70,5 @@ fn main() -> Result<(), impl Debug> {
     });
 
     let proof = prove(&config, &KeccakAir {}, trace, &vec![]);
-
     verify(&config, &KeccakAir {}, &proof, &vec![])
 }

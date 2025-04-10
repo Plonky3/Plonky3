@@ -68,6 +68,5 @@ fn main() -> Result<(), impl Debug> {
     let config = MyConfig::new(pcs, perm, Challenger::new);
 
     let proof = prove(&config, &KeccakAir {}, trace, &vec![]);
-
     verify(&config, &KeccakAir {}, &proof, &vec![])
 }
