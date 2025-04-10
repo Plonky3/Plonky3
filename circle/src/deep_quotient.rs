@@ -72,7 +72,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
             dot_product(alpha_powers.iter().copied(), ps_at_zeta.iter().copied());
 
         self.values
-            .dot_packed_ext_vector::<EF>(&packed_alpha_powers)
+            .rowwise_packed_dot_product::<EF>(&packed_alpha_powers)
             .zip(vp_nums.into_par_iter())
             .zip(vp_denom_invs.into_par_iter())
             .map(|((reduced_ps_at_x, vp_num), vp_denom_inv)| {

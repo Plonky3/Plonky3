@@ -270,7 +270,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     ///
     /// # Panics
     /// This function panics if the length of `vec` is less than `self.width().div_ceil(T::Packing::WIDTH)`.
-    fn dot_packed_ext_vector<EF>(
+    fn rowwise_packed_dot_product<EF>(
         &self,
         vec: &[EF::ExtensionPacking],
     ) -> impl IndexedParallelIterator<Item = EF>
