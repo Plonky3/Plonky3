@@ -339,7 +339,7 @@ where
         let mut num_reduced = [0; 32];
 
         // For each `log_height` from 2^1 -> 2^32, reduced_openings will contain either `None`
-        // if there are no matrices of that height, Some(Vec) where Vec is equal to
+        // if there are no matrices of that height, or `Some(vec)` where `vec` is equal to
         // a sum of `(f(zeta) - f(x))/(zeta - x)` over all `f`'s of that height and
         // opening points `zeta` with the sum weighted by powers of alpha.
         let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None);
