@@ -270,7 +270,6 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     ///
     /// # Panics
     /// This function panics if the length of `vec` is less than `self.width().div_ceil(T::Packing::WIDTH)`.
-    #[instrument(level = "debug", skip_all, fields(dims = %self.dimensions()))]
     fn rowwise_packed_dot_product<EF>(
         &self,
         vec: &[EF::ExtensionPacking],

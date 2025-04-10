@@ -363,10 +363,11 @@ where
 
                 // Treating our matrix M as the evaluations of functions M0, M1, ...
                 // Compute the evaluations of `Mred(x) = M0(x) + alpha*M1(x) + ...`
-                // This will be reused for all points z which M is opened at so we collect into a vector.
-                let mat_compressed = mat
-                    .rowwise_packed_dot_product::<Challenge>(&packed_alpha_powers)
-                    .collect::<Vec<_>>();
+                let mat_compressed = info_span!("compress mat").in_scope(|| {
+                    // This will be reused for all points z which M is opened at so we collect into a vector.
+                    mat.rowwise_packed_dot_product::<Challenge>(&packed_alpha_powers)
+                        .collect::<Vec<_>>()
+                });
 
                 for (&point, openings) in points_for_mat.iter().zip(openings_for_mat) {
                     // If we have multiple matrices at the same height, we need to scale mat to combine them.
