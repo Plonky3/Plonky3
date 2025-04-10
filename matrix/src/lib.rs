@@ -261,12 +261,16 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
             .collect()
     }
 
-    /// Multiply this matrix by the vector `vec` containing Extension Field elements packed into
-    /// `ExtensionPacking` elements.
+    /// Compute the matrix vector product `M . vec`, aka take the dot product of each
+    /// row of `M` by `vec`. If the length of `vec` is longer than the width of `M`,
+    /// `vec` is truncated to the first `width()` elements.
     ///
-    /// Note that zip will truncate whichever iterator is longer so the user should ensure that
-    /// `vec` is longer than `self.width().div_ceil(T::Packing::WIDTH)`.
-    fn dot_ext_vector<EF>(
+    /// We make use of `PackedFieldExtension` to speed up computations. Thus `vec` is passed in as
+    /// a slice of `PackedFieldExtension` elements.
+    ///
+    /// # Panics
+    /// This function panics if the length of `vec` is less than `self.width().div_ceil(T::Packing::WIDTH)`.
+    fn dot_packed_ext_vector<EF>(
         &self,
         vec: &[EF::ExtensionPacking],
     ) -> impl IndexedParallelIterator<Item = EF>
@@ -274,8 +278,12 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         T: Field,
         EF: ExtensionField<T>,
     {
+        // The length of a `padded_horizontally_packed_row` is `self.width().div_ceil(T::Packing::WIDTH)`.
+        assert!(vec.len() >= self.width().div_ceil(T::Packing::WIDTH));
+
         // TODO: This is a base - extension dot product and so it should
         // be possible to speed this up using ideas in `packed_linear_combination`.
+        // TODO: Perhaps we should be packing rows vertically not horizontally.
         self.par_padded_horizontally_packed_rows::<T::Packing>()
             .map(move |row_packed| {
                 let packed_sum_of_packed: EF::ExtensionPacking =

@@ -365,7 +365,7 @@ where
                 // Compute the evaluations of `Mred(x) = M0(x) + alpha*M1(x) + ...`
                 let mat_compressed = info_span!("compress mat").in_scope(|| {
                     // This will be reused for all points z which M is opened at so we collect into a vector.
-                    mat.dot_ext_vector::<Challenge>(&packed_alpha_powers)
+                    mat.dot_packed_ext_vector::<Challenge>(&packed_alpha_powers)
                         .collect::<Vec<_>>()
                 });
 
