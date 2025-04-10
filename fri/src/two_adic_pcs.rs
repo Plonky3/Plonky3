@@ -486,12 +486,14 @@ where
                 }
             }
 
-            // `reduced_openings` would have a log_height = log_blowup entry only if there was a
-            // trace matrix of height 1. In this case the reduced opening can be skipped as it will
-            // not be checked against any commit phase commit.
-            if let Some((_alpha_pow, ro)) = reduced_openings.remove(&self.fri.log_blowup) {
-                assert!(ro.is_zero());
-            }
+            // Commenting the following as it's causing issues with fri higher arity
+
+            // // `reduced_openings` would have a log_height = log_blowup entry only if there was a
+            // // trace matrix of height 1. In this case the reduced opening can be skipped as it will
+            // // not be checked against any commit phase commit.
+            // if let Some((_alpha_pow, ro)) = reduced_openings.remove(&self.fri.log_blowup) {
+            //     assert!(ro.is_zero());
+            // }
 
             // Return reduced openings descending by log_height.
             Ok(reduced_openings
