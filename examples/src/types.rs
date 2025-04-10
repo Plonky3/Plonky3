@@ -31,13 +31,13 @@ pub(crate) type KeccakMerkleMmcs<F> = MerkleTreeMmcs<
 pub(crate) type KeccakStarkConfig<F, EF, DFT> = StarkConfig<
     TwoAdicFriPcs<F, DFT, KeccakMerkleMmcs<F>, ExtensionMmcs<F, EF, KeccakMerkleMmcs<F>>>,
     EF,
-    (),
+    Keccak256Hash,
     SerializingChallenger32<F, HashChallenger<u8, Keccak256Hash, 32>>,
 >;
 pub(crate) type KeccakCircleStarkConfig<F, EF> = StarkConfig<
     CirclePcs<F, KeccakMerkleMmcs<F>, ExtensionMmcs<F, EF, KeccakMerkleMmcs<F>>>,
     EF,
-    (),
+    Keccak256Hash,
     SerializingChallenger32<F, HashChallenger<u8, Keccak256Hash, 32>>,
 >;
 

@@ -42,8 +42,11 @@ pub trait StarkGenericConfig {
 
 #[derive(Debug)]
 pub struct StarkConfig<Pcs, Challenge, ChallengerConstants, Challenger> {
+    /// The PCS used to commit polynomials and prove opening proofs.
     pcs: Pcs,
+    /// Constants used to create an initialised challenger.
     challenger_constants: ChallengerConstants,
+    /// Function to create the initialised challenger.
     init_challenger: fn(ChallengerConstants) -> Challenger,
     _phantom: PhantomData<Challenge>,
 }
