@@ -64,12 +64,12 @@ fn main() -> Result<(), impl Debug> {
         _phantom: PhantomData,
     };
 
-    type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
-    let config = MyConfig::new(pcs);
+    type MyConfig = StarkConfig<Pcs, Challenge, ByteHash, Challenger>;
+    let config = MyConfig::new(pcs, byte_hash, |byte_hash| {
+        Challenger::from_hasher(vec![], byte_hash)
+    });
 
-    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-    let proof = prove(&config, &KeccakAir {}, &mut challenger, trace, &vec![]);
+    let proof = prove(&config, &KeccakAir {}, trace, &vec![]);
 
-    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-    verify(&config, &KeccakAir {}, &mut challenger, &proof, &vec![])
+    verify(&config, &KeccakAir {}, &proof, &vec![])
 }

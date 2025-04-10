@@ -148,13 +148,15 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), impl Debug> {
 
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 
+    type Pcs = TrivialPcs<Val, Radix2DitParallel<Val>>;
     let pcs = TrivialPcs {
         dft,
         log_n,
         _phantom: PhantomData,
     };
 
-    let config = new(pcs, move || Challenger::new(perm.clone()));
+    type MyConfig = StarkConfig<Pcs, Challenge, Perm, Challenger>;
+    let config = MyConfig::new(pcs, perm, Challenger::new);
 
     let air = MulAir {
         degree,
@@ -215,7 +217,8 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
 
-    let config = StarkConfig::<_, Challenge, _>::new(pcs, move || Challenger::new(perm.clone()));
+    type MyConfig = StarkConfig<Pcs, Challenge, Perm, Challenger>;
+    let config = MyConfig::new(pcs, perm, Challenger::new);
 
     let air = MulAir {
         degree,
@@ -280,7 +283,8 @@ fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
         _phantom: PhantomData,
     };
 
-    let config = StarkConfig::<_, Challenge, _>::new(pcs, move || {
+    type MyConfig = StarkConfig<Pcs, Challenge, ByteHash, Challenger>;
+    let config = MyConfig::new(pcs, byte_hash, |byte_hash| {
         Challenger::from_hasher(vec![], byte_hash)
     });
 

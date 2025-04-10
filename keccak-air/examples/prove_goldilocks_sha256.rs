@@ -62,12 +62,12 @@ fn main() -> Result<(), impl Debug> {
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
 
-    type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
-    let config = MyConfig::new(pcs);
+    type MyConfig = StarkConfig<Pcs, Challenge, ByteHash, Challenger>;
+    let config = MyConfig::new(pcs, byte_hash, |byte_hash| {
+        Challenger::from_hasher(vec![], byte_hash)
+    });
 
-    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-    let proof = prove(&config, &KeccakAir {}, &mut challenger, trace, &vec![]);
+    let proof = prove(&config, &KeccakAir {}, trace, &vec![]);
 
-    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-    verify(&config, &KeccakAir {}, &mut challenger, &proof, &vec![])
+    verify(&config, &KeccakAir {}, &proof, &vec![])
 }
