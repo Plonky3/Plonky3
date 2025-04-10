@@ -6,7 +6,7 @@ use itertools::{iterate, izip, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::coset::TwoAdicMultiplicativeCoset;
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_field::{batch_multiplicative_inverse, ExtensionField, Field, TwoAdicField};
 use p3_poly::Polynomial;
 
 // Syntactic sugar for the proof-of-work computation
@@ -51,6 +51,8 @@ pub(crate) fn fold_polynomial<F: TwoAdicField>(
 
     Polynomial::from_coeffs(folded_coeffs)
 }
+
+// NP TODO remove if no longer used
 
 // Multiply the given polynomial by the power polynomial
 //   1 + c * x + c^2 * x^2 + ... + c^d * x^d
@@ -97,23 +99,80 @@ pub(crate) fn multiply_by_power_polynomial<F: Field>(
     Polynomial::from_coeffs(new_coeffs)
 }
 
-pub fn fold_evaluations_at_domain<F: TwoAdicField>(
+pub(crate) fn fold_evaluations_at_domain<F: TwoAdicField>(
     evals: Vec<F>,
     domain: TwoAdicMultiplicativeCoset<F>,
     log_folding_factor: usize,
     c: F,
 ) -> Vec<F> {
-    // NP TODO implement properly
-    use p3_dft::Radix2Dit;
-    let dft = Radix2Dit::default();
+    // NP TODO better way to handle 1/2?
+    let two_inv = F::TWO.inverse();
+    let denominators: Vec<F> = domain.iter().take(domain.size() / 2).collect();
+    let inv_denominators = batch_multiplicative_inverse(&denominators);
 
-    let poly = Polynomial::from_coeffs(domain_idft(evals, domain, &dft));
-    let folded_poly = fold_polynomial(&poly, c, log_folding_factor);
-    let sub_domain = domain.exp_power_of_2(log_folding_factor).unwrap();
-    let out = domain_dft(sub_domain, folded_poly.coeffs().to_vec(), &dft);
-
-    out
+    fold_evaluations_at_domain_inner(
+        evals,
+        domain,
+        log_folding_factor,
+        c,
+        two_inv,
+        inv_denominators,
+    )
 }
+
+fn fold_evaluations_at_domain_inner<F: TwoAdicField>(
+    evals: Vec<F>,
+    domain: TwoAdicMultiplicativeCoset<F>,
+    log_folding_factor: usize,
+    c: F,
+    two_inv: F,
+    half_domain_invs: Vec<F>,
+) -> Vec<F> {
+    if log_folding_factor == 0 {
+        return evals;
+    }
+
+    // We modify the evaluations and domain inverses in place to avoid
+    // allocating new memory
+    let mut evals = evals;
+    let mut half_domain_invs = half_domain_invs;
+
+    let half_size = half_domain_invs.len();
+
+    let (evals_plus, evals_minus) = evals.split_at_mut(half_size);
+
+    evals_plus
+        .iter_mut()
+        .zip(evals_minus.iter())
+        .zip(half_domain_invs.iter())
+        .for_each(|((eval_p, eval_m), inv)| {
+            *eval_p = two_inv * (*eval_p + *eval_m + c * *inv * (*eval_p - *eval_m));
+        });
+
+    evals.resize(half_size, F::ZERO);
+
+    half_domain_invs.resize(half_size / 2, F::ZERO);
+
+    half_domain_invs.iter_mut().for_each(|inv| {
+        *inv = inv.square();
+    });
+
+    let c_squared = c.square();
+
+    // NP TODO remove this and pass only the generator
+    let domain_squared = domain.exp_power_of_2(1).unwrap();
+
+    fold_evaluations_at_domain_inner(
+        evals,
+        domain_squared,
+        log_folding_factor - 1,
+        c_squared,
+        two_inv,
+        half_domain_invs,
+    )
+}
+
+// NP TODO now this is largely duplicated in fold_evaluationsa_at_domain
 
 // Compute the evaluation of a folded polynomial at a point given the
 // evaluations of the original polynomial at the k-th roots of that point, where
@@ -450,6 +509,36 @@ mod tests {
         }};
     }
 
+    // NP TODO remove duplication with test_fold_evaluations
+    // NP TODO pass rng here and in the above macro
+
+    macro_rules! test_fold_evals_at_domain_with_log_arity {
+        ($log_arity:expr, $polynomial:expr, $folding_randomness:expr, $dft:expr) => {{
+            let mut rng = SmallRng::seed_from_u64(87);
+            let domain = TwoAdicMultiplicativeCoset::new(rng.random(), 10).unwrap();
+
+            // Evaluating the polynomial over the domain
+            let evaluations = domain_dft(domain, $polynomial.coeffs().to_vec(), $dft);
+
+            // We first compute the folded evaluations using the method
+            // fold_evaluations_at_domain()
+            let folded_evaluation =
+                fold_evaluations_at_domain(evaluations, domain, $log_arity, $folding_randomness);
+
+            // The above needs to coincide with the result of evaluating the
+            // folded polynomial at the the k^th power of the domain
+            let folded_polynomial = fold_polynomial(&$polynomial, $folding_randomness, $log_arity);
+
+            let expected_folded_evaluations = domain_dft(
+                domain.exp_power_of_2($log_arity).unwrap(),
+                folded_polynomial.coeffs().to_vec(),
+                $dft,
+            );
+
+            assert_eq!(folded_evaluation, expected_folded_evaluations);
+        }};
+    }
+
     #[test]
     // Checks that fold_evaluations() returns the expected results for arities
     // k = 2^1, ..., 2^9
@@ -460,6 +549,26 @@ mod tests {
 
         for log_arity in 1..10 {
             test_fold_evals_with_log_arity!(log_arity, polynomial, folding_randomness)
+        }
+    }
+
+    #[test]
+    // Checks that fold_evaluations_at_domain() returns the expected results for
+    // arities k = 2^1, ..., 2^9
+    fn test_fold_evaluations_at_domain() {
+        let dft = Radix2Dit::default();
+
+        let mut rng = SmallRng::seed_from_u64(999);
+        let polynomial = rand_poly_rng((1 << 10) - 1, &mut rng);
+        let folding_randomness: BB = rng.random();
+
+        for log_arity in 1..10 {
+            test_fold_evals_at_domain_with_log_arity!(
+                log_arity,
+                polynomial,
+                folding_randomness,
+                &dft
+            )
         }
     }
 
