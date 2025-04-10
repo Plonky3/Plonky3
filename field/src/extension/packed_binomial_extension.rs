@@ -168,17 +168,21 @@ where
         let width = F::Packing::WIDTH;
         assert_eq!(ext_slice.len(), width);
 
-        let mut res = [F::Packing::ZERO; D];
-
-        res.iter_mut().enumerate().for_each(|(i, row_i)| {
-            let row_i = row_i.as_slice_mut();
-            ext_slice
-                .iter()
-                .enumerate()
-                .for_each(|(j, vec_j)| row_i[j] = vec_j.value[i])
-        });
-
+        let res = array::from_fn(|i| F::Packing::from_fn(|j| ext_slice[j].value[i]));
         Self::new(res)
+    }
+
+    #[inline]
+    fn to_ext_iter(
+        iter: impl IntoIterator<Item = Self>,
+    ) -> impl Iterator<Item = BinomialExtensionField<F, D>> {
+        let width = F::Packing::WIDTH;
+        iter.into_iter().flat_map(move |x| {
+            (0..width).map(move |i| {
+                let values = array::from_fn(|j| x.value[j].as_slice()[i]);
+                BinomialExtensionField::new(values)
+            })
+        })
     }
 
     #[inline]
