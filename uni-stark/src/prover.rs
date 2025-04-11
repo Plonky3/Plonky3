@@ -363,6 +363,12 @@ where
     }
 }
 
+/// Compute the values of the quotient polynomial q(x) = c(x) / Z_H(x),
+/// where c(x) is the sum of all constraints weighted by powers of alpha,
+/// and Z_H(x) is the vanishing polynomial over the trace domain H.
+///
+/// This function returns a vector extension field elements
+/// corresponding to evaluations of q(x) over the quotient domain.
 #[instrument(name = "compute quotient polynomial", skip_all)]
 fn quotient_values<SC, A, Mat>(
     air: &A,
@@ -378,11 +384,21 @@ where
     A: for<'a> Air<ProverConstraintFolder<'a, SC>>,
     Mat: Matrix<Val<SC>> + Sync,
 {
+    // Total number of evaluation points
     let quotient_size = quotient_domain.size();
+    // Number of trace columns
     let width = trace_on_quotient_domain.width();
+
+    // Compute row selectors over the quotient domain.
+    // The three selectors we compute are is_first_row, is_last_row and is_transition (aka is not last row).
+    // Additionally we compute the inverse of the vanishing polynomial Z_H(x).
     let mut sels = debug_span!("Compute Selectors")
         .in_scope(|| trace_domain.selectors_on_coset(quotient_domain));
 
+    // Plonky3 support constraint which depend on both the current row of the trace as well
+    // as the next row. While these rows start off adjacent, after the log blow up they will be further apart.
+    //
+    // next_step records how far away the "next" row is from the current row.
     let qdb = log2_strict_usize(quotient_domain.size()) - log2_strict_usize(trace_domain.size());
     let next_step = 1 << qdb;
 
@@ -395,6 +411,7 @@ where
         sels.inv_vanishing.push(Val::<SC>::default());
     }
 
+    // Compute α^i in reverse order: αⁿ⁻¹, ..., α¹, α⁰
     let mut alpha_powers = alpha.powers().take(constraint_count).collect_vec();
     alpha_powers.reverse();
     // alpha powers looks like Vec<EF> ~ Vec<[F; D]>
@@ -408,23 +425,29 @@ where
         })
         .collect();
 
+    // Iterate in parallel over chunks of `WIDTH` rows in the quotient domain.
     (0..quotient_size)
         .into_par_iter()
         .step_by(PackedVal::<SC>::WIDTH)
         .flat_map_iter(|i_start| {
             let i_range = i_start..i_start + PackedVal::<SC>::WIDTH;
 
+            // Load selectors for these rows
             let is_first_row = *PackedVal::<SC>::from_slice(&sels.is_first_row[i_range.clone()]);
             let is_last_row = *PackedVal::<SC>::from_slice(&sels.is_last_row[i_range.clone()]);
             let is_transition = *PackedVal::<SC>::from_slice(&sels.is_transition[i_range.clone()]);
             let inv_vanishing = *PackedVal::<SC>::from_slice(&sels.inv_vanishing[i_range]);
 
+            // Pack the trace values for these rows and their next rows.
             let main = RowMajorMatrix::new(
                 trace_on_quotient_domain.vertically_packed_row_pair(i_start, next_step),
                 width,
             );
 
+            // Initialize the constraint accumulator to zero.
             let accumulator = PackedChallenge::<SC>::ZERO;
+
+            // Construct the `ProverConstraintFolder, which applies constraints.
             let mut folder = ProverConstraintFolder {
                 main: main.as_view(),
                 public_values,
@@ -436,9 +459,11 @@ where
                 accumulator,
                 constraint_index: 0,
             };
+            // Evaluate the AIR constraints over these packed rows.
             air.eval(&mut folder);
 
-            // quotient(x) = constraints(x) / Z_H(x)
+            // Divide constraint polynomial by vanishing polynomial:
+            // q(x) = c(x) / Z_H(x)
             let quotient = folder.accumulator * inv_vanishing;
 
             // "Transpose" D packed base coefficients into WIDTH scalar extension coefficients.
