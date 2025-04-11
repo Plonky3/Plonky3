@@ -26,7 +26,6 @@ pub fn prove<
 >(
     config: &SC,
     air: &A,
-    challenger: &mut SC::Challenger,
     trace: RowMajorMatrix<Val<SC>>,
     public_values: &Vec<Val<SC>>,
 ) -> Proof<SC>
@@ -50,6 +49,7 @@ where
     let log_quotient_degree = log2_ceil_usize(constraint_degree - 1);
     let quotient_degree = 1 << log_quotient_degree;
 
+    let mut challenger = config.initialise_challenger();
     let pcs = config.pcs();
     let trace_domain = pcs.natural_domain_for_degree(degree);
 
@@ -105,7 +105,7 @@ where
                     (0..quotient_degree).map(|_| vec![zeta]).collect_vec(),
                 ),
             ],
-            challenger,
+            &mut challenger,
         )
     });
     let trace_local = opened_values[0][0][0].clone();

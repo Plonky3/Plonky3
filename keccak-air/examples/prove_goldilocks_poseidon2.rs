@@ -55,6 +55,7 @@ fn main() -> Result<(), impl Debug> {
     let dft = Dft::default();
 
     type Challenger = DuplexChallenger<Val, Perm, 8, 4>;
+    let challenger = Challenger::new(perm);
 
     let fri_config = create_benchmark_fri_config(challenge_mmcs);
 
@@ -65,11 +66,8 @@ fn main() -> Result<(), impl Debug> {
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
-    let config = MyConfig::new(pcs);
+    let config = MyConfig::new(pcs, challenger);
 
-    let mut challenger = Challenger::new(perm.clone());
-    let proof = prove(&config, &KeccakAir {}, &mut challenger, trace, &vec![]);
-
-    let mut challenger = Challenger::new(perm);
-    verify(&config, &KeccakAir {}, &mut challenger, &proof, &vec![])
+    let proof = prove(&config, &KeccakAir {}, trace, &vec![]);
+    verify(&config, &KeccakAir {}, &proof, &vec![])
 }

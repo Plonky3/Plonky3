@@ -33,19 +33,27 @@ pub trait StarkGenericConfig {
         + CanObserve<<Self::Pcs as Pcs<Self::Challenge, Self::Challenger>>::Commitment>
         + CanSample<Self::Challenge>;
 
+    /// Get a reference to the PCS used by this proof configuration.
     fn pcs(&self) -> &Self::Pcs;
+
+    /// Get an initialisation of the challenger used by this proof configuration.
+    fn initialise_challenger(&self) -> Self::Challenger;
 }
 
 #[derive(Debug)]
 pub struct StarkConfig<Pcs, Challenge, Challenger> {
+    /// The PCS used to commit polynomials and prove opening proofs.
     pcs: Pcs,
-    _phantom: PhantomData<(Challenge, Challenger)>,
+    /// An initialised instance of the challenger.
+    challenger: Challenger,
+    _phantom: PhantomData<Challenge>,
 }
 
 impl<Pcs, Challenge, Challenger> StarkConfig<Pcs, Challenge, Challenger> {
-    pub const fn new(pcs: Pcs) -> Self {
+    pub const fn new(pcs: Pcs, challenger: Challenger) -> Self {
         Self {
             pcs,
+            challenger,
             _phantom: PhantomData,
         }
     }
@@ -57,7 +65,8 @@ where
     Pcs: p3_commit::Pcs<Challenge, Challenger>,
     Challenger: FieldChallenger<<Pcs::Domain as PolynomialSpace>::Val>
         + CanObserve<<Pcs as p3_commit::Pcs<Challenge, Challenger>>::Commitment>
-        + CanSample<Challenge>,
+        + CanSample<Challenge>
+        + Clone,
 {
     type Pcs = Pcs;
     type Challenge = Challenge;
@@ -65,5 +74,9 @@ where
 
     fn pcs(&self) -> &Self::Pcs {
         &self.pcs
+    }
+
+    fn initialise_challenger(&self) -> Self::Challenger {
+        self.challenger.clone()
     }
 }

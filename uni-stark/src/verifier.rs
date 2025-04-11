@@ -18,7 +18,6 @@ use crate::{PcsError, Proof, StarkGenericConfig, Val, VerifierConstraintFolder};
 pub fn verify<SC, A>(
     config: &SC,
     air: &A,
-    challenger: &mut SC::Challenger,
     proof: &Proof<SC>,
     public_values: &Vec<Val<SC>>,
 ) -> Result<(), VerificationError<PcsError<SC>>>
@@ -37,6 +36,7 @@ where
     let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(air, 0, public_values.len());
     let quotient_degree = 1 << log_quotient_degree;
 
+    let mut challenger = config.initialise_challenger();
     let pcs = config.pcs();
     let trace_domain = pcs.natural_domain_for_degree(degree);
     let quotient_domain =
@@ -95,7 +95,7 @@ where
             ),
         ],
         opening_proof,
-        challenger,
+        &mut challenger,
     )
     .map_err(VerificationError::InvalidOpeningArgument)?;
 

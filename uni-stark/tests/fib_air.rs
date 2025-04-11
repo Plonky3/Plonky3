@@ -124,12 +124,13 @@ fn test_public_value_impl(n: usize, x: u64, log_final_poly_len: usize) {
     let trace = generate_trace_rows::<Val>(0, 1, n);
     let fri_config = create_test_fri_config(challenge_mmcs, log_final_poly_len);
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
-    let config = MyConfig::new(pcs);
-    let mut challenger = Challenger::new(perm.clone());
+    let challenger = Challenger::new(perm);
+
+    let config = MyConfig::new(pcs, challenger);
     let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(x)];
-    let proof = prove(&config, &FibonacciAir {}, &mut challenger, trace, &pis);
-    let mut challenger = Challenger::new(perm);
-    verify(&config, &FibonacciAir {}, &mut challenger, &proof, &pis).expect("verification failed");
+
+    let proof = prove(&config, &FibonacciAir {}, trace, &pis);
+    verify(&config, &FibonacciAir {}, &proof, &pis).expect("verification failed");
 }
 
 #[test]
@@ -157,12 +158,12 @@ fn test_incorrect_public_value() {
     let fri_config = create_test_fri_config(challenge_mmcs, 1);
     let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
-    let config = MyConfig::new(pcs);
-    let mut challenger = Challenger::new(perm);
+    let challenger = Challenger::new(perm);
+    let config = MyConfig::new(pcs, challenger);
     let pis = vec![
         BabyBear::ZERO,
         BabyBear::ONE,
         BabyBear::from_u32(123_123), // incorrect result
     ];
-    prove(&config, &FibonacciAir {}, &mut challenger, trace, &pis);
+    prove(&config, &FibonacciAir {}, trace, &pis);
 }
