@@ -2,13 +2,17 @@ use core::borrow::Borrow;
 use core::marker::PhantomData;
 
 use p3_air::{Air, AirBuilder, BaseAir};
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{Field, PrimeCharacteristicRing, PrimeField};
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
+use rand::distr::{Distribution, StandardUniform};
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 
 use crate::columns::{Poseidon2Cols, num_cols};
 use crate::constants::RoundConstants;
-use crate::{FullRound, PartialRound, SBox};
+use crate::{FullRound, PartialRound, SBox, generate_trace_rows};
 
 /// Assumes the field size is at least 16 bits.
 #[derive(Debug)]
@@ -51,6 +55,29 @@ impl<
             constants,
             _phantom: PhantomData,
         }
+    }
+
+    pub fn generate_trace_rows(
+        &self,
+        num_hashes: usize,
+        extra_capacity_bits: usize,
+    ) -> RowMajorMatrix<F>
+    where
+        F: PrimeField,
+        LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>,
+        StandardUniform: Distribution<[F; WIDTH]>,
+    {
+        let mut rng = SmallRng::seed_from_u64(1);
+        let inputs = (0..num_hashes).map(|_| rng.random()).collect();
+        generate_trace_rows::<
+            _,
+            LinearLayers,
+            WIDTH,
+            SBOX_DEGREE,
+            SBOX_REGISTERS,
+            HALF_FULL_ROUNDS,
+            PARTIAL_ROUNDS,
+        >(inputs, &self.constants, extra_capacity_bits)
     }
 }
 
