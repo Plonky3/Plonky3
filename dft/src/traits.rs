@@ -97,7 +97,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         self.dft_batch(coeffs)
     }
 
-    /// Compute the low-degree extension of each column in `mat` onto a coset of a larger subgroup.
+    /// Compute the low-degree extension of of `vec` onto a coset of a larger subgroup.
     fn coset_lde(&self, vec: Vec<F>, added_bits: usize, shift: F) -> Vec<F> {
         self.coset_lde_batch(RowMajorMatrix::new(vec, 1), added_bits, shift)
             .to_row_major_matrix()
@@ -136,6 +136,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     // you should also ensure to use RecursiveDft instead of Radix2Dit if not using the parallel
     // feature and either RecursiveDft or Radix2DitParallel if you are using that feature.
 
+    /// Compute the discrete Fourier transform (DFT) `vec`.
     fn dft_algebra<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
         &self,
         vec: Vec<V>,
@@ -143,6 +144,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         self.dft_algebra_batch(RowMajorMatrix::new_col(vec)).values
     }
 
+    /// Compute the discrete Fourier transform (DFT) of each column in `mat`.
     fn dft_algebra_batch<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
         &self,
         mat: RowMajorMatrix<V>,
@@ -156,6 +158,8 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         RowMajorMatrix::new(V::convert_from_base_vec(base_dft_output.values), init_width)
     }
 
+    /// Compute the "coset DFT" of `vec`. This can be viewed as interpolation onto a coset of a
+    /// multiplicative subgroup, rather than the subgroup itself.
     fn coset_dft_algebra<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
         &self,
         vec: Vec<V>,
@@ -166,6 +170,8 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
             .values
     }
 
+    /// Compute the "coset DFT" of each column in `mat`. This can be viewed as interpolation onto a
+    /// coset of a multiplicative subgroup, rather than the subgroup itself.
     fn coset_dft_algebra_batch<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
         &self,
         mat: RowMajorMatrix<V>,
@@ -202,6 +208,9 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         RowMajorMatrix::new(V::convert_from_base_vec(base_dft_output.values), init_width)
     }
 
+    // Compute the "coset iDFT" of `vec`. This can be viewed as an inverse operation of
+    /// "coset DFT", that interpolates over a coset of a multiplicative subgroup, rather than
+    /// subgroup itself.
     fn coset_idft_algebra<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
         &self,
         vec: Vec<V>,
@@ -211,6 +220,9 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
             .values
     }
 
+    /// Compute the "coset iDFT" of each column in `mat`. This can be viewed as an inverse operation
+    /// of "coset DFT", that interpolates over a coset of a multiplicative subgroup, rather than the
+    /// subgroup itself.
     fn coset_idft_algebra_batch<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
         &self,
         mat: RowMajorMatrix<V>,
@@ -225,6 +237,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         RowMajorMatrix::new(V::convert_from_base_vec(base_dft_output.values), init_width)
     }
 
+    /// Compute the low-degree extension of `vec` onto a larger subgroup.
     fn lde_algebra<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
         &self,
         vec: Vec<V>,
@@ -235,6 +248,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
             .values
     }
 
+    /// Compute the low-degree extension of each column in `mat` onto a larger subgroup.
     fn lde_algebra_batch<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
         &self,
         mat: RowMajorMatrix<V>,
@@ -249,6 +263,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         RowMajorMatrix::new(V::convert_from_base_vec(base_dft_output.values), init_width)
     }
 
+    /// Compute the low-degree extension of `vec` onto a coset of a larger subgroup.
     fn coset_lde_algebra<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
         &self,
         vec: Vec<V>,
@@ -260,6 +275,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
             .values
     }
 
+    /// Compute the low-degree extension of each column in `mat` onto a coset of a larger subgroup.
     fn coset_lde_algebra_batch<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
         &self,
         mat: RowMajorMatrix<V>,
