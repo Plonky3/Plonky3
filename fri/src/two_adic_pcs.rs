@@ -397,8 +397,7 @@ where
                     // If we have multiple matrices at the same height, we need to scale mat to combine them.
                     let alpha_pow_offset = alpha.exp_u64(num_reduced[log_height] as u64);
 
-                    // As we have all the openings `Mi(z)`, we can combine them using `alpha`
-                    // in an identical way to before to also compute `Mred(z)`.
+                    // We combine the openings `Mi(z)` using `alpha` to compute `Mred(z)`.
                     let reduced_openings: Challenge =
                         dot_product(alpha_powers.iter().copied(), openings.iter().copied());
 
@@ -413,7 +412,7 @@ where
                         // So zip will truncate to the desired smaller length.
                         .zip(inv_denoms.get(&point).unwrap().par_iter())
                         // Map the function `Mred(x) -> (Mred(z) - Mred(x))/(z - x)`
-                        // across the evaluations vector of `Mred(x)`.
+                        // across the evaluation vector of `Mred(x)`.
                         .for_each(|((&reduced_row, ro), &inv_denom)| {
                             *ro += alpha_pow_offset * (reduced_openings - reduced_row) * inv_denom
                         });
