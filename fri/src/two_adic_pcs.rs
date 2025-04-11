@@ -21,7 +21,7 @@ use p3_commit::{Mmcs, OpenedValues, Pcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse,
+    ExtensionField, Field, PackedFieldExtension, TwoAdicField, batch_multiplicative_inverse,
     cyclic_subgroup_coset_known_order, dot_product,
 };
 use p3_interpolation::interpolate_coset;
@@ -270,11 +270,12 @@ where
             })
             .collect_vec();
 
-        // Find the maximum height of a matrix in the batch.
-        let global_max_height = mats_and_points
+        // Find the maximum height and the maximum width of matrices in the batch.
+        // These do not need to correspond to the same matrix.
+        let (global_max_height, global_max_width) = mats_and_points
             .iter()
-            .flat_map(|(mats, _)| mats.iter().map(|m| m.height()))
-            .max()
+            .flat_map(|(mats, _)| mats.iter().map(|m| (m.height(), m.width())))
+            .reduce(|(hmax, wmax), (h, w)| (hmax.max(h), wmax.max(w)))
             .expect("No Matrices Supplied?");
         let log_global_max_height = log2_strict_usize(global_max_height);
 
@@ -332,12 +333,40 @@ where
             .collect_vec();
 
         // Batch combination challenge
-        // TODO: Should we be computing a different alpha for every height?
+        // TODO: Should we be computing a different alpha for each height?
         let alpha: Challenge = challenger.sample_algebra_element();
 
-        // Now that we have the openings, we want to: TODO??
-        let mut num_reduced = [0; 32]; // What will this contain?
-        let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None); // What will this contain?
+        // We precompute powers of alpha as we need the same powers for each matrix.
+        // We compute both a vector of unpacked powers and a vector of packed powers.
+        // TODO: It should be possible to refactor this to only use the packed powers but
+        // this is not a bottleneck so is not a priority.
+        let packed_alpha_powers =
+            Challenge::ExtensionPacking::packed_ext_powers_capped(alpha, global_max_width)
+                .collect_vec();
+        let alpha_powers =
+            Challenge::ExtensionPacking::to_ext_iter(packed_alpha_powers.iter().copied())
+                .collect_vec();
+
+        // Now that we have sent the openings to the verifier, it remains to prove
+        // that those openings are correct.
+
+        // Given a low degree polynomial `f(x)` with claimed evaluation `f(zeta)`, we can check
+        // that `f(zeta)` is correct by doing a low degree test on `(f(zeta) - f(x))/(zeta - x)`.
+        // We will use `alpha` to batch together both different claimed openings `zeta` and
+        // different polynomials `f` whose evaluation vectors have the same height.
+
+        // TODO: If we allow different polynomials to have different blow_up factors
+        // we may need to revisit this and to ensure it is safe to batch them together.
+
+        // num_reduced records the number of reduced function opening point pairs
+        // of each given `log_height`.
+        let mut num_reduced = [0; 32];
+
+        // For each `log_height` from 2^1 -> 2^32, reduced_openings will contain either `None`
+        // if there are no matrices of that height, or `Some(vec)` where `vec` is equal to
+        // a sum of `(f(zeta) - f(x))/(zeta - x)` over all `f`'s of that height and
+        // opening points `zeta` with the sum weighted by powers of alpha.
+        let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None);
 
         for ((mats, points), openings_for_round) in
             mats_and_points.iter().zip(all_opened_values.iter())
@@ -358,10 +387,11 @@ where
 
                 // Treating our matrix M as the evaluations of functions M0, M1, ...
                 // Compute the evaluations of `Mred(x) = M0(x) + alpha*M1(x) + ...`
-                let mat_compressed = info_span!("compress mat")
-                    // TODO: The collect here is just for timing purposes. (This is currently the main bottleneck in reduce matrix quotient).
-                    // It should be removed eventually as dot_ext_powers returns a parallel iterator and we use mat_compressed.par_iter() later.
-                    .in_scope(|| mat.dot_ext_powers(alpha).collect::<Vec<_>>());
+                let mat_compressed = info_span!("compress mat").in_scope(|| {
+                    // This will be reused for all points z which M is opened at so we collect into a vector.
+                    mat.rowwise_packed_dot_product::<Challenge>(&packed_alpha_powers)
+                        .collect::<Vec<_>>()
+                });
 
                 for (&point, openings) in points_for_mat.iter().zip(openings_for_mat) {
                     // If we have multiple matrices at the same height, we need to scale mat to combine them.
@@ -370,22 +400,23 @@ where
                     // As we have all the openings `Mi(z)`, we can combine them using `alpha`
                     // in an identical way to before to also compute `Mred(z)`.
                     let reduced_openings: Challenge =
-                        dot_product(alpha.powers(), openings.iter().copied());
+                        dot_product(alpha_powers.iter().copied(), openings.iter().copied());
 
-                    info_span!("reduce rows").in_scope(|| {
-                        mat_compressed
-                            .par_iter()
-                            .zip(reduced_opening_for_log_height.par_iter_mut())
-                            // This might be longer, but zip will truncate to smaller subgroup
-                            // (which is ok because it's bitrev)
-                            .zip(inv_denoms.get(&point).unwrap().par_iter())
-                            // Map the function `Mred(x)` to `(Mred(z) - Mred(x))/(z - x)`
-                            .for_each(|((&reduced_row, ro), &inv_denom)| {
-                                *ro +=
-                                    alpha_pow_offset * (reduced_openings - reduced_row) * inv_denom
-                            });
-                    });
-
+                    mat_compressed
+                        .par_iter()
+                        .zip(reduced_opening_for_log_height.par_iter_mut())
+                        // inv_denoms contains `1/(point - x)` for `x` in a coset `gK`.
+                        // If `|K| =/= mat.height()` we actually want a subset of this
+                        // corresponding to the evaluations over `gH` for `|H| = mat.height()`.
+                        // As inv_denoms is bit reversed, the evaluations over `gH` are exactly
+                        // the evaluations over `gK` at the indices `0..mat.height()`.
+                        // So zip will truncate to the desired smaller length.
+                        .zip(inv_denoms.get(&point).unwrap().par_iter())
+                        // Map the function `Mred(x) -> (Mred(z) - Mred(x))/(z - x)`
+                        // across the evaluations vector of `Mred(x)`.
+                        .for_each(|((&reduced_row, ro), &inv_denom)| {
+                            *ro += alpha_pow_offset * (reduced_openings - reduced_row) * inv_denom
+                        });
                     num_reduced[log_height] += mat.width();
                 }
             }

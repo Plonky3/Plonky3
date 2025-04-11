@@ -10,8 +10,7 @@ use core::ops::Deref;
 
 use itertools::{Itertools, izip};
 use p3_field::{
-    BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue,
-    PrimeCharacteristicRing, dot_product,
+    BasedVectorSpace, ExtensionField, Field, PackedValue, PrimeCharacteristicRing, dot_product,
 };
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
@@ -264,30 +263,36 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
             .collect()
     }
 
-    /// Given the matrix `M` and extension element `beta`, compute the dot product
-    /// of each row of `M` with the vector of powers of `beta`.
-    fn dot_ext_powers<EF>(&self, beta: EF) -> impl IndexedParallelIterator<Item = EF>
+    /// Compute the matrix vector product `M . vec`, aka take the dot product of each
+    /// row of `M` by `vec`. If the length of `vec` is longer than the width of `M`,
+    /// `vec` is truncated to the first `width()` elements.
+    ///
+    /// We make use of `PackedFieldExtension` to speed up computations. Thus `vec` is passed in as
+    /// a slice of `PackedFieldExtension` elements.
+    ///
+    /// # Panics
+    /// This function panics if the length of `vec` is less than `self.width().div_ceil(T::Packing::WIDTH)`.
+    fn rowwise_packed_dot_product<EF>(
+        &self,
+        vec: &[EF::ExtensionPacking],
+    ) -> impl IndexedParallelIterator<Item = EF>
     where
         T: Field,
         EF: ExtensionField<T>,
     {
-        // Get the packed powers of `beta`. This will be reused for each row.
-        let powers_packed = EF::ExtensionPacking::packed_ext_powers(beta)
-            .take(self.width().next_multiple_of(T::Packing::WIDTH))
-            .collect_vec();
+        // The length of a `padded_horizontally_packed_row` is `self.width().div_ceil(T::Packing::WIDTH)`.
+        assert!(vec.len() >= self.width().div_ceil(T::Packing::WIDTH));
 
-        // We pack the rows horizontally. This means that after our dot product we need to
-        // sum the packed elements together to get the final result.
+        // TODO: This is a base - extension dot product and so it should
+        // be possible to speed this up using ideas in `packed_linear_combination`.
+        // TODO: Perhaps we should be packing rows vertically not horizontally.
         self.par_padded_horizontally_packed_rows::<T::Packing>()
             .map(move |row_packed| {
                 // Note that this is actually a base - ext dot product.
                 // It should be possible to make use of this to speed this computation
                 // up if it ever becomes a bottleneck.
                 let packed_sum_of_packed: EF::ExtensionPacking =
-                    dot_product(powers_packed.iter().copied(), row_packed);
-
-                // We use `as_basis_coefficients_slice` to convert `EF::ExtensionPacking`
-                // to a slice of `F::Packing` elements which we can then sum.
+                    dot_product(vec.iter().copied(), row_packed);
                 let sum_of_packed: EF = EF::from_basis_coefficients_fn(|i| {
                     packed_sum_of_packed.as_basis_coefficients_slice()[i]
                         .as_slice()
