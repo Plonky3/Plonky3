@@ -212,6 +212,8 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
             .collect_vec()
     }
 
+    /// Given a matrix M, return a view to the sub-matrix containing the rows
+    /// `offset, offset + stride, ...` in that order.
     fn vertically_strided(self, stride: usize, offset: usize) -> VerticallyStridedMatrixView<Self>
     where
         Self: Sized,
@@ -286,6 +288,9 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         // TODO: Perhaps we should be packing rows vertically not horizontally.
         self.par_padded_horizontally_packed_rows::<T::Packing>()
             .map(move |row_packed| {
+                // Note that this is actually a base - ext dot product.
+                // It should be possible to make use of this to speed this computation
+                // up if it ever becomes a bottleneck.
                 let packed_sum_of_packed: EF::ExtensionPacking =
                     dot_product(vec.iter().copied(), row_packed);
                 let sum_of_packed: EF = EF::from_basis_coefficients_fn(|i| {

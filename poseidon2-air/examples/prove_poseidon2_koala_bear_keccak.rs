@@ -109,12 +109,12 @@ fn prove_and_verify() -> Result<(), impl Debug> {
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
 
+    let challenger = Challenger::from_hasher(vec![], byte_hash);
+
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
-    let config = MyConfig::new(pcs);
+    let config = MyConfig::new(pcs, challenger);
 
-    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-    let proof = prove(&config, &air, &mut challenger, trace, &vec![]);
+    let proof = prove(&config, &air, trace, &vec![]);
 
-    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-    verify(&config, &air, &mut challenger, &proof, &vec![])
+    verify(&config, &air, &proof, &vec![])
 }
