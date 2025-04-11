@@ -50,7 +50,7 @@ fn generate_trace_rows_for_perm<F: PrimeField64>(rows: &mut [KeccakCols<F>], inp
     let mut current_state: [[u64; 5]; 5] = unsafe { transmute(input) };
 
     let initial_state: [[[F; 4]; 5]; 5] =
-        array::from_fn(|y| array::from_fn(|x| u64_to_16_bit_limbs(current_state[x][y])));
+        array::from_fn(|y| array::from_fn(|x| u64_to_16_bit_limbs(current_state[y][x])));
 
     // Populate the round input for the first round.
     rows[0].a = initial_state;
@@ -135,3 +135,167 @@ fn generate_trace_row_for_round<F: PrimeField64>(
 
     row.a_prime_prime_prime_0_0_limbs = u64_to_16_bit_limbs(current_state[0][0]);
 }
+
+
+#[cfg(test)] 
+
+mod tests{
+    use super::*;
+    use alloc::vec::Vec; 
+    use p3_goldilocks::Goldilocks;
+    use p3_field::PrimeCharacteristicRing;
+
+      // Create a default KeccakCols instance
+    fn default_keccak_cols<F: PrimeField64 + PrimeCharacteristicRing>() -> KeccakCols<F> {
+        KeccakCols {
+            step_flags: [F::ZERO; NUM_ROUNDS],
+            export: F::ZERO,
+            preimage: [[[F::ZERO; U64_LIMBS]; 5]; 5],
+            a: [[[F::ZERO; U64_LIMBS]; 5]; 5],
+            c: [[F::ZERO; 64]; 5],
+            c_prime: [[F::ZERO; 64]; 5],
+            a_prime: [[[F::ZERO; 64]; 5]; 5],
+            a_prime_prime: [[[F::ZERO; U64_LIMBS]; 5]; 5],
+            a_prime_prime_0_0_bits: [F::ZERO; 64],
+            a_prime_prime_prime_0_0_limbs: [F::ZERO; U64_LIMBS],
+        }
+    }
+
+
+     // Verify Keccak permutation with any test vector
+    fn verify_keccak_permutation(input: [u64; 25], expected: [u64; 25]) {
+        // Generate trace for the Keccak permutation
+        let mut rows: Vec<KeccakCols<Goldilocks>> = (0..NUM_ROUNDS).map(|_| default_keccak_cols()).collect();
+        generate_trace_rows_for_perm(&mut rows, input);
+        
+        // Extract the final state from the trace
+        let mut final_state = [[0u64; 5]; 5];
+        for y in 0..5 {
+            for x in 0..5 {
+                // Reconstruct the u64 from 4 16-bit limbs
+                let mut value = 0u64;
+                for i in 0..U64_LIMBS {
+                    let limb = rows[NUM_ROUNDS - 1].a_prime_prime_prime(y, x, i);
+                    value |= (limb.as_canonical_u64() & 0xFFFF) << (16 * i);
+                }
+                final_state[y][x] = value;
+            }
+        }
+        // Flatten the 2D array for comparison
+        let mut final_flat = [0u64; 25];
+        for y in 0..5 {
+            for x in 0..5 {
+                final_flat[x + 5 * y] = final_state[y][x];
+            }
+        }
+        
+        // Verify against expected output
+        assert_eq!(final_flat, expected, "Keccak permutation output doesn't match expected values");
+    }
+
+
+    #[test]
+    fn test_keccak_trace_round_transition() {
+        // Create a test input with unique values
+        let mut input = [0u64; 25];
+        for i in 0..25 {
+            input[i] = (i as u64 + 1) * 0x1111;
+        }
+
+        // Generate trace for the Keccak permutation
+        let mut rows: Vec<KeccakCols<Goldilocks>> = (0..NUM_ROUNDS).map(|_| default_keccak_cols()).collect();
+        generate_trace_rows_for_perm(&mut rows, input);
+
+        // Verify that the output of round 0 (a_prime_prime_prime) becomes the input of round 1 (a)
+        for y in 0..5 {
+            for x in 0..5 {
+                for limb in 0..U64_LIMBS {
+                    assert_eq!(
+                        rows[1].a[y][x][limb],
+                        rows[0].a_prime_prime_prime(y, x, limb),
+                        "State transition mismatch at position ({}, {}) limb {} between round 0 and 1",
+                        x, y, limb
+                    );
+                }
+            }
+        }
+
+        // Verify that the preimage remains the same across rounds
+        for round in 1..NUM_ROUNDS {
+            for y in 0..5 {
+                for x in 0..5 {
+                    for limb in 0..U64_LIMBS {
+                        assert_eq!(
+                            rows[round].preimage[y][x][limb],
+                            rows[0].preimage[y][x][limb],
+                            "Preimage mismatch at round {}, position ({}, {}) limb {}",
+                            round, x, y, limb
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+
+    #[test]
+    fn test_keccak_permutation_zero_input() {
+        let input = [0u64; 25];
+        let expected = [
+            0xF1258F7940E1DDE7, 
+            0x84D5CCF933C0478A, 
+            0xD598261EA65AA9EE, 
+            0xBD1547306F80494D,
+            0x8B284E056253D057, 
+            0xFF97A42D7F8E6FD4, 
+            0x90FEE5A0A44647C4, 
+            0x8C5BDA0CD6192E76,
+            0xAD30A6F71B19059C, 
+            0x30935AB7D08FFC64, 
+            0xEB5AA93F2317D635, 
+            0xA9A6E6260D712103,
+            0x81A57C16DBCF555F, 
+            0x43B831CD0347C826, 
+            0x01F22F1A11A5569F, 
+            0x05E5635A21D9AE61,
+            0x64BEFEF28CC970F2, 
+            0x613670957BC46611, 
+            0xB87C5A554FD00ECB, 
+            0x8C3EE88A1CCF32C8,
+            0x940C7922AE3A2614, 
+            0x1841F924A2C509E4, 
+            0x16F53526E70465C2, 
+            0x75F644E97F30A13B,
+            0xEAF1FF7B5CECA249,
+        ];
+        verify_keccak_permutation(input, expected);
+
+    }
+
+    
+    #[test]
+    fn test_keccak_state_indexing() {
+        // Create a test state with unique values for each position
+        let mut input = [0u64; 25];
+        for i in 0..25 {
+            input[i] = i as u64 + 1; 
+        }
+        
+        // Convert to 2D state using unsafe transmute (as in the implementation)
+        let state_2d: [[u64; 5]; 5] = unsafe { transmute(input) };
+        
+        // Verify that the indexing matches the expected convention: state[x + 5*y]
+        for y in 0..5 {
+            for x in 0..5 {
+                // Check that the value at state_2d[y][x] is the same as input[x + 5*y]
+                // This confirms we're using the correct indexing convention
+                assert_eq!(state_2d[y][x], input[x + 5 * y]);
+            }
+        }
+    }
+    
+   
+
+}
+
+
