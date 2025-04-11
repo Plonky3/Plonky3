@@ -79,6 +79,7 @@ fn main() -> Result<(), impl Debug> {
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
+    let challenger = Challenger::from_hasher(vec![], byte_hash);
 
     let air: VectorizedPoseidon2Air<
         Val,
@@ -100,10 +101,8 @@ fn main() -> Result<(), impl Debug> {
     type Pcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, SmallRng>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config, 4, SmallRng::seed_from_u64(1));
 
-    type MyConfig = StarkConfig<Pcs, Challenge, ByteHash, Challenger>;
-    let config = MyConfig::new(pcs, byte_hash, |byte_hash| {
-        Challenger::from_hasher(vec![], byte_hash)
-    });
+    type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
+    let config = MyConfig::new(pcs, challenger);
 
     let proof = prove(&config, &air, trace, &vec![]);
 

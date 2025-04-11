@@ -110,7 +110,7 @@ type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 type Dft = Radix2DitParallel<Val>;
 type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
-type MyConfig = StarkConfig<Pcs, Challenge, Perm, Challenger>;
+type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
 
 /// n-th Fibonacci number expected to be x
 fn test_public_value_impl(n: usize, x: u64, log_final_poly_len: usize) {
@@ -124,8 +124,9 @@ fn test_public_value_impl(n: usize, x: u64, log_final_poly_len: usize) {
     let trace = generate_trace_rows::<Val>(0, 1, n);
     let fri_config = create_test_fri_config(challenge_mmcs, log_final_poly_len);
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
+    let challenger = Challenger::new(perm);
 
-    let config = MyConfig::new(pcs, perm, Challenger::new);
+    let config = MyConfig::new(pcs, challenger);
     let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(x)];
 
     let proof = prove(&config, &FibonacciAir {}, trace, &pis);
@@ -157,7 +158,8 @@ fn test_incorrect_public_value() {
     let fri_config = create_test_fri_config(challenge_mmcs, 1);
     let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
-    let config = MyConfig::new(pcs, perm, Challenger::new);
+    let challenger = Challenger::new(perm);
+    let config = MyConfig::new(pcs, challenger);
     let pis = vec![
         BabyBear::ZERO,
         BabyBear::ONE,

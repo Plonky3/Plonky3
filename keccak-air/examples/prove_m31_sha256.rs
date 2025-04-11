@@ -50,6 +50,7 @@ fn main() -> Result<(), impl Debug> {
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
+    let challenger = Challenger::from_hasher(vec![], byte_hash);
 
     let fri_config = create_benchmark_fri_config(challenge_mmcs);
 
@@ -64,10 +65,8 @@ fn main() -> Result<(), impl Debug> {
         _phantom: PhantomData,
     };
 
-    type MyConfig = StarkConfig<Pcs, Challenge, ByteHash, Challenger>;
-    let config = MyConfig::new(pcs, byte_hash, |byte_hash| {
-        Challenger::from_hasher(vec![], byte_hash)
-    });
+    type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
+    let config = MyConfig::new(pcs, challenger);
 
     let proof = prove(&config, &KeccakAir {}, trace, &vec![]);
     verify(&config, &KeccakAir {}, &proof, &vec![])

@@ -41,42 +41,32 @@ pub trait StarkGenericConfig {
 }
 
 #[derive(Debug)]
-pub struct StarkConfig<Pcs, Challenge, ChallengerConstants, Challenger> {
+pub struct StarkConfig<Pcs, Challenge, Challenger> {
     /// The PCS used to commit polynomials and prove opening proofs.
     pcs: Pcs,
-    /// Constants used to create an initialised challenger.
-    challenger_constants: ChallengerConstants,
-    /// Function to create the initialised challenger.
-    init_challenger: fn(ChallengerConstants) -> Challenger,
+    /// An initialised instance of the challenger.
+    challenger: Challenger,
     _phantom: PhantomData<Challenge>,
 }
 
-impl<Pcs, Challenge, ChallengerConstants, Challenger>
-    StarkConfig<Pcs, Challenge, ChallengerConstants, Challenger>
-{
-    pub const fn new(
-        pcs: Pcs,
-        challenger_constants: ChallengerConstants,
-        init_challenger: fn(ChallengerConstants) -> Challenger,
-    ) -> Self {
+impl<Pcs, Challenge, Challenger> StarkConfig<Pcs, Challenge, Challenger> {
+    pub const fn new(pcs: Pcs, challenger: Challenger) -> Self {
         Self {
             pcs,
-            challenger_constants,
-            init_challenger,
+            challenger,
             _phantom: PhantomData,
         }
     }
 }
 
-impl<Pcs, Challenge, ChallengerConstants, Challenger> StarkGenericConfig
-    for StarkConfig<Pcs, Challenge, ChallengerConstants, Challenger>
+impl<Pcs, Challenge, Challenger> StarkGenericConfig for StarkConfig<Pcs, Challenge, Challenger>
 where
     Challenge: ExtensionField<<Pcs::Domain as PolynomialSpace>::Val>,
     Pcs: p3_commit::Pcs<Challenge, Challenger>,
     Challenger: FieldChallenger<<Pcs::Domain as PolynomialSpace>::Val>
         + CanObserve<<Pcs as p3_commit::Pcs<Challenge, Challenger>>::Commitment>
-        + CanSample<Challenge>,
-    ChallengerConstants: Clone,
+        + CanSample<Challenge>
+        + Clone,
 {
     type Pcs = Pcs;
     type Challenge = Challenge;
@@ -87,6 +77,6 @@ where
     }
 
     fn initialise_challenger(&self) -> Self::Challenger {
-        (self.init_challenger)(self.challenger_constants.clone())
+        self.challenger.clone()
     }
 }

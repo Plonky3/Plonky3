@@ -55,6 +55,7 @@ fn main() -> Result<(), impl Debug> {
     let dft = Dft::default();
 
     type Challenger = DuplexChallenger<Val, Perm, 8, 4>;
+    let challenger = Challenger::new(perm);
 
     let fri_config = create_benchmark_fri_config(challenge_mmcs);
 
@@ -64,8 +65,8 @@ fn main() -> Result<(), impl Debug> {
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
 
-    type MyConfig = StarkConfig<Pcs, Challenge, Perm, Challenger>;
-    let config = MyConfig::new(pcs, perm, Challenger::new);
+    type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
+    let config = MyConfig::new(pcs, challenger);
 
     let proof = prove(&config, &KeccakAir {}, trace, &vec![]);
     verify(&config, &KeccakAir {}, &proof, &vec![])

@@ -85,6 +85,7 @@ fn prove_and_verify() -> Result<(), impl Debug> {
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
+    let challenger = Challenger::from_hasher(vec![], byte_hash);
 
     // WARNING: DO NOT USE SmallRng in proper applications! Use a real PRNG instead!
     let mut rng = SmallRng::seed_from_u64(1);
@@ -109,10 +110,8 @@ fn prove_and_verify() -> Result<(), impl Debug> {
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
 
-    type MyConfig = StarkConfig<Pcs, Challenge, ByteHash, Challenger>;
-    let config = MyConfig::new(pcs, byte_hash, |byte_hash| {
-        Challenger::from_hasher(vec![], byte_hash)
-    });
+    type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
+    let config = MyConfig::new(pcs, challenger);
 
     let proof = prove(&config, &air, trace, &vec![]);
 

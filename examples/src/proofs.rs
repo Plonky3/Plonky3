@@ -80,10 +80,9 @@ where
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_config.log_blowup);
 
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_config);
+    let challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
 
-    let config = KeccakStarkConfig::new(pcs, Keccak256Hash {}, |hash| {
-        SerializingChallenger32::from_hasher(vec![], hash)
-    });
+    let config = KeccakStarkConfig::new(pcs, challenger);
 
     let proof = prove(&config, &proof_goal, trace, &vec![]);
     report_proof_size(&proof);
@@ -123,8 +122,9 @@ where
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_config.log_blowup);
 
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_config);
+    let challenger = DuplexChallenger::new(perm24);
 
-    let config = Poseidon2StarkConfig::new(pcs, perm24, DuplexChallenger::new);
+    let config = Poseidon2StarkConfig::new(pcs, challenger);
 
     let proof = prove(&config, &proof_goal, trace, &vec![]);
     report_proof_size(&proof);
@@ -158,10 +158,9 @@ pub fn prove_m31_keccak<
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_config.log_blowup);
 
     let pcs = CirclePcs::new(val_mmcs, fri_config);
+    let challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
 
-    let config = KeccakCircleStarkConfig::new(pcs, Keccak256Hash {}, |hash| {
-        SerializingChallenger32::from_hasher(vec![], hash)
-    });
+    let config = KeccakCircleStarkConfig::new(pcs, challenger);
 
     let proof = prove(&config, &proof_goal, trace, &vec![]);
     report_proof_size(&proof);
@@ -199,8 +198,9 @@ where
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_config.log_blowup);
 
     let pcs = CirclePcs::new(val_mmcs, fri_config);
+    let challenger = DuplexChallenger::new(perm24);
 
-    let config = Poseidon2CircleStarkConfig::new(pcs, perm24, DuplexChallenger::new);
+    let config = Poseidon2CircleStarkConfig::new(pcs, challenger);
 
     let proof = prove(&config, &proof_goal, trace, &vec![]);
     report_proof_size(&proof);
