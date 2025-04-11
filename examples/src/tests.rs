@@ -12,13 +12,12 @@ use p3_koala_bear::{GenericPoseidon2LinearLayersKoalaBear, KoalaBear, Poseidon2K
 use p3_mersenne_31::{GenericPoseidon2LinearLayersMersenne31, Mersenne31, Poseidon2Mersenne31};
 use p3_monty_31::dft::RecursiveDft;
 use p3_poseidon2_air::{Poseidon2Air, RoundConstants, VectorizedPoseidon2Air};
-use rand::{SeedableRng, rngs::SmallRng};
+use rand::SeedableRng;
+use rand::rngs::SmallRng;
 
-use crate::{
-    dfts::DftChoice,
-    proofs::{
-        prove_m31_keccak, prove_m31_poseidon2, prove_monty31_keccak, prove_monty31_poseidon2,
-    },
+use crate::dfts::DftChoice;
+use crate::proofs::{
+    prove_m31_keccak, prove_m31_poseidon2, prove_monty31_keccak, prove_monty31_poseidon2,
 };
 
 // 128 rows for the Generic Poseidon2 AIR.
