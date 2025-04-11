@@ -85,8 +85,9 @@ impl<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: usize> BasedVectorSpace
 
         let buf_ptr = vec.as_ptr().cast::<A>();
         let n = vec.len() * D;
+        // Ideally we could use Vec::from_raw_parts but that seems to be dangerous.
         let slice = unsafe { slice::from_raw_parts(buf_ptr, n) };
-        slice.to_vec()
+        slice.to_vec() // Hopefully the compiler will optimize this away.
     }
 
     #[inline]
@@ -104,8 +105,9 @@ impl<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: usize> BasedVectorSpace
         );
         let buf_ptr = vec.as_mut_ptr().cast::<Self>();
         let n = vec.len() / D;
+        // Ideally we could use Vec::from_raw_parts but that seems to be dangerous.
         let slice = unsafe { slice::from_raw_parts(buf_ptr, n) };
-        slice.to_vec()
+        slice.to_vec() // Hopefully the compiler will optimize this away.
     }
 }
 

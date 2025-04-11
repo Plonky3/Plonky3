@@ -463,6 +463,18 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
         (i < Self::DIMENSION).then(|| Self::from_basis_coefficients_fn(|j| F::from_bool(i == j)))
     }
 
+    /// Convert from a vector of `Self` to a vector of `F` by flattening the basis coefficients.
+    ///
+    /// For some `BasedVectorSpaces` we may be able to do this directly and avoid passing through
+    /// the iterator and `as_basis_coefficients_slice`.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
     #[must_use]
     #[inline]
     fn convert_to_base_vec(vec: Vec<Self>) -> Vec<F> {
@@ -471,9 +483,26 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
             .collect()
     }
 
+    /// Convert from a vector of `F` to a vector of `Self` by combining the basis coefficients.
+    ///
+    /// For some `BasedVectorSpaces` we may be able to do this directly and avoid passing through
+    /// the iterator and `from_basis_coefficients_slice`.
+    ///
+    /// # Panics
+    /// This will panic if the length of `vec` is not a multiple of `Self::DIMENSION`.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
     #[must_use]
     #[inline]
     fn convert_from_base_vec(vec: Vec<F>) -> Vec<Self> {
+        assert_eq!(vec.len() % Self::DIMENSION, 0);
+
         vec.chunks_exact(Self::DIMENSION)
             .map(|chunk| Self::from_basis_coefficients_slice(chunk).unwrap())
             .collect::<Vec<_>>()
@@ -496,6 +525,18 @@ impl<F: PrimeCharacteristicRing> BasedVectorSpace<F> for F {
     #[inline]
     fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = F>>(mut iter: I) -> Option<Self> {
         (iter.len() == 1).then(|| iter.next().unwrap()) // Unwrap will not panic as we know the length is 1.
+    }
+
+    #[must_use]
+    #[inline]
+    fn convert_to_base_vec(vec: Vec<Self>) -> Vec<F> {
+        vec
+    }
+
+    #[must_use]
+    #[inline]
+    fn convert_from_base_vec(vec: Vec<F>) -> Vec<Self> {
+        vec
     }
 }
 

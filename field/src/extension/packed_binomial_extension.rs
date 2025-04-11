@@ -1,8 +1,8 @@
 use alloc::vec::Vec;
-use core::array;
 use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::{array, slice};
 
 use itertools::Itertools;
 use p3_util::convert_vec;
@@ -155,6 +155,40 @@ where
     #[inline]
     fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = PF>>(mut iter: I) -> Option<Self> {
         (iter.len() == D).then(|| Self::new(array::from_fn(|_| iter.next().unwrap()))) // The unwrap is safe as we just checked the length of iter.
+    }
+
+    #[inline]
+    fn convert_to_base_vec(vec: Vec<Self>) -> Vec<PF> {
+        // PFs Self = [PF; D] and this carries repr(transparent), we can safely mess with pointers.
+
+        // We leave this in, just in case
+        assert!(align_of::<Self>() == align_of::<PF>());
+
+        let buf_ptr = vec.as_ptr().cast::<PF>();
+        let n = vec.len() * D;
+        // Ideally we could use Vec::from_raw_parts but that seems to be dangerous.
+        let slice = unsafe { slice::from_raw_parts(buf_ptr, n) };
+        slice.to_vec() // Hopefully the compiler will optimize this away.
+    }
+
+    #[inline]
+    fn convert_from_base_vec(mut vec: Vec<PF>) -> Vec<Self> {
+        vec.shrink_to_fit(); // Reserve space for the new vector.
+        // PFs Self = [PF; D] and this carries repr(transparent), we can safely mess with pointers.
+
+        // We leave this in, just in case
+        assert!(align_of::<Self>() == align_of::<PF>());
+        assert!(
+            vec.len() % D == 0,
+            "Vector length (got {}) must be a multiple of the extension field dimension ({}).",
+            vec.len(),
+            D
+        );
+        let buf_ptr = vec.as_mut_ptr().cast::<Self>();
+        let n = vec.len() / D;
+        // Ideally we could use Vec::from_raw_parts but that seems to be dangerous.
+        let slice = unsafe { slice::from_raw_parts(buf_ptr, n) };
+        slice.to_vec() // Hopefully the compiler will optimize this away.
     }
 }
 
