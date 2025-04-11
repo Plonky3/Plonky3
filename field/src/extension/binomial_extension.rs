@@ -1,11 +1,11 @@
 use alloc::format;
 use alloc::string::ToString;
 use alloc::vec::Vec;
-use core::array;
 use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
 use core::marker::PhantomData;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::{array, slice};
 
 use itertools::Itertools;
 use num_bigint::BigUint;
@@ -74,6 +74,38 @@ impl<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: usize> BasedVectorSpace
     #[inline]
     fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = A>>(mut iter: I) -> Option<Self> {
         (iter.len() == D).then(|| Self::new(array::from_fn(|_| iter.next().unwrap()))) // The unwrap is safe as we just checked the length of iter.
+    }
+
+    #[inline]
+    fn convert_to_base_vec(vec: Vec<Self>) -> Vec<A> {
+        // As Self = [A; D] and this carries repr(transparent), we can safely mess with pointers.
+
+        // We leave this in, just in case
+        assert!(align_of::<Self>() == align_of::<A>());
+
+        let buf_ptr = vec.as_ptr().cast::<A>();
+        let n = vec.len() * D;
+        let slice = unsafe { slice::from_raw_parts(buf_ptr, n) };
+        slice.to_vec()
+    }
+
+    #[inline]
+    fn convert_from_base_vec(mut vec: Vec<A>) -> Vec<Self> {
+        vec.shrink_to_fit(); // Reserve space for the new vector.
+        // As Self = [A; D] and this carries repr(transparent), we can safely mess with pointers.
+
+        // We leave this in, just in case
+        assert!(align_of::<Self>() == align_of::<A>());
+        assert!(
+            vec.len() % D == 0,
+            "Vector length (got {}) must be a multiple of the extension field dimension ({}).",
+            vec.len(),
+            D
+        );
+        let buf_ptr = vec.as_mut_ptr().cast::<Self>();
+        let n = vec.len() / D;
+        let slice = unsafe { slice::from_raw_parts(buf_ptr, n) };
+        slice.to_vec()
     }
 }
 

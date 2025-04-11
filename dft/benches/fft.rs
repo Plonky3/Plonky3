@@ -1,8 +1,8 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::BabyBear;
 use p3_dft::{Radix2Bowers, Radix2Dit, Radix2DitParallel, TwoAdicSubgroupDft};
-use p3_field::TwoAdicField;
-use p3_field::extension::Complex;
+use p3_field::extension::{BinomialExtensionField, Complex};
+use p3_field::{Algebra, BasedVectorSpace, TwoAdicField};
 use p3_goldilocks::Goldilocks;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_mersenne_31::{Mersenne31, Mersenne31ComplexRadix2Dit, Mersenne31Dft};
@@ -16,13 +16,17 @@ fn bench_fft(c: &mut Criterion) {
     // log_sizes correspond to the sizes of DFT we want to benchmark;
     // for the DFT over the quadratic extension "Mersenne31Complex" a
     // fairer comparison is to use half sizes, which is the log minus 1.
-    let log_sizes = &[14, 16, 18, 20, 22];
-    let log_half_sizes = &[13, 15, 17];
+    let log_sizes = &[18];
+    let log_half_sizes = &[];
 
-    const BATCH_SIZE: usize = 256;
+    const BATCH_SIZE: usize = 1;
+    type BBExt = BinomialExtensionField<BabyBear, 5>;
 
-    fft::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
+    fft::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
+    fft::<BBExt, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
+    fft_algebra::<BabyBear, BBExt, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
+    fft_algebra::<BabyBear, BBExt, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
     fft::<Goldilocks, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
@@ -69,6 +73,37 @@ where
         group.bench_with_input(BenchmarkId::from_parameter(n), &dft, |b, dft| {
             b.iter(|| {
                 dft.dft_batch(messages.clone());
+            });
+        });
+    }
+}
+
+fn fft_algebra<F, V, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
+where
+    F: TwoAdicField,
+    V: Algebra<F> + BasedVectorSpace<F> + Clone + Default + Send + Sync,
+    Dft: TwoAdicSubgroupDft<F>,
+    StandardUniform: Distribution<V>,
+{
+    let mut group = c.benchmark_group(format!(
+        "fft_algebra/{}/{}/{}/ncols={}",
+        pretty_name::<F>(),
+        pretty_name::<Dft>(),
+        pretty_name::<V>(),
+        BATCH_SIZE
+    ));
+    group.sample_size(10);
+
+    let mut rng = SmallRng::seed_from_u64(1);
+    for n_log in log_sizes {
+        let n = 1 << n_log;
+
+        let messages = RowMajorMatrix::<V>::rand(&mut rng, n, BATCH_SIZE);
+
+        let dft = Dft::default();
+        group.bench_with_input(BenchmarkId::from_parameter(n), &dft, |b, dft| {
+            b.iter(|| {
+                dft.dft_algebra_batch(messages.clone());
             });
         });
     }

@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_field::TwoAdicField;
+use p3_field::{Algebra, BasedVectorSpace, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::BitReversibleMatrix;
 use p3_matrix::dense::RowMajorMatrix;
@@ -122,5 +122,158 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
             F::ZERO,
         );
         self.coset_dft_batch(coeffs, shift)
+    }
+
+    // As FFT's are linear, we can lift these FFT algorithms to work on any algebra
+    // over the field. We don't actually need the `Algebra<F>` trait for this to
+    // compile but, if a vector space does not implement `Algebra<F>`, applying
+    // an F-FFT to it is meaningless.
+
+    // When `V` is an extension field, this is much faster than using `TwoAdicSubgroupDft<V>`
+    // as it avoids extension field multiplications and makes better use of vectorization.
+
+    // If you are using this to compute FFT/IFFT's of a single polynomial (e.g. no batching)
+    // you should also ensure to use RecursiveDft instead of Radix2Dit if not using the parallel
+    // feature and either RecursiveDft or Radix2DitParallel if you are using that feature.
+
+    fn dft_algebra<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
+        &self,
+        vec: Vec<V>,
+    ) -> Vec<V> {
+        self.dft_algebra_batch(RowMajorMatrix::new_col(vec)).values
+    }
+
+    fn dft_algebra_batch<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
+        &self,
+        mat: RowMajorMatrix<V>,
+    ) -> RowMajorMatrix<V> {
+        let init_width = mat.width();
+        let base_mat = RowMajorMatrix::new(
+            V::convert_to_base_vec(mat.values),
+            init_width * V::DIMENSION,
+        );
+        let base_dft_output = self.dft_batch(base_mat).to_row_major_matrix();
+        RowMajorMatrix::new(V::convert_from_base_vec(base_dft_output.values), init_width)
+    }
+
+    fn coset_dft_algebra<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
+        &self,
+        vec: Vec<V>,
+        shift: F,
+    ) -> Vec<V> {
+        self.coset_dft_algebra_batch(RowMajorMatrix::new_col(vec), shift)
+            .to_row_major_matrix()
+            .values
+    }
+
+    fn coset_dft_algebra_batch<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
+        &self,
+        mat: RowMajorMatrix<V>,
+        shift: F,
+    ) -> RowMajorMatrix<V> {
+        let init_width = mat.width();
+        let base_mat = RowMajorMatrix::new(
+            V::convert_to_base_vec(mat.values),
+            init_width * V::DIMENSION,
+        );
+        let base_dft_output = self.coset_dft_batch(base_mat, shift).to_row_major_matrix();
+        RowMajorMatrix::new(V::convert_from_base_vec(base_dft_output.values), init_width)
+    }
+
+    /// Compute the inverse DFT of `vec`.
+    fn idft_algebra<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
+        &self,
+        vec: Vec<V>,
+    ) -> Vec<V> {
+        self.idft_algebra_batch(RowMajorMatrix::new(vec, 1)).values
+    }
+
+    /// Compute the inverse DFT of each column in `mat`.
+    fn idft_algebra_batch<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
+        &self,
+        mat: RowMajorMatrix<V>,
+    ) -> RowMajorMatrix<V> {
+        let init_width = mat.width();
+        let base_mat = RowMajorMatrix::new(
+            V::convert_to_base_vec(mat.values),
+            init_width * V::DIMENSION,
+        );
+        let base_dft_output = self.idft_batch(base_mat);
+        RowMajorMatrix::new(V::convert_from_base_vec(base_dft_output.values), init_width)
+    }
+
+    fn coset_idft_algebra<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
+        &self,
+        vec: Vec<V>,
+        shift: F,
+    ) -> Vec<V> {
+        self.coset_idft_algebra_batch(RowMajorMatrix::new(vec, 1), shift)
+            .values
+    }
+
+    fn coset_idft_algebra_batch<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
+        &self,
+        mat: RowMajorMatrix<V>,
+        shift: F,
+    ) -> RowMajorMatrix<V> {
+        let init_width = mat.width();
+        let base_mat = RowMajorMatrix::new(
+            V::convert_to_base_vec(mat.values),
+            init_width * V::DIMENSION,
+        );
+        let base_dft_output = self.coset_idft_batch(base_mat, shift);
+        RowMajorMatrix::new(V::convert_from_base_vec(base_dft_output.values), init_width)
+    }
+
+    fn lde_algebra<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
+        &self,
+        vec: Vec<V>,
+        added_bits: usize,
+    ) -> Vec<V> {
+        self.lde_algebra_batch(RowMajorMatrix::new(vec, 1), added_bits)
+            .to_row_major_matrix()
+            .values
+    }
+
+    fn lde_algebra_batch<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
+        &self,
+        mat: RowMajorMatrix<V>,
+        added_bits: usize,
+    ) -> RowMajorMatrix<V> {
+        let init_width = mat.width();
+        let base_mat = RowMajorMatrix::new(
+            V::convert_to_base_vec(mat.values),
+            init_width * V::DIMENSION,
+        );
+        let base_dft_output = self.lde_batch(base_mat, added_bits).to_row_major_matrix();
+        RowMajorMatrix::new(V::convert_from_base_vec(base_dft_output.values), init_width)
+    }
+
+    fn coset_lde_algebra<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
+        &self,
+        vec: Vec<V>,
+        added_bits: usize,
+        shift: F,
+    ) -> Vec<V> {
+        self.coset_lde_algebra_batch(RowMajorMatrix::new(vec, 1), added_bits, shift)
+            .to_row_major_matrix()
+            .values
+    }
+
+    fn coset_lde_algebra_batch<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
+        &self,
+        mat: RowMajorMatrix<V>,
+        added_bits: usize,
+        shift: F,
+    ) -> RowMajorMatrix<V> {
+        let init_width = mat.width();
+        let base_mat = RowMajorMatrix::new(
+            V::convert_to_base_vec(mat.values),
+            init_width * V::DIMENSION,
+        );
+        let base_dft_output = self
+            .coset_lde_batch(base_mat, added_bits, shift)
+            .to_row_major_matrix();
+        RowMajorMatrix::new(V::convert_from_base_vec(base_dft_output.values), init_width)
     }
 }

@@ -462,6 +462,22 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     fn ith_basis_element(i: usize) -> Option<Self> {
         (i < Self::DIMENSION).then(|| Self::from_basis_coefficients_fn(|j| F::from_bool(i == j)))
     }
+
+    #[must_use]
+    #[inline]
+    fn convert_to_base_vec(vec: Vec<Self>) -> Vec<F> {
+        vec.into_iter()
+            .flat_map(|x| x.as_basis_coefficients_slice().to_vec())
+            .collect()
+    }
+
+    #[must_use]
+    #[inline]
+    fn convert_from_base_vec(vec: Vec<F>) -> Vec<Self> {
+        vec.chunks_exact(Self::DIMENSION)
+            .map(|chunk| Self::from_basis_coefficients_slice(chunk).unwrap())
+            .collect::<Vec<_>>()
+    }
 }
 
 impl<F: PrimeCharacteristicRing> BasedVectorSpace<F> for F {
