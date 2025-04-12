@@ -16,17 +16,14 @@ fn bench_fft(c: &mut Criterion) {
     // log_sizes correspond to the sizes of DFT we want to benchmark;
     // for the DFT over the quadratic extension "Mersenne31Complex" a
     // fairer comparison is to use half sizes, which is the log minus 1.
-    let log_sizes = &[18];
-    let log_half_sizes = &[];
+    let log_sizes = &[14, 16, 18, 20, 22];
+    let log_half_sizes = &[13, 15, 17];
 
-    const BATCH_SIZE: usize = 1;
+    const BATCH_SIZE: usize = 256;
     type BBExt = BinomialExtensionField<BabyBear, 5>;
 
-    fft::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
-    fft::<BBExt, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
-    fft_algebra::<BabyBear, BBExt, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
+    fft::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
-    fft_algebra::<BabyBear, BBExt, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
     fft::<Goldilocks, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
@@ -47,6 +44,12 @@ fn bench_fft(c: &mut Criterion) {
     coset_lde::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
     coset_lde::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
     coset_lde::<Goldilocks, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
+
+    fft::<BBExt, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
+    fft::<BBExt, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
+    fft_algebra::<BabyBear, BBExt, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
+    fft_algebra::<BabyBear, BBExt, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
+    fft_algebra::<BabyBear, BBExt, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
 }
 
 fn fft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
