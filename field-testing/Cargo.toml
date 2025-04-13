@@ -13,4 +13,3 @@ criterion.workspace = true
 num-bigint.workspace = true
 
 [dev-dependencies]
-p3-baby-bear.workspace = true
