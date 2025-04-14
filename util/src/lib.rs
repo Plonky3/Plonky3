@@ -8,8 +8,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::any::type_name;
 use core::hint::unreachable_unchecked;
-use core::mem;
 use core::mem::MaybeUninit;
+use core::{iter, mem};
 
 use crate::transpose::transpose_in_place_square;
 
@@ -284,10 +284,10 @@ pub fn pretty_name<T>() -> String {
 /// A C-style buffered input reader, similar to
 /// `core::iter::Iterator::next_chunk()` from nightly.
 ///
-/// Unsafe because the returned array may contain uninitialised
-/// elements.
+/// Returns an array of `MaybeUninit<T>` and the number of items in the
+/// array which have been correctly initialized.
 #[inline]
-unsafe fn iter_next_chunk<const BUFLEN: usize, I: Iterator>(
+fn iter_next_chunk_erased<const BUFLEN: usize, I: Iterator>(
     iter: &mut I,
 ) -> ([MaybeUninit<I::Item>; BUFLEN], usize)
 where
@@ -296,15 +296,15 @@ where
     let mut buf = [const { MaybeUninit::<I::Item>::uninit() }; BUFLEN];
     let mut i = 0;
 
-    // Read BUFLEN values from `iter` into `buf` at a time.
-    for c in iter {
-        // Copy the next Item into `buf`.
-        unsafe {
-            buf.get_unchecked_mut(i).write(c);
-            i = i.unchecked_add(1);
-        }
-        // If `buf` is full
-        if i == BUFLEN {
+    while i < BUFLEN {
+        if let Some(c) = iter.next() {
+            // Copy the next Item into `buf`.
+            unsafe {
+                buf.get_unchecked_mut(i).write(c);
+                i = i.unchecked_add(1);
+            }
+        } else {
+            // No more items in the iterator.
             break;
         }
     }
@@ -342,12 +342,45 @@ where
 {
     let mut iter = input.into_iter();
     loop {
-        let (buf, n) = unsafe { iter_next_chunk::<BUFLEN, _>(&mut iter) };
+        let (buf, n) = iter_next_chunk_erased::<BUFLEN, _>(&mut iter);
         if n == 0 {
             break;
         }
         func(unsafe { assume_init_ref(buf.get_unchecked(..n)) });
     }
+}
+
+/// Pulls `N` items from `iter` and returns them as an array. If the iterator
+/// yields fewer than `N` items (but more than `0`), pads by default values and returns.
+///
+/// Since the iterator is passed as a mutable reference and this function calls
+/// `next` at most `N` times, the iterator can still be used afterwards to
+/// retrieve the remaining items.
+///
+/// If `iter.next()` panics, all items already yielded by the iterator are
+/// dropped.
+#[inline]
+fn iter_next_chunk_padded<T: Default + Copy, const N: usize>(
+    iter: &mut impl Iterator<Item = T>,
+) -> Option<[T; N]> {
+    let (mut arr, n) = iter_next_chunk_erased::<N, _>(iter);
+    (n != 0).then(|| {
+        // Fill the rest of the array with default values.
+        arr[n..].fill(MaybeUninit::new(T::default()));
+        unsafe { mem::transmute_copy::<_, [T; N]>(&arr) }
+    })
+}
+
+/// Returns an iterator over `N` elements of the iterator at a time.
+///
+/// The chunks do not overlap. If `N` does not divide the length of the
+/// iterator, then the last `N-1` elements will be padded with default values.
+#[inline]
+pub fn iter_array_chunks_padded<T: Default + Copy, const N: usize>(
+    iter: impl IntoIterator<Item = T>,
+) -> impl Iterator<Item = [T; N]> {
+    let mut iter = iter.into_iter();
+    iter::from_fn(move || iter_next_chunk_padded(&mut iter))
 }
 
 /// Converts a vector of one type to one of another type.

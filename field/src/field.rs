@@ -5,6 +5,7 @@ use core::hash::Hash;
 use core::iter::{self, Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::{array, slice};
+use p3_util::iter_array_chunks_padded;
 
 use num_bigint::BigUint;
 use serde::Serialize;
@@ -576,14 +577,8 @@ pub trait RawDataSerializable: Sized {
     /// if `NUM_BYTES * input.len()` does not divide `4`, the final `u32` will involve padding bytes which are set to `0`.
     #[must_use]
     fn into_u32_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u32> {
-        let mut bytes = Self::into_byte_stream(input).into_iter().peekable();
-
-        iter::from_fn(move || {
-            bytes.peek().is_some().then(|| {
-                let u32_bytes = array::from_fn(|_| bytes.next().unwrap_or_default());
-                u32::from_le_bytes(u32_bytes)
-            })
-        })
+        let bytes = Self::into_byte_stream(input);
+        iter_array_chunks_padded(bytes).map(u32::from_le_bytes)
     }
 
     /// Convert an iterator of field elements into an iterator of u64s.
@@ -592,14 +587,8 @@ pub trait RawDataSerializable: Sized {
     /// if `NUM_BYTES * input.len()` does not divide `8`, the final `u64` will involve padding bytes which are set to `0`.
     #[must_use]
     fn into_u64_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u64> {
-        let mut bytes = Self::into_byte_stream(input).into_iter().peekable();
-
-        iter::from_fn(move || {
-            bytes.peek().is_some().then(|| {
-                let u64_bytes = array::from_fn(|_| bytes.next().unwrap_or_default());
-                u64::from_le_bytes(u64_bytes)
-            })
-        })
+        let bytes = Self::into_byte_stream(input);
+        iter_array_chunks_padded(bytes).map(u64::from_le_bytes)
     }
 
     /// Convert an iterator of field elements arrays into an iterator of bytes arrays.
