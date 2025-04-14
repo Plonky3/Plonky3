@@ -84,6 +84,7 @@ pub fn generate_trace_rows<
 >(
     inputs: Vec<[F; WIDTH]>,
     constants: &RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
+    extra_capacity_bits: usize,
 ) -> RowMajorMatrix<F> {
     let n = inputs.len();
     assert!(
@@ -92,7 +93,7 @@ pub fn generate_trace_rows<
     );
 
     let ncols = num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>();
-    let mut vec = Vec::with_capacity(n * ncols * 2);
+    let mut vec = Vec::with_capacity((n * ncols) << extra_capacity_bits);
     let trace = &mut vec.spare_capacity_mut()[..n * ncols];
     let trace = RowMajorMatrixViewMut::new(trace, ncols);
 
