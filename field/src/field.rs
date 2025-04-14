@@ -477,7 +477,7 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     /// different basis might have been used.
     #[must_use]
     #[inline]
-    fn convert_to_base_vec(vec: Vec<Self>) -> Vec<F> {
+    fn flatten_to_base(vec: Vec<Self>) -> Vec<F> {
         vec.into_iter()
             .flat_map(|x| x.as_basis_coefficients_slice().to_vec())
             .collect()
@@ -500,11 +500,11 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     /// different basis might have been used.
     #[must_use]
     #[inline]
-    fn convert_from_base_vec(vec: Vec<F>) -> Vec<Self> {
+    fn reconstitute_from_base(vec: Vec<F>) -> Vec<Self> {
         assert_eq!(vec.len() % Self::DIMENSION, 0);
 
         vec.chunks_exact(Self::DIMENSION)
-            .map(|chunk| Self::from_basis_coefficients_slice(chunk).unwrap())
+            .flat_map(|chunk| Self::from_basis_coefficients_slice(chunk))
             .collect::<Vec<_>>()
     }
 }
@@ -529,13 +529,13 @@ impl<F: PrimeCharacteristicRing> BasedVectorSpace<F> for F {
 
     #[must_use]
     #[inline]
-    fn convert_to_base_vec(vec: Vec<Self>) -> Vec<F> {
+    fn flatten_to_base(vec: Vec<Self>) -> Vec<F> {
         vec
     }
 
     #[must_use]
     #[inline]
-    fn convert_from_base_vec(vec: Vec<F>) -> Vec<Self> {
+    fn reconstitute_from_base(vec: Vec<F>) -> Vec<Self> {
         vec
     }
 }

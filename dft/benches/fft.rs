@@ -46,7 +46,7 @@ fn bench_fft(c: &mut Criterion) {
     coset_lde::<Goldilocks, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
 
     // The FFT is really slow when dealing with extension fields so we use smaller sizes:
-    let ext_log_sizes = &[10, 12, 14];
+    let ext_log_sizes = &[10];
     fft::<BBExt, Radix2Dit<_>, BATCH_SIZE>(c, ext_log_sizes);
     fft::<BBExt, Radix2DitParallel<_>, BATCH_SIZE>(c, ext_log_sizes);
     fft_algebra::<BabyBear, BBExt, Radix2Dit<_>, BATCH_SIZE>(c, ext_log_sizes);

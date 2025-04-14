@@ -25,7 +25,7 @@ pub trait MontyParametersNeon {
 
 /// Vectorized NEON implementation of `MontyField31` arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(transparent)] // This needed to make `transmute`s safe.
+#[repr(transparent)] // Needed to make `transmute`s safe.
 pub struct PackedMontyField31Neon<PMP: PackedMontyParameters>(pub [MontyField31<PMP>; WIDTH]);
 
 impl<PMP: PackedMontyParameters> PackedMontyField31Neon<PMP> {

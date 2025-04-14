@@ -20,7 +20,7 @@ const P: uint32x4_t = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH])
 
 /// Vectorized NEON implementation of `Mersenne31` arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(transparent)] // This needed to make `transmute`s safe.
+#[repr(transparent)] // Needed to make `transmute`s safe.
 pub struct PackedMersenne31Neon(pub [Mersenne31; WIDTH]);
 
 impl PackedMersenne31Neon {

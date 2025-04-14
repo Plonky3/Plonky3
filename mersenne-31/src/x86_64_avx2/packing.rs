@@ -20,7 +20,7 @@ pub(crate) const P: __m256i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff;
 
 /// Vectorized AVX2 implementation of `Mersenne31` arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(transparent)] // This needed to make `transmute`s safe.
+#[repr(transparent)] // Needed to make `transmute`s safe.
 pub struct PackedMersenne31AVX2(pub [Mersenne31; WIDTH]);
 
 impl PackedMersenne31AVX2 {

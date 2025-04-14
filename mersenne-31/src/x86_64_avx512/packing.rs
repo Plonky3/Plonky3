@@ -23,7 +23,7 @@ const EVENS4: __mmask16 = 0x0f0f;
 
 /// Vectorized AVX-512F implementation of `Mersenne31` arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(transparent)] // This needed to make `transmute`s safe.
+#[repr(transparent)] // Needed to make `transmute`s safe.
 pub struct PackedMersenne31AVX512(pub [Mersenne31; WIDTH]);
 
 impl PackedMersenne31AVX512 {

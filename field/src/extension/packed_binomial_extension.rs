@@ -1,14 +1,17 @@
 use alloc::vec::Vec;
+use core::array;
 use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
-use core::{array, slice};
 
 use itertools::Itertools;
 use p3_util::convert_vec;
 use serde::{Deserialize, Serialize};
 
-use super::{BinomialExtensionField, binomial_mul, cubic_square, vector_add, vector_sub};
+use super::{
+    BinomialExtensionField, binomial_mul, cubic_square, flatten_to_base, reconstitute_from_base,
+    vector_add, vector_sub,
+};
 use crate::extension::BinomiallyExtendable;
 use crate::{
     Algebra, BasedVectorSpace, Field, PackedField, PackedFieldExtension, PackedValue, Powers,
@@ -16,7 +19,7 @@ use crate::{
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
-#[repr(transparent)] // to make the zero_vec implementation safe
+#[repr(transparent)] // Needed to make various casts safe.
 pub struct PackedBinomialExtensionField<F: Field, PF: PackedField<Scalar = F>, const D: usize> {
     #[serde(
         with = "p3_util::array_serialization",
@@ -158,37 +161,21 @@ where
     }
 
     #[inline]
-    fn convert_to_base_vec(vec: Vec<Self>) -> Vec<PF> {
-        // PFs Self = [PF; D] and this carries repr(transparent), we can safely mess with pointers.
-
-        // We leave this in, just in case
-        assert!(align_of::<Self>() == align_of::<PF>());
-
-        let buf_ptr = vec.as_ptr().cast::<PF>();
-        let n = vec.len() * D;
-        // Ideally we could use Vec::from_raw_parts but that seems to be dangerous.
-        let slice = unsafe { slice::from_raw_parts(buf_ptr, n) };
-        slice.to_vec() // Hopefully the compiler will optimize this away.
+    fn flatten_to_base(vec: Vec<Self>) -> Vec<PF> {
+        unsafe {
+            // Safety:
+            // As `Self` is a `repr(transparent)`, it can be transmuted to `[PF; D]`
+            flatten_to_base::<PF, Self, D>(vec)
+        }
     }
 
     #[inline]
-    fn convert_from_base_vec(mut vec: Vec<PF>) -> Vec<Self> {
-        vec.shrink_to_fit(); // Reserve space for the new vector.
-        // PFs Self = [PF; D] and this carries repr(transparent), we can safely mess with pointers.
-
-        // We leave this in, just in case
-        assert!(align_of::<Self>() == align_of::<PF>());
-        assert!(
-            vec.len() % D == 0,
-            "Vector length (got {}) must be a multiple of the extension field dimension ({}).",
-            vec.len(),
-            D
-        );
-        let buf_ptr = vec.as_mut_ptr().cast::<Self>();
-        let n = vec.len() / D;
-        // Ideally we could use Vec::from_raw_parts but that seems to be dangerous.
-        let slice = unsafe { slice::from_raw_parts(buf_ptr, n) };
-        slice.to_vec() // Hopefully the compiler will optimize this away.
+    fn reconstitute_from_base(vec: Vec<PF>) -> Vec<Self> {
+        unsafe {
+            // Safety:
+            // As `Self` is a `repr(transparent)`, it can be transmuted to `[PF; D]`
+            reconstitute_from_base::<PF, Self, D>(vec)
+        }
     }
 }
 

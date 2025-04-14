@@ -150,12 +150,13 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         mat: RowMajorMatrix<V>,
     ) -> RowMajorMatrix<V> {
         let init_width = mat.width();
-        let base_mat = RowMajorMatrix::new(
-            V::convert_to_base_vec(mat.values),
-            init_width * V::DIMENSION,
-        );
+        let base_mat =
+            RowMajorMatrix::new(V::flatten_to_base(mat.values), init_width * V::DIMENSION);
         let base_dft_output = self.dft_batch(base_mat).to_row_major_matrix();
-        RowMajorMatrix::new(V::convert_from_base_vec(base_dft_output.values), init_width)
+        RowMajorMatrix::new(
+            V::reconstitute_from_base(base_dft_output.values),
+            init_width,
+        )
     }
 
     /// Compute the "coset DFT" of `vec`. This can be viewed as interpolation onto a coset of a
@@ -178,12 +179,13 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         shift: F,
     ) -> RowMajorMatrix<V> {
         let init_width = mat.width();
-        let base_mat = RowMajorMatrix::new(
-            V::convert_to_base_vec(mat.values),
-            init_width * V::DIMENSION,
-        );
+        let base_mat =
+            RowMajorMatrix::new(V::flatten_to_base(mat.values), init_width * V::DIMENSION);
         let base_dft_output = self.coset_dft_batch(base_mat, shift).to_row_major_matrix();
-        RowMajorMatrix::new(V::convert_from_base_vec(base_dft_output.values), init_width)
+        RowMajorMatrix::new(
+            V::reconstitute_from_base(base_dft_output.values),
+            init_width,
+        )
     }
 
     /// Compute the inverse DFT of `vec`.
@@ -200,12 +202,13 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         mat: RowMajorMatrix<V>,
     ) -> RowMajorMatrix<V> {
         let init_width = mat.width();
-        let base_mat = RowMajorMatrix::new(
-            V::convert_to_base_vec(mat.values),
-            init_width * V::DIMENSION,
-        );
+        let base_mat =
+            RowMajorMatrix::new(V::flatten_to_base(mat.values), init_width * V::DIMENSION);
         let base_dft_output = self.idft_batch(base_mat);
-        RowMajorMatrix::new(V::convert_from_base_vec(base_dft_output.values), init_width)
+        RowMajorMatrix::new(
+            V::reconstitute_from_base(base_dft_output.values),
+            init_width,
+        )
     }
 
     /// Compute the "coset iDFT" of `vec`. This can be viewed as an inverse operation of
@@ -229,12 +232,13 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         shift: F,
     ) -> RowMajorMatrix<V> {
         let init_width = mat.width();
-        let base_mat = RowMajorMatrix::new(
-            V::convert_to_base_vec(mat.values),
-            init_width * V::DIMENSION,
-        );
+        let base_mat =
+            RowMajorMatrix::new(V::flatten_to_base(mat.values), init_width * V::DIMENSION);
         let base_dft_output = self.coset_idft_batch(base_mat, shift);
-        RowMajorMatrix::new(V::convert_from_base_vec(base_dft_output.values), init_width)
+        RowMajorMatrix::new(
+            V::reconstitute_from_base(base_dft_output.values),
+            init_width,
+        )
     }
 
     /// Compute the low-degree extension of `vec` onto a larger subgroup.
@@ -255,12 +259,13 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         added_bits: usize,
     ) -> RowMajorMatrix<V> {
         let init_width = mat.width();
-        let base_mat = RowMajorMatrix::new(
-            V::convert_to_base_vec(mat.values),
-            init_width * V::DIMENSION,
-        );
+        let base_mat =
+            RowMajorMatrix::new(V::flatten_to_base(mat.values), init_width * V::DIMENSION);
         let base_dft_output = self.lde_batch(base_mat, added_bits).to_row_major_matrix();
-        RowMajorMatrix::new(V::convert_from_base_vec(base_dft_output.values), init_width)
+        RowMajorMatrix::new(
+            V::reconstitute_from_base(base_dft_output.values),
+            init_width,
+        )
     }
 
     /// Compute the low-degree extension of `vec` onto a coset of a larger subgroup.
@@ -283,13 +288,14 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         shift: F,
     ) -> RowMajorMatrix<V> {
         let init_width = mat.width();
-        let base_mat = RowMajorMatrix::new(
-            V::convert_to_base_vec(mat.values),
-            init_width * V::DIMENSION,
-        );
+        let base_mat =
+            RowMajorMatrix::new(V::flatten_to_base(mat.values), init_width * V::DIMENSION);
         let base_dft_output = self
             .coset_lde_batch(base_mat, added_bits, shift)
             .to_row_major_matrix();
-        RowMajorMatrix::new(V::convert_from_base_vec(base_dft_output.values), init_width)
+        RowMajorMatrix::new(
+            V::reconstitute_from_base(base_dft_output.values),
+            init_width,
+        )
     }
 }
