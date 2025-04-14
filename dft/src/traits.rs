@@ -208,7 +208,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         RowMajorMatrix::new(V::convert_from_base_vec(base_dft_output.values), init_width)
     }
 
-    // Compute the "coset iDFT" of `vec`. This can be viewed as an inverse operation of
+    /// Compute the "coset iDFT" of `vec`. This can be viewed as an inverse operation of
     /// "coset DFT", that interpolates over a coset of a multiplicative subgroup, rather than
     /// subgroup itself.
     fn coset_idft_algebra<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
