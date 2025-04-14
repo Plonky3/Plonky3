@@ -5,9 +5,9 @@ use core::hash::Hash;
 use core::iter::{self, Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::{array, slice};
-use p3_util::iter_array_chunks_padded;
 
 use num_bigint::BigUint;
+use p3_util::iter_array_chunks_padded;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
