@@ -289,24 +289,18 @@ pub fn pretty_name<T>() -> String {
 #[inline]
 unsafe fn iter_next_chunk<const BUFLEN: usize, I: Iterator>(
     iter: &mut I,
-) -> ([I::Item; BUFLEN], usize)
+) -> ([MaybeUninit<I::Item>; BUFLEN], usize)
 where
     I::Item: Copy,
 {
-    let mut buf = unsafe {
-        let t = [const { MaybeUninit::<I::Item>::uninit() }; BUFLEN];
-        // We are forced to use `transmute_copy` here instead of
-        // `transmute` because `BUFLEN` is a const generic parameter.
-        // The compiler *should* be smart enough not to emit a copy though.
-        core::mem::transmute_copy::<_, [I::Item; BUFLEN]>(&t)
-    };
+    let mut buf = [const { MaybeUninit::<I::Item>::uninit() }; BUFLEN];
     let mut i = 0;
 
     // Read BUFLEN values from `iter` into `buf` at a time.
     for c in iter {
         // Copy the next Item into `buf`.
         unsafe {
-            *buf.get_unchecked_mut(i) = c;
+            buf.get_unchecked_mut(i).write(c);
             i = i.unchecked_add(1);
         }
         // If `buf` is full
@@ -315,6 +309,23 @@ where
         }
     }
     (buf, i)
+}
+
+/// Gets a shared reference to the contained value.
+///
+/// # Safety
+///
+/// Calling this when the content is not yet fully initialized causes undefined
+/// behavior: it is up to the caller to guarantee that every `MaybeUninit<T>` in
+/// the slice really is in an initialized state.
+// #[unstable(feature = "maybe_uninit_slice", issue = "63569")]
+#[inline(always)]
+pub const unsafe fn assume_init_ref<T>(slice: &[MaybeUninit<T>]) -> &[T] {
+    // SAFETY: casting `slice` to a `*const [T]` is safe since the caller guarantees that
+    // `slice` is initialized, and `MaybeUninit` is guaranteed to have the same layout as `T`.
+    // The pointer obtained is valid since it refers to memory owned by `slice` which is a
+    // reference and thus guaranteed to be valid for reads.
+    unsafe { &*(slice as *const [MaybeUninit<T>] as *const [T]) }
 }
 
 /// Split an iterator into small arrays and apply `func` to each.
@@ -335,7 +346,7 @@ where
         if n == 0 {
             break;
         }
-        func(unsafe { buf.get_unchecked(..n) });
+        func(unsafe { assume_init_ref(buf.get_unchecked(..n)) });
     }
 }
 

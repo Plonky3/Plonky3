@@ -61,7 +61,7 @@ where
 /// by filling zeros.
 #[inline]
 pub const fn field_to_array<R: PrimeCharacteristicRing, const D: usize>(x: R) -> [R; D] {
-    let mut arr: [_; D] = [const { MaybeUninit::uninit() }; D];
+    let mut arr = [const { MaybeUninit::uninit() }; D];
     arr[0] = MaybeUninit::new(x);
     let mut i = 1;
     while i < D {
