@@ -505,7 +505,7 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
 
         vec.chunks_exact(Self::DIMENSION)
             .flat_map(|chunk| Self::from_basis_coefficients_slice(chunk))
-            .collect::<Vec<_>>()
+            .collect()
     }
 }
 
