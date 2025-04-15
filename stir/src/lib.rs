@@ -3,8 +3,7 @@
 //! [implementation](https://github.com/WizardOfMenlo/stir) by the co-author
 //! Giacomo Fenzi.
 
-// NP TODO re-introduce
-// #![no_std]
+#![no_std]
 
 extern crate alloc;
 

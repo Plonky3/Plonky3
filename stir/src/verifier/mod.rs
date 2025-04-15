@@ -749,9 +749,9 @@ fn compute_folded_evaluations<F: TwoAdicField>(
 // The above equation is checked at a uniformly sampled random point r.
 fn verify_evaluations<F: TwoAdicField>(
     // Polynomial whose evaluations are being checked
-    f: &Vec<F>,
+    f: &[F],
     // Shake polynomial q
-    shake_polynomial: &Vec<F>,
+    shake_polynomial: &[F],
     // Random field element where the equation is checked
     r: F,
     // Vector of point-evaluation pairs (x_i, y_i)

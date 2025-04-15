@@ -11,12 +11,13 @@ use p3_field::{
     PackedFieldExtension, PackedValue, TwoAdicField,
 };
 use p3_matrix::dense::RowMajorMatrix;
-use p3_poly::Polynomial;
 
 use crate::config::{observe_public_parameters, RoundConfig};
 use crate::proof::RoundProof;
 use crate::utils::{
-    domain_dft, domain_idft, fold_evaluations_at_domain, observe_ext_slice_with_size,
+    add_polys, divide_by_vanishing_linear_polynomial, domain_dft, domain_idft,
+    fold_evaluations_at_domain, lagrange_interpolation, observe_ext_slice_with_size,
+    power_polynomial, vanishing_polynomial,
 };
 use crate::{Messages, StirConfig, StirProof, POW_BITS_WARNING};
 
@@ -87,19 +88,17 @@ pub(crate) struct StirRoundWitness<F: TwoAdicField, M: Mmcs<F>> {
 /// degree at most `2^{config.log_starting_degree()} - 1`).
 pub fn commit_polynomial<F, M>(
     config: &StirConfig<F, M>,
-    polynomial: Polynomial<F>,
+    polynomial: Vec<F>,
 ) -> (StirWitness<F, M>, M::Commitment)
 where
     F: TwoAdicField,
     M: Mmcs<F>,
 {
     assert!(
-        polynomial
-            .degree()
-            .is_none_or(|d| d < (1 << config.log_starting_degree())),
+        polynomial.is_empty() || polynomial.len() <= (1 << config.log_starting_degree()),
         "The degree of the polynomial ({}) is too large: the configuration \
         only supports polynomials of degree up to 2^{} - 1 = {}",
-        polynomial.degree().unwrap(),
+        polynomial.len() - 1,
         config.log_starting_degree(),
         (1 << config.log_starting_degree()) - 1
     );
@@ -123,7 +122,7 @@ where
         TwoAdicMultiplicativeCoset::new(F::two_adic_generator(log_size), log_size).unwrap();
 
     // Committing to the evaluations of f_0 over L_0.
-    let evals = domain_dft(domain, polynomial.coeffs().to_vec(), &config.dft);
+    let evals = domain_dft(domain, polynomial, &config.dft);
 
     commit_evals(config, evals)
 }
@@ -479,14 +478,14 @@ where
     let quotient_set_size = quotient_set.len();
 
     // Compute the Ans polynomial and add it to the transcript
-    let ans_polynomial = Polynomial::<EF>::lagrange_interpolation(quotient_answers.clone());
+    let ans_polynomial = lagrange_interpolation(quotient_answers.clone());
     challenger.observe(F::from_u8(Messages::AnsPolynomial as u8));
-    observe_ext_slice_with_size(challenger, ans_polynomial.coeffs());
+    observe_ext_slice_with_size(challenger, &ans_polynomial);
 
     // Compute the shake polynomial and add it to the transcript
-    let shake_polynomial = compute_shake_polynomial(&ans_polynomial, quotient_answers.into_iter());
+    let shake_polynomial = compute_shake_polynomial(&ans_polynomial, &quotient_set);
     challenger.observe(F::from_u8(Messages::ShakePolynomial as u8));
-    observe_ext_slice_with_size(challenger, shake_polynomial.coeffs());
+    observe_ext_slice_with_size(challenger, &shake_polynomial);
 
     // Shake randomness: this is only used by the verifier, but it doesn't need
     // to be kept private. Therefore, the verifier can sample it from the
@@ -501,25 +500,28 @@ where
         panic!("Early termination configuration failed");
     }
 
-    let power_polynomial = Polynomial::power_polynomial(comb_randomness, quotient_set_size);
-    let vanishing_polynomial = Polynomial::vanishing_polynomial(quotient_set);
+    let mut power_polynomial = power_polynomial(comb_randomness, quotient_set_size);
+    let mut vanishing_polynomial = vanishing_polynomial(quotient_set);
 
     // NP TODO this could be done in one go if dft_batch had a coset version.
     // NB: If done, make sure to pad the vectors with zeros to the size
     // new_domain_k.size(); currently this is handled by the convenience
     // function domain_dft from utils
 
+    let mut resized_ans_polynomial = ans_polynomial.clone();
+
     // NP TODO remove calls to clone() once Polynomial is gone and we are
     // working with coeff vecs directly
-    let mut power_coeffs = power_polynomial.coeffs().to_vec();
-    let mut ans_coeffs = ans_polynomial.coeffs().to_vec();
-    let mut vanishing_coeffs = vanishing_polynomial.coeffs().to_vec();
+    power_polynomial.resize(new_domain_k.size(), EF::ZERO);
+    resized_ans_polynomial.resize(new_domain_k.size(), EF::ZERO);
+    vanishing_polynomial.resize(new_domain_k.size(), EF::ZERO);
 
-    power_coeffs.resize(new_domain_k.size(), EF::ZERO);
-    ans_coeffs.resize(new_domain_k.size(), EF::ZERO);
-    vanishing_coeffs.resize(new_domain_k.size(), EF::ZERO);
-
-    let flat_coeffs = [power_coeffs, ans_coeffs, vanishing_coeffs].concat();
+    let flat_coeffs = [
+        power_polynomial,
+        resized_ans_polynomial,
+        vanishing_polynomial,
+    ]
+    .concat();
 
     let coeff_matrix = RowMajorMatrix::new(flat_coeffs, new_domain_k.size()).transpose();
     let eval_matrix = config.dft.coset_dft_batch(coeff_matrix, domain_k.shift());
@@ -549,9 +551,9 @@ where
         RoundProof {
             g_root: new_commitment,
             betas,
-            ans_polynomial: ans_polynomial.coeffs().to_vec(),
+            ans_polynomial,
             query_proofs,
-            shake_polynomial: shake_polynomial.coeffs().to_vec(),
+            shake_polynomial,
             pow_witness,
         },
     )
@@ -559,17 +561,15 @@ where
 
 // Compute the shake polynomial which allows the verifier to evaluate the Ans
 // polynomial at all points which it purportedly interpolates.
-fn compute_shake_polynomial<F: TwoAdicField>(
-    ans_polynomial: &Polynomial<F>,
-    quotient_answers: impl Iterator<Item = (F, F)>,
-) -> Polynomial<F> {
+fn compute_shake_polynomial<F: TwoAdicField>(ans_polynomial: &[F], points: &[F]) -> Vec<F> {
     // The shake polynomial is defined as:
-    //   sum_{y in quotient_answers} (ans_polynomial - y) / (x - y)
-    let mut shake_polynomial = Polynomial::zero();
-    for (x, y) in quotient_answers {
-        let numerator = ans_polynomial - &y;
-        let denominator = Polynomial::vanishing_linear_polynomial(x);
-        shake_polynomial = &shake_polynomial + &(&numerator / &denominator);
+    //   sum_{y in quotient_answers} (ans_polynomial(x) - ans_polynomial(y)) / (x - y)
+    let mut shake_polynomial = vec![];
+
+    for p in points {
+        let (quotient, _) = divide_by_vanishing_linear_polynomial(ans_polynomial, *p);
+        shake_polynomial = add_polys(&shake_polynomial, &quotient);
     }
+
     shake_polynomial
 }

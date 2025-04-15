@@ -1,5 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::cmp::Ordering;
+#[cfg(test)]
 use core::iter;
 
 use itertools::{iterate, izip, Itertools};
@@ -7,96 +9,16 @@ use p3_challenger::{CanObserve, FieldChallenger};
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{batch_multiplicative_inverse, ExtensionField, Field, TwoAdicField};
-use p3_poly::Polynomial;
+#[cfg(test)]
+use rand::{
+    distr::{Distribution, StandardUniform},
+    Rng,
+};
 
 // Syntactic sugar for the proof-of-work computation
 #[inline]
 pub(crate) fn compute_pow(security_level: usize, error: f64) -> f64 {
     0f64.max(security_level as f64 - error)
-}
-
-// Given a polynomial f and a folding coefficient c, this function computes the usual folding
-// (same as in FRI) of the requested arity/folding factor:
-//   folded(x) = f_0(x) + c * f_1(x) + ... + c^(arity - 1) * f_(arity - 1)(x)
-// where f_i is the polynomial whose j_th coefficient is the (i + j * arity)-th
-// coefficient of f.
-pub(crate) fn fold_polynomial<F: TwoAdicField>(
-    // The polynomial to fold
-    polynomial: &Polynomial<F>,
-    // The folding coefficient
-    c: F,
-    // The log2 of the folding factor
-    log_folding_factor: usize,
-) -> Polynomial<F> {
-    let deg = if let Some(deg) = polynomial.degree() {
-        deg
-    } else {
-        return Polynomial::zero();
-    };
-
-    let folding_factor = 1 << log_folding_factor;
-    let fold_size = (deg + 1).div_ceil(folding_factor);
-
-    // Powers of c
-    let folding_powers = iter::successors(Some(F::ONE), |&x| Some(x * c))
-        .take(folding_factor)
-        .collect_vec();
-
-    let mut folded_coeffs = vec![F::ZERO; fold_size];
-
-    // Computing the folded coefficients as described above
-    for (i, coeff) in polynomial.coeffs().iter().enumerate() {
-        folded_coeffs[i / folding_factor] += *coeff * folding_powers[i % folding_factor];
-    }
-
-    Polynomial::from_coeffs(folded_coeffs)
-}
-
-// NP TODO remove if no longer used
-
-// Multiply the given polynomial by the power polynomial
-//   1 + c * x + c^2 * x^2 + ... + c^d * x^d
-// using the more efficient method of multiplying by
-// (c * x - 1)^(d + 1) and then dividing by (c * x - 1).
-pub(crate) fn multiply_by_power_polynomial<F: Field>(
-    // The polynomial to multiply
-    polynomial: &Polynomial<F>,
-    // The coefficient c defining the power polynomial
-    c: F,
-    // The degree d of the desired power polynomial
-    degree: usize,
-) -> Polynomial<F> {
-    // The power polynomial of degree 0 is identically 1
-    if degree == 0 {
-        return polynomial.clone();
-    }
-
-    // Multiplication by ((c * x)^(d + 1) - 1) / (c * x - 1) can be done more efficiently
-    // by a special-case multiplication followed by a special-case division.
-
-    // We first compute polynomial * ((c * x)^(d + 1) - 1), i. e.:
-    //   [0 ... 0] || [c^(degree + 1) * coeffs]
-    // -  coeffs   || [0         ...         0]
-    let c_pow_n_1 = c.exp_u64((degree + 1) as u64);
-    let mut new_coeffs = vec![F::ZERO; degree + 1];
-    new_coeffs.extend(polynomial.coeffs().iter().map(|&coeff| coeff * c_pow_n_1));
-    for (c1, c2) in new_coeffs.iter_mut().zip(polynomial.coeffs().iter()) {
-        *c1 -= *c2;
-    }
-
-    // Now we divide by c*x - 1 by dividing by x - (1/c) and multiplying by c afterwards
-    let mut last = *new_coeffs.iter().last().unwrap();
-    let c_inv = c.inverse();
-    for new_c in new_coeffs.iter_mut().rev().skip(1) {
-        *new_c += c_inv * last;
-        last = *new_c;
-    }
-
-    assert!(new_coeffs.remove(0) == F::ZERO);
-
-    new_coeffs.iter_mut().for_each(|c| *c *= c_inv);
-
-    Polynomial::from_coeffs(new_coeffs)
 }
 
 pub(crate) fn fold_evaluations_at_domain<F: TwoAdicField>(
@@ -356,6 +278,340 @@ pub(crate) fn domain_idft<F: TwoAdicField>(
     dft.coset_idft(evals, domain.shift())
 }
 
+// Adds two polynomials given their coefficients
+pub(crate) fn add_polys<F: Field>(coeffs_1: &[F], coeffs_2: &[F]) -> Vec<F> {
+    let mut sum = coeffs_1
+        .iter()
+        .zip(coeffs_2.iter())
+        .map(|(a, b)| *a + *b)
+        .collect_vec();
+
+    match coeffs_1.len().cmp(&coeffs_2.len()) {
+        Ordering::Greater => sum.extend(coeffs_1[coeffs_2.len()..].iter().cloned()),
+        Ordering::Less => sum.extend(coeffs_2[coeffs_1.len()..].iter().cloned()),
+        Ordering::Equal => (),
+    }
+
+    sum
+}
+
+// Returns the polynomial 1, r*x, r^2*x^2, ..., r^degree*x^degree
+pub(crate) fn power_polynomial<F: Field>(r: F, degree: usize) -> Vec<F> {
+    if r == F::ZERO {
+        vec![F::ONE]
+    } else {
+        iterate(F::ONE, |&prev| prev * r).take(degree + 1).collect()
+    }
+}
+
+// Returns the vanishing polynomial at the given points, i. e. the product of (x
+// - p) as p runs over `points`. If the list contains duplicates of the same
+// point, only one is kept.
+pub(crate) fn vanishing_polynomial<F: Field>(points: impl IntoIterator<Item = F>) -> Vec<F> {
+    // Deduplicating the points
+    let mut points = points.into_iter().unique().collect_vec();
+
+    assert!(
+        !points.is_empty(),
+        "The vanishing polynomial of an empty set is undefined"
+    );
+
+    // We iteratively multiply the polynomial (x - points[0]) by each of the
+    // vanishing polynomials (x - points[i]) for i > 0
+    let mut coeffs = vec![-points.pop().unwrap(), F::ONE];
+
+    while let Some(point) = points.pop() {
+        // Basic idea: add shifted and scaled versions of the current polynomial
+        // For instance, if f has coefficients
+        //   [2, -3, 4, 1],
+        // then (x - 5) * f has coefficients
+        //   [0, 2, -3, 4, 1] + (-5) * [2, -3, 4, 1, 0]
+
+        let mut prev_coeff = F::ZERO;
+
+        for coeff in coeffs.iter_mut() {
+            let current_coeff = *coeff;
+            *coeff = prev_coeff - *coeff * point;
+            prev_coeff = current_coeff;
+        }
+
+        coeffs.push(F::ONE);
+    }
+
+    coeffs
+}
+
+// Returns the unique polynomial of degree <= point_to_evals.len() which maps x
+// to y as (x, y) runs over point_to_evals. Panics if point_to_evals contains
+// the same coordinate x in two of its pairs which differ in the evaluation y.
+pub(crate) fn lagrange_interpolation<F: Field>(point_to_evals: Vec<(F, F)>) -> Vec<F> {
+    if point_to_evals.is_empty() {
+        panic!("The Lagrange interpolation of an empty set is undefined");
+    }
+
+    // Testing for consistency and removing duplicate points
+    let point_to_evals = point_to_evals.into_iter().unique().collect_vec();
+
+    let points = point_to_evals
+        .iter()
+        .map(|(x, _)| *x)
+        .unique()
+        .collect_vec();
+
+    assert_eq!(
+        points.len(),
+        point_to_evals.len(),
+        "One point has two different requested evaluations"
+    );
+
+    let vanishing_poly = vanishing_polynomial(points);
+
+    let mut result = vec![];
+
+    for (point, eval) in point_to_evals.into_iter() {
+        // We obtain the (non-normalised) vanishing polynomial at all points
+        // other than point by removing the (x - point) factor from the full
+        // vanishing polynomial
+        let (polynomial, _) = divide_by_vanishing_linear_polynomial(&vanishing_poly, point);
+
+        // We normalise it so that it takes the value `eval` at `point`
+        let denominator = eval_poly(&polynomial, point);
+        result = add_polys(&result, &scale_poly(&polynomial, eval / denominator));
+    }
+
+    result
+}
+
+#[cfg(test)]
+// Test function which subtracts two polynomials given their coefficients
+pub(crate) fn subtract_polys<F: Field>(coeffs_1: &[F], coeffs_2: &[F]) -> Vec<F> {
+    let minus_coeffs_2 = coeffs_2.iter().map(|c| -*c).collect_vec();
+
+    add_polys(coeffs_1, &minus_coeffs_2)
+}
+
+#[cfg(test)]
+// Test function which multiplies two polynomials given their coefficients
+pub(crate) fn mul_polys<F: Field>(coeffs_1: &[F], coeffs_2: &[F]) -> Vec<F> {
+    let mut result = vec![F::ZERO; coeffs_1.len() + coeffs_2.len() - 1];
+
+    for (i, coeff_1) in coeffs_1.iter().enumerate() {
+        for (j, coeff_2) in coeffs_2.iter().enumerate() {
+            result[i + j] += *coeff_1 * *coeff_2;
+        }
+    }
+    result
+}
+
+#[inline]
+// Scales a polynomial by a scalar given the former's coefficients
+fn scale_poly<F: Field>(coeffs: &[F], scalar: F) -> Vec<F> {
+    coeffs.iter().map(|c| *c * scalar).collect_vec()
+}
+
+// Divides the polynomial with the given coefficients by (x - point), returning
+// the quotient and the remainder. The latter coincides with the polynomial
+// evaluated at `point` and is returned as a field element.
+pub(crate) fn divide_by_vanishing_linear_polynomial<F: Field>(
+    coeffs: &[F],
+    point: F,
+) -> (Vec<F>, F) {
+    if coeffs.is_empty() {
+        return (vec![], F::ZERO);
+    }
+
+    let mut quotient_coeffs = coeffs.to_vec();
+
+    // Special case: division by x - 0 = x
+    if point == F::ZERO {
+        let remainder = quotient_coeffs.remove(0);
+        return (quotient_coeffs, remainder);
+    }
+
+    // General case: use Ruffini's rule
+    let mut quotient_coeffs_iter = quotient_coeffs.iter_mut().rev();
+
+    let mut last = *quotient_coeffs_iter.next().unwrap();
+
+    for new_c in quotient_coeffs_iter {
+        *new_c += point * last;
+        last = *new_c;
+    }
+
+    let remainder = quotient_coeffs.remove(0);
+
+    (quotient_coeffs, remainder)
+}
+
+// Evaluates a polynomial given its coefficients at a point
+pub(crate) fn eval_poly<F: Field>(coeffs: &[F], point: F) -> F {
+    coeffs
+        .iter()
+        .rev()
+        .fold(F::ZERO, |acc, coeff| acc * point + *coeff)
+}
+
+#[cfg(test)]
+// Test function which, given a polynomial f and a folding coefficient
+// c, computes the usual folding of the requested arity/folding factor:
+//   folded(x) = f_0(x) + c * f_1(x) + ... + c^(arity - 1) * f_(arity - 1)(x)
+// where f_i is the polynomial whose j_th coefficient is the (i + j * arity)-th
+// coefficient of f.
+pub(crate) fn fold_polynomial<F: TwoAdicField>(
+    // The polynomial to fold
+    polynomial: &[F],
+    // The folding coefficient
+    c: F,
+    // The log2 of the folding factor
+    log_folding_factor: usize,
+) -> Vec<F> {
+    if polynomial.is_empty() {
+        // Folding the zero polynomial
+        return vec![F::ZERO];
+    }
+
+    let deg = polynomial.len() - 1;
+
+    let folding_factor = 1 << log_folding_factor;
+    let fold_size = (deg + 1).div_ceil(folding_factor);
+
+    // Powers of c
+    let folding_powers = iter::successors(Some(F::ONE), |&x| Some(x * c))
+        .take(folding_factor)
+        .collect_vec();
+
+    let mut folded_coeffs = vec![F::ZERO; fold_size];
+
+    // Computing the folded coefficients as described above
+    for (i, coeff) in polynomial.iter().enumerate() {
+        folded_coeffs[i / folding_factor] += *coeff * folding_powers[i % folding_factor];
+    }
+
+    folded_coeffs
+}
+
+#[cfg(test)]
+// Test function which returns a random polynomial of the exact given degree
+pub(crate) fn rand_poly_coeffs<F: Field>(degree: usize, rng: &mut impl Rng) -> Vec<F>
+where
+    StandardUniform: Distribution<F>,
+{
+    let mut coeffs: Vec<F> = (0..degree).map(|_| rng.random()).collect();
+
+    let mut leading_coeff = F::ZERO;
+
+    while leading_coeff == F::ZERO {
+        leading_coeff = rng.random();
+    }
+
+    coeffs.push(leading_coeff);
+
+    coeffs
+}
+
+#[cfg(test)]
+// Test function which returns a random polynomial of the exact given degree
+// generated using seeded ChaCha20Rng.
+pub(crate) fn rand_poly_coeffs_seeded<F: Field>(degree: usize, seed: Option<u64>) -> Vec<F>
+where
+    StandardUniform: Distribution<F>,
+{
+    use rand::rngs::SmallRng;
+    use rand::SeedableRng;
+
+    let mut rng = SmallRng::seed_from_u64(seed.unwrap_or(42));
+
+    rand_poly_coeffs(degree, &mut rng)
+}
+
+#[cfg(test)]
+// Test function which, given the coefficients of the polynomial f(x), returns the coefficients of
+// the polynomial f(x^exponent)
+fn compose_poly_with_exponent<F: Field>(coeffs: &[F], exponent: usize) -> Vec<F> {
+    if coeffs.is_empty() {
+        return vec![F::ZERO];
+    }
+
+    let d = coeffs.len() - 1;
+
+    // We "stretch out" the vector of coefficients by a factor of exponent
+    // filling the gaps with zeros
+    let mut new_coeffs = vec![F::ZERO; d * exponent + 1];
+
+    for (i, coeff) in coeffs.iter().enumerate() {
+        new_coeffs[i * exponent] = *coeff;
+    }
+
+    new_coeffs
+}
+
+#[cfg(test)]
+// Test function which divides a polynomial by another polynomial given their
+// coefficients, returning the quotient and remainder
+pub(crate) fn divide_poly_with_remainder<F: Field>(
+    dividend: Vec<F>,
+    divisor: Vec<F>,
+) -> (Vec<F>, Vec<F>) {
+    assert!(!divisor.is_empty(), "Cannot divide by the zero polynomial");
+
+    // Trivial division cases
+    if dividend.is_empty() {
+        return (vec![], vec![]);
+    }
+
+    let d_dividend = dividend.len() - 1;
+    let d_divisor = divisor.len() - 1;
+
+    if d_dividend < d_divisor {
+        return (vec![], dividend);
+    }
+
+    let mut quotient_coeffs = vec![F::ZERO; d_dividend - d_divisor + 1];
+    let mut remainder = dividend.clone();
+
+    let divisor_leading_coeff_inv = divisor.last().unwrap().inverse();
+
+    // Ieratively compute the coefficients of the quotient
+    while !remainder.is_empty() && remainder.len() - 1 >= d_divisor {
+        let cur_q_coeff = *remainder.last().unwrap() * divisor_leading_coeff_inv;
+        let cur_q_degree = remainder.len() - 1 - d_divisor;
+        quotient_coeffs[cur_q_degree] = cur_q_coeff;
+
+        for (i, div_coeff) in divisor.iter().cloned().enumerate() {
+            remainder[cur_q_degree + i] -= cur_q_coeff * div_coeff;
+        }
+        while let Some(true) = remainder.last().map(|c| c.is_zero()) {
+            remainder.pop();
+        }
+    }
+
+    truncate_leading_zeros(&mut remainder);
+
+    (quotient_coeffs, remainder)
+}
+
+#[cfg(test)]
+// Test function which removes leading zeros from a polynomial given its
+// coefficients
+pub(crate) fn truncate_leading_zeros<F: Field>(coeffs: &mut Vec<F>) {
+    if coeffs.is_empty() {
+        return;
+    }
+
+    let mut leading_index = coeffs.len() - 1;
+
+    while coeffs[leading_index].is_zero() {
+        if leading_index == 0 {
+            coeffs.clear();
+            return;
+        }
+
+        leading_index -= 1;
+    }
+
+    coeffs.truncate(leading_index + 1);
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -365,8 +621,6 @@ mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::coset::TwoAdicMultiplicativeCoset;
     use p3_field::PrimeCharacteristicRing;
-    use p3_poly::test_utils::rand_poly_rng;
-    use p3_poly::Polynomial;
     use rand::rngs::SmallRng;
     use rand::{Rng, SeedableRng};
 
@@ -379,12 +633,12 @@ mod tests {
     // manually. All polynomials are hard-coded, but the folding randomness is
     // not.
     fn test_fold_polynomial() {
-        let polynomial = Polynomial::<BB>::from_coeffs(vec![BB::ONE; 16]);
+        let polynomial = vec![BB::ONE; 16];
         let folding_randomness = BB::from_u32(3);
 
         // folding_factor = 2
         assert_eq!(
-            fold_polynomial(&polynomial, folding_randomness, 1).coeffs(),
+            fold_polynomial(&polynomial, folding_randomness, 1),
             vec![4, 4, 4, 4, 4, 4, 4, 4]
                 .into_iter()
                 .map(BB::from_u32)
@@ -393,7 +647,7 @@ mod tests {
 
         // folding_factor = 4
         assert_eq!(
-            fold_polynomial(&polynomial, folding_randomness, 2).coeffs(),
+            fold_polynomial(&polynomial, folding_randomness, 2),
             vec![40, 40, 40, 40]
                 .into_iter()
                 .map(BB::from_u32)
@@ -418,20 +672,24 @@ mod tests {
 
         // Generating the limbs
         let folds = (0..folding_factor)
-            .map(|_| rand_poly_rng::<BB>(fold_degree - 1, &mut rng))
+            .map(|_| rand_poly_coeffs::<BB>(fold_degree, &mut rng))
             .collect_vec();
 
-        let powers_of_x = iter::successors(Some(Polynomial::one()), |p| Some(&Polynomial::x() * p))
-            .take(folding_factor)
+        let powers_of_x = (0..folding_factor)
+            .map(|i| {
+                let mut coeffs = vec![BB::ZERO; i];
+                coeffs.push(BB::ONE);
+                coeffs
+            })
             .collect_vec();
 
         // Constructing the polynomial to be folded
         let polynomial = folds
             .iter()
-            .map(|fold| fold.compose_with_exponent(folding_factor))
+            .map(|fold| compose_poly_with_exponent(fold, folding_factor))
             .zip(powers_of_x.iter())
-            .fold(Polynomial::zero(), |acc, (raised_fold, power_of_x)| {
-                &acc + &(&raised_fold * power_of_x)
+            .fold(vec![], |acc, (raised_fold, power_of_x)| {
+                add_polys(&acc, &mul_polys(&raised_fold, power_of_x))
             });
 
         let powers_of_r = iter::successors(Some(BB::ONE), |&x| Some(x * folding_randomness))
@@ -443,32 +701,12 @@ mod tests {
         let expected_folded_polynomial = folds
             .iter()
             .zip(powers_of_r.iter())
-            .map(|(p, r)| p * r)
-            .fold(Polynomial::zero(), |acc, p| &acc + &p);
+            .map(|(p, r)| scale_poly(p, *r))
+            .fold(vec![], |acc, p| add_polys(&acc, &p));
 
         assert_eq!(
             fold_polynomial(&polynomial, folding_randomness, log_folding_factor),
             expected_folded_polynomial
-        );
-    }
-
-    #[test]
-    // Checks that multiply_by_power_polynomial returns the same as
-    // multiplication by power_polynomial() (the latter being more transparent,
-    // but less efficient)
-    fn test_multiply_by_power_polynomial() {
-        let degree_polynomial = 5;
-        let degree_power_polynomial = 6;
-
-        let mut rng = SmallRng::seed_from_u64(1923);
-        let coeff: BB = rng.random();
-        let polynomial = rand_poly_rng(degree_polynomial, &mut rng);
-
-        let expected = &Polynomial::power_polynomial(coeff, degree_power_polynomial) * &polynomial;
-
-        assert_eq!(
-            multiply_by_power_polynomial(&polynomial, coeff, degree_power_polynomial),
-            expected
         );
     }
 
@@ -481,7 +719,7 @@ mod tests {
             // Evaluating the polynomial over the domain
             let evaluations = domain
                 .iter()
-                .map(|x| $polynomial.evaluate(&x))
+                .map(|x| eval_poly(&$polynomial, x))
                 .collect_vec();
 
             // We first compute the folded evaluations using the method
@@ -498,8 +736,10 @@ mod tests {
             // The above needs to coincide with the result of evaluating the
             // folded polynomial at shift^k
             let folded_polynomial = fold_polynomial(&$polynomial, $folding_randomness, $log_arity);
-            let expected_folded_evaluation =
-                folded_polynomial.evaluate(&domain.shift().exp_power_of_2($log_arity));
+            let expected_folded_evaluation = eval_poly(
+                &folded_polynomial,
+                domain.shift().exp_power_of_2($log_arity),
+            );
 
             assert_eq!(
                 folded_evaluation, expected_folded_evaluation,
@@ -518,7 +758,7 @@ mod tests {
             let domain = TwoAdicMultiplicativeCoset::new(rng.random(), 10).unwrap();
 
             // Evaluating the polynomial over the domain
-            let evaluations = domain_dft(domain, $polynomial.coeffs().to_vec(), $dft);
+            let evaluations = domain_dft(domain, $polynomial.clone(), $dft);
 
             // We first compute the folded evaluations using the method
             // fold_evaluations_at_domain()
@@ -531,7 +771,7 @@ mod tests {
 
             let expected_folded_evaluations = domain_dft(
                 domain.exp_power_of_2($log_arity).unwrap(),
-                folded_polynomial.coeffs().to_vec(),
+                folded_polynomial.to_vec(),
                 $dft,
             );
 
@@ -544,11 +784,11 @@ mod tests {
     // k = 2^1, ..., 2^9
     fn test_fold_evaluations() {
         let mut rng = SmallRng::seed_from_u64(43);
-        let polynomial = rand_poly_rng((1 << 10) - 1, &mut rng);
+        let polynomial = rand_poly_coeffs((1 << 10) - 1, &mut rng);
         let folding_randomness: BB = rng.random();
 
         for log_arity in 1..10 {
-            test_fold_evals_with_log_arity!(log_arity, polynomial, folding_randomness)
+            test_fold_evals_with_log_arity!(log_arity, &polynomial, folding_randomness)
         }
     }
 
@@ -559,13 +799,13 @@ mod tests {
         let dft = Radix2Dit::default();
 
         let mut rng = SmallRng::seed_from_u64(999);
-        let polynomial = rand_poly_rng((1 << 10) - 1, &mut rng);
+        let polynomial = rand_poly_coeffs((1 << 10) - 1, &mut rng);
         let folding_randomness: BB = rng.random();
 
         for log_arity in 1..10 {
             test_fold_evals_at_domain_with_log_arity!(
                 log_arity,
-                polynomial,
+                &polynomial,
                 folding_randomness,
                 &dft
             )
@@ -580,7 +820,7 @@ mod tests {
 
         let mut rng = SmallRng::seed_from_u64(93);
 
-        let polynomial = rand_poly_rng(poly_deg, &mut rng);
+        let polynomial = rand_poly_coeffs(poly_deg, &mut rng);
 
         // Folding coefficient
         let c = rng.random();
@@ -604,7 +844,7 @@ mod tests {
             .collect_vec();
         let evals = roots
             .iter()
-            .map(|&root| polynomial.evaluate(&root))
+            .map(|&root| eval_poly(&polynomial, root))
             .collect_vec();
         let folded_evals = fold_evaluations_binary(evals.clone(), &gammas, None);
 
@@ -616,7 +856,7 @@ mod tests {
             .collect_vec();
         let expected_folded_evals = roots_squared
             .iter()
-            .map(|root| folded_poly.evaluate(root))
+            .map(|root| eval_poly(&folded_poly, *root))
             .collect_vec();
 
         assert_eq!(folded_evals, expected_folded_evals);

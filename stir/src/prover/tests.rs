@@ -2,23 +2,22 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_challenger::MockChallenger;
-use p3_commit::Mmcs;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
-use p3_field::PrimeCharacteristicRing;
-use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::Matrix;
-use p3_poly::test_utils::{rand_poly_rng, rand_poly_seeded};
-use p3_poly::Polynomial;
+use p3_field::eval_poly;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
-use super::{prove_round, RoundConfig};
-use crate::proof::RoundProof;
-// NP TODO import and test commit_evals too
-use crate::prover::{commit_polynomial, prove, StirRoundWitness};
+use super::RoundConfig;
+use crate::prover::{commit_polynomial, prove};
 use crate::test_utils::*;
-use crate::utils::{domain_dft, fold_polynomial};
+use crate::utils::{
+    divide_poly_with_remainder, fold_polynomial, lagrange_interpolation, mul_polys,
+    power_polynomial, rand_poly_coeffs, rand_poly_coeffs_seeded, subtract_polys,
+    vanishing_polynomial,
+};
 use crate::SecurityAssumption;
+
+// NP TODO document this and below
 
 // Auxiliary test function which checks that prove_round transforms the round
 // polynomial f_i into the expected polynomial f_{i + 1} and produces the right
@@ -257,7 +256,7 @@ fn test_prove() {
         3,
     );
 
-    let polynomial = rand_poly_seeded((1 << config.log_starting_degree()) - 1, Some(103));
+    let polynomial = rand_poly_coeffs_seeded((1 << config.log_starting_degree()) - 1, Some(103));
 
     let (witness, commitment) = commit_polynomial(&config, polynomial);
 
@@ -374,7 +373,7 @@ fn test_prove_final_polynomial() {
     let mut challenger = MockChallenger::new(field_replies, bit_replies);
 
     // ================================ Proving ================================
-    let mut polynomial = rand_poly_rng((1 << config.log_starting_degree()) - 1, &mut rng);
+    let mut polynomial = rand_poly_coeffs((1 << config.log_starting_degree()) - 1, &mut rng);
 
     let (witness, commitment) = commit_polynomial(&config, polynomial.clone());
 
@@ -406,19 +405,25 @@ fn test_prove_final_polynomial() {
 
         let quotient_set_points = quotient_set
             .iter()
-            .map(|x| (*x, g_i.evaluate(x)))
+            .map(|x| (*x, eval_poly(&g_i, *x)))
             .collect_vec();
 
-        let ans_polynomial = Polynomial::lagrange_interpolation(quotient_set_points.clone());
+        let ans_polynomial = lagrange_interpolation(quotient_set_points.clone());
 
-        let quotient_polynomial =
-            &(&g_i - &ans_polynomial) / &Polynomial::vanishing_polynomial(quotient_set.clone());
+        let (quotient_polynomial, remainder) = divide_poly_with_remainder(
+            subtract_polys(&g_i, &ans_polynomial),
+            vanishing_polynomial(quotient_set.clone()),
+        );
+
+        assert!(remainder.is_empty());
 
         let comb_randomness = round_comb_replies[round - 1];
 
         // New round polynomial f_i
-        polynomial = &Polynomial::power_polynomial(comb_randomness, quotient_set.len())
-            * &quotient_polynomial;
+        polynomial = mul_polys(
+            &power_polynomial(comb_randomness, quotient_set.len()),
+            &quotient_polynomial,
+        );
     }
 
     let f_2 = polynomial.clone();
@@ -426,10 +431,7 @@ fn test_prove_final_polynomial() {
     // Computing the expected final polynomial p = g_3
     let expected_final_polynomial = fold_polynomial(&f_2, round_r_replies[2], log_folding_factor);
 
-    assert_eq!(
-        proof.final_polynomial,
-        expected_final_polynomial.coeffs().to_vec()
-    );
+    assert_eq!(proof.final_polynomial, expected_final_polynomial);
 }
 
 #[test]
@@ -446,7 +448,7 @@ fn test_incorrect_polynomial() {
         3,
     );
 
-    let polynomial = rand_poly_seeded(1 << config.log_starting_degree(), Some(107));
+    let polynomial = rand_poly_coeffs_seeded(1 << config.log_starting_degree(), Some(107));
 
     commit_polynomial(&config, polynomial);
 }

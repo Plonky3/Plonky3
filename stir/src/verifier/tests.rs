@@ -6,8 +6,7 @@ use itertools::Itertools;
 use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
-use p3_field::PrimeCharacteristicRing;
-use p3_poly::test_utils::{rand_poly_rng, rand_poly_seeded};
+use p3_field::{eval_poly, PrimeCharacteristicRing};
 use p3_symmetric::Hash;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -16,7 +15,9 @@ use rand_chacha::ChaCha20Rng;
 use crate::config::observe_public_parameters;
 use crate::prover::{commit_polynomial, prove, prove_round, StirRoundWitness};
 use crate::test_utils::*;
-use crate::utils::{fold_polynomial, observe_ext_slice_with_size};
+use crate::utils::{
+    fold_polynomial, observe_ext_slice_with_size, rand_poly_coeffs, rand_poly_coeffs_seeded,
+};
 use crate::verifier::error::{FullRoundVerificationError, VerificationError};
 use crate::verifier::{compute_folded_evaluations, verify};
 use crate::{Messages, SecurityAssumption, StirConfig, StirProof};
@@ -46,7 +47,7 @@ macro_rules! impl_generate_proof_with_config {
             challenger: &mut $challenger,
         ) -> ($proof_type, $commitment_type) {
             let polynomial =
-                rand_poly_seeded((1 << config.log_starting_degree()) - 1, Some(238567));
+                rand_poly_coeffs_seeded((1 << config.log_starting_degree()) - 1, Some(238567));
             let (witness, commitment) = commit_polynomial(&config, polynomial);
             (
                 prove(&config, witness, commitment, challenger),
@@ -135,7 +136,7 @@ fn tamper_with_final_polynomial(
 
     // This is documented in prover.rs
     let mut challenger = test_bb_challenger();
-    let polynomial = rand_poly_seeded((1 << config.log_starting_degree()) - 1, Some(831992));
+    let polynomial = rand_poly_coeffs_seeded((1 << config.log_starting_degree()) - 1, Some(831992));
     let (witness, commitment) = commit_polynomial(config, polynomial);
 
     observe_public_parameters(config.parameters(), &mut challenger);
@@ -176,7 +177,7 @@ fn tamper_with_final_polynomial(
 
     // ===================== Dishonest final polynomial ========================
 
-    let final_polynomial = rand_poly_seeded(
+    let final_polynomial = rand_poly_coeffs_seeded(
         (witness.evals_k.len() / 2_usize.pow(log_last_folding_factor as u32)) - 1,
         Some(2512202),
     );
@@ -188,7 +189,7 @@ fn tamper_with_final_polynomial(
 
     // Absorb the final polynomial
     challenger.observe(Bb::from_u8(Messages::FinalPolynomial as u8));
-    observe_ext_slice_with_size(&mut challenger, final_polynomial.coeffs());
+    observe_ext_slice_with_size(&mut challenger, &final_polynomial);
 
     // Sample the queried indices
     challenger.observe(Bb::from_u8(Messages::FinalQueryIndices as u8));
@@ -213,7 +214,7 @@ fn tamper_with_final_polynomial(
         StirProof {
             round_proofs,
             starting_folding_pow_witness,
-            final_polynomial: final_polynomial.coeffs().to_vec(),
+            final_polynomial,
             final_pow_witness,
             final_round_queries: queries_to_final,
         },
@@ -230,14 +231,17 @@ fn test_compute_folded_evals() {
     let mut rng = SmallRng::seed_from_u64(4239);
 
     let poly_degree = 42;
-    let polynomial = rand_poly_rng(poly_degree, &mut rng);
+    let polynomial = rand_poly_coeffs(poly_degree, &mut rng);
 
     let root: BbExt = rng.random();
     let c: BbExt = rng.random();
 
     let domain = TwoAdicMultiplicativeCoset::new(root, log_arity).unwrap();
 
-    let evaluations = vec![domain.iter().map(|x| polynomial.evaluate(&x)).collect_vec()];
+    let evaluations = vec![domain
+        .iter()
+        .map(|x| eval_poly(&polynomial, x))
+        .collect_vec()];
 
     let folded_eval = compute_folded_evaluations(
         evaluations,
@@ -249,8 +253,10 @@ fn test_compute_folded_evals() {
     .pop()
     .unwrap();
 
-    let expected_folded_eval =
-        fold_polynomial(&polynomial, c, log_arity).evaluate(&root.exp_power_of_2(log_arity));
+    let expected_folded_eval = eval_poly(
+        &fold_polynomial(&polynomial, c, log_arity),
+        root.exp_power_of_2(log_arity),
+    );
 
     assert_eq!(folded_eval, expected_folded_eval);
 }
@@ -457,9 +463,8 @@ fn test_verify_failing_cases() {
 
     let mut invalid_proof = proof.clone();
     let original_degree = invalid_proof.round_proofs[0].ans_polynomial.len() - 1;
-    invalid_proof.round_proofs[0].ans_polynomial = rand_poly_rng(original_degree + 1, &mut rng)
-        .coeffs()
-        .to_vec();
+    invalid_proof.round_proofs[0].ans_polynomial =
+        rand_poly_coeffs_seeded(original_degree + 1, Some(98761)).to_vec();
 
     assert_eq!(
         verify(
@@ -479,7 +484,7 @@ fn test_verify_failing_cases() {
     let mut invalid_proof = proof.clone();
     let original_degree = invalid_proof.round_proofs[0].ans_polynomial.len() - 1;
     invalid_proof.round_proofs[0].ans_polynomial =
-        rand_poly_rng(original_degree, &mut rng).coeffs().to_vec();
+        rand_poly_coeffs_seeded(original_degree, Some(11888)).to_vec();
 
     assert_eq!(
         verify(
@@ -498,9 +503,8 @@ fn test_verify_failing_cases() {
 
     let mut invalid_proof = proof.clone();
     let original_degree = invalid_proof.final_polynomial.len() + 1;
-    invalid_proof.final_polynomial = rand_poly_rng(original_degree + 1, &mut rng)
-        .coeffs()
-        .to_vec();
+    invalid_proof.final_polynomial =
+        rand_poly_coeffs_seeded(original_degree + 1, Some(88118)).to_vec();
 
     assert_eq!(
         verify(
