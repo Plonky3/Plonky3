@@ -61,7 +61,7 @@ where
 
     fn commit(
         &self,
-        evaluations: impl Iterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
         let coeffs: Vec<_> = evaluations
             .into_iter()

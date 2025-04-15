@@ -115,7 +115,7 @@ where
 
     fn commit(
         &self,
-        evaluations: impl Iterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
         let ldes = evaluations
             .into_iter()
@@ -532,6 +532,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use core::iter;
     use p3_challenger::{HashChallenger, SerializingChallenger32};
     use p3_commit::ExtensionMmcs;
     use p3_field::extension::BinomialExtensionField;
@@ -588,10 +589,8 @@ mod tests {
 
         let evals = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
 
-        let (comm, data) = <Pcs as p3_commit::Pcs<Challenge, Challenger>>::commit(
-            &pcs,
-            vec![(d, evals)].into_iter(),
-        );
+        let (comm, data) =
+            <Pcs as p3_commit::Pcs<Challenge, Challenger>>::commit(&pcs, iter::once((d, evals)));
 
         let zeta: Challenge = rng.random();
 

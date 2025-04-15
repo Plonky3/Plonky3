@@ -158,7 +158,7 @@ where
 
     fn commit(
         &self,
-        evaluations: impl Iterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
         let ldes: Vec<_> = evaluations
             .into_iter()
@@ -505,7 +505,7 @@ where
 }
 
 #[instrument(skip_all)]
-pub(crate) fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matrix<F>>(
+fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matrix<F>>(
     mats_and_points: &[(Vec<M>, &Vec<Vec<EF>>)],
     coset_shift: F,
 ) -> LinearMap<EF, Vec<EF>> {

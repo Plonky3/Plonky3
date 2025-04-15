@@ -55,7 +55,7 @@ where
     #[allow(clippy::type_complexity)]
     fn commit(
         &self,
-        evaluations: impl Iterator<Item = (Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
     ) -> (Self::Commitment, Self::ProverData);
 
     /// Commit to the quotient polynomials. If `zk` is not enabled, this is the same as `commit`.
