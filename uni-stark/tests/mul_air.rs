@@ -274,13 +274,14 @@ fn prove_bb_twoadic_deg2_zk() -> Result<(), impl Debug> {
     type HidingPcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, SmallRng>;
     let pcs = HidingPcs::new(dft, val_mmcs, fri_config, 4, SmallRng::seed_from_u64(1));
     type MyConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
-    let config = MyConfig::new(pcs);
+    let challenger = Challenger::new(perm);
+    let config = MyConfig::new(pcs, challenger);
 
     let air = MulAir {
         degree: 3,
         ..Default::default()
     };
-    do_test(config, air, 1 << 8, Challenger::new(perm))
+    do_test(config, air, 1 << 8)
 }
 
 #[test]
