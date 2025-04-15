@@ -56,13 +56,14 @@ fn test_config() {
 
     assert_eq!(config.starting_domain_log_size(), 19);
     assert_eq!(config.starting_folding_pow_bits(), 30);
+    assert_eq!(config.log_starting_inv_rate(), 1);
     assert_eq!(config.log_stopping_degree(), 2);
     assert_eq!(config.final_log_inv_rate(), 10);
     assert_eq!(config.final_num_queries(), 11);
     assert_eq!(config.final_pow_bits(), 19);
 
     // (folding_factor, log_domain_size, queries, log_inv_rate, pow_bits, ood_samples)
-    let expected_round_configs = vec![(4, 117, 1, 42, 2), (4, 28, 4, 45, 2), (4, 16, 7, 49, 2)];
+    let expected_round_configs = vec![(4, 117, 4, 42, 2), (4, 28, 7, 45, 2), (4, 16, 10, 49, 2)];
 
     for (
         round_config,

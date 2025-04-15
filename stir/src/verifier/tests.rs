@@ -14,7 +14,7 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 
 use crate::config::observe_public_parameters;
-use crate::prover::{commit, prove, prove_round, StirRoundWitness};
+use crate::prover::{commit_polynomial, prove, prove_round, StirRoundWitness};
 use crate::test_utils::*;
 use crate::utils::{fold_polynomial, observe_ext_slice_with_size};
 use crate::verifier::error::{FullRoundVerificationError, VerificationError};
@@ -47,7 +47,7 @@ macro_rules! impl_generate_proof_with_config {
         ) -> ($proof_type, $commitment_type) {
             let polynomial =
                 rand_poly_seeded((1 << config.log_starting_degree()) - 1, Some(238567));
-            let (witness, commitment) = commit(&config, polynomial);
+            let (witness, commitment) = commit_polynomial(&config, polynomial);
             (
                 prove(&config, witness, commitment, challenger),
                 commitment.clone(),
@@ -136,7 +136,7 @@ fn tamper_with_final_polynomial(
     // This is documented in prover.rs
     let mut challenger = test_bb_challenger();
     let polynomial = rand_poly_seeded((1 << config.log_starting_degree()) - 1, Some(831992));
-    let (witness, commitment) = commit(config, polynomial);
+    let (witness, commitment) = commit_polynomial(config, polynomial);
 
     observe_public_parameters(config.parameters(), &mut challenger);
 
@@ -151,9 +151,15 @@ fn tamper_with_final_polynomial(
     challenger.observe(Bb::from_u8(Messages::FoldingRandomness as u8));
     let folding_randomness = challenger.sample_algebra_element();
 
+    let domain_k_0 = witness
+        .domain
+        .shrink_coset(config.log_starting_inv_rate())
+        .unwrap();
+
     let mut witness = StirRoundWitness {
-        domain: witness.domain,
-        polynomial: witness.polynomial,
+        domain_l: witness.domain,
+        domain_k: domain_k_0,
+        evals_k: witness.evals_k,
         merkle_tree: witness.merkle_tree,
         round: 0,
         folding_randomness,
@@ -171,14 +177,14 @@ fn tamper_with_final_polynomial(
     // ===================== Dishonest final polynomial ========================
 
     let final_polynomial = rand_poly_seeded(
-        witness.polynomial.degree().unwrap() / 2_usize.pow(log_last_folding_factor as u32),
+        (witness.evals_k.len() / 2_usize.pow(log_last_folding_factor as u32)) - 1,
         Some(2512202),
     );
 
     // ===================== Continuing honest proving ========================
     let final_queries = config.final_num_queries();
 
-    let log_query_domain_size = witness.domain.log_size() - log_last_folding_factor;
+    let log_query_domain_size = witness.domain_l.log_size() - log_last_folding_factor;
 
     // Absorb the final polynomial
     challenger.observe(Bb::from_u8(Messages::FinalPolynomial as u8));
@@ -380,6 +386,9 @@ fn test_serialize_deserialize_proof() {
 // Check that each possible VerificationError is triggered correctly by
 // producing various dishonest proofs
 fn test_verify_failing_cases() {
+    // NP TODO remove
+    let _ = tracing_subscriber::fmt::try_init();
+
     // Seeding the RNG guarantees the test won't fail because of the initial PoW
     // proving too few bits
     let mut rng = ChaCha20Rng::seed_from_u64(42);

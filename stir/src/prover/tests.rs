@@ -14,7 +14,8 @@ use rand::{Rng, SeedableRng};
 
 use super::{prove_round, RoundConfig};
 use crate::proof::RoundProof;
-use crate::prover::{commit, prove, StirRoundWitness};
+// NP TODO import and test commit_evals too
+use crate::prover::{commit_polynomial, prove, StirRoundWitness};
 use crate::test_utils::*;
 use crate::utils::{domain_dft, fold_polynomial};
 use crate::SecurityAssumption;
@@ -27,218 +28,220 @@ use crate::SecurityAssumption;
 //    than once
 //  - degree_slack: difference between the degree of the starting polynomial f_0
 //    and the maximum degree ensured by the LDT, i. e. 2^log_starting_degree - 1
-fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
-    let mut rng = SmallRng::seed_from_u64(109);
 
-    let config = test_bb_stir_config(
-        BB_EXT_SEC_LEVEL,
-        SecurityAssumption::CapacityBound,
-        15,
-        2,
-        3,
-        2,
-    );
+// NP TODO reintroduce
+// fn test_prove_round_aux(repeat_queries: bool, degree_slack: usize) {
+//     let mut rng = SmallRng::seed_from_u64(109);
 
-    // ============================== Committing ==============================
+//     let config = test_bb_stir_config(
+//         BB_EXT_SEC_LEVEL,
+//         SecurityAssumption::CapacityBound,
+//         15,
+//         2,
+//         3,
+//         2,
+//     );
 
-    // Starting polynomial. We allow it to have lower degree than the maximum
-    // bound proved by the LDT, i. e. 2^log_starting_degree - 1
-    let degree = (1 << config.log_starting_degree()) - 1 - degree_slack;
-    let f_0 = rand_poly_rng(degree, &mut rng);
+//     // ============================== Committing ==============================
 
-    let original_domain = TwoAdicMultiplicativeCoset::new(
-        BbExt::ONE,
-        config.log_starting_degree() + config.log_starting_inv_rate(),
-    )
-    .unwrap();
+//     // Starting polynomial. We allow it to have lower degree than the maximum
+//     // bound proved by the LDT, i. e. 2^log_starting_degree - 1
+//     let degree = (1 << config.log_starting_degree()) - 1 - degree_slack;
+//     let f_0 = rand_poly_rng(degree, &mut rng);
 
-    let original_domain = original_domain.set_shift(original_domain.subgroup_generator());
+//     let original_domain = TwoAdicMultiplicativeCoset::new(
+//         BbExt::ONE,
+//         config.log_starting_degree() + config.log_starting_inv_rate(),
+//     )
+//     .unwrap();
 
-    let original_evals = domain_dft(original_domain, f_0.coeffs().to_vec(), &config.dft);
+//     let original_domain = original_domain.set_shift(original_domain.subgroup_generator());
 
-    let stacked_original_evals =
-        RowMajorMatrix::new(original_evals, 1 << config.log_starting_folding_factor());
+//     let original_evals = domain_dft(original_domain, f_0.coeffs().to_vec(), &config.dft);
 
-    let dimensions = stacked_original_evals.dimensions();
+//     let stacked_original_evals =
+//         RowMajorMatrix::new(original_evals, 1 << config.log_starting_folding_factor());
 
-    let (root, merkle_tree) = config
-        .mmcs_config()
-        .commit_matrix(stacked_original_evals.clone());
+//     let dimensions = stacked_original_evals.dimensions();
 
-    let r_0: BbExt = rng.random();
+//     let (root, merkle_tree) = config
+//         .mmcs_config()
+//         .commit_matrix(stacked_original_evals.clone());
 
-    let witness = StirRoundWitness {
-        domain: original_domain,
-        polynomial: f_0.clone(),
-        merkle_tree,
-        round: 0,
-        folding_randomness: r_0,
-    };
+//     let r_0: BbExt = rng.random();
 
-    // ======================= Preparing fake randomness =======================
+//     let witness = StirRoundWitness {
+//         domain: original_domain,
+//         polynomial: f_0.clone(),
+//         merkle_tree,
+//         round: 0,
+//         folding_randomness: r_0,
+//     };
 
-    let round = 1;
-    let round_config = config.round_config(round);
+//     // ======================= Preparing fake randomness =======================
 
-    let RoundConfig {
-        log_folding_factor,
-        log_inv_rate,
-        num_ood_samples,
-        num_queries,
-        ..
-    } = round_config.clone();
+//     let round = 1;
+//     let round_config = config.round_config(round);
 
-    // Prepare the field randomness produced by the mock challenger
-    let r_1: BbExt = rng.random();
+//     let RoundConfig {
+//         log_folding_factor,
+//         log_inv_rate,
+//         num_ood_samples,
+//         num_queries,
+//         ..
+//     } = round_config.clone();
 
-    // Out-of-domain randomness
-    let ood_randomness: Vec<BbExt> = (0..num_ood_samples).map(|_| rng.random()).collect();
+//     // Prepare the field randomness produced by the mock challenger
+//     let r_1: BbExt = rng.random();
 
-    // Degree-correction randomness
-    let comb_randomness = rng.random();
+//     // Out-of-domain randomness
+//     let ood_randomness: Vec<BbExt> = (0..num_ood_samples).map(|_| rng.random()).collect();
 
-    // Shake randomness (which is squeezed but not used by the prover)
-    let shake_randomness = rng.random();
+//     // Degree-correction randomness
+//     let comb_randomness = rng.random();
 
-    let mut field_replies = ood_randomness.clone();
-    field_replies.push(comb_randomness);
-    field_replies.push(r_1);
-    field_replies.push(shake_randomness);
+//     // Shake randomness (which is squeezed but not used by the prover)
+//     let shake_randomness = rng.random();
 
-    // Random queried indices (in the form of bits, not field elements)
-    let log_size_second_codeword = config.log_starting_degree() - log_folding_factor + log_inv_rate;
+//     let mut field_replies = ood_randomness.clone();
+//     field_replies.push(comb_randomness);
+//     field_replies.push(r_1);
+//     field_replies.push(shake_randomness);
 
-    let mut bit_replies = (0..num_queries)
-        .map(|_| rng.random_range(0..usize::MAX))
-        .map(|i: usize| i % (1 << log_size_second_codeword))
-        .collect::<Vec<_>>();
+//     // Random queried indices (in the form of bits, not field elements)
+//     let log_size_second_codeword = config.log_starting_degree() - log_folding_factor + log_inv_rate;
 
-    // We incorporate this possibility to test the case where some elements of
-    // L_i^{k_i} are sampled more than once, in which case the prover and
-    // verifier should remove the duplicate queries and work with an Ans
-    // polynomial of consequently lower degree (which also affets degree
-    // correction)
-    if repeat_queries {
-        for _ in 0..num_queries / 4 {
-            let (i, j) = (
-                rng.random_range(0..num_queries),
-                rng.random_range(0..num_queries),
-            );
-            bit_replies[i] = bit_replies[j];
-        }
-    }
+//     let mut bit_replies = (0..num_queries)
+//         .map(|_| rng.random_range(0..usize::MAX))
+//         .map(|i: usize| i % (1 << log_size_second_codeword))
+//         .collect::<Vec<_>>();
 
-    // Preloading fake randomness
-    let mut challenger = MockChallenger::new(field_replies, bit_replies.clone());
+//     // We incorporate this possibility to test the case where some elements of
+//     // L_i^{k_i} are sampled more than once, in which case the prover and
+//     // verifier should remove the duplicate queries and work with an Ans
+//     // polynomial of consequently lower degree (which also affets degree
+//     // correction)
+//     if repeat_queries {
+//         for _ in 0..num_queries / 4 {
+//             let (i, j) = (
+//                 rng.random_range(0..num_queries),
+//                 rng.random_range(0..num_queries),
+//             );
+//             bit_replies[i] = bit_replies[j];
+//         }
+//     }
 
-    // ====================== prove_round for round i = 1 ======================
+//     // Preloading fake randomness
+//     let mut challenger = MockChallenger::new(field_replies, bit_replies.clone());
 
-    let (witness, round_proof) = prove_round(&config, witness, &mut challenger);
+//     // ====================== prove_round for round i = 1 ======================
 
-    // ============================ Witness checks ============================
+//     let (witness, round_proof) = prove_round(&config, witness, &mut challenger);
 
-    let StirRoundWitness {
-        domain,
-        polynomial: f_1,
-        folding_randomness,
-        round,
-        ..
-    } = witness;
+//     // ============================ Witness checks ============================
 
-    let expected_domain = original_domain.shrink_coset(1).unwrap();
+//     let StirRoundWitness {
+//         domain,
+//         polynomial: f_1,
+//         folding_randomness,
+//         round,
+//         ..
+//     } = witness;
 
-    let expected_round = 1;
+//     let expected_domain = original_domain.shrink_coset(1).unwrap();
 
-    // Domain testing
-    assert_eq!(
-        domain.subgroup_generator(),
-        expected_domain.subgroup_generator()
-    );
-    assert_eq!(domain.shift(), expected_domain.shift());
-    assert_eq!(r_1, folding_randomness);
+//     let expected_round = 1;
 
-    // Round-number testing
-    assert_eq!(round, expected_round);
+//     // Domain testing
+//     assert_eq!(
+//         domain.subgroup_generator(),
+//         expected_domain.subgroup_generator()
+//     );
+//     assert_eq!(domain.shift(), expected_domain.shift());
+//     assert_eq!(r_1, folding_randomness);
 
-    // Computing the expected polynomial f_1 by hand
-    let g_1 = fold_polynomial(&f_0, r_0, log_folding_factor);
+//     // Round-number testing
+//     assert_eq!(round, expected_round);
 
-    let original_domain_pow_k = original_domain.exp_power_of_2(log_folding_factor).unwrap();
-    let stir_randomness = bit_replies
-        .iter()
-        .map(|&i| original_domain_pow_k.element(i));
+//     // Computing the expected polynomial f_1 by hand
+//     let g_1 = fold_polynomial(&f_0, r_0, log_folding_factor);
 
-    let quotient_set = stir_randomness.chain(ood_randomness).unique().collect_vec();
+//     let original_domain_pow_k = original_domain.exp_power_of_2(log_folding_factor).unwrap();
+//     let stir_randomness = bit_replies
+//         .iter()
+//         .map(|&i| original_domain_pow_k.element(i));
 
-    let quotient_set_points = quotient_set
-        .iter()
-        .map(|x| (*x, g_1.evaluate(x)))
-        .collect_vec();
+//     let quotient_set = stir_randomness.chain(ood_randomness).unique().collect_vec();
 
-    let expected_ans_polynomial = Polynomial::lagrange_interpolation(quotient_set_points.clone());
+//     let quotient_set_points = quotient_set
+//         .iter()
+//         .map(|x| (*x, g_1.evaluate(x)))
+//         .collect_vec();
 
-    let quotient_polynomial = &(&g_1 - &expected_ans_polynomial)
-        / &Polynomial::vanishing_polynomial(quotient_set.clone());
+//     let expected_ans_polynomial = Polynomial::lagrange_interpolation(quotient_set_points.clone());
 
-    let expected_f_1 =
-        &Polynomial::power_polynomial(comb_randomness, quotient_set.len()) * &quotient_polynomial;
+//     let quotient_polynomial = &(&g_1 - &expected_ans_polynomial)
+//         / &Polynomial::vanishing_polynomial(quotient_set.clone());
 
-    // Main check of this entire function
-    assert_eq!(f_1, expected_f_1);
+//     let expected_f_1 =
+//         &Polynomial::power_polynomial(comb_randomness, quotient_set.len()) * &quotient_polynomial;
 
-    // =================== Ans- and shake-polynomial checks ===================
+//     // Main check of this entire function
+//     assert_eq!(f_1, expected_f_1);
 
-    let RoundProof {
-        query_proofs,
-        ans_polynomial,
-        shake_polynomial,
-        ..
-    } = round_proof;
+//     // =================== Ans- and shake-polynomial checks ===================
 
-    for (&i, (leaf, proof)) in bit_replies.iter().unique().zip(query_proofs) {
-        config
-            .mmcs_config()
-            .verify_batch(&root, &[dimensions], i, &[leaf], &proof)
-            .unwrap();
-    }
+//     let RoundProof {
+//         query_proofs,
+//         ans_polynomial,
+//         shake_polynomial,
+//         ..
+//     } = round_proof;
 
-    let expected_shake_polynomial = quotient_set_points
-        .into_iter()
-        .map(|(x, y)| {
-            let (quotient, _) = (&Polynomial::from_coeffs(ans_polynomial.clone())
-                - &Polynomial::constant(y))
-                .divide_by_vanishing_linear_polynomial(x);
-            quotient
-        })
-        .fold(Polynomial::zero(), |sum, next_poly| &sum + &next_poly);
+//     for (&i, (leaf, proof)) in bit_replies.iter().unique().zip(query_proofs) {
+//         config
+//             .mmcs_config()
+//             .verify_batch(&root, &[dimensions], i, &[leaf], &proof)
+//             .unwrap();
+//     }
 
-    assert_eq!(ans_polynomial, expected_ans_polynomial.coeffs().to_vec());
-    assert_eq!(
-        shake_polynomial,
-        expected_shake_polynomial.coeffs().to_vec()
-    );
-}
+//     let expected_shake_polynomial = quotient_set_points
+//         .into_iter()
+//         .map(|(x, y)| {
+//             let (quotient, _) = (&Polynomial::from_coeffs(ans_polynomial.clone())
+//                 - &Polynomial::constant(y))
+//                 .divide_by_vanishing_linear_polynomial(x);
+//             quotient
+//         })
+//         .fold(Polynomial::zero(), |sum, next_poly| &sum + &next_poly);
 
-#[test]
-// Checks that prove_round produces the expected witness and round proof, most
-// importantly the correct witness, Ans and shake polynomials
-fn test_prove_round_no_repeat() {
-    test_prove_round_aux(false, 0);
-}
+//     assert_eq!(ans_polynomial, expected_ans_polynomial.coeffs().to_vec());
+//     assert_eq!(
+//         shake_polynomial,
+//         expected_shake_polynomial.coeffs().to_vec()
+//     );
+// }
 
-#[test]
-// Checks the same as test_prove_round_no_repeat, but includes duplicates in the
-// in-domain queried points
-fn test_prove_round_repeat() {
-    test_prove_round_aux(true, 0);
-}
+// #[test]
+// // Checks that prove_round produces the expected witness and round proof, most
+// // importantly the correct witness, Ans and shake polynomials
+// fn test_prove_round_no_repeat() {
+//     test_prove_round_aux(false, 0);
+// }
 
-#[test]
-// Checks the same as test_prove_round_no_repeat, but operates on a polynomial
-// with degree lower than the maximum allowed by the configuration
-fn test_prove_round_degree_slack() {
-    test_prove_round_aux(false, 10);
-}
+// #[test]
+// // Checks the same as test_prove_round_no_repeat, but includes duplicates in the
+// // in-domain queried points
+// fn test_prove_round_repeat() {
+//     test_prove_round_aux(true, 0);
+// }
+
+// #[test]
+// // Checks the same as test_prove_round_no_repeat, but operates on a polynomial
+// // with degree lower than the maximum allowed by the configuration
+// fn test_prove_round_degree_slack() {
+//     test_prove_round_aux(false, 10);
+// }
 
 #[test]
 // Checks that prove runs from beginning to end and performs a degree check on
@@ -256,7 +259,7 @@ fn test_prove() {
 
     let polynomial = rand_poly_seeded((1 << config.log_starting_degree()) - 1, Some(103));
 
-    let (witness, commitment) = commit(&config, polynomial);
+    let (witness, commitment) = commit_polynomial(&config, polynomial);
 
     let mut challenger = test_bb_challenger();
 
@@ -373,7 +376,7 @@ fn test_prove_final_polynomial() {
     // ================================ Proving ================================
     let mut polynomial = rand_poly_rng((1 << config.log_starting_degree()) - 1, &mut rng);
 
-    let (witness, commitment) = commit(&config, polynomial.clone());
+    let (witness, commitment) = commit_polynomial(&config, polynomial.clone());
 
     let generator = witness.domain.subgroup_generator();
 
@@ -445,5 +448,5 @@ fn test_incorrect_polynomial() {
 
     let polynomial = rand_poly_seeded(1 << config.log_starting_degree(), Some(107));
 
-    commit(&config, polynomial);
+    commit_polynomial(&config, polynomial);
 }

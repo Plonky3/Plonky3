@@ -44,8 +44,8 @@ pub struct StirParameters<M: Clone> {
     // bound"
     pub log_starting_degree: usize,
 
-    /// log2 of the folding factor `k_i` in each round (incl. final) `i = 1,
-    /// ..., M + 1`.
+    /// log2 of the folding factor `k_i` in each round (incl. final) `i = 0,
+    /// ..., M`.
     pub log_folding_factors: Vec<usize>,
 
     /// log2 of the inverse of the rate used to encode the initial polynomial
@@ -176,8 +176,8 @@ pub struct RoundConfig {
     // log2 of the folding factor for the next round.
     pub(crate) log_next_folding_factor: usize,
 
-    // log2 of the size of the evaluation domain of the oracle *sent this
-    // round*.
+    // log2 of the size of the evaluation domain of the oracle sent this
+    // round.
     pub(crate) log_evaluation_domain_size: usize,
 
     // Number of proof-of-work bits used to reduce query error in this round.
@@ -216,7 +216,7 @@ pub struct StirConfig<F: TwoAdicField, M: Clone> {
     // sent in plain.
     log_stopping_degree: usize,
 
-    // log2 of the inverse of therate of the final RS codeword.
+    // log2 of the inverse of therate of the final RS codeword g_M.
     log_final_inv_rate: usize,
 
     // Number of domain points queried in the last round.
@@ -332,7 +332,7 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
             if num_terms > 1 << current_log_degree {
                 let new_params = StirParameters {
                     log_folding_factors: log_folding_factors[0..i + 1].to_vec(),
-                    log_inv_rates: log_inv_rates[0..i + 1].to_vec(),
+                    log_inv_rates: log_inv_rates[0..i].to_vec(),
                     ..parameters
                 };
 

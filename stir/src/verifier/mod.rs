@@ -19,10 +19,6 @@ mod error;
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
-// NP TODO remove
-mod tests_evals;
-
 // The virtual function
 //   DegCor(Quot(f, interpolating_polynomial), quotient_set)
 // in the notation of the paper, where `f` is the underlying function. In the

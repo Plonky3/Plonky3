@@ -1,18 +1,22 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use itertools::Itertools;
+use itertools::{izip, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
+use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_field::{
+    batch_multiplicative_inverse, eval_packed_ext_poly, ExtensionField, Field,
+    PackedFieldExtension, PackedValue, TwoAdicField,
+};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_poly::Polynomial;
 
 use crate::config::{observe_public_parameters, RoundConfig};
 use crate::proof::RoundProof;
 use crate::utils::{
-    domain_dft, fold_polynomial, multiply_by_power_polynomial, observe_ext_slice_with_size,
+    domain_dft, domain_idft, fold_evaluations_at_domain, observe_ext_slice_with_size,
 };
 use crate::{Messages, StirConfig, StirProof, POW_BITS_WARNING};
 
@@ -24,8 +28,12 @@ pub struct StirWitness<F: TwoAdicField, M: Mmcs<F>> {
     // Domain L_0
     pub(crate) domain: TwoAdicMultiplicativeCoset<F>,
 
-    // Polynomial f_0 which was committed to
-    pub(crate) polynomial: Polynomial<F>,
+    // Evaluations of f_0 over K_0
+
+    // NP TODO clarify in note that this memory cannot be saved due to the FFT
+    // (even though the information in here is already contained in the Merkle
+    // tree below)
+    pub(crate) evals_k: Vec<F>,
 
     // Merkle tree whose leaves are the stacked evaluations of f_0. Its root is
     // the commitment shared with the verifier.
@@ -37,14 +45,21 @@ pub struct StirWitness<F: TwoAdicField, M: Mmcs<F>> {
 pub(crate) struct StirRoundWitness<F: TwoAdicField, M: Mmcs<F>> {
     // The indices are given in the following frame of reference: Self is
     // produced inside prove_round for round i (in {1, ..., M}). The final
-    // round, with index M + 1, does not produce a StirRoundWitness.
+    // round, with index M + 1, does not produce a StirRoundWitness. The first
+    // StirRoundWitness, produced inside prove() and passed to the first call to
+    // prove_round(), should be understood as having i = 0.
 
     // Domain L_i. The chosen sequence of domains L_0, L_1, ... is documented
     // at the start of the method commit.
-    pub(crate) domain: TwoAdicMultiplicativeCoset<F>,
+    pub(crate) domain_l: TwoAdicMultiplicativeCoset<F>,
 
-    // Polynomial f_i
-    pub(crate) polynomial: Polynomial<F>,
+    // Domain K_i
+    pub(crate) domain_k: TwoAdicMultiplicativeCoset<F>,
+
+    // Evaluations of f_i over K_i
+
+    // NP TODO same comment as in the evals_k_0 field of StirWitness
+    pub(crate) evals_k: Vec<F>,
 
     // Merkle tree whose leaves are the stacked evaluations of g_i
     pub(crate) merkle_tree: M::ProverData<RowMajorMatrix<F>>,
@@ -70,7 +85,7 @@ pub(crate) struct StirRoundWitness<F: TwoAdicField, M: Mmcs<F>> {
 ///
 /// Panics if the degree of `polynomial` is too large (the configuration supports
 /// degree at most `2^{config.log_starting_degree()} - 1`).
-pub fn commit<F, M>(
+pub fn commit_polynomial<F, M>(
     config: &StirConfig<F, M>,
     polynomial: Polynomial<F>,
 ) -> (StirWitness<F, M>, M::Commitment)
@@ -110,6 +125,28 @@ where
     // Committing to the evaluations of f_0 over L_0.
     let evals = domain_dft(domain, polynomial.coeffs().to_vec(), &config.dft);
 
+    commit_evals(config, evals)
+}
+
+pub fn commit_evals<F, M>(
+    config: &StirConfig<F, M>,
+    evals: Vec<F>,
+) -> (StirWitness<F, M>, M::Commitment)
+where
+    F: TwoAdicField,
+    M: Mmcs<F>,
+{
+    let log_size = config.log_starting_degree() + config.log_starting_inv_rate();
+
+    let domain =
+        TwoAdicMultiplicativeCoset::new(F::two_adic_generator(log_size), log_size).unwrap();
+
+    let evals_k = evals
+        .iter()
+        .step_by(1 << config.log_starting_inv_rate())
+        .copied()
+        .collect();
+
     // The stacking width is
     //   k_0 = 2^{log_size - config.log_starting_folding_factor},
     // which facilitates opening values so that the prover can verify the first
@@ -120,12 +157,13 @@ where
     )
     .transpose();
 
-    let (commitment, merkle_tree) = config.mmcs_config().commit_matrix(stacked_evals.clone());
+    let (commitment, merkle_tree) = config.mmcs_config().commit_matrix(stacked_evals);
 
+    // NP TODO maybe remove domain and/or evals from here and compute them inside prove()
     (
         StirWitness {
             domain,
-            polynomial,
+            evals_k,
             merkle_tree,
         },
         commitment,
@@ -183,11 +221,18 @@ where
     challenger.observe(F::from_u8(Messages::FoldingRandomness as u8));
     let folding_randomness: EF = challenger.sample_algebra_element();
 
+    // NP TODO handle this symmetrically to StirWitness.domain
+    let domain_k_0 = witness
+        .domain
+        .shrink_coset(config.log_starting_inv_rate())
+        .unwrap();
+
     // Enriching the initial witness into a full round witness that prove_round
     // can receive.
     let mut witness = StirRoundWitness {
-        domain: witness.domain,
-        polynomial: witness.polynomial,
+        domain_l: witness.domain,
+        domain_k: domain_k_0,
+        evals_k: witness.evals_k,
         merkle_tree: witness.merkle_tree,
         round: 0,
         folding_randomness,
@@ -196,6 +241,7 @@ where
     // Prove each full round i = 1, ..., M of the protocol
     let mut round_proofs = vec![];
     for _ in 1..=config.num_rounds() - 1 {
+        // NP TODO two PoW per round
         let (new_witness, round_proof) = prove_round(config, witness, challenger);
 
         witness = new_witness;
@@ -205,22 +251,31 @@ where
     // Final round i = M + 1
     let log_last_folding_factor = config.log_last_folding_factor();
 
-    // Computing the final polynomial p in the notation of the article (which we
-    // also refer to as g_{M + 1})
-    let final_polynomial = fold_polynomial(
-        &witness.polynomial,
-        witness.folding_randomness,
+    // Folding the evaluations of f_M at k_M in order to obtain those of the
+    // final polynomial p (i. e. g_{M + 1})
+    let final_polynomial_evals = fold_evaluations_at_domain(
+        witness.evals_k,
+        witness.domain_k,
         log_last_folding_factor,
+        witness.folding_randomness,
     );
+
+    let final_domain_pow = witness
+        .domain_k
+        .exp_power_of_2(log_last_folding_factor)
+        .unwrap();
+
+    // Interpolating g_{M + 1}
+    let final_polynomial = domain_idft(final_polynomial_evals, final_domain_pow, &config.dft);
 
     let final_queries = config.final_num_queries();
 
     // Logarithm of |(L_M)^(k_M)|
-    let log_query_domain_size = witness.domain.log_size() - log_last_folding_factor;
+    let log_query_domain_size = witness.domain_l.log_size() - log_last_folding_factor;
 
     // Observe the final polynomial g_{M + 1}
     challenger.observe(F::from_u8(Messages::FinalPolynomial as u8));
-    observe_ext_slice_with_size(challenger, final_polynomial.coeffs());
+    observe_ext_slice_with_size(challenger, &final_polynomial);
 
     // Sample the indices to query verify the folding of f_M into g_{M + 1} at
     challenger.observe(F::from_u8(Messages::FinalQueryIndices as u8));
@@ -246,7 +301,7 @@ where
 
     StirProof {
         round_proofs,
-        final_polynomial: final_polynomial.coeffs().to_vec(),
+        final_polynomial,
         starting_folding_pow_witness,
         final_pow_witness,
         final_round_queries: queries_to_final,
@@ -283,8 +338,9 @@ where
     } = config.round_config(round).clone();
 
     let StirRoundWitness {
-        domain,
-        polynomial,
+        domain_l,
+        domain_k,
+        evals_k,
         merkle_tree,
         folding_randomness,
         ..
@@ -293,26 +349,48 @@ where
     // ================================ Folding ================================
 
     // Obtain g_i as the folding of f_{i - 1}
-    let folded_polynomial = fold_polynomial(&polynomial, folding_randomness, log_folding_factor);
+
+    // NP TODO
+    assert_eq!(domain_k.size(), evals_k.len(), "round: {}", round);
+
+    let folded_evals_k =
+        fold_evaluations_at_domain(evals_k, domain_k, log_folding_factor, folding_randomness);
+    let domain_k_pow = domain_k.exp_power_of_2(log_folding_factor).unwrap();
+    let folded_polynomial = domain_idft(folded_evals_k.clone(), domain_k_pow, &config.dft);
+
+    // TODO: Remove this assert and just pad folded_polynomial by zeroes to make it true.
+    // For now this assert seems to hold true for the tests I am running.
+    assert!(folded_polynomial.len() % F::Packing::WIDTH == 0);
+    let packed_folded_polynomial = folded_polynomial
+        .chunks_exact(F::Packing::WIDTH)
+        .map(|chunck| EF::ExtensionPacking::from_ext_slice(chunck))
+        .collect::<Vec<_>>(); // TODO: Ideally this transformation should be a method in ExtensionPacking.
 
     // Compute the i-th domain L_i = w * <w^{2^i}> = w * (w^{-1} * L_{i - 1})^2
-    let new_domain = domain.shrink_coset(1).unwrap(); // Can never panic due to parameter set-up
+    // and its subdomain K_{i - 1}
+    let new_domain_l = domain_l.shrink_coset(1).unwrap(); // Can never panic due to parameter set-up
+    let new_domain_k = domain_k.shrink_coset(log_folding_factor).unwrap(); // Idem
 
     // Evaluate g_i over L_i
-    let folded_evals = domain_dft(new_domain, folded_polynomial.coeffs().to_vec(), &config.dft);
+    let folded_evals_l = domain_dft(new_domain_l, folded_polynomial.clone(), &config.dft);
+
+    // Collecting the evaluations of g_i over K_i for later use
+    let g_i_evals_k = folded_evals_l
+        .iter()
+        .step_by(1 << (new_domain_l.log_size() - new_domain_k.log_size()))
+        .copied()
+        .collect_vec();
 
     // Stack the evaluations, commit to them (in preparation for
     // next-round-folding verification, and therefore with width equal to the
     // folding factor of the next round) and then observe the commitment
     let new_stacked_evals = RowMajorMatrix::new(
-        folded_evals,
-        1 << (new_domain.log_size() - log_next_folding_factor),
+        folded_evals_l,
+        1 << (new_domain_l.log_size() - log_next_folding_factor),
     )
     .transpose();
 
-    let (new_commitment, new_merkle_tree) = config
-        .mmcs_config()
-        .commit_matrix(new_stacked_evals.clone());
+    let (new_commitment, new_merkle_tree) = config.mmcs_config().commit_matrix(new_stacked_evals);
 
     // Observe the commitment
     challenger.observe(F::from_u8(Messages::RoundCommitment as u8));
@@ -325,7 +403,7 @@ where
     challenger.observe(F::from_u8(Messages::OodSamples as u8));
     while ood_samples.len() < num_ood_samples {
         let el: EF = challenger.sample_algebra_element();
-        if !new_domain.contains(el) {
+        if !new_domain_l.contains(el) {
             ood_samples.push(el);
         }
     }
@@ -333,7 +411,7 @@ where
     // Evaluate the polynomial at the out-of-domain sampled points
     let betas: Vec<EF> = ood_samples
         .iter()
-        .map(|x| folded_polynomial.evaluate(x))
+        .map(|&x| eval_packed_ext_poly(&packed_folded_polynomial, x))
         .collect();
 
     // Observe the evaluations
@@ -344,7 +422,7 @@ where
 
     // ========================== Sampling randomness ==========================
 
-    // Sample ramdomness for degree correction
+    // Sample randomness for degree correction
     challenger.observe(F::from_u8(Messages::CombRandomness as u8));
     let comb_randomness = challenger.sample_algebra_element();
 
@@ -353,7 +431,7 @@ where
     let new_folding_randomness = challenger.sample_algebra_element();
 
     // Sample queried indices of elements in L_{i - 1}^k_{i - 1}
-    let log_query_domain_size = domain.log_size() - log_folding_factor;
+    let log_query_domain_size = domain_l.log_size() - log_folding_factor;
 
     challenger.observe(F::from_u8(Messages::QueryIndices as u8));
     let queried_indices: Vec<usize> = (0..num_queries)
@@ -377,18 +455,18 @@ where
     // ============= Computing the Quot, Ans and shake polynomials =============
 
     // Compute the domain L_{i - 1}^{k_{i - 1}}
-    let domain_k = domain.exp_power_of_2(log_folding_factor).unwrap(); // Can never panic due to parameter set-up
+    let domain_pow2_k = domain_l.exp_power_of_2(log_folding_factor).unwrap(); // Can never panic due to parameter set-up
 
     // Get the domain elements at the queried indices (i.e r^shift_i in the paper)
     let stir_randomness: Vec<EF> = queried_indices
         .iter()
-        .map(|index| domain_k.element(*index))
+        .map(|&index| domain_pow2_k.element(index))
         .collect();
 
     // Evaluate the polynomial at those points
     let stir_randomness_evals: Vec<EF> = stir_randomness
         .iter()
-        .map(|x| folded_polynomial.evaluate(x))
+        .map(|&x| eval_packed_ext_poly(&packed_folded_polynomial, x))
         .collect();
 
     // stir_answers has been dedup-ed but beta_answers has not yet:
@@ -417,33 +495,53 @@ where
     challenger.observe(F::from_u8(Messages::ShakeRandomness as u8));
     let _shake_randomness: EF = challenger.sample_algebra_element();
 
-    // Compute the Quot polynomial
-    let vanishing_polynomial = Polynomial::vanishing_polynomial(quotient_set);
-    let quotient_polynomial = &(&folded_polynomial - &ans_polynomial) / &vanishing_polynomial;
-
-    // Correct the degree by multiplying by the scaling polynomial,
-    //   1 + rx + r^2 x^2 + ... + r^n x^n
-    // with n = |quotient_set|
-    let witness_polynomial =
-        multiply_by_power_polynomial(&quotient_polynomial, comb_randomness, quotient_set_size);
-
-    // NP TODO remove this?
-    if quotient_polynomial.is_zero() {
-        // This happens when the quotient set has deg(g_i) + 1 elements or more,
-        // in which case the interpolator ans_i coincides with g_i, causing f_i
-        // to be 0. A potential cause is the combination of a small field,
-        // low-degree initial polynomial and large number of security bits
-        // required. This does not make the protocol vulnerable, but perhaps
-        // less efficient than it could be. In the future, early termination can
-        // be designed and implemented for this case, but this is unexplored as
-        // of yet.
-        tracing::info!("The quotient polynomial is zero in round {}", round);
+    // Compute the evaluations of the ans, vanishing and power polynomials over K_i
+    if quotient_set_size > new_domain_k.size() {
+        // NP TODO make sure this should never happen
+        panic!("Early termination configuration failed");
     }
+
+    let power_polynomial = Polynomial::power_polynomial(comb_randomness, quotient_set_size);
+    let vanishing_polynomial = Polynomial::vanishing_polynomial(quotient_set);
+
+    // NP TODO this could be done in one go if dft_batch had a coset version.
+    // NB: If done, make sure to pad the vectors with zeros to the size
+    // new_domain_k.size(); currently this is handled by the convenience
+    // function domain_dft from utils
+
+    // NP TODO remove calls to clone() once Polynomial is gone and we are
+    // working with coeff vecs directly
+    let mut power_coeffs = power_polynomial.coeffs().to_vec();
+    let mut ans_coeffs = ans_polynomial.coeffs().to_vec();
+    let mut vanishing_coeffs = vanishing_polynomial.coeffs().to_vec();
+
+    power_coeffs.resize(new_domain_k.size(), EF::ZERO);
+    ans_coeffs.resize(new_domain_k.size(), EF::ZERO);
+    vanishing_coeffs.resize(new_domain_k.size(), EF::ZERO);
+
+    let flat_coeffs = [power_coeffs, ans_coeffs, vanishing_coeffs].concat();
+
+    let coeff_matrix = RowMajorMatrix::new(flat_coeffs, new_domain_k.size()).transpose();
+    let eval_matrix = config.dft.coset_dft_batch(coeff_matrix, domain_k.shift());
+
+    // Batch-invert all vanishing-polynomial evaluations denominators. Note that
+    // vanishing polynomial cannot vanish at any queried point: K_i is contained
+    // in L_i and the queried points come from either EF \ L_i (in the case of
+    // ood) or L_{i - 1}^{k_{i - 1}} (in the case of stir randomness), both of
+    // which are disjoint from L_i.
+    let vanishing_evals = eval_matrix.row_slices().map(|r| r[2]).collect_vec();
+    let vanishing_evals_inv = batch_multiplicative_inverse(&vanishing_evals);
+
+    // Computing the evaluations of f_i over K_i
+    let evals_k = izip!(g_i_evals_k, vanishing_evals_inv, eval_matrix.row_slices())
+        .map(|(g, v_inv, row)| row[0] * (g - row[1]) * v_inv)
+        .collect();
 
     (
         StirRoundWitness {
-            domain: new_domain,
-            polynomial: witness_polynomial,
+            domain_l: new_domain_l,
+            domain_k: new_domain_k,
+            evals_k,
             merkle_tree: new_merkle_tree,
             folding_randomness: new_folding_randomness,
             round,

@@ -12,7 +12,6 @@ mod config;
 mod proof;
 // NP TODO refactor once one prover is left
 pub mod prover;
-pub mod prover_eval;
 mod proximity_gaps;
 mod utils;
 mod verifier;
