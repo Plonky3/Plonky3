@@ -208,6 +208,6 @@ mod tests {
         p3_monty_31::dft::RecursiveDft<_>
     );
     test_prime_field!(crate::KoalaBear);
-    test_prime_field_64!(crate::KoalaBear);
-    test_prime_field_32!(crate::KoalaBear);
+    test_prime_field_64!(crate::KoalaBear, &super::ZEROS, &super::ONES);
+    test_prime_field_32!(crate::KoalaBear, &super::ZEROS, &super::ONES);
 }

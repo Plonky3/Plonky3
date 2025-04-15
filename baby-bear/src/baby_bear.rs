@@ -227,6 +227,6 @@ mod tests {
         p3_monty_31::dft::RecursiveDft<_>
     );
     test_prime_field!(crate::BabyBear);
-    test_prime_field_64!(crate::BabyBear);
-    test_prime_field_32!(crate::BabyBear);
+    test_prime_field_64!(crate::BabyBear, &super::ZEROS, &super::ONES);
+    test_prime_field_32!(crate::BabyBear, &super::ZEROS, &super::ONES);
 }

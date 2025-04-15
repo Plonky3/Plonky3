@@ -653,6 +653,6 @@ mod tests {
         &super::multiplicative_group_prime_factorization()
     );
     test_prime_field!(crate::Mersenne31);
-    test_prime_field_64!(crate::Mersenne31);
-    test_prime_field_32!(crate::Mersenne31);
+    test_prime_field_64!(crate::Mersenne31, &super::ZEROS, &super::ONES);
+    test_prime_field_32!(crate::Mersenne31, &super::ZEROS, &super::ONES);
 }

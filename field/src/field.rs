@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display};
 use core::hash::Hash;
-use core::iter::{self, Product, Sum};
+use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::{array, slice};
 
@@ -578,7 +578,7 @@ pub trait RawDataSerializable: Sized {
     #[must_use]
     fn into_u32_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u32> {
         let bytes = Self::into_byte_stream(input);
-        iter_array_chunks_padded(bytes).map(u32::from_le_bytes)
+        iter_array_chunks_padded(bytes, 0).map(u32::from_le_bytes)
     }
 
     /// Convert an iterator of field elements into an iterator of u64s.
@@ -588,7 +588,7 @@ pub trait RawDataSerializable: Sized {
     #[must_use]
     fn into_u64_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u64> {
         let bytes = Self::into_byte_stream(input);
-        iter_array_chunks_padded(bytes).map(u64::from_le_bytes)
+        iter_array_chunks_padded(bytes, 0).map(u64::from_le_bytes)
     }
 
     /// Convert an iterator of field elements arrays into an iterator of bytes arrays.
@@ -622,16 +622,9 @@ pub trait RawDataSerializable: Sized {
     fn into_parallel_u32_streams<const N: usize>(
         input: impl IntoIterator<Item = [Self; N]>,
     ) -> impl IntoIterator<Item = [u32; N]> {
-        let mut bytes = Self::into_parallel_byte_streams(input)
-            .into_iter()
-            .peekable();
-
-        iter::from_fn(move || {
-            bytes.peek().is_some().then(|| {
-                let u32_bytes_array: [[u8; N]; 4] =
-                    array::from_fn(|_| bytes.next().unwrap_or([0; N]));
-                array::from_fn(|i| u32::from_le_bytes(array::from_fn(|j| u32_bytes_array[j][i])))
-            })
+        let bytes = Self::into_parallel_byte_streams(input);
+        iter_array_chunks_padded(bytes, [0; N]).map(|byte_array: [[u8; N]; 4]| {
+            array::from_fn(|i| u32::from_le_bytes(array::from_fn(|j| byte_array[j][i])))
         })
     }
 
@@ -651,16 +644,9 @@ pub trait RawDataSerializable: Sized {
     fn into_parallel_u64_streams<const N: usize>(
         input: impl IntoIterator<Item = [Self; N]>,
     ) -> impl IntoIterator<Item = [u64; N]> {
-        let mut bytes = Self::into_parallel_byte_streams(input)
-            .into_iter()
-            .peekable();
-
-        iter::from_fn(move || {
-            bytes.peek().is_some().then(|| {
-                let u32_bytes_array: [[u8; N]; 8] =
-                    array::from_fn(|_| bytes.next().unwrap_or([0; N]));
-                array::from_fn(|i| u64::from_le_bytes(array::from_fn(|j| u32_bytes_array[j][i])))
-            })
+        let bytes = Self::into_parallel_byte_streams(input);
+        iter_array_chunks_padded(bytes, [0; N]).map(|byte_array: [[u8; N]; 8]| {
+            array::from_fn(|i| u64::from_le_bytes(array::from_fn(|j| byte_array[j][i])))
         })
     }
 }

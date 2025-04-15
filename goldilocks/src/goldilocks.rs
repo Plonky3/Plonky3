@@ -717,7 +717,7 @@ mod tests {
         &super::multiplicative_group_prime_factorization()
     );
     test_prime_field!(crate::Goldilocks);
-    test_prime_field_64!(crate::Goldilocks);
+    test_prime_field_64!(crate::Goldilocks, &super::ZEROS, &super::ONES);
     test_two_adic_field!(crate::Goldilocks);
 
     test_field_dft!(radix2dit, crate::Goldilocks, p3_dft::Radix2Dit<_>);

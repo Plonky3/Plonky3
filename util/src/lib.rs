@@ -360,13 +360,14 @@ where
 /// If `iter.next()` panics, all items already yielded by the iterator are
 /// dropped.
 #[inline]
-fn iter_next_chunk_padded<T: Default + Copy, const N: usize>(
+fn iter_next_chunk_padded<T: Copy, const N: usize>(
     iter: &mut impl Iterator<Item = T>,
+    default: T,
 ) -> Option<[T; N]> {
     let (mut arr, n) = iter_next_chunk_erased::<N, _>(iter);
     (n != 0).then(|| {
         // Fill the rest of the array with default values.
-        arr[n..].fill(MaybeUninit::new(T::default()));
+        arr[n..].fill(MaybeUninit::new(default));
         unsafe { mem::transmute_copy::<_, [T; N]>(&arr) }
     })
 }
@@ -376,11 +377,12 @@ fn iter_next_chunk_padded<T: Default + Copy, const N: usize>(
 /// The chunks do not overlap. If `N` does not divide the length of the
 /// iterator, then the last `N-1` elements will be padded with default values.
 #[inline]
-pub fn iter_array_chunks_padded<T: Default + Copy, const N: usize>(
+pub fn iter_array_chunks_padded<T: Copy, const N: usize>(
     iter: impl IntoIterator<Item = T>,
+    default: T,
 ) -> impl Iterator<Item = [T; N]> {
     let mut iter = iter.into_iter();
-    iter::from_fn(move || iter_next_chunk_padded(&mut iter))
+    iter::from_fn(move || iter_next_chunk_padded(&mut iter, default))
 }
 
 /// Converts a vector of one type to one of another type.
