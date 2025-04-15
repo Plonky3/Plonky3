@@ -7,7 +7,10 @@ use num_bigint::BigUint;
 use p3_maybe_rayon::prelude::{IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::field::Field;
-use crate::{PackedValue, PrimeCharacteristicRing, PrimeField, PrimeField32, TwoAdicField};
+use crate::{
+    BasedVectorSpace, ExtensionField, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
+    PrimeField, PrimeField32, TwoAdicField,
+};
 
 /// Computes `Z_H(x)`, where `Z_H` is the vanishing polynomial of a multiplicative subgroup of order `2^log_n`.
 pub fn two_adic_subgroup_vanishing_polynomial<F: TwoAdicField>(log_n: usize, x: F) -> F {
@@ -203,4 +206,28 @@ pub fn eval_poly<F: Field>(poly: &[F], x: F) -> F {
         acc += *coeff;
     }
     acc
+}
+
+/// Evaluate a polynomial at a given point making use of PackedFieldExtension elements.
+/// TODO: Improve this doc comment
+///
+/// This will usually be much faster then `eval_poly` where ever it is applicable.
+pub fn eval_packed_ext_poly<F: Field, EF: ExtensionField<F>>(
+    poly: &[EF::ExtensionPacking],
+    x: EF,
+) -> EF {
+    debug_assert!(poly.len() % F::Packing::WIDTH == 0);
+    let powers_packed = EF::ExtensionPacking::packed_ext_powers(x);
+    let packed_eval = poly
+        .iter()
+        .zip(powers_packed)
+        .map(|(coeff, powers)| *coeff * powers)
+        .sum::<EF::ExtensionPacking>();
+    EF::from_basis_coefficients_fn(|i| {
+        packed_eval.as_basis_coefficients_slice()[i]
+            .as_slice()
+            .iter()
+            .copied()
+            .sum()
+    })
 }

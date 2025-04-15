@@ -6,15 +6,17 @@ use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
-use p3_field::{batch_multiplicative_inverse, eval_poly, ExtensionField, Field, TwoAdicField};
+use p3_field::{
+    batch_multiplicative_inverse, eval_packed_ext_poly, ExtensionField, Field,
+    PackedFieldExtension, PackedValue, TwoAdicField,
+};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_poly::Polynomial;
 
 use crate::config::{observe_public_parameters, RoundConfig};
 use crate::proof::RoundProof;
 use crate::utils::{
-    domain_dft, domain_idft, fold_evaluations, fold_evaluations_at_domain, fold_polynomial,
-    multiply_by_power_polynomial, observe_ext_slice_with_size,
+    domain_dft, domain_idft, fold_evaluations_at_domain, observe_ext_slice_with_size,
 };
 use crate::{Messages, StirConfig, StirProof, POW_BITS_WARNING};
 
@@ -219,7 +221,7 @@ where
     challenger.observe(F::from_u8(Messages::FoldingRandomness as u8));
     let folding_randomness: EF = challenger.sample_algebra_element();
 
-    // NP TODO handle this symetrically to StirWitness.domain
+    // NP TODO handle this symmetrically to StirWitness.domain
     let domain_k_0 = witness
         .domain
         .shrink_coset(config.log_starting_inv_rate())
@@ -356,6 +358,14 @@ where
     let domain_k_pow = domain_k.exp_power_of_2(log_folding_factor).unwrap();
     let folded_polynomial = domain_idft(folded_evals_k.clone(), domain_k_pow, &config.dft);
 
+    // TODO: Remove this assert and just pad folded_polynomial by zeroes to make it true.
+    // For now this assert seems to hold true for the tests I am running.
+    assert!(folded_polynomial.len() % F::Packing::WIDTH == 0);
+    let packed_folded_polynomial = folded_polynomial
+        .chunks_exact(F::Packing::WIDTH)
+        .map(|chunck| EF::ExtensionPacking::from_ext_slice(chunck))
+        .collect::<Vec<_>>(); // TODO: Ideally this transformation should be a method in ExtensionPacking.
+
     // Compute the i-th domain L_i = w * <w^{2^i}> = w * (w^{-1} * L_{i - 1})^2
     // and its subdomain K_{i - 1}
     let new_domain_l = domain_l.shrink_coset(1).unwrap(); // Can never panic due to parameter set-up
@@ -367,8 +377,8 @@ where
     // Collecting the evaluations of g_i over K_i for later use
     let g_i_evals_k = folded_evals_l
         .iter()
-        .copied()
         .step_by(1 << (new_domain_l.log_size() - new_domain_k.log_size()))
+        .copied()
         .collect_vec();
 
     // Stack the evaluations, commit to them (in preparation for
@@ -380,9 +390,7 @@ where
     )
     .transpose();
 
-    let (new_commitment, new_merkle_tree) = config
-        .mmcs_config()
-        .commit_matrix(new_stacked_evals.clone());
+    let (new_commitment, new_merkle_tree) = config.mmcs_config().commit_matrix(new_stacked_evals);
 
     // Observe the commitment
     challenger.observe(F::from_u8(Messages::RoundCommitment as u8));
@@ -403,7 +411,7 @@ where
     // Evaluate the polynomial at the out-of-domain sampled points
     let betas: Vec<EF> = ood_samples
         .iter()
-        .map(|&x| eval_poly(&folded_polynomial, x))
+        .map(|&x| eval_packed_ext_poly(&packed_folded_polynomial, x))
         .collect();
 
     // Observe the evaluations
@@ -414,7 +422,7 @@ where
 
     // ========================== Sampling randomness ==========================
 
-    // Sample ramdomness for degree correction
+    // Sample randomness for degree correction
     challenger.observe(F::from_u8(Messages::CombRandomness as u8));
     let comb_randomness = challenger.sample_algebra_element();
 
@@ -458,7 +466,7 @@ where
     // Evaluate the polynomial at those points
     let stir_randomness_evals: Vec<EF> = stir_randomness
         .iter()
-        .map(|&x| eval_poly(&folded_polynomial, x))
+        .map(|&x| eval_packed_ext_poly(&packed_folded_polynomial, x))
         .collect();
 
     // stir_answers has been dedup-ed but beta_answers has not yet:
