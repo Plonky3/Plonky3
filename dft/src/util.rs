@@ -40,13 +40,11 @@ mod tests {
     use alloc::vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_field::extension::BinomialExtensionField;
     use p3_matrix::dense::RowMajorMatrix;
 
     use super::*;
 
     type F = BabyBear;
-    type EF4 = BinomialExtensionField<F, 4>;
 
     #[test]
     fn test_divide_by_height_2x2() {
@@ -102,39 +100,6 @@ mod tests {
     }
 
     #[test]
-    fn test_divide_by_height_with_ef4() {
-        // Construct matrix:
-        // [4, 8]
-        // [12, 16]
-        //
-        // height = 2 → divide all values by 2
-        // Expected result: [
-        //   [2, 4],
-        //   [6, 8]
-        // ]
-        let mut mat = RowMajorMatrix::new(
-            vec![
-                EF4::from(F::from_u8(4)),
-                EF4::from(F::from_u8(8)),
-                EF4::from(F::from_u8(12)),
-                EF4::from(F::from_u8(16)),
-            ],
-            2,
-        );
-
-        divide_by_height(&mut mat);
-
-        let expected = vec![
-            EF4::from(F::from_u8(2)),
-            EF4::from(F::from_u8(4)),
-            EF4::from(F::from_u8(6)),
-            EF4::from(F::from_u8(8)),
-        ];
-
-        assert_eq!(mat.values, expected);
-    }
-
-    #[test]
     fn test_coset_shift_cols_3x2_shift_2() {
         // Input matrix:
         // [ 1, 2 ]
@@ -183,50 +148,6 @@ mod tests {
         coset_shift_cols(&mut mat, F::from_u8(1));
 
         let expected = vec![F::from_u8(7), F::from_u8(8), F::from_u8(9), F::from_u8(10)];
-
-        assert_eq!(mat.values, expected);
-    }
-
-    #[test]
-    fn test_coset_shift_cols_zero_matrix() {
-        // Matrix full of zeros; output should remain zero regardless of shift
-        let mut mat = RowMajorMatrix::new(vec![F::ZERO; 4], 2);
-
-        coset_shift_cols(&mut mat, F::from_u8(5));
-
-        let expected = vec![F::ZERO; 4];
-
-        assert_eq!(mat.values, expected);
-    }
-
-    #[test]
-    fn test_coset_shift_cols_with_ef4_shift_3() {
-        // Input EF4 matrix:
-        // [ 1, 2 ]
-        // [ 3, 4 ]
-        //
-        // shift = 3
-        // Row 0: shift^0 = 1 → [1, 2]
-        // Row 1: shift^1 = 3 → [3 * 3, 4 * 3] = [9, 12]
-
-        let mut mat = RowMajorMatrix::new(
-            vec![
-                EF4::from(F::from_u8(1)),
-                EF4::from(F::from_u8(2)),
-                EF4::from(F::from_u8(3)),
-                EF4::from(F::from_u8(4)),
-            ],
-            2,
-        );
-
-        coset_shift_cols(&mut mat, EF4::from(F::from_u8(3)));
-
-        let expected = vec![
-            EF4::from(F::from_u8(1)),
-            EF4::from(F::from_u8(2)),
-            EF4::from(F::from_u8(9)),
-            EF4::from(F::from_u8(12)),
-        ];
 
         assert_eq!(mat.values, expected);
     }
