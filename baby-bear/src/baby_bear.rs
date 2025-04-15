@@ -116,10 +116,8 @@ mod tests {
     use core::array;
 
     use num_bigint::BigUint;
-    use p3_field::{
-        InjectiveMonomial, PermutationMonomial, PrimeField64, TwoAdicField,
-        extension::BinomialExtensionField,
-    };
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::{InjectiveMonomial, PermutationMonomial, PrimeField64, TwoAdicField};
     use p3_field_testing::{
         test_field, test_field_dft, test_prime_field, test_prime_field_32, test_prime_field_64,
         test_two_adic_field,
