@@ -593,6 +593,7 @@ unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use p3_field::extension::BinomialExtensionField;
     use p3_field_testing::{
         test_field, test_field_dft, test_prime_field, test_prime_field_64, test_two_adic_field,
     };
@@ -600,6 +601,7 @@ mod tests {
     use super::*;
 
     type F = Goldilocks;
+    type EF = BinomialExtensionField<F, 5>;
 
     #[test]
     fn test_goldilocks() {
@@ -668,11 +670,17 @@ mod tests {
     test_prime_field_64!(crate::Goldilocks);
     test_two_adic_field!(crate::Goldilocks);
 
-    test_field_dft!(radix2dit, crate::Goldilocks, p3_dft::Radix2Dit<_>);
-    test_field_dft!(bowers, crate::Goldilocks, p3_dft::Radix2Bowers);
+    test_field_dft!(
+        radix2dit,
+        crate::Goldilocks,
+        super::EF,
+        p3_dft::Radix2Dit<_>
+    );
+    test_field_dft!(bowers, crate::Goldilocks, super::EF, p3_dft::Radix2Bowers);
     test_field_dft!(
         parallel,
         crate::Goldilocks,
+        super::EF,
         p3_dft::Radix2DitParallel<crate::Goldilocks>
     );
 }
