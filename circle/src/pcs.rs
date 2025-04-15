@@ -546,6 +546,7 @@ where
 #[cfg(test)]
 mod tests {
     use core::iter;
+
     use p3_challenger::{HashChallenger, SerializingChallenger32};
     use p3_commit::ExtensionMmcs;
     use p3_field::extension::BinomialExtensionField;
