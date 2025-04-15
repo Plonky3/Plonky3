@@ -1,16 +1,15 @@
 use alloc::format;
 use alloc::string::ToString;
 use alloc::vec::Vec;
+use core::array;
 use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
 use core::marker::PhantomData;
-use core::mem::ManuallyDrop;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
-use core::{array, slice};
 
 use itertools::Itertools;
 use num_bigint::BigUint;
-use p3_util::convert_vec;
+use p3_util::{flatten_to_base, reconstitute_from_base};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
@@ -82,7 +81,7 @@ impl<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: usize> BasedVectorSpace
         unsafe {
             // Safety:
             // As `Self` is a `repr(transparent)`, it can be transmuted to `[A; D]`
-            flatten_to_base::<A, Self, D>(vec)
+            flatten_to_base::<A, Self>(vec)
         }
     }
 
@@ -91,7 +90,7 @@ impl<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: usize> BasedVectorSpace
         unsafe {
             // Safety:
             // As `Self` is a `repr(transparent)`, it can be transmuted to `[A; D]`
-            reconstitute_from_base::<A, Self, D>(vec)
+            reconstitute_from_base::<A, Self>(vec)
         }
     }
 }
@@ -217,7 +216,7 @@ where
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { convert_vec(F::zero_vec(len * D)) }
+        unsafe { reconstitute_from_base(F::zero_vec(len * D)) }
     }
 }
 
@@ -660,118 +659,4 @@ pub(crate) fn cubic_square<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: u
     res[0] = a[0].square() + (a[1].clone() * w_a2.clone()).double();
     res[1] = w_a2 * a[2].clone() + (a[0].clone() * a[1].clone()).double();
     res[2] = a[1].square() + (a[0].clone() * a[2].clone()).double();
-}
-
-/// Convert a vector of `BaseArray` elements to a vector of `Base` elements without any
-/// reallocations.
-///
-/// # Safety:
-/// This is assumes that `BaseArray` as the same alignment and memory layout as `[Base; D]`.
-/// As Rust guarantees that arrays elements are contiguous in memory and the alignment of
-/// the array is the same as the alignment of its elements, this means that `BaseArray`
-/// must have the same alignment as `Base`.
-#[inline]
-pub(crate) unsafe fn flatten_to_base<Base, BaseArray, const D: usize>(
-    vec: Vec<BaseArray>,
-) -> Vec<Base> {
-    debug_assert_eq!(align_of::<Base>(), align_of::<BaseArray>());
-    debug_assert_eq!(size_of::<Base>() * D, size_of::<BaseArray>());
-    // Prevent running `vec`'s destructor so we are in complete control
-    // of the allocation.
-    let mut values = ManuallyDrop::new(vec);
-
-    // Each `Self` is an array of `D` elements, so the length and capacity of
-    // the new vector will be multiplied by `D`.
-    let new_len = values.len() * D;
-    let new_cap = values.capacity() * D;
-
-    // Safe as BaseArray and Base have the same alignment.
-    let ptr = values.as_mut_ptr() as *mut Base;
-
-    unsafe {
-        // Safety:
-        // - BaseArray and Base have the same alignment.
-        // - As size_of::<BaseArray>() == size_of::<Base>() * D:
-        //      -- The capacity of the new vector is equal to the capacity of the old vector.
-        //      -- The first new_len elements of the new vector correspond to the first
-        //         len elements of the old vector and so are properly initialized.
-        Vec::from_raw_parts(ptr, new_len, new_cap)
-    }
-}
-
-/// Convert a vector of `Base` elements to a vector of `BaseArray` elements ideally without any
-/// reallocations.
-///
-/// This is an inverse of `flatten_to_base`. Unfortunately, unlike `flatten_to_base`, it may not be
-/// possible to avoid allocations. This issue is that there is not way to guarantee that the capacity
-/// of the vector is a multiple of `D`.
-///
-/// # Safety:
-/// This is assumes that `BaseArray` as the same alignment and memory layout as `[Base; D]`.
-/// As Rust guarantees that arrays elements are contiguous in memory and the alignment of
-/// the array is the same as the alignment of its elements, this means that `BaseArray`
-/// must have the same alignment as `Base`.
-///
-/// # Panics
-/// This panics if the length of the vector is not a multiple of `D`.
-#[inline]
-pub(crate) unsafe fn reconstitute_from_base<Base, BaseArray: Clone, const D: usize>(
-    mut vec: Vec<Base>,
-) -> Vec<BaseArray> {
-    assert!(
-        vec.len() % D == 0,
-        "Vector length (got {}) must be a multiple of the extension field dimension ({}).",
-        vec.len(),
-        D
-    );
-
-    let new_len = vec.len() / D;
-
-    // We could call vec.shrink_to_fit() here to try and increase the probability that
-    // the capacity is a multiple of D. That might cause a reallocation though which
-    // would defeat the whole purpose.
-    let cap = vec.capacity();
-
-    // The assumption is that basically all callers of `reconstitute_from_base_vec` will be calling it
-    // with a vector constructed from `flatten_to_base` and so the capacity should be a multiple of `D`.
-    // But capacities can do strange things so we need to support both possibilities.
-    // Note that the `else` branch would also work if the capacity is a multiple of `D` but it is slower.
-    if cap % D == 0 {
-        // Prevent running `vec`'s destructor so we are in complete control
-        // of the allocation.
-        let mut values = ManuallyDrop::new(vec);
-
-        // If we are on this branch then the capacity is a multiple of `D`.
-        let new_cap = cap / D;
-
-        // Safe as BaseArray and Base have the same alignment.
-        let ptr = values.as_mut_ptr() as *mut BaseArray;
-
-        unsafe {
-            // Safety:
-            // - BaseArray and Base have the same alignment.
-            // - As size_of::<Base>() == size_of::<BaseArray>() / D:
-            //      -- If we have reached this point, the length and capacity are both divisible by `D`.
-            //      -- The capacity of the new vector is equal to the capacity of the old vector.
-            //      -- The first new_len elements of the new vector correspond to the first
-            //         len elements of the old vector and so are properly initialized.
-            Vec::from_raw_parts(ptr, new_len, new_cap)
-        }
-    } else {
-        // If the capacity is not a multiple of `D`, we go via slices.
-
-        let buf_ptr = vec.as_mut_ptr().cast::<BaseArray>();
-        let slice = unsafe {
-            // Safety:
-            // - BaseArray and Base have the same alignment.
-            // - As size_of::<Base>() == size_of::<BaseArray>() / D:
-            //      -- If we have reached this point, the length is divisible by `D`.
-            //      -- The first new_len elements of the slice correspond to the first
-            //         len elements of the old slice and so are properly initialized.
-            slice::from_raw_parts(buf_ptr, new_len)
-        };
-
-        // Ideally the compiler could optimize this away to avoid the copy but it appears not to.
-        slice.to_vec()
-    }
 }

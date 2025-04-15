@@ -5,13 +5,10 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use itertools::Itertools;
-use p3_util::convert_vec;
+use p3_util::{flatten_to_base, reconstitute_from_base};
 use serde::{Deserialize, Serialize};
 
-use super::{
-    BinomialExtensionField, binomial_mul, cubic_square, flatten_to_base, reconstitute_from_base,
-    vector_add, vector_sub,
-};
+use super::{BinomialExtensionField, binomial_mul, cubic_square, vector_add, vector_sub};
 use crate::extension::BinomiallyExtendable;
 use crate::{
     Algebra, BasedVectorSpace, Field, PackedField, PackedFieldExtension, PackedValue, Powers,
@@ -132,7 +129,7 @@ where
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { convert_vec(PF::zero_vec(len * D)) }
+        unsafe { reconstitute_from_base(PF::zero_vec(len * D)) }
     }
 }
 
@@ -165,7 +162,7 @@ where
         unsafe {
             // Safety:
             // As `Self` is a `repr(transparent)`, it can be transmuted to `[PF; D]`
-            flatten_to_base::<PF, Self, D>(vec)
+            flatten_to_base::<PF, Self>(vec)
         }
     }
 
@@ -174,7 +171,7 @@ where
         unsafe {
             // Safety:
             // As `Self` is a `repr(transparent)`, it can be transmuted to `[PF; D]`
-            reconstitute_from_base::<PF, Self, D>(vec)
+            reconstitute_from_base::<PF, Self>(vec)
         }
     }
 }
