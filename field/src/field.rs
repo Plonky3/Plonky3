@@ -465,8 +465,8 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
 
     /// Convert from a vector of `Self` to a vector of `F` by flattening the basis coefficients.
     ///
-    /// For some `BasedVectorSpaces` we may be able to do this directly and avoid passing through
-    /// the iterator and `as_basis_coefficients_slice`.
+    /// Depending on the `BasedVectorSpace` this may be essentially a no-op and should certainly
+    /// be reimplemented in those cases.
     ///
     /// # Safety
     ///
@@ -485,8 +485,8 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
 
     /// Convert from a vector of `F` to a vector of `Self` by combining the basis coefficients.
     ///
-    /// For some `BasedVectorSpaces` we may be able to do this directly and avoid passing through
-    /// the iterator and `from_basis_coefficients_slice`.
+    /// Depending on the `BasedVectorSpace` this may be essentially a no-op and should certainly
+    /// be reimplemented in those cases.
     ///
     /// # Panics
     /// This will panic if the length of `vec` is not a multiple of `Self::DIMENSION`.
