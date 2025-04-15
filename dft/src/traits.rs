@@ -133,8 +133,8 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     // as it avoids extension field multiplications and makes better use of vectorization.
 
     // If you are using this to compute FFT/IFFT's of a single polynomial (e.g. no batching)
-    // you should also ensure to use RecursiveDft instead of Radix2Dit if not using the parallel
-    // feature and either RecursiveDft or Radix2DitParallel if you are using that feature.
+    // you should also ensure to use `RecursiveDft` instead of `Radix2Dit` if not using the parallel
+    // feature and either `RecursiveDft` or `Radix2DitParallel` if you are using that feature.
 
     /// Compute the discrete Fourier transform (DFT) `vec`.
     fn dft_algebra<V: Algebra<F> + BasedVectorSpace<F> + Clone + Send + Sync>(
