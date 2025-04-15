@@ -26,7 +26,6 @@ pub fn prove<
 >(
     config: &SC,
     air: &A,
-    challenger: &mut SC::Challenger,
     trace: RowMajorMatrix<Val<SC>>,
     public_values: &Vec<Val<SC>>,
 ) -> Proof<SC>
@@ -53,6 +52,7 @@ where
     let log_quotient_degree = log2_ceil_usize(constraint_degree - 1 + config.is_zk());
     let quotient_degree = 1 << (log_quotient_degree + config.is_zk());
 
+    let mut challenger = config.initialise_challenger();
     let trace_domain = pcs.natural_domain_for_degree(degree);
     let ext_trace_domain = pcs.natural_domain_for_degree(degree * (config.is_zk() + 1));
 
@@ -137,7 +137,7 @@ where
             .chain([round1, round2])
             .collect::<Vec<_>>();
 
-        pcs.open(rounds, challenger)
+        pcs.open(rounds, &mut challenger)
     });
     let trace_idx = <SC as StarkGenericConfig>::Pcs::TRACE_IDX;
     let quotient_idx = <SC as StarkGenericConfig>::Pcs::QUOTIENT_IDX;

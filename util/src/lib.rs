@@ -16,6 +16,7 @@ use crate::transpose::transpose_in_place_square;
 pub mod array_serialization;
 pub mod linear_map;
 pub mod transpose;
+pub mod zip_eq;
 
 /// Computes `ceil(log_2(n))`.
 #[must_use]

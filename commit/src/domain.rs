@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
 
 use itertools::Itertools;
+use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
     ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse,
     cyclic_subgroup_coset_known_order,
@@ -132,34 +133,15 @@ pub trait PolynomialSpace: Copy {
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>>;
 }
 
-/// A coset of the form `gH` where `H` is the unique multiplicative subgroup of order `n = 2^{log_n}`.
-///
-/// Fixing a generator `h` of `H`, we index this subgroup by `{g, gh, gh^2, ..., gh^{-1}}`.
-/// We refer to `g` as the "shift" of the coset.
-#[derive(Copy, Clone, Debug)]
-pub struct TwoAdicMultiplicativeCoset<Val: TwoAdicField> {
-    /// The log of the order of the subgroup.
-    pub log_n: usize,
-    /// The shift `g` defining the coset.
-    pub shift: Val,
-}
-
-impl<Val: TwoAdicField> TwoAdicMultiplicativeCoset<Val> {
-    /// Return the element `h` which generates the subgroup `H`.
-    fn subgroup_generator(&self) -> Val {
-        Val::two_adic_generator(self.log_n)
-    }
-}
-
 impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     type Val = Val;
 
     fn size(&self) -> usize {
-        1 << self.log_n
+        self.size()
     }
 
     fn first_point(&self) -> Self::Val {
-        self.shift
+        self.shift()
     }
 
     /// Getting the next point corresponds to multiplication by the generator.
@@ -170,6 +152,10 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     /// Given the coset `gH`, return the disjoint coset `gfK` where `f`
     /// is a fixed generator of `F^*` and `K` is the unique two-adic subgroup
     /// of with size `2^(ceil(log_2(min_size)))`.
+    ///
+    /// # Panics
+    ///
+    /// This will panic if `min_size` > `1 << Val::TWO_ADICITY`.
     fn create_disjoint_domain(&self, min_size: usize) -> Self {
         // We provide a short proof that these cosets are always disjoint:
         //
@@ -180,10 +166,9 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         // it does not lie in `K` and so `gf` cannot lie in `gK`.
         //
         // Thus `gH` and `gfK` are disjoint.
-        Self {
-            log_n: log2_ceil_usize(min_size),
-            shift: self.shift * Val::GENERATOR,
-        }
+
+        // This panics if (and only if) `min_size` > `1 << Val::TWO_ADICITY`.
+        Self::new(self.shift() * Val::GENERATOR, log2_ceil_usize(min_size)).unwrap()
     }
 
     /// Given the coset `gH` and generator `h` of `H`, let `K = H^{num_chunks}`
@@ -192,11 +177,14 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     /// Then we decompose `gH` into `gK, ghK, gh^2K, ..., gh^{num_chunks}K`.
     fn split_domains(&self, num_chunks: usize) -> Vec<Self> {
         let log_chunks = log2_strict_usize(num_chunks);
-        debug_assert!(log_chunks <= self.log_n);
+        debug_assert!(log_chunks <= self.log_size());
         (0..num_chunks)
-            .map(|i| Self {
-                log_n: self.log_n - log_chunks,
-                shift: self.shift * self.subgroup_generator().exp_u64(i as u64),
+            .map(|i| {
+                Self::new(
+                    self.shift() * self.subgroup_generator().exp_u64(i as u64),
+                    self.log_size() - log_chunks,
+                )
+                .unwrap() // This won't panic as `self.log_size() - log_chunks < self.log_size() < Val::TWO_ADICITY`
             })
             .collect()
     }
@@ -207,7 +195,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         evals: RowMajorMatrix<Self::Val>,
     ) -> Vec<RowMajorMatrix<Self::Val>> {
         debug_assert_eq!(evals.height(), self.size());
-        debug_assert!(log2_strict_usize(num_chunks) <= self.log_n);
+        debug_assert!(log2_strict_usize(num_chunks) <= self.log_size());
         // todo less copy
         (0..num_chunks)
             .map(|i| {
@@ -223,7 +211,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     ///
     /// `Z_{gH}(X) = g^{-|H|}\prod_{h \in H} (X - gh) = (g^{-1}X)^|H| - 1`
     fn vanishing_poly_at_point<Ext: ExtensionField<Val>>(&self, point: Ext) -> Ext {
-        (point * self.shift.inverse()).exp_power_of_2(self.log_n) - Ext::ONE
+        (point * self.shift().inverse()).exp_power_of_2(self.log_size()) - Ext::ONE
     }
 
     /// Compute the normalizing constants for the Langrange selectors of the provided domains.
@@ -233,13 +221,14 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
             .iter()
             .enumerate()
             .map(|(i, domain)| {
-                let shift = domain.shift;
+                let shift = domain.shift();
                 qc_domains
                     .iter()
                     .enumerate()
                     .filter(|(j, _)| *j != i)
                     .map(|(_, other_domain)| {
-                        (other_domain.first_point().inverse() * shift).exp_power_of_2(domain.log_n)
+                        (other_domain.first_point().inverse() * shift)
+                            .exp_power_of_2(domain.log_size())
                             - Val::ONE
                     })
                     .product()
@@ -255,8 +244,8 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     /// - `(g^{-1}X - h^{-1})`: The Lagrange selector of the subset consisting of everything but the point `gh^{-1}`.
     /// - `1/Z_{gH}(X)`: The inverse of the vanishing polynomial.
     fn selectors_at_point<Ext: ExtensionField<Val>>(&self, point: Ext) -> LagrangeSelectors<Ext> {
-        let unshifted_point = point * self.shift.inverse();
-        let z_h = unshifted_point.exp_power_of_2(self.log_n) - Ext::ONE;
+        let unshifted_point = point * self.shift().inverse();
+        let z_h = unshifted_point.exp_power_of_2(self.log_size()) - Ext::ONE;
         LagrangeSelectors {
             is_first_row: z_h / (unshifted_point - Ext::ONE),
             is_last_row: z_h / (unshifted_point - self.subgroup_generator().inverse()),
@@ -270,12 +259,12 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     /// This will error if our space is not the group `H` and if the given
     /// coset is not disjoint from `H`.
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Val>> {
-        assert_eq!(self.shift, Val::ONE);
-        assert_ne!(coset.shift, Val::ONE);
-        assert!(coset.log_n >= self.log_n);
-        let rate_bits = coset.log_n - self.log_n;
+        assert_eq!(self.shift(), Val::ONE);
+        assert_ne!(coset.shift(), Val::ONE);
+        assert!(coset.log_size() >= self.log_size());
+        let rate_bits = coset.log_size() - self.log_size();
 
-        let s_pow_n = coset.shift.exp_power_of_2(self.log_n);
+        let s_pow_n = coset.shift().exp_power_of_2(self.log_size());
         // evals of Z_H(X) = X^n - 1
         let evals = Val::two_adic_generator(rate_bits)
             .powers()
@@ -285,8 +274,8 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
 
         let xs = cyclic_subgroup_coset_known_order(
             coset.subgroup_generator(),
-            coset.shift,
-            1 << coset.log_n,
+            coset.shift(),
+            coset.size(),
         )
         .collect_vec();
 
@@ -306,12 +295,12 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
 
         LagrangeSelectors {
             is_first_row: single_point_selector(0),
-            is_last_row: single_point_selector((1 << self.log_n) - 1),
+            is_last_row: single_point_selector(self.size() as u64 - 1),
             is_transition: xs.into_iter().map(|x| x - subgroup_last).collect(),
             inv_vanishing: batch_multiplicative_inverse(&evals)
                 .into_iter()
                 .cycle()
-                .take(1 << coset.log_n)
+                .take(coset.size())
                 .collect(),
         }
     }

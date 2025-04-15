@@ -4,13 +4,15 @@ use core::marker::PhantomData;
 
 use p3_challenger::CanSample;
 use p3_dft::TwoAdicSubgroupDft;
+use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_strict_usize;
+use p3_util::zip_eq::zip_eq;
 use serde::{Deserialize, Serialize};
 
-use crate::{OpenedValues, Pcs, PolynomialSpace, TwoAdicMultiplicativeCoset};
+use crate::{OpenedValues, Pcs};
 
 /// A trivial PCS: its commitment is simply the coefficients of each poly.
 #[derive(Debug)]
@@ -53,10 +55,9 @@ where
     const ZK: bool = false;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
-        TwoAdicMultiplicativeCoset {
-            log_n: log2_strict_usize(degree),
-            shift: Val::ONE,
-        }
+        // This panics if (and only if) `degree` is not a power of 2 or `degree`
+        // > `1 << Val::TWO_ADICITY`.
+        TwoAdicMultiplicativeCoset::new(Val::ONE, log2_strict_usize(degree)).unwrap()
     }
 
     fn commit(
@@ -74,7 +75,7 @@ where
                 let mut coeffs = self.dft.idft_batch(evals);
                 coeffs
                     .rows_mut()
-                    .zip(domain.shift.inverse().powers())
+                    .zip(domain.shift().inverse().powers())
                     .for_each(|(row, weight)| {
                         row.iter_mut().for_each(|coeff| {
                             *coeff *= weight;
@@ -96,12 +97,12 @@ where
         domain: Self::Domain,
     ) -> Self::EvaluationsOnDomain<'a> {
         let mut coeffs = prover_data[idx].clone();
-        assert!(domain.log_n >= self.log_n);
+        assert!(domain.log_size() >= self.log_n);
         coeffs.values.resize(
-            coeffs.values.len() << (domain.log_n - self.log_n),
+            coeffs.values.len() << (domain.log_size() - self.log_n),
             Val::ZERO,
         );
-        self.dft.coset_dft_batch(coeffs, domain.shift)
+        self.dft.coset_dft_batch(coeffs, domain.shift())
     }
 
     fn open(
@@ -162,7 +163,7 @@ where
         _challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
         for (comm, round_opening) in rounds {
-            for (coeff_vec, (domain, points_and_values)) in comm.into_iter().zip(round_opening) {
+            for (coeff_vec, (domain, points_and_values)) in zip_eq(comm, round_opening, ())? {
                 let width = coeff_vec.len() / domain.size();
                 assert_eq!(width * domain.size(), coeff_vec.len());
                 let coeffs = RowMajorMatrix::new(coeff_vec, width);

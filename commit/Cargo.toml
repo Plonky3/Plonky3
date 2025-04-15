@@ -23,4 +23,3 @@ p3-dft = { workspace = true, optional = true }
 [dev-dependencies]
 p3-challenger.workspace = true
 p3-dft.workspace = true
-rand.workspace = true

@@ -34,6 +34,7 @@ impl<F: Field, PF: PackedField<Scalar = F>, const D: usize> PackedBinomialExtens
 impl<F: Field, PF: PackedField<Scalar = F>, const D: usize> Default
     for PackedBinomialExtensionField<F, PF, D>
 {
+    #[inline]
     fn default() -> Self {
         Self {
             value: array::from_fn(|_| PF::ZERO),
@@ -44,9 +45,10 @@ impl<F: Field, PF: PackedField<Scalar = F>, const D: usize> Default
 impl<F: Field, PF: PackedField<Scalar = F>, const D: usize> From<BinomialExtensionField<F, D>>
     for PackedBinomialExtensionField<F, PF, D>
 {
+    #[inline]
     fn from(x: BinomialExtensionField<F, D>) -> Self {
         Self {
-            value: x.value.map(Into::<PF>::into),
+            value: x.value.map(Into::into),
         }
     }
 }
@@ -54,9 +56,10 @@ impl<F: Field, PF: PackedField<Scalar = F>, const D: usize> From<BinomialExtensi
 impl<F: Field, PF: PackedField<Scalar = F>, const D: usize> From<PF>
     for PackedBinomialExtensionField<F, PF, D>
 {
+    #[inline]
     fn from(x: PF) -> Self {
         Self {
-            value: field_to_array::<PF, D>(x),
+            value: field_to_array(x),
         }
     }
 }
@@ -83,15 +86,15 @@ where
     };
 
     const ONE: Self = Self {
-        value: field_to_array::<PF, D>(PF::ONE),
+        value: field_to_array(PF::ONE),
     };
 
     const TWO: Self = Self {
-        value: field_to_array::<PF, D>(PF::TWO),
+        value: field_to_array(PF::TWO),
     };
 
     const NEG_ONE: Self = Self {
-        value: field_to_array::<PF, D>(PF::NEG_ONE),
+        value: field_to_array(PF::NEG_ONE),
     };
 
     #[inline]
@@ -119,7 +122,7 @@ where
                 cubic_square(&self.value, &mut res.value);
                 res
             }
-            _ => <Self as Mul<Self>>::mul(*self, *self),
+            _ => *self * *self,
         }
     }
 
@@ -137,22 +140,21 @@ where
 {
     const DIMENSION: usize = D;
 
+    #[inline]
     fn as_basis_coefficients_slice(&self) -> &[PF] {
         &self.value
     }
 
+    #[inline]
     fn from_basis_coefficients_fn<Fn: FnMut(usize) -> PF>(f: Fn) -> Self {
         Self {
             value: array::from_fn(f),
         }
     }
 
-    fn from_basis_coefficients_iter<I: Iterator<Item = PF>>(iter: I) -> Self {
-        let mut res = Self::default();
-        for (i, b) in iter.enumerate() {
-            res.value[i] = b;
-        }
-        res
+    #[inline]
+    fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = PF>>(mut iter: I) -> Option<Self> {
+        (iter.len() == D).then(|| Self::new(array::from_fn(|_| iter.next().unwrap()))) // The unwrap is safe as we just checked the length of iter.
     }
 }
 
@@ -161,23 +163,29 @@ impl<F, const D: usize> PackedFieldExtension<F, BinomialExtensionField<F, D>>
 where
     F: BinomiallyExtendable<D>,
 {
+    #[inline]
     fn from_ext_slice(ext_slice: &[BinomialExtensionField<F, D>]) -> Self {
         let width = F::Packing::WIDTH;
         assert_eq!(ext_slice.len(), width);
 
-        let mut res = [F::Packing::ZERO; D];
-
-        res.iter_mut().enumerate().for_each(|(i, row_i)| {
-            let row_i = row_i.as_slice_mut();
-            ext_slice
-                .iter()
-                .enumerate()
-                .for_each(|(j, vec_j)| row_i[j] = vec_j.value[i])
-        });
-
+        let res = array::from_fn(|i| F::Packing::from_fn(|j| ext_slice[j].value[i]));
         Self::new(res)
     }
 
+    #[inline]
+    fn to_ext_iter(
+        iter: impl IntoIterator<Item = Self>,
+    ) -> impl Iterator<Item = BinomialExtensionField<F, D>> {
+        let width = F::Packing::WIDTH;
+        iter.into_iter().flat_map(move |x| {
+            (0..width).map(move |i| {
+                let values = array::from_fn(|j| x.value[j].as_slice()[i]);
+                BinomialExtensionField::new(values)
+            })
+        })
+    }
+
+    #[inline]
     fn packed_ext_powers(base: BinomialExtensionField<F, D>) -> crate::Powers<Self> {
         let width = F::Packing::WIDTH;
         let powers = base.powers().take(width + 1).collect_vec();
@@ -295,6 +303,7 @@ where
     F: BinomiallyExtendable<D>,
     PF: PackedField<Scalar = F>,
 {
+    #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.reduce(|acc, x| acc + x).unwrap_or(Self::ZERO)
     }
@@ -439,6 +448,7 @@ where
     F: BinomiallyExtendable<D>,
     PF: PackedField<Scalar = F>,
 {
+    #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.reduce(|acc, x| acc * x).unwrap_or(Self::ZERO)
     }

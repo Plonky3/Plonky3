@@ -9,12 +9,10 @@ nightly-features = ["p3-monty-31/nightly-features"]
 
 [dependencies]
 p3-field.workspace = true
-p3-mds.workspace = true
 p3-monty-31.workspace = true
 p3-poseidon2.workspace = true
 p3-symmetric.workspace = true
 rand.workspace = true
-serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 num-bigint.workspace = true
@@ -23,7 +21,6 @@ p3-field-testing.workspace = true
 p3-util.workspace = true
 rand.workspace = true
 criterion.workspace = true
-rand_chacha.workspace = true
 serde_json.workspace = true
 rand_xoshiro.workspace = true
 

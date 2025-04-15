@@ -16,7 +16,6 @@ p3-fri.workspace = true
 p3-keccak.workspace = true
 p3-keccak-air.workspace = true
 p3-matrix.workspace = true
-p3-maybe-rayon.workspace = true
 p3-merkle-tree.workspace = true
 p3-mersenne-31.workspace = true
 p3-monty-31.workspace = true
@@ -24,12 +23,9 @@ p3-poseidon2.workspace = true
 p3-poseidon2-air.workspace = true
 p3-symmetric.workspace = true
 p3-uni-stark.workspace = true
-p3-util.workspace = true
 bincode = { workspace = true, features = ["serde", "alloc"] }
 clap.workspace = true
-itertools.workspace = true
 rand.workspace = true
-serde = { workspace = true, features = ["derive", "alloc"] }
 
 
 [dev-dependencies]
@@ -39,7 +35,6 @@ p3-commit = { workspace = true, features = ["test-utils"] }
 p3-challenger.workspace = true
 p3-dft.workspace = true
 p3-koala-bear.workspace = true
-p3-mds.workspace = true
 p3-matrix.workspace = true
 p3-sha256.workspace = true
 clap_derive.workspace = true
@@ -50,7 +45,6 @@ tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 
 
 [features]
-parallel = ["p3-maybe-rayon/parallel"]
 nightly-features = [
     "p3-monty-31/nightly-features",
     "p3-baby-bear/nightly-features",

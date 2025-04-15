@@ -60,10 +60,13 @@ pub trait FriGenericConfig<F: Field> {
 
 /// Creates a minimal `FriConfig` for testing purposes.
 /// This configuration is designed to reduce computational cost during tests.
-pub const fn create_test_fri_config<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
+pub const fn create_test_fri_config<Mmcs>(
+    mmcs: Mmcs,
+    log_final_poly_len: usize,
+) -> FriConfig<Mmcs> {
     FriConfig {
-        log_blowup: 1,
-        log_final_poly_len: 0,
+        log_blowup: 2,
+        log_final_poly_len,
         num_queries: 2,
         proof_of_work_bits: 1,
         mmcs,

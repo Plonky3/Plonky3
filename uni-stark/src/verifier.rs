@@ -8,6 +8,7 @@ use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
+use p3_util::zip_eq::zip_eq;
 use tracing::instrument;
 
 use crate::symbolic_builder::{SymbolicAirBuilder, get_log_quotient_degree};
@@ -17,7 +18,6 @@ use crate::{PcsError, Proof, StarkGenericConfig, Val, VerifierConstraintFolder};
 pub fn verify<SC, A>(
     config: &SC,
     air: &A,
-    challenger: &mut SC::Challenger,
     proof: &Proof<SC>,
     public_values: &Vec<Val<SC>>,
 ) -> Result<(), VerificationError<PcsError<SC>>>
@@ -39,6 +39,7 @@ where
         get_log_quotient_degree::<Val<SC>, A>(air, 0, public_values.len(), config.is_zk());
     let quotient_degree = 1 << (log_quotient_degree + config.is_zk());
 
+    let mut challenger = config.initialise_challenger();
     let trace_domain = pcs.natural_domain_for_degree(degree);
     let init_trace_domain = pcs.natural_domain_for_degree(degree >> (config.is_zk()));
 
@@ -114,15 +115,17 @@ where
         (
             commitments.quotient_chunks.clone(),
             // Check the commitment on the randomized domains.
-            randomized_quotient_chunks_domains
-                .iter()
-                .zip(&opened_values.quotient_chunks)
-                .map(|(domain, values)| (*domain, vec![(zeta, values.clone())]))
-                .collect_vec(),
+            zip_eq(
+                randomized_quotient_chunks_domains.iter(),
+                &opened_values.quotient_chunks,
+                VerificationError::InvalidProofShape,
+            )?
+            .map(|(domain, values)| (*domain, vec![(zeta, values.clone())]))
+            .collect_vec(),
         ),
     ]);
 
-    pcs.verify(coms_to_verify, opening_proof, challenger)
+    pcs.verify(coms_to_verify, opening_proof, &mut challenger)
         .map_err(VerificationError::InvalidOpeningArgument)?;
 
     let zps = quotient_chunks_domains
@@ -148,10 +151,13 @@ where
         .iter()
         .enumerate()
         .map(|(ch_i, ch)| {
+            // We checked in valid_shape the length of "ch" is equal to
+            // <SC::Challenge as BasedVectorSpace<Val<SC>>>::DIMENSION. Hence
+            // the unwrap() will never panic.
             zps[ch_i]
                 * ch.iter()
                     .enumerate()
-                    .map(|(e_i, &c)| SC::Challenge::ith_basis_element(e_i) * c)
+                    .map(|(e_i, &c)| SC::Challenge::ith_basis_element(e_i).unwrap() * c)
                     .sum::<SC::Challenge>()
         })
         .sum::<SC::Challenge>();

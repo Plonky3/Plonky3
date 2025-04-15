@@ -12,7 +12,7 @@ use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, Serializing
 use p3_uni_stark::{StarkConfig, prove, verify};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
-#[cfg(not(target_env = "msvc"))]
+#[cfg(target_family = "unix")]
 use tikv_jemallocator::Jemalloc;
 use tracing_forest::ForestLayer;
 use tracing_forest::util::LevelFilter;
@@ -20,7 +20,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
-#[cfg(not(target_env = "msvc"))]
+#[cfg(target_family = "unix")]
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
@@ -85,6 +85,7 @@ fn prove_and_verify() -> Result<(), impl Debug> {
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
+    let challenger = Challenger::from_hasher(vec![], byte_hash);
 
     // WARNING: DO NOT USE SmallRng in proper applications! Use a real PRNG instead!
     let mut rng = SmallRng::seed_from_u64(1);
@@ -110,11 +111,9 @@ fn prove_and_verify() -> Result<(), impl Debug> {
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
-    let config = MyConfig::new(pcs);
+    let config = MyConfig::new(pcs, challenger);
 
-    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-    let proof = prove(&config, &air, &mut challenger, trace, &vec![]);
+    let proof = prove(&config, &air, trace, &vec![]);
 
-    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-    verify(&config, &air, &mut challenger, &proof, &vec![])
+    verify(&config, &air, &proof, &vec![])
 }

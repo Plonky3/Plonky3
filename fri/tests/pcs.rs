@@ -10,11 +10,11 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use rand::distr::{Distribution, StandardUniform};
+use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
-use rand_chacha::ChaCha20Rng;
 
 fn seeded_rng() -> impl Rng {
-    ChaCha20Rng::seed_from_u64(0)
+    SmallRng::seed_from_u64(0)
 }
 
 fn do_test_fri_pcs<Val, Challenge, Challenger, P>(

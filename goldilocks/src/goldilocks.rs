@@ -382,7 +382,7 @@ impl QuotientMap<i64> for Goldilocks {
 
 impl PrimeField for Goldilocks {
     fn as_canonical_biguint(&self) -> BigUint {
-        <Self as PrimeField64>::as_canonical_u64(self).into()
+        self.as_canonical_u64().into()
     }
 }
 

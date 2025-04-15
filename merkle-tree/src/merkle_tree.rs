@@ -192,6 +192,7 @@ where
     let next_len_padded = if prev_layer.len() == 2 {
         1
     } else {
+        // Round prev_layer.len() / 2 up to the next even integer.
         (prev_layer.len() / 2 + 1) & !1
     };
 
@@ -255,6 +256,7 @@ where
     let next_len_padded = if prev_layer.len() == 2 {
         1
     } else {
+        // Round prev_layer.len() / 2 up to the next even integer.
         (prev_layer.len() / 2 + 1) & !1
     };
     let next_len = prev_layer.len() / 2;
