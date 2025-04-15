@@ -125,7 +125,7 @@ impl InjectiveMonomial<5> for Bn254Fr {}
 // Not a priority given how slow (and unused) this will be.
 
 impl RawDataSerializable for Bn254Fr {
-    const NUM_BYTES: usize = 328;
+    const NUM_BYTES: usize = 32;
 
     #[allow(refining_impl_trait)]
     #[inline]
