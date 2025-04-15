@@ -154,9 +154,10 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), impl Debug> {
         log_n,
         _phantom: PhantomData,
     };
+    let challenger = Challenger::new(perm);
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
-    let config = MyConfig::new(pcs, Challenger::new(perm));
+    let config = MyConfig::new(pcs, challenger);
 
     let air = MulAir {
         degree,
@@ -216,9 +217,10 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     };
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
+    let challenger = Challenger::new(perm);
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
-    let config = MyConfig::new(pcs, Challenger::new(perm));
+    let config = MyConfig::new(pcs, challenger);
 
     let air = MulAir {
         degree,
@@ -282,9 +284,10 @@ fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
         fri_config,
         _phantom: PhantomData,
     };
+    let challenger = Challenger::from_hasher(vec![], byte_hash);
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
-    let config = MyConfig::new(pcs, Challenger::from_hasher(vec![], byte_hash));
+    let config = MyConfig::new(pcs, challenger);
 
     let air = MulAir {
         degree,

@@ -125,11 +125,11 @@ fn test_public_value_impl(n: usize, x: u64, log_final_poly_len: usize) {
     let fri_config = create_test_fri_config(challenge_mmcs, log_final_poly_len);
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
     let challenger = Challenger::new(perm);
+
     let config = MyConfig::new(pcs, challenger);
-
     let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(x)];
-    let proof = prove(&config, &FibonacciAir {}, trace, &pis);
 
+    let proof = prove(&config, &FibonacciAir {}, trace, &pis);
     verify(&config, &FibonacciAir {}, &proof, &pis).expect("verification failed");
 }
 
@@ -159,9 +159,7 @@ fn test_incorrect_public_value() {
     let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
     let challenger = Challenger::new(perm);
-
     let config = MyConfig::new(pcs, challenger);
-
     let pis = vec![
         BabyBear::ZERO,
         BabyBear::ONE,

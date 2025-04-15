@@ -10,7 +10,7 @@ use p3_fri::{TwoAdicFriPcs, create_benchmark_fri_config};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHasher32To64};
-use p3_uni_stark::{Proof, StarkConfig, StarkGenericConfig, prove, verify};
+use p3_uni_stark::{Proof, StarkGenericConfig, prove, verify};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 
@@ -80,7 +80,6 @@ where
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_config.log_blowup);
 
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_config);
-
     let challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
 
     let config = KeccakStarkConfig::new(pcs, challenger);
@@ -123,10 +122,9 @@ where
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_config.log_blowup);
 
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_config);
-
     let challenger = DuplexChallenger::new(perm24);
 
-    let config = StarkConfig::new(pcs, challenger);
+    let config = Poseidon2StarkConfig::new(pcs, challenger);
 
     let proof = prove(&config, &proof_goal, trace, &vec![]);
     report_proof_size(&proof);
@@ -160,7 +158,6 @@ pub fn prove_m31_keccak<
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_config.log_blowup);
 
     let pcs = CirclePcs::new(val_mmcs, fri_config);
-
     let challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
 
     let config = KeccakCircleStarkConfig::new(pcs, challenger);
@@ -201,8 +198,7 @@ where
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_config.log_blowup);
 
     let pcs = CirclePcs::new(val_mmcs, fri_config);
-
-    let challenger = DuplexChallenger::new(perm24.clone());
+    let challenger = DuplexChallenger::new(perm24);
 
     let config = Poseidon2CircleStarkConfig::new(pcs, challenger);
 

@@ -34,16 +34,18 @@ pub trait StarkGenericConfig {
         + CanObserve<<Self::Pcs as Pcs<Self::Challenge, Self::Challenger>>::Commitment>
         + CanSample<Self::Challenge>;
 
-    /// Get the PCS used in this configuration.
+    /// Get a reference to the PCS used by this proof configuration.
     fn pcs(&self) -> &Self::Pcs;
 
-    /// Get a new initialisation of the challenger used in this configuration.
+    /// Get an initialisation of the challenger used by this proof configuration.
     fn initialise_challenger(&self) -> Self::Challenger;
 }
 
 #[derive(Debug)]
 pub struct StarkConfig<Pcs, Challenge, Challenger> {
+    /// The PCS used to commit polynomials and prove opening proofs.
     pcs: Pcs,
+    /// An initialised instance of the challenger.
     challenger: Challenger,
     _phantom: PhantomData<Challenge>,
 }
