@@ -191,8 +191,9 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY:
-        // Due to #[repr(transparent)], the memory layout of MontyField31 is the same as u32.
-        // Hence this will create MontyField31 elements with value set to 0 which is the
+        // Due to `#[repr(transparent)]`, MontyField31 and u32 have the same size, alignment
+        // and memory layout making `flatten_to_base` safe. This this will create
+        // a vector MontyField31 elements with value set to 0 which is the
         // MONTY form of 0.
         unsafe { flatten_to_base(vec![0u32; len]) }
     }

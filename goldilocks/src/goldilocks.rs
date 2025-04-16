@@ -182,8 +182,9 @@ impl PrimeCharacteristicRing for Goldilocks {
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY:
-        // Due to repr transparent, the memory layout of Goldilocks is the same as u64.
-        // Hence this will create Goldilocks elements with value set to 0.
+        // Due to `#[repr(transparent)]`, Goldilocks and u64 have the same size, alignment
+        // and memory layout making `flatten_to_base` safe. This this will create
+        // a vector Goldilocks elements with value set to 0.
         unsafe { flatten_to_base(vec![0u64; len]) }
     }
 }

@@ -200,8 +200,9 @@ impl PrimeCharacteristicRing for Mersenne31 {
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY:
-        // Due to repr transparent, the memory layout of Mersenne31 is the same as u32.
-        // Hence this will create Mersenne31 elements with value set to 0.
+        // Due to `#[repr(transparent)]`, Mersenne31 and u32 have the same size, alignment
+        // and memory layout making `flatten_to_base` safe. This this will create
+        // a vector Mersenne31 elements with value set to 0.
         unsafe { flatten_to_base(vec![0u32; len]) }
     }
 }

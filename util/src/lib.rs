@@ -343,13 +343,13 @@ where
 /// reallocations.
 ///
 /// This is useful to convert `Vec<[F; N]>` to `Vec<F>` or `Vec<A>` to `Vec<F>` where
-/// `A` has the same size, alignment and memory layout as `[F; N]` for some `N`. In particular,
-/// it can also be used to safely convert `Vec<u32>` to `Vec<F>` if `F` is a `32` bit field
+/// `A` has the same size, alignment and memory layout as `[F; N]` for some `N`. It can also,
+/// be used to safely convert `Vec<u32>` to `Vec<F>` if `F` is a `32` bit field
 /// or `Vec<u64>` to `Vec<F>` if `F` is a `64` bit field.
 ///
 /// # Safety
 ///
-/// This is assumes that `BaseArray` as the same alignment and memory layout as `[Base; N]`.
+/// This is assumes that `BaseArray` has the same alignment and memory layout as `[Base; N]`.
 /// As Rust guarantees that arrays elements are contiguous in memory and the alignment of
 /// the array is the same as the alignment of its elements, this means that `BaseArray`
 /// must have the same alignment as `Base`.
@@ -401,7 +401,7 @@ pub unsafe fn flatten_to_base<Base, BaseArray>(vec: Vec<BaseArray>) -> Vec<Base>
 ///
 /// # Safety
 ///
-/// This is assumes that `BaseArray` as the same alignment and memory layout as `[Base; N]`.
+/// This is assumes that `BaseArray` has the same alignment and memory layout as `[Base; N]`.
 /// As Rust guarantees that arrays elements are contiguous in memory and the alignment of
 /// the array is the same as the alignment of its elements, this means that `BaseArray`
 /// must have the same alignment as `Base`.

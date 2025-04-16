@@ -80,7 +80,7 @@ impl<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: usize> BasedVectorSpace
     fn flatten_to_base(vec: Vec<Self>) -> Vec<A> {
         unsafe {
             // Safety:
-            // As `Self` is a `repr(transparent)`, it can be transmuted to `[A; D]`
+            // As `Self` is a `repr(transparent)`, it is stored identically in memory to `[A; D]`
             flatten_to_base::<A, Self>(vec)
         }
     }
@@ -89,7 +89,7 @@ impl<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: usize> BasedVectorSpace
     fn reconstitute_from_base(vec: Vec<A>) -> Vec<Self> {
         unsafe {
             // Safety:
-            // As `Self` is a `repr(transparent)`, it can be transmuted to `[A; D]`
+            // As `Self` is a `repr(transparent)`, it is stored identically in memory to `[A; D]`
             reconstitute_from_base::<A, Self>(vec)
         }
     }

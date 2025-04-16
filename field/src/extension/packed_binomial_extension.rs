@@ -161,7 +161,7 @@ where
     fn flatten_to_base(vec: Vec<Self>) -> Vec<PF> {
         unsafe {
             // Safety:
-            // As `Self` is a `repr(transparent)`, it can be transmuted to `[PF; D]`
+            // As `Self` is a `repr(transparent)`, it is stored identically in memory to `[PF; D]`
             flatten_to_base::<PF, Self>(vec)
         }
     }
@@ -170,7 +170,7 @@ where
     fn reconstitute_from_base(vec: Vec<PF>) -> Vec<Self> {
         unsafe {
             // Safety:
-            // As `Self` is a `repr(transparent)`, it can be transmuted to `[PF; D]`
+            // As `Self` is a `repr(transparent)`, it is stored identically in memory to `[PF; D]`
             reconstitute_from_base::<PF, Self>(vec)
         }
     }
