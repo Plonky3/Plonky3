@@ -11,7 +11,8 @@
 extern crate alloc;
 
 mod baby_bear;
-mod extension;
+#[cfg(test)]
+mod extension_test;
 mod mds;
 mod poseidon2;
 
