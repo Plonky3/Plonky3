@@ -410,19 +410,17 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     /// (or rederived within) another compilation environment where a
     /// different basis might have been used.
     ///
-    /// The user should ensure that the slice has length `DIMENSION`. If
-    /// it is shorter than this, the function will panic, if it is longer the
-    /// extra elements will be ignored.
+    /// Returns `None` if the length of the slice is different to `DIMENSION`.
     #[must_use]
     #[inline]
-    fn from_basis_coefficients_slice(slice: &[F]) -> Self {
-        Self::from_basis_coefficients_fn(|i| slice[i].clone())
+    fn from_basis_coefficients_slice(slice: &[F]) -> Option<Self> {
+        Self::from_basis_coefficients_iter(slice.iter().cloned())
     }
 
     /// Fixes a basis for the algebra `A` and uses this to
     /// map `DIMENSION` `F` elements to an element of `A`. Similar
     /// to `core:array::from_fn`, the `DIMENSION` `F` elements are
-    /// given by `Fn(0), ..., Fn(DIMENSION - 1)`.
+    /// given by `Fn(0), ..., Fn(DIMENSION - 1)` called in that order.
     ///
     /// # Safety
     ///
@@ -445,10 +443,9 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     /// (or rederived within) another compilation environment where a
     /// different basis might have been used.
     ///
-    /// If the iterator contains more than `DIMENSION` many elements,
-    /// the rest will be ignored.
+    /// Returns `None` if the length of the iterator is different to `DIMENSION`.
     #[must_use]
-    fn from_basis_coefficients_iter<I: Iterator<Item = F>>(iter: I) -> Self;
+    fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = F>>(iter: I) -> Option<Self>;
 
     /// Given a basis for the Algebra `A`, return the i'th basis element.
     ///
@@ -459,10 +456,57 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     /// to ensure portability if these values might ever be passed to
     /// (or rederived within) another compilation environment where a
     /// different basis might have been used.
+    ///
+    /// Returns `None` if `i` is greater than or equal to `DIMENSION`.
     #[must_use]
     #[inline]
-    fn ith_basis_element(i: usize) -> Self {
-        Self::from_basis_coefficients_fn(|j| F::from_bool(i == j))
+    fn ith_basis_element(i: usize) -> Option<Self> {
+        (i < Self::DIMENSION).then(|| Self::from_basis_coefficients_fn(|j| F::from_bool(i == j)))
+    }
+
+    /// Convert from a vector of `Self` to a vector of `F` by flattening the basis coefficients.
+    ///
+    /// Depending on the `BasedVectorSpace` this may be essentially a no-op and should certainly
+    /// be reimplemented in those cases.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
+    #[must_use]
+    #[inline]
+    fn flatten_to_base(vec: Vec<Self>) -> Vec<F> {
+        vec.into_iter()
+            .flat_map(|x| x.as_basis_coefficients_slice().to_vec())
+            .collect()
+    }
+
+    /// Convert from a vector of `F` to a vector of `Self` by combining the basis coefficients.
+    ///
+    /// Depending on the `BasedVectorSpace` this may be essentially a no-op and should certainly
+    /// be reimplemented in those cases.
+    ///
+    /// # Panics
+    /// This will panic if the length of `vec` is not a multiple of `Self::DIMENSION`.
+    ///
+    /// # Safety
+    ///
+    /// The value produced by this function fundamentally depends
+    /// on the choice of basis. Care must be taken
+    /// to ensure portability if these values might ever be passed to
+    /// (or rederived within) another compilation environment where a
+    /// different basis might have been used.
+    #[must_use]
+    #[inline]
+    fn reconstitute_from_base(vec: Vec<F>) -> Vec<Self> {
+        assert_eq!(vec.len() % Self::DIMENSION, 0);
+
+        vec.chunks_exact(Self::DIMENSION)
+            .flat_map(|chunk| Self::from_basis_coefficients_slice(chunk))
+            .collect()
     }
 }
 
@@ -480,8 +524,20 @@ impl<F: PrimeCharacteristicRing> BasedVectorSpace<F> for F {
     }
 
     #[inline]
-    fn from_basis_coefficients_iter<I: Iterator<Item = F>>(mut iter: I) -> Self {
-        iter.next().unwrap()
+    fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = F>>(mut iter: I) -> Option<Self> {
+        (iter.len() == 1).then(|| iter.next().unwrap()) // Unwrap will not panic as we know the length is 1.
+    }
+
+    #[must_use]
+    #[inline]
+    fn flatten_to_base(vec: Vec<Self>) -> Vec<F> {
+        vec
+    }
+
+    #[must_use]
+    #[inline]
+    fn reconstitute_from_base(vec: Vec<F>) -> Vec<Self> {
+        vec
     }
 }
 

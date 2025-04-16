@@ -9,7 +9,7 @@ use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
     PermutationMonomial, PrimeCharacteristicRing,
 };
-use p3_util::convert_vec;
+use p3_util::reconstitute_from_base;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 
@@ -23,7 +23,7 @@ const EVENS4: __mmask16 = 0x0f0f;
 
 /// Vectorized AVX-512F implementation of `Mersenne31` arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(transparent)] // This needed to make `transmute`s safe.
+#[repr(transparent)] // Needed to make `transmute`s safe.
 pub struct PackedMersenne31AVX512(pub [Mersenne31; WIDTH]);
 
 impl PackedMersenne31AVX512 {
@@ -434,7 +434,7 @@ impl PrimeCharacteristicRing for PackedMersenne31AVX512 {
     #[inline(always)]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { convert_vec(Mersenne31::zero_vec(len * WIDTH)) }
+        unsafe { reconstitute_from_base(Mersenne31::zero_vec(len * WIDTH)) }
     }
 
     #[must_use]

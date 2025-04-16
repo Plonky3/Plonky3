@@ -6,7 +6,6 @@ use core::fmt::{self, Debug, Display, Formatter};
 use core::hash::Hash;
 use core::iter::{Product, Sum};
 use core::marker::PhantomData;
-use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::{array, iter};
 
@@ -17,6 +16,7 @@ use p3_field::{
     PrimeField32, PrimeField64, RawDataSerializable, TwoAdicField,
     impl_raw_serializable_primefield32, quotient_map_small_int,
 };
+use p3_util::flatten_to_base;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -27,7 +27,7 @@ use crate::utils::{
 use crate::{FieldParameters, MontyParameters, RelativelyPrimePower, TwoAdicData};
 
 #[derive(Clone, Copy, Default, Eq, Hash, PartialEq)]
-#[repr(transparent)] // Packed field implementations rely on this!
+#[repr(transparent)] // Important for reasoning about memory layout.
 pub struct MontyField31<MP: MontyParameters> {
     /// The MONTY form of the field element, saved as a positive integer less than `P`.
     ///
@@ -192,8 +192,12 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
 
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
-        // SAFETY: repr(transparent) ensures transmutation safety.
-        unsafe { transmute(vec![0u32; len]) }
+        // SAFETY:
+        // Due to `#[repr(transparent)]`, MontyField31 and u32 have the same size, alignment
+        // and memory layout making `flatten_to_base` safe. This this will create
+        // a vector MontyField31 elements with value set to 0 which is the
+        // MONTY form of 0.
+        unsafe { flatten_to_base(vec![0u32; len]) }
     }
 
     #[inline]

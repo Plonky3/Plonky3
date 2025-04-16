@@ -48,7 +48,7 @@ mod test_quartic_extension {
         assert_eq!(
             format!(
                 "{}",
-                EF::from_basis_coefficients_slice(&[F::TWO, F::ONE, F::ZERO, F::TWO])
+                EF::from_basis_coefficients_slice(&[F::TWO, F::ONE, F::ZERO, F::TWO]).unwrap()
             ),
             "2 + X + 2 X^3"
         );

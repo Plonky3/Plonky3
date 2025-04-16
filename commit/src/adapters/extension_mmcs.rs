@@ -48,8 +48,12 @@ where
         let opened_ext_values = opened_base_values
             .into_iter()
             .map(|row| {
-                row.chunks(EF::DIMENSION)
-                    .map(EF::from_basis_coefficients_slice)
+                // By construction, the width of the row is a multiple of EF::DIMENSION.
+                // So there will be no remainder when we call chunks_exact.
+                row.chunks_exact(EF::DIMENSION)
+                    // As each chunk has length EF::DIMENSION, from_basis_coefficients_slice
+                    // will produce some(elem) which into_iter converts to the iterator once(elem).
+                    .flat_map(EF::from_basis_coefficients_slice)
                     .collect()
             })
             .collect();

@@ -26,7 +26,6 @@ p3-uni-stark.workspace = true
 bincode = { workspace = true, features = ["serde", "alloc"] }
 clap.workspace = true
 rand.workspace = true
-serde = { workspace = true, features = ["derive", "alloc"] }
 
 
 [dev-dependencies]
@@ -36,7 +35,6 @@ p3-commit = { workspace = true, features = ["test-utils"] }
 p3-challenger.workspace = true
 p3-dft.workspace = true
 p3-koala-bear.workspace = true
-p3-mds.workspace = true
 p3-matrix.workspace = true
 p3-sha256.workspace = true
 clap_derive.workspace = true

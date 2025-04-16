@@ -9,7 +9,7 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use itertools::Itertools;
 use num_bigint::BigUint;
-use p3_util::convert_vec;
+use p3_util::{flatten_to_base, reconstitute_from_base};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,7 @@ use crate::{
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
-#[repr(transparent)] // to make the zero_vec implementation safe
+#[repr(transparent)] // Needed to make various casts safe.
 pub struct BinomialExtensionField<F, const D: usize, A = F> {
     #[serde(
         with = "p3_util::array_serialization",
@@ -72,12 +72,26 @@ impl<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: usize> BasedVectorSpace
     }
 
     #[inline]
-    fn from_basis_coefficients_iter<I: Iterator<Item = A>>(iter: I) -> Self {
-        let mut res = Self::default();
-        for (i, b) in iter.enumerate() {
-            res.value[i] = b;
+    fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = A>>(mut iter: I) -> Option<Self> {
+        (iter.len() == D).then(|| Self::new(array::from_fn(|_| iter.next().unwrap()))) // The unwrap is safe as we just checked the length of iter.
+    }
+
+    #[inline]
+    fn flatten_to_base(vec: Vec<Self>) -> Vec<A> {
+        unsafe {
+            // Safety:
+            // As `Self` is a `repr(transparent)`, it is stored identically in memory to `[A; D]`
+            flatten_to_base::<A, Self>(vec)
         }
-        res
+    }
+
+    #[inline]
+    fn reconstitute_from_base(vec: Vec<A>) -> Vec<Self> {
+        unsafe {
+            // Safety:
+            // As `Self` is a `repr(transparent)`, it is stored identically in memory to `[A; D]`
+            reconstitute_from_base::<A, Self>(vec)
+        }
     }
 }
 
@@ -86,10 +100,12 @@ impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F>
 {
     type ExtensionPacking = PackedBinomialExtensionField<F, F::Packing, D>;
 
+    #[inline]
     fn is_in_basefield(&self) -> bool {
         self.value[1..].iter().all(F::is_zero)
     }
 
+    #[inline]
     fn as_base(&self) -> Option<F> {
         <Self as ExtensionField<F>>::is_in_basefield(self).then(|| self.value[0])
     }
@@ -97,6 +113,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F>
 
 impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExtensionField<F, D> {
     /// FrobeniusField automorphisms: x -> x^n, where n is the order of BaseField.
+    #[inline]
     fn frobenius(&self) -> Self {
         self.repeated_frobenius(1)
     }
@@ -105,6 +122,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
     ///
     /// Follows precomputation suggestion in Section 11.3.3 of the
     /// Handbook of Elliptic and Hyperelliptic Curve Cryptography.
+    #[inline]
     fn repeated_frobenius(&self, count: usize) -> Self {
         if count == 0 {
             return *self;
@@ -113,23 +131,20 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
             // x^(n^(count % D))
             return self.repeated_frobenius(count % D);
         }
-        let arr: &[F] = self.as_basis_coefficients_slice();
 
         // z0 = DTH_ROOT^count = W^(k * count) where k = floor((n-1)/D)
-        let mut z0 = F::DTH_ROOT;
-        for _ in 1..count {
-            z0 *= F::DTH_ROOT;
-        }
+        let z0 = F::DTH_ROOT.exp_u64(count as u64);
 
-        let mut res = [F::ZERO; D];
+        let mut res = Self::ZERO;
         for (i, z) in z0.powers().take(D).enumerate() {
-            res[i] = arr[i] * z;
+            res.value[i] = self.value[i] * z;
         }
 
-        Self::from_basis_coefficients_slice(&res)
+        res
     }
 
     /// Algorithm 11.3.4 in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
+    #[inline]
     fn frobenius_inv(&self) -> Self {
         // Writing 'a' for self, we need to compute a^(r-1):
         // r = n^D-1/n-1 = n^(D-1)+n^(D-2)+...+n
@@ -193,6 +208,7 @@ where
         }
     }
 
+    #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
         Self::new(self.value.clone().map(|x| x.mul_2exp_u64(exp)))
     }
@@ -200,7 +216,7 @@ where
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { convert_vec(F::zero_vec(len * D)) }
+        unsafe { reconstitute_from_base(F::zero_vec(len * D)) }
     }
 }
 
@@ -227,27 +243,28 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
             return None;
         }
 
+        let mut res = Self::default();
+
         match D {
-            2 => Some(Self::from_basis_coefficients_slice(&quadratic_inv(
-                &self.value,
-                F::W,
-            ))),
-            3 => Some(Self::from_basis_coefficients_slice(&cubic_inv(
-                &self.value,
-                F::W,
-            ))),
-            _ => Some(self.frobenius_inv()),
+            2 => quadratic_inv(&self.value, &mut res.value, F::W),
+            3 => cubic_inv(&self.value, &mut res.value, F::W),
+            _ => res = self.frobenius_inv(),
         }
+
+        Some(res)
     }
 
+    #[inline]
     fn halve(&self) -> Self {
         Self::new(self.value.map(|x| x.halve()))
     }
 
+    #[inline]
     fn div_2exp_u64(&self, exp: u64) -> Self {
         Self::new(self.value.map(|x| x.div_2exp_u64(exp)))
     }
 
+    #[inline]
     fn order() -> BigUint {
         F::order().pow(D as u32)
     }
@@ -349,6 +366,7 @@ where
     F: BinomiallyExtendable<D>,
     A: Algebra<F>,
 {
+    #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.reduce(|acc, x| acc + x).unwrap_or(Self::ZERO)
     }
@@ -467,6 +485,7 @@ where
     F: BinomiallyExtendable<D>,
     A: Algebra<F>,
 {
+    #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.reduce(|acc, x| acc * x).unwrap_or(Self::ONE)
     }
@@ -500,6 +519,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Distribution<BinomialExtensionF
 where
     Self: Distribution<F>,
 {
+    #[inline]
     fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> BinomialExtensionField<F, D> {
         BinomialExtensionField::new(array::from_fn(|_| self.sample(rng)))
     }
@@ -579,14 +599,17 @@ pub(super) fn binomial_mul<
 
 ///Section 11.3.6b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
-fn quadratic_inv<F: Field>(a: &[F], w: F) -> [F; 2] {
+fn quadratic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
+    assert_eq!(D, 2);
     let scalar = (a[0].square() - w * a[1].square()).inverse();
-    [a[0] * scalar, -a[1] * scalar]
+    res[0] = a[0] * scalar;
+    res[1] = -a[1] * scalar;
 }
 
 /// Section 11.3.6b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
-fn cubic_inv<F: Field>(a: &[F], w: F) -> [F; 3] {
+fn cubic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
+    assert_eq!(D, 3);
     let a0_square = a[0].square();
     let a1_square = a[1].square();
     let a2_w = w * a[2];
@@ -598,11 +621,9 @@ fn cubic_inv<F: Field>(a: &[F], w: F) -> [F; 3] {
         .inverse();
 
     //scalar*[a0^2-wa1a2, wa2^2-a0a1, a1^2-a0a2]
-    [
-        scalar * (a0_square - a[1] * a2_w),
-        scalar * (a2_w * a[2] - a0_a1),
-        scalar * (a1_square - a[0] * a[2]),
-    ]
+    res[0] = scalar * (a0_square - a[1] * a2_w);
+    res[1] = scalar * (a2_w * a[2] - a0_a1);
+    res[2] = scalar * (a1_square - a[0] * a[2]);
 }
 
 /// karatsuba multiplication for cubic extension field
@@ -638,7 +659,7 @@ pub(crate) fn cubic_mul<
 
 /// Section 11.3.6a in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
-pub fn cubic_square<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: usize>(
+pub(crate) fn cubic_square<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: usize>(
     a: &[A; D],
     res: &mut [A; D],
 ) {
