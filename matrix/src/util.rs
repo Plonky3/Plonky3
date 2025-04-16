@@ -25,7 +25,7 @@ use crate::dense::{DenseMatrix, DenseStorage, RowMajorMatrix};
 ///      7          111      111        7
 /// ```
 ///
-/// The transformation is performed in-place, and only swaps `i < reverse(i)` to avoid redundant work.
+/// The transformation is performed in-place.
 ///
 /// # Panics
 /// Panics if the height of the matrix is not a power of two.
