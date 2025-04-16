@@ -151,8 +151,8 @@ impl<F: Field> Butterfly<F> for DitButterfly<F> {
 /// the final or base level of a transform tree.
 ///
 /// Computes:
-///   output_1 = x1 + x2
-///   output_2 = x1 - x2
+///   - `output_1 = x1 + x2`
+///   - `output_2 = x1 - x2`
 #[derive(Copy, Clone)]
 pub struct TwiddleFreeButterfly;
 
