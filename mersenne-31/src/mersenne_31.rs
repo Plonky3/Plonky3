@@ -5,7 +5,6 @@ use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use p3_util::flatten_to_base;
 
 use num_bigint::BigUint;
 use p3_field::exponentiation::exp_1717986917;
@@ -15,6 +14,7 @@ use p3_field::{
     PrimeField32, PrimeField64, halve_u32, quotient_map_large_iint, quotient_map_large_uint,
     quotient_map_small_int,
 };
+use p3_util::flatten_to_base;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::de::Error;

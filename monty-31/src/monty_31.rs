@@ -7,7 +7,6 @@ use core::hash::Hash;
 use core::iter::{Product, Sum};
 use core::marker::PhantomData;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-use p3_util::flatten_to_base;
 
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
@@ -15,6 +14,7 @@ use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
     PrimeField32, PrimeField64, TwoAdicField, quotient_map_small_int,
 };
+use p3_util::flatten_to_base;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Deserializer, Serialize};
