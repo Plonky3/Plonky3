@@ -91,7 +91,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     /// Treating `vec` as the evaluations of a polynomial on `H`, compute the
     /// coefficients of that polynomial.
     fn idft(&self, vec: Vec<F>) -> Vec<F> {
-        self.idft_batch(RowMajorMatrix::new(vec, 1)).values
+        self.idft_batch(RowMajorMatrix::new_col(vec)).values
     }
 
     /// Compute the inverse DFT of each column in `mat`.
@@ -122,7 +122,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     /// Treating `vec` as the evaluations of a polynomial on `shift * H`,
     /// compute the coefficients of this polynomial.
     fn coset_idft(&self, vec: Vec<F>, shift: F) -> Vec<F> {
-        self.coset_idft_batch(RowMajorMatrix::new(vec, 1), shift)
+        self.coset_idft_batch(RowMajorMatrix::new_col(vec), shift)
             .values
     }
 
@@ -154,7 +154,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     /// Treating `vec` as the evaluations of a polynomial on the subgroup `H`,
     /// compute the evaluations of that polynomial on the subgroup `K`.
     fn lde(&self, vec: Vec<F>, added_bits: usize) -> Vec<F> {
-        self.lde_batch(RowMajorMatrix::new(vec, 1), added_bits)
+        self.lde_batch(RowMajorMatrix::new_col(vec), added_bits)
             .to_row_major_matrix()
             .values
     }
@@ -189,7 +189,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     /// over a coset `gH` and then computing the evaluations of that polynomial
     /// on the coset `g'K` where `g' = g * shift`.
     fn coset_lde(&self, vec: Vec<F>, added_bits: usize, shift: F) -> Vec<F> {
-        self.coset_lde_batch(RowMajorMatrix::new(vec, 1), added_bits, shift)
+        self.coset_lde_batch(RowMajorMatrix::new_col(vec), added_bits, shift)
             .to_row_major_matrix()
             .values
     }
@@ -311,7 +311,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     /// Treating `vec` as the evaluations of a polynomial on `H`, compute the
     /// coefficients of that polynomial.
     fn idft_algebra<V: BasedVectorSpace<F> + Clone + Send + Sync>(&self, vec: Vec<V>) -> Vec<V> {
-        self.idft_algebra_batch(RowMajorMatrix::new(vec, 1)).values
+        self.idft_algebra_batch(RowMajorMatrix::new_col(vec)).values
     }
 
     /// Compute the inverse DFT of each column in `mat`.
@@ -347,7 +347,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         vec: Vec<V>,
         shift: F,
     ) -> Vec<V> {
-        self.coset_idft_algebra_batch(RowMajorMatrix::new(vec, 1), shift)
+        self.coset_idft_algebra_batch(RowMajorMatrix::new_col(vec), shift)
             .values
     }
 
@@ -387,7 +387,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         vec: Vec<V>,
         added_bits: usize,
     ) -> Vec<V> {
-        self.lde_algebra_batch(RowMajorMatrix::new(vec, 1), added_bits)
+        self.lde_algebra_batch(RowMajorMatrix::new_col(vec), added_bits)
             .to_row_major_matrix()
             .values
     }
@@ -434,7 +434,7 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         added_bits: usize,
         shift: F,
     ) -> Vec<V> {
-        self.coset_lde_algebra_batch(RowMajorMatrix::new(vec, 1), added_bits, shift)
+        self.coset_lde_algebra_batch(RowMajorMatrix::new_col(vec), added_bits, shift)
             .to_row_major_matrix()
             .values
     }
