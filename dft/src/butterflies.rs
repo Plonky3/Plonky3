@@ -65,7 +65,7 @@ pub trait Butterfly<F: Field>: Copy + Send + Sync {
     /// Applies the butterfly out-of-place to two source rows.
     ///
     /// This version does not overwrite the source. Instead, it writes the
-    /// result of each butterfly to separate destination slices (which must
+    /// result of each butterfly to separate destination slices (which may
     /// be uninitialized memory).
     ///
     /// This is useful in recursive NTT implementations that alternate between
