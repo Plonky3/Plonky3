@@ -12,8 +12,8 @@ use p3_field::exponentiation::exp_1717986917;
 use p3_field::integers::QuotientMap;
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField32, PrimeField64, RawDataSerializable, halve_u32, quotient_map_large_iint,
-    quotient_map_large_uint, quotient_map_small_int,
+    PrimeField32, PrimeField64, RawDataSerializable, halve_u32, impl_raw_serializable_primefield32,
+    quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int,
 };
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
@@ -147,70 +147,7 @@ impl<'a> Deserialize<'a> for Mersenne31 {
 }
 
 impl RawDataSerializable for Mersenne31 {
-    const NUM_BYTES: usize = 4;
-
-    #[allow(refining_impl_trait)]
-    #[inline]
-    fn into_bytes(self) -> [u8; 4] {
-        self.to_unique_u32().to_le_bytes()
-    }
-
-    #[inline]
-    fn into_u32_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u32> {
-        input.into_iter().map(|x| x.to_unique_u32())
-    }
-
-    #[inline]
-    fn into_u64_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u64> {
-        let mut input = input.into_iter();
-        iter::from_fn(move || {
-            // If the first input.next() returns None, we return None.
-            let a = input.next()?;
-            if let Some(b) = input.next() {
-                Some(a.to_unique_u64() | b.to_unique_u64() << 32)
-            } else {
-                Some(a.to_unique_u64())
-            }
-        })
-    }
-
-    #[inline]
-    fn into_parallel_byte_streams<const N: usize>(
-        input: impl IntoIterator<Item = [Self; N]>,
-    ) -> impl IntoIterator<Item = [u8; N]> {
-        input.into_iter().flat_map(|vector| {
-            let bytes = vector.map(|elem| elem.into_bytes());
-            (0..Self::NUM_BYTES).map(move |i| array::from_fn(|j| bytes[j][i]))
-        })
-    }
-
-    #[inline]
-    fn into_parallel_u32_streams<const N: usize>(
-        input: impl IntoIterator<Item = [Self; N]>,
-    ) -> impl IntoIterator<Item = [u32; N]> {
-        input.into_iter().map(|vec| vec.map(|x| x.to_unique_u32()))
-    }
-
-    #[inline]
-    fn into_parallel_u64_streams<const N: usize>(
-        input: impl IntoIterator<Item = [Self; N]>,
-    ) -> impl IntoIterator<Item = [u64; N]> {
-        let mut input = input.into_iter();
-        iter::from_fn(move || {
-            // If the first input.next() returns None, we return None.
-            let a = input.next()?;
-            if let Some(b) = input.next() {
-                let ab = array::from_fn(|i| {
-                    let ai = a[i].to_unique_u64();
-                    let bi = b[i].to_unique_u64();
-                    ai | (bi << 32)
-                });
-                Some(ab)
-            } else {
-                Some(a.map(|x| x.to_unique_u64()))
-            }
-        })
-    }
+    impl_raw_serializable_primefield32!();
 }
 
 impl PrimeCharacteristicRing for Mersenne31 {

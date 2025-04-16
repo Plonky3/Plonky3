@@ -12,8 +12,8 @@ use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::integers::QuotientMap;
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField64, RawDataSerializable, TwoAdicField, halve_u64, quotient_map_large_iint,
-    quotient_map_large_uint, quotient_map_small_int,
+    PrimeField64, RawDataSerializable, TwoAdicField, halve_u64, impl_raw_serializable_primefield64,
+    quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int,
 };
 use p3_util::{assume, branch_hint};
 use rand::Rng;
@@ -202,55 +202,7 @@ impl PermutationMonomial<7> for Goldilocks {
 }
 
 impl RawDataSerializable for Goldilocks {
-    const NUM_BYTES: usize = 8;
-
-    #[allow(refining_impl_trait)]
-    #[inline]
-    fn into_bytes(self) -> [u8; 8] {
-        self.to_unique_u64().to_le_bytes()
-    }
-
-    #[inline]
-    fn into_u32_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u32> {
-        input.into_iter().flat_map(|x| {
-            let x_u64 = x.to_unique_u64();
-            [x_u64 as u32, (x_u64 >> 32) as u32]
-        })
-    }
-
-    #[inline]
-    fn into_u64_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u64> {
-        input.into_iter().map(|x| x.to_unique_u64())
-    }
-
-    #[inline]
-    fn into_parallel_byte_streams<const N: usize>(
-        input: impl IntoIterator<Item = [Self; N]>,
-    ) -> impl IntoIterator<Item = [u8; N]> {
-        input.into_iter().flat_map(|vector| {
-            let bytes = vector.map(|elem| elem.into_bytes());
-            (0..Self::NUM_BYTES).map(move |i| array::from_fn(|j| bytes[j][i]))
-        })
-    }
-
-    #[inline]
-    fn into_parallel_u32_streams<const N: usize>(
-        input: impl IntoIterator<Item = [Self; N]>,
-    ) -> impl IntoIterator<Item = [u32; N]> {
-        input.into_iter().flat_map(|vec| {
-            let vec_64 = vec.map(|x| x.to_unique_u64());
-            let vec_32_lo = vec_64.map(|x| x as u32);
-            let vec_32_hi = vec_64.map(|x| (x >> 32) as u32);
-            [vec_32_lo, vec_32_hi]
-        })
-    }
-
-    #[inline]
-    fn into_parallel_u64_streams<const N: usize>(
-        input: impl IntoIterator<Item = [Self; N]>,
-    ) -> impl IntoIterator<Item = [u64; N]> {
-        input.into_iter().map(|vec| vec.map(|x| x.to_unique_u64()))
-    }
+    impl_raw_serializable_primefield64!();
 }
 
 impl Field for Goldilocks {

@@ -138,7 +138,7 @@ impl RawDataSerializable for Bn254Fr {
     fn into_u32_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u32> {
         // TODO: Might be a way to use iter_u32_digits and save an allocation.
         // Currently switching it in causes rust to throw an error about referencing temporary values.
-        // Also we don't as_canonical_biguint, (e.g. as_unique_biguint would be fine if it existed).
+        // Also we don't need as_canonical_biguint, (e.g. as_unique_biguint would be fine if it existed).
         // This comment also applies to `into_u64_stream` as well as `into_parallel_u32_streams` and `into_parallel_u64_streams`.
         input
             .into_iter()
