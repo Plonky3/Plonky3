@@ -127,10 +127,10 @@ impl<F: Field> Butterfly<F> for DifButterfly<F> {
 ///
 /// Used in the *input-ordering* variant of NTT/FFT.
 /// This butterfly computes:
-///
+/// ```text
 ///   output_1 = x1 + x2 * twiddle
 ///   output_2 = x1 - x2 * twiddle
-///
+/// ```
 /// The twiddle factor is applied to x2 before combining.
 /// Suitable for DIT-style recursive transforms.
 #[derive(Copy, Clone)]
