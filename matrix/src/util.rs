@@ -52,9 +52,7 @@ where
     });
 }
 
-/// Swap two rows `i` and `j` in a [`RowMajorMatrix`] using safe Rust.
-///
-/// This function assumes `i < j`, and swaps the contents of rows `i` and `j` by slicing into the underlying storage.
+/// Swap two rows `i` and `j` in a [`RowMajorMatrix`].
 ///
 /// # Panics
 /// Panics if the indices are out of bounds or not ordered as `i < j`.
