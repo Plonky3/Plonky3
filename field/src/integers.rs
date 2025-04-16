@@ -38,6 +38,8 @@ macro_rules! from_integer_types {
     };
 }
 
+pub(crate) use from_integer_types;
+
 /// Implementation of the quotient map `ℤ -> ℤ/p` which sends an integer `r` to its conjugacy class `[r]`.
 ///
 /// This is the key trait allowing us to convert integers into field elements. Each prime field
@@ -480,6 +482,7 @@ macro_rules! impl_raw_serializable_primefield32 {
 
         #[inline]
         fn into_u32_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u32> {
+            // As every element is 32 bits, we can just convert the input to a unique u32.
             input.into_iter().map(|x| x.to_unique_u32())
         }
 
@@ -489,6 +492,8 @@ macro_rules! impl_raw_serializable_primefield32 {
             iter::from_fn(move || {
                 // If the first input.next() returns None, we return None.
                 let a = input.next()?;
+                // Otherwise we either pack 2 32 bit elements together if the iterator
+                // gives a second value or just cast the 32 bit element to 64 bits.
                 if let Some(b) = input.next() {
                     Some(a.to_unique_u64() | b.to_unique_u64() << 32)
                 } else {
@@ -511,6 +516,7 @@ macro_rules! impl_raw_serializable_primefield32 {
         fn into_parallel_u32_streams<const N: usize>(
             input: impl IntoIterator<Item = [Self; N]>,
         ) -> impl IntoIterator<Item = [u32; N]> {
+            // As every element is 32 bits, we can just convert the input to a unique u32.
             input.into_iter().map(|vec| vec.map(|x| x.to_unique_u32()))
         }
 
@@ -522,6 +528,8 @@ macro_rules! impl_raw_serializable_primefield32 {
             iter::from_fn(move || {
                 // If the first input.next() returns None, we return None.
                 let a = input.next()?;
+                // Otherwise we either pack pairs of 32 bit elements together if the iterator
+                // gives two arrays of or just cast the 32 bit elements to 64 bits.
                 if let Some(b) = input.next() {
                     let ab = array::from_fn(|i| {
                         let ai = a[i].to_unique_u64();
@@ -562,6 +570,7 @@ macro_rules! impl_raw_serializable_primefield64 {
 
         #[inline]
         fn into_u64_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u64> {
+            // As every element is 64 bits, we can just convert the input to a unique u64.
             input.into_iter().map(|x| x.to_unique_u64())
         }
 
@@ -591,16 +600,8 @@ macro_rules! impl_raw_serializable_primefield64 {
         fn into_parallel_u64_streams<const N: usize>(
             input: impl IntoIterator<Item = [Self; N]>,
         ) -> impl IntoIterator<Item = [u64; N]> {
+            // As every element is 64 bits, we can just convert the input to a unique u64.
             input.into_iter().map(|vec| vec.map(|x| x.to_unique_u64()))
         }
     };
 }
-
-// The only general type for which we do not provide a macro is for large signed integers.
-// This is because different field will usually want to handle large signed integers in
-// their own way.
-pub(crate) use from_integer_types;
-pub use {
-    impl_raw_serializable_primefield32, quotient_map_large_iint, quotient_map_large_uint,
-    quotient_map_small_int,
-};

@@ -647,7 +647,7 @@ pub trait RawDataSerializable: Sized {
         iter_array_chunks_padded(bytes, 0).map(u64::from_le_bytes)
     }
 
-    /// Convert an iterator of field elements arrays into an iterator of bytes arrays.
+    /// Convert an iterator of field element arrays into an iterator of byte arrays.
     ///
     /// Converts an element `[F; N]` into the byte array `[[u8; N]; NUM_BYTES]`. This is
     /// intended for use with vectorized hash functions which use vector operations
@@ -662,15 +662,15 @@ pub trait RawDataSerializable: Sized {
         })
     }
 
-    /// Convert an iterator of field elements arrays into an iterator of u32 arrays.
+    /// Convert an iterator of field element arrays into an iterator of u32 arrays.
     ///
-    /// Converts an element `[F; N]` into the byte array `[[u32; N]; NUM_BYTES/4]`. This is
+    /// Converts an element `[F; N]` into the u32 array `[[u32; N]; NUM_BYTES/4]`. This is
     /// intended for use with vectorized hash functions which use vector operations
     /// to compute several hashes in parallel.
     ///
-    /// This function is guaranteed to be equivalent to starting with `Iterator<[F; N]>` performing a "transpose"
+    /// This function is guaranteed to be equivalent to starting with `Iterator<[F; N]>` performing a transpose
     /// operation to get `[Iterator<F>; N]`, calling `into_u32_stream` on each element to get `[Iterator<u32>; N]` and then
-    /// performing another "transpose" operation to get `Iterator<[u32; N]>`.
+    /// performing another transpose operation to get `Iterator<[u32; N]>`.
     ///
     /// If `NUM_BYTES` does not divide `4`, multiple `[F; N]`s may be packed together to make a single `[u32; N]`. Furthermore,
     /// if `NUM_BYTES * input.len()` does not divide `4`, the final `[u32; N]` will involve padding bytes which are set to `0`.
@@ -684,15 +684,15 @@ pub trait RawDataSerializable: Sized {
         })
     }
 
-    /// Convert an iterator of field elements arrays into an iterator of u64 arrays.
+    /// Convert an iterator of field element arrays into an iterator of u64 arrays.
     ///
-    /// Converts an element `[F; N]` into the byte array `[[u64; N]; NUM_BYTES/8]`. This is
+    /// Converts an element `[F; N]` into the u64 array `[[u64; N]; NUM_BYTES/8]`. This is
     /// intended for use with vectorized hash functions which use vector operations
     /// to compute several hashes in parallel.
     ///
-    /// This function is guaranteed to be equivalent to starting with `Iterator<[F; N]>` performing a "transpose"
+    /// This function is guaranteed to be equivalent to starting with `Iterator<[F; N]>` performing a transpose
     /// operation to get `[Iterator<F>; N]`, calling `into_u64_stream` on each element to get `[Iterator<u64>; N]` and then
-    /// performing another "transpose" operation to get `Iterator<[u64; N]>`.
+    /// performing another transpose operation to get `Iterator<[u64; N]>`.
     ///
     /// If `NUM_BYTES` does not divide `8`, multiple `[F; N]`s may be packed together to make a single `[u64; N]`. Furthermore,
     /// if `NUM_BYTES * input.len()` does not divide `8`, the final `[u64; N]` will involve padding bytes which are set to `0`.

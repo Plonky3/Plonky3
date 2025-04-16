@@ -319,7 +319,10 @@ where
 /// Calling this when the content is not yet fully initialized causes undefined
 /// behavior: it is up to the caller to guarantee that every `MaybeUninit<T>` in
 /// the slice really is in an initialized state.
-// #[unstable(feature = "maybe_uninit_slice", issue = "63569")]
+///
+/// Copied from:
+/// https://doc.rust-lang.org/std/primitive.slice.html#method.assume_init_ref
+/// Once that is stabilized, this should be removed.
 #[inline(always)]
 pub const unsafe fn assume_init_ref<T>(slice: &[MaybeUninit<T>]) -> &[T] {
     // SAFETY: casting `slice` to a `*const [T]` is safe since the caller guarantees that
@@ -352,7 +355,7 @@ where
 }
 
 /// Pulls `N` items from `iter` and returns them as an array. If the iterator
-/// yields fewer than `N` items (but more than `0`), pads by default values and returns.
+/// yields fewer than `N` items (but more than `0`), pads by the given default value.
 ///
 /// Since the iterator is passed as a mutable reference and this function calls
 /// `next` at most `N` times, the iterator can still be used afterwards to
@@ -363,7 +366,7 @@ where
 #[inline]
 fn iter_next_chunk_padded<T: Copy, const N: usize>(
     iter: &mut impl Iterator<Item = T>,
-    default: T,
+    default: T, // Needed due to [T; M] not always implementing Default. Can probably be dropped if const generics stabilize.
 ) -> Option<[T; N]> {
     let (mut arr, n) = iter_next_chunk_erased::<N, _>(iter);
     (n != 0).then(|| {
@@ -376,11 +379,15 @@ fn iter_next_chunk_padded<T: Copy, const N: usize>(
 /// Returns an iterator over `N` elements of the iterator at a time.
 ///
 /// The chunks do not overlap. If `N` does not divide the length of the
-/// iterator, then the last `N-1` elements will be padded with default values.
+/// iterator, then the last `N-1` elements will be padded with the given default value.
+///
+/// This is essentially a copy pasted version of the nightly `array_chunks` function.
+/// https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.array_chunks
+/// Once that is stabilized this and the functions above it should be removed.
 #[inline]
 pub fn iter_array_chunks_padded<T: Copy, const N: usize>(
     iter: impl IntoIterator<Item = T>,
-    default: T,
+    default: T, // Needed due to [T; M] not always implementing Default. Can probably be dropped if const generics stabilize.
 ) -> impl Iterator<Item = [T; N]> {
     let mut iter = iter.into_iter();
     iter::from_fn(move || iter_next_chunk_padded(&mut iter, default))

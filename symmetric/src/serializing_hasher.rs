@@ -105,7 +105,8 @@ mod tests {
     use core::array;
 
     use p3_koala_bear::KoalaBear;
-    use p3_symmetric::{CryptographicHasher, SerializingHasher};
+
+    use crate::{CryptographicHasher, SerializingHasher};
 
     #[derive(Clone)]
     struct MockHasher;

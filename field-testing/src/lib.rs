@@ -862,7 +862,7 @@ macro_rules! test_prime_field_32 {
     ($field:ty, $zeros: expr, $ones: expr) => {
         mod from_integer_tests_prime_field_32 {
             use p3_field::integers::QuotientMap;
-            use p3_field::{Field, PrimeCharacteristicRing, PrimeField32};
+            use p3_field::{Field, PrimeCharacteristicRing, PrimeField32, PrimeField64};
             use rand::rngs::SmallRng;
             use rand::{Rng, SeedableRng};
 
@@ -874,9 +874,11 @@ macro_rules! test_prime_field_32 {
 
                 for zero in $zeros {
                     assert_eq!(zero.as_canonical_u32(), 0);
+                    assert_eq!(zero.to_unique_u32() as u64, zero.to_unique_u64());
                 }
                 for one in $ones {
                     assert_eq!(one.as_canonical_u32(), 1);
+                    assert_eq!(one.to_unique_u32() as u64, one.to_unique_u64());
                 }
                 assert_eq!(<$field>::TWO.as_canonical_u32(), 2 % <$field>::ORDER_U32);
                 assert_eq!(
@@ -888,6 +890,10 @@ macro_rules! test_prime_field_32 {
                     0
                 );
                 assert_eq!(<$field>::from_int(x).as_canonical_u32(), x_mod_order);
+                assert_eq!(
+                    <$field>::from_int(x).to_unique_u32() as u64,
+                    <$field>::from_int(x).to_unique_u64()
+                );
                 assert_eq!(
                     unsafe { <$field>::from_canonical_unchecked(x_mod_order).as_canonical_u32() },
                     x_mod_order
