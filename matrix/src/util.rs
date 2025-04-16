@@ -74,7 +74,6 @@ pub fn swap_rows<F: Clone + Send + Sync>(mat: &mut RowMajorMatrix<F>, i: usize, 
 /// Swap two rows `i` and `j` in-place using raw pointer access.
 ///
 /// This function is equivalent to [`swap_rows`] but uses unsafe raw pointer math for better performance.
-/// It swaps two disjoint slices of length `w` each, corresponding to the `i`-th and `j`-th rows.
 ///
 /// # Safety
 /// - The caller must ensure `i < j < h`, where `h` is the height of the matrix.
