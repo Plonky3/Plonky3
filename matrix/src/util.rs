@@ -41,12 +41,13 @@ where
     let w = mat.width();
     let h = mat.height();
     let log_h = log2_strict_usize(h);
-    let ptr = mat.values.borrow_mut().as_mut_ptr();
+    let values = mat.values.borrow_mut().as_mut_ptr() as usize;
 
     (0..h).into_par_iter().for_each(|i| {
+        let values = values as *mut F;
         let j = reverse_bits_len(i, log_h);
         if i < j {
-            unsafe { swap_rows_raw(ptr, w, i, j) };
+            unsafe { swap_rows_raw(values, w, i, j) };
         }
     });
 }
