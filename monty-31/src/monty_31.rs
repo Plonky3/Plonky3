@@ -36,8 +36,8 @@ pub struct MontyField31<MP: MontyParameters> {
 }
 
 impl<MP: MontyParameters> MontyField31<MP> {
-    /// The standard way to crate a new element.
-    /// Note that new converts the input into MONTY form so should be avoided in performance critical implementations.
+    /// The standard way to create a new element.
+    /// Note that `new` converts the input into MONTY form so should be avoided in performance critical implementations.
     #[inline(always)]
     pub const fn new(value: u32) -> Self {
         Self {
@@ -451,7 +451,7 @@ impl<FP: FieldParameters> QuotientMap<i128> for MontyField31<FP> {
 
 impl<FP: FieldParameters> PrimeField for MontyField31<FP> {
     fn as_canonical_biguint(&self) -> BigUint {
-        <Self as PrimeField32>::as_canonical_u32(self).into()
+        self.as_canonical_u32().into()
     }
 }
 
