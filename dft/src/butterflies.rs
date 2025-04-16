@@ -150,9 +150,11 @@ impl<F: Field> Butterfly<F> for DitButterfly<F> {
 /// It works for either DIT or DIF, and is often used at
 /// the final or base level of a transform tree.
 ///
-/// Computes:
-///   - `output_1 = x1 + x2`
-///   - `output_2 = x1 - x2`
+/// This butterfly computes:
+/// ```text
+///   - output_1 = x1 + x2
+///   - output_2 = x1 - x2
+/// ```
 #[derive(Copy, Clone)]
 pub struct TwiddleFreeButterfly;
 
