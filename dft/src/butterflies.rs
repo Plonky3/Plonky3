@@ -68,8 +68,7 @@ pub trait Butterfly<F: Field>: Copy + Send + Sync {
     /// result of each butterfly to separate destination slices (which may
     /// be uninitialized memory).
     ///
-    /// This is useful in recursive NTT implementations that alternate between
-    /// source and destination buffers at each layer.
+    /// This is useful when performing LDE's where the size of the output is larger than the size of the input.
     ///
     /// - `src_1`, `src_2`: input slices
     /// - `dst_1`, `dst_2`: output slices to write to (must be MaybeUninit)
