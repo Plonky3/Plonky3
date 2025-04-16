@@ -86,7 +86,7 @@ pub fn swap_rows<F: Clone + Send + Sync>(mat: &mut RowMajorMatrix<F>, i: usize, 
 /// - `w`: The matrix width (number of columns).
 /// - `i`: The first row index.
 /// - `j`: The second row index.
-pub(crate) unsafe fn swap_rows_raw<F>(mat: *mut F, w: usize, i: usize, j: usize) {
+unsafe fn swap_rows_raw<F>(mat: *mut F, w: usize, i: usize, j: usize) {
     unsafe {
         let row_i = core::slice::from_raw_parts_mut(mat.add(i * w), w);
         let row_j = core::slice::from_raw_parts_mut(mat.add(j * w), w);
