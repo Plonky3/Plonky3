@@ -4,8 +4,8 @@ use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
-use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use p3_util::flatten_to_base;
 
 use num_bigint::BigUint;
 use p3_field::exponentiation::exp_1717986917;
@@ -25,7 +25,7 @@ const P: u32 = (1 << 31) - 1;
 
 /// The prime field `F_p` where `p = 2^31 - 1`.
 #[derive(Copy, Clone, Default)]
-#[repr(transparent)] // Packed field implementations rely on this!
+#[repr(transparent)] // Important for reasoning about memory layout.
 pub struct Mersenne31 {
     /// Not necessarily canonical, but must fit in 31 bits.
     pub(crate) value: u32,
@@ -199,8 +199,10 @@ impl PrimeCharacteristicRing for Mersenne31 {
 
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
-        // SAFETY: repr(transparent) ensures transmutation safety.
-        unsafe { transmute(vec![0u32; len]) }
+        // SAFETY:
+        // Due to repr transparent, the memory layout of Mersenne31 is the same as u32.
+        // Hence this will create Mersenne31 elements with value set to 0.
+        unsafe { flatten_to_base(vec![0u32; len]) }
     }
 }
 
