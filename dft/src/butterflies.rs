@@ -107,10 +107,10 @@ pub trait Butterfly<F: Field>: Copy + Send + Sync {
 ///
 /// Used in the *output-ordering* variant of NTT.
 /// This butterfly computes:
-///
+/// ```text
 ///   output_1 = x1 + x2
 ///   output_2 = (x1 - x2) * twiddle
-///
+/// ```
 /// The twiddle factor is applied after subtraction.
 /// Suitable for DIF-style recursive transforms.
 #[derive(Copy, Clone)]
