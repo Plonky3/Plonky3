@@ -77,7 +77,7 @@ pub fn swap_rows<F: Clone + Send + Sync>(mat: &mut RowMajorMatrix<F>, i: usize, 
 ///
 /// # Safety
 /// - The caller must ensure `i < j < h`, where `h` is the height of the matrix.
-/// - The pointer must be valid and properly aligned for at least `max(i, j) * w + w` elements.
+/// - The pointer must point to a vector corresponding to a matrix of width `w`.
 ///
 /// # Arguments
 /// - `mat`: A mutable pointer to the underlying matrix data.
