@@ -26,10 +26,11 @@ pub trait Butterfly<F: Field>: Copy + Send + Sync {
     ///
     /// This method takes two inputs `x_1` and `x_2` and returns two outputs `(y_1, y_2)`
     /// depending on the butterfly type.
-    ///
+    /// ```text
     /// Example (DIF):
     ///   Input:  x_1 = a, x_2 = b
     ///   Output: (a + b, (a - b) * twiddle)
+    /// ```
     fn apply<PF: PackedField<Scalar = F>>(&self, x_1: PF, x_2: PF) -> (PF, PF);
 
     /// Applies the butterfly in-place to two packed values.
