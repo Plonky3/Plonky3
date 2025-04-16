@@ -6,7 +6,7 @@ use crate::batch_inverse::batch_multiplicative_inverse_general;
 use crate::{Algebra, Field, PackedValue, PrimeCharacteristicRing};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(transparent)] // This needed to make `transmute`s safe.
+#[repr(transparent)] // Needed to make `transmute`s safe.
 pub struct FieldArray<F: Field, const N: usize>(pub [F; N]);
 
 impl<F: Field, const N: usize> FieldArray<F, N> {

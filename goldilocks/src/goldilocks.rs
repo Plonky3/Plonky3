@@ -4,7 +4,6 @@ use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
-use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
@@ -15,7 +14,7 @@ use p3_field::{
     PrimeField64, TwoAdicField, halve_u64, quotient_map_large_iint, quotient_map_large_uint,
     quotient_map_small_int,
 };
-use p3_util::{assume, branch_hint};
+use p3_util::{assume, branch_hint, flatten_to_base};
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
@@ -27,7 +26,7 @@ const P: u64 = 0xFFFF_FFFF_0000_0001;
 ///
 /// Note that the safety of deriving `Serialize` and `Deserialize` relies on the fact that the internal value can be any u64.
 #[derive(Copy, Clone, Default, Serialize, Deserialize)]
-#[repr(transparent)] // Packed field implementations rely on this!
+#[repr(transparent)] // Important for reasoning about memory layout
 pub struct Goldilocks {
     /// Not necessarily canonical.
     pub(crate) value: u64,
@@ -182,8 +181,11 @@ impl PrimeCharacteristicRing for Goldilocks {
 
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
-        // SAFETY: repr(transparent) ensures transmutation safety.
-        unsafe { transmute(vec![0u64; len]) }
+        // SAFETY:
+        // Due to `#[repr(transparent)]`, Goldilocks and u64 have the same size, alignment
+        // and memory layout making `flatten_to_base` safe. This this will create
+        // a vector Goldilocks elements with value set to 0.
+        unsafe { flatten_to_base(vec![0u64; len]) }
     }
 }
 
@@ -593,6 +595,7 @@ unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use p3_field::extension::BinomialExtensionField;
     use p3_field_testing::{
         test_field, test_field_dft, test_prime_field, test_prime_field_64, test_two_adic_field,
     };
@@ -600,6 +603,7 @@ mod tests {
     use super::*;
 
     type F = Goldilocks;
+    type EF = BinomialExtensionField<F, 5>;
 
     #[test]
     fn test_goldilocks() {
@@ -668,11 +672,17 @@ mod tests {
     test_prime_field_64!(crate::Goldilocks);
     test_two_adic_field!(crate::Goldilocks);
 
-    test_field_dft!(radix2dit, crate::Goldilocks, p3_dft::Radix2Dit<_>);
-    test_field_dft!(bowers, crate::Goldilocks, p3_dft::Radix2Bowers);
+    test_field_dft!(
+        radix2dit,
+        crate::Goldilocks,
+        super::EF,
+        p3_dft::Radix2Dit<_>
+    );
+    test_field_dft!(bowers, crate::Goldilocks, super::EF, p3_dft::Radix2Bowers);
     test_field_dft!(
         parallel,
         crate::Goldilocks,
+        super::EF,
         p3_dft::Radix2DitParallel<crate::Goldilocks>
     );
 }

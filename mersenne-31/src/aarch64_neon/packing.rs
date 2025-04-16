@@ -9,7 +9,7 @@ use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
     PermutationMonomial, PrimeCharacteristicRing,
 };
-use p3_util::convert_vec;
+use p3_util::reconstitute_from_base;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 
@@ -20,7 +20,7 @@ const P: uint32x4_t = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH])
 
 /// Vectorized NEON implementation of `Mersenne31` arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(transparent)] // This needed to make `transmute`s safe.
+#[repr(transparent)] // Needed to make `transmute`s safe.
 pub struct PackedMersenne31Neon(pub [Mersenne31; WIDTH]);
 
 impl PackedMersenne31Neon {
@@ -328,7 +328,7 @@ impl PrimeCharacteristicRing for PackedMersenne31Neon {
     #[inline(always)]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { convert_vec(Mersenne31::zero_vec(len * WIDTH)) }
+        unsafe { reconstitute_from_base(Mersenne31::zero_vec(len * WIDTH)) }
     }
 }
 
