@@ -10,11 +10,11 @@ use p3_field::{Field, PackedField, PackedValue};
 ///
 /// In an NTT, butterflies are the core units that recursively combine values
 /// across layers. Each butterfly computes:
-///
+/// ```text
 ///   (a + b * twiddle, a - b * twiddle)   // DIT
 /// or
 ///   (a + b, (a - b) * twiddle)           // DIF
-///
+/// ```
 /// The transformation can be applied:
 /// - in-place (mutating input values)
 /// - to full rows of values (arrays of field elements)
