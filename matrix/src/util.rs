@@ -43,6 +43,10 @@ where
     let log_h = log2_strict_usize(h);
     let values = mat.values.borrow_mut().as_mut_ptr() as usize;
 
+    // SAFETY: Due to the i < j check, we are guaranteed that `swap_rows_raw
+    // will never try and access a particular slice of data more than once
+    // across all parallel threads. Hence the following code is safe and does
+    // not trigger undefined behaviour.
     (0..h).into_par_iter().for_each(|i| {
         let values = values as *mut F;
         let j = reverse_bits_len(i, log_h);
