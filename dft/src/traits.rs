@@ -25,8 +25,19 @@ use crate::util::{coset_shift_cols, divide_by_height};
 /// parallel feature) different implementation may be faster. Hence depending on your use case
 /// you may want to be using `Radix2Dit, Radix2DitParallel, RecursiveDft` or `Radix2Bowers`.
 pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
-    // Effectively this is either RowMajorMatrix or BitReversedMatrixView<RowMajorMatrix>.
-    // Always owned.
+    /// The matrix type used to store the result of a batched DFT operation.
+    ///
+    /// This type represents a columnar matrix of field elements, typically used
+    /// to hold the evaluation results of multiple polynomials over a two-adic subgroup
+    /// or its coset. It is always owned and supports efficient access and transformation
+    /// patterns used in FFT-based algorithms.
+    ///
+    /// Most implementations use `RowMajorMatrix<F>` or a wrapper like
+    /// `BitReversedMatrixView<RowMajorMatrix<F>>` to allow in-place bit-reversed access.
+    ///
+    /// Requirements:
+    /// - Must support bit-reversed indexing (`BitReversibleMatrix`).
+    /// - Must own its data (`'static` lifetime).
     type Evaluations: BitReversibleMatrix<F> + 'static;
 
     /// Compute the discrete Fourier transform (DFT) of `vec`.
