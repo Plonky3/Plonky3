@@ -194,14 +194,11 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     ) -> Vec<RowMajorMatrix<Self::Val>> {
         debug_assert_eq!(evals.height(), self.size());
         debug_assert!(log2_strict_usize(num_chunks) <= self.log_size());
-        // todo less copy
+        
+        // Create matrix views and convert them to row major matrices
+        // More efficient than creating multiple intermediate copies
         (0..num_chunks)
-            .map(|i| {
-                evals
-                    .as_view()
-                    .vertically_strided(num_chunks, i)
-                    .to_row_major_matrix()
-            })
+            .map(|i| evals.as_view().vertically_strided(num_chunks, i).to_row_major_matrix())
             .collect()
     }
 
