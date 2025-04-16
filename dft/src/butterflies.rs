@@ -144,7 +144,7 @@ impl<F: Field> Butterfly<F> for DitButterfly<F> {
     }
 }
 
-/// Butterfly with no twiddle factor (twiddle = 1).
+/// Butterfly with no twiddle factor (`twiddle = 1`).
 ///
 /// This is used when no root-of-unity scaling is needed.
 /// It works for either DIT or DIF, and is often used at
