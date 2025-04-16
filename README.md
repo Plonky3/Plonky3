@@ -3,9 +3,9 @@
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/Plonky3/Plonky3/blob/main/LICENSE-MIT)
 [![License](https://img.shields.io/github/license/Plonky3/Plonky3)](https://github.com/Plonky3/Plonky3/blob/main/LICENSE-APACHE)
 
-Plonky3 is a toolkit for implementing polynomial IOPs (PIOPs), such as PLONK and STARKs. It aims to support several polynomial commitment schemes, such as Brakedown.
+Plonky3 is a toolkit which provides a set of primitives, such as polynomial commitment schemes, for implementing polynomial IOPs (PIOPs). It is mainly used to power STARK-based zkVMs, though in principle it may be used for PLONK-based circuits or other PIOPs.
 
-This is the "core" repo, but the plan is to move each crate into its own repo once APIs stabilize.
+For questions or discussions, please use the Telegram group, [t.me/plonky3](https://t.me/plonky3).
 
 
 ## Status
