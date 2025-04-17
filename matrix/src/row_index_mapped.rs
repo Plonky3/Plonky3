@@ -63,6 +63,8 @@ impl<T: Send + Sync, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
     }
 
     fn get(&self, r: usize, c: usize) -> Option<T> {
+        // Need to check r < self.height() as `map_row_index` can return anything when given something
+        // out of the range `0..self.height()`.
         (r < self.height() && c < self.width())
             .then(|| unsafe { self.inner.get_unchecked(self.index_map.map_row_index(r), c) })
     }
@@ -80,7 +82,12 @@ impl<T: Send + Sync, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         &self,
         r: usize,
     ) -> Option<impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync>> {
-        self.inner.row(self.index_map.map_row_index(r))
+        // Need to check r < self.height() as `map_row_index` can return anything when given something
+        // out of the range `0..self.height()`.
+        (r < self.height()).then(|| unsafe {
+            // Safety: We just checked that r < self.height().
+            self.inner.row_unchecked(self.index_map.map_row_index(r))
+        })
     }
 
     unsafe fn row_unchecked(
@@ -107,7 +114,13 @@ impl<T: Send + Sync, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
     }
 
     fn row_slice(&self, r: usize) -> Option<impl Deref<Target = [T]>> {
-        self.inner.row_slice(self.index_map.map_row_index(r))
+        // Need to check r < self.height() as `map_row_index` can return anything when given something
+        // out of the range `0..self.height()`.
+        (r < self.height()).then(|| unsafe {
+            // Safety: We just checked that r < self.height().
+            self.inner
+                .row_slice_unchecked(self.index_map.map_row_index(r))
+        })
     }
 
     unsafe fn row_slice_unchecked(&self, r: usize) -> impl Deref<Target = [T]> {
@@ -203,6 +216,19 @@ mod tests {
 
         fn map_row_index(&self, r: usize) -> usize {
             self.0 - 1 - r
+        }
+    }
+
+    /// A final Mock implementation of RowIndexMap
+    struct ConstantMap;
+
+    impl RowIndexMap for ConstantMap {
+        fn height(&self) -> usize {
+            1
+        }
+
+        fn map_row_index(&self, _r: usize) -> usize {
+            0
         }
     }
 
@@ -401,6 +427,9 @@ mod tests {
                 vec![10, 20]
             ); // was row 0
         }
+
+        assert!(mapped_view.row(2).is_none()); // Height out of bounds.
+        assert!(mapped_view.row_slice(2).is_none()); // Height out of bounds.
     }
 
     #[test]
@@ -419,6 +448,29 @@ mod tests {
         // Attempt to access out-of-bounds row (index 2). Should panic.
         assert_eq!(mapped_view.get(2, 1), None);
         assert!(mapped_view.row(5).is_none());
+        assert!(mapped_view.row_slice(11).is_none());
         assert_eq!(mapped_view.get(0, 20), None);
+    }
+
+    #[test]
+    fn test_out_of_bounds_access_with_bad_map() {
+        // Create a 2x2 matrix:
+        // [ 1  2 ]
+        // [ 3  4 ]
+        let inner = RowMajorMatrix::new(vec![1, 2, 3, 4], 4);
+
+        // Use identity mapping.
+        let mapped_view = RowIndexMappedView {
+            index_map: ConstantMap,
+            inner,
+        };
+
+        assert_eq!(mapped_view.get(0, 2), Some(3));
+
+        // Attempt to access out-of-bounds row (index 1). Should panic.
+        assert_eq!(mapped_view.get(1, 0), None);
+        assert!(mapped_view.row(1).is_none());
+        assert!(mapped_view.row_slice(1).is_none());
+        
     }
 }

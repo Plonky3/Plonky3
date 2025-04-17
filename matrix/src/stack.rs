@@ -59,6 +59,17 @@ impl<T: Send + Sync, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
         }
     }
 
+    unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height() and c < self.width()
+            if r < self.first.height() {
+                self.first.get_unchecked(r, c)
+            } else {
+                self.second.get_unchecked(r - self.first.height(), c)
+            }
+        }
+    }
+
     fn row(
         &self,
         r: usize,
@@ -306,6 +317,11 @@ mod tests {
             assert_eq!(vertical.row_slice_unchecked(3).deref(), &[7, 8]);
             assert_eq!(vertical.row_subslice_unchecked(1, 1, 2).deref(), &[4]);
         }
+
+        assert_eq!(vertical.get(0, 2), None); // Width out of bounds
+        assert_eq!(vertical.get(4, 0), None); // Height out of bounds
+        assert!(vertical.row(4).is_none()); // Height out of bounds
+        assert!(vertical.row_slice(4).is_none()); // Height out of bounds
     }
 
     #[test]
@@ -336,6 +352,10 @@ mod tests {
             let row = horizontal.row_unchecked(1).into_iter().collect_vec();
             assert_eq!(row, vec![3, 4, 7, 8]);
         }
+
+        assert_eq!(horizontal.get(0, 4), None); // Width out of bounds
+        assert_eq!(horizontal.get(2, 0), None); // Height out of bounds
+        assert!(horizontal.row(2).is_none()); // Height out of bounds
     }
 
     #[test]
