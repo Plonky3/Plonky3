@@ -18,7 +18,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{
-    CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32, TruncatedPermutation,
+    CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
 };
 use p3_uni_stark::{StarkConfig, StarkGenericConfig, Val, prove, verify};
 use rand::distr::{Distribution, StandardUniform};
@@ -255,7 +255,7 @@ fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     type Challenge = BinomialExtensionField<Val, 3>;
 
     type ByteHash = Keccak256Hash;
-    type FieldHash = SerializingHasher32<ByteHash>;
+    type FieldHash = SerializingHasher<ByteHash>;
     let byte_hash = ByteHash {};
     let field_hash = FieldHash::new(byte_hash);
 

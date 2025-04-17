@@ -1,18 +1,18 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::{array, fmt, iter};
 
 use num_bigint::BigUint;
 use p3_field::exponentiation::exp_1717986917;
 use p3_field::integers::QuotientMap;
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField32, PrimeField64, halve_u32, quotient_map_large_iint, quotient_map_large_uint,
-    quotient_map_small_int,
+    PrimeField32, PrimeField64, RawDataSerializable, halve_u32, impl_raw_serializable_primefield32,
+    quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int,
 };
 use p3_util::flatten_to_base;
 use rand::Rng;
@@ -144,6 +144,10 @@ impl<'a> Deserialize<'a> for Mersenne31 {
             Err(D::Error::custom("Value is out of range"))
         }
     }
+}
+
+impl RawDataSerializable for Mersenne31 {
+    impl_raw_serializable_primefield32!();
 }
 
 impl PrimeCharacteristicRing for Mersenne31 {
@@ -589,6 +593,6 @@ mod tests {
         &super::multiplicative_group_prime_factorization()
     );
     test_prime_field!(crate::Mersenne31);
-    test_prime_field_64!(crate::Mersenne31);
-    test_prime_field_32!(crate::Mersenne31);
+    test_prime_field_64!(crate::Mersenne31, &super::ZEROS, &super::ONES);
+    test_prime_field_32!(crate::Mersenne31, &super::ZEROS, &super::ONES);
 }

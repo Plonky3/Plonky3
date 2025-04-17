@@ -1,18 +1,18 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::{array, fmt};
 
 use num_bigint::BigUint;
 use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::integers::QuotientMap;
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField64, TwoAdicField, halve_u64, quotient_map_large_iint, quotient_map_large_uint,
-    quotient_map_small_int,
+    PrimeField64, RawDataSerializable, TwoAdicField, halve_u64, impl_raw_serializable_primefield64,
+    quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int,
 };
 use p3_util::{assume, branch_hint, flatten_to_base};
 use rand::Rng;
@@ -201,6 +201,10 @@ impl PermutationMonomial<7> for Goldilocks {
     fn injective_exp_root_n(&self) -> Self {
         exp_10540996611094048183(*self)
     }
+}
+
+impl RawDataSerializable for Goldilocks {
+    impl_raw_serializable_primefield64!();
 }
 
 impl Field for Goldilocks {
@@ -669,7 +673,7 @@ mod tests {
         &super::multiplicative_group_prime_factorization()
     );
     test_prime_field!(crate::Goldilocks);
-    test_prime_field_64!(crate::Goldilocks);
+    test_prime_field_64!(crate::Goldilocks, &super::ZEROS, &super::ONES);
     test_two_adic_field!(crate::Goldilocks);
 
     test_field_dft!(

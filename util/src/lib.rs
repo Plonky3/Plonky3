@@ -10,6 +10,7 @@ use alloc::vec::Vec;
 use core::any::type_name;
 use core::hint::unreachable_unchecked;
 use core::mem::{ManuallyDrop, MaybeUninit};
+use core::{iter, mem};
 
 use crate::transpose::transpose_in_place_square;
 
@@ -284,37 +285,51 @@ pub fn pretty_name<T>() -> String {
 /// A C-style buffered input reader, similar to
 /// `core::iter::Iterator::next_chunk()` from nightly.
 ///
-/// Unsafe because the returned array may contain uninitialised
-/// elements.
+/// Returns an array of `MaybeUninit<T>` and the number of items in the
+/// array which have been correctly initialized.
 #[inline]
-unsafe fn iter_next_chunk<const BUFLEN: usize, I: Iterator>(
+fn iter_next_chunk_erased<const BUFLEN: usize, I: Iterator>(
     iter: &mut I,
-) -> ([I::Item; BUFLEN], usize)
+) -> ([MaybeUninit<I::Item>; BUFLEN], usize)
 where
     I::Item: Copy,
 {
-    let mut buf = unsafe {
-        let t = [const { MaybeUninit::<I::Item>::uninit() }; BUFLEN];
-        // We are forced to use `transmute_copy` here instead of
-        // `transmute` because `BUFLEN` is a const generic parameter.
-        // The compiler *should* be smart enough not to emit a copy though.
-        core::mem::transmute_copy::<_, [I::Item; BUFLEN]>(&t)
-    };
+    let mut buf = [const { MaybeUninit::<I::Item>::uninit() }; BUFLEN];
     let mut i = 0;
 
-    // Read BUFLEN values from `iter` into `buf` at a time.
-    for c in iter {
-        // Copy the next Item into `buf`.
-        unsafe {
-            *buf.get_unchecked_mut(i) = c;
-            i = i.unchecked_add(1);
-        }
-        // If `buf` is full
-        if i == BUFLEN {
+    while i < BUFLEN {
+        if let Some(c) = iter.next() {
+            // Copy the next Item into `buf`.
+            unsafe {
+                buf.get_unchecked_mut(i).write(c);
+                i = i.unchecked_add(1);
+            }
+        } else {
+            // No more items in the iterator.
             break;
         }
     }
     (buf, i)
+}
+
+/// Gets a shared reference to the contained value.
+///
+/// # Safety
+///
+/// Calling this when the content is not yet fully initialized causes undefined
+/// behavior: it is up to the caller to guarantee that every `MaybeUninit<T>` in
+/// the slice really is in an initialized state.
+///
+/// Copied from:
+/// https://doc.rust-lang.org/std/primitive.slice.html#method.assume_init_ref
+/// Once that is stabilized, this should be removed.
+#[inline(always)]
+pub const unsafe fn assume_init_ref<T>(slice: &[MaybeUninit<T>]) -> &[T] {
+    // SAFETY: casting `slice` to a `*const [T]` is safe since the caller guarantees that
+    // `slice` is initialized, and `MaybeUninit` is guaranteed to have the same layout as `T`.
+    // The pointer obtained is valid since it refers to memory owned by `slice` which is a
+    // reference and thus guaranteed to be valid for reads.
+    unsafe { &*(slice as *const [MaybeUninit<T>] as *const [T]) }
 }
 
 /// Split an iterator into small arrays and apply `func` to each.
@@ -331,12 +346,51 @@ where
 {
     let mut iter = input.into_iter();
     loop {
-        let (buf, n) = unsafe { iter_next_chunk::<BUFLEN, _>(&mut iter) };
+        let (buf, n) = iter_next_chunk_erased::<BUFLEN, _>(&mut iter);
         if n == 0 {
             break;
         }
-        func(unsafe { buf.get_unchecked(..n) });
+        func(unsafe { assume_init_ref(buf.get_unchecked(..n)) });
     }
+}
+
+/// Pulls `N` items from `iter` and returns them as an array. If the iterator
+/// yields fewer than `N` items (but more than `0`), pads by the given default value.
+///
+/// Since the iterator is passed as a mutable reference and this function calls
+/// `next` at most `N` times, the iterator can still be used afterwards to
+/// retrieve the remaining items.
+///
+/// If `iter.next()` panics, all items already yielded by the iterator are
+/// dropped.
+#[inline]
+fn iter_next_chunk_padded<T: Copy, const N: usize>(
+    iter: &mut impl Iterator<Item = T>,
+    default: T, // Needed due to [T; M] not always implementing Default. Can probably be dropped if const generics stabilize.
+) -> Option<[T; N]> {
+    let (mut arr, n) = iter_next_chunk_erased::<N, _>(iter);
+    (n != 0).then(|| {
+        // Fill the rest of the array with default values.
+        arr[n..].fill(MaybeUninit::new(default));
+        unsafe { mem::transmute_copy::<_, [T; N]>(&arr) }
+    })
+}
+
+/// Returns an iterator over `N` elements of the iterator at a time.
+///
+/// The chunks do not overlap. If `N` does not divide the length of the
+/// iterator, then the last `N-1` elements will be padded with the given default value.
+///
+/// This is essentially a copy pasted version of the nightly `array_chunks` function.
+/// https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.array_chunks
+/// Once that is stabilized this and the functions above it should be removed.
+#[inline]
+pub fn iter_array_chunks_padded<T: Copy, const N: usize>(
+    iter: impl IntoIterator<Item = T>,
+    default: T, // Needed due to [T; M] not always implementing Default. Can probably be dropped if const generics stabilize.
+) -> impl Iterator<Item = [T; N]> {
+    let mut iter = iter.into_iter();
+    iter::from_fn(move || iter_next_chunk_padded(&mut iter, default))
 }
 
 /// Convert a vector of `BaseArray` elements to a vector of `Base` elements without any

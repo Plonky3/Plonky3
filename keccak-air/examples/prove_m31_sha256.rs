@@ -10,7 +10,7 @@ use p3_keccak_air::{KeccakAir, generate_trace_rows};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_mersenne_31::Mersenne31;
 use p3_sha256::Sha256;
-use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
+use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
 use p3_uni_stark::{StarkConfig, prove, verify};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -36,7 +36,7 @@ fn main() -> Result<(), impl Debug> {
     type Challenge = BinomialExtensionField<Val, 3>;
 
     type ByteHash = Sha256;
-    type FieldHash = SerializingHasher32<ByteHash>;
+    type FieldHash = SerializingHasher<ByteHash>;
     let byte_hash = ByteHash {};
     let field_hash = FieldHash::new(Sha256);
 

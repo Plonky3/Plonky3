@@ -18,8 +18,8 @@ use super::{HasFrobenius, HasTwoAdicBinomialExtension, PackedBinomialExtensionFi
 use crate::extension::BinomiallyExtendable;
 use crate::field::Field;
 use crate::{
-    Algebra, BasedVectorSpace, ExtensionField, Packable, PrimeCharacteristicRing, TwoAdicField,
-    field_to_array,
+    Algebra, BasedVectorSpace, ExtensionField, Packable, PrimeCharacteristicRing,
+    RawDataSerializable, TwoAdicField, field_to_array,
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
@@ -221,6 +221,65 @@ where
 }
 
 impl<F: BinomiallyExtendable<D>, const D: usize> Algebra<F> for BinomialExtensionField<F, D> {}
+
+impl<F: BinomiallyExtendable<D>, const D: usize> RawDataSerializable
+    for BinomialExtensionField<F, D>
+{
+    const NUM_BYTES: usize = F::NUM_BYTES * D;
+
+    #[inline]
+    fn into_bytes(self) -> impl IntoIterator<Item = u8> {
+        self.value.into_iter().flat_map(|x| x.into_bytes())
+    }
+
+    #[inline]
+    fn into_byte_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u8> {
+        F::into_byte_stream(input.into_iter().flat_map(|x| x.value))
+    }
+
+    #[inline]
+    fn into_u32_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u32> {
+        F::into_u32_stream(input.into_iter().flat_map(|x| x.value))
+    }
+
+    #[inline]
+    fn into_u64_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u64> {
+        F::into_u64_stream(input.into_iter().flat_map(|x| x.value))
+    }
+
+    #[inline]
+    fn into_parallel_byte_streams<const N: usize>(
+        input: impl IntoIterator<Item = [Self; N]>,
+    ) -> impl IntoIterator<Item = [u8; N]> {
+        F::into_parallel_byte_streams(
+            input
+                .into_iter()
+                .flat_map(|x| (0..D).map(move |i| array::from_fn(|j| x[j].value[i]))),
+        )
+    }
+
+    #[inline]
+    fn into_parallel_u32_streams<const N: usize>(
+        input: impl IntoIterator<Item = [Self; N]>,
+    ) -> impl IntoIterator<Item = [u32; N]> {
+        F::into_parallel_u32_streams(
+            input
+                .into_iter()
+                .flat_map(|x| (0..D).map(move |i| array::from_fn(|j| x[j].value[i]))),
+        )
+    }
+
+    #[inline]
+    fn into_parallel_u64_streams<const N: usize>(
+        input: impl IntoIterator<Item = [Self; N]>,
+    ) -> impl IntoIterator<Item = [u64; N]> {
+        F::into_parallel_u64_streams(
+            input
+                .into_iter()
+                .flat_map(|x| (0..D).map(move |i| array::from_fn(|j| x[j].value[i]))),
+        )
+    }
+}
 
 impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionField<F, D> {
     type Packing = Self;
