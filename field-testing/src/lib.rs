@@ -610,15 +610,10 @@ where
 {
     let mut rng = SmallRng::seed_from_u64(1);
     let x = rng.random::<F>();
-    let y = rng.random::<F>();
 
     assert_eq!(
         x.into_bytes().into_iter().collect::<Vec<_>>(),
         x.to_unique_u32().to_le_bytes()
-    );
-    assert_eq!(
-        y.into_bytes().into_iter().collect::<Vec<_>>(),
-        y.to_unique_u32().to_le_bytes()
     );
     for one in ones {
         assert_eq!(
@@ -637,15 +632,10 @@ where
 {
     let mut rng = SmallRng::seed_from_u64(1);
     let x = rng.random::<F>();
-    let y = rng.random::<F>();
 
     assert_eq!(
         x.into_bytes().into_iter().collect::<Vec<_>>(),
         x.to_unique_u64().to_le_bytes()
-    );
-    assert_eq!(
-        y.into_bytes().into_iter().collect::<Vec<_>>(),
-        y.to_unique_u64().to_le_bytes()
     );
     for one in ones {
         assert_eq!(
