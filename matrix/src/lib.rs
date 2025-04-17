@@ -129,9 +129,10 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         )
     }
 
-    /// Returns packed and suffix iterators over the `r`-th row.
+    /// Get a packed iterator over the `r`-th row.
     ///
-    /// The row is split into `PackedValue` chunks and a tail suffix.
+    /// If the row length is not divisible by the packing width, the final elements
+    /// are returned as a base iterator with length `<= P::WIDTH - 1`.
     fn horizontally_packed_row<'a, P>(
         &'a self,
         r: usize,
