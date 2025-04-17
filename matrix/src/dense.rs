@@ -2,9 +2,9 @@ use alloc::borrow::Cow;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::borrow::{Borrow, BorrowMut};
+use core::iter;
 use core::marker::PhantomData;
 use core::ops::Deref;
-use core::{iter, slice};
 
 use p3_field::{ExtensionField, Field, PackedValue, scale_slice_in_place};
 use p3_maybe_rayon::prelude::*;
@@ -348,25 +348,87 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
     }
 
     #[inline]
-    fn get(&self, r: usize, c: usize) -> T {
-        self.values.borrow()[r * self.width + c].clone()
-    }
-
-    type Row<'a>
-        = iter::Cloned<slice::Iter<'a, T>>
-    where
-        Self: 'a;
-
-    #[inline]
-    fn row(&self, r: usize) -> Self::Row<'_> {
-        self.values.borrow()[r * self.width..(r + 1) * self.width]
-            .iter()
-            .cloned()
+    fn get(&self, r: usize, c: usize) -> Option<T> {
+        self.values.borrow().get(r * self.width + c).cloned()
     }
 
     #[inline]
-    fn row_slice(&self, r: usize) -> impl Deref<Target = [T]> {
-        &self.values.borrow()[r * self.width..(r + 1) * self.width]
+    unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
+        unsafe {
+            // Safety: It is up to the user to ensure that r < self.height() and c < self.width().
+            self.values
+                .borrow()
+                .get_unchecked(r * self.width + c)
+                .clone()
+        }
+    }
+
+    #[inline]
+    fn row(
+        &self,
+        r: usize,
+    ) -> Option<impl IntoIterator<Item = T, IntoIter = impl ParallelIterator<Item = T> + Send + Sync>>
+    {
+        (r < self.height()).then(|| unsafe {
+            // Safety: We know that the bounds are in the slice because of the previous check.
+            self.values
+                .borrow()
+                .get_unchecked(r * self.width..(r + 1) * self.width)
+                .iter()
+                .cloned()
+        })
+    }
+
+    #[inline]
+    unsafe fn row_unchecked(
+        &self,
+        r: usize,
+    ) -> impl IntoIterator<Item = T, IntoIter = impl ParallelIterator<Item = T> + Send + Sync> {
+        unsafe {
+            // Safety: It is up to the user to ensure that r < self.height().
+            self.values
+                .borrow()
+                .get_unchecked(r * self.width..(r + 1) * self.width)
+                .iter()
+                .cloned()
+        }
+    }
+
+    #[inline]
+    unsafe fn row_subset_unchecked(
+        &self,
+        r: usize,
+        start: usize,
+        end: usize,
+    ) -> impl IntoIterator<Item = T, IntoIter = impl ParallelIterator<Item = T> + Send + Sync> {
+        unsafe {
+            // Safety: It is up to the user to ensure that r < self.height(), start < end <= self.width().
+            // If end > self.width() this will return values from the next row.
+            self.values
+                .borrow()
+                .get_unchecked(r * self.width + start..r * self.width + end)
+                .iter()
+                .cloned()
+        }
+    }
+
+    #[inline]
+    fn row_slice(&self, r: usize) -> Option<impl Deref<Target = [T]>> {
+        (r < self.height()).then(|| unsafe {
+            // Safety: We know that the bounds are in the slice because of the previous check.
+            self.values
+                .borrow()
+                .get_unchecked(r * self.width..(r + 1) * self.width)
+        })
+    }
+
+    #[inline]
+    unsafe fn row_slice_unchecked(&self, r: usize) -> impl Deref<Target = [T]> {
+        unsafe {
+            self.values
+                .borrow()
+                .get_unchecked(r * self.width..(r + 1) * self.width)
+        }
     }
 
     fn to_row_major_matrix(self) -> RowMajorMatrix<T>
@@ -500,13 +562,18 @@ mod tests {
     }
 
     #[test]
-    fn test_get() {
+    fn test_get_and_get_unchecked() {
         let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
-        assert_eq!(matrix.get(0, 0), 1);
-        assert_eq!(matrix.get(1, 1), 4);
-        assert_eq!(matrix.get(2, 0), 5);
+        unsafe {
+            assert_eq!(matrix.get(0, 0), Some(matrix.get_unchecked(0, 0)));
+            assert_eq!(matrix.get(1, 1), Some(matrix.get_unchecked(1, 1)));
+            assert_eq!(matrix.get(2, 0), Some(matrix.get_unchecked(2, 0)));
+        }
+        assert_eq!(matrix.get(3, 0), None);
+        assert_eq!(matrix.get(0, 3), None);
     }
 
+    // TODO: Add more tests for other unsafe methods
     #[test]
     fn test_row_slice() {
         let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
