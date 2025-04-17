@@ -87,6 +87,9 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         Self: 'a;
 
     /// Returns an iterator over the elements of the `r`-th row.
+    ///
+    /// # Panics
+    /// Panics if `r >= height()`.
     fn row(&self, r: usize) -> Self::Row<'_>;
 
     /// Returns an iterator over all rows in the matrix.
