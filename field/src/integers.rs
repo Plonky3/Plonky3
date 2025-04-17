@@ -38,6 +38,8 @@ macro_rules! from_integer_types {
     };
 }
 
+pub(crate) use from_integer_types;
+
 /// Implementation of the quotient map `ℤ -> ℤ/p` which sends an integer `r` to its conjugacy class `[r]`.
 ///
 /// This is the key trait allowing us to convert integers into field elements. Each prime field
@@ -463,8 +465,143 @@ macro_rules! impl_u_i_size {
 impl_u_i_size!(usize, u8, u16, u32, u64, u128);
 impl_u_i_size!(isize, i8, i16, i32, i64, i128);
 
-// The only general type for which we do not provide a macro is for large signed integers.
-// This is because different field will usually want to handle large signed integers in
-// their own way.
-pub(crate) use from_integer_types;
-pub use {quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int};
+/// A simple macro which allows us to implement the `RawSerializable` trait for any 32-bit field.
+/// The field must implement PrimeField32.
+///
+/// This macro doesn't need any inputs as the implementation is identical for all 32-bit fields.
+#[macro_export]
+macro_rules! impl_raw_serializable_primefield32 {
+    () => {
+        const NUM_BYTES: usize = 4;
+
+        #[allow(refining_impl_trait)]
+        #[inline]
+        fn into_bytes(self) -> [u8; 4] {
+            self.to_unique_u32().to_le_bytes()
+        }
+
+        #[inline]
+        fn into_u32_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u32> {
+            // As every element is 32 bits, we can just convert the input to a unique u32.
+            input.into_iter().map(|x| x.to_unique_u32())
+        }
+
+        #[inline]
+        fn into_u64_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u64> {
+            let mut input = input.into_iter();
+            iter::from_fn(move || {
+                // If the first input.next() returns None, we return None.
+                let a = input.next()?;
+                // Otherwise we either pack 2 32 bit elements together if the iterator
+                // gives a second value or just cast the 32 bit element to 64 bits.
+                if let Some(b) = input.next() {
+                    Some(a.to_unique_u64() | b.to_unique_u64() << 32)
+                } else {
+                    Some(a.to_unique_u64())
+                }
+            })
+        }
+
+        #[inline]
+        fn into_parallel_byte_streams<const N: usize>(
+            input: impl IntoIterator<Item = [Self; N]>,
+        ) -> impl IntoIterator<Item = [u8; N]> {
+            input.into_iter().flat_map(|vector| {
+                let bytes = vector.map(|elem| elem.into_bytes());
+                (0..Self::NUM_BYTES).map(move |i| array::from_fn(|j| bytes[j][i]))
+            })
+        }
+
+        #[inline]
+        fn into_parallel_u32_streams<const N: usize>(
+            input: impl IntoIterator<Item = [Self; N]>,
+        ) -> impl IntoIterator<Item = [u32; N]> {
+            // As every element is 32 bits, we can just convert the input to a unique u32.
+            input.into_iter().map(|vec| vec.map(|x| x.to_unique_u32()))
+        }
+
+        #[inline]
+        fn into_parallel_u64_streams<const N: usize>(
+            input: impl IntoIterator<Item = [Self; N]>,
+        ) -> impl IntoIterator<Item = [u64; N]> {
+            let mut input = input.into_iter();
+            iter::from_fn(move || {
+                // If the first input.next() returns None, we return None.
+                let a = input.next()?;
+                // Otherwise we either pack pairs of 32 bit elements together if the iterator
+                // gives two arrays of or just cast the 32 bit elements to 64 bits.
+                if let Some(b) = input.next() {
+                    let ab = array::from_fn(|i| {
+                        let ai = a[i].to_unique_u64();
+                        let bi = b[i].to_unique_u64();
+                        ai | (bi << 32)
+                    });
+                    Some(ab)
+                } else {
+                    Some(a.map(|x| x.to_unique_u64()))
+                }
+            })
+        }
+    };
+}
+
+/// A simple macro which allows us to implement the `RawSerializable` trait for any 64-bit field.
+/// The field must implement PrimeField64 (and should not implement PrimeField32).
+///
+/// This macro doesn't need any inputs as the implementation is identical for all 64-bit fields.
+#[macro_export]
+macro_rules! impl_raw_serializable_primefield64 {
+    () => {
+        const NUM_BYTES: usize = 8;
+
+        #[allow(refining_impl_trait)]
+        #[inline]
+        fn into_bytes(self) -> [u8; 8] {
+            self.to_unique_u64().to_le_bytes()
+        }
+
+        #[inline]
+        fn into_u32_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u32> {
+            input.into_iter().flat_map(|x| {
+                let x_u64 = x.to_unique_u64();
+                [x_u64 as u32, (x_u64 >> 32) as u32]
+            })
+        }
+
+        #[inline]
+        fn into_u64_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u64> {
+            // As every element is 64 bits, we can just convert the input to a unique u64.
+            input.into_iter().map(|x| x.to_unique_u64())
+        }
+
+        #[inline]
+        fn into_parallel_byte_streams<const N: usize>(
+            input: impl IntoIterator<Item = [Self; N]>,
+        ) -> impl IntoIterator<Item = [u8; N]> {
+            input.into_iter().flat_map(|vector| {
+                let bytes = vector.map(|elem| elem.into_bytes());
+                (0..Self::NUM_BYTES).map(move |i| array::from_fn(|j| bytes[j][i]))
+            })
+        }
+
+        #[inline]
+        fn into_parallel_u32_streams<const N: usize>(
+            input: impl IntoIterator<Item = [Self; N]>,
+        ) -> impl IntoIterator<Item = [u32; N]> {
+            input.into_iter().flat_map(|vec| {
+                let vec_64 = vec.map(|x| x.to_unique_u64());
+                let vec_32_lo = vec_64.map(|x| x as u32);
+                let vec_32_hi = vec_64.map(|x| (x >> 32) as u32);
+                [vec_32_lo, vec_32_hi]
+            })
+        }
+
+        #[inline]
+        fn into_parallel_u64_streams<const N: usize>(
+            input: impl IntoIterator<Item = [Self; N]>,
+        ) -> impl IntoIterator<Item = [u64; N]> {
+            // As every element is 64 bits, we can just convert the input to a unique u64.
+            input.into_iter().map(|vec| vec.map(|x| x.to_unique_u64()))
+        }
+    };
+}

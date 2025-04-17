@@ -9,7 +9,7 @@ use p3_field::{ExtensionField, Field, PrimeField32, PrimeField64, TwoAdicField};
 use p3_fri::{TwoAdicFriPcs, create_benchmark_fri_config};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_mersenne_31::Mersenne31;
-use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHasher32To64};
+use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHasher};
 use p3_uni_stark::{Proof, StarkGenericConfig, prove, verify};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
@@ -25,7 +25,7 @@ use crate::types::{
 const fn get_keccak_mmcs<F: Field>() -> KeccakMerkleMmcs<F> {
     let u64_hash = PaddingFreeSponge::<KeccakF, 25, 17, 4>::new(KeccakF {});
 
-    let field_hash = SerializingHasher32To64::new(u64_hash);
+    let field_hash = SerializingHasher::new(u64_hash);
 
     let compress = KeccakCompressionFunction::new(u64_hash);
 

@@ -10,15 +10,17 @@ pub mod from_integer_tests;
 pub mod packedfield_testing;
 
 use alloc::vec::Vec;
+use core::array;
 
 pub use bench_func::*;
 pub use dft_testing::*;
 use num_bigint::BigUint;
 use p3_field::{
-    ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField,
+    ExtensionField, Field, PrimeCharacteristicRing, PrimeField32, PrimeField64, TwoAdicField,
     cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order,
     two_adic_coset_vanishing_polynomial, two_adic_subgroup_vanishing_polynomial,
 };
+use p3_util::iter_array_chunks_padded;
 pub use packedfield_testing::*;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
@@ -29,8 +31,8 @@ pub fn test_ring_with_eq<R: PrimeCharacteristicRing + Copy + Eq>(zeros: &[R], on
 where
     StandardUniform: Distribution<R> + Distribution<[R; 16]>,
 {
-    // zeros should be a vector containing differenent representatives of `R::ZERO`.
-    // ones should be a vector containing differenent representatives of `R::ONE`.
+    // zeros should be a vector containing different representatives of `R::ZERO`.
+    // ones should be a vector containing different representatives of `R::ONE`.
     let mut rng = SmallRng::seed_from_u64(1);
     let x = rng.random::<R>();
     let y = rng.random::<R>();
@@ -602,6 +604,113 @@ pub fn test_ef_two_adic_generator_consistency<
     );
 }
 
+pub fn test_into_bytes_32<F: PrimeField32>(zeros: &[F], ones: &[F])
+where
+    StandardUniform: Distribution<F>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    let x = rng.random::<F>();
+
+    assert_eq!(
+        x.into_bytes().into_iter().collect::<Vec<_>>(),
+        x.to_unique_u32().to_le_bytes()
+    );
+    for one in ones {
+        assert_eq!(
+            one.into_bytes().into_iter().collect::<Vec<_>>(),
+            F::ONE.to_unique_u32().to_le_bytes()
+        );
+    }
+    for zero in zeros {
+        assert_eq!(zero.into_bytes().into_iter().collect::<Vec<_>>(), [0; 4]);
+    }
+}
+
+pub fn test_into_bytes_64<F: PrimeField64>(zeros: &[F], ones: &[F])
+where
+    StandardUniform: Distribution<F>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    let x = rng.random::<F>();
+
+    assert_eq!(
+        x.into_bytes().into_iter().collect::<Vec<_>>(),
+        x.to_unique_u64().to_le_bytes()
+    );
+    for one in ones {
+        assert_eq!(
+            one.into_bytes().into_iter().collect::<Vec<_>>(),
+            F::ONE.to_unique_u64().to_le_bytes()
+        );
+    }
+    for zero in zeros {
+        assert_eq!(zero.into_bytes().into_iter().collect::<Vec<_>>(), [0; 8]);
+    }
+}
+
+pub fn test_into_stream<F: Field>()
+where
+    StandardUniform: Distribution<[F; 16]>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    let xs: [F; 16] = rng.random();
+
+    let byte_vec = F::into_byte_stream(xs).into_iter().collect::<Vec<_>>();
+    let u32_vec = F::into_u32_stream(xs).into_iter().collect::<Vec<_>>();
+    let u64_vec = F::into_u64_stream(xs).into_iter().collect::<Vec<_>>();
+
+    let expected_bytes = xs
+        .into_iter()
+        .flat_map(|x| x.into_bytes())
+        .collect::<Vec<_>>();
+    let expected_u32s = iter_array_chunks_padded(byte_vec.iter().copied(), 0)
+        .map(u32::from_le_bytes)
+        .collect::<Vec<_>>();
+    let expected_u64s = iter_array_chunks_padded(byte_vec.iter().copied(), 0)
+        .map(u64::from_le_bytes)
+        .collect::<Vec<_>>();
+
+    assert_eq!(byte_vec, expected_bytes);
+    assert_eq!(u32_vec, expected_u32s);
+    assert_eq!(u64_vec, expected_u64s);
+
+    let ys: [F; 16] = rng.random();
+    let zs: [F; 16] = rng.random();
+
+    let combs: [[F; 3]; 16] = array::from_fn(|i| [xs[i], ys[i], zs[i]]);
+
+    let byte_vec_ys = F::into_byte_stream(ys).into_iter().collect::<Vec<_>>();
+    let byte_vec_zs = F::into_byte_stream(zs).into_iter().collect::<Vec<_>>();
+    let u32_vec_ys = F::into_u32_stream(ys).into_iter().collect::<Vec<_>>();
+    let u32_vec_zs = F::into_u32_stream(zs).into_iter().collect::<Vec<_>>();
+    let u64_vec_ys = F::into_u64_stream(ys).into_iter().collect::<Vec<_>>();
+    let u64_vec_zs = F::into_u64_stream(zs).into_iter().collect::<Vec<_>>();
+
+    let combined_bytes = F::into_parallel_byte_streams(combs)
+        .into_iter()
+        .collect::<Vec<_>>();
+    let combined_u32s = F::into_parallel_u32_streams(combs)
+        .into_iter()
+        .collect::<Vec<_>>();
+    let combined_u64s = F::into_parallel_u64_streams(combs)
+        .into_iter()
+        .collect::<Vec<_>>();
+
+    let expected_combined_bytes: Vec<[u8; 3]> = (0..byte_vec.len())
+        .map(|i| [byte_vec[i], byte_vec_ys[i], byte_vec_zs[i]])
+        .collect();
+    let expected_combined_u32s: Vec<[u32; 3]> = (0..u32_vec.len())
+        .map(|i| [u32_vec[i], u32_vec_ys[i], u32_vec_zs[i]])
+        .collect();
+    let expected_combined_u64s: Vec<[u64; 3]> = (0..u64_vec.len())
+        .map(|i| [u64_vec[i], u64_vec_ys[i], u64_vec_zs[i]])
+        .collect();
+
+    assert_eq!(combined_bytes, expected_combined_bytes);
+    assert_eq!(combined_u32s, expected_combined_u32s);
+    assert_eq!(combined_u64s, expected_combined_u64s);
+}
+
 #[macro_export]
 macro_rules! test_field {
     ($field:ty, $zeros: expr, $ones: expr, $factors: expr) => {
@@ -629,6 +738,10 @@ macro_rules! test_field {
             #[test]
             fn test_div_2exp_u64() {
                 $crate::test_div_2exp_u64::<$field>();
+            }
+            #[test]
+            fn test_streaming() {
+                $crate::test_into_stream::<$field>();
             }
         }
     };
@@ -664,10 +777,10 @@ macro_rules! test_prime_field {
 
 #[macro_export]
 macro_rules! test_prime_field_64 {
-    ($field:ty) => {
+    ($field:ty, $zeros: expr, $ones: expr) => {
         mod from_integer_tests_prime_field_64 {
             use p3_field::integers::QuotientMap;
-            use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
+            use p3_field::{Field, PrimeCharacteristicRing, PrimeField64, RawDataSerializable};
             use rand::rngs::SmallRng;
             use rand::{Rng, SeedableRng};
 
@@ -721,16 +834,25 @@ macro_rules! test_prime_field_64 {
             fn test_large_signed_integer_conversions() {
                 $crate::generate_from_large_i_int_tests!($field, <$field>::ORDER_U64, [i64, i128]);
             }
+
+            #[test]
+            fn test_raw_data_serializable() {
+                // Only do the 64-bit test if the field is 64 bits.
+                // This will error if tested on smaller fields.
+                if <$field>::NUM_BYTES == 8 {
+                    $crate::test_into_bytes_64::<$field>($zeros, $ones);
+                }
+            }
         }
     };
 }
 
 #[macro_export]
 macro_rules! test_prime_field_32 {
-    ($field:ty) => {
+    ($field:ty, $zeros: expr, $ones: expr) => {
         mod from_integer_tests_prime_field_32 {
             use p3_field::integers::QuotientMap;
-            use p3_field::{Field, PrimeCharacteristicRing, PrimeField32};
+            use p3_field::{Field, PrimeCharacteristicRing, PrimeField32, PrimeField64};
             use rand::rngs::SmallRng;
             use rand::{Rng, SeedableRng};
 
@@ -740,8 +862,14 @@ macro_rules! test_prime_field_32 {
                 let x: u32 = rng.random();
                 let x_mod_order = x % <$field>::ORDER_U32;
 
-                assert_eq!(<$field>::ZERO.as_canonical_u32(), 0);
-                assert_eq!(<$field>::ONE.as_canonical_u32(), 1);
+                for zero in $zeros {
+                    assert_eq!(zero.as_canonical_u32(), 0);
+                    assert_eq!(zero.to_unique_u32() as u64, zero.to_unique_u64());
+                }
+                for one in $ones {
+                    assert_eq!(one.as_canonical_u32(), 1);
+                    assert_eq!(one.to_unique_u32() as u64, one.to_unique_u64());
+                }
                 assert_eq!(<$field>::TWO.as_canonical_u32(), 2 % <$field>::ORDER_U32);
                 assert_eq!(
                     <$field>::NEG_ONE.as_canonical_u32(),
@@ -752,6 +880,10 @@ macro_rules! test_prime_field_32 {
                     0
                 );
                 assert_eq!(<$field>::from_int(x).as_canonical_u32(), x_mod_order);
+                assert_eq!(
+                    <$field>::from_int(x).to_unique_u32() as u64,
+                    <$field>::from_int(x).to_unique_u64()
+                );
                 assert_eq!(
                     unsafe { <$field>::from_canonical_unchecked(x_mod_order).as_canonical_u32() },
                     x_mod_order
@@ -790,6 +922,11 @@ macro_rules! test_prime_field_32 {
                     <$field>::ORDER_U32,
                     [i32, i64, i128]
                 );
+            }
+
+            #[test]
+            fn test_raw_data_serializable() {
+                $crate::test_into_bytes_32::<$field>($zeros, $ones);
             }
         }
     };
