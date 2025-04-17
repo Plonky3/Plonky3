@@ -55,7 +55,7 @@ where
     /// Returns None if `c >= truncated_width`, or if `r > self.height()`.
     #[inline(always)]
     fn get(&self, r: usize, c: usize) -> Option<T> {
-        (c < self.truncated_width || r < self.height())
+        (c < self.truncated_width && r < self.height())
             .then(|| self.inner.get(r, c).expect("This should be unreachable without undefined behaviour. Most likely cause is inner.width() being incorrect."))
     }
 
@@ -220,7 +220,7 @@ mod tests {
         assert_eq!(truncated.height(), 1);
 
         // Row should be empty.
-        let row: Vec<_> = truncated.row(0).into_iter().collect();
+        let row: Vec<_> = truncated.row(0).unwrap().into_iter().collect();
         assert!(row.is_empty());
     }
 

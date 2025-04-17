@@ -172,15 +172,12 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
     fn test_vertically_strided_view_stride_greater_than_height_with_offset_beyond_height() {
         let matrix = sample_matrix(); // height = 5
         let view = VerticallyStridedRowIndexMap::new_view(matrix, 10, 6);
 
         // offset == 6 > height == 5 → no valid row
         assert_eq!(view.height(), 0);
-
-        // Should panic when trying to access row 0
-        let _ = view.get(0, 0);
+        assert_eq!(view.get(0, 0), None); // out of bounds
     }
 }

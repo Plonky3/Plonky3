@@ -63,7 +63,8 @@ impl<T: Send + Sync, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
     }
 
     fn get(&self, r: usize, c: usize) -> Option<T> {
-        self.inner.get(self.index_map.map_row_index(r), c)
+        (r < self.height() && c < self.width())
+            .then(|| unsafe { self.inner.get_unchecked(self.index_map.map_row_index(r), c) })
     }
 
     unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {

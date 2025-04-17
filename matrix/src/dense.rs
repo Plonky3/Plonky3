@@ -349,7 +349,15 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
 
     #[inline]
     fn get(&self, r: usize, c: usize) -> Option<T> {
-        self.values.borrow().get(r * self.width + c).cloned()
+        (r < self.height() && c < self.width()).then(|| {
+            // We just checked the bounds, so this is safe.
+            unsafe {
+                self.values
+                    .borrow()
+                    .get_unchecked(r * self.width + c)
+                    .clone()
+            }
+        })
     }
 
     #[inline]
@@ -367,8 +375,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
     fn row(
         &self,
         r: usize,
-    ) -> Option<impl IntoIterator<Item = T, IntoIter = impl ParallelIterator<Item = T> + Send + Sync>>
-    {
+    ) -> Option<impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync>> {
         (r < self.height()).then(|| unsafe {
             // Safety: We know that the bounds are in the slice because of the previous check.
             self.values
@@ -383,7 +390,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
     unsafe fn row_unchecked(
         &self,
         r: usize,
-    ) -> impl IntoIterator<Item = T, IntoIter = impl ParallelIterator<Item = T> + Send + Sync> {
+    ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
         unsafe {
             // Safety: The caller must ensure that r < self.height().
             self.values
@@ -400,7 +407,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         r: usize,
         start: usize,
         end: usize,
-    ) -> impl IntoIterator<Item = T, IntoIter = impl ParallelIterator<Item = T> + Send + Sync> {
+    ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
         unsafe {
             // Safety: The caller must ensure that r < self.height() and start <= end <= self.width().
             self.values
@@ -589,6 +596,24 @@ mod tests {
     }
 
     #[test]
+    fn test_row_methods() {
+        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6, 7, 8], 4);
+        let row: Vec<_> = matrix.row(1).unwrap().into_iter().collect();
+        assert_eq!(row, vec![5, 6, 7, 8]);
+        unsafe {
+            let row: Vec<_> = matrix.row_unchecked(0).into_iter().collect();
+            assert_eq!(row, vec![1, 2, 3, 4]);
+            let row: Vec<_> = matrix.row_subset_unchecked(0, 0, 3).into_iter().collect();
+            assert_eq!(row, vec![1, 2, 3]);
+            let row: Vec<_> = matrix.row_subset_unchecked(0, 1, 3).into_iter().collect();
+            assert_eq!(row, vec![2, 3]);
+            let row: Vec<_> = matrix.row_subset_unchecked(0, 2, 4).into_iter().collect();
+            assert_eq!(row, vec![3, 4]);
+        }
+        assert!(matrix.row(2).is_none());
+    }
+
+    #[test]
     fn test_row_slice_methods() {
         let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6, 7, 8, 9], 3);
         let slice0 = matrix.row_slice(0);
@@ -600,16 +625,9 @@ mod tests {
             assert_eq!(&[7, 8, 9], matrix.row_slice_unchecked(2).deref());
 
             assert_eq!(&[1, 2, 3], matrix.row_subslice_unchecked(0, 0, 3).deref());
-            assert_eq!(&[5], matrix.row_subslice_unchecked(2, 1, 2).deref());
+            assert_eq!(&[8], matrix.row_subslice_unchecked(2, 1, 2).deref());
         }
-    }
-    assert_eq!(matrix.row_slice(3), None);
-
-    #[test]
-    fn test_row_slices() {
-        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
-        let rows: Vec<&[i32]> = matrix.row_slices().collect();
-        assert_eq!(rows, vec![&[1, 2], &[3, 4], &[5, 6]]);
+        assert!(matrix.row_slice(3).is_none());
     }
 
     #[test]
@@ -764,24 +782,6 @@ mod tests {
                 BabyBear::new(6),
             ]
         );
-    }
-
-    #[test]
-    fn test_row_methods() {
-        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6, 7, 8], 4);
-        let row: Vec<_> = matrix.row(1).unwrap().into_iter().collect();
-        assert_eq!(row, vec![5, 6, 7, 8]);
-        unsafe {
-            let row: Vec<_> = matrix.row_unchecked(0).into_iter().collect();
-            assert_eq!(row, vec![1, 2, 3, 4]);
-            let row: Vec<_> = matrix.row_subset_unchecked(0, 0, 3).into_iter().collect();
-            assert_eq!(row, vec![1, 2, 3]);
-            let row: Vec<_> = matrix.row_subset_unchecked(0, 1, 3).into_iter().collect();
-            assert_eq!(row, vec![2, 3]);
-            let row: Vec<_> = matrix.row_subset_unchecked(0, 2, 4).into_iter().collect();
-            assert_eq!(row, vec![3, 4]);
-        }
-        assert!(matrix.row(2).is_none());
     }
 
     #[test]

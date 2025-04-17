@@ -34,7 +34,10 @@ impl<AB: AirBuilderWithPublicValues> Air<AB> for FibonacciAir {
         let b = pis[1];
         let x = pis[2];
 
-        let (local, next) = (main.row_slice(0), main.row_slice(1));
+        let (local, next) = (
+            main.row_slice(0).expect("Matrix is empty?"),
+            main.row_slice(1).expect("Matrix only has 1 row?"),
+        );
         let local: &FibonacciRow<AB::Var> = (*local).borrow();
         let next: &FibonacciRow<AB::Var> = (*next).borrow();
 

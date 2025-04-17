@@ -155,8 +155,11 @@ where
     // If our packing width did not divide max_height, fall back to single-threaded scalar code
     // for the last bit.
     #[allow(clippy::needless_range_loop)]
-    for i in (max_height / width * width)..max_height {
-        digests[i] = h.hash_iter(tallest_matrices.iter().flat_map(|m| m.row(i)));
+    for i in ((max_height / width) * width)..max_height {
+        unsafe {
+            // Safety: Clearly i < max_height = m.height().
+            digests[i] = h.hash_iter(tallest_matrices.iter().flat_map(|m| m.row_unchecked(i)));
+        }
     }
 
     // Everything has been initialized so we can safely cast.
@@ -223,7 +226,10 @@ where
         let left = prev_layer[2 * i];
         let right = prev_layer[2 * i + 1];
         let digest = c.compress([left, right]);
-        let rows_digest = h.hash_iter(matrices_to_inject.iter().flat_map(|m| m.row(i)));
+        let rows_digest = unsafe {
+            // Safety: Clearly i < next_len = m.height().
+            h.hash_iter(matrices_to_inject.iter().flat_map(|m| m.row_unchecked(i)))
+        };
         next_digests[i] = c.compress([digest, rows_digest]);
     }
 

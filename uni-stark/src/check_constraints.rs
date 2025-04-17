@@ -18,8 +18,8 @@ where
     (0..height).for_each(|i| {
         let i_next = (i + 1) % height;
 
-        let local = main.row_slice(i);
-        let next = main.row_slice(i_next);
+        let local = main.row_slice(i).unwrap(); // i < height so unwrap should never fail.
+        let next = main.row_slice(i_next).unwrap(); // i_next < height so unwrap should never fail.
         let main = VerticalPair::new(
             RowMajorMatrixView::new_row(&*local),
             RowMajorMatrixView::new_row(&*next),
