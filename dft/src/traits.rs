@@ -27,7 +27,7 @@ use crate::util::{coset_shift_cols, divide_by_height};
 pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     /// The matrix type used to store the result of a batched DFT operation.
     ///
-    /// This type represents a matrix of field elements, used to hold the evaluations 
+    /// This type represents a matrix of field elements, used to hold the evaluations
     /// of multiple polynomials over a two-adic subgroup or its coset.
     /// It is always owned and supports efficient access and transformation
     /// patterns used in FFT-based algorithms.
