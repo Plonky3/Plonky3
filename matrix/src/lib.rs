@@ -528,12 +528,20 @@ mod tests {
             self.height
         }
 
-        fn row(&self, r: usize) -> Self::Row<'_> {
-            self.data[r].clone().into_iter()
+        fn row(
+            &self,
+            r: usize,
+        ) -> Option<impl IntoIterator<Item = u32, IntoIter = impl Iterator<Item = u32> + Send + Sync>>
+        {
+            Some(self.data.get(r)?.clone())
         }
 
-        unsafe fn row_unchecked(&self, r: usize) -> Self::Row<'_> {
-            self.data[r].clone().into_iter()
+        unsafe fn row_unchecked(
+            &self,
+            r: usize,
+        ) -> impl IntoIterator<Item = u32, IntoIter = impl Iterator<Item = u32> + Send + Sync>
+        {
+            self.data[r].clone()
         }
     }
 
@@ -600,8 +608,15 @@ mod tests {
             width: 3,
             height: 3,
         };
-        let row_slice = matrix.row_slice(1);
-        assert_eq!(row_slice, Some(&[4, 5, 6]));
+        let row_slice = matrix.row_slice(1).unwrap();
+        assert_eq!(*row_slice, [4, 5, 6]);
+        unsafe {
+            let row_slice_unchecked = matrix.row_slice_unchecked(2);
+            assert_eq!(*row_slice_unchecked, [7, 8, 9]);
+
+            let row_subslice = matrix.row_subslice_unchecked(0, 1, 2);
+            assert_eq!(*row_subslice, [2]);
+        }
     }
 
     #[test]
@@ -617,15 +632,21 @@ mod tests {
     }
 
     #[test]
-    fn test_matrix_get() {
+    fn test_matrix_get_methods() {
         let matrix = MockMatrix {
             data: vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]],
             width: 3,
             height: 3,
         };
-        assert_eq!(matrix.get(0, 0), 1);
-        assert_eq!(matrix.get(1, 2), 6);
-        assert_eq!(matrix.get(2, 1), 8);
+        assert_eq!(matrix.get(0, 0), Some(1));
+        assert_eq!(matrix.get(1, 2), Some(6));
+        assert_eq!(matrix.get(2, 1), Some(8));
+
+        unsafe {
+            assert_eq!(matrix.get_unchecked(0, 1), 2);
+            assert_eq!(matrix.get_unchecked(1, 0), 4);
+            assert_eq!(matrix.get_unchecked(2, 2), 9);
+        }
     }
 
     #[test]
@@ -636,11 +657,26 @@ mod tests {
             height: 3,
         };
 
-        let mut row_iter = matrix.row(1);
+        let mut row_iter = matrix.row(1).unwrap().into_iter();
         assert_eq!(row_iter.next(), Some(4));
         assert_eq!(row_iter.next(), Some(5));
         assert_eq!(row_iter.next(), Some(6));
         assert_eq!(row_iter.next(), None);
+
+        assert!(matrix.row(3).is_none()); // Out of bounds
+
+        unsafe {
+            let mut row_iter_unchecked = matrix.row_unchecked(2).into_iter();
+            assert_eq!(row_iter_unchecked.next(), Some(7));
+            assert_eq!(row_iter_unchecked.next(), Some(8));
+            assert_eq!(row_iter_unchecked.next(), Some(9));
+            assert_eq!(row_iter_unchecked.next(), None);
+
+            let mut row_iter_subset = matrix.row_subset_unchecked(0, 1, 3).into_iter();
+            assert_eq!(row_iter_subset.next(), Some(2));
+            assert_eq!(row_iter_subset.next(), Some(3));
+            assert_eq!(row_iter_subset.next(), None);
+        }
     }
 
     #[test]

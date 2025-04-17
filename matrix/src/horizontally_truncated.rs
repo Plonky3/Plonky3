@@ -163,11 +163,11 @@ mod tests {
         }
 
         // Row 0: should return [1, 2]
-        let row0: Vec<_> = truncated.row(0).unwrap().collect();
+        let row0: Vec<_> = truncated.row(0).unwrap().into_iter().collect();
         assert_eq!(row0, vec![1, 2]);
 
         // Row 1: should return [4, 5]
-        let row1: Vec<_> = unsafe { truncated.row_unchecked(1).collect() };
+        let row1: Vec<_> = unsafe { truncated.row_unchecked(1).into_iter().collect() };
         assert_eq!(row1, vec![4, 5]);
 
         // Convert the truncated view to a RowMajorMatrix and check contents.
@@ -201,10 +201,10 @@ mod tests {
             assert_eq!(truncated.get_unchecked(1, 1), 10);
         }
 
-        let row0: Vec<_> = truncated.row(0).unwrap().collect();
+        let row0: Vec<_> = truncated.row(0).unwrap().into_iter().collect();
         assert_eq!(row0, vec![7, 8]);
 
-        let row1: Vec<_> = unsafe { truncated.row_unchecked(1).collect() };
+        let row1: Vec<_> = unsafe { truncated.row_unchecked(1).into_iter().collect() };
         assert_eq!(row1, vec![9, 10]);
     }
 
@@ -220,7 +220,7 @@ mod tests {
         assert_eq!(truncated.height(), 1);
 
         // Row should be empty.
-        let row: Vec<_> = truncated.row(0).collect();
+        let row: Vec<_> = truncated.row(0).into_iter().collect();
         assert!(row.is_empty());
     }
 

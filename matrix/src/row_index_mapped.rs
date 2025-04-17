@@ -172,6 +172,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
+    use itertools::Itertools;
     use p3_baby_bear::BabyBear;
     use p3_field::FieldArray;
 
@@ -230,8 +231,6 @@ mod tests {
             assert_eq!(mapped_view.get_unchecked(0, 1), 2);
             assert_eq!(mapped_view.get_unchecked(1, 0), 4);
         }
-
-        // TODO: Check unsafe row methods and row_slice methods.
 
         // Check rows.
         let rows: Vec<Vec<_>> = mapped_view.rows().map(|row| row.collect()).collect();
@@ -362,7 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn test_row_slice() {
+    fn test_row_and_row_slice_methods() {
         // Create a 2x3 matrix of integers:
         // [ 10  20  30 ]
         // [ 40  50  60 ]
@@ -375,13 +374,36 @@ mod tests {
         };
 
         // Get row slices through dereferencing and verify content.
-        assert_eq!(mapped_view.row_slice(0).deref(), &[40, 50, 60]); // was row 1
-        assert_eq!(mapped_view.row_slice(1).deref(), &[10, 20, 30]); // was row 0
+        assert_eq!(mapped_view.row_slice(0).unwrap().deref(), &[40, 50, 60]); // was row 1
+        assert_eq!(
+            mapped_view.row(1).unwrap().into_iter().collect_vec(),
+            vec![10, 20, 30]
+        ); // was row 0
+
+        unsafe {
+            // Check unsafe row slices.
+            assert_eq!(
+                mapped_view.row_unchecked(0).into_iter().collect_vec(),
+                vec![40, 50, 60]
+            ); // was row 1
+            assert_eq!(mapped_view.row_slice_unchecked(1).deref(), &[10, 20, 30]); // was row 0
+
+            assert_eq!(
+                mapped_view.row_subslice_unchecked(0, 1, 3).deref(),
+                &[50, 60]
+            ); // was row 1
+            assert_eq!(
+                mapped_view
+                    .row_subset_unchecked(1, 0, 2)
+                    .into_iter()
+                    .collect_vec(),
+                vec![10, 20]
+            ); // was row 0
+        }
     }
 
     #[test]
-    #[should_panic]
-    fn test_out_of_bounds_row_access() {
+    fn test_out_of_bounds_access() {
         // Create a 2x2 matrix:
         // [ 1  2 ]
         // [ 3  4 ]
@@ -394,24 +416,8 @@ mod tests {
         };
 
         // Attempt to access out-of-bounds row (index 2). Should panic.
-        mapped_view.get(2, 1);
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_out_of_bounds_col_access() {
-        // Create a 2x2 matrix:
-        // [ 1  2 ]
-        // [ 3  4 ]
-        let inner = RowMajorMatrix::new(vec![1, 2, 3, 4], 2);
-
-        // Use identity mapping.
-        let mapped_view = RowIndexMappedView {
-            index_map: IdentityMap(inner.height()),
-            inner,
-        };
-
-        // Attempt to access out-of-bounds column (index 20). Should panic.
-        mapped_view.get(0, 20);
+        assert_eq!(mapped_view.get(2, 1), None);
+        assert!(mapped_view.row(5).is_none());
+        assert_eq!(mapped_view.get(0, 20), None);
     }
 }

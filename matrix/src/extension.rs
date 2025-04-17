@@ -184,7 +184,13 @@ mod tests {
         ];
         let ext = RowMajorMatrix::<EF>::new(values, 2);
         let flat = FlatMatrixView::<F, EF, _>::new(ext);
-        assert_eq!(&*flat.row_slice(0), &[10, 11, 20, 21].map(F::from_u8));
-        assert_eq!(&*flat.row_slice(1), &[30, 31, 40, 41].map(F::from_u8));
+        assert_eq!(
+            &*flat.row_slice(0).unwrap(),
+            &[10, 11, 20, 21].map(F::from_u8)
+        );
+        assert_eq!(
+            &*flat.row_slice(1).unwrap(),
+            &[30, 31, 40, 41].map(F::from_u8)
+        );
     }
 }

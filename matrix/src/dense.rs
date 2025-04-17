@@ -580,9 +580,9 @@ mod tests {
         assert_eq!(matrix.get(1, 1), Some(4));
         assert_eq!(matrix.get(2, 0), Some(5));
         unsafe {
-            assert_eq!(matrix.get_unchecked(0, 1), Some(2));
-            assert_eq!(matrix.get_unchecked(1, 0), Some(3));
-            assert_eq!(matrix.get_unchecked(2, 1), Some(6));
+            assert_eq!(matrix.get_unchecked(0, 1), 2);
+            assert_eq!(matrix.get_unchecked(1, 0), 3);
+            assert_eq!(matrix.get_unchecked(2, 1), 6);
         }
         assert_eq!(matrix.get(3, 0), None);
         assert_eq!(matrix.get(0, 2), None);
@@ -596,11 +596,11 @@ mod tests {
         assert_eq!(slice0.unwrap().deref(), &[1, 2, 3]);
         assert_eq!(slice2.unwrap().deref(), &[7, 8, 9]);
         unsafe {
-            assert_eq!(slice0, Some(matrix.row_slice_unchecked(0)));
-            assert_eq!(slice2, Some(matrix.row_slice_unchecked(2)));
+            assert_eq!(&[1, 2, 3], matrix.row_slice_unchecked(0).deref());
+            assert_eq!(&[7, 8, 9], matrix.row_slice_unchecked(2).deref());
 
-            assert_eq!(slice0, Some(matrix.row_subslice_unchecked(0, 0, 3)));
-            assert_eq!(&[5], matrix.row_subslice_unchecked(2, 1, 2));
+            assert_eq!(&[1, 2, 3], matrix.row_subslice_unchecked(0, 0, 3).deref());
+            assert_eq!(&[5], matrix.row_subslice_unchecked(2, 1, 2).deref());
         }
     }
     assert_eq!(matrix.row_slice(3), None);
@@ -769,19 +769,19 @@ mod tests {
     #[test]
     fn test_row_methods() {
         let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6, 7, 8], 4);
-        let row: Vec<_> = matrix.row(1).unwrap().collect();
+        let row: Vec<_> = matrix.row(1).unwrap().into_iter().collect();
         assert_eq!(row, vec![5, 6, 7, 8]);
         unsafe {
-            let row: Vec<_> = matrix.row_unchecked(0).collect();
+            let row: Vec<_> = matrix.row_unchecked(0).into_iter().collect();
             assert_eq!(row, vec![1, 2, 3, 4]);
-            let row: Vec<_> = matrix.row_subset_unchecked(0, 0, 3).collect();
+            let row: Vec<_> = matrix.row_subset_unchecked(0, 0, 3).into_iter().collect();
             assert_eq!(row, vec![1, 2, 3]);
-            let row: Vec<_> = matrix.row_subset_unchecked(0, 1, 3).collect();
+            let row: Vec<_> = matrix.row_subset_unchecked(0, 1, 3).into_iter().collect();
             assert_eq!(row, vec![2, 3]);
-            let row: Vec<_> = matrix.row_subset_unchecked(0, 2, 4).collect();
+            let row: Vec<_> = matrix.row_subset_unchecked(0, 2, 4).into_iter().collect();
             assert_eq!(row, vec![3, 4]);
         }
-        assert_eq!(matrix.row(2), None);
+        assert!(matrix.row(2).is_none());
     }
 
     #[test]

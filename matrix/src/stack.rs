@@ -241,12 +241,11 @@ where
     }
 }
 
-// TODO: Add tests for row and row_unchecked
-
 #[cfg(test)]
 mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
+    use itertools::Itertools;
 
     use super::*;
     use crate::RowMajorMatrix;
@@ -284,12 +283,29 @@ mod tests {
         }
 
         // Row iter from bottom
-        let row = vertical.row(3);
-        let values: Vec<_> = row.collect();
-        assert_eq!(values, vec![7, 8]);
+        let row = vertical.row(3).unwrap().into_iter().collect_vec();
+        assert_eq!(row, vec![7, 8]);
+
+        unsafe {
+            // Row iter from top
+            let row = vertical.row_unchecked(1).into_iter().collect_vec();
+            assert_eq!(row, vec![3, 4]);
+
+            let row = vertical
+                .row_subset_unchecked(0, 0, 1)
+                .into_iter()
+                .collect_vec();
+            assert_eq!(row, vec![1]);
+        }
 
         // Row slice
-        assert_eq!(vertical.row_slice(2).deref(), &[5, 6]);
+        assert_eq!(vertical.row_slice(2).unwrap().deref(), &[5, 6]);
+
+        unsafe {
+            // Row slice unchecked
+            assert_eq!(vertical.row_slice_unchecked(3).deref(), &[7, 8]);
+            assert_eq!(vertical.row_subslice_unchecked(1, 1, 2).deref(), &[4]);
+        }
     }
 
     #[test]
@@ -313,9 +329,13 @@ mod tests {
         }
 
         // Row iter
-        let row = horizontal.row(0);
-        let values: Vec<_> = row.collect();
-        assert_eq!(values, vec![1, 2, 5, 6]);
+        let row = horizontal.row(0).unwrap().into_iter().collect_vec();
+        assert_eq!(row, vec![1, 2, 5, 6]);
+
+        unsafe {
+            let row = horizontal.row_unchecked(1).into_iter().collect_vec();
+            assert_eq!(row, vec![3, 4, 7, 8]);
+        }
     }
 
     #[test]
