@@ -65,7 +65,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     /// Returns the number of rows in the matrix.
     fn height(&self) -> usize;
 
-    /// Returns the dimensions (width × height) of the matrix.
+    /// Returns the dimensions (width, height) of the matrix.
     fn dimensions(&self) -> Dimensions {
         Dimensions {
             width: self.width(),
