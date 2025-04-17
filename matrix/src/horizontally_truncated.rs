@@ -54,10 +54,10 @@ where
     /// Get the element at the given row and column.
     ///
     /// # Panics
-    /// Panics in debug mode if `c >= truncated_width`.
+    /// Panics if `c >= truncated_width`, or if `r` or `c` are out of bounds for the inner matrix.
     #[inline(always)]
     fn get(&self, r: usize, c: usize) -> T {
-        debug_assert!(c < self.truncated_width);
+        assert!(c < self.truncated_width);
         self.inner.get(r, c)
     }
 
@@ -109,6 +109,16 @@ mod tests {
         // Row 1: should return [4, 5]
         let row1: Vec<_> = truncated.row(1).collect();
         assert_eq!(row1, vec![4, 5]);
+
+        // Convert the truncated view to a RowMajorMatrix and check contents.
+        let as_matrix = truncated.to_row_major_matrix();
+
+        // The expected matrix after truncation:
+        // [1 2]
+        // [4 5]
+        let expected = RowMajorMatrix::new(vec![1, 2, 4, 5], 2);
+
+        assert_eq!(as_matrix, expected);
     }
 
     #[test]
