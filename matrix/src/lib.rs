@@ -167,7 +167,10 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         (0..num_elems).map(move |_| P::from_fn(|_| row_iter.next().unwrap_or_default()))
     }
 
-    /// Returns a parallel iterator over packed rows (with suffixes).
+    /// Get a parallel iterator over all packed rows of the matrix.
+    ///
+    /// If the matrix width is not divisible by the packing width, the final elements
+    /// of each row are returned as a base iterator with length `<= P::WIDTH - 1`.
     fn par_horizontally_packed_rows<'a, P>(
         &'a self,
     ) -> impl IndexedParallelIterator<
