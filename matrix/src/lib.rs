@@ -73,46 +73,106 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
 
     /// Returns the element at the given row and column.
     ///
-    /// # Panics
-    /// Panics if `r >= height()` or `c >= width()`.
-    fn get(&self, r: usize, c: usize) -> T {
-        self.row(r).nth(c).unwrap()
+    /// Returns `None` if either `r >= height()` or `c >= width()`.
+    fn get(&self, r: usize, c: usize) -> Option<T> {
+        self.row(r)?.nth(c)
+    }
+
+    /// Returns the element at the given row and column.
+    ///
+    /// For a safe alternative, see [`get`].
+    ///
+    /// It is undefined behaviour to call this function if either
+    /// `r >= height()` or `c >= width()`.
+    unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
+        unsafe { self.row(r).unwrap_unchecked().nth(c).unwrap_unchecked() }
     }
 
     /// Type of row iterator returned by this matrix.
+    ///
+    /// The length of Row **must** be equal to `matrix.width()` in all
+    /// cases.
     type Row<'a>: Iterator<Item = T> + Send + Sync
     where
         Self: 'a;
 
     /// Returns an iterator over the elements of the `r`-th row.
     ///
-    /// # Panics
-    /// Panics if `r >= height()`.
-    fn row(&self, r: usize) -> Self::Row<'_>;
+    /// Returns None if `r >= height()`.
+    fn row(&self, r: usize) -> Option<Self::Row<'_>>;
+
+    /// Returns an iterator over the elements of the `r`-th row.
+    ///
+    /// For a safe alternative, see [`row`].
+    ///
+    /// It is undefined behaviour to call this function if `r >= height()`.
+    unsafe fn row_unchecked(&self, r: usize) -> Self::Row<'_>;
 
     /// Returns an iterator over all rows in the matrix.
     fn rows(&self) -> impl Iterator<Item = Self::Row<'_>> {
-        (0..self.height()).map(move |r| self.row(r))
+        unsafe {
+            // Safe as the row index is less than height().
+            (0..self.height()).map(move |r| self.row_unchecked(r))
+        }
     }
 
     /// Returns a parallel iterator over all rows in the matrix.
     fn par_rows(&self) -> impl IndexedParallelIterator<Item = Self::Row<'_>> {
-        (0..self.height()).into_par_iter().map(move |r| self.row(r))
+        unsafe {
+            // Safe as the row index is less than height().
+            (0..self.height())
+                .into_par_iter()
+                .map(move |r| self.row_unchecked(r))
+        }
     }
 
     /// Returns the elements of the `r`-th row as something which can be coerced to a slice.
-    fn row_slice(&self, r: usize) -> impl Deref<Target = [T]> {
-        self.row(r).collect_vec()
+    ///
+    /// Returns None if `r >= height()`.
+    fn row_slice(&self, r: usize) -> Option<impl Deref<Target = [T]>> {
+        self.row(r).map(|x| x.collect_vec())
+    }
+
+    /// Returns the elements of the `r`-th row as something which can be coerced to a slice.
+    ///
+    /// For a safe alternative, see [`row`].
+    ///
+    /// It is undefined behaviour to call this function if `r >= height()`.
+    unsafe fn row_slice_unchecked(&self, r: usize) -> impl Deref<Target = [T]> {
+        unsafe { self.row_unchecked(r).collect_vec() }
+    }
+
+    /// Returns the elements of the `r`-th row as something which can be coerced to a slice.
+    ///
+    /// Returns None if `r >= height()`.
+    fn wrapping_row_slices(&self, r: usize, c: usize) -> Vec<impl Deref<Target = [T]>> {
+        unsafe {
+            (0..c)
+                .map(|i| self.row_slice_unchecked((r + i) % self.height()))
+                .collect_vec()
+        }
     }
 
     /// Returns an iterator over the first row of the matrix.
+    ///
+    /// Returns None if `height() == 0`.
     fn first_row(&self) -> Self::Row<'_> {
-        self.row(0)
+        assert!(self.height() > 0, "Matrix has no rows.");
+        unsafe {
+            // Safe as the height must be > 0.
+            self.row_unchecked(0)
+        }
     }
 
     /// Returns an iterator over the last row of the matrix.
+    ///
+    /// Returns None if `height() == 0`.
     fn last_row(&self) -> Self::Row<'_> {
-        self.row(self.height() - 1)
+        assert!(self.height() > 0, "Matrix has no rows.");
+        unsafe {
+            // Safe as the height must be > 0.
+            self.row_unchecked(self.height() - 1)
+        }
     }
 
     /// Converts the matrix into a `RowMajorMatrix` by collecting all rows into a single vector.
@@ -121,16 +181,23 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         Self: Sized,
         T: Clone,
     {
-        RowMajorMatrix::new(
-            (0..self.height()).flat_map(|r| self.row(r)).collect(),
-            self.width(),
-        )
+        unsafe {
+            RowMajorMatrix::new(
+                (0..self.height())
+                    .flat_map(|r| self.row_unchecked(r))
+                    .collect(),
+                self.width(),
+            )
+        }
     }
 
     /// Get a packed iterator over the `r`-th row.
     ///
     /// If the row length is not divisible by the packing width, the final elements
     /// are returned as a base iterator with length `<= P::WIDTH - 1`.
+    ///
+    /// # Panics
+    /// Panics if `r >= height()`.
     fn horizontally_packed_row<'a, P>(
         &'a self,
         r: usize,
@@ -142,15 +209,24 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         P: PackedValue<Value = T>,
         T: Clone + 'a,
     {
+        assert!(r < self.height(), "Row index out of bounds.");
         let num_packed = self.width() / P::WIDTH;
-        let packed = (0..num_packed).map(move |c| P::from_fn(|i| self.get(r, P::WIDTH * c + i)));
-        let sfx = (num_packed * P::WIDTH..self.width()).map(move |c| self.get(r, c));
-        (packed, sfx)
+        // TODO: We should be using array_chunks here given it is now in utils.
+        unsafe {
+            // Safe as r < height().
+            let packed = (0..num_packed)
+                .map(move |c| P::from_fn(|i| self.get_unchecked(r, P::WIDTH * c + i)));
+            let sfx = (num_packed * P::WIDTH..self.width()).map(move |c| self.get_unchecked(r, c));
+            (packed, sfx)
+        }
     }
 
     /// Get a packed iterator over the `r`-th row.
     ///
     /// If the row length is not divisible by the packing width, the final entry will be zero-padded.
+    ///
+    /// # Panics
+    /// Panics if `r >= height()`.
     fn padded_horizontally_packed_row<'a, P>(
         &'a self,
         r: usize,
@@ -159,7 +235,8 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         P: PackedValue<Value = T>,
         T: Clone + Default + 'a,
     {
-        let mut row_iter = self.row(r);
+        // TODO: We should be using array_chunks here given it is now in utils.
+        let mut row_iter = self.row(r).expect("Row index out of bounds.");
         let num_elems = self.width().div_ceil(P::WIDTH);
         // array::from_fn is guaranteed to always call in order.
         (0..num_elems).map(move |_| P::from_fn(|_| row_iter.next().unwrap_or_default()))
@@ -213,9 +290,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         P: PackedValue<Value = T>,
     {
         // Precompute row slices once to minimize redundant calls and improve performance.
-        let rows = (0..P::WIDTH)
-            .map(|c| self.row_slice((r + c) % self.height()))
-            .collect_vec();
+        let rows = self.wrapping_row_slices(r, P::WIDTH);
 
         // Using precomputed rows avoids repeatedly calling `row_slice`, which is costly.
         (0..self.width()).map(move |c| P::from_fn(|i| rows[i][c]))
@@ -238,13 +313,8 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         // tests seem to indicate that combining them in the same function is slightly faster.
         // It's probably allowing the compiler to make some optimizations on the fly.
 
-        let rows = (0..P::WIDTH)
-            .map(|c| self.row_slice((r + c) % self.height()))
-            .collect_vec();
-
-        let next_rows = (0..P::WIDTH)
-            .map(|c| self.row_slice((r + c + step) % self.height()))
-            .collect_vec();
+        let rows = self.wrapping_row_slices(r, P::WIDTH);
+        let next_rows = self.wrapping_row_slices(r + step, P::WIDTH);
 
         (0..self.width())
             .map(|c| P::from_fn(|i| rows[i][c]))
@@ -397,6 +467,12 @@ mod tests {
         fn row(&self, r: usize) -> Self::Row<'_> {
             self.data[r].clone().into_iter()
         }
+
+        // TODO: Fix tests.
+
+        unsafe fn row_unchecked(&self, r: usize) -> Self::Row<'_> {
+            self.data[r].clone().into_iter()
+        }
     }
 
     #[test]
@@ -463,7 +539,7 @@ mod tests {
             height: 3,
         };
         let row_slice = matrix.row_slice(1);
-        assert_eq!(row_slice.deref(), &[4, 5, 6]);
+        assert_eq!(row_slice, Some(&[4, 5, 6]));
     }
 
     #[test]
