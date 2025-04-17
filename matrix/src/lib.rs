@@ -29,9 +29,15 @@ pub mod stack;
 pub mod strided;
 pub mod util;
 
+/// A simple struct representing the shape of a matrix.
+///
+/// The `Dimensions` type stores the number of columns (`width`) and rows (`height`)
+/// of a matrix. It is commonly used for querying and displaying matrix shapes.
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct Dimensions {
+    /// Number of columns in the matrix.
     pub width: usize,
+    /// Number of rows in the matrix.
     pub height: usize,
 }
 
@@ -47,10 +53,19 @@ impl Display for Dimensions {
     }
 }
 
+/// A generic trait for two-dimensional matrix-like data structures.
+///
+/// The `Matrix` trait provides a uniform interface for accessing rows, elements,
+/// and computing with matrices in both sequential and parallel contexts. It supports
+/// packing strategies for SIMD optimizations and interaction with extension fields.
 pub trait Matrix<T: Send + Sync>: Send + Sync {
+    /// Returns the number of columns in the matrix.
     fn width(&self) -> usize;
+
+    /// Returns the number of rows in the matrix.
     fn height(&self) -> usize;
 
+    /// Returns the dimensions (width × height) of the matrix.
     fn dimensions(&self) -> Dimensions {
         Dimensions {
             width: self.width(),
@@ -58,37 +73,48 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         }
     }
 
+    /// Returns the element at the given row and column.
+    ///
+    /// # Panics
+    /// Panics if `r >= height()` or `c >= width()`.
     fn get(&self, r: usize, c: usize) -> T {
         self.row(r).nth(c).unwrap()
     }
 
+    /// Type of row iterator returned by this matrix.
     type Row<'a>: Iterator<Item = T> + Send + Sync
     where
         Self: 'a;
 
+    /// Returns an iterator over the elements of the `r`-th row.
     fn row(&self, r: usize) -> Self::Row<'_>;
 
+    /// Returns an iterator over all rows in the matrix.
     fn rows(&self) -> impl Iterator<Item = Self::Row<'_>> {
         (0..self.height()).map(move |r| self.row(r))
     }
 
+    /// Returns a parallel iterator over all rows in the matrix.
     fn par_rows(&self) -> impl IndexedParallelIterator<Item = Self::Row<'_>> {
         (0..self.height()).into_par_iter().map(move |r| self.row(r))
     }
 
-    // Opaque return type implicitly captures &'_ self
+    /// Returns the elements of the `r`-th row as a collected slice.
     fn row_slice(&self, r: usize) -> impl Deref<Target = [T]> {
         self.row(r).collect_vec()
     }
 
+    /// Returns an iterator over the first row of the matrix.
     fn first_row(&self) -> Self::Row<'_> {
         self.row(0)
     }
 
+    /// Returns an iterator over the last row of the matrix.
     fn last_row(&self) -> Self::Row<'_> {
         self.row(self.height() - 1)
     }
 
+    /// Converts the matrix into a `RowMajorMatrix` by collecting all rows.
     fn to_row_major_matrix(self) -> RowMajorMatrix<T>
     where
         Self: Sized,
@@ -100,6 +126,9 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         )
     }
 
+    /// Returns packed and suffix iterators over the `r`-th row.
+    ///
+    /// The row is split into `PackedValue` chunks and a tail suffix.
     fn horizontally_packed_row<'a, P>(
         &'a self,
         r: usize,
@@ -117,7 +146,9 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         (packed, sfx)
     }
 
-    /// Zero padded.
+    /// Returns a zero-padded packed iterator over the `r`-th row.
+    ///
+    /// If the row length is not divisible by the packing width, remaining entries are zero-padded.
     fn padded_horizontally_packed_row<'a, P>(
         &'a self,
         r: usize,
@@ -132,6 +163,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         (0..num_elems).map(move |_| P::from_fn(|_| row_iter.next().unwrap_or_default()))
     }
 
+    /// Returns a parallel iterator over packed rows (with suffixes).
     fn par_horizontally_packed_rows<'a, P>(
         &'a self,
     ) -> impl IndexedParallelIterator<
@@ -149,6 +181,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
             .map(|r| self.horizontally_packed_row(r))
     }
 
+    /// Returns a parallel iterator over zero-padded packed rows.
     fn par_padded_horizontally_packed_rows<'a, P>(
         &'a self,
     ) -> impl IndexedParallelIterator<Item = impl Iterator<Item = P> + Send + Sync>
@@ -212,6 +245,9 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
             .collect_vec()
     }
 
+    /// Returns a view over a vertically strided submatrix.
+    ///
+    /// The view selects rows using `r = offset + i * stride` for each `i`.
     fn vertically_strided(self, stride: usize, offset: usize) -> VerticallyStridedMatrixView<Self>
     where
         Self: Sized,
