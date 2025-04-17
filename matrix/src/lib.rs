@@ -188,7 +188,9 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
             .map(|r| self.horizontally_packed_row(r))
     }
 
-    /// Returns a parallel iterator over zero-padded packed rows.
+    /// Get a parallel iterator over all packed rows of the matrix.
+    ///
+    /// If the matrix width is not divisible by the packing width, the final entry of each row will be zero-padded.
     fn par_padded_horizontally_packed_rows<'a, P>(
         &'a self,
     ) -> impl IndexedParallelIterator<Item = impl Iterator<Item = P> + Send + Sync>
