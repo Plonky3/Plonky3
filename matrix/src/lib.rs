@@ -202,9 +202,8 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         }
     }
 
-    /// Returns the elements of the `r`-th row as something which can be coerced to a slice.
-    ///
-    /// Returns None if `r >= height()`.
+    /// Collect the elements of the rows `r` through `r + c`. If anything is larger than `self.height()`
+    /// simply wrap around to the beginning of the matrix.
     fn wrapping_row_slices(&self, r: usize, c: usize) -> Vec<impl Deref<Target = [T]>> {
         unsafe {
             (0..c)
@@ -241,14 +240,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         Self: Sized,
         T: Clone,
     {
-        unsafe {
-            RowMajorMatrix::new(
-                (0..self.height())
-                    .flat_map(|r| self.row_unchecked(r))
-                    .collect(),
-                self.width(),
-            )
-        }
+        RowMajorMatrix::new(self.rows().flatten().collect(), self.width())
     }
 
     /// Get a packed iterator over the `r`-th row.
