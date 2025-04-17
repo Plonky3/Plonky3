@@ -102,7 +102,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         (0..self.height()).into_par_iter().map(move |r| self.row(r))
     }
 
-    /// Returns the elements of the `r`-th row as a collected slice.
+    /// Returns the elements of the `r`-th row as something which can be coerced to a slice.
     fn row_slice(&self, r: usize) -> impl Deref<Target = [T]> {
         self.row(r).collect_vec()
     }
