@@ -132,7 +132,7 @@ mod tests {
         let bitrev = BitReversalPerm::new_view(matrix);
 
         // Should map row indices via bit reversal
-        let expected = vec![0, 4, 2, 6, 1, 5, 3, 7];
+        let expected = [0, 4, 2, 6, 1, 5, 3, 7];
         for (i, &expected_row_idx) in expected.iter().enumerate() {
             let row: Vec<_> = bitrev.row(i).collect();
             assert_eq!(row, vec![expected_row_idx]);
