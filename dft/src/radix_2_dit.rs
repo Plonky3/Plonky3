@@ -15,9 +15,8 @@ use crate::butterflies::{Butterfly, DitButterfly, TwiddleFreeButterfly};
 /// Radix-2 Decimation-in-Time FFT over a two-adic subgroup.
 ///
 /// This struct implements a fast Fourier transform (FFT) using the Radix-2
-/// Decimation-in-Time (DIT) algorithm over a multiplicative subgroup of a finite field.
-/// It is optimized for fields that support a two-adic structure, enabling FFT
-/// computations for sizes that are powers of two.
+/// Decimation-in-Time (DIT) algorithm over a two-adic multiplicative subgroup of a finite field.
+/// It is optimized for a batch setting where multiple FFT's are being computed simultaneously.
 ///
 /// Internally, the implementation memoizes twiddle factors (powers of the root of unity)
 /// for reuse across multiple transforms. This avoids redundant computation
