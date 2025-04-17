@@ -150,9 +150,9 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         (packed, sfx)
     }
 
-    /// Returns a zero-padded packed iterator over the `r`-th row.
+    /// Get a packed iterator over the `r`-th row.
     ///
-    /// If the row length is not divisible by the packing width, remaining entries are zero-padded.
+    /// If the row length is not divisible by the packing width, the final entry will be zero-padded.
     fn padded_horizontally_packed_row<'a, P>(
         &'a self,
         r: usize,
