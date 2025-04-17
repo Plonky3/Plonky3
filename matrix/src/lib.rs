@@ -117,7 +117,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         self.row(self.height() - 1)
     }
 
-    /// Converts the matrix into a `RowMajorMatrix` by collecting all rows.
+    /// Converts the matrix into a `RowMajorMatrix` by collecting all rows into a single vector.
     fn to_row_major_matrix(self) -> RowMajorMatrix<T>
     where
         Self: Sized,
