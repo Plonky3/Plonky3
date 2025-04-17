@@ -90,12 +90,12 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         Self::new(values, 1)
     }
 
-    /// Get a view of the the matrix, i.e. a reference to the underlying data.
+    /// Get a view of the matrix, i.e. a reference to the underlying data.
     pub fn as_view(&self) -> RowMajorMatrixView<'_, T> {
         RowMajorMatrixView::new(self.values.borrow(), self.width)
     }
 
-    /// Get a mutable view of the the matrix, i.e. a mutable reference to the underlying data.
+    /// Get a mutable view of the matrix, i.e. a mutable reference to the underlying data.
     pub fn as_view_mut(&mut self) -> RowMajorMatrixViewMut<'_, T>
     where
         S: BorrowMut<[T]>,
