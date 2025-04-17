@@ -35,9 +35,6 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     /// Most implementations use `RowMajorMatrix<F>` or a wrapper like
     /// `BitReversedMatrixView<RowMajorMatrix<F>>` to allow in-place bit-reversed access.
     ///
-    /// Requirements:
-    /// - Must support bit-reversed indexing (`BitReversibleMatrix`).
-    /// - Must own its data (`'static` lifetime).
     type Evaluations: BitReversibleMatrix<F> + 'static;
 
     /// Compute the discrete Fourier transform (DFT) of `vec`.
