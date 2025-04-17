@@ -355,7 +355,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
     #[inline]
     unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
         unsafe {
-            // Safety: It is up to the user to ensure that r < self.height() and c < self.width().
+            // Safety: The caller must ensure that r < self.height() and c < self.width().
             self.values
                 .borrow()
                 .get_unchecked(r * self.width + c)
@@ -385,7 +385,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         r: usize,
     ) -> impl IntoIterator<Item = T, IntoIter = impl ParallelIterator<Item = T> + Send + Sync> {
         unsafe {
-            // Safety: It is up to the user to ensure that r < self.height().
+            // Safety: The caller must ensure that r < self.height().
             self.values
                 .borrow()
                 .get_unchecked(r * self.width..(r + 1) * self.width)
@@ -402,8 +402,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         end: usize,
     ) -> impl IntoIterator<Item = T, IntoIter = impl ParallelIterator<Item = T> + Send + Sync> {
         unsafe {
-            // Safety: It is up to the user to ensure that r < self.height(), start < end <= self.width().
-            // If end > self.width() this will return values from the next row.
+            // Safety: The caller must ensure that r < self.height() and start <= end <= self.width().
             self.values
                 .borrow()
                 .get_unchecked(r * self.width + start..r * self.width + end)
@@ -414,20 +413,33 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
 
     #[inline]
     fn row_slice(&self, r: usize) -> Option<impl Deref<Target = [T]>> {
-        (r < self.height()).then(|| unsafe {
-            // Safety: We know that the bounds are in the slice because of the previous check.
-            self.values
-                .borrow()
-                .get_unchecked(r * self.width..(r + 1) * self.width)
-        })
+        self.values
+            .borrow()
+            .get(r * self.width..(r + 1) * self.width)
     }
 
     #[inline]
     unsafe fn row_slice_unchecked(&self, r: usize) -> impl Deref<Target = [T]> {
         unsafe {
+            // Safety: The caller must ensure that r < self.height()
             self.values
                 .borrow()
                 .get_unchecked(r * self.width..(r + 1) * self.width)
+        }
+    }
+
+    #[inline]
+    unsafe fn row_subslice_unchecked(
+        &self,
+        r: usize,
+        start: usize,
+        end: usize,
+    ) -> impl Deref<Target = [T]> {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height()
+            self.values
+                .borrow()
+                .get_unchecked(r * self.width + start..r * self.width + end)
         }
     }
 
@@ -562,24 +574,36 @@ mod tests {
     }
 
     #[test]
-    fn test_get_and_get_unchecked() {
+    fn test_get_methods() {
         let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
+        assert_eq!(matrix.get(0, 0), Some(1));
+        assert_eq!(matrix.get(1, 1), Some(4));
+        assert_eq!(matrix.get(2, 0), Some(5));
         unsafe {
-            assert_eq!(matrix.get(0, 0), Some(matrix.get_unchecked(0, 0)));
-            assert_eq!(matrix.get(1, 1), Some(matrix.get_unchecked(1, 1)));
-            assert_eq!(matrix.get(2, 0), Some(matrix.get_unchecked(2, 0)));
+            assert_eq!(matrix.get_unchecked(0, 1), Some(2));
+            assert_eq!(matrix.get_unchecked(1, 0), Some(3));
+            assert_eq!(matrix.get_unchecked(2, 1), Some(6));
         }
         assert_eq!(matrix.get(3, 0), None);
-        assert_eq!(matrix.get(0, 3), None);
+        assert_eq!(matrix.get(0, 2), None);
     }
 
-    // TODO: Add more tests for other unsafe methods
     #[test]
-    fn test_row_slice() {
-        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
-        assert_eq!(matrix.row_slice(0).deref(), &[1, 2]);
-        assert_eq!(matrix.row_slice(2).deref(), &[5, 6]);
+    fn test_row_slice_methods() {
+        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6, 7, 8, 9], 3);
+        let slice0 = matrix.row_slice(0);
+        let slice2 = matrix.row_slice(2);
+        assert_eq!(slice0.unwrap().deref(), &[1, 2, 3]);
+        assert_eq!(slice2.unwrap().deref(), &[7, 8, 9]);
+        unsafe {
+            assert_eq!(slice0, Some(matrix.row_slice_unchecked(0)));
+            assert_eq!(slice2, Some(matrix.row_slice_unchecked(2)));
+
+            assert_eq!(slice0, Some(matrix.row_subslice_unchecked(0, 0, 3)));
+            assert_eq!(&[5], matrix.row_subslice_unchecked(2, 1, 2));
+        }
     }
+    assert_eq!(matrix.row_slice(3), None);
 
     #[test]
     fn test_row_slices() {
@@ -743,10 +767,21 @@ mod tests {
     }
 
     #[test]
-    fn test_row() {
-        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4], 2);
-        let row: Vec<_> = matrix.row(1).collect();
-        assert_eq!(row, vec![3, 4]);
+    fn test_row_methods() {
+        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6, 7, 8], 4);
+        let row: Vec<_> = matrix.row(1).unwrap().collect();
+        assert_eq!(row, vec![5, 6, 7, 8]);
+        unsafe {
+            let row: Vec<_> = matrix.row_unchecked(0).collect();
+            assert_eq!(row, vec![1, 2, 3, 4]);
+            let row: Vec<_> = matrix.row_subset_unchecked(0, 0, 3).collect();
+            assert_eq!(row, vec![1, 2, 3]);
+            let row: Vec<_> = matrix.row_subset_unchecked(0, 1, 3).collect();
+            assert_eq!(row, vec![2, 3]);
+            let row: Vec<_> = matrix.row_subset_unchecked(0, 2, 4).collect();
+            assert_eq!(row, vec![3, 4]);
+        }
+        assert_eq!(matrix.row(2), None);
     }
 
     #[test]

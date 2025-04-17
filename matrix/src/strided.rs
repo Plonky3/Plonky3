@@ -86,9 +86,13 @@ mod tests {
         assert_eq!(view.height(), 5);
         assert_eq!(view.width(), 3);
 
-        assert_eq!(view.get(0, 0), 10);
-        assert_eq!(view.get(1, 1), 21);
-        assert_eq!(view.get(4, 2), 52);
+        assert_eq!(view.get(0, 0), Some(10));
+        assert_eq!(view.get(1, 1), Some(21));
+        unsafe {
+            assert_eq!(view.get_unchecked(4, 2), 52);
+        }
+        assert_eq!(view.get(5, 0), None); // out of bounds
+        assert_eq!(view.get(0, 3), None); // out of bounds
     }
 
     #[test]
@@ -97,9 +101,12 @@ mod tests {
         let view = VerticallyStridedRowIndexMap::new_view(matrix, 2, 0);
 
         assert_eq!(view.height(), 3);
-        assert_eq!(view.get(0, 0), 10); // row 0
-        assert_eq!(view.get(1, 1), 31); // row 2
-        assert_eq!(view.get(2, 2), 52); // row 4
+        assert_eq!(view.get(0, 0), Some(10)); // row 0
+        unsafe {
+            assert_eq!(view.get_unchecked(1, 1), 31); // row 2
+            assert_eq!(view.get_unchecked(2, 2), 52); // row 4
+        }
+        assert_eq!(view.get(0, 3), None); // out of bounds
     }
 
     #[test]
@@ -108,8 +115,10 @@ mod tests {
         let view = VerticallyStridedRowIndexMap::new_view(matrix, 2, 1);
 
         assert_eq!(view.height(), 2);
-        assert_eq!(view.get(0, 0), 20); // row 1
-        assert_eq!(view.get(1, 1), 41); // row 3
+        assert_eq!(view.get(0, 0), Some(20)); // row 1
+        unsafe {
+            assert_eq!(view.get_unchecked(1, 1), 41);
+        } // row 3
     }
 
     #[test]
@@ -118,8 +127,8 @@ mod tests {
         let view = VerticallyStridedRowIndexMap::new_view(matrix, 3, 0);
 
         assert_eq!(view.height(), 2);
-        assert_eq!(view.get(0, 0), 10); // row 0
-        assert_eq!(view.get(1, 1), 41); // row 3
+        assert_eq!(view.get(0, 0), Some(10)); // row 0
+        assert_eq!(view.get(1, 1), Some(41)); // row 3
     }
 
     #[test]
@@ -128,8 +137,10 @@ mod tests {
         let view = VerticallyStridedRowIndexMap::new_view(matrix, 3, 1);
 
         assert_eq!(view.height(), 2);
-        assert_eq!(view.get(0, 0), 20); // row 1
-        assert_eq!(view.get(1, 1), 51); // row 4
+        unsafe {
+            assert_eq!(view.get_unchecked(0, 0), 20); // row 1
+            assert_eq!(view.get_unchecked(1, 1), 51); // row 4
+        }
     }
 
     #[test]
@@ -138,7 +149,7 @@ mod tests {
         let view = VerticallyStridedRowIndexMap::new_view(matrix, 3, 2);
 
         assert_eq!(view.height(), 1);
-        assert_eq!(view.get(0, 2), 32); // row 2
+        assert_eq!(view.get(0, 2), Some(32)); // row 2
     }
 
     #[test]
@@ -147,7 +158,7 @@ mod tests {
         let view = VerticallyStridedRowIndexMap::new_view(matrix, 10, 0);
 
         assert_eq!(view.height(), 1);
-        assert_eq!(view.get(0, 0), 10); // row 0
+        assert_eq!(view.get(0, 0), Some(10)); // row 0
     }
 
     #[test]
@@ -157,7 +168,7 @@ mod tests {
 
         // offset == 4 < height == 5 → view selects row 4
         assert_eq!(view.height(), 1);
-        assert_eq!(view.get(0, 2), 52); // row 4
+        assert_eq!(view.get(0, 2), Some(52)); // row 4
     }
 
     #[test]

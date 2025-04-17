@@ -58,9 +58,13 @@ impl Display for Dimensions {
 /// packing strategies for SIMD optimizations and interaction with extension fields.
 pub trait Matrix<T: Send + Sync>: Send + Sync {
     /// Returns the number of columns in the matrix.
+    ///
+    /// This being the incorrect value is considered undefined behaviour.
     fn width(&self) -> usize;
 
     /// Returns the number of rows in the matrix.
+    ///
+    /// This being the incorrect value is considered undefined behaviour.
     fn height(&self) -> usize;
 
     /// Returns the dimensions (width, height) of the matrix.
@@ -82,16 +86,11 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     ///
     /// For a safe alternative, see [`get`].
     ///
-    /// It is undefined behaviour to call this function if either
-    /// `r >= height()` or `c >= width()`.
+    /// # Safety
+    /// The caller must ensure that `r < self.height()` and `c < self.width()`.
+    /// Breaking any of these assumptions is considered undefined behaviour.
     unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
-        unsafe {
-            self.row(r)
-                .unwrap_unchecked()
-                .into_iter()
-                .nth(c)
-                .unwrap_unchecked()
-        }
+        unsafe { self.get(r, c).unwrap_unchecked() }
     }
 
     /// Returns an iterator over the elements of the `r`-th row.
@@ -110,11 +109,15 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     ///
     /// For a safe alternative, see [`row`].
     ///
-    /// It is undefined behaviour to call this function if `r >= height()`.
+    /// # Safety
+    /// The caller must ensure that `r < self.height()`.
+    /// Breaking this assumption is considered undefined behaviour.
     unsafe fn row_unchecked(
         &self,
         r: usize,
-    ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync>;
+    ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
+        unsafe { self.row(r).unwrap_unchecked() }
+    }
 
     /// Returns an iterator over the elements of the `r`-th row from position `start` to `end`.
     ///
@@ -122,7 +125,9 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     ///
     /// For a safe alternative, use [`row`], along with the `skip` and `take` iterator methods.
     ///
-    /// It is undefined behaviour to call this function if `r >= height()`, `start > end`, or `end > width()`.
+    /// # Safety
+    /// The caller must ensure that `r < self.height()` and `start <= end <= self.width()`.
+    /// Breaking any of these assumptions is considered undefined behaviour.
     unsafe fn row_subset_unchecked(
         &self,
         r: usize,
@@ -134,6 +139,46 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
                 .into_iter()
                 .skip(start)
                 .take(end - start)
+        }
+    }
+
+    /// Returns the elements of the `r`-th row as something which can be coerced to a slice.
+    ///
+    /// Returns None if `r >= height()`.
+    fn row_slice(&self, r: usize) -> Option<impl Deref<Target = [T]>> {
+        self.row(r).map(|x| x.into_iter().collect_vec())
+    }
+
+    /// Returns the elements of the `r`-th row as something which can be coerced to a slice.
+    ///
+    /// For a safe alternative, see [`row_slice`].
+    ///
+    /// # Safety
+    /// The caller must ensure that `r < self.height()`.
+    /// Breaking this assumption is considered undefined behaviour.
+    unsafe fn row_slice_unchecked(&self, r: usize) -> impl Deref<Target = [T]> {
+        unsafe { self.row_unchecked(r).into_iter().collect_vec() }
+    }
+
+    /// Returns the elements of the `r`-th row as something which can be coerced to a slice.
+    ///
+    /// When `start = 0` and `end = width()`, this is equivalent to [`row_slice_unchecked`].
+    ///
+    /// For a safe alternative, see [`row_slice`].
+    ///
+    /// # Safety
+    /// The caller must ensure that `r < self.height()` and `start <= end <= self.width()`.
+    /// Breaking any of these assumptions is considered undefined behaviour.
+    unsafe fn row_subslice_unchecked(
+        &self,
+        r: usize,
+        start: usize,
+        end: usize,
+    ) -> impl Deref<Target = [T]> {
+        unsafe {
+            self.row_subset_unchecked(r, start, end)
+                .into_iter()
+                .collect_vec()
         }
     }
 
@@ -155,22 +200,6 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
                 .into_par_iter()
                 .map(move |r| self.row_unchecked(r).into_iter())
         }
-    }
-
-    /// Returns the elements of the `r`-th row as something which can be coerced to a slice.
-    ///
-    /// Returns None if `r >= height()`.
-    fn row_slice(&self, r: usize) -> Option<impl Deref<Target = [T]>> {
-        self.row(r).map(|x| x.into_iter().collect_vec())
-    }
-
-    /// Returns the elements of the `r`-th row as something which can be coerced to a slice.
-    ///
-    /// For a safe alternative, see [`row`].
-    ///
-    /// It is undefined behaviour to call this function if `r >= height()`.
-    unsafe fn row_slice_unchecked(&self, r: usize) -> impl Deref<Target = [T]> {
-        unsafe { self.row_unchecked(r).into_iter().collect_vec() }
     }
 
     /// Returns the elements of the `r`-th row as something which can be coerced to a slice.
@@ -502,8 +531,6 @@ mod tests {
         fn row(&self, r: usize) -> Self::Row<'_> {
             self.data[r].clone().into_iter()
         }
-
-        // TODO: Fix tests.
 
         unsafe fn row_unchecked(&self, r: usize) -> Self::Row<'_> {
             self.data[r].clone().into_iter()

@@ -40,26 +40,98 @@ where
         self.0.height()
     }
 
-    type Row<'a>
-        = FlatIter<F, Inner::Row<'a>>
-    where
-        Self: 'a;
+    fn get(&self, r: usize, c: usize) -> Option<F> {
+        // The c'th base field element in a row of extension field elements is
+        // at index c % EF::DIMENSION in the c / EF::DIMENSION'th extension element.
+        let (r, c) = (r, c / EF::DIMENSION);
+        let inner = self.0.get(r, c)?;
+        Some(inner.as_basis_coefficients_slice()[c % EF::DIMENSION])
+    }
 
-    fn row(&self, r: usize) -> Self::Row<'_> {
-        FlatIter {
-            inner: self.0.row(r).peekable(),
+    unsafe fn get_unchecked(&self, r: usize, c: usize) -> F {
+        // The c'th base field element in a row of extension field elements is
+        // at index c % EF::DIMENSION in the c / EF::DIMENSION'th extension element.
+        let (r, c) = (r, c / EF::DIMENSION);
+        let inner = unsafe {
+            // Safety: The caller must ensure that r < self.height() and c < self.width().
+            // Assuming this, c / EF::DIMENSION < self.0.width().
+            self.0.get_unchecked(r, c)
+        };
+        inner.as_basis_coefficients_slice()[c % EF::DIMENSION]
+    }
+
+    fn row(
+        &self,
+        r: usize,
+    ) -> Option<impl IntoIterator<Item = F, IntoIter = impl Iterator<Item = F> + Send + Sync>> {
+        Some(FlatIter {
+            inner: self.0.row(r)?.into_iter().peekable(),
             idx: 0,
             _phantom: PhantomData,
+        })
+    }
+
+    unsafe fn row_unchecked(
+        &self,
+        r: usize,
+    ) -> impl IntoIterator<Item = F, IntoIter = impl Iterator<Item = F> + Send + Sync> {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height().
+            FlatIter {
+                inner: self.0.row_unchecked(r).into_iter().peekable(),
+                idx: 0,
+                _phantom: PhantomData,
+            }
         }
     }
 
-    fn row_slice(&self, r: usize) -> impl Deref<Target = [F]> {
-        self.0
-            .row_slice(r)
-            .iter()
-            .flat_map(|val| val.as_basis_coefficients_slice())
-            .copied()
-            .collect::<Vec<_>>()
+    unsafe fn row_subset_unchecked(
+        &self,
+        r: usize,
+        start: usize,
+        end: usize,
+    ) -> impl IntoIterator<Item = F, IntoIter = impl Iterator<Item = F> + Send + Sync> {
+        // We can skip the first start / EF::DIMENSION elements in the row.
+        let len = end - start;
+        let inner_start = start / EF::DIMENSION;
+        unsafe {
+            // Safety: The caller must ensure that r < self.height(), start <= end and end < self.width().
+            FlatIter {
+                inner: self
+                    .0
+                    // We set end to be the width of the inner matrix and use take to ensure we get the right
+                    // number of elements.
+                    .row_subset_unchecked(r, inner_start, self.0.width())
+                    .into_iter()
+                    .peekable(),
+                idx: start,
+                _phantom: PhantomData,
+            }
+            .take(len)
+        }
+    }
+
+    fn row_slice(&self, r: usize) -> Option<impl Deref<Target = [F]>> {
+        Some(
+            self.0
+                .row_slice(r)?
+                .iter()
+                .flat_map(|val| val.as_basis_coefficients_slice())
+                .copied()
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    unsafe fn row_slice_unchecked(&self, r: usize) -> impl Deref<Target = [F]> {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height().
+            self.0
+                .row_slice_unchecked(r)
+                .iter()
+                .flat_map(|val| val.as_basis_coefficients_slice())
+                .copied()
+                .collect::<Vec<_>>()
+        }
     }
 }
 
@@ -99,6 +171,8 @@ mod tests {
     use crate::dense::RowMajorMatrix;
     type F = Mersenne31;
     type EF = Complex<Mersenne31>;
+
+    // TODO: ADD Tests
 
     #[test]
     fn flat_matrix() {

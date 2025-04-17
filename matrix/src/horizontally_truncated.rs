@@ -1,4 +1,3 @@
-use core::iter::Take;
 use core::marker::PhantomData;
 
 use crate::Matrix;
@@ -53,26 +52,83 @@ where
 
     /// Get the element at the given row and column.
     ///
-    /// # Panics
-    /// Panics if `c >= truncated_width`, or if `r` or `c` are out of bounds for the inner matrix.
+    /// Returns None if `c >= truncated_width`, or if `r > self.height()`.
     #[inline(always)]
-    fn get(&self, r: usize, c: usize) -> T {
-        assert!(c < self.truncated_width);
-        self.inner.get(r, c)
+    fn get(&self, r: usize, c: usize) -> Option<T> {
+        (c < self.truncated_width || r < self.height())
+            .then(|| self.inner.get(r, c).expect("This should be unreachable without undefined behaviour. Most likely cause is inner.width() being incorrect."))
     }
 
-    /// The type of a matrix row, represented as an iterator over the truncated number of columns.
-    type Row<'a>
-        = Take<Inner::Row<'a>>
-    where
-        Self: 'a;
-
-    /// Return an iterator over the elements of row `r`, up to `truncated_width` columns.
     #[inline(always)]
-    fn row(&self, r: usize) -> Self::Row<'_> {
-        self.inner.row(r).take(self.truncated_width)
+    unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
+        unsafe {
+            // Safety: The caller must ensure that `c < truncated_width` and `r < self.height()`.
+            self.inner.get_unchecked(r, c)
+        }
+    }
+
+    fn row(
+        &self,
+        r: usize,
+    ) -> Option<impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync>> {
+        (r < self.height()).then(|| unsafe {
+            // Safety: We just checked that `r < self.height()`.
+            self.inner.row_subset_unchecked(r, 0, self.truncated_width)
+        })
+    }
+
+    unsafe fn row_unchecked(
+        &self,
+        r: usize,
+    ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
+        unsafe {
+            // Safety: The caller must ensure that `r < self.height()`.
+            self.inner.row_subset_unchecked(r, 0, self.truncated_width)
+        }
+    }
+
+    unsafe fn row_subset_unchecked(
+        &self,
+        r: usize,
+        start: usize,
+        end: usize,
+    ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height() and start <= end <= self.width().
+            self.inner.row_subset_unchecked(r, start, end)
+        }
+    }
+
+    fn row_slice(&self, r: usize) -> Option<impl core::ops::Deref<Target = [T]>> {
+        (r < self.height()).then(|| unsafe {
+            // Safety: We just checked that `r < self.height()`.
+            self.inner
+                .row_subslice_unchecked(r, 0, self.truncated_width)
+        })
+    }
+
+    unsafe fn row_slice_unchecked(&self, r: usize) -> impl core::ops::Deref<Target = [T]> {
+        unsafe {
+            // Safety: The caller must ensure that `r < self.height()`.
+            self.inner
+                .row_subslice_unchecked(r, 0, self.truncated_width)
+        }
+    }
+
+    unsafe fn row_subslice_unchecked(
+        &self,
+        r: usize,
+        start: usize,
+        end: usize,
+    ) -> impl core::ops::Deref<Target = [T]> {
+        unsafe {
+            // Safety: The caller must ensure that `r < self.height()` and `start <= end <= self.width()`.
+            self.inner.row_subslice_unchecked(r, start, end)
+        }
     }
 }
+
+// TODO: Test row_subset_unchecked, row_slice, row_slice_unchecked, row_subslice_unchecked.
 
 #[cfg(test)]
 mod tests {
@@ -99,15 +155,19 @@ mod tests {
         assert_eq!(truncated.height(), 2);
 
         // Check individual elements.
-        assert_eq!(truncated.get(0, 0), 1); // row 0, col 0
-        assert_eq!(truncated.get(1, 1), 5); // row 1, col 1
+        assert_eq!(truncated.get(0, 0), Some(1)); // row 0, col 0
+        assert_eq!(truncated.get(1, 1), Some(5)); // row 1, col 1
+        unsafe {
+            assert_eq!(truncated.get_unchecked(0, 1), 2); // row 0, col 1
+            assert_eq!(truncated.get_unchecked(1, 0), 4); // row 1, col 0
+        }
 
         // Row 0: should return [1, 2]
-        let row0: Vec<_> = truncated.row(0).collect();
+        let row0: Vec<_> = truncated.row(0).unwrap().collect();
         assert_eq!(row0, vec![1, 2]);
 
         // Row 1: should return [4, 5]
-        let row1: Vec<_> = truncated.row(1).collect();
+        let row1: Vec<_> = unsafe { truncated.row_unchecked(1).collect() };
         assert_eq!(row1, vec![4, 5]);
 
         // Convert the truncated view to a RowMajorMatrix and check contents.
@@ -133,13 +193,18 @@ mod tests {
 
         assert_eq!(truncated.width(), 2);
         assert_eq!(truncated.height(), 2);
-        assert_eq!(truncated.get(0, 1), 8);
-        assert_eq!(truncated.get(1, 0), 9);
+        assert_eq!(truncated.get(0, 1).unwrap(), 8);
+        assert_eq!(truncated.get(1, 0).unwrap(), 9);
 
-        let row0: Vec<_> = truncated.row(0).collect();
+        unsafe {
+            assert_eq!(truncated.get_unchecked(0, 0), 7);
+            assert_eq!(truncated.get_unchecked(1, 1), 10);
+        }
+
+        let row0: Vec<_> = truncated.row(0).unwrap().collect();
         assert_eq!(row0, vec![7, 8]);
 
-        let row1: Vec<_> = truncated.row(1).collect();
+        let row1: Vec<_> = unsafe { truncated.row_unchecked(1).collect() };
         assert_eq!(row1, vec![9, 10]);
     }
 

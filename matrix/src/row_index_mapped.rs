@@ -14,6 +14,8 @@ pub trait RowIndexMap: Send + Sync {
     fn height(&self) -> usize;
 
     /// Maps a visible row index `r` to the corresponding row index in the underlying matrix.
+    ///
+    /// It is considered undefined behaviour if `map_row_index(r) > inner.height()` for some index `r`.
     fn map_row_index(&self, r: usize) -> usize;
 
     /// Converts the mapped matrix into a dense row-major matrix.
@@ -25,9 +27,13 @@ pub trait RowIndexMap: Send + Sync {
         inner: Inner,
     ) -> RowMajorMatrix<T> {
         RowMajorMatrix::new(
-            (0..self.height())
-                .flat_map(|r| inner.row(self.map_row_index(r)))
-                .collect(),
+            unsafe {
+                // Safety: The caller that the output of `map_row_index` is less than `inner.height()`
+                // for all inputs in the range `0..self.height()`.
+                (0..self.height())
+                    .flat_map(|r| inner.row_unchecked(self.map_row_index(r)))
+                    .collect()
+            },
             inner.width(),
         )
     }
@@ -56,23 +62,72 @@ impl<T: Send + Sync, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         self.index_map.height()
     }
 
-    fn get(&self, r: usize, c: usize) -> T {
+    fn get(&self, r: usize, c: usize) -> Option<T> {
         self.inner.get(self.index_map.map_row_index(r), c)
     }
 
-    type Row<'a>
-        = Inner::Row<'a>
-    where
-        Self: 'a;
+    unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height() and c < self.width().
+            self.inner.get_unchecked(self.index_map.map_row_index(r), c)
+        }
+    }
 
     // Override these methods so we use the potentially optimized inner methods instead of defaults.
 
-    fn row(&self, r: usize) -> Self::Row<'_> {
+    fn row(
+        &self,
+        r: usize,
+    ) -> Option<impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync>> {
         self.inner.row(self.index_map.map_row_index(r))
     }
 
-    fn row_slice(&self, r: usize) -> impl Deref<Target = [T]> {
+    unsafe fn row_unchecked(
+        &self,
+        r: usize,
+    ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height().
+            self.inner.row_unchecked(self.index_map.map_row_index(r))
+        }
+    }
+
+    unsafe fn row_subset_unchecked(
+        &self,
+        r: usize,
+        start: usize,
+        end: usize,
+    ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height() and start <= end <= self.width().
+            self.inner
+                .row_subset_unchecked(self.index_map.map_row_index(r), start, end)
+        }
+    }
+
+    fn row_slice(&self, r: usize) -> Option<impl Deref<Target = [T]>> {
         self.inner.row_slice(self.index_map.map_row_index(r))
+    }
+
+    unsafe fn row_slice_unchecked(&self, r: usize) -> impl Deref<Target = [T]> {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height().
+            self.inner
+                .row_slice_unchecked(self.index_map.map_row_index(r))
+        }
+    }
+
+    unsafe fn row_subslice_unchecked(
+        &self,
+        r: usize,
+        start: usize,
+        end: usize,
+    ) -> impl Deref<Target = [T]> {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height() and start <= end <= self.width().
+            self.inner
+                .row_subslice_unchecked(self.index_map.map_row_index(r), start, end)
+        }
     }
 
     fn to_row_major_matrix(self) -> RowMajorMatrix<T>
@@ -168,8 +223,15 @@ mod tests {
         assert_eq!(mapped_view.width(), 3);
 
         // Check values.
-        assert_eq!(mapped_view.get(0, 0), 1);
-        assert_eq!(mapped_view.get(1, 2), 6);
+        assert_eq!(mapped_view.get(0, 0).unwrap(), 1);
+        assert_eq!(mapped_view.get(1, 2).unwrap(), 6);
+
+        unsafe {
+            assert_eq!(mapped_view.get_unchecked(0, 1), 2);
+            assert_eq!(mapped_view.get_unchecked(1, 0), 4);
+        }
+
+        // TODO: Check unsafe row methods and row_slice methods.
 
         // Check rows.
         let rows: Vec<Vec<_>> = mapped_view.rows().map(|row| row.collect()).collect();
@@ -199,9 +261,14 @@ mod tests {
         assert_eq!(mapped_view.width(), 3);
 
         // Check the first element of the mapped view (originally the second row, first column).
-        assert_eq!(mapped_view.get(0, 0), 4);
+        assert_eq!(mapped_view.get(0, 0).unwrap(), 4);
         // Check the last element of the mapped view (originally the first row, last column).
-        assert_eq!(mapped_view.get(1, 2), 3);
+        assert_eq!(mapped_view.get(1, 2).unwrap(), 3);
+
+        unsafe {
+            assert_eq!(mapped_view.get_unchecked(0, 1), 5);
+            assert_eq!(mapped_view.get_unchecked(1, 0), 1);
+        }
 
         // Check rows.
         let rows: Vec<Vec<_>> = mapped_view.rows().map(|row| row.collect()).collect();
