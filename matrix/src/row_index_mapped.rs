@@ -471,6 +471,5 @@ mod tests {
         assert_eq!(mapped_view.get(1, 0), None);
         assert!(mapped_view.row(1).is_none());
         assert!(mapped_view.row_slice(1).is_none());
-        
     }
 }
