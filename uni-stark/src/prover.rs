@@ -3,9 +3,9 @@ use alloc::vec::Vec;
 
 use itertools::{Itertools, izip};
 use p3_air::Air;
-use p3_challenger::{CanObserve, CanSample, FieldChallenger};
+use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{BasedVectorSpace, PackedValue, PrimeCharacteristicRing};
+use p3_field::{BasedVectorSpace, ExtensionField, PackedValue, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
@@ -63,6 +63,10 @@ where
 
     challenger.observe(trace_commit.clone());
     challenger.observe_slice(public_values);
+
+    // Get the first Fiat Shamir challenge which will be used to combine all constraint polynomials
+    // into a single polynomial. The only real restriction on this value is that it should not be `0`
+    // but the probability of that is 1/|EF| < 2^{-120} so we can ignore it.
     let alpha: SC::Challenge = challenger.sample_algebra_element();
 
     let quotient_domain =
@@ -92,7 +96,27 @@ where
         quotient_chunks: quotient_commit,
     };
 
-    let zeta: SC::Challenge = challenger.sample();
+    // Get an out-of-domain point to open our values at.
+    // It's important that zeta does not accidentally lie in the domain `gH` as that could
+    // lead to denominators being zero later on.
+    let zeta = {
+        // It's much cheaper to check that zeta does not lie in the base field which is
+        // sufficient as the domain is a subset of the base field. This does have a slightly
+        // higher probability of occurring but that probability is |F|/|EF| which is
+        // still tiny for all our configurations so this loop should basically only ever run once.
+        // We do need to ensure though that the Challenge field is not equal to the base field.
+        assert_ne!(
+            SC::Challenge::DIMENSION,
+            1,
+            "The Challenge field must be a non trivial extension field."
+        );
+        loop {
+            let zeta: SC::Challenge = challenger.sample_algebra_element();
+            if !zeta.is_in_basefield() {
+                break zeta;
+            }
+        }
+    };
     let zeta_next = trace_domain.next_point(zeta).unwrap();
 
     let (opened_values, opening_proof) = info_span!("open").in_scope(|| {
