@@ -160,6 +160,11 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     /// and `vec.len() << added_bits`, respectively.
     /// Treating `vec` as the evaluations of a polynomial on the subgroup `H`,
     /// compute the evaluations of that polynomial on the subgroup `K`.
+    ///
+    /// There is another way to interpret this transformation which gives a larger
+    /// use case. We can also view it as treating columns of `mat` as evaluations
+    /// over a coset `gH` and then computing the evaluations of those polynomials
+    /// on the coset `gK`.
     fn lde(&self, vec: Vec<F>, added_bits: usize) -> Vec<F> {
         self.lde_batch(RowMajorMatrix::new_col(vec), added_bits)
             .to_row_major_matrix()
@@ -174,12 +179,16 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     /// and `mat.height() << added_bits`, respectively.
     /// Treating each column of `mat` as the evaluations of a polynomial on the subgroup `H`,
     /// compute the evaluations of those polynomials on the subgroup `K`.
+    ///
+    /// There is another way to interpret this transformation which gives a larger
+    /// use case. We can also view it as treating columns of `mat` as evaluations
+    /// over a coset `gH` and then computing the evaluations of those polynomials
+    /// on the coset `gK`.
     fn lde_batch(&self, mat: RowMajorMatrix<F>, added_bits: usize) -> Self::Evaluations {
-        let mut coeffs = self.idft_batch(mat);
-        coeffs
-            .values
-            .resize(coeffs.values.len() << added_bits, F::ZERO);
-        self.dft_batch(coeffs)
+        // This is a better default as several implementations have a custom implementation
+        // of `coset_lde_batch` and often the fact that the shift is `ONE` won't give any
+        // performance improvements anyway.
+        self.coset_lde_batch(mat, added_bits, F::ONE)
     }
 
     /// Compute the low-degree extension of of `vec` onto a coset of a larger subgroup.
@@ -389,6 +398,11 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     /// and `vec.len() << added_bits`, respectively.
     /// Treating `vec` as the evaluations of a polynomial on the subgroup `H`,
     /// compute the evaluations of that polynomial on the subgroup `K`.
+    ///
+    /// There is another way to interpret this transformation which gives a larger
+    /// use case. We can also view it as treating columns of `mat` as evaluations
+    /// over a coset `gH` and then computing the evaluations of those polynomials
+    /// on the coset `gK`.
     fn lde_algebra<V: BasedVectorSpace<F> + Clone + Send + Sync>(
         &self,
         vec: Vec<V>,
@@ -407,6 +421,11 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     /// and `mat.height() << added_bits`, respectively.
     /// Treating each column of `mat` as the evaluations of a polynomial on the subgroup `H`,
     /// compute the evaluations of those polynomials on the subgroup `K`.
+    ///
+    /// There is another way to interpret this transformation which gives a larger
+    /// use case. We can also view it as treating columns of `mat` as evaluations
+    /// over a coset `gH` and then computing the evaluations of those polynomials
+    /// on the coset `gK`.
     fn lde_algebra_batch<V: BasedVectorSpace<F> + Clone + Send + Sync>(
         &self,
         mat: RowMajorMatrix<V>,
