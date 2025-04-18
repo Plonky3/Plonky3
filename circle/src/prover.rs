@@ -26,7 +26,7 @@ where
     Challenge: ExtensionField<Val>,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
-    G: FriGenericConfig<Challenge>,
+    G: FriGenericConfig<Val, Challenge>,
 {
     // check sorted descending
     assert!(
@@ -82,7 +82,7 @@ where
     Challenge: ExtensionField<Val>,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + CanObserve<M::Commitment>,
-    G: FriGenericConfig<Challenge>,
+    G: FriGenericConfig<Val, Challenge>,
 {
     let mut inputs_iter = inputs.into_iter().peekable();
     let mut folded = inputs_iter.next().unwrap();

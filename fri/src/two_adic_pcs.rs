@@ -60,7 +60,7 @@ pub struct TwoAdicFriGenericConfig<InputProof, InputError>(
 pub type TwoAdicFriGenericConfigForMmcs<F, M> =
     TwoAdicFriGenericConfig<Vec<BatchOpening<F, M>>, <M as Mmcs<F>>::Error>;
 
-impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
+impl<F: TwoAdicField, InputProof, InputError: Debug, EF: ExtensionField<F>> FriGenericConfig<F, EF>
     for TwoAdicFriGenericConfig<InputProof, InputError>
 {
     type InputProof = InputProof;
@@ -74,9 +74,9 @@ impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
         &self,
         index: usize,
         log_height: usize,
-        beta: F,
-        evals: impl Iterator<Item = F>,
-    ) -> F {
+        beta: EF,
+        evals: impl Iterator<Item = EF>,
+    ) -> EF {
         let arity = 2;
         let log_arity = 1;
         let (e0, e1) = evals
@@ -84,7 +84,7 @@ impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
             .expect("TwoAdicFriFolder only supports arity=2");
         // If performance critical, make this API stateful to avoid this
         // This is a bit more math than is necessary, but leaving it here
-        // in case we want higher arity in the future
+        // in case we want higher arity in the future.
         let subgroup_start = F::two_adic_generator(log_height + log_arity)
             .exp_u64(reverse_bits_len(index, log_height) as u64);
         let mut xs = F::two_adic_generator(log_arity)
@@ -94,10 +94,12 @@ impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
         reverse_slice_index_bits(&mut xs);
         assert_eq!(log_arity, 1, "can only interpolate two points for now");
         // interpolate and evaluate at beta
-        e0 + (beta - xs[0]) * (e1 - e0) / (xs[1] - xs[0])
+        e0 + (beta - xs[0]) * (e1 - e0) * (xs[1] - xs[0]).inverse()
+        // Currently Algebra<F> does not include division so we do it manually.
+        // Note we do not want to do an EF division as that is far more expensive.
     }
 
-    fn fold_matrix<M: Matrix<F>>(&self, beta: F, m: M) -> Vec<F> {
+    fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, m: M) -> Vec<EF> {
         // We use the fact that
         //     p_e(x^2) = (p(x) + p(-x)) / 2
         //     p_o(x^2) = (p(x) - p(-x)) / (2 x)
@@ -106,25 +108,26 @@ impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
         //     p_o(g^(2i)) = (p(g^i) - p(g^(n/2 + i))) / (2 g^i)
         // so
         //     result(g^(2i)) = p_e(g^(2i)) + beta p_o(g^(2i))
-        //                    = (1/2 + beta/2 g_inv^i) p(g^i)
-        //                    + (1/2 - beta/2 g_inv^i) p(g^(n/2 + i))
+        //
+        // As p_e, p_o will be in the extension field we want to find ways to avoid extension multiplications.
+        // We should only need a single one (namely multiplication by beta).
         let g_inv = F::two_adic_generator(log2_strict_usize(m.height()) + 1).inverse();
-        let half_beta = beta.halve();
 
         // TODO: vectorize this (after we have packed extension fields)
 
-        // beta/2 times successive powers of g_inv
-        let mut powers = g_inv
-            .shifted_powers(half_beta)
+        // As beta is in the extension field, we want to avoid multiplying by it
+        // for as long as possible. Hence we use powers instead of shifted_powers.
+        let mut halve_inv_powers = g_inv
+            .shifted_powers(F::ONE.halve())
             .take(m.height())
             .collect_vec();
-        reverse_slice_index_bits(&mut powers);
+        reverse_slice_index_bits(&mut halve_inv_powers);
 
         m.par_rows()
-            .zip(powers)
-            .map(|(mut row, power)| {
+            .zip(halve_inv_powers)
+            .map(|(mut row, halve_inv_power)| {
                 let (lo, hi) = row.next_tuple().unwrap();
-                (lo + hi).halve() + power * (lo - hi)
+                (lo + hi).halve() + (lo - hi) * beta * halve_inv_power
             })
             .collect()
     }
