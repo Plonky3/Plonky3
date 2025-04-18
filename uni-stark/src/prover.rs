@@ -124,7 +124,6 @@
 
 use alloc::vec;
 use alloc::vec::Vec;
-use core::iter;
 
 use itertools::{Itertools, izip};
 use p3_air::Air;
@@ -182,7 +181,7 @@ where
     let log_degree = log2_strict_usize(degree);
 
     // Compute the constraint polynomials as vectors of symbolic expressions.
-    let symbolic_constraints = get_symbolic_constraints::<Val<SC>, A>(air, 0, public_values.len());
+    let symbolic_constraints = get_symbolic_constraints(air, 0, public_values.len());
 
     // Count the number of constraints that we have.
     let constraint_count = symbolic_constraints.len();
@@ -292,20 +291,8 @@ where
     let quotient_chunks = quotient_domain.split_evals(num_quotient_chunks, quotient_flat);
     let qc_domains = quotient_domain.split_domains(num_quotient_chunks);
 
-    // TODO: This treats the all `q_{ij}` as if they are evaluations over the domain `H`.
-    // This doesn't matter for low degree-ness but we need to be careful when checking
-    // equalities.
-
-    // When computing quotient_data, we take `q_{ij}` (defined on `g (k^j) H`), re-interpret it to
-    // be defined on `H`, e.g. replacing it with `q_{ij}'(x) = q_{ij}(g (k^j) x)`. Then we do a coset LDE to
-    // get it's evaluations on `(g/g (k^j)) H' = (k^{-j}) H'` which we commit to. Then when computing opening values
-    // we again re-interpret the evaluation vector to be defined on `g H'` e.g. replacing our
-    // polynomial with `q_{ij}''(x) = q_{ij}'(g^{-1} k^{-j} x) = q_{ij}(g^{-1} k^{-j} g (k^j) x) = q_{ij}(x)`.
-    // In other words our commitment does actually compute the evaluations of `q_{ij}(x)` over `gH`.
-    // Despite seemingly doing something else... Should try to make this clearer.
-
-    // For each polynomial `q_{ij}`, compute the evaluation vector of `q_{ij}(x)` over `gH'`. This
-    // is then hashed into a Merkle tree with it's rows bit-reversed.
+    // For each polynomial `q_{ij}`, compute the evaluation vector of `q_{ij}(x)` over `gH'`. We bit
+    // reverse the rows and hash the resulting matrix into a merkle tree.
     //      quotient_commit contains the root of the tree
     //      quotient_data contains the entire tree.
     //          - quotient_data.leaves is a pair of matrices containing the `q_i0(x)` and `q_i1(x)`.
@@ -341,7 +328,7 @@ where
                 (
                     &quotient_data,
                     // open every chunk at zeta
-                    iter::repeat_n(vec![zeta], num_quotient_chunks).collect_vec(),
+                    vec![vec![zeta]; num_quotient_chunks],
                 ),
             ],
             &mut challenger,

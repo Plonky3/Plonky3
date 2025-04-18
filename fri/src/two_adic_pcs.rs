@@ -7,7 +7,9 @@
 //! the evaluations of `F(x)` over `gH` are identical to the evaluations of `G(x)` over `H`.
 //!
 //! Hence we can reinterpret our vector of evaluations as evaluations of `G(x)` over `H` and apply
-//! the standard FRI protocol to this evaluation vector.
+//! the standard FRI protocol to this evaluation vector. This makes is easier to apply FRI to a collection
+//! of polynomials defined over different cosets as we don't need to keep track of the coset shifts. We
+//! can just assume that every polynomial is defined over the subgroup of the relevant size.
 
 use alloc::collections::BTreeMap;
 use alloc::vec;
@@ -182,9 +184,13 @@ where
             .into_iter()
             .map(|(domain, evals)| {
                 assert_eq!(domain.size(), evals.height());
-                //
+                // coset_lde_batch converts from evaluations over `xH` to evaluations over `shift * x * K`.
+                // Hence, letting `shift = g/x` the output will be evaluations over `gK` as desired.
+                // When `x = g,` we could just use the standard LDE but currently this doesn't seem
+                // to give a meaningful performance boost.
                 let shift = Val::GENERATOR / domain.shift();
-                // Commit to the bit-reversed LDE.
+                // Compute the LDE with blowup factor fri.log_blowup.
+                // We bit reverse as this has a nice interplay with the FRI protocol.
                 self.dft
                     .coset_lde_batch(evals, self.fri.log_blowup, shift)
                     .bit_reverse_rows()
@@ -192,6 +198,7 @@ where
             })
             .collect();
 
+        // Commit to the bit-reversed LDEs.
         self.mmcs.commit(ldes)
     }
 
