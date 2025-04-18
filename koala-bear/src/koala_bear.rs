@@ -106,6 +106,7 @@ impl BinomialExtensionData<4> for KoalaBearParameters {
 #[cfg(test)]
 mod tests {
     use num_bigint::BigUint;
+    use p3_field::extension::BinomialExtensionField;
     use p3_field::{InjectiveMonomial, PermutationMonomial, PrimeField64, TwoAdicField};
     use p3_field_testing::{
         test_field, test_field_dft, test_prime_field, test_prime_field_32, test_prime_field_64,
@@ -115,6 +116,7 @@ mod tests {
     use super::*;
 
     type F = KoalaBear;
+    type EF = BinomialExtensionField<F, 4>;
 
     #[test]
     fn test_koala_bear_two_adicity_generators() {
@@ -195,19 +197,21 @@ mod tests {
     );
     test_two_adic_field!(crate::KoalaBear);
 
-    test_field_dft!(radix2dit, crate::KoalaBear, p3_dft::Radix2Dit<_>);
-    test_field_dft!(bowers, crate::KoalaBear, p3_dft::Radix2Bowers);
+    test_field_dft!(radix2dit, crate::KoalaBear, super::EF, p3_dft::Radix2Dit<_>);
+    test_field_dft!(bowers, crate::KoalaBear, super::EF, p3_dft::Radix2Bowers);
     test_field_dft!(
         parallel,
         crate::KoalaBear,
+        super::EF,
         p3_dft::Radix2DitParallel::<crate::KoalaBear>
     );
     test_field_dft!(
         recur_dft,
         crate::KoalaBear,
+        super::EF,
         p3_monty_31::dft::RecursiveDft<_>
     );
     test_prime_field!(crate::KoalaBear);
-    test_prime_field_64!(crate::KoalaBear);
-    test_prime_field_32!(crate::KoalaBear);
+    test_prime_field_64!(crate::KoalaBear, &super::ZEROS, &super::ONES);
+    test_prime_field_32!(crate::KoalaBear, &super::ZEROS, &super::ONES);
 }

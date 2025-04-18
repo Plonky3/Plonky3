@@ -6,15 +6,17 @@ use core::fmt::{self, Debug, Display, Formatter};
 use core::hash::Hash;
 use core::iter::{Product, Sum};
 use core::marker::PhantomData;
-use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::{array, iter};
 
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField32, PrimeField64, TwoAdicField, quotient_map_small_int,
+    PrimeField32, PrimeField64, RawDataSerializable, TwoAdicField,
+    impl_raw_serializable_primefield32, quotient_map_small_int,
 };
+use p3_util::flatten_to_base;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -25,7 +27,7 @@ use crate::utils::{
 use crate::{FieldParameters, MontyParameters, RelativelyPrimePower, TwoAdicData};
 
 #[derive(Clone, Copy, Default, Eq, Hash, PartialEq)]
-#[repr(transparent)] // Packed field implementations rely on this!
+#[repr(transparent)] // Important for reasoning about memory layout.
 pub struct MontyField31<MP: MontyParameters> {
     /// The MONTY form of the field element, saved as a positive integer less than `P`.
     ///
@@ -36,8 +38,8 @@ pub struct MontyField31<MP: MontyParameters> {
 }
 
 impl<MP: MontyParameters> MontyField31<MP> {
-    /// The standard way to crate a new element.
-    /// Note that new converts the input into MONTY form so should be avoided in performance critical implementations.
+    /// The standard way to create a new element.
+    /// Note that `new` converts the input into MONTY form so should be avoided in performance critical implementations.
     #[inline(always)]
     pub const fn new(value: u32) -> Self {
         Self {
@@ -190,8 +192,12 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
 
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
-        // SAFETY: repr(transparent) ensures transmutation safety.
-        unsafe { transmute(vec![0u32; len]) }
+        // SAFETY:
+        // Due to `#[repr(transparent)]`, MontyField31 and u32 have the same size, alignment
+        // and memory layout making `flatten_to_base` safe. This this will create
+        // a vector MontyField31 elements with value set to 0 which is the
+        // MONTY form of 0.
+        unsafe { flatten_to_base(vec![0u32; len]) }
     }
 
     #[inline]
@@ -225,6 +231,10 @@ impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> PermutationMon
     fn injective_exp_root_n(&self) -> Self {
         FP::exp_root_d(*self)
     }
+}
+
+impl<FP: FieldParameters> RawDataSerializable for MontyField31<FP> {
+    impl_raw_serializable_primefield32!();
 }
 
 impl<FP: FieldParameters> Field for MontyField31<FP> {
@@ -447,7 +457,7 @@ impl<FP: FieldParameters> QuotientMap<i128> for MontyField31<FP> {
 
 impl<FP: FieldParameters> PrimeField for MontyField31<FP> {
     fn as_canonical_biguint(&self) -> BigUint {
-        <Self as PrimeField32>::as_canonical_u32(self).into()
+        self.as_canonical_u32().into()
     }
 }
 

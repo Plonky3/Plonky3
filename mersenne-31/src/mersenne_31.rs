@@ -1,20 +1,20 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
-use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::{array, fmt, iter};
 
 use num_bigint::BigUint;
 use p3_field::exponentiation::exp_1717986917;
 use p3_field::integers::QuotientMap;
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField32, PrimeField64, halve_u32, quotient_map_large_iint, quotient_map_large_uint,
-    quotient_map_small_int,
+    PrimeField32, PrimeField64, RawDataSerializable, halve_u32, impl_raw_serializable_primefield32,
+    quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int,
 };
+use p3_util::flatten_to_base;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::de::Error;
@@ -25,7 +25,7 @@ const P: u32 = (1 << 31) - 1;
 
 /// The prime field `F_p` where `p = 2^31 - 1`.
 #[derive(Copy, Clone, Default)]
-#[repr(transparent)] // Packed field implementations rely on this!
+#[repr(transparent)] // Important for reasoning about memory layout.
 pub struct Mersenne31 {
     /// Not necessarily canonical, but must fit in 31 bits.
     pub(crate) value: u32,
@@ -146,6 +146,10 @@ impl<'a> Deserialize<'a> for Mersenne31 {
     }
 }
 
+impl RawDataSerializable for Mersenne31 {
+    impl_raw_serializable_primefield32!();
+}
+
 impl PrimeCharacteristicRing for Mersenne31 {
     type PrimeSubfield = Self;
 
@@ -199,8 +203,11 @@ impl PrimeCharacteristicRing for Mersenne31 {
 
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
-        // SAFETY: repr(transparent) ensures transmutation safety.
-        unsafe { transmute(vec![0u32; len]) }
+        // SAFETY:
+        // Due to `#[repr(transparent)]`, Mersenne31 and u32 have the same size, alignment
+        // and memory layout making `flatten_to_base` safe. This this will create
+        // a vector Mersenne31 elements with value set to 0.
+        unsafe { flatten_to_base(vec![0u32; len]) }
     }
 }
 
@@ -586,6 +593,6 @@ mod tests {
         &super::multiplicative_group_prime_factorization()
     );
     test_prime_field!(crate::Mersenne31);
-    test_prime_field_64!(crate::Mersenne31);
-    test_prime_field_32!(crate::Mersenne31);
+    test_prime_field_64!(crate::Mersenne31, &super::ZEROS, &super::ONES);
+    test_prime_field_32!(crate::Mersenne31, &super::ZEROS, &super::ONES);
 }

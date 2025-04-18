@@ -10,7 +10,8 @@
 
 extern crate alloc;
 
-mod extension;
+#[cfg(test)]
+mod extension_test;
 mod koala_bear;
 mod poseidon2;
 
