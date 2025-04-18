@@ -35,7 +35,7 @@ where
     Challenge: ExtensionField<Val> + TwoAdicField,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
-    G: FriGenericConfig<Challenge>,
+    G: FriGenericConfig<Val, Challenge>,
 {
     let betas: Vec<Challenge> = proof
         .commit_phase_commits
@@ -139,21 +139,22 @@ type CommitStep<'a, F, M> = (
 /// polynomials to be added in at specific domain sizes, perform the standard
 /// sequence of FRI folds, checking at each step that the pair of sibling evaluations
 /// match the commitment.
-fn verify_query<'a, G, F, M>(
+fn verify_query<'a, G, F, EF, M>(
     g: &G,
     config: &FriConfig<M>,
     index: &mut usize,
-    steps: impl ExactSizeIterator<Item = CommitStep<'a, F, M>>,
-    reduced_openings: Vec<(usize, F)>,
+    steps: impl ExactSizeIterator<Item = CommitStep<'a, EF, M>>,
+    reduced_openings: Vec<(usize, EF)>,
     log_max_height: usize,
     log_final_height: usize,
-) -> Result<F, FriError<M::Error, G::InputError>>
+) -> Result<EF, FriError<M::Error, G::InputError>>
 where
     F: Field,
-    M: Mmcs<F> + 'a,
-    G: FriGenericConfig<F>,
+    EF: ExtensionField<F>,
+    M: Mmcs<EF> + 'a,
+    G: FriGenericConfig<F, EF>,
 {
-    let mut folded_eval = F::ZERO;
+    let mut folded_eval = EF::ZERO;
     let mut ro_iter = reduced_openings.into_iter().peekable();
 
     // We start with evaluations over a domain of size (1 << log_max_height). We fold
