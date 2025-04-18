@@ -65,8 +65,8 @@ where
     challenger.observe_slice(public_values);
 
     // Get the first Fiat Shamir challenge which will be used to combine all constraint polynomials
-    // into a single polynomial. The only real restriction on this value is that it should not be `0`
-    // but the probability of that is 1/|EF| < 2^{-120} so we can ignore it.
+    // into a single polynomial. The only restriction on this value is that it should not be `0`
+    // but the probability of that is `1/|EF| < 2^{-120}` so we can ignore it.
     let alpha: SC::Challenge = challenger.sample_algebra_element();
 
     let quotient_domain =
@@ -102,7 +102,7 @@ where
     let zeta = {
         // It's much cheaper to check that zeta does not lie in the base field which is
         // sufficient as the domain is a subset of the base field. This does have a slightly
-        // higher probability of occurring but that probability is |F|/|EF| which is
+        // higher probability of occurring but that probability is `|F|/|EF|` which is
         // still tiny for all our configurations so this loop should basically only ever run once.
         // We do need to ensure though that the Challenge field is not equal to the base field.
         assert_ne!(

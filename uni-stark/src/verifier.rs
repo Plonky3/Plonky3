@@ -67,8 +67,8 @@ where
     challenger.observe_slice(public_values);
 
     // Get the first Fiat Shamir challenge which will be used to combine all constraint polynomials
-    // into a single polynomial. The only real restriction on this value is that it should not be `0`
-    // but the probability of that is 1/|EF| < 2^{-120} so we can ignore it.
+    // into a single polynomial. The only restriction on this value is that it should not be `0`
+    // but the probability of that is `1/|EF| < 2^{-120}` so we can ignore it.
     let alpha: SC::Challenge = challenger.sample_algebra_element();
     challenger.observe(commitments.quotient_chunks.clone());
 
