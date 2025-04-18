@@ -14,6 +14,7 @@ use tracing::instrument;
 use crate::symbolic_builder::{SymbolicAirBuilder, get_log_quotient_degree};
 use crate::{PcsError, Proof, StarkGenericConfig, Val, VerifierConstraintFolder};
 
+/// Verify that the given proof is valid for the given AIR and public values.
 #[instrument(skip_all)]
 pub fn verify<SC, A>(
     config: &SC,
@@ -36,8 +37,8 @@ where
     let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(air, 0, public_values.len());
     let quotient_degree = 1 << log_quotient_degree;
 
-    let mut challenger = config.initialise_challenger();
     let pcs = config.pcs();
+    let mut challenger = config.initialise_challenger();
     let trace_domain = pcs.natural_domain_for_degree(degree);
     let quotient_domain =
         trace_domain.create_disjoint_domain(1 << (degree_bits + log_quotient_degree));
