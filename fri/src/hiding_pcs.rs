@@ -112,7 +112,8 @@ where
         );
         let inner_width = inner_evals.width();
         // Truncate off the columns representing random codewords we added in `commit` above.
-        HorizontallyTruncated::new(inner_evals, inner_width - self.num_random_codewords)
+        // The unwrap is safe as inner_width - self.num_random_codewords <= inner_width.
+        HorizontallyTruncated::new(inner_evals, inner_width - self.num_random_codewords).unwrap()
     }
 
     fn open(

@@ -305,7 +305,7 @@ mod tests {
             );
             for (i, pt) in domain.points().enumerate() {
                 assert_eq!(
-                    &*trace.row_slice(i),
+                    &*trace.row_slice(i).unwrap(),
                     coeffs.columnwise_dot_product(&circle_basis(pt, log_n)),
                     "coeffs can be evaluated with circle_basis",
                 );
@@ -329,10 +329,13 @@ mod tests {
             let lde_coeffs = lde.interpolate();
 
             for r in 0..coeffs.height() {
-                assert_eq!(&*coeffs.row_slice(r), &*lde_coeffs.row_slice(r));
+                assert_eq!(
+                    &*coeffs.row_slice(r).unwrap(),
+                    &*lde_coeffs.row_slice(r).unwrap()
+                );
             }
             for r in coeffs.height()..lde_coeffs.height() {
-                assert!(lde_coeffs.row(r).all(|x| x.is_zero()));
+                assert!(lde_coeffs.row(r).unwrap().into_iter().all(|x| x.is_zero()));
             }
         }
     }

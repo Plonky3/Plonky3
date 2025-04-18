@@ -91,8 +91,8 @@ impl<F> BaseAir<F> for MulAir {
 impl<AB: AirBuilder> Air<AB> for MulAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let main_local = main.row_slice(0);
-        let main_next = main.row_slice(1);
+        let main_local = main.row_slice(0).expect("Matrix is empty?");
+        let main_next = main.row_slice(1).expect("Matrix only has 1 row?");
 
         for i in 0..REPETITIONS {
             let start = i * 3;

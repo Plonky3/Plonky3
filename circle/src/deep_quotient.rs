@@ -248,7 +248,7 @@ mod tests {
             let mut lde = CircleEvaluations::evaluate(domain, coeffs.clone()).values;
 
             let lambda = extract_lambda(&mut lde.values, log_blowup);
-            assert_eq!(lambda, coeffs.get(1 << log_n, 0));
+            assert_eq!(lambda, coeffs.get(1 << log_n, 0).unwrap());
 
             let coeffs2 =
                 CircleEvaluations::from_cfft_order(domain, RowMajorMatrix::new_col(lde.values))

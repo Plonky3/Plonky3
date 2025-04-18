@@ -258,7 +258,7 @@ impl<
     #[inline]
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let local = main.row_slice(0);
+        let local = main.row_slice(0).expect("The matrix is empty?");
         let local: &VectorizedPoseidon2Cols<
             _,
             WIDTH,

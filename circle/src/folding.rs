@@ -151,13 +151,13 @@ mod tests {
 
         let mat_y_folded = fold_y::<F, EF>(beta, m.as_view());
         let row_y_folded = (0..(1 << log_folded_height))
-            .map(|i| fold_y_row::<F, EF>(i, log_folded_height, beta, m.row(i)))
+            .map(|i| fold_y_row::<F, EF>(i, log_folded_height, beta, m.row(i).unwrap().into_iter()))
             .collect_vec();
         assert_eq!(mat_y_folded, row_y_folded);
 
         let mat_x_folded = fold_x::<F, EF>(beta, m.as_view());
         let row_x_folded = (0..(1 << log_folded_height))
-            .map(|i| fold_x_row::<F, EF>(i, log_folded_height, beta, m.row(i)))
+            .map(|i| fold_x_row::<F, EF>(i, log_folded_height, beta, m.row(i).unwrap().into_iter()))
             .collect_vec();
         assert_eq!(mat_x_folded, row_x_folded);
     }

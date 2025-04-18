@@ -76,7 +76,11 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
                     .map(|r| {
                         alpha
                             .powers()
-                            .zip(matrices_with_log_height.iter().flat_map(|m| m.row(r)))
+                            .zip(
+                                matrices_with_log_height
+                                    .iter()
+                                    .flat_map(|m| m.row(r).unwrap()),
+                            )
                             .map(|(alpha_pow, v)| alpha_pow * v)
                             .sum()
                     })

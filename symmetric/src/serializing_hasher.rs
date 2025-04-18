@@ -5,7 +5,7 @@ use crate::CryptographicHasher;
 /// Converts a hasher which can hash bytes, u32's or u64's into a hasher which can hash field elements.
 ///
 /// Supports two types of hashing.
-/// - Hashing a a sequence of field elements.
+/// - Hashing a sequence of field elements.
 /// - Hashing a sequence of arrays of `N` field elements as if we are hashing `N` sequences of field elements in parallel.
 ///   This is useful when the inner hash is able to use vectorized instructions to compute multiple hashes at once.
 #[derive(Copy, Clone, Debug)]
