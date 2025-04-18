@@ -52,6 +52,7 @@ where
     type EvaluationsOnDomain<'a> = Dft::Evaluations;
     type Proof = ();
     type Error = ();
+    const ZK: bool = false;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         // This panics if (and only if) `degree` is not a power of 2 or `degree`
@@ -61,7 +62,7 @@ where
 
     fn commit(
         &self,
-        evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
         let coeffs: Vec<_> = evaluations
             .into_iter()

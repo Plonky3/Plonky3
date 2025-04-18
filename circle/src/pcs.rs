@@ -109,6 +109,7 @@ where
     type EvaluationsOnDomain<'a> = RowIndexMappedView<CfftPerm, DenseMatrix<Val, Cow<'a, [Val]>>>;
     type Proof = CirclePcsProof<Val, Challenge, InputMmcs, FriMmcs, Challenger::Witness>;
     type Error = FriError<FriMmcs::Error, InputError<InputMmcs::Error, FriMmcs::Error>>;
+    const ZK: bool = false;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         CircleDomain::standard(log2_strict_usize(degree))
@@ -116,7 +117,7 @@ where
 
     fn commit(
         &self,
-        evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
         let ldes = evaluations
             .into_iter()
@@ -601,7 +602,7 @@ mod tests {
         let evals = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
 
         let (comm, data) =
-            <Pcs as p3_commit::Pcs<Challenge, Challenger>>::commit(&pcs, vec![(d, evals)]);
+            <Pcs as p3_commit::Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]);
 
         let zeta: Challenge = rng.random();
 
