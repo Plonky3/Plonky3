@@ -315,10 +315,8 @@ where
             self,
             ext_trace_domain.size(),
         );
-        let r_commit_and_data = Pcs::<Challenge, Challenger>::commit(
-            &self.inner,
-            core::iter::once((extended_domain, random_vals)),
-        );
+        let r_commit_and_data =
+            Pcs::<Challenge, Challenger>::commit(&self.inner, [(extended_domain, random_vals)]);
         Some(r_commit_and_data)
     }
 }

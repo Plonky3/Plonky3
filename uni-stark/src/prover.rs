@@ -56,8 +56,8 @@ where
     let trace_domain = pcs.natural_domain_for_degree(degree);
     let ext_trace_domain = pcs.natural_domain_for_degree(degree * (config.is_zk() + 1));
 
-    let (trace_commit, trace_data) = info_span!("commit to trace data")
-        .in_scope(|| pcs.commit(core::iter::once((ext_trace_domain, trace))));
+    let (trace_commit, trace_data) =
+        info_span!("commit to trace data").in_scope(|| pcs.commit([(ext_trace_domain, trace)]));
 
     // Observe the instance.
     // degree < 2^255 so we can safely cast log_degree to a u8.
@@ -126,11 +126,7 @@ where
     let (opened_values, opening_proof) = info_span!("open").in_scope(|| {
         let round0 = opt_r_data.as_ref().map(|r_data| (r_data, vec![vec![zeta]]));
         let round1 = (&trace_data, vec![vec![zeta, zeta_next]]);
-        let round2 = (
-            &quotient_data,
-            // open every chunk at zeta
-            vec![vec![zeta]; quotient_degree],
-        );
+        let round2 = (&quotient_data, vec![vec![zeta]; quotient_degree]); // open every chunk at zeta
 
         let rounds = round0
             .into_iter()
