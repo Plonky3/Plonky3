@@ -166,6 +166,14 @@ where
         TwoAdicMultiplicativeCoset::new(Val::ONE, log2_strict_usize(degree)).unwrap()
     }
 
+    /// Commit to a collection of evaluation matrices.
+    ///
+    /// Each element of evaluation contains a coset `shift * H` and a matrix `mat` with `mat.height() = |H|`.
+    /// Interpreting each column of `mat` as the evaluations of a polynomial `p_i(x)` over `shift * H`,
+    /// we compute the evaluations of `p_i` over `gK` where `g` is the chosen generator of the multiplicative group
+    /// of `Val` and `K` is the unique subgroup of order `|H| << self.fri.log_blowup`.
+    ///
+    /// We then produce a merkle commitment to these evaluations.
     fn commit(
         &self,
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
@@ -174,6 +182,7 @@ where
             .into_iter()
             .map(|(domain, evals)| {
                 assert_eq!(domain.size(), evals.height());
+                //
                 let shift = Val::GENERATOR / domain.shift();
                 // Commit to the bit-reversed LDE.
                 self.dft
