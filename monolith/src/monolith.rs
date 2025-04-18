@@ -7,9 +7,9 @@ use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
 use p3_field::integers::QuotientMap;
-use p3_field::{PrimeCharacteristicRing, PrimeField32};
+use p3_field::{PrimeCharacteristicRing, PrimeField32, PackedField, PackedValue, Algebra};
 use p3_mds::MdsPermutation;
-use p3_mersenne_31::Mersenne31;
+use p3_mersenne_31::{Mersenne31, PackedMersenne31};
 use sha3::digest::{ExtendableOutput, Update};
 use sha3::{Shake128, Shake128Reader};
 
@@ -129,9 +129,18 @@ where
         state: &mut [Mersenne31; WIDTH],
         round_constants: &[Mersenne31; WIDTH],
     ) {
-        // TODO: vectorize?
-        for (x, rc) in state.iter_mut().zip(round_constants) {
-            *x += *rc;
+        // Vectorized version
+        let (packed_state, state_suffix) = PackedMersenne31::pack_slice_with_suffix_mut(state);
+        let (packed_rcs, rcs_suffix) = PackedMersenne31::pack_slice_with_suffix(round_constants);
+
+        assert_eq!(packed_state.len(), packed_rcs.len());
+        for (packed_x, packed_rc) in packed_state.iter_mut().zip(packed_rcs) {
+            packed_x.add(packed_rc); // Vectorized addition
+        }
+
+        assert_eq!(state_suffix.len(), rcs_suffix.len());
+        for (x, rc) in state_suffix.iter_mut().zip(rcs_suffix) {
+            *x += *rc; // Scalar addition for the remainder
         }
     }
 
