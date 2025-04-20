@@ -145,15 +145,38 @@ pub fn mds_light_permutation<
     }
 }
 
-/// A struct which holds the constants for the external layer.
+/// Constants used in the external layers of the Poseidon2 permutation.
+///
+/// External layers are applied at the beginning and end of the permutation.
+/// They help strengthen diffusion and prevent structural or algebraic attacks.
+///
+/// This struct stores round-specific constants for both initial and terminal external layers.
+/// These constants are combined with nonlinear S-boxes and lightweight matrix operations,
+/// improving security without adding much overhead.
+///
+/// Main purposes of these constants:
+/// - Inject randomness between rounds.
+/// - Support the Hades strategy (full nonlinear rounds).
+/// - Work with efficient linear layers in Poseidon2.
 #[derive(Debug, Clone)]
 pub struct ExternalLayerConstants<T, const WIDTH: usize> {
-    // Once initialised, these constants should be immutable.
+    /// Constants applied before each initial external round.
+    ///
+    /// Used in `permute_state_initial`. Each `[T; WIDTH]` is a full-width vector of constants.
     initial: Vec<[T; WIDTH]>,
-    terminal: Vec<[T; WIDTH]>, // We use terminal instead of final as final is a reserved keyword.
+
+    /// Constants applied before each terminal external round.
+    ///
+    /// Used in `permute_state_terminal`. The term "terminal" avoids using Rust’s reserved word `final`.
+    terminal: Vec<[T; WIDTH]>,
 }
 
 impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
+    /// Create a new instance of external layer constants.
+    ///
+    /// # Panics
+    /// Panics if `initial.len() != terminal.len()` since the Poseidon2 spec requires
+    /// the same number of initial and terminal rounds to maintain symmetry.
     pub fn new(initial: Vec<[T; WIDTH]>, terminal: Vec<[T; WIDTH]>) -> Self {
         assert_eq!(
             initial.len(),
@@ -163,6 +186,16 @@ impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
         Self { initial, terminal }
     }
 
+    /// Randomly generate a new set of external constants using a provided RNG.
+    ///
+    /// # Arguments
+    /// - `external_round_number`: Total number of external rounds (must be even).
+    /// - `rng`: A random number generator that supports uniform sampling.
+    ///
+    /// The constants are split equally between the initial and terminal rounds.
+    ///
+    /// # Panics
+    /// Panics if `external_round_number` is not even.
     pub fn new_from_rng<R: Rng>(external_round_number: usize, rng: &mut R) -> Self
     where
         StandardUniform: Distribution<[T; WIDTH]>,
@@ -179,6 +212,14 @@ impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
         Self::new(initial_constants, terminal_constants)
     }
 
+    /// Construct constants from statically stored arrays, using a conversion function.
+    ///
+    /// This is useful when deserializing precomputed constants or embedding
+    /// them directly in the codebase (e.g., from `[[[u8; WIDTH]; N]; 2]` arrays).
+    ///
+    /// # Arguments
+    /// - `initial`, `terminal`: Two fixed-size arrays of size `N` containing round constants.
+    /// - `conversion_fn`: A function to convert from the source type `U` to `T`.
     pub fn new_from_saved_array<U, const N: usize>(
         [initial, terminal]: [[[U; WIDTH]; N]; 2],
         conversion_fn: fn([U; WIDTH]) -> [T; WIDTH],
@@ -191,10 +232,16 @@ impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
         Self::new(initial_consts, terminal_consts)
     }
 
+    /// Get a reference to the list of initial round constants.
+    ///
+    /// These are used in the first half of the external rounds.
     pub const fn get_initial_constants(&self) -> &Vec<[T; WIDTH]> {
         &self.initial
     }
 
+    /// Get a reference to the list of terminal round constants.
+    ///
+    /// These are used in the second half (final rounds) of the external layer.
     pub const fn get_terminal_constants(&self) -> &Vec<[T; WIDTH]> {
         &self.terminal
     }
@@ -225,7 +272,20 @@ where
     fn permute_state_terminal(&self, state: &mut [R; WIDTH]);
 }
 
-/// A helper method which allow any field to easily implement the terminal External Layer.
+/// Applies the terminal external rounds of the Poseidon2 permutation.
+///
+/// This function handles the final set of external rounds by:
+/// 1. Adding round constants to each element of the state.
+/// 2. Applying a lightweight linear layer (based on a structured MDS matrix).
+///
+/// This is part of the Poseidon2 external layer strategy, designed to enhance diffusion
+/// after the main rounds and prevent structural attacks.
+///
+/// # Parameters
+/// - `state`: The current state of the permutation (size `WIDTH`).
+/// - `terminal_external_constants`: Per-round constants to add to each state element.
+/// - `add_rc_and_sbox`: A function that applies the S-box and adds the constant.
+/// - `mat4`: The 4x4 MDS matrix used in the lightweight linear layer.
 #[inline]
 pub fn external_terminal_permute_state<
     R: PrimeCharacteristicRing,
@@ -247,7 +307,20 @@ pub fn external_terminal_permute_state<
     }
 }
 
-/// A helper method which allow any field to easily implement the initial External Layer.
+/// Applies the initial external rounds of the Poseidon2 permutation.
+///
+/// This function handles the initial external rounds by:
+/// 1. Applying an initial linear transformation (`mds_light_permutation`) to the state.
+/// 2. Reusing the same procedure as `external_terminal_permute_state` with initial constants.
+///
+/// The initial layer adds early diffusion and mixes the input state to protect against
+/// attacks that exploit structured input values.
+///
+/// # Parameters
+/// - `state`: The state array at the start of the permutation.
+/// - `initial_external_constants`: Per-round constants to apply before the main rounds.
+/// - `add_rc_and_sbox`: A function that applies the S-box and adds the constant.
+/// - `mat4`: The 4x4 MDS matrix used in the lightweight linear layer.
 #[inline]
 pub fn external_initial_permute_state<
     R: PrimeCharacteristicRing,
