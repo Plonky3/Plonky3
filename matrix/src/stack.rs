@@ -3,21 +3,49 @@ use core::ops::Deref;
 
 use crate::Matrix;
 
-/// A combination of two matrices, stacked together vertically.
+/// A matrix composed by stacking two matrices vertically, one on top of the other.
+///
+/// Both matrices must have the same number of columns (`width`).
+/// The resulting matrix has:
+/// - The same number of columns as the inputs,
+/// - A total number of rows equal to the sum of both input matrices' heights.
+///
+/// Element access and iteration will first access the top (`first`) matrix,
+/// followed by the bottom (`second`) matrix.
 #[derive(Copy, Clone, Debug)]
 pub struct VerticalPair<First, Second> {
+    /// The top matrix in the vertical composition.
     pub first: First,
+    /// The bottom matrix in the vertical composition.
     pub second: Second,
 }
 
-/// A combination of two matrices, stacked together horizontally.
+/// A matrix composed by placing two matrices side-by-side horizontally.
+///
+/// Both matrices must have the same number of rows (`height`).
+/// The resulting matrix has:
+/// - The same number of rows as the inputs,
+/// - A total number of columns equal to the sum of both input matrices' widths.
+///
+/// Element access and iteration will first access the left (`first`) matrix,
+/// followed by the right (`second`) matrix.
 #[derive(Copy, Clone, Debug)]
 pub struct HorizontalPair<First, Second> {
+    /// The left matrix in the horizontal composition.
     pub first: First,
+    /// The right matrix in the horizontal composition.
     pub second: Second,
 }
 
 impl<First, Second> VerticalPair<First, Second> {
+    /// Create a new `VerticalPair` by stacking two matrices vertically.
+    ///
+    /// # Panics
+    /// Panics if the two matrices do not have the same width (i.e., number of columns),
+    /// since vertical composition requires column alignment.
+    ///
+    /// # Returns
+    /// A `VerticalPair` that represents the combined matrix.
     pub fn new<T>(first: First, second: Second) -> Self
     where
         T: Send + Sync,
@@ -30,6 +58,14 @@ impl<First, Second> VerticalPair<First, Second> {
 }
 
 impl<First, Second> HorizontalPair<First, Second> {
+    /// Create a new `HorizontalPair` by joining two matrices side by side.
+    ///
+    /// # Panics
+    /// Panics if the two matrices do not have the same height (i.e., number of rows),
+    /// since horizontal composition requires row alignment.
+    ///
+    /// # Returns
+    /// A `HorizontalPair` that represents the combined matrix.
     pub fn new<T>(first: First, second: Second) -> Self
     where
         T: Send + Sync,
