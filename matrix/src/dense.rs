@@ -15,11 +15,20 @@ use tracing::instrument;
 
 use crate::Matrix;
 
-/// A dense matrix stored in row-major form.
+/// A dense matrix in row-major format, with customizable backing storage.
+///
+/// The data is stored as a flat buffer, where rows are laid out consecutively.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DenseMatrix<T, V = Vec<T>> {
+    /// Flat buffer of matrix values in row-major order.
     pub values: V,
+    /// Number of columns in the matrix.
+    ///
+    /// The number of rows is implicitly determined as `values.len() / width`.
     pub width: usize,
+    /// Marker for the element type `T`, unused directly.
+    ///
+    /// Required to retain type information when `V` does not own or contain `T`.
     _phantom: PhantomData<T>,
 }
 
@@ -31,22 +40,26 @@ pub type RowMajorMatrixCow<'a, T> = DenseMatrix<T, Cow<'a, [T]>>;
 pub trait DenseStorage<T>: Borrow<[T]> + Send + Sync {
     fn to_vec(self) -> Vec<T>;
 }
+
 // Cow doesn't impl IntoOwned so we can't blanket it
 impl<T: Clone + Send + Sync> DenseStorage<T> for Vec<T> {
     fn to_vec(self) -> Self {
         self
     }
 }
+
 impl<T: Clone + Send + Sync> DenseStorage<T> for &[T] {
     fn to_vec(self) -> Vec<T> {
         <[T]>::to_vec(self)
     }
 }
+
 impl<T: Clone + Send + Sync> DenseStorage<T> for &mut [T] {
     fn to_vec(self) -> Vec<T> {
         <[T]>::to_vec(self)
     }
 }
+
 impl<T: Clone + Send + Sync> DenseStorage<T> for Cow<'_, [T]> {
     fn to_vec(self) -> Vec<T> {
         self.into_owned()
