@@ -7,8 +7,13 @@ use p3_field::{ExtensionField, Field};
 
 use crate::Matrix;
 
-/// Flattens a matrix of extension field elements to one of base field elements. The flattening is
-/// done horizontally, resulting in a wider matrix.
+/// A view that flattens a matrix of extension field elements into a matrix of base field elements.
+///
+/// Each element of the original matrix is an extension field element `EF`, composed of several
+/// base field elements `F`. This view expands each `EF` element into its base field components,
+/// effectively increasing the number of columns (width) while keeping the number of rows unchanged.
+///
+/// Flattening is performed row-wise: each row of `EF` values becomes a longer row of `F` values.
 #[derive(Debug)]
 pub struct FlatMatrixView<F, EF, Inner>(Inner, PhantomData<(F, EF)>);
 
