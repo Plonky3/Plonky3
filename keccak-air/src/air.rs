@@ -7,7 +7,6 @@ use p3_matrix::Matrix;
 use crate::columns::{KeccakCols, NUM_KECCAK_COLS};
 use crate::constants::rc_value_bit;
 use crate::logic::{andn_gen, xor3_gen, xor_gen};
-use crate::round_flags::eval_round_flags;
 use crate::{BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS};
 
 /// Assumes the field size is at least 16 bits.

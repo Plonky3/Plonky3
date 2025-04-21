@@ -1,5 +1,7 @@
+use core::borrow::Borrow;
 use core::marker::PhantomData;
 
+use crate::hash::Hash;
 use crate::hasher::CryptographicHasher;
 use crate::permutation::CryptographicPermutation;
 
@@ -36,10 +38,32 @@ where
         debug_assert!(CHUNK * N <= WIDTH);
         let mut pre = [T::default(); WIDTH];
         for i in 0..N {
-            pre[i * CHUNK..(i + 1) * CHUNK].copy_from_slice(&input[i]);
+            pre[i * CHUNK..(i + 1) * CHUNK]
+                .copy_from_slice(Borrow::<[T; CHUNK]>::borrow(&input[i]).as_slice());
         }
         let post = self.inner_permutation.permute(pre);
-        post[..CHUNK].try_into().unwrap()
+        let post_arr: [T; CHUNK] = post[..CHUNK].try_into().unwrap();
+        post_arr.into()
+    }
+}
+
+impl<F, T, InnerP, const N: usize, const CHUNK: usize, const WIDTH: usize>
+    PseudoCompressionFunction<Hash<F, T, CHUNK>, N>
+    for TruncatedPermutation<InnerP, N, CHUNK, WIDTH>
+where
+    T: Copy + Default,
+    InnerP: CryptographicPermutation<[T; WIDTH]>,
+{
+    fn compress(&self, input: [Hash<F, T, CHUNK>; N]) -> Hash<F, T, CHUNK> {
+        debug_assert!(CHUNK * N <= WIDTH);
+        let mut pre = [T::default(); WIDTH];
+        for i in 0..N {
+            pre[i * CHUNK..(i + 1) * CHUNK]
+                .copy_from_slice(Borrow::<[T; CHUNK]>::borrow(&input[i]).as_slice());
+        }
+        let post = self.inner_permutation.permute(pre);
+        let post_arr: [T; CHUNK] = post[..CHUNK].try_into().unwrap();
+        post_arr.into()
     }
 }
 
