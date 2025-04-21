@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound(serialize = "[W; DIGEST_ELEMS]: Serialize"))]
 #[serde(bound(deserialize = "[W; DIGEST_ELEMS]: Deserialize<'de>"))]
+#[repr(transparent)]
 pub struct Hash<F, W, const DIGEST_ELEMS: usize> {
     value: [W; DIGEST_ELEMS],
     _marker: PhantomData<F>,

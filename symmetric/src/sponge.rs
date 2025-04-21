@@ -4,6 +4,7 @@ use core::marker::PhantomData;
 use itertools::Itertools;
 use p3_field::{reduce_32, Field, PrimeField, PrimeField32};
 
+use crate::hash::Hash;
 use crate::hasher::CryptographicHasher;
 use crate::permutation::CryptographicPermutation;
 
@@ -82,13 +83,14 @@ where
 }
 
 impl<F, PF, P, const WIDTH: usize, const RATE: usize, const OUT: usize>
-    CryptographicHasher<F, [PF; OUT]> for MultiField32PaddingFreeSponge<F, PF, P, WIDTH, RATE, OUT>
+    CryptographicHasher<F, Hash<F, PF, OUT>>
+    for MultiField32PaddingFreeSponge<F, PF, P, WIDTH, RATE, OUT>
 where
     F: PrimeField32,
     PF: PrimeField + Default + Copy,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
-    fn hash_iter<I>(&self, input: I) -> [PF; OUT]
+    fn hash_iter<I>(&self, input: I) -> Hash<F, PF, OUT>
     where
         I: IntoIterator<Item = F>,
     {
@@ -103,6 +105,7 @@ where
             state = self.permutation.permute(state);
         }
 
-        state[..OUT].try_into().unwrap()
+        let inner_arr: [PF; OUT] = state[..OUT].try_into().unwrap();
+        inner_arr.into()
     }
 }
