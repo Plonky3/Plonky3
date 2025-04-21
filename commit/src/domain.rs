@@ -1,13 +1,14 @@
 use alloc::vec::Vec;
 
+use core::ops::Deref;
 use itertools::Itertools;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse,
-    cyclic_subgroup_coset_known_order,
+    batch_multiplicative_inverse, cyclic_subgroup_coset_known_order, ExtensionField, Field,
+    TwoAdicField,
 };
-use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::Matrix;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 
 /// Given a `PolynomialSpace`, `S`, and a subset `R`, a Lagrange selector `P_R` is
@@ -194,13 +195,23 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     ) -> Vec<RowMajorMatrix<Self::Val>> {
         debug_assert_eq!(evals.height(), self.size());
         debug_assert!(log2_strict_usize(num_chunks) <= self.log_size());
-        // todo less copy
+
+        let width = evals.width();
+        let chunk_height = self.size() / num_chunks;
+
+        // Preallocate the result vectors for each chunk
         (0..num_chunks)
             .map(|i| {
-                evals
-                    .as_view()
-                    .vertically_strided(num_chunks, i)
-                    .to_row_major_matrix()
+                // Directly allocate the matrix with proper capacity
+                let mut values = Vec::with_capacity(chunk_height * width);
+
+                // Copy the elements directly into the new vector
+                for r in 0..chunk_height {
+                    let source_row = i + r * num_chunks;
+                    values.extend_from_slice(evals.row_slice(source_row).deref());
+                }
+
+                RowMajorMatrix::new(values, width)
             })
             .collect()
     }
