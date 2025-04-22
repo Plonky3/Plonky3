@@ -27,8 +27,8 @@ pub struct VerticalPair<First, Second> {
 /// - `width`: The sum of the `widths` of the input matrices.
 /// - `height`: The same as the inputs.
 ///
-/// Element access and iteration will first access the left (`first`) matrix,
-/// followed by the right (`second`) matrix.
+/// Element access and iteration for a given row `i` will first access the elements in the `i`'th row of the left (`first`) matrix,
+/// followed by elements in the `i'`th row of the right (`second`) matrix.
 #[derive(Copy, Clone, Debug)]
 pub struct HorizontalPair<First, Second> {
     /// The left matrix in the horizontal composition.
