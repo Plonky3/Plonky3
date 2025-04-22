@@ -159,8 +159,8 @@ mod tests {
             let main = builder.main();
 
             for col in 0..W {
-                let a = main.first.get(0, col);
-                let b = main.second.get(0, col);
+                let a = main.top.get(0, col);
+                let b = main.bottom.get(0, col);
 
                 // New logic: enforce row[i+1] = row[i] + 1, only on transitions
                 builder.when_transition().assert_eq(b, a + F::ONE);
@@ -170,7 +170,7 @@ mod tests {
             let public_values = builder.public_values;
             let mut when_last = builder.when(builder.is_last_row);
             for (i, &pv) in public_values.iter().enumerate().take(W) {
-                when_last.assert_eq(main.first.get(0, i), pv);
+                when_last.assert_eq(main.top.get(0, i), pv);
             }
         }
     }
