@@ -504,13 +504,17 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     fn reconstitute_from_base(vec: Vec<F>) -> Vec<Self>
     where
         F: Sync,
+        Self: Send,
     {
         use p3_maybe_rayon::prelude::{ParallelIterator, ParallelSlice};
 
         assert_eq!(vec.len() % Self::DIMENSION, 0);
 
         vec.par_chunks_exact(Self::DIMENSION)
-            .flat_map(|chunk| Self::from_basis_coefficients_slice(chunk))
+            .map(|chunk| {
+                Self::from_basis_coefficients_slice(chunk)
+                    .expect("Chunk length not equal to dimension")
+            })
             .collect()
     }
 }
