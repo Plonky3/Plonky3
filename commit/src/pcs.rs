@@ -54,7 +54,7 @@ where
         evaluations: Vec<(Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
     ) -> (Self::Commitment, Self::ProverData);
 
-    /// Given prover data corresponding to a commitment of a collection of evaluation matrices,
+    /// Given prover data corresponding to a commitment to a collection of evaluation matrices,
     /// return the evaluations of those matrices on the given domain.
     ///
     /// Ideally this should only be called when the domain is a subset of the evaluation domain
