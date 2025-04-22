@@ -165,7 +165,7 @@ pub struct ExternalLayerConstants<T, const WIDTH: usize> {
     /// Used in `permute_state_initial`. Each `[T; WIDTH]` is a full-width vector of constants.
     initial: Vec<[T; WIDTH]>,
 
-    /// Constants applied before each terminal external round.
+    /// Constants applied during each terminal external round.
     ///
     /// Used in `permute_state_terminal`. The term "terminal" avoids using Rust’s reserved word `final`.
     terminal: Vec<[T; WIDTH]>,
