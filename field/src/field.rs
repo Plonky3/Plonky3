@@ -7,7 +7,6 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::{array, slice};
 
 use num_bigint::BigUint;
-use p3_maybe_rayon::prelude::ParallelSlice;
 use p3_util::iter_array_chunks_padded;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -506,6 +505,8 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     where
         F: Sync,
     {
+        use p3_maybe_rayon::prelude::{ParallelIterator, ParallelSlice};
+
         assert_eq!(vec.len() % Self::DIMENSION, 0);
 
         vec.par_chunks_exact(Self::DIMENSION)
