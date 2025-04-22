@@ -10,8 +10,8 @@ use crate::Matrix;
 /// - `width`: The same as the inputs.
 /// - `height`: The sum of the `heights` of the input matrices.
 ///
-/// Element access and iteration will first access the top (`first`) matrix,
-/// followed by the bottom (`second`) matrix.
+/// Element access and iteration will first access the rows of the top (`first`) matrix,
+/// followed by the rows of the bottom (`second`) matrix.
 #[derive(Copy, Clone, Debug)]
 pub struct VerticalPair<First, Second> {
     /// The top matrix in the vertical composition.
