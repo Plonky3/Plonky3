@@ -412,10 +412,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         (r < self.height() && c < self.width()).then(|| {
             // We just checked the bounds, so this is safe.
             unsafe {
-                self.values
-                    .borrow()
-                    .get_unchecked(r * self.width + c)
-                    .clone()
+                self.get_unchecked(r, c).clone()
             }
         })
     }
