@@ -20,7 +20,6 @@ where
     let name = format!("fold_matrix::<{}>", pretty_name::<EF>(),);
     let mut group = c.benchmark_group(&name);
     group.sample_size(10);
-    // let simple_config = create_benchmark_fri_config(val_mmcs);
     let config = TwoAdicFriGenericConfig::<(), ()>(PhantomData);
 
     for log_size in log_sizes {
