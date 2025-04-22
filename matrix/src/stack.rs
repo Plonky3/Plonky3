@@ -22,10 +22,10 @@ pub struct VerticalPair<First, Second> {
 
 /// A matrix composed by placing two matrices side-by-side horizontally.
 ///
-/// Both matrices must have the same number of rows (`height`).
-/// The resulting matrix has:
-/// - The same number of rows as the inputs,
-/// - A total number of columns equal to the sum of both input matrices' widths.
+/// Both matrices must have the same `height`.
+/// The resulting matrix has dimensions:
+/// - `width`: The sum of the `widths` of the input matrices.
+/// - `height`: The same as the inputs.
 ///
 /// Element access and iteration will first access the left (`first`) matrix,
 /// followed by the right (`second`) matrix.
