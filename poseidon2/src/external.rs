@@ -12,10 +12,8 @@
 //! The constants and linear transformations used in these rounds are designed
 //! to complement the internal structure of Poseidon2.
 //!
-//! Main purposes of these constants:
+//! Main purpose of these constants:
 //! - Inject randomness between rounds.
-//! - Support the Hades strategy (full nonlinear rounds).
-//! - Work with efficient linear layers in Poseidon2.
 
 use alloc::vec::Vec;
 
