@@ -160,7 +160,7 @@ pub fn mds_light_permutation<
 /// - Work with efficient linear layers in Poseidon2.
 #[derive(Debug, Clone)]
 pub struct ExternalLayerConstants<T, const WIDTH: usize> {
-    /// Constants applied before each initial external round.
+    /// Constants applied during each initial external round.
     ///
     /// Used in `permute_state_initial`. Each `[T; WIDTH]` is a full-width vector of constants.
     initial: Vec<[T; WIDTH]>,
