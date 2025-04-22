@@ -84,12 +84,7 @@ impl<T: Send + Sync, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         &self,
         r: usize,
     ) -> Option<impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync>> {
-        // Need to check r < self.height() as `map_row_index` can return anything when given something
-        // out of the range `0..self.height()`.
-        (r < self.height()).then(|| unsafe {
-            // Safety: We just checked that r < self.height().
-            self.inner.row_unchecked(self.index_map.map_row_index(r))
-        })
+        (r < self.height()).then(|| unsafe { self.row_unchecked(r) })
     }
 
     unsafe fn row_unchecked(
