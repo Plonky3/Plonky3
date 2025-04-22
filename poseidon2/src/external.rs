@@ -215,7 +215,7 @@ impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
     /// Construct constants from statically stored arrays, using a conversion function.
     ///
     /// This is useful when deserializing precomputed constants or embedding
-    /// them directly in the codebase (e.g., from `[[[u8; WIDTH]; N]; 2]` arrays).
+    /// them directly in the codebase (e.g., from `[[[u32; WIDTH]; N]; 2]` arrays).
     ///
     /// # Arguments
     /// - `initial`, `terminal`: Two fixed-size arrays of size `N` containing round constants.
