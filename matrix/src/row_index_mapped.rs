@@ -30,7 +30,7 @@ pub trait RowIndexMap: Send + Sync {
     ) -> RowMajorMatrix<T> {
         RowMajorMatrix::new(
             unsafe {
-                // Safety: The caller that the output of `map_row_index` is less than `inner.height()`
+                // Safety: The trait implementer guarantees that the output of `map_row_index` is less than `inner.height()`
                 // for all inputs in the range `0..self.height()`.
                 (0..self.height())
                     .flat_map(|r| inner.row_unchecked(self.map_row_index(r)))
