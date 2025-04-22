@@ -1,3 +1,22 @@
+//! External layers for the Poseidon2 permutation.
+//!
+//! Poseidon2 applies *external layers* at both the beginning and end of the permutation.
+//! These layers are critical for ensuring proper diffusion and enhancing security,
+//! particularly against structural and algebraic attacks.
+//!
+//! An external round consists of:
+//! 1. Addition of round constants,
+//! 2. Application of a nonlinear S-box,
+//! 3. A lightweight matrix multiplication (external linear layer).
+//!
+//! The constants and linear transformations used in these rounds are designed
+//! to complement the internal structure of Poseidon2.
+//!
+//! Main purposes of these constants:
+//! - Inject randomness between rounds.
+//! - Support the Hades strategy (full nonlinear rounds).
+//! - Work with efficient linear layers in Poseidon2.
+
 use alloc::vec::Vec;
 
 use p3_field::{Field, PrimeCharacteristicRing};
