@@ -37,7 +37,7 @@ where
     /// The opening argument.
     type Proof: Clone + Serialize + DeserializeOwned;
 
-    /// Possible proof verification errors.
+    /// The type of a proof verification error.
     type Error: Debug;
 
     /// This should return a domain such that `Domain::next_point` returns `Some`.
