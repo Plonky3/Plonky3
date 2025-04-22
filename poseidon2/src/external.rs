@@ -1,3 +1,20 @@
+//! External layers for the Poseidon2 permutation.
+//!
+//! Poseidon2 applies *external layers* at both the beginning and end of the permutation.
+//! These layers are critical for ensuring proper diffusion and enhancing security,
+//! particularly against structural and algebraic attacks.
+//!
+//! An external round consists of:
+//! 1. Addition of round constants,
+//! 2. Application of a nonlinear S-box,
+//! 3. A lightweight matrix multiplication (external linear layer).
+//!
+//! The constants and linear transformations used in these rounds are designed
+//! to complement the internal structure of Poseidon2.
+//!
+//! Main purpose of these constants:
+//! - Inject randomness between rounds.
+
 use alloc::vec::Vec;
 
 use p3_field::{Field, PrimeCharacteristicRing};
@@ -145,15 +162,26 @@ pub fn mds_light_permutation<
     }
 }
 
-/// A struct which holds the constants for the external layer.
+/// A struct which stores round-specific constants for both initial and terminal external layers.
 #[derive(Debug, Clone)]
 pub struct ExternalLayerConstants<T, const WIDTH: usize> {
-    // Once initialised, these constants should be immutable.
+    /// Constants applied during each initial external round.
+    ///
+    /// Used in `permute_state_initial`. Each `[T; WIDTH]` is a full-width vector of constants.
     initial: Vec<[T; WIDTH]>,
-    terminal: Vec<[T; WIDTH]>, // We use terminal instead of final as final is a reserved keyword.
+
+    /// Constants applied during each terminal external round.
+    ///
+    /// Used in `permute_state_terminal`. The term "terminal" avoids using Rust’s reserved word `final`.
+    terminal: Vec<[T; WIDTH]>,
 }
 
 impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
+    /// Create a new instance of external layer constants.
+    ///
+    /// # Panics
+    /// Panics if `initial.len() != terminal.len()` since the Poseidon2 spec requires
+    /// the same number of initial and terminal rounds to maintain symmetry.
     pub fn new(initial: Vec<[T; WIDTH]>, terminal: Vec<[T; WIDTH]>) -> Self {
         assert_eq!(
             initial.len(),
@@ -163,6 +191,16 @@ impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
         Self { initial, terminal }
     }
 
+    /// Randomly generate a new set of external constants using a provided RNG.
+    ///
+    /// # Arguments
+    /// - `external_round_number`: Total number of external rounds (must be even).
+    /// - `rng`: A random number generator that supports uniform sampling.
+    ///
+    /// The constants are split equally between the initial and terminal rounds.
+    ///
+    /// # Panics
+    /// Panics if `external_round_number` is not even.
     pub fn new_from_rng<R: Rng>(external_round_number: usize, rng: &mut R) -> Self
     where
         StandardUniform: Distribution<[T; WIDTH]>,
@@ -179,6 +217,14 @@ impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
         Self::new(initial_constants, terminal_constants)
     }
 
+    /// Construct constants from statically stored arrays, using a conversion function.
+    ///
+    /// This is useful when deserializing precomputed constants or embedding
+    /// them directly in the codebase (e.g., from `[[[u32; WIDTH]; N]; 2]` arrays).
+    ///
+    /// # Arguments
+    /// - `initial`, `terminal`: Two fixed-size arrays of size `N` containing round constants.
+    /// - `conversion_fn`: A function to convert from the source type `U` to `T`.
     pub fn new_from_saved_array<U, const N: usize>(
         [initial, terminal]: [[[U; WIDTH]; N]; 2],
         conversion_fn: fn([U; WIDTH]) -> [T; WIDTH],
@@ -191,10 +237,16 @@ impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
         Self::new(initial_consts, terminal_consts)
     }
 
+    /// Get a reference to the list of initial round constants.
+    ///
+    /// These are used in the first half of the external rounds.
     pub const fn get_initial_constants(&self) -> &Vec<[T; WIDTH]> {
         &self.initial
     }
 
+    /// Get a reference to the list of terminal round constants.
+    ///
+    /// These are used in the second half (terminal rounds) of the external layer.
     pub const fn get_terminal_constants(&self) -> &Vec<[T; WIDTH]> {
         &self.terminal
     }
@@ -225,7 +277,18 @@ where
     fn permute_state_terminal(&self, state: &mut [R; WIDTH]);
 }
 
-/// A helper method which allow any field to easily implement the terminal External Layer.
+/// Applies the terminal external rounds of the Poseidon2 permutation.
+///
+/// Each external round consists of three steps:
+/// 1. Adding round constants to each element of the state.
+/// 2. Apply the S-box to each element of the state.
+/// 3. Applying an external linear layer (based on a `4x4` MDS matrix).
+///
+/// # Parameters
+/// - `state`: The current state of the permutation (size `WIDTH`).
+/// - `terminal_external_constants`: Per-round constants which are added to each state element.
+/// - `add_rc_and_sbox`: A function that adds the round constant and applies the S-box to a given element.
+/// - `mat4`: The 4x4 MDS matrix used in the external linear layer.
 #[inline]
 pub fn external_terminal_permute_state<
     R: PrimeCharacteristicRing,
@@ -247,7 +310,18 @@ pub fn external_terminal_permute_state<
     }
 }
 
-/// A helper method which allow any field to easily implement the initial External Layer.
+/// Applies the initial external rounds of the Poseidon2 permutation.
+///
+/// Apply the external linear layer and run a sequence of standard external rounds consisting of
+/// 1. Adding round constants to each element of the state.
+/// 2. Apply the S-box to each element of the state.
+/// 3. Applying an external linear layer (based on a `4x4` MDS matrix).
+///
+/// # Parameters
+/// - `state`: The state array at the start of the permutation.
+/// - `initial_external_constants`: Per-round constants which are added to each state element.
+/// - `add_rc_and_sbox`: A function that adds the round constant and applies the S-box to a given element.
+/// - `mat4`: The 4x4 MDS matrix used in the external linear layer.
 #[inline]
 pub fn external_initial_permute_state<
     R: PrimeCharacteristicRing,
