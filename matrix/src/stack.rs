@@ -13,11 +13,11 @@ use crate::Matrix;
 /// Element access and iteration will first access the rows of the top (`first`) matrix,
 /// followed by the rows of the bottom (`second`) matrix.
 #[derive(Copy, Clone, Debug)]
-pub struct VerticalPair<First, Second> {
+pub struct VerticalPair<Top, Bottom> {
     /// The top matrix in the vertical composition.
-    pub first: First,
+    pub top: Top,
     /// The bottom matrix in the vertical composition.
-    pub second: Second,
+    pub bottom: Bottom,
 }
 
 /// A matrix composed by placing two matrices side-by-side horizontally.
@@ -30,14 +30,14 @@ pub struct VerticalPair<First, Second> {
 /// Element access and iteration for a given row `i` will first access the elements in the `i`'th row of the left (`first`) matrix,
 /// followed by elements in the `i'`th row of the right (`second`) matrix.
 #[derive(Copy, Clone, Debug)]
-pub struct HorizontalPair<First, Second> {
+pub struct HorizontalPair<Left, Right> {
     /// The left matrix in the horizontal composition.
-    pub first: First,
+    pub left: Left,
     /// The right matrix in the horizontal composition.
-    pub second: Second,
+    pub right: Right,
 }
 
-impl<First, Second> VerticalPair<First, Second> {
+impl<Top, Bottom> VerticalPair<Top, Bottom> {
     /// Create a new `VerticalPair` by stacking two matrices vertically.
     ///
     /// # Panics
@@ -46,18 +46,18 @@ impl<First, Second> VerticalPair<First, Second> {
     ///
     /// # Returns
     /// A `VerticalPair` that represents the combined matrix.
-    pub fn new<T>(first: First, second: Second) -> Self
+    pub fn new<T>(top: Top, bottom: Bottom) -> Self
     where
         T: Send + Sync,
-        First: Matrix<T>,
-        Second: Matrix<T>,
+        Top: Matrix<T>,
+        Bottom: Matrix<T>,
     {
-        assert_eq!(first.width(), second.width());
-        Self { first, second }
+        assert_eq!(top.width(), bottom.width());
+        Self { top, bottom }
     }
 }
 
-impl<First, Second> HorizontalPair<First, Second> {
+impl<Left, Right> HorizontalPair<Left, Right> {
     /// Create a new `HorizontalPair` by joining two matrices side by side.
     ///
     /// # Panics
@@ -66,84 +66,80 @@ impl<First, Second> HorizontalPair<First, Second> {
     ///
     /// # Returns
     /// A `HorizontalPair` that represents the combined matrix.
-    pub fn new<T>(first: First, second: Second) -> Self
+    pub fn new<T>(left: Left, right: Right) -> Self
     where
         T: Send + Sync,
-        First: Matrix<T>,
-        Second: Matrix<T>,
+        Left: Matrix<T>,
+        Right: Matrix<T>,
     {
-        assert_eq!(first.height(), second.height());
-        Self { first, second }
+        assert_eq!(left.height(), right.height());
+        Self { left, right }
     }
 }
 
-impl<T: Send + Sync, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
-    for VerticalPair<First, Second>
-{
+impl<T: Send + Sync, Top: Matrix<T>, Bottom: Matrix<T>> Matrix<T> for VerticalPair<Top, Bottom> {
     fn width(&self) -> usize {
-        self.first.width()
+        self.top.width()
     }
 
     fn height(&self) -> usize {
-        self.first.height() + self.second.height()
+        self.top.height() + self.bottom.height()
     }
 
     fn get(&self, r: usize, c: usize) -> T {
-        if r < self.first.height() {
-            self.first.get(r, c)
+        if r < self.top.height() {
+            self.top.get(r, c)
         } else {
-            self.second.get(r - self.first.height(), c)
+            self.bottom.get(r - self.top.height(), c)
         }
     }
 
     type Row<'a>
-        = EitherRow<First::Row<'a>, Second::Row<'a>>
+        = EitherRow<Top::Row<'a>, Bottom::Row<'a>>
     where
         Self: 'a;
 
     fn row(&self, r: usize) -> Self::Row<'_> {
-        if r < self.first.height() {
-            EitherRow::Left(self.first.row(r))
+        if r < self.top.height() {
+            EitherRow::Left(self.top.row(r))
         } else {
-            EitherRow::Right(self.second.row(r - self.first.height()))
+            EitherRow::Right(self.bottom.row(r - self.top.height()))
         }
     }
 
     fn row_slice(&self, r: usize) -> impl Deref<Target = [T]> {
-        if r < self.first.height() {
-            EitherRow::Left(self.first.row_slice(r))
+        if r < self.top.height() {
+            EitherRow::Left(self.top.row_slice(r))
         } else {
-            EitherRow::Right(self.second.row_slice(r - self.first.height()))
+            EitherRow::Right(self.bottom.row_slice(r - self.top.height()))
         }
     }
 }
 
-impl<T: Send + Sync, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
-    for HorizontalPair<First, Second>
-{
+impl<T: Send + Sync, Left: Matrix<T>, Right: Matrix<T>> Matrix<T> for HorizontalPair<Left, Right> {
     fn width(&self) -> usize {
-        self.first.width() + self.second.width()
+        self.left.width() + self.right.width()
     }
 
     fn height(&self) -> usize {
-        self.first.height()
+        self.left.height()
     }
 
     fn get(&self, r: usize, c: usize) -> T {
-        if c < self.first.width() {
-            self.first.get(r, c)
+        if c < self.left.width() {
+            self.left.get(r, c)
         } else {
-            self.second.get(r, c - self.first.width())
+            self.right.get(r, c - self.left.width())
         }
     }
 
     type Row<'a>
-        = Chain<First::Row<'a>, Second::Row<'a>>
+        = Chain<Left::Row<'a>, Right::Row<'a>>
     where
         Self: 'a;
 
     fn row(&self, r: usize) -> Self::Row<'_> {
-        self.first.row(r).chain(self.second.row(r))
+        self.left.row(r).chain(self.right.row(r))
     }
 }
 
