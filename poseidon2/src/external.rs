@@ -307,18 +307,16 @@ pub fn external_terminal_permute_state<
 
 /// Applies the initial external rounds of the Poseidon2 permutation.
 ///
-/// This function handles the initial external rounds by:
-/// 1. Applying an initial linear transformation (`mds_light_permutation`) to the state.
-/// 2. Reusing the same procedure as `external_terminal_permute_state` with initial constants.
-///
-/// The initial layer adds early diffusion and mixes the input state to protect against
-/// attacks that exploit structured input values.
+/// Apply the external linear layer and run a sequence of standard external rounds consisting of
+/// 1. Adding round constants to each element of the state.
+/// 2. Apply the S-box to each element of the state.
+/// 3. Applying an external linear layer (based on a `4x4` MDS matrix).
 ///
 /// # Parameters
 /// - `state`: The state array at the start of the permutation.
-/// - `initial_external_constants`: Per-round constants to apply before the main rounds.
-/// - `add_rc_and_sbox`: A function that applies the S-box and adds the constant.
-/// - `mat4`: The 4x4 MDS matrix used in the lightweight linear layer.
+/// - `initial_external_constants`: Per-round constants which are added to each state element.
+/// - `add_rc_and_sbox`: A function that adds the round constant and applies the S-box to a given element.
+/// - `mat4`: The 4x4 MDS matrix used in the external linear layer.
 #[inline]
 pub fn external_initial_permute_state<
     R: PrimeCharacteristicRing,
