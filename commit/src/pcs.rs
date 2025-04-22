@@ -57,9 +57,8 @@ where
     /// Given prover data corresponding to a commitment to a collection of evaluation matrices,
     /// return the evaluations of those matrices on the given domain.
     ///
-    /// Ideally this should only be called when the domain is a subset of the evaluation domain
-    /// on which the evaluation matrices are defined. In these cases, this should be essentially
-    /// a no-op.
+    /// This is essentially a no-op when called with a `domain` which is a subset of the evaluation domain
+    /// on which the evaluation matrices are defined.
     fn get_evaluations_on_domain<'a>(
         &self,
         prover_data: &'a Self::ProverData,
