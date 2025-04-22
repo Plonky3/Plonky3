@@ -5,10 +5,10 @@ use crate::Matrix;
 
 /// A matrix composed by stacking two matrices vertically, one on top of the other.
 ///
-/// Both matrices must have the same number of columns (`width`).
-/// The resulting matrix has:
-/// - The same number of columns as the inputs,
-/// - A total number of rows equal to the sum of both input matrices' heights.
+/// Both matrices must have the same `width`.
+/// The resulting matrix has dimensions:
+/// - `width`: The same as the inputs.
+/// - `height`: The sum of the `heights` of the input matrices.
 ///
 /// Element access and iteration will first access the top (`first`) matrix,
 /// followed by the bottom (`second`) matrix.
