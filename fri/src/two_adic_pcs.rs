@@ -116,7 +116,7 @@ impl<F: TwoAdicField, InputProof, InputError: Debug, EF: ExtensionField<F>> FriG
         // TODO: vectorize this (after we have packed extension fields)
 
         // As beta is in the extension field, we want to avoid multiplying by it
-        // for as long as possible. Hence we use powers instead of shifted_powers.
+        // for as long as possible. Here we precompute the powers  `g_inv^i / 2` in the base field.
         let mut halve_inv_powers = g_inv
             .shifted_powers(F::ONE.halve())
             .take(m.height())
