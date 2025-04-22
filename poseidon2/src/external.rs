@@ -145,19 +145,7 @@ pub fn mds_light_permutation<
     }
 }
 
-/// Constants used in the external layers of the Poseidon2 permutation.
-///
-/// External layers are applied at the beginning and end of the permutation.
-/// They help strengthen diffusion and prevent structural or algebraic attacks.
-///
-/// This struct stores round-specific constants for both initial and terminal external layers.
-/// These constants are combined with nonlinear S-boxes and lightweight matrix operations,
-/// improving security without adding much overhead.
-///
-/// Main purposes of these constants:
-/// - Inject randomness between rounds.
-/// - Support the Hades strategy (full nonlinear rounds).
-/// - Work with efficient linear layers in Poseidon2.
+/// A struct which stores round-specific constants for both initial and terminal external layers.
 #[derive(Debug, Clone)]
 pub struct ExternalLayerConstants<T, const WIDTH: usize> {
     /// Constants applied during each initial external round.
