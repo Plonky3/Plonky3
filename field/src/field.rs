@@ -7,6 +7,7 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::{array, slice};
 
 use num_bigint::BigUint;
+use p3_maybe_rayon::prelude::ParallelSlice;
 use p3_util::iter_array_chunks_padded;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -501,10 +502,13 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     /// different basis might have been used.
     #[must_use]
     #[inline]
-    fn reconstitute_from_base(vec: Vec<F>) -> Vec<Self> {
+    fn reconstitute_from_base(vec: Vec<F>) -> Vec<Self>
+    where
+        F: Sync,
+    {
         assert_eq!(vec.len() % Self::DIMENSION, 0);
 
-        vec.chunks_exact(Self::DIMENSION)
+        vec.par_chunks_exact(Self::DIMENSION)
             .flat_map(|chunk| Self::from_basis_coefficients_slice(chunk))
             .collect()
     }
