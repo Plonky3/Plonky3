@@ -167,10 +167,10 @@ mod tests {
             }
 
             // Add public value equality on last row for extra coverage
-            if builder.is_last_row != F::ZERO {
-                for (i, &pv) in builder.public_values.iter().enumerate().take(W) {
-                    builder.assert_eq(main.first.get(0, i), pv);
-                }
+            let public_values = builder.public_values;
+            let mut when_last = builder.when(builder.is_last_row);
+            for (i, &pv) in public_values.iter().enumerate().take(W) {
+                when_last.assert_eq(main.first.get(0, i), pv);
             }
         }
     }
