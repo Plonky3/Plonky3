@@ -471,6 +471,24 @@ impl<T: Copy + Default + Send + Sync> DenseMatrix<T, Vec<T>> {
     }
 }
 
+impl<'a, T: Copy + Default + Send + Sync> RowMajorMatrixViewMut<'a, T> {
+    /// Transpose this matrix view, writing the result back into it.
+    ///
+    /// Note: this is not an in-place transpose; it uses a temporary buffer.
+    ///
+    /// TODO: we probably want to make this an in-place transpose in the future.
+    pub fn transpose(&mut self) {
+        let rows = self.height();
+        let cols = self.width;
+
+        let mut temp = vec![T::default(); rows * cols];
+        transpose::transpose(&self.values, &mut temp, cols, rows);
+
+        self.values.copy_from_slice(&temp);
+        self.width = rows;
+    }
+}
+
 impl<'a, T: Clone + Default + Send + Sync> DenseMatrix<T, &'a [T]> {
     pub fn as_cow(self) -> RowMajorMatrixCow<'a, T> {
         RowMajorMatrixCow::new(Cow::Borrowed(self.values), self.width)
@@ -1170,5 +1188,24 @@ mod tests {
                 Packed::from([BabyBear::new(16), BabyBear::new(4)]),
             ]
         );
+    }
+
+    #[test]
+    fn test_transpose_view_mut() {
+        // Original matrix: 2 rows x 3 cols
+        // [1, 2, 3]
+        // [4, 5, 6]
+        let mut values = vec![1, 2, 3, 4, 5, 6];
+        let mut matrix = RowMajorMatrixViewMut::new(&mut values, 3);
+
+        matrix.transpose();
+
+        // After transpose: 3 rows x 2 cols
+        // [1, 4]
+        // [2, 5]
+        // [3, 6]
+        assert_eq!(matrix.width, 2);
+        assert_eq!(matrix.height(), 3);
+        assert_eq!(matrix.values, &[1, 4, 2, 5, 3, 6]);
     }
 }
