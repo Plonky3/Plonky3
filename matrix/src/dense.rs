@@ -471,7 +471,7 @@ impl<T: Copy + Default + Send + Sync> DenseMatrix<T> {
     }
 }
 
-impl<'a, T: Copy + Default + Send + Sync> RowMajorMatrixViewMut<'a, T> {
+impl<T: Copy + Default + Send + Sync> RowMajorMatrixViewMut<'_, T> {
     /// Transpose this matrix view, writing the result back into it.
     ///
     /// Note: this is not an in-place transpose; it uses a temporary buffer.
@@ -482,13 +482,12 @@ impl<'a, T: Copy + Default + Send + Sync> RowMajorMatrixViewMut<'a, T> {
         let cols = self.width;
 
         let mut temp = vec![T::default(); rows * cols];
-        transpose::transpose(&self.values, &mut temp, cols, rows);
+        transpose::transpose(self.values, &mut temp, cols, rows);
 
         self.values.copy_from_slice(&temp);
         self.width = rows;
     }
 }
-
 
 impl<'a, T: Clone + Default + Send + Sync> RowMajorMatrixView<'a, T> {
     pub fn as_cow(self) -> RowMajorMatrixCow<'a, T> {
