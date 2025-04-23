@@ -193,7 +193,7 @@ mod tests {
     #[test]
     fn test_flat_matrix_multiple_rows() {
         // Construct a 2-column, 2-row matrix of EF values, with varying offsets per row.
-        // Row 0: [1,2], [10,11]; Row 1: [20,21], [30,31].
+        // Row 0: [0,1], [10,11]; Row 1: [20,21], [30,31].
         // Verify that the flattening preserves row structure and ordering.
         let ef = |base| EF::from_basis_coefficients_fn(|i| F::from_u8(base + i as u8));
         let matrix = RowMajorMatrix::new(vec![ef(0), ef(10), ef(20), ef(30)], 2);
