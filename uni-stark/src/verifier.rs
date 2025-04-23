@@ -5,7 +5,7 @@ use itertools::Itertools;
 use p3_air::{Air, BaseAir};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing};
+use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use p3_util::zip_eq::zip_eq;
@@ -67,32 +67,35 @@ where
     challenger.observe_slice(public_values);
 
     // Get the first Fiat Shamir challenge which will be used to combine all constraint polynomials
-    // into a single polynomial. The only restriction on this value is that it should not be `0`
-    // but the probability of that is `1/|EF| < 2^{-120}` so we can ignore it.
+    // into a single polynomial.
+    //
+    // Soundness Error:
+    // If a prover is malicious, we can find a row `i` such that some of the constraints
+    // C_0, ..., C_n are non 0 on this row. The malicious prover "wins" if the random challenge
+    // alpha is such that:
+    // (1): C_0(i) + alpha * C_1(i) + ... + alpha^n * C_n(i) = 0
+    // This is a polynomial of degree n+1, so it has at most n roots and so the probability of this
+    // occurring for a given trace and set of constraints is n/|EF|.
+    //
+    // Currently, we do not observe data about the constraint polynomials directly. In particular
+    // A prover could take a trace and fiddle around with the AIR it claims to satisfy without
+    // changing this sample alpha.
+    //
+    // In particular this means that a malicious prover could create a custom AIR for a given trace
+    // such that equation (1) holds. However, such AIRs would need to be very specific and
+    // so such tampering should be obvious to spot. The verifier needs to check the AIR anyway to
+    // confirm that satisfying it indeed proves what the prover claims. Hence this should not be
+    // a soundness issue.
     let alpha: SC::Challenge = challenger.sample_algebra_element();
     challenger.observe(commitments.quotient_chunks.clone());
 
-    // Get an out-of-domain point to open all our values at.
-    // It's important that zeta does not accidentally lie in the domain `gH` as that could
-    // lead to denominators being zero later on.
-    let zeta = {
-        // It's much cheaper to check that zeta does not lie in the base field which is
-        // sufficient as the domain is a subset of the base field. This does have a slightly
-        // higher probability of occurring but that probability is |F|/|EF| which is
-        // still tiny for all our configurations so this loop should basically only ever run once.
-        // We do need to ensure though that the Challenge field is not equal to the base field.
-        assert_ne!(
-            SC::Challenge::DIMENSION,
-            1,
-            "The Challenge field must be a non trivial extension field."
-        );
-        loop {
-            let zeta: SC::Challenge = challenger.sample_algebra_element();
-            if !zeta.is_in_basefield() {
-                break zeta;
-            }
-        }
-    };
+    // Get an out-of-domain point to open our values at.
+    //
+    // Soundness Error:
+    // This sample will be used to check the equality: `C(X) = ZH(X)Q(X)`. If a prover is malicious
+    // and this equality is false, the probability that it is true at the point `zeta` will be
+    // deg(C(X))/|EF| = dN/|EF| where `N` is the trace length and our constraints have degree `d`.
+    let zeta: SC::Challenge = challenger.sample_algebra_element();
     let zeta_next = trace_domain.next_point(zeta).unwrap();
 
     pcs.verify(
