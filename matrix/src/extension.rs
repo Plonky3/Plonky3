@@ -12,8 +12,6 @@ use crate::Matrix;
 /// Each element of the original matrix is an extension field element `EF`, composed of several
 /// base field elements `F`. This view expands each `EF` element into its base field components,
 /// effectively increasing the number of columns (width) while keeping the number of rows unchanged.
-///
-/// Flattening is performed row-wise: each row of `EF` values becomes a longer row of `F` values.
 #[derive(Debug)]
 pub struct FlatMatrixView<F, EF, Inner>(Inner, PhantomData<(F, EF)>);
 
