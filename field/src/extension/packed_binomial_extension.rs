@@ -5,7 +5,7 @@ use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use itertools::Itertools;
-use p3_util::convert_vec;
+use p3_util::{flatten_to_base, reconstitute_from_base};
 use serde::{Deserialize, Serialize};
 
 use super::{BinomialExtensionField, binomial_mul, cubic_square, vector_add, vector_sub};
@@ -16,7 +16,7 @@ use crate::{
 };
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
-#[repr(transparent)] // to make the zero_vec implementation safe
+#[repr(transparent)] // Needed to make various casts safe.
 pub struct PackedBinomialExtensionField<F: Field, PF: PackedField<Scalar = F>, const D: usize> {
     #[serde(
         with = "p3_util::array_serialization",
@@ -129,7 +129,7 @@ where
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { convert_vec(PF::zero_vec(len * D)) }
+        unsafe { reconstitute_from_base(PF::zero_vec(len * D)) }
     }
 }
 
@@ -155,6 +155,24 @@ where
     #[inline]
     fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = PF>>(mut iter: I) -> Option<Self> {
         (iter.len() == D).then(|| Self::new(array::from_fn(|_| iter.next().unwrap()))) // The unwrap is safe as we just checked the length of iter.
+    }
+
+    #[inline]
+    fn flatten_to_base(vec: Vec<Self>) -> Vec<PF> {
+        unsafe {
+            // Safety:
+            // As `Self` is a `repr(transparent)`, it is stored identically in memory to `[PF; D]`
+            flatten_to_base::<PF, Self>(vec)
+        }
+    }
+
+    #[inline]
+    fn reconstitute_from_base(vec: Vec<PF>) -> Vec<Self> {
+        unsafe {
+            // Safety:
+            // As `Self` is a `repr(transparent)`, it is stored identically in memory to `[PF; D]`
+            reconstitute_from_base::<PF, Self>(vec)
+        }
     }
 }
 

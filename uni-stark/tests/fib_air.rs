@@ -13,7 +13,7 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
 use p3_symmetric::{
-    CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32To64, TruncatedPermutation,
+    CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
 };
 use p3_uni_stark::{StarkConfig, prove, verify};
 use rand::SeedableRng;
@@ -145,7 +145,7 @@ fn test_zk() {
     type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
     let u64_hash = U64Hash::new(KeccakF {});
 
-    type FieldHash = SerializingHasher32To64<U64Hash>;
+    type FieldHash = SerializingHasher<U64Hash>;
     let field_hash = FieldHash::new(u64_hash);
 
     type MyCompress = CompressionFunctionFromHasher<U64Hash, 2, 4>;

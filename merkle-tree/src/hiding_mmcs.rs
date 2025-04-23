@@ -113,7 +113,7 @@ where
         &self,
         prover_data: &'a Self::ProverData<M>,
     ) -> Vec<&'a M> {
-        prover_data.leaves.iter().map(|mat| &mat.first).collect()
+        prover_data.leaves.iter().map(|mat| &mat.left).collect()
     }
 
     fn verify_batch(

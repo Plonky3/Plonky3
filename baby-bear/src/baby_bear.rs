@@ -116,6 +116,7 @@ mod tests {
     use core::array;
 
     use num_bigint::BigUint;
+    use p3_field::extension::BinomialExtensionField;
     use p3_field::{InjectiveMonomial, PermutationMonomial, PrimeField64, TwoAdicField};
     use p3_field_testing::{
         test_field, test_field_dft, test_prime_field, test_prime_field_32, test_prime_field_64,
@@ -125,6 +126,7 @@ mod tests {
     use super::*;
 
     type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
 
     #[test]
     fn test_baby_bear_two_adicity_generators() {
@@ -218,15 +220,21 @@ mod tests {
     );
     test_two_adic_field!(crate::BabyBear);
 
-    test_field_dft!(radix2dit, crate::BabyBear, p3_dft::Radix2Dit<_>);
-    test_field_dft!(bowers, crate::BabyBear, p3_dft::Radix2Bowers);
-    test_field_dft!(parallel, crate::BabyBear, p3_dft::Radix2DitParallel::<_>);
+    test_field_dft!(radix2dit, crate::BabyBear, super::EF, p3_dft::Radix2Dit<_>);
+    test_field_dft!(bowers, crate::BabyBear, super::EF, p3_dft::Radix2Bowers);
+    test_field_dft!(
+        parallel,
+        crate::BabyBear,
+        super::EF,
+        p3_dft::Radix2DitParallel::<_>
+    );
     test_field_dft!(
         recur_dft,
         crate::BabyBear,
+        super::EF,
         p3_monty_31::dft::RecursiveDft<_>
     );
     test_prime_field!(crate::BabyBear);
-    test_prime_field_64!(crate::BabyBear);
-    test_prime_field_32!(crate::BabyBear);
+    test_prime_field_64!(crate::BabyBear, &super::ZEROS, &super::ONES);
+    test_prime_field_32!(crate::BabyBear, &super::ZEROS, &super::ONES);
 }
