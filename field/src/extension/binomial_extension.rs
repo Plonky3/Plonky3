@@ -81,7 +81,7 @@ impl<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: usize> BasedVectorSpace
         unsafe {
             // Safety:
             // As `Self` is a `repr(transparent)`, it is stored identically in memory to `[A; D]`
-            flatten_to_base::<A, Self>(vec)
+            flatten_to_base(vec)
         }
     }
 
@@ -90,7 +90,7 @@ impl<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: usize> BasedVectorSpace
         unsafe {
             // Safety:
             // As `Self` is a `repr(transparent)`, it is stored identically in memory to `[A; D]`
-            reconstitute_from_base::<A, Self>(vec)
+            reconstitute_from_base(vec)
         }
     }
 }
@@ -204,7 +204,7 @@ where
                 cubic_square(&self.value, &mut res.value);
                 res
             }
-            _ => <Self as Mul<Self>>::mul(self.clone(), self.clone()),
+            _ => self.clone() * self.clone(),
         }
     }
 
@@ -482,13 +482,8 @@ where
 
     #[inline]
     fn mul(self, rhs: Self) -> Self {
-        let a = self.value;
-        let b = rhs.value;
         let mut res = Self::default();
-        let w = F::W;
-
-        binomial_mul(&a, &b, &mut res.value, w);
-
+        binomial_mul(&self.value, &rhs.value, &mut res.value, F::W);
         res
     }
 }
@@ -615,7 +610,7 @@ pub(crate) fn vector_sub<
 pub(super) fn binomial_mul<
     F: Field,
     R: Algebra<F> + Mul<R2, Output = R>,
-    R2: Add<Output = R2> + Clone,
+    R2: Algebra<F> + Add<Output = R2> + Clone,
     const D: usize,
 >(
     a: &[R; D],
@@ -625,13 +620,32 @@ pub(super) fn binomial_mul<
 ) {
     match D {
         2 => {
-            res[0] = a[0].clone() * b[0].clone() + a[1].clone() * w * b[1].clone();
-            res[1] = a[0].clone() * b[1].clone() + a[1].clone() * b[0].clone();
+            // Karatsuba multiplication for two-term polynomials
+            //
+            // Let the elements be:
+            // A = a0 + a1·X
+            // B = b0 + b1·X
+
+            // Compute v0 = a0 · b0, the constant term from multiplying A and B
+            let v0 = a[0].clone() * b[0].clone();
+
+            // Compute v1 = a1 · b1, the coefficient of X², which becomes w·v1 in the result
+            let v1 = a[1].clone() * b[1].clone();
+
+            // Compute v2 = (a0 + a1) · (b0 + b1)
+            let v2 = (a[0].clone() + a[1].clone()) * (b[0].clone() + b[1].clone());
+
+            // Result coefficient for X⁰:
+            // = a0·b0 + w·a1·b1
+            res[0] = v0.clone() + v1.clone() * w;
+
+            // Result coefficient for X¹:
+            // = (a0 + a1)(b0 + b1) - a0·b0 - a1·b1
+            res[1] = v2 - v0 - v1;
         }
         3 => cubic_mul(a, b, res, w),
-        _ =>
-        {
-            #[allow(clippy::needless_range_loop)]
+        4 => quartic_karatsuba_mul(a, b, res, w),
+        _ => {
             for i in 0..D {
                 for j in 0..D {
                     if i + j >= D {
@@ -645,7 +659,7 @@ pub(super) fn binomial_mul<
     }
 }
 
-///Section 11.3.6b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
+/// Section 11.3.6b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
 fn quadratic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
     assert_eq!(D, 2);
@@ -718,4 +732,109 @@ pub(crate) fn cubic_square<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: u
     res[0] = a[0].square() + (a[1].clone() * w_a2.clone()).double();
     res[1] = w_a2 * a[2].clone() + (a[0].clone() * a[1].clone()).double();
     res[2] = a[1].square() + (a[0].clone() * a[2].clone()).double();
+}
+
+/// Optimized Karatsuba multiplication for extension degree 4.
+///
+/// Let the input polynomials be:
+///
+///     A = a0 + a1·X + a2·X² + a3·X³
+///     B = b0 + b1·X + b2·X² + b3·X³
+///
+/// These can be grouped as:
+///
+///     A = A0 + A1·X², where A0 = a0 + a1·X, A1 = a2 + a3·X
+///     B = B0 + B1·X², where B0 = b0 + b1·X, B1 = b2 + b3·X
+///
+/// The multiplication follows:
+///
+///     A·B = A0·B0
+///         + ((A0 + A1)·(B0 + B1) - A0·B0 - A1·B1)·X²
+///         + A1·B1·X⁴
+///
+/// Since X⁴ ≡ w (mod X⁴ - w), the X⁴ term is folded back into lower degrees using w.
+#[inline]
+fn quartic_karatsuba_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
+where
+    F: Field,
+    R: Algebra<F> + Mul<R2, Output = R>,
+    R2: Algebra<F> + Add<Output = R2> + Clone,
+{
+    // Split A into A0 = a0 + a1·X and A1 = a2 + a3·X
+    let (a0_0, a0_1) = (a[0].clone(), a[1].clone()); // A0 terms
+    let (a1_0, a1_1) = (a[2].clone(), a[3].clone()); // A1 terms
+
+    // Split B into B0 = b0 + b1·X and B1 = b2 + b3·X
+    let (b0_0, b0_1) = (b[0].clone(), b[1].clone()); // B0 terms
+    let (b1_0, b1_1) = (b[2].clone(), b[3].clone()); // B1 terms
+
+    // Compute A0·B0 = (a0 + a1·X)(b0 + b1·X)
+    // = a0·b0 + (a0·b1 + a1·b0)·X + a1·b1·X²
+
+    // X⁰ term from A0·B0
+    let a0b0_0 = a0_0.clone() * b0_0.clone();
+    // X¹ term from A0·B0
+    let a0b0_1 = a0_0.clone() * b0_1.clone() + a0_1.clone() * b0_0.clone();
+    // X² term from A0·B0
+    let a0b0_2 = a0_1.clone() * b0_1.clone();
+
+    // Compute partial A1·B1 = (a2 + a3·X)(b2 + b3·X)
+    // = a2·b2 + (a2·b3 + a3·b2)·X + a3·b3·X²
+    // We compute only the terms we need for reduction mod X⁴ - w
+
+    // a2·b2 (used in X⁰ and X²)
+    let a1b1_0 = a1_0.clone() * b1_0.clone();
+    // a2·b3 (used in X¹)
+    let a1b1_01 = a1_0.clone() * b1_1.clone();
+    // a3·b2 (used in X¹)
+    let a1b1_10 = a1_1.clone() * b1_0.clone();
+    // X¹ term from A1·B1
+    let a1b1_1 = a1b1_01.clone() + a1b1_10.clone();
+
+    // Compute A0 + A1 = (a0 + a2) + (a1 + a3)·X
+
+    // low term of (A0 + A1)
+    let a_sum_0 = a0_0 + a1_0;
+    // high term of (A0 + A1)
+    let a_sum_1 = a0_1.clone() + a1_1.clone();
+
+    // Compute B0 + B1 = (b0 + b2) + (b1 + b3)·X
+
+    // low term of (B0 + B1)
+    let b_sum_0 = b0_0 + b1_0;
+    // high term of (B0 + B1)
+    let b_sum_1 = b0_1.clone() + b1_1.clone();
+
+    // Compute middle product: (A0 + A1)(B0 + B1)
+    // = a_sum_0·b_sum_0 + (a_sum_0·b_sum_1 + a_sum_1·b_sum_0)·X + a_sum_1·b_sum_1·X²
+    // Only mid_0 (X⁰) and mid_1 (X¹) are used; X² term is ignored (degree ≥ 4)
+
+    // X⁰ term of middle product
+    let mid_0 = a_sum_0.clone() * b_sum_0.clone();
+    // X¹ term of middle product
+    let mid_1 = a_sum_0 * b_sum_1 + a_sum_1 * b_sum_0;
+
+    // Precompute w·b3 for folding a3·b3·X⁴ into constant term (X⁴ ≡ w)
+    let b3_w = b1_1 * w;
+
+    // Compute X⁰ term:
+    // = a0·b0 + a1·b3·w + a2·b2·w + a3·b1·w
+    res[0] = a0b0_0.clone()
+        + a0_1 * b3_w.clone()   // a1·b3·w
+        + a1b1_0.clone() * w    // a2·b2·w
+        + a1_1.clone() * b0_1 * w; // a3·b1·w
+
+    // Compute X¹ term:
+    // = a0·b1 + a1·b0 + a2·b3·w + a3·b2·w
+    res[1] = a0b0_1.clone()
+        + a1b1_01 * w // a2·b3·w
+        + a1b1_10 * w; // a3·b2·w
+
+    // Compute X² term:
+    // = a1·b1 + (middle - a0·b0 - a2·b2) + a3·b3·w
+    res[2] = a0b0_2 + (mid_0 - a0b0_0 - a1b1_0) + a1_1 * b3_w; // a3·b3·w folded into X²
+
+    // Compute X³ term:
+    // = mid_1 - a0·b1 - a1·b0 - a2·b3 - a3·b2
+    res[3] = mid_1 - a0b0_1 - a1b1_1;
 }

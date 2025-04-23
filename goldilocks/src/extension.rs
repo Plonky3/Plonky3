@@ -67,11 +67,12 @@ impl HasTwoAdicBinomialExtension<5> for Goldilocks {
 
 #[cfg(test)]
 mod test_quadratic_extension {
-
     use num_bigint::BigUint;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_field_testing::{test_field, test_two_adic_extension_field};
+    use rand::rngs::SmallRng;
+    use rand::{Rng, SeedableRng};
 
     use crate::Goldilocks;
 
@@ -107,6 +108,28 @@ mod test_quadratic_extension {
     );
 
     test_two_adic_extension_field!(super::F, super::EF);
+
+    #[test]
+    fn quadratic_mul_distributivity_over_addition() {
+        let mut rng = SmallRng::seed_from_u64(12345);
+
+        for _ in 0..100 {
+            let a: EF = rng.random();
+            let b: EF = rng.random();
+            let c: EF = rng.random();
+
+            // Left: (a + b) · c
+            let lhs = (a + b) * c;
+
+            // Right: a·c + b·c
+            let rhs = a * c + b * c;
+
+            assert_eq!(
+                lhs, rhs,
+                "Distributivity failed:\na = {a}\nb = {b}\nc = {c}\nlhs = {lhs}\nrhs = {rhs}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

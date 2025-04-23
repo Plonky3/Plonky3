@@ -162,7 +162,7 @@ where
         unsafe {
             // Safety:
             // As `Self` is a `repr(transparent)`, it is stored identically in memory to `[PF; D]`
-            flatten_to_base::<PF, Self>(vec)
+            flatten_to_base(vec)
         }
     }
 
@@ -171,7 +171,7 @@ where
         unsafe {
             // Safety:
             // As `Self` is a `repr(transparent)`, it is stored identically in memory to `[PF; D]`
-            reconstitute_from_base::<PF, Self>(vec)
+            reconstitute_from_base(vec)
         }
     }
 }
@@ -414,13 +414,8 @@ where
 
     #[inline]
     fn mul(self, rhs: Self) -> Self {
-        let a = self.value;
-        let b = rhs.value;
         let mut res = Self::default();
-        let w = F::W;
-
-        binomial_mul(&a, &b, &mut res.value, w);
-
+        binomial_mul(&self.value, &rhs.value, &mut res.value, F::W);
         res
     }
 }
@@ -435,13 +430,8 @@ where
 
     #[inline]
     fn mul(self, rhs: BinomialExtensionField<F, D>) -> Self {
-        let a = self.value;
-        let b = rhs.value;
         let mut res = Self::default();
-        let w = F::W;
-
-        binomial_mul(&a, &b, &mut res.value, w);
-
+        binomial_mul(&self.value, &rhs.value, &mut res.value, F::W);
         res
     }
 }

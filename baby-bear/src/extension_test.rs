@@ -6,6 +6,8 @@ mod test_quartic_extension {
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
     use p3_field_testing::{test_field, test_two_adic_extension_field};
+    use rand::rngs::SmallRng;
+    use rand::{Rng, SeedableRng};
 
     use crate::BabyBear;
 
@@ -52,6 +54,25 @@ mod test_quartic_extension {
             ),
             "2 + X + 2 X^3"
         );
+    }
+
+    #[test]
+    fn quartic_mul_distributivity_over_addition() {
+        let mut rng = SmallRng::seed_from_u64(12345);
+
+        for _ in 0..100 {
+            let a: EF = rng.random();
+            let b: EF = rng.random();
+            let c: EF = rng.random();
+
+            // Left: (a + b) · c
+            let lhs = (a + b) * c;
+
+            // Right: a·c + b·c
+            let rhs = a * c + b * c;
+
+            assert_eq!(lhs, rhs);
+        }
     }
 }
 

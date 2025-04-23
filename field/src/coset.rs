@@ -74,7 +74,7 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
     ///    shifted
     ///  - `log_size`: the size of the subgroup (and hence of the coset) is `2 ^
     ///    log_size`. This determines the subgroup uniquely.
-    pub fn new(shift: F, log_size: usize) -> Option<Self> {
+    pub const fn new(shift: F, log_size: usize) -> Option<Self> {
         if log_size <= F::TWO_ADICITY {
             Some(Self { shift, log_size })
         } else {
@@ -90,19 +90,19 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
 
     /// Returns the shift of the coset.
     #[inline]
-    pub fn shift(&self) -> F {
+    pub const fn shift(&self) -> F {
         self.shift
     }
 
     /// Returns the log2 of the size of the coset.
     #[inline]
-    pub fn log_size(&self) -> usize {
+    pub const fn log_size(&self) -> usize {
         self.log_size
     }
 
     /// Returns the size of the coset.
     #[inline]
-    pub fn size(&self) -> usize {
+    pub const fn size(&self) -> usize {
         1 << self.log_size
     }
 
@@ -114,7 +114,7 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
     pub fn shrink_coset(&self, log_scale_factor: usize) -> Option<Self> {
         self.log_size
             .checked_sub(log_scale_factor)
-            .map(|new_log_size| TwoAdicMultiplicativeCoset {
+            .map(|new_log_size| Self {
                 shift: self.shift,
                 log_size: new_log_size,
             })
@@ -131,16 +131,16 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
     }
 
     /// Returns a new coset of the same size whose shift is equal to `scale * self.shift`.
-    pub fn shift_by(&self, scale: F) -> TwoAdicMultiplicativeCoset<F> {
-        TwoAdicMultiplicativeCoset {
+    pub fn shift_by(&self, scale: F) -> Self {
+        Self {
             shift: self.shift * scale,
             log_size: self.log_size,
         }
     }
 
     /// Returns a new coset where the shift has been set to `shift`
-    pub fn set_shift(&self, shift: F) -> TwoAdicMultiplicativeCoset<F> {
-        TwoAdicMultiplicativeCoset {
+    pub const fn set_shift(&self, shift: F) -> Self {
+        Self {
             shift,
             log_size: self.log_size,
         }
