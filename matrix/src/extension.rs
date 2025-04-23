@@ -196,7 +196,7 @@ mod tests {
         // Row 0: [1,2], [10,11]; Row 1: [20,21], [30,31].
         // Verify that the flattening preserves row structure and ordering.
         let ef = |base| EF::from_basis_coefficients_fn(|i| F::from_u8(base + i as u8));
-        let matrix = RowMajorMatrix::new(vec![ef(1), ef(10), ef(20), ef(30)], 2);
+        let matrix = RowMajorMatrix::new(vec![ef(0), ef(10), ef(20), ef(30)], 2);
         let flat = FlatMatrixView::<F, EF, _>::new(matrix);
 
         let row0: Vec<_> = flat.row(0).collect();
