@@ -737,20 +737,23 @@ pub(crate) fn cubic_square<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: u
 /// Optimized Karatsuba multiplication for extension degree 4.
 ///
 /// Let the input polynomials be:
-///
+/// ```text
 ///     A = a0 + a1·X + a2·X² + a3·X³
 ///     B = b0 + b1·X + b2·X² + b3·X³
+/// ```
 ///
 /// These can be grouped as:
-///
+/// ```text
 ///     A = A0 + A1·X², where A0 = a0 + a1·X, A1 = a2 + a3·X
 ///     B = B0 + B1·X², where B0 = b0 + b1·X, B1 = b2 + b3·X
+/// ```
 ///
 /// The multiplication follows:
-///
+/// ```text
 ///     A·B = A0·B0
 ///         + ((A0 + A1)·(B0 + B1) - A0·B0 - A1·B1)·X²
 ///         + A1·B1·X⁴
+/// ```
 ///
 /// Since X⁴ ≡ w (mod X⁴ - w), the X⁴ term is folded back into lower degrees using w.
 #[inline]
