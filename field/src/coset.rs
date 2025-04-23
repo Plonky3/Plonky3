@@ -149,7 +149,7 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
         let shift = self.shift * scale;
         TwoAdicMultiplicativeCoset {
             shift_inverse: shift.inverse(),
-            shift: self.shift * scale,
+            shift,
             log_size: self.log_size,
         }
     }
