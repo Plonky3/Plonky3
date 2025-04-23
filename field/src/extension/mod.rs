@@ -13,26 +13,54 @@ pub use binomial_extension::*;
 pub use complex::*;
 pub use packed_binomial_extension::*;
 
-/// Binomial extension field trait.
+/// Trait for fields that support binomial extension of the form `F[X]/(X^D - W)`.
 ///
-/// This exists if the polynomial ring `F[X]` has an irreducible polynomial `X^d-W`
-/// allowing us to define the binomial extension field `F[X]/(X^d-W)`.
+/// A type implementing this trait can define a degree-`D` extension field
+/// using a binomial polynomial `X^D - W`, where `W` is a nonzero constant in the base field.
+///
+/// This is used to construct extension fields with efficient arithmetic.
 pub trait BinomiallyExtendable<const D: usize>: Field {
+    /// The `W` constant in the binomial `X^D - W`.
     const W: Self;
 
-    /// DTH_ROOT = W^((n - 1)/D).
-    /// n is the order of base field.
-    /// Only works when exists k such that n = kD + 1.
+    /// A `D`-th root of unity derived from `W`.
+    ///
+    /// This is `W^((n - 1)/D)`, where `n` is the order of the field.
+    /// Valid only when `n = kD + 1` for some `k`.
     const DTH_ROOT: Self;
 
+    /// A generator for the extension field, expressed as a degree-`D` polynomial.
+    ///
+    /// This is an array of size `D`, where each entry is a base field element.
     const EXT_GENERATOR: [Self; D];
 }
 
+/// Trait for extension fields that support Frobenius automorphisms.
+///
+/// The Frobenius automorphism is a field map `x ↦ x^n`,
+/// where `n` is the order of the base field.
+///
+/// This map preserves the structure of the field.
 pub trait HasFrobenius<F: Field>: ExtensionField<F> {
+    /// Apply the Frobenius automorphism once.
+    ///
+    /// Equivalent to raising the element to the `n`th power.
     fn frobenius(&self) -> Self;
+
+    /// Apply the Frobenius automorphism `count` times.
+    ///
+    /// Equivalent to raising to the `n^count` power.
     fn repeated_frobenius(&self, count: usize) -> Self;
+
+    /// Compute the inverse Frobenius map.
+    ///
+    /// Returns an element `y` such that `self = y^n`.
     fn frobenius_inv(&self) -> Self;
 
+    /// Returns the full Galois orbit of the element under Frobenius.
+    ///
+    /// This is the sequence `[x, x^n, x^{n^2}, ..., x^{n^{D-1}}]`,
+    /// where `D` is the extension degree.
     fn galois_orbit(self) -> Vec<Self> {
         iter::successors(Some(self), |x| Some(x.frobenius()))
             .take(Self::DIMENSION)
@@ -40,11 +68,16 @@ pub trait HasFrobenius<F: Field>: ExtensionField<F> {
     }
 }
 
-/// Optional trait for implementing Two Adic Binomial Extension Field.
+/// Trait for binomial extensions that support a two-adic subgroup generator.
 pub trait HasTwoAdicBinomialExtension<const D: usize>: BinomiallyExtendable<D> {
+    /// Two-adicity of the multiplicative group of the extension field.
+    ///
+    /// This is the number of times 2 divides the order of the field minus 1.
     const EXT_TWO_ADICITY: usize;
 
-    /// Assumes the multiplicative group size has at least `bits` powers of two, otherwise the
-    /// behavior is undefined.
+    /// Returns a two-adic generator for the extension field.
+    ///
+    /// This is used to generate the 2^bits-th roots of unity in the extension field.
+    /// Behavior is undefined if `bits > EXT_TWO_ADICITY`.
     fn ext_two_adic_generator(bits: usize) -> [Self; D];
 }
