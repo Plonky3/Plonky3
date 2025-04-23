@@ -179,9 +179,9 @@ mod tests {
     #[test]
     fn test_flat_iter_length_and_values() {
         // Create a row with three EF values, each with offset base coefficients:
-        // [1,2], [10,11], [20,21] -> flattened row should be [1,2,10,11,20,21].
+        // [0,1], [10,11], [20,21] -> flattened row should be [0,1,10,11,20,21].
         let ef = |offset| EF::from_basis_coefficients_fn(|i| F::from_u8(i as u8 + offset));
-        let values = vec![ef(1), ef(10), ef(20)];
+        let values = vec![ef(0), ef(10), ef(20)];
         let matrix = RowMajorMatrix::new(values, 3); // 1 row
         let flat = FlatMatrixView::<F, EF, _>::new(matrix);
 
