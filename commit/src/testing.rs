@@ -75,7 +75,7 @@ where
                 let mut coeffs = self.dft.idft_batch(evals);
                 coeffs
                     .rows_mut()
-                    .zip(domain.shift().inverse().powers())
+                    .zip(domain.shift_inverse().powers())
                     .for_each(|(row, weight)| {
                         row.iter_mut().for_each(|coeff| {
                             *coeff *= weight;

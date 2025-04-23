@@ -109,8 +109,6 @@ pub trait PolynomialSpace: Copy {
     /// to `0` at any point not in `self`.
     fn vanishing_poly_at_point<Ext: ExtensionField<Self::Val>>(&self, point: Ext) -> Ext;
 
-    fn get_zp_cis<Ext: ExtensionField<Self::Val>>(qc_domains: &[Self]) -> Vec<Self::Val>;
-
     /// Compute several Lagrange selectors at a given point.
     /// - The Lagrange selector of the first point.
     /// - The Lagrange selector of the last point.
@@ -211,31 +209,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     ///
     /// `Z_{gH}(X) = g^{-|H|}\prod_{h \in H} (X - gh) = (g^{-1}X)^|H| - 1`
     fn vanishing_poly_at_point<Ext: ExtensionField<Val>>(&self, point: Ext) -> Ext {
-        (point * self.shift().inverse()).exp_power_of_2(self.log_size()) - Ext::ONE
-    }
-
-    /// Compute the normalizing constants for the Langrange selectors of the provided domains.
-    /// See Section 4.2 of https://eprint.iacr.org/2024/1037.pdf for more details.
-    fn get_zp_cis<Ext: ExtensionField<Val>>(qc_domains: &[Self]) -> Vec<Val> {
-        batch_multiplicative_inverse(
-            &qc_domains
-                .iter()
-                .enumerate()
-                .map(|(i, domain)| {
-                    let shift_inverse = domain.first_point().inverse();
-                    qc_domains
-                        .iter()
-                        .enumerate()
-                        .filter(|(j, _)| *j != i)
-                        .map(|(_, other_domain)| {
-                            (shift_inverse * other_domain.first_point())
-                                .exp_power_of_2(other_domain.log_size())
-                                - Val::ONE
-                        })
-                        .product()
-                })
-                .collect::<Vec<_>>(),
-        )
+        (point * self.shift_inverse()).exp_power_of_2(self.log_size()) - Ext::ONE
     }
 
     /// Compute several Lagrange selectors at the given point:
@@ -246,7 +220,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     /// - `(g^{-1}X - h^{-1})`: The Lagrange selector of the subset consisting of everything but the point `gh^{-1}`.
     /// - `1/Z_{gH}(X)`: The inverse of the vanishing polynomial.
     fn selectors_at_point<Ext: ExtensionField<Val>>(&self, point: Ext) -> LagrangeSelectors<Ext> {
-        let unshifted_point = point * self.shift().inverse();
+        let unshifted_point = point * self.shift_inverse();
         let z_h = unshifted_point.exp_power_of_2(self.log_size()) - Ext::ONE;
         LagrangeSelectors {
             is_first_row: z_h / (unshifted_point - Ext::ONE),

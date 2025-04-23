@@ -3,8 +3,8 @@ use alloc::vec::Vec;
 
 use itertools::{Itertools, iterate};
 use p3_commit::{LagrangeSelectors, PolynomialSpace};
+use p3_field::ExtensionField;
 use p3_field::extension::ComplexExtendable;
-use p3_field::{ExtensionField, batch_multiplicative_inverse};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
@@ -166,25 +166,6 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
 
     fn vanishing_poly_at_point<Ext: ExtensionField<Self::Val>>(&self, point: Ext) -> Ext {
         self.vanishing_poly(Point::from_projective_line(point))
-    }
-
-    fn get_zp_cis<Ext: ExtensionField<Self::Val>>(qc_domains: &[Self]) -> Vec<Self::Val> {
-        batch_multiplicative_inverse(
-            &qc_domains
-                .iter()
-                .enumerate()
-                .map(|(i, domain)| {
-                    qc_domains
-                        .iter()
-                        .enumerate()
-                        .filter(|(j, _)| *j != i)
-                        .map(|(_, other_domain)| {
-                            other_domain.vanishing_poly_at_point(domain.first_point())
-                        })
-                        .product()
-                })
-                .collect::<Vec<_>>(),
-        )
     }
 
     fn selectors_at_point<Ext: ExtensionField<Self::Val>>(

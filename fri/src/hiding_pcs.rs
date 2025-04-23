@@ -8,7 +8,7 @@ use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_field::{ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse};
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversalPerm, BitReversibleMatrix};
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
@@ -120,8 +120,7 @@ where
         if evaluations.is_empty() {
             return self.inner.mmcs.commit(vec![]);
         }
-        let cis = PolynomialSpace::get_zp_cis::<Challenge>(&domains);
-
+        let cis = get_zp_cis(&domains);
         let last_chunk = evaluations.len() - 1;
         let last_chunk_ci_inv = cis[last_chunk].inverse();
         let mul_coeffs = (0..last_chunk)
@@ -348,4 +347,25 @@ where
             new_row[old_w..].iter_mut().for_each(|v| *v = rng.random());
         });
     result
+}
+
+/// Compute the normalizing constants for the Langrange selectors of the provided domains.
+/// See Section 4.2 of https://eprint.iacr.org/2024/1037.pdf for more details.
+fn get_zp_cis<D: PolynomialSpace>(qc_domains: &[D]) -> Vec<p3_commit::Val<D>> {
+    batch_multiplicative_inverse(
+        &qc_domains
+            .iter()
+            .enumerate()
+            .map(|(i, domain)| {
+                qc_domains
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, _)| *j != i)
+                    .map(|(_, other_domain)| {
+                        other_domain.vanishing_poly_at_point(domain.first_point())
+                    })
+                    .product()
+            })
+            .collect::<Vec<_>>(),
+    )
 }
