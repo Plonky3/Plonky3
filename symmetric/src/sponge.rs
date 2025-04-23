@@ -109,3 +109,29 @@ where
         inner_arr.into()
     }
 }
+
+impl<F, PF, P, const WIDTH: usize, const RATE: usize, const OUT: usize>
+    CryptographicHasher<F, [PF; OUT]> for MultiField32PaddingFreeSponge<F, PF, P, WIDTH, RATE, OUT>
+where
+    F: PrimeField32,
+    PF: PrimeField + Default + Copy,
+    P: CryptographicPermutation<[PF; WIDTH]>,
+{
+    fn hash_iter<I>(&self, input: I) -> [PF; OUT]
+    where
+        I: IntoIterator<Item = F>,
+    {
+        let mut state = [PF::default(); WIDTH];
+        for block_chunk in &input.into_iter().chunks(RATE) {
+            for (chunk_id, chunk) in (&block_chunk.chunks(self.num_f_elms))
+                .into_iter()
+                .enumerate()
+            {
+                state[chunk_id] = reduce_32(&chunk.collect_vec());
+            }
+            state = self.permutation.permute(state);
+        }
+
+        state[..OUT].try_into().unwrap()
+    }
+}
