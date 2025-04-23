@@ -124,10 +124,7 @@ mod test_quadratic_extension {
             // Right: a·c + b·c
             let rhs = a * c + b * c;
 
-            assert_eq!(
-                lhs, rhs,
-                "Distributivity failed:\na = {a}\nb = {b}\nc = {c}\nlhs = {lhs}\nrhs = {rhs}"
-            );
+            assert_eq!(lhs, rhs);
         }
     }
 }
