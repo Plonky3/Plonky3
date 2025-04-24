@@ -155,7 +155,7 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
     }
 
     /// Returns a new coset where the shift has been set to `shift`
-    pub const fn set_shift(&self, shift: F) -> Self {
+    pub fn set_shift(&self, shift: F) -> Self {
         Self {
             shift,
             shift_inverse: shift.inverse(),
