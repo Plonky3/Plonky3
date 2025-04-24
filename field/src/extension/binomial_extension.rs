@@ -822,20 +822,15 @@ where
 
     // Compute X⁰ term:
     // = a0·b0 + a1·b3·w + a2·b2·w + a3·b1·w
-    res[0] = a0b0_0.clone()
-        + a0_1 * b3_w.clone()   // a1·b3·w
-        + a1b1_0.clone() * w    // a2·b2·w
-        + a1_1.clone() * b0_1 * w; // a3·b1·w
+    res[0] = a0b0_0.clone() + a0_1 * b3_w.clone() + (a1b1_0.clone() + a1_1.clone() * b0_1) * w;
 
     // Compute X¹ term:
     // = a0·b1 + a1·b0 + a2·b3·w + a3·b2·w
-    res[1] = a0b0_1.clone()
-        + a1b1_01 * w // a2·b3·w
-        + a1b1_10 * w; // a3·b2·w
+    res[1] = a0b0_1.clone() + (a1b1_01 + a1b1_10) * w;
 
     // Compute X² term:
     // = a1·b1 + (middle - a0·b0 - a2·b2) + a3·b3·w
-    res[2] = a0b0_2 + (mid_0 - a0b0_0 - a1b1_0) + a1_1 * b3_w; // a3·b3·w folded into X²
+    res[2] = a0b0_2 + (mid_0 - a0b0_0 - a1b1_0) + a1_1 * b3_w;
 
     // Compute X³ term:
     // = mid_1 - a0·b1 - a1·b0 - a2·b3 - a3·b2
