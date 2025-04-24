@@ -29,9 +29,9 @@ use crate::{FriConfig, FriGenericConfig, FriProof, prover};
 
 #[derive(Debug)]
 pub struct TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
-    dft: Dft,
-    mmcs: InputMmcs,
-    fri: FriConfig<FriMmcs>,
+    pub(crate) dft: Dft,
+    pub(crate) mmcs: InputMmcs,
+    pub(crate) fri: FriConfig<FriMmcs>,
     _phantom: PhantomData<Val>,
 }
 
@@ -150,6 +150,7 @@ where
     type EvaluationsOnDomain<'a> = BitReversedMatrixView<RowMajorMatrixView<'a, Val>>;
     type Proof = FriProof<Challenge, FriMmcs, Val, Vec<BatchOpening<Val, InputMmcs>>>;
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
+    const ZK: bool = false;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         // This panics if (and only if) `degree` is not a power of 2 or `degree`
@@ -159,7 +160,7 @@ where
 
     fn commit(
         &self,
-        evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
         let ldes: Vec<_> = evaluations
             .into_iter()

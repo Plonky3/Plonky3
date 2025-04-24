@@ -40,19 +40,45 @@ where
     /// The type of a proof verification error.
     type Error: Debug;
 
+    /// Set to true to activate randomization and achieve zero-knowledge.
+    const ZK: bool;
+
+    /// Index of the trace commitment in the computed opened values.
+    const TRACE_IDX: usize = Self::ZK as usize;
+
+    /// Index of the quotient commitments in the computed opened values.
+    const QUOTIENT_IDX: usize = Self::TRACE_IDX + 1;
+
     /// This should return a domain such that `Domain::next_point` returns `Some`.
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain;
 
     /// Given a collection of evaluation matrices, produce a binding commitment to
-    /// the polynomials defined by those evaluations.
+    /// the polynomials defined by those evaluations. If `zk` is enabled, the evaluations are
+    /// first randomized as explained in Section 3 of https://eprint.iacr.org/2024/1037.pdf .
     ///
     /// Returns both the commitment which should be sent to the verifier
     /// and the prover data which can be used to produce opening proofs.
     #[allow(clippy::type_complexity)]
     fn commit(
         &self,
-        evaluations: Vec<(Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
     ) -> (Self::Commitment, Self::ProverData);
+
+    /// Commit to the quotient polynomials. If `zk` is not enabled, this is the same as `commit`.
+    /// If `zk` is enabled, the quotient polynomials are randomized as explained in Section 4.2 of
+    /// https://eprint.iacr.org/2024/1037.pdf .
+    ///
+    /// *** Arguments
+    /// - `domains` are the domains of the quotient polynomial chunks we need to commit to.
+    /// - `evaluations` are the evaluations of the quotient polynomial chunks we need to commit to.
+    #[allow(clippy::type_complexity)]
+    fn commit_quotient(
+        &self,
+        domains: Vec<Self::Domain>,
+        evaluations: Vec<RowMajorMatrix<Val<Self::Domain>>>,
+    ) -> (Self::Commitment, Self::ProverData) {
+        self.commit(domains.into_iter().zip(evaluations))
+    }
 
     /// Given prover data corresponding to a commitment to a collection of evaluation matrices,
     /// return the evaluations of those matrices on the given domain.
@@ -131,6 +157,13 @@ where
         proof: &Self::Proof,
         fiat_shamir_challenger: &mut Challenger,
     ) -> Result<(), Self::Error>;
+
+    fn get_opt_randomization_poly_commitment(
+        &self,
+        _domain: Self::Domain,
+    ) -> Option<(Self::Commitment, Self::ProverData)> {
+        None
+    }
 }
 
 pub type OpenedValues<F> = Vec<OpenedValuesForRound<F>>;

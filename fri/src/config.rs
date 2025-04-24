@@ -73,11 +73,34 @@ pub const fn create_test_fri_config<Mmcs>(
     }
 }
 
+/// Creates a minimal `FriConfig` for testing purposes, with zk enabled.
+/// This configuration is designed to reduce computational cost during tests.
+pub const fn create_test_fri_config_zk<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
+    FriConfig {
+        log_blowup: 2,
+        log_final_poly_len: 0,
+        num_queries: 2,
+        proof_of_work_bits: 1,
+        mmcs,
+    }
+}
+
 /// Creates a `FriConfig` suitable for benchmarking.
 /// This configuration represents typical settings used in production-like scenarios.
 pub const fn create_benchmark_fri_config<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
     FriConfig {
         log_blowup: 1,
+        log_final_poly_len: 0,
+        num_queries: 100,
+        proof_of_work_bits: 16,
+        mmcs,
+    }
+}
+
+/// Creates a `FriConfig` suitable for benchmarking with zk enabled.
+pub fn create_benchmark_fri_config_zk<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
+    FriConfig {
+        log_blowup: 2,
         log_final_poly_len: 0,
         num_queries: 100,
         proof_of_work_bits: 16,
