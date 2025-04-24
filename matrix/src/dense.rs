@@ -486,6 +486,9 @@ impl<T: Copy + Default + Send + Sync, V: DenseStorage<T>> DenseMatrix<T, V> {
     }
 
     /// Transpose the matrix in place, modifying the original matrix.
+    ///
+    /// TODO: Currently this uses a temporary buffer to perform the transpose.
+    /// This should eventually be optimized to make this truly in-place.
     pub fn transpose_in_place(&mut self)
     where
         V: BorrowMut<[T]>,
