@@ -186,7 +186,7 @@ mod tests {
         let flat = FlatMatrixView::<F, EF, _>::new(matrix);
 
         let row: Vec<_> = flat.row(0).collect();
-        let expected = [1, 2, 10, 11, 20, 21].map(F::from_u8).to_vec();
+        let expected = [0, 1, 10, 11, 20, 21].map(F::from_u8).to_vec();
         assert_eq!(row, expected);
     }
 
@@ -202,7 +202,7 @@ mod tests {
         let row0: Vec<_> = flat.row(0).collect();
         let row1: Vec<_> = flat.row(1).collect();
 
-        assert_eq!(row0, [1, 2, 10, 11].map(F::from_u8).to_vec());
+        assert_eq!(row0, [0, 1, 10, 11].map(F::from_u8).to_vec());
         assert_eq!(row1, [20, 21, 30, 31].map(F::from_u8).to_vec());
     }
 
