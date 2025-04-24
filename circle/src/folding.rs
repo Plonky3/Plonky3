@@ -24,7 +24,7 @@ pub(crate) type CircleFriConfig<Val, Challenge, InputMmcs, FriMmcs> = CircleFriG
 >;
 
 impl<F: ComplexExtendable, EF: ExtensionField<F>, InputProof, InputError: Debug>
-    FriGenericConfig<EF> for CircleFriGenericConfig<F, InputProof, InputError>
+    FriGenericConfig<F, EF> for CircleFriGenericConfig<F, InputProof, InputError>
 {
     type InputProof = InputProof;
     type InputError = InputError;
