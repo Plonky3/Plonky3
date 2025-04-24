@@ -60,7 +60,11 @@ where
             .quotient_chunks
             .iter()
             .all(|qc| qc.len() == <SC::Challenge as BasedVectorSpace<Val<SC>>>::DIMENSION)
-        && if let Some(r_comm) = opened_values.random.clone() {
+        && if SC::Pcs::ZK {
+            let r_comm = opened_values
+                .random
+                .as_ref()
+                .ok_or(VerificationError::RandomizationError)?;
             r_comm.len() == SC::Challenge::DIMENSION
         } else {
             true
@@ -89,10 +93,14 @@ where
     let zeta: SC::Challenge = challenger.sample();
     let zeta_next = init_trace_domain.next_point(zeta).unwrap();
 
-    let mut coms_to_verify = if let Some(random_commit) = &commitments.random {
+    let mut coms_to_verify = if SC::Pcs::ZK {
+        let random_commit = commitments
+            .random
+            .as_ref()
+            .ok_or(VerificationError::RandomizationError)?;
         let random_values = opened_values
             .random
-            .clone()
+            .as_ref()
             .ok_or(VerificationError::RandomizationError)?;
         vec![(
             random_commit.clone(),

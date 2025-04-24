@@ -93,8 +93,10 @@ where
                     .into_iter()
                     .map(|(domain, mat)| {
                         let mat_width = mat.width();
-                        // Let `w` and `h` be the width and height of the original matrix. The randomized matrix should have shape `2 * h * (w + num_random_codewords)`.
+                        // Let `w` and `h` be the width and height of the original matrix. The randomized matrix should have height `2h` and width `w + num_random_codewords`.
                         // To generate it, we add `w + 2 * num_random_codewords` columns to the original matrix, then reshape it by setting the width to `w + num_random_codewords`.
+                        // All columns are added on the right hand side so, after reshaping, this has the net effect of adding `num_random_codewords` random columns on the right and interleaving the original trace with random rows.
+
                         let mut random_evaluation = add_random_cols(
                             mat,
                             mat_width + 2 * self.num_random_codewords,

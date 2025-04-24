@@ -100,7 +100,7 @@ where
     // we actually need to commit to `SC::CHallenge::D` base field random polynomials.
     // This is similar to what is done for the quotient polynomials.
     // TODO: This approach is only statistically zk. To make it perfectly zk, `R` would have to truly be an extension field polynomial.
-    let (opt_r_commit, opt_r_data) = if config.is_zk() != 0 {
+    let (opt_r_commit, opt_r_data) = if SC::Pcs::ZK {
         let (r_commit, r_data) = pcs
             .get_opt_randomization_poly_commitment(ext_trace_domain)
             .expect("ZK is enabled, so we should have randomization commitments");

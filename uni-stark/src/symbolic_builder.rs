@@ -22,6 +22,7 @@ where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
 {
+    assert!(is_zk <= 1, "is_zk must be either 0 or 1");
     // We pad to at least degree 2, since a quotient argument doesn't make sense with smaller degrees.
     let constraint_degree =
         (get_max_constraint_degree(air, preprocessed_width, num_public_values) + is_zk).max(2);

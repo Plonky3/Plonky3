@@ -67,7 +67,7 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
     /// Returns the coset `shift * <generator>`, where `generator` is a
     /// canonical (i. e. fixed in the implementation of `F: TwoAdicField`)
     /// generator of the unique subgroup of the units of `F` of order `2 ^
-    /// log_size`. Returns `None` if `log_size > F::TWO_ADICITY`.
+    /// log_size`. Returns `None` if `log_size > F::TWO_ADICITY` or if `shift` is zero.
     ///
     /// # Arguments
     ///
@@ -127,8 +127,8 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
         self.log_size
             .checked_sub(log_scale_factor)
             .map(|new_log_size| TwoAdicMultiplicativeCoset {
-                shift_inverse: self.shift_inverse,
                 shift: self.shift,
+                shift_inverse: self.shift_inverse,
                 log_size: new_log_size,
             })
     }
@@ -139,7 +139,7 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
     pub fn exp_power_of_2(&self, log_scale_factor: usize) -> Option<Self> {
         self.shrink_coset(log_scale_factor).map(|mut coset| {
             coset.shift = self.shift.exp_power_of_2(log_scale_factor);
-            coset.shift_inverse = coset.shift.inverse();
+            coset.shift_inverse = self.shift_inverse.exp_power_of_2(log_scale_factor);
             coset
         })
     }
@@ -148,8 +148,8 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
     pub fn shift_by(&self, scale: F) -> TwoAdicMultiplicativeCoset<F> {
         let shift = self.shift * scale;
         TwoAdicMultiplicativeCoset {
-            shift_inverse: shift.inverse(),
             shift,
+            shift_inverse: shift.inverse(),
             log_size: self.log_size,
         }
     }
@@ -157,8 +157,8 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
     /// Returns a new coset where the shift has been set to `shift`
     pub fn set_shift(&self, shift: F) -> TwoAdicMultiplicativeCoset<F> {
         TwoAdicMultiplicativeCoset {
-            shift_inverse: shift.inverse(),
             shift,
+            shift_inverse: shift.inverse(),
             log_size: self.log_size,
         }
     }
