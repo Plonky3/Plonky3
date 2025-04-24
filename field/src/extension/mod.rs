@@ -20,7 +20,7 @@ pub use packed_binomial_extension::*;
 ///
 /// This is used to construct extension fields with efficient arithmetic.
 pub trait BinomiallyExtendable<const D: usize>: Field {
-    /// The `W` constant in the binomial `X^D - W`.
+    /// The constant coefficient `W` in the binomial `X^D - W`.
     const W: Self;
 
     /// A `D`-th root of unity derived from `W`.
