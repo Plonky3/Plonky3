@@ -27,6 +27,7 @@ pub struct Proof<SC: StarkGenericConfig> {
 pub struct Commitments<Com> {
     pub(crate) trace: Com,
     pub(crate) quotient_chunks: Com,
+    pub(crate) random: Option<Com>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -34,4 +35,5 @@ pub struct OpenedValues<Challenge> {
     pub(crate) trace_local: Vec<Challenge>,
     pub(crate) trace_next: Vec<Challenge>,
     pub(crate) quotient_chunks: Vec<Vec<Challenge>>,
+    pub(crate) random: Option<Vec<Challenge>>,
 }

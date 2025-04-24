@@ -16,14 +16,16 @@ pub fn get_log_quotient_degree<F, A>(
     air: &A,
     preprocessed_width: usize,
     num_public_values: usize,
+    is_zk: usize,
 ) -> usize
 where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
 {
+    assert!(is_zk <= 1, "is_zk must be either 0 or 1");
     // We pad to at least degree 2, since a quotient argument doesn't make sense with smaller degrees.
     let constraint_degree =
-        get_max_constraint_degree(air, preprocessed_width, num_public_values).max(2);
+        (get_max_constraint_degree(air, preprocessed_width, num_public_values) + is_zk).max(2);
 
     // The quotient's actual degree is approximately (max_constraint_degree - 1) n,
     // where subtracting 1 comes from division by the vanishing polynomial.
@@ -185,7 +187,7 @@ mod tests {
             constraints: vec![],
             width: 4,
         };
-        let log_degree = get_log_quotient_degree(&air, 3, 2);
+        let log_degree = get_log_quotient_degree(&air, 3, 2, 0);
         assert_eq!(log_degree, 0);
     }
 
@@ -195,7 +197,7 @@ mod tests {
             constraints: vec![SymbolicVariable::new(Entry::Main { offset: 0 }, 0)],
             width: 4,
         };
-        let log_degree = get_log_quotient_degree(&air, 3, 2);
+        let log_degree = get_log_quotient_degree(&air, 3, 2, 0);
         assert_eq!(log_degree, log2_ceil_usize(1));
     }
 
@@ -209,7 +211,7 @@ mod tests {
             ],
             width: 4,
         };
-        let log_degree = get_log_quotient_degree(&air, 3, 2);
+        let log_degree = get_log_quotient_degree(&air, 3, 2, 0);
         assert_eq!(log_degree, log2_ceil_usize(1));
     }
 

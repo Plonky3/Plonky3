@@ -11,11 +11,11 @@ use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
     ExtensionField, Field, PackedFieldExtension, TwoAdicField, batch_multiplicative_inverse,
-    cyclic_subgroup_coset_known_order, dot_product,
+    cyclic_subgroup_known_order, dot_product,
 };
-use p3_interpolation::interpolate_coset;
-use p3_matrix::bitrev::{BitReversalPerm, BitReversedMatrixView, BitReversibleMatrix};
-use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
+use p3_interpolation::interpolate_coset_with_precomputation;
+use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::{Dimensions, Matrix};
 use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
@@ -29,9 +29,9 @@ use crate::{FriConfig, FriGenericConfig, FriProof, prover};
 
 #[derive(Debug)]
 pub struct TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
-    dft: Dft,
-    mmcs: InputMmcs,
-    fri: FriConfig<FriMmcs>,
+    pub(crate) dft: Dft,
+    pub(crate) mmcs: InputMmcs,
+    pub(crate) fri: FriConfig<FriMmcs>,
     _phantom: PhantomData<Val>,
 }
 
@@ -147,9 +147,10 @@ where
     type Domain = TwoAdicMultiplicativeCoset<Val>;
     type Commitment = InputMmcs::Commitment;
     type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
-    type EvaluationsOnDomain<'a> = BitReversedMatrixView<DenseMatrix<Val, &'a [Val]>>;
+    type EvaluationsOnDomain<'a> = BitReversedMatrixView<RowMajorMatrixView<'a, Val>>;
     type Proof = FriProof<Challenge, FriMmcs, Val, Vec<BatchOpening<Val, InputMmcs>>>;
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
+    const ZK: bool = false;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         // This panics if (and only if) `degree` is not a power of 2 or `degree`
@@ -159,7 +160,7 @@ where
 
     fn commit(
         &self,
-        evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
         let ldes: Vec<_> = evaluations
             .into_iter()
@@ -267,9 +268,16 @@ where
             .expect("No Matrices Supplied?");
         let log_global_max_height = log2_strict_usize(global_max_height);
 
+        let mut subgroup = cyclic_subgroup_known_order(
+            Val::two_adic_generator(log_global_max_height),
+            global_max_height,
+        )
+        .collect_vec();
+        reverse_slice_index_bits(&mut subgroup);
+
         // For each unique opening point z, we will find the largest degree bound
         // for that point, and precompute 1/(z - X) for the largest subgroup (in bitrev order).
-        let inv_denoms = compute_inverse_denominators(&mats_and_points, Val::GENERATOR);
+        let inv_denoms = compute_inverse_denominators(&mats_and_points, Val::GENERATOR, &subgroup);
 
         // Evaluate coset representations and write openings to the challenger
         let all_opened_values = mats_and_points
@@ -277,6 +285,11 @@ where
             .map(|(mats, points)| {
                 izip!(mats.iter(), points.iter())
                     .map(|(mat, points_for_mat)| {
+                        let h = mat.height() >> self.fri.log_blowup;
+                        // `subgroup` and `mat` are both in bit-reversed order, so we can truncate.
+                        let (low_coset, _) = mat.split_rows(h);
+                        let subgroup_h = &subgroup[..h];
+
                         points_for_mat
                             .iter()
                             .map(|&point| {
@@ -288,16 +301,13 @@ where
                                 let ys =
                                     info_span!("compute opened values with Lagrange interpolation")
                                         .in_scope(|| {
-                                            let h = mat.height() >> self.fri.log_blowup;
-                                            let (low_coset, _) = mat.split_rows(h);
-                                            let mut inv_denoms =
-                                                inv_denoms.get(&point).unwrap()[..h].to_vec();
-                                            reverse_slice_index_bits(&mut inv_denoms);
-                                            interpolate_coset(
-                                                &BitReversalPerm::new_view(low_coset),
+                                            let inv_denoms = &inv_denoms.get(&point).unwrap()[..h];
+                                            interpolate_coset_with_precomputation(
+                                                &low_coset,
                                                 Val::GENERATOR,
                                                 point,
-                                                Some(&inv_denoms),
+                                                subgroup_h,
+                                                inv_denoms,
                                             )
                                         });
                                 ys.iter()
@@ -562,6 +572,7 @@ where
 fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matrix<F>>(
     mats_and_points: &[(Vec<M>, &Vec<Vec<EF>>)],
     coset_shift: F,
+    subgroup: &[F],
 ) -> LinearMap<EF, Vec<EF>> {
     let mut max_log_height_for_point: LinearMap<EF, usize> = LinearMap::new();
     for (mats, points) in mats_and_points {
@@ -577,16 +588,6 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
         }
     }
 
-    // Compute the largest subgroup we will use, in bitrev order.
-    let max_log_height = *max_log_height_for_point.values().max().unwrap();
-    let mut subgroup = cyclic_subgroup_coset_known_order(
-        F::two_adic_generator(max_log_height),
-        coset_shift,
-        1 << max_log_height,
-    )
-    .collect_vec();
-    reverse_slice_index_bits(&mut subgroup);
-
     max_log_height_for_point
         .into_iter()
         .map(|(z, log_height)| {
@@ -595,7 +596,7 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
                 batch_multiplicative_inverse(
                     &subgroup[..(1 << log_height)]
                         .iter()
-                        .map(|&x| z - x)
+                        .map(|&x| z - coset_shift * x)
                         .collect_vec(),
                 ),
             )
