@@ -45,11 +45,11 @@ pub struct MerkleTreeHidingMmcs<P, PW, H, C, R, const DIGEST_ELEMS: usize, const
 impl<P, PW, H, C, R, const DIGEST_ELEMS: usize, const SALT_ELEMS: usize>
     MerkleTreeHidingMmcs<P, PW, H, C, R, DIGEST_ELEMS, SALT_ELEMS>
 {
-    pub fn new(hash: H, compress: C, rng: R) -> Self {
+    pub const fn new(hash: H, compress: C, rng: R) -> Self {
         let inner = MerkleTreeMmcs::new(hash, compress);
         Self {
             inner,
-            rng: rng.into(),
+            rng: RefCell::new(rng),
         }
     }
 }
