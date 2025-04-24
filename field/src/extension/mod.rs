@@ -15,8 +15,8 @@ pub use packed_binomial_extension::*;
 
 /// Trait for fields that support binomial extension of the form `F[X]/(X^D - W)`.
 ///
-/// A type implementing this trait can define a degree-`D` extension field
-/// using a binomial polynomial `X^D - W`, where `W` is a nonzero constant in the base field.
+/// A type implementing this trait can define a degree-`D` extension field using an
+/// irreducible binomial polynomial `X^D - W`, where `W` is a nonzero constant in the base field.
 ///
 /// This is used to construct extension fields with efficient arithmetic.
 pub trait BinomiallyExtendable<const D: usize>: Field {
