@@ -54,7 +54,7 @@ pub trait HasFrobenius<F: Field>: ExtensionField<F> {
 
     /// Compute the inverse Frobenius map.
     ///
-    /// Returns an element `y` such that `self = y^n`.
+    /// Returns the unique element `y` such that `self = y^n`.
     fn frobenius_inv(&self) -> Self;
 
     /// Returns the full Galois orbit of the element under Frobenius.
