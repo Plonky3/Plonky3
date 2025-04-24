@@ -40,7 +40,7 @@ pub trait BinomiallyExtendable<const D: usize>: Field {
 /// The Frobenius automorphism is a field map `x ↦ x^n`,
 /// where `n` is the order of the base field.
 ///
-/// This map preserves the structure of the field.
+/// This map is an automorphism of the field that fixes the base field.
 pub trait HasFrobenius<F: Field>: ExtensionField<F> {
     /// Apply the Frobenius automorphism once.
     ///
