@@ -6,10 +6,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use p3_field::{
-    ExtensionField, TwoAdicField, batch_multiplicative_inverse, scale_vec,
-    two_adic_coset_vanishing_polynomial,
-};
+use p3_field::{ExtensionField, TwoAdicField, batch_multiplicative_inverse, scale_vec};
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
@@ -41,15 +38,15 @@ where
 {
     let height = coset_evals.height();
     let log_height = log2_strict_usize(height);
-    let subgroup = F::two_adic_generator(log_height)
-        .powers()
+    let coset = F::two_adic_generator(log_height)
+        .shifted_powers(shift)
         .take(height)
         .collect::<Vec<_>>();
 
-    let diffs: Vec<EF> = subgroup.par_iter().map(|&g| point - g * shift).collect();
+    let diffs: Vec<EF> = coset.par_iter().map(|&g| point - g).collect();
     let diff_invs = batch_multiplicative_inverse(&diffs);
 
-    interpolate_coset_with_precomputation(coset_evals, shift, point, &subgroup, &diff_invs)
+    interpolate_coset_with_precomputation(coset_evals, shift, point, &coset, &diff_invs)
 }
 
 /// Given evaluations of a batch of polynomials over the given coset of the
@@ -68,7 +65,7 @@ pub fn interpolate_coset_with_precomputation<F, EF, Mat>(
     coset_evals: &Mat,
     shift: F,
     point: EF,
-    subgroup: &[F],
+    coset: &[F],
     diff_invs: &[EF],
 ) -> Vec<EF>
 where
@@ -77,26 +74,26 @@ where
     Mat: Matrix<F>,
 {
     // Slight variation of this approach: https://hackmd.io/@vbuterin/barycentric_evaluation
-    debug_assert_eq!(subgroup.len(), diff_invs.len());
-    debug_assert_eq!(subgroup.len(), coset_evals.height());
+    debug_assert_eq!(coset.len(), diff_invs.len());
+    debug_assert_eq!(coset.len(), coset_evals.height());
 
     let height = coset_evals.height();
     let log_height = log2_strict_usize(height);
 
-    let col_scale: Vec<_> = subgroup
+    let col_scale: Vec<_> = coset
         .par_iter()
         .zip(diff_invs)
         .map(|(&sg, &diff_inv)| diff_inv * sg)
         .collect();
     let sum = coset_evals.columnwise_dot_product(&col_scale);
 
-    let vanishing_polynomial =
-        two_adic_coset_vanishing_polynomial::<EF>(log_height, shift.into(), point);
+    let point_pow_height = point.exp_power_of_2(log_height);
+    let shift_pow_height = shift.exp_power_of_2(log_height);
+
+    let vanishing_polynomial = point_pow_height - shift_pow_height;
 
     // In principle, height could be bigger than the characteristic of F.
-    let denominator = shift
-        .exp_u64(height as u64 - 1)
-        .mul_2exp_u64(log_height as u64);
+    let denominator = shift_pow_height.mul_2exp_u64(log_height as u64);
     scale_vec(vanishing_polynomial * denominator.inverse(), sum)
 }
 
@@ -144,16 +141,16 @@ mod tests {
         let n = evals.len();
         let k = log2_strict_usize(n);
 
-        let denom: Vec<_> = F::two_adic_generator(k)
+        let coset: Vec<_> = F::two_adic_generator(k)
             .shifted_powers(shift)
             .take(n)
-            .map(|w| point - w)
             .collect();
-        let subgroup: Vec<_> = F::two_adic_generator(k).powers().take(n).collect();
+
+        let denom: Vec<_> = coset.iter().map(|&w| point - w).collect();
 
         let denom = batch_multiplicative_inverse(&denom);
         let result =
-            interpolate_coset_with_precomputation(&evals_mat, shift, point, &subgroup, &denom);
+            interpolate_coset_with_precomputation(&evals_mat, shift, point, &coset, &denom);
         assert_eq!(result, vec![F::from_u16(10203)]);
     }
 }
