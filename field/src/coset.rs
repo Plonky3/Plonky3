@@ -59,6 +59,7 @@ pub struct TwoAdicMultiplicativeCoset<F: TwoAdicField> {
     // question is
     //     s * <g> = {s, s * g, shift * g^2, ..., s * g^(2^log_size - 1)]
     shift: F,
+    shift_inverse: F,
     log_size: usize,
 }
 
@@ -66,7 +67,7 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
     /// Returns the coset `shift * <generator>`, where `generator` is a
     /// canonical (i. e. fixed in the implementation of `F: TwoAdicField`)
     /// generator of the unique subgroup of the units of `F` of order `2 ^
-    /// log_size`. Returns `None` if `log_size > F::TWO_ADICITY`.
+    /// log_size`. Returns `None` if `log_size > F::TWO_ADICITY` or if `shift` is zero.
     ///
     /// # Arguments
     ///
@@ -75,8 +76,13 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
     ///  - `log_size`: the size of the subgroup (and hence of the coset) is `2 ^
     ///    log_size`. This determines the subgroup uniquely.
     pub fn new(shift: F, log_size: usize) -> Option<Self> {
-        if log_size <= F::TWO_ADICITY {
-            Some(Self { shift, log_size })
+        if shift != F::ZERO && log_size <= F::TWO_ADICITY {
+            let shift_inverse = shift.inverse();
+            Some(Self {
+                shift,
+                shift_inverse,
+                log_size,
+            })
         } else {
             None
         }
@@ -92,6 +98,12 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
     #[inline]
     pub fn shift(&self) -> F {
         self.shift
+    }
+
+    /// Returns the inverse of the coset shift.
+    #[inline]
+    pub fn shift_inverse(&self) -> F {
+        self.shift_inverse
     }
 
     /// Returns the log2 of the size of the coset.
@@ -116,6 +128,7 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
             .checked_sub(log_scale_factor)
             .map(|new_log_size| TwoAdicMultiplicativeCoset {
                 shift: self.shift,
+                shift_inverse: self.shift_inverse,
                 log_size: new_log_size,
             })
     }
@@ -126,14 +139,17 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
     pub fn exp_power_of_2(&self, log_scale_factor: usize) -> Option<Self> {
         self.shrink_coset(log_scale_factor).map(|mut coset| {
             coset.shift = self.shift.exp_power_of_2(log_scale_factor);
+            coset.shift_inverse = self.shift_inverse.exp_power_of_2(log_scale_factor);
             coset
         })
     }
 
     /// Returns a new coset of the same size whose shift is equal to `scale * self.shift`.
     pub fn shift_by(&self, scale: F) -> TwoAdicMultiplicativeCoset<F> {
+        let shift = self.shift * scale;
         TwoAdicMultiplicativeCoset {
-            shift: self.shift * scale,
+            shift,
+            shift_inverse: shift.inverse(),
             log_size: self.log_size,
         }
     }
@@ -142,6 +158,7 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
     pub fn set_shift(&self, shift: F) -> TwoAdicMultiplicativeCoset<F> {
         TwoAdicMultiplicativeCoset {
             shift,
+            shift_inverse: shift.inverse(),
             log_size: self.log_size,
         }
     }
