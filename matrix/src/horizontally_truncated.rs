@@ -81,14 +81,6 @@ where
         }
     }
 
-    unsafe fn row_slice_unchecked(&self, r: usize) -> impl core::ops::Deref<Target = [T]> {
-        unsafe {
-            // Safety: The caller must ensure that `r < self.height()`.
-            self.inner
-                .row_subslice_unchecked(r, 0, self.truncated_width)
-        }
-    }
-
     unsafe fn row_subslice_unchecked(
         &self,
         r: usize,

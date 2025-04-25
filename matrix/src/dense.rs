@@ -78,7 +78,7 @@ impl<T: Clone + Send + Sync + Default> DenseMatrix<T> {
 impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     /// Create a new dense matrix of the given dimensions, backed by the given storage.
     ///
-    /// Note that it is treated as undefined behavior to create a matrix such that
+    /// Note that it is undefined behavior to create a matrix such that
     /// `values.len() % width != 0`.
     #[must_use]
     pub fn new(values: S, width: usize) -> Self {

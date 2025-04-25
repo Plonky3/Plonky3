@@ -83,7 +83,10 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
     /// Returns `None` if either `r >= height()` or `c >= width()`.
     #[inline]
     fn get(&self, r: usize, c: usize) -> Option<T> {
-        (r < self.height() && c < self.width()).then(|| unsafe { self.get_unchecked(r, c) })
+        (r < self.height() && c < self.width()).then(|| unsafe {
+            // Safety: Clearly `r < self.height()` and `c < self.width()`.
+            self.get_unchecked(r, c)
+        })
     }
 
     /// Returns the element at the given row and column.
@@ -102,14 +105,14 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
     ///
     /// The iterator will have `self.width()` elements.
     ///
-    /// Returns None if `r >= height()`.
+    /// Returns `None` if `r >= height()`.
     #[inline]
     fn row(
         &self,
         r: usize,
     ) -> Option<impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync>> {
         (r < self.height()).then(|| unsafe {
-            // Safety: We know that `r < self.height()`.
+            // Safety: Clearly `r < self.height()`.
             self.row_unchecked(r)
         })
     }
@@ -157,11 +160,11 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
 
     /// Returns the elements of the `r`-th row as something which can be coerced to a slice.
     ///
-    /// Returns None if `r >= height()`.
+    /// Returns `None` if `r >= height()`.
     #[inline]
     fn row_slice(&self, r: usize) -> Option<impl Deref<Target = [T]>> {
         (r < self.height()).then(|| unsafe {
-            // Safety: We know that `r < self.height()`.
+            // Safety: Clearly `r < self.height()`.
             self.row_slice_unchecked(r)
         })
     }
@@ -178,7 +181,7 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         unsafe { self.row_subslice_unchecked(r, 0, self.width()) }
     }
 
-    /// Returns the elements of the `r`-th row as something which can be coerced to a slice.
+    /// Returns a subset of elements of the `r`-th row as something which can be coerced to a slice.
     ///
     /// When `start = 0` and `end = width()`, this is equivalent to [`row_slice_unchecked`].
     ///
@@ -205,7 +208,7 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
     #[inline]
     fn rows(&self) -> impl Iterator<Item = impl Iterator<Item = T>> + Send + Sync {
         unsafe {
-            // Safe as the row index is less than height().
+            // Safety: `r` always satisfies `r < self.height()`.
             (0..self.height()).map(move |r| self.row_unchecked(r).into_iter())
         }
     }
@@ -216,7 +219,7 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         &self,
     ) -> impl IndexedParallelIterator<Item = impl Iterator<Item = T>> + Send + Sync {
         unsafe {
-            // Safe as the row index is less than height().
+            // Safety: `r` always satisfies `r < self.height()`.
             (0..self.height())
                 .into_par_iter()
                 .map(move |r| self.row_unchecked(r).into_iter())
@@ -227,6 +230,7 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
     /// simply wrap around to the beginning of the matrix.
     fn wrapping_row_slices(&self, r: usize, c: usize) -> Vec<impl Deref<Target = [T]>> {
         unsafe {
+            // Safety: Thank to the `%`, the rows index is always less than `self.height()`.
             (0..c)
                 .map(|i| self.row_slice_unchecked((r + i) % self.height()))
                 .collect_vec()
@@ -253,7 +257,7 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         if self.height() == 0 {
             None
         } else {
-            // Safety: We know that the row index is less than height().
+            // Safety: Clearly `self.height() - 1 < self.height()`.
             unsafe { Some(self.row_unchecked(self.height() - 1)) }
         }
     }
@@ -288,7 +292,7 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         assert!(r < self.height(), "Row index out of bounds.");
         let num_packed = self.width() / P::WIDTH;
         unsafe {
-            // Safe as r < height().
+            // Safety: We have already checked that `r < height()`.
             let mut iter = self
                 .row_subseq_unchecked(r, 0, num_packed * P::WIDTH)
                 .into_iter();

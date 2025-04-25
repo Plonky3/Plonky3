@@ -15,9 +15,10 @@ pub trait RowIndexMap: Send + Sync {
 
     /// Maps a visible row index `r` to the corresponding row index in the underlying matrix.
     ///
-    /// This function **must** not panic or return an invalid inner index for any input in the range `0..self.height()`.
+    /// The input `r` is assumed to lie in the range `0..self.height()` and the output
+    /// will lie in the range `0..self.inner.height()`.
     ///
-    /// It is considered undefined behaviour to call `map_row_index` with an index `r >= self.height()`.
+    /// It is considered undefined behaviour to call `map_row_index` with `r >= self.height()`.
     fn map_row_index(&self, r: usize) -> usize;
 
     /// Converts the mapped matrix into a dense row-major matrix.
@@ -30,8 +31,7 @@ pub trait RowIndexMap: Send + Sync {
     ) -> RowMajorMatrix<T> {
         RowMajorMatrix::new(
             unsafe {
-                // Safety: The trait implementer guarantees that the output of `map_row_index` is less than `inner.height()`
-                // for all inputs in the range `0..self.height()`.
+                // Safety: The output of `map_row_index` is less than `inner.height()` for all inputs in the range `0..self.height()`.
                 (0..self.height())
                     .flat_map(|r| inner.row_unchecked(self.map_row_index(r)))
                     .collect()
