@@ -224,6 +224,6 @@ pub enum VerificationError<PcsErr> {
     /// Out-of-domain evaluation mismatch, i.e. `constraints(zeta)` did not match
     /// `quotient(zeta) Z_H(zeta)`.
     OodEvaluationMismatch,
-    /// An error occurred while fetching the random FRI batch polynomial when zk is enabled.
+    /// The FRI batch randomization does not correspond to the ZK setting.
     RandomizationError,
 }
