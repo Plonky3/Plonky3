@@ -2,22 +2,8 @@ mod helpers {
     use p3_baby_bear::BabyBear;
     use p3_field::{
         PrimeCharacteristicRing, add_scaled_slice_in_place, dot_product, field_to_array, reduce_32,
-        scale_vec, split_32, two_adic_subgroup_vanishing_polynomial,
+        scale_vec, split_32,
     };
-
-    #[test]
-    fn test_two_adic_subgroup_vanishing_polynomial() {
-        // x = 3, log_n = 3 → compute x^8 - 1
-        let x = BabyBear::TWO + BabyBear::ONE;
-        let log_n = 3;
-
-        // x^8 = 3^8 = 6561
-        let x_pow = BabyBear::from_u16(6561);
-
-        let expected = x_pow - BabyBear::ONE;
-        let result = two_adic_subgroup_vanishing_polynomial(log_n, x);
-        assert_eq!(result, expected);
-    }
 
     #[test]
     fn test_scale_vec() {
