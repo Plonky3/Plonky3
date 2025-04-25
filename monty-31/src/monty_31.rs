@@ -251,6 +251,39 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
                     + (u[3].value as u64) * (v[3].value as u64);
                 Self::new_monty(large_monty_reduce::<FP>(u64_prod_sum))
             }
+            5 => {
+                let (u_left, u_right) = u.split_at(4);
+                let (v_left, v_right) = u.split_at(4);
+                Self::dot_product::<4>(u_left.try_into().unwrap(), v_left.try_into().unwrap())
+                    + u_right[0] * v_right[0]
+            }
+            6 => {
+                let (u_left, u_right) = u.split_at(4);
+                let (v_left, v_right) = u.split_at(4);
+                Self::dot_product::<4>(u_left.try_into().unwrap(), v_left.try_into().unwrap())
+                    + Self::dot_product::<2>(
+                        u_right.try_into().unwrap(),
+                        v_right.try_into().unwrap(),
+                    )
+            }
+            7 => {
+                let (u_left, u_right) = u.split_at(4);
+                let (v_left, v_right) = u.split_at(4);
+                Self::dot_product::<4>(u_left.try_into().unwrap(), v_left.try_into().unwrap())
+                    + Self::dot_product::<3>(
+                        u_right.try_into().unwrap(),
+                        v_right.try_into().unwrap(),
+                    )
+            }
+            8 => {
+                let (u_left, u_right) = u.split_at(4);
+                let (v_left, v_right) = u.split_at(4);
+                Self::dot_product::<4>(u_left.try_into().unwrap(), v_left.try_into().unwrap())
+                    + Self::dot_product::<4>(
+                        u_right.try_into().unwrap(),
+                        v_right.try_into().unwrap(),
+                    )
+            }
             // We need to stop at 4 as it's possible to overflow a u64 with 5 products.
             // That being said, the probability of this is tiny.
             _ => {
