@@ -644,17 +644,19 @@ pub(super) fn binomial_mul<
     }
 }
 
-/// Optimized Karatsuba multiplication for quadratic extension field.
+/// Optimized multiplication for quadratic extension field.
 ///
-/// Let the input polynomials be:
+/// Makes use of the in built field dot product code. This is optimized for the case that
+/// R is a prime field or it's packing.
+///
 /// ```text
 ///     A = a0 + a1·X
 ///     B = b0 + b1·X
 /// ```
 /// Where `X` satisfies `X² = w`. Then the product is:
 /// ```text
-///     A·B = a0·b0 + (a0·b1 + a1·b0)·X + a1·b1·w
-///         = (a0·b0 + a1·b1·w) + ((a0 + a1) * (b0 + b1) - a0·b0 - a1·b1)·X
+///     A·B = a0·b0 + a1·b1·w + (a0·b1 + a1·b0)·X
+/// ```
 #[inline]
 fn quadratic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
 where
@@ -664,10 +666,13 @@ where
 {
     let b1_w = b[1].clone() * w;
 
+    // Compute a0·b0 + a1·b1·w
     res[0] = R::dot_product(
         a[..].try_into().unwrap(),
         &[b[0].clone().into(), b1_w.into()],
     );
+
+    // Compute a0·b1 + a1·b0
     res[1] = R::dot_product(
         &[a[0].clone(), a[1].clone()],
         &[b[1].clone().into(), b[0].clone().into()],
@@ -717,6 +722,8 @@ pub(crate) fn cubic_mul<
     w: F,
 ) {
     assert_eq!(D, 3);
+    // TODO: Test if we should switch to a naive multiplication approach using dot products.
+    // This is mainly used for a degree 3 extension of Complex<Mersenne31> so this approach might be faster.
 
     let a0_b0 = a[0].clone() * b[0].clone();
     let a1_b1 = a[1].clone() * b[1].clone();
@@ -750,6 +757,9 @@ pub(crate) fn cubic_square<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: u
 }
 
 /// Multiplication in a quartic binomial extension field.
+///
+/// Makes use of the in built field dot product code. This is optimized for the case that
+/// R is a prime field or it's packing.
 #[inline]
 fn quartic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
 where
@@ -796,6 +806,9 @@ where
 }
 
 /// Multiplication in a quintic binomial extension field.
+///
+/// Makes use of the in built field dot product code. This is optimized for the case that
+/// R is a prime field or it's packing.
 fn quintic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
 where
     F: Field,

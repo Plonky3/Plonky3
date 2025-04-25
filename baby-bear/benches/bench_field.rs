@@ -1,5 +1,3 @@
-use core::any::type_name;
-
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::BabyBear;
 use p3_field::{Field, PrimeCharacteristicRing};
@@ -17,18 +15,15 @@ type F = BabyBear;
 
 fn bench_field(c: &mut Criterion) {
     let name = "BabyBear";
-    const REPS: usize = 100;
-    // benchmark_inv::<F>(c, name);
-    // benchmark_iter_sum::<F, 4, REPS>(c, name);
-    // benchmark_iter_sum::<F, 8, REPS>(c, name);
-    // benchmark_iter_sum::<F, 12, REPS>(c, name);
+    const REPS: usize = 1000;
+    benchmark_inv::<F>(c, name);
+    benchmark_iter_sum::<F, 4, REPS>(c, name);
+    benchmark_iter_sum::<F, 8, REPS>(c, name);
+    benchmark_iter_sum::<F, 12, REPS>(c, name);
 
     benchmark_dot_array::<F, 2, REPS>(c, name);
-    benchmark_dot_array::<F, 3, REPS>(c, name);
     benchmark_dot_array::<F, 4, REPS>(c, name);
     benchmark_dot_array::<F, 5, REPS>(c, name);
-    benchmark_dot_array::<F, 6, REPS>(c, name);
-    benchmark_dot_array::<F, 7, REPS>(c, name);
     benchmark_dot_array::<F, 8, REPS>(c, name);
     benchmark_dot_array::<F, 9, REPS>(c, name);
     benchmark_dot_array::<F, 16, REPS>(c, name);
@@ -39,8 +34,8 @@ fn bench_field(c: &mut Criterion) {
     const L_REPS: usize = 10 * REPS;
     benchmark_add_latency::<F, L_REPS>(c, name);
     benchmark_add_throughput::<F, REPS>(c, name);
-    // benchmark_sub_latency::<F, L_REPS>(c, name);
-    // benchmark_sub_throughput::<F, REPS>(c, name);
+    benchmark_sub_latency::<F, L_REPS>(c, name);
+    benchmark_sub_throughput::<F, REPS>(c, name);
     benchmark_mul_latency::<F, L_REPS>(c, name);
     benchmark_mul_throughput::<F, REPS>(c, name);
 

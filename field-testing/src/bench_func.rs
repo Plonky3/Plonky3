@@ -115,11 +115,7 @@ pub fn benchmark_sum_array<R: PrimeCharacteristicRing + Copy, const N: usize, co
     });
 }
 
-/// Benchmark the time taken to sum an array [[F; N]; REPS] by summing each array
-/// [F; N] using sum_array method and accumulating the sums into an accumulator.
-///
-/// Making N larger and REPS smaller (vs the opposite) leans the benchmark more sensitive towards
-/// the latency (resp throughput) of the sum method.
+/// Benchmark the time taken to do `REPS` dot products on a pair of `[R; N]` arrays.
 pub fn benchmark_dot_array<R: PrimeCharacteristicRing + Copy, const N: usize, const REPS: usize>(
     c: &mut Criterion,
     name: &str,
@@ -135,7 +131,7 @@ pub fn benchmark_dot_array<R: PrimeCharacteristicRing + Copy, const N: usize, co
         b.iter(|| {
             let mut out = R::zero_vec(REPS);
             for (i, (lhs, rhs)) in input.iter().enumerate() {
-                out[i] += R::dot_product::<N>(lhs, rhs)
+                out[i] = R::dot_product::<N>(lhs, rhs)
             }
             out
         })
