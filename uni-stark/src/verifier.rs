@@ -1,3 +1,5 @@
+//! See `prover.rs` for an overview of the protocol and a more detailed soundness analysis.
+
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -69,32 +71,13 @@ where
     // Get the first Fiat Shamir challenge which will be used to combine all constraint polynomials
     // into a single polynomial.
     //
-    // Soundness Error:
-    // If a prover is malicious, we can find a row `i` such that some of the constraints
-    // C_0, ..., C_n are non 0 on this row. The malicious prover "wins" if the random challenge
-    // alpha is such that:
-    // (1): C_0(i) + alpha * C_1(i) + ... + alpha^n * C_n(i) = 0
-    // This is a polynomial of degree n+1, so it has at most n roots and so the probability of this
-    // occurring for a given trace and set of constraints is n/|EF|.
-    //
-    // Currently, we do not observe data about the constraint polynomials directly. In particular
-    // A prover could take a trace and fiddle around with the AIR it claims to satisfy without
-    // changing this sample alpha.
-    //
-    // In particular this means that a malicious prover could create a custom AIR for a given trace
-    // such that equation (1) holds. However, such AIRs would need to be very specific and
-    // so such tampering should be obvious to spot. The verifier needs to check the AIR anyway to
-    // confirm that satisfying it indeed proves what the prover claims. Hence this should not be
-    // a soundness issue.
+    // Soundness Error: n/|EF| where n is the number of constraints.
     let alpha: SC::Challenge = challenger.sample_algebra_element();
     challenger.observe(commitments.quotient_chunks.clone());
 
     // Get an out-of-domain point to open our values at.
     //
-    // Soundness Error:
-    // This sample will be used to check the equality: `C(X) = ZH(X)Q(X)`. If a prover is malicious
-    // and this equality is false, the probability that it is true at the point `zeta` will be
-    // deg(C(X))/|EF| = dN/|EF| where `N` is the trace length and our constraints have degree `d`.
+    // Soundness Error: dN/|EF| where `N` is the trace length and our constraint polynomial has degree `d`.
     let zeta: SC::Challenge = challenger.sample_algebra_element();
     let zeta_next = trace_domain.next_point(zeta).unwrap();
 

@@ -72,7 +72,7 @@ where
     // C_0, ..., C_n are non 0 on this row. The malicious prover "wins" if the random challenge
     // alpha is such that:
     // (1): C_0(i) + alpha * C_1(i) + ... + alpha^n * C_n(i) = 0
-    // This is a polynomial of degree n+1, so it has at most n roots and so the probability of this
+    // This is a polynomial of degree n, so it has at most n roots. Thus the probability of this
     // occurring for a given trace and set of constraints is n/|EF|.
     //
     // Currently, we do not observe data about the constraint polynomials directly. In particular
