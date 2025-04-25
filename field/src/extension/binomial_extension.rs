@@ -854,15 +854,15 @@ where
 
     // Coefficient for X⁰:
     // = e0 + w·(e2 + o1)
-    res[0] = e0 + (e2.clone() + o1.clone()) * w.clone();
+    res[0] = e0 + (e2.clone() + o1.clone()) * w;
 
     // Coefficient for X¹:
     // = m0 + w·m2
-    res[1] = m0 + m2.clone() * w.clone();
+    res[1] = m0 + m2.clone() * w;
 
     // Coefficient for X²:
     // = e1 + o0 + w·o2
-    res[2] = e1 + o0 + o2.clone() * w.clone();
+    res[2] = e1 + o0 + o2.clone() * w;
 
     // Coefficient for X³:
     // = m1
