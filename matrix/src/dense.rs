@@ -457,7 +457,7 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
 }
 
 impl<T: Copy + Default + Send + Sync, V: DenseStorage<T>> DenseMatrix<T, V> {
-    /// Take the transpose the matrix, returning a new matrix with the rows and columns swapped.
+    /// Return the transpose of this matrix.
     pub fn transpose(&self) -> RowMajorMatrix<T> {
         let nelts = self.height() * self.width();
         let mut values = vec![T::default(); nelts];
