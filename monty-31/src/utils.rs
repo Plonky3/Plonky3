@@ -90,8 +90,8 @@ pub(crate) const fn monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
 }
 
 /// Montgomery reduction of a value in `0..P << MONTY_BITS`.
-/// the input must be in [0, 2 * MONTY * P).
-/// the output will be in [0, P).
+/// The input must be in [0, 2 * MONTY * P).
+/// The output will be in [0, P).
 ///
 /// This is slower than `monty_reduce` but has a larger input range.
 #[inline]
