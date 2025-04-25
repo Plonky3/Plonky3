@@ -487,7 +487,7 @@ where
         let mut res = Self::default();
         let w = F::W;
 
-        binomial_mul(&a, &b, &mut res.value, w);
+        binomial_mul::<F, A, A, D>(&a, &b, &mut res.value, w);
 
         res
     }
@@ -614,8 +614,8 @@ pub(crate) fn vector_sub<
 #[inline]
 pub(super) fn binomial_mul<
     F: Field,
-    R: Algebra<F> + Mul<R2, Output = R>,
-    R2: Add<Output = R2> + Clone,
+    R: Algebra<F> + Algebra<R2>,
+    R2: Algebra<F> + Add<Output = R2> + Clone,
     const D: usize,
 >(
     a: &[R; D],
@@ -629,6 +629,7 @@ pub(super) fn binomial_mul<
             res[1] = a[0].clone() * b[1].clone() + a[1].clone() * b[0].clone();
         }
         3 => cubic_mul(a, b, res, w),
+        4 => quartic_karatsuba_mul(a, b, res, w),
         _ =>
         {
             #[allow(clippy::needless_range_loop)]
@@ -643,6 +644,36 @@ pub(super) fn binomial_mul<
             }
         }
     }
+}
+
+/// Optimized Karatsuba multiplication for quadratic extension field.
+///
+/// Let the input polynomials be:
+/// ```text
+///     A = a0 + a1·X
+///     B = b0 + b1·X
+/// ```
+/// Where `X` satisfies `X² = w`. Then the product is:
+/// ```text
+///     A·B = a0·b0 + (a0·b1 + a1·b0)·X + a1·b1·w
+///         = (a0·b0 + a1·b1·w) + ((a0 + a1) * (b0 + b1) - a0·b0 - a1·b1)·X
+#[inline]
+fn quadratic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
+where
+    F: Field,
+    R: Algebra<F> + Algebra<R2>,
+    R2: Algebra<F> + Add<Output = R2> + Clone,
+{
+    let a1_w = a[1].clone() * w;
+
+    res[0] = R::dot_product(
+        &[a[0].clone(), a1_w],
+        &[b[0].clone().into(), b[1].clone().into()],
+    );
+    res[1] = R::dot_product(
+        &[a[0].clone(), a[1].clone()],
+        &[b[1].clone().into(), b[0].clone().into()],
+    );
 }
 
 ///Section 11.3.6b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
@@ -678,8 +709,8 @@ fn cubic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
 #[inline]
 pub(crate) fn cubic_mul<
     F: Field,
-    R: Algebra<F> + Mul<R2, Output = R>,
-    R2: Add<Output = R2> + Clone,
+    R: Algebra<F> + Algebra<R2>,
+    R2: Algebra<F> + Add<Output = R2> + Clone,
     const D: usize,
 >(
     a: &[R; D],
@@ -718,4 +749,62 @@ pub(crate) fn cubic_square<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: u
     res[0] = a[0].square() + (a[1].clone() * w_a2.clone()).double();
     res[1] = w_a2 * a[2].clone() + (a[0].clone() * a[1].clone()).double();
     res[2] = a[1].square() + (a[0].clone() * a[2].clone()).double();
+}
+
+/// Optimized Karatsuba multiplication for extension degree 4.
+///
+/// Let the input polynomials be:
+/// ```text
+///     A = a0 + a1·X + a2·X² + a3·X³
+///     B = b0 + b1·X + b2·X² + b3·X³
+/// ```
+///
+/// These can be grouped as:
+/// ```text
+///     A = A0 + A1·X, where A0 = a0 + a2·X², A1 = a1 + a3·X²
+///     B = B0 + B1·X, where B0 = b0 + b2·X², B1 = b1 + b3·X²
+/// ```
+///
+/// The multiplication follows:
+/// ```text
+///     A·B = A0·B0
+///         + ((A0 + A1)·(B0 + B1) - A0·B0 - A1·B1)·X
+///         + A1·B1·X²
+/// ```
+/// These inner multiplications can also be decomposed using karatsuba.
+///
+/// Since X⁴ ≡ w (mod X⁴ - w), all X⁴ terms can be folded back into lower degrees using w.
+#[inline]
+fn quartic_karatsuba_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
+where
+    F: Field,
+    R: Algebra<F> + Algebra<R2>,
+    R2: Algebra<F> + Add<Output = R2> + Clone,
+{
+    let aa0 = [a[0].clone(), a[2].clone()];
+    let bb0 = [b[0].clone(), b[2].clone()];
+    let mut cc0 = [R::ZERO, R::ZERO];
+
+    quadratic_mul(&aa0, &bb0, &mut cc0, w);
+
+    let aa1 = [a[1].clone(), a[3].clone()];
+    let bb1 = [b[1].clone(), b[3].clone()];
+    let mut cc1 = [R::ZERO, R::ZERO];
+
+    quadratic_mul(&aa1, &bb1, &mut cc1, w);
+
+    let aa_sum = [a[0].clone() + a[1].clone(), a[2].clone() + a[3].clone()];
+    let bb_sum = [b[0].clone() + b[1].clone(), b[2].clone() + b[3].clone()];
+    let mut cc_sum = [R::ZERO, R::ZERO];
+
+    quadratic_mul(&aa_sum, &bb_sum, &mut cc_sum, w);
+    cc_sum[0] -= cc0[0].clone() + cc1[0].clone();
+    cc_sum[1] -= cc0[1].clone() + cc1[1].clone();
+
+    // We simply need to combine the results.
+    res[0] = cc0[0].clone() + cc1[1].clone() * w;
+    res[2] = cc0[1].clone() + cc1[0].clone();
+
+    res[1] = cc_sum[0].clone();
+    res[3] = cc_sum[1].clone();
 }

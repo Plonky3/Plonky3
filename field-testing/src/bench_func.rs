@@ -115,6 +115,33 @@ pub fn benchmark_sum_array<R: PrimeCharacteristicRing + Copy, const N: usize, co
     });
 }
 
+/// Benchmark the time taken to sum an array [[F; N]; REPS] by summing each array
+/// [F; N] using sum_array method and accumulating the sums into an accumulator.
+///
+/// Making N larger and REPS smaller (vs the opposite) leans the benchmark more sensitive towards
+/// the latency (resp throughput) of the sum method.
+pub fn benchmark_dot_array<R: PrimeCharacteristicRing + Copy, const N: usize, const REPS: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
+    StandardUniform: Distribution<R>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    let mut input = Vec::new();
+    for _ in 0..REPS {
+        input.push((rng.random::<[R; N]>(), rng.random::<[R; N]>()));
+    }
+    c.bench_function(&format!("{} dot product/{}, {}", name, REPS, N), |b| {
+        b.iter(|| {
+            let mut out = R::zero_vec(REPS);
+            for (i, (lhs, rhs)) in input.iter().enumerate() {
+                out[i] += R::dot_product::<N>(lhs, rhs)
+            }
+            out
+        })
+    });
+}
+
 pub fn benchmark_add_latency<R: PrimeCharacteristicRing + Copy, const N: usize>(
     c: &mut Criterion,
     name: &str,
@@ -265,7 +292,7 @@ pub fn benchmark_mul_latency<R: PrimeCharacteristicRing + Copy, const N: usize>(
                 }
                 vec
             },
-            |x| x.iter().fold(R::ZERO, |x, y| x * *y),
+            |x| x.iter().fold(R::ONE, |x, y| x * *y),
             BatchSize::SmallInput,
         )
     });

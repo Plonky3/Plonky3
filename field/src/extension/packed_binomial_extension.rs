@@ -419,7 +419,7 @@ where
         let mut res = Self::default();
         let w = F::W;
 
-        binomial_mul(&a, &b, &mut res.value, w);
+        binomial_mul::<F, PF, PF, D>(&a, &b, &mut res.value, w);
 
         res
     }
