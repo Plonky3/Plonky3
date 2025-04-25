@@ -484,28 +484,6 @@ impl<T: Copy + Default + Send + Sync, V: DenseStorage<T>> DenseMatrix<T, V> {
             self.height(),
         );
     }
-
-    /// Transpose the matrix in place, modifying the original matrix.
-    ///
-    /// TODO: Currently this uses a temporary buffer to perform the transpose.
-    /// This should eventually be optimized to make this truly in-place.
-    pub fn transpose_in_place(&mut self)
-    where
-        V: BorrowMut<[T]>,
-    {
-        let nelts = self.height() * self.width();
-        let mut values = vec![T::default(); nelts];
-        transpose::transpose(
-            self.values.borrow(),
-            &mut values,
-            self.width(),
-            self.height(),
-        );
-        self.values.borrow_mut().copy_from_slice(&values);
-
-        // Update the width of the matrix to reflect the transposition.
-        self.width = self.height();
-    }
 }
 
 impl<'a, T: Clone + Default + Send + Sync> RowMajorMatrixView<'a, T> {
@@ -1097,25 +1075,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn test_transpose_view_mut() {
-        // Original matrix: 2 rows x 3 cols
-        // [1, 2, 3]
-        // [4, 5, 6]
-        let mut values = vec![1, 2, 3, 4, 5, 6];
-        let mut matrix = RowMajorMatrixViewMut::new(&mut values, 3);
-
-        matrix.transpose_in_place();
-
-        // After transpose: 3 rows x 2 cols
-        // [1, 4]
-        // [2, 5]
-        // [3, 6]
-        assert_eq!(matrix.width, 2);
-        assert_eq!(matrix.height(), 3);
-        assert_eq!(matrix.values, &[1, 4, 2, 5, 3, 6]);
     }
 
     #[test]
