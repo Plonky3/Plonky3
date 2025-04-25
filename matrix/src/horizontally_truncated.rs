@@ -64,8 +64,8 @@ where
         r: usize,
     ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
         unsafe {
-            // Safety: The caller must ensure that r < self.height() and start <= end <= self.width().
-            self.inner.row_unchecked(r)
+            // Safety: The caller must ensure that `r < self.height()`.
+            self.inner.row_subseq_unchecked(r, 0, self.truncated_width)
         }
     }
 
