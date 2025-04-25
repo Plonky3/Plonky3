@@ -456,18 +456,33 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
     }
 }
 
-impl<T: Copy + Default + Send + Sync> DenseMatrix<T> {
-    pub fn transpose(&self) -> Self {
+impl<T: Copy + Default + Send + Sync, V: DenseStorage<T>> DenseMatrix<T, V> {
+    /// Return the transpose of this matrix.
+    pub fn transpose(&self) -> RowMajorMatrix<T> {
         let nelts = self.height() * self.width();
         let mut values = vec![T::default(); nelts];
-        transpose::transpose(&self.values, &mut values, self.width(), self.height());
-        Self::new(values, self.height())
+        transpose::transpose(
+            self.values.borrow(),
+            &mut values,
+            self.width(),
+            self.height(),
+        );
+        RowMajorMatrix::new(values, self.height())
     }
 
-    pub fn transpose_into(&self, other: &mut Self) {
+    /// Transpose the matrix returning the result in `other` without intermediate allocation.
+    pub fn transpose_into<W: DenseStorage<T> + BorrowMut<[T]>>(
+        &self,
+        other: &mut DenseMatrix<T, W>,
+    ) {
         assert_eq!(self.height(), other.width());
         assert_eq!(other.height(), self.width());
-        transpose::transpose(&self.values, &mut other.values, self.width(), self.height());
+        transpose::transpose(
+            self.values.borrow(),
+            other.values.borrow_mut(),
+            self.width(),
+            self.height(),
+        );
     }
 }
 
