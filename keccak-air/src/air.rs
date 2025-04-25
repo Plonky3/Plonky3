@@ -42,7 +42,10 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         eval_round_flags(builder);
 
         let main = builder.main();
-        let (local, next) = (main.row_slice(0), main.row_slice(1));
+        let (local, next) = (
+            main.row_slice(0).expect("The matrix is empty?"),
+            main.row_slice(1).expect("The matrix only has 1 row?"),
+        );
         let local: &KeccakCols<AB::Var> = (*local).borrow();
         let next: &KeccakCols<AB::Var> = (*next).borrow();
 

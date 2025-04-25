@@ -17,8 +17,6 @@ pub use dft_testing::*;
 use num_bigint::BigUint;
 use p3_field::{
     ExtensionField, Field, PrimeCharacteristicRing, PrimeField32, PrimeField64, TwoAdicField,
-    cyclic_subgroup_coset_known_order, cyclic_subgroup_known_order,
-    two_adic_coset_vanishing_polynomial, two_adic_subgroup_vanishing_polynomial,
 };
 use p3_util::iter_array_chunks_padded;
 pub use packedfield_testing::*;
@@ -565,27 +563,6 @@ pub fn test_generator<F: Field>(multiplicative_group_factors: &[(BigUint, u32)])
     }
 }
 
-pub fn test_two_adic_subgroup_vanishing_polynomial<F: TwoAdicField>() {
-    for log_n in 0..5 {
-        let g = F::two_adic_generator(log_n);
-        for x in cyclic_subgroup_known_order(g, 1 << log_n) {
-            let vanishing_polynomial_eval = two_adic_subgroup_vanishing_polynomial(log_n, x);
-            assert_eq!(vanishing_polynomial_eval, F::ZERO);
-        }
-    }
-}
-
-pub fn test_two_adic_coset_vanishing_polynomial<F: TwoAdicField>() {
-    for log_n in 0..5 {
-        let g = F::two_adic_generator(log_n);
-        let shift = F::GENERATOR;
-        for x in cyclic_subgroup_coset_known_order(g, shift, 1 << log_n) {
-            let vanishing_polynomial_eval = two_adic_coset_vanishing_polynomial(log_n, shift, x);
-            assert_eq!(vanishing_polynomial_eval, F::ZERO);
-        }
-    }
-}
-
 pub fn test_two_adic_generator_consistency<F: TwoAdicField>() {
     let log_n = F::TWO_ADICITY;
     let g = F::two_adic_generator(log_n);
@@ -936,14 +913,6 @@ macro_rules! test_prime_field_32 {
 macro_rules! test_two_adic_field {
     ($field:ty) => {
         mod two_adic_field_tests {
-            #[test]
-            fn test_two_adic_field_subgroup_vanishing_polynomial() {
-                $crate::test_two_adic_subgroup_vanishing_polynomial::<$field>();
-            }
-            #[test]
-            fn test_two_adic_coset_vanishing_polynomial() {
-                $crate::test_two_adic_coset_vanishing_polynomial::<$field>();
-            }
             #[test]
             fn test_two_adic_consistency() {
                 $crate::test_two_adic_generator_consistency::<$field>();

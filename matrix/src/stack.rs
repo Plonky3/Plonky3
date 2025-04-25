@@ -1,4 +1,3 @@
-use core::iter::Chain;
 use core::ops::Deref;
 
 use crate::Matrix;
@@ -48,7 +47,7 @@ impl<Top, Bottom> VerticalPair<Top, Bottom> {
     /// A `VerticalPair` that represents the combined matrix.
     pub fn new<T>(top: Top, bottom: Bottom) -> Self
     where
-        T: Send + Sync,
+        T: Send + Sync + Clone,
         Top: Matrix<T>,
         Bottom: Matrix<T>,
     {
@@ -68,7 +67,7 @@ impl<Left, Right> HorizontalPair<Left, Right> {
     /// A `HorizontalPair` that represents the combined matrix.
     pub fn new<T>(left: Left, right: Right) -> Self
     where
-        T: Send + Sync,
+        T: Send + Sync + Clone,
         Left: Matrix<T>,
         Right: Matrix<T>,
     {
@@ -77,7 +76,9 @@ impl<Left, Right> HorizontalPair<Left, Right> {
     }
 }
 
-impl<T: Send + Sync, Top: Matrix<T>, Bottom: Matrix<T>> Matrix<T> for VerticalPair<Top, Bottom> {
+impl<T: Send + Sync + Clone, Top: Matrix<T>, Bottom: Matrix<T>> Matrix<T>
+    for VerticalPair<Top, Bottom>
+{
     fn width(&self) -> usize {
         self.top.width()
     }
@@ -86,37 +87,86 @@ impl<T: Send + Sync, Top: Matrix<T>, Bottom: Matrix<T>> Matrix<T> for VerticalPa
         self.top.height() + self.bottom.height()
     }
 
-    fn get(&self, r: usize, c: usize) -> T {
-        if r < self.top.height() {
-            self.top.get(r, c)
-        } else {
-            self.bottom.get(r - self.top.height(), c)
+    unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height() and c < self.width()
+            if r < self.top.height() {
+                self.top.get_unchecked(r, c)
+            } else {
+                self.bottom.get_unchecked(r - self.top.height(), c)
+            }
         }
     }
 
-    type Row<'a>
-        = EitherRow<Top::Row<'a>, Bottom::Row<'a>>
-    where
-        Self: 'a;
-
-    fn row(&self, r: usize) -> Self::Row<'_> {
-        if r < self.top.height() {
-            EitherRow::Left(self.top.row(r))
-        } else {
-            EitherRow::Right(self.bottom.row(r - self.top.height()))
+    unsafe fn row_unchecked(
+        &self,
+        r: usize,
+    ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height()
+            if r < self.top.height() {
+                EitherRow::Left(self.top.row_unchecked(r).into_iter())
+            } else {
+                EitherRow::Right(self.bottom.row_unchecked(r - self.top.height()).into_iter())
+            }
         }
     }
 
-    fn row_slice(&self, r: usize) -> impl Deref<Target = [T]> {
-        if r < self.top.height() {
-            EitherRow::Left(self.top.row_slice(r))
-        } else {
-            EitherRow::Right(self.bottom.row_slice(r - self.top.height()))
+    unsafe fn row_subseq_unchecked(
+        &self,
+        r: usize,
+        start: usize,
+        end: usize,
+    ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height() and start <= end <= self.width()
+            if r < self.top.height() {
+                EitherRow::Left(self.top.row_subseq_unchecked(r, start, end).into_iter())
+            } else {
+                EitherRow::Right(
+                    self.bottom
+                        .row_subseq_unchecked(r - self.top.height(), start, end)
+                        .into_iter(),
+                )
+            }
+        }
+    }
+
+    unsafe fn row_slice_unchecked(&self, r: usize) -> impl Deref<Target = [T]> {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height()
+            if r < self.top.height() {
+                EitherRow::Left(self.top.row_slice_unchecked(r))
+            } else {
+                EitherRow::Right(self.bottom.row_slice_unchecked(r - self.top.height()))
+            }
+        }
+    }
+
+    unsafe fn row_subslice_unchecked(
+        &self,
+        r: usize,
+        start: usize,
+        end: usize,
+    ) -> impl Deref<Target = [T]> {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height() and start <= end <= self.width()
+            if r < self.top.height() {
+                EitherRow::Left(self.top.row_subslice_unchecked(r, start, end))
+            } else {
+                EitherRow::Right(self.bottom.row_subslice_unchecked(
+                    r - self.top.height(),
+                    start,
+                    end,
+                ))
+            }
         }
     }
 }
 
-impl<T: Send + Sync, Left: Matrix<T>, Right: Matrix<T>> Matrix<T> for HorizontalPair<Left, Right> {
+impl<T: Send + Sync + Clone, Left: Matrix<T>, Right: Matrix<T>> Matrix<T>
+    for HorizontalPair<Left, Right>
+{
     fn width(&self) -> usize {
         self.left.width() + self.right.width()
     }
@@ -125,21 +175,28 @@ impl<T: Send + Sync, Left: Matrix<T>, Right: Matrix<T>> Matrix<T> for Horizontal
         self.left.height()
     }
 
-    fn get(&self, r: usize, c: usize) -> T {
-        if c < self.left.width() {
-            self.left.get(r, c)
-        } else {
-            self.right.get(r, c - self.left.width())
+    unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height() and c < self.width()
+            if c < self.left.width() {
+                self.left.get_unchecked(r, c)
+            } else {
+                self.right.get_unchecked(r, c - self.left.width())
+            }
         }
     }
 
-    type Row<'a>
-        = Chain<Left::Row<'a>, Right::Row<'a>>
-    where
-        Self: 'a;
-
-    fn row(&self, r: usize) -> Self::Row<'_> {
-        self.left.row(r).chain(self.right.row(r))
+    unsafe fn row_unchecked(
+        &self,
+        r: usize,
+    ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height()
+            self.left
+                .row_unchecked(r)
+                .into_iter()
+                .chain(self.right.row_unchecked(r))
+        }
     }
 }
 
@@ -184,6 +241,8 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
+    use itertools::Itertools;
+
     use super::*;
     use crate::RowMajorMatrix;
 
@@ -193,7 +252,10 @@ mod tests {
         let bottom = RowMajorMatrix::new(vec![1, 2, 3, 4], 2); // 2x2
         let vpair = VerticalPair::new::<i32>(top, bottom);
         assert_eq!(vpair.height(), 2);
-        assert_eq!(vpair.get(1, 1), 4);
+        assert_eq!(vpair.get(1, 1), Some(4));
+        unsafe {
+            assert_eq!(vpair.get_unchecked(0, 0), 1);
+        }
     }
 
     #[test]
@@ -207,20 +269,44 @@ mod tests {
         assert_eq!(vertical.height(), 4);
 
         // Values from top
-        assert_eq!(vertical.get(0, 0), 1);
-        assert_eq!(vertical.get(1, 1), 4);
+        assert_eq!(vertical.get(0, 0), Some(1));
+        assert_eq!(vertical.get(1, 1), Some(4));
 
         // Values from bottom
-        assert_eq!(vertical.get(2, 0), 5);
-        assert_eq!(vertical.get(3, 1), 8);
+        unsafe {
+            assert_eq!(vertical.get_unchecked(2, 0), 5);
+            assert_eq!(vertical.get_unchecked(3, 1), 8);
+        }
 
         // Row iter from bottom
-        let row = vertical.row(3);
-        let values: Vec<_> = row.collect();
-        assert_eq!(values, vec![7, 8]);
+        let row = vertical.row(3).unwrap().into_iter().collect_vec();
+        assert_eq!(row, vec![7, 8]);
+
+        unsafe {
+            // Row iter from top
+            let row = vertical.row_unchecked(1).into_iter().collect_vec();
+            assert_eq!(row, vec![3, 4]);
+
+            let row = vertical
+                .row_subseq_unchecked(0, 0, 1)
+                .into_iter()
+                .collect_vec();
+            assert_eq!(row, vec![1]);
+        }
 
         // Row slice
-        assert_eq!(vertical.row_slice(2).deref(), &[5, 6]);
+        assert_eq!(vertical.row_slice(2).unwrap().deref(), &[5, 6]);
+
+        unsafe {
+            // Row slice unchecked
+            assert_eq!(vertical.row_slice_unchecked(3).deref(), &[7, 8]);
+            assert_eq!(vertical.row_subslice_unchecked(1, 1, 2).deref(), &[4]);
+        }
+
+        assert_eq!(vertical.get(0, 2), None); // Width out of bounds
+        assert_eq!(vertical.get(4, 0), None); // Height out of bounds
+        assert!(vertical.row(4).is_none()); // Height out of bounds
+        assert!(vertical.row_slice(4).is_none()); // Height out of bounds
     }
 
     #[test]
@@ -234,17 +320,27 @@ mod tests {
         assert_eq!(horizontal.width(), 4);
 
         // Left values
-        assert_eq!(horizontal.get(0, 0), 1);
-        assert_eq!(horizontal.get(1, 1), 4);
+        assert_eq!(horizontal.get(0, 0), Some(1));
+        assert_eq!(horizontal.get(1, 1), Some(4));
 
         // Right values
-        assert_eq!(horizontal.get(0, 2), 5);
-        assert_eq!(horizontal.get(1, 3), 8);
+        unsafe {
+            assert_eq!(horizontal.get_unchecked(0, 2), 5);
+            assert_eq!(horizontal.get_unchecked(1, 3), 8);
+        }
 
         // Row iter
-        let row = horizontal.row(0);
-        let values: Vec<_> = row.collect();
-        assert_eq!(values, vec![1, 2, 5, 6]);
+        let row = horizontal.row(0).unwrap().into_iter().collect_vec();
+        assert_eq!(row, vec![1, 2, 5, 6]);
+
+        unsafe {
+            let row = horizontal.row_unchecked(1).into_iter().collect_vec();
+            assert_eq!(row, vec![3, 4, 7, 8]);
+        }
+
+        assert_eq!(horizontal.get(0, 4), None); // Width out of bounds
+        assert_eq!(horizontal.get(2, 0), None); // Height out of bounds
+        assert!(horizontal.row(2).is_none()); // Height out of bounds
     }
 
     #[test]

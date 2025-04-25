@@ -12,7 +12,10 @@ const NUM_ROUNDS_MIN_1: usize = NUM_ROUNDS - 1;
 #[inline]
 pub(crate) fn eval_round_flags<AB: AirBuilder>(builder: &mut AB) {
     let main = builder.main();
-    let (local, next) = (main.row_slice(0), main.row_slice(1));
+    let (local, next) = (
+        main.row_slice(0).expect("The matrix is empty?"),
+        main.row_slice(1).expect("The matrix only has 1 row?"),
+    );
     let local: &KeccakCols<AB::Var> = (*local).borrow();
     let next: &KeccakCols<AB::Var> = (*next).borrow();
 

@@ -124,7 +124,7 @@ where
                 let log2_height = log2_ceil_usize(matrix.height());
                 let bits_reduced = log_max_height - log2_height;
                 let reduced_index = index >> bits_reduced;
-                matrix.row(reduced_index).collect()
+                matrix.row(reduced_index).unwrap().into_iter().collect()
             })
             .collect_vec();
 

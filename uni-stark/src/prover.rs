@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_air::Air;
-use p3_challenger::{CanObserve, CanSample, FieldChallenger};
+use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, PackedValue, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
@@ -67,6 +67,27 @@ where
 
     challenger.observe(trace_commit.clone());
     challenger.observe_slice(public_values);
+
+    // Get the first Fiat Shamir challenge which will be used to combine all constraint polynomials
+    // into a single polynomial.
+    //
+    // Soundness Error:
+    // If a prover is malicious, we can find a row `i` such that some of the constraints
+    // C_0, ..., C_n are non 0 on this row. The malicious prover "wins" if the random challenge
+    // alpha is such that:
+    // (1): C_0(i) + alpha * C_1(i) + ... + alpha^n * C_n(i) = 0
+    // This is a polynomial of degree n, so it has at most n roots. Thus the probability of this
+    // occurring for a given trace and set of constraints is n/|EF|.
+    //
+    // Currently, we do not observe data about the constraint polynomials directly. In particular
+    // a prover could take a trace and fiddle around with the AIR it claims to satisfy without
+    // changing this sample alpha.
+    //
+    // In particular this means that a malicious prover could create a custom AIR for a given trace
+    // such that equation (1) holds. However, such AIRs would need to be very specific and
+    // so such tampering should be obvious to spot. The verifier needs to check the AIR anyway to
+    // confirm that satisfying it indeed proves what the prover claims. Hence this should not be
+    // a soundness issue.
     let alpha: SC::Challenge = challenger.sample_algebra_element();
 
     let quotient_domain =
@@ -119,7 +140,18 @@ where
         challenger.observe(r_commit);
     }
 
-    let zeta: SC::Challenge = challenger.sample();
+    // Get an out-of-domain point to open our values at.
+    //
+    // Soundness Error:
+    // This sample will be used to check the equality: `C(X) = ZH(X)Q(X)`. If a prover is malicious
+    // and this equality is false, the probability that it is true at the point `zeta` will be
+    // deg(C(X))/|EF| = dN/|EF| where `N` is the trace length and our constraints have degree `d`.
+    //
+    // Completeness Error:
+    // If zeta happens to lie in the domain `gK`, then when opening at zeta we will run into division
+    // by zero errors. This doesn't lead to a soundness issue as the verifier will just reject in those
+    // cases but it is a completeness issue and contributes a completeness error of |gK| = 2N/|EF|.
+    let zeta: SC::Challenge = challenger.sample_algebra_element();
     let zeta_next = trace_domain.next_point(zeta).unwrap();
 
     let is_random = opt_r_data.is_some();
@@ -199,7 +231,7 @@ where
     let mut alpha_powers = alpha.powers().take(constraint_count).collect_vec();
     alpha_powers.reverse();
     // alpha powers looks like Vec<EF> ~ Vec<[F; D]>
-    // It's useful to also have access to the the transpose of this of form [Vec<F>; D].
+    // It's useful to also have access to the transpose of this of form [Vec<F>; D].
     let decomposed_alpha_powers: Vec<_> = (0..SC::Challenge::DIMENSION)
         .map(|i| {
             alpha_powers

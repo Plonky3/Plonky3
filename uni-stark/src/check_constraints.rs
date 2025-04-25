@@ -28,8 +28,8 @@ where
     (0..height).for_each(|i| {
         let i_next = (i + 1) % height;
 
-        let local = main.row_slice(i);
-        let next = main.row_slice(i_next);
+        let local = main.row_slice(i).unwrap(); // i < height so unwrap should never fail.
+        let next = main.row_slice(i_next).unwrap(); // i_next < height so unwrap should never fail.
         let main = VerticalPair::new(
             RowMajorMatrixView::new_row(&*local),
             RowMajorMatrixView::new_row(&*next),
@@ -159,8 +159,8 @@ mod tests {
             let main = builder.main();
 
             for col in 0..W {
-                let a = main.top.get(0, col);
-                let b = main.bottom.get(0, col);
+                let a = main.top.get(0, col).unwrap();
+                let b = main.bottom.get(0, col).unwrap();
 
                 // New logic: enforce row[i+1] = row[i] + 1, only on transitions
                 builder.when_transition().assert_eq(b, a + F::ONE);
@@ -170,7 +170,7 @@ mod tests {
             let public_values = builder.public_values;
             let mut when_last = builder.when(builder.is_last_row);
             for (i, &pv) in public_values.iter().enumerate().take(W) {
-                when_last.assert_eq(main.top.get(0, i), pv);
+                when_last.assert_eq(main.top.get(0, i).unwrap(), pv);
             }
         }
     }
