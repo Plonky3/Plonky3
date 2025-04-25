@@ -642,7 +642,7 @@ pub(super) fn binomial_mul<
 
             // Compute result:
             // Coefficient of X⁰: v0 + w·v2
-            res[0] = v0 + v2.clone() * w;
+            res[0] = v0 + v2 * w;
 
             // Coefficient of X¹: v1
             res[1] = v1;
@@ -845,24 +845,24 @@ where
     //    - m0: X⁰ term
     //    - m1: X² term
     //    - m2: X⁴ term (to fold using X⁴ ≡ w)
-    let m0 = s0.clone() - e0.clone() - o0.clone();
-    let m1 = s1.clone() - e1.clone() - o1.clone();
-    let m2 = s2.clone() - e2.clone() - o2.clone();
+    let m0 = s0 - e0.clone() - o0.clone();
+    let m1 = s1 - e1.clone() - o1.clone();
+    let m2 = s2 - e2.clone() - o2.clone();
 
     // 5. Assemble result C = A·B
     //    - Fold every X⁴ term using X⁴ ≡ w
 
     // Coefficient for X⁰:
     // = e0 + w·(e2 + o1)
-    res[0] = e0 + (e2.clone() + o1.clone()) * w;
+    res[0] = e0 + (e2 + o1) * w;
 
     // Coefficient for X¹:
     // = m0 + w·m2
-    res[1] = m0 + m2.clone() * w;
+    res[1] = m0 + m2 * w;
 
     // Coefficient for X²:
     // = e1 + o0 + w·o2
-    res[2] = e1 + o0 + o2.clone() * w;
+    res[2] = e1 + o0 + o2 * w;
 
     // Coefficient for X³:
     // = m1
