@@ -13,12 +13,6 @@ pub fn two_adic_subgroup_vanishing_polynomial<F: TwoAdicField>(log_n: usize, x: 
     x.exp_power_of_2(log_n) - F::ONE
 }
 
-/// Computes `Z_{sH}(x)`, where `Z_{sH}` is the vanishing polynomial of the given coset of a multiplicative
-/// subgroup of order `2^log_n`.
-pub fn two_adic_coset_vanishing_polynomial<F: TwoAdicField>(log_n: usize, shift: F, x: F) -> F {
-    x.exp_power_of_2(log_n) - shift.exp_power_of_2(log_n)
-}
-
 /// Computes a multiplicative subgroup whose order is known in advance.
 pub fn cyclic_subgroup_known_order<F: Field>(
     generator: F,

@@ -2,8 +2,7 @@ mod helpers {
     use p3_baby_bear::BabyBear;
     use p3_field::{
         PrimeCharacteristicRing, add_scaled_slice_in_place, dot_product, field_to_array, reduce_32,
-        scale_vec, split_32, two_adic_coset_vanishing_polynomial,
-        two_adic_subgroup_vanishing_polynomial,
+        scale_vec, split_32, two_adic_subgroup_vanishing_polynomial,
     };
 
     #[test]
@@ -17,24 +16,6 @@ mod helpers {
 
         let expected = x_pow - BabyBear::ONE;
         let result = two_adic_subgroup_vanishing_polynomial(log_n, x);
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_two_adic_coset_vanishing_polynomial() {
-        // x = 2, shift = 5, log_n = 2 → compute x^4 - shift^4
-        let x = BabyBear::TWO;
-        let shift = BabyBear::from_u64(5);
-        let log_n = 2;
-
-        // x^4 = 2^4
-        let x_pow = x * x * x * x;
-
-        // shift^4 = 5^4
-        let shift_pow = shift * shift * shift * shift;
-
-        let expected = x_pow - shift_pow;
-        let result = two_adic_coset_vanishing_polynomial(log_n, shift, x);
         assert_eq!(result, expected);
     }
 
