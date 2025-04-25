@@ -53,7 +53,7 @@ fn do_test_fri_pcs<Val, Challenge, Challenger, P>(
 
     let (commits_by_round, data_by_round): (Vec<_>, Vec<_>) = domains_and_polys_by_round
         .iter()
-        .map(|domains_and_polys| pcs.commit(domains_and_polys.clone()))
+        .map(|domains_and_polys| pcs.commit(domains_and_polys.iter().cloned()))
         .unzip();
     assert_eq!(commits_by_round.len(), num_rounds);
     assert_eq!(data_by_round.len(), num_rounds);

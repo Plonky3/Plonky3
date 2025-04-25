@@ -2,62 +2,98 @@ use core::ops::Deref;
 
 use crate::Matrix;
 
-/// A combination of two matrices, stacked together vertically.
+/// A matrix composed by stacking two matrices vertically, one on top of the other.
+///
+/// Both matrices must have the same `width`.
+/// The resulting matrix has dimensions:
+/// - `width`: The same as the inputs.
+/// - `height`: The sum of the `heights` of the input matrices.
+///
+/// Element access and iteration will first access the rows of the top matrix,
+/// followed by the rows of the bottom matrix.
 #[derive(Copy, Clone, Debug)]
-pub struct VerticalPair<First, Second> {
-    pub first: First,
-    pub second: Second,
+pub struct VerticalPair<Top, Bottom> {
+    /// The top matrix in the vertical composition.
+    pub top: Top,
+    /// The bottom matrix in the vertical composition.
+    pub bottom: Bottom,
 }
 
-/// A combination of two matrices, stacked together horizontally.
+/// A matrix composed by placing two matrices side-by-side horizontally.
+///
+/// Both matrices must have the same `height`.
+/// The resulting matrix has dimensions:
+/// - `width`: The sum of the `widths` of the input matrices.
+/// - `height`: The same as the inputs.
+///
+/// Element access and iteration for a given row `i` will first access the elements in the `i`'th row of the left matrix,
+/// followed by elements in the `i'`th row of the right matrix.
 #[derive(Copy, Clone, Debug)]
-pub struct HorizontalPair<First, Second> {
-    pub first: First,
-    pub second: Second,
+pub struct HorizontalPair<Left, Right> {
+    /// The left matrix in the horizontal composition.
+    pub left: Left,
+    /// The right matrix in the horizontal composition.
+    pub right: Right,
 }
 
-impl<First, Second> VerticalPair<First, Second> {
-    pub fn new<T>(first: First, second: Second) -> Self
+impl<Top, Bottom> VerticalPair<Top, Bottom> {
+    /// Create a new `VerticalPair` by stacking two matrices vertically.
+    ///
+    /// # Panics
+    /// Panics if the two matrices do not have the same width (i.e., number of columns),
+    /// since vertical composition requires column alignment.
+    ///
+    /// # Returns
+    /// A `VerticalPair` that represents the combined matrix.
+    pub fn new<T>(top: Top, bottom: Bottom) -> Self
     where
         T: Send + Sync + Clone,
-        First: Matrix<T>,
-        Second: Matrix<T>,
+        Top: Matrix<T>,
+        Bottom: Matrix<T>,
     {
-        assert_eq!(first.width(), second.width());
-        Self { first, second }
+        assert_eq!(top.width(), bottom.width());
+        Self { top, bottom }
     }
 }
 
-impl<First, Second> HorizontalPair<First, Second> {
-    pub fn new<T>(first: First, second: Second) -> Self
+impl<Left, Right> HorizontalPair<Left, Right> {
+    /// Create a new `HorizontalPair` by joining two matrices side by side.
+    ///
+    /// # Panics
+    /// Panics if the two matrices do not have the same height (i.e., number of rows),
+    /// since horizontal composition requires row alignment.
+    ///
+    /// # Returns
+    /// A `HorizontalPair` that represents the combined matrix.
+    pub fn new<T>(left: Left, right: Right) -> Self
     where
         T: Send + Sync + Clone,
-        First: Matrix<T>,
-        Second: Matrix<T>,
+        Left: Matrix<T>,
+        Right: Matrix<T>,
     {
-        assert_eq!(first.height(), second.height());
-        Self { first, second }
+        assert_eq!(left.height(), right.height());
+        Self { left, right }
     }
 }
 
-impl<T: Send + Sync + Clone, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
-    for VerticalPair<First, Second>
+impl<T: Send + Sync + Clone, Top: Matrix<T>, Bottom: Matrix<T>> Matrix<T>
+    for VerticalPair<Top, Bottom>
 {
     fn width(&self) -> usize {
-        self.first.width()
+        self.top.width()
     }
 
     fn height(&self) -> usize {
-        self.first.height() + self.second.height()
+        self.top.height() + self.bottom.height()
     }
 
     unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
         unsafe {
             // Safety: The caller must ensure that r < self.height() and c < self.width()
-            if r < self.first.height() {
-                self.first.get_unchecked(r, c)
+            if r < self.top.height() {
+                self.top.get_unchecked(r, c)
             } else {
-                self.second.get_unchecked(r - self.first.height(), c)
+                self.bottom.get_unchecked(r - self.top.height(), c)
             }
         }
     }
@@ -68,14 +104,10 @@ impl<T: Send + Sync + Clone, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
     ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
         unsafe {
             // Safety: The caller must ensure that r < self.height()
-            if r < self.first.height() {
-                EitherRow::Left(self.first.row_unchecked(r).into_iter())
+            if r < self.top.height() {
+                EitherRow::Left(self.top.row_unchecked(r).into_iter())
             } else {
-                EitherRow::Right(
-                    self.second
-                        .row_unchecked(r - self.first.height())
-                        .into_iter(),
-                )
+                EitherRow::Right(self.bottom.row_unchecked(r - self.top.height()).into_iter())
             }
         }
     }
@@ -88,12 +120,12 @@ impl<T: Send + Sync + Clone, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
     ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
         unsafe {
             // Safety: The caller must ensure that r < self.height() and start <= end <= self.width()
-            if r < self.first.height() {
-                EitherRow::Left(self.first.row_subseq_unchecked(r, start, end).into_iter())
+            if r < self.top.height() {
+                EitherRow::Left(self.top.row_subseq_unchecked(r, start, end).into_iter())
             } else {
                 EitherRow::Right(
-                    self.second
-                        .row_subseq_unchecked(r - self.first.height(), start, end)
+                    self.bottom
+                        .row_subseq_unchecked(r - self.top.height(), start, end)
                         .into_iter(),
                 )
             }
@@ -103,10 +135,10 @@ impl<T: Send + Sync + Clone, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
     unsafe fn row_slice_unchecked(&self, r: usize) -> impl Deref<Target = [T]> {
         unsafe {
             // Safety: The caller must ensure that r < self.height()
-            if r < self.first.height() {
-                EitherRow::Left(self.first.row_slice_unchecked(r))
+            if r < self.top.height() {
+                EitherRow::Left(self.top.row_slice_unchecked(r))
             } else {
-                EitherRow::Right(self.second.row_slice_unchecked(r - self.first.height()))
+                EitherRow::Right(self.bottom.row_slice_unchecked(r - self.top.height()))
             }
         }
     }
@@ -119,11 +151,11 @@ impl<T: Send + Sync + Clone, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
     ) -> impl Deref<Target = [T]> {
         unsafe {
             // Safety: The caller must ensure that r < self.height() and start <= end <= self.width()
-            if r < self.first.height() {
-                EitherRow::Left(self.first.row_subslice_unchecked(r, start, end))
+            if r < self.top.height() {
+                EitherRow::Left(self.top.row_subslice_unchecked(r, start, end))
             } else {
-                EitherRow::Right(self.second.row_subslice_unchecked(
-                    r - self.first.height(),
+                EitherRow::Right(self.bottom.row_subslice_unchecked(
+                    r - self.top.height(),
                     start,
                     end,
                 ))
@@ -132,24 +164,24 @@ impl<T: Send + Sync + Clone, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
     }
 }
 
-impl<T: Send + Sync + Clone, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
-    for HorizontalPair<First, Second>
+impl<T: Send + Sync + Clone, Left: Matrix<T>, Right: Matrix<T>> Matrix<T>
+    for HorizontalPair<Left, Right>
 {
     fn width(&self) -> usize {
-        self.first.width() + self.second.width()
+        self.left.width() + self.right.width()
     }
 
     fn height(&self) -> usize {
-        self.first.height()
+        self.left.height()
     }
 
     unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
         unsafe {
             // Safety: The caller must ensure that r < self.height() and c < self.width()
-            if c < self.first.width() {
-                self.first.get_unchecked(r, c)
+            if c < self.left.width() {
+                self.left.get_unchecked(r, c)
             } else {
-                self.second.get_unchecked(r, c - self.first.width())
+                self.right.get_unchecked(r, c - self.left.width())
             }
         }
     }
@@ -160,10 +192,10 @@ impl<T: Send + Sync + Clone, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
     ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
         unsafe {
             // Safety: The caller must ensure that r < self.height()
-            self.first
+            self.left
                 .row_unchecked(r)
                 .into_iter()
-                .chain(self.second.row_unchecked(r))
+                .chain(self.right.row_unchecked(r))
         }
     }
 }
