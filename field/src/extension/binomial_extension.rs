@@ -763,50 +763,46 @@ where
     R: Algebra<F> + Mul<R2, Output = R>,
     R2: Algebra<F> + Add<Output = R2> + Clone,
 {
-    // Split A into A0 = a0 + a1·X and A1 = a2 + a3·X
-    let (a0_0, a0_1) = (a[0].clone(), a[1].clone()); // A0 terms
-    let (a1_0, a1_1) = (a[2].clone(), a[3].clone()); // A1 terms
-
-    // Split B into B0 = b0 + b1·X and B1 = b2 + b3·X
-    let (b0_0, b0_1) = (b[0].clone(), b[1].clone()); // B0 terms
-    let (b1_0, b1_1) = (b[2].clone(), b[3].clone()); // B1 terms
+    // As an introduction, we:
+    // 1. Split A into A0 = a0 + a1·X and A1 = a2 + a3·X
+    // 2. Split B into B0 = b0 + b1·X and B1 = b2 + b3·X
 
     // Compute A0·B0 = (a0 + a1·X)(b0 + b1·X)
     // = a0·b0 + (a0·b1 + a1·b0)·X + a1·b1·X²
 
     // X⁰ term from A0·B0
-    let a0b0_0 = a0_0.clone() * b0_0.clone();
+    let a0b0_0 = a[0].clone() * b[0].clone();
     // X¹ term from A0·B0
-    let a0b0_1 = a0_0.clone() * b0_1.clone() + a0_1.clone() * b0_0.clone();
+    let a0b0_1 = a[0].clone() * b[1].clone() + a[1].clone() * b[0].clone();
     // X² term from A0·B0
-    let a0b0_2 = a0_1.clone() * b0_1.clone();
+    let a0b0_2 = a[1].clone() * b[1].clone();
 
     // Compute partial A1·B1 = (a2 + a3·X)(b2 + b3·X)
     // = a2·b2 + (a2·b3 + a3·b2)·X + a3·b3·X²
     // We compute only the terms we need for reduction mod X⁴ - w
 
     // a2·b2 (used in X⁰ and X²)
-    let a1b1_0 = a1_0.clone() * b1_0.clone();
+    let a1b1_0 = a[2].clone() * b[2].clone();
     // a2·b3 (used in X¹)
-    let a1b1_01 = a1_0.clone() * b1_1.clone();
+    let a1b1_01 = a[2].clone() * b[3].clone();
     // a3·b2 (used in X¹)
-    let a1b1_10 = a1_1.clone() * b1_0.clone();
+    let a1b1_10 = a[3].clone() * b[2].clone();
     // X¹ term from A1·B1
     let a1b1_1 = a1b1_01.clone() + a1b1_10.clone();
 
     // Compute A0 + A1 = (a0 + a2) + (a1 + a3)·X
 
     // low term of (A0 + A1)
-    let a_sum_0 = a0_0 + a1_0;
+    let a_sum_0 = a[0].clone() + a[2].clone();
     // high term of (A0 + A1)
-    let a_sum_1 = a0_1.clone() + a1_1.clone();
+    let a_sum_1 = a[1].clone() + a[3].clone();
 
     // Compute B0 + B1 = (b0 + b2) + (b1 + b3)·X
 
     // low term of (B0 + B1)
-    let b_sum_0 = b0_0 + b1_0;
+    let b_sum_0 = b[0].clone() + b[2].clone();
     // high term of (B0 + B1)
-    let b_sum_1 = b0_1.clone() + b1_1.clone();
+    let b_sum_1 = b[1].clone() + b[3].clone();
 
     // Compute middle product: (A0 + A1)(B0 + B1)
     // = a_sum_0·b_sum_0 + (a_sum_0·b_sum_1 + a_sum_1·b_sum_0)·X + a_sum_1·b_sum_1·X²
@@ -818,11 +814,13 @@ where
     let mid_1 = a_sum_0 * b_sum_1 + a_sum_1 * b_sum_0;
 
     // Precompute w·b3 for folding a3·b3·X⁴ into constant term (X⁴ ≡ w)
-    let b3_w = b1_1 * w;
+    let b3_w = b[3].clone() * w;
 
     // Compute X⁰ term:
     // = a0·b0 + a1·b3·w + a2·b2·w + a3·b1·w
-    res[0] = a0b0_0.clone() + a0_1 * b3_w.clone() + (a1b1_0.clone() + a1_1.clone() * b0_1) * w;
+    res[0] = a0b0_0.clone()
+        + a[1].clone() * b3_w.clone()
+        + (a1b1_0.clone() + a[3].clone() * b[1].clone()) * w;
 
     // Compute X¹ term:
     // = a0·b1 + a1·b0 + a2·b3·w + a3·b2·w
@@ -830,7 +828,7 @@ where
 
     // Compute X² term:
     // = a1·b1 + (middle - a0·b0 - a2·b2) + a3·b3·w
-    res[2] = a0b0_2 + (mid_0 - a0b0_0 - a1b1_0) + a1_1 * b3_w;
+    res[2] = a0b0_2 + (mid_0 - a0b0_0 - a1b1_0) + a[3].clone() * b3_w;
 
     // Compute X³ term:
     // = mid_1 - a0·b1 - a1·b0 - a2·b3 - a3·b2
