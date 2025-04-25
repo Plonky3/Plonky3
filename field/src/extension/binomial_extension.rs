@@ -765,7 +765,8 @@ where
     (p0, p1, p2)
 }
 
-/// Optimized Karatsuba multiplication for extension degree 4.
+/// Optimized Karatsuba multiplication for extension degree 4,
+/// using even-odd decomposition.
 ///
 /// Let the input polynomials be:
 /// ```text
@@ -775,74 +776,95 @@ where
 ///
 /// These can be grouped as:
 /// ```text
-///     A = A0 + A1·X², where A0 = a0 + a1·X, A1 = a2 + a3·X
-///     B = B0 + B1·X², where B0 = b0 + b1·X, B1 = b2 + b3·X
+///     A = E_A + X·O_A, where E_A = a0 + a2·X² (even powers),
+///                            O_A = a1 + a3·X² (odd  powers)
+///
+///     B = E_B + X·O_B, where E_B = b0 + b2·X²,
+///                            O_B = b1 + b3·X²
 /// ```
 ///
 /// The multiplication follows:
 /// ```text
-///     A·B = A0·B0
-///         + ((A0 + A1)·(B0 + B1) - A0·B0 - A1·B1)·X²
-///         + A1·B1·X⁴
+///     A·B = E_A·E_B
+///         + (E_A·O_B + O_A·E_B)·X
+///         + O_A·O_B·X²
 /// ```
 ///
-/// Since X⁴ ≡ w (mod X⁴ - w), the X⁴ term is folded back into lower degrees using w.
+/// All three products above are degree-1 polynomials in `Y = X²`,
+/// and we evaluate them using small Karatsuba. We then reduce `X⁴ ≡ w`
+/// to fold back higher-degree terms into the lower ones.
+///
+/// Denoting:
+/// ```text
+///     E = (E0, E1, E2) = E_A·E_B
+///     O = (O0, O1, O2) = O_A·O_B
+///     S = (S0, S1, S2) = (E_A + O_A)(E_B + O_B)
+///     M = S - E - O    = E_A·O_B + O_A·E_B
+/// ```
+///
+/// The final coefficients are:
+/// ```text
+///     res[0] = E0 + w·(E2 + O1)
+///     res[1] = M0 + w·M2
+///     res[2] = E1 + O0 + w·O2
+///     res[3] = M1
+/// ```
 #[inline]
 fn quartic_karatsuba_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
 where
     F: Field,
-    R: Algebra<F> + Mul<R2, Output = R>,
+    R: Algebra<F> + Add<Output = R> + Sub<Output = R> + Mul<R2, Output = R> + Clone,
     R2: Algebra<F> + Add<Output = R2> + Clone,
 {
-    // As an introduction, we:
-    // 1. Split A into A0 = a0 + a1·X and A1 = a2 + a3·X
-    // 2. Split B into B0 = b0 + b1·X and B1 = b2 + b3·X
+    debug_assert_eq!(D, 4);
 
-    // 1. Compute A0·B0 using small Karatsuba:
-    //    - a0b0_0: X⁰ term from A0·B0
-    //    - a0b0_1: X¹ term from A0·B0
-    //    - a0b0_2: X² term from A0·B0
-    let (a0b0_0, a0b0_1, a0b0_2) =
-        karatsuba(a[0].clone(), a[1].clone(), b[0].clone(), b[1].clone());
+    // 1. Compute E = E_A · E_B = (a0 + a2·X²)(b0 + b2·X²)
+    //    - e0: X⁰ term
+    //    - e1: X² term
+    //    - e2: X⁴ term (to fold using X⁴ ≡ w)
+    let (e0, e1, e2) = karatsuba(a[0].clone(), a[2].clone(), b[0].clone(), b[2].clone());
 
-    // 2. Compute A1·B1 using small Karatsuba:
-    //    - a1b1_0: X⁰ term from A1·B1
-    //    - a1b1_1: X¹ term from A1·B1
-    //    - a1b1_2: X² term from A1·B1 -> not used here (degree ≥ 4)
-    let (a1b1_0, a1b1_1, _a1b1_2) =
-        karatsuba(a[2].clone(), a[3].clone(), b[2].clone(), b[3].clone());
+    // 2. Compute O = O_A · O_B = (a1 + a3·X²)(b1 + b3·X²)
+    //    - o0: X⁰ term
+    //    - o1: X² term
+    //    - o2: X⁴ term (to fold using X⁴ ≡ w)
+    let (o0, o1, o2) = karatsuba(a[1].clone(), a[3].clone(), b[1].clone(), b[3].clone());
 
-    // 3. Compute (A0 + A1)·(B0 + B1) using small Karatsuba:
-    //    - mid_0: X⁰ term from (A0+A1)(B0+B1)
-    //    - mid_1: X¹ term from (A0+A1)(B0+B1)
-    //    - mid_2: X² term from (A0+A1)(B0+B1) -> not used here (degree ≥ 4)
-    let (mid_0, mid_1, _mid_2_unused) = karatsuba(
-        a[0].clone() + a[2].clone(),
-        a[1].clone() + a[3].clone(),
-        b[0].clone() + b[2].clone(),
-        b[1].clone() + b[3].clone(),
+    // 3. Compute S = (E_A + O_A)(E_B + O_B)
+    //    - s0: X⁰ term
+    //    - s1: X² term
+    //    - s2: X⁴ term
+    let (s0, s1, s2) = karatsuba(
+        a[0].clone() + a[1].clone(),
+        a[2].clone() + a[3].clone(),
+        b[0].clone() + b[1].clone(),
+        b[2].clone() + b[3].clone(),
     );
 
-    // 4. Precompute w·b3 to fold the X⁴ term (a3·b3·X⁴) back to degree 0.
-    let b3_w = b[3].clone() * w;
+    // 4. Compute M = S - E - O = E_A·O_B + O_A·E_B
+    //    - m0: X⁰ term
+    //    - m1: X² term
+    //    - m2: X⁴ term (to fold using X⁴ ≡ w)
+    let m0 = s0.clone() - e0.clone() - o0.clone();
+    let m1 = s1.clone() - e1.clone() - o1.clone();
+    let m2 = s2.clone() - e2.clone() - o2.clone();
 
-    // 5. Assemble the output coefficients:
+    // 5. Assemble result C = A·B
+    //    - Fold every X⁴ term using X⁴ ≡ w
 
     // Coefficient for X⁰:
-    // = a0·b0 + (a1·b3 + a2·b2 + a3·b1)·w
-    res[0] = a0b0_0.clone()
-        + a[1].clone() * b3_w.clone()
-        + (a1b1_0.clone() + a[3].clone() * b[1].clone()) * w;
+    // = e0 + w·(e2 + o1)
+    res[0] = e0 + (e2.clone() + o1.clone()) * w.clone();
 
     // Coefficient for X¹:
-    // = (a0·b1 + a1·b0) + (a2·b3 + a3·b2)·w
-    res[1] = a0b0_1.clone() + a1b1_1.clone() * w;
+    // = m0 + w·m2
+    res[1] = m0 + m2.clone() * w.clone();
 
     // Coefficient for X²:
-    // = (a1·b1) + ((mid_0 - a0·b0 - a2·b2)) + (a3·b3)·w
-    res[2] = a0b0_2 + (mid_0 - a0b0_0 - a1b1_0) + a[3].clone() * b3_w;
+    // = e1 + o0 + w·o2
+    res[2] = e1 + o0 + o2.clone() * w.clone();
 
     // Coefficient for X³:
-    // = (mid_1) - (a0·b1 + a1·b0 + a2·b3 + a3·b2)
-    res[3] = mid_1 - a0b0_1 - a1b1_1;
+    // = m1
+    res[3] = m1;
 }
