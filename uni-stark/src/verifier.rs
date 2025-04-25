@@ -52,6 +52,17 @@ where
         .map(|domain| pcs.natural_domain_for_degree(domain.size() << (config.is_zk())))
         .collect_vec();
 
+    // Check that the random commitments are/are not present depending on the ZK setting.
+    if SC::Pcs::ZK {
+        // If ZK is enabled, the prover should have random commitments.
+        if opened_values.random.is_none() || commitments.random.is_none() {
+            return Err(VerificationError::RandomizationError);
+        }
+        // If ZK is not enabled, the prover should not have random commitments.
+    } else if opened_values.random.is_some() || commitments.random.is_some() {
+        return Err(VerificationError::RandomizationError);
+    }
+
     let air_width = <A as BaseAir<Val<SC>>>::width(air);
     let valid_shape = opened_values.trace_local.len() == air_width
         && opened_values.trace_next.len() == air_width
@@ -60,11 +71,8 @@ where
             .quotient_chunks
             .iter()
             .all(|qc| qc.len() == <SC::Challenge as BasedVectorSpace<Val<SC>>>::DIMENSION)
-        && if SC::Pcs::ZK {
-            let r_comm = opened_values
-                .random
-                .as_ref()
-                .ok_or(VerificationError::RandomizationError)?;
+        // We've already checked that opened_values.random is present if and only if ZK is enabled.
+        && if let Some(r_comm) = &opened_values.random {
             r_comm.len() == SC::Challenge::DIMENSION
         } else {
             true
@@ -86,6 +94,9 @@ where
     challenger.observe_slice(public_values);
     let alpha: SC::Challenge = challenger.sample_algebra_element();
     challenger.observe(commitments.quotient_chunks.clone());
+
+    // We've already checked that commitments.random is present if and only if ZK is enabled.
+    // Observe the random commitment if it is present.
     if let Some(r_commit) = commitments.random.clone() {
         challenger.observe(r_commit);
     }
@@ -93,11 +104,8 @@ where
     let zeta: SC::Challenge = challenger.sample();
     let zeta_next = init_trace_domain.next_point(zeta).unwrap();
 
-    let mut coms_to_verify = if SC::Pcs::ZK {
-        let random_commit = commitments
-            .random
-            .as_ref()
-            .ok_or(VerificationError::RandomizationError)?;
+    // We've already checked that commitments.random and opened_values.random are present if and only if ZK is enabled.
+    let mut coms_to_verify = if let Some(random_commit) = &commitments.random {
         let random_values = opened_values
             .random
             .as_ref()
