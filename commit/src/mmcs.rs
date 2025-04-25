@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 /// with the largest height. For matrices with smaller heights, some bits of the row index are
 /// removed (from the least-significant side) to get the effective row index. These semantics are
 /// useful in the FRI protocol. See the documentation for `open_batch` for more details.
-pub trait Mmcs<T: Send + Sync>: Clone {
+pub trait Mmcs<T: Send + Sync + Clone>: Clone {
     type ProverData<M>;
     type Commitment: Clone + Serialize + DeserializeOwned;
     type Proof: Clone + Serialize + DeserializeOwned;
