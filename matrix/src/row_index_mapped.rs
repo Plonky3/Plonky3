@@ -14,6 +14,11 @@ pub trait RowIndexMap: Send + Sync {
     fn height(&self) -> usize;
 
     /// Maps a visible row index `r` to the corresponding row index in the underlying matrix.
+    ///
+    /// The input `r` is assumed to lie in the range `0..self.height()` and the output
+    /// will lie in the range `0..self.inner.height()`.
+    ///
+    /// It is considered undefined behaviour to call `map_row_index` with `r >= self.height()`.
     fn map_row_index(&self, r: usize) -> usize;
 
     /// Converts the mapped matrix into a dense row-major matrix.
@@ -25,9 +30,12 @@ pub trait RowIndexMap: Send + Sync {
         inner: Inner,
     ) -> RowMajorMatrix<T> {
         RowMajorMatrix::new(
-            (0..self.height())
-                .flat_map(|r| inner.row(self.map_row_index(r)))
-                .collect(),
+            unsafe {
+                // Safety: The output of `map_row_index` is less than `inner.height()` for all inputs in the range `0..self.height()`.
+                (0..self.height())
+                    .flat_map(|r| inner.row_unchecked(self.map_row_index(r)))
+                    .collect()
+            },
             inner.width(),
         )
     }
@@ -45,7 +53,7 @@ pub struct RowIndexMappedView<IndexMap, Inner> {
     pub inner: Inner,
 }
 
-impl<T: Send + Sync, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
+impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
     for RowIndexMappedView<IndexMap, Inner>
 {
     fn width(&self) -> usize {
@@ -56,23 +64,55 @@ impl<T: Send + Sync, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         self.index_map.height()
     }
 
-    fn get(&self, r: usize, c: usize) -> T {
-        self.inner.get(self.index_map.map_row_index(r), c)
+    unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height() and c < self.width().
+            self.inner.get_unchecked(self.index_map.map_row_index(r), c)
+        }
     }
 
-    type Row<'a>
-        = Inner::Row<'a>
-    where
-        Self: 'a;
-
-    // Override these methods so we use the potentially optimized inner methods instead of defaults.
-
-    fn row(&self, r: usize) -> Self::Row<'_> {
-        self.inner.row(self.index_map.map_row_index(r))
+    unsafe fn row_unchecked(
+        &self,
+        r: usize,
+    ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height().
+            self.inner.row_unchecked(self.index_map.map_row_index(r))
+        }
     }
 
-    fn row_slice(&self, r: usize) -> impl Deref<Target = [T]> {
-        self.inner.row_slice(self.index_map.map_row_index(r))
+    unsafe fn row_subseq_unchecked(
+        &self,
+        r: usize,
+        start: usize,
+        end: usize,
+    ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height() and start <= end <= self.width().
+            self.inner
+                .row_subseq_unchecked(self.index_map.map_row_index(r), start, end)
+        }
+    }
+
+    unsafe fn row_slice_unchecked(&self, r: usize) -> impl Deref<Target = [T]> {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height().
+            self.inner
+                .row_slice_unchecked(self.index_map.map_row_index(r))
+        }
+    }
+
+    unsafe fn row_subslice_unchecked(
+        &self,
+        r: usize,
+        start: usize,
+        end: usize,
+    ) -> impl Deref<Target = [T]> {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height() and start <= end <= self.width().
+            self.inner
+                .row_subslice_unchecked(self.index_map.map_row_index(r), start, end)
+        }
     }
 
     fn to_row_major_matrix(self) -> RowMajorMatrix<T>
@@ -117,6 +157,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
+    use itertools::Itertools;
     use p3_baby_bear::BabyBear;
     use p3_field::FieldArray;
 
@@ -149,6 +190,19 @@ mod tests {
         }
     }
 
+    /// A final Mock implementation of RowIndexMap
+    struct ConstantMap;
+
+    impl RowIndexMap for ConstantMap {
+        fn height(&self) -> usize {
+            1
+        }
+
+        fn map_row_index(&self, _r: usize) -> usize {
+            0
+        }
+    }
+
     #[test]
     fn test_identity_row_index_map() {
         // Create an inner matrix.
@@ -168,8 +222,13 @@ mod tests {
         assert_eq!(mapped_view.width(), 3);
 
         // Check values.
-        assert_eq!(mapped_view.get(0, 0), 1);
-        assert_eq!(mapped_view.get(1, 2), 6);
+        assert_eq!(mapped_view.get(0, 0).unwrap(), 1);
+        assert_eq!(mapped_view.get(1, 2).unwrap(), 6);
+
+        unsafe {
+            assert_eq!(mapped_view.get_unchecked(0, 1), 2);
+            assert_eq!(mapped_view.get_unchecked(1, 0), 4);
+        }
 
         // Check rows.
         let rows: Vec<Vec<_>> = mapped_view.rows().map(|row| row.collect()).collect();
@@ -199,9 +258,14 @@ mod tests {
         assert_eq!(mapped_view.width(), 3);
 
         // Check the first element of the mapped view (originally the second row, first column).
-        assert_eq!(mapped_view.get(0, 0), 4);
+        assert_eq!(mapped_view.get(0, 0).unwrap(), 4);
         // Check the last element of the mapped view (originally the first row, last column).
-        assert_eq!(mapped_view.get(1, 2), 3);
+        assert_eq!(mapped_view.get(1, 2).unwrap(), 3);
+
+        unsafe {
+            assert_eq!(mapped_view.get_unchecked(0, 1), 5);
+            assert_eq!(mapped_view.get_unchecked(1, 0), 1);
+        }
 
         // Check rows.
         let rows: Vec<Vec<_>> = mapped_view.rows().map(|row| row.collect()).collect();
@@ -295,7 +359,7 @@ mod tests {
     }
 
     #[test]
-    fn test_row_slice() {
+    fn test_row_and_row_slice_methods() {
         // Create a 2x3 matrix of integers:
         // [ 10  20  30 ]
         // [ 40  50  60 ]
@@ -308,13 +372,39 @@ mod tests {
         };
 
         // Get row slices through dereferencing and verify content.
-        assert_eq!(mapped_view.row_slice(0).deref(), &[40, 50, 60]); // was row 1
-        assert_eq!(mapped_view.row_slice(1).deref(), &[10, 20, 30]); // was row 0
+        assert_eq!(mapped_view.row_slice(0).unwrap().deref(), &[40, 50, 60]); // was row 1
+        assert_eq!(
+            mapped_view.row(1).unwrap().into_iter().collect_vec(),
+            vec![10, 20, 30]
+        ); // was row 0
+
+        unsafe {
+            // Check unsafe row slices.
+            assert_eq!(
+                mapped_view.row_unchecked(0).into_iter().collect_vec(),
+                vec![40, 50, 60]
+            ); // was row 1
+            assert_eq!(mapped_view.row_slice_unchecked(1).deref(), &[10, 20, 30]); // was row 0
+
+            assert_eq!(
+                mapped_view.row_subslice_unchecked(0, 1, 3).deref(),
+                &[50, 60]
+            ); // was row 1
+            assert_eq!(
+                mapped_view
+                    .row_subseq_unchecked(1, 0, 2)
+                    .into_iter()
+                    .collect_vec(),
+                vec![10, 20]
+            ); // was row 0
+        }
+
+        assert!(mapped_view.row(2).is_none()); // Height out of bounds.
+        assert!(mapped_view.row_slice(2).is_none()); // Height out of bounds.
     }
 
     #[test]
-    #[should_panic]
-    fn test_out_of_bounds_row_access() {
+    fn test_out_of_bounds_access() {
         // Create a 2x2 matrix:
         // [ 1  2 ]
         // [ 3  4 ]
@@ -327,24 +417,30 @@ mod tests {
         };
 
         // Attempt to access out-of-bounds row (index 2). Should panic.
-        mapped_view.get(2, 1);
+        assert_eq!(mapped_view.get(2, 1), None);
+        assert!(mapped_view.row(5).is_none());
+        assert!(mapped_view.row_slice(11).is_none());
+        assert_eq!(mapped_view.get(0, 20), None);
     }
 
     #[test]
-    #[should_panic]
-    fn test_out_of_bounds_col_access() {
+    fn test_out_of_bounds_access_with_bad_map() {
         // Create a 2x2 matrix:
         // [ 1  2 ]
         // [ 3  4 ]
-        let inner = RowMajorMatrix::new(vec![1, 2, 3, 4], 2);
+        let inner = RowMajorMatrix::new(vec![1, 2, 3, 4], 4);
 
         // Use identity mapping.
         let mapped_view = RowIndexMappedView {
-            index_map: IdentityMap(inner.height()),
+            index_map: ConstantMap,
             inner,
         };
 
-        // Attempt to access out-of-bounds column (index 20). Should panic.
-        mapped_view.get(0, 20);
+        assert_eq!(mapped_view.get(0, 2), Some(3));
+
+        // Attempt to access out-of-bounds row (index 1). Should panic.
+        assert_eq!(mapped_view.get(1, 0), None);
+        assert!(mapped_view.row(1).is_none());
+        assert!(mapped_view.row_slice(1).is_none());
     }
 }

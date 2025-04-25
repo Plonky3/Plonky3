@@ -43,26 +43,68 @@ where
         self.0.height()
     }
 
-    type Row<'a>
-        = FlatIter<F, Inner::Row<'a>>
-    where
-        Self: 'a;
+    unsafe fn get_unchecked(&self, r: usize, c: usize) -> F {
+        // The c'th base field element in a row of extension field elements is
+        // at index c % EF::DIMENSION in the c / EF::DIMENSION'th extension element.
+        let c_inner = c / EF::DIMENSION;
+        let inner = unsafe {
+            // Safety: The caller must ensure that r < self.height() and c < self.width().
+            // Assuming this, c / EF::DIMENSION < self.0.width().
+            self.0.get_unchecked(r, c_inner)
+        };
+        inner.as_basis_coefficients_slice()[c % EF::DIMENSION]
+    }
 
-    fn row(&self, r: usize) -> Self::Row<'_> {
-        FlatIter {
-            inner: self.0.row(r).peekable(),
-            idx: 0,
-            _phantom: PhantomData,
+    unsafe fn row_unchecked(
+        &self,
+        r: usize,
+    ) -> impl IntoIterator<Item = F, IntoIter = impl Iterator<Item = F> + Send + Sync> {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height().
+            FlatIter {
+                inner: self.0.row_unchecked(r).into_iter().peekable(),
+                idx: 0,
+                _phantom: PhantomData,
+            }
         }
     }
 
-    fn row_slice(&self, r: usize) -> impl Deref<Target = [F]> {
-        self.0
-            .row_slice(r)
-            .iter()
-            .flat_map(|val| val.as_basis_coefficients_slice())
-            .copied()
-            .collect::<Vec<_>>()
+    unsafe fn row_subseq_unchecked(
+        &self,
+        r: usize,
+        start: usize,
+        end: usize,
+    ) -> impl IntoIterator<Item = F, IntoIter = impl Iterator<Item = F> + Send + Sync> {
+        // We can skip the first start / EF::DIMENSION elements in the row.
+        let len = end - start;
+        let inner_start = start / EF::DIMENSION;
+        unsafe {
+            // Safety: The caller must ensure that r < self.height(), start <= end and end < self.width().
+            FlatIter {
+                inner: self
+                    .0
+                    // We set end to be the width of the inner matrix and use take to ensure we get the right
+                    // number of elements.
+                    .row_subseq_unchecked(r, inner_start, self.0.width())
+                    .into_iter()
+                    .peekable(),
+                idx: start,
+                _phantom: PhantomData,
+            }
+            .take(len)
+        }
+    }
+
+    unsafe fn row_slice_unchecked(&self, r: usize) -> impl Deref<Target = [F]> {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height().
+            self.0
+                .row_slice_unchecked(r)
+                .iter()
+                .flat_map(|val| val.as_basis_coefficients_slice())
+                .copied()
+                .collect::<Vec<_>>()
+        }
     }
 }
 
@@ -94,6 +136,7 @@ where
 mod tests {
     use alloc::vec;
 
+    use itertools::Itertools;
     use p3_field::extension::Complex;
     use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
     use p3_mersenne_31::Mersenne31;
@@ -110,11 +153,59 @@ mod tests {
             EF::from_basis_coefficients_fn(|i| F::from_u8(i as u8 + 20)),
             EF::from_basis_coefficients_fn(|i| F::from_u8(i as u8 + 30)),
             EF::from_basis_coefficients_fn(|i| F::from_u8(i as u8 + 40)),
+            EF::from_basis_coefficients_fn(|i| F::from_u8(i as u8 + 50)),
+            EF::from_basis_coefficients_fn(|i| F::from_u8(i as u8 + 60)),
         ];
         let ext = RowMajorMatrix::<EF>::new(values, 2);
         let flat = FlatMatrixView::<F, EF, _>::new(ext);
-        assert_eq!(&*flat.row_slice(0), &[10, 11, 20, 21].map(F::from_u8));
-        assert_eq!(&*flat.row_slice(1), &[30, 31, 40, 41].map(F::from_u8));
+
+        assert_eq!(flat.width(), 4);
+        assert_eq!(flat.height(), 3);
+
+        assert_eq!(flat.get(0, 2), Some(F::from_u8(20)));
+        assert_eq!(flat.get(1, 3), Some(F::from_u8(41)));
+        assert_eq!(flat.get(2, 0), Some(F::from_u8(50)));
+
+        unsafe {
+            assert_eq!(flat.get_unchecked(0, 1), F::from_u8(11));
+            assert_eq!(flat.get_unchecked(1, 0), F::from_u8(30));
+            assert_eq!(flat.get_unchecked(2, 2), F::from_u8(60));
+        }
+
+        assert_eq!(
+            &*flat.row_slice(0).unwrap(),
+            &[10, 11, 20, 21].map(F::from_u8)
+        );
+        unsafe {
+            assert_eq!(
+                &*flat.row_slice_unchecked(1),
+                &[30, 31, 40, 41].map(F::from_u8)
+            );
+            assert_eq!(
+                &*flat.row_subslice_unchecked(2, 0, 3),
+                &[50, 51, 60].map(F::from_u8)
+            );
+        }
+
+        assert_eq!(
+            flat.row(2).unwrap().into_iter().collect_vec(),
+            [50, 51, 60, 61].map(F::from_u8)
+        );
+        unsafe {
+            assert_eq!(
+                flat.row_unchecked(1).into_iter().collect_vec(),
+                [30, 31, 40, 41].map(F::from_u8)
+            );
+            assert_eq!(
+                flat.row_subseq_unchecked(0, 1, 4).into_iter().collect_vec(),
+                [11, 20, 21].map(F::from_u8)
+            );
+        }
+
+        assert!(flat.get(0, 4).is_none()); // Width out of bounds
+        assert!(flat.get(3, 0).is_none()); // Height out of bounds
+        assert!(flat.row(3).is_none()); // Height out of bounds
+        assert!(flat.row_slice(3).is_none()); // Height out of bounds
     }
 
     #[test]
@@ -148,7 +239,7 @@ mod tests {
         let flat = FlatMatrixView::<F, EF, _>::new(matrix);
 
         // Flattened row should concatenate basis coefficients of both EF elements.
-        let row: Vec<_> = flat.row(0).collect();
+        let row: Vec<_> = flat.first_row().unwrap().into_iter().collect();
         let expected = [1, 2, 10, 11].map(F::from_u8).to_vec();
 
         assert_eq!(row, expected);
@@ -162,7 +253,10 @@ mod tests {
         let matrix = RowMajorMatrix::new(vec![ef(1), ef(10)], 2);
         let flat = FlatMatrixView::<F, EF, _>::new(matrix);
 
-        assert_eq!(&*flat.row_slice(0), &[1, 2, 10, 11].map(F::from_u8));
+        assert_eq!(
+            &*flat.row_slice(0).unwrap(),
+            &[1, 2, 10, 11].map(F::from_u8)
+        );
     }
 
     #[test]
@@ -185,7 +279,7 @@ mod tests {
         let matrix = RowMajorMatrix::new(values, 3); // 1 row
         let flat = FlatMatrixView::<F, EF, _>::new(matrix);
 
-        let row: Vec<_> = flat.row(0).collect();
+        let row: Vec<_> = flat.first_row().unwrap().into_iter().collect();
         let expected = [0, 1, 10, 11, 20, 21].map(F::from_u8).to_vec();
         assert_eq!(row, expected);
     }
@@ -199,8 +293,8 @@ mod tests {
         let matrix = RowMajorMatrix::new(vec![ef(0), ef(10), ef(20), ef(30)], 2);
         let flat = FlatMatrixView::<F, EF, _>::new(matrix);
 
-        let row0: Vec<_> = flat.row(0).collect();
-        let row1: Vec<_> = flat.row(1).collect();
+        let row0: Vec<_> = flat.first_row().unwrap().into_iter().collect();
+        let row1: Vec<_> = flat.row(1).unwrap().into_iter().collect();
 
         assert_eq!(row0, [0, 1, 10, 11].map(F::from_u8).to_vec());
         assert_eq!(row1, [20, 21, 30, 31].map(F::from_u8).to_vec());
@@ -219,7 +313,7 @@ mod tests {
         let matrix = RowMajorMatrix::new(vec![ef(0), ef(10), ef(20)], 3); // 1 row, 3 EF elements
         let flat = FlatMatrixView::<F, EF, _>::new(matrix);
 
-        let mut row_iter = flat.row(0);
+        let mut row_iter = flat.row(0).unwrap().into_iter();
 
         // Expected flattened result
         let expected = [0, 1, 10, 11, 20, 21].map(F::from_u8);

@@ -12,7 +12,7 @@ use crate::util::reverse_matrix_index_bits;
 ///
 /// This trait allows interoperability between regular matrices and views
 /// that access their rows in a bit-reversed order.
-pub trait BitReversibleMatrix<T: Send + Sync>: Matrix<T> {
+pub trait BitReversibleMatrix<T: Send + Sync + Clone>: Matrix<T> {
     /// The type returned when this matrix is viewed in bit-reversed order.
     type BitRev: BitReversibleMatrix<T>;
 
@@ -42,7 +42,7 @@ impl BitReversalPerm {
     ///
     /// # Returns
     /// A `BitReversedMatrixView` that wraps the input with row reordering.
-    pub fn new_view<T: Send + Sync, Inner: Matrix<T>>(
+    pub fn new_view<T: Send + Sync + Clone, Inner: Matrix<T>>(
         inner: Inner,
     ) -> BitReversedMatrixView<Inner> {
         RowIndexMappedView {
@@ -134,7 +134,7 @@ mod tests {
         // Should map row indices via bit reversal
         let expected = [0, 4, 2, 6, 1, 5, 3, 7];
         for (i, &expected_row_idx) in expected.iter().enumerate() {
-            let row: Vec<_> = bitrev.row(i).collect();
+            let row: Vec<_> = bitrev.row(i).unwrap().into_iter().collect();
             assert_eq!(row, vec![expected_row_idx]);
         }
     }
