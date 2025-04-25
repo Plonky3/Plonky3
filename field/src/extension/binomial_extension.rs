@@ -615,7 +615,7 @@ pub(crate) fn vector_sub<
 pub(super) fn binomial_mul<
     F: Field,
     R: Algebra<F> + Algebra<R2>,
-    R2: Algebra<F> + Add<Output = R2> + Clone,
+    R2: Algebra<F>,
     const D: usize,
 >(
     a: &[R; D],
@@ -662,7 +662,7 @@ fn quadratic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R
 where
     F: Field,
     R: Algebra<F> + Algebra<R2>,
-    R2: Algebra<F> + Add<Output = R2> + Clone,
+    R2: Algebra<F>,
 {
     let b1_w = b[1].clone() * w;
 
@@ -710,12 +710,7 @@ fn cubic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
 
 /// karatsuba multiplication for cubic extension field
 #[inline]
-pub(crate) fn cubic_mul<
-    F: Field,
-    R: Algebra<F> + Algebra<R2>,
-    R2: Algebra<F> + Add<Output = R2> + Clone,
-    const D: usize,
->(
+pub(crate) fn cubic_mul<F: Field, R: Algebra<F> + Algebra<R2>, R2: Algebra<F>, const D: usize>(
     a: &[R; D],
     b: &[R2; D],
     res: &mut [R; D],
@@ -765,7 +760,7 @@ fn quartic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; 
 where
     F: Field,
     R: Algebra<F> + Algebra<R2>,
-    R2: Algebra<F> + Add<Output = R2> + Clone,
+    R2: Algebra<F>,
 {
     assert_eq!(D, 4);
     let b_r_rev: [R; 5] = [
@@ -813,7 +808,7 @@ fn quintic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; 
 where
     F: Field,
     R: Algebra<F> + Algebra<R2>,
-    R2: Algebra<F> + Add<Output = R2> + Clone,
+    R2: Algebra<F>,
 {
     assert_eq!(D, 5);
     let b_r_rev: [R; 6] = [

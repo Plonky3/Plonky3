@@ -255,24 +255,30 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
             // We need to stop at 4 as it's possible to overflow a u64 with 5 products.
             // That being said, the probability of this is tiny.
             _ => {
-                let lhs_chunks = lhs.chunks_exact(4);
-                let rhs_chunks = rhs.chunks_exact(4);
-                let acc = lhs_chunks.zip(rhs_chunks).fold(Self::ZERO, |acc, (l, r)| {
-                    acc + Self::dot_product::<4>(l.try_into().unwrap(), r.try_into().unwrap())
-                });
+                let acc =
+                    lhs.chunks_exact(4)
+                        .zip(rhs.chunks_exact(4))
+                        .fold(Self::ZERO, |acc, (l, r)| {
+                            acc + Self::dot_product::<4>(
+                                l.try_into().unwrap(),
+                                r.try_into().unwrap(),
+                            )
+                        });
+                // Index of first element of remaining:
+                let base = 4 * (N / 4);
                 match N & 3 {
                     0 => acc,
-                    1 => acc + lhs[4 * (N / 4)] * rhs[4 * (N / 4)],
+                    1 => acc + lhs[base] * rhs[base],
                     2 => {
                         acc + Self::dot_product::<2>(
-                            &lhs[(4 * (N / 4))..].try_into().unwrap(),
-                            &rhs[(4 * (N / 4))..].try_into().unwrap(),
+                            &lhs[base..].try_into().unwrap(),
+                            &rhs[base..].try_into().unwrap(),
                         )
                     }
                     3 => {
                         acc + Self::dot_product::<3>(
-                            &lhs[(4 * (N / 4))..].try_into().unwrap(),
-                            &rhs[(4 * (N / 4))..].try_into().unwrap(),
+                            &lhs[base..].try_into().unwrap(),
+                            &rhs[base..].try_into().unwrap(),
                         )
                     }
                     _ => unreachable!(),
