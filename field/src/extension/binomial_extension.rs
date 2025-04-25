@@ -620,28 +620,32 @@ pub(super) fn binomial_mul<
 ) {
     match D {
         2 => {
-            // Karatsuba multiplication for two-term polynomials
+            // Karatsuba multiplication for two-term polynomials (degree 2 extension).
             //
             // Let the elements be:
-            // A = a0 + a1·X
-            // B = b0 + b1·X
+            // ```text
+            //     A = a0 + a1·X
+            //     B = b0 + b1·X
+            // ```
+            //
+            // The multiplication follows:
+            // ```text
+            //     A·B = a0·b0 + (a0·b1 + a1·b0)·X + a1·b1·X²
+            // ```
+            // and since X² ≡ w (mod X² - w), the X² term folds into the constant term.
 
-            // Compute v0 = a0 · b0, the constant term from multiplying A and B
-            let v0 = a[0].clone() * b[0].clone();
+            // Perform simple Karatsuba:
+            // - v0: X⁰ term = a0·b0
+            // - v1: X¹ term = a0·b1 + a1·b0
+            // - v2: X² term = a1·b1
+            let (v0, v1, v2) = karatsuba(a[0].clone(), a[1].clone(), b[0].clone(), b[1].clone());
 
-            // Compute v1 = a1 · b1, the coefficient of X², which becomes w·v1 in the result
-            let v1 = a[1].clone() * b[1].clone();
+            // Compute result:
+            // Coefficient of X⁰: v0 + w·v2
+            res[0] = v0 + v2.clone() * w;
 
-            // Compute v2 = (a0 + a1) · (b0 + b1)
-            let v2 = (a[0].clone() + a[1].clone()) * (b[0].clone() + b[1].clone());
-
-            // Result coefficient for X⁰:
-            // = a0·b0 + w·a1·b1
-            res[0] = v0.clone() + v1.clone() * w;
-
-            // Result coefficient for X¹:
-            // = (a0 + a1)(b0 + b1) - a0·b0 - a1·b1
-            res[1] = v2 - v0 - v1;
+            // Coefficient of X¹: v1
+            res[1] = v1;
         }
         3 => cubic_mul(a, b, res, w),
         4 => quartic_karatsuba_mul(a, b, res, w),
@@ -734,6 +738,33 @@ pub(crate) fn cubic_square<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: u
     res[2] = a[1].square() + (a[0].clone() * a[2].clone()).double();
 }
 
+/// Perform a simple Karatsuba multiplication for two degree-1 polynomials.
+///
+/// Given:
+/// ```text
+///     A = a0 + a1·X
+///     B = b0 + b1·X
+/// ```
+/// computes and returns:
+/// ```text
+///     (a0·b0, a0·b1 + a1·b0, a1·b1)
+/// ```
+/// representing coefficients for X⁰, X¹, and X² respectively.
+#[inline]
+fn karatsuba<R, R2>(a0: R, a1: R, b0: R2, b1: R2) -> (R, R, R)
+where
+    R: Add<Output = R> + Sub<Output = R> + Mul<R2, Output = R> + Clone,
+    R2: Add<Output = R2> + Clone,
+{
+    // Compute p0 = a0·b0
+    let p0 = a0.clone() * b0.clone();
+    // Compute p2 = a1·b1
+    let p2 = a1.clone() * b1.clone();
+    // Compute p1 = (a0 + a1)·(b0 + b1) - p0 - p2
+    let p1 = (a0 + a1) * (b0 + b1) - p0.clone() - p2.clone();
+    (p0, p1, p2)
+}
+
 /// Optimized Karatsuba multiplication for extension degree 4.
 ///
 /// Let the input polynomials be:
@@ -767,70 +798,51 @@ where
     // 1. Split A into A0 = a0 + a1·X and A1 = a2 + a3·X
     // 2. Split B into B0 = b0 + b1·X and B1 = b2 + b3·X
 
-    // Compute A0·B0 = (a0 + a1·X)(b0 + b1·X)
-    // = a0·b0 + (a0·b1 + a1·b0)·X + a1·b1·X²
+    // 1. Compute A0·B0 using small Karatsuba:
+    //    - a0b0_0: X⁰ term from A0·B0
+    //    - a0b0_1: X¹ term from A0·B0
+    //    - a0b0_2: X² term from A0·B0
+    let (a0b0_0, a0b0_1, a0b0_2) =
+        karatsuba(a[0].clone(), a[1].clone(), b[0].clone(), b[1].clone());
 
-    // X⁰ term from A0·B0
-    let a0b0_0 = a[0].clone() * b[0].clone();
-    // X¹ term from A0·B0
-    let a0b0_1 = a[0].clone() * b[1].clone() + a[1].clone() * b[0].clone();
-    // X² term from A0·B0
-    let a0b0_2 = a[1].clone() * b[1].clone();
+    // 2. Compute A1·B1 using small Karatsuba:
+    //    - a1b1_0: X⁰ term from A1·B1
+    //    - a1b1_1: X¹ term from A1·B1
+    //    - a1b1_2: X² term from A1·B1 -> not used here (degree ≥ 4)
+    let (a1b1_0, a1b1_1, _a1b1_2) =
+        karatsuba(a[2].clone(), a[3].clone(), b[2].clone(), b[3].clone());
 
-    // Compute partial A1·B1 = (a2 + a3·X)(b2 + b3·X)
-    // = a2·b2 + (a2·b3 + a3·b2)·X + a3·b3·X²
-    // We compute only the terms we need for reduction mod X⁴ - w
+    // 3. Compute (A0 + A1)·(B0 + B1) using small Karatsuba:
+    //    - mid_0: X⁰ term from (A0+A1)(B0+B1)
+    //    - mid_1: X¹ term from (A0+A1)(B0+B1)
+    //    - mid_2: X² term from (A0+A1)(B0+B1) -> not used here (degree ≥ 4)
+    let (mid_0, mid_1, _mid_2_unused) = karatsuba(
+        a[0].clone() + a[2].clone(),
+        a[1].clone() + a[3].clone(),
+        b[0].clone() + b[2].clone(),
+        b[1].clone() + b[3].clone(),
+    );
 
-    // a2·b2 (used in X⁰ and X²)
-    let a1b1_0 = a[2].clone() * b[2].clone();
-    // a2·b3 (used in X¹)
-    let a1b1_01 = a[2].clone() * b[3].clone();
-    // a3·b2 (used in X¹)
-    let a1b1_10 = a[3].clone() * b[2].clone();
-    // X¹ term from A1·B1
-    let a1b1_1 = a1b1_01.clone() + a1b1_10.clone();
-
-    // Compute A0 + A1 = (a0 + a2) + (a1 + a3)·X
-
-    // low term of (A0 + A1)
-    let a_sum_0 = a[0].clone() + a[2].clone();
-    // high term of (A0 + A1)
-    let a_sum_1 = a[1].clone() + a[3].clone();
-
-    // Compute B0 + B1 = (b0 + b2) + (b1 + b3)·X
-
-    // low term of (B0 + B1)
-    let b_sum_0 = b[0].clone() + b[2].clone();
-    // high term of (B0 + B1)
-    let b_sum_1 = b[1].clone() + b[3].clone();
-
-    // Compute middle product: (A0 + A1)(B0 + B1)
-    // = a_sum_0·b_sum_0 + (a_sum_0·b_sum_1 + a_sum_1·b_sum_0)·X + a_sum_1·b_sum_1·X²
-    // Only mid_0 (X⁰) and mid_1 (X¹) are used; X² term is ignored (degree ≥ 4)
-
-    // X⁰ term of middle product
-    let mid_0 = a_sum_0.clone() * b_sum_0.clone();
-    // X¹ term of middle product
-    let mid_1 = a_sum_0 * b_sum_1 + a_sum_1 * b_sum_0;
-
-    // Precompute w·b3 for folding a3·b3·X⁴ into constant term (X⁴ ≡ w)
+    // 4. Precompute w·b3 to fold the X⁴ term (a3·b3·X⁴) back to degree 0.
     let b3_w = b[3].clone() * w;
 
-    // Compute X⁰ term:
-    // = a0·b0 + a1·b3·w + a2·b2·w + a3·b1·w
+    // 5. Assemble the output coefficients:
+
+    // Coefficient for X⁰:
+    // = a0·b0 + (a1·b3 + a2·b2 + a3·b1)·w
     res[0] = a0b0_0.clone()
         + a[1].clone() * b3_w.clone()
         + (a1b1_0.clone() + a[3].clone() * b[1].clone()) * w;
 
-    // Compute X¹ term:
-    // = a0·b1 + a1·b0 + a2·b3·w + a3·b2·w
-    res[1] = a0b0_1.clone() + (a1b1_01 + a1b1_10) * w;
+    // Coefficient for X¹:
+    // = (a0·b1 + a1·b0) + (a2·b3 + a3·b2)·w
+    res[1] = a0b0_1.clone() + a1b1_1.clone() * w;
 
-    // Compute X² term:
-    // = a1·b1 + (middle - a0·b0 - a2·b2) + a3·b3·w
+    // Coefficient for X²:
+    // = (a1·b1) + ((mid_0 - a0·b0 - a2·b2)) + (a3·b3)·w
     res[2] = a0b0_2 + (mid_0 - a0b0_0 - a1b1_0) + a[3].clone() * b3_w;
 
-    // Compute X³ term:
-    // = mid_1 - a0·b1 - a1·b0 - a2·b3 - a3·b2
+    // Coefficient for X³:
+    // = (mid_1) - (a0·b1 + a1·b0 + a2·b3 + a3·b2)
     res[3] = mid_1 - a0b0_1 - a1b1_1;
 }
