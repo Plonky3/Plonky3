@@ -405,17 +405,6 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
     }
 
     #[inline]
-    fn get(&self, r: usize, c: usize) -> Option<T> {
-        // We need to check the bound c < self.width() as
-        // self.values.borrow().get(r * self.width + c) will produce
-        // a value for r * self.width + c < self.height()*self.width().
-        (r < self.height() && c < self.width()).then(|| {
-            // We just checked the bounds, so this is safe.
-            unsafe { self.get_unchecked(r, c).clone() }
-        })
-    }
-
-    #[inline]
     unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
         unsafe {
             // Safety: The caller must ensure that r < self.height() and c < self.width().
@@ -423,36 +412,6 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
                 .borrow()
                 .get_unchecked(r * self.width + c)
                 .clone()
-        }
-    }
-
-    #[inline]
-    fn row(
-        &self,
-        r: usize,
-    ) -> Option<impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync>> {
-        (r < self.height()).then(|| unsafe {
-            // Safety: We know that the bounds are in the slice because of the previous check.
-            self.values
-                .borrow()
-                .get_unchecked(r * self.width..(r + 1) * self.width)
-                .iter()
-                .cloned()
-        })
-    }
-
-    #[inline]
-    unsafe fn row_unchecked(
-        &self,
-        r: usize,
-    ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
-        unsafe {
-            // Safety: The caller must ensure that r < self.height().
-            self.values
-                .borrow()
-                .get_unchecked(r * self.width..(r + 1) * self.width)
-                .iter()
-                .cloned()
         }
     }
 
@@ -470,23 +429,6 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
                 .get_unchecked(r * self.width + start..r * self.width + end)
                 .iter()
                 .cloned()
-        }
-    }
-
-    #[inline]
-    fn row_slice(&self, r: usize) -> Option<impl Deref<Target = [T]>> {
-        self.values
-            .borrow()
-            .get(r * self.width..(r + 1) * self.width)
-    }
-
-    #[inline]
-    unsafe fn row_slice_unchecked(&self, r: usize) -> impl Deref<Target = [T]> {
-        unsafe {
-            // Safety: The caller must ensure that r < self.height()
-            self.values
-                .borrow()
-                .get_unchecked(r * self.width..(r + 1) * self.width)
         }
     }
 

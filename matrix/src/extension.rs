@@ -40,14 +40,6 @@ where
         self.0.height()
     }
 
-    fn get(&self, r: usize, c: usize) -> Option<F> {
-        // The c'th base field element in a row of extension field elements is
-        // at index c % EF::DIMENSION in the c / EF::DIMENSION'th extension element.
-        let c_inner = c / EF::DIMENSION;
-        let inner = self.0.get(r, c_inner)?;
-        Some(inner.as_basis_coefficients_slice()[c % EF::DIMENSION])
-    }
-
     unsafe fn get_unchecked(&self, r: usize, c: usize) -> F {
         // The c'th base field element in a row of extension field elements is
         // at index c % EF::DIMENSION in the c / EF::DIMENSION'th extension element.
@@ -58,17 +50,6 @@ where
             self.0.get_unchecked(r, c_inner)
         };
         inner.as_basis_coefficients_slice()[c % EF::DIMENSION]
-    }
-
-    fn row(
-        &self,
-        r: usize,
-    ) -> Option<impl IntoIterator<Item = F, IntoIter = impl Iterator<Item = F> + Send + Sync>> {
-        Some(FlatIter {
-            inner: self.0.row(r)?.into_iter().peekable(),
-            idx: 0,
-            _phantom: PhantomData,
-        })
     }
 
     unsafe fn row_unchecked(
@@ -109,17 +90,6 @@ where
             }
             .take(len)
         }
-    }
-
-    fn row_slice(&self, r: usize) -> Option<impl Deref<Target = [F]>> {
-        Some(
-            self.0
-                .row_slice(r)?
-                .iter()
-                .flat_map(|val| val.as_basis_coefficients_slice())
-                .copied()
-                .collect::<Vec<_>>(),
-        )
     }
 
     unsafe fn row_slice_unchecked(&self, r: usize) -> impl Deref<Target = [F]> {
@@ -172,8 +142,6 @@ mod tests {
     use crate::dense::RowMajorMatrix;
     type F = Mersenne31;
     type EF = Complex<Mersenne31>;
-
-    // TODO: ADD Tests
 
     #[test]
     fn flat_matrix() {

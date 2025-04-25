@@ -19,7 +19,7 @@ pub struct HorizontalPair<First, Second> {
 impl<First, Second> VerticalPair<First, Second> {
     pub fn new<T>(first: First, second: Second) -> Self
     where
-        T: Send + Sync,
+        T: Send + Sync + Clone,
         First: Matrix<T>,
         Second: Matrix<T>,
     {
@@ -31,7 +31,7 @@ impl<First, Second> VerticalPair<First, Second> {
 impl<First, Second> HorizontalPair<First, Second> {
     pub fn new<T>(first: First, second: Second) -> Self
     where
-        T: Send + Sync,
+        T: Send + Sync + Clone,
         First: Matrix<T>,
         Second: Matrix<T>,
     {
@@ -40,7 +40,7 @@ impl<First, Second> HorizontalPair<First, Second> {
     }
 }
 
-impl<T: Send + Sync, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
+impl<T: Send + Sync + Clone, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
     for VerticalPair<First, Second>
 {
     fn width(&self) -> usize {
@@ -49,14 +49,6 @@ impl<T: Send + Sync, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
 
     fn height(&self) -> usize {
         self.first.height() + self.second.height()
-    }
-
-    fn get(&self, r: usize, c: usize) -> Option<T> {
-        if r < self.first.height() {
-            self.first.get(r, c)
-        } else {
-            self.second.get(r - self.first.height(), c)
-        }
     }
 
     unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
@@ -68,20 +60,6 @@ impl<T: Send + Sync, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
                 self.second.get_unchecked(r - self.first.height(), c)
             }
         }
-    }
-
-    fn row(
-        &self,
-        r: usize,
-    ) -> Option<impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync>> {
-        Some(if r < self.first.height() {
-            unsafe {
-                // Safety: We just checked that r < self.first.height()
-                EitherRow::Left(self.first.row_unchecked(r).into_iter())
-            }
-        } else {
-            EitherRow::Right(self.second.row(r - self.first.height())?.into_iter())
-        })
     }
 
     unsafe fn row_unchecked(
@@ -122,17 +100,6 @@ impl<T: Send + Sync, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
         }
     }
 
-    fn row_slice(&self, r: usize) -> Option<impl Deref<Target = [T]>> {
-        Some(if r < self.first.height() {
-            unsafe {
-                // Safety: We just checked that r < self.first.height()
-                EitherRow::Left(self.first.row_slice_unchecked(r))
-            }
-        } else {
-            EitherRow::Right(self.second.row_slice(r - self.first.height())?)
-        })
-    }
-
     unsafe fn row_slice_unchecked(&self, r: usize) -> impl Deref<Target = [T]> {
         unsafe {
             // Safety: The caller must ensure that r < self.height()
@@ -165,7 +132,7 @@ impl<T: Send + Sync, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
     }
 }
 
-impl<T: Send + Sync, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
+impl<T: Send + Sync + Clone, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
     for HorizontalPair<First, Second>
 {
     fn width(&self) -> usize {
@@ -174,14 +141,6 @@ impl<T: Send + Sync, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
 
     fn height(&self) -> usize {
         self.first.height()
-    }
-
-    fn get(&self, r: usize, c: usize) -> Option<T> {
-        if c < self.first.width() {
-            self.first.get(r, c)
-        } else {
-            self.second.get(r, c - self.first.width())
-        }
     }
 
     unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
@@ -193,13 +152,6 @@ impl<T: Send + Sync, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
                 self.second.get_unchecked(r, c - self.first.width())
             }
         }
-    }
-
-    fn row(
-        &self,
-        r: usize,
-    ) -> Option<impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync>> {
-        Some(self.first.row(r)?.into_iter().chain(self.second.row(r)?))
     }
 
     unsafe fn row_unchecked(

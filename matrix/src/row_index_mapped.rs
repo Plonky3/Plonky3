@@ -53,7 +53,7 @@ pub struct RowIndexMappedView<IndexMap, Inner> {
     pub inner: Inner,
 }
 
-impl<T: Send + Sync, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
+impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
     for RowIndexMappedView<IndexMap, Inner>
 {
     fn width(&self) -> usize {
@@ -64,26 +64,11 @@ impl<T: Send + Sync, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         self.index_map.height()
     }
 
-    fn get(&self, r: usize, c: usize) -> Option<T> {
-        // Need to check r < self.height() as `map_row_index` can return anything when given something
-        // out of the range `0..self.height()`.
-        (r < self.height() && c < self.width()).then(|| unsafe { self.get_unchecked(r, c) })
-    }
-
     unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
         unsafe {
             // Safety: The caller must ensure that r < self.height() and c < self.width().
             self.inner.get_unchecked(self.index_map.map_row_index(r), c)
         }
-    }
-
-    // Override these methods so we use the potentially optimized inner methods instead of defaults.
-
-    fn row(
-        &self,
-        r: usize,
-    ) -> Option<impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync>> {
-        (r < self.height()).then(|| unsafe { self.row_unchecked(r) })
     }
 
     unsafe fn row_unchecked(
@@ -107,16 +92,6 @@ impl<T: Send + Sync, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
             self.inner
                 .row_subseq_unchecked(self.index_map.map_row_index(r), start, end)
         }
-    }
-
-    fn row_slice(&self, r: usize) -> Option<impl Deref<Target = [T]>> {
-        // Need to check r < self.height() as `map_row_index` can return anything when given something
-        // out of the range `0..self.height()`.
-        (r < self.height()).then(|| unsafe {
-            // Safety: We just checked that r < self.height().
-            self.inner
-                .row_slice_unchecked(self.index_map.map_row_index(r))
-        })
     }
 
     unsafe fn row_slice_unchecked(&self, r: usize) -> impl Deref<Target = [T]> {

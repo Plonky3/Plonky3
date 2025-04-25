@@ -56,7 +56,7 @@ impl Display for Dimensions {
 /// The `Matrix` trait provides a uniform interface for accessing rows, elements,
 /// and computing with matrices in both sequential and parallel contexts. It supports
 /// packing strategies for SIMD optimizations and interaction with extension fields.
-pub trait Matrix<T: Send + Sync>: Send + Sync {
+pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
     /// Returns the number of columns in the matrix.
     fn width(&self) -> usize;
 
@@ -71,11 +71,19 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         }
     }
 
+    // The methods:
+    // get, get_unchecked, row, row_unchecked, row_subseq_unchecked, row_slice, row_slice_unchecked, row_subslice_unchecked
+    // are all defined in a circular manner so you only need to implement a subset of them.
+    // In particular is is enough to implement just one of: row_unchecked, row_subseq_unchecked
+    //
+    // That being said, most implementations will want to implement several methods for performance reasons.
+
     /// Returns the element at the given row and column.
     ///
     /// Returns `None` if either `r >= height()` or `c >= width()`.
+    #[inline]
     fn get(&self, r: usize, c: usize) -> Option<T> {
-        self.row(r)?.into_iter().nth(c)
+        (r < self.height() && c < self.width()).then(|| unsafe { self.get_unchecked(r, c) })
     }
 
     /// Returns the element at the given row and column.
@@ -85,8 +93,9 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     /// # Safety
     /// The caller must ensure that `r < self.height()` and `c < self.width()`.
     /// Breaking any of these assumptions is considered undefined behaviour.
+    #[inline]
     unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
-        unsafe { self.get(r, c).unwrap_unchecked() }
+        unsafe { self.row_slice_unchecked(r)[c].clone() }
     }
 
     /// Returns an iterator over the elements of the `r`-th row.
@@ -94,10 +103,16 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     /// The iterator will have `self.width()` elements.
     ///
     /// Returns None if `r >= height()`.
+    #[inline]
     fn row(
         &self,
         r: usize,
-    ) -> Option<impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync>>;
+    ) -> Option<impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync>> {
+        (r < self.height()).then(|| unsafe {
+            // Safety: We know that `r < self.height()`.
+            self.row_unchecked(r)
+        })
+    }
 
     /// Returns an iterator over the elements of the `r`-th row.
     ///
@@ -108,11 +123,12 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     /// # Safety
     /// The caller must ensure that `r < self.height()`.
     /// Breaking this assumption is considered undefined behaviour.
+    #[inline]
     unsafe fn row_unchecked(
         &self,
         r: usize,
     ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
-        unsafe { self.row(r).unwrap_unchecked() }
+        unsafe { self.row_subseq_unchecked(r, 0, self.width()) }
     }
 
     /// Returns an iterator over the elements of the `r`-th row from position `start` to `end`.
@@ -124,6 +140,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     /// # Safety
     /// The caller must ensure that `r < self.height()` and `start <= end <= self.width()`.
     /// Breaking any of these assumptions is considered undefined behaviour.
+    #[inline]
     unsafe fn row_subseq_unchecked(
         &self,
         r: usize,
@@ -141,8 +158,12 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     /// Returns the elements of the `r`-th row as something which can be coerced to a slice.
     ///
     /// Returns None if `r >= height()`.
+    #[inline]
     fn row_slice(&self, r: usize) -> Option<impl Deref<Target = [T]>> {
-        self.row(r).map(|x| x.into_iter().collect_vec())
+        (r < self.height()).then(|| unsafe {
+            // Safety: We know that `r < self.height()`.
+            self.row_slice_unchecked(r)
+        })
     }
 
     /// Returns the elements of the `r`-th row as something which can be coerced to a slice.
@@ -152,8 +173,9 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     /// # Safety
     /// The caller must ensure that `r < self.height()`.
     /// Breaking this assumption is considered undefined behaviour.
+    #[inline]
     unsafe fn row_slice_unchecked(&self, r: usize) -> impl Deref<Target = [T]> {
-        unsafe { self.row_unchecked(r).into_iter().collect_vec() }
+        unsafe { self.row_subslice_unchecked(r, 0, self.width()) }
     }
 
     /// Returns the elements of the `r`-th row as something which can be coerced to a slice.
@@ -165,6 +187,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     /// # Safety
     /// The caller must ensure that `r < self.height()` and `start <= end <= self.width()`.
     /// Breaking any of these assumptions is considered undefined behaviour.
+    #[inline]
     unsafe fn row_subslice_unchecked(
         &self,
         r: usize,
@@ -179,6 +202,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     }
 
     /// Returns an iterator over all rows in the matrix.
+    #[inline]
     fn rows(&self) -> impl Iterator<Item = impl Iterator<Item = T>> + Send + Sync {
         unsafe {
             // Safe as the row index is less than height().
@@ -187,6 +211,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     }
 
     /// Returns a parallel iterator over all rows in the matrix.
+    #[inline]
     fn par_rows(
         &self,
     ) -> impl IndexedParallelIterator<Item = impl Iterator<Item = T>> + Send + Sync {
@@ -211,22 +236,25 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     /// Returns an iterator over the first row of the matrix.
     ///
     /// Returns None if `height() == 0`.
-    fn first_row(&self) -> impl Iterator<Item = T> + Send + Sync {
-        assert!(self.height() > 0, "Matrix has no rows.");
-        unsafe {
-            // Safe as the height must be > 0.
-            self.row_unchecked(0).into_iter()
-        }
+    #[inline]
+    fn first_row(
+        &self,
+    ) -> Option<impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync>> {
+        self.row(0)
     }
 
     /// Returns an iterator over the last row of the matrix.
     ///
     /// Returns None if `height() == 0`.
-    fn last_row(&self) -> impl Iterator<Item = T> + Send + Sync {
-        assert!(self.height() > 0, "Matrix has no rows.");
-        unsafe {
-            // Safe as the height must be > 0.
-            self.row_unchecked(self.height() - 1).into_iter()
+    #[inline]
+    fn last_row(
+        &self,
+    ) -> Option<impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync>> {
+        if self.height() == 0 {
+            None
+        } else {
+            // Safety: We know that the row index is less than height().
+            unsafe { Some(self.row_unchecked(self.height() - 1)) }
         }
     }
 
@@ -516,19 +544,12 @@ mod tests {
             self.height
         }
 
-        fn row(
-            &self,
-            r: usize,
-        ) -> Option<impl IntoIterator<Item = u32, IntoIter = impl Iterator<Item = u32> + Send + Sync>>
-        {
-            Some(self.data.get(r)?.clone())
-        }
-
         unsafe fn row_unchecked(
             &self,
             r: usize,
         ) -> impl IntoIterator<Item = u32, IntoIter = impl Iterator<Item = u32> + Send + Sync>
         {
+            // Just a mock implementation so we just do the easy safe thing.
             self.data[r].clone()
         }
     }
@@ -570,7 +591,7 @@ mod tests {
             width: 3,
             height: 3,
         };
-        let mut first_row = matrix.first_row();
+        let mut first_row = matrix.first_row().unwrap().into_iter();
         assert_eq!(first_row.next(), Some(1));
         assert_eq!(first_row.next(), Some(2));
         assert_eq!(first_row.next(), Some(3));
@@ -583,10 +604,23 @@ mod tests {
             width: 3,
             height: 3,
         };
-        let mut last_row = matrix.last_row();
+        let mut last_row = matrix.last_row().unwrap().into_iter();
         assert_eq!(last_row.next(), Some(7));
         assert_eq!(last_row.next(), Some(8));
         assert_eq!(last_row.next(), Some(9));
+    }
+
+    #[test]
+    fn test_first_last_row_empty_matrix() {
+        let matrix = MockMatrix {
+            data: vec![],
+            width: 3,
+            height: 0,
+        };
+        let first_row = matrix.first_row();
+        let last_row = matrix.last_row();
+        assert!(first_row.is_none());
+        assert!(last_row.is_none());
     }
 
     #[test]

@@ -16,7 +16,7 @@ pub struct HorizontallyTruncated<T, Inner> {
 
 impl<T, Inner: Matrix<T>> HorizontallyTruncated<T, Inner>
 where
-    T: Send + Sync,
+    T: Send + Sync + Clone,
 {
     /// Construct a new horizontally truncated view of a matrix.
     ///
@@ -36,7 +36,7 @@ where
 
 impl<T, Inner> Matrix<T> for HorizontallyTruncated<T, Inner>
 where
-    T: Send + Sync,
+    T: Send + Sync + Clone,
     Inner: Matrix<T>,
 {
     /// Returns the number of columns exposed by the truncated matrix.
@@ -51,15 +51,6 @@ where
         self.inner.height()
     }
 
-    /// Get the element at the given row and column.
-    ///
-    /// Returns None if `c >= truncated_width`, or if `r > self.height()`.
-    #[inline(always)]
-    fn get(&self, r: usize, c: usize) -> Option<T> {
-        (c < self.truncated_width && r < self.height())
-            .then(|| self.inner.get(r, c).expect("This should be unreachable without undefined behaviour. Most likely cause is inner.width() being incorrect."))
-    }
-
     #[inline(always)]
     unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
         unsafe {
@@ -68,23 +59,13 @@ where
         }
     }
 
-    fn row(
-        &self,
-        r: usize,
-    ) -> Option<impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync>> {
-        (r < self.height()).then(|| unsafe {
-            // Safety: We just checked that `r < self.height()`.
-            self.inner.row_subseq_unchecked(r, 0, self.truncated_width)
-        })
-    }
-
     unsafe fn row_unchecked(
         &self,
         r: usize,
     ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
         unsafe {
-            // Safety: The caller must ensure that `r < self.height()`.
-            self.inner.row_subseq_unchecked(r, 0, self.truncated_width)
+            // Safety: The caller must ensure that r < self.height() and start <= end <= self.width().
+            self.inner.row_unchecked(r)
         }
     }
 
@@ -98,14 +79,6 @@ where
             // Safety: The caller must ensure that r < self.height() and start <= end <= self.width().
             self.inner.row_subseq_unchecked(r, start, end)
         }
-    }
-
-    fn row_slice(&self, r: usize) -> Option<impl core::ops::Deref<Target = [T]>> {
-        (r < self.height()).then(|| unsafe {
-            // Safety: We just checked that `r < self.height()`.
-            self.inner
-                .row_subslice_unchecked(r, 0, self.truncated_width)
-        })
     }
 
     unsafe fn row_slice_unchecked(&self, r: usize) -> impl core::ops::Deref<Target = [T]> {
@@ -128,8 +101,6 @@ where
         }
     }
 }
-
-// TODO: Test row_subset_unchecked, row_slice, row_slice_unchecked, row_subslice_unchecked.
 
 #[cfg(test)]
 mod tests {

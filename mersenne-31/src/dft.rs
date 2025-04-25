@@ -70,7 +70,13 @@ fn dft_postprocess(input: RowMajorMatrix<C>) -> RowMajorMatrix<C> {
     let mut omega_j = omega;
 
     let mut output = Vec::with_capacity((h + 1) * input.width());
-    output.extend(input.first_row().map(|x| C::new_real(x.real() + x.imag())));
+    output.extend(
+        input
+            .first_row()
+            .unwrap() // The matrix is non-empty so this unwrap should never panic.
+            .into_iter()
+            .map(|x| C::new_real(x.real() + x.imag())),
+    );
 
     for j in 1..h {
         let row_iter = unsafe {
@@ -87,7 +93,13 @@ fn dft_postprocess(input: RowMajorMatrix<C>) -> RowMajorMatrix<C> {
         omega_j *= omega;
     }
 
-    output.extend(input.first_row().map(|x| C::new_real(x.real() - x.imag())));
+    output.extend(
+        input
+            .first_row()
+            .unwrap() // The matrix is non-empty so this unwrap should never panic.
+            .into_iter()
+            .map(|x| C::new_real(x.real() - x.imag())),
+    );
     debug_assert_eq!(output.len(), (h + 1) * input.width());
     RowMajorMatrix::new(output, input.width())
 }

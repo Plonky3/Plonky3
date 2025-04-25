@@ -27,7 +27,7 @@ impl VerticallyStridedRowIndexMap {
     /// - `inner`: The inner matrix to view.
     /// - `stride`: The number of rows between each selected row.
     /// - `offset`: The initial row to start from.
-    pub fn new_view<T: Send + Sync, Inner: Matrix<T>>(
+    pub fn new_view<T: Send + Sync + Clone, Inner: Matrix<T>>(
         inner: Inner,
         stride: usize,
         offset: usize,
