@@ -1,9 +1,11 @@
+//! See `prover.rs` for an overview of the protocol and a more detailed soundness analysis.
+
 use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_air::{Air, BaseAir};
-use p3_challenger::{CanObserve, CanSample, FieldChallenger};
+use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
@@ -92,6 +94,11 @@ where
 
     challenger.observe(commitments.trace.clone());
     challenger.observe_slice(public_values);
+
+    // Get the first Fiat Shamir challenge which will be used to combine all constraint polynomials
+    // into a single polynomial.
+    //
+    // Soundness Error: n/|EF| where n is the number of constraints.
     let alpha: SC::Challenge = challenger.sample_algebra_element();
     challenger.observe(commitments.quotient_chunks.clone());
 
@@ -101,7 +108,10 @@ where
         challenger.observe(r_commit);
     }
 
-    let zeta: SC::Challenge = challenger.sample();
+    // Get an out-of-domain point to open our values at.
+    //
+    // Soundness Error: dN/|EF| where `N` is the trace length and our constraint polynomial has degree `d`.
+    let zeta: SC::Challenge = challenger.sample_algebra_element();
     let zeta_next = init_trace_domain.next_point(zeta).unwrap();
 
     // We've already checked that commitments.random and opened_values.random are present if and only if ZK is enabled.
