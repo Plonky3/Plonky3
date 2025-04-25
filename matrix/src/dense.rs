@@ -470,7 +470,7 @@ impl<T: Copy + Default + Send + Sync, V: DenseStorage<T>> DenseMatrix<T, V> {
         RowMajorMatrix::new(values, self.height())
     }
 
-    /// Transpose the matrix out of place copying the results into the given matrix.
+    /// Transpose the matrix returning the result in `other` without intermediate allocation.
     pub fn transpose_into<W: DenseStorage<T> + BorrowMut<[T]>>(
         &self,
         other: &mut DenseMatrix<T, W>,
