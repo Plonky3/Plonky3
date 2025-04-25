@@ -22,8 +22,8 @@ use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::utils::{
-    from_monty, halve_u32, large_monty_reduce, monty_reduce, monty_reduce_u128, to_monty,
-    to_monty_64, to_monty_64_signed, to_monty_signed,
+    from_monty, halve_u32, large_monty_reduce, monty_reduce, to_monty, to_monty_64,
+    to_monty_64_signed, to_monty_signed,
 };
 use crate::{FieldParameters, MontyParameters, RelativelyPrimePower, TwoAdicData};
 
@@ -220,79 +220,62 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
         }
     }
 
-    fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
+    fn dot_product<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
         match N {
             0 => Self::ZERO,
-            1 => u[0] * v[0],
+            1 => lhs[0] * rhs[0],
             2 => {
                 // As all values are < P < 2^31, the products are < P^2 < 2^31P.
                 // Hence, summing two together we stay below 2^32P which means
                 // monty_reduce will produce a valid result.
-                let u64_prod_sum = (u[0].value as u64) * (v[0].value as u64)
-                    + (u[1].value as u64) * (v[1].value as u64);
+                let u64_prod_sum = (lhs[0].value as u64) * (rhs[0].value as u64)
+                    + (lhs[1].value as u64) * (rhs[1].value as u64);
                 Self::new_monty(monty_reduce::<FP>(u64_prod_sum))
             }
             3 => {
                 // As all values are < P < 2^31, the products are < P^2 < 2^31P.
                 // Hence, summing three together will not overflow a u64 but will be
                 // larger than 2^32P.
-                let u64_prod_sum = (u[0].value as u64) * (v[0].value as u64)
-                    + (u[1].value as u64) * (v[1].value as u64)
-                    + (u[2].value as u64) * (v[2].value as u64);
+                let u64_prod_sum = (lhs[0].value as u64) * (rhs[0].value as u64)
+                    + (lhs[1].value as u64) * (rhs[1].value as u64)
+                    + (lhs[2].value as u64) * (rhs[2].value as u64);
                 Self::new_monty(large_monty_reduce::<FP>(u64_prod_sum))
             }
             4 => {
                 // As all values are < P < 2^31, the products are < P^2 < 2^31P.
                 // Hence, summing four together will not overflow a u64 but will be
                 // larger than 2^32P.
-                let u64_prod_sum = (u[0].value as u64) * (v[0].value as u64)
-                    + (u[1].value as u64) * (v[1].value as u64)
-                    + (u[2].value as u64) * (v[2].value as u64)
-                    + (u[3].value as u64) * (v[3].value as u64);
+                let u64_prod_sum = (lhs[0].value as u64) * (rhs[0].value as u64)
+                    + (lhs[1].value as u64) * (rhs[1].value as u64)
+                    + (lhs[2].value as u64) * (rhs[2].value as u64)
+                    + (lhs[3].value as u64) * (rhs[3].value as u64);
                 Self::new_monty(large_monty_reduce::<FP>(u64_prod_sum))
-            }
-            5 => {
-                let (u_left, u_right) = u.split_at(4);
-                let (v_left, v_right) = u.split_at(4);
-                Self::dot_product::<4>(u_left.try_into().unwrap(), v_left.try_into().unwrap())
-                    + u_right[0] * v_right[0]
-            }
-            6 => {
-                let (u_left, u_right) = u.split_at(4);
-                let (v_left, v_right) = u.split_at(4);
-                Self::dot_product::<4>(u_left.try_into().unwrap(), v_left.try_into().unwrap())
-                    + Self::dot_product::<2>(
-                        u_right.try_into().unwrap(),
-                        v_right.try_into().unwrap(),
-                    )
-            }
-            7 => {
-                let (u_left, u_right) = u.split_at(4);
-                let (v_left, v_right) = u.split_at(4);
-                Self::dot_product::<4>(u_left.try_into().unwrap(), v_left.try_into().unwrap())
-                    + Self::dot_product::<3>(
-                        u_right.try_into().unwrap(),
-                        v_right.try_into().unwrap(),
-                    )
-            }
-            8 => {
-                let (u_left, u_right) = u.split_at(4);
-                let (v_left, v_right) = u.split_at(4);
-                Self::dot_product::<4>(u_left.try_into().unwrap(), v_left.try_into().unwrap())
-                    + Self::dot_product::<4>(
-                        u_right.try_into().unwrap(),
-                        v_right.try_into().unwrap(),
-                    )
             }
             // We need to stop at 4 as it's possible to overflow a u64 with 5 products.
             // That being said, the probability of this is tiny.
             _ => {
-                let u128_prod_sum = u
-                    .iter()
-                    .zip(v)
-                    .map(|(a, b)| a.value as u128 * b.value as u128)
-                    .sum::<u128>();
-                Self::new_monty(monty_reduce_u128::<FP>(u128_prod_sum))
+                let lhs_chunks = lhs.chunks_exact(4);
+                let rhs_chunks = rhs.chunks_exact(4);
+                let acc = lhs_chunks.zip(rhs_chunks).fold(Self::ZERO, |acc, (l, r)| {
+                    acc + Self::dot_product::<4>(l.try_into().unwrap(), r.try_into().unwrap())
+                });
+                match N & 3 {
+                    0 => acc,
+                    1 => acc + lhs[4 * (N / 4)] * rhs[4 * (N / 4)],
+                    2 => {
+                        acc + Self::dot_product::<2>(
+                            &lhs[(4 * (N / 4))..].try_into().unwrap(),
+                            &rhs[(4 * (N / 4))..].try_into().unwrap(),
+                        )
+                    }
+                    3 => {
+                        acc + Self::dot_product::<3>(
+                            &lhs[(4 * (N / 4))..].try_into().unwrap(),
+                            &rhs[(4 * (N / 4))..].try_into().unwrap(),
+                        )
+                    }
+                    _ => unreachable!(),
+                }
             }
         }
     }
