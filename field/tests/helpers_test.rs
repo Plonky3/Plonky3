@@ -10,7 +10,7 @@ mod helpers {
         // Scale [1, 2, 3] by 7
         let v = vec![BabyBear::ONE, BabyBear::TWO, BabyBear::ONE + BabyBear::TWO];
         let s = BabyBear::from_u8(7);
-        let result = scale_vec(s, v.clone());
+        let result = scale_vec(s, v);
 
         let expected = vec![
             s * BabyBear::ONE,
@@ -33,7 +33,7 @@ mod helpers {
         let y = vec![y1, y2];
         let s = BabyBear::from_u8(3);
 
-        add_scaled_slice_in_place(&mut x, y.clone().into_iter(), s);
+        add_scaled_slice_in_place(&mut x, y.into_iter(), s);
 
         // x = [x1 + s * y1, x2 + s * y2]
         let expected = vec![x1 + s * y1, x2 + s * y2];
