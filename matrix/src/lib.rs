@@ -58,13 +58,9 @@ impl Display for Dimensions {
 /// packing strategies for SIMD optimizations and interaction with extension fields.
 pub trait Matrix<T: Send + Sync>: Send + Sync {
     /// Returns the number of columns in the matrix.
-    ///
-    /// This being the incorrect value is considered undefined behaviour.
     fn width(&self) -> usize;
 
     /// Returns the number of rows in the matrix.
-    ///
-    /// This being the incorrect value is considered undefined behaviour.
     fn height(&self) -> usize;
 
     /// Returns the dimensions (width, height) of the matrix.
@@ -128,7 +124,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
     /// # Safety
     /// The caller must ensure that `r < self.height()` and `start <= end <= self.width()`.
     /// Breaking any of these assumptions is considered undefined behaviour.
-    unsafe fn row_subset_unchecked(
+    unsafe fn row_subseq_unchecked(
         &self,
         r: usize,
         start: usize,
@@ -176,7 +172,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         end: usize,
     ) -> impl Deref<Target = [T]> {
         unsafe {
-            self.row_subset_unchecked(r, start, end)
+            self.row_subseq_unchecked(r, start, end)
                 .into_iter()
                 .collect_vec()
         }
@@ -266,7 +262,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
         unsafe {
             // Safe as r < height().
             let mut iter = self
-                .row_subset_unchecked(r, 0, num_packed * P::WIDTH)
+                .row_subseq_unchecked(r, 0, num_packed * P::WIDTH)
                 .into_iter();
 
             // array::from_fn is guaranteed to always call in order.
@@ -274,7 +270,7 @@ pub trait Matrix<T: Send + Sync>: Send + Sync {
                 (0..num_packed).map(move |_| P::from_fn(|_| iter.next().unwrap_unchecked()));
 
             let sfx = self
-                .row_subset_unchecked(r, num_packed * P::WIDTH, self.width())
+                .row_subseq_unchecked(r, num_packed * P::WIDTH, self.width())
                 .into_iter();
             (packed, sfx)
         }
@@ -647,7 +643,7 @@ mod tests {
             assert_eq!(row_iter_unchecked.next(), Some(9));
             assert_eq!(row_iter_unchecked.next(), None);
 
-            let mut row_iter_subset = matrix.row_subset_unchecked(0, 1, 3).into_iter();
+            let mut row_iter_subset = matrix.row_subseq_unchecked(0, 1, 3).into_iter();
             assert_eq!(row_iter_subset.next(), Some(2));
             assert_eq!(row_iter_subset.next(), Some(3));
             assert_eq!(row_iter_subset.next(), None);

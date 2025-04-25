@@ -411,9 +411,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         // a value for r * self.width + c < self.height()*self.width().
         (r < self.height() && c < self.width()).then(|| {
             // We just checked the bounds, so this is safe.
-            unsafe {
-                self.get_unchecked(r, c).clone()
-            }
+            unsafe { self.get_unchecked(r, c).clone() }
         })
     }
 
@@ -459,7 +457,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
     }
 
     #[inline]
-    unsafe fn row_subset_unchecked(
+    unsafe fn row_subseq_unchecked(
         &self,
         r: usize,
         start: usize,
@@ -660,11 +658,11 @@ mod tests {
         unsafe {
             let row: Vec<_> = matrix.row_unchecked(0).into_iter().collect();
             assert_eq!(row, vec![1, 2, 3, 4]);
-            let row: Vec<_> = matrix.row_subset_unchecked(0, 0, 3).into_iter().collect();
+            let row: Vec<_> = matrix.row_subseq_unchecked(0, 0, 3).into_iter().collect();
             assert_eq!(row, vec![1, 2, 3]);
-            let row: Vec<_> = matrix.row_subset_unchecked(0, 1, 3).into_iter().collect();
+            let row: Vec<_> = matrix.row_subseq_unchecked(0, 1, 3).into_iter().collect();
             assert_eq!(row, vec![2, 3]);
-            let row: Vec<_> = matrix.row_subset_unchecked(0, 2, 4).into_iter().collect();
+            let row: Vec<_> = matrix.row_subseq_unchecked(0, 2, 4).into_iter().collect();
             assert_eq!(row, vec![3, 4]);
         }
         assert!(matrix.row(2).is_none()); // Height out of bounds

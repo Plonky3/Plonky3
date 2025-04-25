@@ -96,7 +96,7 @@ impl<T: Send + Sync, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         }
     }
 
-    unsafe fn row_subset_unchecked(
+    unsafe fn row_subseq_unchecked(
         &self,
         r: usize,
         start: usize,
@@ -105,7 +105,7 @@ impl<T: Send + Sync, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         unsafe {
             // Safety: The caller must ensure that r < self.height() and start <= end <= self.width().
             self.inner
-                .row_subset_unchecked(self.index_map.map_row_index(r), start, end)
+                .row_subseq_unchecked(self.index_map.map_row_index(r), start, end)
         }
     }
 
@@ -417,7 +417,7 @@ mod tests {
             ); // was row 1
             assert_eq!(
                 mapped_view
-                    .row_subset_unchecked(1, 0, 2)
+                    .row_subseq_unchecked(1, 0, 2)
                     .into_iter()
                     .collect_vec(),
                 vec![10, 20]

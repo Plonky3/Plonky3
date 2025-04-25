@@ -74,7 +74,7 @@ where
     ) -> Option<impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync>> {
         (r < self.height()).then(|| unsafe {
             // Safety: We just checked that `r < self.height()`.
-            self.inner.row_subset_unchecked(r, 0, self.truncated_width)
+            self.inner.row_subseq_unchecked(r, 0, self.truncated_width)
         })
     }
 
@@ -84,11 +84,11 @@ where
     ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
         unsafe {
             // Safety: The caller must ensure that `r < self.height()`.
-            self.inner.row_subset_unchecked(r, 0, self.truncated_width)
+            self.inner.row_subseq_unchecked(r, 0, self.truncated_width)
         }
     }
 
-    unsafe fn row_subset_unchecked(
+    unsafe fn row_subseq_unchecked(
         &self,
         r: usize,
         start: usize,
@@ -96,7 +96,7 @@ where
     ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
         unsafe {
             // Safety: The caller must ensure that r < self.height() and start <= end <= self.width().
-            self.inner.row_subset_unchecked(r, start, end)
+            self.inner.row_subseq_unchecked(r, start, end)
         }
     }
 
@@ -174,7 +174,7 @@ mod tests {
 
             // Row 3: is equal to return [9, 10, 11]
             let row3_subset: Vec<_> = truncated
-                .row_subset_unchecked(2, 1, 2)
+                .row_subseq_unchecked(2, 1, 2)
                 .into_iter()
                 .collect();
             assert_eq!(row3_subset, vec![10]);

@@ -102,7 +102,7 @@ impl<T: Send + Sync, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
         }
     }
 
-    unsafe fn row_subset_unchecked(
+    unsafe fn row_subseq_unchecked(
         &self,
         r: usize,
         start: usize,
@@ -111,11 +111,11 @@ impl<T: Send + Sync, First: Matrix<T>, Second: Matrix<T>> Matrix<T>
         unsafe {
             // Safety: The caller must ensure that r < self.height() and start <= end <= self.width()
             if r < self.first.height() {
-                EitherRow::Left(self.first.row_subset_unchecked(r, start, end).into_iter())
+                EitherRow::Left(self.first.row_subseq_unchecked(r, start, end).into_iter())
             } else {
                 EitherRow::Right(
                     self.second
-                        .row_subset_unchecked(r - self.first.height(), start, end)
+                        .row_subseq_unchecked(r - self.first.height(), start, end)
                         .into_iter(),
                 )
             }
@@ -304,7 +304,7 @@ mod tests {
             assert_eq!(row, vec![3, 4]);
 
             let row = vertical
-                .row_subset_unchecked(0, 0, 1)
+                .row_subseq_unchecked(0, 0, 1)
                 .into_iter()
                 .collect_vec();
             assert_eq!(row, vec![1]);

@@ -85,7 +85,7 @@ where
         }
     }
 
-    unsafe fn row_subset_unchecked(
+    unsafe fn row_subseq_unchecked(
         &self,
         r: usize,
         start: usize,
@@ -101,7 +101,7 @@ where
                     .0
                     // We set end to be the width of the inner matrix and use take to ensure we get the right
                     // number of elements.
-                    .row_subset_unchecked(r, inner_start, self.0.width())
+                    .row_subseq_unchecked(r, inner_start, self.0.width())
                     .into_iter()
                     .peekable(),
                 idx: start,
@@ -226,7 +226,7 @@ mod tests {
                 [30, 31, 40, 41].map(F::from_u8)
             );
             assert_eq!(
-                flat.row_subset_unchecked(0, 1, 4).into_iter().collect_vec(),
+                flat.row_subseq_unchecked(0, 1, 4).into_iter().collect_vec(),
                 [11, 20, 21].map(F::from_u8)
             );
         }
