@@ -220,6 +220,7 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
         }
     }
 
+    #[inline]
     fn dot_product<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
         match N {
             0 => Self::ZERO,
