@@ -76,7 +76,7 @@ where
     // occurring for a given trace and set of constraints is n/|EF|.
     //
     // Currently, we do not observe data about the constraint polynomials directly. In particular
-    // A prover could take a trace and fiddle around with the AIR it claims to satisfy without
+    // a prover could take a trace and fiddle around with the AIR it claims to satisfy without
     // changing this sample alpha.
     //
     // In particular this means that a malicious prover could create a custom AIR for a given trace
