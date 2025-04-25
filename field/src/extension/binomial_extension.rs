@@ -624,12 +624,10 @@ pub(super) fn binomial_mul<
     w: F,
 ) {
     match D {
-        2 => {
-            res[0] = a[0].clone() * b[0].clone() + a[1].clone() * w * b[1].clone();
-            res[1] = a[0].clone() * b[1].clone() + a[1].clone() * b[0].clone();
-        }
+        2 => quadratic_mul(a, b, res, w),
         3 => cubic_mul(a, b, res, w),
-        4 => quartic_karatsuba_mul(a, b, res, w),
+        4 => quartic_mul(a, b, res, w),
+        5 => quintic_mul(a, b, res, w),
         _ =>
         {
             #[allow(clippy::needless_range_loop)]
@@ -664,11 +662,11 @@ where
     R: Algebra<F> + Algebra<R2>,
     R2: Algebra<F> + Add<Output = R2> + Clone,
 {
-    let a1_w = a[1].clone() * w;
+    let b1_w = b[1].clone() * w;
 
     res[0] = R::dot_product(
-        &[a[0].clone(), a1_w],
-        &[b[0].clone().into(), b[1].clone().into()],
+        a[..].try_into().unwrap(),
+        &[b[0].clone().into(), b1_w.into()],
     );
     res[1] = R::dot_product(
         &[a[0].clone(), a[1].clone()],
@@ -751,60 +749,103 @@ pub(crate) fn cubic_square<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: u
     res[2] = a[1].square() + (a[0].clone() * a[2].clone()).double();
 }
 
-/// Optimized Karatsuba multiplication for extension degree 4.
-///
-/// Let the input polynomials be:
-/// ```text
-///     A = a0 + a1·X + a2·X² + a3·X³
-///     B = b0 + b1·X + b2·X² + b3·X³
-/// ```
-///
-/// These can be grouped as:
-/// ```text
-///     A = A0 + A1·X, where A0 = a0 + a2·X², A1 = a1 + a3·X²
-///     B = B0 + B1·X, where B0 = b0 + b2·X², B1 = b1 + b3·X²
-/// ```
-///
-/// The multiplication follows:
-/// ```text
-///     A·B = A0·B0
-///         + ((A0 + A1)·(B0 + B1) - A0·B0 - A1·B1)·X
-///         + A1·B1·X²
-/// ```
-/// These inner multiplications can also be decomposed using karatsuba.
-///
-/// Since X⁴ ≡ w (mod X⁴ - w), all X⁴ terms can be folded back into lower degrees using w.
+/// Multiplication in a quartic binomial extension field.
 #[inline]
-fn quartic_karatsuba_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
+fn quartic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
 where
     F: Field,
     R: Algebra<F> + Algebra<R2>,
     R2: Algebra<F> + Add<Output = R2> + Clone,
 {
-    let aa0 = [a[0].clone(), a[2].clone()];
-    let bb0 = [b[0].clone(), b[2].clone()];
-    let mut cc0 = [R::ZERO, R::ZERO];
+    assert_eq!(D, 4);
+    let b_r_rev: [R; 5] = [
+        b[3].clone().into(),
+        b[2].clone().into(),
+        b[1].clone().into(),
+        b[0].clone().into(),
+        w.into(),
+    ];
 
-    quadratic_mul(&aa0, &bb0, &mut cc0, w);
+    // Constant term = a0*b0 + w(a1*b3 + a2*b3 + a3*b1)
+    let w_coeff_0 =
+        R::dot_product::<3>(a[1..].try_into().unwrap(), b_r_rev[..3].try_into().unwrap());
+    res[0] = R::dot_product(&[a[0].clone(), w_coeff_0], b_r_rev[3..].try_into().unwrap());
 
-    let aa1 = [a[1].clone(), a[3].clone()];
-    let bb1 = [b[1].clone(), b[3].clone()];
-    let mut cc1 = [R::ZERO, R::ZERO];
+    // Linear term = a0*b1 + a1*b0 + w(a2*b3 + a3*b2)
+    let w_coeff_1 =
+        R::dot_product::<2>(a[2..].try_into().unwrap(), b_r_rev[..2].try_into().unwrap());
+    res[1] = R::dot_product(
+        &[a[0].clone(), a[1].clone(), w_coeff_1],
+        b_r_rev[2..].try_into().unwrap(),
+    );
 
-    quadratic_mul(&aa1, &bb1, &mut cc1, w);
+    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b3)
+    let b3_w = b[3].clone() * w;
+    res[2] = R::dot_product::<4>(
+        a[..4].try_into().unwrap(),
+        &[
+            b_r_rev[1].clone(),
+            b_r_rev[2].clone(),
+            b_r_rev[3].clone(),
+            b3_w.into(),
+        ],
+    );
 
-    let aa_sum = [a[0].clone() + a[1].clone(), a[2].clone() + a[3].clone()];
-    let bb_sum = [b[0].clone() + b[1].clone(), b[2].clone() + b[3].clone()];
-    let mut cc_sum = [R::ZERO, R::ZERO];
+    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0
+    res[3] = R::dot_product::<4>(a[..].try_into().unwrap(), b_r_rev[..4].try_into().unwrap());
+}
 
-    quadratic_mul(&aa_sum, &bb_sum, &mut cc_sum, w);
-    cc_sum[0] -= cc0[0].clone() + cc1[0].clone();
-    cc_sum[1] -= cc0[1].clone() + cc1[1].clone();
+/// Multiplication in a quintic binomial extension field.
+fn quintic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
+where
+    F: Field,
+    R: Algebra<F> + Algebra<R2>,
+    R2: Algebra<F> + Add<Output = R2> + Clone,
+{
+    assert_eq!(D, 5);
+    let b_r_rev: [R; 6] = [
+        b[4].clone().into(),
+        b[3].clone().into(),
+        b[2].clone().into(),
+        b[1].clone().into(),
+        b[0].clone().into(),
+        w.into(),
+    ];
 
-    // We simply need to combine the results.
-    res[0] = cc0[0].clone() + cc1[1].clone() * w;
-    res[2] = cc0[1].clone() + cc1[0].clone();
+    // Constant term = a0*b0 + w(a1*b4 + a2*b3 + a3*b2 + a4*b1)
+    let w_coeff_0 =
+        R::dot_product::<4>(a[1..].try_into().unwrap(), b_r_rev[..4].try_into().unwrap());
+    res[0] = R::dot_product(&[a[0].clone(), w_coeff_0], b_r_rev[4..].try_into().unwrap());
 
-    res[1] = cc_sum[0].clone();
-    res[3] = cc_sum[1].clone();
+    // Linear term = a0*b1 + a1*b0 + w(a2*b4 + a3*b3 + a4*b2)
+    let w_coeff_1 =
+        R::dot_product::<3>(a[2..].try_into().unwrap(), b_r_rev[..3].try_into().unwrap());
+    res[1] = R::dot_product(
+        &[a[0].clone(), a[1].clone(), w_coeff_1],
+        b_r_rev[3..].try_into().unwrap(),
+    );
+
+    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b4 + a4*b3)
+    let w_coeff_2 =
+        R::dot_product::<2>(a[3..].try_into().unwrap(), b_r_rev[..2].try_into().unwrap());
+    res[2] = R::dot_product(
+        &[a[0].clone(), a[1].clone(), a[2].clone(), w_coeff_2],
+        b_r_rev[2..].try_into().unwrap(),
+    );
+
+    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0 + w*a4*b4
+    let b4_w = b[4].clone() * w;
+    res[3] = R::dot_product::<5>(
+        a[..5].try_into().unwrap(),
+        &[
+            b_r_rev[1].clone(),
+            b_r_rev[2].clone(),
+            b_r_rev[3].clone(),
+            b_r_rev[4].clone(),
+            b4_w.into(),
+        ],
+    );
+
+    // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 + a4*b0
+    res[4] = R::dot_product::<5>(a[..].try_into().unwrap(), b_r_rev[..5].try_into().unwrap());
 }
