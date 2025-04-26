@@ -115,6 +115,29 @@ pub fn benchmark_sum_array<R: PrimeCharacteristicRing + Copy, const N: usize, co
     });
 }
 
+/// Benchmark the time taken to do `REPS` dot products on a pair of `[R; N]` arrays.
+pub fn benchmark_dot_array<R: PrimeCharacteristicRing + Copy, const N: usize, const REPS: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
+    StandardUniform: Distribution<R>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    let mut input = Vec::new();
+    for _ in 0..REPS {
+        input.push((rng.random::<[R; N]>(), rng.random::<[R; N]>()));
+    }
+    c.bench_function(&format!("{} dot product/{}, {}", name, REPS, N), |b| {
+        b.iter(|| {
+            let mut out = R::zero_vec(REPS);
+            for (i, (lhs, rhs)) in input.iter().enumerate() {
+                out[i] = R::dot_product::<N>(lhs, rhs)
+            }
+            out
+        })
+    });
+}
+
 pub fn benchmark_add_latency<R: PrimeCharacteristicRing + Copy, const N: usize>(
     c: &mut Criterion,
     name: &str,

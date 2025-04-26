@@ -125,13 +125,13 @@ impl PartialOrd for Goldilocks {
 
 impl Display for Goldilocks {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Display::fmt(&self.value, f)
+        Display::fmt(&self.as_canonical_u64(), f)
     }
 }
 
 impl Debug for Goldilocks {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Debug::fmt(&self.value, f)
+        Debug::fmt(&self.as_canonical_u64(), f)
     }
 }
 
@@ -160,6 +160,7 @@ impl PrimeCharacteristicRing for Goldilocks {
         f
     }
 
+    #[inline]
     fn from_bool(b: bool) -> Self {
         Self::new(b.into())
     }
@@ -176,6 +177,69 @@ impl PrimeCharacteristicRing for Goldilocks {
             2 => input[0] + input[1],
             3 => input[0] + input[1] + input[2],
             _ => input.iter().copied().sum(),
+        }
+    }
+
+    #[inline]
+    fn dot_product<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
+        // The constant OFFSET has 2 important properties:
+        // 1. It is a multiple of P.
+        // 2. It is greater than the maximum possible value of the sum of the products of two u64s.
+        const OFFSET: u128 = ((P as u128) << 64) - (P as u128) + ((P as u128) << 32);
+        match N {
+            0 => Self::ZERO,
+            1 => lhs[0] * rhs[0],
+            2 => {
+                // We unroll the N = 2 case as it is slightly faster and this is an important case
+                // as a major use is in extension field arithmetic and Goldilocks has a degree 2 extension.
+                let long_prod_0 = (lhs[0].value as u128) * (rhs[0].value as u128);
+                let long_prod_1 = (lhs[1].value as u128) * (rhs[1].value as u128);
+
+                // We know that long_prod_0, long_prod_1 < OFFSET.
+                // Thus if long_prod_0 + long_prod_1 overflows, we can just subtract OFFSET.
+                let (sum, over) = long_prod_0.overflowing_add(long_prod_1);
+                // Compiler really likes defining sum_corr here instead of in the if/else.
+                let sum_corr = sum.wrapping_sub(OFFSET);
+                if over {
+                    reduce128(sum_corr)
+                } else {
+                    reduce128(sum)
+                }
+            }
+            3 => {
+                // We unroll the N = 2 case as it is slightly faster and this is an important case
+                // as a major use is in extension field arithmetic and Goldilocks has a degree 2 extension.
+                let long_prod_0 = (lhs[0].value as u128) * (rhs[0].value as u128);
+                let long_prod_1 = (lhs[1].value as u128) * (rhs[1].value as u128);
+                let long_prod_2 = (lhs[2].value as u128) * (rhs[2].value as u128);
+
+                // We know that long_prod_0, long_prod_1 < OFFSET.
+                // Thus if long_prod_0 + long_prod_1 overflows, we can just subtract OFFSET.
+                let (acc, over) = long_prod_0.overflowing_add(long_prod_1);
+                // Compiler really likes defining sum_corr here instead of in the if/else.
+                let acc_corr = acc.wrapping_sub(OFFSET);
+                let acc_01 = if over { acc_corr } else { acc };
+                let (acc, over) = acc_01.overflowing_add(long_prod_2);
+                let acc_corr = acc.wrapping_sub(OFFSET);
+                if over {
+                    reduce128(acc_corr)
+                } else {
+                    reduce128(acc)
+                }
+            }
+            _ => {
+                lhs.iter().zip(rhs).map(|(x, y)| *x * *y).sum()
+                // let mut acc = 0_u128;
+                // for (l, r) in lhs.iter().zip(rhs) {
+                //     let prod = (l.value as u128) * (r.value as u128);
+                //     // We know that prod < OFFSET.
+                //     // Thus if acc + prod overflows, we can just subtract OFFSET.
+                //     let (sum, over) = acc.overflowing_add(prod);
+                //     let sum_corr = sum.wrapping_sub(OFFSET);
+                //     acc = if over { sum_corr } else { sum }
+                // }
+                // reduce128(acc)
+            }
         }
     }
 
