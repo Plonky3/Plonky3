@@ -222,7 +222,7 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
 
     #[inline]
     fn dot_product<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
-        assert!(N <= (1 << 34));
+        assert!(N as u64 <= (1 << 34));
         // This code relies on assumptions about the relative size of the
         // prime and the monty parameter. If these are changes this needs to be checked.
         debug_assert!(FP::MONTY_BITS == 32);
