@@ -22,8 +22,8 @@ use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::utils::{
-    from_monty, halve_u32, large_monty_reduce, monty_reduce, to_monty, to_monty_64,
-    to_monty_64_signed, to_monty_signed,
+    from_monty, halve_u32, large_monty_reduce, monty_reduce, monty_reduce_u128, to_monty,
+    to_monty_64, to_monty_64_signed, to_monty_signed,
 };
 use crate::{FieldParameters, MontyParameters, RelativelyPrimePower, TwoAdicData};
 
@@ -222,12 +222,17 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
 
     #[inline]
     fn dot_product<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
+        assert!(N <= (1 << 34));
+        // This code relies on assumptions about the relative size of the
+        // prime and the monty parameter. If these are changes this needs to be checked.
+        debug_assert!(FP::MONTY_BITS == 32);
+        debug_assert!((FP::PRIME as u64) < (1 << 31));
         match N {
             0 => Self::ZERO,
             1 => lhs[0] * rhs[0],
             2 => {
                 // As all values are < P < 2^31, the products are < P^2 < 2^31P.
-                // Hence, summing two together we stay below 2^32P which means
+                // Hence, summing two together we stay below MONTY*P which means
                 // monty_reduce will produce a valid result.
                 let u64_prod_sum = (lhs[0].value as u64) * (rhs[0].value as u64)
                     + (lhs[1].value as u64) * (rhs[1].value as u64);
@@ -235,8 +240,7 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
             }
             3 => {
                 // As all values are < P < 2^31, the products are < P^2 < 2^31P.
-                // Hence, summing three together will not overflow a u64 but will be
-                // larger than 2^32P.
+                // Hence, summing three together will be less than 2 * MONTY * P
                 let u64_prod_sum = (lhs[0].value as u64) * (rhs[0].value as u64)
                     + (lhs[1].value as u64) * (rhs[1].value as u64)
                     + (lhs[2].value as u64) * (rhs[2].value as u64);
@@ -244,45 +248,93 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
             }
             4 => {
                 // As all values are < P < 2^31, the products are < P^2 < 2^31P.
-                // Hence, summing four together will not overflow a u64 but will be
-                // larger than 2^32P.
+                // Hence, summing four together will be less than 2 * MONTY * P.
                 let u64_prod_sum = (lhs[0].value as u64) * (rhs[0].value as u64)
                     + (lhs[1].value as u64) * (rhs[1].value as u64)
                     + (lhs[2].value as u64) * (rhs[2].value as u64)
                     + (lhs[3].value as u64) * (rhs[3].value as u64);
                 Self::new_monty(large_monty_reduce::<FP>(u64_prod_sum))
             }
-            // We need to stop at 4 as it's possible to overflow a u64 with 5 products.
-            // That being said, the probability of this is tiny.
+            5 => {
+                let head_sum = (lhs[0].value as u64) * (rhs[0].value as u64)
+                    + (lhs[1].value as u64) * (rhs[1].value as u64)
+                    + (lhs[2].value as u64) * (rhs[2].value as u64)
+                    + (lhs[3].value as u64) * (rhs[3].value as u64);
+                let tail_sum = (lhs[4].value as u64) * (rhs[4].value as u64);
+                // head_sum < 4*P^2, tail_sum < P^2.
+                let head_sum_corr = head_sum.wrapping_sub((FP::PRIME as u64) << FP::MONTY_BITS);
+                // head_sum.min(head_sum_corr) is guaranteed to be < 2*P^2.
+                // Hence sum < 4P^2 < 2 * MONTY * P
+                let sum = head_sum.min(head_sum_corr) + tail_sum;
+                Self::new_monty(large_monty_reduce::<FP>(sum))
+            }
+            6 => {
+                let head_sum = (lhs[0].value as u64) * (rhs[0].value as u64)
+                    + (lhs[1].value as u64) * (rhs[1].value as u64)
+                    + (lhs[2].value as u64) * (rhs[2].value as u64)
+                    + (lhs[3].value as u64) * (rhs[3].value as u64);
+                let tail_sum = (lhs[4].value as u64) * (rhs[4].value as u64)
+                    + (lhs[5].value as u64) * (rhs[5].value as u64);
+                // head_sum < 4*P^2, tail_sum < 2*P^2.
+                let head_sum_corr = head_sum.wrapping_sub((FP::PRIME as u64) << FP::MONTY_BITS);
+                // head_sum.min(head_sum_corr) is guaranteed to be < 2*P^2.
+                // Hence sum < 4P^2 < 2 * MONTY * P
+                let sum = head_sum.min(head_sum_corr) + tail_sum;
+                Self::new_monty(large_monty_reduce::<FP>(sum))
+            }
+            7 => {
+                let head_sum = (lhs[0].value as u64) * (rhs[0].value as u64)
+                    + (lhs[1].value as u64) * (rhs[1].value as u64)
+                    + (lhs[2].value as u64) * (rhs[2].value as u64)
+                    + (lhs[3].value as u64) * (rhs[3].value as u64);
+                let tail_sum = (lhs[4].value as u64) * (rhs[4].value as u64)
+                    + lhs[5].value as u64 * (rhs[5].value as u64)
+                    + lhs[6].value as u64 * (rhs[6].value as u64);
+                // head_sum, tail_sum are guaranteed to be < 4*P^2.
+                let head_sum_corr = head_sum.wrapping_sub((FP::PRIME as u64) << FP::MONTY_BITS);
+                let tail_sum_corr = tail_sum.wrapping_sub((FP::PRIME as u64) << FP::MONTY_BITS);
+                // head_sum.min(head_sum_corr), tail_sum.min(tail_sum_corr) is guaranteed to be < 2*P^2.
+                // Hence sum < 4P^2 < 2 * MONTY * P
+                let sum = head_sum.min(head_sum_corr) + tail_sum.min(tail_sum_corr);
+                Self::new_monty(large_monty_reduce::<FP>(sum))
+            }
+            8 => {
+                let head_sum = (lhs[0].value as u64) * (rhs[0].value as u64)
+                    + (lhs[1].value as u64) * (rhs[1].value as u64)
+                    + (lhs[2].value as u64) * (rhs[2].value as u64)
+                    + (lhs[3].value as u64) * (rhs[3].value as u64);
+                let tail_sum = (lhs[4].value as u64) * (rhs[4].value as u64)
+                    + lhs[5].value as u64 * (rhs[5].value as u64)
+                    + lhs[6].value as u64 * (rhs[6].value as u64)
+                    + lhs[7].value as u64 * (rhs[7].value as u64);
+                // head_sum, tail_sum are guaranteed to be < 4*P^2.
+                let head_sum_corr = head_sum.wrapping_sub((FP::PRIME as u64) << FP::MONTY_BITS);
+                let tail_sum_corr = tail_sum.wrapping_sub((FP::PRIME as u64) << FP::MONTY_BITS);
+                // head_sum.min(head_sum_corr), tail_sum.min(tail_sum_corr) is guaranteed to be < 2*P^2.
+                // Hence sum < 4P^2 < 2 * MONTY * P
+                let sum = head_sum.min(head_sum_corr) + tail_sum.min(tail_sum_corr);
+                Self::new_monty(large_monty_reduce::<FP>(sum))
+            }
             _ => {
-                let acc =
-                    lhs.chunks_exact(4)
-                        .zip(rhs.chunks_exact(4))
-                        .fold(Self::ZERO, |acc, (l, r)| {
-                            acc + Self::dot_product::<4>(
-                                l.try_into().unwrap(),
-                                r.try_into().unwrap(),
-                            )
-                        });
-                // Index of first element of remaining:
-                let base = 4 * (N / 4);
-                match N & 3 {
-                    0 => acc,
-                    1 => acc + lhs[base] * rhs[base],
-                    2 => {
-                        acc + Self::dot_product::<2>(
-                            &lhs[base..].try_into().unwrap(),
-                            &rhs[base..].try_into().unwrap(),
-                        )
-                    }
-                    3 => {
-                        acc + Self::dot_product::<3>(
-                            &lhs[base..].try_into().unwrap(),
-                            &rhs[base..].try_into().unwrap(),
-                        )
-                    }
-                    _ => unreachable!(),
-                }
+                // For large enough N, we accumulate into a u128. This helps the compiler as it lets
+                // it do a lot of computation in parallel as it knows that summing u128's is associative.
+                let acc_u128 = lhs
+                    .chunks(4)
+                    .zip(rhs.chunks(4))
+                    .map(|(l, r)| {
+                        // As all values are < P < 2^31, the products are < P^2 < 2^31P.
+                        // Hence, summing four together will not overflow a u64 but will be
+                        // larger than 2^32P.
+                        let u64_prod_sum = l
+                            .iter()
+                            .zip(r)
+                            .map(|(l, r)| (l.value as u64) * (r.value as u64))
+                            .sum::<u64>();
+                        u64_prod_sum as u128
+                    })
+                    .sum();
+                // As N <= 2^34 by the earlier assertion, acc_u128 <= 2^34 * P^2 < 2^34 * 2^62 < 2^96.
+                Self::new_monty(monty_reduce_u128::<FP>(acc_u128))
             }
         }
     }

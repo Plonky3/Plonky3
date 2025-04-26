@@ -121,3 +121,23 @@ pub(crate) const fn large_monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
     let corr = if over { MP::PRIME } else { 0 };
     x_sub_u_hi.wrapping_add(corr)
 }
+
+/// Perform a monty reduction on a u128 in the range `[0, 2^96)`
+///
+/// The input will be in `[0, P)` and be equal to `x * MONTY^{-1} mod P`.
+pub(crate) fn monty_reduce_u128<MP: MontyParameters>(x: u128) -> u32 {
+    // TODO: There is probably a way to do this faster than using %.
+
+    // Need to find MONTY^{-1} mod P.
+    // As P * MONTY_MU = 1 mod MONTY, we know that P * MONTY_MU = 1 + k * MONTY for some k.
+    // Thus k * MONTY = -1 mod P.
+    // Rearranging, we get k = (P * MONTY_MU - 1) / MONTY.
+    // Thus we want -k = P - k = P - (P * MONTY_MU - 1) / MONTY.
+
+    // Compiler should realize that this is a constant.
+    let monty_inv_mod_p =
+        MP::PRIME - ((((MP::PRIME as u64) * (MP::MONTY_MU as u64)) - 1) >> MP::MONTY_BITS) as u32;
+
+    // As monty_inv_mod_p < 2^32, x * monty_inv_mod_p < 2^128 so the product below will not overflow.
+    ((x * (monty_inv_mod_p as u128)) % (MP::PRIME as u128)) as u32
+}

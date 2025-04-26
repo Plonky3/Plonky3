@@ -4,6 +4,7 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field_testing::bench_func::{
     benchmark_inv, benchmark_mul_latency, benchmark_mul_throughput, benchmark_square,
 };
+use p3_field_testing::benchmark_mul;
 
 type EF4 = BinomialExtensionField<BabyBear, 4>;
 type EF5 = BinomialExtensionField<BabyBear, 5>;
@@ -17,6 +18,7 @@ fn bench_quartic_extension(c: &mut Criterion) {
     let name = "BinomialExtensionField<BabyBear, 4>";
     benchmark_square::<EF4>(c, name);
     benchmark_inv::<EF4>(c, name);
+    benchmark_mul::<EF5>(c, name);
     benchmark_mul_throughput::<EF4, REPS>(c, name);
     benchmark_mul_latency::<EF4, L_REPS>(c, name);
 }
@@ -25,6 +27,7 @@ fn bench_qunitic_extension(c: &mut Criterion) {
     let name = "BinomialExtensionField<BabyBear, 5>";
     benchmark_square::<EF5>(c, name);
     benchmark_inv::<EF5>(c, name);
+    benchmark_mul::<EF5>(c, name);
     benchmark_mul_throughput::<EF5, REPS>(c, name);
     benchmark_mul_latency::<EF5, L_REPS>(c, name);
 }

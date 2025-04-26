@@ -21,13 +21,16 @@ fn bench_field(c: &mut Criterion) {
     benchmark_iter_sum::<F, 8, REPS>(c, name);
     benchmark_iter_sum::<F, 12, REPS>(c, name);
 
-    benchmark_dot_array::<F, 2, REPS>(c, name);
-    benchmark_dot_array::<F, 4, REPS>(c, name);
-    benchmark_dot_array::<F, 5, REPS>(c, name);
-    benchmark_dot_array::<F, 8, REPS>(c, name);
-    benchmark_dot_array::<F, 9, REPS>(c, name);
-    benchmark_dot_array::<F, 16, REPS>(c, name);
-    benchmark_dot_array::<F, 64, REPS>(c, name);
+    benchmark_dot_array::<F, 2>(c, name);
+    benchmark_dot_array::<F, 3>(c, name);
+    benchmark_dot_array::<F, 4>(c, name);
+    benchmark_dot_array::<F, 5>(c, name);
+    benchmark_dot_array::<F, 6>(c, name);
+    benchmark_dot_array::<F, 7>(c, name);
+    benchmark_dot_array::<F, 8>(c, name);
+    benchmark_dot_array::<F, 9>(c, name);
+    benchmark_dot_array::<F, 16>(c, name);
+    benchmark_dot_array::<F, 64>(c, name);
 
     // Note that each round of throughput has 10 operations
     // So we should have 10 * more repetitions for latency tests.
