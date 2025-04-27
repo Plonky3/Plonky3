@@ -1,11 +1,9 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use p3_field::extension::BinomialExtensionField;
-use p3_field_testing::{
-    bench_func::{
-        benchmark_inv, benchmark_mul_latency, benchmark_mul_throughput, benchmark_square,
-    },
-    benchmark_mul,
+use p3_field_testing::bench_func::{
+    benchmark_inv, benchmark_mul_latency, benchmark_mul_throughput, benchmark_square,
 };
+use p3_field_testing::benchmark_mul;
 use p3_goldilocks::Goldilocks;
 
 type EF2 = BinomialExtensionField<Goldilocks, 2>;
