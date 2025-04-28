@@ -874,7 +874,7 @@ where
     res[4] = R::dot_product::<5>(a[..].try_into().unwrap(), b_r_rev[..5].try_into().unwrap());
 }
 
-/// Section 11.3.6b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
+/// Compute the inverse of a quintic binomial extension field element.
 #[inline]
 fn quintic_inv<F: BinomiallyExtendable<D>, const D: usize>(
     a: &BinomialExtensionField<F, D>,
@@ -885,7 +885,7 @@ fn quintic_inv<F: BinomiallyExtendable<D>, const D: usize>(
     let a_exp_n_plus_n_sq = (*a * a_exp_n).frobenius();
     let a_r_min_1 = a_exp_n_plus_n_sq * a_exp_n_plus_n_sq.repeated_frobenius(2);
 
-    // g = a^r is in the base field, so only compute that
+    // norm = a^r is in the base field, so only compute that
     // coefficient rather than the full product.
     let a_vals = a.value;
     let mut b = a_r_min_1.value;
