@@ -1,5 +1,3 @@
-use core::any::type_name;
-
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::BabyBear;
 use p3_field::{Field, PrimeCharacteristicRing};
@@ -8,6 +6,8 @@ use p3_field_testing::bench_func::{
     benchmark_mul_latency, benchmark_mul_throughput, benchmark_sub_latency,
     benchmark_sub_throughput,
 };
+use p3_field_testing::benchmark_dot_array;
+use p3_util::pretty_name;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
@@ -21,6 +21,17 @@ fn bench_field(c: &mut Criterion) {
     benchmark_iter_sum::<F, 8, REPS>(c, name);
     benchmark_iter_sum::<F, 12, REPS>(c, name);
 
+    benchmark_dot_array::<F, 2>(c, name);
+    benchmark_dot_array::<F, 3>(c, name);
+    benchmark_dot_array::<F, 4>(c, name);
+    benchmark_dot_array::<F, 5>(c, name);
+    benchmark_dot_array::<F, 6>(c, name);
+    benchmark_dot_array::<F, 7>(c, name);
+    benchmark_dot_array::<F, 8>(c, name);
+    benchmark_dot_array::<F, 9>(c, name);
+    benchmark_dot_array::<F, 16>(c, name);
+    benchmark_dot_array::<F, 64>(c, name);
+
     // Note that each round of throughput has 10 operations
     // So we should have 10 * more repetitions for latency tests.
     const L_REPS: usize = 10 * REPS;
@@ -28,6 +39,8 @@ fn bench_field(c: &mut Criterion) {
     benchmark_add_throughput::<F, REPS>(c, name);
     benchmark_sub_latency::<F, L_REPS>(c, name);
     benchmark_sub_throughput::<F, REPS>(c, name);
+    benchmark_mul_latency::<F, L_REPS>(c, name);
+    benchmark_mul_throughput::<F, REPS>(c, name);
 
     let mut rng = SmallRng::seed_from_u64(1);
     c.bench_function("7th_root", |b| {
@@ -40,7 +53,7 @@ fn bench_field(c: &mut Criterion) {
 }
 
 fn bench_packedfield(c: &mut Criterion) {
-    let name = type_name::<<F as Field>::Packing>().to_string();
+    let name = pretty_name::<<F as Field>::Packing>().to_string();
     // Note that each round of throughput has 10 operations
     // So we should have 10 * more repetitions for latency tests.
     const REPS: usize = 100;
