@@ -115,7 +115,13 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
     /// FrobeniusField automorphisms: x -> x^n, where n is the order of BaseField.
     #[inline]
     fn frobenius(&self) -> Self {
-        self.repeated_frobenius(1)
+        // Slightly faster than self.repeated_frobenius(1)
+        let mut res = Self::ZERO;
+        for (i, z) in F::DTH_ROOT.powers().take(D).enumerate() {
+            res.value[i] = self.value[i] * z;
+        }
+
+        res
     }
 
     /// Repeated Frobenius automorphisms: x -> x^(n^count).
@@ -147,9 +153,14 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
     #[inline]
     fn frobenius_inv(&self) -> Self {
         // Writing 'a' for self, we need to compute a^(r-1):
-        // r = n^D-1/n-1 = n^(D-1)+n^(D-2)+...+n
-        let mut f = Self::ONE;
-        for _ in 1..D {
+        // r = n^D-1/n-1 = n^(D-1) + n^(D-2) + ... + n + 1
+
+        // Need to compute: a^(n^(D-1) + n^(D-2) + ... + n)
+        // This requires a linear number of multiplications and Frobenius automorphisms.
+        // If D is known, it is possible to this this in a logarithmic number. See quintic_inv
+        // for an example of this.
+        let mut f = self.frobenius();
+        for _ in 2..D {
             f = (f * *self).frobenius();
         }
 
@@ -158,14 +169,17 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
         let a = self.value;
         let b = f.value;
         let mut g = F::ZERO;
+        // This should really be a dot product but
+        // const generics doesn't let this happen:
+        // b.reverse();
+        // let mut g = F::dot_product::<{D - 1}>(a[1..].try_into().unwrap(), b[..D - 1].try_into().unwrap());
         for i in 1..D {
             g += a[i] * b[D - i];
         }
-        g *= F::W;
-        g += a[0] * b[0];
-        debug_assert_eq!(Self::from(g), *self * f);
+        let norm = F::dot_product(&[a[0], F::W], &[b[0], g]);
+        debug_assert_eq!(Self::from(norm), *self * f);
 
-        f * g.inverse()
+        f * norm.inverse()
     }
 }
 
@@ -297,6 +311,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
         match D {
             2 => quadratic_inv(&self.value, &mut res.value, F::W),
             3 => cubic_inv(&self.value, &mut res.value, F::W),
+            5 => res = quintic_inv(self),
             _ => res = self.frobenius_inv(),
         }
 
@@ -857,4 +872,28 @@ where
 
     // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 + a4*b0
     res[4] = R::dot_product::<5>(a[..].try_into().unwrap(), b_r_rev[..5].try_into().unwrap());
+}
+
+/// Section 11.3.6b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
+#[inline]
+fn quintic_inv<F: BinomiallyExtendable<D>, const D: usize>(
+    a: &BinomialExtensionField<F, D>,
+) -> BinomialExtensionField<F, D> {
+    // Writing 'a' for self, we need to compute:
+    //      a^(r - 1) = a^{n^4 + n^3 + n^2 + n}
+    let a_exp_n = a.frobenius();
+    let a_exp_n_plus_n_sq = (*a * a_exp_n).frobenius();
+    let a_r_min_1 = a_exp_n_plus_n_sq * a_exp_n_plus_n_sq.repeated_frobenius(2);
+
+    // g = a^r is in the base field, so only compute that
+    // coefficient rather than the full product.
+    let a_vals = a.value;
+    let mut b = a_r_min_1.value;
+    b.reverse();
+
+    let w_coeff = F::dot_product::<4>(a.value[1..].try_into().unwrap(), b[..4].try_into().unwrap());
+    let norm = F::dot_product::<2>(&[a_vals[0], F::W], &[b[4], w_coeff]);
+    debug_assert_eq!(BinomialExtensionField::<F, D>::from(norm), *a * a_r_min_1);
+
+    a_r_min_1 * norm.inverse()
 }

@@ -16,16 +16,16 @@ const L_REPS: usize = 10 * REPS;
 
 fn bench_quartic_extension(c: &mut Criterion) {
     let name = "BinomialExtensionField<BabyBear, 4>";
-    benchmark_square::<EF4>(c, name);
-    benchmark_inv::<EF4>(c, name);
-    benchmark_mul::<EF5>(c, name);
-    benchmark_mul_throughput::<EF4, REPS>(c, name);
-    benchmark_mul_latency::<EF4, L_REPS>(c, name);
+    // benchmark_square::<EF4>(c, name);
+    // benchmark_inv::<EF4>(c, name);
+    // benchmark_mul::<EF5>(c, name);
+    // benchmark_mul_throughput::<EF4, REPS>(c, name);
+    // benchmark_mul_latency::<EF4, L_REPS>(c, name);
 }
 
 fn bench_qunitic_extension(c: &mut Criterion) {
     let name = "BinomialExtensionField<BabyBear, 5>";
-    benchmark_square::<EF5>(c, name);
+    // benchmark_square::<EF5>(c, name);
     benchmark_inv::<EF5>(c, name);
     benchmark_mul::<EF5>(c, name);
     benchmark_mul_throughput::<EF5, REPS>(c, name);
