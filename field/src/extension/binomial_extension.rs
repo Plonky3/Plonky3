@@ -199,18 +199,12 @@ where
                 let a1_w = a[1].clone() * F::W;
                 res.value[0] = A::dot_product(a[..].try_into().unwrap(), &[a[0].clone(), a1_w]);
                 res.value[1] = a[0].clone() * a[1].double();
-                res
             }
-            3 => {
-                cubic_square(&self.value, &mut res.value);
-                res
-            }
-            4 => {
-                quartic_square(&self.value, &mut res.value, w);
-                res
-            }
-            _ => <Self as Mul<Self>>::mul(self.clone(), self.clone()),
+            3 => cubic_square(&self.value, &mut res.value),
+            4 => quartic_square(&self.value, &mut res.value, w),
+            _ => binomial_mul::<F, A, A, D>(&self.value, &self.value, &mut res.value, w),
         }
+        res
     }
 
     #[inline]
@@ -810,7 +804,7 @@ where
 /// Makes use of the in built field dot product code. This is optimized for the case that
 /// R is a prime field or its packing.
 #[inline]
-fn quartic_square<F, R, const D: usize>(a: &[R; D], res: &mut [R; D], w: F)
+pub(crate) fn quartic_square<F, R, const D: usize>(a: &[R; D], res: &mut [R; D], w: F)
 where
     F: Field,
     R: Algebra<F>,
