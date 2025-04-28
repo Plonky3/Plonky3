@@ -30,7 +30,7 @@ p3-uni-stark.workspace = true
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 
-[target.'cfg(target_family = "unix")'.dependencies]
+[target.'cfg(target_family = "unix")'.dev-dependencies]
 tikv-jemallocator = "0.6"
 
 [features]
