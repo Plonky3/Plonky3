@@ -191,22 +191,20 @@ where
 
     #[inline(always)]
     fn square(&self) -> Self {
+        let mut res = Self::default();
+        let w = F::W;
         match D {
             2 => {
-                let a = self.value.clone();
-                let mut res = Self::default();
+                let a = &self.value;
                 let a1_w = a[1].clone() * F::W;
                 res.value[0] = A::dot_product(a[..].try_into().unwrap(), &[a[0].clone(), a1_w]);
                 res.value[1] = a[0].clone() * a[1].double();
-                res
             }
-            3 => {
-                let mut res = Self::default();
-                cubic_square(&self.value, &mut res.value);
-                res
-            }
-            _ => <Self as Mul<Self>>::mul(self.clone(), self.clone()),
+            3 => cubic_square(&self.value, &mut res.value),
+            5 => quintic_square(&self.value, &mut res.value, w),
+            _ => binomial_mul::<F, A, A, D>(&self.value, &self.value, &mut res.value, w),
         }
+        res
     }
 
     #[inline]
@@ -857,4 +855,54 @@ where
 
     // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 + a4*b0
     res[4] = R::dot_product::<5>(a[..].try_into().unwrap(), b_r_rev[..5].try_into().unwrap());
+}
+
+/// Optimized Square function for quintic extension field elements.
+///
+/// Makes use of the in built field dot product code. This is optimized for the case that
+/// R is a prime field or its packing.
+#[inline]
+pub(crate) fn quintic_square<F, R, const D: usize>(a: &[R; D], res: &mut [R; D], w: F)
+where
+    F: Field,
+    R: Algebra<F>,
+{
+    assert_eq!(D, 5);
+
+    let two_a0 = a[0].double();
+    let two_a1 = a[1].double();
+    let two_a2 = a[2].double();
+    let two_a3 = a[3].double();
+    let w_a3 = a[3].clone() * w;
+    let w_a4 = a[4].clone() * w;
+
+    // Constant term = a0*a0 + 2*w(a1*a4 + a2*a3)
+    res[0] = R::dot_product(
+        &[a[0].clone(), w_a4.clone(), w_a3.clone()],
+        &[a[0].clone(), two_a1.clone(), two_a2.clone()],
+    );
+
+    // Linear term = w*a3*a3 + 2*(a0*a1 + w * a2*a4)
+    res[1] = R::dot_product(
+        &[w_a3, two_a0.clone(), w_a4.clone()],
+        &[a[3].clone(), a[1].clone(), two_a2],
+    );
+
+    // Square term = a1*a1 + 2 * (a0*a2 + w*a3*a4)
+    res[2] = R::dot_product(
+        &[a[1].clone(), two_a0.clone(), w_a4.clone()],
+        &[a[1].clone(), a[2].clone(), two_a3],
+    );
+
+    // Cubic term = w*a4*a4 + 2*(a0*a3 + a1*a2)
+    res[3] = R::dot_product(
+        &[w_a4, two_a0.clone(), two_a1.clone()],
+        &[a[4].clone(), a[3].clone(), a[2].clone()],
+    );
+
+    // Quartic term = a2*a2 + 2*(a0*a4 + a1*a3)
+    res[4] = R::dot_product(
+        &[a[2].clone(), two_a0, two_a1],
+        &[a[2].clone(), a[4].clone(), a[3].clone()],
+    );
 }
