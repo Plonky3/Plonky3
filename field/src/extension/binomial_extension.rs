@@ -191,22 +191,14 @@ where
 
     #[inline(always)]
     fn square(&self) -> Self {
+        let mut res = Self::default();
+        let w = F::W;
         match D {
-            2 => {
-                let a = self.value.clone();
-                let mut res = Self::default();
-                let a1_w = a[1].clone() * F::W;
-                res.value[0] = A::dot_product(a[..].try_into().unwrap(), &[a[0].clone(), a1_w]);
-                res.value[1] = a[0].clone() * a[1].double();
-                res
-            }
-            3 => {
-                let mut res = Self::default();
-                cubic_square(&self.value, &mut res.value);
-                res
-            }
-            _ => <Self as Mul<Self>>::mul(self.clone(), self.clone()),
+            2 => quadratic_square(&self.value, &mut res.value, w),
+            3 => cubic_square(&self.value, &mut res.value),
+            _ => binomial_mul::<F, A, A, D>(&self.value, &self.value, &mut res.value, w),
         }
+        res
     }
 
     #[inline]
@@ -297,6 +289,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
         match D {
             2 => quadratic_inv(&self.value, &mut res.value, F::W),
             3 => cubic_inv(&self.value, &mut res.value, F::W),
+            4 => quartic_inv(&self.value, &mut res.value, F::W),
             _ => res = self.frobenius_inv(),
         }
 
@@ -680,13 +673,33 @@ where
     );
 }
 
+/// Optimized squaring for quadratic extension field.
+///
+/// Makes use of the in built field dot product code. This is optimized for the case that
+/// R is a prime field or its packing.
+#[inline]
+fn quadratic_square<F, R, const D: usize>(a: &[R; D], res: &mut [R; D], w: F)
+where
+    F: Field,
+    R: Algebra<F>,
+{
+    // We want to compute:
+    // (a0 + a1·X)² = a0² + a1²·w + (2·a0·a1)·X
+    let a1_w = a[1].clone() * w;
+    // Compute a0² + a1²·w
+    res[0] = R::dot_product(a[..].try_into().unwrap(), &[a[0].clone(), a1_w]);
+    // Compute 2·a0·a1
+    res[1] = a[0].clone() * a[1].double();
+}
+
 ///Section 11.3.6b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
 fn quadratic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
     assert_eq!(D, 2);
-    let scalar = (a[0].square() - w * a[1].square()).inverse();
+    let neg_a1 = -a[1];
+    let scalar = F::dot_product(&[a[0], neg_a1], &[a[0], w * a[1]]).inverse();
     res[0] = a[0] * scalar;
-    res[1] = -a[1] * scalar;
+    res[1] = neg_a1 * scalar;
 }
 
 /// Section 11.3.6b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
@@ -799,6 +812,46 @@ where
 
     // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0
     res[3] = R::dot_product::<4>(a[..].try_into().unwrap(), b_r_rev[..4].try_into().unwrap());
+}
+
+/// Compute the inverse of a quartic binomial extension field element.
+#[inline]
+fn quartic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
+    assert_eq!(D, 4);
+
+    // We use the fact that the quartic extension is a tower of quadratic extensions.
+    // We can see this by writing our element as a = a0 + a1·X + a2·X² + a3·X³ = (a0 + a2·X²) + (a1 + a3·X²)·X.
+    // Explicitly our tower looks like F < F[x]/(X²-w) < F[x]/(X⁴-w).
+    // Using this, we can compute the inverse of a in three steps:
+
+    // Compute the norm of our element with respect to F[x]/(X²-w).
+    // This is given by:
+    //      ((a0 + a2·X²) + (a1 + a3·X²)·X) * ((a0 + a2·X²) - (a1 + a3·X²)·X)
+    //          = (a0 + a2·X²)² - (a1 + a3·X²)²
+    //          = (a0² + w·a2² - 2w·a1·a3) + (2·a0·a2 - a1² - w·a3²)·X²
+    //          = norm_0 + norm_1·X² = norm
+    let neg_a1 = -a[1];
+    let a3_w = a[3] * w;
+    let norm_0 = F::dot_product(&[a[0], a[2], neg_a1.double()], &[a[0], a[2] * w, a3_w]);
+    let norm_1 = F::dot_product(&[a[0], a[1], -a[3]], &[a[2].double(), neg_a1, a3_w]);
+
+    // Now we compute the inverse of norm = norm_0 + norm_1·X².
+    let mut inv = [F::ZERO; 2];
+    quadratic_inv(&[norm_0, norm_1], &mut inv, w);
+
+    // Then the inverse of a is given by:
+    //      a⁻¹ = ((a0 + a2·X²) - (a1 + a3·X²)·X)·norm·⁻¹
+    //          = (a0 + a2·X²)·norm·⁻¹ - (a1 + a3·X²)·norm·⁻¹
+    // Both of these multiplication can be done in the quadratic extension field.
+    let mut out_evn = [F::ZERO; 2];
+    let mut out_odd = [F::ZERO; 2];
+    quadratic_mul(&[a[0], a[2]], &inv, &mut out_evn, w);
+    quadratic_mul(&[a[1], a[3]], &inv, &mut out_odd, w);
+
+    res[0] = out_evn[0];
+    res[1] = -out_odd[0];
+    res[2] = out_evn[1];
+    res[3] = -out_odd[1];
 }
 
 /// Multiplication in a quintic binomial extension field.
