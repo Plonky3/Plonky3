@@ -647,7 +647,7 @@ pub(super) fn binomial_mul<
 /// Optimized multiplication for quadratic extension field.
 ///
 /// Makes use of the in built field dot product code. This is optimized for the case that
-/// R is a prime field or it's packing.
+/// R is a prime field or its packing.
 ///
 /// ```text
 ///     A = a0 + a1·X
@@ -754,7 +754,7 @@ pub(crate) fn cubic_square<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: u
 /// Multiplication in a quartic binomial extension field.
 ///
 /// Makes use of the in built field dot product code. This is optimized for the case that
-/// R is a prime field or it's packing.
+/// R is a prime field or its packing.
 #[inline]
 fn quartic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
 where
@@ -803,7 +803,7 @@ where
 /// Multiplication in a quintic binomial extension field.
 ///
 /// Makes use of the in built field dot product code. This is optimized for the case that
-/// R is a prime field or it's packing.
+/// R is a prime field or its packing.
 fn quintic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
 where
     F: Field,
