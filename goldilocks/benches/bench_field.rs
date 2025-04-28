@@ -6,7 +6,9 @@ use p3_field_testing::bench_func::{
     benchmark_add_latency, benchmark_add_throughput, benchmark_inv, benchmark_iter_sum,
     benchmark_sub_latency, benchmark_sub_throughput,
 };
-use p3_field_testing::{benchmark_mul_latency, benchmark_mul_throughput, benchmark_sum_array};
+use p3_field_testing::{
+    benchmark_dot_array, benchmark_mul_latency, benchmark_mul_throughput, benchmark_sum_array,
+};
 use p3_goldilocks::Goldilocks;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -15,12 +17,19 @@ type F = Goldilocks;
 
 fn bench_field(c: &mut Criterion) {
     let name = "Goldilocks";
-    const REPS: usize = 1000;
+    const REPS: usize = 200;
     benchmark_mul_latency::<F, 100>(c, name);
     benchmark_mul_throughput::<F, 25>(c, name);
     benchmark_inv::<F>(c, name);
     benchmark_iter_sum::<F, 4, REPS>(c, name);
     benchmark_sum_array::<F, 4, REPS>(c, name);
+
+    benchmark_dot_array::<F, 1>(c, name);
+    benchmark_dot_array::<F, 2>(c, name);
+    benchmark_dot_array::<F, 3>(c, name);
+    benchmark_dot_array::<F, 4>(c, name);
+    benchmark_dot_array::<F, 5>(c, name);
+    benchmark_dot_array::<F, 6>(c, name);
 
     // Note that each round of throughput has 10 operations
     // So we should have 10 * more repetitions for latency tests.

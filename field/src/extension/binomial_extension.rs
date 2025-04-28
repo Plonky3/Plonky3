@@ -195,8 +195,8 @@ where
         let w = F::W;
         match D {
             2 => {
-                let a = self.value.clone();
-                res.value[0] = a[0].square() + a[1].square() * w;
+                let a1_w = a[1].clone() * F::W;
+                res.value[0] = A::dot_product(a[..].try_into().unwrap(), &[a[0].clone(), a1_w]);
                 res.value[1] = a[0].clone() * a[1].double();
                 res
             }
