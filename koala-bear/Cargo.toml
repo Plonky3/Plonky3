@@ -27,3 +27,7 @@ rand_xoshiro.workspace = true
 [[bench]]
 name = "bench_field"
 harness = false
+
+[[bench]]
+name = "extension"
+harness = false

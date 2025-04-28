@@ -298,7 +298,7 @@ pub fn benchmark_mul_latency<R: PrimeCharacteristicRing + Copy, const N: usize>(
                 }
                 vec
             },
-            |x| x.iter().fold(R::ZERO, |x, y| x * *y),
+            |x| x.iter().fold(R::ONE, |x, y| x * *y),
             BatchSize::SmallInput,
         )
     });
