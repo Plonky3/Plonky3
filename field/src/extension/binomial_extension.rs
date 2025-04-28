@@ -191,14 +191,22 @@ where
 
     #[inline(always)]
     fn square(&self) -> Self {
-        let mut res = Self::default();
-        let w = F::W;
         match D {
-            2 => quadratic_square(&self.value, &mut res.value, w),
-            3 => cubic_square(&self.value, &mut res.value),
-            _ => binomial_mul::<F, A, A, D>(&self.value, &self.value, &mut res.value, w),
+            2 => {
+                let a = self.value.clone();
+                let mut res = Self::default();
+                let a1_w = a[1].clone() * F::W;
+                res.value[0] = A::dot_product(a[..].try_into().unwrap(), &[a[0].clone(), a1_w]);
+                res.value[1] = a[0].clone() * a[1].double();
+                res
+            }
+            3 => {
+                let mut res = Self::default();
+                cubic_square(&self.value, &mut res.value);
+                res
+            }
+            _ => <Self as Mul<Self>>::mul(self.clone(), self.clone()),
         }
-        res
     }
 
     #[inline]
@@ -671,25 +679,6 @@ where
         &[a[0].clone(), a[1].clone()],
         &[b[1].clone().into(), b[0].clone().into()],
     );
-}
-
-/// Optimized squaring for quadratic extension field.
-///
-/// Makes use of the in built field dot product code. This is optimized for the case that
-/// R is a prime field or its packing.
-#[inline]
-fn quadratic_square<F, R, const D: usize>(a: &[R; D], res: &mut [R; D], w: F)
-where
-    F: Field,
-    R: Algebra<F>,
-{
-    // We want to compute:
-    // (a0 + a1·X)² = a0² + a1²·w + (2·a0·a1)·X
-    let a1_w = a[1].clone() * w;
-    // Compute a0² + a1²·w
-    res[0] = R::dot_product(a[..].try_into().unwrap(), &[a[0].clone(), a1_w]);
-    // Compute 2·a0·a1
-    res[1] = a[0].clone() * a[1].double();
 }
 
 ///Section 11.3.6b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
