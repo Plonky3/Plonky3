@@ -125,13 +125,13 @@ impl PartialOrd for Goldilocks {
 
 impl Display for Goldilocks {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Display::fmt(&self.value, f)
+        Display::fmt(&self.as_canonical_u64(), f)
     }
 }
 
 impl Debug for Goldilocks {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Debug::fmt(&self.value, f)
+        Debug::fmt(&self.as_canonical_u64(), f)
     }
 }
 
@@ -160,6 +160,7 @@ impl PrimeCharacteristicRing for Goldilocks {
         f
     }
 
+    #[inline]
     fn from_bool(b: bool) -> Self {
         Self::new(b.into())
     }
@@ -176,6 +177,55 @@ impl PrimeCharacteristicRing for Goldilocks {
             2 => input[0] + input[1],
             3 => input[0] + input[1] + input[2],
             _ => input.iter().copied().sum(),
+        }
+    }
+
+    #[inline]
+    fn dot_product<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
+        // The constant OFFSET has 2 important properties:
+        // 1. It is a multiple of P.
+        // 2. It is greater than the maximum possible value of the sum of the products of two u64s.
+        const OFFSET: u128 = ((P as u128) << 64) - (P as u128) + ((P as u128) << 32);
+        assert!((N as u32) <= (1 << 31));
+        match N {
+            0 => Self::ZERO,
+            1 => lhs[0] * rhs[0],
+            2 => {
+                // We unroll the N = 2 case as it is slightly faster and this is an important case
+                // as a major use is in extension field arithmetic and Goldilocks has a degree 2 extension.
+                let long_prod_0 = (lhs[0].value as u128) * (rhs[0].value as u128);
+                let long_prod_1 = (lhs[1].value as u128) * (rhs[1].value as u128);
+
+                // We know that long_prod_0, long_prod_1 < OFFSET.
+                // Thus if long_prod_0 + long_prod_1 overflows, we can just subtract OFFSET.
+                let (sum, over) = long_prod_0.overflowing_add(long_prod_1);
+                // Compiler really likes defining sum_corr here instead of in the if/else.
+                let sum_corr = sum.wrapping_sub(OFFSET);
+                if over {
+                    reduce128(sum_corr)
+                } else {
+                    reduce128(sum)
+                }
+            }
+            _ => {
+                let (lo_plus_hi, hi) = lhs
+                    .iter()
+                    .zip(rhs)
+                    .map(|(x, y)| (x.value as u128) * (y.value as u128))
+                    .fold((0_u128, 0_u64), |(acc_lo, acc_hi), val| {
+                        // Split val into (hi, lo) where hi is the upper 32 bits and lo is the lower 96 bits.
+                        let val_hi = (val >> 96) as u64;
+                        // acc_hi accumulates hi, acc_lo accumulates lo + 2^{96}hi.
+                        // As N <= 2^32, acc_hi cannot overflow.
+                        unsafe { (acc_lo.wrapping_add(val), acc_hi.unchecked_add(val_hi)) }
+                    });
+                // First, remove the hi part from lo_plus_hi.
+                let lo = lo_plus_hi.wrapping_sub((hi as u128) << 96);
+                // As 2^{96} = -1 mod P, we simply need to reduce lo - hi.
+                // As N <= 2^31, lo < 2^127 and hi < 2^63 < P. Hence the equation below will not over or underflow.
+                let sum = unsafe { lo.unchecked_add(P.unchecked_sub(hi) as u128) };
+                reduce128(sum)
+            }
         }
     }
 
