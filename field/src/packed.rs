@@ -93,6 +93,9 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
 
     /// Converts a mutable slice of possibly uninitialized scalar values into
     /// a mutable slice of possibly uninitialized packed values.
+    ///
+    /// # Panics
+    /// Panics if the slice length is not divisible by `WIDTH`.
     fn pack_maybe_uninit_slice_mut(
         buf: &mut [MaybeUninit<Self::Value>],
     ) -> &mut [MaybeUninit<Self>] {
