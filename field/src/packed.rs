@@ -24,6 +24,9 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     const WIDTH: usize;
 
     /// Interprets a slice of scalar values as a packed value reference.
+    ///
+    /// # Panics:
+    /// This function will panic if `slice.len() != Self::WIDTH`
     fn from_slice(slice: &[Self::Value]) -> &Self;
 
     /// Interprets a mutable slice of scalar values as a mutable packed value.
