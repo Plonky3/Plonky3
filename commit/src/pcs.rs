@@ -17,10 +17,6 @@ pub type Val<D> = <D as PolynomialSpace>::Val;
 /// over some domain.
 ///
 /// In general this does not have to be a hiding commitment scheme but it might be for some implementations.
-/// A polynomial commitment scheme, for committing to batches of polynomials defined by their evaluations
-/// over some domain.
-///
-/// In general this does not have to be a hiding commitment scheme but it might be for some implementations.
 // TODO: Should we have a super-trait for weakly-binding PCSs, like FRI outside unique decoding radius?
 pub trait Pcs<Challenge, Challenger>
 where
