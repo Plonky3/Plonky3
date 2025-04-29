@@ -115,7 +115,13 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
     /// FrobeniusField automorphisms: x -> x^n, where n is the order of BaseField.
     #[inline]
     fn frobenius(&self) -> Self {
-        self.repeated_frobenius(1)
+        // Slightly faster than self.repeated_frobenius(1)
+        let mut res = Self::ZERO;
+        for (i, z) in F::DTH_ROOT.powers().take(D).enumerate() {
+            res.value[i] = self.value[i] * z;
+        }
+
+        res
     }
 
     /// Repeated Frobenius automorphisms: x -> x^(n^count).
@@ -143,29 +149,45 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
         res
     }
 
+    /// Compute the inverse of a given element making use of the Frobenius automorphism.
+    ///
     /// Algorithm 11.3.4 in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
     #[inline]
     fn frobenius_inv(&self) -> Self {
-        // Writing 'a' for self, we need to compute a^(r-1):
-        // r = n^D-1/n-1 = n^(D-1)+n^(D-2)+...+n
-        let mut f = Self::ONE;
-        for _ in 1..D {
-            f = (f * *self).frobenius();
+        // Writing 'a' for self and `q` for the order of the base field, our goal is to compute `a^{-1}`.
+        //
+        // Note that we can write `-1 = (q^{D - 1} + ... + q) - (q^{D - 1} + ... + q + 1)`.
+        // This is a useful decomposition as powers of q can be efficiently computed using the frobenius
+        // automorphism and `Norm(a) = a^{(q^{D - 1} + ... + q + 1)}` is guaranteed to lie in the base field.
+        // This means that `Norm(a)^{-1}` can be computed using base field operations.
+        //
+        // Hence this implementation first computes `ProdConj(a) = a^{q^{D - 1} + ... + q}` using frobenius automorphisms.
+        // From this, it computes `Norm(a) = a * ProdConj(a)` and returns `ProdConj(a) * Norm(a)^{-1} = a^{-1}`.
+
+        // This loop requires a linear number of multiplications and Frobenius automorphisms.
+        // If D is known, it is possible to do this in a logarithmic number. See quintic_inv
+        // for an example of this.
+        let mut prod_conj = self.frobenius();
+        for _ in 2..D {
+            prod_conj = (prod_conj * *self).frobenius();
         }
 
-        // g = a^r is in the base field, so only compute that
+        // norm = a * prod_conj is in the base field, so only compute that
         // coefficient rather than the full product.
         let a = self.value;
-        let b = f.value;
-        let mut g = F::ZERO;
+        let b = prod_conj.value;
+        let mut w_coeff = F::ZERO;
+        // This should really be a dot product but
+        // const generics doesn't let this happen:
+        // b.reverse();
+        // let mut g = F::dot_product::<{D - 1}>(a[1..].try_into().unwrap(), b[..D - 1].try_into().unwrap());
         for i in 1..D {
-            g += a[i] * b[D - i];
+            w_coeff += a[i] * b[D - i];
         }
-        g *= F::W;
-        g += a[0] * b[0];
-        debug_assert_eq!(Self::from(g), *self * f);
+        let norm = F::dot_product(&[a[0], F::W], &[b[0], w_coeff]);
+        debug_assert_eq!(Self::from(norm), *self * prod_conj);
 
-        f * g.inverse()
+        prod_conj * norm.inverse()
     }
 }
 
@@ -297,6 +319,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
             2 => quadratic_inv(&self.value, &mut res.value, F::W),
             3 => cubic_inv(&self.value, &mut res.value, F::W),
             4 => quartic_inv(&self.value, &mut res.value, F::W),
+            5 => res = quintic_inv(self),
             _ => res = self.frobenius_inv(),
         }
 
@@ -988,4 +1011,27 @@ where
         &[a[2].clone(), two_a0, two_a1],
         &[a[2].clone(), a[4].clone(), a[3].clone()],
     );
+}
+
+/// Compute the inverse of a quintic binomial extension field element.
+#[inline]
+fn quintic_inv<F: BinomiallyExtendable<D>, const D: usize>(
+    a: &BinomialExtensionField<F, D>,
+) -> BinomialExtensionField<F, D> {
+    // Writing 'a' for self, we need to compute: `prod_conj = a^{q^4 + q^3 + q^2 + q}`
+    let a_exp_q = a.frobenius();
+    let a_exp_q_plus_q_sq = (*a * a_exp_q).frobenius();
+    let prod_conj = a_exp_q_plus_q_sq * a_exp_q_plus_q_sq.repeated_frobenius(2);
+
+    // norm = a * prod_conj is in the base field, so only compute that
+    // coefficient rather than the full product.
+    let a_vals = a.value;
+    let mut b = prod_conj.value;
+    b.reverse();
+
+    let w_coeff = F::dot_product::<4>(a.value[1..].try_into().unwrap(), b[..4].try_into().unwrap());
+    let norm = F::dot_product::<2>(&[a_vals[0], F::W], &[b[4], w_coeff]);
+    debug_assert_eq!(BinomialExtensionField::<F, D>::from(norm), *a * prod_conj);
+
+    prod_conj * norm.inverse()
 }
