@@ -120,8 +120,8 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     }
 
     /// Converts a mutable slice of possibly uninitialized scalar values into a pair:
-    /// - a slice of possibly uninitialized packed values, representing the aligned prefix,
-    /// - and the remaining unaligned scalar values as a suffix.
+    /// - a slice of possibly uninitialized packed values covering the largest aligned portion,
+    /// - and a remainder slice of possibly uninitialized scalar values that couldn't be packed.
     fn pack_maybe_uninit_slice_with_suffix_mut(
         buf: &mut [MaybeUninit<Self::Value>],
     ) -> (&mut [MaybeUninit<Self>], &mut [MaybeUninit<Self::Value>]) {
