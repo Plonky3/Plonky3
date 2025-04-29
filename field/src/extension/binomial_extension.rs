@@ -157,7 +157,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
 
         // Need to compute: a^(n^(D-1) + n^(D-2) + ... + n)
         // This requires a linear number of multiplications and Frobenius automorphisms.
-        // If D is known, it is possible to this this in a logarithmic number. See quintic_inv
+        // If D is known, it is possible to do this in a logarithmic number. See quintic_inv
         // for an example of this.
         let mut f = self.frobenius();
         for _ in 2..D {
