@@ -75,6 +75,9 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     }
 
     /// Converts a mutable slice of scalar values into a mutable slice of packed values.
+    ///
+    /// # Panics
+    /// Panics if the slice length is not divisible by `WIDTH`.
     fn pack_slice_mut(buf: &mut [Self::Value]) -> &mut [Self] {
         assert!(align_of::<Self>() <= align_of::<Self::Value>());
         assert!(
