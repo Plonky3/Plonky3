@@ -5,7 +5,7 @@ use core::fmt::Debug;
 
 use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace};
+use p3_commit::{BatchOpening, Mmcs, OpenedValues, Pcs, PolynomialSpace};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse};
@@ -20,7 +20,7 @@ use rand::distr::{Distribution, StandardUniform};
 use tracing::{info_span, instrument};
 
 use crate::verifier::FriError;
-use crate::{BatchOpening, FriConfig, FriProof, TwoAdicFriPcs};
+use crate::{FriConfig, FriProof, TwoAdicFriPcs};
 
 /// A hiding FRI PCS. Both MMCSs must also be hiding; this is not enforced at compile time so it's
 /// the user's responsibility to configure.

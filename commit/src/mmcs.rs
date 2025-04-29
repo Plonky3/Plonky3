@@ -4,8 +4,8 @@ use core::fmt::Debug;
 
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix};
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 /// A "Mixed Matrix Commitment Scheme" (MMCS) is a generalization of a vector commitment scheme.
 ///
@@ -43,7 +43,7 @@ pub trait Mmcs<T: Send + Sync + Clone>: Clone {
         &self,
         index: usize,
         prover_data: &Self::ProverData<M>,
-    ) -> (Vec<Vec<T>>, Self::Proof);
+    ) -> BatchOpening<T, Self>;
 
     /// Get the matrices that were committed to.
     fn get_matrices<'a, M: Matrix<T>>(&self, prover_data: &'a Self::ProverData<M>) -> Vec<&'a M>;
@@ -76,7 +76,46 @@ pub trait Mmcs<T: Send + Sync + Clone>: Clone {
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         index: usize,
-        opened_values: &[Vec<T>],
-        proof: &Self::Proof,
+        batch_opening: &BatchOpening<T, Self>,
     ) -> Result<(), Self::Error>;
+}
+
+/// A Batched opening proof.
+///
+/// Allows for opening multiple matrices at multiple locations at once.
+#[derive(Serialize, Deserialize, Clone)]
+// Enable Serialize/Deserialize whenever T supports it.
+#[serde(bound(serialize = "T: Serialize"))]
+#[serde(bound(deserialize = "T: DeserializeOwned"))]
+pub struct BatchOpening<T: Send + Sync + Clone, InputMmcs: Mmcs<T>> {
+    pub opened_values: Vec<Vec<T>>,
+    pub opening_proof: <InputMmcs as Mmcs<T>>::Proof,
+}
+
+impl<T: Send + Sync + Clone, InputMmcs: Mmcs<T>> BatchOpening<T, InputMmcs> {
+    /// Creates a new batch opening proof.
+    pub fn new(opened_values: Vec<Vec<T>>, opening_proof: <InputMmcs as Mmcs<T>>::Proof) -> Self {
+        Self {
+            opened_values,
+            opening_proof,
+        }
+    }
+
+    /// Deconstructs the batch opening proof into its components.
+    pub fn deconstruct(self) -> (Vec<Vec<T>>, <InputMmcs as Mmcs<T>>::Proof) {
+        let BatchOpening {
+            opened_values,
+            opening_proof,
+        } = self;
+        (opened_values, opening_proof)
+    }
+
+    /// Deconstructs the batch opening proof into its components.
+    pub fn deconstruct_by_ref(&self) -> (&[Vec<T>], &<InputMmcs as Mmcs<T>>::Proof) {
+        let BatchOpening {
+            opened_values,
+            opening_proof,
+        } = self;
+        (opened_values, opening_proof)
+    }
 }

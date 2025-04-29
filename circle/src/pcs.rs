@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace};
+use p3_commit::{BatchOpening, Mmcs, OpenedValues, Pcs, PolynomialSpace};
 use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, Field};
 use p3_fri::FriConfig;
@@ -42,13 +42,6 @@ impl<Val: Field, InputMmcs, FriMmcs> CirclePcs<Val, InputMmcs, FriMmcs> {
             _phantom: PhantomData,
         }
     }
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(bound = "")]
-pub struct BatchOpening<Val: Field, InputMmcs: Mmcs<Val>> {
-    pub(crate) opened_values: Vec<Vec<Val>>,
-    pub(crate) opening_proof: <InputMmcs as Mmcs<Val>>::Proof,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -315,11 +308,7 @@ where
                 .map(|(data, _)| {
                     let log_max_batch_height = log2_strict_usize(self.mmcs.get_max_height(data));
                     let reduced_index = index >> (log_max_height - log_max_batch_height);
-                    let (opened_values, opening_proof) = self.mmcs.open_batch(reduced_index, data);
-                    BatchOpening {
-                        opened_values,
-                        opening_proof,
-                    }
+                    self.mmcs.open_batch(reduced_index, data)
                 })
                 .collect();
 
@@ -328,7 +317,8 @@ where
             let (first_layer_values, first_layer_proof) = self
                 .fri_config
                 .mmcs
-                .open_batch(index >> 1, &first_layer_data);
+                .open_batch(index >> 1, &first_layer_data)
+                .deconstruct();
             let first_layer_siblings = izip!(&first_layer_values, &log_heights)
                 .map(|(v, log_height)| {
                     let reduced_index = index >> (log_max_height - log_height);
@@ -438,13 +428,7 @@ where
                     };
 
                     self.mmcs
-                        .verify_batch(
-                            batch_commit,
-                            dims,
-                            idx,
-                            &batch_opening.opened_values,
-                            &batch_opening.opening_proof,
-                        )
+                        .verify_batch(batch_commit, dims, idx, batch_opening)
                         .map_err(InputError::InputMmcsError)?;
 
                     for (ps_at_x, (mat_domain, mat_points_and_values)) in zip_eq(
@@ -531,8 +515,7 @@ where
                         &proof.first_layer_commitment,
                         &fl_dims,
                         index >> 1,
-                        &fl_leaves,
-                        first_layer_proof,
+                        &BatchOpening::new(fl_leaves, first_layer_proof.clone()),
                     )
                     .map_err(InputError::FirstLayerMmcsError)?;
 
