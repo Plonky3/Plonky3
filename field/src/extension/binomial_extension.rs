@@ -201,6 +201,7 @@ where
                 res.value[1] = a[0].clone() * a[1].double();
             }
             3 => cubic_square(&self.value, &mut res.value),
+            4 => quartic_square(&self.value, &mut res.value, w),
             5 => quintic_square(&self.value, &mut res.value, w),
             _ => binomial_mul::<F, A, A, D>(&self.value, &self.value, &mut res.value, w),
         }
@@ -770,7 +771,7 @@ where
         w.into(),
     ];
 
-    // Constant term = a0*b0 + w(a1*b3 + a2*b3 + a3*b1)
+    // Constant term = a0*b0 + w(a1*b3 + a2*b2 + a3*b1)
     let w_coeff_0 =
         R::dot_product::<3>(a[1..].try_into().unwrap(), b_r_rev[..3].try_into().unwrap());
     res[0] = R::dot_product(&[a[0].clone(), w_coeff_0], b_r_rev[3..].try_into().unwrap());
@@ -797,6 +798,46 @@ where
 
     // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0
     res[3] = R::dot_product::<4>(a[..].try_into().unwrap(), b_r_rev[..4].try_into().unwrap());
+}
+
+/// Optimized Square function for quadratic extension field.
+///
+/// Makes use of the in built field dot product code. This is optimized for the case that
+/// R is a prime field or its packing.
+#[inline]
+pub(crate) fn quartic_square<F, R, const D: usize>(a: &[R; D], res: &mut [R; D], w: F)
+where
+    F: Field,
+    R: Algebra<F>,
+{
+    assert_eq!(D, 4);
+
+    let two_a0 = a[0].double();
+    let two_a1 = a[1].double();
+    let two_a2 = a[2].double();
+    let a2_w = a[2].clone() * w;
+    let a3_w = a[3].clone() * w;
+
+    // Constant term = a0*a0 + w*a2*a2 + 2*w*a1*a3
+    res[0] = R::dot_product(
+        &[a[0].clone(), a2_w, two_a1],
+        &[a[0].clone(), a[2].clone(), a3_w.clone()],
+    );
+
+    // Linear term = 2*a0*a1 + 2*w*a2*a3)
+    res[1] = R::dot_product(
+        &[two_a0.clone(), two_a2.clone()],
+        &[a[1].clone(), a3_w.clone()],
+    );
+
+    // Square term = a1*a1 + w*a3*a3 + 2*a0*a2
+    res[2] = R::dot_product(
+        &[a[1].clone(), a3_w, two_a0.clone()],
+        &[a[1].clone(), a[3].clone(), a[2].clone()],
+    );
+
+    // Cubic term = 2*a0*a3 + 2*a1*a2)
+    res[3] = R::dot_product(&[two_a0, two_a2], &[a[3].clone(), a[1].clone()]);
 }
 
 /// Multiplication in a quintic binomial extension field.
