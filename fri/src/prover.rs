@@ -14,7 +14,7 @@ use tracing::{debug_span, info_span, instrument};
 use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof, QueryProof};
 
 #[instrument(name = "FRI prover", skip_all)]
-pub fn prove<G, Val, Challenge, M, Challenger>(
+pub fn prove_fri<G, Val, Challenge, M, Challenger>(
     g: &G,
     config: &FriConfig<M>,
     inputs: Vec<Vec<Challenge>>,

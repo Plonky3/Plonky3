@@ -93,7 +93,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
 
         let log_max_height = log2_strict_usize(input[0].len());
 
-        let proof = prover::prove(
+        let proof = prover::prove_fri(
             &TwoAdicFriGenericConfig::<Vec<(usize, Challenge)>, ()>(PhantomData),
             &fc,
             input.clone(),
@@ -115,7 +115,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
 
     let mut v_challenger = Challenger::new(perm);
     let _alpha: Challenge = v_challenger.sample_algebra_element();
-    verifier::verify(
+    verifier::verify_fri(
         &TwoAdicFriGenericConfig::<Vec<(usize, Challenge)>, ()>(PhantomData),
         &fc,
         &proof,

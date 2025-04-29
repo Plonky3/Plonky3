@@ -488,21 +488,27 @@ where
         let g: TwoAdicFriGenericConfigForMmcs<Val, InputMmcs> =
             TwoAdicFriGenericConfig(PhantomData);
 
-        let fri_proof = prover::prove(&g, &self.fri, fri_input, fiat_shamir_challenger, |index| {
-            commitment_data_with_opening_points
-                .iter()
-                .map(|(data, _)| {
-                    let log_max_height = log2_strict_usize(self.mmcs.get_max_height(data));
-                    let bits_reduced = log_global_max_height - log_max_height;
-                    let reduced_index = index >> bits_reduced;
-                    let (opened_values, opening_proof) = self.mmcs.open_batch(reduced_index, data);
-                    BatchOpening {
-                        opened_values,
-                        opening_proof,
-                    }
-                })
-                .collect()
-        });
+        let fri_proof =
+            prover::prove_fri(&g, &self.fri, fri_input, fiat_shamir_challenger, |index| {
+                // Given an index, produce batch opening proofs for each collection of matrices
+                // combined into a single mmcs commitment. In cases where the maximum height of
+                // a batch of matrices is smaller than the global max height, shift the index down
+                // to compensate.
+                commitment_data_with_opening_points
+                    .iter()
+                    .map(|(data, _)| {
+                        let log_max_height = log2_strict_usize(self.mmcs.get_max_height(data));
+                        let bits_reduced = log_global_max_height - log_max_height;
+                        let reduced_index = index >> bits_reduced;
+                        let (opened_values, opening_proof) =
+                            self.mmcs.open_batch(reduced_index, data);
+                        BatchOpening {
+                            opened_values,
+                            opening_proof,
+                        }
+                    })
+                    .collect()
+            });
 
         (all_opened_values, fri_proof)
     }
@@ -555,22 +561,30 @@ where
         let g: TwoAdicFriGenericConfigForMmcs<Val, InputMmcs> =
             TwoAdicFriGenericConfig(PhantomData);
 
-        verifier::verify(
+        verifier::verify_fri(
             &g,
             &self.fri,
             proof,
             fiat_shamir_challenger,
+            // index is the query position we are checking
+            // input_proof is a vector of batch openings. Each batch opening contains a
+            // list of opened values for a collection of matrices along with a batched opening proof.
             |index, input_proof| {
                 // TODO: separate this out into functions
 
+                // For each log_height, we store the alpha power and compute the reduced opening.
                 // log_height -> (alpha_pow, reduced_opening)
                 let mut reduced_openings = BTreeMap::<usize, (Challenge, Challenge)>::new();
 
+                // For each batch commitment and opening proof
                 for (batch_opening, (batch_commit, mats)) in zip_eq(
                     input_proof,
                     &commitments_with_opening_points,
                     FriError::InvalidProofShape,
                 )? {
+                    // Find the height of each matrix in the batch.
+                    // Currently we only check domain.size() as the shift is
+                    // assumed to always be Val::GENERATOR.
                     let batch_heights = mats
                         .iter()
                         .map(|(domain, _)| domain.size() << self.fri.log_blowup)
@@ -586,6 +600,7 @@ where
                         let bits_reduced = log_global_max_height - log_batch_max_height;
                         let reduced_index = index >> bits_reduced;
 
+                        // Verify that the opened values match the commitment.
                         self.mmcs.verify_batch(
                             batch_commit,
                             &batch_dims,
@@ -603,8 +618,10 @@ where
                             &batch_opening.opening_proof,
                         )
                     }
+                    // If the opened values do not match the commitment, error.
                     .map_err(FriError::InputError)?;
 
+                    // For each matrix in the commitment
                     for (mat_opening, (mat_domain, mat_points_and_values)) in zip_eq(
                         &batch_opening.opened_values,
                         mats,
@@ -617,18 +634,19 @@ where
 
                         // todo: this can be nicer with domain methods?
 
+                        // Compute gh^i
                         let x = Val::GENERATOR
                             * Val::two_adic_generator(log_height).exp_u64(rev_reduced_index as u64);
 
                         let (alpha_pow, ro) = reduced_openings
-                            .entry(log_height)
+                            .entry(log_height) // Get a mutable reference to the entry.
                             .or_insert((Challenge::ONE, Challenge::ZERO));
 
                         for (z, ps_at_z) in mat_points_and_values {
                             for (&p_at_x, &p_at_z) in
                                 zip_eq(mat_opening, ps_at_z, FriError::InvalidProofShape)?
                             {
-                                let quotient = (-p_at_z + p_at_x) / (-*z + x);
+                                let quotient = (p_at_z - p_at_x) / (*z - x);
                                 *ro += *alpha_pow * quotient;
                                 *alpha_pow *= alpha;
                             }

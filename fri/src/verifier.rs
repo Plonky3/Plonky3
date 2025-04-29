@@ -20,11 +20,20 @@ pub enum FriError<CommitMmcsErr, InputError> {
     InvalidPowWitness,
 }
 
-pub fn verify<G, Val, Challenge, M, Challenger>(
-    g: &G,
-    config: &FriConfig<M>,
+/// Verifies a FRI proof.
+///
+/// Arguments:
+/// - `config`, `parameters`: Together, these contain all information the verifier needs to reimplement
+///   the provers FRI protocol.
+/// - `proof`: The proof to verify.
+/// - `fiat_shamir_challenger`: The Fiat-Shamir challenger to use for sampling challenges.
+/// - `open_input`: A function that takes an index and an opening proof and returns a vector of openings
+///   or a `FriError` if the proof fails.
+pub fn verify_fri<G, Val, Challenge, M, Challenger>(
+    config: &G,
+    parameters: &FriConfig<M>,
     proof: &FriProof<Challenge, M, Challenger::Witness, G::InputProof>,
-    challenger: &mut Challenger,
+    fiat_shamir_challenger: &mut Challenger,
     open_input: impl Fn(
         usize,
         &G::InputProof,
@@ -41,8 +50,8 @@ where
         .commit_phase_commits
         .iter()
         .map(|comm| {
-            challenger.observe(comm.clone());
-            challenger.sample_algebra_element()
+            fiat_shamir_challenger.observe(comm.clone());
+            fiat_shamir_challenger.sample_algebra_element()
         })
         .collect();
 
@@ -50,26 +59,27 @@ where
     proof
         .final_poly
         .iter()
-        .for_each(|x| challenger.observe_algebra_element(*x));
+        .for_each(|x| fiat_shamir_challenger.observe_algebra_element(*x));
 
-    if proof.query_proofs.len() != config.num_queries {
+    if proof.query_proofs.len() != parameters.num_queries {
         return Err(FriError::InvalidProofShape);
     }
 
     // Check PoW.
-    if !challenger.check_witness(config.proof_of_work_bits, proof.pow_witness) {
+    if !fiat_shamir_challenger.check_witness(parameters.proof_of_work_bits, proof.pow_witness) {
         return Err(FriError::InvalidPowWitness);
     }
 
     // The log of the maximum domain size.
     let log_max_height =
-        proof.commit_phase_commits.len() + config.log_blowup + config.log_final_poly_len;
+        proof.commit_phase_commits.len() + parameters.log_blowup + parameters.log_final_poly_len;
 
     // The log of the final domain size.
-    let log_final_height = config.log_blowup + config.log_final_poly_len;
+    let log_final_height = parameters.log_blowup + parameters.log_final_poly_len;
 
     for qp in &proof.query_proofs {
-        let index = challenger.sample_bits(log_max_height + g.extra_query_index_bits());
+        let index =
+            fiat_shamir_challenger.sample_bits(log_max_height + config.extra_query_index_bits());
         let ro = open_input(index, &qp.input_proof)?;
 
         debug_assert!(
@@ -77,15 +87,15 @@ where
             "reduced openings sorted by height descending"
         );
 
-        let mut domain_index = index >> g.extra_query_index_bits();
+        let mut domain_index = index >> config.extra_query_index_bits();
 
         // Starting at the evaluation at `index` of the initial domain,
         // perform fri folds until the domain size reaches the final domain size.
         // Check after each fold that the pair of sibling evaluations at the current
         // node match the commitment.
         let folded_eval = verify_query(
-            g,
             config,
+            parameters,
             &mut domain_index,
             zip_eq(
                 zip_eq(
