@@ -42,7 +42,7 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     where
         F: FnMut(usize) -> Self::Value;
 
-    /// Returns the packed values as an immutable slice.
+    /// Returns the underlying scalar values as an immutable slice.
     fn as_slice(&self) -> &[Self::Value];
 
     /// Returns the packed values as a mutable slice.
