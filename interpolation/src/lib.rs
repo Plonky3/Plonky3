@@ -43,6 +43,7 @@ where
         .take(height)
         .collect::<Vec<_>>();
 
+    // Compute `1/(z - gh^i)` for each elements of the coset.
     let diffs: Vec<EF> = coset.par_iter().map(|&g| point - g).collect();
     let diff_invs = batch_multiplicative_inverse(&diffs);
 
@@ -56,7 +57,7 @@ where
 ///
 /// This function takes the precomputed `subgroup` points and `diff_invs` (the
 /// inverses of the differences between the evaluation point and each shifted
-/// subgroup element), and should be prefered over `interpolate_coset` when
+/// subgroup element), and should be preferred over `interpolate_coset` when
 /// repeatedly called with the same subgroup and/or point.
 ///
 /// Unlike `interpolate_coset`, the parameters `subgroup`, `coset_evals`, and
@@ -74,26 +75,44 @@ where
     Mat: Matrix<F>,
 {
     // Slight variation of this approach: https://hackmd.io/@vbuterin/barycentric_evaluation
+
     debug_assert_eq!(coset.len(), diff_invs.len());
     debug_assert_eq!(coset.len(), coset_evals.height());
+
+    // We start with the evaluations of a polynomial `f` over a coset `gH` of size `N` and want to compute `f(z)`.
+    // First note that `g^N - z^N` is equal to `0` at all points in the coset. Thus `(z^N - g^N)/(z - gh^i)`
+    // is equal to `0` at all points except for `gh^i` where it is equal to `N * (gh^i)^{N - 1} = N * g^N * (gh^{i})^{-1}`.
+    // Hence `L_{i}(x) = h^i * (g^N - x^N)/(N * g^{N - 1} * (gh^i - x))` will be equal to `1` at `gh^i` and `0`
+    // at all other points in the coset. This means that we can compute `f(z)` as:
+    //          `\sum_i L_{i}(z) f(gh^i) = (z^N - g^N)/(N * g^N) * \sum_i gh^i/(z - gh^i) f(gh^i)`.
 
     let height = coset_evals.height();
     let log_height = log2_strict_usize(height);
 
+    // Compute `gh^i/(z - gh^i)` for each i.
     let col_scale: Vec<_> = coset
         .par_iter()
         .zip(diff_invs)
         .map(|(&sg, &diff_inv)| diff_inv * sg)
         .collect();
+
+    // For each column polynomial `fj`, compute `\sum_i h^i/(gh^i - z) * fj(gh^i)`.
     let sum = coset_evals.columnwise_dot_product(&col_scale);
 
     let point_pow_height = point.exp_power_of_2(log_height);
     let shift_pow_height = shift.exp_power_of_2(log_height);
 
+    // Compute the vanishing polynomial of the coset.
+    // This is `Z_{sH}(z) = z^N - g^N`.
     let vanishing_polynomial = point_pow_height - shift_pow_height;
 
+    // Compute N * g^N
     // In principle, height could be bigger than the characteristic of F.
     let denominator = shift_pow_height.mul_2exp_u64(log_height as u64);
+
+    // TODO: It should be possible to remove this inverse via a simple refactor.
+    // We simply need to pass in shift_inv as well as shift. This would also
+    // let us get rid of one of the exp_power_of_2 calls using `(z^N - g^N)/(N * g^N) = ((z/g)^N - 1)/N`.
     scale_vec(vanishing_polynomial * denominator.inverse(), sum)
 }
 

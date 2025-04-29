@@ -29,7 +29,8 @@ pub trait StarkGenericConfig {
     type Challenge: ExtensionField<Val<Self>>;
 
     /// The challenger (Fiat-Shamir) implementation used.
-    type Challenger: FieldChallenger<Val<Self>>
+    type Challenger: Clone
+        + FieldChallenger<Val<Self>>
         + CanObserve<<Self::Pcs as Pcs<Self::Challenge, Self::Challenger>>::Commitment>
         + CanSample<Self::Challenge>;
 

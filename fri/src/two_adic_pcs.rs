@@ -1,3 +1,16 @@
+//! The FRI PCS protocol over two-adic fields.
+//!
+//! The following implements a slight variant of the usual FRI protocol. As usual we start
+//! with a polynomial `F(x)` of degree `n` given as evaluations over the coset `gH` with `|H| = 2^n`.
+//!
+//! Now consider the polynomial `G(x) = F(gx)`. Note that `G(x)` has the same degree as `F(x)` and
+//! the evaluations of `F(x)` over `gH` are identical to the evaluations of `G(x)` over `H`.
+//!
+//! Hence we can reinterpret our vector of evaluations as evaluations of `G(x)` over `H` and apply
+//! the standard FRI protocol to this evaluation vector. This makes is easier to apply FRI to a collection
+//! of polynomials defined over different cosets as we don't need to keep track of the coset shifts. We
+//! can just assume that every polynomial is defined over the subgroup of the relevant size.
+
 use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -158,6 +171,14 @@ where
         TwoAdicMultiplicativeCoset::new(Val::ONE, log2_strict_usize(degree)).unwrap()
     }
 
+    /// Commit to a collection of evaluation matrices.
+    ///
+    /// Each element of evaluation contains a coset `shift * H` and a matrix `mat` with `mat.height() = |H|`.
+    /// Interpreting each column of `mat` as the evaluations of a polynomial `p_i(x)` over `shift * H`,
+    /// we compute the evaluations of `p_i` over `gK` where `g` is the chosen generator of the multiplicative group
+    /// of `Val` and `K` is the unique subgroup of order `|H| << self.fri.log_blowup`.
+    ///
+    /// We then produce a merkle commitment to these evaluations.
     fn commit(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
@@ -166,8 +187,13 @@ where
             .into_iter()
             .map(|(domain, evals)| {
                 assert_eq!(domain.size(), evals.height());
+                // coset_lde_batch converts from evaluations over `xH` to evaluations over `shift * x * K`.
+                // Hence, letting `shift = g/x` the output will be evaluations over `gK` as desired.
+                // When `x = g,` we could just use the standard LDE but currently this doesn't seem
+                // to give a meaningful performance boost.
                 let shift = Val::GENERATOR / domain.shift();
-                // Commit to the bit-reversed LDE.
+                // Compute the LDE with blowup factor fri.log_blowup.
+                // We bit reverse as this has a nice interplay with the FRI protocol.
                 self.dft
                     .coset_lde_batch(evals, self.fri.log_blowup, shift)
                     .bit_reverse_rows()
@@ -175,6 +201,7 @@ where
             })
             .collect();
 
+        // Commit to the bit-reversed LDEs.
         self.mmcs.commit(ldes)
     }
 
@@ -195,6 +222,7 @@ where
         &self,
         // For each round,
         rounds: Vec<(
+            // TODO: Why is this called rounds??
             &Self::ProverData,
             // for each matrix,
             Vec<
@@ -241,6 +269,8 @@ where
 
         */
 
+        // Contained in each `Self::ProverData` is a list of matrices which have been committed to.
+        // We start by extracting those matrices to make them easier to work with.
         let mats_and_points = rounds
             .iter()
             .map(|(data, points)| {
@@ -284,8 +314,10 @@ where
         let all_opened_values = mats_and_points
             .iter()
             .map(|(mats, points)| {
+                // For each collection of matrices
                 izip!(mats.iter(), points.iter())
                     .map(|(mat, points_for_mat)| {
+                        // For each matrix and vector of opening points
                         let h = mat.height() >> self.fri.log_blowup;
                         // `subgroup` and `mat` are both in bit-reversed order, so we can truncate.
                         let (low_coset, _) = mat.split_rows(h);
@@ -298,11 +330,18 @@ where
                                     info_span!("evaluate matrix", dims = %mat.dimensions())
                                         .entered();
 
-                                // Use Barycentric interpolation to evaluate the matrix at the given point.
+                                // Use Barycentric interpolation to evaluate each column of the matrix at the given point.
                                 let ys =
                                     info_span!("compute opened values with Lagrange interpolation")
                                         .in_scope(|| {
+                                            // TODO: I think this is potentially the cause of a bunch of bugs. This assumes that every input matrix has a blowup of at least self.fri.log_blowup.
+                                            // If the blow_up factor is smaller than self.fri.log_blowup. this will lead to errors. (If it is bigger, we shouldn't get any errors but it will be slightly slower.)
+
+                                            // The point of this correction is that each column of the matrix corresponds to a low degree polynomial.
+                                            // Hence we can save time by restricting the height of the matrix to be the minimal height which
+                                            // uniquely identifies the polynomial.
                                             let inv_denoms = &inv_denoms.get(&point).unwrap()[..h];
+                                            // This assumes that low_coset is `gH` for `g` the generator of the group.
                                             interpolate_coset_with_precomputation(
                                                 &low_coset,
                                                 Val::GENERATOR,
@@ -386,8 +425,7 @@ where
                     // If we have multiple matrices at the same height, we need to scale mat to combine them.
                     let alpha_pow_offset = alpha.exp_u64(num_reduced[log_height] as u64);
 
-                    // As we have all the openings `Mi(z)`, we can combine them using `alpha`
-                    // in an identical way to before to also compute `Mred(z)`.
+                    // We combine the openings `Mi(z)` using `alpha` to compute `Mred(z)`.
                     let reduced_openings: Challenge =
                         dot_product(alpha_powers.iter().copied(), openings.iter().copied());
 
@@ -402,7 +440,7 @@ where
                         // So zip will truncate to the desired smaller length.
                         .zip(inv_denoms.get(&point).unwrap().par_iter())
                         // Map the function `Mred(x) -> (Mred(z) - Mred(x))/(z - x)`
-                        // across the evaluations vector of `Mred(x)`.
+                        // across the evaluation vector of `Mred(x)`.
                         .for_each(|((&reduced_row, ro), &inv_denom)| {
                             *ro += alpha_pow_offset * (reduced_openings - reduced_row) * inv_denom
                         });
@@ -411,6 +449,7 @@ where
             }
         }
 
+        // It remains to prove that all our functions are low degree.
         let fri_input = reduced_openings.into_iter().rev().flatten().collect_vec();
 
         let g: TwoAdicFriGenericConfigForMmcs<Val, InputMmcs> =
@@ -480,7 +519,7 @@ where
             // TODO: separate this out into functions
 
             // log_height -> (alpha_pow, reduced_opening)
-            let mut reduced_openings = BTreeMap::<usize, (Challenge, Challenge)>::new();
+            let mut reduced_openings = BTreeMap::new();
 
             for (batch_opening, (batch_commit, mats)) in
                 zip_eq(input_proof, &rounds, FriError::InvalidProofShape)?
@@ -569,11 +608,13 @@ where
     }
 }
 
+/// TODO: Add doc comment
 #[instrument(skip_all)]
 fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matrix<F>>(
     mats_and_points: &[(Vec<M>, &Vec<Vec<EF>>)],
     coset: &[F],
 ) -> LinearMap<EF, Vec<EF>> {
+    // For each point z, find the largest height of a matrix that we need to open at that point.
     let mut max_log_height_for_point: LinearMap<EF, usize> = LinearMap::new();
     for (mats, points) in mats_and_points {
         for (mat, points_for_mat) in izip!(mats, *points) {
@@ -588,13 +629,16 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
         }
     }
 
+    // Compute the inverse of `(z - x)` for every `x` in the coset using `batch_multiplicative_inverse`.
+    // This does involve calling `batch_multiplicative_inverse` for each `z` but there shouldn't be too many `z`'s.
+    // If we need to speed this up, it should be possible to call `batch_multiplicative_inverse` exactly once.
     max_log_height_for_point
         .into_iter()
         .map(|(z, log_height)| {
             (
                 z,
                 batch_multiplicative_inverse(
-                    &coset[..(1 << log_height)]
+                    &coset[..(1 << log_height)] // Due to bit reversal, this gives the values of the coset gH where H is the subgroup of size 2^log_height.
                         .iter()
                         .map(|&x| z - x)
                         .collect_vec(),
