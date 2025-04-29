@@ -11,7 +11,7 @@ use crate::{Algebra, BasedVectorSpace, ExtensionField, Powers, PrimeCharacterist
 /// The `Packable` trait allows us to specify implementations for potentially conflicting types.
 pub trait Packable: 'static + Default + Copy + Send + Sync + PartialEq + Eq {}
 
-/// A trait for packed SIMD-like values made up of multiple scalar elements.
+/// A trait for array-like structs made up of multiple scalar elements.
 ///
 /// # Safety
 /// - If `P` implements `PackedField` then `P` must be castable to/from `[P::Value; P::WIDTH]`
