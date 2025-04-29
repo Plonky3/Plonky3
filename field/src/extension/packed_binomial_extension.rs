@@ -9,7 +9,8 @@ use p3_util::{flatten_to_base, reconstitute_from_base};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    BinomialExtensionField, binomial_mul, cubic_square, quartic_square, vector_add, vector_sub,
+    BinomialExtensionField, binomial_mul, cubic_square, quartic_square, quintic_square, vector_add,
+    vector_sub,
 };
 use crate::extension::BinomiallyExtendable;
 use crate::{
@@ -122,6 +123,7 @@ where
             }
             3 => cubic_square(&self.value, &mut res.value),
             4 => quartic_square(&self.value, &mut res.value, w),
+            5 => quintic_square(&self.value, &mut res.value, w),
             _ => binomial_mul::<F, PF, PF, D>(&self.value, &self.value, &mut res.value, w),
         }
         res
