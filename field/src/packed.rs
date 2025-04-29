@@ -11,25 +11,39 @@ use crate::{Algebra, BasedVectorSpace, ExtensionField, Powers, PrimeCharacterist
 /// The `Packable` trait allows us to specify implementations for potentially conflicting types.
 pub trait Packable: 'static + Default + Copy + Send + Sync + PartialEq + Eq {}
 
+/// A trait for packed SIMD-like values made up of multiple scalar elements.
+///
 /// # Safety
 /// - If `P` implements `PackedField` then `P` must be castable to/from `[P::Value; P::WIDTH]`
 ///   without UB.
 pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
+    /// The scalar type that is packed into this value.
     type Value: Packable;
 
+    /// Number of scalar values packed together.
     const WIDTH: usize;
 
+    /// Interprets a slice of scalar values as a packed value reference.
     fn from_slice(slice: &[Self::Value]) -> &Self;
+
+    /// Interprets a mutable slice of scalar values as a mutable packed value.
     fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self;
 
-    /// Similar to `core:array::from_fn`.
+    /// Constructs a packed value using a function to generate each element.
     fn from_fn<F>(f: F) -> Self
     where
         F: FnMut(usize) -> Self::Value;
 
+    /// Returns the packed values as an immutable slice.
     fn as_slice(&self) -> &[Self::Value];
+
+    /// Returns the packed values as a mutable slice.
     fn as_slice_mut(&mut self) -> &mut [Self::Value];
 
+    /// Packs a slice of scalar values into a slice of packed values.
+    ///
+    /// # Panics
+    /// Panics if the slice length is not divisible by `WIDTH`.
     fn pack_slice(buf: &[Self::Value]) -> &[Self] {
         // Sources vary, but this should be true on all platforms we care about.
         // This should be a const assert, but trait methods can't access `Self` in a const context,
@@ -46,11 +60,13 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         unsafe { slice::from_raw_parts(buf_ptr, n) }
     }
 
+    /// Packs a slice into packed values and returns the packed portion and any remaining suffix.
     fn pack_slice_with_suffix(buf: &[Self::Value]) -> (&[Self], &[Self::Value]) {
         let (packed, suffix) = buf.split_at(buf.len() - buf.len() % Self::WIDTH);
         (Self::pack_slice(packed), suffix)
     }
 
+    /// Converts a mutable slice of scalar values into a mutable slice of packed values.
     fn pack_slice_mut(buf: &mut [Self::Value]) -> &mut [Self] {
         assert!(align_of::<Self>() <= align_of::<Self::Value>());
         assert!(
@@ -64,6 +80,8 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         unsafe { slice::from_raw_parts_mut(buf_ptr, n) }
     }
 
+    /// Converts a mutable slice of possibly uninitialized scalar values into
+    /// a mutable slice of possibly uninitialized packed values.
     fn pack_maybe_uninit_slice_mut(
         buf: &mut [MaybeUninit<Self::Value>],
     ) -> &mut [MaybeUninit<Self>] {
@@ -79,11 +97,17 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         unsafe { slice::from_raw_parts_mut(buf_ptr, n) }
     }
 
+    /// Converts a mutable slice of scalar values into a pair:
+    /// - a slice of packed values covering the largest aligned portion,
+    /// - and a remainder slice of scalar values that couldn't be packed.
     fn pack_slice_with_suffix_mut(buf: &mut [Self::Value]) -> (&mut [Self], &mut [Self::Value]) {
         let (packed, suffix) = buf.split_at_mut(buf.len() - buf.len() % Self::WIDTH);
         (Self::pack_slice_mut(packed), suffix)
     }
 
+    /// Converts a mutable slice of possibly uninitialized scalar values into a pair:
+    /// - a slice of possibly uninitialized packed values, representing the aligned prefix,
+    /// - and the remaining unaligned scalar values as a suffix.
     fn pack_maybe_uninit_slice_with_suffix_mut(
         buf: &mut [MaybeUninit<Self::Value>],
     ) -> (&mut [MaybeUninit<Self>], &mut [MaybeUninit<Self::Value>]) {
@@ -91,6 +115,10 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         (Self::pack_maybe_uninit_slice_mut(packed), suffix)
     }
 
+    /// Reinterprets a slice of packed values as a flat slice of scalar values.
+    ///
+    /// Each packed value contains `Self::WIDTH` scalar values, which are laid out
+    /// contiguously in memory. This function allows direct access to those scalars.
     fn unpack_slice(buf: &[Self]) -> &[Self::Value] {
         assert!(align_of::<Self>() >= align_of::<Self::Value>());
         let buf_ptr = buf.as_ptr().cast::<Self::Value>();
@@ -168,7 +196,7 @@ pub unsafe trait PackedField: Algebra<Self::Scalar>
     /// Compute a linear combination of a slice of base field elements and
     /// a slice of packed field elements. The slices must have equal length
     /// and it must be a compile time constant.
-    /// 
+    ///
     /// # Panics
     ///
     /// May panic if the length of either slice is not equal to `N`.
