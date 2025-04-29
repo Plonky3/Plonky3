@@ -30,6 +30,9 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     fn from_slice(slice: &[Self::Value]) -> &Self;
 
     /// Interprets a mutable slice of scalar values as a mutable packed value.
+    ///
+    /// # Panics:
+    /// This function will panic if `slice.len() != Self::WIDTH`
     fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self;
 
     /// Constructs a packed value using a function to generate each element.
