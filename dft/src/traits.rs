@@ -185,11 +185,10 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     /// over a coset `gH` and then computing the evaluations of those polynomials
     /// on the coset `gK`.
     fn lde_batch(&self, mat: RowMajorMatrix<F>, added_bits: usize) -> Self::Evaluations {
-        let mut coeffs = self.idft_batch(mat);
-        coeffs
-            .values
-            .resize(coeffs.values.len() << added_bits, F::ZERO);
-        self.dft_batch(coeffs)
+        // This is a better default as several implementations have a custom implementation
+        // of `coset_lde_batch` and often the fact that the shift is `ONE` won't give any
+        // performance improvements anyway.
+        self.coset_lde_batch(mat, added_bits, F::ONE)
     }
 
     /// Compute the low-degree extension of of `vec` onto a coset of a larger subgroup.

@@ -2,9 +2,9 @@ use alloc::borrow::Cow;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::borrow::{Borrow, BorrowMut};
+use core::iter;
 use core::marker::PhantomData;
 use core::ops::Deref;
-use core::{iter, slice};
 
 use p3_field::{ExtensionField, Field, PackedValue, scale_slice_in_place};
 use p3_maybe_rayon::prelude::*;
@@ -15,15 +15,24 @@ use tracing::instrument;
 
 use crate::Matrix;
 
-/// A dense matrix stored in row-major form.
+/// A dense matrix in row-major format, with customizable backing storage.
+///
+/// The data is stored as a flat buffer, where rows are laid out consecutively.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DenseMatrix<T, V = Vec<T>> {
+    /// Flat buffer of matrix values in row-major order.
     pub values: V,
+    /// Number of columns in the matrix.
+    ///
+    /// The number of rows is implicitly determined as `values.len() / width`.
     pub width: usize,
+    /// Marker for the element type `T`, unused directly.
+    ///
+    /// Required to retain type information when `V` does not own or contain `T`.
     _phantom: PhantomData<T>,
 }
 
-pub type RowMajorMatrix<T> = DenseMatrix<T, Vec<T>>;
+pub type RowMajorMatrix<T> = DenseMatrix<T>;
 pub type RowMajorMatrixView<'a, T> = DenseMatrix<T, &'a [T]>;
 pub type RowMajorMatrixViewMut<'a, T> = DenseMatrix<T, &'a mut [T]>;
 pub type RowMajorMatrixCow<'a, T> = DenseMatrix<T, Cow<'a, [T]>>;
@@ -31,22 +40,26 @@ pub type RowMajorMatrixCow<'a, T> = DenseMatrix<T, Cow<'a, [T]>>;
 pub trait DenseStorage<T>: Borrow<[T]> + Send + Sync {
     fn to_vec(self) -> Vec<T>;
 }
+
 // Cow doesn't impl IntoOwned so we can't blanket it
 impl<T: Clone + Send + Sync> DenseStorage<T> for Vec<T> {
     fn to_vec(self) -> Self {
         self
     }
 }
+
 impl<T: Clone + Send + Sync> DenseStorage<T> for &[T] {
     fn to_vec(self) -> Vec<T> {
         <[T]>::to_vec(self)
     }
 }
+
 impl<T: Clone + Send + Sync> DenseStorage<T> for &mut [T] {
     fn to_vec(self) -> Vec<T> {
         <[T]>::to_vec(self)
     }
 }
+
 impl<T: Clone + Send + Sync> DenseStorage<T> for Cow<'_, [T]> {
     fn to_vec(self) -> Vec<T> {
         self.into_owned()
@@ -63,6 +76,10 @@ impl<T: Clone + Send + Sync + Default> DenseMatrix<T> {
 }
 
 impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
+    /// Create a new dense matrix of the given dimensions, backed by the given storage.
+    ///
+    /// Note that it is undefined behavior to create a matrix such that
+    /// `values.len() % width != 0`.
     #[must_use]
     pub fn new(values: S, width: usize) -> Self {
         debug_assert!(width == 0 || values.borrow().len() % width == 0);
@@ -73,21 +90,25 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         }
     }
 
+    /// Create a new RowMajorMatrix containing a single row.
     #[must_use]
     pub fn new_row(values: S) -> Self {
         let width = values.borrow().len();
         Self::new(values, width)
     }
 
+    /// Create a new RowMajorMatrix containing a single column.
     #[must_use]
     pub fn new_col(values: S) -> Self {
         Self::new(values, 1)
     }
 
+    /// Get a view of the matrix, i.e. a reference to the underlying data.
     pub fn as_view(&self) -> RowMajorMatrixView<'_, T> {
         RowMajorMatrixView::new(self.values.borrow(), self.width)
     }
 
+    /// Get a mutable view of the matrix, i.e. a mutable reference to the underlying data.
     pub fn as_view_mut(&mut self) -> RowMajorMatrixViewMut<'_, T>
     where
         S: BorrowMut<[T]>,
@@ -95,6 +116,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         RowMajorMatrixViewMut::new(self.values.borrow_mut(), self.width)
     }
 
+    /// Copy the values from the given matrix into this matrix.
     pub fn copy_from<S2>(&mut self, source: &DenseMatrix<T, S2>)
     where
         T: Copy,
@@ -111,26 +133,24 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
             });
     }
 
-    pub fn flatten_to_base<F: Field>(&self) -> RowMajorMatrix<F>
+    /// Flatten an extension field matrix to a base field matrix.
+    pub fn flatten_to_base<F: Field>(self) -> RowMajorMatrix<F>
     where
         T: ExtensionField<F>,
     {
         let width = self.width * T::DIMENSION;
         // TODO: Depending on the way EF elements are stored internally, there
         // should be a way to avoid the copy here.
-        let values = self
-            .values
-            .borrow()
-            .iter()
-            .flat_map(|x| x.as_basis_coefficients_slice().iter().copied())
-            .collect();
+        let values = T::flatten_to_base(self.values.to_vec());
         RowMajorMatrix::new(values, width)
     }
 
+    /// Get an iterator over the rows of the matrix.
     pub fn row_slices(&self) -> impl Iterator<Item = &[T]> {
         self.values.borrow().chunks_exact(self.width)
     }
 
+    /// Get a parallel iterator over the rows of the matrix.
     pub fn par_row_slices(&self) -> impl IndexedParallelIterator<Item = &[T]>
     where
         T: Sync,
@@ -138,6 +158,10 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         self.values.borrow().par_chunks_exact(self.width)
     }
 
+    /// Returns a slice of the given row.
+    ///
+    /// # Panics
+    /// Panics if `r` larger than self.height().
     pub fn row_mut(&mut self, r: usize) -> &mut [T]
     where
         S: BorrowMut<[T]>,
@@ -145,6 +169,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         &mut self.values.borrow_mut()[r * self.width..(r + 1) * self.width]
     }
 
+    /// Get a mutable iterator over the rows of the matrix.
     pub fn rows_mut(&mut self) -> impl Iterator<Item = &mut [T]>
     where
         S: BorrowMut<[T]>,
@@ -152,6 +177,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         self.values.borrow_mut().chunks_exact_mut(self.width)
     }
 
+    /// Get a mutable parallel iterator over the rows of the matrix.
     pub fn par_rows_mut<'a>(&'a mut self) -> impl IndexedParallelIterator<Item = &'a mut [T]>
     where
         T: 'a + Send,
@@ -160,6 +186,10 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         self.values.borrow_mut().par_chunks_exact_mut(self.width)
     }
 
+    /// Get a mutable iterator over the rows of the matrix which packs the rows into packed values.
+    ///
+    /// If `P::WIDTH` does not divide `self.width`, the remainder of the row will be returned as a
+    /// base slice.
     pub fn horizontally_packed_row_mut<P>(&mut self, r: usize) -> (&mut [P], &mut [T])
     where
         P: PackedValue<Value = T>,
@@ -168,6 +198,10 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         P::pack_slice_with_suffix_mut(self.row_mut(r))
     }
 
+    /// Scale the given row by the given value.
+    ///
+    /// # Panics
+    /// Panics if `r` larger than `self.height()`.
     pub fn scale_row(&mut self, r: usize, scale: T)
     where
         T: Field,
@@ -176,6 +210,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         scale_slice_in_place(scale, self.row_mut(r));
     }
 
+    /// Scale the entire matrix by the given value.
     pub fn scale(&mut self, scale: T)
     where
         T: Field,
@@ -184,6 +219,10 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         scale_slice_in_place(scale, self.values.borrow_mut());
     }
 
+    /// Split the matrix into two matrix views, one with the first `r` rows and one with the remaining rows.
+    ///
+    /// # Panics
+    /// Panics if `r` larger than `self.height()`.
     pub fn split_rows(&self, r: usize) -> (RowMajorMatrixView<T>, RowMajorMatrixView<T>) {
         let (lo, hi) = self.values.borrow().split_at(r * self.width);
         (
@@ -192,6 +231,10 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         )
     }
 
+    /// Split the matrix into two mutable matrix views, one with the first `r` rows and one with the remaining rows.
+    ///
+    /// # Panics
+    /// Panics if `r` larger than `self.height()`.
     pub fn split_rows_mut(
         &mut self,
         r: usize,
@@ -206,6 +249,9 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         )
     }
 
+    /// Get an iterator over the rows of the matrix which takes `chunk_rows` rows at a time.
+    ///
+    /// If `chunk_rows` does not divide the height of the matrix, the last chunk will be smaller.
     pub fn par_row_chunks(
         &self,
         chunk_rows: usize,
@@ -219,6 +265,9 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
             .map(|slice| RowMajorMatrixView::new(slice, self.width))
     }
 
+    /// Get a parallel iterator over the rows of the matrix which takes `chunk_rows` rows at a time.
+    ///
+    /// If `chunk_rows` does not divide the height of the matrix, the last chunk will be smaller.
     pub fn par_row_chunks_exact(
         &self,
         chunk_rows: usize,
@@ -232,6 +281,9 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
             .map(|slice| RowMajorMatrixView::new(slice, self.width))
     }
 
+    /// Get a mutable iterator over the rows of the matrix which takes `chunk_rows` rows at a time.
+    ///
+    /// If `chunk_rows` does not divide the height of the matrix, the last chunk will be smaller.
     pub fn par_row_chunks_mut(
         &mut self,
         chunk_rows: usize,
@@ -246,6 +298,10 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
             .map(|slice| RowMajorMatrixViewMut::new(slice, self.width))
     }
 
+    /// Get a mutable iterator over the rows of the matrix which takes `chunk_rows` rows at a time.
+    ///
+    /// If `chunk_rows` does not divide the height of the matrix, the last up to `chunk_rows - 1` rows
+    /// of the matrix will be omitted.
     pub fn row_chunks_exact_mut(
         &mut self,
         chunk_rows: usize,
@@ -260,6 +316,10 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
             .map(|slice| RowMajorMatrixViewMut::new(slice, self.width))
     }
 
+    /// Get a parallel mutable iterator over the rows of the matrix which takes `chunk_rows` rows at a time.
+    ///
+    /// If `chunk_rows` does not divide the height of the matrix, the last up to `chunk_rows - 1` rows
+    /// of the matrix will be omitted.
     pub fn par_row_chunks_exact_mut(
         &mut self,
         chunk_rows: usize,
@@ -274,6 +334,10 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
             .map(|slice| RowMajorMatrixViewMut::new(slice, self.width))
     }
 
+    /// Get a pair of mutable slices of the given rows.
+    ///
+    /// # Panics
+    /// Panics if `row_1` or `row_2` are out of bounds or if `row_1 >= row_2`.
     pub fn row_pair_mut(&mut self, row_1: usize, row_2: usize) -> (&mut [T], &mut [T])
     where
         S: BorrowMut<[T]>,
@@ -285,6 +349,12 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         (&mut lo[start_1..][..self.width], &mut hi[..self.width])
     }
 
+    /// Get a pair of mutable slices of the given rows, both packed into packed field elements.
+    ///
+    /// If `P:WIDTH` does not divide `self.width`, the remainder of the row will be returned as a base slice.
+    ///
+    /// # Panics
+    /// Panics if `row_1` or `row_2` are out of bounds or if `row_1 >= row_2`.
     #[allow(clippy::type_complexity)]
     pub fn packed_row_pair_mut<P>(
         &mut self,
@@ -350,25 +420,46 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
     }
 
     #[inline]
-    fn get(&self, r: usize, c: usize) -> T {
-        self.values.borrow()[r * self.width + c].clone()
-    }
-
-    type Row<'a>
-        = iter::Cloned<slice::Iter<'a, T>>
-    where
-        Self: 'a;
-
-    #[inline]
-    fn row(&self, r: usize) -> Self::Row<'_> {
-        self.values.borrow()[r * self.width..(r + 1) * self.width]
-            .iter()
-            .cloned()
+    unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height() and c < self.width().
+            self.values
+                .borrow()
+                .get_unchecked(r * self.width + c)
+                .clone()
+        }
     }
 
     #[inline]
-    fn row_slice(&self, r: usize) -> impl Deref<Target = [T]> {
-        &self.values.borrow()[r * self.width..(r + 1) * self.width]
+    unsafe fn row_subseq_unchecked(
+        &self,
+        r: usize,
+        start: usize,
+        end: usize,
+    ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height() and start <= end <= self.width().
+            self.values
+                .borrow()
+                .get_unchecked(r * self.width + start..r * self.width + end)
+                .iter()
+                .cloned()
+        }
+    }
+
+    #[inline]
+    unsafe fn row_subslice_unchecked(
+        &self,
+        r: usize,
+        start: usize,
+        end: usize,
+    ) -> impl Deref<Target = [T]> {
+        unsafe {
+            // Safety: The caller must ensure that r < self.height()
+            self.values
+                .borrow()
+                .get_unchecked(r * self.width + start..r * self.width + end)
+        }
     }
 
     fn to_row_major_matrix(self) -> RowMajorMatrix<T>
@@ -413,7 +504,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
     }
 }
 
-impl<T: Clone + Default + Send + Sync> DenseMatrix<T, Vec<T>> {
+impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
     pub fn as_cow<'a>(self) -> RowMajorMatrixCow<'a, T> {
         RowMajorMatrixCow::new(Cow::Owned(self.values), self.width)
     }
@@ -445,22 +536,37 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T, Vec<T>> {
     }
 }
 
-impl<T: Copy + Default + Send + Sync> DenseMatrix<T, Vec<T>> {
-    pub fn transpose(&self) -> Self {
+impl<T: Copy + Default + Send + Sync, V: DenseStorage<T>> DenseMatrix<T, V> {
+    /// Return the transpose of this matrix.
+    pub fn transpose(&self) -> RowMajorMatrix<T> {
         let nelts = self.height() * self.width();
         let mut values = vec![T::default(); nelts];
-        transpose::transpose(&self.values, &mut values, self.width(), self.height());
-        Self::new(values, self.height())
+        transpose::transpose(
+            self.values.borrow(),
+            &mut values,
+            self.width(),
+            self.height(),
+        );
+        RowMajorMatrix::new(values, self.height())
     }
 
-    pub fn transpose_into(&self, other: &mut Self) {
+    /// Transpose the matrix returning the result in `other` without intermediate allocation.
+    pub fn transpose_into<W: DenseStorage<T> + BorrowMut<[T]>>(
+        &self,
+        other: &mut DenseMatrix<T, W>,
+    ) {
         assert_eq!(self.height(), other.width());
         assert_eq!(other.height(), self.width());
-        transpose::transpose(&self.values, &mut other.values, self.width(), self.height());
+        transpose::transpose(
+            self.values.borrow(),
+            other.values.borrow_mut(),
+            self.width(),
+            self.height(),
+        );
     }
 }
 
-impl<'a, T: Clone + Default + Send + Sync> DenseMatrix<T, &'a [T]> {
+impl<'a, T: Clone + Default + Send + Sync> RowMajorMatrixView<'a, T> {
     pub fn as_cow(self) -> RowMajorMatrixCow<'a, T> {
         RowMajorMatrixCow::new(Cow::Borrowed(self.values), self.width)
     }
@@ -502,25 +608,53 @@ mod tests {
     }
 
     #[test]
-    fn test_get() {
-        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
-        assert_eq!(matrix.get(0, 0), 1);
-        assert_eq!(matrix.get(1, 1), 4);
-        assert_eq!(matrix.get(2, 0), 5);
+    fn test_get_methods() {
+        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2); // Height = 3, Width = 2
+        assert_eq!(matrix.get(0, 0), Some(1));
+        assert_eq!(matrix.get(1, 1), Some(4));
+        assert_eq!(matrix.get(2, 0), Some(5));
+        unsafe {
+            assert_eq!(matrix.get_unchecked(0, 1), 2);
+            assert_eq!(matrix.get_unchecked(1, 0), 3);
+            assert_eq!(matrix.get_unchecked(2, 1), 6);
+        }
+        assert_eq!(matrix.get(3, 0), None); // Height out of bounds
+        assert_eq!(matrix.get(0, 2), None); // Width out of bounds
     }
 
     #[test]
-    fn test_row_slice() {
-        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
-        assert_eq!(matrix.row_slice(0).deref(), &[1, 2]);
-        assert_eq!(matrix.row_slice(2).deref(), &[5, 6]);
+    fn test_row_methods() {
+        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6, 7, 8], 4); // Height = 2, Width = 4
+        let row: Vec<_> = matrix.row(1).unwrap().into_iter().collect();
+        assert_eq!(row, vec![5, 6, 7, 8]);
+        unsafe {
+            let row: Vec<_> = matrix.row_unchecked(0).into_iter().collect();
+            assert_eq!(row, vec![1, 2, 3, 4]);
+            let row: Vec<_> = matrix.row_subseq_unchecked(0, 0, 3).into_iter().collect();
+            assert_eq!(row, vec![1, 2, 3]);
+            let row: Vec<_> = matrix.row_subseq_unchecked(0, 1, 3).into_iter().collect();
+            assert_eq!(row, vec![2, 3]);
+            let row: Vec<_> = matrix.row_subseq_unchecked(0, 2, 4).into_iter().collect();
+            assert_eq!(row, vec![3, 4]);
+        }
+        assert!(matrix.row(2).is_none()); // Height out of bounds
     }
 
     #[test]
-    fn test_row_slices() {
-        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
-        let rows: Vec<&[i32]> = matrix.row_slices().collect();
-        assert_eq!(rows, vec![&[1, 2], &[3, 4], &[5, 6]]);
+    fn test_row_slice_methods() {
+        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6, 7, 8, 9], 3); // Height = 3, Width = 3
+        let slice0 = matrix.row_slice(0);
+        let slice2 = matrix.row_slice(2);
+        assert_eq!(slice0.unwrap().deref(), &[1, 2, 3]);
+        assert_eq!(slice2.unwrap().deref(), &[7, 8, 9]);
+        unsafe {
+            assert_eq!(&[1, 2, 3], matrix.row_slice_unchecked(0).deref());
+            assert_eq!(&[7, 8, 9], matrix.row_slice_unchecked(2).deref());
+
+            assert_eq!(&[1, 2, 3], matrix.row_subslice_unchecked(0, 0, 3).deref());
+            assert_eq!(&[8], matrix.row_subslice_unchecked(2, 1, 2).deref());
+        }
+        assert!(matrix.row_slice(3).is_none()); // Height out of bounds
     }
 
     #[test]
@@ -675,13 +809,6 @@ mod tests {
                 BabyBear::new(6),
             ]
         );
-    }
-
-    #[test]
-    fn test_row() {
-        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4], 2);
-        let row: Vec<_> = matrix.row(1).collect();
-        assert_eq!(row, vec![3, 4]);
     }
 
     #[test]

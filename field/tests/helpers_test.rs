@@ -2,48 +2,15 @@ mod helpers {
     use p3_baby_bear::BabyBear;
     use p3_field::{
         PrimeCharacteristicRing, add_scaled_slice_in_place, dot_product, field_to_array, reduce_32,
-        scale_vec, split_32, two_adic_coset_vanishing_polynomial,
-        two_adic_subgroup_vanishing_polynomial,
+        scale_vec, split_32,
     };
-
-    #[test]
-    fn test_two_adic_subgroup_vanishing_polynomial() {
-        // x = 3, log_n = 3 → compute x^8 - 1
-        let x = BabyBear::TWO + BabyBear::ONE;
-        let log_n = 3;
-
-        // x^8 = 3^8 = 6561
-        let x_pow = BabyBear::from_u16(6561);
-
-        let expected = x_pow - BabyBear::ONE;
-        let result = two_adic_subgroup_vanishing_polynomial(log_n, x);
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_two_adic_coset_vanishing_polynomial() {
-        // x = 2, shift = 5, log_n = 2 → compute x^4 - shift^4
-        let x = BabyBear::TWO;
-        let shift = BabyBear::from_u64(5);
-        let log_n = 2;
-
-        // x^4 = 2^4
-        let x_pow = x * x * x * x;
-
-        // shift^4 = 5^4
-        let shift_pow = shift * shift * shift * shift;
-
-        let expected = x_pow - shift_pow;
-        let result = two_adic_coset_vanishing_polynomial(log_n, shift, x);
-        assert_eq!(result, expected);
-    }
 
     #[test]
     fn test_scale_vec() {
         // Scale [1, 2, 3] by 7
         let v = vec![BabyBear::ONE, BabyBear::TWO, BabyBear::ONE + BabyBear::TWO];
         let s = BabyBear::from_u8(7);
-        let result = scale_vec(s, v.clone());
+        let result = scale_vec(s, v);
 
         let expected = vec![
             s * BabyBear::ONE,
@@ -66,7 +33,7 @@ mod helpers {
         let y = vec![y1, y2];
         let s = BabyBear::from_u8(3);
 
-        add_scaled_slice_in_place(&mut x, y.clone().into_iter(), s);
+        add_scaled_slice_in_place(&mut x, y.into_iter(), s);
 
         // x = [x1 + s * y1, x2 + s * y2]
         let expected = vec![x1 + s * y1, x2 + s * y2];

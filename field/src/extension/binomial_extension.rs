@@ -191,21 +191,21 @@ where
 
     #[inline(always)]
     fn square(&self) -> Self {
+        let mut res = Self::default();
+        let w = F::W;
         match D {
             2 => {
-                let a = self.value.clone();
-                let mut res = Self::default();
-                res.value[0] = a[0].square() + a[1].square() * F::W;
+                let a = &self.value;
+                let a1_w = a[1].clone() * F::W;
+                res.value[0] = A::dot_product(a[..].try_into().unwrap(), &[a[0].clone(), a1_w]);
                 res.value[1] = a[0].clone() * a[1].double();
-                res
             }
-            3 => {
-                let mut res = Self::default();
-                cubic_square(&self.value, &mut res.value);
-                res
-            }
-            _ => <Self as Mul<Self>>::mul(self.clone(), self.clone()),
+            3 => cubic_square(&self.value, &mut res.value),
+            4 => quartic_square(&self.value, &mut res.value, w),
+            5 => quintic_square(&self.value, &mut res.value, w),
+            _ => binomial_mul::<F, A, A, D>(&self.value, &self.value, &mut res.value, w),
         }
+        res
     }
 
     #[inline]
@@ -296,6 +296,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
         match D {
             2 => quadratic_inv(&self.value, &mut res.value, F::W),
             3 => cubic_inv(&self.value, &mut res.value, F::W),
+            4 => quartic_inv(&self.value, &mut res.value, F::W),
             _ => res = self.frobenius_inv(),
         }
 
@@ -487,7 +488,7 @@ where
         let mut res = Self::default();
         let w = F::W;
 
-        binomial_mul(&a, &b, &mut res.value, w);
+        binomial_mul::<F, A, A, D>(&a, &b, &mut res.value, w);
 
         res
     }
@@ -614,8 +615,8 @@ pub(crate) fn vector_sub<
 #[inline]
 pub(super) fn binomial_mul<
     F: Field,
-    R: Algebra<F> + Mul<R2, Output = R>,
-    R2: Add<Output = R2> + Clone,
+    R: Algebra<F> + Algebra<R2>,
+    R2: Algebra<F>,
     const D: usize,
 >(
     a: &[R; D],
@@ -624,11 +625,10 @@ pub(super) fn binomial_mul<
     w: F,
 ) {
     match D {
-        2 => {
-            res[0] = a[0].clone() * b[0].clone() + a[1].clone() * w * b[1].clone();
-            res[1] = a[0].clone() * b[1].clone() + a[1].clone() * b[0].clone();
-        }
+        2 => quadratic_mul(a, b, res, w),
         3 => cubic_mul(a, b, res, w),
+        4 => quartic_mul(a, b, res, w),
+        5 => quintic_mul(a, b, res, w),
         _ =>
         {
             #[allow(clippy::needless_range_loop)]
@@ -645,13 +645,49 @@ pub(super) fn binomial_mul<
     }
 }
 
+/// Optimized multiplication for quadratic extension field.
+///
+/// Makes use of the in built field dot product code. This is optimized for the case that
+/// R is a prime field or its packing.
+///
+/// ```text
+///     A = a0 + a1·X
+///     B = b0 + b1·X
+/// ```
+/// Where `X` satisfies `X² = w`. Then the product is:
+/// ```text
+///     A·B = a0·b0 + a1·b1·w + (a0·b1 + a1·b0)·X
+/// ```
+#[inline]
+fn quadratic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
+where
+    F: Field,
+    R: Algebra<F> + Algebra<R2>,
+    R2: Algebra<F>,
+{
+    let b1_w = b[1].clone() * w;
+
+    // Compute a0·b0 + a1·b1·w
+    res[0] = R::dot_product(
+        a[..].try_into().unwrap(),
+        &[b[0].clone().into(), b1_w.into()],
+    );
+
+    // Compute a0·b1 + a1·b0
+    res[1] = R::dot_product(
+        &[a[0].clone(), a[1].clone()],
+        &[b[1].clone().into(), b[0].clone().into()],
+    );
+}
+
 ///Section 11.3.6b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
 fn quadratic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
     assert_eq!(D, 2);
-    let scalar = (a[0].square() - w * a[1].square()).inverse();
+    let neg_a1 = -a[1];
+    let scalar = F::dot_product(&[a[0], neg_a1], &[a[0], w * a[1]]).inverse();
     res[0] = a[0] * scalar;
-    res[1] = -a[1] * scalar;
+    res[1] = neg_a1 * scalar;
 }
 
 /// Section 11.3.6b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
@@ -676,18 +712,15 @@ fn cubic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
 
 /// karatsuba multiplication for cubic extension field
 #[inline]
-pub(crate) fn cubic_mul<
-    F: Field,
-    R: Algebra<F> + Mul<R2, Output = R>,
-    R2: Add<Output = R2> + Clone,
-    const D: usize,
->(
+pub(crate) fn cubic_mul<F: Field, R: Algebra<F> + Algebra<R2>, R2: Algebra<F>, const D: usize>(
     a: &[R; D],
     b: &[R2; D],
     res: &mut [R; D],
     w: F,
 ) {
     assert_eq!(D, 3);
+    // TODO: Test if we should switch to a naive multiplication approach using dot products.
+    // This is mainly used for a degree 3 extension of Complex<Mersenne31> so this approach might be faster.
 
     let a0_b0 = a[0].clone() * b[0].clone();
     let a1_b1 = a[1].clone() * b[1].clone();
@@ -718,4 +751,241 @@ pub(crate) fn cubic_square<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: u
     res[0] = a[0].square() + (a[1].clone() * w_a2.clone()).double();
     res[1] = w_a2 * a[2].clone() + (a[0].clone() * a[1].clone()).double();
     res[2] = a[1].square() + (a[0].clone() * a[2].clone()).double();
+}
+
+/// Multiplication in a quartic binomial extension field.
+///
+/// Makes use of the in built field dot product code. This is optimized for the case that
+/// R is a prime field or its packing.
+#[inline]
+fn quartic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
+where
+    F: Field,
+    R: Algebra<F> + Algebra<R2>,
+    R2: Algebra<F>,
+{
+    assert_eq!(D, 4);
+    let b_r_rev: [R; 5] = [
+        b[3].clone().into(),
+        b[2].clone().into(),
+        b[1].clone().into(),
+        b[0].clone().into(),
+        w.into(),
+    ];
+
+    // Constant term = a0*b0 + w(a1*b3 + a2*b2 + a3*b1)
+    let w_coeff_0 =
+        R::dot_product::<3>(a[1..].try_into().unwrap(), b_r_rev[..3].try_into().unwrap());
+    res[0] = R::dot_product(&[a[0].clone(), w_coeff_0], b_r_rev[3..].try_into().unwrap());
+
+    // Linear term = a0*b1 + a1*b0 + w(a2*b3 + a3*b2)
+    let w_coeff_1 =
+        R::dot_product::<2>(a[2..].try_into().unwrap(), b_r_rev[..2].try_into().unwrap());
+    res[1] = R::dot_product(
+        &[a[0].clone(), a[1].clone(), w_coeff_1],
+        b_r_rev[2..].try_into().unwrap(),
+    );
+
+    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b3)
+    let b3_w = b[3].clone() * w;
+    res[2] = R::dot_product::<4>(
+        a[..4].try_into().unwrap(),
+        &[
+            b_r_rev[1].clone(),
+            b_r_rev[2].clone(),
+            b_r_rev[3].clone(),
+            b3_w.into(),
+        ],
+    );
+
+    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0
+    res[3] = R::dot_product::<4>(a[..].try_into().unwrap(), b_r_rev[..4].try_into().unwrap());
+}
+
+/// Compute the inverse of a quartic binomial extension field element.
+#[inline]
+fn quartic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
+    assert_eq!(D, 4);
+
+    // We use the fact that the quartic extension is a tower of quadratic extensions.
+    // We can see this by writing our element as a = a0 + a1·X + a2·X² + a3·X³ = (a0 + a2·X²) + (a1 + a3·X²)·X.
+    // Explicitly our tower looks like F < F[x]/(X²-w) < F[x]/(X⁴-w).
+    // Using this, we can compute the inverse of a in three steps:
+
+    // Compute the norm of our element with respect to F[x]/(X²-w).
+    // This is given by:
+    //      ((a0 + a2·X²) + (a1 + a3·X²)·X) * ((a0 + a2·X²) - (a1 + a3·X²)·X)
+    //          = (a0 + a2·X²)² - (a1 + a3·X²)²
+    //          = (a0² + w·a2² - 2w·a1·a3) + (2·a0·a2 - a1² - w·a3²)·X²
+    //          = norm_0 + norm_1·X² = norm
+    let neg_a1 = -a[1];
+    let a3_w = a[3] * w;
+    let norm_0 = F::dot_product(&[a[0], a[2], neg_a1.double()], &[a[0], a[2] * w, a3_w]);
+    let norm_1 = F::dot_product(&[a[0], a[1], -a[3]], &[a[2].double(), neg_a1, a3_w]);
+
+    // Now we compute the inverse of norm = norm_0 + norm_1·X².
+    let mut inv = [F::ZERO; 2];
+    quadratic_inv(&[norm_0, norm_1], &mut inv, w);
+
+    // Then the inverse of a is given by:
+    //      a⁻¹ = ((a0 + a2·X²) - (a1 + a3·X²)·X)·norm⁻¹
+    //          = (a0 + a2·X²)·norm⁻¹ - (a1 + a3·X²)·norm⁻¹·X
+    // Both of these multiplications can be done in the quadratic extension field.
+    let mut out_evn = [F::ZERO; 2];
+    let mut out_odd = [F::ZERO; 2];
+    quadratic_mul(&[a[0], a[2]], &inv, &mut out_evn, w);
+    quadratic_mul(&[a[1], a[3]], &inv, &mut out_odd, w);
+
+    res[0] = out_evn[0];
+    res[1] = -out_odd[0];
+    res[2] = out_evn[1];
+    res[3] = -out_odd[1];
+}
+
+/// Optimized Square function for quadratic extension field.
+///
+/// Makes use of the in built field dot product code. This is optimized for the case that
+/// R is a prime field or its packing.
+#[inline]
+pub(crate) fn quartic_square<F, R, const D: usize>(a: &[R; D], res: &mut [R; D], w: F)
+where
+    F: Field,
+    R: Algebra<F>,
+{
+    assert_eq!(D, 4);
+
+    let two_a0 = a[0].double();
+    let two_a1 = a[1].double();
+    let two_a2 = a[2].double();
+    let a2_w = a[2].clone() * w;
+    let a3_w = a[3].clone() * w;
+
+    // Constant term = a0*a0 + w*a2*a2 + 2*w*a1*a3
+    res[0] = R::dot_product(
+        &[a[0].clone(), a2_w, two_a1],
+        &[a[0].clone(), a[2].clone(), a3_w.clone()],
+    );
+
+    // Linear term = 2*a0*a1 + 2*w*a2*a3)
+    res[1] = R::dot_product(
+        &[two_a0.clone(), two_a2.clone()],
+        &[a[1].clone(), a3_w.clone()],
+    );
+
+    // Square term = a1*a1 + w*a3*a3 + 2*a0*a2
+    res[2] = R::dot_product(
+        &[a[1].clone(), a3_w, two_a0.clone()],
+        &[a[1].clone(), a[3].clone(), a[2].clone()],
+    );
+
+    // Cubic term = 2*a0*a3 + 2*a1*a2)
+    res[3] = R::dot_product(&[two_a0, two_a2], &[a[3].clone(), a[1].clone()]);
+}
+
+/// Multiplication in a quintic binomial extension field.
+///
+/// Makes use of the in built field dot product code. This is optimized for the case that
+/// R is a prime field or its packing.
+fn quintic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
+where
+    F: Field,
+    R: Algebra<F> + Algebra<R2>,
+    R2: Algebra<F>,
+{
+    assert_eq!(D, 5);
+    let b_r_rev: [R; 6] = [
+        b[4].clone().into(),
+        b[3].clone().into(),
+        b[2].clone().into(),
+        b[1].clone().into(),
+        b[0].clone().into(),
+        w.into(),
+    ];
+
+    // Constant term = a0*b0 + w(a1*b4 + a2*b3 + a3*b2 + a4*b1)
+    let w_coeff_0 =
+        R::dot_product::<4>(a[1..].try_into().unwrap(), b_r_rev[..4].try_into().unwrap());
+    res[0] = R::dot_product(&[a[0].clone(), w_coeff_0], b_r_rev[4..].try_into().unwrap());
+
+    // Linear term = a0*b1 + a1*b0 + w(a2*b4 + a3*b3 + a4*b2)
+    let w_coeff_1 =
+        R::dot_product::<3>(a[2..].try_into().unwrap(), b_r_rev[..3].try_into().unwrap());
+    res[1] = R::dot_product(
+        &[a[0].clone(), a[1].clone(), w_coeff_1],
+        b_r_rev[3..].try_into().unwrap(),
+    );
+
+    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b4 + a4*b3)
+    let w_coeff_2 =
+        R::dot_product::<2>(a[3..].try_into().unwrap(), b_r_rev[..2].try_into().unwrap());
+    res[2] = R::dot_product(
+        &[a[0].clone(), a[1].clone(), a[2].clone(), w_coeff_2],
+        b_r_rev[2..].try_into().unwrap(),
+    );
+
+    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0 + w*a4*b4
+    let b4_w = b[4].clone() * w;
+    res[3] = R::dot_product::<5>(
+        a[..5].try_into().unwrap(),
+        &[
+            b_r_rev[1].clone(),
+            b_r_rev[2].clone(),
+            b_r_rev[3].clone(),
+            b_r_rev[4].clone(),
+            b4_w.into(),
+        ],
+    );
+
+    // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 + a4*b0
+    res[4] = R::dot_product::<5>(a[..].try_into().unwrap(), b_r_rev[..5].try_into().unwrap());
+}
+
+/// Optimized Square function for quintic extension field elements.
+///
+/// Makes use of the in built field dot product code. This is optimized for the case that
+/// R is a prime field or its packing.
+#[inline]
+pub(crate) fn quintic_square<F, R, const D: usize>(a: &[R; D], res: &mut [R; D], w: F)
+where
+    F: Field,
+    R: Algebra<F>,
+{
+    assert_eq!(D, 5);
+
+    let two_a0 = a[0].double();
+    let two_a1 = a[1].double();
+    let two_a2 = a[2].double();
+    let two_a3 = a[3].double();
+    let w_a3 = a[3].clone() * w;
+    let w_a4 = a[4].clone() * w;
+
+    // Constant term = a0*a0 + 2*w(a1*a4 + a2*a3)
+    res[0] = R::dot_product(
+        &[a[0].clone(), w_a4.clone(), w_a3.clone()],
+        &[a[0].clone(), two_a1.clone(), two_a2.clone()],
+    );
+
+    // Linear term = w*a3*a3 + 2*(a0*a1 + w * a2*a4)
+    res[1] = R::dot_product(
+        &[w_a3, two_a0.clone(), w_a4.clone()],
+        &[a[3].clone(), a[1].clone(), two_a2],
+    );
+
+    // Square term = a1*a1 + 2 * (a0*a2 + w*a3*a4)
+    res[2] = R::dot_product(
+        &[a[1].clone(), two_a0.clone(), w_a4.clone()],
+        &[a[1].clone(), a[2].clone(), two_a3],
+    );
+
+    // Cubic term = w*a4*a4 + 2*(a0*a3 + a1*a2)
+    res[3] = R::dot_product(
+        &[w_a4, two_a0.clone(), two_a1.clone()],
+        &[a[4].clone(), a[3].clone(), a[2].clone()],
+    );
+
+    // Quartic term = a2*a2 + 2*(a0*a4 + a1*a3)
+    res[4] = R::dot_product(
+        &[a[2].clone(), two_a0, two_a1],
+        &[a[2].clone(), a[4].clone(), a[3].clone()],
+    );
 }

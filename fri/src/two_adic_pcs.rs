@@ -26,9 +26,9 @@ use p3_field::{
     ExtensionField, Field, PackedFieldExtension, TwoAdicField, batch_multiplicative_inverse,
     cyclic_subgroup_coset_known_order, dot_product,
 };
-use p3_interpolation::interpolate_coset;
-use p3_matrix::bitrev::{BitReversalPerm, BitReversedMatrixView, BitReversibleMatrix};
-use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
+use p3_interpolation::interpolate_coset_with_precomputation;
+use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::{Dimensions, Matrix};
 use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
@@ -42,9 +42,9 @@ use crate::{FriConfig, FriGenericConfig, FriProof, prover};
 
 #[derive(Debug)]
 pub struct TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
-    dft: Dft,
-    mmcs: InputMmcs,
-    fri: FriConfig<FriMmcs>,
+    pub(crate) dft: Dft,
+    pub(crate) mmcs: InputMmcs,
+    pub(crate) fri: FriConfig<FriMmcs>,
     _phantom: PhantomData<Val>,
 }
 
@@ -73,7 +73,7 @@ pub struct TwoAdicFriGenericConfig<InputProof, InputError>(
 pub type TwoAdicFriGenericConfigForMmcs<F, M> =
     TwoAdicFriGenericConfig<Vec<BatchOpening<F, M>>, <M as Mmcs<F>>::Error>;
 
-impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
+impl<F: TwoAdicField, InputProof, InputError: Debug, EF: ExtensionField<F>> FriGenericConfig<F, EF>
     for TwoAdicFriGenericConfig<InputProof, InputError>
 {
     type InputProof = InputProof;
@@ -87,9 +87,9 @@ impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
         &self,
         index: usize,
         log_height: usize,
-        beta: F,
-        evals: impl Iterator<Item = F>,
-    ) -> F {
+        beta: EF,
+        evals: impl Iterator<Item = EF>,
+    ) -> EF {
         let arity = 2;
         let log_arity = 1;
         let (e0, e1) = evals
@@ -97,7 +97,7 @@ impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
             .expect("TwoAdicFriFolder only supports arity=2");
         // If performance critical, make this API stateful to avoid this
         // This is a bit more math than is necessary, but leaving it here
-        // in case we want higher arity in the future
+        // in case we want higher arity in the future.
         let subgroup_start = F::two_adic_generator(log_height + log_arity)
             .exp_u64(reverse_bits_len(index, log_height) as u64);
         let mut xs = F::two_adic_generator(log_arity)
@@ -107,10 +107,12 @@ impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
         reverse_slice_index_bits(&mut xs);
         assert_eq!(log_arity, 1, "can only interpolate two points for now");
         // interpolate and evaluate at beta
-        e0 + (beta - xs[0]) * (e1 - e0) / (xs[1] - xs[0])
+        e0 + (beta - xs[0]) * (e1 - e0) * (xs[1] - xs[0]).inverse()
+        // Currently Algebra<F> does not include division so we do it manually.
+        // Note we do not want to do an EF division as that is far more expensive.
     }
 
-    fn fold_matrix<M: Matrix<F>>(&self, beta: F, m: M) -> Vec<F> {
+    fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, m: M) -> Vec<EF> {
         // We use the fact that
         //     p_e(x^2) = (p(x) + p(-x)) / 2
         //     p_o(x^2) = (p(x) - p(-x)) / (2 x)
@@ -119,26 +121,26 @@ impl<F: TwoAdicField, InputProof, InputError: Debug> FriGenericConfig<F>
         //     p_o(g^(2i)) = (p(g^i) - p(g^(n/2 + i))) / (2 g^i)
         // so
         //     result(g^(2i)) = p_e(g^(2i)) + beta p_o(g^(2i))
-        //                    = (1/2 + beta/2 g_inv^i) p(g^i)
-        //                    + (1/2 - beta/2 g_inv^i) p(g^(n/2 + i))
+        //
+        // As p_e, p_o will be in the extension field we want to find ways to avoid extension multiplications.
+        // We should only need a single one (namely multiplication by beta).
         let g_inv = F::two_adic_generator(log2_strict_usize(m.height()) + 1).inverse();
-        let one_half = F::ONE.halve();
-        let half_beta = beta * one_half;
 
         // TODO: vectorize this (after we have packed extension fields)
 
-        // beta/2 times successive powers of g_inv
-        let mut powers = g_inv
-            .shifted_powers(half_beta)
+        // As beta is in the extension field, we want to avoid multiplying by it
+        // for as long as possible. Here we precompute the powers  `g_inv^i / 2` in the base field.
+        let mut halve_inv_powers = g_inv
+            .shifted_powers(F::ONE.halve())
             .take(m.height())
             .collect_vec();
-        reverse_slice_index_bits(&mut powers);
+        reverse_slice_index_bits(&mut halve_inv_powers);
 
         m.par_rows()
-            .zip(powers)
-            .map(|(mut row, power)| {
+            .zip(halve_inv_powers)
+            .map(|(mut row, halve_inv_power)| {
                 let (lo, hi) = row.next_tuple().unwrap();
-                (one_half + power) * lo + (one_half - power) * hi
+                (lo + hi).halve() + (lo - hi) * beta * halve_inv_power
             })
             .collect()
     }
@@ -158,9 +160,10 @@ where
     type Domain = TwoAdicMultiplicativeCoset<Val>;
     type Commitment = InputMmcs::Commitment;
     type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
-    type EvaluationsOnDomain<'a> = BitReversedMatrixView<DenseMatrix<Val, &'a [Val]>>;
+    type EvaluationsOnDomain<'a> = BitReversedMatrixView<RowMajorMatrixView<'a, Val>>;
     type Proof = FriProof<Challenge, FriMmcs, Val, Vec<BatchOpening<Val, InputMmcs>>>;
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
+    const ZK: bool = false;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         // This panics if (and only if) `degree` is not a power of 2 or `degree`
@@ -178,7 +181,7 @@ where
     /// We then produce a merkle commitment to these evaluations.
     fn commit(
         &self,
-        evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
         let ldes: Vec<_> = evaluations
             .into_iter()
@@ -295,9 +298,17 @@ where
             .expect("No Matrices Supplied?");
         let log_global_max_height = log2_strict_usize(global_max_height);
 
+        let mut coset = cyclic_subgroup_coset_known_order(
+            Val::two_adic_generator(log_global_max_height),
+            Val::GENERATOR,
+            global_max_height,
+        )
+        .collect_vec();
+        reverse_slice_index_bits(&mut coset);
+
         // For each unique opening point z, we will find the largest degree bound
         // for that point, and precompute 1/(z - X) for the largest subgroup (in bitrev order).
-        let inv_denoms = compute_inverse_denominators(&mats_and_points, Val::GENERATOR); // TODO: We have hard coded the shift to be Val::GENERATOR. Why is this okay?
+        let inv_denoms = compute_inverse_denominators(&mats_and_points, &coset);
 
         // Evaluate coset representations and write openings to the challenger
         let all_opened_values = mats_and_points
@@ -307,6 +318,11 @@ where
                 izip!(mats.iter(), points.iter())
                     .map(|(mat, points_for_mat)| {
                         // For each matrix and vector of opening points
+                        let h = mat.height() >> self.fri.log_blowup;
+                        // `subgroup` and `mat` are both in bit-reversed order, so we can truncate.
+                        let (low_coset, _) = mat.split_rows(h);
+                        let coset_h = &coset[..h];
+
                         points_for_mat
                             .iter()
                             .map(|&point| {
@@ -324,18 +340,14 @@ where
                                             // The point of this correction is that each column of the matrix corresponds to a low degree polynomial.
                                             // Hence we can save time by restricting the height of the matrix to be the minimal height which
                                             // uniquely identifies the polynomial.
-                                            let h = mat.height() >> self.fri.log_blowup;
-                                            let (low_coset, _) = mat.split_rows(h);
-                                            let mut inv_denoms =
-                                                inv_denoms.get(&point).unwrap()[..h].to_vec();
-                                            reverse_slice_index_bits(&mut inv_denoms);
-
+                                            let inv_denoms = &inv_denoms.get(&point).unwrap()[..h];
                                             // This assumes that low_coset is `gH` for `g` the generator of the group.
-                                            interpolate_coset(
-                                                &BitReversalPerm::new_view(low_coset),
+                                            interpolate_coset_with_precomputation(
+                                                &low_coset,
                                                 Val::GENERATOR,
                                                 point,
-                                                Some(&inv_denoms), // Would be nice if interpolate_coset could accept things in bitrev order
+                                                coset_h,
+                                                inv_denoms,
                                             )
                                         });
                                 ys.iter()
@@ -600,7 +612,7 @@ where
 #[instrument(skip_all)]
 fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matrix<F>>(
     mats_and_points: &[(Vec<M>, &Vec<Vec<EF>>)],
-    coset_shift: F,
+    coset: &[F],
 ) -> LinearMap<EF, Vec<EF>> {
     // For each point z, find the largest height of a matrix that we need to open at that point.
     let mut max_log_height_for_point: LinearMap<EF, usize> = LinearMap::new();

@@ -39,6 +39,11 @@ pub trait StarkGenericConfig {
 
     /// Get an initialisation of the challenger used by this proof configuration.
     fn initialise_challenger(&self) -> Self::Challenger;
+
+    /// Returns 1 if the PCS is zero-knowledge, 0 otherwise.
+    fn is_zk(&self) -> usize {
+        Self::Pcs::ZK as usize
+    }
 }
 
 #[derive(Debug)]
