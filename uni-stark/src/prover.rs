@@ -176,8 +176,6 @@ where
     #[cfg(debug_assertions)]
     crate::check_constraints::check_constraints(air, &trace, public_values);
 
-    let pcs = config.pcs();
-
     // Compute the height `N = 2^n` and `log_2(height)`, `n`, of the trace.
     let degree = trace.height();
     let log_degree = log2_strict_usize(degree);
@@ -279,7 +277,7 @@ where
     let quotient_values = quotient_values(
         air,
         public_values,
-        initial_trace_domain,
+        trace_domain,
         quotient_domain,
         trace_on_quotient_domain,
         alpha,
@@ -369,7 +367,7 @@ where
     let (opened_values, opening_proof) = info_span!("open").in_scope(|| {
         let round0 = opt_r_data.as_ref().map(|r_data| (r_data, vec![vec![zeta]]));
         let round1 = (&trace_data, vec![vec![zeta, zeta_next]]);
-        let round2 = (&quotient_data, vec![vec![zeta]; quotient_degree]); // open every chunk at zeta
+        let round2 = (&quotient_data, vec![vec![zeta]; num_quotient_chunks]); // open every chunk at zeta
 
         let rounds = round0
             .into_iter()

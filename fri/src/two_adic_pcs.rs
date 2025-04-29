@@ -629,23 +629,6 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
         }
     }
 
-    // Compute the largest coset we will use, collect all
-    // of it's elements into a vector and bit reverse it.
-    // This means that the first 2^n elements will correspond
-    // to the coset of size 2^N.
-    //
-    // TODO: This seems like a possibly incorrect thing to do?
-    // Shouldn't smaller matrices lie over disjoint cosets? (E.g. Fold of gH is g^2H^2)
-    // Might be to do with our novel FRI implementation.
-    let max_log_height = *max_log_height_for_point.values().max().unwrap();
-    let mut coset = cyclic_subgroup_coset_known_order(
-        F::two_adic_generator(max_log_height),
-        coset_shift,
-        1 << max_log_height,
-    )
-    .collect_vec();
-    reverse_slice_index_bits(&mut coset);
-
     // Compute the inverse of `(z - x)` for every `x` in the coset using `batch_multiplicative_inverse`.
     // This does involve calling `batch_multiplicative_inverse` for each `z` but there shouldn't be too many `z`'s.
     // If we need to speed this up, it should be possible to call `batch_multiplicative_inverse` exactly once.
