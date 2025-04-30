@@ -72,10 +72,10 @@ where
 
     // The log of the maximum domain size.
     let log_max_height =
-        proof.commit_phase_commits.len() + parameters.log_blowup + parameters.log_final_poly_len;
+        proof.commit_phase_commits.len() + parameters.log_blowup + parameters.log_final_poly_degree;
 
     // The log of the final domain size.
-    let log_final_height = parameters.log_blowup + parameters.log_final_poly_len;
+    let log_final_height = parameters.log_blowup + parameters.log_final_poly_degree;
 
     for qp in &proof.query_proofs {
         let index =

@@ -1,6 +1,5 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::iter;
 
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
@@ -13,10 +12,21 @@ use tracing::{debug_span, info_span, instrument};
 
 use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof, QueryProof};
 
+/// Create a proof that an opening `f(zeta)` is correct by proving that the
+/// function `f(x) - f(zeta)/(x - zeta)` is low degree. This supports proving this for a collection of
+/// `f`'s of shrinking sizes. `f`'s of the same size can be rolled together before calling this function.
+///
+/// Arguments:
+/// - `config`, `parameters`: Together, these contain all information needed to define the FRI protocol.
+///    E.g. the folding scheme, the code rate, the final polynomial size.
+/// - `inputs`: The evaluation vectors of the `f's`
+/// - `challenger`: The Fiat-Shamir challenger to use for sampling challenges.
+/// - `open_input`: A function that takes an index and produces proofs that the initial values in
+///   inputs at that index (Or at `index >> i` for smaller `f`'s) are correct.
 #[instrument(name = "FRI prover", skip_all)]
 pub fn prove_fri<G, Val, Challenge, M, Challenger>(
-    g: &G,
-    config: &FriConfig<M>,
+    config: &G,
+    parameters: &FriConfig<M>,
     inputs: Vec<Vec<Challenge>>,
     challenger: &mut Challenger,
     open_input: impl Fn(usize) -> G::InputProof,
@@ -39,23 +49,31 @@ where
 
     let log_max_height = log2_strict_usize(inputs[0].len());
     let log_min_height = log2_strict_usize(inputs.last().unwrap().len());
-    if config.log_final_poly_len > 0 {
-        assert!(log_min_height > config.log_final_poly_len + config.log_blowup);
+    if parameters.log_final_poly_degree > 0 {
+        // Final_poly_degree must be less than or equal to the degree of the smallest polynomial.
+        assert!(log_min_height > parameters.log_final_poly_degree + parameters.log_blowup);
     }
 
-    let commit_phase_result = commit_phase(g, config, inputs, challenger);
+    // Continually fold the inputs down until the polynomial degree reaches Final_poly_degree.
+    // Returns a vector of commitments to the intermediate stage polynomials, the intermediate stage polynomials
+    // themselves and the final polynomial.
+    // Note that the challenger observes the commitments and the final polynomial in this function so we don't
+    // need to do it here.
+    let commit_phase_result = commit_phase(config, parameters, inputs, challenger);
 
-    let pow_witness = challenger.grind(config.proof_of_work_bits);
+    // Produce a proof of work witness before receiving any query challenges.
+    // This helps to prevent grinding attacks.
+    let pow_witness = challenger.grind(parameters.proof_of_work_bits);
 
     let query_proofs = info_span!("query phase").in_scope(|| {
-        iter::repeat_with(|| challenger.sample_bits(log_max_height + g.extra_query_index_bits()))
-            .take(config.num_queries)
+        (0..parameters.num_queries)
+            .map(|_| challenger.sample_bits(log_max_height + config.extra_query_index_bits()))
             .map(|index| QueryProof {
                 input_proof: open_input(index),
                 commit_phase_openings: answer_query(
-                    config,
+                    parameters,
                     &commit_phase_result.data,
-                    index >> g.extra_query_index_bits(),
+                    index >> config.extra_query_index_bits(),
                 ),
             })
             .collect()
@@ -75,6 +93,16 @@ struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
     final_poly: Vec<F>,
 }
 
+/// Perform the commit phase of the FRI protocol.
+///
+/// In each round we reduce our evaluations over `H` to evaluations over `H^2` by defining
+/// ```text
+///     f_{i + 1}(x^2) = (f_i(x) + f_i(-x))/2 + beta_i (f_i(x) - f_i(-x))/2x
+/// ```
+/// We then commit to the evaluation vector of `f_{i + 1}` over `H^2`.
+///
+/// Once the degree of our polynomial falls below `final_poly_degree`, we compute the coefficients of our
+/// polynomial and return it along with all intermediate evaluations and our commitments to them.
 #[instrument(name = "commit phase", skip_all)]
 fn commit_phase<G, Val, Challenge, M, Challenger>(
     g: &G,
@@ -94,7 +122,7 @@ where
     let mut commits = vec![];
     let mut data = vec![];
 
-    while folded.len() > config.blowup() * config.final_poly_len() {
+    while folded.len() > config.blowup() * config.final_poly_degree() {
         let leaves = RowMajorMatrix::new(folded, 2);
         let (commit, prover_data) = config.mmcs.commit_matrix(leaves);
         challenger.observe(commit.clone());
@@ -129,7 +157,7 @@ where
     debug_assert!(
         final_poly
             .iter()
-            .skip(1 << config.log_final_poly_len)
+            .skip(1 << config.log_final_poly_degree)
             .all(|x| x.is_zero()),
         "All coefficients beyond final_poly_len must be zero"
     );
@@ -146,10 +174,17 @@ where
     }
 }
 
+/// Given an index `i` prove that all folds involving that index are correct.
+///
+/// Explicitly for each `i` this returns the value at `(index >> i) ^ 1` in round `i`
+/// along with an opening proof. The verifier can use the values in round `i` at `index >> i`
+/// and `(index >> i) ^ 1` to compute the value at `index >> (i + 1)` in round `i + 1`.
+/// We repeat until we reach the final round where the verifier can check the value against the
+/// polynomial we sent them.
 fn answer_query<F, M>(
     config: &FriConfig<M>,
-    commit_phase_commits: &[M::ProverData<RowMajorMatrix<F>>],
-    index: usize,
+    commit_phase_commits: &[M::ProverData<RowMajorMatrix<F>>], // The commitments to the intermediate stage polynomials.
+    index: usize,                                              // The initial index to start at.
 ) -> Vec<CommitPhaseProofStep<F, M>>
 where
     F: Field,
@@ -159,16 +194,22 @@ where
         .iter()
         .enumerate()
         .map(|(i, commit)| {
+            // After i folding rounds, the current index we are looking at is `index >> i`.
             let index_i = index >> i;
             let index_i_sibling = index_i ^ 1;
             let index_pair = index_i >> 1;
 
+            // Get a proof that the pair of indices are correct.
             let (mut opened_rows, opening_proof) = config.mmcs.open_batch(index_pair, commit);
+
+            // opened_rows should contain just the value at index_i and it's sibling.
+            // We just need to get the sibling.
             assert_eq!(opened_rows.len(), 1);
             let opened_row = opened_rows.pop().unwrap();
             assert_eq!(opened_row.len(), 2, "Committed data should be in pairs");
             let sibling_value = opened_row[index_i_sibling % 2];
 
+            // Add the sibling and the proof to the vector.
             CommitPhaseProofStep {
                 sibling_value,
                 opening_proof,

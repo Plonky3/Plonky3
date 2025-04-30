@@ -556,7 +556,7 @@ where
         // commit_phase_commits.len() + self.fri.log_final_poly_len and so, as the same blow-up is used for all
         // polynomials, the maximal matrix height is proof.commit_phase_commits.len() + self.fri.log_blowup + self.fri.log_final_poly_len;
         let log_global_max_height =
-            proof.commit_phase_commits.len() + self.fri.log_blowup + self.fri.log_final_poly_len;
+            proof.commit_phase_commits.len() + self.fri.log_blowup + self.fri.log_final_poly_degree;
 
         let g: TwoAdicFriGenericConfigForMmcs<Val, InputMmcs> =
             TwoAdicFriGenericConfig(PhantomData);
