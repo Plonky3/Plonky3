@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{BatchOpening, Mmcs};
+use p3_commit::{BatchOpeningRef, Mmcs};
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::Dimensions;
 use p3_util::reverse_bits_len;
@@ -183,6 +183,8 @@ where
         // Replace index with the index of the parent fri node.
         *index >>= 1;
 
+        let evals_in_array = [evals];
+
         // Verify the commitment to the evaluations of the sibling nodes.
         config
             .mmcs
@@ -190,12 +192,17 @@ where
                 comm,
                 dims,
                 *index,
-                &BatchOpening::new(vec![evals.clone()], opening.opening_proof.clone()),
+                BatchOpeningRef::new(&evals_in_array, &opening.opening_proof),
             )
             .map_err(FriError::CommitPhaseMmcsError)?;
 
         // Fold the pair of evaluations of sibling nodes into the evaluation of the parent fri node.
-        folded_eval = g.fold_row(*index, log_folded_height, beta, evals.into_iter());
+        folded_eval = g.fold_row(
+            *index,
+            log_folded_height,
+            beta,
+            evals_in_array.into_iter().flat_map(|x| x.into_iter()),
+        );
     }
 
     // If ro_iter is not empty, we failed to fold in some polynomial evaluations.

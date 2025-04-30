@@ -164,7 +164,7 @@ where
             let index_pair = index_i >> 1;
 
             let (mut opened_rows, opening_proof) =
-                config.mmcs.open_batch(index_pair, commit).deconstruct();
+                config.mmcs.open_batch(index_pair, commit).unpack();
             assert_eq!(opened_rows.len(), 1);
             let opened_row = &opened_rows.pop().unwrap();
             assert_eq!(opened_row.len(), 2, "Committed data should be in pairs");

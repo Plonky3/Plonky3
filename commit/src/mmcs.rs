@@ -76,13 +76,15 @@ pub trait Mmcs<T: Send + Sync + Clone>: Clone {
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         index: usize,
-        batch_opening: &BatchOpening<T, Self>,
+        batch_opening: BatchOpeningRef<T, Self>,
     ) -> Result<(), Self::Error>;
 }
 
 /// A Batched opening proof.
 ///
-/// Allows for opening multiple matrices at multiple locations at once.
+/// Contains a Merkle proof for a collection of opened_values.
+///
+/// Primarily used by the prover.
 #[derive(Serialize, Deserialize, Clone)]
 // Enable Serialize/Deserialize whenever T supports it.
 #[serde(bound(serialize = "T: Serialize"))]
@@ -102,20 +104,44 @@ impl<T: Send + Sync + Clone, InputMmcs: Mmcs<T>> BatchOpening<T, InputMmcs> {
     }
 
     /// Deconstructs the batch opening proof into its components.
-    pub fn deconstruct(self) -> (Vec<Vec<T>>, <InputMmcs as Mmcs<T>>::Proof) {
-        let BatchOpening {
+    pub fn unpack(self) -> (Vec<Vec<T>>, <InputMmcs as Mmcs<T>>::Proof) {
+        (self.opened_values, self.opening_proof)
+    }
+}
+
+/// A reference to a batched opening proof.
+///
+/// Contains references to a collection of claimed opening values and a Merkle proof for those values.
+///
+/// Primarily used by the verifier.
+#[derive(Copy, Clone)]
+pub struct BatchOpeningRef<'a, T: Send + Sync + Clone, InputMmcs: Mmcs<T>> {
+    pub opened_values: &'a [Vec<T>],
+    pub opening_proof: &'a <InputMmcs as Mmcs<T>>::Proof,
+}
+
+impl<'a, T: Send + Sync + Clone, InputMmcs: Mmcs<T>> BatchOpeningRef<'a, T, InputMmcs> {
+    /// Creates a new batch opening proof.
+    pub fn new(
+        opened_values: &'a [Vec<T>],
+        opening_proof: &'a <InputMmcs as Mmcs<T>>::Proof,
+    ) -> Self {
+        Self {
             opened_values,
             opening_proof,
-        } = self;
-        (opened_values, opening_proof)
+        }
     }
 
     /// Deconstructs the batch opening proof into its components.
-    pub fn deconstruct_by_ref(&self) -> (&[Vec<T>], &<InputMmcs as Mmcs<T>>::Proof) {
-        let BatchOpening {
-            opened_values,
-            opening_proof,
-        } = self;
-        (opened_values, opening_proof)
+    pub fn unpack(&self) -> (&'a [Vec<T>], &'a <InputMmcs as Mmcs<T>>::Proof) {
+        (self.opened_values, self.opening_proof)
+    }
+}
+
+impl<'a, T: Send + Sync + Clone, InputMmcs: Mmcs<T>> From<&'a BatchOpening<T, InputMmcs>>
+    for BatchOpeningRef<'a, T, InputMmcs>
+{
+    fn from(batch_opening: &'a BatchOpening<T, InputMmcs>) -> Self {
+        BatchOpeningRef::new(&batch_opening.opened_values, &batch_opening.opening_proof)
     }
 }

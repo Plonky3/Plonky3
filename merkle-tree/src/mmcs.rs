@@ -24,7 +24,7 @@ use core::cmp::Reverse;
 use core::marker::PhantomData;
 
 use itertools::Itertools;
-use p3_commit::{BatchOpening, Mmcs};
+use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs};
 use p3_field::PackedValue;
 use p3_matrix::{Dimensions, Matrix};
 use p3_symmetric::{CryptographicHasher, Hash, PseudoCompressionFunction};
@@ -160,9 +160,9 @@ where
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         mut index: usize,
-        batch_proof: &BatchOpening<P::Value, Self>,
+        batch_proof: BatchOpeningRef<P::Value, Self>,
     ) -> Result<(), Self::Error> {
-        let (opened_values, opening_proof) = batch_proof.deconstruct_by_ref();
+        let (opened_values, opening_proof) = batch_proof.unpack();
         // Check that the openings have the correct shape.
         if dimensions.len() != opened_values.len() {
             return Err(WrongBatchSize);
@@ -475,7 +475,7 @@ mod tests {
 
         assert_eq!(commit, expected_result);
 
-        let (opened_values, _) = mmcs.open_batch(2, &prover_data).deconstruct();
+        let (opened_values, _) = mmcs.open_batch(2, &prover_data).unpack();
         assert_eq!(
             opened_values,
             vec![vec![F::TWO, F::TWO], vec![F::ZERO, F::TWO, F::TWO]]
@@ -544,7 +544,7 @@ mod tests {
             &commit,
             &large_mat_dims.chain(small_mat_dims).collect_vec(),
             3,
-            &batch_opening,
+            (&batch_opening).into(),
         )
         .expect_err("expected verification to fail");
     }
@@ -599,7 +599,7 @@ mod tests {
                 .chain(tiny_mat_dims)
                 .collect_vec(),
             6,
-            &batch_opening,
+            (&batch_opening).into(),
         )
         .expect("expected verification to succeed");
     }
@@ -620,7 +620,7 @@ mod tests {
 
         let (commit, prover_data) = mmcs.commit(mats);
         let batch_opening = mmcs.open_batch(17, &prover_data);
-        mmcs.verify_batch(&commit, &dims, 17, &batch_opening)
+        mmcs.verify_batch(&commit, &dims, 17, (&batch_opening).into())
             .expect("expected verification to succeed");
     }
 }

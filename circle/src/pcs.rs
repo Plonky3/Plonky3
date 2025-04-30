@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{BatchOpening, Mmcs, OpenedValues, Pcs, PolynomialSpace};
+use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs, OpenedValues, Pcs, PolynomialSpace};
 use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, Field};
 use p3_fri::FriConfig;
@@ -318,7 +318,7 @@ where
                 .fri_config
                 .mmcs
                 .open_batch(index >> 1, &first_layer_data)
-                .deconstruct();
+                .unpack();
             let first_layer_siblings = izip!(&first_layer_values, &log_heights)
                 .map(|(v, log_height)| {
                     let reduced_index = index >> (log_max_height - log_height);
@@ -428,7 +428,7 @@ where
                     };
 
                     self.mmcs
-                        .verify_batch(batch_commit, dims, idx, batch_opening)
+                        .verify_batch(batch_commit, dims, idx, batch_opening.into())
                         .map_err(InputError::InputMmcsError)?;
 
                     for (ps_at_x, (mat_domain, mat_points_and_values)) in zip_eq(
@@ -515,7 +515,7 @@ where
                         &proof.first_layer_commitment,
                         &fl_dims,
                         index >> 1,
-                        &BatchOpening::new(fl_leaves, first_layer_proof.clone()),
+                        BatchOpeningRef::new(&fl_leaves, first_layer_proof),
                     )
                     .map_err(InputError::FirstLayerMmcsError)?;
 

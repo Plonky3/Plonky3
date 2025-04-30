@@ -488,11 +488,16 @@ where
                     let bits_reduced = log_global_max_height - log_batch_max_height;
                     let reduced_index = index >> bits_reduced;
 
-                    self.mmcs
-                        .verify_batch(batch_commit, &batch_dims, reduced_index, batch_opening)
+                    self.mmcs.verify_batch(
+                        batch_commit,
+                        &batch_dims,
+                        reduced_index,
+                        batch_opening.into(),
+                    )
                 } else {
                     // Empty batch?
-                    self.mmcs.verify_batch(batch_commit, &[], 0, batch_opening)
+                    self.mmcs
+                        .verify_batch(batch_commit, &[], 0, batch_opening.into())
                 }
                 .map_err(FriError::InputError)?;
 

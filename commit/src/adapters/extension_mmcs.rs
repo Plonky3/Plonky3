@@ -6,7 +6,7 @@ use p3_field::{ExtensionField, Field};
 use p3_matrix::extension::FlatMatrixView;
 use p3_matrix::{Dimensions, Matrix};
 
-use crate::{BatchOpening, Mmcs};
+use crate::{BatchOpening, BatchOpeningRef, Mmcs};
 
 #[derive(Clone, Debug)]
 pub struct ExtensionMmcs<F, EF, InnerMmcs> {
@@ -44,8 +44,7 @@ where
         index: usize,
         prover_data: &Self::ProverData<M>,
     ) -> BatchOpening<EF, Self> {
-        let (inner_opened_values, inner_proof) =
-            self.inner.open_batch(index, prover_data).deconstruct();
+        let (inner_opened_values, inner_proof) = self.inner.open_batch(index, prover_data).unpack();
         let opened_ext_values = inner_opened_values
             .into_iter()
             .map(|row| {
@@ -74,7 +73,7 @@ where
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         index: usize,
-        batch_opening: &BatchOpening<EF, Self>,
+        batch_opening: BatchOpeningRef<EF, Self>,
     ) -> Result<(), Self::Error> {
         let opened_base_values: Vec<Vec<F>> = batch_opening
             .opened_values
@@ -97,7 +96,7 @@ where
             commit,
             &base_dimensions,
             index,
-            &BatchOpening::new(opened_base_values, batch_opening.opening_proof.clone()),
+            BatchOpeningRef::new(&opened_base_values, batch_opening.opening_proof),
         )
     }
 }
