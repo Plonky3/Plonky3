@@ -82,7 +82,7 @@ pub trait Mmcs<T: Send + Sync + Clone>: Clone {
 
 /// A Batched opening proof.
 ///
-/// Contains a Merkle proof for a collection of opened_values.
+/// Contains a collection of opened values at a Merkle proof for those openings.
 ///
 /// Primarily used by the prover.
 #[derive(Serialize, Deserialize, Clone)]
