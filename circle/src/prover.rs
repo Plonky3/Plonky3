@@ -6,7 +6,7 @@ use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field};
-use p3_fri::{FriConfig, FriGenericConfig};
+use p3_fri::{FriParameters, FriGenericConfig};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_strict_usize;
 use tracing::{info_span, instrument};
@@ -16,7 +16,7 @@ use crate::{CircleCommitPhaseProofStep, CircleFriProof, CircleQueryProof};
 #[instrument(name = "FRI prover", skip_all)]
 pub fn prove<G, Val, Challenge, M, Challenger>(
     g: &G,
-    config: &FriConfig<M>,
+    config: &FriParameters<M>,
     inputs: Vec<Vec<Challenge>>,
     challenger: &mut Challenger,
     open_input: impl Fn(usize) -> G::InputProof,
@@ -73,7 +73,7 @@ struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
 #[instrument(name = "commit phase", skip_all)]
 fn commit_phase<G, Val, Challenge, M, Challenger>(
     g: &G,
-    config: &FriConfig<M>,
+    config: &FriParameters<M>,
     inputs: Vec<Vec<Challenge>>,
     challenger: &mut Challenger,
 ) -> CommitPhaseResult<Challenge, M>
@@ -123,7 +123,7 @@ where
 }
 
 fn answer_query<F, M>(
-    config: &FriConfig<M>,
+    config: &FriParameters<M>,
     commit_phase_commits: &[M::ProverData<RowMajorMatrix<F>>],
     index: usize,
 ) -> Vec<CircleCommitPhaseProofStep<F, M>>

@@ -20,7 +20,7 @@ use rand::distr::{Distribution, StandardUniform};
 use tracing::{info_span, instrument};
 
 use crate::verifier::FriError;
-use crate::{BatchOpening, FriConfig, FriProof, TwoAdicFriPcs};
+use crate::{BatchOpening, FriParameters, FriProof, TwoAdicFriPcs};
 
 /// A hiding FRI PCS. Both MMCSs must also be hiding; this is not enforced at compile time so it's
 /// the user's responsibility to configure.
@@ -35,7 +35,7 @@ impl<Val, Dft, InputMmcs, FriMmcs, R> HidingFriPcs<Val, Dft, InputMmcs, FriMmcs,
     pub fn new(
         dft: Dft,
         mmcs: InputMmcs,
-        fri: FriConfig<FriMmcs>,
+        fri: FriParameters<FriMmcs>,
         num_random_codewords: usize,
         rng: R,
     ) -> Self {
@@ -166,14 +166,14 @@ where
                 let mut lde_evals = self
                     .inner
                     .dft
-                    .coset_lde_batch(evals, self.inner.fri.log_blowup + 1, shift)
+                    .coset_lde_batch(evals, self.inner.parameters.log_blowup + 1, shift)
                     .to_row_major_matrix();
 
                 // Evaluate `v_H(X) * r(X)` over the LDE, where:
                 // - `v_H` is the coset vanishing polynomial, here equal to (GENERATOR * X / domain.shift)^n - 1,
                 // - and `r` is a random polynomial.
                 let mut vanishing_poly_coeffs =
-                    Val::zero_vec((h * w) << (self.inner.fri.log_blowup + 1));
+                    Val::zero_vec((h * w) << (self.inner.parameters.log_blowup + 1));
                 let p = shift.exp_u64(h as u64);
                 Val::GENERATOR
                     .powers()
@@ -193,7 +193,7 @@ where
                     .to_row_major_matrix();
 
                 // Add the quotient chunk evaluations over the LDE to the evaluations of `v_H(X) * r(X)`.
-                for i in 0..h * w * (1 << (self.inner.fri.log_blowup + 1)) {
+                for i in 0..h * w * (1 << (self.inner.parameters.log_blowup + 1)) {
                     lde_evals.values[i] += random_eval.values[i];
                 }
 

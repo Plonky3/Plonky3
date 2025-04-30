@@ -8,7 +8,7 @@ use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace};
 use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, Field};
-use p3_fri::FriConfig;
+use p3_fri::FriParameters;
 use p3_fri::verifier::FriError;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixCow};
 use p3_matrix::row_index_mapped::RowIndexMappedView;
@@ -30,12 +30,12 @@ use crate::{CfftPerm, CfftPermutable, CircleEvaluations, CircleFriProof, cfft_pe
 #[derive(Debug)]
 pub struct CirclePcs<Val: Field, InputMmcs, FriMmcs> {
     pub mmcs: InputMmcs,
-    pub fri_config: FriConfig<FriMmcs>,
+    pub fri_config: FriParameters<FriMmcs>,
     pub _phantom: PhantomData<Val>,
 }
 
 impl<Val: Field, InputMmcs, FriMmcs> CirclePcs<Val, InputMmcs, FriMmcs> {
-    pub const fn new(mmcs: InputMmcs, fri_config: FriConfig<FriMmcs>) -> Self {
+    pub const fn new(mmcs: InputMmcs, fri_config: FriParameters<FriMmcs>) -> Self {
         Self {
             mmcs,
             fri_config,

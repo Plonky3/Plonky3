@@ -5,7 +5,7 @@ use p3_commit::{ExtensionMmcs, Pcs, PolynomialSpace};
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{ExtensionField, Field};
-use p3_fri::{FriConfig, TwoAdicFriPcs};
+use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -176,7 +176,7 @@ mod babybear_fri_pcs {
         let val_mmcs = ValMmcs::new(hash, compress);
         let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
-        let fri_config = FriConfig {
+        let fri_config = FriParameters {
             log_blowup,
             log_final_poly_degree: 0,
             num_queries: 10,
@@ -229,7 +229,7 @@ mod m31_fri_pcs {
         let compress = MyCompress::new(byte_hash);
         let val_mmcs = ValMmcs::new(field_hash, compress);
         let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
-        let fri_config = FriConfig {
+        let fri_config = FriParameters {
             log_blowup,
             log_final_poly_degree: 0,
             num_queries: 10,

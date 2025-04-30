@@ -9,7 +9,7 @@ use p3_matrix::Dimensions;
 use p3_util::reverse_bits_len;
 use p3_util::zip_eq::zip_eq;
 
-use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof};
+use crate::{CommitPhaseProofStep, FriGenericConfig, FriParameters, FriProof, QueryProof};
 
 #[derive(Debug)]
 pub enum FriError<CommitMmcsErr, InputError> {
@@ -26,32 +26,36 @@ pub enum FriError<CommitMmcsErr, InputError> {
 /// - `config`, `parameters`: Together, these contain all information the verifier needs to reimplement
 ///   the provers FRI protocol.
 /// - `proof`: The proof to verify.
-/// - `fiat_shamir_challenger`: The Fiat-Shamir challenger to use for sampling challenges.
-/// - `open_input`: A function that takes an index and an opening proof and returns a vector of openings
-///   or a `FriError` if the proof fails.
+/// - `challenger`: The Fiat-Shamir challenger to use for sampling challenges.
+/// - `open_input`: A function that takes an index and opening proofs and returns a vector of reduced openings
+///   which constitute the fri inputs. The opening proofs prove that the values `f(x)` are the ones committed
+///   to and there are then combined into the fri inputs.
 pub fn verify_fri<G, Val, Challenge, M, Challenger>(
     config: &G,
-    parameters: &FriConfig<M>,
+    parameters: &FriParameters<M>,
     proof: &FriProof<Challenge, M, Challenger::Witness, G::InputProof>,
-    fiat_shamir_challenger: &mut Challenger,
+    challenger: &mut Challenger,
     open_input: impl Fn(
         usize,
         &G::InputProof,
     ) -> Result<Vec<(usize, Challenge)>, FriError<M::Error, G::InputError>>,
 ) -> Result<(), FriError<M::Error, G::InputError>>
 where
-    Val: Field,
-    Challenge: ExtensionField<Val> + TwoAdicField,
+    Val: TwoAdicField,
+    Challenge: ExtensionField<Val>,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
     G: FriGenericConfig<Val, Challenge>,
 {
+    // Generate all of the random challenges for the fri rounds.
     let betas: Vec<Challenge> = proof
         .commit_phase_commits
         .iter()
         .map(|comm| {
-            fiat_shamir_challenger.observe(comm.clone());
-            fiat_shamir_challenger.sample_algebra_element()
+            // To match with the prover (and for security purposes),
+            // we observe the commitment before sampling the challenge.
+            challenger.observe(comm.clone());
+            challenger.sample_algebra_element()
         })
         .collect();
 
@@ -59,14 +63,15 @@ where
     proof
         .final_poly
         .iter()
-        .for_each(|x| fiat_shamir_challenger.observe_algebra_element(*x));
+        .for_each(|x| challenger.observe_algebra_element(*x));
 
+    // Ensure that we have the expected number of fri query proofs.
     if proof.query_proofs.len() != parameters.num_queries {
         return Err(FriError::InvalidProofShape);
     }
 
     // Check PoW.
-    if !fiat_shamir_challenger.check_witness(parameters.proof_of_work_bits, proof.pow_witness) {
+    if !challenger.check_witness(parameters.proof_of_work_bits, proof.pow_witness) {
         return Err(FriError::InvalidPowWitness);
     }
 
@@ -77,16 +82,23 @@ where
     // The log of the final domain size.
     let log_final_height = parameters.log_blowup + parameters.log_final_poly_degree;
 
-    for qp in &proof.query_proofs {
-        let index =
-            fiat_shamir_challenger.sample_bits(log_max_height + config.extra_query_index_bits());
-        let ro = open_input(index, &qp.input_proof)?;
+    for QueryProof {
+        input_proof,
+        commit_phase_openings,
+    } in &proof.query_proofs
+    {
+        // For each query proof, we start by generating the random index.
+        let index = challenger.sample_bits(log_max_height + config.extra_query_index_bits());
+
+        // Next we open all polynomials `f` at the relevant index and combine them into our fri inputs.
+        let ro = open_input(index, input_proof)?;
 
         debug_assert!(
             ro.iter().tuple_windows().all(|((l, _), (r, _))| l > r),
             "reduced openings sorted by height descending"
         );
 
+        // If we queried extra bits, shift them off now.
         let mut domain_index = index >> config.extra_query_index_bits();
 
         // Starting at the evaluation at `index` of the initial domain,
@@ -103,22 +115,24 @@ where
                     &proof.commit_phase_commits,
                     FriError::InvalidProofShape,
                 )?,
-                &qp.commit_phase_openings,
+                commit_phase_openings,
                 FriError::InvalidProofShape,
             )?,
             ro,
             log_max_height,
             log_final_height,
         )?;
+        // Assuming all the checks passed, the final check is to ensure that the folded evaluation
+        // matches the evaluation of the final polynomial sent by the prover.
 
         let mut eval = Challenge::ZERO;
 
         // We open the final polynomial at index `domain_index`, which corresponds to evaluating
         // the polynomial at x^k, where x is the 2-adic generator of order `max_height` and k is
         // `reverse_bits_len(domain_index, log_max_height)`.
-        let x = Challenge::two_adic_generator(log_max_height)
+        let x = Val::two_adic_generator(log_max_height)
             .exp_u64(reverse_bits_len(domain_index, log_max_height) as u64);
-        let mut x_pow = Challenge::ONE;
+        let mut x_pow = Val::ONE;
 
         // Evaluate the final polynomial at x.
         for coeff in &proof.final_poly {
@@ -142,7 +156,8 @@ type CommitStep<'a, F, M> = (
     &'a CommitPhaseProofStep<F, M>, // The sibling and opening proof for the current FRI node.
 );
 
-/// Verifies a single query chain in the FRI proof.
+/// Verifies a single query chain in the FRI proof. This is the verifier complement
+/// to the prover's [`answer_query`] function.
 ///
 /// Given an initial `index` corresponding to a point in the initial domain
 /// and a series of `reduced_openings` corresponding to evaluations of
@@ -151,10 +166,10 @@ type CommitStep<'a, F, M> = (
 /// match the commitment.
 fn verify_query<'a, G, F, EF, M>(
     g: &G,
-    config: &FriConfig<M>,
-    index: &mut usize,
-    steps: impl ExactSizeIterator<Item = CommitStep<'a, EF, M>>,
-    reduced_openings: Vec<(usize, EF)>,
+    config: &FriParameters<M>,
+    index: &mut usize, // initial index in index path.
+    steps: impl ExactSizeIterator<Item = CommitStep<'a, EF, M>>, // Fri folding data along index path.
+    reduced_openings: Vec<(usize, EF)>,                          // Fri input data along index path.
     log_max_height: usize,
     log_final_height: usize,
 ) -> Result<EF, FriError<M::Error, G::InputError>>
@@ -164,21 +179,25 @@ where
     M: Mmcs<EF> + 'a,
     G: FriGenericConfig<F, EF>,
 {
-    let mut folded_eval = EF::ZERO;
     let mut ro_iter = reduced_openings.into_iter().peekable();
+
+    // These checks are not essential to security,
+    // but they should be satisfied by any non malicious prover.
+    // ro_iter being empty means that we have committed to no polynomials at all and
+    // we need to roll in a polynomial initially otherwise we are just folding a zero polynomial.
+    if ro_iter.peek().is_none() || ro_iter.peek().unwrap().0 != log_max_height {
+        return Err(FriError::InvalidProofShape);
+    }
+    let mut folded_eval = ro_iter.next().unwrap().1;
 
     // We start with evaluations over a domain of size (1 << log_max_height). We fold
     // using FRI until the domain size reaches (1 << log_final_height).
     for (log_folded_height, ((&beta, comm), opening)) in zip_eq(
+        // zip_eq ensures that we have the right number of steps.
         (log_final_height..log_max_height).rev(),
         steps,
         FriError::InvalidProofShape,
     )? {
-        // If there are new polynomials to roll in at this height, do so.
-        if let Some((_, ro)) = ro_iter.next_if(|(lh, _)| *lh == log_folded_height + 1) {
-            folded_eval += ro;
-        }
-
         // Get the index of the other sibling of the current fri node.
         let index_sibling = *index ^ 1;
 
@@ -199,8 +218,13 @@ where
             .verify_batch(comm, dims, *index, &[evals.clone()], &opening.opening_proof)
             .map_err(FriError::CommitPhaseMmcsError)?;
 
-        // Fold the pair of evaluations of sibling nodes into the evaluation of the parent fri node.
+        // Fold the pair of sibling nodes to get the evaluation of the parent fri node.
         folded_eval = g.fold_row(*index, log_folded_height, beta, evals.into_iter());
+
+        // If there are new polynomials to roll in at this height, do so.
+        if let Some((_, ro)) = ro_iter.next_if(|(lh, _)| *lh == log_folded_height) {
+            folded_eval += beta.square() * ro;
+        }
     }
 
     // If ro_iter is not empty, we failed to fold in some polynomial evaluations.
