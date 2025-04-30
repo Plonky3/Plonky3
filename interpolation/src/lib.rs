@@ -103,7 +103,7 @@ where
         .map(|(&sg, &diff_inv)| diff_inv * sg)
         .collect();
 
-    // For each column polynomial `fj`, compute `\sum_i h^i/(gh^i - z) * fj(gh^i)`.
+    // For each column polynomial `f_j`, compute `\sum_i h^i/(gh^i - z) * f_j(gh^i)`.
     let sum = coset_evals.columnwise_dot_product(&col_scale);
 
     let point_pow_height = point.exp_power_of_2(log_height);
