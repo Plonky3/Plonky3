@@ -81,11 +81,11 @@ where
     // We start with the evaluations of a polynomial `f` over a coset `gH` of size `N` and want to compute `f(z)`.
     // Observe that `z^N - g^N` is equal to `0` at all points in the coset.
     // Thus `(z^N - g^N)/(z - gh^i)` is equal to `0` at all points except for `gh^i` where it is equal to:
-    //          `N * (gh^i)^{N - 1} = N * g^N * (gh^{i})^{-1}.`
+    //          `N * (gh^i)^{N - 1} = N * g^N * (gh^i)^{-1}.`
     //
-    // Hence `L_{i}(z) = h^i * (z^N - g^N)/(N * g^{N - 1} * (z - gh^i))` will be equal to `1` at `gh^i` and `0`
+    // Hence `L_i(z) = h^i * (z^N - g^N)/(N * g^{N - 1} * (z - gh^i))` will be equal to `1` at `gh^i` and `0`
     // at all other points in the coset. This means that we can compute `f(z)` as:
-    //          `\sum_i L_{i}(z) f(gh^i) = (z^N - g^N)/(N * g^N) * \sum_i gh^i/(z - gh^i) f(gh^i).`
+    //          `\sum_i L_i(z) f(gh^i) = (z^N - g^N)/(N * g^N) * \sum_i gh^i/(z - gh^i) f(gh^i).`
 
     // TODO: It might be possible to speed this up by refactoring the code to instead compute:
     //          `((z/g)^N - 1)/N * \sum_i 1/(z/(gh^i) - 1) f(gh^i).`
