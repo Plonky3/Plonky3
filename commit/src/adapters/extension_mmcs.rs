@@ -47,15 +47,7 @@ where
         let (inner_opened_values, inner_proof) = self.inner.open_batch(index, prover_data).unpack();
         let opened_ext_values = inner_opened_values
             .into_iter()
-            .map(|row| {
-                // By construction, the width of the row is a multiple of EF::DIMENSION.
-                // So there will be no remainder when we call chunks_exact.
-                row.chunks_exact(EF::DIMENSION)
-                    // As each chunk has length EF::DIMENSION, from_basis_coefficients_slice
-                    // will produce some(elem) which into_iter converts to the iterator once(elem).
-                    .flat_map(EF::from_basis_coefficients_slice)
-                    .collect()
-            })
+            .map(|row| EF::reconstitute_from_base(row))
             .collect();
         BatchOpening::new(opened_ext_values, inner_proof)
     }
@@ -78,12 +70,7 @@ where
         let opened_base_values: Vec<Vec<F>> = batch_opening
             .opened_values
             .iter()
-            .map(|row| {
-                row.iter()
-                    .flat_map(|el| el.as_basis_coefficients_slice())
-                    .copied()
-                    .collect()
-            })
+            .map(|row| EF::flatten_to_base(row.clone()))
             .collect();
         let base_dimensions = dimensions
             .iter()
