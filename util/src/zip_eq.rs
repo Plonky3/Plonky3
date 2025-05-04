@@ -61,3 +61,79 @@ where
     B: ExactSizeIterator,
 {
 }
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    use super::*;
+
+    #[test]
+    fn test_zip_eq_success() {
+        let a = [1, 2, 3];
+        let b = ['a', 'b', 'c'];
+
+        // Expect zip_eq to succeed since both slices are length 3.
+        let zipped = zip_eq(a, b, "length mismatch").unwrap();
+
+        let result: Vec<_> = zipped.collect();
+
+        // Expect tuples zipped together positionally.
+        assert_eq!(result, vec![(1, 'a'), (2, 'b'), (3, 'c')]);
+    }
+
+    #[test]
+    fn test_zip_eq_length_mismatch() {
+        let a = [1, 2];
+        let b = ['x', 'y', 'z'];
+
+        // Use pattern matching instead of .unwrap_err()
+        match zip_eq(a, b, "oops") {
+            Err(e) => assert_eq!(e, "oops"),
+            Ok(_) => panic!("expected error due to mismatched lengths"),
+        }
+    }
+
+    #[test]
+    fn test_zip_eq_empty_iterators() {
+        let a: [i32; 0] = [];
+        let b: [char; 0] = [];
+
+        // Zipping two empty iterators should succeed and produce an empty iterator.
+        let zipped = zip_eq(a, b, "mismatch").unwrap();
+
+        let result: Vec<_> = zipped.collect();
+
+        // The result should be an empty vector.
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_zip_eq_size_hint() {
+        let a = [10, 20];
+        let b = [100, 200];
+
+        let zipped = zip_eq(a, b, "bad").unwrap();
+
+        // Size hint should reflect the number of items remaining.
+        assert_eq!(zipped.size_hint(), (2, Some(2)));
+    }
+
+    #[test]
+    fn test_zip_eq_unreachable_case() {
+        let a = [1, 2];
+        let b = [3, 4];
+
+        let mut zipped = zip_eq(a, b, "fail").unwrap();
+
+        // Manually advance past the last element
+        assert_eq!(zipped.next(), Some((1, 3)));
+        assert_eq!(zipped.next(), Some((2, 4)));
+        assert_eq!(zipped.next(), None);
+
+        // If one iterator somehow returns more, it would panic — unreachable by construction.
+        // This line is commented because it would panic if uncommented:
+        // zipped.b.next(); // ⚠️ Do not call after fully consumed
+    }
+}
