@@ -31,9 +31,13 @@ use tracing::instrument;
 pub struct MerkleTree<F, W, M, const DIGEST_ELEMS: usize> {
     /// All leaf matrices in insertion order.
     ///
-    /// Each matrix contributes one column of packed rows to the first digest
-    /// layer. The vector is kept only so you can inspect or re-open the tree
-    /// later; it is not used after construction time.
+    /// Each matrix contributes rows to one or more digest layers, depending on its height.
+    /// Specifically, only the tallest matrices are included in the first digest layer,
+    /// while shorter matrices are injected into higher digest layers at positions determined
+    /// by their padded heights.
+    ///
+    /// This vector is retained only for inspection or re-opening of the tree; it is not used
+    /// after construction time.
     pub(crate) leaves: Vec<M>,
 
     /// All intermediate digest layers, index 0 being the first layer above
@@ -42,8 +46,8 @@ pub struct MerkleTree<F, W, M, const DIGEST_ELEMS: usize> {
     /// Every inner vector holds contiguous digests `[left₀, right₀, left₁,
     /// right₁, …]`; higher layers refer to these by index.
     ///
-    /// Serialization is available when `W` is a fixed-size array
-    /// (length 1–32).
+    /// Serialization requires that `[W; DIGEST_ELEMS]` implements `Serialize` and
+    /// `Deserialize`. This is automatically satisfied when `W` is a fixed-size type.
     #[serde(
         bound(serialize = "[W; DIGEST_ELEMS]: Serialize"),
         bound(deserialize = "[W; DIGEST_ELEMS]: Deserialize<'de>")
@@ -62,6 +66,10 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
     /// * `h` – hashing function used on raw rows.
     /// * `c` – 2-to-1 compression function used on digests.
     /// * `leaves` – matrices to commit to. Must be non-empty.
+    ///
+    /// Matrices do **not** need to have power-of-two heights. However, any two matrices
+    /// whose heights **round up** to the same power-of-two must have **equal actual height**.
+    /// This ensures proper balancing when folding digests layer-by-layer.
     ///
     /// All matrices are hashed row-by-row with `h`. The resulting digests are
     /// then folded upwards with `c` until a single root remains.
