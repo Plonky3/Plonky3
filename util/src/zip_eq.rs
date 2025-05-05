@@ -131,9 +131,5 @@ mod tests {
         assert_eq!(zipped.next(), Some((1, 3)));
         assert_eq!(zipped.next(), Some((2, 4)));
         assert_eq!(zipped.next(), None);
-
-        // If one iterator somehow returns more, it would panic — unreachable by construction.
-        // This line is commented because it would panic if uncommented:
-        // zipped.b.next(); // ⚠️ Do not call after fully consumed
     }
 }
