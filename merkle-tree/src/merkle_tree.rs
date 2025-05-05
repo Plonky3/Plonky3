@@ -212,9 +212,6 @@ where
 /// Fold one digest layer into the next and, when present, mix in rows
 /// taken from smaller matrices whose padded height equals `prev_layer.len()/2`.
 ///
-/// For each index it compresses the left-right pair, then optionally
-/// hashes the injected rows and compresses once more.
-///
 /// Pads the output so its length is even unless it becomes the root.
 fn compress_and_inject<P, PW, H, C, M, const DIGEST_ELEMS: usize>(
     prev_layer: &[[PW::Value; DIGEST_ELEMS]],
