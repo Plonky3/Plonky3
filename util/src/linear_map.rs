@@ -4,8 +4,8 @@ use core::mem;
 /// A linear key-value map backed by a `Vec`.
 ///
 /// This map performs **O(n)** lookups and inserts.
-/// It is suitable only for **small** sets of keys where
-/// performance is not critical and keys implement `Eq` but not `Hash`.
+/// It is suitable only for **small** sets of keys which
+/// must implement `Eq`.
 ///
 /// Internally stores key-value pairs in insertion order.
 /// Duplicate key inserts overwrite the previous value.
