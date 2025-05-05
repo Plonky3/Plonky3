@@ -63,26 +63,23 @@ mod tests {
 
     /// A helper wrapper struct to use serialize/deserialize hooks on arrays.
     #[derive(Serialize, Deserialize, Debug, PartialEq)]
-    struct Wrapper {
+    #[serde(bound(serialize = "", deserialize = ""))]
+    struct Wrapper<const N: usize> {
         #[serde(serialize_with = "serialize", deserialize_with = "deserialize")]
-        arr: [u32; 3],
+        arr: [u32; N],
     }
 
     #[test]
     fn test_array_serde_roundtrip() {
-        let original = Wrapper { arr: [10, 20, 30] };
+        let original = Wrapper::<3> { arr: [10, 20, 30] };
 
-        // Serialize to JSON
         let json = serde_json::to_string(&original).unwrap();
         assert_eq!(json, r#"{"arr":[10,20,30]}"#);
 
-        // Deserialize from JSON
-        let deserialized: Wrapper = serde_json::from_str(&json).unwrap();
+        let deserialized: Wrapper<3> = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, original);
 
-        // Also test deserialization from a hardcoded JSON string
-        let explicit_json = r#"{"arr":[10,20,30]}"#;
-        let parsed: Wrapper = serde_json::from_str(explicit_json).unwrap();
+        let parsed: Wrapper<3> = serde_json::from_str(r#"{"arr":[10,20,30]}"#).unwrap();
         assert_eq!(parsed.arr, [10, 20, 30]);
     }
 
@@ -90,28 +87,18 @@ mod tests {
     fn test_deserialize_wrong_length() {
         let json = r#"{"arr":[1,2]}"#;
 
-        // Fails because array has length 2 but we expect 3
-        let result: Result<Wrapper, _> = serde_json::from_str(json);
-
-        // Must error with invalid length
+        let result: Result<Wrapper<3>, _> = serde_json::from_str(json);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_empty_array() {
-        #[derive(Serialize, Deserialize, Debug, PartialEq)]
-        struct EmptyWrapper {
-            #[serde(serialize_with = "serialize", deserialize_with = "deserialize")]
-            arr: [u8; 0],
-        }
+        let data = Wrapper::<0> { arr: [] };
 
-        // Serialize empty array
-        let data = EmptyWrapper { arr: [] };
         let json = serde_json::to_string(&data).unwrap();
         assert_eq!(json, r#"{"arr":[]}"#);
 
-        // Deserialize back
-        let parsed: EmptyWrapper = serde_json::from_str(&json).unwrap();
+        let parsed: Wrapper<0> = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, data);
     }
 }
