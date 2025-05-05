@@ -349,16 +349,10 @@ where
     next_digests
 }
 
-/// Convert a packed array `[P; N]` into `P::WIDTH` row-major scalar arrays.
+/// Converts a packed array `[P; N]` into its underlying `P::WIDTH` scalar arrays.
 ///
-/// Think of `[P; N]` as an `N×WIDTH` matrix stored column-major.
-/// `unpack_array` transposes this logical matrix and yields its rows one by one.
-///
-/// Example when `P::WIDTH == 4` and `N == 2`:
-/// ```text
-/// input  = [[a0 a1 a2 a3], [b0 b1 b2 b3]]
-/// output = ([a0 b0], [a1 b1], [a2 b2], [a3 b3])
-/// ```
+/// Interprets `[P; N]` as the matrix `[[P::Value; P::WIDTH]; N]`, performs a transpose to
+/// get `[[P::Value; N] P::WIDTH]` and returns these `P::Value` arrays as an iterator.
 #[inline]
 fn unpack_array<P: PackedValue, const N: usize>(
     packed_digest: [P; N],
