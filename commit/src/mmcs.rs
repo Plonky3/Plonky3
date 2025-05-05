@@ -135,7 +135,7 @@ impl<'a, T: Send + Sync + Clone, InputMmcs: Mmcs<T>> BatchOpeningRef<'a, T, Inpu
         }
     }
 
-    /// Deconstructs the batch opening proof into its components.
+    /// Unpacks the batch opening proof into its components.
     #[inline]
     pub fn unpack(&self) -> (&'a [Vec<T>], &'a <InputMmcs as Mmcs<T>>::Proof) {
         (self.opened_values, self.opening_proof)
