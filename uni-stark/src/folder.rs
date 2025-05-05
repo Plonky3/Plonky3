@@ -7,29 +7,56 @@ use p3_matrix::stack::VerticalPair;
 
 use crate::{PackedChallenge, PackedVal, StarkGenericConfig, Val};
 
+/// Handles constraint generation and accumulation for the prover in a STARK system.
+/// 
+/// This struct is responsible for evaluating constraints over the trace matrix
+/// and accumulating them into a single value using randomized constraint combination
+/// with powers of the challenge variable.
 #[derive(Debug)]
 pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
+    /// The main matrix containing the trace data to be verified
     pub main: RowMajorMatrixView<'a, PackedVal<SC>>,
+    /// Public values that are inputs to the computation
     pub public_values: &'a Vec<Val<SC>>,
+    /// Boolean indicator for the first row of the trace
     pub is_first_row: PackedVal<SC>,
+    /// Boolean indicator for the last row of the trace
     pub is_last_row: PackedVal<SC>,
+    /// Boolean indicator for rows where transition constraints should be applied
     pub is_transition: PackedVal<SC>,
+    /// Challenge powers used for randomized constraint combination
     pub alpha_powers: &'a [SC::Challenge],
+    /// Decomposed challenge powers for batch constraint handling
     pub decomposed_alpha_powers: &'a [Vec<Val<SC>>],
+    /// Running accumulator for all constraints multiplied by challenge powers
     pub accumulator: PackedChallenge<SC>,
+    /// Current constraint index being processed
     pub constraint_index: usize,
 }
 
+/// A paired view of two matrices, typically used for verifier operations
+/// that need to look at consecutive rows simultaneously
 type ViewPair<'a, T> = VerticalPair<RowMajorMatrixView<'a, T>, RowMajorMatrixView<'a, T>>;
 
+/// Handles constraint verification for the verifier in a STARK system.
+///
+/// Similar to ProverConstraintFolder but operates on committed values rather than the full trace,
+/// using a more efficient accumulation method for verification.
 #[derive(Debug)]
 pub struct VerifierConstraintFolder<'a, SC: StarkGenericConfig> {
+    /// Pair of consecutive rows from the committed polynomial evaluations
     pub main: ViewPair<'a, SC::Challenge>,
+    /// Public values that are inputs to the computation
     pub public_values: &'a Vec<Val<SC>>,
+    /// Boolean indicator for the first row of the trace
     pub is_first_row: SC::Challenge,
+    /// Boolean indicator for the last row of the trace
     pub is_last_row: SC::Challenge,
+    /// Boolean indicator for rows where transition constraints should be applied
     pub is_transition: SC::Challenge,
+    /// Single challenge value used for constraint combination
     pub alpha: SC::Challenge,
+    /// Running accumulator for all constraints
     pub accumulator: SC::Challenge,
 }
 
@@ -54,6 +81,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
         self.is_last_row
     }
 
+    /// Returns a boolean indicating rows where transition constraints should be checked.
+    /// 
     /// # Panics
     /// This function panics if `size` is not `2`.
     #[inline]
@@ -65,6 +94,9 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
         }
     }
 
+    /// Adds a constraint to the system, requiring that expression x equals zero.
+    /// 
+    /// Multiplies the constraint by the appropriate challenge power and adds to accumulator.
     #[inline]
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         let x: PackedVal<SC> = x.into();
@@ -73,6 +105,9 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
         self.constraint_index += 1;
     }
 
+    /// Efficiently adds multiple constraints at once using optimized batch processing.
+    /// 
+    /// This improves performance by handling N constraints with fewer field operations.
     #[inline]
     fn assert_zeros<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
         let expr_array: [Self::Expr; N] = array.map(Into::into);
@@ -112,6 +147,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
         self.is_last_row
     }
 
+    /// Returns a boolean indicating rows where transition constraints should be checked.
+    /// 
     /// # Panics
     /// This function panics if `size` is not `2`.
     fn is_transition_window(&self, size: usize) -> Self::Expr {
@@ -122,6 +159,10 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
         }
     }
 
+    /// Adds a constraint to the verifier system, requiring that expression x equals zero.
+    /// 
+    /// Instead of using explicit powers, the verifier multiplies the accumulator by alpha
+    /// before adding each constraint, which is mathematically equivalent but more efficient.
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         let x: SC::Challenge = x.into();
         self.accumulator *= self.alpha;
