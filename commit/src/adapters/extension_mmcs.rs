@@ -6,7 +6,7 @@ use p3_field::{ExtensionField, Field};
 use p3_matrix::extension::FlatMatrixView;
 use p3_matrix::{Dimensions, Matrix};
 
-use crate::Mmcs;
+use crate::{BatchOpening, BatchOpeningRef, Mmcs};
 
 #[derive(Clone, Debug)]
 pub struct ExtensionMmcs<F, EF, InnerMmcs> {
@@ -43,21 +43,13 @@ where
         &self,
         index: usize,
         prover_data: &Self::ProverData<M>,
-    ) -> (Vec<Vec<EF>>, Self::Proof) {
-        let (opened_base_values, proof) = self.inner.open_batch(index, prover_data);
-        let opened_ext_values = opened_base_values
+    ) -> BatchOpening<EF, Self> {
+        let (inner_opened_values, inner_proof) = self.inner.open_batch(index, prover_data).unpack();
+        let opened_ext_values = inner_opened_values
             .into_iter()
-            .map(|row| {
-                // By construction, the width of the row is a multiple of EF::DIMENSION.
-                // So there will be no remainder when we call chunks_exact.
-                row.chunks_exact(EF::DIMENSION)
-                    // As each chunk has length EF::DIMENSION, from_basis_coefficients_slice
-                    // will produce some(elem) which into_iter converts to the iterator once(elem).
-                    .flat_map(EF::from_basis_coefficients_slice)
-                    .collect()
-            })
+            .map(EF::reconstitute_from_base)
             .collect();
-        (opened_ext_values, proof)
+        BatchOpening::new(opened_ext_values, inner_proof)
     }
 
     fn get_matrices<'a, M: Matrix<EF>>(&self, prover_data: &'a Self::ProverData<M>) -> Vec<&'a M> {
@@ -73,17 +65,13 @@ where
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         index: usize,
-        opened_values: &[Vec<EF>],
-        proof: &Self::Proof,
+        batch_opening: BatchOpeningRef<EF, Self>,
     ) -> Result<(), Self::Error> {
-        let opened_base_values: Vec<Vec<F>> = opened_values
+        let opened_base_values: Vec<Vec<F>> = batch_opening
+            .opened_values
             .iter()
-            .map(|row| {
-                row.iter()
-                    .flat_map(|el| el.as_basis_coefficients_slice())
-                    .copied()
-                    .collect()
-            })
+            .cloned()
+            .map(EF::flatten_to_base)
             .collect();
         let base_dimensions = dimensions
             .iter()
@@ -92,7 +80,11 @@ where
                 height: dim.height,
             })
             .collect::<Vec<_>>();
-        self.inner
-            .verify_batch(commit, &base_dimensions, index, &opened_base_values, proof)
+        self.inner.verify_batch(
+            commit,
+            &base_dimensions,
+            index,
+            BatchOpeningRef::new(&opened_base_values, batch_opening.opening_proof),
+        )
     }
 }
