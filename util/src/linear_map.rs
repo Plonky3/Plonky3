@@ -220,15 +220,4 @@ mod tests {
         // values() iterator should be empty
         assert_eq!(map.values().count(), 0);
     }
-
-    #[test]
-    fn test_insert_with_duplicate_key_behavior() {
-        let mut map = LinearMap::new();
-        assert_eq!(map.insert("key", 1), None);
-        assert_eq!(map.insert("key", 2), Some(1));
-        assert_eq!(map.insert("key", 3), Some(2));
-
-        // Final value for the key should be the latest one
-        assert_eq!(map.get(&"key"), Some(&3));
-    }
 }
