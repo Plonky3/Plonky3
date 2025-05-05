@@ -70,7 +70,8 @@ where
         let opened_base_values: Vec<Vec<F>> = batch_opening
             .opened_values
             .iter()
-            .map(|row| EF::flatten_to_base(row.clone()))
+            .cloned()
+            .map(EF::flatten_to_base)
             .collect();
         let base_dimensions = dimensions
             .iter()
