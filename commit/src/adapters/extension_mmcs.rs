@@ -47,7 +47,7 @@ where
         let (inner_opened_values, inner_proof) = self.inner.open_batch(index, prover_data).unpack();
         let opened_ext_values = inner_opened_values
             .into_iter()
-            .map(|row| EF::reconstitute_from_base(row))
+            .map(EF::reconstitute_from_base)
             .collect();
         BatchOpening::new(opened_ext_values, inner_proof)
     }
