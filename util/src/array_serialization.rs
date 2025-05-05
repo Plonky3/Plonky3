@@ -69,36 +69,21 @@ mod tests {
     }
 
     #[test]
-    fn test_serialize_array() {
-        let data = Wrapper { arr: [10, 20, 30] };
+    fn test_array_serde_roundtrip() {
+        let original = Wrapper { arr: [10, 20, 30] };
 
-        // Serialize using serde_json
-        let json = serde_json::to_string(&data).unwrap();
-
-        // Should match JSON array inside object
-        assert_eq!(json, r#"{"arr":[10,20,30]}"#);
-    }
-
-    #[test]
-    fn test_deserialize_array() {
-        let json = r#"{"arr":[1,2,3]}"#;
-
-        // Deserialize JSON into struct
-        let parsed: Wrapper = serde_json::from_str(json).unwrap();
-
-        // Verify the contents
-        assert_eq!(parsed.arr, [1, 2, 3]);
-    }
-
-    #[test]
-    fn test_roundtrip_array() {
-        let original = Wrapper { arr: [7, 8, 9] };
-
-        // Serialize → Deserialize → Compare
+        // Serialize to JSON
         let json = serde_json::to_string(&original).unwrap();
-        let restored: Wrapper = serde_json::from_str(&json).unwrap();
+        assert_eq!(json, r#"{"arr":[10,20,30]}"#);
 
-        assert_eq!(original, restored);
+        // Deserialize from JSON
+        let deserialized: Wrapper = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, original);
+
+        // Also test deserialization from a hardcoded JSON string
+        let explicit_json = r#"{"arr":[10,20,30]}"#;
+        let parsed: Wrapper = serde_json::from_str(explicit_json).unwrap();
+        assert_eq!(parsed.arr, [10, 20, 30]);
     }
 
     #[test]
