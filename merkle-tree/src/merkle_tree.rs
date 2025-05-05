@@ -12,7 +12,7 @@ use p3_symmetric::{CryptographicHasher, Hash, PseudoCompressionFunction};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-/// A binary Merkle tree whose leaves are matrices.
+/// A binary Merkle tree whose leaves are vectors of matrix rows.
 ///
 /// * `F` – scalar element type inside each matrix row.
 /// * `W` – scalar element type of every digest word.
