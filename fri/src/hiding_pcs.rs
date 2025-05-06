@@ -134,7 +134,7 @@ where
         assert!(decomposition_degree > 1);
 
         // Given the evaluation vector of `Q_i(x)` over a domain, split it into evaluation vectors
-        // of `q_{i0}(x), ...` over subdomains and commit to these `q`'s.
+        // of `q_{i0}(x), ...` over subdomains.
         let evaluations = quotient_domain.split_evals(decomposition_degree, quotient_evaluations);
         let domains = quotient_domain.split_domains(decomposition_degree);
 
