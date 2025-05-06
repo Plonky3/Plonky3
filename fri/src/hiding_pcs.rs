@@ -1,4 +1,3 @@
-use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::fmt::Debug;
@@ -112,18 +111,35 @@ where
         Pcs::<Challenge, Challenger>::commit(&self.inner, randomized_evaluations)
     }
 
+    /// Commit to the quotient polynomial. We first decompose the quotient polynomial into
+    /// `decomposition_degree` many smaller polynomials each of degree `degree / decomposition_degree`.
+    /// These quotient polynomials are then randomized as explained in Section 4.2 of
+    /// https://eprint.iacr.org/2024/1037.pdf .
+    ///
+    /// ### Arguments
+    /// - `quotient_domain` the domain of the quotient polynomial.
+    /// - `quotient_evaluations` the evaluations of the quotient polynomial over the domain. This should be in
+    ///   standard (not bit-reversed) order.
+    /// - `decomposition_degree` the number of smaller polynomials to decompose the quotient polynomial into.
+    ///
+    /// # Panics
+    /// This function panics if `decomposition_degree` is either `0` or `1`. The first case makes no logical
+    /// sense and in the second case, the resulting commitment would not be hiding.
     fn commit_quotient(
         &self,
-        domains: Vec<Self::Domain>,
-        evaluations: Vec<RowMajorMatrix<Val>>,
+        quotient_domain: Self::Domain,
+        quotient_evaluations: RowMajorMatrix<Val>,
+        decomposition_degree: usize,
     ) -> (Self::Commitment, Self::ProverData) {
-        // Compute the vanishing polynomial normalizing constants.
-        assert_eq!(domains.len(), evaluations.len());
-        if evaluations.is_empty() {
-            return self.inner.mmcs.commit(vec![]);
-        }
+        assert!(decomposition_degree > 1);
+
+        // Given the evaluation vector of `Q_i(x)` over a domain, split it into evaluation vectors
+        // of `q_{i0}(x), ...` over subdomains and commit to these `q`'s.
+        let evaluations = quotient_domain.split_evals(decomposition_degree, quotient_evaluations);
+        let domains = quotient_domain.split_domains(decomposition_degree);
+
         let cis = get_zp_cis(&domains);
-        let last_chunk = evaluations.len() - 1;
+        let last_chunk = decomposition_degree - 1;
         let last_chunk_ci_inv = cis[last_chunk].inverse();
         let mul_coeffs = (0..last_chunk)
             .map(|i| cis[i] * last_chunk_ci_inv)

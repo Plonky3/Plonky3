@@ -91,6 +91,7 @@ pub trait PolynomialSpace: Copy {
     /// of polynomial evaluations over each `PolynomialSpace` generated from `split_domains`.
     ///
     /// `evals.height()` must equal `self.size()` and `num_chunks` must divide `self.size()`.
+    /// `evals` are assumed to not be in standard (not bit-reversed) order.
     fn split_evals(
         &self,
         num_chunks: usize,
