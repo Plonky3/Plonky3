@@ -94,9 +94,6 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
         }
     }
 
-    /// Adds a constraint to the system, requiring that expression x equals zero.
-    /// 
-    /// Multiplies the constraint by the appropriate challenge power and adds to accumulator.
     #[inline]
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         let x: PackedVal<SC> = x.into();
