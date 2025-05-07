@@ -50,14 +50,14 @@ where
     // Each constraint polynomial looks like `C_j(X_1, ..., X_w, Y_1, ..., Y_w, Z_1, ..., Z_j)`.
     // When evaluated on a given row, the X_i's will be the `i`'th element of the that row, the
     // Y_i's will be the `i`'th element of the next row and the Z_i's correspond to evaluations of
-    // selector polynomials.
+    // selector polynomials on the given row index.
     //
     // When we convert to working with trace polynomials, the `X_i`'s and `Y_i`'s will be replaced by
-    // the degree `N - 1` polynomials `T_i(x)` and `T_i(hx)` respectively. The selectors are a little
+    // the degree `N - 1` polynomials `T_i(x)` and `T_i(hx)` respectively. The selector polynomials are a little
     // more complicated however.
     //
     // In our our case, the selector polynomials are `S_1(x) = is_first_row`, `S_2(x) = is_last_row`
-    // and `S_3(x) = is_transition`. Both `S_1(x)` and `S_2(x)` are to polynomials of degree `N - 1`
+    // and `S_3(x) = is_transition`. Both `S_1(x)` and `S_2(x)` are polynomials of degree `N - 1`
     // as they must be non zero only at a single location in the initial domain. However, `is_transition`
     // is a polynomial of degree `1` as it simply need to be `0` on the last row.
     //
@@ -65,8 +65,8 @@ where
     // words, it is roughly the total degree of `C` however, we treat `Z_3` as a constant term which does
     // not contribute to the degree.
     //
-    // E.g. C_j = Z_1(X_1^3 - X_2 * X_3 * X_4) would have degree `4`.
-    //      C_j = Z_3(X_1^3 - X_2 * X_3 * X_4) would have degree `3`.
+    // E.g. C_j = Z_1 * (X_1^3 - X_2 * X_3 * X_4) would have degree `4`.
+    //      C_j = Z_3 * (X_1^3 - X_2 * X_3 * X_4) would have degree `3`.
     //
     // The point of all this is that, defining:
     //          C(x) = C(T_1(x), ..., T_w(x), T_1(hx), ... T_w(hx), S_1(x), S_2(x), S_3(x))
