@@ -7,11 +7,11 @@ use p3_matrix::stack::VerticalPair;
 
 use crate::{PackedChallenge, PackedVal, StarkGenericConfig, Val};
 
-/// Handles constraint generation and accumulation for the prover in a STARK system.
+/// Handles constraint accumulation for the prover in a STARK system.
 /// 
-/// This struct is responsible for evaluating constraints over the trace matrix
-/// and accumulating them into a single value using randomized constraint combination
-/// with powers of the challenge variable.
+/// This struct is responsible for evaluating constraints corresponding to a given row in the trace matrix.
+/// It accumulates them into a single value using a randomized challenge.
+/// `C_0 + alpha C_1 + alpha^2 C_2 + ...`
 #[derive(Debug)]
 pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     /// The main matrix containing the trace data to be verified
