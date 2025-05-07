@@ -65,7 +65,7 @@ where
     ) -> (Self::Commitment, Self::ProverData);
 
     /// Commit to the quotient polynomial. We first decompose the quotient polynomial into
-    /// `decomposition_degree` many smaller polynomials each of degree `degree / decomposition_degree`.
+    /// `num_chunks` many smaller polynomials each of degree `degree / num_chunks`.
     /// This can have minor performance benefits, but is not strictly necessary in the non `zk` case.
     /// When `zk` is enabled, this commitment will additionally include some randomization process
     /// to hide the inputs.
@@ -74,19 +74,21 @@ where
     /// - `quotient_domain` the domain of the quotient polynomial.
     /// - `quotient_evaluations` the evaluations of the quotient polynomial over the domain. This should be in
     ///   standard (not bit-reversed) order.
-    /// - `decomposition_degree` the number of smaller polynomials to decompose the quotient polynomial into.
+    /// - `num_chunks` the number of smaller polynomials to decompose the quotient polynomial into.
     #[allow(clippy::type_complexity)]
     fn commit_quotient(
         &self,
         quotient_domain: Self::Domain,
         quotient_evaluations: RowMajorMatrix<Val<Self::Domain>>,
-        decomposition_degree: usize,
+        num_chunks: usize,
     ) -> (Self::Commitment, Self::ProverData) {
         // Given the evaluation vector of `Q_i(x)` over a domain, split it into evaluation vectors
         // of `q_{i0}(x), ...` over subdomains and commit to these `q`'s.
+        // TODO: Currently, split_evals involves a copying the data to a new matrix.
+        //       We may be able to avoid this using bit-reversals.
         let quotient_sub_evaluations =
-            quotient_domain.split_evals(decomposition_degree, quotient_evaluations);
-        let quotient_sub_domains = quotient_domain.split_domains(decomposition_degree);
+            quotient_domain.split_evals(num_chunks, quotient_evaluations);
+        let quotient_sub_domains = quotient_domain.split_domains(num_chunks);
 
         self.commit(
             quotient_sub_domains

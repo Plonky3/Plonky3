@@ -47,9 +47,35 @@ where
     // Count the number of constraints that we have.
     let constraint_count = symbolic_constraints.len();
 
-    // Find the total degree of the multivariate constraint polynomial `C`.
+    // Each constraint polynomial looks like `C_j(X_1, ..., X_w, Y_1, ..., Y_w, Z_1, ..., Z_j)`.
+    // When evaluated on a given row, the X_i's will be the `i`'th element of the that row, the
+    // Y_i's will be the `i`'th element of the next row and the Z_i's correspond to evaluations of
+    // selector polynomials.
     //
-    // For now in comments we assume that `deg(C) = 3`.
+    // When we convert to working with trace polynomials, the `X_i`'s and `Y_i`'s will be replaced by
+    // the degree `N - 1` polynomials `T_i(x)` and `T_i(hx)` respectively. The selectors are a little
+    // more complicated however.
+    //
+    // In our our case, the selector polynomials are `S_1(x) = is_first_row`, `S_2(x) = is_last_row`
+    // and `S_3(x) = is_transition`. Both `S_1(x)` and `S_2(x)` are to polynomials of degree `N - 1`
+    // as they must be non zero only at a single location in the initial domain. However, `is_transition`
+    // is a polynomial of degree `1` as it simply need to be `0` on the last row.
+    //
+    // The constraint degree (`deg(C)`) is the linear factor of `N` in the constraint polynomial. In other
+    // words, it is roughly the total degree of `C` however, we treat `Z_3` as a constant term which does
+    // not contribute to the degree.
+    //
+    // E.g. C_j = Z_1(X_1^3 - X_2 * X_3 * X_4) would have degree `4`.
+    //      C_j = Z_3(X_1^3 - X_2 * X_3 * X_4) would have degree `3`.
+    //
+    // The point of all this is that, defining:
+    //          C(x) = C(T_1(x), ..., T_w(x), T_1(hx), ... T_w(hx), S_1(x), S_2(x), S_3(x))
+    // We get the constraint bound:
+    //          deg(C(x)) <= deg(C) * (N - 1) + 1
+    // The `+1` is due to the `is_transition` selector which is not accounted for in `deg(C)`. Note
+    // that S_i^2 should never appear in a constraint as it should just be replaced by `S_i`.
+    //
+    // For now in comments we assume that `deg(C) = 3` meaning `deg(C(x)) <= 3N - 2`
     let constraint_degree = symbolic_constraints
         .iter()
         .map(SymbolicExpression::degree_multiple)
@@ -134,9 +160,10 @@ where
     // TODO: Make this explicit in `get_evaluations_on_domain` or otherwise fix this.
     let trace_on_quotient_domain = pcs.get_evaluations_on_domain(&trace_data, 0, quotient_domain);
 
-    // Compute the quotient polynomial `Q(x)` by evaluating `C(T_1(x), ..., T_w(x), T_1(hx), ..., T_w(hx), selectors(x)) / Z_H(x)`
-    // at every point in the quotient domain. The degree of `Q(x)` is `<= deg(C) * (N - 1) - N + 1 = 2(N - 1)`.
-    // The `-N` comes from dividing by `Z_H(x)` and the `+1` is due to the `is_transition` selector.
+    // Compute the quotient polynomial `Q(x)` by evaluating
+    //          `C(T_1(x), ..., T_w(x), T_1(hx), ..., T_w(hx), selectors(x)) / Z_H(x)`
+    // at every point in the quotient domain. The degree of `Q(x)` is `<= deg(C(x)) - N = 2N - 2` in the case
+    // where `deg(C) = 3`. (See the discussion above constraint_degree for more details.)
     let quotient_values = quotient_values(
         air,
         public_values,
