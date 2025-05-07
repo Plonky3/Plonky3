@@ -14,19 +14,19 @@ use crate::{PackedChallenge, PackedVal, StarkGenericConfig, Val};
 /// `C_0 + alpha C_1 + alpha^2 C_2 + ...`
 #[derive(Debug)]
 pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
-    /// The main matrix containing the trace data to be verified
+    /// The matrix containing rows on which the constraint polynomial is to be evaluated
     pub main: RowMajorMatrixView<'a, PackedVal<SC>>,
     /// Public inputs to the AIR
     pub public_values: &'a Vec<Val<SC>>,
-    /// Boolean indicator for the first row of the trace
+    /// Evaluations of the Selector polynomial for the first row of the trace
     pub is_first_row: PackedVal<SC>,
-    /// Boolean indicator for the last row of the trace
+    /// Evaluations of the Selector polynomial for the last row of the trace
     pub is_last_row: PackedVal<SC>,
-    /// Boolean indicator for rows where transition constraints should be applied
+    /// Evaluations of the Selector polynomial for rows where transition constraints should be applied
     pub is_transition: PackedVal<SC>,
     /// Challenge powers used for randomized constraint combination
     pub alpha_powers: &'a [SC::Challenge],
-    /// Challenge powers decomposed into their base field component.
+    /// Decomposed challenge powers for batch constraint handling
     pub decomposed_alpha_powers: &'a [Vec<Val<SC>>],
     /// Running accumulator for all constraints multiplied by challenge powers
     /// `C_0 + alpha C_1 + alpha^2 C_2 + ...`
@@ -49,11 +49,11 @@ pub struct VerifierConstraintFolder<'a, SC: StarkGenericConfig> {
     pub main: ViewPair<'a, SC::Challenge>,
     /// Public values that are inputs to the computation
     pub public_values: &'a Vec<Val<SC>>,
-    /// Boolean indicator for the first row of the trace
+    /// Evaluations of the Selector polynomial for the first row of the trace
     pub is_first_row: SC::Challenge,
-    /// Boolean indicator for the last row of the trace
+    /// Evaluations of the Selector polynomial for the last row of the trace
     pub is_last_row: SC::Challenge,
-    /// Boolean indicator for rows where transition constraints should be applied
+    /// Evaluations of the Selector polynomial for rows where transition constraints should be applied
     pub is_transition: SC::Challenge,
     /// Single challenge value used for constraint combination
     pub alpha: SC::Challenge,
@@ -82,7 +82,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
         self.is_last_row
     }
 
-    /// Returns a boolean indicating rows where transition constraints should be checked.
+    /// Returns an expression indicating rows where transition constraints should be checked.
     /// 
     /// # Panics
     /// This function panics if `size` is not `2`.
@@ -142,7 +142,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
         self.is_last_row
     }
 
-    /// Returns a boolean indicating rows where transition constraints should be checked.
+    /// Returns an expression indicating rows where transition constraints should be checked.
     /// 
     /// # Panics
     /// This function panics if `size` is not `2`.
