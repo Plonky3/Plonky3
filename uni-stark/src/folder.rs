@@ -16,7 +16,7 @@ use crate::{PackedChallenge, PackedVal, StarkGenericConfig, Val};
 pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     /// The main matrix containing the trace data to be verified
     pub main: RowMajorMatrixView<'a, PackedVal<SC>>,
-    /// Public values that are inputs to the computation
+    /// Public inputs to the AIR
     pub public_values: &'a Vec<Val<SC>>,
     /// Boolean indicator for the first row of the trace
     pub is_first_row: PackedVal<SC>,
