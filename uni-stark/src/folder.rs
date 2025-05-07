@@ -102,9 +102,6 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
         self.constraint_index += 1;
     }
 
-    /// Efficiently adds multiple constraints at once using optimized batch processing.
-    /// 
-    /// This improves performance by handling N constraints with fewer field operations.
     #[inline]
     fn assert_zeros<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
         let expr_array: [Self::Expr; N] = array.map(Into::into);
