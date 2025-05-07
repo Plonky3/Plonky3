@@ -84,8 +84,8 @@ where
     ) -> (Self::Commitment, Self::ProverData) {
         // Given the evaluation vector of `Q_i(x)` over a domain, split it into evaluation vectors
         // of `q_{i0}(x), ...` over subdomains and commit to these `q`'s.
-        // TODO: Currently, split_evals involves a copying the data to a new matrix.
-        //       We may be able to avoid this using bit-reversals.
+        // TODO: Currently, split_evals involves copying the data to a new matrix.
+        //       We may be able to avoid this copy making use of bit-reversals.
         let quotient_sub_evaluations =
             quotient_domain.split_evals(num_chunks, quotient_evaluations);
         let quotient_sub_domains = quotient_domain.split_domains(num_chunks);
