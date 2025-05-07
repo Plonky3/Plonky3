@@ -29,6 +29,7 @@ pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     /// Decomposed challenge powers for batch constraint handling
     pub decomposed_alpha_powers: &'a [Vec<Val<SC>>],
     /// Running accumulator for all constraints multiplied by challenge powers
+    /// `C_0 + alpha C_1 + alpha^2 C_2 + ...`
     pub accumulator: PackedChallenge<SC>,
     /// Current constraint index being processed
     pub constraint_index: usize,
