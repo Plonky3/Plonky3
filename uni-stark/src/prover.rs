@@ -76,7 +76,7 @@ where
     let ext_trace_domain = pcs.natural_domain_for_degree(degree * (config.is_zk() + 1));
 
     // Let `g` denote a generator of the multiplicative group of `F` and `H'` the unique
-    // subgroup of `F` of size `N << pcs.config.log_blowup + config.is_zk()`.
+    // subgroup of `F` of size `N << (pcs.config.log_blowup + config.is_zk())`.
     // If `zk` is enabled, we double the trace length by adding random values.
     //
     // For each trace column `T_i`, we compute the evaluation vector of `T_i(x)` over `H'`. This
