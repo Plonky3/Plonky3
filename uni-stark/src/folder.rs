@@ -26,7 +26,7 @@ pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     pub is_transition: PackedVal<SC>,
     /// Challenge powers used for randomized constraint combination
     pub alpha_powers: &'a [SC::Challenge],
-    /// Decomposed challenge powers for batch constraint handling
+    /// Challenge powers decomposed into their base field component.
     pub decomposed_alpha_powers: &'a [Vec<Val<SC>>],
     /// Running accumulator for all constraints multiplied by challenge powers
     /// `C_0 + alpha C_1 + alpha^2 C_2 + ...`
