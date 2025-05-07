@@ -153,10 +153,6 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
         }
     }
 
-    /// Adds a constraint to the verifier system, requiring that expression x equals zero.
-    /// 
-    /// Instead of using explicit powers, the verifier multiplies the accumulator by alpha
-    /// before adding each constraint, which is mathematically equivalent but more efficient.
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         let x: SC::Challenge = x.into();
         self.accumulator *= self.alpha;
