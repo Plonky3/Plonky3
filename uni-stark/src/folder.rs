@@ -8,7 +8,7 @@ use p3_matrix::stack::VerticalPair;
 use crate::{PackedChallenge, PackedVal, StarkGenericConfig, Val};
 
 /// Handles constraint accumulation for the prover in a STARK system.
-/// 
+///
 /// This struct is responsible for evaluating constraints corresponding to a given row in the trace matrix.
 /// It accumulates them into a single value using a randomized challenge.
 /// `C_0 + alpha C_1 + alpha^2 C_2 + ...`
@@ -83,7 +83,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
     }
 
     /// Returns an expression indicating rows where transition constraints should be checked.
-    /// 
+    ///
     /// # Panics
     /// This function panics if `size` is not `2`.
     #[inline]
@@ -143,7 +143,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
     }
 
     /// Returns an expression indicating rows where transition constraints should be checked.
-    /// 
+    ///
     /// # Panics
     /// This function panics if `size` is not `2`.
     fn is_transition_window(&self, size: usize) -> Self::Expr {
