@@ -15,6 +15,7 @@ use p3_field::{
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
 use tracing::instrument;
+use p3_util::log2_strict_usize;
 
 use crate::dense::RowMajorMatrix;
 
@@ -497,6 +498,15 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
                 sum_of_packed
             })
     }
+
+    /// Returns the base-2 logarithm of the matrix height.
+    ///
+    /// # Panics
+    /// Panics if the height is not a power of two.
+    #[inline]
+    fn log_height(&self) -> usize {
+        log2_strict_usize(self.height())
+    }
 }
 
 #[cfg(test)]
@@ -720,5 +730,22 @@ mod tests {
 
         let all_rows: Vec<Vec<u32>> = matrix.rows().map(|row| row.collect()).collect();
         assert_eq!(all_rows, vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]]);
+    }
+
+    #[test]
+    fn test_log_height() {
+        let mat = MockMatrix {
+            data: vec![vec![1, 2], vec![3, 4], vec![5, 6], vec![7, 8]],
+            width: 2,
+            height: 4,
+        };
+        assert_eq!(mat.log_height(), 2); // log2(4) == 2
+
+        let mat2 = MockMatrix {
+            data: vec![vec![1]],
+            width: 1,
+            height: 1,
+        };
+        assert_eq!(mat2.log_height(), 0); // log2(1) == 0
     }
 }
