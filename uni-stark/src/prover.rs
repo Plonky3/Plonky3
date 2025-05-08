@@ -38,7 +38,7 @@ where
 
     // Compute the height `N = 2^n` and `log_2(height)`, `n`, of the trace.
     let degree = trace.height();
-    let log_degree = log2_strict_usize(degree);
+    let log_degree = trace.log_height();
     let log_ext_degree = log_degree + config.is_zk();
 
     // Compute the constraint polynomials as vectors of symbolic expressions.
