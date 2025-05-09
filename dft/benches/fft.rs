@@ -1,6 +1,6 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::BabyBear;
-use p3_dft::{Radix2Bowers, Radix2Dit, Radix2DitParallel, TwoAdicSubgroupDft};
+use p3_dft::{Radix2Bowers, Radix2Dit, Radix2DitParallel, Radix2DitSmallBatch, TwoAdicSubgroupDft};
 use p3_field::extension::{BinomialExtensionField, Complex};
 use p3_field::{Algebra, BasedVectorSpace, TwoAdicField};
 use p3_goldilocks::Goldilocks;
@@ -8,9 +8,9 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_mersenne_31::{Mersenne31, Mersenne31ComplexRadix2Dit, Mersenne31Dft};
 use p3_monty_31::dft::RecursiveDft;
 use p3_util::pretty_name;
-use rand::SeedableRng;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 
 fn bench_fft(c: &mut Criterion) {
     // log_sizes correspond to the sizes of DFT we want to benchmark;
@@ -46,13 +46,21 @@ fn bench_fft(c: &mut Criterion) {
     coset_lde::<Goldilocks, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
 
     // The FFT is much slower when handling extension fields so we use smaller sizes:
-    let ext_log_sizes = &[10, 12, 14];
-    const EXT_BATCH_SIZE: usize = 50;
+    // let ext_log_sizes = &[10, 12, 14];
+    let ext_log_sizes = &[14];
+    const EXT_BATCH_SIZE: usize = 1;
     fft::<BBExt, Radix2Dit<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
     fft::<BBExt, Radix2DitParallel<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
+    fft_algebra::<BabyBear, BBExt, Radix2DitSmallBatch<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
     fft_algebra::<BabyBear, BBExt, Radix2Dit<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
     fft_algebra::<BabyBear, BBExt, Radix2DitParallel<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
     fft_algebra::<BabyBear, BBExt, RecursiveDft<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
+
+    // coset_lde_algebra::<BabyBear, BBExt, Radix2DitParallel<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
+    coset_lde_algebra_unbatched::<BabyBear, BBExt, Radix2Dit<_>>(c, ext_log_sizes);
+    coset_lde_algebra_unbatched::<BabyBear, BBExt, Radix2DitParallel<_>>(c, ext_log_sizes);
+    coset_lde_algebra_unbatched::<BabyBear, BBExt, Radix2DitSmallBatch<_>>(c, ext_log_sizes);
+    coset_lde_algebra_unbatched::<BabyBear, BBExt, RecursiveDft<_>>(c, ext_log_sizes);
 }
 
 fn fft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
@@ -194,6 +202,67 @@ where
         group.bench_with_input(BenchmarkId::from_parameter(n), &dft, |b, dft| {
             b.iter(|| {
                 dft.coset_lde_batch(messages.clone(), 1, F::GENERATOR);
+            });
+        });
+    }
+}
+
+fn _coset_lde_algebra<F, V, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
+where
+    F: TwoAdicField,
+    V: Algebra<F> + BasedVectorSpace<F> + Clone + Default + Send + Sync,
+    Dft: TwoAdicSubgroupDft<F>,
+    StandardUniform: Distribution<V>,
+{
+    let mut group = c.benchmark_group(format!(
+        "coset_lde_algebra/{}/{}/{}/ncols={}",
+        pretty_name::<F>(),
+        pretty_name::<Dft>(),
+        pretty_name::<V>(),
+        BATCH_SIZE
+    ));
+    group.sample_size(10);
+
+    let mut rng = SmallRng::seed_from_u64(1);
+    for n_log in log_sizes {
+        let n = 1 << n_log;
+
+        let messages = RowMajorMatrix::<V>::rand(&mut rng, n, BATCH_SIZE);
+
+        let dft = Dft::default();
+        group.bench_with_input(BenchmarkId::from_parameter(n), &dft, |b, dft| {
+            b.iter(|| {
+                dft.coset_lde_algebra_batch(messages.clone(), 1, F::GENERATOR);
+            });
+        });
+    }
+}
+
+fn coset_lde_algebra_unbatched<F, V, Dft>(c: &mut Criterion, log_sizes: &[usize])
+where
+    F: TwoAdicField,
+    V: Algebra<F> + BasedVectorSpace<F> + Clone + Default + Send + Sync,
+    Dft: TwoAdicSubgroupDft<F>,
+    StandardUniform: Distribution<V>,
+{
+    let mut group = c.benchmark_group(format!(
+        "coset_lde_algebra_unbatched/{}/{}/{}",
+        pretty_name::<F>(),
+        pretty_name::<Dft>(),
+        pretty_name::<V>()
+    ));
+    group.sample_size(10);
+
+    let mut rng = SmallRng::seed_from_u64(1);
+    for n_log in log_sizes {
+        let n = 1 << n_log;
+
+        let messages: Vec<V> = (&mut rng).sample_iter(StandardUniform).take(n).collect();
+
+        let dft = Dft::default();
+        group.bench_with_input(BenchmarkId::from_parameter(n), &dft, |b, dft| {
+            b.iter(|| {
+                dft.coset_lde_algebra(messages.clone(), 1, F::GENERATOR);
             });
         });
     }

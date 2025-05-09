@@ -1,5 +1,6 @@
 use core::mem::MaybeUninit;
 
+use alloc::vec::Vec;
 use itertools::izip;
 use p3_field::{Field, PackedField, PackedValue};
 
@@ -141,6 +142,43 @@ impl<F: Field> Butterfly<F> for DitButterfly<F> {
     fn apply<PF: PackedField<Scalar = F>>(&self, x_1: PF, x_2: PF) -> (PF, PF) {
         let x_2_twiddle = x_2 * self.0;
         (x_1 + x_2_twiddle, x_1 - x_2_twiddle)
+    }
+}
+
+/// DIT (Decimation-In-Time) butterfly operation.
+///
+/// Used in the *input-ordering* variant of NTT/FFT.
+/// This butterfly computes:
+/// ```text
+///   output_1 = x1 + x2 * twiddle
+///   output_2 = x1 - x2 * twiddle
+/// ```
+/// The twiddle factor is applied to x2 before combining.
+/// Suitable for DIT-style recursive transforms.
+pub struct DitButterflyCopiedTwiddles<F>(pub Vec<F>);
+
+impl<F: Field> Butterfly<F> for &DitButterflyCopiedTwiddles<F> {
+    fn apply<PF: PackedField<Scalar = F>>(&self, _x_1: PF, _x_2: PF) -> (PF, PF) {
+        panic!("DitButterflyCopiedTwiddles cannot apply to a single element. Only to entire rows.");
+    }
+
+    #[inline]
+    fn apply_to_rows(&self, row_1: &mut [F], row_2: &mut [F]) {
+        let (shorts_1, suffix_1) = F::Packing::pack_slice_with_suffix_mut(row_1);
+        let (shorts_2, suffix_2) = F::Packing::pack_slice_with_suffix_mut(row_2);
+        let (shorts_twiddles, suffix_twiddles) = F::Packing::pack_slice_with_suffix(&self.0);
+        debug_assert_eq!(shorts_1.len(), shorts_2.len());
+        debug_assert_eq!(shorts_1.len(), shorts_twiddles.len());
+        debug_assert_eq!(suffix_1.len(), suffix_2.len());
+        debug_assert_eq!(suffix_1.len(), suffix_twiddles.len());
+        for ((x_1, x_2), twiddle) in shorts_1.iter_mut().zip(shorts_2).zip(shorts_twiddles) {
+            let x_2_twiddle = *x_2 * *twiddle;
+            (*x_1, *x_2) = (*x_1 + x_2_twiddle, *x_1 - x_2_twiddle);
+        }
+        for ((x_1, x_2), twiddle) in suffix_1.iter_mut().zip(suffix_2).zip(suffix_twiddles) {
+            let x_2_twiddle = *x_2 * *twiddle;
+            (*x_1, *x_2) = (*x_1 + x_2_twiddle, *x_1 - x_2_twiddle);
+        }
     }
 }
 

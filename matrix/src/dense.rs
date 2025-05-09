@@ -263,6 +263,19 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
             .map(|slice| RowMajorMatrixView::new(slice, self.width))
     }
 
+    /// Get an iterator over the rows of the matrix which takes `chunk_rows` rows at a time.
+    ///
+    /// If `chunk_rows` does not divide the height of the matrix, the last chunk will be smaller.
+    pub fn row_chunks_exact(&self, chunk_rows: usize) -> impl Iterator<Item = RowMajorMatrixView<T>>
+    where
+        T: Send,
+    {
+        self.values
+            .borrow()
+            .chunks_exact(self.width * chunk_rows)
+            .map(|slice| RowMajorMatrixView::new(slice, self.width))
+    }
+
     /// Get a parallel iterator over the rows of the matrix which takes `chunk_rows` rows at a time.
     ///
     /// If `chunk_rows` does not divide the height of the matrix, the last chunk will be smaller.

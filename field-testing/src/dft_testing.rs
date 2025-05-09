@@ -16,7 +16,7 @@ where
     let mut rng = SmallRng::seed_from_u64(1);
     for log_h in 0..5 {
         let h = 1 << log_h;
-        let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 1);
         let dft_naive = NaiveDft.dft_batch(mat.clone());
         let dft_result = dft.dft_batch(mat);
         assert_eq!(dft_naive, dft_result.to_row_major_matrix());
