@@ -157,7 +157,6 @@ mod tests {
         let result = interpolate_coset(&evals_mat, shift, point);
         assert_eq!(result, vec![F::from_u16(10203)]);
 
-        use p3_field::TwoAdicField;
         let n = evals.len();
         let k = log2_strict_usize(n);
 
