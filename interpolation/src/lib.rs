@@ -44,7 +44,7 @@ where
         .collect::<Vec<_>>();
 
     // Compute `1/(z - gh^i)` for each elements of the coset.
-    let diffs: Vec<EF> = coset.par_iter().map(|&g| point - g).collect();
+    let diffs: Vec<_> = coset.par_iter().map(|&g| point - g).collect();
     let diff_invs = batch_multiplicative_inverse(&diffs);
 
     interpolate_coset_with_precomputation(coset_evals, shift, point, &coset, &diff_invs)
@@ -123,7 +123,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_field::{Field, PrimeCharacteristicRing, batch_multiplicative_inverse};
+    use p3_field::{Field, PrimeCharacteristicRing, TwoAdicField, batch_multiplicative_inverse};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_util::log2_strict_usize;
 
@@ -172,5 +172,120 @@ mod tests {
         let result =
             interpolate_coset_with_precomputation(&evals_mat, shift, point, &coset, &denom);
         assert_eq!(result, vec![F::from_u16(10203)]);
+    }
+
+    #[test]
+    fn test_interpolate_coset_single_point_identity() {
+        type F = BabyBear;
+
+        // Test a trivial case: constant polynomial f(x) = c
+        // Regardless of x, f(x) = c, so interpolation must always return c
+        let c = F::from_u32(42); // constant polynomial
+        let evals = vec![c; 8];
+        let evals_mat = RowMajorMatrix::new(evals.clone(), 1);
+
+        let shift = F::GENERATOR;
+        let point = F::from_u16(1337);
+
+        let result = interpolate_coset(&evals_mat, shift, point);
+        assert_eq!(result, vec![c]); // must recover the constant
+    }
+
+    #[test]
+    fn test_interpolate_subgroup_degree_3_correctness() {
+        type F = BabyBear;
+
+        // This test checks that interpolation works for a degree-3 polynomial
+        // when evaluated over 2^2 = 4 subgroup points, which is valid.
+        let poly = |x: F| x * x * x + F::from_u32(2) * x * x + F::from_u32(3) * x + F::from_u32(4);
+
+        let subgroup: Vec<_> = F::two_adic_generator(2).powers().take(4).collect();
+        let evals: Vec<_> = subgroup.iter().map(|&x| poly(x)).collect();
+
+        let evals_mat = RowMajorMatrix::new(evals, 1);
+        let point = F::from_u16(5);
+
+        let result = interpolate_subgroup(&evals_mat, point);
+        let expected = poly(point);
+
+        assert_eq!(result[0], expected);
+    }
+
+    #[test]
+    fn test_interpolate_coset_multiple_polynomials() {
+        type F = BabyBear;
+
+        // We test interpolation of two polynomials evaluated over a coset.
+        // f1(x) = x^2 + 2x + 3
+        // f2(x) = 4x^2 + 5x + 6
+        //
+        // Each is evaluated at the coset and interpolated at the same external point.
+        let shift = F::GENERATOR;
+        let coset = F::two_adic_generator(3)
+            .shifted_powers(shift)
+            .take(8)
+            .collect::<Vec<_>>();
+
+        let f1 = |x: F| x * x + F::from_u32(2) * x + F::from_u32(3);
+        let f2 = |x: F| F::from_u32(4) * x * x + F::from_u32(5) * x + F::from_u32(6);
+
+        let evals_f1: Vec<_> = coset.iter().map(|&x| f1(x)).collect();
+        let evals_f2: Vec<_> = coset.iter().map(|&x| f2(x)).collect();
+
+        let evals_interleaved: Vec<_> = evals_f1
+            .iter()
+            .zip(&evals_f2)
+            .flat_map(|(&a, &b)| vec![a, b])
+            .collect();
+        let evals_mat = RowMajorMatrix::new(evals_interleaved, 2);
+
+        let point = F::from_u32(77);
+        let result = interpolate_coset(&evals_mat, shift, point);
+
+        // Evaluate f1 and f2 at the same point directly
+        let expected_f1 = f1(point);
+        let expected_f2 = f2(point);
+
+        assert_eq!(result[0], expected_f1);
+        assert_eq!(result[1], expected_f2);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_interpolate_coset_with_empty_matrix_panics() {
+        type F = BabyBear;
+
+        // Interpolation should panic if called with an empty evaluation matrix
+        let evals_mat = RowMajorMatrix::new(vec![], 1);
+        let shift = F::GENERATOR;
+        let point = F::from_u32(123);
+
+        let _ = interpolate_coset(&evals_mat, shift, point);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_interpolate_coset_with_point_in_coset() {
+        type F = BabyBear;
+
+        // This test demonstrates the undefined behavior of interpolate_coset
+        // when `point` is actually inside the coset.
+        let shift = F::GENERATOR;
+        let n = 8;
+        let log_n = log2_strict_usize(n);
+        let coset: Vec<_> = F::two_adic_generator(log_n)
+            .shifted_powers(shift)
+            .take(n)
+            .collect();
+
+        // Construct evaluations of a known polynomial: f(x) = x^2 + 1
+        let evals: Vec<_> = coset.iter().map(|&x| x * x + F::ONE).collect();
+        let evals_mat = RowMajorMatrix::new(evals.clone(), 1);
+
+        // Pick a point inside the coset (e.g. coset[3])
+        let point_in_coset = coset[3];
+
+        // The function *should not* be used this way. Result is undefined.
+        let _ = interpolate_coset(&evals_mat, shift, point_in_coset);
     }
 }
