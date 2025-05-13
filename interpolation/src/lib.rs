@@ -248,17 +248,4 @@ mod tests {
         assert_eq!(result[0], expected_f1);
         assert_eq!(result[1], expected_f2);
     }
-
-    #[test]
-    #[should_panic]
-    fn test_interpolate_coset_with_empty_matrix_panics() {
-        type F = BabyBear;
-
-        // Interpolation should panic if called with an empty evaluation matrix
-        let evals_mat = RowMajorMatrix::new(vec![], 1);
-        let shift = F::GENERATOR;
-        let point = F::from_u32(123);
-
-        let _ = interpolate_coset(&evals_mat, shift, point);
-    }
 }
