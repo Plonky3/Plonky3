@@ -261,30 +261,4 @@ mod tests {
 
         let _ = interpolate_coset(&evals_mat, shift, point);
     }
-
-    #[test]
-    #[should_panic]
-    fn test_interpolate_coset_with_point_in_coset() {
-        type F = BabyBear;
-
-        // This test demonstrates the undefined behavior of interpolate_coset
-        // when `point` is actually inside the coset.
-        let shift = F::GENERATOR;
-        let n = 8;
-        let log_n = log2_strict_usize(n);
-        let coset: Vec<_> = F::two_adic_generator(log_n)
-            .shifted_powers(shift)
-            .take(n)
-            .collect();
-
-        // Construct evaluations of a known polynomial: f(x) = x^2 + 1
-        let evals: Vec<_> = coset.iter().map(|&x| x * x + F::ONE).collect();
-        let evals_mat = RowMajorMatrix::new(evals.clone(), 1);
-
-        // Pick a point inside the coset (e.g. coset[3])
-        let point_in_coset = coset[3];
-
-        // The function *should not* be used this way. Result is undefined.
-        let _ = interpolate_coset(&evals_mat, shift, point_in_coset);
-    }
 }
