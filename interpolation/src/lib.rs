@@ -196,7 +196,7 @@ mod tests {
 
         // This test checks that interpolation works for a degree-3 polynomial
         // when evaluated over 2^2 = 4 subgroup points, which is valid.
-        let poly = |x: F| x * x * x + F::from_u32(2) * x * x + F::from_u32(3) * x + F::from_u32(4);
+        let poly = |x: F| x * x * x + F::TWO * x * x + F::from_u32(3) * x + F::from_u32(4);
 
         let subgroup: Vec<_> = F::two_adic_generator(2).powers().take(4).collect();
         let evals: Vec<_> = subgroup.iter().map(|&x| poly(x)).collect();
