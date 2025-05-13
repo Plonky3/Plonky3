@@ -90,7 +90,7 @@ pub trait Mmcs<T: Send + Sync + Clone>: Clone {
 
     /// Returns references to all matrices originally committed to in the batch.
     ///
-    /// This allows access to the underlying data for inspection or additional logic..
+    /// This allows access to the underlying data for inspection or additional logic.
     ///
     /// # Parameters
     /// - `prover_data`: The prover data returned by [`commit`].
