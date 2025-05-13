@@ -229,7 +229,7 @@ mod tests {
         let f2 = |x: F| F::from_u32(4) * x * x + F::from_u32(5) * x + F::from_u32(6);
 
         let evals: Vec<_> = coset.iter().flat_map(|&x| vec![f1(x), f2(x)]).collect();
-        let evals_mat = RowMajorMatrix::new(evals_interleaved, 2);
+        let evals_mat = RowMajorMatrix::new(evals, 2);
 
         let point = F::from_u32(77);
         let result = interpolate_coset(&evals_mat, shift, point);
