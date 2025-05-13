@@ -225,7 +225,7 @@ mod tests {
             .take(8)
             .collect::<Vec<_>>();
 
-        let f1 = |x: F| x * x + F::from_u32(2) * x + F::from_u32(3);
+        let f1 = |x: F| x * x + F::TWO * x + F::from_u32(3);
         let f2 = |x: F| F::from_u32(4) * x * x + F::from_u32(5) * x + F::from_u32(6);
 
         let evals_f1: Vec<_> = coset.iter().map(|&x| f1(x)).collect();
