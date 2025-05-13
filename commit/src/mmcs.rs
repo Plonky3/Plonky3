@@ -31,8 +31,8 @@ pub trait Mmcs<T: Send + Sync + Clone>: Clone {
     ///
     /// # Returns
     /// A tuple `(commitment, prover_data)` where:
-    /// - `commitment` is a compact representation of all matrix contents.
-    /// - `prover_data` is auxiliary data used later to open the commitment.
+    /// - `commitment` is a compact representation of all matrix elements and will be sent to the verifier.
+    /// - `prover_data` is auxiliary data used by the prover open the commitment.
     fn commit<M: Matrix<T>>(&self, inputs: Vec<M>) -> (Self::Commitment, Self::ProverData<M>);
 
     /// Convenience method to commit to a single matrix.
