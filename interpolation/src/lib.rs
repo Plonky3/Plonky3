@@ -123,6 +123,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
+    use p3_field::extension::BinomialExtensionField;
     use p3_field::{Field, PrimeCharacteristicRing, TwoAdicField, batch_multiplicative_inverse};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_util::log2_strict_usize;
@@ -193,16 +194,17 @@ mod tests {
     #[test]
     fn test_interpolate_subgroup_degree_3_correctness() {
         type F = BabyBear;
+        type EF4 = BinomialExtensionField<BabyBear, 4>;
 
         // This test checks that interpolation works for a degree-3 polynomial
         // when evaluated over 2^2 = 4 subgroup points, which is valid.
-        let poly = |x: F| x * x * x + F::TWO * x * x + F::from_u32(3) * x + F::from_u32(4);
+        let poly = |x: EF4| x * x * x + x * x * F::TWO + x * F::from_u32(3) + F::from_u32(4);
 
-        let subgroup: Vec<_> = F::two_adic_generator(2).powers().take(4).collect();
+        let subgroup: Vec<_> = EF4::two_adic_generator(2).powers().take(4).collect();
         let evals: Vec<_> = subgroup.iter().map(|&x| poly(x)).collect();
 
         let evals_mat = RowMajorMatrix::new(evals, 1);
-        let point = F::from_u16(5);
+        let point = EF4::from_u16(5);
 
         let result = interpolate_subgroup(&evals_mat, point);
         let expected = poly(point);
@@ -213,25 +215,26 @@ mod tests {
     #[test]
     fn test_interpolate_coset_multiple_polynomials() {
         type F = BabyBear;
+        type EF4 = BinomialExtensionField<BabyBear, 4>;
 
         // We test interpolation of two polynomials evaluated over a coset.
         // f1(x) = x^2 + 2x + 3
         // f2(x) = 4x^2 + 5x + 6
         //
         // Each is evaluated at the coset and interpolated at the same external point.
-        let shift = F::GENERATOR;
-        let coset = F::two_adic_generator(3)
+        let shift = EF4::GENERATOR;
+        let coset = EF4::two_adic_generator(3)
             .shifted_powers(shift)
             .take(8)
             .collect::<Vec<_>>();
 
-        let f1 = |x: F| x * x + F::TWO * x + F::from_u32(3);
-        let f2 = |x: F| F::from_u32(4) * x * x + F::from_u32(5) * x + F::from_u32(6);
+        let f1 = |x: EF4| x * x + x * F::TWO + F::from_u32(3);
+        let f2 = |x: EF4| x * x * F::from_u32(4) + x * F::from_u32(5) + F::from_u32(6);
 
         let evals: Vec<_> = coset.iter().flat_map(|&x| vec![f1(x), f2(x)]).collect();
         let evals_mat = RowMajorMatrix::new(evals, 2);
 
-        let point = F::from_u32(77);
+        let point = EF4::from_u32(77);
         let result = interpolate_coset(&evals_mat, shift, point);
 
         // Evaluate f1 and f2 at the same point directly
