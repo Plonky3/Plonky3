@@ -228,14 +228,7 @@ mod tests {
         let f1 = |x: F| x * x + F::TWO * x + F::from_u32(3);
         let f2 = |x: F| F::from_u32(4) * x * x + F::from_u32(5) * x + F::from_u32(6);
 
-        let evals_f1: Vec<_> = coset.iter().map(|&x| f1(x)).collect();
-        let evals_f2: Vec<_> = coset.iter().map(|&x| f2(x)).collect();
-
-        let evals_interleaved: Vec<_> = evals_f1
-            .iter()
-            .zip(&evals_f2)
-            .flat_map(|(&a, &b)| vec![a, b])
-            .collect();
+        let evals: Vec<_> = coset.iter().flat_map(|&x| vec![f1(x), f2(x)]).collect();
         let evals_mat = RowMajorMatrix::new(evals_interleaved, 2);
 
         let point = F::from_u32(77);
