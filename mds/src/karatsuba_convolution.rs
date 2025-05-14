@@ -171,104 +171,62 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
 
     #[inline(always)]
     fn conv6(lhs: [T; 6], rhs: [U; 6], output: &mut [V]) {
-        conv_n_recursive::<6, 3, T, U, V, _, _>(
-            lhs,
-            rhs,
-            output,
-            Self::conv3,
-            Self::negacyclic_conv3,
-        )
+        conv_n_recursive(lhs, rhs, output, Self::conv3, Self::negacyclic_conv3)
     }
 
     #[inline(always)]
     fn negacyclic_conv6(lhs: [T; 6], rhs: [U; 6], output: &mut [V]) {
-        negacyclic_conv_n_recursive::<6, 3, T, U, V, _>(lhs, rhs, output, Self::negacyclic_conv3)
+        negacyclic_conv_n_recursive(lhs, rhs, output, Self::negacyclic_conv3)
     }
 
     #[inline(always)]
     fn conv8(lhs: [T; 8], rhs: [U; 8], output: &mut [V]) {
-        conv_n_recursive::<8, 4, T, U, V, _, _>(
-            lhs,
-            rhs,
-            output,
-            Self::conv4,
-            Self::negacyclic_conv4,
-        )
+        conv_n_recursive(lhs, rhs, output, Self::conv4, Self::negacyclic_conv4)
     }
 
     #[inline(always)]
     fn negacyclic_conv8(lhs: [T; 8], rhs: [U; 8], output: &mut [V]) {
-        negacyclic_conv_n_recursive::<8, 4, T, U, V, _>(lhs, rhs, output, Self::negacyclic_conv4)
+        negacyclic_conv_n_recursive(lhs, rhs, output, Self::negacyclic_conv4)
     }
 
     #[inline(always)]
     fn conv12(lhs: [T; 12], rhs: [U; 12], output: &mut [V]) {
-        conv_n_recursive::<12, 6, T, U, V, _, _>(
-            lhs,
-            rhs,
-            output,
-            Self::conv6,
-            Self::negacyclic_conv6,
-        )
+        conv_n_recursive(lhs, rhs, output, Self::conv6, Self::negacyclic_conv6)
     }
 
     #[inline(always)]
     fn negacyclic_conv12(lhs: [T; 12], rhs: [U; 12], output: &mut [V]) {
-        negacyclic_conv_n_recursive::<12, 6, T, U, V, _>(lhs, rhs, output, Self::negacyclic_conv6)
+        negacyclic_conv_n_recursive(lhs, rhs, output, Self::negacyclic_conv6)
     }
 
     #[inline(always)]
     fn conv16(lhs: [T; 16], rhs: [U; 16], output: &mut [V]) {
-        conv_n_recursive::<16, 8, T, U, V, _, _>(
-            lhs,
-            rhs,
-            output,
-            Self::conv8,
-            Self::negacyclic_conv8,
-        )
+        conv_n_recursive(lhs, rhs, output, Self::conv8, Self::negacyclic_conv8)
     }
 
     #[inline(always)]
     fn negacyclic_conv16(lhs: [T; 16], rhs: [U; 16], output: &mut [V]) {
-        negacyclic_conv_n_recursive::<16, 8, T, U, V, _>(lhs, rhs, output, Self::negacyclic_conv8)
+        negacyclic_conv_n_recursive(lhs, rhs, output, Self::negacyclic_conv8)
     }
 
     #[inline(always)]
     fn conv24(lhs: [T; 24], rhs: [U; 24], output: &mut [V]) {
-        conv_n_recursive::<24, 12, T, U, V, _, _>(
-            lhs,
-            rhs,
-            output,
-            Self::conv12,
-            Self::negacyclic_conv12,
-        )
+        conv_n_recursive(lhs, rhs, output, Self::conv12, Self::negacyclic_conv12)
     }
 
     #[inline(always)]
     fn conv32(lhs: [T; 32], rhs: [U; 32], output: &mut [V]) {
-        conv_n_recursive::<32, 16, T, U, V, _, _>(
-            lhs,
-            rhs,
-            output,
-            Self::conv16,
-            Self::negacyclic_conv16,
-        )
+        conv_n_recursive(lhs, rhs, output, Self::conv16, Self::negacyclic_conv16)
     }
 
     #[inline(always)]
     fn negacyclic_conv32(lhs: [T; 32], rhs: [U; 32], output: &mut [V]) {
-        negacyclic_conv_n_recursive::<32, 16, T, U, V, _>(lhs, rhs, output, Self::negacyclic_conv16)
+        negacyclic_conv_n_recursive(lhs, rhs, output, Self::negacyclic_conv16)
     }
 
     #[inline(always)]
     fn conv64(lhs: [T; 64], rhs: [U; 64], output: &mut [V]) {
-        conv_n_recursive::<64, 32, T, U, V, _, _>(
-            lhs,
-            rhs,
-            output,
-            Self::conv32,
-            Self::negacyclic_conv32,
-        )
+        conv_n_recursive(lhs, rhs, output, Self::conv32, Self::negacyclic_conv32)
     }
 }
 
