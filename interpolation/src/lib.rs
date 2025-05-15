@@ -258,7 +258,7 @@ mod tests {
         let subgroup_iter = EF4::two_adic_generator(3).powers().take(8);
 
         // Evaluate both polynomials on the subgroup
-        let evals: Vec<_> = subgroup_iter.flat_map(|&x| vec![f1(x), f2(x)]).collect();
+        let evals: Vec<_> = subgroup_iter.flat_map(|x| vec![f1(x), f2(x)]).collect();
 
         // Organize into a 2-column matrix (column-major: 8 rows × 2 columns)
         let evals_mat = RowMajorMatrix::new(evals, 2);
