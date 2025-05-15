@@ -244,4 +244,35 @@ mod tests {
         assert_eq!(result[0], expected_f1);
         assert_eq!(result[1], expected_f2);
     }
+
+    #[test]
+    fn test_interpolate_subgroup_multiple_columns() {
+        type F = BabyBear;
+        type EF4 = BinomialExtensionField<BabyBear, 4>;
+
+        // Define two polynomials f1(x) = x^2 + 2x + 3 and f2(x) = 4x^2 + 5x + 6
+        let f1 = |x: EF4| x * x + x * F::TWO + F::from_u32(3);
+        let f2 = |x: EF4| x * x * F::from_u32(4) + x * F::from_u32(5) + F::from_u32(6);
+
+        // Evaluation domain: 2^3 = 8-point subgroup
+        let subgroup: Vec<_> = EF4::two_adic_generator(3).powers().take(8).collect();
+
+        // Evaluate both polynomials on the subgroup
+        let evals: Vec<_> = subgroup.iter().flat_map(|&x| vec![f1(x), f2(x)]).collect();
+
+        // Organize into a 2-column matrix (column-major: 8 rows × 2 columns)
+        let evals_mat = RowMajorMatrix::new(evals, 2);
+
+        // Choose a point outside the subgroup to interpolate at
+        let point = EF4::from_u32(77);
+
+        // Perform interpolation
+        let result = interpolate_subgroup(&evals_mat, point);
+
+        // Expected results: f1(point), f2(point)
+        let expected_f1 = f1(point);
+        let expected_f2 = f2(point);
+
+        assert_eq!(result, vec![expected_f1, expected_f2]);
+    }
 }
