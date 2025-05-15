@@ -255,10 +255,10 @@ mod tests {
         let f2 = |x: EF4| x * x * F::from_u32(4) + x * F::from_u32(5) + F::from_u32(6);
 
         // Evaluation domain: 2^3 = 8-point subgroup
-        let subgroup: Vec<_> = EF4::two_adic_generator(3).powers().take(8).collect();
+        let subgroup_iter = EF4::two_adic_generator(3).powers().take(8);
 
         // Evaluate both polynomials on the subgroup
-        let evals: Vec<_> = subgroup.iter().flat_map(|&x| vec![f1(x), f2(x)]).collect();
+        let evals: Vec<_> = subgroup_iter.flat_map(|&x| vec![f1(x), f2(x)]).collect();
 
         // Organize into a 2-column matrix (column-major: 8 rows × 2 columns)
         let evals_mat = RowMajorMatrix::new(evals, 2);
