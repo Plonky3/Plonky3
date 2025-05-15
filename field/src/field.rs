@@ -536,13 +536,11 @@ impl<F: PrimeCharacteristicRing> BasedVectorSpace<F> for F {
         (iter.len() == 1).then(|| iter.next().unwrap()) // Unwrap will not panic as we know the length is 1.
     }
 
-    #[must_use]
     #[inline]
     fn flatten_to_base(vec: Vec<Self>) -> Vec<F> {
         vec
     }
 
-    #[must_use]
     #[inline]
     fn reconstitute_from_base(vec: Vec<F>) -> Vec<Self> {
         vec
