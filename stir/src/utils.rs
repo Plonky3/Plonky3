@@ -496,16 +496,8 @@ pub(crate) fn rand_poly_coeffs<F: Field>(degree: usize, rng: &mut impl Rng) -> V
 where
     StandardUniform: Distribution<F>,
 {
-    let mut coeffs: Vec<F> = (0..degree).map(|_| rng.random()).collect();
-
-    let mut leading_coeff = F::ZERO;
-
-    while leading_coeff == F::ZERO {
-        leading_coeff = rng.random();
-    }
-
-    coeffs.push(leading_coeff);
-
+    let mut coeffs: Vec<F> = (0..degree).map(|_| rng.gen()).collect();
+    coeffs.push(rng.sample_iter(Standard).find(|c: &F| *c != F::ZERO).unwrap());
     coeffs
 }
 
