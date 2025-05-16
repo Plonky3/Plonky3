@@ -4,7 +4,7 @@ use core::cmp::Ordering;
 #[cfg(test)]
 use core::iter;
 
-use itertools::{iterate, izip, Itertools};
+use itertools::{iterate, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::coset::TwoAdicMultiplicativeCoset;
@@ -21,20 +21,26 @@ pub(crate) fn compute_pow(security_level: usize, error: f64) -> f64 {
     0f64.max(security_level as f64 - error)
 }
 
+// Fold (with factor k equal to a power of two) the evaluations of a polynomial
+// over an entire coset H into those of the folded polynomial over H^k
+// TODO here and below, document all arguments
 pub(crate) fn fold_evaluations_at_domain<F: TwoAdicField>(
+    // The evaluations of the original polynomial over the domain
     evals: Vec<F>,
+    // The domain
     domain: TwoAdicMultiplicativeCoset<F>,
+    // The log2 of the folding factor k
     log_folding_factor: usize,
+    // The folding coefficient
     c: F,
 ) -> Vec<F> {
-    // NP TODO better way to handle 1/2?
-    let two_inv = F::TWO.inverse();
+    let two_inv = F::ONE.halve();
     let denominators: Vec<F> = domain.iter().take(domain.size() / 2).collect();
     let inv_denominators = batch_multiplicative_inverse(&denominators);
 
     fold_evaluations_at_domain_inner(
         evals,
-        domain,
+        domain.subgroup_generator(),
         log_folding_factor,
         c,
         two_inv,
@@ -42,155 +48,89 @@ pub(crate) fn fold_evaluations_at_domain<F: TwoAdicField>(
     )
 }
 
+// Inner function wrapped around by fold_evaluations_at_domain and
+// fold_evaluations_at_small_domain which folds the evaluations of a polynomial
+// over an entire coset H into those of the folded polynomial over a power of
+// that coset.
 fn fold_evaluations_at_domain_inner<F: TwoAdicField>(
-    evals: Vec<F>,
-    domain: TwoAdicMultiplicativeCoset<F>,
-    log_folding_factor: usize,
-    c: F,
+    // The evaluations of the original polynomial
+    mut evals: Vec<F>,
+    // The generator of the domain's subgroup
+    mut gen: F,
+    // The log2 of the folding factor
+    mut log_folding_factor: usize,
+    // The folding coefficient
+    mut c: F,
+    // The inverse of 2, provided in order to avoid recomputation
     two_inv: F,
-    half_domain_invs: Vec<F>,
+    // The inverses of half the domain elements
+    mut half_domain_invs: Vec<F>,
 ) -> Vec<F> {
-    if log_folding_factor == 0 {
-        return evals;
-    }
+    while log_folding_factor > 0 {
+        let half_size = half_domain_invs.len();
 
-    // We modify the evaluations and domain inverses in place to avoid
-    // allocating new memory
-    let mut evals = evals;
-    let mut half_domain_invs = half_domain_invs;
+        let (evals_plus, evals_minus) = evals.split_at_mut(half_size);
 
-    let half_size = half_domain_invs.len();
+        // Iteratively apply the formula that folds two evaluations into one
+        evals_plus
+            .iter_mut()
+            .zip(evals_minus.iter())
+            .zip(half_domain_invs.iter())
+            .for_each(|((eval_p, eval_m), inv)| {
+                *eval_p = two_inv * (*eval_p + *eval_m + c * *inv * (*eval_p - *eval_m));
+            });
 
-    let (evals_plus, evals_minus) = evals.split_at_mut(half_size);
-
-    evals_plus
-        .iter_mut()
-        .zip(evals_minus.iter())
-        .zip(half_domain_invs.iter())
-        .for_each(|((eval_p, eval_m), inv)| {
-            *eval_p = two_inv * (*eval_p + *eval_m + c * *inv * (*eval_p - *eval_m));
+        // Prepare the arguments for the next step, which computes the evaluations
+        // over the square of the current domain
+        evals.truncate(half_size);
+        half_domain_invs.truncate(half_size / 2);
+        half_domain_invs.iter_mut().for_each(|inv| {
+            *inv = inv.square();
         });
 
-    evals.resize(half_size, F::ZERO);
+        gen = gen.square();
+        c = c.square();
+        log_folding_factor -= 1;
+    }
 
-    half_domain_invs.resize(half_size / 2, F::ZERO);
+    evals
+}
 
-    half_domain_invs.iter_mut().for_each(|inv| {
-        *inv = inv.square();
-    });
-
-    let c_squared = c.square();
-
-    // NP TODO remove this and pass only the generator
-    let domain_squared = domain.exp_power_of_2(1).unwrap();
+// Compute the evaluation of a folded polynomial at a point alpha given the
+// evaluations of the original polynomial at the k-th roots of alpha, where k is
+// the folding factor. Mathematically, it performs the same operation as
+// fold_evaluations_at_domain in the concrete case where the domain consists
+// exactly of the k-th roots of alpha - however, the arguments are slightly
+// different for efficiency/usage reasons.
+pub(crate) fn fold_evaluations_at_small_domain<F: TwoAdicField>(
+    // The evaluations of the original polynomial
+    evals: Vec<F>,
+    // the inverse of is a k-th root of the point where we evaluate the folded
+    // polynomial, computed outside (using batch inversion in the case of the
+    // verifier) for efficiency reasons
+    point_root_inv: F,
+    // The log2 of the folding factor k
+    log_folding_factor: usize,
+    // omega is the generator of the coset's subgroup, i. e. a (concrete) primitive
+    // k-th root of unity. omega_inv is its inverse, provided for efficiency reasons
+    (omega, omega_inv): (F, F),
+    // The folding coefficient
+    c: F,
+    // The inverse of 2 is supplied to avoid recomputation in every call
+    two_inv: F,
+) -> F {
+    let half_domain_invs = iterate(point_root_inv, |&x| x * omega_inv)
+        .take(1 << (log_folding_factor - 1))
+        .collect_vec();
 
     fold_evaluations_at_domain_inner(
         evals,
-        domain_squared,
-        log_folding_factor - 1,
-        c_squared,
+        omega,
+        log_folding_factor,
+        c,
         two_inv,
         half_domain_invs,
-    )
-}
-
-// NP TODO now this is largely duplicated in fold_evaluationsa_at_domain
-
-// Compute the evaluation of a folded polynomial at a point given the
-// evaluations of the original polynomial at the k-th roots of that point, where
-// k is the folding factor
-pub(crate) fn fold_evaluations<F: TwoAdicField>(
-    // The evaluations of the original polynomial
-    evals: Vec<F>,
-    // point_root is a k-th root of the point where we evaluate the folded
-    // polynomial. Its inverse can be supplied to make use of batch inversion
-    // outside of this function.
-    (point_root, point_root_inv_hint): (F, Option<F>),
-    // The log2 of the folding factor
-    log_folding_factor: usize,
-    // omega is the generator of the coset of k-th roots of the point - in other
-    // words, this is simply a primitive k-th root of unity. Its inverse can be
-    // suplied for efficiency, since it will be used across many calls.
-    (omega, omega_inv_hint): (F, Option<F>),
-    // The folding coefficient
-    c: F,
-    // The inverse of 2 can be supplied to avoid recomputation in every call
-    two_inv_hint: Option<F>,
-) -> F {
-    // Let fold_k(g, b) denote the k-ary folding of a polynomial g with
-    // coefficient b. Then one has:
-    //   fold_k(h, coeff) = fold_2(..., fold_2(h, c), c^2, c^4, ..., ),
-    // where the ellipses denote the log2(k)-fold composition of fold_2. The
-    // same applies to the evaluations, i. e. one can compute the k-ary folding
-    // of evals through repeated binary foldings.
-
-    let arity = 1 << log_folding_factor;
-    assert!(evals.len() == arity);
-
-    // We first construct the list `gammas` of values c / y_j, where y_j runs
-    // over half the k-th roots of point_root^k. In particular, for each pair
-    // of roots {y_j, -y_j} (note that k is even), we only store one of the
-    // two.
-
-    let inv_omega = omega_inv_hint.unwrap_or_else(|| omega.inverse());
-    let inv_point_root = point_root_inv_hint.unwrap_or_else(|| point_root.inverse());
-
-    let mut gammas = iterate(inv_point_root * c, |&x| x * inv_omega)
-        .take(arity / 2)
-        .collect_vec();
-
-    let mut result = evals;
-
-    // Repeatedly binary-fold until only one evaluation is left
-    while result.len() > 1 {
-        result = fold_evaluations_binary(result, &gammas, two_inv_hint);
-
-        // The gammas for the next step are half the squares of the current
-        // gammas
-        gammas = gammas[..(gammas.len() / 2)]
-            .iter()
-            .map(|&gamma| gamma.square())
-            .collect_vec();
-    }
-
-    result.pop().unwrap()
-}
-
-// Compute the binary folding of the given list of evaluations
-fn fold_evaluations_binary<F: TwoAdicField>(
-    // The evaluations to fold
-    evals: Vec<F>,
-    // The list of c / y_j with y_j as in fold_evaluations()
-    gammas: &[F],
-    // The inverse of 2 can be supplied to avoid recomputation in every call
-    two_inv_hint: Option<F>,
-) -> Vec<F> {
-    let cutoff = evals.len() / 2;
-    let low_evals = evals[..cutoff].iter();
-    let high_evals = evals[cutoff..].iter();
-
-    izip!(low_evals, high_evals, gammas.iter())
-        .map(|(&eval_1, &eval_2, &gamma)| fold_evaluation_pair(eval_1, eval_2, gamma, two_inv_hint))
-        .collect_vec()
-}
-
-// Compute the binary folding of the evaluations of a polynomial at a point and
-// its additive inverse
-#[inline]
-fn fold_evaluation_pair<F: TwoAdicField>(
-    // f(w), where w^2 is the point we are evaluating fold_2(f) at
-    eval_1: F,
-    // f(-w) with w as above
-    eval_2: F,
-    // c / w, where c is the folding coefficient
-    gamma: F,
-    // The inverse of 2 can be supplied to avoid recomputation in every call
-    two_inv_hint: Option<F>,
-) -> F {
-    let two_inv = two_inv_hint.unwrap_or_else(|| F::TWO.inverse());
-    // This expression uses two multiplications, as opposed to three in the more
-    // symmetric 1/2 * ((1 + gamma) * eval_1 + (1 - gamma) * eval_2)
-    two_inv * (eval_1 + eval_2 + gamma * (eval_1 - eval_2))
+    )[0]
 }
 
 // Observe a list of extension field elements, preceded by its length for
@@ -720,13 +660,16 @@ mod tests {
 
             // We first compute the folded evaluations using the method
             // fold_evaluations()
-            let folded_evaluation = fold_evaluations(
+            let folded_evaluation = fold_evaluations_at_small_domain(
                 evaluations,
-                (domain.shift(), None),
+                domain.shift().inverse(),
                 $log_arity,
-                (domain.subgroup_generator(), None),
+                (
+                    domain.subgroup_generator(),
+                    domain.subgroup_generator().inverse(),
+                ),
                 $folding_randomness,
-                None,
+                BB::ONE.halve(),
             );
 
             // The above needs to coincide with the result of evaluating the
@@ -780,7 +723,7 @@ mod tests {
     // k = 2^1, ..., 2^9
     fn test_fold_evaluations() {
         let mut rng = SmallRng::seed_from_u64(43);
-        let polynomial = rand_poly_coeffs((1 << 10) - 1, &mut rng);
+        let polynomial: Vec<BB> = rand_poly_coeffs((1 << 10) - 1, &mut rng);
         let folding_randomness: BB = rng.random();
 
         for log_arity in 1..10 {
@@ -806,55 +749,5 @@ mod tests {
                 &dft
             )
         }
-    }
-
-    #[test]
-    // Checks that fold_evaluations_binary() returns the expected results
-    fn test_fold_evaluations_binary() {
-        let log_domain_size = 4;
-        let poly_deg = 7;
-
-        let mut rng = SmallRng::seed_from_u64(93);
-
-        let polynomial = rand_poly_coeffs(poly_deg, &mut rng);
-
-        // Folding coefficient
-        let c = rng.random();
-
-        // Points with the same 16-th power
-        let point_root: BB = rng.random();
-        let point = point_root.exp_power_of_2(log_domain_size);
-        let omega = BB::two_adic_generator(log_domain_size);
-        let roots = iterate(point_root, |&x| x * omega)
-            .take(1 << log_domain_size)
-            .collect_vec();
-
-        assert!(roots
-            .iter()
-            .all(|&x| x.exp_power_of_2(log_domain_size) == point));
-
-        // Computing folded evaluations using the method fold_evaluations_binary
-        let gammas = roots[0..(1 << log_domain_size) / 2]
-            .iter()
-            .map(|&root| c * root.inverse())
-            .collect_vec();
-        let evals = roots
-            .iter()
-            .map(|&root| eval_poly(&polynomial, root))
-            .collect_vec();
-        let folded_evals = fold_evaluations_binary(evals.clone(), &gammas, None);
-
-        // Computing folded evaluations by evaluating the folded polynomial
-        let folded_poly = fold_polynomial(&polynomial, c, 1);
-        let roots_squared = roots[0..(1 << log_domain_size) / 2]
-            .iter()
-            .map(|&root| root.square())
-            .collect_vec();
-        let expected_folded_evals = roots_squared
-            .iter()
-            .map(|root| eval_poly(&folded_poly, *root))
-            .collect_vec();
-
-        assert_eq!(folded_evals, expected_folded_evals);
     }
 }

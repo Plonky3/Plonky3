@@ -11,7 +11,7 @@ use p3_matrix::Dimensions;
 
 use crate::config::{observe_public_parameters, RoundConfig};
 use crate::proof::RoundProof;
-use crate::utils::{fold_evaluations, observe_ext_slice_with_size};
+use crate::utils::{fold_evaluations_at_small_domain, observe_ext_slice_with_size};
 use crate::{Messages, StirConfig, StirProof, POW_BITS_WARNING};
 
 mod error;
@@ -728,16 +728,15 @@ fn compute_folded_evaluations<F: TwoAdicField>(
     // For each list of evaluations, we call the method fold_evaluations() once
     unfolded_evaluations
         .into_iter()
-        .zip(point_roots.iter())
         .zip(point_roots_invs)
-        .map(|((evals, &point_root), point_root_inv)| {
-            fold_evaluations(
+        .map(|(evals, point_root_inv)| {
+            fold_evaluations_at_small_domain(
                 evals,
-                (point_root, Some(point_root_inv)),
+                point_root_inv,
                 log_folding_factor,
-                (omega, Some(omega_inv)),
+                (omega, omega_inv),
                 c,
-                Some(two_inv),
+                two_inv,
             )
         })
         .collect()
