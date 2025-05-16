@@ -199,14 +199,11 @@ impl Display for SecurityAssumption {
 impl FromStr for SecurityAssumption {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s == "UniqueDecoding" {
-            Ok(SecurityAssumption::UniqueDecoding)
-        } else if s == "JohnsonBound" {
-            Ok(SecurityAssumption::JohnsonBound)
-        } else if s == "CapacityBound" {
-            Ok(SecurityAssumption::CapacityBound)
-        } else {
-            Err(format!("Invalid soundness specification: {}", s))
+        match s {
+            "UniqueDecoding" => Ok(SecurityAssumption::UniqueDecoding),
+            "JohnsonBound" => Ok(SecurityAssumption::JohnsonBound),
+            "CapacityBound" => Ok(SecurityAssumption::CapacityBound),
+            _ => Err(format!("Invalid soundness specification: {s}")),
         }
     }
 }
