@@ -409,11 +409,17 @@ where
                         .iter()
                         .map(|(domain, _)| (domain.size() << self.fri_config.log_blowup))
                         .collect_vec();
-                    let batch_dims: Vec<Dimensions> = batch_heights
-                        .iter()
-                        // todo: mmcs doesn't really need width
-                        .map(|&height| Dimensions { width: 0, height })
-                        .collect_vec();
+                    let batch_dims: Vec<Dimensions> =
+                        izip!(batch_heights.iter(), batch_opening.opened_values.iter())
+                            .map(|(&height, opened_values)| {
+                                // Width is not used for verification in MMCS, but we provide it for completeness
+                                // using the length of opened values for each matrix
+                                Dimensions {
+                                    width: opened_values.len(),
+                                    height,
+                                }
+                            })
+                            .collect_vec();
 
                     let (dims, idx) = if let Some(log_batch_max_height) =
                         batch_heights.iter().max().map(|x| log2_strict_usize(*x))
@@ -498,7 +504,8 @@ where
                     );
 
                     let fl_dims = Dimensions {
-                        width: 0,
+                        // Width is set to match the actual value for consistency
+                        width: fl_values.len(),
                         height: 1 << (log_height - 1),
                     };
 
