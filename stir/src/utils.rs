@@ -23,7 +23,6 @@ pub(crate) fn compute_pow(security_level: usize, error: f64) -> f64 {
 
 // Fold (with factor k equal to a power of two) the evaluations of a polynomial
 // over an entire coset H into those of the folded polynomial over H^k
-// TODO here and below, document all arguments
 pub(crate) fn fold_evaluations_at_domain<F: TwoAdicField>(
     // The evaluations of the original polynomial over the domain
     evals: Vec<F>,
@@ -50,7 +49,7 @@ pub(crate) fn fold_evaluations_at_domain<F: TwoAdicField>(
 
 // Inner function wrapped around by fold_evaluations_at_domain and
 // fold_evaluations_at_small_domain which folds the evaluations of a polynomial
-// over an entire coset H into those of the folded polynomial over a power of
+// over an entire coset into those of the folded polynomial over a power of
 // that coset.
 fn fold_evaluations_at_domain_inner<F: TwoAdicField>(
     // The evaluations of the original polynomial
@@ -69,6 +68,7 @@ fn fold_evaluations_at_domain_inner<F: TwoAdicField>(
     while log_folding_factor > 0 {
         let half_size = half_domain_invs.len();
 
+        // Evals over each half of the domain
         let (evals_plus, evals_minus) = evals.split_at_mut(half_size);
 
         // Iteratively apply the formula that folds two evaluations into one
@@ -80,8 +80,8 @@ fn fold_evaluations_at_domain_inner<F: TwoAdicField>(
                 *eval_p = two_inv * (*eval_p + *eval_m + c * *inv * (*eval_p - *eval_m));
             });
 
-        // Prepare the arguments for the next step, which computes the evaluations
-        // over the square of the current domain
+        // Prepare the arguments for the next iteration, which computes the
+        // evaluations over the square of the current domain
         evals.truncate(half_size);
         half_domain_invs.truncate(half_size / 2);
         half_domain_invs.iter_mut().for_each(|inv| {
@@ -105,9 +105,9 @@ fn fold_evaluations_at_domain_inner<F: TwoAdicField>(
 pub(crate) fn fold_evaluations_at_small_domain<F: TwoAdicField>(
     // The evaluations of the original polynomial
     evals: Vec<F>,
-    // the inverse of is a k-th root of the point where we evaluate the folded
-    // polynomial, computed outside (using batch inversion in the case of the
-    // verifier) for efficiency reasons
+    // The inverse point_root_inv is a k-th root of the point where we evaluate
+    // the folded polynomial, computed outside (using batch inversion in the
+    // case of the verifier) for efficiency reasons
     point_root_inv: F,
     // The log2 of the folding factor k
     log_folding_factor: usize,
@@ -208,7 +208,6 @@ pub(crate) fn domain_dft<F: TwoAdicField>(
     }
 }
 
-// NP TODO explain that this is here simply for symmetry with domain_dft
 #[inline]
 pub(crate) fn domain_idft<F: TwoAdicField>(
     evals: Vec<F>,

@@ -33,14 +33,13 @@ impl SecurityAssumption {
     /// E.g. in JB proximity gaps holds for every delta in (0, 1 - sqrt(rho)).
     /// eta is the distance between the chosen proximity parameter and the bound.
     /// I.e. in JB delta = 1 - sqrt(rho) - eta and in CB delta = 1 - rho - eta.
-    // TODO: Maybe it makes more sense to be multiplicative. I think this can be set in a better way.
     pub fn log_eta(&self, log_inv_rate: usize) -> f64 {
         // Editor's note: This is Giacom's original comment:
         //     Ask me how I did this? At the time, only God and I knew. Now only God knows
         //     I joke, I actually know but this is left for posterity.
         match self {
             // We don't use eta in UD
-            Self::UniqueDecoding => 0., // TODO: Maybe just panic and avoid calling it in UD?
+            Self::UniqueDecoding => 0.,
             // Set as sqrt(rho)/20
             Self::JohnsonBound => -(0.5 * log_inv_rate as f64 + LOG2_10 + 1.),
             // Set as rho/20
