@@ -497,7 +497,11 @@ where
     StandardUniform: Distribution<F>,
 {
     let mut coeffs: Vec<F> = (0..degree).map(|_| rng.gen()).collect();
-    coeffs.push(rng.sample_iter(Standard).find(|c: &F| *c != F::ZERO).unwrap());
+    coeffs.push(
+        rng.sample_iter(Standard)
+            .find(|c: &F| *c != F::ZERO)
+            .unwrap(),
+    );
     coeffs
 }
 
