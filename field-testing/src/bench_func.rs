@@ -1,7 +1,8 @@
 use alloc::format;
 use alloc::vec::Vec;
+use core::hint::black_box;
 
-use criterion::{BatchSize, Criterion, black_box};
+use criterion::{BatchSize, Criterion};
 use p3_field::{Field, PrimeCharacteristicRing};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
