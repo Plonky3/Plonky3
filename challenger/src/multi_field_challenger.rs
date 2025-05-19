@@ -23,11 +23,11 @@ where
     PF: Field,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
-    sponge_state: [PF; WIDTH],
-    input_buffer: Vec<F>,
-    output_buffer: Vec<F>,
-    permutation: P,
-    num_f_elms: usize,
+    pub sponge_state: [PF; WIDTH],
+    pub input_buffer: Vec<F>,
+    pub output_buffer: Vec<F>,
+    pub permutation: P,
+    pub num_f_elms: usize,
 }
 
 impl<F, PF, P, const WIDTH: usize, const RATE: usize> MultiField32Challenger<F, PF, P, WIDTH, RATE>
