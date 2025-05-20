@@ -64,7 +64,7 @@ unsafe fn transpose_in_place_square_small<T>(
 /// - `a` and `b` must be valid for `rows * cols` reads and writes.
 /// - The regions pointed to by `a` and `b` must be disjoint.
 /// - `stride` must be large enough to avoid overlapping accesses during index calculations.
-pub(super) unsafe fn transpose_swap_square<T: Copy>(
+pub(super) unsafe fn transpose_swap<T: Copy>(
     a: *mut T,
     b: *mut T,
     stride: usize,
@@ -102,19 +102,14 @@ pub(super) unsafe fn transpose_swap_square<T: Copy>(
                         let a = a.load(Ordering::Relaxed);
                         let b = b.load(Ordering::Relaxed);
                         unsafe {
-                            transpose_swap_square(a, b, stride, (top, cols));
+                            transpose_swap(a, b, stride, (top, cols));
                         }
                     },
                     || {
                         let a = a.load(Ordering::Relaxed);
                         let b = b.load(Ordering::Relaxed);
                         unsafe {
-                            transpose_swap_square(
-                                a.add(top * stride),
-                                b.add(top),
-                                stride,
-                                (bottom, cols),
-                            );
+                            transpose_swap(a.add(top * stride), b.add(top), stride, (bottom, cols));
                         }
                     },
                 );
@@ -126,14 +121,14 @@ pub(super) unsafe fn transpose_swap_square<T: Copy>(
                         let a = a.load(Ordering::Relaxed);
                         let b = b.load(Ordering::Relaxed);
                         unsafe {
-                            transpose_swap_square(a, b, stride, (rows, left));
+                            transpose_swap(a, b, stride, (rows, left));
                         }
                     },
                     || {
                         let a = a.load(Ordering::Relaxed);
                         let b = b.load(Ordering::Relaxed);
                         unsafe {
-                            transpose_swap_square(
+                            transpose_swap(
                                 a.add(left),
                                 b.add(left * stride),
                                 stride,
@@ -152,15 +147,15 @@ pub(super) unsafe fn transpose_swap_square<T: Copy>(
         let top = rows / 2;
         let bottom = rows - top;
         unsafe {
-            transpose_swap_square(a, b, stride, (top, cols));
-            transpose_swap_square(a.add(top * stride), b.add(top), stride, (bottom, cols));
+            transpose_swap(a, b, stride, (top, cols));
+            transpose_swap(a.add(top * stride), b.add(top), stride, (bottom, cols));
         }
     } else {
         let left = cols / 2;
         let right = cols - left;
         unsafe {
-            transpose_swap_square(a, b, stride, (rows, left));
-            transpose_swap_square(a.add(left), b.add(left * stride), stride, (rows, right));
+            transpose_swap(a, b, stride, (rows, left));
+            transpose_swap(a.add(left), b.add(left * stride), stride, (rows, right));
         }
     }
 }
@@ -244,7 +239,7 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
                         // BL: starts at (x + half, x)
                         || unsafe {
                             let ptr = base.load(Ordering::Relaxed);
-                            transpose_swap_square(
+                            transpose_swap(
                                 ptr.add((x << log_stride) + (x + half)),
                                 ptr.add(((x + half) << log_stride) + x),
                                 stride,
@@ -282,7 +277,7 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
         // Transpose TL quadrant (top-left)
         transpose_in_place_square(arr, log_stride, lb_block_size, x);
         // Swap TR (top-right) with BL (bottom-left)
-        transpose_swap_square(
+        transpose_swap(
             ptr.add((x << log_stride) + (x + block_size)),
             ptr.add(((x + block_size) << log_stride) + x),
             stride,
