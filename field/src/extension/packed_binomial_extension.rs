@@ -165,7 +165,7 @@ where
         unsafe {
             // Safety:
             // As `Self` is a `repr(transparent)`, it is stored identically in memory to `[PF; D]`
-            flatten_to_base::<PF, Self>(vec)
+            flatten_to_base(vec)
         }
     }
 
@@ -174,7 +174,7 @@ where
         unsafe {
             // Safety:
             // As `Self` is a `repr(transparent)`, it is stored identically in memory to `[PF; D]`
-            reconstitute_from_base::<PF, Self>(vec)
+            reconstitute_from_base(vec)
         }
     }
 }
