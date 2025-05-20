@@ -7,7 +7,7 @@ use core::sync::atomic::{AtomicPtr, Ordering};
 const LB_BASE_CASE_LOG: usize = 3;
 
 /// Absolute size threshold (in elements) below which recursive swap stops
-const BASE_CASE_ELEMENT_THRESHOLD: usize = 1 << LB_BASE_CASE_LOG;
+const BASE_CASE_ELEMENT_THRESHOLD: usize = 1 << (2 * LB_BASE_CASE_LOG);
 
 #[cfg(feature = "parallel")]
 /// Threshold (in number of elements) beyond which we enable parallel recursion
@@ -17,7 +17,7 @@ const PARALLEL_RECURSION_THRESHOLD: usize = 1 << 10;
 ///
 /// # Parameters
 /// - `arr`: A mutable reference to a 1D array representing a larger row-major matrix.
-/// - `lb_stride`: Log2 of the stride between rows in the array.
+/// - `log_stride`: Log2 of the stride between rows in the array.
 /// - `lb_size`: Log2 of the dimension of the square matrix to transpose.
 /// - `x`: Offset (in rows and columns) from the top-left corner of the full array.
 ///
@@ -25,10 +25,10 @@ const PARALLEL_RECURSION_THRESHOLD: usize = 1 << 10;
 ///
 /// ## SAFETY
 /// - All accesses to `arr` must be in-bounds.
-/// - `lb_size <= lb_stride` must hold to prevent overlapping indices during swaps.
+/// - `lb_size <= log_stride` must hold to prevent overlapping indices during swaps.
 unsafe fn transpose_in_place_square_small<T>(
     arr: &mut [T],
-    lb_stride: usize,
+    log_stride: usize,
     lb_size: usize,
     x: usize,
 ) {
@@ -38,8 +38,8 @@ unsafe fn transpose_in_place_square_small<T>(
             for j in x..i {
                 // Compute memory offsets and swap M[i, j] <-> M[j, i]
                 swap(
-                    arr.get_unchecked_mut(i + (j << lb_stride)),
-                    arr.get_unchecked_mut((i << lb_stride) + j),
+                    arr.get_unchecked_mut(i + (j << log_stride)),
+                    arr.get_unchecked_mut((i << log_stride) + j),
                 );
             }
         }
@@ -171,7 +171,7 @@ pub(super) unsafe fn transpose_swap_square<T: Copy>(
 /// Each matrix element `M[i,j]` is stored at:
 /// ```text
 /// \begin{equation}
-///     \text{index}(i,j) = i + x + ((i + x) << lb_stride) + (j + x)
+///     \text{index}(i,j) = i + x + ((i + x) << log_stride) + (j + x)
 /// \end{equation}
 /// ```
 ///
@@ -189,11 +189,11 @@ pub(super) unsafe fn transpose_swap_square<T: Copy>(
 /// 3. Recursively transposing `BR`
 ///
 /// # Safety
-/// - Assumes all accesses via `((i + x) << lb_stride) + (j + x)` are in-bounds.
-/// - Requires `lb_size <= lb_stride` to avoid index overlap.
+/// - Assumes all accesses via `((i + x) << log_stride) + (j + x)` are in-bounds.
+/// - Requires `lb_size <= log_stride` to avoid index overlap.
 pub(crate) unsafe fn transpose_in_place_square<T>(
     arr: &mut [T],
-    lb_stride: usize,
+    log_stride: usize,
     lb_size: usize,
     x: usize,
 ) where
@@ -202,7 +202,7 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
     // If small, switch to base case
     if lb_size <= LB_BASE_CASE_LOG {
         unsafe {
-            transpose_in_place_square_small(arr, lb_stride, lb_size, x);
+            transpose_in_place_square_small(arr, log_stride, lb_size, x);
         }
         return;
     }
@@ -222,7 +222,7 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
             // Total length of the backing array
             let len = arr.len();
             // Row stride in physical memory
-            let stride = 1 << lb_stride;
+            let stride = 1 << log_stride;
             // Size of each quadrant (half x half)
             let dim = 1 << lb_half;
 
@@ -233,7 +233,7 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
                 || unsafe {
                     transpose_in_place_square(
                         core::slice::from_raw_parts_mut(base.load(Ordering::Relaxed), len),
-                        lb_stride,
+                        log_stride,
                         lb_half,
                         x,
                     )
@@ -245,8 +245,8 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
                         || unsafe {
                             let ptr = base.load(Ordering::Relaxed);
                             transpose_swap_square(
-                                ptr.add((x << lb_stride) + (x + half)),
-                                ptr.add(((x + half) << lb_stride) + x),
+                                ptr.add((x << log_stride) + (x + half)),
+                                ptr.add(((x + half) << log_stride) + x),
                                 stride,
                                 (dim, dim),
                             );
@@ -254,7 +254,7 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
                         || unsafe {
                             transpose_in_place_square(
                                 core::slice::from_raw_parts_mut(base.load(Ordering::Relaxed), len),
-                                lb_stride,
+                                log_stride,
                                 lb_half,
                                 x + half,
                             )
@@ -272,7 +272,7 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
     // Actual size of each quadrant (i.e., half the current matrix size)
     let block_size = 1 << lb_block_size;
     // Physical stride between rows in memory (in elements)
-    let stride = 1 << lb_stride;
+    let stride = 1 << log_stride;
     // The size of each submatrix (used as a dimension for swapping TR/BL)
     let dim = block_size;
     // Raw pointer to the base of the array for manual offset calculations
@@ -280,16 +280,16 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
 
     unsafe {
         // Transpose TL quadrant (top-left)
-        transpose_in_place_square(arr, lb_stride, lb_block_size, x);
+        transpose_in_place_square(arr, log_stride, lb_block_size, x);
         // Swap TR (top-right) with BL (bottom-left)
         transpose_swap_square(
-            ptr.add((x << lb_stride) + (x + block_size)),
-            ptr.add(((x + block_size) << lb_stride) + x),
+            ptr.add((x << log_stride) + (x + block_size)),
+            ptr.add(((x + block_size) << log_stride) + x),
             stride,
             (dim, dim),
         );
         // Transpose BR quadrant (bottom-right)
-        transpose_in_place_square(arr, lb_stride, lb_block_size, x + block_size);
+        transpose_in_place_square(arr, log_stride, lb_block_size, x + block_size);
     }
 }
 
