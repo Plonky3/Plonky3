@@ -353,10 +353,14 @@ const SHIFTED_FIELD_ORDER: __m256i =
     unsafe { transmute([Goldilocks::ORDER_U64 ^ (i64::MIN as u64); WIDTH]) };
 const EPSILON: __m256i = unsafe { transmute([Goldilocks::ORDER_U64.wrapping_neg(); WIDTH]) };
 
-/// Add 2^63 with overflow. Needed to emulate unsigned comparisons (see point 3. in
-/// packed_prime_field.rs).
-///  # Safety
-/// TODO
+/// # Safety
+/// - The input `x` must be a valid AVX2 register (`__m256i`) containing four 64-bit signed or unsigned integers,
+///   each representing a Goldilocks field element in canonical form.
+/// - This function is intended to be used only on such field elements, as it performs a bitwise XOR with 2^63
+///   (the sign bit) in each lane to enable emulation of unsigned comparisons using signed AVX2 instructions.
+/// - Do not call this function on uninitialized registers, registers containing non-integer data, or data
+///   not representing Goldilocks field elements. Doing so may result in undefined behavior or incorrect results.
+/// - The caller is responsible for ensuring that the input meets these requirements.
 #[inline]
 pub unsafe fn shift(x: __m256i) -> __m256i {
     unsafe { _mm256_xor_si256(x, SIGN_BIT) }
