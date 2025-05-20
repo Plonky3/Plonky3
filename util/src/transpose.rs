@@ -55,19 +55,19 @@ unsafe fn transpose_in_place_square_small<T>(
 /// This function swaps element `A[i, j]` with `B[j, i]`, effectively transposing them
 /// relative to each other.
 ///
-/// `A` is assumed to be row-major, starting at pointer `a`, where A[i,j] = a[i * stride + j].
-/// `B` is assumed to be row-major, starting at pointer `b`, where B[j,i] = b[j * stride + i].
+/// `A` is assumed to be row-major, starting at pointer `a`, where A[i,j] = a[i * width_outer_mat + j].
+/// `B` is assumed to be row-major, starting at pointer `b`, where B[j,i] = b[j * width_outer_mat + i].
 ///
 /// The recursion always splits along the longer dimension to balance cache and workload.
 ///
 /// # Safety
 /// - `a` and `b` must be valid for `rows * cols` reads and writes.
 /// - The regions pointed to by `a` and `b` must be disjoint.
-/// - `stride` must be large enough to avoid overlapping accesses during index calculations.
+/// - `width_outer_mat` must be large enough to avoid overlapping accesses during index calculations.
 pub(super) unsafe fn transpose_swap<T: Copy>(
     a: *mut T,
     b: *mut T,
-    stride: usize,
+    width_outer_mat: usize,
     (rows, cols): (usize, usize),
 ) {
     let size = rows * cols;
@@ -76,8 +76,8 @@ pub(super) unsafe fn transpose_swap<T: Copy>(
     if size < BASE_CASE_ELEMENT_THRESHOLD {
         for i in 0..rows {
             for j in 0..cols {
-                let ai = i * stride + j;
-                let bi = j * stride + i;
+                let ai = i * width_outer_mat + j;
+                let bi = j * width_outer_mat + i;
                 unsafe {
                     swap_nonoverlapping(a.add(ai), b.add(bi), 1);
                 }
@@ -102,14 +102,19 @@ pub(super) unsafe fn transpose_swap<T: Copy>(
                         let a = a.load(Ordering::Relaxed);
                         let b = b.load(Ordering::Relaxed);
                         unsafe {
-                            transpose_swap(a, b, stride, (top, cols));
+                            transpose_swap(a, b, width_outer_mat, (top, cols));
                         }
                     },
                     || {
                         let a = a.load(Ordering::Relaxed);
                         let b = b.load(Ordering::Relaxed);
                         unsafe {
-                            transpose_swap(a.add(top * stride), b.add(top), stride, (bottom, cols));
+                            transpose_swap(
+                                a.add(top * width_outer_mat),
+                                b.add(top),
+                                width_outer_mat,
+                                (bottom, cols),
+                            );
                         }
                     },
                 );
@@ -121,7 +126,7 @@ pub(super) unsafe fn transpose_swap<T: Copy>(
                         let a = a.load(Ordering::Relaxed);
                         let b = b.load(Ordering::Relaxed);
                         unsafe {
-                            transpose_swap(a, b, stride, (rows, left));
+                            transpose_swap(a, b, width_outer_mat, (rows, left));
                         }
                     },
                     || {
@@ -130,8 +135,8 @@ pub(super) unsafe fn transpose_swap<T: Copy>(
                         unsafe {
                             transpose_swap(
                                 a.add(left),
-                                b.add(left * stride),
-                                stride,
+                                b.add(left * width_outer_mat),
+                                width_outer_mat,
                                 (rows, right),
                             );
                         }
@@ -147,15 +152,25 @@ pub(super) unsafe fn transpose_swap<T: Copy>(
         let top = rows / 2;
         let bottom = rows - top;
         unsafe {
-            transpose_swap(a, b, stride, (top, cols));
-            transpose_swap(a.add(top * stride), b.add(top), stride, (bottom, cols));
+            transpose_swap(a, b, width_outer_mat, (top, cols));
+            transpose_swap(
+                a.add(top * width_outer_mat),
+                b.add(top),
+                width_outer_mat,
+                (bottom, cols),
+            );
         }
     } else {
         let left = cols / 2;
         let right = cols - left;
         unsafe {
-            transpose_swap(a, b, stride, (rows, left));
-            transpose_swap(a.add(left), b.add(left * stride), stride, (rows, right));
+            transpose_swap(a, b, width_outer_mat, (rows, left));
+            transpose_swap(
+                a.add(left),
+                b.add(left * width_outer_mat),
+                width_outer_mat,
+                (rows, right),
+            );
         }
     }
 }
