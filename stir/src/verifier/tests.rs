@@ -206,7 +206,12 @@ fn tamper_with_final_polynomial(
                 .mmcs_config()
                 .open_batch(index as usize, &witness.merkle_tree)
         })
-        .map(|(mut k, v)| (k.remove(0), v))
+        .map(|mut batch_opening| {
+            (
+                batch_opening.opened_values.remove(0),
+                batch_opening.opening_proof,
+            )
+        })
         .collect();
 
     let final_pow_witness = challenger.grind(config.final_pow_bits());

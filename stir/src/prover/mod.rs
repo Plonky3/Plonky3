@@ -286,14 +286,17 @@ where
 
     // Opening the cosets of evaluations of g_M at each k_M-th root of the
     // points queried
-    let queries_to_final: Vec<(Vec<EF>, M::Proof)> = queried_indices
+    let queries_to_final = queried_indices
         .into_iter()
         .map(|index| {
-            config
+            let mut batch_proof = config
                 .mmcs_config()
-                .open_batch(index as usize, &witness.merkle_tree)
+                .open_batch(index as usize, &witness.merkle_tree);
+            (
+                batch_proof.opened_values.remove(0),
+                batch_proof.opening_proof,
+            )
         })
-        .map(|(mut k, v)| (k.remove(0), v))
         .collect();
 
     // Compute the proof-of-work for the final round
@@ -449,7 +452,12 @@ where
         .clone()
         .into_iter()
         .map(|index| config.mmcs_config().open_batch(index, &merkle_tree))
-        .map(|(mut k, v)| (k.remove(0), v))
+        .map(|mut batch_proof| {
+            (
+                batch_proof.opened_values.remove(0),
+                batch_proof.opening_proof,
+            )
+        })
         .collect();
 
     // ============= Computing the Quot, Ans and shake polynomials =============

@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use error::{FullRoundVerificationError, VerificationError};
 use itertools::{iterate, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::Mmcs;
+use p3_commit::{BatchOpeningRef, Mmcs};
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{batch_multiplicative_inverse, eval_poly, ExtensionField, Field, TwoAdicField};
 use p3_matrix::Dimensions;
@@ -266,6 +266,9 @@ where
         .unique()
         .zip(final_round_queries.iter())
     {
+        let leaf_vec = vec![leaf.clone()];
+        let batch_proof = BatchOpeningRef::new(&leaf_vec, proof);
+
         if config
             .mmcs_config()
             .verify_batch(
@@ -275,8 +278,8 @@ where
                     height: 1 << (final_domain.log_size() - log_last_folding_factor),
                 }],
                 i,
-                proof,
-                // NP TODO important use leaf or check it somewhere else (here and in the verify_batch below)
+                batch_proof,
+                // NP TODO important use leaf or check it somewhere else (here and in the verify_batch)
             )
             .is_err()
         {
@@ -450,15 +453,22 @@ where
 
     // Verify the Merkle proofs of the evaluations of g_{i - 1}
     for (&i, (leaf, proof)) in queried_indices.iter().unique().zip(query_proofs.iter()) {
-        if config.mmcs_config().verify_batch(
-            &prev_root,
-            &[Dimensions {
-                width: 1 << log_folding_factor,
-                height: 1 << (domain.log_size() - log_folding_factor),
-            }],
-            i,
-            proof,
-        ) {
+        let leaf_vec = vec![leaf.clone()];
+        let batch_proof = BatchOpeningRef::new(&leaf_vec, proof);
+
+        if config
+            .mmcs_config()
+            .verify_batch(
+                &prev_root,
+                &[Dimensions {
+                    width: 1 << log_folding_factor,
+                    height: 1 << (domain.log_size() - log_folding_factor),
+                }],
+                i,
+                batch_proof,
+            )
+            .is_err()
+        {
             return Err(FullRoundVerificationError::QueryPath);
         }
     }
