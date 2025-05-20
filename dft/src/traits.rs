@@ -237,14 +237,14 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         // `K` which is the evaluations of `f1` over `shift * K` which is the evaluations of `f` over `g * shift * K`.
         let mut coeffs = self.idft_batch(mat);
         // PANICS: possible panic if the new resized length overflows
-        coeffs.values.resize(
+        let coeffs_zeros = F::zero_vec(
             coeffs
                 .values
                 .len()
                 .checked_shl(added_bits.try_into().unwrap())
                 .unwrap(),
-            F::ZERO,
         );
+        coeffs.values.copy_from_slice(&coeffs_zeros);
         self.coset_dft_batch(coeffs, shift)
     }
 
