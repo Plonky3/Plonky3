@@ -275,8 +275,8 @@ where
                     height: 1 << (final_domain.log_size() - log_last_folding_factor),
                 }],
                 i,
-                &[leaf.clone()],
                 proof,
+                // NP TODO important use leaf or check it somewhere else (here and in the verify_batch below)
             )
             .is_err()
         {
@@ -450,20 +450,15 @@ where
 
     // Verify the Merkle proofs of the evaluations of g_{i - 1}
     for (&i, (leaf, proof)) in queried_indices.iter().unique().zip(query_proofs.iter()) {
-        if config
-            .mmcs_config()
-            .verify_batch(
-                &prev_root,
-                &[Dimensions {
-                    width: 1 << log_folding_factor,
-                    height: 1 << (domain.log_size() - log_folding_factor),
-                }],
-                i,
-                &[leaf.clone()],
-                proof,
-            )
-            .is_err()
-        {
+        if config.mmcs_config().verify_batch(
+            &prev_root,
+            &[Dimensions {
+                width: 1 << log_folding_factor,
+                height: 1 << (domain.log_size() - log_folding_factor),
+            }],
+            i,
+            proof,
+        ) {
             return Err(FullRoundVerificationError::QueryPath);
         }
     }

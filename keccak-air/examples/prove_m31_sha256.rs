@@ -10,7 +10,7 @@ use p3_keccak_air::{KeccakAir, generate_trace_rows};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_mersenne_31::Mersenne31;
 use p3_sha256::Sha256;
-use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
+use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
 use p3_uni_stark::{StarkConfig, prove, verify};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -36,7 +36,7 @@ fn main() -> Result<(), impl Debug> {
     type Challenge = BinomialExtensionField<Val, 3>;
 
     type ByteHash = Sha256;
-    type FieldHash = SerializingHasher32<ByteHash>;
+    type FieldHash = SerializingHasher<ByteHash>;
     let byte_hash = ByteHash {};
     let field_hash = FieldHash::new(Sha256);
 
@@ -50,6 +50,7 @@ fn main() -> Result<(), impl Debug> {
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
+    let challenger = Challenger::from_hasher(vec![], byte_hash);
 
     let fri_config = create_benchmark_fri_config(challenge_mmcs);
 
@@ -65,11 +66,8 @@ fn main() -> Result<(), impl Debug> {
     };
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
-    let config = MyConfig::new(pcs);
+    let config = MyConfig::new(pcs, challenger);
 
-    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-    let proof = prove(&config, &KeccakAir {}, &mut challenger, trace, &vec![]);
-
-    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-    verify(&config, &KeccakAir {}, &mut challenger, &proof, &vec![])
+    let proof = prove(&config, &KeccakAir {}, trace, &vec![]);
+    verify(&config, &KeccakAir {}, &proof, &vec![])
 }

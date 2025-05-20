@@ -9,7 +9,7 @@ use p3_goldilocks::Goldilocks;
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_keccak_air::{KeccakAir, generate_trace_rows};
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher64};
+use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher};
 use p3_uni_stark::{StarkConfig, prove, verify};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -36,7 +36,7 @@ fn main() -> Result<(), impl Debug> {
 
     type ByteHash = Keccak256Hash;
     type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
-    type FieldHash = SerializingHasher64<U64Hash>;
+    type FieldHash = SerializingHasher<U64Hash>;
     let byte_hash = ByteHash {};
     let u64_hash = U64Hash::new(KeccakF {});
     let field_hash = FieldHash::new(u64_hash);
@@ -60,6 +60,7 @@ fn main() -> Result<(), impl Debug> {
     let dft = Dft::default();
 
     type Challenger = SerializingChallenger64<Val, HashChallenger<u8, ByteHash, 32>>;
+    let challenger = Challenger::from_hasher(vec![], byte_hash);
 
     let fri_config = create_benchmark_fri_config(challenge_mmcs);
 
@@ -71,11 +72,8 @@ fn main() -> Result<(), impl Debug> {
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
-    let config = MyConfig::new(pcs);
+    let config = MyConfig::new(pcs, challenger);
 
-    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-    let proof = prove(&config, &KeccakAir {}, &mut challenger, trace, &vec![]);
-
-    let mut challenger = Challenger::from_hasher(vec![], byte_hash);
-    verify(&config, &KeccakAir {}, &mut challenger, &proof, &vec![])
+    let proof = prove(&config, &KeccakAir {}, trace, &vec![]);
+    verify(&config, &KeccakAir {}, &proof, &vec![])
 }

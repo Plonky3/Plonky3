@@ -1,21 +1,20 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
-use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::{array, fmt};
 
 use num_bigint::BigUint;
 use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::integers::QuotientMap;
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField64, TwoAdicField, halve_u64, quotient_map_large_iint, quotient_map_large_uint,
-    quotient_map_small_int,
+    PrimeField64, RawDataSerializable, TwoAdicField, halve_u64, impl_raw_serializable_primefield64,
+    quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int,
 };
-use p3_util::{assume, branch_hint};
+use p3_util::{assume, branch_hint, flatten_to_base};
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
@@ -27,7 +26,7 @@ const P: u64 = 0xFFFF_FFFF_0000_0001;
 ///
 /// Note that the safety of deriving `Serialize` and `Deserialize` relies on the fact that the internal value can be any u64.
 #[derive(Copy, Clone, Default, Serialize, Deserialize)]
-#[repr(transparent)] // Packed field implementations rely on this!
+#[repr(transparent)] // Important for reasoning about memory layout
 pub struct Goldilocks {
     /// Not necessarily canonical.
     pub(crate) value: u64,
@@ -126,13 +125,13 @@ impl PartialOrd for Goldilocks {
 
 impl Display for Goldilocks {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Display::fmt(&self.value, f)
+        Display::fmt(&self.as_canonical_u64(), f)
     }
 }
 
 impl Debug for Goldilocks {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Debug::fmt(&self.value, f)
+        Debug::fmt(&self.as_canonical_u64(), f)
     }
 }
 
@@ -161,6 +160,7 @@ impl PrimeCharacteristicRing for Goldilocks {
         f
     }
 
+    #[inline]
     fn from_bool(b: bool) -> Self {
         Self::new(b.into())
     }
@@ -181,9 +181,61 @@ impl PrimeCharacteristicRing for Goldilocks {
     }
 
     #[inline]
+    fn dot_product<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
+        // The constant OFFSET has 2 important properties:
+        // 1. It is a multiple of P.
+        // 2. It is greater than the maximum possible value of the sum of the products of two u64s.
+        const OFFSET: u128 = ((P as u128) << 64) - (P as u128) + ((P as u128) << 32);
+        assert!((N as u32) <= (1 << 31));
+        match N {
+            0 => Self::ZERO,
+            1 => lhs[0] * rhs[0],
+            2 => {
+                // We unroll the N = 2 case as it is slightly faster and this is an important case
+                // as a major use is in extension field arithmetic and Goldilocks has a degree 2 extension.
+                let long_prod_0 = (lhs[0].value as u128) * (rhs[0].value as u128);
+                let long_prod_1 = (lhs[1].value as u128) * (rhs[1].value as u128);
+
+                // We know that long_prod_0, long_prod_1 < OFFSET.
+                // Thus if long_prod_0 + long_prod_1 overflows, we can just subtract OFFSET.
+                let (sum, over) = long_prod_0.overflowing_add(long_prod_1);
+                // Compiler really likes defining sum_corr here instead of in the if/else.
+                let sum_corr = sum.wrapping_sub(OFFSET);
+                if over {
+                    reduce128(sum_corr)
+                } else {
+                    reduce128(sum)
+                }
+            }
+            _ => {
+                let (lo_plus_hi, hi) = lhs
+                    .iter()
+                    .zip(rhs)
+                    .map(|(x, y)| (x.value as u128) * (y.value as u128))
+                    .fold((0_u128, 0_u64), |(acc_lo, acc_hi), val| {
+                        // Split val into (hi, lo) where hi is the upper 32 bits and lo is the lower 96 bits.
+                        let val_hi = (val >> 96) as u64;
+                        // acc_hi accumulates hi, acc_lo accumulates lo + 2^{96}hi.
+                        // As N <= 2^32, acc_hi cannot overflow.
+                        unsafe { (acc_lo.wrapping_add(val), acc_hi.unchecked_add(val_hi)) }
+                    });
+                // First, remove the hi part from lo_plus_hi.
+                let lo = lo_plus_hi.wrapping_sub((hi as u128) << 96);
+                // As 2^{96} = -1 mod P, we simply need to reduce lo - hi.
+                // As N <= 2^31, lo < 2^127 and hi < 2^63 < P. Hence the equation below will not over or underflow.
+                let sum = unsafe { lo.unchecked_add(P.unchecked_sub(hi) as u128) };
+                reduce128(sum)
+            }
+        }
+    }
+
+    #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
-        // SAFETY: repr(transparent) ensures transmutation safety.
-        unsafe { transmute(vec![0u64; len]) }
+        // SAFETY:
+        // Due to `#[repr(transparent)]`, Goldilocks and u64 have the same size, alignment
+        // and memory layout making `flatten_to_base` safe. This this will create
+        // a vector Goldilocks elements with value set to 0.
+        unsafe { flatten_to_base(vec![0u64; len]) }
     }
 }
 
@@ -199,6 +251,10 @@ impl PermutationMonomial<7> for Goldilocks {
     fn injective_exp_root_n(&self) -> Self {
         exp_10540996611094048183(*self)
     }
+}
+
+impl RawDataSerializable for Goldilocks {
+    impl_raw_serializable_primefield64!();
 }
 
 impl Field for Goldilocks {
@@ -382,7 +438,7 @@ impl QuotientMap<i64> for Goldilocks {
 
 impl PrimeField for Goldilocks {
     fn as_canonical_biguint(&self) -> BigUint {
-        <Self as PrimeField64>::as_canonical_u64(self).into()
+        self.as_canonical_u64().into()
     }
 }
 
@@ -593,6 +649,7 @@ unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use p3_field::extension::BinomialExtensionField;
     use p3_field_testing::{
         test_field, test_field_dft, test_prime_field, test_prime_field_64, test_two_adic_field,
     };
@@ -600,6 +657,7 @@ mod tests {
     use super::*;
 
     type F = Goldilocks;
+    type EF = BinomialExtensionField<F, 5>;
 
     #[test]
     fn test_goldilocks() {
@@ -665,14 +723,20 @@ mod tests {
         &super::multiplicative_group_prime_factorization()
     );
     test_prime_field!(crate::Goldilocks);
-    test_prime_field_64!(crate::Goldilocks);
+    test_prime_field_64!(crate::Goldilocks, &super::ZEROS, &super::ONES);
     test_two_adic_field!(crate::Goldilocks);
 
-    test_field_dft!(radix2dit, crate::Goldilocks, p3_dft::Radix2Dit<_>);
-    test_field_dft!(bowers, crate::Goldilocks, p3_dft::Radix2Bowers);
+    test_field_dft!(
+        radix2dit,
+        crate::Goldilocks,
+        super::EF,
+        p3_dft::Radix2Dit<_>
+    );
+    test_field_dft!(bowers, crate::Goldilocks, super::EF, p3_dft::Radix2Bowers);
     test_field_dft!(
         parallel,
         crate::Goldilocks,
+        super::EF,
         p3_dft::Radix2DitParallel<crate::Goldilocks>
     );
 }

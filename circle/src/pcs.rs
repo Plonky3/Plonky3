@@ -1,4 +1,3 @@
-use alloc::borrow::Cow;
 use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -6,12 +5,12 @@ use core::marker::PhantomData;
 
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace};
+use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs, OpenedValues, Pcs, PolynomialSpace};
 use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, Field};
 use p3_fri::FriConfig;
 use p3_fri::verifier::FriError;
-use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixCow};
 use p3_matrix::row_index_mapped::RowIndexMappedView;
 use p3_matrix::{Dimensions, Matrix};
 use p3_maybe_rayon::prelude::*;
@@ -43,13 +42,6 @@ impl<Val: Field, InputMmcs, FriMmcs> CirclePcs<Val, InputMmcs, FriMmcs> {
             _phantom: PhantomData,
         }
     }
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(bound = "")]
-pub struct BatchOpening<Val: Field, InputMmcs: Mmcs<Val>> {
-    pub(crate) opened_values: Vec<Vec<Val>>,
-    pub(crate) opening_proof: <InputMmcs as Mmcs<Val>>::Proof,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -106,9 +98,10 @@ where
     type Domain = CircleDomain<Val>;
     type Commitment = InputMmcs::Commitment;
     type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
-    type EvaluationsOnDomain<'a> = RowIndexMappedView<CfftPerm, DenseMatrix<Val, Cow<'a, [Val]>>>;
+    type EvaluationsOnDomain<'a> = RowIndexMappedView<CfftPerm, RowMajorMatrixCow<'a, Val>>;
     type Proof = CirclePcsProof<Val, Challenge, InputMmcs, FriMmcs, Challenger::Witness>;
     type Error = FriError<FriMmcs::Error, InputError<InputMmcs::Error, FriMmcs::Error>>;
+    const ZK: bool = false;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         CircleDomain::standard(log2_strict_usize(degree))
@@ -116,7 +109,7 @@ where
 
     fn commit(
         &self,
-        evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
         let ldes = evaluations
             .into_iter()
@@ -315,11 +308,7 @@ where
                 .map(|(data, _)| {
                     let log_max_batch_height = log2_strict_usize(self.mmcs.get_max_height(data));
                     let reduced_index = index >> (log_max_height - log_max_batch_height);
-                    let (opened_values, opening_proof) = self.mmcs.open_batch(reduced_index, data);
-                    BatchOpening {
-                        opened_values,
-                        opening_proof,
-                    }
+                    self.mmcs.open_batch(reduced_index, data)
                 })
                 .collect();
 
@@ -328,7 +317,8 @@ where
             let (first_layer_values, first_layer_proof) = self
                 .fri_config
                 .mmcs
-                .open_batch(index >> 1, &first_layer_data);
+                .open_batch(index >> 1, &first_layer_data)
+                .unpack();
             let first_layer_siblings = izip!(&first_layer_values, &log_heights)
                 .map(|(v, log_height)| {
                     let reduced_index = index >> (log_max_height - log_height);
@@ -438,13 +428,7 @@ where
                     };
 
                     self.mmcs
-                        .verify_batch(
-                            batch_commit,
-                            dims,
-                            idx,
-                            &batch_opening.opened_values,
-                            &batch_opening.opening_proof,
-                        )
+                        .verify_batch(batch_commit, dims, idx, batch_opening.into())
                         .map_err(InputError::InputMmcsError)?;
 
                     for (ps_at_x, (mat_domain, mat_points_and_values)) in zip_eq(
@@ -531,8 +515,7 @@ where
                         &proof.first_layer_commitment,
                         &fl_dims,
                         index >> 1,
-                        &fl_leaves,
-                        first_layer_proof,
+                        BatchOpeningRef::new(&fl_leaves, first_layer_proof),
                     )
                     .map_err(InputError::FirstLayerMmcsError)?;
 
@@ -551,9 +534,9 @@ mod tests {
     use p3_keccak::Keccak256Hash;
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_mersenne_31::Mersenne31;
-    use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher32};
+    use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
+    use rand::rngs::SmallRng;
     use rand::{Rng, SeedableRng};
-    use rand_chacha::ChaCha8Rng;
 
     use super::*;
 
@@ -561,13 +544,13 @@ mod tests {
     fn circle_pcs() {
         // Very simple pcs test. More rigorous tests in p3_fri/tests/pcs.
 
-        let mut rng = ChaCha8Rng::from_seed([0; 32]);
+        let mut rng = SmallRng::seed_from_u64(0);
 
         type Val = Mersenne31;
         type Challenge = BinomialExtensionField<Mersenne31, 3>;
 
         type ByteHash = Keccak256Hash;
-        type FieldHash = SerializingHasher32<ByteHash>;
+        type FieldHash = SerializingHasher<ByteHash>;
         let byte_hash = ByteHash {};
         let field_hash = FieldHash::new(byte_hash);
 
@@ -601,7 +584,7 @@ mod tests {
         let evals = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
 
         let (comm, data) =
-            <Pcs as p3_commit::Pcs<Challenge, Challenger>>::commit(&pcs, vec![(d, evals)]);
+            <Pcs as p3_commit::Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]);
 
         let zeta: Challenge = rng.random();
 

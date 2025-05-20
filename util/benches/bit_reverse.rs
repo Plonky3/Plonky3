@@ -1,4 +1,6 @@
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use core::hint::black_box;
+
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_util::{reverse_bits, reverse_slice_index_bits};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};

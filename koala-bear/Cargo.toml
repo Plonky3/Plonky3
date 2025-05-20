@@ -21,10 +21,13 @@ p3-field-testing.workspace = true
 p3-util.workspace = true
 rand.workspace = true
 criterion.workspace = true
-rand_chacha.workspace = true
 serde_json.workspace = true
 rand_xoshiro.workspace = true
 
 [[bench]]
 name = "bench_field"
+harness = false
+
+[[bench]]
+name = "extension"
 harness = false

@@ -243,4 +243,184 @@ mod tests {
         let witness = duplex_challenger.grind(too_many_bits);
         assert!(duplex_challenger.check_witness(too_many_bits, witness));
     }
+
+    #[test]
+    fn test_observe_single_value() {
+        let mut chal = DuplexChallenger::<G, TestPermutation, WIDTH, RATE>::new(TestPermutation {});
+        chal.observe(G::from_u8(42));
+        assert_eq!(chal.input_buffer, vec![G::from_u8(42)]);
+        assert!(chal.output_buffer.is_empty());
+    }
+
+    #[test]
+    fn test_observe_array_of_values() {
+        let mut chal = DuplexChallenger::<G, TestPermutation, WIDTH, RATE>::new(TestPermutation {});
+        chal.observe([G::from_u8(1), G::from_u8(2), G::from_u8(3)]);
+        assert_eq!(
+            chal.input_buffer,
+            vec![G::from_u8(1), G::from_u8(2), G::from_u8(3)]
+        );
+        assert!(chal.output_buffer.is_empty());
+    }
+
+    #[test]
+    fn test_observe_hash_array() {
+        let mut chal = DuplexChallenger::<G, TestPermutation, WIDTH, RATE>::new(TestPermutation {});
+        let hash = Hash::<G, G, 4>::from([G::from_u8(10); 4]);
+        chal.observe(hash);
+        assert_eq!(chal.input_buffer, vec![G::from_u8(10); 4]);
+    }
+
+    #[test]
+    fn test_observe_nested_vecs() {
+        let mut chal = DuplexChallenger::<G, TestPermutation, WIDTH, RATE>::new(TestPermutation {});
+        chal.observe(vec![
+            vec![G::from_u8(1), G::from_u8(2)],
+            vec![G::from_u8(3)],
+        ]);
+        assert_eq!(
+            chal.input_buffer,
+            vec![G::from_u8(1), G::from_u8(2), G::from_u8(3)]
+        );
+    }
+
+    #[test]
+    fn test_sample_triggers_duplex() {
+        let mut chal = DuplexChallenger::<G, TestPermutation, WIDTH, RATE>::new(TestPermutation {});
+        chal.observe(G::from_u8(5));
+        assert!(chal.output_buffer.is_empty());
+        let _sample: G = chal.sample();
+        assert!(!chal.output_buffer.is_empty());
+    }
+
+    #[test]
+    fn test_sample_multiple_extension_field() {
+        use p3_field::extension::BinomialExtensionField;
+        type EF = BinomialExtensionField<G, 2>;
+        let mut chal = DuplexChallenger::<G, TestPermutation, WIDTH, RATE>::new(TestPermutation {});
+
+        chal.observe(G::from_u8(1));
+        chal.observe(G::from_u8(2));
+        let _: EF = chal.sample();
+        let _: EF = chal.sample();
+    }
+
+    #[test]
+    fn test_sample_bits_within_bounds() {
+        let mut chal = DuplexChallenger::<G, TestPermutation, WIDTH, RATE>::new(TestPermutation {});
+        for i in 0..RATE {
+            chal.observe(G::from_u8(i as u8));
+        }
+
+        // With RATE=16 and input = 0..15, the reversed sponge_state will be 15..0
+        // The first RATE elements of that, i.e. output_buffer, are 15..0
+        // sample_bits(3) will sample the last of those: G::from_u8(0)
+
+        let bits = 3;
+        let value = chal.sample_bits(bits);
+        let expected = G::ZERO.as_canonical_u64() as usize & ((1 << bits) - 1);
+        assert_eq!(value, expected);
+    }
+
+    #[test]
+    fn test_sample_bits_trigger_duplex_when_empty() {
+        let mut chal = DuplexChallenger::<G, TestPermutation, WIDTH, RATE>::new(TestPermutation {});
+        // Force empty buffers
+        assert_eq!(chal.input_buffer.len(), 0);
+        assert_eq!(chal.output_buffer.len(), 0);
+
+        // sampling bits should not panic, should return 0
+        let bits = 2;
+        let sample = chal.sample_bits(bits);
+        let expected = G::ZERO.as_canonical_u64() as usize & ((1 << bits) - 1);
+        assert_eq!(sample, expected);
+    }
+
+    #[test]
+    fn test_output_buffer_pops_correctly() {
+        let mut chal = DuplexChallenger::<G, TestPermutation, WIDTH, RATE>::new(TestPermutation {});
+
+        // Observe RATE elements, causing a duplexing
+        for i in 0..RATE {
+            chal.observe(G::from_u8(i as u8));
+        }
+
+        // we expect the output buffer to be reversed
+        let expected = [
+            G::from_u8(0),
+            G::from_u8(0),
+            G::from_u8(0),
+            G::from_u8(0),
+            G::from_u8(0),
+            G::from_u8(0),
+            G::from_u8(0),
+            G::from_u8(0),
+            G::from_u8(15),
+            G::from_u8(14),
+            G::from_u8(13),
+            G::from_u8(12),
+            G::from_u8(11),
+            G::from_u8(10),
+            G::from_u8(9),
+            G::from_u8(8),
+        ]
+        .to_vec();
+
+        assert_eq!(chal.output_buffer, expected);
+
+        let first: G = chal.sample();
+        let second: G = chal.sample();
+
+        // sampling pops from end of output buffer
+        assert_eq!(first, G::from_u8(8));
+        assert_eq!(second, G::from_u8(9));
+    }
+
+    #[test]
+    fn test_duplexing_only_when_needed() {
+        let mut chal = DuplexChallenger::<G, TestPermutation, WIDTH, RATE>::new(TestPermutation {});
+        chal.output_buffer = vec![G::from_u8(10), G::from_u8(20)];
+
+        // Sample should not call duplexing; just pop from the buffer
+        let sample: G = chal.sample();
+        assert_eq!(sample, G::from_u8(20));
+        assert_eq!(chal.output_buffer, vec![G::from_u8(10)]);
+    }
+
+    #[test]
+    fn test_flush_when_input_full() {
+        let mut chal = DuplexChallenger::<G, TestPermutation, WIDTH, RATE>::new(TestPermutation {});
+
+        // Observe RATE elements, causing a duplexing
+        for i in 0..RATE {
+            chal.observe(G::from_u8(i as u8));
+        }
+
+        // We expect the output buffer to be reversed
+        let expected_output = [
+            G::from_u8(0),
+            G::from_u8(0),
+            G::from_u8(0),
+            G::from_u8(0),
+            G::from_u8(0),
+            G::from_u8(0),
+            G::from_u8(0),
+            G::from_u8(0),
+            G::from_u8(15),
+            G::from_u8(14),
+            G::from_u8(13),
+            G::from_u8(12),
+            G::from_u8(11),
+            G::from_u8(10),
+            G::from_u8(9),
+            G::from_u8(8),
+        ]
+        .to_vec();
+
+        // Input buffer should be drained after duplexing
+        assert!(chal.input_buffer.is_empty());
+
+        // Output buffer should match expected state from duplexing
+        assert_eq!(chal.output_buffer, expected_output);
+    }
 }

@@ -1,12 +1,27 @@
 use alloc::format;
 use alloc::vec::Vec;
+use core::hint::black_box;
 
-use criterion::{BatchSize, Criterion, black_box};
+use criterion::{BatchSize, Criterion};
 use p3_field::{Field, PrimeCharacteristicRing};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
+
+/// Not useful for benchmarking prime fields as multiplication is too fast but
+/// handy for extension fields.
+pub fn benchmark_mul<F: Field>(c: &mut Criterion, name: &str)
+where
+    StandardUniform: Distribution<F>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    let x = rng.random::<F>();
+    let y = rng.random::<F>();
+    c.bench_function(&format!("{} mul", name), |b| {
+        b.iter(|| black_box(black_box(x) * black_box(y)))
+    });
+}
 
 pub fn benchmark_square<F: Field>(c: &mut Criterion, name: &str)
 where
@@ -112,6 +127,25 @@ pub fn benchmark_sum_array<R: PrimeCharacteristicRing + Copy, const N: usize, co
             }
             acc
         })
+    });
+}
+
+/// Benchmark the time taken to do dot products on a pair of `[R; N]` arrays.
+///
+/// These numbers get more trustworthy as N increases. Small N leads to the
+/// computation being too fast to be measured accurately.
+pub fn benchmark_dot_array<R: PrimeCharacteristicRing + Copy, const N: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
+    StandardUniform: Distribution<R>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    let lhs = rng.random::<[R; N]>();
+    let rhs = rng.random::<[R; N]>();
+
+    c.bench_function(&format!("{} dot product/{}", name, N), |b| {
+        b.iter(|| black_box(R::dot_product(black_box(&lhs), black_box(&rhs))))
     });
 }
 
@@ -265,7 +299,7 @@ pub fn benchmark_mul_latency<R: PrimeCharacteristicRing + Copy, const N: usize>(
                 }
                 vec
             },
-            |x| x.iter().fold(R::ZERO, |x, y| x * *y),
+            |x| x.iter().fold(R::ONE, |x, y| x * *y),
             BatchSize::SmallInput,
         )
     });

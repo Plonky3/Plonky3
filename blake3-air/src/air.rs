@@ -234,7 +234,7 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
     #[inline]
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let local = main.row_slice(0);
+        let local = main.row_slice(0).expect("The matrix is empty?");
         let local: &Blake3Cols<AB::Var> = (*local).borrow();
 
         let initial_row_3 = [

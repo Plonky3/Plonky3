@@ -39,7 +39,7 @@ mod coset {
     #[test]
     // Checks that shrinking by a factor of 2^0 = 1 does nothing
     fn test_shrink_nothing() {
-        let coset = TwoAdicMultiplicativeCoset::<BB>::new(BB::ZERO, 7).unwrap();
+        let coset = TwoAdicMultiplicativeCoset::<BB>::new(BB::ONE, 7).unwrap();
 
         let shrunk = coset.shrink_coset(0).unwrap();
 

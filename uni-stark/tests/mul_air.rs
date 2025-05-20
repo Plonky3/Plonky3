@@ -11,14 +11,14 @@ use p3_commit::testing::TrivialPcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_fri::{FriConfig, TwoAdicFriPcs};
+use p3_fri::{FriConfig, HidingFriPcs, TwoAdicFriPcs, create_test_fri_config_zk};
 use p3_keccak::Keccak256Hash;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_merkle_tree::MerkleTreeMmcs;
+use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{
-    CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher32, TruncatedPermutation,
+    CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
 };
 use p3_uni_stark::{StarkConfig, StarkGenericConfig, Val, prove, verify};
 use rand::distr::{Distribution, StandardUniform};
@@ -91,8 +91,8 @@ impl<F> BaseAir<F> for MulAir {
 impl<AB: AirBuilder> Air<AB> for MulAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let main_local = main.row_slice(0);
-        let main_next = main.row_slice(1);
+        let main_local = main.row_slice(0).expect("Matrix is empty?");
+        let main_next = main.row_slice(1).expect("Matrix only has 1 row?");
 
         for i in 0..REPETITIONS {
             let start = i * 3;
@@ -117,7 +117,6 @@ fn do_test<SC: StarkGenericConfig>(
     config: SC,
     air: MulAir,
     log_height: usize,
-    challenger: SC::Challenger,
 ) -> Result<(), impl Debug>
 where
     SC::Challenger: Clone,
@@ -125,8 +124,7 @@ where
 {
     let trace = air.random_valid_trace(log_height, true);
 
-    let mut p_challenger = challenger.clone();
-    let proof = prove(&config, &air, &mut p_challenger, trace, &vec![]);
+    let proof = prove(&config, &air, trace, &vec![]);
 
     let serialized_proof = postcard::to_allocvec(&proof).expect("unable to serialize proof");
     tracing::debug!("serialized_proof len: {} bytes", serialized_proof.len());
@@ -134,14 +132,7 @@ where
     let deserialized_proof =
         postcard::from_bytes(&serialized_proof).expect("unable to deserialize proof");
 
-    let mut v_challenger = challenger;
-    verify(
-        &config,
-        &air,
-        &mut v_challenger,
-        &deserialized_proof,
-        &vec![],
-    )
+    verify(&config, &air, &deserialized_proof, &vec![])
 }
 
 fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), impl Debug> {
@@ -163,16 +154,17 @@ fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), impl Debug> {
         log_n,
         _phantom: PhantomData,
     };
+    let challenger = Challenger::new(perm);
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
-    let config = MyConfig::new(pcs);
+    let config = MyConfig::new(pcs, challenger);
 
     let air = MulAir {
         degree,
         ..Default::default()
     };
 
-    do_test(config, air, 1 << log_n, Challenger::new(perm))
+    do_test(config, air, 1 << log_n)
 }
 
 #[test]
@@ -225,21 +217,71 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     };
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
+    let challenger = Challenger::new(perm);
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
-    let config = MyConfig::new(pcs);
+    let config = MyConfig::new(pcs, challenger);
 
     let air = MulAir {
         degree,
         ..Default::default()
     };
 
-    do_test(config, air, 1 << log_n, Challenger::new(perm))
+    do_test(config, air, 1 << log_n)
 }
 
 #[test]
 fn prove_bb_twoadic_deg2() -> Result<(), impl Debug> {
     do_test_bb_twoadic(1, 2, 7)
+}
+
+#[test]
+fn prove_bb_twoadic_deg2_zk() -> Result<(), impl Debug> {
+    type Val = BabyBear;
+    type Challenge = BinomialExtensionField<Val, 4>;
+
+    type Perm = Poseidon2BabyBear<16>;
+    let mut rng = SmallRng::seed_from_u64(1);
+    let perm = Perm::new_from_rng_128(&mut rng);
+
+    type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    let hash = MyHash::new(perm.clone());
+
+    type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+    let compress = MyCompress::new(perm.clone());
+
+    type ValMmcs = MerkleTreeHidingMmcs<
+        <Val as Field>::Packing,
+        <Val as Field>::Packing,
+        MyHash,
+        MyCompress,
+        SmallRng,
+        8,
+        4,
+    >;
+
+    let val_mmcs = ValMmcs::new(hash, compress, rng);
+
+    type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+
+    type Dft = Radix2DitParallel<Val>;
+    let dft = Dft::default();
+
+    type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
+
+    let fri_config = create_test_fri_config_zk(challenge_mmcs);
+    type HidingPcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, SmallRng>;
+    let pcs = HidingPcs::new(dft, val_mmcs, fri_config, 4, SmallRng::seed_from_u64(1));
+    type MyConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
+    let challenger = Challenger::new(perm);
+    let config = MyConfig::new(pcs, challenger);
+
+    let air = MulAir {
+        degree: 3,
+        ..Default::default()
+    };
+    do_test(config, air, 1 << 8)
 }
 
 #[test]
@@ -262,7 +304,7 @@ fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     type Challenge = BinomialExtensionField<Val, 3>;
 
     type ByteHash = Keccak256Hash;
-    type FieldHash = SerializingHasher32<ByteHash>;
+    type FieldHash = SerializingHasher<ByteHash>;
     let byte_hash = ByteHash {};
     let field_hash = FieldHash::new(byte_hash);
 
@@ -291,9 +333,10 @@ fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
         fri_config,
         _phantom: PhantomData,
     };
+    let challenger = Challenger::from_hasher(vec![], byte_hash);
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
-    let config = MyConfig::new(pcs);
+    let config = MyConfig::new(pcs, challenger);
 
     let air = MulAir {
         degree,
@@ -301,12 +344,7 @@ fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
         uses_transition_constraints: true,
     };
 
-    do_test(
-        config,
-        air,
-        1 << log_n,
-        Challenger::from_hasher(vec![], byte_hash),
-    )
+    do_test(config, air, 1 << log_n)
 }
 
 #[test]

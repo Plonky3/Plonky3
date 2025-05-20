@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::cell::RefCell;
 
 use itertools::Itertools;
-use p3_commit::Mmcs;
+use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs};
 use p3_field::PackedValue;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::stack::HorizontalPair;
@@ -45,11 +45,11 @@ pub struct MerkleTreeHidingMmcs<P, PW, H, C, R, const DIGEST_ELEMS: usize, const
 impl<P, PW, H, C, R, const DIGEST_ELEMS: usize, const SALT_ELEMS: usize>
     MerkleTreeHidingMmcs<P, PW, H, C, R, DIGEST_ELEMS, SALT_ELEMS>
 {
-    pub fn new(hash: H, compress: C, rng: R) -> Self {
+    pub const fn new(hash: H, compress: C, rng: R) -> Self {
         let inner = MerkleTreeMmcs::new(hash, compress);
         Self {
             inner,
-            rng: rng.into(),
+            rng: RefCell::new(rng),
         }
     }
 }
@@ -97,8 +97,8 @@ where
         &self,
         index: usize,
         prover_data: &Self::ProverData<M>,
-    ) -> (Vec<Vec<P::Value>>, Self::Proof) {
-        let (salted_openings, siblings) = self.inner.open_batch(index, prover_data);
+    ) -> BatchOpening<P::Value, Self> {
+        let (salted_openings, siblings) = self.inner.open_batch(index, prover_data).unpack();
         let (openings, salts): (Vec<_>, Vec<_>) = salted_openings
             .into_iter()
             .map(|row| {
@@ -106,14 +106,14 @@ where
                 (a.to_vec(), b.to_vec())
             })
             .unzip();
-        (openings, (salts, siblings))
+        BatchOpening::new(openings, (salts, siblings))
     }
 
     fn get_matrices<'a, M: Matrix<P::Value>>(
         &self,
         prover_data: &'a Self::ProverData<M>,
     ) -> Vec<&'a M> {
-        prover_data.leaves.iter().map(|mat| &mat.first).collect()
+        prover_data.leaves.iter().map(|mat| &mat.left).collect()
     }
 
     fn verify_batch(
@@ -121,17 +121,20 @@ where
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         index: usize,
-        opened_values: &[Vec<P::Value>],
-        proof: &Self::Proof,
+        batch_opening: BatchOpeningRef<P::Value, Self>,
     ) -> Result<(), Self::Error> {
-        let (salts, siblings) = proof;
+        let (opened_values, (salts, siblings)) = batch_opening.unpack();
 
         let opened_salted_values = zip_eq(opened_values, salts, MerkleTreeError::WrongBatchSize)?
             .map(|(opened, salt)| opened.iter().chain(salt.iter()).copied().collect_vec())
             .collect_vec();
 
-        self.inner
-            .verify_batch(commit, dimensions, index, &opened_salted_values, siblings)
+        self.inner.verify_batch(
+            commit,
+            dimensions,
+            index,
+            BatchOpeningRef::new(&opened_salted_values, siblings),
+        )
     }
 }
 
@@ -198,7 +201,7 @@ mod tests {
         let dims = mats.iter().map(|m| m.dimensions()).collect_vec();
 
         let (commit, prover_data) = mmcs.commit(mats);
-        let (opened_values, proof) = mmcs.open_batch(17, &prover_data);
-        mmcs.verify_batch(&commit, &dims, 17, &opened_values, &proof)
+        let batch_proof = mmcs.open_batch(17, &prover_data);
+        mmcs.verify_batch(&commit, &dims, 17, (&batch_proof).into())
     }
 }

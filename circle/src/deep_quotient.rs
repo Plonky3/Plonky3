@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use itertools::{Itertools, izip};
 use p3_field::extension::ComplexExtendable;
-use p3_field::{ExtensionField, batch_multiplicative_inverse, dot_product};
+use p3_field::{ExtensionField, PackedFieldExtension, batch_multiplicative_inverse, dot_product};
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
@@ -61,10 +61,18 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
             .unzip();
         let vp_denom_invs = batch_multiplicative_inverse(&vp_denoms);
 
-        let alpha_reduced_ps_at_zeta: EF = dot_product(alpha.powers(), ps_at_zeta.iter().copied());
+        // TODO: packed_alpha_powers and alpha_powers should be passed into deep_quotient_reduce instead of being recomputed every time.
+        let packed_alpha_powers =
+            EF::ExtensionPacking::packed_ext_powers_capped(alpha, self.values.width())
+                .collect_vec();
+        let alpha_powers =
+            EF::ExtensionPacking::to_ext_iter(packed_alpha_powers.iter().copied()).collect_vec();
+
+        let alpha_reduced_ps_at_zeta: EF =
+            dot_product(alpha_powers.iter().copied(), ps_at_zeta.iter().copied());
 
         self.values
-            .dot_ext_powers(alpha)
+            .rowwise_packed_dot_product::<EF>(&packed_alpha_powers)
             .zip(vp_nums.into_par_iter())
             .zip(vp_denom_invs.into_par_iter())
             .map(|((reduced_ps_at_x, vp_num), vp_denom_inv)| {
@@ -240,7 +248,7 @@ mod tests {
             let mut lde = CircleEvaluations::evaluate(domain, coeffs.clone()).values;
 
             let lambda = extract_lambda(&mut lde.values, log_blowup);
-            assert_eq!(lambda, coeffs.get(1 << log_n, 0));
+            assert_eq!(lambda, coeffs.get(1 << log_n, 0).unwrap());
 
             let coeffs2 =
                 CircleEvaluations::from_cfft_order(domain, RowMajorMatrix::new_col(lde.values))

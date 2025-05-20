@@ -24,7 +24,7 @@ use core::cmp::Reverse;
 use core::marker::PhantomData;
 
 use itertools::Itertools;
-use p3_commit::Mmcs;
+use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs};
 use p3_field::PackedValue;
 use p3_matrix::{Dimensions, Matrix};
 use p3_symmetric::{CryptographicHasher, Hash, PseudoCompressionFunction};
@@ -112,7 +112,7 @@ where
         &self,
         index: usize,
         prover_data: &MerkleTree<P::Value, PW::Value, M, DIGEST_ELEMS>,
-    ) -> (Vec<Vec<P::Value>>, Self::Proof) {
+    ) -> BatchOpening<P::Value, Self> {
         let max_height = self.get_max_height(prover_data);
         let log_max_height = log2_ceil_usize(max_height);
 
@@ -124,7 +124,7 @@ where
                 let log2_height = log2_ceil_usize(matrix.height());
                 let bits_reduced = log_max_height - log2_height;
                 let reduced_index = index >> bits_reduced;
-                matrix.row(reduced_index).collect()
+                matrix.row(reduced_index).unwrap().into_iter().collect()
             })
             .collect_vec();
 
@@ -133,7 +133,7 @@ where
             .map(|i| prover_data.digest_layers[i][(index >> i) ^ 1])
             .collect();
 
-        (openings, proof)
+        BatchOpening::new(openings, proof)
     }
 
     fn get_matrices<'a, M: Matrix<P::Value>>(
@@ -149,10 +149,10 @@ where
     /// - `dimensions`: A vector of the dimensions of the matrices committed to.
     /// - `index`: The index of a leaf in the tree.
     /// - `opened_values`: A vector of matrix rows. Assume that the tallest matrix committed
-    ///     to has height `2^n >= M_tall.height() > 2^{n - 1}` and the `j`th matrix has height
-    ///     `2^m >= Mj.height() > 2^{m - 1}`. Then `j`'th value of opened values must be the row `Mj[index >> (m - n)]`.
+    ///   to has height `2^n >= M_tall.height() > 2^{n - 1}` and the `j`th matrix has height
+    ///   `2^m >= Mj.height() > 2^{m - 1}`. Then `j`'th value of opened values must be the row `Mj[index >> (m - n)]`.
     /// - `proof`: A vector of sibling nodes. The `i`th element should be the node at level `i`
-    ///     with index `(index << i) ^ 1`.
+    ///   with index `(index << i) ^ 1`.
     ///
     /// Returns nothing if the verification is successful, otherwise returns an error.
     fn verify_batch(
@@ -160,9 +160,9 @@ where
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         mut index: usize,
-        opened_values: &[Vec<P::Value>],
-        proof: &Self::Proof,
+        batch_proof: BatchOpeningRef<P::Value, Self>,
     ) -> Result<(), Self::Error> {
+        let (opened_values, opening_proof) = batch_proof.unpack();
         // Check that the openings have the correct shape.
         if dimensions.len() != opened_values.len() {
             return Err(WrongBatchSize);
@@ -202,10 +202,10 @@ where
             Some((_, dims)) => {
                 let max_height = dims.height.next_power_of_two();
                 let log_max_height = log2_strict_usize(max_height);
-                if proof.len() != log_max_height {
+                if opening_proof.len() != log_max_height {
                     return Err(WrongHeight {
                         log_max_height,
-                        num_siblings: proof.len(),
+                        num_siblings: opening_proof.len(),
                     });
                 }
                 max_height
@@ -222,7 +222,7 @@ where
                 .map(|(i, _)| opened_values[i].as_slice()),
         );
 
-        for &sibling in proof {
+        for &sibling in opening_proof {
             // The last bit of index informs us whether the current node is on the left or right.
             let (left, right) = if index & 1 == 0 {
                 (root, sibling)
@@ -475,7 +475,7 @@ mod tests {
 
         assert_eq!(commit, expected_result);
 
-        let (opened_values, _proof) = mmcs.open_batch(2, &prover_data);
+        let (opened_values, _) = mmcs.open_batch(2, &prover_data).unpack();
         assert_eq!(
             opened_values,
             vec![vec![F::TWO, F::TWO], vec![F::ZERO, F::TWO, F::TWO]]
@@ -538,14 +538,13 @@ mod tests {
         let (commit, prover_data) = mmcs.commit(mats);
 
         // open the 3rd row of each matrix, mess with proof, and verify
-        let (opened_values, mut proof) = mmcs.open_batch(3, &prover_data);
-        proof[0][0] += F::ONE;
+        let mut batch_opening = mmcs.open_batch(3, &prover_data);
+        batch_opening.opening_proof[0][0] += F::ONE;
         mmcs.verify_batch(
             &commit,
             &large_mat_dims.chain(small_mat_dims).collect_vec(),
             3,
-            &opened_values,
-            &proof,
+            (&batch_opening).into(),
         )
         .expect_err("expected verification to fail");
     }
@@ -591,7 +590,7 @@ mod tests {
         let (commit, prover_data) = mmcs.commit(mats);
 
         // open the 6th row of each matrix and verify
-        let (opened_values, proof) = mmcs.open_batch(6, &prover_data);
+        let batch_opening = mmcs.open_batch(6, &prover_data);
         mmcs.verify_batch(
             &commit,
             &large_mat_dims
@@ -600,8 +599,7 @@ mod tests {
                 .chain(tiny_mat_dims)
                 .collect_vec(),
             6,
-            &opened_values,
-            &proof,
+            (&batch_opening).into(),
         )
         .expect("expected verification to succeed");
     }
@@ -621,8 +619,8 @@ mod tests {
         let dims = mats.iter().map(|m| m.dimensions()).collect_vec();
 
         let (commit, prover_data) = mmcs.commit(mats);
-        let (opened_values, proof) = mmcs.open_batch(17, &prover_data);
-        mmcs.verify_batch(&commit, &dims, 17, &opened_values, &proof)
+        let batch_opening = mmcs.open_batch(17, &prover_data);
+        mmcs.verify_batch(&commit, &dims, 17, (&batch_opening).into())
             .expect("expected verification to succeed");
     }
 }

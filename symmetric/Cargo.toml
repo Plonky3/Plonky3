@@ -8,3 +8,6 @@ license = "MIT OR Apache-2.0"
 p3-field.workspace = true
 itertools.workspace = true
 serde = { workspace = true, features = ["alloc"] }
+
+[dev-dependencies]
+p3-koala-bear.workspace = true

@@ -118,3 +118,72 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    use super::*;
+
+    /// Helper to create a square matrix of size `2^log_size` with elements `0..n^2`
+    fn generate_matrix(log_size: usize) -> Vec<u32> {
+        let size = 1 << log_size;
+        (0..size * size).collect()
+    }
+
+    /// Reference transpose that returns a new vector (row-major layout)
+    fn transpose_reference(input: &[u32], log_size: usize) -> Vec<u32> {
+        let size = 1 << log_size;
+        let mut transposed = vec![0; size * size];
+        for i in 0..size {
+            for j in 0..size {
+                transposed[j * size + i] = input[i * size + j];
+            }
+        }
+        transposed
+    }
+
+    /// Helper to test the full transpose and assert equality with reference
+    fn test_transpose(log_size: usize) {
+        let size = 1 << log_size;
+        let mut mat = generate_matrix(log_size);
+
+        let expected = transpose_reference(&mat, log_size);
+
+        unsafe {
+            transpose_in_place_square(&mut mat, log_size, log_size, 0);
+        }
+
+        assert_eq!(
+            mat, expected,
+            "Transpose failed for {}x{} matrix",
+            size, size
+        );
+    }
+
+    #[test]
+    fn test_transpose_2x2() {
+        test_transpose(1);
+    }
+
+    #[test]
+    fn test_transpose_4x4() {
+        test_transpose(2);
+    }
+
+    #[test]
+    fn test_transpose_8x8() {
+        test_transpose(3);
+    }
+
+    #[test]
+    fn test_transpose_16x16() {
+        test_transpose(4);
+    }
+
+    #[test]
+    fn test_transpose_32x32() {
+        test_transpose(5);
+    }
+}

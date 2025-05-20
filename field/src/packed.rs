@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::mem::MaybeUninit;
 use core::ops::Div;
 use core::{array, slice};
@@ -10,25 +11,47 @@ use crate::{Algebra, BasedVectorSpace, ExtensionField, Powers, PrimeCharacterist
 /// The `Packable` trait allows us to specify implementations for potentially conflicting types.
 pub trait Packable: 'static + Default + Copy + Send + Sync + PartialEq + Eq {}
 
+/// A trait for array-like structs made up of multiple scalar elements.
+///
 /// # Safety
 /// - If `P` implements `PackedField` then `P` must be castable to/from `[P::Value; P::WIDTH]`
 ///   without UB.
 pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
+    /// The scalar type that is packed into this value.
     type Value: Packable;
 
+    /// Number of scalar values packed together.
     const WIDTH: usize;
 
+    /// Interprets a slice of scalar values as a packed value reference.
+    ///
+    /// # Panics:
+    /// This function will panic if `slice.len() != Self::WIDTH`
     fn from_slice(slice: &[Self::Value]) -> &Self;
+
+    /// Interprets a mutable slice of scalar values as a mutable packed value.
+    ///
+    /// # Panics:
+    /// This function will panic if `slice.len() != Self::WIDTH`
     fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self;
 
+    /// Constructs a packed value using a function to generate each element.
+    ///
     /// Similar to `core:array::from_fn`.
     fn from_fn<F>(f: F) -> Self
     where
         F: FnMut(usize) -> Self::Value;
 
+    /// Returns the underlying scalar values as an immutable slice.
     fn as_slice(&self) -> &[Self::Value];
+
+    /// Returns the underlying scalar values as a mutable slice.
     fn as_slice_mut(&mut self) -> &mut [Self::Value];
 
+    /// Packs a slice of scalar values into a slice of packed values.
+    ///
+    /// # Panics
+    /// Panics if the slice length is not divisible by `WIDTH`.
     fn pack_slice(buf: &[Self::Value]) -> &[Self] {
         // Sources vary, but this should be true on all platforms we care about.
         // This should be a const assert, but trait methods can't access `Self` in a const context,
@@ -45,11 +68,16 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         unsafe { slice::from_raw_parts(buf_ptr, n) }
     }
 
+    /// Packs a slice into packed values and returns the packed portion and any remaining suffix.
     fn pack_slice_with_suffix(buf: &[Self::Value]) -> (&[Self], &[Self::Value]) {
         let (packed, suffix) = buf.split_at(buf.len() - buf.len() % Self::WIDTH);
         (Self::pack_slice(packed), suffix)
     }
 
+    /// Converts a mutable slice of scalar values into a mutable slice of packed values.
+    ///
+    /// # Panics
+    /// Panics if the slice length is not divisible by `WIDTH`.
     fn pack_slice_mut(buf: &mut [Self::Value]) -> &mut [Self] {
         assert!(align_of::<Self>() <= align_of::<Self::Value>());
         assert!(
@@ -63,6 +91,11 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         unsafe { slice::from_raw_parts_mut(buf_ptr, n) }
     }
 
+    /// Converts a mutable slice of possibly uninitialized scalar values into
+    /// a mutable slice of possibly uninitialized packed values.
+    ///
+    /// # Panics
+    /// Panics if the slice length is not divisible by `WIDTH`.
     fn pack_maybe_uninit_slice_mut(
         buf: &mut [MaybeUninit<Self::Value>],
     ) -> &mut [MaybeUninit<Self>] {
@@ -78,11 +111,17 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         unsafe { slice::from_raw_parts_mut(buf_ptr, n) }
     }
 
+    /// Converts a mutable slice of scalar values into a pair:
+    /// - a slice of packed values covering the largest aligned portion,
+    /// - and a remainder slice of scalar values that couldn't be packed.
     fn pack_slice_with_suffix_mut(buf: &mut [Self::Value]) -> (&mut [Self], &mut [Self::Value]) {
         let (packed, suffix) = buf.split_at_mut(buf.len() - buf.len() % Self::WIDTH);
         (Self::pack_slice_mut(packed), suffix)
     }
 
+    /// Converts a mutable slice of possibly uninitialized scalar values into a pair:
+    /// - a slice of possibly uninitialized packed values covering the largest aligned portion,
+    /// - and a remainder slice of possibly uninitialized scalar values that couldn't be packed.
     fn pack_maybe_uninit_slice_with_suffix_mut(
         buf: &mut [MaybeUninit<Self::Value>],
     ) -> (&mut [MaybeUninit<Self>], &mut [MaybeUninit<Self::Value>]) {
@@ -90,6 +129,10 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         (Self::pack_maybe_uninit_slice_mut(packed), suffix)
     }
 
+    /// Reinterprets a slice of packed values as a flat slice of scalar values.
+    ///
+    /// Each packed value contains `Self::WIDTH` scalar values, which are laid out
+    /// contiguously in memory. This function allows direct access to those scalars.
     fn unpack_slice(buf: &[Self]) -> &[Self::Value] {
         assert!(align_of::<Self>() >= align_of::<Self::Value>());
         let buf_ptr = buf.as_ptr().cast::<Self::Value>();
@@ -167,7 +210,7 @@ pub unsafe trait PackedField: Algebra<Self::Scalar>
     /// Compute a linear combination of a slice of base field elements and
     /// a slice of packed field elements. The slices must have equal length
     /// and it must be a compile time constant.
-    /// 
+    ///
     /// # Panics
     ///
     /// May panic if the length of either slice is not equal to `N`.
@@ -239,9 +282,32 @@ pub trait PackedFieldExtension<
     /// `[[F; W]; D]` and then pack to get `[PF; D]`.
     fn from_ext_slice(ext_slice: &[ExtField]) -> Self;
 
-    /// Similar to packed_powers, construct an iterator which returns
+    /// Given a iterator of packed extension field elements, convert to an iterator of
+    /// extension field elements.
+    ///
+    /// This performs the inverse transformation to `from_ext_slice`.
+    #[inline]
+    fn to_ext_iter(iter: impl IntoIterator<Item = Self>) -> impl Iterator<Item = ExtField> {
+        iter.into_iter().flat_map(|x| {
+            let packed_coeffs = x.as_basis_coefficients_slice();
+            (0..BaseField::Packing::WIDTH)
+                .map(|i| ExtField::from_basis_coefficients_fn(|j| packed_coeffs[j].as_slice()[i]))
+                .collect::<Vec<_>>() // PackedFieldExtension's should reimplement this to avoid this allocation.
+        })
+    }
+
+    /// Similar to `packed_powers`, construct an iterator which returns
     /// powers of `base` packed into `PackedFieldExtension` elements.
     fn packed_ext_powers(base: ExtField) -> Powers<Self>;
+
+    /// Similar to `packed_ext_powers` but only returns `unpacked_len` powers of `base`.
+    ///
+    /// Note that the length of the returned iterator will be `unpacked_len / WIDTH` and
+    /// not `len` as the iterator is over packed extension field elements. If `unpacked_len`
+    /// is not divisible by `WIDTH`, `unpacked_len` will be rounded up to the next multiple of `WIDTH`.
+    fn packed_ext_powers_capped(base: ExtField, unpacked_len: usize) -> impl Iterator<Item = Self> {
+        Self::packed_ext_powers(base).take(unpacked_len.div_ceil(BaseField::Packing::WIDTH))
+    }
 }
 
 unsafe impl<T: Packable> PackedValue for T {

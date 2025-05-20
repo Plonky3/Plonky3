@@ -26,7 +26,7 @@ where
     Challenge: ExtensionField<Val> + TwoAdicField,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
-    G: FriGenericConfig<Challenge>,
+    G: FriGenericConfig<Val, Challenge>,
 {
     assert!(!inputs.is_empty());
     assert!(
@@ -87,7 +87,7 @@ where
     Challenge: ExtensionField<Val> + TwoAdicField,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + CanObserve<M::Commitment>,
-    G: FriGenericConfig<Challenge>,
+    G: FriGenericConfig<Val, Challenge>,
 {
     let mut inputs_iter = inputs.into_iter().peekable();
     let mut folded = inputs_iter.next().unwrap();
@@ -163,9 +163,10 @@ where
             let index_i_sibling = index_i ^ 1;
             let index_pair = index_i >> 1;
 
-            let (mut opened_rows, opening_proof) = config.mmcs.open_batch(index_pair, commit);
+            let (mut opened_rows, opening_proof) =
+                config.mmcs.open_batch(index_pair, commit).unpack();
             assert_eq!(opened_rows.len(), 1);
-            let opened_row = opened_rows.pop().unwrap();
+            let opened_row = &opened_rows.pop().unwrap();
             assert_eq!(opened_row.len(), 2, "Committed data should be in pairs");
             let sibling_value = opened_row[index_i_sibling % 2];
 

@@ -21,14 +21,12 @@ serde.workspace = true
 [dev-dependencies]
 p3-baby-bear.workspace = true
 p3-keccak.workspace = true
-p3-mds.workspace = true
 p3-mersenne-31.workspace = true
 p3-merkle-tree.workspace = true
 p3-symmetric.workspace = true
 
 hashbrown.workspace = true
 rand.workspace = true
-rand_chacha.workspace = true
 criterion.workspace = true
 
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }

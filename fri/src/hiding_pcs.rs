@@ -2,23 +2,24 @@ use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::fmt::Debug;
 
+use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{Mmcs, OpenedValues, Pcs};
+use p3_commit::{BatchOpening, Mmcs, OpenedValues, Pcs, PolynomialSpace};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_field::{ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse};
 use p3_matrix::Matrix;
-use p3_matrix::bitrev::BitReversalPerm;
-use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
+use p3_matrix::bitrev::{BitReversalPerm, BitReversibleMatrix};
+use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::horizontally_truncated::HorizontallyTruncated;
 use p3_matrix::row_index_mapped::RowIndexMappedView;
 use p3_util::zip_eq::zip_eq;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
-use tracing::instrument;
+use tracing::{info_span, instrument};
 
 use crate::verifier::FriError;
-use crate::{BatchOpening, FriConfig, FriProof, TwoAdicFriPcs};
+use crate::{FriConfig, FriProof, TwoAdicFriPcs};
 
 /// A hiding FRI PCS. Both MMCSs must also be hiding; this is not enforced at compile time so it's
 /// the user's responsibility to configure.
@@ -64,7 +65,7 @@ where
     type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
     type EvaluationsOnDomain<'a> = HorizontallyTruncated<
         Val,
-        RowIndexMappedView<BitReversalPerm, DenseMatrix<Val, &'a [Val]>>,
+        RowIndexMappedView<BitReversalPerm, RowMajorMatrixView<'a, Val>>,
     >;
     /// The first item contains the openings of the random polynomials added by this wrapper.
     /// The second item is the usual FRI proof.
@@ -74,6 +75,8 @@ where
     );
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
 
+    const ZK: bool = true;
+
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
             &self.inner, degree)
@@ -81,21 +84,140 @@ where
 
     fn commit(
         &self,
-        evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)>,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
-        let randomized_evaluations = evaluations
+        let randomized_evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)> =
+            info_span!("randomize polys").in_scope(|| {
+                evaluations
+                    .into_iter()
+                    .map(|(domain, mat)| {
+                        let mat_width = mat.width();
+                        // Let `w` and `h` be the width and height of the original matrix. The randomized matrix should have height `2h` and width `w + num_random_codewords`.
+                        // To generate it, we add `w + 2 * num_random_codewords` columns to the original matrix, then reshape it by setting the width to `w + num_random_codewords`.
+                        // All columns are added on the right hand side so, after reshaping, this has the net effect of adding `num_random_codewords` random columns on the right and interleaving the original trace with random rows.
+
+                        let mut random_evaluation = add_random_cols(
+                            mat,
+                            mat_width + 2 * self.num_random_codewords,
+                            &mut *self.rng.borrow_mut(),
+                        );
+                        random_evaluation.width = mat_width + self.num_random_codewords;
+
+                        (domain, random_evaluation)
+                    })
+                    .collect()
+            });
+
+        Pcs::<Challenge, Challenger>::commit(&self.inner, randomized_evaluations)
+    }
+
+    /// Commit to the quotient polynomial. We first decompose the quotient polynomial into
+    /// `num_chunks` many smaller polynomials each of degree `degree / num_chunks`.
+    /// These quotient polynomials are then randomized as explained in Section 4.2 of
+    /// https://eprint.iacr.org/2024/1037.pdf .
+    ///
+    /// ### Arguments
+    /// - `quotient_domain` the domain of the quotient polynomial.
+    /// - `quotient_evaluations` the evaluations of the quotient polynomial over the domain. This should be in
+    ///   standard (not bit-reversed) order.
+    /// - `num_chunks` the number of smaller polynomials to decompose the quotient polynomial into.
+    ///
+    /// # Panics
+    /// This function panics if `num_chunks` is either `0` or `1`. The first case makes no logical
+    /// sense and in the second case, the resulting commitment would not be hiding.
+    fn commit_quotient(
+        &self,
+        quotient_domain: Self::Domain,
+        quotient_evaluations: RowMajorMatrix<Val>,
+        num_chunks: usize,
+    ) -> (Self::Commitment, Self::ProverData) {
+        assert!(num_chunks > 1);
+
+        // Given the evaluation vector of `Q_i(x)` over a domain, split it into evaluation vectors
+        // of `q_{i0}(x), ...` over subdomains.
+        let evaluations = quotient_domain.split_evals(num_chunks, quotient_evaluations);
+        let domains = quotient_domain.split_domains(num_chunks);
+
+        let cis = get_zp_cis(&domains);
+        let last_chunk = num_chunks - 1;
+        let last_chunk_ci_inv = cis[last_chunk].inverse();
+        let mul_coeffs = (0..last_chunk)
+            .map(|i| cis[i] * last_chunk_ci_inv)
+            .collect_vec();
+
+        let mut rng = self.rng.borrow_mut();
+        let randomized_evaluations: Vec<RowMajorMatrix<Val>> = evaluations
             .into_iter()
-            .map(|(domain, mat)| {
-                (
-                    domain,
-                    add_random_cols(mat, self.num_random_codewords, &mut *self.rng.borrow_mut()),
-                )
+            .map(|mat| add_random_cols(mat, self.num_random_codewords, &mut *rng))
+            .collect();
+        // Add random values to the LDE evaluations as described in https://eprint.iacr.org/2024/1037.pdf.
+        // If we have `d` chunks, let q'_i(X) = q_i(X) + v_H_i(X) * t_i(X) where t(X) is random, for 1 <= i < d.
+        // q'_d(X) = q_d(X) - v_H_d(X) c_i \sum t_i(X) where c_i is a Lagrange normalization constant.
+        let h = randomized_evaluations[0].height();
+        let w = randomized_evaluations[0].width();
+        let mut all_random_values = (0..(randomized_evaluations.len() - 1) * h * w)
+            .map(|_| rng.random())
+            .chain(core::iter::repeat_n(Val::ZERO, h * w))
+            .collect::<Vec<_>>();
+
+        // Set the random values for the final chunk accordingly
+        for j in 0..last_chunk {
+            let mul_coeff = mul_coeffs[j];
+            for k in 0..h * w {
+                let t = all_random_values[j * h * w + k] * mul_coeff;
+                all_random_values[last_chunk * h * w + k] -= t;
+            }
+        }
+
+        let ldes: Vec<_> = domains
+            .into_iter()
+            .zip(randomized_evaluations)
+            .enumerate()
+            .map(|(i, (domain, evals))| {
+                assert_eq!(domain.size(), evals.height());
+                let shift = Val::GENERATOR / domain.shift();
+                let random_values = &all_random_values[i * h * w..(i + 1) * h * w];
+
+                // Commit to the bit-reversed LDE.
+                let mut lde_evals = self
+                    .inner
+                    .dft
+                    .coset_lde_batch(evals, self.inner.fri.log_blowup + 1, shift)
+                    .to_row_major_matrix();
+
+                // Evaluate `v_H(X) * r(X)` over the LDE, where:
+                // - `v_H` is the coset vanishing polynomial, here equal to (GENERATOR * X / domain.shift)^n - 1,
+                // - and `r` is a random polynomial.
+                let mut vanishing_poly_coeffs =
+                    Val::zero_vec((h * w) << (self.inner.fri.log_blowup + 1));
+                let p = shift.exp_u64(h as u64);
+                Val::GENERATOR
+                    .powers()
+                    .take(h)
+                    .enumerate()
+                    .for_each(|(i, p_i)| {
+                        for j in 0..w {
+                            let mul_coeff = p_i * random_values[i * w + j];
+                            vanishing_poly_coeffs[i * w + j] -= mul_coeff;
+                            vanishing_poly_coeffs[(h + i) * w + j] = p * mul_coeff;
+                        }
+                    });
+                let random_eval = self
+                    .inner
+                    .dft
+                    .dft_batch(DenseMatrix::new(vanishing_poly_coeffs, w))
+                    .to_row_major_matrix();
+
+                // Add the quotient chunk evaluations over the LDE to the evaluations of `v_H(X) * r(X)`.
+                for i in 0..h * w * (1 << (self.inner.fri.log_blowup + 1)) {
+                    lde_evals.values[i] += random_eval.values[i];
+                }
+
+                lde_evals.bit_reverse_rows().to_row_major_matrix()
             })
             .collect();
-        <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as Pcs<Challenge, Challenger>>::commit(
-            &self.inner,
-            randomized_evaluations,
-        )
+
+        self.inner.mmcs.commit(ldes)
     }
 
     fn get_evaluations_on_domain<'a>(
@@ -112,7 +234,8 @@ where
         );
         let inner_width = inner_evals.width();
         // Truncate off the columns representing random codewords we added in `commit` above.
-        HorizontallyTruncated::new(inner_evals, inner_width - self.num_random_codewords)
+        // The unwrap is safe as inner_width - self.num_random_codewords <= inner_width.
+        HorizontallyTruncated::new(inner_evals, inner_width - self.num_random_codewords).unwrap()
     }
 
     fn open(
@@ -196,6 +319,24 @@ where
         }
         self.inner.verify(rounds, inner_proof, challenger)
     }
+
+    fn get_opt_randomization_poly_commitment(
+        &self,
+        ext_trace_domain: Self::Domain,
+    ) -> Option<(Self::Commitment, Self::ProverData)> {
+        let random_vals = DenseMatrix::rand(
+            &mut *self.rng.borrow_mut(),
+            ext_trace_domain.size(),
+            self.num_random_codewords + Challenge::DIMENSION,
+        );
+        let extended_domain = <Self as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
+            self,
+            ext_trace_domain.size(),
+        );
+        let r_commit_and_data =
+            Pcs::<Challenge, Challenger>::commit(&self.inner, [(extended_domain, random_vals)]);
+        Some(r_commit_and_data)
+    }
 }
 
 #[instrument(level = "debug", skip_all)]
@@ -225,4 +366,25 @@ where
             new_row[old_w..].iter_mut().for_each(|v| *v = rng.random());
         });
     result
+}
+
+/// Compute the normalizing constants for the Langrange selectors of the provided domains.
+/// See Section 4.2 of https://eprint.iacr.org/2024/1037.pdf for more details.
+fn get_zp_cis<D: PolynomialSpace>(qc_domains: &[D]) -> Vec<p3_commit::Val<D>> {
+    batch_multiplicative_inverse(
+        &qc_domains
+            .iter()
+            .enumerate()
+            .map(|(i, domain)| {
+                qc_domains
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, _)| *j != i)
+                    .map(|(_, other_domain)| {
+                        other_domain.vanishing_poly_at_point(domain.first_point())
+                    })
+                    .product()
+            })
+            .collect::<Vec<_>>(),
+    )
 }

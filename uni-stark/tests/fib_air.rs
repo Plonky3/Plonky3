@@ -2,16 +2,19 @@ use core::borrow::Borrow;
 
 use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_challenger::DuplexChallenger;
+use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
-use p3_fri::{TwoAdicFriPcs, create_test_fri_config};
+use p3_fri::{HidingFriPcs, TwoAdicFriPcs, create_test_fri_config};
+use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_merkle_tree::MerkleTreeMmcs;
-use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
+use p3_symmetric::{
+    CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
+};
 use p3_uni_stark::{StarkConfig, prove, verify};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -28,13 +31,17 @@ impl<F> BaseAir<F> for FibonacciAir {
 impl<AB: AirBuilderWithPublicValues> Air<AB> for FibonacciAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
+
         let pis = builder.public_values();
 
         let a = pis[0];
         let b = pis[1];
         let x = pis[2];
 
-        let (local, next) = (main.row_slice(0), main.row_slice(1));
+        let (local, next) = (
+            main.row_slice(0).expect("Matrix is empty?"),
+            main.row_slice(1).expect("Matrix only has 1 row?"),
+        );
         let local: &FibonacciRow<AB::Var> = (*local).borrow();
         let next: &FibonacciRow<AB::Var> = (*next).borrow();
 
@@ -124,12 +131,61 @@ fn test_public_value_impl(n: usize, x: u64, log_final_poly_len: usize) {
     let trace = generate_trace_rows::<Val>(0, 1, n);
     let fri_config = create_test_fri_config(challenge_mmcs, log_final_poly_len);
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
-    let config = MyConfig::new(pcs);
-    let mut challenger = Challenger::new(perm.clone());
+    let challenger = Challenger::new(perm);
+
+    let config = MyConfig::new(pcs, challenger);
     let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(x)];
-    let proof = prove(&config, &FibonacciAir {}, &mut challenger, trace, &pis);
-    let mut challenger = Challenger::new(perm);
-    verify(&config, &FibonacciAir {}, &mut challenger, &proof, &pis).expect("verification failed");
+
+    let proof = prove(&config, &FibonacciAir {}, trace, &pis);
+    verify(&config, &FibonacciAir {}, &proof, &pis).expect("verification failed");
+}
+
+#[test]
+fn test_zk() {
+    type ByteHash = Keccak256Hash;
+    let byte_hash = ByteHash {};
+
+    type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
+    let u64_hash = U64Hash::new(KeccakF {});
+
+    type FieldHash = SerializingHasher<U64Hash>;
+    let field_hash = FieldHash::new(u64_hash);
+
+    type MyCompress = CompressionFunctionFromHasher<U64Hash, 2, 4>;
+    let compress = MyCompress::new(u64_hash);
+
+    type ValHidingMmcs = MerkleTreeHidingMmcs<
+        [Val; p3_keccak::VECTOR_LEN],
+        [u64; p3_keccak::VECTOR_LEN],
+        FieldHash,
+        MyCompress,
+        SmallRng,
+        4,
+        4,
+    >;
+
+    let rng = SmallRng::seed_from_u64(1);
+    let val_mmcs = ValHidingMmcs::new(field_hash, compress, rng);
+
+    type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
+
+    type ChallengeHidingMmcs = ExtensionMmcs<Val, Challenge, ValHidingMmcs>;
+
+    let n = 1 << 3;
+    let x = 21;
+
+    let challenge_mmcs = ChallengeHidingMmcs::new(val_mmcs.clone());
+    let dft = Dft::default();
+    let trace = generate_trace_rows::<Val>(0, 1, n);
+    let fri_config = create_test_fri_config(challenge_mmcs, 2);
+    type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, SmallRng>;
+    type MyHidingConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
+    let pcs = HidingPcs::new(dft, val_mmcs, fri_config, 4, SmallRng::seed_from_u64(1));
+    let challenger = Challenger::from_hasher(vec![], byte_hash);
+    let config = MyHidingConfig::new(pcs, challenger);
+    let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(x)];
+    let proof = prove(&config, &FibonacciAir {}, trace, &pis);
+    verify(&config, &FibonacciAir {}, &proof, &pis).expect("verification failed");
 }
 
 #[test]
@@ -157,12 +213,12 @@ fn test_incorrect_public_value() {
     let fri_config = create_test_fri_config(challenge_mmcs, 1);
     let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
     let pcs = Pcs::new(dft, val_mmcs, fri_config);
-    let config = MyConfig::new(pcs);
-    let mut challenger = Challenger::new(perm);
+    let challenger = Challenger::new(perm);
+    let config = MyConfig::new(pcs, challenger);
     let pis = vec![
         BabyBear::ZERO,
         BabyBear::ONE,
         BabyBear::from_u32(123_123), // incorrect result
     ];
-    prove(&config, &FibonacciAir {}, &mut challenger, trace, &pis);
+    prove(&config, &FibonacciAir {}, trace, &pis);
 }

@@ -12,27 +12,73 @@ use p3_symmetric::{CryptographicHasher, Hash, PseudoCompressionFunction};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-/// A binary Merkle tree for packed data. It has leaves of type `F` and digests of type
-/// `[W; DIGEST_ELEMS]`.
+/// A binary Merkle tree whose leaves are vectors of matrix rows.
+///
+/// * `F` – scalar element type inside each matrix row.
+/// * `W` – scalar element type of every digest word.
+/// * `M` – matrix type.  Must implement [`Matrix<F>`].
+/// * `DIGEST_ELEMS` – number of `W` words in one digest.
+///
+/// The tree is **balanced only at the digest layer**.
+/// Leaf matrices may have arbitrary heights as long as any two heights
+/// that round **up** to the same power-of-two are equal.
+///
+/// Use [`root`] to fetch the final digest once the tree is built.
 ///
 /// This generally shouldn't be used directly. If you're using a Merkle tree as an MMCS,
 /// see `MerkleTreeMmcs`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MerkleTree<F, W, M, const DIGEST_ELEMS: usize> {
+    /// All leaf matrices in insertion order.
+    ///
+    /// Each matrix contributes rows to one or more digest layers, depending on its height.
+    /// Specifically, only the tallest matrices are included in the first digest layer,
+    /// while shorter matrices are injected into higher digest layers at positions determined
+    /// by their padded heights.
+    ///
+    /// This vector is retained only for inspection or re-opening of the tree; it is not used
+    /// after construction time.
     pub(crate) leaves: Vec<M>,
-    // Enable serialization for this type whenever the underlying array type supports it (len 1-32).
-    #[serde(bound(serialize = "[W; DIGEST_ELEMS]: Serialize"))]
-    // Enable deserialization for this type whenever the underlying array type supports it (len 1-32).
-    #[serde(bound(deserialize = "[W; DIGEST_ELEMS]: Deserialize<'de>"))]
+
+    /// All intermediate digest layers, index 0 being the first layer above
+    /// the leaves and the last layer containing exactly one root digest.
+    ///
+    /// Every inner vector holds contiguous digests `[left₀, right₀, left₁,
+    /// right₁, …]`; higher layers refer to these by index.
+    ///
+    /// Serialization requires that `[W; DIGEST_ELEMS]` implements `Serialize` and
+    /// `Deserialize`. This is automatically satisfied when `W` is a fixed-size type.
+    #[serde(
+        bound(serialize = "[W; DIGEST_ELEMS]: Serialize"),
+        bound(deserialize = "[W; DIGEST_ELEMS]: Deserialize<'de>")
+    )]
     pub(crate) digest_layers: Vec<Vec<[W; DIGEST_ELEMS]>>,
+
+    /// Zero-sized marker that binds the generic `F` but occupies no space.
     _phantom: PhantomData<F>,
 }
 
 impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
     MerkleTree<F, W, M, DIGEST_ELEMS>
 {
-    /// Matrix heights need not be powers of two. However, if the heights of two given matrices
-    /// round up to the same power of two, they must be equal.
+    /// Build a tree from **one or more matrices**.
+    ///
+    /// * `h` – hashing function used on raw rows.
+    /// * `c` – 2-to-1 compression function used on digests.
+    /// * `leaves` – matrices to commit to. Must be non-empty.
+    ///
+    /// Matrices do **not** need to have power-of-two heights. However, any two matrices
+    /// whose heights **round up** to the same power-of-two must have **equal actual height**.
+    /// This ensures proper balancing when folding digests layer-by-layer.
+    ///
+    /// All matrices are hashed row-by-row with `h`. The resulting digests are
+    /// then folded upwards with `c` until a single root remains.
+    ///
+    /// # Panics
+    /// * If `leaves` is empty.
+    /// * If the packing widths of `P` and `PW` differ.
+    /// * If two leaf heights *round up* to the same power-of-two but are not
+    ///   equal (violates balancing rule).
     #[instrument(name = "build merkle tree", level = "debug", skip_all,
                  fields(dimensions = alloc::format!("{:?}", leaves.iter().map(|l| l.dimensions()).collect::<Vec<_>>())))]
     pub fn new<P, PW, H, C>(h: &H, c: &C, leaves: Vec<M>) -> Self
@@ -103,6 +149,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
         }
     }
 
+    /// Return the root digest of the tree.
     #[must_use]
     pub fn root(&self) -> Hash<F, W, DIGEST_ELEMS>
     where
@@ -112,6 +159,10 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
     }
 }
 
+/// Hash every row of the tallest matrices and build the first digest layer.
+///
+/// The layer length equals the height of the tallest matrices, padded up to an
+/// even number (except when the height is 1).
 #[instrument(name = "first digest layer", level = "debug", skip_all)]
 fn first_digest_layer<P, PW, H, M, const DIGEST_ELEMS: usize>(
     h: &H,
@@ -155,16 +206,21 @@ where
     // If our packing width did not divide max_height, fall back to single-threaded scalar code
     // for the last bit.
     #[allow(clippy::needless_range_loop)]
-    for i in (max_height / width * width)..max_height {
-        digests[i] = h.hash_iter(tallest_matrices.iter().flat_map(|m| m.row(i)));
+    for i in ((max_height / width) * width)..max_height {
+        unsafe {
+            // Safety: Clearly i < max_height = m.height().
+            digests[i] = h.hash_iter(tallest_matrices.iter().flat_map(|m| m.row_unchecked(i)));
+        }
     }
 
     // Everything has been initialized so we can safely cast.
     digests
 }
 
-/// Compress `n` digests from the previous layer into `n/2` digests, while potentially mixing in
-/// some leaf data, if there are input matrices with (padded) height `n/2`.
+/// Fold one digest layer into the next and, when present, mix in rows
+/// taken from smaller matrices whose padded height equals `prev_layer.len()/2`.
+///
+/// Pads the output so its length is even unless it becomes the root.
 fn compress_and_inject<P, PW, H, C, M, const DIGEST_ELEMS: usize>(
     prev_layer: &[[PW::Value; DIGEST_ELEMS]],
     matrices_to_inject: Vec<&M>,
@@ -223,7 +279,10 @@ where
         let left = prev_layer[2 * i];
         let right = prev_layer[2 * i + 1];
         let digest = c.compress([left, right]);
-        let rows_digest = h.hash_iter(matrices_to_inject.iter().flat_map(|m| m.row(i)));
+        let rows_digest = unsafe {
+            // Safety: Clearly i < next_len = m.height().
+            h.hash_iter(matrices_to_inject.iter().flat_map(|m| m.row_unchecked(i)))
+        };
         next_digests[i] = c.compress([digest, rows_digest]);
     }
 
@@ -240,7 +299,13 @@ where
     next_digests
 }
 
-/// Compress `n` digests from the previous layer into `n/2` digests.
+/// Pure compression step used when no extra rows are injected.
+///
+/// Takes pairs of digests from `prev_layer`, feeds them to `c`,
+/// and writes the results in order.
+///
+/// Pads with the zero digest so the caller always receives an even-sized
+/// slice, except when the tree has shrunk to its single root.
 fn compress<P, C, const DIGEST_ELEMS: usize>(
     prev_layer: &[[P::Value; DIGEST_ELEMS]],
     c: &C,
@@ -290,6 +355,9 @@ where
 }
 
 /// Converts a packed array `[P; N]` into its underlying `P::WIDTH` scalar arrays.
+///
+/// Interprets `[P; N]` as the matrix `[[P::Value; P::WIDTH]; N]`, performs a transpose to
+/// get `[[P::Value; N] P::WIDTH]` and returns these `P::Value` arrays as an iterator.
 #[inline]
 fn unpack_array<P: PackedValue, const N: usize>(
     packed_digest: [P; N],
@@ -360,5 +428,69 @@ mod tests {
             .collect();
         let result = compress::<u8, DummyCompressionFunction, 32>(&prev_layer, &compressor);
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_compress_root_case_single_pair() {
+        // When `prev_layer.len() == 2` we are at the “root-formation” case and
+        // the function must return exactly one digest.
+        //
+        // 0xAA ^ 0x55 = 0xFF
+        let prev_layer = [[0xAA; 32], [0x55; 32]];
+        let compressor = DummyCompressionFunction;
+        let expected = vec![[0xFF; 32]];
+        let result = compress::<u8, DummyCompressionFunction, 32>(&prev_layer, &compressor);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_compress_non_power_of_two_with_padding() {
+        // The code intentionally pads to the next even length unless the output
+        // would become the root.  With `len() == 6` the output length must be 4
+        // (three real digests plus one zero digest).
+
+        let prev_layer = [
+            [0x01; 32], [0x02; 32], [0x03; 32], [0x04; 32], [0x05; 32], [0x06; 32],
+        ];
+        let compressor = DummyCompressionFunction;
+
+        let mut expected = vec![
+            [0x03; 32], // 01 ^ 02
+            [0x07; 32], // 03 ^ 04
+            [0x03; 32], // 05 ^ 06
+        ];
+        // extra padded digest filled with 0
+        expected.push([0x00; 32]);
+
+        let result = compress::<u8, DummyCompressionFunction, 32>(&prev_layer, &compressor);
+        assert_eq!(result, expected);
+        // also validate the padding branch explicitly
+        assert_eq!(result.len(), 4);
+    }
+
+    #[test]
+    fn test_unpack_array_basic() {
+        // Validate that `unpack_array` emits WIDTH (= 4) scalar arrays in the
+        // right order when the packed words are `[u8; 4]`.
+
+        // Two packed “words”, each four lanes wide
+        let packed: [[u8; 4]; 2] = [
+            [0, 1, 2, 3], // first word
+            [4, 5, 6, 7], // second word
+        ];
+
+        // After unpacking we expect four rows (the width),
+        // each row picking lane *j* from every packed word.
+        let rows: Vec<[u8; 2]> = unpack_array::<[u8; 4], 2>(packed).collect();
+
+        assert_eq!(
+            rows,
+            vec![
+                [0, 4], // lane-0 of both packed words
+                [1, 5], // lane-1
+                [2, 6], // lane-2
+                [3, 7], // lane-3
+            ]
+        );
     }
 }
