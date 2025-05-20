@@ -68,7 +68,7 @@ fn fold_evaluations_at_domain_inner<F: TwoAdicField>(
     while log_folding_factor > 0 {
         let half_size = half_domain_invs.len();
 
-        // Evals over each half of the domain
+        //Evals over each half of the domain
         let (evals_plus, evals_minus) = evals.split_at_mut(half_size);
 
         // Iteratively apply the formula that folds two evaluations into one
@@ -80,14 +80,14 @@ fn fold_evaluations_at_domain_inner<F: TwoAdicField>(
                 *eval_p = two_inv * (*eval_p + *eval_m + c * *inv * (*eval_p - *eval_m));
             });
 
+        evals.truncate(half_size);
+
         // Prepare the arguments for the next iteration, which computes the
         // evaluations over the square of the current domain
-        evals.truncate(half_size);
         half_domain_invs.truncate(half_size / 2);
         half_domain_invs.iter_mut().for_each(|inv| {
             *inv = inv.square();
         });
-
         gen = gen.square();
         c = c.square();
         log_folding_factor -= 1;
