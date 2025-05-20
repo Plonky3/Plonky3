@@ -7,8 +7,10 @@ use core::iter;
 use itertools::{iterate, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
-use p3_field::coset::TwoAdicMultiplicativeCoset;
-use p3_field::{batch_multiplicative_inverse, ExtensionField, Field, TwoAdicField};
+use p3_field::{
+    batch_multiplicative_inverse, coset::TwoAdicMultiplicativeCoset, eval_poly, ExtensionField,
+    Field, TwoAdicField,
+};
 #[cfg(test)]
 use rand::{
     distr::{Distribution, StandardUniform},
@@ -382,14 +384,6 @@ pub(crate) fn divide_by_vanishing_linear_polynomial<F: Field>(
     (quotient_coeffs, remainder)
 }
 
-// Evaluates a polynomial given its coefficients at a point
-pub(crate) fn eval_poly<F: Field>(coeffs: &[F], point: F) -> F {
-    coeffs
-        .iter()
-        .rev()
-        .fold(F::ZERO, |acc, coeff| acc * point + *coeff)
-}
-
 #[cfg(test)]
 // Test function which, given a polynomial f and a folding coefficient
 // c, computes the usual folding of the requested arity/folding factor:
@@ -435,9 +429,10 @@ pub(crate) fn rand_poly_coeffs<F: Field>(degree: usize, rng: &mut impl Rng) -> V
 where
     StandardUniform: Distribution<F>,
 {
-    let mut coeffs: Vec<F> = (0..degree).map(|_| rng.gen()).collect();
+    let mut coeffs: Vec<F> = (0..degree).map(|_| rng.sample(StandardUniform)).collect();
+
     coeffs.push(
-        rng.sample_iter(Standard)
+        rng.sample_iter(StandardUniform)
             .find(|c: &F| *c != F::ZERO)
             .unwrap(),
     );

@@ -238,7 +238,8 @@ where
     };
 
     // Prove each full round i = 1, ..., M of the protocol
-    let mut round_proofs = vec![];
+    let mut round_proofs = Vec::with_capacity(config.num_rounds() - 1);
+
     for _ in 1..=config.num_rounds() - 1 {
         // NP TODO two PoW per round
         let (new_witness, round_proof) = prove_round(config, witness, challenger);

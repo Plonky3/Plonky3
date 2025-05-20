@@ -166,7 +166,8 @@ fn tamper_with_final_polynomial(
         folding_randomness,
     };
 
-    let mut round_proofs = vec![];
+    let mut round_proofs = Vec::with_capacity(config.num_rounds() - 1);
+
     for _ in 0..config.num_rounds() - 1 {
         let (new_witness, round_proof) = prove_round(config, witness, &mut challenger);
         witness = new_witness;
