@@ -48,8 +48,12 @@ unsafe fn transpose_in_place_square_small<T>(
 
 /// Recursively swaps two submatrices across the main diagonal as part of a larger transposition.
 ///
-/// Given two submatrices `A` and `B` with dimensions `(rows × cols)`, this function swaps
-/// element `A[i, j]` with `B[j, i]`, effectively transposing them relative to each other.
+/// Given:
+/// - Submatrix `A` of shape `(rows × cols)`
+/// - Submatrix `B` of shape `(cols × rows)`
+///
+/// This function swaps element `A[i, j]` with `B[j, i]`, effectively transposing them
+/// relative to each other.
 ///
 /// `A` is assumed to be row-major, starting at pointer `a`, where A[i,j] = a[i * stride + j].
 /// `B` is assumed to be column-major, starting at pointer `b`, where B[j,i] = b[j * stride + i].
