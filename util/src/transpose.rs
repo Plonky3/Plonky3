@@ -56,7 +56,7 @@ unsafe fn transpose_in_place_square_small<T>(
 /// relative to each other.
 ///
 /// `A` is assumed to be row-major, starting at pointer `a`, where A[i,j] = a[i * stride + j].
-/// `B` is assumed to be column-major, starting at pointer `b`, where B[j,i] = b[j * stride + i].
+/// `B` is assumed to be row-major, starting at pointer `b`, where B[j,i] = b[j * stride + i].
 ///
 /// The recursion always splits along the longer dimension to balance cache and workload.
 ///
