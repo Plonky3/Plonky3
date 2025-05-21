@@ -8,8 +8,7 @@ use p3_field::Field;
 use p3_goldilocks::{Goldilocks, Poseidon2Goldilocks};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use rand::SeedableRng;
-use rand_chacha::ChaCha20Rng;
+use rand::{rngs::SmallRng, SeedableRng};
 
 use crate::{SecurityAssumption, StirConfig, StirParameters};
 
@@ -74,7 +73,7 @@ pub type GlChallenger = DuplexChallenger<Gl, GlPerm, 8, 4>;
 macro_rules! impl_test_mmcs_config {
     ($name:ident, $ext_mmcs:ty, $perm:ty, $hash:ty, $compress:ty, $mmcs:ty) => {
         pub fn $name() -> $ext_mmcs {
-            let mut rng = ChaCha20Rng::seed_from_u64(0);
+            let mut rng = SmallRng::seed_from_u64(0);
             let perm = <$perm>::new_from_rng_128(&mut rng);
             let hash = <$hash>::new(perm.clone());
             let compress = <$compress>::new(perm.clone());
@@ -89,7 +88,7 @@ macro_rules! impl_test_mmcs_config {
 macro_rules! impl_test_challenger {
     ($name:ident, $challenger:ty, $perm:ty) => {
         pub fn $name() -> $challenger {
-            let mut rng = ChaCha20Rng::seed_from_u64(0);
+            let mut rng = SmallRng::seed_from_u64(0);
             let perm = <$perm>::new_from_rng_128(&mut rng);
             <$challenger>::new(perm)
         }

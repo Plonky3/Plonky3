@@ -26,18 +26,16 @@ mod tests;
 
 /// Prover witness for the STIR protocol produced by the [`commit`] method.
 pub struct StirWitness<F: TwoAdicField, M: Mmcs<F>> {
-    // Domain L_0
-    pub(crate) domain: TwoAdicMultiplicativeCoset<F>,
-
     // Evaluations of f_0 over K_0
-
-    // NP TODO clarify in note that this memory cannot be saved due to the FFT
-    // (even though the information in here is already contained in the Merkle
-    // tree below)
+    // N. B.: These values could in fact be extracted from `merkle_tree` below,
+    // but at a non-trivial cost due to the transposition involved in creating
+    // the Merkle tree. This duplication incurs no memory overhead, since
+    // `evals_k` needs to materialise into memory in any case due to the
+    // requirements of the FFT machinery
     pub(crate) evals_k: Vec<F>,
 
-    // Merkle tree whose leaves are the stacked evaluations of f_0. Its root is
-    // the commitment shared with the verifier.
+    // Merkle tree whose leaves are the stacked evaluations of f_0 over L_0.
+    // Its root is the commitment shared with the verifier.
     pub(crate) merkle_tree: M::ProverData<RowMajorMatrix<F>>,
 }
 
@@ -58,8 +56,7 @@ pub(crate) struct StirRoundWitness<F: TwoAdicField, M: Mmcs<F>> {
     pub(crate) domain_k: TwoAdicMultiplicativeCoset<F>,
 
     // Evaluations of f_i over K_i
-
-    // NP TODO same comment as in the evals_k_0 field of StirWitness
+    // N. B. See the comment on the field `evals_k` of `StirWitness`
     pub(crate) evals_k: Vec<F>,
 
     // Merkle tree whose leaves are the stacked evaluations of g_i
@@ -137,9 +134,6 @@ where
 {
     let log_size = config.log_starting_degree() + config.log_starting_inv_rate();
 
-    let domain =
-        TwoAdicMultiplicativeCoset::new(F::two_adic_generator(log_size), log_size).unwrap();
-
     let evals_k = evals
         .iter()
         .step_by(1 << config.log_starting_inv_rate())
@@ -158,10 +152,8 @@ where
 
     let (commitment, merkle_tree) = config.mmcs_config().commit_matrix(stacked_evals);
 
-    // NP TODO maybe remove domain and/or evals from here and compute them inside prove()
     (
         StirWitness {
-            domain,
             evals_k,
             merkle_tree,
         },
@@ -220,16 +212,20 @@ where
     challenger.observe(F::from_u8(Messages::FoldingRandomness as u8));
     let folding_randomness: EF = challenger.sample_algebra_element();
 
-    // NP TODO handle this symmetrically to StirWitness.domain
-    let domain_k_0 = witness
-        .domain
+    // Construct the initial domain L_0
+    let log_size = config.log_starting_degree() + config.log_starting_inv_rate();
+
+    let domain_l_0 =
+        TwoAdicMultiplicativeCoset::new(EF::two_adic_generator(log_size), log_size).unwrap();
+
+    let domain_k_0 = domain_l_0
         .shrink_coset(config.log_starting_inv_rate())
         .unwrap();
 
     // Enriching the initial witness into a full round witness that prove_round
     // can receive.
     let mut witness = StirRoundWitness {
-        domain_l: witness.domain,
+        domain_l: domain_l_0,
         domain_k: domain_k_0,
         evals_k: witness.evals_k,
         merkle_tree: witness.merkle_tree,
@@ -241,7 +237,6 @@ where
     let mut round_proofs = Vec::with_capacity(config.num_rounds() - 1);
 
     for _ in 1..=config.num_rounds() - 1 {
-        // NP TODO two PoW per round
         let (new_witness, round_proof) = prove_round(config, witness, challenger);
 
         witness = new_witness;
@@ -352,9 +347,6 @@ where
     // ================================ Folding ================================
 
     // Obtain g_i as the folding of f_{i - 1}
-
-    // NP TODO
-    assert_eq!(domain_k.size(), evals_k.len(), "round: {}", round);
 
     let folded_evals_k =
         fold_evaluations_at_domain(evals_k, domain_k, log_folding_factor, folding_randomness);
@@ -505,22 +497,16 @@ where
 
     // Compute the evaluations of the ans, vanishing and power polynomials over K_i
     if quotient_set_size > new_domain_k.size() {
-        // NP TODO make sure this should never happen
-        panic!("Early termination configuration failed");
+        // This never happen for configurations constructed with the provided
+        // methods (as opposed to manually)
+        panic!("Configuration early termination failed");
     }
 
     let mut power_polynomial = power_polynomial(comb_randomness, quotient_set_size);
     let mut vanishing_polynomial = vanishing_polynomial(quotient_set);
 
-    // NP TODO this could be done in one go if dft_batch had a coset version.
-    // NB: If done, make sure to pad the vectors with zeros to the size
-    // new_domain_k.size(); currently this is handled by the convenience
-    // function domain_dft from utils
-
     let mut resized_ans_polynomial = ans_polynomial.clone();
 
-    // NP TODO remove calls to clone() once Polynomial is gone and we are
-    // working with coeff vecs directly
     power_polynomial.resize(new_domain_k.size(), EF::ZERO);
     resized_ans_polynomial.resize(new_domain_k.size(), EF::ZERO);
     vanishing_polynomial.resize(new_domain_k.size(), EF::ZERO);

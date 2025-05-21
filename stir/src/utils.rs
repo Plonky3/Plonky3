@@ -441,7 +441,7 @@ where
 
 #[cfg(test)]
 // Test function which returns a random polynomial of the exact given degree
-// generated using seeded ChaCha20Rng.
+// generated using seeded SmallRng.
 pub(crate) fn rand_poly_coeffs_seeded<F: Field>(degree: usize, seed: Option<u64>) -> Vec<F>
 where
     StandardUniform: Distribution<F>,
@@ -642,9 +642,8 @@ mod tests {
 
     // Macro to test evaluation folding with various parameters
     macro_rules! test_fold_evals_with_log_arity {
-        ($log_arity:expr, $polynomial:expr, $folding_randomness:expr) => {{
-            let mut rng = SmallRng::seed_from_u64(87);
-            let domain = TwoAdicMultiplicativeCoset::new(rng.random(), $log_arity).unwrap();
+        ($log_arity:expr, $polynomial:expr, $folding_randomness:expr, $rng:expr) => {{
+            let domain = TwoAdicMultiplicativeCoset::new($rng.random(), $log_arity).unwrap();
 
             // Evaluating the polynomial over the domain
             let evaluations = domain
@@ -682,13 +681,9 @@ mod tests {
         }};
     }
 
-    // NP TODO remove duplication with test_fold_evaluations
-    // NP TODO pass rng here and in the above macro
-
     macro_rules! test_fold_evals_at_domain_with_log_arity {
-        ($log_arity:expr, $polynomial:expr, $folding_randomness:expr, $dft:expr) => {{
-            let mut rng = SmallRng::seed_from_u64(87);
-            let domain = TwoAdicMultiplicativeCoset::new(rng.random(), 10).unwrap();
+        ($log_arity:expr, $polynomial:expr, $folding_randomness:expr, $dft:expr, $rng:expr) => {{
+            let domain = TwoAdicMultiplicativeCoset::new($rng.random(), 10).unwrap();
 
             // Evaluating the polynomial over the domain
             let evaluations = domain_dft(domain, $polynomial.clone(), $dft);
@@ -721,7 +716,7 @@ mod tests {
         let folding_randomness: BB = rng.random();
 
         for log_arity in 1..10 {
-            test_fold_evals_with_log_arity!(log_arity, &polynomial, folding_randomness)
+            test_fold_evals_with_log_arity!(log_arity, &polynomial, folding_randomness, &mut rng)
         }
     }
 
@@ -740,7 +735,8 @@ mod tests {
                 log_arity,
                 &polynomial,
                 folding_randomness,
-                &dft
+                &dft,
+                &mut rng
             )
         }
     }

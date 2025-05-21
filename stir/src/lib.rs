@@ -9,8 +9,7 @@ extern crate alloc;
 
 mod config;
 mod proof;
-// NP TODO refactor once one prover is left
-pub mod prover;
+mod prover;
 mod proximity_gaps;
 mod utils;
 mod verifier;
@@ -20,6 +19,7 @@ pub mod test_utils;
 
 pub use config::{StirConfig, StirParameters};
 pub use proof::StirProof;
+pub use prover::{commit_evals, commit_polynomial, prove};
 pub use proximity_gaps::SecurityAssumption;
 pub use verifier::verify;
 

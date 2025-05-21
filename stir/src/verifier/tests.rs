@@ -6,11 +6,10 @@ use itertools::Itertools;
 use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
-use p3_field::{eval_poly, PrimeCharacteristicRing};
+use p3_field::{eval_poly, PrimeCharacteristicRing, TwoAdicField};
 use p3_symmetric::Hash;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
-use rand_chacha::ChaCha20Rng;
 
 use crate::config::observe_public_parameters;
 use crate::prover::{commit_polynomial, prove, prove_round, StirRoundWitness};
@@ -152,13 +151,16 @@ fn tamper_with_final_polynomial(
     challenger.observe(Bb::from_u8(Messages::FoldingRandomness as u8));
     let folding_randomness = challenger.sample_algebra_element();
 
-    let domain_k_0 = witness
-        .domain
+    let log_size = config.log_starting_degree() + config.log_starting_inv_rate();
+    let domain_l_0 =
+        TwoAdicMultiplicativeCoset::new(BbExt::two_adic_generator(log_size), log_size).unwrap();
+
+    let domain_k_0 = domain_l_0
         .shrink_coset(config.log_starting_inv_rate())
         .unwrap();
 
     let mut witness = StirRoundWitness {
-        domain_l: witness.domain,
+        domain_l: domain_l_0,
         domain_k: domain_k_0,
         evals_k: witness.evals_k,
         merkle_tree: witness.merkle_tree,
@@ -403,7 +405,7 @@ fn test_verify_failing_cases() {
 
     // Seeding the RNG guarantees the test won't fail because of the initial PoW
     // proving too few bits
-    let mut rng = ChaCha20Rng::seed_from_u64(42);
+    let mut rng = SmallRng::seed_from_u64(42);
 
     let config = test_bb_stir_config(145, SecurityAssumption::CapacityBound, 10, 1, 2, 3);
 

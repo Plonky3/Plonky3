@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_challenger::MockChallenger;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
-use p3_field::eval_poly;
+use p3_field::{eval_poly, TwoAdicField};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
@@ -377,7 +377,8 @@ fn test_prove_final_polynomial() {
 
     let (witness, commitment) = commit_polynomial(&config, polynomial.clone());
 
-    let generator = witness.domain.subgroup_generator();
+    let log_size = config.log_starting_degree() + config.log_starting_inv_rate();
+    let generator = BbExt::two_adic_generator(log_size);
 
     let proof = prove(&config, witness, commitment, &mut challenger);
 

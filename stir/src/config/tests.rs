@@ -6,8 +6,7 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use rand::SeedableRng;
-use rand_chacha::ChaCha20Rng;
+use rand::{rngs::SmallRng, SeedableRng};
 
 use crate::{SecurityAssumption, StirConfig, StirParameters};
 
@@ -22,7 +21,7 @@ type BbMmcs = MerkleTreeMmcs<<Bb as Field>::Packing, <Bb as Field>::Packing, BbH
 type BbExtMmcs = ExtensionMmcs<Bb, BbExt, BbMmcs>;
 
 pub fn test_mmcs_config() -> BbExtMmcs {
-    let mut rng = ChaCha20Rng::seed_from_u64(467);
+    let mut rng = SmallRng::seed_from_u64(467);
     let perm = BbPerm::new_from_rng_128(&mut rng);
     let hash = BbHash::new(perm.clone());
     let compress = BbCompress::new(perm.clone());
