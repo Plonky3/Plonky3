@@ -354,7 +354,7 @@ unsafe impl<F: Field> PackedFieldPow2 for F {
 
 impl<F: Field> PackedFieldExtension<F, F> for F::Packing {
     fn from_ext_slice(ext_slice: &[F]) -> Self {
-        ext_slice[0].into()
+        *F::Packing::from_slice(ext_slice)
     }
 
     fn packed_ext_powers(base: F) -> Powers<Self> {
