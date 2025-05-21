@@ -146,6 +146,21 @@ mod test_cubic_extension {
         &super::ONES,
         &super::multiplicative_group_prime_factorization()
     );
+
+    mod test_packed_cubic_extension {
+        use p3_field::extension::PackedBinomialExtensionField;
+        use p3_field::{Field, PrimeCharacteristicRing};
+        use p3_field_testing::test_ring;
+
+        use crate::Mersenne31;
+
+        type Pef = PackedBinomialExtensionField<Mersenne31, <Mersenne31 as Field>::Packing, 3>;
+
+        const PACKED_ZEROS: [Pef; 1] = [Pef::ZERO];
+        const PACKED_ONES: [Pef; 1] = [Pef::ONE];
+
+        test_ring!(super::Pef, &super::PACKED_ZEROS, &super::PACKED_ONES);
+    }
 }
 
 #[cfg(test)]
@@ -196,6 +211,22 @@ mod test_cubic_complex_extension {
     test_extension_field!(super::F, super::EF);
 
     test_two_adic_extension_field!(super::F, super::EF);
+
+    mod test_packed_cubic_complex_extension {
+        use p3_field::extension::{Complex, PackedBinomialExtensionField};
+        use p3_field::{Field, PrimeCharacteristicRing};
+        use p3_field_testing::test_ring;
+
+        use crate::Mersenne31;
+        type Fi = Complex<Mersenne31>;
+
+        type Pef = PackedBinomialExtensionField<Fi, <Fi as Field>::Packing, 3>;
+
+        const PACKED_ZEROS: [Pef; 1] = [Pef::ZERO];
+        const PACKED_ONES: [Pef; 1] = [Pef::ONE];
+
+        test_ring!(super::Pef, &super::PACKED_ZEROS, &super::PACKED_ONES);
+    }
 }
 
 #[cfg(test)]
@@ -244,4 +275,20 @@ mod test_quadratic_complex_extension {
     test_extension_field!(super::F, super::EF);
 
     test_two_adic_extension_field!(super::F, super::EF);
+
+    mod test_packed_quadratic_complex_extension {
+        use p3_field::extension::{Complex, PackedBinomialExtensionField};
+        use p3_field::{Field, PrimeCharacteristicRing};
+        use p3_field_testing::test_ring;
+
+        use crate::Mersenne31;
+        type Fi = Complex<Mersenne31>;
+
+        type Pef = PackedBinomialExtensionField<Fi, <Fi as Field>::Packing, 2>;
+
+        const PACKED_ZEROS: [Pef; 1] = [Pef::ZERO];
+        const PACKED_ONES: [Pef; 1] = [Pef::ONE];
+
+        test_ring!(super::Pef, &super::PACKED_ZEROS, &super::PACKED_ONES);
+    }
 }

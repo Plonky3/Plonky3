@@ -193,4 +193,19 @@ mod tests {
 
     test_extension_field!(super::F, super::Fi);
     test_two_adic_field!(super::Fi);
+
+    mod test_packed_complex_extension {
+        use p3_field::extension::PackedBinomialExtensionField;
+        use p3_field::{Field, PrimeCharacteristicRing};
+        use p3_field_testing::test_ring;
+
+        use crate::Mersenne31;
+
+        type Pef = PackedBinomialExtensionField<Mersenne31, <Mersenne31 as Field>::Packing, 2>;
+
+        const PACKED_ZEROS: [Pef; 1] = [Pef::ZERO];
+        const PACKED_ONES: [Pef; 1] = [Pef::ONE];
+
+        test_ring!(super::Pef, &super::PACKED_ZEROS, &super::PACKED_ONES);
+    }
 }

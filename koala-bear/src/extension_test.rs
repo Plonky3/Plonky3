@@ -39,6 +39,21 @@ mod test_quartic_extension {
     test_extension_field!(super::F, super::EF);
     test_two_adic_extension_field!(super::F, super::EF);
 
+    mod test_packed_quartic_extension {
+        use p3_field::extension::PackedBinomialExtensionField;
+        use p3_field::{Field, PrimeCharacteristicRing};
+        use p3_field_testing::test_ring;
+
+        use crate::KoalaBear;
+
+        type Pef = PackedBinomialExtensionField<KoalaBear, <KoalaBear as Field>::Packing, 4>;
+
+        const PACKED_ZEROS: [Pef; 1] = [Pef::ZERO];
+        const PACKED_ONES: [Pef; 1] = [Pef::ONE];
+
+        test_ring!(super::Pef, &super::PACKED_ZEROS, &super::PACKED_ONES);
+    }
+
     #[test]
     fn display() {
         assert_eq!(format!("{}", EF::ZERO), "0");
