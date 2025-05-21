@@ -1,10 +1,9 @@
 use alloc::vec::Vec;
+
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue};
-use rand::{
-    Rng, SeedableRng,
-    distr::{Distribution, StandardUniform},
-    rngs::SmallRng,
-};
+use rand::distr::{Distribution, StandardUniform};
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 
 use crate::exp_biguint;
 
