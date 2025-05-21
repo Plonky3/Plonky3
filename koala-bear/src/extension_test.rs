@@ -5,7 +5,7 @@ mod test_quartic_extension {
     use num_bigint::BigUint;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
-    use p3_field_testing::{test_field, test_two_adic_extension_field};
+    use p3_field_testing::{test_extension_field, test_field, test_two_adic_extension_field};
 
     use crate::KoalaBear;
 
@@ -36,6 +36,7 @@ mod test_quartic_extension {
         &super::ONES,
         &super::multiplicative_group_prime_factorization()
     );
+    test_extension_field!(super::F, super::EF);
     test_two_adic_extension_field!(super::F, super::EF);
 
     #[test]
