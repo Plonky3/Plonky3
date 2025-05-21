@@ -7,6 +7,7 @@ use rand::{Rng, SeedableRng};
 
 use crate::exp_biguint;
 
+/// Ensure that the methods `is_in_basefield` and `as_base` work as expected.
 pub fn test_to_from_extension_field<F, EF>()
 where
     F: Field,
@@ -90,6 +91,8 @@ where
     );
 }
 
+/// Ensure that the methods `from_ext_slice`, `to_ext_iter`, `packed_ext_powers` and `packed_ext_powers_capped`
+/// all work as expected.
 pub fn test_packed_extension<F, EF>()
 where
     F: Field,
