@@ -38,7 +38,7 @@ where
             "The randomly chosen element {} lies in the base field, but it (likely) should not.",
             extension_elem
         );
-        assert_eq!(extension_elem.as_base(), None);
+        assert!(extension_elem.as_base().is_none());
     }
 }
 
