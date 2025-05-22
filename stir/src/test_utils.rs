@@ -101,7 +101,7 @@ macro_rules! impl_test_challenger {
 
 // Simple wrapper around StirParameters::constant_folding_factor
 macro_rules! impl_test_stir_config {
-    ($name:ident, $ext:ty, $ext_mmcs:ty, $mmcs_config_fn:ident) => {
+    ($name:ident, $base:ty, $ext:ty, $ext_mmcs:ty, $mmcs_config_fn:ident) => {
         pub fn $name(
             security_level: usize,
             security_assumption: SecurityAssumption,
@@ -122,14 +122,14 @@ macro_rules! impl_test_stir_config {
                 $mmcs_config_fn(),
             );
 
-            StirConfig::new(parameters)
+            StirConfig::new::<$base>(parameters)
         }
     };
 }
 
 // Simple wrapper around StirParameters::variable_folding_factor
 macro_rules! impl_test_stir_config_folding_factors {
-    ($name:ident, $ext:ty, $ext_mmcs:ty, $mmcs_config_fn:ident) => {
+    ($name:ident, $base:ty, $ext:ty, $ext_mmcs:ty, $mmcs_config_fn:ident) => {
         pub fn $name(
             security_level: usize,
             security_assumption: SecurityAssumption,
@@ -148,7 +148,7 @@ macro_rules! impl_test_stir_config_folding_factors {
                 $mmcs_config_fn(),
             );
 
-            StirConfig::new(parameters)
+            StirConfig::new::<$base>(parameters)
         }
     };
 }
@@ -174,11 +174,24 @@ impl_test_mmcs_config!(
 impl_test_challenger!(test_bb_challenger, BbChallenger, BbPerm);
 impl_test_challenger!(test_gl_challenger, GlChallenger, GlPerm);
 
-impl_test_stir_config!(test_bb_stir_config, BbExt, BbExtMmcs, test_bb_mmcs_config);
-impl_test_stir_config!(test_gl_stir_config, GlExt, GlExtMmcs, test_gl_mmcs_config);
+impl_test_stir_config!(
+    test_bb_stir_config,
+    Bb,
+    BbExt,
+    BbExtMmcs,
+    test_bb_mmcs_config
+);
+impl_test_stir_config!(
+    test_gl_stir_config,
+    Gl,
+    GlExt,
+    GlExtMmcs,
+    test_gl_mmcs_config
+);
 
 impl_test_stir_config_folding_factors!(
     test_bb_stir_config_folding_factors,
+    Bb,
     BbExt,
     BbExtMmcs,
     test_bb_mmcs_config
@@ -186,6 +199,7 @@ impl_test_stir_config_folding_factors!(
 
 impl_test_stir_config_folding_factors!(
     test_gl_stir_config_folding_factors,
+    Gl,
     GlExt,
     GlExtMmcs,
     test_gl_mmcs_config

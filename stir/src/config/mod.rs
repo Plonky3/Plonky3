@@ -5,7 +5,7 @@ use core::fmt::{Debug, Display, Formatter, Result};
 use itertools::Itertools;
 use p3_challenger::FieldChallenger;
 use p3_dft::Radix2Dit;
-use p3_field::{Field, TwoAdicField};
+use p3_field::{ExtensionField, Field, TwoAdicField};
 
 use crate::utils::{compute_pow, observe_usize_slice};
 use crate::SecurityAssumption;
@@ -195,7 +195,7 @@ pub struct RoundConfig {
 
 /// Full STIR configuration.
 #[derive(Debug, Clone)]
-pub struct StirConfig<F: TwoAdicField, M: Clone> {
+pub struct StirConfig<EF: TwoAdicField, M: Clone> {
     // See the comment at the start of StirParameters for the convention on the
     // number of rounds, codewords, etc.
 
@@ -226,12 +226,15 @@ pub struct StirConfig<F: TwoAdicField, M: Clone> {
     final_pow_bits: usize,
 
     // Structure to compute two-adic FFTs
-    pub(crate) dft: Radix2Dit<F>,
+    pub(crate) dft: Radix2Dit<EF>,
 }
 
-impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
+impl<EF: TwoAdicField, M: Clone> StirConfig<EF, M> {
     /// Expand STIR parameters into a full STIR configuration.
-    pub fn new(parameters: StirParameters<M>) -> Self {
+    pub fn new<F: TwoAdicField>(parameters: StirParameters<M>) -> Self
+    where
+        EF: ExtensionField<F>,
+    {
         let StirParameters {
             security_level,
             security_assumption,
@@ -242,6 +245,35 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
             pow_bits,
             ..
         } = parameters.clone();
+
+        // Implementational choice: Even though the abstract STIR protocol is
+        // defined over a single finite field EF and all it requires is for EF
+        // to contain a root of unity of high-enough power of two (so that the
+        // inital domain L_0 can fit into it), it has been opted here to work
+        // over field extensions EF/F, where the top field EF plays the role of
+        // the unique field in abstract STIR; and to require the initial domain
+        // to be contained in the base field F. This means
+        // - Committed polynomials have coefficients in EF
+        // - All domains L_i are contained live in F
+        //
+        // This allows for at least two significant optimisations:
+        // - The verification that the random OOD samples are outside the domain
+        //   changes to the verification that the OOD samples are outside the
+        //   base field, which is substantially cheaper (but which comes at a
+        //   certain completeness-error cost)
+        // - The FFTs can be performed with optimised-arithmetic algorithms
+        //   that take into account the fact that the domain is contained in
+        //   the base field
+        //
+        // Cf. the discussion here for details:
+        //   https://github.com/Plonky3/Plonky3/pull/674
+        assert!(
+            F::TWO_ADICITY >= log_starting_degree + log_starting_inv_rate,
+            "The base field F must have a root of unity of order equal to the size of initial domain (2^{}) \
+            but it only has two-adicity {}",
+            log_starting_degree + log_starting_inv_rate,
+            F::TWO_ADICITY
+        );
 
         // The polynomial has to be folded with arity at least 2 in each round
         assert!(
@@ -280,7 +312,7 @@ impl<F: TwoAdicField, M: Clone> StirConfig<F, M> {
         let mut log_inv_rate = log_starting_inv_rate;
 
         // Computing the proof-of-work bits for the initial folding
-        let field_bits = F::bits();
+        let field_bits = EF::bits();
 
         let starting_folding_prox_gaps_error = security_assumption.prox_gaps_error(
             current_log_degree,
@@ -628,11 +660,11 @@ impl Display for RoundConfig {
 
 // Have the challenger observe the public parameters at the start of the
 // Fiat-Shamired interaction
-pub(crate) fn observe_public_parameters<F, M>(
+pub(crate) fn observe_public_parameters<EF, M>(
     parameters: &StirParameters<M>,
-    challenger: &mut impl FieldChallenger<F>,
+    challenger: &mut impl FieldChallenger<EF>,
 ) where
-    F: Field,
+    EF: Field,
     M: Clone,
 {
     observe_usize_slice(
