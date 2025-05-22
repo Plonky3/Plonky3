@@ -65,25 +65,34 @@ where
     //
     // `Norm(x)  = x^{(|EF| - 1)/(|F| - 1)} = x^{1 + p + ... + p^(d-1)}`
     // `Trace(x) = x + x^p + ... + x^{p^{d - 1}}`
-    //
+    // `x^{p^d}  = x`
     // We could test other symmetric functions but that seems unnecessary for now.
+    let (trace, norm, power) = (1..ext_degree).fold(
+        (extension_elem, extension_elem, extension_elem),
+        |(acc, prod, power), _| {
+            let next_power = exp_biguint(power, &field_degree);
+            (acc + next_power, prod * next_power, next_power)
+        },
+    );
 
-    let (trace, norm) = (1..ext_degree).fold((x, x), |(acc, prod), _| {
-        let next = exp_biguint(prod, &base_order);
-        (acc + next, prod * next)
-    });
+    let ext_power_p_d = exp_biguint(power, &field_degree);
 
     assert!(
         norm.is_in_basefield(),
         "The product of Galois conjugates {} of the element {} does not lie in the base field.",
         norm,
-        x
+        extension_elem
     );
     assert!(
         trace.is_in_basefield(),
         "The sum of Galois conjugates {} of the element {} does not lie in the base field.",
         trace,
-        x
+        extension_elem
+    );
+    assert_eq!(
+        extension_elem, ext_power_p_d,
+        "The element {} raised to the power of p^d does not equal itself.",
+        extension_elem
     );
 }
 
