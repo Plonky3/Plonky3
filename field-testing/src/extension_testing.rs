@@ -68,26 +68,22 @@ where
     //
     // We could test other symmetric functions but that seems unnecessary for now.
 
-    let mut mul = extension_elem;
-    let mut acc = extension_elem;
-    let mut current_power = extension_elem;
-    for _ in 1..ext_degree {
-        current_power = exp_biguint(current_power, &field_degree);
-        acc += current_power;
-        mul *= current_power;
-    }
+    let (trace, norm) = (1..ext_degree).fold((x, x), |(acc, prod), _| {
+        let next = exp_biguint(prod, &base_order);
+        (acc + next, prod * next)
+    });
 
     assert!(
-        mul.is_in_basefield(),
-        "The product of galois conjugates {} of the element {} does not lie in the base field.",
-        mul,
-        extension_elem
+        norm.is_in_basefield(),
+        "The product of Galois conjugates {} of the element {} does not lie in the base field.",
+        norm,
+        x
     );
     assert!(
-        acc.is_in_basefield(),
-        "The sum of galois conjugates {} of the element {} does not lie in the base field.",
-        acc,
-        extension_elem
+        trace.is_in_basefield(),
+        "The sum of Galois conjugates {} of the element {} does not lie in the base field.",
+        trace,
+        x
     );
 }
 
