@@ -14,9 +14,7 @@ use rand::{Rng, SeedableRng};
 use crate::config::observe_public_parameters;
 use crate::prover::{commit_polynomial, prove, prove_round, StirRoundWitness};
 use crate::test_utils::*;
-use crate::utils::{
-    fold_polynomial, observe_ext_slice_with_size, rand_poly_coeffs, rand_poly_coeffs_seeded,
-};
+use crate::utils::{fold_polynomial, observe_ext_slice_with_size};
 use crate::verifier::error::{FullRoundVerificationError, VerificationError};
 use crate::verifier::{compute_folded_evaluations, verify};
 use crate::{Messages, SecurityAssumption, StirConfig, StirProof};
@@ -400,9 +398,6 @@ fn test_serialize_deserialize_proof() {
 // Check that each possible VerificationError is triggered correctly by
 // producing various dishonest proofs
 fn test_verify_failing_cases() {
-    // NP TODO remove
-    let _ = tracing_subscriber::fmt::try_init();
-
     // Seeding the RNG guarantees the test won't fail because of the initial PoW
     // proving too few bits
     let mut rng = SmallRng::seed_from_u64(42);

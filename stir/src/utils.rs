@@ -11,11 +11,6 @@ use p3_field::{
     batch_multiplicative_inverse, coset::TwoAdicMultiplicativeCoset, eval_poly, ExtensionField,
     Field, TwoAdicField,
 };
-#[cfg(test)]
-use rand::{
-    distr::{Distribution, StandardUniform},
-    Rng,
-};
 
 // Syntactic sugar for the proof-of-work computation
 #[inline]
@@ -424,37 +419,6 @@ pub(crate) fn fold_polynomial<F: TwoAdicField>(
 }
 
 #[cfg(test)]
-// Test function which returns a random polynomial of the exact given degree
-pub(crate) fn rand_poly_coeffs<F: Field>(degree: usize, rng: &mut impl Rng) -> Vec<F>
-where
-    StandardUniform: Distribution<F>,
-{
-    let mut coeffs: Vec<F> = (0..degree).map(|_| rng.sample(StandardUniform)).collect();
-
-    coeffs.push(
-        rng.sample_iter(StandardUniform)
-            .find(|c: &F| *c != F::ZERO)
-            .unwrap(),
-    );
-    coeffs
-}
-
-#[cfg(test)]
-// Test function which returns a random polynomial of the exact given degree
-// generated using seeded SmallRng.
-pub(crate) fn rand_poly_coeffs_seeded<F: Field>(degree: usize, seed: Option<u64>) -> Vec<F>
-where
-    StandardUniform: Distribution<F>,
-{
-    use rand::rngs::SmallRng;
-    use rand::SeedableRng;
-
-    let mut rng = SmallRng::seed_from_u64(seed.unwrap_or(42));
-
-    rand_poly_coeffs(degree, &mut rng)
-}
-
-#[cfg(test)]
 // Test function which, given the coefficients of the polynomial f(x), returns the coefficients of
 // the polynomial f(x^exponent)
 fn compose_poly_with_exponent<F: Field>(coeffs: &[F], exponent: usize) -> Vec<F> {
@@ -553,6 +517,8 @@ mod tests {
     use p3_field::PrimeCharacteristicRing;
     use rand::rngs::SmallRng;
     use rand::{Rng, SeedableRng};
+
+    use crate::test_utils::rand_poly_coeffs;
 
     use super::*;
 

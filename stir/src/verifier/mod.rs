@@ -279,7 +279,6 @@ where
                 }],
                 i,
                 batch_proof,
-                // NP TODO important use leaf or check it somewhere else (here and in the verify_batch)
             )
             .is_err()
         {
@@ -776,8 +775,3 @@ fn verify_evaluations<F: TwoAdicField>(
             .map(|(y, denom)| (f_eval - y) * denom)
             .sum()
 }
-
-// NP TODO proofs might differ because before we were sending the verifier
-// polynomial.coeffs() and now we're working with coeffs directly and not
-// trimming leading coeffs; decide if we want to trim; if so, proofs should
-// match the old ones

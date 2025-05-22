@@ -8,7 +8,11 @@ use p3_field::Field;
 use p3_goldilocks::{Goldilocks, Poseidon2Goldilocks};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use rand::{rngs::SmallRng, SeedableRng};
+use rand::{
+    distr::{Distribution, StandardUniform},
+    rngs::SmallRng,
+    Rng, SeedableRng,
+};
 
 use crate::{SecurityAssumption, StirConfig, StirParameters};
 
@@ -186,3 +190,32 @@ impl_test_stir_config_folding_factors!(
     GlExtMmcs,
     test_gl_mmcs_config
 );
+
+// Test function which returns a random polynomial of the exact given degree
+pub fn rand_poly_coeffs<F: Field>(degree: usize, rng: &mut impl Rng) -> Vec<F>
+where
+    StandardUniform: Distribution<F>,
+{
+    let mut coeffs: Vec<F> = (0..degree).map(|_| rng.sample(StandardUniform)).collect();
+
+    coeffs.push(
+        rng.sample_iter(StandardUniform)
+            .find(|c: &F| *c != F::ZERO)
+            .unwrap(),
+    );
+    coeffs
+}
+
+// Test function which returns a random polynomial of the exact given degree
+// generated using seeded SmallRng.
+pub fn rand_poly_coeffs_seeded<F: Field>(degree: usize, seed: Option<u64>) -> Vec<F>
+where
+    StandardUniform: Distribution<F>,
+{
+    use rand::rngs::SmallRng;
+    use rand::SeedableRng;
+
+    let mut rng = SmallRng::seed_from_u64(seed.unwrap_or(42));
+
+    rand_poly_coeffs(degree, &mut rng)
+}

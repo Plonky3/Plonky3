@@ -21,33 +21,28 @@ This crate's usage workflow can be roughly outlined as follows:
 
 STIR can also be composed with other protocols, in which case the commitment from step 3 might have been produced elsewhere.
 
-A full end-to-end example (on a single machine) could look as follows:
+A full end-to-end example could look as follows (note some of the methods therein require the `test-utils` feature):
 ```
-    use p3_stir::{commit, prove, verify, StirParameters, SecurityAssumption, StirConfig};
-    use p3_poly::test_utils::rand_poly;
-    use p3_stir::test_utils::{test_bb_challenger, test_bb_mmcs_config, BBExt};
-
     let log_degree = 15;
     let degree = 1 << log_degree - 1;
 
     // 1. Define the desired parameters
     let parameters = StirParameters::constant_folding_factor(
+        (100, SecurityAssumption::JohnsonBound),
         15,
         2,
         3,
         4,
-        SecurityAssumption::JohnsonBound,
-        100,
         20,
         test_bb_mmcs_config(),
     );
 
     // 2. Expand into a full configuration
-    let config = StirConfig::new::<BBExt>(parameters);
+    let config = StirConfig::new(parameters);
 
     // 3. Commit to the polynomial
-    let polynomial = rand_poly(degree);
-    let (witness, commitment) = commit(&config, polynomial);
+    let polynomial = rand_poly_coeffs_seeded(degree, None);
+    let (witness, commitment) = commit_polynomial(&config, polynomial);
 
     // 4. Prove low-degreeness    
     let mut prover_challenger = test_bb_challenger();
