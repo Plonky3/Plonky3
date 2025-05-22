@@ -58,7 +58,7 @@ impl HasTwoAdicBinomialExtension<2> for Mersenne31 {
 mod tests {
     use num_bigint::BigUint;
     use p3_field::PrimeField32;
-    use p3_field_testing::{test_field, test_two_adic_field};
+    use p3_field_testing::{test_extension_field, test_field, test_two_adic_field};
 
     use super::*;
 
@@ -190,5 +190,22 @@ mod tests {
         &super::ONES,
         &super::multiplicative_group_prime_factorization()
     );
-    test_two_adic_field!(p3_field::extension::Complex<crate::Mersenne31>);
+
+    test_extension_field!(super::F, super::Fi);
+    test_two_adic_field!(super::Fi);
+
+    mod test_packed_complex_extension {
+        use p3_field::extension::PackedBinomialExtensionField;
+        use p3_field::{Field, PrimeCharacteristicRing};
+        use p3_field_testing::test_ring;
+
+        use crate::Mersenne31;
+
+        type Pef = PackedBinomialExtensionField<Mersenne31, <Mersenne31 as Field>::Packing, 2>;
+
+        const PACKED_ZEROS: [Pef; 1] = [Pef::ZERO];
+        const PACKED_ONES: [Pef; 1] = [Pef::ONE];
+
+        test_ring!(super::Pef, &super::PACKED_ZEROS, &super::PACKED_ONES);
+    }
 }
