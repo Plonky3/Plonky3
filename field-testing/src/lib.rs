@@ -9,6 +9,7 @@ pub mod dft_testing;
 pub mod from_integer_tests;
 pub mod packedfield_testing;
 
+use alloc::vec;
 use alloc::vec::Vec;
 use core::array;
 
@@ -16,7 +17,8 @@ pub use bench_func::*;
 pub use dft_testing::*;
 use num_bigint::BigUint;
 use p3_field::{
-    ExtensionField, Field, PrimeCharacteristicRing, PrimeField32, PrimeField64, TwoAdicField,
+    ExtensionField, Field, PackedValue, PrimeCharacteristicRing, PrimeField32, PrimeField64,
+    TwoAdicField,
 };
 use p3_util::iter_array_chunks_padded;
 pub use packedfield_testing::*;
@@ -263,6 +265,28 @@ where
             // Best to invert in the prime subfield in case F is an extension field.
             x * F::from_prime_subfield(F::PrimeSubfield::from_u128(1_u128 << i).inverse())
         );
+    }
+}
+
+pub fn test_add_slice<F: Field>()
+where
+    StandardUniform: Distribution<F>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    let lengths = [
+        F::Packing::WIDTH - 1,
+        F::Packing::WIDTH,
+        (F::Packing::WIDTH - 1) + (F::Packing::WIDTH << 10),
+    ];
+    for len in lengths {
+        let mut slice_1 = vec![rng.random(); len];
+        let slice_1_copy = slice_1.clone();
+        let slice_2 = vec![rng.random(); len];
+
+        F::add_slices(&mut slice_1, &slice_2);
+        for i in 0..len {
+            assert_eq!(slice_1[i], slice_1_copy[i] + slice_2[i]);
+        }
     }
 }
 

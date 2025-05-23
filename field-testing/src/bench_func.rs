@@ -149,6 +149,26 @@ pub fn benchmark_dot_array<R: PrimeCharacteristicRing + Copy, const N: usize>(
     });
 }
 
+/// Benchmark the time taken to add two slices together.
+pub fn benchmark_add_slices<F: Field, const LENGTH: usize>(c: &mut Criterion, name: &str)
+where
+    StandardUniform: Distribution<F>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    let mut slice_1 = Vec::new();
+    let mut slice_2 = Vec::new();
+    for _ in 0..LENGTH {
+        slice_1.push(rng.random());
+        slice_2.push(rng.random());
+    }
+    c.bench_function(&format!("{} add slices/{}", name, LENGTH), |b| {
+        let mut in_slice = slice_1.clone();
+        b.iter(|| {
+            F::add_slices(&mut in_slice, &slice_2);
+        })
+    });
+}
+
 pub fn benchmark_add_latency<R: PrimeCharacteristicRing + Copy, const N: usize>(
     c: &mut Criterion,
     name: &str,
