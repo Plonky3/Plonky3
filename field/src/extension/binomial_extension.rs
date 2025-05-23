@@ -9,7 +9,7 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use itertools::Itertools;
 use num_bigint::BigUint;
-use p3_util::{flatten_to_base, reconstitute_from_base};
+use p3_util::{as_base_slice, as_base_slice_mut, flatten_to_base, reconstitute_from_base};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
@@ -334,6 +334,19 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
     #[inline]
     fn div_2exp_u64(&self, exp: u64) -> Self {
         Self::new(self.value.map(|x| x.div_2exp_u64(exp)))
+    }
+
+    #[inline]
+    fn add_slices(slice_1: &mut [Self], slice_2: &[Self]) {
+        // By construction, Self is repr(transparent) over [F; D].
+        // Additionally, addition is F-linear. Hence we can cast
+        // everything to F and use F's add_slices.
+        unsafe {
+            let base_slice_1 = as_base_slice_mut(slice_1);
+            let base_slice_2 = as_base_slice(slice_2);
+
+            F::add_slices(base_slice_1, base_slice_2);
+        }
     }
 
     #[inline]
