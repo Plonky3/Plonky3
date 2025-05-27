@@ -40,13 +40,13 @@ pub struct Radix2DitParallel<F> {
 
 /// A pair of vectors, one with twiddle factors in their natural order, the other bit-reversed.
 #[derive(Default, Clone, Debug)]
-pub(crate) struct VectorPair<F> {
-    pub(crate) twiddles: Vec<F>,
-    pub(crate) bitrev_twiddles: Vec<F>,
+struct VectorPair<F> {
+    twiddles: Vec<F>,
+    bitrev_twiddles: Vec<F>,
 }
 
 #[instrument(level = "debug", skip_all)]
-pub(crate) fn compute_twiddles<F: TwoAdicField + Ord>(log_h: usize) -> VectorPair<F> {
+fn compute_twiddles<F: TwoAdicField + Ord>(log_h: usize) -> VectorPair<F> {
     let half_h = (1 << log_h) >> 1;
     let root = F::two_adic_generator(log_h);
     let twiddles: Vec<F> = root.powers().take(half_h).collect();
@@ -59,7 +59,7 @@ pub(crate) fn compute_twiddles<F: TwoAdicField + Ord>(log_h: usize) -> VectorPai
 }
 
 #[instrument(level = "debug", skip_all)]
-pub(crate) fn compute_coset_twiddles<F: TwoAdicField + Ord>(log_h: usize, shift: F) -> Vec<Vec<F>> {
+fn compute_coset_twiddles<F: TwoAdicField + Ord>(log_h: usize, shift: F) -> Vec<Vec<F>> {
     // In general either div_floor or div_ceil would work, but here we prefer div_ceil because it
     // lets us assume below that the "first half" of the network has at least one layer of
     // butterflies, even in the case of log_h = 1.
@@ -85,7 +85,7 @@ pub(crate) fn compute_coset_twiddles<F: TwoAdicField + Ord>(log_h: usize, shift:
 }
 
 #[instrument(level = "debug", skip_all)]
-pub(crate) fn compute_inverse_twiddles<F: TwoAdicField + Ord>(log_h: usize) -> VectorPair<F> {
+fn compute_inverse_twiddles<F: TwoAdicField + Ord>(log_h: usize) -> VectorPair<F> {
     let half_h = (1 << log_h) >> 1;
     let root_inv = F::two_adic_generator(log_h).inverse();
     let twiddles: Vec<F> = root_inv.powers().take(half_h).collect();
@@ -364,7 +364,7 @@ fn first_half_general_oop<F: Field>(
 /// separate pass through main memory.
 #[instrument(level = "debug", skip_all)]
 #[inline(always)] // To avoid branch on scale
-pub(crate) fn second_half<F: Field>(
+fn second_half<F: Field>(
     mat: &mut RowMajorMatrix<F>,
     mid: usize,
     twiddles_rev: &[F],
