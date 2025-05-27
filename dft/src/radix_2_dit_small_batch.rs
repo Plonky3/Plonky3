@@ -1,6 +1,5 @@
 use alloc::vec::Vec;
 use core::cell::RefCell;
-use core::iter;
 
 use p3_field::{Field, PackedFieldPow2, TwoAdicField};
 use p3_matrix::Matrix;
@@ -11,12 +10,10 @@ use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
 use crate::{Butterfly, DitButterfly, TwiddleFreeButterfly, TwoAdicSubgroupDft};
 
-/// Computes the optimal workload size for `T` to fit in L1 cache (32 KB).
+/// Estimates the optimal workload size for `T` to fit in L1 cache.
 ///
-/// Ensures efficient memory access by dividing the cache size by `T`'s size.
-/// The result represents how many elements of `T` can be processed per thread.
-///
-/// Helps minimize cache misses and improve performance in parallel workloads.
+/// Approximates the size of the L1 cache by 32 KB. Used to determine the number of
+/// chunks to process in parallel.
 #[must_use]
 const fn workload_size<T: Sized>() -> usize {
     const L1_CACHE_SIZE: usize = 1 << 15; // 32 KB
@@ -26,37 +23,35 @@ const fn workload_size<T: Sized>() -> usize {
 /// A FFT algorithm which divides a butterfly network's layers into two halves.
 ///
 /// Unlike other FFT algorithms, this algorithm is optimized for small batch sizes.
-/// Hence it does not do any parallelization.
+/// It also stores it's twiddle factors and only re-computes if it is asked to do a
+/// larger FFT.
 ///
-/// For the first half, we apply a butterfly network with smaller blocks in earlier layers,
-/// i.e. either DIT or Bowers G. Then we bit-reverse, and for the second half, we continue executing
-/// the same network but in bit-reversed order. This way we're always working with small blocks,
-/// so within each half, we can have a certain amount of parallelism with no cross-thread
-/// communication.
+/// Instead of parallelizing across rows, this algorithm parallelizes across groups of rows
+/// with the same twiddle factors. This allows it to make use of field packings far more than
+/// the standard methods. Additionally, once the chunk size is small enough, it computes
+/// the last set of layers fully on a single thread, which avoids the overhead of
+/// passing data between threads.
 #[derive(Default, Clone, Debug)]
 pub struct Radix2DitSmallBatch<F: Field> {
     /// Memoized twiddle factors for each length log_n.
     ///
-    /// twiddles are stored in reverse order so twiddle[i]
-    /// is a vector of length 2^{i + 1} designed to be used in the round
-    /// of size 2^{i + 2}. E.g. twiddles[0] = vec![1, i] and will be
-    /// used in the round of size 4. Twiddles are not stored
-    /// for the final round of size 2, as the only twiddle is 1.
+    /// For each `i`, `twiddles[i]` contains a list of twiddles stored in
+    /// bit reversed order. The final set of twiddles `twiddles[-1]` is the
+    /// one element vectors `[1]` and more general `twiddles[-i]` has length `2^i`.
     ///
     /// TODO: The use of RefCell means this can't be shared across
     /// threads; consider using RwLock or finding a better design
     /// instead.
     twiddles: RefCell<Vec<Vec<F>>>,
-
-    /// Memoized inverse twiddle factors for each length log_n.
-    inv_twiddles: RefCell<Vec<Vec<F>>>,
 }
 
 impl<F: TwoAdicField> Radix2DitSmallBatch<F> {
+    /// Create a new `Radix2DitSmallBatch` instance with precomputed twiddles for the given size.
+    ///
+    /// The input `n` should be a power of two, representing the maximal FFT size you expect to handle.
     pub fn new(n: usize) -> Self {
         let res = Self {
             twiddles: RefCell::default(),
-            inv_twiddles: RefCell::default(),
         };
         res.update_twiddles(n);
         res
@@ -94,19 +89,7 @@ impl<F: TwoAdicField> Radix2DitSmallBatch<F> {
         let curr_max_fft_len = 1 << self.twiddles.borrow().len();
         if fft_len > curr_max_fft_len {
             let new_twiddles = self.roots_of_unity_table(fft_len);
-            // We can obtain the inverse twiddles by reversing and
-            // negating the twiddles.
-            let new_inv_twiddles = new_twiddles
-                .iter()
-                .map(|ts| {
-                    // The first twiddle is still one, we reverse and negate the rest...
-                    iter::once(F::ONE)
-                        .chain(ts[1..].iter().rev().map(|&t| -t))
-                        .collect()
-                })
-                .collect();
             self.twiddles.replace(new_twiddles);
-            self.inv_twiddles.replace(new_inv_twiddles);
         }
     }
 }
@@ -124,6 +107,8 @@ where
 
         self.update_twiddles(h);
         let root_table = self.twiddles.borrow();
+        let len = root_table.len();
+        let root_table = &root_table[len - log_h..];
 
         let half_lg_h = log_h / 2;
         let rough_sqrt_height = 1 << half_lg_h;
@@ -153,7 +138,7 @@ where
         par_remaining_layers(
             &mut mat.values,
             chunk_size,
-            &root_table,
+            root_table,
             log_h - log_num_par_rows,
             log_h,
         );
