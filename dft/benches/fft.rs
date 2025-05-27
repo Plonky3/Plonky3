@@ -19,9 +19,13 @@ fn bench_fft(c: &mut Criterion) {
     let log_sizes = &[14, 16, 18, 20, 22];
     let log_half_sizes = &[13, 15, 17];
 
-    const BATCH_SIZE: usize = 256;
+    const BATCH_SIZE: usize = 1;
     type BBExt = BinomialExtensionField<BabyBear, 5>;
 
+    fft::<BabyBear, Radix2DitSmallBatch<_>, BATCH_SIZE>(c, log_sizes);
+    fft::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
+    fft::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
+    fft::<BabyBear, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
     // fft::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
     // fft::<BabyBear, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
     // fft::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
@@ -47,8 +51,8 @@ fn bench_fft(c: &mut Criterion) {
 
     // // The FFT is much slower when handling extension fields so we use smaller sizes:
     // // let ext_log_sizes = &[10, 12, 14];
-    let ext_log_sizes = &[14];
-    const EXT_BATCH_SIZE: usize = 2;
+    let ext_log_sizes = &[18, 20, 22, 24];
+    const EXT_BATCH_SIZE: usize = 1;
     // fft::<BBExt, Radix2Dit<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
     // fft::<BBExt, Radix2DitParallel<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
     fft_algebra::<BabyBear, BBExt, Radix2DitSmallBatch<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
@@ -63,7 +67,7 @@ fn bench_fft(c: &mut Criterion) {
     // coset_lde_algebra_unbatched::<BabyBear, BBExt, RecursiveDft<_>>(c, ext_log_sizes);
 }
 
-fn _fft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
+fn fft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
 where
     F: TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
