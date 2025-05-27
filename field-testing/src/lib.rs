@@ -279,9 +279,9 @@ where
         (F::Packing::WIDTH - 1) + (F::Packing::WIDTH << 10),
     ];
     for len in lengths {
-        let mut slice_1 = vec![rng.random(); len];
+        let mut slice_1 = rng.sample_iter(StandardUniform).take(len).collect();
         let slice_1_copy = slice_1.clone();
-        let slice_2 = vec![rng.random(); len];
+        let slice_2 = rng.sample_iter(StandardUniform).take(len).collect();
 
         F::add_slices(&mut slice_1, &slice_2);
         for i in 0..len {
