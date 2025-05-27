@@ -396,6 +396,58 @@ pub fn iter_array_chunks_padded<T: Copy, const N: usize>(
     iter::from_fn(move || iter_next_chunk_padded(&mut iter, default))
 }
 
+/// Reinterpret a slice of `BaseArray` elements as a slice of `Base` elements
+///
+/// This is useful to convert `&[F; N]` to `&[F]` or `&[A]` to `&[F]` where
+/// `A` has the same size, alignment and memory layout as `[F; N]` for some `N`.
+///
+/// # Safety
+///
+/// This is assumes that `BaseArray` has the same alignment and memory layout as `[Base; N]`.
+/// As Rust guarantees that arrays elements are contiguous in memory and the alignment of
+/// the array is the same as the alignment of its elements, this means that `BaseArray`
+/// must have the same alignment as `Base`.
+///
+/// # Panics
+///
+/// This panics if the size of `BaseArray` is not a multiple of the size of `Base`.
+#[inline]
+pub unsafe fn as_base_slice<Base, BaseArray>(buf: &[BaseArray]) -> &[Base] {
+    assert_eq!(align_of::<Base>(), align_of::<BaseArray>());
+    let d = size_of::<BaseArray>() / size_of::<Base>();
+
+    assert!(align_of::<BaseArray>() >= align_of::<Base>());
+    let buf_ptr = buf.as_ptr().cast::<Base>();
+    let n = buf.len() * d;
+    unsafe { slice::from_raw_parts(buf_ptr, n) }
+}
+
+/// Reinterpret a mutable slice of `BaseArray` elements as a slice of `Base` elements
+///
+/// This is useful to convert `&[F; N]` to `&[F]` or `&[A]` to `&[F]` where
+/// `A` has the same size, alignment and memory layout as `[F; N]` for some `N`.
+///
+/// # Safety
+///
+/// This is assumes that `BaseArray` has the same alignment and memory layout as `[Base; N]`.
+/// As Rust guarantees that arrays elements are contiguous in memory and the alignment of
+/// the array is the same as the alignment of its elements, this means that `BaseArray`
+/// must have the same alignment as `Base`.
+///
+/// # Panics
+///
+/// This panics if the size of `BaseArray` is not a multiple of the size of `Base`.
+#[inline]
+pub unsafe fn as_base_slice_mut<Base, BaseArray>(buf: &mut [BaseArray]) -> &mut [Base] {
+    assert_eq!(align_of::<Base>(), align_of::<BaseArray>());
+    let d = size_of::<BaseArray>() / size_of::<Base>();
+
+    assert!(align_of::<BaseArray>() >= align_of::<Base>());
+    let buf_ptr = buf.as_mut_ptr().cast::<Base>();
+    let n = buf.len() * d;
+    unsafe { slice::from_raw_parts_mut(buf_ptr, n) }
+}
+
 /// Convert a vector of `BaseArray` elements to a vector of `Base` elements without any
 /// reallocations.
 ///
