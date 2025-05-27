@@ -9,7 +9,6 @@ pub mod dft_testing;
 pub mod from_integer_tests;
 pub mod packedfield_testing;
 
-use alloc::vec;
 use alloc::vec::Vec;
 use core::array;
 
@@ -279,9 +278,9 @@ where
         (F::Packing::WIDTH - 1) + (F::Packing::WIDTH << 10),
     ];
     for len in lengths {
-        let mut slice_1 = rng.sample_iter(StandardUniform).take(len).collect();
+        let mut slice_1: Vec<_> = (&mut rng).sample_iter(StandardUniform).take(len).collect();
         let slice_1_copy = slice_1.clone();
-        let slice_2 = rng.sample_iter(StandardUniform).take(len).collect();
+        let slice_2: Vec<_> = (&mut rng).sample_iter(StandardUniform).take(len).collect();
 
         F::add_slices(&mut slice_1, &slice_2);
         for i in 0..len {
