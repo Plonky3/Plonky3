@@ -439,7 +439,7 @@ pub unsafe fn as_base_slice<Base, BaseArray>(buf: &[BaseArray]) -> &[Base] {
 /// This panics if the size of `BaseArray` is not a multiple of the size of `Base`.
 #[inline]
 pub unsafe fn as_base_slice_mut<Base, BaseArray>(buf: &mut [BaseArray]) -> &mut [Base] {
-    debug_assert_eq!(align_of::<Base>(), align_of::<BaseArray>());
+    assert_eq!(align_of::<Base>(), align_of::<BaseArray>());
     let d = size_of::<BaseArray>() / size_of::<Base>();
 
     assert!(align_of::<BaseArray>() >= align_of::<Base>());
