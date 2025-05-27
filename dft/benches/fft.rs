@@ -55,12 +55,6 @@ fn bench_fft(c: &mut Criterion) {
     fft_algebra::<BabyBear, BBExt, Radix2Dit<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
     fft_algebra::<BabyBear, BBExt, Radix2DitParallel<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
     fft_algebra::<BabyBear, BBExt, RecursiveDft<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
-
-    coset_lde_algebra::<BabyBear, BBExt, Radix2DitParallel<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
-    coset_lde_algebra_unbatched::<BabyBear, BBExt, Radix2Dit<_>>(c, ext_log_sizes);
-    coset_lde_algebra_unbatched::<BabyBear, BBExt, Radix2DitParallel<_>>(c, ext_log_sizes);
-    coset_lde_algebra_unbatched::<BabyBear, BBExt, Radix2DitSmallBatch<_>>(c, ext_log_sizes);
-    coset_lde_algebra_unbatched::<BabyBear, BBExt, RecursiveDft<_>>(c, ext_log_sizes);
 }
 
 fn fft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
@@ -202,67 +196,6 @@ where
         group.bench_with_input(BenchmarkId::from_parameter(n), &dft, |b, dft| {
             b.iter(|| {
                 dft.coset_lde_batch(messages.clone(), 1, F::GENERATOR);
-            });
-        });
-    }
-}
-
-fn coset_lde_algebra<F, V, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
-where
-    F: TwoAdicField,
-    V: Algebra<F> + BasedVectorSpace<F> + Clone + Default + Send + Sync,
-    Dft: TwoAdicSubgroupDft<F>,
-    StandardUniform: Distribution<V>,
-{
-    let mut group = c.benchmark_group(format!(
-        "coset_lde_algebra/{}/{}/{}/ncols={}",
-        pretty_name::<F>(),
-        pretty_name::<Dft>(),
-        pretty_name::<V>(),
-        BATCH_SIZE
-    ));
-    group.sample_size(10);
-
-    let mut rng = SmallRng::seed_from_u64(1);
-    for n_log in log_sizes {
-        let n = 1 << n_log;
-
-        let messages = RowMajorMatrix::<V>::rand(&mut rng, n, BATCH_SIZE);
-
-        let dft = Dft::default();
-        group.bench_with_input(BenchmarkId::from_parameter(n), &dft, |b, dft| {
-            b.iter(|| {
-                dft.coset_lde_algebra_batch(messages.clone(), 1, F::GENERATOR);
-            });
-        });
-    }
-}
-
-fn coset_lde_algebra_unbatched<F, V, Dft>(c: &mut Criterion, log_sizes: &[usize])
-where
-    F: TwoAdicField,
-    V: Algebra<F> + BasedVectorSpace<F> + Clone + Default + Send + Sync,
-    Dft: TwoAdicSubgroupDft<F>,
-    StandardUniform: Distribution<V>,
-{
-    let mut group = c.benchmark_group(format!(
-        "coset_lde_algebra_unbatched/{}/{}/{}",
-        pretty_name::<F>(),
-        pretty_name::<Dft>(),
-        pretty_name::<V>()
-    ));
-    group.sample_size(10);
-
-    let mut rng = SmallRng::seed_from_u64(1);
-    for n_log in log_sizes {
-        let n = 1 << n_log;
-
-        let messages: Vec<V> = (&mut rng).sample_iter(StandardUniform).take(n).collect();
-
-        let dft = Dft::default();
-        group.bench_with_input(BenchmarkId::from_parameter(n), &dft, |b, dft| {
-            b.iter(|| {
-                dft.coset_lde_algebra(messages.clone(), 1, F::GENERATOR);
             });
         });
     }
