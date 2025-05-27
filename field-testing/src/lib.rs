@@ -697,25 +697,6 @@ where
     assert_eq!(combined_u64s, expected_combined_u64s);
 }
 
-/// A macro to generate tests for rings which implement equality but may not implement anything else.
-///
-/// Structs should prefer [test_field] or [test_packed_field] over this if they implement either of those traits.
-#[macro_export]
-macro_rules! test_ring {
-    ($ring:ty, $zeros: expr, $ones: expr) => {
-        mod ring_tests {
-            #[test]
-            fn test_ring_with_eq() {
-                $crate::test_ring_with_eq::<$ring>($zeros, $ones);
-            }
-            #[test]
-            fn test_mul_2exp_u64() {
-                $crate::test_mul_2exp_u64::<$ring>();
-            }
-        }
-    };
-}
-
 #[macro_export]
 macro_rules! test_field {
     ($field:ty, $zeros: expr, $ones: expr, $factors: expr) => {
