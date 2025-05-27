@@ -37,7 +37,7 @@ pub struct StirProof<F: Field, M: Mmcs<F>, Witness> {
     serialize = "Witness: Serialize",
     deserialize = "Witness: Deserialize<'de>",
 ))]
-pub(crate) struct RoundProof<F: Field, M: Mmcs<F>, Witness> {
+pub(crate) struct RoundProof<EF: Field, M: Mmcs<EF>, Witness> {
     // Important note:
     // The indices are given in the following frame of reference: Self is
     // produced inside prove_round for round i (for i = 1, ..., M) and are
@@ -48,22 +48,22 @@ pub(crate) struct RoundProof<F: Field, M: Mmcs<F>, Witness> {
     pub(crate) g_root: M::Commitment,
 
     // Replies beta_{i, j} to the out-of-domain queries to g_i
-    pub(crate) betas: Vec<F>,
+    pub(crate) betas: Vec<EF>,
 
     // Coefficients of the polynomial interpolating the evaluations of g_i at
     // the in-domain and out-of-domain queried points, r_{i, j}^shift and r_{i,
     // j}^ood, resp. The leading coefficient is non-zero as explained above.
-    pub(crate) ans_polynomial: Vec<F>,
+    pub(crate) ans_polynomial: Vec<EF>,
 
     // Merkle proofs of the committed evaluations of g_{i - 1} necessary to
     // compute f_{i - 1} at the k_i-th roots of the in-domain queried points
     // r_{i, j}^shift
-    pub(crate) query_proofs: Vec<(Vec<F>, M::Proof)>,
+    pub(crate) query_proofs: Vec<(Vec<EF>, M::Proof)>,
 
     // Coefficients of the auxiliary polynomial helping the verifier evaluate
     // ans_polynomial at the queried points. The leading coefficient is non-zero
     // as explained above.
-    pub(crate) shake_polynomial: Vec<F>,
+    pub(crate) shake_polynomial: Vec<EF>,
 
     // Solution to the proof-of-work challenge in round i
     pub(crate) pow_witness: Witness,

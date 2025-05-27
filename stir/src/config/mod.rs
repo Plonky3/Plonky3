@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
 use alloc::{format, vec};
 use core::fmt::{Debug, Display, Formatter, Result};
+use core::marker::PhantomData;
 
 use itertools::Itertools;
 use p3_challenger::FieldChallenger;
@@ -195,7 +196,12 @@ pub struct RoundConfig {
 
 /// Full STIR configuration.
 #[derive(Debug, Clone)]
-pub struct StirConfig<EF: TwoAdicField, M: Clone> {
+pub struct StirConfig<F, EF, M>
+where
+    F: TwoAdicField,
+    EF: TwoAdicField + ExtensionField<F>,
+    M: Clone,
+{
     // See the comment at the start of StirParameters for the convention on the
     // number of rounds, codewords, etc.
 
@@ -225,16 +231,23 @@ pub struct StirConfig<EF: TwoAdicField, M: Clone> {
     // Number of proof-of-work bits for the last round.
     final_pow_bits: usize,
 
-    // Structure to compute two-adic FFTs
-    pub(crate) dft: Radix2Dit<EF>,
+    // Structure to compute two-adic FFTs over F and its extension EF
+    pub(crate) dft: Radix2Dit<F>,
+
+    // This is necessary to prevent configurations created over one extension EF
+    // to be used over a different extension EF' (which could lead to poor
+    // soundness)
+    _phantom: PhantomData<EF>,
 }
 
-impl<EF: TwoAdicField, M: Clone> StirConfig<EF, M> {
+impl<F, EF, M> StirConfig<F, EF, M>
+where
+    F: TwoAdicField,
+    EF: TwoAdicField + ExtensionField<F>,
+    M: Clone,
+{
     /// Expand STIR parameters into a full STIR configuration.
-    pub fn new<F: TwoAdicField>(parameters: StirParameters<M>) -> Self
-    where
-        EF: ExtensionField<F>,
-    {
+    pub fn new(parameters: StirParameters<M>) -> Self {
         let StirParameters {
             security_level,
             security_assumption,
@@ -439,6 +452,7 @@ impl<EF: TwoAdicField, M: Clone> StirConfig<EF, M> {
             final_num_queries,
             final_pow_bits,
             dft,
+            _phantom: PhantomData,
         }
     }
 
@@ -604,7 +618,12 @@ impl<M: Clone> Display for StirParameters<M> {
     }
 }
 
-impl<F: TwoAdicField, M: Clone> Display for StirConfig<F, M> {
+impl<F, EF, M> Display for StirConfig<F, EF, M>
+where
+    F: TwoAdicField,
+    EF: TwoAdicField + ExtensionField<F>,
+    M: Clone,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(
             f,

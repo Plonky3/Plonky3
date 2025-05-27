@@ -109,7 +109,7 @@ macro_rules! impl_test_stir_config {
             log_starting_inv_rate: usize,
             log_folding_factor: usize,
             num_rounds: usize,
-        ) -> StirConfig<$ext, $ext_mmcs> {
+        ) -> StirConfig<$base, $ext, $ext_mmcs> {
             let pow_bits = 20;
 
             let parameters = StirParameters::constant_folding_factor(
@@ -122,7 +122,7 @@ macro_rules! impl_test_stir_config {
                 $mmcs_config_fn(),
             );
 
-            StirConfig::new::<$base>(parameters)
+            StirConfig::new(parameters)
         }
     };
 }
@@ -136,7 +136,7 @@ macro_rules! impl_test_stir_config_folding_factors {
             log_starting_degree: usize,
             log_starting_inv_rate: usize,
             log_folding_factors: Vec<usize>,
-        ) -> StirConfig<$ext, $ext_mmcs> {
+        ) -> StirConfig<$base, $ext, $ext_mmcs> {
             let pow_bits = 20;
 
             let parameters = StirParameters::variable_folding_factor(
@@ -148,7 +148,7 @@ macro_rules! impl_test_stir_config_folding_factors {
                 $mmcs_config_fn(),
             );
 
-            StirConfig::new::<$base>(parameters)
+            StirConfig::new(parameters)
         }
     };
 }

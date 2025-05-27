@@ -51,7 +51,7 @@ fn test_config() {
         test_mmcs_config(),
     );
 
-    let config: StirConfig<BbExt, BbExtMmcs> = StirConfig::new::<Bb>(parameters);
+    let config: StirConfig<Bb, BbExt, BbExtMmcs> = StirConfig::new(parameters);
 
     assert_eq!(config.starting_domain_log_size(), 19);
     assert_eq!(config.starting_folding_pow_bits(), 30);

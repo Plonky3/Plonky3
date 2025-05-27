@@ -20,16 +20,20 @@ pub(crate) fn compute_pow(security_level: usize, error: f64) -> f64 {
 
 // Fold (with factor k equal to a power of two) the evaluations of a polynomial
 // over an entire coset H into those of the folded polynomial over H^k
-pub(crate) fn fold_evaluations_at_domain<F: TwoAdicField>(
+pub(crate) fn fold_evaluations_at_domain<F, EF>(
     // The evaluations of the original polynomial over the domain
-    evals: Vec<F>,
+    evals: Vec<EF>,
     // The domain
     domain: TwoAdicMultiplicativeCoset<F>,
     // The log2 of the folding factor k
     log_folding_factor: usize,
     // The folding coefficient
-    c: F,
-) -> Vec<F> {
+    c: EF,
+) -> Vec<EF>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F>,
+{
     let two_inv = F::ONE.halve();
     let denominators: Vec<F> = domain.iter().take(domain.size() / 2).collect();
     let inv_denominators = batch_multiplicative_inverse(&denominators);
@@ -48,20 +52,24 @@ pub(crate) fn fold_evaluations_at_domain<F: TwoAdicField>(
 // fold_evaluations_at_small_domain which folds the evaluations of a polynomial
 // over an entire coset into those of the folded polynomial over a power of
 // that coset.
-fn fold_evaluations_at_domain_inner<F: TwoAdicField>(
+fn fold_evaluations_at_domain_inner<F, EF>(
     // The evaluations of the original polynomial
-    mut evals: Vec<F>,
+    mut evals: Vec<EF>,
     // The generator of the domain's subgroup
     mut gen: F,
     // The log2 of the folding factor
     mut log_folding_factor: usize,
     // The folding coefficient
-    mut c: F,
+    mut c: EF,
     // The inverse of 2, provided in order to avoid recomputation
     two_inv: F,
     // The inverses of half the domain elements
     mut half_domain_invs: Vec<F>,
-) -> Vec<F> {
+) -> Vec<EF>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F>,
+{
     while log_folding_factor > 0 {
         let half_size = half_domain_invs.len();
 
@@ -74,7 +82,7 @@ fn fold_evaluations_at_domain_inner<F: TwoAdicField>(
             .zip(evals_minus.iter())
             .zip(half_domain_invs.iter())
             .for_each(|((eval_p, eval_m), inv)| {
-                *eval_p = two_inv * (*eval_p + *eval_m + c * *inv * (*eval_p - *eval_m));
+                *eval_p = (*eval_p + *eval_m + (*eval_p - *eval_m) * c * *inv) * two_inv;
             });
 
         evals.truncate(half_size);
@@ -168,11 +176,15 @@ pub(crate) fn observe_usize_slice<F: Field, C: CanObserve<F>>(
 // This function panics if the degree of the polynomial is greater than or
 // equal to the size of the coset. In this case, a larger domain should be
 // used instead.
-pub(crate) fn domain_dft<F: TwoAdicField>(
+pub(crate) fn domain_dft<F, EF>(
     domain: TwoAdicMultiplicativeCoset<F>,
-    poly_coeffs: Vec<F>,
+    poly_coeffs: Vec<EF>,
     dft: &Radix2Dit<F>,
-) -> Vec<F> {
+) -> Vec<EF>
+where
+    F: TwoAdicField,
+    EF: TwoAdicField + ExtensionField<F>,
+{
     let size = domain.size();
     assert!(
         poly_coeffs.len() <= size,
@@ -184,34 +196,38 @@ pub(crate) fn domain_dft<F: TwoAdicField>(
     );
 
     if poly_coeffs.is_empty() {
-        return vec![F::ZERO; size];
+        return vec![EF::ZERO; size];
     } else if poly_coeffs.len() == 1 {
         return vec![poly_coeffs[0]; size];
     }
 
     let mut coeffs = poly_coeffs;
-    coeffs.resize(size, F::ZERO);
+    coeffs.resize(size, EF::ZERO);
 
     if domain.shift() == domain.subgroup_generator() {
         // In this case it is more efficient to use a plain FFT without
         // shift, and then (cyclically) rotate the resulting evaluations by
         // one position. This case is particularly frequentNote that this case is not unusual and is, e. g.
         // used in this repository's implementation of STIR
-        let mut evals = dft.dft(coeffs);
+        let mut evals = dft.dft_algebra(coeffs);
         evals.rotate_left(1);
         evals
     } else {
-        dft.coset_dft(coeffs, domain.shift())
+        dft.coset_dft_algebra(coeffs, domain.shift())
     }
 }
 
 #[inline]
-pub(crate) fn domain_idft<F: TwoAdicField>(
-    evals: Vec<F>,
+pub(crate) fn domain_idft<F, EF>(
+    evals: Vec<EF>,
     domain: TwoAdicMultiplicativeCoset<F>,
     dft: &Radix2Dit<F>,
-) -> Vec<F> {
-    dft.coset_idft(evals, domain.shift())
+) -> Vec<EF>
+where
+    F: TwoAdicField,
+    EF: TwoAdicField + ExtensionField<F>,
+{
+    dft.coset_idft_algebra(evals, domain.shift())
 }
 
 // Adds two polynomials given their coefficients

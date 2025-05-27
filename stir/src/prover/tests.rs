@@ -1,9 +1,9 @@
-use alloc::vec::Vec;
+use alloc::{vec, vec::Vec};
 
 use itertools::Itertools;
 use p3_challenger::MockChallenger;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
-use p3_field::{eval_poly, TwoAdicField};
+use p3_field::{eval_poly, BasedVectorSpace, ExtensionField, Field, TwoAdicField};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
@@ -15,6 +15,16 @@ use crate::utils::{
     power_polynomial, subtract_polys, vanishing_polynomial,
 };
 use crate::SecurityAssumption;
+
+// Auxiliary function to read an algebra element from a slice of base-field
+// elements
+#[inline]
+fn read_algebra_element<F: Field, EF: ExtensionField<F>>(coefficients: &[F], index: usize) -> EF {
+    EF::from_basis_coefficients_slice(
+        &coefficients[index * EF::DIMENSION..(index + 1) * EF::DIMENSION],
+    )
+    .unwrap()
+}
 
 #[test]
 // Checks that prove runs from beginning to end and performs a degree check on
@@ -68,6 +78,8 @@ fn test_prove_final_polynomial() {
         3,
     );
 
+    let ext_degree = <BbExt as BasedVectorSpace<Bb>>::DIMENSION;
+
     let log_initial_codeword_size = log_starting_degree + config.log_starting_inv_rate();
 
     // ======================= Preparing fake randomness =======================
@@ -80,9 +92,9 @@ fn test_prove_final_polynomial() {
     let mut round_shake_replies = Vec::new();
     let mut round_bit_replies = Vec::new();
 
-    let r_0 = rng.random();
-    field_replies.push(r_0);
-    round_r_replies.push(r_0);
+    let r_0 = vec![rng.random(); ext_degree];
+    field_replies.extend_from_slice(&r_0);
+    round_r_replies.extend(r_0);
 
     for round in 1..=2 {
         let round_config = config.round_config(round);
@@ -95,32 +107,36 @@ fn test_prove_final_polynomial() {
         } = round_config.clone();
 
         // Out of domain randomness
-        let ood_randomness: Vec<BbExt> = (0..num_ood_samples).map(|_| rng.random()).collect();
+        // We need to construct this and the other MockChallenger values as
+        // sponges over Bb instead of BbExt and then convert slices to sampled
+        // values into extension-field elements.
+        let ood_randomness: Vec<Bb> = (0..num_ood_samples * ext_degree)
+            .map(|_| rng.random())
+            .collect();
 
         // Comb randomness
-        let comb_randomness = rng.random();
+        let comb_randomness: Vec<Bb> = vec![rng.random(); ext_degree];
 
         // Folding randomness
-        let r: BbExt = rng.random();
+        let r: Vec<Bb> = vec![rng.random(); ext_degree];
 
         // Shake randomness (which is squeezed but not used by the prover)
-        let shake_randomness = rng.random();
+        let shake_randomness: Vec<Bb> = vec![rng.random(); ext_degree];
 
-        field_replies.extend(ood_randomness.clone());
-        field_replies.push(comb_randomness);
-        field_replies.push(r);
-        field_replies.push(shake_randomness);
+        field_replies.extend_from_slice(&ood_randomness);
+        field_replies.extend_from_slice(&comb_randomness);
+        field_replies.extend_from_slice(&r);
+        field_replies.extend_from_slice(&shake_randomness);
 
         round_ood_replies.push(ood_randomness);
-        round_comb_replies.push(comb_randomness);
-        round_r_replies.push(r);
-        round_shake_replies.push(shake_randomness);
-
-        // Random queried indices (in the form of bits, not field elements)
+        round_comb_replies.extend(comb_randomness);
+        round_r_replies.extend(r);
+        round_shake_replies.extend(shake_randomness);
 
         // This is the log2 of |L_{i - 1}^{k_{i - 1}}|
         let log_prev_domain_size = log_initial_codeword_size - (round - 1) - log_folding_factor;
 
+        // Random queried indices (in the form of bits, not field elements)
         let new_bit_replies = (0..num_queries)
             .map(|_| rng.random_range(0..usize::MAX))
             .map(|i: usize| i % (1 << log_prev_domain_size))
@@ -130,12 +146,11 @@ fn test_prove_final_polynomial() {
         round_bit_replies.push(new_bit_replies);
     }
 
-    // Prepare the final-round fake randomness (irrelevant to the final
-    // polynomial p = g_3, but sampled from the challenger by the prover)
-
     // log2 of |L_2^{k_2}|
     let log_final_domain_size = log_initial_codeword_size - 2 - log_folding_factor;
 
+    // Prepare the final-round fake randomness (irrelevant to the final
+    // polynomial p = g_3, but sampled from the challenger by the prover)
     let final_bit_replies = (0..config.final_num_queries())
         .map(|_| rng.random_range(0..usize::MAX))
         .map(|i: usize| i % (1 << log_final_domain_size))
@@ -147,6 +162,7 @@ fn test_prove_final_polynomial() {
     let mut challenger = MockChallenger::new(field_replies, bit_replies);
 
     // ================================ Proving ================================
+
     let mut polynomial = rand_poly_coeffs((1 << config.log_starting_degree()) - 1, &mut rng);
 
     let (witness, commitment) = commit_polynomial(&config, polynomial.clone());
@@ -160,7 +176,8 @@ fn test_prove_final_polynomial() {
 
     // Computing f_1 and f_2 manually
     for round in 1..=2 {
-        let g_i = fold_polynomial(&polynomial, round_r_replies[round - 1], log_folding_factor);
+        let r_i_minus_1 = read_algebra_element(&round_r_replies, round - 1);
+        let g_i = fold_polynomial(&polynomial, r_i_minus_1, log_folding_factor);
 
         // Computing the domain L_{i - 1}^{k_{i - 1}}
         let domain_pow_k =
@@ -173,10 +190,12 @@ fn test_prove_final_polynomial() {
             .iter()
             .map(|&i| domain_pow_k.element(i));
 
-        let quotient_set = stir_randomness
-            .chain(round_ood_replies[round - 1].clone().into_iter())
-            .unique()
-            .collect_vec();
+        let num_ood = config.round_config(round).num_ood_samples;
+        let ood_randomness: Vec<BbExt> = (0..num_ood)
+            .map(|i| read_algebra_element(&round_ood_replies[round - 1], i))
+            .collect();
+
+        let quotient_set = stir_randomness.chain(ood_randomness).unique().collect_vec();
 
         let quotient_set_points = quotient_set
             .iter()
@@ -192,7 +211,7 @@ fn test_prove_final_polynomial() {
 
         assert!(remainder.is_empty());
 
-        let comb_randomness = round_comb_replies[round - 1];
+        let comb_randomness = read_algebra_element(&round_comb_replies, round - 1);
 
         // New round polynomial f_i
         polynomial = mul_polys(
@@ -204,7 +223,8 @@ fn test_prove_final_polynomial() {
     let f_2 = polynomial.clone();
 
     // Computing the expected final polynomial p = g_3
-    let expected_final_polynomial = fold_polynomial(&f_2, round_r_replies[2], log_folding_factor);
+    let r_2 = read_algebra_element(&round_r_replies, 2);
+    let expected_final_polynomial = fold_polynomial(&f_2, r_2, log_folding_factor);
 
     assert_eq!(proof.final_polynomial, expected_final_polynomial);
 }

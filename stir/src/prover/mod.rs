@@ -7,8 +7,8 @@ use p3_commit::Mmcs;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    batch_multiplicative_inverse, eval_packed_ext_poly, ExtensionField, Field,
-    PackedFieldExtension, PackedValue, TwoAdicField,
+    batch_multiplicative_inverse, eval_packed_ext_poly, ExtensionField, PackedFieldExtension,
+    PackedValue, TwoAdicField,
 };
 use p3_matrix::dense::RowMajorMatrix;
 
@@ -41,7 +41,12 @@ pub struct StirWitness<F: TwoAdicField, M: Mmcs<F>> {
 
 // STIR witness enriched with additional information (round number and folding
 // randomness) received and produced by the method prove_round
-pub(crate) struct StirRoundWitness<F: TwoAdicField, M: Mmcs<F>> {
+pub(crate) struct StirRoundWitness<F, EF, M>
+where
+    F: TwoAdicField,
+    EF: TwoAdicField + ExtensionField<F>,
+    M: Mmcs<EF>,
+{
     // The indices are given in the following frame of reference: Self is
     // produced inside prove_round for round i (in {1, ..., M}). The final
     // round, with index M + 1, does not produce a StirRoundWitness. The first
@@ -57,17 +62,17 @@ pub(crate) struct StirRoundWitness<F: TwoAdicField, M: Mmcs<F>> {
 
     // Evaluations of f_i over K_i
     // N. B. See the comment on the field `evals_k` of `StirWitness`
-    pub(crate) evals_k: Vec<F>,
+    pub(crate) evals_k: Vec<EF>,
 
     // Merkle tree whose leaves are the stacked evaluations of g_i
-    pub(crate) merkle_tree: M::ProverData<RowMajorMatrix<F>>,
+    pub(crate) merkle_tree: M::ProverData<RowMajorMatrix<EF>>,
 
     // Round number i
     pub(crate) round: usize,
 
     // Folding randomness r_i to be used *in the next round* (g_{i + 1} will be
     // the folding of f_i with randomness r_i)
-    pub(crate) folding_randomness: F,
+    pub(crate) folding_randomness: EF,
 }
 
 /// Commit to the initial polynomial `f_0` whose low-degreeness is being
@@ -83,13 +88,14 @@ pub(crate) struct StirRoundWitness<F: TwoAdicField, M: Mmcs<F>> {
 ///
 /// Panics if the degree of `polynomial` is too large (the configuration supports
 /// degree at most `2^{config.log_starting_degree()} - 1`).
-pub fn commit_polynomial<F, M>(
-    config: &StirConfig<F, M>,
-    polynomial: Vec<F>,
-) -> (StirWitness<F, M>, M::Commitment)
+pub fn commit_polynomial<F, EF, M>(
+    config: &StirConfig<F, EF, M>,
+    polynomial: Vec<EF>,
+) -> (StirWitness<EF, M>, M::Commitment)
 where
     F: TwoAdicField,
-    M: Mmcs<F>,
+    EF: TwoAdicField + ExtensionField<F>,
+    M: Mmcs<EF>,
 {
     assert!(
         polynomial.is_empty() || polynomial.len() <= (1 << config.log_starting_degree()),
@@ -124,13 +130,14 @@ where
     commit_evals(config, evals)
 }
 
-pub fn commit_evals<F, M>(
-    config: &StirConfig<F, M>,
-    evals: Vec<F>,
-) -> (StirWitness<F, M>, M::Commitment)
+pub fn commit_evals<F, EF, M>(
+    config: &StirConfig<F, EF, M>,
+    evals: Vec<EF>,
+) -> (StirWitness<EF, M>, M::Commitment)
 where
     F: TwoAdicField,
-    M: Mmcs<F>,
+    EF: ExtensionField<F> + TwoAdicField,
+    M: Mmcs<EF>,
 {
     let log_size = config.log_starting_degree() + config.log_starting_inv_rate();
 
@@ -173,13 +180,13 @@ where
 /// - `challenger`: Challenger which produces the transcript of the
 ///   Fiat-Shamired interaction
 pub fn prove<F, EF, M, C>(
-    config: &StirConfig<EF, M>,
+    config: &StirConfig<F, EF, M>,
     witness: StirWitness<EF, M>,
     commitment: M::Commitment,
     challenger: &mut C,
 ) -> StirProof<EF, M, C::Witness>
 where
-    F: Field,
+    F: TwoAdicField,
     EF: TwoAdicField + ExtensionField<F>,
     M: Mmcs<EF>,
     C: FieldChallenger<F> + GrindingChallenger + CanObserve<M::Commitment>,
@@ -216,7 +223,7 @@ where
     let log_size = config.log_starting_degree() + config.log_starting_inv_rate();
 
     let domain_l_0 =
-        TwoAdicMultiplicativeCoset::new(EF::two_adic_generator(log_size), log_size).unwrap();
+        TwoAdicMultiplicativeCoset::new(F::two_adic_generator(log_size), log_size).unwrap();
 
     let domain_k_0 = domain_l_0
         .shrink_coset(config.log_starting_inv_rate())
@@ -311,14 +318,14 @@ where
 pub(crate) fn prove_round<F, EF, M, C>(
     // Full STIR configuration from which the round-specific configuration is
     // extracted
-    config: &StirConfig<EF, M>,
+    config: &StirConfig<F, EF, M>,
     // Witness for the previous round (referring to f_{i - 1} if this is round i)
-    witness: StirRoundWitness<EF, M>,
+    witness: StirRoundWitness<F, EF, M>,
     // FS challenger
     challenger: &mut C,
-) -> (StirRoundWitness<EF, M>, RoundProof<EF, M, C::Witness>)
+) -> (StirRoundWitness<F, EF, M>, RoundProof<EF, M, C::Witness>)
 where
-    F: Field,
+    F: TwoAdicField,
     EF: TwoAdicField + ExtensionField<F>,
     M: Mmcs<EF>,
     C: FieldChallenger<F> + GrindingChallenger + CanObserve<M::Commitment>,
@@ -347,7 +354,6 @@ where
     // ================================ Folding ================================
 
     // Obtain g_i as the folding of f_{i - 1}
-
     let folded_evals_k =
         fold_evaluations_at_domain(evals_k, domain_k, log_folding_factor, folding_randomness);
     let domain_k_pow = domain_k.exp_power_of_2(log_folding_factor).unwrap();
@@ -358,7 +364,7 @@ where
     assert!(folded_polynomial.len() % F::Packing::WIDTH == 0);
     let packed_folded_polynomial = folded_polynomial
         .chunks_exact(F::Packing::WIDTH)
-        .map(|chunck| EF::ExtensionPacking::from_ext_slice(chunck))
+        .map(|chunk| EF::ExtensionPacking::from_ext_slice(chunk))
         .collect::<Vec<_>>(); // TODO: Ideally this transformation should be a method in ExtensionPacking.
 
     // Compute the i-th domain L_i = w * <w^{2^i}> = w * (w^{-1} * L_{i - 1})^2
@@ -398,7 +404,12 @@ where
     challenger.observe(F::from_u8(Messages::OodSamples as u8));
     while ood_samples.len() < num_ood_samples {
         let el: EF = challenger.sample_algebra_element();
-        if !new_domain_l.contains(el) {
+        // In the original STIR, the OOD samples are required to live outside
+        // the domain L_i. For efficiency reasons, it was decided all domains
+        // L_i would live in the base field F and rejection sampling would
+        // simply check the OOD samples do not lie in the base field. Cf. the
+        // discussion in https://github.com/Plonky3/Plonky3/pull/674
+        if !el.is_in_basefield() {
             ood_samples.push(el);
         }
     }
@@ -460,7 +471,7 @@ where
     // Get the domain elements at the queried indices (i.e r^shift_i in the paper)
     let stir_randomness: Vec<EF> = queried_indices
         .iter()
-        .map(|&index| domain_pow2_k.element(index))
+        .map(|&index| domain_pow2_k.element(index).into())
         .collect();
 
     // Evaluate the polynomial at those points
@@ -470,6 +481,7 @@ where
         .collect();
 
     // stir_answers has been dedup-ed but beta_answers has not yet:
+
     let stir_answers = stir_randomness.into_iter().zip(stir_randomness_evals);
     let beta_answers = ood_samples.into_iter().zip(betas.clone()).unique();
     let quotient_answers = beta_answers.chain(stir_answers).collect_vec();
@@ -504,7 +516,6 @@ where
 
     let mut power_polynomial = power_polynomial(comb_randomness, quotient_set_size);
     let mut vanishing_polynomial = vanishing_polynomial(quotient_set);
-
     let mut resized_ans_polynomial = ans_polynomial.clone();
 
     power_polynomial.resize(new_domain_k.size(), EF::ZERO);
@@ -519,7 +530,9 @@ where
     .concat();
 
     let coeff_matrix = RowMajorMatrix::new(flat_coeffs, new_domain_k.size()).transpose();
-    let eval_matrix = config.dft.coset_dft_batch(coeff_matrix, domain_k.shift());
+    let eval_matrix = config
+        .dft
+        .coset_dft_algebra_batch(coeff_matrix, domain_k.shift());
 
     // Batch-invert all vanishing-polynomial evaluations denominators. Note that
     // vanishing polynomial cannot vanish at any queried point: K_i is contained

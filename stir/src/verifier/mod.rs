@@ -6,7 +6,7 @@ use itertools::{iterate, Itertools};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{BatchOpeningRef, Mmcs};
 use p3_field::coset::TwoAdicMultiplicativeCoset;
-use p3_field::{batch_multiplicative_inverse, eval_poly, ExtensionField, Field, TwoAdicField};
+use p3_field::{batch_multiplicative_inverse, eval_poly, ExtensionField, TwoAdicField};
 use p3_matrix::Dimensions;
 
 use crate::config::{observe_public_parameters, RoundConfig};
@@ -153,13 +153,13 @@ pub struct VerificationState<F: TwoAdicField, M: Mmcs<F>> {
 ///
 /// # Returns
 pub fn verify<F, EF, M, C>(
-    config: &StirConfig<EF, M>,
+    config: &StirConfig<F, EF, M>,
     commitment: M::Commitment,
     proof: StirProof<EF, M, C::Witness>,
     challenger: &mut C,
 ) -> Result<(), VerificationError>
 where
-    F: Field,
+    F: TwoAdicField,
     EF: TwoAdicField + ExtensionField<F>,
     M: Mmcs<EF>,
     C: FieldChallenger<F> + GrindingChallenger + CanObserve<M::Commitment>,
@@ -348,7 +348,7 @@ where
 fn verify_round<F, EF, M, C>(
     // The full STIR configuration from which the round-specific configuration
     // is extracted
-    config: &StirConfig<EF, M>,
+    config: &StirConfig<F, EF, M>,
     // The verification state produced by the previous full round (or the
     // initial one computed manually)
     verification_state: VerificationState<EF, M>,
@@ -358,7 +358,7 @@ fn verify_round<F, EF, M, C>(
     challenger: &mut C,
 ) -> Result<VerificationState<EF, M>, FullRoundVerificationError>
 where
-    F: Field,
+    F: TwoAdicField,
     EF: TwoAdicField + ExtensionField<F>,
     M: Mmcs<EF>,
     C: FieldChallenger<F> + GrindingChallenger + CanObserve<M::Commitment>,

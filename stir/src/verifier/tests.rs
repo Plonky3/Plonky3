@@ -28,6 +28,8 @@ macro_rules! impl_generate_proof_with_config {
     (
         // Name of the function to create
         $name:ident,
+        // Base field
+        $base:ty,
         // Extension Field
         $ext:ty,
         // MMCS
@@ -40,7 +42,7 @@ macro_rules! impl_generate_proof_with_config {
         $challenger:ty
     ) => {
         pub fn $name(
-            config: &StirConfig<$ext, $ext_mmcs>,
+            config: &StirConfig<$base, $ext, $ext_mmcs>,
             challenger: &mut $challenger,
         ) -> ($proof_type, $commitment_type) {
             let polynomial =
@@ -61,6 +63,8 @@ macro_rules! impl_test_verify_with_config {
     (
         // Name of the function to create
         $name:ident,
+        // Base field
+        $base:ty,
         // Field over which STIR takes place
         $ext:ty,
         // MMCS
@@ -70,7 +74,7 @@ macro_rules! impl_test_verify_with_config {
         // Name of the function which generates the proof
         $proof_fn:ident
     ) => {
-        pub fn $name(config: &StirConfig<$ext, $ext_mmcs>) {
+        pub fn $name(config: &StirConfig<$base, $ext, $ext_mmcs>) {
             let (mut prover_challenger, mut verifier_challenger) =
                 ($challenger_fn(), $challenger_fn());
 
@@ -89,6 +93,7 @@ macro_rules! impl_test_verify_with_config {
 // Create the function generate_bb_proof_with_config
 impl_generate_proof_with_config!(
     generate_bb_proof_with_config,
+    Bb,
     BbExt,
     BbExtMmcs,
     BBProof,
@@ -99,6 +104,7 @@ impl_generate_proof_with_config!(
 // Create the function generate_gl_proof_with_config
 impl_generate_proof_with_config!(
     generate_gl_proof_with_config,
+    Gl,
     GlExt,
     GlExtMmcs,
     GLProof,
@@ -109,6 +115,7 @@ impl_generate_proof_with_config!(
 // Create the function test_bb_verify_with_config
 impl_test_verify_with_config!(
     test_bb_verify_with_config,
+    Bb,
     BbExt,
     BbExtMmcs,
     test_bb_challenger,
@@ -118,6 +125,7 @@ impl_test_verify_with_config!(
 // Create the function test_gl_verify_with_config
 impl_test_verify_with_config!(
     test_gl_verify_with_config,
+    Gl,
     GlExt,
     GlExtMmcs,
     test_gl_challenger,
@@ -127,7 +135,7 @@ impl_test_verify_with_config!(
 // Auxiliary function to trigger a tricky verification error which mimics the
 // honest proving procedure but modifies the final polynomial near the end.
 fn tamper_with_final_polynomial(
-    config: &StirConfig<BbExt, BbExtMmcs>,
+    config: &StirConfig<Bb, BbExt, BbExtMmcs>,
 ) -> (BBProof, Hash<Bb, Bb, 8>) {
     // ========================== Honest proving =============================
 
@@ -151,7 +159,7 @@ fn tamper_with_final_polynomial(
 
     let log_size = config.log_starting_degree() + config.log_starting_inv_rate();
     let domain_l_0 =
-        TwoAdicMultiplicativeCoset::new(BbExt::two_adic_generator(log_size), log_size).unwrap();
+        TwoAdicMultiplicativeCoset::new(Bb::two_adic_generator(log_size), log_size).unwrap();
 
     let domain_k_0 = domain_l_0
         .shrink_coset(config.log_starting_inv_rate())
