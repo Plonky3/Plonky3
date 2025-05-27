@@ -1,8 +1,11 @@
-use core::{cell::RefCell, iter};
-
 use alloc::vec::Vec;
+use core::cell::RefCell;
+use core::iter;
+
 use p3_field::{Field, PackedFieldPow2, TwoAdicField};
-use p3_matrix::{Matrix, dense::RowMajorMatrix, util::reverse_matrix_index_bits};
+use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
