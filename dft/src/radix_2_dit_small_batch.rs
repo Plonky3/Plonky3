@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use core::cell::RefCell;
 
-use p3_field::{Field, PackedFieldPow2, TwoAdicField};
+use p3_field::{Field, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
@@ -97,7 +97,6 @@ impl<F: TwoAdicField> Radix2DitSmallBatch<F> {
 impl<F> TwoAdicSubgroupDft<F> for Radix2DitSmallBatch<F>
 where
     F: TwoAdicField,
-    F::Packing: PackedFieldPow2,
 {
     type Evaluations = BitReversedMatrixView<RowMajorMatrix<F>>;
 
