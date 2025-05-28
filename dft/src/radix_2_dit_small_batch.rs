@@ -121,20 +121,14 @@ where
 
         // For the layers involving blocks larger than `num_par_rows`, we will
         // parallelize across the blocks.
-        for layer in 0..(log_h - log_num_par_rows) {
-            dit_layer_par(&mut mat.as_view_mut(), &root_table[log_h - layer - 1]);
+        for twiddles in root_table[log_num_par_rows..].iter().rev() {
+            dit_layer_par(&mut mat.as_view_mut(), twiddles);
         }
 
         // Once the blocks are small enough, we can split the matrix
         // into chunks of size `chunk_size` and process them in parallel.
         // This avoids passing data between threads, which can be expensive.
-        par_remaining_layers(
-            &mut mat.values,
-            chunk_size,
-            root_table,
-            log_h - log_num_par_rows,
-            log_h,
-        );
+        par_remaining_layers(&mut mat.values, chunk_size, root_table, log_num_par_rows);
 
         // Finally we bit-reverse the matrix to ensure the output is in the correct order.
         mat.bit_reverse_rows()
@@ -205,18 +199,15 @@ fn par_remaining_layers<F: Field>(
     chunk_size: usize,
     root_table: &[Vec<F>],
     log_num_par_rows: usize,
-    log_h: usize,
 ) {
     mat.par_chunks_exact_mut(chunk_size)
         .enumerate()
         .for_each(|(index, chunk)| {
-            for layer in log_num_par_rows..log_h {
-                let num_twiddles_per_block = 1 << (layer - log_num_par_rows);
-                dit_layer(
-                    chunk,
-                    &(root_table[log_h - layer - 1]
-                        [(index * num_twiddles_per_block)..((index + 1) * num_twiddles_per_block)]),
-                );
+            for (layer, twiddles) in root_table[..log_num_par_rows].iter().rev().enumerate() {
+                let num_twiddles_per_block = 1 << layer;
+                let start = index * num_twiddles_per_block;
+                let twiddle_range = start..(start + num_twiddles_per_block);
+                dit_layer(chunk, &(twiddles[twiddle_range]));
             }
         });
 }
@@ -243,7 +234,7 @@ fn dit_layer<F: Field>(vec: &mut [F], twiddles: &[F]) {
     let half_block_size = block_size / 2;
 
     vec.chunks_exact_mut(block_size)
-        .zip(twiddles.iter())
+        .zip(twiddles)
         .for_each(|(block, &twiddle)| {
             // Split each block vertically into top (hi) and bottom (lo) halves
             let (hi_chunk, lo_chunk) = block.split_at_mut(half_block_size);
