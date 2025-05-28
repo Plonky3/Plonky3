@@ -1,4 +1,4 @@
-use p3_dft::{Radix2DitParallel, TwoAdicSubgroupDft};
+use p3_dft::{Radix2DitParallel, Radix2DitSmallBatch, TwoAdicSubgroupDft};
 use p3_field::TwoAdicField;
 use p3_matrix::bitrev::BitReversedMatrixView;
 use p3_matrix::dense::RowMajorMatrix;
@@ -11,6 +11,7 @@ use p3_monty_31::dft::RecursiveDft;
 pub enum DftChoice<F> {
     Recursive(RecursiveDft<F>),
     Parallel(Radix2DitParallel<F>),
+    Small(Radix2DitSmallBatch<F>),
 }
 
 impl<F: Default> Default for DftChoice<F> {
@@ -34,6 +35,7 @@ where
         match self {
             Self::Recursive(inner_dft) => inner_dft.dft_batch(mat),
             Self::Parallel(inner_dft) => inner_dft.dft_batch(mat),
+            Self::Small(inner_dft) => inner_dft.dft_batch(mat),
         }
     }
 
@@ -42,6 +44,7 @@ where
         match self {
             Self::Recursive(inner_dft) => inner_dft.coset_dft_batch(mat, shift),
             Self::Parallel(inner_dft) => inner_dft.coset_dft_batch(mat, shift),
+            Self::Small(inner_dft) => inner_dft.coset_dft_batch(mat, shift),
         }
     }
 
@@ -55,6 +58,7 @@ where
         match self {
             Self::Recursive(inner_dft) => inner_dft.coset_lde_batch(mat, added_bits, shift),
             Self::Parallel(inner_dft) => inner_dft.coset_lde_batch(mat, added_bits, shift),
+            Self::Small(inner_dft) => inner_dft.coset_lde_batch(mat, added_bits, shift),
         }
     }
 }

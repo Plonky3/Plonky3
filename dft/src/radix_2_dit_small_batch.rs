@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use core::cell::RefCell;
 
-use p3_field::{Field, PackedFieldPow2, TwoAdicField};
+use p3_field::{Field, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
@@ -32,7 +32,7 @@ const fn workload_size<T: Sized>() -> usize {
 /// the last set of layers fully on a single thread, which avoids the overhead of
 /// passing data between threads.
 #[derive(Default, Clone, Debug)]
-pub struct Radix2DitSmallBatch<F: Field> {
+pub struct Radix2DitSmallBatch<F> {
     /// Memoized twiddle factors for each length log_n.
     ///
     /// For each `i`, `twiddles[i]` contains a list of twiddles stored in
@@ -97,7 +97,6 @@ impl<F: TwoAdicField> Radix2DitSmallBatch<F> {
 impl<F> TwoAdicSubgroupDft<F> for Radix2DitSmallBatch<F>
 where
     F: TwoAdicField,
-    F::Packing: PackedFieldPow2,
 {
     type Evaluations = BitReversedMatrixView<RowMajorMatrix<F>>;
 
@@ -122,8 +121,23 @@ where
 
         // For the layers involving blocks larger than `num_par_rows`, we will
         // parallelize across the blocks.
-        for layer in 0..(log_h - log_num_par_rows) {
-            dit_layer_par(&mut mat.as_view_mut(), &root_table[log_h - layer - 1]);
+        // for layer in 0..(log_h - log_num_par_rows) {
+        //     dit_layer_par_single(&mut mat.as_view_mut(), &root_table[log_h - layer - 1]);
+        // }
+        for layer in (2..(log_h - log_num_par_rows)).step_by(3) {
+            dit_layer_par_triple(
+                &mut mat.as_view_mut(),
+                &root_table[log_h - layer + 1],
+                &root_table[log_h - layer],
+                &root_table[log_h - layer - 1],
+            );
+        }
+
+        if (log_h - log_num_par_rows) % 3 == 2 {
+            dit_layer_par_single(&mut mat.as_view_mut(), &root_table[log_num_par_rows + 1]);
+            dit_layer_par_single(&mut mat.as_view_mut(), &root_table[log_num_par_rows]);
+        } else if (log_h - log_num_par_rows) % 3 == 1 {
+            dit_layer_par_single(&mut mat.as_view_mut(), &root_table[log_num_par_rows]);
         }
 
         // Once the blocks are small enough, we can split the matrix
@@ -155,7 +169,7 @@ where
 /// - `mat`: Mutable matrix whose height is a power of two.
 /// - `twiddles`: Precomputed twiddle factors for this layer.
 #[inline]
-fn dit_layer_par<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, twiddles: &[F]) {
+fn dit_layer_par_single<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, twiddles: &[F]) {
     debug_assert!(
         mat.height() % twiddles.len() == 0,
         "Matrix height must be divisible by the number of twiddles"
@@ -185,14 +199,117 @@ fn dit_layer_par<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, twiddles: &[F]) {
                 .par_chunks_exact_mut(inner_block_size)
                 .zip(lo_chunk.par_chunks_exact_mut(inner_block_size))
                 .for_each(|(hi_chunk, lo_chunk)| {
-                    if ind == 0 {
-                        // The first pair doesn't require a twiddle factor
-                        TwiddleFreeButterfly.apply_to_rows(hi_chunk, lo_chunk);
-                    } else {
-                        // Apply DIT butterfly using the twiddle factor at index `ind - 1`
-                        DitButterfly(twiddles[ind]).apply_to_rows(hi_chunk, lo_chunk);
-                    }
+                    // if ind == 0 {
+                    //     // The first pair doesn't require a twiddle factor
+                    //     TwiddleFreeButterfly.apply_to_rows(hi_chunk, lo_chunk);
+                    // } else {
+                    // Apply DIT butterfly using the twiddle factor at index `ind - 1`
+                    DitButterfly(twiddles[ind]).apply_to_rows(hi_chunk, lo_chunk);
+                    // }
                 });
+        });
+}
+
+#[inline]
+fn dit_layer_par_triple<F: Field>(
+    mat: &mut RowMajorMatrixViewMut<F>,
+    twiddles_1: &[F],
+    twiddles_2: &[F],
+    twiddles_3: &[F],
+) {
+    debug_assert!(
+        mat.height() % twiddles_1.len() == 0,
+        "Matrix height must be divisible by the number of twiddles"
+    );
+    let size = mat.values.len();
+    let num_blocks = twiddles_1.len();
+
+    let outer_block_size = size / num_blocks;
+    let half_outer_block_size = outer_block_size / 2;
+    let quarter_outer_block_size = outer_block_size / 4;
+    let eighth_outer_block_size = outer_block_size / 8;
+
+    let l1_size = ((workload_size::<F>() / mat.width()).next_power_of_two() * mat.width())
+        .min(eighth_outer_block_size);
+    assert!(eighth_outer_block_size % l1_size == 0);
+
+    mat.values
+        .par_chunks_exact_mut(outer_block_size)
+        .enumerate()
+        .for_each(|(ind, block)| {
+            // Split each block vertically into top (hi) and bottom (lo) halves
+            let (hi_chunk, lo_chunk) = block.split_at_mut(half_outer_block_size);
+            // DitButterfly(twiddles_1[ind]).apply_to_rows(hi_chunk, lo_chunk);
+            let (hi_hi_chunk, hi_lo_chunk) = hi_chunk.split_at_mut(quarter_outer_block_size);
+            let (lo_hi_chunk, lo_lo_chunk) = lo_chunk.split_at_mut(quarter_outer_block_size);
+            // DitButterfly(twiddles_1[ind]).apply_to_rows(hi_hi_chunk, lo_hi_chunk);
+            // DitButterfly(twiddles_1[ind]).apply_to_rows(hi_lo_chunk, lo_lo_chunk);
+            // DitButterfly(twiddles_2[2 * ind]).apply_to_rows(hi_hi_chunk, hi_lo_chunk);
+            // DitButterfly(twiddles_2[2 * ind + 1]).apply_to_rows(lo_hi_chunk, lo_lo_chunk);
+            let (hi_hi_hi_chunk, hi_hi_lo_chunk) =
+                hi_hi_chunk.split_at_mut(eighth_outer_block_size);
+            let (hi_lo_hi_chunk, hi_lo_lo_chunk) =
+                hi_lo_chunk.split_at_mut(eighth_outer_block_size);
+            let (lo_hi_hi_chunk, lo_hi_lo_chunk) =
+                lo_hi_chunk.split_at_mut(eighth_outer_block_size);
+            let (lo_lo_hi_chunk, lo_lo_lo_chunk) =
+                lo_lo_chunk.split_at_mut(eighth_outer_block_size);
+
+            hi_hi_hi_chunk
+                .par_chunks_exact_mut(l1_size)
+                .zip(hi_hi_lo_chunk.par_chunks_exact_mut(l1_size))
+                .zip(
+                    hi_lo_hi_chunk
+                        .par_chunks_exact_mut(l1_size)
+                        .zip(hi_lo_lo_chunk.par_chunks_exact_mut(l1_size)),
+                )
+                .zip(
+                    lo_hi_hi_chunk
+                        .par_chunks_exact_mut(l1_size)
+                        .zip(lo_hi_lo_chunk.par_chunks_exact_mut(l1_size))
+                        .zip(
+                            lo_lo_hi_chunk
+                                .par_chunks_exact_mut(l1_size)
+                                .zip(lo_lo_lo_chunk.par_chunks_exact_mut(l1_size)),
+                        ),
+                )
+                .for_each(
+                    |(
+                        ((hi_hi_hi_chunk, hi_hi_lo_chunk), (hi_lo_hi_chunk, hi_lo_lo_chunk)),
+                        ((lo_hi_hi_chunk, lo_hi_lo_chunk), (lo_lo_hi_chunk, lo_lo_lo_chunk)),
+                    )| {
+                        DitButterfly(twiddles_1[ind]).apply_to_rows(hi_hi_hi_chunk, lo_hi_hi_chunk);
+                        DitButterfly(twiddles_1[ind]).apply_to_rows(hi_hi_lo_chunk, lo_hi_lo_chunk);
+                        DitButterfly(twiddles_1[ind]).apply_to_rows(hi_lo_hi_chunk, lo_lo_hi_chunk);
+                        DitButterfly(twiddles_1[ind]).apply_to_rows(hi_lo_lo_chunk, lo_lo_lo_chunk);
+
+                        DitButterfly(twiddles_2[2 * ind])
+                            .apply_to_rows(hi_hi_hi_chunk, hi_lo_hi_chunk);
+                        DitButterfly(twiddles_2[2 * ind])
+                            .apply_to_rows(hi_hi_lo_chunk, hi_lo_lo_chunk);
+                        DitButterfly(twiddles_2[2 * ind + 1])
+                            .apply_to_rows(lo_hi_hi_chunk, lo_lo_hi_chunk);
+                        DitButterfly(twiddles_2[2 * ind + 1])
+                            .apply_to_rows(lo_hi_lo_chunk, lo_lo_lo_chunk);
+
+                        DitButterfly(twiddles_3[4 * ind])
+                            .apply_to_rows(hi_hi_hi_chunk, hi_hi_lo_chunk);
+                        DitButterfly(twiddles_3[4 * ind + 1])
+                            .apply_to_rows(hi_lo_hi_chunk, hi_lo_lo_chunk);
+                        DitButterfly(twiddles_3[4 * ind + 2])
+                            .apply_to_rows(lo_hi_hi_chunk, lo_hi_lo_chunk);
+                        DitButterfly(twiddles_3[4 * ind + 3])
+                            .apply_to_rows(lo_lo_hi_chunk, lo_lo_lo_chunk);
+                    },
+                );
+
+            // if ind == 0 {
+            //     // The first pair doesn't require a twiddle factor
+            //     TwiddleFreeButterfly.apply_to_rows(hi_chunk, lo_chunk);
+            // } else {
+            // Apply DIT butterfly using the twiddle factor at index `ind - 1`
+            // DitButterfly(twiddles_1[ind]).apply_to_rows(hi_chunk, lo_chunk);
+            // }
         });
 }
 

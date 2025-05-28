@@ -257,6 +257,25 @@ where
     }
 }
 
+pub fn test_dft_idft_algebra_consistency_large<F, EF, Dft>()
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField,
+    StandardUniform: Distribution<EF>,
+    Dft: TwoAdicSubgroupDft<F>,
+{
+    let dft = Dft::default();
+    let mut rng = SmallRng::seed_from_u64(1);
+    for log_h in &[14, 16, 18, 20] {
+        let h = 1 << log_h;
+        let original = RowMajorMatrix::<EF>::rand(&mut rng, h, 3);
+        let dft_output = dft.dft_algebra_batch(original.clone());
+        let idft_output = dft.idft_algebra_batch(dft_output.to_row_major_matrix());
+        let eq = (original == idft_output.to_row_major_matrix());
+        assert!(eq, "Error Found in size: {}", h);
+    }
+}
+
 #[macro_export]
 macro_rules! test_field_dft {
     ($mod:ident, $field:ty, $extfield:ty, $dft:ty) => {
@@ -329,6 +348,11 @@ macro_rules! test_field_dft {
             #[test]
             fn dft_idft_algebra_consistency() {
                 $crate::test_dft_idft_algebra_consistency::<$field, $extfield, $dft>();
+            }
+
+            #[test]
+            fn test_dft_idft_algebra_consistency_large() {
+                $crate::test_dft_idft_algebra_consistency_large::<$field, $extfield, $dft>();
             }
         }
     };
