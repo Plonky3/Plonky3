@@ -221,7 +221,12 @@ mod tests {
     test_two_adic_field!(crate::BabyBear);
 
     test_field_dft!(radix2dit, crate::BabyBear, super::EF, p3_dft::Radix2Dit<_>);
-    test_field_dft!(radix2ditsmallbatch, crate::BabyBear, super::EF, p3_dft::Radix2DitSmallBatch<_>);
+    test_field_dft!(
+        radix2ditsmallbatch,
+        crate::BabyBear,
+        super::EF,
+        p3_dft::Radix2DitSmallBatch<_>
+    );
     test_field_dft!(bowers, crate::BabyBear, super::EF, p3_dft::Radix2Bowers);
     test_field_dft!(
         parallel,
