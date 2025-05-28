@@ -1,10 +1,10 @@
 use alloc::vec::Vec;
 use core::cell::RefCell;
-use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
 
 use p3_field::{Field, PackedFieldPow2, TwoAdicField};
-use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::{Matrix, dense::RowMajorMatrixViewMut};
+use p3_matrix::Matrix;
+use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
