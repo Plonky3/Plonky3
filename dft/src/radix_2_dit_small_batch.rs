@@ -1,10 +1,10 @@
 use alloc::vec::Vec;
 use core::cell::RefCell;
+use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
 
 use p3_field::{Field, PackedFieldPow2, TwoAdicField};
-use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::util::reverse_matrix_index_bits;
+use p3_matrix::{Matrix, dense::RowMajorMatrixViewMut};
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
@@ -99,10 +99,11 @@ where
     F: TwoAdicField,
     F::Packing: PackedFieldPow2,
 {
-    type Evaluations = RowMajorMatrix<F>;
+    type Evaluations = BitReversedMatrixView<RowMajorMatrix<F>>;
 
-    fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
+    fn dft_batch(&self, mut mat: RowMajorMatrix<F>) -> Self::Evaluations {
         let h = mat.height();
+        let w = mat.width();
         let log_h = log2_strict_usize(h);
 
         self.update_twiddles(h);
@@ -110,26 +111,19 @@ where
         let len = root_table.len();
         let root_table = &root_table[len - log_h..];
 
-        let half_lg_h = log_h / 2;
-        let rough_sqrt_height = 1 << half_lg_h;
-
-        // Choose the number of rows to process in parallel per chunk
-        let num_par_rows = (workload_size::<F>() / mat.width())
-            .next_power_of_two()
-            .max(rough_sqrt_height)
-            .min(h);
-
-        // let num_par_rows = rough_sqrt_height;
+        // Find the number of rows which can roughly fit in L1 cache.
+        // The strategy will be to do a standard round-by-round parallelization
+        // until the chunk size is smaller than `num_par_rows * mat.width()` after which we
+        // send `num_par_rows` chunks to each thread and do the remainder of the
+        // fft without transferring any more data between threads.
+        let num_par_rows = (workload_size::<F>() / w).next_power_of_two().min(h); // Ensure we don't exceed the height of the matrix.
         let log_num_par_rows = log2_strict_usize(num_par_rows);
+        let chunk_size = num_par_rows * w;
 
-        let chunk_size = num_par_rows * mat.width();
-
-        // dit_layer_0_par(&mut mat.values);
-
-        // DIT butterfly
+        // For the layers involving blocks larger than `num_par_rows`, we will
+        // parallelize across the blocks.
         for layer in 0..(log_h - log_num_par_rows) {
-            // Note that the length of `root_table[log_h - layer - 1]` is `1 << layer`.
-            dit_layer_par(&mut mat.values, &root_table[log_h - layer - 1]);
+            dit_layer_par(&mut mat.as_view_mut(), &root_table[log_h - layer - 1]);
         }
 
         // Once the blocks are small enough, we can split the matrix
@@ -143,34 +137,37 @@ where
             log_h,
         );
 
-        reverse_matrix_index_bits(&mut mat);
-        mat
+        // Finally we bit-reverse the matrix to ensure the output is in the correct order.
+        mat.bit_reverse_rows()
     }
 }
 
-/// Applies one layer of the Radix-2 DIT FFT butterfly network.
+/// Applies one layer of the Radix-2 DIT FFT butterfly network making use of parallelization.
 ///
 /// Splits the matrix into blocks of rows and performs in-place butterfly operations
 /// on each block. Uses a `TwiddleFreeButterfly` for the first pair and `DitButterfly`
 /// with precomputed twiddles for the rest.
 ///
+/// Each block is processed in parallel, if the blocks are large enough they themselves
+/// are split into parallel sub-blocks.
+///
 /// # Arguments
-/// - `vec`: Mutable vector whose height is a power of two.
+/// - `mat`: Mutable matrix whose height is a power of two.
 /// - `twiddles`: Precomputed twiddle factors for this layer.
 #[inline]
-fn dit_layer_par<F: Field>(vec: &mut [F], twiddles: &[F]) {
-    debug_assert_eq!(
-        vec.len() % twiddles.len(),
-        0,
-        "Vector length must be divisible by the number of twiddles"
+fn dit_layer_par<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, twiddles: &[F]) {
+    debug_assert!(
+        mat.height() % twiddles.len() == 0,
+        "Matrix height must be divisible by the number of twiddles"
     );
-    let size = vec.len();
+    let size = mat.values.len();
     let num_blocks = twiddles.len();
 
     let outer_block_size = size / num_blocks;
     let half_outer_block_size = outer_block_size / 2;
 
-    vec.par_chunks_exact_mut(outer_block_size)
+    mat.values
+        .par_chunks_exact_mut(outer_block_size)
         .enumerate()
         .for_each(|(ind, block)| {
             // Split each block vertically into top (hi) and bottom (lo) halves
@@ -199,15 +196,19 @@ fn dit_layer_par<F: Field>(vec: &mut [F], twiddles: &[F]) {
         });
 }
 
+/// Splits the matrix into chunks of size `chunk_size` and performs
+/// the remaining layers of the FFT in parallel on each chunk.
+///
+/// This avoids passing data between threads, which can be expensive.
 #[inline]
 fn par_remaining_layers<F: Field>(
-    vec: &mut [F],
+    mat: &mut [F],
     chunk_size: usize,
     root_table: &[Vec<F>],
     log_num_par_rows: usize,
     log_h: usize,
 ) {
-    vec.par_chunks_exact_mut(chunk_size)
+    mat.par_chunks_exact_mut(chunk_size)
         .enumerate()
         .for_each(|(index, chunk)| {
             for layer in log_num_par_rows..log_h {
@@ -221,17 +222,21 @@ fn par_remaining_layers<F: Field>(
         });
 }
 
-/// Applies one layer of the Radix-2 DIT FFT butterfly network.
+/// Applies one layer of the Radix-2 DIT FFT butterfly network on a single core.
 ///
 /// Splits the matrix into blocks of rows and performs in-place butterfly operations
-/// on each block. Uses a `TwiddleFreeButterfly` for the first pair and `DitButterfly`
-/// with precomputed twiddles for the rest.
+/// on each block.
 ///
 /// # Arguments
-/// - `mat`: Mutable matrix view with height as a power of two.
+/// - `vec`: Mutable vector whose height is a power of two.
 /// - `twiddles`: Precomputed twiddle factors for this layer.
 #[inline]
 fn dit_layer<F: Field>(vec: &mut [F], twiddles: &[F]) {
+    debug_assert_eq!(
+        vec.len() % twiddles.len(),
+        0,
+        "Vector length must be divisible by the number of twiddles"
+    );
     let size = vec.len();
     let num_blocks = twiddles.len();
 
