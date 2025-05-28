@@ -3,12 +3,12 @@ use core::cell::RefCell;
 use core::iter;
 use p3_matrix::util::reverse_matrix_index_bits;
 
-use p3_field::{Field, TwoAdicField};
+use p3_field::{Field, PackedField, PackedValue, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_maybe_rayon::prelude::*;
-use p3_util::{log2_strict_usize, reverse_slice_index_bits};
+use p3_util::{flatten_to_base, log2_strict_usize, reverse_slice_index_bits};
 
 use crate::{
     Butterfly, DifButterfly, DitButterfly, TwiddleFreeButterfly, TwoAdicSubgroupDft,
@@ -151,7 +151,7 @@ where
         // Once the blocks are small enough, we can split the matrix
         // into chunks of size `chunk_size` and process them in parallel.
         // This avoids passing data between threads, which can be expensive.
-        par_remaining_layers(&mut mat.values, chunk_size, root_table, log_num_par_rows);
+        par_remaining_layers(&mut mat.values, chunk_size, &root_table[..log_num_par_rows]);
 
         // Finally we bit-reverse the matrix to ensure the output is in the correct order.
         mat.bit_reverse_rows()
@@ -181,7 +181,7 @@ where
         // Once the blocks are small enough, we can split the matrix
         // into chunks of size `chunk_size` and process them in parallel.
         // This avoids passing data between threads, which can be expensive.
-        par_initial_layers(&mut mat.values, chunk_size, root_table, log_num_par_rows);
+        par_initial_layers(&mut mat.values, chunk_size, &root_table[..log_num_par_rows]);
 
         // For the layers involving blocks larger than `num_par_rows`, we will
         // parallelize across the blocks.
@@ -195,15 +195,67 @@ where
         mat
     }
 
-    // fn coset_lde_batch(
-    //     &self,
-    //     mut mat: RowMajorMatrix<F>,
-    //     added_bits: usize,
-    //     shift: F,
-    // ) -> Self::Evaluations {
-    //     reverse_matrix_index_bits(&mut mat);
-    //     todo!();
-    // }
+    fn coset_lde_batch(
+        &self,
+        mut mat: RowMajorMatrix<F>,
+        added_bits: usize,
+        shift: F,
+    ) -> Self::Evaluations {
+        let h = mat.height();
+        let w = mat.width();
+        let log_h = log2_strict_usize(h);
+
+        self.update_twiddles(h << added_bits);
+        let root_table = self.twiddles.borrow();
+        let inv_root_table = self.inv_twiddles.borrow();
+        let len = root_table.len();
+
+        let root_table = &root_table[len - (log_h + added_bits)..];
+        let inv_root_table = &inv_root_table[len - log_h..];
+        let output_height = h << added_bits;
+
+        let output_values = F::zero_vec(output_height * w);
+        let mut output = RowMajorMatrix::new(output_values, w);
+
+        // The strategy is reasonably straightforward.
+        // We start off identically to the DFT. But once we get to the inner most layer,
+        // we copy the values from the input matrix to the output matrix and scale appropriately.
+        // We finish by doing the IDFT in the standard way.
+
+        // Find the number of rows which can roughly fit in L1 cache.
+        // The strategy will be to do a standard round-by-round parallelization
+        // until the chunk size is smaller than `num_par_rows * mat.width()` after which we
+        // send `num_par_rows` chunks to each thread and do the remainder of the
+        // fft without transferring any more data between threads.
+        let num_par_rows = (workload_size::<F>() / w).next_power_of_two().min(h); // Ensure we don't exceed the height of the matrix.
+        let log_num_par_rows = log2_strict_usize(num_par_rows);
+
+        // For the layers involving blocks larger than `num_par_rows`, we will
+        // parallelize across the blocks.
+        for twiddles in inv_root_table[log_num_par_rows..].iter().rev() {
+            dit_layer_par(&mut mat.as_view_mut(), twiddles);
+        }
+
+        par_middle_layers(
+            &mut mat.as_view_mut(),
+            &mut output.as_view_mut(),
+            num_par_rows,
+            &inv_root_table[..log_num_par_rows],
+            &root_table[..(log_num_par_rows + added_bits)],
+            added_bits,
+            shift,
+        );
+
+        // For the layers involving blocks larger than `num_par_rows`, we will
+        // parallelize across the blocks.
+        for twiddles in root_table[(log_num_par_rows + added_bits)..].iter() {
+            dif_layer_par(&mut output.as_view_mut(), twiddles);
+        }
+
+        // TODO: Remove this
+        reverse_matrix_index_bits(&mut output);
+        output.bit_reverse_rows()
+    }
 }
 
 /// Applies one layer of the Radix-2 DIT FFT butterfly network making use of parallelization.
@@ -319,16 +371,11 @@ fn dif_layer_par<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, twiddles: &[F]) {
 ///
 /// This avoids passing data between threads, which can be expensive.
 #[inline]
-fn par_remaining_layers<F: Field>(
-    mat: &mut [F],
-    chunk_size: usize,
-    root_table: &[Vec<F>],
-    log_num_par_rows: usize,
-) {
+fn par_remaining_layers<F: Field>(mat: &mut [F], chunk_size: usize, root_table: &[Vec<F>]) {
     mat.par_chunks_exact_mut(chunk_size)
         .enumerate()
         .for_each(|(index, chunk)| {
-            for (layer, twiddles) in root_table[..log_num_par_rows].iter().rev().enumerate() {
+            for (layer, twiddles) in root_table.iter().rev().enumerate() {
                 let num_twiddles_per_block = 1 << layer;
                 let start = index * num_twiddles_per_block;
                 let twiddle_range = start..(start + num_twiddles_per_block);
@@ -342,20 +389,81 @@ fn par_remaining_layers<F: Field>(
 ///
 /// This avoids passing data between threads, which can be expensive.
 #[inline]
-fn par_initial_layers<F: Field>(
-    mat: &mut [F],
-    chunk_size: usize,
-    root_table: &[Vec<F>],
-    log_num_par_rows: usize,
-) {
+fn par_initial_layers<F: Field>(mat: &mut [F], chunk_size: usize, root_table: &[Vec<F>]) {
+    let num_rounds = root_table.len();
     mat.par_chunks_exact_mut(chunk_size)
         .enumerate()
         .for_each(|(index, chunk)| {
-            for (layer, twiddles) in root_table[..log_num_par_rows].iter().enumerate() {
-                let num_twiddles_per_block = 1 << (log_num_par_rows - layer - 1);
+            for (layer, twiddles) in root_table.iter().enumerate() {
+                let num_twiddles_per_block = 1 << (num_rounds - layer - 1);
                 let start = index * num_twiddles_per_block;
                 let twiddle_range = start..(start + num_twiddles_per_block);
                 dif_layer(chunk, &(twiddles[twiddle_range]));
+            }
+        });
+}
+
+fn par_middle_layers<F: Field>(
+    in_mat: &mut RowMajorMatrixViewMut<F>,
+    out_mat: &mut RowMajorMatrixViewMut<F>,
+    num_par_rows: usize,
+    root_table: &[Vec<F>],
+    inv_root_table: &[Vec<F>],
+    added_bits: usize,
+    shift: F,
+) {
+    debug_assert_eq!(in_mat.width(), out_mat.width());
+    debug_assert_eq!(in_mat.height() << added_bits, out_mat.height());
+
+    let width = in_mat.width();
+    let height = in_mat.height();
+    let num_inv_rounds = inv_root_table.len();
+    let in_chunk_size = num_par_rows * width;
+    let out_chunk_size = in_chunk_size << added_bits;
+
+    let log_height = log2_strict_usize(height);
+    let inv_height = F::ONE.div_2exp_u64(log_height as u64);
+
+    let scaling_packed: Vec<F::Packing> = F::Packing::packed_shifted_powers(shift, inv_height)
+        .take(height.div_ceil(F::Packing::WIDTH))
+        .collect::<Vec<_>>();
+    let mut scaling: Vec<F> = unsafe { flatten_to_base(scaling_packed) };
+    scaling.truncate(height);
+    reverse_slice_index_bits(&mut scaling);
+
+    in_mat
+        .values
+        .par_chunks_exact_mut(in_chunk_size)
+        .zip(out_mat.values.par_chunks_exact_mut(out_chunk_size))
+        .zip(scaling.par_chunks_exact_mut(num_par_rows))
+        .enumerate()
+        .for_each(|(index, ((in_chunk, out_chunk), scaling))| {
+            for (layer, twiddles) in root_table.iter().rev().enumerate() {
+                let num_twiddles_per_block = 1 << layer;
+                let start = index * num_twiddles_per_block;
+                let twiddle_range = start..(start + num_twiddles_per_block);
+                dit_layer(in_chunk, &(twiddles[twiddle_range]));
+            }
+
+            // Copy the values to the output matrix and scale appropriately.
+            in_chunk
+                .chunks_exact(width)
+                .zip(scaling)
+                .zip(out_chunk.chunks_exact_mut(width << added_bits))
+                .for_each(|((in_row, scale), out_row)| {
+                    out_row
+                        .iter_mut()
+                        .zip(in_row.iter())
+                        .for_each(|(out_val, in_val)| {
+                            *out_val = *in_val * *scale;
+                        });
+                });
+
+            for (layer, twiddles) in inv_root_table.iter().enumerate() {
+                let num_twiddles_per_block = 1 << (num_inv_rounds - layer - 1);
+                let start = index * num_twiddles_per_block;
+                let twiddle_range = start..(start + num_twiddles_per_block);
+                dif_layer(out_chunk, &(twiddles[twiddle_range]));
             }
         });
 }
