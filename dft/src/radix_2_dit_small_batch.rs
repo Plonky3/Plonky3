@@ -23,7 +23,7 @@ const fn workload_size<T: Sized>() -> usize {
 /// A FFT algorithm which divides a butterfly network's layers into two halves.
 ///
 /// Unlike other FFT algorithms, this algorithm is optimized for small batch sizes.
-/// It also stores it's twiddle factors and only re-computes if it is asked to do a
+/// It also stores its twiddle factors and only re-computes if it is asked to do a
 /// larger FFT.
 ///
 /// Instead of parallelizing across rows, this algorithm parallelizes across groups of rows
