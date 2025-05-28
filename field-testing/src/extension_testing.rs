@@ -12,16 +12,16 @@ pub fn test_to_from_extension_field<F, EF>()
 where
     F: Field,
     EF: ExtensionField<F>,
-    StandardUniform: Distribution<F>,
+    StandardUniform: Distribution<F> + Distribution<EF>,
 {
     let mut rng = SmallRng::seed_from_u64(1);
 
-    let base_elem = rng.random();
+    let base_elem: F = rng.random();
     let base_elem_in_ext: EF = base_elem.into();
     assert!(base_elem_in_ext.is_in_basefield());
     assert_eq!(base_elem_in_ext.as_base(), Some(base_elem));
 
-    let extension_elem = EF::from_basis_coefficients_fn(|_| rng.random());
+    let extension_elem: EF = rng.random();
     let ext_degree = EF::DIMENSION;
 
     if ext_degree == 1 {
@@ -49,14 +49,14 @@ pub fn test_galois_extension<F, EF>()
 where
     F: Field,
     EF: ExtensionField<F>,
-    StandardUniform: Distribution<F>,
+    StandardUniform: Distribution<EF>,
 {
     let mut rng = SmallRng::seed_from_u64(1);
 
-    let extension_elem = EF::from_basis_coefficients_fn(|_| rng.random());
+    let extension_elem = rng.random();
     let ext_degree = EF::DIMENSION;
 
-    let field_degree = F::order();
+    let field_order = F::order();
 
     // Let |F| = p and |EF| = p^d.
     // Then `(|EF| - 1)/(|F| - 1) = 1 + p + ... + p^(d-1)`.
@@ -70,12 +70,12 @@ where
     let (trace, norm, power) = (1..ext_degree).fold(
         (extension_elem, extension_elem, extension_elem),
         |(acc, prod, power), _| {
-            let next_power = exp_biguint(power, &field_degree);
+            let next_power = exp_biguint(power, &field_order);
             (acc + next_power, prod * next_power, next_power)
         },
     );
 
-    let ext_power_p_d = exp_biguint(power, &field_degree);
+    let ext_power_p_d = exp_biguint(power, &field_order);
 
     assert!(
         norm.is_in_basefield(),
@@ -102,13 +102,11 @@ pub fn test_packed_extension<F, EF>()
 where
     F: Field,
     EF: ExtensionField<F>,
-    StandardUniform: Distribution<F>,
+    StandardUniform: Distribution<EF>,
 {
     let mut rng = SmallRng::seed_from_u64(1);
     let width = F::Packing::WIDTH;
-    let extension_elements: Vec<EF> = (0..width)
-        .map(|_| EF::from_basis_coefficients_fn(|_| rng.random()))
-        .collect();
+    let extension_elements: Vec<EF> = (0..width).map(|_| rng.random()).collect();
 
     let packed_extension = EF::ExtensionPacking::from_ext_slice(&extension_elements);
     let unpacked_extension: Vec<EF> =
