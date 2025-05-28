@@ -30,6 +30,7 @@ members = [
     "poseidon2-air",
     "rescue",
     "sha256",
+    "stir",
     "symmetric",
     "util",
     "uni-stark",
@@ -61,9 +62,7 @@ tracing = { version = "0.1.37", default-features = false, features = [
     "attributes",
 ] }
 tracing-forest = "0.1.6"
-tracing-subscriber = { version = "0.3.17", default-features = false, features = [
-    "alloc",
-] }
+tracing-subscriber = { version = "0.3.17", default-features = false, features = ["alloc", "fmt"] }
 transpose = "0.2.3"
 
 # Local dependencies
@@ -75,6 +74,7 @@ p3-bn254-fr = { path = "bn254-fr", version = "0.1.0" }
 p3-challenger = { path = "challenger", version = "0.1.0" }
 p3-circle = { path = "circle", version = "0.1.0" }
 p3-commit = { path = "commit", version = "0.1.0" }
+p3-coset = { path = "coset", version = "0.1.0" }
 p3-dft = { path = "dft", version = "0.1.0" }
 p3-examples = { path = "examples", version = "0.1.0" }
 p3-field = { path = "field", version = "0.1.0" }
