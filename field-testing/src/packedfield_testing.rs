@@ -354,3 +354,18 @@ macro_rules! test_packed_field {
         }
     };
 }
+
+#[macro_export]
+macro_rules! test_packed_extension_field {
+    ($packedextfield:ty, $zeros:expr, $ones:expr) => {
+        mod packed_field_tests {
+            use p3_field::PrimeCharacteristicRing;
+
+            // TODO: Add more tests for packed extension fields.
+            #[test]
+            fn test_ring_with_eq() {
+                $crate::test_ring_with_eq::<$packedextfield>($zeros, $ones);
+            }
+        }
+    };
+}

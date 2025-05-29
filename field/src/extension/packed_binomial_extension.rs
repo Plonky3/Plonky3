@@ -6,6 +6,7 @@ use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use itertools::Itertools;
 use p3_util::{flatten_to_base, reconstitute_from_base};
+use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -64,6 +65,17 @@ impl<F: Field, PF: PackedField<Scalar = F>, const D: usize> From<PF>
         Self {
             value: field_to_array(x),
         }
+    }
+}
+
+impl<F: Field, PF: PackedField<Scalar = F>, const D: usize>
+    Distribution<PackedBinomialExtensionField<F, PF, D>> for StandardUniform
+where
+    Self: Distribution<PF>,
+{
+    #[inline]
+    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> PackedBinomialExtensionField<F, PF, D> {
+        PackedBinomialExtensionField::new(array::from_fn(|_| self.sample(rng)))
     }
 }
 
