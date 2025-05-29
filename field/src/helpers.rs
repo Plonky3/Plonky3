@@ -29,6 +29,16 @@ pub fn scale_vec<F: Field>(s: F, vec: Vec<F>) -> Vec<F> {
     vec.into_iter().map(|x| s * x).collect()
 }
 
+/// Scales each element of the slice by `s`.
+///
+/// Does not use any parallelism.
+pub fn scale_slice_in_place_single_core<F: Field>(s: F, slice: &mut [F]) {
+    let (packed, sfx) = F::Packing::pack_slice_with_suffix_mut(slice);
+    let packed_s: F::Packing = s.into();
+    packed.iter_mut().for_each(|x| *x *= packed_s);
+    sfx.iter_mut().for_each(|x| *x *= s);
+}
+
 pub fn scale_slice_in_place<F: Field>(s: F, slice: &mut [F]) {
     let (packed, sfx) = F::Packing::pack_slice_with_suffix_mut(slice);
     let packed_s: F::Packing = s.into();
