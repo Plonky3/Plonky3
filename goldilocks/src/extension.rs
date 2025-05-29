@@ -69,9 +69,12 @@ impl HasTwoAdicBinomialExtension<5> for Goldilocks {
 mod test_quadratic_extension {
 
     use num_bigint::BigUint;
-    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
-    use p3_field_testing::{test_field, test_two_adic_extension_field};
+    use p3_field::{ExtensionField, PrimeCharacteristicRing};
+    use p3_field_testing::{
+        test_extension_field, test_field, test_packed_extension_field,
+        test_two_adic_extension_field,
+    };
 
     use crate::Goldilocks;
 
@@ -106,16 +109,25 @@ mod test_quadratic_extension {
         &super::multiplicative_group_prime_factorization()
     );
 
+    test_extension_field!(super::F, super::EF);
     test_two_adic_extension_field!(super::F, super::EF);
+
+    type Pef = <EF as ExtensionField<F>>::ExtensionPacking;
+    const PACKED_ZEROS: [Pef; 1] = [Pef::ZERO];
+    const PACKED_ONES: [Pef; 1] = [Pef::ONE];
+    test_packed_extension_field!(super::Pef, &super::PACKED_ZEROS, &super::PACKED_ONES);
 }
 
 #[cfg(test)]
 mod test_quintic_extension {
 
     use num_bigint::BigUint;
-    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
-    use p3_field_testing::{test_field, test_two_adic_extension_field};
+    use p3_field::{ExtensionField, PrimeCharacteristicRing};
+    use p3_field_testing::{
+        test_extension_field, test_field, test_packed_extension_field,
+        test_two_adic_extension_field,
+    };
 
     use crate::Goldilocks;
 
@@ -151,5 +163,11 @@ mod test_quintic_extension {
         &super::multiplicative_group_prime_factorization()
     );
 
+    test_extension_field!(super::F, super::EF);
     test_two_adic_extension_field!(super::F, super::EF);
+
+    type Pef = <EF as ExtensionField<F>>::ExtensionPacking;
+    const PACKED_ZEROS: [Pef; 1] = [Pef::ZERO];
+    const PACKED_ONES: [Pef; 1] = [Pef::ONE];
+    test_packed_extension_field!(super::Pef, &super::PACKED_ZEROS, &super::PACKED_ONES);
 }
