@@ -1,7 +1,7 @@
 use clap::Parser;
 use p3_baby_bear::{BabyBear, GenericPoseidon2LinearLayersBabyBear, Poseidon2BabyBear};
 use p3_blake3_air::Blake3Air;
-use p3_dft::{Radix2DitParallel, Radix2DitSmallBatch};
+use p3_dft::Radix2DitParallel;
 use p3_examples::airs::ProofObjective;
 use p3_examples::dfts::DftChoice;
 use p3_examples::parsers::{DftOptions, FieldOptions, MerkleHashOptions, ProofOptions};
@@ -123,9 +123,7 @@ fn main() {
                 DftOptions::RecursiveDft => {
                     DftChoice::Recursive(RecursiveDft::new(trace_height << 1))
                 }
-                DftOptions::Radix2DitParallel => {
-                    DftChoice::Small(Radix2DitSmallBatch::new(trace_height << 1))
-                }
+                DftOptions::Radix2DitParallel => DftChoice::Parallel(Radix2DitParallel::default()),
                 // DftChoice::Parallel(Radix2DitParallel::default()),
                 DftOptions::None => panic!(
                     "Please specify what dft to use. Options are recursive-dft and radix-2-dit-parallel"
