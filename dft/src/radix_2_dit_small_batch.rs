@@ -8,7 +8,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
-use crate::{Butterfly, DitButterfly, TwiddleFreeButterfly, TwoAdicSubgroupDft};
+use crate::{Butterfly, DitButterfly, TwoAdicSubgroupDft};
 
 /// Estimates the optimal workload size for `T` to fit in L1 cache.
 ///

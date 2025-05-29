@@ -17,10 +17,10 @@ fn bench_fft(c: &mut Criterion) {
     // for the DFT over the quadratic extension "Mersenne31Complex" a
     // fairer comparison is to use half sizes, which is the log minus 1.
     let log_sizes = &[16, 20];
-    let _log_half_sizes = &[13, 15, 17];
+    let log_half_sizes = &[13, 15, 17];
 
     const BATCH_SIZE: usize = 256;
-    type _BBExt = BinomialExtensionField<BabyBear, 5>;
+    type BBExt = BinomialExtensionField<BabyBear, 5>;
 
     fft::<BabyBear, Radix2DitSmallBatch<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
@@ -34,17 +34,17 @@ fn bench_fft(c: &mut Criterion) {
     fft::<Complex<Mersenne31>, Radix2Bowers, BATCH_SIZE>(c, log_half_sizes);
     fft::<Complex<Mersenne31>, Radix2DitParallel<_>, BATCH_SIZE>(c, log_half_sizes);
 
-    // fft::<Complex<Mersenne31>, Mersenne31ComplexRadix2Dit, BATCH_SIZE>(c, log_half_sizes);
-    // m31_fft::<Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
-    // m31_fft::<Mersenne31ComplexRadix2Dit, BATCH_SIZE>(c, log_sizes);
+    fft::<Complex<Mersenne31>, Mersenne31ComplexRadix2Dit, BATCH_SIZE>(c, log_half_sizes);
+    m31_fft::<Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
+    m31_fft::<Mersenne31ComplexRadix2Dit, BATCH_SIZE>(c, log_sizes);
 
-    // ifft::<Goldilocks, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
+    ifft::<Goldilocks, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
 
-    // coset_lde::<BabyBear, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
-    // coset_lde::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
-    // coset_lde::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
-    // coset_lde::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
-    // coset_lde::<Goldilocks, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
+    coset_lde::<BabyBear, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
+    coset_lde::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
+    coset_lde::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
+    coset_lde::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
+    coset_lde::<Goldilocks, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
 
     // The FFT is much slower when handling extension fields so we use smaller sizes:
     let ext_log_sizes = &[10, 12, 14];
@@ -86,7 +86,7 @@ where
     }
 }
 
-fn _fft_algebra<F, V, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
+fn fft_algebra<F, V, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
 where
     F: TwoAdicField,
     V: Algebra<F> + BasedVectorSpace<F> + Clone + Default + Send + Sync,
@@ -117,7 +117,7 @@ where
     }
 }
 
-fn _m31_fft<Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
+fn m31_fft<Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
 where
     Dft: TwoAdicSubgroupDft<Complex<Mersenne31>>,
     StandardUniform: Distribution<Mersenne31>,
@@ -143,7 +143,7 @@ where
     }
 }
 
-fn _ifft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
+fn ifft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
 where
     F: TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
@@ -172,7 +172,7 @@ where
     }
 }
 
-fn _coset_lde<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
+fn coset_lde<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
 where
     F: TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
