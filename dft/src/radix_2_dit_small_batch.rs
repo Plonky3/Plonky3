@@ -3,11 +3,11 @@
 use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::iter;
-use p3_matrix::util::reverse_matrix_index_bits;
 
 use p3_field::{Field, PackedField, PackedValue, TwoAdicField, scale_slice_in_place_single_core};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
+use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{flatten_to_base, log2_strict_usize, reverse_slice_index_bits};
 
