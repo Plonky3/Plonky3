@@ -271,7 +271,7 @@ where
         let original = RowMajorMatrix::<EF>::rand(&mut rng, h, 3);
         let dft_output = dft.dft_algebra_batch(original.clone());
         let idft_output = dft.idft_algebra_batch(dft_output.to_row_major_matrix());
-        let eq = (original == idft_output.to_row_major_matrix());
+        let eq = original == idft_output.to_row_major_matrix();
         assert!(eq, "Error Found in size: {}", h);
     }
 }
