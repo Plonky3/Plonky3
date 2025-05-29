@@ -576,11 +576,11 @@ fn dif_layer<F: Field>(vec: &mut [F], twiddles: &[F]) {
 /// on each block.
 ///
 /// Assume `added_bits = 2`. Then the rows of our matrix look like:
-/// ```
+/// ```text
 /// [R0, 0, 0, 0, R1, 0, 0, 0, ...]
 /// ```
 /// Thus the first two butterfly layers can be implemented more simply as they map the matrix to:
-/// ```
+/// ```text
 /// After Layer 0: [R0, T00 * R0, 0, 0, R1, T01 * R1, 0, 0, ...]
 /// After Layer 1: [R0, T00 * R0, T10 * R0, T10 * T00 * R0, R1, T01 * R1, T11 * R1, T11 * T01 * R1, ...].
 /// ```
