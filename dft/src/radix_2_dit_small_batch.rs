@@ -417,9 +417,8 @@ fn dit_layer_par_triple<F: Field>(
     let quarter_outer_block_size = outer_block_size / 4;
     let eighth_outer_block_size = outer_block_size / 8;
 
-    let l1_size = ((workload_size::<F>() / mat.width()).next_power_of_two() * mat.width())
-        .min(eighth_outer_block_size);
-    assert!(eighth_outer_block_size % l1_size == 0);
+    // Getting this size right seems to be a big deal.
+    let l1_size = (workload_size::<F>().next_power_of_two() / 8).min(eighth_outer_block_size);
 
     mat.values
         .par_chunks_exact_mut(outer_block_size)
@@ -444,21 +443,21 @@ fn dit_layer_par_triple<F: Field>(
                 lo_lo_chunk.split_at_mut(eighth_outer_block_size);
 
             hi_hi_hi_chunk
-                .par_chunks_exact_mut(l1_size)
-                .zip(hi_hi_lo_chunk.par_chunks_exact_mut(l1_size))
+                .par_chunks_mut(l1_size)
+                .zip(hi_hi_lo_chunk.par_chunks_mut(l1_size))
                 .zip(
                     hi_lo_hi_chunk
-                        .par_chunks_exact_mut(l1_size)
-                        .zip(hi_lo_lo_chunk.par_chunks_exact_mut(l1_size)),
+                        .par_chunks_mut(l1_size)
+                        .zip(hi_lo_lo_chunk.par_chunks_mut(l1_size)),
                 )
                 .zip(
                     lo_hi_hi_chunk
-                        .par_chunks_exact_mut(l1_size)
-                        .zip(lo_hi_lo_chunk.par_chunks_exact_mut(l1_size))
+                        .par_chunks_mut(l1_size)
+                        .zip(lo_hi_lo_chunk.par_chunks_mut(l1_size))
                         .zip(
                             lo_lo_hi_chunk
-                                .par_chunks_exact_mut(l1_size)
-                                .zip(lo_lo_lo_chunk.par_chunks_exact_mut(l1_size)),
+                                .par_chunks_mut(l1_size)
+                                .zip(lo_lo_lo_chunk.par_chunks_mut(l1_size)),
                         ),
                 )
                 .for_each(

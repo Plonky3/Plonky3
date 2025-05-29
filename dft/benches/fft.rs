@@ -16,13 +16,18 @@ fn bench_fft(c: &mut Criterion) {
     // log_sizes correspond to the sizes of DFT we want to benchmark;
     // for the DFT over the quadratic extension "Mersenne31Complex" a
     // fairer comparison is to use half sizes, which is the log minus 1.
-    let log_sizes = &[16, 20];
+    let log_sizes = &[14, 16, 18, 20];
     let log_half_sizes = &[13, 15, 17];
 
     const BATCH_SIZE: usize = 256;
     type BBExt = BinomialExtensionField<BabyBear, 5>;
 
     fft::<BabyBear, Radix2FFTSmallBatch<_>, BATCH_SIZE>(c, log_sizes);
+    // fft::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
+    ifft::<BabyBear, Radix2FFTSmallBatch<_>, BATCH_SIZE>(c, log_sizes);
+    // ifft::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
+    coset_lde::<BabyBear, Radix2FFTSmallBatch<_>, BATCH_SIZE>(c, log_sizes);
+    coset_lde::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
