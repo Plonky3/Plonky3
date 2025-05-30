@@ -38,7 +38,7 @@ const fn workload_size<T: Sized>() -> usize {
 /// computes a large set of layers fully on a single thread, which avoids the overhead of
 /// passing data between threads.
 #[derive(Default, Clone, Debug)]
-pub struct Radix2FFTSmallBatch<F> {
+pub struct Radix2DFTSmallBatch<F> {
     /// Memoized twiddle factors for each length log_n.
     ///
     /// For each `i`, `twiddles[i]` contains a list of twiddles stored in
@@ -54,7 +54,7 @@ pub struct Radix2FFTSmallBatch<F> {
     inv_twiddles: RefCell<Vec<Vec<F>>>,
 }
 
-impl<F: TwoAdicField> Radix2FFTSmallBatch<F> {
+impl<F: TwoAdicField> Radix2DFTSmallBatch<F> {
     /// Create a new `Radix2DitSmallBatch` instance with precomputed twiddles for the given size.
     ///
     /// The input `n` should be a power of two, representing the maximal FFT size you expect to handle.
@@ -119,7 +119,7 @@ impl<F: TwoAdicField> Radix2FFTSmallBatch<F> {
     }
 }
 
-impl<F> TwoAdicSubgroupDft<F> for Radix2FFTSmallBatch<F>
+impl<F> TwoAdicSubgroupDft<F> for Radix2DFTSmallBatch<F>
 where
     F: TwoAdicField,
 {
