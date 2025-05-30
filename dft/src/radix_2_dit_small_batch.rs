@@ -396,7 +396,7 @@ fn par_remaining_layers<F: Field>(mat: &mut [F], chunk_size: usize, root_table: 
                 let num_twiddles_per_block = 1 << layer;
                 let start = index * num_twiddles_per_block;
                 let twiddle_range = start..(start + num_twiddles_per_block);
-                dit_layer(chunk, &(twiddles[twiddle_range]));
+                dit_layer(chunk, &twiddles[twiddle_range]);
             }
         });
 }
@@ -426,7 +426,7 @@ fn par_initial_layers<F: Field>(
                 let num_twiddles_per_block = 1 << (num_rounds - layer - 1);
                 let start = index * num_twiddles_per_block;
                 let twiddle_range = start..(start + num_twiddles_per_block);
-                dif_layer(chunk, &(twiddles[twiddle_range]));
+                dif_layer(chunk, &twiddles[twiddle_range]);
             }
         });
 }
@@ -470,7 +470,7 @@ fn par_middle_layers<F: Field>(
                 let num_twiddles_per_block = 1 << layer;
                 let start = index * num_twiddles_per_block;
                 let twiddle_range = start..(start + num_twiddles_per_block);
-                dit_layer(in_chunk, &(twiddles[twiddle_range]));
+                dit_layer(in_chunk, &twiddles[twiddle_range]);
             }
 
             // Copy the values to the output matrix and scale appropriately.
@@ -493,13 +493,9 @@ fn par_middle_layers<F: Field>(
                 let twiddle_range = start..(start + num_twiddles_per_block);
                 // While
                 if layer < added_bits {
-                    dif_layer_zeros(
-                        out_chunk,
-                        &(twiddles[twiddle_range]),
-                        added_bits - layer - 1,
-                    );
+                    dif_layer_zeros(out_chunk, &twiddles[twiddle_range], added_bits - layer - 1);
                 } else {
-                    dif_layer(out_chunk, &(twiddles[twiddle_range]));
+                    dif_layer(out_chunk, &twiddles[twiddle_range]);
                 }
             }
         });
