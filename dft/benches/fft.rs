@@ -23,6 +23,7 @@ fn bench_fft(c: &mut Criterion) {
     type BBExt = BinomialExtensionField<BabyBear, 5>;
 
     fft::<BabyBear, Radix2DFTSmallBatch<_>, BATCH_SIZE>(c, log_sizes);
+    coset_lde::<BabyBear, Radix2DFTSmallBatch<_>, BATCH_SIZE>(c, log_sizes);
     // fft::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
     ifft::<BabyBear, Radix2DFTSmallBatch<_>, BATCH_SIZE>(c, log_sizes);
     // ifft::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
