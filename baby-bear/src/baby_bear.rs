@@ -225,7 +225,7 @@ mod tests {
         radix2ditsmallbatch,
         crate::BabyBear,
         super::EF,
-        p3_dft::Radix2DitSmallBatch<_>
+        p3_dft::Radix2DFTSmallBatch<_>
     );
     test_field_dft!(bowers, crate::BabyBear, super::EF, p3_dft::Radix2Bowers);
     test_field_dft!(
