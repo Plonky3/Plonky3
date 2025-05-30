@@ -26,6 +26,18 @@ const fn workload_size<T: Sized>() -> usize {
     L1_CACHE_SIZE / size_of::<T>()
 }
 
+/// Estimates the optimal number of rows of a `RowMajorMatrix<T>` to take in each parallel chunk.
+///
+/// Designed to ensure that `<T> * estimate_num_rows_par() * width` is roughly the size of the L1 cache.
+///
+/// Assumes that height is a power of two and always outputs a power of two.
+#[must_use]
+fn estimate_num_rows_in_l1<T: Sized>(height: usize, width: usize) -> usize {
+    (workload_size::<T>() / width)
+        .next_power_of_two()
+        .min(height) // Ensure we don't exceed the height of the matrix.
+}
+
 /// A FFT algorithm which divides a butterfly network's layers into two halves.
 ///
 /// Unlike other FFT algorithms, this algorithm is optimized for small batch sizes.
@@ -140,7 +152,7 @@ where
         // until the chunk size is smaller than `num_par_rows * mat.width()` after which we
         // send `num_par_rows` chunks to each thread and do the remainder of the
         // fft without transferring any more data between threads.
-        let num_par_rows = (workload_size::<F>() / w).next_power_of_two().min(h); // Ensure we don't exceed the height of the matrix.
+        let num_par_rows = estimate_num_rows_in_l1::<F>(h, w);
         let log_num_par_rows = log2_strict_usize(num_par_rows);
         let chunk_size = num_par_rows * w;
 
@@ -175,7 +187,7 @@ where
         // We start by moving `num_par_rows` rows onto each thread and doing
         // `num_par_rows` layers of the DFT. After this we recombine and do
         // a standard round-by-round parallelization for the remaining layers.
-        let num_par_rows = (workload_size::<F>() / w).next_power_of_two().min(h); // Ensure we don't exceed the height of the matrix.
+        let num_par_rows = estimate_num_rows_in_l1::<F>(h, w);
         let log_num_par_rows = log2_strict_usize(num_par_rows);
         let chunk_size = num_par_rows * w;
 
@@ -243,7 +255,7 @@ where
         // until the chunk size is smaller than `num_par_rows * mat.width()` after which we
         // send `num_par_rows` chunks to each thread and do the remainder of the
         // fft without transferring any more data between threads.
-        let num_par_rows = (workload_size::<F>() / w).next_power_of_two().min(h); // Ensure we don't exceed the height of the matrix.
+        let num_par_rows = estimate_num_rows_in_l1::<F>(h, w);
         let log_num_par_rows = log2_strict_usize(num_par_rows);
 
         // For the layers involving blocks larger than `num_par_rows`, we will
