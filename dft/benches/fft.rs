@@ -22,11 +22,11 @@ fn bench_fft(c: &mut Criterion) {
     const BATCH_SIZE: usize = 16;
     type BBExt = BinomialExtensionField<BabyBear, 5>;
 
-    fft::<BabyBear, Radix2FFTSmallBatch<_>, BATCH_SIZE>(c, log_sizes);
+    fft::<BabyBear, Radix2DFTSmallBatch<_>, BATCH_SIZE>(c, log_sizes);
     // fft::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
-    ifft::<BabyBear, Radix2FFTSmallBatch<_>, BATCH_SIZE>(c, log_sizes);
+    ifft::<BabyBear, Radix2DFTSmallBatch<_>, BATCH_SIZE>(c, log_sizes);
     // ifft::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
-    coset_lde::<BabyBear, Radix2FFTSmallBatch<_>, BATCH_SIZE>(c, log_sizes);
+    coset_lde::<BabyBear, Radix2DFTSmallBatch<_>, BATCH_SIZE>(c, log_sizes);
     coset_lde::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2DFTSmallBatch<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
