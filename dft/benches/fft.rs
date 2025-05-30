@@ -1,6 +1,6 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::BabyBear;
-use p3_dft::{Radix2Bowers, Radix2Dit, Radix2DitParallel, Radix2FFTSmallBatch, TwoAdicSubgroupDft};
+use p3_dft::{Radix2Bowers, Radix2DFTSmallBatch, Radix2Dit, Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::extension::{BinomialExtensionField, Complex};
 use p3_field::{Algebra, BasedVectorSpace, TwoAdicField};
 use p3_goldilocks::Goldilocks;
@@ -28,6 +28,7 @@ fn bench_fft(c: &mut Criterion) {
     // ifft::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
     coset_lde::<BabyBear, Radix2FFTSmallBatch<_>, BATCH_SIZE>(c, log_sizes);
     coset_lde::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
+    fft::<BabyBear, Radix2DFTSmallBatch<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
     fft::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
@@ -56,7 +57,7 @@ fn bench_fft(c: &mut Criterion) {
     const EXT_BATCH_SIZE: usize = 50;
     fft::<BBExt, Radix2Dit<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
     fft::<BBExt, Radix2DitParallel<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
-    fft_algebra::<BabyBear, BBExt, Radix2FFTSmallBatch<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
+    fft_algebra::<BabyBear, BBExt, Radix2DFTSmallBatch<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
     fft_algebra::<BabyBear, BBExt, Radix2Dit<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
     fft_algebra::<BabyBear, BBExt, Radix2DitParallel<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
     fft_algebra::<BabyBear, BBExt, RecursiveDft<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);

@@ -171,7 +171,7 @@ pub struct BatchOpening<T: Send + Sync + Clone, InputMmcs: Mmcs<T>> {
 impl<T: Send + Sync + Clone, InputMmcs: Mmcs<T>> BatchOpening<T, InputMmcs> {
     /// Creates a new batch opening proof.
     #[inline]
-    pub fn new(opened_values: Vec<Vec<T>>, opening_proof: <InputMmcs as Mmcs<T>>::Proof) -> Self {
+    pub fn new(opened_values: Vec<Vec<T>>, opening_proof: InputMmcs::Proof) -> Self {
         Self {
             opened_values,
             opening_proof,
@@ -180,7 +180,7 @@ impl<T: Send + Sync + Clone, InputMmcs: Mmcs<T>> BatchOpening<T, InputMmcs> {
 
     /// Unpacks the batch opening proof into its components.
     #[inline]
-    pub fn unpack(self) -> (Vec<Vec<T>>, <InputMmcs as Mmcs<T>>::Proof) {
+    pub fn unpack(self) -> (Vec<Vec<T>>, InputMmcs::Proof) {
         (self.opened_values, self.opening_proof)
     }
 }
@@ -201,10 +201,7 @@ pub struct BatchOpeningRef<'a, T: Send + Sync + Clone, InputMmcs: Mmcs<T>> {
 impl<'a, T: Send + Sync + Clone, InputMmcs: Mmcs<T>> BatchOpeningRef<'a, T, InputMmcs> {
     /// Creates a new batch opening proof.
     #[inline]
-    pub fn new(
-        opened_values: &'a [Vec<T>],
-        opening_proof: &'a <InputMmcs as Mmcs<T>>::Proof,
-    ) -> Self {
+    pub fn new(opened_values: &'a [Vec<T>], opening_proof: &'a InputMmcs::Proof) -> Self {
         Self {
             opened_values,
             opening_proof,
@@ -213,7 +210,7 @@ impl<'a, T: Send + Sync + Clone, InputMmcs: Mmcs<T>> BatchOpeningRef<'a, T, Inpu
 
     /// Unpacks the batch opening proof into its components.
     #[inline]
-    pub fn unpack(&self) -> (&'a [Vec<T>], &'a <InputMmcs as Mmcs<T>>::Proof) {
+    pub fn unpack(&self) -> (&'a [Vec<T>], &'a InputMmcs::Proof) {
         (self.opened_values, self.opening_proof)
     }
 }
