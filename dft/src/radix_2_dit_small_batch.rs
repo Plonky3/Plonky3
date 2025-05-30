@@ -3,6 +3,7 @@
 use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::iter;
+use itertools::Itertools;
 
 use p3_field::{Field, PackedField, PackedValue, TwoAdicField, scale_slice_in_place_single_core};
 use p3_matrix::Matrix;
@@ -149,21 +150,58 @@ where
         // for layer in 0..(log_h - log_num_par_rows) {
         //     dit_layer_par_single(&mut mat.as_view_mut(), &root_table[log_h - layer - 1]);
         // }
-        for layer in (2..(log_h - log_num_par_rows)).step_by(3) {
-            dit_layer_par_triple(
+        for layer in (3..(log_h - log_num_par_rows)).step_by(4) {
+            dit_layer_par_quad(
                 &mut mat.as_view_mut(),
+                &root_table[log_h - layer + 2],
                 &root_table[log_h - layer + 1],
                 &root_table[log_h - layer],
                 &root_table[log_h - layer - 1],
             );
         }
 
-        if (log_h - log_num_par_rows) % 3 == 2 {
-            dit_layer_par_single(&mut mat.as_view_mut(), &root_table[log_num_par_rows + 1]);
-            dit_layer_par_single(&mut mat.as_view_mut(), &root_table[log_num_par_rows]);
-        } else if (log_h - log_num_par_rows) % 3 == 1 {
-            dit_layer_par_single(&mut mat.as_view_mut(), &root_table[log_num_par_rows]);
+        if (log_h - log_num_par_rows) % 4 == 1 {
+            dit_layer_par_single(&mut mat.as_view_mut(), &root_table[log_num_par_rows])
+        } else if (log_h - log_num_par_rows) % 4 == 2 {
+            dit_layer_par_double(
+                &mut mat.as_view_mut(),
+                &root_table[log_num_par_rows + 1],
+                &root_table[log_num_par_rows],
+            )
+        } else if (log_h - log_num_par_rows) % 4 == 3 {
+            dit_layer_par_triple(
+                &mut mat.as_view_mut(),
+                &root_table[log_num_par_rows + 2],
+                &root_table[log_num_par_rows + 1],
+                &root_table[log_num_par_rows],
+            )
         }
+
+        // match (log_h - log_num_par_rows) % 3 {
+        //     1 =>
+        //     2 => dit_layer_par_double(
+        //         &mut mat.as_view_mut(),
+        //         &root_table[log_num_par_rows + 1],
+        //         &root_table[log_num_par_rows],
+        //     ),
+        //     // 3 => dit_layer_par_triple(
+        //     //     &mut mat.as_view_mut(),
+        //     //     &root_table[log_num_par_rows + 2],
+        //     //     &root_table[log_num_par_rows + 1],
+        //     //     &root_table[log_num_par_rows],
+        //     // ),
+        //     0 => {}
+        //     _ => unreachable!(),
+        // }
+        // if (log_h - log_num_par_rows) % 4 == 2 {
+        //     dit_layer_par_double(
+        //         &mut mat.as_view_mut(),
+        //         &root_table[log_num_par_rows + 1],
+        //         &root_table[log_num_par_rows],
+        //     );
+        // } else if (log_h - log_num_par_rows) % 3 == 1 {
+        //     dit_layer_par_single(&mut mat.as_view_mut(), &root_table[log_num_par_rows]);
+        // }
 
         // Once the blocks are small enough, we can split the matrix
         // into chunks of size `chunk_size` and process them in parallel.
@@ -399,6 +437,50 @@ fn dif_layer_par<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, twiddles: &[F]) {
 }
 
 #[inline]
+fn dit_layer_par_double<F: Field>(
+    mat: &mut RowMajorMatrixViewMut<F>,
+    twiddles_1: &[F],
+    twiddles_2: &[F],
+) {
+    debug_assert!(
+        mat.height() % twiddles_1.len() == 0,
+        "Matrix height must be divisible by the number of twiddles"
+    );
+    let size = mat.values.len();
+    let num_blocks = twiddles_1.len();
+
+    let outer_block_size = size / num_blocks;
+    let quarter_outer_block_size = outer_block_size / 4;
+
+    // Getting this size right seems to be a big deal.
+    let l1_size = (workload_size::<F>().next_power_of_two() / 4).min(quarter_outer_block_size);
+
+    mat.values
+        .par_chunks_exact_mut(outer_block_size)
+        .enumerate()
+        .for_each(|(ind, block)| {
+            // Split each block vertically into top (hi) and bottom (lo) halves.
+            // Do this 3 times to get 8 sub chunks
+            let chunk_par_iters_0 = block
+                .chunks_exact_mut(quarter_outer_block_size)
+                .map(|chunk| chunk.par_chunks_mut(l1_size))
+                .collect::<Vec<_>>();
+            let chunk_par_iters_1 = zip_par_iter_vec(chunk_par_iters_0);
+            chunk_par_iters_1.into_iter().tuples().for_each(|(hi, lo)| {
+                hi.zip(lo)
+                    .for_each(|((hi_hi_chunk, hi_lo_chunk), (lo_hi_chunk, lo_lo_chunk))| {
+                        DitButterfly(twiddles_1[ind]).apply_to_rows(hi_hi_chunk, lo_hi_chunk);
+                        DitButterfly(twiddles_1[ind]).apply_to_rows(hi_lo_chunk, lo_lo_chunk);
+
+                        DitButterfly(twiddles_2[2 * ind]).apply_to_rows(hi_hi_chunk, hi_lo_chunk);
+                        DitButterfly(twiddles_2[2 * ind + 1])
+                            .apply_to_rows(lo_hi_chunk, lo_lo_chunk);
+                    });
+            });
+        });
+}
+
+#[inline]
 fn dit_layer_par_triple<F: Field>(
     mat: &mut RowMajorMatrixViewMut<F>,
     twiddles_1: &[F],
@@ -413,8 +495,6 @@ fn dit_layer_par_triple<F: Field>(
     let num_blocks = twiddles_1.len();
 
     let outer_block_size = size / num_blocks;
-    let half_outer_block_size = outer_block_size / 2;
-    let quarter_outer_block_size = outer_block_size / 4;
     let eighth_outer_block_size = outer_block_size / 8;
 
     // Getting this size right seems to be a big deal.
@@ -424,79 +504,252 @@ fn dit_layer_par_triple<F: Field>(
         .par_chunks_exact_mut(outer_block_size)
         .enumerate()
         .for_each(|(ind, block)| {
-            // Split each block vertically into top (hi) and bottom (lo) halves
-            let (hi_chunk, lo_chunk) = block.split_at_mut(half_outer_block_size);
-            // DitButterfly(twiddles_1[ind]).apply_to_rows(hi_chunk, lo_chunk);
-            let (hi_hi_chunk, hi_lo_chunk) = hi_chunk.split_at_mut(quarter_outer_block_size);
-            let (lo_hi_chunk, lo_lo_chunk) = lo_chunk.split_at_mut(quarter_outer_block_size);
-            // DitButterfly(twiddles_1[ind]).apply_to_rows(hi_hi_chunk, lo_hi_chunk);
-            // DitButterfly(twiddles_1[ind]).apply_to_rows(hi_lo_chunk, lo_lo_chunk);
-            // DitButterfly(twiddles_2[2 * ind]).apply_to_rows(hi_hi_chunk, hi_lo_chunk);
-            // DitButterfly(twiddles_2[2 * ind + 1]).apply_to_rows(lo_hi_chunk, lo_lo_chunk);
-            let (hi_hi_hi_chunk, hi_hi_lo_chunk) =
-                hi_hi_chunk.split_at_mut(eighth_outer_block_size);
-            let (hi_lo_hi_chunk, hi_lo_lo_chunk) =
-                hi_lo_chunk.split_at_mut(eighth_outer_block_size);
-            let (lo_hi_hi_chunk, lo_hi_lo_chunk) =
-                lo_hi_chunk.split_at_mut(eighth_outer_block_size);
-            let (lo_lo_hi_chunk, lo_lo_lo_chunk) =
-                lo_lo_chunk.split_at_mut(eighth_outer_block_size);
-
-            hi_hi_hi_chunk
-                .par_chunks_mut(l1_size)
-                .zip(hi_hi_lo_chunk.par_chunks_mut(l1_size))
-                .zip(
-                    hi_lo_hi_chunk
-                        .par_chunks_mut(l1_size)
-                        .zip(hi_lo_lo_chunk.par_chunks_mut(l1_size)),
-                )
-                .zip(
-                    lo_hi_hi_chunk
-                        .par_chunks_mut(l1_size)
-                        .zip(lo_hi_lo_chunk.par_chunks_mut(l1_size))
-                        .zip(
-                            lo_lo_hi_chunk
-                                .par_chunks_mut(l1_size)
-                                .zip(lo_lo_lo_chunk.par_chunks_mut(l1_size)),
-                        ),
-                )
-                .for_each(
+            // Split each block vertically into top (hi) and bottom (lo) halves.
+            // Do this 3 times to get 8 sub chunks
+            let chunk_par_iters_0 = block
+                .chunks_exact_mut(eighth_outer_block_size)
+                .map(|chunk| chunk.par_chunks_mut(l1_size))
+                .collect::<Vec<_>>();
+            let chunk_par_iters_1 = zip_par_iter_vec(chunk_par_iters_0);
+            let chunk_par_iters_2 = zip_par_iter_vec(chunk_par_iters_1);
+            chunk_par_iters_2.into_iter().tuples().for_each(|(hi, lo)| {
+                hi.zip(lo).for_each(
                     |(
                         ((hi_hi_hi_chunk, hi_hi_lo_chunk), (hi_lo_hi_chunk, hi_lo_lo_chunk)),
                         ((lo_hi_hi_chunk, lo_hi_lo_chunk), (lo_lo_hi_chunk, lo_lo_lo_chunk)),
                     )| {
-                        DitButterfly(twiddles_1[ind]).apply_to_rows(hi_hi_hi_chunk, lo_hi_hi_chunk);
-                        DitButterfly(twiddles_1[ind]).apply_to_rows(hi_hi_lo_chunk, lo_hi_lo_chunk);
-                        DitButterfly(twiddles_1[ind]).apply_to_rows(hi_lo_hi_chunk, lo_lo_hi_chunk);
-                        DitButterfly(twiddles_1[ind]).apply_to_rows(hi_lo_lo_chunk, lo_lo_lo_chunk);
+                        apply_butterfly_to_pairs(
+                            &[twiddles_1[ind]; 4],
+                            &mut [
+                                hi_hi_hi_chunk,
+                                hi_hi_lo_chunk,
+                                hi_lo_hi_chunk,
+                                hi_lo_lo_chunk,
+                            ],
+                            &mut [
+                                lo_hi_hi_chunk,
+                                lo_hi_lo_chunk,
+                                lo_lo_hi_chunk,
+                                lo_lo_lo_chunk,
+                            ],
+                        );
 
-                        DitButterfly(twiddles_2[2 * ind])
-                            .apply_to_rows(hi_hi_hi_chunk, hi_lo_hi_chunk);
-                        DitButterfly(twiddles_2[2 * ind])
-                            .apply_to_rows(hi_hi_lo_chunk, hi_lo_lo_chunk);
-                        DitButterfly(twiddles_2[2 * ind + 1])
-                            .apply_to_rows(lo_hi_hi_chunk, lo_lo_hi_chunk);
-                        DitButterfly(twiddles_2[2 * ind + 1])
-                            .apply_to_rows(lo_hi_lo_chunk, lo_lo_lo_chunk);
+                        apply_butterfly_to_pairs(
+                            &[
+                                twiddles_2[2 * ind],
+                                twiddles_2[2 * ind],
+                                twiddles_2[2 * ind + 1],
+                                twiddles_2[2 * ind + 1],
+                            ],
+                            &mut [
+                                hi_hi_hi_chunk,
+                                hi_hi_lo_chunk,
+                                lo_hi_hi_chunk,
+                                lo_hi_lo_chunk,
+                            ],
+                            &mut [
+                                hi_lo_hi_chunk,
+                                hi_lo_lo_chunk,
+                                lo_lo_hi_chunk,
+                                lo_lo_lo_chunk,
+                            ],
+                        );
 
-                        DitButterfly(twiddles_3[4 * ind])
-                            .apply_to_rows(hi_hi_hi_chunk, hi_hi_lo_chunk);
-                        DitButterfly(twiddles_3[4 * ind + 1])
-                            .apply_to_rows(hi_lo_hi_chunk, hi_lo_lo_chunk);
-                        DitButterfly(twiddles_3[4 * ind + 2])
-                            .apply_to_rows(lo_hi_hi_chunk, lo_hi_lo_chunk);
-                        DitButterfly(twiddles_3[4 * ind + 3])
-                            .apply_to_rows(lo_lo_hi_chunk, lo_lo_lo_chunk);
+                        apply_butterfly_to_pairs(
+                            &twiddles_3[4 * ind..4 * (ind + 1)],
+                            &mut [
+                                hi_hi_hi_chunk,
+                                hi_lo_hi_chunk,
+                                lo_hi_hi_chunk,
+                                lo_lo_hi_chunk,
+                            ],
+                            &mut [
+                                hi_hi_lo_chunk,
+                                hi_lo_lo_chunk,
+                                lo_hi_lo_chunk,
+                                lo_lo_lo_chunk,
+                            ],
+                        );
                     },
-                );
+                )
+            });
+        });
+}
 
-            // if ind == 0 {
-            //     // The first pair doesn't require a twiddle factor
-            //     TwiddleFreeButterfly.apply_to_rows(hi_chunk, lo_chunk);
-            // } else {
-            // Apply DIT butterfly using the twiddle factor at index `ind - 1`
-            // DitButterfly(twiddles_1[ind]).apply_to_rows(hi_chunk, lo_chunk);
-            // }
+#[inline]
+fn dit_layer_par_quad<F: Field>(
+    mat: &mut RowMajorMatrixViewMut<F>,
+    twiddles_1: &[F],
+    twiddles_2: &[F],
+    twiddles_3: &[F],
+    twiddles_4: &[F],
+) {
+    debug_assert!(
+        mat.height() % twiddles_1.len() == 0,
+        "Matrix height must be divisible by the number of twiddles"
+    );
+    let size = mat.values.len();
+    let num_blocks = twiddles_1.len();
+
+    let outer_block_size = size / num_blocks;
+    let sixteenth_outer_block_size = outer_block_size / 16;
+
+    // Getting this size right seems to be a big deal.
+    let l1_size = (workload_size::<F>().next_power_of_two() / 16).min(sixteenth_outer_block_size);
+
+    mat.values
+        .par_chunks_exact_mut(outer_block_size)
+        .enumerate()
+        .for_each(|(ind, block)| {
+            // Split each block vertically into top (hi) and bottom (lo) halves.
+            // Do this 3 times to get 8 sub chunks
+            let chunk_par_iters_0 = block
+                .chunks_exact_mut(sixteenth_outer_block_size)
+                .map(|chunk| chunk.par_chunks_mut(l1_size))
+                .collect::<Vec<_>>();
+            let chunk_par_iters_1 = zip_par_iter_vec(chunk_par_iters_0);
+            let chunk_par_iters_2 = zip_par_iter_vec(chunk_par_iters_1);
+            let chunk_par_iters_3 = zip_par_iter_vec(chunk_par_iters_2);
+            chunk_par_iters_3.into_iter().tuples().for_each(|(hi, lo)| {
+                hi.zip(lo).for_each(
+                    |(
+                        (
+                            (
+                                (hi_hi_hi_hi_chunk, hi_hi_hi_lo_chunk),
+                                (hi_hi_lo_hi_chunk, hi_hi_lo_lo_chunk),
+                            ),
+                            (
+                                (hi_lo_hi_hi_chunk, hi_lo_hi_lo_chunk),
+                                (hi_lo_lo_hi_chunk, hi_lo_lo_lo_chunk),
+                            ),
+                        ),
+                        (
+                            (
+                                (lo_hi_hi_hi_chunk, lo_hi_hi_lo_chunk),
+                                (lo_hi_lo_hi_chunk, lo_hi_lo_lo_chunk),
+                            ),
+                            (
+                                (lo_lo_hi_hi_chunk, lo_lo_hi_lo_chunk),
+                                (lo_lo_lo_hi_chunk, lo_lo_lo_lo_chunk),
+                            ),
+                        ),
+                    )| {
+                        apply_butterfly_to_pairs(
+                            &[twiddles_1[ind]; 8],
+                            &mut [
+                                hi_hi_hi_hi_chunk,
+                                hi_hi_hi_lo_chunk,
+                                hi_hi_lo_hi_chunk,
+                                hi_hi_lo_lo_chunk,
+                                hi_lo_hi_hi_chunk,
+                                hi_lo_hi_lo_chunk,
+                                hi_lo_lo_hi_chunk,
+                                hi_lo_lo_lo_chunk,
+                            ],
+                            &mut [
+                                lo_hi_hi_hi_chunk,
+                                lo_hi_hi_lo_chunk,
+                                lo_hi_lo_hi_chunk,
+                                lo_hi_lo_lo_chunk,
+                                lo_lo_hi_hi_chunk,
+                                lo_lo_hi_lo_chunk,
+                                lo_lo_lo_hi_chunk,
+                                lo_lo_lo_lo_chunk,
+                            ],
+                        );
+
+                        apply_butterfly_to_pairs(
+                            &[
+                                twiddles_2[2 * ind],
+                                twiddles_2[2 * ind],
+                                twiddles_2[2 * ind],
+                                twiddles_2[2 * ind],
+                                twiddles_2[2 * ind + 1],
+                                twiddles_2[2 * ind + 1],
+                                twiddles_2[2 * ind + 1],
+                                twiddles_2[2 * ind + 1],
+                            ],
+                            &mut [
+                                hi_hi_hi_hi_chunk,
+                                hi_hi_hi_lo_chunk,
+                                hi_hi_lo_hi_chunk,
+                                hi_hi_lo_lo_chunk,
+                                lo_hi_hi_hi_chunk,
+                                lo_hi_hi_lo_chunk,
+                                lo_hi_lo_hi_chunk,
+                                lo_hi_lo_lo_chunk,
+                            ],
+                            &mut [
+                                hi_lo_hi_hi_chunk,
+                                hi_lo_hi_lo_chunk,
+                                hi_lo_lo_hi_chunk,
+                                hi_lo_lo_lo_chunk,
+                                lo_lo_hi_hi_chunk,
+                                lo_lo_hi_lo_chunk,
+                                lo_lo_lo_hi_chunk,
+                                lo_lo_lo_lo_chunk,
+                            ],
+                        );
+
+                        apply_butterfly_to_pairs(
+                            &[
+                                twiddles_3[4 * ind],
+                                twiddles_3[4 * ind],
+                                twiddles_3[4 * ind + 1],
+                                twiddles_3[4 * ind + 1],
+                                twiddles_3[4 * ind + 2],
+                                twiddles_3[4 * ind + 2],
+                                twiddles_3[4 * ind + 3],
+                                twiddles_3[4 * ind + 3],
+                            ],
+                            &mut [
+                                hi_hi_hi_hi_chunk,
+                                hi_hi_hi_lo_chunk,
+                                hi_lo_hi_hi_chunk,
+                                hi_lo_hi_lo_chunk,
+                                lo_hi_hi_hi_chunk,
+                                lo_hi_hi_lo_chunk,
+                                lo_lo_hi_hi_chunk,
+                                lo_lo_hi_lo_chunk,
+                            ],
+                            &mut [
+                                hi_hi_lo_hi_chunk,
+                                hi_hi_lo_lo_chunk,
+                                hi_lo_lo_hi_chunk,
+                                hi_lo_lo_lo_chunk,
+                                lo_hi_lo_hi_chunk,
+                                lo_hi_lo_lo_chunk,
+                                lo_lo_lo_hi_chunk,
+                                lo_lo_lo_lo_chunk,
+                            ],
+                        );
+
+                        apply_butterfly_to_pairs(
+                            &twiddles_4[8 * ind..8 * (ind + 1)],
+                            &mut [
+                                hi_hi_hi_hi_chunk,
+                                hi_hi_lo_hi_chunk,
+                                hi_lo_hi_hi_chunk,
+                                hi_lo_lo_hi_chunk,
+                                lo_hi_hi_hi_chunk,
+                                lo_hi_lo_hi_chunk,
+                                lo_lo_hi_hi_chunk,
+                                lo_lo_lo_hi_chunk,
+                            ],
+                            &mut [
+                                hi_hi_hi_lo_chunk,
+                                hi_hi_lo_lo_chunk,
+                                hi_lo_hi_lo_chunk,
+                                hi_lo_lo_lo_chunk,
+                                lo_hi_hi_lo_chunk,
+                                lo_hi_lo_lo_chunk,
+                                lo_lo_hi_lo_chunk,
+                                lo_lo_lo_lo_chunk,
+                            ],
+                        );
+                    },
+                )
+            });
         });
 }
 
@@ -730,4 +983,26 @@ fn dif_layer_zeros<F: Field>(vec: &mut [F], twiddles: &[F], skip: usize) {
             // Apply DIF butterfly making use of the fact that `lo_chunk` is zero.
             DifButterflyZeros(twiddle).apply_to_rows(hi_chunk, lo_chunk);
         });
+}
+
+/// Given a vector of parallel iterators, zip all pairs together.
+///
+/// This assumes that the input vector has an even number of elements,
+#[inline]
+fn zip_par_iter_vec<I: IndexedParallelIterator>(
+    in_vec: Vec<I>,
+) -> Vec<impl IndexedParallelIterator<Item = (I::Item, I::Item)>> {
+    in_vec
+        .into_iter()
+        .tuples()
+        .map(|(hi, lo)| hi.zip(lo))
+        .collect::<Vec<_>>()
+}
+
+/// Applies the DIT butterfly for each twiddle, hi, lo triplet.
+#[inline]
+fn apply_butterfly_to_pairs<F: Field>(twiddles: &[F], his: &mut [&mut [F]], los: &mut [&mut [F]]) {
+    for (&twiddle, (hi, lo)) in twiddles.iter().zip(his.iter_mut().zip(los)) {
+        DitButterfly(twiddle).apply_to_rows(hi, lo);
+    }
 }
