@@ -69,7 +69,7 @@ where
     Challenge: ExtensionField<<Pcs::Domain as PolynomialSpace>::Val>,
     Pcs: p3_commit::Pcs<Challenge, Challenger>,
     Challenger: FieldChallenger<<Pcs::Domain as PolynomialSpace>::Val>
-        + CanObserve<<Pcs as p3_commit::Pcs<Challenge, Challenger>>::Commitment>
+        + CanObserve<Pcs::Commitment>
         + CanSample<Challenge>
         + Clone,
 {
