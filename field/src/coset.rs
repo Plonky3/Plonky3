@@ -75,7 +75,7 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
     ///  - `log_size`: the size of the subgroup (and hence of the coset) is `2 ^
     ///    log_size`. This determines the subgroup uniquely.
     pub fn new(shift: F, log_size: usize) -> Option<Self> {
-        (shift != F::ZERO && log_size <= F::TWO_ADICITY).then(|| Self { shift, log_size })
+        (shift != F::ZERO && log_size <= F::TWO_ADICITY).then_some(Self { shift, log_size })
     }
 
     /// Returns the generator of the subgroup of order `self.size()`.
