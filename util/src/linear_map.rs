@@ -146,7 +146,7 @@ impl<'a, K, V> IntoIterator for &'a LinearMap<K, V> {
     type IntoIter = <&'a Vec<(K, V)> as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
-        (&self.0).into_iter()
+        self.0.iter()
     }
 }
 
