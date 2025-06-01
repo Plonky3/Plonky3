@@ -98,6 +98,10 @@ const SMALL_ARR_SIZE: usize = 1 << 16;
 ///
 /// If the whole array fits in fast cache, then the trivial algorithm is cache friendly. Also, if
 /// `T` is really big, then the trivial algorithm is cache-friendly, no matter the size of the array.
+///
+/// # Performance
+///
+/// Enable the `parallel` feature to parallelize.
 pub fn reverse_slice_index_bits<F>(vals: &mut [F])
 where
     F: Copy + Send + Sync,
