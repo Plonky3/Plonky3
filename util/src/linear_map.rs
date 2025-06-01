@@ -31,6 +31,7 @@ impl<K: Eq, V> LinearMap<K, V> {
         Default::default()
     }
 
+    /// Creates a new empty `LinearMap` with a pre-allocated capacity.
     pub fn with_capacity(capacity: usize) -> Self {
         Self(Vec::with_capacity(capacity))
     }
