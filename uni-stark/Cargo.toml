@@ -13,27 +13,33 @@ p3-dft.workspace = true
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
 p3-util.workspace = true
+
 itertools.workspace = true
 tracing.workspace = true
 serde = { workspace = true, features = ["derive", "alloc"] }
 
 [dev-dependencies]
 p3-baby-bear.workspace = true
-p3-challenger.workspace = true
 p3-circle.workspace = true
 p3-commit = { workspace = true, features = ["test-utils"] }
-p3-dft.workspace = true
 p3-fri.workspace = true
 p3-keccak.workspace = true
-p3-matrix.workspace = true
 p3-merkle-tree.workspace = true
 p3-mersenne-31.workspace = true
 p3-symmetric.workspace = true
+
 postcard = { workspace = true, features = ["alloc"] }
 rand.workspace = true
 
 [features]
-parallel = ["p3-maybe-rayon/parallel"]
+parallel = [
+    "p3-field/parallel",
+    "p3-challenger/parallel",
+    "p3-commit/parallel",
+    "p3-dft/parallel",
+    "p3-matrix/parallel",
+    "p3-maybe-rayon/parallel",
+]
 nightly-features = [
     "p3-baby-bear/nightly-features",
     "p3-mersenne-31/nightly-features",

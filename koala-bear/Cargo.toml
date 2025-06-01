@@ -4,9 +4,6 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
-[features]
-nightly-features = ["p3-monty-31/nightly-features"]
-
 [dependencies]
 p3-field.workspace = true
 p3-monty-31.workspace = true
@@ -15,14 +12,18 @@ p3-symmetric.workspace = true
 rand.workspace = true
 
 [dev-dependencies]
-num-bigint.workspace = true
 p3-dft.workspace = true
 p3-field-testing.workspace = true
 p3-util.workspace = true
+
+num-bigint.workspace = true
 rand.workspace = true
 criterion.workspace = true
 serde_json.workspace = true
 rand_xoshiro.workspace = true
+
+[features]
+nightly-features = ["p3-monty-31/nightly-features"]
 
 [[bench]]
 name = "bench_field"

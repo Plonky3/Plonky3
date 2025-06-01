@@ -5,11 +5,12 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-itertools.workspace = true
 p3-field.workspace = true
 p3-mds.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
+
+itertools.workspace = true
 rand.workspace = true
 sha3.workspace = true
 

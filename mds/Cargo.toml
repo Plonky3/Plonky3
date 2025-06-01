@@ -12,10 +12,10 @@ p3-util.workspace = true
 rand.workspace = true
 
 [dev-dependencies]
-criterion.workspace = true
 p3-baby-bear.workspace = true
 p3-goldilocks.workspace = true
 p3-mersenne-31.workspace = true
+criterion.workspace = true
 
 [[bench]]
 name = "mds"

@@ -13,21 +13,23 @@ num-bigint.workspace = true
 paste.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
-halo2curves = { version = "0.8.0", features = ["bits", "derive_serde"] }
+halo2curves = { version = "0.8.0", default-features = false, features = ["bits", "derive_serde"] }
+
+# Only on x86_64 do we actually pull in the “asm” feature for halo2curves:
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+halo2curves = { version = "0.8.0", default-features = false, features = ["bits", "derive_serde", "asm"] }
 
 [dev-dependencies]
 p3-field-testing.workspace = true
-
 criterion.workspace = true
 serde_json.workspace = true
 zkhash = { git = "https://github.com/HorizenLabs/poseidon2" }
 
 [features]
-default = []
 table = [
-    "halo2curves/bn256-table",
-] # Generate cached table of [0, 2^16) in Bn254Fr at compile time
-asm = ["halo2curves/asm"]
+    # TODO(@adr1anh): Do we want this to be default?
+    "halo2curves/bn256-table", # Generate cached table of [0, 2^16) in Bn254Fr at compile time
+]
 
 [[bench]]
 name = "bench_field"

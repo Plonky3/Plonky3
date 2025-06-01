@@ -12,3 +12,10 @@ p3-util.workspace = true
 
 [dev-dependencies]
 p3-baby-bear.workspace = true
+
+[features]
+parallel = [
+    "p3-field/parallel",
+    "p3-matrix/parallel",
+    "p3-maybe-rayon/parallel",
+]

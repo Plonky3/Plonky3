@@ -4,9 +4,6 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
-[features]
-nightly-features = []
-
 [dependencies]
 p3-field.workspace = true
 p3-symmetric.workspace = true
@@ -16,6 +13,9 @@ tiny-keccak = { workspace = true, features = ["keccak"] }
 [dev-dependencies]
 p3-mersenne-31.workspace = true
 criterion.workspace = true
+
+[features]
+nightly-features = []
 
 [[bench]]
 name = "bench_keccak"

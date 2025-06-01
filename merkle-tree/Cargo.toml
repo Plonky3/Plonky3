@@ -11,6 +11,7 @@ p3-maybe-rayon.workspace = true
 p3-symmetric.workspace = true
 p3-commit.workspace = true
 p3-util.workspace = true
+
 itertools.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["alloc"] }
@@ -21,9 +22,16 @@ p3-blake3.workspace = true
 p3-keccak.workspace = true
 p3-baby-bear.workspace = true
 p3-mds.workspace = true
-p3-poseidon2.workspace = true
+#p3-poseidon2.workspace = true
 p3-rescue.workspace = true
 criterion.workspace = true
+
+[features]
+parallel = [
+    "p3-matrix/parallel",
+    "p3-maybe-rayon/parallel",
+    "p3-commit/parallel",
+]
 
 [[bench]]
 name = "merkle_tree"

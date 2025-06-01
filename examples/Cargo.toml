@@ -23,6 +23,7 @@ p3-poseidon2.workspace = true
 p3-poseidon2-air.workspace = true
 p3-symmetric.workspace = true
 p3-uni-stark.workspace = true
+
 bincode = { workspace = true, features = ["serde", "alloc"] }
 clap.workspace = true
 rand.workspace = true
@@ -30,24 +31,37 @@ rand.workspace = true
 
 [dev-dependencies]
 p3-baby-bear.workspace = true
-p3-blake3.workspace = true
 p3-commit = { workspace = true, features = ["test-utils"] }
 p3-challenger.workspace = true
 p3-dft.workspace = true
 p3-koala-bear.workspace = true
 p3-matrix.workspace = true
-p3-sha256.workspace = true
-clap_derive.workspace = true
-postcard = { workspace = true, features = ["alloc"] }
-tracing.workspace = true
+
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 
 
 [features]
+parallel = [
+    "p3-field/parallel",
+    "p3-challenger/parallel",
+    "p3-circle/parallel",
+    "p3-commit/parallel",
+    "p3-dft/parallel",
+    "p3-fri/parallel",
+    "p3-keccak-air/parallel",
+    "p3-matrix/parallel",
+    "p3-merkle-tree/parallel",
+    "p3-mersenne-31/parallel",
+    "p3-monty-31/parallel",
+    "p3-uni-stark/parallel",
+]
+asm = ["p3-keccak-air/asm"]
 nightly-features = [
-    "p3-monty-31/nightly-features",
     "p3-baby-bear/nightly-features",
+    "p3-keccak/nightly-features",
     "p3-koala-bear/nightly-features",
     "p3-mersenne-31/nightly-features",
+    "p3-monty-31/nightly-features",
+    "p3-uni-stark/nightly-features",
 ]

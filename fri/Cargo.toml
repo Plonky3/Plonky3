@@ -13,6 +13,7 @@ p3-interpolation.workspace = true
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
 p3-util.workspace = true
+
 itertools.workspace = true
 rand.workspace = true
 tracing.workspace = true
@@ -26,9 +27,20 @@ p3-goldilocks.workspace = true
 p3-keccak.workspace = true
 p3-mersenne-31.workspace = true
 p3-merkle-tree.workspace = true
-p3-poseidon2.workspace = true
 p3-symmetric.workspace = true
 criterion.workspace = true
+
+[features]
+parallel = [
+    "p3-challenger/parallel", # Grinding
+    "p3-commit/parallel",
+    "p3-dft/parallel",
+    "p3-field/parallel", # Batch inversion
+    "p3-interpolation/parallel",
+    "p3-matrix/parallel",
+    "p3-maybe-rayon/parallel",
+    "p3-util/parallel"
+]
 
 [[bench]]
 name = "fold_even_odd"

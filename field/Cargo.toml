@@ -7,10 +7,10 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 p3-util.workspace = true
 p3-maybe-rayon.workspace = true
+
 num-bigint.workspace = true
 paste.workspace = true
 tracing.workspace = true
-
 itertools.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
@@ -18,3 +18,7 @@ serde = { workspace = true, features = ["derive"] }
 [dev-dependencies]
 p3-baby-bear.workspace = true
 p3-goldilocks.workspace = true
+
+[features]
+# Batch inversion
+parallel = ["p3-maybe-rayon/parallel"]

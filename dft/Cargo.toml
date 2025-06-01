@@ -9,6 +9,7 @@ p3-field.workspace = true
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
 p3-util.workspace = true
+
 tracing.workspace = true
 itertools.workspace = true
 
@@ -17,18 +18,25 @@ p3-monty-31.workspace = true
 p3-baby-bear.workspace = true
 p3-goldilocks.workspace = true
 p3-mersenne-31.workspace = true
+
 criterion.workspace = true
 rand.workspace = true
 
-[[bench]]
-name = "fft"
-harness = false
-
 [features]
+parallel = [
+    "p3-field/parallel",
+    "p3-matrix/parallel",
+    "p3-maybe-rayon/parallel",
+    "p3-util/parallel"
+]
+# Benchmarking
 nightly-features = [
     "p3-goldilocks/nightly-features",
     "p3-monty-31/nightly-features",
     "p3-baby-bear/nightly-features",
     "p3-mersenne-31/nightly-features",
 ]
-parallel = ["p3-maybe-rayon/parallel"]
+
+[[bench]]
+name = "fft"
+harness = false

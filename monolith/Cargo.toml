@@ -14,6 +14,9 @@ sha3.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 
+[features]
+nightly-features = ["p3-mersenne-31/nightly-features"]
+
 [[bench]]
 name = "permute"
 harness = false

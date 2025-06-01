@@ -14,3 +14,8 @@ tracing.workspace = true
 [dev-dependencies]
 p3-goldilocks.workspace = true
 p3-baby-bear.workspace = true
+
+[features]
+parallel = [
+    "p3-maybe-rayon/parallel", # Grinding
+]
