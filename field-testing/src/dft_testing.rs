@@ -266,13 +266,37 @@ where
 {
     let dft = Dft::default();
     let mut rng = SmallRng::seed_from_u64(1);
-    for log_h in &[14, 16, 18, 20] {
+    for log_h in &[16, 17, 18, 19, 20] {
         let h = 1 << log_h;
         let original = RowMajorMatrix::<EF>::rand(&mut rng, h, 3);
         let dft_output = dft.dft_algebra_batch(original.clone());
         let idft_output = dft.idft_algebra_batch(dft_output.to_row_major_matrix());
         let eq = original == idft_output.to_row_major_matrix();
         assert!(eq, "Error Found in size: {}", h);
+    }
+}
+
+pub fn test_large_coset_lde_matches_naive<F, Dft1, Dft2>()
+where
+    F: TwoAdicField,
+    StandardUniform: Distribution<F>,
+    Dft1: TwoAdicSubgroupDft<F>,
+    Dft2: TwoAdicSubgroupDft<F>,
+{
+    let dft1 = Dft1::default();
+    let dft2 = Dft2::default();
+    let mut rng = SmallRng::seed_from_u64(1);
+    for log_h in &[16, 17, 18, 19, 20] {
+        let h = 1 << log_h;
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
+        let shift = F::GENERATOR;
+        let coset_lde_result1 = dft1.coset_lde_batch(mat.clone(), 1, shift);
+        let coset_lde_result2 = dft2.coset_lde_batch(mat, 1, shift);
+
+        assert_eq!(
+            coset_lde_result1.to_row_major_matrix(),
+            coset_lde_result2.to_row_major_matrix()
+        );
     }
 }
 
@@ -349,10 +373,22 @@ macro_rules! test_field_dft {
             fn dft_idft_algebra_consistency() {
                 $crate::test_dft_idft_algebra_consistency::<$field, $extfield, $dft>();
             }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! test_large_field_dft {
+    ($mod:ident, $field:ty, $extfield:ty, $dft1:ty, $dft2:ty) => {
+        mod $mod {
+            #[test]
+            fn test_dft1_idft_algebra_consistency_large() {
+                $crate::test_dft_idft_algebra_consistency_large::<$field, $extfield, $dft1>();
+            }
 
             #[test]
-            fn test_dft_idft_algebra_consistency_large() {
-                $crate::test_dft_idft_algebra_consistency_large::<$field, $extfield, $dft>();
+            fn test_dft2_idft_algebra_consistency_large() {
+                $crate::test_dft_idft_algebra_consistency_large::<$field, $extfield, $dft2>();
             }
         }
     };
