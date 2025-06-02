@@ -14,7 +14,7 @@ sha2 = { workspace = true, default-features = false, features = ["compress"] } #
 hex-literal.workspace = true
 
 [features]
-default = ["asm"]
+default = []
 # Enable either x86 or aarch assembly implementation based on target.
 asm = [
     "sha2/asm",
