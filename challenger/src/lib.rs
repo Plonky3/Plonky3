@@ -20,9 +20,15 @@ pub use multi_field_challenger::*;
 use p3_field::{BasedVectorSpace, Field};
 pub use serializing_challenger::*;
 
+/// A generic trait for absorbing elements into the transcript.
+///
+/// Absorbed elements update the internal sponge state,
+/// preparing it to deterministically produce future challenges.
 pub trait CanObserve<T> {
+    /// Absorb a single value into the transcript.
     fn observe(&mut self, value: T);
 
+    /// Absorb a slice of values into the transcript.
     fn observe_slice(&mut self, values: &[T])
     where
         T: Clone,
@@ -33,29 +39,47 @@ pub trait CanObserve<T> {
     }
 }
 
+/// A trait for sampling challenge elements from the Fiat-Shamir transcript.
+///
+/// Sampling produces pseudo-random elements deterministically derived
+/// from the absorbed inputs and the sponge state.
 pub trait CanSample<T> {
+    /// Sample a single challenge value from the transcript.
     fn sample(&mut self) -> T;
 
+    /// Sample an array of `N` challenge values from the transcript.
     fn sample_array<const N: usize>(&mut self) -> [T; N] {
         array::from_fn(|_| self.sample())
     }
 
+    /// Sample a `Vec` of `n` challenge values from the transcript.
     fn sample_vec(&mut self, n: usize) -> Vec<T> {
         (0..n).map(|_| self.sample()).collect()
     }
 }
 
+/// A trait for sampling random bitstrings from the Fiat-Shamir transcript.
 pub trait CanSampleBits<T> {
+    /// Sample a uniformly random `bits`-bit integer from the transcript.
+    ///
+    /// Guarantees that the returned value fits within the requested bit width.
     fn sample_bits(&mut self, bits: usize) -> T;
 }
 
+/// A high-level trait combining observation and sampling over a finite field.
 pub trait FieldChallenger<F: Field>:
     CanObserve<F> + CanSample<F> + CanSampleBits<usize> + Sync
 {
+    /// Absorb an element from a vector space over the base field.
+    ///
+    /// Decomposes the element into its basis coefficients and absorbs each.
     fn observe_algebra_element<A: BasedVectorSpace<F>>(&mut self, alg_elem: A) {
         self.observe_slice(alg_elem.as_basis_coefficients_slice());
     }
 
+    /// Sample an element of a vector space over the base field.
+    ///
+    /// Constructs the element by sampling basis coefficients.
     fn sample_algebra_element<A: BasedVectorSpace<F>>(&mut self) -> A {
         A::from_basis_coefficients_fn(|_| self.sample())
     }
