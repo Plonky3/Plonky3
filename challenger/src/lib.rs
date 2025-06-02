@@ -70,7 +70,7 @@ pub trait CanSampleBits<T> {
 pub trait FieldChallenger<F: Field>:
     CanObserve<F> + CanSample<F> + CanSampleBits<usize> + Sync
 {
-    /// Absorb an algebraic element over the base field.
+    /// Absorb an element from a vector space over the base field.
     ///
     /// Decomposes the element into its basis coefficients and absorbs each.
     fn observe_algebra_element<A: BasedVectorSpace<F>>(&mut self, alg_elem: A) {
