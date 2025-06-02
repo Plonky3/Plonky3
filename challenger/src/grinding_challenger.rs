@@ -30,7 +30,7 @@ pub trait GrindingChallenger:
     /// Check whether a given `witness` satisfies the PoW condition.
     ///
     /// After absorbing the witness, the challenger samples `bits` random bits
-    /// and verifies that the result is zero.
+    /// and verifies that all bits sampled are zero.
     ///
     /// Returns `true` if the witness passes the PoW check, `false` otherwise.
     #[must_use]
