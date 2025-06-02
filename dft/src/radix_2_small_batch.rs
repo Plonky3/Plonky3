@@ -136,12 +136,17 @@ where
 
         // For the layers involving blocks larger than `num_par_rows`, we will
         // parallelize across the blocks.
+
+        // We do three layers of the DFT at once, to minimize how much data we need to transfer
+        // between threads.
         for (twiddles_0, twiddles_1, twiddles_2) in
             root_table[log_num_par_rows..].iter().rev().tuples()
         {
             dit_layer_par_triple(&mut mat.as_view_mut(), twiddles_0, twiddles_1, twiddles_2);
         }
 
+        // If the total number of layers is not a multiple of 3,
+        // we need to handle the remaining layers separately.
         if (log_h - log_num_par_rows) % 3 == 1 {
             dit_layer_par(&mut mat.as_view_mut(), &root_table[log_num_par_rows])
         } else if (log_h - log_num_par_rows) % 3 == 2 {
@@ -250,15 +255,17 @@ where
 
         // For the layers involving blocks larger than `num_par_rows`, we will
         // parallelize across the blocks.
-        // for twiddles in inv_root_table[log_num_par_rows..].iter().rev() {
-        //     dit_layer_par_single(&mut mat.as_view_mut(), twiddles);
-        // }
+
+        // We do three layers of the DFT at once, to minimize how much data we need to transfer
+        // between threads.
         for (twiddles_0, twiddles_1, twiddles_2) in
             inv_root_table[log_num_par_rows..].iter().rev().tuples()
         {
             dit_layer_par_triple(&mut mat.as_view_mut(), twiddles_0, twiddles_1, twiddles_2);
         }
 
+        // If the total number of layers is not a multiple of 3,
+        // we need to handle the remaining layers separately.
         if (log_h - log_num_par_rows) % 3 == 1 {
             dit_layer_par(&mut mat.as_view_mut(), &inv_root_table[log_num_par_rows])
         } else if (log_h - log_num_par_rows) % 3 == 2 {
@@ -576,33 +583,40 @@ fn dit_layer_par_double<F: Field>(
     let outer_block_size = size / num_blocks;
     let quarter_outer_block_size = outer_block_size / 4;
 
-    // Getting this size right seems to be a big deal.
-    let l1_size = (workload_size::<F>().next_power_of_two() / 4).min(quarter_outer_block_size);
+    // Estimate the optimal size of the inner chunks so that all data fits in L1 cache.
+    // Note that 4 inner chunks are processed in each parallel thread so we divide by 4.
+    let inner_chunk_size =
+        (workload_size::<F>().next_power_of_two() / 4).min(quarter_outer_block_size);
 
     mat.values
         .par_chunks_exact_mut(outer_block_size)
         .enumerate()
         .for_each(|(ind, block)| {
-            // Split each block vertically into top (hi) and bottom (lo) halves.
-            // Do this 3 times to get 8 sub chunks
+            // Split each block into four quarters. Each quarter will be further split into
+            // sub-chunks processed in parallel.
             let chunk_par_iters_0 = block
                 .chunks_exact_mut(quarter_outer_block_size)
-                .map(|chunk| chunk.par_chunks_mut(l1_size))
+                .map(|chunk| chunk.par_chunks_mut(inner_chunk_size))
                 .collect::<Vec<_>>();
             let chunk_par_iters_1 = zip_par_iter_vec(chunk_par_iters_0);
             chunk_par_iters_1.into_iter().tuples().for_each(|(hi, lo)| {
                 hi.zip(lo)
                     .for_each(|((hi_hi_chunk, hi_lo_chunk), (lo_hi_chunk, lo_lo_chunk))| {
+                        // Do 2 layers of the DIT FFT butterfly network at once.
                         if ind == 0 {
+                            // Layer 0:
                             TwiddleFreeButterfly.apply_to_rows(hi_hi_chunk, lo_hi_chunk);
                             TwiddleFreeButterfly.apply_to_rows(hi_lo_chunk, lo_lo_chunk);
 
+                            // Layer 1:
                             TwiddleFreeButterfly.apply_to_rows(hi_hi_chunk, hi_lo_chunk);
                             DitButterfly(twiddles_1[1]).apply_to_rows(lo_hi_chunk, lo_lo_chunk);
                         } else {
+                            // Layer 0:
                             DitButterfly(twiddles_0[ind]).apply_to_rows(hi_hi_chunk, lo_hi_chunk);
                             DitButterfly(twiddles_0[ind]).apply_to_rows(hi_lo_chunk, lo_lo_chunk);
 
+                            // Layer 1:
                             DitButterfly(twiddles_1[2 * ind])
                                 .apply_to_rows(hi_hi_chunk, hi_lo_chunk);
                             DitButterfly(twiddles_1[2 * ind + 1])
@@ -618,7 +632,6 @@ fn dit_layer_par_double<F: Field>(
 /// Splits the matrix into blocks of rows and performs in-place butterfly operations
 /// on each block. Advantage of doing three layers at once is it reduces the amount of
 /// data transferred between threads.
-///
 ///
 /// # Arguments
 /// - `mat`: Mutable matrix whose height is a power of two.
@@ -642,18 +655,20 @@ fn dit_layer_par_triple<F: Field>(
     let outer_block_size = size / num_blocks;
     let eighth_outer_block_size = outer_block_size / 8;
 
-    // Getting this size right seems to be a big deal.
-    let l1_size = (workload_size::<F>().next_power_of_two() / 8).min(eighth_outer_block_size);
+    // Estimate the optimal size of the inner chunks so that all data fits in L1 cache.
+    // Note that 8 inner chunks are processed in each parallel thread so we divide by 8.
+    let inner_chunk_size =
+        (workload_size::<F>().next_power_of_two() / 8).min(eighth_outer_block_size);
 
     mat.values
         .par_chunks_exact_mut(outer_block_size)
         .enumerate()
         .for_each(|(ind, block)| {
-            // Split each block vertically into top (hi) and bottom (lo) halves.
-            // Do this 3 times to get 8 sub chunks
+            // Split each block into eight equal parts. Each part will be further split into
+            // sub-chunks processed in parallel.
             let chunk_par_iters_0 = block
                 .chunks_exact_mut(eighth_outer_block_size)
-                .map(|chunk| chunk.par_chunks_mut(l1_size))
+                .map(|chunk| chunk.par_chunks_mut(inner_chunk_size))
                 .collect::<Vec<_>>();
             let chunk_par_iters_1 = zip_par_iter_vec(chunk_par_iters_0);
             let chunk_par_iters_2 = zip_par_iter_vec(chunk_par_iters_1);
@@ -663,12 +678,15 @@ fn dit_layer_par_triple<F: Field>(
                         ((hi_hi_hi_chunk, hi_hi_lo_chunk), (hi_lo_hi_chunk, hi_lo_lo_chunk)),
                         ((lo_hi_hi_chunk, lo_hi_lo_chunk), (lo_lo_hi_chunk, lo_lo_lo_chunk)),
                     )| {
+                        // Do 3 layers of the DIT FFT butterfly network at once.
                         if ind == 0 {
+                            // Layer 0:
                             TwiddleFreeButterfly.apply_to_rows(hi_hi_hi_chunk, lo_hi_hi_chunk);
                             TwiddleFreeButterfly.apply_to_rows(hi_hi_lo_chunk, lo_hi_lo_chunk);
                             TwiddleFreeButterfly.apply_to_rows(hi_lo_hi_chunk, lo_lo_hi_chunk);
                             TwiddleFreeButterfly.apply_to_rows(hi_lo_lo_chunk, lo_lo_lo_chunk);
 
+                            // Layer 1:
                             TwiddleFreeButterfly.apply_to_rows(hi_hi_hi_chunk, hi_lo_hi_chunk);
                             TwiddleFreeButterfly.apply_to_rows(hi_hi_lo_chunk, hi_lo_lo_chunk);
                             DitButterfly(twiddles_1[1])
@@ -676,6 +694,7 @@ fn dit_layer_par_triple<F: Field>(
                             DitButterfly(twiddles_1[1])
                                 .apply_to_rows(lo_hi_lo_chunk, lo_lo_lo_chunk);
 
+                            // Layer 2:
                             TwiddleFreeButterfly.apply_to_rows(hi_hi_hi_chunk, hi_hi_lo_chunk);
                             DitButterfly(twiddles_2[1])
                                 .apply_to_rows(hi_lo_hi_chunk, hi_lo_lo_chunk);
@@ -684,6 +703,7 @@ fn dit_layer_par_triple<F: Field>(
                             DitButterfly(twiddles_2[3])
                                 .apply_to_rows(lo_lo_hi_chunk, lo_lo_lo_chunk);
                         } else {
+                            // Layer 0:
                             DitButterfly(twiddles_0[ind])
                                 .apply_to_rows(hi_hi_hi_chunk, lo_hi_hi_chunk);
                             DitButterfly(twiddles_0[ind])
@@ -693,6 +713,7 @@ fn dit_layer_par_triple<F: Field>(
                             DitButterfly(twiddles_0[ind])
                                 .apply_to_rows(hi_lo_lo_chunk, lo_lo_lo_chunk);
 
+                            // Layer 1:
                             DitButterfly(twiddles_1[2 * ind])
                                 .apply_to_rows(hi_hi_hi_chunk, hi_lo_hi_chunk);
                             DitButterfly(twiddles_1[2 * ind])
@@ -702,6 +723,7 @@ fn dit_layer_par_triple<F: Field>(
                             DitButterfly(twiddles_1[2 * ind + 1])
                                 .apply_to_rows(lo_hi_lo_chunk, lo_lo_lo_chunk);
 
+                            // Layer 2:
                             DitButterfly(twiddles_2[4 * ind])
                                 .apply_to_rows(hi_hi_hi_chunk, hi_hi_lo_chunk);
                             DitButterfly(twiddles_2[4 * ind + 1])
@@ -819,7 +841,10 @@ fn estimate_num_rows_in_l1<T: Sized>(height: usize, width: usize) -> usize {
 
 /// Given a vector of parallel iterators, zip all pairs together.
 ///
-/// This assumes that the input vector has an even number of elements,
+/// This lets us simulate the izip!() macro but for our possibly parallel iterators.
+///
+/// This function assumes that the input vector has an even number of elements. If
+/// it is given an odd number of elements, the last element will be ignored.
 #[inline]
 fn zip_par_iter_vec<I: IndexedParallelIterator>(
     in_vec: Vec<I>,
