@@ -42,7 +42,7 @@ where
     let log_ext_degree = log_degree + config.is_zk();
 
     // Compute the constraint polynomials as vectors of symbolic expressions.
-    let symbolic_constraints = get_symbolic_constraints::<Val<SC>, A>(air, 0, public_values.len());
+    let symbolic_constraints = get_symbolic_constraints(air, 0, public_values.len());
 
     // Count the number of constraints that we have.
     let constraint_count = symbolic_constraints.len();
@@ -254,15 +254,12 @@ where
         let round1 = (&trace_data, vec![vec![zeta, zeta_next]]);
         let round2 = (&quotient_data, vec![vec![zeta]; quotient_degree]); // open every chunk at zeta
 
-        let rounds = round0
-            .into_iter()
-            .chain([round1, round2])
-            .collect::<Vec<_>>();
+        let rounds = round0.into_iter().chain([round1, round2]).collect();
 
         pcs.open(rounds, &mut challenger)
     });
-    let trace_idx = <SC as StarkGenericConfig>::Pcs::TRACE_IDX;
-    let quotient_idx = <SC as StarkGenericConfig>::Pcs::QUOTIENT_IDX;
+    let trace_idx = SC::Pcs::TRACE_IDX;
+    let quotient_idx = SC::Pcs::QUOTIENT_IDX;
     let trace_local = opened_values[trace_idx][0][0].clone();
     let trace_next = opened_values[trace_idx][0][1].clone();
     let quotient_chunks = opened_values[quotient_idx]
