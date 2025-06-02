@@ -77,7 +77,7 @@ pub trait FieldChallenger<F: Field>:
         self.observe_slice(alg_elem.as_basis_coefficients_slice());
     }
 
-    /// Sample an algebraic element over the base field.
+    /// Sample an element of a vector space over the base field.
     ///
     /// Constructs the algebraic element by sampling fresh coefficients.
     fn sample_algebra_element<A: BasedVectorSpace<F>>(&mut self) -> A {
