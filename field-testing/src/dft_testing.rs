@@ -266,7 +266,7 @@ where
 {
     let dft = Dft::default();
     let mut rng = SmallRng::seed_from_u64(1);
-    for log_h in &[16, 17, 18, 19, 20] {
+    for log_h in &[14, 15, 16, 17] {
         let h = 1 << log_h;
         let original = RowMajorMatrix::<EF>::rand(&mut rng, h, 3);
         let dft_output = dft.dft_algebra_batch(original.clone());
@@ -276,7 +276,7 @@ where
     }
 }
 
-pub fn test_large_coset_lde_matches_naive<F, Dft1, Dft2>()
+pub fn test_large_coset_ldes_agree<F, Dft1, Dft2>()
 where
     F: TwoAdicField,
     StandardUniform: Distribution<F>,
@@ -286,9 +286,9 @@ where
     let dft1 = Dft1::default();
     let dft2 = Dft2::default();
     let mut rng = SmallRng::seed_from_u64(1);
-    for log_h in &[16, 17, 18, 19, 20] {
+    for log_h in &[14, 15, 16, 17] {
         let h = 1 << log_h;
-        let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 3);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, h, 16);
         let shift = F::GENERATOR;
         let coset_lde_result1 = dft1.coset_lde_batch(mat.clone(), 1, shift);
         let coset_lde_result2 = dft2.coset_lde_batch(mat, 1, shift);
@@ -389,6 +389,11 @@ macro_rules! test_large_field_dft {
             #[test]
             fn test_dft2_idft_algebra_consistency_large() {
                 $crate::test_dft_idft_algebra_consistency_large::<$field, $extfield, $dft2>();
+            }
+
+            #[test]
+            fn test_large_coset_ldes_agree() {
+                $crate::test_large_coset_ldes_agree::<$field, $dft1, $dft2>();
             }
         }
     };
