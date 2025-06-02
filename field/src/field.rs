@@ -501,6 +501,7 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     /// (or rederived within) another compilation environment where a
     /// different basis might have been used.
     #[must_use]
+    #[inline]
     fn reconstitute_from_base(vec: Vec<F>) -> Vec<Self>
     where
         F: Sync,
