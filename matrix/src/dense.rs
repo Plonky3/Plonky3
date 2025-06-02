@@ -210,6 +210,22 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         scale_slice_in_place(self.row_mut(r), scale);
     }
 
+    /// Scale the given row by the given value.
+    ///
+    /// # Performance
+    /// This function is parallelized, which may introduce some overhead compared to
+    /// [`Self::scale_row`] when the width is small.
+    ///
+    /// # Panics
+    /// Panics if `r` larger than `self.height()`.
+    pub fn par_scale_row(&mut self, r: usize, scale: T)
+    where
+        T: Field,
+        S: BorrowMut<[T]>,
+    {
+        par_scale_slice_in_place(self.row_mut(r), scale);
+    }
+
     /// Scale the entire matrix by the given value.
     pub fn scale(&mut self, scale: T)
     where
