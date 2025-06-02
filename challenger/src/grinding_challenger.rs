@@ -23,8 +23,8 @@ pub trait GrindingChallenger:
     /// Perform a brute-force search to find a valid PoW witness.
     ///
     /// Given a `bits` parameter, this function searches for a field element
-    /// `witness` such that after observing it, the challenger outputs
-    /// `sample_bits(bits) == 0`.
+    /// `witness` such that after observing it, the next `bits` bits that challenger outputs
+    /// are all `0`.
     fn grind(&mut self, bits: usize) -> Self::Witness;
 
     /// Check whether a given `witness` satisfies the PoW condition.
