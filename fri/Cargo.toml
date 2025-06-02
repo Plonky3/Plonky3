@@ -11,8 +11,9 @@ p3-dft.workspace = true
 p3-field.workspace = true
 p3-interpolation.workspace = true
 p3-matrix.workspace = true
-p3-maybe-rayon.workspace = true
 p3-util.workspace = true
+
+p3-maybe-rayon.workspace = true
 
 itertools.workspace = true
 rand.workspace = true
@@ -32,17 +33,13 @@ p3-symmetric.workspace = true
 criterion.workspace = true
 
 [features]
-parallel = [
-    # Grinding
-    "p3-challenger/parallel",
-    "p3-commit/parallel",
-    "p3-dft/parallel",
-    # Batch inversion
-    "p3-field/parallel",
-    "p3-interpolation/parallel",
-    "p3-matrix/parallel",
-    "p3-maybe-rayon/parallel",
-    "p3-util/parallel",
+parallel = ["p3-maybe-rayon/parallel"]
+# Benchmarking
+nightly-features = [
+    "p3-baby-bear/nightly-features",
+    "p3-goldilocks/nightly-features",
+    "p3-keccak/nightly-features",
+    "p3-mersenne-31/nightly-features",
 ]
 
 [[bench]]

@@ -8,20 +8,19 @@ description = "Plonky3 hash trait implementations for the SHA2-256 hash function
 [dependencies]
 p3-symmetric.workspace = true
 p3-util.workspace = true
+
+p3-maybe-rayon = { workspace = true, optional = true }
+
 sha2 = { workspace = true, default-features = false, features = ["compress"] } # no default features avoids `std`
 
 [dev-dependencies]
 hex-literal.workspace = true
 
 [features]
-default = [
-]
+default = []
+parallel = ["p3-maybe-rayon/parallel"]
 # Enable either x86 or aarch assembly implementation based on target.
-asm = [
-    "sha2/asm",
-]
+asm = ["sha2/asm"]
 # Force software implementation (default if "asm" feature is not enabled).
 # If `asm` is not available, this crate must be imported with `default-feautures = false`
-no-asm = [
-    "sha2/force-soft",
-]
+no-asm = ["sha2/force-soft"]

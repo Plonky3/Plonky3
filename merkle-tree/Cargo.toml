@@ -8,9 +8,10 @@ license = "MIT OR Apache-2.0"
 p3-commit.workspace = true
 p3-field.workspace = true
 p3-matrix.workspace = true
-p3-maybe-rayon.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
+
+p3-maybe-rayon.workspace = true
 
 itertools.workspace = true
 rand.workspace = true
@@ -27,11 +28,9 @@ p3-rescue.workspace = true
 criterion.workspace = true
 
 [features]
-parallel = [
-    "p3-matrix/parallel",
-    "p3-maybe-rayon/parallel",
-    "p3-commit/parallel",
-]
+parallel = ["p3-maybe-rayon/parallel"]
+# Benchmarking
+nightly-features = ["p3-baby-bear/nightly-features", "p3-keccak/nightly-features"]
 
 [[bench]]
 name = "merkle_tree"

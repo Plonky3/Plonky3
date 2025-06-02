@@ -8,5 +8,10 @@ license = "MIT OR Apache-2.0"
 p3-field.workspace = true
 p3-matrix.workspace = true
 
+p3-maybe-rayon = { workspace = true, optional = true }
+
 [dev-dependencies]
 p3-baby-bear.workspace = true
+
+[features]
+parallel = ["p3-maybe-rayon/parallel"]

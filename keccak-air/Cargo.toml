@@ -8,8 +8,9 @@ license = "MIT OR Apache-2.0"
 p3-air.workspace = true
 p3-field.workspace = true
 p3-matrix.workspace = true
-p3-maybe-rayon.workspace = true
 p3-util.workspace = true
+
+p3-maybe-rayon.workspace = true
 
 rand.workspace = true
 tracing.workspace = true
@@ -34,17 +35,13 @@ tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
 [features]
-# Trace generation
-parallel = [
-    "p3-maybe-rayon/parallel",
-]
-asm = [
-    "p3-sha256/asm",
-]
+parallel = ["p3-maybe-rayon/parallel"]
+asm = ["p3-sha256/asm"]
 # Examples
 nightly-features = [
-    "p3-goldilocks/nightly-features",
-    "p3-monty-31/nightly-features",
     "p3-baby-bear/nightly-features",
+    "p3-goldilocks/nightly-features",
+    "p3-keccak/nightly-features",
     "p3-mersenne-31/nightly-features",
+    "p3-monty-31/nightly-features",
 ]

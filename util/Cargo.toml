@@ -14,9 +14,7 @@ rand.workspace = true
 serde_json.workspace = true
 
 [features]
-parallel = [
-    "rayon",
-]
+parallel = ["rayon"]
 
 [[bench]]
 name = "bit_reverse"

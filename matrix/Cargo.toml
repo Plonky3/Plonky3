@@ -6,8 +6,9 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 p3-field.workspace = true
-p3-maybe-rayon.workspace = true
 p3-util.workspace = true
+
+p3-maybe-rayon.workspace = true
 
 itertools.workspace = true
 rand.workspace = true
@@ -22,10 +23,9 @@ p3-mersenne-31.workspace = true
 criterion.workspace = true
 
 [features]
-# Parallel row ops and bit-reversing
-parallel = [
-    "p3-maybe-rayon/parallel",
-]
+parallel = ["p3-maybe-rayon/parallel"]
+# Benchmarking
+nightly-features = ["p3-baby-bear/nightly-features", "p3-mersenne-31/nightly-features"]
 
 [[bench]]
 name = "transpose_benchmark"

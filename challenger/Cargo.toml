@@ -6,9 +6,10 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 p3-field.workspace = true
-p3-maybe-rayon.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
+
+p3-maybe-rayon.workspace = true
 
 tracing.workspace = true
 
@@ -17,7 +18,4 @@ p3-baby-bear.workspace = true
 p3-goldilocks.workspace = true
 
 [features]
-parallel = [
-    # Grinding
-    "p3-maybe-rayon/parallel",
-]
+parallel = ["p3-maybe-rayon/parallel"]

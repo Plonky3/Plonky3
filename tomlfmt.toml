@@ -3,7 +3,7 @@ always_trailing_comma = false
 # trailing comma when multi-line
 multiline_trailing_comma = true
 # the maximum length in bytes of the string of an array object
-max_array_line_len = 3
+max_array_line_len = 80
 # number of spaces to indent
 indent_count = 4
 # space around equal sign

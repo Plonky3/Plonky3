@@ -10,6 +10,12 @@ p3-field.workspace = true
 p3-matrix.workspace = true
 p3-util.workspace = true
 
+p3-maybe-rayon = { workspace = true, optional = true }
+
 criterion.workspace = true
 num-bigint.workspace = true
 rand.workspace = true
+
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+

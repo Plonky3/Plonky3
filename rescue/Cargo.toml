@@ -10,6 +10,8 @@ p3-mds.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
 
+p3-maybe-rayon = { workspace = true, optional = true }
+
 itertools.workspace = true
 rand.workspace = true
 sha3.workspace = true
@@ -20,6 +22,15 @@ p3-goldilocks.workspace = true
 p3-mersenne-31.workspace = true
 
 criterion.workspace = true
+
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+# Benchmarking
+nightly-features = [
+    "p3-baby-bear/nightly-features",
+    "p3-goldilocks/nightly-features",
+    "p3-mersenne-31/nightly-features",
+]
 
 [[bench]]
 name = "rescue"

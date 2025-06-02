@@ -9,6 +9,8 @@ p3-field.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
 
+p3-maybe-rayon = { workspace = true, optional = true }
+
 tiny-keccak = { workspace = true, features = ["keccak"] }
 
 [dev-dependencies]
@@ -17,8 +19,8 @@ p3-mersenne-31.workspace = true
 criterion.workspace = true
 
 [features]
-nightly-features = [
-]
+parallel = ["p3-maybe-rayon/parallel"]
+nightly-features = ["p3-mersenne-31/nightly-features"]
 
 [[bench]]
 name = "bench_keccak"

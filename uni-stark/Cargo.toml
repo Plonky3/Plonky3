@@ -11,8 +11,9 @@ p3-commit.workspace = true
 p3-dft.workspace = true
 p3-field.workspace = true
 p3-matrix.workspace = true
-p3-maybe-rayon.workspace = true
 p3-util.workspace = true
+
+p3-maybe-rayon.workspace = true
 
 itertools.workspace = true
 serde = { workspace = true, features = ["derive", "alloc"] }
@@ -32,15 +33,10 @@ postcard = { workspace = true, features = ["alloc"] }
 rand.workspace = true
 
 [features]
-parallel = [
-    "p3-field/parallel",
-    "p3-challenger/parallel",
-    "p3-commit/parallel",
-    "p3-dft/parallel",
-    "p3-matrix/parallel",
-    "p3-maybe-rayon/parallel",
-]
+parallel = ["p3-maybe-rayon/parallel"]
+# Testing
 nightly-features = [
     "p3-baby-bear/nightly-features",
+    "p3-keccak/nightly-features",
     "p3-mersenne-31/nightly-features",
 ]

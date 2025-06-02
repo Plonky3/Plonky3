@@ -24,6 +24,8 @@ p3-poseidon2-air.workspace = true
 p3-symmetric.workspace = true
 p3-uni-stark.workspace = true
 
+p3-maybe-rayon = { workspace = true, optional = true }
+
 bincode = { workspace = true, features = ["serde", "alloc"] }
 clap.workspace = true
 rand.workspace = true
@@ -40,25 +42,12 @@ tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
 [features]
-parallel = [
-    "p3-field/parallel",
-    "p3-challenger/parallel",
-    "p3-circle/parallel",
-    "p3-commit/parallel",
-    "p3-dft/parallel",
-    "p3-fri/parallel",
-    "p3-keccak-air/parallel",
-    "p3-matrix/parallel",
-    "p3-merkle-tree/parallel",
-    "p3-mersenne-31/parallel",
-    "p3-monty-31/parallel",
-    "p3-uni-stark/parallel",
-]
+parallel = ["p3-maybe-rayon/parallel"]
+# Benchmarking
 nightly-features = [
     "p3-baby-bear/nightly-features",
     "p3-keccak/nightly-features",
     "p3-koala-bear/nightly-features",
     "p3-mersenne-31/nightly-features",
     "p3-monty-31/nightly-features",
-    "p3-uni-stark/nightly-features",
 ]

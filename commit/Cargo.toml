@@ -9,6 +9,8 @@ p3-field.workspace = true
 p3-matrix.workspace = true
 p3-util.workspace = true
 
+p3-maybe-rayon = { workspace = true, optional = true }
+
 itertools.workspace = true
 serde.workspace = true
 
@@ -21,14 +23,6 @@ p3-challenger.workspace = true
 p3-dft.workspace = true
 
 [features]
-default = [
-    "test-utils",
-]
-test-utils = [
-    "p3-challenger",
-    "p3-dft",
-]
-parallel = [
-    "p3-field/parallel",
-    "p3-matrix/parallel",
-]
+parallel = ["p3-maybe-rayon/parallel"]
+default = ["test-utils"]
+test-utils = ["p3-challenger", "p3-dft"]

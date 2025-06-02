@@ -11,8 +11,9 @@ p3-dft.workspace = true
 p3-field.workspace = true
 p3-fri.workspace = true
 p3-matrix.workspace = true
-p3-maybe-rayon.workspace = true
 p3-util.workspace = true
+
+p3-maybe-rayon.workspace = true
 
 itertools.workspace = true
 serde.workspace = true
@@ -32,16 +33,12 @@ tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
 [features]
-parallel = [
-    # Grinding
-    "p3-challenger/parallel",
-    "p3-commit/parallel",
-    "p3-dft/parallel",
-    "p3-field/parallel",
-    "p3-fri/parallel",
-    "p3-matrix/parallel",
-    "p3-maybe-rayon/parallel",
-    "p3-util/parallel",
+parallel = ["p3-maybe-rayon/parallel"]
+# Benchmarking
+nightly-features = [
+    "p3-baby-bear/nightly-features",
+    "p3-keccak/nightly-features",
+    "p3-mersenne-31/nightly-features",
 ]
 
 [[bench]]

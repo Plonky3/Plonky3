@@ -5,8 +5,9 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-p3-maybe-rayon.workspace = true
 p3-util.workspace = true
+
+p3-maybe-rayon.workspace = true
 
 itertools.workspace = true
 num-bigint.workspace = true
@@ -20,7 +21,4 @@ p3-baby-bear.workspace = true
 p3-goldilocks.workspace = true
 
 [features]
-parallel = [
-    # Batch inversion
-    "p3-maybe-rayon/parallel",
-]
+parallel = ["p3-maybe-rayon/parallel"]
