@@ -10,14 +10,14 @@ p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
 p3-util.workspace = true
 
-tracing.workspace = true
 itertools.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
-p3-monty-31.workspace = true
 p3-baby-bear.workspace = true
 p3-goldilocks.workspace = true
 p3-mersenne-31.workspace = true
+p3-monty-31.workspace = true
 
 criterion.workspace = true
 rand.workspace = true
@@ -27,7 +27,7 @@ parallel = [
     "p3-field/parallel",
     "p3-matrix/parallel",
     "p3-maybe-rayon/parallel",
-    "p3-util/parallel"
+    "p3-util/parallel",
 ]
 # Benchmarking
 nightly-features = [

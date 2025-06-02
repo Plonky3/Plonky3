@@ -6,17 +6,17 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 p3-air.workspace = true
-p3-field.workspace = true
 p3-challenger.workspace = true
 p3-commit.workspace = true
 p3-dft.workspace = true
+p3-field.workspace = true
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
 p3-util.workspace = true
 
 itertools.workspace = true
-tracing.workspace = true
 serde = { workspace = true, features = ["derive", "alloc"] }
+tracing.workspace = true
 
 [dev-dependencies]
 p3-baby-bear.workspace = true

@@ -21,8 +21,13 @@ p3-challenger.workspace = true
 p3-dft.workspace = true
 
 [features]
-default = ["test-utils"]
-test-utils = ["p3-challenger", "p3-dft"]
+default = [
+    "test-utils",
+]
+test-utils = [
+    "p3-challenger",
+    "p3-dft",
+]
 parallel = [
     "p3-field/parallel",
     "p3-matrix/parallel",

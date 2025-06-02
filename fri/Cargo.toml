@@ -16,8 +16,8 @@ p3-util.workspace = true
 
 itertools.workspace = true
 rand.workspace = true
-tracing.workspace = true
 serde = { workspace = true, features = ["derive", "alloc"] }
+tracing.workspace = true
 
 [dev-dependencies]
 p3-baby-bear.workspace = true
@@ -25,21 +25,24 @@ p3-circle.workspace = true
 p3-dft.workspace = true
 p3-goldilocks.workspace = true
 p3-keccak.workspace = true
-p3-mersenne-31.workspace = true
 p3-merkle-tree.workspace = true
+p3-mersenne-31.workspace = true
 p3-symmetric.workspace = true
+
 criterion.workspace = true
 
 [features]
 parallel = [
-    "p3-challenger/parallel", # Grinding
+    # Grinding
+    "p3-challenger/parallel",
     "p3-commit/parallel",
     "p3-dft/parallel",
-    "p3-field/parallel", # Batch inversion
+    # Batch inversion
+    "p3-field/parallel",
     "p3-interpolation/parallel",
     "p3-matrix/parallel",
     "p3-maybe-rayon/parallel",
-    "p3-util/parallel"
+    "p3-util/parallel",
 ]
 
 [[bench]]

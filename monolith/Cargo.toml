@@ -6,16 +6,19 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 p3-field.workspace = true
-p3-mersenne-31.workspace = true
 p3-mds.workspace = true
+p3-mersenne-31.workspace = true
 p3-symmetric.workspace = true
+
 sha3.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
 
 [features]
-nightly-features = ["p3-mersenne-31/nightly-features"]
+nightly-features = [
+    "p3-mersenne-31/nightly-features",
+]
 
 [[bench]]
 name = "permute"

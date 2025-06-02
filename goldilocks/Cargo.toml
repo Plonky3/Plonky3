@@ -5,13 +5,13 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-p3-field.workspace = true
 p3-dft.workspace = true
+p3-field.workspace = true
 p3-mds.workspace = true
-p3-symmetric.workspace = true
-p3-util.workspace = true
 p3-poseidon.workspace = true
 p3-poseidon2.workspace = true
+p3-symmetric.workspace = true
+p3-util.workspace = true
 
 num-bigint.workspace = true
 paste.workspace = true
@@ -20,13 +20,14 @@ serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 p3-field-testing.workspace = true
-rand.workspace = true
+
 criterion.workspace = true
+rand.workspace = true
 
 [features]
 # Benchmarking
 nightly-features = [
-    "p3-poseidon2/nightly-features"
+    "p3-poseidon2/nightly-features",
 ]
 
 [[bench]]

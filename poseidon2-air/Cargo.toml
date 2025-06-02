@@ -14,6 +14,9 @@ p3-poseidon2.workspace = true
 rand.workspace = true
 tracing.workspace = true
 
+[target.'cfg(target_family = "unix")'.dev-dependencies]
+tikv-jemallocator = "0.6"
+
 [dev-dependencies]
 p3-baby-bear.workspace = true
 p3-challenger.workspace = true
@@ -26,11 +29,10 @@ p3-merkle-tree.workspace = true
 p3-symmetric.workspace = true
 p3-uni-stark.workspace = true
 
-tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
-
-[target.'cfg(target_family = "unix")'.dev-dependencies]
-tikv-jemallocator = "0.6"
+tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
 [features]
-parallel = ["p3-maybe-rayon/parallel"]
+parallel = [
+    "p3-maybe-rayon/parallel",
+]

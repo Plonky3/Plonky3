@@ -10,6 +10,6 @@ p3-field.workspace = true
 p3-matrix.workspace = true
 p3-util.workspace = true
 
-rand.workspace = true
 criterion.workspace = true
 num-bigint.workspace = true
+rand.workspace = true

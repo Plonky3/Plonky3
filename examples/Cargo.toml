@@ -7,11 +7,11 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 p3-air.workspace = true
 p3-blake3-air.workspace = true
-p3-field.workspace = true
 p3-challenger.workspace = true
 p3-circle.workspace = true
 p3-commit.workspace = true
 p3-dft.workspace = true
+p3-field.workspace = true
 p3-fri.workspace = true
 p3-keccak.workspace = true
 p3-keccak-air.workspace = true
@@ -28,18 +28,16 @@ bincode = { workspace = true, features = ["serde", "alloc"] }
 clap.workspace = true
 rand.workspace = true
 
-
 [dev-dependencies]
 p3-baby-bear.workspace = true
-p3-commit = { workspace = true, features = ["test-utils"] }
 p3-challenger.workspace = true
+p3-commit = { workspace = true, features = ["test-utils"] }
 p3-dft.workspace = true
 p3-koala-bear.workspace = true
 p3-matrix.workspace = true
 
-tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
-
+tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
 [features]
 parallel = [
@@ -56,7 +54,6 @@ parallel = [
     "p3-monty-31/parallel",
     "p3-uni-stark/parallel",
 ]
-asm = ["p3-keccak-air/asm"]
 nightly-features = [
     "p3-baby-bear/nightly-features",
     "p3-keccak/nightly-features",

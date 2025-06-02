@@ -9,4 +9,6 @@ edition = "2024"
 rayon = { workspace = true, optional = true }
 
 [features]
-parallel = ["rayon"]
+parallel = [
+    "rayon",
+]

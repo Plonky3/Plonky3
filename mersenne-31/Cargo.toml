@@ -21,6 +21,7 @@ serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 p3-field-testing.workspace = true
+
 criterion.workspace = true
 rand_xoshiro.workspace = true
 
@@ -30,7 +31,8 @@ parallel = [
     "p3-dft/parallel",
     "p3-matrix/parallel",
 ]
-nightly-features = []
+nightly-features = [
+]
 
 [[bench]]
 name = "bench_field"

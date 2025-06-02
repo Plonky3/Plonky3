@@ -30,4 +30,5 @@ parallel = [
     "p3-matrix/parallel",
     "p3-maybe-rayon/parallel",
 ]
-nightly-features = []
+nightly-features = [
+]

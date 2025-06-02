@@ -10,11 +10,12 @@ p3-field.workspace = true
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
 
+itertools.workspace = true
 rand.workspace = true
 tracing.workspace = true
-itertools.workspace = true
 
 [features]
 parallel = [
-    "p3-maybe-rayon/parallel", # Trace generation
+    # Trace generation
+    "p3-maybe-rayon/parallel",
 ]

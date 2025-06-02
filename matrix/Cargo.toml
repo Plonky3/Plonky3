@@ -12,17 +12,20 @@ p3-util.workspace = true
 itertools.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
-transpose.workspace = true
 tracing.workspace = true
+transpose.workspace = true
 
 [dev-dependencies]
 p3-baby-bear.workspace = true
 p3-mersenne-31.workspace = true
+
 criterion.workspace = true
 
 [features]
 # Parallel row ops and bit-reversing
-parallel = ["p3-maybe-rayon/parallel"]
+parallel = [
+    "p3-maybe-rayon/parallel",
+]
 
 [[bench]]
 name = "transpose_benchmark"
