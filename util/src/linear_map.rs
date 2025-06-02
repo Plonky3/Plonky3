@@ -104,8 +104,8 @@ impl<K: Eq, V> LinearMap<K, V> {
     /// Returns an iterator over all key-value pairs in the map.
     ///
     /// Items are yielded in insertion order.
-    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
-        self.0.iter().map(|(k, v)| (k, v))
+    pub fn iter(&self) -> impl Iterator<Item = &(K, V)> {
+        self.0.iter()
     }
 }
 
@@ -260,14 +260,18 @@ mod tests {
     fn test_into_iterator() {
         let mut map = LinearMap::new();
         map.insert("x", 10);
+        map.insert("z", 30);
         map.insert("y", 20);
 
+        // Collect items yielded by `iter()`
+        let iter_ref = map.iter().copied().collect::<Vec<_>>();
         // Consume the LinearMap into an iterator
-        let mut iter = map.into_iter().collect::<Vec<_>>();
+        let iter = map.into_iter().collect::<Vec<_>>();
 
         // Since it's just a Vec internally, order is preserved
-        iter.sort(); // For comparison purposes
-        assert_eq!(iter, vec![("x", 10), ("y", 20)]);
+        assert_eq!(iter_ref, vec![("x", 10), ("z", 30), ("y", 20)]);
+        // Ensure both iter and into_iter yield the same elements
+        assert_eq!(iter, iter_ref);
     }
 
     #[test]
