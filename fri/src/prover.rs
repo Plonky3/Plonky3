@@ -108,7 +108,11 @@ where
         data.push(prover_data);
 
         if let Some(v) = inputs_iter.next_if(|v| v.len() == folded.len()) {
-            izip!(&mut folded, v).for_each(|(c, x)| *c += x);
+            // Each element of `inputs_iter` is a reduced opening polynomial, which is itself a
+            // random linear combination `f_{i, 0} + alpha f_{i, 1} + ...`, but when we add it
+            // to the current folded polynomial, we need to multiply by a new random factor since
+            // `f_{i, 0}` has no leading coefficient.
+            izip!(&mut folded, v).for_each(|(c, x)| *c += beta.square() * x);
         }
     }
 
@@ -119,20 +123,10 @@ where
     // and zero-checks remain valid. If we changed our domain construction (e.g., using multiple
     // cosets), we would need to carefully reconsider these assumptions.
 
+    folded.truncate(config.final_poly_len());
     reverse_slice_index_bits(&mut folded);
-    // TODO: For better performance, we could run the IDFT on only the first half
-    //       (or less, depending on `log_blowup`) of `final_poly`.
-    let final_poly = debug_span!("idft final poly").in_scope(|| Radix2Dit::default().idft(folded));
 
-    // The evaluation domain is "blown-up" relative to the polynomial degree of `final_poly`,
-    // so all coefficients after the first final_poly_len should be zero.
-    debug_assert!(
-        final_poly
-            .iter()
-            .skip(1 << config.log_final_poly_len)
-            .all(|x| x.is_zero()),
-        "All coefficients beyond final_poly_len must be zero"
-    );
+    let final_poly = debug_span!("idft final poly").in_scope(|| Radix2Dit::default().idft(folded));
 
     // Observe all coefficients of the final polynomial.
     for &x in &final_poly {
