@@ -7,7 +7,7 @@
 //! the evaluations of `F(x)` over `gH` are identical to the evaluations of `G(x)` over `H`.
 //!
 //! Hence we can reinterpret our vector of evaluations as evaluations of `G(x)` over `H` and apply
-//! the standard FRI protocol to this evaluation vector. This makes is easier to apply FRI to a collection
+//! the standard FRI protocol to this evaluation vector. This makes it easier to apply FRI to a collection
 //! of polynomials defined over different cosets as we don't need to keep track of the coset shifts. We
 //! can just assume that every polynomial is defined over the subgroup of the relevant size.
 //!
@@ -180,7 +180,7 @@ where
     /// this computes the evaluations of `p_i` over `gK` where `g` is the chosen generator of the multiplicative group
     /// of `Val` and `K` is the unique subgroup of order `|H| << self.fri.log_blowup`.
     ///
-    /// This then outputs a merkle commitment to these evaluations.
+    /// This then outputs a Merkle commitment to these evaluations.
     fn commit(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
@@ -191,7 +191,7 @@ where
                 assert_eq!(domain.size(), evals.height());
                 // coset_lde_batch converts from evaluations over `xH` to evaluations over `shift * x * K`.
                 // Hence, letting `shift = g/x` the output will be evaluations over `gK` as desired.
-                // When `x = g,` we could just use the standard LDE but currently this doesn't seem
+                // When `x = g`, we could just use the standard LDE but currently this doesn't seem
                 // to give a meaningful performance boost.
                 let shift = Val::GENERATOR / domain.shift();
                 // Compute the LDE with blowup factor fri.log_blowup.
@@ -256,7 +256,7 @@ where
         - Instead of computing all alpha^i, we just compute alpha^i for i up to the largest width
         of a matrix, then multiply by an "alpha offset" when accumulating.
               a^0 x0 + a^1 x1 + a^2 x2 + a^3 x3 + ...
-            = a^0 ( a^0 x0 + a^1 x1 ) + a^2 ( a^0 x2 + a^1 x3 ) + ...
+            = ( a^0 x0 + a^1 x1 ) + a^2 ( a^0 x2 + a^1 x3 ) + ...
             (see `alpha_pows`, `alpha_pow_offset`, `num_reduced`)
 
         - For each unique point z, we precompute 1/(X-z) for the largest subgroup opened at this point.
@@ -559,9 +559,9 @@ where
         // (i.e counting the number (point, claimed_evaluation) pairs).
         let alpha: Challenge = challenger.sample_algebra_element();
 
-        // `commit_phase_commits.len()` is the number of folding steps, so the maximal polynomial degree will be
+        // `commit_phase_commits.len()` is the number of folding steps, so the maximum polynomial degree will be
         // `commit_phase_commits.len() + self.fri.log_final_poly_len` and so, as the same blow-up is used for all
-        // polynomials, the maximal matrix height is:
+        // polynomials, the maximum matrix height is:
         let log_global_max_height =
             proof.commit_phase_commits.len() + self.fri.log_blowup + self.fri.log_final_poly_len;
 
@@ -641,9 +641,8 @@ where
                         .entry(log_height) // Get a mutable reference to the entry.
                         .or_insert((Challenge::ONE, Challenge::ZERO));
 
-                    // For each polynomial `f` in our matrix,
-                    // Compute `(f(z) - f(x))/(z - x)`, scale by the appropriate alpha power
-                    // and add to the reduced opening for this log_height.
+                    // For each polynomial `f` in our matrix, compute `(f(z) - f(x))/(z - x)`,
+                    // scale by the appropriate alpha power and add to the reduced opening for this log_height.
                     for (z, ps_at_z) in mat_points_and_values {
                         let quotient = (*z - x).inverse();
                         for (&p_at_x, &p_at_z) in
@@ -684,7 +683,7 @@ where
 ///
 /// Arguments:
 /// - `mats_and_points` is a list of matrices and for each matrix a list of points. We assume that
-///    the total number of distinct points is very small as several methods contained are `O(n^2)`
+///    the total number of distinct points is very small as several methods contained herein are `O(n^2)`
 ///    in the number of points.
 /// - `coset` is the set of points `gH` where `H` a two-adic subgroup such that `|H|` is greater
 ///     than or equal to the largest height of any matrix in `mats_and_points`. The values

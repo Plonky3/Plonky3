@@ -13,10 +13,10 @@ use tracing::{debug_span, info_span, instrument};
 use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof, QueryProof};
 
 /// Create a proof that an opening `f(zeta)` is correct by proving that the
-/// function `f(x) - f(zeta)/(x - zeta)` is low degree.
+/// function `(f(x) - f(zeta))/(x - zeta)` is low degree.
 ///
-/// This further supports proving a batch of these claims for a collection of `f`'s of shrinking sizes.
-/// `f`'s of the same size can be combined using randomness before calling this function.
+/// This further supports proving a batch of these claims for a collection of polynomials of shrinking degrees.
+/// Polynomials of equal degree can be combined using randomness before calling this function.
 ///
 /// The Soundness error from prove_fri comes from the paper:
 /// Proximity Gaps for Reed-Solomon Codes (https://eprint.iacr.org/2020/654)
@@ -29,7 +29,7 @@ use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof, QueryPr
 /// Arguments:
 /// - `g`, `parameters`: Together, these contain all information needed to define the FRI protocol.
 ///    E.g. the folding scheme, the code rate, the final polynomial size.
-/// - `inputs`: The evaluation vectors of the `f's`
+/// - `inputs`: The evaluation vectors of the polynomials.
 /// - `challenger`: The Fiat-Shamir challenger to use for sampling challenges.
 /// - `open_input`: A function that takes an index and produces proofs that the initial values in
 ///   inputs at that index (Or at `index >> i` for smaller `f`'s) are correct.
@@ -77,7 +77,7 @@ where
 
     let query_proofs = info_span!("query phase").in_scope(|| {
         // Sample num_queries indexes to check.
-        // The probability that no two fri indices are equal (ignoring extra query index bits) is:
+        // The probability that no two FRI indices are equal (ignoring extra query index bits) is:
         // (Grabbed this from wikipedia page on the birthday problem)
         // N!/(N^{num_queries} * (N - num_queries)!) ~ (1 - 1/N)^{num_queries * (num_queries - 1)/2}
         //                                           ~ (1 - num_queries^2/2N)
@@ -129,7 +129,7 @@ struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
 /// Arguments:
 /// - `config`, `parameters`: Together, these contain all information needed to define the FRI protocol.
 ///    E.g. the folding scheme, the code rate, the final polynomial size.
-/// - `inputs`: The evaluation vectors of the `f's`. These must be sorted in descending order of length and each
+/// - `inputs`: The evaluation vectors of the polynomials. These must be sorted in descending order of length and each
 ///   evaluation vector must be in bit reversed order.
 /// - `challenger`: The Fiat-Shamir challenger to use for sampling challenges.
 #[instrument(name = "commit phase", skip_all)]
@@ -165,7 +165,7 @@ where
         // Get the Fiat-Shamir challenge for this round.
         let beta: Challenge = challenger.sample_algebra_element();
 
-        // We passed ownership of `current` to the MMCS, so get a reference to it
+        // We passed ownership of `folded` to the MMCS, so get a reference to it
         let leaves = config.mmcs.get_matrices(&prover_data).pop().unwrap();
         // Do the folding operation:
         //      `f_{i + 1}'(x^2) = (f_i(x) + f_i(-x))/2 + beta_i (f_i(x) - f_i(-x))/2x`
@@ -185,7 +185,7 @@ where
 
     // Now we need to get the coefficients of the final polynomial. As we know that the degree
     // is `<= config.final_poly_len()` and the evaluations are stored in bit-reversed order,
-    // we can just truncate the folded vector un bit-reverse and run an IDFT.
+    // we can just truncate the folded vector, bit-reverse again and run an IDFT.
     folded.truncate(config.final_poly_len());
     reverse_slice_index_bits(&mut folded);
     let final_poly =
@@ -203,8 +203,8 @@ where
     }
 }
 
-/// Given an index `i` produce a proof that all folds involving that index are correct. This is the provers complement
-/// to the verifiers's [`verify_query`] function.
+/// Given an index `i` produce a proof that all folds involving that index are correct. This is the prover's complement
+/// to the verifier's [`verify_query`] function.
 ///
 /// In addition to the output of this function, the prover must also supply the verifier with the input values
 /// (with associated opening proofs). These are produced by the `open_input` function passed into `prove_fri`.
@@ -237,7 +237,7 @@ where
             let (mut opened_rows, opening_proof) =
                 config.mmcs.open_batch(index_pair, commit).unpack();
 
-            // opened_rows should contain just the value at index_i and it's sibling.
+            // opened_rows should contain just the value at index_i and its sibling.
             // We just need to get the sibling.
             assert_eq!(opened_rows.len(), 1);
             let opened_row = &opened_rows.pop().unwrap();

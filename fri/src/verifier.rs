@@ -25,12 +25,12 @@ pub enum FriError<CommitMmcsErr, InputError> {
 ///
 /// Arguments:
 /// - `g`, `config`: Together, these contain all information the verifier needs to reimplement
-///   the provers FRI protocol.
+///   the prover's FRI protocol.
 /// - `proof`: The proof to verify.
 /// - `challenger`: The Fiat-Shamir challenger to use for sampling challenges.
 /// - `open_input`: A function that takes an index and opening proofs and returns a vector of reduced openings
-///   which constitute the fri inputs. The opening proofs prove that the values `f(x)` are the ones committed
-///   to and these are then combined into the fri inputs.
+///   which constitute the FRI inputs. The opening proofs prove that the values `f(x)` are the ones committed
+///   to and these are then combined into the FRI inputs.
 pub fn verify_fri<G, Val, Challenge, M, Challenger>(
     g: &G,
     config: &FriConfig<M>,
@@ -48,7 +48,7 @@ where
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
     G: FriGenericConfig<Val, Challenge>,
 {
-    // Generate all of the random challenges for the fri rounds.
+    // Generate all of the random challenges for the FRI rounds.
     let betas: Vec<Challenge> = proof
         .commit_phase_commits
         .iter()
@@ -71,7 +71,7 @@ where
         .iter()
         .for_each(|x| challenger.observe_algebra_element(*x));
 
-    // Ensure that we have the expected number of fri query proofs.
+    // Ensure that we have the expected number of FRI query proofs.
     if proof.query_proofs.len() != config.num_queries {
         return Err(FriError::InvalidProofShape);
     }
@@ -96,7 +96,7 @@ where
         // For each query proof, we start by generating the random index.
         let index = challenger.sample_bits(log_max_height + g.extra_query_index_bits());
 
-        // Next we open all polynomials `f` at the relevant index and combine them into our fri inputs.
+        // Next we open all polynomials `f` at the relevant index and combine them into our FRI inputs.
         let ro = open_input(index, input_proof)?;
 
         debug_assert!(
@@ -108,7 +108,7 @@ where
         let mut domain_index = index >> g.extra_query_index_bits();
 
         // Starting at the evaluation at `index` of the initial domain,
-        // perform fri folds until the domain size reaches the final domain size.
+        // perform FRI folds until the domain size reaches the final domain size.
         // Check after each fold that the pair of sibling evaluations at the current
         // node match the commitment.
         let folded_eval = verify_query(
@@ -167,7 +167,7 @@ type CommitStep<'a, F, M> = (
 /// and a series of `reduced_openings` corresponding to evaluations of
 /// polynomials to be added in at specific domain sizes, perform the standard
 /// sequence of FRI folds, checking at each step that the pair of sibling evaluations
-/// match the commitment.
+/// matches the commitment.
 fn verify_query<'a, G, F, EF, M>(
     g: &G,
     config: &FriConfig<M>,
@@ -202,7 +202,7 @@ where
         steps,
         FriError::InvalidProofShape,
     )? {
-        // Get the index of the other sibling of the current fri node.
+        // Get the index of the other sibling of the current FRI node.
         let index_sibling = *index ^ 1;
 
         let mut evals = vec![folded_eval; 2];
@@ -213,7 +213,7 @@ where
             height: 1 << log_folded_height,
         }];
 
-        // Replace index with the index of the parent fri node.
+        // Replace index with the index of the parent FRI node.
         *index >>= 1;
 
         // Verify the commitment to the evaluations of the sibling nodes.
@@ -227,7 +227,7 @@ where
             )
             .map_err(FriError::CommitPhaseMmcsError)?;
 
-        // Fold the pair of sibling nodes to get the evaluation of the parent fri node.
+        // Fold the pair of sibling nodes to get the evaluation of the parent FRI node.
         folded_eval = g.fold_row(*index, log_folded_height, beta, evals.into_iter());
 
         // If there are new polynomials to roll in at the folded height, do so.
