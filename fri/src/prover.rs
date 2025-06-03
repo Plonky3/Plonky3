@@ -56,9 +56,9 @@ where
 
     let log_max_height = log2_strict_usize(inputs[0].len());
     let log_min_height = log2_strict_usize(inputs.last().unwrap().len());
-    if parameters.log_final_poly_degree > 0 {
+    if parameters.log_final_poly_len > 0 {
         // Final_poly_degree must be less than or equal to the degree of the smallest polynomial.
-        assert!(log_min_height > parameters.log_final_poly_degree + parameters.log_blowup);
+        assert!(log_min_height > parameters.log_final_poly_len + parameters.log_blowup);
     }
 
     // Continually fold the inputs down until the polynomial degree reaches Final_poly_degree.
@@ -148,7 +148,7 @@ where
     let mut commits = vec![];
     let mut data = vec![];
 
-    while folded.len() > parameters.blowup() * parameters.final_poly_degree() {
+    while folded.len() > parameters.blowup() * parameters.final_poly_len() {
         // As folded is in bit reversed order, it looks like:
         //      `[f_i(h^0), f_i(h^{N/2}), f_i(h^{N/4}), f_i(h^{3N/4}), ...] = [f_i(1), f_i(-1), f_i(h^{N/4}), f_i(-h^{N/4}), ...]`
         // so the relevant evaluations are adjacent and we can just reinterpret the vector as a matrix of width 2.
@@ -172,10 +172,22 @@ where
 
         // If we have reached the size of the next input vector, we can add it to the current vector.
         if let Some(v) = inputs_iter.next_if(|v| v.len() == folded.len()) {
+            // Each element of `inputs_iter` is a reduced opening polynomial, which is itself a
+            // random linear combination `f_{i, 0} + alpha f_{i, 1} + ...`, but when we add it
+            // to the current folded polynomial, we need to multiply by a new random factor since
+            // `f_{i, 0}` has no leading coefficient.
             izip!(&mut folded, v).for_each(|(c, x)| *c += beta.square() * x);
         }
     }
 
+    // After repeated folding steps, we end up working over a coset hJ instead of the original
+    // domain. The IDFT we apply operates over a subgroup J, not hJ. This means the polynomial we
+    // recover is G(x), where G(x) = F(hx), and F is the polynomial whose evaluations we actually
+    // observed. For our current construction, this does not cause issues since degree properties
+    // and zero-checks remain valid. If we changed our domain construction (e.g., using multiple
+    // cosets), we would need to carefully reconsider these assumptions.
+
+    folded.truncate(parameters.final_poly_len());
     reverse_slice_index_bits(&mut folded);
     // TODO: For better performance, we could run the IDFT on only the first half
     //       (or less, depending on `log_blowup`) of `final_poly`.
@@ -187,7 +199,7 @@ where
     debug_assert!(
         final_poly
             .iter()
-            .skip(1 << parameters.log_final_poly_degree)
+            .skip(1 << parameters.log_final_poly_len)
             .all(|x| x.is_zero()),
         "All coefficients beyond final_poly_len must be zero"
     );
@@ -235,12 +247,13 @@ where
             let index_pair = index_i >> 1;
 
             // Get a proof that the pair of indices are correct.
-            let (mut opened_rows, opening_proof) = parameters.mmcs.open_batch(index_pair, commit);
+            let (mut opened_rows, opening_proof) =
+                parameters.mmcs.open_batch(index_pair, commit).unpack();
 
             // opened_rows should contain just the value at index_i and it's sibling.
             // We just need to get the sibling.
             assert_eq!(opened_rows.len(), 1);
-            let opened_row = opened_rows.pop().unwrap();
+            let opened_row = &opened_rows.pop().unwrap();
             assert_eq!(opened_row.len(), 2, "Committed data should be in pairs");
             let sibling_value = opened_row[index_i_sibling % 2];
 

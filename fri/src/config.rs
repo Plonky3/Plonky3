@@ -8,7 +8,7 @@ use p3_matrix::Matrix;
 pub struct FriParameters<M> {
     pub log_blowup: usize,
     // TODO: This parameter and FRI early stopping are not yet implemented in `CirclePcs`.
-    pub log_final_poly_degree: usize,
+    pub log_final_poly_len: usize,
     pub num_queries: usize,
     pub proof_of_work_bits: usize,
     pub mmcs: M,
@@ -19,8 +19,8 @@ impl<M> FriParameters<M> {
         1 << self.log_blowup
     }
 
-    pub const fn final_poly_degree(&self) -> usize {
-        1 << self.log_final_poly_degree
+    pub const fn final_poly_len(&self) -> usize {
+        1 << self.log_final_poly_len
     }
 
     /// Returns the soundness bits of this FRI instance based on the
@@ -66,7 +66,7 @@ pub const fn create_test_fri_config<Mmcs>(
 ) -> FriParameters<Mmcs> {
     FriParameters {
         log_blowup: 2,
-        log_final_poly_degree: log_final_poly_len,
+        log_final_poly_len,
         num_queries: 2,
         proof_of_work_bits: 1,
         mmcs,
@@ -78,7 +78,7 @@ pub const fn create_test_fri_config<Mmcs>(
 pub const fn create_test_fri_config_zk<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> {
     FriParameters {
         log_blowup: 2,
-        log_final_poly_degree: 0,
+        log_final_poly_len: 0,
         num_queries: 2,
         proof_of_work_bits: 1,
         mmcs,
@@ -90,7 +90,7 @@ pub const fn create_test_fri_config_zk<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> 
 pub const fn create_benchmark_fri_config<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> {
     FriParameters {
         log_blowup: 1,
-        log_final_poly_degree: 0,
+        log_final_poly_len: 0,
         num_queries: 100,
         proof_of_work_bits: 16,
         mmcs,
@@ -101,7 +101,7 @@ pub const fn create_benchmark_fri_config<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs
 pub fn create_benchmark_fri_config_zk<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> {
     FriParameters {
         log_blowup: 2,
-        log_final_poly_degree: 0,
+        log_final_poly_len: 0,
         num_queries: 100,
         proof_of_work_bits: 16,
         mmcs,

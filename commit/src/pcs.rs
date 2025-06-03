@@ -64,20 +64,37 @@ where
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
     ) -> (Self::Commitment, Self::ProverData);
 
-    /// Commit to the quotient polynomials. If `zk` is not enabled, this is the same as `commit`.
-    /// If `zk` is enabled, the quotient polynomials are randomized as explained in Section 4.2 of
-    /// https://eprint.iacr.org/2024/1037.pdf .
+    /// Commit to the quotient polynomial. We first decompose the quotient polynomial into
+    /// `num_chunks` many smaller polynomials each of degree `degree / num_chunks`.
+    /// This can have minor performance benefits, but is not strictly necessary in the non `zk` case.
+    /// When `zk` is enabled, this commitment will additionally include some randomization process
+    /// to hide the inputs.
     ///
-    /// *** Arguments
-    /// - `domains` are the domains of the quotient polynomial chunks we need to commit to.
-    /// - `evaluations` are the evaluations of the quotient polynomial chunks we need to commit to.
+    /// ### Arguments
+    /// - `quotient_domain` the domain of the quotient polynomial.
+    /// - `quotient_evaluations` the evaluations of the quotient polynomial over the domain. This should be in
+    ///   standard (not bit-reversed) order.
+    /// - `num_chunks` the number of smaller polynomials to decompose the quotient polynomial into.
     #[allow(clippy::type_complexity)]
     fn commit_quotient(
         &self,
-        domains: Vec<Self::Domain>,
-        evaluations: Vec<RowMajorMatrix<Val<Self::Domain>>>,
+        quotient_domain: Self::Domain,
+        quotient_evaluations: RowMajorMatrix<Val<Self::Domain>>,
+        num_chunks: usize,
     ) -> (Self::Commitment, Self::ProverData) {
-        self.commit(domains.into_iter().zip(evaluations))
+        // Given the evaluation vector of `Q_i(x)` over a domain, split it into evaluation vectors
+        // of `q_{i0}(x), ...` over subdomains and commit to these `q`'s.
+        // TODO: Currently, split_evals involves copying the data to a new matrix.
+        //       We may be able to avoid this copy making use of bit-reversals.
+        let quotient_sub_evaluations =
+            quotient_domain.split_evals(num_chunks, quotient_evaluations);
+        let quotient_sub_domains = quotient_domain.split_domains(num_chunks);
+
+        self.commit(
+            quotient_sub_domains
+                .into_iter()
+                .zip(quotient_sub_evaluations),
+        )
     }
 
     /// Given prover data corresponding to a commitment to a collection of evaluation matrices,

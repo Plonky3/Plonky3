@@ -6,6 +6,7 @@ extern crate alloc;
 
 pub mod bench_func;
 pub mod dft_testing;
+pub mod extension_testing;
 pub mod from_integer_tests;
 pub mod packedfield_testing;
 
@@ -14,9 +15,11 @@ use core::array;
 
 pub use bench_func::*;
 pub use dft_testing::*;
+pub use extension_testing::*;
 use num_bigint::BigUint;
 use p3_field::{
-    ExtensionField, Field, PrimeCharacteristicRing, PrimeField32, PrimeField64, TwoAdicField,
+    ExtensionField, Field, PackedValue, PrimeCharacteristicRing, PrimeField32, PrimeField64,
+    TwoAdicField,
 };
 use p3_util::iter_array_chunks_padded;
 pub use packedfield_testing::*;
@@ -266,6 +269,28 @@ where
     }
 }
 
+pub fn test_add_slice<F: Field>()
+where
+    StandardUniform: Distribution<F>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    let lengths = [
+        F::Packing::WIDTH - 1,
+        F::Packing::WIDTH,
+        (F::Packing::WIDTH - 1) + (F::Packing::WIDTH << 10),
+    ];
+    for len in lengths {
+        let mut slice_1: Vec<_> = (&mut rng).sample_iter(StandardUniform).take(len).collect();
+        let slice_1_copy = slice_1.clone();
+        let slice_2: Vec<_> = (&mut rng).sample_iter(StandardUniform).take(len).collect();
+
+        F::add_slices(&mut slice_1, &slice_2);
+        for i in 0..len {
+            assert_eq!(slice_1[i], slice_1_copy[i] + slice_2[i]);
+        }
+    }
+}
+
 pub fn test_inverse<F: Field>()
 where
     StandardUniform: Distribution<F>,
@@ -511,6 +536,25 @@ pub fn test_binary_ops<R: PrimeCharacteristicRing + Eq + Copy>(
     );
 }
 
+/// A function which extends the `exp_u64` code to handle `BigUints`.
+///
+/// This solution is slow (particularly when dealing with extension fields
+/// which should really be making use of the frobenius map) but should be
+/// fast enough for testing purposes.
+pub(crate) fn exp_biguint<F: Field>(x: F, exponent: &BigUint) -> F {
+    let digits = exponent.to_u64_digits();
+    let size = digits.len();
+
+    let mut power = F::ONE;
+
+    let bases = (0..size).map(|i| x.exp_power_of_2(64 * i));
+    digits
+        .iter()
+        .zip(bases)
+        .for_each(|(digit, base)| power *= base.exp_u64(*digit));
+    power
+}
+
 /// Given a list of the factors of the multiplicative group of a field, check
 /// that the defined generator is actually a generator of that group.
 pub fn test_generator<F: Field>(multiplicative_group_factors: &[(BigUint, u32)]) {
@@ -536,20 +580,8 @@ pub fn test_generator<F: Field>(multiplicative_group_factors: &[(BigUint, u32)])
                 .enumerate()
                 .for_each(|(j, (factor, exponent))| {
                     let modified_exponent = if i == j { exponent - 1 } else { *exponent };
-                    let digits = factor.to_u64_digits();
-                    let size = digits.len();
                     for _ in 0..modified_exponent {
-                        // The main complication here is extending our `exp_u64` code to handle `BigUints`.
-                        // This solution is slow (particularly when dealing with extension fields
-                        // which should really be making use of the frobenius map) but should be
-                        // fast enough for testing purposes.
-                        let bases = (0..size).map(|i| generator_power.exp_power_of_2(64 * i));
-                        let mut power = F::ONE;
-                        digits
-                            .iter()
-                            .zip(bases)
-                            .for_each(|(digit, base)| power *= base.exp_u64(*digit));
-                        generator_power = power;
+                        generator_power = exp_biguint(generator_power, factor);
                     }
                 });
             generator_power
@@ -719,6 +751,20 @@ macro_rules! test_field {
             #[test]
             fn test_streaming() {
                 $crate::test_into_stream::<$field>();
+            }
+        }
+
+        // Looks a little strange but we also check that everything works
+        // when the field is considered as a trivial extension of itself.
+        mod trivial_extension_tests {
+            #[test]
+            fn test_to_from_trivial_extension() {
+                $crate::test_to_from_extension_field::<$field, $field>();
+            }
+
+            #[test]
+            fn test_trivial_packed_extension() {
+                $crate::test_packed_extension::<$field, $field>();
             }
         }
     };
@@ -916,6 +962,35 @@ macro_rules! test_two_adic_field {
             #[test]
             fn test_two_adic_consistency() {
                 $crate::test_two_adic_generator_consistency::<$field>();
+            }
+
+            // Looks a little strange but we also check that everything works
+            // when the field is considered as a trivial extension of itself.
+            #[test]
+            fn test_two_adic_generator_consistency_as_trivial_extension() {
+                $crate::test_ef_two_adic_generator_consistency::<$field, $field>();
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! test_extension_field {
+    ($field:ty, $ef:ty) => {
+        mod extension_field_tests {
+            #[test]
+            fn test_to_from_extension() {
+                $crate::test_to_from_extension_field::<$field, $ef>();
+            }
+
+            #[test]
+            fn test_galois_extension() {
+                $crate::test_galois_extension::<$field, $ef>();
+            }
+
+            #[test]
+            fn test_packed_extension() {
+                $crate::test_packed_extension::<$field, $ef>();
             }
         }
     };

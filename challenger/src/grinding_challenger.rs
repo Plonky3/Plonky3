@@ -5,13 +5,34 @@ use tracing::instrument;
 
 use crate::{CanObserve, CanSampleBits, DuplexChallenger, MultiField32Challenger};
 
+/// Trait for challengers that support proof-of-work (PoW) grinding.
+///
+/// A `GrindingChallenger` can:
+/// - Absorb a candidate witness into the transcript
+/// - Sample random bitstrings to check the PoW condition
+/// - Brute-force search for a valid witness that satisfies the PoW
+///
+/// This trait is typically used in protocols requiring computational effort
+/// from the prover.
 pub trait GrindingChallenger:
     CanObserve<Self::Witness> + CanSampleBits<usize> + Sync + Clone
 {
+    /// The underlying field element type used as the witness.
     type Witness: Field;
 
+    /// Perform a brute-force search to find a valid PoW witness.
+    ///
+    /// Given a `bits` parameter, this function searches for a field element
+    /// `witness` such that after observing it, the next `bits` bits that challenger outputs
+    /// are all `0`.
     fn grind(&mut self, bits: usize) -> Self::Witness;
 
+    /// Check whether a given `witness` satisfies the PoW condition.
+    ///
+    /// After absorbing the witness, the challenger samples `bits` random bits
+    /// and verifies that all bits sampled are zero.
+    ///
+    /// Returns `true` if the witness passes the PoW check, `false` otherwise.
     #[must_use]
     fn check_witness(&mut self, bits: usize, witness: Self::Witness) -> bool {
         self.observe(witness);

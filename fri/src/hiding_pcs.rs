@@ -1,11 +1,10 @@
-use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::fmt::Debug;
 
 use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace};
+use p3_commit::{BatchOpening, Mmcs, OpenedValues, Pcs, PolynomialSpace};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse};
@@ -20,7 +19,7 @@ use rand::distr::{Distribution, StandardUniform};
 use tracing::{info_span, instrument};
 
 use crate::verifier::FriError;
-use crate::{BatchOpening, FriParameters, FriProof, TwoAdicFriPcs};
+use crate::{FriParameters, FriProof, TwoAdicFriPcs};
 
 /// A hiding FRI PCS. Both MMCSs must also be hiding; this is not enforced at compile time so it's
 /// the user's responsibility to configure.
@@ -112,18 +111,35 @@ where
         Pcs::<Challenge, Challenger>::commit(&self.inner, randomized_evaluations)
     }
 
+    /// Commit to the quotient polynomial. We first decompose the quotient polynomial into
+    /// `num_chunks` many smaller polynomials each of degree `degree / num_chunks`.
+    /// These quotient polynomials are then randomized as explained in Section 4.2 of
+    /// https://eprint.iacr.org/2024/1037.pdf .
+    ///
+    /// ### Arguments
+    /// - `quotient_domain` the domain of the quotient polynomial.
+    /// - `quotient_evaluations` the evaluations of the quotient polynomial over the domain. This should be in
+    ///   standard (not bit-reversed) order.
+    /// - `num_chunks` the number of smaller polynomials to decompose the quotient polynomial into.
+    ///
+    /// # Panics
+    /// This function panics if `num_chunks` is either `0` or `1`. The first case makes no logical
+    /// sense and in the second case, the resulting commitment would not be hiding.
     fn commit_quotient(
         &self,
-        domains: Vec<Self::Domain>,
-        evaluations: Vec<RowMajorMatrix<Val>>,
+        quotient_domain: Self::Domain,
+        quotient_evaluations: RowMajorMatrix<Val>,
+        num_chunks: usize,
     ) -> (Self::Commitment, Self::ProverData) {
-        // Compute the vanishing polynomial normalizing constants.
-        assert_eq!(domains.len(), evaluations.len());
-        if evaluations.is_empty() {
-            return self.inner.mmcs.commit(vec![]);
-        }
+        assert!(num_chunks > 1);
+
+        // Given the evaluation vector of `Q_i(x)` over a domain, split it into evaluation vectors
+        // of `q_{i0}(x), ...` over subdomains.
+        let evaluations = quotient_domain.split_evals(num_chunks, quotient_evaluations);
+        let domains = quotient_domain.split_domains(num_chunks);
+
         let cis = get_zp_cis(&domains);
-        let last_chunk = evaluations.len() - 1;
+        let last_chunk = num_chunks - 1;
         let last_chunk_ci_inv = cis[last_chunk].inverse();
         let mul_coeffs = (0..last_chunk)
             .map(|i| cis[i] * last_chunk_ci_inv)

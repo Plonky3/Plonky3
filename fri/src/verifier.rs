@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::Mmcs;
+use p3_commit::{BatchOpeningRef, Mmcs};
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::Dimensions;
 use p3_util::reverse_bits_len;
@@ -18,6 +18,7 @@ pub enum FriError<CommitMmcsErr, InputError> {
     InputError(InputError),
     FinalPolyMismatch,
     InvalidPowWitness,
+    MissingInput,
 }
 
 /// Verifies a FRI proof.
@@ -59,6 +60,10 @@ where
         })
         .collect();
 
+    if proof.final_poly.len() != parameters.final_poly_len() {
+        return Err(FriError::InvalidProofShape);
+    }
+
     // Observe all coefficients of the final polynomial.
     proof
         .final_poly
@@ -77,10 +82,10 @@ where
 
     // The log of the maximum domain size.
     let log_max_height =
-        proof.commit_phase_commits.len() + parameters.log_blowup + parameters.log_final_poly_degree;
+        proof.commit_phase_commits.len() + parameters.log_blowup + parameters.log_final_poly_len;
 
     // The log of the final domain size.
-    let log_final_height = parameters.log_blowup + parameters.log_final_poly_degree;
+    let log_final_height = parameters.log_blowup + parameters.log_final_poly_len;
 
     for QueryProof {
         input_proof,
@@ -122,22 +127,19 @@ where
             log_max_height,
             log_final_height,
         )?;
-        // Assuming all the checks passed, the final check is to ensure that the folded evaluation
-        // matches the evaluation of the final polynomial sent by the prover.
-
-        let mut eval = Challenge::ZERO;
 
         // We open the final polynomial at index `domain_index`, which corresponds to evaluating
         // the polynomial at x^k, where x is the 2-adic generator of order `max_height` and k is
         // `reverse_bits_len(domain_index, log_max_height)`.
         let x = Val::two_adic_generator(log_max_height)
             .exp_u64(reverse_bits_len(domain_index, log_max_height) as u64);
-        let mut x_pow = Val::ONE;
 
+        // Assuming all the checks passed, the final check is to ensure that the folded evaluation
+        // matches the evaluation of the final polynomial sent by the prover.
         // Evaluate the final polynomial at x.
-        for coeff in &proof.final_poly {
-            eval += *coeff * x_pow;
-            x_pow *= x;
+        let mut eval = Challenge::ZERO;
+        for &coeff in proof.final_poly.iter().rev() {
+            eval = eval * x + coeff;
         }
 
         if eval != folded_eval {
@@ -215,7 +217,12 @@ where
         // Verify the commitment to the evaluations of the sibling nodes.
         config
             .mmcs
-            .verify_batch(comm, dims, *index, &[evals.clone()], &opening.opening_proof)
+            .verify_batch(
+                comm,
+                dims,
+                *index,
+                BatchOpeningRef::new(&[evals.clone()], &opening.opening_proof), // It's possible to remove the clone here but unnecessary as evals is tiny.
+            )
             .map_err(FriError::CommitPhaseMmcsError)?;
 
         // Fold the pair of sibling nodes to get the evaluation of the parent fri node.

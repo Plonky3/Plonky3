@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::Mmcs;
+use p3_commit::{BatchOpeningRef, Mmcs};
 use p3_field::{ExtensionField, Field};
 use p3_fri::verifier::FriError;
 use p3_fri::{FriParameters, FriGenericConfig};
@@ -152,7 +152,12 @@ where
         // Verify the commitment to the evaluations of the sibling nodes.
         config
             .mmcs
-            .verify_batch(comm, dims, index, &[evals.clone()], &opening.opening_proof)
+            .verify_batch(
+                comm,
+                dims,
+                index,
+                BatchOpeningRef::new(&[evals.clone()], &opening.opening_proof), // It's possible to remove the clone here but unnecessary as evals is tiny.
+            )
             .map_err(FriError::CommitPhaseMmcsError)?;
 
         // Fold the pair of evaluations of sibling nodes into the evaluation of the parent fri node.
