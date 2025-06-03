@@ -1,8 +1,5 @@
 [package]
 name = "p3-sha256"
-version = "0.3.0"
-edition = "2024"
-license = "MIT OR Apache-2.0"
 description = "Plonky3 hash trait implementations for the SHA2-256 hash function."
 version.workspace = true
 edition.workspace = true
