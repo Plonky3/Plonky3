@@ -132,7 +132,7 @@ where
     Dft: TwoAdicSubgroupDft<Val>,
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
-    Challenge: TwoAdicField + ExtensionField<Val>,
+    Challenge: ExtensionField<Val>,
     Challenger:
         FieldChallenger<Val> + CanObserve<FriMmcs::Commitment> + GrindingChallenger<Witness = Val>,
 {

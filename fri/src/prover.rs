@@ -22,8 +22,8 @@ pub fn prove<G, Val, Challenge, M, Challenger>(
     open_input: impl Fn(usize) -> G::InputProof,
 ) -> FriProof<Challenge, M, Challenger::Witness, G::InputProof>
 where
-    Val: Field,
-    Challenge: ExtensionField<Val> + TwoAdicField,
+    Val: TwoAdicField,
+    Challenge: ExtensionField<Val>,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
     G: FriGenericConfig<Val, Challenge>,
@@ -83,8 +83,8 @@ fn commit_phase<G, Val, Challenge, M, Challenger>(
     challenger: &mut Challenger,
 ) -> CommitPhaseResult<Challenge, M>
 where
-    Val: Field,
-    Challenge: ExtensionField<Val> + TwoAdicField,
+    Val: TwoAdicField,
+    Challenge: ExtensionField<Val>,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + CanObserve<M::Commitment>,
     G: FriGenericConfig<Val, Challenge>,
@@ -126,7 +126,8 @@ where
     folded.truncate(config.final_poly_len());
     reverse_slice_index_bits(&mut folded);
 
-    let final_poly = debug_span!("idft final poly").in_scope(|| Radix2Dit::default().idft(folded));
+    let final_poly =
+        debug_span!("idft final poly").in_scope(|| Radix2Dit::default().idft_algebra(folded));
 
     // Observe all coefficients of the final polynomial.
     for &x in &final_poly {

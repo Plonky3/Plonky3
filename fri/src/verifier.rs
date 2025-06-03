@@ -32,8 +32,8 @@ pub fn verify<G, Val, Challenge, M, Challenger>(
     ) -> Result<Vec<(usize, Challenge)>, FriError<M::Error, G::InputError>>,
 ) -> Result<(), FriError<M::Error, G::InputError>>
 where
-    Val: Field,
-    Challenge: ExtensionField<Val> + TwoAdicField,
+    Val: TwoAdicField,
+    Challenge: ExtensionField<Val>,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
     G: FriGenericConfig<Val, Challenge>,
@@ -109,7 +109,7 @@ where
         // We open the final polynomial at index `domain_index`, which corresponds to evaluating
         // the polynomial at x^k, where x is the 2-adic generator of order `max_height` and k is
         // `reverse_bits_len(domain_index, log_max_height)`.
-        let x = Challenge::two_adic_generator(log_max_height)
+        let x = Val::two_adic_generator(log_max_height)
             .exp_u64(reverse_bits_len(domain_index, log_max_height) as u64);
 
         // Evaluate the final polynomial at x.
