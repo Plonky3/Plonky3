@@ -24,18 +24,18 @@ use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
 use tracing::{info_span, instrument};
 
 use crate::verifier::{self, FriError};
-use crate::{FriConfig, FriGenericConfig, FriProof, prover};
+use crate::{FriConfiguration, FriParameters, FriProof, prover};
 
 #[derive(Debug)]
 pub struct TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
     pub(crate) dft: Dft,
     pub(crate) mmcs: InputMmcs,
-    pub(crate) fri: FriConfig<FriMmcs>,
+    pub(crate) fri: FriParameters<FriMmcs>,
     _phantom: PhantomData<Val>,
 }
 
 impl<Val, Dft, InputMmcs, FriMmcs> TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
-    pub const fn new(dft: Dft, mmcs: InputMmcs, fri: FriConfig<FriMmcs>) -> Self {
+    pub const fn new(dft: Dft, mmcs: InputMmcs, fri: FriParameters<FriMmcs>) -> Self {
         Self {
             dft,
             mmcs,
@@ -45,15 +45,13 @@ impl<Val, Dft, InputMmcs, FriMmcs> TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
     }
 }
 
-pub struct TwoAdicFriGenericConfig<InputProof, InputError>(
-    pub PhantomData<(InputProof, InputError)>,
-);
+pub struct TwoAdicFriConfig<InputProof, InputError>(pub PhantomData<(InputProof, InputError)>);
 
-pub type TwoAdicFriGenericConfigForMmcs<F, M> =
-    TwoAdicFriGenericConfig<Vec<BatchOpening<F, M>>, <M as Mmcs<F>>::Error>;
+pub type TwoAdicFriConfigForMmcs<F, M> =
+    TwoAdicFriConfig<Vec<BatchOpening<F, M>>, <M as Mmcs<F>>::Error>;
 
-impl<F: TwoAdicField, InputProof, InputError: Debug, EF: ExtensionField<F>> FriGenericConfig<F, EF>
-    for TwoAdicFriGenericConfig<InputProof, InputError>
+impl<F: TwoAdicField, InputProof, InputError: Debug, EF: ExtensionField<F>> FriConfiguration<F, EF>
+    for TwoAdicFriConfig<InputProof, InputError>
 {
     type InputProof = InputProof;
     type InputError = InputError;
@@ -405,8 +403,7 @@ where
 
         let fri_input = reduced_openings.into_iter().rev().flatten().collect_vec();
 
-        let g: TwoAdicFriGenericConfigForMmcs<Val, InputMmcs> =
-            TwoAdicFriGenericConfig(PhantomData);
+        let g: TwoAdicFriConfigForMmcs<Val, InputMmcs> = TwoAdicFriConfig(PhantomData);
 
         let fri_proof = prover::prove(&g, &self.fri, fri_input, challenger, |index| {
             rounds
@@ -461,8 +458,7 @@ where
         let log_global_max_height =
             proof.commit_phase_commits.len() + self.fri.log_blowup + self.fri.log_final_poly_len;
 
-        let g: TwoAdicFriGenericConfigForMmcs<Val, InputMmcs> =
-            TwoAdicFriGenericConfig(PhantomData);
+        let g: TwoAdicFriConfigForMmcs<Val, InputMmcs> = TwoAdicFriConfig(PhantomData);
 
         verifier::verify(&g, &self.fri, proof, challenger, |index, input_proof| {
             // TODO: separate this out into functions

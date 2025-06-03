@@ -7,7 +7,7 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_fri::{FriConfig, TwoAdicFriGenericConfig, prover, verifier};
+use p3_fri::{FriParameters, TwoAdicFriConfig, prover, verifier};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::reverse_matrix_index_bits;
@@ -27,21 +27,21 @@ type ValMmcs =
     MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
 type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
-type MyFriConfig = FriConfig<ChallengeMmcs>;
+type MyFriParams = FriParameters<ChallengeMmcs>;
 
-fn get_ldt_for_testing<R: Rng>(rng: &mut R, log_final_poly_len: usize) -> (Perm, MyFriConfig) {
+fn get_ldt_for_testing<R: Rng>(rng: &mut R, log_final_poly_len: usize) -> (Perm, MyFriParams) {
     let perm = Perm::new_from_rng_128(rng);
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
     let mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress));
-    let fri_config = FriConfig {
+    let fri_params = FriParameters {
         log_blowup: 1,
         log_final_poly_len,
         num_queries: 10,
         proof_of_work_bits: 8,
         mmcs,
     };
-    (perm, fri_config)
+    (perm, fri_params)
 }
 
 fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
@@ -94,7 +94,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
         let log_max_height = log2_strict_usize(input[0].len());
 
         let proof = prover::prove(
-            &TwoAdicFriGenericConfig::<Vec<(usize, Challenge)>, ()>(PhantomData),
+            &TwoAdicFriConfig::<Vec<(usize, Challenge)>, ()>(PhantomData),
             &fc,
             input.clone(),
             &mut chal,
@@ -116,7 +116,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
     let mut v_challenger = Challenger::new(perm);
     let _alpha: Challenge = v_challenger.sample_algebra_element();
     verifier::verify(
-        &TwoAdicFriGenericConfig::<Vec<(usize, Challenge)>, ()>(PhantomData),
+        &TwoAdicFriConfig::<Vec<(usize, Challenge)>, ()>(PhantomData),
         &fc,
         &proof,
         &mut v_challenger,

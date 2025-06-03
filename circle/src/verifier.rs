@@ -6,25 +6,28 @@ use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{BatchOpeningRef, Mmcs};
 use p3_field::{ExtensionField, Field};
 use p3_fri::verifier::FriError;
-use p3_fri::{FriConfig, FriGenericConfig};
+use p3_fri::{FriConfiguration, FriParameters};
 use p3_matrix::Dimensions;
 use p3_util::zip_eq::zip_eq;
 
 use crate::{CircleCommitPhaseProofStep, CircleFriProof};
 
-pub fn verify<G, Val, Challenge, M, Challenger>(
-    g: &G,
-    config: &FriConfig<M>,
-    proof: &CircleFriProof<Challenge, M, Challenger::Witness, G::InputProof>,
+pub fn verify<Config, Val, Challenge, M, Challenger>(
+    config: &Config,
+    params: &FriParameters<M>,
+    proof: &CircleFriProof<Challenge, M, Challenger::Witness, Config::InputProof>,
     challenger: &mut Challenger,
-    open_input: impl Fn(usize, &G::InputProof) -> Result<Vec<(usize, Challenge)>, G::InputError>,
-) -> Result<(), FriError<M::Error, G::InputError>>
+    open_input: impl Fn(
+        usize,
+        &Config::InputProof,
+    ) -> Result<Vec<(usize, Challenge)>, Config::InputError>,
+) -> Result<(), FriError<M::Error, Config::InputError>>
 where
     Val: Field,
     Challenge: ExtensionField<Val>,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
-    G: FriGenericConfig<Val, Challenge>,
+    Config: FriConfiguration<Val, Challenge>,
 {
     let betas: Vec<Challenge> = proof
         .commit_phase_commits
@@ -38,20 +41,20 @@ where
     // Observe the claimed final polynomial.
     challenger.observe_algebra_element(proof.final_poly);
 
-    if proof.query_proofs.len() != config.num_queries {
+    if proof.query_proofs.len() != params.num_queries {
         return Err(FriError::InvalidProofShape);
     }
 
     // Check PoW.
-    if !challenger.check_witness(config.proof_of_work_bits, proof.pow_witness) {
+    if !challenger.check_witness(params.proof_of_work_bits, proof.pow_witness) {
         return Err(FriError::InvalidPowWitness);
     }
 
     // The log of the maximum domain size.
-    let log_max_height = proof.commit_phase_commits.len() + config.log_blowup;
+    let log_max_height = proof.commit_phase_commits.len() + params.log_blowup;
 
     for qp in &proof.query_proofs {
-        let index = challenger.sample_bits(log_max_height + g.extra_query_index_bits());
+        let index = challenger.sample_bits(log_max_height + config.extra_query_index_bits());
         let ro = open_input(index, &qp.input_proof).map_err(FriError::InputError)?;
 
         debug_assert!(
@@ -64,9 +67,9 @@ where
         // Check after each fold that the pair of sibling evaluations at the current
         // node match the commitment.
         let folded_eval = verify_query(
-            g,
             config,
-            index >> g.extra_query_index_bits(),
+            params,
+            index >> config.extra_query_index_bits(),
             zip_eq(
                 zip_eq(
                     &betas,
@@ -105,19 +108,19 @@ type CommitStep<'a, F, M> = (
 /// polynomials to be added in at specific domain sizes, perform the standard
 /// sequence of Circle-FRI folds, checking at each step that the pair of sibling evaluations
 /// match the commitment.
-fn verify_query<'a, G, F, EF, M>(
-    g: &G,
-    config: &FriConfig<M>,
+fn verify_query<'a, Config, F, EF, M>(
+    config: &Config,
+    params: &FriParameters<M>,
     mut index: usize,
     steps: impl ExactSizeIterator<Item = CommitStep<'a, EF, M>>,
     reduced_openings: Vec<(usize, EF)>,
     log_max_height: usize,
-) -> Result<EF, FriError<M::Error, G::InputError>>
+) -> Result<EF, FriError<M::Error, Config::InputError>>
 where
     F: Field,
     EF: ExtensionField<F>,
     M: Mmcs<EF> + 'a,
-    G: FriGenericConfig<F, EF>,
+    Config: FriConfiguration<F, EF>,
 {
     let mut folded_eval = EF::ZERO;
     let mut ro_iter = reduced_openings.into_iter().peekable();
@@ -126,7 +129,7 @@ where
     // using FRI until the domain size reaches (1 << log_final_height). This is equal to 1 << log_blowup
     // currently as we have not yet implemented early stopping.
     for (log_folded_height, ((&beta, comm), opening)) in zip_eq(
-        (config.log_blowup..log_max_height).rev(),
+        (params.log_blowup..log_max_height).rev(),
         steps,
         FriError::InvalidProofShape,
     )? {
@@ -150,7 +153,7 @@ where
         index >>= 1;
 
         // Verify the commitment to the evaluations of the sibling nodes.
-        config
+        params
             .mmcs
             .verify_batch(
                 comm,
@@ -161,7 +164,7 @@ where
             .map_err(FriError::CommitPhaseMmcsError)?;
 
         // Fold the pair of evaluations of sibling nodes into the evaluation of the parent fri node.
-        folded_eval = g.fold_row(index, log_folded_height, beta, evals.into_iter());
+        folded_eval = config.fold_row(index, log_folded_height, beta, evals.into_iter());
     }
 
     // If ro_iter is not empty, we failed to fold in some polynomial evaluations.

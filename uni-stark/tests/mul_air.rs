@@ -11,7 +11,7 @@ use p3_commit::testing::TrivialPcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_fri::{FriConfig, HidingFriPcs, TwoAdicFriPcs, create_test_fri_config_zk};
+use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs, create_test_fri_config_zk};
 use p3_keccak::Keccak256Hash;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
@@ -208,7 +208,7 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
 
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 
-    let fri_config = FriConfig {
+    let fri_params = FriParameters {
         log_blowup,
         log_final_poly_len: 5,
         num_queries: 40,
@@ -216,7 +216,7 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
         mmcs: challenge_mmcs,
     };
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
-    let pcs = Pcs::new(dft, val_mmcs, fri_config);
+    let pcs = Pcs::new(dft, val_mmcs, fri_params);
     let challenger = Challenger::new(perm);
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
@@ -319,7 +319,7 @@ fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
 
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
-    let fri_config = FriConfig {
+    let fri_params = FriParameters {
         log_blowup,
         log_final_poly_len: 0,
         num_queries: 40,
@@ -330,7 +330,7 @@ fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs {
         mmcs: val_mmcs,
-        fri_config,
+        fri_parameters: fri_params,
         _phantom: PhantomData,
     };
     let challenger = Challenger::from_hasher(vec![], byte_hash);
