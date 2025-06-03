@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 
-# Check if token is setup and display a message if not.
+# We are currently incrementing versions with lockstep, which means that all sub-crates will always be at the same version (eg. `0.x.0` is the crate version that should be used for all crates when we target this version).
 
-# We are currently incrementing versions with lockstep, which means that all subcrates will always be at the same version (eg. `0.x.0` is the crate version that should be used for all crates when we target this version).
-
-# When we increment the version, we are always going to be following Semver of which ever package had the most "significant" bump. So for example, if one package had a major bump but all of the rest only had a patch bump, then all packages would receive a major bump.
+# When we increment the version, we are always going to be following Semver of whichever package had the most "significant" bump. So for example, if one package had a major bump but all of the rest only had a patch bump, then all packages would receive a major bump.
 
 # Check if a binary in installed and exit early if it's missing.
 # $1 --> Binary name
@@ -69,7 +67,7 @@ patch_bumps_suggested=$(echo "$semver_check_out" | grep -c "Summary no semver up
 # Check if we would normally perform a `Major` bump but won't because the current `Major` version `0`. (https://semver.org/#spec-item-4) 
 major_bump_suppressed=0
 
-# Man... We sure love Bash here... Looks at this beautiful line below.
+# Man... We sure love Bash here... Look at this beautiful line below.
 [ "$major_version" -eq 0 ] && [ "$major_bumps_suggested" -gt 0 ] && major_bump_suppressed=1
 
 # Note: Because the rules for Semver are a bit different when major is `0`, we're going to override suggesting a `Major` change if the major version is `0`.

@@ -3,7 +3,7 @@
 # Publish all subcrates to `crates.io` once we merged a version bump PR back to main.
 
 # Note that the intended workflow of this script is:
-# - Have a PR of successful run of `lockstep_version_bump.sh` merged back into `main`.
+# - Have a PR of a successful run of `lockstep_version_bump.sh` merged back into `main`.
 # - Run this script on the commit that got merged back into `main`.
 
 # 1 --> Prompt string
