@@ -59,8 +59,8 @@ pub trait FriConfiguration<F: Field, EF: ExtensionField<F>> {
 }
 
 /// Creates a minimal set of `FriParameters` for testing purposes.
-/// This configuration is designed to reduce computational cost during tests.
-pub const fn create_test_fri_config<Mmcs>(
+/// These parameters are designed to reduce computational cost during tests.
+pub const fn create_test_fri_params<Mmcs>(
     mmcs: Mmcs,
     log_final_poly_len: usize,
 ) -> FriParameters<Mmcs> {
@@ -74,8 +74,8 @@ pub const fn create_test_fri_config<Mmcs>(
 }
 
 /// Creates a minimal set of `FriParameters` for testing purposes, with zk enabled.
-/// This configuration is designed to reduce computational cost during tests.
-pub const fn create_test_fri_config_zk<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> {
+/// These parameters are designed to reduce computational cost during tests.
+pub const fn create_test_fri_params_zk<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> {
     FriParameters {
         log_blowup: 2,
         log_final_poly_len: 0,
@@ -86,8 +86,8 @@ pub const fn create_test_fri_config_zk<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> 
 }
 
 /// Creates a set of `FriParameters` suitable for benchmarking.
-/// This configuration represents typical settings used in production-like scenarios.
-pub const fn create_benchmark_fri_config<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> {
+/// These parameters represent typical settings used in production-like scenarios.
+pub const fn create_benchmark_fri_params<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> {
     FriParameters {
         log_blowup: 1,
         log_final_poly_len: 0,
@@ -98,7 +98,8 @@ pub const fn create_benchmark_fri_config<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs
 }
 
 /// Creates a set of `FriParameters` suitable for benchmarking with zk enabled.
-pub fn create_benchmark_fri_config_zk<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> {
+/// These parameters represent typical settings used in production-like scenarios.
+pub fn create_benchmark_fri_params_zk<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> {
     FriParameters {
         log_blowup: 2,
         log_final_poly_len: 0,

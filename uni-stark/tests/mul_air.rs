@@ -11,7 +11,7 @@ use p3_commit::testing::TrivialPcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs, create_test_fri_config_zk};
+use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs, create_test_fri_params_zk};
 use p3_keccak::Keccak256Hash;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
@@ -270,9 +270,9 @@ fn prove_bb_twoadic_deg2_zk() -> Result<(), impl Debug> {
 
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 
-    let fri_config = create_test_fri_config_zk(challenge_mmcs);
+    let fri_params = create_test_fri_params_zk(challenge_mmcs);
     type HidingPcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, SmallRng>;
-    let pcs = HidingPcs::new(dft, val_mmcs, fri_config, 4, SmallRng::seed_from_u64(1));
+    let pcs = HidingPcs::new(dft, val_mmcs, fri_params, 4, SmallRng::seed_from_u64(1));
     type MyConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
     let challenger = Challenger::new(perm);
     let config = MyConfig::new(pcs, challenger);

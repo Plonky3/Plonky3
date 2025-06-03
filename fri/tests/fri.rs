@@ -140,7 +140,7 @@ fn test_fri_ldt() {
     }
 }
 
-// This test is expected to panic because the polynomial degree is less than the final_poly_degree in the config.
+// This test is expected to panic because the polynomial degree is less than the final_poly_degree in the parameters.
 #[test]
 #[should_panic]
 fn test_fri_ldt_should_panic() {
