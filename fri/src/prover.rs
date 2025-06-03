@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
+use p3_dft::{Radix2DFTSmallBatch, TwoAdicSubgroupDft};
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
@@ -13,15 +13,18 @@ use tracing::{debug_span, info_span, instrument};
 use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof, QueryProof};
 
 /// Create a proof that an opening `f(zeta)` is correct by proving that the
-/// function `f(x) - f(zeta)/(x - zeta)` is low degree. This supports proving this for a collection of
-/// `f`'s of shrinking sizes. `f`'s of the same size can be rolled together before calling this function.
+/// function `f(x) - f(zeta)/(x - zeta)` is low degree.
+///
+/// This further supports proving a batch of these claims for a collection of `f`'s of shrinking sizes.
+/// `f`'s of the same size can be combined using randomness before calling this function.
 ///
 /// The Soundness error from prove_fri comes from the paper:
 /// Proximity Gaps for Reed-Solomon Codes (https://eprint.iacr.org/2020/654)
 /// and is either `rate^{num_queries}` or `rate^{num_queries/2}` depending on if you rely on conjectured or
-/// proven soundness. Particularly safety conscious users may want to set `num_queries` slightly higher than this to account for the
-/// fact that most implementations batch inputs using a single random challenge instead of one challenge for each polynomial and
-/// due to the birthday paradox, there is a non trivial chance that two queried indices will be equal.
+/// proven soundness. Particularly safety conscious users may want to set `num_queries` slightly higher than
+/// this to account for the fact that most implementations batch inputs using a single random challenge
+/// instead of one challenge for each polynomial and due to the birthday paradox,
+/// there is a non trivial chance that two queried indices will be equal.
 ///
 /// Arguments:
 /// - `g`, `parameters`: Together, these contain all information needed to define the FRI protocol.
@@ -61,11 +64,11 @@ where
         assert!(log_min_height > config.log_final_poly_len + config.log_blowup);
     }
 
-    // Continually fold the inputs down until the polynomial degree reaches Final_poly_degree.
+    // Continually fold the inputs down until the polynomial degree reaches final_poly_degree.
     // Returns a vector of commitments to the intermediate stage polynomials, the intermediate stage polynomials
     // themselves and the final polynomial.
-    // Note that the challenger observes the commitments and the final polynomial in this function so we don't
-    // need to do it here.
+    // Note that the challenger observes the commitments and the final polynomial inside this function so we don't
+    // need to observe the output of this function here.
     let commit_phase_result = commit_phase(g, config, inputs, challenger);
 
     // Produce a proof of work witness before receiving any query challenges.
@@ -159,7 +162,7 @@ where
         challenger.observe(commit.clone());
         commits.push(commit);
 
-        // Get the Fiat-shamir challenge for this round.
+        // Get the Fiat-Shamir challenge for this round.
         let beta: Challenge = challenger.sample_algebra_element();
 
         // We passed ownership of `current` to the MMCS, so get a reference to it
@@ -180,28 +183,13 @@ where
         }
     }
 
-    // After repeated folding steps, we end up working over a coset hJ instead of the original
-    // domain. The IDFT we apply operates over a subgroup J, not hJ. This means the polynomial we
-    // recover is G(x), where G(x) = F(hx), and F is the polynomial whose evaluations we actually
-    // observed. For our current construction, this does not cause issues since degree properties
-    // and zero-checks remain valid. If we changed our domain construction (e.g., using multiple
-    // cosets), we would need to carefully reconsider these assumptions.
-
+    // Now we need to get the coefficients of the final polynomial. As we know that the degree
+    // is `<= config.final_poly_len()` and the evaluations are stored in bit-reversed order,
+    // we can just truncate the folded vector un bit-reverse and run an IDFT.
     folded.truncate(config.final_poly_len());
     reverse_slice_index_bits(&mut folded);
-    // TODO: For better performance, we could run the IDFT on only the first half
-    //       (or less, depending on `log_blowup`) of `final_poly`.
-    let final_poly = debug_span!("idft final poly").in_scope(|| Radix2Dit::default().idft(folded));
-
-    // The evaluation domain is "blown-up" relative to the polynomial degree of `final_poly`,
-    // so all coefficients after the first final_poly_len should be zero.
-    debug_assert!(
-        final_poly
-            .iter()
-            .skip(1 << config.log_final_poly_len)
-            .all(|x| x.is_zero()),
-        "All coefficients beyond final_poly_len must be zero"
-    );
+    let final_poly =
+        debug_span!("idft final poly").in_scope(|| Radix2DFTSmallBatch::default().idft(folded));
 
     // Observe all coefficients of the final polynomial.
     for &x in &final_poly {
@@ -226,7 +214,7 @@ where
 /// possibly an input value to compute the value at `index >> (i + 1)` in round `i + 1`.
 ///
 /// We repeat until we reach the final round where the verifier can check the value against the
-/// polynomial we sent them.
+/// polynomial they where sent.
 fn answer_query<F, M>(
     config: &FriConfig<M>,
     commit_phase_commits: &[M::ProverData<RowMajorMatrix<F>>], // The commitments to the intermediate stage polynomials.

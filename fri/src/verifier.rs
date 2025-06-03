@@ -24,13 +24,13 @@ pub enum FriError<CommitMmcsErr, InputError> {
 /// Verifies a FRI proof.
 ///
 /// Arguments:
-/// - `config`, `parameters`: Together, these contain all information the verifier needs to reimplement
+/// - `g`, `config`: Together, these contain all information the verifier needs to reimplement
 ///   the provers FRI protocol.
 /// - `proof`: The proof to verify.
 /// - `challenger`: The Fiat-Shamir challenger to use for sampling challenges.
 /// - `open_input`: A function that takes an index and opening proofs and returns a vector of reduced openings
 ///   which constitute the fri inputs. The opening proofs prove that the values `f(x)` are the ones committed
-///   to and there are then combined into the fri inputs.
+///   to and these are then combined into the fri inputs.
 pub fn verify_fri<G, Val, Challenge, M, Challenger>(
     g: &G,
     config: &FriConfig<M>,
@@ -42,7 +42,7 @@ pub fn verify_fri<G, Val, Challenge, M, Challenger>(
     ) -> Result<Vec<(usize, Challenge)>, FriError<M::Error, G::InputError>>,
 ) -> Result<(), FriError<M::Error, G::InputError>>
 where
-    Val: TwoAdicField,
+    Val: Field,
     Challenge: ExtensionField<Val> + TwoAdicField,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
@@ -60,6 +60,7 @@ where
         })
         .collect();
 
+    // Ensure that the final polynomial has the expected degree.
     if proof.final_poly.len() != config.final_poly_len() {
         return Err(FriError::InvalidProofShape);
     }
@@ -131,11 +132,12 @@ where
         // We open the final polynomial at index `domain_index`, which corresponds to evaluating
         // the polynomial at x^k, where x is the 2-adic generator of order `max_height` and k is
         // `reverse_bits_len(domain_index, log_max_height)`.
-        let x = Val::two_adic_generator(log_max_height)
+        let x = Challenge::two_adic_generator(log_max_height)
             .exp_u64(reverse_bits_len(domain_index, log_max_height) as u64);
 
         // Assuming all the checks passed, the final check is to ensure that the folded evaluation
         // matches the evaluation of the final polynomial sent by the prover.
+
         // Evaluate the final polynomial at x.
         let mut eval = Challenge::ZERO;
         for &coeff in proof.final_poly.iter().rev() {
@@ -228,7 +230,16 @@ where
         // Fold the pair of sibling nodes to get the evaluation of the parent fri node.
         folded_eval = g.fold_row(*index, log_folded_height, beta, evals.into_iter());
 
-        // If there are new polynomials to roll in at this height, do so.
+        // If there are new polynomials to roll in at the folded height, do so.
+        //
+        // Each element of `ro_iter` is the evaluation of a reduced opening polynomial, which is itself
+        // a random linear combination `f_{i, 0}(x) + alpha f_{i, 1}(x) + ...`, but when we add it
+        // to the current folded polynomial evaluation claim, we need to multiply by a new random factor
+        // since `f_{i, 0}` has no leading coefficient.
+        //
+        // We use `beta^2` as the random factor since `beta` is already used in the folding.
+        // This increases the query phase error probability by a negligible amount, and does not change
+        // the required number of FRI queries.
         if let Some((_, ro)) = ro_iter.next_if(|(lh, _)| *lh == log_folded_height) {
             folded_eval += beta.square() * ro;
         }

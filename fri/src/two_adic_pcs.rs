@@ -168,7 +168,7 @@ where
     /// Get the unique subgroup `H` of size `|H| = degree`.
     ///
     /// # Panics:
-    /// This function will panic if `degree` is not a power of 2 or `degree > 1 << Val::TWO_ADICITY`.
+    /// This function will panic if `degree` is not a power of 2 or `degree > (1 << Val::TWO_ADICITY)`.
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         TwoAdicMultiplicativeCoset::new(Val::ONE, log2_strict_usize(degree)).unwrap()
     }
@@ -177,10 +177,10 @@ where
     ///
     /// Each element of evaluation contains a coset `shift * H` and a matrix `mat` with `mat.height() = |H|`.
     /// Interpreting each column of `mat` as the evaluations of a polynomial `p_i(x)` over `shift * H`,
-    /// we compute the evaluations of `p_i` over `gK` where `g` is the chosen generator of the multiplicative group
+    /// this computes the evaluations of `p_i` over `gK` where `g` is the chosen generator of the multiplicative group
     /// of `Val` and `K` is the unique subgroup of order `|H| << self.fri.log_blowup`.
     ///
-    /// We then produce a merkle commitment to these evaluations.
+    /// This then outputs a merkle commitment to these evaluations.
     fn commit(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
@@ -332,9 +332,10 @@ where
                 // For each collection of matrices
                 izip!(mats.iter(), points.iter())
                     .map(|(mat, points_for_mat)| {
-                        // TODO: I think this is potentially the cause of a bunch of bugs. This assumes that every input matrix has a blowup of at least self.fri.log_blowup.
-                        // If the blow_up factor is smaller than self.fri.log_blowup. this will lead to errors.
+                        // TODO: This assumes that every input matrix has a blowup of at least self.fri.log_blowup.
+                        // If the blow_up factor is smaller than self.fri.log_blowup, this will lead to errors.
                         // If it is bigger, we shouldn't get any errors but it will be slightly slower.
+                        // Ideally, polynomials could be passed in with their blow_up factors known.
 
                         // The point of this correction is that each column of the matrix corresponds to a low degree polynomial.
                         // Hence we can save time by restricting the height of the matrix to be the minimal height which
@@ -357,7 +358,8 @@ where
                                     info_span!("compute opened values with Lagrange interpolation")
                                         .in_scope(|| {
                                             // Get the relevant inverse denominators for this point and use these to
-                                            // interpolate to get the evaluation of each polynomial in the matrix at the desired point.
+                                            // interpolate to get the evaluation of each polynomial in the matrix
+                                            // at the desired point.
                                             let inv_denoms = &inv_denoms.get(&point).unwrap()[..h];
                                             interpolate_coset_with_precomputation(
                                                 &low_coset,
@@ -378,9 +380,10 @@ where
             .collect_vec();
 
         // Batch combination challenge
+
         // Soundness Error:
         // See the discussion in the doc comment of [`prove_fri`]. Essentially, the soundness error
-        // for this sample it tightly tied to the soundness error of the FRI protocol.
+        // for this sample is tightly tied to the soundness error of the FRI protocol.
         // Roughly speaking, at a minimum is it k/|EF| where `k` is the sum of, for each function, the number of
         // points it needs to be opened at. This comes from the fact that we are takeing a large linear combination
         // of `(f(zeta) - f(x))/(zeta - x)` for each function `f` and all of `f`'s opening points.
@@ -410,6 +413,7 @@ where
         // we may need to revisit this and to ensure it is safe to batch them together.
 
         // num_reduced records the number of (function, opening point) pairs for each `log_height`.
+        // TODO: This should really be `[0; Val::TWO_ADICITY]` but that runs into issues with generics.
         let mut num_reduced = [0; 32];
 
         // For each `log_height` from 2^1 -> 2^32, reduced_openings will contain either `None`
@@ -484,6 +488,7 @@ where
             TwoAdicFriGenericConfig(PhantomData);
 
         // Produce the FRI proof.
+        // TODO: Move the |index| closure out of this function into another function.
         let fri_proof = prover::prove_fri(&g, &self.fri, fri_input, challenger, |index| {
             // Given an index, produce batch opening proofs for each collection of matrices
             // combined into a single mmcs commitment. In cases where the maximum height of
@@ -548,131 +553,128 @@ where
         }
 
         // Generate the Batch combination challenge
-        // Soundness Error: `|f|/|EF|` where |F| is the number of different functions of the form (f(zeta) - fi(x))/(zeta - x) which need to be checked.
-        // Explicitly, its commitments_with_opening_points.flatten().flatten().len() (i.e counting the number (point, claimed_evaluation) pairs).
+        // Soundness Error: `|f|/|EF|` where `|f|` is the number of different functions of the form
+        // `(f(zeta) - fi(x))/(zeta - x)` which need to be checked.
+        // Explicitly, `|f|` is `commitments_with_opening_points.flatten().flatten().len()`
+        // (i.e counting the number (point, claimed_evaluation) pairs).
         let alpha: Challenge = challenger.sample_algebra_element();
 
-        // commit_phase_commits.len() is the number of folding steps, so the maximal polynomial degree will be
-        // commit_phase_commits.len() + self.fri.log_final_poly_len and so, as the same blow-up is used for all
-        // polynomials, the maximal matrix height is proof.commit_phase_commits.len() + self.fri.log_blowup + self.fri.log_final_poly_len;
+        // `commit_phase_commits.len()` is the number of folding steps, so the maximal polynomial degree will be
+        // `commit_phase_commits.len() + self.fri.log_final_poly_len` and so, as the same blow-up is used for all
+        // polynomials, the maximal matrix height is:
         let log_global_max_height =
             proof.commit_phase_commits.len() + self.fri.log_blowup + self.fri.log_final_poly_len;
 
         let g: TwoAdicFriGenericConfigForMmcs<Val, InputMmcs> =
             TwoAdicFriGenericConfig(PhantomData);
 
-        verifier::verify_fri(
-            &g,
-            &self.fri,
-            proof,
-            challenger,
+        verifier::verify_fri(&g, &self.fri, proof, challenger, |index, input_proof| {
+            // TODO: separate this out into functions
+
             // index is the query position we are checking
             // input_proof is a vector of batch openings. Each batch opening contains a
             // list of opened values for a collection of matrices along with a batched opening proof.
             // We check the proofs and then combine the functions by mapping each function and opening point
             // pair to `(f(z) - f(x))/(z - x)` and then combining functions of the same height using
             // the challenge alpha.
-            |index, input_proof| {
-                // TODO: separate this out into functions
 
-                // For each log_height, we store the alpha power and compute the reduced opening.
-                // log_height -> (alpha_pow, reduced_opening)
-                let mut reduced_openings = BTreeMap::<usize, (Challenge, Challenge)>::new();
+            // For each log_height, we store the alpha power and compute the reduced opening.
+            // log_height -> (alpha_pow, reduced_opening)
+            let mut reduced_openings = BTreeMap::<usize, (Challenge, Challenge)>::new();
 
-                // For each batch commitment and opening proof
-                for (batch_opening, (batch_commit, mats)) in zip_eq(
-                    input_proof,
-                    &commitments_with_opening_points,
+            // For each batch commitment and opening proof
+            for (batch_opening, (batch_commit, mats)) in zip_eq(
+                input_proof,
+                &commitments_with_opening_points,
+                FriError::InvalidProofShape,
+            )? {
+                // Find the height of each matrix in the batch.
+                // Currently we only check domain.size() as the shift is
+                // assumed to always be Val::GENERATOR.
+                let batch_heights = mats
+                    .iter()
+                    .map(|(domain, _)| domain.size() << self.fri.log_blowup)
+                    .collect_vec();
+                let batch_dims = batch_heights
+                    .iter()
+                    // TODO: MMCS doesn't really need width; we put 0 for now.
+                    .map(|&height| Dimensions { width: 0, height })
+                    .collect_vec();
+
+                if let Some(batch_max_height) = batch_heights.iter().max() {
+                    let log_batch_max_height = log2_strict_usize(*batch_max_height);
+                    let bits_reduced = log_global_max_height - log_batch_max_height;
+                    let reduced_index = index >> bits_reduced;
+
+                    // Verify that the opened values match the commitment.
+                    self.mmcs.verify_batch(
+                        batch_commit,
+                        &batch_dims,
+                        reduced_index,
+                        batch_opening.into(),
+                    )
+                } else {
+                    // Empty batch?
+                    self.mmcs
+                        .verify_batch(batch_commit, &[], 0, batch_opening.into())
+                }
+                .map_err(FriError::InputError)?;
+
+                // For each matrix in the commitment
+                for (mat_opening, (mat_domain, mat_points_and_values)) in zip_eq(
+                    &batch_opening.opened_values,
+                    mats,
                     FriError::InvalidProofShape,
                 )? {
-                    // Find the height of each matrix in the batch.
-                    // Currently we only check domain.size() as the shift is
-                    // assumed to always be Val::GENERATOR.
-                    let batch_heights = mats
-                        .iter()
-                        .map(|(domain, _)| domain.size() << self.fri.log_blowup)
-                        .collect_vec();
-                    let batch_dims = batch_heights
-                        .iter()
-                        // TODO: MMCS doesn't really need width; we put 0 for now.
-                        .map(|&height| Dimensions { width: 0, height })
-                        .collect_vec();
+                    let log_height = log2_strict_usize(mat_domain.size()) + self.fri.log_blowup;
 
-                    if let Some(batch_max_height) = batch_heights.iter().max() {
-                        let log_batch_max_height = log2_strict_usize(*batch_max_height);
-                        let bits_reduced = log_global_max_height - log_batch_max_height;
-                        let reduced_index = index >> bits_reduced;
+                    let bits_reduced = log_global_max_height - log_height;
+                    let rev_reduced_index = reverse_bits_len(index >> bits_reduced, log_height);
 
-                        // Verify that the opened values match the commitment.
-                        self.mmcs.verify_batch(
-                            batch_commit,
-                            &batch_dims,
-                            reduced_index,
-                            batch_opening.into(),
-                        )
-                    } else {
-                        // Empty batch?
-                        self.mmcs
-                            .verify_batch(batch_commit, &[], 0, batch_opening.into())
-                    }
-                    .map_err(FriError::InputError)?;
+                    // TODO: this can be nicer with domain methods?
 
-                    // For each matrix in the commitment
-                    for (mat_opening, (mat_domain, mat_points_and_values)) in zip_eq(
-                        &batch_opening.opened_values,
-                        mats,
-                        FriError::InvalidProofShape,
-                    )? {
-                        let log_height = log2_strict_usize(mat_domain.size()) + self.fri.log_blowup;
+                    // Compute gh^i
+                    let x = Val::GENERATOR
+                        * Val::two_adic_generator(log_height).exp_u64(rev_reduced_index as u64);
 
-                        let bits_reduced = log_global_max_height - log_height;
-                        let rev_reduced_index = reverse_bits_len(index >> bits_reduced, log_height);
+                    let (alpha_pow, ro) = reduced_openings
+                        .entry(log_height) // Get a mutable reference to the entry.
+                        .or_insert((Challenge::ONE, Challenge::ZERO));
 
-                        // TODO: this can be nicer with domain methods?
-
-                        // Compute gh^i
-                        let x = Val::GENERATOR
-                            * Val::two_adic_generator(log_height).exp_u64(rev_reduced_index as u64);
-
-                        let (alpha_pow, ro) = reduced_openings
-                            .entry(log_height) // Get a mutable reference to the entry.
-                            .or_insert((Challenge::ONE, Challenge::ZERO));
-
-                        // For each polynomial `f` in our matrix,
-                        // Compute `(f(z) - f(x))/(z - x)`, scale by the appropriate alpha power
-                        // and add to the reduced opening for this log_height.
-                        for (z, ps_at_z) in mat_points_and_values {
-                            let quotient = (*z - x).inverse();
-                            for (&p_at_x, &p_at_z) in
-                                zip_eq(mat_opening, ps_at_z, FriError::InvalidProofShape)?
-                            {
-                                // Note we just checked batch proofs to ensure p_at_x is correct.
-                                // x, z were sent by the verifier.
-                                // ps_at_z was sent to the verifier and we are using fri to prove it is correct.
-                                *ro += *alpha_pow * (p_at_z - p_at_x) * quotient;
-                                *alpha_pow *= alpha;
-                            }
-                        }
-                    }
-
-                    // `reduced_openings` would have a log_height = log_blowup entry only if there was a
-                    // trace matrix of height 1. In this case `f` is constant, so `f(zeta) - f(x))/(zeta - x)`
-                    // must equal `0`.
-                    if let Some((_alpha_pow, ro)) = reduced_openings.get(&self.fri.log_blowup) {
-                        if !ro.is_zero() {
-                            return Err(FriError::FinalPolyMismatch);
+                    // For each polynomial `f` in our matrix,
+                    // Compute `(f(z) - f(x))/(z - x)`, scale by the appropriate alpha power
+                    // and add to the reduced opening for this log_height.
+                    for (z, ps_at_z) in mat_points_and_values {
+                        let quotient = (*z - x).inverse();
+                        for (&p_at_x, &p_at_z) in
+                            zip_eq(mat_opening, ps_at_z, FriError::InvalidProofShape)?
+                        {
+                            // Note we just checked batch proofs to ensure p_at_x is correct.
+                            // x, z were sent by the verifier.
+                            // ps_at_z was sent to the verifier and we are using fri to prove it is correct.
+                            *ro += *alpha_pow * (p_at_z - p_at_x) * quotient;
+                            *alpha_pow *= alpha;
                         }
                     }
                 }
 
-                // Return reduced openings descending by log_height.
-                Ok(reduced_openings
-                    .into_iter()
-                    .rev()
-                    .map(|(log_height, (_alpha_pow, ro))| (log_height, ro))
-                    .collect())
-            },
-        )?;
+                // `reduced_openings` would have a log_height = log_blowup entry only if there was a
+                // trace matrix of height 1. In this case `f` is constant, so `f(zeta) - f(x))/(zeta - x)`
+                // must equal `0`.
+                if let Some((_alpha_pow, ro)) = reduced_openings.get(&self.fri.log_blowup) {
+                    if !ro.is_zero() {
+                        return Err(FriError::FinalPolyMismatch);
+                    }
+                }
+            }
+
+            // Return reduced openings descending by log_height.
+            Ok(reduced_openings
+                .into_iter()
+                .rev()
+                .map(|(log_height, (_alpha_pow, ro))| (log_height, ro))
+                .collect())
+        })?;
 
         Ok(())
     }
@@ -689,7 +691,7 @@ where
 ///     in `coset` must be in bit-reversed order.
 ///
 /// For each point `z`, let `M` be the matrix of largest height which opens at `z`.
-/// let `H_z` be the unique subgroup of order `m.height()`. Compute the vector of
+/// let `H_z` be the unique subgroup of order `M.height()`. Compute the vector of
 /// `1/(z - x)` for `x` in `gH_z`.
 ///
 /// Return a LinearMap which allows us to recover the computed vectors for each `z`.
@@ -721,7 +723,8 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
             (
                 z,
                 batch_multiplicative_inverse(
-                    // As coset is stored in
+                    // As coset is stored in bit-reversed order,
+                    // we can just take the first `2^log_height` elements.
                     &coset[..(1 << log_height)]
                         .iter()
                         .map(|&x| z - x)
