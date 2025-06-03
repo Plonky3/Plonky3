@@ -18,6 +18,7 @@ pub enum FriError<CommitMmcsErr, InputError> {
     InputError(InputError),
     FinalPolyMismatch,
     InvalidPowWitness,
+    MissingInput,
 }
 
 pub fn verify<G, Val, Challenge, M, Challenger>(
@@ -45,6 +46,10 @@ where
             challenger.sample_algebra_element()
         })
         .collect();
+
+    if proof.final_poly.len() != config.final_poly_len() {
+        return Err(FriError::InvalidProofShape);
+    }
 
     // Observe all coefficients of the final polynomial.
     proof
@@ -101,19 +106,16 @@ where
             log_final_height,
         )?;
 
-        let mut eval = Challenge::ZERO;
-
         // We open the final polynomial at index `domain_index`, which corresponds to evaluating
         // the polynomial at x^k, where x is the 2-adic generator of order `max_height` and k is
         // `reverse_bits_len(domain_index, log_max_height)`.
         let x = Challenge::two_adic_generator(log_max_height)
             .exp_u64(reverse_bits_len(domain_index, log_max_height) as u64);
-        let mut x_pow = Challenge::ONE;
 
         // Evaluate the final polynomial at x.
-        for coeff in &proof.final_poly {
-            eval += *coeff * x_pow;
-            x_pow *= x;
+        let mut eval = Challenge::ZERO;
+        for &coeff in proof.final_poly.iter().rev() {
+            eval = eval * x + coeff;
         }
 
         if eval != folded_eval {
@@ -154,8 +156,11 @@ where
     M: Mmcs<EF> + 'a,
     G: FriGenericConfig<F, EF>,
 {
-    let mut folded_eval = EF::ZERO;
     let mut ro_iter = reduced_openings.into_iter().peekable();
+    let mut folded_eval = ro_iter
+        .next_if(|(lh, _)| *lh == log_max_height)
+        .map(|(_, ro)| ro)
+        .ok_or(FriError::MissingInput)?;
 
     // We start with evaluations over a domain of size (1 << log_max_height). We fold
     // using FRI until the domain size reaches (1 << log_final_height).
@@ -164,11 +169,6 @@ where
         steps,
         FriError::InvalidProofShape,
     )? {
-        // If there are new polynomials to roll in at this height, do so.
-        if let Some((_, ro)) = ro_iter.next_if(|(lh, _)| *lh == log_folded_height + 1) {
-            folded_eval += ro;
-        }
-
         // Get the index of the other sibling of the current fri node.
         let index_sibling = *index ^ 1;
 
@@ -196,6 +196,20 @@ where
 
         // Fold the pair of evaluations of sibling nodes into the evaluation of the parent fri node.
         folded_eval = g.fold_row(*index, log_folded_height, beta, evals.into_iter());
+
+        // If there are new polynomials to roll in at the folded height, do so.
+        //
+        // Each element of `ro_iter` is the evaluation of a reduced opening polynomial, which is itself
+        // a random linear combination `f_{i, 0}(x) + alpha f_{i, 1}(x) + ...`, but when we add it
+        // to the current folded polynomial evaluation claim, we need to multiply by a new random factor
+        // since `f_{i, 0}` has no leading coefficient.
+        //
+        // We use `beta^2` as the random factor since `beta` is already used in the folding.
+        // This increases the query phase error probability by a negligible amount, and does not change
+        // the required number of FRI queries.
+        if let Some((_, ro)) = ro_iter.next_if(|(lh, _)| *lh == log_folded_height) {
+            folded_eval += beta.square() * ro;
+        }
     }
 
     // If ro_iter is not empty, we failed to fold in some polynomial evaluations.
