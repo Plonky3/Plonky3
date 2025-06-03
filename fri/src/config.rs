@@ -33,7 +33,7 @@ impl<M> FriConfig<M> {
     }
 }
 
-/// Whereas `FriParameters` encompasses parameters the end user can set, `FriGenericConfig` is
+/// Whereas `FriConfig` encompasses parameters the end user can set, `FriGenericConfig` is
 /// set by the PCS calling FRI, and abstracts over implementation details of the PCS.
 pub trait FriGenericConfig<F: Field, EF: ExtensionField<F>> {
     type InputProof;

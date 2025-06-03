@@ -182,14 +182,14 @@ where
                 let mut lde_evals = self
                     .inner
                     .dft
-                    .coset_lde_batch(evals, self.inner.parameters.log_blowup + 1, shift)
+                    .coset_lde_batch(evals, self.inner.config.log_blowup + 1, shift)
                     .to_row_major_matrix();
 
                 // Evaluate `v_H(X) * r(X)` over the LDE, where:
                 // - `v_H` is the coset vanishing polynomial, here equal to (GENERATOR * X / domain.shift)^n - 1,
                 // - and `r` is a random polynomial.
                 let mut vanishing_poly_coeffs =
-                    Val::zero_vec((h * w) << (self.inner.parameters.log_blowup + 1));
+                    Val::zero_vec((h * w) << (self.inner.config.log_blowup + 1));
                 let p = shift.exp_u64(h as u64);
                 Val::GENERATOR
                     .powers()
@@ -209,7 +209,7 @@ where
                     .to_row_major_matrix();
 
                 // Add the quotient chunk evaluations over the LDE to the evaluations of `v_H(X) * r(X)`.
-                for i in 0..h * w * (1 << (self.inner.parameters.log_blowup + 1)) {
+                for i in 0..h * w * (1 << (self.inner.config.log_blowup + 1)) {
                     lde_evals.values[i] += random_eval.values[i];
                 }
 

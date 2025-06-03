@@ -51,7 +51,7 @@ use crate::{FriConfig, FriGenericConfig, FriProof, prover};
 pub struct TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
     pub(crate) dft: Dft,
     pub(crate) mmcs: InputMmcs,
-    pub(crate) parameters: FriConfig<FriMmcs>,
+    pub(crate) config: FriConfig<FriMmcs>,
     _phantom: PhantomData<Val>,
 }
 
@@ -60,7 +60,7 @@ impl<Val, Dft, InputMmcs, FriMmcs> TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
         Self {
             dft,
             mmcs,
-            parameters,
+            config: parameters,
             _phantom: PhantomData,
         }
     }
@@ -197,7 +197,7 @@ where
                 // Compute the LDE with blowup factor fri.log_blowup.
                 // We bit reverse as this has a nice interplay with the FRI protocol.
                 self.dft
-                    .coset_lde_batch(evals, self.parameters.log_blowup, shift)
+                    .coset_lde_batch(evals, self.config.log_blowup, shift)
                     .bit_reverse_rows()
                     .to_row_major_matrix()
             })
@@ -339,7 +339,7 @@ where
                         // The point of this correction is that each column of the matrix corresponds to a low degree polynomial.
                         // Hence we can save time by restricting the height of the matrix to be the minimal height which
                         // uniquely identifies the polynomial.
-                        let h = mat.height() >> self.parameters.log_blowup;
+                        let h = mat.height() >> self.config.log_blowup;
 
                         // `subgroup` and `mat` are both in bit-reversed order, so we can truncate.
                         let (low_coset, _) = mat.split_rows(h);
@@ -484,32 +484,31 @@ where
             TwoAdicFriGenericConfig(PhantomData);
 
         // Produce the FRI proof.
-        let fri_proof =
-            prover::prove_fri(&config, &self.parameters, fri_input, challenger, |index| {
-                // Given an index, produce batch opening proofs for each collection of matrices
-                // combined into a single mmcs commitment. In cases where the maximum height of
-                // a batch of matrices is smaller than the global max height, shift the index down
-                // to compensate.
-                // This gives the verifier access to evaluations `f(x)` from which it can compute
-                // `(f(zeta) - f(x))/(zeta - x)` and then combine them together and roll into FRI
-                // as appropriate.
-                commitment_data_with_opening_points
-                    .iter()
-                    .map(|(data, _)| {
-                        let log_max_height = log2_strict_usize(self.mmcs.get_max_height(data));
-                        let bits_reduced = log_global_max_height - log_max_height;
-                        // If a matrix is smaller than global max height, we roll it into
-                        // fri in a later round.
-                        let reduced_index = index >> bits_reduced;
-                        let (opened_values, opening_proof) =
-                            self.mmcs.open_batch(reduced_index, data).unpack();
-                        BatchOpening {
-                            opened_values,
-                            opening_proof,
-                        }
-                    })
-                    .collect()
-            });
+        let fri_proof = prover::prove_fri(&config, &self.config, fri_input, challenger, |index| {
+            // Given an index, produce batch opening proofs for each collection of matrices
+            // combined into a single mmcs commitment. In cases where the maximum height of
+            // a batch of matrices is smaller than the global max height, shift the index down
+            // to compensate.
+            // This gives the verifier access to evaluations `f(x)` from which it can compute
+            // `(f(zeta) - f(x))/(zeta - x)` and then combine them together and roll into FRI
+            // as appropriate.
+            commitment_data_with_opening_points
+                .iter()
+                .map(|(data, _)| {
+                    let log_max_height = log2_strict_usize(self.mmcs.get_max_height(data));
+                    let bits_reduced = log_global_max_height - log_max_height;
+                    // If a matrix is smaller than global max height, we roll it into
+                    // fri in a later round.
+                    let reduced_index = index >> bits_reduced;
+                    let (opened_values, opening_proof) =
+                        self.mmcs.open_batch(reduced_index, data).unpack();
+                    BatchOpening {
+                        opened_values,
+                        opening_proof,
+                    }
+                })
+                .collect()
+        });
 
         (all_opened_values, fri_proof)
     }
@@ -557,15 +556,15 @@ where
         // commit_phase_commits.len() + self.fri.log_final_poly_len and so, as the same blow-up is used for all
         // polynomials, the maximal matrix height is proof.commit_phase_commits.len() + self.fri.log_blowup + self.fri.log_final_poly_len;
         let log_global_max_height = proof.commit_phase_commits.len()
-            + self.parameters.log_blowup
-            + self.parameters.log_final_poly_len;
+            + self.config.log_blowup
+            + self.config.log_final_poly_len;
 
         let g: TwoAdicFriGenericConfigForMmcs<Val, InputMmcs> =
             TwoAdicFriGenericConfig(PhantomData);
 
         verifier::verify_fri(
             &g,
-            &self.parameters,
+            &self.config,
             proof,
             challenger,
             // index is the query position we are checking
@@ -592,7 +591,7 @@ where
                     // assumed to always be Val::GENERATOR.
                     let batch_heights = mats
                         .iter()
-                        .map(|(domain, _)| domain.size() << self.parameters.log_blowup)
+                        .map(|(domain, _)| domain.size() << self.config.log_blowup)
                         .collect_vec();
                     let batch_dims = batch_heights
                         .iter()
@@ -626,7 +625,7 @@ where
                         FriError::InvalidProofShape,
                     )? {
                         let log_height =
-                            log2_strict_usize(mat_domain.size()) + self.parameters.log_blowup;
+                            log2_strict_usize(mat_domain.size()) + self.config.log_blowup;
 
                         let bits_reduced = log_global_max_height - log_height;
                         let rev_reduced_index = reverse_bits_len(index >> bits_reduced, log_height);
@@ -661,9 +660,7 @@ where
                     // `reduced_openings` would have a log_height = log_blowup entry only if there was a
                     // trace matrix of height 1. In this case `f` is constant, so `f(zeta) - f(x))/(zeta - x)`
                     // must equal `0`.
-                    if let Some((_alpha_pow, ro)) =
-                        reduced_openings.get(&self.parameters.log_blowup)
-                    {
+                    if let Some((_alpha_pow, ro)) = reduced_openings.get(&self.config.log_blowup) {
                         if !ro.is_zero() {
                             return Err(FriError::FinalPolyMismatch);
                         }
