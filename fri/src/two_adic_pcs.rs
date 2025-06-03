@@ -39,7 +39,7 @@ use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
 use tracing::{info_span, instrument};
 
 use crate::verifier::{self, FriError};
-use crate::{FriGenericConfig, FriParameters, FriProof, prover};
+use crate::{FriConfig, FriGenericConfig, FriProof, prover};
 
 /// A polynomial commitment scheme using FRI to generate opening proofs.
 ///
@@ -51,12 +51,12 @@ use crate::{FriGenericConfig, FriParameters, FriProof, prover};
 pub struct TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
     pub(crate) dft: Dft,
     pub(crate) mmcs: InputMmcs,
-    pub(crate) parameters: FriParameters<FriMmcs>,
+    pub(crate) parameters: FriConfig<FriMmcs>,
     _phantom: PhantomData<Val>,
 }
 
 impl<Val, Dft, InputMmcs, FriMmcs> TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
-    pub const fn new(dft: Dft, mmcs: InputMmcs, parameters: FriParameters<FriMmcs>) -> Self {
+    pub const fn new(dft: Dft, mmcs: InputMmcs, parameters: FriConfig<FriMmcs>) -> Self {
         Self {
             dft,
             mmcs,

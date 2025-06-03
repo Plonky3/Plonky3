@@ -6,7 +6,7 @@ use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{BatchOpeningRef, Mmcs};
 use p3_field::{ExtensionField, Field};
 use p3_fri::verifier::FriError;
-use p3_fri::{FriParameters, FriGenericConfig};
+use p3_fri::{FriConfig, FriGenericConfig};
 use p3_matrix::Dimensions;
 use p3_util::zip_eq::zip_eq;
 
@@ -14,7 +14,7 @@ use crate::{CircleCommitPhaseProofStep, CircleFriProof};
 
 pub fn verify<G, Val, Challenge, M, Challenger>(
     g: &G,
-    config: &FriParameters<M>,
+    config: &FriConfig<M>,
     proof: &CircleFriProof<Challenge, M, Challenger::Witness, G::InputProof>,
     challenger: &mut Challenger,
     open_input: impl Fn(usize, &G::InputProof) -> Result<Vec<(usize, Challenge)>, G::InputError>,
@@ -107,7 +107,7 @@ type CommitStep<'a, F, M> = (
 /// match the commitment.
 fn verify_query<'a, G, F, EF, M>(
     g: &G,
-    config: &FriParameters<M>,
+    config: &FriConfig<M>,
     mut index: usize,
     steps: impl ExactSizeIterator<Item = CommitStep<'a, EF, M>>,
     reduced_openings: Vec<(usize, EF)>,

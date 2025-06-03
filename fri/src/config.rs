@@ -5,7 +5,7 @@ use p3_field::{ExtensionField, Field};
 use p3_matrix::Matrix;
 
 #[derive(Debug)]
-pub struct FriParameters<M> {
+pub struct FriConfig<M> {
     pub log_blowup: usize,
     // TODO: This parameter and FRI early stopping are not yet implemented in `CirclePcs`.
     pub log_final_poly_len: usize,
@@ -14,7 +14,7 @@ pub struct FriParameters<M> {
     pub mmcs: M,
 }
 
-impl<M> FriParameters<M> {
+impl<M> FriConfig<M> {
     pub const fn blowup(&self) -> usize {
         1 << self.log_blowup
     }
@@ -63,8 +63,8 @@ pub trait FriGenericConfig<F: Field, EF: ExtensionField<F>> {
 pub const fn create_test_fri_config<Mmcs>(
     mmcs: Mmcs,
     log_final_poly_len: usize,
-) -> FriParameters<Mmcs> {
-    FriParameters {
+) -> FriConfig<Mmcs> {
+    FriConfig {
         log_blowup: 2,
         log_final_poly_len,
         num_queries: 2,
@@ -75,8 +75,8 @@ pub const fn create_test_fri_config<Mmcs>(
 
 /// Creates a minimal `FriConfig` for testing purposes, with zk enabled.
 /// This configuration is designed to reduce computational cost during tests.
-pub const fn create_test_fri_config_zk<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> {
-    FriParameters {
+pub const fn create_test_fri_config_zk<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
+    FriConfig {
         log_blowup: 2,
         log_final_poly_len: 0,
         num_queries: 2,
@@ -87,8 +87,8 @@ pub const fn create_test_fri_config_zk<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> 
 
 /// Creates a `FriConfig` suitable for benchmarking.
 /// This configuration represents typical settings used in production-like scenarios.
-pub const fn create_benchmark_fri_config<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> {
-    FriParameters {
+pub const fn create_benchmark_fri_config<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
+    FriConfig {
         log_blowup: 1,
         log_final_poly_len: 0,
         num_queries: 100,
@@ -98,8 +98,8 @@ pub const fn create_benchmark_fri_config<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs
 }
 
 /// Creates a `FriConfig` suitable for benchmarking with zk enabled.
-pub fn create_benchmark_fri_config_zk<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> {
-    FriParameters {
+pub fn create_benchmark_fri_config_zk<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
+    FriConfig {
         log_blowup: 2,
         log_final_poly_len: 0,
         num_queries: 100,

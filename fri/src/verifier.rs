@@ -9,7 +9,7 @@ use p3_matrix::Dimensions;
 use p3_util::reverse_bits_len;
 use p3_util::zip_eq::zip_eq;
 
-use crate::{CommitPhaseProofStep, FriGenericConfig, FriParameters, FriProof, QueryProof};
+use crate::{CommitPhaseProofStep, FriGenericConfig, FriConfig, FriProof, QueryProof};
 
 #[derive(Debug)]
 pub enum FriError<CommitMmcsErr, InputError> {
@@ -33,7 +33,7 @@ pub enum FriError<CommitMmcsErr, InputError> {
 ///   to and there are then combined into the fri inputs.
 pub fn verify_fri<G, Val, Challenge, M, Challenger>(
     config: &G,
-    parameters: &FriParameters<M>,
+    parameters: &FriConfig<M>,
     proof: &FriProof<Challenge, M, Challenger::Witness, G::InputProof>,
     challenger: &mut Challenger,
     open_input: impl Fn(
@@ -168,7 +168,7 @@ type CommitStep<'a, F, M> = (
 /// match the commitment.
 fn verify_query<'a, G, F, EF, M>(
     g: &G,
-    config: &FriParameters<M>,
+    config: &FriConfig<M>,
     index: &mut usize, // initial index in index path.
     steps: impl ExactSizeIterator<Item = CommitStep<'a, EF, M>>, // Fri folding data along index path.
     reduced_openings: Vec<(usize, EF)>,                          // Fri input data along index path.

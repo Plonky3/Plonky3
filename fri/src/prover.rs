@@ -10,7 +10,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 use tracing::{debug_span, info_span, instrument};
 
-use crate::{CommitPhaseProofStep, FriGenericConfig, FriParameters, FriProof, QueryProof};
+use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof, QueryProof};
 
 /// Create a proof that an opening `f(zeta)` is correct by proving that the
 /// function `f(x) - f(zeta)/(x - zeta)` is low degree. This supports proving this for a collection of
@@ -33,7 +33,7 @@ use crate::{CommitPhaseProofStep, FriGenericConfig, FriParameters, FriProof, Que
 #[instrument(name = "FRI prover", skip_all)]
 pub fn prove_fri<G, Val, Challenge, M, Challenger>(
     config: &G,
-    parameters: &FriParameters<M>,
+    parameters: &FriConfig<M>,
     inputs: Vec<Vec<Challenge>>,
     challenger: &mut Challenger,
     open_input: impl Fn(usize) -> G::InputProof,
@@ -132,7 +132,7 @@ struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
 #[instrument(name = "commit phase", skip_all)]
 fn commit_phase<G, Val, Challenge, M, Challenger>(
     config: &G,
-    parameters: &FriParameters<M>,
+    parameters: &FriConfig<M>,
     inputs: Vec<Vec<Challenge>>,
     challenger: &mut Challenger,
 ) -> CommitPhaseResult<Challenge, M>
@@ -229,7 +229,7 @@ where
 /// We repeat until we reach the final round where the verifier can check the value against the
 /// polynomial we sent them.
 fn answer_query<F, M>(
-    parameters: &FriParameters<M>,
+    parameters: &FriConfig<M>,
     commit_phase_commits: &[M::ProverData<RowMajorMatrix<F>>], // The commitments to the intermediate stage polynomials.
     index: usize,                                              // The initial index to start at.
 ) -> Vec<CommitPhaseProofStep<F, M>>
