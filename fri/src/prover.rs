@@ -24,7 +24,7 @@ use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof, QueryPr
 /// due to the birthday paradox, there is a non trivial chance that two queried indices will be equal.
 ///
 /// Arguments:
-/// - `config`, `parameters`: Together, these contain all information needed to define the FRI protocol.
+/// - `g`, `parameters`: Together, these contain all information needed to define the FRI protocol.
 ///    E.g. the folding scheme, the code rate, the final polynomial size.
 /// - `inputs`: The evaluation vectors of the `f's`
 /// - `challenger`: The Fiat-Shamir challenger to use for sampling challenges.
@@ -32,15 +32,15 @@ use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof, QueryPr
 ///   inputs at that index (Or at `index >> i` for smaller `f`'s) are correct.
 #[instrument(name = "FRI prover", skip_all)]
 pub fn prove_fri<G, Val, Challenge, M, Challenger>(
-    config: &G,
-    parameters: &FriConfig<M>,
+    g: &G,
+    config: &FriConfig<M>,
     inputs: Vec<Vec<Challenge>>,
     challenger: &mut Challenger,
     open_input: impl Fn(usize) -> G::InputProof,
 ) -> FriProof<Challenge, M, Challenger::Witness, G::InputProof>
 where
-    Val: TwoAdicField,
-    Challenge: ExtensionField<Val>,
+    Val: Field,
+    Challenge: ExtensionField<Val> + TwoAdicField,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
     G: FriGenericConfig<Val, Challenge>,
@@ -56,9 +56,9 @@ where
 
     let log_max_height = log2_strict_usize(inputs[0].len());
     let log_min_height = log2_strict_usize(inputs.last().unwrap().len());
-    if parameters.log_final_poly_len > 0 {
+    if config.log_final_poly_len > 0 {
         // Final_poly_degree must be less than or equal to the degree of the smallest polynomial.
-        assert!(log_min_height > parameters.log_final_poly_len + parameters.log_blowup);
+        assert!(log_min_height > config.log_final_poly_len + config.log_blowup);
     }
 
     // Continually fold the inputs down until the polynomial degree reaches Final_poly_degree.
@@ -66,11 +66,11 @@ where
     // themselves and the final polynomial.
     // Note that the challenger observes the commitments and the final polynomial in this function so we don't
     // need to do it here.
-    let commit_phase_result = commit_phase(config, parameters, inputs, challenger);
+    let commit_phase_result = commit_phase(g, config, inputs, challenger);
 
     // Produce a proof of work witness before receiving any query challenges.
     // This helps to prevent grinding attacks.
-    let pow_witness = challenger.grind(parameters.proof_of_work_bits);
+    let pow_witness = challenger.grind(config.proof_of_work_bits);
 
     let query_proofs = info_span!("query phase").in_scope(|| {
         // Sample num_queries indexes to check.
@@ -82,16 +82,16 @@ where
         // With num_queries = 100, N = 2^20, this is 0.995 so there is a .5% chance of a collision.
         // Due to this, security conscious users may want to set num_queries a little higher than the
         // theoretical minimum.
-        (0..parameters.num_queries)
-            .map(|_| challenger.sample_bits(log_max_height + config.extra_query_index_bits()))
+        (0..config.num_queries)
+            .map(|_| challenger.sample_bits(log_max_height + g.extra_query_index_bits()))
             // For each index, create a proof that the folding operations along the chain:
             // round 0: index, round 1: index >> 1, round 2: index >> 2, ... are correct.
             .map(|index| QueryProof {
                 input_proof: open_input(index),
                 commit_phase_openings: answer_query(
-                    parameters,
+                    config,
                     &commit_phase_result.data,
-                    index >> config.extra_query_index_bits(),
+                    index >> g.extra_query_index_bits(),
                 ),
             })
             .collect()
@@ -131,14 +131,14 @@ struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
 /// - `challenger`: The Fiat-Shamir challenger to use for sampling challenges.
 #[instrument(name = "commit phase", skip_all)]
 fn commit_phase<G, Val, Challenge, M, Challenger>(
-    config: &G,
-    parameters: &FriConfig<M>,
+    g: &G,
+    config: &FriConfig<M>,
     inputs: Vec<Vec<Challenge>>,
     challenger: &mut Challenger,
 ) -> CommitPhaseResult<Challenge, M>
 where
-    Val: TwoAdicField,
-    Challenge: ExtensionField<Val>,
+    Val: Field,
+    Challenge: ExtensionField<Val> + TwoAdicField,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + CanObserve<M::Commitment>,
     G: FriGenericConfig<Val, Challenge>,
@@ -148,14 +148,14 @@ where
     let mut commits = vec![];
     let mut data = vec![];
 
-    while folded.len() > parameters.blowup() * parameters.final_poly_len() {
+    while folded.len() > config.blowup() * config.final_poly_len() {
         // As folded is in bit reversed order, it looks like:
         //      `[f_i(h^0), f_i(h^{N/2}), f_i(h^{N/4}), f_i(h^{3N/4}), ...] = [f_i(1), f_i(-1), f_i(h^{N/4}), f_i(-h^{N/4}), ...]`
         // so the relevant evaluations are adjacent and we can just reinterpret the vector as a matrix of width 2.
         let leaves = RowMajorMatrix::new(folded, 2);
 
         // Commit to these evaluations and observe the commitment.
-        let (commit, prover_data) = parameters.mmcs.commit_matrix(leaves);
+        let (commit, prover_data) = config.mmcs.commit_matrix(leaves);
         challenger.observe(commit.clone());
         commits.push(commit);
 
@@ -163,10 +163,10 @@ where
         let beta: Challenge = challenger.sample_algebra_element();
 
         // We passed ownership of `current` to the MMCS, so get a reference to it
-        let leaves = parameters.mmcs.get_matrices(&prover_data).pop().unwrap();
+        let leaves = config.mmcs.get_matrices(&prover_data).pop().unwrap();
         // Do the folding operation:
         //      `f_{i + 1}'(x^2) = (f_i(x) + f_i(-x))/2 + beta_i (f_i(x) - f_i(-x))/2x`
-        folded = config.fold_matrix(beta, leaves.as_view());
+        folded = g.fold_matrix(beta, leaves.as_view());
 
         data.push(prover_data);
 
@@ -187,19 +187,18 @@ where
     // and zero-checks remain valid. If we changed our domain construction (e.g., using multiple
     // cosets), we would need to carefully reconsider these assumptions.
 
-    folded.truncate(parameters.final_poly_len());
+    folded.truncate(config.final_poly_len());
     reverse_slice_index_bits(&mut folded);
     // TODO: For better performance, we could run the IDFT on only the first half
     //       (or less, depending on `log_blowup`) of `final_poly`.
-    let final_poly =
-        debug_span!("idft final poly").in_scope(|| Radix2Dit::default().idft_algebra(folded));
+    let final_poly = debug_span!("idft final poly").in_scope(|| Radix2Dit::default().idft(folded));
 
     // The evaluation domain is "blown-up" relative to the polynomial degree of `final_poly`,
     // so all coefficients after the first final_poly_len should be zero.
     debug_assert!(
         final_poly
             .iter()
-            .skip(1 << parameters.log_final_poly_len)
+            .skip(1 << config.log_final_poly_len)
             .all(|x| x.is_zero()),
         "All coefficients beyond final_poly_len must be zero"
     );
@@ -229,7 +228,7 @@ where
 /// We repeat until we reach the final round where the verifier can check the value against the
 /// polynomial we sent them.
 fn answer_query<F, M>(
-    parameters: &FriConfig<M>,
+    config: &FriConfig<M>,
     commit_phase_commits: &[M::ProverData<RowMajorMatrix<F>>], // The commitments to the intermediate stage polynomials.
     index: usize,                                              // The initial index to start at.
 ) -> Vec<CommitPhaseProofStep<F, M>>
@@ -248,7 +247,7 @@ where
 
             // Get a proof that the pair of indices are correct.
             let (mut opened_rows, opening_proof) =
-                parameters.mmcs.open_batch(index_pair, commit).unpack();
+                config.mmcs.open_batch(index_pair, commit).unpack();
 
             // opened_rows should contain just the value at index_i and it's sibling.
             // We just need to get the sibling.

@@ -18,7 +18,7 @@ use p3_util::log2_strict_usize;
 pub fn interpolate_subgroup<F, EF, Mat>(subgroup_evals: &Mat, point: EF) -> Vec<EF>
 where
     F: TwoAdicField,
-    EF: ExtensionField<F>,
+    EF: ExtensionField<F> + TwoAdicField,
     Mat: Matrix<F>,
 {
     interpolate_coset(subgroup_evals, F::ONE, point)
@@ -33,7 +33,7 @@ where
 pub fn interpolate_coset<F, EF, Mat>(coset_evals: &Mat, shift: F, point: EF) -> Vec<EF>
 where
     F: TwoAdicField,
-    EF: ExtensionField<F>,
+    EF: ExtensionField<F> + TwoAdicField,
     Mat: Matrix<F>,
 {
     let height = coset_evals.height();
@@ -71,7 +71,7 @@ pub fn interpolate_coset_with_precomputation<F, EF, Mat>(
 ) -> Vec<EF>
 where
     F: TwoAdicField,
-    EF: ExtensionField<F>,
+    EF: ExtensionField<F> + TwoAdicField,
     Mat: Matrix<F>,
 {
     // Slight variation of this approach: https://hackmd.io/@vbuterin/barycentric_evaluation

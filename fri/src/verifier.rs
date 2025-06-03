@@ -9,7 +9,7 @@ use p3_matrix::Dimensions;
 use p3_util::reverse_bits_len;
 use p3_util::zip_eq::zip_eq;
 
-use crate::{CommitPhaseProofStep, FriGenericConfig, FriConfig, FriProof, QueryProof};
+use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof, QueryProof};
 
 #[derive(Debug)]
 pub enum FriError<CommitMmcsErr, InputError> {
@@ -32,8 +32,8 @@ pub enum FriError<CommitMmcsErr, InputError> {
 ///   which constitute the fri inputs. The opening proofs prove that the values `f(x)` are the ones committed
 ///   to and there are then combined into the fri inputs.
 pub fn verify_fri<G, Val, Challenge, M, Challenger>(
-    config: &G,
-    parameters: &FriConfig<M>,
+    g: &G,
+    config: &FriConfig<M>,
     proof: &FriProof<Challenge, M, Challenger::Witness, G::InputProof>,
     challenger: &mut Challenger,
     open_input: impl Fn(
@@ -43,7 +43,7 @@ pub fn verify_fri<G, Val, Challenge, M, Challenger>(
 ) -> Result<(), FriError<M::Error, G::InputError>>
 where
     Val: TwoAdicField,
-    Challenge: ExtensionField<Val>,
+    Challenge: ExtensionField<Val> + TwoAdicField,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
     G: FriGenericConfig<Val, Challenge>,
@@ -60,7 +60,7 @@ where
         })
         .collect();
 
-    if proof.final_poly.len() != parameters.final_poly_len() {
+    if proof.final_poly.len() != config.final_poly_len() {
         return Err(FriError::InvalidProofShape);
     }
 
@@ -71,21 +71,21 @@ where
         .for_each(|x| challenger.observe_algebra_element(*x));
 
     // Ensure that we have the expected number of fri query proofs.
-    if proof.query_proofs.len() != parameters.num_queries {
+    if proof.query_proofs.len() != config.num_queries {
         return Err(FriError::InvalidProofShape);
     }
 
     // Check PoW.
-    if !challenger.check_witness(parameters.proof_of_work_bits, proof.pow_witness) {
+    if !challenger.check_witness(config.proof_of_work_bits, proof.pow_witness) {
         return Err(FriError::InvalidPowWitness);
     }
 
     // The log of the maximum domain size.
     let log_max_height =
-        proof.commit_phase_commits.len() + parameters.log_blowup + parameters.log_final_poly_len;
+        proof.commit_phase_commits.len() + config.log_blowup + config.log_final_poly_len;
 
     // The log of the final domain size.
-    let log_final_height = parameters.log_blowup + parameters.log_final_poly_len;
+    let log_final_height = config.log_blowup + config.log_final_poly_len;
 
     for QueryProof {
         input_proof,
@@ -93,7 +93,7 @@ where
     } in &proof.query_proofs
     {
         // For each query proof, we start by generating the random index.
-        let index = challenger.sample_bits(log_max_height + config.extra_query_index_bits());
+        let index = challenger.sample_bits(log_max_height + g.extra_query_index_bits());
 
         // Next we open all polynomials `f` at the relevant index and combine them into our fri inputs.
         let ro = open_input(index, input_proof)?;
@@ -104,15 +104,15 @@ where
         );
 
         // If we queried extra bits, shift them off now.
-        let mut domain_index = index >> config.extra_query_index_bits();
+        let mut domain_index = index >> g.extra_query_index_bits();
 
         // Starting at the evaluation at `index` of the initial domain,
         // perform fri folds until the domain size reaches the final domain size.
         // Check after each fold that the pair of sibling evaluations at the current
         // node match the commitment.
         let folded_eval = verify_query(
+            g,
             config,
-            parameters,
             &mut domain_index,
             zip_eq(
                 zip_eq(

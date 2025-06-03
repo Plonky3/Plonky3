@@ -153,7 +153,7 @@ where
     Dft: TwoAdicSubgroupDft<Val>,
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
-    Challenge: ExtensionField<Val>,
+    Challenge: TwoAdicField + ExtensionField<Val>,
     Challenger:
         FieldChallenger<Val> + CanObserve<FriMmcs::Commitment> + GrindingChallenger<Witness = Val>,
 {
@@ -480,11 +480,11 @@ where
         // low degree functions.
         let fri_input = reduced_openings.into_iter().rev().flatten().collect_vec();
 
-        let config: TwoAdicFriGenericConfigForMmcs<Val, InputMmcs> =
+        let g: TwoAdicFriGenericConfigForMmcs<Val, InputMmcs> =
             TwoAdicFriGenericConfig(PhantomData);
 
         // Produce the FRI proof.
-        let fri_proof = prover::prove_fri(&config, &self.fri, fri_input, challenger, |index| {
+        let fri_proof = prover::prove_fri(&g, &self.fri, fri_input, challenger, |index| {
             // Given an index, produce batch opening proofs for each collection of matrices
             // combined into a single mmcs commitment. In cases where the maximum height of
             // a batch of matrices is smaller than the global max height, shift the index down
