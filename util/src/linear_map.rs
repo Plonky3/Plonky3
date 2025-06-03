@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 use core::mem;
+use core::ops::Index;
 
 /// A linear key-value map backed by a `Vec`.
 ///
@@ -28,6 +29,11 @@ impl<K: Eq, V> LinearMap<K, V> {
     /// Creates a new empty `LinearMap`.
     pub fn new() -> Self {
         Default::default()
+    }
+
+    /// Creates a new empty `LinearMap` with a pre-allocated capacity.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self(Vec::with_capacity(capacity))
     }
 
     /// Gets a reference to the value associated with the key, if it exists.
@@ -87,6 +93,20 @@ impl<K: Eq, V> LinearMap<K, V> {
     pub fn values(&self) -> impl Iterator<Item = &V> {
         self.0.iter().map(|(_, v)| v)
     }
+
+    /// Returns an iterator over the keys in the map.
+    ///
+    /// Keys are yielded in insertion order.
+    pub fn keys(&self) -> impl Iterator<Item = &K> {
+        self.0.iter().map(|(k, _)| k)
+    }
+
+    /// Returns an iterator over all key-value pairs in the map.
+    ///
+    /// Items are yielded in insertion order.
+    pub fn iter(&self) -> impl Iterator<Item = &(K, V)> {
+        self.0.iter()
+    }
 }
 
 impl<K: Eq, V> FromIterator<(K, V)> for LinearMap<K, V> {
@@ -110,6 +130,23 @@ impl<K, V> IntoIterator for LinearMap<K, V> {
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
+    }
+}
+
+impl<K: Eq, V> Index<&K> for LinearMap<K, V> {
+    type Output = V;
+
+    fn index(&self, index: &K) -> &Self::Output {
+        self.get(index).unwrap()
+    }
+}
+
+impl<'a, K, V> IntoIterator for &'a LinearMap<K, V> {
+    type Item = &'a (K, V);
+    type IntoIter = <&'a Vec<(K, V)> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
     }
 }
 
@@ -186,6 +223,30 @@ mod tests {
     }
 
     #[test]
+    fn test_keys_iterator() {
+        let mut map = LinearMap::new();
+        map.insert("a", 1);
+        map.insert("b", 2);
+        map.insert("c", 3);
+
+        // Collect all values into a vector
+        let values: Vec<_> = map.keys().copied().collect();
+        assert_eq!(values, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_index() {
+        let mut map = LinearMap::new();
+        map.insert("a", 1);
+        map.insert("b", 2);
+        map.insert("c", 3);
+
+        assert_eq!(map[&"a"], 1);
+        assert_eq!(map[&"b"], 2);
+        assert_eq!(map[&"c"], 3);
+    }
+
+    #[test]
     fn test_from_iterator_behavior() {
         // Use .collect() from an iterator of key-value pairs
         let map: LinearMap<_, _> = vec![(1, "a"), (2, "b"), (1, "c")].into_iter().collect();
@@ -199,14 +260,18 @@ mod tests {
     fn test_into_iterator() {
         let mut map = LinearMap::new();
         map.insert("x", 10);
+        map.insert("z", 30);
         map.insert("y", 20);
 
+        // Collect items yielded by `iter()`
+        let iter_ref = map.iter().copied().collect::<Vec<_>>();
         // Consume the LinearMap into an iterator
-        let mut iter = map.into_iter().collect::<Vec<_>>();
+        let iter = map.into_iter().collect::<Vec<_>>();
 
         // Since it's just a Vec internally, order is preserved
-        iter.sort(); // For comparison purposes
-        assert_eq!(iter, vec![("x", 10), ("y", 20)]);
+        assert_eq!(iter_ref, vec![("x", 10), ("z", 30), ("y", 20)]);
+        // Ensure both iter and into_iter yield the same elements
+        assert_eq!(iter, iter_ref);
     }
 
     #[test]
