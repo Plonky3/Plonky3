@@ -756,13 +756,16 @@ fn dit_layer_par_triple<F: Field>(
                 hi.zip(lo).for_each(|chunks| {
                     let mut chunks: TripleLayerBlockDecomposition<F> = chunks.into();
                     if ind == 0 {
-                        chunks.apply_single_twiddle_free();
-                        chunks.apply_twiddle_pair_free(twiddles_1[1]);
-                        chunks.apply_twiddle_quad_free(&twiddles_2[1..4]);
+                        chunks.apply_single_twiddle(TwiddleFreeButterfly);
+                        chunks.apply_twiddle_pair(TwiddleFreeButterfly, twiddles_1[1]);
+                        chunks.apply_twiddle_quad(TwiddleFreeButterfly, &twiddles_2[1..4]);
                     } else {
                         chunks.apply_single_twiddle(twiddles_0[ind]);
-                        chunks.apply_twiddle_pair(&twiddles_1[2 * ind..2 * (ind + 1)]);
-                        chunks.apply_twiddle_quad(&twiddles_2[4 * ind..4 * (ind + 1)]);
+                        chunks.apply_twiddle_pair(twiddles_1[2 * ind], twiddles_1[2 * ind + 1]);
+                        chunks.apply_twiddle_quad(
+                            twiddles_2[4 * ind],
+                            &twiddles_2[4 * ind + 1..4 * (ind + 1)],
+                        );
                     }
                 })
             });
@@ -892,12 +895,15 @@ fn dif_layer_par_triple<F: Field>(
                 hi.zip(lo).for_each(|chunks| {
                     let mut chunks: TripleLayerBlockDecomposition<F> = chunks.into();
                     if ind == 0 {
-                        chunks.apply_twiddle_quad_free(&twiddles_0[1..4]);
-                        chunks.apply_twiddle_pair_free(twiddles_1[1]);
-                        chunks.apply_single_twiddle_free();
+                        chunks.apply_twiddle_quad(TwiddleFreeButterfly, &twiddles_0[1..4]);
+                        chunks.apply_twiddle_pair(TwiddleFreeButterfly, twiddles_1[1]);
+                        chunks.apply_single_twiddle(TwiddleFreeButterfly);
                     } else {
-                        chunks.apply_twiddle_quad(&twiddles_0[4 * ind..4 * (ind + 1)]);
-                        chunks.apply_twiddle_pair(&twiddles_1[2 * ind..2 * (ind + 1)]);
+                        chunks.apply_twiddle_quad(
+                            twiddles_0[4 * ind],
+                            &twiddles_0[4 * ind + 1..4 * (ind + 1)],
+                        );
+                        chunks.apply_twiddle_pair(twiddles_1[2 * ind], twiddles_1[2 * ind + 1]);
                         chunks.apply_single_twiddle(twiddles_2[ind]);
                     }
                 })
@@ -972,43 +978,25 @@ impl<F: Field> TripleLayerBlockDecomposition<'_, F> {
     }
 
     #[inline]
-    fn apply_twiddle_pair<Fly: Butterfly<F>>(&mut self, butterflies: &[Fly]) {
-        debug_assert!(butterflies.len() == 2);
-        butterflies[0].apply_to_rows(self.hi_hi_hi, self.hi_lo_hi);
-        butterflies[0].apply_to_rows(self.hi_hi_lo, self.hi_lo_lo);
-        butterflies[1].apply_to_rows(self.lo_hi_hi, self.lo_lo_hi);
-        butterflies[1].apply_to_rows(self.lo_hi_lo, self.lo_lo_lo);
+    fn apply_twiddle_pair<Fly0: Butterfly<F>, Fly1: Butterfly<F>>(
+        &mut self,
+        fly0: Fly0,
+        fly1: Fly1,
+    ) {
+        fly0.apply_to_rows(self.hi_hi_hi, self.hi_lo_hi);
+        fly0.apply_to_rows(self.hi_hi_lo, self.hi_lo_lo);
+        fly1.apply_to_rows(self.lo_hi_hi, self.lo_lo_hi);
+        fly1.apply_to_rows(self.lo_hi_lo, self.lo_lo_lo);
     }
 
     #[inline]
-    fn apply_twiddle_quad<Fly: Butterfly<F>>(&mut self, butterflies: &[Fly]) {
-        debug_assert!(butterflies.len() == 4);
-        butterflies[0].apply_to_rows(self.hi_hi_hi, self.hi_hi_lo);
-        butterflies[1].apply_to_rows(self.hi_lo_hi, self.hi_lo_lo);
-        butterflies[2].apply_to_rows(self.lo_hi_hi, self.lo_hi_lo);
-        butterflies[3].apply_to_rows(self.lo_lo_hi, self.lo_lo_lo);
-    }
-
-    #[inline]
-    fn apply_single_twiddle_free(&mut self) {
-        TwiddleFreeButterfly.apply_to_rows(self.hi_hi_hi, self.lo_hi_hi);
-        TwiddleFreeButterfly.apply_to_rows(self.hi_hi_lo, self.lo_hi_lo);
-        TwiddleFreeButterfly.apply_to_rows(self.hi_lo_hi, self.lo_lo_hi);
-        TwiddleFreeButterfly.apply_to_rows(self.hi_lo_lo, self.lo_lo_lo);
-    }
-
-    #[inline]
-    fn apply_twiddle_pair_free<Fly: Butterfly<F>>(&mut self, butterfly: Fly) {
-        TwiddleFreeButterfly.apply_to_rows(self.hi_hi_hi, self.hi_lo_hi);
-        TwiddleFreeButterfly.apply_to_rows(self.hi_hi_lo, self.hi_lo_lo);
-        butterfly.apply_to_rows(self.lo_hi_hi, self.lo_lo_hi);
-        butterfly.apply_to_rows(self.lo_hi_lo, self.lo_lo_lo);
-    }
-
-    #[inline]
-    fn apply_twiddle_quad_free<Fly: Butterfly<F>>(&mut self, butterflies: &[Fly]) {
+    fn apply_twiddle_quad<Fly0: Butterfly<F>, Flies: Butterfly<F>>(
+        &mut self,
+        fly0: Fly0,
+        butterflies: &[Flies],
+    ) {
         debug_assert!(butterflies.len() == 3);
-        TwiddleFreeButterfly.apply_to_rows(self.hi_hi_hi, self.hi_hi_lo);
+        fly0.apply_to_rows(self.hi_hi_hi, self.hi_hi_lo);
         butterflies[0].apply_to_rows(self.hi_lo_hi, self.hi_lo_lo);
         butterflies[1].apply_to_rows(self.lo_hi_hi, self.lo_hi_lo);
         butterflies[2].apply_to_rows(self.lo_lo_hi, self.lo_lo_lo);
