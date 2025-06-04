@@ -3,7 +3,7 @@ use core::iter::Sum;
 use core::mem::MaybeUninit;
 use core::ops::Mul;
 
-use p3_maybe_rayon::prelude::{IntoParallelRefMutIterator, ParallelIterator};
+use p3_maybe_rayon::prelude::*;
 
 use crate::field::Field;
 use crate::{PackedValue, PrimeCharacteristicRing, PrimeField, PrimeField32};
@@ -25,35 +25,80 @@ pub fn cyclic_subgroup_coset_known_order<F: Field>(
     generator.shifted_powers(shift).take(order)
 }
 
-pub fn scale_vec<F: Field>(s: F, vec: Vec<F>) -> Vec<F> {
-    vec.into_iter().map(|x| s * x).collect()
-}
-
-/// Scales each element of the slice by `s`.
+/// Scales each element of the slice by `s` using packing.
 ///
-/// Does not use any parallelism.
-pub fn scale_slice_in_place_single_core<F: Field>(s: F, slice: &mut [F]) {
+/// # Performance
+/// For large slices, use [`par_scale_slice_in_place`].
+///
+/// # Deprecation
+/// This function will be replaced with [`scale_slice_in_place`] whose semantics and arguments
+/// will be the same as this one.
+pub fn scale_slice_in_place_single_core<F: Field>(slice: &mut [F], s: F) {
     let (packed, sfx) = F::Packing::pack_slice_with_suffix_mut(slice);
     let packed_s: F::Packing = s.into();
     packed.iter_mut().for_each(|x| *x *= packed_s);
     sfx.iter_mut().for_each(|x| *x *= s);
 }
 
-pub fn scale_slice_in_place<F: Field>(s: F, slice: &mut [F]) {
+/// Scales each element of the slice by `s` using packing and parallelization.
+///
+/// # Performance
+/// For small slices, use [`scale_slice_in_place_single_core`].
+/// Requires the `parallel` feature.
+#[inline]
+pub fn par_scale_slice_in_place<F: Field>(slice: &mut [F], s: F) {
     let (packed, sfx) = F::Packing::pack_slice_with_suffix_mut(slice);
     let packed_s: F::Packing = s.into();
     packed.par_iter_mut().for_each(|x| *x *= packed_s);
     sfx.iter_mut().for_each(|x| *x *= s);
 }
 
-/// `x += y * s`, where `s` is a scalar.
-pub fn add_scaled_slice_in_place<F, Y>(x: &mut [F], y: Y, s: F)
-where
-    F: Field,
-    Y: Iterator<Item = F>,
-{
-    // TODO: Use PackedField
-    x.iter_mut().zip(y).for_each(|(x_i, y_i)| *x_i += y_i * s);
+/// This function is deprecated. It is currently a wrapper for [`par_scale_slice_in_place`], which
+/// it should be replaced with if parallelization is required.
+#[deprecated(
+    note = "use `par_scale_slice_in_place` instead which will replace this method in the future"
+)]
+pub fn scale_slice_in_place<F: Field>(s: F, slice: &mut [F]) {
+    par_scale_slice_in_place(slice, s)
+}
+
+/// Adds `other`, scaled by `s`, to the mutable `slice` using packing, or `slice += other * s`.
+///
+/// # Performance
+/// For large slices, use [`par_add_scaled_slice_in_place`].
+pub fn add_scaled_slice_in_place<F: Field>(slice: &mut [F], other: &[F], s: F) {
+    debug_assert_eq!(slice.len(), other.len(), "slices must have equal length");
+    let (slice_packed, slice_sfx) = F::Packing::pack_slice_with_suffix_mut(slice);
+    let (other_packed, other_sfx) = F::Packing::pack_slice_with_suffix(other);
+    let packed_s: F::Packing = s.into();
+    slice_packed
+        .iter_mut()
+        .zip(other_packed)
+        .for_each(|(x, y)| *x += *y * packed_s);
+    slice_sfx
+        .iter_mut()
+        .zip(other_sfx)
+        .for_each(|(x, y)| *x += *y * s);
+}
+
+/// Adds `other`, scaled by `s`, to the mutable `slice` using packing, or `slice += other * s`.
+///
+/// # Performance
+/// For small slices, use [`add_scaled_slice_in_place`].
+/// Requires the `parallel` feature.
+pub fn par_add_scaled_slice_in_place<F: Field>(slice: &mut [F], other: &[F], s: F) {
+    debug_assert_eq!(slice.len(), other.len(), "slices must have equal length");
+    let (slice_packed, slice_sfx) = F::Packing::pack_slice_with_suffix_mut(slice);
+    let (other_packed, other_sfx) = F::Packing::pack_slice_with_suffix(other);
+    let packed_s: F::Packing = s.into();
+    slice_packed
+        .par_iter_mut()
+        .zip(other_packed.par_iter())
+        .for_each(|(x, y)| *x += *y * packed_s);
+    slice_sfx
+        .iter_mut()
+        .zip(other_sfx)
+        .for_each(|(x, y)| *x += *y * s);
 }
 
 /// Extend a ring `R` element `x` to an array of length `D`

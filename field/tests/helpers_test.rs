@@ -1,25 +1,9 @@
 mod helpers {
     use p3_baby_bear::BabyBear;
     use p3_field::{
-        PrimeCharacteristicRing, add_scaled_slice_in_place, dot_product, field_to_array, reduce_32,
-        scale_vec, split_32,
+        PrimeCharacteristicRing, add_scaled_slice_in_place, dot_product, field_to_array,
+        par_add_scaled_slice_in_place, reduce_32, split_32,
     };
-
-    #[test]
-    fn test_scale_vec() {
-        // Scale [1, 2, 3] by 7
-        let v = vec![BabyBear::ONE, BabyBear::TWO, BabyBear::ONE + BabyBear::TWO];
-        let s = BabyBear::from_u8(7);
-        let result = scale_vec(s, v);
-
-        let expected = vec![
-            s * BabyBear::ONE,
-            s * BabyBear::TWO,
-            s * BabyBear::from_u8(3),
-        ];
-
-        assert_eq!(result, expected);
-    }
 
     #[test]
     fn test_add_scaled_slice_in_place() {
@@ -27,13 +11,15 @@ mod helpers {
         let x1 = BabyBear::ONE;
         let x2 = BabyBear::TWO;
         let mut x = vec![x1, x2];
+        let mut par_x = x.clone();
 
         let y1 = BabyBear::from_u8(10);
         let y2 = BabyBear::from_u8(20);
         let y = vec![y1, y2];
         let s = BabyBear::from_u8(3);
 
-        add_scaled_slice_in_place(&mut x, y.into_iter(), s);
+        add_scaled_slice_in_place(&mut x, &y, s);
+        par_add_scaled_slice_in_place(&mut par_x, &y, s);
 
         // x = [x1 + s * y1, x2 + s * y2]
         let expected = vec![x1 + s * y1, x2 + s * y2];
@@ -45,12 +31,15 @@ mod helpers {
     fn test_add_scaled_slice_in_place_zero_scale() {
         let original = vec![BabyBear::from_u8(4), BabyBear::from_u8(5)];
         let mut x = original.clone();
+        let mut par_x = original.clone();
         let y = vec![BabyBear::from_u8(6), BabyBear::from_u8(7)];
         let s = BabyBear::ZERO;
 
-        add_scaled_slice_in_place(&mut x, y.into_iter(), s);
+        add_scaled_slice_in_place(&mut x, &y, s);
+        par_add_scaled_slice_in_place(&mut par_x, &y, s);
 
         assert_eq!(x, original);
+        assert_eq!(par_x, original);
     }
 
     #[test]
