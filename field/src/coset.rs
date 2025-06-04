@@ -166,7 +166,7 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
         // Note that, in a finite field F (this is not true of a general finite
         // commutative ring), there is exactly one subgroup of |F^*| of order n
         // for each divisor n of |F| - 1, and its elements e are uniquely
-        // caracterised by the condition e^n = 1.
+        // characterised by the condition e^n = 1.
 
         // We check (shift^{-1} * element)^(2^log_size) = 1, which is equivalent
         // to checking shift^(2^log_size) = element^(2^log_size) - this avoids
