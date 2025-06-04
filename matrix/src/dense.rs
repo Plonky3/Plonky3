@@ -6,7 +6,9 @@ use core::iter;
 use core::marker::PhantomData;
 use core::ops::Deref;
 
-use p3_field::{ExtensionField, Field, PackedValue, scale_slice_in_place};
+use p3_field::{
+    ExtensionField, Field, PackedValue, par_scale_slice_in_place, scale_slice_in_place_single_core,
+};
 use p3_maybe_rayon::prelude::*;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
@@ -205,7 +207,23 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         T: Field,
         S: BorrowMut<[T]>,
     {
-        scale_slice_in_place(scale, self.row_mut(r));
+        scale_slice_in_place_single_core(self.row_mut(r), scale);
+    }
+
+    /// Scale the given row by the given value.
+    ///
+    /// # Performance
+    /// This function is parallelized, which may introduce some overhead compared to
+    /// [`Self::scale_row`] when the width is small.
+    ///
+    /// # Panics
+    /// Panics if `r` larger than `self.height()`.
+    pub fn par_scale_row(&mut self, r: usize, scale: T)
+    where
+        T: Field,
+        S: BorrowMut<[T]>,
+    {
+        par_scale_slice_in_place(self.row_mut(r), scale);
     }
 
     /// Scale the entire matrix by the given value.
@@ -214,7 +232,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         T: Field,
         S: BorrowMut<[T]>,
     {
-        scale_slice_in_place(scale, self.values.borrow_mut());
+        par_scale_slice_in_place(self.values.borrow_mut(), scale);
     }
 
     /// Split the matrix into two matrix views, one with the first `r` rows and one with the remaining rows.

@@ -6,7 +6,9 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use p3_field::{ExtensionField, TwoAdicField, batch_multiplicative_inverse, scale_vec};
+use p3_field::{
+    ExtensionField, TwoAdicField, batch_multiplicative_inverse, scale_slice_in_place_single_core,
+};
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
@@ -103,9 +105,6 @@ where
         .map(|(&sg, &diff_inv)| diff_inv * sg)
         .collect();
 
-    // For each column polynomial `f_j`, compute `\sum_i h^i/(gh^i - z) * f_j(gh^i)`.
-    let sum = coset_evals.columnwise_dot_product(&col_scale);
-
     let point_pow_height = point.exp_power_of_2(log_height);
     let shift_pow_height = shift.exp_power_of_2(log_height);
 
@@ -114,7 +113,15 @@ where
 
     // Compute N * g^N
     let denominator = shift_pow_height.mul_2exp_u64(log_height as u64);
-    scale_vec(vanishing_polynomial * denominator.inverse(), sum)
+
+    // Scaling factor s = Z_{sH}(z)/(N * g^N)
+    let scaling_factor = vanishing_polynomial * denominator.inverse();
+
+    // For each column polynomial `f_j`, compute `\sum_i h^i/(gh^i - z) * f_j(gh^i)`,
+    // then scale by s.
+    let mut evals = coset_evals.columnwise_dot_product(&col_scale);
+    scale_slice_in_place_single_core(&mut evals, scaling_factor);
+    evals
 }
 
 #[cfg(test)]

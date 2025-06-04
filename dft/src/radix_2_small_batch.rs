@@ -488,7 +488,7 @@ fn par_initial_layers<F: Field>(
         .enumerate()
         .for_each(|(index, chunk)| {
             // Divide all elements by the height of the matrix.
-            scale_slice_in_place_single_core(height_inv, chunk);
+            scale_slice_in_place_single_core(chunk, height_inv);
 
             for (layer, twiddles) in root_table.iter().enumerate() {
                 let num_twiddles_per_block = 1 << (num_rounds - layer - 1);

@@ -1,8 +1,12 @@
 [package]
 name = "p3-fri"
-version = "0.1.0"
-edition = "2024"
-license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 p3-challenger.workspace = true
@@ -13,10 +17,11 @@ p3-interpolation.workspace = true
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
 p3-util.workspace = true
+
 itertools.workspace = true
 rand.workspace = true
-tracing.workspace = true
 serde = { workspace = true, features = ["derive", "alloc"] }
+tracing.workspace = true
 
 [dev-dependencies]
 p3-baby-bear.workspace = true
@@ -24,10 +29,10 @@ p3-circle.workspace = true
 p3-dft.workspace = true
 p3-goldilocks.workspace = true
 p3-keccak.workspace = true
-p3-mersenne-31.workspace = true
 p3-merkle-tree.workspace = true
-p3-poseidon2.workspace = true
+p3-mersenne-31.workspace = true
 p3-symmetric.workspace = true
+
 criterion.workspace = true
 
 [[bench]]

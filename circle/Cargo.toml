@@ -1,8 +1,12 @@
 [package]
 name = "p3-circle"
-version = "0.1.0"
-edition = "2024"
-license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 p3-challenger.workspace = true
@@ -14,23 +18,22 @@ p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
 p3-util.workspace = true
 
-tracing.workspace = true
 itertools.workspace = true
 serde.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 p3-baby-bear.workspace = true
 p3-keccak.workspace = true
-p3-mersenne-31.workspace = true
 p3-merkle-tree.workspace = true
+p3-mersenne-31.workspace = true
 p3-symmetric.workspace = true
 
+criterion.workspace = true
 hashbrown.workspace = true
 rand.workspace = true
-criterion.workspace = true
-
-tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
+tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
 [[bench]]
 name = "cfft"
