@@ -17,7 +17,7 @@ use crate::{
     TwoAdicSubgroupDft,
 };
 
-/// A FFT algorithm which divides a butterfly network's layers into two halves.
+/// An FFT algorithm which divides a butterfly network's layers into two halves.
 ///
 /// Unlike other FFT algorithms, this algorithm is optimized for small batch sizes.
 /// It also stores its twiddle factors and only re-computes if it is asked to do a
@@ -46,7 +46,7 @@ pub struct Radix2DFTSmallBatch<F> {
 }
 
 impl<F: TwoAdicField> Radix2DFTSmallBatch<F> {
-    /// Create a new `Radix2DitSmallBatch` instance with precomputed twiddles for the given size.
+    /// Create a new `Radix2DFTSmallBatch` instance with precomputed twiddles for the given size.
     ///
     /// The input `n` should be a power of two, representing the maximal FFT size you expect to handle.
     pub fn new(n: usize) -> Self {
@@ -80,7 +80,7 @@ impl<F: TwoAdicField> Radix2DFTSmallBatch<F> {
     /// Compute twiddle and inv_twiddle factors, or take memoized ones if already available.
     fn update_twiddles(&self, fft_len: usize) {
         // TODO: This recomputes the entire table from scratch if we
-        // need it to be bigger, which is wasteful.
+        // need it to be larger, which is wasteful.
 
         // roots_of_unity_table(fft_len) returns a vector of twiddles of length log_2(fft_len).
         let curr_max_fft_len = 1 << self.twiddles.borrow().len();
@@ -201,11 +201,8 @@ where
             log_h,
         );
 
-        // // For the layers involving blocks larger than `num_par_rows`, we will
-        // // parallelize across the blocks.
-        // for twiddles in root_table[log_num_par_rows..].iter() {
-        //     dif_layer_par(&mut mat.as_view_mut(), twiddles);
-        // }
+        // For the layers involving blocks larger than `num_par_rows`, we will
+        // parallelize across the blocks.
 
         // If the total number of layers is not a multiple of 3,
         // we need to handle the remaining layers separately.
@@ -282,9 +279,6 @@ where
         // We will do large DFT/iDFT layers in batches of 3. If the number of large layers
         // is not a multiple of 3, we will need to handle the remaining layers separately.
         let corr = (log_h - num_inner_dit_layers) % 3;
-
-        // For the layers involving blocks larger than `num_par_rows`, we will
-        // parallelize across the blocks.
 
         // We do three layers of the DFT at once, to minimize how much data we need to transfer
         // between threads.
@@ -389,16 +383,12 @@ fn dit_layer_par<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, twiddles: &[F]) {
             let (hi_chunk, lo_chunk) = block.split_at_mut(half_outer_block_size);
 
             // If num_blocks is small, we probably are not using all available threads.
-            // This is an estimate of the optimal block size to make use of all threads.
-            // That being said, this is a bit of a magic number which I determined through
-            // experimentation. It is likely that different hardware might work better with
-            // a slightly different value.
-            const NUM_THREADS: usize = 32;
-            let inner_block_size = size / (2 * num_blocks).max(NUM_THREADS);
+            let num_threads = current_num_threads();
+            let inner_block_size = size / (2 * num_blocks).max(num_threads);
 
             hi_chunk
-                .par_chunks_exact_mut(inner_block_size)
-                .zip(lo_chunk.par_chunks_exact_mut(inner_block_size))
+                .par_chunks_mut(inner_block_size)
+                .zip(lo_chunk.par_chunks_mut(inner_block_size))
                 .for_each(|(hi_chunk, lo_chunk)| {
                     if ind == 0 {
                         // The first pair doesn't require a twiddle factor
@@ -411,10 +401,10 @@ fn dit_layer_par<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, twiddles: &[F]) {
         });
 }
 
-/// Applies one layer of the Radix-2 DIT FFT butterfly network making use of parallelization.
+/// Applies one layer of the Radix-2 DIF FFT butterfly network making use of parallelization.
 ///
 /// Splits the matrix into blocks of rows and performs in-place butterfly operations
-/// on each block. Uses a `TwiddleFreeButterfly` for the first pair and `DitButterfly`
+/// on each block. Uses a `TwiddleFreeButterfly` for the first pair and `DifButterfly`
 /// with precomputed twiddles for the rest.
 ///
 /// Each block is processed in parallel, if the blocks are large enough they themselves
@@ -443,22 +433,18 @@ fn dif_layer_par<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, twiddles: &[F]) {
             let (hi_chunk, lo_chunk) = block.split_at_mut(half_outer_block_size);
 
             // If num_blocks is small, we probably are not using all available threads.
-            // This is an estimate of the optimal block size to make use of all threads.
-            // That being said, this is a bit of a magic number which I determined through
-            // experimentation. It is likely that different hardware might work better with
-            // a slightly different value.
-            const NUM_THREADS: usize = 32;
-            let inner_block_size = size / (2 * num_blocks).max(NUM_THREADS);
+            let num_threads = current_num_threads();
+            let inner_block_size = size / (2 * num_blocks).max(num_threads);
 
             hi_chunk
-                .par_chunks_exact_mut(inner_block_size)
-                .zip(lo_chunk.par_chunks_exact_mut(inner_block_size))
+                .par_chunks_mut(inner_block_size)
+                .zip(lo_chunk.par_chunks_mut(inner_block_size))
                 .for_each(|(hi_chunk, lo_chunk)| {
                     if ind == 0 {
                         // The first pair doesn't require a twiddle factor
                         TwiddleFreeButterfly.apply_to_rows(hi_chunk, lo_chunk);
                     } else {
-                        // Apply DIT butterfly using the twiddle factor at index `ind - 1`
+                        // Apply DIF butterfly using the twiddle factor at index `ind - 1`
                         DifButterfly(twiddles[ind]).apply_to_rows(hi_chunk, lo_chunk);
                     }
                 });
@@ -647,7 +633,7 @@ fn dif_layer<F: Field>(vec: &mut [F], twiddles: &[F]) {
         });
 }
 
-/// Applies two layer of the Radix-2 DIT FFT butterfly network making use of parallelization.
+/// Applies two layers of the Radix-2 DIT FFT butterfly network making use of parallelization.
 ///
 /// Splits the matrix into blocks of rows and performs in-place butterfly operations
 /// on each block. Advantage of doing two layers at once is it reduces the amount of
@@ -717,7 +703,7 @@ fn dit_layer_par_double<F: Field>(
         });
 }
 
-/// Applies three layer of the Radix-2 DIT FFT butterfly network making use of parallelization.
+/// Applies three layers of the Radix-2 DIT FFT butterfly network making use of parallelization.
 ///
 /// Splits the matrix into blocks of rows and performs in-place butterfly operations
 /// on each block. Advantage of doing three layers at once is it reduces the amount of
@@ -829,7 +815,7 @@ fn dit_layer_par_triple<F: Field>(
         });
 }
 
-/// Applies two layer of the Radix-2 DIT FFT butterfly network making use of parallelization.
+/// Applies two layers of the Radix-2 DIF FFT butterfly network making use of parallelization.
 ///
 /// Splits the matrix into blocks of rows and performs in-place butterfly operations
 /// on each block. Advantage of doing two layers at once is it reduces the amount of
@@ -874,7 +860,7 @@ fn dif_layer_par_double<F: Field>(
             chunk_par_iters_1.into_iter().tuples().for_each(|(hi, lo)| {
                 hi.zip(lo)
                     .for_each(|((hi_hi_chunk, hi_lo_chunk), (lo_hi_chunk, lo_lo_chunk))| {
-                        // Do 2 layers of the DIT FFT butterfly network at once.
+                        // Do 2 layers of the DIF FFT butterfly network at once.
                         if ind == 0 {
                             // Layer 0:
                             TwiddleFreeButterfly.apply_to_rows(hi_hi_chunk, hi_lo_chunk);
@@ -899,7 +885,7 @@ fn dif_layer_par_double<F: Field>(
         });
 }
 
-/// Applies three layer of the Radix-2 DIT FFT butterfly network making use of parallelization.
+/// Applies three layers of the Radix-2 DIF FFT butterfly network making use of parallelization.
 ///
 /// Splits the matrix into blocks of rows and performs in-place butterfly operations
 /// on each block. Advantage of doing three layers at once is it reduces the amount of
@@ -950,7 +936,7 @@ fn dif_layer_par_triple<F: Field>(
                         ((hi_hi_hi_chunk, hi_hi_lo_chunk), (hi_lo_hi_chunk, hi_lo_lo_chunk)),
                         ((lo_hi_hi_chunk, lo_hi_lo_chunk), (lo_lo_hi_chunk, lo_lo_lo_chunk)),
                     )| {
-                        // Do 3 layers of the DIT FFT butterfly network at once.
+                        // Do 3 layers of the DIF FFT butterfly network at once.
                         if ind == 0 {
                             // Layer 0:
                             TwiddleFreeButterfly.apply_to_rows(hi_hi_hi_chunk, hi_hi_lo_chunk);
