@@ -6,9 +6,10 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 p3-field.workspace = true
-p3-mersenne-31.workspace = true
 p3-mds.workspace = true
+p3-mersenne-31.workspace = true
 p3-symmetric.workspace = true
+
 sha3.workspace = true
 
 [dev-dependencies]

@@ -5,12 +5,12 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-serde.workspace = true
 rayon = { workspace = true, optional = true }
+serde.workspace = true
 
 [dev-dependencies]
-rand.workspace = true
 criterion.workspace = true
+rand.workspace = true
 serde_json.workspace = true
 
 [features]
