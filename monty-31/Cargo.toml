@@ -4,22 +4,25 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[features]
-nightly-features = []
-
 [dependencies]
-itertools.workspace = true
 p3-dft.workspace = true
 p3-field.workspace = true
 p3-matrix.workspace = true
-p3-maybe-rayon.workspace = true
 p3-mds.workspace = true
 p3-poseidon2.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
+
+p3-maybe-rayon.workspace = true
+
+itertools.workspace = true
 num-bigint.workspace = true
 paste.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 tracing.workspace = true
 transpose.workspace = true
+
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+nightly-features = []

@@ -5,25 +5,32 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+p3-commit.workspace = true
 p3-field.workspace = true
 p3-matrix.workspace = true
-p3-maybe-rayon.workspace = true
 p3-symmetric.workspace = true
-p3-commit.workspace = true
 p3-util.workspace = true
+
+p3-maybe-rayon.workspace = true
+
 itertools.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["alloc"] }
 tracing.workspace = true
 
 [dev-dependencies]
+p3-baby-bear.workspace = true
 p3-blake3.workspace = true
 p3-keccak.workspace = true
-p3-baby-bear.workspace = true
 p3-mds.workspace = true
-p3-poseidon2.workspace = true
 p3-rescue.workspace = true
+
 criterion.workspace = true
+
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+# Benchmarking
+nightly-features = ["p3-baby-bear/nightly-features", "p3-keccak/nightly-features"]
 
 [[bench]]
 name = "merkle_tree"

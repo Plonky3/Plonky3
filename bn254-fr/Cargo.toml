@@ -9,11 +9,19 @@ p3-field.workspace = true
 p3-poseidon2.workspace = true
 p3-symmetric.workspace = true
 
+p3-maybe-rayon = { workspace = true, optional = true }
+
 num-bigint.workspace = true
 paste.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
-halo2curves = { version = "0.8.0", features = ["bits", "derive_serde"] }
+
+# The "asm" feature is only available on "x86_64" platforms, so it is not enabled by default
+halo2curves = { version = "0.8.0", default-features = false, features = ["bits", "derive_serde"] }
+
+# On "x86_64" only, we overwrite the dependency and enable the "asm" feature by default
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+halo2curves = { version = "0.8.0", default-features = false, features = ["bits", "derive_serde", "asm"] }
 
 [dev-dependencies]
 p3-field-testing.workspace = true
@@ -23,11 +31,12 @@ serde_json.workspace = true
 zkhash = { git = "https://github.com/HorizenLabs/poseidon2" }
 
 [features]
-default = []
+parallel = ["p3-maybe-rayon/parallel"]
 table = [
+    # TODO(@adr1anh): Do we want this to be default?
+    # Generate cached table of [0, 2^16) in Bn254Fr at compile time
     "halo2curves/bn256-table",
-] # Generate cached table of [0, 2^16) in Bn254Fr at compile time
-asm = ["halo2curves/asm"]
+]
 
 [[bench]]
 name = "bench_field"

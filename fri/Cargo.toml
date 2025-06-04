@@ -11,12 +11,14 @@ p3-dft.workspace = true
 p3-field.workspace = true
 p3-interpolation.workspace = true
 p3-matrix.workspace = true
-p3-maybe-rayon.workspace = true
 p3-util.workspace = true
+
+p3-maybe-rayon.workspace = true
+
 itertools.workspace = true
 rand.workspace = true
-tracing.workspace = true
 serde = { workspace = true, features = ["derive", "alloc"] }
+tracing.workspace = true
 
 [dev-dependencies]
 p3-baby-bear.workspace = true
@@ -24,11 +26,21 @@ p3-circle.workspace = true
 p3-dft.workspace = true
 p3-goldilocks.workspace = true
 p3-keccak.workspace = true
-p3-mersenne-31.workspace = true
 p3-merkle-tree.workspace = true
-p3-poseidon2.workspace = true
+p3-mersenne-31.workspace = true
 p3-symmetric.workspace = true
+
 criterion.workspace = true
+
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+# Benchmarking
+nightly-features = [
+    "p3-baby-bear/nightly-features",
+    "p3-goldilocks/nightly-features",
+    "p3-keccak/nightly-features",
+    "p3-mersenne-31/nightly-features",
+]
 
 [[bench]]
 name = "fold_even_odd"

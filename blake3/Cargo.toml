@@ -7,8 +7,15 @@ license.workspace = true
 [dependencies]
 p3-symmetric.workspace = true
 p3-util.workspace = true
-blake3.workspace = true
+
+p3-maybe-rayon = { workspace = true, optional = true }
+
+blake3 = { workspace = true, default-features = false } # no default features disables `std`-dependent features.
 
 [features]
+parallel = ["p3-maybe-rayon/parallel"]
+# NEON is enabled by default for AArch64, but not for ARMv7 CPUs which don't all support NEON.
+# TODO(@adr1anh): Are we targeting ARMv7? If not, we could remove and avoid another flag.
 neon = ["blake3/neon"]
-parallel = ["blake3/rayon"]
+# Enable SIMD for all `wasm32-*` targets.
+wasm32_simd = ["blake3/wasm32_simd"]

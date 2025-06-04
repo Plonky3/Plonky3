@@ -14,6 +14,9 @@ use crate::{FieldArray, PackedValue, PrimeCharacteristicRing};
 /// resulting in a long dependency chain. To increase instruction-level parallelism, we
 /// compute WIDTH separate cumulative product arrays that only meet at the end.
 ///
+/// # Performance
+/// To benefit from parallelization, the `parallel` feature must be enabled for this crate.
+///
 /// # Panics
 /// This will panic if any of the inputs is zero.
 #[instrument(level = "debug", skip_all)]

@@ -11,26 +11,35 @@ p3-dft.workspace = true
 p3-field.workspace = true
 p3-fri.workspace = true
 p3-matrix.workspace = true
-p3-maybe-rayon.workspace = true
 p3-util.workspace = true
 
-tracing.workspace = true
+p3-maybe-rayon.workspace = true
+
 itertools.workspace = true
 serde.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 p3-baby-bear.workspace = true
 p3-keccak.workspace = true
-p3-mersenne-31.workspace = true
 p3-merkle-tree.workspace = true
+p3-mersenne-31.workspace = true
 p3-symmetric.workspace = true
 
+criterion.workspace = true
 hashbrown.workspace = true
 rand.workspace = true
-criterion.workspace = true
-
-tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
+tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
+
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+# Benchmarking
+nightly-features = [
+    "p3-baby-bear/nightly-features",
+    "p3-keccak/nightly-features",
+    "p3-mersenne-31/nightly-features",
+]
 
 [[bench]]
 name = "cfft"

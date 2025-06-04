@@ -4,14 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[features]
-default = ["test-utils"]
-test-utils = ["p3-challenger", "p3-dft"]
-
 [dependencies]
 p3-field.workspace = true
 p3-matrix.workspace = true
 p3-util.workspace = true
+
+p3-maybe-rayon = { workspace = true, optional = true }
 
 itertools.workspace = true
 serde.workspace = true
@@ -23,3 +21,8 @@ p3-dft = { workspace = true, optional = true }
 [dev-dependencies]
 p3-challenger.workspace = true
 p3-dft.workspace = true
+
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+default = ["test-utils"]
+test-utils = ["p3-challenger", "p3-dft"]
