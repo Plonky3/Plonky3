@@ -150,8 +150,8 @@ where
     F: Copy,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
-    fn observe(&mut self, valuess: Vec<Vec<F>>) {
-        for values in valuess {
+    fn observe(&mut self, values: Vec<Vec<F>>) {
+        for values in values {
             for value in values {
                 self.observe(value);
             }
