@@ -1,11 +1,11 @@
 use alloc::vec::Vec;
 
-use p3_field::{Field, Powers, PrimeCharacteristicRing, TwoAdicField};
+use p3_field::{Field, PrimeCharacteristicRing, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
-use p3_util::{log2_strict_usize, reverse_bits, reverse_slice_index_bits};
+use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 use tracing::instrument;
 
 use crate::TwoAdicSubgroupDft;
@@ -61,15 +61,13 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
         // Rescale coefficients in two ways:
         // - divide by height (since we're doing an inverse DFT)
         // - multiply by powers of the coset shift (see default coset LDE impl for an explanation)
-        let weights = Powers {
-            base: shift,
-            current: h_inv,
-        }
-        .take(h);
-        for (row, weight) in weights.enumerate() {
-            // reverse_bits because mat is encoded in bit-reversed order
-            mat.scale_row(reverse_bits(row, h), weight);
-        }
+        let mut weights = shift.shifted_powers(h_inv).take(h).collect();
+        // reverse_bits because mat is encoded in bit-reversed order
+        reverse_slice_index_bits(&mut weights);
+
+        mat.par_rows_mut()
+            .zip(weights.into_par_iter())
+            .for_each(|(row, weight)| row.iter_mut().for_each(|elem| *elem *= weight));
 
         mat = mat.bit_reversed_zero_pad(added_bits);
 
@@ -86,8 +84,9 @@ fn bowers_g<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
     let log_h = log2_strict_usize(h);
 
     let root = F::two_adic_generator(log_h);
-    let mut twiddles: Vec<_> = root.powers().take(h / 2).map(DifButterfly).collect();
+    let mut twiddles: Vec<_> = root.powers().take(h / 2).collect();
     reverse_slice_index_bits(&mut twiddles);
+    let twiddles: Vec<_> = twiddles.into_iter().map(DifButterfly).collect();
 
     for log_half_block_size in 0..log_h {
         butterfly_layer(mat, 1 << log_half_block_size, &twiddles)
@@ -101,8 +100,9 @@ fn bowers_g_t<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
     let log_h = log2_strict_usize(h);
 
     let root_inv = F::two_adic_generator(log_h).inverse();
-    let mut twiddles: Vec<_> = root_inv.powers().take(h / 2).map(DitButterfly).collect();
+    let mut twiddles: Vec<_> = root_inv.powers().take(h / 2).collect();
     reverse_slice_index_bits(&mut twiddles);
+    let twiddles: Vec<_> = twiddles.into_iter().map(DitButterfly).collect();
 
     for log_half_block_size in (0..log_h).rev() {
         butterfly_layer(mat, 1 << log_half_block_size, &twiddles)

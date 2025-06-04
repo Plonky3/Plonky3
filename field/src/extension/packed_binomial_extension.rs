@@ -221,6 +221,7 @@ where
     #[inline]
     fn packed_ext_powers(base: BinomialExtensionField<F, D>) -> crate::Powers<Self> {
         let width = F::Packing::WIDTH;
+        //
         let powers = base.powers().take(width + 1).collect_vec();
         // Transpose first WIDTH powers
         let current = Self::from_ext_slice(&powers[..width]);

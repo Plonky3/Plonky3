@@ -35,12 +35,7 @@ where
         reverse_slice_index_bits(&mut ifft_twiddles);
 
         let shift = F::GENERATOR;
-        let mut weights: [F; N] = shift
-            .powers()
-            .take(N)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let mut weights: [F; N] = shift.powers().take(N).collect().try_into().unwrap();
         reverse_slice_index_bits(&mut weights);
         Self {
             fft_twiddles,

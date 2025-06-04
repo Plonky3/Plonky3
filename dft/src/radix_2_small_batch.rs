@@ -5,12 +5,12 @@ use core::cell::RefCell;
 use core::iter;
 
 use itertools::Itertools;
-use p3_field::{Field, PackedField, PackedValue, TwoAdicField, scale_slice_in_place_single_core};
+use p3_field::{Field, TwoAdicField, scale_slice_in_place_single_core};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
-use p3_util::{flatten_to_base, log2_strict_usize, reverse_slice_index_bits};
+use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
 use crate::{
     Butterfly, DifButterfly, DifButterflyZeros, DitButterfly, TwiddleFreeButterfly,
@@ -525,11 +525,7 @@ fn par_middle_layers<F: Field>(
     let log_height = log2_strict_usize(height);
     let inv_height = F::ONE.div_2exp_u64(log_height as u64);
 
-    let scaling_packed: Vec<F::Packing> = F::Packing::packed_shifted_powers(shift, inv_height)
-        .take(height.div_ceil(F::Packing::WIDTH))
-        .collect::<Vec<_>>();
-    let mut scaling: Vec<F> = unsafe { flatten_to_base(scaling_packed) };
-    scaling.truncate(height);
+    let mut scaling = shift.shifted_powers(inv_height).take(height).collect();
     reverse_slice_index_bits(&mut scaling);
 
     in_mat

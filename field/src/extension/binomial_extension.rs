@@ -117,6 +117,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
     fn frobenius(&self) -> Self {
         // Slightly faster than self.repeated_frobenius(1)
         let mut res = Self::ZERO;
+        //
         for (i, z) in F::DTH_ROOT.powers().take(D).enumerate() {
             res.value[i] = self.value[i] * z;
         }
@@ -142,6 +143,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
         let z0 = F::DTH_ROOT.exp_u64(count as u64);
 
         let mut res = Self::ZERO;
+        //
         for (i, z) in z0.powers().take(D).enumerate() {
             res.value[i] = self.value[i] * z;
         }
