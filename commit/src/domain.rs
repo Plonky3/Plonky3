@@ -2,10 +2,7 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
-use p3_field::{
-    ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse,
-    cyclic_subgroup_coset_known_order,
-};
+use p3_field::{ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
@@ -249,12 +246,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
             .map(|x| s_pow_n * x - Val::ONE)
             .collect_vec();
 
-        let xs = cyclic_subgroup_coset_known_order(
-            coset.subgroup_generator(),
-            coset.shift(),
-            coset.size(),
-        )
-        .collect_vec();
+        let xs = coset.iter().collect();
 
         let single_point_selector = |i: u64| {
             let coset_i = self.subgroup_generator().exp_u64(i);

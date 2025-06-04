@@ -10,8 +10,7 @@ use p3_commit::{BatchOpening, Mmcs, OpenedValues, Pcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    ExtensionField, PackedFieldExtension, TwoAdicField, batch_multiplicative_inverse,
-    cyclic_subgroup_coset_known_order, dot_product,
+    ExtensionField, PackedFieldExtension, TwoAdicField, batch_multiplicative_inverse, dot_product,
 };
 use p3_interpolation::interpolate_coset_with_precomputation;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
@@ -82,7 +81,7 @@ impl<F: TwoAdicField, InputProof, InputError: Debug, EF: ExtensionField<F>> FriG
         let mut xs = F::two_adic_generator(log_arity)
             .shifted_powers(subgroup_start)
             .take(arity)
-            .collect_vec();
+            .collect();
         reverse_slice_index_bits(&mut xs);
         assert_eq!(log_arity, 1, "can only interpolate two points for now");
         // interpolate and evaluate at beta
@@ -112,7 +111,7 @@ impl<F: TwoAdicField, InputProof, InputError: Debug, EF: ExtensionField<F>> FriG
         let mut halve_inv_powers = g_inv
             .shifted_powers(F::ONE.halve())
             .take(m.height())
-            .collect_vec();
+            .collect();
         reverse_slice_index_bits(&mut halve_inv_powers);
 
         m.par_rows()
@@ -260,13 +259,14 @@ where
             .expect("No Matrices Supplied?");
         let log_global_max_height = log2_strict_usize(global_max_height);
 
-        let mut coset = cyclic_subgroup_coset_known_order(
-            Val::two_adic_generator(log_global_max_height),
-            Val::GENERATOR,
-            global_max_height,
-        )
-        .collect_vec();
-        reverse_slice_index_bits(&mut coset);
+        // Coset points in bit-reversed order
+        let coset = {
+            let coset =
+                TwoAdicMultiplicativeCoset::new(Val::GENERATOR, log_global_max_height).unwrap();
+            let mut coset_points = coset.iter().collect();
+            reverse_slice_index_bits(&mut coset_points);
+            coset_points
+        };
 
         // For each unique opening point z, we will find the largest degree bound
         // for that point, and precompute 1/(z - X) for the largest subgroup (in bitrev order).

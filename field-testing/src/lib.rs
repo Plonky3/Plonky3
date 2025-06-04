@@ -17,6 +17,7 @@ pub use bench_func::*;
 pub use dft_testing::*;
 pub use extension_testing::*;
 use num_bigint::BigUint;
+use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
     ExtensionField, Field, PackedValue, PrimeCharacteristicRing, PrimeField32, PrimeField64,
     TwoAdicField,
@@ -603,6 +604,18 @@ pub fn test_two_adic_generator_consistency<F: TwoAdicField>() {
     }
 }
 
+pub fn test_two_adic_point_collection<F: TwoAdicField>() {
+    let log_n = F::TWO_ADICITY.min(18);
+    for bits in 0..=log_n {
+        let group = TwoAdicMultiplicativeCoset::new(F::ONE, bits).unwrap();
+        let points = group.iter().collect();
+        // Add `map` to avoid calling `BoundedPowers::collect()`
+        #[allow(clippy::map_identity)]
+        let points_expected = group.iter().map(|x| x).collect::<Vec<_>>();
+        assert_eq!(points, points_expected)
+    }
+}
+
 pub fn test_ef_two_adic_generator_consistency<
     F: TwoAdicField,
     EF: TwoAdicField + ExtensionField<F>,
@@ -962,6 +975,7 @@ macro_rules! test_two_adic_field {
             #[test]
             fn test_two_adic_consistency() {
                 $crate::test_two_adic_generator_consistency::<$field>();
+                $crate::test_two_adic_point_collection::<$field>();
             }
 
             // Looks a little strange but we also check that everything works
