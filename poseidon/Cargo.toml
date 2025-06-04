@@ -8,6 +8,7 @@ license = "MIT OR Apache-2.0"
 p3-field.workspace = true
 p3-mds.workspace = true
 p3-symmetric.workspace = true
+
 rand.workspace = true
 
 [dev-dependencies]
