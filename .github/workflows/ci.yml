@@ -135,6 +135,9 @@ jobs:
         with:
           components: rustfmt
 
+      - name: Install cargo-sort
+        run: cargo install cargo-sort
+
       - uses: actions/cache@v3
         with:
           path: |
@@ -144,9 +147,7 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ hashFiles('**/Cargo.toml') }}
-
-      - name: Install cargo-sort
-        run: cargo install cargo-sort --force
+        run: cargo install cargo-sort
 
       - name: Sort Cargo.toml
         run: cargo +stable sort --workspace --grouped --check
