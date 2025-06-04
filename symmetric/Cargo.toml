@@ -5,8 +5,9 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-itertools.workspace = true
 p3-field.workspace = true
+
+itertools.workspace = true
 serde = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]

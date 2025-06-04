@@ -20,15 +20,12 @@ tikv-jemallocator = "0.6"
 [dev-dependencies]
 p3-baby-bear.workspace = true
 p3-challenger.workspace = true
-p3-circle.workspace = true
 p3-commit.workspace = true
 p3-dft.workspace = true
 p3-fri.workspace = true
 p3-keccak.workspace = true
 p3-koala-bear.workspace = true
 p3-merkle-tree.workspace = true
-p3-mersenne-31.workspace = true
-p3-monty-31.workspace = true
 p3-symmetric.workspace = true
 p3-uni-stark.workspace = true
 

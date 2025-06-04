@@ -8,6 +8,7 @@ description = "Plonky3 hash trait implementations for the SHA2-256 hash function
 [dependencies]
 p3-symmetric.workspace = true
 p3-util.workspace = true
+
 sha2 = { workspace = true, features = ["compress"] }
 
 [dev-dependencies]

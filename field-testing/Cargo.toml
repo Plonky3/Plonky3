@@ -14,5 +14,3 @@ criterion.workspace = true
 num-bigint.workspace = true
 rand.workspace = true
 
-[dev-dependencies]
-p3-baby-bear.workspace = true
