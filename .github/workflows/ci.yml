@@ -147,8 +147,7 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ hashFiles('**/Cargo.toml') }}
-        run: cargo install cargo-sort
-
+        
       - name: Sort Cargo.toml
         run: cargo +stable sort --workspace --grouped --check
 
