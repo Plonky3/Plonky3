@@ -4,11 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[features]
-nightly-features = []
-
 [dependencies]
-itertools.workspace = true
 p3-dft.workspace = true
 p3-field.workspace = true
 p3-matrix.workspace = true
@@ -16,15 +12,21 @@ p3-mds.workspace = true
 p3-poseidon2.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
+
+itertools.workspace = true
 num-bigint.workspace = true
 paste.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
-criterion.workspace = true
 p3-field-testing.workspace = true
+
+criterion.workspace = true
 rand_xoshiro.workspace = true
+
+[features]
+nightly-features = []
 
 [[bench]]
 name = "bench_field"

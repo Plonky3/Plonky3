@@ -8,10 +8,9 @@ license.workspace = true
 p3-dft.workspace = true
 p3-field.workspace = true
 p3-matrix.workspace = true
-rand.workspace = true
-criterion.workspace = true
-num-bigint.workspace = true
 p3-util.workspace = true
 
-[dev-dependencies]
-p3-baby-bear.workspace = true
+criterion.workspace = true
+num-bigint.workspace = true
+rand.workspace = true
+

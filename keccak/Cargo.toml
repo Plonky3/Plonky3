@@ -4,18 +4,20 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[features]
-nightly-features = []
-
 [dependencies]
 p3-field.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
+
 tiny-keccak = { workspace = true, features = ["keccak"] }
 
 [dev-dependencies]
 p3-mersenne-31.workspace = true
+
 criterion.workspace = true
+
+[features]
+nightly-features = []
 
 [[bench]]
 name = "bench_keccak"

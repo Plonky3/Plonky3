@@ -5,12 +5,12 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-serde.workspace = true
 rayon = { workspace = true, optional = true }
+serde.workspace = true
 
 [dev-dependencies]
-rand.workspace = true
 criterion.workspace = true
+rand.workspace = true
 serde_json.workspace = true
 
 [features]

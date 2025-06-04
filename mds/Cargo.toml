@@ -9,13 +9,15 @@ p3-dft.workspace = true
 p3-field.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
+
 rand.workspace = true
 
 [dev-dependencies]
-criterion.workspace = true
 p3-baby-bear.workspace = true
 p3-goldilocks.workspace = true
 p3-mersenne-31.workspace = true
+
+criterion.workspace = true
 
 [[bench]]
 name = "mds"

@@ -9,11 +9,11 @@ p3-field.workspace = true
 p3-poseidon2.workspace = true
 p3-symmetric.workspace = true
 
+halo2curves = { version = "0.8.0", features = ["bits", "derive_serde"] }
 num-bigint.workspace = true
 paste.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
-halo2curves = { version = "0.8.0", features = ["bits", "derive_serde"] }
 
 [dev-dependencies]
 p3-field-testing.workspace = true

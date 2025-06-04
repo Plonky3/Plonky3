@@ -12,7 +12,11 @@ categories.workspace = true
 [dependencies]
 p3-symmetric.workspace = true
 p3-util.workspace = true
+
 sha2 = { workspace = true, features = ["compress"] }
+
+[dev-dependencies]
+hex-literal.workspace = true
 
 [features]
 default = []
@@ -22,6 +26,3 @@ asm = [
 force-soft = [
     "sha2/force-soft",
 ] # Force software implementation (default if "asm" feature is not enabled).
-
-[dev-dependencies]
-hex-literal.workspace = true

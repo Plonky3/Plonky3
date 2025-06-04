@@ -8,12 +8,14 @@ license.workspace = true
 p3-field.workspace = true
 p3-mds.workspace = true
 p3-symmetric.workspace = true
+
 rand.workspace = true
 
 [dev-dependencies]
 p3-baby-bear.workspace = true
 p3-goldilocks.workspace = true
 p3-mersenne-31.workspace = true
+
 criterion.workspace = true
 
 [[bench]]

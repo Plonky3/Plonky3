@@ -16,12 +16,12 @@ members = [
     "fri",
     "goldilocks",
     "interpolation",
-    "koala-bear",
     "keccak",
     "keccak-air",
+    "koala-bear",
     "matrix",
-    "merkle-tree",
     "maybe-rayon",
+    "merkle-tree",
     "mersenne-31",
     "monolith",
     "monty-31",
@@ -31,8 +31,8 @@ members = [
     "rescue",
     "sha256",
     "symmetric",
-    "util",
     "uni-stark",
+    "util",
 ]
 
 [workspace.dependencies]
