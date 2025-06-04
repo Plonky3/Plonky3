@@ -7,7 +7,7 @@ use core::marker::PhantomData;
 use core::ops::Deref;
 
 use p3_field::{
-    ExtensionField, Field, PackedValue, par_scale_slice_in_place, scale_slice_in_place,
+    ExtensionField, Field, PackedValue, par_scale_slice_in_place, scale_slice_in_place_single_core,
 };
 use p3_maybe_rayon::prelude::*;
 use rand::Rng;
@@ -207,7 +207,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
         T: Field,
         S: BorrowMut<[T]>,
     {
-        scale_slice_in_place(self.row_mut(r), scale);
+        scale_slice_in_place_single_core(self.row_mut(r), scale);
     }
 
     /// Scale the given row by the given value.
