@@ -209,19 +209,20 @@ where
 
         // If the total number of layers is not a multiple of 3,
         // we need to handle the remaining layers separately.
-        let corr = if (log_h - log_num_par_rows) % 3 == 1 {
-            dif_layer_par(&mut mat.as_view_mut(), &root_table[log_num_par_rows]);
-            1
-        } else if (log_h - log_num_par_rows) % 3 == 2 {
-            dif_layer_par_double(
-                &mut mat.as_view_mut(),
-                &root_table[log_num_par_rows],
-                &root_table[log_num_par_rows + 1],
-            );
-            2
-        } else {
-            0
-        };
+        let corr = (log_h - log_num_par_rows) % 3;
+        match corr {
+            1 => {
+                dif_layer_par(&mut mat.as_view_mut(), &root_table[log_num_par_rows]);
+            }
+            2 => {
+                dif_layer_par_double(
+                    &mut mat.as_view_mut(),
+                    &root_table[log_num_par_rows],
+                    &root_table[log_num_par_rows + 1],
+                );
+            }
+            _ => {}
+        }
 
         // We do three layers of the DFT at once, to minimize how much data we need to transfer
         // between threads.
@@ -275,7 +276,12 @@ where
         // send `num_par_rows` chunks to each thread and do the remainder of the
         // fft without transferring any more data between threads.
         let num_par_rows = estimate_num_rows_in_l1::<F>(h, w);
-        let log_num_par_rows = log2_strict_usize(num_par_rows);
+        let num_inner_dit_layers = log2_strict_usize(num_par_rows);
+        let num_inner_dif_layers = num_inner_dit_layers + added_bits;
+
+        // We will do large DFT/iDFT layers in batches of 3. If the number of large layers
+        // is not a multiple of 3, we will need to handle the remaining layers separately.
+        let corr = (log_h - num_inner_dit_layers) % 3;
 
         // For the layers involving blocks larger than `num_par_rows`, we will
         // parallelize across the blocks.
@@ -283,21 +289,27 @@ where
         // We do three layers of the DFT at once, to minimize how much data we need to transfer
         // between threads.
         for (twiddles_0, twiddles_1, twiddles_2) in
-            inv_root_table[log_num_par_rows..].iter().rev().tuples()
+            inv_root_table[num_inner_dit_layers..].iter().rev().tuples()
         {
             dit_layer_par_triple(&mut mat.as_view_mut(), twiddles_0, twiddles_1, twiddles_2);
         }
 
-        // If the total number of layers is not a multiple of 3,
-        // we need to handle the remaining layers separately.
-        if (log_h - log_num_par_rows) % 3 == 1 {
-            dit_layer_par(&mut mat.as_view_mut(), &inv_root_table[log_num_par_rows])
-        } else if (log_h - log_num_par_rows) % 3 == 2 {
-            dit_layer_par_double(
-                &mut mat.as_view_mut(),
-                &inv_root_table[log_num_par_rows + 1],
-                &inv_root_table[log_num_par_rows],
-            )
+        // If the total number of layers is not a multiple of 3, we need to handle the remaining layers separately.
+        match corr {
+            1 => {
+                dit_layer_par(
+                    &mut mat.as_view_mut(),
+                    &inv_root_table[num_inner_dit_layers],
+                );
+            }
+            2 => {
+                dit_layer_par_double(
+                    &mut mat.as_view_mut(),
+                    &inv_root_table[num_inner_dit_layers + 1],
+                    &inv_root_table[num_inner_dit_layers],
+                );
+            }
+            _ => {}
         }
 
         // Now do all the inner layers at once. This does the final `log_num_par_rows` of
@@ -307,37 +319,31 @@ where
             &mut mat.as_view_mut(),
             &mut output.as_view_mut(),
             num_par_rows,
-            &root_table[..(log_num_par_rows + added_bits)],
-            &inv_root_table[..log_num_par_rows],
+            &root_table[..(num_inner_dif_layers)],
+            &inv_root_table[..num_inner_dit_layers],
             added_bits,
             shift,
         );
 
-        // If the total number of layers is not a multiple of 3,
-        // we need to handle the remaining layers separately.
-        let corr = if (log_h - log_num_par_rows) % 3 == 1 {
-            dif_layer_par(
-                &mut output.as_view_mut(),
-                &root_table[log_num_par_rows + added_bits],
-            );
-            1
-        } else if (log_h - log_num_par_rows) % 3 == 2 {
-            dif_layer_par_double(
-                &mut output.as_view_mut(),
-                &root_table[log_num_par_rows + added_bits],
-                &root_table[log_num_par_rows + added_bits + 1],
-            );
-            2
-        } else {
-            0
-        };
+        // If the total number of layers is not a multiple of 3, we need to handle the remaining layers separately.
+        match corr {
+            1 => {
+                dif_layer_par(&mut output.as_view_mut(), &root_table[num_inner_dif_layers]);
+            }
+            2 => {
+                dif_layer_par_double(
+                    &mut output.as_view_mut(),
+                    &root_table[num_inner_dif_layers],
+                    &root_table[num_inner_dif_layers + 1],
+                );
+            }
+            _ => {}
+        }
 
         // We do three layers of the DFT at once, to minimize how much data we need to transfer
         // between threads.
-        for (twiddles_0, twiddles_1, twiddles_2) in root_table
-            [(log_num_par_rows + corr + added_bits)..]
-            .iter()
-            .tuples()
+        for (twiddles_0, twiddles_1, twiddles_2) in
+            root_table[(num_inner_dif_layers + corr)..].iter().tuples()
         {
             dif_layer_par_triple(
                 &mut output.as_view_mut(),
