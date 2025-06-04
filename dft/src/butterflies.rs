@@ -114,6 +114,7 @@ pub trait Butterfly<F: Field>: Copy + Send + Sync {
 /// The twiddle factor is applied after subtraction.
 /// Suitable for DIF-style recursive transforms.
 #[derive(Copy, Clone)]
+#[repr(transparent)] // Allows simple and safe transmutes from F to this.
 pub struct DifButterfly<F>(pub F);
 
 impl<F: Field> Butterfly<F> for DifButterfly<F> {
@@ -134,6 +135,7 @@ impl<F: Field> Butterfly<F> for DifButterfly<F> {
 ///   output_2 = x1 * twiddle
 /// ```
 #[derive(Copy, Clone)]
+#[repr(transparent)] // Allows simple and safe transmutes from F to this.
 pub struct DifButterflyZeros<F>(pub F);
 
 impl<F: Field> Butterfly<F> for DifButterflyZeros<F> {
@@ -171,6 +173,7 @@ impl<F: Field> Butterfly<F> for DifButterflyZeros<F> {
 /// The twiddle factor is applied to x2 before combining.
 /// Suitable for DIT-style recursive transforms.
 #[derive(Copy, Clone)]
+#[repr(transparent)] // Allows simple and safe transmutes from F to this.
 pub struct DitButterfly<F>(pub F);
 
 impl<F: Field> Butterfly<F> for DitButterfly<F> {

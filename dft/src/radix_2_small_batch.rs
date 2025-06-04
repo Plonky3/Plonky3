@@ -10,7 +10,7 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
-use p3_util::{flatten_to_base, log2_strict_usize, reverse_slice_index_bits};
+use p3_util::{as_base_slice, flatten_to_base, log2_strict_usize, reverse_slice_index_bits};
 
 use crate::{
     Butterfly, DifButterfly, DifButterflyZeros, DitButterfly, TwiddleFreeButterfly,
@@ -721,6 +721,10 @@ fn dit_layer_par_triple<F: Field>(
     twiddles_1: &[F],
     twiddles_2: &[F],
 ) {
+    let twiddles_0: &[DitButterfly<F>] = unsafe { as_base_slice(twiddles_0) };
+    let twiddles_1: &[DitButterfly<F>] = unsafe { as_base_slice(twiddles_1) };
+    let twiddles_2: &[DitButterfly<F>] = unsafe { as_base_slice(twiddles_2) };
+
     debug_assert!(
         mat.height() % twiddles_0.len() == 0,
         "Matrix height must be divisible by the number of twiddles"
@@ -749,68 +753,18 @@ fn dit_layer_par_triple<F: Field>(
             let chunk_par_iters_1 = zip_par_iter_vec(chunk_par_iters_0);
             let chunk_par_iters_2 = zip_par_iter_vec(chunk_par_iters_1);
             chunk_par_iters_2.into_iter().tuples().for_each(|(hi, lo)| {
-                hi.zip(lo).for_each(
-                    |(
-                        ((hi_hi_hi_chunk, hi_hi_lo_chunk), (hi_lo_hi_chunk, hi_lo_lo_chunk)),
-                        ((lo_hi_hi_chunk, lo_hi_lo_chunk), (lo_lo_hi_chunk, lo_lo_lo_chunk)),
-                    )| {
-                        // Do 3 layers of the DIT FFT butterfly network at once.
-                        if ind == 0 {
-                            // Layer 0:
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_hi_chunk, lo_hi_hi_chunk);
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_lo_chunk, lo_hi_lo_chunk);
-                            TwiddleFreeButterfly.apply_to_rows(hi_lo_hi_chunk, lo_lo_hi_chunk);
-                            TwiddleFreeButterfly.apply_to_rows(hi_lo_lo_chunk, lo_lo_lo_chunk);
-
-                            // Layer 1:
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_hi_chunk, hi_lo_hi_chunk);
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_lo_chunk, hi_lo_lo_chunk);
-                            DitButterfly(twiddles_1[1])
-                                .apply_to_rows(lo_hi_hi_chunk, lo_lo_hi_chunk);
-                            DitButterfly(twiddles_1[1])
-                                .apply_to_rows(lo_hi_lo_chunk, lo_lo_lo_chunk);
-
-                            // Layer 2:
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_hi_chunk, hi_hi_lo_chunk);
-                            DitButterfly(twiddles_2[1])
-                                .apply_to_rows(hi_lo_hi_chunk, hi_lo_lo_chunk);
-                            DitButterfly(twiddles_2[2])
-                                .apply_to_rows(lo_hi_hi_chunk, lo_hi_lo_chunk);
-                            DitButterfly(twiddles_2[3])
-                                .apply_to_rows(lo_lo_hi_chunk, lo_lo_lo_chunk);
-                        } else {
-                            // Layer 0:
-                            DitButterfly(twiddles_0[ind])
-                                .apply_to_rows(hi_hi_hi_chunk, lo_hi_hi_chunk);
-                            DitButterfly(twiddles_0[ind])
-                                .apply_to_rows(hi_hi_lo_chunk, lo_hi_lo_chunk);
-                            DitButterfly(twiddles_0[ind])
-                                .apply_to_rows(hi_lo_hi_chunk, lo_lo_hi_chunk);
-                            DitButterfly(twiddles_0[ind])
-                                .apply_to_rows(hi_lo_lo_chunk, lo_lo_lo_chunk);
-
-                            // Layer 1:
-                            DitButterfly(twiddles_1[2 * ind])
-                                .apply_to_rows(hi_hi_hi_chunk, hi_lo_hi_chunk);
-                            DitButterfly(twiddles_1[2 * ind])
-                                .apply_to_rows(hi_hi_lo_chunk, hi_lo_lo_chunk);
-                            DitButterfly(twiddles_1[2 * ind + 1])
-                                .apply_to_rows(lo_hi_hi_chunk, lo_lo_hi_chunk);
-                            DitButterfly(twiddles_1[2 * ind + 1])
-                                .apply_to_rows(lo_hi_lo_chunk, lo_lo_lo_chunk);
-
-                            // Layer 2:
-                            DitButterfly(twiddles_2[4 * ind])
-                                .apply_to_rows(hi_hi_hi_chunk, hi_hi_lo_chunk);
-                            DitButterfly(twiddles_2[4 * ind + 1])
-                                .apply_to_rows(hi_lo_hi_chunk, hi_lo_lo_chunk);
-                            DitButterfly(twiddles_2[4 * ind + 2])
-                                .apply_to_rows(lo_hi_hi_chunk, lo_hi_lo_chunk);
-                            DitButterfly(twiddles_2[4 * ind + 3])
-                                .apply_to_rows(lo_lo_hi_chunk, lo_lo_lo_chunk);
-                        }
-                    },
-                )
+                hi.zip(lo).for_each(|chunks| {
+                    let mut chunks: TripleLayerBlockDecomposition<F> = chunks.into();
+                    if ind == 0 {
+                        chunks.apply_single_twiddle_free();
+                        chunks.apply_twiddle_pair_free(twiddles_1[1]);
+                        chunks.apply_twiddle_quad_free(&twiddles_2[1..4]);
+                    } else {
+                        chunks.apply_single_twiddle(twiddles_0[ind]);
+                        chunks.apply_twiddle_pair(&twiddles_1[2 * ind..2 * (ind + 1)]);
+                        chunks.apply_twiddle_quad(&twiddles_2[4 * ind..4 * (ind + 1)]);
+                    }
+                })
             });
         });
 }
@@ -903,6 +857,10 @@ fn dif_layer_par_triple<F: Field>(
     twiddles_1: &[F],
     twiddles_2: &[F],
 ) {
+    let twiddles_0: &[DifButterfly<F>] = unsafe { as_base_slice(twiddles_0) };
+    let twiddles_1: &[DifButterfly<F>] = unsafe { as_base_slice(twiddles_1) };
+    let twiddles_2: &[DifButterfly<F>] = unsafe { as_base_slice(twiddles_2) };
+
     debug_assert!(
         mat.height() % twiddles_2.len() == 0,
         "Matrix height must be divisible by the number of twiddles"
@@ -931,68 +889,18 @@ fn dif_layer_par_triple<F: Field>(
             let chunk_par_iters_1 = zip_par_iter_vec(chunk_par_iters_0);
             let chunk_par_iters_2 = zip_par_iter_vec(chunk_par_iters_1);
             chunk_par_iters_2.into_iter().tuples().for_each(|(hi, lo)| {
-                hi.zip(lo).for_each(
-                    |(
-                        ((hi_hi_hi_chunk, hi_hi_lo_chunk), (hi_lo_hi_chunk, hi_lo_lo_chunk)),
-                        ((lo_hi_hi_chunk, lo_hi_lo_chunk), (lo_lo_hi_chunk, lo_lo_lo_chunk)),
-                    )| {
-                        // Do 3 layers of the DIF FFT butterfly network at once.
-                        if ind == 0 {
-                            // Layer 0:
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_hi_chunk, hi_hi_lo_chunk);
-                            DifButterfly(twiddles_0[1])
-                                .apply_to_rows(hi_lo_hi_chunk, hi_lo_lo_chunk);
-                            DifButterfly(twiddles_0[2])
-                                .apply_to_rows(lo_hi_hi_chunk, lo_hi_lo_chunk);
-                            DifButterfly(twiddles_0[3])
-                                .apply_to_rows(lo_lo_hi_chunk, lo_lo_lo_chunk);
-
-                            // Layer 1:
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_hi_chunk, hi_lo_hi_chunk);
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_lo_chunk, hi_lo_lo_chunk);
-                            DifButterfly(twiddles_1[1])
-                                .apply_to_rows(lo_hi_hi_chunk, lo_lo_hi_chunk);
-                            DifButterfly(twiddles_1[1])
-                                .apply_to_rows(lo_hi_lo_chunk, lo_lo_lo_chunk);
-
-                            // Layer 2:
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_hi_chunk, lo_hi_hi_chunk);
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_lo_chunk, lo_hi_lo_chunk);
-                            TwiddleFreeButterfly.apply_to_rows(hi_lo_hi_chunk, lo_lo_hi_chunk);
-                            TwiddleFreeButterfly.apply_to_rows(hi_lo_lo_chunk, lo_lo_lo_chunk);
-                        } else {
-                            // Layer 0:
-                            DifButterfly(twiddles_0[4 * ind])
-                                .apply_to_rows(hi_hi_hi_chunk, hi_hi_lo_chunk);
-                            DifButterfly(twiddles_0[4 * ind + 1])
-                                .apply_to_rows(hi_lo_hi_chunk, hi_lo_lo_chunk);
-                            DifButterfly(twiddles_0[4 * ind + 2])
-                                .apply_to_rows(lo_hi_hi_chunk, lo_hi_lo_chunk);
-                            DifButterfly(twiddles_0[4 * ind + 3])
-                                .apply_to_rows(lo_lo_hi_chunk, lo_lo_lo_chunk);
-
-                            // Layer 1:
-                            DifButterfly(twiddles_1[2 * ind])
-                                .apply_to_rows(hi_hi_hi_chunk, hi_lo_hi_chunk);
-                            DifButterfly(twiddles_1[2 * ind])
-                                .apply_to_rows(hi_hi_lo_chunk, hi_lo_lo_chunk);
-                            DifButterfly(twiddles_1[2 * ind + 1])
-                                .apply_to_rows(lo_hi_hi_chunk, lo_lo_hi_chunk);
-                            DifButterfly(twiddles_1[2 * ind + 1])
-                                .apply_to_rows(lo_hi_lo_chunk, lo_lo_lo_chunk);
-
-                            // Layer 2:
-                            DifButterfly(twiddles_2[ind])
-                                .apply_to_rows(hi_hi_hi_chunk, lo_hi_hi_chunk);
-                            DifButterfly(twiddles_2[ind])
-                                .apply_to_rows(hi_hi_lo_chunk, lo_hi_lo_chunk);
-                            DifButterfly(twiddles_2[ind])
-                                .apply_to_rows(hi_lo_hi_chunk, lo_lo_hi_chunk);
-                            DifButterfly(twiddles_2[ind])
-                                .apply_to_rows(hi_lo_lo_chunk, lo_lo_lo_chunk);
-                        }
-                    },
-                )
+                hi.zip(lo).for_each(|chunks| {
+                    let mut chunks: TripleLayerBlockDecomposition<F> = chunks.into();
+                    if ind == 0 {
+                        chunks.apply_twiddle_quad_free(&twiddles_0[1..4]);
+                        chunks.apply_twiddle_pair_free(twiddles_1[1]);
+                        chunks.apply_single_twiddle_free();
+                    } else {
+                        chunks.apply_twiddle_quad(&twiddles_0[4 * ind..4 * (ind + 1)]);
+                        chunks.apply_twiddle_pair(&twiddles_1[2 * ind..2 * (ind + 1)]);
+                        chunks.apply_single_twiddle(twiddles_2[ind]);
+                    }
+                })
             });
         });
 }
@@ -1041,6 +949,95 @@ fn dif_layer_zeros<F: Field>(vec: &mut [F], twiddles: &[F], skip: usize) {
             // Apply DIF butterfly making use of the fact that `lo_chunk` is zero.
             DifButterflyZeros(twiddle).apply_to_rows(hi_chunk, lo_chunk);
         });
+}
+
+pub struct TripleLayerBlockDecomposition<'a, F: Field> {
+    hi_hi_hi: &'a mut [F],
+    hi_hi_lo: &'a mut [F],
+    hi_lo_hi: &'a mut [F],
+    hi_lo_lo: &'a mut [F],
+    lo_hi_hi: &'a mut [F],
+    lo_hi_lo: &'a mut [F],
+    lo_lo_hi: &'a mut [F],
+    lo_lo_lo: &'a mut [F],
+}
+
+impl<F: Field> TripleLayerBlockDecomposition<'_, F> {
+    #[inline]
+    fn apply_single_twiddle<Fly: Butterfly<F>>(&mut self, butterfly: Fly) {
+        butterfly.apply_to_rows(self.hi_hi_hi, self.lo_hi_hi);
+        butterfly.apply_to_rows(self.hi_hi_lo, self.lo_hi_lo);
+        butterfly.apply_to_rows(self.hi_lo_hi, self.lo_lo_hi);
+        butterfly.apply_to_rows(self.hi_lo_lo, self.lo_lo_lo);
+    }
+
+    #[inline]
+    fn apply_twiddle_pair<Fly: Butterfly<F>>(&mut self, butterflies: &[Fly]) {
+        debug_assert!(butterflies.len() == 2);
+        butterflies[0].apply_to_rows(self.hi_hi_hi, self.hi_lo_hi);
+        butterflies[0].apply_to_rows(self.hi_hi_lo, self.hi_lo_lo);
+        butterflies[1].apply_to_rows(self.lo_hi_hi, self.lo_lo_hi);
+        butterflies[1].apply_to_rows(self.lo_hi_lo, self.lo_lo_lo);
+    }
+
+    #[inline]
+    fn apply_twiddle_quad<Fly: Butterfly<F>>(&mut self, butterflies: &[Fly]) {
+        debug_assert!(butterflies.len() == 4);
+        butterflies[0].apply_to_rows(self.hi_hi_hi, self.hi_hi_lo);
+        butterflies[1].apply_to_rows(self.hi_lo_hi, self.hi_lo_lo);
+        butterflies[2].apply_to_rows(self.lo_hi_hi, self.lo_hi_lo);
+        butterflies[3].apply_to_rows(self.lo_lo_hi, self.lo_lo_lo);
+    }
+
+    #[inline]
+    fn apply_single_twiddle_free(&mut self) {
+        TwiddleFreeButterfly.apply_to_rows(self.hi_hi_hi, self.lo_hi_hi);
+        TwiddleFreeButterfly.apply_to_rows(self.hi_hi_lo, self.lo_hi_lo);
+        TwiddleFreeButterfly.apply_to_rows(self.hi_lo_hi, self.lo_lo_hi);
+        TwiddleFreeButterfly.apply_to_rows(self.hi_lo_lo, self.lo_lo_lo);
+    }
+
+    #[inline]
+    fn apply_twiddle_pair_free<Fly: Butterfly<F>>(&mut self, butterfly: Fly) {
+        TwiddleFreeButterfly.apply_to_rows(self.hi_hi_hi, self.hi_lo_hi);
+        TwiddleFreeButterfly.apply_to_rows(self.hi_hi_lo, self.hi_lo_lo);
+        butterfly.apply_to_rows(self.lo_hi_hi, self.lo_lo_hi);
+        butterfly.apply_to_rows(self.lo_hi_lo, self.lo_lo_lo);
+    }
+
+    #[inline]
+    fn apply_twiddle_quad_free<Fly: Butterfly<F>>(&mut self, butterflies: &[Fly]) {
+        debug_assert!(butterflies.len() == 3);
+        TwiddleFreeButterfly.apply_to_rows(self.hi_hi_hi, self.hi_hi_lo);
+        butterflies[0].apply_to_rows(self.hi_lo_hi, self.hi_lo_lo);
+        butterflies[1].apply_to_rows(self.lo_hi_hi, self.lo_hi_lo);
+        butterflies[2].apply_to_rows(self.lo_lo_hi, self.lo_lo_lo);
+    }
+}
+
+impl<'a, F: Field>
+    From<(
+        ((&'a mut [F], &'a mut [F]), (&'a mut [F], &'a mut [F])),
+        ((&'a mut [F], &'a mut [F]), (&'a mut [F], &'a mut [F])),
+    )> for TripleLayerBlockDecomposition<'a, F>
+{
+    fn from(
+        value: (
+            ((&'a mut [F], &'a mut [F]), (&'a mut [F], &'a mut [F])),
+            ((&'a mut [F], &'a mut [F]), (&'a mut [F], &'a mut [F])),
+        ),
+    ) -> Self {
+        Self {
+            hi_hi_hi: value.0.0.0,
+            hi_hi_lo: value.0.0.1,
+            hi_lo_hi: value.0.1.0,
+            hi_lo_lo: value.0.1.1,
+            lo_hi_hi: value.1.0.0,
+            lo_hi_lo: value.1.0.1,
+            lo_lo_hi: value.1.1.0,
+            lo_lo_lo: value.1.1.1,
+        }
+    }
 }
 
 /// Estimates the optimal workload size for `T` to fit in L1 cache.
