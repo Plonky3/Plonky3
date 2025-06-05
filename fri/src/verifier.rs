@@ -9,7 +9,7 @@ use p3_matrix::Dimensions;
 use p3_util::reverse_bits_len;
 use p3_util::zip_eq::zip_eq;
 
-use crate::{CommitPhaseProofStep, FriParameters, FriFoldingStrategy, FriProof};
+use crate::{CommitPhaseProofStep, FriFoldingStrategy, FriParameters, FriProof};
 
 #[derive(Debug)]
 pub enum FriError<CommitMmcsErr, InputError> {
