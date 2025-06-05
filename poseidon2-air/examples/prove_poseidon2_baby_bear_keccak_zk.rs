@@ -4,7 +4,7 @@ use p3_baby_bear::{BabyBear, GenericPoseidon2LinearLayersBabyBear};
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
-use p3_fri::{HidingFriPcs, create_benchmark_fri_config_zk};
+use p3_fri::{HidingFriPcs, create_benchmark_fri_params_zk};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_merkle_tree::MerkleTreeHidingMmcs;
 use p3_poseidon2_air::{RoundConstants, VectorizedPoseidon2Air};
@@ -92,14 +92,14 @@ fn main() -> Result<(), impl Debug> {
         VECTOR_LEN,
     > = VectorizedPoseidon2Air::new(constants);
 
-    let fri_config = create_benchmark_fri_config_zk(challenge_mmcs);
+    let fri_params = create_benchmark_fri_params_zk(challenge_mmcs);
 
-    let trace = air.generate_vectorized_trace_rows(NUM_PERMUTATIONS, fri_config.log_blowup);
+    let trace = air.generate_vectorized_trace_rows(NUM_PERMUTATIONS, fri_params.log_blowup);
 
     let dft = Dft::default();
 
     type Pcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, SmallRng>;
-    let pcs = Pcs::new(dft, val_mmcs, fri_config, 4, SmallRng::seed_from_u64(1));
+    let pcs = Pcs::new(dft, val_mmcs, fri_params, 4, SmallRng::seed_from_u64(1));
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs, challenger);
