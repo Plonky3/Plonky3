@@ -11,22 +11,22 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 use tracing::{debug_span, info_span, instrument};
 
-use crate::{CommitPhaseProofStep, FriConfiguration, FriParameters, FriProof, QueryProof};
+use crate::{CommitPhaseProofStep, FriFoldingStrategy, FriParameters, FriProof, QueryProof};
 
 #[instrument(name = "FRI prover", skip_all)]
-pub fn prove<Config, Val, Challenge, M, Challenger>(
-    config: &Config,
+pub fn prove<Folding, Val, Challenge, M, Challenger>(
+    folding: &Folding,
     params: &FriParameters<M>,
     inputs: Vec<Vec<Challenge>>,
     challenger: &mut Challenger,
-    open_input: impl Fn(usize) -> Config::InputProof,
-) -> FriProof<Challenge, M, Challenger::Witness, Config::InputProof>
+    open_input: impl Fn(usize) -> Folding::InputProof,
+) -> FriProof<Challenge, M, Challenger::Witness, Folding::InputProof>
 where
     Val: Field,
     Challenge: ExtensionField<Val> + TwoAdicField,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
-    Config: FriConfiguration<Val, Challenge>,
+    Folding: FriFoldingStrategy<Val, Challenge>,
 {
     assert!(!inputs.is_empty());
     assert!(
@@ -43,13 +43,13 @@ where
         assert!(log_min_height > params.log_final_poly_len + params.log_blowup);
     }
 
-    let commit_phase_result = commit_phase(config, params, inputs, challenger);
+    let commit_phase_result = commit_phase(folding, params, inputs, challenger);
 
     let pow_witness = challenger.grind(params.proof_of_work_bits);
 
     let query_proofs = info_span!("query phase").in_scope(|| {
         iter::repeat_with(|| {
-            challenger.sample_bits(log_max_height + config.extra_query_index_bits())
+            challenger.sample_bits(log_max_height + folding.extra_query_index_bits())
         })
         .take(params.num_queries)
         .map(|index| QueryProof {
@@ -57,7 +57,7 @@ where
             commit_phase_openings: answer_query(
                 params,
                 &commit_phase_result.data,
-                index >> config.extra_query_index_bits(),
+                index >> folding.extra_query_index_bits(),
             ),
         })
         .collect()
@@ -78,8 +78,8 @@ struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
 }
 
 #[instrument(name = "commit phase", skip_all)]
-fn commit_phase<Config, Val, Challenge, M, Challenger>(
-    config: &Config,
+fn commit_phase<Folding, Val, Challenge, M, Challenger>(
+    folding: &Folding,
     params: &FriParameters<M>,
     inputs: Vec<Vec<Challenge>>,
     challenger: &mut Challenger,
@@ -89,7 +89,7 @@ where
     Challenge: ExtensionField<Val> + TwoAdicField,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + CanObserve<M::Commitment>,
-    Config: FriConfiguration<Val, Challenge>,
+    Folding: FriFoldingStrategy<Val, Challenge>,
 {
     let mut inputs_iter = inputs.into_iter().peekable();
     let mut folded = inputs_iter.next().unwrap();
@@ -104,7 +104,7 @@ where
         let beta: Challenge = challenger.sample_algebra_element();
         // We passed ownership of `current` to the MMCS, so get a reference to it
         let leaves = params.mmcs.get_matrices(&prover_data).pop().unwrap();
-        folded = config.fold_matrix(beta, leaves.as_view());
+        folded = folding.fold_matrix(beta, leaves.as_view());
 
         commits.push(commit);
         data.push(prover_data);

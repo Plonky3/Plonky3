@@ -33,9 +33,9 @@ impl<M> FriParameters<M> {
     }
 }
 
-/// Whereas `FriParameters` encompasses parameters the end user can set, `FriConfiguration` is
+/// Whereas `FriParameters` encompasses parameters the end user can set, `FriFoldingStrategy` is
 /// set by the PCS calling FRI, and abstracts over implementation details of the PCS.
-pub trait FriConfiguration<F: Field, EF: ExtensionField<F>> {
+pub trait FriFoldingStrategy<F: Field, EF: ExtensionField<F>> {
     type InputProof;
     type InputError: Debug;
 

@@ -4,7 +4,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::BabyBear;
 use p3_field::extension::{BinomialExtensionField, Complex};
 use p3_field::{ExtensionField, TwoAdicField};
-use p3_fri::{FriConfiguration, TwoAdicFriConfig};
+use p3_fri::{FriFoldingStrategy, TwoAdicFriFolding};
 use p3_goldilocks::Goldilocks;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_mersenne_31::Mersenne31;
@@ -20,7 +20,7 @@ where
     let name = format!("fold_matrix::<{}>", pretty_name::<EF>(),);
     let mut group = c.benchmark_group(&name);
     group.sample_size(10);
-    let config = TwoAdicFriConfig::<(), ()>(PhantomData);
+    let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
 
     for log_size in log_sizes {
         let n = 1 << log_size;
@@ -31,7 +31,7 @@ where
 
         group.bench_function(BenchmarkId::from_parameter(n), |b| {
             b.iter(|| {
-                config.fold_matrix(beta, mat.clone());
+                folding.fold_matrix(beta, mat.clone());
             })
         });
     }

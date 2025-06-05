@@ -9,7 +9,7 @@ use p3_matrix::Dimensions;
 use p3_util::reverse_bits_len;
 use p3_util::zip_eq::zip_eq;
 
-use crate::{CommitPhaseProofStep, FriConfiguration, FriParameters, FriProof};
+use crate::{CommitPhaseProofStep, FriParameters, FriFoldingStrategy, FriProof};
 
 #[derive(Debug)]
 pub enum FriError<CommitMmcsErr, InputError> {
@@ -21,22 +21,22 @@ pub enum FriError<CommitMmcsErr, InputError> {
     MissingInput,
 }
 
-pub fn verify<Config, Val, Challenge, M, Challenger>(
-    config: &Config,
+pub fn verify<Folding, Val, Challenge, M, Challenger>(
+    folding: &Folding,
     params: &FriParameters<M>,
-    proof: &FriProof<Challenge, M, Challenger::Witness, Config::InputProof>,
+    proof: &FriProof<Challenge, M, Challenger::Witness, Folding::InputProof>,
     challenger: &mut Challenger,
     open_input: impl Fn(
         usize,
-        &Config::InputProof,
-    ) -> Result<Vec<(usize, Challenge)>, FriError<M::Error, Config::InputError>>,
-) -> Result<(), FriError<M::Error, Config::InputError>>
+        &Folding::InputProof,
+    ) -> Result<Vec<(usize, Challenge)>, FriError<M::Error, Folding::InputError>>,
+) -> Result<(), FriError<M::Error, Folding::InputError>>
 where
     Val: Field,
     Challenge: ExtensionField<Val> + TwoAdicField,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
-    Config: FriConfiguration<Val, Challenge>,
+    Folding: FriFoldingStrategy<Val, Challenge>,
 {
     let betas: Vec<Challenge> = proof
         .commit_phase_commits
@@ -74,7 +74,7 @@ where
     let log_final_height = params.log_blowup + params.log_final_poly_len;
 
     for qp in &proof.query_proofs {
-        let index = challenger.sample_bits(log_max_height + config.extra_query_index_bits());
+        let index = challenger.sample_bits(log_max_height + folding.extra_query_index_bits());
         let ro = open_input(index, &qp.input_proof)?;
 
         debug_assert!(
@@ -82,14 +82,14 @@ where
             "reduced openings sorted by height descending"
         );
 
-        let mut domain_index = index >> config.extra_query_index_bits();
+        let mut domain_index = index >> folding.extra_query_index_bits();
 
         // Starting at the evaluation at `index` of the initial domain,
         // perform fri folds until the domain size reaches the final domain size.
         // Check after each fold that the pair of sibling evaluations at the current
         // node match the commitment.
         let folded_eval = verify_query(
-            config,
+            folding,
             params,
             &mut domain_index,
             zip_eq(
@@ -141,20 +141,20 @@ type CommitStep<'a, F, M> = (
 /// polynomials to be added in at specific domain sizes, perform the standard
 /// sequence of FRI folds, checking at each step that the pair of sibling evaluations
 /// match the commitment.
-fn verify_query<'a, Config, F, EF, M>(
-    config: &Config,
+fn verify_query<'a, Folding, F, EF, M>(
+    folding: &Folding,
     params: &FriParameters<M>,
     index: &mut usize,
     steps: impl ExactSizeIterator<Item = CommitStep<'a, EF, M>>,
     reduced_openings: Vec<(usize, EF)>,
     log_max_height: usize,
     log_final_height: usize,
-) -> Result<EF, FriError<M::Error, Config::InputError>>
+) -> Result<EF, FriError<M::Error, Folding::InputError>>
 where
     F: Field,
     EF: ExtensionField<F>,
     M: Mmcs<EF> + 'a,
-    Config: FriConfiguration<F, EF>,
+    Folding: FriFoldingStrategy<F, EF>,
 {
     let mut ro_iter = reduced_openings.into_iter().peekable();
     let mut folded_eval = ro_iter
@@ -195,7 +195,7 @@ where
             .map_err(FriError::CommitPhaseMmcsError)?;
 
         // Fold the pair of evaluations of sibling nodes into the evaluation of the parent fri node.
-        folded_eval = config.fold_row(*index, log_folded_height, beta, evals.into_iter());
+        folded_eval = folding.fold_row(*index, log_folded_height, beta, evals.into_iter());
 
         // If there are new polynomials to roll in at the folded height, do so.
         //

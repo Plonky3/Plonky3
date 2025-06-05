@@ -21,7 +21,7 @@ use tracing::info_span;
 
 use crate::deep_quotient::{deep_quotient_reduce_row, extract_lambda};
 use crate::domain::CircleDomain;
-use crate::folding::{CircleFriConfig, CircleFriConfigForMmcs, fold_y, fold_y_row};
+use crate::folding::{CircleFriFolding, CircleFriFoldingForMmcs, fold_y, fold_y_row};
 use crate::point::Point;
 use crate::prover::prove;
 use crate::verifier::verify;
@@ -295,11 +295,11 @@ where
             .rev()
             .collect();
 
-        let config: CircleFriConfigForMmcs<Val, Challenge, InputMmcs, FriMmcs> =
-            CircleFriConfig(PhantomData);
+        let folding: CircleFriFoldingForMmcs<Val, Challenge, InputMmcs, FriMmcs> =
+            CircleFriFolding(PhantomData);
 
         let fri_proof = prove(
-            &config,
+            &folding,
             &self.fri_parameters,
             fri_input,
             challenger,
@@ -391,11 +391,11 @@ where
         let log_global_max_height =
             proof.fri_proof.commit_phase_commits.len() + self.fri_parameters.log_blowup + 1;
 
-        let config: CircleFriConfigForMmcs<Val, Challenge, InputMmcs, FriMmcs> =
-            CircleFriConfig(PhantomData);
+        let folding: CircleFriFoldingForMmcs<Val, Challenge, InputMmcs, FriMmcs> =
+            CircleFriFolding(PhantomData);
 
         verify(
-            &config,
+            &folding,
             &self.fri_parameters,
             &proof.fri_proof,
             challenger,
