@@ -1,5 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::iter;
 
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
@@ -85,19 +86,21 @@ where
         // With num_queries = 100, N = 2^20, this is 0.995 so there is a .5% chance of a collision.
         // Due to this, security conscious users may want to set num_queries a little higher than the
         // theoretical minimum.
-        (0..config.num_queries)
-            .map(|_| challenger.sample_bits(log_max_height + g.extra_query_index_bits()))
+        iter::repeat_with(|| {
+            let index = challenger.sample_bits(log_max_height + g.extra_query_index_bits());
             // For each index, create a proof that the folding operations along the chain:
             // round 0: index, round 1: index >> 1, round 2: index >> 2, ... are correct.
-            .map(|index| QueryProof {
+            QueryProof {
                 input_proof: open_input(index),
                 commit_phase_openings: answer_query(
                     config,
                     &commit_phase_result.data,
                     index >> g.extra_query_index_bits(),
                 ),
-            })
-            .collect()
+            }
+        })
+        .take(config.num_queries)
+        .collect()
     });
 
     FriProof {
@@ -126,6 +129,7 @@ struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
 /// polynomial and return it along with all intermediate evaluations and our commitments to them.
 ///
 /// Arguments:
+/// - TODO (Once the renaming is done, fix this up)
 /// - `config`, `parameters`: Together, these contain all information needed to define the FRI protocol.
 ///    E.g. the folding scheme, the code rate, the final polynomial size.
 /// - `inputs`: The evaluation vectors of the polynomials. These must be sorted in descending order of length and each
@@ -202,33 +206,39 @@ where
     }
 }
 
-/// Given an index `i` produce a proof that all folds involving that index are correct. This is the prover's complement
-/// to the verifier's [`verify_query`] function.
+/// Given an `index` produce a proof that the chain of folds at `index, index >> 1, ... ` are correct.
+/// This is the prover's complement to the verifier's [`verify_query`] function.
 ///
 /// In addition to the output of this function, the prover must also supply the verifier with the input values
 /// (with associated opening proofs). These are produced by the `open_input` function passed into `prove_fri`.
 ///
-/// For each `i` this returns the value at `(index >> i) ^ 1` in round `i` along with an opening proof.
-/// The verifier can then use the values in round `i` at `index >> i` and `(index >> i) ^ 1` along with
-/// possibly an input value to compute the value at `index >> (i + 1)` in round `i + 1`.
+/// For each `i` in `[0, ..., num_folds)` this returns the value at `(index >> i) ^ 1` in round `i` along with
+/// an opening proof. The verifier can then use the values in round `i` at `index >> i` and `(index >> i) ^ 1`
+/// along with possibly an input value to compute the value at `index >> (i + 1)` in round `i + 1`.
 ///
 /// We repeat until we reach the final round where the verifier can check the value against the
-/// polynomial they where sent.
+/// polynomial they were sent.
+///
+/// Arguments:
+/// - `config`: The FRI configuration file containing the user set parameters.
+/// - `folded_polynomial_commits`: The commitments to the intermediate stage polynomials.
+/// - `start_index`: The opening index for the unfolded polynomial. For folded polynomials
+///   we use this this index right shifted by the number of folds.
 fn answer_query<F, M>(
     config: &FriConfig<M>,
-    commit_phase_commits: &[M::ProverData<RowMajorMatrix<F>>], // The commitments to the intermediate stage polynomials.
-    index: usize,                                              // The initial index to start at.
+    folded_polynomial_commits: &[M::ProverData<RowMajorMatrix<F>>],
+    start_index: usize,
 ) -> Vec<CommitPhaseProofStep<F, M>>
 where
     F: Field,
     M: Mmcs<F>,
 {
-    commit_phase_commits
+    folded_polynomial_commits
         .iter()
         .enumerate()
         .map(|(i, commit)| {
             // After i folding rounds, the current index we are looking at is `index >> i`.
-            let index_i = index >> i;
+            let index_i = start_index >> i;
             let index_i_sibling = index_i ^ 1;
             let index_pair = index_i >> 1;
 

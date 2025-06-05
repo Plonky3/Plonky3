@@ -168,10 +168,22 @@ type CommitStep<'a, F, M> = (
 /// polynomials to be added in at specific domain sizes, perform the standard
 /// sequence of FRI folds, checking at each step that the pair of sibling evaluations
 /// matches the commitment.
+///
+/// Arguments:
+/// - `g`: TODO (Once the renaming is done)
+/// - `config`: TODO (Once the renaming is done)
+/// - `index`: The opening index for the unfolded polynomial. For folded polynomials
+///   we use this this index right shifted by the number of folds.
+/// - `steps`: An iterator over the FRI folding data along the index path, which contains
+///   the beta challenge and commitment for each step.
+/// - `reduced_openings`: A vector of reduced openings, which are the evaluations of the polynomials
+///   to be added in at specific domain sizes.
+/// - `log_max_height`: The log of the maximum domain size, which is used to determine the number of folds.
+/// - `log_final_height`: The log of the final domain size, which is used to determine when to stop folding.
 fn verify_query<'a, G, F, EF, M>(
     g: &G,
     config: &FriConfig<M>,
-    index: &mut usize, // initial index in index path.
+    start_index: &mut usize,
     steps: impl ExactSizeIterator<Item = CommitStep<'a, EF, M>>, // Fri folding data along index path.
     reduced_openings: Vec<(usize, EF)>,                          // Fri input data along index path.
     log_max_height: usize,
@@ -203,7 +215,7 @@ where
         FriError::InvalidProofShape,
     )? {
         // Get the index of the other sibling of the current FRI node.
-        let index_sibling = *index ^ 1;
+        let index_sibling = *start_index ^ 1;
 
         let mut evals = vec![folded_eval; 2];
         evals[index_sibling % 2] = opening.sibling_value;
@@ -214,7 +226,7 @@ where
         }];
 
         // Replace index with the index of the parent FRI node.
-        *index >>= 1;
+        *start_index >>= 1;
 
         // Verify the commitment to the evaluations of the sibling nodes.
         config
@@ -222,13 +234,13 @@ where
             .verify_batch(
                 comm,
                 dims,
-                *index,
+                *start_index,
                 BatchOpeningRef::new(&[evals.clone()], &opening.opening_proof), // It's possible to remove the clone here but unnecessary as evals is tiny.
             )
             .map_err(FriError::CommitPhaseMmcsError)?;
 
         // Fold the pair of sibling nodes to get the evaluation of the parent FRI node.
-        folded_eval = g.fold_row(*index, log_folded_height, beta, evals.into_iter());
+        folded_eval = g.fold_row(*start_index, log_folded_height, beta, evals.into_iter());
 
         // If there are new polynomials to roll in at the folded height, do so.
         //

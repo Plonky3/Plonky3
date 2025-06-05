@@ -195,7 +195,7 @@ where
                 // to give a meaningful performance boost.
                 let shift = Val::GENERATOR / domain.shift();
                 // Compute the LDE with blowup factor fri.log_blowup.
-                // We bit reverse as this has a nice interplay with the FRI protocol.
+                // We bit reverse as this is required by our implementation of the FRI protocol.
                 self.dft
                     .coset_lde_batch(evals, self.fri.log_blowup, shift)
                     .bit_reverse_rows()
@@ -209,7 +209,12 @@ where
 
     /// Given the evaluations on a domain `gH`, return the evaluations on a different domain `g'K`.
     ///
-    /// Currently this assumes that `g' = g = Val::GENERATOR` and `K` is a subgroup of `H`.
+    /// Arguments:
+    /// - `prover_data`: The prover data containing all committed evaluation matrices.
+    /// - `idx`: The index of the matrix containing the evaluations we want. These evaluations
+    ///   are assumed to be over the coset `gH` where `g = Val::GENERATOR`.
+    /// - `domain`: The domain `g'K` on which to get evaluations on. Currently, this assumes that
+    ///   `g' = g` and `K` is a subgroup of `H` and panics if this is not the case.
     fn get_evaluations_on_domain<'a>(
         &self,
         prover_data: &'a Self::ProverData,
@@ -505,12 +510,7 @@ where
                     // If a matrix is smaller than global max height, we roll it into
                     // fri in a later round.
                     let reduced_index = index >> bits_reduced;
-                    let (opened_values, opening_proof) =
-                        self.mmcs.open_batch(reduced_index, data).unpack();
-                    BatchOpening {
-                        opened_values,
-                        opening_proof,
-                    }
+                    self.mmcs.open_batch(reduced_index, data)
                 })
                 .collect()
         });
