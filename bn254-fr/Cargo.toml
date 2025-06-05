@@ -1,19 +1,23 @@
 [package]
 name = "p3-bn254-fr"
-version = "0.1.0"
-edition = "2024"
-license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 p3-field.workspace = true
 p3-poseidon2.workspace = true
 p3-symmetric.workspace = true
 
+halo2curves = { version = "0.8.0", features = ["bits", "derive_serde"] }
 num-bigint.workspace = true
 paste.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
-halo2curves = { version = "0.8.0", features = ["bits", "derive_serde"] }
 
 [dev-dependencies]
 p3-field-testing.workspace = true

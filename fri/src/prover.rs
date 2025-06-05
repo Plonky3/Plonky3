@@ -11,7 +11,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 use tracing::{debug_span, info_span, instrument};
 
-use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof, QueryProof};
+use crate::{CommitPhaseProofStep, FriFoldingStrategy, FriParameters, FriProof, QueryProof};
 
 /// Create a proof that an opening `f(zeta)` is correct by proving that the
 /// function `(f(x) - f(zeta))/(x - zeta)` is low degree.
@@ -35,19 +35,19 @@ use crate::{CommitPhaseProofStep, FriConfig, FriGenericConfig, FriProof, QueryPr
 /// - `open_input`: A function that takes an index and produces proofs that the initial values in
 ///   inputs at that index (Or at `index >> i` for smaller `f`'s) are correct.
 #[instrument(name = "FRI prover", skip_all)]
-pub fn prove_fri<G, Val, Challenge, M, Challenger>(
-    g: &G,
-    config: &FriConfig<M>,
+pub fn prove_fri<Folding, Val, Challenge, M, Challenger>(
+    folding: &Folding,
+    params: &FriParameters<M>,
     inputs: Vec<Vec<Challenge>>,
     challenger: &mut Challenger,
-    open_input: impl Fn(usize) -> G::InputProof,
-) -> FriProof<Challenge, M, Challenger::Witness, G::InputProof>
+    open_input: impl Fn(usize) -> Folding::InputProof,
+) -> FriProof<Challenge, M, Challenger::Witness, Folding::InputProof>
 where
-    Val: Field,
-    Challenge: ExtensionField<Val> + TwoAdicField,
+    Val: TwoAdicField,
+    Challenge: ExtensionField<Val>,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
-    G: FriGenericConfig<Val, Challenge>,
+    Folding: FriFoldingStrategy<Val, Challenge>,
 {
     assert!(!inputs.is_empty());
     assert!(
@@ -60,9 +60,9 @@ where
 
     let log_max_height = log2_strict_usize(inputs[0].len());
     let log_min_height = log2_strict_usize(inputs.last().unwrap().len());
-    if config.log_final_poly_len > 0 {
+    if params.log_final_poly_len > 0 {
         // Final_poly_degree must be less than or equal to the degree of the smallest polynomial.
-        assert!(log_min_height > config.log_final_poly_len + config.log_blowup);
+        assert!(log_min_height > params.log_final_poly_len + params.log_blowup);
     }
 
     // Continually fold the inputs down until the polynomial degree reaches final_poly_degree.
@@ -70,11 +70,11 @@ where
     // themselves and the final polynomial.
     // Note that the challenger observes the commitments and the final polynomial inside this function so we don't
     // need to observe the output of this function here.
-    let commit_phase_result = commit_phase(g, config, inputs, challenger);
+    let commit_phase_result = commit_phase(folding, params, inputs, challenger);
 
     // Produce a proof of work witness before receiving any query challenges.
     // This helps to prevent grinding attacks.
-    let pow_witness = challenger.grind(config.proof_of_work_bits);
+    let pow_witness = challenger.grind(params.proof_of_work_bits);
 
     let query_proofs = info_span!("query phase").in_scope(|| {
         // Sample num_queries indexes to check.
@@ -136,32 +136,32 @@ struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
 ///   evaluation vector must be in bit reversed order.
 /// - `challenger`: The Fiat-Shamir challenger to use for sampling challenges.
 #[instrument(name = "commit phase", skip_all)]
-fn commit_phase<G, Val, Challenge, M, Challenger>(
-    g: &G,
-    config: &FriConfig<M>,
+fn commit_phase<Folding, Val, Challenge, M, Challenger>(
+    folding: &Folding,
+    params: &FriParameters<M>,
     inputs: Vec<Vec<Challenge>>,
     challenger: &mut Challenger,
 ) -> CommitPhaseResult<Challenge, M>
 where
-    Val: Field,
-    Challenge: ExtensionField<Val> + TwoAdicField,
+    Val: TwoAdicField,
+    Challenge: ExtensionField<Val>,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + CanObserve<M::Commitment>,
-    G: FriGenericConfig<Val, Challenge>,
+    Folding: FriFoldingStrategy<Val, Challenge>,
 {
     let mut inputs_iter = inputs.into_iter().peekable();
     let mut folded = inputs_iter.next().unwrap();
     let mut commits = vec![];
     let mut data = vec![];
 
-    while folded.len() > config.blowup() * config.final_poly_len() {
+    while folded.len() > params.blowup() * params.final_poly_len() {
         // As folded is in bit reversed order, it looks like:
         //      `[f_i(h^0), f_i(h^{N/2}), f_i(h^{N/4}), f_i(h^{3N/4}), ...] = [f_i(1), f_i(-1), f_i(h^{N/4}), f_i(-h^{N/4}), ...]`
         // so the relevant evaluations are adjacent and we can just reinterpret the vector as a matrix of width 2.
         let leaves = RowMajorMatrix::new(folded, 2);
 
         // Commit to these evaluations and observe the commitment.
-        let (commit, prover_data) = config.mmcs.commit_matrix(leaves);
+        let (commit, prover_data) = params.mmcs.commit_matrix(leaves);
         challenger.observe(commit.clone());
         commits.push(commit);
 
@@ -169,10 +169,10 @@ where
         let beta: Challenge = challenger.sample_algebra_element();
 
         // We passed ownership of `folded` to the MMCS, so get a reference to it
-        let leaves = config.mmcs.get_matrices(&prover_data).pop().unwrap();
+        let leaves = params.mmcs.get_matrices(&prover_data).pop().unwrap();
         // Do the folding operation:
         //      `f_{i + 1}'(x^2) = (f_i(x) + f_i(-x))/2 + beta_i (f_i(x) - f_i(-x))/2x`
-        folded = g.fold_matrix(beta, leaves.as_view());
+        folded = folding.fold_matrix(beta, leaves.as_view());
 
         data.push(prover_data);
 
@@ -191,8 +191,8 @@ where
     // we can just truncate the folded vector, bit-reverse again and run an IDFT.
     folded.truncate(config.final_poly_len());
     reverse_slice_index_bits(&mut folded);
-    let final_poly =
-        debug_span!("idft final poly").in_scope(|| Radix2DFTSmallBatch::default().idft(folded));
+    let final_poly = debug_span!("idft final poly")
+        .in_scope(|| Radix2DFTSmallBatch::default().idft_algebra(folded));
 
     // Observe all coefficients of the final polynomial.
     for &x in &final_poly {
@@ -225,7 +225,7 @@ where
 /// - `start_index`: The opening index for the unfolded polynomial. For folded polynomials
 ///   we use this this index right shifted by the number of folds.
 fn answer_query<F, M>(
-    config: &FriConfig<M>,
+    config: &FriParameters<M>,
     folded_polynomial_commits: &[M::ProverData<RowMajorMatrix<F>>],
     start_index: usize,
 ) -> Vec<CommitPhaseProofStep<F, M>>

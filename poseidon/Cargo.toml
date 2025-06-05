@@ -1,19 +1,25 @@
 [package]
 name = "p3-poseidon"
-version = "0.1.0"
-edition = "2024"
-license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 p3-field.workspace = true
 p3-mds.workspace = true
 p3-symmetric.workspace = true
+
 rand.workspace = true
 
 [dev-dependencies]
 p3-baby-bear.workspace = true
 p3-goldilocks.workspace = true
 p3-mersenne-31.workspace = true
+
 criterion.workspace = true
 
 [[bench]]

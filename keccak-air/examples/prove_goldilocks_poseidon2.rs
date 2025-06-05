@@ -5,7 +5,7 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::Field;
 use p3_field::extension::BinomialExtensionField;
-use p3_fri::{TwoAdicFriPcs, create_benchmark_fri_config};
+use p3_fri::{TwoAdicFriPcs, create_benchmark_fri_params};
 use p3_goldilocks::{Goldilocks, Poseidon2Goldilocks};
 use p3_keccak_air::{KeccakAir, generate_trace_rows};
 use p3_merkle_tree::MerkleTreeMmcs;
@@ -57,13 +57,13 @@ fn main() -> Result<(), impl Debug> {
     type Challenger = DuplexChallenger<Val, Perm, 8, 4>;
     let challenger = Challenger::new(perm);
 
-    let fri_config = create_benchmark_fri_config(challenge_mmcs);
+    let fri_params = create_benchmark_fri_params(challenge_mmcs);
 
     let inputs = (0..NUM_HASHES).map(|_| rng.random()).collect::<Vec<_>>();
-    let trace = generate_trace_rows::<Val>(inputs, fri_config.log_blowup);
+    let trace = generate_trace_rows::<Val>(inputs, fri_params.log_blowup);
 
     type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
-    let pcs = Pcs::new(dft, val_mmcs, fri_config);
+    let pcs = Pcs::new(dft, val_mmcs, fri_params);
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs, challenger);

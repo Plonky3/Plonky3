@@ -1,11 +1,12 @@
 [package]
 name = "p3-baby-bear"
-version = "0.1.0"
-edition = "2024"
-license = "MIT OR Apache-2.0"
-
-[features]
-nightly-features = ["p3-monty-31/nightly-features"]
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 p3-field.workspace = true
@@ -13,17 +14,22 @@ p3-mds.workspace = true
 p3-monty-31.workspace = true
 p3-poseidon2.workspace = true
 p3-symmetric.workspace = true
+
 rand.workspace = true
 
 [dev-dependencies]
+p3-dft.workspace = true
+p3-field-testing.workspace = true
+p3-util.workspace = true
+
+criterion.workspace = true
 num-bigint.workspace = true
 rand.workspace = true
-p3-field-testing.workspace = true
-p3-dft.workspace = true
-p3-util.workspace = true
-criterion.workspace = true
-serde_json.workspace = true
 rand_xoshiro.workspace = true
+serde_json.workspace = true
+
+[features]
+nightly-features = ["p3-monty-31/nightly-features"]
 
 [[bench]]
 name = "bench_field"

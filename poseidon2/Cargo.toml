@@ -1,8 +1,29 @@
 [package]
 name = "p3-poseidon2"
-version = "0.1.0"
-edition = "2024"
-license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+p3-field.workspace = true
+p3-mds.workspace = true
+p3-symmetric.workspace = true
+p3-util.workspace = true
+
+rand.workspace = true
+
+[dev-dependencies]
+p3-baby-bear.workspace = true
+p3-bn254-fr.workspace = true
+p3-goldilocks.workspace = true
+p3-koala-bear.workspace = true
+p3-mersenne-31.workspace = true
+
+criterion.workspace = true
 
 [features]
 nightly-features = [
@@ -11,21 +32,6 @@ nightly-features = [
     "p3-mersenne-31/nightly-features",
     "p3-goldilocks/nightly-features",
 ]
-
-[dependencies]
-p3-field.workspace = true
-p3-symmetric.workspace = true
-p3-mds.workspace = true
-p3-util.workspace = true
-rand.workspace = true
-
-[dev-dependencies]
-p3-mersenne-31.workspace = true
-p3-baby-bear.workspace = true
-p3-koala-bear.workspace = true
-p3-bn254-fr.workspace = true
-p3-goldilocks.workspace = true
-criterion.workspace = true
 
 [[bench]]
 name = "poseidon2"

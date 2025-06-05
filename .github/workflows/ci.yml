@@ -25,37 +25,37 @@ jobs:
     if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - uses: dtolnay/rust-toolchain@stable
-      id: rs-stable
+      - uses: dtolnay/rust-toolchain@stable
+        id: rs-stable
 
-    - uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/bin/
-          ~/.cargo/registry/index/
-          ~/.cargo/registry/cache/
-          ~/.cargo/git/db/
-          target/
-        key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ matrix.os }}-${{ matrix.features }}-${{ hashFiles('**/Cargo.toml') }}
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ matrix.os }}-${{ matrix.features }}-${{ hashFiles('**/Cargo.toml') }}
 
-    - name: Set flags
-      if: ${{ matrix.features }}
-      run: |
-        echo "RUSTFLAGS=-Ctarget-feature=${{ matrix.features }}" >> "$GITHUB_ENV"
+      - name: Set flags
+        if: ${{ matrix.features }}
+        run: |
+          echo "RUSTFLAGS=-Ctarget-feature=${{ matrix.features }}" >> "$GITHUB_ENV"
 
-    - name: Build
-      run: cargo build --verbose --all-targets
+      - name: Build
+        run: cargo build --verbose --all-targets
 
-    - name: Check with parallel
-      run: cargo check --verbose --all-targets --features parallel
+      - name: Check with parallel
+        run: cargo check --verbose --all-targets --features parallel
 
-    - name: Test
-      run: cargo test --verbose
+      - name: Test
+        run: cargo test --verbose
 
-    - name: Test with parallel
-      run: cargo test --verbose --features parallel
+      - name: Test with parallel
+        run: cargo test --verbose --features parallel
 
   check_embedded:
     name: Build embedded
@@ -66,57 +66,57 @@ jobs:
       target: thumbv7em-none-eabi
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - uses: dtolnay/rust-toolchain@stable
-      with:
-        targets: ${{ env.target }}
-      id: rs-stable
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.target }}
+        id: rs-stable
 
-    - uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/bin/
-          ~/.cargo/registry/index/
-          ~/.cargo/registry/cache/
-          ~/.cargo/git/db/
-          target/
-        key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ env.target }}-${{ hashFiles('**/Cargo.toml') }}
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ env.target }}-${{ hashFiles('**/Cargo.toml') }}
 
-    # NB: We omit p3-bn254-fr, p3-field-testing, and p3-examples as they currently depend on std
-    # and hence don't compile on the given target.
-    - name: Build
-      run: |
-        cargo build --verbose --target ${{ env.target }} -p p3-air
-        cargo build --verbose --target ${{ env.target }} -p p3-baby-bear
-        cargo build --verbose --target ${{ env.target }} -p p3-blake3
-        cargo build --verbose --target ${{ env.target }} -p p3-blake3-air
-        cargo build --verbose --target ${{ env.target }} -p p3-challenger
-        cargo build --verbose --target ${{ env.target }} -p p3-circle
-        cargo build --verbose --target ${{ env.target }} -p p3-commit
-        cargo build --verbose --target ${{ env.target }} -p p3-dft
-        cargo build --verbose --target ${{ env.target }} -p p3-field
-        cargo build --verbose --target ${{ env.target }} -p p3-fri
-        cargo build --verbose --target ${{ env.target }} -p p3-goldilocks
-        cargo build --verbose --target ${{ env.target }} -p p3-interpolation
-        cargo build --verbose --target ${{ env.target }} -p p3-keccak
-        cargo build --verbose --target ${{ env.target }} -p p3-keccak-air
-        cargo build --verbose --target ${{ env.target }} -p p3-koala-bear
-        cargo build --verbose --target ${{ env.target }} -p p3-matrix
-        cargo build --verbose --target ${{ env.target }} -p p3-maybe-rayon
-        cargo build --verbose --target ${{ env.target }} -p p3-mds
-        cargo build --verbose --target ${{ env.target }} -p p3-merkle-tree
-        cargo build --verbose --target ${{ env.target }} -p p3-mersenne-31
-        cargo build --verbose --target ${{ env.target }} -p p3-monolith
-        cargo build --verbose --target ${{ env.target }} -p p3-monty-31
-        cargo build --verbose --target ${{ env.target }} -p p3-poseidon
-        cargo build --verbose --target ${{ env.target }} -p p3-poseidon2
-        cargo build --verbose --target ${{ env.target }} -p p3-poseidon2-air
-        cargo build --verbose --target ${{ env.target }} -p p3-rescue
-        cargo build --verbose --target ${{ env.target }} -p p3-sha256
-        cargo build --verbose --target ${{ env.target }} -p p3-symmetric
-        cargo build --verbose --target ${{ env.target }} -p p3-uni-stark
-        cargo build --verbose --target ${{ env.target }} -p p3-util
+      # NB: We omit p3-bn254-fr, p3-field-testing, and p3-examples as they currently depend on std
+      # and hence don't compile on the given target.
+      - name: Build
+        run: |
+          cargo build --verbose --target ${{ env.target }} -p p3-air
+          cargo build --verbose --target ${{ env.target }} -p p3-baby-bear
+          cargo build --verbose --target ${{ env.target }} -p p3-blake3
+          cargo build --verbose --target ${{ env.target }} -p p3-blake3-air
+          cargo build --verbose --target ${{ env.target }} -p p3-challenger
+          cargo build --verbose --target ${{ env.target }} -p p3-circle
+          cargo build --verbose --target ${{ env.target }} -p p3-commit
+          cargo build --verbose --target ${{ env.target }} -p p3-dft
+          cargo build --verbose --target ${{ env.target }} -p p3-field
+          cargo build --verbose --target ${{ env.target }} -p p3-fri
+          cargo build --verbose --target ${{ env.target }} -p p3-goldilocks
+          cargo build --verbose --target ${{ env.target }} -p p3-interpolation
+          cargo build --verbose --target ${{ env.target }} -p p3-keccak
+          cargo build --verbose --target ${{ env.target }} -p p3-keccak-air
+          cargo build --verbose --target ${{ env.target }} -p p3-koala-bear
+          cargo build --verbose --target ${{ env.target }} -p p3-matrix
+          cargo build --verbose --target ${{ env.target }} -p p3-maybe-rayon
+          cargo build --verbose --target ${{ env.target }} -p p3-mds
+          cargo build --verbose --target ${{ env.target }} -p p3-merkle-tree
+          cargo build --verbose --target ${{ env.target }} -p p3-mersenne-31
+          cargo build --verbose --target ${{ env.target }} -p p3-monolith
+          cargo build --verbose --target ${{ env.target }} -p p3-monty-31
+          cargo build --verbose --target ${{ env.target }} -p p3-poseidon
+          cargo build --verbose --target ${{ env.target }} -p p3-poseidon2
+          cargo build --verbose --target ${{ env.target }} -p p3-poseidon2-air
+          cargo build --verbose --target ${{ env.target }} -p p3-rescue
+          cargo build --verbose --target ${{ env.target }} -p p3-sha256
+          cargo build --verbose --target ${{ env.target }} -p p3-symmetric
+          cargo build --verbose --target ${{ env.target }} -p p3-uni-stark
+          cargo build --verbose --target ${{ env.target }} -p p3-util
 
   lint:
     name: Formatting and Clippy
@@ -124,29 +124,35 @@ jobs:
     if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - uses: dtolnay/rust-toolchain@stable
-      with:
+      - uses: dtolnay/rust-toolchain@stable
+        with:
           components: clippy
-      id: rs-stable
+        id: rs-stable
 
-    - uses: dtolnay/rust-toolchain@nightly
-      with:
-        components: rustfmt
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
 
-    - uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/bin/
-          ~/.cargo/registry/index/
-          ~/.cargo/registry/cache/
-          ~/.cargo/git/db/
-          target/
-        key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ hashFiles('**/Cargo.toml') }}
+      - name: Install cargo-sort
+        run: cargo install cargo-sort
 
-    - name: Clippy
-      run: cargo +stable clippy --all-targets -- -D warnings
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ hashFiles('**/Cargo.toml') }}
+        
+      - name: Sort Cargo.toml
+        run: cargo +stable sort --workspace --grouped --check
 
-    - name: Format
-      run: cargo +nightly fmt --all -- --check 
+      - name: Clippy
+        run: cargo +stable clippy --all-targets -- -D warnings
+
+      - name: Format
+        run: cargo +nightly fmt --all -- --check
