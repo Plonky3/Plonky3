@@ -192,15 +192,17 @@ where
                 let mut vanishing_poly_coeffs =
                     Val::zero_vec((h * w) << (self.inner.fri.log_blowup + 1));
                 let p = shift.exp_u64(h as u64);
-                let group = Val::GENERATOR.powers().take(h);
-
-                group.into_iter().enumerate().for_each(|(i, p_i)| {
-                    for j in 0..w {
-                        let mul_coeff = p_i * random_values[i * w + j];
-                        vanishing_poly_coeffs[i * w + j] -= mul_coeff;
-                        vanishing_poly_coeffs[(h + i) * w + j] = p * mul_coeff;
-                    }
-                });
+                Val::GENERATOR
+                    .powers()
+                    .take(h)
+                    .enumerate()
+                    .for_each(|(i, p_i)| {
+                        for j in 0..w {
+                            let mul_coeff = p_i * random_values[i * w + j];
+                            vanishing_poly_coeffs[i * w + j] -= mul_coeff;
+                            vanishing_poly_coeffs[(h + i) * w + j] = p * mul_coeff;
+                        }
+                    });
                 let random_eval = self
                     .inner
                     .dft

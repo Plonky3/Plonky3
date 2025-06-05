@@ -30,7 +30,7 @@ fn coset_shift_and_scale_rows<F: Field>(
     shift: F,
     scale: F,
 ) {
-    let powers = shift.shifted_powers(scale).take(ncols).collect();
+    let powers = shift.shifted_powers(scale).collect_n(ncols);
     out.par_chunks_exact_mut(out_ncols)
         .zip(mat.par_chunks_exact(ncols))
         .for_each(|(out_row, in_row)| {

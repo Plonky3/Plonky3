@@ -994,6 +994,12 @@ impl<R: PrimeCharacteristicRing> Powers<R> {
             .zip(self)
             .for_each(|(out, next)| *out = next)
     }
+
+    /// Wrapper for `self.take(n).collect()`.
+    #[inline]
+    pub fn collect_n(self, n: usize) -> Vec<R> {
+        self.take(n).collect()
+    }
 }
 
 impl<F: Field> BoundedPowers<F> {

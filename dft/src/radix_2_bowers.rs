@@ -5,7 +5,7 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
-use p3_util::{log2_strict_usize, reverse_slice_index_bits};
+use p3_util::{flatten_to_base, log2_strict_usize, reverse_slice_index_bits};
 use tracing::instrument;
 
 use crate::TwoAdicSubgroupDft;
@@ -61,7 +61,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
         // Rescale coefficients in two ways:
         // - divide by height (since we're doing an inverse DFT)
         // - multiply by powers of the coset shift (see default coset LDE impl for an explanation)
-        let mut weights = shift.shifted_powers(h_inv).take(h).collect();
+        let mut weights = shift.shifted_powers(h_inv).collect_n(h);
         // reverse_bits because mat is encoded in bit-reversed order
         reverse_slice_index_bits(&mut weights);
 
@@ -86,7 +86,8 @@ fn bowers_g<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
     let root = F::two_adic_generator(log_h);
     let mut twiddles: Vec<_> = root.powers().take(h / 2).collect();
     reverse_slice_index_bits(&mut twiddles);
-    let twiddles: Vec<_> = twiddles.into_iter().map(DifButterfly).collect();
+    // SAFETY: DifButterfly is `repr(transparent)`
+    let twiddles: Vec<DifButterfly<F>> = unsafe { flatten_to_base(twiddles) };
 
     for log_half_block_size in 0..log_h {
         butterfly_layer(mat, 1 << log_half_block_size, &twiddles)
@@ -102,7 +103,8 @@ fn bowers_g_t<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
     let root_inv = F::two_adic_generator(log_h).inverse();
     let mut twiddles: Vec<_> = root_inv.powers().take(h / 2).collect();
     reverse_slice_index_bits(&mut twiddles);
-    let twiddles: Vec<_> = twiddles.into_iter().map(DitButterfly).collect();
+    // SAFETY: DitButterfly is `repr(transparent)`
+    let twiddles: Vec<DitButterfly<F>> = unsafe { flatten_to_base(twiddles) };
 
     for log_half_block_size in (0..log_h).rev() {
         butterfly_layer(mat, 1 << log_half_block_size, &twiddles)
