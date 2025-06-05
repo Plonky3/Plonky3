@@ -43,7 +43,7 @@ use crate::{FriConfig, FriGenericConfig, FriProof, prover};
 
 /// A polynomial commitment scheme using FRI to generate opening proofs.
 ///
-/// A polynomial `f` is committed to via its evaluation vectors over a coset
+/// We commit to a polynomial `f` via its evaluation vectors over a coset
 /// `gH` where `|H| >= 2 * deg(f)`. A value `f(z)` is opened by using a FRI
 /// proof to show that the evaluations of `(f(x) - f(z))/(x - z)` over
 /// `gH` are low degree.
