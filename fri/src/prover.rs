@@ -129,8 +129,8 @@ struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
 /// polynomial and return it along with all intermediate evaluations and our commitments to them.
 ///
 /// Arguments:
-/// - TODO (Once the renaming is done, fix this up)
-/// - `config`, `parameters`: Together, these contain all information needed to define the FRI protocol.
+/// - `folding`:
+/// - `params`: Together, these contain all information needed to define the FRI protocol.
 ///    E.g. the folding scheme, the code rate, the final polynomial size.
 /// - `inputs`: The evaluation vectors of the polynomials. These must be sorted in descending order of length and each
 ///   evaluation vector must be in bit reversed order.
@@ -168,7 +168,7 @@ where
         // Get the Fiat-Shamir challenge for this round.
         let beta: Challenge = challenger.sample_algebra_element();
 
-        // We passed ownership of `folded` to the MMCS, so get a reference to it
+        // We passed ownership of `leaves` to the MMCS, so get a reference to it
         let leaves = params.mmcs.get_matrices(&prover_data).pop().unwrap();
         // Do the folding operation:
         //      `f_{i + 1}'(x^2) = (f_i(x) + f_i(-x))/2 + beta_i (f_i(x) - f_i(-x))/2x`
@@ -220,8 +220,8 @@ where
 /// polynomial they were sent.
 ///
 /// Arguments:
-/// - `config`: The FRI configuration file containing the user set parameters.
-/// - `folded_polynomial_commits`: The commitments to the intermediate stage polynomials.
+/// - `params`: The parameters for the specific FRI protocol instance.
+/// - `folded_polynomial_commits`: A slice of commitments to the intermediate stage polynomials.
 /// - `start_index`: The opening index for the unfolded polynomial. For folded polynomials
 ///   we use this this index right shifted by the number of folds.
 fn answer_query<F, M>(

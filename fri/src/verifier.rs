@@ -27,9 +27,9 @@ pub enum FriError<CommitMmcsErr, InputError> {
 /// - `folding`: The FRI folding scheme used by the prover.
 /// - `params`: The parameters for the specific FRI protocol instance.
 /// - `proof`: The proof to verify.
-/// - `challenger`: The Fiat-Shamir challenger to use for sampling challenges.
+/// - `challenger`: The Fiat-Shamir challenger.
 /// - `open_input`: A function that takes an index and opening proofs and returns a vector of reduced openings
-///   which constitute the FRI inputs. The opening proofs prove that the values `f(x)` are the ones committed
+///   used as FRI inputs. The opening proofs prove that the values `f(x)` are the ones committed
 ///   to and these are then combined into the FRI inputs.
 pub fn verify_fri<Folding, Val, Challenge, M, Challenger>(
     folding: &Folding,
@@ -172,7 +172,7 @@ type CommitStep<'a, F, M> = (
 /// Arguments:
 /// - `folding`: The FRI folding scheme used by the prover.
 /// - `params`: The parameters for the specific FRI protocol instance.
-/// - `index`: The opening index for the unfolded polynomial. For folded polynomials
+/// - `start_index`: The opening index for the unfolded polynomial. For folded polynomials
 ///   we use this this index right shifted by the number of folds.
 /// - `fold_data_iter`: An iterator containing, for each fold, the beta challenge, polynomial commitment
 ///   and commitment opening at the appropriate index.
