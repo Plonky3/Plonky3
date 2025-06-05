@@ -87,19 +87,19 @@ where
         // Due to this, security conscious users may want to set num_queries a little higher than the
         // theoretical minimum.
         iter::repeat_with(|| {
-            let index = challenger.sample_bits(log_max_height + g.extra_query_index_bits());
+            let index = challenger.sample_bits(log_max_height + folding.extra_query_index_bits());
             // For each index, create a proof that the folding operations along the chain:
             // round 0: index, round 1: index >> 1, round 2: index >> 2, ... are correct.
             QueryProof {
                 input_proof: open_input(index),
                 commit_phase_openings: answer_query(
-                    config,
+                    params,
                     &commit_phase_result.data,
-                    index >> g.extra_query_index_bits(),
+                    index >> folding.extra_query_index_bits(),
                 ),
             }
         })
-        .take(config.num_queries)
+        .take(params.num_queries)
         .collect()
     });
 
@@ -187,9 +187,9 @@ where
     }
 
     // Now we need to get the coefficients of the final polynomial. As we know that the degree
-    // is `<= config.final_poly_len()` and the evaluations are stored in bit-reversed order,
+    // is `<= params.final_poly_len()` and the evaluations are stored in bit-reversed order,
     // we can just truncate the folded vector, bit-reverse again and run an IDFT.
-    folded.truncate(config.final_poly_len());
+    folded.truncate(params.final_poly_len());
     reverse_slice_index_bits(&mut folded);
     let final_poly = debug_span!("idft final poly")
         .in_scope(|| Radix2DFTSmallBatch::default().idft_algebra(folded));
