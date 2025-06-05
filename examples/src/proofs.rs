@@ -61,7 +61,7 @@ const fn get_poseidon2_mmcs<
 #[inline]
 pub fn prove_monty31_keccak<
     F: PrimeField32 + TwoAdicField,
-    EF: ExtensionField<F> + TwoAdicField,
+    EF: ExtensionField<F>,
     DFT: TwoAdicSubgroupDft<F>,
     PG: ExampleHashAir<F, KeccakStarkConfig<F, EF, DFT>>,
 >(
@@ -99,7 +99,7 @@ where
 #[inline]
 pub fn prove_monty31_poseidon2<
     F: PrimeField32 + TwoAdicField,
-    EF: ExtensionField<F> + TwoAdicField,
+    EF: ExtensionField<F>,
     DFT: TwoAdicSubgroupDft<F>,
     Perm16: CryptographicPermutation<[F; 16]> + CryptographicPermutation<[F::Packing; 16]>,
     Perm24: CryptographicPermutation<[F; 24]> + CryptographicPermutation<[F::Packing; 24]>,
