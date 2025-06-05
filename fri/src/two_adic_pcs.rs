@@ -175,7 +175,7 @@ where
 
     /// Commit to a collection of evaluation matrices.
     ///
-    /// Each element of evaluation contains a coset `shift * H` and a matrix `mat` with `mat.height() = |H|`.
+    /// Each element of `evaluations` contains a coset `shift * H` and a matrix `mat` with `mat.height() = |H|`.
     /// Interpreting each column of `mat` as the evaluations of a polynomial `p_i(x)` over `shift * H`,
     /// this computes the evaluations of `p_i` over `gK` where `g` is the chosen generator of the multiplicative group
     /// of `Val` and `K` is the unique subgroup of order `|H| << self.fri.log_blowup`.
