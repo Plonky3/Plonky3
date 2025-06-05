@@ -17,6 +17,9 @@ use crate::{
     TwoAdicSubgroupDft,
 };
 
+/// The number of layers to compute in each parallelization.
+const LAYERS_PER_GROUP: usize = 3;
+
 /// An FFT algorithm which divides a butterfly network's layers into two halves.
 ///
 /// Unlike other FFT algorithms, this algorithm is optimized for small batch sizes.
@@ -137,7 +140,7 @@ where
         // For the layers involving blocks larger than `num_par_rows`, we will
         // parallelize across the blocks.
 
-        // We do three layers of the DFT at once, to minimize how much data we need to transfer
+        // We do `LAYERS_PER_GROUP` layers of the DFT at once, to minimize how much data we need to transfer
         // between threads.
         for (twiddles_0, twiddles_1, twiddles_2) in
             root_table[log_num_par_rows..].iter().rev().tuples()
@@ -145,11 +148,11 @@ where
             dit_layer_par_triple(&mut mat.as_view_mut(), twiddles_0, twiddles_1, twiddles_2);
         }
 
-        // If the total number of layers is not a multiple of 3,
+        // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
         // we need to handle the remaining layers separately.
-        if (log_h - log_num_par_rows) % 3 == 1 {
+        if (log_h - log_num_par_rows) % LAYERS_PER_GROUP == 1 {
             dit_layer_par(&mut mat.as_view_mut(), &root_table[log_num_par_rows])
-        } else if (log_h - log_num_par_rows) % 3 == 2 {
+        } else if (log_h - log_num_par_rows) % LAYERS_PER_GROUP == 2 {
             dit_layer_par_double(
                 &mut mat.as_view_mut(),
                 &root_table[log_num_par_rows + 1],
@@ -204,9 +207,9 @@ where
         // For the layers involving blocks larger than `num_par_rows`, we will
         // parallelize across the blocks.
 
-        // If the total number of layers is not a multiple of 3,
+        // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
         // we need to handle the remaining layers separately.
-        let corr = (log_h - log_num_par_rows) % 3;
+        let corr = (log_h - log_num_par_rows) % LAYERS_PER_GROUP;
         match corr {
             1 => {
                 dif_layer_par(&mut mat.as_view_mut(), &root_table[log_num_par_rows]);
@@ -221,7 +224,7 @@ where
             _ => {}
         }
 
-        // We do three layers of the DFT at once, to minimize how much data we need to transfer
+        // We do `LAYERS_PER_GROUP` layers of the DFT at once, to minimize how much data we need to transfer
         // between threads.
         for (twiddles_0, twiddles_1, twiddles_2) in
             root_table[(log_num_par_rows + corr)..].iter().tuples()
@@ -276,11 +279,11 @@ where
         let num_inner_dit_layers = log2_strict_usize(num_par_rows);
         let num_inner_dif_layers = num_inner_dit_layers + added_bits;
 
-        // We will do large DFT/iDFT layers in batches of 3. If the number of large layers
-        // is not a multiple of 3, we will need to handle the remaining layers separately.
-        let corr = (log_h - num_inner_dit_layers) % 3;
+        // We will do large DFT/iDFT layers in batches of `LAYERS_PER_GROUP`. If the number of large layers
+        // is not a multiple of `LAYERS_PER_GROUP`, we will need to handle the remaining layers separately.
+        let corr = (log_h - num_inner_dit_layers) % LAYERS_PER_GROUP;
 
-        // We do three layers of the DFT at once, to minimize how much data we need to transfer
+        // We do `LAYERS_PER_GROUP` layers of the DFT at once, to minimize how much data we need to transfer
         // between threads.
         for (twiddles_0, twiddles_1, twiddles_2) in
             inv_root_table[num_inner_dit_layers..].iter().rev().tuples()
@@ -288,7 +291,8 @@ where
             dit_layer_par_triple(&mut mat.as_view_mut(), twiddles_0, twiddles_1, twiddles_2);
         }
 
-        // If the total number of layers is not a multiple of 3, we need to handle the remaining layers separately.
+        // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
+        // we need to handle the remaining layers separately.
         match corr {
             1 => {
                 dit_layer_par(
@@ -319,7 +323,8 @@ where
             shift,
         );
 
-        // If the total number of layers is not a multiple of 3, we need to handle the remaining layers separately.
+        // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
+        // we need to handle the remaining layers separately.
         match corr {
             1 => {
                 dif_layer_par(&mut output.as_view_mut(), &root_table[num_inner_dif_layers]);
@@ -334,7 +339,7 @@ where
             _ => {}
         }
 
-        // We do three layers of the DFT at once, to minimize how much data we need to transfer
+        // We do `LAYERS_PER_GROUP` layers of the DFT at once, to minimize how much data we need to transfer
         // between threads.
         for (twiddles_0, twiddles_1, twiddles_2) in
             root_table[(num_inner_dif_layers + corr)..].iter().tuples()
