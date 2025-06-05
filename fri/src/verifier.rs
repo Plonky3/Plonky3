@@ -24,8 +24,8 @@ pub enum FriError<CommitMmcsErr, InputError> {
 /// Verifies a FRI proof.
 ///
 /// Arguments:
-/// - `g`, `config`: Together, these contain all information the verifier needs to reimplement
-///   the prover's FRI protocol.
+/// - `folding`: The FRI folding scheme used by the prover.
+/// - `params`: The parameters for the specific FRI protocol instance.
 /// - `proof`: The proof to verify.
 /// - `challenger`: The Fiat-Shamir challenger to use for sampling challenges.
 /// - `open_input`: A function that takes an index and opening proofs and returns a vector of reduced openings
@@ -170,22 +170,23 @@ type CommitStep<'a, F, M> = (
 /// matches the commitment.
 ///
 /// Arguments:
-/// - `g`: TODO (Once the renaming is done)
-/// - `config`: TODO (Once the renaming is done)
+/// - `folding`: The FRI folding scheme used by the prover.
+/// - `params`: The parameters for the specific FRI protocol instance.
 /// - `index`: The opening index for the unfolded polynomial. For folded polynomials
 ///   we use this this index right shifted by the number of folds.
-/// - `steps`: An iterator over the FRI folding data along the index path, which contains
-///   the beta challenge and commitment for each step.
-/// - `reduced_openings`: A vector of reduced openings, which are the evaluations of the polynomials
-///   to be added in at specific domain sizes.
-/// - `log_max_height`: The log of the maximum domain size, which is used to determine the number of folds.
-/// - `log_final_height`: The log of the final domain size, which is used to determine when to stop folding.
+/// - `fold_data_iter`: An iterator containing, for each fold, the beta challenge, polynomial commitment
+///   and commitment opening at the appropriate index.
+/// - `reduced_openings`: A vector of pairs of a size and an opening. The opening is a linear combination
+///   of all input polynomials of that size opened at the appropriate index. Each opening is added into the
+///   the FRI folding chain once the domain size reaches the size specified in the pair.
+/// - `log_max_height`: The log of the maximum domain size.
+/// - `log_final_height`: The log of the final domain size.
 fn verify_query<'a, Folding, F, EF, M>(
     folding: &Folding,
     params: &FriParameters<M>,
     start_index: &mut usize,
-    steps: impl ExactSizeIterator<Item = CommitStep<'a, EF, M>>, // Fri folding data along index path.
-    reduced_openings: Vec<(usize, EF)>,                          // Fri input data along index path.
+    fold_data_iter: impl ExactSizeIterator<Item = CommitStep<'a, EF, M>>,
+    reduced_openings: Vec<(usize, EF)>,
     log_max_height: usize,
     log_final_height: usize,
 ) -> Result<EF, FriError<M::Error, Folding::InputError>>
@@ -211,7 +212,7 @@ where
     for (log_folded_height, ((&beta, comm), opening)) in zip_eq(
         // zip_eq ensures that we have the right number of steps.
         (log_final_height..log_max_height).rev(),
-        steps,
+        fold_data_iter,
         FriError::InvalidProofShape,
     )? {
         // Get the index of the other sibling of the current FRI node.

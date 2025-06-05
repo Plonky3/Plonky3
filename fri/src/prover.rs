@@ -28,8 +28,8 @@ use crate::{CommitPhaseProofStep, FriFoldingStrategy, FriParameters, FriProof, Q
 /// there is a non trivial chance that two queried indices will be equal.
 ///
 /// Arguments:
-/// - `g`, `parameters`: Together, these contain all information needed to define the FRI protocol.
-///    E.g. the folding scheme, the code rate, the final polynomial size.
+/// - `folding`: The FRI folding scheme to use.
+/// - `params`: The parameters for the specific FRI protocol instance.
 /// - `inputs`: The evaluation vectors of the polynomials.
 /// - `challenger`: The Fiat-Shamir challenger to use for sampling challenges.
 /// - `open_input`: A function that takes an index and produces proofs that the initial values in
