@@ -44,17 +44,19 @@ where
 
     let query_proofs = info_span!("query phase").in_scope(|| {
         iter::repeat_with(|| {
-            challenger.sample_bits(log_max_height + folding.extra_query_index_bits())
+            let index = challenger.sample_bits(log_max_height + folding.extra_query_index_bits());
+            // For each index, create a proof that the folding operations along the chain:
+            // round 0: index, round 1: index >> 1, round 2: index >> 2, ... are correct.
+            CircleQueryProof {
+                input_proof: open_input(index),
+                commit_phase_openings: answer_query(
+                    params,
+                    &commit_phase_result.data,
+                    index >> folding.extra_query_index_bits(),
+                ),
+            }
         })
         .take(params.num_queries)
-        .map(|index| CircleQueryProof {
-            input_proof: open_input(index),
-            commit_phase_openings: answer_query(
-                params,
-                &commit_phase_result.data,
-                index >> folding.extra_query_index_bits(),
-            ),
-        })
         .collect()
     });
 

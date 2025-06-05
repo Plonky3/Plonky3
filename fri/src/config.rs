@@ -4,6 +4,7 @@ use core::fmt::Debug;
 use p3_field::{ExtensionField, Field};
 use p3_matrix::Matrix;
 
+/// A set of parameters defining a specific instance of the FRI protocol.
 #[derive(Debug)]
 pub struct FriParameters<M> {
     pub log_blowup: usize,
