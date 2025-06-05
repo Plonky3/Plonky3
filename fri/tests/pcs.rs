@@ -238,7 +238,7 @@ mod m31_fri_pcs {
         };
         let pcs = Pcs {
             mmcs: val_mmcs,
-            fri_parameters: fri_params,
+            fri_params,
             _phantom: PhantomData,
         };
         (pcs, Challenger::from_hasher(vec![], byte_hash))

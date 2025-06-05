@@ -30,7 +30,7 @@ use crate::{CfftPerm, CfftPermutable, CircleEvaluations, CircleFriProof, cfft_pe
 #[derive(Debug)]
 pub struct CirclePcs<Val: Field, InputMmcs, FriMmcs> {
     pub mmcs: InputMmcs,
-    pub fri_parameters: FriParameters<FriMmcs>,
+    pub fri_params: FriParameters<FriMmcs>,
     pub _phantom: PhantomData<Val>,
 }
 
@@ -38,7 +38,7 @@ impl<Val: Field, InputMmcs, FriMmcs> CirclePcs<Val, InputMmcs, FriMmcs> {
     pub const fn new(mmcs: InputMmcs, fri_params: FriParameters<FriMmcs>) -> Self {
         Self {
             mmcs,
-            fri_parameters: fri_params,
+            fri_params,
             _phantom: PhantomData,
         }
     }
@@ -121,7 +121,7 @@ where
                 );
                 CircleEvaluations::from_natural_order(domain, evals)
                     .extrapolate(CircleDomain::standard(
-                        domain.log_n + self.fri_parameters.log_blowup,
+                        domain.log_n + self.fri_params.log_blowup,
                     ))
                     .to_cfft_order()
             })
@@ -265,7 +265,7 @@ where
             .map(|(log_height, (_, mut ro))| {
                 assert!(log_height > 0);
                 log_heights.push(log_height);
-                let lambda = extract_lambda(&mut ro, self.fri_parameters.log_blowup);
+                let lambda = extract_lambda(&mut ro, self.fri_params.log_blowup);
                 lambdas.push(lambda);
                 // Prepare for first layer fold with 2 siblings per leaf.
                 RowMajorMatrix::new(ro, 2)
@@ -279,14 +279,14 @@ where
         // to do it here, before p3-fri.
 
         let (first_layer_commitment, first_layer_data) =
-            self.fri_parameters.mmcs.commit(first_layer_mats);
+            self.fri_params.mmcs.commit(first_layer_mats);
         challenger.observe(first_layer_commitment.clone());
         let bivariate_beta: Challenge = challenger.sample_algebra_element();
 
         // Fold all first layers at bivariate_beta.
 
         let fri_input: Vec<Vec<Challenge>> = self
-            .fri_parameters
+            .fri_params
             .mmcs
             .get_matrices(&first_layer_data)
             .into_iter()
@@ -298,47 +298,40 @@ where
         let folding: CircleFriFoldingForMmcs<Val, Challenge, InputMmcs, FriMmcs> =
             CircleFriFolding(PhantomData);
 
-        let fri_proof = prove(
-            &folding,
-            &self.fri_parameters,
-            fri_input,
-            challenger,
-            |index| {
-                // CircleFriFolder asks for an extra query index bit, so we use that here to index
-                // the first layer fold.
+        let fri_proof = prove(&folding, &self.fri_params, fri_input, challenger, |index| {
+            // CircleFriFolder asks for an extra query index bit, so we use that here to index
+            // the first layer fold.
 
-                // Open the input (big opening, lots of columns) at the full index...
-                let input_openings = rounds
-                    .iter()
-                    .map(|(data, _)| {
-                        let log_max_batch_height =
-                            log2_strict_usize(self.mmcs.get_max_height(data));
-                        let reduced_index = index >> (log_max_height - log_max_batch_height);
-                        self.mmcs.open_batch(reduced_index, data)
-                    })
-                    .collect();
+            // Open the input (big opening, lots of columns) at the full index...
+            let input_openings = rounds
+                .iter()
+                .map(|(data, _)| {
+                    let log_max_batch_height = log2_strict_usize(self.mmcs.get_max_height(data));
+                    let reduced_index = index >> (log_max_height - log_max_batch_height);
+                    self.mmcs.open_batch(reduced_index, data)
+                })
+                .collect();
 
-                // We committed to first_layer in pairs, so open the reduced index and include the sibling
-                // as part of the input proof.
-                let (first_layer_values, first_layer_proof) = self
-                    .fri_parameters
-                    .mmcs
-                    .open_batch(index >> 1, &first_layer_data)
-                    .unpack();
-                let first_layer_siblings = izip!(&first_layer_values, &log_heights)
-                    .map(|(v, log_height)| {
-                        let reduced_index = index >> (log_max_height - log_height);
-                        let sibling_index = (reduced_index & 1) ^ 1;
-                        v[sibling_index]
-                    })
-                    .collect();
-                CircleInputProof {
-                    input_openings,
-                    first_layer_siblings,
-                    first_layer_proof,
-                }
-            },
-        );
+            // We committed to first_layer in pairs, so open the reduced index and include the sibling
+            // as part of the input proof.
+            let (first_layer_values, first_layer_proof) = self
+                .fri_params
+                .mmcs
+                .open_batch(index >> 1, &first_layer_data)
+                .unpack();
+            let first_layer_siblings = izip!(&first_layer_values, &log_heights)
+                .map(|(v, log_height)| {
+                    let reduced_index = index >> (log_max_height - log_height);
+                    let sibling_index = (reduced_index & 1) ^ 1;
+                    v[sibling_index]
+                })
+                .collect();
+            CircleInputProof {
+                input_openings,
+                first_layer_siblings,
+                first_layer_proof,
+            }
+        });
 
         (
             values,
@@ -389,14 +382,14 @@ where
 
         // +1 to account for first layer
         let log_global_max_height =
-            proof.fri_proof.commit_phase_commits.len() + self.fri_parameters.log_blowup + 1;
+            proof.fri_proof.commit_phase_commits.len() + self.fri_params.log_blowup + 1;
 
         let folding: CircleFriFoldingForMmcs<Val, Challenge, InputMmcs, FriMmcs> =
             CircleFriFolding(PhantomData);
 
         verify(
             &folding,
-            &self.fri_parameters,
+            &self.fri_params,
             &proof.fri_proof,
             challenger,
             |index, input_proof| {
@@ -414,7 +407,7 @@ where
                 {
                     let batch_heights: Vec<usize> = mats
                         .iter()
-                        .map(|(domain, _)| (domain.size() << self.fri_parameters.log_blowup))
+                        .map(|(domain, _)| (domain.size() << self.fri_params.log_blowup))
                         .collect_vec();
                     let batch_dims: Vec<Dimensions> = batch_heights
                         .iter()
@@ -443,7 +436,7 @@ where
                         mats,
                         InputError::InputShapeError,
                     )? {
-                        let log_height = mat_domain.log_n + self.fri_parameters.log_blowup;
+                        let log_height = mat_domain.log_n + self.fri_params.log_blowup;
                         let bits_reduced = log_global_max_height - log_height;
                         let orig_idx = cfft_permute_index(index >> bits_reduced, log_height);
 
@@ -480,7 +473,7 @@ where
                 .map(|(((log_height, (_, ro)), &fl_sib), &lambda)| {
                     assert!(log_height > 0);
 
-                    let orig_size = log_height - self.fri_parameters.log_blowup;
+                    let orig_size = log_height - self.fri_params.log_blowup;
                     let bits_reduced = log_global_max_height - log_height;
                     let orig_idx = cfft_permute_index(index >> bits_reduced, log_height);
 
@@ -516,7 +509,7 @@ where
                 // sort descending
                 fri_input.reverse();
 
-                self.fri_parameters
+                self.fri_params
                     .mmcs
                     .verify_batch(
                         &proof.first_layer_commitment,
@@ -577,7 +570,7 @@ mod tests {
         type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
         let pcs = Pcs {
             mmcs: val_mmcs,
-            fri_parameters: fri_params,
+            fri_params,
             _phantom: PhantomData,
         };
 

@@ -61,7 +61,7 @@ fn main() -> Result<(), impl Debug> {
     type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs {
         mmcs: val_mmcs,
-        fri_parameters: fri_params,
+        fri_params,
         _phantom: PhantomData,
     };
 

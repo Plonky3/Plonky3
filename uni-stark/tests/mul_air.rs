@@ -330,7 +330,7 @@ fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
     let pcs = Pcs {
         mmcs: val_mmcs,
-        fri_parameters: fri_params,
+        fri_params,
         _phantom: PhantomData,
     };
     let challenger = Challenger::from_hasher(vec![], byte_hash);
