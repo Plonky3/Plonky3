@@ -282,7 +282,7 @@ where
         */
 
         // Contained in each `Self::ProverData` is a list of matrices which have been committed to.
-        // We start by extracting those matrices to make them easier to work with.
+        // We extract those matrices to be able to refer to them directly.
         let mats_and_points = commitment_data_with_opening_points
             .iter()
             .map(|(data, points)| {
