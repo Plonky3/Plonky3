@@ -100,7 +100,6 @@ where
             .collect()
     });
 
-    // Return the proof.
     FriProof {
         commit_phase_commits: commit_phase_result.commits,
         query_proofs,
