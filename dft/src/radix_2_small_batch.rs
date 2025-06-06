@@ -18,6 +18,9 @@ use crate::{
     TwoAdicSubgroupDft,
 };
 
+/// The number of layers to compute in each parallelization.
+const LAYERS_PER_GROUP: usize = 3;
+
 /// An FFT algorithm which divides a butterfly network's layers into two halves.
 ///
 /// Unlike other FFT algorithms, this algorithm is optimized for small batch sizes.
@@ -140,7 +143,7 @@ where
 
         let multi_layer_dit = MultiLayerDitButterfly::new();
 
-        // We do three layers of the DFT at once, to minimize how much data we need to transfer
+        // We do `LAYERS_PER_GROUP` layers of the DFT at once, to minimize how much data we need to transfer
         // between threads.
         for (dit_0, dit_1, dit_2) in root_table[log_num_par_rows..]
             .iter()
@@ -151,14 +154,14 @@ where
             dft_layer_par_triple(&mut mat.as_view_mut(), dit_0, dit_1, dit_2, multi_layer_dit);
         }
 
-        // If the total number of layers is not a multiple of 3,
+        // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
         // we need to handle the remaining layers separately.
-        if (log_h - log_num_par_rows) % 3 == 1 {
+        if (log_h - log_num_par_rows) % LAYERS_PER_GROUP == 1 {
             // Safe as DitButterfly is #[repr(transparent)]
             let dit_twiddles: &[DitButterfly<F>] =
                 unsafe { as_base_slice(&root_table[log_num_par_rows]) };
             dft_layer_par(&mut mat.as_view_mut(), dit_twiddles);
-        } else if (log_h - log_num_par_rows) % 3 == 2 {
+        } else if (log_h - log_num_par_rows) % LAYERS_PER_GROUP == 2 {
             let dit_0: &[DitButterfly<F>] = unsafe { as_base_slice(&root_table[log_num_par_rows]) };
             let dit_1: &[DitButterfly<F>] =
                 unsafe { as_base_slice(&root_table[log_num_par_rows + 1]) };
@@ -214,9 +217,9 @@ where
 
         let multi_layer_dif = MultiLayerDifButterfly::new();
 
-        // If the total number of layers is not a multiple of 3,
+        // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
         // we need to handle the remaining layers separately.
-        let corr = (log_h - log_num_par_rows) % 3;
+        let corr = (log_h - log_num_par_rows) % LAYERS_PER_GROUP;
         match corr {
             1 => {
                 // Safe as DifButterfly is #[repr(transparent)]
@@ -234,7 +237,7 @@ where
             _ => {}
         }
 
-        // We do three layers of the DFT at once, to minimize how much data we need to transfer
+        // We do `LAYERS_PER_GROUP` layers of the DFT at once, to minimize how much data we need to transfer
         // between threads.
         for (dif_0, dif_1, dif_2) in root_table[(log_num_par_rows + corr)..]
             .iter()
@@ -291,12 +294,12 @@ where
         let num_inner_dit_layers = log2_strict_usize(num_par_rows);
         let num_inner_dif_layers = num_inner_dit_layers + added_bits;
 
-        // We will do large DFT/iDFT layers in batches of 3. If the number of large layers
-        // is not a multiple of 3, we will need to handle the remaining layers separately.
-        let corr = (log_h - num_inner_dit_layers) % 3;
+        // We will do large DFT/iDFT layers in batches of `LAYERS_PER_GROUP`. If the number of large layers
+        // is not a multiple of `LAYERS_PER_GROUP`, we will need to handle the remaining layers separately.
+        let corr = (log_h - num_inner_dit_layers) % LAYERS_PER_GROUP;
         let multi_layer = MultiLayerDitButterfly::new();
 
-        // We do three layers of the DFT at once, to minimize how much data we need to transfer
+        // We do `LAYERS_PER_GROUP` layers of the DFT at once, to minimize how much data we need to transfer
         // between threads.
         for (dit_0, dit_1, dit_2) in inv_root_table[num_inner_dit_layers..]
             .iter()
@@ -307,7 +310,8 @@ where
             dft_layer_par_triple(&mut mat.as_view_mut(), dit_0, dit_1, dit_2, multi_layer);
         }
 
-        // If the total number of layers is not a multiple of 3, we need to handle the remaining layers separately.
+        // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
+        // we need to handle the remaining layers separately.
         match corr {
             1 => {
                 // Safe as DitButterfly is #[repr(transparent)]
@@ -341,7 +345,8 @@ where
 
         let multi_layer_dif = MultiLayerDifButterfly::new();
 
-        // If the total number of layers is not a multiple of 3, we need to handle the remaining layers separately.
+        // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
+        // we need to handle the remaining layers separately.
         match corr {
             1 => {
                 // Safe as DifButterfly is #[repr(transparent)]
@@ -360,7 +365,7 @@ where
             _ => {}
         }
 
-        // We do three layers of the DFT at once, to minimize how much data we need to transfer
+        // We do `LAYERS_PER_GROUP` layers of the DFT at once, to minimize how much data we need to transfer
         // between threads.
         for (dif_0, dif_1, dif_2) in root_table[(num_inner_dif_layers + corr)..]
             .iter()
