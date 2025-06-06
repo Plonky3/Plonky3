@@ -921,7 +921,7 @@ fn zip_par_iter_vec<I: IndexedParallelIterator>(
         .collect::<Vec<_>>()
 }
 
-trait MultiLayerButterfly<F: Field, B: Butterfly<F>> {
+trait MultiLayerButterfly<F: Field, B: Butterfly<F>>: Copy + Send + Sync {
     fn apply_2_layers(
         &self,
         chunk_decomposition: &mut DoubleLayerBlockDecomposition<F>,
