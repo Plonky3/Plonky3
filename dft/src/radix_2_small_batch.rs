@@ -396,16 +396,20 @@ fn par_remaining_layers<F: Field>(mat: &mut [F], chunk_size: usize, root_table: 
     mat.par_chunks_exact_mut(chunk_size)
         .enumerate()
         .for_each(|(index, chunk)| {
-            for (layer, twiddles) in root_table.iter().rev().enumerate() {
-                let num_twiddles_per_block = 1 << layer;
-                let start = index * num_twiddles_per_block;
-                let twiddle_range = start..(start + num_twiddles_per_block);
-                // Safe as DitButterfly is #[repr(transparent)]
-                let dit_twiddles: &[DitButterfly<F>] =
-                    unsafe { as_base_slice(&twiddles[twiddle_range]) };
-                dft_layer(chunk, dit_twiddles);
-            }
+            remaining_layers(chunk, root_table, index);
         });
+}
+
+/// Performs a collection of DIT layers on a chunk of the matrix.
+fn remaining_layers<F: Field>(chunk: &mut [F], root_table: &[Vec<F>], index: usize) {
+    for (layer, twiddles) in root_table.iter().rev().enumerate() {
+        let num_twiddles_per_block = 1 << layer;
+        let start = index * num_twiddles_per_block;
+        let twiddle_range = start..(start + num_twiddles_per_block);
+        // Safe as DitButterfly is #[repr(transparent)]
+        let dit_twiddles: &[DitButterfly<F>] = unsafe { as_base_slice(&twiddles[twiddle_range]) };
+        dft_layer(chunk, dit_twiddles);
+    }
 }
 
 /// Splits the matrix into chunks of size `chunk_size` and performs
@@ -422,24 +426,29 @@ fn par_initial_layers<F: Field>(
     root_table: &[Vec<F>],
     log_height: usize,
 ) {
-    let num_rounds = root_table.len();
-    let height_inv = F::ONE.div_2exp_u64(log_height as u64);
+    let inv_height = F::ONE.div_2exp_u64(log_height as u64);
     mat.par_chunks_exact_mut(chunk_size)
         .enumerate()
         .for_each(|(index, chunk)| {
             // Divide all elements by the height of the matrix.
-            scale_slice_in_place_single_core(chunk, height_inv);
-
-            for (layer, twiddles) in root_table.iter().enumerate() {
-                let num_twiddles_per_block = 1 << (num_rounds - layer - 1);
-                let start = index * num_twiddles_per_block;
-                let twiddle_range = start..(start + num_twiddles_per_block);
-                // Safe as DifButterfly is #[repr(transparent)]
-                let dif_twiddles: &[DifButterfly<F>] =
-                    unsafe { as_base_slice(&twiddles[twiddle_range]) };
-                dft_layer(chunk, dif_twiddles);
-            }
+            scale_slice_in_place_single_core(chunk, inv_height);
+            initial_layers(chunk, root_table, index);
         });
+}
+
+/// Performs a collection of DIF layers on a chunk of the matrix.
+#[inline]
+fn initial_layers<F: Field>(chunk: &mut [F], root_table: &[Vec<F>], index: usize) {
+    let num_rounds = root_table.len();
+
+    for (layer, twiddles) in root_table.iter().enumerate() {
+        let num_twiddles_per_block = 1 << (num_rounds - layer - 1);
+        let start = index * num_twiddles_per_block;
+        let twiddle_range = start..(start + num_twiddles_per_block);
+        // Safe as DifButterfly is #[repr(transparent)]
+        let dif_twiddles: &[DifButterfly<F>] = unsafe { as_base_slice(&twiddles[twiddle_range]) };
+        dft_layer(chunk, dif_twiddles);
+    }
 }
 
 /// Splits the matrix into chunks of size `chunk_size` and performs
@@ -482,15 +491,7 @@ fn par_middle_layers<F: Field>(
         .zip(scaling.par_chunks_exact_mut(num_par_rows))
         .enumerate()
         .for_each(|(index, ((in_chunk, out_chunk), scaling))| {
-            for (layer, twiddles) in inv_root_table.iter().rev().enumerate() {
-                let num_twiddles_per_block = 1 << layer;
-                let start = index * num_twiddles_per_block;
-                let twiddle_range = start..(start + num_twiddles_per_block);
-                // Safe as DitButterfly is #[repr(transparent)]
-                let dit_twiddles: &[DitButterfly<F>] =
-                    unsafe { as_base_slice(&twiddles[twiddle_range]) };
-                dft_layer(in_chunk, dit_twiddles);
-            }
+            remaining_layers(in_chunk, inv_root_table, index);
 
             // Copy the values to the output matrix and scale appropriately.
             in_chunk
@@ -506,23 +507,20 @@ fn par_middle_layers<F: Field>(
                         });
                 });
 
-            for (layer, twiddles) in root_table.iter().enumerate() {
+            // We can do something cheaper than standard DFT layers for the first `added_bits` layers.
+            // as there are a lot of zeroes in the out_chunk.
+            for (layer, twiddles) in root_table[..added_bits].iter().enumerate() {
                 let num_twiddles_per_block = 1 << (num_rounds - layer - 1);
                 let start = index * num_twiddles_per_block;
                 let twiddle_range = start..(start + num_twiddles_per_block);
-                // While
-                if layer < added_bits {
-                    // Safe as DifButterflyZeros is #[repr(transparent)]
-                    let dif_twiddles_zeros: &[DifButterflyZeros<F>] =
-                        unsafe { as_base_slice(&twiddles[twiddle_range]) };
-                    dft_layer_zeros(out_chunk, dif_twiddles_zeros, added_bits - layer - 1);
-                } else {
-                    // Safe as DifButterfly is #[repr(transparent)]
-                    let dif_twiddles: &[DifButterfly<F>] =
-                        unsafe { as_base_slice(&twiddles[twiddle_range]) };
-                    dft_layer(out_chunk, dif_twiddles)
-                }
+
+                // Safe as DifButterflyZeros is #[repr(transparent)]
+                let dif_twiddles_zeros: &[DifButterflyZeros<F>] =
+                    unsafe { as_base_slice(&twiddles[twiddle_range]) };
+                dft_layer_zeros(out_chunk, dif_twiddles_zeros, added_bits - layer - 1);
             }
+
+            initial_layers(out_chunk, &root_table[added_bits..], index);
         });
 }
 
