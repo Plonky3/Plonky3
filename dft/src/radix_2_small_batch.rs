@@ -22,10 +22,6 @@ use crate::{
 const LAYERS_PER_GROUP: usize = 3;
 
 /// An FFT algorithm which divides a butterfly network's layers into two halves.
-/// The number of layers to compute in each parallelization.
-const LAYERS_PER_GROUP: usize = 3;
-
-/// An FFT algorithm which divides a butterfly network's layers into two halves.
 ///
 /// Unlike other FFT algorithms, this algorithm is optimized for small batch sizes.
 /// It also stores its twiddle factors and only re-computes if it is asked to do a
@@ -158,7 +154,6 @@ where
             dft_layer_par_triple(&mut mat.as_view_mut(), dit_0, dit_1, dit_2, multi_layer_dit);
         }
 
-        // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
         // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
         // we need to handle the remaining layers separately.
         let corr = (log_h - log_num_par_rows) % LAYERS_PER_GROUP;
@@ -295,7 +290,6 @@ where
             dft_layer_par_triple(&mut mat.as_view_mut(), dit_0, dit_1, dit_2, multi_layer_dit);
         }
 
-        // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
         // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
         // we need to handle the remaining layers separately.
         let corr = (log_h - num_inner_dit_layers) % LAYERS_PER_GROUP;
