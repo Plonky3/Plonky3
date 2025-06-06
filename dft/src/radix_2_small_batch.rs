@@ -278,13 +278,9 @@ where
         let num_inner_dit_layers = log2_strict_usize(num_par_rows);
         let num_inner_dif_layers = num_inner_dit_layers + added_bits;
 
-        // We will do large DFT/iDFT layers in batches of `LAYERS_PER_GROUP`. If the number of large layers
-        // is not a multiple of `LAYERS_PER_GROUP`, we will need to handle the remaining layers separately.
-        let corr = (log_h - num_inner_dit_layers) % LAYERS_PER_GROUP;
+        // We will do large DFT/iDFT layers in batches of `LAYERS_PER_GROUP`. We start with
+        // the dit layers.
         let multi_layer_dit = MultiLayerDitButterfly::new();
-
-        // We do `LAYERS_PER_GROUP` layers of the DFT at once, to minimize how much data we need to transfer
-        // between threads.
         for (dit_0, dit_1, dit_2) in inv_root_table[num_inner_dit_layers..]
             .iter()
             .rev()
@@ -296,6 +292,7 @@ where
 
         // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
         // we need to handle the remaining layers separately.
+        let corr = (log_h - num_inner_dit_layers) % LAYERS_PER_GROUP;
         dft_layer_par_extra_layers(
             &mut mat.as_view_mut(),
             &inv_root_table[num_inner_dit_layers..num_inner_dit_layers + corr],
@@ -315,6 +312,7 @@ where
             shift,
         );
 
+        // We are left with the final dif layers.
         let multi_layer_dif = MultiLayerDifButterfly::new();
 
         // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
@@ -415,7 +413,8 @@ fn par_remaining_layers<F: Field>(mat: &mut [F], chunk_size: usize, root_table: 
 ///
 /// This avoids passing data between threads, which can be expensive.
 ///
-/// Basically identical to [par_remaining_layers] but in reverse.
+/// Basically identical to [par_remaining_layers] but in reverse and we
+/// also divide by the height.
 #[inline]
 fn par_initial_layers<F: Field>(
     mat: &mut [F],
@@ -443,6 +442,11 @@ fn par_initial_layers<F: Field>(
         });
 }
 
+/// Splits the matrix into chunks of size `chunk_size` and performs
+/// the middle layers of a coset_lde in parallel on each chunk.
+///
+/// Similar to [par_remaining_layers] followed by [par_initial_layers]
+/// with a scaling and copying operation in between.
 fn par_middle_layers<F: Field>(
     in_mat: &mut RowMajorMatrixViewMut<F>,
     out_mat: &mut RowMajorMatrixViewMut<F>,
