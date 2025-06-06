@@ -19,7 +19,7 @@ use rand::distr::{Distribution, StandardUniform};
 use tracing::{info_span, instrument};
 
 use crate::verifier::FriError;
-use crate::{FriConfig, FriProof, TwoAdicFriPcs};
+use crate::{FriParameters, FriProof, TwoAdicFriPcs};
 
 /// A hiding FRI PCS. Both MMCSs must also be hiding; this is not enforced at compile time so it's
 /// the user's responsibility to configure.
@@ -34,11 +34,11 @@ impl<Val, Dft, InputMmcs, FriMmcs, R> HidingFriPcs<Val, Dft, InputMmcs, FriMmcs,
     pub fn new(
         dft: Dft,
         mmcs: InputMmcs,
-        fri: FriConfig<FriMmcs>,
+        params: FriParameters<FriMmcs>,
         num_random_codewords: usize,
         rng: R,
     ) -> Self {
-        let inner = TwoAdicFriPcs::new(dft, mmcs, fri);
+        let inner = TwoAdicFriPcs::new(dft, mmcs, params);
         Self {
             inner,
             num_random_codewords,

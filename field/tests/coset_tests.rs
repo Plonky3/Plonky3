@@ -10,21 +10,21 @@ mod coset {
     type GL = Goldilocks;
 
     #[test]
-    // Checks that a coset of the maximum size allwed by the field (implementation)
+    // Checks that a coset of the maximum size allowed by the field (implementation)
     // can indeed be constructed
     fn test_coset_limit() {
         TwoAdicMultiplicativeCoset::<BB>::new(BB::ONE, BB::TWO_ADICITY).unwrap();
     }
 
     #[test]
-    // Checks that attemtping to construct a field larger than allowed by the field
+    // Checks that attempting to construct a field larger than allowed by the field
     // implementation is disallowed
     fn test_coset_too_large() {
         assert!(TwoAdicMultiplicativeCoset::<BB>::new(BB::ONE, BB::TWO_ADICITY + 1).is_none());
     }
 
     #[test]
-    // Checks that attemtping to shrink a coset by any divisor of its size is
+    // Checks that attempting to shrink a coset by any divisor of its size is
     // allowed, but doing so by the next power of two is not
     fn test_shrink_too_much() {
         let coset = TwoAdicMultiplicativeCoset::<GL>::new(GL::from_u16(42), 5).unwrap();

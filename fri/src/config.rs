@@ -4,8 +4,9 @@ use core::fmt::Debug;
 use p3_field::{ExtensionField, Field};
 use p3_matrix::Matrix;
 
+/// A set of parameters defining a specific instance of the FRI protocol.
 #[derive(Debug)]
-pub struct FriConfig<M> {
+pub struct FriParameters<M> {
     pub log_blowup: usize,
     // TODO: This parameter and FRI early stopping are not yet implemented in `CirclePcs`.
     pub log_final_poly_len: usize,
@@ -14,7 +15,7 @@ pub struct FriConfig<M> {
     pub mmcs: M,
 }
 
-impl<M> FriConfig<M> {
+impl<M> FriParameters<M> {
     pub const fn blowup(&self) -> usize {
         1 << self.log_blowup
     }
@@ -33,9 +34,9 @@ impl<M> FriConfig<M> {
     }
 }
 
-/// Whereas `FriConfig` encompasses parameters the end user can set, `FriGenericConfig` is
+/// Whereas `FriParameters` encompasses parameters the end user can set, `FriFoldingStrategy` is
 /// set by the PCS calling FRI, and abstracts over implementation details of the PCS.
-pub trait FriGenericConfig<F: Field, EF: ExtensionField<F>> {
+pub trait FriFoldingStrategy<F: Field, EF: ExtensionField<F>> {
     type InputProof;
     type InputError: Debug;
 
@@ -58,13 +59,13 @@ pub trait FriGenericConfig<F: Field, EF: ExtensionField<F>> {
     fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, m: M) -> Vec<EF>;
 }
 
-/// Creates a minimal `FriConfig` for testing purposes.
-/// This configuration is designed to reduce computational cost during tests.
-pub const fn create_test_fri_config<Mmcs>(
+/// Creates a minimal set of `FriParameters` for testing purposes.
+/// These parameters are designed to reduce computational cost during tests.
+pub const fn create_test_fri_params<Mmcs>(
     mmcs: Mmcs,
     log_final_poly_len: usize,
-) -> FriConfig<Mmcs> {
-    FriConfig {
+) -> FriParameters<Mmcs> {
+    FriParameters {
         log_blowup: 2,
         log_final_poly_len,
         num_queries: 2,
@@ -73,10 +74,10 @@ pub const fn create_test_fri_config<Mmcs>(
     }
 }
 
-/// Creates a minimal `FriConfig` for testing purposes, with zk enabled.
-/// This configuration is designed to reduce computational cost during tests.
-pub const fn create_test_fri_config_zk<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
-    FriConfig {
+/// Creates a minimal set of `FriParameters` for testing purposes, with zk enabled.
+/// These parameters are designed to reduce computational cost during tests.
+pub const fn create_test_fri_params_zk<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> {
+    FriParameters {
         log_blowup: 2,
         log_final_poly_len: 0,
         num_queries: 2,
@@ -85,10 +86,10 @@ pub const fn create_test_fri_config_zk<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
     }
 }
 
-/// Creates a `FriConfig` suitable for benchmarking.
-/// This configuration represents typical settings used in production-like scenarios.
-pub const fn create_benchmark_fri_config<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
-    FriConfig {
+/// Creates a set of `FriParameters` suitable for benchmarking.
+/// These parameters represent typical settings used in production-like scenarios.
+pub const fn create_benchmark_fri_params<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> {
+    FriParameters {
         log_blowup: 1,
         log_final_poly_len: 0,
         num_queries: 100,
@@ -97,9 +98,10 @@ pub const fn create_benchmark_fri_config<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
     }
 }
 
-/// Creates a `FriConfig` suitable for benchmarking with zk enabled.
-pub fn create_benchmark_fri_config_zk<Mmcs>(mmcs: Mmcs) -> FriConfig<Mmcs> {
-    FriConfig {
+/// Creates a set of `FriParameters` suitable for benchmarking with zk enabled.
+/// These parameters represent typical settings used in production-like scenarios.
+pub fn create_benchmark_fri_params_zk<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> {
+    FriParameters {
         log_blowup: 2,
         log_final_poly_len: 0,
         num_queries: 100,
