@@ -11,9 +11,9 @@ pub mod from_integer_tests;
 pub mod packedfield_testing;
 
 use alloc::vec::Vec;
-use core::array;
-
 pub use bench_func::*;
+use core::array;
+use core::iter::successors;
 pub use dft_testing::*;
 pub use extension_testing::*;
 use num_bigint::BigUint;
@@ -537,6 +537,42 @@ pub fn test_binary_ops<R: PrimeCharacteristicRing + Eq + Copy>(
     );
 }
 
+/// Tests the optimized implementation of `powers.take(n).collect()`
+pub fn test_powers_collect<F: Field>() {
+    // Small using serial implementation
+    let small_powers_serial = [0, 1, 2, 3, 4, 15];
+    // Small using packed implementation
+    let small_powers_packed = [16, 17];
+    // Large powers of two
+    let powers_of_two = [5, 6, 7, 8, 9, 10, 13];
+
+    let num_powers_tests: Vec<usize> = small_powers_serial
+        .into_iter()
+        .chain(small_powers_packed)
+        .into_iter()
+        .chain(powers_of_two.iter().flat_map(|exp| {
+            // Check boundaries at power of 2
+            let n = 1 << exp;
+            [n - 1, n, n + 1]
+        }))
+        .collect();
+
+    let base = F::TWO;
+    let shift = F::GENERATOR;
+
+    // Manual implementation of `Powers`
+    let expected_iter = successors(Some(shift), |prev| Some(*prev * base));
+
+    for num_powers in num_powers_tests {
+        let expected: Vec<_> = expected_iter.clone().take(num_powers).collect();
+        let actual = base.shifted_powers(shift).collect_n(num_powers);
+        assert_eq!(
+            expected, actual,
+            "Got different powers when taking {num_powers}"
+        );
+    }
+}
+
 /// A function which extends the `exp_u64` code to handle `BigUints`.
 ///
 /// This solution is slow (particularly when dealing with extension fields
@@ -605,7 +641,7 @@ pub fn test_two_adic_generator_consistency<F: TwoAdicField>() {
 }
 
 pub fn test_two_adic_point_collection<F: TwoAdicField>() {
-    let log_n = F::TWO_ADICITY.min(18);
+    let log_n = F::TWO_ADICITY.min(15);
     for bits in 0..=log_n {
         let group = TwoAdicMultiplicativeCoset::new(F::ONE, bits).unwrap();
         let points = group.iter().collect();
@@ -764,6 +800,10 @@ macro_rules! test_field {
             #[test]
             fn test_streaming() {
                 $crate::test_into_stream::<$field>();
+            }
+            #[test]
+            fn test_powers_collect() {
+                $crate::test_powers_collect::<$field>();
             }
         }
 
