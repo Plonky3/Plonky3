@@ -549,7 +549,6 @@ pub fn test_powers_collect<F: Field>() {
     let num_powers_tests: Vec<usize> = small_powers_serial
         .into_iter()
         .chain(small_powers_packed)
-        .into_iter()
         .chain(powers_of_two.iter().flat_map(|exp| {
             // Check boundaries at power of 2
             let n = 1 << exp;
