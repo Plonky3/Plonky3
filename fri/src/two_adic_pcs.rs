@@ -99,8 +99,7 @@ impl<F: TwoAdicField, InputProof, InputError: Debug, EF: ExtensionField<F>>
             .exp_u64(reverse_bits_len(index, log_height) as u64);
         let mut xs = F::two_adic_generator(log_arity)
             .shifted_powers(subgroup_start)
-            .take(arity)
-            .collect();
+            .collect_n(arity);
         reverse_slice_index_bits(&mut xs);
         assert_eq!(log_arity, 1, "can only interpolate two points for now");
         // interpolate and evaluate at beta
@@ -127,10 +126,7 @@ impl<F: TwoAdicField, InputProof, InputError: Debug, EF: ExtensionField<F>>
 
         // As beta is in the extension field, we want to avoid multiplying by it
         // for as long as possible. Here we precompute the powers  `g_inv^i / 2` in the base field.
-        let mut halve_inv_powers = g_inv
-            .shifted_powers(F::ONE.halve())
-            .take(m.height())
-            .collect();
+        let mut halve_inv_powers = g_inv.shifted_powers(F::ONE.halve()).collect_n(m.height());
         reverse_slice_index_bits(&mut halve_inv_powers);
 
         m.par_rows()

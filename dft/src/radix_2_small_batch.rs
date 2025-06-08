@@ -525,7 +525,7 @@ fn par_middle_layers<F: Field>(
     let log_height = log2_strict_usize(height);
     let inv_height = F::ONE.div_2exp_u64(log_height as u64);
 
-    let mut scaling = shift.shifted_powers(inv_height).take(height).collect();
+    let mut scaling = shift.shifted_powers(inv_height).collect_n(height);
     reverse_slice_index_bits(&mut scaling);
 
     in_mat

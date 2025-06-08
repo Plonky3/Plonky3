@@ -170,10 +170,7 @@ mod tests {
         let n = evals.len();
         let k = log2_strict_usize(n);
 
-        let coset = F::two_adic_generator(k)
-            .shifted_powers(shift)
-            .take(n)
-            .collect();
+        let coset = F::two_adic_generator(k).shifted_powers(shift).collect_n(n);
 
         let denom: Vec<_> = coset.iter().map(|&w| point - w).collect();
 
@@ -234,8 +231,7 @@ mod tests {
         let shift = EF4::GENERATOR;
         let coset = EF4::two_adic_generator(3)
             .shifted_powers(shift)
-            .take(8)
-            .collect();
+            .collect_n(8);
 
         let f1 = |x: EF4| x * x + x * F::TWO + F::from_u32(3);
         let f2 = |x: EF4| x * x * F::from_u32(4) + x * F::from_u32(5) + F::from_u32(6);
