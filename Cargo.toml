@@ -101,6 +101,8 @@ p3-uni-stark = { path = "uni-stark", version = "0.3.0" }
 p3-util = { path = "util", version = "0.3.0" }
 
 [workspace.package]
+# General description field used for the sub-crates that are currently missing a description.
+description = "Plonky3 is a toolkit for implementing polynomial IOPs (PIOPs), such as PLONK and STARKs."
 version = "0.3.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
