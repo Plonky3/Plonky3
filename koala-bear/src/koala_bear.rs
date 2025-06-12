@@ -173,7 +173,7 @@ impl AbstractField for KoalaBear {
 
     #[inline]
     fn generator() -> Self {
-        Self::from_canonical_u32(0x1f)
+        Self::from_canonical_u32(0x3)
     }
 }
 
