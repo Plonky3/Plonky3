@@ -1,7 +1,6 @@
 [package]
 name = "p3-monty-31"
-# TODO: Replace this generic plonky3 description with one specific to this crate...
-description.workspace = true
+description = "Implements a 31-bit prime field using Montgomery arithmetic, suitable for cryptographic computations."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

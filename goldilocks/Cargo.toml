@@ -1,7 +1,6 @@
 [package]
 name = "p3-goldilocks"
-# TODO: Replace this generic plonky3 description with one specific to this crate...
-description.workspace = true
+description = "An implementation of the Goldilocks prime field F_p, where p = 2^64 - 2^32 + 1, with SIMD-accelerated arithmetic and Poseidon2 support."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

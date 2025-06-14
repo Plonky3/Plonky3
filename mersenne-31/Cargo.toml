@@ -1,7 +1,6 @@
 [package]
 name = "p3-mersenne-31"
-# TODO: Replace this generic plonky3 description with one specific to this crate...
-description.workspace = true
+description = "A highly optimized implementation of the prime field F_p where p = 2^31 - 1, with SIMD acceleration for multiple architectures."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

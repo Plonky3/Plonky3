@@ -1,6 +1,6 @@
 [package]
 name = "p3-baby-bear"
-description.workspace = true
+description = "Implementation of the BabyBear field, including AVX/NEON optimizations and cryptographic primitives like Poseidon2."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

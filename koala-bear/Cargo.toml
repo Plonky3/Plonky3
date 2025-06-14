@@ -1,7 +1,6 @@
 [package]
 name = "p3-koala-bear"
-# TODO: Replace this generic plonky3 description with one specific to this crate...
-description.workspace = true
+description = "Field extensions and optimized Poseidon2 implementations using the KoalaBear field with SIMD support."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
