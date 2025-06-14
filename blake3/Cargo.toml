@@ -1,7 +1,6 @@
 [package]
 name = "p3-blake3"
-# TODO: Replace this generic plonky3 description with one specific to this crate...
-description.workspace = true
+description = "Implements the BLAKE3 cryptographic hash function with support for chunked and slice-based hashing."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -1,7 +1,6 @@
 [package]
 name = "p3-interpolation"
-# TODO: Replace this generic plonky3 description with one specific to this crate...
-description.workspace = true
+description = "Tools for performing Lagrange interpolation over two-adic subgroups and their cosets."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -1,7 +1,6 @@
 [package]
 name = "p3-challenger"
-# TODO: Replace this generic plonky3 description with one specific to this crate...
-description.workspace = true
+description = "A Fiat–Shamir transcript and challenger framework used to derive random challenges in proof systems."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

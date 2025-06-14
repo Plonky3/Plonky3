@@ -1,7 +1,6 @@
 [package]
 name = "p3-dft"
-# TODO: Replace this generic plonky3 description with one specific to this crate...
-description.workspace = true
+description = "A collection of discrete Fourier transform (DFT) implementations for finite fields, including radix-2 and parallel variants."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

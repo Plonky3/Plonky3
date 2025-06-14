@@ -1,7 +1,6 @@
 [package]
 name = "p3-fri"
-# TODO: Replace this generic plonky3 description with one specific to this crate...
-description.workspace = true
+description = "An implementation of the FRI low-degree test (LDT) protocol used in zero-knowledge proof systems."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

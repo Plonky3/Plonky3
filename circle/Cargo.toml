@@ -1,7 +1,6 @@
 [package]
 name = "p3-circle"
-# TODO: Replace this generic plonky3 description with one specific to this crate...
-description.workspace = true
+description = "A STARK proof system built around the unit circle of a finite field, based on the Circle STARKs paper."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

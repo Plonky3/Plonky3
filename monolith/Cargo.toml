@@ -1,7 +1,6 @@
 [package]
 name = "p3-monolith"
-# TODO: Replace this generic plonky3 description with one specific to this crate...
-description.workspace = true
+description = "Implements the Monolith permutation and associated hash functions over Mersenne31 fields."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

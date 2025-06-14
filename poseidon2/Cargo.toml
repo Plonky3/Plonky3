@@ -1,7 +1,6 @@
 [package]
 name = "p3-poseidon2"
-# TODO: Replace this generic plonky3 description with one specific to this crate...
-description.workspace = true
+description = "An efficient, parameterized implementation of the Poseidon2 cryptographic permutation for zero-knowledge applications."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
