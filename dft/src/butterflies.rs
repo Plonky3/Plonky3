@@ -22,6 +22,8 @@ use p3_field::{Field, PackedField, PackedValue};
 ///
 /// Different butterfly variants (DIT, DIF, or twiddle-free) define the exact formula.
 pub trait Butterfly<F: Field>: Copy + Send + Sync {
+    fn from_twiddle(twiddle: F) -> Self;
+
     /// Applies the butterfly transformation to two packed field values.
     ///
     /// This method takes two inputs `x_1` and `x_2` and returns two outputs `(y_1, y_2)`
@@ -113,11 +115,16 @@ pub trait Butterfly<F: Field>: Copy + Send + Sync {
 /// ```
 /// The twiddle factor is applied after subtraction.
 /// Suitable for DIF-style recursive transforms.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 #[repr(transparent)]
 pub struct DifButterfly<F>(pub F);
 
 impl<F: Field> Butterfly<F> for DifButterfly<F> {
+    #[inline]
+    fn from_twiddle(twiddle: F) -> Self {
+        Self(twiddle)
+    }
+
     #[inline]
     fn apply<PF: PackedField<Scalar = F>>(&self, x_1: PF, x_2: PF) -> (PF, PF) {
         (x_1 + x_2, (x_1 - x_2) * self.0)
@@ -134,10 +141,15 @@ impl<F: Field> Butterfly<F> for DifButterfly<F> {
 ///   output_1 = x1
 ///   output_2 = x1 * twiddle
 /// ```
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub struct DifButterflyZeros<F>(pub F);
 
 impl<F: Field> Butterfly<F> for DifButterflyZeros<F> {
+    #[inline]
+    fn from_twiddle(twiddle: F) -> Self {
+        Self(twiddle)
+    }
+
     #[inline]
     fn apply<PF: PackedField<Scalar = F>>(&self, x_1: PF, x_2: PF) -> (PF, PF) {
         debug_assert!(x_2.as_slice().iter().all(|x| x.is_zero())); // Slightly convoluted but PF may not implement equality.
@@ -152,11 +164,11 @@ impl<F: Field> Butterfly<F> for DifButterflyZeros<F> {
         debug_assert_eq!(suffix_1.len(), suffix_2.len());
         for (x_1, x_2) in shorts_1.iter().zip(shorts_2) {
             debug_assert!(x_2.as_slice().iter().all(|x| x.is_zero())); // Slightly convoluted but PF may not implement equality.
-            *x_2 = *x_1 * self.0; // x_2 is guaranteed to be zero, so we just set it to x_1 * twiddle. 
+            *x_2 = *x_1 * self.0; // x_2 is guaranteed to be zero, so we just set it to x_1 * twiddle.
         }
         for (x_1, x_2) in suffix_1.iter().zip(suffix_2) {
             debug_assert!(x_2.is_zero());
-            *x_2 = *x_1 * self.0; // x_2 is guaranteed to be zero, so we just set it to x_1 * twiddle. 
+            *x_2 = *x_1 * self.0; // x_2 is guaranteed to be zero, so we just set it to x_1 * twiddle.
         }
     }
 }
@@ -171,11 +183,16 @@ impl<F: Field> Butterfly<F> for DifButterflyZeros<F> {
 /// ```
 /// The twiddle factor is applied to x2 before combining.
 /// Suitable for DIT-style recursive transforms.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 #[repr(transparent)]
 pub struct DitButterfly<F>(pub F);
 
 impl<F: Field> Butterfly<F> for DitButterfly<F> {
+    #[inline]
+    fn from_twiddle(twiddle: F) -> Self {
+        Self(twiddle)
+    }
+
     #[inline]
     fn apply<PF: PackedField<Scalar = F>>(&self, x_1: PF, x_2: PF) -> (PF, PF) {
         let x_2_twiddle = x_2 * self.0;
@@ -194,10 +211,15 @@ impl<F: Field> Butterfly<F> for DitButterfly<F> {
 ///   - output_1 = x1 + x2
 ///   - output_2 = x1 - x2
 /// ```
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub struct TwiddleFreeButterfly;
 
 impl<F: Field> Butterfly<F> for TwiddleFreeButterfly {
+    #[inline]
+    fn from_twiddle(_: F) -> Self {
+        Self
+    }
+
     #[inline]
     fn apply<PF: PackedField<Scalar = F>>(&self, x_1: PF, x_2: PF) -> (PF, PF) {
         (x_1 + x_2, x_1 - x_2)
