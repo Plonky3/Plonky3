@@ -192,7 +192,7 @@ where
     folded.truncate(params.final_poly_len());
     reverse_slice_index_bits(&mut folded);
     let final_poly = debug_span!("idft final poly")
-        .in_scope(|| Radix2DFTSmallBatch::default().idft_algebra(folded));
+        .in_scope(|| Radix2DFTSmallBatch::<_>::default().idft_algebra(folded));
 
     // Observe all coefficients of the final polynomial.
     for &x in &final_poly {
