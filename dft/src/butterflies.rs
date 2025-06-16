@@ -22,6 +22,9 @@ use p3_field::{Field, PackedField, PackedValue};
 ///
 /// Different butterfly variants (DIT, DIF, or twiddle-free) define the exact formula.
 pub trait Butterfly<F: Field>: Copy + Send + Sync {
+    /// Construct a butterfly instance from a given twiddle factor.
+    ///
+    /// This is used to instantiate butterfly gates that require twiddle scaling.
     fn from_twiddle(twiddle: F) -> Self;
 
     /// Applies the butterfly transformation to two packed field values.
