@@ -1,4 +1,8 @@
 [workspace]
+changelog_config = "git-cliff.toml"
+pr_labels = ["release"]
+publish_timeout = "10m"
+dependencies_update = true
 
 [[package]]
 name = "p3-air"
