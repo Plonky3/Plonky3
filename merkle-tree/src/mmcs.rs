@@ -7,12 +7,12 @@
 //!
 //! ```rust,ignore
 //! ///
-//! ///                                      root = c00 = C(c10, c11)                              
-//! ///                       /                                                \         
+//! ///                                      root = c00 = C(c10, c11)
+//! ///                       /                                                \
 //! ///         c10 = C(C(c20, c21), H(N[0]))                     c11 = C(C(c22, c23), H(N[1]))
-//! ///           /                      \                          /                      \     
-//! ///      c20 = C(L, R)            c21 = C(L, R)            c22 = C(L, R)            c23 = C(L, R)  
-//! ///   L/             \R        L/             \R        L/             \R        L/             \R     
+//! ///           /                      \                          /                      \
+//! ///      c20 = C(L, R)            c21 = C(L, R)            c22 = C(L, R)            c23 = C(L, R)
+//! ///   L/             \R        L/             \R        L/             \R        L/             \R
 //! /// H(M[0])         H(M[1])  H(M[2])         H(M[3])  H(M[4])         H(M[5])  H(M[6])         H(M[7])
 //! ```
 //! E.g. we start by making a standard MerkleTree commitment for each row of M and then add in the rows of N when we
@@ -36,34 +36,60 @@ use crate::MerkleTreeError::{
     EmptyBatch, IncompatibleHeights, RootMismatch, WrongBatchSize, WrongHeight,
 };
 
-/// A vector commitment scheme backed by a `MerkleTree`.
+/// A Merkle Tree-based commitment scheme for multiple matrices of potentially differing heights.
 ///
-/// Generics:
-/// - `P`: a leaf value
-/// - `PW`: an element of a digest
-/// - `H`: the leaf hasher
-/// - `C`: the digest compression function
+/// `MerkleTreeMmcs` generalizes a classical Merkle Tree to support committing to a list of
+/// matrices by arranging their rows into a unified binary tree. The tallest matrix defines
+/// the maximum height, and smaller matrices are integrated at appropriate depths.
+///
+/// Type Parameters:
+/// - `P`: Packed leaf value (e.g. a field element or vector of elements)
+/// - `PW`: Packed digest element (used in the hash and compression output)
+/// - `H`: Cryptographic hash function (leaf hash)
+/// - `C`: Pseudo-compression function (internal node compression)
+/// - `DIGEST_ELEMS`: Number of elements in a single digest
 #[derive(Copy, Clone, Debug)]
 pub struct MerkleTreeMmcs<P, PW, H, C, const DIGEST_ELEMS: usize> {
+    /// The hash function used to hash individual matrix rows (leaf level).
     hash: H,
+
+    /// The compression function used to hash internal tree nodes.
     compress: C,
+
+    /// Phantom type to associate `P` and `PW` without storing values.
     _phantom: PhantomData<(P, PW)>,
 }
 
+/// Errors that may arise during Merkle tree commitment, opening, or verification.
 #[derive(Debug)]
 pub enum MerkleTreeError {
+    /// The number of openings provided does not match the expected number.
     WrongBatchSize,
+
+    /// A matrix has a different width than expected.
     WrongWidth,
+
+    /// The number of proof nodes does not match the expected tree height.
     WrongHeight {
+        /// Expected log2 of the maximum matrix height.
         log_max_height: usize,
+
+        /// Actual number of sibling hashes provided in the proof.
         num_siblings: usize,
     },
+
+    /// Matrix heights are incompatible; they cannot share a common binary Merkle tree.
     IncompatibleHeights,
+
+    /// The computed Merkle root does not match the provided commitment.
     RootMismatch,
+
+    /// Attempted to open an empty batch (no committed matrices).
     EmptyBatch,
 }
 
 impl<P, PW, H, C, const DIGEST_ELEMS: usize> MerkleTreeMmcs<P, PW, H, C, DIGEST_ELEMS> {
+    /// Create a new `MerkleTreeMmcs` with the given hash and compression functions.
     pub const fn new(hash: H, compress: C) -> Self {
         Self {
             hash,
