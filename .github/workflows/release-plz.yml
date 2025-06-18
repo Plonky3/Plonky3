@@ -10,7 +10,7 @@ jobs:
   release-plz-release:
     name: Release-plz release
     runs-on: ubuntu-latest
-    if: ${{ github.repository_owner == 'Plonky3' && github.event.pull_request.merged == true && contains(github.event.pull_request.title, 'release') }}
+    if: ${{ github.repository_owner == 'Plonky3' && github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release') }}
     permissions:
       contents: write
     steps:
