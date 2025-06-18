@@ -16,6 +16,13 @@ if [ -z "${GIT_TOKEN}" ]; then
   exit 1
 fi
 
+current_branch=$(git rev-parse --abbrev-ref HEAD)
+
+if [ "$current_branch" != "main" ] ; then
+  echo "Must be on the main branch to do a release."
+  exit 1
+fi
+
 check_binary_installed "cargo-semver-checks"
 check_binary_installed "release-plz"
 
@@ -42,7 +49,10 @@ find . -name "Cargo.toml" -exec sed -i \
     /^\[.*\]/!d
   }' {} \;
 
-release-plz update --allow-dirty 
+echo "UPDATE!!!!"
+release-plz update --allow-dirty &&
+
+echo "RELEASE!!!"
 release-plz release --allow-dirty --dry-run
 
 # # Restore original dependencies
