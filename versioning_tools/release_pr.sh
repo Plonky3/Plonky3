@@ -49,12 +49,8 @@ find . -name "Cargo.toml" -exec sed -i \
     /^\[.*\]/!d
   }' {} \;
 
-echo "UPDATE!!!!"
-release-plz update --allow-dirty &&
-
-echo "RELEASE!!!"
-release-plz release --allow-dirty --dry-run
+release-plz update &&
+release-plz release
 
 # # Restore original dependencies
 find . -name "Cargo.toml.backup" -exec bash -c 'mv "$1" "${1%.backup}"' _ {} \;
-
