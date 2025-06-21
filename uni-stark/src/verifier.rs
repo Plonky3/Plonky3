@@ -4,7 +4,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_air::{Air, BaseAir};
+use p3_air::Air;
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
@@ -55,24 +55,20 @@ where
         .collect_vec();
 
     // Check that the random commitments are/are not present depending on the ZK setting.
-    if SC::Pcs::ZK {
-        // If ZK is enabled, the prover should have random commitments.
-        if opened_values.random.is_none() || commitments.random.is_none() {
-            return Err(VerificationError::RandomizationError);
-        }
-        // If ZK is not enabled, the prover should not have random commitments.
-    } else if opened_values.random.is_some() || commitments.random.is_some() {
+    // - If ZK is enabled, the prover should have random commitments.
+    // - If ZK is not enabled, the prover should not have random commitments.
+    if (opened_values.random.is_some() && commitments.random.is_some()) != SC::Pcs::ZK {
         return Err(VerificationError::RandomizationError);
     }
 
-    let air_width = <A as BaseAir<Val<SC>>>::width(air);
+    let air_width = A::width(air);
     let valid_shape = opened_values.trace_local.len() == air_width
         && opened_values.trace_next.len() == air_width
         && opened_values.quotient_chunks.len() == quotient_degree
         && opened_values
             .quotient_chunks
             .iter()
-            .all(|qc| qc.len() == <SC::Challenge as BasedVectorSpace<Val<SC>>>::DIMENSION)
+            .all(|qc| qc.len() == SC::Challenge::DIMENSION)
         // We've already checked that opened_values.random is present if and only if ZK is enabled.
         && if let Some(r_comm) = &opened_values.random {
             r_comm.len() == SC::Challenge::DIMENSION
@@ -99,7 +95,7 @@ where
     // into a single polynomial.
     //
     // Soundness Error: n/|EF| where n is the number of constraints.
-    let alpha: SC::Challenge = challenger.sample_algebra_element();
+    let alpha = challenger.sample_algebra_element();
     challenger.observe(commitments.quotient_chunks.clone());
 
     // We've already checked that commitments.random is present if and only if ZK is enabled.
@@ -111,7 +107,7 @@ where
     // Get an out-of-domain point to open our values at.
     //
     // Soundness Error: dN/|EF| where `N` is the trace length and our constraint polynomial has degree `d`.
-    let zeta: SC::Challenge = challenger.sample_algebra_element();
+    let zeta = challenger.sample_algebra_element();
     let zeta_next = init_trace_domain.next_point(zeta).unwrap();
 
     // We've already checked that commitments.random and opened_values.random are present if and only if ZK is enabled.
