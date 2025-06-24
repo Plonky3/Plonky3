@@ -57,7 +57,7 @@ where
     // Check that the random commitments are/are not present depending on the ZK setting.
     // - If ZK is enabled, the prover should have random commitments.
     // - If ZK is not enabled, the prover should not have random commitments.
-    if (opened_values.random.is_some() && commitments.random.is_some()) != SC::Pcs::ZK {
+    if (opened_values.random.is_some() != SC::Pcs::ZK) || (commitments.random.is_some()) != SC::Pcs::ZK) {
         return Err(VerificationError::RandomizationError);
     }
 
