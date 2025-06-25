@@ -1,22 +1,17 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use p3_bn254_fr::Bn254;
 use p3_field_testing::bench_func::{
-    benchmark_add_latency, benchmark_add_throughput, benchmark_inv, benchmark_iter_sum,
-    benchmark_sub_latency, benchmark_sub_throughput,
+    benchmark_add_latency, benchmark_add_throughput, benchmark_inv, benchmark_sub_latency,
+    benchmark_sub_throughput,
 };
-use p3_field_testing::benchmark_sum_array;
+use p3_field_testing::{benchmark_mul_latency, benchmark_mul_throughput};
 
 type F = Bn254;
 
 fn bench_field(c: &mut Criterion) {
     let name = "BN254Fr";
-    const REPS: usize = 1000;
+    const REPS: usize = 100;
     benchmark_inv::<F>(c, name);
-
-    benchmark_iter_sum::<F, 4, REPS>(c, name);
-    benchmark_sum_array::<F, 4, REPS>(c, name);
-    benchmark_iter_sum::<F, 64, REPS>(c, name);
-    benchmark_sum_array::<F, 64, REPS>(c, name);
 
     // Note that each round of throughput has 10 operations
     // So we should have 10 * more repetitions for latency tests.
@@ -25,6 +20,8 @@ fn bench_field(c: &mut Criterion) {
     benchmark_add_throughput::<F, REPS>(c, name);
     benchmark_sub_latency::<F, L_REPS>(c, name);
     benchmark_sub_throughput::<F, REPS>(c, name);
+    benchmark_mul_throughput::<F, L_REPS>(c, name);
+    benchmark_mul_latency::<F, REPS>(c, name);
 }
 
 criterion_group!(bn254fr_arithmetic, bench_field);
