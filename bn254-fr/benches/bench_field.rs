@@ -1,12 +1,12 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use p3_bn254_fr::Bn254Fr;
+use p3_bn254_fr::Bn254;
 use p3_field_testing::bench_func::{
     benchmark_add_latency, benchmark_add_throughput, benchmark_inv, benchmark_iter_sum,
     benchmark_sub_latency, benchmark_sub_throughput,
 };
 use p3_field_testing::benchmark_sum_array;
 
-type F = Bn254Fr;
+type F = Bn254;
 
 fn bench_field(c: &mut Criterion) {
     let name = "BN254Fr";
