@@ -40,12 +40,25 @@ const BN254_MONTY_MU: [u64; 4] = [
 ];
 
 // 0x216d0b17f4e44a58c49833d53bb808553fe3ab1e35c59e31bb8e645ae216da7
-const BN254_MONTY_MU_SQ: [u64; 4] = [
+const BN254_MONTY_MU_SQ: Bn254 = Bn254::new([
     0x1bb8e645ae216da7,
     0x53fe3ab1e35c59e3,
     0x8c49833d53bb8085,
     0x0216d0b17f4e44a5,
-];
+]);
+
+// 0xcf8594b7fcc657c893cc664a19fcfed2a489cbe1cfbb6b85e94d8e1b4bf0040
+const BN254_MONTY_MU_CB: Bn254 = Bn254::new([
+    0x5e94d8e1b4bf0040,
+    0x2a489cbe1cfbb6b8,
+    0x893cc664a19fcfed,
+    0x0cf8594b7fcc657c,
+]);
+
+fn to_biguint<const N: usize>(value: [u64; N]) -> BigUint {
+    let bytes: Vec<u8> = value.iter().flat_map(|x| x.to_le_bytes()).collect();
+    BigUint::from_bytes_le(&bytes)
+}
 
 /// The BN254 curve scalar field prime, defined as `F_r` where `r = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.
 #[derive(Copy, Clone, Default, Eq, PartialEq)]
@@ -68,21 +81,44 @@ impl Bn254 {
     }
 
     fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        assert!(
-            bytes.len() == 32,
-            "Expected 32 bytes for Bn254 field element"
-        );
+        if bytes.len() != 32 {
+            return None;
+        }
         let value: [u64; 4] = array::from_fn(|i| {
             // Convert each 8 bytes to a u64 in little-endian order.
             let start = i * 8;
             let end = start + 8;
+            // This unwrap is safe due to the length check above.
             u64::from_le_bytes(bytes[start..end].try_into().unwrap())
         });
         // Check if the value is less than the prime.
-        if value < BN254_PRIME {
+        if value.iter().rev().cmp(BN254_PRIME.iter().rev()) == core::cmp::Ordering::Less {
             Some(Self::new(value))
         } else {
             None
+        }
+    }
+
+    fn to_biguint(self) -> BigUint {
+        to_biguint(self.value)
+    }
+
+    fn from_biguint(int: BigUint) -> Option<Self> {
+        let u64s = int.to_u64_digits();
+        match u64s.len() {
+            0 => Some(Self::ZERO),
+            1..=4 => {
+                let mut value = [0u64; 4];
+                value[..u64s.len()].copy_from_slice(&u64s);
+                if u64s.len() == 4
+                    && value.iter().rev().cmp(BN254_PRIME.iter().rev()) != core::cmp::Ordering::Less
+                {
+                    None
+                } else {
+                    Some(Self::new(value))
+                }
+            }
+            _ => None,
         }
     }
 }
@@ -99,7 +135,7 @@ impl Serialize for Bn254 {
 impl<'de> Deserialize<'de> for Bn254 {
     /// Deserializes from raw bytes, which are typically of the Montgomery representation of the field element.
     /// Performs a check that the deserialized field element corresponds to a value less than the field modulus, and
-    /// returns error otherwise.
+    /// returns an error otherwise.
     // See https://github.com/privacy-scaling-explorations/halo2curves/blob/d34e9e46f7daacd194739455de3b356ca6c03206/derive/src/field/mod.rs#L485
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let bytes: Vec<u8> = Deserialize::deserialize(d)?;
@@ -187,10 +223,7 @@ impl RawDataSerializable for Bn254 {
     #[allow(refining_impl_trait)]
     #[inline]
     fn into_bytes(self) -> [u8; 32] {
-        // TODO: Should be possible to make this a no-op.
-        // Is transmute safe here? Either way, should port this across to the other methods.
-        // Should so something to correct for little/big endianness.
-        unsafe { transmute(self.value) }
+        unsafe { transmute(self.value.map(|x| x.to_le_bytes())) }
     }
 
     #[inline]
@@ -199,9 +232,11 @@ impl RawDataSerializable for Bn254 {
         // Currently switching it in causes rust to throw an error about referencing temporary values.
         // Also we don't need as_canonical_biguint, (e.g. as_unique_biguint would be fine if it existed).
         // This comment also applies to `into_u64_stream` as well as `into_parallel_u32_streams` and `into_parallel_u64_streams`.
-        input
-            .into_iter()
-            .flat_map(|x| x.as_canonical_biguint().to_u32_digits())
+        input.into_iter().flat_map(|x| {
+            x.value
+                .into_iter()
+                .flat_map(|digit| [digit as u32, (digit >> 32) as u32])
+        })
     }
 
     #[inline]
@@ -224,7 +259,8 @@ impl RawDataSerializable for Bn254 {
         input: impl IntoIterator<Item = [Self; N]>,
     ) -> impl IntoIterator<Item = [u32; N]> {
         input.into_iter().flat_map(|vector| {
-            let u32s = vector.map(|elem| elem.as_canonical_biguint().to_u32_digits());
+            let u32s: [[u32; 8]; N] = vector
+                .map(|elem| unsafe { transmute(elem.value.map(|x| [x as u32, (x >> 32) as u32])) });
             (0..(Self::NUM_BYTES / 4)).map(move |i| array::from_fn(|j| u32s[j][i]))
         })
     }
@@ -234,7 +270,7 @@ impl RawDataSerializable for Bn254 {
         input: impl IntoIterator<Item = [Self; N]>,
     ) -> impl IntoIterator<Item = [u64; N]> {
         input.into_iter().flat_map(|vector| {
-            let u64s = vector.map(|elem| elem.as_canonical_biguint().to_u64_digits());
+            let u64s = vector.map(|elem| elem.value);
             (0..(Self::NUM_BYTES / 8)).map(move |i| array::from_fn(|j| u64s[j][i]))
         })
     }
@@ -256,15 +292,18 @@ impl Field for Bn254 {
     }
 
     fn try_inverse(&self) -> Option<Self> {
-        todo!()
+        // The input starts in the form aR.
+        let big_int_val = self.to_biguint();
+        let bit_int_prime = to_biguint(BN254_PRIME);
+        let inv = big_int_val.modinv(&bit_int_prime);
+        // Now inv = a^{-1}R^{-1} but, we want a^{-1}R.
+        inv.and_then(Bn254::from_biguint)
+            .map(|x| x * BN254_MONTY_MU_CB)
     }
 
     /// r = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001
     fn order() -> BigUint {
-        BigUint::from_slice(&[
-            0xf0000001, 0x43e1f593, 0x79b97091, 0x2833e848, 0x8181585d, 0xb85045b6, 0xe131a029,
-            0x30644e72,
-        ])
+        to_biguint(BN254_PRIME)
     }
 }
 
@@ -275,9 +314,8 @@ impl QuotientMap<u128> for Bn254 {
     /// Due to the size of the `BN254` prime, the input value is always canonical.
     #[inline]
     fn from_int(int: u128) -> Self {
-        let int_array = [int as u64, (int >> 64) as u64, 0, 0];
-        let monty_val = monty_mul(int_array, BN254_MONTY_MU_SQ);
-        Self::new(monty_val)
+        let bn254_elem = Self::new([int as u64, (int >> 64) as u64, 0, 0]);
+        bn254_elem * BN254_MONTY_MU_SQ
     }
 
     /// Due to the size of the `BN254` prime, the input value is always canonical.
@@ -321,8 +359,7 @@ impl QuotientMap<i128> for Bn254 {
 impl PrimeField for Bn254 {
     fn as_canonical_biguint(&self) -> BigUint {
         let out_val = monty_mul(self.value, [1, 0, 0, 0]);
-        let out_bytes_le: Vec<u8> = out_val.iter().flat_map(|x| x.to_le_bytes()).collect();
-        BigUint::from_bytes_le(&out_bytes_le)
+        to_biguint(out_val)
     }
 }
 
@@ -340,7 +377,7 @@ const fn carrying_add(lhs: u64, rhs: u64, carry: bool) -> (u64, bool) {
     (b, c1 | c2)
 }
 
-// Compute lhs + rhs, returning a bool if overflow occurred.
+// Compute `lhs + rhs`, returning a bool if overflow occurred.
 fn wrapping_add<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u64; N], bool) {
     let mut carry = false;
     let mut output = [0; N];
@@ -366,7 +403,7 @@ const fn borrowing_sub(lhs: u64, rhs: u64, borrow: bool) -> (u64, bool) {
     (b, c1 | c2)
 }
 
-// Compute lhs - rhs, returning a bool if underflow occurred.
+// Compute `lhs - rhs`, returning a bool if underflow occurred.
 fn wrapping_sub<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u64; N], bool) {
     let mut borrow = false;
     let mut output = [0; N];
