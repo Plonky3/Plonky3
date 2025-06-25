@@ -1,11 +1,3 @@
-//! The scalar field of the BN254 curve, defined as `F_r` where `r = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.
-#![no_std]
-
-mod helpers;
-mod poseidon2;
-
-extern crate alloc;
-
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
@@ -20,7 +12,6 @@ use p3_field::{
     Field, InjectiveMonomial, Packable, PrimeCharacteristicRing, PrimeField, RawDataSerializable,
     TwoAdicField, quotient_map_small_int,
 };
-pub use poseidon2::Poseidon2Bn254;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -30,7 +21,7 @@ use crate::helpers::{exp_bn_inv, monty_mul, to_biguint, wrapping_add, wrapping_s
 /// The BN254 prime represented as a little-endian array of 4-u64s.
 ///
 /// Equal to: `21888242871839275222246405745257275088548364400416034343698204186575808495617`
-const BN254_PRIME: [u64; 4] = [
+pub(crate) const BN254_PRIME: [u64; 4] = [
     0x43e1f593f0000001,
     0x2833e84879b97091,
     0xb85045b68181585d,
@@ -43,7 +34,7 @@ const BN254_PRIME: [u64; 4] = [
 /// The value P^{-1} mod 2^256 where P is the BN254 prime.
 ///
 /// Equal to: `63337608412835713303214155666321450302732274313949655463074949594303195774977`
-const BN254_MONTY_MU: [u64; 4] = [
+pub(crate) const BN254_MONTY_MU: [u64; 4] = [
     0x3d1e0a6c10000001,
     0x9a7979b4b396ee4c,
     0x1c6567d766f9dc6e,
@@ -156,7 +147,7 @@ impl PrimeCharacteristicRing for Bn254 {
     const ZERO: Self = Self::new([0, 0, 0, 0]);
 
     /// The Montgomery form of the BN254 field element 1.
-    /// 
+    ///
     /// Equal to `2^256 mod P = 6350874878119819312338956282401532410528162663560392320966563075034087161851`
     const ONE: Self = Self::new([
         0xac96341c4ffffffb,
@@ -166,7 +157,7 @@ impl PrimeCharacteristicRing for Bn254 {
     ]);
 
     /// The Montgomery form of the BN254 field element 2.
-    /// 
+    ///
     /// Equal to `2^257 mod P = 12701749756239638624677912564803064821056325327120784641933126150068174323702`
     const TWO: Self = Self::new([
         0x592c68389ffffff6,
@@ -176,7 +167,7 @@ impl PrimeCharacteristicRing for Bn254 {
     ]);
 
     /// The Montgomery form of the BN254 field element -1.
-    /// 
+    ///
     /// Equal to `-2^256 mod P = 15537367993719455909907449462855742678020201736855642022731641111541721333766`
     const NEG_ONE: Self = Self::new([
         0x974bc177a0000006,

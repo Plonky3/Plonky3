@@ -1,5 +1,5 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use p3_bn254_fr::Bn254;
+use p3_bn254::Bn254;
 use p3_field_testing::bench_func::{
     benchmark_add_latency, benchmark_add_throughput, benchmark_inv, benchmark_sub_latency,
     benchmark_sub_throughput,

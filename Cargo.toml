@@ -5,7 +5,7 @@ members = [
     "baby-bear",
     "blake3",
     "blake3-air",
-    "bn254-fr",
+    "bn254",
     "challenger",
     "circle",
     "commit",
@@ -71,7 +71,7 @@ p3-air = { path = "air", version = "0.3.0" }
 p3-baby-bear = { path = "baby-bear", version = "0.3.0" }
 p3-blake3 = { path = "blake3", version = "0.3.0" }
 p3-blake3-air = { path = "blake3-air", version = "0.3.0" }
-p3-bn254-fr = { path = "bn254-fr", version = "0.3.0" }
+p3-bn254 = { path = "bn254", version = "0.3.0" }
 p3-challenger = { path = "challenger", version = "0.3.0" }
 p3-circle = { path = "circle", version = "0.3.0" }
 p3-commit = { path = "commit", version = "0.3.0" }

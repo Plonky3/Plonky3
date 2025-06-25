@@ -1,6 +1,6 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_bn254_fr::{Bn254, Poseidon2Bn254};
+use p3_bn254::{Bn254, Poseidon2Bn254};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_goldilocks::{Goldilocks, Poseidon2Goldilocks};
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};

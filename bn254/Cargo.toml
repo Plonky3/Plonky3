@@ -1,5 +1,5 @@
 [package]
-name = "p3-bn254-fr"
+name = "p3-bn254"
 # TODO: Replace this generic plonky3 description with one specific to this crate...
 description.workspace = true
 version.workspace = true
