@@ -283,10 +283,11 @@ impl Field for Bn254 {
 
     #[inline]
     fn try_inverse(&self) -> Option<Self> {
-        // TODO: This turns out to be a little slower (~20%) than the Halo2 implementation used by FFBn254Fr.
+        // TODO: This turns out to be a much slower than the Halo2 implementation used by FFBn254Fr. (Roughly 4x slower)
         // That implementation makes use of an optimised extended Euclidean algorithm. It would be good
         // to either implement that here or further improve the speed of multiplication to speed exponentiation
-        // based inversion up.
+        // based inversion up. Don't think it is super important for now though as inversion is rare and can mostly be
+        // batched.
         (!self.is_zero()).then(|| exp_bn_inv(*self))
     }
 
