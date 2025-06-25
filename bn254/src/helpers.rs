@@ -5,6 +5,7 @@ use p3_field::Field;
 use crate::{BN254_MONTY_MU, BN254_PRIME};
 
 /// Convert a fixed-size array of u64s to a BigUint.
+#[inline]
 pub(crate) fn to_biguint<const N: usize>(value: [u64; N]) -> BigUint {
     let bytes: Vec<u8> = value.iter().flat_map(|x| x.to_le_bytes()).collect();
     BigUint::from_bytes_le(&bytes)
@@ -14,6 +15,7 @@ pub(crate) fn to_biguint<const N: usize>(value: [u64; N]) -> BigUint {
 ///
 /// Once this moves to standard rust (currently nightly) we can use that directly.
 /// Tracking Issue is here: https://github.com/rust-lang/rust/issues/85532
+#[inline]
 const fn carrying_add(lhs: u64, rhs: u64, carry: bool) -> (u64, bool) {
     let (a, c1) = lhs.overflowing_add(rhs);
     let (b, c2) = a.overflowing_add(carry as u64);
@@ -24,7 +26,8 @@ const fn carrying_add(lhs: u64, rhs: u64, carry: bool) -> (u64, bool) {
     (b, c1 | c2)
 }
 
-// Compute `lhs + rhs`, returning a bool if overflow occurred.
+/// Compute `lhs + rhs`, returning a bool if overflow occurred.
+#[inline]
 pub(crate) fn wrapping_add<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u64; N], bool) {
     let mut carry = false;
     let mut output = [0; N];
@@ -40,6 +43,7 @@ pub(crate) fn wrapping_add<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u6
 ///
 /// Once this moves to standard rust (currently nightly) we can use that directly.
 /// Tracking Issue is here: https://github.com/rust-lang/rust/issues/85532
+#[inline]
 const fn borrowing_sub(lhs: u64, rhs: u64, borrow: bool) -> (u64, bool) {
     let (a, c1) = lhs.overflowing_sub(rhs);
     let (b, c2) = a.overflowing_sub(borrow as u64);
@@ -50,7 +54,8 @@ const fn borrowing_sub(lhs: u64, rhs: u64, borrow: bool) -> (u64, bool) {
     (b, c1 | c2)
 }
 
-// Compute `lhs - rhs`, returning a bool if underflow occurred.
+/// Compute `lhs - rhs`, returning a bool if underflow occurred.
+#[inline]
 pub(crate) fn wrapping_sub<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u64; N], bool) {
     let mut borrow = false;
     let mut output = [0; N];
@@ -63,6 +68,7 @@ pub(crate) fn wrapping_sub<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u6
 }
 
 /// Simple big-num widening multiplication.
+#[inline]
 fn widening_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 8] {
     // TODO: This is the key component of the Montgomery multiplication algorithm so we should look into it
     // for optimizations in the future.
@@ -98,6 +104,7 @@ fn widening_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 8] {
 ///
 /// Uses the montgomery constant `2^256` making division free as we can
 /// simply ignore the bottom 4 u64s.
+#[inline]
 pub(crate) fn monty_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 4] {
     // TODO: It's likely worth it to remove the 'prod' variable here
     // and instead have this function simple do the monty reduction.
@@ -123,6 +130,7 @@ pub(crate) fn monty_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 4] {
 }
 
 /// Compute `base^{2^num_sq} * mul`
+#[inline]
 fn sq_and_mul<F: Field>(base: F, num_sq: usize, mul: F) -> F {
     base.exp_power_of_2(num_sq) * mul
 }
@@ -131,6 +139,7 @@ fn sq_and_mul<F: Field>(base: F, num_sq: usize, mul: F) -> F {
 ///
 /// Explicitly this function computes the exponential map:
 /// `x -> x^21888242871839275222246405745257275088548364400416034343698204186575808495615`.
+#[inline]
 pub(crate) fn exp_bn_inv<F: Field>(val: F) -> F {
     // Note the binary expansion: 21888242871839275222246405745257275088548364400416034343698204186575808495615
     //  = 1100000110010001001110011100101110000100110001101000000010100110111000010100000100010110110110100000

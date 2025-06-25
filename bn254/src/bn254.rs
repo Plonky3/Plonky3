@@ -61,6 +61,7 @@ pub struct Bn254 {
 }
 
 impl Bn254 {
+    #[inline]
     pub(crate) const fn new(value: [u64; 4]) -> Self {
         Self { value }
     }
@@ -69,6 +70,7 @@ impl Bn254 {
     ///
     /// Returns None is the byte array is not exactly 32 bytes long or if the value
     /// represented by the byte array is not less than the BN254 prime.
+    #[inline]
     pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
         if bytes.len() != 32 {
             return None;
@@ -91,6 +93,7 @@ impl Bn254 {
 
 impl Serialize for Bn254 {
     /// Serializes to raw bytes, which correspond to the Montgomery representation of the field element.
+    #[inline]
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_bytes(&self.into_bytes())
     }
@@ -100,6 +103,7 @@ impl<'de> Deserialize<'de> for Bn254 {
     /// Deserializes from raw bytes, which correspond to the Montgomery representation of the field element.
     /// Performs a check that the deserialized field element corresponds to a value less than the field modulus, and
     /// returns an error otherwise.
+    #[inline]
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let bytes: Vec<u8> = Deserialize::deserialize(d)?;
 
@@ -110,6 +114,7 @@ impl<'de> Deserialize<'de> for Bn254 {
 impl Packable for Bn254 {}
 
 impl Hash for Bn254 {
+    #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         for byte in self.value.as_ref() {
             state.write_u64(*byte);
@@ -118,24 +123,28 @@ impl Hash for Bn254 {
 }
 
 impl Ord for Bn254 {
+    #[inline]
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.value.iter().rev().cmp(other.value.iter().rev())
     }
 }
 
 impl PartialOrd for Bn254 {
+    #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Display for Bn254 {
+    #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         core::fmt::Display::fmt(&self.as_canonical_biguint(), f)
     }
 }
 
 impl Debug for Bn254 {
+    #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         core::fmt::Debug::fmt(&self.as_canonical_biguint(), f)
     }
@@ -267,10 +276,12 @@ impl Field for Bn254 {
         0x15d0085520f5bbc3,
     ]);
 
+    #[inline]
     fn is_zero(&self) -> bool {
         self.value.iter().all(|&x| x == 0)
     }
 
+    #[inline]
     fn try_inverse(&self) -> Option<Self> {
         // TODO: This turns out to be a little slower (~20%) than the Halo2 implementation used by FFBn254Fr.
         // That implementation makes use of an optimised extended Euclidean algorithm. It would be good
@@ -280,6 +291,7 @@ impl Field for Bn254 {
     }
 
     /// `r = 21888242871839275222246405745257275088548364400416034343698204186575808495617`
+    #[inline]
     fn order() -> BigUint {
         to_biguint(BN254_PRIME)
     }
@@ -339,6 +351,7 @@ impl QuotientMap<i128> for Bn254 {
 }
 
 impl PrimeField for Bn254 {
+    #[inline]
     fn as_canonical_biguint(&self) -> BigUint {
         // `monty_mul` strips out a factor of `R` so multiplying by `1` converts a montgomery
         // representation into a canonical representation.
@@ -350,6 +363,7 @@ impl PrimeField for Bn254 {
 impl Add for Bn254 {
     type Output = Self;
 
+    #[inline]
     fn add(self, rhs: Self) -> Self {
         let lhs = self.value;
         let rhs = rhs.value;
@@ -374,12 +388,14 @@ impl Add for Bn254 {
 }
 
 impl AddAssign for Bn254 {
+    #[inline]
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
 }
 
 impl Sum for Bn254 {
+    #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO)
     }
@@ -388,6 +404,7 @@ impl Sum for Bn254 {
 impl Sub for Bn254 {
     type Output = Self;
 
+    #[inline]
     fn sub(self, rhs: Self) -> Self {
         let lhs = self.value;
         let rhs = rhs.value;
@@ -404,6 +421,7 @@ impl Sub for Bn254 {
 }
 
 impl SubAssign for Bn254 {
+    #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
     }
@@ -412,6 +430,7 @@ impl SubAssign for Bn254 {
 impl Neg for Bn254 {
     type Output = Self;
 
+    #[inline]
     fn neg(self) -> Self::Output {
         self * Self::NEG_ONE
     }
@@ -420,18 +439,21 @@ impl Neg for Bn254 {
 impl Mul for Bn254 {
     type Output = Self;
 
+    #[inline]
     fn mul(self, rhs: Self) -> Self {
         Self::new(monty_mul(self.value, rhs.value))
     }
 }
 
 impl MulAssign for Bn254 {
+    #[inline]
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }
 }
 
 impl Product for Bn254 {
+    #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
     }
@@ -441,6 +463,7 @@ impl Div for Bn254 {
     type Output = Self;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
+    #[inline]
     fn div(self, rhs: Self) -> Self {
         self * rhs.inverse()
     }
@@ -478,6 +501,7 @@ const TWO_ADIC_GENERATOR: [u64; 4] = [
 impl TwoAdicField for Bn254 {
     const TWO_ADICITY: usize = 28;
 
+    #[inline]
     fn two_adic_generator(bits: usize) -> Self {
         let mut omega = Self::new(TWO_ADIC_GENERATOR);
         for _ in bits..Self::TWO_ADICITY {
