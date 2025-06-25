@@ -1,6 +1,7 @@
 //! The scalar field of the BN254 curve, defined as `F_r` where `r = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.
 #![no_std]
 
+mod helpers;
 mod poseidon2;
 
 extern crate alloc;
@@ -23,6 +24,8 @@ pub use poseidon2::Poseidon2Bn254;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Deserializer, Serialize};
+
+use crate::helpers::exp_bn_inv;
 
 const BN254_PRIME: [u64; 4] = [
     0x43e1f593f0000001,
@@ -48,12 +51,12 @@ const BN254_MONTY_MU_SQ: Bn254 = Bn254::new([
 ]);
 
 // 0xcf8594b7fcc657c893cc664a19fcfed2a489cbe1cfbb6b85e94d8e1b4bf0040
-const BN254_MONTY_MU_CB: Bn254 = Bn254::new([
-    0x5e94d8e1b4bf0040,
-    0x2a489cbe1cfbb6b8,
-    0x893cc664a19fcfed,
-    0x0cf8594b7fcc657c,
-]);
+// const BN254_MONTY_MU_CB: Bn254 = Bn254::new([
+//     0x5e94d8e1b4bf0040,
+//     0x2a489cbe1cfbb6b8,
+//     0x893cc664a19fcfed,
+//     0x0cf8594b7fcc657c,
+// ]);
 
 fn to_biguint<const N: usize>(value: [u64; N]) -> BigUint {
     let bytes: Vec<u8> = value.iter().flat_map(|x| x.to_le_bytes()).collect();
@@ -99,28 +102,28 @@ impl Bn254 {
         }
     }
 
-    fn to_biguint(self) -> BigUint {
-        to_biguint(self.value)
-    }
+    // fn to_biguint(self) -> BigUint {
+    //     to_biguint(self.value)
+    // }
 
-    fn from_biguint(int: BigUint) -> Option<Self> {
-        let u64s = int.to_u64_digits();
-        match u64s.len() {
-            0 => Some(Self::ZERO),
-            1..=4 => {
-                let mut value = [0u64; 4];
-                value[..u64s.len()].copy_from_slice(&u64s);
-                if u64s.len() == 4
-                    && value.iter().rev().cmp(BN254_PRIME.iter().rev()) != core::cmp::Ordering::Less
-                {
-                    None
-                } else {
-                    Some(Self::new(value))
-                }
-            }
-            _ => None,
-        }
-    }
+    // fn from_biguint(int: BigUint) -> Option<Self> {
+    //     let u64s = int.to_u64_digits();
+    //     match u64s.len() {
+    //         0 => Some(Self::ZERO),
+    //         1..=4 => {
+    //             let mut value = [0u64; 4];
+    //             value[..u64s.len()].copy_from_slice(&u64s);
+    //             if u64s.len() == 4
+    //                 && value.iter().rev().cmp(BN254_PRIME.iter().rev()) != core::cmp::Ordering::Less
+    //             {
+    //                 None
+    //             } else {
+    //                 Some(Self::new(value))
+    //             }
+    //         }
+    //         _ => None,
+    //     }
+    // }
 }
 
 impl Serialize for Bn254 {
@@ -292,13 +295,14 @@ impl Field for Bn254 {
     }
 
     fn try_inverse(&self) -> Option<Self> {
-        // The input starts in the form aR.
-        let big_int_val = self.to_biguint();
-        let bit_int_prime = to_biguint(BN254_PRIME);
-        let inv = big_int_val.modinv(&bit_int_prime);
-        // Now inv = a^{-1}R^{-1} but, we want a^{-1}R.
-        inv.and_then(Bn254::from_biguint)
-            .map(|x| x * BN254_MONTY_MU_CB)
+        (!self.is_zero()).then(|| exp_bn_inv(*self))
+        // // The input starts in the form aR.
+        // let big_int_val = self.to_biguint();
+        // let bit_int_prime = to_biguint(BN254_PRIME);
+        // let inv = big_int_val.modinv(&bit_int_prime);
+        // // Now inv = a^{-1}R^{-1} but, we want a^{-1}R.
+        // inv.and_then(Bn254::from_biguint)
+        //     .map(|x| x * BN254_MONTY_MU_CB)
     }
 
     /// r = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001
