@@ -20,8 +20,8 @@ fn bench_field(c: &mut Criterion) {
     benchmark_add_throughput::<F, REPS>(c, name);
     benchmark_sub_latency::<F, L_REPS>(c, name);
     benchmark_sub_throughput::<F, REPS>(c, name);
-    benchmark_mul_throughput::<F, L_REPS>(c, name);
-    benchmark_mul_latency::<F, REPS>(c, name);
+    benchmark_mul_latency::<F, L_REPS>(c, name);
+    benchmark_mul_throughput::<F, REPS>(c, name);
 }
 
 criterion_group!(bn254fr_arithmetic, bench_field);
