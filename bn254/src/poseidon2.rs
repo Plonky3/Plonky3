@@ -116,9 +116,8 @@ mod tests {
     use zkhash::poseidon2::poseidon2::Poseidon2 as Poseidon2Ref;
     use zkhash::poseidon2::poseidon2_instance_bn256::{POSEIDON2_BN256_PARAMS, RC3};
 
-    use crate::BN254_MONTY_R_SQ;
-
     use super::*;
+    use crate::BN254_MONTY_R_SQ;
 
     fn bn254_from_ark_ff(input: ark_FpBN256) -> Bn254 {
         let mut full_bytes = [0; 32];
