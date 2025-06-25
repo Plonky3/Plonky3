@@ -103,93 +103,98 @@ impl<const WIDTH: usize> ExternalLayer<Bn254, WIDTH, BN254_S_BOX_DEGREE>
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use num_bigint::BigUint;
-//     use p3_poseidon2::ExternalLayerConstants;
-//     use p3_symmetric::Permutation;
-//     use rand::rngs::SmallRng;
-//     use rand::{Rng, SeedableRng};
-//     use zkhash::ark_ff::{BigInteger, PrimeField as ark_PrimeField};
-//     use zkhash::fields::bn256::FpBN256 as ark_FpBN256;
-//     use zkhash::poseidon2::poseidon2::Poseidon2 as Poseidon2Ref;
-//     use zkhash::poseidon2::poseidon2_instance_bn256::{POSEIDON2_BN256_PARAMS, RC3};
+#[cfg(test)]
+mod tests {
+    use num_bigint::BigUint;
+    use p3_field::PrimeField;
+    use p3_poseidon2::ExternalLayerConstants;
+    use p3_symmetric::Permutation;
+    use rand::rngs::SmallRng;
+    use rand::{Rng, SeedableRng};
+    use zkhash::ark_ff::{BigInteger, PrimeField as ark_PrimeField};
+    use zkhash::fields::bn256::FpBN256 as ark_FpBN256;
+    use zkhash::poseidon2::poseidon2::Poseidon2 as Poseidon2Ref;
+    use zkhash::poseidon2::poseidon2_instance_bn256::{POSEIDON2_BN256_PARAMS, RC3};
 
-//     use super::*;
-//     use crate::FFBn254Fr;
+    use crate::BN254_MONTY_R_SQ;
 
-//     fn bn254_from_ark_ff(input: ark_FpBN256) -> Bn254 {
-//         let mut full_bytes = [0; 32];
-//         let bytes = input.into_bigint().to_bytes_le();
-//         full_bytes[..bytes.len()].copy_from_slice(&bytes);
-//         let value = FFBn254Fr::from_bytes(&full_bytes);
+    use super::*;
 
-//         if value.is_some().into() {
-//             Bn254 {
-//                 value: value.unwrap(),
-//             }
-//         } else {
-//             panic!("Invalid field element")
-//         }
-//     }
+    fn bn254_from_ark_ff(input: ark_FpBN256) -> Bn254 {
+        let mut full_bytes = [0; 32];
+        let bytes = input.into_bigint().to_bytes_le();
+        full_bytes[..bytes.len()].copy_from_slice(&bytes);
 
-//     fn ark_ff_from_bn254(input: Bn254) -> ark_FpBN256 {
-//         let bigint = BigUint::from_bytes_le(&input.value.to_bytes());
-//         ark_FpBN256::from(bigint)
-//     }
+        let value = Bn254::from_bytes(&full_bytes);
 
-//     #[test]
-//     fn test_poseidon2_bn254() {
-//         const WIDTH: usize = 3;
-//         const ROUNDS_F: usize = 8;
-//         const ROUNDS_P: usize = 56;
+        if let Some(field_elem) = value {
+            // From bytes does not convert into Monty form.
+            // Hence we need to do that ourselves.
+            field_elem * BN254_MONTY_R_SQ
+        } else {
+            panic!("Invalid field element")
+        }
+    }
 
-//         type F = Bn254;
+    fn ark_ff_from_bn254(input: Bn254) -> ark_FpBN256 {
+        // We can't just use `input.into_bytes()` as we need to first convert out of MONTY form.
+        // Going via `BigUint` is a little unnecessary but is sufficient for our purposes.
+        let bigint = BigUint::from_bytes_le(&input.as_canonical_biguint().to_bytes_le());
+        ark_FpBN256::from(bigint)
+    }
 
-//         let mut rng = SmallRng::seed_from_u64(1);
+    #[test]
+    fn test_poseidon2_bn254() {
+        const WIDTH: usize = 3;
+        const ROUNDS_F: usize = 8;
+        const ROUNDS_P: usize = 56;
 
-//         // Poiseidon2 reference implementation from zkhash repo.
-//         let poseidon2_ref = Poseidon2Ref::new(&POSEIDON2_BN256_PARAMS);
+        type F = Bn254;
 
-//         // Copy over round constants from zkhash.
-//         let mut round_constants: Vec<[F; WIDTH]> = RC3
-//             .iter()
-//             .map(|vec| {
-//                 vec.iter()
-//                     .copied()
-//                     .map(bn254_from_ark_ff)
-//                     .collect::<Vec<_>>()
-//                     .try_into()
-//                     .unwrap()
-//             })
-//             .collect();
+        let mut rng = SmallRng::seed_from_u64(1);
 
-//         let internal_start = ROUNDS_F / 2;
-//         let internal_end = (ROUNDS_F / 2) + ROUNDS_P;
-//         let internal_round_constants = round_constants
-//             .drain(internal_start..internal_end)
-//             .map(|vec| vec[0])
-//             .collect::<Vec<_>>();
-//         let external_round_constants = ExternalLayerConstants::new(
-//             round_constants[..(ROUNDS_F / 2)].to_vec(),
-//             round_constants[(ROUNDS_F / 2)..].to_vec(),
-//         );
-//         // Our Poseidon2 implementation.
-//         let poseidon2 = Poseidon2Bn254::new(external_round_constants, internal_round_constants);
+        // Poiseidon2 reference implementation from zkhash repo.
+        let poseidon2_ref = Poseidon2Ref::new(&POSEIDON2_BN256_PARAMS);
 
-//         // Generate random input and convert to both field formats.
-//         let input = rng.random::<[F; WIDTH]>();
-//         let input_ark_ff = input.map(ark_ff_from_bn254);
+        // Copy over round constants from zkhash.
+        let mut round_constants: Vec<[F; WIDTH]> = RC3
+            .iter()
+            .map(|vec| {
+                vec.iter()
+                    .copied()
+                    .map(bn254_from_ark_ff)
+                    .collect::<Vec<_>>()
+                    .try_into()
+                    .unwrap()
+            })
+            .collect();
 
-//         // Run reference implementation.
-//         let output_ref: [ark_FpBN256; WIDTH] =
-//             poseidon2_ref.permutation(&input_ark_ff).try_into().unwrap();
-//         let expected: [F; WIDTH] = output_ref.map(bn254_from_ark_ff);
+        let internal_start = ROUNDS_F / 2;
+        let internal_end = (ROUNDS_F / 2) + ROUNDS_P;
+        let internal_round_constants = round_constants
+            .drain(internal_start..internal_end)
+            .map(|vec| vec[0])
+            .collect::<Vec<_>>();
+        let external_round_constants = ExternalLayerConstants::new(
+            round_constants[..(ROUNDS_F / 2)].to_vec(),
+            round_constants[(ROUNDS_F / 2)..].to_vec(),
+        );
+        // Our Poseidon2 implementation.
+        let poseidon2 = Poseidon2Bn254::new(external_round_constants, internal_round_constants);
 
-//         // Run our implementation.
-//         let mut output = input;
-//         poseidon2.permute_mut(&mut output);
+        // Generate random input and convert to both field formats.
+        let input = rng.random::<[F; WIDTH]>();
+        let input_ark_ff = input.map(ark_ff_from_bn254);
 
-//         assert_eq!(output, expected);
-//     }
-// }
+        // Run reference implementation.
+        let output_ref: [ark_FpBN256; WIDTH] =
+            poseidon2_ref.permutation(&input_ark_ff).try_into().unwrap();
+        let expected: [F; WIDTH] = output_ref.map(bn254_from_ark_ff);
+
+        // Run our implementation.
+        let mut output = input;
+        poseidon2.permute_mut(&mut output);
+
+        assert_eq!(output, expected);
+    }
+}

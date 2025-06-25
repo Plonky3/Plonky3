@@ -16,58 +16,45 @@ fn bench_fft(c: &mut Criterion) {
     // log_sizes correspond to the sizes of DFT we want to benchmark;
     // for the DFT over the quadratic extension "Mersenne31Complex" a
     // fairer comparison is to use half sizes, which is the log minus 1.
-    let log_sizes = &[16, 18, 20];
+    let log_sizes = &[14, 16, 18, 20, 22];
     let log_half_sizes = &[13, 15, 17];
 
     const BATCH_SIZE: usize = 256;
     type BBExt = BinomialExtensionField<BabyBear, 5>;
 
-    fft::<BabyBear, Radix2DFTSmallBatch<_>, 1>(c, log_sizes);
-    fft::<BabyBear, Radix2DFTSmallBatch<_>, 5>(c, log_sizes);
-    fft::<BabyBear, Radix2DFTSmallBatch<_>, 16>(c, log_sizes);
-    fft::<BabyBear, Radix2DFTSmallBatch<_>, 128>(c, log_sizes);
-    ifft::<BabyBear, Radix2DFTSmallBatch<_>, 1>(c, log_sizes);
-    ifft::<BabyBear, Radix2DFTSmallBatch<_>, 5>(c, log_sizes);
-    ifft::<BabyBear, Radix2DFTSmallBatch<_>, 16>(c, log_sizes);
-    ifft::<BabyBear, Radix2DFTSmallBatch<_>, 128>(c, log_sizes);
-    coset_lde::<BabyBear, Radix2DFTSmallBatch<_>, 1>(c, log_sizes);
-    coset_lde::<BabyBear, Radix2DFTSmallBatch<_>, 5>(c, log_sizes);
-    coset_lde::<BabyBear, Radix2DFTSmallBatch<_>, 16>(c, log_sizes);
-    coset_lde::<BabyBear, Radix2DFTSmallBatch<_>, 128>(c, log_sizes);
+    fft::<BabyBear, Radix2DFTSmallBatch<_>, BATCH_SIZE>(c, log_sizes);
+    fft::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
+    fft::<BabyBear, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
+    fft::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
+    fft::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
+    fft::<Goldilocks, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
+    fft::<Goldilocks, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
+    fft::<Goldilocks, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
+    fft::<Complex<Mersenne31>, Radix2Dit<_>, BATCH_SIZE>(c, log_half_sizes);
+    fft::<Complex<Mersenne31>, Radix2Bowers, BATCH_SIZE>(c, log_half_sizes);
+    fft::<Complex<Mersenne31>, Radix2DitParallel<_>, BATCH_SIZE>(c, log_half_sizes);
 
-    // fft::<BabyBear, Radix2DFTSmallBatch<_>, BATCH_SIZE>(c, log_sizes);
-    // fft::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
-    // fft::<BabyBear, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
-    // fft::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
-    // fft::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
-    // fft::<Goldilocks, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
-    // fft::<Goldilocks, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
-    // fft::<Goldilocks, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
-    // fft::<Complex<Mersenne31>, Radix2Dit<_>, BATCH_SIZE>(c, log_half_sizes);
-    // fft::<Complex<Mersenne31>, Radix2Bowers, BATCH_SIZE>(c, log_half_sizes);
-    // fft::<Complex<Mersenne31>, Radix2DitParallel<_>, BATCH_SIZE>(c, log_half_sizes);
+    fft::<Complex<Mersenne31>, Mersenne31ComplexRadix2Dit, BATCH_SIZE>(c, log_half_sizes);
+    m31_fft::<Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
+    m31_fft::<Mersenne31ComplexRadix2Dit, BATCH_SIZE>(c, log_sizes);
 
-    // fft::<Complex<Mersenne31>, Mersenne31ComplexRadix2Dit, BATCH_SIZE>(c, log_half_sizes);
-    // m31_fft::<Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
-    // m31_fft::<Mersenne31ComplexRadix2Dit, BATCH_SIZE>(c, log_sizes);
+    ifft::<Goldilocks, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
 
-    // ifft::<Goldilocks, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
+    coset_lde::<BabyBear, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
+    coset_lde::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
+    coset_lde::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
+    coset_lde::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
+    coset_lde::<Goldilocks, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
 
-    // coset_lde::<BabyBear, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
-    // coset_lde::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
-    // coset_lde::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
-    // coset_lde::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
-    // coset_lde::<Goldilocks, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
-
-    // // The FFT is much slower when handling extension fields so we use smaller sizes:
-    // let ext_log_sizes = &[10, 12, 14];
-    // const EXT_BATCH_SIZE: usize = 50;
-    // fft::<BBExt, Radix2Dit<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
-    // fft::<BBExt, Radix2DitParallel<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
-    // fft_algebra::<BabyBear, BBExt, Radix2DFTSmallBatch<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
-    // fft_algebra::<BabyBear, BBExt, Radix2Dit<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
-    // fft_algebra::<BabyBear, BBExt, Radix2DitParallel<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
-    // fft_algebra::<BabyBear, BBExt, RecursiveDft<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
+    // The FFT is much slower when handling extension fields so we use smaller sizes:
+    let ext_log_sizes = &[10, 12, 14];
+    const EXT_BATCH_SIZE: usize = 50;
+    fft::<BBExt, Radix2Dit<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
+    fft::<BBExt, Radix2DitParallel<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
+    fft_algebra::<BabyBear, BBExt, Radix2DFTSmallBatch<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
+    fft_algebra::<BabyBear, BBExt, Radix2Dit<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
+    fft_algebra::<BabyBear, BBExt, Radix2DitParallel<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
+    fft_algebra::<BabyBear, BBExt, RecursiveDft<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
 }
 
 fn fft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])

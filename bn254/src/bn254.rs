@@ -47,7 +47,7 @@ pub(crate) const BN254_MONTY_MU: [u64; 4] = [
 /// This constant is equal to `R^2 mod P` and is useful for converting elements into Montgomery form.
 ///
 /// Equal to: `944936681149208446651664254269745548490766851729442924617792859073125903783`
-const BN254_MONTY_R_SQ: Bn254 = Bn254::new([
+pub(crate) const BN254_MONTY_R_SQ: Bn254 = Bn254::new([
     0x1bb8e645ae216da7,
     0x53fe3ab1e35c59e3,
     0x8c49833d53bb8085,
@@ -69,7 +69,7 @@ impl Bn254 {
     ///
     /// Returns None is the byte array is not exactly 32 bytes long or if the value
     /// represented by the byte array is not less than the BN254 prime.
-    fn from_bytes(bytes: &[u8]) -> Option<Self> {
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
         if bytes.len() != 32 {
             return None;
         }
