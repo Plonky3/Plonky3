@@ -196,15 +196,12 @@ impl RawDataSerializable for Bn254 {
     #[allow(refining_impl_trait)]
     #[inline]
     fn into_bytes(self) -> [u8; 32] {
+        // The transmute here maps from [[u8; 8]; 4] to [u8; 32] so is clearly safe.
         unsafe { transmute(self.value.map(|x| x.to_le_bytes())) }
     }
 
     #[inline]
     fn into_u32_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u32> {
-        // TODO: Might be a way to use iter_u32_digits and save an allocation.
-        // Currently switching it in causes rust to throw an error about referencing temporary values.
-        // Also we don't need as_canonical_biguint, (e.g. as_unique_biguint would be fine if it existed).
-        // This comment also applies to `into_u64_stream` as well as `into_parallel_u32_streams` and `into_parallel_u64_streams`.
         input.into_iter().flat_map(|x| {
             x.value
                 .into_iter()
@@ -232,6 +229,7 @@ impl RawDataSerializable for Bn254 {
         input: impl IntoIterator<Item = [Self; N]>,
     ) -> impl IntoIterator<Item = [u32; N]> {
         input.into_iter().flat_map(|vector| {
+            // The transmute here maps from [[u32; 2]; 4] to [u32; 8] so is clearly safe.
             let u32s: [[u32; 8]; N] = vector
                 .map(|elem| unsafe { transmute(elem.value.map(|x| [x as u32, (x >> 32) as u32])) });
             (0..(Self::NUM_BYTES / 4)).map(move |i| array::from_fn(|j| u32s[j][i]))
@@ -252,7 +250,16 @@ impl RawDataSerializable for Bn254 {
 impl Field for Bn254 {
     type Packing = Self;
 
-    // Generator is 5. The Montgomery representation of 5 is: 0x15d0085520f5bbc347d8eb76d8dd0689eaba68a3a32a913f1b0d0ef99fffffe6
+    /// The Montgomery form of the BN254 field element 5 which generates the multiplicative group.
+    ///
+    /// Can check this in SageMath by running:
+    /// ```SageMath
+    ///     BN254_prime = 21888242871839275222246405745257275088548364400416034343698204186575808495617
+    ///     BN254_field = GF(BN254_prime)
+    ///     BN254_field(5).multiplicative_order()
+    /// ```
+    ///
+    /// Equal to `9866131518759821339448375666750386964092448917385927261134611188594627313638`
     const GENERATOR: Self = Self::new([
         0x1b0d0ef99fffffe6,
         0xeaba68a3a32a913f,
@@ -265,17 +272,14 @@ impl Field for Bn254 {
     }
 
     fn try_inverse(&self) -> Option<Self> {
+        // TODO: This turns out to be a little slower (~20%) than the Halo2 implementation used by FFBn254Fr.
+        // That implementation makes use of an optimised extended Euclidean algorithm. It would be good
+        // to either implement that here or further improve the speed of multiplication to speed exponentiation
+        // based inversion up.
         (!self.is_zero()).then(|| exp_bn_inv(*self))
-        // // The input starts in the form aR.
-        // let big_int_val = self.to_biguint();
-        // let bit_int_prime = to_biguint(BN254_PRIME);
-        // let inv = big_int_val.modinv(&bit_int_prime);
-        // // Now inv = a^{-1}R^{-1} but, we want a^{-1}R.
-        // inv.and_then(Bn254::from_biguint)
-        //     .map(|x| x * BN254_MONTY_MU_CB)
     }
 
-    /// r = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001
+    /// `r = 21888242871839275222246405745257275088548364400416034343698204186575808495617`
     fn order() -> BigUint {
         to_biguint(BN254_PRIME)
     }
@@ -289,6 +293,10 @@ impl QuotientMap<u128> for Bn254 {
     #[inline]
     fn from_int(int: u128) -> Self {
         let bn254_elem = Self::new([int as u64, (int >> 64) as u64, 0, 0]);
+        // Need to convert into Monty form. As multiplication strips out a factor of `R`,
+        // we can do this by multiplying by `R^2`.
+        // TODO: This could clearly be sped up as some of the values are always zero.
+        // Similarly, the u64 and smaller cases could be sped up even further.
         bn254_elem * BN254_MONTY_R_SQ
     }
 
@@ -332,6 +340,8 @@ impl QuotientMap<i128> for Bn254 {
 
 impl PrimeField for Bn254 {
     fn as_canonical_biguint(&self) -> BigUint {
+        // `monty_mul` strips out a factor of `R` so multiplying by `1` converts a montgomery
+        // representation into a canonical representation.
         let out_val = monty_mul(self.value, [1, 0, 0, 0]);
         to_biguint(out_val)
     }
@@ -350,6 +360,9 @@ impl Add for Bn254 {
         debug_assert!(!overflow);
 
         // If output is bigger than BN254_PRIME, we should subtract BN254_PRIME from it.
+        // TODO: Can we avoid this subtraction in some cases? Might make things faster.
+        // Currently subtraction of Bn254 elements is faster than addition as we don't need to
+        // do both an addition and a subtraction in both cases.
         let (sum_corr, underflow) = wrapping_sub(sum, BN254_PRIME);
 
         if underflow {
@@ -452,7 +465,9 @@ impl Distribution<Bn254> for StandardUniform {
     }
 }
 
-// 0x1860ef942963f9e756452ac01eb203d8a22bf3742445ffd6636e735580d13d9c
+/// TWO_ADIC_GENERATOR is defined as `5^{P - 1 / 2^28}` where `P` is the BN254 prime.
+///
+/// It is equal to: 19103219067921713944291392827692070036145651957329286315305642004821462161904
 const TWO_ADIC_GENERATOR: [u64; 4] = [
     0x636e735580d13d9c,
     0xa22bf3742445ffd6,

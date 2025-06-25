@@ -62,7 +62,11 @@ pub(crate) fn wrapping_sub<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u6
     (output, borrow)
 }
 
+/// Simple big-num widening multiplication.
 fn widening_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 8] {
+    // TODO: This is the key component of the Montgomery multiplication algorithm so we should look into it
+    // for optimizations in the future.
+    // Could try a Karatsuba approach?
     let mut output = [0_u64; 8];
     let mut overflow;
 
@@ -90,7 +94,15 @@ fn widening_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 8] {
     output
 }
 
+/// Montgomery multiplication and reduction algorithm for BN254.
+///
+/// Uses the montgomery constant `2^256` making division free as we can
+/// simply ignore the bottom 4 u64s.
 pub(crate) fn monty_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 4] {
+    // TODO: It's likely worth it to remove the 'prod' variable here
+    // and instead have this function simple do the monty reduction.
+    // This allows us to compute the product elsewhere which will be
+    // cheaper in some cases.
     let prod = widening_mul(lhs, rhs);
 
     let prod_lo: [u64; 4] = prod[..4].try_into().unwrap();
