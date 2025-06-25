@@ -25,8 +25,11 @@ use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::helpers::exp_bn_inv;
+use crate::helpers::{exp_bn_inv, monty_mul, to_biguint, wrapping_add, wrapping_sub};
 
+/// The BN254 prime represented as a little-endian array of 4-u64s.
+///
+/// Equal to: `21888242871839275222246405745257275088548364400416034343698204186575808495617`
 const BN254_PRIME: [u64; 4] = [
     0x43e1f593f0000001,
     0x2833e84879b97091,
@@ -34,7 +37,12 @@ const BN254_PRIME: [u64; 4] = [
     0x30644e72e131a029,
 ];
 
-// 0x8c07d0e2f27cbe4d1c6567d766f9dc6e9a7979b4b396ee4c3d1e0a6c10000001
+// We use the Montgomery representation of the BN254 prime, with respect to the
+// constant 2^256.
+
+/// The value P^{-1} mod 2^256 where P is the BN254 prime.
+///
+/// Equal to: `63337608412835713303214155666321450302732274313949655463074949594303195774977`
 const BN254_MONTY_MU: [u64; 4] = [
     0x3d1e0a6c10000001,
     0x9a7979b4b396ee4c,
@@ -42,26 +50,18 @@ const BN254_MONTY_MU: [u64; 4] = [
     0x8c07d0e2f27cbe4d,
 ];
 
-// 0x216d0b17f4e44a58c49833d53bb808553fe3ab1e35c59e31bb8e645ae216da7
-const BN254_MONTY_MU_SQ: Bn254 = Bn254::new([
+/// The square of the Montgomery constant `R = 2^256 mod P` for the BN254 field.
+///
+/// Elements of the BN254 field are represented in Montgomery form, by `aR mod P`
+/// This constant is equal to `R^2 mod P` and is useful for converting elements into Montgomery form.
+///
+/// Equal to: `944936681149208446651664254269745548490766851729442924617792859073125903783`
+const BN254_MONTY_R_SQ: Bn254 = Bn254::new([
     0x1bb8e645ae216da7,
     0x53fe3ab1e35c59e3,
     0x8c49833d53bb8085,
     0x0216d0b17f4e44a5,
 ]);
-
-// 0xcf8594b7fcc657c893cc664a19fcfed2a489cbe1cfbb6b85e94d8e1b4bf0040
-// const BN254_MONTY_MU_CB: Bn254 = Bn254::new([
-//     0x5e94d8e1b4bf0040,
-//     0x2a489cbe1cfbb6b8,
-//     0x893cc664a19fcfed,
-//     0x0cf8594b7fcc657c,
-// ]);
-
-fn to_biguint<const N: usize>(value: [u64; N]) -> BigUint {
-    let bytes: Vec<u8> = value.iter().flat_map(|x| x.to_le_bytes()).collect();
-    BigUint::from_bytes_le(&bytes)
-}
 
 /// The BN254 curve scalar field prime, defined as `F_r` where `r = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.
 #[derive(Copy, Clone, Default, Eq, PartialEq)]
@@ -69,20 +69,15 @@ pub struct Bn254 {
     pub(crate) value: [u64; 4],
 }
 
-// 21888242871839275222246405745257275088548364400416034343698204186575808495617
-// Base 16 version:
-//
-
-// Montgomery representation = 2^256 mod r:
-// 6350874878119819312338956282401532410528162663560392320966563075034087161851
-// 0x0e0a77c19a07df2f 666ea36f7879462e 36fc76959f60cd29 ac96341c4ffffffb
-// 0x1c14ef83340fbe5e ccdd46def0f28c5c 6df8ed2b3ec19a53 592c68389ffffff6
-
 impl Bn254 {
     pub(crate) const fn new(value: [u64; 4]) -> Self {
         Self { value }
     }
 
+    /// Converts the a byte array in little-endian order to a field elements.
+    ///
+    /// Returns None is the byte array is not exactly 32 bytes long or if the value
+    /// represented by the byte array is not less than the BN254 prime.
     fn from_bytes(bytes: &[u8]) -> Option<Self> {
         if bytes.len() != 32 {
             return None;
@@ -101,45 +96,19 @@ impl Bn254 {
             None
         }
     }
-
-    // fn to_biguint(self) -> BigUint {
-    //     to_biguint(self.value)
-    // }
-
-    // fn from_biguint(int: BigUint) -> Option<Self> {
-    //     let u64s = int.to_u64_digits();
-    //     match u64s.len() {
-    //         0 => Some(Self::ZERO),
-    //         1..=4 => {
-    //             let mut value = [0u64; 4];
-    //             value[..u64s.len()].copy_from_slice(&u64s);
-    //             if u64s.len() == 4
-    //                 && value.iter().rev().cmp(BN254_PRIME.iter().rev()) != core::cmp::Ordering::Less
-    //             {
-    //                 None
-    //             } else {
-    //                 Some(Self::new(value))
-    //             }
-    //         }
-    //         _ => None,
-    //     }
-    // }
 }
 
 impl Serialize for Bn254 {
-    /// Serializes to raw bytes, which are typically of the Montgomery representation of the field element.
-    // See https://github.com/privacy-scaling-explorations/halo2curves/blob/d34e9e46f7daacd194739455de3b356ca6c03206/derive/src/field/mod.rs#L493
+    /// Serializes to raw bytes, which correspond to the Montgomery representation of the field element.
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let bytes: Vec<u8> = self.value.iter().flat_map(|x| x.to_le_bytes()).collect();
-        serializer.serialize_bytes(&bytes)
+        serializer.serialize_bytes(&self.into_bytes())
     }
 }
 
 impl<'de> Deserialize<'de> for Bn254 {
-    /// Deserializes from raw bytes, which are typically of the Montgomery representation of the field element.
+    /// Deserializes from raw bytes, which correspond to the Montgomery representation of the field element.
     /// Performs a check that the deserialized field element corresponds to a value less than the field modulus, and
     /// returns an error otherwise.
-    // See https://github.com/privacy-scaling-explorations/halo2curves/blob/d34e9e46f7daacd194739455de3b356ca6c03206/derive/src/field/mod.rs#L485
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let bytes: Vec<u8> = Deserialize::deserialize(d)?;
 
@@ -159,7 +128,7 @@ impl Hash for Bn254 {
 
 impl Ord for Bn254 {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.value.cmp(&other.value)
+        self.value.iter().rev().cmp(other.value.iter().rev())
     }
 }
 
@@ -171,13 +140,13 @@ impl PartialOrd for Bn254 {
 
 impl Display for Bn254 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        self.value.fmt(f)
+        core::fmt::Display::fmt(&self.as_canonical_biguint(), f)
     }
 }
 
 impl Debug for Bn254 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Debug::fmt(&self.value, f)
+        core::fmt::Debug::fmt(&self.as_canonical_biguint(), f)
     }
 }
 
@@ -185,12 +154,20 @@ impl PrimeCharacteristicRing for Bn254 {
     type PrimeSubfield = Self;
 
     const ZERO: Self = Self::new([0, 0, 0, 0]);
+
+    /// The Montgomery form of the BN254 field element 1.
+    /// 
+    /// Equal to `2^256 mod P = 6350874878119819312338956282401532410528162663560392320966563075034087161851`
     const ONE: Self = Self::new([
         0xac96341c4ffffffb,
         0x36fc76959f60cd29,
         0x666ea36f7879462e,
         0x0e0a77c19a07df2f,
     ]);
+
+    /// The Montgomery form of the BN254 field element 2.
+    /// 
+    /// Equal to `2^257 mod P = 12701749756239638624677912564803064821056325327120784641933126150068174323702`
     const TWO: Self = Self::new([
         0x592c68389ffffff6,
         0x6df8ed2b3ec19a53,
@@ -198,7 +175,9 @@ impl PrimeCharacteristicRing for Bn254 {
         0x1c14ef83340fbe5e,
     ]);
 
-    // r - 1 = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000000
+    /// The Montgomery form of the BN254 field element -1.
+    /// 
+    /// Equal to `-2^256 mod P = 15537367993719455909907449462855742678020201736855642022731641111541721333766`
     const NEG_ONE: Self = Self::new([
         0x974bc177a0000006,
         0xf13771b2da58a367,
@@ -319,7 +298,7 @@ impl QuotientMap<u128> for Bn254 {
     #[inline]
     fn from_int(int: u128) -> Self {
         let bn254_elem = Self::new([int as u64, (int >> 64) as u64, 0, 0]);
-        bn254_elem * BN254_MONTY_MU_SQ
+        bn254_elem * BN254_MONTY_R_SQ
     }
 
     /// Due to the size of the `BN254` prime, the input value is always canonical.
@@ -364,106 +343,6 @@ impl PrimeField for Bn254 {
     fn as_canonical_biguint(&self) -> BigUint {
         let out_val = monty_mul(self.value, [1, 0, 0, 0]);
         to_biguint(out_val)
-    }
-}
-
-/// Basically copied the implementation here: https://doc.rust-lang.org/std/primitive.u32.html#method.carrying_add
-///
-/// Once this moves to standard rust (currently nightly) we can use that directly.
-/// Tracking Issue is here: https://github.com/rust-lang/rust/issues/85532
-const fn carrying_add(lhs: u64, rhs: u64, carry: bool) -> (u64, bool) {
-    let (a, c1) = lhs.overflowing_add(rhs);
-    let (b, c2) = a.overflowing_add(carry as u64);
-
-    // Ideally LLVM would know this is disjoint without us telling them,
-    // but it doesn't <https://github.com/llvm/llvm-project/issues/118162>
-    // Just doing a standard or for now.
-    (b, c1 | c2)
-}
-
-// Compute `lhs + rhs`, returning a bool if overflow occurred.
-fn wrapping_add<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u64; N], bool) {
-    let mut carry = false;
-    let mut output = [0; N];
-
-    for i in 0..N {
-        (output[i], carry) = carrying_add(lhs[i], rhs[i], carry);
-    }
-
-    (output, carry)
-}
-
-/// Basically copied the implementation here: https://doc.rust-lang.org/std/primitive.u32.html#method.borrowing_sub
-///
-/// Once this moves to standard rust (currently nightly) we can use that directly.
-/// Tracking Issue is here: https://github.com/rust-lang/rust/issues/85532
-const fn borrowing_sub(lhs: u64, rhs: u64, borrow: bool) -> (u64, bool) {
-    let (a, c1) = lhs.overflowing_sub(rhs);
-    let (b, c2) = a.overflowing_sub(borrow as u64);
-
-    // Ideally LLVM would know this is disjoint without us telling them,
-    // but it doesn't <https://github.com/llvm/llvm-project/issues/118162>
-    // Just doing a standard or for now.
-    (b, c1 | c2)
-}
-
-// Compute `lhs - rhs`, returning a bool if underflow occurred.
-fn wrapping_sub<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u64; N], bool) {
-    let mut borrow = false;
-    let mut output = [0; N];
-
-    for i in 0..N {
-        (output[i], borrow) = borrowing_sub(lhs[i], rhs[i], borrow);
-    }
-
-    (output, borrow)
-}
-
-fn widening_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 8] {
-    let mut output = [0_u64; 8];
-    let mut overflow;
-
-    for i in 0..4 {
-        let mut carry = 0_u128;
-        for j in 0..4 {
-            // prod_u128 <= (2^64 - 1)^2 <= 2^128 - 2^65 + 1
-            let prod_u128 = lhs[i] as u128 * rhs[j] as u128;
-
-            // carry < 2^64 so this sum is < 2^128 - 1.
-            carry += prod_u128;
-
-            // Get bottom 64 bits of carry and add into output accumulator.
-            let lo = carry as u64;
-            (output[i + j], overflow) = output[i + j].overflowing_add(lo);
-
-            // Move top bits down. As carry < 2^128 - 1, after this reduction and
-            // addition it is < 2^64 - 1.
-            carry >>= 64;
-            carry += overflow as u128;
-        }
-        // As i is increasing, `output[i + 4]` currently stores a 0.
-        output[i + 4] = carry as u64;
-    }
-    output
-}
-
-fn monty_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 4] {
-    let prod = widening_mul(lhs, rhs);
-
-    let prod_lo: [u64; 4] = prod[..4].try_into().unwrap();
-    let prod_hi: [u64; 4] = prod[4..].try_into().unwrap();
-    let t = widening_mul(prod_lo, BN254_MONTY_MU);
-    let t_lo: [u64; 4] = t[..4].try_into().unwrap();
-
-    let u = widening_mul(t_lo, BN254_PRIME);
-    let u_hi: [u64; 4] = u[4..].try_into().unwrap();
-
-    let (sub, over) = wrapping_sub(prod_hi, u_hi);
-    if over {
-        let (sub_corr, _) = wrapping_add(sub, BN254_PRIME);
-        sub_corr
-    } else {
-        sub
     }
 }
 

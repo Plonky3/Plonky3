@@ -1,22 +1,131 @@
+use alloc::vec::Vec;
+use num_bigint::BigUint;
 use p3_field::Field;
+
+use crate::{BN254_MONTY_MU, BN254_PRIME};
+
+/// Convert a fixed-size array of u64s to a BigUint.
+pub(crate) fn to_biguint<const N: usize>(value: [u64; N]) -> BigUint {
+    let bytes: Vec<u8> = value.iter().flat_map(|x| x.to_le_bytes()).collect();
+    BigUint::from_bytes_le(&bytes)
+}
+
+/// Basically copied the implementation here: https://doc.rust-lang.org/std/primitive.u32.html#method.carrying_add
+///
+/// Once this moves to standard rust (currently nightly) we can use that directly.
+/// Tracking Issue is here: https://github.com/rust-lang/rust/issues/85532
+const fn carrying_add(lhs: u64, rhs: u64, carry: bool) -> (u64, bool) {
+    let (a, c1) = lhs.overflowing_add(rhs);
+    let (b, c2) = a.overflowing_add(carry as u64);
+
+    // Ideally LLVM would know this is disjoint without us telling them,
+    // but it doesn't <https://github.com/llvm/llvm-project/issues/118162>
+    // Just doing a standard or for now.
+    (b, c1 | c2)
+}
+
+// Compute `lhs + rhs`, returning a bool if overflow occurred.
+pub(crate) fn wrapping_add<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u64; N], bool) {
+    let mut carry = false;
+    let mut output = [0; N];
+
+    for i in 0..N {
+        (output[i], carry) = carrying_add(lhs[i], rhs[i], carry);
+    }
+
+    (output, carry)
+}
+
+/// Basically copied the implementation here: https://doc.rust-lang.org/std/primitive.u32.html#method.borrowing_sub
+///
+/// Once this moves to standard rust (currently nightly) we can use that directly.
+/// Tracking Issue is here: https://github.com/rust-lang/rust/issues/85532
+const fn borrowing_sub(lhs: u64, rhs: u64, borrow: bool) -> (u64, bool) {
+    let (a, c1) = lhs.overflowing_sub(rhs);
+    let (b, c2) = a.overflowing_sub(borrow as u64);
+
+    // Ideally LLVM would know this is disjoint without us telling them,
+    // but it doesn't <https://github.com/llvm/llvm-project/issues/118162>
+    // Just doing a standard or for now.
+    (b, c1 | c2)
+}
+
+// Compute `lhs - rhs`, returning a bool if underflow occurred.
+pub(crate) fn wrapping_sub<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u64; N], bool) {
+    let mut borrow = false;
+    let mut output = [0; N];
+
+    for i in 0..N {
+        (output[i], borrow) = borrowing_sub(lhs[i], rhs[i], borrow);
+    }
+
+    (output, borrow)
+}
+
+fn widening_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 8] {
+    let mut output = [0_u64; 8];
+    let mut overflow;
+
+    for i in 0..4 {
+        let mut carry = 0_u128;
+        for j in 0..4 {
+            // prod_u128 <= (2^64 - 1)^2 <= 2^128 - 2^65 + 1
+            let prod_u128 = lhs[i] as u128 * rhs[j] as u128;
+
+            // carry < 2^64 so this sum is < 2^128 - 1.
+            carry += prod_u128;
+
+            // Get bottom 64 bits of carry and add into output accumulator.
+            let lo = carry as u64;
+            (output[i + j], overflow) = output[i + j].overflowing_add(lo);
+
+            // Move top bits down. As carry < 2^128 - 1, after this reduction and
+            // addition it is < 2^64 - 1.
+            carry >>= 64;
+            carry += overflow as u128;
+        }
+        // As i is increasing, `output[i + 4]` currently stores a 0.
+        output[i + 4] = carry as u64;
+    }
+    output
+}
+
+pub(crate) fn monty_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 4] {
+    let prod = widening_mul(lhs, rhs);
+
+    let prod_lo: [u64; 4] = prod[..4].try_into().unwrap();
+    let prod_hi: [u64; 4] = prod[4..].try_into().unwrap();
+    let t = widening_mul(prod_lo, BN254_MONTY_MU);
+    let t_lo: [u64; 4] = t[..4].try_into().unwrap();
+
+    let u = widening_mul(t_lo, BN254_PRIME);
+    let u_hi: [u64; 4] = u[4..].try_into().unwrap();
+
+    let (sub, over) = wrapping_sub(prod_hi, u_hi);
+    if over {
+        let (sub_corr, _) = wrapping_add(sub, BN254_PRIME);
+        sub_corr
+    } else {
+        sub
+    }
+}
 
 /// Compute `base^{2^num_sq} * mul`
 fn sq_and_mul<F: Field>(base: F, num_sq: usize, mul: F) -> F {
     base.exp_power_of_2(num_sq) * mul
 }
 
-/// Compute the exponential `x -> x^21888242871839275222246405745257275088548364400416034343698204186575808495615` using a custom addition chain.
+/// Invert and element in the BN254 field using addition chain exponentiation.
 ///
-/// This map computes the inverse in the BN254 field.
+/// Explicitly this function computes the exponential map:
+/// `x -> x^21888242871839275222246405745257275088548364400416034343698204186575808495615`.
 pub(crate) fn exp_bn_inv<F: Field>(val: F) -> F {
     // Note the binary expansion: 21888242871839275222246405745257275088548364400416034343698204186575808495615
     //  = 1100000110010001001110011100101110000100110001101000000010100110111000010100000100010110110110100000
     //       0110000001010110000101110100101000001100111110100001001000011110011011100101110000100100010100001
     //       111100001111101011001001111101111111111111111111111111111.
-    // This uses 250 Squares + 54 Multiplications => 306 Operations total.
+    // This uses 251 Squares + 56 Multiplications => 307 Operations total.
     // It is likely that this could be improved through further effort.
-
-    // 10101
 
     // The basic idea we follow here is to create some simple binary building blocks to save on multiplications.
     let p1 = val;
