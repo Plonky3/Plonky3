@@ -101,6 +101,41 @@ fn widening_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 8] {
     output
 }
 
+/// Multiplication of big-nums mod `2^256`.
+///
+/// Lets us avoid multiplication we know will result in a multiple of `2^256`.
+#[inline]
+fn mul_mod_2_exp_256(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 4] {
+    let mut output = [0_u64; 4];
+
+    // As we are working mod `2^256`, we can simplify some of our computations and ignore some carries.
+    let limb0 = (lhs[0] as u128) * (rhs[0] as u128);
+    output[0] = limb0 as u64;
+
+    // Note that the first add cannot overflow as (limb0 >> 64) < 2^64 and any product of u64's is
+    // less than or equal to 2^128 - 2^65 + 1.
+    let (limb1, carry) = (limb0 >> 64)
+        .wrapping_add((lhs[0] as u128) * (rhs[1] as u128))
+        .overflowing_add((lhs[1] as u128) * (rhs[0] as u128));
+    output[1] = limb1 as u64;
+
+    // Overflow does not matter for limb2 as the overflow is > 2^256.
+    let limb2 = ((limb1 >> 64) + ((carry as u128) << 64))
+        .wrapping_add((lhs[0] as u128) * (rhs[2] as u128))
+        .wrapping_add((lhs[1] as u128) * (rhs[1] as u128))
+        .wrapping_add((lhs[2] as u128) * (rhs[0] as u128));
+    output[2] = limb2 as u64;
+
+    // For limb3 we can work with everything as u64s.
+    output[3] = ((limb2 >> 64) as u64)
+        .wrapping_add(lhs[0].wrapping_mul(rhs[3]))
+        .wrapping_add(lhs[1].wrapping_mul(rhs[2]))
+        .wrapping_add(lhs[2].wrapping_mul(rhs[1]))
+        .wrapping_add(lhs[3].wrapping_mul(rhs[0]));
+
+    output
+}
+
 /// Montgomery multiplication and reduction algorithm for BN254.
 ///
 /// Uses the montgomery constant `2^256` making division free as we can
@@ -108,16 +143,22 @@ fn widening_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 8] {
 #[inline]
 pub(crate) fn monty_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 4] {
     // TODO: It's likely worth it to remove the 'prod' variable here
-    // and instead have this function simple do the monty reduction.
+    // and instead have this function simply do the monty reduction.
     // This allows us to compute the product elsewhere which will be
     // cheaper in some cases.
+    // There may also be a cleverer algorithm (interleaved Montgomery multiplication)
+    // which lets us do four smaller monty reductions instead of one big one
+    // and avoids all the widening multiplications.
     let prod = widening_mul(lhs, rhs);
 
     let prod_lo: [u64; 4] = prod[..4].try_into().unwrap();
     let prod_hi: [u64; 4] = prod[4..].try_into().unwrap();
-    let t = widening_mul(prod_lo, BN254_MONTY_MU);
-    let t_lo: [u64; 4] = t[..4].try_into().unwrap();
 
+    let t_lo = mul_mod_2_exp_256(prod_lo, BN254_MONTY_MU);
+
+    // TODO: For u, we only actually need the top 4 u64s.
+    // It may be possible to use a simpler multiplication
+    // algorithm.
     let u = widening_mul(t_lo, BN254_PRIME);
     let u_hi: [u64; 4] = u[4..].try_into().unwrap();
 
@@ -136,7 +177,7 @@ fn sq_and_mul<F: Field>(base: F, num_sq: usize, mul: F) -> F {
     base.exp_power_of_2(num_sq) * mul
 }
 
-/// Invert and element in the BN254 field using addition chain exponentiation.
+/// Invert an element in the BN254 field using addition chain exponentiation.
 ///
 /// Explicitly this function computes the exponential map:
 /// `x -> x^21888242871839275222246405745257275088548364400416034343698204186575808495615`.
