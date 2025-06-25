@@ -47,22 +47,27 @@ pub(crate) const BN254_MONTY_MU: [u64; 4] = [
 /// This constant is equal to `R^2 mod P` and is useful for converting elements into Montgomery form.
 ///
 /// Equal to: `944936681149208446651664254269745548490766851729442924617792859073125903783`
-pub(crate) const BN254_MONTY_R_SQ: Bn254 = Bn254::new([
+pub(crate) const BN254_MONTY_R_SQ: Bn254 = Bn254::new_monty([
     0x1bb8e645ae216da7,
     0x53fe3ab1e35c59e3,
     0x8c49833d53bb8085,
     0x0216d0b17f4e44a5,
 ]);
 
-/// The BN254 curve scalar field prime, defined as `F_r` where `r = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.
+/// The BN254 curve scalar field prime, defined as `F_P` where `P = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.
 #[derive(Copy, Clone, Default, Eq, PartialEq)]
 pub struct Bn254 {
+    /// The MONTY form of the field element, a 254-bit integer less than `P` saved as a collection of u64's using a little-endian order.
     pub(crate) value: [u64; 4],
 }
 
 impl Bn254 {
+    /// Creates a new BN254 field element from an array of 4 u64's.
+    ///
+    /// The array is assumed to correspond to a 254-bit integer less than P and is interpreted as
+    /// already being in Montgomery form.
     #[inline]
-    pub(crate) const fn new(value: [u64; 4]) -> Self {
+    pub(crate) const fn new_monty(value: [u64; 4]) -> Self {
         Self { value }
     }
 
@@ -84,7 +89,7 @@ impl Bn254 {
         });
         // Check if the value is less than the prime.
         if value.iter().rev().cmp(BN254_PRIME.iter().rev()) == core::cmp::Ordering::Less {
-            Some(Self::new(value))
+            Some(Self::new_monty(value))
         } else {
             None
         }
@@ -153,12 +158,12 @@ impl Debug for Bn254 {
 impl PrimeCharacteristicRing for Bn254 {
     type PrimeSubfield = Self;
 
-    const ZERO: Self = Self::new([0, 0, 0, 0]);
+    const ZERO: Self = Self::new_monty([0, 0, 0, 0]);
 
     /// The Montgomery form of the BN254 field element 1.
     ///
     /// Equal to `2^256 mod P = 6350874878119819312338956282401532410528162663560392320966563075034087161851`
-    const ONE: Self = Self::new([
+    const ONE: Self = Self::new_monty([
         0xac96341c4ffffffb,
         0x36fc76959f60cd29,
         0x666ea36f7879462e,
@@ -168,7 +173,7 @@ impl PrimeCharacteristicRing for Bn254 {
     /// The Montgomery form of the BN254 field element 2.
     ///
     /// Equal to `2^257 mod P = 12701749756239638624677912564803064821056325327120784641933126150068174323702`
-    const TWO: Self = Self::new([
+    const TWO: Self = Self::new_monty([
         0x592c68389ffffff6,
         0x6df8ed2b3ec19a53,
         0xccdd46def0f28c5c,
@@ -178,7 +183,7 @@ impl PrimeCharacteristicRing for Bn254 {
     /// The Montgomery form of the BN254 field element -1.
     ///
     /// Equal to `-2^256 mod P = 15537367993719455909907449462855742678020201736855642022731641111541721333766`
-    const NEG_ONE: Self = Self::new([
+    const NEG_ONE: Self = Self::new_monty([
         0x974bc177a0000006,
         0xf13771b2da58a367,
         0x51e1a2470908122e,
@@ -269,7 +274,7 @@ impl Field for Bn254 {
     /// ```
     ///
     /// Equal to `9866131518759821339448375666750386964092448917385927261134611188594627313638`
-    const GENERATOR: Self = Self::new([
+    const GENERATOR: Self = Self::new_monty([
         0x1b0d0ef99fffffe6,
         0xeaba68a3a32a913f,
         0x47d8eb76d8dd0689,
@@ -305,7 +310,7 @@ impl QuotientMap<u128> for Bn254 {
     /// Due to the size of the `BN254` prime, the input value is always canonical.
     #[inline]
     fn from_int(int: u128) -> Self {
-        let bn254_elem = Self::new([int as u64, (int >> 64) as u64, 0, 0]);
+        let bn254_elem = Self::new_monty([int as u64, (int >> 64) as u64, 0, 0]);
         // Need to convert into Monty form. As multiplication strips out a factor of `R`,
         // we can do this by multiplying by `R^2`.
         // TODO: This could clearly be sped up as some of the values are always zero.
@@ -381,9 +386,9 @@ impl Add for Bn254 {
         let (sum_corr, underflow) = wrapping_sub(sum, BN254_PRIME);
 
         if underflow {
-            Self::new(sum)
+            Self::new_monty(sum)
         } else {
-            Self::new(sum_corr)
+            Self::new_monty(sum_corr)
         }
     }
 }
@@ -417,7 +422,7 @@ impl Sub for Bn254 {
             (sub, _) = wrapping_add(sub, BN254_PRIME);
         }
 
-        Self::new(sub)
+        Self::new_monty(sub)
     }
 }
 
@@ -442,7 +447,7 @@ impl Mul for Bn254 {
 
     #[inline]
     fn mul(self, rhs: Self) -> Self {
-        Self::new(monty_mul(self.value, rhs.value))
+        Self::new_monty(monty_mul(self.value, rhs.value))
     }
 }
 
@@ -504,7 +509,7 @@ impl TwoAdicField for Bn254 {
 
     #[inline]
     fn two_adic_generator(bits: usize) -> Self {
-        let mut omega = Self::new(TWO_ADIC_GENERATOR);
+        let mut omega = Self::new_monty(TWO_ADIC_GENERATOR);
         for _ in bits..Self::TWO_ADICITY {
             omega = omega.square();
         }
