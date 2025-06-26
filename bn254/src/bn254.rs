@@ -40,12 +40,12 @@ pub(crate) const BN254_MONTY_MU_64: u64 = 0x3d1e0a6c10000001;
 /// This constant is equal to `R^2 mod P` and is useful for converting elements into Montgomery form.
 ///
 /// Equal to: `944936681149208446651664254269745548490766851729442924617792859073125903783`
-pub(crate) const BN254_MONTY_R_SQ: Bn254 = Bn254::new_monty([
+pub(crate) const BN254_MONTY_R_SQ: [u64; 4] = [
     0x1bb8e645ae216da7,
     0x53fe3ab1e35c59e3,
     0x8c49833d53bb8085,
     0x0216d0b17f4e44a5,
-]);
+];
 
 /// The BN254 curve scalar field prime, defined as `F_P` where `P = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.
 #[derive(Copy, Clone, Default, Eq, PartialEq)]
@@ -306,12 +306,12 @@ impl QuotientMap<u128> for Bn254 {
     /// Due to the size of the `BN254` prime, the input value is always canonical.
     #[inline]
     fn from_int(int: u128) -> Self {
-        let bn254_elem = Self::new_monty([int as u64, (int >> 64) as u64, 0, 0]);
-        // Need to convert into Monty form. As multiplication strips out a factor of `R`,
-        // we can do this by multiplying by `R^2`.
-        // TODO: This could clearly be sped up as some of the values are always zero.
-        // Similarly, the u64 and smaller cases could be sped up even further.
-        bn254_elem * BN254_MONTY_R_SQ
+        // Need to convert into Monty form. As the monty reduction strips out a factor of `R`,
+        // we can do this by multiplying by `R^2` and doing a monty reduction.
+        // This may be able to be improved as some values are always 0 but the compiler is
+        // probably smart enough to work that out here?
+        let monty_form = monty_mul(BN254_MONTY_R_SQ, [int as u64, (int >> 64) as u64, 0, 0]);
+        Self::new_monty(monty_form)
     }
 
     /// Due to the size of the `BN254` prime, the input value is always canonical.
@@ -357,7 +357,7 @@ impl PrimeField for Bn254 {
     fn as_canonical_biguint(&self) -> BigUint {
         // `monty_mul` strips out a factor of `R` so multiplying by `1` converts a montgomery
         // representation into a canonical representation.
-        let out_val = monty_mul([1, 0, 0, 0], self.value);
+        let out_val = monty_mul(self.value, [1, 0, 0, 0]);
         to_biguint(out_val)
     }
 }
