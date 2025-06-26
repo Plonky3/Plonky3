@@ -1,5 +1,5 @@
 [package]
-name = "p3-bn254-fr"
+name = "p3-bn254"
 # TODO: Replace this generic plonky3 description with one specific to this crate...
 description.workspace = true
 version.workspace = true
@@ -15,7 +15,6 @@ p3-field.workspace = true
 p3-poseidon2.workspace = true
 p3-symmetric.workspace = true
 
-halo2curves = { version = "0.8.0", features = ["bits", "derive_serde"] }
 num-bigint.workspace = true
 paste.workspace = true
 rand.workspace = true
@@ -27,13 +26,6 @@ p3-field-testing.workspace = true
 criterion.workspace = true
 serde_json.workspace = true
 zkhash = { git = "https://github.com/HorizenLabs/poseidon2" }
-
-[features]
-default = []
-table = [
-    "halo2curves/bn256-table",
-] # Generate cached table of [0, 2^16) in Bn254Fr at compile time
-asm = ["halo2curves/asm"]
 
 [[bench]]
 name = "bench_field"
