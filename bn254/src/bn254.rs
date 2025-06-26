@@ -31,15 +31,8 @@ pub(crate) const BN254_PRIME: [u64; 4] = [
 // We use the Montgomery representation of the BN254 prime, with respect to the
 // constant 2^256.
 
-/// The value P^{-1} mod 2^256 where P is the BN254 prime.
-///
-/// Equal to: `63337608412835713303214155666321450302732274313949655463074949594303195774977`
-pub(crate) const BN254_MONTY_MU: [u64; 4] = [
-    0x3d1e0a6c10000001,
-    0x9a7979b4b396ee4c,
-    0x1c6567d766f9dc6e,
-    0x8c07d0e2f27cbe4d,
-];
+/// The value P^{-1} mod 2^64 where P is the BN254 prime.
+pub(crate) const BN254_MONTY_MU_64: u64 = 0x3d1e0a6c10000001;
 
 /// The square of the Montgomery constant `R = 2^256 mod P` for the BN254 field.
 ///
@@ -364,7 +357,7 @@ impl PrimeField for Bn254 {
     fn as_canonical_biguint(&self) -> BigUint {
         // `monty_mul` strips out a factor of `R` so multiplying by `1` converts a montgomery
         // representation into a canonical representation.
-        let out_val = monty_mul(self.value, [1, 0, 0, 0]);
+        let out_val = monty_mul([1, 0, 0, 0], self.value);
         to_biguint(out_val)
     }
 }
