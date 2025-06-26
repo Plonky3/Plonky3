@@ -71,9 +71,9 @@ impl Bn254 {
         Self { value }
     }
 
-    /// Converts the a byte array in little-endian order to a field elements.
+    /// Converts the a byte array in little-endian order to a field element.
     ///
-    /// Returns None is the byte array is not exactly 32 bytes long or if the value
+    /// Returns None if the byte array is not exactly 32 bytes long or if the value
     /// represented by the byte array is not less than the BN254 prime.
     #[inline]
     pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
