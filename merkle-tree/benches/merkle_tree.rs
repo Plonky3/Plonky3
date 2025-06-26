@@ -166,7 +166,7 @@ where
         type_name::<H>(),
         type_name::<C>()
     );
-    let params = BenchmarkId::from_parameter(format!("{:?}", dims));
+    let params = BenchmarkId::from_parameter(format!("{dims:?}"));
 
     let mut group = criterion.benchmark_group(name);
     group.sample_size(10);
