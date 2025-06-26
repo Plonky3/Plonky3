@@ -71,12 +71,14 @@ impl Bn254 {
         Self { value }
     }
 
-    /// Converts the a byte array in little-endian order to a field elements.
+    /// Converts the a byte array in little-endian order to a field element.
     ///
-    /// Returns None is the byte array is not exactly 32 bytes long or if the value
+    /// Assumes the bytes correspond to the Montgomery form of the desired field element.
+    ///
+    /// Returns None if the byte array is not exactly 32 bytes long or if the value
     /// represented by the byte array is not less than the BN254 prime.
     #[inline]
-    pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
+    pub(crate) fn from_bytes_monty(bytes: &[u8]) -> Option<Self> {
         if bytes.len() != 32 {
             return None;
         }
@@ -112,7 +114,8 @@ impl<'de> Deserialize<'de> for Bn254 {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let bytes: Vec<u8> = Deserialize::deserialize(d)?;
 
-        Self::from_bytes(&bytes).ok_or_else(|| serde::de::Error::custom("Invalid field element"))
+        Self::from_bytes_monty(&bytes)
+            .ok_or_else(|| serde::de::Error::custom("Invalid field element"))
     }
 }
 
@@ -486,7 +489,7 @@ impl Distribution<Bn254> for StandardUniform {
             // `from_bytes` expects little endian input, so we adjust byte 31:
             trial_element[31] &= (1_u8 << 6) - 1;
 
-            let x = Bn254::from_bytes(&trial_element);
+            let x = Bn254::from_bytes_monty(&trial_element);
             if let Some(val) = x {
                 return val;
             }

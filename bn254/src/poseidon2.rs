@@ -124,7 +124,7 @@ mod tests {
         let bytes = input.into_bigint().to_bytes_le();
         full_bytes[..bytes.len()].copy_from_slice(&bytes);
 
-        let value = Bn254::from_bytes(&full_bytes);
+        let value = Bn254::from_bytes_monty(&full_bytes);
 
         if let Some(field_elem) = value {
             // From bytes does not convert into Monty form.
