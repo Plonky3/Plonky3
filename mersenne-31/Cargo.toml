@@ -1,6 +1,6 @@
 [package]
 name = "p3-mersenne-31"
-description = "A highly optimized implementation of the prime field F_p where p = 2^31 - 1, with SIMD acceleration for multiple architectures."
+description = "An implementation of the Mersenne31 prime field F_p, where p = 2^31 - 1."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
