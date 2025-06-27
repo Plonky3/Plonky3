@@ -19,7 +19,7 @@ where
 
     let mut input = array::from_fn(Mersenne31::from_usize);
 
-    let name = format!("monolith::<Mersenne31, {}>", WIDTH);
+    let name = format!("monolith::<Mersenne31, {WIDTH}>");
     c.bench_function(name.as_str(), |b| {
         b.iter(|| monolith.permutation(&mut input))
     });

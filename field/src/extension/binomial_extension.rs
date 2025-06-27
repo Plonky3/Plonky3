@@ -376,7 +376,7 @@ where
                     (_, false) => format!("{x} X^{i}"),
                 })
                 .join(" + ");
-            write!(f, "{}", str)
+            write!(f, "{str}")
         }
     }
 }
