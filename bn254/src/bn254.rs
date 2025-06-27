@@ -16,7 +16,9 @@ use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::helpers::{exp_bn_inv, monty_mul, to_biguint, wrapping_add, wrapping_sub};
+use crate::helpers::{
+    gcd_inversion_simple, halve_bn254, monty_mul, to_biguint, wrapping_add, wrapping_sub,
+};
 
 /// The BN254 prime represented as a little-endian array of 4-u64s.
 ///
@@ -52,6 +54,19 @@ pub(crate) const BN254_MONTY_R_SQ: Bn254 = Bn254::new_monty([
     0x53fe3ab1e35c59e3,
     0x8c49833d53bb8085,
     0x0216d0b17f4e44a5,
+]);
+
+/// The cube of the Montgomery constant `R = 2^256 mod P` for the BN254 field.
+///
+/// Elements of the BN254 field are represented in Montgomery form, by `aR mod P`
+/// This constant is equal to `R^3 mod P` and is useful for converting elements into Montgomery form.
+///
+/// Equal to: `5866548545943845227489894872040244720403868105578784105281690076696998248512`
+pub(crate) const BN254_MONTY_R_CB: Bn254 = Bn254::new_monty([
+    0x5e94d8e1b4bf0040,
+    0x2a489cbe1cfbb6b8,
+    0x893cc664a19fcfed,
+    0x0cf8594b7fcc657c,
 ]);
 
 /// The BN254 curve scalar field prime, defined as `F_P` where `P = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.
@@ -290,13 +305,18 @@ impl Field for Bn254 {
     }
 
     #[inline]
+    fn halve(&self) -> Self {
+        Self::new_monty(halve_bn254(self.value))
+    }
+
+    #[inline]
     fn try_inverse(&self) -> Option<Self> {
         // TODO: This turns out to be a much slower than the Halo2 implementation used by FFBn254Fr. (Roughly 4x slower)
         // That implementation makes use of an optimised extended Euclidean algorithm. It would be good
         // to either implement that here or further improve the speed of multiplication to speed exponentiation
         // based inversion up. Don't think it is super important for now though as inversion is rare and can mostly be
         // batched.
-        (!self.is_zero()).then(|| exp_bn_inv(*self))
+        (!self.is_zero()).then(|| gcd_inversion_simple(*self))
     }
 
     /// `r = 21888242871839275222246405745257275088548364400416034343698204186575808495617`
