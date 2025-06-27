@@ -1,6 +1,6 @@
 [package]
 name = "p3-koala-bear"
-description = "Field extensions and optimized Poseidon2 implementations using the KoalaBear field with SIMD support."
+description = "An implementation of the Koalabear prime field F_p, where p = 2^31 - 2^24 + 1."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
