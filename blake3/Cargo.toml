@@ -1,6 +1,6 @@
 [package]
 name = "p3-blake3"
-description = "Implements the BLAKE3 cryptographic hash function with support for chunked and slice-based hashing."
+description = "A wrapper for the standard BLAKE3 cryptographic hash function allowing it to be used in the Plonky3 environment."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
