@@ -1,6 +1,6 @@
 [package]
 name = "p3-mds"
-description = "A collection of MDS transformations and related utilities used in cryptographic constructions."
+description = "A collection of methods allowing for fast multiplication by MDS matrices."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
