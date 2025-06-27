@@ -2,9 +2,8 @@ use alloc::vec::Vec;
 use core::cmp::Ordering::{Equal, Greater, Less};
 
 use num_bigint::BigUint;
-use p3_field::Field;
 
-use crate::{BN254_MONTY_MU_64, BN254_MONTY_R_SQ, BN254_PRIME, Bn254};
+use crate::{BN254_MONTY_MU_64, BN254_PRIME};
 
 /// Convert a fixed-size array of u64s to a BigUint.
 #[inline]
@@ -228,32 +227,12 @@ pub(crate) fn halve_even(mut input: [u64; 4]) -> [u64; 4] {
     input
 }
 
-pub(crate) fn gcd_inversion_simple(val: Bn254) -> Bn254 {
-    let mut a = val.value;
-    let mut u = Bn254::new_monty(BN254_MONTY_R_SQ);
-    let mut v = Bn254::new_monty([0, 0, 0, 0]);
-    let mut b = BN254_PRIME;
-
-    while !a.iter().all(|&x| x == 0) {
-        // println!("{a}, {b}");
-        if a[0] & 1 == 0 {
-            a = halve_even(a);
-            u = u.halve();
-        } else {
-            if a.iter().rev().cmp(b.iter().rev()) == Less {
-                (a, u, b, v) = (b, v, a, u)
-            }
-            let (sub, _) = wrapping_sub(a, b);
-            a = halve_even(sub);
-            u = (u - v).halve();
-        }
-    }
-    v
-}
-
 // The following approach to a GCD based inversion algorithm is taken from here: https://eprint.iacr.org/2020/972.pdf
-// 254 + 254 - 1 = 507 = 16 * 30 + 27 (Could also do 507 = 16 * 31 + 11)
+// Explicitly, we implement Algorithm 2, roughly following the C implementation linked in that paper (in section 3).
+// The algorithm is a variant of the Binary Extended Euclidean Algorithm which, allows for most of the iterations to
+// be performed using only u64's even in cases where the inputs are much larger.
 
+#[inline]
 fn num_bits(val: [u64; 4]) -> usize {
     for i in (0..4).rev() {
         if val[i] != 0 {
@@ -264,55 +243,71 @@ fn num_bits(val: [u64; 4]) -> usize {
     0
 }
 
+#[inline]
 fn rm_middle<const K: usize>(val: [u64; 4], n: usize) -> u64 {
-    // Get the bottom k-1 bits.
-    let last_k_min_1 = val[0] & ((1 << (K - 1)) - 1);
+    // Get the bottom K bits.
+    let last_k = val[0] & ((1 << K) - 1);
 
-    // Get the k+1 bits n to n - k inclusive where the bits are numbered with the least significant bit being 1.
+    // Get the k+2 bits n to n - k - 1 inclusive where the bits are numbered with the least significant bit being 1.
     let n_limb = (n - 1) / 64; // Which limb is the n-th bit in.
     let n_remainder = (n - 1) % 64; // How far into the limb is the n-th bit.
 
-    // Get the top k + 1 bits starting from the n-th bit shifted into bits k - 1 -> 2k - 1.
-    let first_k_plus_1 = match core::cmp::Ord::cmp(&n_remainder, &K) {
+    // Get the top k + 2 bits starting from the n-th bit shifted into bits k -> 2k + 2.
+    let first_k_plus_2 = match core::cmp::Ord::cmp(&n_remainder, &(K + 1)) {
         Equal | Greater => {
-            // This is the easiest case as all K + 1 bits are in the n'th_limb
+            // This is the easiest case as all K + 2 bits are in the n'th_limb
             // We also already know that all bits above the n-th bit are 0.
-            let shift = n_remainder - K;
-            (val[n_limb] >> shift) << (K - 1)
+            let shift = n_remainder - (K + 1);
+            (val[n_limb] >> shift) << K
         }
         Less => {
             // In this case we need to get some bits from the next limb as well.
-            let num_extra_bits = K - n_remainder;
+            let num_extra_bits = (K + 1) - n_remainder;
             let next_limb_bits = val[n_limb - 1] >> (64 - num_extra_bits);
-            ((val[n_limb] << num_extra_bits) | next_limb_bits) << (K - 1)
+            ((val[n_limb] << num_extra_bits) | next_limb_bits) << K
         }
     };
-
-    first_k_plus_1 | last_k_min_1
+    first_k_plus_2 | last_k
 }
 
 /// Negate a (in the 2's complement sense) if sign is `-1 = 2^64 - 1`
 /// Leave a unchanged if sign is `0`.
 ///
 /// Sign is assumed ot be either `0` or `-1`.
+#[inline]
 fn conditional_neg(a: &mut [u64; 4], sign: u64) {
     let mut carry;
-    (a[0], carry) = a[0].overflowing_sub(sign);
-    a[0] ^= sign;
-    (a[1], carry) = a[1].overflowing_sub(carry as u64);
-    a[1] ^= sign;
-    (a[2], carry) = a[2].overflowing_sub(carry as u64);
-    a[2] ^= sign;
-    (a[3], _) = a[3].overflowing_sub(carry as u64);
-    a[3] ^= sign;
+    (a[0], carry) = (a[0] ^ sign).overflowing_add((-(sign as i64)) as u64);
+    (a[1], carry) = (a[1] ^ sign).overflowing_add(carry as u64);
+    (a[2], carry) = (a[2] ^ sign).overflowing_add(carry as u64);
+    (a[3], _) = (a[3] ^ sign).overflowing_add(carry as u64);
 }
 
-fn linear_comb(mut a: [u64; 4], mut b: [u64; 4], f: i64, g: i64) -> [u64; 5] {
+// Want to map x -> -x = 1 + !x
+
+#[inline]
+fn linear_comb(a: [u64; 4], b: [u64; 4], f: u64, g: u64) -> [u64; 5] {
+    let mut output = [0_u64; 5];
+    let mut carry = (a[0] as u128) * (f as u128) + (b[0] as u128) * (g as u128);
+    output[0] = carry as u64;
+    carry >>= 64;
+    for i in 1..4 {
+        carry += (a[i] as u128) * (f as u128) + (b[i] as u128) * (g as u128);
+        output[i] = carry as u64;
+        carry >>= 64;
+    }
+    output[4] = carry as u64;
+
+    output
+}
+
+#[inline]
+fn linear_comb_div(mut a: [u64; 4], mut b: [u64; 4], f: i64, g: i64, k: usize) -> ([u64; 4], i64) {
     // Get the signs and absolute values of f and g
     let s_f = (f >> 63) as u64;
     let s_g = (g >> 63) as u64;
-    let abs_f = f.wrapping_abs() as u64;
-    let abs_g = g.wrapping_abs() as u64;
+    let abs_f = f.unsigned_abs();
+    let abs_g = g.unsigned_abs();
 
     // Apply the signs to a and b using 2's complement.
     // `-a = 2^{256} - a = (2^{256} - 1) - (a - 1)`
@@ -320,31 +315,19 @@ fn linear_comb(mut a: [u64; 4], mut b: [u64; 4], f: i64, g: i64) -> [u64; 5] {
     conditional_neg(&mut a, s_f);
     conditional_neg(&mut b, s_g);
 
-    // Now that everything is positive, we can compute the linear combination.
-    // Nothing overflows as f, g are small (e.g. < 2^60).
-    let mut output = [0_u64; 5];
-    let mut carry = (a[0] as u128) * (abs_f as u128) + (b[0] as u128) * (abs_g as u128);
-    output[0] = carry as u64;
-    carry >>= 64;
-    for i in 1..4 {
-        carry += (a[i] as u128) * (abs_f as u128) + (b[i] as u128) * (abs_g as u128);
-        output[i] = carry as u64;
-        carry >>= 64;
-    }
-    output[4] = carry as u64;
+    let mut product = linear_comb(a, b, abs_f, abs_g);
 
-    // Now we need to correct for the signs of a and b. If a < 0, then the result is 2^{256} * f too large.
-    // Similarly, if b < 0, then the result is 2^{256} * g too large.
-    // Hence we need to subtract 2^{256} * (s_a * f + s_b * g).
-    output[4] -= ((s_f as i64) * f + (s_g as i64) * g) as u64;
+    // Now we need to correct for the signs. If f < 0 then we computed -f * (2^{256} - a) instead of af.
+    // Hence in this case, we need to add f * 2^{256}.
+    let s_a = a[3] >> 63;
+    let s_b = b[3] >> 63;
+    // Similarly if g < 0 we need to add g * 2^{256}.
+    // The good news is that this only effects output 4.
+    product[4] = product[4].wrapping_add(((s_a as i64) * f + (s_b as i64) * g) as u64);
 
-    output
-}
-
-fn linear_comb_div(a: [u64; 4], b: [u64; 4], f: i64, g: i64, k: usize) -> ([u64; 4], u64) {
-    let product = linear_comb(a, b, f, g);
     let mut output = [0_u64; 4];
 
+    assert_eq!(product[0] & ((1 << k) - 1), 0);
     // Next we need to apply the k shift:
     output[0] = (product[0] >> k) | (product[1] << (64 - k));
     output[1] = (product[1] >> k) | (product[2] << (64 - k));
@@ -352,34 +335,109 @@ fn linear_comb_div(a: [u64; 4], b: [u64; 4], f: i64, g: i64, k: usize) -> ([u64;
     output[3] = (product[3] >> k) | (product[4] << (64 - k));
 
     // Finally, if the result is negative, we negate it again.
-    let sign = ((product[4] as i64) >> 63) as u64;
-    conditional_neg(&mut output, sign);
+    let sign = (product[4] as i64) >> 63;
+    conditional_neg(&mut output, sign as u64);
     (output, sign)
 }
 
-fn linear_comb_monty_red(a: [u64; 4], b: [u64; 4], f: i64, g: i64, k: usize) -> [u64; 4] {
-    let product = linear_comb(a, b, f, g);
-    todo!()
+#[inline]
+fn linear_comb_monty_red(a: [u64; 4], b: [u64; 4], f: i64, g: i64) -> [u64; 4] {
+    // Get the signs and absolute values of f and g
+    let s_f = f >> 63;
+    let s_g = g >> 63;
+    let abs_f = f.unsigned_abs();
+    let abs_g = g.unsigned_abs();
+
+    // If we need to invert, do that by subtracting from P.
+    let a_signed = if s_f == -1 {
+        let (sub, _) = wrapping_sub(BN254_PRIME, a);
+        sub
+    } else {
+        a
+    };
+    let b_signed = if s_g == -1 {
+        let (sub, _) = wrapping_sub(BN254_PRIME, b);
+        sub
+    } else {
+        b
+    };
+
+    let product = linear_comb(a_signed, b_signed, abs_f, abs_g);
+    interleaved_monty_reduction(product[0], product[1..].try_into().unwrap())
 }
 
-fn gcd_inversion(val: [u64; 4]) -> [u64; 4] {
-    let (mut a, mut u, mut b, mut v) = (val, [1, 0, 0, 0], BN254_PRIME, [0, 0, 0, 0]);
+/// TODO
+pub(crate) const BN254_2_POW_1030: [u64; 4] = [
+    0x1f7ca21e7fcb111b,
+    0x61a09399fcfe8a6c,
+    0x1438cc5aab55aedb,
+    0x020c9ba0aeb6b6c7,
+];
 
-    const ROUND_SIZE: usize = 30;
-    const FINAL_ROUND_SIZE: usize = 27;
-    for _ in 0..16 {
-        let n = num_bits(a).max(num_bits(b)).max(2 * ROUND_SIZE);
+//
+
+pub(crate) fn gcd_inversion(val: [u64; 4]) -> [u64; 4] {
+    // When u = 1 and v 0, this outputs a^{-1} mod P.
+    // More generally, when u = K, this output a^{-1}K mod P. Hence if we can choose the right
+    // initial value for u, we can save some ourselves some work.
+    // We start with aR so this will output (aR)^{-1} whereas we want a^{-1}R. Hence we need to multiply
+    // by R^2 = 2^{512}
+    // We do 31 * 15 + 41 = 506 iterations. Each iteration injects a power of 2 so we need to divide by 2^{506}.
+    // Each pair of calls to linear_comb_monty_red, involves dividing by `2^64`. Hence to correct for all these
+    // we need to multiply by `2^{16 * 64}`.
+    // Overall it seems like we want `u` to be `2^{16 * 64 + 6} = 2^{1030} mod P`
+    let (mut a, mut u, mut b, mut v) = (val, BN254_2_POW_1030, BN254_PRIME, [0, 0, 0, 0]);
+
+    const ROUND_SIZE: usize = 31;
+    const FINAL_ROUND_SIZE: usize = 41;
+    for _ in 0..15 {
+        let n = num_bits(a).max(num_bits(b)).max(2 * ROUND_SIZE + 2);
         let a_tilde = rm_middle::<ROUND_SIZE>(a, n);
         let b_tilde = rm_middle::<ROUND_SIZE>(b, n);
 
-        let (f0, g0, f1, g1) = gcd_inner::<ROUND_SIZE>(a_tilde, b_tilde);
-        todo!()
+        // println!("a_3: {:0b}, b_3: {:0b}", a[3], b[3]);
+        // println!("a_2: {:0b}, b_2: {:0b}", a[2], b[2]);
+        // println!("a_1: {:0b}, b_1: {:0b}", a[1], b[1]);
+        // println!("a_0: {:0b}, b_0: {:0b}", a[0], b[0]);
+        // println!("a_tidle: {a_tilde:0b}, b_tidle: {b_tilde:0b}");
+
+        let (mut f0, mut g0, mut f1, mut g1) = gcd_inner::<ROUND_SIZE>(a_tilde, b_tilde);
+
+        // Update a and b
+        let (new_a, sign) = linear_comb_div(a, b, f0, g0, ROUND_SIZE);
+        // If sign = -1, need to flip f0 and g0, if sign = 0, do nothing.
+        f0 = (f0 ^ sign).wrapping_sub(sign);
+        g0 = (g0 ^ sign).wrapping_sub(sign);
+
+        let (new_b, sign) = linear_comb_div(a, b, f1, g1, ROUND_SIZE);
+        // If sign = -1, need to flip f1 and g1, if sign = 0, do nothing.
+        f1 = (f1 ^ sign).wrapping_sub(sign);
+        g1 = (g1 ^ sign).wrapping_sub(sign);
+
+        // Update u and v
+        let new_u = linear_comb_monty_red(u, v, f0, g0);
+        let new_v = linear_comb_monty_red(u, v, f1, g1);
+
+        a = new_a;
+        b = new_b;
+        u = new_u;
+        v = new_v;
     }
-    v
+
+    let (_, _, f1, g1) = gcd_inner::<FINAL_ROUND_SIZE>(a[0], b[0]);
+
+    // let (new_a, _) = linear_comb_div(a, b, f0, g0, FINAL_ROUND_SIZE);
+    // let (new_b, _) = linear_comb_div(a, b, f1, g1, FINAL_ROUND_SIZE);
+    // assert_eq!(new_a, [1, 0, 0, 0]);
+    // assert_eq!(new_b, [1, 0, 0, 0]);
+
+    // let out1 = linear_comb_monty_red(u, v, f0, g0);
+    linear_comb_monty_red(u, v, f1, g1)
 }
 
 /// Inner loop of the GCD algorithm.
-fn gcd_inner<const NUM_ROUNDS: usize>(mut a: u64, mut b: u64) -> (i32, i32, i32, i32) {
+#[inline]
+fn gcd_inner<const NUM_ROUNDS: usize>(mut a: u64, mut b: u64) -> (i64, i64, i64, i64) {
     // Initialise update factors.
     // At the start of round 0: -1 <= f0, g0, f1, g1 <= 1
     let (mut f0, mut g0, mut f1, mut g1) = (1, 0, 0, 1);
@@ -391,12 +449,12 @@ fn gcd_inner<const NUM_ROUNDS: usize>(mut a: u64, mut b: u64) -> (i32, i32, i32,
             a >>= 1;
         } else {
             if a < b {
-                core::mem::swap(&mut a, &mut b);
-                core::mem::swap(&mut f0, &mut f1);
-                core::mem::swap(&mut g0, &mut g1);
+                (a, b) = (b, a);
+                (f0, f1) = (f1, f0);
+                (g0, g1) = (g1, g0);
             }
             a -= b;
-            a <<= 1;
+            a >>= 1;
             f0 -= f1;
             g0 -= g1;
         }
