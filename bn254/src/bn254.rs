@@ -56,19 +56,6 @@ pub(crate) const BN254_MONTY_R_SQ: Bn254 = Bn254::new_monty([
     0x0216d0b17f4e44a5,
 ]);
 
-/// The cube of the Montgomery constant `R = 2^256 mod P` for the BN254 field.
-///
-/// Elements of the BN254 field are represented in Montgomery form, by `aR mod P`
-/// This constant is equal to `R^3 mod P` and is useful for converting elements into Montgomery form.
-///
-/// Equal to: `5866548545943845227489894872040244720403868105578784105281690076696998248512`
-pub(crate) const BN254_MONTY_R_CB: Bn254 = Bn254::new_monty([
-    0x5e94d8e1b4bf0040,
-    0x2a489cbe1cfbb6b8,
-    0x893cc664a19fcfed,
-    0x0cf8594b7fcc657c,
-]);
-
 /// The BN254 curve scalar field prime, defined as `F_P` where `P = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.
 #[derive(Copy, Clone, Default, Eq, PartialEq)]
 pub struct Bn254 {

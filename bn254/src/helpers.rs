@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use num_bigint::BigUint;
 use p3_field::Field;
 
-use crate::{BN254_MONTY_MU, BN254_MONTY_R_CB, BN254_PRIME, Bn254};
+use crate::{BN254_MONTY_MU, BN254_MONTY_R_SQ, BN254_PRIME, Bn254};
 
 /// Convert a fixed-size array of u64s to a BigUint.
 #[inline]
@@ -192,7 +192,7 @@ pub(crate) fn halve_bn254(mut input: [u64; 4]) -> [u64; 4] {
 
 pub(crate) fn gcd_inversion_simple(val: Bn254) -> Bn254 {
     let mut a = val;
-    let mut u = Bn254::new_monty([1, 0, 0, 0]);
+    let mut u = BN254_MONTY_R_SQ;
     let mut v = Bn254::new_monty([0, 0, 0, 0]);
     let mut b = Bn254::new_monty(BN254_PRIME);
 
@@ -209,7 +209,7 @@ pub(crate) fn gcd_inversion_simple(val: Bn254) -> Bn254 {
             u = (u - v).halve();
         }
     }
-    v * BN254_MONTY_R_CB
+    v
 }
 
 // // The following approach to a GCD based inversion algorithm is taken from here: https://eprint.iacr.org/2020/972.pdf
