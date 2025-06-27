@@ -25,7 +25,7 @@ where
     type Value = [T; N];
 
     fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_fmt(format_args!("an array of length {}", N))
+        formatter.write_fmt(format_args!("an array of length {N}"))
     }
 
     #[inline]
