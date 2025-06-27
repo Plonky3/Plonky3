@@ -1,6 +1,6 @@
 [package]
 name = "p3-baby-bear"
-description = "Implementation of the BabyBear field, including AVX/NEON optimizations and cryptographic primitives like Poseidon2."
+description = "An implementation of the Babybear prime field F_p, where p = 2^31 - 2^27 + 1."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
