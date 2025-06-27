@@ -118,6 +118,7 @@ mod tests {
 
     use super::*;
     use crate::BN254_MONTY_R_SQ;
+    use crate::helpers::monty_mul;
 
     fn bn254_from_ark_ff(input: ark_FpBN256) -> Bn254 {
         let mut full_bytes = [0; 32];
@@ -129,7 +130,8 @@ mod tests {
         if let Some(field_elem) = value {
             // From bytes does not convert into Monty form.
             // Hence we need to do that ourselves.
-            field_elem * BN254_MONTY_R_SQ
+            let monty_form = monty_mul(BN254_MONTY_R_SQ, field_elem.value);
+            Bn254::new_monty(monty_form)
         } else {
             panic!("Invalid field element")
         }
