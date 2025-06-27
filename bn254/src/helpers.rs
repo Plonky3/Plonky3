@@ -178,7 +178,11 @@ pub(crate) fn halve_bn254(mut input: [u64; 4]) -> [u64; 4] {
     if input[0] & 1 == 1 {
         (input, _) = wrapping_add(input, BN254_PRIME);
     }
+    halve_even(input)
+}
 
+#[inline]
+pub(crate) fn halve_even(mut input: [u64; 4]) -> [u64; 4] {
     let bot_bit_1 = input[1] << 63;
     let bot_bit_2 = input[2] << 63;
     let bot_bit_3 = input[3] << 63;
@@ -191,21 +195,22 @@ pub(crate) fn halve_bn254(mut input: [u64; 4]) -> [u64; 4] {
 }
 
 pub(crate) fn gcd_inversion_simple(val: Bn254) -> Bn254 {
-    let mut a = val;
+    let mut a = val.value;
     let mut u = BN254_MONTY_R_SQ;
     let mut v = Bn254::new_monty([0, 0, 0, 0]);
-    let mut b = Bn254::new_monty(BN254_PRIME);
+    let mut b = BN254_PRIME;
 
-    while !a.is_zero() {
+    while !a.iter().all(|&x| x == 0) {
         // println!("{a}, {b}");
-        if a.value[0] & 1 == 0 {
-            a = a.halve();
+        if a[0] & 1 == 0 {
+            a = halve_even(a);
             u = u.halve();
         } else {
-            if a < b {
+            if a.iter().rev().cmp(b.iter().rev()) == core::cmp::Ordering::Less {
                 (a, u, b, v) = (b, v, a, u)
             }
-            a = (a - b).halve();
+            let (sub, _) = wrapping_sub(a, b);
+            a = halve_even(sub);
             u = (u - v).halve();
         }
     }
