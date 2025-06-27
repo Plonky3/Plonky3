@@ -1,6 +1,6 @@
 [package]
 name = "p3-monty-31"
-description = "Implements a 31-bit prime field using Montgomery arithmetic, suitable for cryptographic computations."
+description = "An implementation of a generic prime field F_p, where 2^30 < p < 2^31 using Montgomery arithmetic."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
