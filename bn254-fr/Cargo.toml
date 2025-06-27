@@ -1,6 +1,6 @@
 [package]
 name = "p3-bn254-fr"
-description = "Wraps the ark_bn254::Fr field to implement p3-field traits for interoperability."
+description = "A wrapper for the ark_bn254::Fr field allowing it to be used in the Plonky3 environment"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
