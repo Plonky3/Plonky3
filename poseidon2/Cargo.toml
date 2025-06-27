@@ -1,6 +1,6 @@
 [package]
 name = "p3-poseidon2"
-description = "An efficient, parameterized implementation of the Poseidon2 cryptographic permutation for zero-knowledge applications."
+description = "An implementation of the Poseidon2 cryptographic permutation for zero-knowledge applications."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
