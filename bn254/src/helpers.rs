@@ -140,6 +140,11 @@ fn mul_mod_2_exp_256(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 4] {
 ///
 /// Uses the montgomery constant `2^256` making division free as we can
 /// simply ignore the bottom 4 u64s.
+///
+/// Assuming the product of the inputs is less than `2^256 P`, the output
+/// will be less than `P`. In particular this means we only need to
+/// assume that one of the inputs is less than `P` as both inputs are
+/// trivially less than `2^256`.
 #[inline]
 pub(crate) fn monty_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 4] {
     // TODO: It's likely worth it to remove the 'prod' variable here
