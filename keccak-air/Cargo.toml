@@ -1,6 +1,6 @@
 [package]
 name = "p3-keccak-air"
-description = "An AIR (Algebraic Intermediate Representation) for the Keccak-f permutation, assuming a field size between 2^16 and 2^32."
+description = "An AIR for the Keccak-f permutation, assuming a field size between 2^16 and 2^32."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
