@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use core::cmp::Ordering::{Equal, Greater, Less};
 
 use num_bigint::BigUint;
 use p3_field::Field;
@@ -255,4 +256,91 @@ pub(crate) fn exp_bn_inv<F: Field>(val: F) -> F {
     output = sq_and_mul(output, 7, p1111111); // 1111111
     output = sq_and_mul(output, 7, p1111111); // 1111111
     output
+}
+
+// The following approach to a GCD based inversion algorithm is taken from here: https://eprint.iacr.org/2020/972.pdf
+// 254 + 254 - 1 = 507 = 16 * 30 + 27 (Could also do 507 = 16 * 31 + 11)
+
+fn num_bits(val: [u64; 4]) -> usize {
+    for i in (0..4).rev() {
+        if val[i] != 0 {
+            return 64 * (i + 1) - val[i].leading_zeros() as usize;
+        }
+    }
+    // If we have gotten to this point, the value is 0.
+    0
+}
+
+fn rm_middle<const K: usize>(val: [u64; 4], n: usize) -> u64 {
+    // Get the bottom k-1 bits.
+    let last_k_min_1 = val[0] & ((1 << (K - 1)) - 1);
+
+    // Get the k+1 bits n to n - k inclusive where the bits are numbered with the least significant bit being 1.
+    let n_limb = (n - 1) / 64; // Which limb is the n-th bit in.
+    let n_remainder = (n - 1) % 64; // How far into the limb is the n-th bit.
+
+    // Get the top k + 1 bits starting from the n-th bit shifted into bits k - 1 -> 2k - 1.
+    let first_k_plus_1 = match core::cmp::Ord::cmp(&n_remainder, &K) {
+        Equal | Greater => {
+            // This is the easiest case as all K + 1 bits are in the n'th_limb
+            // We also already know that all bits above the n-th bit are 0.
+            let shift = n_remainder - K;
+            (val[n_limb] >> shift) << (K - 1)
+        }
+        Less => {
+            // In this case we need to get some bits from the next limb as well.
+            let num_extra_bits = K - n_remainder;
+            let next_limb_bits = val[n_limb - 1] >> (64 - num_extra_bits);
+            ((val[n_limb] << num_extra_bits) | next_limb_bits) << (K - 1)
+        }
+    };
+
+    first_k_plus_1 | last_k_min_1
+}
+
+fn gcd_inversion(val: [u64; 4]) -> [u64; 4] {
+    let (mut a, mut u, mut b, mut v) = (val, [1, 0, 0, 0], BN254_PRIME, [0, 0, 0, 0]);
+
+    const ROUND_SIZE: usize = 30;
+    const FINAL_ROUND_SIZE: usize = 27;
+    for _ in 0..16 {
+        let n = num_bits(a).max(num_bits(b)).max(2 * ROUND_SIZE);
+        let a_tilde = rm_middle::<ROUND_SIZE>(a, n);
+        let b_tilde = rm_middle::<ROUND_SIZE>(b, n);
+
+        let (f0, g0, f1, g1) = gcd_inner::<ROUND_SIZE>(a_tilde, b_tilde);
+        todo!()
+    }
+    v
+}
+
+/// Inner loop of the GCD algorithm.
+fn gcd_inner<const NUM_ROUNDS: usize>(mut a: u64, mut b: u64) -> (i32, i32, i32, i32) {
+    // Initialise update factors.
+    // At the start of round 0: -1 <= f0, g0, f1, g1 <= 1
+    let (mut f0, mut g0, mut f1, mut g1) = (1, 0, 0, 1);
+
+    // If at the start of a round: -2^i <= f0, g0, f1, g1 <= 2^i
+    // Then, at the end of the round: -2^{i + 1} <= f0, g0, f1, g1 <= 2^{i + 1}
+    for _ in 0..NUM_ROUNDS {
+        if a & 1 == 0 {
+            a >>= 1;
+        } else {
+            if a < b {
+                core::mem::swap(&mut a, &mut b);
+                core::mem::swap(&mut f0, &mut f1);
+                core::mem::swap(&mut g0, &mut g1);
+            }
+            a -= b;
+            a <<= 1;
+            f0 -= f1;
+            g0 -= g1;
+        }
+        f1 <<= 1;
+        g1 <<= 1;
+    }
+
+    // -2^NUM_ROUNDS <= f0, g0, f1, g1 <= 2^NUM_ROUNDS
+    // Hence provided NUM_ROUNDS <= 30, we will not get any overflow.
+    (f0, g0, f1, g1)
 }
