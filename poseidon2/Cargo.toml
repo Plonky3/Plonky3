@@ -19,7 +19,7 @@ rand.workspace = true
 
 [dev-dependencies]
 p3-baby-bear.workspace = true
-p3-bn254-fr.workspace = true
+p3-bn254.workspace = true
 p3-goldilocks.workspace = true
 p3-koala-bear.workspace = true
 p3-mersenne-31.workspace = true

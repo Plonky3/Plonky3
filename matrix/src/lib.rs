@@ -566,8 +566,8 @@ mod tests {
         };
         assert_eq!(dims.width, 3);
         assert_eq!(dims.height, 5);
-        assert_eq!(format!("{:?}", dims), "3x5");
-        assert_eq!(format!("{}", dims), "3x5");
+        assert_eq!(format!("{dims:?}"), "3x5");
+        assert_eq!(format!("{dims}"), "3x5");
     }
 
     #[test]

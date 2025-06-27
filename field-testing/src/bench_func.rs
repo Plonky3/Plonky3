@@ -18,7 +18,7 @@ where
     let mut rng = SmallRng::seed_from_u64(1);
     let x = rng.random::<F>();
     let y = rng.random::<F>();
-    c.bench_function(&format!("{} mul", name), |b| {
+    c.bench_function(&format!("{name} mul"), |b| {
         b.iter(|| black_box(black_box(x) * black_box(y)))
     });
 }
@@ -29,7 +29,7 @@ where
 {
     let mut rng = SmallRng::seed_from_u64(1);
     let x = rng.random::<F>();
-    c.bench_function(&format!("{} square", name), |b| {
+    c.bench_function(&format!("{name} square"), |b| {
         b.iter(|| black_box(black_box(x).square()))
     });
 }
@@ -40,7 +40,7 @@ where
 {
     let mut rng = SmallRng::seed_from_u64(1);
     let x = rng.random::<F>();
-    c.bench_function(&format!("{} inv", name), |b| {
+    c.bench_function(&format!("{name} inv"), |b| {
         b.iter(|| black_box(black_box(x)).inverse())
     });
 }
@@ -57,7 +57,7 @@ pub fn benchmark_mul_2exp<R: PrimeCharacteristicRing + Copy, const REPS: usize>(
     for _ in 0..REPS {
         input.push(rng.random::<R>())
     }
-    c.bench_function(&format!("{} mul_2exp_u64 {}", name, val), |b| {
+    c.bench_function(&format!("{name} mul_2exp_u64 {val}"), |b| {
         b.iter(|| input.iter_mut().for_each(|i| *i = i.mul_2exp_u64(val)))
     });
 }
@@ -71,7 +71,7 @@ where
     for _ in 0..REPS {
         input.push(rng.random::<F>())
     }
-    c.bench_function(&format!("{} div_2exp_u64 {}", name, val), |b| {
+    c.bench_function(&format!("{name} div_2exp_u64 {val}"), |b| {
         b.iter(|| input.iter_mut().for_each(|i| *i = i.div_2exp_u64(val)))
     });
 }
@@ -92,7 +92,7 @@ pub fn benchmark_iter_sum<R: PrimeCharacteristicRing + Copy, const N: usize, con
     for _ in 0..REPS {
         input.push(rng.random::<[R; N]>())
     }
-    c.bench_function(&format!("{} sum/{}, {}", name, REPS, N), |b| {
+    c.bench_function(&format!("{name} sum/{REPS}, {N}"), |b| {
         b.iter(|| {
             let mut acc = R::ZERO;
             for row in &mut input {
@@ -119,7 +119,7 @@ pub fn benchmark_sum_array<R: PrimeCharacteristicRing + Copy, const N: usize, co
     for _ in 0..REPS {
         input.push(rng.random::<[R; N]>())
     }
-    c.bench_function(&format!("{} tree sum/{}, {}", name, REPS, N), |b| {
+    c.bench_function(&format!("{name} tree sum/{REPS}, {N}"), |b| {
         b.iter(|| {
             let mut acc = R::ZERO;
             for row in &mut input {
@@ -144,7 +144,7 @@ pub fn benchmark_dot_array<R: PrimeCharacteristicRing + Copy, const N: usize>(
     let lhs = rng.random::<[R; N]>();
     let rhs = rng.random::<[R; N]>();
 
-    c.bench_function(&format!("{} dot product/{}", name, N), |b| {
+    c.bench_function(&format!("{name} dot product/{N}"), |b| {
         b.iter(|| black_box(R::dot_product(black_box(&lhs), black_box(&rhs))))
     });
 }
@@ -161,7 +161,7 @@ where
         slice_1.push(rng.random());
         slice_2.push(rng.random());
     }
-    c.bench_function(&format!("{} add slices/{}", name, LENGTH), |b| {
+    c.bench_function(&format!("{name} add slices/{LENGTH}"), |b| {
         let mut in_slice = slice_1.clone();
         b.iter(|| {
             F::add_slices(&mut in_slice, &slice_2);
@@ -175,7 +175,7 @@ pub fn benchmark_add_latency<R: PrimeCharacteristicRing + Copy, const N: usize>(
 ) where
     StandardUniform: Distribution<R>,
 {
-    c.bench_function(&format!("add-latency/{} {}", N, name), |b| {
+    c.bench_function(&format!("add-latency/{N} {name}"), |b| {
         b.iter_batched(
             || {
                 let mut rng = SmallRng::seed_from_u64(1);
@@ -197,7 +197,7 @@ pub fn benchmark_add_throughput<R: PrimeCharacteristicRing + Copy, const N: usiz
 ) where
     StandardUniform: Distribution<R>,
 {
-    c.bench_function(&format!("add-throughput/{} {}", N, name), |b| {
+    c.bench_function(&format!("add-throughput/{N} {name}"), |b| {
         b.iter_batched(
             || {
                 let mut rng = SmallRng::seed_from_u64(1);
@@ -242,7 +242,7 @@ pub fn benchmark_sub_latency<R: PrimeCharacteristicRing + Copy, const N: usize>(
 ) where
     StandardUniform: Distribution<R>,
 {
-    c.bench_function(&format!("sub-latency/{} {}", N, name), |b| {
+    c.bench_function(&format!("sub-latency/{N} {name}"), |b| {
         b.iter_batched(
             || {
                 let mut rng = SmallRng::seed_from_u64(1);
@@ -264,7 +264,7 @@ pub fn benchmark_sub_throughput<R: PrimeCharacteristicRing + Copy, const N: usiz
 ) where
     StandardUniform: Distribution<R>,
 {
-    c.bench_function(&format!("sub-throughput/{} {}", N, name), |b| {
+    c.bench_function(&format!("sub-throughput/{N} {name}"), |b| {
         b.iter_batched(
             || {
                 let mut rng = SmallRng::seed_from_u64(1);
@@ -309,7 +309,7 @@ pub fn benchmark_mul_latency<R: PrimeCharacteristicRing + Copy, const N: usize>(
 ) where
     StandardUniform: Distribution<R>,
 {
-    c.bench_function(&format!("mul-latency/{} {}", N, name), |b| {
+    c.bench_function(&format!("mul-latency/{N} {name}"), |b| {
         b.iter_batched(
             || {
                 let mut rng = SmallRng::seed_from_u64(1);
@@ -331,7 +331,7 @@ pub fn benchmark_mul_throughput<R: PrimeCharacteristicRing + Copy, const N: usiz
 ) where
     StandardUniform: Distribution<R>,
 {
-    c.bench_function(&format!("mul-throughput/{} {}", N, name), |b| {
+    c.bench_function(&format!("mul-throughput/{N} {name}"), |b| {
         b.iter_batched(
             || {
                 let mut rng = SmallRng::seed_from_u64(1);

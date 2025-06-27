@@ -274,8 +274,7 @@ where
         assert_eq!(
             original,
             idft_output.to_row_major_matrix(),
-            "Error Found in size: {}",
-            h
+            "Error Found in size: {h}"
         );
     }
 }
