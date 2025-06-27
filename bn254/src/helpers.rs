@@ -211,11 +211,6 @@ pub(crate) fn halve_bn254(mut input: [u64; 4]) -> [u64; 4] {
     if input[0] & 1 == 1 {
         (input, _) = wrapping_add(input, BN254_PRIME);
     }
-    halve_even(input)
-}
-
-#[inline]
-pub(crate) fn halve_even(mut input: [u64; 4]) -> [u64; 4] {
     let bot_bit_1 = input[1] << 63;
     let bot_bit_2 = input[2] << 63;
     let bot_bit_3 = input[3] << 63;
@@ -232,42 +227,51 @@ pub(crate) fn halve_even(mut input: [u64; 4]) -> [u64; 4] {
 // The algorithm is a variant of the Binary Extended Euclidean Algorithm which, allows for most of the iterations to
 // be performed using only u64's even in cases where the inputs are much larger.
 
+/// Find the size of the number.
 #[inline]
 fn num_bits(val: [u64; 4]) -> usize {
     for i in (0..4).rev() {
         if val[i] != 0 {
-            return 64 * (i + 1) - val[i].leading_zeros() as usize;
+            return 64 * i + (64 - val[i].leading_zeros() as usize);
         }
     }
     // If we have gotten to this point, the value is 0.
     0
 }
 
+/// Get the bottom 31 bits of the number along with the top 33 bits starting from the n-th bit.
 #[inline]
-fn rm_middle<const K: usize>(val: [u64; 4], n: usize) -> u64 {
-    // Get the bottom K bits.
-    let last_k = val[0] & ((1 << K) - 1);
+fn rm_middle(val: [u64; 4], n: usize) -> u64 {
+    const K: usize = 32;
+    if n == 64 {
+        return val[0];
+    }
 
-    // Get the k+2 bits n to n - k - 1 inclusive where the bits are numbered with the least significant bit being 1.
-    let n_limb = (n - 1) / 64; // Which limb is the n-th bit in.
-    let n_remainder = (n - 1) % 64; // How far into the limb is the n-th bit.
+    // Get the bottom K bits.
+    let last_k = val[0] & ((1 << (K - 1)) - 1);
+
+    // Get the top k + 2 bits starting from the n-th bit.
+    // The n-th bit is at index n-1.
+    let bit_index = n - 1;
+    let limb_index = bit_index / 64;
+    let bit_in_limb = bit_index % 64;
 
     // Get the top k + 2 bits starting from the n-th bit shifted into bits k -> 2k + 2.
-    let first_k_plus_2 = match core::cmp::Ord::cmp(&n_remainder, &(K + 1)) {
+    let first_k_plus_2 = match core::cmp::Ord::cmp(&bit_in_limb, &K) {
         Equal | Greater => {
             // This is the easiest case as all K + 2 bits are in the n'th_limb
             // We also already know that all bits above the n-th bit are 0.
-            let shift = n_remainder - (K + 1);
-            (val[n_limb] >> shift) << K
+            let shift = bit_in_limb - K;
+            val[limb_index] >> shift
         }
         Less => {
             // In this case we need to get some bits from the next limb as well.
-            let num_extra_bits = (K + 1) - n_remainder;
-            let next_limb_bits = val[n_limb - 1] >> (64 - num_extra_bits);
-            ((val[n_limb] << num_extra_bits) | next_limb_bits) << K
+            let num_extra_bits = K - bit_in_limb;
+            let next_limb_bits = val[limb_index - 1] >> (64 - num_extra_bits);
+            (val[limb_index] << num_extra_bits) | next_limb_bits
         }
     };
-    first_k_plus_2 | last_k
+    (first_k_plus_2 << (K - 1)) | last_k
 }
 
 /// Negate a (in the 2's complement sense) if sign is `-1 = 2^64 - 1`
@@ -392,14 +396,8 @@ pub(crate) fn gcd_inversion(val: [u64; 4]) -> [u64; 4] {
     const FINAL_ROUND_SIZE: usize = 41;
     for _ in 0..15 {
         let n = num_bits(a).max(num_bits(b)).max(2 * ROUND_SIZE + 2);
-        let a_tilde = rm_middle::<ROUND_SIZE>(a, n);
-        let b_tilde = rm_middle::<ROUND_SIZE>(b, n);
-
-        // println!("a_3: {:0b}, b_3: {:0b}", a[3], b[3]);
-        // println!("a_2: {:0b}, b_2: {:0b}", a[2], b[2]);
-        // println!("a_1: {:0b}, b_1: {:0b}", a[1], b[1]);
-        // println!("a_0: {:0b}, b_0: {:0b}", a[0], b[0]);
-        // println!("a_tidle: {a_tilde:0b}, b_tidle: {b_tilde:0b}");
+        let a_tilde = rm_middle(a, n);
+        let b_tilde = rm_middle(b, n);
 
         let (mut f0, mut g0, mut f1, mut g1) = gcd_inner::<ROUND_SIZE>(a_tilde, b_tilde);
 
