@@ -131,7 +131,7 @@ pub(crate) fn mul_small_and_acc(lhs: [u64; 4], rhs: u64, add: [u64; 4]) -> (u64,
 // When working with Big-Nums where the base multiplication is expensive, we
 // use a variant of montgomery multiplication which is more efficient. The idea
 // is to interleave the multiplication and reduction steps which lets us
-// avoid the need for Big-Nums - Big-Nums multiplications.
+// avoid the need for Big-Num x Big-Num multiplications.
 //
 // Let P be our prime and `mu = P^{-1} mod 2^64`.
 // The Interleaved Montgomery reduction (IMR) algorithm takes as input 320-bit number `x`
