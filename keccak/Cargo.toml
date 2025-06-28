@@ -1,7 +1,6 @@
 [package]
 name = "p3-keccak"
-# TODO: Replace this generic plonky3 description with one specific to this crate...
-description.workspace = true
+description = "An optimized implementation of the Keccak-f permutation and Keccak256 hash function."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -1,7 +1,6 @@
 [package]
 name = "p3-air"
-# TODO: Replace this generic plonky3 description with one specific to this crate...
-description.workspace = true
+description = "Defines the Algebraic Intermediate Representation (AIR) interface and supporting utilities for STARK provers."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
