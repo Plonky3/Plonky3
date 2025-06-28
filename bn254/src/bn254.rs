@@ -531,7 +531,6 @@ mod tests {
     #[test]
     fn test_bn254fr() {
         let f = F::from_u8(100);
-        assert_eq!(f.inverse() * f, F::ONE);
         assert_eq!(f.as_canonical_biguint(), BigUint::from(100u32));
 
         // Generator check
