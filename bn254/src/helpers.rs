@@ -227,7 +227,7 @@ pub(crate) fn halve_bn254(mut input: [u64; 4]) -> [u64; 4] {
 // The algorithm is a variant of the Binary Extended Euclidean Algorithm which, allows for most of the iterations to
 // be performed using only u64's even in cases where the inputs are much larger.
 
-/// Find the size of the number.
+/// Find the size (number of bits) of val.
 #[inline]
 fn num_bits(val: [u64; 4]) -> usize {
     for i in (0..4).rev() {
@@ -239,7 +239,7 @@ fn num_bits(val: [u64; 4]) -> usize {
     0
 }
 
-/// Get the bottom 31 bits of the number along with the top 33 bits starting from the n-th bit.
+/// Get the bottom 31 bits of val along with the top 33 bits starting from the n-th bit stored as a u64.
 #[inline]
 fn rm_middle(val: [u64; 4], n: usize) -> u64 {
     const K: usize = 32;
@@ -277,7 +277,7 @@ fn rm_middle(val: [u64; 4], n: usize) -> u64 {
 /// Negate a (in the 2's complement sense) if sign is `-1 = 2^64 - 1`
 /// Leave a unchanged if sign is `0`.
 ///
-/// Sign is assumed ot be either `0` or `-1`.
+/// Sign is assumed to be either `0` or `-1`.
 #[inline]
 fn conditional_neg(a: &mut [u64; 4], sign: u64) {
     let mut carry;
@@ -287,10 +287,30 @@ fn conditional_neg(a: &mut [u64; 4], sign: u64) {
     (a[3], _) = (a[3] ^ sign).overflowing_add(carry as u64);
 }
 
-// Want to map x -> -x = 1 + !x
-
+/// Compute the linear combination `af + bg` where `a, b` are `256-bit` positive integers
+/// and `f, g` are 64-bit signed integers.
+///
+/// The result is a 320-bit signed integer represented as 4 64-bit limbs of positive integers
+/// and an i64 for the highest limb.
 #[inline]
-fn linear_comb(a: [u64; 4], b: [u64; 4], f: u64, g: u64) -> [u64; 5] {
+fn linear_comb_signed(a: [u64; 4], b: [u64; 4], f: i64, g: i64) -> ([u64; 4], i64) {
+    let mut output = [0_u64; 4];
+    let mut carry = (a[0] as i128) * (f as i128) + (b[0] as i128) * (g as i128);
+    output[0] = carry as u64;
+    carry >>= 64;
+    for i in 1..4 {
+        carry += (a[i] as i128) * (f as i128) + (b[i] as i128) * (g as i128);
+        output[i] = carry as u64;
+        carry >>= 64;
+    }
+
+    (output, carry as i64)
+}
+
+/// Compute the linear combination `af + bg` where `a, b` are `256-bit` positive integers
+/// and `f, g` are `64-bit` positive integers.
+#[inline]
+fn linear_comb_unsigned(a: [u64; 4], b: [u64; 4], f: u64, g: u64) -> [u64; 5] {
     let mut output = [0_u64; 5];
     let mut carry = (a[0] as u128) * (f as u128) + (b[0] as u128) * (g as u128);
     output[0] = carry as u64;
@@ -305,41 +325,25 @@ fn linear_comb(a: [u64; 4], b: [u64; 4], f: u64, g: u64) -> [u64; 5] {
     output
 }
 
+/// Compute the linear combination `(af + bg)/2^k` where `a, b` are `256-bit` integers and `f, g` are `64-bit` integers.
+/// The division is assumed to be exact and the result is assumed to fit in a `256-bit` integer.
+///
+/// If the output would be negative, it is negated using 2's complement. A i64 is returned indicating
+/// if the negation was applied. The i64 is `-1` if the output was negated `0` otherwise.
 #[inline]
-fn linear_comb_div(mut a: [u64; 4], mut b: [u64; 4], f: i64, g: i64, k: usize) -> ([u64; 4], i64) {
-    // Get the signs and absolute values of f and g
-    let s_f = (f >> 63) as u64;
-    let s_g = (g >> 63) as u64;
-    let abs_f = f.unsigned_abs();
-    let abs_g = g.unsigned_abs();
-
-    // Apply the signs to a and b using 2's complement.
-    // `-a = 2^{256} - a = (2^{256} - 1) - (a - 1)`
-    // The larger subtraction is simply a NOT.
-    conditional_neg(&mut a, s_f);
-    conditional_neg(&mut b, s_g);
-
-    let mut product = linear_comb(a, b, abs_f, abs_g);
-
-    // Now we need to correct for the signs. If f < 0 then we computed -f * (2^{256} - a) instead of af.
-    // Hence in this case, we need to add f * 2^{256}.
-    let s_a = a[3] >> 63;
-    let s_b = b[3] >> 63;
-    // Similarly if g < 0 we need to add g * 2^{256}.
-    // The good news is that this only effects output 4.
-    product[4] = product[4].wrapping_add(((s_a as i64) * f + (s_b as i64) * g) as u64);
+fn linear_comb_div(a: [u64; 4], b: [u64; 4], f: i64, g: i64, k: usize) -> ([u64; 4], i64) {
+    let (product, hi_limb) = linear_comb_signed(a, b, f, g);
 
     let mut output = [0_u64; 4];
 
-    assert_eq!(product[0] & ((1 << k) - 1), 0);
-    // Next we need to apply the k shift:
+    // Now we apply the division by 2^k.
     output[0] = (product[0] >> k) | (product[1] << (64 - k));
     output[1] = (product[1] >> k) | (product[2] << (64 - k));
     output[2] = (product[2] >> k) | (product[3] << (64 - k));
-    output[3] = (product[3] >> k) | (product[4] << (64 - k));
+    output[3] = (product[3] >> k) | ((hi_limb << (64 - k)) as u64);
 
-    // Finally, if the result is negative, we negate it again.
-    let sign = (product[4] as i64) >> 63;
+    // Finally, if the result is negative, we negate it.
+    let sign = hi_limb >> 63;
     conditional_neg(&mut output, sign as u64);
     (output, sign)
 }
@@ -352,25 +356,17 @@ fn linear_comb_monty_red(a: [u64; 4], b: [u64; 4], f: i64, g: i64) -> [u64; 4] {
     let abs_f = f.unsigned_abs();
     let abs_g = g.unsigned_abs();
 
-    // If we need to invert, do that by subtracting from P.
-    let a_signed = if s_f == -1 {
-        let (sub, _) = wrapping_sub(BN254_PRIME, a);
-        sub
-    } else {
-        a
-    };
-    let b_signed = if s_g == -1 {
-        let (sub, _) = wrapping_sub(BN254_PRIME, b);
-        sub
-    } else {
-        b
-    };
+    // If we need to invert, we can easily invert a, b by subtracting from P.
+    let (a_sub, _) = wrapping_sub(BN254_PRIME, a);
+    let a_signed = if s_f == -1 { a_sub } else { a };
+    let (b_sub, _) = wrapping_sub(BN254_PRIME, b);
+    let b_signed = if s_g == -1 { b_sub } else { b };
 
-    let product = linear_comb(a_signed, b_signed, abs_f, abs_g);
+    let product = linear_comb_unsigned(a_signed, b_signed, abs_f, abs_g);
     interleaved_monty_reduction(product[0], product[1..].try_into().unwrap())
 }
 
-/// TODO
+/// An adjustment factor equal to `2^{1030} mod P`
 pub(crate) const BN254_2_POW_1030: [u64; 4] = [
     0x1f7ca21e7fcb111b,
     0x61a09399fcfe8a6c,
@@ -378,8 +374,7 @@ pub(crate) const BN254_2_POW_1030: [u64; 4] = [
     0x020c9ba0aeb6b6c7,
 ];
 
-//
-
+/// Invert a value in the BN254 field using a GCD based inversion algorithm.
 pub(crate) fn gcd_inversion(val: [u64; 4]) -> [u64; 4] {
     // When u = 1 and v 0, this outputs a^{-1} mod P.
     // More generally, when u = K, this output a^{-1}K mod P. Hence if we can choose the right
@@ -389,9 +384,14 @@ pub(crate) fn gcd_inversion(val: [u64; 4]) -> [u64; 4] {
     // We do 31 * 15 + 41 = 506 iterations. Each iteration injects a power of 2 so we need to divide by 2^{506}.
     // Each pair of calls to linear_comb_monty_red, involves dividing by `2^64`. Hence to correct for all these
     // we need to multiply by `2^{16 * 64}`.
-    // Overall it seems like we want `u` to be `2^{16 * 64 + 6} = 2^{1030} mod P`
+    // Overall we want `u` to equal `2^{16 * 64 + 6} = 2^{1030} mod P`
     let (mut a, mut u, mut b, mut v) = (val, BN254_2_POW_1030, BN254_PRIME, [0, 0, 0, 0]);
 
+    // We need 506 iterations as in each iteration, all we can guarantee is that len(a) + len(b) will decrease by 1.
+    // Initially, `len(a) + len(b) <= 2 * 254 = 508` so we need 506 iterations to get to the point that the sum of the
+    // lengths is 2. Once it is 2, we know both `a` and `b` must be `1` or `0` as neither can be `0` without the other being
+    // `1` due to the fact that the GCD is `1`.
+    // We split the iterations into 15 initial rounds of size 31 and a final round of size 41.
     const ROUND_SIZE: usize = 31;
     const FINAL_ROUND_SIZE: usize = 41;
     for _ in 0..15 {
@@ -399,6 +399,8 @@ pub(crate) fn gcd_inversion(val: [u64; 4]) -> [u64; 4] {
         let a_tilde = rm_middle(a, n);
         let b_tilde = rm_middle(b, n);
 
+        // Do the inner GCD loop on a_tilde and b_tilde to get the adjustment
+        // factors for this round.
         let (mut f0, mut g0, mut f1, mut g1) = gcd_inner::<ROUND_SIZE>(a_tilde, b_tilde);
 
         // Update a and b
@@ -422,18 +424,23 @@ pub(crate) fn gcd_inversion(val: [u64; 4]) -> [u64; 4] {
         v = new_v;
     }
 
+    // a and b are now guaranteed to fit in a u64 so we can just use the inner loop
+    // for the remaining layers.
     let (_, _, f1, g1) = gcd_inner::<FINAL_ROUND_SIZE>(a[0], b[0]);
 
-    // let (new_a, _) = linear_comb_div(a, b, f0, g0, FINAL_ROUND_SIZE);
-    // let (new_b, _) = linear_comb_div(a, b, f1, g1, FINAL_ROUND_SIZE);
-    // assert_eq!(new_a, [1, 0, 0, 0]);
-    // assert_eq!(new_b, [1, 0, 0, 0]);
-
-    // let out1 = linear_comb_monty_red(u, v, f0, g0);
+    // We can now compute the final result:
     linear_comb_monty_red(u, v, f1, g1)
 }
 
 /// Inner loop of the GCD algorithm.
+///
+/// This is basically a mini GCD which builds up a transformation to apply to the larger
+/// numbers in the main loop. The key point is that this small loop only uses u64s and
+/// does not require any BigNum multiplications.
+///
+/// The bottom `NUM_ROUNDS` bits of `a` and `b` should match the bottom `NUM_ROUNDS` bits of
+/// the corresponding big-ints and the top `NUM_ROUNDS + 2` should match the top bits including
+/// zeroes if the original numbers have different sizes.
 #[inline]
 fn gcd_inner<const NUM_ROUNDS: usize>(mut a: u64, mut b: u64) -> (i64, i64, i64, i64) {
     // Initialise update factors.
@@ -461,6 +468,6 @@ fn gcd_inner<const NUM_ROUNDS: usize>(mut a: u64, mut b: u64) -> (i64, i64, i64,
     }
 
     // -2^NUM_ROUNDS <= f0, g0, f1, g1 <= 2^NUM_ROUNDS
-    // Hence provided NUM_ROUNDS <= 30, we will not get any overflow.
+    // Hence provided NUM_ROUNDS <= 62, we will not get any overflow.
     (f0, g0, f1, g1)
 }
