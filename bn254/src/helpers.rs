@@ -395,6 +395,7 @@ pub(crate) fn gcd_inversion(val: [u64; 4]) -> [u64; 4] {
     const ROUND_SIZE: usize = 31;
     const FINAL_ROUND_SIZE: usize = 41;
     for _ in 0..15 {
+        // Find the a and b approximations for this set of inner rounds.
         let n = num_bits(a).max(num_bits(b)).max(2 * ROUND_SIZE + 2);
         let a_tilde = rm_middle(a, n);
         let b_tilde = rm_middle(b, n);
