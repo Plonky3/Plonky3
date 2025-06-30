@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use num_bigint::BigUint;
 use p3_field::Field;
 
-use crate::{BN254_MONTY_MU_64, BN254_PRIME, BN254_PRIME_U128};
+use crate::{BN254_MONTY_MU_64, BN254_PRIME};
 
 /// Convert a fixed-size array of u64s to a BigUint.
 #[inline]
@@ -205,56 +205,37 @@ pub(crate) fn monty_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 4] {
     interleaved_monty_reduction(acc0, acc)
 }
 
-#[inline(always)]
-const fn carrying_add_128(x: u128, y: u128, carry: bool) -> (u128, bool) {
-    let (a, b) = x.overflowing_add(y);
-    let (c, d) = a.overflowing_add(carry as u128);
-    (c, b || d)
-}
+/// The BN254 prime represented as a little-endian array of 2-u128s.
+///
+/// Equal to: `21888242871839275222246405745257275088548364400416034343698204186575808495617`
+const BN254_PRIME_U128: [u128; 2] = [
+    0x2833e84879b9709143e1f593f0000001,
+    0x30644e72e131a029b85045b68181585d,
+];
 
-#[inline(always)]
-const fn wrapping_add_128_no_overflow(x: u128, y: u128, carry: bool) -> u128 {
-    let a = x.wrapping_add(y);
-    a.wrapping_add(carry as u128)
-}
-
-/// Compute `lhs + rhs`, returning a bool if overflow occurred.
-#[inline(always)]
-pub(crate) fn wrapping_add_u128(lhs: [u128; 2], rhs: [u128; 2]) -> ([u128; 2], bool) {
-    let mut carry = false;
-    let mut output = [0; 2];
-
-    (output[0], carry) = carrying_add_128(lhs[0], rhs[0], carry);
-    output[1] = wrapping_add_128_no_overflow(lhs[1], rhs[1], carry);
-
-    (output, carry)
-}
-
+/// Efficiently halve a Bn254 element.
 #[inline]
 pub(crate) fn halve_bn254(mut input: [u64; 4]) -> [u64; 4] {
-    // if input[0] & 1 == 1 {
-    //     (input, _) = wrapping_add(input, BN254_PRIME);
-    // }
-    // let bot_bit_1 = input[1] << 63;
-    // let bot_bit_2 = input[2] << 63;
-    // let bot_bit_3 = input[3] << 63;
-
-    // input[0] = (input[0] >> 1) | bot_bit_1;
-    // input[1] = (input[1] >> 1) | bot_bit_2;
-    // input[2] = (input[2] >> 1) | bot_bit_3;
-    // input[3] >>= 1;
-    // input
-
+    // Seems to be a little faster to convert into u128s.
+    // It's essentially identical under the hood so this is
+    // likely just helping the compiler generate simpler assembly somehow.
     let mut input0_u128 = (input[1] as u128) << 64 | (input[0] as u128);
     let mut input1_u128 = (input[3] as u128) << 64 | (input[2] as u128);
+    let carry;
+
+    // If the element is odd, we add P.
     if input0_u128 & 1 == 1 {
-        ([input0_u128, input1_u128], _) =
-            wrapping_add_u128([input0_u128, input1_u128], BN254_PRIME_U128);
+        (input0_u128, carry) = input0_u128.overflowing_add(BN254_PRIME_U128[0]);
+        input1_u128 = input1_u128.wrapping_add(BN254_PRIME_U128[0]);
+        input1_u128 = input1_u128.wrapping_add(carry as u128);
     }
-    let bot_bit_1 = (input1_u128 << 63) as u64;
+
+    // As this point the element is guaranteed to be even so we just
+    // need to shift down by 1.
+    let carry_bit = (input1_u128 << 63) as u64;
 
     input[0] = (input0_u128 >> 1) as u64;
-    input[1] = (input0_u128 >> 65) as u64 | bot_bit_1;
+    input[1] = (input0_u128 >> 65) as u64 | carry_bit;
     input[2] = (input1_u128 >> 1) as u64;
     input[3] = (input1_u128 >> 65) as u64;
     input

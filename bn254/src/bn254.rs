@@ -28,14 +28,6 @@ pub(crate) const BN254_PRIME: [u64; 4] = [
     0x30644e72e131a029,
 ];
 
-/// The BN254 prime represented as a little-endian array of 4-u64s.
-///
-/// Equal to: `21888242871839275222246405745257275088548364400416034343698204186575808495617`
-pub(crate) const BN254_PRIME_U128: [u128; 2] = [
-    0x2833e84879b9709143e1f593f0000001,
-    0x30644e72e131a029b85045b68181585d,
-];
-
 // We use the Montgomery representation of the BN254 prime, with respect to the
 // constant 2^256.
 
