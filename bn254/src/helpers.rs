@@ -223,9 +223,10 @@ pub(crate) fn halve_bn254(mut input: [u64; 4]) -> [u64; 4] {
     let mut input1_u128 = (input[3] as u128) << 64 | (input[2] as u128);
     let carry;
 
-    // If the element is odd, we add P.
     if input0_u128 & 1 == 1 {
+        // If the element is odd, we add P.
         (input0_u128, carry) = input0_u128.overflowing_add(BN254_PRIME_U128[0]);
+        // Can ignore overflow here as the sum is < 2^256.
         input1_u128 = input1_u128.wrapping_add(BN254_PRIME_U128[0]);
         input1_u128 = input1_u128.wrapping_add(carry as u128);
     }
