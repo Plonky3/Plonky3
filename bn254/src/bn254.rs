@@ -76,10 +76,9 @@ impl Bn254 {
                 inner[..num_dig].copy_from_slice(&digits);
 
                 // We don't need to check that the value is less than the prime as, provided
-                // one entry of `monty_mul` is less than `P`, the result will be less than `P`.
-                let unadjusted_value = Self::new_monty(inner);
+                // the lhs entry of `monty_mul` is less than `P`, the result will be less than `P`.
                 // Adjust the value into Montgomery form by multiplying by `R^2` and doing a monty reduction.
-                Some(unadjusted_value * BN254_MONTY_R_SQ)
+                Some(Self::new_monty(monty_mul(BN254_MONTY_R_SQ, inner)))
             }
             _ => None, // Too many digits for BN254
         }
