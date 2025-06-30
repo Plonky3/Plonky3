@@ -1,5 +1,4 @@
 use alloc::vec::Vec;
-use core::cmp::Ordering::{Equal, Greater, Less};
 
 use num_bigint::BigUint;
 
@@ -204,56 +203,46 @@ pub(crate) fn monty_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 4] {
     interleaved_monty_reduction(acc0, acc)
 }
 
-// The following approach to a GCD based inversion algorithm is taken from here: https://eprint.iacr.org/2020/972.pdf
-// Explicitly, we implement Algorithm 2, roughly following the C implementation linked in that paper (in section 3).
-// The algorithm is a variant of the Binary Extended Euclidean Algorithm which, allows for most of the iterations to
-// be performed using only u64's even in cases where the inputs are much larger.
-
 /// Find the size (number of bits) of val.
+///
+/// Return `num_bits / 64` and `num_bits % 64`
+///
+/// This assumes that val is actually a 256 bit number and we simply have the top 192 bits.
+/// The bottom 64 bits are assumed to all be non zero so the "smallest" `num_bits` output this
+/// will give is `num_bits = 64` or `(1, 0)`.
 #[inline]
-fn num_bits(val: [u64; 4]) -> usize {
-    for i in (0..4).rev() {
-        if val[i] != 0 {
-            return 64 * i + (64 - val[i].leading_zeros() as usize);
-        }
-    }
-    // If we have gotten to this point, the value is 0.
-    0
+fn num_bits(val: [u64; 3]) -> (usize, usize) {
+    let v3 = 64 - (val[2].leading_zeros() as i64);
+    let v2 = 64 - (val[1].leading_zeros() as i64);
+    let v1 = 64 - (val[0].leading_zeros() as i64);
+
+    let v3_non_0 = (-v3) >> 63;
+    let v2_non_0 = ((-v2) >> 63) & (!v3_non_0);
+    let v1_non_0 = ((-v1) >> 63) & (!v3_non_0) & (!v2_non_0);
+
+    let limb = (1 - v2_non_0 - (v3_non_0 << 1)) as usize;
+    let bits_mod_64 = ((v3_non_0 & v3) | (v2_non_0 & v2) | (v1_non_0 & v1)) as usize;
+
+    (limb, bits_mod_64)
 }
 
-/// Get the bottom 31 bits of val along with the top 33 bits starting from the n-th bit stored as a u64.
+/// Get the bottom `31` bits of val along with the top `33` bits starting from the `n`-th bit.
+///
+/// `n` is given by `limb = n / 64` and `bits_mod_64 = n % 64` for convenience.
 #[inline]
-fn rm_middle(val: [u64; 4], n: usize) -> u64 {
+fn get_approximation(val: [u64; 4], limb: usize, bits_mod_64: usize) -> u64 {
     const K: usize = 32;
-    if n == 64 {
-        return val[0];
-    }
 
-    // Get the bottom K bits.
-    let last_k = val[0] & ((1 << (K - 1)) - 1);
+    // Get the bottom K - 1 bits.
+    let last_k_min_1 = val[0] & ((1 << (K - 1)) - 1);
 
-    // Get the top k + 2 bits starting from the n-th bit.
-    // The n-th bit is at index n-1.
-    let bit_index = n - 1;
-    let limb_index = bit_index / 64;
-    let bit_in_limb = bit_index % 64;
+    let joined_limb = ((val[limb] as u128) << 64) | (val[limb - 1] as u128);
 
-    // Get the top k + 2 bits starting from the n-th bit shifted into bits k -> 2k + 2.
-    let first_k_plus_2 = match core::cmp::Ord::cmp(&bit_in_limb, &K) {
-        Equal | Greater => {
-            // This is the easiest case as all K + 2 bits are in the n'th_limb
-            // We also already know that all bits above the n-th bit are 0.
-            let shift = bit_in_limb - K;
-            val[limb_index] >> shift
-        }
-        Less => {
-            // In this case we need to get some bits from the next limb as well.
-            let num_extra_bits = K - bit_in_limb;
-            let next_limb_bits = val[limb_index - 1] >> (64 - num_extra_bits);
-            (val[limb_index] << num_extra_bits) | next_limb_bits
-        }
-    };
-    (first_k_plus_2 << (K - 1)) | last_k
+    // 64 - bits_mod_64 = number of leading 0's. => Number of numbers is 64 + bits_mod_64
+    // a >> b kills b numbers at the base. 64 + bits_mod_64 - (bits_mod_64 + 64 - (K + 1)) = K + 1
+    let top_k_plus_1 = (joined_limb >> (bits_mod_64 + 64 - (K + 1))) as u64;
+
+    (top_k_plus_1 << (K - 1)) | last_k_min_1
 }
 
 /// Negate a (in the 2's complement sense) if sign is `-1 = 2^64 - 1`
@@ -357,6 +346,18 @@ pub(crate) const BN254_2_POW_1030: [u64; 4] = [
 ];
 
 /// Invert a value in the BN254 field using a GCD based inversion algorithm.
+///
+/// The following approach to a GCD based inversion algorithm is taken from the paper:
+/// Optimized Binary GCD for Modular Inversion by Thomas Pornin.
+/// It can be found here: https://eprint.iacr.org/2020/972.pdf
+//
+/// Explicitly, we implement Algorithm 2, roughly following the C implementation linked in that paper (in section 3).
+/// The algorithm is a variant of the Binary Extended Euclidean Algorithm which, allows for most of the iterations to
+/// be performed using only u64's even in cases where the inputs are much larger.
+//
+/// This implementation is also impervious to side-channel attacks as an added bonus. In principal we could make
+/// the average case a little faster if we didn't care about this property but the worst case would be unchanged and
+/// potentially even slightly worse.
 pub(crate) fn gcd_inversion(val: [u64; 4]) -> [u64; 4] {
     // When u = 1 and v 0, this outputs a^{-1} mod P.
     // More generally, when u = K, this output a^{-1}K mod P. Hence if we can choose the right
@@ -374,13 +375,22 @@ pub(crate) fn gcd_inversion(val: [u64; 4]) -> [u64; 4] {
     // lengths is 2. Once it is 2, we know both `a` and `b` must be `1` or `0` as neither can be `0` without the other being
     // `1` due to the fact that the GCD is `1`.
     // We split the iterations into 15 initial rounds of size 31 and a final round of size 41.
-    const ROUND_SIZE: usize = 31;
+    const ROUND_SIZE: usize = 31; // If you want to change round size, you will also need to modify the constant in rm_middle.
     const FINAL_ROUND_SIZE: usize = 41;
     for _ in 0..15 {
         // Find the a and b approximations for this set of inner rounds.
-        let n = num_bits(a).max(num_bits(b)).max(2 * ROUND_SIZE + 2);
-        let a_tilde = rm_middle(a, n);
-        let b_tilde = rm_middle(b, n);
+        // If both a and b now fit in a u64, return those. Otherwise take the bottom
+        // 31 bits and the top 33 bits and assemble into a u64.
+        let (limb, bits_mod_64) = num_bits([a[1] | b[1], a[2] | b[2], a[3] | b[3]]);
+        let a_tilde = get_approximation(a, limb, bits_mod_64);
+        let b_tilde = get_approximation(b, limb, bits_mod_64);
+
+        // The key idea for the algorithm is that, instead of doing the standard
+        // binary GCD algorithm on the big-ints a, b we can do the GCD algorithm
+        // on a_tilde and b_tilde and then apply the updates all at once to a, b
+        // and u, v.
+        // By construction, a_tilde, b_tilde will function as good enough approximations
+        // of a and b for at least 31 inner rounds.
 
         // Do the inner GCD loop on a_tilde and b_tilde to get the adjustment
         // factors for this round.
