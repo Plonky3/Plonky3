@@ -64,6 +64,26 @@ impl Bn254 {
         Self { value }
     }
 
+    #[inline]
+    pub fn from_biguint(value: BigUint) -> Option<Self> {
+        let digits = value.to_u64_digits();
+        let num_dig = digits.len();
+
+        match num_dig {
+            0 => Some(Self::ZERO),
+            1..=4 => {
+                let mut inner = [0; 4];
+                inner[..num_dig].copy_from_slice(&digits);
+
+                // We don't need to check that the value is less than the prime as, provided
+                // the lhs entry of `monty_mul` is less than `P`, the result will be less than `P`.
+                // Adjust the value into Montgomery form by multiplying by `R^2` and doing a monty reduction.
+                Some(Self::new_monty(monty_mul(BN254_MONTY_R_SQ, inner)))
+            }
+            _ => None, // Too many digits for BN254
+        }
+    }
+
     /// Converts the a byte array in little-endian order to a field element.
     ///
     /// Assumes the bytes correspond to the Montgomery form of the desired field element.
@@ -528,8 +548,36 @@ mod tests {
 
     #[test]
     fn test_bn254fr() {
-        let f = F::from_u8(100);
-        assert_eq!(f.as_canonical_biguint(), BigUint::from(100u32));
+        let big_int_100 = BigUint::from(100u32);
+        let big_int_p = to_biguint(BN254_PRIME);
+        let big_int_2_256_min_1 = to_biguint([
+            0xffffffffffffffff,
+            0xffffffffffffffff,
+            0xffffffffffffffff,
+            0xffffffffffffffff,
+        ]);
+        let big_int_2_256_mod_p = to_biguint([
+            0xac96341c4ffffffb,
+            0x36fc76959f60cd29,
+            0x666ea36f7879462e,
+            0x0e0a77c19a07df2f,
+        ]);
+
+        let f_100 = F::from_biguint(big_int_100.clone()).unwrap();
+        assert_eq!(f_100.as_canonical_biguint(), BigUint::from(100u32));
+        assert_eq!(F::from_biguint(BigUint::ZERO), Some(F::ZERO));
+        for i in 0_u32..6_u32 {
+            assert_eq!(F::from_biguint(big_int_p.clone() * i), Some(F::ZERO));
+            assert_eq!(
+                F::from_biguint((big_int_100.clone() + big_int_p.clone()) * i),
+                Some(f_100 * F::from_int(i))
+            );
+        }
+        assert_eq!(F::from_biguint(big_int_p.clone() * 6_u32), None);
+        assert_eq!(
+            F::from_biguint(big_int_2_256_min_1).unwrap(),
+            F::NEG_ONE + F::from_biguint(big_int_2_256_mod_p).unwrap()
+        );
 
         // Generator check
         let expected_multiplicative_group_generator = F::from_u8(5);
@@ -541,9 +589,9 @@ mod tests {
         let f_r_minus_1 = F::NEG_ONE;
         let f_r_minus_2 = F::NEG_ONE + F::NEG_ONE;
 
-        let f_serialized = serde_json::to_string(&f).unwrap();
+        let f_serialized = serde_json::to_string(&f_100).unwrap();
         let f_deserialized: F = serde_json::from_str(&f_serialized).unwrap();
-        assert_eq!(f, f_deserialized);
+        assert_eq!(f_100, f_deserialized);
 
         let f_1_serialized = serde_json::to_string(&f_1).unwrap();
         let f_1_deserialized: F = serde_json::from_str(&f_1_serialized).unwrap();
