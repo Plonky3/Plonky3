@@ -349,7 +349,7 @@ pub trait PrimeCharacteristicRing:
     /// write zeros, which would be redundant. However, the compiler may not always recognize this.
     ///
     /// In particular, `vec![Self::ZERO; len]` appears to result in redundant userspace zeroing.
-    /// This is the default implementation, but implementors may wish to provide their own
+    /// This is the default implementation, but implementers may wish to provide their own
     /// implementation which transmutes something like `vec![0u32; len]`.
     #[must_use]
     #[inline]
