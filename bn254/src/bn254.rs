@@ -72,7 +72,7 @@ impl Bn254 {
     }
 
     #[inline]
-    pub fn from_big_u_int(value: BigUint) -> Option<Self> {
+    pub fn from_biguint(value: BigUint) -> Option<Self> {
         let digits = value.to_u64_digits();
         let num_dig = digits.len();
 
@@ -566,20 +566,20 @@ mod tests {
             0x0e0a77c19a07df2f,
         ]);
 
-        let f_100 = F::from_big_u_int(big_int_100.clone()).unwrap();
+        let f_100 = F::from_biguint(big_int_100.clone()).unwrap();
         assert_eq!(f_100.as_canonical_biguint(), BigUint::from(100u32));
-        assert_eq!(F::from_big_u_int(BigUint::ZERO), Some(F::ZERO));
+        assert_eq!(F::from_biguint(BigUint::ZERO), Some(F::ZERO));
         for i in 0_u32..6_u32 {
-            assert_eq!(F::from_big_u_int(big_int_p.clone() * i), Some(F::ZERO));
+            assert_eq!(F::from_biguint(big_int_p.clone() * i), Some(F::ZERO));
             assert_eq!(
-                F::from_big_u_int((big_int_100.clone() + big_int_p.clone()) * i),
+                F::from_biguint((big_int_100.clone() + big_int_p.clone()) * i),
                 Some(f_100 * F::from_int(i))
             );
         }
-        assert_eq!(F::from_big_u_int(big_int_p.clone() * 6_u32), None);
+        assert_eq!(F::from_biguint(big_int_p.clone() * 6_u32), None);
         assert_eq!(
-            F::from_big_u_int(big_int_2_256_min_1).unwrap(),
-            F::NEG_ONE + F::from_big_u_int(big_int_2_256_mod_p).unwrap()
+            F::from_biguint(big_int_2_256_min_1).unwrap(),
+            F::NEG_ONE + F::from_biguint(big_int_2_256_mod_p).unwrap()
         );
 
         // Generator check
