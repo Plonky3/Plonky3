@@ -3,6 +3,7 @@
 use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::iter;
+use core::marker::PhantomData;
 
 use itertools::Itertools;
 use p3_field::{Field, TwoAdicField, scale_slice_in_place_single_core};
@@ -32,7 +33,13 @@ const LAYERS_PER_GROUP: usize = 3;
 /// computes a large set of layers fully on a single thread, which avoids the overhead of
 /// passing data between threads.
 #[derive(Default, Clone, Debug)]
-pub struct Radix2DFTSmallBatch<F> {
+pub struct Radix2DFTSmallBatch<
+    F,
+    TWFB = TwiddleFreeButterfly,
+    DITB = DitButterfly<F>,
+    DIFB = DifButterfly<F>,
+    DIFBZ = DifButterflyZeros<F>,
+> {
     /// Memoized twiddle factors for each length log_n.
     ///
     /// For each `i`, `twiddles[i]` contains a list of twiddles stored in
@@ -46,17 +53,33 @@ pub struct Radix2DFTSmallBatch<F> {
 
     /// Similar to `twiddles`, but stored the inverses used for the inverse fft.
     inv_twiddles: RefCell<Vec<Vec<F>>>,
+
+    /// Marker for the butterfly used in the first stage of DIT (Decimation-in-Time) FFT layers.
+    twiddle_free_butterfly: TWFB,
+
+    /// Marker type for the DIT butterfly used in all but the first layer of the FFT.
+    dit_butterfly: PhantomData<DITB>,
+
+    /// Marker type for the DIF (Decimation-in-Frequency) butterfly.
+    dif_butterfly: PhantomData<DIFB>,
+
+    /// Marker type for the DIF (Decimation-in-Frequency) butterfly (zero-padded version).
+    dif_butterfly_zeros: PhantomData<DIFBZ>,
 }
 
-impl<F: TwoAdicField> Radix2DFTSmallBatch<F> {
+impl<F, TWFB, DITB, DIFB, DIFBZ> Radix2DFTSmallBatch<F, TWFB, DITB, DIFB, DIFBZ>
+where
+    F: TwoAdicField,
+    TWFB: Butterfly<F> + Default,
+    DITB: Butterfly<F> + Default,
+    DIFB: Butterfly<F> + Default,
+    DIFBZ: Butterfly<F> + Default,
+{
     /// Create a new `Radix2DFTSmallBatch` instance with precomputed twiddles for the given size.
     ///
     /// The input `n` should be a power of two, representing the maximal FFT size you expect to handle.
     pub fn new(n: usize) -> Self {
-        let res = Self {
-            twiddles: RefCell::default(),
-            inv_twiddles: RefCell::default(),
-        };
+        let res = Self::default();
         res.update_twiddles(n);
         res
     }
@@ -113,9 +136,14 @@ impl<F: TwoAdicField> Radix2DFTSmallBatch<F> {
     }
 }
 
-impl<F> TwoAdicSubgroupDft<F> for Radix2DFTSmallBatch<F>
+impl<F, TWFB, DITB, DIFB, DIFBZ> TwoAdicSubgroupDft<F>
+    for Radix2DFTSmallBatch<F, TWFB, DITB, DIFB, DIFBZ>
 where
     F: TwoAdicField,
+    TWFB: Butterfly<F> + Default,
+    DITB: Butterfly<F> + Default,
+    DIFB: Butterfly<F> + Default,
+    DIFBZ: Butterfly<F> + Default,
 {
     type Evaluations = RowMajorMatrix<F>;
 
@@ -145,25 +173,40 @@ where
         for (twiddles_0, twiddles_1, twiddles_2) in
             root_table[log_num_par_rows..].iter().rev().tuples()
         {
-            dit_layer_par_triple(&mut mat.as_view_mut(), twiddles_0, twiddles_1, twiddles_2);
+            dit_layer_par_triple::<_, _, DITB>(
+                &mut mat.as_view_mut(),
+                twiddles_0,
+                twiddles_1,
+                twiddles_2,
+                self.twiddle_free_butterfly,
+            );
         }
 
         // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
         // we need to handle the remaining layers separately.
         if (log_h - log_num_par_rows) % LAYERS_PER_GROUP == 1 {
-            dit_layer_par(&mut mat.as_view_mut(), &root_table[log_num_par_rows])
+            dit_layer_par::<_, _, DITB>(
+                &mut mat.as_view_mut(),
+                &root_table[log_num_par_rows],
+                self.twiddle_free_butterfly,
+            )
         } else if (log_h - log_num_par_rows) % LAYERS_PER_GROUP == 2 {
-            dit_layer_par_double(
+            dit_layer_par_double::<_, _, DITB>(
                 &mut mat.as_view_mut(),
                 &root_table[log_num_par_rows + 1],
                 &root_table[log_num_par_rows],
+                self.twiddle_free_butterfly,
             )
         }
 
         // Once the blocks are small enough, we can split the matrix
         // into chunks of size `chunk_size` and process them in parallel.
         // This avoids passing data between threads, which can be expensive.
-        par_remaining_layers(&mut mat.values, chunk_size, &root_table[..log_num_par_rows]);
+        par_remaining_layers::<_, DITB>(
+            &mut mat.values,
+            chunk_size,
+            &root_table[..log_num_par_rows],
+        );
 
         // Finally we bit-reverse the matrix to ensure the output is in the correct order.
         reverse_matrix_index_bits(&mut mat);
@@ -197,7 +240,7 @@ where
         // This avoids passing data between threads, which can be expensive.
         // We also divide by the height of the matrix while the data is nicely partitioned
         // on each core.
-        par_initial_layers(
+        par_initial_layers::<_, DIFB>(
             &mut mat.values,
             chunk_size,
             &root_table[..log_num_par_rows],
@@ -212,13 +255,18 @@ where
         let corr = (log_h - log_num_par_rows) % LAYERS_PER_GROUP;
         match corr {
             1 => {
-                dif_layer_par(&mut mat.as_view_mut(), &root_table[log_num_par_rows]);
+                dif_layer_par::<_, _, DIFB>(
+                    &mut mat.as_view_mut(),
+                    &root_table[log_num_par_rows],
+                    self.twiddle_free_butterfly,
+                );
             }
             2 => {
-                dif_layer_par_double(
+                dif_layer_par_double::<_, _, DIFB>(
                     &mut mat.as_view_mut(),
                     &root_table[log_num_par_rows],
                     &root_table[log_num_par_rows + 1],
+                    self.twiddle_free_butterfly,
                 );
             }
             _ => {}
@@ -229,7 +277,13 @@ where
         for (twiddles_0, twiddles_1, twiddles_2) in
             root_table[(log_num_par_rows + corr)..].iter().tuples()
         {
-            dif_layer_par_triple(&mut mat.as_view_mut(), twiddles_0, twiddles_1, twiddles_2);
+            dif_layer_par_triple::<_, _, DIFB>(
+                &mut mat.as_view_mut(),
+                twiddles_0,
+                twiddles_1,
+                twiddles_2,
+                self.twiddle_free_butterfly,
+            );
         }
 
         mat
@@ -288,23 +342,31 @@ where
         for (twiddles_0, twiddles_1, twiddles_2) in
             inv_root_table[num_inner_dit_layers..].iter().rev().tuples()
         {
-            dit_layer_par_triple(&mut mat.as_view_mut(), twiddles_0, twiddles_1, twiddles_2);
+            dit_layer_par_triple::<_, _, DITB>(
+                &mut mat.as_view_mut(),
+                twiddles_0,
+                twiddles_1,
+                twiddles_2,
+                self.twiddle_free_butterfly,
+            );
         }
 
         // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
         // we need to handle the remaining layers separately.
         match corr {
             1 => {
-                dit_layer_par(
+                dit_layer_par::<_, _, DITB>(
                     &mut mat.as_view_mut(),
                     &inv_root_table[num_inner_dit_layers],
+                    self.twiddle_free_butterfly,
                 );
             }
             2 => {
-                dit_layer_par_double(
+                dit_layer_par_double::<_, _, DITB>(
                     &mut mat.as_view_mut(),
                     &inv_root_table[num_inner_dit_layers + 1],
                     &inv_root_table[num_inner_dit_layers],
+                    self.twiddle_free_butterfly,
                 );
             }
             _ => {}
@@ -313,7 +375,7 @@ where
         // Now do all the inner layers at once. This does the final `log_num_par_rows` of
         // the initial transformation, then copies the values of mat to output, scales then
         // and does the first `log_num_par_rows + added_bits` layers of the final transformation.
-        par_middle_layers(
+        par_middle_layers::<_, DITB, DIFB, DIFBZ>(
             &mut mat.as_view_mut(),
             &mut output.as_view_mut(),
             num_par_rows,
@@ -327,13 +389,18 @@ where
         // we need to handle the remaining layers separately.
         match corr {
             1 => {
-                dif_layer_par(&mut output.as_view_mut(), &root_table[num_inner_dif_layers]);
+                dif_layer_par::<_, _, DIFB>(
+                    &mut output.as_view_mut(),
+                    &root_table[num_inner_dif_layers],
+                    self.twiddle_free_butterfly,
+                );
             }
             2 => {
-                dif_layer_par_double(
+                dif_layer_par_double::<_, _, DIFB>(
                     &mut output.as_view_mut(),
                     &root_table[num_inner_dif_layers],
                     &root_table[num_inner_dif_layers + 1],
+                    self.twiddle_free_butterfly,
                 );
             }
             _ => {}
@@ -344,11 +411,12 @@ where
         for (twiddles_0, twiddles_1, twiddles_2) in
             root_table[(num_inner_dif_layers + corr)..].iter().tuples()
         {
-            dif_layer_par_triple(
+            dif_layer_par_triple::<_, _, DIFB>(
                 &mut output.as_view_mut(),
                 twiddles_0,
                 twiddles_1,
                 twiddles_2,
+                self.twiddle_free_butterfly,
             );
         }
 
@@ -359,8 +427,8 @@ where
 /// Applies one layer of the Radix-2 DIT FFT butterfly network making use of parallelization.
 ///
 /// Splits the matrix into blocks of rows and performs in-place butterfly operations
-/// on each block. Uses a `TwiddleFreeButterfly` for the first pair and `DitButterfly`
-/// with precomputed twiddles for the rest.
+/// on each block. The first row pair in each block is processed using a `TWFB` (twiddle-free butterfly),
+/// while the remaining pairs use a `DITB` (twiddled butterfly) instantiated via `DITB::from_twiddle(...)`.
 ///
 /// Each block is processed in parallel, if the blocks are large enough they themselves
 /// are split into parallel sub-blocks.
@@ -369,7 +437,15 @@ where
 /// - `mat`: Mutable matrix whose height is a power of two.
 /// - `twiddles`: Precomputed twiddle factors for this layer.
 #[inline]
-fn dit_layer_par<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, twiddles: &[F]) {
+fn dit_layer_par<F, TWFB, DITB>(
+    mat: &mut RowMajorMatrixViewMut<F>,
+    twiddles: &[F],
+    twiddle_free_butterfly: TWFB,
+) where
+    F: Field,
+    TWFB: Butterfly<F>,
+    DITB: Butterfly<F>,
+{
     debug_assert!(
         mat.height() % twiddles.len() == 0,
         "Matrix height must be divisible by the number of twiddles"
@@ -397,10 +473,10 @@ fn dit_layer_par<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, twiddles: &[F]) {
                 .for_each(|(hi_chunk, lo_chunk)| {
                     if ind == 0 {
                         // The first pair doesn't require a twiddle factor
-                        TwiddleFreeButterfly.apply_to_rows(hi_chunk, lo_chunk);
+                        twiddle_free_butterfly.apply_to_rows(hi_chunk, lo_chunk);
                     } else {
                         // Apply DIT butterfly using the twiddle factor at index `ind - 1`
-                        DitButterfly(twiddles[ind]).apply_to_rows(hi_chunk, lo_chunk);
+                        DITB::from_twiddle(twiddles[ind]).apply_to_rows(hi_chunk, lo_chunk);
                     }
                 });
         });
@@ -408,9 +484,9 @@ fn dit_layer_par<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, twiddles: &[F]) {
 
 /// Applies one layer of the Radix-2 DIF FFT butterfly network making use of parallelization.
 ///
-/// Splits the matrix into blocks of rows and performs in-place butterfly operations
-/// on each block. Uses a `TwiddleFreeButterfly` for the first pair and `DifButterfly`
-/// with precomputed twiddles for the rest.
+/// Splits the matrix into blocks of rows and performs in-place butterfly operations on each block.
+/// Uses a `TWFB` (twiddle-free butterfly) for the first row pair and a `DIFB` (twiddled butterfly)
+/// constructed with `DIFB::from_twiddle(twiddle)` for the remaining pairs.
 ///
 /// Each block is processed in parallel, if the blocks are large enough they themselves
 /// are split into parallel sub-blocks.
@@ -419,7 +495,15 @@ fn dit_layer_par<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, twiddles: &[F]) {
 /// - `mat`: Mutable matrix whose height is a power of two.
 /// - `twiddles`: Precomputed twiddle factors for this layer.
 #[inline]
-fn dif_layer_par<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, twiddles: &[F]) {
+fn dif_layer_par<F, TWFB, DIFB>(
+    mat: &mut RowMajorMatrixViewMut<F>,
+    twiddles: &[F],
+    twiddle_free_butterfly: TWFB,
+) where
+    F: Field,
+    TWFB: Butterfly<F>,
+    DIFB: Butterfly<F>,
+{
     debug_assert!(
         mat.height() % twiddles.len() == 0,
         "Matrix height must be divisible by the number of twiddles"
@@ -447,10 +531,10 @@ fn dif_layer_par<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, twiddles: &[F]) {
                 .for_each(|(hi_chunk, lo_chunk)| {
                     if ind == 0 {
                         // The first pair doesn't require a twiddle factor
-                        TwiddleFreeButterfly.apply_to_rows(hi_chunk, lo_chunk);
+                        twiddle_free_butterfly.apply_to_rows(hi_chunk, lo_chunk);
                     } else {
                         // Apply DIF butterfly using the twiddle factor at index `ind - 1`
-                        DifButterfly(twiddles[ind]).apply_to_rows(hi_chunk, lo_chunk);
+                        DIFB::from_twiddle(twiddles[ind]).apply_to_rows(hi_chunk, lo_chunk);
                     }
                 });
         });
@@ -461,7 +545,11 @@ fn dif_layer_par<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, twiddles: &[F]) {
 ///
 /// This avoids passing data between threads, which can be expensive.
 #[inline]
-fn par_remaining_layers<F: Field>(mat: &mut [F], chunk_size: usize, root_table: &[Vec<F>]) {
+fn par_remaining_layers<F, DITB>(mat: &mut [F], chunk_size: usize, root_table: &[Vec<F>])
+where
+    F: Field,
+    DITB: Butterfly<F>,
+{
     mat.par_chunks_exact_mut(chunk_size)
         .enumerate()
         .for_each(|(index, chunk)| {
@@ -469,7 +557,7 @@ fn par_remaining_layers<F: Field>(mat: &mut [F], chunk_size: usize, root_table: 
                 let num_twiddles_per_block = 1 << layer;
                 let start = index * num_twiddles_per_block;
                 let twiddle_range = start..(start + num_twiddles_per_block);
-                dit_layer(chunk, &twiddles[twiddle_range]);
+                dit_layer::<_, DITB>(chunk, &twiddles[twiddle_range]);
             }
         });
 }
@@ -481,12 +569,15 @@ fn par_remaining_layers<F: Field>(mat: &mut [F], chunk_size: usize, root_table: 
 ///
 /// Basically identical to [par_remaining_layers] but in reverse.
 #[inline]
-fn par_initial_layers<F: Field>(
+fn par_initial_layers<F, DIFB>(
     mat: &mut [F],
     chunk_size: usize,
     root_table: &[Vec<F>],
     log_height: usize,
-) {
+) where
+    F: Field,
+    DIFB: Butterfly<F>,
+{
     let num_rounds = root_table.len();
     let height_inv = F::ONE.div_2exp_u64(log_height as u64);
     mat.par_chunks_exact_mut(chunk_size)
@@ -499,12 +590,12 @@ fn par_initial_layers<F: Field>(
                 let num_twiddles_per_block = 1 << (num_rounds - layer - 1);
                 let start = index * num_twiddles_per_block;
                 let twiddle_range = start..(start + num_twiddles_per_block);
-                dif_layer(chunk, &twiddles[twiddle_range]);
+                dif_layer::<_, DIFB>(chunk, &twiddles[twiddle_range]);
             }
         });
 }
 
-fn par_middle_layers<F: Field>(
+fn par_middle_layers<F, DITB, DIFB, DIFBZ>(
     in_mat: &mut RowMajorMatrixViewMut<F>,
     out_mat: &mut RowMajorMatrixViewMut<F>,
     num_par_rows: usize,
@@ -512,7 +603,12 @@ fn par_middle_layers<F: Field>(
     inv_root_table: &[Vec<F>],
     added_bits: usize,
     shift: F,
-) {
+) where
+    F: Field,
+    DITB: Butterfly<F>,
+    DIFB: Butterfly<F>,
+    DIFBZ: Butterfly<F>,
+{
     debug_assert_eq!(in_mat.width(), out_mat.width());
     debug_assert_eq!(in_mat.height() << added_bits, out_mat.height());
 
@@ -539,7 +635,7 @@ fn par_middle_layers<F: Field>(
                 let num_twiddles_per_block = 1 << layer;
                 let start = index * num_twiddles_per_block;
                 let twiddle_range = start..(start + num_twiddles_per_block);
-                dit_layer(in_chunk, &twiddles[twiddle_range]);
+                dit_layer::<_, DITB>(in_chunk, &twiddles[twiddle_range]);
             }
 
             // Copy the values to the output matrix and scale appropriately.
@@ -562,9 +658,13 @@ fn par_middle_layers<F: Field>(
                 let twiddle_range = start..(start + num_twiddles_per_block);
                 // While
                 if layer < added_bits {
-                    dif_layer_zeros(out_chunk, &twiddles[twiddle_range], added_bits - layer - 1);
+                    dif_layer_zeros::<_, DIFBZ>(
+                        out_chunk,
+                        &twiddles[twiddle_range],
+                        added_bits - layer - 1,
+                    );
                 } else {
-                    dif_layer(out_chunk, &twiddles[twiddle_range]);
+                    dif_layer::<_, DIFB>(out_chunk, &twiddles[twiddle_range]);
                 }
             }
         });
@@ -579,7 +679,11 @@ fn par_middle_layers<F: Field>(
 /// - `vec`: Mutable vector whose height is a power of two.
 /// - `twiddles`: Precomputed twiddle factors for this layer.
 #[inline]
-fn dit_layer<F: Field>(vec: &mut [F], twiddles: &[F]) {
+fn dit_layer<F, DITB>(vec: &mut [F], twiddles: &[F])
+where
+    F: Field,
+    DITB: Butterfly<F>,
+{
     debug_assert_eq!(
         vec.len() % twiddles.len(),
         0,
@@ -598,7 +702,7 @@ fn dit_layer<F: Field>(vec: &mut [F], twiddles: &[F]) {
             let (hi_chunk, lo_chunk) = block.split_at_mut(half_block_size);
 
             // Apply DIT butterfly
-            DitButterfly(twiddle).apply_to_rows(hi_chunk, lo_chunk);
+            DITB::from_twiddle(twiddle).apply_to_rows(hi_chunk, lo_chunk);
         });
 }
 
@@ -611,7 +715,11 @@ fn dit_layer<F: Field>(vec: &mut [F], twiddles: &[F]) {
 /// - `vec`: Mutable vector whose height is a power of two.
 /// - `twiddles`: Precomputed twiddle factors for this layer.
 #[inline]
-fn dif_layer<F: Field>(vec: &mut [F], twiddles: &[F]) {
+fn dif_layer<F, DIFB>(vec: &mut [F], twiddles: &[F])
+where
+    F: Field,
+    DIFB: Butterfly<F>,
+{
     debug_assert_eq!(
         vec.len() % twiddles.len(),
         0,
@@ -630,7 +738,7 @@ fn dif_layer<F: Field>(vec: &mut [F], twiddles: &[F]) {
             let (hi_chunk, lo_chunk) = block.split_at_mut(half_block_size);
 
             // Apply DIF butterfly
-            DifButterfly(twiddle).apply_to_rows(hi_chunk, lo_chunk);
+            DIFB::from_twiddle(twiddle).apply_to_rows(hi_chunk, lo_chunk);
         });
 }
 
@@ -645,11 +753,16 @@ fn dif_layer<F: Field>(vec: &mut [F], twiddles: &[F]) {
 /// - `twiddles_0`: Precomputed twiddle factors for the first layer.
 /// - `twiddles_1`: Precomputed twiddle factors for the second layer.
 #[inline]
-fn dit_layer_par_double<F: Field>(
+fn dit_layer_par_double<F, TWFB, DITB>(
     mat: &mut RowMajorMatrixViewMut<F>,
     twiddles_0: &[F],
     twiddles_1: &[F],
-) {
+    twiddle_free_butterfly: TWFB,
+) where
+    F: Field,
+    TWFB: Butterfly<F>,
+    DITB: Butterfly<F>,
+{
     debug_assert!(
         mat.height() % twiddles_0.len() == 0,
         "Matrix height must be divisible by the number of twiddles"
@@ -682,21 +795,24 @@ fn dit_layer_par_double<F: Field>(
                         // Do 2 layers of the DIT FFT butterfly network at once.
                         if ind == 0 {
                             // Layer 0:
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_chunk, lo_hi_chunk);
-                            TwiddleFreeButterfly.apply_to_rows(hi_lo_chunk, lo_lo_chunk);
+                            twiddle_free_butterfly.apply_to_rows(hi_hi_chunk, lo_hi_chunk);
+                            twiddle_free_butterfly.apply_to_rows(hi_lo_chunk, lo_lo_chunk);
 
                             // Layer 1:
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_chunk, hi_lo_chunk);
-                            DitButterfly(twiddles_1[1]).apply_to_rows(lo_hi_chunk, lo_lo_chunk);
+                            twiddle_free_butterfly.apply_to_rows(hi_hi_chunk, hi_lo_chunk);
+                            DITB::from_twiddle(twiddles_1[1])
+                                .apply_to_rows(lo_hi_chunk, lo_lo_chunk);
                         } else {
                             // Layer 0:
-                            DitButterfly(twiddles_0[ind]).apply_to_rows(hi_hi_chunk, lo_hi_chunk);
-                            DitButterfly(twiddles_0[ind]).apply_to_rows(hi_lo_chunk, lo_lo_chunk);
+                            DITB::from_twiddle(twiddles_0[ind])
+                                .apply_to_rows(hi_hi_chunk, lo_hi_chunk);
+                            DITB::from_twiddle(twiddles_0[ind])
+                                .apply_to_rows(hi_lo_chunk, lo_lo_chunk);
 
                             // Layer 1:
-                            DitButterfly(twiddles_1[2 * ind])
+                            DITB::from_twiddle(twiddles_1[2 * ind])
                                 .apply_to_rows(hi_hi_chunk, hi_lo_chunk);
-                            DitButterfly(twiddles_1[2 * ind + 1])
+                            DITB::from_twiddle(twiddles_1[2 * ind + 1])
                                 .apply_to_rows(lo_hi_chunk, lo_lo_chunk);
                         }
                     });
@@ -716,12 +832,17 @@ fn dit_layer_par_double<F: Field>(
 /// - `twiddles_1`: Precomputed twiddle factors for the second layer.
 /// - `twiddles_2`: Precomputed twiddle factors for the third layer.
 #[inline]
-fn dit_layer_par_triple<F: Field>(
+fn dit_layer_par_triple<F, TWFB, DITB>(
     mat: &mut RowMajorMatrixViewMut<F>,
     twiddles_0: &[F],
     twiddles_1: &[F],
     twiddles_2: &[F],
-) {
+    twiddle_free_butterfly: TWFB,
+) where
+    F: Field,
+    TWFB: Butterfly<F>,
+    DITB: Butterfly<F>,
+{
     debug_assert!(
         mat.height() % twiddles_0.len() == 0,
         "Matrix height must be divisible by the number of twiddles"
@@ -758,56 +879,56 @@ fn dit_layer_par_triple<F: Field>(
                         // Do 3 layers of the DIT FFT butterfly network at once.
                         if ind == 0 {
                             // Layer 0:
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_hi_chunk, lo_hi_hi_chunk);
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_lo_chunk, lo_hi_lo_chunk);
-                            TwiddleFreeButterfly.apply_to_rows(hi_lo_hi_chunk, lo_lo_hi_chunk);
-                            TwiddleFreeButterfly.apply_to_rows(hi_lo_lo_chunk, lo_lo_lo_chunk);
+                            twiddle_free_butterfly.apply_to_rows(hi_hi_hi_chunk, lo_hi_hi_chunk);
+                            twiddle_free_butterfly.apply_to_rows(hi_hi_lo_chunk, lo_hi_lo_chunk);
+                            twiddle_free_butterfly.apply_to_rows(hi_lo_hi_chunk, lo_lo_hi_chunk);
+                            twiddle_free_butterfly.apply_to_rows(hi_lo_lo_chunk, lo_lo_lo_chunk);
 
                             // Layer 1:
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_hi_chunk, hi_lo_hi_chunk);
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_lo_chunk, hi_lo_lo_chunk);
-                            DitButterfly(twiddles_1[1])
+                            twiddle_free_butterfly.apply_to_rows(hi_hi_hi_chunk, hi_lo_hi_chunk);
+                            twiddle_free_butterfly.apply_to_rows(hi_hi_lo_chunk, hi_lo_lo_chunk);
+                            DITB::from_twiddle(twiddles_1[1])
                                 .apply_to_rows(lo_hi_hi_chunk, lo_lo_hi_chunk);
-                            DitButterfly(twiddles_1[1])
+                            DITB::from_twiddle(twiddles_1[1])
                                 .apply_to_rows(lo_hi_lo_chunk, lo_lo_lo_chunk);
 
                             // Layer 2:
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_hi_chunk, hi_hi_lo_chunk);
-                            DitButterfly(twiddles_2[1])
+                            twiddle_free_butterfly.apply_to_rows(hi_hi_hi_chunk, hi_hi_lo_chunk);
+                            DITB::from_twiddle(twiddles_2[1])
                                 .apply_to_rows(hi_lo_hi_chunk, hi_lo_lo_chunk);
-                            DitButterfly(twiddles_2[2])
+                            DITB::from_twiddle(twiddles_2[2])
                                 .apply_to_rows(lo_hi_hi_chunk, lo_hi_lo_chunk);
-                            DitButterfly(twiddles_2[3])
+                            DITB::from_twiddle(twiddles_2[3])
                                 .apply_to_rows(lo_lo_hi_chunk, lo_lo_lo_chunk);
                         } else {
                             // Layer 0:
-                            DitButterfly(twiddles_0[ind])
+                            DITB::from_twiddle(twiddles_0[ind])
                                 .apply_to_rows(hi_hi_hi_chunk, lo_hi_hi_chunk);
-                            DitButterfly(twiddles_0[ind])
+                            DITB::from_twiddle(twiddles_0[ind])
                                 .apply_to_rows(hi_hi_lo_chunk, lo_hi_lo_chunk);
-                            DitButterfly(twiddles_0[ind])
+                            DITB::from_twiddle(twiddles_0[ind])
                                 .apply_to_rows(hi_lo_hi_chunk, lo_lo_hi_chunk);
-                            DitButterfly(twiddles_0[ind])
+                            DITB::from_twiddle(twiddles_0[ind])
                                 .apply_to_rows(hi_lo_lo_chunk, lo_lo_lo_chunk);
 
                             // Layer 1:
-                            DitButterfly(twiddles_1[2 * ind])
+                            DITB::from_twiddle(twiddles_1[2 * ind])
                                 .apply_to_rows(hi_hi_hi_chunk, hi_lo_hi_chunk);
-                            DitButterfly(twiddles_1[2 * ind])
+                            DITB::from_twiddle(twiddles_1[2 * ind])
                                 .apply_to_rows(hi_hi_lo_chunk, hi_lo_lo_chunk);
-                            DitButterfly(twiddles_1[2 * ind + 1])
+                            DITB::from_twiddle(twiddles_1[2 * ind + 1])
                                 .apply_to_rows(lo_hi_hi_chunk, lo_lo_hi_chunk);
-                            DitButterfly(twiddles_1[2 * ind + 1])
+                            DITB::from_twiddle(twiddles_1[2 * ind + 1])
                                 .apply_to_rows(lo_hi_lo_chunk, lo_lo_lo_chunk);
 
                             // Layer 2:
-                            DitButterfly(twiddles_2[4 * ind])
+                            DITB::from_twiddle(twiddles_2[4 * ind])
                                 .apply_to_rows(hi_hi_hi_chunk, hi_hi_lo_chunk);
-                            DitButterfly(twiddles_2[4 * ind + 1])
+                            DITB::from_twiddle(twiddles_2[4 * ind + 1])
                                 .apply_to_rows(hi_lo_hi_chunk, hi_lo_lo_chunk);
-                            DitButterfly(twiddles_2[4 * ind + 2])
+                            DITB::from_twiddle(twiddles_2[4 * ind + 2])
                                 .apply_to_rows(lo_hi_hi_chunk, lo_hi_lo_chunk);
-                            DitButterfly(twiddles_2[4 * ind + 3])
+                            DITB::from_twiddle(twiddles_2[4 * ind + 3])
                                 .apply_to_rows(lo_lo_hi_chunk, lo_lo_lo_chunk);
                         }
                     },
@@ -827,11 +948,16 @@ fn dit_layer_par_triple<F: Field>(
 /// - `twiddles_0`: Precomputed twiddle factors for the first layer.
 /// - `twiddles_1`: Precomputed twiddle factors for the second layer.
 #[inline]
-fn dif_layer_par_double<F: Field>(
+fn dif_layer_par_double<F, TWFB, DIFB>(
     mat: &mut RowMajorMatrixViewMut<F>,
     twiddles_0: &[F],
     twiddles_1: &[F],
-) {
+    twiddle_free_butterfly: TWFB,
+) where
+    F: Field,
+    TWFB: Butterfly<F>,
+    DIFB: Butterfly<F>,
+{
     debug_assert!(
         mat.height() % twiddles_1.len() == 0,
         "Matrix height must be divisible by the number of twiddles"
@@ -864,22 +990,25 @@ fn dif_layer_par_double<F: Field>(
                         // Do 2 layers of the DIF FFT butterfly network at once.
                         if ind == 0 {
                             // Layer 0:
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_chunk, hi_lo_chunk);
-                            DifButterfly(twiddles_0[1]).apply_to_rows(lo_hi_chunk, lo_lo_chunk);
-
-                            // Layer 1:
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_chunk, lo_hi_chunk);
-                            TwiddleFreeButterfly.apply_to_rows(hi_lo_chunk, lo_lo_chunk);
-                        } else {
-                            // Layer 0:
-                            DifButterfly(twiddles_0[2 * ind])
-                                .apply_to_rows(hi_hi_chunk, hi_lo_chunk);
-                            DifButterfly(twiddles_0[2 * ind + 1])
+                            twiddle_free_butterfly.apply_to_rows(hi_hi_chunk, hi_lo_chunk);
+                            DIFB::from_twiddle(twiddles_0[1])
                                 .apply_to_rows(lo_hi_chunk, lo_lo_chunk);
 
                             // Layer 1:
-                            DifButterfly(twiddles_1[ind]).apply_to_rows(hi_hi_chunk, lo_hi_chunk);
-                            DifButterfly(twiddles_1[ind]).apply_to_rows(hi_lo_chunk, lo_lo_chunk);
+                            twiddle_free_butterfly.apply_to_rows(hi_hi_chunk, lo_hi_chunk);
+                            twiddle_free_butterfly.apply_to_rows(hi_lo_chunk, lo_lo_chunk);
+                        } else {
+                            // Layer 0:
+                            DIFB::from_twiddle(twiddles_0[2 * ind])
+                                .apply_to_rows(hi_hi_chunk, hi_lo_chunk);
+                            DIFB::from_twiddle(twiddles_0[2 * ind + 1])
+                                .apply_to_rows(lo_hi_chunk, lo_lo_chunk);
+
+                            // Layer 1:
+                            DIFB::from_twiddle(twiddles_1[ind])
+                                .apply_to_rows(hi_hi_chunk, lo_hi_chunk);
+                            DIFB::from_twiddle(twiddles_1[ind])
+                                .apply_to_rows(hi_lo_chunk, lo_lo_chunk);
                         }
                     });
             });
@@ -898,12 +1027,17 @@ fn dif_layer_par_double<F: Field>(
 /// - `twiddles_1`: Precomputed twiddle factors for the second layer.
 /// - `twiddles_2`: Precomputed twiddle factors for the third layer.
 #[inline]
-fn dif_layer_par_triple<F: Field>(
+fn dif_layer_par_triple<F, TWFB, DIFB>(
     mat: &mut RowMajorMatrixViewMut<F>,
     twiddles_0: &[F],
     twiddles_1: &[F],
     twiddles_2: &[F],
-) {
+    twiddle_free_butterfly: TWFB,
+) where
+    F: Field,
+    TWFB: Butterfly<F>,
+    DIFB: Butterfly<F>,
+{
     debug_assert!(
         mat.height() % twiddles_2.len() == 0,
         "Matrix height must be divisible by the number of twiddles"
@@ -940,56 +1074,56 @@ fn dif_layer_par_triple<F: Field>(
                         // Do 3 layers of the DIF FFT butterfly network at once.
                         if ind == 0 {
                             // Layer 0:
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_hi_chunk, hi_hi_lo_chunk);
-                            DifButterfly(twiddles_0[1])
+                            twiddle_free_butterfly.apply_to_rows(hi_hi_hi_chunk, hi_hi_lo_chunk);
+                            DIFB::from_twiddle(twiddles_0[1])
                                 .apply_to_rows(hi_lo_hi_chunk, hi_lo_lo_chunk);
-                            DifButterfly(twiddles_0[2])
+                            DIFB::from_twiddle(twiddles_0[2])
                                 .apply_to_rows(lo_hi_hi_chunk, lo_hi_lo_chunk);
-                            DifButterfly(twiddles_0[3])
+                            DIFB::from_twiddle(twiddles_0[3])
                                 .apply_to_rows(lo_lo_hi_chunk, lo_lo_lo_chunk);
 
                             // Layer 1:
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_hi_chunk, hi_lo_hi_chunk);
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_lo_chunk, hi_lo_lo_chunk);
-                            DifButterfly(twiddles_1[1])
+                            twiddle_free_butterfly.apply_to_rows(hi_hi_hi_chunk, hi_lo_hi_chunk);
+                            twiddle_free_butterfly.apply_to_rows(hi_hi_lo_chunk, hi_lo_lo_chunk);
+                            DIFB::from_twiddle(twiddles_1[1])
                                 .apply_to_rows(lo_hi_hi_chunk, lo_lo_hi_chunk);
-                            DifButterfly(twiddles_1[1])
+                            DIFB::from_twiddle(twiddles_1[1])
                                 .apply_to_rows(lo_hi_lo_chunk, lo_lo_lo_chunk);
 
                             // Layer 2:
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_hi_chunk, lo_hi_hi_chunk);
-                            TwiddleFreeButterfly.apply_to_rows(hi_hi_lo_chunk, lo_hi_lo_chunk);
-                            TwiddleFreeButterfly.apply_to_rows(hi_lo_hi_chunk, lo_lo_hi_chunk);
-                            TwiddleFreeButterfly.apply_to_rows(hi_lo_lo_chunk, lo_lo_lo_chunk);
+                            twiddle_free_butterfly.apply_to_rows(hi_hi_hi_chunk, lo_hi_hi_chunk);
+                            twiddle_free_butterfly.apply_to_rows(hi_hi_lo_chunk, lo_hi_lo_chunk);
+                            twiddle_free_butterfly.apply_to_rows(hi_lo_hi_chunk, lo_lo_hi_chunk);
+                            twiddle_free_butterfly.apply_to_rows(hi_lo_lo_chunk, lo_lo_lo_chunk);
                         } else {
                             // Layer 0:
-                            DifButterfly(twiddles_0[4 * ind])
+                            DIFB::from_twiddle(twiddles_0[4 * ind])
                                 .apply_to_rows(hi_hi_hi_chunk, hi_hi_lo_chunk);
-                            DifButterfly(twiddles_0[4 * ind + 1])
+                            DIFB::from_twiddle(twiddles_0[4 * ind + 1])
                                 .apply_to_rows(hi_lo_hi_chunk, hi_lo_lo_chunk);
-                            DifButterfly(twiddles_0[4 * ind + 2])
+                            DIFB::from_twiddle(twiddles_0[4 * ind + 2])
                                 .apply_to_rows(lo_hi_hi_chunk, lo_hi_lo_chunk);
-                            DifButterfly(twiddles_0[4 * ind + 3])
+                            DIFB::from_twiddle(twiddles_0[4 * ind + 3])
                                 .apply_to_rows(lo_lo_hi_chunk, lo_lo_lo_chunk);
 
                             // Layer 1:
-                            DifButterfly(twiddles_1[2 * ind])
+                            DIFB::from_twiddle(twiddles_1[2 * ind])
                                 .apply_to_rows(hi_hi_hi_chunk, hi_lo_hi_chunk);
-                            DifButterfly(twiddles_1[2 * ind])
+                            DIFB::from_twiddle(twiddles_1[2 * ind])
                                 .apply_to_rows(hi_hi_lo_chunk, hi_lo_lo_chunk);
-                            DifButterfly(twiddles_1[2 * ind + 1])
+                            DIFB::from_twiddle(twiddles_1[2 * ind + 1])
                                 .apply_to_rows(lo_hi_hi_chunk, lo_lo_hi_chunk);
-                            DifButterfly(twiddles_1[2 * ind + 1])
+                            DIFB::from_twiddle(twiddles_1[2 * ind + 1])
                                 .apply_to_rows(lo_hi_lo_chunk, lo_lo_lo_chunk);
 
                             // Layer 2:
-                            DifButterfly(twiddles_2[ind])
+                            DIFB::from_twiddle(twiddles_2[ind])
                                 .apply_to_rows(hi_hi_hi_chunk, lo_hi_hi_chunk);
-                            DifButterfly(twiddles_2[ind])
+                            DIFB::from_twiddle(twiddles_2[ind])
                                 .apply_to_rows(hi_hi_lo_chunk, lo_hi_lo_chunk);
-                            DifButterfly(twiddles_2[ind])
+                            DIFB::from_twiddle(twiddles_2[ind])
                                 .apply_to_rows(hi_lo_hi_chunk, lo_lo_hi_chunk);
-                            DifButterfly(twiddles_2[ind])
+                            DIFB::from_twiddle(twiddles_2[ind])
                                 .apply_to_rows(hi_lo_lo_chunk, lo_lo_lo_chunk);
                         }
                     },
@@ -1020,7 +1154,11 @@ fn dif_layer_par_triple<F: Field>(
 /// - `skip`: `(1 << skip) - 1` is the number of entirely zero
 ///   blocks between each non zero block.
 #[inline]
-fn dif_layer_zeros<F: Field>(vec: &mut [F], twiddles: &[F], skip: usize) {
+fn dif_layer_zeros<F, DIFBZ>(vec: &mut [F], twiddles: &[F], skip: usize)
+where
+    F: Field,
+    DIFBZ: Butterfly<F>,
+{
     debug_assert_eq!(
         vec.len() % twiddles.len(),
         0,
@@ -1040,7 +1178,7 @@ fn dif_layer_zeros<F: Field>(vec: &mut [F], twiddles: &[F], skip: usize) {
             let (hi_chunk, lo_chunk) = block.split_at_mut(half_block_size);
 
             // Apply DIF butterfly making use of the fact that `lo_chunk` is zero.
-            DifButterflyZeros(twiddle).apply_to_rows(hi_chunk, lo_chunk);
+            DIFBZ::from_twiddle(twiddle).apply_to_rows(hi_chunk, lo_chunk);
         });
 }
 
