@@ -1,7 +1,6 @@
 [package]
 name = "p3-poseidon2-air"
-# TODO: Replace this generic plonky3 description with one specific to this crate...
-description.workspace = true
+description = "An AIR implementation of the Poseidon2 cryptographic hash function for use in zero-knowledge proof systems."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

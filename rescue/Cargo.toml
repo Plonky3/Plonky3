@@ -1,7 +1,6 @@
 [package]
 name = "p3-rescue"
-# TODO: Replace this generic plonky3 description with one specific to this crate...
-description.workspace = true
+description = "Implementation of the Rescue hash function and utilities."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
