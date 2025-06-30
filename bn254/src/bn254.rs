@@ -16,7 +16,7 @@ use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::helpers::{exp_bn_inv, monty_mul, to_biguint, wrapping_add, wrapping_sub};
+use crate::helpers::{exp_bn_inv, halve_bn254, monty_mul, to_biguint, wrapping_add, wrapping_sub};
 
 /// The BN254 prime represented as a little-endian array of 4-u64s.
 ///
@@ -26,6 +26,14 @@ pub(crate) const BN254_PRIME: [u64; 4] = [
     0x2833e84879b97091,
     0xb85045b68181585d,
     0x30644e72e131a029,
+];
+
+/// The BN254 prime represented as a little-endian array of 4-u64s.
+///
+/// Equal to: `21888242871839275222246405745257275088548364400416034343698204186575808495617`
+pub(crate) const BN254_PRIME_U128: [u128; 2] = [
+    0x2833e84879b9709143e1f593f0000001,
+    0x30644e72e131a029b85045b68181585d,
 ];
 
 // We use the Montgomery representation of the BN254 prime, with respect to the
@@ -280,6 +288,11 @@ impl Field for Bn254 {
     #[inline]
     fn is_zero(&self) -> bool {
         self.value.iter().all(|&x| x == 0)
+    }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        Self::new_monty(halve_bn254(self.value))
     }
 
     #[inline]

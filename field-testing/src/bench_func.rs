@@ -62,6 +62,20 @@ pub fn benchmark_mul_2exp<R: PrimeCharacteristicRing + Copy, const REPS: usize>(
     });
 }
 
+pub fn benchmark_halve<F: Field, const REPS: usize>(c: &mut Criterion, name: &str)
+where
+    StandardUniform: Distribution<F>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    let mut input = Vec::new();
+    for _ in 0..REPS {
+        input.push(rng.random::<F>())
+    }
+    c.bench_function(&format!("{name} halve. Num Reps: {REPS}"), |b| {
+        b.iter(|| input.iter_mut().for_each(|i| *i = i.halve()))
+    });
+}
+
 pub fn benchmark_div_2exp<F: Field, const REPS: usize>(c: &mut Criterion, name: &str, val: u64)
 where
     StandardUniform: Distribution<F>,
