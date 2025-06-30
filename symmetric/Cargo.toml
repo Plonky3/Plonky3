@@ -1,7 +1,6 @@
 [package]
 name = "p3-symmetric"
-# TODO: Replace this generic plonky3 description with one specific to this crate...
-description.workspace = true
+description = "A modular framework for symmetric cryptographic primitives."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

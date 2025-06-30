@@ -1,7 +1,6 @@
 [package]
 name = "p3-commit"
-# TODO: Replace this generic plonky3 description with one specific to this crate...
-description.workspace = true
+description = "A framework for implementing various cryptographic commitment schemes, including non-hiding variants."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

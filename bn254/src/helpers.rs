@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use num_bigint::BigUint;
 use p3_field::Field;
 
-use crate::{BN254_MONTY_MU, BN254_PRIME};
+use crate::{BN254_MONTY_MU_64, BN254_PRIME};
 
 /// Convert a fixed-size array of u64s to a BigUint.
 #[inline]
@@ -68,112 +68,178 @@ pub(crate) fn wrapping_sub<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u6
     (output, borrow)
 }
 
-/// Simple big-num widening multiplication.
+/// Compute a * b with a in the range 0..2^256 and b in the range 0..2^64.
+///
+/// Returns the lowest output limb and the remaining limbs in a 4-limb array.
 #[inline]
-fn widening_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 8] {
-    // TODO: This is the key component of the Montgomery multiplication algorithm so we should look into it
-    // for optimizations in the future.
-    // Could try a Karatsuba approach?
-    let mut output = [0_u64; 8];
-    let mut overflow;
+pub(crate) fn mul_small(lhs: [u64; 4], rhs: u64) -> (u64, [u64; 4]) {
+    let mut output = [0u64; 4];
+    let mut acc;
 
-    for i in 0..4 {
-        let mut carry = 0_u128;
-        for j in 0..4 {
-            // prod_u128 <= (2^64 - 1)^2 <= 2^128 - 2^65 + 1
-            let prod_u128 = lhs[i] as u128 * rhs[j] as u128;
+    // Process the first limb separately to get the lowest output limb.
+    acc = (lhs[0] as u128) * (rhs as u128);
+    let out_0 = acc as u64;
 
-            // carry < 2^64 so this sum is < 2^128 - 1.
-            carry += prod_u128;
+    // acc < 2^64
+    acc >>= 64;
 
-            // Get bottom 64 bits of carry and add into output accumulator.
-            let lo = carry as u64;
-            (output[i + j], overflow) = output[i + j].overflowing_add(lo);
+    // Process the remaining limbs.
+    for i in 1..4 {
+        // Product of u64's < 2^128 - 2^64 so this addition will not overflow.
+        acc += (lhs[i] as u128) * (rhs as u128);
+        output[i - 1] = acc as u64;
 
-            // Move top bits down. As carry < 2^128 - 1, after this reduction and
-            // addition it is < 2^64 - 1.
-            carry >>= 64;
-            carry += overflow as u128;
-        }
-        // As i is increasing, `output[i + 4]` currently stores a 0.
-        output[i + 4] = carry as u64;
+        // acc < 2^64
+        acc >>= 64;
     }
-    output
+    output[3] = acc as u64;
+
+    (out_0, output)
 }
 
-/// Multiplication of big-nums mod `2^256`.
+/// Compute a * b + c with a, c in the range 0..2^256 and b in the range 0..2^64.
 ///
-/// Lets us avoid multiplication we know will result in a multiple of `2^256`.
+/// Returns the lowest output limb and the remaining limbs in a 4-limb array.
 #[inline]
-fn mul_mod_2_exp_256(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 4] {
-    let mut output = [0_u64; 4];
+pub(crate) fn mul_small_and_acc(lhs: [u64; 4], rhs: u64, add: [u64; 4]) -> (u64, [u64; 4]) {
+    let mut output = [0u64; 4];
+    let mut acc;
 
-    // As we are working mod `2^256`, we can simplify some of our computations and ignore some carries.
-    let limb0 = (lhs[0] as u128) * (rhs[0] as u128);
-    output[0] = limb0 as u64;
+    // Process the first limb separately to get the lowest output limb.
+    acc = (lhs[0] as u128) * (rhs as u128) + (add[0] as u128);
+    let out_0 = acc as u64;
 
-    // Note that the first add cannot overflow as (limb0 >> 64) < 2^64 and any product of u64's is
-    // less than or equal to 2^128 - 2^65 + 1.
-    let (limb1, carry) = (limb0 >> 64)
-        .wrapping_add((lhs[0] as u128) * (rhs[1] as u128))
-        .overflowing_add((lhs[1] as u128) * (rhs[0] as u128));
-    output[1] = limb1 as u64;
+    // acc < 2^64
+    acc >>= 64;
 
-    // Overflow does not matter for limb2 as the overflow is > 2^256.
-    let limb2 = ((limb1 >> 64) + ((carry as u128) << 64))
-        .wrapping_add((lhs[0] as u128) * (rhs[2] as u128))
-        .wrapping_add((lhs[1] as u128) * (rhs[1] as u128))
-        .wrapping_add((lhs[2] as u128) * (rhs[0] as u128));
-    output[2] = limb2 as u64;
+    // Process the remaining limbs.
+    for i in 1..4 {
+        // Product of u64's < 2^128 - 2^64 so this addition will not overflow.
+        acc += (lhs[i] as u128) * (rhs as u128) + (add[i] as u128);
+        output[i - 1] = acc as u64;
 
-    // For limb3 we can work with everything as u64s.
-    output[3] = ((limb2 >> 64) as u64)
-        .wrapping_add(lhs[0].wrapping_mul(rhs[3]))
-        .wrapping_add(lhs[1].wrapping_mul(rhs[2]))
-        .wrapping_add(lhs[2].wrapping_mul(rhs[1]))
-        .wrapping_add(lhs[3].wrapping_mul(rhs[0]));
+        // acc < 2^64
+        acc >>= 64;
+    }
+    output[3] = acc as u64;
 
-    output
+    (out_0, output)
 }
 
-/// Montgomery multiplication and reduction algorithm for BN254.
+// Interleaved Montgomery multiplication:
+//
+// When working with Big-Nums where the base multiplication is expensive, we
+// use a variant of montgomery multiplication which is more efficient. The idea
+// is to interleave the multiplication and reduction steps which lets us
+// avoid the need for Big-Num x Big-Num multiplications.
+//
+// Let P be our prime and `mu = P^{-1} mod 2^64`.
+// The Interleaved Montgomery reduction (IMR) algorithm takes as input 320-bit number `x`
+// and returns a 256-bit number equal to `2^{-64}x mod P`.
+//
+// 1. Define `t = x * mu mod 2^64`.
+// 2. Define `u = t * P`.
+// 3. Define `sub = (x - u) / 2^{64}`.
+// 4. If `sub < 0`, return `sub + P` else return `sub`.
+//
+// The division in step 3 is exact as `u mod 2^64 = t * P mod 2^64 = x * mu * P mod 2^64 = t mod 2^64`.
+// Additionally note that the output is `< P` if `sub < 0` and otherwise is `< x/2^{64}`. Hence if we assume
+// that `x < 2^{64}P`, then the output is always `< P`.
+//
+// We will apply this algorithm 4 times, once for each limb of the input number.
+// Given two inputs x, y, we compute `x * y * 2^{-256} mod P` as follows:
+// 1. Compute `acc0 = x * y[0]` and `res0 = IMR(acc0)`.
+// 2. Compute `acc1 = x * y[1] + res0` and `res1 = IMR(acc1)`.
+// 3. Compute `acc2 = x * y[2] + res1` and `res2 = IMR(acc2)`.
+// 4. Compute `acc3 = x * y[3] + res2` and `res3 = IMR(acc3)`.
+// 5. Return `res3`.
+//
+// Assume that x < P. (We make no assumptions about y). Then `res0 < P` as either `sub < 0` or
+// `res0 < x * y[0]/(2^{64})` and `y[0] < 2^64`.
+//
+// Now assume that `resi < P`. Then `res{i+1} < P` as either `sub < 0` or
+// `res{i+1} < (x * y[i+1] + resi)/(2^{64}) < P * (y[i+1] + 1)/(2^{64}) < P`.
+//
+// Hence by induction we have `res3 < P`.
+
 ///
-/// Uses the montgomery constant `2^256` making division free as we can
-/// simply ignore the bottom 4 u64s.
-///
-/// Assuming the product of the inputs is less than `2^256 P`, the output
-/// will be less than `P`. In particular this means we only need to
-/// assume that one of the inputs is less than `P` as both inputs are
-/// trivially less than `2^256`.
+/// The incoming number is split into 5 64-bit limbs with the
+/// first limb separated out as it will be treated differently.
 #[inline]
-pub(crate) fn monty_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 4] {
-    // TODO: It's likely worth it to remove the 'prod' variable here
-    // and instead have this function simply do the monty reduction.
-    // This allows us to compute the product elsewhere which will be
-    // cheaper in some cases.
-    // There may also be a cleverer algorithm (interleaved Montgomery multiplication)
-    // which lets us do four smaller monty reductions instead of one big one
-    // and avoids all the widening multiplications.
-    let prod = widening_mul(lhs, rhs);
+fn interleaved_monty_reduction(acc0: u64, acc: [u64; 4]) -> [u64; 4] {
+    let t = acc0.wrapping_mul(BN254_MONTY_MU_64);
+    let (_, u) = mul_small(BN254_PRIME, t);
 
-    let prod_lo: [u64; 4] = prod[..4].try_into().unwrap();
-    let prod_hi: [u64; 4] = prod[4..].try_into().unwrap();
-
-    let t_lo = mul_mod_2_exp_256(prod_lo, BN254_MONTY_MU);
-
-    // TODO: For u, we only actually need the top 4 u64s.
-    // It may be possible to use a simpler multiplication
-    // algorithm.
-    let u = widening_mul(t_lo, BN254_PRIME);
-    let u_hi: [u64; 4] = u[4..].try_into().unwrap();
-
-    let (sub, over) = wrapping_sub(prod_hi, u_hi);
-    if over {
+    let (sub, under) = wrapping_sub::<4>(acc, u);
+    if under {
         let (sub_corr, _) = wrapping_add(sub, BN254_PRIME);
         sub_corr
     } else {
         sub
     }
+}
+
+/// Montgomery multiplication and reduction algorithm for BN254.
+///
+/// The algorithm assumes that `lhs < P` but puts no constraints on `rhs`.
+///
+/// The output is a 4-limb array representing the result of `lhs * rhs * 2^{-256} mod P`
+/// guaranteed to be in the range `[0, P)`.
+#[inline]
+pub(crate) fn monty_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 4] {
+    // We need to ensure that `lhs < P` otherwise it's possible for the
+    // algorithm to fail and produce a value which is too large.
+    debug_assert!(lhs.iter().rev().cmp(BN254_PRIME.iter().rev()) == core::cmp::Ordering::Less);
+
+    // Our accumulator starts at 0 so we start with mul_small
+    let (acc0, acc) = mul_small(lhs, rhs[0]);
+    let res0 = interleaved_monty_reduction(acc0, acc);
+
+    // Then we repeat the above process for the remaining rhs limbs
+    // including the previous result as an accumulator.
+    let (acc0, acc) = mul_small_and_acc(lhs, rhs[1], res0);
+    let res1 = interleaved_monty_reduction(acc0, acc);
+    let (acc0, acc) = mul_small_and_acc(lhs, rhs[2], res1);
+    let res2 = interleaved_monty_reduction(acc0, acc);
+    let (acc0, acc) = mul_small_and_acc(lhs, rhs[3], res2);
+    interleaved_monty_reduction(acc0, acc)
+}
+
+/// The BN254 prime represented as a little-endian array of 2-u128s.
+///
+/// Equal to: `21888242871839275222246405745257275088548364400416034343698204186575808495617`
+const BN254_PRIME_U128: [u128; 2] = [
+    0x2833e84879b9709143e1f593f0000001,
+    0x30644e72e131a029b85045b68181585d,
+];
+
+/// Efficiently halve a Bn254 element.
+#[inline]
+pub(crate) fn halve_bn254(mut input: [u64; 4]) -> [u64; 4] {
+    // Seems to be a little faster to convert into u128s.
+    // It's essentially identical under the hood so this is
+    // likely just helping the compiler generate simpler assembly somehow.
+    let mut input0_u128 = (input[1] as u128) << 64 | (input[0] as u128);
+    let mut input1_u128 = (input[3] as u128) << 64 | (input[2] as u128);
+    let carry;
+
+    if input0_u128 & 1 == 1 {
+        // If the element is odd, we add P.
+        (input0_u128, carry) = input0_u128.overflowing_add(BN254_PRIME_U128[0]);
+        // Can ignore overflow here as the sum is < 2^256.
+        input1_u128 = input1_u128.wrapping_add(BN254_PRIME_U128[1]);
+        input1_u128 = input1_u128.wrapping_add(carry as u128);
+    }
+
+    // As this point the element is guaranteed to be even so we just
+    // need to shift down by 1.
+    let carry_bit = (input1_u128 << 63) as u64;
+
+    input[0] = (input0_u128 >> 1) as u64;
+    input[1] = (input0_u128 >> 65) as u64 | carry_bit;
+    input[2] = (input1_u128 >> 1) as u64;
+    input[3] = (input1_u128 >> 65) as u64;
+    input
 }
 
 /// Compute `base^{2^num_sq} * mul`

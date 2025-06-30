@@ -1,7 +1,6 @@
 [package]
 name = "p3-monty-31"
-# TODO: Replace this generic plonky3 description with one specific to this crate...
-description.workspace = true
+description = "An implementation of a generic prime field F_p, where 2^30 < p < 2^31 using Montgomery arithmetic."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

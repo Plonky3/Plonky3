@@ -1,6 +1,6 @@
 [package]
 name = "p3-baby-bear"
-description.workspace = true
+description = "An implementation of the Babybear prime field F_p, where p = 2^31 - 2^27 + 1."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

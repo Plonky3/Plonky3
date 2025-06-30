@@ -214,7 +214,7 @@ where
 #[inline]
 pub fn report_result(result: Result<(), impl Debug>) {
     if let Err(e) = result {
-        panic!("{:?}", e);
+        panic!("{e:?}");
     } else {
         println!("Proof Verified Successfully")
     }
