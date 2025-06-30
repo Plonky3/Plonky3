@@ -162,7 +162,6 @@ pub(crate) fn mul_small_and_acc(lhs: [u64; 4], rhs: u64, add: [u64; 4]) -> (u64,
 //
 // Hence by induction we have `res3 < P`.
 
-///
 /// The incoming number is split into 5 64-bit limbs with the
 /// first limb separated out as it will be treated differently.
 #[inline]
