@@ -16,9 +16,7 @@ use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::helpers::{
-    gcd_inversion, halve_bn254, monty_mul, to_biguint, wrapping_add, wrapping_sub,
-};
+use crate::helpers::{gcd_inversion, monty_mul, to_biguint, wrapping_add, wrapping_sub};
 
 /// The BN254 prime represented as a little-endian array of 4-u64s.
 ///
@@ -282,11 +280,6 @@ impl Field for Bn254 {
     #[inline]
     fn is_zero(&self) -> bool {
         self.value.iter().all(|&x| x == 0)
-    }
-
-    #[inline]
-    fn halve(&self) -> Self {
-        Self::new_monty(halve_bn254(self.value))
     }
 
     #[inline]

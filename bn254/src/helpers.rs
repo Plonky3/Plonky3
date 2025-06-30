@@ -204,23 +204,6 @@ pub(crate) fn monty_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 4] {
     interleaved_monty_reduction(acc0, acc)
 }
 
-/// Halve
-#[inline]
-pub(crate) fn halve_bn254(mut input: [u64; 4]) -> [u64; 4] {
-    if input[0] & 1 == 1 {
-        (input, _) = wrapping_add(input, BN254_PRIME);
-    }
-    let bot_bit_1 = input[1] << 63;
-    let bot_bit_2 = input[2] << 63;
-    let bot_bit_3 = input[3] << 63;
-
-    input[0] = (input[0] >> 1) | bot_bit_1;
-    input[1] = (input[1] >> 1) | bot_bit_2;
-    input[2] = (input[2] >> 1) | bot_bit_3;
-    input[3] >>= 1;
-    input
-}
-
 // The following approach to a GCD based inversion algorithm is taken from here: https://eprint.iacr.org/2020/972.pdf
 // Explicitly, we implement Algorithm 2, roughly following the C implementation linked in that paper (in section 3).
 // The algorithm is a variant of the Binary Extended Euclidean Algorithm which, allows for most of the iterations to
