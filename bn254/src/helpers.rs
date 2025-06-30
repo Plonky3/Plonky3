@@ -205,6 +205,43 @@ pub(crate) fn monty_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 4] {
     interleaved_monty_reduction(acc0, acc)
 }
 
+/// The BN254 prime represented as a little-endian array of 2-u128s.
+///
+/// Equal to: `21888242871839275222246405745257275088548364400416034343698204186575808495617`
+const BN254_PRIME_U128: [u128; 2] = [
+    0x2833e84879b9709143e1f593f0000001,
+    0x30644e72e131a029b85045b68181585d,
+];
+
+/// Efficiently halve a Bn254 element.
+#[inline]
+pub(crate) fn halve_bn254(mut input: [u64; 4]) -> [u64; 4] {
+    // Seems to be a little faster to convert into u128s.
+    // It's essentially identical under the hood so this is
+    // likely just helping the compiler generate simpler assembly somehow.
+    let mut input0_u128 = (input[1] as u128) << 64 | (input[0] as u128);
+    let mut input1_u128 = (input[3] as u128) << 64 | (input[2] as u128);
+    let carry;
+
+    if input0_u128 & 1 == 1 {
+        // If the element is odd, we add P.
+        (input0_u128, carry) = input0_u128.overflowing_add(BN254_PRIME_U128[0]);
+        // Can ignore overflow here as the sum is < 2^256.
+        input1_u128 = input1_u128.wrapping_add(BN254_PRIME_U128[1]);
+        input1_u128 = input1_u128.wrapping_add(carry as u128);
+    }
+
+    // As this point the element is guaranteed to be even so we just
+    // need to shift down by 1.
+    let carry_bit = (input1_u128 << 63) as u64;
+
+    input[0] = (input0_u128 >> 1) as u64;
+    input[1] = (input0_u128 >> 65) as u64 | carry_bit;
+    input[2] = (input1_u128 >> 1) as u64;
+    input[3] = (input1_u128 >> 65) as u64;
+    input
+}
+
 /// Compute `base^{2^num_sq} * mul`
 #[inline]
 fn sq_and_mul<F: Field>(base: F, num_sq: usize, mul: F) -> F {
