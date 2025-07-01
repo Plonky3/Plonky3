@@ -630,43 +630,71 @@ pub const fn relatively_prime_u64(mut u: u64, mut v: u64) -> bool {
 /// Inverts elements inside the prime field `F_P` with `P < 2^FIELD_BITS`.
 ///
 /// Arguments:
-///  - a: The value we want to invert.
-///  - b: The value of the prime P.
+///  - a: The value we want to invert. It must be < P.
+///  - b: The value of the prime `P > 2`.
 ///
 /// Output:
 /// - A `64` bit signed integer `v` equal to `2^{2 * FIELD_BITS - 2} a^{-1} mod P` with
 ///   size `|v| < 2^{2 * FIELD_BITS - 2}`.
+///
+/// It is up to the user to ensure that `b` is an odd prime with at most `FIELD_BITS` bits and
+/// `a < b`. If either of these assumptions break, the output is undefined.
 #[inline]
 pub fn gcd_inversion_prime_field_32<const FIELD_BITS: u32>(mut a: u32, mut b: u32) -> i64 {
     assert!(FIELD_BITS <= 32);
+    debug_assert!(((1_u64 << FIELD_BITS) - 1) >= b as u64);
+
     // Initialise u, v. Note that |u|, |v| <= 2^0
     let (mut u, mut v) = (1_i64, 0_i64);
 
+    // Let a0 and P denote the initial values of a and b. Observe:
+    // `a = u * a0 mod P`
+    // `b = v * a0 mod P`
+    // `len(a) + len(b) <= 2 * len(P) <= 2 * FIELD_BITS`
+
     for _ in 0..(2 * FIELD_BITS - 2) {
-        // Assume at the start of the loop i: |u|, |v| <= 2^{i}
-        if a & 1 == 0 {
-            a >>= 1
-        } else {
+        // Assume at the start of the loop i:
+        // (1) `|u|, |v| <= 2^{i}`
+        // (2) `2^i * a = u * a0 mod P`
+        // (3) `2^i * b = v * a0 mod P`
+        // (4) `gcd(a, b) = 1`
+        // (5) `b` is odd.
+        // (6) `len(a) + len(b) <= max(n - i, 1)`
+
+        if a & 1 != 0 {
             if a < b {
                 (a, b) = (b, a);
                 (u, v) = (v, u);
             }
+            // As b < a, this subtraction cannot increase `len(a) + len(b)`
             a -= b;
-            a >>= 1;
-
             // Observe |u'| = |u - v| <= |u| + |v| <= 2^{i + 1}
             u -= v;
+
+            // As (1) and (2) hold, we have
+            // `2^i a' = 2^i * (a - b) = (u - v) * a0 mod P = u' * a0 mod P`
         }
+        // As b is odd, a must now be even.
+        // This reduces `len(a) + len(b)` by 1 (unless `a = 0` in which case `b = 1` and the sum of the lengths is always 1)
+        a >>= 1;
+
         // Observe |v'| = 2|v| <= 2^{i + 1}
         v <<= 1;
 
-        // Thus as the end of loop i: |u|, |v| <= 2^{i + 1}
+        // Thus as the end of loop i:
+        // (1) `|u|, |v| <= 2^{i + 1}`
+        // (2) `2^{i + 1} * a = u * a0 mod P`  (As we have halved a)
+        // (3) `2^{i + 1} * b = v * a0 mod P`  (As we have doubled v)
+        // (4) `gcd(a, b) = 1`
+        // (5) `b` is odd.
+        // (6) `len(a) + len(b) <= max(n - i - 1, 1)`
     }
 
-    // After the loops, we see that
-    // |u|, |v| <= 2^{2 * FIELD_BITS - 2}
-    // Hence for FIELD_BITS <= 32 we will not overflow an i64.
-
+    // After the loops, we see that:
+    // |u|, |v| <= 2^{2 * FIELD_BITS - 2}: Hence for FIELD_BITS <= 32 we will not overflow an i64.
+    // `2^{2 * FIELD_BITS - 2} * b = v * a0 mod P`
+    // `len(a) + len(b) <= 2` with `gcd(a, b) = 1` and `b` odd.
+    // This implies that `b` must be `1` and so `v = 2^{2 * FIELD_BITS - 2} a0^{-1} mod P` as desired.
     v
 }
 

@@ -278,8 +278,11 @@ impl Field for Mersenne31 {
             return None;
         }
 
+        // Number of bits in the Mersenne31 prime.
+        const NUM_PRIME_BITS: u32 = 31;
+
         // gcd_inversion returns the inverse multiplied by 2^60 so we need to correct for that.
-        let inverse_i64 = gcd_inversion_prime_field_32::<31>(self.value, P);
+        let inverse_i64 = gcd_inversion_prime_field_32::<NUM_PRIME_BITS>(self.value, P);
         Some(Self::from_int(inverse_i64).div_2exp_u64(60))
     }
 
