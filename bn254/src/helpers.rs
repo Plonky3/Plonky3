@@ -1,11 +1,10 @@
 use alloc::vec::Vec;
 
 use num_bigint::BigUint;
-use p3_field::Field;
 
 use crate::{BN254_MONTY_MU_64, BN254_PRIME};
 
-/// Convert a fixed-size array of u64s to a BigUint.
+/// Convert a fixed-size array of u64s (little-endian) to a BigUint.
 #[inline]
 pub(crate) fn to_biguint<const N: usize>(value: [u64; N]) -> BigUint {
     let bytes: Vec<u8> = value.iter().flat_map(|x| x.to_le_bytes()).collect();
@@ -162,7 +161,6 @@ pub(crate) fn mul_small_and_acc(lhs: [u64; 4], rhs: u64, add: [u64; 4]) -> (u64,
 //
 // Hence by induction we have `res3 < P`.
 
-///
 /// The incoming number is split into 5 64-bit limbs with the
 /// first limb separated out as it will be treated differently.
 #[inline]
@@ -231,7 +229,7 @@ pub(crate) fn halve_bn254(mut input: [u64; 4]) -> [u64; 4] {
         input1_u128 = input1_u128.wrapping_add(carry as u128);
     }
 
-    // As this point the element is guaranteed to be even so we just
+    // At this point the element is guaranteed to be even so we just
     // need to shift down by 1.
     let carry_bit = (input1_u128 << 63) as u64;
 
@@ -242,88 +240,300 @@ pub(crate) fn halve_bn254(mut input: [u64; 4]) -> [u64; 4] {
     input
 }
 
-/// Compute `base^{2^num_sq} * mul`
+/// Find the size (number of bits) of val.
+///
+/// Return `num_bits / 64` and `num_bits % 64`
+///
+/// This assumes that val is actually a 256 bit number and we simply have the top 192 bits.
+/// The bottom 64 bits are assumed to all be non zero so the "smallest" `num_bits` output this
+/// will give is `num_bits = 64` or `(1, 0)`.
+///
+/// This is slightly more complicated than necessary but avoid if statements and so
+/// is impervious to side-channel attacks. This isn't strictly necessary but it makes no
+/// difference to speed and the rest of the algorithm has this property so we preserve it
+/// here.
 #[inline]
-fn sq_and_mul<F: Field>(base: F, num_sq: usize, mul: F) -> F {
-    base.exp_power_of_2(num_sq) * mul
+fn num_bits(limb_1: u64, limb_2: u64, limb_3: u64) -> (usize, usize) {
+    // For each limb, find the number of leading zeros and subtract from 64.
+    // `num_bits % 64` is equal to the `v` corresponding to the largest non-zero limb.
+    let v3 = 64 - (limb_3.leading_zeros() as i64);
+    let v2 = 64 - (limb_2.leading_zeros() as i64);
+    let v1 = 64 - (limb_1.leading_zeros() as i64);
+
+    // `limb_i` equals 0 if and only if there are 64 leading zeros meaning that `v_i` is 0.
+    // Hence `(-vi) >> 63` is `-1` if `limb_i` is non-zero and `0` otherwise.
+    // If `vi` is non-zero, then set all lower `v`'s to zero.
+    let v3_non_0 = (-v3) >> 63;
+    let v2_non_0 = ((-v2) >> 63) & (!v3_non_0);
+    let v1_non_0 = ((-v1) >> 63) & (!v3_non_0) & (!v2_non_0);
+
+    // As only one of `v1_non_0`, `v2_non_0`, `v3_non_0` can be non-zero and whichever one is
+    // non-zero is equal to `-1` we can use these to compute `num_bits / 64` and `num_bits % 64`.
+    let limb = (1 - v2_non_0 - (v3_non_0 << 1)) as usize;
+    let bits_mod_64 = ((v3_non_0 & v3) | (v2_non_0 & v2) | (v1_non_0 & v1)) as usize;
+
+    (limb, bits_mod_64)
 }
 
-/// Invert an element in the BN254 field using addition chain exponentiation.
+/// Get the bottom `31` bits of val along with the top `33` bits starting from the `n`-th bit.
 ///
-/// Explicitly this function computes the exponential map:
-/// `x -> x^21888242871839275222246405745257275088548364400416034343698204186575808495615`.
+/// `n` is given by `limb = n / 64` and `bits_mod_64 = n % 64` for convenience.
 #[inline]
-pub(crate) fn exp_bn_inv<F: Field>(val: F) -> F {
-    // Note the binary expansion: 21888242871839275222246405745257275088548364400416034343698204186575808495615
-    //  = 1100000110010001001110011100101110000100110001101000000010100110111000010100000100010110110110100000
-    //       0110000001010110000101110100101000001100111110100001001000011110011011100101110000100100010100001
-    //       111100001111101011001001111101111111111111111111111111111.
-    // This uses 251 Squares + 56 Multiplications => 307 Operations total.
-    // It is likely that this could be improved through further effort.
+fn get_approximation(val: [u64; 4], limb: usize, bits_mod_64: usize) -> u64 {
+    // Assuming that our machine is 64-bits, half the word size will be 32 bits.
+    // This is the largest possible value which ensures our output fits inside
+    // a single word.
+    const HALF_WORD_SIZE: usize = 32;
 
-    // The basic idea we follow here is to create some simple binary building blocks to save on multiplications.
-    let p1 = val;
-    let p10 = p1.square();
-    let p11 = p10 * p1;
-    let p101 = p11 * p10;
-    let p111 = p101 * p10;
-    let p1111 = sq_and_mul(p111, 1, p1);
-    let p11111 = sq_and_mul(p1111, 1, p1);
-    let p1111100 = p11111.exp_power_of_2(2);
-    let p1111101 = p1111100 * p1;
-    let p1111111 = p1111101 * p10;
-    let p10000001 = p1111111 * p10;
-    let mut output = sq_and_mul(p10000001, 1, p10000001);
+    // Get the bottom HALF_WORD_SIZE - 1 bits.
+    let bottom_bits = val[0] & ((1 << (HALF_WORD_SIZE - 1)) - 1);
 
-    // output now agrees with the first 9 digits of the binary expansion. We just have to do the
-    // remaining 245...
+    // Stored as a u128 but all bits above 64 + bits_mod_64 are guaranteed to be zero.
+    let joined_limb = ((val[limb] as u128) << 64) | (val[limb - 1] as u128);
 
-    output = sq_and_mul(output, 3, p1); // 001
-    output = sq_and_mul(output, 4, p1); // 0001
-    output = sq_and_mul(output, 5, p111); // 00111
-    output = sq_and_mul(output, 5, p111); // 00111
-    output = sq_and_mul(output, 3, p1); // 001
-    output = sq_and_mul(output, 4, p111); // 0111
-    output = sq_and_mul(output, 5, p1); // 00001
-    output = sq_and_mul(output, 4, p11); // 0011
-    output = sq_and_mul(output, 5, p11); // 00011
-    output = sq_and_mul(output, 2, p1); // 01
-    output = sq_and_mul(output, 10, p101); // 0000000101
-    output = sq_and_mul(output, 4, p11); // 0011
-    output = sq_and_mul(output, 4, p111); // 0111
-    output = sq_and_mul(output, 7, p101); // 0000101
-    output = sq_and_mul(output, 6, p1); // 000001
-    output = sq_and_mul(output, 6, p101); // 000101
-    output = sq_and_mul(output, 3, p101); // 101
-    output = sq_and_mul(output, 3, p101); // 101
-    output = sq_and_mul(output, 3, p101); // 101
-    output = sq_and_mul(output, 8, p11); // 00000011
-    output = sq_and_mul(output, 9, p101); // 000000101
-    output = sq_and_mul(output, 3, p11); // 011
-    output = sq_and_mul(output, 5, p1); // 00001
-    output = sq_and_mul(output, 4, p111); // 0111
-    output = sq_and_mul(output, 2, p1); // 01
-    output = sq_and_mul(output, 5, p101); // 00101
-    output = sq_and_mul(output, 7, p11); // 0000011
-    output = sq_and_mul(output, 9, p1111101); // 001111101
-    output = sq_and_mul(output, 5, p1); // 00001
-    output = sq_and_mul(output, 3, p1); // 001
-    output = sq_and_mul(output, 8, p1111); // 00001111
-    output = sq_and_mul(output, 4, p11); // 0011
-    output = sq_and_mul(output, 4, p111); // 0111
-    output = sq_and_mul(output, 3, p1); // 001
-    output = sq_and_mul(output, 4, p111); // 0111
-    output = sq_and_mul(output, 5, p1); // 00001
-    output = sq_and_mul(output, 3, p1); // 001
-    output = sq_and_mul(output, 6, p101); // 000101
-    output = sq_and_mul(output, 9, p11111); // 000011111
-    output = sq_and_mul(output, 11, p1111101); // 00001111101
-    output = sq_and_mul(output, 3, p11); // 011
-    output = sq_and_mul(output, 3, p1); // 001
-    output = sq_and_mul(output, 7, p11111); // 0011111
-    output = sq_and_mul(output, 8, p1111111); // 01111111
-    output = sq_and_mul(output, 7, p1111111); // 1111111
-    output = sq_and_mul(output, 7, p1111111); // 1111111
-    output = sq_and_mul(output, 7, p1111111); // 1111111
+    // Extract the top `HALF_WORD_SIZE + 1` bits.
+    let top_bits = (joined_limb >> (bits_mod_64 + 64 - (HALF_WORD_SIZE + 1))) as u64;
+
+    (top_bits << (HALF_WORD_SIZE - 1)) | bottom_bits
+}
+
+/// Negate a (in the 2's complement sense) if sign is `-1 = 2^64 - 1`
+/// Leave a unchanged if sign is `0`.
+///
+/// Sign is assumed to be either `0` or `-1`.
+#[inline]
+fn conditional_neg(a: &mut [u64; 4], sign: u64) {
+    let mut carry;
+    (a[0], carry) = (a[0] ^ sign).overflowing_add((-(sign as i64)) as u64);
+    (a[1], carry) = (a[1] ^ sign).overflowing_add(carry as u64);
+    (a[2], carry) = (a[2] ^ sign).overflowing_add(carry as u64);
+    (a[3], _) = (a[3] ^ sign).overflowing_add(carry as u64);
+}
+
+/// Compute the linear combination `af + bg` where `a, b` are `256-bit` positive integers
+/// and `f, g` are 64-bit signed integers.
+///
+/// The result is a 320-bit signed integer represented as 4 64-bit limbs of positive integers
+/// and an i64 for the highest limb.
+#[inline]
+fn linear_comb_signed(a: [u64; 4], b: [u64; 4], f: i64, g: i64) -> ([u64; 4], i64) {
+    let mut output = [0_u64; 4];
+    let mut carry = (a[0] as i128) * (f as i128) + (b[0] as i128) * (g as i128);
+    output[0] = carry as u64;
+    carry >>= 64;
+    for i in 1..4 {
+        carry += (a[i] as i128) * (f as i128) + (b[i] as i128) * (g as i128);
+        output[i] = carry as u64;
+        carry >>= 64;
+    }
+
+    (output, carry as i64)
+}
+
+/// Compute the linear combination `af + bg` where `a, b` are `256-bit` positive integers
+/// and `f, g` are `64-bit` positive integers.
+#[inline]
+fn linear_comb_unsigned(a: [u64; 4], b: [u64; 4], f: u64, g: u64) -> [u64; 5] {
+    let mut output = [0_u64; 5];
+    let mut carry = (a[0] as u128) * (f as u128) + (b[0] as u128) * (g as u128);
+    output[0] = carry as u64;
+    carry >>= 64;
+    for i in 1..4 {
+        carry += (a[i] as u128) * (f as u128) + (b[i] as u128) * (g as u128);
+        output[i] = carry as u64;
+        carry >>= 64;
+    }
+    output[4] = carry as u64;
+
     output
+}
+
+/// Compute the linear combination `(af + bg)/2^k` where `a, b` are `256-bit` integers and `f, g` are `64-bit` integers.
+/// The division is assumed to be exact and the result is assumed to fit in a `256-bit` integer.
+///
+/// If the output would be negative, it is negated using 2's complement. A i64 is returned indicating
+/// if the negation was applied. The i64 is `-1` if the output was negated `0` otherwise.
+#[inline]
+fn linear_comb_div(a: [u64; 4], b: [u64; 4], f: i64, g: i64, k: usize) -> ([u64; 4], i64) {
+    let (product, hi_limb) = linear_comb_signed(a, b, f, g);
+
+    let mut output = [0_u64; 4];
+
+    // Now we apply the division by 2^k.
+    output[0] = (product[0] >> k) | (product[1] << (64 - k));
+    output[1] = (product[1] >> k) | (product[2] << (64 - k));
+    output[2] = (product[2] >> k) | (product[3] << (64 - k));
+    output[3] = (product[3] >> k) | ((hi_limb << (64 - k)) as u64);
+
+    // Finally, if the result is negative, we negate it.
+    let sign = hi_limb >> 63;
+    conditional_neg(&mut output, sign as u64);
+    (output, sign)
+}
+
+#[inline]
+fn linear_comb_monty_red(a: [u64; 4], b: [u64; 4], f: i64, g: i64) -> [u64; 4] {
+    // Get the signs and absolute values of f and g
+    let s_f = f >> 63;
+    let s_g = g >> 63;
+    let abs_f = f.unsigned_abs();
+    let abs_g = g.unsigned_abs();
+
+    // If we need to invert, we can easily invert a, b by subtracting from P.
+    let (a_sub, _) = wrapping_sub(BN254_PRIME, a);
+    let a_signed = if s_f == -1 { a_sub } else { a };
+    let (b_sub, _) = wrapping_sub(BN254_PRIME, b);
+    let b_signed = if s_g == -1 { b_sub } else { b };
+
+    let product = linear_comb_unsigned(a_signed, b_signed, abs_f, abs_g);
+    interleaved_monty_reduction(product[0], product[1..].try_into().unwrap())
+}
+
+/// An adjustment factor equal to `2^{1030} mod P`
+///
+/// Used to initialise the `u` variable in the GCD based inversion algorithm.
+/// Adjusts for monty form and accumulation of powers of 2.
+pub(crate) const BN254_2_POW_1030: [u64; 4] = [
+    0x1f7ca21e7fcb111b,
+    0x61a09399fcfe8a6c,
+    0x1438cc5aab55aedb,
+    0x020c9ba0aeb6b6c7,
+];
+
+/// Invert a value in the BN254 field using a GCD based inversion algorithm.
+///
+/// The following approach to a GCD based inversion algorithm is taken from the paper:
+/// Optimized Binary GCD for Modular Inversion by Thomas Pornin.
+/// It can be found here: https://eprint.iacr.org/2020/972.pdf
+///
+/// Explicitly, we implement Algorithm 2, roughly following the C implementation linked in that paper (in section 3).
+/// The algorithm is a variant of the Binary Extended Euclidean Algorithm which allows for most of the iterations to
+/// be performed using only u64's even in cases where the inputs are much larger.
+///
+/// This implementation is also impervious to side-channel attacks as an added bonus. In principal we could make
+/// the average case a little faster if we didn't care about this property but the worst case would be unchanged and
+/// potentially even slightly worse.
+pub(crate) fn gcd_inversion(input: [u64; 4]) -> [u64; 4] {
+    // The standard binary GCD inversion algorithm for a field `P` has
+    // a single input `input` and
+    // four internal variables: `a`, `u`, `b`, and `v`.
+    // - `a` is initialised `input`.
+    // - `u` is an element of `F_p`, stores changes to `a` and is initialised to `u0`.
+    // - `b` is initialised to `P`.
+    // - `v` is an element of `F_p`, stores changes to `b` and is initialised to 0.
+    // The key property which makes everything work is that through all rounds of the algorithm:
+    // `a * u0 = u * input mod P`
+    // `b * u0 = v * input mod P`  (Note that this holds initially as `b = v = 0 mod P`)
+    // Hence, when `a = 1`, we can conclude that `u = u0 * input^{-1} mod P`. (Similarly for `b` and `v`.)
+    //
+    // When `u0 = 1`, we get the standard inverse however this isn't actually what we want as our input
+    // is in monty form, e.g. we have `xR mod P` not `x mod P` where `R = 2^{256}`. Hence we want to
+    // compute `x^{-1}R mod P` not `x^{-1}R^{-1} mod P`. We can convert between these by
+    // multiplying by `R^2 = 2^{512} mod P`.
+    //
+    // Additionally, in our modified algorithm, `u` and `v` pick up a factor of `2` in each inner round.
+    // We do `31 * 15 + 41 = 506` inner rounds meaning we need to divide by `2^{506}`.
+    // Finally, each call to `linear_comb_monty_red`, divides by `2^64`. We call this `16` times,
+    // once in every outer loop so to correct for this we need to multiply by `2^{16 * 64}`.
+    //
+    // Overall this means we want `u0` to equal `2^{512 - 506 + 16 * 64} = 2^{1030} mod P`.
+    let (mut a, mut u, mut b, mut v) = (input, BN254_2_POW_1030, BN254_PRIME, [0, 0, 0, 0]);
+
+    // We need 506 iterations as, in each iteration, all we can guarantee is that
+    // `len(a) + len(b)` will decrease by at least 1. Initially, `len(a) + len(b) ≤ 2 * 254 = 508` so,
+    // after 506 iterations we get `len(a) + len(b) ≤ 2`. At this point, both `a` and `b` must be `1` or `0`
+    // as neither can be `0` without the other being `1` due to the fact that `gcd(a, b) = 1`. In particular,
+    // as `b` is always odd, this means `b = 1` and so `v` stores the desired output.
+    //
+    // We split the iterations into 15 initial rounds of size 31 and a final round of size 41.
+    const ROUND_SIZE: usize = 31; // If you want to change round size, you will also need to modify the constant in get_approximation.
+    const FINAL_ROUND_SIZE: usize = 41;
+    const NUM_ROUNDS: usize = 15;
+    assert_eq!(NUM_ROUNDS * ROUND_SIZE + FINAL_ROUND_SIZE, 506);
+    for _ in 0..NUM_ROUNDS {
+        // Find the a and b approximations for this set of inner rounds.
+        // If both a and b now fit in a u64, return those. Otherwise take the bottom
+        // 31 bits and the top 33 bits and assemble into a u64.
+        let (limb, bits_mod_64) = num_bits(a[1] | b[1], a[2] | b[2], a[3] | b[3]);
+        let a_tilde = get_approximation(a, limb, bits_mod_64);
+        let b_tilde = get_approximation(b, limb, bits_mod_64);
+
+        // The key idea for the algorithm is that, instead of doing the standard
+        // binary GCD algorithm on the big-ints a, b we can do the GCD algorithm
+        // on a_tilde and b_tilde and then apply the updates all at once to a, b
+        // and u, v.
+        // By construction, a_tilde, b_tilde will function as good enough approximations
+        // of a and b for at least 31 inner rounds.
+
+        // Do the inner GCD loop on a_tilde and b_tilde to get the adjustment
+        // factors for this round.
+        let (mut f0, mut g0, mut f1, mut g1) = gcd_inner::<ROUND_SIZE>(a_tilde, b_tilde);
+
+        // Update a and b
+        let (new_a, sign) = linear_comb_div(a, b, f0, g0, ROUND_SIZE);
+        // If sign = -1, need to flip f0 and g0, if sign = 0, do nothing.
+        f0 = (f0 ^ sign).wrapping_sub(sign);
+        g0 = (g0 ^ sign).wrapping_sub(sign);
+
+        let (new_b, sign) = linear_comb_div(a, b, f1, g1, ROUND_SIZE);
+        // If sign = -1, need to flip f1 and g1, if sign = 0, do nothing.
+        f1 = (f1 ^ sign).wrapping_sub(sign);
+        g1 = (g1 ^ sign).wrapping_sub(sign);
+
+        // Update u and v
+        let new_u = linear_comb_monty_red(u, v, f0, g0);
+        let new_v = linear_comb_monty_red(u, v, f1, g1);
+
+        a = new_a;
+        b = new_b;
+        u = new_u;
+        v = new_v;
+    }
+
+    // a and b are now guaranteed to fit in a u64 so we can just use the inner loop
+    // for the remaining layers.
+    let (_, _, f1, g1) = gcd_inner::<FINAL_ROUND_SIZE>(a[0], b[0]);
+
+    // We can now compute the final result:
+    linear_comb_monty_red(u, v, f1, g1)
+}
+
+/// Inner loop of the GCD algorithm.
+///
+/// This is basically a mini GCD which builds up a transformation to apply to the larger
+/// numbers in the main loop. The key point is that this small loop only uses u64s and
+/// does not require any BigNum multiplications.
+///
+/// The bottom `NUM_ROUNDS` bits of `a` and `b` should match the bottom `NUM_ROUNDS` bits of
+/// the corresponding big-ints and the top `NUM_ROUNDS + 2` should match the top bits including
+/// zeroes if the original numbers have different sizes.
+#[inline]
+fn gcd_inner<const NUM_ROUNDS: usize>(mut a: u64, mut b: u64) -> (i64, i64, i64, i64) {
+    // Initialise update factors.
+    // At the start of round 0: -1 <= f0, g0, f1, g1 <= 1
+    let (mut f0, mut g0, mut f1, mut g1) = (1, 0, 0, 1);
+
+    // If at the start of a round: -2^i <= f0, g0, f1, g1 <= 2^i
+    // Then, at the end of the round: -2^{i + 1} <= f0, g0, f1, g1 <= 2^{i + 1}
+    for _ in 0..NUM_ROUNDS {
+        if a & 1 == 0 {
+            a >>= 1;
+        } else {
+            if a < b {
+                (a, b) = (b, a);
+                (f0, f1) = (f1, f0);
+                (g0, g1) = (g1, g0);
+            }
+            a -= b;
+            a >>= 1;
+            f0 -= f1;
+            g0 -= g1;
+        }
+        f1 <<= 1;
+        g1 <<= 1;
+    }
+
+    // -2^NUM_ROUNDS <= f0, g0, f1, g1 <= 2^NUM_ROUNDS
+    // Hence provided NUM_ROUNDS <= 62, we will not get any overflow.
+    (f0, g0, f1, g1)
 }

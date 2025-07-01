@@ -16,7 +16,9 @@ use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::helpers::{exp_bn_inv, halve_bn254, monty_mul, to_biguint, wrapping_add, wrapping_sub};
+use crate::helpers::{
+    gcd_inversion, halve_bn254, monty_mul, to_biguint, wrapping_add, wrapping_sub,
+};
 
 /// The BN254 prime represented as a little-endian array of 4-u64s.
 ///
@@ -314,7 +316,7 @@ impl Field for Bn254 {
         // to either implement that here or further improve the speed of multiplication to speed exponentiation
         // based inversion up. Don't think it is super important for now though as inversion is rare and can mostly be
         // batched.
-        (!self.is_zero()).then(|| exp_bn_inv(*self))
+        (!self.is_zero()).then(|| Self::new_monty(gcd_inversion(self.value)))
     }
 
     /// `r = 21888242871839275222246405745257275088548364400416034343698204186575808495617`
