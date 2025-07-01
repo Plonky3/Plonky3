@@ -4,7 +4,7 @@ use num_bigint::BigUint;
 
 use crate::{BN254_MONTY_MU_64, BN254_PRIME};
 
-/// Convert a fixed-size array of u64s to a BigUint.
+/// Convert a fixed-size array of u64s (little-endian) to a BigUint.
 #[inline]
 pub(crate) fn to_biguint<const N: usize>(value: [u64; N]) -> BigUint {
     let bytes: Vec<u8> = value.iter().flat_map(|x| x.to_le_bytes()).collect();
@@ -229,7 +229,7 @@ pub(crate) fn halve_bn254(mut input: [u64; 4]) -> [u64; 4] {
         input1_u128 = input1_u128.wrapping_add(carry as u128);
     }
 
-    // As this point the element is guaranteed to be even so we just
+    // At this point the element is guaranteed to be even so we just
     // need to shift down by 1.
     let carry_bit = (input1_u128 << 63) as u64;
 
@@ -285,16 +285,16 @@ fn get_approximation(val: [u64; 4], limb: usize, bits_mod_64: usize) -> u64 {
     // a single word.
     const HALF_WORD_SIZE: usize = 32;
 
-    // Get the bottom K - 1 bits.
-    let last_k_min_1 = val[0] & ((1 << (HALF_WORD_SIZE - 1)) - 1);
+    // Get the bottom HALF_WORD_SIZE - 1 bits.
+    let bottom_bits = val[0] & ((1 << (HALF_WORD_SIZE - 1)) - 1);
 
+    // Stored as a u128 but all bits above 64 + bits_mod_64 are guaranteed to be zero.
     let joined_limb = ((val[limb] as u128) << 64) | (val[limb - 1] as u128);
 
-    // 64 - bits_mod_64 = number of leading 0's. => Number of numbers is 64 + bits_mod_64
-    // a >> b kills b numbers at the base. 64 + bits_mod_64 - (bits_mod_64 + 64 - (K + 1)) = K + 1
-    let top_k_plus_1 = (joined_limb >> (bits_mod_64 + 64 - (HALF_WORD_SIZE + 1))) as u64;
+    // Extract the top `HALF_WORD_SIZE + 1` bits.
+    let top_bits = (joined_limb >> (bits_mod_64 + 64 - (HALF_WORD_SIZE + 1))) as u64;
 
-    (top_k_plus_1 << (HALF_WORD_SIZE - 1)) | last_k_min_1
+    (top_bits << (HALF_WORD_SIZE - 1)) | bottom_bits
 }
 
 /// Negate a (in the 2's complement sense) if sign is `-1 = 2^64 - 1`
@@ -390,6 +390,9 @@ fn linear_comb_monty_red(a: [u64; 4], b: [u64; 4], f: i64, g: i64) -> [u64; 4] {
 }
 
 /// An adjustment factor equal to `2^{1030} mod P`
+///
+/// Used to initialise the `u` variable in the GCD based inversion algorithm.
+/// Adjusts for monty form and accumulation of powers of 2.
 pub(crate) const BN254_2_POW_1030: [u64; 4] = [
     0x1f7ca21e7fcb111b,
     0x61a09399fcfe8a6c,
@@ -420,23 +423,28 @@ pub(crate) fn gcd_inversion(input: [u64; 4]) -> [u64; 4] {
     // - `v` is an element of `F_p`, stores changes to `b` and is initialised to 0.
     // The key property which makes everything work is that through all rounds of the algorithm:
     // `a * u0 = u * input mod P`
-    // `b * u0 = v * input mod P`  (Note that this holds true initially as `b = v = 0 mod P`)
+    // `b * u0 = v * input mod P`  (Note that this holds initially as `b = v = 0 mod P`)
     // Hence, when `a = 1`, we can conclude that `u = u0 * input^{-1} mod P`. (Similarly for `b` and `v`.)
     //
-    // When `u0 = 1`, we get the "true" inverse however this isn't actually what we want as our input
+    // When `u0 = 1`, we get the standard inverse however this isn't actually what we want as our input
     // is in monty form, e.g. we have `xR mod P` not `x mod P` where `R = 2^{256}`. Hence we want to
-    // compute `x^{-1}R mod P` not `x^{-1}R^{-1} mod P`. The difference between these is `R^2 = 2^{512} mod P`.
+    // compute `x^{-1}R mod P` not `x^{-1}R^{-1} mod P`. We can convert between these by
+    // multiplying by `R^2 = 2^{512} mod P`.
     //
-    // Moreover, in this modified algorithm, in each round, `u` and `v` pick up a factor of `2`. We do
-    // `31 * 15 + 41 = 506` iterations and so we also need to divide by `2^{506}`. Finally, each call
-    // to `linear_comb_monty_red`, divides by `2^64`. Hence to correct for all these calls we need to
-    // multiply by `2^{16 * 64}`. Overall this means we want `u0` to equal `2^{16 * 64 + 512 - 506} = 2^{1030} mod P`.
+    // Additionally, in our modified algorithm, `u` and `v` pick up a factor of `2` in each inner round.
+    // We do `31 * 15 + 41 = 506` inner rounds meaning we need to divide by `2^{506}`.
+    // Finally, each call to `linear_comb_monty_red`, divides by `2^64`. We call this `16` times,
+    // once in every outer loop so to correct for this we need to multiply by `2^{16 * 64}`.
+    //
+    // Overall this means we want `u0` to equal `2^{512 - 506 + 16 * 64} = 2^{1030} mod P`.
     let (mut a, mut u, mut b, mut v) = (input, BN254_2_POW_1030, BN254_PRIME, [0, 0, 0, 0]);
 
-    // We need 506 iterations as in each iteration, all we can guarantee is that len(a) + len(b) will decrease by 1.
-    // Initially, `len(a) + len(b) <= 2 * 254 = 508` so we need 506 iterations to get to the point that the sum of the
-    // lengths is 2. Once it is 2, we know both `a` and `b` must be `1` or `0` as neither can be `0` without the other being
-    // `1` due to the fact that the GCD is `1`.
+    // We need 506 iterations as, in each iteration, all we can guarantee is that
+    // `len(a) + len(b)` will decrease by at least 1. Initially, `len(a) + len(b) ≤ 2 * 254 = 508` so,
+    // after 506 iterations we get `len(a) + len(b) ≤ 2`. At this point, both `a` and `b` must be `1` or `0`
+    // as neither can be `0` without the other being `1` due to the fact that `gcd(a, b) = 1`. In particular,
+    // as `b` is always odd, this means `b = 1` and so `v` stores the desired output.
+    //
     // We split the iterations into 15 initial rounds of size 31 and a final round of size 41.
     const ROUND_SIZE: usize = 31; // If you want to change round size, you will also need to modify the constant in get_approximation.
     const FINAL_ROUND_SIZE: usize = 41;
