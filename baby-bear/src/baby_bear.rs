@@ -1,5 +1,5 @@
+use p3_field::PrimeCharacteristicRing;
 use p3_field::exponentiation::exp_1725656503;
-use p3_field::{Field, PrimeCharacteristicRing};
 use p3_monty_31::{
     BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
     PackedMontyParameters, RelativelyPrimePower, TwoAdicData,
@@ -26,36 +26,6 @@ impl BarrettParameters for BabyBearParameters {}
 
 impl FieldParameters for BabyBearParameters {
     const MONTY_GEN: BabyBear = BabyBear::new(31);
-
-    #[inline]
-    fn try_inverse<F: Field>(p1: F) -> Option<F> {
-        if p1.is_zero() {
-            return None;
-        }
-
-        // From Fermat's little theorem, in a prime field `F_p`, the inverse of `a` is `a^(p-2)`.
-        // Here p-2 = 2013265919 = 1110111111111111111111111111111_2.
-        // Uses 30 Squares + 7 Multiplications => 37 Operations total.
-
-        let p100000000 = p1.exp_power_of_2(8);
-        let p100000001 = p100000000 * p1;
-        let p10000000000000000 = p100000000.exp_power_of_2(8);
-        let p10000000100000001 = p10000000000000000 * p100000001;
-        let p10000000100000001000 = p10000000100000001.exp_power_of_2(3);
-        let p1000000010000000100000000 = p10000000100000001000.exp_power_of_2(5);
-        let p1000000010000000100000001 = p1000000010000000100000000 * p1;
-        let p1000010010000100100001001 = p1000000010000000100000001 * p10000000100000001000;
-        let p10000000100000001000000010 = p1000000010000000100000001.square();
-        let p11000010110000101100001011 = p10000000100000001000000010 * p1000010010000100100001001;
-        let p100000001000000010000000100 = p10000000100000001000000010.square();
-        let p111000011110000111100001111 =
-            p100000001000000010000000100 * p11000010110000101100001011;
-        let p1110000111100001111000011110000 = p111000011110000111100001111.exp_power_of_2(4);
-        let p1110111111111111111111111111111 =
-            p1110000111100001111000011110000 * p111000011110000111100001111;
-
-        Some(p1110111111111111111111111111111)
-    }
 }
 
 impl RelativelyPrimePower<7> for BabyBearParameters {

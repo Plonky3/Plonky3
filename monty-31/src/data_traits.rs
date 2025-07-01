@@ -1,7 +1,7 @@
 use core::fmt::Debug;
 use core::hash::Hash;
 
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::PrimeCharacteristicRing;
 
 use crate::MontyField31;
 
@@ -76,8 +76,6 @@ pub trait FieldParameters: PackedMontyParameters + Sized {
     const MONTY_GEN: MontyField31<Self>;
 
     const HALF_P_PLUS_1: u32 = (Self::PRIME + 1) >> 1;
-
-    fn try_inverse<F: Field>(p1: F) -> Option<F>;
 }
 
 /// An integer `D` such that `gcd(D, p - 1) = 1`.
