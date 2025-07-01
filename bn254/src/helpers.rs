@@ -247,16 +247,28 @@ pub(crate) fn halve_bn254(mut input: [u64; 4]) -> [u64; 4] {
 /// This assumes that val is actually a 256 bit number and we simply have the top 192 bits.
 /// The bottom 64 bits are assumed to all be non zero so the "smallest" `num_bits` output this
 /// will give is `num_bits = 64` or `(1, 0)`.
+///
+/// This is slightly more complicated than necessary but avoid if statements and so
+/// is impervious to side-channel attacks. This isn't strictly necessary but it makes no
+/// difference to speed and the rest of the algorithm has this property so we preserve it
+/// here.
 #[inline]
-fn num_bits(val: [u64; 3]) -> (usize, usize) {
-    let v3 = 64 - (val[2].leading_zeros() as i64);
-    let v2 = 64 - (val[1].leading_zeros() as i64);
-    let v1 = 64 - (val[0].leading_zeros() as i64);
+fn num_bits(limb_1: u64, limb_2: u64, limb_3: u64) -> (usize, usize) {
+    // For each limb, find the number of leading zeros and subtract from 64.
+    // `num_bits % 64` is equal to the `v` corresponding to the largest non-zero limb.
+    let v3 = 64 - (limb_3.leading_zeros() as i64);
+    let v2 = 64 - (limb_2.leading_zeros() as i64);
+    let v1 = 64 - (limb_1.leading_zeros() as i64);
 
+    // `limb_i` equals 0 if and only if there are 64 leading zeros meaning that `v_i` is 0.
+    // Hence `(-vi) >> 63` is `-1` if `limb_i` is non-zero and `0` otherwise.
+    // If `vi` is non-zero, then set all lower `v`'s to zero.
     let v3_non_0 = (-v3) >> 63;
     let v2_non_0 = ((-v2) >> 63) & (!v3_non_0);
     let v1_non_0 = ((-v1) >> 63) & (!v3_non_0) & (!v2_non_0);
 
+    // As only one of `v1_non_0`, `v2_non_0`, `v3_non_0` can be non-zero and whichever one is
+    // non-zero is equal to `-1` we can use these to compute `num_bits / 64` and `num_bits % 64`.
     let limb = (1 - v2_non_0 - (v3_non_0 << 1)) as usize;
     let bits_mod_64 = ((v3_non_0 & v3) | (v2_non_0 & v2) | (v1_non_0 & v1)) as usize;
 
@@ -268,18 +280,21 @@ fn num_bits(val: [u64; 3]) -> (usize, usize) {
 /// `n` is given by `limb = n / 64` and `bits_mod_64 = n % 64` for convenience.
 #[inline]
 fn get_approximation(val: [u64; 4], limb: usize, bits_mod_64: usize) -> u64 {
-    const K: usize = 32;
+    // Assuming that our machine is 64-bits, half the word size will be 32 bits.
+    // This is the largest possible value which ensures our output fits inside
+    // a single word.
+    const HALF_WORD_SIZE: usize = 32;
 
     // Get the bottom K - 1 bits.
-    let last_k_min_1 = val[0] & ((1 << (K - 1)) - 1);
+    let last_k_min_1 = val[0] & ((1 << (HALF_WORD_SIZE - 1)) - 1);
 
     let joined_limb = ((val[limb] as u128) << 64) | (val[limb - 1] as u128);
 
     // 64 - bits_mod_64 = number of leading 0's. => Number of numbers is 64 + bits_mod_64
     // a >> b kills b numbers at the base. 64 + bits_mod_64 - (bits_mod_64 + 64 - (K + 1)) = K + 1
-    let top_k_plus_1 = (joined_limb >> (bits_mod_64 + 64 - (K + 1))) as u64;
+    let top_k_plus_1 = (joined_limb >> (bits_mod_64 + 64 - (HALF_WORD_SIZE + 1))) as u64;
 
-    (top_k_plus_1 << (K - 1)) | last_k_min_1
+    (top_k_plus_1 << (HALF_WORD_SIZE - 1)) | last_k_min_1
 }
 
 /// Negate a (in the 2's complement sense) if sign is `-1 = 2^64 - 1`
@@ -387,38 +402,51 @@ pub(crate) const BN254_2_POW_1030: [u64; 4] = [
 /// The following approach to a GCD based inversion algorithm is taken from the paper:
 /// Optimized Binary GCD for Modular Inversion by Thomas Pornin.
 /// It can be found here: https://eprint.iacr.org/2020/972.pdf
-//
+///
 /// Explicitly, we implement Algorithm 2, roughly following the C implementation linked in that paper (in section 3).
-/// The algorithm is a variant of the Binary Extended Euclidean Algorithm which, allows for most of the iterations to
+/// The algorithm is a variant of the Binary Extended Euclidean Algorithm which allows for most of the iterations to
 /// be performed using only u64's even in cases where the inputs are much larger.
-//
+///
 /// This implementation is also impervious to side-channel attacks as an added bonus. In principal we could make
 /// the average case a little faster if we didn't care about this property but the worst case would be unchanged and
 /// potentially even slightly worse.
-pub(crate) fn gcd_inversion(val: [u64; 4]) -> [u64; 4] {
-    // When u = 1 and v 0, this outputs a^{-1} mod P.
-    // More generally, when u = K, this output a^{-1}K mod P. Hence if we can choose the right
-    // initial value for u, we can save some ourselves some work.
-    // We start with aR so this will output (aR)^{-1} whereas we want a^{-1}R. Hence we need to multiply
-    // by R^2 = 2^{512}
-    // We do 31 * 15 + 41 = 506 iterations. Each iteration injects a power of 2 so we need to divide by 2^{506}.
-    // Each pair of calls to linear_comb_monty_red, involves dividing by `2^64`. Hence to correct for all these
-    // we need to multiply by `2^{16 * 64}`.
-    // Overall we want `u` to equal `2^{16 * 64 + 6} = 2^{1030} mod P`
-    let (mut a, mut u, mut b, mut v) = (val, BN254_2_POW_1030, BN254_PRIME, [0, 0, 0, 0]);
+pub(crate) fn gcd_inversion(input: [u64; 4]) -> [u64; 4] {
+    // The standard binary GCD inversion algorithm for a field `P` has
+    // a single input `input` and
+    // four internal variables: `a`, `u`, `b`, and `v`.
+    // - `a` is initialised `input`.
+    // - `u` is an element of `F_p`, stores changes to `a` and is initialised to `u0`.
+    // - `b` is initialised to `P`.
+    // - `v` is an element of `F_p`, stores changes to `b` and is initialised to 0.
+    // The key property which makes everything work is that through all rounds of the algorithm:
+    // `a * u0 = u * input mod P`
+    // `b * u0 = v * input mod P`  (Note that this holds true initially as `b = v = 0 mod P`)
+    // Hence, when `a = 1`, we can conclude that `u = u0 * input^{-1} mod P`. (Similarly for `b` and `v`.)
+    //
+    // When `u0 = 1`, we get the "true" inverse however this isn't actually what we want as our input
+    // is in monty form, e.g. we have `xR mod P` not `x mod P` where `R = 2^{256}`. Hence we want to
+    // compute `x^{-1}R mod P` not `x^{-1}R^{-1} mod P`. The difference between these is `R^2 = 2^{512} mod P`.
+    //
+    // Moreover, in this modified algorithm, in each round, `u` and `v` pick up a factor of `2`. We do
+    // `31 * 15 + 41 = 506` iterations and so we also need to divide by `2^{506}`. Finally, each call
+    // to `linear_comb_monty_red`, divides by `2^64`. Hence to correct for all these calls we need to
+    // multiply by `2^{16 * 64}`. Overall this means we want `u0` to equal `2^{16 * 64 + 512 - 506} = 2^{1030} mod P`.
+    let (mut a, mut u, mut b, mut v) = (input, BN254_2_POW_1030, BN254_PRIME, [0, 0, 0, 0]);
 
     // We need 506 iterations as in each iteration, all we can guarantee is that len(a) + len(b) will decrease by 1.
     // Initially, `len(a) + len(b) <= 2 * 254 = 508` so we need 506 iterations to get to the point that the sum of the
     // lengths is 2. Once it is 2, we know both `a` and `b` must be `1` or `0` as neither can be `0` without the other being
     // `1` due to the fact that the GCD is `1`.
     // We split the iterations into 15 initial rounds of size 31 and a final round of size 41.
-    const ROUND_SIZE: usize = 31; // If you want to change round size, you will also need to modify the constant in rm_middle.
+    const ROUND_SIZE: usize = 31; // If you want to change round size, you will also need to modify the constant in get_approximation.
     const FINAL_ROUND_SIZE: usize = 41;
-    for _ in 0..15 {
+    const NUM_ROUNDS: usize = 15;
+    assert_eq!(NUM_ROUNDS * ROUND_SIZE + FINAL_ROUND_SIZE, 506);
+    for _ in 0..NUM_ROUNDS {
         // Find the a and b approximations for this set of inner rounds.
         // If both a and b now fit in a u64, return those. Otherwise take the bottom
         // 31 bits and the top 33 bits and assemble into a u64.
-        let (limb, bits_mod_64) = num_bits([a[1] | b[1], a[2] | b[2], a[3] | b[3]]);
+        let (limb, bits_mod_64) = num_bits(a[1] | b[1], a[2] | b[2], a[3] | b[3]);
         let a_tilde = get_approximation(a, limb, bits_mod_64);
         let b_tilde = get_approximation(b, limb, bits_mod_64);
 
