@@ -627,6 +627,27 @@ pub const fn relatively_prime_u64(mut u: u64, mut v: u64) -> bool {
     false
 }
 
+#[inline]
+pub fn gcd_inversion_31_bit_field(mut a: u32, mut b: u32) -> i64 {
+    let (mut u, mut v) = (1_i64, 0_i64);
+
+    for _ in 0..60 {
+        if a & 1 == 0 {
+            a >>= 1
+        } else {
+            if a < b {
+                (a, b) = (b, a);
+                (u, v) = (v, u);
+            }
+            a -= b;
+            a >>= 1;
+            u -= v;
+        }
+        v <<= 1;
+    }
+    v
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec;
