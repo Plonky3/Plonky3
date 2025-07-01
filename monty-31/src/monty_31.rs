@@ -394,8 +394,6 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
             return None;
         }
 
-        // FP::try_inverse(*self)
-
         // The number of bits of FP::PRIME. By the very name of MontyField31 this should always be 31.
         const NUM_PRIME_BITS: u32 = 31;
 
