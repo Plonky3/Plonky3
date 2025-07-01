@@ -27,6 +27,7 @@ impl BarrettParameters for BabyBearParameters {}
 impl FieldParameters for BabyBearParameters {
     const MONTY_GEN: BabyBear = BabyBear::new(31);
 
+    #[inline]
     fn try_inverse<F: Field>(p1: F) -> Option<F> {
         if p1.is_zero() {
             return None;

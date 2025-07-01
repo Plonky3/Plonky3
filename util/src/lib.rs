@@ -627,11 +627,23 @@ pub const fn relatively_prime_u64(mut u: u64, mut v: u64) -> bool {
     false
 }
 
+/// Inverts elements inside the prime field `F_P` with `P < 2^FIELD_BITS`.
+///
+/// Arguments:
+///  - a: The value we want to invert.
+///  - b: The value of the prime P.
+///
+/// Output:
+/// - A `64` bit signed integer `v` equal to `2^{2 * FIELD_BITS - 2} a^{-1} mod P` with
+///   size `|v| < 2^{2 * FIELD_BITS - 2}`.
 #[inline]
-pub fn gcd_inversion_31_bit_field(mut a: u32, mut b: u32) -> i64 {
+pub fn gcd_inversion_prime_field_32<const FIELD_BITS: u32>(mut a: u32, mut b: u32) -> i64 {
+    assert!(FIELD_BITS <= 32);
+    // Initialise u, v. Note that |u|, |v| <= 2^0
     let (mut u, mut v) = (1_i64, 0_i64);
 
-    for _ in 0..60 {
+    for _ in 0..(2 * FIELD_BITS - 2) {
+        // Assume at the start of the loop i: |u|, |v| <= 2^{i}
         if a & 1 == 0 {
             a >>= 1
         } else {
@@ -641,10 +653,20 @@ pub fn gcd_inversion_31_bit_field(mut a: u32, mut b: u32) -> i64 {
             }
             a -= b;
             a >>= 1;
+
+            // Observe |u'| = |u - v| <= |u| + |v| <= 2^{i + 1}
             u -= v;
         }
+        // Observe |v'| = 2|v| <= 2^{i + 1}
         v <<= 1;
+
+        // Thus as the end of loop i: |u|, |v| <= 2^{i + 1}
     }
+
+    // After the loops, we see that
+    // |u|, |v| <= 2^{2 * FIELD_BITS - 2}
+    // Hence for FIELD_BITS <= 32 we will not overflow an i64.
+
     v
 }
 

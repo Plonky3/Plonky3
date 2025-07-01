@@ -16,7 +16,7 @@ use p3_field::{
     PrimeField32, PrimeField64, RawDataSerializable, TwoAdicField,
     impl_raw_serializable_primefield32, quotient_map_small_int,
 };
-use p3_util::flatten_to_base;
+use p3_util::{flatten_to_base, gcd_inversion_prime_field_32};
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -390,7 +390,38 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
     const GENERATOR: Self = FP::MONTY_GEN;
 
     fn try_inverse(&self) -> Option<Self> {
-        FP::try_inverse(*self)
+        if self.is_zero() {
+            return None;
+        }
+
+        // FP::try_inverse(*self)
+
+        // The number of bits of FP::PRIME. By the very name of MontyField31 this should always be 31.
+        const NUM_PRIME_BITS: u32 = 31;
+
+        // Get the inverse using a gcd algorithm.
+        // We use `val` to denote the input to `gcd_inversion_prime_field_32` and `R = 2^{MONTY_BITS}`
+        // our monty constant.
+        // The function gcd_inversion_31_bit_field maps `val mod P -> 2^{60}val mod P`
+        let gcd_inverse = gcd_inversion_prime_field_32::<NUM_PRIME_BITS>(self.value, FP::PRIME);
+
+        // Currently |gcd_inverse| <= 2^{NUM_PRIME_BITS - 2} <= 2^{60}
+        // As P > 2^{30}, 0 < 2^{30}P + gcd_inverse < 2^61
+        let pos_inverse = (((FP::PRIME as i64) << 30) + gcd_inverse) as u64;
+
+        // We could do a % operation here, but monty reduction is faster.
+        // This does remove a factor of `R` from the result so we will need to
+        // correct for that.
+        let uncorrected_value = Self::new_monty(monty_reduce::<FP>(pos_inverse as u64));
+
+        // Currently, uncorrected_value = R^{-1} * 2^{60} * val^{-1} mod P = 2^{28} * val^{-1} mod P`.
+        // But `val` is really the monty form of some value `x` satisfying `val = xR mod P`. We want
+        // `x^{-1}R mod P = R^2 x^{-1}R^{-1} mod P = 2^{64} val^{-1} mod P`.
+        // Hence we need to multiply by 2^{64 - 28} = 2^{36}.
+
+        // Unrolling the definitions a little, this 36 comes from: 3 * FP::MONTY_BITS - (2 * NUM_PRIME_BITS - 2)
+
+        Some(uncorrected_value.mul_2exp_u64((3 * FP::MONTY_BITS - (2 * NUM_PRIME_BITS - 2)) as u64))
     }
 
     #[inline]

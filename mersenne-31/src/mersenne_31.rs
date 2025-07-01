@@ -14,7 +14,7 @@ use p3_field::{
     PrimeField32, PrimeField64, RawDataSerializable, halve_u32, impl_raw_serializable_primefield32,
     quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int,
 };
-use p3_util::{flatten_to_base, gcd_inversion_31_bit_field};
+use p3_util::{flatten_to_base, gcd_inversion_prime_field_32};
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::de::Error;
@@ -279,7 +279,7 @@ impl Field for Mersenne31 {
         }
 
         // gcd_inversion returns the inverse multiplied by 2^60 so we need to correct for that.
-        let inverse_i64 = gcd_inversion_31_bit_field(self.value, P);
+        let inverse_i64 = gcd_inversion_prime_field_32::<31>(self.value, P);
         Some(Self::from_int(inverse_i64).div_2exp_u64(60))
     }
 
