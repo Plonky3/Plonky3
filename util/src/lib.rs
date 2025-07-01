@@ -634,7 +634,7 @@ pub const fn relatively_prime_u64(mut u: u64, mut v: u64) -> bool {
 ///  - b: The value of the prime `P > 2`.
 ///
 /// Output:
-/// - A `64` bit signed integer `v` equal to `2^{2 * FIELD_BITS - 2} a^{-1} mod P` with
+/// - A `64-bit` signed integer `v` equal to `2^{2 * FIELD_BITS - 2} a^{-1} mod P` with
 ///   size `|v| < 2^{2 * FIELD_BITS - 2}`.
 ///
 /// It is up to the user to ensure that `b` is an odd prime with at most `FIELD_BITS` bits and
