@@ -245,11 +245,15 @@ where
     let x = rng.random::<R>();
     assert_eq!(x.mul_2exp_u64(0), x);
     assert_eq!(x.mul_2exp_u64(1), x.double());
+    // Goldilocks behaviour changes as 96 and 192 so we want to test larger numbers than those.
     for i in 0..128 {
         assert_eq!(
             x.clone().mul_2exp_u64(i),
             x.clone() * R::from_u128(1_u128 << i)
         );
+    }
+    for i in 128..256 {
+        assert_eq!(x.clone().mul_2exp_u64(i), x.clone() * R::TWO.exp_u64(i));
     }
 }
 
@@ -261,12 +265,21 @@ where
     let x = rng.random::<F>();
     assert_eq!(x.div_2exp_u64(0), x);
     assert_eq!(x.div_2exp_u64(1), x.halve());
+    // Goldilocks behaviour changes as 96 and 192 so we want to test larger numbers than those.
     for i in 0..128 {
         assert_eq!(x.mul_2exp_u64(i).div_2exp_u64(i), x);
         assert_eq!(
             x.div_2exp_u64(i),
             // Best to invert in the prime subfield in case F is an extension field.
             x * F::from_prime_subfield(F::PrimeSubfield::from_u128(1_u128 << i).inverse())
+        );
+    }
+    for i in 128..256 {
+        assert_eq!(x.mul_2exp_u64(i).div_2exp_u64(i), x);
+        assert_eq!(
+            x.div_2exp_u64(i),
+            // Best to invert in the prime subfield in case F is an extension field.
+            x * F::from_prime_subfield(F::PrimeSubfield::TWO.inverse().exp_u64(i))
         );
     }
 }

@@ -1,4 +1,4 @@
-use crate::{FieldParameters, MontyParameters};
+use crate::{FieldParameters, MontyField31, MontyParameters};
 
 /// Convert a u32 into MONTY form.
 /// There are no constraints on the input.
@@ -6,6 +6,19 @@ use crate::{FieldParameters, MontyParameters};
 #[inline]
 pub(crate) const fn to_monty<MP: MontyParameters>(x: u32) -> u32 {
     (((x as u64) << MP::MONTY_BITS) % MP::PRIME as u64) as u32
+}
+
+/// A constant version of the addition function.
+pub(crate) const fn add<MP: MontyParameters>(
+    lhs: MontyField31<MP>,
+    rhs: MontyField31<MP>,
+) -> MontyField31<MP> {
+    let mut sum = lhs.value + rhs.value;
+    let (corr_sum, over) = sum.overflowing_sub(MP::PRIME);
+    if !over {
+        sum = corr_sum;
+    }
+    MontyField31::new_monty(sum)
 }
 
 /// Convert an i32 into MONTY form.

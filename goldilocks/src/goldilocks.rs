@@ -93,6 +93,23 @@ impl Goldilocks {
         0x400a7f755588e659,
         0x185629dcda58878c,
     ]);
+
+    const POWERS_OF_TWO: [Self; 96] = {
+        let mut powers_of_two = [Goldilocks::ONE; 96];
+
+        let mut i = 1;
+        while i < 64 {
+            powers_of_two[i] = Goldilocks::new(1 << i);
+            i += 1;
+        }
+        let mut var = Goldilocks::new(1 << 63);
+        while i < 96 {
+            var = const_add(var, var);
+            powers_of_two[i] = var;
+            i += 1;
+        }
+        powers_of_two
+    };
 }
 
 impl PartialEq for Goldilocks {
@@ -163,6 +180,19 @@ impl PrimeCharacteristicRing for Goldilocks {
     #[inline]
     fn from_bool(b: bool) -> Self {
         Self::new(b.into())
+    }
+
+    #[inline]
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        // In the Goldilocks field, 2^192 = 1 mod P.
+        // In particular this means that 2^96 = -1 mod P.
+        if exp < 96 {
+            *self * Self::POWERS_OF_TWO[exp as usize]
+        } else if exp < 192 {
+            -*self * Self::POWERS_OF_TWO[(exp - 96) as usize]
+        } else {
+            self.mul_2exp_u64(exp % 192)
+        }
     }
 
     #[inline]
@@ -300,45 +330,6 @@ impl Field for Goldilocks {
         }
 
         Some(gcd_inversion(*self))
-
-        // // From Fermat's little theorem, in a prime field `F_p`, the inverse of `a` is `a^(p-2)`.
-        // //
-        // // compute a^(p - 2) using 72 multiplications
-        // // The exponent p - 2 is represented in binary as:
-        // // 0b1111111111111111111111111111111011111111111111111111111111111111
-        // // Adapted from: https://github.com/facebook/winterfell/blob/d238a1/math/src/field/f64/mod.rs#L136-L164
-
-        // // compute base^11
-        // let t2 = self.square() * *self;
-
-        // // compute base^111
-        // let t3 = t2.square() * *self;
-
-        // // compute base^111111 (6 ones)
-        // // repeatedly square t3 3 times and multiply by t3
-        // let t6 = exp_acc::<3>(t3, t3);
-        // let t60 = t6.square();
-        // let t7 = t60 * *self;
-
-        // // compute base^111111111111 (12 ones)
-        // // repeatedly square t6 6 times and multiply by t6
-        // let t12 = exp_acc::<5>(t60, t6);
-
-        // // compute base^111111111111111111111111 (24 ones)
-        // // repeatedly square t12 12 times and multiply by t12
-        // let t24 = exp_acc::<12>(t12, t12);
-
-        // // compute base^1111111111111111111111111111111 (31 ones)
-        // // repeatedly square t24 6 times and multiply by t6 first. then square t30 and
-        // // multiply by base
-        // let t31 = exp_acc::<7>(t24, t7);
-
-        // // compute base^111111111111111111111111111111101111111111111111111111111111111
-        // // repeatedly square t31 32 times and multiply by t31
-        // let t63 = exp_acc::<32>(t31, t31);
-
-        // // compute base^1111111111111111111111111111111011111111111111111111111111111111
-        // Some(t63.square() * *self)
     }
 
     #[inline]
@@ -346,10 +337,11 @@ impl Field for Goldilocks {
         Self::new(halve_u64::<P>(self.value))
     }
 
-    fn div_2exp_u64(&self, exp: u64) -> Self {
-        // 2^192 = 1 mod P.
-        let remainder = exp % 192;
-        self.mul_2exp_u64(192 - remainder)
+    fn div_2exp_u64(&self, mut exp: u64) -> Self {
+        // In the goldilocks field, 2^192 = 1 mod P.
+        // Thus 2^{-n} = 2^{192 - n} mod P.
+        exp %= 192;
+        self.mul_2exp_u64(192 - exp)
     }
 
     #[inline]
@@ -473,6 +465,16 @@ impl TwoAdicField for Goldilocks {
     }
 }
 
+// A const version of addition.
+const fn const_add(lhs: Goldilocks, rhs: Goldilocks) -> Goldilocks {
+    let (sum, over) = lhs.value.overflowing_add(rhs.value);
+    let (mut sum, over) = sum.overflowing_add((over as u64) * Goldilocks::NEG_ORDER);
+    if over {
+        sum += Goldilocks::NEG_ORDER;
+    }
+    Goldilocks::new(sum)
+}
+
 impl Add for Goldilocks {
     type Output = Self;
 
@@ -583,12 +585,6 @@ impl Div for Goldilocks {
     }
 }
 
-/// Squares the base N number of times and multiplies the result by the tail value.
-#[inline(always)]
-fn exp_acc<const N: usize>(base: Goldilocks, tail: Goldilocks) -> Goldilocks {
-    base.exp_power_of_2(N) * tail
-}
-
 /// Reduces to a 64-bit value. The result might not be in canonical form; it could be in between the
 /// field order and `2^64`.
 #[inline]
@@ -664,36 +660,29 @@ fn gcd_inversion(input: Goldilocks) -> Goldilocks {
     // as neither can be `0` without the other being `1` due to the fact that `gcd(a, b) = 1`. In particular,
     // as `b` is always odd, this means `b = 1` and so `v` stores the desired output.
     //
-    // We split the iterations into 2 rounds of length 62.
-    const ROUND_SIZE: usize = 62; // Can't do 63 as 2^63 is not representable in an i64.
+    // We split the iterations into 2 rounds of length 63.
+    const ROUND_SIZE: usize = 63;
 
+    // We could make this slightly faster by replacing the first `gcd_inner` by a copy-pasted
+    // version which doesn't do any computations involving g. But this is a very minor speedup.
     let (f00, _, f10, _) = gcd_inner::<ROUND_SIZE>(&mut a, &mut b);
-    let u = Goldilocks::from_int(f00);
-    let v = Goldilocks::from_int(f10);
-    let (f01, g01, f11, g11) = gcd_inner::<ROUND_SIZE>(&mut a, &mut b);
-    let u_fac01 = Goldilocks::from_int(f01);
-    let u_fac11 = Goldilocks::from_int(f11);
-    let v_fac01 = Goldilocks::from_int(g01);
-    let v_fac11 = Goldilocks::from_int(g11);
+    let (_, _, f11, g11) = gcd_inner::<ROUND_SIZE>(&mut a, &mut b);
+    let u = from_unusual_int(f00);
+    let v = from_unusual_int(f10);
+    let u_fac11 = from_unusual_int(f11);
+    let v_fac11 = from_unusual_int(g11);
 
-    let mut update_u = (u * u_fac01 + v * v_fac01).div_2exp_u64(124);
-    let mut update_v = (u * u_fac11 + v * v_fac11).div_2exp_u64(124);
+    // 192 - 126 = 66
+    (u * u_fac11 + v * v_fac11).mul_2exp_u64(66)
+}
 
-    while b != 1 {
-        if a & 1 == 1 {
-            if a > b {
-                // Swap a and b.
-                core::mem::swap(&mut a, &mut b);
-                core::mem::swap(&mut update_u, &mut update_v);
-            }
-            a -= b;
-            update_u -= update_v;
-        }
-        a >>= 1;
-        update_u = update_u.halve();
+/// Convert from an i64 to a Goldilocks element but interpret -2^63 as 2^63.
+fn from_unusual_int(int: i64) -> Goldilocks {
+    if (int >= 0) | (int == i64::MIN) {
+        Goldilocks::new(int as u64)
+    } else {
+        Goldilocks::new(Goldilocks::ORDER_U64.wrapping_add_signed(int))
     }
-
-    update_v
 }
 
 #[cfg(test)]

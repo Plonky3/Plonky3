@@ -102,8 +102,7 @@ impl Bn254 {
             let start = i * 8;
             let end = start + 8;
             // This unwrap is safe due to the length check above.
-            u64::from_le_bytes(bytes[start..end].
-                _into().unwrap())
+            u64::from_le_bytes(bytes[start..end].try_into().unwrap())
         });
         // Check if the value is less than the prime.
         if value.iter().rev().cmp(BN254_PRIME.iter().rev()) == core::cmp::Ordering::Less {
