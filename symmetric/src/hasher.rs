@@ -40,7 +40,7 @@ pub trait CryptographicHasher<Item: Clone, Out>: Clone {
         self.hash_iter_slices(core::iter::once(input))
     }
 
-    /// Hash a single item by wrapping it into a slice.
+    /// Hash a single item.
     ///
     /// # Arguments
     /// - `input`: A single item to hash.
