@@ -20,7 +20,7 @@ pub trait CryptographicHasher<Item: Clone, Out>: Clone {
     /// - `input`: An iterator over slices of items to hash.
     ///
     /// # Returns
-    /// A digest representing the hash of all concatenated items.
+    /// A fixed-size digest of type `Out`.
     fn hash_iter_slices<'a, I>(&self, input: I) -> Out
     where
         I: IntoIterator<Item = &'a [Item]>,
@@ -35,7 +35,7 @@ pub trait CryptographicHasher<Item: Clone, Out>: Clone {
     /// - `input`: A slice of items to hash.
     ///
     /// # Returns
-    /// A digest of the input slice.
+    /// A fixed-size digest of type `Out`.
     fn hash_slice(&self, input: &[Item]) -> Out {
         self.hash_iter_slices(core::iter::once(input))
     }
@@ -46,7 +46,7 @@ pub trait CryptographicHasher<Item: Clone, Out>: Clone {
     /// - `input`: A single item to hash.
     ///
     /// # Returns
-    /// A digest of the single item.
+    /// A fixed-size digest of type `Out`.
     fn hash_item(&self, input: Item) -> Out {
         self.hash_slice(&[input])
     }
