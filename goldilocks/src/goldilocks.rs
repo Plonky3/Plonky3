@@ -93,6 +93,23 @@ impl Goldilocks {
         0x400a7f755588e659,
         0x185629dcda58878c,
     ]);
+
+    const POWERS_OF_TWO: [Self; 96] = {
+        let mut powers_of_two = [Goldilocks::ONE; 96];
+
+        let mut i = 1;
+        while i < 64 {
+            powers_of_two[i] = Goldilocks::new(1 << i);
+            i += 1;
+        }
+        let mut var = Goldilocks::new(1 << 63);
+        while i < 96 {
+            var = const_add(var, var);
+            powers_of_two[i] = var;
+            i += 1;
+        }
+        powers_of_two
+    };
 }
 
 impl PartialEq for Goldilocks {
@@ -163,6 +180,18 @@ impl PrimeCharacteristicRing for Goldilocks {
     #[inline]
     fn from_bool(b: bool) -> Self {
         Self::new(b.into())
+    }
+
+    #[inline]
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        // In the Goldilocks field, 2^96 = -1 mod P and 2^192 = 1 mod P.
+        if exp < 96 {
+            *self * Self::POWERS_OF_TWO[exp as usize]
+        } else if exp < 192 {
+            -*self * Self::POWERS_OF_TWO[(exp - 96) as usize]
+        } else {
+            self.mul_2exp_u64(exp % 192)
+        }
     }
 
     #[inline]
@@ -344,6 +373,13 @@ impl Field for Goldilocks {
         Self::new(halve_u64::<P>(self.value))
     }
 
+    fn div_2exp_u64(&self, mut exp: u64) -> Self {
+        // In the goldilocks field, 2^192 = 1 mod P.
+        // Thus 2^{-n} = 2^{192 - n} mod P.
+        exp %= 192;
+        self.mul_2exp_u64(192 - exp)
+    }
+
     #[inline]
     fn order() -> BigUint {
         P.into()
@@ -463,6 +499,20 @@ impl TwoAdicField for Goldilocks {
         assert!(bits <= Self::TWO_ADICITY);
         Self::TWO_ADIC_GENERATORS[bits]
     }
+}
+
+/// A const version of the addition function.
+///
+/// Useful for constructing constants values in const contexts. Outside of
+/// const contexts, Add should be used instead.
+#[inline]
+const fn const_add(lhs: Goldilocks, rhs: Goldilocks) -> Goldilocks {
+    let (sum, over) = lhs.value.overflowing_add(rhs.value);
+    let (mut sum, over) = sum.overflowing_add((over as u64) * Goldilocks::NEG_ORDER);
+    if over {
+        sum += Goldilocks::NEG_ORDER;
+    }
+    Goldilocks::new(sum)
 }
 
 impl Add for Goldilocks {
