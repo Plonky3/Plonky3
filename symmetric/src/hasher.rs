@@ -14,7 +14,7 @@ pub trait CryptographicHasher<Item: Clone, Out>: Clone {
     where
         I: IntoIterator<Item = Item>;
 
-    /// Hash an iterator of slices, automatically flattening them into a single stream of items.
+    /// Hash an iterator of slices, by flattening it into a single stream of items.
     ///
     /// # Arguments
     /// - `input`: An iterator over slices of items to hash.
