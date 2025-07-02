@@ -29,7 +29,7 @@ pub trait CryptographicHasher<Item: Clone, Out>: Clone {
         self.hash_iter(input.into_iter().flatten().cloned())
     }
 
-    /// Hash a single contiguous slice of items.
+    /// Hash a single slice of items.
     ///
     /// # Arguments
     /// - `input`: A slice of items to hash.
