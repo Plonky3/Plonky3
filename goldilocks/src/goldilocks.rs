@@ -94,6 +94,10 @@ impl Goldilocks {
         0x185629dcda58878c,
     ]);
 
+    /// A list of powers of two from 0 to 95.
+    ///
+    /// Note that 2^{96} = -1 mod P so all powers of two can be simply
+    /// derived from this list.
     const POWERS_OF_TWO: [Self; 96] = {
         let mut powers_of_two = [Goldilocks::ONE; 96];
 
@@ -373,6 +377,7 @@ impl Field for Goldilocks {
         Self::new(halve_u64::<P>(self.value))
     }
 
+    #[inline]
     fn div_2exp_u64(&self, mut exp: u64) -> Self {
         // In the goldilocks field, 2^192 = 1 mod P.
         // Thus 2^{-n} = 2^{192 - n} mod P.
