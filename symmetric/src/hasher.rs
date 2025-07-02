@@ -4,7 +4,7 @@
 /// This trait abstracts over hash functions in a flexible way, supporting both field elements,
 /// scalars, or any other data type that implements `Clone`.
 pub trait CryptographicHasher<Item: Clone, Out>: Clone {
-    /// Hash an iterator of input items into a single digest output.    ///
+    /// Hash an iterator of input items.
     /// # Arguments
     /// - `input`: An iterator over items to be hashed.
     ///
