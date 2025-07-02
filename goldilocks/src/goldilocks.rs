@@ -641,7 +641,7 @@ fn gcd_inversion(input: Goldilocks) -> Goldilocks {
 
 /// Convert from an i64 to a Goldilocks element but interpret -2^63 as 2^63.
 fn from_unusual_int(int: i64) -> Goldilocks {
-    if (int >= 0) | (int == i64::MIN) {
+    if (int >= 0) || (int == i64::MIN) {
         Goldilocks::new(int as u64)
     } else {
         Goldilocks::new(Goldilocks::ORDER_U64.wrapping_add_signed(int))
