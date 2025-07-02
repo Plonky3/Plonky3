@@ -604,28 +604,38 @@ unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
     res_wrapped + Goldilocks::NEG_ORDER * u64::from(carry)
 }
 
+/// Compute the inverse of a Goldilocks element `a` using the binary GCD algorithm.
+///
+/// Instead of applying the standard algorithm this uses a variant inspired by https://eprint.iacr.org/2020/972.pdf.
+/// The key idea is to compute update factors which are incorrect by a known power of 2 which
+/// can be corrected at the end. These update factors can then be used to construct the inverse
+/// via a simple linear combination.
+///
+/// This is much faster than the standard algorithm as we avoid most of the (more expensive) field arithmetic.
 fn gcd_inversion(input: Goldilocks) -> Goldilocks {
+    // Initialise our values to the value we want to invert and the prime.
     let (mut a, mut b) = (input.value, P);
 
-    // We need 126 iterations as, in each iteration, all we can guarantee is that
-    // `len(a) + len(b)` will decrease by at least 1. Initially, `len(a) + len(b) ≤ 2 * 64 = 128` so,
-    // after 126 iterations we get `len(a) + len(b) ≤ 2`. At this point, both `a` and `b` must be `1` or `0`
-    // as neither can be `0` without the other being `1` due to the fact that `gcd(a, b) = 1`. In particular,
-    // as `b` is always odd, this means `b = 1` and so `v` stores the desired output.
-    //
+    // As the goldilocks prime is 64 bit, initially `len(a) + len(b) ≤ 2 * 64 = 128`.
+    // This means we will need `126` iterations of the inner loop ensure `len(a) + len(b) ≤ 2`.
     // We split the iterations into 2 rounds of length 63.
     const ROUND_SIZE: usize = 63;
 
-    // We could make this slightly faster by replacing the first `gcd_inner` by a copy-pasted
-    // version which doesn't do any computations involving g. But this is a very minor speedup.
+    // In theory we could make this slightly faster by replacing the first `gcd_inner` by a copy-pasted
+    // version which doesn't do any computations involving g. But either the compiler works this out
+    // for itself or the speed up is negligible as I couldn't notice any difference in benchmarks.
     let (f00, _, f10, _) = gcd_inner::<ROUND_SIZE>(&mut a, &mut b);
     let (_, _, f11, g11) = gcd_inner::<ROUND_SIZE>(&mut a, &mut b);
+
+    // The update factors are i64's except we need to interpret -2^63 as 2^63.
+    // This is because the outputs of `gcd_inner` are always in the range `(-2^ROUND_SIZE, 2^ROUND_SIZE]`.
     let u = from_unusual_int(f00);
     let v = from_unusual_int(f10);
     let u_fac11 = from_unusual_int(f11);
     let v_fac11 = from_unusual_int(g11);
 
-    // 192 - 126 = 66
+    // Each iteration introduced a factor of 2 and so we need to divide by 2^{126}.
+    // But 2^{192} = 1 mod P, so we can instead multiply by 2^{66} as 192 - 126 = 66.
     (u * u_fac11 + v * v_fac11).mul_2exp_u64(66)
 }
 
