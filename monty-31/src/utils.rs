@@ -63,8 +63,9 @@ pub(crate) const fn halve_u32<FP: FieldParameters>(input: u32) -> u32 {
 }
 
 /// Montgomery reduction of a value in `0..P << MONTY_BITS`.
-/// the input must be in `[0, MONTY * P)`.
-/// the output will be in `[0, P)`.
+///
+/// The input must be in `[0, MONTY * P)`.
+/// The output will be in `[0, P)`.
 #[inline]
 #[must_use]
 pub(crate) const fn monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
