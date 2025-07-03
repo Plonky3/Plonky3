@@ -251,6 +251,10 @@ where
             x.clone() * R::from_u128(1_u128 << i)
         );
     }
+    // Goldilocks behaviour changes at 96, 192 so we want to test larger numbers than that.
+    for i in 128..256 {
+        assert_eq!(x.clone().mul_2exp_u64(i), x.clone() * R::TWO.exp_u64(i));
+    }
 }
 
 pub fn test_div_2exp_u64<F: Field>()
@@ -267,6 +271,15 @@ where
             x.div_2exp_u64(i),
             // Best to invert in the prime subfield in case F is an extension field.
             x * F::from_prime_subfield(F::PrimeSubfield::from_u128(1_u128 << i).inverse())
+        );
+    }
+    // Goldilocks behaviour changes at 96, 192 so we want to test larger numbers than that.
+    for i in 128..256 {
+        assert_eq!(x.mul_2exp_u64(i).div_2exp_u64(i), x);
+        assert_eq!(
+            x.div_2exp_u64(i),
+            // Best to invert in the prime subfield in case F is an extension field.
+            x * F::from_prime_subfield(F::PrimeSubfield::TWO.inverse().exp_u64(i))
         );
     }
 }

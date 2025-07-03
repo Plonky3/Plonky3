@@ -1096,7 +1096,6 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX512<F
         }
     }
 
-    #[must_use]
     #[inline(always)]
     fn exp_const_u64<const POWER: u64>(&self) -> Self {
         // We provide specialised code for the powers 3, 5, 7 as these turn up regularly.

@@ -161,8 +161,25 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
 
 /// Hash every row of the tallest matrices and build the first digest layer.
 ///
-/// The layer length equals the height of the tallest matrices, padded up to an
-/// even number (except when the height is 1).
+/// This function is responsible for creating the first layer of Merkle digests,
+/// starting from raw rows of the tallest matrices. Each row is hashed using the
+/// provided cryptographic hasher `h`. The result is a vector of digests that serve
+/// as the base (leaf-level) nodes for the rest of the Merkle tree.
+///
+/// # Details
+/// - We always return an *even number of digests* (except when height is 1), to
+///   ensure even pairing at higher layers.
+/// - Matrices are "vertically packed" to allow SIMD-friendly parallel hashing,
+///   meaning rows can be processed in batches.
+/// - If the total number of rows isn't a multiple of the SIMD packing width,
+///   the final few rows are handled using a fallback scalar path.
+///
+/// # Arguments
+/// - `h`: Reference to the cryptographic hasher.
+/// - `tallest_matrices`: References to the tallest matrices (all must have same height).
+///
+/// # Returns
+/// A vector of `[PW::Value; DIGEST_ELEMS]`, containing the digests of each row.
 #[instrument(name = "first digest layer", level = "debug", skip_all)]
 fn first_digest_layer<P, PW, H, M, const DIGEST_ELEMS: usize>(
     h: &H,
@@ -176,44 +193,60 @@ where
         + Sync,
     M: Matrix<P::Value>,
 {
+    // The number of rows to pack and hash together in one SIMD batch.
     let width = PW::WIDTH;
+
+    // Get the height of the tallest matrices (they are guaranteed to be equal).
     let max_height = tallest_matrices[0].height();
-    // we always want to return an even number of digests, except when it's the root.
+
+    // Compute the padded height to ensure we end up with an even number of digests.
+    // **Exception:** if there's only 1 row, we keep it as 1.
     let max_height_padded = if max_height == 1 {
         1
     } else {
         max_height + max_height % 2
     };
 
+    // Prepare a default digest value to fill unused slots or padding.
     let default_digest = [PW::Value::default(); DIGEST_ELEMS];
+
+    // Allocate the digest vector with padded size, initialized to default digest.
     let mut digests = vec![default_digest; max_height_padded];
 
+    // Parallel loop: process complete batches of `width` rows at a time.
     digests[0..max_height]
         .par_chunks_exact_mut(width)
         .enumerate()
         .for_each(|(i, digests_chunk)| {
+            // Compute the starting row index for this chunk.
             let first_row = i * width;
+
+            // Collect all vertically packed rows from each matrix at `first_row`.
+            // These packed rows are then hashed together using `h`.
             let packed_digest: [PW; DIGEST_ELEMS] = h.hash_iter(
                 tallest_matrices
                     .iter()
                     .flat_map(|m| m.vertically_packed_row(first_row)),
             );
+
+            // Unpack the resulting packed digest into individual scalar digests.
+            // Then, assign each to its slot in the current chunk.
             for (dst, src) in digests_chunk.iter_mut().zip(unpack_array(packed_digest)) {
                 *dst = src;
             }
         });
 
-    // If our packing width did not divide max_height, fall back to single-threaded scalar code
-    // for the last bit.
+    // Handle leftover rows that do not form a full SIMD batch (if any).
     #[allow(clippy::needless_range_loop)]
     for i in ((max_height / width) * width)..max_height {
         unsafe {
-            // Safety: Clearly i < max_height = m.height().
+            // Safety: The loop guarantees i < max_height == matrix height.
+            // Use `row_unchecked` to avoid bounds checks for performance.
             digests[i] = h.hash_iter(tallest_matrices.iter().flat_map(|m| m.row_unchecked(i)));
         }
     }
 
-    // Everything has been initialized so we can safely cast.
+    // Return the final digest vector (now fully populated).
     digests
 }
 
