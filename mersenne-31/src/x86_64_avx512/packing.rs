@@ -437,7 +437,6 @@ impl PrimeCharacteristicRing for PackedMersenne31AVX512 {
         unsafe { reconstitute_from_base(Mersenne31::zero_vec(len * WIDTH)) }
     }
 
-    #[must_use]
     #[inline(always)]
     fn exp_const_u64<const POWER: u64>(&self) -> Self {
         // We provide specialised code for power 5 as this turns up regularly.
