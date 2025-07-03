@@ -16,7 +16,7 @@ use rand::distr::{Distribution, StandardUniform};
 use crate::Mersenne31;
 
 const WIDTH: usize = 4;
-const P: uint32x4_t = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
+const P: uint32x4_t = unsafe { transmute([0x7fffffffu32; WIDTH]) };
 
 /// Vectorized NEON implementation of `Mersenne31` arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

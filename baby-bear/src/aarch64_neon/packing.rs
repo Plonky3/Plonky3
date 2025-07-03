@@ -9,10 +9,10 @@ const WIDTH: usize = 4;
 
 impl MontyParametersNeon for BabyBearParameters {
     // SAFETY: This is a valid packed representation of P.
-    const PACKED_P: uint32x4_t = unsafe { transmute::<[u32; WIDTH], _>([0x78000001; WIDTH]) };
+    const PACKED_P: uint32x4_t = unsafe { transmute([0x78000001u32; WIDTH]) };
     // This MU is the same 0x88000001 as elsewhere, just interpreted as an `i32`.
     // SAFETY: This is a valid packed representation of MU.
-    const PACKED_MU: int32x4_t = unsafe { transmute::<[i32; WIDTH], _>([-0x77ffffff; WIDTH]) };
+    const PACKED_MU: int32x4_t = unsafe { transmute([-0x77ffffff; WIDTH]) };
 }
 
 pub type PackedBabyBearNeon = PackedMontyField31Neon<BabyBearParameters>;

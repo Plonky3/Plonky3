@@ -16,7 +16,7 @@ use rand::distr::{Distribution, StandardUniform};
 use crate::Mersenne31;
 
 const WIDTH: usize = 16;
-pub(crate) const P: __m512i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
+pub(crate) const P: __m512i = unsafe { transmute([0x7fffffffu32; WIDTH]) };
 const EVENS: __mmask16 = 0b0101010101010101;
 const ODDS: __mmask16 = 0b1010101010101010;
 const EVENS4: __mmask16 = 0x0f0f;
@@ -292,7 +292,7 @@ fn partial_reduce_neg(x: __m512i) -> __m512i {
         // Get the top bits shifted down.
         let hi = x86_64::_mm512_srli_epi64::<31>(x);
 
-        const LOW31: __m512i = unsafe { transmute::<[u64; 8], _>([0x7fffffff; 8]) };
+        const LOW31: __m512i = unsafe { transmute([0x7fffffffu64; 8]) };
 
         // nand instead of and means this returns P - lo.
         let neg_lo = x86_64::_mm512_andnot_si512(x, LOW31);

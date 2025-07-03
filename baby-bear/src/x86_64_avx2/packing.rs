@@ -10,8 +10,8 @@ pub type PackedBabyBearAVX2 = PackedMontyField31AVX2<BabyBearParameters>;
 const WIDTH: usize = 8;
 
 impl MontyParametersAVX2 for BabyBearParameters {
-    const PACKED_P: __m256i = unsafe { transmute::<[u32; WIDTH], _>([0x78000001; WIDTH]) };
-    const PACKED_MU: __m256i = unsafe { transmute::<[u32; WIDTH], _>([0x88000001; WIDTH]) };
+    const PACKED_P: __m256i = unsafe { transmute([0x78000001u32; WIDTH]) };
+    const PACKED_MU: __m256i = unsafe { transmute([0x88000001u32; WIDTH]) };
 }
 
 #[cfg(test)]

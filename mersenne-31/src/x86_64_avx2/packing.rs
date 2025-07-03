@@ -16,7 +16,7 @@ use rand::distr::{Distribution, StandardUniform};
 use crate::Mersenne31;
 
 const WIDTH: usize = 8;
-pub(crate) const P: __m256i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
+pub(crate) const P: __m256i = unsafe { transmute([0x7fffffffu32; WIDTH]) };
 
 /// Vectorized AVX2 implementation of `Mersenne31` arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -282,7 +282,7 @@ fn partial_reduce_neg(x: __m256i) -> __m256i {
         // Get the top bits shifted down.
         let hi = x86_64::_mm256_srli_epi64::<31>(x);
 
-        const LOW31: __m256i = unsafe { transmute::<[u64; 4], _>([0x7fffffff; 4]) };
+        const LOW31: __m256i = unsafe { transmute([0x7fffffffu64; 4]) };
         // nand instead of and means this returns P - lo.
         let neg_lo = x86_64::_mm256_andnot_si256(x, LOW31);
 
