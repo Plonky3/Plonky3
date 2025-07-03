@@ -31,7 +31,6 @@ where
     log2_ceil_usize(constraint_degree - 1)
 }
 
-#[instrument(name = "infer constraint degree", skip_all, level = "debug")]
 pub fn get_max_constraint_degree<F, A>(
     air: &A,
     preprocessed_width: usize,
@@ -48,7 +47,6 @@ where
         .unwrap_or(0)
 }
 
-#[instrument(name = "evaluate constraints symbolically", skip_all, level = "debug")]
 pub fn get_symbolic_constraints<F, A>(
     air: &A,
     preprocessed_width: usize,
