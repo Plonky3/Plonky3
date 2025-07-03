@@ -13,6 +13,7 @@ categories.workspace = true
 p3-field.workspace = true
 p3-poseidon2.workspace = true
 p3-symmetric.workspace = true
+p3-util.workspace = true
 
 num-bigint.workspace = true
 paste.workspace = true

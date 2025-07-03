@@ -627,6 +627,50 @@ pub const fn relatively_prime_u64(mut u: u64, mut v: u64) -> bool {
     false
 }
 
+/// Inner loop of the deferred GCD algorithm.
+///
+/// See: https://eprint.iacr.org/2020/972.pdf for more information.
+///
+/// This is basically a mini GCD algorithm which builds up a transformation to apply to the larger
+/// numbers in the main loop. The key point is that this small loop only uses u64s, subtractions and
+/// bit shifts, which are very fast operations.
+///
+/// The bottom `NUM_ROUNDS` bits of `a` and `b` should match the bottom `NUM_ROUNDS` bits of
+/// the corresponding big-ints and the top `NUM_ROUNDS + 2` should match the top bits including
+/// zeroes if the original numbers have different sizes.
+#[inline]
+pub fn gcd_inner<const NUM_ROUNDS: usize>(a: &mut u64, b: &mut u64) -> (i64, i64, i64, i64) {
+    // Initialise update factors.
+    // At the start of round 0: -1 < f0, g0, f1, g1 <= 1
+    let (mut f0, mut g0, mut f1, mut g1) = (1, 0, 0, 1);
+
+    // If at the start of a round: -2^i < f0, g0, f1, g1 <= 2^i
+    // Then, at the end of the round: -2^{i + 1} < f0, g0, f1, g1 <= 2^{i + 1}
+    for _ in 0..NUM_ROUNDS {
+        if *a & 1 == 0 {
+            *a >>= 1;
+        } else {
+            if a < b {
+                core::mem::swap(a, b);
+                (f0, f1) = (f1, f0);
+                (g0, g1) = (g1, g0);
+            }
+            *a -= *b;
+            *a >>= 1;
+            f0 -= f1;
+            g0 -= g1;
+        }
+        f1 <<= 1;
+        g1 <<= 1;
+    }
+
+    // -2^NUM_ROUNDS < f0, g0, f1, g1 <= 2^NUM_ROUNDS
+    // Hence provided NUM_ROUNDS <= 62, we will not get any overflow.
+    // Additionally, if NUM_ROUNDS <= 63, then the only source of overflow will be
+    // if a variable is meant to equal 2^{63} in which case it will overflow to -2^{63}.
+    (f0, g0, f1, g1)
+}
+
 /// Inverts elements inside the prime field `F_P` with `P < 2^FIELD_BITS`.
 ///
 /// Arguments:

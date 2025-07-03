@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
 
 use num_bigint::BigUint;
+use p3_util::gcd_inner;
 
 use crate::{BN254_MONTY_MU_64, BN254_PRIME};
 
@@ -455,8 +456,8 @@ pub(crate) fn gcd_inversion(input: [u64; 4]) -> [u64; 4] {
         // If both a and b now fit in a u64, return those. Otherwise take the bottom
         // 31 bits and the top 33 bits and assemble into a u64.
         let (limb, bits_mod_64) = num_bits(a[1] | b[1], a[2] | b[2], a[3] | b[3]);
-        let a_tilde = get_approximation(a, limb, bits_mod_64);
-        let b_tilde = get_approximation(b, limb, bits_mod_64);
+        let mut a_tilde = get_approximation(a, limb, bits_mod_64);
+        let mut b_tilde = get_approximation(b, limb, bits_mod_64);
 
         // The key idea for the algorithm is that, instead of doing the standard
         // binary GCD algorithm on the big-ints a, b we can do the GCD algorithm
@@ -467,7 +468,7 @@ pub(crate) fn gcd_inversion(input: [u64; 4]) -> [u64; 4] {
 
         // Do the inner GCD loop on a_tilde and b_tilde to get the adjustment
         // factors for this round.
-        let (mut f0, mut g0, mut f1, mut g1) = gcd_inner::<ROUND_SIZE>(a_tilde, b_tilde);
+        let (mut f0, mut g0, mut f1, mut g1) = gcd_inner::<ROUND_SIZE>(&mut a_tilde, &mut b_tilde);
 
         // Update a and b
         let (new_a, sign) = linear_comb_div(a, b, f0, g0, ROUND_SIZE);
@@ -492,48 +493,8 @@ pub(crate) fn gcd_inversion(input: [u64; 4]) -> [u64; 4] {
 
     // a and b are now guaranteed to fit in a u64 so we can just use the inner loop
     // for the remaining layers.
-    let (_, _, f1, g1) = gcd_inner::<FINAL_ROUND_SIZE>(a[0], b[0]);
+    let (_, _, f1, g1) = gcd_inner::<FINAL_ROUND_SIZE>(&mut a[0], &mut b[0]);
 
     // We can now compute the final result:
     linear_comb_monty_red(u, v, f1, g1)
-}
-
-/// Inner loop of the GCD algorithm.
-///
-/// This is basically a mini GCD which builds up a transformation to apply to the larger
-/// numbers in the main loop. The key point is that this small loop only uses u64s and
-/// does not require any BigNum multiplications.
-///
-/// The bottom `NUM_ROUNDS` bits of `a` and `b` should match the bottom `NUM_ROUNDS` bits of
-/// the corresponding big-ints and the top `NUM_ROUNDS + 2` should match the top bits including
-/// zeroes if the original numbers have different sizes.
-#[inline]
-fn gcd_inner<const NUM_ROUNDS: usize>(mut a: u64, mut b: u64) -> (i64, i64, i64, i64) {
-    // Initialise update factors.
-    // At the start of round 0: -1 <= f0, g0, f1, g1 <= 1
-    let (mut f0, mut g0, mut f1, mut g1) = (1, 0, 0, 1);
-
-    // If at the start of a round: -2^i <= f0, g0, f1, g1 <= 2^i
-    // Then, at the end of the round: -2^{i + 1} <= f0, g0, f1, g1 <= 2^{i + 1}
-    for _ in 0..NUM_ROUNDS {
-        if a & 1 == 0 {
-            a >>= 1;
-        } else {
-            if a < b {
-                (a, b) = (b, a);
-                (f0, f1) = (f1, f0);
-                (g0, g1) = (g1, g0);
-            }
-            a -= b;
-            a >>= 1;
-            f0 -= f1;
-            g0 -= g1;
-        }
-        f1 <<= 1;
-        g1 <<= 1;
-    }
-
-    // -2^NUM_ROUNDS <= f0, g0, f1, g1 <= 2^NUM_ROUNDS
-    // Hence provided NUM_ROUNDS <= 62, we will not get any overflow.
-    (f0, g0, f1, g1)
 }
