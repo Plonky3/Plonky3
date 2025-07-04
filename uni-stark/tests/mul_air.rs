@@ -96,15 +96,17 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
 
         for i in 0..REPETITIONS {
             let start = i * 3;
-            let a = main_local[start];
-            let b = main_local[start + 1];
-            let c = main_local[start + 2];
-            builder.assert_zero(a.into().exp_u64(self.degree - 1) * b - c);
+            let a = main_local[start].clone();
+            let b = main_local[start + 1].clone();
+            let c = main_local[start + 2].clone();
+            builder.assert_zero(a.clone().into().exp_u64(self.degree - 1) * b.clone() - c);
             if self.uses_boundary_constraints {
-                builder.when_first_row().assert_eq(a * a + AB::Expr::ONE, b);
+                builder
+                    .when_first_row()
+                    .assert_eq(a.clone() * a.clone() + AB::Expr::ONE, b);
             }
             if self.uses_transition_constraints {
-                let next_a = main_next[start];
+                let next_a = main_next[start].clone();
                 builder
                     .when_transition()
                     .assert_eq(a + AB::Expr::from_u8(REPETITIONS as u8), next_a);
