@@ -1,12 +1,12 @@
 use core::array;
 use core::borrow::Borrow;
 
+use array_init::array_init;
 use p3_air::AirBuilder;
 use p3_matrix::Matrix;
 
 use crate::NUM_ROUNDS;
 use crate::columns::KeccakCols;
-use array_init::array_init;
 
 const NUM_ROUNDS_MIN_1: usize = NUM_ROUNDS - 1;
 
