@@ -5,15 +5,9 @@
 use p3_symmetric::{CryptographicHasher, CryptographicPermutation, Permutation};
 use tiny_keccak::{Hasher, Keccak, keccakf};
 
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx512f"
-))]
+#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
 pub mod avx512;
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx512f"
-))]
+#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
 pub use avx512::*;
 
 #[cfg(all(

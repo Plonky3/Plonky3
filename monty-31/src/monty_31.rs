@@ -366,10 +366,7 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
         not(target_feature = "avx512f")
     ))]
     type Packing = crate::PackedMontyField31AVX2<FP>;
-    #[cfg(all(
-        target_arch = "x86_64",
-        target_feature = "avx512f"
-    ))]
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
     type Packing = crate::PackedMontyField31AVX512<FP>;
     #[cfg(not(any(
         all(target_arch = "aarch64", target_feature = "neon"),
@@ -378,10 +375,7 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
             target_feature = "avx2",
             not(target_feature = "avx512f")
         ),
-        all(
-            target_arch = "x86_64",
-            target_feature = "avx512f"
-        ),
+        all(target_arch = "x86_64", target_feature = "avx512f"),
     )))]
     type Packing = Self;
 

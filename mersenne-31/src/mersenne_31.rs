@@ -234,10 +234,7 @@ impl Field for Mersenne31 {
         not(target_feature = "avx512f")
     ))]
     type Packing = crate::PackedMersenne31AVX2;
-    #[cfg(all(
-        target_arch = "x86_64",
-        target_feature = "avx512f"
-    ))]
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
     type Packing = crate::PackedMersenne31AVX512;
     #[cfg(not(any(
         all(target_arch = "aarch64", target_feature = "neon"),
@@ -246,10 +243,7 @@ impl Field for Mersenne31 {
             target_feature = "avx2",
             not(target_feature = "avx512f")
         ),
-        all(
-            target_arch = "x86_64",
-            target_feature = "avx512f"
-        ),
+        all(target_arch = "x86_64", target_feature = "avx512f"),
     )))]
     type Packing = Self;
 
