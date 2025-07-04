@@ -9,9 +9,8 @@ fn bench_reverse_bits(c: &mut Criterion) {
     let mut group = c.benchmark_group("reverse_bits");
     let mut rng = SmallRng::seed_from_u64(1);
     for log_size in [1, 3, 5, 8, 16, 24] {
-        let bits = 1 << log_size;
-        group.bench_with_input(BenchmarkId::from_parameter(bits), &bits, |b, &bits| {
-            let n = 1 << bits;
+        let n = 1 << log_size;
+        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
             let x = rng.random_range(0..n);
             b.iter(|| {
                 black_box(reverse_bits(black_box(x), black_box(n)));
