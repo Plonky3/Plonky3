@@ -31,7 +31,7 @@ fn interleave<T: Copy + Default>(arr1: &[T], arr2: &[T], i: usize) -> (Vec<T>, V
     let mut flag = false;
 
     for j in 0..width {
-        if j % i == 0 {
+        if j.is_multiple_of(i) {
             flag = !flag;
         }
         if flag {
@@ -51,7 +51,7 @@ where
     PF: PackedFieldPow2 + Eq,
     StandardUniform: Distribution<PF::Scalar>,
 {
-    assert!(PF::WIDTH % i == 0);
+    assert!(PF::WIDTH.is_multiple_of(i));
 
     let vec1 = packed_from_random::<PF>(0x4ff5dec04791e481);
     let vec2 = packed_from_random::<PF>(0x5806c495e9451f8e);
