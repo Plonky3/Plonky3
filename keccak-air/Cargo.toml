@@ -10,12 +10,12 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+array-init = "2"
 p3-air.workspace = true
 p3-field.workspace = true
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
 p3-util.workspace = true
-array-init = "2"
 
 rand.workspace = true
 tracing.workspace = true
