@@ -21,9 +21,6 @@ p3-mersenne-31.workspace = true
 
 criterion.workspace = true
 
-[features]
-nightly-features = []
-
 [[bench]]
 name = "bench_keccak"
 harness = false

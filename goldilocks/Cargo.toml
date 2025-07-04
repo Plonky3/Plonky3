@@ -29,9 +29,6 @@ p3-poseidon.workspace = true
 criterion.workspace = true
 rand.workspace = true
 
-[features]
-nightly-features = []
-
 [[bench]]
 name = "bench_field"
 harness = false

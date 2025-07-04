@@ -30,9 +30,6 @@ p3-field-testing.workspace = true
 criterion.workspace = true
 rand_xoshiro.workspace = true
 
-[features]
-nightly-features = []
-
 [[bench]]
 name = "bench_field"
 harness = false

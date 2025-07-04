@@ -363,11 +363,10 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
     #[cfg(all(
         target_arch = "x86_64",
         target_feature = "avx2",
-        not(all(feature = "nightly-features", target_feature = "avx512f"))
+        not(target_feature = "avx512f")
     ))]
     type Packing = crate::PackedMontyField31AVX2<FP>;
     #[cfg(all(
-        feature = "nightly-features",
         target_arch = "x86_64",
         target_feature = "avx512f"
     ))]
@@ -377,10 +376,9 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
         all(
             target_arch = "x86_64",
             target_feature = "avx2",
-            not(all(feature = "nightly-features", target_feature = "avx512f"))
+            not(target_feature = "avx512f")
         ),
         all(
-            feature = "nightly-features",
             target_arch = "x86_64",
             target_feature = "avx512f"
         ),

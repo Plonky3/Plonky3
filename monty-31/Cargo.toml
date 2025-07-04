@@ -26,6 +26,3 @@ rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 tracing.workspace = true
 transpose.workspace = true
-
-[features]
-nightly-features = []

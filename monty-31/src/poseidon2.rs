@@ -42,14 +42,13 @@ pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>:
 #[cfg(all(
     target_arch = "x86_64",
     target_feature = "avx2",
-    not(all(feature = "nightly-features", target_feature = "avx512f"))
+    not(target_feature = "avx512f")
 ))]
 pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>:
     InternalLayerBaseParameters<FP, WIDTH> + crate::InternalLayerParametersAVX2<FP, WIDTH>
 {
 }
 #[cfg(all(
-    feature = "nightly-features",
     target_arch = "x86_64",
     target_feature = "avx512f"
 ))]
@@ -62,10 +61,9 @@ pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>:
     all(
         target_arch = "x86_64",
         target_feature = "avx2",
-        not(all(feature = "nightly-features", target_feature = "avx512f"))
+        not(target_feature = "avx512f")
     ),
     all(
-        feature = "nightly-features",
         target_arch = "x86_64",
         target_feature = "avx512f"
     ),
