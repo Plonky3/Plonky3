@@ -28,12 +28,6 @@ criterion.workspace = true
 rand.workspace = true
 
 [features]
-nightly-features = [
-    "p3-goldilocks/nightly-features",
-    "p3-monty-31/nightly-features",
-    "p3-baby-bear/nightly-features",
-    "p3-mersenne-31/nightly-features",
-]
 parallel = ["p3-maybe-rayon/parallel"]
 
 [[bench]]
