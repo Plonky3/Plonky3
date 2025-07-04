@@ -271,7 +271,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     pub fn par_row_chunks(
         &self,
         chunk_rows: usize,
-    ) -> impl IndexedParallelIterator<Item = RowMajorMatrixView<'_,T>>
+    ) -> impl IndexedParallelIterator<Item = RowMajorMatrixView<'_, T>>
     where
         T: Send,
     {
