@@ -58,7 +58,7 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         // even with inner struct instantiation. So we will trust LLVM to optimize this out.
         assert!(align_of::<Self>() <= align_of::<Self::Value>());
         assert!(
-            buf.len() % Self::WIDTH == 0,
+            buf.len().is_multiple_of(Self::WIDTH),
             "Slice length (got {}) must be a multiple of packed field width ({}).",
             buf.len(),
             Self::WIDTH
@@ -81,7 +81,7 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     fn pack_slice_mut(buf: &mut [Self::Value]) -> &mut [Self] {
         assert!(align_of::<Self>() <= align_of::<Self::Value>());
         assert!(
-            buf.len() % Self::WIDTH == 0,
+            buf.len().is_multiple_of(Self::WIDTH),
             "Slice length (got {}) must be a multiple of packed field width ({}).",
             buf.len(),
             Self::WIDTH
@@ -101,7 +101,7 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     ) -> &mut [MaybeUninit<Self>] {
         assert!(align_of::<Self>() <= align_of::<Self::Value>());
         assert!(
-            buf.len() % Self::WIDTH == 0,
+            buf.len().is_multiple_of(Self::WIDTH),
             "Slice length (got {}) must be a multiple of packed field width ({}).",
             buf.len(),
             Self::WIDTH

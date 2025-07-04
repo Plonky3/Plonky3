@@ -37,7 +37,10 @@ type C = Complex<Mersenne31>;
 /// domain Mersenne31Complex; it is inverse to `idft_postprocess()`
 /// below.
 fn dft_preprocess(input: RowMajorMatrix<F>) -> RowMajorMatrix<C> {
-    assert!(input.height() % 2 == 0, "input height must be even");
+    assert!(
+        input.height().is_multiple_of(2),
+        "input height must be even"
+    );
     RowMajorMatrix::new(
         input
             .rows()
