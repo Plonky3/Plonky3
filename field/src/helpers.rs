@@ -131,8 +131,8 @@ pub fn halve_u64<const P: u64>(input: u64) -> u64 {
 }
 
 /// Given a slice of SF elements, reduce them to a TF element using a 2^32-base decomposition.
-pub fn reduce_32<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
-    let po2 = TF::from_canonical_u64(1u64 << 32);
+pub fn reduce_31<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
+    let po2 = TF::from_canonical_u64(1u64 << 31);
     let mut result = TF::zero();
     for val in vals.iter().rev() {
         result = result * po2 + TF::from_canonical_u32(val.as_canonical_u32());

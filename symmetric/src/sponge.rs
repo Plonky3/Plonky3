@@ -2,7 +2,7 @@ use alloc::string::String;
 use core::marker::PhantomData;
 
 use itertools::Itertools;
-use p3_field::{reduce_32, Field, PrimeField, PrimeField32};
+use p3_field::{reduce_31, Field, PrimeField, PrimeField32};
 
 use crate::hash::Hash;
 use crate::hasher::CryptographicHasher;
@@ -100,7 +100,7 @@ where
                 .into_iter()
                 .enumerate()
             {
-                state[chunk_id] = reduce_32(&chunk.collect_vec());
+                state[chunk_id] = reduce_31(&chunk.collect_vec());
             }
             state = self.permutation.permute(state);
         }
@@ -127,7 +127,7 @@ where
                 .into_iter()
                 .enumerate()
             {
-                state[chunk_id] = reduce_32(&chunk.collect_vec());
+                state[chunk_id] = reduce_31(&chunk.collect_vec());
             }
             state = self.permutation.permute(state);
         }
