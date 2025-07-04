@@ -89,7 +89,10 @@ RUSTFLAGS="-Ctarget-cpu=native" cargo test
 
 ## Known issues
 
+There is currently a bug in AVX512 compilation on some architectures (znver4, znver5, mic_avx512). This is a bug in LLVM and shoudl hopefully be fixed soon. In the meantime you can either compile with `target-cpu=znver3` or more generally any target which does not support `avx512`. This will hopefully be fixed in a rust update soon. (See issues #729, #905)
+
 The verifier might panic upon receiving certain invalid proofs.
+
 
 
 ## License
