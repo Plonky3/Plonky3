@@ -226,3 +226,152 @@ pub fn xor_32_shift<AB: AirBuilder>(
     // are also boolean and so this final check additionally has the effect of range checking a[0], a[1].
     builder.assert_zeros([a[0] - sum_0_16, a[1] - sum_16_32]);
 }
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_baby_bear::BabyBear;
+
+    use super::*;
+
+    type F = BabyBear;
+
+    #[test]
+    fn test_pack_bits_le_various_patterns() {
+        // Pattern: [1, 0, 1] as little-endian => 1 + 2*0 + 4*1 = 5
+        let bits = [F::ONE, F::ZERO, F::ONE];
+        let packed = pack_bits_le::<F, _, _>(bits.iter().cloned());
+        assert_eq!(packed, F::from_u8(5));
+
+        // Pattern: [1, 1, 0, 1] => 1 + 2*1 + 4*0 + 8*1 = 1 + 2 + 8 = 11
+        let bits = [F::ONE, F::ONE, F::ZERO, F::ONE];
+        let packed = pack_bits_le::<F, _, _>(bits.iter().cloned());
+        assert_eq!(packed, F::from_u8(11));
+
+        // Pattern: all zeros
+        let bits = [F::ZERO; 5];
+        let packed = pack_bits_le::<F, _, _>(bits.iter().cloned());
+        assert_eq!(packed, F::ZERO);
+
+        // Pattern: single one at the highest place
+        let bits = [F::ZERO, F::ZERO, F::ZERO, F::ZERO, F::ONE];
+        let packed = pack_bits_le::<F, _, _>(bits.iter().cloned());
+        assert_eq!(packed, F::from_u8(16));
+    }
+
+    #[test]
+    fn test_checked_xor_multiple_cases() {
+        // Input: [1, 0, 1] => XOR(1 ^ 0 ^ 1) = 0
+        let bits = vec![F::ONE, F::ZERO, F::ONE];
+        let result = checked_xor::<F, 3>(&bits);
+        assert_eq!(result, F::ZERO);
+
+        // [1, 1, 1] => XOR = 1 ^ 1 ^ 1 = 1
+        let bits = vec![F::ONE, F::ONE, F::ONE];
+        let result = checked_xor::<F, 3>(&bits);
+        assert_eq!(result, F::ONE);
+
+        // [0, 0, 0] => XOR = 0
+        let bits = vec![F::ZERO, F::ZERO, F::ZERO];
+        let result = checked_xor::<F, 3>(&bits);
+        assert_eq!(result, F::ZERO);
+
+        // [1, 0, 1, 0] => XOR = 1 ^ 0 ^ 1 ^ 0 = 0
+        let bits = vec![F::ONE, F::ZERO, F::ONE, F::ZERO];
+        let result = checked_xor::<F, 4>(&bits);
+        assert_eq!(result, F::ZERO);
+    }
+
+    #[test]
+    fn test_checked_andn() {
+        // x = 1, y = 0 => 1 & !0 = 0
+        let result = checked_andn(F::ONE, F::ZERO);
+        assert_eq!(result, F::ZERO);
+
+        // x = 0, y = 1 => 0 & !1 = 1
+        let result = checked_andn(F::ZERO, F::ONE);
+        assert_eq!(result, F::ONE);
+
+        // x = 0, y = 0 => 0 & !0 = 0
+        let result = checked_andn(F::ZERO, F::ZERO);
+        assert_eq!(result, F::ZERO);
+
+        // x = 1, y = 1 => 1 & !1 = 0
+        let result = checked_andn(F::ONE, F::ONE);
+        assert_eq!(result, F::ZERO);
+    }
+
+    #[test]
+    fn test_u32_to_bits_le_edges() {
+        // Check 0 => all zeros
+        let bits = u32_to_bits_le::<F>(0);
+        assert!(bits.iter().all(|b| *b == F::ZERO));
+
+        // Check max => all ones
+        let bits = u32_to_bits_le::<F>(u32::MAX);
+        assert!(bits.iter().all(|b| *b == F::ONE));
+    }
+
+    #[test]
+    fn test_u32_to_bits_le() {
+        // Convert 0b1010 (decimal 10) => [0, 1, 0, 1, ...]
+        let bits = u32_to_bits_le::<F>(10);
+        assert_eq!(bits[0], F::ZERO); // LSB first
+        assert_eq!(bits[1], F::ONE);
+        assert_eq!(bits[2], F::ZERO);
+        assert_eq!(bits[3], F::ONE);
+    }
+
+    #[test]
+    fn test_u64_to_bits_le_edges() {
+        // Check 0 => all zeros
+        let bits = u64_to_bits_le::<F>(0);
+        assert!(bits.iter().all(|b| *b == F::ZERO));
+
+        // Check max => all ones
+        let bits = u64_to_bits_le::<F>(u64::MAX);
+        assert!(bits.iter().all(|b| *b == F::ONE));
+    }
+
+    #[test]
+    fn test_u64_to_bits_le() {
+        // Convert 0b11 (decimal 3) => [1, 1, 0, ...]
+        let bits = u64_to_bits_le::<F>(3);
+        assert_eq!(bits[0], F::ONE);
+        assert_eq!(bits[1], F::ONE);
+        assert_eq!(bits[2], F::ZERO);
+    }
+
+    #[test]
+    fn test_u64_to_16_bit_limbs() {
+        // Convert 0x123456789ABCDEF0
+        let val: u64 = 0x123456789ABCDEF0;
+        let limbs = u64_to_16_bit_limbs::<F>(val);
+
+        // Expected limbs (little endian): [0xDEF0, 0x9ABC, 0x5678, 0x1234]
+        assert_eq!(limbs[0], F::from_u64(0xDEF0));
+        assert_eq!(limbs[1], F::from_u64(0x9ABC));
+        assert_eq!(limbs[2], F::from_u64(0x5678));
+        assert_eq!(limbs[3], F::from_u64(0x1234));
+    }
+
+    #[test]
+    fn test_u64_to_16_bit_limbs_various() {
+        // Check zero
+        let limbs = u64_to_16_bit_limbs::<F>(0);
+        assert!(limbs.iter().all(|l| *l == F::ZERO));
+
+        // Check max
+        let limbs = u64_to_16_bit_limbs::<F>(u64::MAX);
+        for l in limbs {
+            assert_eq!(l, F::from_u64(0xFFFF));
+        }
+
+        // Check small value
+        let val: u64 = 0x1234;
+        let limbs = u64_to_16_bit_limbs::<F>(val);
+        assert_eq!(limbs[0], F::from_u64(0x1234));
+        assert!(limbs[1..].iter().all(|l| *l == F::ZERO));
+    }
+}
