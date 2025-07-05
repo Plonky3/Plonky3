@@ -217,18 +217,16 @@ unsafe impl PackedValue for PackedGoldilocksAVX512 {
     }
     #[inline]
     fn as_slice(&self) -> &[Goldilocks] {
-        &self.0[..]
+        &self.0
     }
     #[inline]
     fn as_slice_mut(&mut self) -> &mut [Goldilocks] {
-        &mut self.0[..]
+        &mut self.0
     }
 
-    /// Similar to `core:array::from_fn`.
     #[inline]
     fn from_fn<F: FnMut(usize) -> Goldilocks>(f: F) -> Self {
-        let vals_arr: [_; WIDTH] = core::array::from_fn(f);
-        Self(vals_arr)
+        Self(core::array::from_fn(f))
     }
 }
 
