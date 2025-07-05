@@ -4,33 +4,47 @@ use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 
-/// An AIR (algebraic intermediate representation).
+/// An algebraic intermediate representation (AIR) definition.
+///
+/// This trait describes the core structure of an AIR system.
 pub trait BaseAir<F>: Sync {
     /// The number of columns (a.k.a. registers) in this AIR.
     fn width(&self) -> usize;
 
+    /// Return an optional preprocessed trace matrix to be included in the prover's trace.
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
         None
     }
 }
 
-///  An AIR with 0 or more public values.
+/// An extension of `BaseAir` that includes support for public values.
 pub trait BaseAirWithPublicValues<F>: BaseAir<F> {
+    /// Return the number of expected public values.
     fn num_public_values(&self) -> usize {
         0
     }
 }
 
-/// An AIR that works with a particular `AirBuilder`.
+/// An AIR object that defines constraint evaluations using a provided builder.
+///
+/// The builder is used to build symbolic algebraic expressions defining the AIR constraints.
 pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
+    /// Evaluate and register all AIR constraints using the provided builder.
+    ///
+    /// # Arguments
+    /// - `builder`: Mutable reference to an `AirBuilder` for defining constraints.
     fn eval(&self, builder: &mut AB);
 }
 
+/// A builder for constructing symbolic algebraic AIR constraints.
 pub trait AirBuilder: Sized {
+    /// Base field type.
     type F: Field;
 
+    /// Expression type built from variables and constants over `F`.
     type Expr: Algebra<Self::F> + Algebra<Self::Var>;
 
+    /// Variable type used in expressions.
     type Var: Into<Self::Expr>
         + Copy
         + Send
@@ -45,15 +59,24 @@ pub trait AirBuilder: Sized {
         + Mul<Self::Var, Output = Self::Expr>
         + Mul<Self::Expr, Output = Self::Expr>;
 
+    /// Matrix type holding variables.
     type M: Matrix<Self::Var>;
 
+    /// Return the matrix representing the main (primary) trace registers.
     fn main(&self) -> Self::M;
 
+    /// Expression evaluating to 1 on the first row, 0 elsewhere.
     fn is_first_row(&self) -> Self::Expr;
+
+    /// Expression evaluating to 1 on the last row, 0 elsewhere.
     fn is_last_row(&self) -> Self::Expr;
+
+    /// Expression evaluating to 1 on all transition rows (not last row), 0 on last row.
     fn is_transition(&self) -> Self::Expr {
         self.is_transition_window(2)
     }
+
+    /// Expression evaluating to 1 on rows except the last `size - 1` rows, 0 otherwise.
     fn is_transition_window(&self, size: usize) -> Self::Expr;
 
     /// Returns a sub-builder whose constraints are enforced only when `condition` is nonzero.
@@ -133,27 +156,38 @@ pub trait AirBuilder: Sized {
     }
 }
 
+/// Extension trait for `AirBuilder` providing access to public values.
 pub trait AirBuilderWithPublicValues: AirBuilder {
+    /// Type representing a public variable.
     type PublicVar: Into<Self::Expr> + Copy;
 
+    /// Return the list of public variables.
     fn public_values(&self) -> &[Self::PublicVar];
 }
 
+/// Trait for `AirBuilder` variants that include preprocessed data columns.
 pub trait PairBuilder: AirBuilder {
+    /// Return a matrix of preprocessed registers.
     fn preprocessed(&self) -> Self::M;
 }
 
+/// Extension of `AirBuilder` for working over extension fields.
 pub trait ExtensionBuilder: AirBuilder {
+    /// Extension field type.
     type EF: ExtensionField<Self::F>;
 
+    /// Expression type over extension field elements.
     type ExprEF: Algebra<Self::Expr> + Algebra<Self::EF>;
 
+    /// Variable type over extension field elements.
     type VarEF: Into<Self::ExprEF> + Copy + Send + Sync;
 
+    /// Assert that an extension field expression is zero.
     fn assert_zero_ext<I>(&mut self, x: I)
     where
         I: Into<Self::ExprEF>;
 
+    /// Assert that two extension field expressions are equal.
     fn assert_eq_ext<I1, I2>(&mut self, x: I1, y: I2)
     where
         I1: Into<Self::ExprEF>,
@@ -162,6 +196,7 @@ pub trait ExtensionBuilder: AirBuilder {
         self.assert_zero_ext(x.into() - y.into());
     }
 
+    /// Assert that an extension field expression is equal to one.
     fn assert_one_ext<I>(&mut self, x: I)
     where
         I: Into<Self::ExprEF>,
@@ -170,13 +205,18 @@ pub trait ExtensionBuilder: AirBuilder {
     }
 }
 
+/// Trait for builders supporting permutation arguments (e.g., for lookup constraints).
 pub trait PermutationAirBuilder: ExtensionBuilder {
+    /// Matrix type over extension field variables representing a permutation.
     type MP: Matrix<Self::VarEF>;
 
+    /// Randomness variable type used in permutation commitments.
     type RandomVar: Into<Self::ExprEF> + Copy;
 
+    /// Return the matrix representing permutation registers.
     fn permutation(&self) -> Self::MP;
 
+    /// Return the list of randomness values for permutation argument.
     fn permutation_randomness(&self) -> &[Self::RandomVar];
 }
 
