@@ -183,7 +183,7 @@ where
         let root_table = &root_table[len - log_h..];
 
         // Find the number of rows which can roughly fit in L1 cache.
-        // The strategy is literally the same as `dft_batch` but in reverse.
+        // The strategy is the same as `dft_batch` but in reverse.
         // We start by moving `num_par_rows` rows onto each thread and doing
         // `num_par_rows` layers of the DFT. After this we recombine and do
         // a standard round-by-round parallelization for the remaining layers.
@@ -212,7 +212,7 @@ where
         let multi_layer_dif = MultiLayerDifButterfly {};
 
         // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
-        // we need to handle the remaining layers separately.
+        // we need to handle the initial layers separately.
         let corr = (log_h - log_num_par_rows) % LAYERS_PER_GROUP;
         dft_layer_par_extra_layers(
             &mut mat.as_view_mut(),
@@ -257,8 +257,7 @@ where
         let mut out = RowMajorMatrix::new(output_values, w);
 
         // The strategy is reasonably straightforward.
-        // The rough idea is we want to squash together the dft and idft code which will
-        // cancel out the `reverse_matrix_index_bits`.
+        // The rough idea is we want to squash together the dft and idft code.
 
         // This lets us do all of the inner layers on a single thread reducing the amount
         // of data we need to transfer.
@@ -666,7 +665,7 @@ fn dft_layer_par_triple<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>
 
 /// Applies the remaining layers of the Radix-2 FFT butterfly network in parallel.
 ///
-/// This function is used to correct for the fact that the total number of layers is
+/// This function is used to correct for the fact that the total number of layers
 /// may not be a multiple of `LAYERS_PER_GROUP`.
 fn dft_layer_par_extra_layers<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>(
     mat: &mut RowMajorMatrixViewMut<F>,
@@ -741,6 +740,7 @@ fn dft_layer_zeros<F: Field, B: Butterfly<F>>(vec: &mut [F], twiddles: &[B], ski
         });
 }
 
+/// A type representing a decomposition of an FFT block into four sub-blocks.
 type DoubleLayerBlockDecomposition<'a, F> =
     ((&'a mut [F], &'a mut [F]), (&'a mut [F], &'a mut [F]));
 
@@ -768,8 +768,7 @@ fn fft_double_layer_double_twiddle<F: Field, Fly0: Butterfly<F>, Fly1: Butterfly
     fly1.apply_to_rows(block.1.0, block.1.1);
 }
 
-/// A struct representing a decomposition of an FFT block into eight sub-blocks.
-/// This is used to apply three layers of the FFT butterfly network to the block.
+/// A type representing a decomposition of an FFT block into eight sub-blocks.
 type TripleLayerBlockDecomposition<'a, F> = (
     ((&'a mut [F], &'a mut [F]), (&'a mut [F], &'a mut [F])),
     ((&'a mut [F], &'a mut [F]), (&'a mut [F], &'a mut [F])),
