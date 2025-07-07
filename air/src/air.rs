@@ -48,7 +48,9 @@ pub trait AirBuilder: Sized {
     /// Serves as the output type for an AIR constraint evaluation.
     type Expr: Algebra<Self::F> + Algebra<Self::Var>;
 
-    /// Variable type used in expressions.
+    /// The type of the variable appearing in the trace matrix.
+    ///
+    /// Serves as the input type for an AIR constraint evaluation.
     type Var: Into<Self::Expr>
         + Copy
         + Send
