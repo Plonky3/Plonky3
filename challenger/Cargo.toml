@@ -1,5 +1,6 @@
 [package]
 name = "p3-challenger"
+description = "A Fiat–Shamir transcript and challenger framework used to derive random challenges in proof systems."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

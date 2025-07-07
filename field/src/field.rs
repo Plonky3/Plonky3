@@ -7,8 +7,8 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::{array, slice};
 
 use num_bigint::BigUint;
-use p3_maybe_rayon::prelude::{ParallelIterator, ParallelSlice};
-use p3_util::iter_array_chunks_padded;
+use p3_maybe_rayon::prelude::*;
+use p3_util::{flatten_to_base, iter_array_chunks_padded};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -349,7 +349,7 @@ pub trait PrimeCharacteristicRing:
     /// write zeros, which would be redundant. However, the compiler may not always recognize this.
     ///
     /// In particular, `vec![Self::ZERO; len]` appears to result in redundant userspace zeroing.
-    /// This is the default implementation, but implementors may wish to provide their own
+    /// This is the default implementation, but implementers may wish to provide their own
     /// implementation which transmutes something like `vec![0u32; len]`.
     #[must_use]
     #[inline]
@@ -964,9 +964,9 @@ pub trait TwoAdicField: Field {
 
 /// An iterator which returns the powers of a base element `b` shifted by current `c`: `c, c * b, c * b^2, ...`.
 #[derive(Clone, Debug)]
-pub struct Powers<F> {
-    pub base: F,
-    pub current: F,
+pub struct Powers<R: PrimeCharacteristicRing> {
+    pub base: R,
+    pub current: R,
 }
 
 impl<R: PrimeCharacteristicRing> Iterator for Powers<R> {
@@ -976,5 +976,98 @@ impl<R: PrimeCharacteristicRing> Iterator for Powers<R> {
         let result = self.current.clone();
         self.current *= self.base.clone();
         Some(result)
+    }
+}
+
+impl<R: PrimeCharacteristicRing> Powers<R> {
+    /// Returns an iterator yielding the first `n` powers.
+    #[inline]
+    pub fn take(self, n: usize) -> BoundedPowers<R> {
+        BoundedPowers { iter: self, n }
+    }
+
+    /// Fills `slice` with the next `slice.len()` powers yielded by the iterator.
+    #[inline]
+    pub fn fill(self, slice: &mut [R]) {
+        slice
+            .iter_mut()
+            .zip(self)
+            .for_each(|(out, next)| *out = next)
+    }
+
+    /// Wrapper for `self.take(n).collect()`.
+    #[inline]
+    pub fn collect_n(self, n: usize) -> Vec<R> {
+        self.take(n).collect()
+    }
+}
+
+impl<F: Field> BoundedPowers<F> {
+    /// Collect exactly `num_powers` ascending powers of `self.base`, starting at `self.current`.
+    ///
+    /// # Details
+    ///
+    /// The computation is split evenly amongst available threads, and each chunk is computed
+    /// using packed fields.
+    ///
+    /// # Performance
+    ///
+    /// Enable the `parallel` feature to enable parallelization.
+    pub fn collect(self) -> Vec<F> {
+        let num_powers = self.n;
+
+        // When num_powers is small, fallback to serial computation
+        if num_powers < 16 {
+            return self.take(num_powers).collect();
+        }
+
+        // Allocate buffer storing packed powers, containing at least `num_powers` scalars.
+        let width = F::Packing::WIDTH;
+        let num_packed = num_powers.div_ceil(width);
+        let mut points_packed = F::Packing::zero_vec(num_packed);
+
+        // Split computation evenly among threads
+        let num_threads = current_num_threads().max(1);
+        let chunk_size = num_packed.div_ceil(num_threads);
+
+        // Precompute base for each chunk.
+        let base = self.iter.base;
+        let chunk_base = base.exp_u64((chunk_size * width) as u64);
+        let shift = self.iter.current;
+
+        points_packed
+            .par_chunks_mut(chunk_size)
+            .enumerate()
+            .for_each(|(chunk_idx, chunk_slice)| {
+                // First power in this chunk
+                let chunk_start = shift * chunk_base.exp_u64(chunk_idx as u64);
+
+                // Fill the chunk with packed powers.
+                F::Packing::packed_shifted_powers(base, chunk_start).fill(chunk_slice);
+            });
+
+        // return the number of requested points, discarding the unused packed powers
+        // SAFETY: size_of::<F::Packing> always divides size_of::<F::Packing>.
+        let mut points = unsafe { flatten_to_base(points_packed) };
+        points.truncate(num_powers);
+        points
+    }
+}
+
+/// Same as [`Powers`], but returns a bounded number of powers.
+#[derive(Clone, Debug)]
+pub struct BoundedPowers<R: PrimeCharacteristicRing> {
+    iter: Powers<R>,
+    n: usize,
+}
+
+impl<R: PrimeCharacteristicRing> Iterator for BoundedPowers<R> {
+    type Item = R;
+
+    fn next(&mut self) -> Option<R> {
+        (self.n != 0).then(|| {
+            self.n -= 1;
+            self.iter.next().unwrap()
+        })
     }
 }

@@ -1,5 +1,5 @@
+use p3_field::PrimeCharacteristicRing;
 use p3_field::exponentiation::exp_1420470955;
-use p3_field::{Field, PrimeCharacteristicRing};
 use p3_monty_31::{
     BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
     PackedMontyParameters, RelativelyPrimePower, TwoAdicData,
@@ -29,32 +29,6 @@ impl BarrettParameters for KoalaBearParameters {}
 
 impl FieldParameters for KoalaBearParameters {
     const MONTY_GEN: KoalaBear = KoalaBear::new(3);
-
-    fn try_inverse<F: Field>(p1: F) -> Option<F> {
-        if p1.is_zero() {
-            return None;
-        }
-
-        // From Fermat's little theorem, in a prime field `F_p`, the inverse of `a` is `a^(p-2)`.
-        // Here p-2 = 2130706431 = 1111110111111111111111111111111_2
-        // Uses 29 Squares + 7 Multiplications => 36 Operations total.
-
-        let p10 = p1.square();
-        let p11 = p10 * p1;
-        let p1100 = p11.exp_power_of_2(2);
-        let p1111 = p1100 * p11;
-        let p110000 = p1100.exp_power_of_2(2);
-        let p111111 = p110000 * p1111;
-        let p1111110000 = p111111.exp_power_of_2(4);
-        let p1111111111 = p1111110000 * p1111;
-        let p11111101111 = p1111111111 * p1111110000;
-        let p111111011110000000000 = p11111101111.exp_power_of_2(10);
-        let p111111011111111111111 = p111111011110000000000 * p1111111111;
-        let p1111110111111111111110000000000 = p111111011111111111111.exp_power_of_2(10);
-        let p1111110111111111111111111111111 = p1111110111111111111110000000000 * p1111111111;
-
-        Some(p1111110111111111111111111111111)
-    }
 }
 
 impl RelativelyPrimePower<3> for KoalaBearParameters {

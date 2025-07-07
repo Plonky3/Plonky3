@@ -83,7 +83,7 @@ jobs:
             target/
           key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ env.target }}-${{ hashFiles('**/Cargo.toml') }}
 
-      # NB: We omit p3-bn254-fr, p3-field-testing, and p3-examples as they currently depend on std
+      # NB: We omit, p3-field-testing, and p3-examples as they currently depend on std
       # and hence don't compile on the given target.
       - name: Build
         run: |
@@ -91,6 +91,7 @@ jobs:
           cargo build --verbose --target ${{ env.target }} -p p3-baby-bear
           cargo build --verbose --target ${{ env.target }} -p p3-blake3
           cargo build --verbose --target ${{ env.target }} -p p3-blake3-air
+          cargo build --verbose --target ${{ env.target }} -p p3-bn254
           cargo build --verbose --target ${{ env.target }} -p p3-challenger
           cargo build --verbose --target ${{ env.target }} -p p3-circle
           cargo build --verbose --target ${{ env.target }} -p p3-commit

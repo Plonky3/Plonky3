@@ -1,5 +1,6 @@
 [package]
 name = "p3-fri"
+description = "An implementation of the FRI low-degree test (LDT) protocol used in zero-knowledge proof systems."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -14,7 +14,7 @@ use p3_field::{
     PrimeField32, PrimeField64, RawDataSerializable, halve_u32, impl_raw_serializable_primefield32,
     quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int,
 };
-use p3_util::flatten_to_base;
+use p3_util::{flatten_to_base, gcd_inversion_prime_field_32};
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::de::Error;
@@ -278,21 +278,12 @@ impl Field for Mersenne31 {
             return None;
         }
 
-        // From Fermat's little theorem, in a prime field `F_p`, the inverse of `a` is `a^(p-2)`.
-        // Here p-2 = 2147483645 = 1111111111111111111111111111101_2.
-        // Uses 30 Squares + 7 Multiplications => 37 Operations total.
+        // Number of bits in the Mersenne31 prime.
+        const NUM_PRIME_BITS: u32 = 31;
 
-        let p1 = *self;
-        let p101 = p1.exp_power_of_2(2) * p1;
-        let p1111 = p101.square() * p101;
-        let p11111111 = p1111.exp_power_of_2(4) * p1111;
-        let p111111110000 = p11111111.exp_power_of_2(4);
-        let p111111111111 = p111111110000 * p1111;
-        let p1111111111111111 = p111111110000.exp_power_of_2(4) * p11111111;
-        let p1111111111111111111111111111 = p1111111111111111.exp_power_of_2(12) * p111111111111;
-        let p1111111111111111111111111111101 =
-            p1111111111111111111111111111.exp_power_of_2(3) * p101;
-        Some(p1111111111111111111111111111101)
+        // gcd_inversion returns the inverse multiplied by 2^60 so we need to correct for that.
+        let inverse_i64 = gcd_inversion_prime_field_32::<NUM_PRIME_BITS>(self.value, P);
+        Some(Self::from_int(inverse_i64).div_2exp_u64(60))
     }
 
     #[inline]

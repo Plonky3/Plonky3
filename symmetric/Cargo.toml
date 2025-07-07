@@ -1,5 +1,6 @@
 [package]
 name = "p3-symmetric"
+description = "A modular framework for symmetric cryptographic primitives."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

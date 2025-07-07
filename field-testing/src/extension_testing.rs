@@ -27,16 +27,14 @@ where
     if ext_degree == 1 {
         assert!(
             extension_elem.is_in_basefield(),
-            "The element {} does not lie in the base field, but it should.",
-            extension_elem
+            "The element {extension_elem} does not lie in the base field, but it should.",
         );
     } else {
         // In principle it's possible that a randomly chosen element does lie in the base field.
         // But this is very unlikely. If this comes up regularly, we can change the test.
         assert!(
             !extension_elem.is_in_basefield(),
-            "The randomly chosen element {} lies in the base field, but it (likely) should not.",
-            extension_elem
+            "The randomly chosen element {extension_elem} lies in the base field, but it (likely) should not.",
         );
         assert!(extension_elem.as_base().is_none());
     }
@@ -79,20 +77,15 @@ where
 
     assert!(
         norm.is_in_basefield(),
-        "The product of Galois conjugates {} of the element {} does not lie in the base field.",
-        norm,
-        extension_elem
+        "The product of Galois conjugates {norm} of the element {extension_elem} does not lie in the base field.",
     );
     assert!(
         trace.is_in_basefield(),
-        "The sum of Galois conjugates {} of the element {} does not lie in the base field.",
-        trace,
-        extension_elem
+        "The sum of Galois conjugates {trace} of the element {extension_elem} does not lie in the base field.",
     );
     assert_eq!(
         extension_elem, ext_power_p_d,
-        "The element {} raised to the power of p^d does not equal itself.",
-        extension_elem
+        "The element {extension_elem} raised to the power of p^d does not equal itself.",
     );
 }
 

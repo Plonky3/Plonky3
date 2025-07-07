@@ -514,20 +514,19 @@ unsafe impl PackedValue for PackedMersenne31Neon {
         }
     }
 
-    /// Similar to `core:array::from_fn`.
     #[inline]
     fn from_fn<F: FnMut(usize) -> Mersenne31>(f: F) -> Self {
-        let vals_arr: [_; WIDTH] = core::array::from_fn(f);
-        Self(vals_arr)
+        Self(core::array::from_fn(f))
     }
 
     #[inline]
     fn as_slice(&self) -> &[Mersenne31] {
-        &self.0[..]
+        &self.0
     }
+
     #[inline]
     fn as_slice_mut(&mut self) -> &mut [Mersenne31] {
-        &mut self.0[..]
+        &mut self.0
     }
 }
 

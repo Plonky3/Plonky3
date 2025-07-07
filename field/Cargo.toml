@@ -1,5 +1,6 @@
 [package]
 name = "p3-field"
+description = "A modular framework for finite fields, including support for generic binomial extensions, SIMD-packed field arithmetic."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

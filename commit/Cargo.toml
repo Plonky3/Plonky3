@@ -1,5 +1,6 @@
 [package]
 name = "p3-commit"
+description = "A framework for implementing various cryptographic commitment schemes, including non-hiding variants."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

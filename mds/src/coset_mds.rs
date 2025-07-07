@@ -29,18 +29,13 @@ where
 
         let root = F::two_adic_generator(log_n);
         let root_inv = root.inverse();
-        let mut fft_twiddles: Vec<F> = root.powers().take(N / 2).collect();
-        let mut ifft_twiddles: Vec<F> = root_inv.powers().take(N / 2).collect();
+        let mut fft_twiddles: Vec<F> = root.powers().collect_n(N / 2);
+        let mut ifft_twiddles: Vec<F> = root_inv.powers().collect_n(N / 2);
         reverse_slice_index_bits(&mut fft_twiddles);
         reverse_slice_index_bits(&mut ifft_twiddles);
 
         let shift = F::GENERATOR;
-        let mut weights: [F; N] = shift
-            .powers()
-            .take(N)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let mut weights: [F; N] = shift.powers().collect_n(N).try_into().unwrap();
         reverse_slice_index_bits(&mut weights);
         Self {
             fft_twiddles,

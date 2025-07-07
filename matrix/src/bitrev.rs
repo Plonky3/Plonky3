@@ -7,7 +7,7 @@ use crate::util::reverse_matrix_index_bits;
 
 /// A trait for matrices that support *bit-reversed row reordering*.
 ///
-/// Implementors of this trait can switch between row-major order and bit-reversed
+/// Implementers of this trait can switch between row-major order and bit-reversed
 /// row order (i.e., reversing the binary representation of each row index).
 ///
 /// This trait allows interoperability between regular matrices and views

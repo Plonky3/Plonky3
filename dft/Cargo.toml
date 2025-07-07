@@ -1,5 +1,6 @@
 [package]
 name = "p3-dft"
+description = "A collection of discrete Fourier transform (DFT) implementations for finite fields."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

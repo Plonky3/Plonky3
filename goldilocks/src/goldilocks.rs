@@ -14,7 +14,7 @@ use p3_field::{
     PrimeField64, RawDataSerializable, TwoAdicField, halve_u64, impl_raw_serializable_primefield64,
     quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int,
 };
-use p3_util::{assume, branch_hint, flatten_to_base};
+use p3_util::{assume, branch_hint, flatten_to_base, gcd_inner};
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
@@ -93,6 +93,27 @@ impl Goldilocks {
         0x400a7f755588e659,
         0x185629dcda58878c,
     ]);
+
+    /// A list of powers of two from 0 to 95.
+    ///
+    /// Note that 2^{96} = -1 mod P so all powers of two can be simply
+    /// derived from this list.
+    const POWERS_OF_TWO: [Self; 96] = {
+        let mut powers_of_two = [Goldilocks::ONE; 96];
+
+        let mut i = 1;
+        while i < 64 {
+            powers_of_two[i] = Goldilocks::new(1 << i);
+            i += 1;
+        }
+        let mut var = Goldilocks::new(1 << 63);
+        while i < 96 {
+            var = const_add(var, var);
+            powers_of_two[i] = var;
+            i += 1;
+        }
+        powers_of_two
+    };
 }
 
 impl PartialEq for Goldilocks {
@@ -163,6 +184,18 @@ impl PrimeCharacteristicRing for Goldilocks {
     #[inline]
     fn from_bool(b: bool) -> Self {
         Self::new(b.into())
+    }
+
+    #[inline]
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        // In the Goldilocks field, 2^96 = -1 mod P and 2^192 = 1 mod P.
+        if exp < 96 {
+            *self * Self::POWERS_OF_TWO[exp as usize]
+        } else if exp < 192 {
+            -*self * Self::POWERS_OF_TWO[(exp - 96) as usize]
+        } else {
+            self.mul_2exp_u64(exp % 192)
+        }
     }
 
     #[inline]
@@ -299,49 +332,20 @@ impl Field for Goldilocks {
             return None;
         }
 
-        // From Fermat's little theorem, in a prime field `F_p`, the inverse of `a` is `a^(p-2)`.
-        //
-        // compute a^(p - 2) using 72 multiplications
-        // The exponent p - 2 is represented in binary as:
-        // 0b1111111111111111111111111111111011111111111111111111111111111111
-        // Adapted from: https://github.com/facebook/winterfell/blob/d238a1/math/src/field/f64/mod.rs#L136-L164
-
-        // compute base^11
-        let t2 = self.square() * *self;
-
-        // compute base^111
-        let t3 = t2.square() * *self;
-
-        // compute base^111111 (6 ones)
-        // repeatedly square t3 3 times and multiply by t3
-        let t6 = exp_acc::<3>(t3, t3);
-        let t60 = t6.square();
-        let t7 = t60 * *self;
-
-        // compute base^111111111111 (12 ones)
-        // repeatedly square t6 6 times and multiply by t6
-        let t12 = exp_acc::<5>(t60, t6);
-
-        // compute base^111111111111111111111111 (24 ones)
-        // repeatedly square t12 12 times and multiply by t12
-        let t24 = exp_acc::<12>(t12, t12);
-
-        // compute base^1111111111111111111111111111111 (31 ones)
-        // repeatedly square t24 6 times and multiply by t6 first. then square t30 and
-        // multiply by base
-        let t31 = exp_acc::<7>(t24, t7);
-
-        // compute base^111111111111111111111111111111101111111111111111111111111111111
-        // repeatedly square t31 32 times and multiply by t31
-        let t63 = exp_acc::<32>(t31, t31);
-
-        // compute base^1111111111111111111111111111111011111111111111111111111111111111
-        Some(t63.square() * *self)
+        Some(gcd_inversion(*self))
     }
 
     #[inline]
     fn halve(&self) -> Self {
         Self::new(halve_u64::<P>(self.value))
+    }
+
+    #[inline]
+    fn div_2exp_u64(&self, mut exp: u64) -> Self {
+        // In the goldilocks field, 2^192 = 1 mod P.
+        // Thus 2^{-n} = 2^{192 - n} mod P.
+        exp %= 192;
+        self.mul_2exp_u64(192 - exp)
     }
 
     #[inline]
@@ -465,6 +469,20 @@ impl TwoAdicField for Goldilocks {
     }
 }
 
+/// A const version of the addition function.
+///
+/// Useful for constructing constants values in const contexts. Outside of
+/// const contexts, Add should be used instead.
+#[inline]
+const fn const_add(lhs: Goldilocks, rhs: Goldilocks) -> Goldilocks {
+    let (sum, over) = lhs.value.overflowing_add(rhs.value);
+    let (mut sum, over) = sum.overflowing_add((over as u64) * Goldilocks::NEG_ORDER);
+    if over {
+        sum += Goldilocks::NEG_ORDER;
+    }
+    Goldilocks::new(sum)
+}
+
 impl Add for Goldilocks {
     type Output = Self;
 
@@ -575,12 +593,6 @@ impl Div for Goldilocks {
     }
 }
 
-/// Squares the base N number of times and multiplies the result by the tail value.
-#[inline(always)]
-fn exp_acc<const N: usize>(base: Goldilocks, tail: Goldilocks) -> Goldilocks {
-    base.exp_power_of_2(N) * tail
-}
-
 /// Reduces to a 64-bit value. The result might not be in canonical form; it could be in between the
 /// field order and `2^64`.
 #[inline]
@@ -645,6 +657,50 @@ unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
     let (res_wrapped, carry) = x.overflowing_add(y);
     // Below cannot overflow unless the assumption if x + y < 2**64 + ORDER is incorrect.
     res_wrapped + Goldilocks::NEG_ORDER * u64::from(carry)
+}
+
+/// Compute the inverse of a Goldilocks element `a` using the binary GCD algorithm.
+///
+/// Instead of applying the standard algorithm this uses a variant inspired by https://eprint.iacr.org/2020/972.pdf.
+/// The key idea is to compute update factors which are incorrect by a known power of 2 which
+/// can be corrected at the end. These update factors can then be used to construct the inverse
+/// via a simple linear combination.
+///
+/// This is much faster than the standard algorithm as we avoid most of the (more expensive) field arithmetic.
+fn gcd_inversion(input: Goldilocks) -> Goldilocks {
+    // Initialise our values to the value we want to invert and the prime.
+    let (mut a, mut b) = (input.value, P);
+
+    // As the goldilocks prime is 64 bit, initially `len(a) + len(b) ≤ 2 * 64 = 128`.
+    // This means we will need `126` iterations of the inner loop ensure `len(a) + len(b) ≤ 2`.
+    // We split the iterations into 2 rounds of length 63.
+    const ROUND_SIZE: usize = 63;
+
+    // In theory we could make this slightly faster by replacing the first `gcd_inner` by a copy-pasted
+    // version which doesn't do any computations involving g. But either the compiler works this out
+    // for itself or the speed up is negligible as I couldn't notice any difference in benchmarks.
+    let (f00, _, f10, _) = gcd_inner::<ROUND_SIZE>(&mut a, &mut b);
+    let (_, _, f11, g11) = gcd_inner::<ROUND_SIZE>(&mut a, &mut b);
+
+    // The update factors are i64's except we need to interpret -2^63 as 2^63.
+    // This is because the outputs of `gcd_inner` are always in the range `(-2^ROUND_SIZE, 2^ROUND_SIZE]`.
+    let u = from_unusual_int(f00);
+    let v = from_unusual_int(f10);
+    let u_fac11 = from_unusual_int(f11);
+    let v_fac11 = from_unusual_int(g11);
+
+    // Each iteration introduced a factor of 2 and so we need to divide by 2^{126}.
+    // But 2^{192} = 1 mod P, so we can instead multiply by 2^{66} as 192 - 126 = 66.
+    (u * u_fac11 + v * v_fac11).mul_2exp_u64(66)
+}
+
+/// Convert from an i64 to a Goldilocks element but interpret -2^63 as 2^63.
+fn from_unusual_int(int: i64) -> Goldilocks {
+    if (int >= 0) || (int == i64::MIN) {
+        Goldilocks::new(int as u64)
+    } else {
+        Goldilocks::new(Goldilocks::ORDER_U64.wrapping_add_signed(int))
+    }
 }
 
 #[cfg(test)]

@@ -32,7 +32,7 @@ pub trait AirBuilder: Sized {
     type Expr: Algebra<Self::F> + Algebra<Self::Var>;
 
     type Var: Into<Self::Expr>
-        + Copy
+        + Clone
         + Send
         + Sync
         + Add<Self::F, Output = Self::Expr>

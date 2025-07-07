@@ -1,5 +1,6 @@
 [package]
 name = "p3-monolith"
+description = "Implements the Monolith permutation and associated hash functions over Mersenne31 fields."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -5,12 +5,12 @@ use core::cell::RefCell;
 use core::iter;
 
 use itertools::Itertools;
-use p3_field::{Field, PackedField, PackedValue, TwoAdicField, scale_slice_in_place_single_core};
+use p3_field::{Field, TwoAdicField, scale_slice_in_place_single_core};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
-use p3_util::{as_base_slice, flatten_to_base, log2_strict_usize, reverse_slice_index_bits};
+use p3_util::{as_base_slice, log2_strict_usize, reverse_slice_index_bits};
 
 use crate::{
     Butterfly, DifButterfly, DifButterflyZeros, DitButterfly, TwiddleFreeButterfly,
@@ -351,7 +351,7 @@ where
 #[inline]
 fn dft_layer_par<F: Field, B: Butterfly<F>>(mat: &mut RowMajorMatrixViewMut<F>, twiddles: &[B]) {
     debug_assert!(
-        mat.height() % twiddles.len() == 0,
+        mat.height().is_multiple_of(twiddles.len()),
         "Matrix height must be divisible by the number of twiddles"
     );
     let size = mat.values.len();
@@ -476,11 +476,7 @@ fn par_middle_layers<F: Field>(
     let log_height = log2_strict_usize(height);
     let inv_height = F::ONE.div_2exp_u64(log_height as u64);
 
-    let scaling_packed: Vec<F::Packing> = F::Packing::packed_shifted_powers(shift, inv_height)
-        .take(height.div_ceil(F::Packing::WIDTH))
-        .collect::<Vec<_>>();
-    let mut scaling: Vec<F> = unsafe { flatten_to_base(scaling_packed) };
-    scaling.truncate(height);
+    let mut scaling = shift.shifted_powers(inv_height).collect_n(height);
     reverse_slice_index_bits(&mut scaling);
 
     in_mat
@@ -574,7 +570,7 @@ fn dft_layer_par_double<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>
     multi_butterfly: M,
 ) {
     debug_assert!(
-        mat.height() % twiddles_small.len() == 0,
+        mat.height().is_multiple_of(twiddles_small.len()),
         "Matrix height must be divisible by the number of twiddles"
     );
     let size = mat.values.len();
@@ -628,7 +624,7 @@ fn dft_layer_par_triple<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>
     multi_butterfly: M,
 ) {
     debug_assert!(
-        mat.height() % twiddles_small.len() == 0,
+        mat.height().is_multiple_of(twiddles_small.len()),
         "Matrix height must be divisible by the number of twiddles"
     );
     let size = mat.values.len();
@@ -677,8 +673,6 @@ fn dft_layer_par_extra_layers<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<
     root_table: &[Vec<F>],
     multi_layer: M,
 ) {
-    // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
-    // we need to handle the remaining layers separately.
     match root_table.len() {
         1 => {
             // Safe as DitButterfly is #[repr(transparent)]

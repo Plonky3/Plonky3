@@ -258,14 +258,12 @@ mod tests {
 
         assert!(
             constraints.iter().any(|x| matches!(x, SymbolicExpression::Variable(v) if v.index == c1.index && v.entry == c1.entry)),
-            "Expected constraint {:?} was not found",
-            c1
+            "Expected constraint {c1:?} was not found"
         );
 
         assert!(
             constraints.iter().any(|x| matches!(x, SymbolicExpression::Variable(v) if v.index == c2.index && v.entry == c2.entry)),
-            "Expected constraint {:?} was not found",
-            c2
+            "Expected constraint {c2:?} was not found"
         );
     }
 

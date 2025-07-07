@@ -471,7 +471,7 @@ pub unsafe fn flatten_to_base<Base, BaseArray>(vec: Vec<BaseArray>) -> Vec<Base>
     debug_assert_eq!(align_of::<Base>(), align_of::<BaseArray>());
 
     assert!(
-        size_of::<BaseArray>() % size_of::<Base>() == 0,
+        size_of::<BaseArray>().is_multiple_of(size_of::<Base>()),
         "Size of BaseArray (got {}) must be a multiple of the size of Base ({}).",
         size_of::<BaseArray>(),
         size_of::<Base>()
@@ -522,7 +522,7 @@ pub unsafe fn flatten_to_base<Base, BaseArray>(vec: Vec<BaseArray>) -> Vec<Base>
 #[inline]
 pub unsafe fn reconstitute_from_base<Base, BaseArray: Clone>(mut vec: Vec<Base>) -> Vec<BaseArray> {
     assert!(
-        size_of::<BaseArray>() % size_of::<Base>() == 0,
+        size_of::<BaseArray>().is_multiple_of(size_of::<Base>()),
         "Size of BaseArray (got {}) must be a multiple of the size of Base ({}).",
         size_of::<BaseArray>(),
         size_of::<Base>()
@@ -531,7 +531,7 @@ pub unsafe fn reconstitute_from_base<Base, BaseArray: Clone>(mut vec: Vec<Base>)
     let d = size_of::<BaseArray>() / size_of::<Base>();
 
     assert!(
-        vec.len() % d == 0,
+        vec.len().is_multiple_of(d),
         "Vector length (got {}) must be a multiple of the extension field dimension ({}).",
         vec.len(),
         d
@@ -548,7 +548,7 @@ pub unsafe fn reconstitute_from_base<Base, BaseArray: Clone>(mut vec: Vec<Base>)
     // with a vector constructed from `flatten_to_base` and so the capacity should be a multiple of `d`.
     // But capacities can do strange things so we need to support both possibilities.
     // Note that the `else` branch would also work if the capacity is a multiple of `d` but it is slower.
-    if cap % d == 0 {
+    if cap.is_multiple_of(d) {
         // Prevent running `vec`'s destructor so we are in complete control
         // of the allocation.
         let mut values = ManuallyDrop::new(vec);
@@ -625,6 +625,121 @@ pub const fn relatively_prime_u64(mut u: u64, mut v: u64) -> bool {
     // If we made it through the loop, at no point is u or v equal to 1 and so the gcd
     // must be greater than 1.
     false
+}
+
+/// Inner loop of the deferred GCD algorithm.
+///
+/// See: https://eprint.iacr.org/2020/972.pdf for more information.
+///
+/// This is basically a mini GCD algorithm which builds up a transformation to apply to the larger
+/// numbers in the main loop. The key point is that this small loop only uses u64s, subtractions and
+/// bit shifts, which are very fast operations.
+///
+/// The bottom `NUM_ROUNDS` bits of `a` and `b` should match the bottom `NUM_ROUNDS` bits of
+/// the corresponding big-ints and the top `NUM_ROUNDS + 2` should match the top bits including
+/// zeroes if the original numbers have different sizes.
+#[inline]
+pub fn gcd_inner<const NUM_ROUNDS: usize>(a: &mut u64, b: &mut u64) -> (i64, i64, i64, i64) {
+    // Initialise update factors.
+    // At the start of round 0: -1 < f0, g0, f1, g1 <= 1
+    let (mut f0, mut g0, mut f1, mut g1) = (1, 0, 0, 1);
+
+    // If at the start of a round: -2^i < f0, g0, f1, g1 <= 2^i
+    // Then, at the end of the round: -2^{i + 1} < f0, g0, f1, g1 <= 2^{i + 1}
+    for _ in 0..NUM_ROUNDS {
+        if *a & 1 == 0 {
+            *a >>= 1;
+        } else {
+            if a < b {
+                core::mem::swap(a, b);
+                (f0, f1) = (f1, f0);
+                (g0, g1) = (g1, g0);
+            }
+            *a -= *b;
+            *a >>= 1;
+            f0 -= f1;
+            g0 -= g1;
+        }
+        f1 <<= 1;
+        g1 <<= 1;
+    }
+
+    // -2^NUM_ROUNDS < f0, g0, f1, g1 <= 2^NUM_ROUNDS
+    // Hence provided NUM_ROUNDS <= 62, we will not get any overflow.
+    // Additionally, if NUM_ROUNDS <= 63, then the only source of overflow will be
+    // if a variable is meant to equal 2^{63} in which case it will overflow to -2^{63}.
+    (f0, g0, f1, g1)
+}
+
+/// Inverts elements inside the prime field `F_P` with `P < 2^FIELD_BITS`.
+///
+/// Arguments:
+///  - a: The value we want to invert. It must be < P.
+///  - b: The value of the prime `P > 2`.
+///
+/// Output:
+/// - A `64-bit` signed integer `v` equal to `2^{2 * FIELD_BITS - 2} a^{-1} mod P` with
+///   size `|v| < 2^{2 * FIELD_BITS - 2}`.
+///
+/// It is up to the user to ensure that `b` is an odd prime with at most `FIELD_BITS` bits and
+/// `a < b`. If either of these assumptions break, the output is undefined.
+#[inline]
+pub fn gcd_inversion_prime_field_32<const FIELD_BITS: u32>(mut a: u32, mut b: u32) -> i64 {
+    assert!(FIELD_BITS <= 32);
+    debug_assert!(((1_u64 << FIELD_BITS) - 1) >= b as u64);
+
+    // Initialise u, v. Note that |u|, |v| <= 2^0
+    let (mut u, mut v) = (1_i64, 0_i64);
+
+    // Let a0 and P denote the initial values of a and b. Observe:
+    // `a = u * a0 mod P`
+    // `b = v * a0 mod P`
+    // `len(a) + len(b) <= 2 * len(P) <= 2 * FIELD_BITS`
+
+    for _ in 0..(2 * FIELD_BITS - 2) {
+        // Assume at the start of the loop i:
+        // (1) `|u|, |v| <= 2^{i}`
+        // (2) `2^i * a = u * a0 mod P`
+        // (3) `2^i * b = v * a0 mod P`
+        // (4) `gcd(a, b) = 1`
+        // (5) `b` is odd.
+        // (6) `len(a) + len(b) <= max(n - i, 1)`
+
+        if a & 1 != 0 {
+            if a < b {
+                (a, b) = (b, a);
+                (u, v) = (v, u);
+            }
+            // As b < a, this subtraction cannot increase `len(a) + len(b)`
+            a -= b;
+            // Observe |u'| = |u - v| <= |u| + |v| <= 2^{i + 1}
+            u -= v;
+
+            // As (1) and (2) hold, we have
+            // `2^i a' = 2^i * (a - b) = (u - v) * a0 mod P = u' * a0 mod P`
+        }
+        // As b is odd, a must now be even.
+        // This reduces `len(a) + len(b)` by 1 (unless `a = 0` in which case `b = 1` and the sum of the lengths is always 1)
+        a >>= 1;
+
+        // Observe |v'| = 2|v| <= 2^{i + 1}
+        v <<= 1;
+
+        // Thus as the end of loop i:
+        // (1) `|u|, |v| <= 2^{i + 1}`
+        // (2) `2^{i + 1} * a = u * a0 mod P`  (As we have halved a)
+        // (3) `2^{i + 1} * b = v * a0 mod P`  (As we have doubled v)
+        // (4) `gcd(a, b) = 1`
+        // (5) `b` is odd.
+        // (6) `len(a) + len(b) <= max(n - i - 1, 1)`
+    }
+
+    // After the loops, we see that:
+    // |u|, |v| <= 2^{2 * FIELD_BITS - 2}: Hence for FIELD_BITS <= 32 we will not overflow an i64.
+    // `2^{2 * FIELD_BITS - 2} * b = v * a0 mod P`
+    // `len(a) + len(b) <= 2` with `gcd(a, b) = 1` and `b` odd.
+    // This implies that `b` must be `1` and so `v = 2^{2 * FIELD_BITS - 2} a0^{-1} mod P` as desired.
+    v
 }
 
 #[cfg(test)]

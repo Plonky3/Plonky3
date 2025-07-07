@@ -12,11 +12,13 @@ pub mod packedfield_testing;
 
 use alloc::vec::Vec;
 use core::array;
+use core::iter::successors;
 
 pub use bench_func::*;
 pub use dft_testing::*;
 pub use extension_testing::*;
 use num_bigint::BigUint;
+use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
     ExtensionField, Field, PackedValue, PrimeCharacteristicRing, PrimeField32, PrimeField64,
     TwoAdicField,
@@ -249,6 +251,10 @@ where
             x.clone() * R::from_u128(1_u128 << i)
         );
     }
+    // Goldilocks behaviour changes at 96, 192 so we want to test larger numbers than that.
+    for i in 128..256 {
+        assert_eq!(x.clone().mul_2exp_u64(i), x.clone() * R::TWO.exp_u64(i));
+    }
 }
 
 pub fn test_div_2exp_u64<F: Field>()
@@ -265,6 +271,15 @@ where
             x.div_2exp_u64(i),
             // Best to invert in the prime subfield in case F is an extension field.
             x * F::from_prime_subfield(F::PrimeSubfield::from_u128(1_u128 << i).inverse())
+        );
+    }
+    // Goldilocks behaviour changes at 96, 192 so we want to test larger numbers than that.
+    for i in 128..256 {
+        assert_eq!(x.mul_2exp_u64(i).div_2exp_u64(i), x);
+        assert_eq!(
+            x.div_2exp_u64(i),
+            // Best to invert in the prime subfield in case F is an extension field.
+            x * F::from_prime_subfield(F::PrimeSubfield::TWO.inverse().exp_u64(i))
         );
     }
 }
@@ -536,6 +551,41 @@ pub fn test_binary_ops<R: PrimeCharacteristicRing + Eq + Copy>(
     );
 }
 
+/// Tests the optimized implementation of `powers.take(n).collect()`
+pub fn test_powers_collect<F: Field>() {
+    // Small using serial implementation
+    let small_powers_serial = [0, 1, 2, 3, 4, 15];
+    // Small using packed implementation
+    let small_powers_packed = [16, 17];
+    // Large powers of two
+    let powers_of_two = [5, 6, 7, 8, 9, 10, 13];
+
+    let num_powers_tests: Vec<usize> = small_powers_serial
+        .into_iter()
+        .chain(small_powers_packed)
+        .chain(powers_of_two.iter().flat_map(|exp| {
+            // Check boundaries at power of 2
+            let n = 1 << exp;
+            [n - 1, n, n + 1]
+        }))
+        .collect();
+
+    let base = F::TWO;
+    let shift = F::GENERATOR;
+
+    // Manual implementation of `Powers`
+    let expected_iter = successors(Some(shift), |prev| Some(*prev * base));
+
+    for num_powers in num_powers_tests {
+        let expected: Vec<_> = expected_iter.clone().take(num_powers).collect();
+        let actual = base.shifted_powers(shift).collect_n(num_powers);
+        assert_eq!(
+            expected, actual,
+            "Got different powers when taking {num_powers}"
+        );
+    }
+}
+
 /// A function which extends the `exp_u64` code to handle `BigUints`.
 ///
 /// This solution is slow (particularly when dealing with extension fields
@@ -600,6 +650,18 @@ pub fn test_two_adic_generator_consistency<F: TwoAdicField>() {
     let g = F::two_adic_generator(log_n);
     for bits in 0..=log_n {
         assert_eq!(g.exp_power_of_2(bits), F::two_adic_generator(log_n - bits));
+    }
+}
+
+pub fn test_two_adic_point_collection<F: TwoAdicField>() {
+    let log_n = F::TWO_ADICITY.min(15);
+    for bits in 0..=log_n {
+        let group = TwoAdicMultiplicativeCoset::new(F::ONE, bits).unwrap();
+        let points = group.iter().collect();
+        // Add `map` to avoid calling `BoundedPowers::collect()`
+        #[allow(clippy::map_identity)]
+        let points_expected = group.iter().map(|x| x).collect::<Vec<_>>();
+        assert_eq!(points, points_expected)
     }
 }
 
@@ -751,6 +813,10 @@ macro_rules! test_field {
             #[test]
             fn test_streaming() {
                 $crate::test_into_stream::<$field>();
+            }
+            #[test]
+            fn test_powers_collect() {
+                $crate::test_powers_collect::<$field>();
             }
         }
 
@@ -962,6 +1028,7 @@ macro_rules! test_two_adic_field {
             #[test]
             fn test_two_adic_consistency() {
                 $crate::test_two_adic_generator_consistency::<$field>();
+                $crate::test_two_adic_point_collection::<$field>();
             }
 
             // Looks a little strange but we also check that everything works

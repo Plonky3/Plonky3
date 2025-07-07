@@ -1,5 +1,6 @@
 [package]
 name = "p3-rescue"
+description = "Implementation of the Rescue hash function and utilities."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

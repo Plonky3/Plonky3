@@ -1,5 +1,6 @@
 [package]
 name = "p3-uni-stark"
+description = "A minimal univariate STARK framework providing core components for proof generation and verification."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

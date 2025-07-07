@@ -6,7 +6,7 @@ use crate::{BinomialExtensionData, FieldParameters, MontyField31, TwoAdicData};
 // If a field implements BinomialExtensionData<WIDTH> then there is a natural
 // field extension of degree WIDTH we can define.
 // We perform no checks to make sure the data given in BinomialExtensionData<WIDTH> is valid and
-// corresponds to an actual field extension. Ensuring that is left to the implementor.
+// corresponds to an actual field extension. Ensuring that is left to the implementer.
 
 impl<const WIDTH: usize, FP> BinomiallyExtendable<WIDTH> for MontyField31<FP>
 where
