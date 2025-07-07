@@ -10,7 +10,6 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-array-init = "2"
 p3-air.workspace = true
 p3-field.workspace = true
 p3-matrix.workspace = true

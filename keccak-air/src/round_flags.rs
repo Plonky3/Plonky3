@@ -1,7 +1,6 @@
 use core::array;
 use core::borrow::Borrow;
 
-use array_init::array_init;
 use p3_air::AirBuilder;
 use p3_matrix::Matrix;
 
@@ -40,5 +39,5 @@ fn try_clone_array<T: Clone, const N: usize>(slice: &[T]) -> Result<[T; N], &'st
         return Err("Incorrect length");
     }
 
-    Ok(array_init(|i| slice[i].clone()))
+    Ok(array::from_fn(|i| slice[i].clone()))
 }
