@@ -29,7 +29,7 @@ pub trait BaseAirWithPublicValues<F>: BaseAir<F> {
 ///
 /// The builder is used to build symbolic algebraic expressions defining the AIR constraints.
 pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
-    /// Evaluate and register all AIR constraints using the provided builder.
+    /// Evaluate all AIR constraints using the provided builder.
     ///
     /// # Arguments
     /// - `builder`: Mutable reference to an `AirBuilder` for defining constraints.
