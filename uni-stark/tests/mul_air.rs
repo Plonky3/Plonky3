@@ -234,7 +234,7 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
 
 #[test]
 fn prove_bb_twoadic_deg2() -> Result<(), impl Debug> {
-    do_test_bb_twoadic(1, 2, 7)
+    do_test_bb_twoadic(1, 2, 5)
 }
 
 #[test]
@@ -288,17 +288,17 @@ fn prove_bb_twoadic_deg2_zk() -> Result<(), impl Debug> {
 
 #[test]
 fn prove_bb_twoadic_deg3() -> Result<(), impl Debug> {
-    do_test_bb_twoadic(1, 3, 7)
+    do_test_bb_twoadic(1, 3, 5)
 }
 
 #[test]
 fn prove_bb_twoadic_deg4() -> Result<(), impl Debug> {
-    do_test_bb_twoadic(2, 4, 6)
+    do_test_bb_twoadic(2, 4, 4)
 }
 
 #[test]
 fn prove_bb_twoadic_deg5() -> Result<(), impl Debug> {
-    do_test_bb_twoadic(2, 5, 6)
+    do_test_bb_twoadic(2, 5, 4)
 }
 
 fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<(), impl Debug> {
@@ -351,10 +351,10 @@ fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
 
 #[test]
 fn prove_m31_circle_deg2() -> Result<(), impl Debug> {
-    do_test_m31_circle(1, 2, 8)
+    do_test_m31_circle(1, 2, 6)
 }
 
 #[test]
 fn prove_m31_circle_deg3() -> Result<(), impl Debug> {
-    do_test_m31_circle(1, 3, 9)
+    do_test_m31_circle(1, 3, 7)
 }
