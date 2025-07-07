@@ -23,9 +23,12 @@ pub trait BaseAirWithPublicValues<F>: BaseAir<F> {
     }
 }
 
-/// An AIR object that defines constraint evaluations using a provided builder.
+/// An algebraic intermediate representation (AIR) definition.
 ///
-/// The builder is used to build symbolic algebraic expressions defining the AIR constraints.
+/// Contains an evaluation function for computing the constraints of the AIR.
+/// This function can be applied to an evaluation trace in which case each
+/// constraint will compute a particular value or it can be applied symbolically
+/// with each constraint computing a symbolic expression.
 pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
     /// Evaluate all AIR constraints using the provided builder.
     ///
