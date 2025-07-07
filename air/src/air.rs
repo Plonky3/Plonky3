@@ -42,7 +42,7 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
 /// Supports both symbolic cases where the constraints are treated as polynomials and collected into a vector
 /// as well cases where the constraints are evaluated on an evaluation trace and combined using randomness.
 pub trait AirBuilder: Sized {
-    /// Base field type.
+    /// Underlying field type.
     type F: Field;
 
     /// Expression type built from variables and constants over `F`.
