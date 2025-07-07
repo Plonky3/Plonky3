@@ -212,7 +212,7 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
 
     let fri_params = FriParameters {
         log_blowup,
-        log_final_poly_len: 5,
+        log_final_poly_len: 3,
         num_queries: 40,
         proof_of_work_bits: 8,
         mmcs: challenge_mmcs,
