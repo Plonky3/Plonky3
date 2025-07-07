@@ -45,7 +45,7 @@ pub trait AirBuilder: Sized {
     /// Underlying field type.
     type F: Field;
 
-    /// Expression type built from variables and constants over `F`.
+    /// Serves as the output type for an AIR constraint evaluation.
     type Expr: Algebra<Self::F> + Algebra<Self::Var>;
 
     /// Variable type used in expressions.
