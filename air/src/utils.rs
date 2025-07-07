@@ -303,7 +303,18 @@ mod tests {
     }
 
     #[test]
-    fn test_u32_to_bits_le_edges() {
+    fn test_u32_to_bits_le() {
+        // Convert 0b1010 (decimal 10) => [0, 1, 0, 1, ...]
+        let bits = u32_to_bits_le::<F>(10);
+        assert_eq!(bits[0], F::ZERO); // LSB first
+        assert_eq!(bits[1], F::ONE);
+        assert_eq!(bits[2], F::ZERO);
+        assert_eq!(bits[3], F::ONE);
+
+        for &bit in &bits[4..] {
+            assert_eq!(bit, F::ZERO);
+        }
+
         // Check 0 => all zeros
         let bits = u32_to_bits_le::<F>(0);
         assert!(bits.iter().all(|b| *b == F::ZERO));
@@ -314,17 +325,17 @@ mod tests {
     }
 
     #[test]
-    fn test_u32_to_bits_le() {
-        // Convert 0b1010 (decimal 10) => [0, 1, 0, 1, ...]
-        let bits = u32_to_bits_le::<F>(10);
-        assert_eq!(bits[0], F::ZERO); // LSB first
+    fn test_u64_to_bits_le() {
+        // Convert 0b11 (decimal 3) => [1, 1, 0, ...]
+        let bits = u64_to_bits_le::<F>(3);
+        assert_eq!(bits[0], F::ONE);
         assert_eq!(bits[1], F::ONE);
         assert_eq!(bits[2], F::ZERO);
-        assert_eq!(bits[3], F::ONE);
-    }
 
-    #[test]
-    fn test_u64_to_bits_le_edges() {
+        for &bit in &bits[3..] {
+            assert_eq!(bit, F::ZERO);
+        }
+
         // Check 0 => all zeros
         let bits = u64_to_bits_le::<F>(0);
         assert!(bits.iter().all(|b| *b == F::ZERO));
@@ -335,29 +346,25 @@ mod tests {
     }
 
     #[test]
-    fn test_u64_to_bits_le() {
-        // Convert 0b11 (decimal 3) => [1, 1, 0, ...]
-        let bits = u64_to_bits_le::<F>(3);
-        assert_eq!(bits[0], F::ONE);
-        assert_eq!(bits[1], F::ONE);
-        assert_eq!(bits[2], F::ZERO);
-    }
-
-    #[test]
     fn test_u64_to_16_bit_limbs() {
         // Convert 0x123456789ABCDEF0
         let val: u64 = 0x123456789ABCDEF0;
         let limbs = u64_to_16_bit_limbs::<F>(val);
 
         // Expected limbs (little endian): [0xDEF0, 0x9ABC, 0x5678, 0x1234]
-        assert_eq!(limbs[0], F::from_u64(0xDEF0));
-        assert_eq!(limbs[1], F::from_u64(0x9ABC));
-        assert_eq!(limbs[2], F::from_u64(0x5678));
-        assert_eq!(limbs[3], F::from_u64(0x1234));
-    }
+        assert_eq!(limbs[0], F::from_u16(0xDEF0));
+        assert_eq!(limbs[1], F::from_u16(0x9ABC));
+        assert_eq!(limbs[2], F::from_u16(0x5678));
+        assert_eq!(limbs[3], F::from_u16(0x1234));
 
-    #[test]
-    fn test_u64_to_16_bit_limbs_various() {
+        assert_eq!(
+            limbs[0]
+                + limbs[1].mul_2exp_u64(16)
+                + limbs[2].mul_2exp_u64(32)
+                + limbs[3].mul_2exp_u64(48),
+            F::from_u64(val)
+        );
+
         // Check zero
         let limbs = u64_to_16_bit_limbs::<F>(0);
         assert!(limbs.iter().all(|l| *l == F::ZERO));
