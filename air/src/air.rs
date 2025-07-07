@@ -4,9 +4,7 @@ use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 
-/// An algebraic intermediate representation (AIR) definition.
-///
-/// This trait describes the core structure of an AIR system.
+/// The underlying structure of an AIR.
 pub trait BaseAir<F>: Sync {
     /// The number of columns (a.k.a. registers) in this AIR.
     fn width(&self) -> usize;
