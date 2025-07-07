@@ -3,7 +3,6 @@
 use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::iter;
-use core::marker::PhantomData;
 
 use itertools::Itertools;
 use p3_field::{Field, PackedField, PackedValue, TwoAdicField, scale_slice_in_place_single_core};
@@ -141,7 +140,7 @@ where
         // For the layers involving blocks larger than `num_par_rows`, we will
         // parallelize across the blocks.
 
-        let multi_layer_dit = MultiLayerDitButterfly::new();
+        let multi_layer_dit = MultiLayerDitButterfly {};
 
         // We do `LAYERS_PER_GROUP` layers of the DFT at once, to minimize how much data we need to transfer
         // between threads.
@@ -210,7 +209,7 @@ where
         // For the layers involving blocks larger than `num_par_rows`, we will
         // parallelize across the blocks.
 
-        let multi_layer_dif = MultiLayerDifButterfly::new();
+        let multi_layer_dif = MultiLayerDifButterfly {};
 
         // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
         // we need to handle the remaining layers separately.
@@ -280,7 +279,7 @@ where
 
         // We will do large DFT/iDFT layers in batches of `LAYERS_PER_GROUP`. We start with
         // the dit layers.
-        let multi_layer_dit = MultiLayerDitButterfly::new();
+        let multi_layer_dit = MultiLayerDitButterfly {};
         for (dit_0, dit_1, dit_2) in inv_root_table[num_inner_dit_layers..]
             .iter()
             .rev()
@@ -313,7 +312,7 @@ where
         );
 
         // We are left with the final dif layers.
-        let multi_layer_dif = MultiLayerDifButterfly::new();
+        let multi_layer_dif = MultiLayerDifButterfly {};
 
         // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
         // we need to handle the remaining layers separately.
@@ -602,13 +601,7 @@ fn dft_layer_par_double<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>
             let chunk_par_iters_1 = zip_par_iter_vec(chunk_par_iters_0);
             chunk_par_iters_1.into_iter().tuples().for_each(|(hi, lo)| {
                 hi.zip(lo).for_each(|chunks| {
-                    let mut chunks: DoubleLayerBlockDecomposition<F> = chunks.into();
-                    multi_butterfly.apply_2_layers(
-                        &mut chunks,
-                        ind,
-                        twiddles_small,
-                        twiddles_large,
-                    );
+                    multi_butterfly.apply_2_layers(chunks, ind, twiddles_small, twiddles_large);
                 });
             });
         });
@@ -663,9 +656,8 @@ fn dft_layer_par_triple<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>
             let chunk_par_iters_2 = zip_par_iter_vec(chunk_par_iters_1);
             chunk_par_iters_2.into_iter().tuples().for_each(|(hi, lo)| {
                 hi.zip(lo).for_each(|chunks| {
-                    let mut chunks: TripleLayerBlockDecomposition<F> = chunks.into();
                     multi_butterfly.apply_3_layers(
-                        &mut chunks,
+                        chunks,
                         ind,
                         twiddles_small,
                         twiddles_med,
@@ -755,131 +747,83 @@ fn dft_layer_zeros<F: Field, B: Butterfly<F>>(vec: &mut [F], twiddles: &[B], ski
         });
 }
 
-/// A struct representing a decomposition of an FFT block into four sub-blocks.
-/// This is used to apply two layers of the FFT butterfly network to the block.
-struct DoubleLayerBlockDecomposition<'a, F: Field> {
-    hi_hi: &'a mut [F],
-    hi_lo: &'a mut [F],
-    lo_hi: &'a mut [F],
-    lo_lo: &'a mut [F],
+type DoubleLayerBlockDecomposition<'a, F> =
+    ((&'a mut [F], &'a mut [F]), (&'a mut [F], &'a mut [F]));
+
+/// Performs an FFT layer on the sub-blocks using a single twiddle factor.
+#[inline]
+fn fft_double_layer_single_twiddle<F: Field, Fly: Butterfly<F>>(
+    block: &mut DoubleLayerBlockDecomposition<F>,
+    butterfly: Fly,
+) {
+    butterfly.apply_to_rows(block.0.0, block.1.0);
+    butterfly.apply_to_rows(block.0.1, block.1.1);
 }
 
-impl<F: Field> DoubleLayerBlockDecomposition<'_, F> {
-    /// Performs an FFT layer on the sub-blocks using a single twiddle factor.
-    #[inline]
-    fn fft_layer_single_twiddle<Fly: Butterfly<F>>(&mut self, butterfly: Fly) {
-        butterfly.apply_to_rows(self.hi_hi, self.lo_hi);
-        butterfly.apply_to_rows(self.hi_lo, self.lo_lo);
-    }
-
-    /// Performs an FFT layer on the sub-blocks using a pair of twiddle factors.
-    ///
-    /// The inputs are differentiated in order to allow the first input to potentially
-    /// be a `TwiddleFreeButterfly`, which does not require a twiddle factor.
-    #[inline]
-    fn fft_layer_double_twiddle<Fly0: Butterfly<F>, Fly1: Butterfly<F>>(
-        &mut self,
-        fly0: Fly0,
-        fly1: Fly1,
-    ) {
-        fly0.apply_to_rows(self.hi_hi, self.hi_lo);
-        fly1.apply_to_rows(self.lo_hi, self.lo_lo);
-    }
-}
-
-impl<'a, F: Field> From<((&'a mut [F], &'a mut [F]), (&'a mut [F], &'a mut [F]))>
-    for DoubleLayerBlockDecomposition<'a, F>
-{
-    fn from(value: ((&'a mut [F], &'a mut [F]), (&'a mut [F], &'a mut [F]))) -> Self {
-        Self {
-            hi_hi: value.0.0,
-            hi_lo: value.0.1,
-            lo_hi: value.1.0,
-            lo_lo: value.1.1,
-        }
-    }
+/// Performs an FFT layer on the sub-blocks using a pair of twiddle factors.
+///
+/// The inputs are differentiated in order to allow the first input to potentially
+/// be a `TwiddleFreeButterfly`, which does not require a twiddle factor.
+#[inline]
+fn fft_double_layer_double_twiddle<F: Field, Fly0: Butterfly<F>, Fly1: Butterfly<F>>(
+    block: &mut DoubleLayerBlockDecomposition<F>,
+    fly0: Fly0,
+    fly1: Fly1,
+) {
+    fly0.apply_to_rows(block.0.0, block.0.1);
+    fly1.apply_to_rows(block.1.0, block.1.1);
 }
 
 /// A struct representing a decomposition of an FFT block into eight sub-blocks.
 /// This is used to apply three layers of the FFT butterfly network to the block.
-struct TripleLayerBlockDecomposition<'a, F: Field> {
-    hi_hi_hi: &'a mut [F],
-    hi_hi_lo: &'a mut [F],
-    hi_lo_hi: &'a mut [F],
-    hi_lo_lo: &'a mut [F],
-    lo_hi_hi: &'a mut [F],
-    lo_hi_lo: &'a mut [F],
-    lo_lo_hi: &'a mut [F],
-    lo_lo_lo: &'a mut [F],
+type TripleLayerBlockDecomposition<'a, F> = (
+    ((&'a mut [F], &'a mut [F]), (&'a mut [F], &'a mut [F])),
+    ((&'a mut [F], &'a mut [F]), (&'a mut [F], &'a mut [F])),
+);
+
+/// Performs an FFT layer on the sub-blocks using a single twiddle factor.
+#[inline]
+fn fft_triple_layer_single_twiddle<F: Field, Fly: Butterfly<F>>(
+    block: &mut TripleLayerBlockDecomposition<F>,
+    butterfly: Fly,
+) {
+    butterfly.apply_to_rows(block.0.0.0, block.1.0.0);
+    butterfly.apply_to_rows(block.0.0.1, block.1.0.1);
+    butterfly.apply_to_rows(block.0.1.0, block.1.1.0);
+    butterfly.apply_to_rows(block.0.1.1, block.1.1.1);
 }
 
-impl<F: Field> TripleLayerBlockDecomposition<'_, F> {
-    /// Performs an FFT layer on the sub-blocks using a single twiddle factor.
-    #[inline]
-    fn fft_layer_single_twiddle<Fly: Butterfly<F>>(&mut self, butterfly: Fly) {
-        butterfly.apply_to_rows(self.hi_hi_hi, self.lo_hi_hi);
-        butterfly.apply_to_rows(self.hi_hi_lo, self.lo_hi_lo);
-        butterfly.apply_to_rows(self.hi_lo_hi, self.lo_lo_hi);
-        butterfly.apply_to_rows(self.hi_lo_lo, self.lo_lo_lo);
-    }
-
-    /// Performs an FFT layer on the sub-blocks using a pair of twiddle factors.
-    ///
-    /// The inputs are differentiated in order to allow the first input to potentially
-    /// be a `TwiddleFreeButterfly`, which does not require a twiddle factor.
-    #[inline]
-    fn fft_layer_double_twiddle<Fly0: Butterfly<F>, Fly1: Butterfly<F>>(
-        &mut self,
-        fly0: Fly0,
-        fly1: Fly1,
-    ) {
-        fly0.apply_to_rows(self.hi_hi_hi, self.hi_lo_hi);
-        fly0.apply_to_rows(self.hi_hi_lo, self.hi_lo_lo);
-        fly1.apply_to_rows(self.lo_hi_hi, self.lo_lo_hi);
-        fly1.apply_to_rows(self.lo_hi_lo, self.lo_lo_lo);
-    }
-
-    /// Performs an FFT layer on the sub-blocks using a four twiddle factors.
-    ///
-    /// The inputs are differentiated in order to allow the first input to potentially
-    /// be a `TwiddleFreeButterfly`, which does not require a twiddle factor.
-    #[inline]
-    fn fft_layer_quad_twiddle<Fly0: Butterfly<F>, Flies: Butterfly<F>>(
-        &mut self,
-        fly0: Fly0,
-        butterflies: &[Flies],
-    ) {
-        debug_assert!(butterflies.len() == 3);
-        fly0.apply_to_rows(self.hi_hi_hi, self.hi_hi_lo);
-        butterflies[0].apply_to_rows(self.hi_lo_hi, self.hi_lo_lo);
-        butterflies[1].apply_to_rows(self.lo_hi_hi, self.lo_hi_lo);
-        butterflies[2].apply_to_rows(self.lo_lo_hi, self.lo_lo_lo);
-    }
+/// Performs an FFT layer on the sub-blocks using a pair of twiddle factors.
+///
+/// The inputs are differentiated in order to allow the first input to potentially
+/// be a `TwiddleFreeButterfly`, which does not require a twiddle factor.
+#[inline]
+fn fft_triple_layer_double_twiddle<F: Field, Fly0: Butterfly<F>, Fly1: Butterfly<F>>(
+    block: &mut TripleLayerBlockDecomposition<F>,
+    fly0: Fly0,
+    fly1: Fly1,
+) {
+    fly0.apply_to_rows(block.0.0.0, block.0.1.0);
+    fly0.apply_to_rows(block.0.0.1, block.0.1.1);
+    fly1.apply_to_rows(block.1.0.0, block.1.1.0);
+    fly1.apply_to_rows(block.1.0.1, block.1.1.1);
 }
 
-impl<'a, F: Field>
-    From<(
-        ((&'a mut [F], &'a mut [F]), (&'a mut [F], &'a mut [F])),
-        ((&'a mut [F], &'a mut [F]), (&'a mut [F], &'a mut [F])),
-    )> for TripleLayerBlockDecomposition<'a, F>
-{
-    fn from(
-        value: (
-            ((&'a mut [F], &'a mut [F]), (&'a mut [F], &'a mut [F])),
-            ((&'a mut [F], &'a mut [F]), (&'a mut [F], &'a mut [F])),
-        ),
-    ) -> Self {
-        Self {
-            hi_hi_hi: value.0.0.0,
-            hi_hi_lo: value.0.0.1,
-            hi_lo_hi: value.0.1.0,
-            hi_lo_lo: value.0.1.1,
-            lo_hi_hi: value.1.0.0,
-            lo_hi_lo: value.1.0.1,
-            lo_lo_hi: value.1.1.0,
-            lo_lo_lo: value.1.1.1,
-        }
-    }
+/// Performs an FFT layer on the sub-blocks using a four twiddle factors.
+///
+/// The inputs are differentiated in order to allow the first input to potentially
+/// be a `TwiddleFreeButterfly`, which does not require a twiddle factor.
+#[inline]
+fn fft_triple_layer_quad_twiddle<F: Field, Fly0: Butterfly<F>, Flies: Butterfly<F>>(
+    block: &mut TripleLayerBlockDecomposition<F>,
+    fly0: Fly0,
+    butterflies: &[Flies],
+) {
+    debug_assert!(butterflies.len() == 3);
+    fly0.apply_to_rows(block.0.0.0, block.0.0.1);
+    butterflies[0].apply_to_rows(block.0.1.0, block.0.1.1);
+    butterflies[1].apply_to_rows(block.1.0.0, block.1.0.1);
+    butterflies[2].apply_to_rows(block.1.1.0, block.1.1.1);
 }
 
 /// Estimates the optimal workload size for `T` to fit in L1 cache.
@@ -924,7 +868,7 @@ fn zip_par_iter_vec<I: IndexedParallelIterator>(
 trait MultiLayerButterfly<F: Field, B: Butterfly<F>>: Copy + Send + Sync {
     fn apply_2_layers(
         &self,
-        chunk_decomposition: &mut DoubleLayerBlockDecomposition<F>,
+        chunk_decomposition: DoubleLayerBlockDecomposition<F>,
         ind: usize,
         twiddles_small: &[B],
         twiddles_large: &[B],
@@ -932,7 +876,7 @@ trait MultiLayerButterfly<F: Field, B: Butterfly<F>>: Copy + Send + Sync {
 
     fn apply_3_layers(
         &self,
-        chunk_decomposition: &mut TripleLayerBlockDecomposition<F>,
+        chunk_decomposition: TripleLayerBlockDecomposition<F>,
         ind: usize,
         twiddles_small: &[B],
         twiddles_med: &[B],
@@ -941,55 +885,60 @@ trait MultiLayerButterfly<F: Field, B: Butterfly<F>>: Copy + Send + Sync {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct MultiLayerDitButterfly<F> {
-    _phantom: PhantomData<F>,
-}
+struct MultiLayerDitButterfly;
 
-impl<F: Field> MultiLayerDitButterfly<F> {
-    fn new() -> Self {
-        Self {
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<F: Field> MultiLayerButterfly<F, DitButterfly<F>> for MultiLayerDitButterfly<F> {
+impl<F: Field> MultiLayerButterfly<F, DitButterfly<F>> for MultiLayerDitButterfly {
     #[inline]
     fn apply_2_layers(
         &self,
-        chunk_decomposition: &mut DoubleLayerBlockDecomposition<F>,
+        mut blk_decomp: DoubleLayerBlockDecomposition<F>,
         ind: usize,
         twiddles_small: &[DitButterfly<F>],
         twiddles_large: &[DitButterfly<F>],
     ) {
         if ind == 0 {
-            chunk_decomposition.fft_layer_single_twiddle(TwiddleFreeButterfly);
-            chunk_decomposition.fft_layer_double_twiddle(TwiddleFreeButterfly, twiddles_large[1]);
+            fft_double_layer_single_twiddle(&mut blk_decomp, TwiddleFreeButterfly);
+            fft_double_layer_double_twiddle(
+                &mut blk_decomp,
+                TwiddleFreeButterfly,
+                twiddles_large[1],
+            );
         } else {
-            chunk_decomposition.fft_layer_single_twiddle(twiddles_small[ind]);
-            chunk_decomposition
-                .fft_layer_double_twiddle(twiddles_large[2 * ind], twiddles_large[2 * ind + 1]);
+            fft_double_layer_single_twiddle(&mut blk_decomp, twiddles_small[ind]);
+            fft_double_layer_double_twiddle(
+                &mut blk_decomp,
+                twiddles_large[2 * ind],
+                twiddles_large[2 * ind + 1],
+            );
         }
     }
 
     #[inline]
     fn apply_3_layers(
         &self,
-        chunk_decomposition: &mut TripleLayerBlockDecomposition<F>,
+        mut blk_decomp: TripleLayerBlockDecomposition<F>,
         ind: usize,
         twiddles_small: &[DitButterfly<F>],
         twiddles_med: &[DitButterfly<F>],
         twiddles_large: &[DitButterfly<F>],
     ) {
         if ind == 0 {
-            chunk_decomposition.fft_layer_single_twiddle(TwiddleFreeButterfly);
-            chunk_decomposition.fft_layer_double_twiddle(TwiddleFreeButterfly, twiddles_med[1]);
-            chunk_decomposition.fft_layer_quad_twiddle(TwiddleFreeButterfly, &twiddles_large[1..4]);
+            fft_triple_layer_single_twiddle(&mut blk_decomp, TwiddleFreeButterfly);
+            fft_triple_layer_double_twiddle(&mut blk_decomp, TwiddleFreeButterfly, twiddles_med[1]);
+            fft_triple_layer_quad_twiddle(
+                &mut blk_decomp,
+                TwiddleFreeButterfly,
+                &twiddles_large[1..4],
+            );
         } else {
-            chunk_decomposition.fft_layer_single_twiddle(twiddles_small[ind]);
-            chunk_decomposition
-                .fft_layer_double_twiddle(twiddles_med[2 * ind], twiddles_med[2 * ind + 1]);
-            chunk_decomposition.fft_layer_quad_twiddle(
+            fft_triple_layer_single_twiddle(&mut blk_decomp, twiddles_small[ind]);
+            fft_triple_layer_double_twiddle(
+                &mut blk_decomp,
+                twiddles_med[2 * ind],
+                twiddles_med[2 * ind + 1],
+            );
+            fft_triple_layer_quad_twiddle(
+                &mut blk_decomp,
                 twiddles_large[4 * ind],
                 &twiddles_large[4 * ind + 1..4 * (ind + 1)],
             );
@@ -998,58 +947,63 @@ impl<F: Field> MultiLayerButterfly<F, DitButterfly<F>> for MultiLayerDitButterfl
 }
 
 #[derive(Debug, Clone, Copy)]
-struct MultiLayerDifButterfly<F> {
-    _phantom: PhantomData<F>,
-}
+struct MultiLayerDifButterfly;
 
-impl<F: Field> MultiLayerDifButterfly<F> {
-    fn new() -> Self {
-        Self {
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<F: Field> MultiLayerButterfly<F, DifButterfly<F>> for MultiLayerDifButterfly<F> {
+impl<F: Field> MultiLayerButterfly<F, DifButterfly<F>> for MultiLayerDifButterfly {
     #[inline]
     fn apply_2_layers(
         &self,
-        chunk_decomposition: &mut DoubleLayerBlockDecomposition<F>,
+        mut blk_decomp: DoubleLayerBlockDecomposition<F>,
         ind: usize,
         twiddles_small: &[DifButterfly<F>],
         twiddles_large: &[DifButterfly<F>],
     ) {
         if ind == 0 {
-            chunk_decomposition.fft_layer_double_twiddle(TwiddleFreeButterfly, twiddles_large[1]);
-            chunk_decomposition.fft_layer_single_twiddle(TwiddleFreeButterfly);
+            fft_double_layer_double_twiddle(
+                &mut blk_decomp,
+                TwiddleFreeButterfly,
+                twiddles_large[1],
+            );
+            fft_double_layer_single_twiddle(&mut blk_decomp, TwiddleFreeButterfly);
         } else {
-            chunk_decomposition
-                .fft_layer_double_twiddle(twiddles_large[2 * ind], twiddles_large[2 * ind + 1]);
-            chunk_decomposition.fft_layer_single_twiddle(twiddles_small[ind]);
+            fft_double_layer_double_twiddle(
+                &mut blk_decomp,
+                twiddles_large[2 * ind],
+                twiddles_large[2 * ind + 1],
+            );
+            fft_double_layer_single_twiddle(&mut blk_decomp, twiddles_small[ind]);
         }
     }
 
     #[inline]
     fn apply_3_layers(
         &self,
-        chunk_decomposition: &mut TripleLayerBlockDecomposition<F>,
+        mut blk_decomp: TripleLayerBlockDecomposition<F>,
         ind: usize,
         twiddles_small: &[DifButterfly<F>],
         twiddles_med: &[DifButterfly<F>],
         twiddles_large: &[DifButterfly<F>],
     ) {
         if ind == 0 {
-            chunk_decomposition.fft_layer_quad_twiddle(TwiddleFreeButterfly, &twiddles_large[1..4]);
-            chunk_decomposition.fft_layer_double_twiddle(TwiddleFreeButterfly, twiddles_med[1]);
-            chunk_decomposition.fft_layer_single_twiddle(TwiddleFreeButterfly);
+            fft_triple_layer_quad_twiddle(
+                &mut blk_decomp,
+                TwiddleFreeButterfly,
+                &twiddles_large[1..4],
+            );
+            fft_triple_layer_double_twiddle(&mut blk_decomp, TwiddleFreeButterfly, twiddles_med[1]);
+            fft_triple_layer_single_twiddle(&mut blk_decomp, TwiddleFreeButterfly);
         } else {
-            chunk_decomposition.fft_layer_quad_twiddle(
+            fft_triple_layer_quad_twiddle(
+                &mut blk_decomp,
                 twiddles_large[4 * ind],
                 &twiddles_large[4 * ind + 1..4 * (ind + 1)],
             );
-            chunk_decomposition
-                .fft_layer_double_twiddle(twiddles_med[2 * ind], twiddles_med[2 * ind + 1]);
-            chunk_decomposition.fft_layer_single_twiddle(twiddles_small[ind]);
+            fft_triple_layer_double_twiddle(
+                &mut blk_decomp,
+                twiddles_med[2 * ind],
+                twiddles_med[2 * ind + 1],
+            );
+            fft_triple_layer_single_twiddle(&mut blk_decomp, twiddles_small[ind]);
         }
     }
 }
