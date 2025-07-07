@@ -27,7 +27,7 @@ pub fn generate_vectorized_trace_rows<
 ) -> RowMajorMatrix<F> {
     let n = inputs.len();
     assert!(
-        n % VECTOR_LEN == 0 && (n / VECTOR_LEN).is_power_of_two(),
+        n.is_multiple_of(VECTOR_LEN) && (n / VECTOR_LEN).is_power_of_two(),
         "Callers expected to pad inputs to VECTOR_LEN times a power of two"
     );
 

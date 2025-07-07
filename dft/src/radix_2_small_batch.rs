@@ -371,7 +371,7 @@ where
 #[inline]
 fn dit_layer_par<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, twiddles: &[F]) {
     debug_assert!(
-        mat.height() % twiddles.len() == 0,
+        mat.height().is_multiple_of(twiddles.len()),
         "Matrix height must be divisible by the number of twiddles"
     );
     let size = mat.values.len();
@@ -421,7 +421,7 @@ fn dit_layer_par<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, twiddles: &[F]) {
 #[inline]
 fn dif_layer_par<F: Field>(mat: &mut RowMajorMatrixViewMut<F>, twiddles: &[F]) {
     debug_assert!(
-        mat.height() % twiddles.len() == 0,
+        mat.height().is_multiple_of(twiddles.len()),
         "Matrix height must be divisible by the number of twiddles"
     );
     let size = mat.values.len();
@@ -651,7 +651,7 @@ fn dit_layer_par_double<F: Field>(
     twiddles_1: &[F],
 ) {
     debug_assert!(
-        mat.height() % twiddles_0.len() == 0,
+        mat.height().is_multiple_of(twiddles_0.len()),
         "Matrix height must be divisible by the number of twiddles"
     );
     let size = mat.values.len();
@@ -723,7 +723,7 @@ fn dit_layer_par_triple<F: Field>(
     twiddles_2: &[F],
 ) {
     debug_assert!(
-        mat.height() % twiddles_0.len() == 0,
+        mat.height().is_multiple_of(twiddles_0.len()),
         "Matrix height must be divisible by the number of twiddles"
     );
     let size = mat.values.len();
@@ -833,7 +833,7 @@ fn dif_layer_par_double<F: Field>(
     twiddles_1: &[F],
 ) {
     debug_assert!(
-        mat.height() % twiddles_1.len() == 0,
+        mat.height().is_multiple_of(twiddles_1.len()),
         "Matrix height must be divisible by the number of twiddles"
     );
     let size = mat.values.len();
@@ -905,7 +905,7 @@ fn dif_layer_par_triple<F: Field>(
     twiddles_2: &[F],
 ) {
     debug_assert!(
-        mat.height() % twiddles_2.len() == 0,
+        mat.height().is_multiple_of(twiddles_2.len()),
         "Matrix height must be divisible by the number of twiddles"
     );
     let size = mat.values.len();
