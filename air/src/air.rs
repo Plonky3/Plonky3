@@ -32,6 +32,10 @@ pub trait BaseAirWithPublicValues<F>: BaseAir<F> {
 pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
     /// Evaluate all AIR constraints using the provided builder.
     ///
+    /// The builder provides both the trace on which the constraints
+    /// are evaluated on as well as the method of accumulating the
+    /// constraint evaluations.
+    ///
     /// # Arguments
     /// - `builder`: Mutable reference to an `AirBuilder` for defining constraints.
     fn eval(&self, builder: &mut AB);
