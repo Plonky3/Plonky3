@@ -1,7 +1,7 @@
 use core::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use p3_util::{reverse_bits, reverse_slice_index_bits};
+use p3_util::reverse_slice_index_bits;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
