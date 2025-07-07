@@ -119,8 +119,8 @@ pub fn add3<AB: AirBuilder>(
             .unwrap();
     let two_32 = two_16.square();
 
-    let acc_16 = a[0] - b[0] - c[0].clone() - d[0].clone();
-    let acc_32 = a[1] - b[1] - c[1].clone() - d[1].clone();
+    let acc_16 = a[0].clone() - b[0].clone() - c[0].clone() - d[0].clone();
+    let acc_32 = a[1].clone() - b[1].clone() - c[1].clone() - d[1].clone();
     let acc = acc_16.clone() + acc_32.mul_2exp_u64(16);
 
     builder.assert_zeros([
@@ -183,8 +183,8 @@ pub fn add2<AB: AirBuilder>(
             .unwrap();
     let two_32 = two_16.square();
 
-    let acc_16 = a[0] - b[0] - c[0].clone();
-    let acc_32 = a[1] - b[1] - c[1].clone();
+    let acc_16 = a[0].clone() - b[0].clone() - c[0].clone();
+    let acc_32 = a[1].clone() - b[1].clone() - c[1].clone();
     let acc = acc_16.clone() + acc_32.mul_2exp_u64(16);
 
     builder.assert_zeros([
@@ -207,24 +207,26 @@ pub fn xor_32_shift<AB: AirBuilder>(
     shift: usize,
 ) {
     // First we range check all elements of c.
-    builder.assert_bools(*c);
+    builder.assert_bools(c.clone());
 
     // Next we compute (b ^ (c << shift)) and pack the result into two 16-bit integers.
-    let xor_shift_c_0_16 = b[..16]
-        .iter()
-        .enumerate()
-        .map(|(i, elem)| (*elem).into().xor(&c[(32 + i - shift) % 32].into()));
+    let xor_shift_c_0_16 = b[..16].iter().enumerate().map(|(i, elem)| {
+        (elem.clone())
+            .into()
+            .xor(&c[(32 + i - shift) % 32].clone().into())
+    });
     let sum_0_16: AB::Expr = pack_bits_le(xor_shift_c_0_16);
 
-    let xor_shift_c_16_32 = b[16..]
-        .iter()
-        .enumerate()
-        .map(|(i, elem)| (*elem).into().xor(&c[(32 + (i + 16) - shift) % 32].into()));
+    let xor_shift_c_16_32 = b[16..].iter().enumerate().map(|(i, elem)| {
+        (elem.clone())
+            .into()
+            .xor(&c[(32 + (i + 16) - shift) % 32].clone().into())
+    });
     let sum_16_32: AB::Expr = pack_bits_le(xor_shift_c_16_32);
 
     // As both b and c have been range checked to be boolean, all the (b ^ (c << shift))
     // are also boolean and so this final check additionally has the effect of range checking a[0], a[1].
-    builder.assert_zeros([a[0] - sum_0_16, a[1] - sum_16_32]);
+    builder.assert_zeros([a[0].clone() - sum_0_16, a[1].clone() - sum_16_32]);
 }
 
 #[cfg(test)]
