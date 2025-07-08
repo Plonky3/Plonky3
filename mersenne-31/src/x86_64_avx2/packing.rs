@@ -2,10 +2,13 @@ use alloc::vec::Vec;
 use core::arch::x86_64::{self, __m256i};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::exponentiation::exp_1717986917;
-use p3_field::op_assign_macros::{ring_add_assign, ring_mul_assign, ring_sub_assign};
+use p3_field::op_assign_macros::{
+    algebra_from_field_add, algebra_from_field_div, algebra_from_field_mul, algebra_from_field_sub,
+    algebra_from_field_sum_prod, ring_add_assign, ring_mul_assign, ring_sub_assign,
+};
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
     PermutationMonomial, PrimeCharacteristicRing,
@@ -442,105 +445,13 @@ impl PermutationMonomial<5> for PackedMersenne31AVX2 {
     }
 }
 
+algebra_from_field_add!(PackedMersenne31AVX2, Mersenne31);
+algebra_from_field_sub!(PackedMersenne31AVX2, Mersenne31);
+algebra_from_field_mul!(PackedMersenne31AVX2, Mersenne31);
+algebra_from_field_div!(PackedMersenne31AVX2, Mersenne31);
+algebra_from_field_sum_prod!(PackedMersenne31AVX2, Mersenne31);
+
 impl Algebra<Mersenne31> for PackedMersenne31AVX2 {}
-
-impl Add<Mersenne31> for PackedMersenne31AVX2 {
-    type Output = Self;
-    #[inline]
-    fn add(self, rhs: Mersenne31) -> Self {
-        self + Self::from(rhs)
-    }
-}
-
-impl Mul<Mersenne31> for PackedMersenne31AVX2 {
-    type Output = Self;
-    #[inline]
-    fn mul(self, rhs: Mersenne31) -> Self {
-        self * Self::from(rhs)
-    }
-}
-
-impl Sub<Mersenne31> for PackedMersenne31AVX2 {
-    type Output = Self;
-    #[inline]
-    fn sub(self, rhs: Mersenne31) -> Self {
-        self - Self::from(rhs)
-    }
-}
-
-impl AddAssign<Mersenne31> for PackedMersenne31AVX2 {
-    #[inline]
-    fn add_assign(&mut self, rhs: Mersenne31) {
-        *self += Self::from(rhs)
-    }
-}
-
-impl MulAssign<Mersenne31> for PackedMersenne31AVX2 {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Mersenne31) {
-        *self *= Self::from(rhs)
-    }
-}
-
-impl SubAssign<Mersenne31> for PackedMersenne31AVX2 {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Mersenne31) {
-        *self -= Self::from(rhs)
-    }
-}
-
-impl Sum<Mersenne31> for PackedMersenne31AVX2 {
-    #[inline]
-    fn sum<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Mersenne31>,
-    {
-        iter.sum::<Mersenne31>().into()
-    }
-}
-
-impl Product<Mersenne31> for PackedMersenne31AVX2 {
-    #[inline]
-    fn product<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Mersenne31>,
-    {
-        iter.product::<Mersenne31>().into()
-    }
-}
-
-impl Div<Mersenne31> for PackedMersenne31AVX2 {
-    type Output = Self;
-    #[allow(clippy::suspicious_arithmetic_impl)]
-    #[inline]
-    fn div(self, rhs: Mersenne31) -> Self {
-        self * rhs.inverse()
-    }
-}
-
-impl Add<PackedMersenne31AVX2> for Mersenne31 {
-    type Output = PackedMersenne31AVX2;
-    #[inline]
-    fn add(self, rhs: PackedMersenne31AVX2) -> PackedMersenne31AVX2 {
-        PackedMersenne31AVX2::from(self) + rhs
-    }
-}
-
-impl Mul<PackedMersenne31AVX2> for Mersenne31 {
-    type Output = PackedMersenne31AVX2;
-    #[inline]
-    fn mul(self, rhs: PackedMersenne31AVX2) -> PackedMersenne31AVX2 {
-        PackedMersenne31AVX2::from(self) * rhs
-    }
-}
-
-impl Sub<PackedMersenne31AVX2> for Mersenne31 {
-    type Output = PackedMersenne31AVX2;
-    #[inline]
-    fn sub(self, rhs: PackedMersenne31AVX2) -> PackedMersenne31AVX2 {
-        PackedMersenne31AVX2::from(self) - rhs
-    }
-}
 
 impl Distribution<PackedMersenne31AVX2> for StandardUniform {
     #[inline]

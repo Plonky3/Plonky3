@@ -5,7 +5,10 @@ use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::exponentiation::exp_1717986917;
-use p3_field::op_assign_macros::{ring_add_assign, ring_mul_assign, ring_sub_assign};
+use p3_field::op_assign_macros::{
+    algebra_from_field_add, algebra_from_field_div, algebra_from_field_mul, algebra_from_field_sub,
+    algebra_from_field_sum_prod, ring_add_assign, ring_mul_assign, ring_sub_assign,
+};
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
     PermutationMonomial, PrimeCharacteristicRing,
@@ -448,8 +451,6 @@ impl PrimeCharacteristicRing for PackedMersenne31AVX512 {
     }
 }
 
-impl Algebra<Mersenne31> for PackedMersenne31AVX512 {}
-
 // Degree of the smallest permutation polynomial for Mersenne31.
 //
 // As p - 1 = 2×3^2×7×11×... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
@@ -464,103 +465,13 @@ impl PermutationMonomial<5> for PackedMersenne31AVX512 {
     }
 }
 
-impl Add<Mersenne31> for PackedMersenne31AVX512 {
-    type Output = Self;
-    #[inline]
-    fn add(self, rhs: Mersenne31) -> Self {
-        self + Self::from(rhs)
-    }
-}
+algebra_from_field_add!(PackedMersenne31AVX512, Mersenne31);
+algebra_from_field_sub!(PackedMersenne31AVX512, Mersenne31);
+algebra_from_field_mul!(PackedMersenne31AVX512, Mersenne31);
+algebra_from_field_div!(PackedMersenne31AVX512, Mersenne31);
+algebra_from_field_sum_prod!(PackedMersenne31AVX512, Mersenne31);
 
-impl Mul<Mersenne31> for PackedMersenne31AVX512 {
-    type Output = Self;
-    #[inline]
-    fn mul(self, rhs: Mersenne31) -> Self {
-        self * Self::from(rhs)
-    }
-}
-
-impl Sub<Mersenne31> for PackedMersenne31AVX512 {
-    type Output = Self;
-    #[inline]
-    fn sub(self, rhs: Mersenne31) -> Self {
-        self - Self::from(rhs)
-    }
-}
-
-impl AddAssign<Mersenne31> for PackedMersenne31AVX512 {
-    #[inline]
-    fn add_assign(&mut self, rhs: Mersenne31) {
-        *self += Self::from(rhs)
-    }
-}
-
-impl MulAssign<Mersenne31> for PackedMersenne31AVX512 {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Mersenne31) {
-        *self *= Self::from(rhs)
-    }
-}
-
-impl SubAssign<Mersenne31> for PackedMersenne31AVX512 {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Mersenne31) {
-        *self -= Self::from(rhs)
-    }
-}
-
-impl Sum<Mersenne31> for PackedMersenne31AVX512 {
-    #[inline]
-    fn sum<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Mersenne31>,
-    {
-        iter.sum::<Mersenne31>().into()
-    }
-}
-
-impl Product<Mersenne31> for PackedMersenne31AVX512 {
-    #[inline]
-    fn product<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Mersenne31>,
-    {
-        iter.product::<Mersenne31>().into()
-    }
-}
-
-impl Div<Mersenne31> for PackedMersenne31AVX512 {
-    type Output = Self;
-    #[allow(clippy::suspicious_arithmetic_impl)]
-    #[inline]
-    fn div(self, rhs: Mersenne31) -> Self {
-        self * rhs.inverse()
-    }
-}
-
-impl Add<PackedMersenne31AVX512> for Mersenne31 {
-    type Output = PackedMersenne31AVX512;
-    #[inline]
-    fn add(self, rhs: PackedMersenne31AVX512) -> PackedMersenne31AVX512 {
-        PackedMersenne31AVX512::from(self) + rhs
-    }
-}
-
-impl Mul<PackedMersenne31AVX512> for Mersenne31 {
-    type Output = PackedMersenne31AVX512;
-    #[inline]
-    fn mul(self, rhs: PackedMersenne31AVX512) -> PackedMersenne31AVX512 {
-        PackedMersenne31AVX512::from(self) * rhs
-    }
-}
-
-impl Sub<PackedMersenne31AVX512> for Mersenne31 {
-    type Output = PackedMersenne31AVX512;
-    #[inline]
-    fn sub(self, rhs: PackedMersenne31AVX512) -> PackedMersenne31AVX512 {
-        PackedMersenne31AVX512::from(self) - rhs
-    }
-}
+impl Algebra<Mersenne31> for PackedMersenne31AVX512 {}
 
 impl Distribution<PackedMersenne31AVX512> for StandardUniform {
     #[inline]
