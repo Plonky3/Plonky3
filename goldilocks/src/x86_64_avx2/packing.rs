@@ -9,7 +9,8 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, PrimeField64,
+    PermutationMonomial, PrimeCharacteristicRing, PrimeField64, ring_add_assign, ring_mul_assign,
+    ring_sub_assign,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
@@ -62,12 +63,7 @@ impl Add<PackedGoldilocksAVX2> for Goldilocks {
         Self::Output::from(self) + rhs
     }
 }
-impl AddAssign<Self> for PackedGoldilocksAVX2 {
-    #[inline]
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
+
 impl AddAssign<Goldilocks> for PackedGoldilocksAVX2 {
     #[inline]
     fn add_assign(&mut self, rhs: Goldilocks) {
@@ -132,12 +128,7 @@ impl Mul<PackedGoldilocksAVX2> for Goldilocks {
         Self::Output::from(self) * rhs
     }
 }
-impl MulAssign<Self> for PackedGoldilocksAVX2 {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = *self * rhs;
-    }
-}
+
 impl MulAssign<Goldilocks> for PackedGoldilocksAVX2 {
     #[inline]
     fn mul_assign(&mut self, rhs: Goldilocks) {
@@ -270,12 +261,11 @@ impl Sub<PackedGoldilocksAVX2> for Goldilocks {
         Self::Output::from(self) - rhs
     }
 }
-impl SubAssign<Self> for PackedGoldilocksAVX2 {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
-    }
-}
+
+ring_add_assign!(PackedGoldilocksAVX2);
+ring_sub_assign!(PackedGoldilocksAVX2);
+ring_mul_assign!(PackedGoldilocksAVX2);
+
 impl SubAssign<Goldilocks> for PackedGoldilocksAVX2 {
     #[inline]
     fn sub_assign(&mut self, rhs: Goldilocks) {

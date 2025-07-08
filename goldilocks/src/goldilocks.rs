@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::{array, fmt};
 
 use num_bigint::BigUint;
@@ -11,8 +11,9 @@ use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::integers::QuotientMap;
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField64, RawDataSerializable, TwoAdicField, halve_u64, impl_raw_serializable_primefield64,
-    quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int,
+    PrimeField64, RawDataSerializable, TwoAdicField, field_div_assign, halve_u64,
+    impl_raw_serializable_primefield64, quotient_map_large_iint, quotient_map_large_uint,
+    quotient_map_small_int, ring_add_assign, ring_mul_assign, ring_sub_assign,
 };
 use p3_util::{assume, branch_hint, flatten_to_base, gcd_inner};
 use rand::Rng;
@@ -506,13 +507,6 @@ impl Add for Goldilocks {
     }
 }
 
-impl AddAssign for Goldilocks {
-    #[inline]
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
 impl Sum for Goldilocks {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO) for iterators of length > 2.
@@ -546,13 +540,6 @@ impl Sub for Goldilocks {
     }
 }
 
-impl SubAssign for Goldilocks {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
-    }
-}
-
 impl Neg for Goldilocks {
     type Output = Self;
 
@@ -571,13 +558,6 @@ impl Mul for Goldilocks {
     }
 }
 
-impl MulAssign for Goldilocks {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = *self * rhs;
-    }
-}
-
 impl Product for Goldilocks {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
@@ -592,6 +572,11 @@ impl Div for Goldilocks {
         self * rhs.inverse()
     }
 }
+
+ring_add_assign!(Goldilocks);
+ring_sub_assign!(Goldilocks);
+ring_mul_assign!(Goldilocks);
+field_div_assign!(Goldilocks);
 
 /// Reduces to a 64-bit value. The result might not be in canonical form; it could be in between the
 /// field order and `2^64`.
