@@ -133,11 +133,11 @@ impl PrimeCharacteristicRing for PackedGoldilocksAVX512 {
     }
 }
 
-algebra_from_field_add!(PackedGoldilocksAVX2, Goldilocks);
-algebra_from_field_sub!(PackedGoldilocksAVX2, Goldilocks);
-algebra_from_field_mul!(PackedGoldilocksAVX2, Goldilocks);
-algebra_from_field_div!(PackedGoldilocksAVX2, Goldilocks);
-algebra_from_field_sum_prod!(PackedGoldilocksAVX2, Goldilocks);
+algebra_from_field_add!(PackedGoldilocksAVX512, Goldilocks);
+algebra_from_field_sub!(PackedGoldilocksAVX512, Goldilocks);
+algebra_from_field_mul!(PackedGoldilocksAVX512, Goldilocks);
+algebra_from_field_div!(PackedGoldilocksAVX512, Goldilocks);
+algebra_from_field_sum_prod!(PackedGoldilocksAVX512, Goldilocks);
 
 impl Algebra<Goldilocks> for PackedGoldilocksAVX512 {}
 

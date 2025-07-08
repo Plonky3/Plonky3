@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::arch::aarch64::{self, uint32x4_t};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::exponentiation::exp_1717986917;
 use p3_field::op_assign_macros::{
