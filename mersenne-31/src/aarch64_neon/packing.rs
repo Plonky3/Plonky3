@@ -7,7 +7,7 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use p3_field::exponentiation::exp_1717986917;
 use p3_field::op_assign_macros::{
     algebra_from_field_add, algebra_from_field_div, algebra_from_field_mul, algebra_from_field_sub,
-    algebra_from_field_sum_prod, ring_add_assign, ring_mul_assign, ring_sub_assign,
+    algebra_from_field_sum_prod, ring_add_assign, ring_mul_assign, ring_sub_assign, ring_sum,
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
@@ -65,6 +65,20 @@ impl PackedMersenne31Neon {
     #[must_use]
     const fn broadcast(value: Mersenne31) -> Self {
         Self([value; WIDTH])
+    }
+}
+
+impl From<Mersenne31> for PackedMersenne31Neon {
+    #[inline]
+    fn from(value: Mersenne31) -> Self {
+        Self::broadcast(value)
+    }
+}
+
+impl Default for PackedMersenne31Neon {
+    #[inline]
+    fn default() -> Self {
+        Mersenne31::default().into()
     }
 }
 
@@ -126,6 +140,27 @@ impl Mul for PackedMersenne31Neon {
 ring_add_assign!(PackedMersenne31AVX2);
 ring_sub_assign!(PackedMersenne31AVX2);
 ring_mul_assign!(PackedMersenne31AVX2);
+ring_sum!(PackedMersenne31AVX2);
+
+impl PrimeCharacteristicRing for PackedMersenne31Neon {
+    type PrimeSubfield = Mersenne31;
+
+    const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
+    const ONE: Self = Self::broadcast(Mersenne31::ONE);
+    const TWO: Self = Self::broadcast(Mersenne31::TWO);
+    const NEG_ONE: Self = Self::broadcast(Mersenne31::NEG_ONE);
+
+    #[inline]
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
+        f.into()
+    }
+
+    #[inline(always)]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        // SAFETY: this is a repr(transparent) wrapper around an array.
+        unsafe { reconstitute_from_base(Mersenne31::zero_vec(len * WIDTH)) }
+    }
+}
 
 /// Given a `val` in `0, ..., 2 P`, return a `res` in `0, ..., P` such that `res = val (mod P)`
 #[inline]
@@ -262,60 +297,6 @@ fn sub(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
         let diff = aarch64::vsubq_u32(lhs, rhs);
         let underflow = aarch64::vcltq_u32(lhs, rhs);
         aarch64::vmlsq_u32(diff, underflow, P)
-    }
-}
-
-impl From<Mersenne31> for PackedMersenne31Neon {
-    #[inline]
-    fn from(value: Mersenne31) -> Self {
-        Self::broadcast(value)
-    }
-}
-
-impl Default for PackedMersenne31Neon {
-    #[inline]
-    fn default() -> Self {
-        Mersenne31::default().into()
-    }
-}
-
-impl Sum for PackedMersenne31Neon {
-    #[inline]
-    fn sum<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::ZERO)
-    }
-}
-
-impl Product for PackedMersenne31Neon {
-    #[inline]
-    fn product<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::ONE)
-    }
-}
-
-impl PrimeCharacteristicRing for PackedMersenne31Neon {
-    type PrimeSubfield = Mersenne31;
-
-    const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
-    const ONE: Self = Self::broadcast(Mersenne31::ONE);
-    const TWO: Self = Self::broadcast(Mersenne31::TWO);
-    const NEG_ONE: Self = Self::broadcast(Mersenne31::NEG_ONE);
-
-    #[inline]
-    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
-        f.into()
-    }
-
-    #[inline(always)]
-    fn zero_vec(len: usize) -> Vec<Self> {
-        // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { reconstitute_from_base(Mersenne31::zero_vec(len * WIDTH)) }
     }
 }
 

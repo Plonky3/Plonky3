@@ -13,7 +13,7 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use p3_field::op_assign_macros::{
     algebra_from_field_add, algebra_from_field_div, algebra_from_field_mul, algebra_from_field_sub,
-    algebra_from_field_sum_prod, ring_add_assign, ring_mul_assign, ring_sub_assign,
+    algebra_from_field_sum_prod, ring_add_assign, ring_mul_assign, ring_sub_assign, ring_sum,
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
@@ -82,6 +82,20 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX512<PMP> {
     }
 }
 
+impl<PMP: PackedMontyParameters> From<MontyField31<PMP>> for PackedMontyField31AVX512<PMP> {
+    #[inline]
+    fn from(value: MontyField31<PMP>) -> Self {
+        Self::broadcast(value)
+    }
+}
+
+impl<PMP: PackedMontyParameters> Default for PackedMontyField31AVX512<PMP> {
+    #[inline]
+    fn default() -> Self {
+        MontyField31::default().into()
+    }
+}
+
 impl<PMP: PackedMontyParameters> Add for PackedMontyField31AVX512<PMP> {
     type Output = Self;
     #[inline]
@@ -139,7 +153,97 @@ impl<PMP: PackedMontyParameters> Mul for PackedMontyField31AVX512<PMP> {
 
 ring_add_assign!(PackedMontyField31AVX512, (PackedMontyParameters, PMP));
 ring_sub_assign!(PackedMontyField31AVX512, (PackedMontyParameters, PMP));
-ring_mul_assign!(PackedMontyField31AVX512, (PackedMontyParameters, PMP));
+ring_mul_assign!(PackedMontyField31AVX512, (FieldParameters, FP));
+ring_sum!(PackedMontyField31AVX512, (FieldParameters, FP));
+
+impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX512<FP> {
+    type PrimeSubfield = MontyField31<FP>;
+
+    const ZERO: Self = Self::broadcast(MontyField31::ZERO);
+    const ONE: Self = Self::broadcast(MontyField31::ONE);
+    const TWO: Self = Self::broadcast(MontyField31::TWO);
+    const NEG_ONE: Self = Self::broadcast(MontyField31::NEG_ONE);
+
+    #[inline]
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
+        f.into()
+    }
+
+    #[inline(always)]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        // SAFETY: this is a repr(transparent) wrapper around an array.
+        unsafe { reconstitute_from_base(MontyField31::<FP>::zero_vec(len * WIDTH)) }
+    }
+
+    #[inline]
+    fn cube(&self) -> Self {
+        let val = self.to_vector();
+        unsafe {
+            // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
+            let res = apply_func_to_even_odd::<FP>(val, packed_exp_3::<FP>);
+            Self::from_vector(res)
+        }
+    }
+
+    #[inline]
+    fn xor(&self, rhs: &Self) -> Self {
+        let lhs = self.to_vector();
+        let rhs = rhs.to_vector();
+        let res = xor::<FP>(lhs, rhs);
+        unsafe {
+            // Safety: `xor` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
+    }
+
+    #[inline]
+    fn andn(&self, rhs: &Self) -> Self {
+        let lhs = self.to_vector();
+        let rhs = rhs.to_vector();
+        let res = andn::<FP>(lhs, rhs);
+        unsafe {
+            // Safety: `andn` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
+    }
+
+    #[inline(always)]
+    fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        // We provide specialised code for the powers 3, 5, 7 as these turn up regularly.
+        // The other powers could be specialised similarly but we ignore this for now.
+        // These ideas could also be used to speed up the more generic exp_u64.
+        match POWER {
+            0 => Self::ONE,
+            1 => *self,
+            2 => self.square(),
+            3 => self.cube(),
+            4 => self.square().square(),
+            5 => {
+                let val = self.to_vector();
+                unsafe {
+                    // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
+                    let res = apply_func_to_even_odd::<FP>(val, packed_exp_5::<FP>);
+                    Self::from_vector(res)
+                }
+            }
+            6 => self.square().cube(),
+            7 => {
+                let val = self.to_vector();
+                unsafe {
+                    // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
+                    let res = apply_func_to_even_odd::<FP>(val, packed_exp_7::<FP>);
+                    Self::from_vector(res)
+                }
+            }
+            _ => self.exp_u64(POWER),
+        }
+    }
+
+    #[inline(always)]
+    fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
+        general_dot_product::<_, _, _, N>(u, v)
+    }
+}
 
 /// Add two vectors of MontyField31 elements in canonical form.
 ///
@@ -995,129 +1099,6 @@ fn general_dot_product<
                 _ => unreachable!(),
             }
         }
-    }
-}
-
-impl<PMP: PackedMontyParameters> From<MontyField31<PMP>> for PackedMontyField31AVX512<PMP> {
-    #[inline]
-    fn from(value: MontyField31<PMP>) -> Self {
-        Self::broadcast(value)
-    }
-}
-
-impl<PMP: PackedMontyParameters> Default for PackedMontyField31AVX512<PMP> {
-    #[inline]
-    fn default() -> Self {
-        MontyField31::default().into()
-    }
-}
-
-impl<FP: FieldParameters> Sum for PackedMontyField31AVX512<FP> {
-    #[inline]
-    fn sum<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::ZERO)
-    }
-}
-
-impl<FP: FieldParameters> Product for PackedMontyField31AVX512<FP> {
-    #[inline]
-    fn product<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::ONE)
-    }
-}
-
-impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX512<FP> {
-    type PrimeSubfield = MontyField31<FP>;
-
-    const ZERO: Self = Self::broadcast(MontyField31::ZERO);
-    const ONE: Self = Self::broadcast(MontyField31::ONE);
-    const TWO: Self = Self::broadcast(MontyField31::TWO);
-    const NEG_ONE: Self = Self::broadcast(MontyField31::NEG_ONE);
-
-    #[inline]
-    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
-        f.into()
-    }
-
-    #[inline(always)]
-    fn zero_vec(len: usize) -> Vec<Self> {
-        // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { reconstitute_from_base(MontyField31::<FP>::zero_vec(len * WIDTH)) }
-    }
-
-    #[inline]
-    fn cube(&self) -> Self {
-        let val = self.to_vector();
-        unsafe {
-            // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
-            let res = apply_func_to_even_odd::<FP>(val, packed_exp_3::<FP>);
-            Self::from_vector(res)
-        }
-    }
-
-    #[inline]
-    fn xor(&self, rhs: &Self) -> Self {
-        let lhs = self.to_vector();
-        let rhs = rhs.to_vector();
-        let res = xor::<FP>(lhs, rhs);
-        unsafe {
-            // Safety: `xor` returns values in canonical form when given values in canonical form.
-            Self::from_vector(res)
-        }
-    }
-
-    #[inline]
-    fn andn(&self, rhs: &Self) -> Self {
-        let lhs = self.to_vector();
-        let rhs = rhs.to_vector();
-        let res = andn::<FP>(lhs, rhs);
-        unsafe {
-            // Safety: `andn` returns values in canonical form when given values in canonical form.
-            Self::from_vector(res)
-        }
-    }
-
-    #[inline(always)]
-    fn exp_const_u64<const POWER: u64>(&self) -> Self {
-        // We provide specialised code for the powers 3, 5, 7 as these turn up regularly.
-        // The other powers could be specialised similarly but we ignore this for now.
-        // These ideas could also be used to speed up the more generic exp_u64.
-        match POWER {
-            0 => Self::ONE,
-            1 => *self,
-            2 => self.square(),
-            3 => self.cube(),
-            4 => self.square().square(),
-            5 => {
-                let val = self.to_vector();
-                unsafe {
-                    // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
-                    let res = apply_func_to_even_odd::<FP>(val, packed_exp_5::<FP>);
-                    Self::from_vector(res)
-                }
-            }
-            6 => self.square().cube(),
-            7 => {
-                let val = self.to_vector();
-                unsafe {
-                    // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
-                    let res = apply_func_to_even_odd::<FP>(val, packed_exp_7::<FP>);
-                    Self::from_vector(res)
-                }
-            }
-            _ => self.exp_u64(POWER),
-        }
-    }
-
-    #[inline(always)]
-    fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
-        general_dot_product::<_, _, _, N>(u, v)
     }
 }
 

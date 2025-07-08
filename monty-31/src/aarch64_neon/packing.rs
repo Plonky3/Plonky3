@@ -8,7 +8,7 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use p3_field::op_assign_macros::{
     algebra_from_field_add, algebra_from_field_div, algebra_from_field_mul, algebra_from_field_sub,
-    algebra_from_field_sum_prod, ring_add_assign, ring_mul_assign, ring_sub_assign,
+    algebra_from_field_sum_prod, ring_add_assign, ring_mul_assign, ring_sub_assign, ring_sum,
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
@@ -74,6 +74,20 @@ impl<PMP: PackedMontyParameters> PackedMontyField31Neon<PMP> {
     }
 }
 
+impl<PMP: PackedMontyParameters> From<MontyField31<PMP>> for PackedMontyField31Neon<PMP> {
+    #[inline]
+    fn from(value: MontyField31<PMP>) -> Self {
+        Self::broadcast(value)
+    }
+}
+
+impl<PMP: PackedMontyParameters> Default for PackedMontyField31Neon<PMP> {
+    #[inline]
+    fn default() -> Self {
+        MontyField31::<PMP>::default().into()
+    }
+}
+
 impl<PMP: PackedMontyParameters> Add for PackedMontyField31Neon<PMP> {
     type Output = Self;
     #[inline]
@@ -131,7 +145,38 @@ impl<PMP: PackedMontyParameters> Mul for PackedMontyField31Neon<PMP> {
 
 ring_add_assign!(PackedMontyField31Neon, (PackedMontyParameters, PMP));
 ring_sub_assign!(PackedMontyField31Neon, (PackedMontyParameters, PMP));
-ring_mul_assign!(PackedMontyField31Neon, (PackedMontyParameters, PMP));
+ring_mul_assign!(PackedMontyField31Neon, (FieldParameters, FP));
+ring_sum!(PackedMontyField31Neon, (FieldParameters, FP));
+
+impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31Neon<FP> {
+    type PrimeSubfield = MontyField31<FP>;
+
+    const ZERO: Self = Self::broadcast(MontyField31::ZERO);
+    const ONE: Self = Self::broadcast(MontyField31::ONE);
+    const TWO: Self = Self::broadcast(MontyField31::TWO);
+    const NEG_ONE: Self = Self::broadcast(MontyField31::NEG_ONE);
+
+    #[inline]
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
+        f.into()
+    }
+
+    #[inline]
+    fn cube(&self) -> Self {
+        let val = self.to_vector();
+        let res = cube::<FP>(val);
+        unsafe {
+            // Safety: `cube` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
+    }
+
+    #[inline(always)]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        // SAFETY: this is a repr(transparent) wrapper around an array.
+        unsafe { reconstitute_from_base(MontyField31::<FP>::zero_vec(len * WIDTH)) }
+    }
+}
 
 /// No-op. Prevents the compiler from deducing the value of the vector.
 ///
@@ -397,70 +442,6 @@ fn sub<MPNeon: MontyParametersNeon>(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x
         // either 0 or -1 and will try to do an `and` and `add` instead, which is slower on the M1.
         // The `confuse_compiler` prevents this "optimization".
         aarch64::vmlsq_u32(diff, confuse_compiler(underflow), MPNeon::PACKED_P)
-    }
-}
-
-impl<PMP: PackedMontyParameters> From<MontyField31<PMP>> for PackedMontyField31Neon<PMP> {
-    #[inline]
-    fn from(value: MontyField31<PMP>) -> Self {
-        Self::broadcast(value)
-    }
-}
-
-impl<PMP: PackedMontyParameters> Default for PackedMontyField31Neon<PMP> {
-    #[inline]
-    fn default() -> Self {
-        MontyField31::<PMP>::default().into()
-    }
-}
-
-impl<FP: FieldParameters> Sum for PackedMontyField31Neon<FP> {
-    #[inline]
-    fn sum<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::ZERO)
-    }
-}
-
-impl<FP: FieldParameters> Product for PackedMontyField31Neon<FP> {
-    #[inline]
-    fn product<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::ONE)
-    }
-}
-
-impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31Neon<FP> {
-    type PrimeSubfield = MontyField31<FP>;
-
-    const ZERO: Self = Self::broadcast(MontyField31::ZERO);
-    const ONE: Self = Self::broadcast(MontyField31::ONE);
-    const TWO: Self = Self::broadcast(MontyField31::TWO);
-    const NEG_ONE: Self = Self::broadcast(MontyField31::NEG_ONE);
-
-    #[inline]
-    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
-        f.into()
-    }
-
-    #[inline]
-    fn cube(&self) -> Self {
-        let val = self.to_vector();
-        let res = cube::<FP>(val);
-        unsafe {
-            // Safety: `cube` returns values in canonical form when given values in canonical form.
-            Self::from_vector(res)
-        }
-    }
-
-    #[inline(always)]
-    fn zero_vec(len: usize) -> Vec<Self> {
-        // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { reconstitute_from_base(MontyField31::<FP>::zero_vec(len * WIDTH)) }
     }
 }
 

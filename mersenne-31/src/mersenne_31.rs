@@ -442,20 +442,6 @@ impl Add for Mersenne31 {
     }
 }
 
-impl Sum for Mersenne31 {
-    #[inline]
-    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO) for iterators of length >= 6.
-        // It assumes that iter.len() < 2^31.
-
-        // This sum will not overflow so long as iter.len() < 2^33.
-        let sum = iter.map(|x| x.value as u64).sum::<u64>();
-
-        // sum is < 2^62 provided iter.len() < 2^31.
-        from_u62(sum)
-    }
-}
-
 impl Sub for Mersenne31 {
     type Output = Self;
 
@@ -492,17 +478,24 @@ impl Mul for Mersenne31 {
     }
 }
 
-impl Product for Mersenne31 {
-    #[inline]
-    fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
-    }
-}
-
 ring_add_assign!(Mersenne31);
 ring_sub_assign!(Mersenne31);
 ring_mul_assign!(Mersenne31);
 field_div_assign!(Mersenne31);
+
+impl Sum for Mersenne31 {
+    #[inline]
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO) for iterators of length >= 6.
+        // It assumes that iter.len() < 2^31.
+
+        // This sum will not overflow so long as iter.len() < 2^33.
+        let sum = iter.map(|x| x.value as u64).sum::<u64>();
+
+        // sum is < 2^62 provided iter.len() < 2^31.
+        from_u62(sum)
+    }
+}
 
 #[inline(always)]
 pub(crate) fn from_u62(input: u64) -> Mersenne31 {

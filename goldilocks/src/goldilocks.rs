@@ -509,16 +509,6 @@ impl Add for Goldilocks {
     }
 }
 
-impl Sum for Goldilocks {
-    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO) for iterators of length > 2.
-
-        // This sum will not overflow so long as iter.len() < 2^64.
-        let sum = iter.map(|x| x.value as u128).sum::<u128>();
-        reduce128(sum)
-    }
-}
-
 impl Sub for Goldilocks {
     type Output = Self;
 
@@ -560,16 +550,20 @@ impl Mul for Goldilocks {
     }
 }
 
-impl Product for Goldilocks {
-    fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
-    }
-}
-
 ring_add_assign!(Goldilocks);
 ring_sub_assign!(Goldilocks);
 ring_mul_assign!(Goldilocks);
 field_div_assign!(Goldilocks);
+
+impl Sum for Goldilocks {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO) for iterators of length > 2.
+
+        // This sum will not overflow so long as iter.len() < 2^64.
+        let sum = iter.map(|x| x.value as u128).sum::<u128>();
+        reduce128(sum)
+    }
+}
 
 /// Reduces to a 64-bit value. The result might not be in canonical form; it could be in between the
 /// field order and `2^64`.

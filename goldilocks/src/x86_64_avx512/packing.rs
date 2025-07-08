@@ -9,7 +9,7 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::op_assign_macros::{
     algebra_from_field_add, algebra_from_field_div, algebra_from_field_mul, algebra_from_field_sub,
-    algebra_from_field_sum_prod, ring_add_assign, ring_mul_assign, ring_sub_assign,
+    algebra_from_field_sum_prod, ring_add_assign, ring_mul_assign, ring_sub_assign, ring_sum,
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
@@ -44,38 +44,6 @@ impl PackedGoldilocksAVX512 {
     }
 }
 
-impl Add for PackedGoldilocksAVX512 {
-    type Output = Self;
-    #[inline]
-    fn add(self, rhs: Self) -> Self {
-        Self::new(unsafe { add(self.get(), rhs.get()) })
-    }
-}
-
-impl Neg for PackedGoldilocksAVX512 {
-    type Output = Self;
-    #[inline]
-    fn neg(self) -> Self {
-        Self::new(unsafe { neg(self.get()) })
-    }
-}
-
-impl Sub for PackedGoldilocksAVX512 {
-    type Output = Self;
-    #[inline]
-    fn sub(self, rhs: Self) -> Self {
-        Self::new(unsafe { sub(self.get(), rhs.get()) })
-    }
-}
-
-impl Mul for PackedGoldilocksAVX512 {
-    type Output = Self;
-    #[inline]
-    fn mul(self, rhs: Self) -> Self {
-        Self::new(unsafe { mul(self.get(), rhs.get()) })
-    }
-}
-
 impl Debug for PackedGoldilocksAVX512 {
     #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -96,16 +64,49 @@ impl From<Goldilocks> for PackedGoldilocksAVX512 {
     }
 }
 
-impl Product for PackedGoldilocksAVX512 {
+impl Add for PackedGoldilocksAVX512 {
+    type Output = Self;
     #[inline]
-    fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
+    fn add(self, rhs: Self) -> Self {
+        Self::new(unsafe { add(self.get(), rhs.get()) })
+    }
+}
+
+impl Sub for PackedGoldilocksAVX512 {
+    type Output = Self;
+    #[inline]
+    fn sub(self, rhs: Self) -> Self {
+        Self::new(unsafe { sub(self.get(), rhs.get()) })
+    }
+}
+
+impl Neg for PackedGoldilocksAVX512 {
+    type Output = Self;
+    #[inline]
+    fn neg(self) -> Self {
+        Self::new(unsafe { neg(self.get()) })
+    }
+}
+
+impl Mul for PackedGoldilocksAVX512 {
+    type Output = Self;
+    #[inline]
+    fn mul(self, rhs: Self) -> Self {
+        Self::new(unsafe { mul(self.get(), rhs.get()) })
     }
 }
 
 ring_add_assign!(PackedGoldilocksAVX512);
 ring_sub_assign!(PackedGoldilocksAVX512);
 ring_mul_assign!(PackedGoldilocksAVX512);
+ring_sum!(PackedGoldilocksAVX512);
+
+impl Distribution<PackedGoldilocksAVX512> for StandardUniform {
+    #[inline]
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedGoldilocksAVX512 {
+        PackedGoldilocksAVX512(rng.random())
+    }
+}
 
 impl PrimeCharacteristicRing for PackedGoldilocksAVX512 {
     type PrimeSubfield = Goldilocks;
@@ -200,20 +201,6 @@ unsafe impl PackedFieldPow2 for PackedGoldilocksAVX512 {
             _ => panic!("unsupported block_len"),
         };
         (Self::new(res0), Self::new(res1))
-    }
-}
-
-impl Sum for PackedGoldilocksAVX512 {
-    #[inline]
-    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO)
-    }
-}
-
-impl Distribution<PackedGoldilocksAVX512> for StandardUniform {
-    #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedGoldilocksAVX512 {
-        PackedGoldilocksAVX512(rng.random())
     }
 }
 

@@ -32,6 +32,23 @@ macro_rules! ring_add_assign {
     };
 }
 
+/// Given a struct which implements `Add` implement `Sum`.
+///
+/// `Sum` is implemented by just doing a reduce on the iterator.
+#[macro_export]
+macro_rules! ring_sum {
+    ($type:ty $(, ($type_param:ty, $param_name:ty))?) => {
+        paste::paste! {
+            impl$(<$param_name: $type_param>)? Sum for $type$(<$param_name>)? {
+                #[inline]
+                fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+                    iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO)
+                }
+            }
+        }
+    };
+}
+
 /// Given a struct which implements `Sub` implement `SubAssign`.
 ///
 /// `SubAssign` is implemented in a simple way by calling `sub`
@@ -50,10 +67,11 @@ macro_rules! ring_sub_assign {
     };
 }
 
-/// Given a struct which implements `Mul` implement `MulAssign`.
+/// Given a struct which implements `Mul` implement `MulAssign` and `Product`.
 ///
 /// `MulAssign` is implemented in a simple way by calling `mul`
-/// and assigning the result to `*self`.
+/// and assigning the result to `*self`. Similarly `Product` is implemented
+/// in the similarly simple way of just doing a reduce on the iterator.
 #[macro_export]
 macro_rules! ring_mul_assign {
     ($type:ty $(, ($type_param:ty, $param_name:ty))?) => {
@@ -62,6 +80,13 @@ macro_rules! ring_mul_assign {
                 #[inline]
                 fn mul_assign(&mut self, rhs: Self) {
                     *self = *self * rhs;
+                }
+            }
+
+            impl$(<$param_name: $type_param>)? Product for $type$(<$param_name>)? {
+                #[inline]
+                fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
+                    iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
                 }
             }
         }
@@ -192,7 +217,7 @@ macro_rules! algebra_from_field_mul {
             impl$(<$param_name: $type_param>)? MulAssign<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
                 #[inline]
                 fn mul_assign(&mut self, rhs: $field_type$(<$param_name>)?) {
-                    *self *= Self::from(rhs);
+                    *self = *self * rhs;
                 }
             }
 
@@ -274,5 +299,5 @@ macro_rules! algebra_from_field_sum_prod {
 pub use {
     algebra_from_field_add, algebra_from_field_div, algebra_from_field_mul, algebra_from_field_sub,
     algebra_from_field_sum_prod, field_div_assign, ring_add_assign, ring_mul_assign,
-    ring_sub_assign,
+    ring_sub_assign, ring_sum,
 };

@@ -9,7 +9,7 @@ use core::{array, fmt, stringify};
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
 use p3_field::op_assign_macros::{
-    field_div_assign, ring_add_assign, ring_mul_assign, ring_sub_assign,
+    field_div_assign, ring_add_assign, ring_mul_assign, ring_sub_assign, ring_sum,
 };
 use p3_field::{
     Field, InjectiveMonomial, Packable, PrimeCharacteristicRing, PrimeField, RawDataSerializable,
@@ -419,13 +419,6 @@ impl Add for Bn254 {
     }
 }
 
-impl Sum for Bn254 {
-    #[inline]
-    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO)
-    }
-}
-
 impl Sub for Bn254 {
     type Output = Self;
 
@@ -463,16 +456,10 @@ impl Mul for Bn254 {
     }
 }
 
-impl Product for Bn254 {
-    #[inline]
-    fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
-    }
-}
-
 ring_add_assign!(Bn254);
 ring_sub_assign!(Bn254);
 ring_mul_assign!(Bn254);
+ring_sum!(Bn254);
 field_div_assign!(Bn254);
 
 impl Distribution<Bn254> for StandardUniform {

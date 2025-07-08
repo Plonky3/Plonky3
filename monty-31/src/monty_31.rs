@@ -667,18 +667,6 @@ impl<FP: MontyParameters> Add for MontyField31<FP> {
     }
 }
 
-impl<FP: MontyParameters> Sum for MontyField31<FP> {
-    #[inline]
-    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO) for iterators of length > 2.
-        // There might be a faster reduction method possible for lengths <= 16 which avoids %.
-
-        // This sum will not overflow so long as iter.len() < 2^33.
-        let sum = iter.map(|x| x.value as u64).sum::<u64>();
-        Self::new_monty((sum % FP::PRIME as u64) as u32)
-    }
-}
-
 impl<FP: MontyParameters> Sub for MontyField31<FP> {
     type Output = Self;
 
@@ -710,14 +698,19 @@ impl<FP: MontyParameters> Mul for MontyField31<FP> {
     }
 }
 
-impl<FP: FieldParameters> Product for MontyField31<FP> {
-    #[inline]
-    fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
-    }
-}
-
 ring_add_assign!(MontyField31, (MontyParameters, MP));
 ring_sub_assign!(MontyField31, (MontyParameters, MP));
-ring_mul_assign!(MontyField31, (MontyParameters, MP));
+ring_mul_assign!(MontyField31, (FieldParameters, FP));
 field_div_assign!(MontyField31, (FieldParameters, FP));
+
+impl<FP: MontyParameters> Sum for MontyField31<FP> {
+    #[inline]
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO) for iterators of length > 2.
+        // There might be a faster reduction method possible for lengths <= 16 which avoids %.
+
+        // This sum will not overflow so long as iter.len() < 2^33.
+        let sum = iter.map(|x| x.value as u64).sum::<u64>();
+        Self::new_monty((sum % FP::PRIME as u64) as u32)
+    }
+}
