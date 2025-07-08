@@ -7,7 +7,8 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use p3_field::exponentiation::exp_1717986917;
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing,
+    PermutationMonomial, PrimeCharacteristicRing, ring_add_assign, ring_mul_assign,
+    ring_sub_assign,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
@@ -79,15 +80,15 @@ impl Add for PackedMersenne31AVX2 {
     }
 }
 
-impl Mul for PackedMersenne31AVX2 {
+impl Sub for PackedMersenne31AVX2 {
     type Output = Self;
     #[inline]
-    fn mul(self, rhs: Self) -> Self {
+    fn sub(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = mul(lhs, rhs);
+        let res = sub(lhs, rhs);
         unsafe {
-            // Safety: `mul` returns values in canonical form when given values in canonical form.
+            // Safety: `sub` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
@@ -106,19 +107,23 @@ impl Neg for PackedMersenne31AVX2 {
     }
 }
 
-impl Sub for PackedMersenne31AVX2 {
+impl Mul for PackedMersenne31AVX2 {
     type Output = Self;
     #[inline]
-    fn sub(self, rhs: Self) -> Self {
+    fn mul(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = sub(lhs, rhs);
+        let res = mul(lhs, rhs);
         unsafe {
-            // Safety: `sub` returns values in canonical form when given values in canonical form.
+            // Safety: `mul` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
 }
+
+ring_add_assign!(PackedMersenne31AVX2);
+ring_sub_assign!(PackedMersenne31AVX2);
+ring_mul_assign!(PackedMersenne31AVX2);
 
 /// Add two vectors of Mersenne-31 field elements represented as values in {0, ..., P}.
 /// If the inputs do not conform to this representation, the result is undefined.
@@ -354,27 +359,6 @@ impl Default for PackedMersenne31AVX2 {
     #[inline]
     fn default() -> Self {
         Mersenne31::default().into()
-    }
-}
-
-impl AddAssign for PackedMersenne31AVX2 {
-    #[inline]
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
-impl MulAssign for PackedMersenne31AVX2 {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = *self * rhs;
-    }
-}
-
-impl SubAssign for PackedMersenne31AVX2 {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
     }
 }
 

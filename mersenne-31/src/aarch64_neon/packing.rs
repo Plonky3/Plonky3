@@ -78,15 +78,15 @@ impl Add for PackedMersenne31Neon {
     }
 }
 
-impl Mul for PackedMersenne31Neon {
+impl Sub for PackedMersenne31Neon {
     type Output = Self;
     #[inline]
-    fn mul(self, rhs: Self) -> Self {
+    fn sub(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = mul(lhs, rhs);
+        let res = sub(lhs, rhs);
         unsafe {
-            // Safety: `mul` returns valid values when given valid values.
+            // Safety: `sub` returns valid values when given valid values.
             Self::from_vector(res)
         }
     }
@@ -105,19 +105,23 @@ impl Neg for PackedMersenne31Neon {
     }
 }
 
-impl Sub for PackedMersenne31Neon {
+impl Mul for PackedMersenne31Neon {
     type Output = Self;
     #[inline]
-    fn sub(self, rhs: Self) -> Self {
+    fn mul(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = sub(lhs, rhs);
+        let res = mul(lhs, rhs);
         unsafe {
-            // Safety: `sub` returns valid values when given valid values.
+            // Safety: `mul` returns valid values when given valid values.
             Self::from_vector(res)
         }
     }
 }
+
+ring_add_assign!(PackedMersenne31AVX2);
+ring_sub_assign!(PackedMersenne31AVX2);
+ring_mul_assign!(PackedMersenne31AVX2);
 
 /// Given a `val` in `0, ..., 2 P`, return a `res` in `0, ..., P` such that `res = val (mod P)`
 #[inline]
@@ -268,27 +272,6 @@ impl Default for PackedMersenne31Neon {
     #[inline]
     fn default() -> Self {
         Mersenne31::default().into()
-    }
-}
-
-impl AddAssign for PackedMersenne31Neon {
-    #[inline]
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
-impl MulAssign for PackedMersenne31Neon {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = *self * rhs;
-    }
-}
-
-impl SubAssign for PackedMersenne31Neon {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
     }
 }
 
