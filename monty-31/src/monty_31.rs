@@ -727,7 +727,7 @@ impl<FP: FieldParameters> Div for MontyField31<FP> {
     }
 }
 
-ring_add_assign!(MontyField31, MontyParameters);
-ring_sub_assign!(MontyField31, MontyParameters);
-ring_mul_assign!(MontyField31, MontyParameters);
-field_div_assign!(MontyField31, FieldParameters);
+ring_add_assign!(MontyField31, (MontyParameters, MP));
+ring_sub_assign!(MontyField31, (MontyParameters, MP));
+ring_mul_assign!(MontyField31, (MontyParameters, MP));
+field_div_assign!(MontyField31, (FieldParameters, FP));

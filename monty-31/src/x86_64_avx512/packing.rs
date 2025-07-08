@@ -134,9 +134,9 @@ impl<PMP: PackedMontyParameters> Mul for PackedMontyField31AVX512<PMP> {
     }
 }
 
-ring_add_assign!(PackedMontyField31AVX512, PackedMontyParameters);
-ring_sub_assign!(PackedMontyField31AVX512, PackedMontyParameters);
-ring_mul_assign!(PackedMontyField31AVX512, PackedMontyParameters);
+ring_add_assign!(PackedMontyField31AVX512, (PackedMontyParameters, PMP));
+ring_sub_assign!(PackedMontyField31AVX512, (PackedMontyParameters, PMP));
+ring_mul_assign!(PackedMontyField31AVX512, (PackedMontyParameters, PMP));
 
 /// Add two vectors of MontyField31 elements in canonical form.
 ///

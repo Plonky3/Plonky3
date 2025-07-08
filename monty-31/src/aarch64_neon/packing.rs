@@ -126,9 +126,9 @@ impl<PMP: PackedMontyParameters> Mul for PackedMontyField31Neon<PMP> {
     }
 }
 
-ring_add_assign!(PackedMontyField31Neon, PackedMontyParameters);
-ring_sub_assign!(PackedMontyField31Neon, PackedMontyParameters);
-ring_mul_assign!(PackedMontyField31Neon, PackedMontyParameters);
+ring_add_assign!(PackedMontyField31Neon, (PackedMontyParameters, PMP));
+ring_sub_assign!(PackedMontyField31Neon, (PackedMontyParameters, PMP));
+ring_mul_assign!(PackedMontyField31Neon, (PackedMontyParameters, PMP));
 
 /// No-op. Prevents the compiler from deducing the value of the vector.
 ///
