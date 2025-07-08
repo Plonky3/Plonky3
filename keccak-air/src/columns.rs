@@ -19,14 +19,6 @@ pub struct KeccakCols<T> {
     /// The `i`th value is set to 1 if we are in the `i`th round, otherwise 0.
     pub step_flags: [T; NUM_ROUNDS],
 
-    /// A register which indicates if a row should be exported, i.e. included in a multiset equality
-    /// argument. Should be 1 only for certain rows which are final steps, i.e. with
-    /// `step_flags[23] = 1`.
-    pub export: T,
-
-    /// Permutation inputs, stored in y-major order.
-    pub preimage: [[[T; U64_LIMBS]; 5]; 5],
-
     pub a: [[[T; U64_LIMBS]; 5]; 5],
 
     /// ```ignore
@@ -91,6 +83,7 @@ impl<T: Clone> KeccakCols<T> {
     }
 }
 
+/// Returns the `i`th `a` limb, which corresponds to the `i`-th input limb in the first round.
 pub fn input_limb(i: usize) -> usize {
     debug_assert!(i < RATE_LIMBS);
 
@@ -101,7 +94,7 @@ pub fn input_limb(i: usize) -> usize {
     let y = i_u64 / 5;
     let x = i_u64 % 5;
 
-    KECCAK_COL_MAP.preimage[y][x][limb_index]
+    KECCAK_COL_MAP.a[y][x][limb_index]
 }
 
 pub fn output_limb(i: usize) -> usize {
