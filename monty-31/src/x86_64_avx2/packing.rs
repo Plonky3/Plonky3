@@ -3,9 +3,12 @@ use core::arch::x86_64::{self, __m256i};
 use core::array;
 use core::iter::{Product, Sum};
 use core::mem::transmute;
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::op_assign_macros::{ring_add_assign, ring_mul_assign, ring_sub_assign};
+use p3_field::op_assign_macros::{
+    algebra_from_field_add, algebra_from_field_div, algebra_from_field_mul, algebra_from_field_sub,
+    algebra_from_field_sum_prod, ring_add_assign, ring_mul_assign, ring_sub_assign,
+};
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
     PermutationMonomial, PrimeCharacteristicRing,
@@ -1007,6 +1010,24 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX2<FP>
     }
 }
 
+algebra_from_field_add!(
+    PackedMontyField31AVX2,
+    MontyField31,
+    (PackedMontyParameters, PMP)
+);
+algebra_from_field_sub!(
+    PackedMontyField31AVX2,
+    MontyField31,
+    (PackedMontyParameters, PMP)
+);
+algebra_from_field_mul!(
+    PackedMontyField31AVX2,
+    MontyField31,
+    (PackedMontyParameters, PMP)
+);
+algebra_from_field_div!(PackedMontyField31AVX2, MontyField31, (FieldParameters, FP));
+algebra_from_field_sum_prod!(PackedMontyField31AVX2, MontyField31, (FieldParameters, FP));
+
 impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31AVX2<FP> {}
 
 impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> InjectiveMonomial<D>
@@ -1019,104 +1040,6 @@ impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> PermutationMon
 {
     fn injective_exp_root_n(&self) -> Self {
         FP::exp_root_d(*self)
-    }
-}
-
-impl<PMP: PackedMontyParameters> Add<MontyField31<PMP>> for PackedMontyField31AVX2<PMP> {
-    type Output = Self;
-    #[inline]
-    fn add(self, rhs: MontyField31<PMP>) -> Self {
-        self + Self::from(rhs)
-    }
-}
-
-impl<PMP: PackedMontyParameters> Mul<MontyField31<PMP>> for PackedMontyField31AVX2<PMP> {
-    type Output = Self;
-    #[inline]
-    fn mul(self, rhs: MontyField31<PMP>) -> Self {
-        self * Self::from(rhs)
-    }
-}
-
-impl<PMP: PackedMontyParameters> Sub<MontyField31<PMP>> for PackedMontyField31AVX2<PMP> {
-    type Output = Self;
-    #[inline]
-    fn sub(self, rhs: MontyField31<PMP>) -> Self {
-        self - Self::from(rhs)
-    }
-}
-
-impl<PMP: PackedMontyParameters> AddAssign<MontyField31<PMP>> for PackedMontyField31AVX2<PMP> {
-    #[inline]
-    fn add_assign(&mut self, rhs: MontyField31<PMP>) {
-        *self += Self::from(rhs)
-    }
-}
-
-impl<PMP: PackedMontyParameters> MulAssign<MontyField31<PMP>> for PackedMontyField31AVX2<PMP> {
-    #[inline]
-    fn mul_assign(&mut self, rhs: MontyField31<PMP>) {
-        *self *= Self::from(rhs)
-    }
-}
-
-impl<PMP: PackedMontyParameters> SubAssign<MontyField31<PMP>> for PackedMontyField31AVX2<PMP> {
-    #[inline]
-    fn sub_assign(&mut self, rhs: MontyField31<PMP>) {
-        *self -= Self::from(rhs)
-    }
-}
-
-impl<FP: FieldParameters> Sum<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
-    #[inline]
-    fn sum<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = MontyField31<FP>>,
-    {
-        iter.sum::<MontyField31<FP>>().into()
-    }
-}
-
-impl<FP: FieldParameters> Product<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
-    #[inline]
-    fn product<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = MontyField31<FP>>,
-    {
-        iter.product::<MontyField31<FP>>().into()
-    }
-}
-
-impl<FP: FieldParameters> Div<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
-    type Output = Self;
-    #[allow(clippy::suspicious_arithmetic_impl)]
-    #[inline]
-    fn div(self, rhs: MontyField31<FP>) -> Self {
-        self * rhs.inverse()
-    }
-}
-
-impl<PMP: PackedMontyParameters> Add<PackedMontyField31AVX2<PMP>> for MontyField31<PMP> {
-    type Output = PackedMontyField31AVX2<PMP>;
-    #[inline]
-    fn add(self, rhs: PackedMontyField31AVX2<PMP>) -> PackedMontyField31AVX2<PMP> {
-        PackedMontyField31AVX2::<PMP>::from(self) + rhs
-    }
-}
-
-impl<PMP: PackedMontyParameters> Mul<PackedMontyField31AVX2<PMP>> for MontyField31<PMP> {
-    type Output = PackedMontyField31AVX2<PMP>;
-    #[inline]
-    fn mul(self, rhs: PackedMontyField31AVX2<PMP>) -> PackedMontyField31AVX2<PMP> {
-        PackedMontyField31AVX2::<PMP>::from(self) * rhs
-    }
-}
-
-impl<PMP: PackedMontyParameters> Sub<PackedMontyField31AVX2<PMP>> for MontyField31<PMP> {
-    type Output = PackedMontyField31AVX2<PMP>;
-    #[inline]
-    fn sub(self, rhs: PackedMontyField31AVX2<PMP>) -> PackedMontyField31AVX2<PMP> {
-        PackedMontyField31AVX2::<PMP>::from(self) - rhs
     }
 }
 

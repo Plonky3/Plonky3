@@ -56,29 +56,29 @@ macro_rules! field_div_assign {
 
 #[macro_export]
 macro_rules! algebra_from_field_add {
-    ($alg_type:ty, $field_type: ty) => {
+    ($alg_type:ty, $field_type: ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
-            impl Add<$field_type> for $alg_type {
-                type Output = $alg_type;
+            impl$(<$param_name: $type_param>)? Add<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
+                type Output = Self;
 
                 #[inline]
-                fn add(self, rhs: $field_type) -> $alg_type {
+                fn add(self, rhs: $field_type$(<$param_name>)?) -> Self {
                     self + Self::from(rhs)
                 }
             }
 
-            impl AddAssign<$field_type> for $alg_type {
+            impl$(<$param_name: $type_param>)? AddAssign<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
                 #[inline]
-                fn add_assign(&mut self, rhs: $field_type) {
+                fn add_assign(&mut self, rhs: $field_type$(<$param_name>)?) {
                     *self += Self::from(rhs);
                 }
             }
 
-            impl Add<$alg_type> for $field_type {
-                type Output = $alg_type;
+            impl$(<$param_name: $type_param>)? Add<$alg_type$(<$param_name>)?> for $field_type$(<$param_name>)? {
+                type Output = $alg_type$(<$param_name>)?;
 
                 #[inline]
-                fn add(self, rhs: $alg_type) -> $alg_type {
+                fn add(self, rhs: $alg_type$(<$param_name>)?) -> Self::Output {
                     $alg_type::from(self) + rhs
                 }
             }
@@ -88,29 +88,29 @@ macro_rules! algebra_from_field_add {
 
 #[macro_export]
 macro_rules! algebra_from_field_sub {
-    ($alg_type:ty, $field_type: ty) => {
+    ($alg_type:ty, $field_type: ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
-            impl Sub<$field_type> for $alg_type {
-                type Output = $alg_type;
+            impl$(<$param_name: $type_param>)? Sub<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
+                type Output = Self;
 
                 #[inline]
-                fn sub(self, rhs: $field_type) -> $alg_type {
+                fn sub(self, rhs: $field_type$(<$param_name>)?) -> Self {
                     self - Self::from(rhs)
                 }
             }
 
-            impl SubAssign<$field_type> for $alg_type {
+            impl$(<$param_name: $type_param>)? SubAssign<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
                 #[inline]
-                fn sub_assign(&mut self, rhs: $field_type) {
+                fn sub_assign(&mut self, rhs: $field_type$(<$param_name>)?) {
                     *self -= Self::from(rhs);
                 }
             }
 
-            impl Sub<$alg_type> for $field_type {
-                type Output = $alg_type;
+            impl$(<$param_name: $type_param>)? Sub<$alg_type$(<$param_name>)?> for $field_type$(<$param_name>)? {
+                type Output = $alg_type$(<$param_name>)?;
 
                 #[inline]
-                fn sub(self, rhs: $alg_type) -> $alg_type {
+                fn sub(self, rhs: $alg_type$(<$param_name>)?) -> Self::Output {
                     $alg_type::from(self) - rhs
                 }
             }
@@ -120,29 +120,29 @@ macro_rules! algebra_from_field_sub {
 
 #[macro_export]
 macro_rules! algebra_from_field_mul {
-    ($alg_type:ty, $field_type: ty) => {
+    ($alg_type:ty, $field_type: ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
-            impl Mul<$field_type> for $alg_type {
-                type Output = $alg_type;
+            impl$(<$param_name: $type_param>)? Mul<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
+                type Output = Self;
 
                 #[inline]
-                fn mul(self, rhs: $field_type) -> $alg_type {
+                fn mul(self, rhs: $field_type$(<$param_name>)?) -> Self {
                     self * Self::from(rhs)
                 }
             }
 
-            impl MulAssign<$field_type> for $alg_type {
+            impl$(<$param_name: $type_param>)? MulAssign<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
                 #[inline]
-                fn mul_assign(&mut self, rhs: $field_type) {
+                fn mul_assign(&mut self, rhs: $field_type$(<$param_name>)?) {
                     *self *= Self::from(rhs);
                 }
             }
 
-            impl Mul<$alg_type> for $field_type {
-                type Output = $alg_type;
+            impl$(<$param_name: $type_param>)? Mul<$alg_type$(<$param_name>)?> for $field_type$(<$param_name>)? {
+                type Output = $alg_type$(<$param_name>)?;
 
                 #[inline]
-                fn mul(self, rhs: $alg_type) -> $alg_type {
+                fn mul(self, rhs: $alg_type$(<$param_name>)?) -> Self::Output {
                     $alg_type::from(self) * rhs
                 }
             }
@@ -152,22 +152,22 @@ macro_rules! algebra_from_field_mul {
 
 #[macro_export]
 macro_rules! algebra_from_field_div {
-    ($alg_type:ty, $field_type: ty) => {
+    ($alg_type:ty, $field_type: ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
-            impl Div<$field_type> for $alg_type {
-                type Output = $alg_type;
+            impl$(<$param_name: $type_param>)? Div<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
+                type Output = Self;
 
                 #[inline]
                 #[allow(clippy::suspicious_arithmetic_impl)]
-                fn div(self, rhs: $field_type) -> $alg_type {
+                fn div(self, rhs: $field_type$(<$param_name>)?) -> Self {
                     self * Self::from(rhs.inverse())
                 }
             }
 
-            impl DivAssign<$field_type> for $alg_type {
+            impl$(<$param_name: $type_param>)? DivAssign<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
                 #[inline]
                 #[allow(clippy::suspicious_op_assign_impl)]
-                fn div_assign(&mut self, rhs: $field_type) {
+                fn div_assign(&mut self, rhs: $field_type$(<$param_name>)?) {
                     *self *= Self::from(rhs.inverse());
                 }
             }
@@ -177,25 +177,25 @@ macro_rules! algebra_from_field_div {
 
 #[macro_export]
 macro_rules! algebra_from_field_sum_prod {
-    ($alg_type:ty, $field_type: ty) => {
+    ($alg_type:ty, $field_type: ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
-            impl Sum<$field_type> for $alg_type {
+            impl$(<$param_name: $type_param>)? Sum<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
                 #[inline]
-                fn sum<I>(iter: I) -> $alg_type
+                fn sum<I>(iter: I) -> Self
                 where
-                    I: Iterator<Item = $field_type>,
+                    I: Iterator<Item = $field_type$(<$param_name>)?>,
                 {
-                    iter.sum::<$field_type>().into()
+                    iter.sum::<$field_type$(<$param_name>)?>().into()
                 }
             }
 
-            impl Product<$field_type> for $alg_type {
+            impl$(<$param_name: $type_param>)? Product<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
                 #[inline]
-                fn product<I>(iter: I) -> $alg_type
+                fn product<I>(iter: I) -> Self
                 where
-                    I: Iterator<Item = $field_type>,
+                    I: Iterator<Item = $field_type$(<$param_name>)?>,
                 {
-                    iter.product::<$field_type>().into()
+                    iter.product::<$field_type$(<$param_name>)?>().into()
                 }
             }
         }
