@@ -9,11 +9,13 @@ use core::{array, fmt};
 use num_bigint::BigUint;
 use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::integers::QuotientMap;
+use p3_field::op_assign_macros::{
+    field_div_assign, ring_add_assign, ring_mul_assign, ring_sub_assign,
+};
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField64, RawDataSerializable, TwoAdicField, field_div_assign, halve_u64,
-    impl_raw_serializable_primefield64, quotient_map_large_iint, quotient_map_large_uint,
-    quotient_map_small_int, ring_add_assign, ring_mul_assign, ring_sub_assign,
+    PrimeField64, RawDataSerializable, TwoAdicField, halve_u64, impl_raw_serializable_primefield64,
+    quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int,
 };
 use p3_util::{assume, branch_hint, flatten_to_base, gcd_inner};
 use rand::Rng;

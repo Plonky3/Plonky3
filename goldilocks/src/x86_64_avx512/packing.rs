@@ -7,10 +7,10 @@ use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::exponentiation::exp_10540996611094048183;
+use p3_field::op_assign_macros::{ring_add_assign, ring_mul_assign, ring_sub_assign};
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, PrimeField64, ring_add_assign, ring_mul_assign,
-    ring_sub_assign,
+    PermutationMonomial, PrimeCharacteristicRing, PrimeField64,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;

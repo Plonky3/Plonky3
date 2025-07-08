@@ -8,10 +8,12 @@ use core::{array, fmt, stringify};
 
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
+use p3_field::op_assign_macros::{
+    field_div_assign, ring_add_assign, ring_mul_assign, ring_sub_assign,
+};
 use p3_field::{
     Field, InjectiveMonomial, Packable, PrimeCharacteristicRing, PrimeField, RawDataSerializable,
-    TwoAdicField, field_div_assign, quotient_map_small_int, ring_add_assign, ring_mul_assign,
-    ring_sub_assign,
+    TwoAdicField, quotient_map_small_int,
 };
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
