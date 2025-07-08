@@ -2,7 +2,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::{reduce_31, split_32, ExtensionField, Field, PrimeField, PrimeField32};
+use p3_field::{reduce_31, split_32, ExtensionField, Field, PrimeField, PrimeField32, PrimeField31};
 use p3_symmetric::{CryptographicPermutation, Hash};
 use serde::{Deserialize, Serialize};
 
@@ -56,7 +56,7 @@ where
 
 impl<F, PF, P, const WIDTH: usize, const RATE: usize> MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
-    F: PrimeField32,
+    F: PrimeField31,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
@@ -84,7 +84,7 @@ where
 impl<F, PF, P, const WIDTH: usize, const RATE: usize> FieldChallenger<F>
     for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
-    F: PrimeField32,
+    F: PrimeField31,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
@@ -93,7 +93,7 @@ where
 impl<F, PF, P, const WIDTH: usize, const RATE: usize> CanObserve<F>
     for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
-    F: PrimeField32,
+    F: PrimeField31,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
@@ -112,7 +112,7 @@ where
 impl<F, PF, const N: usize, P, const WIDTH: usize, const RATE: usize> CanObserve<[F; N]>
     for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
-    F: PrimeField32,
+    F: PrimeField31,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
@@ -126,7 +126,7 @@ where
 impl<F, PF, const N: usize, P, const WIDTH: usize, const RATE: usize> CanObserve<Hash<F, PF, N>>
     for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
-    F: PrimeField32,
+    F: PrimeField31,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
@@ -144,7 +144,7 @@ where
 impl<F, PF, P, const WIDTH: usize, const RATE: usize> CanObserve<Vec<Vec<F>>>
     for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
-    F: PrimeField32,
+    F: PrimeField31,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
@@ -160,7 +160,7 @@ where
 impl<F, EF, PF, P, const WIDTH: usize, const RATE: usize> CanSample<EF>
     for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
-    F: PrimeField32,
+    F: PrimeField31,
     EF: ExtensionField<F>,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
@@ -183,7 +183,7 @@ where
 impl<F, PF, P, const WIDTH: usize, const RATE: usize> CanSampleBits<usize>
     for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
-    F: PrimeField32,
+    F: PrimeField31,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {

@@ -2,7 +2,7 @@ use alloc::string::String;
 use core::marker::PhantomData;
 
 use itertools::Itertools;
-use p3_field::{reduce_31, Field, PrimeField, PrimeField32};
+use p3_field::{reduce_31, Field, PrimeField, PrimeField32, PrimeField31};
 
 use crate::hash::Hash;
 use crate::hasher::CryptographicHasher;
@@ -86,7 +86,7 @@ impl<F, PF, P, const WIDTH: usize, const RATE: usize, const OUT: usize>
     CryptographicHasher<F, Hash<F, PF, OUT>>
     for MultiField32PaddingFreeSponge<F, PF, P, WIDTH, RATE, OUT>
 where
-    F: PrimeField32,
+    F: PrimeField31,
     PF: PrimeField + Default + Copy,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
@@ -113,7 +113,7 @@ where
 impl<F, PF, P, const WIDTH: usize, const RATE: usize, const OUT: usize>
     CryptographicHasher<F, [PF; OUT]> for MultiField32PaddingFreeSponge<F, PF, P, WIDTH, RATE, OUT>
 where
-    F: PrimeField32,
+    F: PrimeField31,
     PF: PrimeField + Default + Copy,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {

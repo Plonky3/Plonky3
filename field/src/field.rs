@@ -255,6 +255,8 @@ pub trait PrimeField32: PrimeField64 {
     fn as_canonical_u32(&self) -> u32;
 }
 
+pub trait PrimeField31: PrimeField32 {}
+
 pub trait AbstractExtensionField<Base: AbstractField>:
     AbstractField
     + From<Base>

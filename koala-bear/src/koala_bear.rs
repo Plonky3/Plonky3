@@ -5,7 +5,7 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use num_bigint::BigUint;
 use p3_field::{
     exp_1420470955, exp_u64_by_squaring, halve_u32, AbstractField, Field, Packable, PrimeField,
-    PrimeField32, PrimeField64, TwoAdicField,
+    PrimeField32, PrimeField64, TwoAdicField, PrimeField31
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -285,6 +285,8 @@ impl PrimeField32 for KoalaBear {
         from_monty(self.value)
     }
 }
+
+impl PrimeField31 for KoalaBear {}
 
 impl TwoAdicField for KoalaBear {
     const TWO_ADICITY: usize = 24;
