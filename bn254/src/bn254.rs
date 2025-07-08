@@ -3,14 +3,15 @@ use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::{array, fmt, stringify};
 
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
 use p3_field::{
     Field, InjectiveMonomial, Packable, PrimeCharacteristicRing, PrimeField, RawDataSerializable,
-    TwoAdicField, quotient_map_small_int,
+    TwoAdicField, field_div_assign, quotient_map_small_int, ring_add_assign, ring_mul_assign,
+    ring_sub_assign,
 };
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
@@ -416,13 +417,6 @@ impl Add for Bn254 {
     }
 }
 
-impl AddAssign for Bn254 {
-    #[inline]
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
 impl Sum for Bn254 {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
@@ -449,13 +443,6 @@ impl Sub for Bn254 {
     }
 }
 
-impl SubAssign for Bn254 {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
-    }
-}
-
 impl Neg for Bn254 {
     type Output = Self;
 
@@ -471,13 +458,6 @@ impl Mul for Bn254 {
     #[inline]
     fn mul(self, rhs: Self) -> Self {
         Self::new_monty(monty_mul(self.value, rhs.value))
-    }
-}
-
-impl MulAssign for Bn254 {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = *self * rhs;
     }
 }
 
@@ -497,6 +477,11 @@ impl Div for Bn254 {
         self * rhs.inverse()
     }
 }
+
+ring_add_assign!(Bn254);
+ring_sub_assign!(Bn254);
+ring_mul_assign!(Bn254);
+field_div_assign!(Bn254);
 
 impl Distribution<Bn254> for StandardUniform {
     #[inline]
