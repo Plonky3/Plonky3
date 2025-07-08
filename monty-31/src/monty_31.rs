@@ -717,16 +717,6 @@ impl<FP: FieldParameters> Product for MontyField31<FP> {
     }
 }
 
-impl<FP: FieldParameters> Div for MontyField31<FP> {
-    type Output = Self;
-
-    #[allow(clippy::suspicious_arithmetic_impl)]
-    #[inline]
-    fn div(self, rhs: Self) -> Self {
-        self * rhs.inverse()
-    }
-}
-
 ring_add_assign!(MontyField31, (MontyParameters, MP));
 ring_sub_assign!(MontyField31, (MontyParameters, MP));
 ring_mul_assign!(MontyField31, (MontyParameters, MP));

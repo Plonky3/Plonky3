@@ -566,15 +566,6 @@ impl Product for Goldilocks {
     }
 }
 
-impl Div for Goldilocks {
-    type Output = Self;
-
-    #[allow(clippy::suspicious_arithmetic_impl)]
-    fn div(self, rhs: Self) -> Self {
-        self * rhs.inverse()
-    }
-}
-
 ring_add_assign!(Goldilocks);
 ring_sub_assign!(Goldilocks);
 ring_mul_assign!(Goldilocks);

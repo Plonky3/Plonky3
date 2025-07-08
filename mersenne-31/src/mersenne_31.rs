@@ -499,16 +499,6 @@ impl Product for Mersenne31 {
     }
 }
 
-impl Div for Mersenne31 {
-    type Output = Self;
-
-    #[inline]
-    #[allow(clippy::suspicious_arithmetic_impl)]
-    fn div(self, rhs: Self) -> Self {
-        self * rhs.inverse()
-    }
-}
-
 ring_add_assign!(Mersenne31);
 ring_sub_assign!(Mersenne31);
 ring_mul_assign!(Mersenne31);

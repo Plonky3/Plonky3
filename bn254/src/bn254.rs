@@ -470,16 +470,6 @@ impl Product for Bn254 {
     }
 }
 
-impl Div for Bn254 {
-    type Output = Self;
-
-    #[allow(clippy::suspicious_arithmetic_impl)]
-    #[inline]
-    fn div(self, rhs: Self) -> Self {
-        self * rhs.inverse()
-    }
-}
-
 ring_add_assign!(Bn254);
 ring_sub_assign!(Bn254);
 ring_mul_assign!(Bn254);
