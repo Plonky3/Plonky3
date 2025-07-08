@@ -20,14 +20,24 @@ pub(crate) fn eval_round_flags<AB: AirBuilder>(builder: &mut AB) {
     let next: &KeccakCols<AB::Var> = (*next).borrow();
 
     // Initially, the first step flag should be 1 while the others should be 0.
-    builder.when_first_row().assert_one(local.step_flags[0]);
     builder
         .when_first_row()
-        .assert_zeros::<NUM_ROUNDS_MIN_1, _>(local.step_flags[1..].try_into().unwrap());
+        .assert_one(local.step_flags[0].clone());
+    builder
+        .when_first_row()
+        .assert_zeros::<NUM_ROUNDS_MIN_1, _>(try_clone_array(&local.step_flags[1..]).unwrap());
 
     builder
         .when_transition()
         .assert_zeros::<NUM_ROUNDS, _>(array::from_fn(|i| {
-            local.step_flags[i] - next.step_flags[(i + 1) % NUM_ROUNDS]
+            local.step_flags[i].clone() - next.step_flags[(i + 1) % NUM_ROUNDS].clone()
         }));
+}
+
+fn try_clone_array<T: Clone, const N: usize>(slice: &[T]) -> Result<[T; N], &'static str> {
+    if slice.len() != N {
+        return Err("Incorrect length");
+    }
+
+    Ok(array::from_fn(|i| slice[i].clone()))
 }

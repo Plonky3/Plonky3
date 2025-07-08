@@ -16,7 +16,7 @@ use tracing::instrument;
 ///
 /// * `F` – scalar element type inside each matrix row.
 /// * `W` – scalar element type of every digest word.
-/// * `M` – matrix type.  Must implement [`Matrix<F>`].
+/// * `M` – matrix type. Must implement [`Matrix<F>`].
 /// * `DIGEST_ELEMS` – number of `W` words in one digest.
 ///
 /// The tree is **balanced only at the digest layer**.

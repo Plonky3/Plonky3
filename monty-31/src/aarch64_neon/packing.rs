@@ -646,6 +646,7 @@ unsafe impl<FP: FieldParameters> PackedValue for PackedMontyField31Neon<FP> {
             &*slice.as_ptr().cast()
         }
     }
+
     #[inline]
     fn from_slice_mut(slice: &mut [MontyField31<FP>]) -> &mut Self {
         assert_eq!(slice.len(), Self::WIDTH);
@@ -657,20 +658,19 @@ unsafe impl<FP: FieldParameters> PackedValue for PackedMontyField31Neon<FP> {
         }
     }
 
-    /// Similar to `core:array::from_fn`.
     #[inline]
     fn from_fn<F: FnMut(usize) -> MontyField31<FP>>(f: F) -> Self {
-        let vals_arr: [_; WIDTH] = core::array::from_fn(f);
-        Self(vals_arr)
+        Self(core::array::from_fn(f))
     }
 
     #[inline]
     fn as_slice(&self) -> &[MontyField31<FP>] {
-        &self.0[..]
+        &self.0
     }
+
     #[inline]
     fn as_slice_mut(&mut self) -> &mut [MontyField31<FP>] {
-        &mut self.0[..]
+        &mut self.0
     }
 }
 
