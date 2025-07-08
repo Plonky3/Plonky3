@@ -19,9 +19,6 @@ pub struct KeccakCols<T> {
     /// The `i`th value is set to 1 if we are in the `i`th round, otherwise 0.
     pub step_flags: [T; NUM_ROUNDS],
 
-    /// A register which indicates if a row should be exported, i.e. included in a multiset equality
-    /// argument. Should be 1 only for certain rows which are final steps, i.e. with
-    /// `step_flags[23] = 1`.
     pub a: [[[T; U64_LIMBS]; 5]; 5],
 
     /// ```ignore
