@@ -16,7 +16,7 @@
 
 /// Given a struct which implements `Add` implement `AddAssign`.
 ///
-/// `AddAssign` is implemented in the simplest way by calling `add`
+/// `AddAssign` is implemented in a simple way by calling `add`
 /// and assigning the result to `*self`.
 #[macro_export]
 macro_rules! ring_add_assign {
@@ -34,7 +34,7 @@ macro_rules! ring_add_assign {
 
 /// Given a struct which implements `Sub` implement `SubAssign`.
 ///
-/// `SubAssign` is implemented in the simplest way by simply calling `sub`
+/// `SubAssign` is implemented in a simple way by calling `sub`
 /// and assigning the result to `*self`.
 #[macro_export]
 macro_rules! ring_sub_assign {
@@ -52,7 +52,7 @@ macro_rules! ring_sub_assign {
 
 /// Given a struct which implements `Mul` implement `MulAssign`.
 ///
-/// `MulAssign` is implemented in the simplest way by simply calling `mul`
+/// `MulAssign` is implemented in a simple way by calling `mul`
 /// and assigning the result to `*self`.
 #[macro_export]
 macro_rules! ring_mul_assign {
@@ -97,14 +97,14 @@ macro_rules! field_div_assign {
     };
 }
 
-/// Given a two struct `Alg` and `Field` where `Alg` implements `From<Field>`, implement
+/// Given two structs `Alg` and `Field` where `Alg` implements `From<Field>`, implement
 /// `Add<Field> and AddAssign<Field>` for `Alg` and `Add<Alg>` for `Field`.
 ///
 /// All are implemented in the simplest way by using `From` to map the `Field` element
 /// to an `Alg` element and then applying the native `add` or `add_assign` methods on `Alg` elements.
 #[macro_export]
 macro_rules! algebra_from_field_add {
-    ($alg_type:ty, $field_type: ty $(, ($type_param:ty, $param_name:ty))?) => {
+    ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
             impl$(<$param_name: $type_param>)? Add<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
                 type Output = Self;
@@ -134,14 +134,14 @@ macro_rules! algebra_from_field_add {
     };
 }
 
-/// Given a two struct `Alg` and `Field` where `Alg` implements `From<Field>`, implement
+/// Given two structs `Alg` and `Field` where `Alg` implements `From<Field>`, implement
 /// `Sub<Field> and SubAssign<Field>` for `Alg` and `Sub<Alg>` for `Field`.
 ///
 /// All are implemented in the simplest way by using `From` to map the `Field` element
 /// to an `Alg` element and then applying the native `sub` or `sub_assign` methods on `Alg` elements.
 #[macro_export]
 macro_rules! algebra_from_field_sub {
-    ($alg_type:ty, $field_type: ty $(, ($type_param:ty, $param_name:ty))?) => {
+    ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
             impl$(<$param_name: $type_param>)? Sub<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
                 type Output = Self;
@@ -171,14 +171,14 @@ macro_rules! algebra_from_field_sub {
     };
 }
 
-/// Given a two struct `Alg` and `Field` where `Alg` implements `From<Field>`, implement
+/// Given two structs `Alg` and `Field` where `Alg` implements `From<Field>`, implement
 /// `Mul<Field> and MulAssign<Field>` for `Alg` and `Mul<Alg>` for `Field`.
 ///
 /// All are implemented in the simplest way by using `From` to map the `Field` element
 /// to an `Alg` element and then applying the native `mul` or `mul_assign` methods on `Alg` elements.
 #[macro_export]
 macro_rules! algebra_from_field_mul {
-    ($alg_type:ty, $field_type: ty $(, ($type_param:ty, $param_name:ty))?) => {
+    ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
             impl$(<$param_name: $type_param>)? Mul<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
                 type Output = Self;
@@ -208,7 +208,7 @@ macro_rules! algebra_from_field_mul {
     };
 }
 
-/// Given a two struct `Alg` and `Field` where `Alg` implements `From<Field>`, implement
+/// Given two structs `Alg` and `Field` where `Alg` implements `From<Field>`, implement
 /// `Div<Field> and DivAssign<Field>` for `Alg`.
 ///
 /// Both are implemented in the simplest way by first applying the `.inverse()` map from
@@ -216,7 +216,7 @@ macro_rules! algebra_from_field_mul {
 ///  applying the native `mul` or `mul_assign` methods on `Alg` elements.
 #[macro_export]
 macro_rules! algebra_from_field_div {
-    ($alg_type:ty, $field_type: ty $(, ($type_param:ty, $param_name:ty))?) => {
+    ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
             impl$(<$param_name: $type_param>)? Div<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
                 type Output = Self;
@@ -239,14 +239,14 @@ macro_rules! algebra_from_field_div {
     };
 }
 
-/// Given a two struct `Alg` and `Field` where `Alg` implements `From<Field>`, implement
+/// Given two structs `Alg` and `Field` where `Alg` implements `From<Field>`, implement
 /// `Sum<Field> and Product<Field>` for `Alg`.
 ///
 /// Both are implemented in the simplest way by simply computing the Sum/Product as
 /// field elements before mapping to an `Alg` element using `From`.
 #[macro_export]
 macro_rules! algebra_from_field_sum_prod {
-    ($alg_type:ty, $field_type: ty $(, ($type_param:ty, $param_name:ty))?) => {
+    ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
             impl$(<$param_name: $type_param>)? Sum<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
                 #[inline]
