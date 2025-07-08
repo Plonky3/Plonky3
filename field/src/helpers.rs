@@ -5,7 +5,7 @@ use core::array;
 use num_bigint::BigUint;
 
 use crate::field::Field;
-use crate::{AbstractField, PrimeField, PrimeField32, TwoAdicField};
+use crate::{AbstractField, PrimeField, PrimeField32, TwoAdicField, PrimeField31};
 
 /// Computes `Z_H(x)`, where `Z_H` is the zerofier of a multiplicative subgroup of order `2^log_n`.
 pub fn two_adic_subgroup_zerofier<F: TwoAdicField>(log_n: usize, x: F) -> F {
@@ -131,8 +131,8 @@ pub fn halve_u64<const P: u64>(input: u64) -> u64 {
 }
 
 /// Given a slice of SF elements, reduce them to a TF element using a 2^32-base decomposition.
-pub fn reduce_32<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
-    let po2 = TF::from_canonical_u64(1u64 << 32);
+pub fn reduce_31<SF: PrimeField31, TF: PrimeField>(vals: &[SF]) -> TF {
+    let po2 = TF::from_canonical_u64(1u64 << 31);
     let mut result = TF::zero();
     for val in vals.iter().rev() {
         result = result * po2 + TF::from_canonical_u32(val.as_canonical_u32());

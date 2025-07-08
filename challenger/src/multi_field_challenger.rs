@@ -2,7 +2,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::{reduce_32, split_32, ExtensionField, Field, PrimeField, PrimeField32};
+use p3_field::{reduce_31, split_32, ExtensionField, Field, PrimeField, PrimeField32, PrimeField31};
 use p3_symmetric::{CryptographicPermutation, Hash};
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +27,7 @@ where
     pub input_buffer: Vec<F>,
     pub output_buffer: Vec<F>,
     pub permutation: P,
+    pub num_duplex_elms: usize,
     pub num_f_elms: usize,
 }
 
@@ -40,12 +41,14 @@ where
         if F::order() >= PF::order() {
             return Err(String::from("F::order() must be less than PF::order()"));
         }
-        let num_f_elms = PF::bits() / 64;
+        let num_duplex_elms = PF::bits() / F::bits();
+        let num_f_elms = PF::bits() / F::bits() / 2;
         Ok(Self {
             sponge_state: [PF::default(); WIDTH],
             input_buffer: vec![],
             output_buffer: vec![],
             permutation,
+            num_duplex_elms,
             num_f_elms,
         })
     }
@@ -53,15 +56,15 @@ where
 
 impl<F, PF, P, const WIDTH: usize, const RATE: usize> MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
-    F: PrimeField32,
+    F: PrimeField31,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
     fn duplexing(&mut self) {
-        assert!(self.input_buffer.len() <= self.num_f_elms * RATE);
+        assert!(self.input_buffer.len() <= self.num_duplex_elms * RATE);
 
-        for (i, f_chunk) in self.input_buffer.chunks(self.num_f_elms).enumerate() {
-            self.sponge_state[i] = reduce_32(f_chunk);
+        for (i, f_chunk) in self.input_buffer.chunks(self.num_duplex_elms).enumerate() {
+            self.sponge_state[i] = reduce_31(f_chunk);
         }
         self.input_buffer.clear();
 
@@ -81,7 +84,7 @@ where
 impl<F, PF, P, const WIDTH: usize, const RATE: usize> FieldChallenger<F>
     for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
-    F: PrimeField32,
+    F: PrimeField31,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
@@ -90,7 +93,7 @@ where
 impl<F, PF, P, const WIDTH: usize, const RATE: usize> CanObserve<F>
     for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
-    F: PrimeField32,
+    F: PrimeField31,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
@@ -100,7 +103,7 @@ where
 
         self.input_buffer.push(value);
 
-        if self.input_buffer.len() == self.num_f_elms * RATE {
+        if self.input_buffer.len() == self.num_duplex_elms * RATE {
             self.duplexing();
         }
     }
@@ -109,7 +112,7 @@ where
 impl<F, PF, const N: usize, P, const WIDTH: usize, const RATE: usize> CanObserve<[F; N]>
     for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
-    F: PrimeField32,
+    F: PrimeField31,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
@@ -123,7 +126,7 @@ where
 impl<F, PF, const N: usize, P, const WIDTH: usize, const RATE: usize> CanObserve<Hash<F, PF, N>>
     for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
-    F: PrimeField32,
+    F: PrimeField31,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
@@ -141,7 +144,7 @@ where
 impl<F, PF, P, const WIDTH: usize, const RATE: usize> CanObserve<Vec<Vec<F>>>
     for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
-    F: PrimeField32,
+    F: PrimeField31,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
@@ -157,7 +160,7 @@ where
 impl<F, EF, PF, P, const WIDTH: usize, const RATE: usize> CanSample<EF>
     for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
-    F: PrimeField32,
+    F: PrimeField31,
     EF: ExtensionField<F>,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
@@ -180,7 +183,7 @@ where
 impl<F, PF, P, const WIDTH: usize, const RATE: usize> CanSampleBits<usize>
     for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
-    F: PrimeField32,
+    F: PrimeField31,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
