@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::{array, fmt, iter};
 
 use num_bigint::BigUint;
@@ -11,8 +11,9 @@ use p3_field::exponentiation::exp_1717986917;
 use p3_field::integers::QuotientMap;
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField32, PrimeField64, RawDataSerializable, halve_u32, impl_raw_serializable_primefield32,
-    quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int,
+    PrimeField32, PrimeField64, RawDataSerializable, field_div_assign, halve_u32,
+    impl_raw_serializable_primefield32, quotient_map_large_iint, quotient_map_large_uint,
+    quotient_map_small_int, ring_add_assign, ring_mul_assign, ring_sub_assign,
 };
 use p3_util::{flatten_to_base, gcd_inversion_prime_field_32};
 use rand::Rng;
@@ -439,13 +440,6 @@ impl Add for Mersenne31 {
     }
 }
 
-impl AddAssign for Mersenne31 {
-    #[inline]
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
 impl Sum for Mersenne31 {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
@@ -475,13 +469,6 @@ impl Sub for Mersenne31 {
     }
 }
 
-impl SubAssign for Mersenne31 {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
-    }
-}
-
 impl Neg for Mersenne31 {
     type Output = Self;
 
@@ -503,13 +490,6 @@ impl Mul for Mersenne31 {
     }
 }
 
-impl MulAssign for Mersenne31 {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = *self * rhs;
-    }
-}
-
 impl Product for Mersenne31 {
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
@@ -526,6 +506,11 @@ impl Div for Mersenne31 {
         self * rhs.inverse()
     }
 }
+
+ring_add_assign!(Mersenne31);
+ring_sub_assign!(Mersenne31);
+ring_mul_assign!(Mersenne31);
+field_div_assign!(Mersenne31);
 
 #[inline(always)]
 pub(crate) fn from_u62(input: u64) -> Mersenne31 {
