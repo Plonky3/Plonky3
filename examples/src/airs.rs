@@ -134,7 +134,7 @@ impl<
     SC: StarkGenericConfig<Pcs = Pcs, Challenge = EF, Challenger = Challenger>,
     LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>
         + GenericPoseidon2LinearLayers<SymbolicExpression<F>, WIDTH>
-        + GenericPoseidon2LinearLayers<<F as Field>::Packing, WIDTH>
+        + GenericPoseidon2LinearLayers<F::Packing, WIDTH>
         + GenericPoseidon2LinearLayers<EF, WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
@@ -226,7 +226,7 @@ impl<
     SC: StarkGenericConfig<Pcs = Pcs, Challenge = EF, Challenger = Challenger>,
     LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>
         + GenericPoseidon2LinearLayers<SymbolicExpression<F>, WIDTH>
-        + GenericPoseidon2LinearLayers<<F as Field>::Packing, WIDTH>
+        + GenericPoseidon2LinearLayers<F::Packing, WIDTH>
         + GenericPoseidon2LinearLayers<EF, WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
@@ -268,7 +268,7 @@ impl<
     SC: StarkGenericConfig<Pcs = Pcs, Challenge = EF, Challenger = Challenger>,
     LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>
         + GenericPoseidon2LinearLayers<SymbolicExpression<F>, WIDTH>
-        + GenericPoseidon2LinearLayers<<F as Field>::Packing, WIDTH>
+        + GenericPoseidon2LinearLayers<F::Packing, WIDTH>
         + GenericPoseidon2LinearLayers<EF, WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
