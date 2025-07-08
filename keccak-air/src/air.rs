@@ -1,4 +1,3 @@
-use alloc::vec::Vec;
 use core::array;
 use core::borrow::Borrow;
 
@@ -12,7 +11,7 @@ use rand::{Rng, SeedableRng};
 use crate::columns::{KeccakCols, NUM_KECCAK_COLS};
 use crate::constants::rc_value_bit;
 use crate::round_flags::eval_round_flags;
-use crate::{BITS_PER_LIMB, NUM_ROUNDS, U64_LIMBS, generate_trace_rows};
+use crate::{BITS_PER_LIMB, NUM_ROUNDS, NUM_ROUNDS_MIN_1, U64_LIMBS, generate_trace_rows};
 
 /// Assumes the field size is at least 16 bits.
 #[derive(Debug)]
@@ -25,7 +24,7 @@ impl KeccakAir {
         extra_capacity_bits: usize,
     ) -> RowMajorMatrix<F> {
         let mut rng = SmallRng::seed_from_u64(1);
-        let inputs = (0..num_hashes).map(|_| rng.random()).collect::<Vec<_>>();
+        let inputs = (0..num_hashes).map(|_| rng.random()).collect();
         generate_trace_rows(inputs, extra_capacity_bits)
     }
 }
@@ -50,7 +49,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         let next: &KeccakCols<AB::Var> = (*next).borrow();
 
         let first_step = local.step_flags[0].clone();
-        let final_step = local.step_flags[NUM_ROUNDS - 1].clone();
+        let final_step = local.step_flags[NUM_ROUNDS_MIN_1].clone();
         let not_final_step = AB::Expr::ONE - final_step;
 
         // If this is the first step, the input A must match the preimage.
@@ -110,9 +109,9 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         for y in 0..5 {
             for x in 0..5 {
                 let get_bit = |z: usize| {
-                    Into::<AB::Expr>::into(local.a_prime[y][x][z].clone()).xor3(
-                        &Into::<AB::Expr>::into(local.c[x][z].clone()),
-                        &Into::<AB::Expr>::into(local.c_prime[x][z].clone()),
+                    local.a_prime[y][x][z].clone().into().xor3(
+                        &local.c[x][z].clone().into(),
+                        &local.c_prime[x][z].clone().into(),
                     )
                 };
 
