@@ -6,11 +6,14 @@ use core::fmt::{self, Debug, Display, Formatter};
 use core::hash::Hash;
 use core::iter::{Product, Sum};
 use core::marker::PhantomData;
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::{array, iter};
 
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
+use p3_field::op_assign_macros::{
+    field_div_assign, ring_add_assign, ring_mul_assign, ring_sub_assign,
+};
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
     PrimeField32, PrimeField64, RawDataSerializable, TwoAdicField,
@@ -664,13 +667,6 @@ impl<FP: MontyParameters> Add for MontyField31<FP> {
     }
 }
 
-impl<FP: MontyParameters> AddAssign for MontyField31<FP> {
-    #[inline]
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
 impl<FP: MontyParameters> Sum for MontyField31<FP> {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
@@ -695,13 +691,6 @@ impl<FP: MontyParameters> Sub for MontyField31<FP> {
     }
 }
 
-impl<FP: MontyParameters> SubAssign for MontyField31<FP> {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
-    }
-}
-
 impl<FP: FieldParameters> Neg for MontyField31<FP> {
     type Output = Self;
 
@@ -721,13 +710,6 @@ impl<FP: MontyParameters> Mul for MontyField31<FP> {
     }
 }
 
-impl<FP: MontyParameters> MulAssign for MontyField31<FP> {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = *self * rhs;
-    }
-}
-
 impl<FP: FieldParameters> Product for MontyField31<FP> {
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
@@ -744,3 +726,8 @@ impl<FP: FieldParameters> Div for MontyField31<FP> {
         self * rhs.inverse()
     }
 }
+
+ring_add_assign!(MontyField31, MontyParameters);
+ring_sub_assign!(MontyField31, MontyParameters);
+ring_mul_assign!(MontyField31, MontyParameters);
+field_div_assign!(MontyField31, FieldParameters);

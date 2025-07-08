@@ -8,6 +8,17 @@ macro_rules! ring_add_assign {
             }
         }
     };
+
+    ($type:ty, $type_param:ty) => {
+        paste::paste! {
+            impl<T: $type_param> AddAssign for $type<T> {
+                #[inline]
+                fn add_assign(&mut self, rhs: Self) {
+                    *self = *self + rhs;
+                }
+            }
+        }
+    };
 }
 
 #[macro_export]
@@ -17,6 +28,17 @@ macro_rules! ring_sub_assign {
             #[inline]
             fn sub_assign(&mut self, rhs: Self) {
                 *self = *self - rhs;
+            }
+        }
+    };
+
+    ($type:ty, $type_param:ty) => {
+        paste::paste! {
+            impl<T: $type_param> SubAssign for $type<T> {
+                #[inline]
+                fn sub_assign(&mut self, rhs: Self) {
+                    *self = *self - rhs;
+                }
             }
         }
     };
@@ -32,6 +54,17 @@ macro_rules! ring_mul_assign {
             }
         }
     };
+
+    ($type:ty, $type_param:ty) => {
+        paste::paste! {
+            impl<T: $type_param> MulAssign for $type<T> {
+                #[inline]
+                fn mul_assign(&mut self, rhs: Self) {
+                    *self = *self * rhs;
+                }
+            }
+        }
+    };
 }
 
 #[macro_export]
@@ -41,6 +74,17 @@ macro_rules! field_div_assign {
             #[inline]
             fn div_assign(&mut self, rhs: Self) {
                 *self = *self / rhs;
+            }
+        }
+    };
+
+    ($type:ty, $type_param:ty) => {
+        paste::paste! {
+            impl<T: $type_param> DivAssign for $type<T> {
+                #[inline]
+                fn div_assign(&mut self, rhs: Self) {
+                    *self = *self / rhs;
+                }
             }
         }
     };

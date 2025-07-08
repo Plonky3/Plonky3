@@ -5,6 +5,7 @@ use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
+use p3_field::op_assign_macros::{ring_add_assign, ring_mul_assign, ring_sub_assign};
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
     PermutationMonomial, PrimeCharacteristicRing,
@@ -85,17 +86,15 @@ impl<PMP: PackedMontyParameters> Add for PackedMontyField31AVX2<PMP> {
     }
 }
 
-impl<PMP: PackedMontyParameters> Mul for PackedMontyField31AVX2<PMP> {
+impl<PMP: PackedMontyParameters> Sub for PackedMontyField31AVX2<PMP> {
     type Output = Self;
     #[inline]
-    fn mul(self, rhs: Self) -> Self {
+    fn sub(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let t = mul::<PMP>(lhs, rhs);
-        let res = red_signed_to_canonical::<PMP>(t);
+        let res = sub::<PMP>(lhs, rhs);
         unsafe {
-            // Safety: `mul` returns values in signed form when given values in canonical form.
-            // Then `red_signed_to_canonical` reduces values from signed form to canonical form.
+            // Safety: `sub` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
@@ -114,19 +113,25 @@ impl<PMP: PackedMontyParameters> Neg for PackedMontyField31AVX2<PMP> {
     }
 }
 
-impl<PMP: PackedMontyParameters> Sub for PackedMontyField31AVX2<PMP> {
+impl<PMP: PackedMontyParameters> Mul for PackedMontyField31AVX2<PMP> {
     type Output = Self;
     #[inline]
-    fn sub(self, rhs: Self) -> Self {
+    fn mul(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = sub::<PMP>(lhs, rhs);
+        let t = mul::<PMP>(lhs, rhs);
+        let res = red_signed_to_canonical::<PMP>(t);
         unsafe {
-            // Safety: `sub` returns values in canonical form when given values in canonical form.
+            // Safety: `mul` returns values in signed form when given values in canonical form.
+            // Then `red_signed_to_canonical` reduces values from signed form to canonical form.
             Self::from_vector(res)
         }
     }
 }
+
+ring_add_assign!(PackedMontyField31AVX2, PackedMontyParameters);
+ring_sub_assign!(PackedMontyField31AVX2, PackedMontyParameters);
+ring_mul_assign!(PackedMontyField31AVX2, PackedMontyParameters);
 
 /// Add two vectors of Monty31 field elements in canonical form.
 /// If the inputs are not in canonical form, the result is undefined.
@@ -890,27 +895,6 @@ impl<PMP: PackedMontyParameters> Default for PackedMontyField31AVX2<PMP> {
     #[inline]
     fn default() -> Self {
         MontyField31::<PMP>::default().into()
-    }
-}
-
-impl<PMP: PackedMontyParameters> AddAssign for PackedMontyField31AVX2<PMP> {
-    #[inline]
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
-impl<PMP: PackedMontyParameters> MulAssign for PackedMontyField31AVX2<PMP> {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = *self * rhs;
-    }
-}
-
-impl<PMP: PackedMontyParameters> SubAssign for PackedMontyField31AVX2<PMP> {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
     }
 }
 
