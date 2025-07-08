@@ -73,7 +73,7 @@ macro_rules! ring_sub_assign {
 /// and assigning the result to `*self`. Similarly `Product` is implemented
 /// in the similarly simple way of just doing a reduce on the iterator.
 #[macro_export]
-macro_rules! ring_mul_assign {
+macro_rules! ring_mul_methods {
     ($type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
             impl$(<$param_name: $type_param>)? MulAssign for $type$(<$param_name>)? {
@@ -98,7 +98,7 @@ macro_rules! ring_mul_assign {
 /// Both are implemented in the simplest way by inverting the right hand side and
 /// using `mul` or `mul_assign`.
 #[macro_export]
-macro_rules! field_div_assign {
+macro_rules! field_div_methods {
     ($type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
             impl$(<$param_name: $type_param>)? Div for $type$(<$param_name>)? {
@@ -128,7 +128,7 @@ macro_rules! field_div_assign {
 /// All are implemented in the simplest way by using `From` to map the `Field` element
 /// to an `Alg` element and then applying the native `add` or `add_assign` methods on `Alg` elements.
 #[macro_export]
-macro_rules! algebra_from_field_add {
+macro_rules! algebra_add_from_field {
     ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
             impl$(<$param_name: $type_param>)? Add<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
@@ -165,7 +165,7 @@ macro_rules! algebra_from_field_add {
 /// All are implemented in the simplest way by using `From` to map the `Field` element
 /// to an `Alg` element and then applying the native `sub` or `sub_assign` methods on `Alg` elements.
 #[macro_export]
-macro_rules! algebra_from_field_sub {
+macro_rules! algebra_sub_from_field {
     ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
             impl$(<$param_name: $type_param>)? Sub<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
@@ -202,7 +202,7 @@ macro_rules! algebra_from_field_sub {
 /// All are implemented in the simplest way by using `From` to map the `Field` element
 /// to an `Alg` element and then applying the native `mul` or `mul_assign` methods on `Alg` elements.
 #[macro_export]
-macro_rules! algebra_from_field_mul {
+macro_rules! algebra_mul_from_field {
     ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
             impl$(<$param_name: $type_param>)? Mul<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
@@ -240,7 +240,7 @@ macro_rules! algebra_from_field_mul {
 /// `Field` then using the `From` to map the inverse to an `Alg` element before
 ///  applying the native `mul` or `mul_assign` methods on `Alg` elements.
 #[macro_export]
-macro_rules! algebra_from_field_div {
+macro_rules! algebra_div_from_field {
     ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
             impl$(<$param_name: $type_param>)? Div<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
@@ -270,7 +270,7 @@ macro_rules! algebra_from_field_div {
 /// Both are implemented in the simplest way by simply computing the Sum/Product as
 /// field elements before mapping to an `Alg` element using `From`.
 #[macro_export]
-macro_rules! algebra_from_field_sum_prod {
+macro_rules! algebra_field_sum_prod {
     ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
             impl$(<$param_name: $type_param>)? Sum<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
@@ -297,7 +297,7 @@ macro_rules! algebra_from_field_sum_prod {
 }
 
 pub use {
-    algebra_from_field_add, algebra_from_field_div, algebra_from_field_mul, algebra_from_field_sub,
-    algebra_from_field_sum_prod, field_div_assign, ring_add_assign, ring_mul_assign,
-    ring_sub_assign, ring_sum,
+    algebra_add_from_field, algebra_div_from_field, algebra_field_sum_prod, algebra_mul_from_field,
+    algebra_sub_from_field, field_div_methods, ring_add_assign, ring_mul_methods, ring_sub_assign,
+    ring_sum,
 };

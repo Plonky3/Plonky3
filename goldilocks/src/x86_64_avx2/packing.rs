@@ -8,8 +8,8 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::op_assign_macros::{
-    algebra_from_field_add, algebra_from_field_div, algebra_from_field_mul, algebra_from_field_sub,
-    algebra_from_field_sum_prod, ring_add_assign, ring_mul_assign, ring_sub_assign, ring_sum,
+    algebra_add_from_field, algebra_div_from_field, algebra_field_sum_prod, algebra_mul_from_field,
+    algebra_sub_from_field, ring_add_assign, ring_mul_methods, ring_sub_assign, ring_sum,
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
@@ -99,7 +99,7 @@ impl Mul for PackedGoldilocksAVX2 {
 
 ring_add_assign!(PackedGoldilocksAVX2);
 ring_sub_assign!(PackedGoldilocksAVX2);
-ring_mul_assign!(PackedGoldilocksAVX2);
+ring_mul_methods!(PackedGoldilocksAVX2);
 ring_sum!(PackedGoldilocksAVX2);
 
 impl Distribution<PackedGoldilocksAVX2> for StandardUniform {
@@ -148,11 +148,11 @@ impl PermutationMonomial<7> for PackedGoldilocksAVX2 {
     }
 }
 
-algebra_from_field_add!(PackedGoldilocksAVX2, Goldilocks);
-algebra_from_field_sub!(PackedGoldilocksAVX2, Goldilocks);
-algebra_from_field_mul!(PackedGoldilocksAVX2, Goldilocks);
-algebra_from_field_div!(PackedGoldilocksAVX2, Goldilocks);
-algebra_from_field_sum_prod!(PackedGoldilocksAVX2, Goldilocks);
+algebra_add_from_field!(PackedGoldilocksAVX2, Goldilocks);
+algebra_sub_from_field!(PackedGoldilocksAVX2, Goldilocks);
+algebra_mul_from_field!(PackedGoldilocksAVX2, Goldilocks);
+algebra_div_from_field!(PackedGoldilocksAVX2, Goldilocks);
+algebra_field_sum_prod!(PackedGoldilocksAVX2, Goldilocks);
 
 impl Algebra<Goldilocks> for PackedGoldilocksAVX2 {}
 

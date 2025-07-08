@@ -12,7 +12,7 @@ use core::{array, iter};
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
 use p3_field::op_assign_macros::{
-    field_div_assign, ring_add_assign, ring_mul_assign, ring_sub_assign,
+    field_div_methods, ring_add_assign, ring_mul_methods, ring_sub_assign,
 };
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
@@ -700,8 +700,8 @@ impl<FP: MontyParameters> Mul for MontyField31<FP> {
 
 ring_add_assign!(MontyField31, (MontyParameters, MP));
 ring_sub_assign!(MontyField31, (MontyParameters, MP));
-ring_mul_assign!(MontyField31, (FieldParameters, FP));
-field_div_assign!(MontyField31, (FieldParameters, FP));
+ring_mul_methods!(MontyField31, (FieldParameters, FP));
+field_div_methods!(MontyField31, (FieldParameters, FP));
 
 impl<FP: MontyParameters> Sum for MontyField31<FP> {
     #[inline]

@@ -6,8 +6,8 @@ use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::op_assign_macros::{
-    algebra_from_field_add, algebra_from_field_div, algebra_from_field_mul, algebra_from_field_sub,
-    algebra_from_field_sum_prod, ring_add_assign, ring_mul_assign, ring_sub_assign, ring_sum,
+    algebra_add_from_field, algebra_div_from_field, algebra_field_sum_prod, algebra_mul_from_field,
+    algebra_sub_from_field, ring_add_assign, ring_mul_methods, ring_sub_assign, ring_sum,
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
@@ -148,7 +148,7 @@ impl<PMP: PackedMontyParameters> Mul for PackedMontyField31AVX2<PMP> {
 
 ring_add_assign!(PackedMontyField31AVX2, (PackedMontyParameters, PMP));
 ring_sub_assign!(PackedMontyField31AVX2, (PackedMontyParameters, PMP));
-ring_mul_assign!(PackedMontyField31AVX2, (FieldParameters, FP));
+ring_mul_methods!(PackedMontyField31AVX2, (FieldParameters, FP));
 ring_sum!(PackedMontyField31AVX2, (FieldParameters, FP));
 
 impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX2<FP> {
@@ -991,23 +991,23 @@ pub(crate) fn sub<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __
     }
 }
 
-algebra_from_field_add!(
+algebra_add_from_field!(
     PackedMontyField31AVX2,
     MontyField31,
     (PackedMontyParameters, PMP)
 );
-algebra_from_field_sub!(
+algebra_sub_from_field!(
     PackedMontyField31AVX2,
     MontyField31,
     (PackedMontyParameters, PMP)
 );
-algebra_from_field_mul!(
+algebra_mul_from_field!(
     PackedMontyField31AVX2,
     MontyField31,
     (PackedMontyParameters, PMP)
 );
-algebra_from_field_div!(PackedMontyField31AVX2, MontyField31, (FieldParameters, FP));
-algebra_from_field_sum_prod!(PackedMontyField31AVX2, MontyField31, (FieldParameters, FP));
+algebra_div_from_field!(PackedMontyField31AVX2, MontyField31, (FieldParameters, FP));
+algebra_field_sum_prod!(PackedMontyField31AVX2, MontyField31, (FieldParameters, FP));
 
 impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31AVX2<FP> {}
 
