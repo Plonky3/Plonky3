@@ -137,10 +137,10 @@ impl Mul for PackedMersenne31Neon {
     }
 }
 
-ring_add_assign!(PackedMersenne31AVX2);
-ring_sub_assign!(PackedMersenne31AVX2);
-ring_mul_assign!(PackedMersenne31AVX2);
-ring_sum!(PackedMersenne31AVX2);
+ring_add_assign!(PackedMersenne31Neon);
+ring_sub_assign!(PackedMersenne31Neon);
+ring_mul_assign!(PackedMersenne31Neon);
+ring_sum!(PackedMersenne31Neon);
 
 impl PrimeCharacteristicRing for PackedMersenne31Neon {
     type PrimeSubfield = Mersenne31;
