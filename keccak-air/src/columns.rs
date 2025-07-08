@@ -121,8 +121,7 @@ pub const NUM_KECCAK_COLS: usize = size_of::<KeccakCols<u8>>();
 pub(crate) const KECCAK_COL_MAP: KeccakCols<usize> = make_col_map();
 
 const fn make_col_map() -> KeccakCols<usize> {
-    let indices_arr = indices_arr::<NUM_KECCAK_COLS>();
-    unsafe { transmute::<[usize; NUM_KECCAK_COLS], KeccakCols<usize>>(indices_arr) }
+    unsafe { transmute(indices_arr::<NUM_KECCAK_COLS>()) }
 }
 
 impl<T> Borrow<KeccakCols<T>> for [T] {
