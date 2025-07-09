@@ -264,8 +264,6 @@ const EPSILON: __m256i = unsafe { transmute([Goldilocks::ORDER_U64.wrapping_neg(
 
 /// Add 2^63 with overflow. Needed to emulate unsigned comparisons (see point 3. in
 /// packed_prime_field.rs).
-///  # Safety
-/// TODO
 #[inline]
 pub fn shift(x: __m256i) -> __m256i {
     unsafe { _mm256_xor_si256(x, SIGN_BIT) }
