@@ -9,7 +9,7 @@ use core::{array, fmt, stringify};
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
 use p3_field::op_assign_macros::{
-    impl_div_methods, impl_add_assign, impl_mul_methods, impl_sub_assign, ring_sum,
+    impl_add_assign, impl_div_methods, impl_mul_methods, impl_sub_assign, ring_sum,
 };
 use p3_field::{
     Field, InjectiveMonomial, Packable, PrimeCharacteristicRing, PrimeField, RawDataSerializable,

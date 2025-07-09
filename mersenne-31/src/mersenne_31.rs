@@ -10,7 +10,7 @@ use num_bigint::BigUint;
 use p3_field::exponentiation::exp_1717986917;
 use p3_field::integers::QuotientMap;
 use p3_field::op_assign_macros::{
-    impl_div_methods, impl_add_assign, impl_mul_methods, impl_sub_assign,
+    impl_add_assign, impl_div_methods, impl_mul_methods, impl_sub_assign,
 };
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
