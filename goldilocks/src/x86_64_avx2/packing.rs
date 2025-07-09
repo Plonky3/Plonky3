@@ -103,13 +103,6 @@ impl_mul_methods!(PackedGoldilocksAVX2);
 ring_sum!(PackedGoldilocksAVX2);
 impl_rng!(PackedGoldilocksAVX2);
 
-// impl Distribution<PackedGoldilocksAVX2> for StandardUniform {
-//     #[inline]
-//     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedGoldilocksAVX2 {
-//         PackedGoldilocksAVX2(rng.random())
-//     }
-// }
-
 impl PrimeCharacteristicRing for PackedGoldilocksAVX2 {
     type PrimeSubfield = Goldilocks;
 
