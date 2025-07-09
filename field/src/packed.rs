@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
+use core::iter::{Product, Sum};
 use core::mem::MaybeUninit;
-use core::ops::Div;
+use core::ops::{Div, DivAssign};
 use core::{array, slice};
 
 use crate::field::Field;
@@ -179,6 +180,9 @@ pub unsafe trait PackedField: Algebra<Self::Scalar>
     + PackedValue<Value = Self::Scalar>
     // TODO: Implement packed / packed division
     + Div<Self::Scalar, Output = Self>
+    + DivAssign<Self::Scalar>
+    + Sum<Self::Scalar>
+    + Product<Self::Scalar>
 {
     type Scalar: Field;
 

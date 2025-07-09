@@ -2,9 +2,13 @@ use alloc::vec::Vec;
 use core::arch::aarch64::{self, uint32x4_t};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::exponentiation::exp_1717986917;
+use p3_field::op_assign_macros::{
+    impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
+    impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field, ring_sum,
+};
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
     PermutationMonomial, PrimeCharacteristicRing,
@@ -19,7 +23,7 @@ const WIDTH: usize = 4;
 const P: uint32x4_t = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
 
 /// Vectorized NEON implementation of `Mersenne31` arithmetic.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // Needed to make `transmute`s safe.
 pub struct PackedMersenne31Neon(pub [Mersenne31; WIDTH]);
 
@@ -64,6 +68,13 @@ impl PackedMersenne31Neon {
     }
 }
 
+impl From<Mersenne31> for PackedMersenne31Neon {
+    #[inline]
+    fn from(value: Mersenne31) -> Self {
+        Self::broadcast(value)
+    }
+}
+
 impl Add for PackedMersenne31Neon {
     type Output = Self;
     #[inline]
@@ -73,6 +84,33 @@ impl Add for PackedMersenne31Neon {
         let res = add(lhs, rhs);
         unsafe {
             // Safety: `add` returns valid values when given valid values.
+            Self::from_vector(res)
+        }
+    }
+}
+
+impl Sub for PackedMersenne31Neon {
+    type Output = Self;
+    #[inline]
+    fn sub(self, rhs: Self) -> Self {
+        let lhs = self.to_vector();
+        let rhs = rhs.to_vector();
+        let res = sub(lhs, rhs);
+        unsafe {
+            // Safety: `sub` returns valid values when given valid values.
+            Self::from_vector(res)
+        }
+    }
+}
+
+impl Neg for PackedMersenne31Neon {
+    type Output = Self;
+    #[inline]
+    fn neg(self) -> Self {
+        let val = self.to_vector();
+        let res = neg(val);
+        unsafe {
+            // Safety: `neg` returns valid values when given valid values.
             Self::from_vector(res)
         }
     }
@@ -92,32 +130,53 @@ impl Mul for PackedMersenne31Neon {
     }
 }
 
-impl Neg for PackedMersenne31Neon {
-    type Output = Self;
+impl_add_assign!(PackedMersenne31Neon);
+impl_sub_assign!(PackedMersenne31Neon);
+impl_mul_methods!(PackedMersenne31Neon);
+ring_sum!(PackedMersenne31Neon);
+impl_rng!(PackedMersenne31Neon);
+
+impl PrimeCharacteristicRing for PackedMersenne31Neon {
+    type PrimeSubfield = Mersenne31;
+
+    const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
+    const ONE: Self = Self::broadcast(Mersenne31::ONE);
+    const TWO: Self = Self::broadcast(Mersenne31::TWO);
+    const NEG_ONE: Self = Self::broadcast(Mersenne31::NEG_ONE);
+
     #[inline]
-    fn neg(self) -> Self {
-        let val = self.to_vector();
-        let res = neg(val);
-        unsafe {
-            // Safety: `neg` returns valid values when given valid values.
-            Self::from_vector(res)
-        }
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
+        f.into()
+    }
+
+    #[inline(always)]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        // SAFETY: this is a repr(transparent) wrapper around an array.
+        unsafe { reconstitute_from_base(Mersenne31::zero_vec(len * WIDTH)) }
     }
 }
 
-impl Sub for PackedMersenne31Neon {
-    type Output = Self;
-    #[inline]
-    fn sub(self, rhs: Self) -> Self {
-        let lhs = self.to_vector();
-        let rhs = rhs.to_vector();
-        let res = sub(lhs, rhs);
-        unsafe {
-            // Safety: `sub` returns valid values when given valid values.
-            Self::from_vector(res)
-        }
+// Degree of the smallest permutation polynomial for Mersenne31.
+//
+// As p - 1 = 2×3^2×7×11×... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
+impl InjectiveMonomial<5> for PackedMersenne31Neon {}
+
+impl PermutationMonomial<5> for PackedMersenne31Neon {
+    /// In the field `Mersenne31`, `a^{1/5}` is equal to a^{1717986917}.
+    ///
+    /// This follows from the calculation `5 * 1717986917 = 4*(2^31 - 2) + 1 = 1 mod p - 1`.
+    fn injective_exp_root_n(&self) -> Self {
+        exp_1717986917(*self)
     }
 }
+
+impl_add_base_field!(PackedMersenne31Neon, Mersenne31);
+impl_sub_base_field!(PackedMersenne31Neon, Mersenne31);
+impl_mul_base_field!(PackedMersenne31Neon, Mersenne31);
+impl_div_methods!(PackedMersenne31Neon, Mersenne31);
+impl_sum_prod_base_field!(PackedMersenne31Neon, Mersenne31);
+
+impl Algebra<Mersenne31> for PackedMersenne31Neon {}
 
 /// Given a `val` in `0, ..., 2 P`, return a `res` in `0, ..., P` such that `res = val (mod P)`
 #[inline]
@@ -254,202 +313,6 @@ fn sub(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
         let diff = aarch64::vsubq_u32(lhs, rhs);
         let underflow = aarch64::vcltq_u32(lhs, rhs);
         aarch64::vmlsq_u32(diff, underflow, P)
-    }
-}
-
-impl From<Mersenne31> for PackedMersenne31Neon {
-    #[inline]
-    fn from(value: Mersenne31) -> Self {
-        Self::broadcast(value)
-    }
-}
-
-impl Default for PackedMersenne31Neon {
-    #[inline]
-    fn default() -> Self {
-        Mersenne31::default().into()
-    }
-}
-
-impl AddAssign for PackedMersenne31Neon {
-    #[inline]
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
-impl MulAssign for PackedMersenne31Neon {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = *self * rhs;
-    }
-}
-
-impl SubAssign for PackedMersenne31Neon {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
-    }
-}
-
-impl Sum for PackedMersenne31Neon {
-    #[inline]
-    fn sum<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::ZERO)
-    }
-}
-
-impl Product for PackedMersenne31Neon {
-    #[inline]
-    fn product<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::ONE)
-    }
-}
-
-impl PrimeCharacteristicRing for PackedMersenne31Neon {
-    type PrimeSubfield = Mersenne31;
-
-    const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
-    const ONE: Self = Self::broadcast(Mersenne31::ONE);
-    const TWO: Self = Self::broadcast(Mersenne31::TWO);
-    const NEG_ONE: Self = Self::broadcast(Mersenne31::NEG_ONE);
-
-    #[inline]
-    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
-        f.into()
-    }
-
-    #[inline(always)]
-    fn zero_vec(len: usize) -> Vec<Self> {
-        // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { reconstitute_from_base(Mersenne31::zero_vec(len * WIDTH)) }
-    }
-}
-
-impl Algebra<Mersenne31> for PackedMersenne31Neon {}
-
-// Degree of the smallest permutation polynomial for Mersenne31.
-//
-// As p - 1 = 2×3^2×7×11×... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
-impl InjectiveMonomial<5> for PackedMersenne31Neon {}
-
-impl PermutationMonomial<5> for PackedMersenne31Neon {
-    /// In the field `Mersenne31`, `a^{1/5}` is equal to a^{1717986917}.
-    ///
-    /// This follows from the calculation `5 * 1717986917 = 4*(2^31 - 2) + 1 = 1 mod p - 1`.
-    fn injective_exp_root_n(&self) -> Self {
-        exp_1717986917(*self)
-    }
-}
-
-impl Add<Mersenne31> for PackedMersenne31Neon {
-    type Output = Self;
-    #[inline]
-    fn add(self, rhs: Mersenne31) -> Self {
-        self + Self::from(rhs)
-    }
-}
-
-impl Mul<Mersenne31> for PackedMersenne31Neon {
-    type Output = Self;
-    #[inline]
-    fn mul(self, rhs: Mersenne31) -> Self {
-        self * Self::from(rhs)
-    }
-}
-
-impl Sub<Mersenne31> for PackedMersenne31Neon {
-    type Output = Self;
-    #[inline]
-    fn sub(self, rhs: Mersenne31) -> Self {
-        self - Self::from(rhs)
-    }
-}
-
-impl AddAssign<Mersenne31> for PackedMersenne31Neon {
-    #[inline]
-    fn add_assign(&mut self, rhs: Mersenne31) {
-        *self += Self::from(rhs)
-    }
-}
-
-impl MulAssign<Mersenne31> for PackedMersenne31Neon {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Mersenne31) {
-        *self *= Self::from(rhs)
-    }
-}
-
-impl SubAssign<Mersenne31> for PackedMersenne31Neon {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Mersenne31) {
-        *self -= Self::from(rhs)
-    }
-}
-
-impl Sum<Mersenne31> for PackedMersenne31Neon {
-    #[inline]
-    fn sum<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Mersenne31>,
-    {
-        iter.sum::<Mersenne31>().into()
-    }
-}
-
-impl Product<Mersenne31> for PackedMersenne31Neon {
-    #[inline]
-    fn product<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Mersenne31>,
-    {
-        iter.product::<Mersenne31>().into()
-    }
-}
-
-impl Div<Mersenne31> for PackedMersenne31Neon {
-    type Output = Self;
-    #[allow(clippy::suspicious_arithmetic_impl)]
-    #[inline]
-    fn div(self, rhs: Mersenne31) -> Self {
-        self * rhs.inverse()
-    }
-}
-
-impl Add<PackedMersenne31Neon> for Mersenne31 {
-    type Output = PackedMersenne31Neon;
-    #[inline]
-    fn add(self, rhs: PackedMersenne31Neon) -> PackedMersenne31Neon {
-        PackedMersenne31Neon::from(self) + rhs
-    }
-}
-
-impl Mul<PackedMersenne31Neon> for Mersenne31 {
-    type Output = PackedMersenne31Neon;
-    #[inline]
-    fn mul(self, rhs: PackedMersenne31Neon) -> PackedMersenne31Neon {
-        PackedMersenne31Neon::from(self) * rhs
-    }
-}
-
-impl Sub<PackedMersenne31Neon> for Mersenne31 {
-    type Output = PackedMersenne31Neon;
-    #[inline]
-    fn sub(self, rhs: PackedMersenne31Neon) -> PackedMersenne31Neon {
-        PackedMersenne31Neon::from(self) - rhs
-    }
-}
-
-impl Distribution<PackedMersenne31Neon> for StandardUniform {
-    #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMersenne31Neon {
-        PackedMersenne31Neon(rng.random())
     }
 }
 

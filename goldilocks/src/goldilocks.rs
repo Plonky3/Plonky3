@@ -3,12 +3,15 @@ use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::{array, fmt};
 
 use num_bigint::BigUint;
 use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::integers::QuotientMap;
+use p3_field::op_assign_macros::{
+    impl_add_assign, impl_div_methods, impl_mul_methods, impl_sub_assign,
+};
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
     PrimeField64, RawDataSerializable, TwoAdicField, halve_u64, impl_raw_serializable_primefield64,
@@ -506,23 +509,6 @@ impl Add for Goldilocks {
     }
 }
 
-impl AddAssign for Goldilocks {
-    #[inline]
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
-impl Sum for Goldilocks {
-    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO) for iterators of length > 2.
-
-        // This sum will not overflow so long as iter.len() < 2^64.
-        let sum = iter.map(|x| x.value as u128).sum::<u128>();
-        reduce128(sum)
-    }
-}
-
 impl Sub for Goldilocks {
     type Output = Self;
 
@@ -546,13 +532,6 @@ impl Sub for Goldilocks {
     }
 }
 
-impl SubAssign for Goldilocks {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
-    }
-}
-
 impl Neg for Goldilocks {
     type Output = Self;
 
@@ -571,25 +550,18 @@ impl Mul for Goldilocks {
     }
 }
 
-impl MulAssign for Goldilocks {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = *self * rhs;
-    }
-}
+impl_add_assign!(Goldilocks);
+impl_sub_assign!(Goldilocks);
+impl_mul_methods!(Goldilocks);
+impl_div_methods!(Goldilocks, Goldilocks);
 
-impl Product for Goldilocks {
-    fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
-    }
-}
+impl Sum for Goldilocks {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO) for iterators of length > 2.
 
-impl Div for Goldilocks {
-    type Output = Self;
-
-    #[allow(clippy::suspicious_arithmetic_impl)]
-    fn div(self, rhs: Self) -> Self {
-        self * rhs.inverse()
+        // This sum will not overflow so long as iter.len() < 2^64.
+        let sum = iter.map(|x| x.value as u128).sum::<u128>();
+        reduce128(sum)
     }
 }
 

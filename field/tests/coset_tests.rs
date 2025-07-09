@@ -136,7 +136,7 @@ mod coset {
     // Checks that the contains method returns true on all elements of the coset
     fn test_contains() {
         let mut rng = SmallRng::seed_from_u64(1729);
-        let shift = rng.random();
+        let shift: BB = rng.random();
 
         let log_size = 8;
 

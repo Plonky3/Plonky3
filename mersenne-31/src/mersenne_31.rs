@@ -3,12 +3,15 @@ use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::{array, fmt, iter};
 
 use num_bigint::BigUint;
 use p3_field::exponentiation::exp_1717986917;
 use p3_field::integers::QuotientMap;
+use p3_field::op_assign_macros::{
+    impl_add_assign, impl_div_methods, impl_mul_methods, impl_sub_assign,
+};
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
     PrimeField32, PrimeField64, RawDataSerializable, halve_u32, impl_raw_serializable_primefield32,
@@ -439,27 +442,6 @@ impl Add for Mersenne31 {
     }
 }
 
-impl AddAssign for Mersenne31 {
-    #[inline]
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
-impl Sum for Mersenne31 {
-    #[inline]
-    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO) for iterators of length >= 6.
-        // It assumes that iter.len() < 2^31.
-
-        // This sum will not overflow so long as iter.len() < 2^33.
-        let sum = iter.map(|x| x.value as u64).sum::<u64>();
-
-        // sum is < 2^62 provided iter.len() < 2^31.
-        from_u62(sum)
-    }
-}
-
 impl Sub for Mersenne31 {
     type Output = Self;
 
@@ -472,13 +454,6 @@ impl Sub for Mersenne31 {
         // Hence we need to remove the most significant bit and subtract 1.
         sub -= over as u32;
         Self::new(sub & Self::ORDER_U32)
-    }
-}
-
-impl SubAssign for Mersenne31 {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
     }
 }
 
@@ -503,27 +478,22 @@ impl Mul for Mersenne31 {
     }
 }
 
-impl MulAssign for Mersenne31 {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = *self * rhs;
-    }
-}
+impl_add_assign!(Mersenne31);
+impl_sub_assign!(Mersenne31);
+impl_mul_methods!(Mersenne31);
+impl_div_methods!(Mersenne31, Mersenne31);
 
-impl Product for Mersenne31 {
+impl Sum for Mersenne31 {
     #[inline]
-    fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
-    }
-}
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO) for iterators of length >= 6.
+        // It assumes that iter.len() < 2^31.
 
-impl Div for Mersenne31 {
-    type Output = Self;
+        // This sum will not overflow so long as iter.len() < 2^33.
+        let sum = iter.map(|x| x.value as u64).sum::<u64>();
 
-    #[inline]
-    #[allow(clippy::suspicious_arithmetic_impl)]
-    fn div(self, rhs: Self) -> Self {
-        self * rhs.inverse()
+        // sum is < 2^62 provided iter.len() < 2^31.
+        from_u62(sum)
     }
 }
 
