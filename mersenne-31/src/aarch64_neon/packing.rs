@@ -19,7 +19,7 @@ const WIDTH: usize = 4;
 const P: uint32x4_t = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
 
 /// Vectorized NEON implementation of `Mersenne31` arithmetic.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // Needed to make `transmute`s safe.
 pub struct PackedMersenne31Neon(pub [Mersenne31; WIDTH]);
 
@@ -261,13 +261,6 @@ impl From<Mersenne31> for PackedMersenne31Neon {
     #[inline]
     fn from(value: Mersenne31) -> Self {
         Self::broadcast(value)
-    }
-}
-
-impl Default for PackedMersenne31Neon {
-    #[inline]
-    fn default() -> Self {
-        Mersenne31::default().into()
     }
 }
 

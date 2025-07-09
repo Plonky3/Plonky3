@@ -32,7 +32,7 @@ const EVENS: __mmask16 = 0b0101010101010101;
 const EVENS4: __mmask16 = 0x0f0f;
 
 /// Vectorized AVX-512F implementation of `MontyField31` arithmetic.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // Needed to make `transmute`s safe.
 pub struct PackedMontyField31AVX512<PMP: PackedMontyParameters>(pub [MontyField31<PMP>; WIDTH]);
 
@@ -994,13 +994,6 @@ impl<PMP: PackedMontyParameters> From<MontyField31<PMP>> for PackedMontyField31A
     #[inline]
     fn from(value: MontyField31<PMP>) -> Self {
         Self::broadcast(value)
-    }
-}
-
-impl<PMP: PackedMontyParameters> Default for PackedMontyField31AVX512<PMP> {
-    #[inline]
-    fn default() -> Self {
-        MontyField31::default().into()
     }
 }
 
