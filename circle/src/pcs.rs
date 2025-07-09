@@ -378,7 +378,7 @@ where
         // Batch combination challenge
         let alpha: Challenge = challenger.sample_algebra_element();
         challenger.observe(proof.first_layer_commitment.clone());
-        let bivariate_beta = challenger.sample_algebra_element();
+        let bivariate_beta:Challenge = challenger.sample_algebra_element();
 
         // +1 to account for first layer
         let log_global_max_height =
