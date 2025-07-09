@@ -4,7 +4,7 @@ use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues};
 use p3_field::Field;
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
-use p3_matrix::stack::VerticalPair;
+use p3_matrix::stack::{VerticalPair, ViewPair};
 use tracing::instrument;
 
 /// Runs constraint checks using a given AIR definition and trace matrix.
@@ -25,23 +25,25 @@ where
 {
     let height = main.height();
 
-    (0..height).for_each(|i| {
-        let i_next = (i + 1) % height;
+    (0..height).for_each(|row_index| {
+        let row_index_next = (row_index + 1) % height;
 
-        let local = main.row_slice(i).unwrap(); // i < height so unwrap should never fail.
-        let next = main.row_slice(i_next).unwrap(); // i_next < height so unwrap should never fail.
+        // row_index < height so we can used unchecked indexing.
+        let local = unsafe { main.row_slice_unchecked(row_index) };
+        // row_index_next < height so we can used unchecked indexing.
+        let next = unsafe { main.row_slice_unchecked(row_index_next) };
         let main = VerticalPair::new(
             RowMajorMatrixView::new_row(&*local),
             RowMajorMatrixView::new_row(&*next),
         );
 
         let mut builder = DebugConstraintBuilder {
-            row_index: i,
+            row_index,
             main,
             public_values,
-            is_first_row: F::from_bool(i == 0),
-            is_last_row: F::from_bool(i == height - 1),
-            is_transition: F::from_bool(i != height - 1),
+            is_first_row: F::from_bool(row_index == 0),
+            is_last_row: F::from_bool(row_index == height - 1),
+            is_transition: F::from_bool(row_index != height - 1),
         };
 
         air.eval(&mut builder);
@@ -57,7 +59,7 @@ pub struct DebugConstraintBuilder<'a, F: Field> {
     /// The index of the row currently being evaluated.
     row_index: usize,
     /// A view of the current and next row as a vertical pair.
-    main: VerticalPair<RowMajorMatrixView<'a, F>, RowMajorMatrixView<'a, F>>,
+    main: ViewPair<'a, F>,
     /// The public values provided for constraint validation (e.g. inputs or outputs).
     public_values: &'a [F],
     /// A flag indicating whether this is the first row.
@@ -75,7 +77,7 @@ where
     type F = F;
     type Expr = F;
     type Var = F;
-    type M = VerticalPair<RowMajorMatrixView<'a, F>, RowMajorMatrixView<'a, F>>;
+    type M = ViewPair<'a, F>;
 
     fn main(&self) -> Self::M {
         self.main

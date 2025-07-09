@@ -59,7 +59,7 @@ fn do_test_fri_pcs<Val, Challenge, Challenger, P>(
     assert_eq!(data_by_round.len(), num_rounds);
     p_challenger.observe_slice(&commits_by_round);
 
-    let zeta: Challenge = p_challenger.sample_algebra_element();
+    let zeta = p_challenger.sample_algebra_element();
 
     let points_by_round = log_degrees_by_round
         .iter()

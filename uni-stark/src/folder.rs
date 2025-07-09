@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use p3_air::{AirBuilder, AirBuilderWithPublicValues};
 use p3_field::{BasedVectorSpace, PackedField};
 use p3_matrix::dense::RowMajorMatrixView;
-use p3_matrix::stack::VerticalPair;
+use p3_matrix::stack::ViewPair;
 
 use crate::{PackedChallenge, PackedVal, StarkGenericConfig, Val};
 
@@ -34,10 +34,6 @@ pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     /// Current constraint index being processed
     pub constraint_index: usize,
 }
-
-/// A paired view of two matrices, typically used for verifier operations
-/// that need to look at consecutive rows simultaneously
-type ViewPair<'a, T> = VerticalPair<RowMajorMatrixView<'a, T>, RowMajorMatrixView<'a, T>>;
 
 /// Handles constraint verification for the verifier in a STARK system.
 ///
@@ -97,15 +93,14 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
 
     #[inline]
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
-        let x: PackedVal<SC> = x.into();
         let alpha_power = self.alpha_powers[self.constraint_index];
-        self.accumulator += Into::<PackedChallenge<SC>>::into(alpha_power) * x;
+        self.accumulator += Into::<PackedChallenge<SC>>::into(alpha_power) * x.into();
         self.constraint_index += 1;
     }
 
     #[inline]
     fn assert_zeros<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
-        let expr_array: [Self::Expr; N] = array.map(Into::into);
+        let expr_array = array.map(Into::into);
         self.accumulator += PackedChallenge::<SC>::from_basis_coefficients_fn(|i| {
             let alpha_powers = &self.decomposed_alpha_powers[i]
                 [self.constraint_index..(self.constraint_index + N)];
@@ -155,9 +150,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
-        let x: SC::Challenge = x.into();
         self.accumulator *= self.alpha;
-        self.accumulator += x;
+        self.accumulator += x.into();
     }
 }
 

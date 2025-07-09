@@ -386,7 +386,7 @@ where
         // points it needs to be opened at. This comes from the fact that we are takeing a large linear combination
         // of `(f(zeta) - f(x))/(zeta - x)` for each function `f` and all of `f`'s opening points.
         // In our setup, k is two times the trace width plus the number of quotient polynomials.
-        let alpha: Challenge = challenger.sample_algebra_element();
+        let alpha = challenger.sample_algebra_element();
 
         // We precompute powers of alpha as we need the same powers for each matrix.
         // We compute both a vector of unpacked powers and a vector of packed powers.

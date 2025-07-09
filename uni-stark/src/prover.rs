@@ -141,7 +141,7 @@ where
     // so such tampering should be obvious to spot. The verifier needs to check the AIR anyway to
     // confirm that satisfying it indeed proves what the prover claims. Hence this should not be
     // a soundness issue.
-    let alpha: SC::Challenge = challenger.sample_algebra_element();
+    let alpha = challenger.sample_algebra_element();
 
     // A domain large enough to uniquely identify the quotient polynomial.
     // This domain must be contained in the domain over which `trace_data` is defined.
@@ -241,7 +241,7 @@ where
     // If zeta happens to lie in the domain `gK`, then when opening at zeta we will run into division
     // by zero errors. This doesn't lead to a soundness issue as the verifier will just reject in those
     // cases but it is a completeness issue and contributes a completeness error of |gK| = 2N/|EF|.
-    let zeta: SC::Challenge = challenger.sample_algebra_element();
+    let zeta = challenger.sample_algebra_element();
     let zeta_next = trace_domain.next_point(zeta).unwrap();
 
     let is_random = opt_r_data.is_some();

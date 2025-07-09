@@ -230,9 +230,19 @@ pub trait PermutationAirBuilder: ExtensionBuilder {
     fn permutation_randomness(&self) -> &[Self::RandomVar];
 }
 
+/// A wrapper around an [`AirBuilder`] that enforces constraints only when a specified condition is met.
+///
+/// This struct allows selectively applying constraints to certain rows or under certain conditions in the AIR,
+/// without modifying the underlying logic. All constraints asserted through this filtered builder will be
+/// multiplied by the given `condition`, effectively disabling them when `condition` evaluates to zero.
 #[derive(Debug)]
 pub struct FilteredAirBuilder<'a, AB: AirBuilder> {
+    /// Reference to the underlying inner [`AirBuilder`] where constraints are ultimately recorded.
     pub inner: &'a mut AB,
+
+    /// Condition expression that controls when the constraints are enforced.
+    ///
+    /// If `condition` evaluates to zero, constraints asserted through this builder have no effect.
     condition: AB::Expr,
 }
 

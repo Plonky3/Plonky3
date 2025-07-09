@@ -166,7 +166,7 @@ where
         commits.push(commit);
 
         // Get the Fiat-Shamir challenge for this round.
-        let beta: Challenge = challenger.sample_algebra_element();
+        let beta = challenger.sample_algebra_element();
 
         // We passed ownership of `leaves` to the MMCS, so get a reference to it
         let leaves = params.mmcs.get_matrices(&prover_data).pop().unwrap();
