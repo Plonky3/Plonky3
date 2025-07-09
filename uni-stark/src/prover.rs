@@ -241,7 +241,7 @@ where
     // If zeta happens to lie in the domain `gK`, then when opening at zeta we will run into division
     // by zero errors. This doesn't lead to a soundness issue as the verifier will just reject in those
     // cases but it is a completeness issue and contributes a completeness error of |gK| = 2N/|EF|.
-    let zeta :SC::Challenge= challenger.sample_algebra_element();
+    let zeta: SC::Challenge = challenger.sample_algebra_element();
     let zeta_next = trace_domain.next_point(zeta).unwrap();
 
     let is_random = opt_r_data.is_some();
