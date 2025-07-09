@@ -258,6 +258,8 @@ unsafe impl PackedFieldPow2 for PackedGoldilocksAVX2 {
 const SIGN_BIT: __m256i = unsafe { transmute([i64::MIN; WIDTH]) };
 const SHIFTED_FIELD_ORDER: __m256i =
     unsafe { transmute([Goldilocks::ORDER_U64 ^ (i64::MIN as u64); WIDTH]) };
+
+/// Equal to 2^32 - 1 = 2^64 mod P.
 const EPSILON: __m256i = unsafe { transmute([Goldilocks::ORDER_U64.wrapping_neg(); WIDTH]) };
 
 /// Add 2^63 with overflow. Needed to emulate unsigned comparisons (see point 3. in
@@ -406,8 +408,8 @@ fn square64(x: __m256i) -> (__m256i, __m256i) {
     }
 }
 
-/// Goldilocks addition of a "small" number. `x_s` is pre-shifted by 2**63. `y` is assumed to be <=
-/// `0xffffffff00000000`. The result is shifted by 2**63.
+/// Goldilocks addition of a "small" number. `x_s` is pre-shifted by 2**63. `y` is assumed to be
+/// `<= 2^64 - 2^32 = 0xffffffff00000000`. The result is shifted by 2**63.
 #[inline]
 unsafe fn add_small_64s_64_s(x_s: __m256i, y: __m256i) -> __m256i {
     unsafe {
@@ -442,15 +444,35 @@ unsafe fn sub_small_64s_64_s(x_s: __m256i, y: __m256i) -> __m256i {
     }
 }
 
+/// Given a 128-bit value represented as two 64-bit halves, reduce it modulo the Goldilocks field order.
+///
+/// The result will be a 64-bit value but may be larger than `FIELD_ORDER`.
 #[inline]
-unsafe fn reduce128(x: (__m256i, __m256i)) -> __m256i {
+fn reduce128(x: (__m256i, __m256i)) -> __m256i {
     unsafe {
         let (hi0, lo0) = x;
+
+        // First we shift lo0 to lo0_s = lo0 + 2^{63} mod 2^64
+        // This lets us emulate unsigned comparisons
         let lo0_s = shift(lo0);
+
+        // Get the top 32 bits of hi_hi0.
         let hi_hi0 = _mm256_srli_epi64::<32>(hi0);
+
+        // Computes lo0_s - hi_hi0 mod FIELD_ORDER.
+        // Makes sense to do as 2^96 = -1 mod FIELD_ORDER.
+        // sub_small_64s_64_s is safe to use as `hi_hi0 < 2^32`.
         let lo1_s = sub_small_64s_64_s(lo0_s, hi_hi0);
+
+        // Compute the product of the bottom 32 bits of hi0 with 2^64 = 2^32 - 1 mod FIELD_ORDER
+        // _mm256_mul_epu32 ignores the top 32 bits so just use that.
         let t1 = _mm256_mul_epu32(hi0, EPSILON);
+
+        // Clearly t1 <= (2^32 - 1)^2 = 2^64 - 2^33 + 1 so we can use `add_small_64s_64_s` to get
+        // `lo2_s = lo1_s + t1 mod FIELD_ORDER.`
         let lo2_s = add_small_64s_64_s(lo1_s, t1);
+
+        // Finally just need to correct for the shift.
         shift(lo2_s)
     }
 }
@@ -460,7 +482,7 @@ unsafe fn reduce128(x: (__m256i, __m256i)) -> __m256i {
 /// Inputs can be arbitrary, output is not guaranteed to be less than `FIELD_ORDER`.
 #[inline]
 fn mul(x: __m256i, y: __m256i) -> __m256i {
-    unsafe { reduce128(mul64_64(x, y)) }
+    reduce128(mul64_64(x, y))
 }
 
 /// Goldilocks modular square. Computes `x^2 mod FIELD_ORDER`.
@@ -468,7 +490,7 @@ fn mul(x: __m256i, y: __m256i) -> __m256i {
 /// Input can be arbitrary, output is not guaranteed to be less than `FIELD_ORDER`.
 #[inline]
 fn square(x: __m256i) -> __m256i {
-    unsafe { reduce128(square64(x)) }
+    reduce128(square64(x))
 }
 
 #[inline]

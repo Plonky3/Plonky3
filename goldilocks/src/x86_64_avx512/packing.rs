@@ -217,6 +217,15 @@ unsafe fn canonicalize(x: __m512i) -> __m512i {
     }
 }
 
+/// Compute the modular addition `x + y mod FIELD_ORDER`.
+///
+/// This function is always safe if `y < FIELD_ORDER` but may also be used in a wider
+/// set of circumstances if bounds on `x` are known.
+///
+/// The result will be a u64 which may be greater than FIELD_ORDER.
+///
+/// Safety:
+///     User must ensure that x + y < 2^64 + FIELD_ORDER.
 #[inline]
 unsafe fn add_no_double_overflow_64_64(x: __m512i, y: __m512i) -> __m512i {
     unsafe {
@@ -226,6 +235,15 @@ unsafe fn add_no_double_overflow_64_64(x: __m512i, y: __m512i) -> __m512i {
     }
 }
 
+/// Compute the modular subtraction x - y mod FIELD_ORDER.
+///
+/// This function is always safe if `y < FIELD_ORDER` but may also be used in a wider
+/// set of circumstances if bounds on `x` are known.
+///
+/// The result will be a u64 which may be greater than FIELD_ORDER.
+///
+/// Safety:
+///     User must ensure that x - y > -FIELD_ORDER.
 #[inline]
 unsafe fn sub_no_double_overflow_64_64(x: __m512i, y: __m512i) -> __m512i {
     unsafe {
@@ -332,13 +350,28 @@ fn square64(x: __m512i) -> (__m512i, __m512i) {
     }
 }
 
+/// Given a 128-bit value represented as two 64-bit halves, reduce it modulo the Goldilocks field order.
+///
+/// The result will be a 64-bit value but may be larger than `FIELD_ORDER`.
 #[inline]
-unsafe fn reduce128(x: (__m512i, __m512i)) -> __m512i {
+fn reduce128(x: (__m512i, __m512i)) -> __m512i {
     unsafe {
         let (hi0, lo0) = x;
+
+        // Find the high 32 bits of hi0.
         let hi_hi0 = _mm512_srli_epi64::<32>(hi0);
+
+        // Computes lo0_s - hi_hi0 mod FIELD_ORDER.
+        // Makes sense to do as 2^96 = -1 mod FIELD_ORDER.
+        // `sub_no_double_overflow_64_64` is safe to use as `hi_hi0 < 2^32`.
         let lo1 = sub_no_double_overflow_64_64(lo0, hi_hi0);
+
+        // Compute the product of the bottom 32 bits of hi0 with 2^64 = 2^32 - 1 mod FIELD_ORDER
+        // _mm256_mul_epu32 ignores the top 32 bits so just use that.
         let t1 = _mm512_mul_epu32(hi0, EPSILON);
+
+        // Clearly t1 <= (2^32 - 1)^2 = 2^64 - 2^33 + 1 < FIELD_ORDER so we can use `add_no_double_overflow_64_64` to get
+        // `lo1 + t1 mod FIELD_ORDER.`
         add_no_double_overflow_64_64(lo1, t1)
     }
 }
@@ -348,7 +381,7 @@ unsafe fn reduce128(x: (__m512i, __m512i)) -> __m512i {
 /// Inputs can be arbitrary, output is not guaranteed to be less than `FIELD_ORDER`.
 #[inline]
 fn mul(x: __m512i, y: __m512i) -> __m512i {
-    unsafe { reduce128(mul64_64(x, y)) }
+    reduce128(mul64_64(x, y))
 }
 
 /// Goldilocks modular square. Computes `x^2 mod FIELD_ORDER`.
@@ -356,7 +389,7 @@ fn mul(x: __m512i, y: __m512i) -> __m512i {
 /// Input can be arbitrary, output is not guaranteed to be less than `FIELD_ORDER`.
 #[inline]
 fn square(x: __m512i) -> __m512i {
-    unsafe { reduce128(square64(x)) }
+    reduce128(square64(x))
 }
 
 #[inline]
