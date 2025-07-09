@@ -26,7 +26,7 @@ const ODDS: __mmask16 = 0b1010101010101010;
 const EVENS4: __mmask16 = 0x0f0f;
 
 /// Vectorized AVX-512F implementation of `Mersenne31` arithmetic.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // Needed to make `transmute`s safe.
 pub struct PackedMersenne31AVX512(pub [Mersenne31; WIDTH]);
 
@@ -76,13 +76,6 @@ impl From<Mersenne31> for PackedMersenne31AVX512 {
     #[inline]
     fn from(value: Mersenne31) -> Self {
         Self::broadcast(value)
-    }
-}
-
-impl Default for PackedMersenne31AVX512 {
-    #[inline]
-    fn default() -> Self {
-        Mersenne31::default().into()
     }
 }
 

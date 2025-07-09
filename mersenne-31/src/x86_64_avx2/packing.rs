@@ -23,7 +23,7 @@ const WIDTH: usize = 8;
 pub(crate) const P: __m256i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
 
 /// Vectorized AVX2 implementation of `Mersenne31` arithmetic.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // Needed to make `transmute`s safe.
 pub struct PackedMersenne31AVX2(pub [Mersenne31; WIDTH]);
 
@@ -73,13 +73,6 @@ impl From<Mersenne31> for PackedMersenne31AVX2 {
     #[inline]
     fn from(value: Mersenne31) -> Self {
         Self::broadcast(value)
-    }
-}
-
-impl Default for PackedMersenne31AVX2 {
-    #[inline]
-    fn default() -> Self {
-        Mersenne31::default().into()
     }
 }
 
