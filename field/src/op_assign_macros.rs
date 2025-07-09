@@ -14,7 +14,8 @@
 // impl<MP: MontyParameters> AddAssign for MontyField31<MP>
 // ...
 
-/// Given a struct which implements `Add` implement `AddAssign`.
+/// Given a struct which implements `Add` implement `AddAssign<T>` for
+/// any type `T` which implements `Into<Self>`.
 ///
 /// `AddAssign` is implemented in a simple way by calling `add`
 /// and assigning the result to `*self`.
@@ -22,10 +23,10 @@
 macro_rules! ring_add_assign {
     ($type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
-            impl$(<$param_name: $type_param>)? AddAssign for $type$(<$param_name>)? {
+            impl<$($param_name: $type_param,)? T: Into<Self>> AddAssign<T> for $type$(<$param_name>)? {
                 #[inline]
-                fn add_assign(&mut self, rhs: Self) {
-                    *self = *self + rhs;
+                fn add_assign(&mut self, rhs: T) {
+                    *self = *self + rhs.into();
                 }
             }
         }
@@ -49,7 +50,8 @@ macro_rules! ring_sum {
     };
 }
 
-/// Given a struct which implements `Sub` implement `SubAssign`.
+/// Given a struct which implements `Sub` implement `SubAssign<T>` for
+/// any type `T` which implements `Into<Self>`.
 ///
 /// `SubAssign` is implemented in a simple way by calling `sub`
 /// and assigning the result to `*self`.
@@ -57,17 +59,18 @@ macro_rules! ring_sum {
 macro_rules! ring_sub_assign {
     ($type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
-            impl$(<$param_name: $type_param>)? SubAssign for $type$(<$param_name>)? {
+            impl<$($param_name: $type_param,)? T: Into<Self>> SubAssign<T> for $type$(<$param_name>)? {
                 #[inline]
-                fn sub_assign(&mut self, rhs: Self) {
-                    *self = *self - rhs;
+                fn sub_assign(&mut self, rhs: T) {
+                    *self = *self - rhs.into();
                 }
             }
         }
     };
 }
 
-/// Given a struct which implements `Mul` implement `MulAssign` and `Product`.
+/// Given a struct which implements `Mul` implement `MulAssign<T>` for
+/// any type `T` which implements `Into<Self>`.
 ///
 /// `MulAssign` is implemented in a simple way by calling `mul`
 /// and assigning the result to `*self`. Similarly `Product` is implemented
@@ -76,10 +79,10 @@ macro_rules! ring_sub_assign {
 macro_rules! ring_mul_methods {
     ($type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
-            impl$(<$param_name: $type_param>)? MulAssign for $type$(<$param_name>)? {
+            impl<$($param_name: $type_param,)? T: Into<Self>> MulAssign<T> for $type$(<$param_name>)? {
                 #[inline]
-                fn mul_assign(&mut self, rhs: Self) {
-                    *self = *self * rhs;
+                fn mul_assign(&mut self, rhs: T) {
+                    *self = *self * rhs.into();
                 }
             }
 
@@ -94,10 +97,10 @@ macro_rules! ring_mul_methods {
 }
 
 /// Given two structs `Alg` and `Field` where `Alg` implements `From<Field>`, implement
-/// `Add<Field> and AddAssign<Field>` for `Alg` and `Add<Alg>` for `Field`.
+/// `Add<Field>` for `Alg` and `Add<Alg>` for `Field`.
 ///
 /// All are implemented in the simplest way by using `From` to map the `Field` element
-/// to an `Alg` element and then applying the native `add` or `add_assign` methods on `Alg` elements.
+/// to an `Alg` element and then applying the native `add` methods on `Alg` elements.
 #[macro_export]
 macro_rules! algebra_add_from_field {
     ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
@@ -108,13 +111,6 @@ macro_rules! algebra_add_from_field {
                 #[inline]
                 fn add(self, rhs: $field_type$(<$param_name>)?) -> Self {
                     self + Self::from(rhs)
-                }
-            }
-
-            impl$(<$param_name: $type_param>)? AddAssign<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
-                #[inline]
-                fn add_assign(&mut self, rhs: $field_type$(<$param_name>)?) {
-                    *self += Self::from(rhs);
                 }
             }
 
@@ -131,10 +127,10 @@ macro_rules! algebra_add_from_field {
 }
 
 /// Given two structs `Alg` and `Field` where `Alg` implements `From<Field>`, implement
-/// `Sub<Field> and SubAssign<Field>` for `Alg` and `Sub<Alg>` for `Field`.
+/// `Sub<Field>` for `Alg` and `Sub<Alg>` for `Field`.
 ///
 /// All are implemented in the simplest way by using `From` to map the `Field` element
-/// to an `Alg` element and then applying the native `sub` or `sub_assign` methods on `Alg` elements.
+/// to an `Alg` element and then applying the native `sub` methods on `Alg` elements.
 #[macro_export]
 macro_rules! algebra_sub_from_field {
     ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
@@ -145,13 +141,6 @@ macro_rules! algebra_sub_from_field {
                 #[inline]
                 fn sub(self, rhs: $field_type$(<$param_name>)?) -> Self {
                     self - Self::from(rhs)
-                }
-            }
-
-            impl$(<$param_name: $type_param>)? SubAssign<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
-                #[inline]
-                fn sub_assign(&mut self, rhs: $field_type$(<$param_name>)?) {
-                    *self -= Self::from(rhs);
                 }
             }
 
@@ -168,10 +157,10 @@ macro_rules! algebra_sub_from_field {
 }
 
 /// Given two structs `Alg` and `Field` where `Alg` implements `From<Field>`, implement
-/// `Mul<Field> and MulAssign<Field>` for `Alg` and `Mul<Alg>` for `Field`.
+/// `Mul<Field>` for `Alg` and `Mul<Alg>` for `Field`.
 ///
 /// All are implemented in the simplest way by using `From` to map the `Field` element
-/// to an `Alg` element and then applying the native `mul` or `mul_assign` methods on `Alg` elements.
+/// to an `Alg` element and then applying the native `mul` methods on `Alg` elements.
 #[macro_export]
 macro_rules! algebra_mul_from_field {
     ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
@@ -182,13 +171,6 @@ macro_rules! algebra_mul_from_field {
                 #[inline]
                 fn mul(self, rhs: $field_type$(<$param_name>)?) -> Self {
                     self * Self::from(rhs)
-                }
-            }
-
-            impl$(<$param_name: $type_param>)? MulAssign<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
-                #[inline]
-                fn mul_assign(&mut self, rhs: $field_type$(<$param_name>)?) {
-                    *self = *self * rhs;
                 }
             }
 
