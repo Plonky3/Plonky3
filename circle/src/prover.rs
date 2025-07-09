@@ -98,7 +98,7 @@ where
         let (commit, prover_data) = params.mmcs.commit_matrix(leaves);
         challenger.observe(commit.clone());
 
-        let beta = challenger.sample_algebra_element();
+        let beta: Challenge = challenger.sample_algebra_element();
         // We passed ownership of `current` to the MMCS, so get a reference to it
         let leaves = params.mmcs.get_matrices(&prover_data).pop().unwrap();
         folded = folding.fold_matrix(beta, leaves.as_view());
