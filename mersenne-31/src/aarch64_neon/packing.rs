@@ -6,8 +6,8 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use p3_field::exponentiation::exp_1717986917;
 use p3_field::op_assign_macros::{
-    algebra_add_from_field, div_from_inverse, algebra_field_sum_prod, algebra_mul_from_field,
-    algebra_sub_from_field, ring_add_assign, ring_mul_methods, ring_sub_assign, ring_sum,
+    algebra_add_from_field, algebra_field_sum_prod, algebra_mul_from_field, algebra_sub_from_field,
+    div_from_inverse, impl_rng, ring_add_assign, ring_mul_methods, ring_sub_assign, ring_sum,
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
@@ -141,6 +141,7 @@ ring_add_assign!(PackedMersenne31Neon);
 ring_sub_assign!(PackedMersenne31Neon);
 ring_mul_methods!(PackedMersenne31Neon);
 ring_sum!(PackedMersenne31Neon);
+impl_rng!(PackedMersenne31Neon);
 
 impl PrimeCharacteristicRing for PackedMersenne31Neon {
     type PrimeSubfield = Mersenne31;
@@ -161,6 +162,28 @@ impl PrimeCharacteristicRing for PackedMersenne31Neon {
         unsafe { reconstitute_from_base(Mersenne31::zero_vec(len * WIDTH)) }
     }
 }
+
+// Degree of the smallest permutation polynomial for Mersenne31.
+//
+// As p - 1 = 2×3^2×7×11×... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
+impl InjectiveMonomial<5> for PackedMersenne31Neon {}
+
+impl PermutationMonomial<5> for PackedMersenne31Neon {
+    /// In the field `Mersenne31`, `a^{1/5}` is equal to a^{1717986917}.
+    ///
+    /// This follows from the calculation `5 * 1717986917 = 4*(2^31 - 2) + 1 = 1 mod p - 1`.
+    fn injective_exp_root_n(&self) -> Self {
+        exp_1717986917(*self)
+    }
+}
+
+algebra_add_from_field!(PackedMersenne31Neon, Mersenne31);
+algebra_sub_from_field!(PackedMersenne31Neon, Mersenne31);
+algebra_mul_from_field!(PackedMersenne31Neon, Mersenne31);
+div_from_inverse!(PackedMersenne31Neon, Mersenne31);
+algebra_field_sum_prod!(PackedMersenne31Neon, Mersenne31);
+
+impl Algebra<Mersenne31> for PackedMersenne31Neon {}
 
 /// Given a `val` in `0, ..., 2 P`, return a `res` in `0, ..., P` such that `res = val (mod P)`
 #[inline]
@@ -297,35 +320,6 @@ fn sub(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
         let diff = aarch64::vsubq_u32(lhs, rhs);
         let underflow = aarch64::vcltq_u32(lhs, rhs);
         aarch64::vmlsq_u32(diff, underflow, P)
-    }
-}
-
-// Degree of the smallest permutation polynomial for Mersenne31.
-//
-// As p - 1 = 2×3^2×7×11×... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
-impl InjectiveMonomial<5> for PackedMersenne31Neon {}
-
-impl PermutationMonomial<5> for PackedMersenne31Neon {
-    /// In the field `Mersenne31`, `a^{1/5}` is equal to a^{1717986917}.
-    ///
-    /// This follows from the calculation `5 * 1717986917 = 4*(2^31 - 2) + 1 = 1 mod p - 1`.
-    fn injective_exp_root_n(&self) -> Self {
-        exp_1717986917(*self)
-    }
-}
-
-algebra_add_from_field!(PackedMersenne31Neon, Mersenne31);
-algebra_sub_from_field!(PackedMersenne31Neon, Mersenne31);
-algebra_mul_from_field!(PackedMersenne31Neon, Mersenne31);
-div_from_inverse!(PackedMersenne31Neon, Mersenne31);
-algebra_field_sum_prod!(PackedMersenne31Neon, Mersenne31);
-
-impl Algebra<Mersenne31> for PackedMersenne31Neon {}
-
-impl Distribution<PackedMersenne31Neon> for StandardUniform {
-    #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMersenne31Neon {
-        PackedMersenne31Neon(rng.random())
     }
 }
 

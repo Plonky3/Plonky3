@@ -6,8 +6,8 @@ use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::op_assign_macros::{
-    algebra_add_from_field, div_from_inverse, algebra_field_sum_prod, algebra_mul_from_field,
-    algebra_sub_from_field, ring_add_assign, ring_mul_methods, ring_sub_assign, ring_sum,
+    algebra_add_from_field, algebra_field_sum_prod, algebra_mul_from_field, algebra_sub_from_field,
+    div_from_inverse, impl_rng, ring_add_assign, ring_mul_methods, ring_sub_assign, ring_sum,
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
@@ -85,7 +85,7 @@ impl<PMP: PackedMontyParameters> From<MontyField31<PMP>> for PackedMontyField31A
 impl<PMP: PackedMontyParameters> Default for PackedMontyField31AVX2<PMP> {
     #[inline]
     fn default() -> Self {
-        MontyField31::<PMP>::default().into()
+        MontyField31::default().into()
     }
 }
 
@@ -150,6 +150,7 @@ ring_add_assign!(PackedMontyField31AVX2, (PackedMontyParameters, PMP));
 ring_sub_assign!(PackedMontyField31AVX2, (PackedMontyParameters, PMP));
 ring_mul_methods!(PackedMontyField31AVX2, (FieldParameters, FP));
 ring_sum!(PackedMontyField31AVX2, (FieldParameters, FP));
+impl_rng!(PackedMontyField31AVX2, (PackedMontyParameters, PMP));
 
 impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX2<FP> {
     type PrimeSubfield = MontyField31<FP>;
@@ -239,6 +240,26 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX2<FP>
         unsafe { reconstitute_from_base(MontyField31::<FP>::zero_vec(len * WIDTH)) }
     }
 }
+
+algebra_add_from_field!(
+    PackedMontyField31AVX2,
+    MontyField31,
+    (PackedMontyParameters, PMP)
+);
+algebra_sub_from_field!(
+    PackedMontyField31AVX2,
+    MontyField31,
+    (PackedMontyParameters, PMP)
+);
+algebra_mul_from_field!(
+    PackedMontyField31AVX2,
+    MontyField31,
+    (PackedMontyParameters, PMP)
+);
+div_from_inverse!(PackedMontyField31AVX2, MontyField31, (FieldParameters, FP));
+algebra_field_sum_prod!(PackedMontyField31AVX2, MontyField31, (FieldParameters, FP));
+
+impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31AVX2<FP> {}
 
 /// Add two vectors of Monty31 field elements in canonical form.
 /// If the inputs are not in canonical form, the result is undefined.
@@ -991,26 +1012,6 @@ pub(crate) fn sub<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __
     }
 }
 
-algebra_add_from_field!(
-    PackedMontyField31AVX2,
-    MontyField31,
-    (PackedMontyParameters, PMP)
-);
-algebra_sub_from_field!(
-    PackedMontyField31AVX2,
-    MontyField31,
-    (PackedMontyParameters, PMP)
-);
-algebra_mul_from_field!(
-    PackedMontyField31AVX2,
-    MontyField31,
-    (PackedMontyParameters, PMP)
-);
-div_from_inverse!(PackedMontyField31AVX2, MontyField31, (FieldParameters, FP));
-algebra_field_sum_prod!(PackedMontyField31AVX2, MontyField31, (FieldParameters, FP));
-
-impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31AVX2<FP> {}
-
 impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> InjectiveMonomial<D>
     for PackedMontyField31AVX2<FP>
 {
@@ -1021,13 +1022,6 @@ impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> PermutationMon
 {
     fn injective_exp_root_n(&self) -> Self {
         FP::exp_root_d(*self)
-    }
-}
-
-impl<PMP: PackedMontyParameters> Distribution<PackedMontyField31AVX2<PMP>> for StandardUniform {
-    #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMontyField31AVX2<PMP> {
-        PackedMontyField31AVX2::<PMP>(rng.random())
     }
 }
 

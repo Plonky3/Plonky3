@@ -269,7 +269,27 @@ macro_rules! algebra_field_sum_prod {
     };
 }
 
+/// Given a struct `Alg` which is a wrapper over `[Field; N]` for some `N`,
+/// implement `Distribution<Alg>` for `StandardUniform`.
+///
+/// As `Distribution<Field>` is implemented for `StandardUniform` we can
+/// already generate random `[Field; N]` elements so we just need to wrap the
+/// result in `Alg`'s name.
+#[macro_export]
+macro_rules! impl_rng {
+    ($type:ty $(, ($type_param:ty, $param_name:ty))?) => {
+        paste::paste! {
+            impl$(<$param_name: $type_param>)? Distribution<$type$(<$param_name>)?> for StandardUniform {
+                #[inline]
+            fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> $type$(<$param_name>)? {
+                $type(rng.random())
+                }
+            }
+        }
+    };
+}
+
 pub use {
-    algebra_add_from_field, div_from_inverse, algebra_field_sum_prod, algebra_mul_from_field,
-    algebra_sub_from_field, ring_add_assign, ring_mul_methods, ring_sub_assign, ring_sum,
+    algebra_add_from_field, algebra_field_sum_prod, algebra_mul_from_field, algebra_sub_from_field,
+    div_from_inverse, impl_rng, ring_add_assign, ring_mul_methods, ring_sub_assign, ring_sum,
 };

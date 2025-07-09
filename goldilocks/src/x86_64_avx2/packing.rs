@@ -9,7 +9,7 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::op_assign_macros::{
     algebra_add_from_field, algebra_field_sum_prod, algebra_mul_from_field, algebra_sub_from_field,
-    div_from_inverse, ring_add_assign, ring_mul_methods, ring_sub_assign, ring_sum,
+    div_from_inverse, impl_rng, ring_add_assign, ring_mul_methods, ring_sub_assign, ring_sum,
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
@@ -101,13 +101,14 @@ ring_add_assign!(PackedGoldilocksAVX2);
 ring_sub_assign!(PackedGoldilocksAVX2);
 ring_mul_methods!(PackedGoldilocksAVX2);
 ring_sum!(PackedGoldilocksAVX2);
+impl_rng!(PackedGoldilocksAVX2);
 
-impl Distribution<PackedGoldilocksAVX2> for StandardUniform {
-    #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedGoldilocksAVX2 {
-        PackedGoldilocksAVX2(rng.random())
-    }
-}
+// impl Distribution<PackedGoldilocksAVX2> for StandardUniform {
+//     #[inline]
+//     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedGoldilocksAVX2 {
+//         PackedGoldilocksAVX2(rng.random())
+//     }
+// }
 
 impl PrimeCharacteristicRing for PackedGoldilocksAVX2 {
     type PrimeSubfield = Goldilocks;

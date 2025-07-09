@@ -6,8 +6,8 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use p3_field::exponentiation::exp_1717986917;
 use p3_field::op_assign_macros::{
-    algebra_add_from_field, div_from_inverse, algebra_field_sum_prod, algebra_mul_from_field,
-    algebra_sub_from_field, ring_add_assign, ring_mul_methods, ring_sub_assign, ring_sum,
+    algebra_add_from_field, algebra_field_sum_prod, algebra_mul_from_field, algebra_sub_from_field,
+    div_from_inverse, impl_rng, ring_add_assign, ring_mul_methods, ring_sub_assign, ring_sum,
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
@@ -145,6 +145,7 @@ ring_add_assign!(PackedMersenne31AVX512);
 ring_sub_assign!(PackedMersenne31AVX512);
 ring_mul_methods!(PackedMersenne31AVX512);
 ring_sum!(PackedMersenne31AVX512);
+impl_rng!(PackedMersenne31AVX512);
 
 impl PrimeCharacteristicRing for PackedMersenne31AVX512 {
     type PrimeSubfield = Mersenne31;
@@ -191,6 +192,28 @@ impl PrimeCharacteristicRing for PackedMersenne31AVX512 {
         }
     }
 }
+
+// Degree of the smallest permutation polynomial for Mersenne31.
+//
+// As p - 1 = 2×3^2×7×11×... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
+impl InjectiveMonomial<5> for PackedMersenne31AVX512 {}
+
+impl PermutationMonomial<5> for PackedMersenne31AVX512 {
+    /// In the field `Mersenne31`, `a^{1/5}` is equal to a^{1717986917}.
+    ///
+    /// This follows from the calculation `5 * 1717986917 = 4*(2^31 - 2) + 1 = 1 mod p - 1`.
+    fn injective_exp_root_n(&self) -> Self {
+        exp_1717986917(*self)
+    }
+}
+
+algebra_add_from_field!(PackedMersenne31AVX512, Mersenne31);
+algebra_sub_from_field!(PackedMersenne31AVX512, Mersenne31);
+algebra_mul_from_field!(PackedMersenne31AVX512, Mersenne31);
+div_from_inverse!(PackedMersenne31AVX512, Mersenne31);
+algebra_field_sum_prod!(PackedMersenne31AVX512, Mersenne31);
+
+impl Algebra<Mersenne31> for PackedMersenne31AVX512 {}
 
 /// Add two vectors of Mersenne-31 field elements represented as values in {0, ..., P}.
 /// If the inputs do not conform to this representation, the result is undefined.
@@ -429,35 +452,6 @@ pub(crate) fn exp5(x: __m512i) -> __m512i {
         let u = x86_64::_mm512_sub_epi32(t, corr);
 
         x86_64::_mm512_min_epu32(t, u)
-    }
-}
-
-// Degree of the smallest permutation polynomial for Mersenne31.
-//
-// As p - 1 = 2×3^2×7×11×... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
-impl InjectiveMonomial<5> for PackedMersenne31AVX512 {}
-
-impl PermutationMonomial<5> for PackedMersenne31AVX512 {
-    /// In the field `Mersenne31`, `a^{1/5}` is equal to a^{1717986917}.
-    ///
-    /// This follows from the calculation `5 * 1717986917 = 4*(2^31 - 2) + 1 = 1 mod p - 1`.
-    fn injective_exp_root_n(&self) -> Self {
-        exp_1717986917(*self)
-    }
-}
-
-algebra_add_from_field!(PackedMersenne31AVX512, Mersenne31);
-algebra_sub_from_field!(PackedMersenne31AVX512, Mersenne31);
-algebra_mul_from_field!(PackedMersenne31AVX512, Mersenne31);
-div_from_inverse!(PackedMersenne31AVX512, Mersenne31);
-algebra_field_sum_prod!(PackedMersenne31AVX512, Mersenne31);
-
-impl Algebra<Mersenne31> for PackedMersenne31AVX512 {}
-
-impl Distribution<PackedMersenne31AVX512> for StandardUniform {
-    #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMersenne31AVX512 {
-        PackedMersenne31AVX512(rng.random())
     }
 }
 
