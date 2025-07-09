@@ -28,9 +28,9 @@ const WIDTH: usize = 4;
 pub struct PackedGoldilocksAVX2(pub [Goldilocks; WIDTH]);
 
 impl PackedGoldilocksAVX2 {
+    /// Get an arch-specific vector representing the packed values.
     #[inline]
     #[must_use]
-    /// Get an arch-specific vector representing the packed values.
     pub(crate) fn to_vector(self) -> __m256i {
         unsafe {
             // Safety: `Goldilocks` is `repr(transparent)` so it can be transmuted to `u64`. It
@@ -42,12 +42,12 @@ impl PackedGoldilocksAVX2 {
         }
     }
 
-    #[inline]
-    #[must_use]
     /// Make a packed field vector from an arch-specific vector.
     ///
     /// Elements of `Goldilocks` are allowed to be arbitrary u64s so this function
     /// is safe unlike the `Mersenne31/MontyField31` variants.
+    #[inline]
+    #[must_use]
     pub(crate) fn from_vector(vector: __m256i) -> Self {
         unsafe {
             // Safety: `__m256i` can be transmuted to `[u64; WIDTH]` (since arrays elements are
