@@ -7,8 +7,6 @@ use crate::dense::RowMajorMatrixView;
 ///
 /// `ViewPair` combines two [`RowMajorMatrixView`]'s with the same element type `T`
 /// and lifetime `'a` into a single virtual matrix stacked vertically.
-/// This is often used to model consecutive sections or windows of a trace
-/// (e.g., local and next rows) in constraint systems.
 ///
 /// Both views must have the same width; the resulting view has a height equal
 /// to the sum of the two original heights.
