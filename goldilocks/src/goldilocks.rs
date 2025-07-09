@@ -10,7 +10,7 @@ use num_bigint::BigUint;
 use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::integers::QuotientMap;
 use p3_field::op_assign_macros::{
-    div_from_inverse, ring_add_assign, ring_mul_methods, ring_sub_assign,
+    impl_add_assign, impl_div_methods, impl_mul_methods, impl_sub_assign,
 };
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
@@ -550,10 +550,10 @@ impl Mul for Goldilocks {
     }
 }
 
-ring_add_assign!(Goldilocks);
-ring_sub_assign!(Goldilocks);
-ring_mul_methods!(Goldilocks);
-div_from_inverse!(Goldilocks, Goldilocks);
+impl_add_assign!(Goldilocks);
+impl_sub_assign!(Goldilocks);
+impl_mul_methods!(Goldilocks);
+impl_div_methods!(Goldilocks, Goldilocks);
 
 impl Sum for Goldilocks {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {

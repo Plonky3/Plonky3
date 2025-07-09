@@ -10,7 +10,7 @@ use num_bigint::BigUint;
 use p3_field::exponentiation::exp_1717986917;
 use p3_field::integers::QuotientMap;
 use p3_field::op_assign_macros::{
-    div_from_inverse, ring_add_assign, ring_mul_methods, ring_sub_assign,
+    impl_div_methods, impl_add_assign, impl_mul_methods, impl_sub_assign,
 };
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
@@ -478,10 +478,10 @@ impl Mul for Mersenne31 {
     }
 }
 
-ring_add_assign!(Mersenne31);
-ring_sub_assign!(Mersenne31);
-ring_mul_methods!(Mersenne31);
-div_from_inverse!(Mersenne31, Mersenne31);
+impl_add_assign!(Mersenne31);
+impl_sub_assign!(Mersenne31);
+impl_mul_methods!(Mersenne31);
+impl_div_methods!(Mersenne31, Mersenne31);
 
 impl Sum for Mersenne31 {
     #[inline]

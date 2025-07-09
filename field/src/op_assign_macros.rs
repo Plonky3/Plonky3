@@ -4,12 +4,12 @@
 // To help with reading the macros, note that the ? operator indicates an optional argument.
 // If it doesn't appear, all call of ? in the body of the macro disappear.
 //
-// Hence `ring_add_assign!(Mersenne31)` will produce:
+// Hence `impl_add_assign!(Mersenne31)` will produce:
 //
 // impl AddAssign for Mersenne31
 // ...
 //
-// whereas `ring_add_assign!(MontyField31, (MontyParameters, MP))` produces:
+// whereas `impl_add_assign!(MontyField31, (MontyParameters, MP))` produces:
 //
 // impl<MP: MontyParameters> AddAssign for MontyField31<MP>
 // ...
@@ -20,7 +20,7 @@
 /// `AddAssign` is implemented in a simple way by calling `add`
 /// and assigning the result to `*self`.
 #[macro_export]
-macro_rules! ring_add_assign {
+macro_rules! impl_add_assign {
     ($type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
             impl<$($param_name: $type_param,)? T: Into<Self>> AddAssign<T> for $type$(<$param_name>)? {
@@ -56,7 +56,7 @@ macro_rules! ring_sum {
 /// `SubAssign` is implemented in a simple way by calling `sub`
 /// and assigning the result to `*self`.
 #[macro_export]
-macro_rules! ring_sub_assign {
+macro_rules! impl_sub_assign {
     ($type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
             impl<$($param_name: $type_param,)? T: Into<Self>> SubAssign<T> for $type$(<$param_name>)? {
@@ -76,7 +76,7 @@ macro_rules! ring_sub_assign {
 /// and assigning the result to `*self`. Similarly `Product` is implemented
 /// in the similarly simple way of just doing a reduce on the iterator.
 #[macro_export]
-macro_rules! ring_mul_methods {
+macro_rules! impl_mul_methods {
     ($type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
             impl<$($param_name: $type_param,)? T: Into<Self>> MulAssign<T> for $type$(<$param_name>)? {
@@ -102,7 +102,7 @@ macro_rules! ring_mul_methods {
 /// All are implemented in the simplest way by using `From` to map the `Field` element
 /// to an `Alg` element and then applying the native `add` methods on `Alg` elements.
 #[macro_export]
-macro_rules! algebra_add_from_field {
+macro_rules! impl_add_base_field {
     ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
             impl$(<$param_name: $type_param>)? Add<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
@@ -132,7 +132,7 @@ macro_rules! algebra_add_from_field {
 /// All are implemented in the simplest way by using `From` to map the `Field` element
 /// to an `Alg` element and then applying the native `sub` methods on `Alg` elements.
 #[macro_export]
-macro_rules! algebra_sub_from_field {
+macro_rules! impl_sub_base_field {
     ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
             impl$(<$param_name: $type_param>)? Sub<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
@@ -162,7 +162,7 @@ macro_rules! algebra_sub_from_field {
 /// All are implemented in the simplest way by using `From` to map the `Field` element
 /// to an `Alg` element and then applying the native `mul` methods on `Alg` elements.
 #[macro_export]
-macro_rules! algebra_mul_from_field {
+macro_rules! impl_mul_base_field {
     ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
             impl$(<$param_name: $type_param>)? Mul<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
@@ -195,7 +195,7 @@ macro_rules! algebra_mul_from_field {
 ///
 /// This can also be used with `Alg = Field` to implement `Div` and `DivAssign` for Field.
 #[macro_export]
-macro_rules! div_from_inverse {
+macro_rules! impl_div_methods {
     ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
             impl$(<$param_name: $type_param>)? Div<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
@@ -225,7 +225,7 @@ macro_rules! div_from_inverse {
 /// Both are implemented in the simplest way by simply computing the Sum/Product as
 /// field elements before mapping to an `Alg` element using `From`.
 #[macro_export]
-macro_rules! algebra_field_sum_prod {
+macro_rules! impl_sum_prod_base_field {
     ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
             impl$(<$param_name: $type_param>)? Sum<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
@@ -272,6 +272,6 @@ macro_rules! impl_rng {
 }
 
 pub use {
-    algebra_add_from_field, algebra_field_sum_prod, algebra_mul_from_field, algebra_sub_from_field,
-    div_from_inverse, impl_rng, ring_add_assign, ring_mul_methods, ring_sub_assign, ring_sum,
+    impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
+    impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field, ring_sum,
 };

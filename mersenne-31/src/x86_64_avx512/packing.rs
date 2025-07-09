@@ -6,8 +6,8 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use p3_field::exponentiation::exp_1717986917;
 use p3_field::op_assign_macros::{
-    algebra_add_from_field, algebra_field_sum_prod, algebra_mul_from_field, algebra_sub_from_field,
-    div_from_inverse, impl_rng, ring_add_assign, ring_mul_methods, ring_sub_assign, ring_sum,
+    impl_add_base_field, impl_sum_prod_base_field, impl_mul_base_field, impl_sub_base_field,
+    impl_div_methods, impl_rng, impl_add_assign, impl_mul_methods, impl_sub_assign, ring_sum,
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
@@ -141,9 +141,9 @@ impl Mul for PackedMersenne31AVX512 {
     }
 }
 
-ring_add_assign!(PackedMersenne31AVX512);
-ring_sub_assign!(PackedMersenne31AVX512);
-ring_mul_methods!(PackedMersenne31AVX512);
+impl_add_assign!(PackedMersenne31AVX512);
+impl_sub_assign!(PackedMersenne31AVX512);
+impl_mul_methods!(PackedMersenne31AVX512);
 ring_sum!(PackedMersenne31AVX512);
 impl_rng!(PackedMersenne31AVX512);
 
@@ -207,11 +207,11 @@ impl PermutationMonomial<5> for PackedMersenne31AVX512 {
     }
 }
 
-algebra_add_from_field!(PackedMersenne31AVX512, Mersenne31);
-algebra_sub_from_field!(PackedMersenne31AVX512, Mersenne31);
-algebra_mul_from_field!(PackedMersenne31AVX512, Mersenne31);
-div_from_inverse!(PackedMersenne31AVX512, Mersenne31);
-algebra_field_sum_prod!(PackedMersenne31AVX512, Mersenne31);
+impl_add_base_field!(PackedMersenne31AVX512, Mersenne31);
+impl_sub_base_field!(PackedMersenne31AVX512, Mersenne31);
+impl_mul_base_field!(PackedMersenne31AVX512, Mersenne31);
+impl_div_methods!(PackedMersenne31AVX512, Mersenne31);
+impl_sum_prod_base_field!(PackedMersenne31AVX512, Mersenne31);
 
 impl Algebra<Mersenne31> for PackedMersenne31AVX512 {}
 
