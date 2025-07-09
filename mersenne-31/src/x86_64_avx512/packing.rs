@@ -2,9 +2,13 @@ use alloc::vec::Vec;
 use core::arch::x86_64::{self, __m512i, __mmask8, __mmask16};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::exponentiation::exp_1717986917;
+use p3_field::op_assign_macros::{
+    impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
+    impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field, ring_sum,
+};
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
     PermutationMonomial, PrimeCharacteristicRing,
@@ -68,6 +72,13 @@ impl PackedMersenne31AVX512 {
     }
 }
 
+impl From<Mersenne31> for PackedMersenne31AVX512 {
+    #[inline]
+    fn from(value: Mersenne31) -> Self {
+        Self::broadcast(value)
+    }
+}
+
 impl Add for PackedMersenne31AVX512 {
     type Output = Self;
     #[inline]
@@ -77,6 +88,33 @@ impl Add for PackedMersenne31AVX512 {
         let res = add(lhs, rhs);
         unsafe {
             // Safety: `add` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
+    }
+}
+
+impl Sub for PackedMersenne31AVX512 {
+    type Output = Self;
+    #[inline]
+    fn sub(self, rhs: Self) -> Self {
+        let lhs = self.to_vector();
+        let rhs = rhs.to_vector();
+        let res = sub(lhs, rhs);
+        unsafe {
+            // Safety: `sub` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
+    }
+}
+
+impl Neg for PackedMersenne31AVX512 {
+    type Output = Self;
+    #[inline]
+    fn neg(self) -> Self {
+        let val = self.to_vector();
+        let res = neg(val);
+        unsafe {
+            // Safety: `neg` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
@@ -96,32 +134,79 @@ impl Mul for PackedMersenne31AVX512 {
     }
 }
 
-impl Neg for PackedMersenne31AVX512 {
-    type Output = Self;
+impl_add_assign!(PackedMersenne31AVX512);
+impl_sub_assign!(PackedMersenne31AVX512);
+impl_mul_methods!(PackedMersenne31AVX512);
+ring_sum!(PackedMersenne31AVX512);
+impl_rng!(PackedMersenne31AVX512);
+
+impl PrimeCharacteristicRing for PackedMersenne31AVX512 {
+    type PrimeSubfield = Mersenne31;
+
+    const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
+    const ONE: Self = Self::broadcast(Mersenne31::ONE);
+    const TWO: Self = Self::broadcast(Mersenne31::TWO);
+    const NEG_ONE: Self = Self::broadcast(Mersenne31::NEG_ONE);
+
     #[inline]
-    fn neg(self) -> Self {
-        let val = self.to_vector();
-        let res = neg(val);
-        unsafe {
-            // Safety: `neg` returns values in canonical form when given values in canonical form.
-            Self::from_vector(res)
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
+        f.into()
+    }
+
+    #[inline(always)]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        // SAFETY: this is a repr(transparent) wrapper around an array.
+        unsafe { reconstitute_from_base(Mersenne31::zero_vec(len * WIDTH)) }
+    }
+
+    #[inline(always)]
+    fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        // We provide specialised code for power 5 as this turns up regularly.
+        // The other powers could be specialised similarly but we ignore this for now.
+        // These ideas could also be used to speed up the more generic exp_u64.
+        match POWER {
+            0 => Self::ONE,
+            1 => *self,
+            2 => self.square(),
+            3 => self.cube(),
+            4 => self.square().square(),
+            5 => unsafe {
+                let val = self.to_vector();
+                Self::from_vector(exp5(val))
+            },
+            6 => self.square().cube(),
+            7 => {
+                let x2 = self.square();
+                let x3 = x2 * *self;
+                let x4 = x2.square();
+                x3 * x4
+            }
+            _ => self.exp_u64(POWER),
         }
     }
 }
 
-impl Sub for PackedMersenne31AVX512 {
-    type Output = Self;
-    #[inline]
-    fn sub(self, rhs: Self) -> Self {
-        let lhs = self.to_vector();
-        let rhs = rhs.to_vector();
-        let res = sub(lhs, rhs);
-        unsafe {
-            // Safety: `sub` returns values in canonical form when given values in canonical form.
-            Self::from_vector(res)
-        }
+// Degree of the smallest permutation polynomial for Mersenne31.
+//
+// As p - 1 = 2×3^2×7×11×... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
+impl InjectiveMonomial<5> for PackedMersenne31AVX512 {}
+
+impl PermutationMonomial<5> for PackedMersenne31AVX512 {
+    /// In the field `Mersenne31`, `a^{1/5}` is equal to a^{1717986917}.
+    ///
+    /// This follows from the calculation `5 * 1717986917 = 4*(2^31 - 2) + 1 = 1 mod p - 1`.
+    fn injective_exp_root_n(&self) -> Self {
+        exp_1717986917(*self)
     }
 }
+
+impl_add_base_field!(PackedMersenne31AVX512, Mersenne31);
+impl_sub_base_field!(PackedMersenne31AVX512, Mersenne31);
+impl_mul_base_field!(PackedMersenne31AVX512, Mersenne31);
+impl_div_methods!(PackedMersenne31AVX512, Mersenne31);
+impl_sum_prod_base_field!(PackedMersenne31AVX512, Mersenne31);
+
+impl Algebra<Mersenne31> for PackedMersenne31AVX512 {}
 
 /// Add two vectors of Mersenne-31 field elements represented as values in {0, ..., P}.
 /// If the inputs do not conform to this representation, the result is undefined.
@@ -360,221 +445,6 @@ pub(crate) fn exp5(x: __m512i) -> __m512i {
         let u = x86_64::_mm512_sub_epi32(t, corr);
 
         x86_64::_mm512_min_epu32(t, u)
-    }
-}
-
-impl From<Mersenne31> for PackedMersenne31AVX512 {
-    #[inline]
-    fn from(value: Mersenne31) -> Self {
-        Self::broadcast(value)
-    }
-}
-
-impl AddAssign for PackedMersenne31AVX512 {
-    #[inline]
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
-impl MulAssign for PackedMersenne31AVX512 {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = *self * rhs;
-    }
-}
-
-impl SubAssign for PackedMersenne31AVX512 {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
-    }
-}
-
-impl Sum for PackedMersenne31AVX512 {
-    #[inline]
-    fn sum<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::ZERO)
-    }
-}
-
-impl Product for PackedMersenne31AVX512 {
-    #[inline]
-    fn product<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::ONE)
-    }
-}
-
-impl PrimeCharacteristicRing for PackedMersenne31AVX512 {
-    type PrimeSubfield = Mersenne31;
-
-    const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
-    const ONE: Self = Self::broadcast(Mersenne31::ONE);
-    const TWO: Self = Self::broadcast(Mersenne31::TWO);
-    const NEG_ONE: Self = Self::broadcast(Mersenne31::NEG_ONE);
-
-    #[inline]
-    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
-        f.into()
-    }
-
-    #[inline(always)]
-    fn zero_vec(len: usize) -> Vec<Self> {
-        // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { reconstitute_from_base(Mersenne31::zero_vec(len * WIDTH)) }
-    }
-
-    #[inline(always)]
-    fn exp_const_u64<const POWER: u64>(&self) -> Self {
-        // We provide specialised code for power 5 as this turns up regularly.
-        // The other powers could be specialised similarly but we ignore this for now.
-        // These ideas could also be used to speed up the more generic exp_u64.
-        match POWER {
-            0 => Self::ONE,
-            1 => *self,
-            2 => self.square(),
-            3 => self.cube(),
-            4 => self.square().square(),
-            5 => unsafe {
-                let val = self.to_vector();
-                Self::from_vector(exp5(val))
-            },
-            6 => self.square().cube(),
-            7 => {
-                let x2 = self.square();
-                let x3 = x2 * *self;
-                let x4 = x2.square();
-                x3 * x4
-            }
-            _ => self.exp_u64(POWER),
-        }
-    }
-}
-
-impl Algebra<Mersenne31> for PackedMersenne31AVX512 {}
-
-// Degree of the smallest permutation polynomial for Mersenne31.
-//
-// As p - 1 = 2×3^2×7×11×... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
-impl InjectiveMonomial<5> for PackedMersenne31AVX512 {}
-
-impl PermutationMonomial<5> for PackedMersenne31AVX512 {
-    /// In the field `Mersenne31`, `a^{1/5}` is equal to a^{1717986917}.
-    ///
-    /// This follows from the calculation `5 * 1717986917 = 4*(2^31 - 2) + 1 = 1 mod p - 1`.
-    fn injective_exp_root_n(&self) -> Self {
-        exp_1717986917(*self)
-    }
-}
-
-impl Add<Mersenne31> for PackedMersenne31AVX512 {
-    type Output = Self;
-    #[inline]
-    fn add(self, rhs: Mersenne31) -> Self {
-        self + Self::from(rhs)
-    }
-}
-
-impl Mul<Mersenne31> for PackedMersenne31AVX512 {
-    type Output = Self;
-    #[inline]
-    fn mul(self, rhs: Mersenne31) -> Self {
-        self * Self::from(rhs)
-    }
-}
-
-impl Sub<Mersenne31> for PackedMersenne31AVX512 {
-    type Output = Self;
-    #[inline]
-    fn sub(self, rhs: Mersenne31) -> Self {
-        self - Self::from(rhs)
-    }
-}
-
-impl AddAssign<Mersenne31> for PackedMersenne31AVX512 {
-    #[inline]
-    fn add_assign(&mut self, rhs: Mersenne31) {
-        *self += Self::from(rhs)
-    }
-}
-
-impl MulAssign<Mersenne31> for PackedMersenne31AVX512 {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Mersenne31) {
-        *self *= Self::from(rhs)
-    }
-}
-
-impl SubAssign<Mersenne31> for PackedMersenne31AVX512 {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Mersenne31) {
-        *self -= Self::from(rhs)
-    }
-}
-
-impl Sum<Mersenne31> for PackedMersenne31AVX512 {
-    #[inline]
-    fn sum<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Mersenne31>,
-    {
-        iter.sum::<Mersenne31>().into()
-    }
-}
-
-impl Product<Mersenne31> for PackedMersenne31AVX512 {
-    #[inline]
-    fn product<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Mersenne31>,
-    {
-        iter.product::<Mersenne31>().into()
-    }
-}
-
-impl Div<Mersenne31> for PackedMersenne31AVX512 {
-    type Output = Self;
-    #[allow(clippy::suspicious_arithmetic_impl)]
-    #[inline]
-    fn div(self, rhs: Mersenne31) -> Self {
-        self * rhs.inverse()
-    }
-}
-
-impl Add<PackedMersenne31AVX512> for Mersenne31 {
-    type Output = PackedMersenne31AVX512;
-    #[inline]
-    fn add(self, rhs: PackedMersenne31AVX512) -> PackedMersenne31AVX512 {
-        PackedMersenne31AVX512::from(self) + rhs
-    }
-}
-
-impl Mul<PackedMersenne31AVX512> for Mersenne31 {
-    type Output = PackedMersenne31AVX512;
-    #[inline]
-    fn mul(self, rhs: PackedMersenne31AVX512) -> PackedMersenne31AVX512 {
-        PackedMersenne31AVX512::from(self) * rhs
-    }
-}
-
-impl Sub<PackedMersenne31AVX512> for Mersenne31 {
-    type Output = PackedMersenne31AVX512;
-    #[inline]
-    fn sub(self, rhs: PackedMersenne31AVX512) -> PackedMersenne31AVX512 {
-        PackedMersenne31AVX512::from(self) - rhs
-    }
-}
-
-impl Distribution<PackedMersenne31AVX512> for StandardUniform {
-    #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMersenne31AVX512 {
-        PackedMersenne31AVX512(rng.random())
     }
 }
 

@@ -6,6 +6,10 @@ use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::exponentiation::exp_10540996611094048183;
+use p3_field::op_assign_macros::{
+    impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
+    impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field, ring_sum,
+};
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
     PermutationMonomial, PrimeCharacteristicRing, PrimeField64,
@@ -39,93 +43,25 @@ impl PackedGoldilocksAVX512 {
     }
 }
 
-impl Add<Self> for PackedGoldilocksAVX512 {
-    type Output = Self;
-    #[inline]
-    fn add(self, rhs: Self) -> Self {
-        Self::new(unsafe { add(self.get(), rhs.get()) })
-    }
-}
-impl Add<Goldilocks> for PackedGoldilocksAVX512 {
-    type Output = Self;
-    #[inline]
-    fn add(self, rhs: Goldilocks) -> Self {
-        self + Self::from(rhs)
-    }
-}
-impl Add<PackedGoldilocksAVX512> for Goldilocks {
-    type Output = PackedGoldilocksAVX512;
-    #[inline]
-    fn add(self, rhs: Self::Output) -> Self::Output {
-        Self::Output::from(self) + rhs
-    }
-}
-impl AddAssign<Self> for PackedGoldilocksAVX512 {
-    #[inline]
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-impl AddAssign<Goldilocks> for PackedGoldilocksAVX512 {
-    #[inline]
-    fn add_assign(&mut self, rhs: Goldilocks) {
-        *self = *self + rhs;
-    }
-}
-
-impl Div<Goldilocks> for PackedGoldilocksAVX512 {
-    type Output = Self;
-    #[allow(clippy::suspicious_arithmetic_impl)]
-    #[inline]
-    fn div(self, rhs: Goldilocks) -> Self {
-        self * rhs.inverse()
-    }
-}
-impl DivAssign<Goldilocks> for PackedGoldilocksAVX512 {
-    #[allow(clippy::suspicious_op_assign_impl)]
-    #[inline]
-    fn div_assign(&mut self, rhs: Goldilocks) {
-        *self *= rhs.inverse();
-    }
-}
-
 impl From<Goldilocks> for PackedGoldilocksAVX512 {
     fn from(x: Goldilocks) -> Self {
         Self([x; WIDTH])
     }
 }
 
-impl Mul<Self> for PackedGoldilocksAVX512 {
+impl Add for PackedGoldilocksAVX512 {
     type Output = Self;
     #[inline]
-    fn mul(self, rhs: Self) -> Self {
-        Self::new(unsafe { mul(self.get(), rhs.get()) })
+    fn add(self, rhs: Self) -> Self {
+        Self::new(unsafe { add(self.get(), rhs.get()) })
     }
 }
-impl Mul<Goldilocks> for PackedGoldilocksAVX512 {
+
+impl Sub for PackedGoldilocksAVX512 {
     type Output = Self;
     #[inline]
-    fn mul(self, rhs: Goldilocks) -> Self {
-        self * Self::from(rhs)
-    }
-}
-impl Mul<PackedGoldilocksAVX512> for Goldilocks {
-    type Output = PackedGoldilocksAVX512;
-    #[inline]
-    fn mul(self, rhs: PackedGoldilocksAVX512) -> Self::Output {
-        Self::Output::from(self) * rhs
-    }
-}
-impl MulAssign<Self> for PackedGoldilocksAVX512 {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = *self * rhs;
-    }
-}
-impl MulAssign<Goldilocks> for PackedGoldilocksAVX512 {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Goldilocks) {
-        *self = *self * rhs;
+    fn sub(self, rhs: Self) -> Self {
+        Self::new(unsafe { sub(self.get(), rhs.get()) })
     }
 }
 
@@ -137,12 +73,19 @@ impl Neg for PackedGoldilocksAVX512 {
     }
 }
 
-impl Product for PackedGoldilocksAVX512 {
+impl Mul for PackedGoldilocksAVX512 {
+    type Output = Self;
     #[inline]
-    fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
+    fn mul(self, rhs: Self) -> Self {
+        Self::new(unsafe { mul(self.get(), rhs.get()) })
     }
 }
+
+impl_add_assign!(PackedGoldilocksAVX512);
+impl_sub_assign!(PackedGoldilocksAVX512);
+impl_mul_methods!(PackedGoldilocksAVX512);
+ring_sum!(PackedGoldilocksAVX512);
+impl_rng!(PackedGoldilocksAVX512);
 
 impl PrimeCharacteristicRing for PackedGoldilocksAVX512 {
     type PrimeSubfield = Goldilocks;
@@ -168,6 +111,12 @@ impl PrimeCharacteristicRing for PackedGoldilocksAVX512 {
         unsafe { reconstitute_from_base(Goldilocks::zero_vec(len * WIDTH)) }
     }
 }
+
+impl_add_base_field!(PackedGoldilocksAVX512, Goldilocks);
+impl_sub_base_field!(PackedGoldilocksAVX512, Goldilocks);
+impl_mul_base_field!(PackedGoldilocksAVX512, Goldilocks);
+impl_div_methods!(PackedGoldilocksAVX512, Goldilocks);
+impl_sum_prod_base_field!(PackedGoldilocksAVX512, Goldilocks);
 
 impl Algebra<Goldilocks> for PackedGoldilocksAVX512 {}
 
@@ -231,54 +180,6 @@ unsafe impl PackedFieldPow2 for PackedGoldilocksAVX512 {
             _ => panic!("unsupported block_len"),
         };
         (Self::new(res0), Self::new(res1))
-    }
-}
-
-impl Sub<Self> for PackedGoldilocksAVX512 {
-    type Output = Self;
-    #[inline]
-    fn sub(self, rhs: Self) -> Self {
-        Self::new(unsafe { sub(self.get(), rhs.get()) })
-    }
-}
-impl Sub<Goldilocks> for PackedGoldilocksAVX512 {
-    type Output = Self;
-    #[inline]
-    fn sub(self, rhs: Goldilocks) -> Self {
-        self - Self::from(rhs)
-    }
-}
-impl Sub<PackedGoldilocksAVX512> for Goldilocks {
-    type Output = PackedGoldilocksAVX512;
-    #[inline]
-    fn sub(self, rhs: PackedGoldilocksAVX512) -> Self::Output {
-        Self::Output::from(self) - rhs
-    }
-}
-impl SubAssign<Self> for PackedGoldilocksAVX512 {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
-    }
-}
-impl SubAssign<Goldilocks> for PackedGoldilocksAVX512 {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Goldilocks) {
-        *self = *self - rhs;
-    }
-}
-
-impl Sum for PackedGoldilocksAVX512 {
-    #[inline]
-    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO)
-    }
-}
-
-impl Distribution<PackedGoldilocksAVX512> for StandardUniform {
-    #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedGoldilocksAVX512 {
-        PackedGoldilocksAVX512(rng.random())
     }
 }
 

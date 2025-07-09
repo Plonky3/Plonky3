@@ -3,11 +3,14 @@ use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::{array, fmt, stringify};
 
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
+use p3_field::op_assign_macros::{
+    impl_add_assign, impl_div_methods, impl_mul_methods, impl_sub_assign, ring_sum,
+};
 use p3_field::{
     Field, InjectiveMonomial, Packable, PrimeCharacteristicRing, PrimeField, RawDataSerializable,
     TwoAdicField, quotient_map_small_int,
@@ -416,20 +419,6 @@ impl Add for Bn254 {
     }
 }
 
-impl AddAssign for Bn254 {
-    #[inline]
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
-impl Sum for Bn254 {
-    #[inline]
-    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO)
-    }
-}
-
 impl Sub for Bn254 {
     type Output = Self;
 
@@ -446,13 +435,6 @@ impl Sub for Bn254 {
         }
 
         Self::new_monty(sub)
-    }
-}
-
-impl SubAssign for Bn254 {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
     }
 }
 
@@ -474,29 +456,11 @@ impl Mul for Bn254 {
     }
 }
 
-impl MulAssign for Bn254 {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = *self * rhs;
-    }
-}
-
-impl Product for Bn254 {
-    #[inline]
-    fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
-    }
-}
-
-impl Div for Bn254 {
-    type Output = Self;
-
-    #[allow(clippy::suspicious_arithmetic_impl)]
-    #[inline]
-    fn div(self, rhs: Self) -> Self {
-        self * rhs.inverse()
-    }
-}
+impl_add_assign!(Bn254);
+impl_sub_assign!(Bn254);
+impl_mul_methods!(Bn254);
+ring_sum!(Bn254);
+impl_div_methods!(Bn254, Bn254);
 
 impl Distribution<Bn254> for StandardUniform {
     #[inline]
