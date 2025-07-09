@@ -281,7 +281,7 @@ where
         let (first_layer_commitment, first_layer_data) =
             self.fri_params.mmcs.commit(first_layer_mats);
         challenger.observe(first_layer_commitment.clone());
-        let bivariate_beta :Challenge= challenger.sample_algebra_element();
+        let bivariate_beta: Challenge = challenger.sample_algebra_element();
 
         // Fold all first layers at bivariate_beta.
 
