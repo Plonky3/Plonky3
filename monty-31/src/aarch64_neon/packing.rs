@@ -24,7 +24,7 @@ pub trait MontyParametersNeon {
 }
 
 /// Vectorized NEON implementation of `MontyField31` arithmetic.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // Needed to make `transmute`s safe.
 pub struct PackedMontyField31Neon<PMP: PackedMontyParameters>(pub [MontyField31<PMP>; WIDTH]);
 
@@ -396,13 +396,6 @@ impl<PMP: PackedMontyParameters> From<MontyField31<PMP>> for PackedMontyField31N
     #[inline]
     fn from(value: MontyField31<PMP>) -> Self {
         Self::broadcast(value)
-    }
-}
-
-impl<PMP: PackedMontyParameters> Default for PackedMontyField31Neon<PMP> {
-    #[inline]
-    fn default() -> Self {
-        MontyField31::<PMP>::default().into()
     }
 }
 

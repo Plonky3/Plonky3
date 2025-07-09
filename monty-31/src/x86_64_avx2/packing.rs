@@ -25,7 +25,7 @@ pub trait MontyParametersAVX2 {
 }
 
 /// Vectorized AVX2 implementation of `MontyField31<FP>` arithmetic.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // This is needed to make `transmute`s safe.
 pub struct PackedMontyField31AVX2<PMP: PackedMontyParameters>(pub [MontyField31<PMP>; WIDTH]);
 
@@ -883,13 +883,6 @@ impl<PMP: PackedMontyParameters> From<MontyField31<PMP>> for PackedMontyField31A
     #[inline]
     fn from(value: MontyField31<PMP>) -> Self {
         Self::broadcast(value)
-    }
-}
-
-impl<PMP: PackedMontyParameters> Default for PackedMontyField31AVX2<PMP> {
-    #[inline]
-    fn default() -> Self {
-        MontyField31::<PMP>::default().into()
     }
 }
 

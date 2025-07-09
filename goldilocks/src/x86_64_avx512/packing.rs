@@ -1,7 +1,6 @@
 use alloc::vec::Vec;
 use core::arch::x86_64::*;
-use core::fmt;
-use core::fmt::{Debug, Formatter};
+use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -25,7 +24,7 @@ const WIDTH: usize = 8;
 /// `PackedGoldilocksAVX512`. We need to ensure that `PackedGoldilocksAVX512` has the same alignment as
 /// `Goldilocks`. Thus we wrap `[Goldilocks; 8]` and use the `new` and `get` methods to
 /// convert to and from `__m512i`.
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct PackedGoldilocksAVX512(pub [Goldilocks; WIDTH]);
 
@@ -71,20 +70,6 @@ impl AddAssign<Goldilocks> for PackedGoldilocksAVX512 {
     #[inline]
     fn add_assign(&mut self, rhs: Goldilocks) {
         *self = *self + rhs;
-    }
-}
-
-impl Debug for PackedGoldilocksAVX512 {
-    #[inline]
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "({:?})", self.get())
-    }
-}
-
-impl Default for PackedGoldilocksAVX512 {
-    #[inline]
-    fn default() -> Self {
-        Self::ZERO
     }
 }
 
