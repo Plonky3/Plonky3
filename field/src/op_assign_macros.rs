@@ -11,7 +11,7 @@
 //
 // whereas `ring_add_assign!(MontyField31, (MontyParameters, MP))` produces:
 //
-// impl<MP: MontyParameters> AddAssign for MontyField31<FP>
+// impl<MP: MontyParameters> AddAssign for MontyField31<MP>
 // ...
 
 /// Given a struct which implements `Add` implement `AddAssign`.
