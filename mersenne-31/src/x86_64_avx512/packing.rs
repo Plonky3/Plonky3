@@ -6,7 +6,7 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use p3_field::exponentiation::exp_1717986917;
 use p3_field::op_assign_macros::{
-    algebra_add_from_field, algebra_div_from_field, algebra_field_sum_prod, algebra_mul_from_field,
+    algebra_add_from_field, div_from_inverse, algebra_field_sum_prod, algebra_mul_from_field,
     algebra_sub_from_field, ring_add_assign, ring_mul_methods, ring_sub_assign, ring_sum,
 };
 use p3_field::{
@@ -449,7 +449,7 @@ impl PermutationMonomial<5> for PackedMersenne31AVX512 {
 algebra_add_from_field!(PackedMersenne31AVX512, Mersenne31);
 algebra_sub_from_field!(PackedMersenne31AVX512, Mersenne31);
 algebra_mul_from_field!(PackedMersenne31AVX512, Mersenne31);
-algebra_div_from_field!(PackedMersenne31AVX512, Mersenne31);
+div_from_inverse!(PackedMersenne31AVX512, Mersenne31);
 algebra_field_sum_prod!(PackedMersenne31AVX512, Mersenne31);
 
 impl Algebra<Mersenne31> for PackedMersenne31AVX512 {}

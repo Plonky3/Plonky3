@@ -6,7 +6,7 @@ use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::op_assign_macros::{
-    algebra_add_from_field, algebra_div_from_field, algebra_field_sum_prod, algebra_mul_from_field,
+    algebra_add_from_field, div_from_inverse, algebra_field_sum_prod, algebra_mul_from_field,
     algebra_sub_from_field, ring_add_assign, ring_mul_methods, ring_sub_assign, ring_sum,
 };
 use p3_field::{
@@ -1006,7 +1006,7 @@ algebra_mul_from_field!(
     MontyField31,
     (PackedMontyParameters, PMP)
 );
-algebra_div_from_field!(PackedMontyField31AVX2, MontyField31, (FieldParameters, FP));
+div_from_inverse!(PackedMontyField31AVX2, MontyField31, (FieldParameters, FP));
 algebra_field_sum_prod!(PackedMontyField31AVX2, MontyField31, (FieldParameters, FP));
 
 impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31AVX2<FP> {}

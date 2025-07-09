@@ -93,35 +93,6 @@ macro_rules! ring_mul_methods {
     };
 }
 
-/// Given a struct which implements `Mul` and `.inverse()` implement `Div, DivAssign`.
-///
-/// Both are implemented in the simplest way by inverting the right hand side and
-/// using `mul` or `mul_assign`.
-#[macro_export]
-macro_rules! field_div_methods {
-    ($type:ty $(, ($type_param:ty, $param_name:ty))?) => {
-        paste::paste! {
-            impl$(<$param_name: $type_param>)? Div for $type$(<$param_name>)? {
-                type Output = Self;
-
-                #[inline]
-                #[allow(clippy::suspicious_arithmetic_impl)]
-                fn div(self, rhs: Self) -> Self {
-                    self * rhs.inverse()
-                }
-            }
-
-            impl$(<$param_name: $type_param>)? DivAssign for $type$(<$param_name>)? {
-                #[inline]
-                #[allow(clippy::suspicious_op_assign_impl)]
-                fn div_assign(&mut self, rhs: Self) {
-                    *self *= rhs.inverse();
-                }
-            }
-        }
-    };
-}
-
 /// Given two structs `Alg` and `Field` where `Alg` implements `From<Field>`, implement
 /// `Add<Field> and AddAssign<Field>` for `Alg` and `Add<Alg>` for `Field`.
 ///
@@ -234,13 +205,15 @@ macro_rules! algebra_mul_from_field {
 }
 
 /// Given two structs `Alg` and `Field` where `Alg` implements `From<Field>`, implement
-/// `Div<Field> and DivAssign<Field>` for `Alg`.
+/// `Div<Field>` and `DivAssign<Field>` for `Alg`.
 ///
 /// Both are implemented in the simplest way by first applying the `.inverse()` map from
 /// `Field` then using the `From` to map the inverse to an `Alg` element before
 ///  applying the native `mul` or `mul_assign` methods on `Alg` elements.
+///
+/// This can also be used with `Alg = Field` to implement `Div` and `DivAssign` for Field.
 #[macro_export]
-macro_rules! algebra_div_from_field {
+macro_rules! div_from_inverse {
     ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
         paste::paste! {
             impl$(<$param_name: $type_param>)? Div<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
@@ -297,7 +270,6 @@ macro_rules! algebra_field_sum_prod {
 }
 
 pub use {
-    algebra_add_from_field, algebra_div_from_field, algebra_field_sum_prod, algebra_mul_from_field,
-    algebra_sub_from_field, field_div_methods, ring_add_assign, ring_mul_methods, ring_sub_assign,
-    ring_sum,
+    algebra_add_from_field, div_from_inverse, algebra_field_sum_prod, algebra_mul_from_field,
+    algebra_sub_from_field, ring_add_assign, ring_mul_methods, ring_sub_assign, ring_sum,
 };

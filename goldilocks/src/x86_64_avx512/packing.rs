@@ -8,8 +8,8 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::op_assign_macros::{
-    algebra_add_from_field, algebra_div_from_field, algebra_field_sum_prod, algebra_mul_from_field,
-    algebra_sub_from_field, ring_add_assign, ring_mul_methods, ring_sub_assign, ring_sum,
+    algebra_add_from_field, algebra_field_sum_prod, algebra_mul_from_field, algebra_sub_from_field,
+    div_from_inverse, ring_add_assign, ring_mul_methods, ring_sub_assign, ring_sum,
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
@@ -136,7 +136,7 @@ impl PrimeCharacteristicRing for PackedGoldilocksAVX512 {
 algebra_add_from_field!(PackedGoldilocksAVX512, Goldilocks);
 algebra_sub_from_field!(PackedGoldilocksAVX512, Goldilocks);
 algebra_mul_from_field!(PackedGoldilocksAVX512, Goldilocks);
-algebra_div_from_field!(PackedGoldilocksAVX512, Goldilocks);
+div_from_inverse!(PackedGoldilocksAVX512, Goldilocks);
 algebra_field_sum_prod!(PackedGoldilocksAVX512, Goldilocks);
 
 impl Algebra<Goldilocks> for PackedGoldilocksAVX512 {}
