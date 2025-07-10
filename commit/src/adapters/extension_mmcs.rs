@@ -13,9 +13,6 @@ use crate::{BatchOpening, BatchOpeningRef, Mmcs};
 /// `ExtensionMmcs` allows committing to and opening matrices over an extension field by internally
 /// using an MMCS defined on the base field. It works by flattening each extension field element
 /// into its base field coordinates for commitment, and then reconstructing them on opening.
-///
-/// # Usage
-/// Use this to seamlessly commit to matrices over `EF` using an existing MMCS on `F`.
 #[derive(Clone, Debug)]
 pub struct ExtensionMmcs<F, EF, InnerMmcs> {
     /// The inner MMCS instance used to handle commitments at the base field level.
