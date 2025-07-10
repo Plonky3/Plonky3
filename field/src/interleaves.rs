@@ -7,6 +7,9 @@ pub mod interleave {
 
     #[inline]
     #[must_use]
+    /// Interleave two vectors of 32-bit integers.
+    ///
+    /// Maps `[a0, ..., a3], [b0, ..., b3], ` to `[a0, b0, ...], [..., a3, b3]`.
     pub fn interleave_u32(v0: uint32x4_t, v1: uint32x4_t) -> (uint32x4_t, uint32x4_t) {
         // We want this to compile to:
         //      trn1  res0.4s, v0.4s, v1.4s
@@ -21,6 +24,9 @@ pub mod interleave {
 
     #[inline]
     #[must_use]
+    /// Interleave two vectors of 64-bit integers.
+    ///
+    /// Maps `[a0, a1], [b0, b1], ` to `[a0, b0], [a1, b1]`.
     pub fn interleave_u64(v0: uint32x4_t, v1: uint32x4_t) -> (uint32x4_t, uint32x4_t) {
         // We want this to compile to:
         //      trn1  res0.2d, v0.2d, v1.2d
@@ -51,6 +57,9 @@ pub mod interleave {
 
     #[inline]
     #[must_use]
+    /// Interleave two vectors of 32-bit integers.
+    ///
+    /// Maps `[a0, ..., a7], [b0, ..., b7], ` to `[a0, b0, ...], [..., a7, b7]`.
     pub fn interleave_u32(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
         // We want this to compile to:
         //      vpsllq    t, a, 32
@@ -86,6 +95,9 @@ pub mod interleave {
 
     #[inline]
     #[must_use]
+    /// Interleave two vectors of 64-bit integers.
+    ///
+    /// Maps `[a0, ..., a3], [b0, ..., b3], ` to `[a0, b0, ...], [..., a3, b3]`.
     pub fn interleave_u64(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
         // We want this to compile to:
         //      vpunpcklqdq   res0, a, b
@@ -104,6 +116,9 @@ pub mod interleave {
 
     #[inline]
     #[must_use]
+    /// Interleave two vectors of 128-bit integers.
+    ///
+    /// Maps `[a0, a1], [b0, b1], ` to `[a0, b0], [a1, b1]`.
     pub fn interleave_u128(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
         // We want this to compile to:
         //      vperm2i128  t, a, b, 21h
@@ -176,6 +191,9 @@ pub mod interleave {
 
     #[inline]
     #[must_use]
+    /// Interleave two vectors of 32-bit integers.
+    ///
+    /// Maps `[a0, ..., a15], [b0, ..., b15], ` to `[a0, b0, ...], [..., a15, b15]`.
     pub fn interleave_u32(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
         // If we have AVX-512VBMI2, we want this to compile to:
         //      vpshrdq    t, x, y, 32
@@ -226,6 +244,9 @@ pub mod interleave {
 
     #[inline]
     #[must_use]
+    /// Interleave two vectors of 64-bit integers.
+    ///
+    /// Maps `[a0, ..., a7], [b0, ..., b7], ` to `[a0, b0, ...], [..., a7, b7]`.
     pub fn interleave_u64(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
         // We want this to compile to:
         //      vshufpd    t, x, y, 55h
@@ -256,6 +277,9 @@ pub mod interleave {
 
     #[inline]
     #[must_use]
+    /// Interleave two vectors of 128-bit integers.
+    ///
+    /// Maps `[a0, ..., a3], [b0, ..., b3], ` to `[a0, b0, ...], [..., a3, b3]`.
     pub fn interleave_u128(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
         // We want this to compile to:
         //      vmovdqa64   t, INTERLEAVE4_INDICES
@@ -292,6 +316,9 @@ pub mod interleave {
 
     #[inline]
     #[must_use]
+    /// Interleave two vectors of 256-bit integers.
+    ///
+    /// Maps `[a0, a1], [b0, b1], ` to `[a0, b0], [a1, b1]`.
     pub fn interleave_u256(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
         // We want this to compile to:
         //      vshufi64x2  t, x, b, 4eh
@@ -321,6 +348,46 @@ pub mod interleave {
     }
 }
 
+/// A macro to implement the PackedFieldPow2 trait for PackedFields. The macro assumes that the PackedFields
+/// have a `to_vector` and `from_vector` method, which convert between the PackedField and a packed vector.
+///
+/// # Arguments:
+/// - `$type`: The type of the PackedField.
+/// - `($type_param, $param_name)`: Optional type parameter if one is needed and a name for it.
+/// - `; [ ($block_len, $func), ... ]`: A list of block lengths and their corresponding interleaving functions.
+/// - `$width`: The width of the PackedField, corresponding to the largest possible block length.
+///
+/// For example, calling this macro with:
+/// ```rust,ignore
+/// impl_packed_field_pow_2!(
+///    PackedMontyField31Neon, (FieldParameters, FP);
+///    [
+///        (1, interleave_u32),
+///        (2, interleave_u64),
+///   ],
+///    4
+/// );
+/// ```
+/// crates the code:
+/// ```rust,ignore
+/// impl<FP: FieldParameters> PackedFieldPow2 for PackedMontyField31Neon<FP> {
+///     #[inline]
+///     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
+///         let (v0, v1) = (self.to_vector(), other.to_vector());
+///         let (res0, res1) = match block_len {
+///             1 => interleave_u32(v0, v1),
+///             2 => interleave_u64(v0, v1),
+///             4 => (v0, v1),
+///             _ => panic!("unsupported block_len"),
+///         };
+///         unsafe {
+///             // Safety: We haven't changed any values, just moved data around
+///             // so all entries still represent valid field elements.
+///             (Self::from_vector(res0), Self::from_vector(res1))
+///         }
+///     }
+/// }
+/// ```
 #[macro_export]
 macro_rules! impl_packed_field_pow_2 {
     // Accepts: type, block sizes as (block_len, function), and optional type param
@@ -343,7 +410,8 @@ macro_rules! impl_packed_field_pow_2 {
                         _ => panic!("unsupported block_len"),
                     };
                     unsafe {
-                        // Safety: all values are in canonical form (we haven't changed them).
+                        // Safety: We haven't changed any values, just moved data around
+                        // so all entries still represent valid field elements.
                         (Self::from_vector(res0), Self::from_vector(res1))
                     }
                 }

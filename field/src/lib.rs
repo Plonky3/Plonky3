@@ -28,6 +28,6 @@ pub use array::*;
 pub use batch_inverse::*;
 pub use field::*;
 pub use helpers::*;
-#[allow(unused_imports)] // Used when vectorization is available.
-pub use interleaves::*;
+#[allow(unused_imports)]
+pub use interleaves::*; // Only used when vectorization is available.
 pub use packed::*;
