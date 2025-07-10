@@ -319,3 +319,36 @@ pub mod interleave {
         }
     }
 }
+
+#[macro_export]
+macro_rules! impl_packed_field_pow_2 {
+    // Accepts: type, block sizes as (block_len, function), and optional type param
+    (
+        $type:ty
+        $(, ($type_param:ty, $param_name:ty))?
+        ; [ $( ($block_len:expr, $func:ident) ),* $(,)? ],
+        $width:expr
+    ) => {
+        paste::paste! {
+            unsafe impl$(<$param_name: $type_param>)? PackedFieldPow2 for $type$(<$param_name>)? {
+                #[inline]
+                fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
+                    let (v0, v1) = (self.to_vector(), other.to_vector());
+                    let (res0, res1) = match block_len {
+                        $(
+                            $block_len => $func(v0, v1),
+                        )*
+                        $width => (v0, v1),
+                        _ => panic!("unsupported block_len"),
+                    };
+                    unsafe {
+                        // Safety: all values are in canonical form (we haven't changed them).
+                        (Self::from_vector(res0), Self::from_vector(res1))
+                    }
+                }
+            }
+        }
+    };
+}
+
+pub use impl_packed_field_pow_2;

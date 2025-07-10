@@ -13,7 +13,7 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing,
+    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
@@ -519,19 +519,11 @@ unsafe impl<FP: FieldParameters> PackedField for PackedMontyField31Neon<FP> {
     type Scalar = MontyField31<FP>;
 }
 
-unsafe impl<FP: FieldParameters> PackedFieldPow2 for PackedMontyField31Neon<FP> {
-    #[inline]
-    fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
-        let (v0, v1) = (self.to_vector(), other.to_vector());
-        let (res0, res1) = match block_len {
-            1 => interleave_u32(v0, v1),
-            2 => interleave_u64(v0, v1),
-            4 => (v0, v1),
-            _ => panic!("unsupported block_len"),
-        };
-        unsafe {
-            // Safety: all values are in canonical form (we haven't changed them).
-            (Self::from_vector(res0), Self::from_vector(res1))
-        }
-    }
-}
+impl_packed_field_pow_2!(
+    PackedMontyField31Neon, (FieldParameters, FP);
+    [
+        (1, interleave_u32),
+        (2, interleave_u64),
+    ],
+    WIDTH
+);
