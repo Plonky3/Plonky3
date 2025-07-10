@@ -28,5 +28,9 @@ pub use array::*;
 pub use batch_inverse::*;
 pub use field::*;
 pub use helpers::*;
+#[cfg(any(
+    all(target_arch = "x86_64", target_feature = "avx2"),
+    all(target_arch = "aarch64", target_feature = "neon")
+))]
 pub use interleaves::*;
 pub use packed::*;
