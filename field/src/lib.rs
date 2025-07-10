@@ -12,6 +12,7 @@ pub mod extension;
 mod field;
 mod helpers;
 pub mod integers;
+mod interleaves;
 pub mod op_assign_macros;
 mod packed;
 
@@ -19,4 +20,5 @@ pub use array::*;
 pub use batch_inverse::*;
 pub use field::*;
 pub use helpers::*;
+pub use interleaves::*;
 pub use packed::*;
