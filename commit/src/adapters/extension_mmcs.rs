@@ -18,7 +18,6 @@ pub struct ExtensionMmcs<F, EF, InnerMmcs> {
     /// The inner MMCS instance used to handle commitments at the base field level.
     pub(crate) inner: InnerMmcs,
 
-    /// Marker to tie the base and extension fields together at the type level.
     pub(crate) _phantom: PhantomData<(F, EF)>,
 }
 
