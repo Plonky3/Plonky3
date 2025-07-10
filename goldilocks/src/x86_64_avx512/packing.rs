@@ -21,31 +21,55 @@ use rand::distr::{Distribution, StandardUniform};
 use crate::Goldilocks;
 
 const WIDTH: usize = 8;
-/// AVX512 Goldilocks Field
-///
-/// Ideally `PackedGoldilocksAVX512` would wrap `__m512i`. Unfortunately, `__m512i` has an alignment
-/// of 64B, which would preclude us from casting `[Goldilocks; 8]` (alignment 8B) to
-/// `PackedGoldilocksAVX512`. We need to ensure that `PackedGoldilocksAVX512` has the same alignment as
-/// `Goldilocks`. Thus we wrap `[Goldilocks; 8]` and use the `new` and `get` methods to
-/// convert to and from `__m512i`.
+
+/// Vectorized AVX512 implementation of `Goldilocks` arithmetic.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-#[repr(transparent)]
+#[repr(transparent)] // Needed to make `transmute`s safe.
 pub struct PackedGoldilocksAVX512(pub [Goldilocks; WIDTH]);
 
 impl PackedGoldilocksAVX512 {
+    /// Get an arch-specific vector representing the packed values.
     #[inline]
-    fn new(x: __m512i) -> Self {
-        unsafe { transmute(x) }
+    #[must_use]
+    pub(crate) fn to_vector(self) -> __m512i {
+        unsafe {
+            // Safety: `Goldilocks` is `repr(transparent)` so it can be transmuted to `u64`. It
+            // follows that `[Goldilocks; WIDTH]` can be transmuted to `[u64; WIDTH]`, which can be
+            // transmuted to `__m512i`, since arrays are guaranteed to be contiguous in memory.
+            // Finally `PackedGoldilocksAVX512` is `repr(transparent)` so it can be transmuted to
+            // `[Goldilocks; WIDTH]`.
+            transmute(self)
+        }
     }
+
+    /// Make a packed field vector from an arch-specific vector.
+    ///
+    /// Elements of `Goldilocks` are allowed to be arbitrary u64s so this function
+    /// is safe unlike the `Mersenne31/MontyField31` variants.
     #[inline]
-    fn get(&self) -> __m512i {
-        unsafe { transmute(*self) }
+    #[must_use]
+    pub(crate) fn from_vector(vector: __m512i) -> Self {
+        unsafe {
+            // Safety: `__m512i` can be transmuted to `[u64; WIDTH]` (since arrays elements are
+            // contiguous in memory), which can be transmuted to `[Goldilocks; WIDTH]` (since
+            // `Goldilocks` is `repr(transparent)`), which in turn can be transmuted to
+            // `PackedGoldilocksAVX512` (since `PackedGoldilocksAVX512` is also `repr(transparent)`).
+            transmute(vector)
+        }
+    }
+
+    /// Copy `value` to all positions in a packed vector. This is the same as
+    /// `From<Goldilocks>::from`, but `const`.
+    #[inline]
+    #[must_use]
+    const fn broadcast(value: Goldilocks) -> Self {
+        Self([value; WIDTH])
     }
 }
 
 impl From<Goldilocks> for PackedGoldilocksAVX512 {
     fn from(x: Goldilocks) -> Self {
-        Self([x; WIDTH])
+        Self::broadcast(x)
     }
 }
 
@@ -53,7 +77,7 @@ impl Add for PackedGoldilocksAVX512 {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        Self::new(unsafe { add(self.get(), rhs.get()) })
+        Self::from_vector(add(self.to_vector(), rhs.to_vector()))
     }
 }
 
@@ -61,7 +85,7 @@ impl Sub for PackedGoldilocksAVX512 {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        Self::new(unsafe { sub(self.get(), rhs.get()) })
+        Self::from_vector(sub(self.to_vector(), rhs.to_vector()))
     }
 }
 
@@ -69,7 +93,7 @@ impl Neg for PackedGoldilocksAVX512 {
     type Output = Self;
     #[inline]
     fn neg(self) -> Self {
-        Self::new(unsafe { neg(self.get()) })
+        Self::from_vector(neg(self.to_vector()))
     }
 }
 
@@ -77,7 +101,7 @@ impl Mul for PackedGoldilocksAVX512 {
     type Output = Self;
     #[inline]
     fn mul(self, rhs: Self) -> Self {
-        Self::new(unsafe { mul(self.get(), rhs.get()) })
+        Self::from_vector(mul(self.to_vector(), rhs.to_vector()))
     }
 }
 
@@ -90,10 +114,10 @@ impl_rng!(PackedGoldilocksAVX512);
 impl PrimeCharacteristicRing for PackedGoldilocksAVX512 {
     type PrimeSubfield = Goldilocks;
 
-    const ZERO: Self = Self([Goldilocks::ZERO; WIDTH]);
-    const ONE: Self = Self([Goldilocks::ONE; WIDTH]);
-    const TWO: Self = Self([Goldilocks::TWO; WIDTH]);
-    const NEG_ONE: Self = Self([Goldilocks::NEG_ONE; WIDTH]);
+    const ZERO: Self = Self::broadcast(Goldilocks::ZERO);
+    const ONE: Self = Self::broadcast(Goldilocks::ONE);
+    const TWO: Self = Self::broadcast(Goldilocks::TWO);
+    const NEG_ONE: Self = Self::broadcast(Goldilocks::NEG_ONE);
 
     #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
@@ -102,7 +126,7 @@ impl PrimeCharacteristicRing for PackedGoldilocksAVX512 {
 
     #[inline]
     fn square(&self) -> Self {
-        Self::new(unsafe { square(self.get()) })
+        Self::from_vector(square(self.to_vector()))
     }
 
     #[inline]
@@ -171,15 +195,15 @@ unsafe impl PackedField for PackedGoldilocksAVX512 {
 unsafe impl PackedFieldPow2 for PackedGoldilocksAVX512 {
     #[inline]
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
-        let (v0, v1) = (self.get(), other.get());
+        let (v0, v1) = (self.to_vector(), other.to_vector());
         let (res0, res1) = match block_len {
-            1 => unsafe { interleave1(v0, v1) },
-            2 => unsafe { interleave2(v0, v1) },
-            4 => unsafe { interleave4(v0, v1) },
+            1 => interleave1(v0, v1),
+            2 => interleave2(v0, v1),
+            4 => interleave4(v0, v1),
             8 => (v0, v1),
             _ => panic!("unsupported block_len"),
         };
-        (Self::new(res0), Self::new(res1))
+        (Self::from_vector(res0), Self::from_vector(res1))
     }
 }
 
@@ -194,6 +218,15 @@ unsafe fn canonicalize(x: __m512i) -> __m512i {
     }
 }
 
+/// Compute the modular addition `x + y mod FIELD_ORDER`.
+///
+/// This function is always safe if `y < FIELD_ORDER` but may also be used in a wider
+/// set of circumstances if bounds on `x` are known.
+///
+/// The result will be a u64 which may be greater than FIELD_ORDER.
+///
+/// Safety:
+///     User must ensure that x + y < 2^64 + FIELD_ORDER.
 #[inline]
 unsafe fn add_no_double_overflow_64_64(x: __m512i, y: __m512i) -> __m512i {
     unsafe {
@@ -203,6 +236,15 @@ unsafe fn add_no_double_overflow_64_64(x: __m512i, y: __m512i) -> __m512i {
     }
 }
 
+/// Compute the modular subtraction x - y mod FIELD_ORDER.
+///
+/// This function is always safe if `y < FIELD_ORDER` but may also be used in a wider
+/// set of circumstances if bounds on `x` are known.
+///
+/// The result will be a u64 which may be greater than FIELD_ORDER.
+///
+/// Safety:
+///     User must ensure that x - y > -FIELD_ORDER.
 #[inline]
 unsafe fn sub_no_double_overflow_64_64(x: __m512i, y: __m512i) -> __m512i {
     unsafe {
@@ -212,26 +254,36 @@ unsafe fn sub_no_double_overflow_64_64(x: __m512i, y: __m512i) -> __m512i {
     }
 }
 
+/// Goldilocks modular addition. Computes `x + y mod FIELD_ORDER`.
+///
+/// Inputs can be arbitrary, output is not guaranteed to be less than `FIELD_ORDER`.
 #[inline]
-unsafe fn add(x: __m512i, y: __m512i) -> __m512i {
+fn add(x: __m512i, y: __m512i) -> __m512i {
     unsafe { add_no_double_overflow_64_64(x, canonicalize(y)) }
 }
 
+/// Goldilocks modular subtraction. Computes `x - y mod FIELD_ORDER`.
+///
+/// Inputs can be arbitrary, output is not guaranteed to be less than `FIELD_ORDER`.
 #[inline]
-unsafe fn sub(x: __m512i, y: __m512i) -> __m512i {
+fn sub(x: __m512i, y: __m512i) -> __m512i {
     unsafe { sub_no_double_overflow_64_64(x, canonicalize(y)) }
 }
 
+/// Goldilocks modular negation. Computes `-x mod FIELD_ORDER`.
+///
+/// Input can be arbitrary, output is not guaranteed to be less than `FIELD_ORDER`.
 #[inline]
-unsafe fn neg(y: __m512i) -> __m512i {
+fn neg(y: __m512i) -> __m512i {
     unsafe { _mm512_sub_epi64(FIELD_ORDER, canonicalize(y)) }
 }
 
 #[allow(clippy::useless_transmute)]
 const LO_32_BITS_MASK: __mmask16 = unsafe { transmute(0b0101010101010101u16) };
 
+/// Full 64-bit by 64-bit multiplication.
 #[inline]
-unsafe fn mul64_64(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
+fn mul64_64(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
     unsafe {
         // We want to move the high 32 bits to the low position. The multiplication instruction ignores
         // the high 32 bits, so it's ok to just duplicate it into the low position. This duplication can
@@ -272,8 +324,9 @@ unsafe fn mul64_64(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
     }
 }
 
+/// Full 64-bit squaring.
 #[inline]
-unsafe fn square64(x: __m512i) -> (__m512i, __m512i) {
+fn square64(x: __m512i) -> (__m512i, __m512i) {
     unsafe {
         // Get high 32 bits of x. See comment in mul64_64_s.
         let x_hi = _mm512_castps_si512(_mm512_movehdup_ps(_mm512_castsi512_ps(x)));
@@ -298,29 +351,50 @@ unsafe fn square64(x: __m512i) -> (__m512i, __m512i) {
     }
 }
 
+/// Given a 128-bit value represented as two 64-bit halves, reduce it modulo the Goldilocks field order.
+///
+/// The result will be a 64-bit value but may be larger than `FIELD_ORDER`.
 #[inline]
-unsafe fn reduce128(x: (__m512i, __m512i)) -> __m512i {
+fn reduce128(x: (__m512i, __m512i)) -> __m512i {
     unsafe {
         let (hi0, lo0) = x;
+
+        // Find the high 32 bits of hi0.
         let hi_hi0 = _mm512_srli_epi64::<32>(hi0);
+
+        // Computes lo0_s - hi_hi0 mod FIELD_ORDER.
+        // Makes sense to do as 2^96 = -1 mod FIELD_ORDER.
+        // `sub_no_double_overflow_64_64` is safe to use as `hi_hi0 < 2^32`.
         let lo1 = sub_no_double_overflow_64_64(lo0, hi_hi0);
+
+        // Compute the product of the bottom 32 bits of hi0 with 2^64 = 2^32 - 1 mod FIELD_ORDER
+        // _mm256_mul_epu32 ignores the top 32 bits so just use that.
         let t1 = _mm512_mul_epu32(hi0, EPSILON);
+
+        // Clearly t1 <= (2^32 - 1)^2 = 2^64 - 2^33 + 1 < FIELD_ORDER so we can use `add_no_double_overflow_64_64` to get
+        // `lo1 + t1 mod FIELD_ORDER.`
         add_no_double_overflow_64_64(lo1, t1)
     }
 }
 
+/// Goldilocks modular multiplication. Computes `x * y mod FIELD_ORDER`.
+///
+/// Inputs can be arbitrary, output is not guaranteed to be less than `FIELD_ORDER`.
 #[inline]
-unsafe fn mul(x: __m512i, y: __m512i) -> __m512i {
-    unsafe { reduce128(mul64_64(x, y)) }
+fn mul(x: __m512i, y: __m512i) -> __m512i {
+    reduce128(mul64_64(x, y))
+}
+
+/// Goldilocks modular square. Computes `x^2 mod FIELD_ORDER`.
+///
+/// Input can be arbitrary, output is not guaranteed to be less than `FIELD_ORDER`.
+#[inline]
+fn square(x: __m512i) -> __m512i {
+    reduce128(square64(x))
 }
 
 #[inline]
-unsafe fn square(x: __m512i) -> __m512i {
-    unsafe { reduce128(square64(x)) }
-}
-
-#[inline]
-unsafe fn interleave1(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
+fn interleave1(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
     unsafe {
         let a = _mm512_unpacklo_epi64(x, y);
         let b = _mm512_unpackhi_epi64(x, y);
@@ -340,7 +414,7 @@ const INTERLEAVE2_IDX_B: __m512i = unsafe {
 };
 
 #[inline]
-unsafe fn interleave2(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
+fn interleave2(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
     unsafe {
         let a = _mm512_permutex2var_epi64(x, INTERLEAVE2_IDX_A, y);
         let b = _mm512_permutex2var_epi64(x, INTERLEAVE2_IDX_B, y);
@@ -349,7 +423,7 @@ unsafe fn interleave2(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
 }
 
 #[inline]
-unsafe fn interleave4(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
+fn interleave4(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
     unsafe {
         let a = _mm512_shuffle_i64x2::<0x44>(x, y);
         let b = _mm512_shuffle_i64x2::<0xee>(x, y);
