@@ -166,7 +166,7 @@ impl<'de, FP: FieldParameters> Deserialize<'de> for MontyField31<FP> {
     }
 }
 
-impl<FP: FieldParameters> Packable for MontyField31<FP> {}
+impl<MP: MontyParameters> Packable for MontyField31<MP> {}
 
 impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
     type PrimeSubfield = Self;

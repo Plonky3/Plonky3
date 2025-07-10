@@ -13,7 +13,8 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use p3_field::op_assign_macros::{
     impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
-    impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field, ring_sum,
+    impl_packed_value, impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field,
+    ring_sum,
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
@@ -1312,47 +1313,12 @@ fn interleave8(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
     }
 }
 
-unsafe impl<FP: FieldParameters> PackedValue for PackedMontyField31AVX512<FP> {
-    type Value = MontyField31<FP>;
-
-    const WIDTH: usize = WIDTH;
-
-    #[inline]
-    fn from_slice(slice: &[MontyField31<FP>]) -> &Self {
-        assert_eq!(slice.len(), Self::WIDTH);
-        unsafe {
-            // Safety: `[MontyField31<FP>; WIDTH]` can be transmuted to `PackedMontyField31AVX512` since the
-            // latter is `repr(transparent)`. They have the same alignment, so the reference cast is
-            // safe too.
-            &*slice.as_ptr().cast()
-        }
-    }
-    #[inline]
-    fn from_slice_mut(slice: &mut [MontyField31<FP>]) -> &mut Self {
-        assert_eq!(slice.len(), Self::WIDTH);
-        unsafe {
-            // Safety: `[MontyField31<FP>; WIDTH]` can be transmuted to `PackedMontyField31AVX512` since the
-            // latter is `repr(transparent)`. They have the same alignment, so the reference cast is
-            // safe too.
-            &mut *slice.as_mut_ptr().cast()
-        }
-    }
-
-    #[inline]
-    fn from_fn<F: FnMut(usize) -> MontyField31<FP>>(f: F) -> Self {
-        Self(core::array::from_fn(f))
-    }
-
-    #[inline]
-    fn as_slice(&self) -> &[MontyField31<FP>] {
-        &self.0
-    }
-
-    #[inline]
-    fn as_slice_mut(&mut self) -> &mut [MontyField31<FP>] {
-        &mut self.0
-    }
-}
+impl_packed_value!(
+    PackedMontyField31AVX512,
+    MontyField31,
+    WIDTH,
+    (PackedMontyParameters, PMP)
+);
 
 unsafe impl<FP: FieldParameters> PackedField for PackedMontyField31AVX512<FP> {
     type Scalar = MontyField31<FP>;

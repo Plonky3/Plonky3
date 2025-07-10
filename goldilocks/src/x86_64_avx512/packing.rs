@@ -158,35 +158,7 @@ impl PermutationMonomial<7> for PackedGoldilocksAVX512 {
     }
 }
 
-unsafe impl PackedValue for PackedGoldilocksAVX512 {
-    type Value = Goldilocks;
-
-    const WIDTH: usize = WIDTH;
-
-    #[inline]
-    fn from_slice(slice: &[Goldilocks]) -> &Self {
-        assert_eq!(slice.len(), Self::WIDTH);
-        unsafe { &*slice.as_ptr().cast() }
-    }
-    #[inline]
-    fn from_slice_mut(slice: &mut [Goldilocks]) -> &mut Self {
-        assert_eq!(slice.len(), Self::WIDTH);
-        unsafe { &mut *slice.as_mut_ptr().cast() }
-    }
-    #[inline]
-    fn as_slice(&self) -> &[Goldilocks] {
-        &self.0
-    }
-    #[inline]
-    fn as_slice_mut(&mut self) -> &mut [Goldilocks] {
-        &mut self.0
-    }
-
-    #[inline]
-    fn from_fn<F: FnMut(usize) -> Goldilocks>(f: F) -> Self {
-        Self(core::array::from_fn(f))
-    }
-}
+impl_packed_value!(PackedGoldilocksAVX512, Goldilocks, WIDTH);
 
 unsafe impl PackedField for PackedGoldilocksAVX512 {
     type Scalar = Goldilocks;

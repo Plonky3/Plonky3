@@ -7,7 +7,8 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use p3_field::exponentiation::exp_1717986917;
 use p3_field::op_assign_macros::{
     impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
-    impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field, ring_sum,
+    impl_packed_value, impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field,
+    ring_sum,
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
@@ -623,47 +624,7 @@ fn interleave8(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
     }
 }
 
-unsafe impl PackedValue for PackedMersenne31AVX512 {
-    type Value = Mersenne31;
-
-    const WIDTH: usize = WIDTH;
-
-    #[inline]
-    fn from_slice(slice: &[Mersenne31]) -> &Self {
-        assert_eq!(slice.len(), Self::WIDTH);
-        unsafe {
-            // Safety: `[Mersenne31; WIDTH]` can be transmuted to `PackedMersenne31AVX512` since the
-            // latter is `repr(transparent)`. They have the same alignment, so the reference cast is
-            // safe too.
-            &*slice.as_ptr().cast()
-        }
-    }
-    #[inline]
-    fn from_slice_mut(slice: &mut [Mersenne31]) -> &mut Self {
-        assert_eq!(slice.len(), Self::WIDTH);
-        unsafe {
-            // Safety: `[Mersenne31; WIDTH]` can be transmuted to `PackedMersenne31AVX512` since the
-            // latter is `repr(transparent)`. They have the same alignment, so the reference cast is
-            // safe too.
-            &mut *slice.as_mut_ptr().cast()
-        }
-    }
-
-    #[inline]
-    fn from_fn<F: FnMut(usize) -> Mersenne31>(f: F) -> Self {
-        Self(core::array::from_fn(f))
-    }
-
-    #[inline]
-    fn as_slice(&self) -> &[Mersenne31] {
-        &self.0
-    }
-
-    #[inline]
-    fn as_slice_mut(&mut self) -> &mut [Mersenne31] {
-        &mut self.0
-    }
-}
+impl_packed_value!(PackedMersenne31AVX512, Mersenne31, WIDTH);
 
 unsafe impl PackedField for PackedMersenne31AVX512 {
     type Scalar = Mersenne31;
