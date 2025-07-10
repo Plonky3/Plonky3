@@ -11,6 +11,7 @@ use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
+use p3_field::interleave::{interleave_u32, interleave_u64, interleave_u128, interleave_u256};
 use p3_field::op_assign_macros::{
     impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
     impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field, ring_sum,
@@ -33,7 +34,6 @@ pub trait MontyParametersAVX512 {
 }
 
 const EVENS: __mmask16 = 0b0101010101010101;
-const EVENS4: __mmask16 = 0x0f0f;
 
 /// Vectorized AVX-512F implementation of `MontyField31` arithmetic.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1137,181 +1137,6 @@ fn general_dot_product<
     }
 }
 
-// vpshrdq requires AVX-512VBMI2.
-#[cfg(target_feature = "avx512vbmi2")]
-#[inline]
-#[must_use]
-fn interleave1_antidiagonal(x: __m512i, y: __m512i) -> __m512i {
-    unsafe {
-        // Safety: If this code got compiled then AVX-512VBMI2 intrinsics are available.
-        x86_64::_mm512_shrdi_epi64::<32>(x, y)
-    }
-}
-
-// If we can't use vpshrdq, then do a vpermi2d, but we waste a register and double the latency.
-#[cfg(not(target_feature = "avx512vbmi2"))]
-#[inline]
-#[must_use]
-fn interleave1_antidiagonal(x: __m512i, y: __m512i) -> __m512i {
-    const INTERLEAVE1_INDICES: __m512i = unsafe {
-        // Safety: `[u32; 16]` is trivially transmutable to `__m512i`.
-        transmute::<[u32; WIDTH], _>([
-            0x01, 0x10, 0x03, 0x12, 0x05, 0x14, 0x07, 0x16, 0x09, 0x18, 0x0b, 0x1a, 0x0d, 0x1c,
-            0x0f, 0x1e,
-        ])
-    };
-    unsafe {
-        // Safety: If this code got compiled then AVX-512F intrinsics are available.
-        x86_64::_mm512_permutex2var_epi32(x, INTERLEAVE1_INDICES, y)
-    }
-}
-
-#[inline]
-#[must_use]
-fn interleave1(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
-    // If we have AVX-512VBMI2, we want this to compile to:
-    //      vpshrdq    t, x, y, 32
-    //      vpblendmd  res0 {EVENS}, t, x
-    //      vpblendmd  res1 {EVENS}, y, t
-    // throughput: 1.5 cyc/2 vec (21.33 els/cyc)
-    // latency: 2 cyc
-    //
-    // Otherwise, we want it to compile to:
-    //      vmovdqa32  t, INTERLEAVE1_INDICES
-    //      vpermi2d   t, x, y
-    //      vpblendmd  res0 {EVENS}, t, x
-    //      vpblendmd  res1 {EVENS}, y, t
-    // throughput: 1.5 cyc/2 vec (21.33 els/cyc)
-    // latency: 4 cyc
-
-    // We currently have:
-    //   x = [ x0  x1  x2  x3  x4  x5  x6  x7  x8  x9  xa  xb  xc  xd  xe  xf ],
-    //   y = [ y0  y1  y2  y3  y4  y5  y6  y7  y8  y9  ya  yb  yc  yd  ye  yf ].
-    // First form
-    //   t = [ x1  y0  x3  y2  x5  y4  x7  y6  x9  y8  xb  ya  xd  yc  xf  ye ].
-    let t = interleave1_antidiagonal(x, y);
-
-    unsafe {
-        // Safety: If this code got compiled then AVX-512F intrinsics are available.
-
-        // Then
-        //   res0 = [ x0  y0  x2  y2  x4  y4  x6  y6  x8  y8  xa  ya  xc  yc  xe  ye ],
-        //   res1 = [ x1  y1  x3  y3  x5  y5  x7  y7  x9  y9  xb  yb  xd  yd  xf  yf ].
-        (
-            x86_64::_mm512_mask_blend_epi32(EVENS, t, x),
-            x86_64::_mm512_mask_blend_epi32(EVENS, y, t),
-        )
-    }
-}
-
-#[inline]
-#[must_use]
-fn shuffle_epi64<const MASK: i32>(a: __m512i, b: __m512i) -> __m512i {
-    // The instruction is only available in the floating-point flavor; this distinction is only for
-    // historical reasons and no longer matters. We cast to floats, do the thing, and cast back.
-    unsafe {
-        let a = x86_64::_mm512_castsi512_pd(a);
-        let b = x86_64::_mm512_castsi512_pd(b);
-        x86_64::_mm512_castpd_si512(x86_64::_mm512_shuffle_pd::<MASK>(a, b))
-    }
-}
-
-#[inline]
-#[must_use]
-fn interleave2(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
-    // We want this to compile to:
-    //      vshufpd    t, x, y, 55h
-    //      vpblendmq  res0 {EVENS}, t, x
-    //      vpblendmq  res1 {EVENS}, y, t
-    // throughput: 1.5 cyc/2 vec (21.33 els/cyc)
-    // latency: 2 cyc
-
-    unsafe {
-        // Safety: If this code got compiled then AVX-512F intrinsics are available.
-
-        // We currently have:
-        //   x = [ x0  x1  x2  x3  x4  x5  x6  x7  x8  x9  xa  xb  xc  xd  xe  xf ],
-        //   y = [ y0  y1  y2  y3  y4  y5  y6  y7  y8  y9  ya  yb  yc  yd  ye  yf ].
-        // First form
-        //   t = [ x2  x3  y0  y1  x6  x7  y4  y5  xa  xb  y8  y9  xe  xf  yc  yd ].
-        let t = shuffle_epi64::<0b01010101>(x, y);
-
-        // Then
-        //   res0 = [ x0  x1  y0  y1  x4  x5  y4  y5  x8  x9  y8  y9  xc  xd  yc  yd ],
-        //   res1 = [ x2  x3  y2  y3  x6  x7  y6  y7  xa  xb  ya  yb  xe  xf  ye  yf ].
-        (
-            x86_64::_mm512_mask_blend_epi64(EVENS as __mmask8, t, x),
-            x86_64::_mm512_mask_blend_epi64(EVENS as __mmask8, y, t),
-        )
-    }
-}
-
-#[inline]
-#[must_use]
-fn interleave4(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
-    // We want this to compile to:
-    //      vmovdqa64   t, INTERLEAVE4_INDICES
-    //      vpermi2q    t, x, y
-    //      vpblendmd   res0 {EVENS4}, t, x
-    //      vpblendmd   res1 {EVENS4}, y, t
-    // throughput: 1.5 cyc/2 vec (21.33 els/cyc)
-    // latency: 4 cyc
-
-    const INTERLEAVE4_INDICES: __m512i = unsafe {
-        // Safety: `[u64; 8]` is trivially transmutable to `__m512i`.
-        transmute::<[u64; WIDTH / 2], _>([0o02, 0o03, 0o10, 0o11, 0o06, 0o07, 0o14, 0o15])
-    };
-
-    unsafe {
-        // Safety: If this code got compiled then AVX-512F intrinsics are available.
-
-        // We currently have:
-        //   x = [ x0  x1  x2  x3  x4  x5  x6  x7  x8  x9  xa  xb  xc  xd  xe  xf ],
-        //   y = [ y0  y1  y2  y3  y4  y5  y6  y7  y8  y9  ya  yb  yc  yd  ye  yf ].
-        // First form
-        //   t = [ x4  x5  x6  x7  y0  y1  y2  y3  xc  xd  xe  xf  y8  y9  ya  yb ].
-        let t = x86_64::_mm512_permutex2var_epi64(x, INTERLEAVE4_INDICES, y);
-
-        // Then
-        //   res0 = [ x0  x1  x2  x3  y0  y1  y2  y3  x8  x9  xa  xb  y8  y9  ya  yb ],
-        //   res1 = [ x4  x5  x6  x7  y4  y5  y6  y7  xc  xd  xe  xf  yc  yd  ye  yf ].
-        (
-            x86_64::_mm512_mask_blend_epi32(EVENS4, t, x),
-            x86_64::_mm512_mask_blend_epi32(EVENS4, y, t),
-        )
-    }
-}
-
-#[inline]
-#[must_use]
-fn interleave8(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
-    // We want this to compile to:
-    //      vshufi64x2  t, x, b, 4eh
-    //      vpblendmq   res0 {EVENS4}, t, x
-    //      vpblendmq   res1 {EVENS4}, y, t
-    // throughput: 1.5 cyc/2 vec (21.33 els/cyc)
-    // latency: 4 cyc
-
-    unsafe {
-        // Safety: If this code got compiled then AVX-512F intrinsics are available.
-
-        // We currently have:
-        //   x = [ x0  x1  x2  x3  x4  x5  x6  x7  x8  x9  xa  xb  xc  xd  xe  xf ],
-        //   y = [ y0  y1  y2  y3  y4  y5  y6  y7  y8  y9  ya  yb  yc  yd  ye  yf ].
-        // First form
-        //   t = [ x8  x9  xa  xb  xc  xd  xe  xf  y0  y1  y2  y3  y4  y5  y6  y7 ].
-        let t = x86_64::_mm512_shuffle_i64x2::<0b01_00_11_10>(x, y);
-
-        // Then
-        //   res0 = [ x0  x1  x2  x3  x4  x5  x6  x7  y0  y1  y2  y3  y4  y5  y6  y7 ],
-        //   res1 = [ x8  x9  xa  xb  xc  xd  xe  xf  y8  y9  ya  yb  yc  yd  ye  yf ].
-        (
-            x86_64::_mm512_mask_blend_epi64(EVENS4 as __mmask8, t, x),
-            x86_64::_mm512_mask_blend_epi64(EVENS4 as __mmask8, y, t),
-        )
-    }
-}
-
 unsafe impl<FP: FieldParameters> PackedValue for PackedMontyField31AVX512<FP> {
     type Value = MontyField31<FP>;
 
@@ -1368,10 +1193,10 @@ unsafe impl<FP: FieldParameters> PackedFieldPow2 for PackedMontyField31AVX512<FP
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
         let (v0, v1) = (self.to_vector(), other.to_vector());
         let (res0, res1) = match block_len {
-            1 => interleave1(v0, v1),
-            2 => interleave2(v0, v1),
-            4 => interleave4(v0, v1),
-            8 => interleave8(v0, v1),
+            1 => interleave_u32(v0, v1),
+            2 => interleave_u64(v0, v1),
+            4 => interleave_u128(v0, v1),
+            8 => interleave_u256(v0, v1),
             16 => (v0, v1),
             _ => panic!("unsupported block_len"),
         };
