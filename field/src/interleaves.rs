@@ -139,7 +139,8 @@ pub mod interleave {
     target_feature = "avx512f"
 ))]
 pub mod interleave {
-    use core::arch::x86_64::{self, __m512i, __mmask8, __mmask16};
+    use core::{arch::x86_64::{self, __m512i, __mmask16, __mmask8}};
+    use core::mem::transmute;
 
     const EVENS: __mmask16 = 0b0101010101010101;
     const EVENS4: __mmask16 = 0x0f0f;
@@ -266,7 +267,7 @@ pub mod interleave {
 
         const INTERLEAVE4_INDICES: __m512i = unsafe {
             // Safety: `[u64; 8]` is trivially transmutable to `__m512i`.
-            transmute::<[u64; WIDTH / 2], _>([0o02, 0o03, 0o10, 0o11, 0o06, 0o07, 0o14, 0o15])
+            transmute::<[u64; 8], _>([0o02, 0o03, 0o10, 0o11, 0o06, 0o07, 0o14, 0o15])
         };
 
         unsafe {
