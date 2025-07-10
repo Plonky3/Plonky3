@@ -139,7 +139,7 @@ pub mod interleave {
     target_feature = "avx512f"
 ))]
 pub mod interleave {
-    use core::{arch::x86_64::{self, __m512i, __mmask16, __mmask8}};
+    use core::arch::x86_64::{self, __m512i, __mmask8, __mmask16};
     use core::mem::transmute;
 
     const EVENS: __mmask16 = 0b0101010101010101;
