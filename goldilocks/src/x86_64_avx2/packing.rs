@@ -6,6 +6,7 @@ use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::exponentiation::exp_10540996611094048183;
+use p3_field::interleave::{interleave_u64, interleave_u128};
 use p3_field::op_assign_macros::{
     impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
     impl_packed_value, impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field,
@@ -13,7 +14,7 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, PrimeField64,
+    PermutationMonomial, PrimeCharacteristicRing, PrimeField64, impl_packed_field_pow_2,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
@@ -165,19 +166,14 @@ unsafe impl PackedField for PackedGoldilocksAVX2 {
     type Scalar = Goldilocks;
 }
 
-unsafe impl PackedFieldPow2 for PackedGoldilocksAVX2 {
-    #[inline]
-    fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
-        let (v0, v1) = (self.to_vector(), other.to_vector());
-        let (res0, res1) = match block_len {
-            1 => interleave1(v0, v1),
-            2 => interleave2(v0, v1),
-            4 => (v0, v1),
-            _ => panic!("unsupported block_len"),
-        };
-        (Self::from_vector(res0), Self::from_vector(res1))
-    }
-}
+impl_packed_field_pow_2!(
+    PackedGoldilocksAVX2;
+    [
+        (1, interleave_u64),
+        (2, interleave_u128),
+    ],
+    WIDTH
+);
 
 // Resources:
 // 1. Intel Intrinsics Guide for explanation of each intrinsic:
@@ -462,37 +458,6 @@ fn mul(x: __m256i, y: __m256i) -> __m256i {
 #[inline]
 fn square(x: __m256i) -> __m256i {
     reduce128(square64(x))
-}
-
-#[inline]
-fn interleave1(x: __m256i, y: __m256i) -> (__m256i, __m256i) {
-    unsafe {
-        let a = _mm256_unpacklo_epi64(x, y);
-        let b = _mm256_unpackhi_epi64(x, y);
-        (a, b)
-    }
-}
-
-#[inline]
-fn interleave2(x: __m256i, y: __m256i) -> (__m256i, __m256i) {
-    unsafe {
-        let y_lo = _mm256_castsi256_si128(y); // This has 0 cost.
-
-        // 1 places y_lo in the high half of x; 0 would place it in the lower half.
-        let a = _mm256_inserti128_si256::<1>(x, y_lo);
-        // NB: _mm256_permute2x128_si256 could be used here as well but _mm256_inserti128_si256 has
-        // lower latency on Zen 3 processors.
-
-        // Each nibble of the constant has the following semantics:
-        // 0 => src1[low 128 bits]
-        // 1 => src1[high 128 bits]
-        // 2 => src2[low 128 bits]
-        // 3 => src2[high 128 bits]
-        // The low (resp. high) nibble chooses the low (resp. high) 128 bits of the result.
-        let b = _mm256_permute2x128_si256::<0x31>(x, y);
-
-        (a, b)
-    }
 }
 
 #[cfg(test)]
