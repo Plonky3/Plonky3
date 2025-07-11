@@ -5,13 +5,14 @@ use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::exponentiation::exp_1717986917;
+use p3_field::interleave::{interleave_u32, interleave_u64};
 use p3_field::op_assign_macros::{
     impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
     impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field, ring_sum,
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing,
+    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
@@ -316,41 +317,6 @@ fn sub(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
     }
 }
 
-#[inline]
-#[must_use]
-fn interleave1(v0: uint32x4_t, v1: uint32x4_t) -> (uint32x4_t, uint32x4_t) {
-    // We want this to compile to:
-    //      trn1  res0.4s, v0.4s, v1.4s
-    //      trn2  res1.4s, v0.4s, v1.4s
-    // throughput: .5 cyc/2 vec (16 els/cyc)
-    // latency: 2 cyc
-    unsafe {
-        // Safety: If this code got compiled then NEON intrinsics are available.
-        (aarch64::vtrn1q_u32(v0, v1), aarch64::vtrn2q_u32(v0, v1))
-    }
-}
-
-#[inline]
-#[must_use]
-fn interleave2(v0: uint32x4_t, v1: uint32x4_t) -> (uint32x4_t, uint32x4_t) {
-    // We want this to compile to:
-    //      trn1  res0.2d, v0.2d, v1.2d
-    //      trn2  res1.2d, v0.2d, v1.2d
-    // throughput: .5 cyc/2 vec (16 els/cyc)
-    // latency: 2 cyc
-
-    // To transpose 64-bit blocks, cast the [u32; 4] vectors to [u64; 2], transpose, and cast back.
-    unsafe {
-        // Safety: If this code got compiled then NEON intrinsics are available.
-        let v0 = aarch64::vreinterpretq_u64_u32(v0);
-        let v1 = aarch64::vreinterpretq_u64_u32(v1);
-        (
-            aarch64::vreinterpretq_u32_u64(aarch64::vtrn1q_u64(v0, v1)),
-            aarch64::vreinterpretq_u32_u64(aarch64::vtrn2q_u64(v0, v1)),
-        )
-    }
-}
-
 unsafe impl PackedValue for PackedMersenne31Neon {
     type Value = Mersenne31;
 
@@ -397,22 +363,14 @@ unsafe impl PackedField for PackedMersenne31Neon {
     type Scalar = Mersenne31;
 }
 
-unsafe impl PackedFieldPow2 for PackedMersenne31Neon {
-    #[inline]
-    fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
-        let (v0, v1) = (self.to_vector(), other.to_vector());
-        let (res0, res1) = match block_len {
-            1 => interleave1(v0, v1),
-            2 => interleave2(v0, v1),
-            4 => (v0, v1),
-            _ => panic!("unsupported block_len"),
-        };
-        unsafe {
-            // Safety: all values are in canonical form (we haven't changed them).
-            (Self::from_vector(res0), Self::from_vector(res1))
-        }
-    }
-}
+impl_packed_field_pow_2!(
+    PackedMersenne31Neon;
+    [
+        (1, interleave_u32),
+        (2, interleave_u64)
+    ],
+    WIDTH
+);
 
 #[cfg(test)]
 mod tests {

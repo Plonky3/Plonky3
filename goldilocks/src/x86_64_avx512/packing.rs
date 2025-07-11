@@ -6,13 +6,14 @@ use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::exponentiation::exp_10540996611094048183;
+use p3_field::interleave::{interleave_u64, interleave_u128, interleave_u256};
 use p3_field::op_assign_macros::{
     impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
     impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field, ring_sum,
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, PrimeField64,
+    PermutationMonomial, PrimeCharacteristicRing, PrimeField64, impl_packed_field_pow_2,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
@@ -192,20 +193,15 @@ unsafe impl PackedField for PackedGoldilocksAVX512 {
     type Scalar = Goldilocks;
 }
 
-unsafe impl PackedFieldPow2 for PackedGoldilocksAVX512 {
-    #[inline]
-    fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
-        let (v0, v1) = (self.to_vector(), other.to_vector());
-        let (res0, res1) = match block_len {
-            1 => interleave1(v0, v1),
-            2 => interleave2(v0, v1),
-            4 => interleave4(v0, v1),
-            8 => (v0, v1),
-            _ => panic!("unsupported block_len"),
-        };
-        (Self::from_vector(res0), Self::from_vector(res1))
-    }
-}
+impl_packed_field_pow_2!(
+    PackedGoldilocksAVX512;
+    [
+        (1, interleave_u64),
+        (2, interleave_u128),
+        (4, interleave_u256),
+    ],
+    WIDTH
+);
 
 const FIELD_ORDER: __m512i = unsafe { transmute([Goldilocks::ORDER_U64; WIDTH]) };
 const EPSILON: __m512i = unsafe { transmute([Goldilocks::ORDER_U64.wrapping_neg(); WIDTH]) };
@@ -391,44 +387,6 @@ fn mul(x: __m512i, y: __m512i) -> __m512i {
 #[inline]
 fn square(x: __m512i) -> __m512i {
     reduce128(square64(x))
-}
-
-#[inline]
-fn interleave1(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
-    unsafe {
-        let a = _mm512_unpacklo_epi64(x, y);
-        let b = _mm512_unpackhi_epi64(x, y);
-        (a, b)
-    }
-}
-
-const INTERLEAVE2_IDX_A: __m512i = unsafe {
-    transmute([
-        0o00u64, 0o01u64, 0o10u64, 0o11u64, 0o04u64, 0o05u64, 0o14u64, 0o15u64,
-    ])
-};
-const INTERLEAVE2_IDX_B: __m512i = unsafe {
-    transmute([
-        0o02u64, 0o03u64, 0o12u64, 0o13u64, 0o06u64, 0o07u64, 0o16u64, 0o17u64,
-    ])
-};
-
-#[inline]
-fn interleave2(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
-    unsafe {
-        let a = _mm512_permutex2var_epi64(x, INTERLEAVE2_IDX_A, y);
-        let b = _mm512_permutex2var_epi64(x, INTERLEAVE2_IDX_B, y);
-        (a, b)
-    }
-}
-
-#[inline]
-fn interleave4(x: __m512i, y: __m512i) -> (__m512i, __m512i) {
-    unsafe {
-        let a = _mm512_shuffle_i64x2::<0x44>(x, y);
-        let b = _mm512_shuffle_i64x2::<0xee>(x, y);
-        (a, b)
-    }
 }
 
 #[cfg(test)]

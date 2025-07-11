@@ -265,6 +265,7 @@ pub unsafe trait PackedFieldPow2: PackedField {
     /// # Panics
     /// This may panic if `block_len` does not divide `WIDTH`. Since `WIDTH` is specified to be a power of 2,
     /// `block_len` must also be a power of 2. It cannot be 0 and it cannot exceed `WIDTH`.
+    #[must_use]
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self);
 }
 
