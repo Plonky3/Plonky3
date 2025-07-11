@@ -146,27 +146,32 @@ unsafe impl<T: Packable, const WIDTH: usize> PackedValue for [T; WIDTH] {
     type Value = T;
     const WIDTH: usize = WIDTH;
 
+    #[inline]
     fn from_slice(slice: &[Self::Value]) -> &Self {
         assert_eq!(slice.len(), Self::WIDTH);
-        slice.try_into().unwrap()
+        unsafe { &*slice.as_ptr().cast() }
     }
 
+    #[inline]
     fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self {
         assert_eq!(slice.len(), Self::WIDTH);
-        slice.try_into().unwrap()
+        unsafe { &mut *slice.as_mut_ptr().cast() }
     }
 
-    fn from_fn<F>(f: F) -> Self
+    #[inline]
+    fn from_fn<Fn>(f: Fn) -> Self
     where
-        F: FnMut(usize) -> Self::Value,
+        Fn: FnMut(usize) -> Self::Value,
     {
         core::array::from_fn(f)
     }
 
+    #[inline]
     fn as_slice(&self) -> &[Self::Value] {
         self
     }
 
+    #[inline]
     fn as_slice_mut(&mut self) -> &mut [Self::Value] {
         self
     }
@@ -320,14 +325,19 @@ unsafe impl<T: Packable> PackedValue for T {
 
     const WIDTH: usize = 1;
 
+    #[inline]
     fn from_slice(slice: &[Self::Value]) -> &Self {
+        assert_eq!(slice.len(), Self::WIDTH);
         &slice[0]
     }
 
+    #[inline]
     fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self {
+        assert_eq!(slice.len(), Self::WIDTH);
         &mut slice[0]
     }
 
+    #[inline]
     fn from_fn<Fn>(mut f: Fn) -> Self
     where
         Fn: FnMut(usize) -> Self::Value,
@@ -335,10 +345,12 @@ unsafe impl<T: Packable> PackedValue for T {
         f(0)
     }
 
+    #[inline]
     fn as_slice(&self) -> &[Self::Value] {
         slice::from_ref(self)
     }
 
+    #[inline]
     fn as_slice_mut(&mut self) -> &mut [Self::Value] {
         slice::from_mut(self)
     }

@@ -271,7 +271,54 @@ macro_rules! impl_rng {
     };
 }
 
+/// Given `Field` and `Algebra` structs where `Algebra` is simply a wrapper around `[Field; N]`
+/// implement `PackedValue` for `Algebra`.
+///
+/// # Safety
+/// `Algebra` must be `repr(transparent)` and castable from to/from `[Field; N]`. Assuming this
+/// holds, these types have the same alignment and size, so all our reference casts are safe.
+#[macro_export]
+macro_rules! impl_packed_value {
+    ($alg_type:ty, $field_type:ty, $width:expr $(, ($type_param:ty, $param_name:ty))?) => {
+        paste::paste! {
+            unsafe impl$(<$param_name: $type_param>)? PackedValue for $alg_type$(<$param_name>)? {
+                type Value = $field_type$(<$param_name>)?;
+
+                const WIDTH: usize = $width;
+
+                #[inline]
+                fn from_slice(slice: &[Self::Value]) -> &Self {
+                    assert_eq!(slice.len(), Self::WIDTH);
+                    unsafe { &*slice.as_ptr().cast() }
+                }
+
+                #[inline]
+                fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self {
+                    assert_eq!(slice.len(), Self::WIDTH);
+                    unsafe { &mut *slice.as_mut_ptr().cast() }
+                }
+
+                #[inline]
+                fn as_slice(&self) -> &[Self::Value] {
+                    &self.0
+                }
+
+                #[inline]
+                fn as_slice_mut(&mut self) -> &mut [Self::Value] {
+                    &mut self.0
+                }
+
+                #[inline]
+                fn from_fn<F: FnMut(usize) -> Self::Value>(f: F) -> Self {
+                    Self(core::array::from_fn(f))
+                }
+            }
+        }
+    };
+}
+
 pub use {
     impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
-    impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field, ring_sum,
+    impl_packed_value, impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field,
+    ring_sum,
 };
