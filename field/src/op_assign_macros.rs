@@ -291,15 +291,18 @@ macro_rules! impl_packed_value {
                     assert_eq!(slice.len(), Self::WIDTH);
                     unsafe { &*slice.as_ptr().cast() }
                 }
+                
                 #[inline]
                 fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self {
                     assert_eq!(slice.len(), Self::WIDTH);
                     unsafe { &mut *slice.as_mut_ptr().cast() }
                 }
+                
                 #[inline]
                 fn as_slice(&self) -> &[Self::Value] {
                     &self.0
                 }
+                
                 #[inline]
                 fn as_slice_mut(&mut self) -> &mut [Self::Value] {
                     &mut self.0
