@@ -159,7 +159,10 @@ unsafe impl<T: Packable, const WIDTH: usize> PackedValue for [T; WIDTH] {
     }
 
     #[inline]
-    fn from_fn<F: FnMut(usize) -> Self::Value>(f: F) -> Self {
+    fn from_fn<Fn>(f: Fn) -> Self
+    where
+        Fn: FnMut(usize) -> Self::Value,
+    {
         core::array::from_fn(f)
     }
 
@@ -334,7 +337,10 @@ unsafe impl<T: Packable> PackedValue for T {
     }
 
     #[inline]
-    fn from_fn<Fn: FnMut(usize) -> Self::Value>(mut f: Fn) -> Self {
+    fn from_fn<Fn>(mut f: Fn) -> Self
+    where
+        Fn: FnMut(usize) -> Self::Value,
+    {
         f(0)
     }
 
