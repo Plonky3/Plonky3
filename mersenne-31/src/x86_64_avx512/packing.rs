@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use core::arch::x86_64::{self, __m512i, __mmask8, __mmask16};
+use core::arch::x86_64::{self, __m512i, __mmask16};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -24,7 +24,6 @@ const WIDTH: usize = 16;
 pub(crate) const P: __m512i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
 const EVENS: __mmask16 = 0b0101010101010101;
 const ODDS: __mmask16 = 0b1010101010101010;
-const EVENS4: __mmask16 = 0x0f0f;
 
 /// Vectorized AVX-512F implementation of `Mersenne31` arithmetic.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

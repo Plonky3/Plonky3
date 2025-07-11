@@ -4,7 +4,7 @@
 
 use alloc::vec::Vec;
 use core::arch::asm;
-use core::arch::x86_64::{self, __m512i, __mmask8, __mmask16};
+use core::arch::x86_64::{self, __m512i, __mmask16};
 use core::array;
 use core::hint::unreachable_unchecked;
 use core::iter::{Product, Sum};
