@@ -32,7 +32,6 @@ impl Convolve<Mersenne31, i64, i64, i64> for SmallConvolveMersenne31 {
         input.value as i64
     }
 
-    /// FIXME: Refactor the dot product
     /// For a convolution of size N, |x| < N * 2^31 and (as per the
     /// assumption above), |y| < 2^24. So the product is at most N * 2^55
     /// which will not overflow for N <= 16.
