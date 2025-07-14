@@ -82,6 +82,20 @@ impl BinomialExtensionData<5> for BabyBearParameters {
     const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike = [];
 }
 
+impl BinomialExtensionData<8> for BabyBearParameters {
+    const W: BabyBear = BabyBear::new(11);
+    const DTH_ROOT: BabyBear = BabyBear::new(420899707);
+    const EXT_GENERATOR: [BabyBear; 8] = BabyBear::new_array([5, 1, 0, 0, 0, 0, 0, 0]);
+    const EXT_TWO_ADICITY: usize = 30;
+
+    type ArrayLike = [[BabyBear; 8]; 3];
+    const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike = BabyBear::new_2d_array([
+        [0, 0, 0, 0, 1996171314, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 124907976, 0],
+        [0, 0, 0, 518392818, 0, 0, 0, 0],
+    ]);
+}
+
 #[cfg(test)]
 mod tests {
     use core::array;
