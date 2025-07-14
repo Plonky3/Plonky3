@@ -169,7 +169,17 @@ mod test_deg_8_extension {
         assert_eq!(
             format!(
                 "{}",
-                EF::from_basis_coefficients_slice(&[F::TWO, F::ONE, F::ZERO, F::TWO, F::TWO, F::ZERO, F::ZERO, F::ONE]).unwrap()
+                EF::from_basis_coefficients_slice(&[
+                    F::TWO,
+                    F::ONE,
+                    F::ZERO,
+                    F::TWO,
+                    F::TWO,
+                    F::ZERO,
+                    F::ZERO,
+                    F::ONE
+                ])
+                .unwrap()
             ),
             "2 + X + 2 X^3 + 2 X^4 + X^7"
         );
