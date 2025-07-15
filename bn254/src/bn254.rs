@@ -488,7 +488,7 @@ const TWO_ADIC_GENERATOR: [u64; 4] = [
     0x636e735580d13d9c,
     0xa22bf3742445ffd6,
     0x56452ac01eb203d8,
-    0x01860ef942963f9e7,
+    0x1860ef942963f9e7,
 ];
 
 impl TwoAdicField for Bn254 {

@@ -77,6 +77,21 @@ impl BinomialExtensionData<4> for KoalaBearParameters {
         KoalaBear::new_2d_array([[0, 0, 1759267465, 0], [0, 0, 0, 777715144]]);
 }
 
+impl BinomialExtensionData<8> for KoalaBearParameters {
+    const W: KoalaBear = KoalaBear::new(3);
+    const DTH_ROOT: KoalaBear = KoalaBear::new(1748172362);
+    const EXT_GENERATOR: [KoalaBear; 8] = KoalaBear::new_array([10, 1, 0, 0, 0, 0, 0, 0]);
+    const EXT_TWO_ADICITY: usize = 27;
+
+    type ArrayLike = [[KoalaBear; 8]; 3];
+
+    const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike = KoalaBear::new_2d_array([
+        [0, 0, 0, 0, 1759267465, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 777715144, 0],
+        [0, 0, 0, 0, 0, 0, 0, 14348907],
+    ]);
+}
+
 #[cfg(test)]
 mod tests {
     use num_bigint::BigUint;
