@@ -320,6 +320,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
             3 => cubic_inv(&self.value, &mut res.value, F::W),
             4 => quartic_inv(&self.value, &mut res.value, F::W),
             5 => res = quintic_inv(self),
+            8 => octic_inv(&self.value, &mut res.value, F::W),
             _ => res = self.frobenius_inv(),
         }
 
@@ -1132,4 +1133,61 @@ where
 
     // Final coefficient = a0*b7 + ... + a7*b0
     res[7] = R::dot_product::<8>(&a_array, b_r_rev[..8].try_into().unwrap());
+}
+
+/// Compute the inverse of a octic binomial extension field element.
+#[inline]
+fn octic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
+    assert_eq!(D, 8);
+
+    // We use the fact that the octic extension is a tower of extensions.
+    // Explicitly our tower looks like F < F[x]/(X⁴ - w) < F[x]/(X^8 - w).
+    // Using this, we can compute the inverse of a in three steps:
+
+    // Compute the norm of our element with respect to F[x]/(X⁴-w).
+    // Writing a = a0 + a1·X + a2·X² + a3·X³ + a4·X⁴ + a5·X⁵ + a6·X⁶ + a7·X⁷
+    //           = (a0 + a2·X² + a4·X⁴ + a6·X⁶) + (a1 + a3·X² + a5·X⁴ + a7·X⁶)·X
+    //           = evens + odds·X
+    //
+    // The norm is given by:
+    //    norm = (evens + odds·X) * (evens - odds·X)
+    //          = evens² - odds²·X²
+    //
+    // This costs 2 multiplications in the quartic extension field.
+    let evns = [a[0], a[2], a[4], a[6]];
+    let odds = [a[1], a[3], a[5], a[7]];
+    let mut evns_sq = [F::ZERO; 4];
+    let mut odds_sq = [F::ZERO; 4];
+    quartic_square(&evns, &mut evns_sq, w);
+    quartic_square(&odds, &mut odds_sq, w);
+    // odds_sq is multiplied by X^2 so we need to rotate it and multiply by a factor of w.
+    let norm = [
+        evns_sq[0] - w * odds_sq[3],
+        evns_sq[1] - odds_sq[0],
+        evns_sq[2] - odds_sq[1],
+        evns_sq[3] - odds_sq[2],
+    ];
+
+    // Now we compute the inverse of norm inside F[x]/(X⁴ - w). We already have an efficient function for this.
+    let mut norm_inv = [F::ZERO; 4];
+    quartic_inv(&norm, &mut norm_inv, w);
+
+    // Then the inverse of a is given by:
+    //      a⁻¹ = (evens - odds·X)·norm⁻¹
+    //          = evens·norm⁻¹ - odds·norm⁻¹·X
+    //
+    // Both of these multiplications can again be done in the quartic extension field.
+    let mut out_evn = [F::ZERO; 4];
+    let mut out_odd = [F::ZERO; 4];
+    quartic_mul(&evns, &norm_inv, &mut out_evn, w);
+    quartic_mul(&odds, &norm_inv, &mut out_odd, w);
+
+    res[0] = out_evn[0];
+    res[1] = -out_odd[0];
+    res[2] = out_evn[1];
+    res[3] = -out_odd[1];
+    res[4] = out_evn[2];
+    res[5] = -out_odd[2];
+    res[6] = out_evn[3];
+    res[7] = -out_odd[3];
 }

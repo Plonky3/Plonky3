@@ -8,6 +8,7 @@ use p3_koala_bear::KoalaBear;
 
 type EF4 = BinomialExtensionField<KoalaBear, 4>;
 type EF8 = BinomialExtensionField<KoalaBear, 8>;
+type EF8 = BinomialExtensionField<KoalaBear, 8>;
 
 // Note that each round of throughput has 10 operations
 // So we should have 10 * more repetitions for latency tests.
@@ -37,8 +38,8 @@ fn bench_octic_extension(c: &mut Criterion) {
 }
 
 criterion_group!(
-    bench_babybear_ef,
-    bench_octic_extension,
+    bench_koalabear_ef,
     bench_quartic_extension,
+    bench_octic_extension
 );
-criterion_main!(bench_babybear_ef);
+criterion_main!(bench_koalabear_ef);
