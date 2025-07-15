@@ -225,6 +225,7 @@ where
             3 => cubic_square(&self.value, &mut res.value),
             4 => quartic_square(&self.value, &mut res.value, w),
             5 => quintic_square(&self.value, &mut res.value, w),
+            8 => octic_square(&self.value, &mut res.value, w),
             _ => binomial_mul::<F, A, A, D>(&self.value, &self.value, &mut res.value, w),
         }
         res
@@ -1024,6 +1025,121 @@ where
     res[4] = R::dot_product(
         &[a[2].clone(), two_a0, two_a1],
         &[a[2].clone(), a[4].clone(), a[3].clone()],
+    );
+}
+
+/// Optimized Square function for octic extension field elements.
+///
+/// Makes use of the in built field dot product code. This is optimized for the case that
+/// R is a prime field or its packing.
+#[inline]
+fn octic_square<F, R, const D: usize>(a: &[R; D], res: &mut [R; D], w: F)
+where
+    F: Field,
+    R: Algebra<F>,
+{
+    assert_eq!(D, 8);
+
+    let a0_2 = a[0].double();
+    let a1_2 = a[1].double();
+    let a2_2 = a[2].double();
+    let a3_2 = a[3].double();
+    let w_a4 = a[4].clone() * w;
+    let w_a5 = a[5].clone() * w;
+    let w_a6 = a[6].clone() * w;
+    let w_a7 = a[7].clone() * w;
+    let w_a5_2 = w_a5.double();
+    let w_a6_2 = w_a6.double();
+    let w_a7_2 = w_a7.double();
+
+    // Constant coefficient = a0² + w (2(a1 * a7 + a2 * a6 + a3 * a5) + a4²)
+    res[0] = R::dot_product(
+        &[
+            a[0].clone(),
+            a[1].clone(),
+            a[2].clone(),
+            a[3].clone(),
+            a[4].clone(),
+        ],
+        &[
+            a[0].clone(),
+            w_a7_2.clone(),
+            w_a6_2.clone(),
+            w_a5_2.clone(),
+            w_a4,
+        ],
+    );
+
+    // Linear coefficient = 2(a0 * a1 + w(a2 * a7 + a3 * a6 + a4 * a5))
+    res[1] = R::dot_product(
+        &[a0_2.clone(), a[2].clone(), a[3].clone(), a[4].clone()],
+        &[a[1].clone(), w_a7_2.clone(), w_a6_2.clone(), w_a5_2.clone()],
+    );
+
+    // Square coefficient = 2a0 * a2 + a1² + w(2(a3 * a7 + a4 * a6) + a5²)
+    res[2] = R::dot_product(
+        &[
+            a0_2.clone(),
+            a[1].clone(),
+            a[3].clone(),
+            a[4].clone(),
+            a[5].clone(),
+        ],
+        &[
+            a[2].clone(),
+            a[1].clone(),
+            w_a7_2.clone(),
+            w_a6_2.clone(),
+            w_a5,
+        ],
+    );
+
+    // Cube coefficient = 2(a0 * a3 + a1 * a2 + w(a4 * a7 + a5 * a6)
+    res[3] = R::dot_product(
+        &[a0_2.clone(), a1_2.clone(), a[4].clone(), a[5].clone()],
+        &[a[3].clone(), a[2].clone(), w_a7_2.clone(), w_a6_2.clone()],
+    );
+
+    // Quartic coefficient = 2(a0 * a4 + a1 * a3) + a2² + w(2 * a7 * a5 + a6²)
+    res[4] = R::dot_product(
+        &[
+            a0_2.clone(),
+            a1_2.clone(),
+            a[2].clone(),
+            a[5].clone(),
+            a[6].clone(),
+        ],
+        &[
+            a[4].clone(),
+            a[3].clone(),
+            a[2].clone(),
+            w_a7_2.clone(),
+            w_a6,
+        ],
+    );
+
+    // Quintic coefficient = 2 * (a0 * a5 + a1 * a4 + a2 * a3 + w * a6 * a7)
+    res[5] = R::dot_product(
+        &[a0_2.clone(), a1_2.clone(), a2_2.clone(), a[6].clone()],
+        &[a[5].clone(), a[4].clone(), a[3].clone(), w_a7_2],
+    );
+
+    // Sextic coefficient = 2(a0 * a6 + a1 * a5 + a2 * a4) + a3² + w * a7²
+    res[6] = R::dot_product(
+        &[
+            a0_2.clone(),
+            a1_2.clone(),
+            a2_2.clone(),
+            a[3].clone(),
+            a[7].clone(),
+        ],
+        &[a[6].clone(), a[5].clone(), a[4].clone(), a[3].clone(), w_a7],
+    );
+
+    // Final coefficient = 2(a0 * a7 + a1 * a6 + a2 * a5 + a3 * a4)
+    res[7] = R::dot_product(
+        &[a0_2, a1_2, a2_2, a3_2],
+        &[a[7].clone(), a[6].clone(), a[5].clone(), a[4].clone()],
     );
 }
 
