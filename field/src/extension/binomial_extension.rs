@@ -639,7 +639,7 @@ pub(crate) fn vector_sub<
 
 /// Multiply two vectors representing elements in a binomial extension.
 #[inline]
-pub(crate) fn binomial_mul<
+pub(super) fn binomial_mul<
     F: Field,
     R: Algebra<F> + Algebra<R2>,
     R2: Algebra<F>,
@@ -675,7 +675,7 @@ pub(crate) fn binomial_mul<
 ///
 /// This is optimized for the case that R is a prime field or its packing.
 #[inline]
-pub(crate) fn binomial_square<F: Field, R: Algebra<F>, const D: usize>(
+pub(super) fn binomial_square<F: Field, R: Algebra<F>, const D: usize>(
     a: &[R; D],
     res: &mut [R; D],
     w: F,
