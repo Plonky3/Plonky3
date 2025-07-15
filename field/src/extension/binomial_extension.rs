@@ -215,19 +215,7 @@ where
     fn square(&self) -> Self {
         let mut res = Self::default();
         let w = F::W;
-        match D {
-            2 => {
-                let a = &self.value;
-                let a1_w = a[1].clone() * F::W;
-                res.value[0] = A::dot_product(a[..].try_into().unwrap(), &[a[0].clone(), a1_w]);
-                res.value[1] = a[0].clone() * a[1].double();
-            }
-            3 => cubic_square(&self.value, &mut res.value),
-            4 => quartic_square(&self.value, &mut res.value, w),
-            5 => quintic_square(&self.value, &mut res.value, w),
-            8 => octic_square(&self.value, &mut res.value, w),
-            _ => binomial_mul::<F, A, A, D>(&self.value, &self.value, &mut res.value, w),
-        }
+        binomial_square(&self.value, &mut res.value, w);
         res
     }
 
@@ -651,7 +639,7 @@ pub(crate) fn vector_sub<
 
 /// Multiply two vectors representing elements in a binomial extension.
 #[inline]
-pub(super) fn binomial_mul<
+pub(crate) fn binomial_mul<
     F: Field,
     R: Algebra<F> + Algebra<R2>,
     R2: Algebra<F>,
@@ -680,6 +668,29 @@ pub(super) fn binomial_mul<
                 }
             }
         }
+    }
+}
+
+/// Square a vector representing an element in a binomial extension.
+///
+/// This is optimized for the case that R is a prime field or its packing.
+#[inline]
+pub(crate) fn binomial_square<F: Field, R: Algebra<F>, const D: usize>(
+    a: &[R; D],
+    res: &mut [R; D],
+    w: F,
+) {
+    match D {
+        2 => {
+            let a1_w = a[1].clone() * w;
+            res[0] = R::dot_product(a[..].try_into().unwrap(), &[a[0].clone(), a1_w]);
+            res[1] = a[0].clone() * a[1].double();
+        }
+        3 => cubic_square(a, res, w),
+        4 => quartic_square(a, res, w),
+        5 => quintic_square(a, res, w),
+        8 => octic_square(a, res, w),
+        _ => binomial_mul::<F, R, R, D>(a, a, res, w),
     }
 }
 
@@ -750,7 +761,7 @@ fn cubic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
 
 /// karatsuba multiplication for cubic extension field
 #[inline]
-pub(crate) fn cubic_mul<F: Field, R: Algebra<F> + Algebra<R2>, R2: Algebra<F>, const D: usize>(
+fn cubic_mul<F: Field, R: Algebra<F> + Algebra<R2>, R2: Algebra<F>, const D: usize>(
     a: &[R; D],
     b: &[R2; D],
     res: &mut [R; D],
@@ -778,13 +789,10 @@ pub(crate) fn cubic_mul<F: Field, R: Algebra<F> + Algebra<R2>, R2: Algebra<F>, c
 
 /// Section 11.3.6a in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
-pub(crate) fn cubic_square<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: usize>(
-    a: &[A; D],
-    res: &mut [A; D],
-) {
+fn cubic_square<F: Field, R: Algebra<F>, const D: usize>(a: &[R; D], res: &mut [R; D], w: F) {
     assert_eq!(D, 3);
 
-    let w_a2 = a[2].clone() * F::W;
+    let w_a2 = a[2].clone() * w;
 
     res[0] = a[0].square() + (a[1].clone() * w_a2.clone()).double();
     res[1] = w_a2 * a[2].clone() + (a[0].clone() * a[1].clone()).double();
@@ -885,7 +893,7 @@ fn quartic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
 /// Makes use of the in built field dot product code. This is optimized for the case that
 /// R is a prime field or its packing.
 #[inline]
-pub(crate) fn quartic_square<F, R, const D: usize>(a: &[R; D], res: &mut [R; D], w: F)
+fn quartic_square<F, R, const D: usize>(a: &[R; D], res: &mut [R; D], w: F)
 where
     F: Field,
     R: Algebra<F>,
@@ -983,7 +991,7 @@ where
 /// Makes use of the in built field dot product code. This is optimized for the case that
 /// R is a prime field or its packing.
 #[inline]
-pub(crate) fn quintic_square<F, R, const D: usize>(a: &[R; D], res: &mut [R; D], w: F)
+fn quintic_square<F, R, const D: usize>(a: &[R; D], res: &mut [R; D], w: F)
 where
     F: Field,
     R: Algebra<F>,
