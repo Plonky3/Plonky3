@@ -8,7 +8,6 @@ use p3_koala_bear::KoalaBear;
 
 type EF4 = BinomialExtensionField<KoalaBear, 4>;
 type EF8 = BinomialExtensionField<KoalaBear, 8>;
-type EF8 = BinomialExtensionField<KoalaBear, 8>;
 
 // Note that each round of throughput has 10 operations
 // So we should have 10 * more repetitions for latency tests.
