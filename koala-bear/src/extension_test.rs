@@ -64,7 +64,7 @@ mod test_quartic_extension {
 }
 
 #[cfg(test)]
-mod test_deg_8_extension {
+mod test_octic_extension {
     use alloc::format;
 
     use num_bigint::BigUint;
@@ -85,7 +85,7 @@ mod test_deg_8_extension {
     const ONES: [EF; 1] = [EF::ONE];
 
     // Get the prime factorization of the order of the multiplicative group.
-    // i.e. the prime factorization of P^4 - 1.
+    // i.e. the prime factorization of p^8 - 1.
     fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 10] {
         [
             (BigUint::from(2u8), 27),
