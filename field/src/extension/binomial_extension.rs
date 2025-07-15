@@ -1051,9 +1051,6 @@ fn quintic_inv<F: BinomiallyExtendable<D>, const D: usize>(
 }
 
 /// Compute the inverse of a octic binomial extension field element.
-///
-/// Makes use of the in built field dot product code. This is optimized for the case that
-/// R is a prime field or its packing.
 #[inline]
 fn octic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
     assert_eq!(D, 8);

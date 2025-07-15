@@ -37,8 +37,8 @@ fn bench_octic_extension(c: &mut Criterion) {
 }
 
 criterion_group!(
-    bench_babybear_ef,
+    bench_koalabear_ef,
     bench_quartic_extension,
     bench_octic_extension
 );
-criterion_main!(bench_babybear_ef);
+criterion_main!(bench_koalabear_ef);
