@@ -1,4 +1,6 @@
-use p3_field::extension::{BinomiallyExtendable, HasTwoAdicBinomialExtension};
+use p3_field::extension::{
+    BinomiallyExtendable, BinomiallyExtendableAlgebra, HasTwoAdicBinomialExtension,
+};
 use p3_field::{TwoAdicField, field_to_array};
 
 use crate::{BinomialExtensionData, FieldParameters, MontyField31, TwoAdicData};
@@ -7,6 +9,21 @@ use crate::{BinomialExtensionData, FieldParameters, MontyField31, TwoAdicData};
 // field extension of degree WIDTH we can define.
 // We perform no checks to make sure the data given in BinomialExtensionData<WIDTH> is valid and
 // corresponds to an actual field extension. Ensuring that is left to the implementer.
+
+impl<const WIDTH: usize, FP> BinomiallyExtendableAlgebra<MontyField31<FP>, WIDTH>
+    for MontyField31<FP>
+where
+    FP: BinomialExtensionData<WIDTH> + FieldParameters,
+{
+    fn binomial_mul(
+        a: &[Self; WIDTH],
+        b: &[Self; WIDTH],
+        res: &mut [Self; WIDTH],
+        w: MontyField31<FP>,
+    ) {
+        FP::binomial_mul(a, b, res, w);
+    }
+}
 
 impl<const WIDTH: usize, FP> BinomiallyExtendable<WIDTH> for MontyField31<FP>
 where

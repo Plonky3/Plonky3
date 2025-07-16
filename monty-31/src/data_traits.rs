@@ -138,4 +138,11 @@ pub trait BinomialExtensionData<const DEG: usize>: MontyParameters + Sized {
 
     /// A list of generators of 2-adic subgroups not contained in the base field.
     const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike;
+
+    fn binomial_mul(
+        a: &[MontyField31<Self>; DEG],
+        b: &[MontyField31<Self>; DEG],
+        res: &mut [MontyField31<Self>; DEG],
+        w: MontyField31<Self>,
+    );
 }

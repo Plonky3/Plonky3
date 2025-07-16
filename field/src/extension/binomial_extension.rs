@@ -15,7 +15,7 @@ use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
 
 use super::{HasFrobenius, HasTwoAdicBinomialExtension, PackedBinomialExtensionField};
-use crate::extension::BinomiallyExtendable;
+use crate::extension::{BinomiallyExtendable, BinomiallyExtendableAlgebra};
 use crate::field::Field;
 use crate::{
     Algebra, BasedVectorSpace, ExtensionField, Packable, PrimeCharacteristicRing,
@@ -194,7 +194,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
 impl<F, A, const D: usize> PrimeCharacteristicRing for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: Algebra<F>,
+    A: BinomiallyExtendableAlgebra<F, D>,
 {
     type PrimeSubfield = <A as PrimeCharacteristicRing>::PrimeSubfield;
 
@@ -439,7 +439,7 @@ where
 impl<F, A, const D: usize> Sum for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: Algebra<F>,
+    A: BinomiallyExtendableAlgebra<F, D>,
 {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
@@ -503,7 +503,7 @@ where
 impl<F, A, const D: usize> Mul for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: Algebra<F>,
+    A: BinomiallyExtendableAlgebra<F, D>,
 {
     type Output = Self;
 
@@ -514,7 +514,7 @@ where
         let mut res = Self::default();
         let w = F::W;
 
-        binomial_mul::<F, A, A, D>(&a, &b, &mut res.value, w);
+        A::binomial_mul(&a, &b, &mut res.value, w);
 
         res
     }
@@ -523,7 +523,7 @@ where
 impl<F, A, const D: usize> Mul<A> for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: Algebra<F>,
+    A: BinomiallyExtendableAlgebra<F, D>,
 {
     type Output = Self;
 
@@ -536,7 +536,7 @@ where
 impl<F, A, const D: usize> MulAssign for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: Algebra<F>,
+    A: BinomiallyExtendableAlgebra<F, D>,
 {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
@@ -547,7 +547,7 @@ where
 impl<F, A, const D: usize> MulAssign<A> for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: Algebra<F>,
+    A: BinomiallyExtendableAlgebra<F, D>,
 {
     #[inline]
     fn mul_assign(&mut self, rhs: A) {
@@ -558,7 +558,7 @@ where
 impl<F, A, const D: usize> Product for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: Algebra<F>,
+    A: BinomiallyExtendableAlgebra<F, D>,
 {
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {

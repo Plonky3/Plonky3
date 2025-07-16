@@ -1,7 +1,7 @@
 use core::iter;
 
-use crate::ExtensionField;
 use crate::field::Field;
+use crate::{Algebra, ExtensionField};
 
 mod binomial_extension;
 mod complex;
@@ -19,7 +19,9 @@ pub use packed_binomial_extension::*;
 /// irreducible binomial polynomial `X^D - W`, where `W` is a nonzero constant in the base field.
 ///
 /// This is used to construct extension fields with efficient arithmetic.
-pub trait BinomiallyExtendable<const D: usize>: Field {
+pub trait BinomiallyExtendable<const D: usize>:
+    Field + BinomiallyExtendableAlgebra<Self, D>
+{
     /// The constant coefficient `W` in the binomial `X^D - W`.
     const W: Self;
 
@@ -33,6 +35,12 @@ pub trait BinomiallyExtendable<const D: usize>: Field {
     ///
     /// This is an array of size `D`, where each entry is a base field element.
     const EXT_GENERATOR: [Self; D];
+}
+
+pub trait BinomiallyExtendableAlgebra<F: Field, const D: usize>: Algebra<F> {
+    fn binomial_mul(a: &[Self; D], b: &[Self; D], res: &mut [Self; D], w: F) {
+        binomial_mul::<F, Self, Self, D>(a, b, res, w);
+    }
 }
 
 /// Trait for extension fields that support Frobenius automorphisms.
