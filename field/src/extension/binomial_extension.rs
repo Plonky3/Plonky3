@@ -1096,7 +1096,7 @@ where
     R2: Algebra<F>,
 {
     assert_eq!(D, 8);
-    let a_array: [R; 8] = array::from_fn(|i| a[i].clone());
+    let a: &[R; 8] = a[..].try_into().unwrap();
     let mut b_r_rev: [R; 9] = [
         b[7].clone().into(),
         b[6].clone().into(),
@@ -1110,29 +1110,29 @@ where
     ];
 
     // Constant coefficient = a0*b0 + w(a1*b7 + ... + a7*b1)
-    res[0] = compute_coefficient::<F, R, 8, 9, 7, 2>(&a_array, &b_r_rev);
+    res[0] = compute_coefficient::<F, R, 8, 9, 7, 2>(a, &b_r_rev);
 
     // Linear coefficient = a0*b1 + a1*b0 + w(a2*b7 + ... + a7*b2)
-    res[1] = compute_coefficient::<F, R, 8, 9, 6, 3>(&a_array, &b_r_rev);
+    res[1] = compute_coefficient::<F, R, 8, 9, 6, 3>(a, &b_r_rev);
 
     // Square coefficient = a0*b2 + .. + a2*b0 + w(a3*b7 + ... + a7*b3)
-    res[2] = compute_coefficient::<F, R, 8, 9, 5, 4>(&a_array, &b_r_rev);
+    res[2] = compute_coefficient::<F, R, 8, 9, 5, 4>(a, &b_r_rev);
 
     // Cube coefficient = a0*b3 + .. + a3*b0 + w(a4*b7 + ... + a7*b4)
-    res[3] = compute_coefficient::<F, R, 8, 9, 4, 5>(&a_array, &b_r_rev);
+    res[3] = compute_coefficient::<F, R, 8, 9, 4, 5>(a, &b_r_rev);
 
     // Quartic coefficient = a0*b4 + ... + a4*b0 + w(a5*b7 + ... + a7*b5)
-    res[4] = compute_coefficient::<F, R, 8, 9, 3, 6>(&a_array, &b_r_rev);
+    res[4] = compute_coefficient::<F, R, 8, 9, 3, 6>(a, &b_r_rev);
 
     // Quintic coefficient = a0*b5 + ... + a5*b0 + w(a6*b7 + ... + a7*b6)
-    res[5] = compute_coefficient::<F, R, 8, 9, 2, 7>(&a_array, &b_r_rev);
+    res[5] = compute_coefficient::<F, R, 8, 9, 2, 7>(a, &b_r_rev);
 
     // Sextic coefficient = a0*b6 + ... + a6*b0 + w*a7*b7
     b_r_rev[8] *= b[7].clone();
-    res[6] = R::dot_product::<8>(&a_array, b_r_rev[1..].try_into().unwrap());
+    res[6] = R::dot_product::<8>(a, b_r_rev[1..].try_into().unwrap());
 
     // Final coefficient = a0*b7 + ... + a7*b0
-    res[7] = R::dot_product::<8>(&a_array, b_r_rev[..8].try_into().unwrap());
+    res[7] = R::dot_product::<8>(a, b_r_rev[..8].try_into().unwrap());
 }
 
 /// Compute the inverse of a octic binomial extension field element.
