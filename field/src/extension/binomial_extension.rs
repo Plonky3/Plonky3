@@ -655,6 +655,7 @@ pub(super) fn binomial_mul<
         3 => cubic_mul(a, b, res, w),
         4 => quartic_mul(a, b, res, w),
         5 => quintic_mul(a, b, res, w),
+        8 => octic_mul(a, b, res, w),
         _ =>
         {
             #[allow(clippy::needless_range_loop)]
@@ -1172,6 +1173,90 @@ fn quintic_inv<F: BinomiallyExtendable<D>, const D: usize>(
     debug_assert_eq!(BinomialExtensionField::<F, D>::from(norm), *a * prod_conj);
 
     prod_conj * norm.inverse()
+}
+
+/// Compute the (D-N)'th coefficient in the multiplication of two elements in a degree
+/// D binomial extension field.
+///
+/// a_0 * b_{D - N} + ... + a_{D - N} * b_0 + w * (a_{D - N + 1}b_{D - 1} + ... + a_{D - 1}b_{D - N + 1})
+///
+/// # Inputs
+/// - a: An array of coefficients.
+/// - b: An array of coefficients in reverse order with last element equal to `W`
+#[inline]
+fn compute_coefficient<
+    F,
+    R,
+    const D: usize,
+    const D_PLUS_1: usize,
+    const N: usize,
+    const D_PLUS_1_MIN_N: usize,
+>(
+    a: &[R; D],
+    b_rev: &[R; D_PLUS_1],
+) -> R
+where
+    F: Field,
+    R: Algebra<F>,
+{
+    let w_coeff = R::dot_product::<N>(
+        a[(D - N)..].try_into().unwrap(),
+        b_rev[..N].try_into().unwrap(),
+    );
+    let mut scratch: [R; D_PLUS_1_MIN_N] = array::from_fn(|i| a[i].clone());
+    scratch[D_PLUS_1_MIN_N - 1] = w_coeff;
+    R::dot_product(&scratch, b_rev[N..].try_into().unwrap())
+}
+
+/// Multiplication in an octic binomial extension field.
+///
+/// Makes use of the in built field dot product code. This is optimized for the case that
+/// R is a prime field or its packing.
+#[inline]
+fn octic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
+where
+    F: Field,
+    R: Algebra<F> + Algebra<R2>,
+    R2: Algebra<F>,
+{
+    assert_eq!(D, 8);
+    let a: &[R; 8] = a[..].try_into().unwrap();
+    let mut b_r_rev: [R; 9] = [
+        b[7].clone().into(),
+        b[6].clone().into(),
+        b[5].clone().into(),
+        b[4].clone().into(),
+        b[3].clone().into(),
+        b[2].clone().into(),
+        b[1].clone().into(),
+        b[0].clone().into(),
+        w.into(),
+    ];
+
+    // Constant coefficient = a0*b0 + w(a1*b7 + ... + a7*b1)
+    res[0] = compute_coefficient::<F, R, 8, 9, 7, 2>(a, &b_r_rev);
+
+    // Linear coefficient = a0*b1 + a1*b0 + w(a2*b7 + ... + a7*b2)
+    res[1] = compute_coefficient::<F, R, 8, 9, 6, 3>(a, &b_r_rev);
+
+    // Square coefficient = a0*b2 + .. + a2*b0 + w(a3*b7 + ... + a7*b3)
+    res[2] = compute_coefficient::<F, R, 8, 9, 5, 4>(a, &b_r_rev);
+
+    // Cube coefficient = a0*b3 + .. + a3*b0 + w(a4*b7 + ... + a7*b4)
+    res[3] = compute_coefficient::<F, R, 8, 9, 4, 5>(a, &b_r_rev);
+
+    // Quartic coefficient = a0*b4 + ... + a4*b0 + w(a5*b7 + ... + a7*b5)
+    res[4] = compute_coefficient::<F, R, 8, 9, 3, 6>(a, &b_r_rev);
+
+    // Quintic coefficient = a0*b5 + ... + a5*b0 + w(a6*b7 + ... + a7*b6)
+    res[5] = compute_coefficient::<F, R, 8, 9, 2, 7>(a, &b_r_rev);
+
+    // Sextic coefficient = a0*b6 + ... + a6*b0 + w*a7*b7
+    b_r_rev[8] *= b[7].clone();
+    res[6] = R::dot_product::<8>(a, b_r_rev[1..].try_into().unwrap());
+
+    // Final coefficient = a0*b7 + ... + a7*b0
+    res[7] = R::dot_product::<8>(a, b_r_rev[..8].try_into().unwrap());
 }
 
 /// Compute the inverse of a octic binomial extension field element.
