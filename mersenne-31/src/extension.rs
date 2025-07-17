@@ -1,9 +1,12 @@
 use p3_field::extension::{
-    BinomiallyExtendable, Complex, HasComplexBinomialExtension, HasTwoAdicComplexBinomialExtension,
+    BinomiallyExtendable, BinomiallyExtendableAlgebra, Complex, HasComplexBinomialExtension, HasTwoAdicComplexBinomialExtension
 };
 use p3_field::{PrimeCharacteristicRing, TwoAdicField, field_to_array};
 
 use crate::Mersenne31;
+
+impl BinomiallyExtendableAlgebra<Mersenne31, 3> for Mersenne31 {
+}
 
 impl BinomiallyExtendable<3> for Mersenne31 {
     // ```sage
