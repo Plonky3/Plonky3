@@ -81,6 +81,18 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX512<PMP> {
     const fn broadcast(value: MontyField31<PMP>) -> Self {
         Self([value; WIDTH])
     }
+
+    /// Copy values from `arr` into the packed vector padding by zeros if necessary.
+    #[inline]
+    #[must_use]
+    fn from_monty_array<const N: usize>(arr: [MontyField31<PMP>; N]) -> Self 
+    where PMP: FieldParameters
+    {
+        assert!(N <= WIDTH);
+        let mut out = Self::ZERO;
+        out.0[..N].copy_from_slice(&arr);
+        out
+    }
 }
 
 impl<PMP: PackedMontyParameters> From<MontyField31<PMP>> for PackedMontyField31AVX512<PMP> {
@@ -1164,3 +1176,85 @@ impl_packed_field_pow_2!(
     ],
     WIDTH
 );
+
+/// Multiplication in a quartic binomial extension field.
+///
+/// Makes use of the in built field dot product code. This is optimized for the case that
+/// R is a prime field or its packing.
+#[inline]
+pub fn quartic_mul_packed<FP: FieldParameters>(
+    a: &[MontyField31<FP>; 4],
+    b: &[MontyField31<FP>; 4],
+    res: &mut [MontyField31<FP>; 4],
+    _w: MontyField31<FP>,
+) {
+    // b1_w, b2_w, b3_w
+    // let packed_b = PackedMontyField31AVX2([b[0], b[1], b[2], b[3], zero, zero, zero, zero]);
+    // let b_w = packed_b * w;
+    // let b_w1 = b_w.0[1];
+    // let b_w2 = b_w.0[2];
+    // let b_w3 = b_w.0[3];
+    let b_w1 = b[1].double() + b[1];
+    let b_w2 = b[2].double() + b[2];
+    let b_w3 = b[3].double() + b[3];
+
+    // Constant term = a0*b0 + w(a1*b3 + a2*b2 + a3*b1)
+    // Linear term = a0*b1 + a1*b0 + w(a2*b3 + a3*b2)
+    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b3)
+    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0
+    let dot_lhs = [
+        PackedMontyField31AVX512::from_monty_array([a[0], a[0], a[0], a[0]]),
+        PackedMontyField31AVX512::from_monty_array([a[1], a[1], a[1], a[1]]),
+        PackedMontyField31AVX512::from_monty_array([a[2], a[2], a[2], a[2]]),
+        PackedMontyField31AVX512::from_monty_array([a[3], a[3], a[3], a[3]]),
+    ];
+    let dot_rhs = [
+        PackedMontyField31AVX512::from_monty_array([b[0], b[1], b[2], b[3]]),
+        PackedMontyField31AVX512::from_monty_array([b_w3, b[0], b[1], b[2]]),
+        PackedMontyField31AVX512::from_monty_array([b_w2, b_w3, b[0], b[1]]),
+        PackedMontyField31AVX512::from_monty_array([b_w1, b_w2, b_w3, b[0]]),
+    ];
+
+    let dot_product = PackedMontyField31AVX512::dot_product(&dot_lhs, &dot_rhs);
+    res[0] = dot_product.0[0];
+    res[1] = dot_product.0[1];
+    res[2] = dot_product.0[2];
+    res[3] = dot_product.0[3];
+}
+
+/// Multiplication in an octic binomial extension field.
+///
+/// Makes use of the in built field dot product code. This is optimized for the case that
+/// R is a prime field or its packing.
+#[inline]
+pub fn octic_mul_packed<FP: FieldParameters>(
+    a: &[MontyField31<FP>; 8],
+    b: &[MontyField31<FP>; 8],
+    res: &mut [MontyField31<FP>; 8],
+    _w: MontyField31<FP>,
+) {
+    let packed_b = PackedMontyField31AVX512::from_monty_array(*b);
+    let b_w = (packed_b.double() + packed_b).0;
+
+    // Constant coefficient = a0*b0 + w(a1*b7 + ... + a7*b1)
+    // Linear coefficient = a0*b1 + a1*b0 + w(a2*b7 + ... + a7*b2)
+    // Square coefficient = a0*b2 + .. + a2*b0 + w(a3*b7 + ... + a7*b3)
+    // Cube coefficient = a0*b3 + .. + a3*b0 + w(a4*b7 + ... + a7*b4)
+    // Quartic coefficient = a0*b4 + ... + a4*b0 + w(a5*b7 + ... + a7*b5)
+    // Quintic coefficient = a0*b5 + ... + a5*b0 + w(a6*b7 + ... + a7*b6)
+    // Sextic coefficient = a0*b6 + ... + a6*b0 + w*a7*b7
+    // Final coefficient = a0*b7 + ... + a7*b0
+    let dot_lhs: [PackedMontyField31AVX512<FP>; 8] = a.map(Into::into);
+    let dot_rhs = [
+        PackedMontyField31AVX512::from_monty_array([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]),
+        PackedMontyField31AVX512::from_monty_array([b_w[7], b[0], b[1], b[2], b[3], b[4], b[5], b[6]]),
+        PackedMontyField31AVX512::from_monty_array([b_w[6], b_w[7], b[0], b[1], b[2], b[3], b[4], b[5]]),
+        PackedMontyField31AVX512::from_monty_array([b_w[5], b_w[6], b_w[7], b[0], b[1], b[2], b[3], b[4]]),
+        PackedMontyField31AVX512::from_monty_array([b_w[4], b_w[5], b_w[6], b_w[7], b[0], b[1], b[2], b[3]]),
+        PackedMontyField31AVX512::from_monty_array([b_w[3], b_w[4], b_w[5], b_w[6], b_w[7], b[0], b[1], b[2]]),
+        PackedMontyField31AVX512::from_monty_array([b_w[2], b_w[3], b_w[4], b_w[5], b_w[6], b_w[7], b[0], b[1]]),
+        PackedMontyField31AVX512::from_monty_array([b_w[1], b_w[2], b_w[3], b_w[4], b_w[5], b_w[6], b_w[7], b[0]]),
+    ];
+
+    *res = PackedMontyField31AVX512::dot_product(&dot_lhs, &dot_rhs).0[..8].try_into().unwrap();
+}

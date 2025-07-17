@@ -15,14 +15,14 @@ impl<const WIDTH: usize, FP> BinomiallyExtendableAlgebra<MontyField31<FP>, WIDTH
 where
     FP: BinomialExtensionData<WIDTH> + FieldParameters,
 {
-    fn binomial_mul(
-        a: &[Self; WIDTH],
-        b: &[Self; WIDTH],
-        res: &mut [Self; WIDTH],
-        w: MontyField31<FP>,
-    ) {
-        FP::binomial_mul(a, b, res, w);
-    }
+    // fn binomial_mul(
+    //     a: &[Self; WIDTH],
+    //     b: &[Self; WIDTH],
+    //     res: &mut [Self; WIDTH],
+    //     w: MontyField31<FP>,
+    // ) {
+    //     FP::binomial_mul(a, b, res, w);
+    // }
 }
 
 impl<const WIDTH: usize, FP> BinomiallyExtendable<WIDTH> for MontyField31<FP>

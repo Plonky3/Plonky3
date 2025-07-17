@@ -7,7 +7,7 @@ use p3_field_testing::bench_func::{
 };
 use p3_field_testing::{benchmark_add_slices, benchmark_add_throughput, benchmark_mul};
 use p3_koala_bear::KoalaBear;
-use p3_monty_31::{octic_mul_packed, quartic_mul, quartic_mul_packed};
+use p3_monty_31::{octic_mul_packed, quartic_mul_packed};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
