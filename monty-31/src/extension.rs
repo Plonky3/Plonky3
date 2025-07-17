@@ -3,7 +3,10 @@ use p3_field::extension::{
 };
 use p3_field::{TwoAdicField, field_to_array};
 
-use crate::{octic_mul_packed, quartic_mul_packed, quintic_mul_packed, BinomialExtensionData, FieldParameters, MontyField31, TwoAdicData};
+use crate::{
+    BinomialExtensionData, FieldParameters, MontyField31, TwoAdicData, octic_mul_packed,
+    quartic_mul_packed, quintic_mul_packed,
+};
 
 // If a field implements BinomialExtensionData<WIDTH> then there is a natural
 // field extension of degree WIDTH we can define.

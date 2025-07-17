@@ -96,7 +96,7 @@ impl BinomialExtensionData<8> for KoalaBearParameters {
         [0, 0, 0, 0, 0, 0, 777715144, 0],
         [0, 0, 0, 0, 0, 0, 0, 14348907],
     ]);
-    
+
     #[inline(always)]
     fn mul_w<A: p3_field::Algebra<MontyField31<Self>>>(a: A) -> A {
         a.double() + a

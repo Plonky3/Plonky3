@@ -2,10 +2,10 @@
 
 mod poseidon2;
 
+use p3_field::extension::{octic_mul, quartic_mul, quintic_mul};
 pub use poseidon2::*;
 
-use crate::{FieldParameters, BinomialExtensionData, MontyField31};
-use p3_field::extension::{quartic_mul, quintic_mul, octic_mul};
+use crate::{BinomialExtensionData, FieldParameters, MontyField31};
 
 /// If no packings are available, we use the generic binomial extension multiplication functions.
 #[inline]

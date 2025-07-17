@@ -1,10 +1,11 @@
-use p3_field::extension::{BinomiallyExtendable, BinomiallyExtendableAlgebra, HasTwoAdicBinomialExtension};
+use p3_field::extension::{
+    BinomiallyExtendable, BinomiallyExtendableAlgebra, HasTwoAdicBinomialExtension,
+};
 use p3_field::{PrimeCharacteristicRing, TwoAdicField, field_to_array};
 
 use crate::Goldilocks;
 
-impl BinomiallyExtendableAlgebra<Goldilocks, 2> for Goldilocks {
-}
+impl BinomiallyExtendableAlgebra<Goldilocks, 2> for Goldilocks {}
 
 impl BinomiallyExtendable<2> for Goldilocks {
     // Verifiable in Sage with
@@ -34,8 +35,7 @@ impl HasTwoAdicBinomialExtension<2> for Goldilocks {
     }
 }
 
-impl BinomiallyExtendableAlgebra<Goldilocks, 5> for Goldilocks {
-}
+impl BinomiallyExtendableAlgebra<Goldilocks, 5> for Goldilocks {}
 
 impl BinomiallyExtendable<5> for Goldilocks {
     // Verifiable via:

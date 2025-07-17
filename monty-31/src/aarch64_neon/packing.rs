@@ -493,3 +493,141 @@ impl_packed_field_pow_2!(
     ],
     WIDTH
 );
+
+/// Multiplication in a quartic binomial extension field.
+///
+/// TODO: This could likely be optimised further with more effort.
+#[inline]
+pub fn quartic_mul_packed<FP, const WIDTH: usize>(
+    a: &[MontyField31<FP>; WIDTH],
+    b: &[MontyField31<FP>; WIDTH],
+    res: &mut [MontyField31<FP>; WIDTH],
+) where
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+{
+    assert_eq!(WIDTH, 4);
+
+    let b_w1 = FP::mul_w(b[1]);
+    let b_w2 = FP::mul_w(b[2]);
+    let b_w3 = FP::mul_w(b[3]);
+
+    // Constant term = a0*b0 + w(a1*b3 + a2*b2 + a3*b1)
+    // Linear term = a0*b1 + a1*b0 + w(a2*b3 + a3*b2)
+    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b3)
+    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0
+    let lhs: [PackedMontyField31Neon<FP>; 4] = [a[0].into(), a[1].into(), a[2].into(), a[3].into()];
+    let rhs = [
+        PackedMontyField31Neon([b[0], b[1], b[2], b[3]]),
+        PackedMontyField31Neon([b_w3, b[0], b[1], b[2]]),
+        PackedMontyField31Neon([b_w2, b_w3, b[0], b[1]]),
+        PackedMontyField31Neon([b_w1, b_w2, b_w3, b[0]]),
+    ];
+
+    let dot = PackedMontyField31Neon::dot_product(&lhs, &rhs).0;
+
+    res[..].copy_from_slice(&dot);
+}
+
+/// Multiplication in a quintic binomial extension field.
+///
+/// TODO: This could likely be optimised further with more effort.
+#[inline]
+pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
+    a: &[MontyField31<FP>; WIDTH],
+    b: &[MontyField31<FP>; WIDTH],
+    res: &mut [MontyField31<FP>; WIDTH],
+) where
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+{
+    assert_eq!(WIDTH, 5);
+    let b_w_1 = FP::mul_w(b[1]);
+    let b_w_2 = FP::mul_w(b[2]);
+    let b_w_3 = FP::mul_w(b[3]);
+    let b_w_4 = FP::mul_w(b[4]);
+
+    // Constant term = a0*b0 + w(a1*b4 + a2*b3 + a3*b2 + a4*b1)
+    // Linear term = a0*b1 + a1*b0 + w(a2*b4 + a3*b3 + a4*b2)
+    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b4 + a4*b3)
+    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0 + w*a4*b4
+    // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 + a4*b0
+    let lhs: [PackedMontyField31Neon<FP>; 8] = [
+        a[0].into(),
+        a[1].into(),
+        a[2].into(),
+        a[3].into(),
+        a[4].into(),
+    ];
+    let rhs = [
+        PackedMontyField31Neon([b[0], b[1], b[2], b[3]]),
+        PackedMontyField31Neon([b_w_4, b[0], b[1], b[2]]),
+        PackedMontyField31Neon([b_w_3, b_w_4, b[0], b[1]]),
+        PackedMontyField31Neon([b_w_2, b_w_3, b_w_4, b[0]]),
+        PackedMontyField31Neon([b_w_1, b_w_2, b_w_3, b_w_4]),
+    ];
+
+    let dot = PackedMontyField31Neon::dot_product(&lhs, &rhs);
+
+    res[..4].copy_from_slice(&dot);
+    res[4] = MontyField31::dot_product(&[a], &[b[4], b[3], b[2], b[1], b[0]]);
+}
+
+/// Multiplication in an octic binomial extension field.
+///
+/// TODO: This could likely be optimised further with more effort.
+#[inline]
+pub fn octic_mul_packed<FP: FieldParameters, const WIDTH: usize>(
+    a: &[MontyField31<FP>; WIDTH],
+    b: &[MontyField31<FP>; WIDTH],
+    res: &mut [MontyField31<FP>; WIDTH],
+) where
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+{
+    assert_eq!(WIDTH, 8);
+    let packed_b = PackedMontyField31Neon([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
+    let b_w = FP::mul_w(packed_b).0;
+
+    // Constant coefficient = a0*b0 + w(a1*b7 + ... + a7*b1)
+    // Linear coefficient = a0*b1 + a1*b0 + w(a2*b7 + ... + a7*b2)
+    // Square coefficient = a0*b2 + .. + a2*b0 + w(a3*b7 + ... + a7*b3)
+    // Cube coefficient = a0*b3 + .. + a3*b0 + w(a4*b7 + ... + a7*b4)
+    // Quartic coefficient = a0*b4 + ... + a4*b0 + w(a5*b7 + ... + a7*b5)
+    // Quintic coefficient = a0*b5 + ... + a5*b0 + w(a6*b7 + ... + a7*b6)
+    // Sextic coefficient = a0*b6 + ... + a6*b0 + w*a7*b7
+    // Final coefficient = a0*b7 + ... + a7*b0
+    let lhs: [PackedMontyField31Neon<FP>; 8] = [
+        a[0].into(),
+        a[1].into(),
+        a[2].into(),
+        a[3].into(),
+        a[4].into(),
+        a[5].into(),
+        a[6].into(),
+        a[7].into(),
+    ];
+    let rhs_0 = [
+        PackedMontyField31Neon([b[0], b[1], b[2], b[3]]),
+        PackedMontyField31Neon([b_w[7], b[0], b[1], b[2]]),
+        PackedMontyField31Neon([b_w[6], b_w[7], b[0], b[1]]),
+        PackedMontyField31Neon([b_w[5], b_w[6], b_w[7], b[0]]),
+        PackedMontyField31Neon([b_w[4], b_w[5], b_w[6], b_w[7]]),
+        PackedMontyField31Neon([b_w[3], b_w[4], b_w[5], b_w[6]]),
+        PackedMontyField31Neon([b_w[2], b_w[3], b_w[4], b_w[5]]),
+        PackedMontyField31Neon([b_w[1], b_w[2], b_w[3], b_w[4]]),
+    ];
+    let rhs_1 = [
+        PackedMontyField31Neon(b[4], b[5], b[6], b[7]),
+        PackedMontyField31Neon(b[3], b[4], b[5], b[6]),
+        PackedMontyField31Neon(b[2], b[3], b[4], b[5]),
+        PackedMontyField31Neon(b[1], b[2], b[3], b[4]),
+        PackedMontyField31Neon(b[0], b[1], b[2], b[3]),
+        PackedMontyField31Neon(b_w[7], b[0], b[1], b[2]),
+        PackedMontyField31Neon(b_w[6], b_w[7], b[0], b[1]),
+        PackedMontyField31Neon(b_w[5], b_w[6], b_w[7], b[0]),
+    ];
+
+    let dot_0 = PackedMontyField31Neon::dot_product(&lhs, &rhs_0).0;
+    let dot_1 = PackedMontyField31Neon::dot_product(&lhs, &rhs_1).0;
+
+    res[..4].copy_from_slice(&dot_0);
+    res[4..].copy_from_slice(&dot_1);
+}

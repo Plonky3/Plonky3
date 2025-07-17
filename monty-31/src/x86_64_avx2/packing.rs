@@ -20,7 +20,8 @@ use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 
 use crate::{
-    FieldParameters, MontyField31, PackedMontyParameters, RelativelyPrimePower, BinomialExtensionData, signed_add_avx2,
+    BinomialExtensionData, FieldParameters, MontyField31, PackedMontyParameters,
+    RelativelyPrimePower, signed_add_avx2,
 };
 
 const WIDTH: usize = 8;
@@ -1107,7 +1108,7 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
     let b_w_2 = FP::mul_w(b[2]);
     let b_w_3 = FP::mul_w(b[3]);
     let b_w_4 = FP::mul_w(b[4]);
-    
+
     // Constant term = a0*b0 + w(a1*b4 + a2*b3 + a3*b2 + a4*b1)
     // Linear term = a0*b1 + a1*b0 + w(a2*b4 + a3*b3 + a4*b2)
     // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b4 + a4*b3)
@@ -1126,11 +1127,10 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
         PackedMontyField31AVX2([b_w_2, b_w_3, b_w_4, b[0], b[1], zero, zero, zero]),
     ];
 
-    let dot_res = unsafe{PackedMontyField31AVX2::from_vector(dot_product_4(lhs, rhs)).0};
+    let dot_res = unsafe { PackedMontyField31AVX2::from_vector(dot_product_4(lhs, rhs)).0 };
 
     let extra1 = b_w_1 * a[4];
     let extra2 = b_w_2 * a[4];
-
 
     res[0] = dot_res[0] + extra1;
     res[1] = dot_res[1] + extra2;
@@ -1162,8 +1162,16 @@ pub fn octic_mul_packed<FP: FieldParameters, const WIDTH: usize>(
     // Quintic coefficient = a0*b5 + ... + a5*b0 + w(a6*b7 + ... + a7*b6)
     // Sextic coefficient = a0*b6 + ... + a6*b0 + w*a7*b7
     // Final coefficient = a0*b7 + ... + a7*b0
-    let lhs: [PackedMontyField31AVX2<FP>; 8] = [a[0].into(), a[1].into(), a[2].into(), a[3].into(),
-        a[4].into(), a[5].into(), a[6].into(), a[7].into()];
+    let lhs: [PackedMontyField31AVX2<FP>; 8] = [
+        a[0].into(),
+        a[1].into(),
+        a[2].into(),
+        a[3].into(),
+        a[4].into(),
+        a[5].into(),
+        a[6].into(),
+        a[7].into(),
+    ];
     let rhs = [
         PackedMontyField31AVX2([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]),
         PackedMontyField31AVX2([b_w[7], b[0], b[1], b[2], b[3], b[4], b[5], b[6]]),
@@ -1178,5 +1186,4 @@ pub fn octic_mul_packed<FP: FieldParameters, const WIDTH: usize>(
     let dot = PackedMontyField31AVX2::dot_product(&lhs, &rhs).0;
 
     res[..].copy_from_slice(&dot);
-
 }

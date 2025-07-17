@@ -1,4 +1,5 @@
 use core::hint::black_box;
+
 use criterion::{Criterion, criterion_group, criterion_main};
 use p3_field::PrimeCharacteristicRing;
 use p3_field::extension::BinomialExtensionField;
