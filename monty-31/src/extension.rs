@@ -3,7 +3,7 @@ use p3_field::extension::{
 };
 use p3_field::{TwoAdicField, field_to_array};
 
-use crate::{BinomialExtensionData, FieldParameters, MontyField31, TwoAdicData};
+use crate::{octic_mul_packed, quartic_mul_packed, BinomialExtensionData, FieldParameters, MontyField31, TwoAdicData};
 
 // If a field implements BinomialExtensionData<WIDTH> then there is a natural
 // field extension of degree WIDTH we can define.
@@ -15,14 +15,18 @@ impl<const WIDTH: usize, FP> BinomiallyExtendableAlgebra<MontyField31<FP>, WIDTH
 where
     FP: BinomialExtensionData<WIDTH> + FieldParameters,
 {
-    #[inline]
+    #[inline(always)]
     fn binomial_mul(
         a: &[Self; WIDTH],
         b: &[Self; WIDTH],
         res: &mut [Self; WIDTH],
-        w: MontyField31<FP>,
+        _w: MontyField31<FP>,
     ) {
-        FP::binomial_mul(a, b, res, w);
+        match WIDTH {
+            4 => quartic_mul_packed(a, b, res),
+            8 => octic_mul_packed(a, b, res),
+            _ => panic!("Unsupported binomial extension degree: {}", WIDTH),
+        }
     }
 }
 

@@ -2,7 +2,7 @@ use p3_field::PrimeCharacteristicRing;
 use p3_field::exponentiation::exp_1420470955;
 use p3_monty_31::{
     BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
-    PackedMontyParameters, RelativelyPrimePower, TwoAdicData, octic_mul_packed, quartic_mul_packed,
+    PackedMontyParameters, RelativelyPrimePower, TwoAdicData,
 };
 
 /// The prime field `2^31 - 2^24 + 1`, a.k.a. the Koala Bear field.
@@ -67,6 +67,12 @@ impl TwoAdicData for KoalaBearParameters {
 
 impl BinomialExtensionData<4> for KoalaBearParameters {
     const W: KoalaBear = KoalaBear::new(3);
+
+    #[inline(always)]
+    fn mul_w<A: p3_field::Algebra<MontyField31<Self>>>(a: A) -> A {
+        a.double() + a
+    }
+
     const DTH_ROOT: KoalaBear = KoalaBear::new(2113994754);
     const EXT_GENERATOR: [KoalaBear; 4] = KoalaBear::new_array([2, 1, 0, 0]);
     const EXT_TWO_ADICITY: usize = 26;
@@ -75,16 +81,6 @@ impl BinomialExtensionData<4> for KoalaBearParameters {
 
     const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike =
         KoalaBear::new_2d_array([[0, 0, 1759267465, 0], [0, 0, 0, 777715144]]);
-
-    #[inline]
-    fn binomial_mul(
-        a: &[MontyField31<Self>; 4],
-        b: &[MontyField31<Self>; 4],
-        res: &mut [MontyField31<Self>; 4],
-        w: MontyField31<Self>,
-    ) {
-        quartic_mul_packed(a, b, res, w);
-    }
 }
 
 impl BinomialExtensionData<8> for KoalaBearParameters {
@@ -100,15 +96,10 @@ impl BinomialExtensionData<8> for KoalaBearParameters {
         [0, 0, 0, 0, 0, 0, 777715144, 0],
         [0, 0, 0, 0, 0, 0, 0, 14348907],
     ]);
-
-    #[inline]
-    fn binomial_mul(
-        a: &[MontyField31<Self>; 8],
-        b: &[MontyField31<Self>; 8],
-        res: &mut [MontyField31<Self>; 8],
-        w: MontyField31<Self>,
-    ) {
-        octic_mul_packed(a, b, res, w);
+    
+    #[inline(always)]
+    fn mul_w<A: p3_field::Algebra<MontyField31<Self>>>(a: A) -> A {
+        a.double() + a
     }
 }
 

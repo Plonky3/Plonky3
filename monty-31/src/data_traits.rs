@@ -1,7 +1,7 @@
 use core::fmt::Debug;
 use core::hash::Hash;
 
-use p3_field::PrimeCharacteristicRing;
+use p3_field::{Algebra, PrimeCharacteristicRing};
 
 use crate::MontyField31;
 
@@ -125,6 +125,10 @@ pub trait BinomialExtensionData<const DEG: usize>: MontyParameters + Sized {
     /// W is a value such that (x^DEG - W) is irreducible.
     const W: MontyField31<Self>;
 
+    fn mul_w<A: Algebra<MontyField31<Self>>>(a: A) -> A {
+        a * Self::W
+    }
+
     /// DTH_ROOT = W^((p - 1)/DEG)
     const DTH_ROOT: MontyField31<Self>;
 
@@ -138,11 +142,4 @@ pub trait BinomialExtensionData<const DEG: usize>: MontyParameters + Sized {
 
     /// A list of generators of 2-adic subgroups not contained in the base field.
     const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike;
-
-    fn binomial_mul(
-        a: &[MontyField31<Self>; DEG],
-        b: &[MontyField31<Self>; DEG],
-        res: &mut [MontyField31<Self>; DEG],
-        w: MontyField31<Self>,
-    );
 }

@@ -25,7 +25,7 @@ use p3_util::reconstitute_from_base;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 
-use crate::{FieldParameters, MontyField31, PackedMontyParameters, RelativelyPrimePower};
+use crate::{BinomialExtensionData, FieldParameters, MontyField31, PackedMontyParameters, RelativelyPrimePower};
 
 const WIDTH: usize = 16;
 
@@ -1182,32 +1182,33 @@ impl_packed_field_pow_2!(
 /// Makes use of the in built field dot product code. This is optimized for the case that
 /// R is a prime field or its packing.
 #[inline]
-pub fn quartic_mul_packed<FP: FieldParameters>(
-    a: &[MontyField31<FP>; 4],
-    b: &[MontyField31<FP>; 4],
-    res: &mut [MontyField31<FP>; 4],
-    _w: MontyField31<FP>,
-) {
+pub fn quartic_mul_packed<FP, const WIDTH: usize>(
+    a: &[MontyField31<FP>; WIDTH],
+    b: &[MontyField31<FP>; WIDTH],
+    res: &mut [MontyField31<FP>; WIDTH],
+) where
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+{
+    assert_eq!(WIDTH, 4);
     let zero = MontyField31::<FP>::ZERO;
-    // b1_w, b2_w, b3_w
-    // let packed_b = PackedMontyField31AVX2([b[0], b[1], b[2], b[3], zero, zero, zero, zero]);
-    // let b_w = packed_b * w;
-    // let b_w1 = b_w.0[1];
-    // let b_w2 = b_w.0[2];
-    // let b_w3 = b_w.0[3];
-    let b_w1 = b[1].double() + b[1];
-    let b_w2 = b[2].double() + b[2];
-    let b_w3 = b[3].double() + b[3];
+
+    // No point in using packings here as we only have 3 elements.
+    let b_w1 = FP::mul_w(b[1]);
+    let b_w2 = FP::mul_w(b[2]);
+    let b_w3 = FP::mul_w(b[3]);
 
     // Constant term = a0*b0 + w(a1*b3 + a2*b2 + a3*b1)
     // Linear term = a0*b1 + a1*b0 + w(a2*b3 + a3*b2)
     // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b3)
     // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0
+    // The constant term will be computed in the first 128bits, the linear term in the second 128bits,
+    // the square term in the third 128bits and the cubic term in the fourth 128bits.
     let lhs = [PackedMontyField31AVX512([a[0], zero, a[1], zero, a[0], zero, a[1], zero, a[0], zero, a[1], zero, a[0], zero, a[1], zero]),
         PackedMontyField31AVX512([a[2], zero, a[3], zero, a[2], zero, a[3], zero, a[2], zero, a[3], zero, a[2], zero, a[3], zero])];
     let rhs = [PackedMontyField31AVX512([b[0], zero, b_w3, zero, b[1], zero, b[0], zero, b[2], zero, b[1], zero, b[3], zero, b[2], zero]),
     PackedMontyField31AVX512([b_w2, zero, b_w1, zero, b_w3, zero, b_w2, zero, b[0], zero, b_w3, zero, b[1], zero, b[0], zero])];
 
+    // We could use dot_product_2 but we can be a little more efficient as we have already zero-interleaved the inputs.
     let dot_product: [MontyField31<FP>; 16] = unsafe {
         let lhs_0 = lhs[0].to_vector();
         let lhs_1 = lhs[1].to_vector();
@@ -1255,14 +1256,17 @@ pub fn quartic_mul_packed<FP: FieldParameters>(
 /// Makes use of the in built field dot product code. This is optimized for the case that
 /// R is a prime field or its packing.
 #[inline]
-pub fn octic_mul_packed<FP: FieldParameters>(
-    a: &[MontyField31<FP>; 8],
-    b: &[MontyField31<FP>; 8],
-    res: &mut [MontyField31<FP>; 8],
-    _w: MontyField31<FP>,
-) {
+pub fn octic_mul_packed<FP, const WIDTH: usize>
+(
+    a: &[MontyField31<FP>; WIDTH],
+    b: &[MontyField31<FP>; WIDTH],
+    res: &mut [MontyField31<FP>; WIDTH],
+) where
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+{
+    assert_eq!(WIDTH, 8);
     let packed_b = PackedMontyField31AVX512::from_monty_array(*b);
-    let b_w = (packed_b.double() + packed_b).0;
+    let b_w = FP::mul_w(packed_b).0;
 
     // Constant coefficient = a0*b0 + w(a1*b7 + ... + a7*b1)
     // Linear coefficient = a0*b1 + a1*b0 + w(a2*b7 + ... + a7*b2)
@@ -1272,24 +1276,29 @@ pub fn octic_mul_packed<FP: FieldParameters>(
     // Quintic coefficient = a0*b5 + ... + a5*b0 + w(a6*b7 + ... + a7*b6)
     // Sextic coefficient = a0*b6 + ... + a6*b0 + w*a7*b7
     // Final coefficient = a0*b7 + ... + a7*b0
-    let dot_lhs = [
+    // The i'th 64 bit chunk of the _mm512 vector will compute the i'th coefficient.
+    let lhs = [
         PackedMontyField31AVX512([a[0], a[1], a[0], a[1], a[0], a[1], a[0], a[1], a[0], a[1], a[0], a[1], a[0], a[1], a[0], a[1]]),
         PackedMontyField31AVX512([a[2], a[3], a[2], a[3], a[2], a[3], a[2], a[3], a[2], a[3], a[2], a[3], a[2], a[3], a[2], a[3]]),
         PackedMontyField31AVX512([a[4], a[5], a[4], a[5], a[4], a[5], a[4], a[5], a[4], a[5], a[4], a[5], a[4], a[5], a[4], a[5]]),
         PackedMontyField31AVX512([a[6], a[7], a[6], a[7], a[6], a[7], a[6], a[7], a[6], a[7], a[6], a[7], a[6], a[7], a[6], a[7]])
     ];
-    let dot_rhs = [
-        PackedMontyField31AVX512::from_monty_array([b[0], b_w[7], b[1], b[0], b[2], b[1], b[3], b[2], b[4], b[3], b[5], b[4], b[6], b[5], b[7], b[6]]),
-        PackedMontyField31AVX512::from_monty_array([b_w[6], b_w[5], b_w[7], b_w[6], b[0], b_w[7], b[1], b[0], b[2], b[1], b[3], b[2], b[4], b[3], b[5], b[4]]),
-        PackedMontyField31AVX512::from_monty_array([b_w[4], b_w[3], b_w[5], b_w[4], b_w[6], b_w[5], b_w[7], b_w[6], b[0], b_w[7], b[1], b[0], b[2], b[1], b[3], b[2]]),
-        PackedMontyField31AVX512::from_monty_array([b_w[2], b_w[1], b_w[3], b_w[2], b_w[4], b_w[3], b_w[5], b_w[4], b_w[6], b_w[5], b_w[7], b_w[6], b[0], b_w[7], b[1], b[0]]),
+    let rhs = [
+        PackedMontyField31AVX512([b[0], b_w[7], b[1], b[0], b[2], b[1], b[3], b[2], b[4], b[3], b[5], b[4], b[6], b[5], b[7], b[6]]),
+        PackedMontyField31AVX512([b_w[6], b_w[5], b_w[7], b_w[6], b[0], b_w[7], b[1], b[0], b[2], b[1], b[3], b[2], b[4], b[3], b[5], b[4]]),
+        PackedMontyField31AVX512([b_w[4], b_w[3], b_w[5], b_w[4], b_w[6], b_w[5], b_w[7], b_w[6], b[0], b_w[7], b[1], b[0], b[2], b[1], b[3], b[2]]),
+        PackedMontyField31AVX512([b_w[2], b_w[1], b_w[3], b_w[2], b_w[4], b_w[3], b_w[5], b_w[4], b_w[6], b_w[5], b_w[7], b_w[6], b[0], b_w[7], b[1], b[0]]),
     ];
 
-    let dot = PackedMontyField31AVX512::dot_product(&dot_lhs, &dot_rhs);
+    // Now take the dot product of the two vectors.
+    let dot = dot_product_4(lhs, rhs);
+
+    // It remains to sum the 32 bit halves of the 64 bit chunks together.
     let total = unsafe {
-        let packed_dot = dot.to_vector();
-        let swizzled_dot = x86_64::_mm512_shuffle_epi32::<0b10110001>(packed_dot);
-        let sum = add::<FP>(packed_dot, swizzled_dot);
+        // We could do this via putting the relevant pieces into a __mm256 vectors but
+        // the data fiddling seems to be more expensive than just doing the naive thing.
+        let swizzled_dot = x86_64::_mm512_shuffle_epi32::<0b10110001>(dot);
+        let sum = add::<FP>(dot, swizzled_dot);
         PackedMontyField31AVX512::<FP>::from_vector(sum)
     };
 
