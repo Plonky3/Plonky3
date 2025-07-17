@@ -1179,8 +1179,7 @@ impl_packed_field_pow_2!(
 
 /// Multiplication in a quartic binomial extension field.
 ///
-/// Makes use of the in built field dot product code. This is optimized for the case that
-/// R is a prime field or its packing.
+/// TODO: This could likely be optimised further with more effort.
 #[inline]
 pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
     a: &[MontyField31<FP>; WIDTH],
@@ -1203,10 +1202,10 @@ pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
     // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0
     // The constant term will be computed in the first 128bits, the linear term in the second 128bits,
     // the square term in the third 128bits and the cubic term in the fourth 128bits.
-    let lhs = [PackedMontyField31AVX512([a[0], zero, a[1], zero, a[0], zero, a[1], zero, a[0], zero, a[1], zero, a[0], zero, a[1], zero]),
-        PackedMontyField31AVX512([a[2], zero, a[3], zero, a[2], zero, a[3], zero, a[2], zero, a[3], zero, a[2], zero, a[3], zero])];
-    let rhs = [PackedMontyField31AVX512([b[0], zero, b_w3, zero, b[1], zero, b[0], zero, b[2], zero, b[1], zero, b[3], zero, b[2], zero]),
-    PackedMontyField31AVX512([b_w2, zero, b_w1, zero, b_w3, zero, b_w2, zero, b[0], zero, b_w3, zero, b[1], zero, b[0], zero])];
+    let lhs = [PackedMontyField31AVX512([a[0], zero, a[1], zero, a[2], zero, a[3], zero, a[0], zero, a[1], zero, a[2], zero, a[3], zero]),
+        PackedMontyField31AVX512([a[2], zero, a[3], zero, a[0], zero, a[1], zero, a[2], zero, a[3], zero, a[0], zero, a[1], zero])];
+    let rhs = [PackedMontyField31AVX512([b[0], zero, b_w3, zero, b_w3, zero, b_w2, zero, b[2], zero, b[1], zero, b[1], zero, b[0], zero]),
+    PackedMontyField31AVX512([b_w2, zero, b_w1, zero, b[1], zero, b[0], zero, b[0], zero, b_w3, zero, b[3], zero, b[2], zero])];
 
     // We could use dot_product_2 but we can be a little more efficient as we have already zero-interleaved the inputs.
     let dot_product: [MontyField31<FP>; 16] = unsafe {
@@ -1253,8 +1252,7 @@ pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
 
 /// Multiplication in a quintic binomial extension field.
 ///
-/// Makes use of the in built field dot product code. This is optimized for the case that
-/// R is a prime field or its packing.
+/// TODO: This could likely be optimised further with more effort.
 #[inline]
 pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
     a: &[MontyField31<FP>; WIDTH],
@@ -1279,25 +1277,25 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
     // Each packed vector can do 8 multiplications at once. As we have
     // 25 multiplications to do we will need to use at least 3 packed vectors 
     // but we might as well use 4 so we can make use of dot_product_2.
-
-    let lhs = [PackedMontyField31AVX512([a[0], a[1], a[0], a[1], a[0], a[1], a[0], a[1], a[0], a[1], a[4], a[4], a[4], a[4], a[4], zero]),
-                PackedMontyField31AVX512([a[2], a[3], a[2], a[3], a[2], a[3], a[2], a[3], a[2], a[3], zero, zero, zero, zero, zero, zero])];
-    let rhs = [PackedMontyField31AVX512([b[0], b_w_4, b[1], b[0], b[2], b[1], b[3], b[2], b[4], b[3], b_w_1, b_w_2, b_w_3, b_w_4, b[0], zero]),
-    PackedMontyField31AVX512([b_w_3, b_w_2, b_w_4, b_w_3, b[0], b_w_4, b[1], b[0], b[2], b[1], zero, zero, zero, zero, zero, zero])];
+    // TODO: This can probably be improved by using a custom function.
+    let lhs = [PackedMontyField31AVX512([a[0], a[1], a[0], a[1], a[2], a[3], a[0], a[1], a[2], a[3], a[4], a[4], a[4], a[4], a[4], zero]),
+                PackedMontyField31AVX512([a[2], a[3], a[2], a[3], a[0], a[1], a[2], a[3], a[0], a[1], zero, zero, zero, zero, zero, zero])];
+    let rhs = [PackedMontyField31AVX512([b[0], b_w_4, b[1], b[0], b[0], b_w_4, b[3], b[2], b[2], b[1], b_w_1, b_w_2, b_w_3, b_w_4, b[0], zero]),
+               PackedMontyField31AVX512([b_w_3, b_w_2, b_w_4, b_w_3, b[2], b[1], b[1], b[0], b[4], b[3], zero, zero, zero, zero, zero, zero])];
     
     let dot = unsafe{PackedMontyField31AVX512::from_vector(dot_product_2(lhs, rhs)).0};
     
-    res[0] = dot[0] + dot[1] + dot[10];
-    res[1] = dot[2] + dot[3] + dot[11];
-    res[2] = dot[4] + dot[5] + dot[12];
-    res[3] = dot[6] + dot[7] + dot[13];
-    res[4] = dot[8] + dot[9] + dot[14];
+    let sumand1 = PackedMontyField31AVX512::from_monty_array([dot[0], dot[2], dot[4], dot[6], dot[8]]);
+    let sumand2 = PackedMontyField31AVX512::from_monty_array([dot[1], dot[3], dot[5], dot[7], dot[9]]);
+    let sumand3 = PackedMontyField31AVX512::from_monty_array([dot[10], dot[11], dot[12], dot[13], dot[14]]);
+    let sum = sumand1 + sumand2 + sumand3;
+
+    res.copy_from_slice(&sum.0[..5]);
 }
 
 /// Multiplication in an octic binomial extension field.
 ///
-/// Makes use of the in built field dot product code. This is optimized for the case that
-/// R is a prime field or its packing.
+/// TODO: This could likely be optimised further with more effort.
 #[inline]
 pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>
 (
@@ -1321,16 +1319,16 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>
     // Final coefficient = a0*b7 + ... + a7*b0
     // The i'th 64 bit chunk of the _mm512 vector will compute the i'th coefficient.
     let lhs = [
-        PackedMontyField31AVX512([a[0], a[1], a[0], a[1], a[0], a[1], a[0], a[1], a[0], a[1], a[0], a[1], a[0], a[1], a[0], a[1]]),
-        PackedMontyField31AVX512([a[2], a[3], a[2], a[3], a[2], a[3], a[2], a[3], a[2], a[3], a[2], a[3], a[2], a[3], a[2], a[3]]),
-        PackedMontyField31AVX512([a[4], a[5], a[4], a[5], a[4], a[5], a[4], a[5], a[4], a[5], a[4], a[5], a[4], a[5], a[4], a[5]]),
-        PackedMontyField31AVX512([a[6], a[7], a[6], a[7], a[6], a[7], a[6], a[7], a[6], a[7], a[6], a[7], a[6], a[7], a[6], a[7]])
+        PackedMontyField31AVX512([a[0],   a[1],   a[2],   a[3],   a[4],   a[5],   a[6],   a[7],   a[0],   a[1],   a[2],   a[3],   a[4],   a[5], a[6], a[7]]),
+        PackedMontyField31AVX512([a[2],   a[3],   a[4],   a[5],   a[6],   a[7],   a[0],   a[1],   a[2],   a[3],   a[4],   a[5],   a[6],   a[7], a[0], a[1]]),
+        PackedMontyField31AVX512([a[4],   a[5],   a[6],   a[7],   a[0],   a[1],   a[2],   a[3],   a[4],   a[5],   a[6],   a[7],   a[0],   a[1], a[2], a[3]]),
+        PackedMontyField31AVX512([a[6],   a[7],   a[0],   a[1],   a[2],   a[3],   a[4],   a[5],   a[6],   a[7],   a[0],   a[1],   a[2],   a[3], a[4], a[5]])
     ];
     let rhs = [
-        PackedMontyField31AVX512([b[0], b_w[7], b[1], b[0], b[2], b[1], b[3], b[2], b[4], b[3], b[5], b[4], b[6], b[5], b[7], b[6]]),
-        PackedMontyField31AVX512([b_w[6], b_w[5], b_w[7], b_w[6], b[0], b_w[7], b[1], b[0], b[2], b[1], b[3], b[2], b[4], b[3], b[5], b[4]]),
-        PackedMontyField31AVX512([b_w[4], b_w[3], b_w[5], b_w[4], b_w[6], b_w[5], b_w[7], b_w[6], b[0], b_w[7], b[1], b[0], b[2], b[1], b[3], b[2]]),
-        PackedMontyField31AVX512([b_w[2], b_w[1], b_w[3], b_w[2], b_w[4], b_w[3], b_w[5], b_w[4], b_w[6], b_w[5], b_w[7], b_w[6], b[0], b_w[7], b[1], b[0]]),
+        PackedMontyField31AVX512([b[0],   b_w[7], b_w[7], b_w[6], b_w[6], b_w[5], b_w[5], b_w[4], b[4],   b[3],   b[3],   b[2],   b[2], b[1],   b[1], b[0]]),
+        PackedMontyField31AVX512([b_w[6], b_w[5], b_w[5], b_w[4], b_w[4], b_w[3], b[3],   b[2],   b[2],   b[1],   b[1],   b[0],   b[0], b_w[7], b[7], b[6]]),
+        PackedMontyField31AVX512([b_w[4], b_w[3], b_w[3], b_w[2], b[2],   b[1],   b[1],   b[0],   b[0],   b_w[7], b_w[7], b_w[6], b[6], b[5],   b[5], b[4]]),
+        PackedMontyField31AVX512([b_w[2], b_w[1], b[1],   b[0],   b[0],   b_w[7], b_w[7], b_w[6], b_w[6], b_w[5], b[5],   b[4],   b[4], b[3],   b[3], b[2]]),
     ];
 
     // Now take the dot product of the two vectors.

@@ -18,9 +18,6 @@ impl MontyParametersAVX2 for KoalaBearParameters {
 mod tests {
     use p3_field::PrimeCharacteristicRing;
     use p3_field_testing::test_packed_field;
-    use p3_monty_31::{quartic_mul, quartic_mul_packed};
-    use rand::rngs::SmallRng;
-    use rand::{Rng, SeedableRng};
 
     use super::WIDTH;
     use crate::KoalaBear;
@@ -36,20 +33,4 @@ mod tests {
         &[crate::PackedKoalaBearAVX2::ONE],
         p3_monty_31::PackedMontyField31AVX2::<crate::KoalaBearParameters>(super::SPECIAL_VALS)
     );
-
-    #[test]
-    fn test_packed_ex_mul() {
-        let mut rng = SmallRng::seed_from_u64(1);
-        let w = KoalaBear::TWO + KoalaBear::ONE;
-        let a: [KoalaBear; 4] = rng.random();
-        let b: [KoalaBear; 4] = rng.random();
-
-        let mut res_0 = [KoalaBear::ZERO; 4];
-        let mut res_1 = [KoalaBear::ZERO; 4];
-
-        quartic_mul(&a, &b, &mut res_0, w);
-        quartic_mul_packed(&a, &b, &mut res_1, w);
-
-        assert_eq!(res_0, res_1);
-    }
 }

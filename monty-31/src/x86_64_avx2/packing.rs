@@ -20,7 +20,7 @@ use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 
 use crate::{
-    FieldParameters, MontyField31, PackedMontyParameters, RelativelyPrimePower, signed_add_avx2,
+    FieldParameters, MontyField31, PackedMontyParameters, RelativelyPrimePower, BinomialExtensionData, signed_add_avx2,
 };
 
 const WIDTH: usize = 8;
@@ -1048,103 +1048,111 @@ impl_packed_field_pow_2!(
 
 /// Multiplication in a quartic binomial extension field.
 ///
-/// Makes use of the in built field dot product code. This is optimized for the case that
-/// R is a prime field or its packing.
+/// TODO: This could likely be optimised further with more effort.
 #[inline]
-pub fn quartic_mul<FP: FieldParameters>(
-    a: &[MontyField31<FP>; 4],
-    b: &[MontyField31<FP>; 4],
-    res: &mut [MontyField31<FP>; 4],
-    w: MontyField31<FP>,
-) {
-    let b_r_rev: [MontyField31<FP>; 5] = [b[3], b[2], b[1], b[0], w];
+pub fn quartic_mul_packed<FP, const WIDTH: usize>(
+    a: &[MontyField31<FP>; WIDTH],
+    b: &[MontyField31<FP>; WIDTH],
+    res: &mut [MontyField31<FP>; WIDTH],
+) where
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+{
+    assert_eq!(WIDTH, 4);
 
-    // Constant term = a0*b0 + w(a1*b3 + a2*b2 + a3*b1)
-    let w_coeff_0 = MontyField31::dot_product::<3>(
-        a[1..].try_into().unwrap(),
-        b_r_rev[..3].try_into().unwrap(),
-    );
-    res[0] = MontyField31::dot_product(&[a[0], w_coeff_0], b_r_rev[3..].try_into().unwrap());
-
-    // Linear term = a0*b1 + a1*b0 + w(a2*b3 + a3*b2)
-    let w_coeff_1 = MontyField31::dot_product::<2>(
-        a[2..].try_into().unwrap(),
-        b_r_rev[..2].try_into().unwrap(),
-    );
-    res[1] = MontyField31::dot_product(&[a[0], a[1], w_coeff_1], b_r_rev[2..].try_into().unwrap());
-
-    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b3)
-    let b3_w = b[3] * w;
-    res[2] = MontyField31::dot_product::<4>(
-        a[..4].try_into().unwrap(),
-        &[b_r_rev[1], b_r_rev[2], b_r_rev[3], b3_w],
-    );
-
-    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0
-    res[3] =
-        MontyField31::dot_product::<4>(a[..].try_into().unwrap(), b_r_rev[..4].try_into().unwrap());
-}
-
-/// Multiplication in a quartic binomial extension field.
-///
-/// Makes use of the in built field dot product code. This is optimized for the case that
-/// R is a prime field or its packing.
-#[inline]
-pub fn quartic_mul_packed<FP: FieldParameters>(
-    a: &[MontyField31<FP>; 4],
-    b: &[MontyField31<FP>; 4],
-    res: &mut [MontyField31<FP>; 4],
-    _w: MontyField31<FP>,
-) {
-    let zero = MontyField31::ZERO;
-
-    // b1_w, b2_w, b3_w
-    // let packed_b = PackedMontyField31AVX2([b[0], b[1], b[2], b[3], zero, zero, zero, zero]);
-    // let b_w = packed_b * w;
-    // let b_w1 = b_w.0[1];
-    // let b_w2 = b_w.0[2];
-    // let b_w3 = b_w.0[3];
-    let b_w1 = b[1].double() + b[1];
-    let b_w2 = b[2].double() + b[2];
-    let b_w3 = b[3].double() + b[3];
+    let b_w1 = FP::mul_w(b[1]);
+    let b_w2 = FP::mul_w(b[2]);
+    let b_w3 = FP::mul_w(b[3]);
 
     // Constant term = a0*b0 + w(a1*b3 + a2*b2 + a3*b1)
     // Linear term = a0*b1 + a1*b0 + w(a2*b3 + a3*b2)
     // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b3)
     // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0
+    // The i'th 64 bit chunk of the _mm512 vector will compute the i'th coefficient.
     let dot_lhs = [
-        PackedMontyField31AVX2([a[0], a[0], a[0], a[0], zero, zero, zero, zero]),
-        PackedMontyField31AVX2([a[1], a[1], a[1], a[1], zero, zero, zero, zero]),
-        PackedMontyField31AVX2([a[2], a[2], a[2], a[2], zero, zero, zero, zero]),
-        PackedMontyField31AVX2([a[3], a[3], a[3], a[3], zero, zero, zero, zero]),
+        PackedMontyField31AVX2([a[0], a[1], a[2], a[3], a[0], a[1], a[2], a[3]]),
+        PackedMontyField31AVX2([a[2], a[3], a[0], a[1], a[2], a[3], a[0], a[1]]),
     ];
     let dot_rhs = [
-        PackedMontyField31AVX2([b[0], b[1], b[2], b[3], zero, zero, zero, zero]),
-        PackedMontyField31AVX2([b_w3, b[0], b[1], b[2], zero, zero, zero, zero]),
-        PackedMontyField31AVX2([b_w2, b_w3, b[0], b[1], zero, zero, zero, zero]),
-        PackedMontyField31AVX2([b_w1, b_w2, b_w3, b[0], zero, zero, zero, zero]),
+        PackedMontyField31AVX2([b[0], b_w3, b_w3, b_w2, b[2], b[1], b[1], b[0]]),
+        PackedMontyField31AVX2([b_w2, b_w1, b[1], b[0], b[0], b_w3, b[3], b[2]]),
     ];
 
-    let dot_product = PackedMontyField31AVX2::dot_product(&dot_lhs, &dot_rhs);
-    res[0] = dot_product.0[0];
-    res[1] = dot_product.0[1];
-    res[2] = dot_product.0[2];
-    res[3] = dot_product.0[3];
+    let dot_product: [MontyField31<FP>; 8] = unsafe {
+        let dot = dot_product_2(dot_lhs, dot_rhs);
+        let swizzled_dot = x86_64::_mm256_shuffle_epi32::<0b10110001>(dot);
+        let sum = add::<FP>(dot, swizzled_dot);
+        transmute(sum)
+    };
+
+    res[0] = dot_product[0];
+    res[1] = dot_product[2];
+    res[2] = dot_product[4];
+    res[3] = dot_product[6];
+}
+
+/// Multiplication in a quintic binomial extension field.
+///
+/// TODO: This could likely be optimised further with more effort.
+#[inline]
+pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
+    a: &[MontyField31<FP>; WIDTH],
+    b: &[MontyField31<FP>; WIDTH],
+    res: &mut [MontyField31<FP>; WIDTH],
+) where
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+{
+    assert_eq!(WIDTH, 5);
+    let zero = MontyField31::<FP>::ZERO;
+    let b_w_1 = FP::mul_w(b[1]);
+    let b_w_2 = FP::mul_w(b[2]);
+    let b_w_3 = FP::mul_w(b[3]);
+    let b_w_4 = FP::mul_w(b[4]);
+    
+    // Constant term = a0*b0 + w(a1*b4 + a2*b3 + a3*b2 + a4*b1)
+    // Linear term = a0*b1 + a1*b0 + w(a2*b4 + a3*b3 + a4*b2)
+    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b4 + a4*b3)
+    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0 + w*a4*b4
+    // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 + a4*b0
+    let lhs = [
+        PackedMontyField31AVX2([a[0], a[0], a[0], a[0], a[0], a[4], a[4], a[4]]),
+        PackedMontyField31AVX2([a[1], a[1], a[1], a[1], a[1], zero, zero, zero]),
+        PackedMontyField31AVX2([a[2], a[2], a[2], a[2], a[2], zero, zero, zero]),
+        PackedMontyField31AVX2([a[3], a[3], a[3], a[3], a[3], zero, zero, zero]),
+    ];
+    let rhs = [
+        PackedMontyField31AVX2([b[0], b[1], b[2], b[3], b[4], b_w_3, b_w_4, b[0]]),
+        PackedMontyField31AVX2([b_w_4, b[0], b[1], b[2], b[3], zero, zero, zero]),
+        PackedMontyField31AVX2([b_w_3, b_w_4, b[0], b[1], b[2], zero, zero, zero]),
+        PackedMontyField31AVX2([b_w_2, b_w_3, b_w_4, b[0], b[1], zero, zero, zero]),
+    ];
+
+    let dot_res = unsafe{PackedMontyField31AVX2::from_vector(dot_product_4(lhs, rhs)).0};
+
+    let extra1 = b_w_1 * a[4];
+    let extra2 = b_w_2 * a[4];
+
+
+    res[0] = dot_res[0] + extra1;
+    res[1] = dot_res[1] + extra2;
+    res[2] = dot_res[2] + dot_res[5];
+    res[3] = dot_res[3] + dot_res[6];
+    res[4] = dot_res[4] + dot_res[7];
 }
 
 /// Multiplication in an octic binomial extension field.
 ///
-/// Makes use of the in built field dot product code. This is optimized for the case that
-/// R is a prime field or its packing.
+/// TODO: This could likely be optimised further with more effort.
 #[inline]
-pub fn octic_mul_packed<FP: FieldParameters>(
-    a: &[MontyField31<FP>; 8],
-    b: &[MontyField31<FP>; 8],
-    res: &mut [MontyField31<FP>; 8],
-    _w: MontyField31<FP>,
-) {
-    let packed_b = PackedMontyField31AVX2(*b);
-    let b_w = (packed_b.double() + packed_b).0;
+pub fn octic_mul_packed<FP: FieldParameters, const WIDTH: usize>(
+    a: &[MontyField31<FP>; WIDTH],
+    b: &[MontyField31<FP>; WIDTH],
+    res: &mut [MontyField31<FP>; WIDTH],
+) where
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+{
+    assert_eq!(WIDTH, 8);
+    let packed_b = PackedMontyField31AVX2([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
+    let b_w = FP::mul_w(packed_b).0;
 
     // Constant coefficient = a0*b0 + w(a1*b7 + ... + a7*b1)
     // Linear coefficient = a0*b1 + a1*b0 + w(a2*b7 + ... + a7*b2)
@@ -1154,8 +1162,9 @@ pub fn octic_mul_packed<FP: FieldParameters>(
     // Quintic coefficient = a0*b5 + ... + a5*b0 + w(a6*b7 + ... + a7*b6)
     // Sextic coefficient = a0*b6 + ... + a6*b0 + w*a7*b7
     // Final coefficient = a0*b7 + ... + a7*b0
-    let dot_lhs: [PackedMontyField31AVX2<FP>; 8] = a.map(Into::into);
-    let dot_rhs = [
+    let lhs: [PackedMontyField31AVX2<FP>; 8] = [a[0].into(), a[1].into(), a[2].into(), a[3].into(),
+        a[4].into(), a[5].into(), a[6].into(), a[7].into()];
+    let rhs = [
         PackedMontyField31AVX2([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]),
         PackedMontyField31AVX2([b_w[7], b[0], b[1], b[2], b[3], b[4], b[5], b[6]]),
         PackedMontyField31AVX2([b_w[6], b_w[7], b[0], b[1], b[2], b[3], b[4], b[5]]),
@@ -1166,5 +1175,8 @@ pub fn octic_mul_packed<FP: FieldParameters>(
         PackedMontyField31AVX2([b_w[1], b_w[2], b_w[3], b_w[4], b_w[5], b_w[6], b_w[7], b[0]]),
     ];
 
-    *res = PackedMontyField31AVX2::dot_product(&dot_lhs, &dot_rhs).0;
+    let dot = PackedMontyField31AVX2::dot_product(&lhs, &rhs).0;
+
+    res[..].copy_from_slice(&dot);
+
 }
