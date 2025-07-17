@@ -1202,24 +1202,24 @@ pub fn quartic_mul_packed<FP: FieldParameters>(
     // Linear term = a0*b1 + a1*b0 + w(a2*b3 + a3*b2)
     // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b3)
     // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0
-    let dot_lhs = [
-        PackedMontyField31AVX512::from_monty_array([a[0], a[0], a[0], a[0]]),
-        PackedMontyField31AVX512::from_monty_array([a[1], a[1], a[1], a[1]]),
-        PackedMontyField31AVX512::from_monty_array([a[2], a[2], a[2], a[2]]),
-        PackedMontyField31AVX512::from_monty_array([a[3], a[3], a[3], a[3]]),
-    ];
-    let dot_rhs = [
-        PackedMontyField31AVX512::from_monty_array([b[0], b[1], b[2], b[3]]),
-        PackedMontyField31AVX512::from_monty_array([b_w3, b[0], b[1], b[2]]),
-        PackedMontyField31AVX512::from_monty_array([b_w2, b_w3, b[0], b[1]]),
-        PackedMontyField31AVX512::from_monty_array([b_w1, b_w2, b_w3, b[0]]),
-    ];
+    let lhs = PackedMontyField31AVX512([a[0], a[1], a[2], a[3], a[0], a[1], a[2], a[3], a[0], a[1], a[2], a[3], a[0], a[1], a[2], a[3]]);
+    let rhs = PackedMontyField31AVX512([b[0], b_w3, b_w2, b_w1, b[1], b[0], b_w3, b_w2, b[2], b[1], b[0], b_w3, b[3], b[2], b[1], b[0]]);
 
-    let dot_product = PackedMontyField31AVX512::dot_product(&dot_lhs, &dot_rhs);
-    res[0] = dot_product.0[0];
-    res[1] = dot_product.0[1];
-    res[2] = dot_product.0[2];
-    res[3] = dot_product.0[3];
+    let product = lhs * rhs;
+    let total = unsafe {
+        let packed_product = product.to_vector();
+        let swizzled_product = x86_64::_mm512_shuffle_epi32::<0b10110001>(packed_product);
+
+        let sum = add::<FP>(packed_product, swizzled_product);
+        let swizzled_sum = x86_64::_mm512_shuffle_epi32::<0b01001110>(sum);
+        let total = add::<FP>(sum, swizzled_sum);
+        PackedMontyField31AVX512::<FP>::from_vector(total)
+    };
+
+    res[0] = total.0[0];
+    res[1] = total.0[4];
+    res[2] = total.0[8];
+    res[3] = total.0[12];
 }
 
 /// Multiplication in an octic binomial extension field.
@@ -1244,17 +1244,33 @@ pub fn octic_mul_packed<FP: FieldParameters>(
     // Quintic coefficient = a0*b5 + ... + a5*b0 + w(a6*b7 + ... + a7*b6)
     // Sextic coefficient = a0*b6 + ... + a6*b0 + w*a7*b7
     // Final coefficient = a0*b7 + ... + a7*b0
-    let dot_lhs: [PackedMontyField31AVX512<FP>; 8] = a.map(Into::into);
+    let dot_lhs = [
+        PackedMontyField31AVX512([a[0], a[1], a[0], a[1], a[0], a[1], a[0], a[1], a[0], a[1], a[0], a[1], a[0], a[1], a[0], a[1]]),
+        PackedMontyField31AVX512([a[2], a[3], a[2], a[3], a[2], a[3], a[2], a[3], a[2], a[3], a[2], a[3], a[2], a[3], a[2], a[3]]),
+        PackedMontyField31AVX512([a[4], a[5], a[4], a[5], a[4], a[5], a[4], a[5], a[4], a[5], a[4], a[5], a[4], a[5], a[4], a[5]]),
+        PackedMontyField31AVX512([a[6], a[7], a[6], a[7], a[6], a[7], a[6], a[7], a[6], a[7], a[6], a[7], a[6], a[7], a[6], a[7]])
+    ];
     let dot_rhs = [
-        PackedMontyField31AVX512::from_monty_array([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]),
-        PackedMontyField31AVX512::from_monty_array([b_w[7], b[0], b[1], b[2], b[3], b[4], b[5], b[6]]),
-        PackedMontyField31AVX512::from_monty_array([b_w[6], b_w[7], b[0], b[1], b[2], b[3], b[4], b[5]]),
-        PackedMontyField31AVX512::from_monty_array([b_w[5], b_w[6], b_w[7], b[0], b[1], b[2], b[3], b[4]]),
-        PackedMontyField31AVX512::from_monty_array([b_w[4], b_w[5], b_w[6], b_w[7], b[0], b[1], b[2], b[3]]),
-        PackedMontyField31AVX512::from_monty_array([b_w[3], b_w[4], b_w[5], b_w[6], b_w[7], b[0], b[1], b[2]]),
-        PackedMontyField31AVX512::from_monty_array([b_w[2], b_w[3], b_w[4], b_w[5], b_w[6], b_w[7], b[0], b[1]]),
-        PackedMontyField31AVX512::from_monty_array([b_w[1], b_w[2], b_w[3], b_w[4], b_w[5], b_w[6], b_w[7], b[0]]),
+        PackedMontyField31AVX512::from_monty_array([b[0], b_w[7], b[1], b[0], b[2], b[1], b[3], b[2], b[4], b[3], b[5], b[4], b[6], b[5], b[7], b[6]]),
+        PackedMontyField31AVX512::from_monty_array([b_w[6], b_w[5], b_w[7], b_w[6], b[0], b_w[7], b[1], b[0], b[2], b[1], b[3], b[2], b[4], b[3], b[5], b[4]]),
+        PackedMontyField31AVX512::from_monty_array([b_w[4], b_w[3], b_w[5], b_w[4], b_w[6], b_w[5], b_w[7], b_w[6], b[0], b_w[7], b[1], b[0], b[2], b[1], b[3], b[2]]),
+        PackedMontyField31AVX512::from_monty_array([b_w[2], b_w[1], b_w[3], b_w[2], b_w[4], b_w[3], b_w[5], b_w[4], b_w[6], b_w[5], b_w[7], b_w[6], b[0], b_w[7], b[1], b[0]]),
     ];
 
-    *res = PackedMontyField31AVX512::dot_product(&dot_lhs, &dot_rhs).0[..8].try_into().unwrap();
+    let dot = PackedMontyField31AVX512::dot_product(&dot_lhs, &dot_rhs);
+    let total = unsafe {
+        let packed_dot = dot.to_vector();
+        let swizzled_dot = x86_64::_mm512_shuffle_epi32::<0b10110001>(packed_dot);
+        let sum = add::<FP>(packed_dot, swizzled_dot);
+        PackedMontyField31AVX512::<FP>::from_vector(sum)
+    };
+
+    res[0] = total.0[0];
+    res[1] = total.0[2];
+    res[2] = total.0[4];
+    res[3] = total.0[6];
+    res[4] = total.0[8];
+    res[5] = total.0[10];
+    res[6] = total.0[12];
+    res[7] = total.0[14];
 }

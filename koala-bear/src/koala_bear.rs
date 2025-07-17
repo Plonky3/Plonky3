@@ -76,6 +76,7 @@ impl BinomialExtensionData<4> for KoalaBearParameters {
     const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike =
         KoalaBear::new_2d_array([[0, 0, 1759267465, 0], [0, 0, 0, 777715144]]);
 
+    #[inline]
     fn binomial_mul(
         a: &[MontyField31<Self>; 4],
         b: &[MontyField31<Self>; 4],
@@ -100,6 +101,7 @@ impl BinomialExtensionData<8> for KoalaBearParameters {
         [0, 0, 0, 0, 0, 0, 0, 14348907],
     ]);
 
+    #[inline]
     fn binomial_mul(
         a: &[MontyField31<Self>; 8],
         b: &[MontyField31<Self>; 8],

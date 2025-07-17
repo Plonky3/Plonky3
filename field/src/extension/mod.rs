@@ -38,6 +38,7 @@ pub trait BinomiallyExtendable<const D: usize>:
 }
 
 pub trait BinomiallyExtendableAlgebra<F: Field, const D: usize>: Algebra<F> {
+    #[inline]
     fn binomial_mul(a: &[Self; D], b: &[Self; D], res: &mut [Self; D], w: F) {
         binomial_mul::<F, Self, Self, D>(a, b, res, w);
     }
