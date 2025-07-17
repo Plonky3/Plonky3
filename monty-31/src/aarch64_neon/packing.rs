@@ -571,7 +571,8 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
     let dot = PackedMontyField31Neon::dot_product(&lhs, &rhs).0;
 
     res[..4].copy_from_slice(&dot);
-    res[4] = MontyField31::dot_product(a.try_into().unwrap(), &[b[4], b[3], b[2], b[1], b[0]]);
+    res[4] =
+        MontyField31::dot_product::<5>(a[..].try_into().unwrap(), &[b[4], b[3], b[2], b[1], b[0]]);
 }
 
 /// Multiplication in an octic binomial extension field.
