@@ -553,7 +553,7 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
     // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b4 + a4*b3)
     // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0 + w*a4*b4
     // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 + a4*b0
-    let lhs: [PackedMontyField31Neon<FP>; 8] = [
+    let lhs: [PackedMontyField31Neon<FP>; 5] = [
         a[0].into(),
         a[1].into(),
         a[2].into(),
@@ -568,10 +568,10 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
         PackedMontyField31Neon([b_w_1, b_w_2, b_w_3, b_w_4]),
     ];
 
-    let dot = PackedMontyField31Neon::dot_product(&lhs, &rhs);
+    let dot = PackedMontyField31Neon::dot_product(&lhs, &rhs).0;
 
     res[..4].copy_from_slice(&dot);
-    res[4] = MontyField31::dot_product(&[a], &[b[4], b[3], b[2], b[1], b[0]]);
+    res[4] = MontyField31::dot_product(a.try_into().unwrap(), &[b[4], b[3], b[2], b[1], b[0]]);
 }
 
 /// Multiplication in an octic binomial extension field.
@@ -586,8 +586,10 @@ pub fn octic_mul_packed<FP: FieldParameters, const WIDTH: usize>(
     FP: FieldParameters + BinomialExtensionData<WIDTH>,
 {
     assert_eq!(WIDTH, 8);
-    let packed_b = PackedMontyField31Neon([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
-    let b_w = FP::mul_w(packed_b).0;
+    let packed_b_lo = PackedMontyField31Neon([b[0], b[1], b[2], b[3]]);
+    let packed_b_hi = PackedMontyField31Neon([b[4], b[5], b[6], b[7]]);
+    let b_w_lo = FP::mul_w(packed_b_lo).0;
+    let b_w_hi = FP::mul_w(packed_b_hi).0;
 
     // Constant coefficient = a0*b0 + w(a1*b7 + ... + a7*b1)
     // Linear coefficient = a0*b1 + a1*b0 + w(a2*b7 + ... + a7*b2)
@@ -609,23 +611,23 @@ pub fn octic_mul_packed<FP: FieldParameters, const WIDTH: usize>(
     ];
     let rhs_0 = [
         PackedMontyField31Neon([b[0], b[1], b[2], b[3]]),
-        PackedMontyField31Neon([b_w[7], b[0], b[1], b[2]]),
-        PackedMontyField31Neon([b_w[6], b_w[7], b[0], b[1]]),
-        PackedMontyField31Neon([b_w[5], b_w[6], b_w[7], b[0]]),
-        PackedMontyField31Neon([b_w[4], b_w[5], b_w[6], b_w[7]]),
-        PackedMontyField31Neon([b_w[3], b_w[4], b_w[5], b_w[6]]),
-        PackedMontyField31Neon([b_w[2], b_w[3], b_w[4], b_w[5]]),
-        PackedMontyField31Neon([b_w[1], b_w[2], b_w[3], b_w[4]]),
+        PackedMontyField31Neon([b_w_hi[3], b[0], b[1], b[2]]),
+        PackedMontyField31Neon([b_w_hi[2], b_w_hi[3], b[0], b[1]]),
+        PackedMontyField31Neon([b_w_hi[1], b_w_hi[2], b_w_hi[3], b[0]]),
+        PackedMontyField31Neon([b_w_hi[0], b_w_hi[1], b_w_hi[2], b_w_hi[3]]),
+        PackedMontyField31Neon([b_w_lo[3], b_w_hi[0], b_w_hi[1], b_w_hi[2]]),
+        PackedMontyField31Neon([b_w_lo[2], b_w_lo[3], b_w_hi[0], b_w_hi[1]]),
+        PackedMontyField31Neon([b_w_lo[1], b_w_lo[2], b_w_lo[3], b_w_hi[0]]),
     ];
     let rhs_1 = [
-        PackedMontyField31Neon(b[4], b[5], b[6], b[7]),
-        PackedMontyField31Neon(b[3], b[4], b[5], b[6]),
-        PackedMontyField31Neon(b[2], b[3], b[4], b[5]),
-        PackedMontyField31Neon(b[1], b[2], b[3], b[4]),
-        PackedMontyField31Neon(b[0], b[1], b[2], b[3]),
-        PackedMontyField31Neon(b_w[7], b[0], b[1], b[2]),
-        PackedMontyField31Neon(b_w[6], b_w[7], b[0], b[1]),
-        PackedMontyField31Neon(b_w[5], b_w[6], b_w[7], b[0]),
+        PackedMontyField31Neon([b[4], b[5], b[6], b[7]]),
+        PackedMontyField31Neon([b[3], b[4], b[5], b[6]]),
+        PackedMontyField31Neon([b[2], b[3], b[4], b[5]]),
+        PackedMontyField31Neon([b[1], b[2], b[3], b[4]]),
+        PackedMontyField31Neon([b[0], b[1], b[2], b[3]]),
+        PackedMontyField31Neon([b_w_hi[3], b[0], b[1], b[2]]),
+        PackedMontyField31Neon([b_w_hi[2], b_w_hi[3], b[0], b[1]]),
+        PackedMontyField31Neon([b_w_hi[1], b_w_hi[2], b_w_hi[3], b[0]]),
     ];
 
     let dot_0 = PackedMontyField31Neon::dot_product(&lhs, &rhs_0).0;
