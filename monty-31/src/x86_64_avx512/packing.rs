@@ -1188,6 +1188,7 @@ pub fn quartic_mul_packed<FP: FieldParameters>(
     res: &mut [MontyField31<FP>; 4],
     _w: MontyField31<FP>,
 ) {
+    let zero = MontyField31::<FP>::ZERO;
     // b1_w, b2_w, b3_w
     // let packed_b = PackedMontyField31AVX2([b[0], b[1], b[2], b[3], zero, zero, zero, zero]);
     // let b_w = packed_b * w;
@@ -1202,24 +1203,51 @@ pub fn quartic_mul_packed<FP: FieldParameters>(
     // Linear term = a0*b1 + a1*b0 + w(a2*b3 + a3*b2)
     // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b3)
     // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0
-    let lhs = PackedMontyField31AVX512([a[0], a[1], a[2], a[3], a[0], a[1], a[2], a[3], a[0], a[1], a[2], a[3], a[0], a[1], a[2], a[3]]);
-    let rhs = PackedMontyField31AVX512([b[0], b_w3, b_w2, b_w1, b[1], b[0], b_w3, b_w2, b[2], b[1], b[0], b_w3, b[3], b[2], b[1], b[0]]);
+    let lhs = [PackedMontyField31AVX512([a[0], zero, a[1], zero, a[0], zero, a[1], zero, a[0], zero, a[1], zero, a[0], zero, a[1], zero]),
+        PackedMontyField31AVX512([a[2], zero, a[3], zero, a[2], zero, a[3], zero, a[2], zero, a[3], zero, a[2], zero, a[3], zero])];
+    let rhs = [PackedMontyField31AVX512([b[0], zero, b_w3, zero, b[1], zero, b[0], zero, b[2], zero, b[1], zero, b[3], zero, b[2], zero]),
+    PackedMontyField31AVX512([b_w2, zero, b_w1, zero, b_w3, zero, b_w2, zero, b[0], zero, b_w3, zero, b[1], zero, b[0], zero])];
 
-    let product = lhs * rhs;
-    let total = unsafe {
-        let packed_product = product.to_vector();
-        let swizzled_product = x86_64::_mm512_shuffle_epi32::<0b10110001>(packed_product);
+    let dot_product: [MontyField31<FP>; 16] = unsafe {
+        let lhs_0 = lhs[0].to_vector();
+        let lhs_1 = lhs[1].to_vector();
 
-        let sum = add::<FP>(packed_product, swizzled_product);
-        let swizzled_sum = x86_64::_mm512_shuffle_epi32::<0b01001110>(sum);
-        let total = add::<FP>(sum, swizzled_sum);
-        PackedMontyField31AVX512::<FP>::from_vector(total)
+        let rhs_0 = rhs[0].to_vector();
+        let rhs_1 = rhs[1].to_vector();
+
+        let mul_0 = x86_64::_mm512_mul_epu32(lhs_0, rhs_0);
+        let mul_1 = x86_64::_mm512_mul_epu32(lhs_1, rhs_1);
+        let dot = x86_64::_mm512_add_epi64(mul_0, mul_1);
+
+        // We throw a confuse compiler here to prevent the compiler from
+        // using vpmullq instead of vpmuludq in the computations for q_p.
+        // vpmullq has both higher latency and lower throughput.
+        let q = confuse_compiler(x86_64::_mm512_mul_epu32(dot, FP::PACKED_MU));
+
+        // Normally we'd want to mask to perform % 2**32, but the instruction below only reads the
+        // low 32 bits anyway.
+        let q_p = x86_64::_mm512_mul_epu32(q, FP::PACKED_P);
+
+        // Subtraction `prod_hi - q_p_hi` modulo `P`.
+        // NB: Normally we'd `vpaddd P` and take the `vpminud`, but `vpminud` runs on port 0, which
+        // is already under a lot of pressure performing multiplications. To relieve this pressure,
+        // we check for underflow to generate a mask, and then conditionally add `P`. The underflow
+        // check runs on port 5, increasing our throughput, although it does cost us an additional
+        // cycle of latency.
+        let underflow = x86_64::_mm512_cmplt_epu32_mask(dot, q_p);
+        let t = x86_64::_mm512_sub_epi32(dot, q_p); // We could do sub_epi32 but the lower 32 bits all cancel so it's not a big issue.
+        let dot_res = x86_64::_mm512_mask_add_epi32(t, underflow, t, FP::PACKED_P);
+
+        let dot_res_shft = x86_64::_mm512_bslli_epi128::<8>(dot_res);
+        let total = x86_64::_mm512_add_epi32(dot_res, dot_res_shft);
+        let u = x86_64::_mm512_sub_epi32(total, FP::PACKED_P);
+        transmute(x86_64::_mm512_min_epu32(total, u))
     };
 
-    res[0] = total.0[0];
-    res[1] = total.0[4];
-    res[2] = total.0[8];
-    res[3] = total.0[12];
+    res[0] = dot_product[3];
+    res[1] = dot_product[7];
+    res[2] = dot_product[11];
+    res[3] = dot_product[15];
 }
 
 /// Multiplication in an octic binomial extension field.
