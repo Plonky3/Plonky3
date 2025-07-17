@@ -1143,7 +1143,7 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
 ///
 /// TODO: This could likely be optimised further with more effort.
 #[inline]
-pub fn octic_mul_packed<FP: FieldParameters, const WIDTH: usize>(
+pub fn octic_mul_packed<FP, const WIDTH: usize>(
     a: &[MontyField31<FP>; WIDTH],
     b: &[MontyField31<FP>; WIDTH],
     res: &mut [MontyField31<FP>; WIDTH],

@@ -16,7 +16,6 @@ impl MontyParametersAVX2 for KoalaBearParameters {
 
 #[cfg(test)]
 mod tests {
-    use p3_field::PrimeCharacteristicRing;
     use p3_field_testing::test_packed_field;
 
     use super::WIDTH;
