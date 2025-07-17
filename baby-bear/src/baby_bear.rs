@@ -74,6 +74,12 @@ impl BinomialExtensionData<4> for BabyBearParameters {
 
 impl BinomialExtensionData<5> for BabyBearParameters {
     const W: BabyBear = BabyBear::new(2);
+
+    #[inline(always)]
+    fn mul_w<A: p3_field::Algebra<MontyField31<Self>>>(a: A) -> A {
+        a.double()
+    }
+
     const DTH_ROOT: BabyBear = BabyBear::new(815036133);
     const EXT_GENERATOR: [BabyBear; 5] = BabyBear::new_array([8, 1, 0, 0, 0]);
     const EXT_TWO_ADICITY: usize = 27;

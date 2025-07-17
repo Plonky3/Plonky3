@@ -1251,6 +1251,49 @@ pub fn quartic_mul_packed<FP, const WIDTH: usize>(
     res[3] = dot_product[15];
 }
 
+/// Multiplication in a quintic binomial extension field.
+///
+/// Makes use of the in built field dot product code. This is optimized for the case that
+/// R is a prime field or its packing.
+#[inline]
+pub fn quintic_mul_packed<FP, const WIDTH: usize>(
+    a: &[MontyField31<FP>; WIDTH],
+    b: &[MontyField31<FP>; WIDTH],
+    res: &mut [MontyField31<FP>; WIDTH],
+) where
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+{
+    assert_eq!(WIDTH, 5);
+    let zero = MontyField31::<FP>::ZERO;
+    let b_w_1 = FP::mul_w(b[1]);
+    let b_w_2 = FP::mul_w(b[2]);
+    let b_w_3 = FP::mul_w(b[3]);
+    let b_w_4 = FP::mul_w(b[4]);
+    
+    // Constant term = a0*b0 + w(a1*b4 + a2*b3 + a3*b2 + a4*b1)
+    // Linear term = a0*b1 + a1*b0 + w(a2*b4 + a3*b3 + a4*b2)
+    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b4 + a4*b3)
+    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0 + w*a4*b4
+    // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 + a4*b0
+
+    // Each packed vector can do 8 multiplications at once. As we have
+    // 25 multiplications to do we will need to use at least 3 packed vectors 
+    // but we might as well use 4 so we can make use of dot_product_2.
+
+    let lhs = [PackedMontyField31AVX512([a[0], a[1], a[0], a[1], a[0], a[1], a[0], a[1], a[0], a[1], a[4], a[4], a[4], a[4], a[4], zero]),
+                PackedMontyField31AVX512([a[2], a[3], a[2], a[3], a[2], a[3], a[2], a[3], a[2], a[3], zero, zero, zero, zero, zero, zero])];
+    let rhs = [PackedMontyField31AVX512([b[0], b_w_4, b[1], b[0], b[2], b[1], b[3], b[2], b[4], b[3], b_w_1, b_w_2, b_w_3, b_w_4, b[0], zero]),
+    PackedMontyField31AVX512([b_w_3, b_w_2, b_w_4, b_w_3, b[0], b_w_4, b[1], b[0], b[2], b[1], zero, zero, zero, zero, zero, zero])];
+    
+    let dot = unsafe{PackedMontyField31AVX512::from_vector(dot_product_2(lhs, rhs)).0};
+    
+    res[0] = dot[0] + dot[1] + dot[10];
+    res[1] = dot[2] + dot[3] + dot[11];
+    res[2] = dot[4] + dot[5] + dot[12];
+    res[3] = dot[6] + dot[7] + dot[13];
+    res[4] = dot[8] + dot[9] + dot[14];
+}
+
 /// Multiplication in an octic binomial extension field.
 ///
 /// Makes use of the in built field dot product code. This is optimized for the case that
