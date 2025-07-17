@@ -20,7 +20,10 @@ use p3_util::reconstitute_from_base;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 
-use crate::{FieldParameters, MontyField31, PackedMontyParameters, RelativelyPrimePower};
+use crate::{
+    BinomialExtensionData, FieldParameters, MontyField31, PackedMontyParameters,
+    RelativelyPrimePower,
+};
 
 const WIDTH: usize = 4;
 
