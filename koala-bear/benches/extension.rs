@@ -27,11 +27,11 @@ fn bench_quartic_extension(c: &mut Criterion) {
 
 fn bench_octic_extension(c: &mut Criterion) {
     let name = "BinomialExtensionField<KoalaBear, 8>";
-        benchmark_add_throughput::<EF8, REPS>(c, name);
-        benchmark_add_slices::<EF8, 8>(c, name);
-        benchmark_add_slices::<EF8, 1000>(c, name);
-        benchmark_square::<EF8>(c, name);
-        benchmark_inv::<EF8>(c, name);
+    benchmark_add_throughput::<EF8, REPS>(c, name);
+    benchmark_add_slices::<EF8, 8>(c, name);
+    benchmark_add_slices::<EF8, 1000>(c, name);
+    benchmark_square::<EF8>(c, name);
+    benchmark_inv::<EF8>(c, name);
     benchmark_mul_throughput::<EF8, REPS>(c, name);
     benchmark_mul_latency::<EF8, L_REPS>(c, name);
 }
