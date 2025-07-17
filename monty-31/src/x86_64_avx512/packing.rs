@@ -1182,7 +1182,7 @@ impl_packed_field_pow_2!(
 /// Makes use of the in built field dot product code. This is optimized for the case that
 /// R is a prime field or its packing.
 #[inline]
-pub fn quartic_mul_packed<FP, const WIDTH: usize>(
+pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
     a: &[MontyField31<FP>; WIDTH],
     b: &[MontyField31<FP>; WIDTH],
     res: &mut [MontyField31<FP>; WIDTH],
@@ -1256,7 +1256,7 @@ pub fn quartic_mul_packed<FP, const WIDTH: usize>(
 /// Makes use of the in built field dot product code. This is optimized for the case that
 /// R is a prime field or its packing.
 #[inline]
-pub fn quintic_mul_packed<FP, const WIDTH: usize>(
+pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
     a: &[MontyField31<FP>; WIDTH],
     b: &[MontyField31<FP>; WIDTH],
     res: &mut [MontyField31<FP>; WIDTH],
@@ -1299,7 +1299,7 @@ pub fn quintic_mul_packed<FP, const WIDTH: usize>(
 /// Makes use of the in built field dot product code. This is optimized for the case that
 /// R is a prime field or its packing.
 #[inline]
-pub fn octic_mul_packed<FP, const WIDTH: usize>
+pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>
 (
     a: &[MontyField31<FP>; WIDTH],
     b: &[MontyField31<FP>; WIDTH],

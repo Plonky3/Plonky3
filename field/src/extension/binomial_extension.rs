@@ -805,7 +805,7 @@ fn cubic_square<F: Field, R: Algebra<F>, const D: usize>(a: &[R; D], res: &mut [
 /// Makes use of the in built field dot product code. This is optimized for the case that
 /// R is a prime field or its packing.
 #[inline]
-fn quartic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
+pub fn quartic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
 where
     F: Field,
     R: Algebra<F> + Algebra<R2>,
@@ -933,7 +933,7 @@ where
 ///
 /// Makes use of the in built field dot product code. This is optimized for the case that
 /// R is a prime field or its packing.
-fn quintic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
+pub fn quintic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
 where
     F: Field,
     R: Algebra<F> + Algebra<R2>,
@@ -1213,7 +1213,7 @@ where
 /// Makes use of the in built field dot product code. This is optimized for the case that
 /// R is a prime field or its packing.
 #[inline]
-fn octic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
+pub fn octic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
 where
     F: Field,
     R: Algebra<F> + Algebra<R2>,
