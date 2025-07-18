@@ -499,7 +499,7 @@ impl_packed_field_pow_2!(
 
 /// Multiplication in a quartic binomial extension field.
 #[inline]
-pub fn quartic_mul_packed<FP, const WIDTH: usize>(
+pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
     a: &[MontyField31<FP>; WIDTH],
     b: &[MontyField31<FP>; WIDTH],
     res: &mut [MontyField31<FP>; WIDTH],
@@ -578,7 +578,7 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
 
 /// Multiplication in an octic binomial extension field.
 #[inline]
-pub fn octic_mul_packed<FP: FieldParameters, const WIDTH: usize>(
+pub(crate) fn octic_mul_packed<FP: FieldParameters, const WIDTH: usize>(
     a: &[MontyField31<FP>; WIDTH],
     b: &[MontyField31<FP>; WIDTH],
     res: &mut [MontyField31<FP>; WIDTH],
