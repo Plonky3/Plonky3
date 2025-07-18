@@ -125,6 +125,11 @@ pub trait BinomialExtensionData<const DEG: usize>: MontyParameters + Sized {
     /// W is a value such that (x^DEG - W) is irreducible.
     const W: MontyField31<Self>;
 
+    /// Multiply a field element (or packed field element) by W.
+    ///
+    /// Defaults to standard multiplication but this can be reimplemented to
+    /// make use of the exact value of `W`. E.g. if `W = 2, 3` this should be
+    /// reimplemented using addition.
     fn mul_w<A: Algebra<MontyField31<Self>>>(a: A) -> A {
         a * Self::W
     }

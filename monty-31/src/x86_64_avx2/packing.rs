@@ -1048,8 +1048,6 @@ impl_packed_field_pow_2!(
 );
 
 /// Multiplication in a quartic binomial extension field.
-///
-/// TODO: This could likely be optimised further with more effort.
 #[inline]
 pub fn quartic_mul_packed<FP, const WIDTH: usize>(
     a: &[MontyField31<FP>; WIDTH],
@@ -1060,40 +1058,102 @@ pub fn quartic_mul_packed<FP, const WIDTH: usize>(
 {
     assert_eq!(WIDTH, 4);
 
-    let b_w1 = FP::mul_w(b[1]);
-    let b_w2 = FP::mul_w(b[2]);
-    let b_w3 = FP::mul_w(b[3]);
+    // TODO: It's plausible that this could be improved by folding the computation of packed_b into
+    // the custom AVX2 implementation. Similarly for BabyBear, a custom mul function could help as
+    // we only need to do 3 muls instead of the usual 8 so we can save quite a few operations.
+
+    // We only care about the entries 1, 2, 3 of packed b.
+    let packed_b = PackedMontyField31AVX2([b[0], b[1], b[2], b[3], b[0], b[1], b[2], b[3]]);
+    let b_w = FP::mul_w(packed_b).0;
 
     // Constant term = a0*b0 + w(a1*b3 + a2*b2 + a3*b1)
     // Linear term = a0*b1 + a1*b0 + w(a2*b3 + a3*b2)
     // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b3)
     // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0
-    // The i'th 64 bit chunk of the _mm512 vector will compute the i'th coefficient.
-    let dot_lhs = [
-        PackedMontyField31AVX2([a[0], a[1], a[2], a[3], a[0], a[1], a[2], a[3]]),
-        PackedMontyField31AVX2([a[2], a[3], a[0], a[1], a[2], a[3], a[0], a[1]]),
-    ];
-    let dot_rhs = [
-        PackedMontyField31AVX2([b[0], b_w3, b_w3, b_w2, b[2], b[1], b[1], b[0]]),
-        PackedMontyField31AVX2([b_w2, b_w1, b[1], b[0], b[0], b_w3, b[3], b[2]]),
-    ];
 
+    // We write a custom AVX2 implementation as we want to do a 4 term dot-product but we
+    // only need to do 4 of them, not 8 in parallel so we can do something similar to
+    // dot_product_4 but with many fewer instructions.
+    // This will produce the output we want in the high parts of each u64 with the low parts
+    // being some nonsense (usually 0 but in principle might not be).
     let dot_product: [MontyField31<FP>; 8] = unsafe {
-        let dot = dot_product_2(dot_lhs, dot_rhs);
-        let swizzled_dot = x86_64::_mm256_shuffle_epi32::<0b10110001>(dot);
-        let sum = add::<FP>(dot, swizzled_dot);
-        transmute(sum)
+        let lhs_0 = x86_64::_mm256_set1_epi32(transmute::<MontyField31<FP>, i32>(a[0]));
+        let lhs_1 = x86_64::_mm256_set1_epi32(transmute::<MontyField31<FP>, i32>(a[1]));
+        let lhs_2 = x86_64::_mm256_set1_epi32(transmute::<MontyField31<FP>, i32>(a[2]));
+        let lhs_3 = x86_64::_mm256_set1_epi32(transmute::<MontyField31<FP>, i32>(a[3]));
+
+        // We use setr instead of set as setr reverses the order of the arguments
+        // for some reason.
+        let rhs_0 = x86_64::_mm256_setr_epi32(
+            transmute::<MontyField31<FP>, i32>(b[0]),
+            0,
+            transmute::<MontyField31<FP>, i32>(b[1]),
+            0,
+            transmute::<MontyField31<FP>, i32>(b[2]),
+            0,
+            transmute::<MontyField31<FP>, i32>(b[3]),
+            0,
+        );
+        let rhs_1 = x86_64::_mm256_setr_epi32(
+            transmute::<MontyField31<FP>, i32>(b_w[3]),
+            0,
+            transmute::<MontyField31<FP>, i32>(b[0]),
+            0,
+            transmute::<MontyField31<FP>, i32>(b[1]),
+            0,
+            transmute::<MontyField31<FP>, i32>(b[2]),
+            0,
+        );
+        let rhs_2 = x86_64::_mm256_setr_epi32(
+            transmute::<MontyField31<FP>, i32>(b_w[2]),
+            0,
+            transmute::<MontyField31<FP>, i32>(b_w[3]),
+            0,
+            transmute::<MontyField31<FP>, i32>(b[0]),
+            0,
+            transmute::<MontyField31<FP>, i32>(b[1]),
+            0,
+        );
+        let rhs_3 = x86_64::_mm256_setr_epi32(
+            transmute::<MontyField31<FP>, i32>(b_w[1]),
+            0,
+            transmute::<MontyField31<FP>, i32>(b_w[2]),
+            0,
+            transmute::<MontyField31<FP>, i32>(b_w[3]),
+            0,
+            transmute::<MontyField31<FP>, i32>(b[0]),
+            0,
+        );
+
+        let mul_0 = x86_64::_mm256_mul_epu32(lhs_0, rhs_0);
+        let mul_1 = x86_64::_mm256_mul_epu32(lhs_1, rhs_1);
+        let mul_2 = x86_64::_mm256_mul_epu32(lhs_2, rhs_2);
+        let mul_3 = x86_64::_mm256_mul_epu32(lhs_3, rhs_3);
+
+        let dot_01 = x86_64::_mm256_add_epi64(mul_0, mul_1);
+        let dot_23 = x86_64::_mm256_add_epi64(mul_2, mul_3);
+        let dot = x86_64::_mm256_add_epi64(dot_01, dot_23);
+
+        // We only care about the top 32 bits of dot as the bottom 32 bits will
+        // be cancelled out.
+        // Those bits currently lie in [0, 2P) so we reduce them to [0, P)
+        let dot_sub = x86_64::_mm256_sub_epi32(dot, FP::PACKED_P);
+        let dot_prime = x86_64::_mm256_min_epu32(dot, dot_sub);
+
+        let q = x86_64::_mm256_mul_epu32(dot, FP::PACKED_MU);
+        let q_p = x86_64::_mm256_mul_epu32(q, FP::PACKED_P);
+
+        let t = x86_64::_mm256_sub_epi32(dot_prime, q_p);
+        transmute(red_signed_to_canonical::<FP>(t))
     };
 
-    res[0] = dot_product[0];
-    res[1] = dot_product[2];
-    res[2] = dot_product[4];
-    res[3] = dot_product[6];
+    res[0] = dot_product[1];
+    res[1] = dot_product[3];
+    res[2] = dot_product[5];
+    res[3] = dot_product[7];
 }
 
 /// Multiplication in a quintic binomial extension field.
-///
-/// TODO: This could likely be optimised further with more effort.
 #[inline]
 pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
     a: &[MontyField31<FP>; WIDTH],
@@ -1102,7 +1162,10 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
 ) where
     FP: FieldParameters + BinomialExtensionData<WIDTH>,
 {
+    // TODO: This could likely be optimised further with more effort.
+    // in particular it would benefit from a custom AVX2 implementation.
     assert_eq!(WIDTH, 5);
+
     let zero = MontyField31::<FP>::ZERO;
     let b_w_1 = FP::mul_w(b[1]);
     let b_w_2 = FP::mul_w(b[2]);
@@ -1127,21 +1190,29 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
         PackedMontyField31AVX2([b_w_2, b_w_3, b_w_4, b[0], b[1], zero, zero, zero]),
     ];
 
-    let dot_res = unsafe { PackedMontyField31AVX2::from_vector(dot_product_4(lhs, rhs)).0 };
+    let dot_res = unsafe { PackedMontyField31AVX2::from_vector(dot_product_4(lhs, rhs)) };
 
+    // We managed to compute 3 of the extra terms in the last 3 places of the dot product.
+    // This leaves us with 2 terms remaining we need to compute manually.
     let extra1 = b_w_1 * a[4];
     let extra2 = b_w_2 * a[4];
 
-    res[0] = dot_res[0] + extra1;
-    res[1] = dot_res[1] + extra2;
-    res[2] = dot_res[2] + dot_res[5];
-    res[3] = dot_res[3] + dot_res[6];
-    res[4] = dot_res[4] + dot_res[7];
+    let extra_addition = PackedMontyField31AVX2([
+        extra1,
+        extra2,
+        dot_res.0[5],
+        dot_res.0[6],
+        dot_res.0[7],
+        zero,
+        zero,
+        zero,
+    ]);
+    let total = dot_res + extra_addition;
+
+    res.copy_from_slice(&total.0[..5]);
 }
 
 /// Multiplication in an octic binomial extension field.
-///
-/// TODO: This could likely be optimised further with more effort.
 #[inline]
 pub fn octic_mul_packed<FP, const WIDTH: usize>(
     a: &[MontyField31<FP>; WIDTH],
@@ -1150,6 +1221,7 @@ pub fn octic_mul_packed<FP, const WIDTH: usize>(
 ) where
     FP: FieldParameters + BinomialExtensionData<WIDTH>,
 {
+    // TODO: It's plausible that this could be improved by a custom AVX2 implementation.
     assert_eq!(WIDTH, 8);
     let packed_b = PackedMontyField31AVX2([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
     let b_w = FP::mul_w(packed_b).0;
@@ -1161,7 +1233,8 @@ pub fn octic_mul_packed<FP, const WIDTH: usize>(
     // Quartic coefficient = a0*b4 + ... + a4*b0 + w(a5*b7 + ... + a7*b5)
     // Quintic coefficient = a0*b5 + ... + a5*b0 + w(a6*b7 + ... + a7*b6)
     // Sextic coefficient = a0*b6 + ... + a6*b0 + w*a7*b7
-    // Final coefficient = a0*b7 + ... + a7*b0
+    // Final coefficient = a0*b7 + ... + a7*b7
+    // This can be implemented reasonably efficiently as an 8-term dot product.
     let lhs: [PackedMontyField31AVX2<FP>; 8] = [
         a[0].into(),
         a[1].into(),
