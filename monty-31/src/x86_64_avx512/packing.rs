@@ -1182,8 +1182,6 @@ impl_packed_field_pow_2!(
 );
 
 /// Multiplication in a quartic binomial extension field.
-///
-/// TODO: This could likely be optimised further with more effort.
 #[inline]
 pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
     a: &[MontyField31<FP>; WIDTH],
@@ -1192,10 +1190,14 @@ pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
 ) where
     FP: FieldParameters + BinomialExtensionData<WIDTH>,
 {
+    // TODO: It's plausible that this could be improved by folding the computation of packed_b into
+    // the custom AVX512 implementation. Moreover, a custom implementation which mixes AVX512 and
+    // AVX2 code might well be able to improve on the one that is here.
     assert_eq!(WIDTH, 4);
-    let zero = MontyField31::<FP>::ZERO;
 
-    // No point in using packings here as we only have 3 elements.
+    // No point in using packings here as we only have 3 elements. It might be worth using a smaller packed
+    // field (e.g AVX2) but right now we don't compile both PackedMontyField31AVX2 and PackedMontyField31AVX512
+    // at the same time.
     let b_w1 = FP::mul_w(b[1]);
     let b_w2 = FP::mul_w(b[2]);
     let b_w3 = FP::mul_w(b[3]);
@@ -1206,73 +1208,91 @@ pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
     // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0
     // The constant term will be computed in the first 128bits, the linear term in the second 128bits,
     // the square term in the third 128bits and the cubic term in the fourth 128bits.
-    let lhs = [
-        PackedMontyField31AVX512([
-            a[0], zero, a[1], zero, a[2], zero, a[3], zero, a[0], zero, a[1], zero, a[2], zero,
-            a[3], zero,
-        ]),
-        PackedMontyField31AVX512([
-            a[2], zero, a[3], zero, a[0], zero, a[1], zero, a[2], zero, a[3], zero, a[0], zero,
-            a[1], zero,
-        ]),
-    ];
-    let rhs = [
-        PackedMontyField31AVX512([
-            b[0], zero, b_w3, zero, b_w3, zero, b_w2, zero, b[2], zero, b[1], zero, b[1], zero,
-            b[0], zero,
-        ]),
-        PackedMontyField31AVX512([
-            b_w2, zero, b_w1, zero, b[1], zero, b[0], zero, b[0], zero, b_w3, zero, b[3], zero,
-            b[2], zero,
-        ]),
-    ];
+    let dot_product: [MontyField31<FP>; 8] = unsafe {
+        // Surprisingly, testing indicates it's actually faster to just use AVX2 intrinsics here instead of AVX512.
+        // Hence this is just copied and pasted from the AVX2 implementation. the issue is likely that there isn't
+        // a huge amount of parallelism to be had and so using AVX512 leads to a bunch of extra data fiddiling.
+        let lhs_0 = x86_64::_mm256_set1_epi32(transmute::<MontyField31<FP>, i32>(a[0]));
+        let lhs_1 = x86_64::_mm256_set1_epi32(transmute::<MontyField31<FP>, i32>(a[1]));
+        let lhs_2 = x86_64::_mm256_set1_epi32(transmute::<MontyField31<FP>, i32>(a[2]));
+        let lhs_3 = x86_64::_mm256_set1_epi32(transmute::<MontyField31<FP>, i32>(a[3]));
 
-    // We could use dot_product_2 but we can be a little more efficient as we have already zero-interleaved the inputs.
-    let dot_product: [MontyField31<FP>; 16] = unsafe {
-        let lhs_0 = lhs[0].to_vector();
-        let lhs_1 = lhs[1].to_vector();
+        // We use setr instead of set as setr reverses the order of the arguments
+        // for some reason.
+        let rhs_0 = x86_64::_mm256_setr_epi32(
+            transmute::<MontyField31<FP>, i32>(b[0]),
+            0,
+            transmute::<MontyField31<FP>, i32>(b[1]),
+            0,
+            transmute::<MontyField31<FP>, i32>(b[2]),
+            0,
+            transmute::<MontyField31<FP>, i32>(b[3]),
+            0,
+        );
+        let rhs_1 = x86_64::_mm256_setr_epi32(
+            transmute::<MontyField31<FP>, i32>(b_w3),
+            0,
+            transmute::<MontyField31<FP>, i32>(b[0]),
+            0,
+            transmute::<MontyField31<FP>, i32>(b[1]),
+            0,
+            transmute::<MontyField31<FP>, i32>(b[2]),
+            0,
+        );
+        let rhs_2 = x86_64::_mm256_setr_epi32(
+            transmute::<MontyField31<FP>, i32>(b_w2),
+            0,
+            transmute::<MontyField31<FP>, i32>(b_w3),
+            0,
+            transmute::<MontyField31<FP>, i32>(b[0]),
+            0,
+            transmute::<MontyField31<FP>, i32>(b[1]),
+            0,
+        );
+        let rhs_3 = x86_64::_mm256_setr_epi32(
+            transmute::<MontyField31<FP>, i32>(b_w1),
+            0,
+            transmute::<MontyField31<FP>, i32>(b_w2),
+            0,
+            transmute::<MontyField31<FP>, i32>(b_w3),
+            0,
+            transmute::<MontyField31<FP>, i32>(b[0]),
+            0,
+        );
 
-        let rhs_0 = rhs[0].to_vector();
-        let rhs_1 = rhs[1].to_vector();
+        let mul_0 = x86_64::_mm256_mul_epu32(lhs_0, rhs_0);
+        let mul_1 = x86_64::_mm256_mul_epu32(lhs_1, rhs_1);
+        let mul_2 = x86_64::_mm256_mul_epu32(lhs_2, rhs_2);
+        let mul_3 = x86_64::_mm256_mul_epu32(lhs_3, rhs_3);
 
-        let mul_0 = x86_64::_mm512_mul_epu32(lhs_0, rhs_0);
-        let mul_1 = x86_64::_mm512_mul_epu32(lhs_1, rhs_1);
-        let dot = x86_64::_mm512_add_epi64(mul_0, mul_1);
+        let dot_01 = x86_64::_mm256_add_epi64(mul_0, mul_1);
+        let dot_23 = x86_64::_mm256_add_epi64(mul_2, mul_3);
+        let dot = x86_64::_mm256_add_epi64(dot_01, dot_23);
 
-        // We throw a confuse compiler here to prevent the compiler from
-        // using vpmullq instead of vpmuludq in the computations for q_p.
-        // vpmullq has both higher latency and lower throughput.
-        let q = confuse_compiler(x86_64::_mm512_mul_epu32(dot, FP::PACKED_MU));
+        let mu_mm256 = x86_64::_mm512_castsi512_si256(FP::PACKED_MU);
+        let p_mm256 = x86_64::_mm512_castsi512_si256(FP::PACKED_P);
 
-        // Normally we'd want to mask to perform % 2**32, but the instruction below only reads the
-        // low 32 bits anyway.
-        let q_p = x86_64::_mm512_mul_epu32(q, FP::PACKED_P);
+        // We only care about the top 32 bits of dot as the bottom 32 bits will
+        // be cancelled out.
+        // Those bits currently lie in [0, 2P) so we reduce them to [0, P)
+        let dot_sub = x86_64::_mm256_sub_epi32(dot, p_mm256);
+        let dot_prime = x86_64::_mm256_min_epu32(dot, dot_sub);
 
-        // Subtraction `prod_hi - q_p_hi` modulo `P`.
-        // NB: Normally we'd `vpaddd P` and take the `vpminud`, but `vpminud` runs on port 0, which
-        // is already under a lot of pressure performing multiplications. To relieve this pressure,
-        // we check for underflow to generate a mask, and then conditionally add `P`. The underflow
-        // check runs on port 5, increasing our throughput, although it does cost us an additional
-        // cycle of latency.
-        let underflow = x86_64::_mm512_cmplt_epu32_mask(dot, q_p);
-        let t = x86_64::_mm512_sub_epi32(dot, q_p); // We could do sub_epi32 but the lower 32 bits all cancel so it's not a big issue.
-        let dot_res = x86_64::_mm512_mask_add_epi32(t, underflow, t, FP::PACKED_P);
+        let q = x86_64::_mm256_mul_epu32(dot, mu_mm256);
+        let q_p = x86_64::_mm256_mul_epu32(q, p_mm256);
 
-        let dot_res_shft = x86_64::_mm512_bslli_epi128::<8>(dot_res);
-        let total = x86_64::_mm512_add_epi32(dot_res, dot_res_shft);
-        let u = x86_64::_mm512_sub_epi32(total, FP::PACKED_P);
-        transmute(x86_64::_mm512_min_epu32(total, u))
+        let t = x86_64::_mm256_sub_epi32(dot_prime, q_p);
+        let corr = x86_64::_mm256_add_epi32(t, p_mm256);
+        transmute(x86_64::_mm256_min_epu32(t, corr))
     };
 
-    res[0] = dot_product[3];
-    res[1] = dot_product[7];
-    res[2] = dot_product[11];
-    res[3] = dot_product[15];
+    res[0] = dot_product[1];
+    res[1] = dot_product[3];
+    res[2] = dot_product[5];
+    res[3] = dot_product[7];
 }
 
 /// Multiplication in a quintic binomial extension field.
-///
-/// TODO: This could likely be optimised further with more effort.
 #[inline]
 pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
     a: &[MontyField31<FP>; WIDTH],
@@ -1281,6 +1301,10 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
 ) where
     FP: FieldParameters + BinomialExtensionData<WIDTH>,
 {
+    // TODO: It's plausible that this could be improved by folding the computation of packed_b into
+    // the custom AVX512 implementation. Moreover, AVX512 is really a bit to large so we are wasting a lot
+    // of space. A custom implementation which mixes AVX512 and AVX2 code might well be able to
+    // improve one that is here.
     assert_eq!(WIDTH, 5);
     let zero = MontyField31::<FP>::ZERO;
     let b_w_1 = FP::mul_w(b[1]);
@@ -1333,8 +1357,6 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
 }
 
 /// Multiplication in an octic binomial extension field.
-///
-/// TODO: This could likely be optimised further with more effort.
 #[inline]
 pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
     a: &[MontyField31<FP>; WIDTH],
@@ -1343,6 +1365,8 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
 ) where
     FP: FieldParameters + BinomialExtensionData<WIDTH>,
 {
+    // TODO: This could likely be optimised further with more effort.
+    // in particular it would benefit from a custom AVX2 implementation.
     assert_eq!(WIDTH, 8);
     let packed_b = PackedMontyField31AVX512::from_monty_array(*b);
     let b_w = FP::mul_w(packed_b).0;
