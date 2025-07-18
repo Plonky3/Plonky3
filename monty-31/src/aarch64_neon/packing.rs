@@ -498,8 +498,6 @@ impl_packed_field_pow_2!(
 );
 
 /// Multiplication in a quartic binomial extension field.
-///
-/// TODO: This could likely be optimised further with more effort.
 #[inline]
 pub fn quartic_mul_packed<FP, const WIDTH: usize>(
     a: &[MontyField31<FP>; WIDTH],
