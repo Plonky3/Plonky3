@@ -510,9 +510,9 @@ pub fn quartic_mul_packed<FP, const WIDTH: usize>(
     assert_eq!(WIDTH, 4);
     let packed_b = PackedMontyField31Neon([b[0], b[1], b[2], b[3]]);
     let b_w = FP::mul_w(packed_b).0;
-    let b_w_1 = b_w[1];
-    let b_w_2 = b_w[2];
-    let b_w_3 = b_w[3];
+    let b_w1 = b_w[1];
+    let b_w2 = b_w[2];
+    let b_w3 = b_w[3];
 
     // Constant term = a0*b0 + w(a1*b3 + a2*b2 + a3*b1)
     // Linear term = a0*b1 + a1*b0 + w(a2*b3 + a3*b2)
@@ -544,10 +544,10 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
     assert_eq!(WIDTH, 5);
     let packed_b = PackedMontyField31Neon([b[1], b[2], b[3], b[4]]);
     let b_w = FP::mul_w(packed_b).0;
-    let b_w_1 = b_w[0];
-    let b_w_2 = b_w[1];
-    let b_w_3 = b_w[2];
-    let b_w_4 = b_w[3];
+    let b_w1 = b_w[0];
+    let b_w2 = b_w[1];
+    let b_w3 = b_w[2];
+    let b_w4 = b_w[3];
 
     // Constant term = a0*b0 + w(a1*b4 + a2*b3 + a3*b2 + a4*b1)
     // Linear term = a0*b1 + a1*b0 + w(a2*b4 + a3*b3 + a4*b2)
@@ -563,10 +563,10 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
     ];
     let rhs = [
         PackedMontyField31Neon([b[0], b[1], b[2], b[3]]),
-        PackedMontyField31Neon([b_w_4, b[0], b[1], b[2]]),
-        PackedMontyField31Neon([b_w_3, b_w_4, b[0], b[1]]),
-        PackedMontyField31Neon([b_w_2, b_w_3, b_w_4, b[0]]),
-        PackedMontyField31Neon([b_w_1, b_w_2, b_w_3, b_w_4]),
+        PackedMontyField31Neon([b_w4, b[0], b[1], b[2]]),
+        PackedMontyField31Neon([b_w3, b_w4, b[0], b[1]]),
+        PackedMontyField31Neon([b_w2, b_w3, b_w4, b[0]]),
+        PackedMontyField31Neon([b_w1, b_w2, b_w3, b_w4]),
     ];
 
     let dot = PackedMontyField31Neon::dot_product(&lhs, &rhs).0;
