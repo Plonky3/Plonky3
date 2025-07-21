@@ -4,14 +4,17 @@ use core::iter;
 
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::Mmcs;
+use p3_commit::{BatchOpening, Mmcs};
 use p3_dft::{Radix2DFTSmallBatch, TwoAdicSubgroupDft};
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 use tracing::{debug_span, info_span, instrument};
 
-use crate::{CommitPhaseProofStep, FriFoldingStrategy, FriParameters, FriProof, QueryProof};
+use crate::{
+    CommitPhaseProofStep, FriFoldingStrategy, FriParameters, FriProof, ProverDataWithOpeningPoints,
+    QueryProof,
+};
 
 /// Create a proof that an opening `f(zeta)` is correct by proving that the
 /// function `(f(x) - f(zeta))/(x - zeta)` is low degree.
@@ -35,19 +38,25 @@ use crate::{CommitPhaseProofStep, FriFoldingStrategy, FriParameters, FriProof, Q
 /// - `open_input`: A function that takes an index and produces proofs that the initial values in
 ///   inputs at that index (Or at `index >> i` for smaller `f`'s) are correct.
 #[instrument(name = "FRI prover", skip_all)]
-pub fn prove_fri<Folding, Val, Challenge, M, Challenger>(
+pub fn prove_fri<Folding, Val, Challenge, InputMmcs, FriMmcs, Challenger>(
     folding: &Folding,
-    params: &FriParameters<M>,
+    params: &FriParameters<FriMmcs>,
     inputs: Vec<Vec<Challenge>>,
     challenger: &mut Challenger,
-    open_input: impl Fn(usize) -> Folding::InputProof,
-) -> FriProof<Challenge, M, Challenger::Witness, Folding::InputProof>
+    log_global_max_height: usize,
+    commitment_data_with_opening_points: &[ProverDataWithOpeningPoints<
+        Challenge,
+        InputMmcs::ProverData<RowMajorMatrix<Val>>,
+    >],
+    input_mmcs: &InputMmcs,
+) -> FriProof<Challenge, FriMmcs, Challenger::Witness, Folding::InputProof>
 where
     Val: TwoAdicField,
     Challenge: ExtensionField<Val>,
-    M: Mmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
-    Folding: FriFoldingStrategy<Val, Challenge>,
+    InputMmcs: Mmcs<Val>,
+    FriMmcs: Mmcs<Challenge>,
+    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<FriMmcs::Commitment>,
+    Folding: FriFoldingStrategy<Val, Challenge, InputProof = Vec<BatchOpening<Val, InputMmcs>>>,
 {
     assert!(!inputs.is_empty());
     assert!(
@@ -91,7 +100,12 @@ where
             // For each index, create a proof that the folding operations along the chain:
             // round 0: index, round 1: index >> 1, round 2: index >> 2, ... are correct.
             QueryProof {
-                input_proof: open_input(index),
+                input_proof: open_input(
+                    log_global_max_height,
+                    index,
+                    commitment_data_with_opening_points,
+                    input_mmcs,
+                ),
                 commit_phase_openings: answer_query(
                     params,
                     &commit_phase_result.data,
@@ -258,6 +272,40 @@ where
                 sibling_value,
                 opening_proof,
             }
+        })
+        .collect()
+}
+
+fn open_input<Val, Challenge, InputMmcs>(
+    log_global_max_height: usize,
+    index: usize,
+    commitment_data_with_opening_points: &[ProverDataWithOpeningPoints<
+        Challenge,
+        InputMmcs::ProverData<RowMajorMatrix<Val>>,
+    >],
+    mmcs: &InputMmcs,
+) -> Vec<BatchOpening<Val, InputMmcs>>
+where
+    Val: TwoAdicField,
+    Challenge: ExtensionField<Val>,
+    InputMmcs: Mmcs<Val>,
+{
+    // Given an index, produce batch opening proofs for each collection of matrices
+    // combined into a single mmcs commitment. In cases where the maximum height of
+    // a batch of matrices is smaller than the global max height, shift the index down
+    // to compensate.
+    // This gives the verifier access to evaluations `f(x)` from which it can compute
+    // `(f(zeta) - f(x))/(zeta - x)` and then combine them together and roll into FRI
+    // as appropriate.
+    commitment_data_with_opening_points
+        .iter()
+        .map(|(data, _)| {
+            let log_max_height = log2_strict_usize(mmcs.get_max_height(data));
+            let bits_reduced = log_global_max_height - log_max_height;
+            // If a matrix is smaller than global max height, we roll it into
+            // fri in a later round.
+            let reduced_index = index >> bits_reduced;
+            mmcs.open_batch(reduced_index, data)
         })
         .collect()
 }

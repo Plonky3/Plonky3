@@ -1,9 +1,8 @@
-use core::cmp::Reverse;
 use core::marker::PhantomData;
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{CanSampleBits, DuplexChallenger, FieldChallenger};
-use p3_commit::ExtensionMmcs;
+use p3_commit::{BatchOpening, ExtensionMmcs, Mmcs};
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
@@ -29,23 +28,27 @@ type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 type MyFriParams = FriParameters<ChallengeMmcs>;
 
-fn get_ldt_for_testing<R: Rng>(rng: &mut R, log_final_poly_len: usize) -> (Perm, MyFriParams) {
+fn get_ldt_for_testing<R: Rng>(
+    rng: &mut R,
+    log_final_poly_len: usize,
+) -> (Perm, ValMmcs, MyFriParams) {
     let perm = Perm::new_from_rng_128(rng);
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
-    let mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress));
+    let input_mmcs = ValMmcs::new(hash.clone(), compress.clone());
+    let fri_mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress));
     let fri_params = FriParameters {
         log_blowup: 1,
         log_final_poly_len,
         num_queries: 10,
         proof_of_work_bits: 8,
-        mmcs,
+        mmcs: fri_mmcs,
     };
-    (perm, fri_params)
+    (perm, input_mmcs, fri_params)
 }
 
 fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
-    let (perm, fc) = get_ldt_for_testing(rng, log_final_poly_len);
+    let (perm, input_mmcs, fc) = get_ldt_for_testing(rng, log_final_poly_len);
     let dft = Radix2Dit::default();
 
     let shift = Val::GENERATOR;
@@ -94,20 +97,15 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
         let log_max_height = log2_strict_usize(input[0].len());
 
         let proof = prover::prove_fri(
-            &TwoAdicFriFolding::<Vec<(usize, Challenge)>, ()>(PhantomData),
+            &TwoAdicFriFolding::<Vec<BatchOpening<Val, ValMmcs>>, <ValMmcs as Mmcs<Val>>::Error>(
+                PhantomData,
+            ),
             &fc,
             input.clone(),
             &mut chal,
-            |idx| {
-                // As our "input opening proof", just pass through the literal reduced openings.
-                let mut ro = vec![];
-                for v in &input {
-                    let log_height = log2_strict_usize(v.len());
-                    ro.push((log_height, v[idx >> (log_max_height - log_height)]));
-                }
-                ro.sort_by_key(|(lh, _)| Reverse(*lh));
-                ro
-            },
+            log_max_height,
+            &[], // Empty set of points to open at.
+            &input_mmcs,
         );
 
         (proof, chal.sample_bits(8))
@@ -116,11 +114,14 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
     let mut v_challenger = Challenger::new(perm);
     let _alpha: Challenge = v_challenger.sample_algebra_element();
     verifier::verify_fri(
-        &TwoAdicFriFolding::<Vec<(usize, Challenge)>, ()>(PhantomData),
+        &TwoAdicFriFolding::<Vec<BatchOpening<Val, ValMmcs>>, <ValMmcs as Mmcs<Val>>::Error>(
+            PhantomData,
+        ),
         &fc,
         &proof,
         &mut v_challenger,
-        |_index, proof| Ok(proof.clone()),
+        &[],         // Empty commitments_with_opening_points
+        &input_mmcs, // Use the mmcs from fri params as input_mmcs
     )
     .unwrap();
 
