@@ -26,14 +26,6 @@ p3-mersenne-31.workspace = true
 
 criterion.workspace = true
 
-[features]
-nightly-features = [
-    "p3-koala-bear/nightly-features",
-    "p3-baby-bear/nightly-features",
-    "p3-mersenne-31/nightly-features",
-    "p3-goldilocks/nightly-features",
-]
-
 [[bench]]
 name = "poseidon2"
 harness = false
