@@ -1,22 +1,14 @@
-use core::marker::PhantomData;
-
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{CanObserve, CanSampleBits, DuplexChallenger, FieldChallenger};
-use p3_commit::{BatchOpening, ExtensionMmcs, Mmcs, Pcs};
-use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
+use p3_commit::{ExtensionMmcs, Pcs};
+use p3_dft::Radix2Dit;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_fri::{
-    CommitmentWithOpeningPoints, FriParameters, ProverDataWithOpeningPoints, TwoAdicFriFolding,
-    TwoAdicFriPcs, prover, verifier,
-};
-use p3_matrix::Matrix;
+use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::util::reverse_matrix_index_bits;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use p3_util::log2_strict_usize;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
