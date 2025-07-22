@@ -320,7 +320,7 @@ where
 /// - `log_global_max_height`: The log of the maximum height of the input matrices.
 /// - `index`: The index at which to open the functions.
 /// - `input_proof`: A vector of batch openings with each opening containing a
-///    list of opened values for a collection of matrices along with a batched opening proof.
+///   list of opened values for a collection of matrices along with a batched opening proof.
 /// - `alpha`: The challenge used to combine the functions.
 /// - `input_mmcs`: The input multi-matrix commitment scheme.
 /// - `commitments_with_opening_points`: A vector of joint commitments to collections of matrices
