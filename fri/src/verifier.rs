@@ -219,6 +219,7 @@ type CommitStep<'a, F, M> = (
 ///   the FRI folding chain once the domain size reaches the size specified in the pair.
 /// - `log_max_height`: The log of the maximum domain size.
 /// - `log_final_height`: The log of the final domain size.
+#[inline]
 fn verify_query<'a, Folding, F, EF, M>(
     folding: &Folding,
     params: &FriParameters<M>,
@@ -325,6 +326,7 @@ where
 /// - `input_mmcs`: The input multi-matrix commitment scheme.
 /// - `commitments_with_opening_points`: A vector of joint commitments to collections of matrices
 ///   and openings of those matrices at a collection of points.
+#[inline]
 fn open_input<Val, Challenge, InputMmcs, FriMmcs>(
     params: &FriParameters<FriMmcs>,
     log_global_max_height: usize,

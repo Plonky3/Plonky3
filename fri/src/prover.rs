@@ -239,6 +239,7 @@ where
 /// - `folded_polynomial_commits`: A slice of commitments to the intermediate stage polynomials.
 /// - `start_index`: The opening index for the unfolded polynomial. For folded polynomials
 ///   we use this this index right shifted by the number of folds.
+#[inline]
 fn answer_query<F, M>(
     config: &FriParameters<M>,
     folded_polynomial_commits: &[M::ProverData<RowMajorMatrix<F>>],
@@ -289,6 +290,7 @@ where
 /// - `prover_data_with_opening_points`: A list of pairs of a batch commitment to a collection
 ///   of matrices and a list of points to open those matrices at.
 /// - `mmcs`: The mixed matrix commitment scheme used to produce the batch commitments.
+#[inline]
 fn open_input<Val, Challenge, InputMmcs>(
     log_global_max_height: usize,
     index: usize,
