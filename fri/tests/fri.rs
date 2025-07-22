@@ -1,14 +1,15 @@
 use core::marker::PhantomData;
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_challenger::{CanSampleBits, DuplexChallenger, FieldChallenger};
-use p3_commit::{BatchOpening, ExtensionMmcs, Mmcs};
+use p3_challenger::{CanObserve, CanSampleBits, DuplexChallenger, FieldChallenger};
+use p3_commit::{BatchOpening, ExtensionMmcs, Mmcs, Pcs};
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
+use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_fri::{
     CommitmentWithOpeningPoints, FriParameters, ProverDataWithOpeningPoints, TwoAdicFriFolding,
-    prover, verifier,
+    TwoAdicFriPcs, prover, verifier,
 };
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
@@ -51,105 +52,88 @@ fn get_ldt_for_testing<R: Rng>(
 }
 
 fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
-    let (perm, input_mmcs, fc) = get_ldt_for_testing(rng, log_final_poly_len);
+    let (perm, input_mmcs, fri_params) = get_ldt_for_testing(rng, log_final_poly_len);
     let dft = Radix2Dit::default();
 
-    let shift = Val::GENERATOR;
+    let pcs = TwoAdicFriPcs::<BabyBear, Radix2Dit<BabyBear>, ValMmcs, ChallengeMmcs>::new(
+        dft, input_mmcs, fri_params,
+    );
 
-    let ldes: Vec<RowMajorMatrix<Val>> = (5..10)
-        .map(|deg_bits| {
-            let evals = RowMajorMatrix::<Val>::rand_nonzero(rng, 1 << deg_bits, 16);
-            let mut lde = dft.coset_lde_batch(evals, 1, shift);
-            reverse_matrix_index_bits(&mut lde);
-            lde
-        })
-        .collect();
+    let sizes = [9, 8, 7, 6, 5];
+    let val_sizes = sizes.map(Val::from_u8);
 
-    let (proof, p_sample) = {
-        // Prover world
-        let mut chal = Challenger::new(perm.clone());
-        let alpha: Challenge = chal.sample_algebra_element();
+    // Prover World:
+    let (commitment, mut p_challenger, opened_values, opening_proof) = {
+        let mut challenger = Challenger::new(perm.clone());
+        challenger.observe(val_sizes);
 
-        let input: [_; 32] = core::array::from_fn(|log_height| {
-            let matrices_with_log_height: Vec<&RowMajorMatrix<Val>> = ldes
-                .iter()
-                .filter(|m| log2_strict_usize(m.height()) == log_height)
-                .collect();
-            if matrices_with_log_height.is_empty() {
-                None
-            } else {
-                let reduced: Vec<Challenge> = (0..(1 << log_height))
-                    .map(|r| {
-                        alpha
-                            .powers()
-                            .zip(
-                                matrices_with_log_height
-                                    .iter()
-                                    .flat_map(|m| m.row(r).unwrap()),
-                            )
-                            .map(|(alpha_pow, v)| alpha_pow * v)
-                            .sum()
-                    })
-                    .collect();
-                Some(reduced)
-            }
-        });
+        let evaluations: Vec<(TwoAdicMultiplicativeCoset<Val>, RowMajorMatrix<Val>)> = sizes
+            .iter()
+            .map(|deg_bits| {
+                let deg = 1 << deg_bits;
+                (
+                    <TwoAdicFriPcs<BabyBear, Radix2Dit<BabyBear>, ValMmcs, ChallengeMmcs> as Pcs<
+                        Challenge,
+                        Challenger,
+                    >>::natural_domain_for_degree(&pcs, deg),
+                    RowMajorMatrix::<Val>::rand_nonzero(rng, deg, 16),
+                )
+            })
+            .collect();
 
-        let zeta: Challenge = chal.sample_algebra_element();
+        let num_evaluations = evaluations.len();
 
-        let input: Vec<Vec<Challenge>> = input.into_iter().rev().flatten().collect();
-
-        let log_max_height = log2_strict_usize(input[0].len());
-
-        // Pass an empty Vec for commitment_data_with_opening_points
-        let commitment_data_with_opening_points: Vec<
-            ProverDataWithOpeningPoints<
+        let (commitment, prover_data) =
+            <TwoAdicFriPcs<BabyBear, Radix2Dit<BabyBear>, ValMmcs, ChallengeMmcs> as Pcs<
                 Challenge,
-                <ValMmcs as Mmcs<Val>>::ProverData<RowMajorMatrix<Val>>,
-            >,
-        > = vec![];
+                Challenger,
+            >>::commit(&pcs, evaluations);
 
-        let proof = prover::prove_fri(
-            &TwoAdicFriFolding::<Vec<BatchOpening<Val, ValMmcs>>, <ValMmcs as Mmcs<Val>>::Error>(
-                PhantomData,
-            ),
-            &fc,
-            input.clone(),
-            &mut chal,
-            log_max_height,
-            &commitment_data_with_opening_points,
-            &input_mmcs,
-        );
+        challenger.observe(commitment);
 
-        (proof, chal.sample_bits(8))
+        let zeta = challenger.sample_algebra_element();
+
+        let open_data = vec![(&prover_data, vec![vec![zeta]; num_evaluations])]; // open every chunk at zeta
+
+        let (opened_values, opening_proof) = pcs.open(open_data, &mut challenger);
+        (commitment, challenger, opened_values, opening_proof)
     };
 
-    let mut v_challenger = Challenger::new(perm);
-    let _alpha: Challenge = v_challenger.sample_algebra_element();
+    // Verifier World
+    let mut v_challenger = {
+        let mut challenger = Challenger::new(perm.clone());
+        challenger.observe(val_sizes);
+        challenger.observe(commitment);
 
-    // Pass an empty Vec for commitments_with_opening_points
-    let commitments_with_opening_points: Vec<
-        CommitmentWithOpeningPoints<
-            Challenge,
-            <ValMmcs as Mmcs<Val>>::Commitment,
-            p3_field::coset::TwoAdicMultiplicativeCoset<Val>,
-        >,
-    > = vec![];
+        let zeta = challenger.sample_algebra_element();
 
-    verifier::verify_fri(
-        &TwoAdicFriFolding::<Vec<BatchOpening<Val, ValMmcs>>, <ValMmcs as Mmcs<Val>>::Error>(
-            PhantomData,
-        ),
-        &fc,
-        &proof,
-        &mut v_challenger,
-        &commitments_with_opening_points,
-        &input_mmcs,
-    )
-    .unwrap();
+        let domains = sizes.map(|size| {
+            <TwoAdicFriPcs<BabyBear, Radix2Dit<BabyBear>, ValMmcs, ChallengeMmcs> as Pcs<
+                Challenge,
+                Challenger,
+            >>::natural_domain_for_degree(&pcs, 1 << size)
+        });
+
+        let commitments_with_opening_points = vec![(
+            commitment,
+            domains
+                .into_iter()
+                .zip(opened_values.into_iter().flatten().flatten())
+                .map(|(domain, value)| (domain, vec![(zeta, value)]))
+                .collect(),
+        )];
+
+        let verification = pcs.verify(
+            commitments_with_opening_points,
+            &opening_proof,
+            &mut challenger,
+        );
+        assert!(verification.is_ok());
+        challenger
+    };
 
     assert_eq!(
-        p_sample,
+        p_challenger.sample_bits(8),
         v_challenger.sample_bits(8),
         "prover and verifier transcript have same state after FRI"
     );
