@@ -276,6 +276,10 @@ where
         .collect()
 }
 
+/// Given an index, produce batch opening proofs for each collection of matrices
+/// combined into a single mmcs commitment. In cases where the maximum height of
+/// a batch of matrices is smaller than the global max height, shift the index down
+/// to compensate.
 fn open_input<Val, Challenge, InputMmcs>(
     log_global_max_height: usize,
     index: usize,
@@ -290,10 +294,6 @@ where
     Challenge: ExtensionField<Val>,
     InputMmcs: Mmcs<Val>,
 {
-    // Given an index, produce batch opening proofs for each collection of matrices
-    // combined into a single mmcs commitment. In cases where the maximum height of
-    // a batch of matrices is smaller than the global max height, shift the index down
-    // to compensate.
     // This gives the verifier access to evaluations `f(x)` from which it can compute
     // `(f(zeta) - f(x))/(zeta - x)` and then combine them together and roll into FRI
     // as appropriate.

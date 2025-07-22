@@ -6,7 +6,10 @@ use p3_commit::{BatchOpening, ExtensionMmcs, Mmcs};
 use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_fri::{FriParameters, TwoAdicFriFolding, prover, verifier};
+use p3_fri::{
+    CommitmentWithOpeningPoints, FriParameters, ProverDataWithOpeningPoints, TwoAdicFriFolding,
+    prover, verifier,
+};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::util::reverse_matrix_index_bits;
@@ -92,9 +95,19 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
             }
         });
 
+        let zeta: Challenge = chal.sample_algebra_element();
+
         let input: Vec<Vec<Challenge>> = input.into_iter().rev().flatten().collect();
 
         let log_max_height = log2_strict_usize(input[0].len());
+
+        // Pass an empty Vec for commitment_data_with_opening_points
+        let commitment_data_with_opening_points: Vec<
+            ProverDataWithOpeningPoints<
+                Challenge,
+                <ValMmcs as Mmcs<Val>>::ProverData<RowMajorMatrix<Val>>,
+            >,
+        > = vec![];
 
         let proof = prover::prove_fri(
             &TwoAdicFriFolding::<Vec<BatchOpening<Val, ValMmcs>>, <ValMmcs as Mmcs<Val>>::Error>(
@@ -104,7 +117,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
             input.clone(),
             &mut chal,
             log_max_height,
-            &[], // Empty set of points to open at.
+            &commitment_data_with_opening_points,
             &input_mmcs,
         );
 
@@ -113,6 +126,16 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
 
     let mut v_challenger = Challenger::new(perm);
     let _alpha: Challenge = v_challenger.sample_algebra_element();
+
+    // Pass an empty Vec for commitments_with_opening_points
+    let commitments_with_opening_points: Vec<
+        CommitmentWithOpeningPoints<
+            Challenge,
+            <ValMmcs as Mmcs<Val>>::Commitment,
+            p3_field::coset::TwoAdicMultiplicativeCoset<Val>,
+        >,
+    > = vec![];
+
     verifier::verify_fri(
         &TwoAdicFriFolding::<Vec<BatchOpening<Val, ValMmcs>>, <ValMmcs as Mmcs<Val>>::Error>(
             PhantomData,
@@ -120,8 +143,8 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize) {
         &fc,
         &proof,
         &mut v_challenger,
-        &[],         // Empty commitments_with_opening_points
-        &input_mmcs, // Use the mmcs from fri params as input_mmcs
+        &commitments_with_opening_points,
+        &input_mmcs,
     )
     .unwrap();
 

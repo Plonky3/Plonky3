@@ -508,7 +508,6 @@ where
         let folding: TwoAdicFriFoldingForMmcs<Val, InputMmcs> = TwoAdicFriFolding(PhantomData);
 
         // Produce the FRI proof.
-        // TODO: Move the |index| closure out of this function into another function.
         let fri_proof = prover::prove_fri(
             &folding,
             &self.fri,

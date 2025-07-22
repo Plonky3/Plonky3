@@ -307,6 +307,12 @@ where
     Ok(folded_eval)
 }
 
+/// index is the query position we are checking
+/// input_proof is a vector of batch openings. Each batch opening contains a
+/// list of opened values for a collection of matrices along with a batched opening proof.
+/// We check the proofs and then combine the functions by mapping each function and opening point
+/// pair to `(f(z) - f(x))/(z - x)` and then combining functions of the same height using
+/// the challenge alpha.
 fn open_input<Val, Challenge, InputMmcs, FriMmcs>(
     params: &FriParameters<FriMmcs>,
     log_global_max_height: usize,
@@ -326,13 +332,6 @@ where
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
 {
-    // index is the query position we are checking
-    // input_proof is a vector of batch openings. Each batch opening contains a
-    // list of opened values for a collection of matrices along with a batched opening proof.
-    // We check the proofs and then combine the functions by mapping each function and opening point
-    // pair to `(f(z) - f(x))/(z - x)` and then combining functions of the same height using
-    // the challenge alpha.
-
     // For each log_height, we store the alpha power and compute the reduced opening.
     // log_height -> (alpha_pow, reduced_opening)
     let mut reduced_openings = BTreeMap::<usize, (Challenge, Challenge)>::new();
@@ -424,6 +423,6 @@ where
     Ok(reduced_openings
         .into_iter()
         .rev()
-        .map(|(log_height, (_alpha_pow, ro))| (log_height, ro))
+        .map(|(log_height, (_, ro))| (log_height, ro))
         .collect())
 }
