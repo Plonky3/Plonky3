@@ -29,7 +29,7 @@ pub enum FriError<CommitMmcsErr, InputError> {
 /// A chain of FRI input openings allowing a verifier to check a sequence of
 /// FRI folds and rolls. The first element of each pair indicates the round of
 /// fri in which the input should be rolled in. The second element is the opening.
-pub type FriOpenings<F> = Vec<(usize, F)>;
+type FriOpenings<F> = Vec<(usize, F)>;
 
 /// Verifies a FRI proof.
 ///
@@ -38,9 +38,8 @@ pub type FriOpenings<F> = Vec<(usize, F)>;
 /// - `params`: The parameters for the specific FRI protocol instance.
 /// - `proof`: The proof to verify.
 /// - `challenger`: The Fiat-Shamir challenger.
-/// - `open_input`: A function that takes an index and opening proofs and returns a vector of reduced openings
-///   used as FRI inputs. The opening proofs prove that the values `f(x)` are the ones committed
-///   to and these are then combined into the FRI inputs.
+/// - `commitments_with_opening_points`: A vector of joint commitments to collections of matrices
+///   and openings of those matrices at a collection of points.
 pub fn verify_fri<Folding, Val, Challenge, InputMmcs, FriMmcs, Challenger>(
     folding: &Folding,
     params: &FriParameters<FriMmcs>,
@@ -307,12 +306,26 @@ where
     Ok(folded_eval)
 }
 
-/// index is the query position we are checking
-/// input_proof is a vector of batch openings. Each batch opening contains a
-/// list of opened values for a collection of matrices along with a batched opening proof.
-/// We check the proofs and then combine the functions by mapping each function and opening point
-/// pair to `(f(z) - f(x))/(z - x)` and then combining functions of the same height using
-/// the challenge alpha.
+// - `open_input`: A function that takes an index and opening proofs and returns a vector of reduced openings
+//   used as FRI inputs. The opening proofs prove that the values `f(x)` are the ones committed
+//   to and these are then combined into the FRI inputs.
+
+/// Given an index and a collection of opening proofs, check all opening proofs and combine
+/// the opened values into the FRI inputs along the path specified by the index.
+///
+/// We combine the functions by mapping each function and opening point pair to `(f(z) - f(x))/(z - x)`
+/// and then combining functions of the same degree using the challenge alpha.
+///
+/// Arguments:
+/// - `params`: The FRI parameters.
+/// - `log_global_max_height`: The log of the maximum height of the input matrices.
+/// - `index`: The index at which to open the functions.
+/// - `input_proof`: A vector of batch openings with each opening containing a
+///    list of opened values for a collection of matrices along with a batched opening proof.
+/// - `alpha`: The challenge used to combine the functions.
+/// - `input_mmcs`: The input multi-matrix commitment scheme.
+/// - `commitments_with_opening_points`: A vector of joint commitments to collections of matrices
+///   and openings of those matrices at a collection of points.
 fn open_input<Val, Challenge, InputMmcs, FriMmcs>(
     params: &FriParameters<FriMmcs>,
     log_global_max_height: usize,
