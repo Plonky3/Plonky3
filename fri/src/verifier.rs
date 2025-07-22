@@ -306,12 +306,11 @@ where
     Ok(folded_eval)
 }
 
-// - `open_input`: A function that takes an index and opening proofs and returns a vector of reduced openings
-//   used as FRI inputs. The opening proofs prove that the values `f(x)` are the ones committed
-//   to and these are then combined into the FRI inputs.
-
 /// Given an index and a collection of opening proofs, check all opening proofs and combine
 /// the opened values into the FRI inputs along the path specified by the index.
+///
+/// In cases where the maximum height of a batch of matrices is smaller than the
+/// global max height, shift the index down to compensate.
 ///
 /// We combine the functions by mapping each function and opening point pair to `(f(z) - f(x))/(z - x)`
 /// and then combining functions of the same degree using the challenge alpha.

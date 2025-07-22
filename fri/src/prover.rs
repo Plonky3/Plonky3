@@ -35,8 +35,9 @@ use crate::{
 /// - `params`: The parameters for the specific FRI protocol instance.
 /// - `inputs`: The evaluation vectors of the polynomials.
 /// - `challenger`: The Fiat-Shamir challenger to use for sampling challenges.
-/// - `open_input`: A function that takes an index and produces proofs that the initial values in
-///   inputs at that index (Or at `index >> i` for smaller `f`'s) are correct.
+/// - `log_global_max_height`: The log of the maximum height of the input matrices.
+/// - `prover_data_with_opening_points`: A list of pairs of a batch commitment to a collection
+///   of matrices and a list of points to open those matrices at.
 #[instrument(name = "FRI prover", skip_all)]
 pub fn prove_fri<Folding, Val, Challenge, InputMmcs, FriMmcs, Challenger>(
     folding: &Folding,
@@ -44,7 +45,7 @@ pub fn prove_fri<Folding, Val, Challenge, InputMmcs, FriMmcs, Challenger>(
     inputs: Vec<Vec<Challenge>>,
     challenger: &mut Challenger,
     log_global_max_height: usize,
-    commitment_data_with_opening_points: &[ProverDataWithOpeningPoints<
+    prover_data_with_opening_points: &[ProverDataWithOpeningPoints<
         Challenge,
         InputMmcs::ProverData<RowMajorMatrix<Val>>,
     >],
@@ -103,7 +104,7 @@ where
                 input_proof: open_input(
                     log_global_max_height,
                     index,
-                    commitment_data_with_opening_points,
+                    prover_data_with_opening_points,
                     input_mmcs,
                 ),
                 commit_phase_openings: answer_query(
@@ -277,13 +278,21 @@ where
 }
 
 /// Given an index, produce batch opening proofs for each collection of matrices
-/// combined into a single mmcs commitment. In cases where the maximum height of
-/// a batch of matrices is smaller than the global max height, shift the index down
-/// to compensate.
+/// combined into a single mmcs commitment.
+///
+/// In cases where the maximum height of a batch of matrices is smaller than the
+/// global max height, shift the index down to compensate.
+///
+/// Arguments:
+/// - `log_global_max_height`: The log of the maximum height of the input matrices.
+/// - `index`: The index to open the matrices at.
+/// - `prover_data_with_opening_points`: A list of pairs of a batch commitment to a collection
+///   of matrices and a list of points to open those matrices at.
+/// - `mmcs`: The mixed matrix commitment scheme used to produce the batch commitments.
 fn open_input<Val, Challenge, InputMmcs>(
     log_global_max_height: usize,
     index: usize,
-    commitment_data_with_opening_points: &[ProverDataWithOpeningPoints<
+    prover_data_with_opening_points: &[ProverDataWithOpeningPoints<
         Challenge,
         InputMmcs::ProverData<RowMajorMatrix<Val>>,
     >],
@@ -297,7 +306,7 @@ where
     // This gives the verifier access to evaluations `f(x)` from which it can compute
     // `(f(zeta) - f(x))/(zeta - x)` and then combine them together and roll into FRI
     // as appropriate.
-    commitment_data_with_opening_points
+    prover_data_with_opening_points
         .iter()
         .map(|(data, _)| {
             let log_max_height = log2_strict_usize(mmcs.get_max_height(data));
