@@ -533,7 +533,11 @@ impl<F: PrimeCharacteristicRing> BasedVectorSpace<F> for F {
 
     #[inline]
     fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = F>>(mut iter: I) -> Option<Self> {
-        (iter.len() == 1).then(|| iter.next().unwrap()) // Unwrap will not panic as we know the length is 1.
+        if iter.len() == 1 {
+            iter.next()
+        } else {
+            None
+        }
     }
 
     #[inline]
