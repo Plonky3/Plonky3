@@ -33,7 +33,8 @@ use crate::{
 /// Arguments:
 /// - `folding`: The FRI folding scheme to use.
 /// - `params`: The parameters for the specific FRI protocol instance.
-/// - `inputs`: The evaluation vectors of the polynomials.
+/// - `inputs`: The evaluation vectors of all polynomials we are applying FRI to. The function assumes that
+///   commitments to these vectors have been produced and observed by the challenger earlier in the protocol.
 /// - `challenger`: The Fiat-Shamir challenger to use for sampling challenges.
 /// - `log_global_max_height`: The log of the maximum height of the input matrices.
 /// - `prover_data_with_opening_points`: A list of pairs of a batch commitment to a collection
@@ -141,14 +142,14 @@ struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
 /// We then commit to the evaluation vector of `f_{i + 1}` over `H^2`.
 ///
 /// Once the degree of our polynomial falls below `final_poly_degree`, we compute the coefficients of our
-/// polynomial and return it along with all intermediate evaluations and our commitments to them.
+/// polynomial and return them along with all intermediate evaluations and corresponding commitments.
 ///
 /// Arguments:
-/// - `folding`:
-/// - `params`: Together, these contain all information needed to define the FRI protocol.
-///    E.g. the folding scheme, the code rate, the final polynomial size.
+/// - `folding`: The FRI folding scheme used by the prover.
+/// - `params`: The parameters for the specific FRI protocol instance.
 /// - `inputs`: The evaluation vectors of the polynomials. These must be sorted in descending order of length and each
-///   evaluation vector must be in bit reversed order.
+///   evaluation vector must be in bit reversed order. This function assumes that commitments to these vectors
+///   have already been produced and observed by the challenger.
 /// - `challenger`: The Fiat-Shamir challenger to use for sampling challenges.
 #[instrument(name = "commit phase", skip_all)]
 fn commit_phase<Folding, Val, Challenge, M, Challenger>(
@@ -194,9 +195,8 @@ where
         // If we have reached the size of the next input vector, we can add it to the current vector.
         if let Some(v) = inputs_iter.next_if(|v| v.len() == folded.len()) {
             // Each element of `inputs_iter` is a reduced opening polynomial, which is itself a
-            // random linear combination `f_{i, 0} + alpha f_{i, 1} + ...`, but when we add it
-            // to the current folded polynomial, we need to multiply by a new random factor since
-            // `f_{i, 0}` has no leading coefficient.
+            // random linear combination `f_{i, 0} + alpha f_{i, 1} + ...`, when we add it
+            // to the current folded polynomial, we need to multiply by a random factor.
             izip!(&mut folded, v).for_each(|(c, x)| *c += beta.square() * x);
         }
     }
@@ -237,8 +237,8 @@ where
 /// Arguments:
 /// - `params`: The parameters for the specific FRI protocol instance.
 /// - `folded_polynomial_commits`: A slice of commitments to the intermediate stage polynomials.
-/// - `start_index`: The opening index for the unfolded polynomial. For folded polynomials
-///   we use this this index right shifted by the number of folds.
+/// - `start_index`: The opening index for the unfolded polynomial. For folded polynomials,
+///   we use this index right shifted by the number of folds.
 #[inline]
 fn answer_query<F, M>(
     config: &FriParameters<M>,
