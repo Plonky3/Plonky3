@@ -1,5 +1,3 @@
-use alloc::vec::Vec;
-
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::extension::Complex;
 use p3_field::{PrimeCharacteristicRing, PrimeField64, TwoAdicField};
