@@ -316,7 +316,7 @@ where
 /// We combine the functions by mapping each function and opening point pair to `(f(z) - f(x))/(z - x)`
 /// and then combining functions of the same degree using the challenge alpha.
 ///
-/// Arguments:
+/// ## Arguments:
 /// - `params`: The FRI parameters.
 /// - `log_global_max_height`: The log of the maximum height of the input matrices.
 /// - `index`: The index at which to open the functions.
