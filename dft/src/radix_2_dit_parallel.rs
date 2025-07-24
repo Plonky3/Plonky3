@@ -49,7 +49,7 @@ struct VectorPair<F> {
 fn compute_twiddles<F: TwoAdicField + Ord>(log_h: usize) -> VectorPair<F> {
     let half_h = (1 << log_h) >> 1;
     let root = F::two_adic_generator(log_h);
-    let twiddles: Vec<F> = root.powers().take(half_h).collect();
+    let twiddles = root.powers().collect_n(half_h);
     let mut bit_reversed_twiddles = twiddles.clone();
     reverse_slice_index_bits(&mut bit_reversed_twiddles);
     VectorPair {
@@ -74,7 +74,7 @@ fn compute_coset_twiddles<F: TwoAdicField + Ord>(log_h: usize, shift: F) -> Vec<
                 base: root.exp_power_of_2(layer),
                 current: shift_power,
             };
-            let mut twiddles: Vec<_> = powers.take(h >> (layer + 1)).collect();
+            let mut twiddles = powers.collect_n(h >> (layer + 1));
             let layer_rev = log_h - 1 - layer;
             if layer_rev >= mid {
                 reverse_slice_index_bits(&mut twiddles);
@@ -88,7 +88,7 @@ fn compute_coset_twiddles<F: TwoAdicField + Ord>(log_h: usize, shift: F) -> Vec<
 fn compute_inverse_twiddles<F: TwoAdicField + Ord>(log_h: usize) -> VectorPair<F> {
     let half_h = (1 << log_h) >> 1;
     let root_inv = F::two_adic_generator(log_h).inverse();
-    let twiddles: Vec<F> = root_inv.powers().take(half_h).collect();
+    let twiddles = root_inv.powers().collect_n(half_h);
     let mut bit_reversed_twiddles = twiddles.clone();
 
     // In the middle of the coset LDE, we're in bit-reversed order.

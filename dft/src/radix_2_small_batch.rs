@@ -73,7 +73,7 @@ impl<F: TwoAdicField> Radix2DFTSmallBatch<F> {
         let generator = F::two_adic_generator(lg_n);
         let half_n = 1 << (lg_n - 1);
         // nth_roots = [1, g, g^2, g^3, ..., g^{n/2 - 1}]
-        let nth_roots: Vec<_> = generator.powers().take(half_n).collect();
+        let nth_roots = generator.powers().collect_n(half_n);
 
         (0..lg_n)
             .map(|i| nth_roots.iter().step_by(1 << i).copied().collect())

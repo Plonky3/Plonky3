@@ -23,7 +23,7 @@ impl TwoAdicSubgroupDft<C> for Mersenne31ComplexRadix2Dit {
         let log_h = log2_strict_usize(h);
 
         let root = C::two_adic_generator(log_h);
-        let twiddles: Vec<C> = root.powers().take(h / 2).collect();
+        let twiddles = root.powers().collect_n(h / 2);
 
         // DIT butterfly
         reverse_matrix_index_bits(&mut mat);

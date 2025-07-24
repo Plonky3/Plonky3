@@ -107,7 +107,7 @@ where
 
     assert_eq!(extension_elements, unpacked_extension);
 
-    let base_powers: Vec<EF> = extension_elements[0].powers().take(10 * width).collect();
+    let base_powers = extension_elements[0].powers().collect_n(10 * width);
 
     let packed_powers = EF::ExtensionPacking::packed_ext_powers(extension_elements[0]);
     let unpacked_powers: Vec<EF> = EF::ExtensionPacking::to_ext_iter(packed_powers)
