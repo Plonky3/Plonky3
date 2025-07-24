@@ -25,7 +25,7 @@ impl<F: TwoAdicField, const N: usize> Default for IntegratedCosetMds<F, N> {
         let root_inv = root.inverse();
         let coset_shift = F::GENERATOR;
 
-        let mut ifft_twiddles: Vec<F> = root_inv.powers().take(N / 2).collect();
+        let mut ifft_twiddles = root_inv.powers().collect_n(N / 2);
         reverse_slice_index_bits(&mut ifft_twiddles);
 
         let fft_twiddles: Vec<Vec<F>> = (0..log_n)
@@ -35,7 +35,7 @@ impl<F: TwoAdicField, const N: usize> Default for IntegratedCosetMds<F, N> {
                     base: root.exp_power_of_2(layer),
                     current: shift_power,
                 };
-                let mut twiddles: Vec<_> = powers.take(N >> (layer + 1)).collect();
+                let mut twiddles = powers.collect_n(N >> (layer + 1));
                 reverse_slice_index_bits(&mut twiddles);
                 twiddles
             })
