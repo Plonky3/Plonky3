@@ -369,23 +369,20 @@ where
             .map(|&height| Dimensions { width: 0, height })
             .collect_vec();
 
-        if let Some(batch_max_height) = batch_heights.iter().max() {
-            let log_batch_max_height = log2_strict_usize(*batch_max_height);
-            let bits_reduced = log_global_max_height - log_batch_max_height;
-            let reduced_index = index >> bits_reduced;
+        let reduced_index = batch_heights
+            .iter()
+            .max()
+            .map(|&h| index >> (log_global_max_height - log2_strict_usize(h)))
+            .unwrap_or(0); // If the batch is empty, we use 0.
 
-            // Verify that the opened values match the commitment.
-            input_mmcs.verify_batch(
+        input_mmcs
+            .verify_batch(
                 batch_commit,
                 &batch_dims,
                 reduced_index,
                 batch_opening.into(),
             )
-        } else {
-            // Empty batch?
-            input_mmcs.verify_batch(batch_commit, &[], 0, batch_opening.into())
-        }
-        .map_err(FriError::InputError)?;
+            .map_err(FriError::InputError)?;
 
         // For each matrix in the commitment
         for (mat_opening, (mat_domain, mat_points_and_values)) in zip_eq(
