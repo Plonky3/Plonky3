@@ -1,7 +1,7 @@
 use core::fmt::Debug;
 use core::hash::Hash;
 
-use p3_field::PrimeCharacteristicRing;
+use p3_field::{Algebra, PrimeCharacteristicRing};
 
 use crate::MontyField31;
 
@@ -124,6 +124,15 @@ pub trait TwoAdicData: MontyParameters {
 pub trait BinomialExtensionData<const DEG: usize>: MontyParameters + Sized {
     /// W is a value such that (x^DEG - W) is irreducible.
     const W: MontyField31<Self>;
+
+    /// Multiply a field element (or packed field element) by W.
+    ///
+    /// Defaults to standard multiplication but this can be reimplemented to
+    /// make use of the exact value of `W`. E.g. if `W = 2, 3` this should be
+    /// reimplemented using addition.
+    fn mul_w<A: Algebra<MontyField31<Self>>>(a: A) -> A {
+        a * Self::W
+    }
 
     /// DTH_ROOT = W^((p - 1)/DEG)
     const DTH_ROOT: MontyField31<Self>;

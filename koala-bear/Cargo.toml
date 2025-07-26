@@ -29,7 +29,7 @@ rand_xoshiro.workspace = true
 serde_json.workspace = true
 
 [features]
-nightly-features = ["p3-monty-31/nightly-features"]
+nightly-features = ["p3-monty-31/nightly-features", "p3-field/nightly-features"]
 
 [[bench]]
 name = "bench_field"

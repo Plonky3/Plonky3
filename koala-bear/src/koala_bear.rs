@@ -67,6 +67,12 @@ impl TwoAdicData for KoalaBearParameters {
 
 impl BinomialExtensionData<4> for KoalaBearParameters {
     const W: KoalaBear = KoalaBear::new(3);
+
+    #[inline(always)]
+    fn mul_w<A: p3_field::Algebra<MontyField31<Self>>>(a: A) -> A {
+        a.double() + a
+    }
+
     const DTH_ROOT: KoalaBear = KoalaBear::new(2113994754);
     const EXT_GENERATOR: [KoalaBear; 4] = KoalaBear::new_array([2, 1, 0, 0]);
     const EXT_TWO_ADICITY: usize = 26;
@@ -90,6 +96,11 @@ impl BinomialExtensionData<8> for KoalaBearParameters {
         [0, 0, 0, 0, 0, 0, 777715144, 0],
         [0, 0, 0, 0, 0, 0, 0, 14348907],
     ]);
+
+    #[inline(always)]
+    fn mul_w<A: p3_field::Algebra<MontyField31<Self>>>(a: A) -> A {
+        a.double() + a
+    }
 }
 
 #[cfg(test)]
