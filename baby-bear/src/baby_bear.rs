@@ -1,5 +1,5 @@
-use p3_field::PrimeCharacteristicRing;
 use p3_field::exponentiation::exp_1725656503;
+use p3_field::{Algebra, PrimeCharacteristicRing};
 use p3_monty_31::{
     BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
     PackedMontyParameters, RelativelyPrimePower, TwoAdicData,
@@ -76,7 +76,7 @@ impl BinomialExtensionData<5> for BabyBearParameters {
     const W: BabyBear = BabyBear::new(2);
 
     #[inline(always)]
-    fn mul_w<A: p3_field::Algebra<MontyField31<Self>>>(a: A) -> A {
+    fn mul_w<A: Algebra<MontyField31<Self>>>(a: A) -> A {
         a.double()
     }
 
