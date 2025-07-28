@@ -299,27 +299,19 @@ impl Field for Goldilocks {
     #[cfg(all(
         target_arch = "x86_64",
         target_feature = "avx2",
-        not(all(feature = "nightly-features", target_feature = "avx512f"))
+        not(target_feature = "avx512f")
     ))]
     type Packing = crate::PackedGoldilocksAVX2;
 
-    #[cfg(all(
-        feature = "nightly-features",
-        target_arch = "x86_64",
-        target_feature = "avx512f"
-    ))]
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
     type Packing = crate::PackedGoldilocksAVX512;
     #[cfg(not(any(
         all(
             target_arch = "x86_64",
             target_feature = "avx2",
-            not(all(feature = "nightly-features", target_feature = "avx512f"))
+            not(target_feature = "avx512f")
         ),
-        all(
-            feature = "nightly-features",
-            target_arch = "x86_64",
-            target_feature = "avx512f"
-        ),
+        all(target_arch = "x86_64", target_feature = "avx512f"),
     )))]
     type Packing = Self;
 
