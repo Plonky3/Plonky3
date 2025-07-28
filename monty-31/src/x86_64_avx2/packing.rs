@@ -1064,7 +1064,7 @@ pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
 
     // We only care about the entries 1, 2, 3 of packed b.
     let packed_b = PackedMontyField31AVX2([b[0], b[1], b[2], b[3], b[0], b[1], b[2], b[3]]);
-    let b_w = FP::mul_w(packed_b).0;
+    let w_b = FP::mul_w(packed_b).0;
 
     // Constant term = a0*b0 + w(a1*b3 + a2*b2 + a3*b1)
     // Linear term = a0*b1 + a1*b0 + w(a2*b3 + a3*b2)
@@ -1077,51 +1077,51 @@ pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
     // This will produce the output we want in the high parts of each u64 with the low parts
     // being some nonsense (usually 0 but in principle might not be).
     let dot_product: [MontyField31<FP>; 8] = unsafe {
-        let lhs_0 = x86_64::_mm256_set1_epi32(transmute::<MontyField31<FP>, i32>(a[0]));
-        let lhs_1 = x86_64::_mm256_set1_epi32(transmute::<MontyField31<FP>, i32>(a[1]));
-        let lhs_2 = x86_64::_mm256_set1_epi32(transmute::<MontyField31<FP>, i32>(a[2]));
-        let lhs_3 = x86_64::_mm256_set1_epi32(transmute::<MontyField31<FP>, i32>(a[3]));
+        let lhs_0 = x86_64::_mm256_set1_epi32(a[0].value as i32);
+        let lhs_1 = x86_64::_mm256_set1_epi32(a[1].value as i32);
+        let lhs_2 = x86_64::_mm256_set1_epi32(a[2].value as i32);
+        let lhs_3 = x86_64::_mm256_set1_epi32(a[3].value as i32);
 
         // We use setr instead of set as setr reverses the order of the arguments
         // for some reason.
         let rhs_0 = x86_64::_mm256_setr_epi32(
-            transmute::<MontyField31<FP>, i32>(b[0]),
+            b[0].value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b[1]),
+            b[1].value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b[2]),
+            b[2].value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b[3]),
+            b[3].value as i32,
             0,
         );
         let rhs_1 = x86_64::_mm256_setr_epi32(
-            transmute::<MontyField31<FP>, i32>(b_w[3]),
+            w_b[3].value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b[0]),
+            b[0].value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b[1]),
+            b[1].value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b[2]),
+            b[2].value as i32,
             0,
         );
         let rhs_2 = x86_64::_mm256_setr_epi32(
-            transmute::<MontyField31<FP>, i32>(b_w[2]),
+            w_b[2].value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b_w[3]),
+            w_b[3].value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b[0]),
+            b[0].value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b[1]),
+            b[1].value as i32,
             0,
         );
         let rhs_3 = x86_64::_mm256_setr_epi32(
-            transmute::<MontyField31<FP>, i32>(b_w[1]),
+            w_b[1].value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b_w[2]),
+            w_b[2].value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b_w[3]),
+            w_b[3].value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b[0]),
+            b[0].value as i32,
             0,
         );
 
@@ -1167,10 +1167,10 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
     assert_eq!(WIDTH, 5);
 
     let zero = MontyField31::<FP>::ZERO;
-    let b_w_1 = FP::mul_w(b[1]);
-    let b_w_2 = FP::mul_w(b[2]);
-    let b_w_3 = FP::mul_w(b[3]);
-    let b_w_4 = FP::mul_w(b[4]);
+    let w_b1 = FP::mul_w(b[1]);
+    let w_b2 = FP::mul_w(b[2]);
+    let w_b3 = FP::mul_w(b[3]);
+    let w_b4 = FP::mul_w(b[4]);
 
     // Constant term = a0*b0 + w(a1*b4 + a2*b3 + a3*b2 + a4*b1)
     // Linear term = a0*b1 + a1*b0 + w(a2*b4 + a3*b3 + a4*b2)
@@ -1184,18 +1184,18 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
         PackedMontyField31AVX2([a[3], a[3], a[3], a[3], a[3], zero, zero, zero]),
     ];
     let rhs = [
-        PackedMontyField31AVX2([b[0], b[1], b[2], b[3], b[4], b_w_3, b_w_4, b[0]]),
-        PackedMontyField31AVX2([b_w_4, b[0], b[1], b[2], b[3], zero, zero, zero]),
-        PackedMontyField31AVX2([b_w_3, b_w_4, b[0], b[1], b[2], zero, zero, zero]),
-        PackedMontyField31AVX2([b_w_2, b_w_3, b_w_4, b[0], b[1], zero, zero, zero]),
+        PackedMontyField31AVX2([b[0], b[1], b[2], b[3], b[4], w_b3, w_b4, b[0]]),
+        PackedMontyField31AVX2([w_b4, b[0], b[1], b[2], b[3], zero, zero, zero]),
+        PackedMontyField31AVX2([w_b3, w_b4, b[0], b[1], b[2], zero, zero, zero]),
+        PackedMontyField31AVX2([w_b2, w_b3, w_b4, b[0], b[1], zero, zero, zero]),
     ];
 
     let dot_res = unsafe { PackedMontyField31AVX2::from_vector(dot_product_4(lhs, rhs)) };
 
     // We managed to compute 3 of the extra terms in the last 3 places of the dot product.
     // This leaves us with 2 terms remaining we need to compute manually.
-    let extra1 = b_w_1 * a[4];
-    let extra2 = b_w_2 * a[4];
+    let extra1 = w_b1 * a[4];
+    let extra2 = w_b2 * a[4];
 
     let extra_addition = PackedMontyField31AVX2([
         extra1,
@@ -1224,7 +1224,7 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
     // TODO: It's plausible that this could be improved by a custom AVX2 implementation.
     assert_eq!(WIDTH, 8);
     let packed_b = PackedMontyField31AVX2([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
-    let b_w = FP::mul_w(packed_b).0;
+    let w_b = FP::mul_w(packed_b).0;
 
     // Constant coefficient = a0*b0 + w(a1*b7 + ... + a7*b1)
     // Linear coefficient = a0*b1 + a1*b0 + w(a2*b7 + ... + a7*b2)
@@ -1247,13 +1247,13 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
     ];
     let rhs = [
         PackedMontyField31AVX2([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]),
-        PackedMontyField31AVX2([b_w[7], b[0], b[1], b[2], b[3], b[4], b[5], b[6]]),
-        PackedMontyField31AVX2([b_w[6], b_w[7], b[0], b[1], b[2], b[3], b[4], b[5]]),
-        PackedMontyField31AVX2([b_w[5], b_w[6], b_w[7], b[0], b[1], b[2], b[3], b[4]]),
-        PackedMontyField31AVX2([b_w[4], b_w[5], b_w[6], b_w[7], b[0], b[1], b[2], b[3]]),
-        PackedMontyField31AVX2([b_w[3], b_w[4], b_w[5], b_w[6], b_w[7], b[0], b[1], b[2]]),
-        PackedMontyField31AVX2([b_w[2], b_w[3], b_w[4], b_w[5], b_w[6], b_w[7], b[0], b[1]]),
-        PackedMontyField31AVX2([b_w[1], b_w[2], b_w[3], b_w[4], b_w[5], b_w[6], b_w[7], b[0]]),
+        PackedMontyField31AVX2([w_b[7], b[0], b[1], b[2], b[3], b[4], b[5], b[6]]),
+        PackedMontyField31AVX2([w_b[6], w_b[7], b[0], b[1], b[2], b[3], b[4], b[5]]),
+        PackedMontyField31AVX2([w_b[5], w_b[6], w_b[7], b[0], b[1], b[2], b[3], b[4]]),
+        PackedMontyField31AVX2([w_b[4], w_b[5], w_b[6], w_b[7], b[0], b[1], b[2], b[3]]),
+        PackedMontyField31AVX2([w_b[3], w_b[4], w_b[5], w_b[6], w_b[7], b[0], b[1], b[2]]),
+        PackedMontyField31AVX2([w_b[2], w_b[3], w_b[4], w_b[5], w_b[6], w_b[7], b[0], b[1]]),
+        PackedMontyField31AVX2([w_b[1], w_b[2], w_b[3], w_b[4], w_b[5], w_b[6], w_b[7], b[0]]),
     ];
 
     let dot = PackedMontyField31AVX2::dot_product(&lhs, &rhs).0;

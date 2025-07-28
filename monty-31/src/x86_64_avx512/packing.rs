@@ -1198,9 +1198,9 @@ pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
     // No point in using packings here as we only have 3 elements. It might be worth using a smaller packed
     // field (e.g AVX2) but right now we don't compile both PackedMontyField31AVX2 and PackedMontyField31AVX512
     // at the same time.
-    let b_w1 = FP::mul_w(b[1]);
-    let b_w2 = FP::mul_w(b[2]);
-    let b_w3 = FP::mul_w(b[3]);
+    let w_b1 = FP::mul_w(b[1]);
+    let w_b2 = FP::mul_w(b[2]);
+    let w_b3 = FP::mul_w(b[3]);
 
     // Constant term = a0*b0 + w(a1*b3 + a2*b2 + a3*b1)
     // Linear term = a0*b1 + a1*b0 + w(a2*b3 + a3*b2)
@@ -1212,51 +1212,51 @@ pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
         // Surprisingly, testing indicates it's actually faster to just use AVX2 intrinsics here instead of AVX512.
         // Hence this is just copied and pasted from the AVX2 implementation. the issue is likely that there isn't
         // a huge amount of parallelism to be had and so using AVX512 leads to a bunch of extra data fiddiling.
-        let lhs_0 = x86_64::_mm256_set1_epi32(transmute::<MontyField31<FP>, i32>(a[0]));
-        let lhs_1 = x86_64::_mm256_set1_epi32(transmute::<MontyField31<FP>, i32>(a[1]));
-        let lhs_2 = x86_64::_mm256_set1_epi32(transmute::<MontyField31<FP>, i32>(a[2]));
-        let lhs_3 = x86_64::_mm256_set1_epi32(transmute::<MontyField31<FP>, i32>(a[3]));
+        let lhs_0 = x86_64::_mm256_set1_epi32(a[0].value as i32);
+        let lhs_1 = x86_64::_mm256_set1_epi32(a[1].value as i32);
+        let lhs_2 = x86_64::_mm256_set1_epi32(a[2].value as i32);
+        let lhs_3 = x86_64::_mm256_set1_epi32(a[3].value as i32);
 
         // We use setr instead of set as setr reverses the order of the arguments
         // for some reason.
         let rhs_0 = x86_64::_mm256_setr_epi32(
-            transmute::<MontyField31<FP>, i32>(b[0]),
+            b[0].value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b[1]),
+            b[1].value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b[2]),
+            b[2].value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b[3]),
+            b[3].value as i32,
             0,
         );
         let rhs_1 = x86_64::_mm256_setr_epi32(
-            transmute::<MontyField31<FP>, i32>(b_w3),
+            w_b3.value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b[0]),
+            b[0].value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b[1]),
+            b[1].value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b[2]),
+            b[2].value as i32,
             0,
         );
         let rhs_2 = x86_64::_mm256_setr_epi32(
-            transmute::<MontyField31<FP>, i32>(b_w2),
+            w_b2.value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b_w3),
+            w_b3.value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b[0]),
+            b[0].value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b[1]),
+            b[1].value as i32,
             0,
         );
         let rhs_3 = x86_64::_mm256_setr_epi32(
-            transmute::<MontyField31<FP>, i32>(b_w1),
+            w_b1.value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b_w2),
+            w_b2.value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b_w3),
+            w_b3.value as i32,
             0,
-            transmute::<MontyField31<FP>, i32>(b[0]),
+            b[0].value as i32,
             0,
         );
 
@@ -1307,10 +1307,10 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
     // improve one that is here.
     assert_eq!(WIDTH, 5);
     let zero = MontyField31::<FP>::ZERO;
-    let b_w_1 = FP::mul_w(b[1]);
-    let b_w_2 = FP::mul_w(b[2]);
-    let b_w_3 = FP::mul_w(b[3]);
-    let b_w_4 = FP::mul_w(b[4]);
+    let w_b1 = FP::mul_w(b[1]);
+    let w_b2 = FP::mul_w(b[2]);
+    let w_b3 = FP::mul_w(b[3]);
+    let w_b4 = FP::mul_w(b[4]);
 
     // Constant term = a0*b0 + w(a1*b4 + a2*b3 + a3*b2 + a4*b1)
     // Linear term = a0*b1 + a1*b0 + w(a2*b4 + a3*b3 + a4*b2)
@@ -1334,11 +1334,11 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
     ];
     let rhs = [
         PackedMontyField31AVX512([
-            b[0], b_w_4, b[1], b[0], b[0], b_w_4, b[3], b[2], b[2], b[1], b_w_1, b_w_2, b_w_3,
-            b_w_4, b[0], zero,
+            b[0], w_b4, b[1], b[0], b[0], w_b4, b[3], b[2], b[2], b[1], w_b1, w_b2, w_b3, w_b4,
+            b[0], zero,
         ]),
         PackedMontyField31AVX512([
-            b_w_3, b_w_2, b_w_4, b_w_3, b[2], b[1], b[1], b[0], b[4], b[3], zero, zero, zero, zero,
+            w_b3, w_b2, w_b4, w_b3, b[2], b[1], b[1], b[0], b[4], b[3], zero, zero, zero, zero,
             zero, zero,
         ]),
     ];
@@ -1369,7 +1369,7 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
     // in particular it would benefit from a custom AVX2 implementation.
     assert_eq!(WIDTH, 8);
     let packed_b = PackedMontyField31AVX512::from_monty_array(*b);
-    let b_w = FP::mul_w(packed_b).0;
+    let w_b = FP::mul_w(packed_b).0;
 
     // Constant coefficient = a0*b0 + w(a1*b7 + ... + a7*b1)
     // Linear coefficient = a0*b1 + a1*b0 + w(a2*b7 + ... + a7*b2)
@@ -1400,19 +1400,19 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
     ];
     let rhs = [
         PackedMontyField31AVX512([
-            b[0], b_w[7], b_w[7], b_w[6], b_w[6], b_w[5], b_w[5], b_w[4], b[4], b[3], b[3], b[2],
+            b[0], w_b[7], w_b[7], w_b[6], w_b[6], w_b[5], w_b[5], w_b[4], b[4], b[3], b[3], b[2],
             b[2], b[1], b[1], b[0],
         ]),
         PackedMontyField31AVX512([
-            b_w[6], b_w[5], b_w[5], b_w[4], b_w[4], b_w[3], b[3], b[2], b[2], b[1], b[1], b[0],
-            b[0], b_w[7], b[7], b[6],
+            w_b[6], w_b[5], w_b[5], w_b[4], w_b[4], w_b[3], b[3], b[2], b[2], b[1], b[1], b[0],
+            b[0], w_b[7], b[7], b[6],
         ]),
         PackedMontyField31AVX512([
-            b_w[4], b_w[3], b_w[3], b_w[2], b[2], b[1], b[1], b[0], b[0], b_w[7], b_w[7], b_w[6],
+            w_b[4], w_b[3], w_b[3], w_b[2], b[2], b[1], b[1], b[0], b[0], w_b[7], w_b[7], w_b[6],
             b[6], b[5], b[5], b[4],
         ]),
         PackedMontyField31AVX512([
-            b_w[2], b_w[1], b[1], b[0], b[0], b_w[7], b_w[7], b_w[6], b_w[6], b_w[5], b[5], b[4],
+            w_b[2], w_b[1], b[1], b[0], b[0], w_b[7], w_b[7], w_b[6], w_b[6], w_b[5], b[5], b[4],
             b[4], b[3], b[3], b[2],
         ]),
     ];
