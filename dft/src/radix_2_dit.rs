@@ -92,8 +92,10 @@ fn dit_layer<F: Field>(mat: &mut RowMajorMatrixViewMut<'_, F>, layer: usize, twi
                         // The first pair doesn't require a twiddle factor
                         TwiddleFreeButterfly.apply_to_rows(hi_chunk, lo_chunk)
                     } else {
+                        // Pre-compute the shift amount for each block to avoid redundant computation
                         // Apply DIT butterfly using the twiddle factor at index `ind << layer_rev`
-                        DitButterfly(twiddles[ind << layer_rev]).apply_to_rows(hi_chunk, lo_chunk)
+                        let twiddle_index = ind << layer_rev;
+                        DitButterfly(twiddles[twiddle_index]).apply_to_rows(hi_chunk, lo_chunk)
                     }
                 });
         });
