@@ -20,7 +20,8 @@ use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 
 use crate::{
-    FieldParameters, MontyField31, PackedMontyParameters, RelativelyPrimePower, signed_add_avx2,
+    BinomialExtensionData, FieldParameters, MontyField31, PackedMontyParameters,
+    RelativelyPrimePower, signed_add_avx2,
 };
 
 const WIDTH: usize = 8;
@@ -1045,3 +1046,217 @@ impl_packed_field_pow_2!(
     ],
     WIDTH
 );
+
+/// Multiplication in a quartic binomial extension field.
+#[inline]
+pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
+    a: &[MontyField31<FP>; WIDTH],
+    b: &[MontyField31<FP>; WIDTH],
+    res: &mut [MontyField31<FP>; WIDTH],
+) where
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+{
+    assert_eq!(WIDTH, 4);
+
+    // TODO: It's plausible that this could be improved by folding the computation of packed_b into
+    // the custom AVX2 implementation. Similarly for BabyBear, a custom mul function could help as
+    // we only need to do 3 muls instead of the usual 8 so we can save quite a few operations.
+
+    // We only care about the entries 1, 2, 3 of packed b.
+    let packed_b = PackedMontyField31AVX2([b[0], b[1], b[2], b[3], b[0], b[1], b[2], b[3]]);
+    let w_b = FP::mul_w(packed_b).0;
+
+    // Constant term = a0*b0 + w(a1*b3 + a2*b2 + a3*b1)
+    // Linear term = a0*b1 + a1*b0 + w(a2*b3 + a3*b2)
+    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b3)
+    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0
+
+    // We write a custom AVX2 implementation as we want to do a 4 term dot-product but we
+    // only need to do 4 of them, not 8 in parallel so we can do something similar to
+    // dot_product_4 but with many fewer instructions.
+    // This will produce the output we want in the high parts of each u64 with the low parts
+    // being some nonsense (usually 0 but in principle might not be).
+    let dot_product: [MontyField31<FP>; 8] = unsafe {
+        let lhs_0 = x86_64::_mm256_set1_epi32(a[0].value as i32);
+        let lhs_1 = x86_64::_mm256_set1_epi32(a[1].value as i32);
+        let lhs_2 = x86_64::_mm256_set1_epi32(a[2].value as i32);
+        let lhs_3 = x86_64::_mm256_set1_epi32(a[3].value as i32);
+
+        // We use setr instead of set as setr reverses the order of the arguments
+        // for some reason.
+        let rhs_0 = x86_64::_mm256_setr_epi32(
+            b[0].value as i32,
+            0,
+            b[1].value as i32,
+            0,
+            b[2].value as i32,
+            0,
+            b[3].value as i32,
+            0,
+        );
+        let rhs_1 = x86_64::_mm256_setr_epi32(
+            w_b[3].value as i32,
+            0,
+            b[0].value as i32,
+            0,
+            b[1].value as i32,
+            0,
+            b[2].value as i32,
+            0,
+        );
+        let rhs_2 = x86_64::_mm256_setr_epi32(
+            w_b[2].value as i32,
+            0,
+            w_b[3].value as i32,
+            0,
+            b[0].value as i32,
+            0,
+            b[1].value as i32,
+            0,
+        );
+        let rhs_3 = x86_64::_mm256_setr_epi32(
+            w_b[1].value as i32,
+            0,
+            w_b[2].value as i32,
+            0,
+            w_b[3].value as i32,
+            0,
+            b[0].value as i32,
+            0,
+        );
+
+        let mul_0 = x86_64::_mm256_mul_epu32(lhs_0, rhs_0);
+        let mul_1 = x86_64::_mm256_mul_epu32(lhs_1, rhs_1);
+        let mul_2 = x86_64::_mm256_mul_epu32(lhs_2, rhs_2);
+        let mul_3 = x86_64::_mm256_mul_epu32(lhs_3, rhs_3);
+
+        let dot_01 = x86_64::_mm256_add_epi64(mul_0, mul_1);
+        let dot_23 = x86_64::_mm256_add_epi64(mul_2, mul_3);
+        let dot = x86_64::_mm256_add_epi64(dot_01, dot_23);
+
+        // We only care about the top 32 bits of dot as the bottom 32 bits will
+        // be cancelled out.
+        // Those bits currently lie in [0, 2P) so we reduce them to [0, P)
+        let dot_sub = x86_64::_mm256_sub_epi32(dot, FP::PACKED_P);
+        let dot_prime = x86_64::_mm256_min_epu32(dot, dot_sub);
+
+        let q = x86_64::_mm256_mul_epu32(dot, FP::PACKED_MU);
+        let q_p = x86_64::_mm256_mul_epu32(q, FP::PACKED_P);
+
+        let t = x86_64::_mm256_sub_epi32(dot_prime, q_p);
+        transmute(red_signed_to_canonical::<FP>(t))
+    };
+
+    res[0] = dot_product[1];
+    res[1] = dot_product[3];
+    res[2] = dot_product[5];
+    res[3] = dot_product[7];
+}
+
+/// Multiplication in a quintic binomial extension field.
+#[inline]
+pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
+    a: &[MontyField31<FP>; WIDTH],
+    b: &[MontyField31<FP>; WIDTH],
+    res: &mut [MontyField31<FP>; WIDTH],
+) where
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+{
+    // TODO: This could likely be optimised further with more effort.
+    // in particular it would benefit from a custom AVX2 implementation.
+    assert_eq!(WIDTH, 5);
+
+    let zero = MontyField31::<FP>::ZERO;
+    let w_b1 = FP::mul_w(b[1]);
+    let w_b2 = FP::mul_w(b[2]);
+    let w_b3 = FP::mul_w(b[3]);
+    let w_b4 = FP::mul_w(b[4]);
+
+    // Constant term = a0*b0 + w(a1*b4 + a2*b3 + a3*b2 + a4*b1)
+    // Linear term = a0*b1 + a1*b0 + w(a2*b4 + a3*b3 + a4*b2)
+    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b4 + a4*b3)
+    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0 + w*a4*b4
+    // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 + a4*b0
+    let lhs = [
+        PackedMontyField31AVX2([a[0], a[0], a[0], a[0], a[0], a[4], a[4], a[4]]),
+        PackedMontyField31AVX2([a[1], a[1], a[1], a[1], a[1], zero, zero, zero]),
+        PackedMontyField31AVX2([a[2], a[2], a[2], a[2], a[2], zero, zero, zero]),
+        PackedMontyField31AVX2([a[3], a[3], a[3], a[3], a[3], zero, zero, zero]),
+    ];
+    let rhs = [
+        PackedMontyField31AVX2([b[0], b[1], b[2], b[3], b[4], w_b3, w_b4, b[0]]),
+        PackedMontyField31AVX2([w_b4, b[0], b[1], b[2], b[3], zero, zero, zero]),
+        PackedMontyField31AVX2([w_b3, w_b4, b[0], b[1], b[2], zero, zero, zero]),
+        PackedMontyField31AVX2([w_b2, w_b3, w_b4, b[0], b[1], zero, zero, zero]),
+    ];
+
+    let dot_res = unsafe { PackedMontyField31AVX2::from_vector(dot_product_4(lhs, rhs)) };
+
+    // We managed to compute 3 of the extra terms in the last 3 places of the dot product.
+    // This leaves us with 2 terms remaining we need to compute manually.
+    let extra1 = w_b1 * a[4];
+    let extra2 = w_b2 * a[4];
+
+    let extra_addition = PackedMontyField31AVX2([
+        extra1,
+        extra2,
+        dot_res.0[5],
+        dot_res.0[6],
+        dot_res.0[7],
+        zero,
+        zero,
+        zero,
+    ]);
+    let total = dot_res + extra_addition;
+
+    res.copy_from_slice(&total.0[..5]);
+}
+
+/// Multiplication in an octic binomial extension field.
+#[inline]
+pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
+    a: &[MontyField31<FP>; WIDTH],
+    b: &[MontyField31<FP>; WIDTH],
+    res: &mut [MontyField31<FP>; WIDTH],
+) where
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+{
+    // TODO: It's plausible that this could be improved by a custom AVX2 implementation.
+    assert_eq!(WIDTH, 8);
+    let packed_b = PackedMontyField31AVX2([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
+    let w_b = FP::mul_w(packed_b).0;
+
+    // Constant coefficient = a0*b0 + w(a1*b7 + ... + a7*b1)
+    // Linear coefficient = a0*b1 + a1*b0 + w(a2*b7 + ... + a7*b2)
+    // Square coefficient = a0*b2 + .. + a2*b0 + w(a3*b7 + ... + a7*b3)
+    // Cube coefficient = a0*b3 + .. + a3*b0 + w(a4*b7 + ... + a7*b4)
+    // Quartic coefficient = a0*b4 + ... + a4*b0 + w(a5*b7 + ... + a7*b5)
+    // Quintic coefficient = a0*b5 + ... + a5*b0 + w(a6*b7 + ... + a7*b6)
+    // Sextic coefficient = a0*b6 + ... + a6*b0 + w*a7*b7
+    // Final coefficient = a0*b7 + ... + a7*b7
+    // This can be implemented reasonably efficiently as an 8-term dot product.
+    let lhs: [PackedMontyField31AVX2<FP>; 8] = [
+        a[0].into(),
+        a[1].into(),
+        a[2].into(),
+        a[3].into(),
+        a[4].into(),
+        a[5].into(),
+        a[6].into(),
+        a[7].into(),
+    ];
+    let rhs = [
+        PackedMontyField31AVX2([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]),
+        PackedMontyField31AVX2([w_b[7], b[0], b[1], b[2], b[3], b[4], b[5], b[6]]),
+        PackedMontyField31AVX2([w_b[6], w_b[7], b[0], b[1], b[2], b[3], b[4], b[5]]),
+        PackedMontyField31AVX2([w_b[5], w_b[6], w_b[7], b[0], b[1], b[2], b[3], b[4]]),
+        PackedMontyField31AVX2([w_b[4], w_b[5], w_b[6], w_b[7], b[0], b[1], b[2], b[3]]),
+        PackedMontyField31AVX2([w_b[3], w_b[4], w_b[5], w_b[6], w_b[7], b[0], b[1], b[2]]),
+        PackedMontyField31AVX2([w_b[2], w_b[3], w_b[4], w_b[5], w_b[6], w_b[7], b[0], b[1]]),
+        PackedMontyField31AVX2([w_b[1], w_b[2], w_b[3], w_b[4], w_b[5], w_b[6], w_b[7], b[0]]),
+    ];
+
+    let dot = PackedMontyField31AVX2::dot_product(&lhs, &rhs).0;
+
+    res[..].copy_from_slice(&dot);
+}

@@ -31,7 +31,7 @@ criterion.workspace = true
 rand_xoshiro.workspace = true
 
 [features]
-nightly-features = []
+nightly-features = ["p3-field/nightly-features"]
 
 [[bench]]
 name = "bench_field"
