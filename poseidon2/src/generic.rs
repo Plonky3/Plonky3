@@ -29,7 +29,7 @@ pub fn add_rc_and_sbox_generic<F: Field, A: Algebra<F> + InjectiveMonomial<D>, c
     *val = val.injective_exp_n();
 }
 
-pub trait GenericPoseidon2LinearLayers<R: PrimeCharacteristicRing, const WIDTH: usize>:
+pub trait GenericPoseidon2LinearLayers<R: PrimeCharacteristicRing, I, const WIDTH: usize>:
     Sync
 {
     /// A generic implementation of the internal linear layer.

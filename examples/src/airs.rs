@@ -96,7 +96,7 @@ impl<
 
 impl<
     AB: AirBuilder,
-    LinearLayers: GenericPoseidon2LinearLayers<AB::Expr, WIDTH>,
+    LinearLayers: GenericPoseidon2LinearLayers<AB::Expr, AB::I, WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
@@ -132,10 +132,10 @@ impl<
     Challenger: FieldChallenger<F>,
     Pcs: p3_commit::Pcs<EF, Challenger, Domain = Domain>,
     SC: StarkGenericConfig<Pcs = Pcs, Challenge = EF, Challenger = Challenger>,
-    LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>
-        + GenericPoseidon2LinearLayers<SymbolicExpression<F>, WIDTH>
-        + GenericPoseidon2LinearLayers<F::Packing, WIDTH>
-        + GenericPoseidon2LinearLayers<EF, WIDTH>,
+    LinearLayers: GenericPoseidon2LinearLayers<F, F, WIDTH>
+        + GenericPoseidon2LinearLayers<SymbolicExpression<F>, F, WIDTH>
+        + GenericPoseidon2LinearLayers<F::Packing, F, WIDTH>
+        + GenericPoseidon2LinearLayers<EF, F, WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
@@ -224,10 +224,10 @@ impl<
     Challenger: FieldChallenger<F>,
     Pcs: p3_commit::Pcs<EF, Challenger, Domain = Domain>,
     SC: StarkGenericConfig<Pcs = Pcs, Challenge = EF, Challenger = Challenger>,
-    LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>
-        + GenericPoseidon2LinearLayers<SymbolicExpression<F>, WIDTH>
-        + GenericPoseidon2LinearLayers<F::Packing, WIDTH>
-        + GenericPoseidon2LinearLayers<EF, WIDTH>,
+    LinearLayers: GenericPoseidon2LinearLayers<F, F, WIDTH>
+        + GenericPoseidon2LinearLayers<SymbolicExpression<F>, F, WIDTH>
+        + GenericPoseidon2LinearLayers<F::Packing, F, WIDTH>
+        + GenericPoseidon2LinearLayers<EF, F, WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
@@ -266,10 +266,10 @@ impl<
     Challenger: FieldChallenger<F>,
     Pcs: p3_commit::Pcs<EF, Challenger, Domain = Domain>,
     SC: StarkGenericConfig<Pcs = Pcs, Challenge = EF, Challenger = Challenger>,
-    LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>
-        + GenericPoseidon2LinearLayers<SymbolicExpression<F>, WIDTH>
-        + GenericPoseidon2LinearLayers<F::Packing, WIDTH>
-        + GenericPoseidon2LinearLayers<EF, WIDTH>,
+    LinearLayers: GenericPoseidon2LinearLayers<F, F, WIDTH>
+        + GenericPoseidon2LinearLayers<SymbolicExpression<F>, F, WIDTH>
+        + GenericPoseidon2LinearLayers<F::Packing, F, WIDTH>
+        + GenericPoseidon2LinearLayers<EF, F, WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,

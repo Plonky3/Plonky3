@@ -31,7 +31,9 @@ pub trait InternalLayerBaseParameters<MP: MontyParameters, const WIDTH: usize>:
 
     /// Perform the internal matrix multiplication for any Abstract field
     /// which implements multiplication by MontyField31 elements.
-    fn generic_internal_linear_layer<A: Algebra<MontyField31<MP>>>(state: &mut [A; WIDTH]);
+    fn generic_internal_linear_layer<A: Algebra<I>, I: From<MontyField31<MP>>>(
+        state: &mut [A; WIDTH],
+    );
 }
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
@@ -130,11 +132,12 @@ pub struct GenericPoseidon2LinearLayersMonty31<FP, ILBP> {
     _phantom2: PhantomData<ILBP>,
 }
 
-impl<FP, A, ILBP, const WIDTH: usize> GenericPoseidon2LinearLayers<A, WIDTH>
+impl<FP, I, A, ILBP, const WIDTH: usize> GenericPoseidon2LinearLayers<A, I, WIDTH>
     for GenericPoseidon2LinearLayersMonty31<FP, ILBP>
 where
     FP: FieldParameters,
-    A: Algebra<MontyField31<FP>>,
+    I: From<MontyField31<FP>>,
+    A: Algebra<I>,
     ILBP: InternalLayerBaseParameters<FP, WIDTH>,
 {
     /// Perform the external matrix multiplication for any Abstract field

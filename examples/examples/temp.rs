@@ -1,5 +1,6 @@
 use p3_air::{Air, AirBuilder};
-use p3_field::{ExtensionField, Field, extension::BinomialExtensionField};
+use p3_field::extension::BinomialExtensionField;
+use p3_field::{ExtensionField, Field};
 use p3_koala_bear::{GenericPoseidon2LinearLayersKoalaBear, KoalaBear};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_poseidon2_air::{Poseidon2Air, RoundConstants};
