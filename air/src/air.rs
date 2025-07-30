@@ -54,7 +54,7 @@ pub trait AirBuilder: Sized {
     /// Rust will not allow generic implementations of both `Algebra<F>` and `Algebra<F::Packing>`
     /// due to the possibility that `F = F::Packing`. This serves as a workaround to that
     /// problem and lets us create an `AirBuilder` with `Expr = <EF as ExtensionField<F>>::ExtensionPacking`.
-    type I;
+    type I: Algebra<F>;
 
     /// Serves as the output type for an AIR constraint evaluation.
     type Expr: Algebra<Self::I> + Algebra<Self::Var>;
