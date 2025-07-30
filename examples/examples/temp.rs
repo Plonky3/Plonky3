@@ -1,28 +1,27 @@
 use p3_air::{Air, AirBuilder};
-use p3_field::{ExtensionField, Field, PrimeCharacteristicRing, extension::BinomialExtensionField};
+use p3_field::{ExtensionField, Field, extension::BinomialExtensionField};
 use p3_koala_bear::{GenericPoseidon2LinearLayersKoalaBear, KoalaBear};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_poseidon2_air::{Poseidon2Air, RoundConstants};
 
-pub type PrimeField<EF> = <EF as PrimeCharacteristicRing>::PrimeSubfield;
-pub type ExtensionPacking<EF> = <EF as ExtensionField<PrimeField<EF>>>::ExtensionPacking;
+pub type ExtensionPacking<F, EF> = <EF as ExtensionField<F>>::ExtensionPacking;
 
 #[derive(Debug)]
-pub struct ConstraintFolderPackedExtension<'a, EF: Field + ExtensionField<PrimeField<EF>>> {
-    pub main: RowMajorMatrixView<'a, ExtensionPacking<EF>>,
+pub struct ConstraintFolderPackedExtension<'a, F: Field, EF: ExtensionField<F>> {
+    pub main: RowMajorMatrixView<'a, ExtensionPacking<F, EF>>,
     pub alpha_powers: &'a [EF],
-    pub accumulator: ExtensionPacking<EF>,
+    pub accumulator: ExtensionPacking<F, EF>,
     pub constraint_index: usize,
 }
 
-impl<'a, EF: Field + ExtensionField<PrimeField<EF>>> AirBuilder
-    for ConstraintFolderPackedExtension<'a, EF>
+impl<'a, F: Field, EF: ExtensionField<F>> AirBuilder
+    for ConstraintFolderPackedExtension<'a, F, EF>
 {
-    type F = PrimeField<EF>;
-    type I = <PrimeField<EF> as Field>::Packing;
-    type Expr = ExtensionPacking<EF>;
-    type Var = ExtensionPacking<EF>;
-    type M = RowMajorMatrixView<'a, ExtensionPacking<EF>>;
+    type F = F;
+    type I = F::Packing;
+    type Expr = ExtensionPacking<F, EF>;
+    type Var = ExtensionPacking<F, EF>;
+    type M = RowMajorMatrixView<'a, ExtensionPacking<F, EF>>;
 
     #[inline]
     fn main(&self) -> Self::M {
@@ -47,7 +46,7 @@ impl<'a, EF: Field + ExtensionField<PrimeField<EF>>> AirBuilder
     #[inline]
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         let alpha_power = self.alpha_powers[self.constraint_index];
-        let x: ExtensionPacking<EF> = x.into();
+        let x: ExtensionPacking<F, EF> = x.into();
         self.accumulator += x * alpha_power;
         self.constraint_index += 1;
     }
@@ -81,13 +80,14 @@ fn main() {
         PARTIAL_ROUNDS,
     >::new(constants.clone());
 
-    my_funct::<EF, _>(&poseidon_air);
+    my_funct::<F, EF, _>(&poseidon_air);
 }
 
 fn my_funct<
     'a,
-    EF: Field + ExtensionField<PrimeField<EF>>,
-    A: Air<ConstraintFolderPackedExtension<'a, EF>>,
+    F: Field,
+    EF: ExtensionField<F>,
+    A: Air<ConstraintFolderPackedExtension<'a, F, EF>>,
 >(
     _air: &A,
 ) {
