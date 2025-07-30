@@ -426,10 +426,10 @@ where
         // `reduced_openings` would have a log_height = log_blowup entry only if there was a
         // trace matrix of height 1. In this case `f` is constant, so `f(zeta) - f(x))/(zeta - x)`
         // must equal `0`.
-        if let Some((_, ro)) = reduced_openings.get(&params.log_blowup)
-            && !ro.is_zero()
-        {
-            return Err(FriError::FinalPolyMismatch);
+        if let Some((_, ro)) = reduced_openings.get(&params.log_blowup) {
+            if !ro.is_zero() {
+                return Err(FriError::FinalPolyMismatch);
+            }
         }
     }
 
