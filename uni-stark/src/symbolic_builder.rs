@@ -107,6 +107,7 @@ impl<F: Field> SymbolicAirBuilder<F> {
 
 impl<F: Field> AirBuilder for SymbolicAirBuilder<F> {
     type F = F;
+    type I = F;
     type Expr = SymbolicExpression<F>;
     type Var = SymbolicVariable<F>;
     type M = RowMajorMatrix<Self::Var>;

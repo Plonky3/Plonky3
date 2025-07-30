@@ -75,6 +75,7 @@ where
     F: Field,
 {
     type F = F;
+    type I = F;
     type Expr = F;
     type Var = F;
     type M = ViewPair<'a, F>;
