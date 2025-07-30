@@ -210,7 +210,7 @@ fn eval_full_round<
     builder: &mut AB,
 ) {
     for (i, (s, r)) in state.iter_mut().zip(round_constants.iter()).enumerate() {
-        *s += *r;
+        *s += (*r).into();
         eval_sbox(&full_round.sbox[i], s, builder);
     }
     LinearLayers::external_linear_layer(state);
@@ -233,7 +233,7 @@ fn eval_partial_round<
     round_constant: &AB::F,
     builder: &mut AB,
 ) {
-    state[0] += *round_constant;
+    state[0] += (*round_constant).into();
     eval_sbox(&partial_round.sbox, &mut state[0], builder);
 
     builder.assert_eq(state[0].clone(), partial_round.post_sbox.clone());

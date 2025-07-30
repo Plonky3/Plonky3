@@ -47,10 +47,12 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
 /// as well cases where the constraints are evaluated on an evaluation trace and combined using randomness.
 pub trait AirBuilder: Sized {
     /// Underlying field type.
-    type F: Field;
+    type F: Field + Into<Self::I>;
+
+    type I;
 
     /// Serves as the output type for an AIR constraint evaluation.
-    type Expr: Algebra<Self::F> + Algebra<Self::Var>;
+    type Expr: Algebra<Self::I> + Algebra<Self::Var>;
 
     /// The type of the variable appearing in the trace matrix.
     ///
@@ -59,13 +61,13 @@ pub trait AirBuilder: Sized {
         + Clone
         + Send
         + Sync
-        + Add<Self::F, Output = Self::Expr>
+        + Add<Self::I, Output = Self::Expr>
         + Add<Self::Var, Output = Self::Expr>
         + Add<Self::Expr, Output = Self::Expr>
-        + Sub<Self::F, Output = Self::Expr>
+        + Sub<Self::I, Output = Self::Expr>
         + Sub<Self::Var, Output = Self::Expr>
         + Sub<Self::Expr, Output = Self::Expr>
-        + Mul<Self::F, Output = Self::Expr>
+        + Mul<Self::I, Output = Self::Expr>
         + Mul<Self::Var, Output = Self::Expr>
         + Mul<Self::Expr, Output = Self::Expr>;
 
@@ -254,6 +256,7 @@ impl<AB: AirBuilder> FilteredAirBuilder<'_, AB> {
 
 impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
     type F = AB::F;
+    type I = AB::I;
     type Expr = AB::Expr;
     type Var = AB::Var;
     type M = AB::M;

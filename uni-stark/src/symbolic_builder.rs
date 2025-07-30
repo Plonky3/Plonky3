@@ -106,6 +106,7 @@ impl<F: Field> SymbolicAirBuilder<F> {
 }
 
 impl<F: Field> AirBuilder for SymbolicAirBuilder<F> {
+    type I = F;
     type F = F;
     type Expr = SymbolicExpression<F>;
     type Var = SymbolicVariable<F>;
