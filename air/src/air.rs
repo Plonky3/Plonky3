@@ -49,6 +49,8 @@ pub trait AirBuilder: Sized {
     /// Underlying field type.
     type F: Field + Into<Self::I>;
 
+    /// An intermediary between F and Expr, usually equal to F.
+    /// Alternative use case: I = F::Packing, Expr = <EF as ExtensionField<F>>::ExtensionPacking
     type I;
 
     /// Serves as the output type for an AIR constraint evaluation.
