@@ -254,7 +254,7 @@ fn neg(y: __m512i) -> __m512i {
 
 /// Halve a vector of Goldilocks field elements.
 #[inline(always)]
-pub(crate) fn halve<MP: MontyParameters>(input: __m512i) -> __m512i {
+pub(crate) fn halve(input: __m512i) -> __m512i {
     /*
         We want this to compile to:
             vptestmq  least_bit, val, ONE
