@@ -5,7 +5,7 @@ use core::arch::x86_64::__m512i;
 use core::arch::x86_64::{self, __m256i};
 
 // Goal: Compute r = lhs + rhs mod P for lhs, rhs <= P < 2^31
-// Output should lie in [0, P).
+// Output should mostly lie in [0, P) but is allowed to equal P if lhs = rhs = P.
 //
 //   Let t := lhs + rhs. Clearly t \in [0, 2P]
 //   Define u := (t - P) mod 2^32 and r := min(t, u)
@@ -57,7 +57,7 @@ pub fn mm512_mod_add(a: __m512i, b: __m512i, p: __m512i) -> __m512i {
     //      vpaddd   t, lhs, rhs
     //      vpsubd   u, t, P
     //      vpminud  res, t, u
-    // throughput: 1 cyc/vec (8 els/cyc)
+    // throughput: 1.5 cyc/vec (10.67 els/cyc)
     // latency: 3 cyc
 
     unsafe {
