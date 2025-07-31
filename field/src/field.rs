@@ -143,7 +143,7 @@ pub trait PrimeCharacteristicRing:
     /// The function will panic if the field has characteristic 2.
     #[must_use]
     fn halve(&self) -> Self {
-        // This must be overwritten by most field implementations as this definition
+        // This must be overwritten by PrimeField implementations as this definition
         // is circular when PrimeSubfield = Self. It should also be overwritten by
         // most rings to avoid the multiplication.
         let half = Self::from_prime_subfield(Self::PrimeSubfield::ONE.halve());
