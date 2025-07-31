@@ -1,5 +1,7 @@
 //! A collection of helper methods when Neon is available
 
+use core::arch::aarch64::{self, uint32x4_t};
+
 /// Add the two packed vectors `a` and `b` modulo `p`.
 ///
 /// This allows us to add 4 elements at once.
