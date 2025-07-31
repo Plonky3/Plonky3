@@ -13,7 +13,7 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2,
+    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, uint32x4_mod_add,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
@@ -83,9 +83,9 @@ impl Add for PackedMersenne31Neon {
     fn add(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = add(lhs, rhs);
+        let res = uint32x4_mod_add(lhs, rhs, P);
         unsafe {
-            // Safety: `add` returns valid values when given valid values.
+            // Safety: `uint32x4_mod_add` returns valid values when given valid values.
             Self::from_vector(res)
         }
     }
@@ -193,28 +193,6 @@ fn reduce_sum(val: uint32x4_t) -> uint32x4_t {
         // Safety: If this code got compiled then NEON intrinsics are available.
         let u = aarch64::vsubq_u32(val, P);
         aarch64::vminq_u32(val, u)
-    }
-}
-
-/// Add two vectors of Mersenne-31 field elements that fit in 31 bits.
-/// If the inputs do not fit in 31 bits, the result is undefined.
-#[inline]
-#[must_use]
-fn add(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
-    // We want this to compile to:
-    //      add   t.4s, lhs.4s, rhs.4s
-    //      sub   u.4s, t.4s, P.4s
-    //      umin  res.4s, t.4s, u.4s
-    // throughput: .75 cyc/vec (5.33 els/cyc)
-    // latency: 6 cyc
-
-    // lhs and rhs are in 0, ..., P, and we want the result to also be in that range.
-    // t := lhs + rhs is in 0, ..., 2 P, so we apply reduce_sum.
-
-    unsafe {
-        // Safety: If this code got compiled then NEON intrinsics are available.
-        let t = aarch64::vaddq_u32(lhs, rhs);
-        reduce_sum(t)
     }
 }
 

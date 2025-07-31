@@ -13,7 +13,7 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2,
+    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, mm256_mod_add,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
@@ -84,9 +84,9 @@ impl Add for PackedMersenne31AVX2 {
     fn add(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = add(lhs, rhs);
+        let res = mm256_mod_add(lhs, rhs, P);
         unsafe {
-            // Safety: `add` returns values in canonical form when given values in canonical form.
+            // Safety: `mm256_mod_add` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
@@ -207,31 +207,6 @@ impl_sum_prod_base_field!(PackedMersenne31AVX2, Mersenne31);
 
 impl Algebra<Mersenne31> for PackedMersenne31AVX2 {}
 
-/// Add two vectors of Mersenne-31 field elements represented as values in {0, ..., P}.
-/// If the inputs do not conform to this representation, the result is undefined.
-#[inline]
-#[must_use]
-fn add(lhs: __m256i, rhs: __m256i) -> __m256i {
-    // We want this to compile to:
-    //      vpaddd   t, lhs, rhs
-    //      vpsubd   u, t, P
-    //      vpminud  res, t, u
-    // throughput: 1 cyc/vec (8 els/cyc)
-    // latency: 3 cyc
-
-    //   Let t := lhs + rhs. We want to return a value r in {0, ..., P} such that r = t (mod P).
-    //   Define u := (t - P) mod 2^32 and r := min(t, u). t is in {0, ..., 2 P}. We argue by cases.
-    //   If t is in {0, ..., P - 1}, then u is in {(P - 1 <) 2^32 - P, ..., 2^32 - 1}, so r = t is
-    // in the correct range.
-    //   If t is in {P, ..., 2 P}, then u is in {0, ..., P} and r = u is in the correct range.
-    unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
-        let t = x86_64::_mm256_add_epi32(lhs, rhs);
-        let u = x86_64::_mm256_sub_epi32(t, P);
-        x86_64::_mm256_min_epu32(t, u)
-    }
-}
-
 #[inline]
 #[must_use]
 fn movehdup_epi32(x: __m256i) -> __m256i {
@@ -311,7 +286,7 @@ fn mul(lhs: __m256i, rhs: __m256i) -> __m256i {
         let prod_lo = x86_64::_mm256_and_si256(prod_lo_dirty, P);
 
         // Standard addition of two 31-bit values.
-        add(prod_lo, prod_hi)
+        mm256_mod_add(prod_lo, prod_hi, P)
     }
 }
 

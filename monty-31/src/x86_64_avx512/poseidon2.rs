@@ -5,14 +5,14 @@ use core::arch::x86_64::{self, __m512i};
 use core::marker::PhantomData;
 use core::mem::transmute;
 
-use p3_field::PrimeCharacteristicRing;
+use p3_field::{PrimeCharacteristicRing, mm512_mod_add};
 use p3_poseidon2::{
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, InternalLayer,
     InternalLayerConstructor, MDSMat4, external_initial_permute_state,
     external_terminal_permute_state,
 };
 
-use super::{add, halve_avx512, sub};
+use super::{halve_avx512, sub};
 use crate::{
     FieldParameters, MontyField31, MontyParameters, PackedMontyField31AVX512,
     PackedMontyParameters, RelativelyPrimePower, apply_func_to_even_odd, packed_exp_3,
@@ -273,14 +273,14 @@ pub trait InternalLayerParametersAVX512<PMP: PackedMontyParameters, const WIDTH:
 
         // input[0] is being multiplied by 1 so we ignore it.
 
-        input[1] = add::<PMP>(input[1], input[1]);
+        input[1] = mm512_mod_add(input[1], input[1], PMP::PACKED_P);
         input[2] = halve_avx512::<PMP>(input[2]);
 
-        let acc3 = add::<PMP>(input[3], input[3]);
-        input[3] = add::<PMP>(acc3, input[3]);
+        let acc3 = mm512_mod_add(input[3], input[3], PMP::PACKED_P);
+        input[3] = mm512_mod_add(acc3, input[3], PMP::PACKED_P);
 
-        let acc4 = add::<PMP>(input[4], input[4]);
-        input[4] = add::<PMP>(acc4, acc4);
+        let acc4 = mm512_mod_add(input[4], input[4], PMP::PACKED_P);
+        input[4] = mm512_mod_add(acc4, acc4, PMP::PACKED_P);
 
         // For the final 3 elements we multiply by 1/2, 3, 4.
         // This gives the negative of the correct answer which
@@ -288,11 +288,11 @@ pub trait InternalLayerParametersAVX512<PMP: PackedMontyParameters, const WIDTH:
 
         input[5] = halve_avx512::<PMP>(input[5]);
 
-        let acc6 = add::<PMP>(input[6], input[6]);
-        input[6] = add::<PMP>(acc6, input[6]);
+        let acc6 = mm512_mod_add(input[6], input[6], PMP::PACKED_P);
+        input[6] = mm512_mod_add(acc6, input[6], PMP::PACKED_P);
 
-        let acc7 = add::<PMP>(input[7], input[7]);
-        input[7] = add::<PMP>(acc7, acc7);
+        let acc7 = mm512_mod_add(input[7], input[7], PMP::PACKED_P);
+        input[7] = mm512_mod_add(acc7, acc7, PMP::PACKED_P);
     }
 
     /// # Safety
@@ -321,7 +321,7 @@ pub trait InternalLayerParametersAVX512<PMP: PackedMontyParameters, const WIDTH:
         // Diagonal mul multiplied these by 1, 2, 1/2, 3, 4 so we simply need to add the sum.
         input.as_mut()[..5]
             .iter_mut()
-            .for_each(|x| *x = add::<PMP>(sum, *x));
+            .for_each(|x| *x = mm512_mod_add(sum, *x, PMP::PACKED_P));
 
         // Diagonal mul multiplied these by 1/2, 3, 4 instead of -1/2, -3, -4 so we need to subtract instead of adding.
         // Similarly we can only cheaply multiply by negative inverse powers of two so we also need to subtract for all
@@ -334,7 +334,7 @@ pub trait InternalLayerParametersAVX512<PMP: PackedMontyParameters, const WIDTH:
         // Note that signed add's parameters are not interchangeable. The first parameter must be positive.
         input.as_mut()[8 + Self::NUM_POS..]
             .iter_mut()
-            .for_each(|x| *x = add::<PMP>(sum, *x));
+            .for_each(|x| *x = mm512_mod_add(sum, *x, PMP::PACKED_P));
     }
 }
 
