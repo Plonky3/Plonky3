@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use core::arch::x86_64::{self, __m128i, __m256i};
+use core::arch::x86_64::{self, __m256i};
 use core::array;
 use core::iter::{Product, Sum};
 use core::mem::transmute;
@@ -13,8 +13,7 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, mm128_mod_add,
-    mm256_mod_add,
+    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, mm256_mod_add,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
@@ -1232,57 +1231,4 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
     let dot = PackedMontyField31AVX2::dot_product(&lhs, &rhs).0;
 
     res[..].copy_from_slice(&dot);
-}
-
-#[inline(always)]
-pub(crate) fn packed_add<FP, const WIDTH: usize>(
-    a: &[MontyField31<FP>; WIDTH],
-    b: &[MontyField31<FP>; WIDTH],
-) -> [MontyField31<FP>; WIDTH]
-where
-    FP: FieldParameters + BinomialExtensionData<WIDTH>,
-{
-    let mut res = [MontyField31::ZERO; WIDTH];
-    match WIDTH {
-        1 => res[0] = a[0] + b[0],
-        4 => {
-            // Perfectly fits into a m128i vector. The compiler is good at
-            // optimising this into AVX2 instructions in cases where we need to
-            // do multiple additions.
-            let out: [MontyField31<FP>; 4] = unsafe {
-                let a: __m128i = transmute([a[0], a[1], a[2], a[3]]);
-                let b: __m128i = transmute([b[0], b[1], b[2], b[3]]);
-                let p: __m128i = x86_64::_mm_set1_epi32(FP::PRIME as i32);
-                transmute(mm128_mod_add(a, b, p))
-            };
-
-            res.copy_from_slice(&out);
-        }
-        5 => {
-            // We fit what we can into a m128i vector. The final add on
-            // is done using a scalar addition. This seems to be faster than
-            // trying to fit everything into an AVX2 vector and makes it much
-            // easier for the compiler to optimise in cases where it needs to
-            // do multiple additions.
-            let out: [MontyField31<FP>; 4] = unsafe {
-                let a: __m128i = transmute([a[0], a[1], a[2], a[3]]);
-                let b: __m128i = transmute([b[0], b[1], b[2], b[3]]);
-                let p: __m128i = x86_64::_mm_set1_epi32(FP::PRIME as i32);
-                transmute(mm128_mod_add(a, b, p))
-            };
-            res[4] = a[4] + b[4];
-
-            res[..4].copy_from_slice(&out);
-        }
-        8 => {
-            // This perfectly fits into a single AVX2 vector.
-            let packed_a = PackedMontyField31AVX2([a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]]);
-            let packed_b = PackedMontyField31AVX2([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
-            let out = packed_a + packed_b;
-
-            res.copy_from_slice(&out.0);
-        }
-        _ => panic!("Currently unsupported width for packed addition"),
-    }
-    res
 }

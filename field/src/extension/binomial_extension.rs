@@ -393,7 +393,7 @@ where
 
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        let value = A::binomial_add(&self.value, &rhs.value);
+        let value = vector_add(&self.value, &rhs.value);
         Self::new(value)
     }
 }

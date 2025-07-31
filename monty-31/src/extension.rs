@@ -5,7 +5,7 @@ use p3_field::{TwoAdicField, field_to_array};
 
 use crate::{
     BinomialExtensionData, FieldParameters, MontyField31, TwoAdicData, octic_mul_packed,
-    packed_add, quartic_mul_packed, quintic_mul_packed,
+    quartic_mul_packed, quintic_mul_packed,
 };
 
 // If a field implements BinomialExtensionData<WIDTH> then there is a natural
@@ -31,11 +31,6 @@ where
             8 => octic_mul_packed(a, b, res),
             _ => panic!("Unsupported binomial extension degree: {}", WIDTH),
         }
-    }
-
-    #[inline(always)]
-    fn binomial_add(a: &[Self; WIDTH], b: &[Self; WIDTH]) -> [Self; WIDTH] {
-        packed_add(a, b)
     }
 }
 
