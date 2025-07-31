@@ -176,14 +176,14 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
     const TWO: Self = FP::MONTY_TWO;
     const NEG_ONE: Self = FP::MONTY_NEG_ONE;
 
-    #[inline]
-    fn halve(&self) -> Self {
-        Self::new_monty(halve_u32::<FP>(self.value))
-    }
-
     #[inline(always)]
     fn from_prime_subfield(f: Self) -> Self {
         f
+    }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        Self::new_monty(halve_u32::<FP>(self.value))
     }
 
     #[inline]

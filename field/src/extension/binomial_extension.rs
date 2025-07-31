@@ -207,13 +207,13 @@ where
     const NEG_ONE: Self = Self::new(field_to_array(A::NEG_ONE));
 
     #[inline]
-    fn halve(&self) -> Self {
-        Self::new(self.value.clone().map(|x| x.halve()))
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
+        <A as PrimeCharacteristicRing>::from_prime_subfield(f).into()
     }
 
     #[inline]
-    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
-        <A as PrimeCharacteristicRing>::from_prime_subfield(f).into()
+    fn halve(&self) -> Self {
+        Self::new(self.value.clone().map(|x| x.halve()))
     }
 
     #[inline(always)]

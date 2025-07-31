@@ -164,11 +164,6 @@ impl PrimeCharacteristicRing for Mersenne31 {
     };
 
     #[inline]
-    fn halve(&self) -> Self {
-        Self::new(halve_u32::<P>(self.value))
-    }
-
-    #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f
     }
@@ -176,6 +171,11 @@ impl PrimeCharacteristicRing for Mersenne31 {
     #[inline]
     fn from_bool(b: bool) -> Self {
         Self::new(b as u32)
+    }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        Self::new(halve_u32::<P>(self.value))
     }
 
     #[inline]

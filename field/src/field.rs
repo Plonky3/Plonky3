@@ -142,15 +142,16 @@ pub trait PrimeCharacteristicRing:
     /// # Panics
     /// The function will panic if the field has characteristic 2.
     #[must_use]
-    fn halve(&self) -> Self {
-        // This should be overwritten by most field implementations.
-        let half = Self::from_prime_subfield(
-            Self::PrimeSubfield::TWO
-                .try_inverse()
-                .expect("Cannot divide by 2 in fields with characteristic 2"),
-        );
-        self.clone() * half
-    }
+    fn halve(&self) -> Self;
+    //  {
+    //     // This should be overwritten by most field implementations.
+    //     let half = Self::from_prime_subfield(
+    //         Self::PrimeSubfield::TWO
+    //             .try_inverse()
+    //             .expect("Cannot divide by 2 in fields with characteristic 2"),
+    //     );
+    //     self.clone() * half
+    // }
 
     /// The elementary function `square(a) = a^2`.
     ///
