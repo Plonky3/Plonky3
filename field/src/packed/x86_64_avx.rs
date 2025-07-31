@@ -8,7 +8,7 @@ use core::arch::x86_64::{self, __m256i};
 // Output should mostly lie in [0, P) but is allowed to equal P if lhs = rhs = P.
 //
 //   Let t := lhs + rhs. Clearly t \in [0, 2P]
-//   Define u := (t - P) mod 2^32 and r := min(t, u)
+//   Define u := (t - P) mod 2^32 and r := min(t, u)  (Note that it is crucial this is an unsigned min)
 //   We argue by cases.
 //      - If t is in [0, P), then due to wraparound, u is in [2^32 - P, 2^32 - 1). As
 //          2^32 - P > P - 1, we conclude that r = t lies in the correct range.
