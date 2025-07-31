@@ -182,10 +182,9 @@ impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
     /// # Panics
     /// Panics if `initial.len() != terminal.len()` since the Poseidon2 spec requires
     /// the same number of initial and terminal rounds to maintain symmetry.
-    pub fn new(initial: Vec<[T; WIDTH]>, terminal: Vec<[T; WIDTH]>) -> Self {
-        assert_eq!(
-            initial.len(),
-            terminal.len(),
+    pub const fn new(initial: Vec<[T; WIDTH]>, terminal: Vec<[T; WIDTH]>) -> Self {
+        assert!(
+            initial.len() == terminal.len(),
             "The number of initial and terminal external rounds should be equal."
         );
         Self { initial, terminal }
