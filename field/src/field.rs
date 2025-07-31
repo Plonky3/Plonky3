@@ -262,6 +262,18 @@ pub trait PrimeCharacteristicRing:
         self.clone() * Self::TWO.exp_u64(exp)
     }
 
+    /// Divide by a given power of two. `div_2exp_u64(a, exp) = a/2^exp`
+    ///
+    /// # Panics
+    /// The function will panic if the field has characteristic 2.
+    #[must_use]
+    #[inline]
+    fn div_2exp_u64(&self, exp: u64) -> Self {
+        // This should be overwritten if possible to avoid the
+        // exponentiations (and potentially even the multiplication).
+        self.clone() * Self::from_prime_subfield(Self::PrimeSubfield::ONE.halve().mul_2exp_u64(exp))
+    }
+
     /// Construct an iterator which returns powers of `self`: `self^0, self^1, self^2, ...`.
     #[must_use]
     #[inline]
@@ -784,23 +796,6 @@ pub trait Field:
                 .expect("Cannot divide by 2 in fields with characteristic 2"),
         );
         *self * half
-    }
-
-    /// Divide by a given power of two. `div_2exp_u64(a, exp) = a/2^exp`
-    ///
-    /// # Panics
-    /// The function will panic if the field has characteristic 2.
-    #[must_use]
-    #[inline]
-    fn div_2exp_u64(&self, exp: u64) -> Self {
-        // This should be overwritten by most field implementations.
-        *self
-            * Self::from_prime_subfield(
-                Self::PrimeSubfield::TWO
-                    .try_inverse()
-                    .expect("Cannot divide by 2 in fields with characteristic 2")
-                    .exp_u64(exp),
-            )
     }
 
     /// Add two slices of field elements together, returning the result in the first slice.

@@ -225,6 +225,11 @@ where
     }
 
     #[inline]
+    fn div_2exp_u64(&self, exp: u64) -> Self {
+        Self::new(self.value.clone().map(|x| x.div_2exp_u64(exp)))
+    }
+
+    #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
         unsafe { reconstitute_from_base(F::zero_vec(len * D)) }
@@ -319,11 +324,6 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
     #[inline]
     fn halve(&self) -> Self {
         Self::new(self.value.map(|x| x.halve()))
-    }
-
-    #[inline]
-    fn div_2exp_u64(&self, exp: u64) -> Self {
-        Self::new(self.value.map(|x| x.div_2exp_u64(exp)))
     }
 
     #[inline]
