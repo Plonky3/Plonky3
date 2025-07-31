@@ -180,6 +180,11 @@ impl PrimeCharacteristicRing for Goldilocks {
     const NEG_ONE: Self = Self::new(Self::ORDER_U64 - 1);
 
     #[inline]
+    fn halve(&self) -> Self {
+        Self::new(halve_u64::<P>(self.value))
+    }
+
+    #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f
     }
@@ -336,11 +341,6 @@ impl Field for Goldilocks {
         }
 
         Some(gcd_inversion(*self))
-    }
-
-    #[inline]
-    fn halve(&self) -> Self {
-        Self::new(halve_u64::<P>(self.value))
     }
 
     #[inline]

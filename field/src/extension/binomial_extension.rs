@@ -207,6 +207,11 @@ where
     const NEG_ONE: Self = Self::new(field_to_array(A::NEG_ONE));
 
     #[inline]
+    fn halve(&self) -> Self {
+        Self::new(self.value.clone().map(|x| x.halve()))
+    }
+
+    #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         <A as PrimeCharacteristicRing>::from_prime_subfield(f).into()
     }
@@ -314,11 +319,6 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
         }
 
         Some(res)
-    }
-
-    #[inline]
-    fn halve(&self) -> Self {
-        Self::new(self.value.map(|x| x.halve()))
     }
 
     #[inline]

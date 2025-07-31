@@ -137,6 +137,21 @@ pub trait PrimeCharacteristicRing:
         self.clone() + self.clone()
     }
 
+    /// The elementary function `halve(a) = a/2`.
+    ///
+    /// # Panics
+    /// The function will panic if the field has characteristic 2.
+    #[must_use]
+    fn halve(&self) -> Self {
+        // This should be overwritten by most field implementations.
+        let half = Self::from_prime_subfield(
+            Self::PrimeSubfield::TWO
+                .try_inverse()
+                .expect("Cannot divide by 2 in fields with characteristic 2"),
+        );
+        self.clone() * half
+    }
+
     /// The elementary function `square(a) = a^2`.
     ///
     /// This function should be preferred over calling `a * a`, as a faster implementation may be available for some rings.
@@ -769,21 +784,6 @@ pub trait Field:
     #[must_use]
     fn inverse(&self) -> Self {
         self.try_inverse().expect("Tried to invert zero")
-    }
-
-    /// The elementary function `halve(a) = a/2`.
-    ///
-    /// # Panics
-    /// The function will panic if the field has characteristic 2.
-    #[must_use]
-    fn halve(&self) -> Self {
-        // This should be overwritten by most field implementations.
-        let half = Self::from_prime_subfield(
-            Self::PrimeSubfield::TWO
-                .try_inverse()
-                .expect("Cannot divide by 2 in fields with characteristic 2"),
-        );
-        *self * half
     }
 
     /// Divide by a given power of two. `div_2exp_u64(a, exp) = a/2^exp`

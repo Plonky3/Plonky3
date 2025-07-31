@@ -212,6 +212,11 @@ impl PrimeCharacteristicRing for Bn254 {
     ]);
 
     #[inline]
+    fn halve(&self) -> Self {
+        Self::new_monty(halve_bn254(self.value))
+    }
+
+    #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f
     }
@@ -305,11 +310,6 @@ impl Field for Bn254 {
     #[inline]
     fn is_zero(&self) -> bool {
         self.value.iter().all(|&x| x == 0)
-    }
-
-    #[inline]
-    fn halve(&self) -> Self {
-        Self::new_monty(halve_bn254(self.value))
     }
 
     #[inline]
