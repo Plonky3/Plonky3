@@ -275,7 +275,7 @@ pub(crate) fn halve(input: __m512i) -> __m512i {
         let least_bit = x86_64::_mm512_test_epi64_mask(input, ONE); // Determine the parity of val.
         let t = x86_64::_mm512_srli_epi64::<1>(input);
         // This does nothing when least_bit = 1 and sets the corresponding entry to 0 when least_bit = 0
-        x86_64::_mm512_mask_add_epi32(t, least_bit, t, half)
+        x86_64::_mm512_mask_add_epi64(t, least_bit, t, half)
     }
 }
 
