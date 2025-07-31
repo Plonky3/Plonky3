@@ -20,10 +20,11 @@ use core::arch::x86_64::{self, __m256i};
 ///
 /// This allows us to add 8 elements at once.
 ///
-/// Assumes that `p` is less than `2^31` and `a + b < 2P`.
+/// Assumes that `p` is less than `2^31` and `a + b <= 2P`.
 /// If the inputs are not in this range, the result may be incorrect.
 /// The result will be in the range `[0, P]` and equal to `(a + b) mod p`.
-/// It will be equal to `P` if and only if `a + b = 2P`.
+/// It will be equal to `P` if and only if `a + b = 2P` so provided `a + b < 2P`
+/// the result is guaranteed to be less than `P`.
 #[inline(always)]
 #[must_use]
 pub fn mm256_mod_add(a: __m256i, b: __m256i, p: __m256i) -> __m256i {
@@ -46,10 +47,11 @@ pub fn mm256_mod_add(a: __m256i, b: __m256i, p: __m256i) -> __m256i {
 ///
 /// This allows us to add 16 elements at once.
 ///
-/// Assumes that `p` is less than `2^31` and `a + b < 2P`.
+/// Assumes that `p` is less than `2^31` and `a + b <= 2P`.
 /// If the inputs are not in this range, the result may be incorrect.
 /// The result will be in the range `[0, P]` and equal to `(a + b) mod p`.
-/// It will be equal to `P` if and only if `a + b = 2P`.
+/// It will be equal to `P` if and only if `a + b = 2P` so provided `a + b < 2P`
+/// the result is guaranteed to be less than `P`.
 #[inline(always)]
 #[must_use]
 pub fn mm512_mod_add(a: __m512i, b: __m512i, p: __m512i) -> __m512i {
