@@ -23,7 +23,7 @@ use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 
 /// The Goldilocks prime
-const P: u64 = 0xFFFF_FFFF_0000_0001;
+pub(crate) const P: u64 = 0xFFFF_FFFF_0000_0001;
 
 /// The prime field known as Goldilocks, defined as `F_p` where `p = 2^64 - 2^32 + 1`.
 ///

@@ -83,6 +83,13 @@ impl<F: Field> PrimeCharacteristicRing for SymbolicExpression<F> {
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         F::from_prime_subfield(f).into()
     }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        // Use F's halve method.
+        let half = Self::Constant(F::ONE.halve());
+        self.clone() * half
+    }
 }
 
 impl<F: Field> Algebra<F> for SymbolicExpression<F> {}

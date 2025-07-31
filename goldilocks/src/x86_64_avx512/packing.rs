@@ -127,6 +127,11 @@ impl PrimeCharacteristicRing for PackedGoldilocksAVX512 {
     }
 
     #[inline]
+    fn halve(&self) -> Self {
+        Self::from_vector(halve(self.to_vector()))
+    }
+
+    #[inline]
     fn square(&self) -> Self {
         Self::from_vector(square(self.to_vector()))
     }
@@ -245,6 +250,33 @@ fn sub(x: __m512i, y: __m512i) -> __m512i {
 #[inline]
 fn neg(y: __m512i) -> __m512i {
     unsafe { _mm512_sub_epi64(FIELD_ORDER, canonicalize(y)) }
+}
+
+/// Halve a vector of Goldilocks field elements.
+#[inline(always)]
+pub(crate) fn halve<MP: MontyParameters>(input: __m512i) -> __m512i {
+    /*
+        We want this to compile to:
+            vptestmq  least_bit, val, ONE
+            vpsrlq    res, val, 1
+            vpaddq    res{least_bit}, res, maybe_half
+        throughput: 2 cyc/vec
+        latency: 4 cyc
+
+        Given an element val in [0, P), we want to compute val/2 mod P.
+        If val is even: val/2 mod P = val/2 = val >> 1.
+        If val is odd: val/2 mod P = (val + P)/2 = (val >> 1) + (P + 1)/2
+    */
+    unsafe {
+        // Safety: If this code got compiled then AVX512 intrinsics are available.
+        const ONE: __m512i = unsafe { transmute([1_i64; 16]) };
+        let half = x86_64::_mm512_set1_epi64(P.div_ceil(2) as i64); // Compiler realises this is constant.
+
+        let least_bit = x86_64::_mm512_test_epi64_mask(input, ONE); // Determine the parity of val.
+        let t = x86_64::_mm512_srli_epi64::<1>(input);
+        // This does nothing when least_bit = 1 and sets the corresponding entry to 0 when least_bit = 0
+        x86_64::_mm512_mask_add_epi32(t, least_bit, t, half)
+    }
 }
 
 #[allow(clippy::useless_transmute)]

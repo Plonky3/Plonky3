@@ -97,11 +97,12 @@ impl<const WIDTH: usize> Poseidon2ExternalLayerMersenne31<WIDTH> {
 }
 
 /// Compute the map x -> 2^I x on Mersenne-31 field elements.
+///
 /// x must be represented as a value in {0..P}.
 /// This requires 2 generic parameters, I and I_PRIME satisfying I + I_PRIME = 31.
 /// If the inputs do not conform to this representations, the result is undefined.
 #[inline(always)]
-fn mul_2exp_i<const I: u32, const I_PRIME: u32>(
+pub(crate) fn mul_2exp_i<const I: u32, const I_PRIME: u32>(
     val: PackedMersenne31AVX512,
 ) -> PackedMersenne31AVX512 {
     assert_eq!(I + I_PRIME, 31);
