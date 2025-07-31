@@ -221,11 +221,15 @@ where
 
     #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
+        // Depending on the field, this might be a little slower than
+        // the default implementation if the compiler doesn't realize `F::TWO.exp_u64(exp)` is a constant.
         Self::new(self.value.clone().map(|x| x.mul_2exp_u64(exp)))
     }
 
     #[inline]
     fn div_2exp_u64(&self, exp: u64) -> Self {
+        // Depending on the field, this might be a little slower than
+        // the default implementation if the compiler doesn't realize `F::ONE.halve().exp_u64(exp)` is a constant.
         Self::new(self.value.clone().map(|x| x.div_2exp_u64(exp)))
     }
 
