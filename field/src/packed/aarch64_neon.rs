@@ -11,7 +11,7 @@
 /// the result is guaranteed to be less than `P`.
 #[inline]
 #[must_use]
-fn uint32x4_mod_add(a: uint32x4_t, b: uint32x4_t, p: uint32x4_t) -> uint32x4_t {
+pub fn uint32x4_mod_add(a: uint32x4_t, b: uint32x4_t, p: uint32x4_t) -> uint32x4_t {
     // We want this to compile to:
     //      add   t.4s, a.4s, b.4s
     //      sub   u.4s, t.4s, P.4s
