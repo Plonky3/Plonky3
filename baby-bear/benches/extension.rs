@@ -2,9 +2,9 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use p3_baby_bear::BabyBear;
 use p3_field::extension::BinomialExtensionField;
 use p3_field_testing::bench_func::{
-    benchmark_inv, benchmark_mul_latency, benchmark_mul_throughput, benchmark_square,
+    benchmark_add_latency, benchmark_add_throughput, benchmark_inv, benchmark_mul_latency,
+    benchmark_mul_throughput, benchmark_square,
 };
-use p3_field_testing::{benchmark_add_latency, benchmark_add_throughput};
 
 type EF4 = BinomialExtensionField<BabyBear, 4>;
 type EF5 = BinomialExtensionField<BabyBear, 5>;

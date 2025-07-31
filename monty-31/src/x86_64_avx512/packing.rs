@@ -19,7 +19,7 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2,
+    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, mm512_mod_add,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
@@ -577,7 +577,7 @@ fn xor<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
         // Unfortunately, AVX512 has no equivalent of vpsignd so we can't do the same
         // signed_add trick as in the AVX2 case. Instead we get a reduced value from mul
         // and add on rhs in the standard way.
-        add::<MPAVX512>(rhs, mul_res)
+        mm512_mod_add(rhs, mul_res, MPAVX512::PACKED_P)
     }
 }
 

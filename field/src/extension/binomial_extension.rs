@@ -387,7 +387,7 @@ where
 impl<F, A, const D: usize> Add for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: BinomiallyExtendableAlgebra<F, D>,
+    A: Algebra<F>,
 {
     type Output = Self;
 
@@ -613,7 +613,11 @@ impl<F: Field + HasTwoAdicBinomialExtension<D>, const D: usize> TwoAdicField
 
 /// Add two vectors element wise.
 #[inline]
-pub fn vector_add<R: PrimeCharacteristicRing + Add<R2, Output = R>, R2: Clone, const D: usize>(
+pub(crate) fn vector_add<
+    R: PrimeCharacteristicRing + Add<R2, Output = R>,
+    R2: Clone,
+    const D: usize,
+>(
     a: &[R; D],
     b: &[R2; D],
 ) -> [R; D] {
