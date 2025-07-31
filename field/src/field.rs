@@ -271,7 +271,7 @@ pub trait PrimeCharacteristicRing:
     fn div_2exp_u64(&self, exp: u64) -> Self {
         // This should be overwritten if possible to avoid the
         // exponentiations (and potentially even the multiplication).
-        self.clone() * Self::from_prime_subfield(Self::PrimeSubfield::ONE.halve().mul_2exp_u64(exp))
+        self.clone() * Self::from_prime_subfield(Self::PrimeSubfield::ONE.halve().exp_u64(exp))
     }
 
     /// Construct an iterator which returns powers of `self`: `self^0, self^1, self^2, ...`.
