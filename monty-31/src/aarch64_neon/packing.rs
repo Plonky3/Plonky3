@@ -578,12 +578,12 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
 
 /// Multiplication in an octic binomial extension field.
 #[inline]
-pub(crate) fn octic_mul_packed<FP: FieldParameters, const WIDTH: usize>(
+pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
     a: &[MontyField31<FP>; WIDTH],
     b: &[MontyField31<FP>; WIDTH],
     res: &mut [MontyField31<FP>; WIDTH],
 ) where
-    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+    FP: FieldParameters + BinomialExtensionData<WIDTH> + FieldParameters,
 {
     // TODO: This could be optimised further with a custom NEON implementation.
     assert_eq!(WIDTH, 8);
