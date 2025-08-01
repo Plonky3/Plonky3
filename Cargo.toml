@@ -50,6 +50,7 @@ itertools = { version = "0.14.0", default-features = false, features = [
 num-bigint = { version = "0.4.3", default-features = false }
 paste = "1.0.15"
 postcard = { version = "1.0.0", default-features = false }
+proptest = "1.7"
 rand = { version = "0.9.0", default-features = false, features = ["small_rng"] }
 rand_xoshiro = "0.7.0"
 rayon = "1.7.0"
@@ -66,7 +67,6 @@ tracing-subscriber = { version = "0.3.17", default-features = false, features = 
     "alloc",
 ] }
 transpose = "0.2.3"
-proptest = "1.7"
 
 # Local dependencies
 p3-air = { path = "air", version = "0.3.0" }
