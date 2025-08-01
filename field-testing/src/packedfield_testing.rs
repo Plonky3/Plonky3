@@ -299,16 +299,14 @@ where
 #[macro_export]
 macro_rules! test_packed_field {
     ($packedfield:ty, $zeros:expr, $ones:expr, $specials:expr) => {
+        $crate::test_ring_with_eq!($packedfield, $zeros, $ones);
+
         mod packed_field_tests {
             use p3_field::PrimeCharacteristicRing;
 
             #[test]
             fn test_interleaves() {
                 $crate::test_interleaves::<$packedfield>();
-            }
-            #[test]
-            fn test_ring_with_eq() {
-                $crate::test_ring_with_eq::<$packedfield>($zeros, $ones);
             }
             #[test]
             fn test_packed_linear_combination() {
@@ -321,10 +319,6 @@ macro_rules! test_packed_field {
             #[test]
             fn test_multiplicative_inverse() {
                 $crate::test_multiplicative_inverse::<$packedfield>();
-            }
-            #[test]
-            fn test_mul_2exp_u64() {
-                $crate::test_mul_2exp_u64::<$packedfield>();
             }
         }
     };
