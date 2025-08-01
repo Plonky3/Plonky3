@@ -1,0 +1,27 @@
+[package]
+name = "p3-multilinear-util"
+description = "A collection of utility functions and tools for multilinear operations."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+p3-util.workspace = true
+p3-field.workspace = true
+p3-maybe-rayon.workspace = true
+
+rayon = { workspace = true, optional = true }
+
+[dev-dependencies]
+p3-baby-bear.workspace = true
+
+proptest.workspace = true
+rand.workspace = true
+
+
+[features]
+parallel = ["dep:rayon", "p3-maybe-rayon/parallel"]
