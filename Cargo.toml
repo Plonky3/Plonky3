@@ -93,6 +93,7 @@ p3-mds = { path = "mds", version = "0.3.0" }
 p3-merkle-tree = { path = "merkle-tree", version = "0.3.0" }
 p3-mersenne-31 = { path = "mersenne-31", version = "0.3.0" }
 p3-monty-31 = { path = "monty-31", version = "0.3.0" }
+p3-multilinear-util = { path = "multilinear-util", version = "0.3.0" }
 p3-poseidon = { path = "poseidon", version = "0.3.0" }
 p3-poseidon2 = { path = "poseidon2", version = "0.3.0" }
 p3-poseidon2-air = { path = "poseidon2-air", version = "0.3.0" }
