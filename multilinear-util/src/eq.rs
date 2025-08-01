@@ -16,20 +16,34 @@ const LOG_NUM_THREADS: usize = 0;
 /// The number of threads to spawn for parallel computations.
 const NUM_THREADS: usize = 1 << LOG_NUM_THREADS;
 
-/// Computes the equality polynomial evaluations efficiently.
+/// Computes the multilinear equality polynomial `eq(x, z)` over all $x ∈ \{0,1\}^n$ using an optimized method.
 ///
-/// Given an evaluation point vector `eval`, the function computes
-/// the equality polynomial recursively using the formula:
+/// Given a constraint point `z ∈ EF^n` and a scalar `α`, this function evaluates the equality polynomial:
 ///
-/// ```text
-/// eq(X) = ∏ (1 - X_i + 2X_i z_i)
-/// ```
+/// \begin{equation}
+/// \mathrm{eq}(x, z) = \prod_{i=0}^{n-1} \left( x_i z_i + (1 - x_i)(1 - z_i) \right)
+/// \end{equation}
 ///
-/// where `z_i` are the constraint points.
+/// for all binary vectors $x ∈ \{0,1\}^n$, and stores the scaled results into the `out` buffer.
 ///
-/// If INITIALIZED is:
-/// - false: the result is directly set to the `out` buffer
-/// - true: the result is added to the `out` buffer
+/// # Output Structure
+/// The `out` buffer must have length exactly $2^n$, where $n = \texttt{eval.len()}$.
+///
+/// Each index `i` in `out` corresponds to the binary vector $x$ given by the **big-endian** bit decomposition of `i`.
+/// That is:
+/// - `out[0]` corresponds to $x = (0, 0, ..., 0)$
+/// - `out[1]` corresponds to $x = (0, 0, ..., 1)$
+/// - ...
+/// - `out[2^n - 1]` corresponds to $x = (1, 1, ..., 1)$
+///
+/// # Behavior of `INITIALIZED`
+/// If `INITIALIZED = false`, each value in `out` is overwritten with the computed result.
+/// If `INITIALIZED = true`, the computed result is added to the existing value in `out`.
+///
+/// # Arguments
+/// - `eval`: Constraint point `z ∈ EF^n`
+/// - `out`: Mutable slice of `EF` of size `2^n`
+/// - `scalar`: Scalar multiplier α ∈ `EF`
 #[inline]
 pub fn eval_eq<F, EF, const INITIALIZED: bool>(eval: &[EF], out: &mut [EF], scalar: EF)
 where
@@ -95,24 +109,33 @@ where
     }
 }
 
-/// Computes the equality polynomial evaluations efficiently.
+/// Computes the multilinear equality polynomial `eq(x, z)` over all $x ∈ \{0,1\}^n$
+/// using a base field point `z ∈ F^n`.
 ///
-/// This function is similar to [`eval_eq`], but it assumes that we want to evaluate
-/// at a base field point instead of an extension field point. This leads to a different
-/// strategy which can better minimize data transfers.
+/// This function is a base-field optimized version of [`eval_eq`] and is more efficient
+/// when `z` lies in the base field `F` rather than the extension field.
 ///
-/// Given an evaluation point vector `eval`, the function computes
-/// the equality polynomial recursively using the formula:
+/// It evaluates the equality polynomial:
 ///
-/// ```text
-/// eq(X) = ∏ (1 - X_i + 2X_i z_i)
-/// ```
+/// \begin{equation}
+/// \mathrm{eq}(x, z) = \prod_{i=0}^{n-1} \left( x_i z_i + (1 - x_i)(1 - z_i) \right)
+/// \end{equation}
 ///
-/// where `z_i` are the constraint points.
+/// and stores the scaled results into the `out` buffer.
 ///
-/// If INITIALIZED is:
-/// - false: the result is directly set to the `out` buffer
-/// - true: the result is added to the `out` buffer
+/// # Output Structure
+/// The `out` buffer must have length exactly $2^n$, where $n = \texttt{eval.len()}$.
+///
+/// Each index `i` corresponds to $x$ given by the **big-endian** bit decomposition of `i`.
+///
+/// # Behavior of `INITIALIZED`
+/// If `INITIALIZED = false`, each value in `out` is overwritten with the computed result.
+/// If `INITIALIZED = true`, the computed result is added to the existing value in `out`.
+///
+/// # Arguments
+/// - `eval`: Constraint point `z ∈ F^n`
+/// - `out`: Mutable slice of `EF` of size `2^n`
+/// - `scalar`: Scalar multiplier α ∈ `EF`
 #[inline]
 pub fn eval_eq_base<F, EF, const INITIALIZED: bool>(eval: &[F], out: &mut [EF], scalar: EF)
 where
@@ -392,20 +415,30 @@ where
     [s000, s001, s010, s011, s100, s101, s110, s111]
 }
 
-/// Computes the equality polynomial evaluations via a simple recursive algorithm.
+/// Computes the multilinear equality polynomial `eq(x, z)` over all $x ∈ \{0,1\}^n$ via a recursive algorithm.
 ///
-/// Given an evaluation point vector `eval`, the function computes
-/// the equality polynomial recursively using the formula:
+/// This function uses a simple, recursive method (with special unrolling for `n = 1, 2, 3`)
+/// to evaluate:
 ///
-/// ```text
-/// eq(X) = scalar * ∏ (1 - X_i + 2X_i z_i)
-/// ```
+/// \begin{equation}
+/// \mathrm{eq}(x, z) = \prod_{i=0}^{n-1} \left( x_i z_i + (1 - x_i)(1 - z_i) \right)
+/// \end{equation}
 ///
-/// where `z_i` are the constraint points.
+/// and stores the scaled results into the `out` buffer.
 ///
-/// If INITIALIZED is:
-/// - false: the result is directly set to the `out` buffer
-/// - true: the result is added to the `out` buffer
+/// # Output Structure
+/// The `out` buffer must have length exactly $2^n$, where $n = \texttt{eval.len()}$.
+///
+/// Each index `i` corresponds to $x$ given by the **big-endian** bit decomposition of `i`.
+///
+/// # Behavior of `INITIALIZED`
+/// If `INITIALIZED = false`, each value in `out` is overwritten with the computed result.
+/// If `INITIALIZED = true`, the computed result is added to the existing value in `out`.
+///
+/// # Arguments
+/// - `eval`: Constraint point `z ∈ IF^n`
+/// - `out`: Mutable slice of `EF` of size `2^n`
+/// - `scalar`: Scalar multiplier α ∈ `EF`
 #[inline]
 fn eval_eq_basic<F, IF, EF, const INITIALIZED: bool>(eval: &[IF], out: &mut [EF], scalar: EF)
 where
