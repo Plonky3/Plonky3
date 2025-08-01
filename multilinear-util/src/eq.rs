@@ -179,7 +179,6 @@ where
 /// PackedExtensionField element. This function fills out the remainder of the buffer so that
 /// `buffer[ind]` contains `{eq(ind, points) * eq(i, x)}` for `i \in \{0, 1\}^j`. Note that
 /// `ind` is interpreted as an element of `\{0, 1\}^{points.len()}`.
-#[allow(clippy::inline_always)] // Adding inline(always) seems to give a small performance boost.
 #[inline(always)]
 fn fill_buffer<'a, F, A>(points: impl ExactSizeIterator<Item = &'a F>, buffer: &mut [A])
 where
@@ -241,7 +240,6 @@ where
 /// # Returns
 /// An array `[α ⋅ (1 - z_0), α ⋅ z_0]` representing the scaled evaluations
 /// of `eq(x, z)` for `x ∈ {0,1}`.
-#[allow(clippy::inline_always)] // Adding inline(always) seems to give a small performance boost.
 #[inline(always)]
 fn eval_eq_1<F, FP>(eval: &[F], scalar: FP) -> [FP; 2]
 where
@@ -291,7 +289,6 @@ where
 ///
 /// # Returns
 /// An array `[α ⋅ eq((0,0), z), α ⋅ eq((0,1), z), α ⋅ eq((1,0), z), α ⋅ eq((1,1), z)]`
-#[allow(clippy::inline_always)] // Helps with performance in tight loops
 #[inline(always)]
 fn eval_eq_2<F, FP>(eval: &[F], scalar: FP) -> [FP; 4]
 where
@@ -348,7 +345,6 @@ where
 ///
 /// # Returns
 /// An array of 8 values `[α ⋅ eq(x, z)]` for all `x ∈ {0,1}³`, in lex order.
-#[allow(clippy::inline_always)] // Adding inline(always) seems to give a small performance boost.
 #[inline(always)]
 fn eval_eq_3<F, FP>(eval: &[F], scalar: FP) -> [FP; 8]
 where
@@ -410,7 +406,6 @@ where
 /// If INITIALIZED is:
 /// - false: the result is directly set to the `out` buffer
 /// - true: the result is added to the `out` buffer
-#[allow(clippy::too_many_lines)]
 #[inline]
 fn eval_eq_basic<F, IF, EF, const INITIALIZED: bool>(eval: &[IF], out: &mut [EF], scalar: EF)
 where
@@ -489,7 +484,6 @@ where
 /// the combined set of variables.
 ///
 /// It then updates the output buffer `out` with the computed values by adding them in.
-#[allow(clippy::too_many_lines)]
 #[inline]
 fn eval_eq_packed<F, EF, const INITIALIZED: bool>(
     eval: &[EF],
@@ -591,7 +585,6 @@ fn eval_eq_packed<F, EF, const INITIALIZED: bool>(
 /// the combined set of variables.
 ///
 /// It then updates the output buffer `out` with the computed values by adding them in.
-#[allow(clippy::too_many_lines)]
 #[inline]
 fn base_eval_eq_packed<F, EF, const INITIALIZED: bool>(
     eval_points: &[F],
@@ -709,7 +702,6 @@ fn scale_and_add<F: Field, EF: ExtensionField<F>, const INITIALIZED: bool>(
 /// field elements (instead of extension field elements).
 ///
 /// The length of `eval` must be equal to the `log2` of `F::Packing::WIDTH`.
-#[allow(clippy::inline_always)] // Adding inline(always) seems to give a small performance boost.
 #[inline(always)]
 fn packed_eq_poly<F, EF>(eval: &[EF], scalar: EF) -> EF::ExtensionPacking
 where
