@@ -17,8 +17,8 @@ p3-util.workspace = true
 rayon = { workspace = true, optional = true }
 
 [dev-dependencies]
-p3-baby-bear.workspace = true
 criterion.workspace = true
+p3-baby-bear.workspace = true
 
 proptest.workspace = true
 rand.workspace = true
