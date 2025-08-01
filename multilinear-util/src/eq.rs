@@ -50,16 +50,7 @@ where
     F: Field,
     EF: ExtensionField<F>,
 {
-    // It's possible for this to be called with F = EF (Despite F actually being an extension field).
-    //
-    // IMPORTANT: We previously checked here that `packing_width > 1`,
-    // but this check is **not viable** for Goldilocks on Neon or when not using `target-cpu=native`.
-    //
-    // Why? Because Neon SIMD vectors are 128 bits and Goldilocks elements are already 64 bits,
-    // so no packing happens (width stays 1), and there's no performance advantage.
-    //
-    // Be careful: this means code relying on packing optimizations should **not assume**
-    // `packing_width > 1` is always true.
+    // We assume that `F::Packing::WIDTH` is a power of 2.
     let packing_width = F::Packing::WIDTH;
     // debug_assert!(packing_width > 1);
 
