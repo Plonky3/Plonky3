@@ -183,15 +183,15 @@ where
 fn fill_buffer<'a, F, A>(points: impl ExactSizeIterator<Item = &'a F>, buffer: &mut [A])
 where
     F: Field,
-    A: Algebra<F> + Copy,
+    A: Algebra<F>,
 {
     for (ind, &entry) in points.enumerate() {
         let stride = 1 << ind;
 
         for index in 0..stride {
-            let val = buffer[index];
-            let scaled_val = val * entry;
-            let new_val = val - scaled_val;
+            let val = buffer[index].clone();
+            let scaled_val = val.clone() * entry;
+            let new_val = val - scaled_val.clone();
 
             buffer[index] = new_val;
             buffer[index + stride] = scaled_val;
@@ -244,7 +244,7 @@ where
 fn eval_eq_1<F, FP>(eval: &[F], scalar: FP) -> [FP; 2]
 where
     F: Field,
-    FP: Algebra<F> + Copy,
+    FP: Algebra<F>,
 {
     assert_eq!(eval.len(), 1);
 
@@ -252,8 +252,8 @@ where
     let z_0 = eval[0];
 
     // Compute α ⋅ z_0 = α ⋅ eq(1, z) and α ⋅ (1 - z_0) = α - α ⋅ z_0 = α ⋅ eq(0, z)
-    let eq_1 = scalar * z_0;
-    let eq_0 = scalar - eq_1;
+    let eq_1 = scalar.clone() * z_0;
+    let eq_0 = scalar - eq_1.clone();
 
     [eq_0, eq_1]
 }
@@ -293,7 +293,7 @@ where
 fn eval_eq_2<F, FP>(eval: &[F], scalar: FP) -> [FP; 4]
 where
     F: Field,
-    FP: Algebra<F> + Copy,
+    FP: Algebra<F>,
 {
     assert_eq!(eval.len(), 2);
 
@@ -302,20 +302,20 @@ where
     let z_1 = eval[1];
 
     // Compute s1 = α ⋅ z_0 = α ⋅ eq(1, -) and s0 = α - s1 = α ⋅ (1 - z_0) = α ⋅ eq(0, -)
-    let s1 = scalar * z_0;
-    let s0 = scalar - s1;
+    let s1 = scalar.clone() * z_0;
+    let s0 = scalar - s1.clone();
 
     // For x_0 = 0:
     // - s01 = s0 ⋅ z_1 = α ⋅ (1 - z_0) ⋅ z_1 = α ⋅ eq((0,1), z)
     // - s00 = s0 - s01 = α ⋅ (1 - z_0)(1 - z_1) = α ⋅ eq((0,0), z)
-    let s01 = s0 * z_1;
-    let s00 = s0 - s01;
+    let s01 = s0.clone() * z_1;
+    let s00 = s0 - s01.clone();
 
     // For x_0 = 1:
     // - s11 = s1 ⋅ z_1 = α ⋅ z_0 ⋅ z_1 = α ⋅ eq((1,1), z)
     // - s10 = s1 - s11 = α ⋅ z_0(1 - z_1) = α ⋅ eq((1,0), z)
-    let s11 = s1 * z_1;
-    let s10 = s1 - s11;
+    let s11 = s1.clone() * z_1;
+    let s10 = s1 - s11.clone();
 
     // Return values in lexicographic order of x = (x_0, x_1)
     [s00, s01, s10, s11]
@@ -349,7 +349,7 @@ where
 fn eval_eq_3<F, FP>(eval: &[F], scalar: FP) -> [FP; 8]
 where
     F: Field,
-    FP: Algebra<F> + Copy,
+    FP: Algebra<F>,
 {
     assert_eq!(eval.len(), 3);
 
@@ -359,34 +359,34 @@ where
     let z_2 = eval[2];
 
     // First dimension split: scalar * z_0 and scalar * (1 - z_0)
-    let s1 = scalar * z_0; // α ⋅ z_0
-    let s0 = scalar - s1; // α ⋅ (1 - z_0)
+    let s1 = scalar.clone() * z_0; // α ⋅ z_0
+    let s0 = scalar - s1.clone(); // α ⋅ (1 - z_0)
 
     // Second dimension split:
     // Group (0, x1) branch using s0 = α ⋅ (1 - z_0)
-    let s01 = s0 * z_1; // α ⋅ (1 - z_0) ⋅ z_1
-    let s00 = s0 - s01; // α ⋅ (1 - z_0) ⋅ (1 - z_1)
+    let s01 = s0.clone() * z_1; // α ⋅ (1 - z_0) ⋅ z_1
+    let s00 = s0 - s01.clone(); // α ⋅ (1 - z_0) ⋅ (1 - z_1)
 
     // Group (1, x1) branch using s1 = α ⋅ z_0
-    let s11 = s1 * z_1; // α ⋅ z_0 ⋅ z_1
-    let s10 = s1 - s11; // α ⋅ z_0 ⋅ (1 - z_1)
+    let s11 = s1.clone() * z_1; // α ⋅ z_0 ⋅ z_1
+    let s10 = s1 - s11.clone(); // α ⋅ z_0 ⋅ (1 - z_1)
 
     // Third dimension split:
     // For (0,0,x2) branch
-    let s001 = s00 * z_2; // α ⋅ (1 - z_0)(1 - z_1) ⋅ z_2
-    let s000 = s00 - s001; // α ⋅ (1 - z_0)(1 - z_1) ⋅ (1 - z_2)
+    let s001 = s00.clone() * z_2; // α ⋅ (1 - z_0)(1 - z_1) ⋅ z_2
+    let s000 = s00 - s001.clone(); // α ⋅ (1 - z_0)(1 - z_1) ⋅ (1 - z_2)
 
     // For (0,1,x2) branch
-    let s011 = s01 * z_2; // α ⋅ (1 - z_0) ⋅ z_1 ⋅ z_2
-    let s010 = s01 - s011; // α ⋅ (1 - z_0) ⋅ z_1 ⋅ (1 - z_2)
+    let s011 = s01.clone() * z_2; // α ⋅ (1 - z_0) ⋅ z_1 ⋅ z_2
+    let s010 = s01 - s011.clone(); // α ⋅ (1 - z_0) ⋅ z_1 ⋅ (1 - z_2)
 
     // For (1,0,x2) branch
-    let s101 = s10 * z_2; // α ⋅ z_0 ⋅ (1 - z_1) ⋅ z_2
-    let s100 = s10 - s101; // α ⋅ z_0 ⋅ (1 - z_1) ⋅ (1 - z_2)
+    let s101 = s10.clone() * z_2; // α ⋅ z_0 ⋅ (1 - z_1) ⋅ z_2
+    let s100 = s10 - s101.clone(); // α ⋅ z_0 ⋅ (1 - z_1) ⋅ (1 - z_2)
 
     // For (1,1,x2) branch
-    let s111 = s11 * z_2; // α ⋅ z_0 ⋅ z_1 ⋅ z_2
-    let s110 = s11 - s111; // α ⋅ z_0 ⋅ z_1 ⋅ (1 - z_2)
+    let s111 = s11.clone() * z_2; // α ⋅ z_0 ⋅ z_1 ⋅ z_2
+    let s110 = s11 - s111.clone(); // α ⋅ z_0 ⋅ z_1 ⋅ (1 - z_2)
 
     // Return all 8 evaluations in lexicographic order of x ∈ {0,1}³
     [s000, s001, s010, s011, s100, s101, s110, s111]
