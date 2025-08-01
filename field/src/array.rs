@@ -47,6 +47,11 @@ impl<F: Field, const N: usize> PrimeCharacteristicRing for FieldArray<F, N> {
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         F::from_prime_subfield(f).into()
     }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        Self(self.0.map(|x| x.halve()))
+    }
 }
 
 impl<F: Field, const N: usize> Algebra<F> for FieldArray<F, N> {}

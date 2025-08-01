@@ -160,6 +160,9 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31Neon<FP>
         f.into()
     }
 
+    // TODO: Add a custom implementation of `halve` that uses NEON intrinsics
+    // and avoids the multiplication.
+
     #[inline]
     fn cube(&self) -> Self {
         let val = self.to_vector();

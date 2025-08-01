@@ -119,6 +119,11 @@ where
         PF::from_bool(b).into()
     }
 
+    #[inline]
+    fn halve(&self) -> Self {
+        Self::new(self.value.map(|x| x.halve()))
+    }
+
     #[inline(always)]
     fn square(&self) -> Self {
         let mut res = Self::default();
