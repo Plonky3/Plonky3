@@ -58,6 +58,7 @@ pub struct VerifierConstraintFolder<'a, SC: StarkGenericConfig> {
 }
 
 impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
+    type I = Val<SC>;
     type F = Val<SC>;
     type Expr = PackedVal<SC>;
     type Var = PackedVal<SC>;
@@ -120,6 +121,7 @@ impl<SC: StarkGenericConfig> AirBuilderWithPublicValues for ProverConstraintFold
 }
 
 impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC> {
+    type I = Val<SC>;
     type F = Val<SC>;
     type Expr = SC::Challenge;
     type Var = SC::Challenge;

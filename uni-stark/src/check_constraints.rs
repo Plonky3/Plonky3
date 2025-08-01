@@ -74,6 +74,7 @@ impl<'a, F> AirBuilder for DebugConstraintBuilder<'a, F>
 where
     F: Field,
 {
+    type I = F;
     type F = F;
     type Expr = F;
     type Var = F;

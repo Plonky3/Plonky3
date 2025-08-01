@@ -13,7 +13,7 @@ use crate::{FullRound, PartialRound, RoundConstants, SBox};
 #[instrument(name = "generate vectorized Poseidon2 trace", skip_all)]
 pub fn generate_vectorized_trace_rows<
     F: PrimeField,
-    LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>,
+    LinearLayers: GenericPoseidon2LinearLayers<F, F, WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
@@ -75,7 +75,7 @@ pub fn generate_vectorized_trace_rows<
 #[instrument(name = "generate Poseidon2 trace", skip_all)]
 pub fn generate_trace_rows<
     F: PrimeField,
-    LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>,
+    LinearLayers: GenericPoseidon2LinearLayers<F, F, WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
@@ -133,7 +133,7 @@ pub fn generate_trace_rows<
 /// `rows` will normally consist of 24 rows, with an exception for the final row.
 fn generate_trace_rows_for_perm<
     F: PrimeField,
-    LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>,
+    LinearLayers: GenericPoseidon2LinearLayers<F, F, WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
@@ -197,7 +197,7 @@ fn generate_trace_rows_for_perm<
 #[inline]
 fn generate_full_round<
     F: PrimeField,
-    LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>,
+    LinearLayers: GenericPoseidon2LinearLayers<F, F, WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
@@ -229,7 +229,7 @@ fn generate_full_round<
 #[inline]
 fn generate_partial_round<
     F: PrimeField,
-    LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>,
+    LinearLayers: GenericPoseidon2LinearLayers<F, F, WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,

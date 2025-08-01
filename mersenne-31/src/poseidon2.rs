@@ -118,7 +118,7 @@ impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, MERSENNE31_S_BOX_DEGRE
     }
 }
 
-impl<A: Algebra<Mersenne31>> GenericPoseidon2LinearLayers<A, 16>
+impl<A: Algebra<I>, I: From<Mersenne31>> GenericPoseidon2LinearLayers<A, I, 16>
     for GenericPoseidon2LinearLayersMersenne31
 {
     fn internal_linear_layer(state: &mut [A; 16]) {
@@ -143,7 +143,7 @@ impl<A: Algebra<Mersenne31>> GenericPoseidon2LinearLayers<A, 16>
     }
 }
 
-impl<A: Algebra<Mersenne31>> GenericPoseidon2LinearLayers<A, 24>
+impl<A: Algebra<I>, I: From<Mersenne31>> GenericPoseidon2LinearLayers<A, I, 24>
     for GenericPoseidon2LinearLayersMersenne31
 {
     fn internal_linear_layer(state: &mut [A; 24]) {

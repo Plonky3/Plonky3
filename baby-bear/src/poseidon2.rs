@@ -305,7 +305,7 @@ impl InternalLayerBaseParameters<BabyBearParameters, 16> for BabyBearInternalLay
         state[15] = sum - state[15];
     }
 
-    fn generic_internal_linear_layer<A: Algebra<BabyBear>>(state: &mut [A; 16]) {
+    fn generic_internal_linear_layer<A: Algebra<I>, I: From<BabyBear>>(state: &mut [A; 16]) {
         let part_sum: A = state[1..].iter().cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();
 
@@ -322,7 +322,7 @@ impl InternalLayerBaseParameters<BabyBearParameters, 16> for BabyBearInternalLay
             .zip(INTERNAL_DIAG_MONTY_16)
             .skip(3)
             .for_each(|(val, diag_elem)| {
-                *val = full_sum.clone() + val.clone() * diag_elem;
+                *val = full_sum.clone() + val.clone() * I::from(diag_elem);
             });
     }
 }
@@ -380,7 +380,7 @@ impl InternalLayerBaseParameters<BabyBearParameters, 24> for BabyBearInternalLay
         state[23] = sum - state[23];
     }
 
-    fn generic_internal_linear_layer<A: Algebra<BabyBear>>(state: &mut [A; 24]) {
+    fn generic_internal_linear_layer<A: Algebra<I>, I: From<BabyBear>>(state: &mut [A; 24]) {
         let part_sum: A = state[1..].iter().cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();
 
@@ -397,7 +397,7 @@ impl InternalLayerBaseParameters<BabyBearParameters, 24> for BabyBearInternalLay
             .zip(INTERNAL_DIAG_MONTY_24)
             .skip(3)
             .for_each(|(val, diag_elem)| {
-                *val = full_sum.clone() + val.clone() * diag_elem;
+                *val = full_sum.clone() + val.clone() * I::from(diag_elem);
             });
     }
 }
