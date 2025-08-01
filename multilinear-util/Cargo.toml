@@ -18,14 +18,13 @@ rayon = { workspace = true, optional = true }
 
 [dev-dependencies]
 p3-baby-bear.workspace = true
+criterion.workspace = true
 
 proptest.workspace = true
 rand.workspace = true
-criterion.workspace = true
 
 [features]
 parallel = ["dep:rayon", "p3-maybe-rayon/parallel"]
-
 
 [[bench]]
 name = "evaleq"
