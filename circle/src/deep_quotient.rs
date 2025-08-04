@@ -245,17 +245,19 @@ mod tests {
             coeffs.pad_to_height(1 << (log_n + log_blowup), F::ZERO);
 
             let domain = CircleDomain::standard(log_n + log_blowup);
-            let mut lde = CircleEvaluations::evaluate(domain, coeffs.clone()).values;
+            let lde = CircleEvaluations::evaluate(domain, coeffs.clone());
 
-            let lambda = extract_lambda(&mut lde.values, log_blowup);
-            assert_eq!(lambda, coeffs.get(1 << log_n, 0).unwrap());
+            // Convert F values to EF for extract_lambda
+            let mut lde_ef: Vec<EF> = lde.values.values.iter().map(|&x| EF::from(x)).collect();
+            let lambda = extract_lambda::<F, EF>(&mut lde_ef, log_blowup);
+            assert_eq!(lambda, EF::from(coeffs.get(1 << log_n, 0).unwrap()));
 
             let coeffs2 =
-                CircleEvaluations::from_cfft_order(domain, RowMajorMatrix::new_col(lde.values))
+                CircleEvaluations::from_cfft_order(domain, RowMajorMatrix::new_col(lde_ef.into_iter().map(|x| x.as_base().unwrap()).collect()))
                     .interpolate()
                     .values;
             assert_eq!(&coeffs2[..(1 << log_n)], &coeffs.values[..(1 << log_n)]);
-            assert_eq!(lambda, coeffs.values[1 << log_n]);
+            assert_eq!(lambda, EF::from(coeffs.values[1 << log_n]));
             assert_eq!(coeffs2[1 << log_n], F::ZERO);
             assert_eq!(
                 &coeffs2[(1 << log_n) + 1..],
