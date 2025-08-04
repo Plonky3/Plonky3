@@ -252,10 +252,12 @@ mod tests {
             let lambda = extract_lambda::<F, EF>(&mut lde_ef, log_blowup);
             assert_eq!(lambda, EF::from(coeffs.get(1 << log_n, 0).unwrap()));
 
-            let coeffs2 =
-                CircleEvaluations::from_cfft_order(domain, RowMajorMatrix::new_col(lde_ef.into_iter().map(|x| x.as_base().unwrap()).collect()))
-                    .interpolate()
-                    .values;
+            let coeffs2 = CircleEvaluations::from_cfft_order(
+                domain,
+                RowMajorMatrix::new_col(lde_ef.into_iter().map(|x| x.as_base().unwrap()).collect()),
+            )
+            .interpolate()
+            .values;
             assert_eq!(&coeffs2[..(1 << log_n)], &coeffs.values[..(1 << log_n)]);
             assert_eq!(lambda, EF::from(coeffs.values[1 << log_n]));
             assert_eq!(coeffs2[1 << log_n], F::ZERO);
