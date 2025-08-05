@@ -613,7 +613,7 @@ fn eval_eq_packed<F, EF, const INITIALIZED: bool>(
 fn base_eval_eq_packed<F, EF, const INITIALIZED: bool>(
     eval_points: &[F],
     out: &mut [EF],
-    eq_evals: F::Packing,
+    eq_evals: <F as ExtensionField<F>>::ExtensionPacking,
     scalar: EF,
 ) where
     F: Field,
@@ -626,34 +626,22 @@ fn base_eval_eq_packed<F, EF, const INITIALIZED: bool>(
 
     match eval_points.len() {
         0 => {
-            scale_and_add::<_, _, INITIALIZED>(out, eq_evals.as_slice(), scalar);
+            scale_and_add::<_, _, INITIALIZED>(out, &[eq_evals], scalar);
         }
         1 => {
             let eq_evaluations = eval_eq_1(eval_points, eq_evals);
 
-            scale_and_add::<_, _, INITIALIZED>(
-                out,
-                F::Packing::unpack_slice(&eq_evaluations),
-                scalar,
-            );
+            scale_and_add::<_, _, INITIALIZED>(out, &eq_evaluations, scalar);
         }
         2 => {
             let eq_evaluations = eval_eq_2(eval_points, eq_evals);
 
-            scale_and_add::<_, _, INITIALIZED>(
-                out,
-                F::Packing::unpack_slice(&eq_evaluations),
-                scalar,
-            );
+            scale_and_add::<_, _, INITIALIZED>(out, &eq_evaluations, scalar);
         }
         3 => {
             let eq_evaluations = eval_eq_3(eval_points, eq_evals);
 
-            scale_and_add::<_, _, INITIALIZED>(
-                out,
-                F::Packing::unpack_slice(&eq_evaluations),
-                scalar,
-            );
+            scale_and_add::<_, _, INITIALIZED>(out, &eq_evaluations, scalar);
         }
         _ => {
             let (&x, tail) = eval_points.split_first().unwrap();
@@ -702,9 +690,10 @@ fn add_or_set<F: Field, const INITIALIZED: bool>(out: &mut [F], evaluations: &[F
 #[inline]
 fn scale_and_add<F: Field, EF: ExtensionField<F>, const INITIALIZED: bool>(
     out: &mut [EF],
-    base_vals: &[F],
+    base_vals: &[F::Packing],
     scalar: EF,
 ) {
+    let base_vals = F::Packing::unpack_slice(base_vals);
     // TODO: We can probably add a custom method to Plonky3 to handle this more efficiently (and use packings).
     // This approach is faster than collecting `scalar * eq_eval` into a vector and using `add_slices`. Presumably
     // this is because we avoid the allocation.
@@ -744,6 +733,228 @@ where
 
     // Finally we need to do a "transpose" to get a `PackedFieldExtension` element.
     EF::ExtensionPacking::from_ext_slice(&buffer)
+}
+
+/// A trait which allows us to define similar but subtly different evaluation strategies depending
+/// on the incoming field types.
+trait EqualityEvaluator<F: Field> {
+    type InputField;
+    type OutputField;
+    type PackedField: Algebra<Self::InputField> + Send + Sync;
+
+    fn init_packed(eval: &[Self::InputField], init_value: Self::OutputField) -> Self::PackedField;
+
+    fn process_chunk<const INITIALIZED: bool>(
+        eval: &[Self::InputField],
+        out_chunk: &mut [Self::OutputField],
+        buffer_val: Self::PackedField,
+        scalar: Self::OutputField,
+    );
+
+    // Not working quite yet. I think `eq_evals` might need to be impl IntoIterator<Item = Self::InputField>?
+    fn accumulate_results<const INITIALIZED: bool>(
+        out: &mut [Self::OutputField],
+        eq_evals: &[Self::InputField],
+        scalar: Self::OutputField,
+    );
+}
+
+/// Implementation for base field case
+struct BaseFieldEvaluator<F, EF>(std::marker::PhantomData<(F, EF)>);
+
+/// Implementation for extension field case
+struct ExtFieldEvaluator<F, EF>(std::marker::PhantomData<(F, EF)>);
+
+impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator<F> for ExtFieldEvaluator<F, EF> {
+    type InputField = EF;
+    type OutputField = EF;
+    type PackedField = EF::ExtensionPacking;
+
+    fn init_packed(eval: &[Self::InputField], init_value: Self::OutputField) -> Self::PackedField {
+        packed_eq_poly(eval, init_value)
+    }
+
+    fn process_chunk<const INITIALIZED: bool>(
+        eval: &[Self::InputField],
+        out_chunk: &mut [Self::OutputField],
+        buffer_val: Self::PackedField,
+        _scalar: Self::OutputField,
+    ) {
+        eval_eq_packed::<F, EF, INITIALIZED>(eval, out_chunk, buffer_val);
+    }
+
+    fn accumulate_results<const INITIALIZED: bool>(
+        out: &mut [Self::OutputField],
+        eq_evals: &[Self::InputField],
+        _scalar: Self::OutputField,
+    ) {
+        add_or_set::<_, INITIALIZED>(out, eq_evals);
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator<F> for BaseFieldEvaluator<F, EF> {
+    type InputField = F;
+    type OutputField = EF;
+    type PackedField = F::Packing;
+
+    fn init_packed(eval: &[Self::InputField], _init_value: Self::OutputField) -> Self::PackedField {
+        packed_eq_poly(eval, F::ONE)
+    }
+
+    fn process_chunk<const INITIALIZED: bool>(
+        eval: &[Self::InputField],
+        out_chunk: &mut [Self::OutputField],
+        buffer_val: Self::PackedField,
+        scalar: Self::OutputField,
+    ) {
+        base_eval_eq_packed::<F, EF, INITIALIZED>(eval, out_chunk, buffer_val, scalar);
+    }
+
+    fn accumulate_results<const INITIALIZED: bool>(
+        out: &mut [Self::OutputField],
+        eq_evals: &[Self::InputField],
+        scalar: Self::OutputField,
+    ) {
+        scale_and_add::<_, _, INITIALIZED>(out, eq_evals, scalar);
+    }
+}
+
+#[inline]
+fn eval_eq_common<F, IF, EF, E, const INITIALIZED: bool, const BASE: bool>(
+    eval: &[IF],
+    out: &mut [EF],
+    scalar: EF,
+) where
+    F: Field,
+    IF: Field,
+    EF: ExtensionField<F> + ExtensionField<IF>,
+    E: EqualityEvaluator<F, InputField = IF, OutputField = EF>,
+{
+    // we assume that packing_width is a power of 2.
+    let packing_width = F::Packing::WIDTH;
+
+    // Ensure that the output buffer size is correct:
+    // It should be of size `2^n`, where `n` is the number of variables.
+    debug_assert_eq!(out.len(), 1 << eval.len());
+
+    // If the number of variables is small, there is no need to use
+    // parallelization or packings.
+    if eval.len() <= packing_width + 1 + LOG_NUM_THREADS {
+        // A basic recursive approach.
+        eval_eq_basic::<F, IF, EF, INITIALIZED>(eval, out, scalar);
+    } else {
+        let log_packing_width = log2_strict_usize(packing_width);
+        let eval_len_min_packing = eval.len() - log_packing_width;
+
+        // We split eval into three parts:
+        // - eval[..LOG_NUM_THREADS] (the first LOG_NUM_THREADS elements)
+        // - eval[LOG_NUM_THREADS..eval_len_min_packing] (the middle elements)
+        // - eval[eval_len_min_packing..] (the last log_packing_width elements)
+
+        // The middle elements are the ones which will be computed in parallel.
+        // The last log_packing_width elements are the ones which will be packed.
+
+        // We make a buffer of PackedField elements of size `NUM_THREADS`.
+        // Note that this is a slightly different strategy to `eval_eq` which instead
+        // uses PackedExtensionField elements. Whilst this involves slightly more mathematical
+        // operations, it seems to be faster in practice due to less data moving around.
+        let mut parallel_buffer = E::PackedField::zero_vec(NUM_THREADS);
+        let out_chunk_size = out.len() / NUM_THREADS;
+
+        // Compute the equality polynomial corresponding to the last log_packing_width elements
+        // and pack these.
+        parallel_buffer[0] = E::init_packed(&eval[eval_len_min_packing..], scalar);
+
+        // Update the buffer so it contains the evaluations of the equality polynomial
+        // with respect to parts one and three.
+        fill_buffer(eval[..LOG_NUM_THREADS].iter().rev(), &mut parallel_buffer);
+
+        // Finally do all computations involving the middle elements.
+        out.par_chunks_exact_mut(out_chunk_size)
+            .zip(parallel_buffer.par_iter())
+            .for_each(|(out_chunk, buffer_val)| {
+                E::process_chunk::<INITIALIZED>(
+                    &eval[LOG_NUM_THREADS..eval_len_min_packing],
+                    out_chunk,
+                    buffer_val.clone(),
+                    scalar,
+                );
+            });
+    }
+}
+
+/// Computes the equality polynomial evaluations via a simple recursive algorithm.
+///
+/// Unlike [`eval_eq_basic`], this function makes heavy use of packed values to speed up computations.
+/// In particular `scalar` should be passed in as a packed value coming from [`packed_eq_poly`].
+///
+/// Essentially using packings this functions computes
+///
+/// ```text
+/// eq(X) = scalar[j] * ∏ (1 - X_i + 2X_i z_i)
+/// ```
+///
+/// for a collection of `i` at the same time. Here `scalar[j]` should be thought of as evaluations of an equality
+/// polynomial over different variables so `eq(X)` ends up being the evaluation of the equality polynomial over
+/// the combined set of variables.
+///
+/// It then updates the output buffer `out` with the computed values by adding them in.
+#[inline]
+fn eval_eq_packed_common<F, IF, EF, E, const INITIALIZED: bool>(
+    eval_points: &[IF],
+    out: &mut [EF],
+    eq_evals: E::PackedField,
+    scalar: EF,
+) where
+    F: Field,
+    IF: Field,
+    EF: ExtensionField<F>,
+    E: EqualityEvaluator<F, InputField = IF, OutputField = EF>,
+{
+    // Ensure that the output buffer size is correct:
+    // It should be of size `2^n`, where `n` is the number of variables.
+    let width = F::Packing::WIDTH;
+    debug_assert_eq!(out.len(), width << eval_points.len());
+
+    match eval_points.len() {
+        0 => {
+            E::accumulate_results::<INITIALIZED>(out, &[eq_evals], scalar);
+        }
+        1 => {
+            let eq_evaluations = eval_eq_1(eval_points, eq_evals);
+            E::accumulate_results::<INITIALIZED>(out, &eq_evaluations, scalar);
+        }
+        2 => {
+            let eq_evaluations = eval_eq_2(eval_points, eq_evals);
+            E::accumulate_results::<INITIALIZED>(out, &eq_evaluations, scalar);
+        }
+        3 => {
+            let eq_evaluations = eval_eq_3(eval_points, eq_evals);
+            E::accumulate_results::<INITIALIZED>(out, &eq_evaluations, scalar);
+        }
+        _ => {
+            let (&x, tail) = eval_points.split_first().unwrap();
+
+            // Divide the output buffer into two halves: one for `X_i = 0` and one for `X_i = 1`
+            let (low, high) = out.split_at_mut(out.len() / 2);
+
+            // Compute weight updates for the two branches:
+            // - `s0` corresponds to the case when `X_i = 0`
+            // - `s1` corresponds to the case when `X_i = 1`
+            //
+            // Mathematically, this follows the recurrence:
+            // ```text
+            // eq_{X1, ..., Xn}(X) = (1 - X_1) * eq_{X2, ..., Xn}(X) + X_1 * eq_{X2, ..., Xn}(X)
+            // ```
+            let s1 = eq_evals * x; // Contribution when `X_i = 1`
+            let s0 = eq_evals - s1; // Contribution when `X_i = 0`
+
+            // The recursive approach turns out to be faster than the iterative one here.
+            // Probably related to nice cache locality.
+            eval_eq_packed_common::<F, IF, EF, E, INITIALIZED>(tail, low, s0, scalar);
+            eval_eq_packed_common::<F, IF, EF, E, INITIALIZED>(tail, high, s1, scalar);
+        }
+    }
 }
 
 #[cfg(test)]
