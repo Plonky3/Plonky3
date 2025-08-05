@@ -186,7 +186,40 @@ impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
         Self { initial, terminal }
     }
 
+    /// Generate a new set of external constants using a deterministic seed.
+    /// This ensures reproducible cryptographic constants for ZK-proof determinism.
+    ///
+    /// # Arguments
+    /// - `external_round_number`: Total number of external rounds (must be even).
+    /// - `seed`: A deterministic seed for reproducible constant generation.
+    ///
+    /// The constants are split equally between the initial and terminal rounds.
+    ///
+    /// # Panics
+    /// Panics if `external_round_number` is not even.
+    pub fn new_from_seed(external_round_number: usize, seed: u64) -> Self
+    where
+        StandardUniform: Distribution<T> + Distribution<[T; WIDTH]>,
+    {
+        use rand::{SeedableRng, rngs::SmallRng};
+        let mut rng = SmallRng::seed_from_u64(seed);
+        
+        assert_eq!(
+            external_round_number % 2,
+            0,
+            "External round number must be even"
+        );
+
+        let half_rounds = external_round_number / 2;
+        let initial: Vec<[T; WIDTH]> = rng.sample_iter(StandardUniform).take(half_rounds).collect();
+        let terminal: Vec<[T; WIDTH]> = rng.sample_iter(StandardUniform).take(half_rounds).collect();
+
+        Self::new(initial, terminal)
+    }
+
     /// Randomly generate a new set of external constants using a provided RNG.
+    /// WARNING: This function is non-deterministic and should not be used in ZK-proof generation.
+    /// Use `new_from_seed` instead for deterministic behavior.
     ///
     /// # Arguments
     /// - `external_round_number`: Total number of external rounds (must be even).
@@ -196,20 +229,22 @@ impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
     ///
     /// # Panics
     /// Panics if `external_round_number` is not even.
+    #[deprecated(since = "0.1.0", note = "Use new_from_seed for deterministic ZK-proof generation")]
     pub fn new_from_rng<R: Rng>(external_round_number: usize, rng: &mut R) -> Self
     where
-        StandardUniform: Distribution<[T; WIDTH]>,
+        StandardUniform: Distribution<T> + Distribution<[T; WIDTH]>,
     {
-        let half_f = external_round_number / 2;
         assert_eq!(
-            2 * half_f,
-            external_round_number,
-            "The total number of external rounds should be even"
+            external_round_number % 2,
+            0,
+            "External round number must be even"
         );
-        let initial_constants = rng.sample_iter(StandardUniform).take(half_f).collect();
-        let terminal_constants = rng.sample_iter(StandardUniform).take(half_f).collect();
 
-        Self::new(initial_constants, terminal_constants)
+        let half_rounds = external_round_number / 2;
+        let initial: Vec<[T; WIDTH]> = rng.sample_iter(StandardUniform).take(half_rounds).collect();
+        let terminal: Vec<[T; WIDTH]> = rng.sample_iter(StandardUniform).take(half_rounds).collect();
+
+        Self::new(initial, terminal)
     }
 
     /// Construct constants from statically stored arrays, using a conversion function.
