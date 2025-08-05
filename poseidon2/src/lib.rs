@@ -62,7 +62,24 @@ where
         }
     }
 
+    /// Create a new Poseidon2 configuration with deterministic seeded parameters.
+    /// This ensures reproducible cryptographic constants for ZK-proof determinism.
+    pub fn new_from_seed(rounds_f: usize, rounds_p: usize, seed: u64) -> Self
+    where
+        StandardUniform: Distribution<F> + Distribution<[F; WIDTH]>,
+    {
+        use rand::{SeedableRng, rngs::SmallRng};
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let external_constants = ExternalLayerConstants::new_from_seed(rounds_f, seed);
+        let internal_constants = rng.sample_iter(StandardUniform).take(rounds_p).collect();
+
+        Self::new(external_constants, internal_constants)
+    }
+
     /// Create a new Poseidon2 configuration with random parameters.
+    /// WARNING: This function is non-deterministic and should not be used in ZK-proof generation.
+    /// Use `new_from_seed` instead for deterministic behavior.
+    #[deprecated(since = "0.1.0", note = "Use new_from_seed for deterministic ZK-proof generation")]
     pub fn new_from_rng<R: Rng>(rounds_f: usize, rounds_p: usize, rng: &mut R) -> Self
     where
         StandardUniform: Distribution<F> + Distribution<[F; WIDTH]>,
@@ -81,11 +98,30 @@ where
     ExternalPerm: ExternalLayerConstructor<F, WIDTH>,
     InternalPerm: InternalLayerConstructor<F>,
 {
-    /// Create a new Poseidon2 configuration with 128 bit security and random rounds constants.
+    /// Create a new Poseidon2 configuration with 128 bit security and deterministic seeded constants.
+    /// This ensures reproducible cryptographic constants for ZK-proof determinism.
     ///
     /// # Panics
     /// This will panic if D and F::ORDER_U64 - 1 are not relatively prime.
     /// This will panic if the optimal parameters for the given field and width have not been computed.
+    pub fn new_from_seed_128(seed: u64) -> Self
+    where
+        StandardUniform: Distribution<F> + Distribution<[F; WIDTH]>,
+    {
+        let round_numbers = poseidon2_round_numbers_128::<F>(WIDTH, D);
+        let (rounds_f, rounds_p) =
+            round_numbers.unwrap_or_else(|_| panic!("{}", round_numbers.unwrap_err()));
+        Self::new_from_seed(rounds_f, rounds_p, seed)
+    }
+
+    /// Create a new Poseidon2 configuration with 128 bit security and random rounds constants.
+    /// WARNING: This function is non-deterministic and should not be used in ZK-proof generation.
+    /// Use `new_from_seed_128` instead for deterministic behavior.
+    ///
+    /// # Panics
+    /// This will panic if D and F::ORDER_U64 - 1 are not relatively prime.
+    /// This will panic if the optimal parameters for the given field and width have not been computed.
+    #[deprecated(since = "0.1.0", note = "Use new_from_seed_128 for deterministic ZK-proof generation")]
     pub fn new_from_rng_128<R: Rng>(rng: &mut R) -> Self
     where
         StandardUniform: Distribution<F> + Distribution<[F; WIDTH]>,
