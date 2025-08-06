@@ -261,21 +261,21 @@ where
     let z_0 = eval[0];
     let z_1 = eval[1];
 
-    // Compute s1 = α ⋅ z_0 = α ⋅ eq(1, -) and s0 = α - s1 = α ⋅ (1 - z_0) = α ⋅ eq(0, -)
+    // Compute
+    // - s1 = α ⋅ z_0 = α ⋅ eq(1, -)
+    // - s0 = α - s1 = α ⋅ (1 - z_0) = α ⋅ eq(0, -)
     let s1 = scalar.clone() * z_0;
     let s0 = scalar - s1.clone();
 
     // For x_0 = 0:
     // - s01 = s0 ⋅ z_1 = α ⋅ (1 - z_0) ⋅ z_1 = α ⋅ eq((0,1), z)
     // - s00 = s0 - s01 = α ⋅ (1 - z_0)(1 - z_1) = α ⋅ eq((0,0), z)
-    let s01 = s0.clone() * z_1;
-    let s00 = s0 - s01.clone();
+    let [s00, s01] = eval_eq_1(&[z_1], s0);
 
     // For x_0 = 1:
     // - s11 = s1 ⋅ z_1 = α ⋅ z_0 ⋅ z_1 = α ⋅ eq((1,1), z)
     // - s10 = s1 - s11 = α ⋅ z_0(1 - z_1) = α ⋅ eq((1,0), z)
-    let s11 = s1.clone() * z_1;
-    let s10 = s1 - s11.clone();
+    let [s10, s11] = eval_eq_1(&[z_1], s1);
 
     // Return values in lexicographic order of x = (x_0, x_1)
     [s00, s01, s10, s11]
