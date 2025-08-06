@@ -240,37 +240,15 @@ where
     [eq_0, eq_1]
 }
 
-/// Compute the scaled multilinear equality polynomial over `{0,1}^2`.
-///
-/// This is the hardcoded base case for the multilinear equality polynomial `eq(x, z)`
-/// when the evaluation point has 2 variables: `z = [z_0, z_1] ∈ 𝔽²`.
-///
-/// It computes and returns the vector:
-///
-/// \begin{equation}
-/// [α ⋅ eq((0,0), z), α ⋅ eq((0,1), z), α ⋅ eq((1,0), z), α ⋅ eq((1,1), z)]
-/// \end{equation}
-///
-/// where the multilinear equality polynomial is:
-///
-/// \begin{equation}
-/// eq(x, z) = ∏_{i=0}^{1} (x_i ⋅ z_i + (1 - x_i)(1 - z_i))
-/// \end{equation}
-///
-/// Concretely, this gives:
-/// - `eq((0,0), z) = (1 - z_0)(1 - z_1)`
-/// - `eq((0,1), z) = (1 - z_0)(z_1)`
-/// - `eq((1,0), z) = z_0(1 - z_1)`
-/// - `eq((1,1), z) = z_0(z_1)`
-///
-/// Then all outputs are scaled by `α`.
+/// Compute the scaled multilinear equality polynomial over `{0,1}²`.
 ///
 /// # Arguments
-/// - `eval`: Slice `[z_0, z_1]`, the evaluation point in `𝔽²`
-/// - `scalar`: The scalar multiplier `α ∈ 𝔽`
+/// - `eval`: Slice containing the evaluation points `[z_0, z_1]` (must have length 2).
+/// - `scalar`: A field element `α ∈ 𝔽` used to scale the result.
 ///
 /// # Returns
 /// An array `[α ⋅ eq((0,0), z), α ⋅ eq((0,1), z), α ⋅ eq((1,0), z), α ⋅ eq((1,1), z)]`
+/// representing the scaled evaluations of `eq(x, z)` for `x ∈ {0,1}²`.
 #[inline(always)]
 fn eval_eq_2<F, FP>(eval: &[F], scalar: FP) -> [FP; 4]
 where
