@@ -215,41 +215,9 @@ where
 
 /// Compute the scaled multilinear equality polynomial over `{0,1}` for a single variable.
 ///
-/// This is the hardcoded base case for the equality polynomial `eq(x, z)`
-/// in the case of a single variable `z = [z_0] ∈ 𝔽`, and returns:
-///
-/// \begin{equation}
-/// [α ⋅ (1 - z_0), α ⋅ z_0]
-/// \end{equation}
-///
-/// corresponding to the evaluations:
-///
-/// \begin{equation}
-/// [α ⋅ eq(0, z), α ⋅ eq(1, z)]
-/// \end{equation}
-///
-/// where the multilinear equality function is:
-///
-/// \begin{equation}
-/// eq(x, z) = x ⋅ z + (1 - x)(1 - z)
-/// \end{equation}
-///
-/// Concretely:
-/// - For `x = 0`, we have:
-///   \begin{equation}
-///   eq(0, z_0) = 0 ⋅ z_0 + (1 - 0)(1 - z_0) = 1 - z_0
-///   \end{equation}
-/// - For `x = 1`, we have:
-///   \begin{equation}
-///   eq(1, z_0) = 1 ⋅ z_0 + (1 - 1)(1 - z_0) = z_0
-///   \end{equation}
-///
-/// So the return value is:
-/// - `[α ⋅ (1 - z_0), α ⋅ z_0]`
-///
 /// # Arguments
-/// - `eval`: Slice containing the evaluation point `[z_0]` (must have length 1)
-/// - `scalar`: A scalar multiplier `α` to scale the result by
+/// - `eval`: Slice containing the evaluation point `[z_0]` (must have length 1).
+/// - `scalar`: A field element `α ∈ 𝔽` used to scale the result.
 ///
 /// # Returns
 /// An array `[α ⋅ (1 - z_0), α ⋅ z_0]` representing the scaled evaluations
