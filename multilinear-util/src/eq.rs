@@ -281,30 +281,14 @@ where
     [s00, s01, s10, s11]
 }
 
-/// Compute the scaled multilinear equality polynomial over `{0,1}³` for 3 variables.
-///
-/// This is the hardcoded base case for the equality polynomial `eq(x, z)`
-/// in the case of three variables `z = [z_0, z_1, z_2] ∈ 𝔽³`, and returns:
-///
-/// \begin{equation}
-/// [α ⋅ eq((0,0,0), z), α ⋅ eq((0,0,1), z), ..., α ⋅ eq((1,1,1), z)]
-/// \end{equation}
-///
-/// where the multilinear equality function is defined as:
-///
-/// \begin{equation}
-/// \mathrm{eq}(x, z) = \prod_{i=0}^{2} \left( x_i z_i + (1 - x_i)(1 - z_i) \right)
-/// \end{equation}
-///
-/// For each binary vector `x ∈ {0,1}³`, this returns the scaled evaluation `α ⋅ eq(x, z)`,
-/// in lexicographic order: `(0,0,0), (0,0,1), ..., (1,1,1)`.
+/// Compute the scaled multilinear equality polynomial over `{0,1}³`.
 ///
 /// # Arguments
-/// - `eval`: A slice containing `[z_0, z_1, z_2]`, the evaluation point.
-/// - `scalar`: A scalar multiplier `α` to apply to all results.
+/// - `eval`: Slice containing the evaluation points `[z_0, z_1, z_2]` (must have length 3).
+/// - `scalar`: A field element `α ∈ 𝔽` used to scale the result.
 ///
 /// # Returns
-/// An array of 8 values `[α ⋅ eq(x, z)]` for all `x ∈ {0,1}³`, in lex order.
+/// An array containing `α ⋅ eq(x, z)` for `x ∈ {0,1}³` arranged using lexicographic order of `x`.
 #[inline(always)]
 fn eval_eq_3<F, FP>(eval: &[F], scalar: FP) -> [FP; 8]
 where
