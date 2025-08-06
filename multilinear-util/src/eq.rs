@@ -626,22 +626,35 @@ fn base_eval_eq_packed<F, EF, const INITIALIZED: bool>(
 
     match eval_points.len() {
         0 => {
-            scale_and_add::<_, _, INITIALIZED>(out, &[eq_evals], scalar);
+            scale_and_add::<_, _, INITIALIZED>(
+                out,
+                eq_evals.as_slice().into_iter().cloned(),
+                scalar,
+            );
         }
         1 => {
             let eq_evaluations = eval_eq_1(eval_points, eq_evals);
+            let eq_evals_iter = F::Packing::unpack_slice(&eq_evaluations)
+                .into_iter()
+                .copied();
 
-            scale_and_add::<_, _, INITIALIZED>(out, &eq_evaluations, scalar);
+            scale_and_add::<_, _, INITIALIZED>(out, eq_evals_iter, scalar);
         }
         2 => {
             let eq_evaluations = eval_eq_2(eval_points, eq_evals);
+            let eq_evals_iter = F::Packing::unpack_slice(&eq_evaluations)
+                .into_iter()
+                .copied();
 
-            scale_and_add::<_, _, INITIALIZED>(out, &eq_evaluations, scalar);
+            scale_and_add::<_, _, INITIALIZED>(out, eq_evals_iter, scalar);
         }
         3 => {
             let eq_evaluations = eval_eq_3(eval_points, eq_evals);
+            let eq_evals_iter = F::Packing::unpack_slice(&eq_evaluations)
+                .into_iter()
+                .copied();
 
-            scale_and_add::<_, _, INITIALIZED>(out, &eq_evaluations, scalar);
+            scale_and_add::<_, _, INITIALIZED>(out, eq_evals_iter, scalar);
         }
         _ => {
             let (&x, tail) = eval_points.split_first().unwrap();
@@ -690,19 +703,15 @@ fn add_or_set<F: Field, const INITIALIZED: bool>(out: &mut [F], evaluations: &[F
 #[inline]
 fn scale_and_add<F: Field, EF: ExtensionField<F>, const INITIALIZED: bool>(
     out: &mut [EF],
-    base_vals: &[F::Packing],
+    base_vals: impl IntoIterator<Item = F>,
     scalar: EF,
 ) {
-    let base_vals = F::Packing::unpack_slice(base_vals);
-    // TODO: We can probably add a custom method to Plonky3 to handle this more efficiently (and use packings).
-    // This approach is faster than collecting `scalar * eq_eval` into a vector and using `add_slices`. Presumably
-    // this is because we avoid the allocation.
     if INITIALIZED {
-        out.iter_mut().zip(base_vals).for_each(|(out, &eq_eval)| {
+        out.iter_mut().zip(base_vals).for_each(|(out, eq_eval)| {
             *out += scalar * eq_eval;
         });
     } else {
-        out.iter_mut().zip(base_vals).for_each(|(out, &eq_eval)| {
+        out.iter_mut().zip(base_vals).for_each(|(out, eq_eval)| {
             *out = scalar * eq_eval;
         });
     }
@@ -751,10 +760,13 @@ trait EqualityEvaluator<F: Field> {
         scalar: Self::OutputField,
     );
 
-    // Not working quite yet. I think `eq_evals` might need to be impl IntoIterator<Item = Self::InputField>?
+    fn unpack_to_iter<const N: usize>(
+        evals: [Self::PackedField; N],
+    ) -> impl Iterator<Item = Self::InputField>;
+
     fn accumulate_results<const INITIALIZED: bool>(
         out: &mut [Self::OutputField],
-        eq_evals: &[Self::InputField],
+        eq_evals: impl IntoIterator<Item = Self::InputField>,
         scalar: Self::OutputField,
     );
 }
@@ -783,9 +795,15 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator<F> for ExtFieldEvaluator
         eval_eq_packed::<F, EF, INITIALIZED>(eval, out_chunk, buffer_val);
     }
 
+    fn unpack_to_iter<const N: usize>(
+        evals: [Self::PackedField; N],
+    ) -> impl Iterator<Item = Self::InputField> {
+        EF::ExtensionPacking::to_ext_iter(evals)
+    }
+
     fn accumulate_results<const INITIALIZED: bool>(
         out: &mut [Self::OutputField],
-        eq_evals: &[Self::InputField],
+        eq_evals: impl IntoIterator<Item = Self::InputField>,
         _scalar: Self::OutputField,
     ) {
         add_or_set::<_, INITIALIZED>(out, eq_evals);
@@ -810,9 +828,15 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator<F> for BaseFieldEvaluato
         base_eval_eq_packed::<F, EF, INITIALIZED>(eval, out_chunk, buffer_val, scalar);
     }
 
+    fn unpack_to_iter<const N: usize>(
+        evals: [Self::PackedField; N],
+    ) -> impl Iterator<Item = Self::InputField> {
+        evals.into_iter().flat_map(|fp| fp.unpack())
+    }
+
     fn accumulate_results<const INITIALIZED: bool>(
         out: &mut [Self::OutputField],
-        eq_evals: &[Self::InputField],
+        eq_evals: impl IntoIterator<Item = Self::InputField>,
         scalar: Self::OutputField,
     ) {
         scale_and_add::<_, _, INITIALIZED>(out, eq_evals, scalar);
