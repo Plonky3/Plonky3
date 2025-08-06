@@ -338,15 +338,6 @@ where
 
 /// Computes the multilinear equality polynomial `eq(x, z)` over all $x ∈ \{0,1\}^n$ via a recursive algorithm.
 ///
-/// This function uses a simple, recursive method (with special unrolling for `n = 1, 2, 3`)
-/// to evaluate:
-///
-/// \begin{equation}
-/// \mathrm{eq}(x, z) = \prod_{i=0}^{n-1} \left( x_i z_i + (1 - x_i)(1 - z_i) \right)
-/// \end{equation}
-///
-/// and stores the scaled results into the `out` buffer.
-///
 /// # Output Structure
 /// The `out` buffer must have length exactly $2^n$, where $n = \texttt{eval.len()}$.
 ///
