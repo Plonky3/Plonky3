@@ -297,43 +297,18 @@ where
 {
     assert_eq!(eval.len(), 3);
 
-    // Extract z_0, z_1, z_2 from the evaluation point
     let z_0 = eval[0];
-    let z_1 = eval[1];
-    let z_2 = eval[2];
 
-    // First dimension split: scalar * z_0 and scalar * (1 - z_0)
-    let s1 = scalar.clone() * z_0; // α ⋅ z_0
-    let s0 = scalar - s1.clone(); // α ⋅ (1 - z_0)
+    // First dimension split: α ⋅ z_0 and α ⋅ (1 - z_0)
+    let s1 = scalar.clone() * z_0;
+    let s0 = scalar - s1.clone();
 
-    // Second dimension split:
-    // Group (0, x1) branch using s0 = α ⋅ (1 - z_0)
-    let s01 = s0.clone() * z_1; // α ⋅ (1 - z_0) ⋅ z_1
-    let s00 = s0 - s01.clone(); // α ⋅ (1 - z_0) ⋅ (1 - z_1)
+    // Recursively evaluate remaining variables using eval_eq_2
+    let [a0, a1, a2, a3] = eval_eq_2(&eval[1..], s0);
+    let [b0, b1, b2, b3] = eval_eq_2(&eval[1..], s1);
 
-    // Group (1, x1) branch using s1 = α ⋅ z_0
-    let s11 = s1.clone() * z_1; // α ⋅ z_0 ⋅ z_1
-    let s10 = s1 - s11.clone(); // α ⋅ z_0 ⋅ (1 - z_1)
-
-    // Third dimension split:
-    // For (0,0,x2) branch
-    let s001 = s00.clone() * z_2; // α ⋅ (1 - z_0)(1 - z_1) ⋅ z_2
-    let s000 = s00 - s001.clone(); // α ⋅ (1 - z_0)(1 - z_1) ⋅ (1 - z_2)
-
-    // For (0,1,x2) branch
-    let s011 = s01.clone() * z_2; // α ⋅ (1 - z_0) ⋅ z_1 ⋅ z_2
-    let s010 = s01 - s011.clone(); // α ⋅ (1 - z_0) ⋅ z_1 ⋅ (1 - z_2)
-
-    // For (1,0,x2) branch
-    let s101 = s10.clone() * z_2; // α ⋅ z_0 ⋅ (1 - z_1) ⋅ z_2
-    let s100 = s10 - s101.clone(); // α ⋅ z_0 ⋅ (1 - z_1) ⋅ (1 - z_2)
-
-    // For (1,1,x2) branch
-    let s111 = s11.clone() * z_2; // α ⋅ z_0 ⋅ z_1 ⋅ z_2
-    let s110 = s11 - s111.clone(); // α ⋅ z_0 ⋅ z_1 ⋅ (1 - z_2)
-
-    // Return all 8 evaluations in lexicographic order of x ∈ {0,1}³
-    [s000, s001, s010, s011, s100, s101, s110, s111]
+    // Return values in lexicographic order of x = (x_0, x_1, x_2)
+    [a0, a1, a2, a3, b0, b1, b2, b3]
 }
 
 /// Computes the multilinear equality polynomial `eq(x, z)` over all $x ∈ \{0,1\}^n$ via a recursive algorithm.
