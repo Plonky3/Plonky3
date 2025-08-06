@@ -484,8 +484,6 @@ where
             let s1 = scalar * x; // Contribution when `X_i = 1`
             let s0 = scalar - s1; // Contribution when `X_i = 0`
 
-            // The recursive approach turns out to be faster than the iterative one here.
-            // Probably related to nice cache locality.
             eval_eq_basic::<_, _, _, INITIALIZED>(tail, low, s0);
             eval_eq_basic::<_, _, _, INITIALIZED>(tail, high, s1);
         }
@@ -585,8 +583,6 @@ fn eval_eq_packed<F, EF, const INITIALIZED: bool>(
             let s1 = scalar * x; // Contribution when `X_i = 1`
             let s0 = scalar - s1; // Contribution when `X_i = 0`
 
-            // The recursive approach turns out to be faster than the iterative one here.
-            // Probably related to nice cache locality.
             eval_eq_packed::<_, _, INITIALIZED>(tail, low, s0);
             eval_eq_packed::<_, _, INITIALIZED>(tail, high, s1);
         }
@@ -672,8 +668,6 @@ fn base_eval_eq_packed<F, EF, const INITIALIZED: bool>(
             let s1 = eq_evals * x; // Contribution when `X_i = 1`
             let s0 = eq_evals - s1; // Contribution when `X_i = 0`
 
-            // The recursive approach turns out to be faster than the iterative one here.
-            // Probably related to nice cache locality.
             base_eval_eq_packed::<_, _, INITIALIZED>(tail, low, s0, scalar);
             base_eval_eq_packed::<_, _, INITIALIZED>(tail, high, s1, scalar);
         }
