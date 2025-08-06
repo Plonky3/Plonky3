@@ -528,14 +528,12 @@ fn eval_eq_packed<F, EF, const INITIALIZED: bool>(
         1 => {
             // Manually unroll for single variable case
             let eq_evaluations = eval_eq_1(eval, scalar);
-
             let result: Vec<EF> = EF::ExtensionPacking::to_ext_iter(eq_evaluations).collect();
             add_or_set::<_, INITIALIZED>(out, &result);
         }
         2 => {
             // Manually unroll for two variables case
             let eq_evaluations = eval_eq_2(eval, scalar);
-
             let result: Vec<EF> = EF::ExtensionPacking::to_ext_iter(eq_evaluations).collect();
             add_or_set::<_, INITIALIZED>(out, &result);
         }
@@ -626,7 +624,6 @@ fn base_eval_eq_packed<F, EF, const INITIALIZED: bool>(
         }
         1 => {
             let eq_evaluations = eval_eq_1(eval_points, eq_evals);
-
             scale_and_add::<_, _, INITIALIZED>(
                 out,
                 F::Packing::unpack_slice(&eq_evaluations),
@@ -635,7 +632,6 @@ fn base_eval_eq_packed<F, EF, const INITIALIZED: bool>(
         }
         2 => {
             let eq_evaluations = eval_eq_2(eval_points, eq_evals);
-
             scale_and_add::<_, _, INITIALIZED>(
                 out,
                 F::Packing::unpack_slice(&eq_evaluations),
@@ -644,7 +640,6 @@ fn base_eval_eq_packed<F, EF, const INITIALIZED: bool>(
         }
         3 => {
             let eq_evaluations = eval_eq_3(eval_points, eq_evals);
-
             scale_and_add::<_, _, INITIALIZED>(
                 out,
                 F::Packing::unpack_slice(&eq_evaluations),
