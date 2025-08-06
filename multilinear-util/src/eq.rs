@@ -1,27 +1,38 @@
 //! Efficient evaluation of multilinear equality polynomials.
 //!
-//! This module provides fast algorithms for computing the multilinear equality
-//! polynomial `eq(x, z)` evaluated over the Boolean hypercube `x ∈ {0,1}^n`.
+//! This module provides optimized routines for computing the **multilinear equality polynomial**
+//! over the Boolean hypercube `{0,1}^n`.
 //!
-//! Given a constraint point `z = (z₀, ..., zₙ₋₁)` and a scalar `α`, we compute
-//! the scaled equality polynomial values over all `x ∈ {0,1}ⁿ`:
-//!
-//! ```text
-//! eq(x, z) = ∏ (1 - xᵢ + 2xᵢ zᵢ)
-//! ```
-//!
-//! This is evaluated efficiently using a recurrence relation that splits each dimension:
+//! The equality polynomial `eq(x, z)` evaluates to 1 if `x == z`, and 0 otherwise.
+//! It is defined as:
 //!
 //! ```text
-//! eq(x, z) = (1 - x₀) * eq(x[1:], z[1:]) + x₀ * eq(x[1:], z[1:])
+//! eq(x, z) = ∏_{i=0}^{n-1} (xᵢ ⋅ zᵢ + (1 - xᵢ)(1 - zᵢ))
 //! ```
+//!
+//! This can also be written (and is computed internally) in the equivalent form:
+//!
+//! ```text
+//! eq(x, z) = ∏_{i=0}^{n-1} (1 - xᵢ + 2xᵢ ⋅ zᵢ)
+//! ```
+//!
+//! These values are computed over all `x ∈ {0,1}^n` efficiently using a recursive strategy.
+//! The key recurrence relation used is:
+//!
+//! ```text
+//! eq(x, z) = (1 - x₀) ⋅ eq(x[1:], z[1:]) + x₀ ⋅ eq(x[1:], z[1:])
+//! ```
+//!
+//! This recurrence underlies all implementations in this module.
 //!
 //! ## `INITIALIZED` flag
 //!
-//! All functions support a `const INITIALIZED: bool` generic flag that controls how results are written:
+//! Each function accepts a `const INITIALIZED: bool` flag to control how output is written:
 //!
-//! - If `INITIALIZED = false`, the output buffer is **set** to the result
-//! - If `INITIALIZED = true`, the result is **added** to the output buffer
+//! - If `INITIALIZED = false`: the result is **written** into the output buffer.
+//! - If `INITIALIZED = true`: the result is **added** to the output buffer.
+//!
+//! The output buffer must always be of length `2^n` for `n` variables.
 
 use p3_field::{
     Algebra, ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
