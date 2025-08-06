@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use core::iter::{Product, Sum};
+use core::iter::{self, Product, Sum};
 use core::mem::MaybeUninit;
 use core::ops::{Div, DivAssign};
 use core::{array, slice};
@@ -15,7 +15,7 @@ pub trait Packable: 'static + Default + Copy + Send + Sync + PartialEq + Eq {}
 /// A trait for array-like structs made up of multiple scalar elements.
 ///
 /// # Safety
-/// - If `P` implements `PackedField` then `P` must be castable to/from `[P::Value; P::WIDTH]`
+/// - If `T` implements `PackedValue` then `T` must be castable to/from `[T::Value; T::WIDTH]`
 ///   without UB.
 pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     /// The scalar type that is packed into this value.
@@ -48,6 +48,18 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
 
     /// Returns the underlying scalar values as a mutable slice.
     fn as_slice_mut(&mut self) -> &mut [Self::Value];
+
+    /// Returns an iterator over the scalar values packed into this value.
+    ///
+    /// Once const generics are stabilised to the point that we can write a function
+    /// which returns `[Self::Value; Self::WIDTH]`, this should be removed and replaced
+    /// by that.
+    fn into_value_iter(self) -> impl Iterator<Item = Self::Value> {
+        // The default implementation requires an allocation.
+        // The vast majority of users should override this.
+        let as_value_vec = self.as_slice().to_vec();
+        as_value_vec.into_iter()
+    }
 
     /// Packs a slice of scalar values into a slice of packed values.
     ///
@@ -174,6 +186,11 @@ unsafe impl<T: Packable, const WIDTH: usize> PackedValue for [T; WIDTH] {
     #[inline]
     fn as_slice_mut(&mut self) -> &mut [Self::Value] {
         self
+    }
+
+    #[inline]
+    fn into_value_iter(self) -> impl Iterator<Item = Self::Value> {
+        self.into_iter()
     }
 }
 
@@ -353,6 +370,11 @@ unsafe impl<T: Packable> PackedValue for T {
     #[inline]
     fn as_slice_mut(&mut self) -> &mut [Self::Value] {
         slice::from_mut(self)
+    }
+
+    #[inline]
+    fn into_value_iter(self) -> impl Iterator<Item = Self::Value> {
+        iter::once(self)
     }
 }
 

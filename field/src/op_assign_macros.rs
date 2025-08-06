@@ -312,6 +312,11 @@ macro_rules! impl_packed_value {
                 fn from_fn<F: FnMut(usize) -> Self::Value>(f: F) -> Self {
                     Self(core::array::from_fn(f))
                 }
+
+                #[inline]
+                fn into_value_iter(self) -> impl Iterator<Item = Self::Value> {
+                    self.0.into_iter()
+                }
             }
         }
     };
