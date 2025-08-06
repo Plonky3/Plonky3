@@ -1,3 +1,28 @@
+//! Efficient evaluation of multilinear equality polynomials.
+//!
+//! This module provides fast algorithms for computing the multilinear equality
+//! polynomial `eq(x, z)` evaluated over the Boolean hypercube `x ∈ {0,1}^n`.
+//!
+//! Given a constraint point `z = (z₀, ..., zₙ₋₁)` and a scalar `α`, we compute
+//! the scaled equality polynomial values over all `x ∈ {0,1}ⁿ`:
+//!
+//! ```text
+//! eq(x, z) = ∏ (1 - xᵢ + 2xᵢ zᵢ)
+//! ```
+//!
+//! This is evaluated efficiently using a recurrence relation that splits each dimension:
+//!
+//! ```text
+//! eq(x, z) = (1 - x₀) * eq(x[1:], z[1:]) + x₀ * eq(x[1:], z[1:])
+//! ```
+//!
+//! ## `INITIALIZED` flag
+//!
+//! All functions support a `const INITIALIZED: bool` generic flag that controls how results are written:
+//!
+//! - If `INITIALIZED = false`, the output buffer is **set** to the result
+//! - If `INITIALIZED = true`, the result is **added** to the output buffer
+
 use p3_field::{
     Algebra, ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
 };
