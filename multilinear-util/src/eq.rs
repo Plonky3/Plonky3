@@ -224,7 +224,7 @@ where
 
 /// A trait which allows us to define similar but subtly different evaluation strategies depending
 /// on the incoming field types.
-trait EqualityEvaluator<F: Field> {
+trait EqualityEvaluator {
     type InputField;
     type OutputField;
     type PackedField: Algebra<Self::InputField> + Copy + Send + Sync;
@@ -245,13 +245,20 @@ trait EqualityEvaluator<F: Field> {
     );
 }
 
-/// Implementation for base field case
+/// Evaluation Strategy for the base field case.
+///
+/// We stay in the bae field for as long as possible to simplify instructions and
+/// reduce the amount of data transferred between cores. In particular this means we
+/// hold of on scaling by `scalar` until the very end.
 struct BaseFieldEvaluator<F, EF>(std::marker::PhantomData<(F, EF)>);
 
-/// Implementation for extension field case
+/// Implementation for extension field case.
+///
+/// We initialise with `scalar` instead of `1` as this reduces the total
+/// number of multiplications we need to do.
 struct ExtFieldEvaluator<F, EF>(std::marker::PhantomData<(F, EF)>);
 
-impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator<F> for ExtFieldEvaluator<F, EF> {
+impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for ExtFieldEvaluator<F, EF> {
     type InputField = EF;
     type OutputField = EF;
     type PackedField = EF::ExtensionPacking;
@@ -288,7 +295,7 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator<F> for ExtFieldEvaluator
     }
 }
 
-impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator<F> for BaseFieldEvaluator<F, EF> {
+impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for BaseFieldEvaluator<F, EF> {
     type InputField = F;
     type OutputField = EF;
     type PackedField = F::Packing;
@@ -343,7 +350,7 @@ where
     F: Field,
     IF: Field,
     EF: ExtensionField<F> + ExtensionField<IF>,
-    E: EqualityEvaluator<F, InputField = IF, OutputField = EF>,
+    E: EqualityEvaluator<InputField = IF, OutputField = EF>,
 {
     // we assume that packing_width is a power of 2.
     let packing_width = F::Packing::WIDTH;
@@ -430,7 +437,7 @@ fn eval_eq_packed<F, IF, EF, E, const INITIALIZED: bool>(
     F: Field,
     IF: Field,
     EF: ExtensionField<F>,
-    E: EqualityEvaluator<F, InputField = IF, OutputField = EF>,
+    E: EqualityEvaluator<InputField = IF, OutputField = EF>,
 {
     // Ensure that the output buffer size is correct:
     // It should be of size `2^n`, where `n` is the number of variables.
