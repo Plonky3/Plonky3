@@ -1395,7 +1395,7 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
         // We could do this via putting the relevant pieces into a __mm256 vectors but
         // the data fiddling seems to be more expensive than just doing the naive thing.
         let swizzled_dot = x86_64::_mm512_shuffle_epi32::<0b10110001>(dot);
-        let sum = add::<FP>(dot, swizzled_dot);
+        let sum = mm512_mod_add(dot, swizzled_dot, FP::PACKED_P);
         PackedMontyField31AVX512::<FP>::from_vector(sum)
     };
 
