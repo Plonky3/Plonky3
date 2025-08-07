@@ -519,7 +519,6 @@ where
         2 => {
             // Manually unroll for two variable case
             let eq_evaluations = eval_eq_2(eval, scalar);
-
             add_or_set::<_, INITIALIZED>(out, &eq_evaluations);
         }
         3 => {
