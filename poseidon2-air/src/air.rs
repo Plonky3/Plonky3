@@ -2,7 +2,7 @@ use core::borrow::Borrow;
 use core::marker::PhantomData;
 
 use p3_air::{Air, AirBuilder, BaseAir};
-use p3_field::{Field, PrimeCharacteristicRing, PrimeField};
+use p3_field::{PrimeCharacteristicRing, PrimeField};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
@@ -17,7 +17,7 @@ use crate::{FullRound, PartialRound, SBox, generate_trace_rows};
 /// Assumes the field size is at least 16 bits.
 #[derive(Debug)]
 pub struct Poseidon2Air<
-    F: Field,
+    F: PrimeCharacteristicRing,
     LinearLayers,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
@@ -30,7 +30,7 @@ pub struct Poseidon2Air<
 }
 
 impl<
-    F: Field,
+    F: PrimeCharacteristicRing,
     LinearLayers,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
@@ -82,7 +82,7 @@ impl<
 }
 
 impl<
-    F: Field,
+    F: PrimeCharacteristicRing + Sync,
     LinearLayers: Sync,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
@@ -210,7 +210,7 @@ fn eval_full_round<
     builder: &mut AB,
 ) {
     for (i, (s, r)) in state.iter_mut().zip(round_constants.iter()).enumerate() {
-        *s += *r;
+        *s += r.clone();
         eval_sbox(&full_round.sbox[i], s, builder);
     }
     LinearLayers::external_linear_layer(state);
@@ -233,7 +233,7 @@ fn eval_partial_round<
     round_constant: &AB::F,
     builder: &mut AB,
 ) {
-    state[0] += *round_constant;
+    state[0] += round_constant.clone();
     eval_sbox(&partial_round.sbox, &mut state[0], builder);
 
     builder.assert_eq(state[0].clone(), partial_round.post_sbox.clone());
