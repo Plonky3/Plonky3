@@ -20,7 +20,7 @@ use p3_util::reconstitute_from_base;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 
-use crate::Goldilocks;
+use crate::{Goldilocks, P};
 
 const WIDTH: usize = 8;
 
@@ -269,13 +269,13 @@ pub(crate) fn halve(input: __m512i) -> __m512i {
     */
     unsafe {
         // Safety: If this code got compiled then AVX512 intrinsics are available.
-        const ONE: __m512i = unsafe { transmute([1_i64; 16]) };
-        let half = x86_64::_mm512_set1_epi64(P.div_ceil(2) as i64); // Compiler realises this is constant.
+        const ONE: __m512i = unsafe { transmute([1_i64; 8]) };
+        let half = _mm512_set1_epi64(P.div_ceil(2) as i64); // Compiler realises this is constant.
 
-        let least_bit = x86_64::_mm512_test_epi64_mask(input, ONE); // Determine the parity of val.
-        let t = x86_64::_mm512_srli_epi64::<1>(input);
+        let least_bit = _mm512_test_epi64_mask(input, ONE); // Determine the parity of val.
+        let t = _mm512_srli_epi64::<1>(input);
         // This does nothing when least_bit = 1 and sets the corresponding entry to 0 when least_bit = 0
-        x86_64::_mm512_mask_add_epi64(t, least_bit, t, half)
+        _mm512_mask_add_epi64(t, least_bit, t, half)
     }
 }
 
