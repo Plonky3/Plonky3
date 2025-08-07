@@ -211,6 +211,11 @@ where
         <A as PrimeCharacteristicRing>::from_prime_subfield(f).into()
     }
 
+    #[inline]
+    fn halve(&self) -> Self {
+        Self::new(self.value.clone().map(|x| x.halve()))
+    }
+
     #[inline(always)]
     fn square(&self) -> Self {
         let mut res = Self::default();
@@ -314,11 +319,6 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
         }
 
         Some(res)
-    }
-
-    #[inline]
-    fn halve(&self) -> Self {
-        Self::new(self.value.map(|x| x.halve()))
     }
 
     #[inline]

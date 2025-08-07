@@ -27,7 +27,7 @@ use rand::distr::{Distribution, StandardUniform};
 
 use crate::{
     BinomialExtensionData, FieldParameters, MontyField31, PackedMontyParameters,
-    RelativelyPrimePower,
+    RelativelyPrimePower, halve_avx512,
 };
 
 const WIDTH: usize = 16;
@@ -178,6 +178,16 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX512<F
     #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f.into()
+    }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        let val = self.to_vector();
+        let halved = halve_avx512::<FP>(val);
+        unsafe {
+            // Safety: `halve_avx512` returns values in canonical form when given values in canonical form.
+            Self::from_vector(halved)
+        }
     }
 
     #[inline(always)]
