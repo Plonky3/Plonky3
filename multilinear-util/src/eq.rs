@@ -247,7 +247,7 @@ trait EqualityEvaluator {
 
 /// Evaluation Strategy for the base field case.
 ///
-/// We stay in the bae field for as long as possible to simplify instructions and
+/// We stay in the base field for as long as possible to simplify instructions and
 /// reduce the amount of data transferred between cores. In particular this means we
 /// hold of on scaling by `scalar` until the very end.
 struct BaseFieldEvaluator<F, EF>(std::marker::PhantomData<(F, EF)>);
