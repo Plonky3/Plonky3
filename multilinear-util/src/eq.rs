@@ -410,7 +410,7 @@ where
 /// Unlike [`eval_eq_basic`], this function makes heavy use of packed values and parallelism to speed up computations.
 ///
 /// In particular, it computes
-/// ```
+/// ```text
 /// eq(X) = eq_evals[j] * ∏ (1 - X_i + 2X_i z_i)
 /// ```
 ///
