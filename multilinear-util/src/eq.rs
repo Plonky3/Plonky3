@@ -514,7 +514,6 @@ where
         1 => {
             // Manually unroll for single variable case
             let eq_evaluations = eval_eq_1(eval, scalar);
-
             add_or_set::<_, INITIALIZED>(out, &eq_evaluations);
         }
         2 => {
