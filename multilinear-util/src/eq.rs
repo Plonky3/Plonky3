@@ -524,7 +524,6 @@ where
         3 => {
             // Manually unroll for three variable case
             let eq_evaluations = eval_eq_3(eval, scalar);
-
             add_or_set::<_, INITIALIZED>(out, &eq_evaluations);
         }
         _ => {
