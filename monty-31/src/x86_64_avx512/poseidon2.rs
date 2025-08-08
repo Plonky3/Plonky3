@@ -5,14 +5,14 @@ use core::arch::x86_64::{self, __m512i};
 use core::marker::PhantomData;
 use core::mem::transmute;
 
-use p3_field::{PrimeCharacteristicRing, mm512_mod_add};
+use p3_field::{PrimeCharacteristicRing, mm512_mod_add, mm512_mod_sub};
 use p3_poseidon2::{
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, InternalLayer,
     InternalLayerConstructor, MDSMat4, external_initial_permute_state,
     external_terminal_permute_state,
 };
 
-use super::{halve_avx512, sub};
+use super::halve_avx512;
 use crate::{
     FieldParameters, MontyField31, MontyParameters, PackedMontyField31AVX512,
     PackedMontyParameters, RelativelyPrimePower, apply_func_to_even_odd, packed_exp_3,
@@ -328,7 +328,7 @@ pub trait InternalLayerParametersAVX512<PMP: PackedMontyParameters, const WIDTH:
         // the positive powers of two.
         input.as_mut()[5..(8 + Self::NUM_POS)]
             .iter_mut()
-            .for_each(|x| *x = sub::<PMP>(sum, *x));
+            .for_each(|x| *x = mm512_mod_sub(sum, *x, PMP::PACKED_P));
 
         // Diagonal mul output a signed value in (-P, P) so we need to do a signed add.
         // Note that signed add's parameters are not interchangeable. The first parameter must be positive.
