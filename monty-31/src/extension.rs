@@ -1,7 +1,7 @@
 use p3_field::extension::{
     BinomiallyExtendable, BinomiallyExtendableAlgebra, HasTwoAdicBinomialExtension,
 };
-use p3_field::{TwoAdicField, field_to_array, packed_mod_add, PrimeCharacteristicRing};
+use p3_field::{PrimeCharacteristicRing, TwoAdicField, field_to_array, packed_mod_add};
 
 use crate::utils::add;
 use crate::{
@@ -39,9 +39,9 @@ where
         let mut res = [Self::ZERO; WIDTH];
         unsafe {
             // Safe as Self is repr(transparent) and stores a single u32.
-            let a: &[u32; WIDTH] = &*(a.as_ptr() as *const[u32; WIDTH]); 
-            let b: &[u32; WIDTH] = &*(b.as_ptr() as *const[u32; WIDTH]);
-            let res: &mut [u32; WIDTH] = &mut *(res.as_mut_ptr() as *mut[u32; WIDTH]);
+            let a: &[u32; WIDTH] = &*(a.as_ptr() as *const [u32; WIDTH]);
+            let b: &[u32; WIDTH] = &*(b.as_ptr() as *const [u32; WIDTH]);
+            let res: &mut [u32; WIDTH] = &mut *(res.as_mut_ptr() as *mut [u32; WIDTH]);
 
             packed_mod_add(a, b, res, FP::PRIME, add::<FP>);
         }

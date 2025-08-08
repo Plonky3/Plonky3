@@ -2,7 +2,8 @@
 
 #[cfg(all(feature = "nightly-features", target_feature = "avx512f"))]
 use core::arch::x86_64::__m512i;
-use core::{arch::x86_64::{self, __m128i, __m256i}, mem::transmute};
+use core::arch::x86_64::{self, __m128i, __m256i};
+use core::mem::transmute;
 
 // Goal: Compute r = lhs + rhs mod P for lhs, rhs <= P < 2^31
 // Output should mostly lie in [0, P) but is allowed to equal P if lhs = rhs = P.
@@ -101,8 +102,7 @@ pub fn packed_mod_add<const WIDTH: usize>(
     res: &mut [u32; WIDTH],
     p: u32,
     scalar_add: fn(u32, u32) -> u32,
-)
-{
+) {
     match WIDTH {
         1 => res[0] = scalar_add(a[0], b[0]),
         4 => {
