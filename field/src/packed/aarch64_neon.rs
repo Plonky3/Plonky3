@@ -30,3 +30,60 @@ pub fn uint32x4_mod_add(a: uint32x4_t, b: uint32x4_t, p: uint32x4_t) -> uint32x4
         aarch64::vminq_u32(t, u)
     }
 }
+
+/// Add two arrays of integers modulo `P` using packings.
+///
+/// Assumes that `P` is less than `2^31` and `a + b <= 2P` for all array pairs `a, b`.
+/// If the inputs are not in this range, the result may be incorrect.
+/// The result will be in the range `[0, P]` and equal to `(a + b) mod P`.
+/// It will be equal to `P` if and only if `a + b = 2P` so provided `a + b < 2P`
+/// the result is guaranteed to be less than `P`.
+/// 
+/// Scalar add is assumed to be a function which implements `a + b % P` with the 
+/// same specifications as above.
+#[inline(always)]
+pub fn packed_mod_add<const WIDTH: usize>(
+    a: &[u32; WIDTH],
+    b: &[u32; WIDTH],
+    res: &mut [u32; WIDTH],
+    p: u32,
+    scalar_add: fn(u32, u32) -> u32,
+) {
+    match WIDTH {
+        1 => res[0] = a[0] + b[0],
+        4 => {
+            // Perfectly fits into a PackedMontyField31Neon element.
+            let packed_a = PackedMontyField31Neon([a[0], a[1], a[2], a[3]]);
+            let packed_b = PackedMontyField31Neon([b[0], b[1], b[2], b[3]]);
+            let out = packed_a + packed_b;
+
+            res.copy_from_slice(&out.0);
+        }
+        5 => {
+            // We fit what we can into a PackedMontyField31Neon element.
+            // The final add is done using a scalar addition.
+            let packed_a = PackedMontyField31Neon([a[0], a[1], a[2], a[3]]);
+            let packed_b = PackedMontyField31Neon([b[0], b[1], b[2], b[3]]);
+            let out = packed_a + packed_b;
+
+            res.copy_from_slice(&out.0);
+            res[4] = a[4] + b[4];
+
+            res[..4].copy_from_slice(&out.0);
+        }
+        8 => {
+            // This perfectly fits into two PackedMontyField31Neon elements.
+            let packed_a_lo = PackedMontyField31Neon([a[0], a[1], a[2], a[3]]);
+            let packed_b_lo = PackedMontyField31Neon([b[0], b[1], b[2], b[3]]);
+            let out_lo = packed_a_lo + packed_b_lo;
+
+            let packed_a_hi = PackedMontyField31Neon([a[4], a[5], a[6], a[7]]);
+            let packed_b_hi = PackedMontyField31Neon([b[4], b[5], b[6], b[7]]);
+            let out_hi = packed_a_hi + packed_b_hi;
+
+            res[..4].copy_from_slice(&out_lo.0);
+            res[4..].copy_from_slice(&out_hi.0);
+        }
+        _ => panic!("Currently unsupported width for packed addition"),
+    }
+}

@@ -51,6 +51,13 @@ pub(crate) const fn from_monty<MP: MontyParameters>(x: u32) -> u32 {
     monty_reduce::<MP>(x as u64)
 }
 
+/// Add two integers modulo `P = MP::PRIME`.
+/// 
+/// Assumes that `P` is less than `2^31` and `a + b <= 2P` for all array pairs `a, b`.
+/// If the inputs are not in this range, the result may be incorrect.
+/// The result will be in the range `[0, P]` and equal to `(a + b) mod P`.
+/// It will be equal to `P` if and only if `a + b = 2P` so provided `a + b < 2P`
+/// the result is guaranteed to be less than `P`.
 #[inline]
 #[must_use]
 pub(crate) fn add<MP: MontyParameters>(lhs: u32, rhs: u32) -> u32 {
