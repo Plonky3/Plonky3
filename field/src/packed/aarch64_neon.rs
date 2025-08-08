@@ -38,8 +38,8 @@ pub fn uint32x4_mod_add(a: uint32x4_t, b: uint32x4_t, p: uint32x4_t) -> uint32x4
 /// The result will be in the range `[0, P]` and equal to `(a + b) mod P`.
 /// It will be equal to `P` if and only if `a + b = 2P` so provided `a + b < 2P`
 /// the result is guaranteed to be less than `P`.
-/// 
-/// Scalar add is assumed to be a function which implements `a + b % P` with the 
+///
+/// Scalar add is assumed to be a function which implements `a + b % P` with the
 /// same specifications as above.
 #[inline(always)]
 pub fn packed_mod_add<const WIDTH: usize>(
