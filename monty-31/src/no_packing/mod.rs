@@ -42,15 +42,3 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
 {
     octic_mul(a, b, res, FP::W);
 }
-
-/// If no packings are available, we use the generic binomial extension multiplication functions.
-#[inline]
-pub(crate) fn packed_add<FP, const WIDTH: usize>(
-    a: &[MontyField31<FP>; WIDTH],
-    b: &[MontyField31<FP>; WIDTH],
-) -> [MontyField31<FP>; WIDTH]
-where
-    FP: FieldParameters + BinomialExtensionData<WIDTH>,
-{
-    vector_add(a, b)
-}
