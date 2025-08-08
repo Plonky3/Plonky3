@@ -16,7 +16,7 @@ pub fn packed_mod_add<const WIDTH: usize>(
     a: &[u32; WIDTH],
     b: &[u32; WIDTH],
     res: &mut [u32; WIDTH],
-    p: u32,
+    _p: u32,
     scalar_add: fn(u32, u32) -> u32,
 ) {
     res.iter_mut()
