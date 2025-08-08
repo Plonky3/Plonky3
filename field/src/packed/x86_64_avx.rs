@@ -5,10 +5,10 @@ use core::arch::x86_64::__m512i;
 use core::arch::x86_64::{self, __m128i, __m256i};
 
 // Goal: Compute r = lhs + rhs mod P for lhs, rhs <= P < 2^31
-// Output should lie in [0, P).
+// Output should mostly lie in [0, P) but is allowed to equal P if lhs = rhs = P.
 //
 //   Let t := lhs + rhs. Clearly t \in [0, 2P]
-//   Define u := (t - P) mod 2^32 and r := min(t, u)
+//   Define u := (t - P) mod 2^32 and r := min(t, u)  (Note that it is crucial this is an unsigned min)
 //   We argue by cases.
 //      - If t is in [0, P), then due to wraparound, u is in [2^32 - P, 2^32 - 1). As
 //          2^32 - P > P - 1, we conclude that r = t lies in the correct range.
@@ -45,10 +45,11 @@ pub fn mm128_mod_add(a: __m128i, b: __m128i, p: __m128i) -> __m128i {
 ///
 /// This allows us to add 8 elements at once.
 ///
-/// Assumes that `p` is less than `2^31` and `a + b < 2P`.
+/// Assumes that `p` is less than `2^31` and `a + b <= 2P`.
 /// If the inputs are not in this range, the result may be incorrect.
 /// The result will be in the range `[0, P]` and equal to `(a + b) mod p`.
-/// It will be equal to `P` if and only if `a + b = 2P`.
+/// It will be equal to `P` if and only if `a + b = 2P` so provided `a + b < 2P`
+/// the result is guaranteed to be less than `P`.
 #[inline(always)]
 #[must_use]
 pub fn mm256_mod_add(a: __m256i, b: __m256i, p: __m256i) -> __m256i {
@@ -71,10 +72,11 @@ pub fn mm256_mod_add(a: __m256i, b: __m256i, p: __m256i) -> __m256i {
 ///
 /// This allows us to add 16 elements at once.
 ///
-/// Assumes that `p` is less than `2^31` and `a + b < 2P`.
+/// Assumes that `p` is less than `2^31` and `a + b <= 2P`.
 /// If the inputs are not in this range, the result may be incorrect.
 /// The result will be in the range `[0, P]` and equal to `(a + b) mod p`.
-/// It will be equal to `P` if and only if `a + b = 2P`.
+/// It will be equal to `P` if and only if `a + b = 2P` so provided `a + b < 2P`
+/// the result is guaranteed to be less than `P`.
 #[inline(always)]
 #[must_use]
 pub fn mm512_mod_add(a: __m512i, b: __m512i, p: __m512i) -> __m512i {
@@ -82,7 +84,7 @@ pub fn mm512_mod_add(a: __m512i, b: __m512i, p: __m512i) -> __m512i {
     //      vpaddd   t, lhs, rhs
     //      vpsubd   u, t, P
     //      vpminud  res, t, u
-    // throughput: 1 cyc/vec (8 els/cyc)
+    // throughput: 1.5 cyc/vec (10.67 els/cyc)
     // latency: 3 cyc
 
     unsafe {

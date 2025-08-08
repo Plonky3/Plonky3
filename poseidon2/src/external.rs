@@ -141,12 +141,8 @@ pub fn mds_light_permutation<
             // Now, we apply the outer circulant matrix (to compute the y_i values).
 
             // We first precompute the four sums of every four elements.
-            let sums: [R; 4] = core::array::from_fn(|k| {
-                (0..WIDTH)
-                    .step_by(4)
-                    .map(|j| state[j + k].clone())
-                    .sum::<R>()
-            });
+            let sums: [R; 4] =
+                core::array::from_fn(|k| (0..WIDTH).step_by(4).map(|j| state[j + k].clone()).sum());
 
             // The formula for each y_i involves 2x_i' term and x_j' terms for each j that equals i mod 4.
             // In other words, we can add a single copy of x_i' to the appropriate one of our precomputed sums
@@ -337,4 +333,75 @@ pub fn external_initial_permute_state<
     // After the initial mds_light_permutation, the remaining layers are identical
     // to the terminal permutation simply with different constants.
     external_terminal_permute_state(state, initial_external_constants, add_rc_and_sbox, mat4)
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::BabyBear;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    use super::*;
+
+    type F = BabyBear;
+
+    #[test]
+    fn test_apply_mat4() {
+        // Use a seeded RNG
+        let mut rng = SmallRng::seed_from_u64(12345678);
+
+        // Define a test input: x = [x0, x1, x2, x3]
+        let x0: F = rng.random();
+        let x1: F = rng.random();
+        let x2: F = rng.random();
+        let x3: F = rng.random();
+        let mut x = [x0, x1, x2, x3];
+
+        // Apply the matrix transformation in place
+        apply_mat4(&mut x);
+
+        // We compute the expected values according to the matrix multiplication formula.
+        // [ 2 3 1 1 ]
+        // [ 1 2 3 1 ]
+        // [ 1 1 2 3 ]
+        // [ 3 1 1 2 ]
+        let expected = [
+            F::TWO * x0 + F::from_u8(3) * x1 + x2 + x3,
+            x0 + F::TWO * x1 + F::from_u8(3) * x2 + x3,
+            x0 + x1 + F::TWO * x2 + F::from_u8(3) * x3,
+            F::from_u8(3) * x0 + x1 + x2 + F::TWO * x3,
+        ];
+
+        assert_eq!(x, expected, "apply_mat4 did not produce expected output");
+    }
+
+    #[test]
+    fn test_apply_hl_mat4_with_manual_verification() {
+        // Use a seeded RNG
+        let mut rng = SmallRng::seed_from_u64(87654321);
+
+        // Generate random values for the input vector
+        let x0: F = rng.random();
+        let x1: F = rng.random();
+        let x2: F = rng.random();
+        let x3: F = rng.random();
+        let mut x = [x0, x1, x2, x3];
+
+        // Apply the hl matrix in-place
+        apply_hl_mat4(&mut x);
+
+        // Manually compute the result of multiplying by:
+        // [ 5 7 1 3 ]
+        // [ 4 6 1 1 ]
+        // [ 1 3 5 7 ]
+        // [ 1 1 4 6 ]
+        let expected = [
+            F::from_u8(5) * x0 + F::from_u8(7) * x1 + x2 + F::from_u8(3) * x3,
+            F::from_u8(4) * x0 + F::from_u8(6) * x1 + x2 + x3,
+            x0 + F::from_u8(3) * x1 + F::from_u8(5) * x2 + F::from_u8(7) * x3,
+            x0 + x1 + F::from_u8(4) * x2 + F::from_u8(6) * x3,
+        ];
+
+        assert_eq!(x, expected, "apply_hl_mat4 did not produce expected output");
+    }
 }

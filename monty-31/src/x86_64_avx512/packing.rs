@@ -19,7 +19,7 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2,
+    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, mm512_mod_add,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
@@ -112,7 +112,7 @@ impl<PMP: PackedMontyParameters> Add for PackedMontyField31AVX512<PMP> {
     fn add(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = add::<PMP>(lhs, rhs);
+        let res = mm512_mod_add(lhs, rhs, PMP::PACKED_P);
         unsafe {
             // Safety: `add` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
@@ -294,36 +294,6 @@ impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> PermutationMon
 {
     fn injective_exp_root_n(&self) -> Self {
         FP::exp_root_d(*self)
-    }
-}
-
-/// Add two vectors of MontyField31 elements in canonical form.
-///
-/// We allow a slight loosening of the canonical form requirement. One of this inputs
-/// must be in canonical form [0, P) but the other is also allowed to equal P.
-/// If the inputs do not conform to this representation, the result is undefined.
-#[inline]
-#[must_use]
-pub(crate) fn add<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
-    // We want this to compile to:
-    //      vpaddd   t, lhs, rhs
-    //      vpsubd   u, t, P
-    //      vpminud  res, t, u
-    // throughput: 1.5 cyc/vec (10.67 els/cyc)
-    // latency: 3 cyc
-
-    // Let t := lhs + rhs. We want to return t mod P. Recall that lhs and rhs are in [0, P]
-    //   with at most one of them equal to P. Hence t is in [0, 2P - 1] and so it suffices
-    //   to return t if t < P and t - P otherwise.
-    // Let u := (t - P) mod 2^32 and r := unsigned_min(t, u).
-    // If t is in [0, P - 1], then u is in (P - 1 <) 2^32 - P, ..., 2^32 - 1 and r = t.
-    // Otherwise, t is in [P, 2P - 1], and u is in [0, P - 1] (< P) and r = u. Hence, r is t if
-    //   t < P and t - P otherwise, as desired.
-    unsafe {
-        // Safety: If this code got compiled then AVX-512F intrinsics are available.
-        let t = x86_64::_mm512_add_epi32(lhs, rhs);
-        let u = x86_64::_mm512_sub_epi32(t, MPAVX512::PACKED_P);
-        x86_64::_mm512_min_epu32(t, u)
     }
 }
 
@@ -607,7 +577,7 @@ fn xor<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
         // Unfortunately, AVX512 has no equivalent of vpsignd so we can't do the same
         // signed_add trick as in the AVX2 case. Instead we get a reduced value from mul
         // and add on rhs in the standard way.
-        add::<MPAVX512>(rhs, mul_res)
+        mm512_mod_add(rhs, mul_res, MPAVX512::PACKED_P)
     }
 }
 
@@ -1425,7 +1395,7 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
         // We could do this via putting the relevant pieces into a __mm256 vectors but
         // the data fiddling seems to be more expensive than just doing the naive thing.
         let swizzled_dot = x86_64::_mm512_shuffle_epi32::<0b10110001>(dot);
-        let sum = add::<FP>(dot, swizzled_dot);
+        let sum = mm512_mod_add(dot, swizzled_dot, FP::PACKED_P);
         PackedMontyField31AVX512::<FP>::from_vector(sum)
     };
 
