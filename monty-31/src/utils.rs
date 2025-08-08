@@ -51,6 +51,17 @@ pub(crate) const fn from_monty<MP: MontyParameters>(x: u32) -> u32 {
     monty_reduce::<MP>(x as u64)
 }
 
+#[inline]
+#[must_use]
+pub(crate) fn add<MP: MontyParameters>(lhs: u32, rhs: u32) -> u32 {
+    let mut sum = lhs + rhs;
+    let (corr_sum, over) = sum.overflowing_sub(MP::PRIME);
+    if !over {
+        sum = corr_sum;
+    }
+    sum
+}
+
 /// Given an element `x` from a 31 bit field `F` compute `x/2`.
 /// The input must be in `[0, P)`.
 /// The output will also be in `[0, P)`.
