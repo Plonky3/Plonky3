@@ -72,7 +72,7 @@ where
         self.permutation.permute_mut(&mut self.sponge_state);
 
         self.output_buffer.clear();
-        for &pf_val in self.sponge_state.iter() {
+        for &pf_val in self.sponge_state[0..RATE].iter() {
             let f_vals = split_32(pf_val, self.num_f_elms);
             for f_val in f_vals {
                 self.output_buffer.push(f_val);
