@@ -13,7 +13,10 @@ pub enum DftChoice<F> {
     Parallel(Radix2DitParallel<F>),
 }
 
-impl<F: Default> Default for DftChoice<F> {
+impl<F> Default for DftChoice<F>
+where
+    Radix2DitParallel<F>: Default,
+{
     // We have to fix a default for the `TwoAdicSubgroupDft` trait. We choose `Radix2DitParallel` as one of the features
     // of `RecursiveDft` is that it works better when initialized with knowledge of the expected size.
     fn default() -> Self {
