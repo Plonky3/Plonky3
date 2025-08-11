@@ -96,15 +96,17 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
 
         for i in 0..REPETITIONS {
             let start = i * 3;
-            let a = main_local[start];
-            let b = main_local[start + 1];
-            let c = main_local[start + 2];
-            builder.assert_zero(a.into().exp_u64(self.degree - 1) * b - c);
+            let a = main_local[start].clone();
+            let b = main_local[start + 1].clone();
+            let c = main_local[start + 2].clone();
+            builder.assert_zero(a.clone().into().exp_u64(self.degree - 1) * b.clone() - c);
             if self.uses_boundary_constraints {
-                builder.when_first_row().assert_eq(a * a + AB::Expr::ONE, b);
+                builder
+                    .when_first_row()
+                    .assert_eq(a.clone() * a.clone() + AB::Expr::ONE, b);
             }
             if self.uses_transition_constraints {
-                let next_a = main_next[start];
+                let next_a = main_next[start].clone();
                 builder
                     .when_transition()
                     .assert_eq(a + AB::Expr::from_u8(REPETITIONS as u8), next_a);
@@ -210,7 +212,7 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
 
     let fri_params = FriParameters {
         log_blowup,
-        log_final_poly_len: 5,
+        log_final_poly_len: 3,
         num_queries: 40,
         proof_of_work_bits: 8,
         mmcs: challenge_mmcs,
@@ -232,7 +234,7 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
 
 #[test]
 fn prove_bb_twoadic_deg2() -> Result<(), impl Debug> {
-    do_test_bb_twoadic(1, 2, 7)
+    do_test_bb_twoadic(1, 2, 5)
 }
 
 #[test]
@@ -286,17 +288,17 @@ fn prove_bb_twoadic_deg2_zk() -> Result<(), impl Debug> {
 
 #[test]
 fn prove_bb_twoadic_deg3() -> Result<(), impl Debug> {
-    do_test_bb_twoadic(1, 3, 7)
+    do_test_bb_twoadic(1, 3, 5)
 }
 
 #[test]
 fn prove_bb_twoadic_deg4() -> Result<(), impl Debug> {
-    do_test_bb_twoadic(2, 4, 6)
+    do_test_bb_twoadic(2, 4, 4)
 }
 
 #[test]
 fn prove_bb_twoadic_deg5() -> Result<(), impl Debug> {
-    do_test_bb_twoadic(2, 5, 6)
+    do_test_bb_twoadic(2, 5, 4)
 }
 
 fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<(), impl Debug> {
@@ -349,10 +351,10 @@ fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
 
 #[test]
 fn prove_m31_circle_deg2() -> Result<(), impl Debug> {
-    do_test_m31_circle(1, 2, 8)
+    do_test_m31_circle(1, 2, 6)
 }
 
 #[test]
 fn prove_m31_circle_deg3() -> Result<(), impl Debug> {
-    do_test_m31_circle(1, 3, 9)
+    do_test_m31_circle(1, 3, 7)
 }

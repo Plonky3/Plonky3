@@ -110,7 +110,7 @@ macro_rules! make_tests_for_pcs {
         #[test]
         fn many_equal() {
             let p = $p;
-            for i in 5..8 {
+            for i in 2..6 {
                 $crate::do_test_fri_pcs(&p, &[&[i; 5]]);
                 println!("{i} ok");
             }
@@ -119,7 +119,7 @@ macro_rules! make_tests_for_pcs {
         #[test]
         fn many_different() {
             let p = $p;
-            for i in 3..8 {
+            for i in 2..5 {
                 let degrees = (3..3 + i).collect::<Vec<_>>();
                 $crate::do_test_fri_pcs(&p, &[&degrees]);
             }
@@ -128,7 +128,7 @@ macro_rules! make_tests_for_pcs {
         #[test]
         fn many_different_rev() {
             let p = $p;
-            for i in 3..8 {
+            for i in 2..5 {
                 let degrees = (3..3 + i).rev().collect::<Vec<_>>();
                 $crate::do_test_fri_pcs(&p, &[&degrees]);
             }

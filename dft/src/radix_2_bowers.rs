@@ -84,7 +84,7 @@ fn bowers_g<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
     let log_h = log2_strict_usize(h);
 
     let root = F::two_adic_generator(log_h);
-    let mut twiddles: Vec<_> = root.powers().take(h / 2).collect();
+    let mut twiddles = root.powers().collect_n(h / 2);
     reverse_slice_index_bits(&mut twiddles);
     // SAFETY: DifButterfly is `repr(transparent)`
     let twiddles: Vec<DifButterfly<F>> = unsafe { flatten_to_base(twiddles) };
@@ -101,7 +101,7 @@ fn bowers_g_t<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
     let log_h = log2_strict_usize(h);
 
     let root_inv = F::two_adic_generator(log_h).inverse();
-    let mut twiddles: Vec<_> = root_inv.powers().take(h / 2).collect();
+    let mut twiddles = root_inv.powers().collect_n(h / 2);
     reverse_slice_index_bits(&mut twiddles);
     // SAFETY: DitButterfly is `repr(transparent)`
     let twiddles: Vec<DitButterfly<F>> = unsafe { flatten_to_base(twiddles) };

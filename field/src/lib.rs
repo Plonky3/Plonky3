@@ -1,6 +1,14 @@
 //! A framework for finite fields.
 
 #![no_std]
+#![cfg_attr(
+    all(
+        feature = "nightly-features",
+        target_arch = "x86_64",
+        target_feature = "avx512f"
+    ),
+    feature(stdarch_x86_avx512)
+)]
 
 extern crate alloc;
 
@@ -12,10 +20,14 @@ pub mod extension;
 mod field;
 mod helpers;
 pub mod integers;
+pub mod interleaves;
+pub mod op_assign_macros;
 mod packed;
 
 pub use array::*;
 pub use batch_inverse::*;
 pub use field::*;
 pub use helpers::*;
+#[allow(unused_imports)]
+pub use interleaves::*; // Only used when vectorization is available.
 pub use packed::*;

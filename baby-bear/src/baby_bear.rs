@@ -1,5 +1,5 @@
-use p3_field::PrimeCharacteristicRing;
 use p3_field::exponentiation::exp_1725656503;
+use p3_field::{Algebra, PrimeCharacteristicRing};
 use p3_monty_31::{
     BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
     PackedMontyParameters, RelativelyPrimePower, TwoAdicData,
@@ -74,12 +74,32 @@ impl BinomialExtensionData<4> for BabyBearParameters {
 
 impl BinomialExtensionData<5> for BabyBearParameters {
     const W: BabyBear = BabyBear::new(2);
+
+    #[inline(always)]
+    fn mul_w<A: Algebra<MontyField31<Self>>>(a: A) -> A {
+        a.double()
+    }
+
     const DTH_ROOT: BabyBear = BabyBear::new(815036133);
     const EXT_GENERATOR: [BabyBear; 5] = BabyBear::new_array([8, 1, 0, 0, 0]);
     const EXT_TWO_ADICITY: usize = 27;
 
     type ArrayLike = [[BabyBear; 5]; 0];
     const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike = [];
+}
+
+impl BinomialExtensionData<8> for BabyBearParameters {
+    const W: BabyBear = BabyBear::new(11);
+    const DTH_ROOT: BabyBear = BabyBear::new(420899707);
+    const EXT_GENERATOR: [BabyBear; 8] = BabyBear::new_array([5, 1, 0, 0, 0, 0, 0, 0]);
+    const EXT_TWO_ADICITY: usize = 30;
+
+    type ArrayLike = [[BabyBear; 8]; 3];
+    const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike = BabyBear::new_2d_array([
+        [0, 0, 0, 0, 1996171314, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 124907976, 0],
+        [0, 0, 0, 518392818, 0, 0, 0, 0],
+    ]);
 }
 
 #[cfg(test)]

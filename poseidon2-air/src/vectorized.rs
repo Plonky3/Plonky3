@@ -1,7 +1,7 @@
 use core::borrow::{Borrow, BorrowMut};
 
 use p3_air::{Air, AirBuilder, BaseAir};
-use p3_field::{Field, PrimeField};
+use p3_field::{PrimeCharacteristicRing, PrimeField};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
@@ -134,7 +134,7 @@ impl<
 
 /// A "vectorized" version of Poseidon2Air, for computing multiple Poseidon2 permutations per row.
 pub struct VectorizedPoseidon2Air<
-    F: Field,
+    F: PrimeCharacteristicRing,
     LinearLayers,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
@@ -155,7 +155,7 @@ pub struct VectorizedPoseidon2Air<
 }
 
 impl<
-    F: Field,
+    F: PrimeCharacteristicRing,
     LinearLayers,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
@@ -209,7 +209,7 @@ impl<
 }
 
 impl<
-    F: Field,
+    F: PrimeCharacteristicRing + Sync,
     LinearLayers: Sync,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,

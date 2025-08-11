@@ -4,17 +4,26 @@ use core::arch::asm;
 use core::hint::unreachable_unchecked;
 use core::iter::{Product, Sum};
 use core::mem::transmute;
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
+use p3_field::interleave::{interleave_u32, interleave_u64};
+use p3_field::op_assign_macros::{
+    impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
+    impl_packed_value, impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field,
+    ring_sum,
+};
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing,
+    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, uint32x4_mod_add,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 
-use crate::{FieldParameters, MontyField31, PackedMontyParameters, RelativelyPrimePower};
+use crate::{
+    BinomialExtensionData, FieldParameters, MontyField31, PackedMontyParameters,
+    RelativelyPrimePower,
+};
 
 const WIDTH: usize = 4;
 
@@ -24,7 +33,7 @@ pub trait MontyParametersNeon {
 }
 
 /// Vectorized NEON implementation of `MontyField31` arithmetic.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // Needed to make `transmute`s safe.
 pub struct PackedMontyField31Neon<PMP: PackedMontyParameters>(pub [MontyField31<PMP>; WIDTH]);
 
@@ -70,15 +79,49 @@ impl<PMP: PackedMontyParameters> PackedMontyField31Neon<PMP> {
     }
 }
 
+impl<PMP: PackedMontyParameters> From<MontyField31<PMP>> for PackedMontyField31Neon<PMP> {
+    #[inline]
+    fn from(value: MontyField31<PMP>) -> Self {
+        Self::broadcast(value)
+    }
+}
+
 impl<PMP: PackedMontyParameters> Add for PackedMontyField31Neon<PMP> {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = add::<PMP>(lhs, rhs);
+        let res = uint32x4_mod_add(lhs, rhs, PMP::PACKED_P);
         unsafe {
-            // Safety: `add` returns values in canonical form when given values in canonical form.
+            // Safety: `uint32x4_mod_add` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
+    }
+}
+
+impl<PMP: PackedMontyParameters> Sub for PackedMontyField31Neon<PMP> {
+    type Output = Self;
+    #[inline]
+    fn sub(self, rhs: Self) -> Self {
+        let lhs = self.to_vector();
+        let rhs = rhs.to_vector();
+        let res = sub::<PMP>(lhs, rhs);
+        unsafe {
+            // Safety: `sub` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
+    }
+}
+
+impl<PMP: PackedMontyParameters> Neg for PackedMontyField31Neon<PMP> {
+    type Output = Self;
+    #[inline]
+    fn neg(self) -> Self {
+        let val = self.to_vector();
+        let res = neg::<PMP>(val);
+        unsafe {
+            // Safety: `neg` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
@@ -98,30 +141,72 @@ impl<PMP: PackedMontyParameters> Mul for PackedMontyField31Neon<PMP> {
     }
 }
 
-impl<PMP: PackedMontyParameters> Neg for PackedMontyField31Neon<PMP> {
-    type Output = Self;
+impl_add_assign!(PackedMontyField31Neon, (PackedMontyParameters, PMP));
+impl_sub_assign!(PackedMontyField31Neon, (PackedMontyParameters, PMP));
+impl_mul_methods!(PackedMontyField31Neon, (FieldParameters, FP));
+ring_sum!(PackedMontyField31Neon, (FieldParameters, FP));
+impl_rng!(PackedMontyField31Neon, (PackedMontyParameters, PMP));
+
+impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31Neon<FP> {
+    type PrimeSubfield = MontyField31<FP>;
+
+    const ZERO: Self = Self::broadcast(MontyField31::ZERO);
+    const ONE: Self = Self::broadcast(MontyField31::ONE);
+    const TWO: Self = Self::broadcast(MontyField31::TWO);
+    const NEG_ONE: Self = Self::broadcast(MontyField31::NEG_ONE);
+
     #[inline]
-    fn neg(self) -> Self {
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
+        f.into()
+    }
+
+    #[inline]
+    fn cube(&self) -> Self {
         let val = self.to_vector();
-        let res = neg::<PMP>(val);
+        let res = cube::<FP>(val);
         unsafe {
-            // Safety: `neg` returns values in canonical form when given values in canonical form.
+            // Safety: `cube` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
+
+    #[inline(always)]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        // SAFETY: this is a repr(transparent) wrapper around an array.
+        unsafe { reconstitute_from_base(MontyField31::<FP>::zero_vec(len * WIDTH)) }
+    }
 }
 
-impl<PMP: PackedMontyParameters> Sub for PackedMontyField31Neon<PMP> {
-    type Output = Self;
-    #[inline]
-    fn sub(self, rhs: Self) -> Self {
-        let lhs = self.to_vector();
-        let rhs = rhs.to_vector();
-        let res = sub::<PMP>(lhs, rhs);
-        unsafe {
-            // Safety: `sub` returns values in canonical form when given values in canonical form.
-            Self::from_vector(res)
-        }
+impl_add_base_field!(
+    PackedMontyField31Neon,
+    MontyField31,
+    (PackedMontyParameters, PMP)
+);
+impl_sub_base_field!(
+    PackedMontyField31Neon,
+    MontyField31,
+    (PackedMontyParameters, PMP)
+);
+impl_mul_base_field!(
+    PackedMontyField31Neon,
+    MontyField31,
+    (PackedMontyParameters, PMP)
+);
+impl_div_methods!(PackedMontyField31Neon, MontyField31, (FieldParameters, FP));
+impl_sum_prod_base_field!(PackedMontyField31Neon, MontyField31, (FieldParameters, FP));
+
+impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31Neon<FP> {}
+
+impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> InjectiveMonomial<D>
+    for PackedMontyField31Neon<FP>
+{
+}
+
+impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> PermutationMonomial<D>
+    for PackedMontyField31Neon<FP>
+{
+    fn injective_exp_root_n(&self) -> Self {
+        FP::exp_root_d(*self)
     }
 }
 
@@ -149,34 +234,6 @@ fn confuse_compiler(x: uint32x4_t) -> uint32x4_t {
         }
     }
     y
-}
-
-/// Add two vectors of Monty31 field elements in canonical form.
-/// If the inputs are not in canonical form, the result is undefined.
-#[inline]
-#[must_use]
-fn add<MPNeon: MontyParametersNeon>(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
-    // We want this to compile to:
-    //      add   t.4s, lhs.4s, rhs.4s
-    //      sub   u.4s, t.4s, P.4s
-    //      umin  res.4s, t.4s, u.4s
-    // throughput: .75 cyc/vec (5.33 els/cyc)
-    // latency: 6 cyc
-
-    //   Let `t := lhs + rhs`. We want to return `t mod P`. Recall that `lhs` and `rhs` are in
-    // `0, ..., P - 1`, so `t` is in `0, ..., 2 P - 2 (< 2^32)`. It suffices to return `t` if
-    // `t < P` and `t - P` otherwise.
-    //   Let `u := (t - P) mod 2^32` and `r := unsigned_min(t, u)`.
-    //   If `t` is in `0, ..., P - 1`, then `u` is in `(P - 1 <) 2^32 - P, ..., 2^32 - 1` and
-    // `r = t`. Otherwise `t` is in `P, ..., 2 P - 2`, `u` is in `0, ..., P - 2 (< P)` and `r = u`.
-    // Hence, `r` is `t` if `t < P` and `t - P` otherwise, as desired.
-
-    unsafe {
-        // Safety: If this code got compiled then NEON intrinsics are available.
-        let t = aarch64::vaddq_u32(lhs, rhs);
-        let u = aarch64::vsubq_u32(t, MPNeon::PACKED_P);
-        aarch64::vminq_u32(t, u)
-    }
 }
 
 // MONTGOMERY MULTIPLICATION
@@ -392,305 +449,163 @@ fn sub<MPNeon: MontyParametersNeon>(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x
     }
 }
 
-impl<PMP: PackedMontyParameters> From<MontyField31<PMP>> for PackedMontyField31Neon<PMP> {
-    #[inline]
-    fn from(value: MontyField31<PMP>) -> Self {
-        Self::broadcast(value)
-    }
-}
-
-impl<PMP: PackedMontyParameters> Default for PackedMontyField31Neon<PMP> {
-    #[inline]
-    fn default() -> Self {
-        MontyField31::<PMP>::default().into()
-    }
-}
-
-impl<PMP: PackedMontyParameters> AddAssign for PackedMontyField31Neon<PMP> {
-    #[inline]
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
-impl<PMP: PackedMontyParameters> MulAssign for PackedMontyField31Neon<PMP> {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = *self * rhs;
-    }
-}
-
-impl<PMP: PackedMontyParameters> SubAssign for PackedMontyField31Neon<PMP> {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
-    }
-}
-
-impl<FP: FieldParameters> Sum for PackedMontyField31Neon<FP> {
-    #[inline]
-    fn sum<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::ZERO)
-    }
-}
-
-impl<FP: FieldParameters> Product for PackedMontyField31Neon<FP> {
-    #[inline]
-    fn product<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::ONE)
-    }
-}
-
-impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31Neon<FP> {
-    type PrimeSubfield = MontyField31<FP>;
-
-    const ZERO: Self = Self::broadcast(MontyField31::ZERO);
-    const ONE: Self = Self::broadcast(MontyField31::ONE);
-    const TWO: Self = Self::broadcast(MontyField31::TWO);
-    const NEG_ONE: Self = Self::broadcast(MontyField31::NEG_ONE);
-
-    #[inline]
-    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
-        f.into()
-    }
-
-    #[inline]
-    fn cube(&self) -> Self {
-        let val = self.to_vector();
-        let res = cube::<FP>(val);
-        unsafe {
-            // Safety: `cube` returns values in canonical form when given values in canonical form.
-            Self::from_vector(res)
-        }
-    }
-
-    #[inline(always)]
-    fn zero_vec(len: usize) -> Vec<Self> {
-        // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { reconstitute_from_base(MontyField31::<FP>::zero_vec(len * WIDTH)) }
-    }
-}
-
-impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31Neon<FP> {}
-
-impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> InjectiveMonomial<D>
-    for PackedMontyField31Neon<FP>
-{
-}
-
-impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> PermutationMonomial<D>
-    for PackedMontyField31Neon<FP>
-{
-    fn injective_exp_root_n(&self) -> Self {
-        FP::exp_root_d(*self)
-    }
-}
-
-impl<PMP: PackedMontyParameters> Add<MontyField31<PMP>> for PackedMontyField31Neon<PMP> {
-    type Output = Self;
-    #[inline]
-    fn add(self, rhs: MontyField31<PMP>) -> Self {
-        self + Self::from(rhs)
-    }
-}
-
-impl<PMP: PackedMontyParameters> Mul<MontyField31<PMP>> for PackedMontyField31Neon<PMP> {
-    type Output = Self;
-    #[inline]
-    fn mul(self, rhs: MontyField31<PMP>) -> Self {
-        self * Self::from(rhs)
-    }
-}
-
-impl<PMP: PackedMontyParameters> Sub<MontyField31<PMP>> for PackedMontyField31Neon<PMP> {
-    type Output = Self;
-    #[inline]
-    fn sub(self, rhs: MontyField31<PMP>) -> Self {
-        self - Self::from(rhs)
-    }
-}
-
-impl<PMP: PackedMontyParameters> AddAssign<MontyField31<PMP>> for PackedMontyField31Neon<PMP> {
-    #[inline]
-    fn add_assign(&mut self, rhs: MontyField31<PMP>) {
-        *self += Self::from(rhs)
-    }
-}
-
-impl<PMP: PackedMontyParameters> MulAssign<MontyField31<PMP>> for PackedMontyField31Neon<PMP> {
-    #[inline]
-    fn mul_assign(&mut self, rhs: MontyField31<PMP>) {
-        *self *= Self::from(rhs)
-    }
-}
-
-impl<PMP: PackedMontyParameters> SubAssign<MontyField31<PMP>> for PackedMontyField31Neon<PMP> {
-    #[inline]
-    fn sub_assign(&mut self, rhs: MontyField31<PMP>) {
-        *self -= Self::from(rhs)
-    }
-}
-
-impl<FP: FieldParameters> Sum<MontyField31<FP>> for PackedMontyField31Neon<FP> {
-    #[inline]
-    fn sum<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = MontyField31<FP>>,
-    {
-        iter.sum::<MontyField31<FP>>().into()
-    }
-}
-
-impl<FP: FieldParameters> Product<MontyField31<FP>> for PackedMontyField31Neon<FP> {
-    #[inline]
-    fn product<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = MontyField31<FP>>,
-    {
-        iter.product::<MontyField31<FP>>().into()
-    }
-}
-
-impl<FP: FieldParameters> Div<MontyField31<FP>> for PackedMontyField31Neon<FP> {
-    type Output = Self;
-    #[allow(clippy::suspicious_arithmetic_impl)]
-    #[inline]
-    fn div(self, rhs: MontyField31<FP>) -> Self {
-        self * rhs.inverse()
-    }
-}
-
-impl<PMP: PackedMontyParameters> Add<PackedMontyField31Neon<PMP>> for MontyField31<PMP> {
-    type Output = PackedMontyField31Neon<PMP>;
-    #[inline]
-    fn add(self, rhs: PackedMontyField31Neon<PMP>) -> PackedMontyField31Neon<PMP> {
-        PackedMontyField31Neon::<PMP>::from(self) + rhs
-    }
-}
-
-impl<PMP: PackedMontyParameters> Mul<PackedMontyField31Neon<PMP>> for MontyField31<PMP> {
-    type Output = PackedMontyField31Neon<PMP>;
-    #[inline]
-    fn mul(self, rhs: PackedMontyField31Neon<PMP>) -> PackedMontyField31Neon<PMP> {
-        PackedMontyField31Neon::<PMP>::from(self) * rhs
-    }
-}
-
-impl<PMP: PackedMontyParameters> Sub<PackedMontyField31Neon<PMP>> for MontyField31<PMP> {
-    type Output = PackedMontyField31Neon<PMP>;
-    #[inline]
-    fn sub(self, rhs: PackedMontyField31Neon<PMP>) -> PackedMontyField31Neon<PMP> {
-        PackedMontyField31Neon::<PMP>::from(self) - rhs
-    }
-}
-
-impl<PMP: PackedMontyParameters> Distribution<PackedMontyField31Neon<PMP>> for StandardUniform {
-    #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMontyField31Neon<PMP> {
-        PackedMontyField31Neon::<PMP>(rng.random())
-    }
-}
-
-#[inline]
-#[must_use]
-fn interleave1(v0: uint32x4_t, v1: uint32x4_t) -> (uint32x4_t, uint32x4_t) {
-    // We want this to compile to:
-    //      trn1  res0.4s, v0.4s, v1.4s
-    //      trn2  res1.4s, v0.4s, v1.4s
-    // throughput: .5 cyc/2 vec (16 els/cyc)
-    // latency: 2 cyc
-    unsafe {
-        // Safety: If this code got compiled then NEON intrinsics are available.
-        (aarch64::vtrn1q_u32(v0, v1), aarch64::vtrn2q_u32(v0, v1))
-    }
-}
-
-#[inline]
-#[must_use]
-fn interleave2(v0: uint32x4_t, v1: uint32x4_t) -> (uint32x4_t, uint32x4_t) {
-    // We want this to compile to:
-    //      trn1  res0.2d, v0.2d, v1.2d
-    //      trn2  res1.2d, v0.2d, v1.2d
-    // throughput: .5 cyc/2 vec (16 els/cyc)
-    // latency: 2 cyc
-
-    // To transpose 64-bit blocks, cast the [u32; 4] vectors to [u64; 2], transpose, and cast back.
-    unsafe {
-        // Safety: If this code got compiled then NEON intrinsics are available.
-        let v0 = aarch64::vreinterpretq_u64_u32(v0);
-        let v1 = aarch64::vreinterpretq_u64_u32(v1);
-        (
-            aarch64::vreinterpretq_u32_u64(aarch64::vtrn1q_u64(v0, v1)),
-            aarch64::vreinterpretq_u32_u64(aarch64::vtrn2q_u64(v0, v1)),
-        )
-    }
-}
-
-unsafe impl<FP: FieldParameters> PackedValue for PackedMontyField31Neon<FP> {
-    type Value = MontyField31<FP>;
-    const WIDTH: usize = WIDTH;
-
-    #[inline]
-    fn from_slice(slice: &[MontyField31<FP>]) -> &Self {
-        assert_eq!(slice.len(), Self::WIDTH);
-        unsafe {
-            // Safety: `[MontyField31; WIDTH]` can be transmuted to `PackedMontyField31Neon` since the
-            // latter is `repr(transparent)`. They have the same alignment, so the reference cast is
-            // safe too.
-            &*slice.as_ptr().cast()
-        }
-    }
-
-    #[inline]
-    fn from_slice_mut(slice: &mut [MontyField31<FP>]) -> &mut Self {
-        assert_eq!(slice.len(), Self::WIDTH);
-        unsafe {
-            // Safety: `[MontyField31; WIDTH]` can be transmuted to `PackedMontyField31Neon` since the
-            // latter is `repr(transparent)`. They have the same alignment, so the reference cast is
-            // safe too.
-            &mut *slice.as_mut_ptr().cast()
-        }
-    }
-
-    #[inline]
-    fn from_fn<F: FnMut(usize) -> MontyField31<FP>>(f: F) -> Self {
-        Self(core::array::from_fn(f))
-    }
-
-    #[inline]
-    fn as_slice(&self) -> &[MontyField31<FP>] {
-        &self.0
-    }
-
-    #[inline]
-    fn as_slice_mut(&mut self) -> &mut [MontyField31<FP>] {
-        &mut self.0
-    }
-}
+impl_packed_value!(
+    PackedMontyField31Neon,
+    MontyField31,
+    WIDTH,
+    (PackedMontyParameters, PMP)
+);
 
 unsafe impl<FP: FieldParameters> PackedField for PackedMontyField31Neon<FP> {
     type Scalar = MontyField31<FP>;
 }
 
-unsafe impl<FP: FieldParameters> PackedFieldPow2 for PackedMontyField31Neon<FP> {
-    #[inline]
-    fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
-        let (v0, v1) = (self.to_vector(), other.to_vector());
-        let (res0, res1) = match block_len {
-            1 => interleave1(v0, v1),
-            2 => interleave2(v0, v1),
-            4 => (v0, v1),
-            _ => panic!("unsupported block_len"),
-        };
-        unsafe {
-            // Safety: all values are in canonical form (we haven't changed them).
-            (Self::from_vector(res0), Self::from_vector(res1))
-        }
-    }
+impl_packed_field_pow_2!(
+    PackedMontyField31Neon, (FieldParameters, FP);
+    [
+        (1, interleave_u32),
+        (2, interleave_u64),
+    ],
+    WIDTH
+);
+
+/// Multiplication in a quartic binomial extension field.
+#[inline]
+pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
+    a: &[MontyField31<FP>; WIDTH],
+    b: &[MontyField31<FP>; WIDTH],
+    res: &mut [MontyField31<FP>; WIDTH],
+) where
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+{
+    // TODO: This could be optimised further with a custom NEON implementation.
+    assert_eq!(WIDTH, 4);
+    let packed_b = PackedMontyField31Neon([b[0], b[1], b[2], b[3]]);
+    let w_b = FP::mul_w(packed_b).0;
+    let w_b1 = w_b[1];
+    let w_b2 = w_b[2];
+    let w_b3 = w_b[3];
+
+    // Constant term = a0*b0 + w(a1*b3 + a2*b2 + a3*b1)
+    // Linear term = a0*b1 + a1*b0 + w(a2*b3 + a3*b2)
+    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b3)
+    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0
+    let lhs: [PackedMontyField31Neon<FP>; 4] = [a[0].into(), a[1].into(), a[2].into(), a[3].into()];
+    let rhs = [
+        PackedMontyField31Neon([b[0], b[1], b[2], b[3]]),
+        PackedMontyField31Neon([w_b3, b[0], b[1], b[2]]),
+        PackedMontyField31Neon([w_b2, w_b3, b[0], b[1]]),
+        PackedMontyField31Neon([w_b1, w_b2, w_b3, b[0]]),
+    ];
+
+    let dot = PackedMontyField31Neon::dot_product(&lhs, &rhs).0;
+
+    res[..].copy_from_slice(&dot);
+}
+
+/// Multiplication in a quintic binomial extension field.
+#[inline]
+pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
+    a: &[MontyField31<FP>; WIDTH],
+    b: &[MontyField31<FP>; WIDTH],
+    res: &mut [MontyField31<FP>; WIDTH],
+) where
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+{
+    // TODO: This could be optimised further with a custom NEON implementation.
+    assert_eq!(WIDTH, 5);
+    let packed_b = PackedMontyField31Neon([b[1], b[2], b[3], b[4]]);
+    let w_b = FP::mul_w(packed_b).0;
+    let w_b1 = w_b[0];
+    let w_b2 = w_b[1];
+    let w_b3 = w_b[2];
+    let w_b4 = w_b[3];
+
+    // Constant term = a0*b0 + w(a1*b4 + a2*b3 + a3*b2 + a4*b1)
+    // Linear term = a0*b1 + a1*b0 + w(a2*b4 + a3*b3 + a4*b2)
+    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b4 + a4*b3)
+    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0 + w*a4*b4
+    // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 + a4*b0
+    let lhs: [PackedMontyField31Neon<FP>; 5] = [
+        a[0].into(),
+        a[1].into(),
+        a[2].into(),
+        a[3].into(),
+        a[4].into(),
+    ];
+    let rhs = [
+        PackedMontyField31Neon([b[0], b[1], b[2], b[3]]),
+        PackedMontyField31Neon([w_b4, b[0], b[1], b[2]]),
+        PackedMontyField31Neon([w_b3, w_b4, b[0], b[1]]),
+        PackedMontyField31Neon([w_b2, w_b3, w_b4, b[0]]),
+        PackedMontyField31Neon([w_b1, w_b2, w_b3, w_b4]),
+    ];
+
+    let dot = PackedMontyField31Neon::dot_product(&lhs, &rhs).0;
+
+    res[..4].copy_from_slice(&dot);
+    res[4] =
+        MontyField31::dot_product::<5>(a[..].try_into().unwrap(), &[b[4], b[3], b[2], b[1], b[0]]);
+}
+
+/// Multiplication in an octic binomial extension field.
+#[inline]
+pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
+    a: &[MontyField31<FP>; WIDTH],
+    b: &[MontyField31<FP>; WIDTH],
+    res: &mut [MontyField31<FP>; WIDTH],
+) where
+    FP: FieldParameters + BinomialExtensionData<WIDTH> + FieldParameters,
+{
+    // TODO: This could be optimised further with a custom NEON implementation.
+    assert_eq!(WIDTH, 8);
+    let packed_b_lo = PackedMontyField31Neon([b[0], b[1], b[2], b[3]]);
+    let packed_b_hi = PackedMontyField31Neon([b[4], b[5], b[6], b[7]]);
+    let w_b_lo = FP::mul_w(packed_b_lo).0;
+    let w_b_hi = FP::mul_w(packed_b_hi).0;
+
+    // Constant coefficient = a0*b0 + w(a1*b7 + ... + a7*b1)
+    // Linear coefficient = a0*b1 + a1*b0 + w(a2*b7 + ... + a7*b2)
+    // Square coefficient = a0*b2 + .. + a2*b0 + w(a3*b7 + ... + a7*b3)
+    // Cube coefficient = a0*b3 + .. + a3*b0 + w(a4*b7 + ... + a7*b4)
+    // Quartic coefficient = a0*b4 + ... + a4*b0 + w(a5*b7 + ... + a7*b5)
+    // Quintic coefficient = a0*b5 + ... + a5*b0 + w(a6*b7 + ... + a7*b6)
+    // Sextic coefficient = a0*b6 + ... + a6*b0 + w*a7*b7
+    // Final coefficient = a0*b7 + ... + a7*b0
+    let lhs: [PackedMontyField31Neon<FP>; 8] = [
+        a[0].into(),
+        a[1].into(),
+        a[2].into(),
+        a[3].into(),
+        a[4].into(),
+        a[5].into(),
+        a[6].into(),
+        a[7].into(),
+    ];
+    let rhs_0 = [
+        PackedMontyField31Neon([b[0], b[1], b[2], b[3]]),
+        PackedMontyField31Neon([w_b_hi[3], b[0], b[1], b[2]]),
+        PackedMontyField31Neon([w_b_hi[2], w_b_hi[3], b[0], b[1]]),
+        PackedMontyField31Neon([w_b_hi[1], w_b_hi[2], w_b_hi[3], b[0]]),
+        PackedMontyField31Neon([w_b_hi[0], w_b_hi[1], w_b_hi[2], w_b_hi[3]]),
+        PackedMontyField31Neon([w_b_lo[3], w_b_hi[0], w_b_hi[1], w_b_hi[2]]),
+        PackedMontyField31Neon([w_b_lo[2], w_b_lo[3], w_b_hi[0], w_b_hi[1]]),
+        PackedMontyField31Neon([w_b_lo[1], w_b_lo[2], w_b_lo[3], w_b_hi[0]]),
+    ];
+    let rhs_1 = [
+        PackedMontyField31Neon([b[4], b[5], b[6], b[7]]),
+        PackedMontyField31Neon([b[3], b[4], b[5], b[6]]),
+        PackedMontyField31Neon([b[2], b[3], b[4], b[5]]),
+        PackedMontyField31Neon([b[1], b[2], b[3], b[4]]),
+        PackedMontyField31Neon([b[0], b[1], b[2], b[3]]),
+        PackedMontyField31Neon([w_b_hi[3], b[0], b[1], b[2]]),
+        PackedMontyField31Neon([w_b_hi[2], w_b_hi[3], b[0], b[1]]),
+        PackedMontyField31Neon([w_b_hi[1], w_b_hi[2], w_b_hi[3], b[0]]),
+    ];
+
+    let dot_0 = PackedMontyField31Neon::dot_product(&lhs, &rhs_0).0;
+    let dot_1 = PackedMontyField31Neon::dot_product(&lhs, &rhs_1).0;
+
+    res[..4].copy_from_slice(&dot_0);
+    res[4..].copy_from_slice(&dot_1);
 }

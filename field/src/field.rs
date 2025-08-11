@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use core::fmt::{Debug, Display};
 use core::hash::Hash;
 use core::iter::{Product, Sum};
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::{array, slice};
 
 use num_bigint::BigUint;
@@ -724,6 +724,10 @@ pub trait Field:
     + 'static
     + Copy
     + Div<Self, Output = Self>
+    + DivAssign
+    + Add<Self::Packing, Output = Self::Packing>
+    + Sub<Self::Packing, Output = Self::Packing>
+    + Mul<Self::Packing, Output = Self::Packing>
     + Eq
     + Hash
     + Send

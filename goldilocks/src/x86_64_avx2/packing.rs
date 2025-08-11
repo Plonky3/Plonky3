@@ -1,15 +1,20 @@
 use alloc::vec::Vec;
 use core::arch::x86_64::*;
-use core::fmt;
-use core::fmt::{Debug, Formatter};
+use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::exponentiation::exp_10540996611094048183;
+use p3_field::interleave::{interleave_u64, interleave_u128};
+use p3_field::op_assign_macros::{
+    impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
+    impl_packed_value, impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field,
+    ring_sum,
+};
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, PrimeField64,
+    PermutationMonomial, PrimeCharacteristicRing, PrimeField64, impl_packed_field_pow_2,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
@@ -19,129 +24,70 @@ use crate::Goldilocks;
 
 const WIDTH: usize = 4;
 
-/// AVX2 Goldilocks Field
-///
-/// Ideally `PackedGoldilocksAVX2` would wrap `__m256i`. Unfortunately, `__m256i` has an alignment of
-/// 32B, which would preclude us from casting `[Goldilocks; 4]` (alignment 8B) to
-/// `PackedGoldilocksAVX2`. We need to ensure that `PackedGoldilocksAVX2` has the same alignment as
-/// `Goldilocks`. Thus we wrap `[Goldilocks; 4]` and use the `new` and `get` methods to
-/// convert to and from `__m256i`.
-#[derive(Copy, Clone, PartialEq, Eq)]
-#[repr(transparent)]
+/// Vectorized AVX2 implementation of `Goldilocks` arithmetic.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+#[repr(transparent)] // Needed to make `transmute`s safe.
 pub struct PackedGoldilocksAVX2(pub [Goldilocks; WIDTH]);
 
 impl PackedGoldilocksAVX2 {
+    /// Get an arch-specific vector representing the packed values.
     #[inline]
-    fn new(x: __m256i) -> Self {
-        unsafe { transmute(x) }
+    #[must_use]
+    pub(crate) fn to_vector(self) -> __m256i {
+        unsafe {
+            // Safety: `Goldilocks` is `repr(transparent)` so it can be transmuted to `u64`. It
+            // follows that `[Goldilocks; WIDTH]` can be transmuted to `[u64; WIDTH]`, which can be
+            // transmuted to `__m256i`, since arrays are guaranteed to be contiguous in memory.
+            // Finally `PackedGoldilocksAVX2` is `repr(transparent)` so it can be transmuted to
+            // `[Goldilocks; WIDTH]`.
+            transmute(self)
+        }
     }
-    #[inline]
-    fn get(&self) -> __m256i {
-        unsafe { transmute(*self) }
-    }
-}
 
-impl Add<Self> for PackedGoldilocksAVX2 {
-    type Output = Self;
+    /// Make a packed field vector from an arch-specific vector.
+    ///
+    /// Elements of `Goldilocks` are allowed to be arbitrary u64s so this function
+    /// is safe unlike the `Mersenne31/MontyField31` variants.
     #[inline]
-    fn add(self, rhs: Self) -> Self {
-        Self::new(unsafe { add(self.get(), rhs.get()) })
+    #[must_use]
+    pub(crate) fn from_vector(vector: __m256i) -> Self {
+        unsafe {
+            // Safety: `__m256i` can be transmuted to `[u64; WIDTH]` (since arrays elements are
+            // contiguous in memory), which can be transmuted to `[Goldilocks; WIDTH]` (since
+            // `Goldilocks` is `repr(transparent)`), which in turn can be transmuted to
+            // `PackedGoldilocksAVX2` (since `PackedGoldilocksAVX2` is also `repr(transparent)`).
+            transmute(vector)
+        }
     }
-}
-impl Add<Goldilocks> for PackedGoldilocksAVX2 {
-    type Output = Self;
-    #[inline]
-    fn add(self, rhs: Goldilocks) -> Self {
-        self + Self::from(rhs)
-    }
-}
-impl Add<PackedGoldilocksAVX2> for Goldilocks {
-    type Output = PackedGoldilocksAVX2;
-    #[inline]
-    fn add(self, rhs: Self::Output) -> Self::Output {
-        Self::Output::from(self) + rhs
-    }
-}
-impl AddAssign<Self> for PackedGoldilocksAVX2 {
-    #[inline]
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-impl AddAssign<Goldilocks> for PackedGoldilocksAVX2 {
-    #[inline]
-    fn add_assign(&mut self, rhs: Goldilocks) {
-        *self = *self + rhs;
-    }
-}
 
-impl Debug for PackedGoldilocksAVX2 {
+    /// Copy `value` to all positions in a packed vector. This is the same as
+    /// `From<Goldilocks>::from`, but `const`.
     #[inline]
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "({:?})", self.get())
-    }
-}
-
-impl Default for PackedGoldilocksAVX2 {
-    #[inline]
-    fn default() -> Self {
-        Self::ZERO
-    }
-}
-
-impl Div<Goldilocks> for PackedGoldilocksAVX2 {
-    type Output = Self;
-    #[allow(clippy::suspicious_arithmetic_impl)]
-    #[inline]
-    fn div(self, rhs: Goldilocks) -> Self {
-        self * rhs.inverse()
-    }
-}
-impl DivAssign<Goldilocks> for PackedGoldilocksAVX2 {
-    #[allow(clippy::suspicious_op_assign_impl)]
-    #[inline]
-    fn div_assign(&mut self, rhs: Goldilocks) {
-        *self *= rhs.inverse();
+    #[must_use]
+    const fn broadcast(value: Goldilocks) -> Self {
+        Self([value; WIDTH])
     }
 }
 
 impl From<Goldilocks> for PackedGoldilocksAVX2 {
     fn from(x: Goldilocks) -> Self {
-        Self([x; WIDTH])
+        Self::broadcast(x)
     }
 }
 
-impl Mul<Self> for PackedGoldilocksAVX2 {
+impl Add for PackedGoldilocksAVX2 {
     type Output = Self;
     #[inline]
-    fn mul(self, rhs: Self) -> Self {
-        Self::new(unsafe { mul(self.get(), rhs.get()) })
+    fn add(self, rhs: Self) -> Self {
+        Self::from_vector(add(self.to_vector(), rhs.to_vector()))
     }
 }
-impl Mul<Goldilocks> for PackedGoldilocksAVX2 {
+
+impl Sub for PackedGoldilocksAVX2 {
     type Output = Self;
     #[inline]
-    fn mul(self, rhs: Goldilocks) -> Self {
-        self * Self::from(rhs)
-    }
-}
-impl Mul<PackedGoldilocksAVX2> for Goldilocks {
-    type Output = PackedGoldilocksAVX2;
-    #[inline]
-    fn mul(self, rhs: PackedGoldilocksAVX2) -> Self::Output {
-        Self::Output::from(self) * rhs
-    }
-}
-impl MulAssign<Self> for PackedGoldilocksAVX2 {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = *self * rhs;
-    }
-}
-impl MulAssign<Goldilocks> for PackedGoldilocksAVX2 {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Goldilocks) {
-        *self = *self * rhs;
+    fn sub(self, rhs: Self) -> Self {
+        Self::from_vector(sub(self.to_vector(), rhs.to_vector()))
     }
 }
 
@@ -149,24 +95,31 @@ impl Neg for PackedGoldilocksAVX2 {
     type Output = Self;
     #[inline]
     fn neg(self) -> Self {
-        Self::new(unsafe { neg(self.get()) })
+        Self::from_vector(neg(self.to_vector()))
     }
 }
 
-impl Product for PackedGoldilocksAVX2 {
+impl Mul for PackedGoldilocksAVX2 {
+    type Output = Self;
     #[inline]
-    fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
+    fn mul(self, rhs: Self) -> Self {
+        Self::from_vector(mul(self.to_vector(), rhs.to_vector()))
     }
 }
+
+impl_add_assign!(PackedGoldilocksAVX2);
+impl_sub_assign!(PackedGoldilocksAVX2);
+impl_mul_methods!(PackedGoldilocksAVX2);
+ring_sum!(PackedGoldilocksAVX2);
+impl_rng!(PackedGoldilocksAVX2);
 
 impl PrimeCharacteristicRing for PackedGoldilocksAVX2 {
     type PrimeSubfield = Goldilocks;
 
-    const ZERO: Self = Self([Goldilocks::ZERO; WIDTH]);
-    const ONE: Self = Self([Goldilocks::ONE; WIDTH]);
-    const TWO: Self = Self([Goldilocks::TWO; WIDTH]);
-    const NEG_ONE: Self = Self([Goldilocks::NEG_ONE; WIDTH]);
+    const ZERO: Self = Self::broadcast(Goldilocks::ZERO);
+    const ONE: Self = Self::broadcast(Goldilocks::ONE);
+    const TWO: Self = Self::broadcast(Goldilocks::TWO);
+    const NEG_ONE: Self = Self::broadcast(Goldilocks::NEG_ONE);
 
     #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
@@ -175,7 +128,7 @@ impl PrimeCharacteristicRing for PackedGoldilocksAVX2 {
 
     #[inline]
     fn square(&self) -> Self {
-        Self::new(unsafe { square(self.get()) })
+        Self::from_vector(square(self.to_vector()))
     }
 
     #[inline]
@@ -199,105 +152,28 @@ impl PermutationMonomial<7> for PackedGoldilocksAVX2 {
     }
 }
 
+impl_add_base_field!(PackedGoldilocksAVX2, Goldilocks);
+impl_sub_base_field!(PackedGoldilocksAVX2, Goldilocks);
+impl_mul_base_field!(PackedGoldilocksAVX2, Goldilocks);
+impl_div_methods!(PackedGoldilocksAVX2, Goldilocks);
+impl_sum_prod_base_field!(PackedGoldilocksAVX2, Goldilocks);
+
 impl Algebra<Goldilocks> for PackedGoldilocksAVX2 {}
 
-unsafe impl PackedValue for PackedGoldilocksAVX2 {
-    type Value = Goldilocks;
-
-    const WIDTH: usize = WIDTH;
-
-    #[inline]
-    fn from_slice(slice: &[Goldilocks]) -> &Self {
-        assert_eq!(slice.len(), Self::WIDTH);
-        unsafe { &*slice.as_ptr().cast() }
-    }
-    #[inline]
-    fn from_slice_mut(slice: &mut [Goldilocks]) -> &mut Self {
-        assert_eq!(slice.len(), Self::WIDTH);
-        unsafe { &mut *slice.as_mut_ptr().cast() }
-    }
-    #[inline]
-    fn as_slice(&self) -> &[Goldilocks] {
-        &self.0[..]
-    }
-    #[inline]
-    fn as_slice_mut(&mut self) -> &mut [Goldilocks] {
-        &mut self.0[..]
-    }
-
-    /// Similar to `core:array::from_fn`.
-    #[inline]
-    fn from_fn<F: FnMut(usize) -> Goldilocks>(f: F) -> Self {
-        let vals_arr: [_; WIDTH] = core::array::from_fn(f);
-        Self(vals_arr)
-    }
-}
+impl_packed_value!(PackedGoldilocksAVX2, Goldilocks, WIDTH);
 
 unsafe impl PackedField for PackedGoldilocksAVX2 {
     type Scalar = Goldilocks;
 }
 
-unsafe impl PackedFieldPow2 for PackedGoldilocksAVX2 {
-    #[inline]
-    fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
-        let (v0, v1) = (self.get(), other.get());
-        let (res0, res1) = match block_len {
-            1 => unsafe { interleave1(v0, v1) },
-            2 => unsafe { interleave2(v0, v1) },
-            4 => (v0, v1),
-            _ => panic!("unsupported block_len"),
-        };
-        (Self::new(res0), Self::new(res1))
-    }
-}
-
-impl Sub<Self> for PackedGoldilocksAVX2 {
-    type Output = Self;
-    #[inline]
-    fn sub(self, rhs: Self) -> Self {
-        Self::new(unsafe { sub(self.get(), rhs.get()) })
-    }
-}
-impl Sub<Goldilocks> for PackedGoldilocksAVX2 {
-    type Output = Self;
-    #[inline]
-    fn sub(self, rhs: Goldilocks) -> Self {
-        self - Self::from(rhs)
-    }
-}
-impl Sub<PackedGoldilocksAVX2> for Goldilocks {
-    type Output = PackedGoldilocksAVX2;
-    #[inline]
-    fn sub(self, rhs: PackedGoldilocksAVX2) -> Self::Output {
-        Self::Output::from(self) - rhs
-    }
-}
-impl SubAssign<Self> for PackedGoldilocksAVX2 {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
-    }
-}
-impl SubAssign<Goldilocks> for PackedGoldilocksAVX2 {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Goldilocks) {
-        *self = *self - rhs;
-    }
-}
-
-impl Sum for PackedGoldilocksAVX2 {
-    #[inline]
-    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO)
-    }
-}
-
-impl Distribution<PackedGoldilocksAVX2> for StandardUniform {
-    #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedGoldilocksAVX2 {
-        PackedGoldilocksAVX2(rng.random())
-    }
-}
+impl_packed_field_pow_2!(
+    PackedGoldilocksAVX2;
+    [
+        (1, interleave_u64),
+        (2, interleave_u128),
+    ],
+    WIDTH
+);
 
 // Resources:
 // 1. Intel Intrinsics Guide for explanation of each intrinsic:
@@ -351,14 +227,14 @@ impl Distribution<PackedGoldilocksAVX2> for StandardUniform {
 const SIGN_BIT: __m256i = unsafe { transmute([i64::MIN; WIDTH]) };
 const SHIFTED_FIELD_ORDER: __m256i =
     unsafe { transmute([Goldilocks::ORDER_U64 ^ (i64::MIN as u64); WIDTH]) };
+
+/// Equal to 2^32 - 1 = 2^64 mod P.
 const EPSILON: __m256i = unsafe { transmute([Goldilocks::ORDER_U64.wrapping_neg(); WIDTH]) };
 
 /// Add 2^63 with overflow. Needed to emulate unsigned comparisons (see point 3. in
 /// packed_prime_field.rs).
-///  # Safety
-/// TODO
 #[inline]
-pub unsafe fn shift(x: __m256i) -> __m256i {
+pub fn shift(x: __m256i) -> __m256i {
     unsafe { _mm256_xor_si256(x, SIGN_BIT) }
 }
 
@@ -389,8 +265,11 @@ unsafe fn add_no_double_overflow_64_64s_s(x: __m256i, y_s: __m256i) -> __m256i {
     }
 }
 
+/// Goldilocks modular addition. Computes `x + y mod FIELD_ORDER`.
+///
+/// Inputs can be arbitrary, output is not guaranteed to be less than `FIELD_ORDER`.
 #[inline]
-unsafe fn add(x: __m256i, y: __m256i) -> __m256i {
+fn add(x: __m256i, y: __m256i) -> __m256i {
     unsafe {
         let y_s = shift(y);
         let res_s = add_no_double_overflow_64_64s_s(x, canonicalize_s(y_s));
@@ -398,8 +277,11 @@ unsafe fn add(x: __m256i, y: __m256i) -> __m256i {
     }
 }
 
+/// Goldilocks modular subtraction. Computes `x - y mod FIELD_ORDER`.
+///
+/// Inputs can be arbitrary, output is not guaranteed to be less than `FIELD_ORDER`.
 #[inline]
-unsafe fn sub(x: __m256i, y: __m256i) -> __m256i {
+fn sub(x: __m256i, y: __m256i) -> __m256i {
     unsafe {
         let mut y_s = shift(y);
         y_s = canonicalize_s(y_s);
@@ -411,8 +293,11 @@ unsafe fn sub(x: __m256i, y: __m256i) -> __m256i {
     }
 }
 
+/// Goldilocks modular negation. Computes `-x mod FIELD_ORDER`.
+///
+/// Input can be arbitrary, output is not guaranteed to be less than `FIELD_ORDER`.
 #[inline]
-unsafe fn neg(y: __m256i) -> __m256i {
+fn neg(y: __m256i) -> __m256i {
     unsafe {
         let y_s = shift(y);
         _mm256_sub_epi64(SHIFTED_FIELD_ORDER, canonicalize_s(y_s))
@@ -422,7 +307,7 @@ unsafe fn neg(y: __m256i) -> __m256i {
 /// Full 64-bit by 64-bit multiplication. This emulated multiplication is 1.33x slower than the
 /// scalar instruction, but may be worth it if we want our data to live in vector registers.
 #[inline]
-unsafe fn mul64_64(x: __m256i, y: __m256i) -> (__m256i, __m256i) {
+fn mul64_64(x: __m256i, y: __m256i) -> (__m256i, __m256i) {
     unsafe {
         // We want to move the high 32 bits to the low position. The multiplication instruction ignores
         // the high 32 bits, so it's ok to just duplicate it into the low position. This duplication can
@@ -465,7 +350,7 @@ unsafe fn mul64_64(x: __m256i, y: __m256i) -> (__m256i, __m256i) {
 
 /// Full 64-bit squaring. This routine is 1.2x faster than the scalar instruction.
 #[inline]
-unsafe fn square64(x: __m256i) -> (__m256i, __m256i) {
+fn square64(x: __m256i) -> (__m256i, __m256i) {
     unsafe {
         // Get high 32 bits of x. See comment in mul64_64_s.
         let x_hi = _mm256_castps_si256(_mm256_movehdup_ps(_mm256_castsi256_ps(x)));
@@ -490,8 +375,8 @@ unsafe fn square64(x: __m256i) -> (__m256i, __m256i) {
     }
 }
 
-/// Goldilocks addition of a "small" number. `x_s` is pre-shifted by 2**63. `y` is assumed to be <=
-/// `0xffffffff00000000`. The result is shifted by 2**63.
+/// Goldilocks addition of a "small" number. `x_s` is pre-shifted by 2**63. `y` is assumed to be
+/// `<= 2^64 - 2^32 = 0xffffffff00000000`. The result is shifted by 2**63.
 #[inline]
 unsafe fn add_small_64s_64_s(x_s: __m256i, y: __m256i) -> __m256i {
     unsafe {
@@ -526,60 +411,53 @@ unsafe fn sub_small_64s_64_s(x_s: __m256i, y: __m256i) -> __m256i {
     }
 }
 
+/// Given a 128-bit value represented as two 64-bit halves, reduce it modulo the Goldilocks field order.
+///
+/// The result will be a 64-bit value but may be larger than `FIELD_ORDER`.
 #[inline]
-unsafe fn reduce128(x: (__m256i, __m256i)) -> __m256i {
+fn reduce128(x: (__m256i, __m256i)) -> __m256i {
     unsafe {
         let (hi0, lo0) = x;
+
+        // First we shift lo0 to lo0_s = lo0 + 2^{63} mod 2^64
+        // This lets us emulate unsigned comparisons
         let lo0_s = shift(lo0);
+
+        // Get the top 32 bits of hi_hi0.
         let hi_hi0 = _mm256_srli_epi64::<32>(hi0);
+
+        // Computes lo0_s - hi_hi0 mod FIELD_ORDER.
+        // Makes sense to do as 2^96 = -1 mod FIELD_ORDER.
+        // sub_small_64s_64_s is safe to use as `hi_hi0 < 2^32`.
         let lo1_s = sub_small_64s_64_s(lo0_s, hi_hi0);
+
+        // Compute the product of the bottom 32 bits of hi0 with 2^64 = 2^32 - 1 mod FIELD_ORDER
+        // _mm256_mul_epu32 ignores the top 32 bits so just use that.
         let t1 = _mm256_mul_epu32(hi0, EPSILON);
+
+        // Clearly t1 <= (2^32 - 1)^2 = 2^64 - 2^33 + 1 so we can use `add_small_64s_64_s` to get
+        // `lo2_s = lo1_s + t1 mod FIELD_ORDER.`
         let lo2_s = add_small_64s_64_s(lo1_s, t1);
+
+        // Finally just need to correct for the shift.
         shift(lo2_s)
     }
 }
 
-/// Multiply two integers modulo FIELD_ORDER.
+/// Goldilocks modular multiplication. Computes `x * y mod FIELD_ORDER`.
+///
+/// Inputs can be arbitrary, output is not guaranteed to be less than `FIELD_ORDER`.
 #[inline]
-unsafe fn mul(x: __m256i, y: __m256i) -> __m256i {
-    unsafe { reduce128(mul64_64(x, y)) }
+fn mul(x: __m256i, y: __m256i) -> __m256i {
+    reduce128(mul64_64(x, y))
 }
 
-/// Square an integer modulo FIELD_ORDER.
+/// Goldilocks modular square. Computes `x^2 mod FIELD_ORDER`.
+///
+/// Input can be arbitrary, output is not guaranteed to be less than `FIELD_ORDER`.
 #[inline]
-unsafe fn square(x: __m256i) -> __m256i {
-    unsafe { reduce128(square64(x)) }
-}
-
-#[inline]
-unsafe fn interleave1(x: __m256i, y: __m256i) -> (__m256i, __m256i) {
-    unsafe {
-        let a = _mm256_unpacklo_epi64(x, y);
-        let b = _mm256_unpackhi_epi64(x, y);
-        (a, b)
-    }
-}
-
-#[inline]
-unsafe fn interleave2(x: __m256i, y: __m256i) -> (__m256i, __m256i) {
-    unsafe {
-        let y_lo = _mm256_castsi256_si128(y); // This has 0 cost.
-
-        // 1 places y_lo in the high half of x; 0 would place it in the lower half.
-        let a = _mm256_inserti128_si256::<1>(x, y_lo);
-        // NB: _mm256_permute2x128_si256 could be used here as well but _mm256_inserti128_si256 has
-        // lower latency on Zen 3 processors.
-
-        // Each nibble of the constant has the following semantics:
-        // 0 => src1[low 128 bits]
-        // 1 => src1[high 128 bits]
-        // 2 => src2[low 128 bits]
-        // 3 => src2[high 128 bits]
-        // The low (resp. high) nibble chooses the low (resp. high) 128 bits of the result.
-        let b = _mm256_permute2x128_si256::<0x31>(x, y);
-
-        (a, b)
-    }
+fn square(x: __m256i) -> __m256i {
+    reduce128(square64(x))
 }
 
 #[cfg(test)]

@@ -206,7 +206,7 @@ mod tests {
         // when evaluated over 2^2 = 4 subgroup points, which is valid.
         let poly = |x: EF4| x * x * x + x * x * F::TWO + x * F::from_u32(3) + F::from_u32(4);
 
-        let subgroup: Vec<_> = EF4::two_adic_generator(2).powers().take(4).collect();
+        let subgroup = EF4::two_adic_generator(2).powers().collect_n(4);
         let evals: Vec<_> = subgroup.iter().map(|&x| poly(x)).collect();
 
         let evals_mat = RowMajorMatrix::new(evals, 1);

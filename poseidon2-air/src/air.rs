@@ -2,7 +2,7 @@ use core::borrow::Borrow;
 use core::marker::PhantomData;
 
 use p3_air::{Air, AirBuilder, BaseAir};
-use p3_field::{Field, PrimeCharacteristicRing, PrimeField};
+use p3_field::{PrimeCharacteristicRing, PrimeField};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
@@ -17,7 +17,7 @@ use crate::{FullRound, PartialRound, SBox, generate_trace_rows};
 /// Assumes the field size is at least 16 bits.
 #[derive(Debug)]
 pub struct Poseidon2Air<
-    F: Field,
+    F: PrimeCharacteristicRing,
     LinearLayers,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
@@ -30,7 +30,7 @@ pub struct Poseidon2Air<
 }
 
 impl<
-    F: Field,
+    F: PrimeCharacteristicRing,
     LinearLayers,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
@@ -82,7 +82,7 @@ impl<
 }
 
 impl<
-    F: Field,
+    F: PrimeCharacteristicRing + Sync,
     LinearLayers: Sync,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
@@ -133,7 +133,7 @@ pub(crate) fn eval<
         PARTIAL_ROUNDS,
     >,
 ) {
-    let mut state: [_; WIDTH] = local.inputs.map(|x| x.into());
+    let mut state: [_; WIDTH] = local.inputs.clone().map(|x| x.into());
 
     LinearLayers::external_linear_layer(&mut state);
 
@@ -210,13 +210,13 @@ fn eval_full_round<
     builder: &mut AB,
 ) {
     for (i, (s, r)) in state.iter_mut().zip(round_constants.iter()).enumerate() {
-        *s += *r;
+        *s += r.clone();
         eval_sbox(&full_round.sbox[i], s, builder);
     }
     LinearLayers::external_linear_layer(state);
-    for (state_i, post_i) in state.iter_mut().zip(full_round.post) {
-        builder.assert_eq(state_i.clone(), post_i);
-        *state_i = post_i.into();
+    for (state_i, post_i) in state.iter_mut().zip(&full_round.post) {
+        builder.assert_eq(state_i.clone(), post_i.clone());
+        *state_i = post_i.clone().into();
     }
 }
 
@@ -233,11 +233,11 @@ fn eval_partial_round<
     round_constant: &AB::F,
     builder: &mut AB,
 ) {
-    state[0] += *round_constant;
+    state[0] += round_constant.clone();
     eval_sbox(&partial_round.sbox, &mut state[0], builder);
 
-    builder.assert_eq(state[0].clone(), partial_round.post_sbox);
-    state[0] = partial_round.post_sbox.into();
+    builder.assert_eq(state[0].clone(), partial_round.post_sbox.clone());
+    state[0] = partial_round.post_sbox.clone().into();
 
     LinearLayers::internal_linear_layer(state);
 }
@@ -262,19 +262,19 @@ fn eval_sbox<AB, const DEGREE: u64, const REGISTERS: usize>(
         (5, 0) => x.exp_const_u64::<5>(),
         (7, 0) => x.exp_const_u64::<7>(),
         (5, 1) => {
-            let committed_x3 = sbox.0[0].into();
+            let committed_x3 = sbox.0[0].clone().into();
             let x2 = x.square();
             builder.assert_eq(committed_x3.clone(), x2.clone() * x.clone());
             committed_x3 * x2
         }
         (7, 1) => {
-            let committed_x3 = sbox.0[0].into();
+            let committed_x3 = sbox.0[0].clone().into();
             builder.assert_eq(committed_x3.clone(), x.cube());
             committed_x3.square() * x.clone()
         }
         (11, 2) => {
-            let committed_x3 = sbox.0[0].into();
-            let committed_x9 = sbox.0[1].into();
+            let committed_x3 = sbox.0[0].clone().into();
+            let committed_x9 = sbox.0[1].clone().into();
             let x2 = x.square();
             builder.assert_eq(committed_x3.clone(), x2.clone() * x.clone());
             builder.assert_eq(committed_x9.clone(), committed_x3.cube());

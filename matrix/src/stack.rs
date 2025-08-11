@@ -1,6 +1,16 @@
 use core::ops::Deref;
 
 use crate::Matrix;
+use crate::dense::RowMajorMatrixView;
+
+/// A type alias representing a vertical composition of two row-major matrix views.
+///
+/// `ViewPair` combines two [`RowMajorMatrixView`]'s with the same element type `T`
+/// and lifetime `'a` into a single virtual matrix stacked vertically.
+///
+/// Both views must have the same width; the resulting view has a height equal
+/// to the sum of the two original heights.
+pub type ViewPair<'a, T> = VerticalPair<RowMajorMatrixView<'a, T>, RowMajorMatrixView<'a, T>>;
 
 /// A matrix composed by stacking two matrices vertically, one on top of the other.
 ///

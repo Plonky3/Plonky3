@@ -181,7 +181,7 @@ pub(super) unsafe fn transpose_swap<T: Copy>(
 /// Each matrix element `M[i,j]` is stored at:
 /// ```text
 /// \begin{equation}
-///     \text{index}(i,j) = i + x + ((i + x) << log_stride) + (j + x)
+///     \text{index}(i,j) = ((i + x) << log_stride) + (j + x)
 /// \end{equation}
 /// ```
 ///

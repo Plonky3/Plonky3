@@ -2,12 +2,18 @@ use alloc::vec::Vec;
 use core::arch::x86_64::{self, __m256i};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::exponentiation::exp_1717986917;
+use p3_field::interleave::{interleave_u32, interleave_u64, interleave_u128};
+use p3_field::op_assign_macros::{
+    impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
+    impl_packed_value, impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field,
+    ring_sum,
+};
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing,
+    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, mm256_mod_add,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
@@ -19,7 +25,7 @@ const WIDTH: usize = 8;
 pub(crate) const P: __m256i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
 
 /// Vectorized AVX2 implementation of `Mersenne31` arithmetic.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // Needed to make `transmute`s safe.
 pub struct PackedMersenne31AVX2(pub [Mersenne31; WIDTH]);
 
@@ -65,42 +71,22 @@ impl PackedMersenne31AVX2 {
     }
 }
 
+impl From<Mersenne31> for PackedMersenne31AVX2 {
+    #[inline]
+    fn from(value: Mersenne31) -> Self {
+        Self::broadcast(value)
+    }
+}
+
 impl Add for PackedMersenne31AVX2 {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = add(lhs, rhs);
+        let res = mm256_mod_add(lhs, rhs, P);
         unsafe {
-            // Safety: `add` returns values in canonical form when given values in canonical form.
-            Self::from_vector(res)
-        }
-    }
-}
-
-impl Mul for PackedMersenne31AVX2 {
-    type Output = Self;
-    #[inline]
-    fn mul(self, rhs: Self) -> Self {
-        let lhs = self.to_vector();
-        let rhs = rhs.to_vector();
-        let res = mul(lhs, rhs);
-        unsafe {
-            // Safety: `mul` returns values in canonical form when given values in canonical form.
-            Self::from_vector(res)
-        }
-    }
-}
-
-impl Neg for PackedMersenne31AVX2 {
-    type Output = Self;
-    #[inline]
-    fn neg(self) -> Self {
-        let val = self.to_vector();
-        let res = neg(val);
-        unsafe {
-            // Safety: `neg` returns values in canonical form when given values in canonical form.
+            // Safety: `mm256_mod_add` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
@@ -120,30 +106,106 @@ impl Sub for PackedMersenne31AVX2 {
     }
 }
 
-/// Add two vectors of Mersenne-31 field elements represented as values in {0, ..., P}.
-/// If the inputs do not conform to this representation, the result is undefined.
-#[inline]
-#[must_use]
-fn add(lhs: __m256i, rhs: __m256i) -> __m256i {
-    // We want this to compile to:
-    //      vpaddd   t, lhs, rhs
-    //      vpsubd   u, t, P
-    //      vpminud  res, t, u
-    // throughput: 1 cyc/vec (8 els/cyc)
-    // latency: 3 cyc
-
-    //   Let t := lhs + rhs. We want to return a value r in {0, ..., P} such that r = t (mod P).
-    //   Define u := (t - P) mod 2^32 and r := min(t, u). t is in {0, ..., 2 P}. We argue by cases.
-    //   If t is in {0, ..., P - 1}, then u is in {(P - 1 <) 2^32 - P, ..., 2^32 - 1}, so r = t is
-    // in the correct range.
-    //   If t is in {P, ..., 2 P}, then u is in {0, ..., P} and r = u is in the correct range.
-    unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
-        let t = x86_64::_mm256_add_epi32(lhs, rhs);
-        let u = x86_64::_mm256_sub_epi32(t, P);
-        x86_64::_mm256_min_epu32(t, u)
+impl Neg for PackedMersenne31AVX2 {
+    type Output = Self;
+    #[inline]
+    fn neg(self) -> Self {
+        let val = self.to_vector();
+        let res = neg(val);
+        unsafe {
+            // Safety: `neg` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
     }
 }
+
+impl Mul for PackedMersenne31AVX2 {
+    type Output = Self;
+    #[inline]
+    fn mul(self, rhs: Self) -> Self {
+        let lhs = self.to_vector();
+        let rhs = rhs.to_vector();
+        let res = mul(lhs, rhs);
+        unsafe {
+            // Safety: `mul` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
+    }
+}
+
+impl_add_assign!(PackedMersenne31AVX2);
+impl_sub_assign!(PackedMersenne31AVX2);
+impl_mul_methods!(PackedMersenne31AVX2);
+ring_sum!(PackedMersenne31AVX2);
+impl_rng!(PackedMersenne31AVX2);
+
+impl PrimeCharacteristicRing for PackedMersenne31AVX2 {
+    type PrimeSubfield = Mersenne31;
+
+    const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
+    const ONE: Self = Self::broadcast(Mersenne31::ONE);
+    const TWO: Self = Self::broadcast(Mersenne31::TWO);
+    const NEG_ONE: Self = Self::broadcast(Mersenne31::NEG_ONE);
+
+    #[inline]
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
+        f.into()
+    }
+
+    #[inline(always)]
+    fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        // We provide specialised code for power 5 as this turns up regularly.
+        // The other powers could be specialised similarly but we ignore this for now.
+        // These ideas could also be used to speed up the more generic exp_u64.
+        match POWER {
+            0 => Self::ONE,
+            1 => *self,
+            2 => self.square(),
+            3 => self.cube(),
+            4 => self.square().square(),
+            5 => unsafe {
+                let val = self.to_vector();
+                Self::from_vector(exp5(val))
+            },
+            6 => self.square().cube(),
+            7 => {
+                let x2 = self.square();
+                let x3 = x2 * *self;
+                let x4 = x2.square();
+                x3 * x4
+            }
+            _ => self.exp_u64(POWER),
+        }
+    }
+
+    #[inline(always)]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        // SAFETY: this is a repr(transparent) wrapper around an array.
+        unsafe { reconstitute_from_base(Mersenne31::zero_vec(len * WIDTH)) }
+    }
+}
+
+// Degree of the smallest permutation polynomial for Mersenne31.
+//
+// As p - 1 = 2×3^2×7×11×... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
+impl InjectiveMonomial<5> for PackedMersenne31AVX2 {}
+
+impl PermutationMonomial<5> for PackedMersenne31AVX2 {
+    /// In the field `Mersenne31`, `a^{1/5}` is equal to a^{1717986917}.
+    ///
+    /// This follows from the calculation `5 * 1717986917 = 4*(2^31 - 2) + 1 = 1 mod p - 1`.
+    fn injective_exp_root_n(&self) -> Self {
+        exp_1717986917(*self)
+    }
+}
+
+impl_add_base_field!(PackedMersenne31AVX2, Mersenne31);
+impl_sub_base_field!(PackedMersenne31AVX2, Mersenne31);
+impl_mul_base_field!(PackedMersenne31AVX2, Mersenne31);
+impl_div_methods!(PackedMersenne31AVX2, Mersenne31);
+impl_sum_prod_base_field!(PackedMersenne31AVX2, Mersenne31);
+
+impl Algebra<Mersenne31> for PackedMersenne31AVX2 {}
 
 #[inline]
 #[must_use]
@@ -224,7 +286,7 @@ fn mul(lhs: __m256i, rhs: __m256i) -> __m256i {
         let prod_lo = x86_64::_mm256_and_si256(prod_lo_dirty, P);
 
         // Standard addition of two 31-bit values.
-        add(prod_lo, prod_hi)
+        mm256_mod_add(prod_lo, prod_hi, P)
     }
 }
 
@@ -343,387 +405,21 @@ pub(crate) fn exp5(x: __m256i) -> __m256i {
     }
 }
 
-impl From<Mersenne31> for PackedMersenne31AVX2 {
-    #[inline]
-    fn from(value: Mersenne31) -> Self {
-        Self::broadcast(value)
-    }
-}
-
-impl Default for PackedMersenne31AVX2 {
-    #[inline]
-    fn default() -> Self {
-        Mersenne31::default().into()
-    }
-}
-
-impl AddAssign for PackedMersenne31AVX2 {
-    #[inline]
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
-impl MulAssign for PackedMersenne31AVX2 {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = *self * rhs;
-    }
-}
-
-impl SubAssign for PackedMersenne31AVX2 {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
-    }
-}
-
-impl Sum for PackedMersenne31AVX2 {
-    #[inline]
-    fn sum<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::ZERO)
-    }
-}
-
-impl Product for PackedMersenne31AVX2 {
-    #[inline]
-    fn product<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::ONE)
-    }
-}
-
-impl PrimeCharacteristicRing for PackedMersenne31AVX2 {
-    type PrimeSubfield = Mersenne31;
-
-    const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
-    const ONE: Self = Self::broadcast(Mersenne31::ONE);
-    const TWO: Self = Self::broadcast(Mersenne31::TWO);
-    const NEG_ONE: Self = Self::broadcast(Mersenne31::NEG_ONE);
-
-    #[inline]
-    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
-        f.into()
-    }
-
-    #[inline(always)]
-    fn exp_const_u64<const POWER: u64>(&self) -> Self {
-        // We provide specialised code for power 5 as this turns up regularly.
-        // The other powers could be specialised similarly but we ignore this for now.
-        // These ideas could also be used to speed up the more generic exp_u64.
-        match POWER {
-            0 => Self::ONE,
-            1 => *self,
-            2 => self.square(),
-            3 => self.cube(),
-            4 => self.square().square(),
-            5 => unsafe {
-                let val = self.to_vector();
-                Self::from_vector(exp5(val))
-            },
-            6 => self.square().cube(),
-            7 => {
-                let x2 = self.square();
-                let x3 = x2 * *self;
-                let x4 = x2.square();
-                x3 * x4
-            }
-            _ => self.exp_u64(POWER),
-        }
-    }
-
-    #[inline(always)]
-    fn zero_vec(len: usize) -> Vec<Self> {
-        // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { reconstitute_from_base(Mersenne31::zero_vec(len * WIDTH)) }
-    }
-}
-
-// Degree of the smallest permutation polynomial for Mersenne31.
-//
-// As p - 1 = 2×3^2×7×11×... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
-impl InjectiveMonomial<5> for PackedMersenne31AVX2 {}
-
-impl PermutationMonomial<5> for PackedMersenne31AVX2 {
-    /// In the field `Mersenne31`, `a^{1/5}` is equal to a^{1717986917}.
-    ///
-    /// This follows from the calculation `5 * 1717986917 = 4*(2^31 - 2) + 1 = 1 mod p - 1`.
-    fn injective_exp_root_n(&self) -> Self {
-        exp_1717986917(*self)
-    }
-}
-
-impl Algebra<Mersenne31> for PackedMersenne31AVX2 {}
-
-impl Add<Mersenne31> for PackedMersenne31AVX2 {
-    type Output = Self;
-    #[inline]
-    fn add(self, rhs: Mersenne31) -> Self {
-        self + Self::from(rhs)
-    }
-}
-
-impl Mul<Mersenne31> for PackedMersenne31AVX2 {
-    type Output = Self;
-    #[inline]
-    fn mul(self, rhs: Mersenne31) -> Self {
-        self * Self::from(rhs)
-    }
-}
-
-impl Sub<Mersenne31> for PackedMersenne31AVX2 {
-    type Output = Self;
-    #[inline]
-    fn sub(self, rhs: Mersenne31) -> Self {
-        self - Self::from(rhs)
-    }
-}
-
-impl AddAssign<Mersenne31> for PackedMersenne31AVX2 {
-    #[inline]
-    fn add_assign(&mut self, rhs: Mersenne31) {
-        *self += Self::from(rhs)
-    }
-}
-
-impl MulAssign<Mersenne31> for PackedMersenne31AVX2 {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Mersenne31) {
-        *self *= Self::from(rhs)
-    }
-}
-
-impl SubAssign<Mersenne31> for PackedMersenne31AVX2 {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Mersenne31) {
-        *self -= Self::from(rhs)
-    }
-}
-
-impl Sum<Mersenne31> for PackedMersenne31AVX2 {
-    #[inline]
-    fn sum<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Mersenne31>,
-    {
-        iter.sum::<Mersenne31>().into()
-    }
-}
-
-impl Product<Mersenne31> for PackedMersenne31AVX2 {
-    #[inline]
-    fn product<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Mersenne31>,
-    {
-        iter.product::<Mersenne31>().into()
-    }
-}
-
-impl Div<Mersenne31> for PackedMersenne31AVX2 {
-    type Output = Self;
-    #[allow(clippy::suspicious_arithmetic_impl)]
-    #[inline]
-    fn div(self, rhs: Mersenne31) -> Self {
-        self * rhs.inverse()
-    }
-}
-
-impl Add<PackedMersenne31AVX2> for Mersenne31 {
-    type Output = PackedMersenne31AVX2;
-    #[inline]
-    fn add(self, rhs: PackedMersenne31AVX2) -> PackedMersenne31AVX2 {
-        PackedMersenne31AVX2::from(self) + rhs
-    }
-}
-
-impl Mul<PackedMersenne31AVX2> for Mersenne31 {
-    type Output = PackedMersenne31AVX2;
-    #[inline]
-    fn mul(self, rhs: PackedMersenne31AVX2) -> PackedMersenne31AVX2 {
-        PackedMersenne31AVX2::from(self) * rhs
-    }
-}
-
-impl Sub<PackedMersenne31AVX2> for Mersenne31 {
-    type Output = PackedMersenne31AVX2;
-    #[inline]
-    fn sub(self, rhs: PackedMersenne31AVX2) -> PackedMersenne31AVX2 {
-        PackedMersenne31AVX2::from(self) - rhs
-    }
-}
-
-impl Distribution<PackedMersenne31AVX2> for StandardUniform {
-    #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMersenne31AVX2 {
-        PackedMersenne31AVX2(rng.random())
-    }
-}
-
-#[inline]
-#[must_use]
-fn interleave1(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
-    // We want this to compile to:
-    //      vpsllq    t, a, 32
-    //      vpsrlq    u, b, 32
-    //      vpblendd  res0, a, u, aah
-    //      vpblendd  res1, t, b, aah
-    // throughput: 1.33 cyc/2 vec (12 els/cyc)
-    // latency: (1 -> 1)  1 cyc
-    //          (1 -> 2)  2 cyc
-    //          (2 -> 1)  2 cyc
-    //          (2 -> 2)  1 cyc
-    unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
-
-        // We currently have:
-        //   a = [ a0  a1  a2  a3  a4  a5  a6  a7 ],
-        //   b = [ b0  b1  b2  b3  b4  b5  b6  b7 ].
-        // First form
-        //   t = [ a1   0  a3   0  a5   0  a7   0 ].
-        //   u = [  0  b0   0  b2   0  b4   0  b6 ].
-        let t = x86_64::_mm256_srli_epi64::<32>(a);
-        let u = x86_64::_mm256_slli_epi64::<32>(b);
-
-        // Then
-        //   res0 = [ a0  b0  a2  b2  a4  b4  a6  b6 ],
-        //   res1 = [ a1  b1  a3  b3  a5  b5  a7  b7 ].
-        (
-            x86_64::_mm256_blend_epi32::<0b10101010>(a, u),
-            x86_64::_mm256_blend_epi32::<0b10101010>(t, b),
-        )
-    }
-}
-
-#[inline]
-#[must_use]
-fn interleave2(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
-    // We want this to compile to:
-    //      vpalignr  t, b, a, 8
-    //      vpblendd  res0, a, t, cch
-    //      vpblendd  res1, t, b, cch
-    // throughput: 1 cyc/2 vec (16 els/cyc)
-    // latency: 2 cyc
-
-    unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
-
-        // We currently have:
-        //   a = [ a0  a1  a2  a3  a4  a5  a6  a7 ],
-        //   b = [ b0  b1  b2  b3  b4  b5  b6  b7 ].
-        // First form
-        //   t = [ a2  a3  b0  b1  a6  a7  b4  b5 ].
-        let t = x86_64::_mm256_alignr_epi8::<8>(b, a);
-
-        // Then
-        //   res0 = [ a0  a1  b0  b1  a4  a5  b4  b5 ],
-        //   res1 = [ a2  a3  b2  b3  a6  a7  b6  b7 ].
-        (
-            x86_64::_mm256_blend_epi32::<0b11001100>(a, t),
-            x86_64::_mm256_blend_epi32::<0b11001100>(t, b),
-        )
-    }
-}
-
-#[inline]
-#[must_use]
-fn interleave4(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
-    // We want this to compile to:
-    //      vperm2i128  t, a, b, 21h
-    //      vpblendd    res0, a, t, f0h
-    //      vpblendd    res1, t, b, f0h
-    // throughput: 1 cyc/2 vec (16 els/cyc)
-    // latency: 4 cyc
-
-    unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
-
-        // We currently have:
-        //   a = [ a0  a1  a2  a3  a4  a5  a6  a7 ],
-        //   b = [ b0  b1  b2  b3  b4  b5  b6  b7 ].
-        // First form
-        //   t = [ a4  a5  a6  a7  b0  b1  b2  b3 ].
-        let t = x86_64::_mm256_permute2x128_si256::<0x21>(a, b);
-
-        // Then
-        //   res0 = [ a0  a1  a2  a3  b0  b1  b2  b3 ],
-        //   res1 = [ a4  a5  a6  a7  b4  b5  b6  b7 ].
-        (
-            x86_64::_mm256_blend_epi32::<0b11110000>(a, t),
-            x86_64::_mm256_blend_epi32::<0b11110000>(t, b),
-        )
-    }
-}
-
-unsafe impl PackedValue for PackedMersenne31AVX2 {
-    type Value = Mersenne31;
-
-    const WIDTH: usize = WIDTH;
-
-    #[inline]
-    fn from_slice(slice: &[Mersenne31]) -> &Self {
-        assert_eq!(slice.len(), Self::WIDTH);
-        unsafe {
-            // Safety: `[Mersenne31; WIDTH]` can be transmuted to `PackedMersenne31AVX2` since the
-            // latter is `repr(transparent)`. They have the same alignment, so the reference cast is
-            // safe too.
-            &*slice.as_ptr().cast()
-        }
-    }
-    #[inline]
-    fn from_slice_mut(slice: &mut [Mersenne31]) -> &mut Self {
-        assert_eq!(slice.len(), Self::WIDTH);
-        unsafe {
-            // Safety: `[Mersenne31; WIDTH]` can be transmuted to `PackedMersenne31AVX2` since the
-            // latter is `repr(transparent)`. They have the same alignment, so the reference cast is
-            // safe too.
-            &mut *slice.as_mut_ptr().cast()
-        }
-    }
-
-    /// Similar to `core:array::from_fn`.
-    #[inline]
-    fn from_fn<F: FnMut(usize) -> Mersenne31>(f: F) -> Self {
-        let vals_arr: [_; WIDTH] = core::array::from_fn(f);
-        Self(vals_arr)
-    }
-
-    #[inline]
-    fn as_slice(&self) -> &[Mersenne31] {
-        &self.0[..]
-    }
-    #[inline]
-    fn as_slice_mut(&mut self) -> &mut [Mersenne31] {
-        &mut self.0[..]
-    }
-}
+impl_packed_value!(PackedMersenne31AVX2, Mersenne31, WIDTH);
 
 unsafe impl PackedField for PackedMersenne31AVX2 {
     type Scalar = Mersenne31;
 }
 
-unsafe impl PackedFieldPow2 for PackedMersenne31AVX2 {
-    #[inline]
-    fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
-        let (v0, v1) = (self.to_vector(), other.to_vector());
-        let (res0, res1) = match block_len {
-            1 => interleave1(v0, v1),
-            2 => interleave2(v0, v1),
-            4 => interleave4(v0, v1),
-            8 => (v0, v1),
-            _ => panic!("unsupported block_len"),
-        };
-        unsafe {
-            // Safety: all values are in canonical form (we haven't changed them).
-            (Self::from_vector(res0), Self::from_vector(res1))
-        }
-    }
-}
+impl_packed_field_pow_2!(
+    PackedMersenne31AVX2;
+    [
+        (1, interleave_u32),
+        (2, interleave_u64),
+        (4, interleave_u128)
+    ],
+    WIDTH
+);
 
 #[cfg(test)]
 mod tests {

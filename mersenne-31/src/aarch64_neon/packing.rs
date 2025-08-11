@@ -2,12 +2,18 @@ use alloc::vec::Vec;
 use core::arch::aarch64::{self, uint32x4_t};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_field::exponentiation::exp_1717986917;
+use p3_field::interleave::{interleave_u32, interleave_u64};
+use p3_field::op_assign_macros::{
+    impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
+    impl_packed_value, impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field,
+    ring_sum,
+};
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing,
+    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, uint32x4_mod_add,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
@@ -19,7 +25,7 @@ const WIDTH: usize = 4;
 const P: uint32x4_t = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
 
 /// Vectorized NEON implementation of `Mersenne31` arithmetic.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // Needed to make `transmute`s safe.
 pub struct PackedMersenne31Neon(pub [Mersenne31; WIDTH]);
 
@@ -64,42 +70,22 @@ impl PackedMersenne31Neon {
     }
 }
 
+impl From<Mersenne31> for PackedMersenne31Neon {
+    #[inline]
+    fn from(value: Mersenne31) -> Self {
+        Self::broadcast(value)
+    }
+}
+
 impl Add for PackedMersenne31Neon {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = add(lhs, rhs);
+        let res = uint32x4_mod_add(lhs, rhs, P);
         unsafe {
-            // Safety: `add` returns valid values when given valid values.
-            Self::from_vector(res)
-        }
-    }
-}
-
-impl Mul for PackedMersenne31Neon {
-    type Output = Self;
-    #[inline]
-    fn mul(self, rhs: Self) -> Self {
-        let lhs = self.to_vector();
-        let rhs = rhs.to_vector();
-        let res = mul(lhs, rhs);
-        unsafe {
-            // Safety: `mul` returns valid values when given valid values.
-            Self::from_vector(res)
-        }
-    }
-}
-
-impl Neg for PackedMersenne31Neon {
-    type Output = Self;
-    #[inline]
-    fn neg(self) -> Self {
-        let val = self.to_vector();
-        let res = neg(val);
-        unsafe {
-            // Safety: `neg` returns valid values when given valid values.
+            // Safety: `uint32x4_mod_add` returns valid values when given valid values.
             Self::from_vector(res)
         }
     }
@@ -119,6 +105,81 @@ impl Sub for PackedMersenne31Neon {
     }
 }
 
+impl Neg for PackedMersenne31Neon {
+    type Output = Self;
+    #[inline]
+    fn neg(self) -> Self {
+        let val = self.to_vector();
+        let res = neg(val);
+        unsafe {
+            // Safety: `neg` returns valid values when given valid values.
+            Self::from_vector(res)
+        }
+    }
+}
+
+impl Mul for PackedMersenne31Neon {
+    type Output = Self;
+    #[inline]
+    fn mul(self, rhs: Self) -> Self {
+        let lhs = self.to_vector();
+        let rhs = rhs.to_vector();
+        let res = mul(lhs, rhs);
+        unsafe {
+            // Safety: `mul` returns valid values when given valid values.
+            Self::from_vector(res)
+        }
+    }
+}
+
+impl_add_assign!(PackedMersenne31Neon);
+impl_sub_assign!(PackedMersenne31Neon);
+impl_mul_methods!(PackedMersenne31Neon);
+ring_sum!(PackedMersenne31Neon);
+impl_rng!(PackedMersenne31Neon);
+
+impl PrimeCharacteristicRing for PackedMersenne31Neon {
+    type PrimeSubfield = Mersenne31;
+
+    const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
+    const ONE: Self = Self::broadcast(Mersenne31::ONE);
+    const TWO: Self = Self::broadcast(Mersenne31::TWO);
+    const NEG_ONE: Self = Self::broadcast(Mersenne31::NEG_ONE);
+
+    #[inline]
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
+        f.into()
+    }
+
+    #[inline(always)]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        // SAFETY: this is a repr(transparent) wrapper around an array.
+        unsafe { reconstitute_from_base(Mersenne31::zero_vec(len * WIDTH)) }
+    }
+}
+
+// Degree of the smallest permutation polynomial for Mersenne31.
+//
+// As p - 1 = 2×3^2×7×11×... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
+impl InjectiveMonomial<5> for PackedMersenne31Neon {}
+
+impl PermutationMonomial<5> for PackedMersenne31Neon {
+    /// In the field `Mersenne31`, `a^{1/5}` is equal to a^{1717986917}.
+    ///
+    /// This follows from the calculation `5 * 1717986917 = 4*(2^31 - 2) + 1 = 1 mod p - 1`.
+    fn injective_exp_root_n(&self) -> Self {
+        exp_1717986917(*self)
+    }
+}
+
+impl_add_base_field!(PackedMersenne31Neon, Mersenne31);
+impl_sub_base_field!(PackedMersenne31Neon, Mersenne31);
+impl_mul_base_field!(PackedMersenne31Neon, Mersenne31);
+impl_div_methods!(PackedMersenne31Neon, Mersenne31);
+impl_sum_prod_base_field!(PackedMersenne31Neon, Mersenne31);
+
+impl Algebra<Mersenne31> for PackedMersenne31Neon {}
+
 /// Given a `val` in `0, ..., 2 P`, return a `res` in `0, ..., P` such that `res = val (mod P)`
 #[inline]
 #[must_use]
@@ -132,28 +193,6 @@ fn reduce_sum(val: uint32x4_t) -> uint32x4_t {
         // Safety: If this code got compiled then NEON intrinsics are available.
         let u = aarch64::vsubq_u32(val, P);
         aarch64::vminq_u32(val, u)
-    }
-}
-
-/// Add two vectors of Mersenne-31 field elements that fit in 31 bits.
-/// If the inputs do not fit in 31 bits, the result is undefined.
-#[inline]
-#[must_use]
-fn add(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
-    // We want this to compile to:
-    //      add   t.4s, lhs.4s, rhs.4s
-    //      sub   u.4s, t.4s, P.4s
-    //      umin  res.4s, t.4s, u.4s
-    // throughput: .75 cyc/vec (5.33 els/cyc)
-    // latency: 6 cyc
-
-    // lhs and rhs are in 0, ..., P, and we want the result to also be in that range.
-    // t := lhs + rhs is in 0, ..., 2 P, so we apply reduce_sum.
-
-    unsafe {
-        // Safety: If this code got compiled then NEON intrinsics are available.
-        let t = aarch64::vaddq_u32(lhs, rhs);
-        reduce_sum(t)
     }
 }
 
@@ -257,300 +296,20 @@ fn sub(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
     }
 }
 
-impl From<Mersenne31> for PackedMersenne31Neon {
-    #[inline]
-    fn from(value: Mersenne31) -> Self {
-        Self::broadcast(value)
-    }
-}
-
-impl Default for PackedMersenne31Neon {
-    #[inline]
-    fn default() -> Self {
-        Mersenne31::default().into()
-    }
-}
-
-impl AddAssign for PackedMersenne31Neon {
-    #[inline]
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
-impl MulAssign for PackedMersenne31Neon {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = *self * rhs;
-    }
-}
-
-impl SubAssign for PackedMersenne31Neon {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
-    }
-}
-
-impl Sum for PackedMersenne31Neon {
-    #[inline]
-    fn sum<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::ZERO)
-    }
-}
-
-impl Product for PackedMersenne31Neon {
-    #[inline]
-    fn product<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::ONE)
-    }
-}
-
-impl PrimeCharacteristicRing for PackedMersenne31Neon {
-    type PrimeSubfield = Mersenne31;
-
-    const ZERO: Self = Self::broadcast(Mersenne31::ZERO);
-    const ONE: Self = Self::broadcast(Mersenne31::ONE);
-    const TWO: Self = Self::broadcast(Mersenne31::TWO);
-    const NEG_ONE: Self = Self::broadcast(Mersenne31::NEG_ONE);
-
-    #[inline]
-    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
-        f.into()
-    }
-
-    #[inline(always)]
-    fn zero_vec(len: usize) -> Vec<Self> {
-        // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { reconstitute_from_base(Mersenne31::zero_vec(len * WIDTH)) }
-    }
-}
-
-impl Algebra<Mersenne31> for PackedMersenne31Neon {}
-
-// Degree of the smallest permutation polynomial for Mersenne31.
-//
-// As p - 1 = 2×3^2×7×11×... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
-impl InjectiveMonomial<5> for PackedMersenne31Neon {}
-
-impl PermutationMonomial<5> for PackedMersenne31Neon {
-    /// In the field `Mersenne31`, `a^{1/5}` is equal to a^{1717986917}.
-    ///
-    /// This follows from the calculation `5 * 1717986917 = 4*(2^31 - 2) + 1 = 1 mod p - 1`.
-    fn injective_exp_root_n(&self) -> Self {
-        exp_1717986917(*self)
-    }
-}
-
-impl Add<Mersenne31> for PackedMersenne31Neon {
-    type Output = Self;
-    #[inline]
-    fn add(self, rhs: Mersenne31) -> Self {
-        self + Self::from(rhs)
-    }
-}
-
-impl Mul<Mersenne31> for PackedMersenne31Neon {
-    type Output = Self;
-    #[inline]
-    fn mul(self, rhs: Mersenne31) -> Self {
-        self * Self::from(rhs)
-    }
-}
-
-impl Sub<Mersenne31> for PackedMersenne31Neon {
-    type Output = Self;
-    #[inline]
-    fn sub(self, rhs: Mersenne31) -> Self {
-        self - Self::from(rhs)
-    }
-}
-
-impl AddAssign<Mersenne31> for PackedMersenne31Neon {
-    #[inline]
-    fn add_assign(&mut self, rhs: Mersenne31) {
-        *self += Self::from(rhs)
-    }
-}
-
-impl MulAssign<Mersenne31> for PackedMersenne31Neon {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Mersenne31) {
-        *self *= Self::from(rhs)
-    }
-}
-
-impl SubAssign<Mersenne31> for PackedMersenne31Neon {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Mersenne31) {
-        *self -= Self::from(rhs)
-    }
-}
-
-impl Sum<Mersenne31> for PackedMersenne31Neon {
-    #[inline]
-    fn sum<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Mersenne31>,
-    {
-        iter.sum::<Mersenne31>().into()
-    }
-}
-
-impl Product<Mersenne31> for PackedMersenne31Neon {
-    #[inline]
-    fn product<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Mersenne31>,
-    {
-        iter.product::<Mersenne31>().into()
-    }
-}
-
-impl Div<Mersenne31> for PackedMersenne31Neon {
-    type Output = Self;
-    #[allow(clippy::suspicious_arithmetic_impl)]
-    #[inline]
-    fn div(self, rhs: Mersenne31) -> Self {
-        self * rhs.inverse()
-    }
-}
-
-impl Add<PackedMersenne31Neon> for Mersenne31 {
-    type Output = PackedMersenne31Neon;
-    #[inline]
-    fn add(self, rhs: PackedMersenne31Neon) -> PackedMersenne31Neon {
-        PackedMersenne31Neon::from(self) + rhs
-    }
-}
-
-impl Mul<PackedMersenne31Neon> for Mersenne31 {
-    type Output = PackedMersenne31Neon;
-    #[inline]
-    fn mul(self, rhs: PackedMersenne31Neon) -> PackedMersenne31Neon {
-        PackedMersenne31Neon::from(self) * rhs
-    }
-}
-
-impl Sub<PackedMersenne31Neon> for Mersenne31 {
-    type Output = PackedMersenne31Neon;
-    #[inline]
-    fn sub(self, rhs: PackedMersenne31Neon) -> PackedMersenne31Neon {
-        PackedMersenne31Neon::from(self) - rhs
-    }
-}
-
-impl Distribution<PackedMersenne31Neon> for StandardUniform {
-    #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMersenne31Neon {
-        PackedMersenne31Neon(rng.random())
-    }
-}
-
-#[inline]
-#[must_use]
-fn interleave1(v0: uint32x4_t, v1: uint32x4_t) -> (uint32x4_t, uint32x4_t) {
-    // We want this to compile to:
-    //      trn1  res0.4s, v0.4s, v1.4s
-    //      trn2  res1.4s, v0.4s, v1.4s
-    // throughput: .5 cyc/2 vec (16 els/cyc)
-    // latency: 2 cyc
-    unsafe {
-        // Safety: If this code got compiled then NEON intrinsics are available.
-        (aarch64::vtrn1q_u32(v0, v1), aarch64::vtrn2q_u32(v0, v1))
-    }
-}
-
-#[inline]
-#[must_use]
-fn interleave2(v0: uint32x4_t, v1: uint32x4_t) -> (uint32x4_t, uint32x4_t) {
-    // We want this to compile to:
-    //      trn1  res0.2d, v0.2d, v1.2d
-    //      trn2  res1.2d, v0.2d, v1.2d
-    // throughput: .5 cyc/2 vec (16 els/cyc)
-    // latency: 2 cyc
-
-    // To transpose 64-bit blocks, cast the [u32; 4] vectors to [u64; 2], transpose, and cast back.
-    unsafe {
-        // Safety: If this code got compiled then NEON intrinsics are available.
-        let v0 = aarch64::vreinterpretq_u64_u32(v0);
-        let v1 = aarch64::vreinterpretq_u64_u32(v1);
-        (
-            aarch64::vreinterpretq_u32_u64(aarch64::vtrn1q_u64(v0, v1)),
-            aarch64::vreinterpretq_u32_u64(aarch64::vtrn2q_u64(v0, v1)),
-        )
-    }
-}
-
-unsafe impl PackedValue for PackedMersenne31Neon {
-    type Value = Mersenne31;
-
-    const WIDTH: usize = WIDTH;
-
-    #[inline]
-    fn from_slice(slice: &[Mersenne31]) -> &Self {
-        assert_eq!(slice.len(), Self::WIDTH);
-        unsafe {
-            // Safety: `[Mersenne31; WIDTH]` can be transmuted to `PackedMersenne31Neon` since the
-            // latter is `repr(transparent)`. They have the same alignment, so the reference cast
-            // is safe too.
-            &*slice.as_ptr().cast()
-        }
-    }
-    #[inline]
-    fn from_slice_mut(slice: &mut [Mersenne31]) -> &mut Self {
-        assert_eq!(slice.len(), Self::WIDTH);
-        unsafe {
-            // Safety: `[Mersenne31; WIDTH]` can be transmuted to `PackedMersenne31Neon` since the
-            // latter is `repr(transparent)`. They have the same alignment, so the reference cast
-            // is safe too.
-            &mut *slice.as_mut_ptr().cast()
-        }
-    }
-
-    /// Similar to `core:array::from_fn`.
-    #[inline]
-    fn from_fn<F: FnMut(usize) -> Mersenne31>(f: F) -> Self {
-        let vals_arr: [_; WIDTH] = core::array::from_fn(f);
-        Self(vals_arr)
-    }
-
-    #[inline]
-    fn as_slice(&self) -> &[Mersenne31] {
-        &self.0[..]
-    }
-    #[inline]
-    fn as_slice_mut(&mut self) -> &mut [Mersenne31] {
-        &mut self.0[..]
-    }
-}
+impl_packed_value!(PackedMersenne31Neon, Mersenne31, WIDTH);
 
 unsafe impl PackedField for PackedMersenne31Neon {
     type Scalar = Mersenne31;
 }
 
-unsafe impl PackedFieldPow2 for PackedMersenne31Neon {
-    #[inline]
-    fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
-        let (v0, v1) = (self.to_vector(), other.to_vector());
-        let (res0, res1) = match block_len {
-            1 => interleave1(v0, v1),
-            2 => interleave2(v0, v1),
-            4 => (v0, v1),
-            _ => panic!("unsupported block_len"),
-        };
-        unsafe {
-            // Safety: all values are in canonical form (we haven't changed them).
-            (Self::from_vector(res0), Self::from_vector(res1))
-        }
-    }
-}
+impl_packed_field_pow_2!(
+    PackedMersenne31Neon;
+    [
+        (1, interleave_u32),
+        (2, interleave_u64)
+    ],
+    WIDTH
+);
 
 #[cfg(test)]
 mod tests {

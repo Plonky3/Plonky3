@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
+use core::iter::{Product, Sum};
 use core::mem::MaybeUninit;
-use core::ops::Div;
+use core::ops::{Div, DivAssign};
 use core::{array, slice};
 
 use crate::field::Field;
@@ -58,7 +59,7 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         // even with inner struct instantiation. So we will trust LLVM to optimize this out.
         assert!(align_of::<Self>() <= align_of::<Self::Value>());
         assert!(
-            buf.len() % Self::WIDTH == 0,
+            buf.len().is_multiple_of(Self::WIDTH),
             "Slice length (got {}) must be a multiple of packed field width ({}).",
             buf.len(),
             Self::WIDTH
@@ -81,7 +82,7 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     fn pack_slice_mut(buf: &mut [Self::Value]) -> &mut [Self] {
         assert!(align_of::<Self>() <= align_of::<Self::Value>());
         assert!(
-            buf.len() % Self::WIDTH == 0,
+            buf.len().is_multiple_of(Self::WIDTH),
             "Slice length (got {}) must be a multiple of packed field width ({}).",
             buf.len(),
             Self::WIDTH
@@ -101,7 +102,7 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     ) -> &mut [MaybeUninit<Self>] {
         assert!(align_of::<Self>() <= align_of::<Self::Value>());
         assert!(
-            buf.len() % Self::WIDTH == 0,
+            buf.len().is_multiple_of(Self::WIDTH),
             "Slice length (got {}) must be a multiple of packed field width ({}).",
             buf.len(),
             Self::WIDTH
@@ -145,27 +146,32 @@ unsafe impl<T: Packable, const WIDTH: usize> PackedValue for [T; WIDTH] {
     type Value = T;
     const WIDTH: usize = WIDTH;
 
+    #[inline]
     fn from_slice(slice: &[Self::Value]) -> &Self {
         assert_eq!(slice.len(), Self::WIDTH);
-        slice.try_into().unwrap()
+        unsafe { &*slice.as_ptr().cast() }
     }
 
+    #[inline]
     fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self {
         assert_eq!(slice.len(), Self::WIDTH);
-        slice.try_into().unwrap()
+        unsafe { &mut *slice.as_mut_ptr().cast() }
     }
 
-    fn from_fn<F>(f: F) -> Self
+    #[inline]
+    fn from_fn<Fn>(f: Fn) -> Self
     where
-        F: FnMut(usize) -> Self::Value,
+        Fn: FnMut(usize) -> Self::Value,
     {
         core::array::from_fn(f)
     }
 
+    #[inline]
     fn as_slice(&self) -> &[Self::Value] {
         self
     }
 
+    #[inline]
     fn as_slice_mut(&mut self) -> &mut [Self::Value] {
         self
     }
@@ -179,6 +185,9 @@ pub unsafe trait PackedField: Algebra<Self::Scalar>
     + PackedValue<Value = Self::Scalar>
     // TODO: Implement packed / packed division
     + Div<Self::Scalar, Output = Self>
+    + DivAssign<Self::Scalar>
+    + Sum<Self::Scalar>
+    + Product<Self::Scalar>
 {
     type Scalar: Field;
 
@@ -261,6 +270,7 @@ pub unsafe trait PackedFieldPow2: PackedField {
     /// # Panics
     /// This may panic if `block_len` does not divide `WIDTH`. Since `WIDTH` is specified to be a power of 2,
     /// `block_len` must also be a power of 2. It cannot be 0 and it cannot exceed `WIDTH`.
+    #[must_use]
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self);
 }
 
@@ -315,14 +325,19 @@ unsafe impl<T: Packable> PackedValue for T {
 
     const WIDTH: usize = 1;
 
+    #[inline]
     fn from_slice(slice: &[Self::Value]) -> &Self {
+        assert_eq!(slice.len(), Self::WIDTH);
         &slice[0]
     }
 
+    #[inline]
     fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self {
+        assert_eq!(slice.len(), Self::WIDTH);
         &mut slice[0]
     }
 
+    #[inline]
     fn from_fn<Fn>(mut f: Fn) -> Self
     where
         Fn: FnMut(usize) -> Self::Value,
@@ -330,10 +345,12 @@ unsafe impl<T: Packable> PackedValue for T {
         f(0)
     }
 
+    #[inline]
     fn as_slice(&self) -> &[Self::Value] {
         slice::from_ref(self)
     }
 
+    #[inline]
     fn as_slice_mut(&mut self) -> &mut [Self::Value] {
         slice::from_mut(self)
     }

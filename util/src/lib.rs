@@ -471,7 +471,7 @@ pub unsafe fn flatten_to_base<Base, BaseArray>(vec: Vec<BaseArray>) -> Vec<Base>
     debug_assert_eq!(align_of::<Base>(), align_of::<BaseArray>());
 
     assert!(
-        size_of::<BaseArray>() % size_of::<Base>() == 0,
+        size_of::<BaseArray>().is_multiple_of(size_of::<Base>()),
         "Size of BaseArray (got {}) must be a multiple of the size of Base ({}).",
         size_of::<BaseArray>(),
         size_of::<Base>()
@@ -522,7 +522,7 @@ pub unsafe fn flatten_to_base<Base, BaseArray>(vec: Vec<BaseArray>) -> Vec<Base>
 #[inline]
 pub unsafe fn reconstitute_from_base<Base, BaseArray: Clone>(mut vec: Vec<Base>) -> Vec<BaseArray> {
     assert!(
-        size_of::<BaseArray>() % size_of::<Base>() == 0,
+        size_of::<BaseArray>().is_multiple_of(size_of::<Base>()),
         "Size of BaseArray (got {}) must be a multiple of the size of Base ({}).",
         size_of::<BaseArray>(),
         size_of::<Base>()
@@ -531,7 +531,7 @@ pub unsafe fn reconstitute_from_base<Base, BaseArray: Clone>(mut vec: Vec<Base>)
     let d = size_of::<BaseArray>() / size_of::<Base>();
 
     assert!(
-        vec.len() % d == 0,
+        vec.len().is_multiple_of(d),
         "Vector length (got {}) must be a multiple of the extension field dimension ({}).",
         vec.len(),
         d
@@ -548,7 +548,7 @@ pub unsafe fn reconstitute_from_base<Base, BaseArray: Clone>(mut vec: Vec<Base>)
     // with a vector constructed from `flatten_to_base` and so the capacity should be a multiple of `d`.
     // But capacities can do strange things so we need to support both possibilities.
     // Note that the `else` branch would also work if the capacity is a multiple of `d` but it is slower.
-    if cap % d == 0 {
+    if cap.is_multiple_of(d) {
         // Prevent running `vec`'s destructor so we are in complete control
         // of the allocation.
         let mut values = ManuallyDrop::new(vec);

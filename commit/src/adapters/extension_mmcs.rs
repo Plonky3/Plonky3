@@ -8,10 +8,17 @@ use p3_matrix::{Dimensions, Matrix};
 
 use crate::{BatchOpening, BatchOpeningRef, Mmcs};
 
+/// A wrapper to lift an MMCS from a base field `F` to an extension field `EF`.
+///
+/// `ExtensionMmcs` allows committing to and opening matrices over an extension field by internally
+/// using an MMCS defined on the base field. It works by flattening each extension field element
+/// into its base field coordinates for commitment, and then reconstructing them on opening.
 #[derive(Clone, Debug)]
 pub struct ExtensionMmcs<F, EF, InnerMmcs> {
-    inner: InnerMmcs,
-    _phantom: PhantomData<(F, EF)>,
+    /// The inner MMCS instance used to handle commitments at the base field level.
+    pub(crate) inner: InnerMmcs,
+
+    pub(crate) _phantom: PhantomData<(F, EF)>,
 }
 
 impl<F, EF, InnerMmcs> ExtensionMmcs<F, EF, InnerMmcs> {

@@ -3,18 +3,25 @@ use core::arch::x86_64::{self, __m256i};
 use core::array;
 use core::iter::{Product, Sum};
 use core::mem::transmute;
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
+use p3_field::interleave::{interleave_u32, interleave_u64, interleave_u128};
+use p3_field::op_assign_macros::{
+    impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
+    impl_packed_value, impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field,
+    ring_sum,
+};
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing,
+    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, mm256_mod_add,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 
 use crate::{
-    FieldParameters, MontyField31, PackedMontyParameters, RelativelyPrimePower, signed_add_avx2,
+    BinomialExtensionData, FieldParameters, MontyField31, PackedMontyParameters,
+    RelativelyPrimePower, signed_add_avx2,
 };
 
 const WIDTH: usize = 8;
@@ -25,7 +32,7 @@ pub trait MontyParametersAVX2 {
 }
 
 /// Vectorized AVX2 implementation of `MontyField31<FP>` arithmetic.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // This is needed to make `transmute`s safe.
 pub struct PackedMontyField31AVX2<PMP: PackedMontyParameters>(pub [MontyField31<PMP>; WIDTH]);
 
@@ -71,15 +78,49 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX2<PMP> {
     }
 }
 
+impl<PMP: PackedMontyParameters> From<MontyField31<PMP>> for PackedMontyField31AVX2<PMP> {
+    #[inline]
+    fn from(value: MontyField31<PMP>) -> Self {
+        Self::broadcast(value)
+    }
+}
+
 impl<PMP: PackedMontyParameters> Add for PackedMontyField31AVX2<PMP> {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = add::<PMP>(lhs, rhs);
+        let res = mm256_mod_add(lhs, rhs, PMP::PACKED_P);
         unsafe {
-            // Safety: `add` returns values in canonical form when given values in canonical form.
+            // Safety: `mm256_mod_add` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
+    }
+}
+
+impl<PMP: PackedMontyParameters> Sub for PackedMontyField31AVX2<PMP> {
+    type Output = Self;
+    #[inline]
+    fn sub(self, rhs: Self) -> Self {
+        let lhs = self.to_vector();
+        let rhs = rhs.to_vector();
+        let res = sub::<PMP>(lhs, rhs);
+        unsafe {
+            // Safety: `sub` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
+    }
+}
+
+impl<PMP: PackedMontyParameters> Neg for PackedMontyField31AVX2<PMP> {
+    type Output = Self;
+    #[inline]
+    fn neg(self) -> Self {
+        let val = self.to_vector();
+        let res = neg::<PMP>(val);
+        unsafe {
+            // Safety: `neg` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
@@ -101,60 +142,120 @@ impl<PMP: PackedMontyParameters> Mul for PackedMontyField31AVX2<PMP> {
     }
 }
 
-impl<PMP: PackedMontyParameters> Neg for PackedMontyField31AVX2<PMP> {
-    type Output = Self;
+impl_add_assign!(PackedMontyField31AVX2, (PackedMontyParameters, PMP));
+impl_sub_assign!(PackedMontyField31AVX2, (PackedMontyParameters, PMP));
+impl_mul_methods!(PackedMontyField31AVX2, (FieldParameters, FP));
+ring_sum!(PackedMontyField31AVX2, (FieldParameters, FP));
+impl_rng!(PackedMontyField31AVX2, (PackedMontyParameters, PMP));
+
+impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX2<FP> {
+    type PrimeSubfield = MontyField31<FP>;
+
+    const ZERO: Self = Self::broadcast(MontyField31::ZERO);
+    const ONE: Self = Self::broadcast(MontyField31::ONE);
+    const TWO: Self = Self::broadcast(MontyField31::TWO);
+    const NEG_ONE: Self = Self::broadcast(MontyField31::NEG_ONE);
+
     #[inline]
-    fn neg(self) -> Self {
+    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
+        f.into()
+    }
+
+    #[inline]
+    fn cube(&self) -> Self {
         let val = self.to_vector();
-        let res = neg::<PMP>(val);
         unsafe {
-            // Safety: `neg` returns values in canonical form when given values in canonical form.
+            // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
+            let res = apply_func_to_even_odd::<FP>(val, packed_exp_3::<FP>);
             Self::from_vector(res)
         }
     }
-}
 
-impl<PMP: PackedMontyParameters> Sub for PackedMontyField31AVX2<PMP> {
-    type Output = Self;
     #[inline]
-    fn sub(self, rhs: Self) -> Self {
+    fn xor(&self, rhs: &Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = sub::<PMP>(lhs, rhs);
+        let res = xor::<FP>(lhs, rhs);
         unsafe {
-            // Safety: `sub` returns values in canonical form when given values in canonical form.
+            // Safety: `xor` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
-}
 
-/// Add two vectors of Monty31 field elements in canonical form.
-/// If the inputs are not in canonical form, the result is undefined.
-#[inline]
-#[must_use]
-pub(crate) fn add<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
-    // We want this to compile to:
-    //      vpaddd   t, lhs, rhs
-    //      vpsubd   u, t, P
-    //      vpminud  res, t, u
-    // throughput: 1 cyc/vec (8 els/cyc)
-    // latency: 3 cyc
+    #[inline]
+    fn andn(&self, rhs: &Self) -> Self {
+        let lhs = self.to_vector();
+        let rhs = rhs.to_vector();
+        let res = andn::<FP>(lhs, rhs);
+        unsafe {
+            // Safety: `andn` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
+    }
 
-    //   Let t := lhs + rhs. We want to return t mod P. Recall that lhs and rhs are in
-    // 0, ..., P - 1, so t is in 0, ..., 2 P - 2 (< 2^32). It suffices to return t if t < P and
-    // t - P otherwise.
-    //   Let u := (t - P) mod 2^32 and r := unsigned_min(t, u).
-    //   If t is in 0, ..., P - 1, then u is in (P - 1 <) 2^32 - P, ..., 2^32 - 1 and r = t.
-    // Otherwise, t is in P, ..., 2 P - 2, u is in 0, ..., P - 2 (< P) and r = u. Hence, r is t if
-    // t < P and t - P otherwise, as desired.
+    #[inline(always)]
+    fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        // We provide specialised code for the powers 3, 5, 7 as these turn up regularly.
+        // The other powers could be specialised similarly but we ignore this for now.
+        // These ideas could also be used to speed up the more generic exp_u64.
+        match POWER {
+            0 => Self::ONE,
+            1 => *self,
+            2 => self.square(),
+            3 => self.cube(),
+            4 => self.square().square(),
+            5 => {
+                let val = self.to_vector();
+                unsafe {
+                    // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
+                    let res = apply_func_to_even_odd::<FP>(val, packed_exp_5::<FP>);
+                    Self::from_vector(res)
+                }
+            }
+            6 => self.square().cube(),
+            7 => {
+                let val = self.to_vector();
+                unsafe {
+                    // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
+                    let res = apply_func_to_even_odd::<FP>(val, packed_exp_7::<FP>);
+                    Self::from_vector(res)
+                }
+            }
+            _ => self.exp_u64(POWER),
+        }
+    }
 
-    unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
-        let t = x86_64::_mm256_add_epi32(lhs, rhs);
-        let u = x86_64::_mm256_sub_epi32(t, MPAVX2::PACKED_P);
-        x86_64::_mm256_min_epu32(t, u)
+    #[inline(always)]
+    fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
+        general_dot_product::<_, _, _, N>(u, v)
+    }
+
+    #[inline(always)]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        // SAFETY: this is a repr(transparent) wrapper around an array.
+        unsafe { reconstitute_from_base(MontyField31::<FP>::zero_vec(len * WIDTH)) }
     }
 }
+
+impl_add_base_field!(
+    PackedMontyField31AVX2,
+    MontyField31,
+    (PackedMontyParameters, PMP)
+);
+impl_sub_base_field!(
+    PackedMontyField31AVX2,
+    MontyField31,
+    (PackedMontyParameters, PMP)
+);
+impl_mul_base_field!(
+    PackedMontyField31AVX2,
+    MontyField31,
+    (PackedMontyParameters, PMP)
+);
+impl_div_methods!(PackedMontyField31AVX2, MontyField31, (FieldParameters, FP));
+impl_sum_prod_base_field!(PackedMontyField31AVX2, MontyField31, (FieldParameters, FP));
+
+impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31AVX2<FP> {}
 
 // MONTGOMERY MULTIPLICATION
 //   This implementation is based on [1] but with minor changes. The reduction is as follows:
@@ -879,152 +980,6 @@ pub(crate) fn sub<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __
     }
 }
 
-impl<PMP: PackedMontyParameters> From<MontyField31<PMP>> for PackedMontyField31AVX2<PMP> {
-    #[inline]
-    fn from(value: MontyField31<PMP>) -> Self {
-        Self::broadcast(value)
-    }
-}
-
-impl<PMP: PackedMontyParameters> Default for PackedMontyField31AVX2<PMP> {
-    #[inline]
-    fn default() -> Self {
-        MontyField31::<PMP>::default().into()
-    }
-}
-
-impl<PMP: PackedMontyParameters> AddAssign for PackedMontyField31AVX2<PMP> {
-    #[inline]
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
-impl<PMP: PackedMontyParameters> MulAssign for PackedMontyField31AVX2<PMP> {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = *self * rhs;
-    }
-}
-
-impl<PMP: PackedMontyParameters> SubAssign for PackedMontyField31AVX2<PMP> {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
-    }
-}
-
-impl<FP: FieldParameters> Sum for PackedMontyField31AVX2<FP> {
-    #[inline]
-    fn sum<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        iter.reduce(|lhs, rhs| lhs + rhs).unwrap_or(Self::ZERO)
-    }
-}
-
-impl<FP: FieldParameters> Product for PackedMontyField31AVX2<FP> {
-    #[inline]
-    fn product<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        iter.reduce(|lhs, rhs| lhs * rhs).unwrap_or(Self::ONE)
-    }
-}
-
-impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX2<FP> {
-    type PrimeSubfield = MontyField31<FP>;
-
-    const ZERO: Self = Self::broadcast(MontyField31::ZERO);
-    const ONE: Self = Self::broadcast(MontyField31::ONE);
-    const TWO: Self = Self::broadcast(MontyField31::TWO);
-    const NEG_ONE: Self = Self::broadcast(MontyField31::NEG_ONE);
-
-    #[inline]
-    fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
-        f.into()
-    }
-
-    #[inline]
-    fn cube(&self) -> Self {
-        let val = self.to_vector();
-        unsafe {
-            // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
-            let res = apply_func_to_even_odd::<FP>(val, packed_exp_3::<FP>);
-            Self::from_vector(res)
-        }
-    }
-
-    #[inline]
-    fn xor(&self, rhs: &Self) -> Self {
-        let lhs = self.to_vector();
-        let rhs = rhs.to_vector();
-        let res = xor::<FP>(lhs, rhs);
-        unsafe {
-            // Safety: `xor` returns values in canonical form when given values in canonical form.
-            Self::from_vector(res)
-        }
-    }
-
-    #[inline]
-    fn andn(&self, rhs: &Self) -> Self {
-        let lhs = self.to_vector();
-        let rhs = rhs.to_vector();
-        let res = andn::<FP>(lhs, rhs);
-        unsafe {
-            // Safety: `andn` returns values in canonical form when given values in canonical form.
-            Self::from_vector(res)
-        }
-    }
-
-    #[inline(always)]
-    fn exp_const_u64<const POWER: u64>(&self) -> Self {
-        // We provide specialised code for the powers 3, 5, 7 as these turn up regularly.
-        // The other powers could be specialised similarly but we ignore this for now.
-        // These ideas could also be used to speed up the more generic exp_u64.
-        match POWER {
-            0 => Self::ONE,
-            1 => *self,
-            2 => self.square(),
-            3 => self.cube(),
-            4 => self.square().square(),
-            5 => {
-                let val = self.to_vector();
-                unsafe {
-                    // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
-                    let res = apply_func_to_even_odd::<FP>(val, packed_exp_5::<FP>);
-                    Self::from_vector(res)
-                }
-            }
-            6 => self.square().cube(),
-            7 => {
-                let val = self.to_vector();
-                unsafe {
-                    // Safety: `apply_func_to_even_odd` returns values in canonical form when given values in canonical form.
-                    let res = apply_func_to_even_odd::<FP>(val, packed_exp_7::<FP>);
-                    Self::from_vector(res)
-                }
-            }
-            _ => self.exp_u64(POWER),
-        }
-    }
-
-    #[inline(always)]
-    fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
-        general_dot_product::<_, _, _, N>(u, v)
-    }
-
-    #[inline(always)]
-    fn zero_vec(len: usize) -> Vec<Self> {
-        // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { reconstitute_from_base(MontyField31::<FP>::zero_vec(len * WIDTH)) }
-    }
-}
-
-impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31AVX2<FP> {}
-
 impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> InjectiveMonomial<D>
     for PackedMontyField31AVX2<FP>
 {
@@ -1038,248 +993,12 @@ impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> PermutationMon
     }
 }
 
-impl<PMP: PackedMontyParameters> Add<MontyField31<PMP>> for PackedMontyField31AVX2<PMP> {
-    type Output = Self;
-    #[inline]
-    fn add(self, rhs: MontyField31<PMP>) -> Self {
-        self + Self::from(rhs)
-    }
-}
-
-impl<PMP: PackedMontyParameters> Mul<MontyField31<PMP>> for PackedMontyField31AVX2<PMP> {
-    type Output = Self;
-    #[inline]
-    fn mul(self, rhs: MontyField31<PMP>) -> Self {
-        self * Self::from(rhs)
-    }
-}
-
-impl<PMP: PackedMontyParameters> Sub<MontyField31<PMP>> for PackedMontyField31AVX2<PMP> {
-    type Output = Self;
-    #[inline]
-    fn sub(self, rhs: MontyField31<PMP>) -> Self {
-        self - Self::from(rhs)
-    }
-}
-
-impl<PMP: PackedMontyParameters> AddAssign<MontyField31<PMP>> for PackedMontyField31AVX2<PMP> {
-    #[inline]
-    fn add_assign(&mut self, rhs: MontyField31<PMP>) {
-        *self += Self::from(rhs)
-    }
-}
-
-impl<PMP: PackedMontyParameters> MulAssign<MontyField31<PMP>> for PackedMontyField31AVX2<PMP> {
-    #[inline]
-    fn mul_assign(&mut self, rhs: MontyField31<PMP>) {
-        *self *= Self::from(rhs)
-    }
-}
-
-impl<PMP: PackedMontyParameters> SubAssign<MontyField31<PMP>> for PackedMontyField31AVX2<PMP> {
-    #[inline]
-    fn sub_assign(&mut self, rhs: MontyField31<PMP>) {
-        *self -= Self::from(rhs)
-    }
-}
-
-impl<FP: FieldParameters> Sum<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
-    #[inline]
-    fn sum<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = MontyField31<FP>>,
-    {
-        iter.sum::<MontyField31<FP>>().into()
-    }
-}
-
-impl<FP: FieldParameters> Product<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
-    #[inline]
-    fn product<I>(iter: I) -> Self
-    where
-        I: Iterator<Item = MontyField31<FP>>,
-    {
-        iter.product::<MontyField31<FP>>().into()
-    }
-}
-
-impl<FP: FieldParameters> Div<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
-    type Output = Self;
-    #[allow(clippy::suspicious_arithmetic_impl)]
-    #[inline]
-    fn div(self, rhs: MontyField31<FP>) -> Self {
-        self * rhs.inverse()
-    }
-}
-
-impl<PMP: PackedMontyParameters> Add<PackedMontyField31AVX2<PMP>> for MontyField31<PMP> {
-    type Output = PackedMontyField31AVX2<PMP>;
-    #[inline]
-    fn add(self, rhs: PackedMontyField31AVX2<PMP>) -> PackedMontyField31AVX2<PMP> {
-        PackedMontyField31AVX2::<PMP>::from(self) + rhs
-    }
-}
-
-impl<PMP: PackedMontyParameters> Mul<PackedMontyField31AVX2<PMP>> for MontyField31<PMP> {
-    type Output = PackedMontyField31AVX2<PMP>;
-    #[inline]
-    fn mul(self, rhs: PackedMontyField31AVX2<PMP>) -> PackedMontyField31AVX2<PMP> {
-        PackedMontyField31AVX2::<PMP>::from(self) * rhs
-    }
-}
-
-impl<PMP: PackedMontyParameters> Sub<PackedMontyField31AVX2<PMP>> for MontyField31<PMP> {
-    type Output = PackedMontyField31AVX2<PMP>;
-    #[inline]
-    fn sub(self, rhs: PackedMontyField31AVX2<PMP>) -> PackedMontyField31AVX2<PMP> {
-        PackedMontyField31AVX2::<PMP>::from(self) - rhs
-    }
-}
-
-impl<PMP: PackedMontyParameters> Distribution<PackedMontyField31AVX2<PMP>> for StandardUniform {
-    #[inline]
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PackedMontyField31AVX2<PMP> {
-        PackedMontyField31AVX2::<PMP>(rng.random())
-    }
-}
-
-#[inline]
-#[must_use]
-fn interleave1(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
-    // We want this to compile to:
-    //      vpsllq    t, a, 32
-    //      vpsrlq    u, b, 32
-    //      vpblendd  res0, a, u, aah
-    //      vpblendd  res1, t, b, aah
-    // throughput: 1.33 cyc/2 vec (12 els/cyc)
-    // latency: (1 -> 1)  1 cyc
-    //          (1 -> 2)  2 cyc
-    //          (2 -> 1)  2 cyc
-    //          (2 -> 2)  1 cyc
-    unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
-
-        // We currently have:
-        //   a = [ a0  a1  a2  a3  a4  a5  a6  a7 ],
-        //   b = [ b0  b1  b2  b3  b4  b5  b6  b7 ].
-        // First form
-        //   t = [ a1   0  a3   0  a5   0  a7   0 ].
-        //   u = [  0  b0   0  b2   0  b4   0  b6 ].
-        let t = x86_64::_mm256_srli_epi64::<32>(a);
-        let u = x86_64::_mm256_slli_epi64::<32>(b);
-
-        // Then
-        //   res0 = [ a0  b0  a2  b2  a4  b4  a6  b6 ],
-        //   res1 = [ a1  b1  a3  b3  a5  b5  a7  b7 ].
-        (
-            x86_64::_mm256_blend_epi32::<0b10101010>(a, u),
-            x86_64::_mm256_blend_epi32::<0b10101010>(t, b),
-        )
-    }
-}
-
-#[inline]
-#[must_use]
-fn interleave2(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
-    // We want this to compile to:
-    //      vpalignr  t, b, a, 8
-    //      vpblendd  res0, a, t, cch
-    //      vpblendd  res1, t, b, cch
-    // throughput: 1 cyc/2 vec (16 els/cyc)
-    // latency: 2 cyc
-
-    unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
-
-        // We currently have:
-        //   a = [ a0  a1  a2  a3  a4  a5  a6  a7 ],
-        //   b = [ b0  b1  b2  b3  b4  b5  b6  b7 ].
-        // First form
-        //   t = [ a2  a3  b0  b1  a6  a7  b4  b5 ].
-        let t = x86_64::_mm256_alignr_epi8::<8>(b, a);
-
-        // Then
-        //   res0 = [ a0  a1  b0  b1  a4  a5  b4  b5 ],
-        //   res1 = [ a2  a3  b2  b3  a6  a7  b6  b7 ].
-        (
-            x86_64::_mm256_blend_epi32::<0b11001100>(a, t),
-            x86_64::_mm256_blend_epi32::<0b11001100>(t, b),
-        )
-    }
-}
-
-#[inline]
-#[must_use]
-fn interleave4(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
-    // We want this to compile to:
-    //      vperm2i128  t, a, b, 21h
-    //      vpblendd    res0, a, t, f0h
-    //      vpblendd    res1, t, b, f0h
-    // throughput: 1 cyc/2 vec (16 els/cyc)
-    // latency: 4 cyc
-
-    unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
-
-        // We currently have:
-        //   a = [ a0  a1  a2  a3  a4  a5  a6  a7 ],
-        //   b = [ b0  b1  b2  b3  b4  b5  b6  b7 ].
-        // First form
-        //   t = [ a4  a5  a6  a7  b0  b1  b2  b3 ].
-        let t = x86_64::_mm256_permute2x128_si256::<0x21>(a, b);
-
-        // Then
-        //   res0 = [ a0  a1  a2  a3  b0  b1  b2  b3 ],
-        //   res1 = [ a4  a5  a6  a7  b4  b5  b6  b7 ].
-        (
-            x86_64::_mm256_blend_epi32::<0b11110000>(a, t),
-            x86_64::_mm256_blend_epi32::<0b11110000>(t, b),
-        )
-    }
-}
-
-unsafe impl<FP: FieldParameters> PackedValue for PackedMontyField31AVX2<FP> {
-    type Value = MontyField31<FP>;
-
-    const WIDTH: usize = WIDTH;
-
-    #[inline]
-    fn from_slice(slice: &[MontyField31<FP>]) -> &Self {
-        assert_eq!(slice.len(), Self::WIDTH);
-        unsafe {
-            // Safety: `[MontyField31<FP>; WIDTH]` can be transmuted to `PackedMontyField31AVX2<FP>` since the
-            // latter is `repr(transparent)`. They have the same alignment, so the reference cast is
-            // safe too.
-            &*slice.as_ptr().cast()
-        }
-    }
-    #[inline]
-    fn from_slice_mut(slice: &mut [MontyField31<FP>]) -> &mut Self {
-        assert_eq!(slice.len(), Self::WIDTH);
-        unsafe {
-            // Safety: `[MontyField31<FP>; WIDTH]` can be transmuted to `PackedMontyField31AVX2<FP>` since the
-            // latter is `repr(transparent)`. They have the same alignment, so the reference cast is
-            // safe too.
-            &mut *slice.as_mut_ptr().cast()
-        }
-    }
-
-    /// Similar to `core:array::from_fn`.
-    #[inline]
-    fn from_fn<F: FnMut(usize) -> MontyField31<FP>>(f: F) -> Self {
-        let vals_arr: [_; WIDTH] = core::array::from_fn(f);
-        Self(vals_arr)
-    }
-
-    #[inline]
-    fn as_slice(&self) -> &[MontyField31<FP>] {
-        &self.0[..]
-    }
-    #[inline]
-    fn as_slice_mut(&mut self) -> &mut [MontyField31<FP>] {
-        &mut self.0[..]
-    }
-}
+impl_packed_value!(
+    PackedMontyField31AVX2,
+    MontyField31,
+    WIDTH,
+    (PackedMontyParameters, PMP)
+);
 
 unsafe impl<FP: FieldParameters> PackedField for PackedMontyField31AVX2<FP> {
     type Scalar = MontyField31<FP>;
@@ -1290,20 +1009,226 @@ unsafe impl<FP: FieldParameters> PackedField for PackedMontyField31AVX2<FP> {
     }
 }
 
-unsafe impl<FP: FieldParameters> PackedFieldPow2 for PackedMontyField31AVX2<FP> {
-    #[inline]
-    fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
-        let (v0, v1) = (self.to_vector(), other.to_vector());
-        let (res0, res1) = match block_len {
-            1 => interleave1(v0, v1),
-            2 => interleave2(v0, v1),
-            4 => interleave4(v0, v1),
-            8 => (v0, v1),
-            _ => panic!("unsupported block_len"),
-        };
-        unsafe {
-            // Safety: all values are in canonical form (we haven't changed them).
-            (Self::from_vector(res0), Self::from_vector(res1))
-        }
-    }
+impl_packed_field_pow_2!(
+    PackedMontyField31AVX2, (FieldParameters, FP);
+    [
+        (1, interleave_u32),
+        (2, interleave_u64),
+        (4, interleave_u128)
+    ],
+    WIDTH
+);
+
+/// Multiplication in a quartic binomial extension field.
+#[inline]
+pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
+    a: &[MontyField31<FP>; WIDTH],
+    b: &[MontyField31<FP>; WIDTH],
+    res: &mut [MontyField31<FP>; WIDTH],
+) where
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+{
+    assert_eq!(WIDTH, 4);
+
+    // TODO: It's plausible that this could be improved by folding the computation of packed_b into
+    // the custom AVX2 implementation. Similarly for BabyBear, a custom mul function could help as
+    // we only need to do 3 muls instead of the usual 8 so we can save quite a few operations.
+
+    // We only care about the entries 1, 2, 3 of packed b.
+    let packed_b = PackedMontyField31AVX2([b[0], b[1], b[2], b[3], b[0], b[1], b[2], b[3]]);
+    let w_b = FP::mul_w(packed_b).0;
+
+    // Constant term = a0*b0 + w(a1*b3 + a2*b2 + a3*b1)
+    // Linear term = a0*b1 + a1*b0 + w(a2*b3 + a3*b2)
+    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b3)
+    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0
+
+    // We write a custom AVX2 implementation as we want to do a 4 term dot-product but we
+    // only need to do 4 of them, not 8 in parallel so we can do something similar to
+    // dot_product_4 but with many fewer instructions.
+    // This will produce the output we want in the high parts of each u64 with the low parts
+    // being some nonsense (usually 0 but in principle might not be).
+    let dot_product: [MontyField31<FP>; 8] = unsafe {
+        let lhs_0 = x86_64::_mm256_set1_epi32(a[0].value as i32);
+        let lhs_1 = x86_64::_mm256_set1_epi32(a[1].value as i32);
+        let lhs_2 = x86_64::_mm256_set1_epi32(a[2].value as i32);
+        let lhs_3 = x86_64::_mm256_set1_epi32(a[3].value as i32);
+
+        // We use setr instead of set as setr reverses the order of the arguments
+        // for some reason.
+        let rhs_0 = x86_64::_mm256_setr_epi32(
+            b[0].value as i32,
+            0,
+            b[1].value as i32,
+            0,
+            b[2].value as i32,
+            0,
+            b[3].value as i32,
+            0,
+        );
+        let rhs_1 = x86_64::_mm256_setr_epi32(
+            w_b[3].value as i32,
+            0,
+            b[0].value as i32,
+            0,
+            b[1].value as i32,
+            0,
+            b[2].value as i32,
+            0,
+        );
+        let rhs_2 = x86_64::_mm256_setr_epi32(
+            w_b[2].value as i32,
+            0,
+            w_b[3].value as i32,
+            0,
+            b[0].value as i32,
+            0,
+            b[1].value as i32,
+            0,
+        );
+        let rhs_3 = x86_64::_mm256_setr_epi32(
+            w_b[1].value as i32,
+            0,
+            w_b[2].value as i32,
+            0,
+            w_b[3].value as i32,
+            0,
+            b[0].value as i32,
+            0,
+        );
+
+        let mul_0 = x86_64::_mm256_mul_epu32(lhs_0, rhs_0);
+        let mul_1 = x86_64::_mm256_mul_epu32(lhs_1, rhs_1);
+        let mul_2 = x86_64::_mm256_mul_epu32(lhs_2, rhs_2);
+        let mul_3 = x86_64::_mm256_mul_epu32(lhs_3, rhs_3);
+
+        let dot_01 = x86_64::_mm256_add_epi64(mul_0, mul_1);
+        let dot_23 = x86_64::_mm256_add_epi64(mul_2, mul_3);
+        let dot = x86_64::_mm256_add_epi64(dot_01, dot_23);
+
+        // We only care about the top 32 bits of dot as the bottom 32 bits will
+        // be cancelled out.
+        // Those bits currently lie in [0, 2P) so we reduce them to [0, P)
+        let dot_sub = x86_64::_mm256_sub_epi32(dot, FP::PACKED_P);
+        let dot_prime = x86_64::_mm256_min_epu32(dot, dot_sub);
+
+        let q = x86_64::_mm256_mul_epu32(dot, FP::PACKED_MU);
+        let q_p = x86_64::_mm256_mul_epu32(q, FP::PACKED_P);
+
+        let t = x86_64::_mm256_sub_epi32(dot_prime, q_p);
+        transmute(red_signed_to_canonical::<FP>(t))
+    };
+
+    res[0] = dot_product[1];
+    res[1] = dot_product[3];
+    res[2] = dot_product[5];
+    res[3] = dot_product[7];
+}
+
+/// Multiplication in a quintic binomial extension field.
+#[inline]
+pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
+    a: &[MontyField31<FP>; WIDTH],
+    b: &[MontyField31<FP>; WIDTH],
+    res: &mut [MontyField31<FP>; WIDTH],
+) where
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+{
+    // TODO: This could likely be optimised further with more effort.
+    // in particular it would benefit from a custom AVX2 implementation.
+    assert_eq!(WIDTH, 5);
+
+    let zero = MontyField31::<FP>::ZERO;
+    let w_b1 = FP::mul_w(b[1]);
+    let w_b2 = FP::mul_w(b[2]);
+    let w_b3 = FP::mul_w(b[3]);
+    let w_b4 = FP::mul_w(b[4]);
+
+    // Constant term = a0*b0 + w(a1*b4 + a2*b3 + a3*b2 + a4*b1)
+    // Linear term = a0*b1 + a1*b0 + w(a2*b4 + a3*b3 + a4*b2)
+    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b4 + a4*b3)
+    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0 + w*a4*b4
+    // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 + a4*b0
+    let lhs = [
+        PackedMontyField31AVX2([a[0], a[0], a[0], a[0], a[0], a[4], a[4], a[4]]),
+        PackedMontyField31AVX2([a[1], a[1], a[1], a[1], a[1], zero, zero, zero]),
+        PackedMontyField31AVX2([a[2], a[2], a[2], a[2], a[2], zero, zero, zero]),
+        PackedMontyField31AVX2([a[3], a[3], a[3], a[3], a[3], zero, zero, zero]),
+    ];
+    let rhs = [
+        PackedMontyField31AVX2([b[0], b[1], b[2], b[3], b[4], w_b3, w_b4, b[0]]),
+        PackedMontyField31AVX2([w_b4, b[0], b[1], b[2], b[3], zero, zero, zero]),
+        PackedMontyField31AVX2([w_b3, w_b4, b[0], b[1], b[2], zero, zero, zero]),
+        PackedMontyField31AVX2([w_b2, w_b3, w_b4, b[0], b[1], zero, zero, zero]),
+    ];
+
+    let dot_res = unsafe { PackedMontyField31AVX2::from_vector(dot_product_4(lhs, rhs)) };
+
+    // We managed to compute 3 of the extra terms in the last 3 places of the dot product.
+    // This leaves us with 2 terms remaining we need to compute manually.
+    let extra1 = w_b1 * a[4];
+    let extra2 = w_b2 * a[4];
+
+    let extra_addition = PackedMontyField31AVX2([
+        extra1,
+        extra2,
+        dot_res.0[5],
+        dot_res.0[6],
+        dot_res.0[7],
+        zero,
+        zero,
+        zero,
+    ]);
+    let total = dot_res + extra_addition;
+
+    res.copy_from_slice(&total.0[..5]);
+}
+
+/// Multiplication in an octic binomial extension field.
+#[inline]
+pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
+    a: &[MontyField31<FP>; WIDTH],
+    b: &[MontyField31<FP>; WIDTH],
+    res: &mut [MontyField31<FP>; WIDTH],
+) where
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+{
+    // TODO: It's plausible that this could be improved by a custom AVX2 implementation.
+    assert_eq!(WIDTH, 8);
+    let packed_b = PackedMontyField31AVX2([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
+    let w_b = FP::mul_w(packed_b).0;
+
+    // Constant coefficient = a0*b0 + w(a1*b7 + ... + a7*b1)
+    // Linear coefficient = a0*b1 + a1*b0 + w(a2*b7 + ... + a7*b2)
+    // Square coefficient = a0*b2 + .. + a2*b0 + w(a3*b7 + ... + a7*b3)
+    // Cube coefficient = a0*b3 + .. + a3*b0 + w(a4*b7 + ... + a7*b4)
+    // Quartic coefficient = a0*b4 + ... + a4*b0 + w(a5*b7 + ... + a7*b5)
+    // Quintic coefficient = a0*b5 + ... + a5*b0 + w(a6*b7 + ... + a7*b6)
+    // Sextic coefficient = a0*b6 + ... + a6*b0 + w*a7*b7
+    // Final coefficient = a0*b7 + ... + a7*b7
+    // This can be implemented reasonably efficiently as an 8-term dot product.
+    let lhs: [PackedMontyField31AVX2<FP>; 8] = [
+        a[0].into(),
+        a[1].into(),
+        a[2].into(),
+        a[3].into(),
+        a[4].into(),
+        a[5].into(),
+        a[6].into(),
+        a[7].into(),
+    ];
+    let rhs = [
+        PackedMontyField31AVX2([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]),
+        PackedMontyField31AVX2([w_b[7], b[0], b[1], b[2], b[3], b[4], b[5], b[6]]),
+        PackedMontyField31AVX2([w_b[6], w_b[7], b[0], b[1], b[2], b[3], b[4], b[5]]),
+        PackedMontyField31AVX2([w_b[5], w_b[6], w_b[7], b[0], b[1], b[2], b[3], b[4]]),
+        PackedMontyField31AVX2([w_b[4], w_b[5], w_b[6], w_b[7], b[0], b[1], b[2], b[3]]),
+        PackedMontyField31AVX2([w_b[3], w_b[4], w_b[5], w_b[6], w_b[7], b[0], b[1], b[2]]),
+        PackedMontyField31AVX2([w_b[2], w_b[3], w_b[4], w_b[5], w_b[6], w_b[7], b[0], b[1]]),
+        PackedMontyField31AVX2([w_b[1], w_b[2], w_b[3], w_b[4], w_b[5], w_b[6], w_b[7], b[0]]),
+    ];
+
+    let dot = PackedMontyField31AVX2::dot_product(&lhs, &rhs).0;
+
+    res[..].copy_from_slice(&dot);
 }

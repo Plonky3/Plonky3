@@ -15,7 +15,7 @@ use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
 
 use super::{HasFrobenius, HasTwoAdicBinomialExtension, PackedBinomialExtensionField};
-use crate::extension::BinomiallyExtendable;
+use crate::extension::{BinomiallyExtendable, BinomiallyExtendableAlgebra};
 use crate::field::Field;
 use crate::{
     Algebra, BasedVectorSpace, ExtensionField, Packable, PrimeCharacteristicRing,
@@ -194,7 +194,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
 impl<F, A, const D: usize> PrimeCharacteristicRing for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: Algebra<F>,
+    A: BinomiallyExtendableAlgebra<F, D>,
 {
     type PrimeSubfield = <A as PrimeCharacteristicRing>::PrimeSubfield;
 
@@ -215,18 +215,7 @@ where
     fn square(&self) -> Self {
         let mut res = Self::default();
         let w = F::W;
-        match D {
-            2 => {
-                let a = &self.value;
-                let a1_w = a[1].clone() * F::W;
-                res.value[0] = A::dot_product(a[..].try_into().unwrap(), &[a[0].clone(), a1_w]);
-                res.value[1] = a[0].clone() * a[1].double();
-            }
-            3 => cubic_square(&self.value, &mut res.value),
-            4 => quartic_square(&self.value, &mut res.value, w),
-            5 => quintic_square(&self.value, &mut res.value, w),
-            _ => binomial_mul::<F, A, A, D>(&self.value, &self.value, &mut res.value, w),
-        }
+        binomial_square(&self.value, &mut res.value, w);
         res
     }
 
@@ -320,6 +309,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
             3 => cubic_inv(&self.value, &mut res.value, F::W),
             4 => quartic_inv(&self.value, &mut res.value, F::W),
             5 => res = quintic_inv(self),
+            8 => octic_inv(&self.value, &mut res.value, F::W),
             _ => res = self.frobenius_inv(),
         }
 
@@ -449,7 +439,7 @@ where
 impl<F, A, const D: usize> Sum for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: Algebra<F>,
+    A: BinomiallyExtendableAlgebra<F, D>,
 {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
@@ -513,7 +503,7 @@ where
 impl<F, A, const D: usize> Mul for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: Algebra<F>,
+    A: BinomiallyExtendableAlgebra<F, D>,
 {
     type Output = Self;
 
@@ -524,7 +514,7 @@ where
         let mut res = Self::default();
         let w = F::W;
 
-        binomial_mul::<F, A, A, D>(&a, &b, &mut res.value, w);
+        A::binomial_mul(&a, &b, &mut res.value, w);
 
         res
     }
@@ -533,7 +523,7 @@ where
 impl<F, A, const D: usize> Mul<A> for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: Algebra<F>,
+    A: BinomiallyExtendableAlgebra<F, D>,
 {
     type Output = Self;
 
@@ -546,7 +536,7 @@ where
 impl<F, A, const D: usize> MulAssign for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: Algebra<F>,
+    A: BinomiallyExtendableAlgebra<F, D>,
 {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
@@ -557,7 +547,7 @@ where
 impl<F, A, const D: usize> MulAssign<A> for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: Algebra<F>,
+    A: BinomiallyExtendableAlgebra<F, D>,
 {
     #[inline]
     fn mul_assign(&mut self, rhs: A) {
@@ -568,7 +558,7 @@ where
 impl<F, A, const D: usize> Product for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: Algebra<F>,
+    A: BinomiallyExtendableAlgebra<F, D>,
 {
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
@@ -665,6 +655,7 @@ pub(super) fn binomial_mul<
         3 => cubic_mul(a, b, res, w),
         4 => quartic_mul(a, b, res, w),
         5 => quintic_mul(a, b, res, w),
+        8 => octic_mul(a, b, res, w),
         _ =>
         {
             #[allow(clippy::needless_range_loop)]
@@ -678,6 +669,29 @@ pub(super) fn binomial_mul<
                 }
             }
         }
+    }
+}
+
+/// Square a vector representing an element in a binomial extension.
+///
+/// This is optimized for the case that R is a prime field or its packing.
+#[inline]
+pub(super) fn binomial_square<F: Field, R: Algebra<F>, const D: usize>(
+    a: &[R; D],
+    res: &mut [R; D],
+    w: F,
+) {
+    match D {
+        2 => {
+            let a1_w = a[1].clone() * w;
+            res[0] = R::dot_product(a[..].try_into().unwrap(), &[a[0].clone(), a1_w]);
+            res[1] = a[0].clone() * a[1].double();
+        }
+        3 => cubic_square(a, res, w),
+        4 => quartic_square(a, res, w),
+        5 => quintic_square(a, res, w),
+        8 => octic_square(a, res, w),
+        _ => binomial_mul::<F, R, R, D>(a, a, res, w),
     }
 }
 
@@ -748,7 +762,7 @@ fn cubic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
 
 /// karatsuba multiplication for cubic extension field
 #[inline]
-pub(crate) fn cubic_mul<F: Field, R: Algebra<F> + Algebra<R2>, R2: Algebra<F>, const D: usize>(
+fn cubic_mul<F: Field, R: Algebra<F> + Algebra<R2>, R2: Algebra<F>, const D: usize>(
     a: &[R; D],
     b: &[R2; D],
     res: &mut [R; D],
@@ -776,13 +790,10 @@ pub(crate) fn cubic_mul<F: Field, R: Algebra<F> + Algebra<R2>, R2: Algebra<F>, c
 
 /// Section 11.3.6a in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
-pub(crate) fn cubic_square<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: usize>(
-    a: &[A; D],
-    res: &mut [A; D],
-) {
+fn cubic_square<F: Field, R: Algebra<F>, const D: usize>(a: &[R; D], res: &mut [R; D], w: F) {
     assert_eq!(D, 3);
 
-    let w_a2 = a[2].clone() * F::W;
+    let w_a2 = a[2].clone() * w;
 
     res[0] = a[0].square() + (a[1].clone() * w_a2.clone()).double();
     res[1] = w_a2 * a[2].clone() + (a[0].clone() * a[1].clone()).double();
@@ -794,7 +805,7 @@ pub(crate) fn cubic_square<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: u
 /// Makes use of the in built field dot product code. This is optimized for the case that
 /// R is a prime field or its packing.
 #[inline]
-fn quartic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
+pub fn quartic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
 where
     F: Field,
     R: Algebra<F> + Algebra<R2>,
@@ -883,7 +894,7 @@ fn quartic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
 /// Makes use of the in built field dot product code. This is optimized for the case that
 /// R is a prime field or its packing.
 #[inline]
-pub(crate) fn quartic_square<F, R, const D: usize>(a: &[R; D], res: &mut [R; D], w: F)
+fn quartic_square<F, R, const D: usize>(a: &[R; D], res: &mut [R; D], w: F)
 where
     F: Field,
     R: Algebra<F>,
@@ -922,7 +933,7 @@ where
 ///
 /// Makes use of the in built field dot product code. This is optimized for the case that
 /// R is a prime field or its packing.
-fn quintic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
+pub fn quintic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
 where
     F: Field,
     R: Algebra<F> + Algebra<R2>,
@@ -981,7 +992,7 @@ where
 /// Makes use of the in built field dot product code. This is optimized for the case that
 /// R is a prime field or its packing.
 #[inline]
-pub(crate) fn quintic_square<F, R, const D: usize>(a: &[R; D], res: &mut [R; D], w: F)
+fn quintic_square<F, R, const D: usize>(a: &[R; D], res: &mut [R; D], w: F)
 where
     F: Field,
     R: Algebra<F>,
@@ -1026,6 +1037,121 @@ where
     );
 }
 
+/// Optimized Square function for octic extension field elements.
+///
+/// Makes use of the in built field dot product code. This is optimized for the case that
+/// R is a prime field or its packing.
+#[inline]
+fn octic_square<F, R, const D: usize>(a: &[R; D], res: &mut [R; D], w: F)
+where
+    F: Field,
+    R: Algebra<F>,
+{
+    assert_eq!(D, 8);
+
+    let a0_2 = a[0].double();
+    let a1_2 = a[1].double();
+    let a2_2 = a[2].double();
+    let a3_2 = a[3].double();
+    let w_a4 = a[4].clone() * w;
+    let w_a5 = a[5].clone() * w;
+    let w_a6 = a[6].clone() * w;
+    let w_a7 = a[7].clone() * w;
+    let w_a5_2 = w_a5.double();
+    let w_a6_2 = w_a6.double();
+    let w_a7_2 = w_a7.double();
+
+    // Constant coefficient = a0² + w (2(a1 * a7 + a2 * a6 + a3 * a5) + a4²)
+    res[0] = R::dot_product(
+        &[
+            a[0].clone(),
+            a[1].clone(),
+            a[2].clone(),
+            a[3].clone(),
+            a[4].clone(),
+        ],
+        &[
+            a[0].clone(),
+            w_a7_2.clone(),
+            w_a6_2.clone(),
+            w_a5_2.clone(),
+            w_a4,
+        ],
+    );
+
+    // Linear coefficient = 2(a0 * a1 + w(a2 * a7 + a3 * a6 + a4 * a5))
+    res[1] = R::dot_product(
+        &[a0_2.clone(), a[2].clone(), a[3].clone(), a[4].clone()],
+        &[a[1].clone(), w_a7_2.clone(), w_a6_2.clone(), w_a5_2.clone()],
+    );
+
+    // Square coefficient = 2a0 * a2 + a1² + w(2(a3 * a7 + a4 * a6) + a5²)
+    res[2] = R::dot_product(
+        &[
+            a0_2.clone(),
+            a[1].clone(),
+            a[3].clone(),
+            a[4].clone(),
+            a[5].clone(),
+        ],
+        &[
+            a[2].clone(),
+            a[1].clone(),
+            w_a7_2.clone(),
+            w_a6_2.clone(),
+            w_a5,
+        ],
+    );
+
+    // Cube coefficient = 2(a0 * a3 + a1 * a2 + w(a4 * a7 + a5 * a6)
+    res[3] = R::dot_product(
+        &[a0_2.clone(), a1_2.clone(), a[4].clone(), a[5].clone()],
+        &[a[3].clone(), a[2].clone(), w_a7_2.clone(), w_a6_2.clone()],
+    );
+
+    // Quartic coefficient = 2(a0 * a4 + a1 * a3) + a2² + w(2 * a7 * a5 + a6²)
+    res[4] = R::dot_product(
+        &[
+            a0_2.clone(),
+            a1_2.clone(),
+            a[2].clone(),
+            a[5].clone(),
+            a[6].clone(),
+        ],
+        &[
+            a[4].clone(),
+            a[3].clone(),
+            a[2].clone(),
+            w_a7_2.clone(),
+            w_a6,
+        ],
+    );
+
+    // Quintic coefficient = 2 * (a0 * a5 + a1 * a4 + a2 * a3 + w * a6 * a7)
+    res[5] = R::dot_product(
+        &[a0_2.clone(), a1_2.clone(), a2_2.clone(), a[6].clone()],
+        &[a[5].clone(), a[4].clone(), a[3].clone(), w_a7_2],
+    );
+
+    // Sextic coefficient = 2(a0 * a6 + a1 * a5 + a2 * a4) + a3² + w * a7²
+    res[6] = R::dot_product(
+        &[
+            a0_2.clone(),
+            a1_2.clone(),
+            a2_2.clone(),
+            a[3].clone(),
+            a[7].clone(),
+        ],
+        &[a[6].clone(), a[5].clone(), a[4].clone(), a[3].clone(), w_a7],
+    );
+
+    // Final coefficient = 2(a0 * a7 + a1 * a6 + a2 * a5 + a3 * a4)
+    res[7] = R::dot_product(
+        &[a0_2, a1_2, a2_2, a3_2],
+        &[a[7].clone(), a[6].clone(), a[5].clone(), a[4].clone()],
+    );
+}
+
 /// Compute the inverse of a quintic binomial extension field element.
 #[inline]
 fn quintic_inv<F: BinomiallyExtendable<D>, const D: usize>(
@@ -1047,4 +1173,145 @@ fn quintic_inv<F: BinomiallyExtendable<D>, const D: usize>(
     debug_assert_eq!(BinomialExtensionField::<F, D>::from(norm), *a * prod_conj);
 
     prod_conj * norm.inverse()
+}
+
+/// Compute the (D-N)'th coefficient in the multiplication of two elements in a degree
+/// D binomial extension field.
+///
+/// a_0 * b_{D - N} + ... + a_{D - N} * b_0 + w * (a_{D - N + 1}b_{D - 1} + ... + a_{D - 1}b_{D - N + 1})
+///
+/// # Inputs
+/// - a: An array of coefficients.
+/// - b: An array of coefficients in reverse order with last element equal to `W`
+#[inline]
+fn compute_coefficient<
+    F,
+    R,
+    const D: usize,
+    const D_PLUS_1: usize,
+    const N: usize,
+    const D_PLUS_1_MIN_N: usize,
+>(
+    a: &[R; D],
+    b_rev: &[R; D_PLUS_1],
+) -> R
+where
+    F: Field,
+    R: Algebra<F>,
+{
+    let w_coeff = R::dot_product::<N>(
+        a[(D - N)..].try_into().unwrap(),
+        b_rev[..N].try_into().unwrap(),
+    );
+    let mut scratch: [R; D_PLUS_1_MIN_N] = array::from_fn(|i| a[i].clone());
+    scratch[D_PLUS_1_MIN_N - 1] = w_coeff;
+    R::dot_product(&scratch, b_rev[N..].try_into().unwrap())
+}
+
+/// Multiplication in an octic binomial extension field.
+///
+/// Makes use of the in built field dot product code. This is optimized for the case that
+/// R is a prime field or its packing.
+#[inline]
+pub fn octic_mul<F, R, R2, const D: usize>(a: &[R; D], b: &[R2; D], res: &mut [R; D], w: F)
+where
+    F: Field,
+    R: Algebra<F> + Algebra<R2>,
+    R2: Algebra<F>,
+{
+    assert_eq!(D, 8);
+    let a: &[R; 8] = a[..].try_into().unwrap();
+    let mut b_r_rev: [R; 9] = [
+        b[7].clone().into(),
+        b[6].clone().into(),
+        b[5].clone().into(),
+        b[4].clone().into(),
+        b[3].clone().into(),
+        b[2].clone().into(),
+        b[1].clone().into(),
+        b[0].clone().into(),
+        w.into(),
+    ];
+
+    // Constant coefficient = a0*b0 + w(a1*b7 + ... + a7*b1)
+    res[0] = compute_coefficient::<F, R, 8, 9, 7, 2>(a, &b_r_rev);
+
+    // Linear coefficient = a0*b1 + a1*b0 + w(a2*b7 + ... + a7*b2)
+    res[1] = compute_coefficient::<F, R, 8, 9, 6, 3>(a, &b_r_rev);
+
+    // Square coefficient = a0*b2 + .. + a2*b0 + w(a3*b7 + ... + a7*b3)
+    res[2] = compute_coefficient::<F, R, 8, 9, 5, 4>(a, &b_r_rev);
+
+    // Cube coefficient = a0*b3 + .. + a3*b0 + w(a4*b7 + ... + a7*b4)
+    res[3] = compute_coefficient::<F, R, 8, 9, 4, 5>(a, &b_r_rev);
+
+    // Quartic coefficient = a0*b4 + ... + a4*b0 + w(a5*b7 + ... + a7*b5)
+    res[4] = compute_coefficient::<F, R, 8, 9, 3, 6>(a, &b_r_rev);
+
+    // Quintic coefficient = a0*b5 + ... + a5*b0 + w(a6*b7 + ... + a7*b6)
+    res[5] = compute_coefficient::<F, R, 8, 9, 2, 7>(a, &b_r_rev);
+
+    // Sextic coefficient = a0*b6 + ... + a6*b0 + w*a7*b7
+    b_r_rev[8] *= b[7].clone();
+    res[6] = R::dot_product::<8>(a, b_r_rev[1..].try_into().unwrap());
+
+    // Final coefficient = a0*b7 + ... + a7*b0
+    res[7] = R::dot_product::<8>(a, b_r_rev[..8].try_into().unwrap());
+}
+
+/// Compute the inverse of a octic binomial extension field element.
+#[inline]
+fn octic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
+    assert_eq!(D, 8);
+
+    // We use the fact that the octic extension is a tower of extensions.
+    // Explicitly our tower looks like F < F[x]/(X⁴ - w) < F[x]/(X^8 - w).
+    // Using this, we can compute the inverse of a in three steps:
+
+    // Compute the norm of our element with respect to F[x]/(X⁴-w).
+    // Writing a = a0 + a1·X + a2·X² + a3·X³ + a4·X⁴ + a5·X⁵ + a6·X⁶ + a7·X⁷
+    //           = (a0 + a2·X² + a4·X⁴ + a6·X⁶) + (a1 + a3·X² + a5·X⁴ + a7·X⁶)·X
+    //           = evens + odds·X
+    //
+    // The norm is given by:
+    //    norm = (evens + odds·X) * (evens - odds·X)
+    //          = evens² - odds²·X²
+    //
+    // This costs 2 multiplications in the quartic extension field.
+    let evns = [a[0], a[2], a[4], a[6]];
+    let odds = [a[1], a[3], a[5], a[7]];
+    let mut evns_sq = [F::ZERO; 4];
+    let mut odds_sq = [F::ZERO; 4];
+    quartic_square(&evns, &mut evns_sq, w);
+    quartic_square(&odds, &mut odds_sq, w);
+    // odds_sq is multiplied by X^2 so we need to rotate it and multiply by a factor of w.
+    let norm = [
+        evns_sq[0] - w * odds_sq[3],
+        evns_sq[1] - odds_sq[0],
+        evns_sq[2] - odds_sq[1],
+        evns_sq[3] - odds_sq[2],
+    ];
+
+    // Now we compute the inverse of norm inside F[x]/(X⁴ - w). We already have an efficient function for this.
+    let mut norm_inv = [F::ZERO; 4];
+    quartic_inv(&norm, &mut norm_inv, w);
+
+    // Then the inverse of a is given by:
+    //      a⁻¹ = (evens - odds·X)·norm⁻¹
+    //          = evens·norm⁻¹ - odds·norm⁻¹·X
+    //
+    // Both of these multiplications can again be done in the quartic extension field.
+    let mut out_evn = [F::ZERO; 4];
+    let mut out_odd = [F::ZERO; 4];
+    quartic_mul(&evns, &norm_inv, &mut out_evn, w);
+    quartic_mul(&odds, &norm_inv, &mut out_odd, w);
+
+    res[0] = out_evn[0];
+    res[1] = -out_odd[0];
+    res[2] = out_evn[1];
+    res[3] = -out_odd[1];
+    res[4] = out_evn[2];
+    res[5] = -out_odd[2];
+    res[6] = out_evn[3];
+    res[7] = -out_odd[3];
 }

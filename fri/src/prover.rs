@@ -4,14 +4,17 @@ use core::iter;
 
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::Mmcs;
+use p3_commit::{BatchOpening, Mmcs};
 use p3_dft::{Radix2DFTSmallBatch, TwoAdicSubgroupDft};
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 use tracing::{debug_span, info_span, instrument};
 
-use crate::{CommitPhaseProofStep, FriFoldingStrategy, FriParameters, FriProof, QueryProof};
+use crate::{
+    CommitPhaseProofStep, FriFoldingStrategy, FriParameters, FriProof, ProverDataWithOpeningPoints,
+    QueryProof,
+};
 
 /// Create a proof that an opening `f(zeta)` is correct by proving that the
 /// function `(f(x) - f(zeta))/(x - zeta)` is low degree.
@@ -30,24 +33,32 @@ use crate::{CommitPhaseProofStep, FriFoldingStrategy, FriParameters, FriProof, Q
 /// Arguments:
 /// - `folding`: The FRI folding scheme to use.
 /// - `params`: The parameters for the specific FRI protocol instance.
-/// - `inputs`: The evaluation vectors of the polynomials.
+/// - `inputs`: The evaluation vectors of all polynomials we are applying FRI to. The function assumes that
+///   commitments to these vectors have been produced and observed by the challenger earlier in the protocol.
 /// - `challenger`: The Fiat-Shamir challenger to use for sampling challenges.
-/// - `open_input`: A function that takes an index and produces proofs that the initial values in
-///   inputs at that index (Or at `index >> i` for smaller `f`'s) are correct.
+/// - `log_global_max_height`: The log of the maximum height of the input matrices.
+/// - `prover_data_with_opening_points`: A list of pairs of a batch commitment to a collection
+///   of matrices and a list of points to open those matrices at.
 #[instrument(name = "FRI prover", skip_all)]
-pub fn prove_fri<Folding, Val, Challenge, M, Challenger>(
+pub fn prove_fri<Folding, Val, Challenge, InputMmcs, FriMmcs, Challenger>(
     folding: &Folding,
-    params: &FriParameters<M>,
+    params: &FriParameters<FriMmcs>,
     inputs: Vec<Vec<Challenge>>,
     challenger: &mut Challenger,
-    open_input: impl Fn(usize) -> Folding::InputProof,
-) -> FriProof<Challenge, M, Challenger::Witness, Folding::InputProof>
+    log_global_max_height: usize,
+    prover_data_with_opening_points: &[ProverDataWithOpeningPoints<
+        Challenge,
+        InputMmcs::ProverData<RowMajorMatrix<Val>>,
+    >],
+    input_mmcs: &InputMmcs,
+) -> FriProof<Challenge, FriMmcs, Challenger::Witness, Folding::InputProof>
 where
     Val: TwoAdicField,
     Challenge: ExtensionField<Val>,
-    M: Mmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
-    Folding: FriFoldingStrategy<Val, Challenge>,
+    InputMmcs: Mmcs<Val>,
+    FriMmcs: Mmcs<Challenge>,
+    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<FriMmcs::Commitment>,
+    Folding: FriFoldingStrategy<Val, Challenge, InputProof = Vec<BatchOpening<Val, InputMmcs>>>,
 {
     assert!(!inputs.is_empty());
     assert!(
@@ -91,7 +102,12 @@ where
             // For each index, create a proof that the folding operations along the chain:
             // round 0: index, round 1: index >> 1, round 2: index >> 2, ... are correct.
             QueryProof {
-                input_proof: open_input(index),
+                input_proof: open_input(
+                    log_global_max_height,
+                    index,
+                    prover_data_with_opening_points,
+                    input_mmcs,
+                ),
                 commit_phase_openings: answer_query(
                     params,
                     &commit_phase_result.data,
@@ -126,14 +142,14 @@ struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
 /// We then commit to the evaluation vector of `f_{i + 1}` over `H^2`.
 ///
 /// Once the degree of our polynomial falls below `final_poly_degree`, we compute the coefficients of our
-/// polynomial and return it along with all intermediate evaluations and our commitments to them.
+/// polynomial and return them along with all intermediate evaluations and corresponding commitments.
 ///
 /// Arguments:
-/// - `folding`:
-/// - `params`: Together, these contain all information needed to define the FRI protocol.
-///    E.g. the folding scheme, the code rate, the final polynomial size.
+/// - `folding`: The FRI folding scheme used by the prover.
+/// - `params`: The parameters for the specific FRI protocol instance.
 /// - `inputs`: The evaluation vectors of the polynomials. These must be sorted in descending order of length and each
-///   evaluation vector must be in bit reversed order.
+///   evaluation vector must be in bit reversed order. This function assumes that commitments to these vectors
+///   have already been produced and observed by the challenger.
 /// - `challenger`: The Fiat-Shamir challenger to use for sampling challenges.
 #[instrument(name = "commit phase", skip_all)]
 fn commit_phase<Folding, Val, Challenge, M, Challenger>(
@@ -179,9 +195,8 @@ where
         // If we have reached the size of the next input vector, we can add it to the current vector.
         if let Some(v) = inputs_iter.next_if(|v| v.len() == folded.len()) {
             // Each element of `inputs_iter` is a reduced opening polynomial, which is itself a
-            // random linear combination `f_{i, 0} + alpha f_{i, 1} + ...`, but when we add it
-            // to the current folded polynomial, we need to multiply by a new random factor since
-            // `f_{i, 0}` has no leading coefficient.
+            // random linear combination `f_{i, 0} + alpha f_{i, 1} + ...`, when we add it
+            // to the current folded polynomial, we need to multiply by a random factor.
             izip!(&mut folded, v).for_each(|(c, x)| *c += beta.square() * x);
         }
     }
@@ -222,8 +237,9 @@ where
 /// Arguments:
 /// - `params`: The parameters for the specific FRI protocol instance.
 /// - `folded_polynomial_commits`: A slice of commitments to the intermediate stage polynomials.
-/// - `start_index`: The opening index for the unfolded polynomial. For folded polynomials
-///   we use this this index right shifted by the number of folds.
+/// - `start_index`: The opening index for the unfolded polynomial. For folded polynomials,
+///   we use this index right shifted by the number of folds.
+#[inline]
 fn answer_query<F, M>(
     config: &FriParameters<M>,
     folded_polynomial_commits: &[M::ProverData<RowMajorMatrix<F>>],
@@ -258,6 +274,49 @@ where
                 sibling_value,
                 opening_proof,
             }
+        })
+        .collect()
+}
+
+/// Given an index, produce batch opening proofs for each collection of matrices
+/// combined into a single mmcs commitment.
+///
+/// In cases where the maximum height of a batch of matrices is smaller than the
+/// global max height, shift the index down to compensate.
+///
+/// Arguments:
+/// - `log_global_max_height`: The log of the maximum height of the input matrices.
+/// - `index`: The index to open the matrices at.
+/// - `prover_data_with_opening_points`: A list of pairs of a batch commitment to a collection
+///   of matrices and a list of points to open those matrices at.
+/// - `mmcs`: The mixed matrix commitment scheme used to produce the batch commitments.
+#[inline]
+fn open_input<Val, Challenge, InputMmcs>(
+    log_global_max_height: usize,
+    index: usize,
+    prover_data_with_opening_points: &[ProverDataWithOpeningPoints<
+        Challenge,
+        InputMmcs::ProverData<RowMajorMatrix<Val>>,
+    >],
+    mmcs: &InputMmcs,
+) -> Vec<BatchOpening<Val, InputMmcs>>
+where
+    Val: TwoAdicField,
+    Challenge: ExtensionField<Val>,
+    InputMmcs: Mmcs<Val>,
+{
+    // This gives the verifier access to evaluations `f(x)` from which it can compute
+    // `(f(zeta) - f(x))/(zeta - x)` and then combine them together and roll into FRI
+    // as appropriate.
+    prover_data_with_opening_points
+        .iter()
+        .map(|(data, _)| {
+            let log_max_height = log2_strict_usize(mmcs.get_max_height(data));
+            let bits_reduced = log_global_max_height - log_max_height;
+            // If a matrix is smaller than global max height, we roll it into
+            // fri in a later round.
+            let reduced_index = index >> bits_reduced;
+            mmcs.open_batch(reduced_index, data)
         })
         .collect()
 }

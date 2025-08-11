@@ -6,11 +6,14 @@ use core::fmt::{self, Debug, Display, Formatter};
 use core::hash::Hash;
 use core::iter::{Product, Sum};
 use core::marker::PhantomData;
-use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::{array, iter};
 
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;
+use p3_field::op_assign_macros::{
+    impl_add_assign, impl_div_methods, impl_mul_methods, impl_sub_assign,
+};
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
     PrimeField32, PrimeField64, RawDataSerializable, TwoAdicField,
@@ -163,7 +166,7 @@ impl<'de, FP: FieldParameters> Deserialize<'de> for MontyField31<FP> {
     }
 }
 
-impl<FP: FieldParameters> Packable for MontyField31<FP> {}
+impl<MP: MontyParameters> Packable for MontyField31<MP> {}
 
 impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
     type PrimeSubfield = Self;
@@ -656,25 +659,6 @@ impl<FP: MontyParameters> Add for MontyField31<FP> {
     }
 }
 
-impl<FP: MontyParameters> AddAssign for MontyField31<FP> {
-    #[inline]
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
-impl<FP: MontyParameters> Sum for MontyField31<FP> {
-    #[inline]
-    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO) for iterators of length > 2.
-        // There might be a faster reduction method possible for lengths <= 16 which avoids %.
-
-        // This sum will not overflow so long as iter.len() < 2^33.
-        let sum = iter.map(|x| x.value as u64).sum::<u64>();
-        Self::new_monty((sum % FP::PRIME as u64) as u32)
-    }
-}
-
 impl<FP: MontyParameters> Sub for MontyField31<FP> {
     type Output = Self;
 
@@ -684,13 +668,6 @@ impl<FP: MontyParameters> Sub for MontyField31<FP> {
         let corr = if over { FP::PRIME } else { 0 };
         diff = diff.wrapping_add(corr);
         Self::new_monty(diff)
-    }
-}
-
-impl<FP: MontyParameters> SubAssign for MontyField31<FP> {
-    #[inline]
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
     }
 }
 
@@ -713,26 +690,19 @@ impl<FP: MontyParameters> Mul for MontyField31<FP> {
     }
 }
 
-impl<FP: MontyParameters> MulAssign for MontyField31<FP> {
-    #[inline]
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = *self * rhs;
-    }
-}
+impl_add_assign!(MontyField31, (MontyParameters, MP));
+impl_sub_assign!(MontyField31, (MontyParameters, MP));
+impl_mul_methods!(MontyField31, (FieldParameters, FP));
+impl_div_methods!(MontyField31, MontyField31, (FieldParameters, FP));
 
-impl<FP: FieldParameters> Product for MontyField31<FP> {
+impl<FP: MontyParameters> Sum for MontyField31<FP> {
     #[inline]
-    fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|x, y| x * y).unwrap_or(Self::ONE)
-    }
-}
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO) for iterators of length > 2.
+        // There might be a faster reduction method possible for lengths <= 16 which avoids %.
 
-impl<FP: FieldParameters> Div for MontyField31<FP> {
-    type Output = Self;
-
-    #[allow(clippy::suspicious_arithmetic_impl)]
-    #[inline]
-    fn div(self, rhs: Self) -> Self {
-        self * rhs.inverse()
+        // This sum will not overflow so long as iter.len() < 2^33.
+        let sum = iter.map(|x| x.value as u64).sum::<u64>();
+        Self::new_monty((sum % FP::PRIME as u64) as u32)
     }
 }

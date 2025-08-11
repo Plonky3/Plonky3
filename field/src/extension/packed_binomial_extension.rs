@@ -9,11 +9,8 @@ use p3_util::{flatten_to_base, reconstitute_from_base};
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 
-use super::{
-    BinomialExtensionField, binomial_mul, cubic_square, quartic_square, quintic_square, vector_add,
-    vector_sub,
-};
-use crate::extension::BinomiallyExtendable;
+use super::{BinomialExtensionField, binomial_mul, vector_add, vector_sub};
+use crate::extension::{BinomiallyExtendable, binomial_square};
 use crate::{
     Algebra, BasedVectorSpace, Field, PackedField, PackedFieldExtension, PackedValue, Powers,
     PrimeCharacteristicRing, field_to_array,
@@ -126,18 +123,7 @@ where
     fn square(&self) -> Self {
         let mut res = Self::default();
         let w = F::W;
-        match D {
-            2 => {
-                let a = &self.value;
-                let a1_w = a[1] * F::W;
-                res.value[0] = PF::dot_product(a[..].try_into().unwrap(), &[a[0], a1_w]);
-                res.value[1] = a[0] * a[1].double();
-            }
-            3 => cubic_square(&self.value, &mut res.value),
-            4 => quartic_square(&self.value, &mut res.value, w),
-            5 => quintic_square(&self.value, &mut res.value, w),
-            _ => binomial_mul::<F, PF, PF, D>(&self.value, &self.value, &mut res.value, w),
-        }
+        binomial_square(&self.value, &mut res.value, w);
         res
     }
 

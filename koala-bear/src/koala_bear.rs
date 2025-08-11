@@ -1,5 +1,5 @@
-use p3_field::PrimeCharacteristicRing;
 use p3_field::exponentiation::exp_1420470955;
+use p3_field::{Algebra, PrimeCharacteristicRing};
 use p3_monty_31::{
     BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
     PackedMontyParameters, RelativelyPrimePower, TwoAdicData,
@@ -67,6 +67,12 @@ impl TwoAdicData for KoalaBearParameters {
 
 impl BinomialExtensionData<4> for KoalaBearParameters {
     const W: KoalaBear = KoalaBear::new(3);
+
+    #[inline(always)]
+    fn mul_w<A: Algebra<MontyField31<Self>>>(a: A) -> A {
+        a.double() + a
+    }
+
     const DTH_ROOT: KoalaBear = KoalaBear::new(2113994754);
     const EXT_GENERATOR: [KoalaBear; 4] = KoalaBear::new_array([2, 1, 0, 0]);
     const EXT_TWO_ADICITY: usize = 26;
@@ -75,6 +81,26 @@ impl BinomialExtensionData<4> for KoalaBearParameters {
 
     const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike =
         KoalaBear::new_2d_array([[0, 0, 1759267465, 0], [0, 0, 0, 777715144]]);
+}
+
+impl BinomialExtensionData<8> for KoalaBearParameters {
+    const W: KoalaBear = KoalaBear::new(3);
+    const DTH_ROOT: KoalaBear = KoalaBear::new(1748172362);
+    const EXT_GENERATOR: [KoalaBear; 8] = KoalaBear::new_array([10, 1, 0, 0, 0, 0, 0, 0]);
+    const EXT_TWO_ADICITY: usize = 27;
+
+    type ArrayLike = [[KoalaBear; 8]; 3];
+
+    const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike = KoalaBear::new_2d_array([
+        [0, 0, 0, 0, 1759267465, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 777715144, 0],
+        [0, 0, 0, 0, 0, 0, 0, 14348907],
+    ]);
+
+    #[inline(always)]
+    fn mul_w<A: Algebra<MontyField31<Self>>>(a: A) -> A {
+        a.double() + a
+    }
 }
 
 #[cfg(test)]
