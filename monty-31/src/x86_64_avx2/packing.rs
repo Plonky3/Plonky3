@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use core::arch::x86_64::{self, __m128i, __m256i};
+use core::arch::x86_64::{self, __m256i};
 use core::array;
 use core::iter::{Product, Sum};
 use core::mem::transmute;
@@ -13,8 +13,7 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, mm128_mod_add,
-    mm256_mod_add,
+    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, mm256_mod_add,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
