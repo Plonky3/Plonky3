@@ -37,7 +37,7 @@ pub fn uint32x4_mod_add(a: uint32x4_t, b: uint32x4_t, p: uint32x4_t) -> uint32x4
 ///
 /// Assumes that `p` is less than `2^31` and `|a - b| <= P`.
 /// If the inputs are not in this range, the result may be incorrect.
-/// The result will be in the range `[0, P]` and equal to `(a + b) mod p`.
+/// The result will be in the range `[0, P]` and equal to `(a - b) mod p`.
 /// It will be equal to `P` if and only if `a - b = P` so provided `a - b < P`
 /// the result is guaranteed to be less than `P`.
 #[inline]
