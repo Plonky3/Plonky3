@@ -105,7 +105,7 @@ pub fn mm512_mod_add(lhs: __m512i, rhs: __m512i, p: __m512i) -> __m512i {
 ///
 /// Assumes that `p` is less than `2^31` and `|a - b| <= P`.
 /// If the inputs are not in this range, the result may be incorrect.
-/// The result will be in the range `[0, P]` and equal to `(a + b) mod p`.
+/// The result will be in the range `[0, P]` and equal to `(a - b) mod p`.
 /// It will be equal to `P` if and only if `a - b = P` so provided `a - b < P`
 /// the result is guaranteed to be less than `P`.
 #[inline(always)]
