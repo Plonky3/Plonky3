@@ -92,7 +92,6 @@ RUSTFLAGS="-Ctarget-cpu=native" cargo test
 The verifier might panic upon receiving certain invalid proofs.
 
 
-
 ## License
 
 Licensed under either of
