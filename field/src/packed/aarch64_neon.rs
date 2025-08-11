@@ -51,7 +51,7 @@ pub fn packed_mod_add<const WIDTH: usize>(
     scalar_add: fn(u32, u32) -> u32,
 ) {
     match WIDTH {
-        1 => res[0] = a[0] + b[0],
+        1 => res[0] = scalar_add(a[0], b[0]),
         4 => {
             // Perfectly fits into a uint32x4_t vector.
             let out: [u32; 4] = unsafe {
@@ -73,7 +73,7 @@ pub fn packed_mod_add<const WIDTH: usize>(
                 transmute(uint32x4_mod_add(a, b, p))
             };
 
-            res[4] = a[4] + b[4];
+            res[4] = scalar_add(a[4], b[4]);
 
             res[..4].copy_from_slice(&out);
         }
