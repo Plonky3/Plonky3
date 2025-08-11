@@ -82,13 +82,13 @@ pub fn packed_mod_add<const WIDTH: usize>(
             let (out_lo, out_hi): ([u32; 4], [u32; 4]) = unsafe {
                 let p: uint32x4_t = aarch64::vdupq_n_u32(p);
 
-                let a: uint32x4_t = transmute([a[0], a[1], a[2], a[3]]);
-                let b: uint32x4_t = transmute([b[0], b[1], b[2], b[3]]);
-                let out_lo = transmute(uint32x4_mod_add(a, b, p));
+                let a_lo: uint32x4_t = transmute([a[0], a[1], a[2], a[3]]);
+                let b_lo: uint32x4_t = transmute([b[0], b[1], b[2], b[3]]);
+                let out_lo = transmute(uint32x4_mod_add(a_lo, b_lo, p));
 
-                let a: uint32x4_t = transmute([a[4], a[5], a[6], a[7]]);
-                let b: uint32x4_t = transmute([b[4], b[5], b[6], b[7]]);
-                let out_hi = transmute(uint32x4_mod_add(a, b, p));
+                let a_hi: uint32x4_t = transmute([a[4], a[5], a[6], a[7]]);
+                let b_hi: uint32x4_t = transmute([b[4], b[5], b[6], b[7]]);
+                let out_hi = transmute(uint32x4_mod_add(a_hi, b_hi, p));
                 (out_lo, out_hi)
             };
 
