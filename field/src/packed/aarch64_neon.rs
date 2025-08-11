@@ -42,6 +42,8 @@ pub fn uint32x4_mod_add(a: uint32x4_t, b: uint32x4_t, p: uint32x4_t) -> uint32x4
 ///
 /// Scalar add is assumed to be a function which implements `a + b % P` with the
 /// same specifications as above.
+///
+/// TODO: Add support for extensions of degree 2,3,6,7.
 #[inline(always)]
 pub fn packed_mod_add<const WIDTH: usize>(
     a: &[u32; WIDTH],

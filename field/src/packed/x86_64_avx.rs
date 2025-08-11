@@ -105,6 +105,8 @@ pub fn mm512_mod_add(a: __m512i, b: __m512i, p: __m512i) -> __m512i {
 ///
 /// Scalar add is assumed to be a function which implements `a + b % P` with the
 /// same specifications as above.
+///
+/// TODO: Add support for extensions of degree 2,3,6,7.
 #[inline(always)]
 pub fn packed_mod_add<const WIDTH: usize>(
     a: &[u32; WIDTH],
@@ -155,6 +157,6 @@ pub fn packed_mod_add<const WIDTH: usize>(
 
             res.copy_from_slice(&out);
         }
-        _ => panic!("Currently unsupported width for packed addition"),
+        _ => panic!("Currently unsupported width for packed addition."),
     }
 }
