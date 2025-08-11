@@ -1,6 +1,7 @@
 //! A collection of helper methods when Neon is available
 
 use core::arch::aarch64::{self, uint32x4_t};
+use core::mem::transmute;
 
 /// Add the two packed vectors `a` and `b` modulo `p`.
 ///
