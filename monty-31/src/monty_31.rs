@@ -182,6 +182,11 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
     }
 
     #[inline]
+    fn halve(&self) -> Self {
+        Self::new_monty(halve_u32::<FP>(self.value))
+    }
+
+    #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
         // The array FP::MONTY_POWERS_OF_TWO contains the powers of 2
         // from 2^0 to 2^63 in monty form. We can use this to quickly
@@ -415,11 +420,6 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
         // Unrolling the definitions a little, this 36 comes from: 3 * FP::MONTY_BITS - (2 * NUM_PRIME_BITS - 2)
 
         Some(uncorrected_value.mul_2exp_u64((3 * FP::MONTY_BITS - (2 * NUM_PRIME_BITS - 2)) as u64))
-    }
-
-    #[inline]
-    fn halve(&self) -> Self {
-        Self::new_monty(halve_u32::<FP>(self.value))
     }
 
     #[inline]

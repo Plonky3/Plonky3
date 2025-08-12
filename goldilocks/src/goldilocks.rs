@@ -23,7 +23,7 @@ use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 
 /// The Goldilocks prime
-const P: u64 = 0xFFFF_FFFF_0000_0001;
+pub(crate) const P: u64 = 0xFFFF_FFFF_0000_0001;
 
 /// The prime field known as Goldilocks, defined as `F_p` where `p = 2^64 - 2^32 + 1`.
 ///
@@ -190,6 +190,11 @@ impl PrimeCharacteristicRing for Goldilocks {
     }
 
     #[inline]
+    fn halve(&self) -> Self {
+        Self::new(halve_u64::<P>(self.value))
+    }
+
+    #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
         // In the Goldilocks field, 2^96 = -1 mod P and 2^192 = 1 mod P.
         if exp < 96 {
@@ -328,11 +333,6 @@ impl Field for Goldilocks {
         }
 
         Some(gcd_inversion(*self))
-    }
-
-    #[inline]
-    fn halve(&self) -> Self {
-        Self::new(halve_u64::<P>(self.value))
     }
 
     #[inline]

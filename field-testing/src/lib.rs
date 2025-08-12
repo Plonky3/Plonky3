@@ -51,6 +51,7 @@ where
         x.double(),
         "Error when comparing x.double() to x * 2"
     );
+    assert_eq!(x, x.halve() * R::TWO, "Error when testing halve.");
 
     // Check different representatives of Zero.
     for zero in zeros.iter().copied() {
@@ -228,7 +229,7 @@ where
     let x = rng.random::<F>();
     let y = rng.random::<F>();
     let z = rng.random::<F>();
-    assert_eq!(x, x.halve() * F::TWO);
+    assert_eq!(F::TWO.inverse(), F::ONE.halve());
     assert_eq!(x * x.inverse(), F::ONE);
     assert_eq!(x.inverse() * x, F::ONE);
     assert_eq!(x.square().inverse(), x.inverse().square());
