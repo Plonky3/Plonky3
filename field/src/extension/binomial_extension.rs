@@ -211,6 +211,11 @@ where
         <A as PrimeCharacteristicRing>::from_prime_subfield(f).into()
     }
 
+    #[inline]
+    fn halve(&self) -> Self {
+        Self::new(self.value.clone().map(|x| x.halve()))
+    }
+
     #[inline(always)]
     fn square(&self) -> Self {
         let mut res = Self::default();
@@ -317,11 +322,6 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
     }
 
     #[inline]
-    fn halve(&self) -> Self {
-        Self::new(self.value.map(|x| x.halve()))
-    }
-
-    #[inline]
     fn div_2exp_u64(&self, exp: u64) -> Self {
         Self::new(self.value.map(|x| x.div_2exp_u64(exp)))
     }
@@ -387,13 +387,13 @@ where
 impl<F, A, const D: usize> Add for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: Algebra<F>,
+    A: BinomiallyExtendableAlgebra<F, D>,
 {
     type Output = Self;
 
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        let value = vector_add(&self.value, &rhs.value);
+        let value = A::binomial_add(&self.value, &rhs.value);
         Self::new(value)
     }
 }
@@ -613,11 +613,7 @@ impl<F: Field + HasTwoAdicBinomialExtension<D>, const D: usize> TwoAdicField
 
 /// Add two vectors element wise.
 #[inline]
-pub(crate) fn vector_add<
-    R: PrimeCharacteristicRing + Add<R2, Output = R>,
-    R2: Clone,
-    const D: usize,
->(
+pub fn vector_add<R: PrimeCharacteristicRing + Add<R2, Output = R>, R2: Clone, const D: usize>(
     a: &[R; D],
     b: &[R2; D],
 ) -> [R; D] {

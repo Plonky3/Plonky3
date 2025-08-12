@@ -152,6 +152,9 @@ impl PrimeCharacteristicRing for PackedMersenne31Neon {
         f.into()
     }
 
+    // TODO: Add a custom implementation of `halve` that uses NEON intrinsics
+    // and avoids the multiplication.
+
     #[inline(always)]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.

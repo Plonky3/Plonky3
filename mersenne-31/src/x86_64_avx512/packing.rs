@@ -20,7 +20,7 @@ use p3_util::reconstitute_from_base;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 
-use crate::Mersenne31;
+use crate::{Mersenne31, mul_2exp_i};
 
 const WIDTH: usize = 16;
 pub(crate) const P: __m512i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
@@ -153,6 +153,12 @@ impl PrimeCharacteristicRing for PackedMersenne31AVX512 {
     #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f.into()
+    }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        // 2^{-1} = 2^30 mod P so we implement halve by multiplying by 2^30.
+        mul_2exp_i::<30, 1>(*self)
     }
 
     #[inline(always)]
