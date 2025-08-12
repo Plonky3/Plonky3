@@ -60,7 +60,7 @@ fn lde_twoadic<F: TwoAdicField, Dft: TwoAdicSubgroupDft<F>, M: Measurement>(
             format!("log_n={log_n},log_w={log_w}"),
         ),
         &(dft, m),
-        |b, (dft, m)| {
+        |b, &(ref dft, ref m)| {
             b.iter_batched(
                 || (dft.clone(), m.clone()),
                 |(dft, m)| dft.coset_lde_batch(m, 1, F::GENERATOR),
