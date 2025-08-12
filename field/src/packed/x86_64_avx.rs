@@ -1,6 +1,6 @@
 //! A collection of helper methods when AVX2 is available
 
-#[cfg(all(feature = "nightly-features", target_feature = "avx512f"))]
+#[cfg(target_feature = "avx512f")]
 use core::arch::x86_64::__m512i;
 use core::arch::x86_64::{self, __m128i, __m256i};
 use core::mem::transmute;
@@ -68,7 +68,7 @@ pub fn mm256_mod_add(a: __m256i, b: __m256i, p: __m256i) -> __m256i {
     }
 }
 
-#[cfg(all(feature = "nightly-features", target_feature = "avx512f"))]
+#[cfg(target_feature = "avx512f")]
 /// Add the two packed vectors `a` and `b` modulo `p`.
 ///
 /// This allows us to add 16 elements at once.
