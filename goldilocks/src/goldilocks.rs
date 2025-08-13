@@ -207,6 +207,14 @@ impl PrimeCharacteristicRing for Goldilocks {
     }
 
     #[inline]
+    fn div_2exp_u64(&self, mut exp: u64) -> Self {
+        // In the goldilocks field, 2^192 = 1 mod P.
+        // Thus 2^{-n} = 2^{192 - n} mod P.
+        exp %= 192;
+        self.mul_2exp_u64(192 - exp)
+    }
+
+    #[inline]
     fn sum_array<const N: usize>(input: &[Self]) -> Self {
         assert_eq!(N, input.len());
         // Benchmarking shows that for N <= 3 it's faster to sum the elements directly
@@ -333,14 +341,6 @@ impl Field for Goldilocks {
         }
 
         Some(gcd_inversion(*self))
-    }
-
-    #[inline]
-    fn div_2exp_u64(&self, mut exp: u64) -> Self {
-        // In the goldilocks field, 2^192 = 1 mod P.
-        // Thus 2^{-n} = 2^{192 - n} mod P.
-        exp %= 192;
-        self.mul_2exp_u64(192 - exp)
     }
 
     #[inline]

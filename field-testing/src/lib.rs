@@ -258,12 +258,12 @@ where
     }
 }
 
-pub fn test_div_2exp_u64<F: Field>()
+pub fn test_div_2exp_u64<R: PrimeCharacteristicRing + Eq>()
 where
-    StandardUniform: Distribution<F>,
+    StandardUniform: Distribution<R>,
 {
     let mut rng = SmallRng::seed_from_u64(1);
-    let x = rng.random::<F>();
+    let x = rng.random::<R>();
     assert_eq!(x.div_2exp_u64(0), x);
     assert_eq!(x.div_2exp_u64(1), x.halve());
     for i in 0..128 {
@@ -271,7 +271,7 @@ where
         assert_eq!(
             x.div_2exp_u64(i),
             // Best to invert in the prime subfield in case F is an extension field.
-            x * F::from_prime_subfield(F::PrimeSubfield::from_u128(1_u128 << i).inverse())
+            x.clone() * R::from_prime_subfield(R::PrimeSubfield::from_u128(1_u128 << i).inverse())
         );
     }
     // Goldilocks behaviour changes at 96, 192 so we want to test larger numbers than that.
@@ -280,7 +280,7 @@ where
         assert_eq!(
             x.div_2exp_u64(i),
             // Best to invert in the prime subfield in case F is an extension field.
-            x * F::from_prime_subfield(F::PrimeSubfield::TWO.inverse().exp_u64(i))
+            x.clone() * R::from_prime_subfield(R::PrimeSubfield::TWO.inverse().exp_u64(i))
         );
     }
 }
@@ -784,13 +784,33 @@ where
 }
 
 #[macro_export]
-macro_rules! test_field {
-    ($field:ty, $zeros: expr, $ones: expr, $factors: expr) => {
-        mod field_tests {
+macro_rules! test_ring_with_eq {
+    ($ring:ty, $zeros: expr, $ones: expr) => {
+        mod ring_tests {
+            use p3_field::PrimeCharacteristicRing;
+
             #[test]
             fn test_ring_with_eq() {
-                $crate::test_ring_with_eq::<$field>($zeros, $ones);
+                $crate::test_ring_with_eq::<$ring>($zeros, $ones);
             }
+            #[test]
+            fn test_mul_2exp_u64() {
+                $crate::test_mul_2exp_u64::<$ring>();
+            }
+            #[test]
+            fn test_div_2exp_u64() {
+                $crate::test_div_2exp_u64::<$ring>();
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! test_field {
+    ($field:ty, $zeros: expr, $ones: expr, $factors: expr) => {
+        $crate::test_ring_with_eq!($field, $zeros, $ones);
+
+        mod field_tests {
             #[test]
             fn test_inv_div() {
                 $crate::test_inv_div::<$field>();
@@ -802,14 +822,6 @@ macro_rules! test_field {
             #[test]
             fn test_generator() {
                 $crate::test_generator::<$field>($factors);
-            }
-            #[test]
-            fn test_mul_2exp_u64() {
-                $crate::test_mul_2exp_u64::<$field>();
-            }
-            #[test]
-            fn test_div_2exp_u64() {
-                $crate::test_div_2exp_u64::<$field>();
             }
             #[test]
             fn test_streaming() {

@@ -200,6 +200,21 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
     }
 
     #[inline]
+    fn div_2exp_u64(&self, exp: u64) -> Self {
+        if exp <= 32 {
+            // As the monty form of 2^{-exp} is 2^{32 - exp} mod P, for
+            // 0 <= exp <= 32, we can multiply by 2^{-exp} by doing a shift
+            // followed by a monty reduction.
+            let long_prod = (self.value as u64) << (32 - exp);
+            Self::new_monty(monty_reduce::<FP>(long_prod))
+        } else {
+            // For larger values we use a slower method though this is
+            // still much faster than the default method as it avoids the inverse().
+            *self * Self::HALF.exp_u64(exp)
+        }
+    }
+
+    #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY:
         // Due to `#[repr(transparent)]`, MontyField31 and u32 have the same size, alignment
@@ -420,21 +435,6 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
         // Unrolling the definitions a little, this 36 comes from: 3 * FP::MONTY_BITS - (2 * NUM_PRIME_BITS - 2)
 
         Some(uncorrected_value.mul_2exp_u64((3 * FP::MONTY_BITS - (2 * NUM_PRIME_BITS - 2)) as u64))
-    }
-
-    #[inline]
-    fn div_2exp_u64(&self, exp: u64) -> Self {
-        if exp <= 32 {
-            // As the monty form of 2^{-exp} is 2^{32 - exp} mod P, for
-            // 0 <= exp <= 32, we can multiply by 2^{-exp} by doing a shift
-            // followed by a monty reduction.
-            let long_prod = (self.value as u64) << (32 - exp);
-            Self::new_monty(monty_reduce::<FP>(long_prod))
-        } else {
-            // For larger values we use a slower method though this is
-            // still much faster than the default method as it avoids the inverse().
-            *self * Self::HALF.exp_u64(exp)
-        }
     }
 
     #[inline]

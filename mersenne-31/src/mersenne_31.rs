@@ -189,6 +189,16 @@ impl PrimeCharacteristicRing for Mersenne31 {
     }
 
     #[inline]
+    fn div_2exp_u64(&self, exp: u64) -> Self {
+        // In a Mersenne field, division by 2^k is just a right rotation by k bits.
+        let exp = (exp % 31) as u8;
+        let left = self.value >> exp;
+        let right = (self.value << (31 - exp)) & ((1 << 31) - 1);
+        let rotated = left | right;
+        Self::new(rotated)
+    }
+
+    #[inline]
     fn sum_array<const N: usize>(input: &[Self]) -> Self {
         assert_eq!(N, input.len());
         // Benchmarking shows that for N <= 5 it's faster to sum the elements directly
@@ -261,16 +271,6 @@ impl Field for Mersenne31 {
     #[inline]
     fn is_zero(&self) -> bool {
         self.value == 0 || self.value == Self::ORDER_U32
-    }
-
-    #[inline]
-    fn div_2exp_u64(&self, exp: u64) -> Self {
-        // In a Mersenne field, division by 2^k is just a right rotation by k bits.
-        let exp = (exp % 31) as u8;
-        let left = self.value >> exp;
-        let right = (self.value << (31 - exp)) & ((1 << 31) - 1);
-        let rotated = left | right;
-        Self::new(rotated)
     }
 
     fn try_inverse(&self) -> Option<Self> {

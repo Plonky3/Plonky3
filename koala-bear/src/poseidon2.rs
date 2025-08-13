@@ -13,7 +13,7 @@
 //! [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/32, 1/64, 1/2^24, -1/2^8, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^9, -1/2^24]
 //! See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
 
-use p3_field::{Algebra, Field, PrimeCharacteristicRing, PrimeField32};
+use p3_field::{Algebra, PrimeCharacteristicRing, PrimeField32};
 use p3_monty_31::{
     GenericPoseidon2LinearLayersMonty31, InternalLayerBaseParameters, InternalLayerParameters,
     MontyField31, Poseidon2ExternalLayerMonty31, Poseidon2InternalLayerMonty31,
