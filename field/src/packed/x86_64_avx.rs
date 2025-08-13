@@ -16,6 +16,9 @@ use core::mem::transmute;
 //      - If t is in [P, 2 P], then u is in [0, P] and r = u lies in the correct range.
 //   As both t and u are both equal to lhs + rhs mod P, we conclude that
 //   r = (lhs + rhs) mod P and lies in the correct range.
+//
+// An identical idea works for subtraction.
+// Set t := lhs - rhs, u := t + P and output r := min(t, u).
 
 /// Add the two packed vectors `a` and `b` modulo `p`.
 ///
@@ -42,7 +45,7 @@ pub fn mm128_mod_add(a: __m128i, b: __m128i, p: __m128i) -> __m128i {
     }
 }
 
-/// Add the two packed vectors `a` and `b` modulo `p`.
+/// Add the packed vectors `a` and `b` modulo `p`.
 ///
 /// This allows us to add 8 elements at once.
 ///
@@ -53,7 +56,7 @@ pub fn mm128_mod_add(a: __m128i, b: __m128i, p: __m128i) -> __m128i {
 /// the result is guaranteed to be less than `P`.
 #[inline(always)]
 #[must_use]
-pub fn mm256_mod_add(a: __m256i, b: __m256i, p: __m256i) -> __m256i {
+pub fn mm256_mod_add(lhs: __m256i, rhs: __m256i, p: __m256i) -> __m256i {
     // We want this to compile to:
     //      vpaddd   t, lhs, rhs
     //      vpsubd   u, t, P
@@ -62,14 +65,40 @@ pub fn mm256_mod_add(a: __m256i, b: __m256i, p: __m256i) -> __m256i {
     // latency: 3 cyc
 
     unsafe {
-        let t = x86_64::_mm256_add_epi32(a, b);
+        let t = x86_64::_mm256_add_epi32(lhs, rhs);
         let u = x86_64::_mm256_sub_epi32(t, p);
         x86_64::_mm256_min_epu32(t, u)
     }
 }
 
+/// Subtract the packed vectors `a` and `b` modulo `p`.
+///
+/// This allows us to subtract 16 elements at once.
+///
+/// Assumes that `p` is less than `2^31` and `|a - b| <= P`.
+/// If the inputs are not in this range, the result may be incorrect.
+/// The result will be in the range `[0, P]` and equal to `(a - b) mod p`.
+/// It will be equal to `P` if and only if `a - b = P` so provided `a - b < P`
+/// the result is guaranteed to be less than `P`.
+#[inline(always)]
+#[must_use]
+pub fn mm256_mod_sub(lhs: __m256i, rhs: __m256i, p: __m256i) -> __m256i {
+    // We want this to compile to:
+    //      vpsubd   t, lhs, rhs
+    //      vpaddd   u, t, P
+    //      vpminud  res, t, u
+    // throughput: 1 cyc/vec (8 els/cyc)
+    // latency: 3 cyc
+
+    unsafe {
+        let t = x86_64::_mm256_sub_epi32(lhs, rhs);
+        let u = x86_64::_mm256_add_epi32(t, p);
+        x86_64::_mm256_min_epu32(t, u)
+    }
+}
+
 #[cfg(target_feature = "avx512f")]
-/// Add the two packed vectors `a` and `b` modulo `p`.
+/// Add the packed vectors `a` and `b` modulo `p`.
 ///
 /// This allows us to add 16 elements at once.
 ///
@@ -80,7 +109,7 @@ pub fn mm256_mod_add(a: __m256i, b: __m256i, p: __m256i) -> __m256i {
 /// the result is guaranteed to be less than `P`.
 #[inline(always)]
 #[must_use]
-pub fn mm512_mod_add(a: __m512i, b: __m512i, p: __m512i) -> __m512i {
+pub fn mm512_mod_add(lhs: __m512i, rhs: __m512i, p: __m512i) -> __m512i {
     // We want this to compile to:
     //      vpaddd   t, lhs, rhs
     //      vpsubd   u, t, P
@@ -89,8 +118,36 @@ pub fn mm512_mod_add(a: __m512i, b: __m512i, p: __m512i) -> __m512i {
     // latency: 3 cyc
 
     unsafe {
-        let t = x86_64::_mm512_add_epi32(a, b);
+        let t = x86_64::_mm512_add_epi32(lhs, rhs);
         let u = x86_64::_mm512_sub_epi32(t, p);
+        x86_64::_mm512_min_epu32(t, u)
+    }
+}
+
+#[cfg(target_feature = "avx512f")]
+/// Subtract the packed vectors `a` and `b` modulo `p`.
+///
+/// This allows us to subtract 16 elements at once.
+///
+/// Assumes that `p` is less than `2^31` and `|a - b| <= P`.
+/// If the inputs are not in this range, the result may be incorrect.
+/// The result will be in the range `[0, P]` and equal to `(a - b) mod p`.
+/// It will be equal to `P` if and only if `a - b = P` so provided `a - b < P`
+/// the result is guaranteed to be less than `P`.
+#[inline(always)]
+#[must_use]
+pub fn mm512_mod_sub(lhs: __m512i, rhs: __m512i, p: __m512i) -> __m512i {
+    // We want this to compile to:
+    //      vpsubd   t, lhs, rhs
+    //      vpaddd   u, t, P
+    //      vpminud  res, t, u
+    // throughput: 1.5 cyc/vec (10.67 els/cyc)
+    // latency: 3 cyc
+
+    unsafe {
+        // Safety: If this code got compiled then AVX-512F intrinsics are available.
+        let t = x86_64::_mm512_sub_epi32(lhs, rhs);
+        let u = x86_64::_mm512_add_epi32(t, p);
         x86_64::_mm512_min_epu32(t, u)
     }
 }

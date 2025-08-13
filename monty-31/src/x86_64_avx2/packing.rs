@@ -14,6 +14,7 @@ use p3_field::op_assign_macros::{
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
     PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, mm256_mod_add,
+    mm256_mod_sub,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
@@ -105,9 +106,9 @@ impl<PMP: PackedMontyParameters> Sub for PackedMontyField31AVX2<PMP> {
     fn sub(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = sub::<PMP>(lhs, rhs);
+        let res = mm256_mod_sub(lhs, rhs, PMP::PACKED_P);
         unsafe {
-            // Safety: `sub` returns values in canonical form when given values in canonical form.
+            // Safety: `mm256_mod_sub` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
@@ -968,25 +969,6 @@ fn neg<MPAVX2: MontyParametersAVX2>(val: __m256i) -> __m256i {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
         let t = x86_64::_mm256_sub_epi32(MPAVX2::PACKED_P, val);
         x86_64::_mm256_sign_epi32(t, val)
-    }
-}
-
-/// Subtract vectors of MontyField31 field elements in canonical form.
-/// If the inputs are not in canonical form, the result is undefined.
-#[inline]
-#[must_use]
-pub(crate) fn sub<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
-    // We want this to compile to:
-    //      vpsubd   t, lhs, rhs
-    //      vpaddd   u, t, P
-    //      vpminud  res, t, u
-    // throughput: 1 cyc/vec (8 els/cyc)
-    // latency: 3 cyc
-
-    unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
-        let t = x86_64::_mm256_sub_epi32(lhs, rhs);
-        red_signed_to_canonical::<MPAVX2>(t)
     }
 }
 

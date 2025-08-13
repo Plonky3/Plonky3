@@ -15,6 +15,7 @@ use p3_field::op_assign_macros::{
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
     PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, uint32x4_mod_add,
+    uint32x4_mod_sub,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
@@ -106,9 +107,9 @@ impl<PMP: PackedMontyParameters> Sub for PackedMontyField31Neon<PMP> {
     fn sub(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = sub::<PMP>(lhs, rhs);
+        let res = uint32x4_mod_sub(lhs, rhs, PMP::PACKED_P);
         unsafe {
-            // Safety: `sub` returns values in canonical form when given values in canonical form.
+            // Safety: `uint32x4_mod_sub` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
@@ -418,37 +419,6 @@ fn neg<MPNeon: MontyParametersNeon>(val: uint32x4_t) -> uint32x4_t {
         let t = aarch64::vsubq_u32(MPNeon::PACKED_P, val);
         let is_zero = aarch64::vceqzq_u32(val);
         aarch64::vbicq_u32(t, is_zero)
-    }
-}
-
-/// Subtract vectors of Monty31 field elements in canonical form.
-/// If the inputs are not in canonical form, the result is undefined.
-#[inline]
-#[must_use]
-fn sub<MPNeon: MontyParametersNeon>(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
-    // We want this to compile to:
-    //      sub   res.4s, lhs.4s, rhs.4s
-    //      cmhi  underflow.4s, rhs.4s, lhs.4s
-    //      mls   res.4s, underflow.4s, P.4s
-    // throughput: .75 cyc/vec (5.33 els/cyc)
-    // latency: 5 cyc
-
-    //   Let `d := lhs - rhs`. We want to return `d mod P`.
-    //   Since `lhs` and `rhs` are both in `0, ..., P - 1`, `d` is in `-P + 1, ..., P - 1`. It
-    // suffices to return `d + P` if `d < 0` and `d` otherwise.
-    //   Equivalently, we return `d + P` if `rhs > lhs` and `d` otherwise.  Observe that this
-    // permits us to perform all calculations `mod 2^32`, so define `diff := d mod 2^32`.
-    //   Let `underflow` be `-1 mod 2^32` if `rhs > lhs` and `0` otherwise.
-    //   Finally, let `r := (diff - underflow * P) mod 2^32` and observe that
-    // `r = (diff + P) mod 2^32` if `rhs > lhs` and `diff` otherwise, as desired.
-    unsafe {
-        // Safety: If this code got compiled then NEON intrinsics are available.
-        let diff = aarch64::vsubq_u32(lhs, rhs);
-        let underflow = aarch64::vcltq_u32(lhs, rhs);
-        // We really want to emit a `mls` instruction here. The compiler knows that `underflow` is
-        // either 0 or -1 and will try to do an `and` and `add` instead, which is slower on the M1.
-        // The `confuse_compiler` prevents this "optimization".
-        aarch64::vmlsq_u32(diff, confuse_compiler(underflow), MPNeon::PACKED_P)
     }
 }
 

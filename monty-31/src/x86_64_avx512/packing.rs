@@ -20,6 +20,7 @@ use p3_field::op_assign_macros::{
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
     PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, mm512_mod_add,
+    mm512_mod_sub,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
@@ -126,9 +127,9 @@ impl<PMP: PackedMontyParameters> Sub for PackedMontyField31AVX512<PMP> {
     fn sub(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = sub::<PMP>(lhs, rhs);
+        let res = mm512_mod_sub(lhs, rhs, PMP::PACKED_P);
         unsafe {
-            // Safety: `sub` returns values in canonical form when given values in canonical form.
+            // Safety: `mm512_mod_sub` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
@@ -304,36 +305,6 @@ impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> PermutationMon
 {
     fn injective_exp_root_n(&self) -> Self {
         FP::exp_root_d(*self)
-    }
-}
-
-/// Subtract vectors of MontyField31 elements in canonical form.
-///
-/// We allow a slight loosening of the canonical form requirement. The
-/// rhs input is additionally allowed to be P.
-/// If the inputs do not conform to this representation, the result is undefined.
-#[inline]
-#[must_use]
-pub(crate) fn sub<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
-    // We want this to compile to:
-    //      vpsubd   t, lhs, rhs
-    //      vpaddd   u, t, P
-    //      vpminud  res, t, u
-    // throughput: 1.5 cyc/vec (10.67 els/cyc)
-    // latency: 3 cyc
-
-    // Let t := lhs - rhs. We want to return t mod P. Recall that lhs is in [0, P - 1]
-    //   and rhs is in [0, P] so t is in (-2^31 <) -P, ..., P - 1 (< 2^31). It suffices to return t if
-    //   t >= 0 and t + P otherwise.
-    // Let u := (t + P) mod 2^32 and r := unsigned_min(t, u).
-    // If t is in [0, P - 1], then u is in P, ..., 2 P - 1 and r = t.
-    // Otherwise, t is in [-P, -1], u is in [0, P - 1] (< P) and r = u. Hence, r is t if
-    //   t < P and t - P otherwise, as desired.
-    unsafe {
-        // Safety: If this code got compiled then AVX-512F intrinsics are available.
-        let t = x86_64::_mm512_sub_epi32(lhs, rhs);
-        let u = x86_64::_mm512_add_epi32(t, MPAVX512::PACKED_P);
-        x86_64::_mm512_min_epu32(t, u)
     }
 }
 
