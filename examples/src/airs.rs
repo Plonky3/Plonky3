@@ -2,7 +2,7 @@ use p3_air::{Air, AirBuilder, BaseAir};
 use p3_blake3_air::Blake3Air;
 use p3_challenger::FieldChallenger;
 use p3_commit::PolynomialSpace;
-use p3_field::{ExtensionField, Field, PrimeField64};
+use p3_field::{ExtensionField, Field, PrimeCharacteristicRing, PrimeField64};
 use p3_keccak_air::KeccakAir;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
@@ -18,7 +18,7 @@ use rand::prelude::Distribution;
 ///
 /// This implements `AIR` by passing to whatever the contained struct is.
 pub enum ProofObjective<
-    F: Field,
+    F: PrimeCharacteristicRing + Sync,
     LinearLayers,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
@@ -64,7 +64,7 @@ pub trait ExampleHashAir<F: Field, SC: StarkGenericConfig>:
 }
 
 impl<
-    F: Field,
+    F: PrimeCharacteristicRing + Sync,
     LinearLayers: Sync,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,

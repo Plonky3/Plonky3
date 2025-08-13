@@ -13,7 +13,8 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2,
+    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, uint32x4_mod_add,
+    uint32x4_mod_sub,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
@@ -83,9 +84,9 @@ impl Add for PackedMersenne31Neon {
     fn add(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = add(lhs, rhs);
+        let res = uint32x4_mod_add(lhs, rhs, P);
         unsafe {
-            // Safety: `add` returns valid values when given valid values.
+            // Safety: `uint32x4_mod_add` returns valid values when given valid values.
             Self::from_vector(res)
         }
     }
@@ -97,9 +98,9 @@ impl Sub for PackedMersenne31Neon {
     fn sub(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = sub(lhs, rhs);
+        let res = uint32x4_mod_sub(lhs, rhs, P);
         unsafe {
-            // Safety: `sub` returns valid values when given valid values.
+            // Safety: `uint32x4_mod_sub` returns valid values when given valid values.
             Self::from_vector(res)
         }
     }
@@ -151,6 +152,9 @@ impl PrimeCharacteristicRing for PackedMersenne31Neon {
         f.into()
     }
 
+    // TODO: Add a custom implementation of `halve` that uses NEON intrinsics
+    // and avoids the multiplication.
+
     #[inline(always)]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
@@ -193,28 +197,6 @@ fn reduce_sum(val: uint32x4_t) -> uint32x4_t {
         // Safety: If this code got compiled then NEON intrinsics are available.
         let u = aarch64::vsubq_u32(val, P);
         aarch64::vminq_u32(val, u)
-    }
-}
-
-/// Add two vectors of Mersenne-31 field elements that fit in 31 bits.
-/// If the inputs do not fit in 31 bits, the result is undefined.
-#[inline]
-#[must_use]
-fn add(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
-    // We want this to compile to:
-    //      add   t.4s, lhs.4s, rhs.4s
-    //      sub   u.4s, t.4s, P.4s
-    //      umin  res.4s, t.4s, u.4s
-    // throughput: .75 cyc/vec (5.33 els/cyc)
-    // latency: 6 cyc
-
-    // lhs and rhs are in 0, ..., P, and we want the result to also be in that range.
-    // t := lhs + rhs is in 0, ..., 2 P, so we apply reduce_sum.
-
-    unsafe {
-        // Safety: If this code got compiled then NEON intrinsics are available.
-        let t = aarch64::vaddq_u32(lhs, rhs);
-        reduce_sum(t)
     }
 }
 
@@ -286,35 +268,6 @@ fn neg(val: uint32x4_t) -> uint32x4_t {
     unsafe {
         // Safety: If this code got compiled then NEON intrinsics are available.
         aarch64::vsubq_u32(P, val)
-    }
-}
-
-/// Subtract vectors of Mersenne-31 field elements that fit in 31 bits.
-/// If the inputs do not fit in 31 bits, the result is undefined.
-#[inline]
-#[must_use]
-fn sub(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
-    // We want this to compile to:
-    //      sub   res.4s, lhs.4s, rhs.4s
-    //      cmhi  underflow.4s, rhs.4s, lhs.4s
-    //      mls   res.4s, underflow.4s, P.4s
-    // throughput: .75 cyc/vec (5.33 els/cyc)
-    // latency: 5 cyc
-
-    // lhs and rhs are in 0, ..., P, and we want the result to also be in that range.
-    // Define: diff := (lhs - rhs) mod 2^32
-    //         underflow := 2^32 - 1 if lhs <u rhs else 0
-    //         res := (diff - underflow * P) mod 2^32
-    // By cases:
-    // 1. If lhs >=u rhs, then diff is in 0, ..., P and underflow is 0. res = diff is valid.
-    // 2. Otherwise, lhs <u rhs, so diff is in 2^32 - P, ..., 2^32 - 1 and underflow is 2^32 - 1.
-    //    res = (diff + P) mod 2^32 is in 0, ..., P - 1, so it is valid.
-
-    unsafe {
-        // Safety: If this code got compiled then NEON intrinsics are available.
-        let diff = aarch64::vsubq_u32(lhs, rhs);
-        let underflow = aarch64::vcltq_u32(lhs, rhs);
-        aarch64::vmlsq_u32(diff, underflow, P)
     }
 }
 

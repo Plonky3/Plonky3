@@ -41,4 +41,3 @@ rand.workspace = true
 
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
-nightly-features = ["p3-baby-bear/nightly-features", "p3-mersenne-31/nightly-features"]
