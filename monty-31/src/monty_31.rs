@@ -25,7 +25,7 @@ use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::utils::{
-    add, from_monty, halve_u32, large_monty_reduce, monty_reduce, monty_reduce_u128, to_monty,
+    add, from_monty, halve_u32, large_monty_reduce, monty_reduce, monty_reduce_u128, sub, to_monty,
     to_monty_64, to_monty_64_signed, to_monty_signed,
 };
 use crate::{FieldParameters, MontyParameters, RelativelyPrimePower, TwoAdicData};
@@ -659,10 +659,7 @@ impl<FP: MontyParameters> Sub for MontyField31<FP> {
 
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        let (mut diff, over) = self.value.overflowing_sub(rhs.value);
-        let corr = if over { FP::PRIME } else { 0 };
-        diff = diff.wrapping_add(corr);
-        Self::new_monty(diff)
+        Self::new_monty(sub::<FP>(self.value, rhs.value))
     }
 }
 
