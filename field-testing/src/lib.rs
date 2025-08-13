@@ -265,7 +265,7 @@ where
     let mut rng = SmallRng::seed_from_u64(1);
     let x = rng.random::<R>();
     assert_eq!(x.div_2exp_u64(0), x);
-    // assert_eq!(x.div_2exp_u64(1), x.halve()); TODO: Uncomment halve when halve moved to Ring
+    assert_eq!(x.div_2exp_u64(1), x.halve());
     for i in 0..128 {
         assert_eq!(x.mul_2exp_u64(i).div_2exp_u64(i), x);
         assert_eq!(
