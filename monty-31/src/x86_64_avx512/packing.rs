@@ -4,7 +4,7 @@
 
 use alloc::vec::Vec;
 use core::arch::asm;
-use core::arch::x86_64::{self, __m256i, __m512i, __mmask16, __mmask8};
+use core::arch::x86_64::{self, __m256i, __m512i, __mmask8, __mmask16};
 use core::array;
 use core::hint::unreachable_unchecked;
 use core::iter::{Product, Sum};
@@ -336,7 +336,7 @@ fn confuse_compiler(x: __m512i) -> __m512i {
 }
 
 /// No-op. Prevents the compiler from deducing the value of the vector.
-/// 
+///
 /// A variant of [`confuse_compiler`] for use with `__m256i` vectors.
 ///
 /// Similar to `core::hint::black_box`, it can be used to stop the compiler applying undesirable
@@ -579,7 +579,7 @@ fn mul<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
 }
 
 /// Multiply a vector of unsigned field elements by a single field element.
-/// 
+///
 /// Return a vector of unsigned field elements lying in [0, P).
 ///
 /// Note that the input does not need to be in canonical form but must satisfy
@@ -1549,7 +1549,8 @@ pub(crate) fn base_mul_packed<FP, const WIDTH: usize>(
             // Surprisingly, the current version is only slightly faster than:
             // res.iter_mut().zip(a.iter()).for_each(|(r, a)| *r = *a * b);
             let out: [MontyField31<FP>; 8] = unsafe {
-                let lhs: __m256i = transmute([a[0].value, a[1].value, a[2].value, a[3].value, 0, 0, 0, 0]);
+                let lhs: __m256i =
+                    transmute([a[0].value, a[1].value, a[2].value, a[3].value, 0, 0, 0, 0]);
                 let prod = mul_256::<FP>(lhs, b.value as i32);
                 transmute(prod)
             };
@@ -1559,7 +1560,9 @@ pub(crate) fn base_mul_packed<FP, const WIDTH: usize>(
         5 => {
             // This could likely be sped up by a completely custom implementation of mul.
             let out: [MontyField31<FP>; 8] = unsafe {
-                let lhs: __m256i = transmute([a[0].value, a[1].value, a[2].value, a[3].value, a[4].value, 0, 0, 0]);
+                let lhs: __m256i = transmute([
+                    a[0].value, a[1].value, a[2].value, a[3].value, a[4].value, 0, 0, 0,
+                ]);
                 let prod = mul_256::<FP>(lhs, b.value as i32);
                 transmute(prod)
             };
@@ -1569,7 +1572,10 @@ pub(crate) fn base_mul_packed<FP, const WIDTH: usize>(
         8 => {
             // This could likely be sped up by a completely custom implementation of mul.
             let out: [MontyField31<FP>; 8] = unsafe {
-                let lhs: __m256i = transmute([a[0].value, a[1].value, a[2].value, a[3].value, a[4].value, a[5].value, a[6].value, a[7].value]);
+                let lhs: __m256i = transmute([
+                    a[0].value, a[1].value, a[2].value, a[3].value, a[4].value, a[5].value,
+                    a[6].value, a[7].value,
+                ]);
                 let prod = mul_256::<FP>(lhs, b.value as i32);
                 transmute(prod)
             };
