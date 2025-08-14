@@ -28,31 +28,38 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     ///
     /// # Panics:
     /// This function will panic if `slice.len() != Self::WIDTH`
+    #[must_use]
     fn from_slice(slice: &[Self::Value]) -> &Self;
 
     /// Interprets a mutable slice of scalar values as a mutable packed value.
     ///
     /// # Panics:
     /// This function will panic if `slice.len() != Self::WIDTH`
+    #[must_use]
     fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self;
 
     /// Constructs a packed value using a function to generate each element.
     ///
     /// Similar to `core:array::from_fn`.
+    #[must_use]
     fn from_fn<F>(f: F) -> Self
     where
         F: FnMut(usize) -> Self::Value;
 
     /// Returns the underlying scalar values as an immutable slice.
+    #[must_use]
     fn as_slice(&self) -> &[Self::Value];
 
     /// Returns the underlying scalar values as a mutable slice.
+    #[must_use]
     fn as_slice_mut(&mut self) -> &mut [Self::Value];
 
     /// Packs a slice of scalar values into a slice of packed values.
     ///
     /// # Panics
     /// Panics if the slice length is not divisible by `WIDTH`.
+    #[inline]
+    #[must_use]
     fn pack_slice(buf: &[Self::Value]) -> &[Self] {
         // Sources vary, but this should be true on all platforms we care about.
         // This should be a const assert, but trait methods can't access `Self` in a const context,
@@ -70,6 +77,8 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     }
 
     /// Packs a slice into packed values and returns the packed portion and any remaining suffix.
+    #[inline]
+    #[must_use]
     fn pack_slice_with_suffix(buf: &[Self::Value]) -> (&[Self], &[Self::Value]) {
         let (packed, suffix) = buf.split_at(buf.len() - buf.len() % Self::WIDTH);
         (Self::pack_slice(packed), suffix)
@@ -79,6 +88,8 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     ///
     /// # Panics
     /// Panics if the slice length is not divisible by `WIDTH`.
+    #[inline]
+    #[must_use]
     fn pack_slice_mut(buf: &mut [Self::Value]) -> &mut [Self] {
         assert!(align_of::<Self>() <= align_of::<Self::Value>());
         assert!(
@@ -97,6 +108,8 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     ///
     /// # Panics
     /// Panics if the slice length is not divisible by `WIDTH`.
+    #[inline]
+    #[must_use]
     fn pack_maybe_uninit_slice_mut(
         buf: &mut [MaybeUninit<Self::Value>],
     ) -> &mut [MaybeUninit<Self>] {
@@ -115,6 +128,8 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     /// Converts a mutable slice of scalar values into a pair:
     /// - a slice of packed values covering the largest aligned portion,
     /// - and a remainder slice of scalar values that couldn't be packed.
+    #[inline]
+    #[must_use]
     fn pack_slice_with_suffix_mut(buf: &mut [Self::Value]) -> (&mut [Self], &mut [Self::Value]) {
         let (packed, suffix) = buf.split_at_mut(buf.len() - buf.len() % Self::WIDTH);
         (Self::pack_slice_mut(packed), suffix)
@@ -123,6 +138,8 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     /// Converts a mutable slice of possibly uninitialized scalar values into a pair:
     /// - a slice of possibly uninitialized packed values covering the largest aligned portion,
     /// - and a remainder slice of possibly uninitialized scalar values that couldn't be packed.
+    #[inline]
+    #[must_use]
     fn pack_maybe_uninit_slice_with_suffix_mut(
         buf: &mut [MaybeUninit<Self::Value>],
     ) -> (&mut [MaybeUninit<Self>], &mut [MaybeUninit<Self::Value>]) {
@@ -134,6 +151,8 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     ///
     /// Each packed value contains `Self::WIDTH` scalar values, which are laid out
     /// contiguously in memory. This function allows direct access to those scalars.
+    #[inline]
+    #[must_use]
     fn unpack_slice(buf: &[Self]) -> &[Self::Value] {
         assert!(align_of::<Self>() >= align_of::<Self::Value>());
         let buf_ptr = buf.as_ptr().cast::<Self::Value>();
@@ -223,6 +242,7 @@ pub unsafe trait PackedField: Algebra<Self::Scalar>
     /// # Panics
     ///
     /// May panic if the length of either slice is not equal to `N`.
+    #[must_use]
     fn packed_linear_combination<const N: usize>(coeffs: &[Self::Scalar], vecs: &[Self]) -> Self {
         assert_eq!(coeffs.len(), N);
         assert_eq!(vecs.len(), N);
@@ -290,6 +310,7 @@ pub trait PackedFieldExtension<
     /// Given a slice of extension field `EF` elements of length `W`,
     /// convert into the array `[[F; D]; W]` transpose to
     /// `[[F; W]; D]` and then pack to get `[PF; D]`.
+    #[must_use]
     fn from_ext_slice(ext_slice: &[ExtField]) -> Self;
 
     /// Given a iterator of packed extension field elements, convert to an iterator of
@@ -297,6 +318,7 @@ pub trait PackedFieldExtension<
     ///
     /// This performs the inverse transformation to `from_ext_slice`.
     #[inline]
+    #[must_use]
     fn to_ext_iter(iter: impl IntoIterator<Item = Self>) -> impl Iterator<Item = ExtField> {
         iter.into_iter().flat_map(|x| {
             let packed_coeffs = x.as_basis_coefficients_slice();
@@ -308,6 +330,7 @@ pub trait PackedFieldExtension<
 
     /// Similar to `packed_powers`, construct an iterator which returns
     /// powers of `base` packed into `PackedFieldExtension` elements.
+    #[must_use]
     fn packed_ext_powers(base: ExtField) -> Powers<Self>;
 
     /// Similar to `packed_ext_powers` but only returns `unpacked_len` powers of `base`.
@@ -315,6 +338,7 @@ pub trait PackedFieldExtension<
     /// Note that the length of the returned iterator will be `unpacked_len / WIDTH` and
     /// not `len` as the iterator is over packed extension field elements. If `unpacked_len`
     /// is not divisible by `WIDTH`, `unpacked_len` will be rounded up to the next multiple of `WIDTH`.
+    #[must_use]
     fn packed_ext_powers_capped(base: ExtField, unpacked_len: usize) -> impl Iterator<Item = Self> {
         Self::packed_ext_powers(base).take(unpacked_len.div_ceil(BaseField::Packing::WIDTH))
     }
@@ -361,6 +385,7 @@ unsafe impl<F: Field> PackedField for F {
 }
 
 unsafe impl<F: Field> PackedFieldPow2 for F {
+    #[inline]
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
         match block_len {
             1 => (*self, other),
@@ -370,10 +395,12 @@ unsafe impl<F: Field> PackedFieldPow2 for F {
 }
 
 impl<F: Field> PackedFieldExtension<F, F> for F::Packing {
+    #[inline]
     fn from_ext_slice(ext_slice: &[F]) -> Self {
         *F::Packing::from_slice(ext_slice)
     }
 
+    #[inline]
     fn packed_ext_powers(base: F) -> Powers<Self> {
         F::Packing::packed_powers(base)
     }

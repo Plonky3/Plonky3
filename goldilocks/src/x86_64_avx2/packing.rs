@@ -27,6 +27,7 @@ const WIDTH: usize = 4;
 /// Vectorized AVX2 implementation of `Goldilocks` arithmetic.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // Needed to make `transmute`s safe.
+#[must_use]
 pub struct PackedGoldilocksAVX2(pub [Goldilocks; WIDTH]);
 
 impl PackedGoldilocksAVX2 {
@@ -49,7 +50,6 @@ impl PackedGoldilocksAVX2 {
     /// Elements of `Goldilocks` are allowed to be arbitrary u64s so this function
     /// is safe unlike the `Mersenne31/MontyField31` variants.
     #[inline]
-    #[must_use]
     pub(crate) fn from_vector(vector: __m256i) -> Self {
         unsafe {
             // Safety: `__m256i` can be transmuted to `[u64; WIDTH]` (since arrays elements are
@@ -63,7 +63,6 @@ impl PackedGoldilocksAVX2 {
     /// Copy `value` to all positions in a packed vector. This is the same as
     /// `From<Goldilocks>::from`, but `const`.
     #[inline]
-    #[must_use]
     const fn broadcast(value: Goldilocks) -> Self {
         Self([value; WIDTH])
     }
