@@ -306,6 +306,6 @@ pub fn packed_mod_sub<const WIDTH: usize>(
 
             res.copy_from_slice(&out);
         }
-        _ => panic!("Currently unsupported width for packed addition."),
+        _ => panic!("Currently unsupported width for packed subtraction."),
     }
 }
