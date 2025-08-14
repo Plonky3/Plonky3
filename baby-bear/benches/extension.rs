@@ -36,8 +36,8 @@ fn bench_qunitic_extension(c: &mut Criterion) {
     let name = "BinomialExtensionField<BabyBear, 5>";
     benchmark_add_throughput::<EF5, REPS>(c, name);
     benchmark_add_latency::<EF5, L_REPS>(c, name);
-    benchmark_sub_throughput::<EF4, REPS>(c, name);
-    benchmark_sub_latency::<EF4, L_REPS>(c, name);
+    benchmark_sub_throughput::<EF5, REPS>(c, name);
+    benchmark_sub_latency::<EF5, L_REPS>(c, name);
     benchmark_base_mul_throughput::<F, EF5, REPS>(c, name);
     benchmark_square::<EF5>(c, name);
     benchmark_inv::<EF5>(c, name);
@@ -49,8 +49,8 @@ fn bench_octic_extension(c: &mut Criterion) {
     let name = "BinomialExtensionField<BabyBear, 8>";
     benchmark_add_throughput::<EF8, REPS>(c, name);
     benchmark_add_latency::<EF8, L_REPS>(c, name);
-    benchmark_sub_throughput::<EF4, REPS>(c, name);
-    benchmark_sub_latency::<EF4, L_REPS>(c, name);
+    benchmark_sub_throughput::<EF8, REPS>(c, name);
+    benchmark_sub_latency::<EF8, L_REPS>(c, name);
     benchmark_base_mul_throughput::<F, EF8, REPS>(c, name);
     benchmark_square::<EF8>(c, name);
     benchmark_inv::<EF8>(c, name);
