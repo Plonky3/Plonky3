@@ -13,7 +13,7 @@
 //! [-2, 2^0, 2, 4, 8, 16, 32, 64, 2^7, 2^8, 2^9, 2^10, 2^11, 2^12, 2^13, 2^14, 2^15, 2^16, 2^17, 2^18, 2^19, 2^20, 2^21, 2^22]
 //! See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
 
-use p3_field::Algebra;
+use p3_field::PrimeCharacteristicRing;
 use p3_poseidon2::{
     ExternalLayer, GenericPoseidon2LinearLayers, InternalLayer, MDSMat4, Poseidon2,
     add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
@@ -118,11 +118,9 @@ impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, MERSENNE31_S_BOX_DEGRE
     }
 }
 
-impl<A: Algebra<Mersenne31>> GenericPoseidon2LinearLayers<A, 16>
-    for GenericPoseidon2LinearLayersMersenne31
-{
-    fn internal_linear_layer(state: &mut [A; 16]) {
-        let part_sum: A = state[1..].iter().cloned().sum();
+impl GenericPoseidon2LinearLayers<16> for GenericPoseidon2LinearLayersMersenne31 {
+    fn internal_linear_layer<R: PrimeCharacteristicRing>(state: &mut [R; 16]) {
+        let part_sum: R = state[1..].iter().cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();
 
         // The first three diagonal elements are -2, 1, 2 so we do something custom.
@@ -143,11 +141,9 @@ impl<A: Algebra<Mersenne31>> GenericPoseidon2LinearLayers<A, 16>
     }
 }
 
-impl<A: Algebra<Mersenne31>> GenericPoseidon2LinearLayers<A, 24>
-    for GenericPoseidon2LinearLayersMersenne31
-{
-    fn internal_linear_layer(state: &mut [A; 24]) {
-        let part_sum: A = state[1..].iter().cloned().sum();
+impl GenericPoseidon2LinearLayers<24> for GenericPoseidon2LinearLayersMersenne31 {
+    fn internal_linear_layer<R: PrimeCharacteristicRing>(state: &mut [R; 24]) {
+        let part_sum: R = state[1..].iter().cloned().sum();
         let full_sum = part_sum.clone() + state[0].clone();
 
         // The first three diagonal elements are -2, 1, 2 so we do something custom.

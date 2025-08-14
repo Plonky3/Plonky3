@@ -29,14 +29,14 @@ pub fn add_rc_and_sbox_generic<F: Field, A: Algebra<F> + InjectiveMonomial<D>, c
     *val = val.injective_exp_n();
 }
 
-pub trait GenericPoseidon2LinearLayers<R: PrimeCharacteristicRing, const WIDTH: usize>:
-    Sync
-{
-    /// A generic implementation of the internal linear layer.
-    fn internal_linear_layer(state: &mut [R; WIDTH]);
+pub trait GenericPoseidon2LinearLayers<const WIDTH: usize>: Sync {
+    /// A generic implementation of the matrix multiplication
+    /// corresponding to the internal linear layer.
+    fn internal_linear_layer<R: PrimeCharacteristicRing>(state: &mut [R; WIDTH]);
 
-    /// A generic implementation of the external linear layer.
-    fn external_linear_layer(state: &mut [R; WIDTH]) {
+    /// A generic implementation of the matrix multiplication
+    /// corresponding to the external linear layer.
+    fn external_linear_layer<R: PrimeCharacteristicRing>(state: &mut [R; WIDTH]) {
         mds_light_permutation(state, &MDSMat4);
     }
 }

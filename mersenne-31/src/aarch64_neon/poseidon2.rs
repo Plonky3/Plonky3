@@ -42,8 +42,7 @@ impl<const WIDTH: usize> ExternalLayerConstructor<Mersenne31, WIDTH>
 impl<const WIDTH: usize, const D: u64> InternalLayer<PackedMersenne31Neon, WIDTH, D>
     for Poseidon2InternalLayerMersenne31
 where
-    GenericPoseidon2LinearLayersMersenne31:
-        GenericPoseidon2LinearLayers<PackedMersenne31Neon, WIDTH>,
+    GenericPoseidon2LinearLayersMersenne31: GenericPoseidon2LinearLayers<WIDTH>,
 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
     fn permute_state(&self, state: &mut [PackedMersenne31Neon; WIDTH]) {
