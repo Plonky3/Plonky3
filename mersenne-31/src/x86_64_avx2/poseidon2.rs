@@ -104,7 +104,9 @@ impl<const WIDTH: usize> Poseidon2ExternalLayerMersenne31<WIDTH> {
 /// This requires 2 generic parameters, `I` and `I_PRIME` satisfying `I + I_PRIME = 31`.
 /// If the inputs do not conform to this representations, the result is undefined.
 #[inline(always)]
-fn mul_2exp_i<const I: i32, const I_PRIME: i32>(val: PackedMersenne31AVX2) -> PackedMersenne31AVX2 {
+pub(crate) fn mul_2exp_i<const I: i32, const I_PRIME: i32>(
+    val: PackedMersenne31AVX2,
+) -> PackedMersenne31AVX2 {
     /*
         We want this to compile to:
             vpslld   hi_dirty, val,      I

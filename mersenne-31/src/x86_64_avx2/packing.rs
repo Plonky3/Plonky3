@@ -14,12 +14,13 @@ use p3_field::op_assign_macros::{
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
     PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, mm256_mod_add,
+    mm256_mod_sub,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 
-use crate::Mersenne31;
+use crate::{Mersenne31, mul_2exp_i};
 
 const WIDTH: usize = 8;
 pub(crate) const P: __m256i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
@@ -98,7 +99,7 @@ impl Sub for PackedMersenne31AVX2 {
     fn sub(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = sub(lhs, rhs);
+        let res = mm256_mod_sub(lhs, rhs, P);
         unsafe {
             // Safety: `sub` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
@@ -150,6 +151,12 @@ impl PrimeCharacteristicRing for PackedMersenne31AVX2 {
     #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f.into()
+    }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        // 2^{-1} = 2^30 mod P so we implement halve by multiplying by 2^30.
+        mul_2exp_i::<30, 1>(*self)
     }
 
     #[inline(always)]
@@ -305,33 +312,6 @@ fn neg(val: __m256i) -> __m256i {
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
         x86_64::_mm256_xor_si256(val, P)
-    }
-}
-
-/// Subtract vectors of Mersenne-31 field elements represented as values in {0, ..., P}.
-/// If the inputs do not conform to this representation, the result is undefined.
-#[inline]
-#[must_use]
-fn sub(lhs: __m256i, rhs: __m256i) -> __m256i {
-    // We want this to compile to:
-    //      vpsubd   t, lhs, rhs
-    //      vpaddd   u, t, P
-    //      vpminud  res, t, u
-    // throughput: 1 cyc/vec (8 els/cyc)
-    // latency: 3 cyc
-
-    //   Let d := lhs - rhs and t := d mod 2^32. We want to return a value r in {0, ..., P} such
-    // that r = d (mod P).
-    //   Define u := (t + P) mod 2^32 and r := min(t, u). d is in {-P, ..., P}. We argue by cases.
-    //   If d is in {0, ..., P}, then t = d and u is in {P, ..., 2 P}. r = t is in the correct
-    // range.
-    //   If d is in {-P, ..., -1}, then t is in {2^32 - P, ..., 2^32 - 1} and u is in
-    // {0, ..., P - 1}. r = u is in the correct range.
-    unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
-        let t = x86_64::_mm256_sub_epi32(lhs, rhs);
-        let u = x86_64::_mm256_add_epi32(t, P);
-        x86_64::_mm256_min_epu32(t, u)
     }
 }
 

@@ -174,11 +174,26 @@ impl PrimeCharacteristicRing for Mersenne31 {
     }
 
     #[inline]
+    fn halve(&self) -> Self {
+        Self::new(halve_u32::<P>(self.value))
+    }
+
+    #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
         // In a Mersenne field, multiplication by 2^k is just a left rotation by k bits.
         let exp = exp % 31;
         let left = (self.value << exp) & ((1 << 31) - 1);
         let right = self.value >> (31 - exp);
+        let rotated = left | right;
+        Self::new(rotated)
+    }
+
+    #[inline]
+    fn div_2exp_u64(&self, exp: u64) -> Self {
+        // In a Mersenne field, division by 2^k is just a right rotation by k bits.
+        let exp = (exp % 31) as u8;
+        let left = self.value >> exp;
+        let right = (self.value << (31 - exp)) & ((1 << 31) - 1);
         let rotated = left | right;
         Self::new(rotated)
     }
@@ -234,27 +249,19 @@ impl Field for Mersenne31 {
     #[cfg(all(
         target_arch = "x86_64",
         target_feature = "avx2",
-        not(all(feature = "nightly-features", target_feature = "avx512f"))
+        not(target_feature = "avx512f")
     ))]
     type Packing = crate::PackedMersenne31AVX2;
-    #[cfg(all(
-        feature = "nightly-features",
-        target_arch = "x86_64",
-        target_feature = "avx512f"
-    ))]
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
     type Packing = crate::PackedMersenne31AVX512;
     #[cfg(not(any(
         all(target_arch = "aarch64", target_feature = "neon"),
         all(
             target_arch = "x86_64",
             target_feature = "avx2",
-            not(all(feature = "nightly-features", target_feature = "avx512f"))
+            not(target_feature = "avx512f")
         ),
-        all(
-            feature = "nightly-features",
-            target_arch = "x86_64",
-            target_feature = "avx512f"
-        ),
+        all(target_arch = "x86_64", target_feature = "avx512f"),
     )))]
     type Packing = Self;
 
@@ -264,16 +271,6 @@ impl Field for Mersenne31 {
     #[inline]
     fn is_zero(&self) -> bool {
         self.value == 0 || self.value == Self::ORDER_U32
-    }
-
-    #[inline]
-    fn div_2exp_u64(&self, exp: u64) -> Self {
-        // In a Mersenne field, division by 2^k is just a right rotation by k bits.
-        let exp = (exp % 31) as u8;
-        let left = self.value >> exp;
-        let right = (self.value << (31 - exp)) & ((1 << 31) - 1);
-        let rotated = left | right;
-        Self::new(rotated)
     }
 
     fn try_inverse(&self) -> Option<Self> {
@@ -287,11 +284,6 @@ impl Field for Mersenne31 {
         // gcd_inversion returns the inverse multiplied by 2^60 so we need to correct for that.
         let inverse_i64 = gcd_inversion_prime_field_32::<NUM_PRIME_BITS>(self.value, P);
         Some(Self::from_int(inverse_i64).div_2exp_u64(60))
-    }
-
-    #[inline]
-    fn halve(&self) -> Self {
-        Self::new(halve_u32::<P>(self.value))
     }
 
     #[inline]

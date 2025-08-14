@@ -42,6 +42,16 @@ pub trait BinomiallyExtendableAlgebra<F: Field, const D: usize>: Algebra<F> {
     fn binomial_mul(a: &[Self; D], b: &[Self; D], res: &mut [Self; D], w: F) {
         binomial_mul::<F, Self, Self, D>(a, b, res, w);
     }
+
+    #[inline]
+    fn binomial_add(a: &[Self; D], b: &[Self; D]) -> [Self; D] {
+        vector_add(a, b)
+    }
+
+    #[inline]
+    fn binomial_sub(a: &[Self; D], b: &[Self; D]) -> [Self; D] {
+        vector_sub(a, b)
+    }
 }
 
 /// Trait for extension fields that support Frobenius automorphisms.
