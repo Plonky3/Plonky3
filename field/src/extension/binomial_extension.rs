@@ -454,13 +454,13 @@ where
 impl<F, A, const D: usize> Sub for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: Algebra<F>,
+    A: BinomiallyExtendableAlgebra<F, D>,
 {
     type Output = Self;
 
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        let value = vector_sub(&self.value, &rhs.value);
+        let value = A::binomial_sub(&self.value, &rhs.value);
         Self::new(value)
     }
 }

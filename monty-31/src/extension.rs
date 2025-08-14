@@ -1,9 +1,11 @@
 use p3_field::extension::{
     BinomiallyExtendable, BinomiallyExtendableAlgebra, HasTwoAdicBinomialExtension,
 };
-use p3_field::{PrimeCharacteristicRing, TwoAdicField, field_to_array, packed_mod_add};
+use p3_field::{
+    PrimeCharacteristicRing, TwoAdicField, field_to_array, packed_mod_add, packed_mod_sub,
+};
 
-use crate::utils::add;
+use crate::utils::{add, sub};
 use crate::{
     BinomialExtensionData, FieldParameters, MontyField31, TwoAdicData, octic_mul_packed,
     quartic_mul_packed, quintic_mul_packed,
@@ -44,6 +46,20 @@ where
             let res: &mut [u32; WIDTH] = &mut *(res.as_mut_ptr() as *mut [u32; WIDTH]);
 
             packed_mod_add(a, b, res, FP::PRIME, add::<FP>);
+        }
+        res
+    }
+
+    #[inline(always)]
+    fn binomial_sub(a: &[Self; WIDTH], b: &[Self; WIDTH]) -> [Self; WIDTH] {
+        let mut res = [Self::ZERO; WIDTH];
+        unsafe {
+            // Safe as Self is repr(transparent) and stores a single u32.
+            let a: &[u32; WIDTH] = &*(a.as_ptr() as *const [u32; WIDTH]);
+            let b: &[u32; WIDTH] = &*(b.as_ptr() as *const [u32; WIDTH]);
+            let res: &mut [u32; WIDTH] = &mut *(res.as_mut_ptr() as *mut [u32; WIDTH]);
+
+            packed_mod_sub(a, b, res, FP::PRIME, sub::<FP>);
         }
         res
     }
