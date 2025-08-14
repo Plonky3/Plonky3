@@ -1,9 +1,10 @@
 //! An implementation of the FFT for `MontyField31`
 extern crate alloc;
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::cell::RefCell;
 use core::iter;
+use parking_lot::RwLock;
 
 use itertools::izip;
 use p3_dft::TwoAdicSubgroupDft;
@@ -13,6 +14,7 @@ use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_ceil_usize;
+use p3_util::log2_strict_usize;
 use tracing::{debug_span, instrument};
 
 mod backward;
@@ -45,19 +47,15 @@ fn coset_shift_and_scale_rows<F: Field>(
 #[derive(Clone, Debug, Default)]
 pub struct RecursiveDft<F> {
     /// Memoized twiddle factors for each length log_n.
-    ///
-    /// TODO: The use of RefCell means this can't be shared across
-    /// threads; consider using RwLock or finding a better design
-    /// instead.
-    twiddles: RefCell<Vec<Vec<F>>>,
-    inv_twiddles: RefCell<Vec<Vec<F>>>,
+    twiddles: Arc<RwLock<Vec<Vec<F>>>>,
+    inv_twiddles: Arc<RwLock<Vec<Vec<F>>>>,
 }
 
 impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
     pub fn new(n: usize) -> Self {
         let res = Self {
-            twiddles: RefCell::default(),
-            inv_twiddles: RefCell::default(),
+            twiddles: Arc::default(),
+            inv_twiddles: Arc::default(),
         };
         res.update_twiddles(n);
         res
@@ -104,7 +102,7 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
         // As we don't save the twiddles for the final layer where
         // the only twiddle is 1, roots_of_unity_table(fft_len)
         // returns a vector of twiddles of length log_2(fft_len) - 1.
-        let curr_max_fft_len = 2 << self.twiddles.borrow().len();
+        let curr_max_fft_len = 2 << self.twiddles.read().len();
         if fft_len > curr_max_fft_len {
             let new_twiddles = MontyField31::roots_of_unity_table(fft_len);
             // We can obtain the inverse twiddles by reversing and
@@ -125,9 +123,34 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
                         .collect()
                 })
                 .collect();
-            self.twiddles.replace(new_twiddles);
-            self.inv_twiddles.replace(new_inv_twiddles);
+            {
+                let mut tw_lock = self.twiddles.write();
+                let cur_have = 1usize << tw_lock.len();
+                if fft_len > cur_have {
+                    *tw_lock = new_twiddles; // move in the new table
+                }
+            }
+            {
+                let mut inv_tw_lock = self.inv_twiddles.write();
+                let cur_have = 1usize << inv_tw_lock.len();
+                if fft_len > cur_have {
+                    *inv_tw_lock = new_inv_twiddles; // move in the new table
+                }
+            }
         }
+    }
+
+    fn get_twiddles(&self, log_nrows: usize) -> Vec<Vec<MontyField31<MP>>> {
+        let guard = self.twiddles.read(); // parking_lot: no unwrap
+        let len = guard.len();
+        assert!(log_nrows <= len);
+        guard[len - log_nrows..].iter().cloned().collect() // cheap Arc clones
+    }
+    fn get_inv_twiddles(&self, log_nrows: usize) -> Vec<Vec<MontyField31<MP>>> {
+        let guard = self.inv_twiddles.read(); // parking_lot: no unwrap
+        let len = guard.len();
+        assert!(log_nrows <= len);
+        guard[len - log_nrows..].iter().cloned().collect() // cheap Arc clones
     }
 }
 
@@ -169,6 +192,8 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
     {
         let nrows = mat.height();
         let ncols = mat.width();
+        let log_nrows = log2_strict_usize(nrows);
+
         if nrows <= 1 {
             return mat.bit_reverse_rows();
         }
@@ -177,7 +202,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
             .in_scope(|| RowMajorMatrix::default(nrows, ncols));
 
         self.update_twiddles(nrows);
-        let twiddles = self.twiddles.borrow();
+        let twiddles = self.get_twiddles(log_nrows);
 
         // transpose input
         debug_span!("pre-transpose", nrows, ncols)
@@ -200,6 +225,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
     {
         let nrows = mat.height();
         let ncols = mat.width();
+        let log_nrows = log2_strict_usize(nrows);
         if nrows <= 1 {
             return mat;
         }
@@ -211,7 +237,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
             debug_span!("initial bitrev").in_scope(|| mat.bit_reverse_rows().to_row_major_matrix());
 
         self.update_twiddles(nrows);
-        let inv_twiddles = self.inv_twiddles.borrow();
+        let inv_twiddles = self.get_inv_twiddles(log_nrows);
 
         // transpose input
         debug_span!("pre-transpose", nrows, ncols)
@@ -239,6 +265,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
     ) -> Self::Evaluations {
         let nrows = mat.height();
         let ncols = mat.width();
+        let log_nrows = log2_ceil_usize(nrows);
         let result_nrows = nrows << added_bits;
 
         if nrows == 1 {
@@ -270,7 +297,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
 
         // Apply inverse DFT; result is not yet normalised.
         self.update_twiddles(result_nrows);
-        let inv_twiddles = self.inv_twiddles.borrow();
+        let inv_twiddles = self.get_inv_twiddles(log_nrows);
         debug_span!("inverse dft batch", n_dfts = ncols, fft_len = nrows)
             .in_scope(|| Self::decimation_in_time_dft(coeffs, nrows, &inv_twiddles));
 
@@ -285,7 +312,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         // `padded` is implicitly zero padded since it was initialised
         // to zeros when declared above.
 
-        let twiddles = self.twiddles.borrow();
+        let twiddles = self.get_twiddles(log_nrows);
 
         // Apply DFT
         debug_span!("dft batch", n_dfts = ncols, fft_len = result_nrows)
