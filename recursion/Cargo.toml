@@ -1,0 +1,51 @@
+[package]
+name = "p3-recursion"
+description = "Air implementation of plonky3's verifier."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+postcard = { workspace = true, features = ["alloc"] }
+p3-air.workspace = true
+p3-challenger.workspace = true
+p3-circle.workspace = true
+p3-commit.workspace = true
+p3-dft.workspace = true
+p3-field.workspace = true
+p3-fri.workspace = true
+p3-keccak.workspace = true
+p3-matrix.workspace = true
+p3-maybe-rayon.workspace = true
+p3-merkle-tree.workspace = true
+p3-mersenne-31.workspace = true
+p3-poseidon2.workspace = true
+p3-baby-bear.workspace = true
+p3-symmetric.workspace = true
+p3-uni-stark.workspace = true
+itertools.workspace = true
+
+rand.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_family = "unix")'.dev-dependencies]
+tikv-jemallocator = "0.6"
+
+[dev-dependencies]
+p3-baby-bear.workspace = true
+p3-challenger.workspace = true
+p3-commit.workspace = true
+p3-dft.workspace = true
+p3-fri.workspace = true
+p3-keccak.workspace = true
+p3-koala-bear.workspace = true
+p3-merkle-tree.workspace = true
+p3-symmetric.workspace = true
+p3-uni-stark.workspace = true
+
+tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
+tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
