@@ -26,3 +26,4 @@ rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 tracing.workspace = true
 transpose.workspace = true
+parking_lot = "0.12.4"
