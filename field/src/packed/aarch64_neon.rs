@@ -195,6 +195,6 @@ pub fn packed_mod_sub<const WIDTH: usize>(
             res[..4].copy_from_slice(&out_lo);
             res[4..].copy_from_slice(&out_hi);
         }
-        _ => panic!("Currently unsupported width for packed addition"),
+        _ => panic!("Currently unsupported width for packed subtraction"),
     }
 }
