@@ -28,6 +28,7 @@ const P: uint32x4_t = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH])
 /// Vectorized NEON implementation of `Mersenne31` arithmetic.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // Needed to make `transmute`s safe.
+#[must_use]
 pub struct PackedMersenne31Neon(pub [Mersenne31; WIDTH]);
 
 impl PackedMersenne31Neon {
@@ -46,7 +47,6 @@ impl PackedMersenne31Neon {
     }
 
     #[inline]
-    #[must_use]
     /// Make a packed field vector from an arch-specific vector.
     ///
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid
@@ -65,7 +65,6 @@ impl PackedMersenne31Neon {
     /// Copy `value` to all positions in a packed vector. This is the same as
     /// `From<Mersenne31>::from`, but `const`.
     #[inline]
-    #[must_use]
     const fn broadcast(value: Mersenne31) -> Self {
         Self([value; WIDTH])
     }

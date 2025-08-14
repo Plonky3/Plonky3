@@ -113,6 +113,7 @@ pub trait PrimeCharacteristicRing:
     /// `from_prime_subfield([r])` will be equal to:
     ///
     /// `Self::ONE + ... + Self::ONE (r times)`
+    #[must_use]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self;
 
     /// Return `Self::ONE` if `b` is `true` and `Self::ZERO` if `b` is `false`.
@@ -142,6 +143,7 @@ pub trait PrimeCharacteristicRing:
     /// # Panics
     /// The function will panic if the field has characteristic 2.
     #[must_use]
+    #[inline]
     fn halve(&self) -> Self {
         // This must be overwritten by PrimeField implementations as this definition
         // is circular when PrimeSubfield = Self. It should also be overwritten by
@@ -981,6 +983,7 @@ impl<R: PrimeCharacteristicRing> Iterator for Powers<R> {
 impl<R: PrimeCharacteristicRing> Powers<R> {
     /// Returns an iterator yielding the first `n` powers.
     #[inline]
+    #[must_use]
     pub fn take(self, n: usize) -> BoundedPowers<R> {
         BoundedPowers { iter: self, n }
     }
@@ -996,6 +999,7 @@ impl<R: PrimeCharacteristicRing> Powers<R> {
 
     /// Wrapper for `self.take(n).collect()`.
     #[inline]
+    #[must_use]
     pub fn collect_n(self, n: usize) -> Vec<R> {
         self.take(n).collect()
     }
@@ -1012,6 +1016,7 @@ impl<F: Field> BoundedPowers<F> {
     /// # Performance
     ///
     /// Enable the `parallel` feature to enable parallelization.
+    #[must_use]
     pub fn collect(self) -> Vec<F> {
         let num_powers = self.n;
 

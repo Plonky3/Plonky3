@@ -32,7 +32,6 @@ pub struct InternalLayer16<PMP: PackedMontyParameters> {
 
 impl<PMP: PackedMontyParameters> InternalLayer16<PMP> {
     #[inline]
-    #[must_use]
     /// Convert from `InternalLayer16<PMP>` to `[PackedMontyField31AVX512<PMP>; 16]`
     ///
     /// SAFETY: The caller must ensure that each element of `s_hi` represents a valid `MontyField31<PMP>`.
@@ -76,7 +75,6 @@ pub struct InternalLayer24<PMP: PackedMontyParameters> {
 
 impl<PMP: PackedMontyParameters> InternalLayer24<PMP> {
     #[inline]
-    #[must_use]
     /// Convert from `InternalLayer24<PMP>` to `[PackedMontyField31AVX512<PMP>; 24]`
     ///
     /// SAFETY: The caller must ensure that each element of `s_hi` represents a valid `MontyField31<PMP>`.

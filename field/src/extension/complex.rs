@@ -45,11 +45,13 @@ impl<R: PrimeCharacteristicRing> Complex<R> {
     }
 
     #[inline(always)]
+    #[must_use]
     pub fn real(&self) -> R {
         self.value[0].clone()
     }
 
     #[inline(always)]
+    #[must_use]
     pub fn imag(&self) -> R {
         self.value[1].clone()
     }
@@ -60,17 +62,20 @@ impl<R: PrimeCharacteristicRing> Complex<R> {
     }
 
     #[inline]
+    #[must_use]
     pub fn norm(&self) -> R {
         self.real().square() + self.imag().square()
     }
 
     #[inline(always)]
+    #[must_use]
     pub fn to_array(&self) -> [R; 2] {
         self.value.clone()
     }
 
     // Sometimes we want to rotate over an extension that's not necessarily ComplexExtendable,
     // but still on the circle.
+    #[inline]
     pub fn rotate<Ext: Algebra<R>>(&self, rhs: &Complex<Ext>) -> Complex<Ext> {
         Complex::<Ext>::new_complex(
             rhs.real() * self.real() - rhs.imag() * self.imag(),

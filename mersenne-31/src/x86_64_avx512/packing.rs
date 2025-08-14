@@ -30,6 +30,7 @@ const ODDS: __mmask16 = 0b1010101010101010;
 /// Vectorized AVX-512F implementation of `Mersenne31` arithmetic.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // Needed to make `transmute`s safe.
+#[must_use]
 pub struct PackedMersenne31AVX512(pub [Mersenne31; WIDTH]);
 
 impl PackedMersenne31AVX512 {
@@ -48,7 +49,6 @@ impl PackedMersenne31AVX512 {
     }
 
     #[inline]
-    #[must_use]
     /// Make a packed field vector from an arch-specific vector.
     ///
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid
@@ -68,7 +68,6 @@ impl PackedMersenne31AVX512 {
     /// Copy `value` to all positions in a packed vector. This is the same as
     /// `From<Mersenne31>::from`, but `const`.
     #[inline]
-    #[must_use]
     const fn broadcast(value: Mersenne31) -> Self {
         Self([value; WIDTH])
     }

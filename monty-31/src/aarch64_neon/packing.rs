@@ -36,6 +36,7 @@ pub trait MontyParametersNeon {
 /// Vectorized NEON implementation of `MontyField31` arithmetic.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // Needed to make `transmute`s safe.
+#[must_use]
 pub struct PackedMontyField31Neon<PMP: PackedMontyParameters>(pub [MontyField31<PMP>; WIDTH]);
 
 impl<PMP: PackedMontyParameters> PackedMontyField31Neon<PMP> {
@@ -54,7 +55,6 @@ impl<PMP: PackedMontyParameters> PackedMontyField31Neon<PMP> {
     }
 
     #[inline]
-    #[must_use]
     /// Make a packed field vector from an arch-specific vector.
     ///
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid `MontyField31`.
@@ -74,7 +74,6 @@ impl<PMP: PackedMontyParameters> PackedMontyField31Neon<PMP> {
     /// Copy `value` to all positions in a packed vector. This is the same as
     /// `From<MontyField31>::from`, but `const`.
     #[inline]
-    #[must_use]
     const fn broadcast(value: MontyField31<PMP>) -> Self {
         Self([value; WIDTH])
     }

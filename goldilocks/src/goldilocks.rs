@@ -30,6 +30,7 @@ pub(crate) const P: u64 = 0xFFFF_FFFF_0000_0001;
 /// Note that the safety of deriving `Serialize` and `Deserialize` relies on the fact that the internal value can be any u64.
 #[derive(Copy, Clone, Default, Serialize, Deserialize)]
 #[repr(transparent)] // Important for reasoning about memory layout
+#[must_use]
 pub struct Goldilocks {
     /// Not necessarily canonical.
     pub(crate) value: u64,
@@ -44,7 +45,6 @@ impl Goldilocks {
     ///
     /// This is a const version of `.map(Goldilocks::new)`.
     #[inline]
-    #[must_use]
     pub(crate) const fn new_array<const N: usize>(input: [u64; N]) -> [Self; N] {
         let mut output = [Self::ZERO; N];
         let mut i = 0;

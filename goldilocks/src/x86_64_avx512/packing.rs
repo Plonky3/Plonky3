@@ -27,6 +27,7 @@ const WIDTH: usize = 8;
 /// Vectorized AVX512 implementation of `Goldilocks` arithmetic.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // Needed to make `transmute`s safe.
+#[must_use]
 pub struct PackedGoldilocksAVX512(pub [Goldilocks; WIDTH]);
 
 impl PackedGoldilocksAVX512 {
@@ -49,7 +50,6 @@ impl PackedGoldilocksAVX512 {
     /// Elements of `Goldilocks` are allowed to be arbitrary u64s so this function
     /// is safe unlike the `Mersenne31/MontyField31` variants.
     #[inline]
-    #[must_use]
     pub(crate) fn from_vector(vector: __m512i) -> Self {
         unsafe {
             // Safety: `__m512i` can be transmuted to `[u64; WIDTH]` (since arrays elements are
@@ -63,7 +63,6 @@ impl PackedGoldilocksAVX512 {
     /// Copy `value` to all positions in a packed vector. This is the same as
     /// `From<Goldilocks>::from`, but `const`.
     #[inline]
-    #[must_use]
     const fn broadcast(value: Goldilocks) -> Self {
         Self([value; WIDTH])
     }

@@ -35,6 +35,7 @@ pub trait MontyParametersAVX2 {
 /// Vectorized AVX2 implementation of `MontyField31<FP>` arithmetic.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // This is needed to make `transmute`s safe.
+#[must_use]
 pub struct PackedMontyField31AVX2<PMP: PackedMontyParameters>(pub [MontyField31<PMP>; WIDTH]);
 
 impl<PMP: PackedMontyParameters> PackedMontyField31AVX2<PMP> {
@@ -53,7 +54,6 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX2<PMP> {
     }
 
     #[inline]
-    #[must_use]
     /// Make a packed field vector from an arch-specific vector.
     ///
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid `MontyField31<FP>`.
@@ -73,7 +73,6 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX2<PMP> {
     /// Copy `value` to all positions in a packed vector. This is the same as
     /// `From<MontyField31<FP>>::from`, but `const`.
     #[inline]
-    #[must_use]
     const fn broadcast(value: MontyField31<PMP>) -> Self {
         Self([value; WIDTH])
     }
