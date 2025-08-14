@@ -35,7 +35,7 @@ pub fn packed_mod_add<const WIDTH: usize>(
 /// It will be equal to `P` if and only if `a - b = P` so provided `a - b < P`
 /// the result is guaranteed to be less than `P`.
 ///
-/// Scalar add is assumed to be a function which implements `a + b % P` with the
+/// Scalar sub is assumed to be a function which implements `a - b % P` with the
 /// same specifications as above.
 #[inline(always)]
 pub fn packed_mod_sub<const WIDTH: usize>(
