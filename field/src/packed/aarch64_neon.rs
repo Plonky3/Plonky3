@@ -130,7 +130,7 @@ pub fn packed_mod_add<const WIDTH: usize>(
     }
 }
 
-/// Add two arrays of integers modulo `P` using packings.
+/// Subtract two arrays of integers modulo `P` using packings.
 ///
 /// Assumes that `p` is less than `2^31` and `|a - b| <= P`.
 /// If the inputs are not in this range, the result may be incorrect.
