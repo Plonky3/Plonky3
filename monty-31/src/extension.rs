@@ -7,8 +7,8 @@ use p3_field::{
 
 use crate::utils::{add, sub};
 use crate::{
-    BinomialExtensionData, FieldParameters, MontyField31, TwoAdicData, octic_mul_packed,
-    quartic_mul_packed, quintic_mul_packed,
+    BinomialExtensionData, FieldParameters, MontyField31, TwoAdicData, base_mul_packed,
+    octic_mul_packed, quartic_mul_packed, quintic_mul_packed,
 };
 
 // If a field implements BinomialExtensionData<WIDTH> then there is a natural
@@ -61,6 +61,13 @@ where
 
             packed_mod_sub(a, b, res, FP::PRIME, sub::<FP>);
         }
+        res
+    }
+
+    #[inline(always)]
+    fn binomial_base_mul(lhs: [Self; WIDTH], rhs: Self) -> [Self; WIDTH] {
+        let mut res = [Self::ZERO; WIDTH];
+        base_mul_packed(lhs, rhs, &mut res);
         res
     }
 }

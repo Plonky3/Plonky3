@@ -42,3 +42,15 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
 {
     octic_mul(a, b, res, FP::W);
 }
+
+/// Multiplication by a base field element in a binomial extension field.
+#[inline]
+pub(crate) fn base_mul_packed<FP, const WIDTH: usize>(
+    a: [MontyField31<FP>; WIDTH],
+    b: MontyField31<FP>,
+    res: &mut [MontyField31<FP>; WIDTH],
+) where
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+{
+    res.iter_mut().zip(a.iter()).for_each(|(r, a)| *r = *a * b);
+}

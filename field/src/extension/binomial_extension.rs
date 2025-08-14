@@ -533,7 +533,7 @@ where
 
     #[inline]
     fn mul(self, rhs: A) -> Self {
-        Self::new(self.value.map(|x| x * rhs.clone()))
+        Self::new(A::binomial_base_mul(self.value, rhs))
     }
 }
 
