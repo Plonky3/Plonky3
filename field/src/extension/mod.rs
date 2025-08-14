@@ -38,7 +38,7 @@ pub trait BinomiallyExtendable<const D: usize>:
 }
 
 /// Trait for algebras which support binomial extensions of the form `A[X]/(X^D - W)`
-/// with `W` in the base field `F`. 
+/// with `W` in the base field `F`.
 pub trait BinomiallyExtendableAlgebra<F: Field, const D: usize>: Algebra<F> {
     /// Multiplication in the algebra extension ring `A<X> / (X^D - W)`.
     ///
@@ -61,7 +61,7 @@ pub trait BinomiallyExtendableAlgebra<F: Field, const D: usize>: Algebra<F> {
     }
 
     /// Subtraction of elements in the algebra extension ring `A<X> / (X^D - W)`.
-    /// 
+    ///
     /// As subtraction has no dependence on `W` so this is equivalent
     /// to an algorithm for subtracting arrays of elements of `A`.
     ///
