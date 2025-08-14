@@ -87,17 +87,6 @@ Plonky3 contains optimizations that rely on newer CPU instructions unavailable i
 RUSTFLAGS="-Ctarget-cpu=native" cargo test
 ```
 
-Support for some instructions, such as AVX-512, is still experimental. They are only available in the nightly build of Rustc and are enabled by the [`nightly-features` feature flag](#nightly-only-optimizations). To use them, you must enable the flag in Rustc (e.g. by setting `target-feature`) and you must also enable the `nightly-features` feature.
-
-
-## Nightly-only optimizations
-
-Some optimizations (in particular, AVX-512-optimized math) rely on features that are currently available only in the nightly build of Rustc. To use them, you need to enable the `nightly-features` feature. For example, to run the tests:
-```bash
-cargo test --features nightly-features
-```
-
-
 ## Known issues
 
 The verifier might panic upon receiving certain invalid proofs.

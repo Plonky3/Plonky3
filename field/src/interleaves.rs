@@ -50,7 +50,7 @@ pub mod interleave {
 #[cfg(all(
     target_arch = "x86_64",
     target_feature = "avx2",
-    not(all(feature = "nightly-features", target_feature = "avx512f"))
+    not(target_feature = "avx512f")
 ))]
 pub mod interleave {
     use core::arch::x86_64::{self, __m256i};
@@ -148,11 +148,7 @@ pub mod interleave {
     }
 }
 
-#[cfg(all(
-    feature = "nightly-features",
-    target_arch = "x86_64",
-    target_feature = "avx512f"
-))]
+#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
 pub mod interleave {
     use core::arch::x86_64::{self, __m512i, __mmask8, __mmask16};
     use core::mem::transmute;

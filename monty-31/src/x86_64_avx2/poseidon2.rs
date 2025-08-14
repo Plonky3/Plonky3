@@ -5,7 +5,7 @@ use core::arch::x86_64::{self, __m256i};
 use core::marker::PhantomData;
 use core::mem::transmute;
 
-use p3_field::{PrimeCharacteristicRing, mm256_mod_add};
+use p3_field::{PrimeCharacteristicRing, mm256_mod_add, mm256_mod_sub};
 use p3_poseidon2::{
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, InternalLayer,
     InternalLayerConstructor, MDSMat4, external_initial_permute_state,
@@ -15,7 +15,7 @@ use p3_poseidon2::{
 use crate::{
     FieldParameters, InternalLayerBaseParameters, MontyField31, MontyParameters,
     PackedMontyField31AVX2, PackedMontyParameters, RelativelyPrimePower, apply_func_to_even_odd,
-    halve_avx2, packed_exp_3, packed_exp_5, packed_exp_7, signed_add_avx2, sub,
+    halve_avx2, packed_exp_3, packed_exp_5, packed_exp_7, signed_add_avx2,
 };
 
 // In the internal layers, it is valuable to treat the first entry of the state differently
@@ -325,7 +325,7 @@ pub trait InternalLayerParametersAVX2<PMP: PackedMontyParameters, const WIDTH: u
             // Diagonal mul multiplied these by 1/2, 3, 4 instead of -1/2, -3, -4 so we need to subtract instead of adding.
             input.as_mut()[5..8]
                 .iter_mut()
-                .for_each(|x| *x = sub::<PMP>(sum, *x));
+                .for_each(|x| *x = mm256_mod_sub(sum, *x, PMP::PACKED_P));
 
             // Diagonal mul output a signed value in (-P, P) so we need to do a signed add.
             // Note that signed add's parameters are not interchangeable. The first parameter must be positive.

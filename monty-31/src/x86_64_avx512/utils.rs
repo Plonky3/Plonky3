@@ -7,6 +7,7 @@ use crate::{MontyParameters, PackedMontyParameters, TwoAdicData};
 // https://godbolt.org/z/dvW7r1zjj
 
 /// Halve a vector of Monty31 field elements in canonical form.
+///
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline(always)]
 pub(crate) fn halve_avx512<MP: MontyParameters>(input: __m512i) -> __m512i {
@@ -23,7 +24,7 @@ pub(crate) fn halve_avx512<MP: MontyParameters>(input: __m512i) -> __m512i {
         If val is odd: val/2 mod P = (val + P)/2 = (val >> 1) + (P + 1)/2
     */
     unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
+        // Safety: If this code got compiled then AVX512 intrinsics are available.
         const ONE: __m512i = unsafe { transmute([1u32; 16]) };
         let half = x86_64::_mm512_set1_epi32((MP::PRIME as i32 + 1) / 2); // Compiler realises this is constant.
 

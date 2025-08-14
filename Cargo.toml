@@ -60,7 +60,7 @@ tiny-keccak = "2.0.2"
 tracing = { version = "0.1.37", default-features = false, features = [
     "attributes",
 ] }
-tracing-forest = "0.1.6"
+tracing-forest = "0.2.0"
 tracing-subscriber = { version = "0.3.17", default-features = false, features = [
     "alloc",
 ] }

@@ -407,7 +407,7 @@ where
                 {
                     let batch_heights: Vec<usize> = mats
                         .iter()
-                        .map(|(domain, _)| (domain.size() << self.fri_params.log_blowup))
+                        .map(|(domain, _)| domain.size() << self.fri_params.log_blowup)
                         .collect_vec();
                     let batch_dims: Vec<Dimensions> = batch_heights
                         .iter()

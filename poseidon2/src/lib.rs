@@ -91,8 +91,7 @@ where
         StandardUniform: Distribution<F> + Distribution<[F; WIDTH]>,
     {
         let round_numbers = poseidon2_round_numbers_128::<F>(WIDTH, D);
-        let (rounds_f, rounds_p) =
-            round_numbers.unwrap_or_else(|_| panic!("{}", round_numbers.unwrap_err()));
+        let (rounds_f, rounds_p) = round_numbers.unwrap_or_else(|e| panic!("{e}"));
         Self::new_from_rng(rounds_f, rounds_p, rng)
     }
 }

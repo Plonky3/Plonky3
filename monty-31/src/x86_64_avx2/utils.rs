@@ -7,6 +7,7 @@ use crate::{MontyParameters, MontyParametersAVX2, TwoAdicData};
 // https://godbolt.org/z/9P71nYrqh
 
 /// Halve a vector of Monty31 field elements in canonical form.
+///
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline(always)]
 pub(crate) fn halve_avx2<MP: MontyParameters>(input: __m256i) -> __m256i {
