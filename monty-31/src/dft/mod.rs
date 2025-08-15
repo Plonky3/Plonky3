@@ -140,10 +140,10 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
     }
 
     fn get_twiddles(&self) -> Vec<Vec<MontyField31<MP>>> {
-        self.twiddles.read().iter().cloned().collect() // parking_lot: no unwrap
+        self.twiddles.read().to_vec() // parking_lot: no unwrap
     }
     fn get_inv_twiddles(&self) -> Vec<Vec<MontyField31<MP>>> {
-        self.inv_twiddles.read().iter().cloned().collect() // parking_lot: no unwrap
+        self.inv_twiddles.read().to_vec() // parking_lot: no unwrap
     }
 }
 

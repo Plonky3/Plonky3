@@ -37,19 +37,18 @@ pub struct Radix2Dit<F: TwoAdicField> {
 
 impl<F: TwoAdicField> Radix2Dit<F> {
     fn get_twiddles(&self, log_h: usize) -> Arc<Vec<F>> {
-        if let Some(v) = self.twiddles.read().get(&log_h).cloned() {
-            return v;
+        // Single read path
+        let up = self.twiddles.upgradable_read();
+        if let Some(v) = up.get(&log_h) {
+            return Arc::clone(v);
         }
-        {
-            let up = self.twiddles.upgradable_read();
-            if let Some(v) = up.get(&log_h) {
-                return Arc::clone(v);
-            }
-            let root = F::two_adic_generator(log_h);
-            let tw = Arc::new(root.powers().take(1 << log_h).collect());
-            let mut w = RwLockUpgradableReadGuard::upgrade(up);
-            Arc::clone(w.entry(log_h).or_insert_with(|| Arc::clone(&tw)))
-        }
+        // Compute without holding the write lock
+        let n = 1usize << log_h;
+        let root = F::two_adic_generator(log_h);
+        let tw = Arc::new(root.powers().collect_n(n));
+        // Upgrade to write; insert or reuse if another thread won the race
+        let mut w = RwLockUpgradableReadGuard::upgrade(up);
+        Arc::clone(w.entry(log_h).or_insert_with(|| Arc::clone(&tw)))
     }
 }
 
