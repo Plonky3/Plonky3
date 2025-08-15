@@ -3,7 +3,6 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::iter;
-use parking_lot::RwLock;
 
 use itertools::Itertools;
 use p3_field::{Field, TwoAdicField, scale_slice_in_place_single_core};
@@ -12,6 +11,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{as_base_slice, log2_strict_usize, reverse_slice_index_bits};
+use parking_lot::RwLock;
 
 use crate::{
     Butterfly, DifButterfly, DifButterflyZeros, DitButterfly, TwiddleFreeButterfly,
