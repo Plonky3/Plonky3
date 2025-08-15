@@ -1,7 +1,7 @@
 //! An FFT implementation optimized for small batch sizes.
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::cell::RefCell;
 use core::iter;
 
 use itertools::Itertools;
@@ -11,6 +11,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{as_base_slice, log2_strict_usize, reverse_slice_index_bits};
+use parking_lot::RwLock;
 
 use crate::{
     Butterfly, DifButterfly, DifButterflyZeros, DitButterfly, TwiddleFreeButterfly,
@@ -39,13 +40,10 @@ pub struct Radix2DFTSmallBatch<F> {
     /// bit reversed order. The final set of twiddles `twiddles[-1]` is the
     /// one element vectors `[1]` and more general `twiddles[-i]` has length `2^i`.
     ///
-    /// TODO: The use of RefCell means this can't be shared across
-    /// threads; consider using RwLock or finding a better design
-    /// instead.
-    twiddles: RefCell<Vec<Vec<F>>>,
+    twiddles: Arc<RwLock<Vec<Vec<F>>>>,
 
     /// Similar to `twiddles`, but stored the inverses used for the inverse fft.
-    inv_twiddles: RefCell<Vec<Vec<F>>>,
+    inv_twiddles: Arc<RwLock<Vec<Vec<F>>>>,
 }
 
 impl<F: TwoAdicField> Radix2DFTSmallBatch<F> {
@@ -54,8 +52,8 @@ impl<F: TwoAdicField> Radix2DFTSmallBatch<F> {
     /// The input `n` should be a power of two, representing the maximal FFT size you expect to handle.
     pub fn new(n: usize) -> Self {
         let res = Self {
-            twiddles: RefCell::default(),
-            inv_twiddles: RefCell::default(),
+            twiddles: Arc::default(),
+            inv_twiddles: Arc::default(),
         };
         res.update_twiddles(n);
         res
@@ -86,7 +84,7 @@ impl<F: TwoAdicField> Radix2DFTSmallBatch<F> {
         // need it to be larger, which is wasteful.
 
         // roots_of_unity_table(fft_len) returns a vector of twiddles of length log_2(fft_len).
-        let curr_max_fft_len = 1 << self.twiddles.borrow().len();
+        let curr_max_fft_len = 1 << self.twiddles.read().len();
         if fft_len > curr_max_fft_len {
             let mut new_twiddles = self.roots_of_unity_table(fft_len);
             let mut new_inv_twiddles: Vec<Vec<F>> = new_twiddles
@@ -106,9 +104,20 @@ impl<F: TwoAdicField> Radix2DFTSmallBatch<F> {
             new_inv_twiddles.iter_mut().for_each(|ts| {
                 reverse_slice_index_bits(ts);
             });
-
-            self.twiddles.replace(new_twiddles);
-            self.inv_twiddles.replace(new_inv_twiddles);
+            {
+                let mut tw_lock = self.twiddles.write();
+                let cur_have = 1usize << tw_lock.len();
+                if fft_len > cur_have {
+                    *tw_lock = new_twiddles; // move in the new table
+                }
+            }
+            {
+                let mut inv_tw_lock = self.inv_twiddles.write();
+                let cur_have = 1usize << inv_tw_lock.len();
+                if fft_len > cur_have {
+                    *inv_tw_lock = new_inv_twiddles; // move in the new table
+                }
+            }
         }
     }
 }
@@ -125,9 +134,10 @@ where
         let log_h = log2_strict_usize(h);
 
         self.update_twiddles(h);
-        let root_table = self.twiddles.borrow();
-        let len = root_table.len();
-        let root_table = &root_table[len - log_h..];
+        let root_table = {
+            let g = self.twiddles.read();
+            g[g.len() - log_h..].to_vec()
+        };
 
         // The strategy will be to do a standard round-by-round parallelization
         // until the chunk size is smaller than `num_par_rows * mat.width()` after which we
@@ -178,9 +188,14 @@ where
         let log_h = log2_strict_usize(h);
 
         self.update_twiddles(h);
-        let root_table = self.inv_twiddles.borrow();
-        let len = root_table.len();
-        let root_table = &root_table[len - log_h..];
+        let root_table: Vec<Vec<F>> = {
+            let g = self.inv_twiddles.read();
+            let start = g
+                .len()
+                .checked_sub(log_h)
+                .expect("log_h exceeds inv_twiddles length");
+            g[start..].to_vec()
+        };
 
         // Find the number of rows which can roughly fit in L1 cache.
         // The strategy is the same as `dft_batch` but in reverse.
@@ -244,12 +259,22 @@ where
         let log_h = log2_strict_usize(h);
 
         self.update_twiddles(h << added_bits);
-        let root_table = self.twiddles.borrow();
-        let inv_root_table = self.inv_twiddles.borrow();
-        let len = root_table.len();
-
-        let root_table = &root_table[len - (log_h + added_bits)..];
-        let inv_root_table = &inv_root_table[len - log_h..];
+        let root_table: Vec<Vec<F>> = {
+            let g = self.twiddles.read();
+            let start = g
+                .len()
+                .checked_sub(log_h + added_bits)
+                .expect("log_h exceeds twiddles length");
+            g[start..].to_vec()
+        }; // lock released here
+        let inv_root_table: Vec<Vec<F>> = {
+            let g = self.inv_twiddles.read();
+            let start = g
+                .len()
+                .checked_sub(log_h)
+                .expect("log_h exceeds inv_twiddles length");
+            g[start..].to_vec()
+        }; // lock released here
         let output_height = h << added_bits;
 
         // The matrix which we will use to store the output.

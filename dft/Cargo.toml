@@ -16,6 +16,8 @@ p3-maybe-rayon.workspace = true
 p3-util.workspace = true
 
 itertools.workspace = true
+parking_lot = "0.12.4"
+rayon.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
