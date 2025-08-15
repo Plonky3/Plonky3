@@ -134,12 +134,10 @@ where
         let log_h = log2_strict_usize(h);
 
         self.update_twiddles(h);
-        let root_table: Vec<Vec<F>> = {
-            let guard = self.twiddles.read(); // parking_lot: no unwrap
-            let len = guard.len();
-            assert!(log_h <= len);
-            guard[len - log_h..].iter().cloned().collect() // cheap Arc clones
-        }; // lock released here
+        let root_table = {
+            let g = self.twiddles.read();
+            g[g.len() - log_h..].to_vec()
+        };
 
         // The strategy will be to do a standard round-by-round parallelization
         // until the chunk size is smaller than `num_par_rows * mat.width()` after which we
@@ -191,11 +189,13 @@ where
 
         self.update_twiddles(h);
         let root_table: Vec<Vec<F>> = {
-            let guard = self.inv_twiddles.read(); // parking_lot: no unwrap
-            let len = guard.len();
-            assert!(log_h <= len);
-            guard[len - log_h..].iter().cloned().collect() // cheap Arc clones
-        }; // lock released here
+            let g = self.inv_twiddles.read();
+            let start = g
+                .len()
+                .checked_sub(log_h)
+                .expect("log_h exceeds inv_twiddles length");
+            g[start..].to_vec()
+        };
 
         // Find the number of rows which can roughly fit in L1 cache.
         // The strategy is the same as `dft_batch` but in reverse.
@@ -260,19 +260,20 @@ where
 
         self.update_twiddles(h << added_bits);
         let root_table: Vec<Vec<F>> = {
-            let guard = self.twiddles.read(); // parking_lot: no unwrap
-            let len = guard.len();
-            assert!(log_h <= len);
-            guard[len - (log_h + added_bits)..]
-                .iter()
-                .cloned()
-                .collect() // cheap Arc clones
+            let g = self.twiddles.read();
+            let start = g
+                .len()
+                .checked_sub(log_h + added_bits)
+                .expect("log_h exceeds twiddles length");
+            g[start..].to_vec()
         }; // lock released here
         let inv_root_table: Vec<Vec<F>> = {
-            let guard = self.inv_twiddles.read(); // parking_lot: no unwrap
-            let len = guard.len();
-            assert!(log_h <= len);
-            guard[len - log_h..].iter().cloned().collect() // cheap Arc clones
+            let g = self.inv_twiddles.read();
+            let start = g
+                .len()
+                .checked_sub(log_h)
+                .expect("log_h exceeds inv_twiddles length");
+            g[start..].to_vec()
         }; // lock released here
         let output_height = h << added_bits;
 
