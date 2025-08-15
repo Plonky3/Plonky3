@@ -3,7 +3,6 @@ use alloc::slice;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::mem::{MaybeUninit, transmute};
-use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 
 use itertools::{Itertools, izip};
 use p3_field::integers::QuotientMap;
@@ -14,6 +13,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
+use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use tracing::{debug_span, instrument};
 
 use crate::TwoAdicSubgroupDft;
