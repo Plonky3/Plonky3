@@ -62,11 +62,11 @@ fn bench_fft(c: &mut Criterion) {
     fft_algebra::<BabyBear, BBExt, RecursiveDft<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
 }
 
-fn fft_on_the_fly<F: Ord, Dft, const TOTAL_COLS: usize, const BATCH_SIZE: usize>(
+fn fft_on_the_fly<F, Dft, const TOTAL_COLS: usize, const BATCH_SIZE: usize>(
     c: &mut Criterion,
     log_sizes: &[usize],
 ) where
-    F: TwoAdicField,
+    F: TwoAdicField + Ord,
     Dft: TwoAdicSubgroupDft<F>,
     StandardUniform: Distribution<F>,
 {
