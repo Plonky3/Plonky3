@@ -21,12 +21,12 @@ p3-util.workspace = true
 
 itertools.workspace = true
 num-bigint.workspace = true
+parking_lot = "0.12.4"
 paste.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 tracing.workspace = true
 transpose.workspace = true
-parking_lot = "0.12.4"
 
 [lints]
 workspace = true

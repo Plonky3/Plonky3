@@ -14,7 +14,6 @@ use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_ceil_usize;
-use p3_util::log2_strict_usize;
 use tracing::{debug_span, instrument};
 
 mod backward;
@@ -140,17 +139,11 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
         }
     }
 
-    fn get_twiddles(&self, log_nrows: usize) -> Vec<Vec<MontyField31<MP>>> {
-        let guard = self.twiddles.read(); // parking_lot: no unwrap
-        let len = guard.len();
-        assert!(log_nrows <= len);
-        guard[len - log_nrows..].iter().cloned().collect() // cheap Arc clones
+    fn get_twiddles(&self) -> Vec<Vec<MontyField31<MP>>> {
+        self.twiddles.read().iter().cloned().collect() // parking_lot: no unwrap
     }
-    fn get_inv_twiddles(&self, log_nrows: usize) -> Vec<Vec<MontyField31<MP>>> {
-        let guard = self.inv_twiddles.read(); // parking_lot: no unwrap
-        let len = guard.len();
-        assert!(log_nrows <= len);
-        guard[len - log_nrows..].iter().cloned().collect() // cheap Arc clones
+    fn get_inv_twiddles(&self) -> Vec<Vec<MontyField31<MP>>> {
+        self.inv_twiddles.read().iter().cloned().collect() // parking_lot: no unwrap
     }
 }
 
@@ -192,7 +185,6 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
     {
         let nrows = mat.height();
         let ncols = mat.width();
-        let log_nrows = log2_strict_usize(nrows);
 
         if nrows <= 1 {
             return mat.bit_reverse_rows();
@@ -202,7 +194,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
             .in_scope(|| RowMajorMatrix::default(nrows, ncols));
 
         self.update_twiddles(nrows);
-        let twiddles = self.get_twiddles(log_nrows);
+        let twiddles = self.get_twiddles();
 
         // transpose input
         debug_span!("pre-transpose", nrows, ncols)
@@ -225,7 +217,6 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
     {
         let nrows = mat.height();
         let ncols = mat.width();
-        let log_nrows = log2_strict_usize(nrows);
         if nrows <= 1 {
             return mat;
         }
@@ -237,7 +228,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
             debug_span!("initial bitrev").in_scope(|| mat.bit_reverse_rows().to_row_major_matrix());
 
         self.update_twiddles(nrows);
-        let inv_twiddles = self.get_inv_twiddles(log_nrows);
+        let inv_twiddles = self.get_inv_twiddles();
 
         // transpose input
         debug_span!("pre-transpose", nrows, ncols)
@@ -265,7 +256,6 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
     ) -> Self::Evaluations {
         let nrows = mat.height();
         let ncols = mat.width();
-        let log_nrows = log2_ceil_usize(nrows);
         let result_nrows = nrows << added_bits;
 
         if nrows == 1 {
@@ -297,7 +287,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
 
         // Apply inverse DFT; result is not yet normalised.
         self.update_twiddles(result_nrows);
-        let inv_twiddles = self.get_inv_twiddles(log_nrows);
+        let inv_twiddles = self.get_inv_twiddles();
         debug_span!("inverse dft batch", n_dfts = ncols, fft_len = nrows)
             .in_scope(|| Self::decimation_in_time_dft(coeffs, nrows, &inv_twiddles));
 
@@ -312,7 +302,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         // `padded` is implicitly zero padded since it was initialised
         // to zeros when declared above.
 
-        let twiddles = self.get_twiddles(log_nrows);
+        let twiddles = self.get_twiddles();
 
         // Apply DFT
         debug_span!("dft batch", n_dfts = ncols, fft_len = result_nrows)

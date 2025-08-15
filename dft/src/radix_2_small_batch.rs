@@ -263,7 +263,10 @@ where
             let guard = self.twiddles.read(); // parking_lot: no unwrap
             let len = guard.len();
             assert!(log_h <= len);
-            guard[len - log_h..].iter().cloned().collect() // cheap Arc clones
+            guard[len - (log_h + added_bits)..]
+                .iter()
+                .cloned()
+                .collect() // cheap Arc clones
         }; // lock released here
         let inv_root_table: Vec<Vec<F>> = {
             let guard = self.inv_twiddles.read(); // parking_lot: no unwrap
@@ -271,10 +274,6 @@ where
             assert!(log_h <= len);
             guard[len - log_h..].iter().cloned().collect() // cheap Arc clones
         }; // lock released here
-        let len = root_table.len();
-
-        let root_table = &root_table[len - (log_h + added_bits)..];
-        let inv_root_table = &inv_root_table[len - log_h..];
         let output_height = h << added_bits;
 
         // The matrix which we will use to store the output.
