@@ -581,3 +581,43 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
     res[..4].copy_from_slice(&dot_0);
     res[4..].copy_from_slice(&dot_1);
 }
+
+/// Multiplication by a base field element in a binomial extension field.
+#[inline]
+pub(crate) fn base_mul_packed<FP, const WIDTH: usize>(
+    a: [MontyField31<FP>; WIDTH],
+    b: MontyField31<FP>,
+    res: &mut [MontyField31<FP>; WIDTH],
+) where
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+{
+    match WIDTH {
+        1 => res[0] = a[0] * b,
+        4 => {
+            let lhs = PackedMontyField31Neon([a[0], a[1], a[2], a[3]]);
+
+            let out = lhs * b;
+
+            res.copy_from_slice(&out.0[..4]);
+        }
+        5 => {
+            let lhs = PackedMontyField31Neon([a[0], a[1], a[2], a[3]]);
+
+            let out = lhs * b;
+            res[4] = a[4] * b;
+
+            res[..4].copy_from_slice(&out.0[..4]);
+        }
+        8 => {
+            let lhs_lo = PackedMontyField31Neon([a[0], a[1], a[2], a[3]]);
+            let lhs_hi = PackedMontyField31Neon([a[4], a[5], a[6], a[7]]);
+
+            let out_lo = lhs_lo * b;
+            let out_hi = lhs_hi * b;
+
+            res[..4].copy_from_slice(&out_lo.0);
+            res[4..].copy_from_slice(&out_hi.0);
+        }
+        _ => panic!("Unsupported binomial extension degree: {}", WIDTH),
+    }
+}
