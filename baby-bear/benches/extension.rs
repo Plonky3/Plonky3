@@ -6,7 +6,8 @@ use p3_field_testing::bench_func::{
     benchmark_mul_throughput, benchmark_square,
 };
 use p3_field_testing::{
-    benchmark_base_mul_latency, benchmark_base_mul_throughput, benchmark_sub_latency, benchmark_sub_throughput
+    benchmark_base_mul_latency, benchmark_base_mul_throughput, benchmark_sub_latency,
+    benchmark_sub_throughput,
 };
 
 type F = BabyBear;
