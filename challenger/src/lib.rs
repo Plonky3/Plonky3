@@ -56,6 +56,12 @@ pub trait FieldChallenger<F: Field>:
         self.observe_slice(ext.as_base_slice());
     }
 
+    fn observe_ext_element_slice<EF: AbstractExtensionField<F>>(&mut self, ext: &[EF]) {
+        for e in ext {
+            self.observe_ext_element(e.clone());
+        }
+    }
+
     fn sample_ext_element<EF: AbstractExtensionField<F>>(&mut self) -> EF {
         let vec = self.sample_vec(EF::D);
         EF::from_base_slice(&vec)
