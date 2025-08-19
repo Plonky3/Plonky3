@@ -60,8 +60,6 @@ where
         let local: &MerkleTreeCols<AB::Var, DIGEST_ELEMS> = (*local).borrow();
         let next: &MerkleTreeCols<AB::Var, DIGEST_ELEMS> = (*next).borrow();
 
-        // Receive the index and the initial root.
-
         // Assert that the height encoding is boolean.
         for i in 0..local.height_encoding.len() {
             builder.assert_bool(local.height_encoding[i].clone());
@@ -95,18 +93,24 @@ where
                 .when(AB::Expr::ONE - local.is_final.clone())
                 .assert_zero(local.index_bits[i].clone() - next.index_bits[i].clone());
         }
+
+        // `is_extra` may only be set before a hash with a sibling at the current height. So `local.is_extra` and `local.is_final` cannot be set at the same time.
+        builder
+            .when_transition()
+            .assert_bool(local.is_extra.clone() + local.is_final.clone());
+
         // Assert that the height encoding is updated correctly.
         for i in 0..local.height_encoding.len() {
             builder
-                .when(next.is_extra.clone())
+                .when(local.is_extra.clone())
                 .when_transition()
                 .assert_zero(local.height_encoding[i].clone() - next.height_encoding[i].clone());
             builder
                 .when_transition()
-                .when(AB::Expr::ONE - next.is_extra.clone())
+                .when(AB::Expr::ONE - (local.is_extra.clone() + next.is_final.clone()))
                 .assert_zero(
                     local.height_encoding[i].clone()
-                        - local.height_encoding[(i + 1) % MAX_TREE_HEIGHT].clone(),
+                        - next.height_encoding[(i + 1) % MAX_TREE_HEIGHT].clone(),
                 );
         }
         builder
@@ -116,11 +120,16 @@ where
         // Assert that we reach the maximal height.
         let mut sum = AB::Expr::ZERO;
         for i in 0..MAX_TREE_HEIGHT {
-            sum += local.height_encoding[i].clone() * AB::Expr::from_usize(i);
+            sum += local.height_encoding[i].clone() * AB::Expr::from_usize(i + 1);
         }
         builder
             .when(local.is_final.clone())
             .assert_zero(sum - local.length.clone());
+
+        builder
+            .when_transition()
+            .when(AB::Expr::ONE - local.is_final.clone())
+            .assert_zero(local.length.clone() - next.length.clone());
 
         let mut cur_to_hash = vec![AB::Expr::ZERO; 2 * DIGEST_ELEMS];
         for i in 0..DIGEST_ELEMS {
@@ -140,7 +149,12 @@ where
             cur_to_hash[DIGEST_ELEMS + i] += (AB::Expr::ONE - local.is_extra.clone()) * tmp
                 + AB::Expr::ONE * local.sibling[i].clone();
         }
+
+        // Interactions:
+        // Receive the index and the initial root.
         // We send `(cur_hash, next_state)` to the Hash table to check the output, with filter `is_final`.
+        // We also need an interaction when `is_extra` is set, as it corresponds to the hash of opened values at another height.
+        // When `is_final`, we send the root to FRI (which receives the actual root, so that we can check the equality).
     }
 }
 
@@ -149,7 +163,8 @@ where
 pub struct MerkleTreeCols<T, const DIGEST_ELEMS: usize> {
     // Bits of the leaf index we are currently verifying.
     pub index_bits: [T; DIGEST_ELEMS],
-    // Length of the current index.
+    // Max height of the Merkle trees, which is equal to the index's bit length.
+    // Transparent column.
     pub length: T,
     // One-hot encoding of the height within the Merkle tree.
     pub height_encoding: [T; MAX_TREE_HEIGHT],
@@ -161,7 +176,10 @@ pub struct MerkleTreeCols<T, const DIGEST_ELEMS: usize> {
     // tree verification for this index.
     pub is_final: T,
     // Whether there is an extra step for the current height (due to batching).
+    // Transparent column.
     pub is_extra: T,
+    // The height at the extra step. Transparent column.
+    pub extra_height: T,
 }
 
 pub const NUM_MERKLE_TREE_COLS: usize = size_of::<MerkleTreeCols<u8, 32>>();
@@ -203,14 +221,31 @@ where
 {
     pub fn generate_trace_rows<MerkleTreeMmcs>(
         &self,
-        inputs: &[([F; DIGEST_ELEMS], usize, Vec<[F; DIGEST_ELEMS]>)], // root, index, height, siblings
+        // root, index, height, siblings, extra_openings.
+        // Note: The extra_openings should are assumed to be sorted by height in a decreasing order.
+        inputs: &[(
+            [F; DIGEST_ELEMS],
+            usize,
+            Vec<[F; DIGEST_ELEMS]>,
+            Vec<[F; DIGEST_ELEMS]>,
+        )],
         dimensions: &[Vec<Dimensions>],
     ) -> RowMajorMatrix<F> {
-        let max_num_rows = dimensions
-            .iter()
-            .map(|dims| dims.iter().map(|d| d.height + 1).sum::<usize>())
-            .sum::<usize>()
-            .next_power_of_two();
+        // Compute the number of rows exactly: whenever the height changes, we need an extra row.
+        let mut max_num_rows = 0;
+        for dims in dimensions {
+            let mut cur_height = dims[0].height.next_power_of_two();
+            for d in dims {
+                let next_height = d.height.next_power_of_two();
+                if next_height != cur_height {
+                    max_num_rows += 1;
+                    cur_height = next_height;
+                }
+                max_num_rows += 1;
+            }
+            // Final row for each input.
+            max_num_rows += 1;
+        }
 
         let trace_length = max_num_rows * NUM_MERKLE_TREE_COLS;
 
@@ -227,11 +262,13 @@ where
 
         let mut row_counter = 0;
         for (input, dims) in inputs.iter().zip(dimensions) {
-            let heights_tallest_first = dims
-                .iter()
-                .sorted_by_key(|d| Reverse(d.height))
-                .collect::<Vec<_>>();
-            let mut cur_height_padded = heights_tallest_first[0].height.next_power_of_two();
+            let mut extra_openings_counter = 0;
+            let mut heights_tallest_first =
+                dims.iter().sorted_by_key(|d| Reverse(d.height)).peekable();
+            let max_height = heights_tallest_first.peek().map(|d| d.height).unwrap_or(0);
+            debug_assert!(max_height == input.2.len());
+
+            let mut cur_height_padded = max_height.next_power_of_two();
             let initial_root = input.0;
             let mut state = initial_root;
 
@@ -241,10 +278,11 @@ where
                 index_bits[i] = F::from_usize((index >> i) & 1);
             }
 
-            for (i, &sibling) in input.2.iter().enumerate() {
+            for (cur_height, &sibling) in input.2.iter().enumerate() {
                 let row = &mut rows[row_counter];
-                row.state = initial_root;
-                row.length = F::from_usize(heights_tallest_first[0].height);
+                row.state = state;
+                row.height_encoding[cur_height] = F::ONE;
+                row.length = F::from_usize(max_height);
                 row_counter += 1;
                 let (left, right) = if index & 1 == 0 {
                     (state, sibling)
@@ -258,10 +296,43 @@ where
                 cur_height_padded >>= 1;
                 row_counter += 1;
 
-                let next_height = heights_tallest_first[i]
+                // Check if there are any new matrix rows to inject at the next height.
+                let next_height = heights_tallest_first
+                    .peek()
                     .map(|dims| dims.height)
                     .filter(|h| h.next_power_of_two() == cur_height_padded);
+                if let Some(next_height) = next_height {
+                    // There is an extra row.
+                    let row = &mut rows[row_counter];
+                    row.state = state;
+                    row.length = F::from_usize(max_height);
+                    row.is_extra = F::ONE;
+                    row.extra_height = F::from_usize(next_height);
+                    row.index_bits = index_bits;
+                    row.height_encoding[cur_height + 1] = F::ONE;
+
+                    row_counter += 1;
+                    // If there are new matrix rows, hash the rows together and then combine with the current root.
+                    let next_height_openings_digest = input.3[extra_openings_counter];
+                    row.sibling = next_height_openings_digest;
+                    extra_openings_counter += 1;
+
+                    state = self
+                        .m_t
+                        .compress
+                        .compress([state, next_height_openings_digest]);
+                }
             }
+
+            // Final row. The one-hot-encoded height_encoding remains unchanged.
+            let row = &mut rows[row_counter];
+            row.state = state;
+            row.height_encoding[max_height - 1] = F::ONE;
+            row.length = F::from_usize(max_height);
+            row.index_bits = index_bits;
+            row.is_final = F::ONE;
+
+            row_counter += 1;
         }
 
         trace
