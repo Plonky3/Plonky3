@@ -11,7 +11,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{as_base_slice, log2_strict_usize, reverse_slice_index_bits};
-use parking_lot::RwLock;
+use spin::RwLock;
 
 use crate::{
     Butterfly, DifButterfly, DifButterflyZeros, DitButterfly, TwiddleFreeButterfly,
