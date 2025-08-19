@@ -16,7 +16,7 @@ p3-maybe-rayon.workspace = true
 p3-util.workspace = true
 
 itertools.workspace = true
-spin = "0.10.0"
+spin.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
