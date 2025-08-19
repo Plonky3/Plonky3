@@ -54,7 +54,7 @@ pub struct MerkleTreeMmcs<P, PW, H, C, const DIGEST_ELEMS: usize> {
     hash: H,
 
     /// The compression function used to hash internal tree nodes.
-    compress: C,
+    pub compress: C,
 
     /// Phantom type to associate `P` and `PW` without storing values.
     _phantom: PhantomData<(P, PW)>,

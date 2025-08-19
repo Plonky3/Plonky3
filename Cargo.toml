@@ -29,6 +29,7 @@ members = [
     "poseidon",
     "poseidon2",
     "poseidon2-air",
+    "recursion",
     "rescue",
     "sha256",
     "symmetric",
