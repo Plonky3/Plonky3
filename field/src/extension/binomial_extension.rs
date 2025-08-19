@@ -24,6 +24,7 @@ use crate::{
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
 #[repr(transparent)] // Needed to make various casts safe.
+#[must_use]
 pub struct BinomialExtensionField<F, const D: usize, A = F> {
     #[serde(
         with = "p3_util::array_serialization",

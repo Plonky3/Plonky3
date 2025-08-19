@@ -29,6 +29,7 @@ const P: u32 = (1 << 31) - 1;
 /// The prime field `F_p` where `p = 2^31 - 1`.
 #[derive(Copy, Clone, Default)]
 #[repr(transparent)] // Important for reasoning about memory layout.
+#[must_use]
 pub struct Mersenne31 {
     /// Not necessarily canonical, but must fit in 31 bits.
     pub(crate) value: u32,

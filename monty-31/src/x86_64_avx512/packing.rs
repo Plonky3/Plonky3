@@ -43,6 +43,7 @@ const EVENS: __mmask16 = 0b0101010101010101;
 /// Vectorized AVX-512F implementation of `MontyField31` arithmetic.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // Needed to make `transmute`s safe.
+#[must_use]
 pub struct PackedMontyField31AVX512<PMP: PackedMontyParameters>(pub [MontyField31<PMP>; WIDTH]);
 
 impl<PMP: PackedMontyParameters> PackedMontyField31AVX512<PMP> {
@@ -61,7 +62,6 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX512<PMP> {
     }
 
     #[inline]
-    #[must_use]
     /// Make a packed field vector from an arch-specific vector.
     ///
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid
@@ -81,14 +81,12 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX512<PMP> {
     /// Copy `value` to all positions in a packed vector. This is the same as
     /// `From<MontyField31>::from`, but `const`.
     #[inline]
-    #[must_use]
     const fn broadcast(value: MontyField31<PMP>) -> Self {
         Self([value; WIDTH])
     }
 
     /// Copy values from `arr` into the packed vector padding by zeros if necessary.
     #[inline]
-    #[must_use]
     fn from_monty_array<const N: usize>(arr: [MontyField31<PMP>; N]) -> Self
     where
         PMP: FieldParameters,

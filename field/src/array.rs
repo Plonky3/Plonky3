@@ -7,6 +7,7 @@ use crate::{Algebra, Field, PackedValue, PrimeCharacteristicRing};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(transparent)] // Needed to make `transmute`s safe.
+#[must_use]
 pub struct FieldArray<F: Field, const N: usize>(pub [F; N]);
 
 impl<F: Field, const N: usize> FieldArray<F, N> {

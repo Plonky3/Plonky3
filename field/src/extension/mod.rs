@@ -37,18 +37,37 @@ pub trait BinomiallyExtendable<const D: usize>:
     const EXT_GENERATOR: [Self; D];
 }
 
+/// Trait for algebras which support binomial extensions of the form `A[X]/(X^D - W)`
+/// with `W` in the base field `F`.
 pub trait BinomiallyExtendableAlgebra<F: Field, const D: usize>: Algebra<F> {
+    /// Multiplication in the algebra extension ring `A<X> / (X^D - W)`.
+    ///
+    /// Some algebras may want to reimplement this with faster methods.
     #[inline]
     fn binomial_mul(a: &[Self; D], b: &[Self; D], res: &mut [Self; D], w: F) {
         binomial_mul::<F, Self, Self, D>(a, b, res, w);
     }
 
+    /// Addition of elements in the algebra extension ring `A<X> / (X^D - W)`.
+    ///
+    /// As addition has no dependence on `W` so this is equivalent
+    /// to an algorithm for adding arrays of elements of `A`.
+    ///
+    /// Some algebras may want to reimplement this with faster methods.
     #[inline]
+    #[must_use]
     fn binomial_add(a: &[Self; D], b: &[Self; D]) -> [Self; D] {
         vector_add(a, b)
     }
 
+    /// Subtraction of elements in the algebra extension ring `A<X> / (X^D - W)`.
+    ///
+    /// As subtraction has no dependence on `W` so this is equivalent
+    /// to an algorithm for subtracting arrays of elements of `A`.
+    ///
+    /// Some algebras may want to reimplement this with faster methods.
     #[inline]
+    #[must_use]
     fn binomial_sub(a: &[Self; D], b: &[Self; D]) -> [Self; D] {
         vector_sub(a, b)
     }
@@ -64,22 +83,26 @@ pub trait HasFrobenius<F: Field>: ExtensionField<F> {
     /// Apply the Frobenius automorphism once.
     ///
     /// Equivalent to raising the element to the `n`th power.
+    #[must_use]
     fn frobenius(&self) -> Self;
 
     /// Apply the Frobenius automorphism `count` times.
     ///
     /// Equivalent to raising to the `n^count` power.
+    #[must_use]
     fn repeated_frobenius(&self, count: usize) -> Self;
 
     /// Compute the inverse Frobenius map.
     ///
     /// Returns the unique element `y` such that `self = y^n`.
+    #[must_use]
     fn frobenius_inv(&self) -> Self;
 
     /// Returns the full Galois orbit of the element under Frobenius.
     ///
     /// This is the sequence `[x, x^n, x^{n^2}, ..., x^{n^{D-1}}]`,
     /// where `D` is the extension degree.
+    #[must_use]
     fn galois_orbit(self) -> Vec<Self> {
         iter::successors(Some(self), |x| Some(x.frobenius()))
             .take(Self::DIMENSION)
@@ -98,5 +121,6 @@ pub trait HasTwoAdicBinomialExtension<const D: usize>: BinomiallyExtendable<D> {
     ///
     /// This is used to generate the 2^bits-th roots of unity in the extension field.
     /// Behavior is undefined if `bits > EXT_TWO_ADICITY`.
+    #[must_use]
     fn ext_two_adic_generator(bits: usize) -> [Self; D];
 }

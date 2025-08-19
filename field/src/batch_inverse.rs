@@ -17,6 +17,7 @@ use crate::{FieldArray, PackedValue, PrimeCharacteristicRing};
 /// # Panics
 /// This will panic if any of the inputs is zero.
 #[instrument(level = "debug", skip_all)]
+#[must_use]
 pub fn batch_multiplicative_inverse<F: Field>(x: &[F]) -> Vec<F> {
     // How many elements to invert in one thread.
     const CHUNK_SIZE: usize = 1024;

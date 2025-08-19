@@ -32,6 +32,7 @@ use crate::{FieldParameters, MontyParameters, RelativelyPrimePower, TwoAdicData}
 
 #[derive(Clone, Copy, Default, Eq, Hash, PartialEq)]
 #[repr(transparent)] // Important for reasoning about memory layout.
+#[must_use]
 pub struct MontyField31<MP: MontyParameters> {
     /// The MONTY form of the field element, saved as a positive integer less than `P`.
     ///
