@@ -11,7 +11,6 @@ use p3_util::pretty_name;
 use rand::SeedableRng;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
-use rayon::prelude::*;
 
 fn bench_fft(c: &mut Criterion) {
     // log_sizes correspond to the sizes of DFT we want to benchmark;
@@ -39,10 +38,6 @@ fn bench_fft(c: &mut Criterion) {
     m31_fft::<Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
     m31_fft::<Mersenne31ComplexRadix2Dit, BATCH_SIZE>(c, log_sizes);
 
-    const TOTAL_COLS: usize = 8192;
-    fft_on_the_fly::<Goldilocks, Radix2Dit<_>, TOTAL_COLS, BATCH_SIZE>(c, log_sizes);
-    fft_on_the_fly::<Goldilocks, Radix2DitParallel<_>, TOTAL_COLS, BATCH_SIZE>(c, log_sizes);
-
     ifft::<Goldilocks, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
 
     coset_lde::<BabyBear, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
@@ -60,42 +55,6 @@ fn bench_fft(c: &mut Criterion) {
     fft_algebra::<BabyBear, BBExt, Radix2Dit<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
     fft_algebra::<BabyBear, BBExt, Radix2DitParallel<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
     fft_algebra::<BabyBear, BBExt, RecursiveDft<_>, EXT_BATCH_SIZE>(c, ext_log_sizes);
-}
-
-fn fft_on_the_fly<F, Dft, const TOTAL_COLS: usize, const BATCH_SIZE: usize>(
-    c: &mut Criterion,
-    log_sizes: &[usize],
-) where
-    F: TwoAdicField + Ord,
-    Dft: TwoAdicSubgroupDft<F>,
-    StandardUniform: Distribution<F>,
-{
-    let mut group = c.benchmark_group(format!(
-        "fft_on_the_fly/{}/{}/ncols={}/batch_size={}",
-        pretty_name::<F>(),
-        pretty_name::<Dft>(),
-        TOTAL_COLS,
-        BATCH_SIZE
-    ));
-    group.sample_size(10);
-
-    let mut rng = SmallRng::seed_from_u64(1);
-    for n_log in log_sizes {
-        let n = 1 << n_log;
-
-        let messages_vec: Vec<RowMajorMatrix<F>> = (0..(TOTAL_COLS / BATCH_SIZE))
-            .map(|_| RowMajorMatrix::rand(&mut rng, n, BATCH_SIZE))
-            .collect();
-
-        let dft = Radix2DitParallel::<F>::default();
-        group.bench_with_input(BenchmarkId::from_parameter(n), &dft, |b, dft| {
-            b.iter(|| {
-                messages_vec.clone().par_iter().for_each(|messages| {
-                    dft.dft_batch(messages.clone());
-                });
-            });
-        });
-    }
 }
 
 fn fft<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])

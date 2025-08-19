@@ -13,7 +13,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
-use parking_lot::{RwLock, RwLockUpgradableReadGuard};
+use spin::{RwLock, RwLockUpgradableGuard};
 use tracing::{debug_span, instrument};
 
 use crate::TwoAdicSubgroupDft;
@@ -50,7 +50,7 @@ struct VectorPair<F> {
 ///
 /// Strategy:
 /// Fast path: shared read; return cached value if present.
-/// Miss path (parking_lot):
+/// Miss path:
 ///   - take an upgradable read and recheck (another thread may have inserted);
 ///   - compute while holding only the upgradable read (blocks writers, allows readers);
 ///   - upgrade to write and insert-or-return.
@@ -65,7 +65,7 @@ where
     };
     {
         // Upgradable read to avoid duplicate computation.
-        let upgradable_read = cache.upgradable_read();
+        let upgradable_read = cache.upgradeable_read();
         // Re-check, to see if any worker updated in the meantime.
         if let Some(v) = upgradable_read.get(&key) {
             // If it happens to be present, just return.
@@ -74,7 +74,7 @@ where
         // Compute while holding only an upgradable read (blocks writers, allows readers).
         let factors = Arc::new(build(&key));
         // Upgrade to write and insert if still absent.
-        let mut write_guard = RwLockUpgradableReadGuard::upgrade(upgradable_read);
+        let mut write_guard = RwLockUpgradableGuard::upgrade(upgradable_read);
         Arc::clone(
             write_guard
                 .entry(key)

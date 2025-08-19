@@ -8,7 +8,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
-use parking_lot::{RwLock, RwLockUpgradableReadGuard};
+use spin::{RwLock, RwLockUpgradableGuard};
 
 use crate::TwoAdicSubgroupDft;
 use crate::butterflies::{Butterfly, DitButterfly, TwiddleFreeButterfly};
@@ -37,7 +37,7 @@ pub struct Radix2Dit<F: TwoAdicField> {
 impl<F: TwoAdicField> Radix2Dit<F> {
     fn get_twiddles(&self, log_h: usize) -> Arc<Vec<F>> {
         // Single read path
-        let up = self.twiddles.upgradable_read();
+        let up = self.twiddles.upgradeable_read();
         if let Some(v) = up.get(&log_h) {
             return Arc::clone(v);
         }
@@ -46,7 +46,7 @@ impl<F: TwoAdicField> Radix2Dit<F> {
         let root = F::two_adic_generator(log_h);
         let tw = Arc::new(root.powers().collect_n(n));
         // Upgrade to write; insert or reuse if another thread won the race
-        let mut w = RwLockUpgradableReadGuard::upgrade(up);
+        let mut w = RwLockUpgradableGuard::upgrade(up);
         Arc::clone(w.entry(log_h).or_insert_with(|| Arc::clone(&tw)))
     }
 }

@@ -21,10 +21,10 @@ p3-util.workspace = true
 
 itertools.workspace = true
 num-bigint.workspace = true
-parking_lot = "0.12.4"
 paste.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
+spin = "0.10.0"
 tracing.workspace = true
 transpose.workspace = true
 

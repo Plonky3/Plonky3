@@ -13,7 +13,7 @@ use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_ceil_usize;
-use parking_lot::RwLock;
+use spin::RwLock;
 use tracing::{debug_span, instrument};
 
 mod backward;
@@ -140,10 +140,10 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
     }
 
     fn get_twiddles(&self) -> Vec<Vec<MontyField31<MP>>> {
-        self.twiddles.read().to_vec() // parking_lot: no unwrap
+        self.twiddles.read().to_vec()
     }
     fn get_inv_twiddles(&self) -> Vec<Vec<MontyField31<MP>>> {
-        self.inv_twiddles.read().to_vec() // parking_lot: no unwrap
+        self.inv_twiddles.read().to_vec()
     }
 }
 
