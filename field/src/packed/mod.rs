@@ -1,4 +1,8 @@
+pub mod interleaves;
 mod packed_traits;
+
+#[allow(unused_imports)]
+pub use interleaves::*; // Only used when vectorizations are available
 pub use packed_traits::*;
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2",))]
