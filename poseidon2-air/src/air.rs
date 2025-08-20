@@ -64,7 +64,7 @@ impl<
     ) -> RowMajorMatrix<F>
     where
         F: PrimeField,
-        LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>,
+        LinearLayers: GenericPoseidon2LinearLayers<WIDTH>,
         StandardUniform: Distribution<[F; WIDTH]>,
     {
         let mut rng = SmallRng::seed_from_u64(1);
@@ -107,7 +107,7 @@ impl<
 
 pub(crate) fn eval<
     AB: AirBuilder,
-    LinearLayers: GenericPoseidon2LinearLayers<AB::Expr, WIDTH>,
+    LinearLayers: GenericPoseidon2LinearLayers<WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
@@ -167,7 +167,7 @@ pub(crate) fn eval<
 
 impl<
     AB: AirBuilder,
-    LinearLayers: GenericPoseidon2LinearLayers<AB::Expr, WIDTH>,
+    LinearLayers: GenericPoseidon2LinearLayers<WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
@@ -199,7 +199,7 @@ impl<
 #[inline]
 fn eval_full_round<
     AB: AirBuilder,
-    LinearLayers: GenericPoseidon2LinearLayers<AB::Expr, WIDTH>,
+    LinearLayers: GenericPoseidon2LinearLayers<WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
@@ -223,7 +223,7 @@ fn eval_full_round<
 #[inline]
 fn eval_partial_round<
     AB: AirBuilder,
-    LinearLayers: GenericPoseidon2LinearLayers<AB::Expr, WIDTH>,
+    LinearLayers: GenericPoseidon2LinearLayers<WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,

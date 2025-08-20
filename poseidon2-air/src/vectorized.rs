@@ -190,7 +190,7 @@ impl<
     ) -> RowMajorMatrix<F>
     where
         F: PrimeField,
-        LinearLayers: GenericPoseidon2LinearLayers<F, WIDTH>,
+        LinearLayers: GenericPoseidon2LinearLayers<WIDTH>,
         StandardUniform: Distribution<[F; WIDTH]>,
     {
         let mut rng = SmallRng::seed_from_u64(1);
@@ -236,7 +236,7 @@ impl<
 
 impl<
     AB: AirBuilder,
-    LinearLayers: GenericPoseidon2LinearLayers<AB::Expr, WIDTH>,
+    LinearLayers: GenericPoseidon2LinearLayers<WIDTH>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
