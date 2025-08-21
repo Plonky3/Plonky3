@@ -1,6 +1,6 @@
 use p3_field::Field;
 
-use crate::gates::gate::Gate;
+use crate::circuit_builder::gates::gate::Gate;
 
 pub(crate) type WireId = usize;
 

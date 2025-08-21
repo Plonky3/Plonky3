@@ -1,6 +1,6 @@
 use p3_baby_bear::BabyBear;
-use p3_uni_stark_recursion::circuit_builder::{CircuitBuilder, CircuitError};
-use p3_uni_stark_recursion::gates::arith_gates::{AddGate, SubGate};
+use p3_recursion::circuit_builder::circuit_builder::{CircuitBuilder, CircuitError};
+use p3_recursion::circuit_builder::gates::arith_gates::{AddGate, SubGate};
 
 type Val = BabyBear;
 

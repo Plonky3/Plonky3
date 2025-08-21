@@ -1,6 +1,6 @@
 use p3_field::Field;
 
-use crate::circuit_builder::{CircuitBuilder, CircuitError};
+use crate::circuit_builder::circuit_builder::{CircuitBuilder, CircuitError};
 
 pub trait Gate<F: Field> {
     fn n_inputs(&self) -> usize;

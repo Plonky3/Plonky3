@@ -1,7 +1,7 @@
 use p3_field::Field;
 
-use crate::circuit_builder::{CircuitBuilder, CircuitError, WireId};
-use crate::gates::gate::Gate;
+use crate::circuit_builder::circuit_builder::{CircuitBuilder, CircuitError, WireId};
+use crate::circuit_builder::gates::gate::Gate;
 
 pub struct AddGate<F: Field> {
     inputs: Vec<WireId>,
