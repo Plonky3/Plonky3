@@ -146,6 +146,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         let packing_width = <Self as Field>::Packing::WIDTH;
         let n = packed_input.len() * packing_width;
         let lg_n = log2_strict_usize(n);
+        debug_assert_eq!(root_table.len(), lg_n - 1);
 
         // Start loop after doing radix 16 separately. This value is determined by the largest
         // packing width we will encounter, which is 16 at the moment for AVX512. Specifically
@@ -162,17 +163,16 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         Self::backward_iterative_packed_radix_16(packed_input);
 
         for lg_m in FIRST_LOOP_LAYER..(lg_n - NUM_SPECIALISATIONS) {
-            let s = lg_n - lg_m - 1;
             let m = 1 << lg_m;
 
-            let roots = &root_table[s];
+            let roots = &root_table[lg_m - 1];
             debug_assert_eq!(roots.len(), m);
 
             Self::backward_iterative_layer(packed_input, roots, m);
         }
         // Specialise the last few iterations; improves performance a little.
-        backward_iterative_layer_1(packed_input, &root_table[1]); // lg_m == lg_n - 2, s == 1
-        backward_pass_packed(packed_input, &root_table[0]); // lg_m == lg_n - 1, s == 0
+        backward_iterative_layer_1(packed_input, &root_table[lg_n - 3]); // lg_m == lg_n - 2, s == 1
+        backward_pass_packed(packed_input, &root_table[lg_n - 2]); // lg_m == lg_n - 1, s == 0
     }
 
     #[inline]
