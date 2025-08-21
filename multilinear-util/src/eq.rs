@@ -1,17 +1,31 @@
-//! This function provides a pair of methods to compute the scaled multilinear equality polynomial `scale * eq(x, z)` at a
-//! given point `z` for all `x` in the boolean hypercube `{0,1}^n`.
+//! This module provides optimized routines for computing the **multilinear equality polynomial**
+//! over the Boolean hypercube `{0,1}^n`.
 //!
-//! Mathematically this the multilinear equality polynomial is defined as
+//! The equality polynomial `eq(x, z)` evaluates to 1 if `x == z`, and 0 otherwise.
+//! It is defined as:
 //!
 //! ```text
-//!     eq(x, z) = \prod_{i=0}^{n-1} (x_i z_i + (1 - x_i)(1 - z_i))
+//! eq(x, z) = \prod_{i=0}^{n-1} (x_i ⋅ z_i + (1 - x_i)(1 - z_i))
 //! ```
-//! Importantly, this equation decomposes as the product of `n` independent factors. Thus, if you
-//! want to compute this for all `x ∈ \{0,1\}^n`, you can use a recursive algorithm to reduce the number of
-//! multiplications required from `(n - 1)2^n` to `2^n`.
 //!
-//! This file provides two slightly distinct methods depending on if the input point lies in the base field or
-//! an extension field.
+//! These values are computed over all `x ∈ {0,1}^n` efficiently using a recursive strategy.
+//! The key relation used is:
+//!
+//! ```text
+//! eq((0, x), z) = (1 - z_0) ⋅ eq(x, z[1:])
+//! eq((1, x), z) = z_0 ⋅ eq(x, z[1:])
+//! ```
+//!
+//! Which allows us to reuse the common factor `eq(x, z[1:])`.
+//!
+//! ## `INITIALIZED` flag
+//!
+//! Each function accepts a `const INITIALIZED: bool` flag to control how output is written:
+//!
+//! - If `INITIALIZED = false`: the result is **written** into the output buffer.
+//! - If `INITIALIZED = true`: the result is **added** to the output buffer.
+//!
+//! The output buffer must always be of length `2^n` for `n` variables.
 
 use p3_field::{
     Algebra, ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
