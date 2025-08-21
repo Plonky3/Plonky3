@@ -31,7 +31,7 @@ fn pow2_no_std(x: f32, tol: f32) -> f32 {
     let mut two_pow_x = t;
     for i in 1.. {
         t *= y / (i as f32);
-        if t < tol {
+        if t.abs() < tol {
             break;
         }
         two_pow_x += t;
@@ -106,7 +106,7 @@ mod test {
             7.409391, 7.491853, 7.569856, 7.643856,
         ];
         for (&x, y) in inputs.iter().zip(expected) {
-            assert!((log2_no_std(x) - y) < TOLERANCE);
+            assert!((log2_no_std(x) - y).abs() < TOLERANCE);
         }
     }
 }
