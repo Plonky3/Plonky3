@@ -12,7 +12,7 @@ use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
-use p3_util::log2_ceil_usize;
+use p3_util::{log2_ceil_usize, log2_strict_usize};
 use spin::RwLock;
 use tracing::{debug_span, instrument};
 
@@ -67,9 +67,8 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
         twiddles: &[Vec<MontyField31<MP>>],
     ) {
         if ncols > 1 {
-            let lg_fft_len = p3_util::log2_ceil_usize(ncols);
-            let roots_idx = (twiddles.len() + 1) - lg_fft_len;
-            let twiddles = &twiddles[roots_idx..];
+            let lg_fft_len = log2_strict_usize(ncols);
+            let twiddles = &twiddles[..(lg_fft_len - 1)];
 
             mat.par_chunks_exact_mut(ncols)
                 .for_each(|v| MontyField31::forward_fft(v, twiddles))
@@ -83,9 +82,8 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
         twiddles: &[Vec<MontyField31<MP>>],
     ) {
         if ncols > 1 {
-            let lg_fft_len = p3_util::log2_ceil_usize(ncols);
-            let roots_idx = (twiddles.len() + 1) - lg_fft_len;
-            let twiddles = &twiddles[roots_idx..];
+            let lg_fft_len = p3_util::log2_strict_usize(ncols);
+            let twiddles = &twiddles[..(lg_fft_len - 1)];
 
             mat.par_chunks_exact_mut(ncols)
                 .for_each(|v| MontyField31::backward_fft(v, twiddles))
@@ -124,17 +122,11 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
                 .collect();
             {
                 let mut tw_lock = self.twiddles.write();
-                let cur_have = 1usize << tw_lock.len();
-                if fft_len > cur_have {
-                    *tw_lock = new_twiddles; // move in the new table
-                }
+                *tw_lock = new_twiddles; // move in the new table
             }
             {
                 let mut inv_tw_lock = self.inv_twiddles.write();
-                let cur_have = 1usize << inv_tw_lock.len();
-                if fft_len > cur_have {
-                    *inv_tw_lock = new_inv_twiddles; // move in the new table
-                }
+                *inv_tw_lock = new_inv_twiddles; // move in the new table
             }
         }
     }
