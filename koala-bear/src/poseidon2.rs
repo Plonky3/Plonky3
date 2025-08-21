@@ -13,10 +13,10 @@
 //! [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/32, 1/64, 1/2^24, -1/2^8, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^9, -1/2^24]
 //! See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
 
-use p3_field::{Algebra, Field, PrimeCharacteristicRing, PrimeField32};
+use p3_field::PrimeCharacteristicRing;
 use p3_monty_31::{
     GenericPoseidon2LinearLayersMonty31, InternalLayerBaseParameters, InternalLayerParameters,
-    MontyField31, Poseidon2ExternalLayerMonty31, Poseidon2InternalLayerMonty31,
+    Poseidon2ExternalLayerMonty31, Poseidon2InternalLayerMonty31,
 };
 use p3_poseidon2::Poseidon2;
 
@@ -54,196 +54,85 @@ pub type Poseidon2KoalaBear<const WIDTH: usize> = Poseidon2<
 pub type GenericPoseidon2LinearLayersKoalaBear =
     GenericPoseidon2LinearLayersMonty31<KoalaBearParameters, KoalaBearInternalLayerParameters>;
 
-// In order to use KoalaBear::new_array we need to convert our vector to a vector of u32's.
-// To do this we make use of the fact that KoalaBear::ORDER_U32 - 1 = 127 * 2^24 so for 0 <= n <= 24:
-// -1/2^n = (KoalaBear::ORDER_U32 - 1) >> n
-// 1/2^n = -(-1/2^n) = KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> n)
-
-/// The vector [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/8, 1/2^24, -1/2^8, -1/8, -1/16, -1/2^24]
-/// saved as an array of KoalaBear elements.
-const INTERNAL_DIAG_MONTY_16: [KoalaBear; 16] = KoalaBear::new_array([
-    KoalaBear::ORDER_U32 - 2,
-    1,
-    2,
-    (KoalaBear::ORDER_U32 + 1) >> 1,
-    3,
-    4,
-    (KoalaBear::ORDER_U32 - 1) >> 1,
-    KoalaBear::ORDER_U32 - 3,
-    KoalaBear::ORDER_U32 - 4,
-    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 8),
-    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 3),
-    KoalaBear::ORDER_U32 - 127,
-    (KoalaBear::ORDER_U32 - 1) >> 8,
-    (KoalaBear::ORDER_U32 - 1) >> 3,
-    (KoalaBear::ORDER_U32 - 1) >> 4,
-    127,
-]);
-
-/// The vector [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/32, 1/64, 1/2^24, -1/2^8, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^9, -1/2^24]
-/// saved as an array of KoalaBear elements.
-const INTERNAL_DIAG_MONTY_24: [KoalaBear; 24] = KoalaBear::new_array([
-    KoalaBear::ORDER_U32 - 2,
-    1,
-    2,
-    (KoalaBear::ORDER_U32 + 1) >> 1,
-    3,
-    4,
-    (KoalaBear::ORDER_U32 - 1) >> 1,
-    KoalaBear::ORDER_U32 - 3,
-    KoalaBear::ORDER_U32 - 4,
-    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 8),
-    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 2),
-    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 3),
-    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 4),
-    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 5),
-    KoalaBear::ORDER_U32 - ((KoalaBear::ORDER_U32 - 1) >> 6),
-    KoalaBear::ORDER_U32 - 127,
-    (KoalaBear::ORDER_U32 - 1) >> 8,
-    (KoalaBear::ORDER_U32 - 1) >> 3,
-    (KoalaBear::ORDER_U32 - 1) >> 4,
-    (KoalaBear::ORDER_U32 - 1) >> 5,
-    (KoalaBear::ORDER_U32 - 1) >> 6,
-    (KoalaBear::ORDER_U32 - 1) >> 7,
-    (KoalaBear::ORDER_U32 - 1) >> 9,
-    127,
-]);
-
 /// Contains data needed to define the internal layers of the Poseidon2 permutation.
 #[derive(Debug, Clone, Default)]
 pub struct KoalaBearInternalLayerParameters;
 
 impl InternalLayerBaseParameters<KoalaBearParameters, 16> for KoalaBearInternalLayerParameters {
-    type ArrayLike = [MontyField31<KoalaBearParameters>; 15];
-
-    const INTERNAL_DIAG_MONTY: [MontyField31<KoalaBearParameters>; 16] = INTERNAL_DIAG_MONTY_16;
-
     /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s.
     /// We ignore `state[0]` as it is handled separately.
-    fn internal_layer_mat_mul(
-        state: &mut [MontyField31<KoalaBearParameters>; 16],
-        sum: MontyField31<KoalaBearParameters>,
-    ) {
+    fn internal_layer_mat_mul<R: PrimeCharacteristicRing>(state: &mut [R; 16], sum: R) {
         // The diagonal matrix is defined by the vector:
         // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/8, 1/2^24, -1/2^8, -1/8, -1/16, -1/2^24]
-        state[1] += sum;
-        state[2] = state[2].double() + sum;
-        state[3] = state[3].halve() + sum;
-        state[4] = sum + state[4].double() + state[4];
-        state[5] = sum + state[5].double().double();
-        state[6] = sum - state[6].halve();
-        state[7] = sum - (state[7].double() + state[7]);
-        state[8] = sum - state[8].double().double();
+        state[1] += sum.clone();
+        state[2] = state[2].double() + sum.clone();
+        state[3] = state[3].halve() + sum.clone();
+        state[4] = sum.clone() + state[4].double() + state[4].clone();
+        state[5] = sum.clone() + state[5].double().double();
+        state[6] = sum.clone() - state[6].halve();
+        state[7] = sum.clone() - (state[7].double() + state[7].clone());
+        state[8] = sum.clone() - state[8].double().double();
         state[9] = state[9].div_2exp_u64(8);
-        state[9] += sum;
+        state[9] += sum.clone();
         state[10] = state[10].div_2exp_u64(3);
-        state[10] += sum;
+        state[10] += sum.clone();
         state[11] = state[11].div_2exp_u64(24);
-        state[11] += sum;
+        state[11] += sum.clone();
         state[12] = state[12].div_2exp_u64(8);
-        state[12] = sum - state[12];
+        state[12] = sum.clone() - state[12].clone();
         state[13] = state[13].div_2exp_u64(3);
-        state[13] = sum - state[13];
+        state[13] = sum.clone() - state[13].clone();
         state[14] = state[14].div_2exp_u64(4);
-        state[14] = sum - state[14];
+        state[14] = sum.clone() - state[14].clone();
         state[15] = state[15].div_2exp_u64(24);
-        state[15] = sum - state[15];
-    }
-
-    fn generic_internal_linear_layer<A: Algebra<KoalaBear>>(state: &mut [A; 16]) {
-        let part_sum: A = state[1..].iter().cloned().sum();
-        let full_sum = part_sum.clone() + state[0].clone();
-
-        // The first three diagonal elements are -2, 1, 2 so we do something custom.
-        state[0] = part_sum - state[0].clone();
-        state[1] = full_sum.clone() + state[1].clone();
-        state[2] = full_sum.clone() + state[2].double();
-
-        // For the remaining elements we use multiplication.
-        // This could probably be improved slightly by making use of the
-        // mul_2exp_u64 and div_2exp_u64 but this would involve porting div_2exp_u64 to PrimeCharacteristicRing.
-        state
-            .iter_mut()
-            .zip(INTERNAL_DIAG_MONTY_16)
-            .skip(3)
-            .for_each(|(val, diag_elem)| {
-                *val = full_sum.clone() + val.clone() * diag_elem;
-            });
+        state[15] = sum.clone() - state[15].clone();
     }
 }
 
 impl InternalLayerBaseParameters<KoalaBearParameters, 24> for KoalaBearInternalLayerParameters {
-    type ArrayLike = [MontyField31<KoalaBearParameters>; 23];
-
-    const INTERNAL_DIAG_MONTY: [MontyField31<KoalaBearParameters>; 24] = INTERNAL_DIAG_MONTY_24;
-
     /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s.
     /// We ignore `state[0]` as it is handled separately.
-    fn internal_layer_mat_mul(
-        state: &mut [MontyField31<KoalaBearParameters>; 24],
-        sum: MontyField31<KoalaBearParameters>,
-    ) {
+    fn internal_layer_mat_mul<R: PrimeCharacteristicRing>(state: &mut [R; 24], sum: R) {
         // The diagonal matrix is defined by the vector:
         // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/32, 1/64, 1/2^24, -1/2^8, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^9, -1/2^24]
-        state[1] += sum;
-        state[2] = state[2].double() + sum;
-        state[3] = state[3].halve() + sum;
-        state[4] = sum + state[4].double() + state[4];
-        state[5] = sum + state[5].double().double();
-        state[6] = sum - state[6].halve();
-        state[7] = sum - (state[7].double() + state[7]);
-        state[8] = sum - state[8].double().double();
+        state[1] += sum.clone();
+        state[2] = state[2].double() + sum.clone();
+        state[3] = state[3].halve() + sum.clone();
+        state[4] = sum.clone() + state[4].double() + state[4].clone();
+        state[5] = sum.clone() + state[5].double().double();
+        state[6] = sum.clone() - state[6].halve();
+        state[7] = sum.clone() - (state[7].double() + state[7].clone());
+        state[8] = sum.clone() - state[8].double().double();
         state[9] = state[9].div_2exp_u64(8);
-        state[9] += sum;
+        state[9] += sum.clone();
         state[10] = state[10].div_2exp_u64(2);
-        state[10] += sum;
+        state[10] += sum.clone();
         state[11] = state[11].div_2exp_u64(3);
-        state[11] += sum;
+        state[11] += sum.clone();
         state[12] = state[12].div_2exp_u64(4);
-        state[12] += sum;
+        state[12] += sum.clone();
         state[13] = state[13].div_2exp_u64(5);
-        state[13] += sum;
+        state[13] += sum.clone();
         state[14] = state[14].div_2exp_u64(6);
-        state[14] += sum;
+        state[14] += sum.clone();
         state[15] = state[15].div_2exp_u64(24);
-        state[15] += sum;
+        state[15] += sum.clone();
         state[16] = state[16].div_2exp_u64(8);
-        state[16] = sum - state[16];
+        state[16] = sum.clone() - state[16].clone();
         state[17] = state[17].div_2exp_u64(3);
-        state[17] = sum - state[17];
+        state[17] = sum.clone() - state[17].clone();
         state[18] = state[18].div_2exp_u64(4);
-        state[18] = sum - state[18];
+        state[18] = sum.clone() - state[18].clone();
         state[19] = state[19].div_2exp_u64(5);
-        state[19] = sum - state[19];
+        state[19] = sum.clone() - state[19].clone();
         state[20] = state[20].div_2exp_u64(6);
-        state[20] = sum - state[20];
+        state[20] = sum.clone() - state[20].clone();
         state[21] = state[21].div_2exp_u64(7);
-        state[21] = sum - state[21];
+        state[21] = sum.clone() - state[21].clone();
         state[22] = state[22].div_2exp_u64(9);
-        state[22] = sum - state[22];
+        state[22] = sum.clone() - state[22].clone();
         state[23] = state[23].div_2exp_u64(24);
-        state[23] = sum - state[23];
-    }
-
-    fn generic_internal_linear_layer<A: Algebra<KoalaBear>>(state: &mut [A; 24]) {
-        let part_sum: A = state[1..].iter().cloned().sum();
-        let full_sum = part_sum.clone() + state[0].clone();
-
-        // The first three diagonal elements are -2, 1, 2 so we do something custom.
-        state[0] = part_sum - state[0].clone();
-        state[1] = full_sum.clone() + state[1].clone();
-        state[2] = full_sum.clone() + state[2].double();
-
-        // For the remaining elements we use multiplication.
-        // This could probably be improved slightly by making use of the
-        // mul_2exp_u64 and div_2exp_u64 but this would involve porting div_2exp_u64 to PrimeCharacteristicRing.
-        state
-            .iter_mut()
-            .zip(INTERNAL_DIAG_MONTY_24)
-            .skip(3)
-            .for_each(|(val, diag_elem)| {
-                *val = full_sum.clone() + val.clone() * diag_elem;
-            });
+        state[23] = sum.clone() - state[23].clone();
     }
 }
 

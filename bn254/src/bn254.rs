@@ -54,6 +54,7 @@ pub(crate) const BN254_MONTY_R_SQ: [u64; 4] = [
 
 /// The BN254 curve scalar field prime, defined as `F_P` where `P = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.
 #[derive(Copy, Clone, Default, Eq, PartialEq)]
+#[must_use]
 pub struct Bn254 {
     /// The MONTY form of the field element, a 254-bit integer less than `P` saved as a collection of u64's using a little-endian order.
     pub(crate) value: [u64; 4],
@@ -215,6 +216,11 @@ impl PrimeCharacteristicRing for Bn254 {
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f
     }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        Self::new_monty(halve_bn254(self.value))
+    }
 }
 
 /// Degree of the smallest permutation polynomial for BN254.
@@ -305,11 +311,6 @@ impl Field for Bn254 {
     #[inline]
     fn is_zero(&self) -> bool {
         self.value.iter().all(|&x| x == 0)
-    }
-
-    #[inline]
-    fn halve(&self) -> Self {
-        Self::new_monty(halve_bn254(self.value))
     }
 
     #[inline]

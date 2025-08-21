@@ -14,7 +14,8 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2,
+    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, uint32x4_mod_add,
+    uint32x4_mod_sub,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
@@ -35,6 +36,7 @@ pub trait MontyParametersNeon {
 /// Vectorized NEON implementation of `MontyField31` arithmetic.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // Needed to make `transmute`s safe.
+#[must_use]
 pub struct PackedMontyField31Neon<PMP: PackedMontyParameters>(pub [MontyField31<PMP>; WIDTH]);
 
 impl<PMP: PackedMontyParameters> PackedMontyField31Neon<PMP> {
@@ -53,7 +55,6 @@ impl<PMP: PackedMontyParameters> PackedMontyField31Neon<PMP> {
     }
 
     #[inline]
-    #[must_use]
     /// Make a packed field vector from an arch-specific vector.
     ///
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid `MontyField31`.
@@ -73,7 +74,6 @@ impl<PMP: PackedMontyParameters> PackedMontyField31Neon<PMP> {
     /// Copy `value` to all positions in a packed vector. This is the same as
     /// `From<MontyField31>::from`, but `const`.
     #[inline]
-    #[must_use]
     const fn broadcast(value: MontyField31<PMP>) -> Self {
         Self([value; WIDTH])
     }
@@ -92,9 +92,9 @@ impl<PMP: PackedMontyParameters> Add for PackedMontyField31Neon<PMP> {
     fn add(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = add::<PMP>(lhs, rhs);
+        let res = uint32x4_mod_add(lhs, rhs, PMP::PACKED_P);
         unsafe {
-            // Safety: `add` returns values in canonical form when given values in canonical form.
+            // Safety: `uint32x4_mod_add` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
@@ -106,9 +106,9 @@ impl<PMP: PackedMontyParameters> Sub for PackedMontyField31Neon<PMP> {
     fn sub(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = sub::<PMP>(lhs, rhs);
+        let res = uint32x4_mod_sub(lhs, rhs, PMP::PACKED_P);
         unsafe {
-            // Safety: `sub` returns values in canonical form when given values in canonical form.
+            // Safety: `uint32x4_mod_sub` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
@@ -159,6 +159,9 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31Neon<FP>
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f.into()
     }
+
+    // TODO: Add a custom implementation of `halve` that uses NEON intrinsics
+    // and avoids the multiplication.
 
     #[inline]
     fn cube(&self) -> Self {
@@ -234,34 +237,6 @@ fn confuse_compiler(x: uint32x4_t) -> uint32x4_t {
         }
     }
     y
-}
-
-/// Add two vectors of Monty31 field elements in canonical form.
-/// If the inputs are not in canonical form, the result is undefined.
-#[inline]
-#[must_use]
-fn add<MPNeon: MontyParametersNeon>(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
-    // We want this to compile to:
-    //      add   t.4s, lhs.4s, rhs.4s
-    //      sub   u.4s, t.4s, P.4s
-    //      umin  res.4s, t.4s, u.4s
-    // throughput: .75 cyc/vec (5.33 els/cyc)
-    // latency: 6 cyc
-
-    //   Let `t := lhs + rhs`. We want to return `t mod P`. Recall that `lhs` and `rhs` are in
-    // `0, ..., P - 1`, so `t` is in `0, ..., 2 P - 2 (< 2^32)`. It suffices to return `t` if
-    // `t < P` and `t - P` otherwise.
-    //   Let `u := (t - P) mod 2^32` and `r := unsigned_min(t, u)`.
-    //   If `t` is in `0, ..., P - 1`, then `u` is in `(P - 1 <) 2^32 - P, ..., 2^32 - 1` and
-    // `r = t`. Otherwise `t` is in `P, ..., 2 P - 2`, `u` is in `0, ..., P - 2 (< P)` and `r = u`.
-    // Hence, `r` is `t` if `t < P` and `t - P` otherwise, as desired.
-
-    unsafe {
-        // Safety: If this code got compiled then NEON intrinsics are available.
-        let t = aarch64::vaddq_u32(lhs, rhs);
-        let u = aarch64::vsubq_u32(t, MPNeon::PACKED_P);
-        aarch64::vminq_u32(t, u)
-    }
 }
 
 // MONTGOMERY MULTIPLICATION
@@ -446,37 +421,6 @@ fn neg<MPNeon: MontyParametersNeon>(val: uint32x4_t) -> uint32x4_t {
     }
 }
 
-/// Subtract vectors of Monty31 field elements in canonical form.
-/// If the inputs are not in canonical form, the result is undefined.
-#[inline]
-#[must_use]
-fn sub<MPNeon: MontyParametersNeon>(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
-    // We want this to compile to:
-    //      sub   res.4s, lhs.4s, rhs.4s
-    //      cmhi  underflow.4s, rhs.4s, lhs.4s
-    //      mls   res.4s, underflow.4s, P.4s
-    // throughput: .75 cyc/vec (5.33 els/cyc)
-    // latency: 5 cyc
-
-    //   Let `d := lhs - rhs`. We want to return `d mod P`.
-    //   Since `lhs` and `rhs` are both in `0, ..., P - 1`, `d` is in `-P + 1, ..., P - 1`. It
-    // suffices to return `d + P` if `d < 0` and `d` otherwise.
-    //   Equivalently, we return `d + P` if `rhs > lhs` and `d` otherwise.  Observe that this
-    // permits us to perform all calculations `mod 2^32`, so define `diff := d mod 2^32`.
-    //   Let `underflow` be `-1 mod 2^32` if `rhs > lhs` and `0` otherwise.
-    //   Finally, let `r := (diff - underflow * P) mod 2^32` and observe that
-    // `r = (diff + P) mod 2^32` if `rhs > lhs` and `diff` otherwise, as desired.
-    unsafe {
-        // Safety: If this code got compiled then NEON intrinsics are available.
-        let diff = aarch64::vsubq_u32(lhs, rhs);
-        let underflow = aarch64::vcltq_u32(lhs, rhs);
-        // We really want to emit a `mls` instruction here. The compiler knows that `underflow` is
-        // either 0 or -1 and will try to do an `and` and `add` instead, which is slower on the M1.
-        // The `confuse_compiler` prevents this "optimization".
-        aarch64::vmlsq_u32(diff, confuse_compiler(underflow), MPNeon::PACKED_P)
-    }
-}
-
 impl_packed_value!(
     PackedMontyField31Neon,
     MontyField31,
@@ -636,4 +580,44 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
 
     res[..4].copy_from_slice(&dot_0);
     res[4..].copy_from_slice(&dot_1);
+}
+
+/// Multiplication by a base field element in a binomial extension field.
+#[inline]
+pub(crate) fn base_mul_packed<FP, const WIDTH: usize>(
+    a: [MontyField31<FP>; WIDTH],
+    b: MontyField31<FP>,
+    res: &mut [MontyField31<FP>; WIDTH],
+) where
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+{
+    match WIDTH {
+        1 => res[0] = a[0] * b,
+        4 => {
+            let lhs = PackedMontyField31Neon([a[0], a[1], a[2], a[3]]);
+
+            let out = lhs * b;
+
+            res.copy_from_slice(&out.0[..4]);
+        }
+        5 => {
+            let lhs = PackedMontyField31Neon([a[0], a[1], a[2], a[3]]);
+
+            let out = lhs * b;
+            res[4] = a[4] * b;
+
+            res[..4].copy_from_slice(&out.0[..4]);
+        }
+        8 => {
+            let lhs_lo = PackedMontyField31Neon([a[0], a[1], a[2], a[3]]);
+            let lhs_hi = PackedMontyField31Neon([a[4], a[5], a[6], a[7]]);
+
+            let out_lo = lhs_lo * b;
+            let out_hi = lhs_hi * b;
+
+            res[..4].copy_from_slice(&out_lo.0);
+            res[4..].copy_from_slice(&out_hi.0);
+        }
+        _ => panic!("Unsupported binomial extension degree: {}", WIDTH),
+    }
 }

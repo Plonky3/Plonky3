@@ -18,6 +18,7 @@ use crate::{
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
 #[repr(transparent)] // Needed to make various casts safe.
+#[must_use]
 pub struct PackedBinomialExtensionField<F: Field, PF: PackedField<Scalar = F>, const D: usize> {
     #[serde(
         with = "p3_util::array_serialization",
@@ -119,12 +120,27 @@ where
         PF::from_bool(b).into()
     }
 
+    #[inline]
+    fn halve(&self) -> Self {
+        Self::new(self.value.map(|x| x.halve()))
+    }
+
     #[inline(always)]
     fn square(&self) -> Self {
         let mut res = Self::default();
         let w = F::W;
         binomial_square(&self.value, &mut res.value, w);
         res
+    }
+
+    #[inline]
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        Self::new(self.value.map(|x| x.mul_2exp_u64(exp)))
+    }
+
+    #[inline]
+    fn div_2exp_u64(&self, exp: u64) -> Self {
+        Self::new(self.value.map(|x| x.div_2exp_u64(exp)))
     }
 
     #[inline]

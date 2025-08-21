@@ -7,6 +7,7 @@ use crate::{Algebra, Field, PackedValue, PrimeCharacteristicRing};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(transparent)] // Needed to make `transmute`s safe.
+#[must_use]
 pub struct FieldArray<F: Field, const N: usize>(pub [F; N]);
 
 impl<F: Field, const N: usize> FieldArray<F, N> {
@@ -46,6 +47,11 @@ impl<F: Field, const N: usize> PrimeCharacteristicRing for FieldArray<F, N> {
     #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         F::from_prime_subfield(f).into()
+    }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        Self(self.0.map(|x| x.halve()))
     }
 }
 

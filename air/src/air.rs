@@ -47,7 +47,10 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
 /// as well cases where the constraints are evaluated on an evaluation trace and combined using randomness.
 pub trait AirBuilder: Sized {
     /// Underlying field type.
-    type F: Field;
+    ///
+    /// This should usually implement `Field` but there are a few edge cases (mostly involving `PackedFields`) where
+    /// it may only implement `PrimeCharacteristicRing`.
+    type F: PrimeCharacteristicRing + Sync;
 
     /// Serves as the output type for an AIR constraint evaluation.
     type Expr: Algebra<Self::F> + Algebra<Self::Var>;
@@ -182,7 +185,7 @@ pub trait PairBuilder: AirBuilder {
 }
 
 /// Extension of `AirBuilder` for working over extension fields.
-pub trait ExtensionBuilder: AirBuilder {
+pub trait ExtensionBuilder: AirBuilder<F: Field> {
     /// Extension field type.
     type EF: ExtensionField<Self::F>;
 

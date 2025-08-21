@@ -4,7 +4,7 @@
 
 use alloc::vec::Vec;
 use core::arch::asm;
-use core::arch::x86_64::{self, __m512i, __mmask16};
+use core::arch::x86_64::{self, __m256i, __m512i, __mmask8, __mmask16};
 use core::array;
 use core::hint::unreachable_unchecked;
 use core::iter::{Product, Sum};
@@ -19,7 +19,8 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2,
+    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, mm512_mod_add,
+    mm512_mod_sub,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
@@ -27,7 +28,7 @@ use rand::distr::{Distribution, StandardUniform};
 
 use crate::{
     BinomialExtensionData, FieldParameters, MontyField31, PackedMontyParameters,
-    RelativelyPrimePower,
+    RelativelyPrimePower, halve_avx512,
 };
 
 const WIDTH: usize = 16;
@@ -38,10 +39,12 @@ pub trait MontyParametersAVX512 {
 }
 
 const EVENS: __mmask16 = 0b0101010101010101;
+const EVENS_8: __mmask8 = 0b01010101;
 
 /// Vectorized AVX-512F implementation of `MontyField31` arithmetic.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // Needed to make `transmute`s safe.
+#[must_use]
 pub struct PackedMontyField31AVX512<PMP: PackedMontyParameters>(pub [MontyField31<PMP>; WIDTH]);
 
 impl<PMP: PackedMontyParameters> PackedMontyField31AVX512<PMP> {
@@ -60,7 +63,6 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX512<PMP> {
     }
 
     #[inline]
-    #[must_use]
     /// Make a packed field vector from an arch-specific vector.
     ///
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid
@@ -80,14 +82,12 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX512<PMP> {
     /// Copy `value` to all positions in a packed vector. This is the same as
     /// `From<MontyField31>::from`, but `const`.
     #[inline]
-    #[must_use]
     const fn broadcast(value: MontyField31<PMP>) -> Self {
         Self([value; WIDTH])
     }
 
     /// Copy values from `arr` into the packed vector padding by zeros if necessary.
     #[inline]
-    #[must_use]
     fn from_monty_array<const N: usize>(arr: [MontyField31<PMP>; N]) -> Self
     where
         PMP: FieldParameters,
@@ -112,7 +112,7 @@ impl<PMP: PackedMontyParameters> Add for PackedMontyField31AVX512<PMP> {
     fn add(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = add::<PMP>(lhs, rhs);
+        let res = mm512_mod_add(lhs, rhs, PMP::PACKED_P);
         unsafe {
             // Safety: `add` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
@@ -126,9 +126,9 @@ impl<PMP: PackedMontyParameters> Sub for PackedMontyField31AVX512<PMP> {
     fn sub(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = sub::<PMP>(lhs, rhs);
+        let res = mm512_mod_sub(lhs, rhs, PMP::PACKED_P);
         unsafe {
-            // Safety: `sub` returns values in canonical form when given values in canonical form.
+            // Safety: `mm512_mod_sub` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
@@ -178,6 +178,16 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX512<F
     #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f.into()
+    }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        let val = self.to_vector();
+        let halved = halve_avx512::<FP>(val);
+        unsafe {
+            // Safety: `halve_avx512` returns values in canonical form when given values in canonical form.
+            Self::from_vector(halved)
+        }
     }
 
     #[inline(always)]
@@ -297,66 +307,6 @@ impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> PermutationMon
     }
 }
 
-/// Add two vectors of MontyField31 elements in canonical form.
-///
-/// We allow a slight loosening of the canonical form requirement. One of this inputs
-/// must be in canonical form [0, P) but the other is also allowed to equal P.
-/// If the inputs do not conform to this representation, the result is undefined.
-#[inline]
-#[must_use]
-pub(crate) fn add<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
-    // We want this to compile to:
-    //      vpaddd   t, lhs, rhs
-    //      vpsubd   u, t, P
-    //      vpminud  res, t, u
-    // throughput: 1.5 cyc/vec (10.67 els/cyc)
-    // latency: 3 cyc
-
-    // Let t := lhs + rhs. We want to return t mod P. Recall that lhs and rhs are in [0, P]
-    //   with at most one of them equal to P. Hence t is in [0, 2P - 1] and so it suffices
-    //   to return t if t < P and t - P otherwise.
-    // Let u := (t - P) mod 2^32 and r := unsigned_min(t, u).
-    // If t is in [0, P - 1], then u is in (P - 1 <) 2^32 - P, ..., 2^32 - 1 and r = t.
-    // Otherwise, t is in [P, 2P - 1], and u is in [0, P - 1] (< P) and r = u. Hence, r is t if
-    //   t < P and t - P otherwise, as desired.
-    unsafe {
-        // Safety: If this code got compiled then AVX-512F intrinsics are available.
-        let t = x86_64::_mm512_add_epi32(lhs, rhs);
-        let u = x86_64::_mm512_sub_epi32(t, MPAVX512::PACKED_P);
-        x86_64::_mm512_min_epu32(t, u)
-    }
-}
-
-/// Subtract vectors of MontyField31 elements in canonical form.
-///
-/// We allow a slight loosening of the canonical form requirement. The
-/// rhs input is additionally allowed to be P.
-/// If the inputs do not conform to this representation, the result is undefined.
-#[inline]
-#[must_use]
-pub(crate) fn sub<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
-    // We want this to compile to:
-    //      vpsubd   t, lhs, rhs
-    //      vpaddd   u, t, P
-    //      vpminud  res, t, u
-    // throughput: 1.5 cyc/vec (10.67 els/cyc)
-    // latency: 3 cyc
-
-    // Let t := lhs - rhs. We want to return t mod P. Recall that lhs is in [0, P - 1]
-    //   and rhs is in [0, P] so t is in (-2^31 <) -P, ..., P - 1 (< 2^31). It suffices to return t if
-    //   t >= 0 and t + P otherwise.
-    // Let u := (t + P) mod 2^32 and r := unsigned_min(t, u).
-    // If t is in [0, P - 1], then u is in P, ..., 2 P - 1 and r = t.
-    // Otherwise, t is in [-P, -1], u is in [0, P - 1] (< P) and r = u. Hence, r is t if
-    //   t < P and t - P otherwise, as desired.
-    unsafe {
-        // Safety: If this code got compiled then AVX-512F intrinsics are available.
-        let t = x86_64::_mm512_sub_epi32(lhs, rhs);
-        let u = x86_64::_mm512_add_epi32(t, MPAVX512::PACKED_P);
-        x86_64::_mm512_min_epu32(t, u)
-    }
-}
-
 /// No-op. Prevents the compiler from deducing the value of the vector.
 ///
 /// Similar to `core::hint::black_box`, it can be used to stop the compiler applying undesirable
@@ -377,6 +327,34 @@ fn confuse_compiler(x: __m512i) -> __m512i {
         // what it does? The answer is that we still inhibit the transform we want to avoid, so
         // apparently not. Idk, LLVM works in mysterious ways.
         if transmute::<__m512i, [u32; 16]>(x) != transmute::<__m512i, [u32; 16]>(y) {
+            unreachable_unchecked();
+        }
+    }
+    y
+}
+
+/// No-op. Prevents the compiler from deducing the value of the vector.
+///
+/// A variant of [`confuse_compiler`] for use with `__m256i` vectors.
+///
+/// Similar to `core::hint::black_box`, it can be used to stop the compiler applying undesirable
+/// "optimizations". Unlike the built-in `black_box`, it does not force the value to be written to
+/// and then read from the stack.
+#[inline]
+#[must_use]
+fn confuse_compiler_256(x: __m256i) -> __m256i {
+    let y;
+    unsafe {
+        asm!(
+            "/*{0}*/",
+            inlateout(ymm_reg) x => y,
+            options(nomem, nostack, preserves_flags, pure),
+        );
+        // Below tells the compiler the semantics of this so it can still do constant folding, etc.
+        // You may ask, doesn't it defeat the point of the inline asm block to tell the compiler
+        // what it does? The answer is that we still inhibit the transform we want to avoid, so
+        // apparently not. Idk, LLVM works in mysterious ways.
+        if transmute::<__m256i, [u32; 8]>(x) != transmute::<__m256i, [u32; 8]>(y) {
             unreachable_unchecked();
         }
     }
@@ -457,6 +435,20 @@ fn movehdup_epi32(a: __m512i) -> __m512i {
     }
 }
 
+/// Viewing the input as a vector of 8 `u32`s, copy the odd elements into the even elements below
+/// them. In other words, for all `0 <= i < 4`, set the even elements according to
+/// `res[2 * i] := a[2 * i + 1]`, and the odd elements according to
+/// `res[2 * i + 1] := a[2 * i + 1]`.
+#[inline]
+#[must_use]
+fn movehdup_epi32_256(a: __m256i) -> __m256i {
+    // The instruction is only available in the floating-point flavor; this distinction is only for
+    // historical reasons and no longer matters. We cast to floats, do the thing, and cast back.
+    unsafe {
+        x86_64::_mm256_castps_si256(x86_64::_mm256_movehdup_ps(x86_64::_mm256_castsi256_ps(a)))
+    }
+}
+
 /// Viewing `a` as a vector of 16 `u32`s, copy the odd elements into the even elements below them,
 /// then merge with `src` according to the mask provided. In other words, for all `0 <= i < 8`, set
 /// the even elements according to `res[2 * i] := if k[2 * i] { a[2 * i + 1] } else { src[2 * i] }`,
@@ -478,6 +470,33 @@ fn mask_movehdup_epi32(src: __m512i, k: __mmask16, a: __m512i) -> __m512i {
             src_dst = inlateout(zmm_reg) src => dst,
             k = in(kreg) k,
             a = in(zmm_reg) a,
+            options(nomem, nostack, preserves_flags, pure),
+        );
+        dst
+    }
+}
+
+/// Viewing `a` as a vector of 8 `u32`s, copy the odd elements into the even elements below them,
+/// then merge with `src` according to the mask provided. In other words, for all `0 <= i < 4`, set
+/// the even elements according to `res[2 * i] := if k[2 * i] { a[2 * i + 1] } else { src[2 * i] }`,
+/// and the odd elements according to
+/// `res[2 * i + 1] := if k[2 * i + 1] { a[2 * i + 1] } else { src[2 * i + 1] }`.
+#[inline]
+#[must_use]
+fn mask_movehdup_epi32_256(src: __m256i, k: __mmask8, a: __m256i) -> __m256i {
+    // The instruction is only available in the floating-point flavor; this distinction is only for
+    // historical reasons and no longer matters.
+
+    // While we can write this using intrinsics, when inlined, the intrinsic often compiles
+    // to a vpermt2ps which has worse latency, see https://godbolt.org/z/489aaPhz3.
+    // Hence we use inline assembly to force the compiler to do the right thing.
+    unsafe {
+        let dst: __m256i;
+        asm!(
+            "vmovshdup {src_dst}{{{k}}}, {a}",
+            src_dst = inlateout(ymm_reg) src => dst,
+            k = in(kreg) k,
+            a = in(ymm_reg) a,
             options(nomem, nostack, preserves_flags, pure),
         );
         dst
@@ -557,6 +576,79 @@ fn mul<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
     }
 }
 
+/// Multiply a vector of unsigned field elements by a single field element.
+///
+/// Return a vector of unsigned field elements lying in [0, P).
+///
+/// Note that the input does not need to be in canonical form but must satisfy
+/// the bound `lhs * rhs < 2^32 * P`. If this bound is not satisfied, the result
+/// is undefined.
+#[inline]
+#[must_use]
+fn mul_256<MPAVX512: MontyParametersAVX512>(lhs: __m256i, rhs: i32) -> __m256i {
+    // We want this to compile to:
+    //      vmovshdup  lhs_odd, lhs
+    //      vpbroadcastd  rhs, rhs
+    //      vpmuludq   prod_evn, lhs, rhs
+    //      vpmuludq   prod_hi, lhs_odd, rhs_odd
+    //      vpmuludq   q_evn, prod_evn, MU
+    //      vpmuludq   q_odd, prod_hi, MU
+    //      vmovshdup  prod_hi{EVENS}, prod_evn
+    //      vpmuludq   q_p_evn, q_evn, P
+    //      vpmuludq   q_p_hi, q_odd, P
+    //      vmovshdup  q_p_hi{EVENS}, q_p_evn
+    //      vpcmpltud  underflow, prod_hi, q_p_hi
+    //      vpsubd     res, prod_hi, q_p_hi
+    //      vpaddd     res{underflow}, res, P
+    // throughput: 6.5 cyc/vec (2.46 els/cyc)
+    // latency: 21 cyc
+    unsafe {
+        // `vpmuludq` only reads the even doublewords, so when we pass `lhs` directly we
+        // get the four products at even positions.
+        let lhs_evn = lhs;
+        let rhs = x86_64::_mm256_set1_epi32(rhs);
+
+        // Copy the odd doublewords into even positions to compute the four products at odd
+        // positions.
+        // NB: The odd doublewords are ignored by `vpmuludq`, so we have a lot of choices for how to
+        // do this; `vmovshdup` is nice because it runs on a memory port if the operand is in
+        // memory, thus improving our throughput.
+        let lhs_odd = movehdup_epi32_256(lhs);
+
+        let prod_evn = x86_64::_mm256_mul_epu32(lhs_evn, rhs);
+        let prod_odd = x86_64::_mm256_mul_epu32(lhs_odd, rhs);
+
+        let mu_256 = x86_64::_mm512_castsi512_si256(MPAVX512::PACKED_MU);
+        let q_evn = confuse_compiler_256(x86_64::_mm256_mul_epu32(prod_evn, mu_256));
+        let q_odd = confuse_compiler_256(x86_64::_mm256_mul_epu32(prod_odd, mu_256));
+
+        // Get all the high halves as one vector: this is `(lhs * rhs) >> 32`.
+        // NB: `vpermt2d` may feel like a more intuitive choice here, but it has much higher
+        // latency.
+        let prod_hi = mask_movehdup_epi32_256(prod_odd, EVENS_8, prod_evn);
+
+        // Normally we'd want to mask to perform % 2**32, but the instruction below only reads the
+        // low 32 bits anyway.
+        let p_256 = x86_64::_mm512_castsi512_si256(MPAVX512::PACKED_P);
+        let q_p_evn = x86_64::_mm256_mul_epu32(q_evn, p_256);
+        let q_p_odd = x86_64::_mm256_mul_epu32(q_odd, p_256);
+
+        // We can ignore all the low halves of `q_p` as they cancel out. Get all the high halves as
+        // one vector.
+        let q_p_hi = mask_movehdup_epi32_256(q_p_odd, EVENS_8, q_p_evn);
+
+        // Subtraction `prod_hi - q_p_hi` modulo `P`.
+        // NB: Normally we'd `vpaddd P` and take the `vpminud`, but `vpminud` runs on port 0, which
+        // is already under a lot of pressure performing multiplications. To relieve this pressure,
+        // we check for underflow to generate a mask, and then conditionally add `P`. The underflow
+        // check runs on port 5, increasing our throughput, although it does cost us an additional
+        // cycle of latency.
+        let underflow = x86_64::_mm256_cmplt_epu32_mask(prod_hi, q_p_hi);
+        let t = x86_64::_mm256_sub_epi32(prod_hi, q_p_hi);
+        x86_64::_mm256_mask_add_epi32(t, underflow, t, p_256)
+    }
+}
+
 /// Compute the elementary arithmetic generalization of `xor`, namely `xor(l, r) = l + r - 2lr` of
 /// vectors in canonical form.
 ///
@@ -607,7 +699,7 @@ fn xor<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
         // Unfortunately, AVX512 has no equivalent of vpsignd so we can't do the same
         // signed_add trick as in the AVX2 case. Instead we get a reduced value from mul
         // and add on rhs in the standard way.
-        add::<MPAVX512>(rhs, mul_res)
+        mm512_mod_add(rhs, mul_res, MPAVX512::PACKED_P)
     }
 }
 
@@ -1425,7 +1517,7 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
         // We could do this via putting the relevant pieces into a __mm256 vectors but
         // the data fiddling seems to be more expensive than just doing the naive thing.
         let swizzled_dot = x86_64::_mm512_shuffle_epi32::<0b10110001>(dot);
-        let sum = add::<FP>(dot, swizzled_dot);
+        let sum = mm512_mod_add(dot, swizzled_dot, FP::PACKED_P);
         PackedMontyField31AVX512::<FP>::from_vector(sum)
     };
 
@@ -1437,4 +1529,57 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
     res[5] = total.0[10];
     res[6] = total.0[12];
     res[7] = total.0[14];
+}
+
+/// Multiplication by a base field element in a binomial extension field.
+#[inline]
+pub(crate) fn base_mul_packed<FP, const WIDTH: usize>(
+    a: [MontyField31<FP>; WIDTH],
+    b: MontyField31<FP>,
+    res: &mut [MontyField31<FP>; WIDTH],
+) where
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+{
+    match WIDTH {
+        1 => res[0] = a[0] * b,
+        4 => {
+            // This could likely be sped up by a completely custom implementation of mul.
+            // Surprisingly, the current version is only slightly faster than:
+            // res.iter_mut().zip(a.iter()).for_each(|(r, a)| *r = *a * b);
+            let out: [MontyField31<FP>; 8] = unsafe {
+                let lhs: __m256i =
+                    transmute([a[0].value, a[1].value, a[2].value, a[3].value, 0, 0, 0, 0]);
+                let prod = mul_256::<FP>(lhs, b.value as i32);
+                transmute(prod)
+            };
+
+            res.copy_from_slice(&out[..4]);
+        }
+        5 => {
+            // This could likely be sped up by a completely custom implementation of mul.
+            let out: [MontyField31<FP>; 8] = unsafe {
+                let lhs: __m256i = transmute([
+                    a[0].value, a[1].value, a[2].value, a[3].value, a[4].value, 0, 0, 0,
+                ]);
+                let prod = mul_256::<FP>(lhs, b.value as i32);
+                transmute(prod)
+            };
+
+            res.copy_from_slice(&out[..5]);
+        }
+        8 => {
+            // This could likely be sped up by a completely custom implementation of mul.
+            let out: [MontyField31<FP>; 8] = unsafe {
+                let lhs: __m256i = transmute([
+                    a[0].value, a[1].value, a[2].value, a[3].value, a[4].value, a[5].value,
+                    a[6].value, a[7].value,
+                ]);
+                let prod = mul_256::<FP>(lhs, b.value as i32);
+                transmute(prod)
+            };
+
+            res.copy_from_slice(&out);
+        }
+        _ => panic!("Unsupported binomial extension degree: {}", WIDTH),
+    }
 }

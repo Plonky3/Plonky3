@@ -55,6 +55,7 @@ pub trait QuotientMap<Int>: Sized {
     /// This method is also strongly preferred over `from_canonical_checked/from_canonical_unchecked`.
     /// It will usually be identical when `Int` is a small type, e.g. `u8/u16` and is safer for
     /// larger types.
+    #[must_use]
     fn from_int(int: Int) -> Self;
 
     /// Convert a given integer into an element of the field `ℤ/p`. The input is checked to
@@ -63,6 +64,7 @@ pub trait QuotientMap<Int>: Sized {
     /// - If `Int` is a signed integer type the input must lie in `[-(p - 1)/2, (p - 1)/2]`.
     ///
     /// Return `None` if the input lies outside this range and `Some(val)` otherwise.
+    #[must_use]
     fn from_canonical_checked(int: Int) -> Option<Self>;
 
     /// Convert a given integer into an element of the field `ℤ/p`. The input is guaranteed
@@ -75,6 +77,7 @@ pub trait QuotientMap<Int>: Sized {
     /// # Safety
     /// - If `Int` is an unsigned integer type then the allowed range will include `[0, p - 1]`.
     /// - If `Int` is a signed integer type then the allowed range will include `[-(p - 1)/2, (p - 1)/2]`.
+    #[must_use]
     unsafe fn from_canonical_unchecked(int: Int) -> Self;
 }
 

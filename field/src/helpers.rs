@@ -104,6 +104,7 @@ pub fn par_add_scaled_slice_in_place<F: Field>(slice: &mut [F], other: &[F], s: 
 /// Extend a ring `R` element `x` to an array of length `D`
 /// by filling zeros.
 #[inline]
+#[must_use]
 pub const fn field_to_array<R: PrimeCharacteristicRing, const D: usize>(x: R) -> [R; D] {
     let mut arr = [const { MaybeUninit::uninit() }; D];
     arr[0] = MaybeUninit::new(x);
@@ -117,6 +118,7 @@ pub const fn field_to_array<R: PrimeCharacteristicRing, const D: usize>(x: R) ->
 
 /// Given an element x from a 32 bit field F_P compute x/2.
 #[inline]
+#[must_use]
 pub const fn halve_u32<const P: u32>(x: u32) -> u32 {
     let shift = (P + 1) >> 1;
     let half = x >> 1;
@@ -125,6 +127,7 @@ pub const fn halve_u32<const P: u32>(x: u32) -> u32 {
 
 /// Given an element x from a 64 bit field F_P compute x/2.
 #[inline]
+#[must_use]
 pub const fn halve_u64<const P: u64>(x: u64) -> u64 {
     let shift = (P + 1) >> 1;
     let half = x >> 1;
@@ -140,6 +143,7 @@ pub const fn halve_u64<const P: u64>(x: u64) -> u64 {
 ///     \text{reduce\_32}(vals) = \sum_{i=0}^{n-1} a_i \cdot 2^{32i}
 /// \end{equation}
 /// ```
+#[must_use]
 pub fn reduce_32<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
     // If the characteristic of TF is > 2^64, from_int and from_canonical_unchecked act identically
     let base = TF::from_int(1u64 << 32);
@@ -158,6 +162,7 @@ pub fn reduce_32<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
 /// ```
 ///
 /// Pads with zeros if needed.
+#[must_use]
 pub fn split_32<SF: PrimeField, TF: PrimeField32>(val: SF, n: usize) -> Vec<TF> {
     let mut result: Vec<TF> = val
         .as_canonical_biguint()
@@ -173,6 +178,7 @@ pub fn split_32<SF: PrimeField, TF: PrimeField32>(val: SF, n: usize) -> Vec<TF> 
 }
 
 /// Maximally generic dot product.
+#[must_use]
 pub fn dot_product<S, LI, RI>(li: LI, ri: RI) -> S
 where
     LI: Iterator,

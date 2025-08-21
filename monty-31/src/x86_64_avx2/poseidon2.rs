@@ -5,7 +5,7 @@ use core::arch::x86_64::{self, __m256i};
 use core::marker::PhantomData;
 use core::mem::transmute;
 
-use p3_field::PrimeCharacteristicRing;
+use p3_field::{PrimeCharacteristicRing, mm256_mod_add, mm256_mod_sub};
 use p3_poseidon2::{
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, InternalLayer,
     InternalLayerConstructor, MDSMat4, external_initial_permute_state,
@@ -14,9 +14,8 @@ use p3_poseidon2::{
 
 use crate::{
     FieldParameters, InternalLayerBaseParameters, MontyField31, MontyParameters,
-    PackedMontyField31AVX2, PackedMontyParameters, RelativelyPrimePower, add,
-    apply_func_to_even_odd, halve_avx2, packed_exp_3, packed_exp_5, packed_exp_7, signed_add_avx2,
-    sub,
+    PackedMontyField31AVX2, PackedMontyParameters, RelativelyPrimePower, apply_func_to_even_odd,
+    halve_avx2, packed_exp_3, packed_exp_5, packed_exp_7, signed_add_avx2,
 };
 
 // In the internal layers, it is valuable to treat the first entry of the state differently
@@ -32,7 +31,6 @@ pub struct InternalLayer16<PMP: PackedMontyParameters> {
 
 impl<PMP: PackedMontyParameters> InternalLayer16<PMP> {
     #[inline]
-    #[must_use]
     /// Convert from `InternalLayer16<PMP>` to `[PackedMontyField31AVX2<PMP>; 16]`
     ///
     /// SAFETY: The caller must ensure that each element of `s_hi` represents a valid `MontyField31<PMP>`.
@@ -76,7 +74,6 @@ pub struct InternalLayer24<PMP: PackedMontyParameters> {
 
 impl<PMP: PackedMontyParameters> InternalLayer24<PMP> {
     #[inline]
-    #[must_use]
     /// Convert from `InternalLayer24<PMP>` to `[PackedMontyField31AVX2<PMP>; 24]`
     ///
     /// SAFETY: The caller must ensure that each element of `s_hi` represents a valid `MontyField31<PMP>`.
@@ -274,14 +271,14 @@ pub trait InternalLayerParametersAVX2<PMP: PackedMontyParameters, const WIDTH: u
 
         // input[0] is being multiplied by 1 so we ignore it.
 
-        input[1] = add::<PMP>(input[1], input[1]);
+        input[1] = mm256_mod_add(input[1], input[1], PMP::PACKED_P);
         input[2] = halve_avx2::<PMP>(input[2]);
 
-        let acc3 = add::<PMP>(input[3], input[3]);
-        input[3] = add::<PMP>(acc3, input[3]);
+        let acc3 = mm256_mod_add(input[3], input[3], PMP::PACKED_P);
+        input[3] = mm256_mod_add(acc3, input[3], PMP::PACKED_P);
 
-        let acc4 = add::<PMP>(input[4], input[4]);
-        input[4] = add::<PMP>(acc4, acc4);
+        let acc4 = mm256_mod_add(input[4], input[4], PMP::PACKED_P);
+        input[4] = mm256_mod_add(acc4, acc4, PMP::PACKED_P);
 
         // For the final 3 elements we multiply by 1/2, 3, 4.
         // This gives the negative of the correct answer which
@@ -289,11 +286,11 @@ pub trait InternalLayerParametersAVX2<PMP: PackedMontyParameters, const WIDTH: u
 
         input[5] = halve_avx2::<PMP>(input[5]);
 
-        let acc6 = add::<PMP>(input[6], input[6]);
-        input[6] = add::<PMP>(acc6, input[6]);
+        let acc6 = mm256_mod_add(input[6], input[6], PMP::PACKED_P);
+        input[6] = mm256_mod_add(acc6, input[6], PMP::PACKED_P);
 
-        let acc7 = add::<PMP>(input[7], input[7]);
-        input[7] = add::<PMP>(acc7, acc7);
+        let acc7 = mm256_mod_add(input[7], input[7], PMP::PACKED_P);
+        input[7] = mm256_mod_add(acc7, acc7, PMP::PACKED_P);
     }
 
     /// # Safety
@@ -321,12 +318,12 @@ pub trait InternalLayerParametersAVX2<PMP: PackedMontyParameters, const WIDTH: u
             // Diagonal mul multiplied these by 1, 2, 1/2, 3, 4 so we simply need to add the sum.
             input.as_mut()[..5]
                 .iter_mut()
-                .for_each(|x| *x = add::<PMP>(sum, *x));
+                .for_each(|x| *x = mm256_mod_add(sum, *x, PMP::PACKED_P));
 
             // Diagonal mul multiplied these by 1/2, 3, 4 instead of -1/2, -3, -4 so we need to subtract instead of adding.
             input.as_mut()[5..8]
                 .iter_mut()
-                .for_each(|x| *x = sub::<PMP>(sum, *x));
+                .for_each(|x| *x = mm256_mod_sub(sum, *x, PMP::PACKED_P));
 
             // Diagonal mul output a signed value in (-P, P) so we need to do a signed add.
             // Note that signed add's parameters are not interchangeable. The first parameter must be positive.

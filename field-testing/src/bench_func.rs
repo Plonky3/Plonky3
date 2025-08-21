@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use core::hint::black_box;
 
 use criterion::{BatchSize, Criterion};
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{Algebra, Field, PrimeCharacteristicRing};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 use rand::rngs::SmallRng;
@@ -375,6 +375,90 @@ pub fn benchmark_mul_throughput<R: PrimeCharacteristicRing + Copy, const N: usiz
                         h * i,
                         i * j,
                         j * a,
+                    );
+                }
+                (a, b, c, d, e, f, g, h, i, j)
+            },
+            BatchSize::SmallInput,
+        )
+    });
+}
+
+pub fn benchmark_base_mul_latency<F: Field, A: Algebra<F> + Copy, const N: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
+    StandardUniform: Distribution<F> + Distribution<A>,
+{
+    c.bench_function(&format!("base_mul-latency/{N} {name}"), |b| {
+        b.iter_batched(
+            || {
+                let mut rng = SmallRng::seed_from_u64(1);
+                let mut vec = Vec::new();
+                for _ in 0..N {
+                    vec.push(rng.random::<F>())
+                }
+                let init_val = rng.random::<A>();
+                (vec, init_val)
+            },
+            |(x, init_val)| x.iter().fold(init_val, |x, y| x * *y),
+            BatchSize::SmallInput,
+        )
+    });
+}
+
+pub fn benchmark_base_mul_throughput<F: Field, A: Algebra<F> + Copy, const N: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
+    StandardUniform: Distribution<F> + Distribution<A>,
+{
+    c.bench_function(&format!("base_mul-throughput/{N} {name}"), |b| {
+        b.iter_batched(
+            || {
+                let mut rng = SmallRng::seed_from_u64(1);
+                let a_tuple = (
+                    rng.random::<A>(),
+                    rng.random::<A>(),
+                    rng.random::<A>(),
+                    rng.random::<A>(),
+                    rng.random::<A>(),
+                    rng.random::<A>(),
+                    rng.random::<A>(),
+                    rng.random::<A>(),
+                    rng.random::<A>(),
+                    rng.random::<A>(),
+                );
+                let f_tuple = (
+                    rng.random::<F>(),
+                    rng.random::<F>(),
+                    rng.random::<F>(),
+                    rng.random::<F>(),
+                    rng.random::<F>(),
+                    rng.random::<F>(),
+                    rng.random::<F>(),
+                    rng.random::<F>(),
+                    rng.random::<F>(),
+                    rng.random::<F>(),
+                );
+                (a_tuple, f_tuple)
+            },
+            |(
+                (mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h, mut i, mut j),
+                (a_f, b_f, c_f, d_f, e_f, f_f, g_f, h_f, i_f, j_f),
+            )| {
+                for _ in 0..N {
+                    (a, b, c, d, e, f, g, h, i, j) = (
+                        a * a_f,
+                        b * b_f,
+                        c * c_f,
+                        d * d_f,
+                        e * e_f,
+                        f * f_f,
+                        g * g_f,
+                        h * h_f,
+                        i * i_f,
+                        j * j_f,
                     );
                 }
                 (a, b, c, d, e, f, g, h, i, j)

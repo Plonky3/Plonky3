@@ -13,13 +13,14 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2,
+    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, mm512_mod_add,
+    mm512_mod_sub,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 
-use crate::Mersenne31;
+use crate::{Mersenne31, mul_2exp_i};
 
 const WIDTH: usize = 16;
 pub(crate) const P: __m512i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
@@ -29,6 +30,7 @@ const ODDS: __mmask16 = 0b1010101010101010;
 /// Vectorized AVX-512F implementation of `Mersenne31` arithmetic.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // Needed to make `transmute`s safe.
+#[must_use]
 pub struct PackedMersenne31AVX512(pub [Mersenne31; WIDTH]);
 
 impl PackedMersenne31AVX512 {
@@ -47,7 +49,6 @@ impl PackedMersenne31AVX512 {
     }
 
     #[inline]
-    #[must_use]
     /// Make a packed field vector from an arch-specific vector.
     ///
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid
@@ -67,7 +68,6 @@ impl PackedMersenne31AVX512 {
     /// Copy `value` to all positions in a packed vector. This is the same as
     /// `From<Mersenne31>::from`, but `const`.
     #[inline]
-    #[must_use]
     const fn broadcast(value: Mersenne31) -> Self {
         Self([value; WIDTH])
     }
@@ -86,9 +86,9 @@ impl Add for PackedMersenne31AVX512 {
     fn add(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = add(lhs, rhs);
+        let res = mm512_mod_add(lhs, rhs, P);
         unsafe {
-            // Safety: `add` returns values in canonical form when given values in canonical form.
+            // Safety: `mm512_mod_add` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
@@ -100,9 +100,9 @@ impl Sub for PackedMersenne31AVX512 {
     fn sub(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = sub(lhs, rhs);
+        let res = mm512_mod_sub(lhs, rhs, P);
         unsafe {
-            // Safety: `sub` returns values in canonical form when given values in canonical form.
+            // Safety: `mm512_mod_sub` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
@@ -152,6 +152,12 @@ impl PrimeCharacteristicRing for PackedMersenne31AVX512 {
     #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f.into()
+    }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        // 2^{-1} = 2^30 mod P so we implement halve by multiplying by 2^30.
+        mul_2exp_i::<30, 1>(*self)
     }
 
     #[inline(always)]
@@ -208,31 +214,6 @@ impl_div_methods!(PackedMersenne31AVX512, Mersenne31);
 impl_sum_prod_base_field!(PackedMersenne31AVX512, Mersenne31);
 
 impl Algebra<Mersenne31> for PackedMersenne31AVX512 {}
-
-/// Add two vectors of Mersenne-31 field elements represented as values in {0, ..., P}.
-/// If the inputs do not conform to this representation, the result is undefined.
-#[inline]
-#[must_use]
-fn add(lhs: __m512i, rhs: __m512i) -> __m512i {
-    // We want this to compile to:
-    //      vpaddd   t, lhs, rhs
-    //      vpsubd   u, t, P
-    //      vpminud  res, t, u
-    // throughput: 1.5 cyc/vec (10.67 els/cyc)
-    // latency: 3 cyc
-
-    //   Let t := lhs + rhs. We want to return a value r in {0, ..., P} such that r = t (mod P).
-    //   Define u := (t - P) mod 2^32 and r := min(t, u). t is in {0, ..., 2 P}. We argue by cases.
-    //   If t is in {0, ..., P - 1}, then u is in {(P - 1 <) 2^32 - P, ..., 2^32 - 1}, so r = t is
-    // in the correct range.
-    //   If t is in {P, ..., 2 P}, then u is in {0, ..., P} and r = u is in the correct range.
-    unsafe {
-        // Safety: If this code got compiled then AVX-512F intrinsics are available.
-        let t = x86_64::_mm512_add_epi32(lhs, rhs);
-        let u = x86_64::_mm512_sub_epi32(t, P);
-        x86_64::_mm512_min_epu32(t, u)
-    }
-}
 
 #[inline]
 #[must_use]
@@ -320,7 +301,7 @@ fn mul(lhs: __m512i, rhs: __m512i) -> __m512i {
         let prod_lo = x86_64::_mm512_srli_epi32::<1>(prod_lo_dbl);
 
         // Standard addition of two 31-bit values.
-        add(prod_lo, prod_hi)
+        mm512_mod_add(prod_lo, prod_hi, P)
     }
 }
 
@@ -339,33 +320,6 @@ fn neg(val: __m512i) -> __m512i {
     unsafe {
         // Safety: If this code got compiled then AVX-512F intrinsics are available.
         x86_64::_mm512_xor_epi32(val, P)
-    }
-}
-
-/// Subtract vectors of Mersenne-31 field elements represented as values in {0, ..., P}.
-/// If the inputs do not conform to this representation, the result is undefined.
-#[inline]
-#[must_use]
-fn sub(lhs: __m512i, rhs: __m512i) -> __m512i {
-    // We want this to compile to:
-    //      vpsubd   t, lhs, rhs
-    //      vpaddd   u, t, P
-    //      vpminud  res, t, u
-    // throughput: 1.5 cyc/vec (10.67 els/cyc)
-    // latency: 3 cyc
-
-    //   Let d := lhs - rhs and t := d mod 2^32. We want to return a value r in {0, ..., P} such
-    // that r = d (mod P).
-    //   Define u := (t + P) mod 2^32 and r := min(t, u). d is in {-P, ..., P}. We argue by cases.
-    //   If d is in {0, ..., P}, then t = d and u is in {P, ..., 2 P}. r = t is in the correct
-    // range.
-    //   If d is in {-P, ..., -1}, then t is in {2^32 - P, ..., 2^32 - 1} and u is in
-    // {0, ..., P - 1}. r = u is in the correct range.
-    unsafe {
-        // Safety: If this code got compiled then AVX-512F intrinsics are available.
-        let t = x86_64::_mm512_sub_epi32(lhs, rhs);
-        let u = x86_64::_mm512_add_epi32(t, P);
-        x86_64::_mm512_min_epu32(t, u)
     }
 }
 

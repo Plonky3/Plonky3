@@ -44,11 +44,3 @@ p3-matrix.workspace = true
 
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
-
-[features]
-nightly-features = [
-    "p3-monty-31/nightly-features",
-    "p3-baby-bear/nightly-features",
-    "p3-koala-bear/nightly-features",
-    "p3-mersenne-31/nightly-features",
-]

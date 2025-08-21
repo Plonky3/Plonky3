@@ -1,6 +1,6 @@
 use core::marker::PhantomData;
 
-use p3_field::{Algebra, InjectiveMonomial};
+use p3_field::{InjectiveMonomial, PrimeCharacteristicRing};
 use p3_poseidon2::{
     ExternalLayer, GenericPoseidon2LinearLayers, InternalLayer, MDSMat4, add_rc_and_sbox_generic,
     external_initial_permute_state, external_terminal_permute_state,
@@ -18,20 +18,19 @@ use crate::{
 pub trait InternalLayerBaseParameters<MP: MontyParameters, const WIDTH: usize>:
     Clone + Sync
 {
-    // Most of the time, ArrayLike will be `[u8; WIDTH - 1]`.
-    type ArrayLike: AsRef<[MontyField31<MP>]> + Sized;
-
-    // Long term INTERNAL_DIAG_MONTY will be removed.
-    // Currently it is needed for the Packed field implementations.
-    const INTERNAL_DIAG_MONTY: [MontyField31<MP>; WIDTH];
-
     /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s.
     /// We ignore `state[0]` as it is handled separately.
-    fn internal_layer_mat_mul(state: &mut [MontyField31<MP>; WIDTH], sum: MontyField31<MP>);
+    fn internal_layer_mat_mul<R: PrimeCharacteristicRing>(state: &mut [R; WIDTH], sum: R);
 
-    /// Perform the internal matrix multiplication for any Abstract field
-    /// which implements multiplication by MontyField31 elements.
-    fn generic_internal_linear_layer<A: Algebra<MontyField31<MP>>>(state: &mut [A; WIDTH]);
+    /// Perform the matrix multiplication corresponding to the internal linear
+    /// layer.
+    fn generic_internal_linear_layer<R: PrimeCharacteristicRing>(state: &mut [R; WIDTH]) {
+        // We mostly delegate to internal_layer_mat_mul but have to handle state[0] separately.
+        let part_sum: R = state[1..].iter().cloned().sum();
+        let full_sum = part_sum.clone() + state[0].clone();
+        state[0] = part_sum - state[0].clone();
+        Self::internal_layer_mat_mul(state, full_sum);
+    }
 }
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
@@ -42,17 +41,13 @@ pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>:
 #[cfg(all(
     target_arch = "x86_64",
     target_feature = "avx2",
-    not(all(feature = "nightly-features", target_feature = "avx512f"))
+    not(target_feature = "avx512f")
 ))]
 pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>:
     InternalLayerBaseParameters<FP, WIDTH> + crate::InternalLayerParametersAVX2<FP, WIDTH>
 {
 }
-#[cfg(all(
-    feature = "nightly-features",
-    target_arch = "x86_64",
-    target_feature = "avx512f"
-))]
+#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
 pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>:
     InternalLayerBaseParameters<FP, WIDTH> + crate::InternalLayerParametersAVX512<FP, WIDTH>
 {
@@ -62,13 +57,9 @@ pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>:
     all(
         target_arch = "x86_64",
         target_feature = "avx2",
-        not(all(feature = "nightly-features", target_feature = "avx512f"))
+        not(target_feature = "avx512f")
     ),
-    all(
-        feature = "nightly-features",
-        target_arch = "x86_64",
-        target_feature = "avx512f"
-    ),
+    all(target_arch = "x86_64", target_feature = "avx512f"),
 )))]
 pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>:
     InternalLayerBaseParameters<FP, WIDTH>
@@ -130,16 +121,13 @@ pub struct GenericPoseidon2LinearLayersMonty31<FP, ILBP> {
     _phantom2: PhantomData<ILBP>,
 }
 
-impl<FP, A, ILBP, const WIDTH: usize> GenericPoseidon2LinearLayers<A, WIDTH>
+impl<FP, ILBP, const WIDTH: usize> GenericPoseidon2LinearLayers<WIDTH>
     for GenericPoseidon2LinearLayersMonty31<FP, ILBP>
 where
     FP: FieldParameters,
-    A: Algebra<MontyField31<FP>>,
     ILBP: InternalLayerBaseParameters<FP, WIDTH>,
 {
-    /// Perform the external matrix multiplication for any Abstract field
-    /// which implements multiplication by MontyField31 elements.
-    fn internal_linear_layer(state: &mut [A; WIDTH]) {
+    fn internal_linear_layer<R: PrimeCharacteristicRing>(state: &mut [R; WIDTH]) {
         ILBP::generic_internal_linear_layer(state);
     }
 }

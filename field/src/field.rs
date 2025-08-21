@@ -113,6 +113,7 @@ pub trait PrimeCharacteristicRing:
     /// `from_prime_subfield([r])` will be equal to:
     ///
     /// `Self::ONE + ... + Self::ONE (r times)`
+    #[must_use]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self;
 
     /// Return `Self::ONE` if `b` is `true` and `Self::ZERO` if `b` is `false`.
@@ -135,6 +136,20 @@ pub trait PrimeCharacteristicRing:
     #[inline(always)]
     fn double(&self) -> Self {
         self.clone() + self.clone()
+    }
+
+    /// The elementary function `halve(a) = a/2`.
+    ///
+    /// # Panics
+    /// The function will panic if the field has characteristic 2.
+    #[must_use]
+    #[inline]
+    fn halve(&self) -> Self {
+        // This must be overwritten by PrimeField implementations as this definition
+        // is circular when PrimeSubfield = Self. It should also be overwritten by
+        // most rings to avoid the multiplication.
+        let half = Self::from_prime_subfield(Self::PrimeSubfield::ONE.halve());
+        self.clone() * half
     }
 
     /// The elementary function `square(a) = a^2`.
@@ -259,7 +274,21 @@ pub trait PrimeCharacteristicRing:
     #[must_use]
     #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
+        // Some rings might want to reimplement this to avoid the
+        // exponentiations (and potentially even the multiplication).
         self.clone() * Self::TWO.exp_u64(exp)
+    }
+
+    /// Divide by a given power of two. `div_2exp_u64(a, exp) = a/2^exp`
+    ///
+    /// # Panics
+    /// The function will panic if the field has characteristic 2.
+    #[must_use]
+    #[inline]
+    fn div_2exp_u64(&self, exp: u64) -> Self {
+        // Some rings might want to reimplement this to avoid the
+        // exponentiations (and potentially even the multiplication).
+        self.clone() * Self::from_prime_subfield(Self::PrimeSubfield::ONE.halve().exp_u64(exp))
     }
 
     /// Construct an iterator which returns powers of `self`: `self^0, self^1, self^2, ...`.
@@ -771,38 +800,6 @@ pub trait Field:
         self.try_inverse().expect("Tried to invert zero")
     }
 
-    /// The elementary function `halve(a) = a/2`.
-    ///
-    /// # Panics
-    /// The function will panic if the field has characteristic 2.
-    #[must_use]
-    fn halve(&self) -> Self {
-        // This should be overwritten by most field implementations.
-        let half = Self::from_prime_subfield(
-            Self::PrimeSubfield::TWO
-                .try_inverse()
-                .expect("Cannot divide by 2 in fields with characteristic 2"),
-        );
-        *self * half
-    }
-
-    /// Divide by a given power of two. `div_2exp_u64(a, exp) = a/2^exp`
-    ///
-    /// # Panics
-    /// The function will panic if the field has characteristic 2.
-    #[must_use]
-    #[inline]
-    fn div_2exp_u64(&self, exp: u64) -> Self {
-        // This should be overwritten by most field implementations.
-        *self
-            * Self::from_prime_subfield(
-                Self::PrimeSubfield::TWO
-                    .try_inverse()
-                    .expect("Cannot divide by 2 in fields with characteristic 2")
-                    .exp_u64(exp),
-            )
-    }
-
     /// Add two slices of field elements together, returning the result in the first slice.
     ///
     /// Makes use of packing to speed up the addition.
@@ -986,6 +983,7 @@ impl<R: PrimeCharacteristicRing> Iterator for Powers<R> {
 impl<R: PrimeCharacteristicRing> Powers<R> {
     /// Returns an iterator yielding the first `n` powers.
     #[inline]
+    #[must_use]
     pub fn take(self, n: usize) -> BoundedPowers<R> {
         BoundedPowers { iter: self, n }
     }
@@ -1001,6 +999,7 @@ impl<R: PrimeCharacteristicRing> Powers<R> {
 
     /// Wrapper for `self.take(n).collect()`.
     #[inline]
+    #[must_use]
     pub fn collect_n(self, n: usize) -> Vec<R> {
         self.take(n).collect()
     }
@@ -1017,6 +1016,7 @@ impl<F: Field> BoundedPowers<F> {
     /// # Performance
     ///
     /// Enable the `parallel` feature to enable parallelization.
+    #[must_use]
     pub fn collect(self) -> Vec<F> {
         let num_powers = self.n;
 

@@ -13,7 +13,8 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2,
+    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, mm256_mod_add,
+    mm256_mod_sub,
 };
 use p3_util::reconstitute_from_base;
 use rand::Rng;
@@ -21,7 +22,7 @@ use rand::distr::{Distribution, StandardUniform};
 
 use crate::{
     BinomialExtensionData, FieldParameters, MontyField31, PackedMontyParameters,
-    RelativelyPrimePower, signed_add_avx2,
+    RelativelyPrimePower, halve_avx2, signed_add_avx2,
 };
 
 const WIDTH: usize = 8;
@@ -34,6 +35,7 @@ pub trait MontyParametersAVX2 {
 /// Vectorized AVX2 implementation of `MontyField31<FP>` arithmetic.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // This is needed to make `transmute`s safe.
+#[must_use]
 pub struct PackedMontyField31AVX2<PMP: PackedMontyParameters>(pub [MontyField31<PMP>; WIDTH]);
 
 impl<PMP: PackedMontyParameters> PackedMontyField31AVX2<PMP> {
@@ -52,7 +54,6 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX2<PMP> {
     }
 
     #[inline]
-    #[must_use]
     /// Make a packed field vector from an arch-specific vector.
     ///
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid `MontyField31<FP>`.
@@ -72,7 +73,6 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX2<PMP> {
     /// Copy `value` to all positions in a packed vector. This is the same as
     /// `From<MontyField31<FP>>::from`, but `const`.
     #[inline]
-    #[must_use]
     const fn broadcast(value: MontyField31<PMP>) -> Self {
         Self([value; WIDTH])
     }
@@ -91,9 +91,9 @@ impl<PMP: PackedMontyParameters> Add for PackedMontyField31AVX2<PMP> {
     fn add(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = add::<PMP>(lhs, rhs);
+        let res = mm256_mod_add(lhs, rhs, PMP::PACKED_P);
         unsafe {
-            // Safety: `add` returns values in canonical form when given values in canonical form.
+            // Safety: `mm256_mod_add` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
@@ -105,9 +105,9 @@ impl<PMP: PackedMontyParameters> Sub for PackedMontyField31AVX2<PMP> {
     fn sub(self, rhs: Self) -> Self {
         let lhs = self.to_vector();
         let rhs = rhs.to_vector();
-        let res = sub::<PMP>(lhs, rhs);
+        let res = mm256_mod_sub(lhs, rhs, PMP::PACKED_P);
         unsafe {
-            // Safety: `sub` returns values in canonical form when given values in canonical form.
+            // Safety: `mm256_mod_sub` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
     }
@@ -159,6 +159,16 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31AVX2<FP>
     #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f.into()
+    }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        let val = self.to_vector();
+        let halved = halve_avx2::<FP>(val);
+        unsafe {
+            // Safety: `halve_avx2` returns values in canonical form when given values in canonical form.
+            Self::from_vector(halved)
+        }
     }
 
     #[inline]
@@ -256,34 +266,6 @@ impl_div_methods!(PackedMontyField31AVX2, MontyField31, (FieldParameters, FP));
 impl_sum_prod_base_field!(PackedMontyField31AVX2, MontyField31, (FieldParameters, FP));
 
 impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31AVX2<FP> {}
-
-/// Add two vectors of Monty31 field elements in canonical form.
-/// If the inputs are not in canonical form, the result is undefined.
-#[inline]
-#[must_use]
-pub(crate) fn add<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
-    // We want this to compile to:
-    //      vpaddd   t, lhs, rhs
-    //      vpsubd   u, t, P
-    //      vpminud  res, t, u
-    // throughput: 1 cyc/vec (8 els/cyc)
-    // latency: 3 cyc
-
-    //   Let t := lhs + rhs. We want to return t mod P. Recall that lhs and rhs are in
-    // 0, ..., P - 1, so t is in 0, ..., 2 P - 2 (< 2^32). It suffices to return t if t < P and
-    // t - P otherwise.
-    //   Let u := (t - P) mod 2^32 and r := unsigned_min(t, u).
-    //   If t is in 0, ..., P - 1, then u is in (P - 1 <) 2^32 - P, ..., 2^32 - 1 and r = t.
-    // Otherwise, t is in P, ..., 2 P - 2, u is in 0, ..., P - 2 (< P) and r = u. Hence, r is t if
-    // t < P and t - P otherwise, as desired.
-
-    unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
-        let t = x86_64::_mm256_add_epi32(lhs, rhs);
-        let u = x86_64::_mm256_sub_epi32(t, MPAVX2::PACKED_P);
-        x86_64::_mm256_min_epu32(t, u)
-    }
-}
 
 // MONTGOMERY MULTIPLICATION
 //   This implementation is based on [1] but with minor changes. The reduction is as follows:
@@ -989,25 +971,6 @@ fn neg<MPAVX2: MontyParametersAVX2>(val: __m256i) -> __m256i {
     }
 }
 
-/// Subtract vectors of MontyField31 field elements in canonical form.
-/// If the inputs are not in canonical form, the result is undefined.
-#[inline]
-#[must_use]
-pub(crate) fn sub<MPAVX2: MontyParametersAVX2>(lhs: __m256i, rhs: __m256i) -> __m256i {
-    // We want this to compile to:
-    //      vpsubd   t, lhs, rhs
-    //      vpaddd   u, t, P
-    //      vpminud  res, t, u
-    // throughput: 1 cyc/vec (8 els/cyc)
-    // latency: 3 cyc
-
-    unsafe {
-        // Safety: If this code got compiled then AVX2 intrinsics are available.
-        let t = x86_64::_mm256_sub_epi32(lhs, rhs);
-        red_signed_to_canonical::<MPAVX2>(t)
-    }
-}
-
 impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> InjectiveMonomial<D>
     for PackedMontyField31AVX2<FP>
 {
@@ -1259,4 +1222,43 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
     let dot = PackedMontyField31AVX2::dot_product(&lhs, &rhs).0;
 
     res[..].copy_from_slice(&dot);
+}
+
+/// Multiplication by a base field element in a binomial extension field.
+#[inline]
+pub(crate) fn base_mul_packed<FP, const WIDTH: usize>(
+    a: [MontyField31<FP>; WIDTH],
+    b: MontyField31<FP>,
+    res: &mut [MontyField31<FP>; WIDTH],
+) where
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+{
+    match WIDTH {
+        1 => res[0] = a[0] * b,
+        4 => {
+            let zero = MontyField31::<FP>::ZERO;
+            let lhs = PackedMontyField31AVX2([a[0], a[1], a[2], a[3], zero, zero, zero, zero]);
+
+            let out = lhs * b;
+
+            res.copy_from_slice(&out.0[..4]);
+        }
+        5 => {
+            let zero = MontyField31::<FP>::ZERO;
+            let lhs = PackedMontyField31AVX2([a[0], a[1], a[2], a[3], zero, zero, zero, zero]);
+
+            let out = lhs * b;
+            res[4] = a[4] * b;
+
+            res[..4].copy_from_slice(&out.0[..4]);
+        }
+        8 => {
+            let lhs = PackedMontyField31AVX2([a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]]);
+
+            let out = lhs * b;
+
+            res.copy_from_slice(&out.0);
+        }
+        _ => panic!("Unsupported binomial extension degree: {}", WIDTH),
+    }
 }

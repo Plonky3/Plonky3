@@ -20,13 +20,14 @@ use p3_util::reconstitute_from_base;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 
-use crate::Goldilocks;
+use crate::{Goldilocks, P};
 
 const WIDTH: usize = 4;
 
 /// Vectorized AVX2 implementation of `Goldilocks` arithmetic.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // Needed to make `transmute`s safe.
+#[must_use]
 pub struct PackedGoldilocksAVX2(pub [Goldilocks; WIDTH]);
 
 impl PackedGoldilocksAVX2 {
@@ -49,7 +50,6 @@ impl PackedGoldilocksAVX2 {
     /// Elements of `Goldilocks` are allowed to be arbitrary u64s so this function
     /// is safe unlike the `Mersenne31/MontyField31` variants.
     #[inline]
-    #[must_use]
     pub(crate) fn from_vector(vector: __m256i) -> Self {
         unsafe {
             // Safety: `__m256i` can be transmuted to `[u64; WIDTH]` (since arrays elements are
@@ -63,7 +63,6 @@ impl PackedGoldilocksAVX2 {
     /// Copy `value` to all positions in a packed vector. This is the same as
     /// `From<Goldilocks>::from`, but `const`.
     #[inline]
-    #[must_use]
     const fn broadcast(value: Goldilocks) -> Self {
         Self([value; WIDTH])
     }
@@ -124,6 +123,11 @@ impl PrimeCharacteristicRing for PackedGoldilocksAVX2 {
     #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         f.into()
+    }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        Self::from_vector(halve(self.to_vector()))
     }
 
     #[inline]
@@ -301,6 +305,42 @@ fn neg(y: __m256i) -> __m256i {
     unsafe {
         let y_s = shift(y);
         _mm256_sub_epi64(SHIFTED_FIELD_ORDER, canonicalize_s(y_s))
+    }
+}
+
+/// Halve a vector of Goldilocks field elements.
+#[inline(always)]
+pub(crate) fn halve(input: __m256i) -> __m256i {
+    /*
+        We want this to compile to:
+            vpand    least_bit, val, ONE
+            vpsrlq   t, val, 1
+            vpsubq   neg_least_bit, ZERO, least_bit
+            vpand    maybe_half, HALF, neg_least_bit
+            vpaddq   res, t, maybe_half
+        throughput: 1.67 cyc/vec
+        latency: 4 cyc
+
+        Given an element val in [0, P), we want to compute val/2 mod P.
+        If val is even: val/2 mod P = val/2 = val >> 1.
+        If val is odd: val/2 mod P = (val + P)/2 = (val >> 1) + (P + 1)/2
+    */
+    unsafe {
+        // Safety: If this code got compiled then AVX2 intrinsics are available.
+        const ONE: __m256i = unsafe { transmute([1_i64; 4]) };
+        const ZERO: __m256i = unsafe { transmute([0_i64; 4]) };
+        let half = _mm256_set1_epi64x(P.div_ceil(2) as i64); // Compiler should realise this is constant.
+
+        let least_bit = _mm256_and_si256(input, ONE); // Determine the parity of val.
+        let t = _mm256_srli_epi64::<1>(input);
+
+        // Negate the least bit giving us either 0 (all bits 0) or -1 (all bits 1).
+        // It would be better to use vpsignq but this instruction does not exist.
+        let neg_least_bit = _mm256_sub_epi64(ZERO, least_bit);
+
+        // This does nothing when least_bit = 1 and sets the corresponding entry to 0 when least_bit = 0
+        let maybe_half = _mm256_and_si256(half, neg_least_bit);
+        _mm256_add_epi64(t, maybe_half)
     }
 }
 
