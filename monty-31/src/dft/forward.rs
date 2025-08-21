@@ -35,6 +35,22 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
             .rev()
             .collect()
     }
+
+    pub fn get_missing_twiddles(
+        requried_fft_size: usize,
+        curr_max_fft_size: usize,
+    ) -> Vec<Vec<Self>> {
+        let req_lg_n = log2_strict_usize(requried_fft_size);
+        let cur_lg_n = log2_strict_usize(curr_max_fft_size);
+        let generator = Self::two_adic_generator(req_lg_n);
+        let half_n = 1 << (req_lg_n - 1);
+        let nth_roots = generator.powers().collect_n(half_n);
+
+        (0..(req_lg_n - cur_lg_n))
+            .map(|i| nth_roots.iter().step_by(1 << i).copied().collect())
+            .rev()
+            .collect()
+    }
 }
 
 #[inline(always)]
