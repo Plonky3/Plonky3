@@ -408,12 +408,12 @@ fn prove_poseidon_verify_mmcs() -> Result<
     const HEIGHT: usize = 8;
 
     // Generate random inputs.
-
     let mut rng = SmallRng::seed_from_u64(1);
     let roots: [_; NUM_INPUTS] = array::from_fn(|_| rng.random::<[Val; DIGEST_ELEMS]>());
     let indices: [_; NUM_INPUTS] = array::from_fn(|_| rng.random::<u32>() as usize);
     let siblings: [[_; HEIGHT]; NUM_INPUTS] =
         array::from_fn(|_| array::from_fn(|_| rng.random::<[Val; DIGEST_ELEMS]>()));
+    // Generate extra digests for half the inputs.
     let extra_heights: [Vec<[_; DIGEST_ELEMS]>; NUM_INPUTS] = array::from_fn(|i| {
         if i % 2 == 0 {
             vec![rng.random::<[Val; DIGEST_ELEMS]>()]
@@ -442,11 +442,12 @@ fn prove_poseidon_verify_mmcs() -> Result<
     let hash = Poseidon2Sponge::new(perm24);
     let compress = Poseidon2Compression::new(perm16);
 
-    // Create the AIR
+    // Create the AIR.
     let air = MerkleTreeAir::<Val, _, _, DIGEST_ELEMS, MAX_TREE_HEIGHT> {
         m_t: MerkleTreeMmcs::new(hash, compress),
     };
 
+    // We add an extra digest at half the height every other input.
     let dims: [Vec<Dimensions>; 4] = array::from_fn(|i| {
         if i % 2 == 0 {
             vec![
@@ -470,6 +471,7 @@ fn prove_poseidon_verify_mmcs() -> Result<
     // Generate trace for Merkle tree table.
     let trace = air.generate_trace_rows(&inputs, &dims);
 
+    // Prove with Keccak.
     type Challenge = BinomialExtensionField<Val, 4>;
 
     type ByteHash = Keccak256Hash;
@@ -512,7 +514,6 @@ fn prove_poseidon_verify_mmcs() -> Result<
 
     let proof = prove(&config, &air, trace, &vec![]);
 
+    // Verify the proof.
     verify(&config, &air, &proof, &vec![])
-    // Check values.
-    // Prove and verify.
 }
