@@ -99,20 +99,25 @@ where
                 .assert_zero(local.index_bits[i].clone() - next.index_bits[i].clone());
         }
 
-        // `is_extra` may only be set before a hash with a sibling at the current height. So `local.is_extra` and `local.is_final` cannot be set at the same time.
+        // `is_extra` may only be set before a hash with a sibling at the current height.
+        // So `local.is_extra` and `local.is_final` cannot be set at the same time.
         builder
             .assert_bool(local.is_extra.clone() + local.is_final.clone() + next.is_final.clone());
 
         // Assert that the height encoding is updated correctly.
         for i in 0..local.height_encoding.len() {
+            // When we are processing an extra hash, the height encoding does not change.
             builder
                 .when(local.is_extra.clone())
                 .when_transition()
                 .assert_zero(local.height_encoding[i].clone() - next.height_encoding[i].clone());
+            // When the next row is a final row, the height encoding does not change:
+            // the final row is an extra row used to store the output of the last hash.
             builder
                 .when(next.is_final.clone())
                 .when_transition()
                 .assert_zero(local.height_encoding[i].clone() - next.height_encoding[i].clone());
+            // During one merkle batch verification, and when the current row is not `is_extra` and the next row is not final, the height encoding is shifted.
             builder
                 .when_transition()
                 .when(
@@ -123,15 +128,17 @@ where
                     local.height_encoding[i].clone()
                         - next.height_encoding[(i + 1) % MAX_TREE_HEIGHT].clone(),
                 );
-            builder
-                .when_transition()
-                .when(next_is_real.clone())
-                .when(next.is_final.clone())
-                .assert_zero(local.height_encoding[i].clone() - next.height_encoding[i].clone());
         }
+        // At the start, the height encoding is 1.
         builder
             .when_first_row()
             .assert_zero(AB::Expr::ONE - local.height_encoding[0].clone());
+        // When the next row is real and the current row is final, then the next height encoding should be 1.
+        builder
+            .when_transition()
+            .when(next_is_real.clone())
+            .when(local.is_final.clone())
+            .assert_zero(AB::Expr::ONE - next.height_encoding[0].clone());
 
         // Assert that we reach the maximal height.
         let mut sum = AB::Expr::ZERO;
@@ -367,7 +374,6 @@ where
     }
 }
 
-// TODO: write tests.
 #[test]
 fn prove_poseidon_verify_mmcs() -> Result<
     (),
