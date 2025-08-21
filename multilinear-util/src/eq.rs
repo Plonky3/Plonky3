@@ -19,18 +19,6 @@ use p3_field::{
 use p3_maybe_rayon::prelude::*;
 use p3_util::{iter_array_chunks_padded, log2_strict_usize};
 
-/// Log of number of threads to spawn.
-/// Long term this should be a modifiable parameter and potentially be in an optimization file somewhere.
-/// I've chosen 32 here as my machine has 20 logical cores.
-#[cfg(feature = "parallel")]
-const LOG_NUM_THREADS: usize = 5;
-#[cfg(not(feature = "parallel"))]
-/// If the parallel feature is not enabled, we default to a single thread.
-const LOG_NUM_THREADS: usize = 0;
-
-/// The number of threads to spawn for parallel computations.
-const NUM_THREADS: usize = 1 << LOG_NUM_THREADS;
-
 /// Computes the multilinear equality polynomial `α ⋅ eq(x, z)` over all `x ∈ \{0,1\}^n` for a point `z ∈ EF^n` and a
 /// scalar `α ∈ EF`.
 ///
@@ -354,6 +342,8 @@ where
 {
     // we assume that packing_width is a power of 2.
     let packing_width = F::Packing::WIDTH;
+    let num_threads = current_num_threads().next_power_of_two();
+    let log_num_threads = log2_strict_usize(num_threads);
 
     // Ensure that the output buffer size is correct:
     // It should be of size `2^n`, where `n` is the number of variables.
@@ -361,7 +351,7 @@ where
 
     // If the number of variables is small, there is no need to use
     // parallelization or packings.
-    if eval.len() <= packing_width + 1 + LOG_NUM_THREADS {
+    if eval.len() <= packing_width + 1 + log_num_threads {
         // A basic recursive approach.
         eval_eq_basic::<F, IF, EF, INITIALIZED>(eval, out, scalar);
     } else {
@@ -369,8 +359,8 @@ where
         let eval_len_min_packing = eval.len() - log_packing_width;
 
         // We split eval into three parts:
-        // - eval[..LOG_NUM_THREADS] (the first LOG_NUM_THREADS elements)
-        // - eval[LOG_NUM_THREADS..eval_len_min_packing] (the middle elements)
+        // - eval[..log_num_threads] (the first log_num_threads elements)
+        // - eval[log_num_threads..eval_len_min_packing] (the middle elements)
         // - eval[eval_len_min_packing..] (the last log_packing_width elements)
 
         // The middle elements are the ones which will be computed in parallel.
@@ -380,8 +370,10 @@ where
         // Note that this is a slightly different strategy to `eval_eq` which instead
         // uses PackedExtensionField elements. Whilst this involves slightly more mathematical
         // operations, it seems to be faster in practice due to less data moving around.
-        let mut parallel_buffer = E::PackedField::zero_vec(NUM_THREADS);
-        let out_chunk_size = out.len() / NUM_THREADS;
+        let mut parallel_buffer = E::PackedField::zero_vec(num_threads);
+
+        // As num_threads is a power of two we can divide using a bit-shift.
+        let out_chunk_size = out.len() >> log_num_threads;
 
         // Compute the equality polynomial corresponding to the last log_packing_width elements
         // and pack these.
@@ -389,14 +381,14 @@ where
 
         // Update the buffer so it contains the evaluations of the equality polynomial
         // with respect to parts one and three.
-        fill_buffer(eval[..LOG_NUM_THREADS].iter().rev(), &mut parallel_buffer);
+        fill_buffer(eval[..log_num_threads].iter().rev(), &mut parallel_buffer);
 
         // Finally do all computations involving the middle elements.
         out.par_chunks_exact_mut(out_chunk_size)
             .zip(parallel_buffer.par_iter())
             .for_each(|(out_chunk, &buffer_val)| {
                 E::process_chunk::<INITIALIZED>(
-                    &eval[LOG_NUM_THREADS..eval_len_min_packing],
+                    &eval[log_num_threads..eval_len_min_packing],
                     out_chunk,
                     buffer_val,
                     scalar,
