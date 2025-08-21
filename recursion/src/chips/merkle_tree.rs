@@ -1,45 +1,48 @@
+use core::fmt::Debug;
 use core::{
     borrow::{Borrow, BorrowMut},
     cmp::Reverse,
-    mem::transmute,
 };
 
 use alloc::vec;
 use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_air::{Air, AirBuilder, BaseAir};
-use p3_field::{PackedValue, PrimeCharacteristicRing, PrimeField64};
+
+use p3_field::{Field, PackedField, PackedValue, PrimeCharacteristicRing, PrimeField64};
+
 use p3_matrix::{Dimensions, Matrix, dense::RowMajorMatrix};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
-use p3_util::indices_arr;
 
 const MAX_TREE_HEIGHT: usize = 32;
-// const DIGEST_ELEMS: usize = 32;
-pub struct MerkleTreeAir<F, H, C, const DIGEST_ELEMS: usize> {
-    pub m_t: MerkleTreeMmcs<F, F, H, C, DIGEST_ELEMS>,
+pub struct MerkleTreeAir<F, H, C, const DIGEST_ELEMS: usize>
+where
+    F: Field,
+{
+    pub m_t: MerkleTreeMmcs<<F as Field>::Packing, <F as Field>::Packing, H, C, DIGEST_ELEMS>,
 }
 
 impl<F, H, C, const DIGEST_ELEMS: usize> BaseAir<F> for MerkleTreeAir<F, H, C, DIGEST_ELEMS>
 where
-    F: PackedValue,
-    H: CryptographicHasher<F::Value, [F::Value; DIGEST_ELEMS]>
+    F: Field,
+    H: CryptographicHasher<<F as PackedValue>::Value, [<F as PackedValue>::Value; DIGEST_ELEMS]>
         + CryptographicHasher<F, [F; DIGEST_ELEMS]>
         + Sync,
-    C: PseudoCompressionFunction<[F::Value; DIGEST_ELEMS], 2>
+    C: PseudoCompressionFunction<[<F as PackedValue>::Value; DIGEST_ELEMS], 2>
         + PseudoCompressionFunction<[F; DIGEST_ELEMS], 2>
         + Sync,
-    F::Value: Eq,
+    F: Eq,
 {
     fn width(&self) -> usize {
-        NUM_MERKLE_TREE_COLS
+        get_num_merkle_tree_cols::<DIGEST_ELEMS>()
     }
 }
 
 impl<AB: AirBuilder, H, C, const DIGEST_ELEMS: usize> Air<AB>
     for MerkleTreeAir<AB::F, H, C, DIGEST_ELEMS>
 where
-    AB::F: PackedValue,
+    AB::F: Field,
     H: CryptographicHasher<
             <AB::F as PackedValue>::Value,
             [<AB::F as PackedValue>::Value; DIGEST_ELEMS],
@@ -48,7 +51,7 @@ where
     C: PseudoCompressionFunction<[<AB::F as PackedValue>::Value; DIGEST_ELEMS], 2>
         + PseudoCompressionFunction<[AB::F; DIGEST_ELEMS], 2>
         + Sync,
-    <AB::F as PackedValue>::Value: Eq,
+    AB::F: Eq,
 {
     #[inline]
     fn eval(&self, builder: &mut AB) {
@@ -78,8 +81,9 @@ where
             next_is_real += next.height_encoding[i].clone();
         }
         builder
+            .when_transition()
             .when(AB::Expr::ONE - is_real)
-            .assert_zero(next_is_real);
+            .assert_zero(next_is_real.clone());
 
         // Assert that the index bits are boolean.
         for i in 0..local.index_bits.len() {
@@ -96,8 +100,7 @@ where
 
         // `is_extra` may only be set before a hash with a sibling at the current height. So `local.is_extra` and `local.is_final` cannot be set at the same time.
         builder
-            .when_transition()
-            .assert_bool(local.is_extra.clone() + local.is_final.clone());
+            .assert_bool(local.is_extra.clone() + local.is_final.clone() + next.is_final.clone());
 
         // Assert that the height encoding is updated correctly.
         for i in 0..local.height_encoding.len() {
@@ -106,12 +109,24 @@ where
                 .when_transition()
                 .assert_zero(local.height_encoding[i].clone() - next.height_encoding[i].clone());
             builder
+                .when(next.is_final.clone())
                 .when_transition()
-                .when(AB::Expr::ONE - (local.is_extra.clone() + next.is_final.clone()))
+                .assert_zero(local.height_encoding[i].clone() - next.height_encoding[i].clone());
+            builder
+                .when_transition()
+                .when(
+                    AB::Expr::ONE
+                        - (local.is_extra.clone() + next.is_final.clone() + local.is_final.clone()),
+                )
                 .assert_zero(
                     local.height_encoding[i].clone()
                         - next.height_encoding[(i + 1) % MAX_TREE_HEIGHT].clone(),
                 );
+            builder
+                .when_transition()
+                .when(next_is_real.clone())
+                .when(next.is_final.clone())
+                .assert_zero(local.height_encoding[i].clone() - next.height_encoding[i].clone());
         }
         builder
             .when_first_row()
@@ -151,7 +166,7 @@ where
         }
 
         // Interactions:
-        // Receive the index and the initial root.
+        // Receive (index, initial_root).
         // We send `(cur_hash, next_state)` to the Hash table to check the output, with filter `is_final`.
         // We also need an interaction when `is_extra` is set, as it corresponds to the hash of opened values at another height.
         // When `is_final`, we send the root to FRI (which receives the actual root, so that we can check the equality).
@@ -182,14 +197,14 @@ pub struct MerkleTreeCols<T, const DIGEST_ELEMS: usize> {
     pub extra_height: T,
 }
 
-pub const NUM_MERKLE_TREE_COLS: usize = size_of::<MerkleTreeCols<u8, 32>>();
-const fn make_col_map() -> MerkleTreeCols<usize, 32> {
-    unsafe { transmute(indices_arr::<NUM_MERKLE_TREE_COLS>()) }
+fn get_num_merkle_tree_cols<const DIGEST_ELEMS: usize>() -> usize {
+    size_of::<MerkleTreeCols<u8, DIGEST_ELEMS>>()
 }
 
 impl<T, const DIGEST_ELEMS: usize> Borrow<MerkleTreeCols<T, DIGEST_ELEMS>> for [T] {
     fn borrow(&self) -> &MerkleTreeCols<T, DIGEST_ELEMS> {
-        debug_assert_eq!(self.len(), NUM_MERKLE_TREE_COLS);
+        let num_merkle_tree_cols = get_num_merkle_tree_cols::<DIGEST_ELEMS>();
+        debug_assert_eq!(self.len(), num_merkle_tree_cols);
         let (prefix, shorts, suffix) =
             unsafe { self.align_to::<MerkleTreeCols<T, DIGEST_ELEMS>>() };
         debug_assert!(prefix.is_empty(), "Alignment should match");
@@ -201,7 +216,7 @@ impl<T, const DIGEST_ELEMS: usize> Borrow<MerkleTreeCols<T, DIGEST_ELEMS>> for [
 
 impl<T, const DIGEST_ELEMS: usize> BorrowMut<MerkleTreeCols<T, DIGEST_ELEMS>> for [T] {
     fn borrow_mut(&mut self) -> &mut MerkleTreeCols<T, DIGEST_ELEMS> {
-        debug_assert_eq!(self.len(), NUM_MERKLE_TREE_COLS);
+        debug_assert_eq!(self.len(), get_num_merkle_tree_cols::<DIGEST_ELEMS>());
         let (prefix, shorts, suffix) =
             unsafe { self.align_to_mut::<MerkleTreeCols<T, DIGEST_ELEMS>>() };
         debug_assert!(prefix.is_empty(), "Alignment should match");
@@ -213,16 +228,19 @@ impl<T, const DIGEST_ELEMS: usize> BorrowMut<MerkleTreeCols<T, DIGEST_ELEMS>> fo
 
 impl<F, H, C, const DIGEST_ELEMS: usize> MerkleTreeAir<F, H, C, DIGEST_ELEMS>
 where
-    F: PackedValue + PrimeField64,
-    H: CryptographicHasher<F::Value, [F::Value; DIGEST_ELEMS]>,
-    C: PseudoCompressionFunction<[F::Value; DIGEST_ELEMS], 2>
+    F: Field,
+    H: CryptographicHasher<<F as PackedValue>::Value, [<F as PackedValue>::Value; DIGEST_ELEMS]>
+        + CryptographicHasher<F, [F; DIGEST_ELEMS]>
+        + Sync,
+    C: PseudoCompressionFunction<[<F as PackedValue>::Value; DIGEST_ELEMS], 2>
         + PseudoCompressionFunction<[F; DIGEST_ELEMS], 2>
         + Sync,
+    F: Eq,
+    F: PrimeField64,
 {
-    pub fn generate_trace_rows<MerkleTreeMmcs>(
+    pub fn generate_trace_rows(
         &self,
-        // root, index, height, siblings, extra_openings.
-        // Note: The extra_openings should are assumed to be sorted by height in a decreasing order.
+        // Note: The extra_openings are assumed to be sorted by height in a decreasing order.
         inputs: &[(
             [F; DIGEST_ELEMS],
             usize,
@@ -230,7 +248,7 @@ where
             Vec<[F; DIGEST_ELEMS]>,
         )],
         dimensions: &[Vec<Dimensions>],
-    ) -> RowMajorMatrix<F> {
+    ) -> RowMajorMatrix<<F as PackedField>::Scalar> {
         // Compute the number of rows exactly: whenever the height changes, we need an extra row.
         let mut max_num_rows = 0;
         for dims in dimensions {
@@ -241,15 +259,16 @@ where
                     max_num_rows += 1;
                     cur_height = next_height;
                 }
-                max_num_rows += 1;
             }
             // Final row for each input.
-            max_num_rows += 1;
+            max_num_rows += dims[0].height + 1;
         }
+        // Count padding rows.
+        max_num_rows = max_num_rows.next_power_of_two();
+        let num_merkle_tree_cols = get_num_merkle_tree_cols::<DIGEST_ELEMS>();
+        let trace_length = max_num_rows * num_merkle_tree_cols;
 
-        let trace_length = max_num_rows * NUM_MERKLE_TREE_COLS;
-
-        let mut trace = RowMajorMatrix::new(F::zero_vec(trace_length), NUM_MERKLE_TREE_COLS);
+        let mut trace = RowMajorMatrix::new(F::zero_vec(trace_length), num_merkle_tree_cols);
 
         let (prefix, rows, suffix) = unsafe {
             trace
@@ -281,6 +300,7 @@ where
             for (cur_height, &sibling) in input.2.iter().enumerate() {
                 let row = &mut rows[row_counter];
                 row.state = state;
+                row.index_bits = index_bits;
                 row.height_encoding[cur_height] = F::ONE;
                 row.length = F::from_usize(max_height);
                 row_counter += 1;
@@ -294,7 +314,6 @@ where
                 state = self.m_t.compress.compress([left, right]);
                 index >>= 1;
                 cur_height_padded >>= 1;
-                row_counter += 1;
 
                 // Check if there are any new matrix rows to inject at the next height.
                 let next_height = heights_tallest_first
@@ -337,4 +356,153 @@ where
 
         trace
     }
+}
+
+// TODO: write tests.
+#[test]
+fn prove_poseidon_verify_mmcs() -> Result<
+    (),
+    p3_uni_stark::VerificationError<
+        p3_fri::verifier::FriError<
+            p3_merkle_tree::MerkleTreeError,
+            p3_merkle_tree::MerkleTreeError,
+        >,
+    >,
+> {
+    const DIGEST_ELEMS: usize = 8;
+    use rand::{Rng, SeedableRng, rngs::SmallRng};
+
+    use core::array;
+    use p3_challenger::HashChallenger;
+    use p3_challenger::SerializingChallenger32;
+    use p3_commit::ExtensionMmcs;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_fri::TwoAdicFriPcs;
+    use p3_fri::create_benchmark_fri_params;
+    use p3_keccak::Keccak256Hash;
+    use p3_keccak::KeccakF;
+    use p3_koala_bear::KoalaBear;
+    use p3_koala_bear::Poseidon2KoalaBear;
+    use p3_symmetric::{
+        CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
+    };
+    use p3_uni_stark::StarkConfig;
+    use p3_uni_stark::prove;
+    use p3_uni_stark::verify;
+
+    type Val = KoalaBear;
+
+    type FieldHash = SerializingHasher<U64Hash>;
+
+    const NUM_INPUTS: usize = 4;
+    const HEIGHT: usize = 8;
+
+    // Generate random inputs.
+
+    let mut rng = SmallRng::seed_from_u64(1);
+    let roots: [_; NUM_INPUTS] = array::from_fn(|_| rng.random::<[Val; DIGEST_ELEMS]>());
+    let indices: [_; NUM_INPUTS] = array::from_fn(|_| rng.random::<u32>() as usize);
+    let siblings: [[_; HEIGHT]; NUM_INPUTS] =
+        array::from_fn(|_| array::from_fn(|_| rng.random::<[Val; DIGEST_ELEMS]>()));
+    let extra_heights: [Vec<[_; DIGEST_ELEMS]>; NUM_INPUTS] = array::from_fn(|i| {
+        if i % 2 == 0 {
+            vec![rng.random::<[Val; DIGEST_ELEMS]>()]
+        } else {
+            vec![]
+        }
+    });
+
+    let inputs = (0..NUM_INPUTS)
+        .map(|i| {
+            (
+                roots[i],
+                indices[i],
+                siblings[i].to_vec(),
+                extra_heights[i].to_vec(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let perm16 = Poseidon2KoalaBear::<16>::new_from_rng_128(&mut rng);
+    let perm24 = Poseidon2KoalaBear::<24>::new_from_rng_128(&mut rng);
+
+    type Poseidon2Sponge<Perm24> = PaddingFreeSponge<Perm24, 24, 16, 8>;
+    type Poseidon2Compression<Perm16> = TruncatedPermutation<Perm16, 2, 8, 16>;
+
+    let hash = Poseidon2Sponge::new(perm24);
+    let compress = Poseidon2Compression::new(perm16);
+
+    // Create the AIR
+    let air = MerkleTreeAir::<Val, _, _, DIGEST_ELEMS> {
+        m_t: MerkleTreeMmcs::new(hash, compress),
+    };
+
+    let dims: [Vec<Dimensions>; 4] = array::from_fn(|i| {
+        if i % 2 == 0 {
+            vec![
+                Dimensions {
+                    width: get_num_merkle_tree_cols::<DIGEST_ELEMS>(),
+                    height: HEIGHT,
+                },
+                Dimensions {
+                    width: get_num_merkle_tree_cols::<DIGEST_ELEMS>(),
+                    height: HEIGHT / 2,
+                },
+            ]
+        } else {
+            vec![Dimensions {
+                width: get_num_merkle_tree_cols::<DIGEST_ELEMS>(),
+                height: HEIGHT,
+            }]
+        }
+    });
+
+    // Generate trace for Merkle tree table.
+    let trace = air.generate_trace_rows(&inputs, &dims);
+
+    type Challenge = BinomialExtensionField<Val, 4>;
+
+    type ByteHash = Keccak256Hash;
+    let byte_hash = ByteHash {};
+
+    type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
+    let u64_hash = U64Hash::new(KeccakF {});
+
+    let field_hash = FieldHash::new(u64_hash);
+
+    type MyCompress = CompressionFunctionFromHasher<U64Hash, 2, 4>;
+    let compress = MyCompress::new(u64_hash);
+
+    type ValMmcs = MerkleTreeMmcs<
+        [Val; p3_keccak::VECTOR_LEN],
+        [u64; p3_keccak::VECTOR_LEN],
+        FieldHash,
+        MyCompress,
+        4,
+    >;
+
+    let val_mmcs = ValMmcs::new(field_hash, compress);
+
+    type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+
+    type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
+    let challenger = Challenger::from_hasher(vec![], byte_hash);
+
+    let fri_params = create_benchmark_fri_params(challenge_mmcs);
+
+    type Dft = p3_dft::Radix2Bowers;
+    let dft = Dft::default();
+
+    type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
+    let pcs = Pcs::new(dft, val_mmcs, fri_params);
+
+    type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
+    let config = MyConfig::new(pcs, challenger);
+
+    let proof = prove(&config, &air, trace, &vec![]);
+
+    verify(&config, &air, &proof, &vec![])
+    // Check values.
+    // Prove and verify.
 }
