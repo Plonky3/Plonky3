@@ -101,10 +101,13 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
         // returns a vector of twiddles of length log_2(fft_len) - 1.
         let curr_max_fft_len = 2 << self.twiddles.read().len();
         if fft_len > curr_max_fft_len {
-            let new_twiddles = MontyField31::roots_of_unity_table(fft_len);
-            // We can obtain the inverse twiddles by reversing and
-            // negating the twiddles.
-            let new_inv_twiddles = new_twiddles
+            let missing_twiddles = MontyField31::get_missing_twiddles(fft_len, curr_max_fft_len);
+            debug_assert_eq!(fft_len % curr_max_fft_len, 0);
+            debug_assert_eq!(
+                missing_twiddles.len(),
+                log2_strict_usize(fft_len / curr_max_fft_len)
+            );
+            let missing_inv_twiddles = missing_twiddles
                 .iter()
                 .map(|ts| {
                     // The first twiddle is still one, we reverse and negate the rest...
@@ -119,14 +122,14 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
                         )
                         .collect()
                 })
-                .collect();
+                .collect::<Vec<_>>();
             {
-                let mut tw_lock = self.twiddles.write();
-                *tw_lock = new_twiddles; // move in the new table
+                self.twiddles.write().extend_from_slice(&missing_twiddles);
             }
             {
-                let mut inv_tw_lock = self.inv_twiddles.write();
-                *inv_tw_lock = new_inv_twiddles; // move in the new table
+                self.inv_twiddles
+                    .write()
+                    .extend_from_slice(&missing_inv_twiddles);
             }
         }
     }
