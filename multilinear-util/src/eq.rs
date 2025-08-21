@@ -65,7 +65,7 @@ where
     F: Field,
     EF: ExtensionField<F>,
 {
-    // Pass the the combined method using the `ExtFieldEvaluator` strategy.
+    // Pass the combined method using the `ExtFieldEvaluator` strategy.
     eval_eq_common::<F, EF, EF, ExtFieldEvaluator<F, EF>, INITIALIZED>(eval, out, scalar);
 }
 
@@ -103,7 +103,7 @@ where
     F: Field,
     EF: ExtensionField<F>,
 {
-    // Pass the the combined method using the `BaseFieldEvaluator` strategy.
+    // Pass the combined method using the `BaseFieldEvaluator` strategy.
     eval_eq_common::<F, F, EF, BaseFieldEvaluator<F, EF>, INITIALIZED>(eval, out, scalar);
 }
 
@@ -251,7 +251,7 @@ trait EqualityEvaluator {
 ///
 /// We stay in the base field for as long as possible to simplify instructions and
 /// reduce the amount of data transferred between cores. In particular this means we
-/// hold of on scaling by `scalar` until the very end.
+/// hold off on scaling by `scalar` until the very end.
 struct BaseFieldEvaluator<F, EF>(std::marker::PhantomData<(F, EF)>);
 
 /// Implementation for extension field case.
