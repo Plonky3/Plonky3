@@ -1,6 +1,6 @@
 //! And AIR for the Poseidon2 permutation.
 
-// #![no_std]
+#![no_std]
 
 extern crate alloc;
 
