@@ -16,7 +16,7 @@ pub(crate) fn shake256_hash(seed_bytes: &[u8], num_bytes: usize) -> Vec<u8> {
     result
 }
 
-/// Return y such that |y - 2^x| < tol for x an f32.
+/// Return y such that |y - 2^x| < tol for x a positive f32.
 ///
 /// This is a replacement for f32::powf() when libm isn't available;
 /// it is slow and shouldn't be used for anything important.
