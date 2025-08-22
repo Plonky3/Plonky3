@@ -21,6 +21,17 @@ use crate::{
 /// The number of layers to compute in each parallelization.
 const LAYERS_PER_GROUP: usize = 3;
 
+/// The cache is structured so readers can use twiddles **without holding locks**:
+///
+/// - `Arc<[F]>` (inner): one level’s immutable twiddle array, shared by readers.
+/// - `Arc<[Arc<[F]>]>` (middle): an immutable **snapshot** of all levels; readers clone
+///   this and drop the lock immediately. Writers publish a longer snapshot atomically.
+/// - `RwLock<…>`: protects the short critical section where a new snapshot is published.
+/// - `Arc<…>` (outer field wrapper): lets `RecursiveDft` be cheaply cloned so multiple
+///   threads share the same cache instance.
+///
+type ThreadSafeTable<F> = Arc<RwLock<Arc<[Arc<[F]>]>>>;
+
 /// An FFT algorithm which divides a butterfly network's layers into two halves.
 ///
 /// Unlike other FFT algorithms, this algorithm is optimized for small batch sizes.
@@ -40,10 +51,10 @@ pub struct Radix2DFTSmallBatch<F> {
     /// bit reversed order. The final set of twiddles `twiddles[-1]` is the
     /// one element vectors `[1]` and more general `twiddles[-i]` has length `2^i`.
     ///
-    twiddles: Arc<RwLock<Vec<Vec<F>>>>,
+    twiddles: ThreadSafeTable<F>,
 
     /// Similar to `twiddles`, but stored the inverses used for the inverse fft.
-    inv_twiddles: Arc<RwLock<Vec<Vec<F>>>>,
+    inv_twiddles: ThreadSafeTable<F>,
 }
 
 impl<F: TwoAdicField> Radix2DFTSmallBatch<F> {
@@ -104,6 +115,15 @@ impl<F: TwoAdicField> Radix2DFTSmallBatch<F> {
             new_inv_twiddles.iter_mut().for_each(|ts| {
                 reverse_slice_index_bits(ts);
             });
+            let new_twiddles: Arc<[Arc<[F]>]> = new_twiddles
+                .into_iter()
+                .map(|tw| Arc::from(tw.into_boxed_slice()))
+                .collect();
+            let new_inv_twiddles: Arc<[Arc<[F]>]> = new_inv_twiddles
+                .into_iter()
+                .map(|tw| Arc::from(tw.into_boxed_slice()))
+                .collect();
+
             {
                 let mut tw_lock = self.twiddles.write();
                 let cur_have = 1usize << tw_lock.len();
@@ -134,10 +154,8 @@ where
         let log_h = log2_strict_usize(h);
 
         self.update_twiddles(h);
-        let root_table = {
-            let g = self.twiddles.read();
-            g[g.len() - log_h..].to_vec()
-        };
+        let g = self.twiddles.read().clone(); // Lock is dropped immediately
+        let root_table = &g[g.len() - log_h..];
 
         // The strategy will be to do a standard round-by-round parallelization
         // until the chunk size is smaller than `num_par_rows * mat.width()` after which we
@@ -188,14 +206,12 @@ where
         let log_h = log2_strict_usize(h);
 
         self.update_twiddles(h);
-        let root_table: Vec<Vec<F>> = {
-            let g = self.inv_twiddles.read();
-            let start = g
-                .len()
-                .checked_sub(log_h)
-                .expect("log_h exceeds inv_twiddles length");
-            g[start..].to_vec()
-        };
+        let g = self.inv_twiddles.read().clone(); // Lock is dropped immediately
+        let start = g
+            .len()
+            .checked_sub(log_h)
+            .expect("log_h exceeds inv_twiddles length");
+        let root_table = &g[start..];
 
         // Find the number of rows which can roughly fit in L1 cache.
         // The strategy is the same as `dft_batch` but in reverse.
@@ -259,22 +275,18 @@ where
         let log_h = log2_strict_usize(h);
 
         self.update_twiddles(h << added_bits);
-        let root_table: Vec<Vec<F>> = {
-            let g = self.twiddles.read();
-            let start = g
-                .len()
-                .checked_sub(log_h + added_bits)
-                .expect("log_h exceeds twiddles length");
-            g[start..].to_vec()
-        }; // lock released here
-        let inv_root_table: Vec<Vec<F>> = {
-            let g = self.inv_twiddles.read();
-            let start = g
-                .len()
-                .checked_sub(log_h)
-                .expect("log_h exceeds inv_twiddles length");
-            g[start..].to_vec()
-        }; // lock released here
+        let g = self.twiddles.read().clone(); // Lock is dropped immediately
+        let start = g
+            .len()
+            .checked_sub(log_h + added_bits)
+            .expect("log_h exceeds twiddles length");
+        let root_table = &g[start..];
+        let g = self.inv_twiddles.read().clone(); // Lock is dropped immediately
+        let start = g
+            .len()
+            .checked_sub(log_h)
+            .expect("log_h exceeds inv_twiddles length");
+        let inv_root_table = &g[start..];
         let output_height = h << added_bits;
 
         // The matrix which we will use to store the output.
@@ -418,7 +430,7 @@ fn dft_layer_par<F: Field, B: Butterfly<F>>(
 ///
 /// This avoids passing data between threads, which can be expensive.
 #[inline]
-fn par_remaining_layers<F: Field>(mat: &mut [F], chunk_size: usize, root_table: &[Vec<F>]) {
+fn par_remaining_layers<F: Field>(mat: &mut [F], chunk_size: usize, root_table: &[Arc<[F]>]) {
     mat.par_chunks_exact_mut(chunk_size)
         .enumerate()
         .for_each(|(index, chunk)| {
@@ -427,7 +439,7 @@ fn par_remaining_layers<F: Field>(mat: &mut [F], chunk_size: usize, root_table: 
 }
 
 /// Performs a collection of DIT layers on a chunk of the matrix.
-fn remaining_layers<F: Field>(chunk: &mut [F], root_table: &[Vec<F>], index: usize) {
+fn remaining_layers<F: Field>(chunk: &mut [F], root_table: &[Arc<[F]>], index: usize) {
     for (layer, twiddles) in root_table.iter().rev().enumerate() {
         let num_twiddles_per_block = 1 << layer;
         let start = index * num_twiddles_per_block;
@@ -449,7 +461,7 @@ fn remaining_layers<F: Field>(chunk: &mut [F], root_table: &[Vec<F>], index: usi
 fn par_initial_layers<F: Field>(
     mat: &mut [F],
     chunk_size: usize,
-    root_table: &[Vec<F>],
+    root_table: &[Arc<[F]>],
     log_height: usize,
 ) {
     let inv_height = F::ONE.div_2exp_u64(log_height as u64);
@@ -464,7 +476,7 @@ fn par_initial_layers<F: Field>(
 
 /// Performs a collection of DIF layers on a chunk of the matrix.
 #[inline]
-fn initial_layers<F: Field>(chunk: &mut [F], root_table: &[Vec<F>], index: usize) {
+fn initial_layers<F: Field>(chunk: &mut [F], root_table: &[Arc<[F]>], index: usize) {
     let num_rounds = root_table.len();
 
     for (layer, twiddles) in root_table.iter().enumerate() {
@@ -486,8 +498,8 @@ fn par_middle_layers<F: Field>(
     in_mat: &mut RowMajorMatrixViewMut<'_, F>,
     out_mat: &mut RowMajorMatrixViewMut<'_, F>,
     num_par_rows: usize,
-    root_table: &[Vec<F>],
-    inv_root_table: &[Vec<F>],
+    root_table: &[Arc<[F]>],
+    inv_root_table: &[Arc<[F]>],
     added_bits: usize,
     shift: F,
 ) {
@@ -697,7 +709,7 @@ fn dft_layer_par_triple<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>
 /// may not be a multiple of `LAYERS_PER_GROUP`.
 fn dft_layer_par_extra_layers<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>(
     mat: &mut RowMajorMatrixViewMut<'_, F>,
-    root_table: &[Vec<F>],
+    root_table: &[Arc<[F]>],
     multi_layer: M,
 ) {
     match root_table.len() {
