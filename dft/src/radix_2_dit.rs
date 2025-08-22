@@ -1,6 +1,5 @@
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
-use alloc::vec::Vec;
 
 use p3_field::{Field, TwoAdicField};
 use p3_matrix::Matrix;
@@ -31,23 +30,31 @@ pub struct Radix2Dit<F: TwoAdicField> {
     ///
     /// `RwLock` is used to enable interior mutability for caching purposes along with thread
     /// safety.
-    twiddles: Arc<RwLock<BTreeMap<usize, Arc<Vec<F>>>>>,
+    twiddles: Arc<RwLock<BTreeMap<usize, Arc<[F]>>>>,
 }
 
 impl<F: TwoAdicField> Radix2Dit<F> {
-    fn get_twiddles(&self, log_h: usize) -> Arc<Vec<F>> {
-        // Single read path
-        let up = self.twiddles.upgradeable_read();
-        if let Some(v) = up.get(&log_h) {
-            return Arc::clone(v);
+    /// Ensure the twiddle table for size `2^log_h` is present.
+    fn update_twiddles(&self, log_h: usize) {
+        if self.twiddles.read().contains_key(&log_h) {
+            return; // fast path
         }
         // Compute without holding the write lock
         let n = 1usize << log_h;
         let root = F::two_adic_generator(log_h);
-        let tw = Arc::new(root.powers().collect_n(n));
-        // Upgrade to write; insert or reuse if another thread won the race
-        let mut w = RwLockUpgradableGuard::upgrade(up);
-        Arc::clone(w.entry(log_h).or_insert_with(|| Arc::clone(&tw)))
+        let built: Arc<[F]> = Arc::from(root.powers().take(n).collect().into_boxed_slice());
+
+        // Publish (double-check)
+        let mut w = self.twiddles.write();
+        if !w.contains_key(&log_h) {
+            w.insert(log_h, built);
+        }
+        // else: another thread already inserted
+    }
+
+    /// Read-only accessor; call `update_twiddles` first if you need it to exist.
+    fn get_twiddles(&self, log_h: usize) -> Option<Arc<[F]>> {
+        self.twiddles.read().get(&log_h).cloned()
     }
 }
 
@@ -59,7 +66,8 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit<F> {
         let log_h = log2_strict_usize(h);
 
         // Compute twiddle factors, or take memoized ones if already available.
-        let twiddles = self.get_twiddles(log_h);
+        self.update_twiddles(log_h);
+        let twiddles = self.get_twiddles(log_h).unwrap();
 
         // DIT butterfly
         reverse_matrix_index_bits(&mut mat);
@@ -80,11 +88,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit<F> {
 /// - `mat`: Mutable matrix view with height as a power of two.
 /// - `layer`: Index of the current FFT layer (starting at 0).
 /// - `twiddles`: Precomputed twiddle factors for this layer.
-fn dit_layer<F: Field>(
-    mat: &mut RowMajorMatrixViewMut<'_, F>,
-    layer: usize,
-    twiddles: Arc<Vec<F>>,
-) {
+fn dit_layer<F: Field>(mat: &mut RowMajorMatrixViewMut<'_, F>, layer: usize, twiddles: Arc<[F]>) {
     // Get the number of rows in the matrix (must be a power of two)
     let h = mat.height();
     // Compute reversed layer index to access twiddle indices correctly
