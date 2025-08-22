@@ -5,7 +5,7 @@
 //! Inspired by Bernstein's djbfft: https://cr.yp.to/djbfft.html
 
 extern crate alloc;
-use alloc::vec::Vec;
+use alloc::sync::Arc;
 
 use itertools::izip;
 use p3_field::{Field, PackedFieldPow2, PackedValue, PrimeCharacteristicRing};
@@ -141,7 +141,10 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         }
     }
 
-    fn backward_iterative(packed_input: &mut [<Self as Field>::Packing], root_table: &[Vec<Self>]) {
+    fn backward_iterative(
+        packed_input: &mut [<Self as Field>::Packing],
+        root_table: &[Arc<[Self]>],
+    ) {
         assert!(packed_input.len() >= 2);
         let packing_width = <Self as Field>::Packing::WIDTH;
         let n = packed_input.len() * packing_width;
@@ -253,7 +256,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn backward_32(a: &mut [Self], root_table: &[Vec<Self>]) {
+    fn backward_32(a: &mut [Self], root_table: &[Arc<[Self]>]) {
         assert_eq!(a.len(), 32);
 
         // Safe because a.len() == 32
@@ -267,7 +270,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     /// Assumes `input.len() >= 64`.
     /// current packing widths.
     #[inline]
-    fn backward_fft_recur(input: &mut [<Self as Field>::Packing], root_table: &[Vec<Self>]) {
+    fn backward_fft_recur(input: &mut [<Self as Field>::Packing], root_table: &[Arc<[Self]>]) {
         const ITERATIVE_FFT_THRESHOLD: usize = 1024;
 
         let n = input.len() * <Self as Field>::Packing::WIDTH;
@@ -286,7 +289,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline]
-    pub fn backward_fft(input: &mut [Self], root_table: &[Vec<Self>]) {
+    pub fn backward_fft(input: &mut [Self], root_table: &[Arc<[Self]>]) {
         let n = input.len();
         if n == 1 {
             return;
