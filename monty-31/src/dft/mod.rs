@@ -3,7 +3,6 @@ extern crate alloc;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::iter;
 
 use itertools::izip;
 use p3_dft::TwoAdicSubgroupDft;
@@ -41,27 +40,25 @@ fn coset_shift_and_scale_rows<F: Field>(
         });
 }
 
+/// The cache is structured so readers can use twiddles **without holding locks**:
+///
+/// - `Arc<[F]>` (inner): one level’s immutable twiddle array, shared by readers.
+/// - `Arc<[Arc<[F]>]>` (middle): an immutable **snapshot** of all levels; readers clone
+///   this and drop the lock immediately. Writers publish a longer snapshot atomically.
+/// - `RwLock<…>`: protects the short critical section where a new snapshot is published.
+/// - `Arc<…>` (outer field wrapper): lets `RecursiveDft` be cheaply cloned so multiple
+///   threads share the same cache instance.
+///
+type ThreadSafeTable<F> = Arc<RwLock<Arc<[Arc<[F]>]>>>;
+
 /// Recursive DFT, decimation-in-frequency in the forward direction,
 /// decimation-in-time in the backward (inverse) direction.
 #[derive(Clone, Debug, Default)]
 pub struct RecursiveDft<F> {
-    /// The cache is structured so readers can use twiddles **without holding locks**:
-    ///
-    /// - `Arc<[F]>` (inner): one level’s immutable twiddle array, shared by readers.
-    /// - `Arc<[Arc<[F]>]>` (middle): an immutable **snapshot** of all levels; readers clone
-    ///   this and drop the lock immediately. Writers publish a longer snapshot atomically.
-    /// - `RwLock<…>`: protects the short critical section where a new snapshot is published.
-    /// - `Arc<…>` (outer field wrapper): lets `RecursiveDft` be cheaply cloned so multiple
-    ///   threads share the same cache instance.
-    /// Forward twiddle tables:
-    /// `Arc<RwLock< Arc<[ Arc<[F]> ]> >>`
-    ///       └─ lock to publish a longer snapshot
-    ///              └─ snapshot of levels (index = level)
-    ///                     └─ one twiddle level (immutable)
-    twiddles: Arc<RwLock<Arc<[Arc<[F]>]>>>,
-
-    /// Inverse twiddle tables (same structure as `twiddles`).
-    inv_twiddles: Arc<RwLock<Arc<[Arc<[F]>]>>>,
+    /// Forward twiddle tables
+    twiddles: ThreadSafeTable<F>,
+    /// Inverse twiddle tables
+    inv_twiddles: ThreadSafeTable<F>,
 }
 
 impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {

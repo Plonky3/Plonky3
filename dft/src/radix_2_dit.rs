@@ -7,7 +7,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
-use spin::{RwLock, RwLockUpgradableGuard};
+use spin::RwLock;
 
 use crate::TwoAdicSubgroupDft;
 use crate::butterflies::{Butterfly, DitButterfly, TwiddleFreeButterfly};
@@ -46,9 +46,7 @@ impl<F: TwoAdicField> Radix2Dit<F> {
 
         // Publish (double-check)
         let mut w = self.twiddles.write();
-        if !w.contains_key(&log_h) {
-            w.insert(log_h, built);
-        }
+        w.entry(log_h).or_insert(built);
         // else: another thread already inserted
     }
 

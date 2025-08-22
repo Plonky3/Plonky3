@@ -6,9 +6,9 @@
 
 extern crate alloc;
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use alloc::sync::Arc;
 use itertools::izip;
 use p3_field::{Field, PackedFieldPow2, PackedValue, PrimeCharacteristicRing, TwoAdicField};
 use p3_util::log2_strict_usize;
