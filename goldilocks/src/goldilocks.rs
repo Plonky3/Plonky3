@@ -493,7 +493,9 @@ impl Add for Goldilocks {
             //     this check.
             //  2. Hints to the compiler how rare this double-overflow is (thus handled better with
             //     a branch).
-            assume(self.value > Self::ORDER_U64 && rhs.value > Self::ORDER_U64);
+            unsafe {
+                assume(self.value > Self::ORDER_U64 && rhs.value > Self::ORDER_U64);
+            }
             branch_hint();
             sum += Self::NEG_ORDER; // Cannot overflow.
         }
@@ -516,7 +518,9 @@ impl Sub for Goldilocks {
             //     then it can skip this check.
             //  2. Hints to the compiler how rare this double-underflow is (thus handled better
             //     with a branch).
-            assume(self.value < Self::NEG_ORDER - 1 && rhs.value > Self::ORDER_U64);
+            unsafe {
+                assume(self.value < Self::NEG_ORDER - 1 && rhs.value > Self::ORDER_U64);
+            }
             branch_hint();
             diff -= Self::NEG_ORDER; // Cannot underflow.
         }
