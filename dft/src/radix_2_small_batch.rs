@@ -21,17 +21,6 @@ use crate::{
 /// The number of layers to compute in each parallelization.
 const LAYERS_PER_GROUP: usize = 3;
 
-/// The cache is structured so readers can use twiddles **without holding locks**:
-///
-/// - `Arc<[F]>` (inner): one level’s immutable twiddle array, shared by readers.
-/// - `Arc<[Arc<[F]>]>` (middle): an immutable **snapshot** of all levels; readers clone
-///   this and drop the lock immediately. Writers publish a longer snapshot atomically.
-/// - `RwLock<…>`: protects the short critical section where a new snapshot is published.
-/// - `Arc<…>` (outer field wrapper): lets `RecursiveDft` be cheaply cloned so multiple
-///   threads share the same cache instance.
-///
-type ThreadSafeTable<F> = Arc<RwLock<Arc<[Arc<[F]>]>>>;
-
 /// An FFT algorithm which divides a butterfly network's layers into two halves.
 ///
 /// Unlike other FFT algorithms, this algorithm is optimized for small batch sizes.
@@ -51,10 +40,12 @@ pub struct Radix2DFTSmallBatch<F> {
     /// bit reversed order. The final set of twiddles `twiddles[-1]` is the
     /// one element vectors `[1]` and more general `twiddles[-i]` has length `2^i`.
     ///
-    twiddles: ThreadSafeTable<F>,
+    #[allow(clippy::type_complexity)]
+    twiddles: Arc<RwLock<Arc<[Arc<[F]>]>>>,
 
     /// Similar to `twiddles`, but stored the inverses used for the inverse fft.
-    inv_twiddles: ThreadSafeTable<F>,
+    #[allow(clippy::type_complexity)]
+    inv_twiddles: Arc<RwLock<Arc<[Arc<[F]>]>>>,
 }
 
 impl<F: TwoAdicField> Radix2DFTSmallBatch<F> {
