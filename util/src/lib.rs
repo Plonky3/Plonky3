@@ -236,10 +236,12 @@ unsafe fn reverse_slice_index_bits_chunks<F>(
 #[inline(always)]
 pub fn assume(p: bool) {
     debug_assert!(p);
+}
+
+#[inline(always)]
+pub unsafe fn assume_unchecked(p: bool) {
     if !p {
-        unsafe {
-            unreachable_unchecked();
-        }
+        unsafe { unreachable_unchecked(); }
     }
 }
 
@@ -471,7 +473,7 @@ pub unsafe fn flatten_to_base<Base, BaseArray>(vec: Vec<BaseArray>) -> Vec<Base>
     debug_assert_eq!(align_of::<Base>(), align_of::<BaseArray>());
 
     assert!(
-        size_of::<BaseArray>().is_multiple_of(size_of::<Base>()),
+        size_of::<BaseArray>() % size_of::<Base>() == 0,
         "Size of BaseArray (got {}) must be a multiple of the size of Base ({}).",
         size_of::<BaseArray>(),
         size_of::<Base>()
@@ -522,7 +524,7 @@ pub unsafe fn flatten_to_base<Base, BaseArray>(vec: Vec<BaseArray>) -> Vec<Base>
 #[inline]
 pub unsafe fn reconstitute_from_base<Base, BaseArray: Clone>(mut vec: Vec<Base>) -> Vec<BaseArray> {
     assert!(
-        size_of::<BaseArray>().is_multiple_of(size_of::<Base>()),
+        size_of::<BaseArray>() % size_of::<Base>() == 0,
         "Size of BaseArray (got {}) must be a multiple of the size of Base ({}).",
         size_of::<BaseArray>(),
         size_of::<Base>()
@@ -531,7 +533,7 @@ pub unsafe fn reconstitute_from_base<Base, BaseArray: Clone>(mut vec: Vec<Base>)
     let d = size_of::<BaseArray>() / size_of::<Base>();
 
     assert!(
-        vec.len().is_multiple_of(d),
+        vec.len() % d == 0,
         "Vector length (got {}) must be a multiple of the extension field dimension ({}).",
         vec.len(),
         d
@@ -548,7 +550,7 @@ pub unsafe fn reconstitute_from_base<Base, BaseArray: Clone>(mut vec: Vec<Base>)
     // with a vector constructed from `flatten_to_base` and so the capacity should be a multiple of `d`.
     // But capacities can do strange things so we need to support both possibilities.
     // Note that the `else` branch would also work if the capacity is a multiple of `d` but it is slower.
-    if cap.is_multiple_of(d) {
+    if cap % d == 0 {
         // Prevent running `vec`'s destructor so we are in complete control
         // of the allocation.
         let mut values = ManuallyDrop::new(vec);
@@ -556,35 +558,26 @@ pub unsafe fn reconstitute_from_base<Base, BaseArray: Clone>(mut vec: Vec<Base>)
         // If we are on this branch then the capacity is a multiple of `d`.
         let new_cap = cap / d;
 
-        // Safe as BaseArray and Base have the same alignment.
-        let ptr = values.as_mut_ptr() as *mut BaseArray;
+        let ptr = values.as_mut_ptr().cast::<BaseArray>();
+
+        unsafe { Vec::from_raw_parts(ptr, new_len, new_cap) }
+    } else {
+        // We need to allocate a new vector because the capacity is not a multiple of `d`.
+        let base_array_size = size_of::<BaseArray>();
+        let new_cap = cap * size_of::<Base>() / base_array_size;
+
+        let mut result = Vec::with_capacity(new_cap);
+        let base_ptr = vec.as_ptr();
+        debug_assert!(new_len <= result.capacity());
 
         unsafe {
-            // Safety:
-            // - BaseArray and Base have the same alignment.
-            // - As size_of::<Base>() == size_of::<BaseArray>() / d:
-            //      -- If we have reached this point, the length and capacity are both divisible by `d`.
-            //      -- The capacity of the new vector is equal to the capacity of the old vector.
-            //      -- The first new_len elements of the new vector correspond to the first
-            //         len elements of the old vector and so are properly initialized.
-            Vec::from_raw_parts(ptr, new_len, new_cap)
+            result.set_len(new_len);
+            let dst_ptr = result.as_mut_ptr() as *mut u8;
+            let src_ptr = base_ptr as *const u8;
+            core::ptr::copy_nonoverlapping(src_ptr, dst_ptr, new_len * base_array_size);
         }
-    } else {
-        // If the capacity is not a multiple of `D`, we go via slices.
 
-        let buf_ptr = vec.as_mut_ptr().cast::<BaseArray>();
-        let slice = unsafe {
-            // Safety:
-            // - BaseArray and Base have the same alignment.
-            // - As size_of::<Base>() == size_of::<BaseArray>() / D:
-            //      -- If we have reached this point, the length is divisible by `D`.
-            //      -- The first new_len elements of the slice correspond to the first
-            //         len elements of the old slice and so are properly initialized.
-            slice::from_raw_parts(buf_ptr, new_len)
-        };
-
-        // Ideally the compiler could optimize this away to avoid the copy but it appears not to.
-        slice.to_vec()
+        result
     }
 }
 
