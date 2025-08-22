@@ -1,5 +1,15 @@
+use alloc::vec::Vec;
+use p3_field::{PrimeField, PrimeField64};
+
 use crate::hasher::CryptographicHasher;
 use crate::permutation::CryptographicPermutation;
+
+// Trait for compression functions that can work with field elements
+pub trait FieldCompression<F: PrimeField, const N: usize, const DIGEST_ELEMS: usize>:
+    Clone
+{
+    fn compress_field(&self, inputs: [[F; DIGEST_ELEMS]; N]) -> [F; DIGEST_ELEMS];
+}
 
 /// An `N`-to-1 compression function collision-resistant in a hash tree setting.
 ///
@@ -43,6 +53,17 @@ where
     }
 }
 
+impl<F: PrimeField, InnerP, const N: usize, const CHUNK: usize, const WIDTH: usize>
+    FieldCompression<F, N, CHUNK> for TruncatedPermutation<InnerP, N, CHUNK, WIDTH>
+where
+    F: Copy + Default,
+    InnerP: CryptographicPermutation<[F; WIDTH]>,
+{
+    fn compress_field(&self, inputs: [[F; CHUNK]; N]) -> [F; CHUNK] {
+        self.compress(inputs)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct CompressionFunctionFromHasher<H, const N: usize, const CHUNK: usize> {
     hasher: H,
@@ -62,6 +83,35 @@ where
 {
     fn compress(&self, input: [[T; CHUNK]; N]) -> [T; CHUNK] {
         self.hasher.hash_iter(input.into_iter().flatten())
+    }
+}
+
+impl<F: PrimeField64, H, const N: usize, const CHUNK: usize> FieldCompression<F, N, CHUNK>
+    for CompressionFunctionFromHasher<H, N, CHUNK>
+where
+    F: Copy,
+    H: CryptographicHasher<u64, [u64; CHUNK]>,
+{
+    fn compress_field(&self, inputs: [[F; CHUNK]; N]) -> [F; CHUNK] {
+        let field_inps = inputs
+            .iter()
+            .map(|xs| {
+                xs.iter()
+                    .map(|x| x.as_canonical_u64())
+                    .collect::<Vec<_>>()
+                    .try_into()
+                    .unwrap()
+            })
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let bytes = self.compress(field_inps);
+        bytes
+            .iter()
+            .map(|b| F::from_u64(*b))
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap()
     }
 }
 
