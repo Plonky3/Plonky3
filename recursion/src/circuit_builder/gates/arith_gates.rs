@@ -1,8 +1,14 @@
+use std::ops::Sub;
+
 use p3_field::Field;
 
+use crate::air::alu::cols::{AddTable, FieldOpEvent};
+use crate::air::{AddEvent, MulEvent, SubEvent};
 use crate::circuit_builder::circuit_builder::{CircuitBuilder, CircuitError, WireId};
+use crate::circuit_builder::gates::event::AllEvents;
 use crate::circuit_builder::gates::gate::Gate;
 
+#[derive(Clone)]
 pub struct AddGate<F: Field> {
     inputs: Vec<WireId>,
     outputs: Vec<WireId>,
@@ -26,6 +32,7 @@ impl<F: Field> AddGate<F> {
 
     pub fn add_to_circuit(builder: &mut CircuitBuilder<F>, a: WireId, b: WireId, c: WireId) -> () {
         let gate = AddGate::new(vec![a, b], vec![c]);
+        let table = AddTable {};
         builder.add_gate(Box::new(gate));
     }
 }
@@ -39,7 +46,11 @@ impl<F: Field> Gate<F> for AddGate<F> {
         BINOP_N_OUTPUTS
     }
 
-    fn generate(&self, builder: &mut CircuitBuilder<F>) -> Result<(), CircuitError> {
+    fn generate(
+        &self,
+        builder: &mut CircuitBuilder<F>,
+        all_events: &mut AllEvents<F>,
+    ) -> Result<(), CircuitError> {
         self.check_shape(self.inputs.len(), self.outputs.len());
 
         let input1 = builder.get_wire_value(self.inputs[0])?;
@@ -52,10 +63,19 @@ impl<F: Field> Gate<F> for AddGate<F> {
         let res = input1.unwrap() + input2.unwrap();
         builder.set_wire_value(self.outputs[0], res)?;
 
+        all_events.add_events.push(AddEvent(FieldOpEvent {
+            left_addr: [self.inputs[0]; 1],
+            left_val: [input1.unwrap(); 1],
+            right_addr: [self.inputs[1]; 1],
+            right_val: [input2.unwrap(); 1],
+            res_addr: [self.outputs[0]; 1],
+            res_val: [res; 1],
+        }));
+
         Ok(())
     }
 }
-
+#[derive(Clone)]
 pub struct SubGate<F: Field> {
     inputs: Vec<WireId>,
     outputs: Vec<WireId>,
@@ -89,7 +109,11 @@ impl<F: Field> Gate<F> for SubGate<F> {
         1
     }
 
-    fn generate(&self, builder: &mut CircuitBuilder<F>) -> Result<(), CircuitError> {
+    fn generate(
+        &self,
+        builder: &mut CircuitBuilder<F>,
+        all_events: &mut AllEvents<F>,
+    ) -> Result<(), CircuitError> {
         self.check_shape(self.inputs.len(), self.outputs.len());
 
         let input1 = builder.get_wire_value(self.inputs[0])?;
@@ -102,10 +126,19 @@ impl<F: Field> Gate<F> for SubGate<F> {
         let res = input1.unwrap() - input2.unwrap();
         builder.set_wire_value(self.outputs[0], res)?;
 
+        all_events.sub_events.push(SubEvent(FieldOpEvent {
+            left_addr: [self.inputs[0]; 1],
+            left_val: [input1.unwrap(); 1],
+            right_addr: [self.inputs[1]; 1],
+            right_val: [input2.unwrap(); 1],
+            res_addr: [self.outputs[0]; 1],
+            res_val: [res; 1],
+        }));
         Ok(())
     }
 }
 
+#[derive(Clone)]
 pub struct MulGate<F: Field> {
     inputs: Vec<WireId>,
     outputs: Vec<WireId>,
@@ -138,7 +171,11 @@ impl<F: Field> Gate<F> for MulGate<F> {
         1
     }
 
-    fn generate(&self, builder: &mut CircuitBuilder<F>) -> Result<(), CircuitError> {
+    fn generate(
+        &self,
+        builder: &mut CircuitBuilder<F>,
+        all_events: &mut AllEvents<F>,
+    ) -> Result<(), CircuitError> {
         self.check_shape(self.inputs.len(), self.outputs.len());
 
         let input1 = builder.get_wire_value(self.inputs[0])?;
@@ -150,6 +187,15 @@ impl<F: Field> Gate<F> for MulGate<F> {
 
         let res = input1.unwrap() * input2.unwrap();
         builder.set_wire_value(self.outputs[0], res)?;
+
+        all_events.mul_events.push(MulEvent(FieldOpEvent {
+            left_addr: [self.inputs[0]; 1],
+            left_val: [input1.unwrap(); 1],
+            right_addr: [self.inputs[1]; 1],
+            right_val: [input2.unwrap(); 1],
+            res_addr: [self.outputs[0]; 1],
+            res_val: [res; 1],
+        }));
 
         Ok(())
     }

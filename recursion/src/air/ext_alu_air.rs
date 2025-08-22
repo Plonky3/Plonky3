@@ -11,7 +11,8 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
-use crate::air::alu_air::{FieldOpEvent, FieldOperation};
+use crate::air::alu::air::FieldOperation;
+use crate::air::alu::cols::FieldOpEvent;
 
 const D: usize = 4;
 
@@ -286,7 +287,7 @@ mod test {
     use rand::distr::{Distribution, StandardUniform};
     use rand::rngs::SmallRng;
 
-    use crate::air::alu_air::FieldOperation;
+    use crate::air::alu::air::FieldOperation;
     use crate::air::ext_alu_air::{D, ExtAluAir};
 
     fn do_test<SC: StarkGenericConfig>(

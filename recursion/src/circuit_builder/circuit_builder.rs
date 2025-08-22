@@ -1,9 +1,15 @@
+use std::any::{Any, TypeId};
+use std::collections::HashSet;
+use std::hash::Hash;
+
 use p3_field::Field;
 
+use crate::circuit_builder::gates::event::{AllEvents, Table};
 use crate::circuit_builder::gates::gate::Gate;
 
 pub(crate) type WireId = usize;
 
+#[derive(Default)]
 pub struct CircuitBuilder<F: Field> {
     wires: Vec<Option<F>>,
     gate_instances: Vec<Box<dyn Gate<F>>>,
@@ -14,6 +20,7 @@ impl<F: Field> CircuitBuilder<F> {
         CircuitBuilder {
             wires: Vec::new(),
             gate_instances: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -54,12 +61,17 @@ impl<F: Field> CircuitBuilder<F> {
         &self.gate_instances
     }
 
-    pub fn generate(&mut self) -> Result<(), CircuitError> {
-        let gate_instances = core::mem::take(&mut self.gate_instances);
-        for gate in gate_instances.into_iter() {
-            gate.generate(self)?;
+    pub fn generate(&mut self) -> Result<AllEvents<F>, CircuitError> {
+        let mut gate_instances = core::mem::take(&mut self.gate_instances);
+        let mut all_events = AllEvents {
+            add_events: Vec::new(),
+            sub_events: Vec::new(),
+            mul_events: Vec::new(),
+        };
+        for gate in gate_instances.iter_mut() {
+            gate.generate(self, &mut all_events)?;
         }
-        Ok(())
+        Ok(all_events)
     }
 }
 
