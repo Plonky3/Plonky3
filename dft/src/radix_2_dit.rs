@@ -52,6 +52,7 @@ impl<F: TwoAdicField> Radix2Dit<F> {
 
     /// Read-only accessor; call `update_twiddles` first if you need it to exist.
     fn get_twiddles(&self, log_h: usize) -> Option<Arc<[F]>> {
+        self.update_twiddles(log_h);
         self.twiddles.read().get(&log_h).cloned()
     }
 }
@@ -64,7 +65,6 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit<F> {
         let log_h = log2_strict_usize(h);
 
         // Compute twiddle factors, or take memoized ones if already available.
-        self.update_twiddles(log_h);
         let twiddles = self.get_twiddles(log_h).unwrap();
 
         // DIT butterfly
