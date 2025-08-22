@@ -6,6 +6,7 @@
 
 extern crate alloc;
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use itertools::izip;
@@ -32,6 +33,25 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
 
         (0..(lg_n - 1))
             .map(|i| nth_roots.iter().step_by(1 << i).copied().collect())
+            .rev()
+            .collect()
+    }
+
+    pub fn get_missing_twiddles(req_lg_n: usize, cur_lg_n: usize) -> Vec<Arc<[Self]>> {
+        let generator = Self::two_adic_generator(req_lg_n);
+        let half_n = 1 << (req_lg_n - 1);
+        let nth_roots = generator.powers().collect_n(half_n);
+
+        (cur_lg_n..req_lg_n)
+            .map(|level| {
+                let count = 1usize << level;
+                let stride = 1usize << (req_lg_n - level - 1);
+                let mut v = Vec::with_capacity(count);
+                for i in 0..count {
+                    v.push(nth_roots[i * stride]);
+                }
+                Arc::from(v.into_boxed_slice()) // Arc<[Self]>
+            })
             .collect()
     }
 }
@@ -164,11 +184,15 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
 
     /// Breadth-first DIF FFT for smallish vectors (must be >= 64)
     #[inline]
-    fn forward_iterative(packed_input: &mut [<Self as Field>::Packing], root_table: &[Vec<Self>]) {
+    fn forward_iterative(
+        packed_input: &mut [<Self as Field>::Packing],
+        root_table: &[Arc<[Self]>],
+    ) {
         assert!(packed_input.len() >= 2);
         let packing_width = <Self as Field>::Packing::WIDTH;
         let n = packed_input.len() * packing_width;
         let lg_n = log2_strict_usize(n);
+        debug_assert_eq!(root_table.len(), lg_n - 1);
 
         // Stop loop early to do radix 16 separately. This value is determined by the largest
         // packing width we will encounter, which is 16 at the moment for AVX512. Specifically
@@ -183,15 +207,14 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         assert!(lg_n >= LAST_LOOP_LAYER + NUM_SPECIALISATIONS);
 
         // Specialise the first NUM_SPECIALISATIONS iterations; improves performance a little.
-        forward_pass_packed(packed_input, &root_table[0]); // lg_m == lg_n - 1, s == 0
-        forward_iterative_layer_1(packed_input, &root_table[1]); // lg_m == lg_n - 2, s == 1
+        forward_pass_packed(packed_input, &root_table[lg_n - 2]); // lg_m == lg_n - 1, s == 0
+        forward_iterative_layer_1(packed_input, &root_table[lg_n - 3]); // lg_m == lg_n - 2, s == 1
 
         // loop from lg_n-2 down to 4.
         for lg_m in (LAST_LOOP_LAYER..(lg_n - NUM_SPECIALISATIONS)).rev() {
-            let s = lg_n - lg_m - 1;
             let m = 1 << lg_m;
 
-            let roots = &root_table[s];
+            let roots = &root_table[lg_m - 1];
             debug_assert_eq!(roots.len(), m);
 
             Self::forward_iterative_layer(packed_input, roots, m);
@@ -283,10 +306,10 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn forward_32(a: &mut [Self], root_table: &[Vec<Self>]) {
+    fn forward_32(a: &mut [Self], root_table: &[Arc<[Self]>]) {
         assert_eq!(a.len(), 32);
 
-        Self::forward_pass(a, &root_table[0]);
+        Self::forward_pass(a, &root_table[root_table.len() - 1]);
 
         // Safe because a.len() == 32
         let (a0, a1) = unsafe { a.split_at_mut_unchecked(a.len() / 2) };
@@ -296,7 +319,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
 
     /// Assumes `input.len() >= 64`.
     #[inline]
-    fn forward_fft_recur(input: &mut [<Self as Field>::Packing], root_table: &[Vec<Self>]) {
+    fn forward_fft_recur(input: &mut [<Self as Field>::Packing], root_table: &[Arc<[Self]>]) {
         const ITERATIVE_FFT_THRESHOLD: usize = 1024;
 
         let n = input.len() * <Self as Field>::Packing::WIDTH;
@@ -304,18 +327,18 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
             Self::forward_iterative(input, root_table);
         } else {
             assert_eq!(n, 1 << (root_table.len() + 1));
-            forward_pass_packed(input, &root_table[0]);
+            forward_pass_packed(input, &root_table[root_table.len() - 1]);
 
             // Safe because input.len() > ITERATIVE_FFT_THRESHOLD
             let (a0, a1) = unsafe { input.split_at_mut_unchecked(input.len() / 2) };
 
-            Self::forward_fft_recur(a0, &root_table[1..]);
-            Self::forward_fft_recur(a1, &root_table[1..]);
+            Self::forward_fft_recur(a0, &root_table[..root_table.len()]);
+            Self::forward_fft_recur(a1, &root_table[..root_table.len()]);
         }
     }
 
     #[inline]
-    pub fn forward_fft(input: &mut [Self], root_table: &[Vec<Self>]) {
+    pub fn forward_fft(input: &mut [Self], root_table: &[Arc<[Self]>]) {
         let n = input.len();
         if n == 1 {
             return;
