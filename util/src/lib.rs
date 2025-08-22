@@ -41,7 +41,9 @@ pub fn log2_strict_usize(n: usize) -> usize {
     assert_eq!(n.wrapping_shr(res), 1, "Not a power of two: {n}");
     // Tell the optimizer about the semantics of `log2_strict`. i.e. it can replace `n` with
     // `1 << res` and vice versa.
-    assume(n == 1 << res);
+    unsafe {
+        assume(n == 1 << res);
+    }
     res as usize
 }
 
@@ -233,8 +235,13 @@ unsafe fn reverse_slice_index_bits_chunks<F>(
     }
 }
 
+/// Allow the compiler to assume that the given predicate `p` is always `true`.
+///
+/// # Safety
+///
+/// Callers must ensure that `p` is true. If this is not the case, the behavior is undefined.
 #[inline(always)]
-pub fn assume(p: bool) {
+pub unsafe fn assume(p: bool) {
     debug_assert!(p);
     if !p {
         unsafe {
