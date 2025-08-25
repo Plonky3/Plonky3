@@ -14,12 +14,13 @@ p3-field.workspace = true
 p3-maybe-rayon.workspace = true
 p3-util.workspace = true
 
+rand.workspace = true
+
 [dev-dependencies]
 criterion.workspace = true
 p3-baby-bear.workspace = true
 
 proptest.workspace = true
-rand.workspace = true
 
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
