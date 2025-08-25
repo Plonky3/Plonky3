@@ -57,6 +57,7 @@ pub type GenericPoseidon2LinearLayersKoalaBear =
 /// Initial round constants for the 16-width Poseidon2 external layer on KoalaBear.
 ///
 /// See Poseidon paper for more details: https://eprint.iacr.org/2019/458
+/// Sage script used to generate these constants: https://github.com/HorizenLabs/poseidon2/blob/main/poseidon2_rust_params.sage
 pub const KOALABEAR_RC16_EXTERNAL_INITIAL: [[KoalaBear; 16]; 4] = KoalaBear::new_2d_array([
     [
         2128964168, 288780357, 316938561, 2126233899, 426817493, 1714118888, 1045008582,
@@ -83,6 +84,7 @@ pub const KOALABEAR_RC16_EXTERNAL_INITIAL: [[KoalaBear; 16]; 4] = KoalaBear::new
 /// Final round constants for the 16-width Poseidon2's external layer on KoalaBear.
 ///
 /// See Poseidon paper for more details: https://eprint.iacr.org/2019/458
+/// Sage script used to generate these constants: https://github.com/HorizenLabs/poseidon2/blob/main/poseidon2_rust_params.sage
 pub const KOALABEAR_RC16_EXTERNAL_FINAL: [[KoalaBear; 16]; 4] = KoalaBear::new_2d_array([
     [
         1423960925, 2101391318, 1915532054, 275400051, 1168624859, 1141248885, 356546469,
@@ -107,6 +109,7 @@ pub const KOALABEAR_RC16_EXTERNAL_FINAL: [[KoalaBear; 16]; 4] = KoalaBear::new_2
 /// Round constants for the 16-width Poseidon2's internal layer on KoalaBear.
 ///
 /// See Poseidon paper for more details: https://eprint.iacr.org/2019/458
+/// Sage script used to generate these constants: https://github.com/HorizenLabs/poseidon2/blob/main/poseidon2_rust_params.sage
 pub const KOALABEAR_RC16_INTERNAL: [KoalaBear; 20] = KoalaBear::new_array([
     2102596038, 1533193853, 1436311464, 2012303432, 839997195, 1225781098, 2011967775, 575084315,
     1309329169, 786393545, 995788880, 1702925345, 1444525226, 908073383, 1811535085, 1531002367,
@@ -129,6 +132,7 @@ pub fn default_koalabear_poseidon2_16() -> Poseidon2KoalaBear<16> {
 /// Initial round constants for the 24-width Poseidon2 external layer on KoalaBear.
 ///
 /// See Poseidon paper for more details: https://eprint.iacr.org/2019/458
+/// Sage script used to generate these constants: https://github.com/HorizenLabs/poseidon2/blob/main/poseidon2_rust_params.sage
 pub const KOALABEAR_RC24_EXTERNAL_INITIAL: [[KoalaBear; 24]; 4] = KoalaBear::new_2d_array([
     [
         487143900, 1829048205, 1652578477, 646002781, 1044144830, 53279448, 1519499836, 22697702,
@@ -158,6 +162,7 @@ pub const KOALABEAR_RC24_EXTERNAL_INITIAL: [[KoalaBear; 24]; 4] = KoalaBear::new
 /// Final round constants for the 24-width Poseidon2's external layer on KoalaBear.
 ///
 /// See Poseidon paper for more details: https://eprint.iacr.org/2019/458
+/// Sage script used to generate these constants: https://github.com/HorizenLabs/poseidon2/blob/main/poseidon2_rust_params.sage
 pub const KOALABEAR_RC24_EXTERNAL_FINAL: [[KoalaBear; 24]; 4] = KoalaBear::new_2d_array([
     [
         328586442, 1572520009, 1375479591, 322991001, 967600467, 1172861548, 1973891356,
@@ -186,6 +191,7 @@ pub const KOALABEAR_RC24_EXTERNAL_FINAL: [[KoalaBear; 24]; 4] = KoalaBear::new_2
 /// Round constants for the 24-width Poseidon2's internal layer on KoalaBear.
 ///
 /// See Poseidon paper for more details: https://eprint.iacr.org/2019/458
+/// Sage script used to generate these constants: https://github.com/HorizenLabs/poseidon2/blob/main/poseidon2_rust_params.sage
 pub const KOALABEAR_RC24_INTERNAL: [KoalaBear; 23] = KoalaBear::new_array([
     893435011, 403879071, 1363789863, 1662900517, 2043370, 2109755796, 931751726, 2091644718,
     606977583, 185050397, 946157136, 1350065230, 1625860064, 122045240, 880989921, 145137438,
