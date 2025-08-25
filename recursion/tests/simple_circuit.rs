@@ -5,21 +5,39 @@ use p3_challenger::DuplexChallenger;
 use p3_commit::testing::TrivialPcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_recursion::air::AluAir;
-use p3_recursion::air::alu::air::FieldOperation;
 use p3_recursion::air::alu::cols::{AddTable, SubTable};
 use p3_recursion::air::asic::Asic;
 use p3_recursion::circuit_builder::circuit_builder::{CircuitBuilder, CircuitError};
 use p3_recursion::circuit_builder::gates::arith_gates::{AddGate, SubGate};
-use p3_uni_stark::{StarkConfig, prove, verify};
+use p3_recursion::prover::prove;
+use p3_recursion::verifier::verify;
+use p3_uni_stark::StarkConfig;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
-type Val = BabyBear;
+type Value = BabyBear;
+type Challenge = BinomialExtensionField<Value, 4>;
+type Perm = Poseidon2BabyBear<16>;
+type Dft = Radix2DitParallel<Value>;
+type Challenger = DuplexChallenger<Value, Perm, 16, 8>;
+type Pcs = TrivialPcs<Value, Radix2DitParallel<Value>>;
+type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
 
 #[test]
 pub fn test_simple_circuit() -> Result<(), CircuitError> {
-    let mut builder = CircuitBuilder::<Val>::new();
+    let mut rng = SmallRng::seed_from_u64(1);
+    let perm = Perm::new_from_rng_128(&mut rng);
+
+    let dft = Dft::default();
+    let pcs = TrivialPcs {
+        dft,
+        log_n: 0,
+        _phantom: PhantomData,
+    };
+    let challenger = Challenger::new(perm);
+    let config = MyConfig::new(pcs, challenger);
+
+    let mut builder = CircuitBuilder::new();
 
     let a = builder.new_wire();
     let b = builder.new_wire();
@@ -34,60 +52,15 @@ pub fn test_simple_circuit() -> Result<(), CircuitError> {
         asic: vec![Box::new(AddTable {}), Box::new(SubTable {})],
     };
 
-    builder.set_wire_value(a, Val::new(10))?;
-    builder.set_wire_value(b, Val::new(5))?;
-    builder.set_wire_value(d, Val::new(2))?;
+    builder.set_wire_value(a, Value::new(10))?;
+    builder.set_wire_value(b, Value::new(5))?;
+    builder.set_wire_value(d, Value::new(2))?;
 
     let all_events = builder.generate()?;
-    let traces = asic.generate_trace(&all_events);
 
-    type Challenge = BinomialExtensionField<Val, 4>;
+    let proof = prove(&config, asic, all_events);
 
-    type Perm = Poseidon2BabyBear<16>;
-    let mut rng = SmallRng::seed_from_u64(1);
-    let perm = Perm::new_from_rng_128(&mut rng);
-
-    type Dft = Radix2DitParallel<Val>;
-    let dft = Dft::default();
-
-    type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
-
-    type Pcs = TrivialPcs<Val, Radix2DitParallel<Val>>;
-    let pcs = TrivialPcs {
-        dft,
-        log_n: 0,
-        _phantom: PhantomData,
-    };
-    let challenger = Challenger::new(perm);
-
-    type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
-    let config = MyConfig::new(pcs, challenger);
-
-    let add_air: AluAir<1> = AluAir {
-        op: FieldOperation::Add,
-    };
-    let sub_air: AluAir<1> = AluAir {
-        op: FieldOperation::Sub,
-    };
-
-    let proof_add = prove(&config, &add_air, traces[0].clone(), &vec![]);
-    let serialized_proof = postcard::to_allocvec(&proof_add).expect("unable to serialize proof");
-    tracing::debug!("serialized_proof len: {} bytes", serialized_proof.len());
-
-    let deserialized_proof =
-        postcard::from_bytes(&serialized_proof).expect("unable to deserialize proof");
-
-    verify(&config, &add_air, &deserialized_proof, &vec![]).unwrap();
-
-    let proof_sub = prove(&config, &sub_air, traces[1].clone(), &vec![]);
-    let serialized_proof = postcard::to_allocvec(&proof_sub).expect(
-        "unable to
-    serialize proof",
-    );
-    tracing::debug!("serialized_proof len: {} bytes", serialized_proof.len());
-    let deserialized_proof =
-        postcard::from_bytes(&serialized_proof).expect("unable to deserialize proof");
-    verify(&config, &sub_air, &deserialized_proof, &vec![]).unwrap();
+    verify(&config, proof).unwrap();
 
     Ok(())
 }

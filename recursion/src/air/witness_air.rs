@@ -35,7 +35,7 @@ impl<F> BorrowMut<RomCols<F>> for [F] {
 }
 
 /// Represents an event in the ROM chip.
-struct RomAirEvent<F> {
+pub struct RomAirEvent<F> {
     address: usize,
     value: F,
 }

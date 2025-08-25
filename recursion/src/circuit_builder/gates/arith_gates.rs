@@ -1,8 +1,6 @@
-use std::ops::Sub;
-
 use p3_field::Field;
 
-use crate::air::alu::cols::{AddTable, FieldOpEvent};
+use crate::air::alu::cols::FieldOpEvent;
 use crate::air::{AddEvent, MulEvent, SubEvent};
 use crate::circuit_builder::circuit_builder::{CircuitBuilder, CircuitError, WireId};
 use crate::circuit_builder::gates::event::AllEvents;
@@ -32,7 +30,6 @@ impl<F: Field> AddGate<F> {
 
     pub fn add_to_circuit(builder: &mut CircuitBuilder<F>, a: WireId, b: WireId, c: WireId) -> () {
         let gate = AddGate::new(vec![a, b], vec![c]);
-        let table = AddTable {};
         builder.add_gate(Box::new(gate));
     }
 }

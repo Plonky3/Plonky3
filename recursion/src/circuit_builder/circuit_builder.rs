@@ -1,10 +1,6 @@
-use std::any::{Any, TypeId};
-use std::collections::HashSet;
-use std::hash::Hash;
-
 use p3_field::Field;
 
-use crate::circuit_builder::gates::event::{AllEvents, Table};
+use crate::circuit_builder::gates::event::AllEvents;
 use crate::circuit_builder::gates::gate::Gate;
 
 pub(crate) type WireId = usize;
