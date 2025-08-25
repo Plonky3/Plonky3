@@ -119,6 +119,7 @@ pub const KOALABEAR_RC16_INTERNAL: [KoalaBear; 20] = KoalaBear::new_array([
 /// A default Poseidon2 for KoalaBear using the round constants from the original specification.
 ///
 /// See Poseidon paper for more details: https://eprint.iacr.org/2019/458
+/// Sage script used to generate these constants: https://github.com/HorizenLabs/poseidon2/blob/main/poseidon2_rust_params.sage
 pub fn default_koalabear_poseidon2_16() -> Poseidon2KoalaBear<16> {
     Poseidon2::new(
         ExternalLayerConstants::new(
@@ -201,6 +202,7 @@ pub const KOALABEAR_RC24_INTERNAL: [KoalaBear; 23] = KoalaBear::new_array([
 /// A default Poseidon2 for KoalaBear using the round constants from the original specification.
 ///
 /// See Poseidon paper for more details: https://eprint.iacr.org/2019/458
+/// Sage script used to generate these constants: https://github.com/HorizenLabs/poseidon2/blob/main/poseidon2_rust_params.sage
 pub fn default_koalabear_poseidon2_24() -> Poseidon2KoalaBear<24> {
     Poseidon2::new(
         ExternalLayerConstants::new(
