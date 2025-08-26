@@ -97,13 +97,20 @@ where
 
         // Iterate in **little-endian** order and adjust using big-endian convention.
         for &val in self.iter().rev() {
-            let val_minus_one = val - F::ONE;
-            let val_minus_two = val - F::TWO;
+            let val_min_1 = val - F::ONE;
+            let val_sq_min_val = val * val_min_1;
 
             acc *= match point % 3 {
-                0 => val_minus_one * val_minus_two.halve(), // (val - 1)(val - 2) / 2
-                1 => -val * val_minus_two,                  // val (val - 2)(-1)
-                2 => val * val_minus_one.halve(),           // val (val - 1) / 2
+                // (val - 1)(val - 2) / 2
+                // = (val^2 - 3val + 2)/2
+                // = (val^2 - val - 2val + 2)/2
+                // = (val(val-1) - 2(val-1))/2
+                // = val(val-1)/2 - (val-1)
+                0 => val_sq_min_val.halve() - val_min_1,
+                // -val * (val - 2) = -val^2 + 2val = -val(val-1) + val
+                1 => val - val_sq_min_val,
+                // val * (val - 1) / 2
+                2 => val_sq_min_val.halve(),
                 _ => unreachable!(),
             };
             point /= 3;
