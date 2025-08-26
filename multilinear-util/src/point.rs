@@ -12,6 +12,11 @@ impl<F> MultilinearPoint<F>
 where
     F: Field,
 {
+    /// Construct a new `MultilinearPoint` from a vector of field elements.
+    pub const fn new(coords: Vec<F>) -> Self {
+        Self(coords)
+    }
+
     /// Returns the number of variables (dimension `n`).
     #[inline]
     #[must_use]
