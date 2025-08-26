@@ -63,17 +63,16 @@ where
     ///
     /// Reversing the order ensures the **big-endian** convention.
     pub fn expand_from_univariate(point: F, num_variables: usize) -> Self {
+        let mut res: Vec<F> = F::zero_vec(num_variables);
         let mut cur = point;
-        let mut res = (0..num_variables)
-            .map(|_| {
-                let value_to_return = cur;
-                // Compute y^(2^k) at each step
-                cur = cur.square();
-                value_to_return
-            })
-            .collect::<Vec<F>>();
 
-        res.reverse();
+        // Fill big-endian: [y^(2^(n-1)), ..., y^2, y]
+        // Loop from the last index down to the first.
+        for i in (0..num_variables).rev() {
+            res[i] = cur;
+            cur = cur.square();
+        }
+
         Self(res)
     }
 
