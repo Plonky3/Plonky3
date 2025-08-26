@@ -61,12 +61,6 @@ where
     /// ```ignore
     /// eq(s1, s2) = ∏ (s1_i * s2_i + (1 - s1_i) * (1 - s2_i))
     /// ```
-    ///
-    /// This uses the algebraic identity:
-    /// ```ignore
-    /// s1_i * s2_i + (1 - s1_i) * (1 - s2_i) = 1 + 2 * s1_i * s2_i - s1_i - s2_i
-    /// ```
-    /// to avoid unnecessary multiplications.
     #[must_use]
     pub fn eq_poly_outside(&self, point: &Self) -> F {
         assert_eq!(self.num_variables(), point.num_variables());
@@ -74,8 +68,9 @@ where
         let mut acc = F::ONE;
 
         for (&l, &r) in self.iter().zip(&point.0) {
+            // This uses the algebraic identity:
             // l * r + (1 - l) * (1 - r) = 1 + 2 * l * r - l - r
-            // +/- much cheaper than multiplication.
+            // to avoid unnecessary multiplications.
             acc *= F::ONE + l * r.double() - l - r;
         }
 
