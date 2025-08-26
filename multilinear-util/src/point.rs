@@ -83,7 +83,7 @@ where
     /// eq(s1, s2) = ∏ (s1_i * s2_i + (1 - s1_i) * (1 - s2_i))
     /// ```
     #[must_use]
-    pub fn eq_poly_outside(&self, point: &Self) -> F {
+    pub fn eq_poly(&self, point: &Self) -> F {
         assert_eq!(self.num_variables(), point.num_variables());
 
         let mut acc = F::ONE;
