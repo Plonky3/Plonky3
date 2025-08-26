@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use core::ops::{Index, Range};
 
 use p3_field::Field;
 use rand::Rng;
@@ -8,14 +8,6 @@ use rand::distr::{Distribution, StandardUniform};
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct MultilinearPoint<F>(pub Vec<F>);
 
-impl<F> Deref for MultilinearPoint<F> {
-    type Target = Vec<F>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
 impl<F> MultilinearPoint<F>
 where
     F: Field,
@@ -23,8 +15,38 @@ where
     /// Returns the number of variables (dimension `n`).
     #[inline]
     #[must_use]
-    pub fn num_variables(&self) -> usize {
-        self.len()
+    pub const fn num_variables(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Return a reference to the slice of field elements
+    /// defining the point.
+    #[inline]
+    #[must_use]
+    pub fn as_slice(&self) -> &[F] {
+        &self.0
+    }
+
+    /// Return an iterator over the field elements making up the point.
+    #[inline]
+    pub fn iter(&self) -> core::slice::Iter<'_, F> {
+        self.0.iter()
+    }
+
+    /// Return a sub-point over the specified range of variables.
+    #[inline]
+    #[must_use]
+    pub fn get_subpoint_over_range(&self, idx: Range<usize>) -> Self {
+        Self(self.0[idx].to_vec())
+    }
+
+    /// Return a reference to the last variable in the point, if it exists.
+    ///
+    /// Returns None if the point is empty.
+    #[inline]
+    #[must_use]
+    pub fn last_variable(&self) -> Option<&F> {
+        self.0.last()
     }
 
     /// Converts a univariate evaluation point into a multilinear one.
@@ -41,17 +63,16 @@ where
     ///
     /// Reversing the order ensures the **big-endian** convention.
     pub fn expand_from_univariate(point: F, num_variables: usize) -> Self {
+        let mut res: Vec<F> = F::zero_vec(num_variables);
         let mut cur = point;
-        let mut res = (0..num_variables)
-            .map(|_| {
-                let value_to_return = cur;
-                // Compute y^(2^k) at each step
-                cur = cur.square();
-                value_to_return
-            })
-            .collect::<Vec<F>>();
+        res[num_variables - 1] = cur;
 
-        res.reverse();
+        // Fill big-endian: [y^(2^(n-1)), ..., y^2, y]
+        for i in (0..(num_variables - 1)).rev() {
+            cur = cur.square();
+            res[num_variables - i - 1] = cur;
+        }
+
         Self(res)
     }
 
@@ -67,7 +88,7 @@ where
 
         let mut acc = F::ONE;
 
-        for (&l, &r) in self.iter().zip(point) {
+        for (&l, &r) in self.into_iter().zip(point) {
             // This uses the algebraic identity:
             // l * r + (1 - l) * (1 - r) = 1 + 2 * l * r - l - r
             // to avoid unnecessary multiplications.
@@ -137,19 +158,19 @@ impl<'a, F> IntoIterator for &'a MultilinearPoint<F> {
     }
 }
 
-impl<'a, F> IntoIterator for &'a mut MultilinearPoint<F> {
-    type Item = &'a mut F;
-    type IntoIter = std::slice::IterMut<'a, F>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.iter_mut()
-    }
-}
-
 impl<F> IntoIterator for MultilinearPoint<F> {
     type Item = F;
     type IntoIter = std::vec::IntoIter<F>;
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
+    }
+}
+
+impl<F> Index<usize> for MultilinearPoint<F> {
+    type Output = F;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.0[index]
     }
 }
 
@@ -591,10 +612,10 @@ mod tests {
 
         for _ in 0..K {
             let point = MultilinearPoint::<F>::rand(&mut rng, N);
-            let first = point[0];
+            let first = point.0[0];
 
             // Check if all coordinates are the same as the first one
-            if point.iter().all(|&x| x == first) {
+            if point.into_iter().all(|x| x == first) {
                 all_same_count += 1;
             }
         }
@@ -623,7 +644,7 @@ mod tests {
 
             // Compute expected value using manual formula:
             // eq(c, p) = ∏ (c_i * p_i + (1 - c_i)(1 - p_i))
-            let expected = p1.iter().zip(&p2.0).fold(F::ONE, |acc, (&a, &b)| {
+            let expected = p1.into_iter().zip(p2).fold(F::ONE, |acc, (a, b)| {
                 acc * (a * b + (F::ONE - a) * (F::ONE - b))
             });
 
