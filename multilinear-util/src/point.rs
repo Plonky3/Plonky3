@@ -6,7 +6,7 @@ use rand::distr::{Distribution, StandardUniform};
 
 /// A point `(x_1, ..., x_n)` in `F^n` for some field `F`.
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
-pub struct MultilinearPoint<F>(pub Vec<F>);
+pub struct MultilinearPoint<F>(pub(crate) Vec<F>);
 
 impl<F> MultilinearPoint<F>
 where
