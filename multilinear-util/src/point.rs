@@ -54,7 +54,7 @@ where
         Self(res)
     }
 
-    /// Computes `eq(c, p)`, where `p` is a general `MultilinearPoint` (not necessarily binary).
+    /// Computes `eq(c, p)`, where `p` is another `MultilinearPoint`.
     ///
     /// The **equality polynomial** for two vectors is:
     /// ```ignore
