@@ -120,12 +120,6 @@ where
     }
 }
 
-impl<F> From<F> for MultilinearPoint<F> {
-    fn from(value: F) -> Self {
-        Self(vec![value])
-    }
-}
-
 impl<F> MultilinearPoint<F>
 where
     StandardUniform: Distribution<F>,
