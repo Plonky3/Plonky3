@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use p3_field::{ExtensionField, Field};
+use p3_field::Field;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 
