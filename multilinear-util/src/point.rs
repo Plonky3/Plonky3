@@ -61,7 +61,6 @@ where
     /// ```ignore
     /// eq(s1, s2) = ∏ (s1_i * s2_i + (1 - s1_i) * (1 - s2_i))
     /// ```
-    /// which evaluates to `1` if `s1 == s2`, and `0` otherwise.
     ///
     /// This uses the algebraic identity:
     /// ```ignore
