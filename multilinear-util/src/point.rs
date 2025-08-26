@@ -289,7 +289,7 @@ mod tests {
         let ml_point1 = MultilinearPoint(vec![F::ZERO; 4]);
         let ml_point2 = MultilinearPoint(vec![F::ZERO; 4]);
 
-        assert_eq!(ml_point1.eq_poly_outside(&ml_point2), F::ONE);
+        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
     }
 
     #[test]
@@ -297,7 +297,7 @@ mod tests {
         let ml_point1 = MultilinearPoint(vec![F::ONE; 4]);
         let ml_point2 = MultilinearPoint(vec![F::ONE; 4]);
 
-        assert_eq!(ml_point1.eq_poly_outside(&ml_point2), F::ONE);
+        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
     }
 
     #[test]
@@ -305,7 +305,7 @@ mod tests {
         let ml_point1 = MultilinearPoint(vec![F::ONE, F::ZERO, F::ONE, F::ZERO]);
         let ml_point2 = MultilinearPoint(vec![F::ONE, F::ZERO, F::ONE, F::ZERO]);
 
-        assert_eq!(ml_point1.eq_poly_outside(&ml_point2), F::ONE);
+        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
     }
 
     #[test]
@@ -313,7 +313,7 @@ mod tests {
         let ml_point1 = MultilinearPoint(vec![F::ONE, F::ZERO, F::ONE, F::ZERO]);
         let ml_point2 = MultilinearPoint(vec![F::ZERO, F::ONE, F::ZERO, F::ONE]);
 
-        assert_eq!(ml_point1.eq_poly_outside(&ml_point2), F::ZERO);
+        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ZERO);
     }
 
     #[test]
@@ -321,7 +321,7 @@ mod tests {
         let ml_point1 = MultilinearPoint(vec![F::ONE]);
         let ml_point2 = MultilinearPoint(vec![F::ONE]);
 
-        assert_eq!(ml_point1.eq_poly_outside(&ml_point2), F::ONE);
+        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
     }
 
     #[test]
@@ -329,7 +329,7 @@ mod tests {
         let ml_point1 = MultilinearPoint(vec![F::ONE]);
         let ml_point2 = MultilinearPoint(vec![F::ZERO]);
 
-        assert_eq!(ml_point1.eq_poly_outside(&ml_point2), F::ZERO);
+        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ZERO);
     }
 
     #[test]
@@ -349,7 +349,7 @@ mod tests {
         let ml_point2 = MultilinearPoint(vec![x10, x11, x12, x13]);
 
         // Compute the equality polynomial between ml_point1 and ml_point2
-        let result = ml_point1.eq_poly_outside(&ml_point2);
+        let result = ml_point1.eq_poly(&ml_point2);
 
         // Manually compute the expected result of the equality polynomial:
         // eq(c, p) = ∏ (c_i * p_i + (1 - c_i) * (1 - p_i))
@@ -386,7 +386,7 @@ mod tests {
             F::ZERO,
         ]);
 
-        assert_eq!(ml_point1.eq_poly_outside(&ml_point2), F::ONE);
+        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
     }
 
     #[test]
@@ -412,7 +412,7 @@ mod tests {
             F::ONE, // Last bit differs
         ]);
 
-        assert_eq!(ml_point1.eq_poly_outside(&ml_point2), F::ZERO);
+        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ZERO);
     }
 
     #[test]
@@ -420,7 +420,7 @@ mod tests {
         let ml_point1 = MultilinearPoint::<F>(vec![]);
         let ml_point2 = MultilinearPoint::<F>(vec![]);
 
-        assert_eq!(ml_point1.eq_poly_outside(&ml_point2), F::ONE);
+        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
     }
 
     #[test]
@@ -430,7 +430,7 @@ mod tests {
         let ml_point2 = MultilinearPoint(vec![F::ONE, F::ZERO, F::ONE]);
 
         // Should panic because lengths do not match
-        let _ = ml_point1.eq_poly_outside(&ml_point2);
+        let _ = ml_point1.eq_poly(&ml_point2);
     }
 
     #[test]
@@ -639,8 +639,8 @@ mod tests {
             let p1 = MultilinearPoint(coords1.iter().copied().map(F::from_u8).collect());
             let p2 = MultilinearPoint(coords2.iter().copied().map(F::from_u8).collect());
 
-            // Evaluate eq_poly_outside
-            let result = p1.eq_poly_outside(&p2);
+            // Evaluate eq_poly
+            let result = p1.eq_poly(&p2);
 
             // Compute expected value using manual formula:
             // eq(c, p) = ∏ (c_i * p_i + (1 - c_i)(1 - p_i))
