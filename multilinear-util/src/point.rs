@@ -67,7 +67,7 @@ where
 
         let mut acc = F::ONE;
 
-        for (&l, &r) in self.iter().zip(&point.0) {
+        for (&l, &r) in self.iter().zip(point) {
             // This uses the algebraic identity:
             // l * r + (1 - l) * (1 - r) = 1 + 2 * l * r - l - r
             // to avoid unnecessary multiplications.
@@ -125,6 +125,30 @@ where
 {
     pub fn rand<R: Rng>(rng: &mut R, num_variables: usize) -> Self {
         Self((0..num_variables).map(|_| rng.random()).collect())
+    }
+}
+
+impl<'a, F> IntoIterator for &'a MultilinearPoint<F> {
+    type Item = &'a F;
+    type IntoIter = std::slice::Iter<'a, F>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<'a, F> IntoIterator for &'a mut MultilinearPoint<F> {
+    type Item = &'a mut F;
+    type IntoIter = std::slice::IterMut<'a, F>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter_mut()
+    }
+}
+
+impl<F> IntoIterator for MultilinearPoint<F> {
+    type Item = F;
+    type IntoIter = std::vec::IntoIter<F>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
     }
 }
 
