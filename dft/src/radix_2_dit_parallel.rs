@@ -1,6 +1,7 @@
 use alloc::collections::BTreeMap;
 use alloc::slice;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::mem::{MaybeUninit, transmute};
 
 use itertools::{Itertools, izip};
@@ -32,7 +33,7 @@ pub struct Radix2DitParallel<F> {
 
     /// A map from `(log_h, shift)` to forward DFT twiddles with that coset shift baked in.
     #[allow(clippy::type_complexity)]
-    coset_twiddles: Arc<RwLock<BTreeMap<(usize, F), Arc<[Arc<[F]>]>>>>,
+    coset_twiddles: Arc<RwLock<BTreeMap<(usize, F), Arc<[Vec<F>]>>>>,
 
     /// Twiddles based on inverse roots of unity, used in the inverse DFT.
     inverse_twiddles: Arc<RwLock<BTreeMap<usize, Arc<VectorPair<F>>>>>,
@@ -41,8 +42,8 @@ pub struct Radix2DitParallel<F> {
 /// A pair of vectors, one with twiddle factors in their natural order, the other bit-reversed.
 #[derive(Default, Clone, Debug)]
 struct VectorPair<F> {
-    twiddles: Arc<[F]>,
-    bitrev_twiddles: Arc<[F]>,
+    twiddles: Vec<F>,
+    bitrev_twiddles: Vec<F>,
 }
 
 impl<F> Radix2DitParallel<F>
@@ -65,14 +66,14 @@ where
         let mut bit_reversed_twiddles = twiddles.clone();
         reverse_slice_index_bits(&mut bit_reversed_twiddles);
         let new = VectorPair {
-            twiddles: Arc::from(twiddles.into_boxed_slice()),
-            bitrev_twiddles: Arc::from(bit_reversed_twiddles.into_boxed_slice()),
+            twiddles: twiddles,
+            bitrev_twiddles: bit_reversed_twiddles,
         };
         let mut write = self.twiddles.write();
         write.entry(log_h).or_insert_with(|| Arc::new(new));
     }
 
-    fn get_coset_twiddles(&self, arg: (usize, F)) -> Arc<[Arc<[F]>]> {
+    fn get_coset_twiddles(&self, arg: (usize, F)) -> Arc<[Vec<F>]> {
         self.update_coset_twiddles(arg);
         self.coset_twiddles.read().get(&arg).unwrap().clone()
     }
@@ -101,7 +102,7 @@ where
                 if layer_rev >= mid {
                     reverse_slice_index_bits(&mut twiddles);
                 }
-                Arc::from(twiddles.into_boxed_slice())
+                twiddles
             })
             .collect();
         let mut write = self.coset_twiddles.write();
@@ -127,8 +128,8 @@ where
         reverse_slice_index_bits(&mut bit_reversed_twiddles);
 
         let update = VectorPair {
-            twiddles: Arc::from(twiddles.into_boxed_slice()),
-            bitrev_twiddles: Arc::from(bit_reversed_twiddles.into_boxed_slice()),
+            twiddles: twiddles,
+            bitrev_twiddles: bit_reversed_twiddles,
         };
         let mut write = self.inverse_twiddles.write();
         write.entry(log_h).or_insert_with(|| Arc::new(update));
@@ -313,7 +314,7 @@ fn first_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F])
 fn first_half_general<F: Field>(
     mat: &mut RowMajorMatrixViewMut<'_, F>,
     mid: usize,
-    twiddles: &[Arc<[F]>],
+    twiddles: &[Vec<F>],
 ) {
     let log_h = log2_strict_usize(mat.height());
     mat.par_row_chunks_exact_mut(1 << mid)
@@ -341,7 +342,7 @@ fn first_half_general_oop<F: Field>(
     src: &RowMajorMatrixView<'_, F>,
     dst_maybe: &mut RowMajorMatrixViewMut<'_, MaybeUninit<F>>,
     mid: usize,
-    twiddles: &[Arc<[F]>],
+    twiddles: &[Vec<F>],
 ) {
     let log_h = log2_strict_usize(src.height());
     src.par_row_chunks_exact(1 << mid)
@@ -424,7 +425,7 @@ fn second_half<F: Field>(
 fn second_half_general<F: Field>(
     mat: &mut RowMajorMatrixViewMut<'_, F>,
     mid: usize,
-    twiddles_rev: &[Arc<[F]>],
+    twiddles_rev: &[Vec<F>],
 ) {
     let log_h = log2_strict_usize(mat.height());
     mat.par_row_chunks_exact_mut(1 << (log_h - mid))
