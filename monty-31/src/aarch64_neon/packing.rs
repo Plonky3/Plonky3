@@ -341,8 +341,8 @@ fn get_reduced_d<MPNeon: MontyParametersNeon>(c_hi: int32x4_t, qp_hi: int32x4_t)
     unsafe {
         let d = aarch64::vreinterpretq_u32_s32(get_d(c_hi, qp_hi));
 
-        // Finally, we reduce D to canonical form. D is negative iff `c_hi > qp_hi`, so if that's the
-        // case then we add P. Note that if `c_hi > qp_hi` then `underflow` is -1, so we must
+        // Finally, we reduce D to canonical form. D is negative iff `c_hi < qp_hi`, so if that's the
+        // case then we add P. Note that if `c_hi < qp_hi` then `underflow` is -1, so we must
         // _subtract_ `underflow` * P.
         let underflow = aarch64::vcltq_s32(c_hi, qp_hi);
         aarch64::vmlsq_u32(d, confuse_compiler(underflow), MPNeon::PACKED_P)
@@ -527,7 +527,7 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
     b: &[MontyField31<FP>; WIDTH],
     res: &mut [MontyField31<FP>; WIDTH],
 ) where
-    FP: FieldParameters + BinomialExtensionData<WIDTH> + FieldParameters,
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
 {
     // TODO: This could be optimised further with a custom NEON implementation.
     assert_eq!(WIDTH, 8);
