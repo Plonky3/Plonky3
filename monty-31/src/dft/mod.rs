@@ -46,10 +46,10 @@ fn coset_shift_and_scale_rows<F: Field>(
 pub struct RecursiveDft<F> {
     /// Forward twiddle tables
     #[allow(clippy::type_complexity)]
-    twiddles: Arc<RwLock<Arc<[Arc<[F]>]>>>,
+    twiddles: Arc<RwLock<Arc<[Vec<F>]>>>,
     /// Inverse twiddle tables
     #[allow(clippy::type_complexity)]
-    inv_twiddles: Arc<RwLock<Arc<[Arc<[F]>]>>>,
+    inv_twiddles: Arc<RwLock<Arc<[Vec<F>]>>>,
 }
 
 impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
@@ -66,7 +66,7 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
     fn decimation_in_freq_dft(
         mat: &mut [MontyField31<MP>],
         ncols: usize,
-        twiddles: &[Arc<[MontyField31<MP>]>],
+        twiddles: &[Vec<MontyField31<MP>>],
     ) {
         if ncols > 1 {
             let lg_fft_len = log2_strict_usize(ncols);
@@ -81,7 +81,7 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
     fn decimation_in_time_dft(
         mat: &mut [MontyField31<MP>],
         ncols: usize,
-        twiddles: &[Arc<[MontyField31<MP>]>],
+        twiddles: &[Vec<MontyField31<MP>>],
     ) {
         if ncols > 1 {
             let lg_fft_len = p3_util::log2_strict_usize(ncols);
@@ -112,7 +112,7 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
 
         let missing_twiddles = MontyField31::get_missing_twiddles(need, have);
 
-        let missing_inv_twiddles: Vec<Arc<[MontyField31<MP>]>> = missing_twiddles
+        let missing_inv_twiddles: Vec<Vec<MontyField31<MP>>> = missing_twiddles
             .iter()
             .map(|ts| {
                 let mut v = Vec::with_capacity(ts.len());
@@ -123,7 +123,7 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
                         .rev()
                         .map(|&t| MontyField31::new_monty(MP::PRIME - t.value)),
                 );
-                Arc::from(v.into_boxed_slice())
+                v
             })
             .collect::<Vec<_>>();
         {
@@ -150,10 +150,10 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
         }
     }
 
-    fn get_twiddles(&self) -> Arc<[Arc<[MontyField31<MP>]>]> {
+    fn get_twiddles(&self) -> Arc<[Vec<MontyField31<MP>>]> {
         self.twiddles.read().clone()
     }
-    fn get_inv_twiddles(&self) -> Arc<[Arc<[MontyField31<MP>]>]> {
+    fn get_inv_twiddles(&self) -> Arc<[Vec<MontyField31<MP>>]> {
         self.inv_twiddles.read().clone()
     }
 }
