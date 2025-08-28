@@ -63,11 +63,11 @@ where
         let half_h = (1 << log_h) >> 1;
         let root = F::two_adic_generator(log_h);
         let twiddles = root.powers().collect_n(half_h);
-        let mut bit_reversed_twiddles = twiddles.clone();
-        reverse_slice_index_bits(&mut bit_reversed_twiddles);
+        let mut bitrev_twiddles = twiddles.clone();
+        reverse_slice_index_bits(&mut bitrev_twiddles);
         let new = VectorPair {
-            twiddles: twiddles,
-            bitrev_twiddles: bit_reversed_twiddles,
+            twiddles,
+            bitrev_twiddles,
         };
         let mut write = self.twiddles.write();
         write.entry(log_h).or_insert_with(|| Arc::new(new));
@@ -122,14 +122,14 @@ where
         let half_h = (1 << log_h) >> 1;
         let root_inv = F::two_adic_generator(log_h).inverse();
         let twiddles = root_inv.powers().collect_n(half_h);
-        let mut bit_reversed_twiddles = twiddles.clone();
+        let mut bitrev_twiddles = twiddles.clone();
 
         // In the middle of the coset LDE, we're in bit-reversed order.
-        reverse_slice_index_bits(&mut bit_reversed_twiddles);
+        reverse_slice_index_bits(&mut bitrev_twiddles);
 
         let update = VectorPair {
-            twiddles: twiddles,
-            bitrev_twiddles: bit_reversed_twiddles,
+            twiddles,
+            bitrev_twiddles,
         };
         let mut write = self.inverse_twiddles.write();
         write.entry(log_h).or_insert_with(|| Arc::new(update));
