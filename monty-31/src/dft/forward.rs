@@ -6,7 +6,6 @@
 
 extern crate alloc;
 
-use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use itertools::izip;
