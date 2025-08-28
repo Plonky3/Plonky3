@@ -41,11 +41,11 @@ pub struct Radix2DFTSmallBatch<F> {
     /// one element vectors `[1]` and more general `twiddles[-i]` has length `2^i`.
     ///
     #[allow(clippy::type_complexity)]
-    twiddles: Arc<RwLock<Arc<[Arc<[F]>]>>>,
+    twiddles: Arc<RwLock<Arc<[Vec<F>]>>>,
 
     /// Similar to `twiddles`, but stored the inverses used for the inverse fft.
     #[allow(clippy::type_complexity)]
-    inv_twiddles: Arc<RwLock<Arc<[Arc<[F]>]>>>,
+    inv_twiddles: Arc<RwLock<Arc<[Vec<F>]>>>,
 }
 
 impl<F: TwoAdicField> Radix2DFTSmallBatch<F> {
@@ -106,27 +106,19 @@ impl<F: TwoAdicField> Radix2DFTSmallBatch<F> {
             new_inv_twiddles.iter_mut().for_each(|ts| {
                 reverse_slice_index_bits(ts);
             });
-            let new_twiddles: Arc<[Arc<[F]>]> = new_twiddles
-                .into_iter()
-                .map(|tw| Arc::from(tw.into_boxed_slice()))
-                .collect();
-            let new_inv_twiddles: Arc<[Arc<[F]>]> = new_inv_twiddles
-                .into_iter()
-                .map(|tw| Arc::from(tw.into_boxed_slice()))
-                .collect();
 
             {
                 let mut tw_lock = self.twiddles.write();
                 let cur_have = 1usize << tw_lock.len();
                 if fft_len > cur_have {
-                    *tw_lock = new_twiddles; // move in the new table
+                    *tw_lock = Arc::from(new_twiddles); // move in the new table
                 }
             }
             {
                 let mut inv_tw_lock = self.inv_twiddles.write();
                 let cur_have = 1usize << inv_tw_lock.len();
                 if fft_len > cur_have {
-                    *inv_tw_lock = new_inv_twiddles; // move in the new table
+                    *inv_tw_lock = Arc::from(new_inv_twiddles); // move in the new table
                 }
             }
         }
@@ -421,7 +413,7 @@ fn dft_layer_par<F: Field, B: Butterfly<F>>(
 ///
 /// This avoids passing data between threads, which can be expensive.
 #[inline]
-fn par_remaining_layers<F: Field>(mat: &mut [F], chunk_size: usize, root_table: &[Arc<[F]>]) {
+fn par_remaining_layers<F: Field>(mat: &mut [F], chunk_size: usize, root_table: &[Vec<F>]) {
     mat.par_chunks_exact_mut(chunk_size)
         .enumerate()
         .for_each(|(index, chunk)| {
@@ -430,7 +422,7 @@ fn par_remaining_layers<F: Field>(mat: &mut [F], chunk_size: usize, root_table: 
 }
 
 /// Performs a collection of DIT layers on a chunk of the matrix.
-fn remaining_layers<F: Field>(chunk: &mut [F], root_table: &[Arc<[F]>], index: usize) {
+fn remaining_layers<F: Field>(chunk: &mut [F], root_table: &[Vec<F>], index: usize) {
     for (layer, twiddles) in root_table.iter().rev().enumerate() {
         let num_twiddles_per_block = 1 << layer;
         let start = index * num_twiddles_per_block;
@@ -452,7 +444,7 @@ fn remaining_layers<F: Field>(chunk: &mut [F], root_table: &[Arc<[F]>], index: u
 fn par_initial_layers<F: Field>(
     mat: &mut [F],
     chunk_size: usize,
-    root_table: &[Arc<[F]>],
+    root_table: &[Vec<F>],
     log_height: usize,
 ) {
     let inv_height = F::ONE.div_2exp_u64(log_height as u64);
@@ -467,7 +459,7 @@ fn par_initial_layers<F: Field>(
 
 /// Performs a collection of DIF layers on a chunk of the matrix.
 #[inline]
-fn initial_layers<F: Field>(chunk: &mut [F], root_table: &[Arc<[F]>], index: usize) {
+fn initial_layers<F: Field>(chunk: &mut [F], root_table: &[Vec<F>], index: usize) {
     let num_rounds = root_table.len();
 
     for (layer, twiddles) in root_table.iter().enumerate() {
@@ -489,8 +481,8 @@ fn par_middle_layers<F: Field>(
     in_mat: &mut RowMajorMatrixViewMut<'_, F>,
     out_mat: &mut RowMajorMatrixViewMut<'_, F>,
     num_par_rows: usize,
-    root_table: &[Arc<[F]>],
-    inv_root_table: &[Arc<[F]>],
+    root_table: &[Vec<F>],
+    inv_root_table: &[Vec<F>],
     added_bits: usize,
     shift: F,
 ) {
@@ -700,7 +692,7 @@ fn dft_layer_par_triple<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>
 /// may not be a multiple of `LAYERS_PER_GROUP`.
 fn dft_layer_par_extra_layers<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>(
     mat: &mut RowMajorMatrixViewMut<'_, F>,
-    root_table: &[Arc<[F]>],
+    root_table: &[Vec<F>],
     multi_layer: M,
 ) {
     match root_table.len() {
