@@ -423,7 +423,7 @@ pub unsafe fn as_base_slice<Base, BaseArray>(buf: &[BaseArray]) -> &[Base] {
     const {
         assert!(align_of::<Base>() == align_of::<BaseArray>());
         assert!(size_of::<BaseArray>().is_multiple_of(size_of::<Base>()));
-        }
+    }
 
     let d = size_of::<BaseArray>() / size_of::<Base>();
 
@@ -452,7 +452,7 @@ pub unsafe fn as_base_slice_mut<Base, BaseArray>(buf: &mut [BaseArray]) -> &mut 
     const {
         assert!(align_of::<Base>() == align_of::<BaseArray>());
         assert!(size_of::<BaseArray>().is_multiple_of(size_of::<Base>()));
-        }
+    }
 
     let d = size_of::<BaseArray>() / size_of::<Base>();
 
@@ -484,7 +484,7 @@ pub unsafe fn flatten_to_base<Base, BaseArray>(vec: Vec<BaseArray>) -> Vec<Base>
     const {
         assert!(align_of::<Base>() == align_of::<BaseArray>());
         assert!(size_of::<BaseArray>().is_multiple_of(size_of::<Base>()));
-        }
+    }
 
     let d = size_of::<BaseArray>() / size_of::<Base>();
     // Prevent running `vec`'s destructor so we are in complete control
@@ -533,7 +533,7 @@ pub unsafe fn reconstitute_from_base<Base, BaseArray: Clone>(mut vec: Vec<Base>)
     const {
         assert!(align_of::<Base>() == align_of::<BaseArray>());
         assert!(size_of::<BaseArray>().is_multiple_of(size_of::<Base>()));
-        }
+    }
 
     let d = size_of::<BaseArray>() / size_of::<Base>();
 
@@ -692,7 +692,9 @@ pub fn gcd_inner<const NUM_ROUNDS: usize>(a: &mut u64, b: &mut u64) -> (i64, i64
 /// `a < b`. If either of these assumptions break, the output is undefined.
 #[inline]
 pub fn gcd_inversion_prime_field_32<const FIELD_BITS: u32>(mut a: u32, mut b: u32) -> i64 {
-    const { assert!(FIELD_BITS <= 32); }
+    const {
+        assert!(FIELD_BITS <= 32);
+    }
     debug_assert!(((1_u64 << FIELD_BITS) - 1) >= b as u64);
 
     // Initialise u, v. Note that |u|, |v| <= 2^0
