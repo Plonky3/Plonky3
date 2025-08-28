@@ -37,7 +37,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
             .collect()
     }
 
-    pub fn get_missing_twiddles(req_lg_n: usize, cur_lg_n: usize) -> Vec<Arc<[Self]>> {
+    pub fn get_missing_twiddles(req_lg_n: usize, cur_lg_n: usize) -> Vec<Vec<Self>> {
         let generator = Self::two_adic_generator(req_lg_n);
         let half_n = 1 << (req_lg_n - 1);
         let nth_roots = generator.powers().collect_n(half_n);
@@ -50,7 +50,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
                 for i in 0..count {
                     v.push(nth_roots[i * stride]);
                 }
-                Arc::from(v.into_boxed_slice()) // Arc<[Self]>
+                v
             })
             .collect()
     }
@@ -184,10 +184,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
 
     /// Breadth-first DIF FFT for smallish vectors (must be >= 64)
     #[inline]
-    fn forward_iterative(
-        packed_input: &mut [<Self as Field>::Packing],
-        root_table: &[Arc<[Self]>],
-    ) {
+    fn forward_iterative(packed_input: &mut [<Self as Field>::Packing], root_table: &[Vec<Self>]) {
         assert!(packed_input.len() >= 2);
         let packing_width = <Self as Field>::Packing::WIDTH;
         let n = packed_input.len() * packing_width;
@@ -306,7 +303,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline(always)]
-    fn forward_32(a: &mut [Self], root_table: &[Arc<[Self]>]) {
+    fn forward_32(a: &mut [Self], root_table: &[Vec<Self>]) {
         assert_eq!(a.len(), 32);
 
         Self::forward_pass(a, &root_table[root_table.len() - 1]);
@@ -319,7 +316,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
 
     /// Assumes `input.len() >= 64`.
     #[inline]
-    fn forward_fft_recur(input: &mut [<Self as Field>::Packing], root_table: &[Arc<[Self]>]) {
+    fn forward_fft_recur(input: &mut [<Self as Field>::Packing], root_table: &[Vec<Self>]) {
         const ITERATIVE_FFT_THRESHOLD: usize = 1024;
 
         let n = input.len() * <Self as Field>::Packing::WIDTH;
@@ -338,7 +335,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     #[inline]
-    pub fn forward_fft(input: &mut [Self], root_table: &[Arc<[Self]>]) {
+    pub fn forward_fft(input: &mut [Self], root_table: &[Vec<Self>]) {
         let n = input.len();
         if n == 1 {
             return;
