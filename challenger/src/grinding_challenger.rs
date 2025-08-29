@@ -51,7 +51,7 @@ where
     #[instrument(name = "grind for proof-of-work witness", skip_all)]
     fn grind(&mut self, bits: usize) -> Self::Witness {
         assert!(bits < (usize::BITS as usize));
-        assert!((1 << bits) < F::ORDER_U64);
+        assert!((1u128 << bits) < F::ORDER_U64 as u128);
 
         let witness = (0..F::ORDER_U64)
             .into_par_iter()
@@ -78,7 +78,8 @@ where
     #[instrument(name = "grind for proof-of-work witness", skip_all)]
     fn grind(&mut self, bits: usize) -> Self::Witness {
         assert!(bits < (usize::BITS as usize));
-        assert!((1 << bits) < F::ORDER_U32);
+        // Avoid shifting a 32-bit base; compare in u64 domain to prevent overflow when bits >= 32
+        assert!((1u64 << bits) < F::ORDER_U64);
         let witness = (0..F::ORDER_U32)
             .into_par_iter()
             .map(|i| unsafe {
