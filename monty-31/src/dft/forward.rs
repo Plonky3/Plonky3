@@ -328,8 +328,8 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
             // Safe because input.len() > ITERATIVE_FFT_THRESHOLD
             let (a0, a1) = unsafe { input.split_at_mut_unchecked(input.len() / 2) };
 
-            Self::forward_fft_recur(a0, &root_table[..root_table.len()]);
-            Self::forward_fft_recur(a1, &root_table[..root_table.len()]);
+            Self::forward_fft_recur(a0, &root_table[..root_table.len() - 1]);
+            Self::forward_fft_recur(a1, &root_table[..root_table.len() - 1]);
         }
     }
 
