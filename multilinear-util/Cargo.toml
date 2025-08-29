@@ -10,12 +10,11 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+itertools.workspace = true
 p3-field.workspace = true
 p3-maybe-rayon.workspace = true
 p3-util.workspace = true
-
 rand.workspace = true
-itertools.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
