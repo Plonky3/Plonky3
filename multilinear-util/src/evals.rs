@@ -1,8 +1,9 @@
 use itertools::Itertools;
 use p3_field::{ExtensionField, Field};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 
-use crate::eq::eval_eq;
+use crate::eq::{eval_eq, eval_eq_base};
 use crate::point::MultilinearPoint;
 
 /// The number of variables at which the multilinear evaluation algorithm switches
@@ -26,12 +27,16 @@ use crate::point::MultilinearPoint;
 /// benefits of the non-recursive strategy begin to outweigh its setup overhead.
 pub const MLE_RECURSION_THRESHOLD: usize = 20;
 
+const PARALLEL_THRESHOLD: usize = 4096;
+
 /// Represents a multilinear polynomial `f` in `n` variables, stored by its evaluations
 /// over the boolean hypercube `{0,1}^n`.
 ///
 /// The inner vector stores function evaluations at points of the hypercube in lexicographic
-/// order.
+/// order. The number of variables `n` is inferred from the length of this vector, where
+/// `self.len() = 2^n`.
 #[derive(Debug, Clone, Eq, PartialEq)]
+#[must_use]
 pub struct EvaluationsList<F>(Vec<F>);
 
 impl<F> EvaluationsList<F>
@@ -48,7 +53,7 @@ where
     ///
     /// # Panics
     /// Panics if `evals.len()` is not a power of two.
-    #[must_use]
+    #[inline]
     pub const fn new(evals: Vec<F>) -> Self {
         assert!(
             evals.len().is_power_of_two(),
@@ -58,57 +63,68 @@ where
         Self(evals)
     }
 
-    /// Creates an `EvaluationsList` for the `eq` polynomial from a given point.
+    /// Given a multilinear point `P`, compute the evaluation vector of the equality function `eq(P, X)`
+    /// for all points `X` in the boolean hypercube.
+    #[inline]
+    pub fn new_from_point(point: &MultilinearPoint<F>, value: F) -> Self {
+        let n = point.num_variables();
+        let mut evals = F::zero_vec(1 << n);
+        eval_eq::<_, _, false>(point.as_slice(), &mut evals, value);
+        Self(evals)
+    }
+
+    /// Evaluates the polynomial as a constant.
+    /// This is only valid for constant polynomials (i.e., when `num_variables` is 0).
     ///
-    /// Given a point `p = (p_1, ..., p_n)`, this computes the evaluations of the polynomial
-    /// ```text
-    ///     eq(x, p) = \prod_{i=1}^{n} (x_i * p_i + (1 - x_i) * (1 - p_i)),
-    /// ```
-    /// over the boolean hypercube.
-    pub fn eval_eq(eval: &[F]) -> Self {
-        // Alloc memory without initializing it to zero.
-        // This is safe because we overwrite it inside `eval_eq`.
-        let mut out: Vec<F> = Vec::with_capacity(1 << eval.len());
-        #[allow(clippy::uninit_vec)]
-        unsafe {
-            out.set_len(1 << eval.len());
-        }
-        eval_eq::<_, _, false>(eval, &mut out, F::ONE);
-        Self(out)
+    /// Returns None in other cases.
+    ///
+    /// # Panics
+    /// Panics if `num_variables` is not 0.
+    #[must_use]
+    #[inline]
+    pub fn as_constant(&self) -> Option<F> {
+        (self.num_evals() == 1).then_some(self.0[0])
+    }
+
+    /// Given a multilinear point `P`, compute the evaluation vector of the equality function `eq(P, X)`
+    /// for all points `X` in the boolean hypercube and add it to the current evaluation vector.
+    #[inline]
+    pub fn accumulate(&mut self, point: &MultilinearPoint<F>, value: F) {
+        assert_eq!(self.num_variables(), point.num_variables());
+        eval_eq::<_, _, true>(point.as_slice(), &mut self.0, value);
+    }
+
+    /// Given a multilinear point `P`, compute the evaluation vector of the equality function `eq(P, X)`
+    /// for all points `X` in the boolean hypercube and add it to the current evaluation vector.
+    ///
+    /// This is a variant of `accumulate` where the new point lies in a sub-field.
+    #[inline]
+    pub fn accumulate_base<BF: Field>(&mut self, point: &MultilinearPoint<BF>, value: F)
+    where
+        F: ExtensionField<BF>,
+    {
+        assert_eq!(self.num_variables(), point.num_variables());
+        eval_eq_base::<_, _, true>(point.as_slice(), &mut self.0, value);
     }
 
     /// Returns the total number of stored evaluations.
     #[must_use]
+    #[inline]
     pub const fn num_evals(&self) -> usize {
         self.0.len()
     }
 
     /// Returns the number of variables in the multilinear polynomial.
     #[must_use]
+    #[inline]
     pub const fn num_variables(&self) -> usize {
         // Safety: The length is guaranteed to be a power of two.
         self.0.len().ilog2() as usize
     }
 
-    /// Truncates the list of evaluations to a new length.
+    /// Evaluates the multilinear polynomial at `point ∈ EF^n`.
     ///
-    /// This is used in protocols like sumcheck where the number of evaluations is
-    /// halved in each round. The new length must be a power of two.
-    ///
-    /// # Panics
-    /// Panics if `new_len` is not a power of two.
-    pub fn truncate(&mut self, new_len: usize) {
-        assert!(
-            new_len.is_power_of_two(),
-            "New evaluation list length must be a power of two."
-        );
-        self.0.truncate(new_len);
-    }
-
-    /// Evaluates the multilinear polynomial at `point ∈ [0,1]^n`.
-    ///
-    /// - If `point ∈ {0,1}^n`, returns the precomputed evaluation `f(point)`.
-    /// - Otherwise, computes
+    /// Computes
     /// ```text
     ///     f(point) = \sum_{x ∈ {0,1}^n} eq(x, point) * f(x),
     /// ```
@@ -117,27 +133,9 @@ where
     ///     eq(x, point) = \prod_{i=1}^{n} (1 - p_i + 2 p_i x_i).
     /// ```
     #[must_use]
-    pub fn evaluate<EF>(&self, point: &MultilinearPoint<EF>) -> EF
-    where
-        EF: ExtensionField<F>,
-    {
-        eval_multilinear(self.as_slice(), point)
-    }
-
-    /// Evaluates the polynomial as a constant.
-    ///
-    /// This is only valid for constant polynomials (i.e., when `num_variables` is 0).
-    ///
-    /// # Panics
-    /// Panics if `num_variables` is not 0.
-    #[must_use]
-    pub fn as_constant(&self) -> F {
-        assert_eq!(
-            self.num_variables(),
-            0,
-            "`as_constant` is only valid for constant polynomials."
-        );
-        self.0[0]
+    #[inline]
+    pub fn evaluate<EF: ExtensionField<F>>(&self, point: &MultilinearPoint<EF>) -> EF {
+        eval_multilinear(&self.0, point)
     }
 
     /// Folds a multilinear polynomial stored in evaluation form along the last `k` variables.
@@ -145,15 +143,8 @@ where
     /// Given evaluations `f: {0,1}^n → F`, this method returns a new evaluation list `g` such that:
     ///
     /// ```text
-    /// g(x_0, ..., x_{n-k-1}) = f(x_0, ..., x_{n-k-1}, r_0, ..., r_{k-1})
+    ///     g(x_0, ..., x_{n-k-1}) = f(x_0, ..., x_{n-k-1}, r_0, ..., r_{k-1})
     /// ```
-    ///
-    /// where `folding_randomness = (r_0, ..., r_{k-1})` is a fixed assignment to the last `k` variables.
-    ///
-    /// This operation reduces the dimensionality of the polynomial:
-    ///
-    /// - Input: `f ∈ F^{2^n}`
-    /// - Output: `g ∈ EF^{2^{n-k}}`, where `EF` is an extension field of `F`
     ///
     /// # Arguments
     /// - `folding_randomness`: The extension-field values to substitute for the last `k` variables.
@@ -163,7 +154,7 @@ where
     ///
     /// # Panics
     /// - If the evaluation list is not sized `2^n` for some `n`.
-    #[must_use]
+    #[inline]
     pub fn fold<EF>(&self, folding_randomness: &MultilinearPoint<EF>) -> EvaluationsList<EF>
     where
         EF: ExtensionField<F>,
@@ -178,10 +169,11 @@ where
         EvaluationsList(evals)
     }
 
-    /// Multiply the polynomial by a scalar factor.
+    /// Create a matrix representation of the evaluation list.
+    #[inline]
     #[must_use]
-    pub fn scale<EF: ExtensionField<F>>(&self, factor: EF) -> EvaluationsList<EF> {
-        EvaluationsList(self.0.par_iter().map(|&e| factor * e).collect())
+    pub fn into_mat(self, width: usize) -> RowMajorMatrix<F> {
+        RowMajorMatrix::new(self.0, width)
     }
 
     /// Returns a reference to the underlying slice of evaluations.
@@ -191,11 +183,98 @@ where
         &self.0
     }
 
-    /// Returns a mutable reference to the underlying slice of evaluations.
+    /// Returns an iterator over the evaluations.
     #[inline]
-    #[must_use]
-    pub fn as_mut_slice(&mut self) -> &mut [F] {
-        &mut self.0
+    pub fn iter(&self) -> std::slice::Iter<'_, F> {
+        self.0.iter()
+    }
+
+    /// Compresses a list of evaluations in-place using a random challenge.
+    ///
+    /// ## Arguments
+    /// * `evals`: A mutable reference to an `EvaluationsList<F>`, which will be modified in-place.
+    /// * `r`: A value from the field `F`, used as the random folding challenge.
+    ///
+    /// ## Mathematical Formula
+    /// The compression is achieved by applying the following formula to pairs of evaluations:
+    /// ```text
+    ///     p'(X_2, ..., X_n) = (p(1, X_2, ..., X_n) - p(0, X_2, ..., X_n)) \cdot r + p(0, X_2, ..., X_n)
+    /// ```
+    #[inline]
+    pub fn compress(&mut self, r: F) {
+        // Ensure the polynomial is not a constant (i.e., has variables to fold).
+        assert_ne!(self.num_variables(), 0);
+
+        // For large inputs, we use a parallel, out-of-place strategy.
+        if self.num_evals() >= PARALLEL_THRESHOLD {
+            // Define the folding operation for a pair of elements.
+            let fold = |slice: &[F]| -> F { r * (slice[1] - slice[0]) + slice[0] };
+            // Execute the fold in parallel and collect into a new vector.
+            let folded = self.0.par_chunks_exact(2).map(fold).collect();
+            // Replace the old evaluations with the new, folded evaluations.
+            self.0 = folded;
+        } else {
+            // For smaller inputs, we use a sequential, in-place strategy.
+            let mid = self.num_evals() / 2;
+            for i in 0..mid {
+                let p0 = self.0[2 * i];
+                let p1 = self.0[2 * i + 1];
+                self.0[i] = r * (p1 - p0) + p0;
+            }
+            self.0.truncate(mid);
+        }
+    }
+
+    /// Folds a list of evaluations from a base field `F` into an extension field `EF`.
+    ///
+    /// ## Arguments
+    /// * `r`: A value `r` from the extension field `EF`, used as the random challenge for folding.
+    ///
+    /// ## Returns
+    /// A new `EvaluationsList<EF>` containing the compressed evaluations in the extension field.
+    ///
+    /// The compression is achieved by applying the following formula to pairs of evaluations:
+    /// ```text
+    ///     p'(X_2, ..., X_n) = (p(1, X_2, ..., X_n) - p(0, X_2, ..., X_n)) \cdot r + p(0, X_2, ..., X_n)
+    /// ```
+    #[inline]
+    pub fn compress_ext<EF: ExtensionField<F>>(&self, r: EF) -> EvaluationsList<EF> {
+        assert_ne!(self.num_variables(), 0);
+
+        // Fold between base and extension field elements
+        let fold = |slice: &[F]| -> EF { r * (slice[1] - slice[0]) + slice[0] };
+
+        // Threshold below which sequential computation is faster
+        //
+        // This was chosen based on experiments with the `compress` function.
+        // It is possible that the threshold can be tuned further.
+        let folded = if self.num_evals() >= PARALLEL_THRESHOLD {
+            self.0.par_chunks_exact(2).map(fold).collect()
+        } else {
+            self.0.chunks_exact(2).map(fold).collect()
+        };
+
+        EvaluationsList::new(folded)
+    }
+}
+
+impl<'a, F> IntoIterator for &'a EvaluationsList<F> {
+    type Item = &'a F;
+    type IntoIter = std::slice::Iter<'a, F>;
+
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<F> IntoIterator for EvaluationsList<F> {
+    type Item = F;
+    type IntoIter = std::vec::IntoIter<F>;
+
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
     }
 }
 
@@ -305,54 +384,35 @@ where
         //
         // This handles all other cases, using one of two different strategies.
         [x, tail @ ..] => {
-            // For a very large number of variables, the recursive approach is not the most efficient.
-            //
-            // We switch to a more direct, non-recursive algorithm that is better suited for wide parallelization.
+            // For a very large number of variables we use a non-recursive algorithm better suited for wide parallelization.
             if point.num_variables() >= MLE_RECURSION_THRESHOLD {
-                // The `evals` are ordered lexicographically, meaning the first variable's bit changes the slowest.
-                //
-                // To align our computation with this memory layout, we process the point's coordinates in reverse.
-                let point_rev = MultilinearPoint::new(point.iter().rev().copied().collect());
-
-                // Split the reversed point's coordinates into two halves:
-                // - `z0` (low-order vars)
-                // - `z1` (high-order vars).
-                let mid = point_rev.num_variables() / 2;
-                let (z0, z1) = point_rev.as_slice().split_at(mid);
+                let mid = point.num_variables() / 2;
+                let (hi, lo) = point.as_slice().split_at(mid);
 
                 // Precomputation of Basis Polynomials
                 //
                 // The basis polynomial eq(v, p) can be split: eq(v, p) = eq(v_low, p_low) * eq(v_high, p_high).
                 //
-                // We precompute all `2^|z0|` values of eq(v_low, p_low) and store them in `left`.
-                // We precompute all `2^|z1|` values of eq(v_high, p_high) and store them in `right`.
+                // We precompute all `2^|lo|` values of eq(v_low, p_low) and store them in `left`.
+                // We precompute all `2^|hi|` values of eq(v_high, p_high) and store them in `right`.
 
-                // Allocate uninitialized memory for the low-order basis polynomial evaluations.
+                // Allocate uninitialized memory for the polynomial evaluations.
                 #[allow(clippy::uninit_vec)]
                 let mut left = unsafe {
-                    let mut vec = Vec::with_capacity(1 << z0.len());
-                    vec.set_len(1 << z0.len());
+                    let mut vec = Vec::with_capacity(1 << lo.len());
+                    vec.set_len(1 << lo.len());
                     vec
                 };
-                // Allocate uninitialized memory for the high-order basis polynomial evaluations.
                 #[allow(clippy::uninit_vec)]
                 let mut right = unsafe {
-                    let mut vec = Vec::with_capacity(1 << z1.len());
-                    vec.set_len(1 << z1.len());
+                    let mut vec = Vec::with_capacity(1 << hi.len());
+                    vec.set_len(1 << hi.len());
                     vec
                 };
 
-                // The `eval_eq` function requires the variables in their original order, so we reverse the halves back.
-                let mut z0_ordered = z0.to_vec();
-                z0_ordered.reverse();
-                // Compute all eq(v_low, p_low) values and fill the `left` vector.
-                eval_eq::<_, _, false>(&z0_ordered, &mut left, EF::ONE);
-
-                // Repeat the process for the high-order variables.
-                let mut z1_ordered = z1.to_vec();
-                z1_ordered.reverse();
-                // Compute all eq(v_high, p_high) values and fill the `right` vector.
-                eval_eq::<_, _, false>(&z1_ordered, &mut right, EF::ONE);
+                // Compute all eq(v_low, p_low) values and fill the `left` and `right` vectors.
+                eval_eq::<_, _, false>(lo, &mut left, EF::ONE);
+                eval_eq::<_, _, false>(hi, &mut right, EF::ONE);
 
                 // Parallelized Final Summation
                 //
@@ -1004,18 +1064,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_eval_eq() {
-        let c0 = F::from_u64(11);
-        let c1 = F::from_u64(22);
-        let evals = [c0, c1];
-        let poly = EvaluationsList::eval_eq(&evals);
-        assert_eq!(poly.0[0], (F::ONE - c0) * (F::ONE - c1));
-        assert_eq!(poly.0[1], (F::ONE - c0) * c1);
-        assert_eq!(poly.0[2], c0 * (F::ONE - c1));
-        assert_eq!(poly.0[3], c0 * c1);
-    }
-
     proptest! {
         #[test]
         fn prop_eval_eq_matches_naive_for_eval_list(
@@ -1050,126 +1098,6 @@ mod tests {
 
             prop_assert_eq!(out, expected);
         }
-    }
-
-    #[test]
-    fn test_scale_by_zero() {
-        let list = EvaluationsList::<F>::new(vec![
-            F::from_u64(1),
-            F::from_u64(2),
-            F::from_u64(3),
-            F::from_u64(4),
-        ]);
-
-        let result = list.scale(EF4::ZERO);
-
-        assert_eq!(result.0.len(), 4);
-        for val in &result.0 {
-            assert_eq!(val.clone(), EF4::ZERO);
-        }
-        assert_eq!(result.num_variables(), 2);
-    }
-
-    #[test]
-    fn test_scale_by_one() {
-        let list = EvaluationsList::<F>::new(vec![
-            F::from_u64(10),
-            F::from_u64(20),
-            F::from_u64(30),
-            F::from_u64(40),
-        ]);
-
-        let result = list.scale(EF4::ONE);
-
-        assert_eq!(result.num_evals(), 4);
-        for (i, val) in result.as_slice().iter().enumerate() {
-            assert_eq!(*val, EF4::from(list.0[i]));
-        }
-        assert_eq!(result.num_variables(), 2);
-    }
-
-    #[test]
-    fn test_scale_by_nontrivial_scalar() {
-        let list = EvaluationsList::<F>::new(vec![
-            F::from_u64(2),
-            F::from_u64(5),
-            F::from_u64(7),
-            F::from_u64(8),
-        ]);
-
-        let factor = EF4::from_u64(9);
-        let result = list.scale(factor);
-
-        assert_eq!(result.num_evals(), 4);
-        for (i, val) in result.as_slice().iter().enumerate() {
-            assert_eq!(*val, EF4::from(list.0[i]) * factor);
-        }
-        assert_eq!(result.num_variables(), 2);
-    }
-
-    #[test]
-    fn test_scale_preserves_length_and_variables() {
-        let list = EvaluationsList::<F>(vec![
-            F::from_u64(0),
-            F::from_u64(1),
-            F::from_u64(2),
-            F::from_u64(3),
-        ]);
-
-        let result = list.scale(EF4::from_u64(7));
-
-        assert_eq!(result.num_evals(), 4);
-        assert_eq!(result.num_variables(), 2);
-    }
-
-    #[test]
-    fn test_truncate_halves_length() {
-        let evals = vec![F::ONE, F::from_u64(2), F::from_u64(3), F::from_u64(4)];
-        let mut list = EvaluationsList::new(evals.clone());
-
-        // Truncate to half
-        list.truncate(2);
-
-        // Only the first two elements should remain
-        assert_eq!(list.as_slice(), &evals[..2]);
-        assert_eq!(list.num_variables(), 1); // log2(2) = 1
-    }
-
-    #[test]
-    fn test_truncate_to_one() {
-        let evals = vec![
-            F::from_u64(7),
-            F::from_u64(8),
-            F::from_u64(9),
-            F::from_u64(10),
-        ];
-        let mut list = EvaluationsList::new(evals);
-
-        list.truncate(1);
-
-        assert_eq!(list.as_slice(), &[F::from_u64(7)]);
-        assert_eq!(list.num_variables(), 0); // log2(1) = 0
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_truncate_to_non_power_of_two_should_panic() {
-        let evals = vec![F::ONE, F::ONE, F::ONE, F::ONE];
-        let mut list = EvaluationsList::new(evals);
-
-        // Not a power of two — should panic
-        list.truncate(3);
-    }
-
-    #[test]
-    fn test_truncate_noop_when_length_unchanged() {
-        let evals = vec![F::from_u64(1), F::from_u64(2)];
-        let mut list = EvaluationsList::new(evals.clone());
-
-        list.truncate(2); // Same length, should remain unchanged
-
-        assert_eq!(list.as_slice(), &evals);
-        assert_eq!(list.num_variables(), 1);
     }
 
     #[test]
@@ -1242,5 +1170,271 @@ mod tests {
 
         // Finally, assert that the results are equal.
         assert_eq!(actual_result, expected_sum);
+    }
+
+    #[test]
+    fn test_new_from_point_zero_vars() {
+        let point = MultilinearPoint::<F>::new(vec![]);
+        let value = F::from_u64(42);
+        let evals_list = EvaluationsList::new_from_point(&point, value);
+
+        // For n=0, the hypercube has one point, and the `eq` polynomial is the constant 1.
+        // The result should be a list with a single element: `value`.
+        assert_eq!(evals_list.num_variables(), 0);
+        assert_eq!(evals_list.as_slice(), &[value]);
+    }
+
+    #[test]
+    fn test_new_from_point_one_var() {
+        let p0 = F::from_u64(7);
+        let point = MultilinearPoint::new(vec![p0]);
+        let value = F::from_u64(3);
+        let evals_list = EvaluationsList::new_from_point(&point, value);
+
+        // For a point `p = [p0]`, the `eq` evaluations over `X={0,1}` are:
+        // - eq(p, 0) = 1 - p0
+        // - eq(p, 1) = p0
+        // These are then scaled by `value`.
+        let expected = vec![value * (F::ONE - p0), value * p0];
+
+        assert_eq!(evals_list.num_variables(), 1);
+        assert_eq!(evals_list.as_slice(), &expected);
+    }
+
+    #[test]
+    #[allow(clippy::identity_op)]
+    fn test_new_from_point_three_vars() {
+        let p = [F::from_u64(2), F::from_u64(3), F::from_u64(5)];
+        let point = MultilinearPoint::new(p.to_vec());
+        let value = F::from_u64(10);
+        let evals_list = EvaluationsList::new_from_point(&point, value);
+
+        // Manually compute the expected result for eq(p, b) * value for all 8 points `b`.
+        // The implementation's lexicographical order means the index `i` is formed as
+        // i = 4*b0 + 2*b1 + 1*b2, where `b` is the hypercube point (b0, b1, b2).
+        let mut expected = Vec::with_capacity(8);
+        for i in 0..8 {
+            // We extract the bits of `i` to determine the coordinates of the hypercube point `b`.
+            //
+            // MSB of `i` corresponds to the first variable, p[0].
+            let b0 = (i >> 2) & 1;
+            // Middle bit of `i` corresponds to the second variable, p[1].
+            let b1 = (i >> 1) & 1;
+            // LSB of `i` corresponds to the last variable, p[2].
+            let b2 = (i >> 0) & 1;
+
+            // Calculate the eq(p, b) term for this specific point `b`.
+            let term0 = if b0 == 1 { p[0] } else { F::ONE - p[0] };
+            let term1 = if b1 == 1 { p[1] } else { F::ONE - p[1] };
+            let term2 = if b2 == 1 { p[2] } else { F::ONE - p[2] };
+
+            expected.push(value * term0 * term1 * term2);
+        }
+
+        assert_eq!(evals_list.num_variables(), 3);
+        assert_eq!(evals_list.as_slice(), &expected);
+    }
+
+    #[test]
+    fn test_as_constant_for_constant_poly() {
+        // A polynomial with 0 variables is a constant. Its evaluation
+        // list contains a single value.
+        let constant_value = F::from_u64(42);
+        let evals = EvaluationsList::new(vec![constant_value]);
+
+        // `as_constant` should return the value wrapped in `Some`.
+        assert_eq!(evals.num_variables(), 0);
+        assert_eq!(evals.as_constant(), Some(constant_value));
+    }
+
+    #[test]
+    fn test_as_constant_for_non_constant_poly() {
+        // A polynomial with 2 variables is not a constant. Its evaluation
+        // list has 2^2 = 4 entries.
+        let evals = EvaluationsList::new(vec![F::ONE, F::ZERO, F::ONE, F::ZERO]);
+
+        // For any non-constant polynomial, `as_constant` should return `None`.
+        assert_ne!(evals.num_variables(), 0);
+        assert_eq!(evals.as_constant(), None);
+    }
+
+    #[test]
+    #[allow(clippy::identity_op)]
+    fn test_accumulate() {
+        // Set up an initial list of evaluations.
+        let n = 2;
+        let initial_values = vec![
+            F::from_u64(10),
+            F::from_u64(20),
+            F::from_u64(30),
+            F::from_u64(40),
+        ];
+        let mut evals_list = EvaluationsList::new(initial_values.clone());
+
+        // Define the point and value to accumulate.
+        let p = [F::from_u64(2), F::from_u64(3)];
+        let point = MultilinearPoint::new(p.to_vec());
+        let value = F::from_u64(5);
+
+        // Manually compute the `eq` evaluations that should be added.
+        let mut eq_evals_to_add = Vec::with_capacity(1 << n);
+        for i in 0..(1 << n) {
+            let b0 = (i >> 1) & 1; // MSB for p[0]
+            let b1 = (i >> 0) & 1; // LSB for p[1]
+            let term0 = if b0 == 1 { p[0] } else { F::ONE - p[0] };
+            let term1 = if b1 == 1 { p[1] } else { F::ONE - p[1] };
+            eq_evals_to_add.push(value * term0 * term1);
+        }
+
+        // Calculate the final expected evaluations after addition.
+        let expected: Vec<F> = initial_values
+            .iter()
+            .zip(eq_evals_to_add.iter())
+            .map(|(&initial, &to_add)| initial + to_add)
+            .collect();
+
+        // Call accumulate and assert that the result matches the expected sum.
+        evals_list.accumulate(&point, value);
+        assert_eq!(evals_list.as_slice(), &expected);
+    }
+
+    #[test]
+    #[allow(clippy::identity_op)]
+    fn test_accumulate_base() {
+        // Set up an initial list of evaluations.
+        let n = 2;
+        // Initial evaluations in the extension field.
+        let initial_values: Vec<EF4> = vec![
+            EF4::from_u64(10),
+            EF4::from_u64(20),
+            EF4::from_u64(30),
+            EF4::from_u64(40),
+        ];
+        let mut evals_list = EvaluationsList::new(initial_values.clone());
+
+        // Point in the base field `F`, value in the extension field `EF4`.
+        let p_base = [F::from_u64(2), F::from_u64(3)];
+        let point_base = MultilinearPoint::new(p_base.to_vec());
+        let value_ext = EF4::from_u64(5);
+
+        // Manually compute `eq` evals,
+        // lifting base field elements to extension field.
+        let mut eq_evals_to_add = Vec::with_capacity(1 << n);
+        for i in 0..(1 << n) {
+            let b0 = (i >> 1) & 1; // MSB
+            let b1 = (i >> 0) & 1; // LSB
+            let term0 = if b0 == 1 {
+                EF4::from(p_base[0])
+            } else {
+                EF4::ONE - EF4::from(p_base[0])
+            };
+            let term1 = if b1 == 1 {
+                EF4::from(p_base[1])
+            } else {
+                EF4::ONE - EF4::from(p_base[1])
+            };
+            eq_evals_to_add.push(value_ext * term0 * term1);
+        }
+
+        // Calculate the final expected sum in the extension field.
+        let expected: Vec<EF4> = initial_values
+            .iter()
+            .zip(eq_evals_to_add.iter())
+            .map(|(&initial, &to_add)| initial + to_add)
+            .collect();
+
+        // Accumulate and assert the result.
+        evals_list.accumulate_base(&point_base, value_ext);
+        assert_eq!(evals_list.as_slice(), &expected);
+    }
+
+    #[test]
+    fn test_compress() {
+        let initial_evals: Vec<F> = (1..=8).map(F::from_u64).collect();
+        let mut evals_list = EvaluationsList::new(initial_evals);
+        let r = F::from_u64(10);
+
+        // Manually compute the expected folded values using the formula:
+        // p' = r * (p1 - p0) + p0
+        let expected = vec![
+            r * (F::from_u64(2) - F::from_u64(1)) + F::from_u64(1),
+            r * (F::from_u64(4) - F::from_u64(3)) + F::from_u64(3),
+            r * (F::from_u64(6) - F::from_u64(5)) + F::from_u64(5),
+            r * (F::from_u64(8) - F::from_u64(7)) + F::from_u64(7),
+        ];
+
+        // The method modifies the list in-place.
+        evals_list.compress(r);
+
+        assert_eq!(evals_list.num_variables(), 2);
+        assert_eq!(evals_list.num_evals(), 4);
+        assert_eq!(evals_list.as_slice(), &expected);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_compress_panics_on_constant() {
+        // A constant polynomial has 0 variables and cannot be compressed.
+        let mut evals_list = EvaluationsList::new(vec![F::from_u64(42)]);
+        evals_list.compress(F::ONE); // This should panic.
+    }
+
+    #[test]
+    fn test_compress_ext() {
+        // This test verifies the out-of-place compression into an extension field.
+        let initial_evals: Vec<F> = (1..=8).map(F::from_u64).collect();
+        let evals_list = EvaluationsList::new(initial_evals);
+        let r_ext = EF4::from_u64(10);
+
+        // The expected result is the same as `test_compress`, but with elements
+        // lifted into the extension field EF4.
+        let expected: Vec<EF4> = vec![
+            r_ext * (EF4::from_u64(2) - EF4::from_u64(1)) + EF4::from_u64(1),
+            r_ext * (EF4::from_u64(4) - EF4::from_u64(3)) + EF4::from_u64(3),
+            r_ext * (EF4::from_u64(6) - EF4::from_u64(5)) + EF4::from_u64(5),
+            r_ext * (EF4::from_u64(8) - EF4::from_u64(7)) + EF4::from_u64(7),
+        ];
+
+        // The method returns a new list and does not modify the original.
+        let compressed_ext_list = evals_list.compress_ext(r_ext);
+
+        assert_eq!(compressed_ext_list.num_variables(), 2);
+        assert_eq!(compressed_ext_list.num_evals(), 4);
+        assert_eq!(compressed_ext_list.as_slice(), &expected);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_compress_ext_panics_on_constant() {
+        // A constant polynomial has 0 variables and cannot be compressed.
+        let evals_list = EvaluationsList::new(vec![F::from_u64(42)]);
+        let _ = evals_list.compress_ext(EF4::ONE); // This should panic.
+    }
+
+    proptest! {
+        #[test]
+        fn prop_compress_and_compress_ext_agree(
+            n in 1..=6,
+            seed in any::<u64>(),
+        ) {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let num_evals = 1 << n;
+            let evals: Vec<F> = (0..num_evals).map(|_| rng.random()).collect();
+            let r_base: F = rng.random();
+
+            // Path A: Use the in-place `compress` method.
+            let mut list_a = EvaluationsList::new(evals.clone());
+            list_a.compress(r_base);
+            // Lift the result into the extension field for comparison.
+            let result_a_lifted: Vec<EF4> = list_a.as_slice().iter().map(|&x| EF4::from(x)).collect();
+
+            // Path B: Use the `compress_ext` method with the same challenge, lifted.
+            let list_b = EvaluationsList::new(evals);
+            let r_ext = EF4::from(r_base);
+            let result_b_ext = list_b.compress_ext(r_ext);
+
+            // The results should be identical.
+            prop_assert_eq!(result_a_lifted, result_b_ext.as_slice());
+        }
     }
 }
