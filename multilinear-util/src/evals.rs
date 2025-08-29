@@ -13,6 +13,8 @@ use crate::point::MultilinearPoint;
 /// benefits of the non-recursive strategy begin to outweigh its setup overhead.
 pub const MLE_RECURSION_THRESHOLD: usize = 20;
 
+/// The number of evaluations at which the `compress` algorithm switches
+/// from a sequential to a parallel strategy.
 const PARALLEL_THRESHOLD: usize = 4096;
 
 /// A multilinear polynomial `f` stored by its evaluations over the boolean hypercube.
