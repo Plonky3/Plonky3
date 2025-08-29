@@ -261,7 +261,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         Self::backward_16(a0);
         Self::backward_16(a1);
 
-        Self::backward_pass(a, &root_table[0]);
+        Self::backward_pass(a, &root_table[root_table.len() - 1]);
     }
 
     /// Assumes `input.len() >= 64`.
@@ -278,10 +278,10 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
 
             // Safe because input.len() > ITERATIVE_FFT_THRESHOLD
             let (a0, a1) = unsafe { input.split_at_mut_unchecked(input.len() / 2) };
-            Self::backward_fft_recur(a0, &root_table[1..]);
-            Self::backward_fft_recur(a1, &root_table[1..]);
+            Self::backward_fft_recur(a0, &root_table[..root_table.len() - 1]);
+            Self::backward_fft_recur(a1, &root_table[..root_table.len() - 1]);
 
-            backward_pass_packed(input, &root_table[0]);
+            backward_pass_packed(input, &root_table[root_table.len() - 1]);
         }
     }
 
