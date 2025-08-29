@@ -28,13 +28,6 @@ where
     F: Field,
 {
     /// Constructs an `EvaluationsList` from a vector of evaluations.
-    ///
-    /// The `evals` vector must adhere to the following constraints:
-    /// - Its length must be a power of two, as it represents evaluations over a
-    ///   binary hypercube of some dimension `n`.
-    /// - The evaluations must be ordered lexicographically corresponding to the points
-    ///   on the hypercube.
-    ///
     /// # Panics
     /// Panics if `evals.len()` is not a power of two.
     #[inline]
