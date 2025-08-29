@@ -50,13 +50,8 @@ where
         Self(evals)
     }
 
-    /// Evaluates the polynomial as a constant.
-    /// This is only valid for constant polynomials (i.e., when `num_variables` is 0).
-    ///
-    /// Returns None in other cases.
-    ///
-    /// # Panics
-    /// Panics if `num_variables` is not 0.
+    /// If the polynomial is over `0` variables (i.e. the length of the evaluation vector `1`)
+    /// return the constant value. Otherwise return None.
     #[must_use]
     #[inline]
     pub fn as_constant(&self) -> Option<F> {
