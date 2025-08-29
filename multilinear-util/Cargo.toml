@@ -28,7 +28,3 @@ parallel = ["p3-maybe-rayon/parallel"]
 [[bench]]
 name = "evaleq"
 harness = false
-
-[[bench]]
-name = "point"
-harness = false
