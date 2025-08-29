@@ -15,12 +15,10 @@ pub const MLE_RECURSION_THRESHOLD: usize = 20;
 
 const PARALLEL_THRESHOLD: usize = 4096;
 
-/// Represents a multilinear polynomial `f` in `n` variables, stored by its evaluations
-/// over the boolean hypercube `{0,1}^n`.
+/// A multilinear polynomial `f` stored by its evaluations over the boolean hypercube.
 ///
-/// The inner vector stores function evaluations at points of the hypercube in lexicographic
-/// order. The number of variables `n` is inferred from the length of this vector, where
-/// `self.len() = 2^n`.
+/// The evaluations are ordered using the lexicographic order on hypercube points.
+/// The number of variables `n` is inferred from the length of this vector, via `vec.len() = 2^n`.
 #[derive(Debug, Clone, Eq, PartialEq)]
 #[must_use]
 pub struct EvaluationsList<F>(Vec<F>);
