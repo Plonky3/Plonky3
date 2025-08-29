@@ -183,7 +183,8 @@ where
 {
     fn sample_bits(&mut self, bits: usize) -> usize {
         assert!(bits < (usize::BITS as usize));
-        assert!((1 << bits) < F::ORDER_U32);
+        // Avoid shifting a 32-bit base; compare in u64 domain to prevent overflow when bits >= 32
+        assert!((1u64 << bits) < F::ORDER_U64);
         let rand_f: F = self.sample();
         let rand_usize = rand_f.as_canonical_u32() as usize;
         rand_usize & ((1 << bits) - 1)
