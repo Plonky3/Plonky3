@@ -31,10 +31,5 @@ name = "evaleq"
 harness = false
 
 [[bench]]
-name = "point"
-harness = false
-
-[[bench]]
 name = "evals"
 harness = false
-
