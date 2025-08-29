@@ -1,5 +1,3 @@
-use std::ops::{Deref, DerefMut};
-
 use itertools::Itertools;
 use p3_field::{ExtensionField, Field};
 use p3_maybe_rayon::prelude::*;
@@ -123,7 +121,7 @@ where
     where
         EF: ExtensionField<F>,
     {
-        eval_multilinear(self, point)
+        eval_multilinear(self.as_slice(), point)
     }
 
     /// Evaluates the polynomial as a constant.
@@ -172,6 +170,7 @@ where
     {
         let folding_factor = folding_randomness.num_variables();
         let evals = self
+            .0
             .par_chunks_exact(1 << folding_factor)
             .map(|ev| eval_multilinear(ev, folding_randomness))
             .collect();
@@ -182,20 +181,20 @@ where
     /// Multiply the polynomial by a scalar factor.
     #[must_use]
     pub fn scale<EF: ExtensionField<F>>(&self, factor: EF) -> EvaluationsList<EF> {
-        EvaluationsList(self.par_iter().map(|&e| factor * e).collect())
+        EvaluationsList(self.0.par_iter().map(|&e| factor * e).collect())
     }
-}
 
-impl<F> Deref for EvaluationsList<F> {
-    type Target = [F];
-
-    fn deref(&self) -> &Self::Target {
+    /// Returns a reference to the underlying slice of evaluations.
+    #[inline]
+    #[must_use]
+    pub fn as_slice(&self) -> &[F] {
         &self.0
     }
-}
 
-impl<F> DerefMut for EvaluationsList<F> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
+    /// Returns a mutable reference to the underlying slice of evaluations.
+    #[inline]
+    #[must_use]
+    pub fn as_mut_slice(&mut self) -> &mut [F] {
         &mut self.0
     }
 }
@@ -426,7 +425,7 @@ mod tests {
 
         assert_eq!(evaluations_list.num_evals(), evals.len());
         assert_eq!(evaluations_list.num_variables(), 2);
-        assert_eq!(&*evaluations_list, &evals);
+        assert_eq!(evaluations_list.as_slice(), &evals);
     }
 
     #[test]
@@ -446,10 +445,10 @@ mod tests {
         ];
         let evaluations_list = EvaluationsList::new(evals.clone());
 
-        assert_eq!(evaluations_list[0], evals[0]);
-        assert_eq!(evaluations_list[1], evals[1]);
-        assert_eq!(evaluations_list[2], evals[2]);
-        assert_eq!(evaluations_list[3], evals[3]);
+        assert_eq!(evaluations_list.0[0], evals[0]);
+        assert_eq!(evaluations_list.0[1], evals[1]);
+        assert_eq!(evaluations_list.0[2], evals[2]);
+        assert_eq!(evaluations_list.0[3], evals[3]);
     }
 
     #[test]
@@ -458,18 +457,18 @@ mod tests {
         let evals = vec![F::ZERO, F::ONE, F::ZERO, F::ONE];
         let evaluations_list = EvaluationsList::new(evals);
 
-        let _ = evaluations_list[4]; // Index out of range, should panic
+        let _ = evaluations_list.0[4]; // Index out of range, should panic
     }
 
     #[test]
     fn test_mutability_of_evals() {
         let mut evals = EvaluationsList::new(vec![F::ZERO, F::ONE, F::ZERO, F::ONE]);
 
-        assert_eq!(evals[1], F::ONE);
+        assert_eq!(evals.0[1], F::ONE);
 
-        evals[1] = F::from_u64(5);
+        evals.0[1] = F::from_u64(5);
 
-        assert_eq!(evals[1], F::from_u64(5));
+        assert_eq!(evals.0[1], F::from_u64(5));
     }
 
     #[test]
@@ -526,7 +525,7 @@ mod tests {
         let result = evals.evaluate(&point);
 
         // Expected result using `eval_multilinear`
-        let expected = eval_multilinear(&evals, &point);
+        let expected = eval_multilinear(evals.as_slice(), &point);
 
         assert_eq!(result, expected);
     }
@@ -1011,10 +1010,10 @@ mod tests {
         let c1 = F::from_u64(22);
         let evals = [c0, c1];
         let poly = EvaluationsList::eval_eq(&evals);
-        assert_eq!(poly[0], (F::ONE - c0) * (F::ONE - c1));
-        assert_eq!(poly[1], (F::ONE - c0) * c1);
-        assert_eq!(poly[2], c0 * (F::ONE - c1));
-        assert_eq!(poly[3], c0 * c1);
+        assert_eq!(poly.0[0], (F::ONE - c0) * (F::ONE - c1));
+        assert_eq!(poly.0[1], (F::ONE - c0) * c1);
+        assert_eq!(poly.0[2], c0 * (F::ONE - c1));
+        assert_eq!(poly.0[3], c0 * c1);
     }
 
     proptest! {
@@ -1082,9 +1081,9 @@ mod tests {
 
         let result = list.scale(EF4::ONE);
 
-        assert_eq!(result.len(), 4);
-        for (i, val) in result.iter().enumerate() {
-            assert_eq!(*val, EF4::from(list[i]));
+        assert_eq!(result.num_evals(), 4);
+        for (i, val) in result.as_slice().iter().enumerate() {
+            assert_eq!(*val, EF4::from(list.0[i]));
         }
         assert_eq!(result.num_variables(), 2);
     }
@@ -1101,9 +1100,9 @@ mod tests {
         let factor = EF4::from_u64(9);
         let result = list.scale(factor);
 
-        assert_eq!(result.len(), 4);
-        for (i, val) in result.iter().enumerate() {
-            assert_eq!(*val, EF4::from(list[i]) * factor);
+        assert_eq!(result.num_evals(), 4);
+        for (i, val) in result.as_slice().iter().enumerate() {
+            assert_eq!(*val, EF4::from(list.0[i]) * factor);
         }
         assert_eq!(result.num_variables(), 2);
     }
@@ -1119,7 +1118,7 @@ mod tests {
 
         let result = list.scale(EF4::from_u64(7));
 
-        assert_eq!(result.len(), 4);
+        assert_eq!(result.num_evals(), 4);
         assert_eq!(result.num_variables(), 2);
     }
 
@@ -1132,7 +1131,7 @@ mod tests {
         list.truncate(2);
 
         // Only the first two elements should remain
-        assert_eq!(&*list, &evals[..2]);
+        assert_eq!(list.as_slice(), &evals[..2]);
         assert_eq!(list.num_variables(), 1); // log2(2) = 1
     }
 
@@ -1148,7 +1147,7 @@ mod tests {
 
         list.truncate(1);
 
-        assert_eq!(&*list, &[F::from_u64(7)]);
+        assert_eq!(list.as_slice(), &[F::from_u64(7)]);
         assert_eq!(list.num_variables(), 0); // log2(1) = 0
     }
 
@@ -1169,7 +1168,7 @@ mod tests {
 
         list.truncate(2); // Same length, should remain unchanged
 
-        assert_eq!(&*list, &evals);
+        assert_eq!(list.as_slice(), &evals);
         assert_eq!(list.num_variables(), 1);
     }
 
@@ -1231,7 +1230,7 @@ mod tests {
 
             // Get the pre-computed evaluation f(v) from our list. The index `i`
             // directly corresponds to the lexicographically ordered point `v`.
-            let f_v = evals_list[i];
+            let f_v = evals_list.0[i];
 
             // Add the term f(v) * eq(v, p) to the total sum. We must lift `f_v` from the
             // base field `F` to the extension field `EF4` for the multiplication.
