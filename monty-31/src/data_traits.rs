@@ -140,3 +140,12 @@ pub trait BinomialExtensionData<const DEG: usize>: MontyParameters + Sized {
     /// A list of generators of 2-adic subgroups not contained in the base field.
     const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike;
 }
+
+pub trait QuinticExtensionData: MontyParameters + Sized {
+    const FROBENIUS_MATRIX: [[MontyField31<Self>; 5]; 4];
+
+    /// A generator for the extension field, expressed as a degree-`D` polynomial.
+    ///
+    /// This is an array of size `D`, where each entry is a base field element.
+    const EXT_GENERATOR: [MontyField31<Self>; 5];
+}

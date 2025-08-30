@@ -2,10 +2,10 @@
 
 mod poseidon2;
 
-use p3_field::extension::{octic_mul, quartic_mul, quintic_mul};
+use p3_field::extension::{kb_quintic_mul, octic_mul, quartic_mul, quintic_mul};
 pub use poseidon2::*;
 
-use crate::{BinomialExtensionData, FieldParameters, MontyField31};
+use crate::{BinomialExtensionData, FieldParameters, MontyField31, QuinticExtensionData};
 
 /// If no packings are available, we use the generic binomial extension multiplication functions.
 #[inline]
@@ -33,6 +33,18 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
 
 /// If no packings are available, we use the generic binomial extension multiplication functions.
 #[inline]
+pub(crate) fn kb_quintic_mul_packed<FP>(
+    a: &[MontyField31<FP>; 5],
+    b: &[MontyField31<FP>; 5],
+    res: &mut [MontyField31<FP>; 5],
+) where
+    FP: FieldParameters + QuinticExtensionData,
+{
+    kb_quintic_mul(a, b, res);
+}
+
+/// If no packings are available, we use the generic binomial extension multiplication functions.
+#[inline]
 pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
     a: &[MontyField31<FP>; WIDTH],
     b: &[MontyField31<FP>; WIDTH],
@@ -50,7 +62,7 @@ pub(crate) fn base_mul_packed<FP, const WIDTH: usize>(
     b: MontyField31<FP>,
     res: &mut [MontyField31<FP>; WIDTH],
 ) where
-    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+    FP: FieldParameters,
 {
     res.iter_mut().zip(a.iter()).for_each(|(r, a)| *r = *a * b);
 }

@@ -6,12 +6,16 @@ use crate::{Algebra, ExtensionField};
 mod binomial_extension;
 mod complex;
 mod packed_binomial_extension;
+mod packed_quintic_extension;
+mod quintic_extension;
 
 use alloc::vec::Vec;
 
 pub use binomial_extension::*;
 pub use complex::*;
 pub use packed_binomial_extension::*;
+pub use packed_quintic_extension::*;
+pub use quintic_extension::*;
 
 /// Trait for fields that support binomial extension of the form `F[X]/(X^D - W)`.
 ///
@@ -35,6 +39,16 @@ pub trait BinomiallyExtendable<const D: usize>:
     ///
     /// This is an array of size `D`, where each entry is a base field element.
     const EXT_GENERATOR: [Self; D];
+}
+
+/// Trait for fields that support binomial extension of the form: `F[X]/(X^5 + X^2 - 1)`
+pub trait QuinticExtendable: Field + QuinticExtendableAlgebra<Self> {
+    const FROBENIUS_MATRIX: [[Self; 5]; 4];
+
+    /// A generator for the extension field, expressed as a degree-`D` polynomial.
+    ///
+    /// This is an array of size `D`, where each entry is a base field element.
+    const EXT_GENERATOR: [Self; 5];
 }
 
 /// Trait for algebras which support binomial extensions of the form `A[X]/(X^D - W)`
@@ -76,6 +90,35 @@ pub trait BinomiallyExtendableAlgebra<F: Field, const D: usize>: Algebra<F> {
     fn binomial_base_mul(lhs: [Self; D], rhs: Self) -> [Self; D] {
         lhs.map(|x| x * rhs.clone())
     }
+}
+
+/// Trait for algebras which support binomial extensions of the form `A[X]/(X^D - W)`
+/// with `W` in the base field `F`.
+pub trait QuinticExtendableAlgebra<F: Field>: Algebra<F> {
+    /// Multiplication in the algebra extension ring `A<X> / (X^D - W)`.
+    ///
+    /// Some algebras may want to reimplement this with faster methods.
+    fn kb_quintic_mul(a: &[Self; 5], b: &[Self; 5], res: &mut [Self; 5]);
+
+    /// Addition of elements in the algebra extension ring `A<X> / (X^D - W)`.
+    ///
+    /// As addition has no dependence on `W` so this is equivalent
+    /// to an algorithm for adding arrays of elements of `A`.
+    ///
+    /// Some algebras may want to reimplement this with faster methods.
+    #[must_use]
+    fn kb_quintic_add(a: &[Self; 5], b: &[Self; 5]) -> [Self; 5];
+
+    /// Subtraction of elements in the algebra extension ring `A<X> / (X^D - W)`.
+    ///
+    /// As subtraction has no dependence on `W` so this is equivalent
+    /// to an algorithm for subtracting arrays of elements of `A`.
+    ///
+    /// Some algebras may want to reimplement this with faster methods.
+    #[must_use]
+    fn kb_quintic_sub(a: &[Self; 5], b: &[Self; 5]) -> [Self; 5];
+
+    fn kb_quintic_base_mul(lhs: [Self; 5], rhs: Self) -> [Self; 5];
 }
 
 /// Trait for extension fields that support Frobenius automorphisms.

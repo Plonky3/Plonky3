@@ -1,3 +1,4 @@
+use crate::QuinticExtensionData;
 use alloc::vec::Vec;
 use core::arch::x86_64::{self, __m256i};
 use core::array;
@@ -1118,6 +1119,77 @@ pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
 
 /// Multiplication in a quintic binomial extension field.
 #[inline]
+pub(crate) fn kb_quintic_mul_packed<FP>(
+    a: &[MontyField31<FP>; 5],
+    b: &[MontyField31<FP>; 5],
+    res: &mut [MontyField31<FP>; 5],
+) where
+    FP: FieldParameters + QuinticExtensionData,
+{
+    // TODO: This could likely be optimised further with more effort.
+    // in particular it would benefit from a custom AVX2 implementation.
+
+    let zero = MontyField31::<FP>::ZERO;
+    let b_0_minus_3 = b[0] - b[3];
+    let b_1_minus_4 = b[1] - b[4];
+    let b_4_minus_2 = b[4] - b[2];
+    let b_3_minus_b_1_minus_4 = b[3] - b_1_minus_4;
+
+    let lhs = [
+        PackedMontyField31AVX2([a[0], a[0], a[0], a[0], a[0], a[4], a[4], a[4]]),
+        PackedMontyField31AVX2([a[1], a[1], a[1], a[1], a[1], zero, zero, zero]),
+        PackedMontyField31AVX2([a[2], a[2], a[2], a[2], a[2], zero, zero, zero]),
+        PackedMontyField31AVX2([a[3], a[3], a[3], a[3], a[3], zero, zero, zero]),
+    ];
+    let rhs = [
+        PackedMontyField31AVX2([
+            b[0],
+            b[1],
+            b[2],
+            b[3],
+            b[4],
+            b_1_minus_4,
+            b[2],
+            b_3_minus_b_1_minus_4,
+        ]),
+        PackedMontyField31AVX2([b[4], b[0], b_1_minus_4, b[2], b[3], zero, zero, zero]),
+        PackedMontyField31AVX2([b[3], b[4], b_0_minus_3, b_1_minus_4, b[2], zero, zero, zero]),
+        PackedMontyField31AVX2([
+            b[2],
+            b[3],
+            b_4_minus_2,
+            b_0_minus_3,
+            b_1_minus_4,
+            zero,
+            zero,
+            zero,
+        ]),
+    ];
+
+    let dot_res = unsafe { PackedMontyField31AVX2::from_vector(dot_product_4(lhs, rhs)) };
+
+    // We managed to compute 3 of the extra terms in the last 3 places of the dot product.
+    // This leaves us with 2 terms remaining we need to compute manually.
+    let extra1 = b_4_minus_2 * a[4];
+    let extra2 = b_0_minus_3 * a[4];
+
+    let extra_addition = PackedMontyField31AVX2([
+        dot_res.0[5],
+        dot_res.0[6],
+        dot_res.0[7],
+        extra1,
+        extra2, 
+        zero,
+        zero,
+        zero,
+    ]);
+    let total = dot_res + extra_addition;
+
+    res.copy_from_slice(&total.0[..5]);
+}
+
+/// Multiplication in a quintic binomial extension field.
+#[inline]
 pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
     a: &[MontyField31<FP>; WIDTH],
     b: &[MontyField31<FP>; WIDTH],
@@ -1231,7 +1303,7 @@ pub(crate) fn base_mul_packed<FP, const WIDTH: usize>(
     b: MontyField31<FP>,
     res: &mut [MontyField31<FP>; WIDTH],
 ) where
-    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+    FP: FieldParameters,
 {
     match WIDTH {
         1 => res[0] = a[0] * b,

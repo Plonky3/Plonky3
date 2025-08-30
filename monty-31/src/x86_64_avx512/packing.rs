@@ -28,7 +28,7 @@ use rand::distr::{Distribution, StandardUniform};
 
 use crate::{
     BinomialExtensionData, FieldParameters, MontyField31, PackedMontyParameters,
-    RelativelyPrimePower, halve_avx512,
+    QuinticExtensionData, RelativelyPrimePower, halve_avx512,
 };
 
 const WIDTH: usize = 16;
@@ -1448,6 +1448,97 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
     res.copy_from_slice(&sum.0[..5]);
 }
 
+/// Multiplication in a quintic binomial extension field.
+#[inline]
+pub(crate) fn kb_quintic_mul_packed<FP>(
+    a: &[MontyField31<FP>; 5],
+    b: &[MontyField31<FP>; 5],
+    res: &mut [MontyField31<FP>; 5],
+) where
+    FP: FieldParameters + QuinticExtensionData,
+{
+    // TODO: It's plausible that this could be improved by folding the computation of packed_b into
+    // the custom AVX512 implementation. Moreover, AVX512 is really a bit to large so we are wasting a lot
+    // of space. A custom implementation which mixes AVX512 and AVX2 code might well be able to
+    // improve one that is here.
+    let zero = MontyField31::<FP>::ZERO;
+    let b_0_minus_3 = b[0] - b[3];
+    let b_1_minus_4 = b[1] - b[4];
+    let b_4_minus_2 = b[4] - b[2];
+    let b_3_minus_b_1_minus_4 = b[3] - b_1_minus_4;
+
+    // Constant term = a0*b0 + w(a1*b4 + a2*b3 + a3*b2 + a4*b1)
+    // Linear term = a0*b1 + a1*b0 + w(a2*b4 + a3*b3 + a4*b2)
+    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b4 + a4*b3)
+    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0 + w*a4*b4
+    // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 + a4*b0
+
+    // Each packed vector can do 8 multiplications at once. As we have
+    // 25 multiplications to do we will need to use at least 3 packed vectors
+    // but we might as well use 4 so we can make use of dot_product_2.
+    // TODO: This can probably be improved by using a custom function.
+    let lhs = [
+        PackedMontyField31AVX512([
+            a[0], a[2], a[0], a[2], a[0], a[2], a[0], a[2], a[2], a[2], a[4], a[4], a[4], a[4],
+            a[4], zero,
+        ]),
+        PackedMontyField31AVX512([
+            a[1], a[3], a[1], a[3], a[1], a[3], a[1], a[3], a[1], a[3], zero, zero, zero, zero,
+            zero, zero,
+        ]),
+    ];
+    let rhs = [
+        PackedMontyField31AVX512([
+            b[0],
+            b[3],
+            b[1],
+            b[4],
+            b[2],
+            b_0_minus_3,
+            b[3],
+            b_1_minus_4,
+            b[4],
+            b[2],
+            b_1_minus_4,
+            b[2],
+            b_3_minus_b_1_minus_4,
+            b_4_minus_2,
+            b_0_minus_3,
+            zero,
+        ]),
+        PackedMontyField31AVX512([
+            b[4],
+            b[2],
+            b[0],
+            b[3],
+            b_1_minus_4,
+            b_4_minus_2,
+            b[2],
+            b_0_minus_3,
+            b[3],
+            b_1_minus_4,
+            zero,
+            zero,
+            zero,
+            zero,
+            zero,
+            zero,
+        ]),
+    ];
+
+    let dot = unsafe { PackedMontyField31AVX512::from_vector(dot_product_2(lhs, rhs)).0 };
+
+    let sumand1 =
+        PackedMontyField31AVX512::from_monty_array([dot[0], dot[2], dot[4], dot[6], dot[8]]);
+    let sumand2 =
+        PackedMontyField31AVX512::from_monty_array([dot[1], dot[3], dot[5], dot[7], dot[9]]);
+    let sumand3 =
+        PackedMontyField31AVX512::from_monty_array([dot[10], dot[11], dot[12], dot[13], dot[14]]);
+    let sum = sumand1 + sumand2 + sumand3;
+
+    res.copy_from_slice(&sum.0[..5]);
+}
+
 /// Multiplication in an octic binomial extension field.
 #[inline]
 pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
@@ -1538,7 +1629,7 @@ pub(crate) fn base_mul_packed<FP, const WIDTH: usize>(
     b: MontyField31<FP>,
     res: &mut [MontyField31<FP>; WIDTH],
 ) where
-    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+    FP: FieldParameters,
 {
     match WIDTH {
         1 => res[0] = a[0] * b,

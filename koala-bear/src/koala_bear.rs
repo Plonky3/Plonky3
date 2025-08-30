@@ -2,7 +2,7 @@ use p3_field::exponentiation::exp_1420470955;
 use p3_field::{Algebra, PrimeCharacteristicRing};
 use p3_monty_31::{
     BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
-    PackedMontyParameters, RelativelyPrimePower, TwoAdicData,
+    PackedMontyParameters, QuinticExtensionData, RelativelyPrimePower, TwoAdicData,
 };
 
 /// The prime field `2^31 - 2^24 + 1`, a.k.a. the Koala Bear field.
@@ -101,6 +101,41 @@ impl BinomialExtensionData<8> for KoalaBearParameters {
     fn mul_w<A: Algebra<MontyField31<Self>>>(a: A) -> A {
         a.double() + a
     }
+}
+
+impl QuinticExtensionData for KoalaBearParameters {
+    const FROBENIUS_MATRIX: [[MontyField31<Self>; 5]; 4] = [
+        [
+            MontyField31::new(1576402667),
+            MontyField31::new(1173144480),
+            MontyField31::new(1567662457),
+            MontyField31::new(1206866823),
+            MontyField31::new(2428146),
+        ],
+        [
+            MontyField31::new(1680345488),
+            MontyField31::new(1381986),
+            MontyField31::new(615237464),
+            MontyField31::new(1380104858),
+            MontyField31::new(295431824),
+        ],
+        [
+            MontyField31::new(441230756),
+            MontyField31::new(323126830),
+            MontyField31::new(704986542),
+            MontyField31::new(1445620072),
+            MontyField31::new(503505220),
+        ],
+        [
+            MontyField31::new(1364444097),
+            MontyField31::new(1144738982),
+            MontyField31::new(2008416047),
+            MontyField31::new(143367062),
+            MontyField31::new(1027410849),
+        ],
+    ];
+
+    const EXT_GENERATOR: [MontyField31<Self>; 5] = MontyField31::new_array([2, 1, 0, 0, 0]);
 }
 
 #[cfg(test)]
