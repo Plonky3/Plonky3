@@ -1,4 +1,4 @@
-use core::arch::aarch64::{uint32x4_t, vaddq_u32, vandq_u32, vdupq_n_u32, vshrq_n_u32, vtstq_u32};
+use core::arch::aarch64::{uint32x4_t, vandq_u32, vdupq_n_u32, vhaddq_u32, vtstq_u32};
 
 use crate::PackedMontyParameters;
 
@@ -10,20 +10,18 @@ use crate::PackedMontyParameters;
 pub(crate) fn halve_neon<PMP: PackedMontyParameters>(input: uint32x4_t) -> uint32x4_t {
     unsafe {
         let one = vdupq_n_u32(1);
-        let half_p = vdupq_n_u32(PMP::PRIME.div_ceil(2));
 
         // Check if the least significant bit is set (i.e., if the number is odd).
         //
         // vtstq_u32 returns a mask of all 1s if the bit is set, and all 0s otherwise.
         let is_odd_mask = vtstq_u32(input, one);
 
-        // Right shift by 1 to perform the division by 2.
-        let val_div_2 = vshrq_n_u32(input, 1);
+        // Select `P` if the corresponding input is odd, or `0` if it's even.
+        let to_add = vandq_u32(PMP::PACKED_P, is_odd_mask);
 
-        // Select `half_p` if odd, 0 otherwise.
-        let to_add = vandq_u32(half_p, is_odd_mask);
-
-        // Add the conditional term.
-        vaddq_u32(val_div_2, to_add)
+        // Halving add computes `(input + to_add) >> 1` for each lane.
+        // - If input is even: (input + 0) >> 1 = input / 2
+        // - If input is odd: (input + P) >> 1 = (input + P) / 2
+        vhaddq_u32(input, to_add)
     }
 }
