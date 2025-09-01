@@ -95,6 +95,8 @@ const BIT_REVERSE_6BIT: &[u8] = &[
 // Ensure that SMALL_ARR_SIZE >= 4 * BIG_T_SIZE.
 const BIG_T_SIZE: usize = 1 << 14;
 const SMALL_ARR_SIZE: usize = 1 << 16;
+// Compile-time assertion that SMALL_ARR_SIZE >= 4 * BIG_T_SIZE
+const _: () = assert!(SMALL_ARR_SIZE >= 4 * BIG_T_SIZE);
 
 /// Permutes `arr` such that each index is mapped to its reverse in binary.
 ///
