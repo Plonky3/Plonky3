@@ -14,8 +14,12 @@ p3-field.workspace = true
 p3-monty-31.workspace = true
 p3-poseidon2.workspace = true
 p3-symmetric.workspace = true
+p3-util.workspace = true
 
 rand.workspace = true
+num-bigint.workspace = true
+itertools.workspace = true
+serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 p3-dft.workspace = true

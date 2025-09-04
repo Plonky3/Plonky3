@@ -528,50 +528,6 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
         MontyField31::dot_product::<5>(a[..].try_into().unwrap(), &[b[4], b[3], b[2], b[1], b[0]]);
 }
 
-/// Multiplication in a quintic binomial extension field.
-#[inline]
-pub(crate) fn kb_quintic_mul_packed<FP>(
-    a: &[MontyField31<FP>; 5],
-    b: &[MontyField31<FP>; 5],
-    res: &mut [MontyField31<FP>; 5],
-) where
-    FP: FieldParameters + QuinticExtensionData,
-{
-    // TODO: This could be optimised further with a custom NEON implementation.
-    let b_0_minus_3 = b[0] - b[3];
-    let b_1_minus_4 = b[1] - b[4];
-    let b_4_minus_2 = b[4] - b[2];
-    let b_3_minus_b_1_minus_4 = b[3] - b_1_minus_4;
-
-    // Constant term = a0*b0 + w(a1*b4 + a2*b3 + a3*b2 + a4*b1)
-    // Linear term = a0*b1 + a1*b0 + w(a2*b4 + a3*b3 + a4*b2)
-    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b4 + a4*b3)
-    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0 + w*a4*b4
-    // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 + a4*b0
-    let lhs: [PackedMontyField31Neon<FP>; 5] = [
-        a[0].into(),
-        a[1].into(),
-        a[2].into(),
-        a[3].into(),
-        a[4].into(),
-    ];
-    let rhs = [
-        PackedMontyField31Neon([b[0], b[1], b[2], b[4]]),
-        PackedMontyField31Neon([b[4], b[0], b_1_minus_4, b[3]]),
-        PackedMontyField31Neon([b[3], b[4], b_0_minus_3, b[2]]),
-        PackedMontyField31Neon([b[2], b[3], b_4_minus_2, b_1_minus_4]),
-        PackedMontyField31Neon([b_1_minus_4, b[2], b_3_minus_b_1_minus_4, b_0_minus_3]),
-    ];
-
-    let dot = PackedMontyField31Neon::dot_product(&lhs, &rhs).0;
-
-    res[..4].copy_from_slice(&dot);
-    res[4] = MontyField31::dot_product::<5>(
-        &[a[0], a[1], a[2], a[3], a[4]],
-        &[b[4], b[3], b[2], b_1_minus_4, b_0_minus_3],
-    );
-}
-
 /// Multiplication in an octic binomial extension field.
 #[inline]
 pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
@@ -636,7 +592,7 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
 
 /// Multiplication by a base field element in a binomial extension field.
 #[inline]
-pub(crate) fn base_mul_packed<FP, const WIDTH: usize>(
+pub fn base_mul_packed<FP, const WIDTH: usize>(
     a: [MontyField31<FP>; WIDTH],
     b: MontyField31<FP>,
     res: &mut [MontyField31<FP>; WIDTH],

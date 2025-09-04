@@ -1,6 +1,5 @@
 use p3_field::extension::{
     BinomiallyExtendable, BinomiallyExtendableAlgebra, HasTwoAdicBinomialExtension,
-    QuinticExtendable, QuinticExtendableAlgebra,
 };
 use p3_field::{
     PrimeCharacteristicRing, TwoAdicField, field_to_array, packed_mod_add, packed_mod_sub,
@@ -8,7 +7,8 @@ use p3_field::{
 
 use crate::utils::{add, sub};
 use crate::{
-    base_mul_packed, kb_quintic_mul_packed, octic_mul_packed, quartic_mul_packed, quintic_mul_packed, BinomialExtensionData, FieldParameters, MontyField31, QuinticExtensionData, TwoAdicData
+    BinomialExtensionData, FieldParameters, MontyField31, TwoAdicData, base_mul_packed,
+    octic_mul_packed, quartic_mul_packed, quintic_mul_packed,
 };
 
 // If a field implements BinomialExtensionData<WIDTH> then there is a natural
@@ -70,65 +70,6 @@ where
         base_mul_packed(lhs, rhs, &mut res);
         res
     }
-}
-
-
-impl<FP> QuinticExtendableAlgebra<MontyField31<FP>>
-    for MontyField31<FP>
-where
-    FP: QuinticExtensionData + FieldParameters,
-{
-    #[inline(always)]
-    fn kb_quintic_mul(
-        a: &[Self; 5],
-        b: &[Self; 5],
-        res: &mut [Self; 5],
-    ) {
-        kb_quintic_mul_packed(a, b, res);
-    }
-
-    #[inline(always)]
-    fn kb_quintic_add(a: &[Self; 5], b: &[Self; 5]) -> [Self; 5] {
-        let mut res = [Self::ZERO; 5];
-        unsafe {
-            // Safe as Self is repr(transparent) and stores a single u32.
-            let a: &[u32; 5] = &*(a.as_ptr() as *const [u32; 5]);
-            let b: &[u32; 5] = &*(b.as_ptr() as *const [u32; 5]);
-            let res: &mut [u32; 5] = &mut *(res.as_mut_ptr() as *mut [u32; 5]);
-
-            packed_mod_add(a, b, res, FP::PRIME, add::<FP>);
-        }
-        res
-    }
-
-    #[inline(always)]
-    fn kb_quintic_sub(a: &[Self; 5], b: &[Self; 5]) -> [Self; 5] {
-        let mut res = [Self::ZERO; 5];
-        unsafe {
-            // Safe as Self is repr(transparent) and stores a single u32.
-            let a: &[u32; 5] = &*(a.as_ptr() as *const [u32; 5]);
-            let b: &[u32; 5] = &*(b.as_ptr() as *const [u32; 5]);
-            let res: &mut [u32; 5] = &mut *(res.as_mut_ptr() as *mut [u32; 5]);
-
-            packed_mod_sub(a, b, res, FP::PRIME, sub::<FP>);
-        }
-        res
-    }
-
-    #[inline(always)]
-    fn kb_quintic_base_mul(lhs: [Self; 5], rhs: Self) -> [Self; 5] {
-        let mut res = [Self::ZERO; 5];
-        base_mul_packed(lhs, rhs, &mut res);
-        res
-    }
-}
-
-impl<FP> QuinticExtendable for MontyField31<FP>
-where
-    FP: QuinticExtensionData + FieldParameters,
-{
-    const FROBENIUS_MATRIX: [[Self; 5]; 4] = FP::FROBENIUS_MATRIX;
-    const EXT_GENERATOR: [Self; 5] = FP::EXT_GENERATOR;
 }
 
 impl<const WIDTH: usize, FP> BinomiallyExtendable<WIDTH> for MontyField31<FP>

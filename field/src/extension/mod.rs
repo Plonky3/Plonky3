@@ -6,16 +6,12 @@ use crate::{Algebra, ExtensionField};
 mod binomial_extension;
 mod complex;
 mod packed_binomial_extension;
-mod packed_quintic_extension;
-mod quintic_extension;
 
 use alloc::vec::Vec;
 
 pub use binomial_extension::*;
 pub use complex::*;
 pub use packed_binomial_extension::*;
-pub use packed_quintic_extension::*;
-pub use quintic_extension::*;
 
 /// Trait for fields that support binomial extension of the form `F[X]/(X^D - W)`.
 ///
@@ -39,16 +35,6 @@ pub trait BinomiallyExtendable<const D: usize>:
     ///
     /// This is an array of size `D`, where each entry is a base field element.
     const EXT_GENERATOR: [Self; D];
-}
-
-/// Trait for fields that support binomial extension of the form: `F[X]/(X^5 + X^2 - 1)`
-pub trait QuinticExtendable: Field + QuinticExtendableAlgebra<Self> {
-    const FROBENIUS_MATRIX: [[Self; 5]; 4];
-
-    /// A generator for the extension field, expressed as a degree-`D` polynomial.
-    ///
-    /// This is an array of size `D`, where each entry is a base field element.
-    const EXT_GENERATOR: [Self; 5];
 }
 
 /// Trait for algebras which support binomial extensions of the form `A[X]/(X^D - W)`
