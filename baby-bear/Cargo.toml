@@ -28,6 +28,7 @@ num-bigint.workspace = true
 rand.workspace = true
 rand_xoshiro.workspace = true
 serde_json.workspace = true
+proptest.workspace = true
 
 [[bench]]
 name = "bench_field"

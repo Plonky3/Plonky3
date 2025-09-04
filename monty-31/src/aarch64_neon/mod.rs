@@ -4,3 +4,4 @@ mod utils;
 
 pub use packing::*;
 pub use poseidon2::*;
+pub use utils::*;
