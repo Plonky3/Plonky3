@@ -1019,7 +1019,7 @@ pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
 ) where
     FP: FieldParameters + BinomialExtensionData<WIDTH>,
 {
-    assert_eq!(WIDTH, 4);
+    const {assert!(WIDTH == 4);}
 
     // TODO: It's plausible that this could be improved by folding the computation of packed_b into
     // the custom AVX2 implementation. Similarly for BabyBear, a custom mul function could help as
@@ -1127,7 +1127,7 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
 {
     // TODO: This could likely be optimised further with more effort.
     // in particular it would benefit from a custom AVX2 implementation.
-    assert_eq!(WIDTH, 5);
+    const {assert!(WIDTH == 5);}
 
     let zero = MontyField31::<FP>::ZERO;
     let w_b1 = FP::mul_w(b[1]);
@@ -1185,7 +1185,7 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
     FP: FieldParameters + BinomialExtensionData<WIDTH>,
 {
     // TODO: It's plausible that this could be improved by a custom AVX2 implementation.
-    assert_eq!(WIDTH, 8);
+    const {assert!(WIDTH == 8);}
     let packed_b = PackedMontyField31AVX2([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
     let w_b = FP::mul_w(packed_b).0;
 
