@@ -459,7 +459,9 @@ pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
     FP: FieldParameters + BinomialExtensionData<WIDTH>,
 {
     // TODO: This could be optimised further with a custom NEON implementation.
-    const {assert!(WIDTH == 4);}
+    const {
+        assert!(WIDTH == 4);
+    }
     let packed_b = PackedMontyField31Neon([b[0], b[1], b[2], b[3]]);
     let w_b = FP::mul_w(packed_b).0;
     let w_b1 = w_b[1];
@@ -493,7 +495,9 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
     FP: FieldParameters + BinomialExtensionData<WIDTH>,
 {
     // TODO: This could be optimised further with a custom NEON implementation.
-    const {assert!(WIDTH == 5);}
+    const {
+        assert!(WIDTH == 5);
+    }
     let packed_b = PackedMontyField31Neon([b[1], b[2], b[3], b[4]]);
     let w_b = FP::mul_w(packed_b).0;
     let w_b1 = w_b[0];
@@ -538,7 +542,9 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
     FP: FieldParameters + BinomialExtensionData<WIDTH> + FieldParameters,
 {
     // TODO: This could be optimised further with a custom NEON implementation.
-    const {assert!(WIDTH == 8);}
+    const {
+        assert!(WIDTH == 8);
+    }
     let packed_b_lo = PackedMontyField31Neon([b[0], b[1], b[2], b[3]]);
     let packed_b_hi = PackedMontyField31Neon([b[4], b[5], b[6], b[7]]);
     let w_b_lo = FP::mul_w(packed_b_lo).0;
