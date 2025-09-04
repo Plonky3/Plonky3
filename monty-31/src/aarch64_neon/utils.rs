@@ -1,6 +1,6 @@
 use core::arch::aarch64::{
     self, uint16x4_t, uint32x4_t, vandq_u32, vbslq_u32, vceqzq_u32, vdup_n_u16, vdupq_n_s32,
-    vdupq_n_u32, vhaddq_u32, vmovn_u32, vshlq_u32, vsubq_u32, vtstq_u32,
+    vdupq_n_u32, vhaddq_u32, vmovn_u32, vshlq_u32, vshrq_n_u32, vsubq_u32, vtstq_u32,
 };
 
 use crate::{PackedMontyParameters, TwoAdicData};
@@ -40,14 +40,14 @@ pub(crate) fn halve_neon<PMP: PackedMontyParameters>(input: uint32x4_t) -> uint3
 #[inline(always)]
 pub unsafe fn mul_neg_2exp_neg_n_neon<
     TAD: TwoAdicData + PackedMontyParameters,
-    const N: u32,
+    const N: i32,
     const N_PRIME: u32,
 >(
     input: uint32x4_t,
 ) -> uint32x4_t {
     // Verifies the constants at compile time.
     const {
-        assert!(N + N_PRIME == TAD::TWO_ADICITY as u32);
+        assert!(N as u32 + N_PRIME == TAD::TWO_ADICITY as u32);
     }
 
     unsafe {
@@ -55,12 +55,10 @@ pub unsafe fn mul_neg_2exp_neg_n_neon<
         //
         // Create a bitmask for the lower N bits. The compiler will treat this as a constant.
         let mask = vdupq_n_u32((1u32 << N) - 1);
-        // Create a vector for the right shift amount. Right shift by N is a left shift by -N.
-        let shift_n = vdupq_n_s32(-(N as i32));
         // Isolate the low N bits of the input.
         let lo = vandq_u32(input, mask);
-        // Get the high bits by shifting right. `vshlq_u32` with a negative shift performs a right shift.
-        let hi = vshlq_u32(input, shift_n);
+        // Get the high bits by shifting right by the constant N.
+        let hi = vshrq_n_u32::<N>(input);
 
         // Compute the main term: `r * 2^(j-N) * lo`
         //
