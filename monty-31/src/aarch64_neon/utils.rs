@@ -36,6 +36,7 @@ pub(crate) fn halve_neon<PMP: PackedMontyParameters>(input: uint32x4_t) -> uint3
 /// - `N` must be between 0 and 15.
 /// - Inputs must be in canonical form.
 /// - Output will be in `(-P, P)`.
+/// - `N + N_PRIME` must equal `TAD::TWO_ADICITY`.
 #[inline(always)]
 pub unsafe fn mul_neg_2exp_neg_n_neon<
     TAD: TwoAdicData + PackedMontyParameters,
