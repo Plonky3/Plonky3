@@ -1,6 +1,6 @@
 use core::arch::aarch64::{
     uint32x4_t, vandq_u32, vbslq_u32, vceqzq_u32, vdupq_n_s32, vdupq_n_u32, vhaddq_u32, vmulq_u32,
-    vshlq_u32, vshrq_n_u32, vsubq_u32, vtstq_u32,
+    vshlq_n_u32, vshlq_u32, vshrq_n_u32, vsubq_u32, vtstq_u32,
 };
 
 use crate::{PackedMontyParameters, TwoAdicData};
@@ -101,14 +101,14 @@ pub unsafe fn mul_neg_2exp_neg_n_neon<
 pub unsafe fn mul_neg_2exp_neg_two_adicity_neon<
     TAD: TwoAdicData + PackedMontyParameters,
     const N: i32,
-    const N_PRIME: u32,
+    const N_PRIME: i32,
 >(
     input: uint32x4_t,
 ) -> uint32x4_t {
     // Verifies the constants at compile time.
     const {
         assert!(N as u32 == TAD::TWO_ADICITY as u32);
-        assert!(N as u32 + N_PRIME == 31);
+        assert!(N + N_PRIME == 31);
     }
 
     unsafe {
@@ -124,10 +124,10 @@ pub unsafe fn mul_neg_2exp_neg_two_adicity_neon<
         // Compute the main term: `r * lo`
         //
         // For this special prime, `r = 2^N_PRIME - 1`.
-        // The multiplication `r * lo` simplifies to `(lo * 2^N_PRIME) - lo`.
-        let shift_n_prime = vdupq_n_s32(N_PRIME as i32);
-        // This is the shift-and-subtract trick to perform the multiplication.
-        let r_x_lo = vsubq_u32(vshlq_u32(lo, shift_n_prime), lo);
+        // The multiplication `r * lo` simplifies to `(lo << N_PRIME) - lo`.
+        //
+        // This is the shift-and-subtract trick, using an immediate shift for efficiency.
+        let r_x_lo = vsubq_u32(vshlq_n_u32::<N_PRIME>(lo), lo);
 
         // Select the correct result based on whether `lo` was zero
         //
