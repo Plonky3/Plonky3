@@ -1,6 +1,6 @@
 use core::arch::aarch64::{
-    uint32x4_t, vandq_u32, vbslq_u32, vceqzq_u32, vdupq_n_s32, vdupq_n_u32, vhaddq_u32, vmulq_u32,
-    vshlq_n_u32, vshlq_u32, vshrq_n_u32, vsubq_u32, vtstq_u32,
+    uint32x4_t, vandq_u32, vbslq_u32, vceqzq_u32, vdupq_n_u32, vhaddq_u32, vmulq_u32, vshlq_n_u32,
+    vshrq_n_u32, vsubq_u32, vtstq_u32,
 };
 
 use crate::{PackedMontyParameters, TwoAdicData};
@@ -41,13 +41,13 @@ pub(crate) fn halve_neon<PMP: PackedMontyParameters>(input: uint32x4_t) -> uint3
 pub unsafe fn mul_neg_2exp_neg_n_neon<
     TAD: TwoAdicData + PackedMontyParameters,
     const N: i32,
-    const N_PRIME: u32,
+    const N_PRIME: i32,
 >(
     input: uint32x4_t,
 ) -> uint32x4_t {
     // Verifies the constants at compile time.
     const {
-        assert!(N as u32 + N_PRIME == TAD::TWO_ADICITY as u32);
+        assert!(N + N_PRIME == TAD::TWO_ADICITY as i32);
     }
 
     unsafe {
@@ -64,13 +64,10 @@ pub unsafe fn mul_neg_2exp_neg_n_neon<
         //
         // Create a u32 vector containing the odd factor `r` in each lane.
         let odd_factor = vdupq_n_u32(TAD::ODD_FACTOR as u32);
-        // Perform a 32-bit multiplication. This is safe from overflow because
-        // `lo < 2^15` and `odd_factor < 2^15`, so their product is `< 2^30`.
+        // Perform a 32-bit multiplication. This is safe from overflow.
         let lo_x_r = vmulq_u32(lo, odd_factor);
-        // Create a vector for the left shift amount. `j-N` is `N_PRIME`.
-        let shift_n_prime = vdupq_n_s32(N_PRIME as i32);
-        // Perform the final shift to get the full term.
-        let lo_shft_nonzero = vshlq_u32(lo_x_r, shift_n_prime);
+        // Perform the final shift by the constant `N_PRIME` to get the full term.
+        let lo_shft_nonzero = vshlq_n_u32::<N_PRIME>(lo_x_r);
 
         // Select the correct result based on whether `lo` was zero or not.
         //
