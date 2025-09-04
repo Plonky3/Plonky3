@@ -21,6 +21,7 @@ use p3_util::reconstitute_from_base;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 
+use super::utils::halve_neon;
 use crate::{
     BinomialExtensionData, FieldParameters, MontyField31, PackedMontyParameters,
     QuinticExtensionData, RelativelyPrimePower,
@@ -160,8 +161,15 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31Neon<FP>
         f.into()
     }
 
-    // TODO: Add a custom implementation of `halve` that uses NEON intrinsics
-    // and avoids the multiplication.
+    #[inline]
+    fn halve(&self) -> Self {
+        let val = self.to_vector();
+        let halved = halve_neon::<FP>(val);
+        unsafe {
+            // Safety: `halve_neon` returns values in canonical form when given values in canonical form.
+            Self::from_vector(halved)
+        }
+    }
 
     #[inline]
     fn cube(&self) -> Self {

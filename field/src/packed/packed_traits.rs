@@ -62,9 +62,9 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     #[must_use]
     fn pack_slice(buf: &[Self::Value]) -> &[Self] {
         // Sources vary, but this should be true on all platforms we care about.
-        // This should be a const assert, but trait methods can't access `Self` in a const context,
-        // even with inner struct instantiation. So we will trust LLVM to optimize this out.
-        assert!(align_of::<Self>() <= align_of::<Self::Value>());
+        const {
+            assert!(align_of::<Self>() <= align_of::<Self::Value>());
+        }
         assert!(
             buf.len().is_multiple_of(Self::WIDTH),
             "Slice length (got {}) must be a multiple of packed field width ({}).",
@@ -91,7 +91,9 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     #[inline]
     #[must_use]
     fn pack_slice_mut(buf: &mut [Self::Value]) -> &mut [Self] {
-        assert!(align_of::<Self>() <= align_of::<Self::Value>());
+        const {
+            assert!(align_of::<Self>() <= align_of::<Self::Value>());
+        }
         assert!(
             buf.len().is_multiple_of(Self::WIDTH),
             "Slice length (got {}) must be a multiple of packed field width ({}).",
@@ -113,7 +115,9 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     fn pack_maybe_uninit_slice_mut(
         buf: &mut [MaybeUninit<Self::Value>],
     ) -> &mut [MaybeUninit<Self>] {
-        assert!(align_of::<Self>() <= align_of::<Self::Value>());
+        const {
+            assert!(align_of::<Self>() <= align_of::<Self::Value>());
+        }
         assert!(
             buf.len().is_multiple_of(Self::WIDTH),
             "Slice length (got {}) must be a multiple of packed field width ({}).",
@@ -154,7 +158,9 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     #[inline]
     #[must_use]
     fn unpack_slice(buf: &[Self]) -> &[Self::Value] {
-        assert!(align_of::<Self>() >= align_of::<Self::Value>());
+        const {
+            assert!(align_of::<Self>() >= align_of::<Self::Value>());
+        }
         let buf_ptr = buf.as_ptr().cast::<Self::Value>();
         let n = buf.len() * Self::WIDTH;
         unsafe { slice::from_raw_parts(buf_ptr, n) }

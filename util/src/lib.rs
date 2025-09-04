@@ -420,10 +420,13 @@ pub fn iter_array_chunks_padded<T: Copy, const N: usize>(
 /// This panics if the size of `BaseArray` is not a multiple of the size of `Base`.
 #[inline]
 pub unsafe fn as_base_slice<Base, BaseArray>(buf: &[BaseArray]) -> &[Base] {
-    assert_eq!(align_of::<Base>(), align_of::<BaseArray>());
+    const {
+        assert!(align_of::<Base>() == align_of::<BaseArray>());
+        assert!(size_of::<BaseArray>().is_multiple_of(size_of::<Base>()));
+    }
+
     let d = size_of::<BaseArray>() / size_of::<Base>();
 
-    assert!(align_of::<BaseArray>() >= align_of::<Base>());
     let buf_ptr = buf.as_ptr().cast::<Base>();
     let n = buf.len() * d;
     unsafe { slice::from_raw_parts(buf_ptr, n) }
@@ -446,10 +449,13 @@ pub unsafe fn as_base_slice<Base, BaseArray>(buf: &[BaseArray]) -> &[Base] {
 /// This panics if the size of `BaseArray` is not a multiple of the size of `Base`.
 #[inline]
 pub unsafe fn as_base_slice_mut<Base, BaseArray>(buf: &mut [BaseArray]) -> &mut [Base] {
-    assert_eq!(align_of::<Base>(), align_of::<BaseArray>());
+    const {
+        assert!(align_of::<Base>() == align_of::<BaseArray>());
+        assert!(size_of::<BaseArray>().is_multiple_of(size_of::<Base>()));
+    }
+
     let d = size_of::<BaseArray>() / size_of::<Base>();
 
-    assert!(align_of::<BaseArray>() >= align_of::<Base>());
     let buf_ptr = buf.as_mut_ptr().cast::<Base>();
     let n = buf.len() * d;
     unsafe { slice::from_raw_parts_mut(buf_ptr, n) }
@@ -475,14 +481,10 @@ pub unsafe fn as_base_slice_mut<Base, BaseArray>(buf: &mut [BaseArray]) -> &mut 
 /// This panics if the size of `BaseArray` is not a multiple of the size of `Base`.
 #[inline]
 pub unsafe fn flatten_to_base<Base, BaseArray>(vec: Vec<BaseArray>) -> Vec<Base> {
-    debug_assert_eq!(align_of::<Base>(), align_of::<BaseArray>());
-
-    assert!(
-        size_of::<BaseArray>().is_multiple_of(size_of::<Base>()),
-        "Size of BaseArray (got {}) must be a multiple of the size of Base ({}).",
-        size_of::<BaseArray>(),
-        size_of::<Base>()
-    );
+    const {
+        assert!(align_of::<Base>() == align_of::<BaseArray>());
+        assert!(size_of::<BaseArray>().is_multiple_of(size_of::<Base>()));
+    }
 
     let d = size_of::<BaseArray>() / size_of::<Base>();
     // Prevent running `vec`'s destructor so we are in complete control
@@ -528,12 +530,10 @@ pub unsafe fn flatten_to_base<Base, BaseArray>(vec: Vec<BaseArray>) -> Vec<Base>
 /// This panics if the length of the vector is not a multiple of the ratio of the sizes.
 #[inline]
 pub unsafe fn reconstitute_from_base<Base, BaseArray: Clone>(mut vec: Vec<Base>) -> Vec<BaseArray> {
-    assert!(
-        size_of::<BaseArray>().is_multiple_of(size_of::<Base>()),
-        "Size of BaseArray (got {}) must be a multiple of the size of Base ({}).",
-        size_of::<BaseArray>(),
-        size_of::<Base>()
-    );
+    const {
+        assert!(align_of::<Base>() == align_of::<BaseArray>());
+        assert!(size_of::<BaseArray>().is_multiple_of(size_of::<Base>()));
+    }
 
     let d = size_of::<BaseArray>() / size_of::<Base>();
 
@@ -692,7 +692,9 @@ pub fn gcd_inner<const NUM_ROUNDS: usize>(a: &mut u64, b: &mut u64) -> (i64, i64
 /// `a < b`. If either of these assumptions break, the output is undefined.
 #[inline]
 pub fn gcd_inversion_prime_field_32<const FIELD_BITS: u32>(mut a: u32, mut b: u32) -> i64 {
-    assert!(FIELD_BITS <= 32);
+    const {
+        assert!(FIELD_BITS <= 32);
+    }
     debug_assert!(((1_u64 << FIELD_BITS) - 1) >= b as u64);
 
     // Initialise u, v. Note that |u|, |v| <= 2^0
