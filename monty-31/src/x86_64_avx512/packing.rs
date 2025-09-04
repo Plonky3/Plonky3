@@ -1285,9 +1285,7 @@ pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
     // TODO: It's plausible that this could be improved by folding the computation of packed_b into
     // the custom AVX512 implementation. Moreover, a custom implementation which mixes AVX512 and
     // AVX2 code might well be able to improve on the one that is here.
-    const {
-        assert!(WIDTH == 4);
-    }
+    const {assert!(WIDTH == 4);}
 
     // No point in using packings here as we only have 3 elements. It might be worth using a smaller packed
     // field (e.g AVX2) but right now we don't compile both PackedMontyField31AVX2 and PackedMontyField31AVX512
@@ -1399,9 +1397,7 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
     // the custom AVX512 implementation. Moreover, AVX512 is really a bit to large so we are wasting a lot
     // of space. A custom implementation which mixes AVX512 and AVX2 code might well be able to
     // improve one that is here.
-    const {
-        assert!(WIDTH == 5);
-    }
+    const {assert!(WIDTH == 5);}
     let zero = MontyField31::<FP>::ZERO;
     let w_b1 = FP::mul_w(b[1]);
     let w_b2 = FP::mul_w(b[2]);
@@ -1463,9 +1459,7 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
 {
     // TODO: This could likely be optimised further with more effort.
     // in particular it would benefit from a custom AVX2 implementation.
-    const {
-        assert!(WIDTH == 8);
-    }
+    const {assert!(WIDTH == 8);}
     let packed_b = PackedMontyField31AVX512::from_monty_array(*b);
     let w_b = FP::mul_w(packed_b).0;
 
