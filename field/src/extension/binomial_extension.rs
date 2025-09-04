@@ -734,7 +734,7 @@ where
 ///Section 11.3.6b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
 fn quadratic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
-    assert_eq!(D, 2);
+    const { assert!(D == 2) };
     let neg_a1 = -a[1];
     let scalar = F::dot_product(&[a[0], neg_a1], &[a[0], w * a[1]]).inverse();
     res[0] = a[0] * scalar;
@@ -744,7 +744,7 @@ fn quadratic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
 /// Section 11.3.6b in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
 fn cubic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
-    assert_eq!(D, 3);
+    const { assert!(D == 3) };
     let a0_square = a[0].square();
     let a1_square = a[1].square();
     let a2_w = w * a[2];
@@ -769,7 +769,7 @@ fn cubic_mul<F: Field, R: Algebra<F> + Algebra<R2>, R2: Algebra<F>, const D: usi
     res: &mut [R; D],
     w: F,
 ) {
-    assert_eq!(D, 3);
+    const { assert!(D == 3) };
     // TODO: Test if we should switch to a naive multiplication approach using dot products.
     // This is mainly used for a degree 3 extension of Complex<Mersenne31> so this approach might be faster.
 
@@ -792,7 +792,7 @@ fn cubic_mul<F: Field, R: Algebra<F> + Algebra<R2>, R2: Algebra<F>, const D: usi
 /// Section 11.3.6a in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
 #[inline]
 fn cubic_square<F: Field, R: Algebra<F>, const D: usize>(a: &[R; D], res: &mut [R; D], w: F) {
-    assert_eq!(D, 3);
+    const { assert!(D == 3) };
 
     let w_a2 = a[2].clone() * w;
 
@@ -812,7 +812,7 @@ where
     R: Algebra<F> + Algebra<R2>,
     R2: Algebra<F>,
 {
-    assert_eq!(D, 4);
+    const { assert!(D == 4) };
     let b_r_rev: [R; 5] = [
         b[3].clone().into(),
         b[2].clone().into(),
@@ -853,7 +853,7 @@ where
 /// Compute the inverse of a quartic binomial extension field element.
 #[inline]
 fn quartic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
-    assert_eq!(D, 4);
+    const { assert!(D == 4) };
 
     // We use the fact that the quartic extension is a tower of quadratic extensions.
     // We can see this by writing our element as a = a0 + a1·X + a2·X² + a3·X³ = (a0 + a2·X²) + (a1 + a3·X²)·X.
@@ -900,7 +900,7 @@ where
     F: Field,
     R: Algebra<F>,
 {
-    assert_eq!(D, 4);
+    const { assert!(D == 4) };
 
     let two_a0 = a[0].double();
     let two_a1 = a[1].double();
@@ -940,7 +940,7 @@ where
     R: Algebra<F> + Algebra<R2>,
     R2: Algebra<F>,
 {
-    assert_eq!(D, 5);
+    const { assert!(D == 5) };
     let b_r_rev: [R; 6] = [
         b[4].clone().into(),
         b[3].clone().into(),
@@ -998,7 +998,7 @@ where
     F: Field,
     R: Algebra<F>,
 {
-    assert_eq!(D, 5);
+    const { assert!(D == 5) };
 
     let two_a0 = a[0].double();
     let two_a1 = a[1].double();
@@ -1048,7 +1048,7 @@ where
     F: Field,
     R: Algebra<F>,
 {
-    assert_eq!(D, 8);
+    const { assert!(D == 8) };
 
     let a0_2 = a[0].double();
     let a1_2 = a[1].double();
@@ -1220,7 +1220,7 @@ where
     R: Algebra<F> + Algebra<R2>,
     R2: Algebra<F>,
 {
-    assert_eq!(D, 8);
+    const { assert!(D == 8) };
     let a: &[R; 8] = a[..].try_into().unwrap();
     let mut b_r_rev: [R; 9] = [
         b[7].clone().into(),
@@ -1263,12 +1263,15 @@ where
 /// Compute the inverse of a octic binomial extension field element.
 #[inline]
 fn octic_inv<F: Field, const D: usize>(a: &[F; D], res: &mut [F; D], w: F) {
-    assert_eq!(D, 8);
+    const {
+        assert!(D == 8);
+    }
 
     // We use the fact that the octic extension is a tower of extensions.
     // Explicitly our tower looks like F < F[x]/(X⁴ - w) < F[x]/(X^8 - w).
-    // Using this, we can compute the inverse of a in three steps:
-
+    // Using this, we reduce computing an inverse in F[x]/(X^8 - w) to
+    // computing an inverse in F[x]/(X⁴ - w).
+    //
     // Compute the norm of our element with respect to F[x]/(X⁴-w).
     // Writing a = a0 + a1·X + a2·X² + a3·X³ + a4·X⁴ + a5·X⁵ + a6·X⁶ + a7·X⁷
     //           = (a0 + a2·X² + a4·X⁴ + a6·X⁶) + (a1 + a3·X² + a5·X⁴ + a7·X⁶)·X
