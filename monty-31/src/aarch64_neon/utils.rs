@@ -1,6 +1,6 @@
 use core::arch::aarch64::{
-    self, uint16x4_t, uint32x4_t, vandq_u32, vbslq_u32, vceqzq_u32, vdup_n_u16, vdupq_n_s32,
-    vdupq_n_u32, vhaddq_u32, vmovn_u32, vshlq_u32, vshrq_n_u32, vsubq_u32, vtstq_u32,
+    uint32x4_t, vandq_u32, vbslq_u32, vceqzq_u32, vdupq_n_s32, vdupq_n_u32, vhaddq_u32, vmulq_u32,
+    vshlq_u32, vshrq_n_u32, vsubq_u32, vtstq_u32,
 };
 
 use crate::{PackedMontyParameters, TwoAdicData};
@@ -62,12 +62,11 @@ pub unsafe fn mul_neg_2exp_neg_n_neon<
 
         // Compute the main term: `r * 2^(j-N) * lo`
         //
-        // Create a 64-bit vector containing the odd factor `r` in each lane.
-        let odd_factor = vdup_n_u16(TAD::ODD_FACTOR as u16);
-        // Narrow `lo` from a u32x4 vector to a u16x4 vector (safe as N <= 15).
-        let lo_u16: uint16x4_t = vmovn_u32(lo);
-        // Perform a widening multiply: u16 * u16 -> u32.
-        let lo_x_r: uint32x4_t = aarch64::vmull_u16(lo_u16, odd_factor);
+        // Create a u32 vector containing the odd factor `r` in each lane.
+        let odd_factor = vdupq_n_u32(TAD::ODD_FACTOR as u32);
+        // Perform a 32-bit multiplication. This is safe from overflow because
+        // `lo < 2^15` and `odd_factor < 2^15`, so their product is `< 2^30`.
+        let lo_x_r = vmulq_u32(lo, odd_factor);
         // Create a vector for the left shift amount. `j-N` is `N_PRIME`.
         let shift_n_prime = vdupq_n_s32(N_PRIME as i32);
         // Perform the final shift to get the full term.
