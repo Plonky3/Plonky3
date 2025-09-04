@@ -62,12 +62,11 @@ pub unsafe fn mul_neg_2exp_neg_n_neon<
 
         // Compute the main term: `r * 2^(j-N) * lo`
         //
-        // Create a u32 vector containing the odd factor `r` in each lane.
-        let odd_factor = vdupq_n_u32(TAD::ODD_FACTOR as u32);
-        // Perform a 32-bit multiplication. This is safe from overflow.
-        let lo_x_r = vmulq_u32(lo, odd_factor);
-        // Perform the final shift by the constant `N_PRIME` to get the full term.
-        let lo_shft_nonzero = vshlq_n_u32::<N_PRIME>(lo_x_r);
+        // Pre-shift the odd factor: r' = r << N_PRIME.
+        // Under constraints r < 2^15 and N_PRIME ≤ 15, r' fits in 31 bits.
+        let odd_factor_shifted = vdupq_n_u32((TAD::ODD_FACTOR as u32) << N_PRIME);
+        // lo_mul = lo * (r << N_PRIME)
+        let lo_mul = vmulq_u32(lo, odd_factor_shifted);
 
         // Select the correct result based on whether `lo` was zero or not.
         //
@@ -76,7 +75,7 @@ pub unsafe fn mul_neg_2exp_neg_n_neon<
         // Use Bitwise Select:
         // - if a lane in `lo_is_zero_mask` is 1, select from `P`;
         // - otherwise, select from `lo_shft_nonzero`.
-        let lo_shft = vbslq_u32(lo_is_zero_mask, TAD::PACKED_P, lo_shft_nonzero);
+        let lo_shft = vbslq_u32(lo_is_zero_mask, TAD::PACKED_P, lo_mul);
 
         // Final subtraction
         //
