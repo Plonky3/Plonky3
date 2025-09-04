@@ -118,7 +118,7 @@ mod tests {
 
     /// A proptest strategy to generate an arbitrary field element.
     fn arb_f() -> impl Strategy<Value = F> {
-        prop::num::u32::ANY.prop_map(|x| F::from_u32(x))
+        prop::num::u32::ANY.prop_map(F::from_u32)
     }
 
     proptest! {
