@@ -100,15 +100,15 @@ pub unsafe fn mul_neg_2exp_neg_n_neon<
 #[inline(always)]
 pub unsafe fn mul_neg_2exp_neg_two_adicity_neon<
     TAD: TwoAdicData + PackedMontyParameters,
-    const N: u32,
+    const N: i32,
     const N_PRIME: u32,
 >(
     input: uint32x4_t,
 ) -> uint32x4_t {
     // Verifies the constants at compile time.
     const {
-        assert!(N == TAD::TWO_ADICITY as u32);
-        assert!(N + N_PRIME == 31);
+        assert!(N as u32 == TAD::TWO_ADICITY as u32);
+        assert!(N as u32 + N_PRIME == 31);
     }
 
     unsafe {
@@ -116,12 +116,10 @@ pub unsafe fn mul_neg_2exp_neg_two_adicity_neon<
         //
         // Create a bitmask for the lower N bits.
         let mask = vdupq_n_u32((1u32 << N) - 1);
-        // Create a vector for the right shift amount.
-        let shift_n = vdupq_n_s32(-(N as i32));
         // Isolate the low N bits of the input.
         let lo = vandq_u32(input, mask);
-        // Get the high bits by shifting right.
-        let hi = vshlq_u32(input, shift_n);
+        // Get the high bits by shifting right with an immediate value.
+        let hi = vshrq_n_u32::<N>(input);
 
         // Compute the main term: `r * lo`
         //
