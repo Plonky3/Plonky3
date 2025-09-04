@@ -92,7 +92,9 @@ pub unsafe fn mul_neg_2exp_neg_n_avx512<
         latency: 9
     */
     unsafe {
-        const {assert!(N + N_PRIME == TAD::TWO_ADICITY as u32);}
+        const {
+            assert!(N + N_PRIME == TAD::TWO_ADICITY as u32);
+        }
 
         let odd_factor = x86_64::_mm512_set1_epi32(TAD::ODD_FACTOR); // This is [r; 16]. Compiler realises this is a constant.
         let mask = x86_64::_mm512_set1_epi32((1_i32 << N) - 1_i32); // Compiler realises this is a constant.
@@ -143,7 +145,9 @@ pub unsafe fn mul_neg_2exp_neg_8_avx512<
         latency: 7
     */
     unsafe {
-        const {assert!(8 + N_PRIME == TAD::TWO_ADICITY as u32);}
+        const {
+            assert!(8 + N_PRIME == TAD::TWO_ADICITY as u32);
+        }
 
         let odd_factor = x86_64::_mm512_set1_epi32(TAD::ODD_FACTOR); // This is [r; 16]. Compiler realises this is a constant.
         let hi = x86_64::_mm512_srli_epi32::<8>(input);
