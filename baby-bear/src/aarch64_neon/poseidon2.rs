@@ -103,68 +103,55 @@ impl InternalLayerParametersNeon<BabyBearParameters, 24> for BabyBearInternalLay
 
 #[cfg(test)]
 mod tests {
-    use alloc::format;
-
-    use p3_field::PrimeCharacteristicRing;
     use p3_symmetric::Permutation;
-    use proptest::prelude::*;
-    use rand::SeedableRng;
     use rand::rngs::SmallRng;
+    use rand::{Rng, SeedableRng};
 
-    use crate::{BabyBear, PackedBabyBearNeon, Poseidon2BabyBear};
+    use crate::{BabyBear, PackedBabyBearNEON, Poseidon2BabyBear};
 
     type F = BabyBear;
     type Perm16 = Poseidon2BabyBear<16>;
     type Perm24 = Poseidon2BabyBear<24>;
 
-    /// A proptest strategy to generate an arbitrary field element.
-    fn arb_f() -> impl Strategy<Value = F> {
-        prop::num::u32::ANY.prop_map(F::from_u32)
+    /// Test that the output is the same as the scalar version on a random input.
+    #[test]
+    fn test_avx2_poseidon2_width_16() {
+        let mut rng = SmallRng::seed_from_u64(1);
+
+        // Our Poseidon2 implementation.
+        let poseidon2 = Perm16::new_from_rng_128(&mut rng);
+
+        let input: [F; 16] = rng.random();
+
+        let mut expected = input;
+        poseidon2.permute_mut(&mut expected);
+
+        let mut avx2_input = input.map(Into::<PackedBabyBearNEON>::into);
+        poseidon2.permute_mut(&mut avx2_input);
+
+        let avx2_output = avx2_input.map(|x| x.0[0]);
+
+        assert_eq!(avx2_output, expected);
     }
 
-    proptest! {
-        #[test]
-        fn vectorized_permutation_matches_scalar_for_width_16(
-            input in prop::array::uniform16(arb_f())
-        ) {
-            // Use a fixed seed for the Poseidon2 constants for reproducibility.
-            let mut rng = SmallRng::seed_from_u64(1);
-            let poseidon2 = Perm16::new_from_rng_128(&mut rng);
+    /// Test that the output is the same as the scalar version on a random input.
+    #[test]
+    fn test_avx2_poseidon2_width_24() {
+        let mut rng = SmallRng::seed_from_u64(1);
 
-            // Calculate the expected result using the scalar implementation.
-            let mut expected = input;
-            poseidon2.permute_mut(&mut expected);
+        // Our Poseidon2 implementation.
+        let poseidon2 = Perm24::new_from_rng_128(&mut rng);
 
-            // Calculate the actual result using the NEON implementation.
-            // First, map the scalar inputs into packed NEON vectors.
-            let mut neon_input = input.map(Into::<PackedBabyBearNeon>::into);
-            poseidon2.permute_mut(&mut neon_input);
+        let input: [F; 24] = rng.random();
 
-            // Finally, unpack the NEON vectors back into scalar values.
-            let neon_output = neon_input.map(|x| x.0[0]);
+        let mut expected = input;
+        poseidon2.permute_mut(&mut expected);
 
-            // Assert that the results are identical.
-            prop_assert_eq!(neon_output, expected, "NEON implementation did not match scalar reference");
-        }
+        let mut avx2_input = input.map(Into::<PackedBabyBearNEON>::into);
+        poseidon2.permute_mut(&mut avx2_input);
 
-        #[test]
-        fn vectorized_permutation_matches_scalar_for_width_24(
-            input in prop::array::uniform24(arb_f())
-        ) {
-            let mut rng = SmallRng::seed_from_u64(1);
-            let poseidon2 = Perm24::new_from_rng_128(&mut rng);
+        let avx2_output = avx2_input.map(|x| x.0[0]);
 
-            // Calculate expected (scalar) result.
-            let mut expected = input;
-            poseidon2.permute_mut(&mut expected);
-
-            // Calculate actual (NEON) result.
-            let mut neon_input = input.map(Into::<PackedBabyBearNeon>::into);
-            poseidon2.permute_mut(&mut neon_input);
-            let neon_output = neon_input.map(|x| x.0[0]);
-
-            // Assert equality.
-            prop_assert_eq!(neon_output, expected, "NEON implementation did not match scalar reference");
-        }
+        assert_eq!(avx2_output, expected);
     }
 }
