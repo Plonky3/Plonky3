@@ -60,7 +60,9 @@ pub trait CanSample<T> {
 
 /// A trait for sampling random bitstrings from the Fiat-Shamir transcript.
 pub trait CanSampleBits<T> {
-    /// Sample a uniformly random `bits`-bit integer from the transcript.
+    /// Sample a random `bits`-bit integer from the transcript.
+    /// 
+    /// Warning: The distribution is not guaranteed to be uniform.
     ///
     /// Guarantees that the returned value fits within the requested bit width.
     fn sample_bits(&mut self, bits: usize) -> T;
