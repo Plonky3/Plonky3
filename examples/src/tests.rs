@@ -6,7 +6,6 @@ use p3_baby_bear::{BabyBear, GenericPoseidon2LinearLayersBabyBear, Poseidon2Baby
 use p3_blake3_air::Blake3Air;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_keccak::VECTOR_LEN;
 use p3_keccak_air::KeccakAir;
 use p3_koala_bear::{GenericPoseidon2LinearLayersKoalaBear, KoalaBear, Poseidon2KoalaBear};
 use p3_mersenne_31::{GenericPoseidon2LinearLayersMersenne31, Mersenne31, Poseidon2Mersenne31};
@@ -54,7 +53,7 @@ fn test_end_to_end_koalabear_vectorized_poseidon2_hashes_recursive_dft_poseidon2
         P2_VECTOR_LEN,
     > = VectorizedPoseidon2Air::new(constants);
 
-    let dft = DftChoice::Recursive(RecursiveDft::new(TRACE_SIZE >> VECTOR_LEN));
+    let dft = DftChoice::Recursive(RecursiveDft::new(TRACE_SIZE << 1));
 
     let perm16 = Poseidon2KoalaBear::<16>::new_from_rng_128(&mut rng);
     let perm24 = Poseidon2KoalaBear::<24>::new_from_rng_128(&mut rng);
