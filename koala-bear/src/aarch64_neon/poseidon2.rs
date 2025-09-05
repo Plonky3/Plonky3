@@ -107,7 +107,7 @@ mod tests {
     use rand::rngs::SmallRng;
     use rand::{Rng, SeedableRng};
 
-    use crate::{KoalaBear, PackedKoalaBearNEON, Poseidon2KoalaBear};
+    use crate::{KoalaBear, PackedKoalaBearNeon, Poseidon2KoalaBear};
 
     type F = KoalaBear;
     type Perm16 = Poseidon2KoalaBear<16>;
@@ -126,7 +126,7 @@ mod tests {
         let mut expected = input;
         poseidon2.permute_mut(&mut expected);
 
-        let mut avx2_input = input.map(Into::<PackedKoalaBearNEON>::into);
+        let mut avx2_input = input.map(Into::<PackedKoalaBearNeon>::into);
         poseidon2.permute_mut(&mut avx2_input);
 
         let avx2_output = avx2_input.map(|x| x.0[0]);
@@ -147,7 +147,7 @@ mod tests {
         let mut expected = input;
         poseidon2.permute_mut(&mut expected);
 
-        let mut avx2_input = input.map(Into::<PackedKoalaBearNEON>::into);
+        let mut avx2_input = input.map(Into::<PackedKoalaBearNeon>::into);
         poseidon2.permute_mut(&mut avx2_input);
 
         let avx2_output = avx2_input.map(|x| x.0[0]);
