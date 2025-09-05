@@ -146,17 +146,16 @@ mod test_quintic_extension {
     use alloc::format;
 
     use num_bigint::BigUint;
-    use p3_field::extension::QuinticExtensionField;
     use p3_field::{BasedVectorSpace, ExtensionField, PrimeCharacteristicRing};
     use p3_field_testing::{
         test_extension_field, test_field, test_packed_extension_field,
         test_two_adic_extension_field,
     };
 
-    use crate::KoalaBear;
+    use crate::{quintic_extension::QuinticExtensionField, KoalaBear};
 
     type F = KoalaBear;
-    type EF = QuinticExtensionField<F>;
+    type EF = QuinticExtensionField;
 
     // MontyField31's have no redundant representations.
     const ZEROS: [EF; 1] = [EF::ZERO];
@@ -194,14 +193,8 @@ mod test_quintic_extension {
         assert_eq!(
             format!(
                 "{}",
-                EF::from_basis_coefficients_slice(&[
-                    F::TWO,
-                    F::ONE,
-                    F::ZERO,
-                    F::TWO,
-                    F::ZERO,
-                ])
-                .unwrap()
+                EF::from_basis_coefficients_slice(&[F::TWO, F::ONE, F::ZERO, F::TWO, F::ZERO,])
+                    .unwrap()
             ),
             "2 + X + 2 X^3"
         );

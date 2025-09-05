@@ -7,7 +7,7 @@ use itertools::Itertools;
 use p3_field::extension::{vector_add, vector_sub};
 use p3_monty_31::MontyParameters;
 
-use p3_util::reconstitute_from_base;
+use p3_util::{flatten_to_base, reconstitute_from_base};
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 
@@ -16,9 +16,8 @@ use p3_field::{
     PrimeCharacteristicRing, field_to_array, packed_mod_add,
 };
 
-use crate::{
-    KoalaBear, KoalaBearParameters, QuinticExtensionField, add, kb_quintic_mul, quintic_square,
-};
+use crate::quintic_extension::{QuinticExtensionField, add, kb_quintic_mul, quintic_square};
+use crate::{KoalaBear, KoalaBearParameters};
 
 type KoalaBearPF = <KoalaBear as Field>::Packing;
 
@@ -59,10 +58,6 @@ impl From<QuinticExtensionField> for PackedQuinticExtensionField {
     }
 }
 
-#[cfg(any(
-    all(target_arch = "aarch64", target_feature = "neon"),
-    all(target_arch = "x86_64", target_feature = "avx2",)
-))]
 impl From<KoalaBearPF> for PackedQuinticExtensionField {
     #[inline]
     fn from(x: KoalaBearPF) -> Self {
@@ -91,7 +86,7 @@ impl Algebra<QuinticExtensionField> for PackedQuinticExtensionField {}
 impl Algebra<KoalaBearPF> for PackedQuinticExtensionField {}
 
 impl PrimeCharacteristicRing for PackedQuinticExtensionField {
-    type PrimeSubfield = KoalaBearPF;
+    type PrimeSubfield = KoalaBear;
 
     const ZERO: Self = Self {
         value: [KoalaBearPF::ZERO; 5],
@@ -133,10 +128,6 @@ impl PrimeCharacteristicRing for PackedQuinticExtensionField {
     }
 }
 
-#[cfg(any(
-    all(target_arch = "aarch64", target_feature = "neon"),
-    all(target_arch = "x86_64", target_feature = "avx2",)
-))]
 impl BasedVectorSpace<KoalaBearPF> for PackedQuinticExtensionField {
     const DIMENSION: usize = 5;
 
@@ -177,6 +168,8 @@ impl BasedVectorSpace<KoalaBearPF> for PackedQuinticExtensionField {
         }
     }
 }
+
+impl Algebra<KoalaBearPF> for PackedQuinticExtensionField {}
 
 impl PackedFieldExtension<KoalaBear, QuinticExtensionField> for PackedQuinticExtensionField {
     #[inline]
@@ -263,10 +256,6 @@ impl Add<QuinticExtensionField> for PackedQuinticExtensionField {
     }
 }
 
-#[cfg(any(
-    all(target_arch = "aarch64", target_feature = "neon"),
-    all(target_arch = "x86_64", target_feature = "avx2",)
-))]
 impl Add<KoalaBearPF> for PackedQuinticExtensionField {
     type Output = Self;
 
@@ -295,10 +284,6 @@ impl AddAssign<QuinticExtensionField> for PackedQuinticExtensionField {
     }
 }
 
-#[cfg(any(
-    all(target_arch = "aarch64", target_feature = "neon"),
-    all(target_arch = "x86_64", target_feature = "avx2",)
-))]
 impl AddAssign<KoalaBearPF> for PackedQuinticExtensionField {
     #[inline]
     fn add_assign(&mut self, rhs: KoalaBearPF) {
@@ -333,10 +318,6 @@ impl Sub<QuinticExtensionField> for PackedQuinticExtensionField {
     }
 }
 
-#[cfg(any(
-    all(target_arch = "aarch64", target_feature = "neon"),
-    all(target_arch = "x86_64", target_feature = "avx2",)
-))]
 impl Sub<KoalaBearPF> for PackedQuinticExtensionField {
     type Output = Self;
 
@@ -362,10 +343,6 @@ impl SubAssign<QuinticExtensionField> for PackedQuinticExtensionField {
     }
 }
 
-#[cfg(any(
-    all(target_arch = "aarch64", target_feature = "neon"),
-    all(target_arch = "x86_64", target_feature = "avx2",)
-))]
 impl SubAssign<KoalaBearPF> for PackedQuinticExtensionField {
     #[inline]
     fn sub_assign(&mut self, rhs: KoalaBearPF) {
@@ -400,10 +377,6 @@ impl Mul<QuinticExtensionField> for PackedQuinticExtensionField {
     }
 }
 
-#[cfg(any(
-    all(target_arch = "aarch64", target_feature = "neon"),
-    all(target_arch = "x86_64", target_feature = "avx2",)
-))]
 impl Mul<KoalaBearPF> for PackedQuinticExtensionField {
     type Output = Self;
 
@@ -436,10 +409,6 @@ impl MulAssign<QuinticExtensionField> for PackedQuinticExtensionField {
     }
 }
 
-#[cfg(any(
-    all(target_arch = "aarch64", target_feature = "neon"),
-    all(target_arch = "x86_64", target_feature = "avx2",)
-))]
 impl MulAssign<KoalaBearPF> for PackedQuinticExtensionField {
     #[inline]
     fn mul_assign(&mut self, rhs: KoalaBearPF) {

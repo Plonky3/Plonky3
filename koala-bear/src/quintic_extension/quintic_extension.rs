@@ -605,7 +605,7 @@ impl TwoAdicField for QuinticExtensionField {
 // + (a0b2 + a1b1 + a2b0 - a1b4 - a2b3 - a3b2 - a4b1 + a3b4 + a4b3 + a4b4).X^2
 // + (a0b3 + a1b2 + a2b1 + a3b0 - a2b4 - a3b3 - a4b2 + a4b4).X^3
 // + (a0b4 + a1b3 + a2b2 + a3b1 + a4b0 - a3b4 - a4*b3).X^4
-pub fn kb_quintic_mul<F, R, R2>(a: &[R; 5], b: &[R2; 5], res: &mut [R; 5])
+pub(crate) fn kb_quintic_mul<F, R, R2>(a: &[R; 5], b: &[R2; 5], res: &mut [R; 5])
 where
     F: Field,
     R: Algebra<F> + Algebra<R2>,
@@ -793,17 +793,17 @@ pub(crate) fn kb_quintic_mul_packed<FP>(
 ))]
 /// Multiplication in a quintic binomial extension field.
 #[inline]
-pub fn kb_quintic_mul_packed<FP>(
-    a: &[MontyField31<FP>; 5],
-    b: &[MontyField31<FP>; 5],
-    res: &mut [MontyField31<FP>; 5],
-) where
-    FP: FieldParameters + QuinticExtensionData,
+pub(crate) fn kb_quintic_mul_packed<FP>(
+    a: &[KoalaBear; 5],
+    b: &[KoalaBear; 5],
+    res: &mut [KoalaBear; 5],
+)
 {
+    use p3_monty_31::PackedMontyField31AVX2;
     // TODO: This could likely be optimised further with more effort.
     // in particular it would benefit from a custom AVX2 implementation.
 
-    let zero = MontyField31::<FP>::ZERO;
+    let zero = KoalaBear::ZERO;
     let b_0_minus_3 = b[0] - b[3];
     let b_1_minus_4 = b[1] - b[4];
     let b_4_minus_2 = b[4] - b[2];
@@ -840,7 +840,7 @@ pub fn kb_quintic_mul_packed<FP>(
         ]),
     ];
 
-    let dot_res = unsafe { PackedMontyField31AVX2::from_vector(dot_product_4(lhs, rhs)) };
+    let dot_res = unsafe { PackedMontyField31AVX2::from_vector(p3_monty_31::dot_product_4(lhs, rhs)) };
 
     // We managed to compute 3 of the extra terms in the last 3 places of the dot product.
     // This leaves us with 2 terms remaining we need to compute manually.

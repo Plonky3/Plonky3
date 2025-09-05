@@ -1,4 +1,3 @@
-use crate::QuinticExtensionData;
 use alloc::vec::Vec;
 use core::arch::x86_64::{self, __m256i};
 use core::array;
@@ -559,7 +558,8 @@ fn dot_product_2<PMP: PackedMontyParameters, LHS: IntoM256<PMP>, RHS: IntoM256<P
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-fn dot_product_4<PMP: PackedMontyParameters, LHS: IntoM256<PMP>, RHS: IntoM256<PMP>>(
+#[warn(private_bounds)]
+pub fn dot_product_4<PMP: PackedMontyParameters, LHS: IntoM256<PMP>, RHS: IntoM256<PMP>>(
     lhs: [LHS; 4],
     rhs: [RHS; 4],
 ) -> __m256i {
