@@ -44,7 +44,7 @@ impl<PMP: PackedMontyParameters> PackedMontyField31Neon<PMP> {
     #[inline]
     #[must_use]
     /// Get an arch-specific vector representing the packed values.
-    fn to_vector(self) -> uint32x4_t {
+    pub(crate) fn to_vector(self) -> uint32x4_t {
         unsafe {
             // Safety: `MontyField31` is `repr(transparent)` so it can be transmuted to `u32`. It
             // follows that `[MontyField31; WIDTH]` can be transmuted to `[u32; WIDTH]`, which can be
@@ -60,7 +60,7 @@ impl<PMP: PackedMontyParameters> PackedMontyField31Neon<PMP> {
     ///
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid `MontyField31`.
     /// In particular, each element of vector must be in `0..P` (canonical form).
-    unsafe fn from_vector(vector: uint32x4_t) -> Self {
+    pub(crate) unsafe fn from_vector(vector: uint32x4_t) -> Self {
         unsafe {
             // Safety: It is up to the user to ensure that elements of `vector` represent valid
             // `MontyField31` values. We must only reason about memory representations. `uint32x4_t` can be
@@ -627,5 +627,56 @@ pub(crate) fn base_mul_packed<FP, const WIDTH: usize>(
             res[4..].copy_from_slice(&out_hi.0);
         }
         _ => panic!("Unsupported binomial extension degree: {}", WIDTH),
+    }
+}
+
+/// Helper for `x -> x^3`. Input must be canonical. Output is canonical.
+#[inline]
+fn packed_exp_3<PMP>(val: uint32x4_t) -> uint32x4_t
+where
+    PMP: PackedMontyParameters + FieldParameters,
+{
+    let val_packed = unsafe { PackedMontyField31Neon::<PMP>::from_vector(val) };
+    let sq = val_packed.square();
+    (sq * val_packed).to_vector()
+}
+
+/// Helper for `x -> x^5`. Input must be canonical. Output is canonical.
+#[inline]
+fn packed_exp_5<PMP>(val: uint32x4_t) -> uint32x4_t
+where
+    PMP: PackedMontyParameters + FieldParameters,
+{
+    let val_packed = unsafe { PackedMontyField31Neon::<PMP>::from_vector(val) };
+    let sq = val_packed.square();
+    let qd = sq.square();
+    (qd * val_packed).to_vector()
+}
+
+/// Helper for `x -> x^7`. Input must be canonical. Output is canonical.
+#[inline]
+fn packed_exp_7<PMP>(val: uint32x4_t) -> uint32x4_t
+where
+    PMP: PackedMontyParameters + FieldParameters,
+{
+    let val_packed = unsafe { PackedMontyField31Neon::<PMP>::from_vector(val) };
+    let sq = val_packed.square();
+    let cube = sq * val_packed;
+    let six = cube.square();
+    (six * val_packed).to_vector()
+}
+
+/// Use hardcoded methods to compute `x -> x^D` for small `D`.
+#[inline(always)]
+#[must_use]
+pub(crate) fn exp_small<PMP, const D: u64>(val: uint32x4_t) -> uint32x4_t
+where
+    PMP: PackedMontyParameters + FieldParameters,
+{
+    match D {
+        3 => packed_exp_3::<PMP>(val),
+        5 => packed_exp_5::<PMP>(val),
+        7 => packed_exp_7::<PMP>(val),
+        _ => panic!("No exp function for given D"),
     }
 }
