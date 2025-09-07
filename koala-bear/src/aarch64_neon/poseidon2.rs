@@ -42,7 +42,7 @@ impl InternalLayerParametersNeon<KoalaBearParameters, 16> for KoalaBearInternalL
         }
     }
 
-    /// There are 3 positive inverse powers of two after the 4: 1/2^8, 1/8, 1/2^24,
+    /// There are 3 positive inverse powers of two after the -4: 1/2^8, 1/8, 1/2^24,
     const NUM_POS: usize = 3;
 }
 
