@@ -12,7 +12,6 @@ use p3_poseidon2::{
     external_terminal_permute_state,
 };
 
-use super::exp_small;
 use super::utils::halve_neon;
 use crate::{
     FieldParameters, MontyField31, MontyParameters, PackedMontyField31Neon, PackedMontyParameters,
@@ -410,11 +409,10 @@ where
         // Reinterpret the sum back to unsigned bits for the exponentiation function.
         let val_plus_rc_u32 = aarch64::vreinterpretq_u32_s32(val_plus_rc);
 
-        // Apply the power S-box `x -> x^D`. This function correctly handles inputs in `[-P, P)`.
-        let output = exp_small::<PMP, D>(val_plus_rc_u32);
-
-        // Wrap the final canonical result in the `PackedMontyField31Neon` type and update the state.
-        *val = PackedMontyField31Neon::<PMP>::from_vector(output);
+        // - Apply the power S-box `x -> x^D`. This function correctly handles inputs in `[-P, P)`.
+        // - Update the state.
+        let val_plus_rc_u32_packed = PackedMontyField31Neon::<PMP>::from_vector(val_plus_rc_u32);
+        *val = val_plus_rc_u32_packed.exp_const_u64::<D>();
     }
 }
 
