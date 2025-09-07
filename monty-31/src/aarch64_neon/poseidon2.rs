@@ -381,10 +381,10 @@ fn convert_to_vec_neg_form_neon<MP: MontyParameters>(input: i32) -> uint32x4_t {
 /// This function combines two steps for efficiency. It takes a vector of field elements `val`
 /// and adds the pre-formatted round constant `rc`. The result is then raised to the power `D`.
 ///
-/// A key optimization is that the round constants `rc` are stored in a negative form `[-P, 0]`.
-/// This allows for a simple signed integer addition `val + rc` without an intermediate modular
-/// reduction, as the result is guaranteed to be in `[-P, P)`, which is the valid input range
-/// for the `exp_small` helper function. This saves a costly reduction operation inside the loop.
+/// A key optimization is that the round constants `rc` are stored in a negative form `c - P`.
+/// This allows for a simple integer addition `val + rc` without an intermediate modular
+/// reduction. The result of this addition is in the range `[-P, P)`. This non-canonical
+/// result is then reduced back to `[0, P)` before the exponentiation is applied.
 ///
 /// # Safety
 /// - `val` must contain elements in canonical form `[0, P)`.
@@ -401,12 +401,23 @@ where
         // Perform a standard wrapping 32-bit addition lane by lane.
         //
         // Since `val` is in `[0, P)` and `rc` is in `[-P, 0]` (represented as large u32s),
-        // the wrapping addition correctly results in a value in `[-P, P)`.
+        // the wrapping addition correctly computes a result in `[-P, P)`.
         let val_plus_rc_u32 = aarch64::vaddq_u32(vec_val, rc);
 
-        // - Apply the power S-box `x -> x^D`.
+        // Reduce the result from `[-P, P)` back to the canonical range `[0, P)`.
+        // This is required before the exponentiation.
+        //
+        // We use a branchless trick with `vminq` (vector minimum):
+        // - If `val_plus_rc` was positive, it's a small u32. `val_plus_rc + P` is larger,
+        //   so `vminq` returns the original, correct value.
+        // - If `val_plus_rc` was negative, it's a large u32. `val_plus_rc + P` wraps around
+        //   to a small positive u32 (the canonical value), so `vminq` selects this smaller value.
+        let val_plus_rc_plus_p = aarch64::vaddq_u32(val_plus_rc_u32, PMP::PACKED_P);
+        let canonical_val = aarch64::vminq_u32(val_plus_rc_u32, val_plus_rc_plus_p);
+
+        // - Apply the power S-box `x -> x^D`. The input is now correctly in `[0, P)`.
         // - Update the state.
-        let val_plus_rc_u32_packed = PackedMontyField31Neon::<PMP>::from_vector(val_plus_rc_u32);
+        let val_plus_rc_u32_packed = PackedMontyField31Neon::<PMP>::from_vector(canonical_val);
         *val = val_plus_rc_u32_packed.exp_const_u64::<D>();
     }
 }
