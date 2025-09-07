@@ -514,23 +514,26 @@ pub trait InternalLayerParametersNeon<PMP: PackedMontyParameters, const WIDTH: u
     /// `sum` must be in canonical form, and `input` must be the immediate output of `diagonal_mul`.
     #[inline(always)]
     unsafe fn add_sum(input: &mut Self::ArrayLike, sum: uint32x4_t) {
-        // For the first 5 elements, `diagonal_mul` computed the correct `v_i * s_i`, so we simply add the sum.
+        // For the first 5 elements (s_1 to s_5), the diagonal coefficients are positive, so we add the sum.
         input.as_mut()[..5]
             .iter_mut()
             .for_each(|x| *x = uint32x4_mod_add(sum, *x, PMP::PACKED_P));
 
-        // For the next block of elements, `diagonal_mul` computed a positive value where a negative one was needed.
-        //
-        // We correct this by subtracting the result from the sum: `sum - (v_i * s_i)`.
-        input.as_mut()[5..(8 + Self::NUM_POS)]
+        // For the next 3 elements (s_6 to s_8), the diagonal coefficients are negative, so we
+        // subtract the result from the sum.
+        input.as_mut()[5..8]
             .iter_mut()
             .for_each(|x| *x = uint32x4_mod_sub(sum, *x, PMP::PACKED_P));
 
-        // For the final block of elements, `diagonal_mul` computed the correct negative value, so we add the sum.
-        //
-        // The result of the multiplication is already in `[-P, P)`, so a standard modular addition works.
-        input.as_mut()[8 + Self::NUM_POS..]
+        // For the next block of elements, the diagonal coefficients are positive, so we add the sum.
+        input.as_mut()[8..(8 + Self::NUM_POS)]
             .iter_mut()
             .for_each(|x| *x = uint32x4_mod_add(sum, *x, PMP::PACKED_P));
+
+        // For the final block of elements, the diagonal coefficients are negative, so we
+        // subtract the result from the sum.
+        input.as_mut()[8 + Self::NUM_POS..]
+            .iter_mut()
+            .for_each(|x| *x = uint32x4_mod_sub(sum, *x, PMP::PACKED_P));
     }
 }

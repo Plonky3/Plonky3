@@ -1,7 +1,7 @@
 use core::arch::aarch64::uint32x4_t;
 
 use p3_monty_31::{
-    InternalLayerParametersNeon, mul_neg_2exp_neg_n_neon, mul_neg_2exp_neg_two_adicity_neon,
+    InternalLayerParametersNeon, mul_2exp_neg_n_neon, mul_2exp_neg_two_adicity_neon,
 };
 
 use crate::{BabyBearInternalLayerParameters, BabyBearParameters};
@@ -19,25 +19,25 @@ impl InternalLayerParametersNeon<BabyBearParameters, 16> for BabyBearInternalLay
     #[inline(always)]
     unsafe fn diagonal_mul_remainder(input: &mut [uint32x4_t; 15]) {
         unsafe {
-            // These first 4 muls output the negative of the desired value and are corrected in `add_sum`.
+            // These multiplications are for positive coefficients. The results are added to the
+            // sum in the `add_sum` function.
+            // input[8] -> input[8] / 2^8
+            input[8] = mul_2exp_neg_n_neon::<BabyBearParameters, 8, 19>(input[8]);
+            // input[9] -> input[9] / 4
+            input[9] = mul_2exp_neg_n_neon::<BabyBearParameters, 2, 25>(input[9]);
+            // input[10] -> input[10] / 8
+            input[10] = mul_2exp_neg_n_neon::<BabyBearParameters, 3, 24>(input[10]);
+            // input[11] -> input[11] / 2^27
+            input[11] = mul_2exp_neg_two_adicity_neon::<BabyBearParameters, 27, 4>(input[11]);
 
-            // input[8] -> 1/2^8
-            input[8] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 8, 19>(input[8]);
-            // input[9] -> 1/4
-            input[9] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 2, 25>(input[9]);
-            // input[10] -> 1/8
-            input[10] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 3, 24>(input[10]);
-            // input[11] -> 1/2^27
-            input[11] = mul_neg_2exp_neg_two_adicity_neon::<BabyBearParameters, 27, 4>(input[11]);
-
-            // These remaining muls are for negative coefficients and are correct as is.
-
-            // input[12] -> -1/2^8
-            input[12] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 8, 19>(input[12]);
-            // input[13] -> -1/16
-            input[13] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 4, 23>(input[13]);
-            // input[14] -> -1/2^27
-            input[14] = mul_neg_2exp_neg_two_adicity_neon::<BabyBearParameters, 27, 4>(input[14]);
+            // These multiplications are for negative coefficients. We compute the multiplication
+            // by the positive value, and the result is later subtracted from the sum in `add_sum`.
+            // input[12] -> input[12] / 2^8
+            input[12] = mul_2exp_neg_n_neon::<BabyBearParameters, 8, 19>(input[12]);
+            // input[13] -> input[13] / 16
+            input[13] = mul_2exp_neg_n_neon::<BabyBearParameters, 4, 23>(input[13]);
+            // input[14] -> input[14] / 2^27
+            input[14] = mul_2exp_neg_two_adicity_neon::<BabyBearParameters, 27, 4>(input[14]);
         }
     }
 
@@ -58,41 +58,41 @@ impl InternalLayerParametersNeon<BabyBearParameters, 24> for BabyBearInternalLay
     #[inline(always)]
     unsafe fn diagonal_mul_remainder(input: &mut [uint32x4_t; 23]) {
         unsafe {
-            // Positive coefficients (corrected in add_sum)
+            // These multiplications are for positive coefficients. The results are added to the
+            // sum in the `add_sum` function.
+            // input[8] -> input[8] / 2^8
+            input[8] = mul_2exp_neg_n_neon::<BabyBearParameters, 8, 19>(input[8]);
+            // input[9] -> input[9] / 4
+            input[9] = mul_2exp_neg_n_neon::<BabyBearParameters, 2, 25>(input[9]);
+            // input[10] -> input[10] / 8
+            input[10] = mul_2exp_neg_n_neon::<BabyBearParameters, 3, 24>(input[10]);
+            // input[11] -> input[11] / 16
+            input[11] = mul_2exp_neg_n_neon::<BabyBearParameters, 4, 23>(input[11]);
+            // input[12] -> input[12] / 2^7
+            input[12] = mul_2exp_neg_n_neon::<BabyBearParameters, 7, 20>(input[12]);
+            // input[13] -> input[13] / 2^9
+            input[13] = mul_2exp_neg_n_neon::<BabyBearParameters, 9, 18>(input[13]);
+            // input[14] -> input[14] / 2^27
+            input[14] = mul_2exp_neg_two_adicity_neon::<BabyBearParameters, 27, 4>(input[14]);
 
-            // input[8] -> sum + input[8]/2**8
-            input[8] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 8, 19>(input[8]);
-            // input[9] -> sum + input[9]/2**2
-            input[9] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 2, 25>(input[9]);
-            // input[10] -> sum + input[10]/2**3
-            input[10] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 3, 24>(input[10]);
-            // input[11] -> sum + input[11]/2**4
-            input[11] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 4, 23>(input[11]);
-            // input[12] -> sum + input[12]/2**7
-            input[12] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 7, 20>(input[12]);
-            // input[13] -> sum + input[13]/2**9
-            input[13] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 9, 18>(input[13]);
-            // input[14] -> sum + input[14]/2**27
-            input[14] = mul_neg_2exp_neg_two_adicity_neon::<BabyBearParameters, 27, 4>(input[14]);
-
-            // Negative coefficients
-
-            // input[15] -> sum - input[15]/2**8
-            input[15] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 8, 19>(input[15]);
-            // input[16] -> sum - input[16]/2**2
-            input[16] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 2, 25>(input[16]);
-            // input[17] -> sum - input[17]/2**3
-            input[17] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 3, 24>(input[17]);
-            // input[18] -> sum - input[18]/2**4
-            input[18] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 4, 23>(input[18]);
-            // input[19] -> sum - input[19]/2**5
-            input[19] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 5, 22>(input[19]);
-            // input[20] -> sum - input[20]/2**6
-            input[20] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 6, 21>(input[20]);
-            // input[21] -> sum - input[21]/2**7
-            input[21] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 7, 20>(input[21]);
-            // input[22] -> sum - input[22]/2**27
-            input[22] = mul_neg_2exp_neg_two_adicity_neon::<BabyBearParameters, 27, 4>(input[22]);
+            // These multiplications are for negative coefficients. We compute the multiplication
+            // by the positive value, and the result is later subtracted from the sum in `add_sum`.
+            // input[15] -> input[15] / 2^8
+            input[15] = mul_2exp_neg_n_neon::<BabyBearParameters, 8, 19>(input[15]);
+            // input[16] -> input[16] / 4
+            input[16] = mul_2exp_neg_n_neon::<BabyBearParameters, 2, 25>(input[16]);
+            // input[17] -> input[17] / 8
+            input[17] = mul_2exp_neg_n_neon::<BabyBearParameters, 3, 24>(input[17]);
+            // input[18] -> input[18] / 16
+            input[18] = mul_2exp_neg_n_neon::<BabyBearParameters, 4, 23>(input[18]);
+            // input[19] -> input[19] / 32
+            input[19] = mul_2exp_neg_n_neon::<BabyBearParameters, 5, 22>(input[19]);
+            // input[20] -> input[20] / 64
+            input[20] = mul_2exp_neg_n_neon::<BabyBearParameters, 6, 21>(input[20]);
+            // input[21] -> input[21] / 2^7
+            input[21] = mul_2exp_neg_n_neon::<BabyBearParameters, 7, 20>(input[21]);
+            // input[22] -> input[22] / 2^27
+            input[22] = mul_2exp_neg_two_adicity_neon::<BabyBearParameters, 27, 4>(input[22]);
         }
     }
 
