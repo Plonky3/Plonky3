@@ -42,7 +42,7 @@ impl InternalLayerParametersNeon<BabyBearParameters, 16> for BabyBearInternalLay
         }
     }
 
-    /// There are 4 positive inverse powers of two after the 4: 1/2^8, 1/4, 1/8, 1/2^27.
+    /// There are 4 positive inverse powers of two after the -4: 1/2^8, 1/4, 1/8, 1/2^27.
     const NUM_POS: usize = 4;
 }
 
