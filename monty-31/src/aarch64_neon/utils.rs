@@ -38,27 +38,49 @@ pub(crate) fn halve_neon<PMP: PackedMontyParameters>(input: uint32x4_t) -> uint3
 /// - Output will be in `(-P, P)`.
 /// - `N + N_PRIME` must equal `TAD::TWO_ADICITY`.
 #[inline(always)]
-pub unsafe fn mul_neg_2exp_n_neon(
+pub unsafe fn mul_neg_2exp_neg_n_neon<
+    TAD: TwoAdicData + PackedMontyParameters,
+    const N: i32,
+    const N_PRIME: i32,
+>(
     input: uint32x4_t,
 ) -> uint32x4_t {
+    // Verifies the constants at compile time.
+    const {
+        assert!(N + N_PRIME == TAD::TWO_ADICITY as i32);
+    }
+
     unsafe {
         // Decompose the input into high and low bits
         //
         // Create a bitmask for the lower N bits. The compiler will treat this as a constant.
-        let mask = aarch64::vdupq_n_u32((1u32 << 7) - 1);
+        let mask = vdupq_n_u32((1u32 << N) - 1);
         // Isolate the low N bits of the input.
-        let lo = aarch64::vandq_u32(input, mask);
-
+        let lo = vandq_u32(input, mask);
         // Get the high bits by shifting right by the constant N.
-        let hi = aarch64::vshrq_n_u32::<7>(input);
+        let hi = vshrq_n_u32::<N>(input);
 
-        // Compute hi - lo * 127 * 2^N_PRIME
-        // vmlsq_n_u32 lets us combine the multiplication and subtraction into a single step.
-        let res = aarch64::vmlsq_n_u32(hi, lo, ((127) as u32) << 17);
+        // Compute the main term: `r * 2^(j-N) * lo`
+        //
+        // Pre-shift the odd factor: r' = r << N_PRIME.
+        // Under constraints r < 2^15 and N_PRIME ≤ 15, r' fits in 31 bits.
+        let odd_factor_shifted = vdupq_n_u32((TAD::ODD_FACTOR as u32) << N_PRIME);
+        // lo_mul = lo * (r << N_PRIME)
+        let lo_mul = vmulq_u32(lo, odd_factor_shifted);
 
-        // Currently `res` lies in (-P, P), we reduce it to [0, P).
-        let u = aarch64::vaddq_u32(res, PACKED_P);
-        aarch64::vminq_u32(res, u)
+        // Select the correct result based on whether `lo` was zero or not.
+        //
+        // Create a mask that is all 1s where `lo` was 0, and all 0s otherwise.
+        let lo_is_zero_mask = vceqzq_u32(lo);
+        // Use Bitwise Select:
+        // - if a lane in `lo_is_zero_mask` is 1, select from `P`;
+        // - otherwise, select from `lo_shft_nonzero`.
+        let lo_shft = vbslq_u32(lo_is_zero_mask, TAD::PACKED_P, lo_mul);
+
+        // Final subtraction
+        //
+        // The result is `(P or r*2^(j-N)*lo) - hi`.
+        vsubq_u32(lo_shft, hi)
     }
 }
 
