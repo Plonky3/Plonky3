@@ -398,21 +398,13 @@ where
         // Unwrap the field element vector to its raw u32 representation.
         let vec_val = val.to_vector();
 
-        // Reinterpret both the state and the round constant vectors as signed integers to perform a signed addition.
+        // Perform a standard wrapping 32-bit addition lane by lane.
         //
-        // This is a no-op at the assembly level, it only changes the type in Rust.
-        let vec_val_s32 = aarch64::vreinterpretq_s32_u32(vec_val);
-        let rc_s32 = aarch64::vreinterpretq_s32_u32(rc);
+        // Since `val` is in `[0, P)` and `rc` is in `[-P, 0]` (represented as large u32s),
+        // the wrapping addition correctly results in a value in `[-P, P)`.
+        let val_plus_rc_u32 = aarch64::vaddq_u32(vec_val, rc);
 
-        // Perform a standard signed 32-bit addition lane by lane.
-        //
-        // Since `val` is in `[0, P)` and `rc` is in `[-P, 0]`, the result is guaranteed to be in `[-P, P)`.
-        let val_plus_rc = aarch64::vaddq_s32(vec_val_s32, rc_s32);
-
-        // Reinterpret the sum back to unsigned bits for the exponentiation function.
-        let val_plus_rc_u32 = aarch64::vreinterpretq_u32_s32(val_plus_rc);
-
-        // - Apply the power S-box `x -> x^D`. This function correctly handles inputs in `[-P, P)`.
+        // - Apply the power S-box `x -> x^D`.
         // - Update the state.
         let val_plus_rc_u32_packed = PackedMontyField31Neon::<PMP>::from_vector(val_plus_rc_u32);
         *val = val_plus_rc_u32_packed.exp_const_u64::<D>();
