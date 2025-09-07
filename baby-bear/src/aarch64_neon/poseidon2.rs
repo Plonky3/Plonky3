@@ -1,8 +1,7 @@
 use core::arch::aarch64::uint32x4_t;
 
 use p3_monty_31::{
-    InternalLayerParametersNeon, mul_neg_2exp_neg_8_neon, mul_neg_2exp_neg_n_neon,
-    mul_neg_2exp_neg_two_adicity_neon,
+    InternalLayerParametersNeon, mul_neg_2exp_neg_n_neon, mul_neg_2exp_neg_two_adicity_neon,
 };
 
 use crate::{BabyBearInternalLayerParameters, BabyBearParameters};
@@ -23,7 +22,7 @@ impl InternalLayerParametersNeon<BabyBearParameters, 16> for BabyBearInternalLay
             // These first 4 muls output the negative of the desired value and are corrected in `add_sum`.
 
             // input[8] -> 1/2^8
-            input[8] = mul_neg_2exp_neg_8_neon::<BabyBearParameters, 19>(input[8]);
+            input[8] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 8, 19>(input[8]);
             // input[9] -> 1/4
             input[9] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 2, 25>(input[9]);
             // input[10] -> 1/8
@@ -34,7 +33,7 @@ impl InternalLayerParametersNeon<BabyBearParameters, 16> for BabyBearInternalLay
             // These remaining muls are for negative coefficients and are correct as is.
 
             // input[12] -> -1/2^8
-            input[12] = mul_neg_2exp_neg_8_neon::<BabyBearParameters, 19>(input[12]);
+            input[12] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 8, 19>(input[12]);
             // input[13] -> -1/16
             input[13] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 4, 23>(input[13]);
             // input[14] -> -1/2^27
@@ -62,7 +61,7 @@ impl InternalLayerParametersNeon<BabyBearParameters, 24> for BabyBearInternalLay
             // Positive coefficients (corrected in add_sum)
 
             // input[8] -> sum + input[8]/2**8
-            input[8] = mul_neg_2exp_neg_8_neon::<BabyBearParameters, 19>(input[8]);
+            input[8] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 8, 19>(input[8]);
             // input[9] -> sum + input[9]/2**2
             input[9] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 2, 25>(input[9]);
             // input[10] -> sum + input[10]/2**3
@@ -79,7 +78,7 @@ impl InternalLayerParametersNeon<BabyBearParameters, 24> for BabyBearInternalLay
             // Negative coefficients
 
             // input[15] -> sum - input[15]/2**8
-            input[15] = mul_neg_2exp_neg_8_neon::<BabyBearParameters, 19>(input[15]);
+            input[15] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 8, 19>(input[15]);
             // input[16] -> sum - input[16]/2**2
             input[16] = mul_neg_2exp_neg_n_neon::<BabyBearParameters, 2, 25>(input[16]);
             // input[17] -> sum - input[17]/2**3

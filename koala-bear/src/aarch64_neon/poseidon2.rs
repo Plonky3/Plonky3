@@ -1,8 +1,7 @@
 use core::arch::aarch64::uint32x4_t;
 
 use p3_monty_31::{
-    InternalLayerParametersNeon, mul_neg_2exp_neg_8_neon, mul_neg_2exp_neg_n_neon,
-    mul_neg_2exp_neg_two_adicity_neon,
+    InternalLayerParametersNeon, mul_neg_2exp_neg_n_neon, mul_neg_2exp_neg_two_adicity_neon,
 };
 
 use crate::{KoalaBearInternalLayerParameters, KoalaBearParameters};
@@ -23,7 +22,7 @@ impl InternalLayerParametersNeon<KoalaBearParameters, 16> for KoalaBearInternalL
             // These first 3 muls output the negative of the desired value and are corrected in `add_sum`.
 
             // input[8] -> 1/2^8
-            input[8] = mul_neg_2exp_neg_8_neon::<KoalaBearParameters, 16>(input[8]);
+            input[8] = mul_neg_2exp_neg_n_neon::<KoalaBearParameters, 8, 16>(input[8]);
             // input[9] -> 1/8
             input[9] = mul_neg_2exp_neg_n_neon::<KoalaBearParameters, 3, 21>(input[9]);
             // input[10] -> 1/2^24
@@ -32,7 +31,7 @@ impl InternalLayerParametersNeon<KoalaBearParameters, 16> for KoalaBearInternalL
             // These remaining muls are for negative coefficients and are correct as is.
 
             // input[11] -> -1/2^8
-            input[11] = mul_neg_2exp_neg_8_neon::<KoalaBearParameters, 16>(input[11]);
+            input[11] = mul_neg_2exp_neg_n_neon::<KoalaBearParameters, 8, 16>(input[11]);
             // input[12] -> -1/8
             input[12] = mul_neg_2exp_neg_n_neon::<KoalaBearParameters, 3, 21>(input[12]);
             // input[13] -> -1/16
@@ -62,7 +61,7 @@ impl InternalLayerParametersNeon<KoalaBearParameters, 24> for KoalaBearInternalL
             // Positive coefficients (corrected in add_sum)
 
             // input[8] -> sum + input[8]/2**8
-            input[8] = mul_neg_2exp_neg_8_neon::<KoalaBearParameters, 16>(input[8]);
+            input[8] = mul_neg_2exp_neg_n_neon::<KoalaBearParameters, 8, 16>(input[8]);
             // input[9] -> sum + input[9]/2**2
             input[9] = mul_neg_2exp_neg_n_neon::<KoalaBearParameters, 2, 22>(input[9]);
             // input[10] -> sum + input[10]/2**3
@@ -79,7 +78,7 @@ impl InternalLayerParametersNeon<KoalaBearParameters, 24> for KoalaBearInternalL
             // Negative coefficients
 
             // input[15] -> sum - input[15]/2**8
-            input[15] = mul_neg_2exp_neg_8_neon::<KoalaBearParameters, 16>(input[15]);
+            input[15] = mul_neg_2exp_neg_n_neon::<KoalaBearParameters, 8, 16>(input[15]);
             // input[16] -> sum - input[16]/2**3
             input[16] = mul_neg_2exp_neg_n_neon::<KoalaBearParameters, 3, 21>(input[16]);
             // input[17] -> sum - input[17]/2**4

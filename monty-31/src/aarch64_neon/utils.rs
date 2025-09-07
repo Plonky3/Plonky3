@@ -1,7 +1,6 @@
 use core::arch::aarch64::{
-    uint16x4_t, uint32x4_t, vandq_u32, vbslq_u32, vceqzq_u32, vcombine_u16, vdup_n_u8, vdup_n_u16,
-    vdupq_n_u32, vget_low_u16, vhaddq_u32, vmovl_u16, vmovn_u16, vmovn_u32, vmull_u8, vmulq_u32,
-    vshlq_n_u32, vshrq_n_u32, vsubq_u32, vtstq_u32,
+    uint32x4_t, vandq_u32, vbslq_u32, vceqzq_u32, vdupq_n_u32, vhaddq_u32, vmulq_u32, vshlq_n_u32,
+    vshrq_n_u32, vsubq_u32, vtstq_u32,
 };
 
 use crate::{PackedMontyParameters, TwoAdicData};
@@ -136,75 +135,6 @@ pub unsafe fn mul_neg_2exp_neg_two_adicity_neon<
         // Final subtraction
         //
         // The result is `(P or r*lo) - hi`.
-        vsubq_u32(lo_shft, hi)
-    }
-}
-
-/// Multiply a vector of Monty31 field elements by `-2^{-8}`.
-///
-/// This is a specialized version of `mul_neg_2exp_neg_n_neon` for `N=8` that can be faster
-/// on some microarchitectures. It leverages a widening 8-bit to 16-bit multiplication,
-/// which mirrors a similar optimization available in AVX512 using `vpmaddubsw`.
-///
-/// # Safety
-/// - The prime `P` must be of the form `P = r * 2^j + 1` with `r` odd and `r < 2^7`.
-/// - Input must be given in canonical form `[0, P)`.
-/// - Output will be in `(-P, P)`.
-#[inline(always)]
-pub unsafe fn mul_neg_2exp_neg_8_neon<
-    TAD: TwoAdicData + PackedMontyParameters,
-    const N_PRIME: i32,
->(
-    input: uint32x4_t,
-) -> uint32x4_t {
-    // Verifies the constants at compile time.
-    const {
-        assert!(8 + N_PRIME == TAD::TWO_ADICITY as i32);
-    }
-
-    unsafe {
-        // Decompose the input into high bits (hi) and low 8 bits (lo).
-        // Get the high bits by shifting right by 8.
-        let hi = vshrq_n_u32::<8>(input);
-
-        // To perform a widening 8-bit multiply, we must first narrow the 32-bit input vector
-        // down to an 8-bit vector containing the low bytes.
-        let input_u16_low: uint16x4_t = vmovn_u32(input); // u32x4 -> u16x4 (64-bit vector)
-
-        // We combine our 64-bit vector with zeros.
-        let zeros_u16 = vdup_n_u16(0);
-        let input_u16x8 = vcombine_u16(input_u16_low, zeros_u16);
-        let input_u8 = vmovn_u16(input_u16x8); // u16x8 -> u8x8
-
-        // Create a vector containing the odd factor `r` in each 8-bit lane.
-        // The constraint `r < 2^7` ensures this is safe.
-        let odd_factor_u8 = vdup_n_u8(TAD::ODD_FACTOR as u8);
-
-        // Perform a widening unsigned multiply: u8 * u8 -> u16.
-        // This computes `lo * r` for each lane, storing the result in a 16-bit vector.
-        let lo_x_r_u16 = vmull_u8(input_u8, odd_factor_u8); // Result is uint16x8_t
-
-        // We only need the results from the 4 original lanes. These are in the lower half
-        // of the resulting 16x8 vector. We extract them and then widen back to 32-bit lanes.
-        let lo_x_r_low_u16 = vget_low_u16(lo_x_r_u16); // u16x8 -> u16x4
-        let lo_x_r = vmovl_u16(lo_x_r_low_u16); // u16x4 -> u32x4
-
-        // Perform the left shift `* 2^(j-N)` where `j-N` is `N_PRIME`.
-        let lo_shft_nonzero = vshlq_n_u32::<N_PRIME>(lo_x_r);
-
-        // Now, create a mask to handle the case where the low 8 bits of the input were zero.
-        // Isolate the low 8 bits of the original input.
-        let lo_mask_vec = vdupq_n_u32(0xFF);
-        let lo = vandq_u32(input, lo_mask_vec);
-        // Create a bitmask that is all 1s where `lo` was 0, and all 0s otherwise.
-        let lo_is_zero_mask = vceqzq_u32(lo);
-
-        // Use Bitwise Select:
-        // - if a lane in `lo_is_zero_mask` is 1, select from `P`;
-        // - otherwise, select from `lo_shft_nonzero`.
-        let lo_shft = vbslq_u32(lo_is_zero_mask, TAD::PACKED_P, lo_shft_nonzero);
-
-        // Final subtraction: `(P or r*2^(j-N)*lo) - hi`.
         vsubq_u32(lo_shft, hi)
     }
 }
