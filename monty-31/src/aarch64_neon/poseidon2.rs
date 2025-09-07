@@ -62,7 +62,7 @@ impl<PMP: PackedMontyParameters> InternalLayer16<PMP> {
     #[must_use]
     fn from_packed_field_array(vector: [PackedMontyField31Neon<PMP>; 16]) -> Self {
         unsafe {
-            // Safety: `PackedMontyField31Neon<PMP>` can be transmuted to and from `uint32x4_t`.
+            // This `transmute` is safe because the source and destination types have identical memory layouts.
             transmute(vector)
         }
     }
@@ -73,8 +73,8 @@ impl<PMP: PackedMontyParameters> InternalLayer16<PMP> {
 /// The primary purpose of this struct is to optimize the internal rounds by separating the state
 /// into two distinct parts:
 ///
-/// 1.  `s0`: The first element, which is the only one to undergo the high-latency S-box operation.
-/// 2.  `s_hi`: The remaining 23 elements, which only undergo the linear layer transformation.
+/// 1. `s0`: The first element, which is the only one to undergo the S-box operation.
+/// 2. `s_hi`: The remaining 23 elements, which only undergo the linear layer transformation.
 ///
 /// By splitting the state in this way, we provide a strong hint to the compiler that the S-box
 /// on `s0` and the linear operations on `s_hi` are independent data paths. This allows the CPU's
@@ -94,17 +94,20 @@ impl<PMP: PackedMontyParameters> InternalLayer24<PMP> {
     ///
     /// # Safety
     /// The caller *must* ensure that every raw `uint32x4_t` vector within `self.s_hi` contains
-    /// valid `MontyField31` elements in canonical form `[0, P)`.
+    /// valid `MontyField31` elements in canonical form `[0, P)`. This function is a zero-cost
+    /// abstraction that relies on `transmute` and the struct's `#[repr(C)]` layout; it performs no validation.
     #[inline]
     unsafe fn to_packed_field_array(self) -> [PackedMontyField31Neon<PMP>; 24] {
         unsafe {
-            // This `transmute` is safe because `InternalLayer24` has the same memory layout
-            // as the target array `[PackedMontyField31Neon<PMP>; 24]` due to `#[repr(C)]`.
+            // This `transmute` is safe because `InternalLayer24` is `#[repr(C)]` and is guaranteed
+            // to have the exact same memory layout as the target array `[PackedMontyField31Neon<PMP>; 24]`.
             transmute(self)
         }
     }
 
     /// Converts a standard array `[PackedMontyField31Neon<PMP>; 24]` into the specialized `InternalLayer24` representation.
+    ///
+    /// This is a zero-cost conversion that leverages the `#[repr(C)]` layout of the struct.
     #[inline]
     #[must_use]
     fn from_packed_field_array(vector: [PackedMontyField31Neon<PMP>; 24]) -> Self {
