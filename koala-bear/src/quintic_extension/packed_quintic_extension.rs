@@ -1,25 +1,47 @@
 use alloc::vec::Vec;
 use core::array;
 use core::fmt::Debug;
+use core::hash::Hash;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use itertools::Itertools;
 use p3_field::extension::{vector_add, vector_sub};
-use p3_monty_31::MontyParameters;
 
 use p3_util::{flatten_to_base, reconstitute_from_base};
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 
 use p3_field::{
-    Algebra, BasedVectorSpace, Field, PackedFieldExtension, PackedValue, Powers,
-    PrimeCharacteristicRing, field_to_array, packed_mod_add,
+    Algebra, BasedVectorSpace, PackedFieldExtension, PackedValue, Powers, PrimeCharacteristicRing,
+    field_to_array,
 };
 
-use crate::quintic_extension::{QuinticExtensionField, add, kb_quintic_mul, quintic_square};
-use crate::{KoalaBear, KoalaBearParameters};
+use crate::quintic_extension::{QuinticExtensionField, quintic_square};
+use crate::{KoalaBear, kb_quintic_mul};
 
-type KoalaBearPF = <KoalaBear as Field>::Packing;
+/* TODO 1:
+
+Why does this does not work? `type KoalaBearPF = <KoalaBear as p3_field::Field>::Packing;`
+
+Currently we need to specify the exact type, but it should be the same type as above, wtf?
+*/
+
+#[cfg(not(any(
+    all(target_arch = "aarch64", target_feature = "neon"),
+    all(target_arch = "x86_64", target_feature = "avx2",)
+)))]
+type KoalaBearPF = KoalaBear;
+
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "avx2",
+    not(target_feature = "avx512f")
+))]
+type KoalaBearPF = p3_monty_31::PackedMontyField31AVX2<crate::KoalaBearParameters>;
+
+/* TODO 2:
+
+Why do some of the [derive(...)] here do not work?
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
 #[repr(transparent)] // Needed to make various casts safe.
@@ -32,6 +54,44 @@ pub struct PackedQuinticExtensionField {
         )
     )]
     pub(crate) value: [KoalaBearPF; 5],
+}
+
+*/
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[repr(transparent)] // Needed to make various casts safe.
+pub struct PackedQuinticExtensionField {
+    pub(crate) value: [KoalaBearPF; 5],
+}
+
+impl Serialize for PackedQuinticExtensionField {
+    fn serialize<S: serde::Serializer>(&self, _serializer: S) -> Result<S::Ok, S::Error> {
+        todo!()
+    }
+}
+
+impl<'de> Deserialize<'de> for PackedQuinticExtensionField {
+    fn deserialize<D: serde::Deserializer<'de>>(_deserializer: D) -> Result<Self, D::Error> {
+        todo!()
+    }
+}
+
+impl Hash for PackedQuinticExtensionField {
+    fn hash<H: core::hash::Hasher>(&self, _state: &mut H) {
+        todo!()
+    }
+}
+
+impl Ord for PackedQuinticExtensionField {
+    fn cmp(&self, _other: &Self) -> core::cmp::Ordering {
+        todo!()
+    }
+}
+
+impl PartialOrd for PackedQuinticExtensionField {
+    fn partial_cmp(&self, _other: &Self) -> Option<core::cmp::Ordering> {
+        todo!()
+    }
 }
 
 impl PackedQuinticExtensionField {
@@ -78,12 +138,6 @@ where
 }
 
 impl Algebra<QuinticExtensionField> for PackedQuinticExtensionField {}
-
-#[cfg(any(
-    all(target_arch = "aarch64", target_feature = "neon"),
-    all(target_arch = "x86_64", target_feature = "avx2",)
-))]
-impl Algebra<KoalaBearPF> for PackedQuinticExtensionField {}
 
 impl PrimeCharacteristicRing for PackedQuinticExtensionField {
     type PrimeSubfield = KoalaBear;
@@ -174,9 +228,7 @@ impl Algebra<KoalaBearPF> for PackedQuinticExtensionField {}
 impl PackedFieldExtension<KoalaBear, QuinticExtensionField> for PackedQuinticExtensionField {
     #[inline]
     fn from_ext_slice(ext_slice: &[QuinticExtensionField]) -> Self {
-        let width = 5;
-        assert_eq!(ext_slice.len(), width);
-
+        assert_eq!(ext_slice.len(), KoalaBearPF::WIDTH);
         let res = array::from_fn(|i| KoalaBearPF::from_fn(|j| ext_slice[j].value[i]));
         Self::new(res)
     }
@@ -185,7 +237,7 @@ impl PackedFieldExtension<KoalaBear, QuinticExtensionField> for PackedQuinticExt
     fn to_ext_iter(
         iter: impl IntoIterator<Item = Self>,
     ) -> impl Iterator<Item = QuinticExtensionField> {
-        let width = 5;
+        let width = KoalaBearPF::WIDTH;
         iter.into_iter().flat_map(move |x| {
             (0..width).map(move |i| {
                 let values = array::from_fn(|j| x.value[j].as_slice()[i]);
@@ -196,7 +248,7 @@ impl PackedFieldExtension<KoalaBear, QuinticExtensionField> for PackedQuinticExt
 
     #[inline]
     fn packed_ext_powers(base: QuinticExtensionField) -> p3_field::Powers<Self> {
-        let width = 5;
+        let width = KoalaBearPF::WIDTH;
         let powers = base.powers().take(width + 1).collect_vec();
         // Transpose first WIDTH powers
         let current = Self::from_ext_slice(&powers[..width]);
@@ -227,22 +279,8 @@ impl Add for PackedQuinticExtensionField {
 
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        let mut res = [KoalaBearPF::ZERO; 5];
-        unsafe {
-            // Safe as Self is repr(transparent) and stores a single u32.
-            let a: &[u32; 5] = &*(self.value.as_ptr() as *const [u32; 5]);
-            let b: &[u32; 5] = &*(rhs.value.as_ptr() as *const [u32; 5]);
-            let res: &mut [u32; 5] = &mut *(res.as_mut_ptr() as *mut [u32; 5]);
-
-            packed_mod_add(
-                a,
-                b,
-                res,
-                KoalaBearParameters::PRIME,
-                add::<KoalaBearParameters>,
-            );
-        }
-        Self { value: res }
+        let value = vector_add(&self.value, &rhs.value);
+        Self { value }
     }
 }
 
@@ -358,7 +396,7 @@ impl Mul for PackedQuinticExtensionField {
         let a = self.value;
         let b = rhs.value;
         let mut res = Self::default();
-        kb_quintic_mul::<KoalaBear, KoalaBearPF, KoalaBearPF>(&a, &b, &mut res.value);
+        kb_quintic_mul(&a, &b, &mut res.value);
         res
     }
 }

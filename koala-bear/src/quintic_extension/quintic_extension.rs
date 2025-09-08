@@ -523,7 +523,7 @@ impl Mul for QuinticExtensionField {
         let b = &rhs.value;
         let mut res = Self::default();
 
-        kb_quintic_mul(a, b, &mut res.value);
+        kb_quintic_mul_packed(a, b, &mut res.value);
 
         res
     }
@@ -605,11 +605,10 @@ impl TwoAdicField for QuinticExtensionField {
 // + (a0b2 + a1b1 + a2b0 - a1b4 - a2b3 - a3b2 - a4b1 + a3b4 + a4b3 + a4b4).X^2
 // + (a0b3 + a1b2 + a2b1 + a3b0 - a2b4 - a3b3 - a4b2 + a4b4).X^3
 // + (a0b4 + a1b3 + a2b2 + a3b1 + a4b0 - a3b4 - a4*b3).X^4
-pub(crate) fn kb_quintic_mul<F, R, R2>(a: &[R; 5], b: &[R2; 5], res: &mut [R; 5])
+pub(crate) fn kb_quintic_mul<R, R2>(a: &[R; 5], b: &[R2; 5], res: &mut [R; 5])
 where
-    F: Field,
-    R: Algebra<F> + Algebra<R2>,
-    R2: Algebra<F>,
+    R: Algebra<KoalaBear> + Algebra<R2>,
+    R2: Algebra<KoalaBear>,
 {
     // Convert b to R type for computation
     let b_r: [R; 5] = [
@@ -697,10 +696,9 @@ In our extension field: X^5 = 1 - X^2
 
 */
 #[inline]
-pub(crate) fn quintic_square<F, R>(a: &[R; 5], res: &mut [R; 5])
+pub(crate) fn quintic_square<R>(a: &[R; 5], res: &mut [R; 5])
 where
-    F: Field,
-    R: Algebra<F>,
+    R: Algebra<KoalaBear>,
 {
     let two_a0 = a[0].double();
     let two_a1 = a[1].double();
@@ -778,7 +776,7 @@ fn quintic_inv(a: &QuinticExtensionField) -> QuinticExtensionField {
 )))]
 /// If no packings are available, we use the generic binomial extension multiplication functions.
 #[inline]
-pub(crate) fn kb_quintic_mul_packed<FP>(
+pub(crate) fn kb_quintic_mul_packed(
     a: &[KoalaBear; 5],
     b: &[KoalaBear; 5],
     res: &mut [KoalaBear; 5],
@@ -793,12 +791,11 @@ pub(crate) fn kb_quintic_mul_packed<FP>(
 ))]
 /// Multiplication in a quintic binomial extension field.
 #[inline]
-pub(crate) fn kb_quintic_mul_packed<FP>(
+pub(crate) fn kb_quintic_mul_packed(
     a: &[KoalaBear; 5],
     b: &[KoalaBear; 5],
     res: &mut [KoalaBear; 5],
-)
-{
+) {
     use p3_monty_31::PackedMontyField31AVX2;
     // TODO: This could likely be optimised further with more effort.
     // in particular it would benefit from a custom AVX2 implementation.
@@ -840,7 +837,8 @@ pub(crate) fn kb_quintic_mul_packed<FP>(
         ]),
     ];
 
-    let dot_res = unsafe { PackedMontyField31AVX2::from_vector(p3_monty_31::dot_product_4(lhs, rhs)) };
+    let dot_res =
+        unsafe { PackedMontyField31AVX2::from_vector(p3_monty_31::dot_product_4(lhs, rhs)) };
 
     // We managed to compute 3 of the extra terms in the last 3 places of the dot product.
     // This leaves us with 2 terms remaining we need to compute manually.

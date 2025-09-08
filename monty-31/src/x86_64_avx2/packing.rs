@@ -58,7 +58,7 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX2<PMP> {
     ///
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid `MontyField31<FP>`.
     /// In particular, each element of vector must be in `0..P` (canonical form).
-    pub(crate) unsafe fn from_vector(vector: __m256i) -> Self {
+    pub unsafe fn from_vector(vector: __m256i) -> Self {
         unsafe {
             // Safety: It is up to the user to ensure that elements of `vector` represent valid
             // `MontyField31<FP>` values. We must only reason about memory representations. `__m256i` can be
@@ -558,7 +558,7 @@ fn dot_product_2<PMP: PackedMontyParameters, LHS: IntoM256<PMP>, RHS: IntoM256<P
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 #[must_use]
-#[warn(private_bounds)]
+#[allow(private_bounds)]
 pub fn dot_product_4<PMP: PackedMontyParameters, LHS: IntoM256<PMP>, RHS: IntoM256<PMP>>(
     lhs: [LHS; 4],
     rhs: [RHS; 4],
