@@ -157,10 +157,10 @@ where
                 zip_eq(
                     &betas,
                     &proof.commit_phase_commits,
-                    FriError::InvalidProofShape,
+                    || FriError::InvalidProofShape,
                 )?,
                 commit_phase_openings,
-                FriError::InvalidProofShape,
+                || FriError::InvalidProofShape,
             )?,
             ro,
             log_max_height,
@@ -252,7 +252,7 @@ where
         // zip_eq ensures that we have the right number of steps.
         (log_final_height..log_max_height).rev(),
         fold_data_iter,
-        FriError::InvalidProofShape,
+        || FriError::InvalidProofShape,
     )? {
         // Get the index of the other sibling of the current FRI node.
         let index_sibling = *start_index ^ 1;
@@ -412,7 +412,7 @@ where
             // scale by the appropriate alpha power and add to the reduced opening for this log_height.
             for (z, ps_at_z) in mat_points_and_values {
                 let quotient = (*z - x).inverse();
-                for (&p_at_x, &p_at_z) in zip_eq(mat_opening, ps_at_z, FriError::InvalidProofShape)?
+                for (&p_at_x, &p_at_z) in zip_eq(mat_opening, ps_at_z, || FriError::InvalidProofShape)?
                 {
                     // Note we just checked batch proofs to ensure p_at_x is correct.
                     // x, z were sent by the verifier.
