@@ -38,16 +38,12 @@ pub(crate) fn halve_neon<PMP: PackedMontyParameters>(input: uint32x4_t) -> uint3
 /// - Output will be in canonical form `[0, P)`.
 /// - `N + N_PRIME` must equal `TAD::TWO_ADICITY`.
 #[inline(always)]
-pub unsafe fn mul_2exp_neg_n_neon<
-    TAD: TwoAdicData + PackedMontyParameters,
-    const N: i32,
-    const N_PRIME: i32,
->(
+pub unsafe fn mul_2exp_neg_n_neon<TAD: TwoAdicData + PackedMontyParameters, const N: i32>(
     input: uint32x4_t,
 ) -> uint32x4_t {
     // Verifies the constants at compile time.
     const {
-        assert!(N + N_PRIME == TAD::TWO_ADICITY as i32);
+        assert!(N <= TAD::TWO_ADICITY as i32);
     }
 
     unsafe {
@@ -59,7 +55,8 @@ pub unsafe fn mul_2exp_neg_n_neon<
         // This computes `hi - lo * (r * 2^N_PRIME)`.
         // The expression `r * 2^N_PRIME` is equivalent to `(P-1)/2^N`.
         // The vmlsq_u32 instruction fuses the multiplication and subtraction.
-        let res = vmlsq_u32(hi, lo, vdupq_n_u32((TAD::ODD_FACTOR as u32) << N_PRIME));
+        let n_prime = TAD::TWO_ADICITY as i32 - N;
+        let res = vmlsq_u32(hi, lo, vdupq_n_u32((TAD::ODD_FACTOR as u32) << n_prime));
 
         // The result `res` is now in `(-P, P)`. We perform a branchless
         // reduction to bring it into the canonical range `[0, P)`.

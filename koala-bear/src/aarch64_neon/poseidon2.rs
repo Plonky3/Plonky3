@@ -22,20 +22,20 @@ impl InternalLayerParametersNeon<KoalaBearParameters, 16> for KoalaBearInternalL
             // These multiplications are for positive coefficients. The results are added to the
             // sum in the `add_sum` function.
             // input[8] -> input[8] / 2^8
-            input[8] = mul_2exp_neg_n_neon::<KoalaBearParameters, 8, 16>(input[8]);
+            input[8] = mul_2exp_neg_n_neon::<KoalaBearParameters, 8>(input[8]);
             // input[9] -> input[9] / 8
-            input[9] = mul_2exp_neg_n_neon::<KoalaBearParameters, 3, 21>(input[9]);
+            input[9] = mul_2exp_neg_n_neon::<KoalaBearParameters, 3>(input[9]);
             // input[10] -> input[10] / 2^24
             input[10] = mul_2exp_neg_two_adicity_neon::<KoalaBearParameters, 24, 7>(input[10]);
 
             // These multiplications are for negative coefficients. We compute the multiplication
             // by the positive value, and the result is later subtracted from the sum in `add_sum`.
             // input[11] -> input[11] / 2^8
-            input[11] = mul_2exp_neg_n_neon::<KoalaBearParameters, 8, 16>(input[11]);
+            input[11] = mul_2exp_neg_n_neon::<KoalaBearParameters, 8>(input[11]);
             // input[12] -> input[12] / 8
-            input[12] = mul_2exp_neg_n_neon::<KoalaBearParameters, 3, 21>(input[12]);
+            input[12] = mul_2exp_neg_n_neon::<KoalaBearParameters, 3>(input[12]);
             // input[13] -> input[13] / 16
-            input[13] = mul_2exp_neg_n_neon::<KoalaBearParameters, 4, 20>(input[13]);
+            input[13] = mul_2exp_neg_n_neon::<KoalaBearParameters, 4>(input[13]);
             // input[14] -> input[14] / 2^24
             input[14] = mul_2exp_neg_two_adicity_neon::<KoalaBearParameters, 24, 7>(input[14]);
         }
@@ -60,35 +60,35 @@ impl InternalLayerParametersNeon<KoalaBearParameters, 24> for KoalaBearInternalL
         unsafe {
             // Positive coefficients
             // input[8] -> sum + input[8]/2**8
-            input[8] = mul_2exp_neg_n_neon::<KoalaBearParameters, 8, 16>(input[8]);
+            input[8] = mul_2exp_neg_n_neon::<KoalaBearParameters, 8>(input[8]);
             // input[9] -> sum + input[9]/2**2
-            input[9] = mul_2exp_neg_n_neon::<KoalaBearParameters, 2, 22>(input[9]);
+            input[9] = mul_2exp_neg_n_neon::<KoalaBearParameters, 2>(input[9]);
             // input[10] -> sum + input[10]/2**3
-            input[10] = mul_2exp_neg_n_neon::<KoalaBearParameters, 3, 21>(input[10]);
+            input[10] = mul_2exp_neg_n_neon::<KoalaBearParameters, 3>(input[10]);
             // input[11] -> sum + input[11]/2**4
-            input[11] = mul_2exp_neg_n_neon::<KoalaBearParameters, 4, 20>(input[11]);
+            input[11] = mul_2exp_neg_n_neon::<KoalaBearParameters, 4>(input[11]);
             // input[12] -> sum + input[12]/2**5
-            input[12] = mul_2exp_neg_n_neon::<KoalaBearParameters, 5, 19>(input[12]);
+            input[12] = mul_2exp_neg_n_neon::<KoalaBearParameters, 5>(input[12]);
             // input[13] -> sum + input[13]/2**6
-            input[13] = mul_2exp_neg_n_neon::<KoalaBearParameters, 6, 18>(input[13]);
+            input[13] = mul_2exp_neg_n_neon::<KoalaBearParameters, 6>(input[13]);
             // input[14] -> sum + input[14]/2**24
             input[14] = mul_2exp_neg_two_adicity_neon::<KoalaBearParameters, 24, 7>(input[14]);
 
             // Negative coefficients
             // input[15] -> sum - input[15]/2**8
-            input[15] = mul_2exp_neg_n_neon::<KoalaBearParameters, 8, 16>(input[15]);
+            input[15] = mul_2exp_neg_n_neon::<KoalaBearParameters, 8>(input[15]);
             // input[16] -> sum - input[16]/2**3
-            input[16] = mul_2exp_neg_n_neon::<KoalaBearParameters, 3, 21>(input[16]);
+            input[16] = mul_2exp_neg_n_neon::<KoalaBearParameters, 3>(input[16]);
             // input[17] -> sum - input[17]/2**4
-            input[17] = mul_2exp_neg_n_neon::<KoalaBearParameters, 4, 20>(input[17]);
+            input[17] = mul_2exp_neg_n_neon::<KoalaBearParameters, 4>(input[17]);
             // input[18] -> sum - input[18]/2**5
-            input[18] = mul_2exp_neg_n_neon::<KoalaBearParameters, 5, 19>(input[18]);
+            input[18] = mul_2exp_neg_n_neon::<KoalaBearParameters, 5>(input[18]);
             // input[19] -> sum - input[19]/2**6
-            input[19] = mul_2exp_neg_n_neon::<KoalaBearParameters, 6, 18>(input[19]);
+            input[19] = mul_2exp_neg_n_neon::<KoalaBearParameters, 6>(input[19]);
             // input[20] -> sum - input[20]/2**7
-            input[20] = mul_2exp_neg_n_neon::<KoalaBearParameters, 7, 17>(input[20]);
+            input[20] = mul_2exp_neg_n_neon::<KoalaBearParameters, 7>(input[20]);
             // input[21] -> sum - input[21]/2**9
-            input[21] = mul_2exp_neg_n_neon::<KoalaBearParameters, 9, 15>(input[21]);
+            input[21] = mul_2exp_neg_n_neon::<KoalaBearParameters, 9>(input[21]);
             // input[22] -> sum - input[22]/2**24
             input[22] = mul_2exp_neg_two_adicity_neon::<KoalaBearParameters, 24, 7>(input[22]);
         }
