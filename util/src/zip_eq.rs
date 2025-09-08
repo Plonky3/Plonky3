@@ -10,16 +10,17 @@ pub struct ZipEq<A, B> {
 /// Zips two iterators but **panics** if they are not of the same length.
 ///
 /// Similar to `itertools::zip_eq`, but we check the lengths at construction time.
-pub fn zip_eq<A, AIter, B, BIter, Error>(
+pub fn zip_eq<A, AIter, B, BIter, E, F>(
     a: A,
     b: B,
-    err: Error,
-) -> Result<ZipEq<A::IntoIter, B::IntoIter>, Error>
+    err: F,
+) -> Result<ZipEq<A::IntoIter, B::IntoIter>, E>
 where
     A: IntoIterator<IntoIter = AIter>,
     AIter: ExactSizeIterator,
     B: IntoIterator<IntoIter = BIter>,
     BIter: ExactSizeIterator,
+    F: FnOnce() -> E,
 {
     let a_iter = a.into_iter();
     let b_iter = b.into_iter();
@@ -28,7 +29,7 @@ where
             a: a_iter,
             b: b_iter,
         }),
-        false => Err(err),
+        false => Err(err()),
     }
 }
 
@@ -75,7 +76,7 @@ mod tests {
         let b = ['a', 'b', 'c'];
 
         // Expect zip_eq to succeed since both slices are length 3.
-        let zipped = zip_eq(a, b, "length mismatch").unwrap();
+        let zipped = zip_eq(a, b, || "length mismatch").unwrap();
 
         let result: Vec<_> = zipped.collect();
 
@@ -89,7 +90,7 @@ mod tests {
         let b = ['x', 'y', 'z'];
 
         // Use pattern matching instead of .unwrap_err()
-        match zip_eq(a, b, "oops") {
+        match zip_eq(a, b, || "oops") {
             Err(e) => assert_eq!(e, "oops"),
             Ok(_) => panic!("expected error due to mismatched lengths"),
         }
@@ -101,7 +102,7 @@ mod tests {
         let b: [char; 0] = [];
 
         // Zipping two empty iterators should succeed and produce an empty iterator.
-        let zipped = zip_eq(a, b, "mismatch").unwrap();
+        let zipped = zip_eq(a, b, || "mismatch").unwrap();
 
         let result: Vec<_> = zipped.collect();
 
@@ -114,7 +115,7 @@ mod tests {
         let a = [10, 20];
         let b = [100, 200];
 
-        let zipped = zip_eq(a, b, "bad").unwrap();
+        let zipped = zip_eq(a, b, || "bad").unwrap();
 
         // Size hint should reflect the number of items remaining.
         assert_eq!(zipped.size_hint(), (2, Some(2)));
@@ -125,7 +126,7 @@ mod tests {
         let a = [1, 2];
         let b = [3, 4];
 
-        let mut zipped = zip_eq(a, b, "fail").unwrap();
+        let mut zipped = zip_eq(a, b, || "fail").unwrap();
 
         // Manually advance past the last element
         assert_eq!(zipped.next(), Some((1, 3)));
