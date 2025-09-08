@@ -163,7 +163,7 @@ where
         _challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
         for (comm, round_opening) in rounds {
-            for (coeff_vec, (domain, points_and_values)) in zip_eq(comm, round_opening, ())? {
+            for (coeff_vec, (domain, points_and_values)) in zip_eq(comm, round_opening, || ())? {
                 let width = coeff_vec.len() / domain.size();
                 assert_eq!(width * domain.size(), coeff_vec.len());
                 let coeffs = RowMajorMatrix::new(coeff_vec, width);
