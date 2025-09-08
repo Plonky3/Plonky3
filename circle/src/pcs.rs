@@ -403,7 +403,7 @@ where
                 } = input_proof;
 
                 for (batch_opening, (batch_commit, mats)) in
-                    zip_eq(input_openings, &rounds, InputError::InputShapeError)?
+                    zip_eq(input_openings, &rounds, || InputError::InputShapeError)?
                 {
                     let batch_heights: Vec<usize> = mats
                         .iter()
@@ -434,7 +434,7 @@ where
                     for (ps_at_x, (mat_domain, mat_points_and_values)) in zip_eq(
                         &batch_opening.opened_values,
                         mats,
-                        InputError::InputShapeError,
+                        || InputError::InputShapeError,
                     )? {
                         let log_height = mat_domain.log_n + self.fri_params.log_blowup;
                         let bits_reduced = log_global_max_height - log_height;
@@ -465,10 +465,10 @@ where
                     zip_eq(
                         reduced_openings,
                         first_layer_siblings,
-                        InputError::InputShapeError,
+                        || InputError::InputShapeError,
                     )?,
                     &proof.lambdas,
-                    InputError::InputShapeError,
+                    || InputError::InputShapeError,
                 )?
                 .map(|(((log_height, (_, ro)), &fl_sib), &lambda)| {
                     assert!(log_height > 0);
