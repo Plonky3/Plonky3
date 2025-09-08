@@ -142,7 +142,7 @@ where
             zip_eq(
                 randomized_quotient_chunks_domains.iter(),
                 &opened_values.quotient_chunks,
-                VerificationError::InvalidProofShape,
+                || VerificationError::InvalidProofShape,
             )?
             .map(|(domain, values)| (*domain, vec![(zeta, values.clone())]))
             .collect_vec(),
