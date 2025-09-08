@@ -1,6 +1,6 @@
 use core::arch::aarch64::{
     self, uint32x4_t, vaddq_u32, vandq_u32, vdupq_n_u32, vhaddq_u32, vminq_u32, vmlsq_u32,
-    vshlq_n_u32, vshrq_n_u32, vsubq_u32, vtstq_u32,
+    vtstq_u32,
 };
 
 use crate::{PackedMontyParameters, TwoAdicData};
