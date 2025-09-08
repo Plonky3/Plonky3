@@ -62,7 +62,8 @@ impl<PMP: PackedMontyParameters> InternalLayer16<PMP> {
     #[must_use]
     fn from_packed_field_array(vector: [PackedMontyField31Neon<PMP>; 16]) -> Self {
         unsafe {
-            // This `transmute` is safe because the source and destination types have identical memory layouts.
+            // This `transmute` is safe because `InternalLayer16` is `#[repr(C)]` and so is guaranteed
+            // to have the exact same memory layout as `[PackedMontyField31Neon<PMP>; 16]`.
             transmute(vector)
         }
     }
