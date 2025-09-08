@@ -95,13 +95,14 @@ pub unsafe fn mul_2exp_neg_two_adicity_neon<
         // Decompose into high and low bits.
         let mask = vdupq_n_u32((1u32 << N) - 1);
         let lo = vandq_u32(input, mask);
-        let hi = vshrq_n_u32::<N>(input);
+        // Get the high bits by shifting right and add the lo bits.
+        let hi_plus_lo = aarch64::vsraq_n_u32::<N>(lo, input);
 
-        // Compute `r * lo` using the shift-and-subtract trick, since `r = 2^N_PRIME - 1`.
-        let r_x_lo = vsubq_u32(vshlq_n_u32::<N_PRIME>(lo), lo);
+        // Multiply the lo bits by 2^N_PRIME = (r + 1)
+        let lo_shft = aarch64::vshlq_n_u32::<N_PRIME>(lo);
 
-        // The modular multiplication result is `(hi - r*lo) mod P`.
-        let res = vsubq_u32(hi, r_x_lo);
+        // Compute input * 2^{-N} = hi + lo - (r + 1) * lo
+        let res = aarch64::vsubq_u32(hi_plus_lo, lo_shft);
 
         // Branchless reduction from `(-P, P)` to `[0, P)`.
         let u = vaddq_u32(res, TAD::PACKED_P);
