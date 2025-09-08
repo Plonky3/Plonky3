@@ -129,10 +129,6 @@ pub struct Poseidon2InternalLayerMonty31<
 > {
     /// The original, scalar round constants for each internal round.
     pub(crate) internal_constants: Vec<MontyField31<PMP>>,
-    /// The pre-processed round constants, packed into NEON vectors in negative form (`c - P`).
-    ///
-    /// This format is optimized for the vectorized permutation loop.
-    packed_internal_constants: Vec<uint32x4_t>,
     _phantom: PhantomData<ILP>,
 }
 
@@ -140,13 +136,8 @@ impl<FP: FieldParameters, const WIDTH: usize, ILP: InternalLayerParametersNeon<F
     InternalLayerConstructor<MontyField31<FP>> for Poseidon2InternalLayerMonty31<FP, WIDTH, ILP>
 {
     fn new_from_constants(internal_constants: Vec<MontyField31<FP>>) -> Self {
-        let packed_internal_constants = internal_constants
-            .iter()
-            .map(|c| convert_to_vec_neg_form_neon::<FP>(c.value as i32))
-            .collect();
         Self {
             internal_constants,
-            packed_internal_constants,
             _phantom: PhantomData,
         }
     }
@@ -181,19 +172,20 @@ where
             // for optimized processing.
             let mut internal_state = InternalLayer16::from_packed_field_array(*state);
 
-            self.packed_internal_constants.iter().for_each(|&rc| {
+            self.internal_constants.iter().for_each(|&c| {
+                // Pre-process the round constant on-the-fly into its negative form `c - P`.
+                let rc = convert_to_vec_neg_form_neon::<FP>(c.value as i32);
+
                 // Apply AddRoundConstant and the S-Box to the first state element (`s0`).
                 add_rc_and_sbox::<FP, D>(&mut internal_state.s0, rc);
 
                 // Compute the sum of all other state elements (`s_hi`).
-                //
                 // This can execute in parallel with the S-box operation on `s0`.
                 let s_hi_transmuted: &[PackedMontyField31Neon<FP>; 15] =
                     transmute(&internal_state.s_hi);
                 let sum_tail = PackedMontyField31Neon::<FP>::sum_array::<15>(s_hi_transmuted);
 
                 // Perform the diagonal multiplication on `s_hi`.
-                //
                 // This can also execute in parallel with the S-box.
                 ILP::diagonal_mul(&mut internal_state.s_hi);
 
@@ -251,19 +243,20 @@ where
             // for optimized processing.
             let mut internal_state = InternalLayer24::from_packed_field_array(*state);
 
-            self.packed_internal_constants.iter().for_each(|&rc| {
+            self.internal_constants.iter().for_each(|&c| {
+                // Pre-process the round constant on-the-fly into its negative form `c - P`.
+                let rc = convert_to_vec_neg_form_neon::<FP>(c.value as i32);
+
                 // Apply AddRoundConstant and the S-Box to the first state element (`s0`).
                 add_rc_and_sbox::<FP, D>(&mut internal_state.s0, rc);
 
                 // Compute the sum of all other state elements (`s_hi`).
-                //
                 // This can execute in parallel with the S-box operation on `s0`.
                 let s_hi_transmuted: &[PackedMontyField31Neon<FP>; 23] =
                     transmute(&internal_state.s_hi);
                 let sum_tail = PackedMontyField31Neon::<FP>::sum_array::<23>(s_hi_transmuted);
 
                 // Perform the diagonal multiplication on `s_hi`.
-                //
                 // This can also execute in parallel with the S-box.
                 ILP::diagonal_mul(&mut internal_state.s_hi);
 
