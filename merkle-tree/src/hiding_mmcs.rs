@@ -125,7 +125,7 @@ where
     ) -> Result<(), Self::Error> {
         let (opened_values, (salts, siblings)) = batch_opening.unpack();
 
-        let opened_salted_values = zip_eq(opened_values, salts, MerkleTreeError::WrongBatchSize)?
+         let opened_salted_values = zip_eq(opened_values, salts, || MerkleTreeError::WrongBatchSize)?
             .map(|(opened, salt)| opened.iter().chain(salt.iter()).copied().collect_vec())
             .collect_vec();
 
