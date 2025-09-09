@@ -35,7 +35,7 @@ pub trait InternalLayerBaseParameters<MP: MontyParameters, const WIDTH: usize>:
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 pub trait InternalLayerParameters<FP: FieldParameters, const WIDTH: usize>:
-    InternalLayerBaseParameters<FP, WIDTH>
+    InternalLayerBaseParameters<FP, WIDTH> + crate::InternalLayerParametersNeon<FP, WIDTH>
 {
 }
 #[cfg(all(
