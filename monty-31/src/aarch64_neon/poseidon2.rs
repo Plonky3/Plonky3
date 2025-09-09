@@ -151,7 +151,7 @@ where
 {
     fn permute_state(&self, state: &mut [PackedMontyField31Neon<FP>; 16]) {
         unsafe {
-            // Safety: This return values in canonical form when given values in canonical form.
+            // Safety: This returns values in canonical form when given values in canonical form.
             /*
                 Fix a vector v and let Diag(v) denote the diagonal matrix with diagonal given by v.
                 Additionally, let 1 denote the matrix with all elements equal to 1.
