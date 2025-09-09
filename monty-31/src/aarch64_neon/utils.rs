@@ -76,6 +76,7 @@ pub unsafe fn mul_2exp_neg_n_neon<TAD: TwoAdicData + PackedMontyParameters, cons
 ///
 /// # Safety
 /// - The prime `P` must have the special form `P = 2^31 - 2^N + 1`.
+/// - The constants must satisfy `N + N_PRIME = 31`.
 /// - Input must be canonical `[0, P)`.
 /// - Output will be in canonical form `[0, P)`.
 #[inline(always)]
