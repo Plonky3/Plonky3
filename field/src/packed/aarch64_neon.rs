@@ -86,8 +86,8 @@ pub fn packed_mod_add<const WIDTH: usize>(
         4 => {
             // Perfectly fits into a uint32x4_t vector.
             let out: [u32; 4] = unsafe {
-                let a: uint32x4_t = transmute([a[0], a[1], a[2], a[3]]);
-                let b: uint32x4_t = transmute([b[0], b[1], b[2], b[3]]);
+                let a: uint32x4_t = transmute::<[u32; 4], uint32x4_t>([a[0], a[1], a[2], a[3]]);
+                let b: uint32x4_t = transmute::<[u32; 4], uint32x4_t>([b[0], b[1], b[2], b[3]]);
                 let p: uint32x4_t = aarch64::vdupq_n_u32(p);
                 transmute(uint32x4_mod_add(a, b, p))
             };
@@ -98,10 +98,10 @@ pub fn packed_mod_add<const WIDTH: usize>(
             // We fit what we can into a uint32x4_t element.
             // The final add is done using a scalar addition.
             let out: [u32; 4] = unsafe {
-                let a: uint32x4_t = transmute([a[0], a[1], a[2], a[3]]);
-                let b: uint32x4_t = transmute([b[0], b[1], b[2], b[3]]);
+                let a: uint32x4_t = transmute::<[u32; 4], uint32x4_t>([a[0], a[1], a[2], a[3]]);
+                let b: uint32x4_t = transmute::<[u32; 4], uint32x4_t>([b[0], b[1], b[2], b[3]]);
                 let p: uint32x4_t = aarch64::vdupq_n_u32(p);
-                transmute(uint32x4_mod_add(a, b, p))
+                transmute::<uint32x4_t, [u32; 4]>(uint32x4_mod_add(a, b, p))
             };
 
             res[4] = scalar_add(a[4], b[4]);
@@ -113,13 +113,13 @@ pub fn packed_mod_add<const WIDTH: usize>(
             let (out_lo, out_hi): ([u32; 4], [u32; 4]) = unsafe {
                 let p: uint32x4_t = aarch64::vdupq_n_u32(p);
 
-                let a_lo: uint32x4_t = transmute([a[0], a[1], a[2], a[3]]);
-                let b_lo: uint32x4_t = transmute([b[0], b[1], b[2], b[3]]);
-                let out_lo = transmute(uint32x4_mod_add(a_lo, b_lo, p));
+                let a_lo: uint32x4_t = transmute::<[u32; 4], uint32x4_t>([a[0], a[1], a[2], a[3]]);
+                let b_lo: uint32x4_t = transmute::<[u32; 4], uint32x4_t>([b[0], b[1], b[2], b[3]]);
+                let out_lo = transmute::<uint32x4_t, [u32; 4]>(uint32x4_mod_add(a_lo, b_lo, p));
 
-                let a_hi: uint32x4_t = transmute([a[4], a[5], a[6], a[7]]);
-                let b_hi: uint32x4_t = transmute([b[4], b[5], b[6], b[7]]);
-                let out_hi = transmute(uint32x4_mod_add(a_hi, b_hi, p));
+                let a_hi: uint32x4_t = transmute::<[u32; 4], uint32x4_t>([a[4], a[5], a[6], a[7]]);
+                let b_hi: uint32x4_t = transmute::<[u32; 4], uint32x4_t>([b[4], b[5], b[6], b[7]]);
+                let out_hi = transmute::<uint32x4_t, [u32; 4]>(uint32x4_mod_add(a_hi, b_hi, p));
                 (out_lo, out_hi)
             };
 
@@ -155,10 +155,10 @@ pub fn packed_mod_sub<const WIDTH: usize>(
         4 => {
             // Perfectly fits into a uint32x4_t vector.
             let out: [u32; 4] = unsafe {
-                let a: uint32x4_t = transmute([a[0], a[1], a[2], a[3]]);
-                let b: uint32x4_t = transmute([b[0], b[1], b[2], b[3]]);
+                let a: uint32x4_t = transmute::<[u32; 4], uint32x4_t>([a[0], a[1], a[2], a[3]]);
+                let b: uint32x4_t = transmute::<[u32; 4], uint32x4_t>([b[0], b[1], b[2], b[3]]);
                 let p: uint32x4_t = aarch64::vdupq_n_u32(p);
-                transmute(uint32x4_mod_sub(a, b, p))
+                transmute::<uint32x4_t, [u32; 4]>(uint32x4_mod_sub(a, b, p))
             };
 
             res.copy_from_slice(&out);
@@ -167,10 +167,10 @@ pub fn packed_mod_sub<const WIDTH: usize>(
             // We fit what we can into a uint32x4_t element.
             // The final sub is done using a scalar subtraction.
             let out: [u32; 4] = unsafe {
-                let a: uint32x4_t = transmute([a[0], a[1], a[2], a[3]]);
-                let b: uint32x4_t = transmute([b[0], b[1], b[2], b[3]]);
+                let a: uint32x4_t = transmute::<[u32; 4], uint32x4_t>([a[0], a[1], a[2], a[3]]);
+                let b: uint32x4_t = transmute::<[u32; 4], uint32x4_t>([b[0], b[1], b[2], b[3]]);
                 let p: uint32x4_t = aarch64::vdupq_n_u32(p);
-                transmute(uint32x4_mod_sub(a, b, p))
+                transmute::<uint32x4_t, [u32; 4]>(uint32x4_mod_sub(a, b, p))
             };
 
             res[4] = scalar_sub(a[4], b[4]);
@@ -182,13 +182,13 @@ pub fn packed_mod_sub<const WIDTH: usize>(
             let (out_lo, out_hi): ([u32; 4], [u32; 4]) = unsafe {
                 let p: uint32x4_t = aarch64::vdupq_n_u32(p);
 
-                let a_lo: uint32x4_t = transmute([a[0], a[1], a[2], a[3]]);
-                let b_lo: uint32x4_t = transmute([b[0], b[1], b[2], b[3]]);
-                let out_lo = transmute(uint32x4_mod_sub(a_lo, b_lo, p));
+                let a_lo: uint32x4_t = transmute::<[u32; 4], uint32x4_t>([a[0], a[1], a[2], a[3]]);
+                let b_lo: uint32x4_t = transmute::<[u32; 4], uint32x4_t>([b[0], b[1], b[2], b[3]]);
+                let out_lo = transmute::<uint32x4_t, [u32; 4]>(uint32x4_mod_sub(a_lo, b_lo, p));
 
-                let a_hi: uint32x4_t = transmute([a[4], a[5], a[6], a[7]]);
-                let b_hi: uint32x4_t = transmute([b[4], b[5], b[6], b[7]]);
-                let out_hi = transmute(uint32x4_mod_sub(a_hi, b_hi, p));
+                let a_hi: uint32x4_t = transmute::<[u32; 4], uint32x4_t>([a[4], a[5], a[6], a[7]]);
+                let b_hi: uint32x4_t = transmute::<[u32; 4], uint32x4_t>([b[4], b[5], b[6], b[7]]);
+                let out_hi = transmute::<uint32x4_t, [u32; 4]>(uint32x4_mod_sub(a_hi, b_hi, p));
                 (out_lo, out_hi)
             };
 
