@@ -33,7 +33,7 @@ pub(crate) fn halve_neon<PMP: PackedMontyParameters>(input: uint32x4_t) -> uint3
 ///
 /// # Safety
 /// - The prime `P` must be of the form `P = r * 2^j + 1` with `r` odd and `j` equal to `TAD::TWO_ADICITY`.
-/// - `N` must be less `j`.
+/// - `N` must be less than or equal to `j`.
 /// - Inputs must be in canonical form `[0, P)`.
 /// - Output will be in canonical form `[0, P)`.
 #[inline(always)]
