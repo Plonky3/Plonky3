@@ -290,10 +290,6 @@ where
 pub struct Poseidon2ExternalLayerMonty31<MP: MontyParameters, const WIDTH: usize> {
     /// The original, scalar round constants for both initial and terminal external rounds.
     pub(crate) external_constants: ExternalLayerConstants<MontyField31<MP>, WIDTH>,
-    /// Pre-processed constants for the initial external rounds, packed into NEON vectors in negative form (`c - P`).
-    packed_initial_external_constants: Vec<[uint32x4_t; WIDTH]>,
-    /// Pre-processed constants for the terminal external rounds, packed into NEON vectors in negative form (`c - P`).
-    packed_terminal_external_constants: Vec<[uint32x4_t; WIDTH]>,
 }
 
 impl<FP: FieldParameters, const WIDTH: usize> ExternalLayerConstructor<MontyField31<FP>, WIDTH>
@@ -302,20 +298,8 @@ impl<FP: FieldParameters, const WIDTH: usize> ExternalLayerConstructor<MontyFiel
     fn new_from_constants(
         external_constants: ExternalLayerConstants<MontyField31<FP>, WIDTH>,
     ) -> Self {
-        let packed_initial_external_constants = external_constants
-            .get_initial_constants()
-            .iter()
-            .map(|arr| arr.map(|c| convert_to_vec_neg_form_neon::<FP>(c.value as i32)))
-            .collect();
-        let packed_terminal_external_constants = external_constants
-            .get_terminal_constants()
-            .iter()
-            .map(|arr| arr.map(|c| convert_to_vec_neg_form_neon::<FP>(c.value as i32)))
-            .collect();
         Self {
             external_constants,
-            packed_initial_external_constants,
-            packed_terminal_external_constants,
         }
     }
 }
