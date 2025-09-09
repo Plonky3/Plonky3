@@ -349,7 +349,7 @@ where
 
 /// Performs the AddRoundConstant and S-Box operations of a Poseidon round (`x -> (x + c)^D`).
 #[inline(always)]
-fn add_rc_and_sbox<PMP, const D: u64>(val: &mut PackedMontyField31Neon<PMP>, rc: uint32x4_t)
+fn add_rc_and_sbox<PMP, const D: u64>(val: &mut PackedMontyField31Neon<PMP>, rc: MontyField31<PMP>)
 where
     PMP: PackedMontyParameters + FieldParameters,
 {
