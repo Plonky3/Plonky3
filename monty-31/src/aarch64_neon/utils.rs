@@ -88,7 +88,7 @@ pub unsafe fn mul_2exp_neg_two_adicity_neon<
 ) -> uint32x4_t {
     // Verifies the constants at compile time.
     const {
-        assert!(N as u32 == TAD::TWO_ADICITY as u32);
+        assert!(N == TAD::TWO_ADICITY as i32);
         assert!(N + N_PRIME == 31);
     }
 
