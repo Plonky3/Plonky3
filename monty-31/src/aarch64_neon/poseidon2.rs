@@ -244,7 +244,7 @@ where
 
             self.internal_constants.iter().for_each(|&c| {
                 // Apply AddRoundConstant and the S-Box to the first state element (`s0`).
-                add_rc_and_sbox::<FP, D>(&mut internal_state.s0, c);
+                add_rc_and_sbox_generic(&mut internal_state.s0, c);
 
                 // Compute the sum of all other state elements (`s_hi`).
                 // This can execute in parallel with the S-box operation on `s0`.
@@ -323,16 +323,6 @@ where
             &MDSMat4,
         );
     }
-}
-
-/// Performs the AddRoundConstant and S-Box operations of a Poseidon round (`x -> (x + c)^D`).
-#[inline(always)]
-fn add_rc_and_sbox<PMP, const D: u64>(val: &mut PackedMontyField31Neon<PMP>, rc: MontyField31<PMP>)
-where
-    PMP: PackedMontyParameters + FieldParameters,
-{
-    *val += rc;
-    *val = val.exp_const_u64::<D>();
 }
 
 /// Trait for NEON-specific parameters and operations for the Poseidon2 internal layer.
