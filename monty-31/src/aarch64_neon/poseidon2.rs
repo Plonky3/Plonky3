@@ -348,29 +348,6 @@ where
     }
 }
 
-/// Converts a scalar constant into a packed NEON vector in "negative form".
-///
-/// This is a pre-computation step for round constants. Instead of storing a constant `c`
-/// and performing a modular addition `(val + c) mod P` in the permutation loop, we pre-compute
-/// `c' = c - P`. This allows the round update to be a simple, non-modular signed integer
-/// addition `val + c'`, which is significantly faster.
-#[inline(always)]
-fn convert_to_vec_neg_form_neon<MP: MontyParameters>(input: i32) -> uint32x4_t {
-    unsafe {
-        // Perform the subtraction as a standard integer operation.
-        //
-        // This computes the "negative form" of the constant.
-        let input_sub_p = input - (MP::PRIME as i32);
-
-        // Broadcast (duplicate) the scalar result into all four lanes of a 128-bit NEON vector.
-        let vec_s32 = aarch64::vdupq_n_s32(input_sub_p);
-
-        // Reinterpret the bits of the signed vector as an unsigned vector.
-        //
-        // This is a zero-cost operation that only changes the type for the Rust compiler.
-        aarch64::vreinterpretq_u32_s32(vec_s32)
-    }
-}
 
 /// Performs the AddRoundConstant and S-Box operations of a Poseidon round (`x -> (x + c)^D`).
 #[inline(always)]
