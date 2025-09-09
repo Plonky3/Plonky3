@@ -372,18 +372,6 @@ fn convert_to_vec_neg_form_neon<MP: MontyParameters>(input: i32) -> uint32x4_t {
 }
 
 /// Performs the AddRoundConstant and S-Box operations of a Poseidon round (`x -> (x + c)^D`).
-///
-/// This function combines two steps for efficiency. It takes a vector of field elements `val`
-/// and adds the pre-formatted round constant `rc`. The result is then raised to the power `D`.
-///
-/// A key optimization is that the round constants `rc` are stored in a negative form `c - P`.
-/// This allows for a simple integer addition `val + rc` without an intermediate modular
-/// reduction. The result of this addition is in the range `[-P, P)`. This non-canonical
-/// result is then reduced back to `[0, P)` before the exponentiation is applied.
-///
-/// # Safety
-/// - `val` must contain elements in canonical form `[0, P)`.
-/// - `rc` must contain elements represented as `c - P`, which are in `[-P, 0]`.
 #[inline(always)]
 fn add_rc_and_sbox<PMP, const D: u64>(val: &mut PackedMontyField31Neon<PMP>, rc: uint32x4_t)
 where
