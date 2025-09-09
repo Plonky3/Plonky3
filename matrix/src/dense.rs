@@ -84,7 +84,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     /// `values.len() % width != 0`.
     #[must_use]
     pub fn new(values: S, width: usize) -> Self {
-        debug_assert!(values.borrow().len().is_multiple_of(width));
+        debug_assert!(width == 0 || values.borrow().len() % width == 0);
         Self {
             values,
             width,
