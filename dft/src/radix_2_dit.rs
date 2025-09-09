@@ -1,6 +1,5 @@
 use alloc::collections::BTreeMap;
-use alloc::vec::Vec;
-use core::cell::RefCell;
+use alloc::sync::Arc;
 
 use p3_field::{Field, TwoAdicField};
 use p3_matrix::Matrix;
@@ -8,6 +7,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
+use spin::RwLock;
 
 use crate::TwoAdicSubgroupDft;
 use crate::butterflies::{Butterfly, DitButterfly, TwiddleFreeButterfly};
@@ -28,8 +28,33 @@ pub struct Radix2Dit<F: TwoAdicField> {
     /// This allows fast lookup and reuse of previously computed twiddle values
     /// (powers of a two-adic generator), which are expensive to recompute.
     ///
-    /// `RefCell` is used to enable interior mutability for caching purposes.
-    twiddles: RefCell<BTreeMap<usize, Vec<F>>>,
+    /// `RwLock` is used to enable interior mutability for caching purposes along with thread
+    /// safety.
+    twiddles: Arc<RwLock<BTreeMap<usize, Arc<[F]>>>>,
+}
+
+impl<F: TwoAdicField> Radix2Dit<F> {
+    /// Ensure the twiddle table for size `2^log_h` is present.
+    fn update_twiddles(&self, log_h: usize) {
+        if self.twiddles.read().contains_key(&log_h) {
+            return; // fast path
+        }
+        // Compute without holding the write lock
+        let n = 1usize << log_h;
+        let root = F::two_adic_generator(log_h);
+        let built: Arc<[F]> = Arc::from(root.powers().take(n).collect().into_boxed_slice());
+
+        // Publish (double-check)
+        let mut w = self.twiddles.write();
+        w.entry(log_h).or_insert(built);
+        // else: another thread already inserted
+    }
+
+    /// Read-only accessor; call `update_twiddles` first if you need it to exist.
+    fn get_twiddles(&self, log_h: usize) -> Option<Arc<[F]>> {
+        self.update_twiddles(log_h);
+        self.twiddles.read().get(&log_h).cloned()
+    }
 }
 
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit<F> {
@@ -40,16 +65,12 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit<F> {
         let log_h = log2_strict_usize(h);
 
         // Compute twiddle factors, or take memoized ones if already available.
-        let mut twiddles_ref_mut = self.twiddles.borrow_mut();
-        let twiddles = twiddles_ref_mut.entry(log_h).or_insert_with(|| {
-            let root = F::two_adic_generator(log_h);
-            root.powers().collect_n(1 << log_h)
-        });
+        let twiddles = self.get_twiddles(log_h).unwrap();
 
         // DIT butterfly
         reverse_matrix_index_bits(&mut mat);
         for layer in 0..log_h {
-            dit_layer(&mut mat.as_view_mut(), layer, twiddles);
+            dit_layer(&mut mat.as_view_mut(), layer, twiddles.clone());
         }
         mat
     }
@@ -65,7 +86,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit<F> {
 /// - `mat`: Mutable matrix view with height as a power of two.
 /// - `layer`: Index of the current FFT layer (starting at 0).
 /// - `twiddles`: Precomputed twiddle factors for this layer.
-fn dit_layer<F: Field>(mat: &mut RowMajorMatrixViewMut<'_, F>, layer: usize, twiddles: &[F]) {
+fn dit_layer<F: Field>(mat: &mut RowMajorMatrixViewMut<'_, F>, layer: usize, twiddles: Arc<[F]>) {
     // Get the number of rows in the matrix (must be a power of two)
     let h = mat.height();
     // Compute reversed layer index to access twiddle indices correctly
