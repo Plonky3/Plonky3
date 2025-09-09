@@ -246,8 +246,6 @@ where
             let mut internal_state = InternalLayer24::from_packed_field_array(*state);
 
             self.internal_constants.iter().for_each(|&c| {
-                // Pre-process the round constant on-the-fly into its negative form `c - P`.
-                let rc = convert_to_vec_neg_form_neon::<FP>(c.value as i32);
                 // Apply AddRoundConstant and the S-Box to the first state element (`s0`).
                 add_rc_and_sbox::<FP, D>(&mut internal_state.s0, c);
 
