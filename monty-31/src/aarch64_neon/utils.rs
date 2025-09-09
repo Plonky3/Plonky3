@@ -54,7 +54,7 @@ pub unsafe fn mul_2exp_neg_n_neon<TAD: TwoAdicData + PackedMontyParameters, cons
         // This computes `hi - lo * (r * 2^N_PRIME) = hi - lo * (P-1)/2^N`.
         //
         // As `lo < 2^N`, `r * lo * 2^N_PRIME < r * 2^(N + N_PRIME) = r * 2^TWO_ADICITY < P`, so no overflow occurs.
-        // The vmlsq_u32 instruction fuses the multiplication and subtraction.
+        // The vmlsq_n_u32 instruction fuses the constant multiplication and subtraction.
         let n_prime = TAD::TWO_ADICITY as i32 - N;
         let res = vmlsq_n_u32(hi, lo, (TAD::ODD_FACTOR as u32) << n_prime);
 
