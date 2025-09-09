@@ -91,12 +91,13 @@ pub struct InternalLayer24<PMP: PackedMontyParameters> {
 }
 
 impl<PMP: PackedMontyParameters> InternalLayer24<PMP> {
-    /// Converts the specialized `InternalLayer24` representation back into a standard array `[PackedMontyField31Neon<PMP>; 24]`.
+    /// Converts the specialized `InternalLayer24` representation into a standard array `[PackedMontyField31Neon<PMP>; 24]`.
+    ///
+    /// This is a zero-cost conversion that leverages the `#[repr(C)]` layout of the struct.
     ///
     /// # Safety
     /// The caller *must* ensure that every raw `uint32x4_t` vector within `self.s_hi` contains
-    /// valid `MontyField31` elements in canonical form `[0, P)`. This function is a zero-cost
-    /// abstraction that relies on `transmute` and the struct's `#[repr(C)]` layout; it performs no validation.
+    /// valid `MontyField31` elements in canonical form `[0, P)`.
     #[inline]
     unsafe fn to_packed_field_array(self) -> [PackedMontyField31Neon<PMP>; 24] {
         unsafe {
