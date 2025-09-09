@@ -350,7 +350,7 @@ where
 #[inline]
 fn dft_layer_par<F: Field, B: Butterfly<F>>(mat: &mut RowMajorMatrixViewMut<F>, twiddles: &[B]) {
     debug_assert!(
-        mat.height().is_multiple_of(twiddles.len()),
+        mat.height() % twiddles.len() == 0,
         "Matrix height must be divisible by the number of twiddles"
     );
     let size = mat.values.len();
@@ -569,7 +569,7 @@ fn dft_layer_par_double<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>
     multi_butterfly: M,
 ) {
     debug_assert!(
-        mat.height().is_multiple_of(twiddles_small.len()),
+        mat.height() % twiddles_small.len() == 0,
         "Matrix height must be divisible by the number of twiddles"
     );
     let size = mat.values.len();
@@ -623,7 +623,7 @@ fn dft_layer_par_triple<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>
     multi_butterfly: M,
 ) {
     debug_assert!(
-        mat.height().is_multiple_of(twiddles_small.len()),
+        mat.height() % twiddles_small.len() == 0,
         "Matrix height must be divisible by the number of twiddles"
     );
     let size = mat.values.len();
