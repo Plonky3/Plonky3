@@ -354,30 +354,8 @@ where
     PMP: PackedMontyParameters + FieldParameters,
 {
     unsafe {
-        // Unwrap the field element vector to its raw u32 representation.
-        let vec_val = val.to_vector();
-
-        // Perform a standard wrapping 32-bit addition lane by lane.
-        //
-        // Since `val` is in `[0, P)` and `rc` is in `[-P, 0]` (represented as large u32s),
-        // the wrapping addition correctly computes a result in `[-P, P)`.
-        let val_plus_rc_u32 = aarch64::vaddq_u32(vec_val, rc);
-
-        // Reduce the result from `[-P, P)` back to the canonical range `[0, P)`.
-        // This is required before the exponentiation.
-        //
-        // We use a branchless trick with `vminq` (vector minimum):
-        // - If `val_plus_rc` was positive, it's a small u32. `val_plus_rc + P` is larger,
-        //   so `vminq` returns the original, correct value.
-        // - If `val_plus_rc` was negative, it's a large u32. `val_plus_rc + P` wraps around
-        //   to a small positive u32 (the canonical value), so `vminq` selects this smaller value.
-        let val_plus_rc_plus_p = aarch64::vaddq_u32(val_plus_rc_u32, PMP::PACKED_P);
-        let canonical_val = aarch64::vminq_u32(val_plus_rc_u32, val_plus_rc_plus_p);
-
-        // - Apply the power S-box `x -> x^D`. The input is now correctly in `[0, P)`.
-        // - Update the state.
-        let val_plus_rc_u32_packed = PackedMontyField31Neon::<PMP>::from_vector(canonical_val);
-        *val = val_plus_rc_u32_packed.exp_const_u64::<D>();
+        *val += rc;
+        *val = val.exp_const_u64::<D>();
     }
 }
 
