@@ -32,11 +32,10 @@ pub(crate) fn halve_neon<PMP: PackedMontyParameters>(input: uint32x4_t) -> uint3
 /// Multiply a vector of Monty31 field elements by `2^{-N}`.
 ///
 /// # Safety
-/// - The prime `P` must be of the form `P = r * 2^j + 1` with `r` odd and `r < 2^15`.
-/// - `N` must be between 0 and 15.
+/// - The prime `P` must be of the form `P = r * 2^j + 1` with `r` odd and `j` equal to `TAD::TWO_ADICITY`.
+/// - `N` must be less `j`.
 /// - Inputs must be in canonical form `[0, P)`.
 /// - Output will be in canonical form `[0, P)`.
-/// - `N + N_PRIME` must equal `TAD::TWO_ADICITY`.
 #[inline(always)]
 pub unsafe fn mul_2exp_neg_n_neon<TAD: TwoAdicData + PackedMontyParameters, const N: i32>(
     input: uint32x4_t,
