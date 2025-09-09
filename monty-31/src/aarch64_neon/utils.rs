@@ -51,8 +51,7 @@ pub unsafe fn mul_2exp_neg_n_neon<TAD: TwoAdicData + PackedMontyParameters, cons
         let lo = aarch64::vandq_u32(input, mask);
         let hi = aarch64::vshrq_n_u32::<N>(input);
 
-        // This computes `hi - lo * (r * 2^N_PRIME)`.
-        // The expression `r * 2^N_PRIME` is equivalent to `(P-1)/2^N`.
+        // This computes `hi - lo * (r * 2^N_PRIME) = hi - lo * (P-1)/2^N`.
         //
         // As `lo < 2^N`, `r * lo * 2^N_PRIME < r * 2^(N + N_PRIME) = r * 2^TWO_ADICITY < P`, so no overflow occurs.
         // The vmlsq_u32 instruction fuses the multiplication and subtraction.
