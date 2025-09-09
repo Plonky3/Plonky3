@@ -1,14 +1,14 @@
 //! Vectorized Neon implementation of Poseidon2 for MontyField31
 
 use alloc::vec::Vec;
-use core::arch::aarch64::{self, uint32x4_t};
+use core::arch::aarch64::uint32x4_t;
 use core::marker::PhantomData;
 use core::mem::transmute;
 
 use p3_field::{PrimeCharacteristicRing, uint32x4_mod_add, uint32x4_mod_sub};
 use p3_poseidon2::{
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, InternalLayer,
-    InternalLayerConstructor, MDSMat4, external_initial_permute_state,
+    InternalLayerConstructor, MDSMat4, add_rc_and_sbox_generic, external_initial_permute_state,
     external_terminal_permute_state,
 };
 
@@ -40,7 +40,7 @@ pub struct InternalLayer16<PMP: PackedMontyParameters> {
 }
 
 impl<PMP: PackedMontyParameters> InternalLayer16<PMP> {
-/// Converts the specialized `InternalLayer16` representation into a standard array `[PackedMontyField31Neon<PMP>; 16]`.
+    /// Converts the specialized `InternalLayer16` representation into a standard array `[PackedMontyField31Neon<PMP>; 16]`.
     ///
     /// This is a zero-cost conversion that leverages the `#[repr(C)]` layout of the struct.
     ///
@@ -175,11 +175,8 @@ where
             let mut internal_state = InternalLayer16::from_packed_field_array(*state);
 
             self.internal_constants.iter().for_each(|&c| {
-                // Pre-process the round constant on-the-fly into its negative form `c - P`.
-                let rc = convert_to_vec_neg_form_neon::<FP>(c.value as i32);
-
                 // Apply AddRoundConstant and the S-Box to the first state element (`s0`).
-                add_rc_and_sbox::<FP, D>(&mut internal_state.s0, rc);
+                add_rc_and_sbox_generic(&mut internal_state.s0, c);
 
                 // Compute the sum of all other state elements (`s_hi`).
                 // This can execute in parallel with the S-box operation on `s0`.
@@ -298,9 +295,7 @@ impl<FP: FieldParameters, const WIDTH: usize> ExternalLayerConstructor<MontyFiel
     fn new_from_constants(
         external_constants: ExternalLayerConstants<MontyField31<FP>, WIDTH>,
     ) -> Self {
-        Self {
-            external_constants,
-        }
+        Self { external_constants }
     }
 }
 
@@ -313,8 +308,8 @@ where
     fn permute_state_initial(&self, state: &mut [PackedMontyField31Neon<FP>; WIDTH]) {
         external_initial_permute_state(
             state,
-            &self.packed_initial_external_constants,
-            add_rc_and_sbox::<FP, D>,
+            self.external_constants.get_initial_constants(),
+            add_rc_and_sbox_generic,
             &MDSMat4,
         );
     }
@@ -323,13 +318,12 @@ where
     fn permute_state_terminal(&self, state: &mut [PackedMontyField31Neon<FP>; WIDTH]) {
         external_terminal_permute_state(
             state,
-            &self.packed_terminal_external_constants,
-            add_rc_and_sbox::<FP, D>,
+            self.external_constants.get_terminal_constants(),
+            add_rc_and_sbox_generic,
             &MDSMat4,
         );
     }
 }
-
 
 /// Performs the AddRoundConstant and S-Box operations of a Poseidon round (`x -> (x + c)^D`).
 #[inline(always)]
@@ -337,10 +331,8 @@ fn add_rc_and_sbox<PMP, const D: u64>(val: &mut PackedMontyField31Neon<PMP>, rc:
 where
     PMP: PackedMontyParameters + FieldParameters,
 {
-    unsafe {
-        *val += rc;
-        *val = val.exp_const_u64::<D>();
-    }
+    *val += rc;
+    *val = val.exp_const_u64::<D>();
 }
 
 /// Trait for NEON-specific parameters and operations for the Poseidon2 internal layer.
