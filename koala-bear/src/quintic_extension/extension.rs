@@ -18,7 +18,7 @@ use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
 
-use super::packed_quintic_extension::PackedQuinticExtensionField;
+use super::packed_extension::PackedQuinticExtensionField;
 use crate::QuinticExtendable;
 
 /// Quintic Extension Field (degree 5), specifically designed for Koala-Bear
@@ -169,7 +169,7 @@ where
 
     #[inline]
     fn halve(&self) -> Self {
-        Self::new(self.value.clone().map(|x| x.halve()))
+        Self::new(self.value.map(|x| x.halve()))
     }
 
     #[inline(always)]
@@ -183,14 +183,14 @@ where
     fn mul_2exp_u64(&self, exp: u64) -> Self {
         // Depending on the field, this might be a little slower than
         // the default implementation if the compiler doesn't realize `F::TWO.exp_u64(exp)` is a constant.
-        Self::new(self.value.clone().map(|x| x.mul_2exp_u64(exp)))
+        Self::new(self.value.map(|x| x.mul_2exp_u64(exp)))
     }
 
     #[inline]
     fn div_2exp_u64(&self, exp: u64) -> Self {
         // Depending on the field, this might be a little slower than
         // the default implementation if the compiler doesn't realize `F::ONE.halve().exp_u64(exp)` is a constant.
-        Self::new(self.value.clone().map(|x| x.div_2exp_u64(exp)))
+        Self::new(self.value.map(|x| x.div_2exp_u64(exp)))
     }
 
     #[inline]
@@ -362,7 +362,7 @@ where
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
         for i in 0..5 {
-            self.value[i] += rhs.value[i].clone();
+            self.value[i] += rhs.value[i];
         }
     }
 }
@@ -421,7 +421,7 @@ where
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         for i in 0..5 {
-            self.value[i] -= rhs.value[i].clone();
+            self.value[i] -= rhs.value[i];
         }
     }
 }
@@ -472,7 +472,7 @@ where
 {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
-        *self = self.clone() * rhs;
+        *self = *self * rhs;
     }
 }
 
@@ -482,7 +482,7 @@ where
 {
     #[inline]
     fn mul_assign(&mut self, rhs: F) {
-        *self = self.clone() * rhs;
+        *self = *self * rhs;
     }
 }
 
@@ -680,11 +680,11 @@ fn quintic_inv<F: QuinticExtendable>(a: &QuinticExtensionField<F>) -> QuinticExt
     let norm = F::dot_product::<5>(
         &a.value,
         &[
-            prod_conj.value[0].clone(),
-            prod_conj.value[4].clone(),
-            prod_conj.value[3].clone(),
-            prod_conj.value[2].clone(),
-            prod_conj.value[1].clone() - prod_conj.value[4].clone(),
+            prod_conj.value[0],
+            prod_conj.value[4],
+            prod_conj.value[3],
+            prod_conj.value[2],
+            prod_conj.value[1] - prod_conj.value[4],
         ],
     );
 

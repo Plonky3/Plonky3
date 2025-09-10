@@ -8,7 +8,7 @@ use crate::KoalaBear;
 )))]
 #[inline]
 pub(crate) fn quintic_mul_packed(a: &[KoalaBear; 5], b: &[KoalaBear; 5], res: &mut [KoalaBear; 5]) {
-    super::quintic_extension::quintic_mul(a, b, res);
+    super::extension::quintic_mul(a, b, res);
 }
 
 #[cfg(all(

@@ -14,7 +14,7 @@ use p3_util::{flatten_to_base, reconstitute_from_base};
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 
-use super::quintic_extension::QuinticExtensionField;
+use super::extension::QuinticExtensionField;
 use crate::QuinticExtendable;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
@@ -119,7 +119,7 @@ where
     #[inline(always)]
     fn square(&self) -> Self {
         let mut res = Self::default();
-        super::quintic_extension::quintic_square(&self.value, &mut res.value);
+        super::extension::quintic_square(&self.value, &mut res.value);
         res
     }
 
@@ -410,7 +410,7 @@ where
         let a = self.value;
         let b = rhs.value;
         let mut res = Self::default();
-        super::quintic_extension::quintic_mul::<F, PF, PF>(&a, &b, &mut res.value);
+        super::extension::quintic_mul::<F, PF, PF>(&a, &b, &mut res.value);
         res
     }
 }
@@ -427,7 +427,7 @@ where
         let a = self.value;
         let b = rhs.value;
         let mut res = Self::default();
-        super::quintic_extension::quintic_mul(&a, &b, &mut res.value);
+        super::extension::quintic_mul(&a, &b, &mut res.value);
 
         res
     }

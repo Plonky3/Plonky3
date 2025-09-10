@@ -1,14 +1,14 @@
 use p3_field::{Algebra, Field, PrimeCharacteristicRing, packed_mod_add, packed_mod_sub};
 use p3_monty_31::{MontyParameters, base_mul_packed, monty_add, monty_sub};
 
-use crate::packed_quintic_extension::PackedQuinticExtensionField;
+use crate::packed_extension::PackedQuinticExtensionField;
 use crate::packing::quintic_mul_packed;
-use crate::quintic_extension::quintic_extension::QuinticExtensionField;
+use crate::quintic_extension::extension::QuinticExtensionField;
 use crate::{KoalaBear, KoalaBearParameters};
 
-pub(crate) mod packed_quintic_extension;
+pub(crate) mod extension;
+pub(crate) mod packed_extension;
 pub(crate) mod packing;
-pub(crate) mod quintic_extension;
 
 pub type QuinticExtensionFieldKB = QuinticExtensionField<KoalaBear>;
 pub type PackedQuinticExtensionFieldKB =
