@@ -440,8 +440,6 @@ fn cube<MPNeon: MontyParametersNeon>(val: uint32x4_t) -> uint32x4_t {
 #[inline]
 #[must_use]
 fn exp_5<MPNeon: MontyParametersNeon>(val: uint32x4_t) -> uint32x4_t {
-    // throughput: 4.25 cyc/vec (0.94 els/cyc)
-    // latency: 33 cyc
     unsafe {
         let val_s = aarch64::vreinterpretq_s32_u32(val);
         let mu_val = mulby_mu::<MPNeon>(val_s);
@@ -470,8 +468,6 @@ fn exp_5<MPNeon: MontyParametersNeon>(val: uint32x4_t) -> uint32x4_t {
 #[inline]
 #[must_use]
 fn exp_7<MPNeon: MontyParametersNeon>(val: uint32x4_t) -> uint32x4_t {
-    // throughput: 5.25 cyc/vec (0.76 els/cyc)
-    // latency: 41 cyc
     unsafe {
         let val_s = aarch64::vreinterpretq_s32_u32(val);
         let mu_val = mulby_mu::<MPNeon>(val_s);
