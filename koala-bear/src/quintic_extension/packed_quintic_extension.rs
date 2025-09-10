@@ -3,19 +3,18 @@ use core::array;
 use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
-use p3_field::extension::{vector_add, vector_sub};
 
 use itertools::Itertools;
-use p3_util::{flatten_to_base, reconstitute_from_base};
-use rand::distr::{Distribution, StandardUniform};
-use serde::{Deserialize, Serialize};
-use super::quintic_extension::QuinticExtensionField;
-
+use p3_field::extension::{vector_add, vector_sub};
 use p3_field::{
     Algebra, BasedVectorSpace, Field, PackedField, PackedFieldExtension, PackedValue, Powers,
     PrimeCharacteristicRing, field_to_array,
 };
+use p3_util::{flatten_to_base, reconstitute_from_base};
+use rand::distr::{Distribution, StandardUniform};
+use serde::{Deserialize, Serialize};
 
+use super::quintic_extension::QuinticExtensionField;
 use crate::QuinticExtendable;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]

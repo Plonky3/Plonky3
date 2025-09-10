@@ -8,7 +8,6 @@ mod koala_bear;
 mod poseidon2;
 mod quintic_extension;
 
-
 pub use koala_bear::*;
 pub use poseidon2::*;
 pub use quintic_extension::*;

@@ -1450,7 +1450,6 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
     res.copy_from_slice(&sum.0[..5]);
 }
 
-
 /// Multiplication in an octic binomial extension field.
 #[inline]
 pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(

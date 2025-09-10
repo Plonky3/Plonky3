@@ -5,10 +5,14 @@ use core::array;
 use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
-use p3_field::extension::HasFrobenius;
 
 use itertools::Itertools;
 use num_bigint::BigUint;
+use p3_field::extension::HasFrobenius;
+use p3_field::{
+    Algebra, BasedVectorSpace, ExtensionField, Field, Packable, PrimeCharacteristicRing,
+    RawDataSerializable, TwoAdicField, field_to_array,
+};
 use p3_util::{as_base_slice, as_base_slice_mut, flatten_to_base, reconstitute_from_base};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
@@ -16,10 +20,6 @@ use serde::{Deserialize, Serialize};
 
 use super::packed_quintic_extension::PackedQuinticExtensionField;
 use crate::QuinticExtendable;
-use p3_field::{
-    Algebra, BasedVectorSpace, ExtensionField, Field, Packable, PrimeCharacteristicRing,
-    RawDataSerializable, TwoAdicField, field_to_array,
-};
 
 /// Quintic Extension Field (degree 5), specifically designed for Koala-Bear
 /// Irreducible polynomial: X^5 + X^2 - 1

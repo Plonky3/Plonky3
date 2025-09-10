@@ -25,8 +25,8 @@ use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::utils::{
-    monty_add, from_monty, halve_u32, large_monty_reduce, monty_reduce, monty_reduce_u128, monty_sub, to_monty,
-    to_monty_64, to_monty_64_signed, to_monty_signed,
+    from_monty, halve_u32, large_monty_reduce, monty_add, monty_reduce, monty_reduce_u128,
+    monty_sub, to_monty, to_monty_64, to_monty_64_signed, to_monty_signed,
 };
 use crate::{FieldParameters, MontyParameters, RelativelyPrimePower, TwoAdicData};
 

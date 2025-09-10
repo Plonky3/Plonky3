@@ -627,11 +627,7 @@ pub fn vector_add<R: PrimeCharacteristicRing + Add<R2, Output = R>, R2: Clone, c
 
 /// Subtract two vectors element wise.
 #[inline]
-pub fn vector_sub<
-    R: PrimeCharacteristicRing + Sub<R2, Output = R>,
-    R2: Clone,
-    const D: usize,
->(
+pub fn vector_sub<R: PrimeCharacteristicRing + Sub<R2, Output = R>, R2: Clone, const D: usize>(
     a: &[R; D],
     b: &[R2; D],
 ) -> [R; D] {

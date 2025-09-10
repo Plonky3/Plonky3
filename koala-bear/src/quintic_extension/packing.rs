@@ -7,11 +7,7 @@ use crate::KoalaBear;
     all(target_arch = "x86_64", target_feature = "avx2",)
 )))]
 #[inline]
-pub(crate) fn quintic_mul_packed(
-    a: &[KoalaBear; 5],
-    b: &[KoalaBear; 5],
-    res: &mut [KoalaBear; 5],
-) {
+pub(crate) fn quintic_mul_packed(a: &[KoalaBear; 5], b: &[KoalaBear; 5], res: &mut [KoalaBear; 5]) {
     super::quintic_extension::quintic_mul(a, b, res);
 }
 
@@ -22,11 +18,7 @@ pub(crate) fn quintic_mul_packed(
 ))]
 /// Multiplication in a quintic binomial extension field.
 #[inline]
-pub(crate) fn quintic_mul_packed(
-    a: &[KoalaBear; 5],
-    b: &[KoalaBear; 5],
-    res: &mut [KoalaBear; 5],
-) {
+pub(crate) fn quintic_mul_packed(a: &[KoalaBear; 5], b: &[KoalaBear; 5], res: &mut [KoalaBear; 5]) {
     // TODO: This could likely be optimised further with more effort.
     // in particular it would benefit from a custom AVX2 implementation.
 
@@ -102,8 +94,7 @@ pub(crate) fn quintic_mul_packed<FP>(
     res: &mut [KoalaBear; 5],
 ) {
     use p3_field::PrimeCharacteristicRing;
-    use p3_monty_31::PackedMontyField31AVX512;
-    use p3_monty_31::dot_product_2;
+    use p3_monty_31::{PackedMontyField31AVX512, dot_product_2};
 
     // TODO: It's plausible that this could be improved by folding the computation of packed_b into
     // the custom AVX512 implementation. Moreover, AVX512 is really a bit to large so we are wasting a lot
@@ -190,11 +181,7 @@ pub(crate) fn quintic_mul_packed<FP>(
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 /// Multiplication in a quintic binomial extension field.
 #[inline]
-pub(crate) fn quintic_mul_packed(
-    a: &[KoalaBear; 5],
-    b: &[KoalaBear; 5],
-    res: &mut [KoalaBear; 5],
-) {
+pub(crate) fn quintic_mul_packed(a: &[KoalaBear; 5], b: &[KoalaBear; 5], res: &mut [KoalaBear; 5]) {
     // TODO: This could be optimised further with a custom NEON implementation.
 
     use p3_field::PrimeCharacteristicRing;
