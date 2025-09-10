@@ -411,7 +411,7 @@ where
         let a = self.value;
         let b = rhs.value;
         let mut res = Self::default();
-        super::quintic_extension::kb_quintic_mul::<F, PF, PF>(&a, &b, &mut res.value);
+        super::quintic_extension::quintic_mul::<F, PF, PF>(&a, &b, &mut res.value);
         res
     }
 }
@@ -428,7 +428,7 @@ where
         let a = self.value;
         let b = rhs.value;
         let mut res = Self::default();
-        super::quintic_extension::kb_quintic_mul(&a, &b, &mut res.value);
+        super::quintic_extension::quintic_mul(&a, &b, &mut res.value);
 
         res
     }

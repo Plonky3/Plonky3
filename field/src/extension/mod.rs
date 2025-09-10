@@ -84,7 +84,7 @@ pub trait QuinticExtendableAlgebra<F: Field>: Algebra<F> {
     /// Multiplication in the algebra extension ring `A<X> / (X^D - W)`.
     ///
     /// Some algebras may want to reimplement this with faster methods.
-    fn kb_quintic_mul(a: &[Self; 5], b: &[Self; 5], res: &mut [Self; 5]);
+    fn quintic_mul(a: &[Self; 5], b: &[Self; 5], res: &mut [Self; 5]);
 
     /// Addition of elements in the algebra extension ring `A<X> / (X^D - W)`.
     ///
@@ -93,7 +93,7 @@ pub trait QuinticExtendableAlgebra<F: Field>: Algebra<F> {
     ///
     /// Some algebras may want to reimplement this with faster methods.
     #[must_use]
-    fn kb_quintic_add(a: &[Self; 5], b: &[Self; 5]) -> [Self; 5];
+    fn quintic_add(a: &[Self; 5], b: &[Self; 5]) -> [Self; 5];
 
     /// Subtraction of elements in the algebra extension ring `A<X> / (X^D - W)`.
     ///
@@ -102,9 +102,9 @@ pub trait QuinticExtendableAlgebra<F: Field>: Algebra<F> {
     ///
     /// Some algebras may want to reimplement this with faster methods.
     #[must_use]
-    fn kb_quintic_sub(a: &[Self; 5], b: &[Self; 5]) -> [Self; 5];
+    fn quintic_sub(a: &[Self; 5], b: &[Self; 5]) -> [Self; 5];
 
-    fn kb_quintic_base_mul(lhs: [Self; 5], rhs: Self) -> [Self; 5];
+    fn quintic_base_mul(lhs: [Self; 5], rhs: Self) -> [Self; 5];
 }
 
 /// Trait for extension fields that support Frobenius automorphisms.

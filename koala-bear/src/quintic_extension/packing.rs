@@ -12,7 +12,7 @@ pub(crate) fn quintic_mul_packed(
     b: &[KoalaBear; 5],
     res: &mut [KoalaBear; 5],
 ) {
-    super::quintic_extension::kb_quintic_mul(a, b, res);
+    super::quintic_extension::quintic_mul(a, b, res);
 }
 
 #[cfg(all(

@@ -337,7 +337,7 @@ where
 
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        let value = F::kb_quintic_add(&self.value, &rhs.value);
+        let value = F::quintic_add(&self.value, &rhs.value);
         Self::new(value)
     }
 }
@@ -395,7 +395,7 @@ where
 
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        let value = F::kb_quintic_sub(&self.value, &rhs.value);
+        let value = F::quintic_sub(&self.value, &rhs.value);
         Self::new(value)
     }
 }
@@ -448,7 +448,7 @@ where
         let b = rhs.value;
         let mut res = Self::default();
 
-        F::kb_quintic_mul(&a, &b, &mut res.value);
+        F::quintic_mul(&a, &b, &mut res.value);
 
         res
     }
@@ -462,7 +462,7 @@ where
 
     #[inline]
     fn mul(self, rhs: F) -> Self {
-        Self::new(F::kb_quintic_base_mul(self.value, rhs))
+        Self::new(F::quintic_base_mul(self.value, rhs))
     }
 }
 
@@ -538,15 +538,7 @@ impl<F: TwoAdicField + QuinticExtendable> TwoAdicField for QuinticExtensionField
     }
 }
 
-/// In our extension field: X^5 = 1 - X^2
-///
-/// (a0 + a1X + a2X^2 + a3X^3 + a4X^4) * (b0 + b1X + b2X^2 + b3X^3 + b4X^4) =
-//   (a0b0 + a1b4 + a2b3 + a3b2 + a4b1 - a4b4)
-// + (a0b1 + a1b0 + a2b4 + a3b3 + a4*b2).X
-// + (a0b2 + a1b1 + a2b0 - a1b4 - a2b3 - a3b2 - a4b1 + a3b4 + a4b3 + a4b4).X^2
-// + (a0b3 + a1b2 + a2b1 + a3b0 - a2b4 - a3b3 - a4b2 + a4b4).X^3
-// + (a0b4 + a1b3 + a2b2 + a3b1 + a4b0 - a3b4 - a4*b3).X^4
-pub fn kb_quintic_mul<F, R, R2>(a: &[R; 5], b: &[R2; 5], res: &mut [R; 5])
+pub fn quintic_mul<F, R, R2>(a: &[R; 5], b: &[R2; 5], res: &mut [R; 5])
 where
     F: Field,
     R: Algebra<F> + Algebra<R2>,
@@ -626,17 +618,6 @@ where
     );
 }
 
-/*
-In our extension field: X^5 = 1 - X^2
-
-(a0 + a1*X + a2*X^2 + a3*X^3 + a4*X^4)^2 =
-  (a0^2 + 2*a1*a4 + 2*a2*a3 - a4^2)
-+ (2*a0*a1 + a3^2 + 2*a2*a4).X
-+ (a1^2 + 2*a0*a2 - 2*a1*a4 - 2*a2*a3 + 2*a3*a4 + a4^2).X^2
-+ (2*a0*a3 + 2*a1*a2 - a3^2 - 2*a2*a4 + a4^2).X^3
-+ (a2^2 + 2*a0*a4 + 2*a1*a3 - 2*a3*a4).X^4
-
-*/
 #[inline]
 pub(crate) fn quintic_square<F, R>(a: &[R; 5], res: &mut [R; 5])
 where
@@ -687,7 +668,6 @@ where
         - two_a3_a4.clone();
 }
 
-/// Compute the inverse of a quintic binomial extension field element.
 #[inline]
 fn quintic_inv<F: QuinticExtendable>(a: &QuinticExtensionField<F>) -> QuinticExtensionField<F> {
     // Writing 'a' for self, we need to compute: `prod_conj = a^{q^4 + q^3 + q^2 + q}`
