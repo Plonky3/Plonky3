@@ -74,7 +74,7 @@ where
 
     // `commit_phase_commits.len()` is the number of folding steps, so the maximum polynomial degree will be
     // `commit_phase_commits.len() + self.fri.log_final_poly_len` and so, as the same blow-up is used for all
-    // polynomials, the maximum matrix height is:
+    // polynomials, the maximum matrix height over all commit batches is:
     let log_global_max_height =
         proof.commit_phase_commits.len() + params.log_blowup + params.log_final_poly_len;
 
@@ -111,10 +111,6 @@ where
         return Err(FriError::InvalidPowWitness);
     }
 
-    // The log of the maximum domain size.
-    let log_max_height =
-        proof.commit_phase_commits.len() + params.log_blowup + params.log_final_poly_len;
-
     // The log of the final domain size.
     let log_final_height = params.log_blowup + params.log_final_poly_len;
 
@@ -124,7 +120,8 @@ where
     } in &proof.query_proofs
     {
         // For each query proof, we start by generating the random index.
-        let index = challenger.sample_bits(log_max_height + folding.extra_query_index_bits());
+        let index =
+            challenger.sample_bits(log_global_max_height + folding.extra_query_index_bits());
 
         // Next we open all polynomials `f` at the relevant index and combine them into our FRI inputs.
         let ro = open_input(
@@ -163,15 +160,15 @@ where
                 FriError::InvalidProofShape,
             )?,
             ro,
-            log_max_height,
+            log_global_max_height,
             log_final_height,
         )?;
 
         // We open the final polynomial at index `domain_index`, which corresponds to evaluating
         // the polynomial at x^k, where x is the 2-adic generator of order `max_height` and k is
-        // `reverse_bits_len(domain_index, log_max_height)`.
-        let x = Val::two_adic_generator(log_max_height)
-            .exp_u64(reverse_bits_len(domain_index, log_max_height) as u64);
+        // `reverse_bits_len(domain_index, log_global_max_height)`.
+        let x = Val::two_adic_generator(log_global_max_height)
+            .exp_u64(reverse_bits_len(domain_index, log_global_max_height) as u64);
 
         // Assuming all the checks passed, the final check is to ensure that the folded evaluation
         // matches the evaluation of the final polynomial sent by the prover.
@@ -217,7 +214,7 @@ type CommitStep<'a, F, M> = (
 /// - `reduced_openings`: A vector of pairs of a size and an opening. The opening is a linear combination
 ///   of all input polynomials of that size opened at the appropriate index. Each opening is added into the
 ///   the FRI folding chain once the domain size reaches the size specified in the pair.
-/// - `log_max_height`: The log of the maximum domain size.
+/// - `log_global_max_height`: The log of the maximum domain size.
 /// - `log_final_height`: The log of the final domain size.
 #[inline]
 fn verify_query<'a, Folding, F, EF, M>(
@@ -226,7 +223,7 @@ fn verify_query<'a, Folding, F, EF, M>(
     start_index: &mut usize,
     fold_data_iter: impl ExactSizeIterator<Item = CommitStep<'a, EF, M>>,
     reduced_openings: FriOpenings<EF>,
-    log_max_height: usize,
+    log_global_max_height: usize,
     log_final_height: usize,
 ) -> Result<EF, FriError<M::Error, Folding::InputError>>
 where
@@ -241,16 +238,16 @@ where
     // but they should be satisfied by any non malicious prover.
     // ro_iter being empty means that we have committed to no polynomials at all and
     // we need to roll in a polynomial initially otherwise we are just folding a zero polynomial.
-    if ro_iter.peek().is_none() || ro_iter.peek().unwrap().0 != log_max_height {
+    if ro_iter.peek().is_none() || ro_iter.peek().unwrap().0 != log_global_max_height {
         return Err(FriError::InvalidProofShape);
     }
     let mut folded_eval = ro_iter.next().unwrap().1;
 
-    // We start with evaluations over a domain of size (1 << log_max_height). We fold
+    // We start with evaluations over a domain of size (1 << log_global_max_height). We fold
     // using FRI until the domain size reaches (1 << log_final_height).
     for (log_folded_height, ((&beta, comm), opening)) in zip_eq(
         // zip_eq ensures that we have the right number of steps.
-        (log_final_height..log_max_height).rev(),
+        (log_final_height..log_global_max_height).rev(),
         fold_data_iter,
         FriError::InvalidProofShape,
     )? {
