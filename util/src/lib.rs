@@ -542,7 +542,7 @@ pub unsafe fn flatten_to_base<Base, BaseArray>(vec: Vec<BaseArray>) -> Vec<Base>
 pub unsafe fn reconstitute_from_base<Base, BaseArray: Clone>(mut vec: Vec<Base>) -> Vec<BaseArray> {
     const {
         assert!(align_of::<Base>() == align_of::<BaseArray>());
-         assert!(
+        assert!(
             (size_of::<BaseArray>() / size_of::<Base>()) * size_of::<Base>()
                 == size_of::<BaseArray>()
         );
