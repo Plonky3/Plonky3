@@ -4,7 +4,6 @@ use alloc::vec::Vec;
 use core::array;
 use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
-use core::marker::PhantomData;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use p3_field::extension::HasFrobenius;
 
@@ -16,7 +15,7 @@ use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
 
 use super::packed_quintic_extension::PackedQuinticExtensionField;
-use crate::{QuinticExtendable, QuinticExtendableAlgebra};
+use crate::QuinticExtendable;
 use p3_field::{
     Algebra, BasedVectorSpace, ExtensionField, Field, Packable, PrimeCharacteristicRing,
     RawDataSerializable, TwoAdicField, field_to_array,
@@ -27,71 +26,67 @@ use p3_field::{
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
 #[repr(transparent)] // Needed to make various casts safe.
 #[must_use]
-pub struct QuinticExtensionField<F, A = F> {
+pub struct QuinticExtensionField<F> {
     #[serde(
         with = "p3_util::array_serialization",
-        bound(serialize = "A: Serialize", deserialize = "A: Deserialize<'de>")
+        bound(serialize = "F: Serialize", deserialize = "F: Deserialize<'de>")
     )]
-    pub(crate) value: [A; 5],
-    _phantom: PhantomData<F>,
+    pub(crate) value: [F; 5],
 }
 
-impl<F, A> QuinticExtensionField<F, A> {
-    pub(crate) const fn new(value: [A; 5]) -> Self {
-        Self {
-            value,
-            _phantom: PhantomData,
-        }
+impl<F> QuinticExtensionField<F> {
+    pub(crate) const fn new(value: [F; 5]) -> Self {
+        Self { value }
     }
 }
 
-impl<F: Field, A: Algebra<F>> Default for QuinticExtensionField<F, A> {
+impl<F: Field> Default for QuinticExtensionField<F> {
     fn default() -> Self {
-        Self::new(array::from_fn(|_| A::ZERO))
+        Self::new(array::from_fn(|_| F::ZERO))
     }
 }
 
-impl<F: Field, A: Algebra<F>> From<A> for QuinticExtensionField<F, A> {
-    fn from(x: A) -> Self {
+impl<F: Field> From<F> for QuinticExtensionField<F> {
+    fn from(x: F) -> Self {
         Self::new(field_to_array(x))
     }
 }
 
 impl<F: QuinticExtendable> Packable for QuinticExtensionField<F> {}
 
-impl<F: QuinticExtendable, A: Algebra<F>> BasedVectorSpace<A> for QuinticExtensionField<F, A> {
+impl<F: QuinticExtendable> BasedVectorSpace<F> for QuinticExtensionField<F> {
     const DIMENSION: usize = 5;
 
     #[inline]
-    fn as_basis_coefficients_slice(&self) -> &[A] {
+    fn as_basis_coefficients_slice(&self) -> &[F] {
         &self.value
     }
 
     #[inline]
-    fn from_basis_coefficients_fn<Fn: FnMut(usize) -> A>(f: Fn) -> Self {
+    fn from_basis_coefficients_fn<Fn: FnMut(usize) -> F>(f: Fn) -> Self {
         Self::new(array::from_fn(f))
     }
 
     #[inline]
-    fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = A>>(mut iter: I) -> Option<Self> {
+    fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = F>>(mut iter: I) -> Option<Self> {
         (iter.len() == 5).then(|| Self::new(array::from_fn(|_| iter.next().unwrap()))) // The unwrap is safe as we just checked the length of iter.
     }
 
     #[inline]
-    fn flatten_to_base(vec: Vec<Self>) -> Vec<A> {
+    fn flatten_to_base(vec: Vec<Self>) -> Vec<F> {
         unsafe {
             // Safety:
             // As `Self` is a `repr(transparent)`, it is stored identically in memory to `[A; 5]`
-            flatten_to_base::<A, Self>(vec)
+            flatten_to_base::<F, Self>(vec)
         }
     }
 
     #[inline]
-    fn reconstitute_from_base(vec: Vec<A>) -> Vec<Self> {
+    fn reconstitute_from_base(vec: Vec<F>) -> Vec<Self> {
         unsafe {
             // Safety:
             // As `Self` is a `repr(transparent)`, it is stored identically in memory to `[A; 5]`
-            reconstitute_from_base::<A, Self>(vec)
+            reconstitute_from_base::<F, Self>(vec)
         }
     }
 }
@@ -153,24 +148,23 @@ impl<F: QuinticExtendable> HasFrobenius<F> for QuinticExtensionField<F> {
     }
 }
 
-impl<F, A> PrimeCharacteristicRing for QuinticExtensionField<F, A>
+impl<F> PrimeCharacteristicRing for QuinticExtensionField<F>
 where
     F: QuinticExtendable,
-    A: QuinticExtendableAlgebra<F>,
 {
-    type PrimeSubfield = <A as PrimeCharacteristicRing>::PrimeSubfield;
+    type PrimeSubfield = <F as PrimeCharacteristicRing>::PrimeSubfield;
 
-    const ZERO: Self = Self::new([A::ZERO; 5]);
+    const ZERO: Self = Self::new([F::ZERO; 5]);
 
-    const ONE: Self = Self::new(field_to_array(A::ONE));
+    const ONE: Self = Self::new(field_to_array(F::ONE));
 
-    const TWO: Self = Self::new(field_to_array(A::TWO));
+    const TWO: Self = Self::new(field_to_array(F::TWO));
 
-    const NEG_ONE: Self = Self::new(field_to_array(A::NEG_ONE));
+    const NEG_ONE: Self = Self::new(field_to_array(F::NEG_ONE));
 
     #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
-        <A as PrimeCharacteristicRing>::from_prime_subfield(f).into()
+        <F as PrimeCharacteristicRing>::from_prime_subfield(f).into()
     }
 
     #[inline]
@@ -323,51 +317,47 @@ where
     }
 }
 
-impl<F, A> Neg for QuinticExtensionField<F, A>
+impl<F> Neg for QuinticExtensionField<F>
 where
     F: QuinticExtendable,
-    A: Algebra<F>,
 {
     type Output = Self;
 
     #[inline]
     fn neg(self) -> Self {
-        Self::new(self.value.map(A::neg))
+        Self::new(self.value.map(F::neg))
     }
 }
 
-impl<F, A> Add for QuinticExtensionField<F, A>
+impl<F> Add for QuinticExtensionField<F>
 where
     F: QuinticExtendable,
-    A: QuinticExtendableAlgebra<F>,
 {
     type Output = Self;
 
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        let value = A::kb_quintic_add(&self.value, &rhs.value);
+        let value = F::kb_quintic_add(&self.value, &rhs.value);
         Self::new(value)
     }
 }
 
-impl<F, A> Add<A> for QuinticExtensionField<F, A>
+impl<F> Add<F> for QuinticExtensionField<F>
 where
     F: QuinticExtendable,
-    A: Algebra<F>,
 {
     type Output = Self;
 
     #[inline]
-    fn add(mut self, rhs: A) -> Self {
+    fn add(mut self, rhs: F) -> Self {
         self.value[0] += rhs;
         self
     }
 }
 
-impl<F, A> AddAssign for QuinticExtensionField<F, A>
+impl<F> AddAssign for QuinticExtensionField<F>
 where
     F: QuinticExtendable,
-    A: Algebra<F>,
 {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
@@ -377,21 +367,19 @@ where
     }
 }
 
-impl<F, A> AddAssign<A> for QuinticExtensionField<F, A>
+impl<F> AddAssign<F> for QuinticExtensionField<F>
 where
     F: QuinticExtendable,
-    A: Algebra<F>,
 {
     #[inline]
-    fn add_assign(&mut self, rhs: A) {
+    fn add_assign(&mut self, rhs: F) {
         self.value[0] += rhs;
     }
 }
 
-impl<F, A> Sum for QuinticExtensionField<F, A>
+impl<F> Sum for QuinticExtensionField<F>
 where
     F: QuinticExtendable,
-    A: QuinticExtendableAlgebra<F>,
 {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
@@ -399,39 +387,36 @@ where
     }
 }
 
-impl<F, A> Sub for QuinticExtensionField<F, A>
+impl<F> Sub for QuinticExtensionField<F>
 where
     F: QuinticExtendable,
-    A: QuinticExtendableAlgebra<F>,
 {
     type Output = Self;
 
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        let value = A::kb_quintic_sub(&self.value, &rhs.value);
+        let value = F::kb_quintic_sub(&self.value, &rhs.value);
         Self::new(value)
     }
 }
 
-impl<F, A> Sub<A> for QuinticExtensionField<F, A>
+impl<F> Sub<F> for QuinticExtensionField<F>
 where
     F: QuinticExtendable,
-    A: Algebra<F>,
 {
     type Output = Self;
 
     #[inline]
-    fn sub(self, rhs: A) -> Self {
+    fn sub(self, rhs: F) -> Self {
         let mut res = self.value;
         res[0] -= rhs;
         Self::new(res)
     }
 }
 
-impl<F, A> SubAssign for QuinticExtensionField<F, A>
+impl<F> SubAssign for QuinticExtensionField<F>
 where
     F: QuinticExtendable,
-    A: Algebra<F>,
 {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
@@ -441,21 +426,19 @@ where
     }
 }
 
-impl<F, A> SubAssign<A> for QuinticExtensionField<F, A>
+impl<F> SubAssign<F> for QuinticExtensionField<F>
 where
     F: QuinticExtendable,
-    A: Algebra<F>,
 {
     #[inline]
-    fn sub_assign(&mut self, rhs: A) {
+    fn sub_assign(&mut self, rhs: F) {
         self.value[0] -= rhs;
     }
 }
 
-impl<F, A> Mul for QuinticExtensionField<F, A>
+impl<F> Mul for QuinticExtensionField<F>
 where
     F: QuinticExtendable,
-    A: QuinticExtendableAlgebra<F>,
 {
     type Output = Self;
 
@@ -465,29 +448,27 @@ where
         let b = rhs.value;
         let mut res = Self::default();
 
-        A::kb_quintic_mul(&a, &b, &mut res.value);
+        F::kb_quintic_mul(&a, &b, &mut res.value);
 
         res
     }
 }
 
-impl<F, A> Mul<A> for QuinticExtensionField<F, A>
+impl<F> Mul<F> for QuinticExtensionField<F>
 where
     F: QuinticExtendable,
-    A: QuinticExtendableAlgebra<F>,
 {
     type Output = Self;
 
     #[inline]
-    fn mul(self, rhs: A) -> Self {
-        Self::new(A::kb_quintic_base_mul(self.value, rhs))
+    fn mul(self, rhs: F) -> Self {
+        Self::new(F::kb_quintic_base_mul(self.value, rhs))
     }
 }
 
-impl<F, A> MulAssign for QuinticExtensionField<F, A>
+impl<F> MulAssign for QuinticExtensionField<F>
 where
     F: QuinticExtendable,
-    A: QuinticExtendableAlgebra<F>,
 {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
@@ -495,21 +476,19 @@ where
     }
 }
 
-impl<F, A> MulAssign<A> for QuinticExtensionField<F, A>
+impl<F> MulAssign<F> for QuinticExtensionField<F>
 where
     F: QuinticExtendable,
-    A: QuinticExtendableAlgebra<F>,
 {
     #[inline]
-    fn mul_assign(&mut self, rhs: A) {
+    fn mul_assign(&mut self, rhs: F) {
         *self = self.clone() * rhs;
     }
 }
 
-impl<F, A> Product for QuinticExtensionField<F, A>
+impl<F> Product for QuinticExtensionField<F>
 where
     F: QuinticExtendable,
-    A: QuinticExtendableAlgebra<F>,
 {
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {

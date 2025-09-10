@@ -1,8 +1,7 @@
 use crate::KoalaBear;
 
-
 /// If no packings are available, we use the generic binomial extension multiplication functions.
-/// 
+///
 #[cfg(not(any(
     all(target_arch = "aarch64", target_feature = "neon"),
     all(target_arch = "x86_64", target_feature = "avx2",)
@@ -16,7 +15,6 @@ pub(crate) fn kb_quintic_mul_packed(
     super::quintic_extension::kb_quintic_mul(a, b, res);
 }
 
-
 #[cfg(all(
     target_arch = "x86_64",
     target_feature = "avx2",
@@ -29,9 +27,11 @@ pub(crate) fn kb_quintic_mul_packed(
     b: &[KoalaBear; 5],
     res: &mut [KoalaBear; 5],
 ) {
-    use p3_monty_31::PackedMontyField31AVX2;
     // TODO: This could likely be optimised further with more effort.
     // in particular it would benefit from a custom AVX2 implementation.
+
+    use p3_field::PrimeCharacteristicRing;
+    use p3_monty_31::PackedMontyField31AVX2;
 
     let zero = KoalaBear::ZERO;
     let b_0_minus_3 = b[0] - b[3];
