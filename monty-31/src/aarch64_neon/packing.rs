@@ -24,7 +24,7 @@ use rand::distr::{Distribution, StandardUniform};
 use super::utils::halve_neon;
 use crate::{
     BinomialExtensionData, FieldParameters, MontyField31, PackedMontyParameters,
-    QuinticExtensionData, RelativelyPrimePower,
+    RelativelyPrimePower,
 };
 
 const WIDTH: usize = 4;
