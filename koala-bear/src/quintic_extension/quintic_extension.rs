@@ -4,23 +4,22 @@ use alloc::vec::Vec;
 use core::array;
 use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
+use core::marker::PhantomData;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+use p3_field::extension::HasFrobenius;
+
 use itertools::Itertools;
 use num_bigint::BigUint;
-use p3_field::extension::HasFrobenius;
-use p3_monty_31::{MontyParameters, base_mul_packed};
-
 use p3_util::{as_base_slice, as_base_slice_mut, flatten_to_base, reconstitute_from_base};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
 
-use crate::{KoalaBear, KoalaBearParameters};
-
-use super::PackedQuinticExtensionField;
+use super::packed_quintic_extension::PackedQuinticExtensionField;
+use crate::{QuinticExtendable, QuinticExtendableAlgebra};
 use p3_field::{
     Algebra, BasedVectorSpace, ExtensionField, Field, Packable, PrimeCharacteristicRing,
-    RawDataSerializable, TwoAdicField, field_to_array, packed_mod_add, packed_mod_sub,
+    RawDataSerializable, TwoAdicField, field_to_array,
 };
 
 /// Quintic Extension Field (degree 5), specifically designed for Koala-Bear
@@ -28,122 +27,90 @@ use p3_field::{
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
 #[repr(transparent)] // Needed to make various casts safe.
 #[must_use]
-pub struct QuinticExtensionField {
+pub struct QuinticExtensionField<F, A = F> {
     #[serde(
         with = "p3_util::array_serialization",
-        bound(
-            serialize = "KoalaBear: Serialize",
-            deserialize = "KoalaBear: Deserialize<'de>"
-        )
+        bound(serialize = "A: Serialize", deserialize = "A: Deserialize<'de>")
     )]
-    pub(crate) value: [KoalaBear; 5],
+    pub(crate) value: [A; 5],
+    _phantom: PhantomData<F>,
 }
 
-impl QuinticExtensionField {
-    pub(crate) const fn new(value: [KoalaBear; 5]) -> Self {
-        Self { value }
+impl<F, A> QuinticExtensionField<F, A> {
+    pub(crate) const fn new(value: [A; 5]) -> Self {
+        Self {
+            value,
+            _phantom: PhantomData,
+        }
     }
 }
 
-impl Default for QuinticExtensionField {
+impl<F: Field, A: Algebra<F>> Default for QuinticExtensionField<F, A> {
     fn default() -> Self {
-        Self::new(array::from_fn(|_| KoalaBear::ZERO))
+        Self::new(array::from_fn(|_| A::ZERO))
     }
 }
 
-impl From<KoalaBear> for QuinticExtensionField {
-    fn from(x: KoalaBear) -> Self {
+impl<F: Field, A: Algebra<F>> From<A> for QuinticExtensionField<F, A> {
+    fn from(x: A) -> Self {
         Self::new(field_to_array(x))
     }
 }
 
-impl Packable for QuinticExtensionField {}
+impl<F: QuinticExtendable> Packable for QuinticExtensionField<F> {}
 
-impl BasedVectorSpace<KoalaBear> for QuinticExtensionField {
+impl<F: QuinticExtendable, A: Algebra<F>> BasedVectorSpace<A> for QuinticExtensionField<F, A> {
     const DIMENSION: usize = 5;
 
     #[inline]
-    fn as_basis_coefficients_slice(&self) -> &[KoalaBear] {
+    fn as_basis_coefficients_slice(&self) -> &[A] {
         &self.value
     }
 
     #[inline]
-    fn from_basis_coefficients_fn<Fn: FnMut(usize) -> KoalaBear>(f: Fn) -> Self {
+    fn from_basis_coefficients_fn<Fn: FnMut(usize) -> A>(f: Fn) -> Self {
         Self::new(array::from_fn(f))
     }
 
     #[inline]
-    fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = KoalaBear>>(
-        mut iter: I,
-    ) -> Option<Self> {
+    fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = A>>(mut iter: I) -> Option<Self> {
         (iter.len() == 5).then(|| Self::new(array::from_fn(|_| iter.next().unwrap()))) // The unwrap is safe as we just checked the length of iter.
     }
 
     #[inline]
-    fn flatten_to_base(vec: Vec<Self>) -> Vec<KoalaBear> {
+    fn flatten_to_base(vec: Vec<Self>) -> Vec<A> {
         unsafe {
             // Safety:
             // As `Self` is a `repr(transparent)`, it is stored identically in memory to `[A; 5]`
-            flatten_to_base::<KoalaBear, Self>(vec)
+            flatten_to_base::<A, Self>(vec)
         }
     }
 
     #[inline]
-    fn reconstitute_from_base(vec: Vec<KoalaBear>) -> Vec<Self> {
+    fn reconstitute_from_base(vec: Vec<A>) -> Vec<Self> {
         unsafe {
             // Safety:
             // As `Self` is a `repr(transparent)`, it is stored identically in memory to `[A; 5]`
-            reconstitute_from_base::<KoalaBear, Self>(vec)
+            reconstitute_from_base::<A, Self>(vec)
         }
     }
 }
 
-impl ExtensionField<KoalaBear> for QuinticExtensionField {
-    type ExtensionPacking = PackedQuinticExtensionField;
+impl<F: QuinticExtendable> ExtensionField<F> for QuinticExtensionField<F> {
+    type ExtensionPacking = PackedQuinticExtensionField<F, F::Packing>;
 
     #[inline]
     fn is_in_basefield(&self) -> bool {
-        self.value[1..].iter().all(KoalaBear::is_zero)
+        self.value[1..].iter().all(F::is_zero)
     }
 
     #[inline]
-    fn as_base(&self) -> Option<KoalaBear> {
-        <Self as ExtensionField<KoalaBear>>::is_in_basefield(self).then(|| self.value[0])
+    fn as_base(&self) -> Option<F> {
+        <Self as ExtensionField<F>>::is_in_basefield(self).then(|| self.value[0])
     }
 }
 
-const FROBENIUS_MATRIX: [[KoalaBear; 5]; 4] = [
-    [
-        KoalaBear::new(1576402667),
-        KoalaBear::new(1173144480),
-        KoalaBear::new(1567662457),
-        KoalaBear::new(1206866823),
-        KoalaBear::new(2428146),
-    ],
-    [
-        KoalaBear::new(1680345488),
-        KoalaBear::new(1381986),
-        KoalaBear::new(615237464),
-        KoalaBear::new(1380104858),
-        KoalaBear::new(295431824),
-    ],
-    [
-        KoalaBear::new(441230756),
-        KoalaBear::new(323126830),
-        KoalaBear::new(704986542),
-        KoalaBear::new(1445620072),
-        KoalaBear::new(503505220),
-    ],
-    [
-        KoalaBear::new(1364444097),
-        KoalaBear::new(1144738982),
-        KoalaBear::new(2008416047),
-        KoalaBear::new(143367062),
-        KoalaBear::new(1027410849),
-    ],
-];
-
-impl HasFrobenius<KoalaBear> for QuinticExtensionField {
+impl<F: QuinticExtendable> HasFrobenius<F> for QuinticExtensionField<F> {
     /// FrobeniusField automorphisms: x -> x^n, where n is the order of BaseField.
     #[inline]
     fn frobenius(&self) -> Self {
@@ -151,7 +118,7 @@ impl HasFrobenius<KoalaBear> for QuinticExtensionField {
         res.value[0] = self.value[0];
         for i in 0..4 {
             for j in 0..5 {
-                res.value[j] += self.value[i + 1] * FROBENIUS_MATRIX[i][j];
+                res.value[j] += self.value[i + 1] * F::FROBENIUS_MATRIX[i][j];
             }
         }
 
@@ -186,20 +153,24 @@ impl HasFrobenius<KoalaBear> for QuinticExtensionField {
     }
 }
 
-impl PrimeCharacteristicRing for QuinticExtensionField {
-    type PrimeSubfield = <KoalaBear as PrimeCharacteristicRing>::PrimeSubfield;
+impl<F, A> PrimeCharacteristicRing for QuinticExtensionField<F, A>
+where
+    F: QuinticExtendable,
+    A: QuinticExtendableAlgebra<F>,
+{
+    type PrimeSubfield = <A as PrimeCharacteristicRing>::PrimeSubfield;
 
-    const ZERO: Self = Self::new([KoalaBear::ZERO; 5]);
+    const ZERO: Self = Self::new([A::ZERO; 5]);
 
-    const ONE: Self = Self::new(field_to_array(KoalaBear::ONE));
+    const ONE: Self = Self::new(field_to_array(A::ONE));
 
-    const TWO: Self = Self::new(field_to_array(KoalaBear::TWO));
+    const TWO: Self = Self::new(field_to_array(A::TWO));
 
-    const NEG_ONE: Self = Self::new(field_to_array(KoalaBear::NEG_ONE));
+    const NEG_ONE: Self = Self::new(field_to_array(A::NEG_ONE));
 
     #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
-        <KoalaBear as PrimeCharacteristicRing>::from_prime_subfield(f).into()
+        <A as PrimeCharacteristicRing>::from_prime_subfield(f).into()
     }
 
     #[inline]
@@ -231,14 +202,14 @@ impl PrimeCharacteristicRing for QuinticExtensionField {
     #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
-        unsafe { reconstitute_from_base(KoalaBear::zero_vec(len * 5)) }
+        unsafe { reconstitute_from_base(F::zero_vec(len * 5)) }
     }
 }
 
-impl Algebra<KoalaBear> for QuinticExtensionField {}
+impl<F: QuinticExtendable> Algebra<F> for QuinticExtensionField<F> {}
 
-impl RawDataSerializable for QuinticExtensionField {
-    const NUM_BYTES: usize = KoalaBear::NUM_BYTES * 5;
+impl<F: QuinticExtendable> RawDataSerializable for QuinticExtensionField<F> {
+    const NUM_BYTES: usize = F::NUM_BYTES * 5;
 
     #[inline]
     fn into_bytes(self) -> impl IntoIterator<Item = u8> {
@@ -247,24 +218,24 @@ impl RawDataSerializable for QuinticExtensionField {
 
     #[inline]
     fn into_byte_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u8> {
-        KoalaBear::into_byte_stream(input.into_iter().flat_map(|x| x.value))
+        F::into_byte_stream(input.into_iter().flat_map(|x| x.value))
     }
 
     #[inline]
     fn into_u32_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u32> {
-        KoalaBear::into_u32_stream(input.into_iter().flat_map(|x| x.value))
+        F::into_u32_stream(input.into_iter().flat_map(|x| x.value))
     }
 
     #[inline]
     fn into_u64_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u64> {
-        KoalaBear::into_u64_stream(input.into_iter().flat_map(|x| x.value))
+        F::into_u64_stream(input.into_iter().flat_map(|x| x.value))
     }
 
     #[inline]
     fn into_parallel_byte_streams<const N: usize>(
         input: impl IntoIterator<Item = [Self; N]>,
     ) -> impl IntoIterator<Item = [u8; N]> {
-        KoalaBear::into_parallel_byte_streams(
+        F::into_parallel_byte_streams(
             input
                 .into_iter()
                 .flat_map(|x| (0..5).map(move |i| array::from_fn(|j| x[j].value[i]))),
@@ -275,7 +246,7 @@ impl RawDataSerializable for QuinticExtensionField {
     fn into_parallel_u32_streams<const N: usize>(
         input: impl IntoIterator<Item = [Self; N]>,
     ) -> impl IntoIterator<Item = [u32; N]> {
-        KoalaBear::into_parallel_u32_streams(
+        F::into_parallel_u32_streams(
             input
                 .into_iter()
                 .flat_map(|x| (0..5).map(move |i| array::from_fn(|j| x[j].value[i]))),
@@ -286,7 +257,7 @@ impl RawDataSerializable for QuinticExtensionField {
     fn into_parallel_u64_streams<const N: usize>(
         input: impl IntoIterator<Item = [Self; N]>,
     ) -> impl IntoIterator<Item = [u64; N]> {
-        KoalaBear::into_parallel_u64_streams(
+        F::into_parallel_u64_streams(
             input
                 .into_iter()
                 .flat_map(|x| (0..5).map(move |i| array::from_fn(|j| x[j].value[i]))),
@@ -294,10 +265,10 @@ impl RawDataSerializable for QuinticExtensionField {
     }
 }
 
-impl Field for QuinticExtensionField {
+impl<F: QuinticExtendable> Field for QuinticExtensionField<F> {
     type Packing = Self;
 
-    const GENERATOR: Self = Self::new(KoalaBear::new_array([2, 1, 0, 0, 0]));
+    const GENERATOR: Self = Self::new(F::EXT_GENERATOR);
 
     fn try_inverse(&self) -> Option<Self> {
         if self.is_zero() {
@@ -316,33 +287,20 @@ impl Field for QuinticExtensionField {
             let base_slice_1 = as_base_slice_mut(slice_1);
             let base_slice_2 = as_base_slice(slice_2);
 
-            KoalaBear::add_slices(base_slice_1, base_slice_2);
+            F::add_slices(base_slice_1, base_slice_2);
         }
     }
 
     #[inline]
     fn order() -> BigUint {
-        KoalaBear::order().pow(5)
-    }
-
-    fn is_zero(&self) -> bool {
-        *self == Self::ZERO
-    }
-
-    fn is_one(&self) -> bool {
-        *self == Self::ONE
-    }
-
-    fn inverse(&self) -> Self {
-        self.try_inverse().expect("Tried to invert zero")
-    }
-
-    fn bits() -> usize {
-        Self::order().bits() as usize
+        F::order().pow(5)
     }
 }
 
-impl Display for QuinticExtensionField {
+impl<F> Display for QuinticExtensionField<F>
+where
+    F: QuinticExtendable,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         if self.is_zero() {
             write!(f, "0")
@@ -365,71 +323,52 @@ impl Display for QuinticExtensionField {
     }
 }
 
-impl Neg for QuinticExtensionField {
+impl<F, A> Neg for QuinticExtensionField<F, A>
+where
+    F: QuinticExtendable,
+    A: Algebra<F>,
+{
     type Output = Self;
 
     #[inline]
     fn neg(self) -> Self {
-        Self::new(self.value.map(KoalaBear::neg))
+        Self::new(self.value.map(A::neg))
     }
 }
 
-impl Add for QuinticExtensionField {
+impl<F, A> Add for QuinticExtensionField<F, A>
+where
+    F: QuinticExtendable,
+    A: QuinticExtendableAlgebra<F>,
+{
     type Output = Self;
 
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        // TODO duplicated with binomial_add
-        let mut res = [KoalaBear::ZERO; 5];
-        unsafe {
-            // Safe as Self is repr(transparent) and stores a single u32.
-            let a: &[u32; 5] = &*(self.value.as_ptr() as *const [u32; 5]);
-            let b: &[u32; 5] = &*(rhs.value.as_ptr() as *const [u32; 5]);
-            let res: &mut [u32; 5] = &mut *(res.as_mut_ptr() as *mut [u32; 5]);
-
-            packed_mod_add(
-                a,
-                b,
-                res,
-                KoalaBearParameters::PRIME,
-                add::<KoalaBearParameters>,
-            );
-        }
-        Self::new(res)
+        let value = A::kb_quintic_add(&self.value, &rhs.value);
+        Self::new(value)
     }
 }
 
-/// TODO duplicated
-///
-/// Add two integers modulo `P = MP::PRIME`.
-///
-/// Assumes that `P` is less than `2^31` and `a + b <= 2P` for all array pairs `a, b`.
-/// If the inputs are not in this range, the result may be incorrect.
-/// The result will be in the range `[0, P]` and equal to `(a + b) mod P`.
-/// It will be equal to `P` if and only if `a + b = 2P` so provided `a + b < 2P`
-/// the result is guaranteed to be less than `P`.
-#[inline]
-#[must_use]
-pub(crate) fn add<MP: MontyParameters>(lhs: u32, rhs: u32) -> u32 {
-    let mut sum = lhs + rhs;
-    let (corr_sum, over) = sum.overflowing_sub(MP::PRIME);
-    if !over {
-        sum = corr_sum;
-    }
-    sum
-}
-
-impl Add<KoalaBear> for QuinticExtensionField {
+impl<F, A> Add<A> for QuinticExtensionField<F, A>
+where
+    F: QuinticExtendable,
+    A: Algebra<F>,
+{
     type Output = Self;
 
     #[inline]
-    fn add(mut self, rhs: KoalaBear) -> Self {
+    fn add(mut self, rhs: A) -> Self {
         self.value[0] += rhs;
         self
     }
 }
 
-impl AddAssign for QuinticExtensionField {
+impl<F, A> AddAssign for QuinticExtensionField<F, A>
+where
+    F: QuinticExtendable,
+    A: Algebra<F>,
+{
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
         for i in 0..5 {
@@ -438,67 +377,62 @@ impl AddAssign for QuinticExtensionField {
     }
 }
 
-impl AddAssign<KoalaBear> for QuinticExtensionField {
+impl<F, A> AddAssign<A> for QuinticExtensionField<F, A>
+where
+    F: QuinticExtendable,
+    A: Algebra<F>,
+{
     #[inline]
-    fn add_assign(&mut self, rhs: KoalaBear) {
+    fn add_assign(&mut self, rhs: A) {
         self.value[0] += rhs;
     }
 }
 
-impl Sum for QuinticExtensionField {
+impl<F, A> Sum for QuinticExtensionField<F, A>
+where
+    F: QuinticExtendable,
+    A: QuinticExtendableAlgebra<F>,
+{
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.reduce(|acc, x| acc + x).unwrap_or(Self::ZERO)
     }
 }
 
-impl Sub for QuinticExtensionField {
+impl<F, A> Sub for QuinticExtensionField<F, A>
+where
+    F: QuinticExtendable,
+    A: QuinticExtendableAlgebra<F>,
+{
     type Output = Self;
 
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        // TODO duplicated with binomial_sub
-        let mut res: [p3_monty_31::MontyField31<KoalaBearParameters>; 5] = [KoalaBear::ZERO; 5];
-        unsafe {
-            // Safe as Self is repr(transparent) and stores a single u32.
-            let a: &[u32; 5] = &*(self.value.as_ptr() as *const [u32; 5]);
-            let b: &[u32; 5] = &*(rhs.value.as_ptr() as *const [u32; 5]);
-            let res: &mut [u32; 5] = &mut *(res.as_mut_ptr() as *mut [u32; 5]);
-
-            packed_mod_sub(
-                a,
-                b,
-                res,
-                KoalaBearParameters::PRIME,
-                sub::<KoalaBearParameters>,
-            );
-        }
-        Self::new(res)
+        let value = A::kb_quintic_sub(&self.value, &rhs.value);
+        Self::new(value)
     }
 }
 
-// TODO duplicated
-#[inline]
-#[must_use]
-pub(crate) fn sub<MP: MontyParameters>(lhs: u32, rhs: u32) -> u32 {
-    let (mut diff, over) = lhs.overflowing_sub(rhs);
-    let corr = if over { MP::PRIME } else { 0 };
-    diff = diff.wrapping_add(corr);
-    diff
-}
-
-impl Sub<KoalaBear> for QuinticExtensionField {
+impl<F, A> Sub<A> for QuinticExtensionField<F, A>
+where
+    F: QuinticExtendable,
+    A: Algebra<F>,
+{
     type Output = Self;
 
     #[inline]
-    fn sub(self, rhs: KoalaBear) -> Self {
+    fn sub(self, rhs: A) -> Self {
         let mut res = self.value;
         res[0] -= rhs;
         Self::new(res)
     }
 }
 
-impl SubAssign for QuinticExtensionField {
+impl<F, A> SubAssign for QuinticExtensionField<F, A>
+where
+    F: QuinticExtendable,
+    A: Algebra<F>,
+{
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
         for i in 0..5 {
@@ -507,61 +441,86 @@ impl SubAssign for QuinticExtensionField {
     }
 }
 
-impl SubAssign<KoalaBear> for QuinticExtensionField {
+impl<F, A> SubAssign<A> for QuinticExtensionField<F, A>
+where
+    F: QuinticExtendable,
+    A: Algebra<F>,
+{
     #[inline]
-    fn sub_assign(&mut self, rhs: KoalaBear) {
+    fn sub_assign(&mut self, rhs: A) {
         self.value[0] -= rhs;
     }
 }
 
-impl Mul for QuinticExtensionField {
+impl<F, A> Mul for QuinticExtensionField<F, A>
+where
+    F: QuinticExtendable,
+    A: QuinticExtendableAlgebra<F>,
+{
     type Output = Self;
 
     #[inline]
     fn mul(self, rhs: Self) -> Self {
-        let a = &self.value;
-        let b = &rhs.value;
+        let a = self.value;
+        let b = rhs.value;
         let mut res = Self::default();
 
-        kb_quintic_mul_packed(a, b, &mut res.value);
+        A::kb_quintic_mul(&a, &b, &mut res.value);
 
         res
     }
 }
 
-impl Mul<KoalaBear> for QuinticExtensionField {
+impl<F, A> Mul<A> for QuinticExtensionField<F, A>
+where
+    F: QuinticExtendable,
+    A: QuinticExtendableAlgebra<F>,
+{
     type Output = Self;
 
     #[inline]
-    fn mul(self, rhs: KoalaBear) -> Self {
-        let mut res = [KoalaBear::ZERO; 5];
-        base_mul_packed(self.value, rhs, &mut res);
-        Self::new(res)
+    fn mul(self, rhs: A) -> Self {
+        Self::new(A::kb_quintic_base_mul(self.value, rhs))
     }
 }
 
-impl MulAssign for QuinticExtensionField {
+impl<F, A> MulAssign for QuinticExtensionField<F, A>
+where
+    F: QuinticExtendable,
+    A: QuinticExtendableAlgebra<F>,
+{
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
         *self = self.clone() * rhs;
     }
 }
 
-impl MulAssign<KoalaBear> for QuinticExtensionField {
+impl<F, A> MulAssign<A> for QuinticExtensionField<F, A>
+where
+    F: QuinticExtendable,
+    A: QuinticExtendableAlgebra<F>,
+{
     #[inline]
-    fn mul_assign(&mut self, rhs: KoalaBear) {
+    fn mul_assign(&mut self, rhs: A) {
         *self = self.clone() * rhs;
     }
 }
 
-impl Product for QuinticExtensionField {
+impl<F, A> Product for QuinticExtensionField<F, A>
+where
+    F: QuinticExtendable,
+    A: QuinticExtendableAlgebra<F>,
+{
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.reduce(|acc, x| acc * x).unwrap_or(Self::ONE)
     }
 }
 
-impl Div for QuinticExtensionField {
+impl<F> Div for QuinticExtensionField<F>
+where
+    F: QuinticExtendable,
+{
     type Output = Self;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
@@ -571,29 +530,32 @@ impl Div for QuinticExtensionField {
     }
 }
 
-impl DivAssign for QuinticExtensionField {
+impl<F> DivAssign for QuinticExtensionField<F>
+where
+    F: QuinticExtendable,
+{
     #[inline]
     fn div_assign(&mut self, rhs: Self) {
         *self = *self / rhs;
     }
 }
 
-impl Distribution<QuinticExtensionField> for StandardUniform
+impl<F: QuinticExtendable> Distribution<QuinticExtensionField<F>> for StandardUniform
 where
-    Self: Distribution<KoalaBear>,
+    Self: Distribution<F>,
 {
     #[inline]
-    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> QuinticExtensionField {
+    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> QuinticExtensionField<F> {
         QuinticExtensionField::new(array::from_fn(|_| self.sample(rng)))
     }
 }
 
-impl TwoAdicField for QuinticExtensionField {
-    const TWO_ADICITY: usize = KoalaBear::TWO_ADICITY;
+impl<F: TwoAdicField + QuinticExtendable> TwoAdicField for QuinticExtensionField<F> {
+    const TWO_ADICITY: usize = F::TWO_ADICITY;
 
     #[inline]
     fn two_adic_generator(bits: usize) -> Self {
-        KoalaBear::two_adic_generator(bits).into()
+        F::two_adic_generator(bits).into()
     }
 }
 
@@ -605,10 +567,11 @@ impl TwoAdicField for QuinticExtensionField {
 // + (a0b2 + a1b1 + a2b0 - a1b4 - a2b3 - a3b2 - a4b1 + a3b4 + a4b3 + a4b4).X^2
 // + (a0b3 + a1b2 + a2b1 + a3b0 - a2b4 - a3b3 - a4b2 + a4b4).X^3
 // + (a0b4 + a1b3 + a2b2 + a3b1 + a4b0 - a3b4 - a4*b3).X^4
-pub(crate) fn kb_quintic_mul<R, R2>(a: &[R; 5], b: &[R2; 5], res: &mut [R; 5])
+pub fn kb_quintic_mul<F, R, R2>(a: &[R; 5], b: &[R2; 5], res: &mut [R; 5])
 where
-    R: Algebra<KoalaBear> + Algebra<R2>,
-    R2: Algebra<KoalaBear>,
+    F: Field,
+    R: Algebra<F> + Algebra<R2>,
+    R2: Algebra<F>,
 {
     // Convert b to R type for computation
     let b_r: [R; 5] = [
@@ -696,9 +659,10 @@ In our extension field: X^5 = 1 - X^2
 
 */
 #[inline]
-pub(crate) fn quintic_square<R>(a: &[R; 5], res: &mut [R; 5])
+pub(crate) fn quintic_square<F, R>(a: &[R; 5], res: &mut [R; 5])
 where
-    R: Algebra<KoalaBear>,
+    F: Field,
+    R: Algebra<F>,
 {
     let two_a0 = a[0].double();
     let two_a1 = a[1].double();
@@ -746,7 +710,7 @@ where
 
 /// Compute the inverse of a quintic binomial extension field element.
 #[inline]
-fn quintic_inv(a: &QuinticExtensionField) -> QuinticExtensionField {
+fn quintic_inv<F: QuinticExtendable>(a: &QuinticExtensionField<F>) -> QuinticExtensionField<F> {
     // Writing 'a' for self, we need to compute: `prod_conj = a^{q^4 + q^3 + q^2 + q}`
     let a_exp_q = a.frobenius();
     let a_exp_q_plus_q_sq = (*a * a_exp_q).frobenius();
@@ -754,7 +718,7 @@ fn quintic_inv(a: &QuinticExtensionField) -> QuinticExtensionField {
 
     // norm = a * prod_conj is in the base field, so only compute that
     // coefficient rather than the full product.
-    let norm = KoalaBear::dot_product::<5>(
+    let norm = F::dot_product::<5>(
         &a.value,
         &[
             prod_conj.value[0].clone(),
@@ -765,239 +729,12 @@ fn quintic_inv(a: &QuinticExtensionField) -> QuinticExtensionField {
         ],
     );
 
-    debug_assert_eq!(QuinticExtensionField::from(norm), *a * prod_conj);
+    debug_assert_eq!(QuinticExtensionField::<F>::from(norm), *a * prod_conj);
 
     prod_conj * norm.inverse()
 }
 
-#[cfg(not(any(
-    all(target_arch = "aarch64", target_feature = "neon"),
-    all(target_arch = "x86_64", target_feature = "avx2",)
-)))]
-/// If no packings are available, we use the generic binomial extension multiplication functions.
-#[inline]
-pub(crate) fn kb_quintic_mul_packed(
-    a: &[KoalaBear; 5],
-    b: &[KoalaBear; 5],
-    res: &mut [KoalaBear; 5],
-) {
-    kb_quintic_mul(a, b, res);
-}
-
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    not(target_feature = "avx512f")
-))]
-/// Multiplication in a quintic binomial extension field.
-#[inline]
-pub(crate) fn kb_quintic_mul_packed(
-    a: &[KoalaBear; 5],
-    b: &[KoalaBear; 5],
-    res: &mut [KoalaBear; 5],
-) {
-    use p3_monty_31::PackedMontyField31AVX2;
-    // TODO: This could likely be optimised further with more effort.
-    // in particular it would benefit from a custom AVX2 implementation.
-
-    let zero = KoalaBear::ZERO;
-    let b_0_minus_3 = b[0] - b[3];
-    let b_1_minus_4 = b[1] - b[4];
-    let b_4_minus_2 = b[4] - b[2];
-    let b_3_minus_b_1_minus_4 = b[3] - b_1_minus_4;
-
-    let lhs = [
-        PackedMontyField31AVX2([a[0], a[0], a[0], a[0], a[0], a[4], a[4], a[4]]),
-        PackedMontyField31AVX2([a[1], a[1], a[1], a[1], a[1], zero, zero, zero]),
-        PackedMontyField31AVX2([a[2], a[2], a[2], a[2], a[2], zero, zero, zero]),
-        PackedMontyField31AVX2([a[3], a[3], a[3], a[3], a[3], zero, zero, zero]),
-    ];
-    let rhs = [
-        PackedMontyField31AVX2([
-            b[0],
-            b[1],
-            b[2],
-            b[3],
-            b[4],
-            b_1_minus_4,
-            b[2],
-            b_3_minus_b_1_minus_4,
-        ]),
-        PackedMontyField31AVX2([b[4], b[0], b_1_minus_4, b[2], b[3], zero, zero, zero]),
-        PackedMontyField31AVX2([b[3], b[4], b_0_minus_3, b_1_minus_4, b[2], zero, zero, zero]),
-        PackedMontyField31AVX2([
-            b[2],
-            b[3],
-            b_4_minus_2,
-            b_0_minus_3,
-            b_1_minus_4,
-            zero,
-            zero,
-            zero,
-        ]),
-    ];
-
-    let dot_res =
-        unsafe { PackedMontyField31AVX2::from_vector(p3_monty_31::dot_product_4(lhs, rhs)) };
-
-    // We managed to compute 3 of the extra terms in the last 3 places of the dot product.
-    // This leaves us with 2 terms remaining we need to compute manually.
-    let extra1 = b_4_minus_2 * a[4];
-    let extra2 = b_0_minus_3 * a[4];
-
-    let extra_addition = PackedMontyField31AVX2([
-        dot_res.0[5],
-        dot_res.0[6],
-        dot_res.0[7],
-        extra1,
-        extra2,
-        zero,
-        zero,
-        zero,
-    ]);
-    let total = dot_res + extra_addition;
-
-    res.copy_from_slice(&total.0[..5]);
-}
-
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-/// Multiplication in a quintic binomial extension field.
-#[inline]
-pub(crate) fn kb_quintic_mul_packed<FP>(
-    a: &[MontyField31<FP>; 5],
-    b: &[MontyField31<FP>; 5],
-    res: &mut [MontyField31<FP>; 5],
-) where
-    FP: FieldParameters + QuinticExtensionData,
-{
-    // TODO: It's plausible that this could be improved by folding the computation of packed_b into
-    // the custom AVX512 implementation. Moreover, AVX512 is really a bit to large so we are wasting a lot
-    // of space. A custom implementation which mixes AVX512 and AVX2 code might well be able to
-    // improve one that is here.
-    let zero = MontyField31::<FP>::ZERO;
-    let b_0_minus_3 = b[0] - b[3];
-    let b_1_minus_4 = b[1] - b[4];
-    let b_4_minus_2 = b[4] - b[2];
-    let b_3_minus_b_1_minus_4 = b[3] - b_1_minus_4;
-
-    // Constant term = a0*b0 + w(a1*b4 + a2*b3 + a3*b2 + a4*b1)
-    // Linear term = a0*b1 + a1*b0 + w(a2*b4 + a3*b3 + a4*b2)
-    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b4 + a4*b3)
-    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0 + w*a4*b4
-    // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 + a4*b0
-
-    // Each packed vector can do 8 multiplications at once. As we have
-    // 25 multiplications to do we will need to use at least 3 packed vectors
-    // but we might as well use 4 so we can make use of dot_product_2.
-    // TODO: This can probably be improved by using a custom function.
-    let lhs = [
-        PackedMontyField31AVX512([
-            a[0], a[2], a[0], a[2], a[0], a[2], a[0], a[2], a[2], a[2], a[4], a[4], a[4], a[4],
-            a[4], zero,
-        ]),
-        PackedMontyField31AVX512([
-            a[1], a[3], a[1], a[3], a[1], a[3], a[1], a[3], a[1], a[3], zero, zero, zero, zero,
-            zero, zero,
-        ]),
-    ];
-    let rhs = [
-        PackedMontyField31AVX512([
-            b[0],
-            b[3],
-            b[1],
-            b[4],
-            b[2],
-            b_0_minus_3,
-            b[3],
-            b_1_minus_4,
-            b[4],
-            b[2],
-            b_1_minus_4,
-            b[2],
-            b_3_minus_b_1_minus_4,
-            b_4_minus_2,
-            b_0_minus_3,
-            zero,
-        ]),
-        PackedMontyField31AVX512([
-            b[4],
-            b[2],
-            b[0],
-            b[3],
-            b_1_minus_4,
-            b_4_minus_2,
-            b[2],
-            b_0_minus_3,
-            b[3],
-            b_1_minus_4,
-            zero,
-            zero,
-            zero,
-            zero,
-            zero,
-            zero,
-        ]),
-    ];
-
-    let dot = unsafe { PackedMontyField31AVX512::from_vector(dot_product_2(lhs, rhs)).0 };
-
-    let sumand1 =
-        PackedMontyField31AVX512::from_monty_array([dot[0], dot[2], dot[4], dot[6], dot[8]]);
-    let sumand2 =
-        PackedMontyField31AVX512::from_monty_array([dot[1], dot[3], dot[5], dot[7], dot[9]]);
-    let sumand3 =
-        PackedMontyField31AVX512::from_monty_array([dot[10], dot[11], dot[12], dot[13], dot[14]]);
-    let sum = sumand1 + sumand2 + sumand3;
-
-    res.copy_from_slice(&sum.0[..5]);
-}
-
-#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
-/// Multiplication in a quintic binomial extension field.
-#[inline]
-pub(crate) fn kb_quintic_mul_packed<FP>(
-    a: &[KoalaBear; 5],
-    b: &[KoalaBear; 5],
-    res: &mut [KoalaBear; 5],
-) where
-    FP: FieldParameters + QuinticExtensionData,
-{
-    // TODO: This could be optimised further with a custom NEON implementation.
-    let b_0_minus_3 = b[0] - b[3];
-    let b_1_minus_4 = b[1] - b[4];
-    let b_4_minus_2 = b[4] - b[2];
-    let b_3_minus_b_1_minus_4 = b[3] - b_1_minus_4;
-
-    // Constant term = a0*b0 + w(a1*b4 + a2*b3 + a3*b2 + a4*b1)
-    // Linear term = a0*b1 + a1*b0 + w(a2*b4 + a3*b3 + a4*b2)
-    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b4 + a4*b3)
-    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0 + w*a4*b4
-    // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 + a4*b0
-    let lhs: [PackedMontyField31Neon<FP>; 5] = [
-        a[0].into(),
-        a[1].into(),
-        a[2].into(),
-        a[3].into(),
-        a[4].into(),
-    ];
-    let rhs = [
-        PackedMontyField31Neon([b[0], b[1], b[2], b[4]]),
-        PackedMontyField31Neon([b[4], b[0], b_1_minus_4, b[3]]),
-        PackedMontyField31Neon([b[3], b[4], b_0_minus_3, b[2]]),
-        PackedMontyField31Neon([b[2], b[3], b_4_minus_2, b_1_minus_4]),
-        PackedMontyField31Neon([b_1_minus_4, b[2], b_3_minus_b_1_minus_4, b_0_minus_3]),
-    ];
-
-    let dot = PackedMontyField31Neon::dot_product(&lhs, &rhs).0;
-
-    res[..4].copy_from_slice(&dot);
-    res[4] = MontyField31::dot_product::<5>(
-        &[a[0], a[1], a[2], a[3], a[4]],
-        &[b[4], b[3], b[2], b_1_minus_4, b_0_minus_3],
-    );
-}
-
-// fn compute_frobenius_matrix() {
+// fn compute_frobenius_matrix<F: QuinticExtendable>() {
 //     for i in 1..5 {
 //         let mut x = QuinticExtensionField::<F>::default();
 //         x.value[i] = F::ONE;

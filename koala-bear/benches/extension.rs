@@ -4,11 +4,11 @@ use p3_field_testing::bench_func::{
     benchmark_add_latency, benchmark_add_slices, benchmark_add_throughput, benchmark_inv,
     benchmark_mul_latency, benchmark_mul_throughput, benchmark_square,
 };
-use p3_koala_bear::{KoalaBear, QuinticExtensionField};
+use p3_koala_bear::{KoalaBear, QuinticExtensionFieldKB};
 
 type EF4 = BinomialExtensionField<KoalaBear, 4>;
 type EF8 = BinomialExtensionField<KoalaBear, 8>;
-type EF5 = QuinticExtensionField;
+type EF5 = QuinticExtensionFieldKB;
 
 // Note that each round of throughput has 10 operations
 // So we should have 10 * more repetitions for latency tests.

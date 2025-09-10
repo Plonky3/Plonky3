@@ -152,10 +152,10 @@ mod test_quintic_extension {
         test_two_adic_extension_field,
     };
 
-    use crate::{quintic_extension::QuinticExtensionField, KoalaBear};
+    use crate::{KoalaBear, QuinticExtensionFieldKB};
 
     type F = KoalaBear;
-    type EF = QuinticExtensionField;
+    type EF = QuinticExtensionFieldKB;
 
     // MontyField31's have no redundant representations.
     const ZEROS: [EF; 1] = [EF::ZERO];
