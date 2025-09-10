@@ -190,14 +190,16 @@ pub(crate) fn kb_quintic_mul_packed<FP>(
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 /// Multiplication in a quintic binomial extension field.
 #[inline]
-pub(crate) fn kb_quintic_mul_packed<FP>(
+pub(crate) fn kb_quintic_mul_packed(
     a: &[KoalaBear; 5],
     b: &[KoalaBear; 5],
     res: &mut [KoalaBear; 5],
-) where
-    FP: FieldParameters + QuinticExtensionData,
-{
+) {
     // TODO: This could be optimised further with a custom NEON implementation.
+
+    use p3_field::PrimeCharacteristicRing;
+    use p3_monty_31::PackedMontyField31Neon;
+
     let b_0_minus_3 = b[0] - b[3];
     let b_1_minus_4 = b[1] - b[4];
     let b_4_minus_2 = b[4] - b[2];
@@ -208,7 +210,7 @@ pub(crate) fn kb_quintic_mul_packed<FP>(
     // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b4 + a4*b3)
     // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0 + w*a4*b4
     // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 + a4*b0
-    let lhs: [PackedMontyField31Neon<FP>; 5] = [
+    let lhs: [PackedMontyField31Neon<crate::KoalaBearParameters>; 5] = [
         a[0].into(),
         a[1].into(),
         a[2].into(),
@@ -226,7 +228,7 @@ pub(crate) fn kb_quintic_mul_packed<FP>(
     let dot = PackedMontyField31Neon::dot_product(&lhs, &rhs).0;
 
     res[..4].copy_from_slice(&dot);
-    res[4] = MontyField31::dot_product::<5>(
+    res[4] = KoalaBear::dot_product::<5>(
         &[a[0], a[1], a[2], a[3], a[4]],
         &[b[4], b[3], b[2], b_1_minus_4, b_0_minus_3],
     );
