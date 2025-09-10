@@ -97,17 +97,19 @@ pub(crate) fn kb_quintic_mul_packed(
 /// Multiplication in a quintic binomial extension field.
 #[inline]
 pub(crate) fn kb_quintic_mul_packed<FP>(
-    a: &[MontyField31<FP>; 5],
-    b: &[MontyField31<FP>; 5],
-    res: &mut [MontyField31<FP>; 5],
-) where
-    FP: FieldParameters + QuinticExtensionData,
-{
+    a: &[KoalaBear; 5],
+    b: &[KoalaBear; 5],
+    res: &mut [KoalaBear; 5],
+) {
+    use p3_field::PrimeCharacteristicRing;
+    use p3_monty_31::PackedMontyField31AVX512;
+    use p3_monty_31::dot_product_2;
+
     // TODO: It's plausible that this could be improved by folding the computation of packed_b into
     // the custom AVX512 implementation. Moreover, AVX512 is really a bit to large so we are wasting a lot
     // of space. A custom implementation which mixes AVX512 and AVX2 code might well be able to
     // improve one that is here.
-    let zero = MontyField31::<FP>::ZERO;
+    let zero = KoalaBear::ZERO;
     let b_0_minus_3 = b[0] - b[3];
     let b_1_minus_4 = b[1] - b[4];
     let b_4_minus_2 = b[4] - b[2];
