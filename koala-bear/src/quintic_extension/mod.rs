@@ -1,6 +1,6 @@
 use crate::packed_quintic_extension::PackedQuinticExtensionField;
 use crate::quintic_extension::quintic_extension::QuinticExtensionField;
-use crate::{KoalaBear, KoalaBearParameters, packing::kb_quintic_mul_packed};
+use crate::{KoalaBear, KoalaBearParameters, packing::quintic_mul_packed};
 use p3_field::{Algebra, Field, packed_mod_add};
 use p3_field::{PrimeCharacteristicRing, packed_mod_sub};
 use p3_monty_31::{MontyParameters, base_mul_packed, monty_add, monty_sub};
@@ -51,7 +51,7 @@ impl QuinticExtendable for KoalaBear {
 impl QuinticExtendableAlgebra<KoalaBear> for KoalaBear {
     #[inline(always)]
     fn kb_quintic_mul(a: &[Self; 5], b: &[Self; 5], res: &mut [Self; 5]) {
-        kb_quintic_mul_packed(a, b, res);
+        quintic_mul_packed(a, b, res);
     }
 
     #[inline(always)]

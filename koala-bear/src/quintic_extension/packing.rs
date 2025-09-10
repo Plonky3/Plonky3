@@ -7,7 +7,7 @@ use crate::KoalaBear;
     all(target_arch = "x86_64", target_feature = "avx2",)
 )))]
 #[inline]
-pub(crate) fn kb_quintic_mul_packed(
+pub(crate) fn quintic_mul_packed(
     a: &[KoalaBear; 5],
     b: &[KoalaBear; 5],
     res: &mut [KoalaBear; 5],
@@ -22,7 +22,7 @@ pub(crate) fn kb_quintic_mul_packed(
 ))]
 /// Multiplication in a quintic binomial extension field.
 #[inline]
-pub(crate) fn kb_quintic_mul_packed(
+pub(crate) fn quintic_mul_packed(
     a: &[KoalaBear; 5],
     b: &[KoalaBear; 5],
     res: &mut [KoalaBear; 5],
@@ -96,7 +96,7 @@ pub(crate) fn kb_quintic_mul_packed(
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
 /// Multiplication in a quintic binomial extension field.
 #[inline]
-pub(crate) fn kb_quintic_mul_packed<FP>(
+pub(crate) fn quintic_mul_packed<FP>(
     a: &[KoalaBear; 5],
     b: &[KoalaBear; 5],
     res: &mut [KoalaBear; 5],
@@ -190,7 +190,7 @@ pub(crate) fn kb_quintic_mul_packed<FP>(
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 /// Multiplication in a quintic binomial extension field.
 #[inline]
-pub(crate) fn kb_quintic_mul_packed(
+pub(crate) fn quintic_mul_packed(
     a: &[KoalaBear; 5],
     b: &[KoalaBear; 5],
     res: &mut [KoalaBear; 5],
