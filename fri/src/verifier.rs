@@ -74,7 +74,7 @@ where
 
     // `commit_phase_commits.len()` is the number of folding steps, so the maximum polynomial degree will be
     // `commit_phase_commits.len() + self.fri.log_final_poly_len` and so, as the same blow-up is used for all
-    // polynomials, the maximum matrix height is:
+    // polynomials, the maximum matrix height over all commit batches is:
     let log_global_max_height =
         proof.commit_phase_commits.len() + params.log_blowup + params.log_final_poly_len;
 
