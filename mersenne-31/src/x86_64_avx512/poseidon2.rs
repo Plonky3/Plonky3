@@ -105,7 +105,9 @@ impl<const WIDTH: usize> Poseidon2ExternalLayerMersenne31<WIDTH> {
 pub(crate) fn mul_2exp_i<const I: u32, const I_PRIME: u32>(
     val: PackedMersenne31AVX512,
 ) -> PackedMersenne31AVX512 {
-    assert_eq!(I + I_PRIME, 31);
+    const {
+        assert!(I + I_PRIME == 31);
+    }
     unsafe {
         // Safety: If this code got compiled then AVX512-F intrinsics are available.
         let input = val.to_vector();

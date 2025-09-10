@@ -187,6 +187,14 @@ where
     F: PrimeField64,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
+    /// The sampled bits are not perfectly uniform, but we can bound the error: every sequence
+    /// appears with probability 1/p-close to uniform (1/2^b).
+    ///
+    /// Proof:
+    /// We denote p = F::ORDER_U64, and b = `bits`.
+    /// If X follows a uniform distribution over F, if we consider the first b bits of X, each
+    /// sequence appears either with probability P1 = ⌊p / 2^b⌋ / p or P2 = (1 + ⌊p / 2^b⌋) / p.
+    /// We have 1/2^b - 1/p ≤ P1, P2 ≤ 1/2^b + 1/p
     fn sample_bits(&mut self, bits: usize) -> usize {
         assert!(bits < (usize::BITS as usize));
         assert!((1 << bits) < F::ORDER_U64);
