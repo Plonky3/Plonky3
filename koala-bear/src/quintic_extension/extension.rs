@@ -538,7 +538,7 @@ impl<F: TwoAdicField + QuinticExtendable> TwoAdicField for QuinticExtensionField
     }
 }
 
-pub fn quintic_mul<F, R, R2>(a: &[R; 5], b: &[R2; 5], res: &mut [R; 5])
+pub(crate) fn quintic_mul<F, R, R2>(a: &[R; 5], b: &[R2; 5], res: &mut [R; 5])
 where
     F: Field,
     R: Algebra<F> + Algebra<R2>,
@@ -581,7 +581,7 @@ where
         ],
     );
 
-    // Square term = a0*b2 + a1*b1 + a2*b0 - a1*b4 - a2*b3 - a3*b2 - a4*b1 + a3*b4 + a4*b3 + a4*b4
+    // Square term = a0*b2 + a1*b1 - a1*b4 + a2*b0 - a2*b3 + a3*b4 - a3*b2 + a4*b3 - a4*b1 + a4*b4
     res[2] = R::dot_product::<5>(
         a,
         &[
@@ -593,7 +593,7 @@ where
         ],
     );
 
-    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0 - a2*b4 - a3*b3 - a4*b2 + a4*b4
+    // Cubic term = a0*b3 + a1*b2 + a2*b1 - a2*b4 + a3*b0 - a3*b3 + a4*b4 - a4*b2
     res[3] = R::dot_product::<5>(
         a,
         &[
@@ -605,7 +605,7 @@ where
         ],
     );
 
-    // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 + a4*b0 - a3*b4 - a4*b3
+    // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 - a3*b4 + a4*b0 - a4*b3
     res[4] = R::dot_product::<5>(
         a,
         &[

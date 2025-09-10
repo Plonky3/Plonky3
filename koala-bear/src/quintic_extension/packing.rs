@@ -25,11 +25,17 @@ pub(crate) fn quintic_mul_packed(a: &[KoalaBear; 5], b: &[KoalaBear; 5], res: &m
     use p3_field::PrimeCharacteristicRing;
     use p3_monty_31::PackedMontyField31AVX2;
 
+    // Constant term = a0*b0 + a1*b4 + a2*b3 + a3*b2 + a4*b1 - a4*b4
+    // Linear term = a0*b1 + a1*b0 + a2*b4 + a3*b3 + a4*b2
+    // Square term = a0*b2 + a1*b1 - a1*b4 + a2*b0 - a2*b3 + a3*b4 - a3*b2 + a4*b3 - a4*b1 + a4*b4
+    // Cubic term = a0*b3 + a1*b2 + a2*b1 - a2*b4 + a3*b0 - a3*b3 + a4*b4 - a4*b2
+    // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 - a3*b4 + a4*b0 - a4*b3
+
     let zero = KoalaBear::ZERO;
-    let b_0_minus_3 = b[0] - b[3];
-    let b_1_minus_4 = b[1] - b[4];
-    let b_4_minus_2 = b[4] - b[2];
-    let b_3_minus_b_1_minus_4 = b[3] - b_1_minus_4;
+    let b0_minus_b3 = b[0] - b[3];
+    let b1_minus_b4 = b[1] - b[4];
+    let b4_minus_b2 = b[4] - b[2];
+    let b3_plus_b4_minus_b_1 = b[3] - b1_minus_b4;
 
     let lhs = [
         PackedMontyField31AVX2([a[0], a[0], a[0], a[0], a[0], a[4], a[4], a[4]]),
@@ -44,18 +50,18 @@ pub(crate) fn quintic_mul_packed(a: &[KoalaBear; 5], b: &[KoalaBear; 5], res: &m
             b[2],
             b[3],
             b[4],
-            b_1_minus_4,
+            b1_minus_b4,
             b[2],
-            b_3_minus_b_1_minus_4,
+            b3_plus_b4_minus_b_1,
         ]),
-        PackedMontyField31AVX2([b[4], b[0], b_1_minus_4, b[2], b[3], zero, zero, zero]),
-        PackedMontyField31AVX2([b[3], b[4], b_0_minus_3, b_1_minus_4, b[2], zero, zero, zero]),
+        PackedMontyField31AVX2([b[4], b[0], b1_minus_b4, b[2], b[3], zero, zero, zero]),
+        PackedMontyField31AVX2([b[3], b[4], b0_minus_b3, b1_minus_b4, b[2], zero, zero, zero]),
         PackedMontyField31AVX2([
             b[2],
             b[3],
-            b_4_minus_2,
-            b_0_minus_3,
-            b_1_minus_4,
+            b4_minus_b2,
+            b0_minus_b3,
+            b1_minus_b4,
             zero,
             zero,
             zero,
@@ -67,8 +73,8 @@ pub(crate) fn quintic_mul_packed(a: &[KoalaBear; 5], b: &[KoalaBear; 5], res: &m
 
     // We managed to compute 3 of the extra terms in the last 3 places of the dot product.
     // This leaves us with 2 terms remaining we need to compute manually.
-    let extra1 = b_4_minus_2 * a[4];
-    let extra2 = b_0_minus_3 * a[4];
+    let extra1 = b4_minus_b2 * a[4];
+    let extra2 = b0_minus_b3 * a[4];
 
     let extra_addition = PackedMontyField31AVX2([
         dot_res.0[5],
@@ -101,16 +107,16 @@ pub(crate) fn quintic_mul_packed<FP>(
     // of space. A custom implementation which mixes AVX512 and AVX2 code might well be able to
     // improve one that is here.
     let zero = KoalaBear::ZERO;
-    let b_0_minus_3 = b[0] - b[3];
-    let b_1_minus_4 = b[1] - b[4];
-    let b_4_minus_2 = b[4] - b[2];
-    let b_3_minus_b_1_minus_4 = b[3] - b_1_minus_4;
+    let b0_minus_b3 = b[0] - b[3];
+    let b1_minus_b4 = b[1] - b[4];
+    let b4_minus_b2 = b[4] - b[2];
+    let b3_plus_b4_minus_b_1 = b[3] - b1_minus_b4;
 
-    // Constant term = a0*b0 + w(a1*b4 + a2*b3 + a3*b2 + a4*b1)
-    // Linear term = a0*b1 + a1*b0 + w(a2*b4 + a3*b3 + a4*b2)
-    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b4 + a4*b3)
-    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0 + w*a4*b4
-    // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 + a4*b0
+    // Constant term = a0*b0 + a1*b4 + a2*b3 + a3*b2 + a4*b1 - a4*b4
+    // Linear term = a0*b1 + a1*b0 + a2*b4 + a3*b3 + a4*b2
+    // Square term = a0*b2 + a1*b1 - a1*b4 + a2*b0 - a2*b3 + a3*b4 - a3*b2 + a4*b3 - a4*b1 + a4*b4
+    // Cubic term = a0*b3 + a1*b2 + a2*b1 - a2*b4 + a3*b0 - a3*b3 + a4*b4 - a4*b2
+    // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 - a3*b4 + a4*b0 - a4*b3
 
     // Each packed vector can do 8 multiplications at once. As we have
     // 25 multiplications to do we will need to use at least 3 packed vectors
@@ -133,16 +139,16 @@ pub(crate) fn quintic_mul_packed<FP>(
             b[1],
             b[4],
             b[2],
-            b_0_minus_3,
+            b0_minus_b3,
             b[3],
-            b_1_minus_4,
+            b1_minus_b4,
             b[4],
             b[2],
-            b_1_minus_4,
+            b1_minus_b4,
             b[2],
-            b_3_minus_b_1_minus_4,
-            b_4_minus_2,
-            b_0_minus_3,
+            b3_plus_b4_minus_b_1,
+            b4_minus_b2,
+            b0_minus_b3,
             zero,
         ]),
         PackedMontyField31AVX512([
@@ -150,12 +156,12 @@ pub(crate) fn quintic_mul_packed<FP>(
             b[2],
             b[0],
             b[3],
-            b_1_minus_4,
-            b_4_minus_2,
+            b1_minus_b4,
+            b4_minus_b2,
             b[2],
-            b_0_minus_3,
+            b0_minus_b3,
             b[3],
-            b_1_minus_4,
+            b1_minus_b4,
             zero,
             zero,
             zero,
@@ -187,16 +193,16 @@ pub(crate) fn quintic_mul_packed(a: &[KoalaBear; 5], b: &[KoalaBear; 5], res: &m
     use p3_field::PrimeCharacteristicRing;
     use p3_monty_31::PackedMontyField31Neon;
 
-    let b_0_minus_3 = b[0] - b[3];
-    let b_1_minus_4 = b[1] - b[4];
-    let b_4_minus_2 = b[4] - b[2];
-    let b_3_minus_b_1_minus_4 = b[3] - b_1_minus_4;
+    let b0_minus_b3 = b[0] - b[3];
+    let b1_minus_b4 = b[1] - b[4];
+    let b4_minus_b2 = b[4] - b[2];
+    let b3_plus_b4_minus_b_1 = b[3] - b1_minus_b4;
 
-    // Constant term = a0*b0 + w(a1*b4 + a2*b3 + a3*b2 + a4*b1)
-    // Linear term = a0*b1 + a1*b0 + w(a2*b4 + a3*b3 + a4*b2)
-    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b4 + a4*b3)
-    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0 + w*a4*b4
-    // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 + a4*b0
+    // Constant term = a0*b0 + a1*b4 + a2*b3 + a3*b2 + a4*b1 - a4*b4
+    // Linear term = a0*b1 + a1*b0 + a2*b4 + a3*b3 + a4*b2
+    // Square term = a0*b2 + a1*b1 - a1*b4 + a2*b0 - a2*b3 + a3*b4 - a3*b2 + a4*b3 - a4*b1 + a4*b4
+    // Cubic term = a0*b3 + a1*b2 + a2*b1 - a2*b4 + a3*b0 - a3*b3 + a4*b4 - a4*b2
+    // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 - a3*b4 + a4*b0 - a4*b3
     let lhs: [PackedMontyField31Neon<crate::KoalaBearParameters>; 5] = [
         a[0].into(),
         a[1].into(),
@@ -205,11 +211,11 @@ pub(crate) fn quintic_mul_packed(a: &[KoalaBear; 5], b: &[KoalaBear; 5], res: &m
         a[4].into(),
     ];
     let rhs = [
-        PackedMontyField31Neon([b[0], b[1], b[2], b[4]]),
-        PackedMontyField31Neon([b[4], b[0], b_1_minus_4, b[3]]),
-        PackedMontyField31Neon([b[3], b[4], b_0_minus_3, b[2]]),
-        PackedMontyField31Neon([b[2], b[3], b_4_minus_2, b_1_minus_4]),
-        PackedMontyField31Neon([b_1_minus_4, b[2], b_3_minus_b_1_minus_4, b_0_minus_3]),
+        PackedMontyField31Neon([b[0], b[1], b[2], b[3]]),
+        PackedMontyField31Neon([b[4], b[0], b1_minus_b4, b[2]]),
+        PackedMontyField31Neon([b[3], b[4], b0_minus_b3, b1_minus_b4]),
+        PackedMontyField31Neon([b[2], b[3], b4_minus_b2, b0_minus_b3]),
+        PackedMontyField31Neon([b1_minus_b4, b[2], b3_plus_b4_minus_b_1, b4_minus_b2]),
     ];
 
     let dot = PackedMontyField31Neon::dot_product(&lhs, &rhs).0;
@@ -217,6 +223,6 @@ pub(crate) fn quintic_mul_packed(a: &[KoalaBear; 5], b: &[KoalaBear; 5], res: &m
     res[..4].copy_from_slice(&dot);
     res[4] = KoalaBear::dot_product::<5>(
         &[a[0], a[1], a[2], a[3], a[4]],
-        &[b[4], b[3], b[2], b_1_minus_4, b_0_minus_3],
+        &[b[4], b[3], b[2], b1_minus_b4, b0_minus_b3],
     );
 }
