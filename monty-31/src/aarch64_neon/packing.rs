@@ -434,9 +434,11 @@ fn cube<MPNeon: MontyParametersNeon>(val: uint32x4_t) -> uint32x4_t {
     }
 }
 
-/// Compute `val^5` using the addition chain `x^5 = (x^2)^2 * x`.
+/// Take the fifth power of the MontyField31 field elements.
 ///
-/// This minimizes full reductions.
+/// # Safety
+/// Inputs must be unsigned 32-bit integers in canonical form [0, ..., P).
+/// Outputs will be a unsigned 32-bit integers in canonical form [0, ..., P).
 #[inline]
 #[must_use]
 fn exp_5<MPNeon: MontyParametersNeon>(val: uint32x4_t) -> uint32x4_t {
