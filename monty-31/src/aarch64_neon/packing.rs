@@ -464,9 +464,12 @@ fn exp_5<MPNeon: MontyParametersNeon>(val: uint32x4_t) -> uint32x4_t {
     }
 }
 
-/// Compute `val^7` using the addition chain `x^7 = (x^2 * x) * (x^2)^2`.
+```suggestion
+/// Take the seventh power of the MontyField31 field elements.
 ///
-/// This minimizes full reductions by reusing intermediate products.
+/// # Safety
+/// Inputs must be unsigned 32-bit integers in canonical form [0, ..., P).
+/// Outputs will be a unsigned 32-bit integers in canonical form [0, ..., P).
 #[inline]
 #[must_use]
 fn exp_7<MPNeon: MontyParametersNeon>(val: uint32x4_t) -> uint32x4_t {
