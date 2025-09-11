@@ -388,6 +388,11 @@ fn get_reduced_d<MPNeon: MontyParametersNeon>(c_hi: int32x4_t, qp_hi: int32x4_t)
     }
 }
 
+/// Multiply MontyField31 field elements.
+///
+/// # Safety
+/// Inputs must be unsigned 32-bit integers in canonical form [0, ..., P).
+/// Outputs will be a unsigned 32-bit integers in canonical form [0, ..., P).
 #[inline]
 #[must_use]
 fn mul<MPNeon: MontyParametersNeon>(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
@@ -414,6 +419,11 @@ fn mul<MPNeon: MontyParametersNeon>(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x
     }
 }
 
+/// Take cube of MontyField31 field elements.
+///
+/// # Safety
+/// Inputs must be unsigned 32-bit integers in canonical form [0, ..., P).
+/// Outputs will be a unsigned 32-bit integers in canonical form [0, ..., P).
 #[inline]
 #[must_use]
 fn cube<MPNeon: MontyParametersNeon>(val: uint32x4_t) -> uint32x4_t {
@@ -464,7 +474,6 @@ fn exp_5<MPNeon: MontyParametersNeon>(val: uint32x4_t) -> uint32x4_t {
     }
 }
 
-```suggestion
 /// Take the seventh power of the MontyField31 field elements.
 ///
 /// # Safety
