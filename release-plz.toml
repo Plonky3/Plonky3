@@ -21,7 +21,7 @@ name = "p3-blake3-air"
 version_group = "plonky3"
 
 [[package]]
-name = "p3-bn254-fr"
+name = "p3-bn254"
 version_group = "plonky3"
 
 [[package]]
