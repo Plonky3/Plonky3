@@ -736,3 +736,24 @@ pub(crate) fn base_mul_packed<FP, const WIDTH: usize>(
         _ => panic!("Unsupported binomial extension degree: {}", WIDTH),
     }
 }
+
+/// Raise MontyField31 field elements to a small constant power `D`.
+///
+/// `D` must be one of 3, 5, or 7, otherwise this function will panic at compile time.
+///
+/// # Safety
+/// Inputs must be unsigned 32-bit integers in canonical form [0, ..., P).
+/// Outputs will be a unsigned 32-bit integers in canonical form [0, ..., P).
+#[inline(always)]
+#[must_use]
+pub(crate) fn exp_small<PMP, const D: u64>(val: uint32x4_t) -> uint32x4_t
+where
+    PMP: PackedMontyParameters + FieldParameters,
+{
+    match D {
+        3 => cube::<PMP>(val),
+        5 => exp_5::<PMP>(val),
+        7 => exp_7::<PMP>(val),
+        _ => panic!("No exp function for given D"),
+    }
+}

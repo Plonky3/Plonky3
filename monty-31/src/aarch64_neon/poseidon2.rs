@@ -1,17 +1,18 @@
 //! Vectorized Neon implementation of Poseidon2 for MontyField31
 
 use alloc::vec::Vec;
-use core::arch::aarch64::uint32x4_t;
+use core::arch::aarch64::{self, uint32x4_t};
 use core::marker::PhantomData;
 use core::mem::transmute;
 
 use p3_field::{PrimeCharacteristicRing, uint32x4_mod_add, uint32x4_mod_sub};
 use p3_poseidon2::{
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, InternalLayer,
-    InternalLayerConstructor, MDSMat4, add_rc_and_sbox_generic, external_initial_permute_state,
+    InternalLayerConstructor, MDSMat4, external_initial_permute_state,
     external_terminal_permute_state,
 };
 
+use super::exp_small;
 use super::utils::halve_neon;
 use crate::{
     FieldParameters, MontyField31, MontyParameters, PackedMontyField31Neon, PackedMontyParameters,
@@ -131,6 +132,10 @@ pub struct Poseidon2InternalLayerMonty31<
 > {
     /// The original, scalar round constants for each internal round.
     pub(crate) internal_constants: Vec<MontyField31<PMP>>,
+    /// The pre-processed round constants, packed into NEON vectors in negative form (`c - P`).
+    ///
+    /// This format is optimized for the vectorized permutation loop.
+    packed_internal_constants: Vec<uint32x4_t>,
     _phantom: PhantomData<ILP>,
 }
 
@@ -138,8 +143,13 @@ impl<FP: FieldParameters, const WIDTH: usize, ILP: InternalLayerParametersNeon<F
     InternalLayerConstructor<MontyField31<FP>> for Poseidon2InternalLayerMonty31<FP, WIDTH, ILP>
 {
     fn new_from_constants(internal_constants: Vec<MontyField31<FP>>) -> Self {
+        let packed_internal_constants = internal_constants
+            .iter()
+            .map(|c| convert_to_vec_neg_form_neon::<FP>(c.value as i32))
+            .collect();
         Self {
             internal_constants,
+            packed_internal_constants,
             _phantom: PhantomData,
         }
     }
@@ -174,17 +184,19 @@ where
             // for optimized processing.
             let mut internal_state = InternalLayer16::from_packed_field_array(*state);
 
-            self.internal_constants.iter().for_each(|&c| {
+            self.packed_internal_constants.iter().for_each(|&rc| {
                 // Apply AddRoundConstant and the S-Box to the first state element (`s0`).
-                add_rc_and_sbox_generic(&mut internal_state.s0, c);
+                add_rc_and_sbox::<FP, D>(&mut internal_state.s0, rc);
 
                 // Compute the sum of all other state elements (`s_hi`).
+                //
                 // This can execute in parallel with the S-box operation on `s0`.
                 let s_hi_transmuted: &[PackedMontyField31Neon<FP>; 15] =
                     transmute(&internal_state.s_hi);
                 let sum_tail = PackedMontyField31Neon::<FP>::sum_array::<15>(s_hi_transmuted);
 
                 // Perform the diagonal multiplication on `s_hi`.
+                //
                 // This can also execute in parallel with the S-box.
                 ILP::diagonal_mul(&mut internal_state.s_hi);
 
@@ -242,17 +254,19 @@ where
             // for optimized processing.
             let mut internal_state = InternalLayer24::from_packed_field_array(*state);
 
-            self.internal_constants.iter().for_each(|&c| {
+            self.packed_internal_constants.iter().for_each(|&rc| {
                 // Apply AddRoundConstant and the S-Box to the first state element (`s0`).
-                add_rc_and_sbox_generic(&mut internal_state.s0, c);
+                add_rc_and_sbox::<FP, D>(&mut internal_state.s0, rc);
 
                 // Compute the sum of all other state elements (`s_hi`).
+                //
                 // This can execute in parallel with the S-box operation on `s0`.
                 let s_hi_transmuted: &[PackedMontyField31Neon<FP>; 23] =
                     transmute(&internal_state.s_hi);
                 let sum_tail = PackedMontyField31Neon::<FP>::sum_array::<23>(s_hi_transmuted);
 
                 // Perform the diagonal multiplication on `s_hi`.
+                //
                 // This can also execute in parallel with the S-box.
                 ILP::diagonal_mul(&mut internal_state.s_hi);
 
@@ -287,6 +301,10 @@ where
 pub struct Poseidon2ExternalLayerMonty31<MP: MontyParameters, const WIDTH: usize> {
     /// The original, scalar round constants for both initial and terminal external rounds.
     pub(crate) external_constants: ExternalLayerConstants<MontyField31<MP>, WIDTH>,
+    /// Pre-processed constants for the initial external rounds, packed into NEON vectors in negative form (`c - P`).
+    packed_initial_external_constants: Vec<[uint32x4_t; WIDTH]>,
+    /// Pre-processed constants for the terminal external rounds, packed into NEON vectors in negative form (`c - P`).
+    packed_terminal_external_constants: Vec<[uint32x4_t; WIDTH]>,
 }
 
 impl<FP: FieldParameters, const WIDTH: usize> ExternalLayerConstructor<MontyField31<FP>, WIDTH>
@@ -295,7 +313,21 @@ impl<FP: FieldParameters, const WIDTH: usize> ExternalLayerConstructor<MontyFiel
     fn new_from_constants(
         external_constants: ExternalLayerConstants<MontyField31<FP>, WIDTH>,
     ) -> Self {
-        Self { external_constants }
+        let packed_initial_external_constants = external_constants
+            .get_initial_constants()
+            .iter()
+            .map(|arr| arr.map(|c| convert_to_vec_neg_form_neon::<FP>(c.value as i32)))
+            .collect();
+        let packed_terminal_external_constants = external_constants
+            .get_terminal_constants()
+            .iter()
+            .map(|arr| arr.map(|c| convert_to_vec_neg_form_neon::<FP>(c.value as i32)))
+            .collect();
+        Self {
+            external_constants,
+            packed_initial_external_constants,
+            packed_terminal_external_constants,
+        }
     }
 }
 
@@ -308,8 +340,8 @@ where
     fn permute_state_initial(&self, state: &mut [PackedMontyField31Neon<FP>; WIDTH]) {
         external_initial_permute_state(
             state,
-            self.external_constants.get_initial_constants(),
-            add_rc_and_sbox_generic,
+            &self.packed_initial_external_constants,
+            add_rc_and_sbox::<FP, D>,
             &MDSMat4,
         );
     }
@@ -318,10 +350,85 @@ where
     fn permute_state_terminal(&self, state: &mut [PackedMontyField31Neon<FP>; WIDTH]) {
         external_terminal_permute_state(
             state,
-            self.external_constants.get_terminal_constants(),
-            add_rc_and_sbox_generic,
+            &self.packed_terminal_external_constants,
+            add_rc_and_sbox::<FP, D>,
             &MDSMat4,
         );
+    }
+}
+
+/// Converts a scalar constant into a packed NEON vector in "negative form".
+///
+/// This is a pre-computation step for round constants. Instead of storing a constant `c`
+/// and performing a modular addition `(val + c) mod P` in the permutation loop, we pre-compute
+/// `c' = c - P`. This allows the round update to be a simple, non-modular signed integer
+/// addition `val + c'`, which is significantly faster.
+#[inline(always)]
+fn convert_to_vec_neg_form_neon<MP: MontyParameters>(input: i32) -> uint32x4_t {
+    unsafe {
+        // Perform the subtraction as a standard integer operation.
+        //
+        // This computes the "negative form" of the constant.
+        let input_sub_p = input - (MP::PRIME as i32);
+
+        // Broadcast (duplicate) the scalar result into all four lanes of a 128-bit NEON vector.
+        let vec_s32 = aarch64::vdupq_n_s32(input_sub_p);
+
+        // Reinterpret the bits of the signed vector as an unsigned vector.
+        //
+        // This is a zero-cost operation that only changes the type for the Rust compiler.
+        aarch64::vreinterpretq_u32_s32(vec_s32)
+    }
+}
+
+/// Performs the AddRoundConstant and S-Box operations of a Poseidon round (`x -> (x + c)^D`).
+///
+/// This function combines two steps for efficiency. It takes a vector of field elements `val`
+/// and adds the pre-formatted round constant `rc`. The result is then raised to the power `D`.
+///
+/// A key optimization is that the round constants `rc` are stored in a negative form `c - P`.
+/// This allows for a simple integer addition `val + rc` without an intermediate modular
+/// reduction. The result of this addition is in the range `[-P, P)`. This non-canonical
+/// result is then reduced back to `[0, P)` before the exponentiation is applied.
+///
+/// # Safety
+/// - `val` must contain elements in canonical form `[0, P)`.
+/// - `rc` must contain elements represented as `c - P`, which are in `[-P, 0]`.
+fn add_rc_and_sbox<PMP, const D: u64>(val: &mut PackedMontyField31Neon<PMP>, rc: uint32x4_t)
+where
+    PMP: PackedMontyParameters + FieldParameters,
+{
+    unsafe {
+        // Unwrap the field element vector to its raw u32 representation.
+        let vec_val = val.to_vector();
+
+        // Reinterpret both the state and the round constant vectors as signed integers.
+        let vec_val_s32 = aarch64::vreinterpretq_s32_u32(vec_val);
+        let rc_s32 = aarch64::vreinterpretq_s32_u32(rc);
+
+        // Perform a standard signed 32-bit addition.
+        // The result is guaranteed to be in the range `[-P, P)`.
+        let val_plus_rc = aarch64::vaddq_s32(vec_val_s32, rc_s32);
+
+        // Create a mask where lanes are all-ones (-1) if the value is negative.
+        let is_negative_mask = aarch64::vcltzq_s32(val_plus_rc);
+
+        // Use the mask to create a correction vector. This vector will contain `P` in lanes
+        // that were negative, and `0` otherwise.
+        let correction = aarch64::vandq_u32(is_negative_mask, PMP::PACKED_P);
+
+        // Add the correction to bring the value into the canonical range [0, P).
+        // - If a lane was negative, this calculates `(val + rc) + P`.
+        // - If a lane was non-negative, this calculates `(val + rc) + 0`.
+        let val_plus_rc_canonical =
+            aarch64::vaddq_u32(aarch64::vreinterpretq_u32_s32(val_plus_rc), correction);
+
+        // Apply the power S-box `x -> x^D`.
+        // The input is guaranteed to be in the canonical range `[0, P)`.
+        let output = exp_small::<PMP, D>(val_plus_rc_canonical);
+
+        // Wrap the final canonical result in the `PackedMontyField31Neon` type.
+        *val = PackedMontyField31Neon::<PMP>::from_vector(output);
     }
 }
 
