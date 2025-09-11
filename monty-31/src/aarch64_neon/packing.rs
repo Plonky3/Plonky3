@@ -186,6 +186,37 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31Neon<FP>
         // SAFETY: this is a repr(transparent) wrapper around an array.
         unsafe { reconstitute_from_base(MontyField31::<FP>::zero_vec(len * WIDTH)) }
     }
+
+    #[inline(always)]
+    fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        // We provide specialised code for the powers 3, 5, 7 as these turn up regularly.
+        // The other powers could be specialised similarly but we ignore this for now.
+        match POWER {
+            0 => Self::ONE,
+            1 => *self,
+            2 => self.square(),
+            3 => self.cube(),
+            4 => self.square().square(),
+            5 => {
+                let val = self.to_vector();
+                unsafe {
+                    // Safety: `exp_5` returns values in canonical form when given values in canonical form.
+                    let res = exp_5::<FP>(val);
+                    Self::from_vector(res)
+                }
+            }
+            6 => self.square().cube(),
+            7 => {
+                let val = self.to_vector();
+                unsafe {
+                    // Safety: `exp_7` returns values in canonical form when given values in canonical form.
+                    let res = exp_7::<FP>(val);
+                    Self::from_vector(res)
+                }
+            }
+            _ => self.exp_u64(POWER),
+        }
+    }
 }
 
 impl_add_base_field!(
@@ -357,6 +388,11 @@ fn get_reduced_d<MPNeon: MontyParametersNeon>(c_hi: int32x4_t, qp_hi: int32x4_t)
     }
 }
 
+/// Multiply MontyField31 field elements.
+///
+/// # Safety
+/// Inputs must be unsigned 32-bit integers in canonical form [0, ..., P).
+/// Outputs will be a unsigned 32-bit integers in canonical form [0, ..., P).
 #[inline]
 #[must_use]
 fn mul<MPNeon: MontyParametersNeon>(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
@@ -383,6 +419,11 @@ fn mul<MPNeon: MontyParametersNeon>(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x
     }
 }
 
+/// Take cube of MontyField31 field elements.
+///
+/// # Safety
+/// Inputs must be unsigned 32-bit integers in canonical form [0, ..., P).
+/// Outputs will be a unsigned 32-bit integers in canonical form [0, ..., P).
 #[inline]
 #[must_use]
 fn cube<MPNeon: MontyParametersNeon>(val: uint32x4_t) -> uint32x4_t {
@@ -400,6 +441,72 @@ fn cube<MPNeon: MontyParametersNeon>(val: uint32x4_t) -> uint32x4_t {
         let c_hi_3 = get_c_hi(val_2, val);
         let qp_hi_3 = get_qp_hi::<MPNeon>(val_2, mu_val);
         get_reduced_d::<MPNeon>(c_hi_3, qp_hi_3)
+    }
+}
+
+/// Take the fifth power of the MontyField31 field elements.
+///
+/// # Safety
+/// Inputs must be unsigned 32-bit integers in canonical form [0, ..., P).
+/// Outputs will be a unsigned 32-bit integers in canonical form [0, ..., P).
+#[inline]
+#[must_use]
+fn exp_5<MPNeon: MontyParametersNeon>(val: uint32x4_t) -> uint32x4_t {
+    unsafe {
+        let val_s = aarch64::vreinterpretq_s32_u32(val);
+        let mu_val = mulby_mu::<MPNeon>(val_s);
+
+        // Compute val^2 in signed form (-P < val_2 < P)
+        let c_hi_2 = get_c_hi(val_s, val_s);
+        let qp_hi_2 = get_qp_hi::<MPNeon>(val_s, mu_val);
+        let val_2 = get_d(c_hi_2, qp_hi_2);
+
+        // Compute val^4 in signed form (-P < val_4 < P)
+        let mu_val_2 = mulby_mu::<MPNeon>(val_2);
+        let c_hi_4 = get_c_hi(val_2, val_2);
+        let qp_hi_4 = get_qp_hi::<MPNeon>(val_2, mu_val_2);
+        let val_4 = get_d(c_hi_4, qp_hi_4);
+
+        // Compute val^5 = val^4 * val and do a final reduction.
+        let c_hi_5 = get_c_hi(val_4, val_s);
+        let qp_hi_5 = get_qp_hi::<MPNeon>(val_4, mu_val);
+        get_reduced_d::<MPNeon>(c_hi_5, qp_hi_5)
+    }
+}
+
+/// Take the seventh power of the MontyField31 field elements.
+///
+/// # Safety
+/// Inputs must be unsigned 32-bit integers in canonical form [0, ..., P).
+/// Outputs will be a unsigned 32-bit integers in canonical form [0, ..., P).
+#[inline]
+#[must_use]
+fn exp_7<MPNeon: MontyParametersNeon>(val: uint32x4_t) -> uint32x4_t {
+    unsafe {
+        let val_s = aarch64::vreinterpretq_s32_u32(val);
+        let mu_val = mulby_mu::<MPNeon>(val_s);
+
+        // Compute val^2 in signed form (-P < val_2 < P)
+        let c_hi_2 = get_c_hi(val_s, val_s);
+        let qp_hi_2 = get_qp_hi::<MPNeon>(val_s, mu_val);
+        let val_2 = get_d(c_hi_2, qp_hi_2);
+
+        // Compute val^3 in signed form (-P < val_3 < P)
+        let c_hi_3 = get_c_hi(val_2, val_s);
+        let qp_hi_3 = get_qp_hi::<MPNeon>(val_2, mu_val);
+        let val_3 = get_d(c_hi_3, qp_hi_3);
+
+        // Compute val^4 in signed form (-P < val_4 < P)
+        let mu_val_2 = mulby_mu::<MPNeon>(val_2);
+        let c_hi_4 = get_c_hi(val_2, val_2);
+        let qp_hi_4 = get_qp_hi::<MPNeon>(val_2, mu_val_2);
+        let val_4 = get_d(c_hi_4, qp_hi_4);
+
+        // Compute val^7 = val^4 * val^3 and do a final reduction.
+        let mu_val_3 = mulby_mu::<MPNeon>(val_3);
+        let c_hi_7 = get_c_hi(val_4, val_3);
+        let qp_hi_7 = get_qp_hi::<MPNeon>(val_4, mu_val_3);
+        get_reduced_d::<MPNeon>(c_hi_7, qp_hi_7)
     }
 }
 
