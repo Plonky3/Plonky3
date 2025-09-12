@@ -366,40 +366,6 @@ fn get_qp_hi<MPNeon: MontyParametersNeon>(lhs: int32x4_t, mu_rhs: int32x4_t) -> 
     }
 }
 
-/// Reduce from a signed integer in `(-P, P)` to a signed integer in canonical form, `[0, P)`.
-///
-/// The extra inputs `c_hi, qp_hi` allow us to determine the sign of `d` in parallel to the computation
-/// of `d`.
-///
-/// Safety:
-/// Assumes that `d` is proportional (with positive constant) to `c_hi - qp_hi` meaning the sign of the former is
-/// eqaul to the sign of the latter.
-#[inline]
-#[must_use]
-fn reduced_to_canonical<MPNeon: MontyParametersNeon>(
-    d: int32x4_t,
-    c_hi: int32x4_t,
-    qp_hi: int32x4_t,
-) -> int32x4_t {
-    // We want this to compile to:
-    //      cmgt     underflow.4s, qp_hi.4s, c_hi.4s
-    //      mls      d.4s, underflow.4s, P.4s
-    // throughput: .5 cyc/vec (8 els/cyc)
-    // latency: 3 cyc
-
-    unsafe {
-        // We reduce D to canonical form. D is negative iff `c_hi > qp_hi`, so if that's the
-        // case then we add P. Note that if `c_hi > qp_hi` then `underflow` is -1, so we must
-        // _subtract_ `underflow` * P.
-        let underflow = aarch64::vcltq_s32(c_hi, qp_hi);
-        transmute(aarch64::vmlsq_u32(
-            transmute(d),
-            confuse_compiler(underflow),
-            MPNeon::PACKED_P,
-        ))
-    }
-}
-
 /// Multiply MontyField31 field elements.
 ///
 /// # Safety
@@ -433,7 +399,8 @@ fn mul<MPNeon: MontyParametersNeon>(lhs: int32x4_t, rhs: int32x4_t) -> uint32x4_
 /// # Safety
 /// Both `lhs` and `rhs` must be signed 32-bit integers in the range (-P, P).
 /// `mu_rhs` must be equal to `MPNeon::PACKED_MU * rhs mod 2^32`
-/// Outputs will be signed 32-bit integers either the range (-P, P) if CANONICAL is set to false
+///
+/// Output will be signed 32-bit integers either in (-P, P) if CANONICAL is set to false
 /// or in [0, P) if CANONICAL is set to true.
 #[inline]
 #[must_use]
@@ -442,12 +409,50 @@ fn mul_with_precomp<MPNeon: MontyParametersNeon, const CANONICAL: bool>(
     rhs: int32x4_t,
     mu_rhs: int32x4_t,
 ) -> int32x4_t {
+    // If CANONICAL:
+    //  We want this to compile to:
+    //      sqdmulh  c_hi.4s, lhs.4s, rhs.4s
+    //      mul      q.4s, lhs.4s, mu_rhs.4s
+    //      sqdmulh  qp_hi.4s, q.4s, P.4s
+    //      shsub    res.4s, c_hi.4s, qp_hi.4s
+    //      cmgt     underflow.4s, qp_hi.4s, c_hi.4s
+    //      mls      res.4s, underflow.4s, P.4s
+    //
+    //      throughput: 1.5 cyc/vec (2.66 els/cyc)
+    //      latency: 11 cyc
+    //
+    // If !CANONICAL:
+    //  We want this to compile to:
+    //      sqdmulh  c_hi.4s, lhs.4s, rhs.4s
+    //      mul      q.4s, lhs.4s, mu_rhs.4s
+    //      sqdmulh  qp_hi.4s, q.4s, P.4s
+    //      shsub    res.4s, c_hi.4s, qp_hi.4s
+    //
+    //      throughput: 1 cyc/vec (4 els/cyc)
+    //      latency: 8 cyc
+    //
     unsafe {
         let c_hi = get_c_hi(lhs, rhs);
         let qp_hi = get_qp_hi::<MPNeon>(lhs, mu_rhs);
         let d = aarch64::vhsubq_s32(c_hi, qp_hi);
+
+        // This branch will be removed by the compiler.
         if CANONICAL {
-            reduced_to_canonical::<MPNeon>(d, c_hi, qp_hi)
+            // We reduce d to canonical form. d is negative iff `c_hi > qp_hi`, so if that's the
+            // case then we add P. Note that if `c_hi > qp_hi` then `underflow` is -1, so we must
+            // _subtract_ `underflow` * P.
+            let underflow = aarch64::vcltq_s32(c_hi, qp_hi);
+
+            // As underflow and MPNeon::PACKED_P are unsigned we use the unsigned version of multiply
+            // and subtract. Note that on bits, the signed and unsigned versions are literally identical.
+            let reduced = transmute(aarch64::vmlsq_u32(
+                aarch64::vreinterpretq_s32_u32(u_d),
+                confuse_compiler(underflow),
+                MPNeon::PACKED_P,
+            ));
+
+            // We convert back to int32x4_t to match the function output.
+            aarch64::vreinterpretq_u32_s32(reduced)
         } else {
             d
         }
@@ -482,14 +487,19 @@ fn cube<MPNeon: MontyParametersNeon>(val: int32x4_t) -> uint32x4_t {
 #[inline]
 #[must_use]
 fn exp_5<MPNeon: MontyParametersNeon>(val: int32x4_t) -> uint32x4_t {
+    // throughput: 4 cyc/vec (1 els/cyc)
+    // latency: 30 cyc
+
     unsafe {
         let mu_val = mulby_mu::<MPNeon>(val);
 
         let val_2 = mul_with_precomp::<MPNeon, false>(val, val, mu_val);
-        let mu_val_2 = mulby_mu::<MPNeon>(val_2);
 
-        let val_4 = mul_with_precomp::<MPNeon, false>(val_2, val_2, mu_val_2);
-        let val_5 = mul_with_precomp::<MPNeon, true>(val_4, val, mu_val);
+        // mu_val_2 and val_3 can be computed in parallel.
+        let mu_val_2 = mulby_mu::<MPNeon>(val_2);
+        let val_3 = mul_with_precomp::<MPNeon, false>(val_2, val, mu_val);
+
+        let val_5 = mul_with_precomp::<MPNeon, true>(val_3, val_2, mu_val_2);
         transmute(val_5)
     }
 }
@@ -502,16 +512,21 @@ fn exp_5<MPNeon: MontyParametersNeon>(val: int32x4_t) -> uint32x4_t {
 #[inline]
 #[must_use]
 fn exp_7<MPNeon: MontyParametersNeon>(val: int32x4_t) -> uint32x4_t {
+    // throughput: 5.25 cyc/vec (0.76 els/cyc)
+    // latency: 33 cyc
+
     unsafe {
         let mu_val = mulby_mu::<MPNeon>(val);
 
         let val_2 = mul_with_precomp::<MPNeon, false>(val, val, mu_val);
+
+        // mu_val_2, val_4 and val_3, mu_val_3 can be computed in parallel.
         let mu_val_2 = mulby_mu::<MPNeon>(val_2);
-
         let val_3 = mul_with_precomp::<MPNeon, false>(val_2, val, mu_val);
-        let mu_val_3 = mulby_mu::<MPNeon>(val_3);
 
+        let mu_val_3 = mulby_mu::<MPNeon>(val_3);
         let val_4 = mul_with_precomp::<MPNeon, false>(val_2, val_2, mu_val_2);
+
         let val_7 = mul_with_precomp::<MPNeon, true>(val_4, val_3, mu_val_3);
         transmute(val_7)
     }
