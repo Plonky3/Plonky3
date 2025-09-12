@@ -41,9 +41,9 @@ pub trait MontyParametersNeon {
 pub struct PackedMontyField31Neon<PMP: PackedMontyParameters>(pub [MontyField31<PMP>; WIDTH]);
 
 impl<PMP: PackedMontyParameters> PackedMontyField31Neon<PMP> {
+    /// Get an arch-specific vector representing the packed values.
     #[inline]
     #[must_use]
-    /// Get an arch-specific vector representing the packed values.
     pub(crate) fn to_vector(self) -> uint32x4_t {
         unsafe {
             // Safety: `MontyField31` is `repr(transparent)` so it can be transmuted to `u32`. It
@@ -55,9 +55,9 @@ impl<PMP: PackedMontyParameters> PackedMontyField31Neon<PMP> {
         }
     }
 
+    /// Get an arch-specific vector representing the packed values.
     #[inline]
     #[must_use]
-    /// Get an arch-specific vector representing the packed values.
     pub(crate) fn to_signed_vector(self) -> int32x4_t {
         unsafe {
             // Safety: `MontyField31` is `repr(transparent)` so it can be transmuted to `u32` furthermore
@@ -70,11 +70,11 @@ impl<PMP: PackedMontyParameters> PackedMontyField31Neon<PMP> {
         }
     }
 
-    #[inline]
     /// Make a packed field vector from an arch-specific vector.
     ///
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid `MontyField31`.
     /// In particular, each element of vector must be in `0..P` (canonical form).
+    #[inline]
     pub(crate) unsafe fn from_vector(vector: uint32x4_t) -> Self {
         unsafe {
             // Safety: It is up to the user to ensure that elements of `vector` represent valid
