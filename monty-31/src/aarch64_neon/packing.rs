@@ -366,23 +366,7 @@ fn get_qp_hi<MPNeon: MontyParametersNeon>(lhs: int32x4_t, mu_rhs: int32x4_t) -> 
     }
 }
 
-#[inline]
-#[must_use]
-fn get_d(c_hi: int32x4_t, qp_hi: int32x4_t) -> int32x4_t {
-    // We want this to compile to:
-    //      shsub    res.4s, c_hi.4s, qp_hi.4s
-    // throughput: .25 cyc/vec (16 els/cyc)
-    // latency: 2 cyc
-
-    unsafe {
-        // Form D. Note that `c_hi` is C >> 31 and `qp_hi` is (Q P) >> 31, whereas we want
-        // (C - Q P) >> 32, so we need to subtract and divide by 2. Luckily NEON has an instruction
-        // for that! The lowest bit of `c_hi` and `qp_hi` is the same, so the division is exact.
-        aarch64::vhsubq_s32(c_hi, qp_hi)
-    }
-}
-
-/// Reduce d from a signed integer in `(-P, P)` to a signed integer in canonical form, `[0, P)`.
+/// Reduce from a signed integer in `(-P, P)` to a signed integer in canonical form, `[0, P)`.
 ///
 /// The extra inputs `c_hi, qp_hi` allow us to determine the sign of `d` in parallel to the computation
 /// of `d`.
@@ -399,7 +383,7 @@ fn reduced_to_canonical<MPNeon: MontyParametersNeon>(
 ) -> int32x4_t {
     // We want this to compile to:
     //      cmgt     underflow.4s, qp_hi.4s, c_hi.4s
-    //      mls      res.4s, underflow.4s, P.4s
+    //      mls      d.4s, underflow.4s, P.4s
     // throughput: .5 cyc/vec (8 els/cyc)
     // latency: 3 cyc
 
@@ -409,7 +393,7 @@ fn reduced_to_canonical<MPNeon: MontyParametersNeon>(
         // _subtract_ `underflow` * P.
         let underflow = aarch64::vcltq_s32(c_hi, qp_hi);
         transmute(aarch64::vmlsq_u32(
-            d,
+            transmute(d),
             confuse_compiler(underflow),
             MPNeon::PACKED_P,
         ))
@@ -461,7 +445,7 @@ fn mul_with_precomp<MPNeon: MontyParametersNeon, const CANONICAL: bool>(
     unsafe {
         let c_hi = get_c_hi(lhs, rhs);
         let qp_hi = get_qp_hi::<MPNeon>(lhs, mu_rhs);
-        let d = get_d::<MPNeon>(c_hi, qp_hi);
+        let d = aarch64::vhsubq_s32(c_hi, qp_hi);
         if CANONICAL {
             reduced_to_canonical(d, c_hi, qp_hi)
         } else {
