@@ -467,3 +467,30 @@ pub fn benchmark_base_mul_throughput<F: Field, A: Algebra<F> + Copy, const N: us
         )
     });
 }
+
+/// Benchmarks the `exp_const_u64` implementation for a given `POWER`.
+///
+/// This function measures the throughput of the exponentiation by applying the operation
+/// to a vector of `REPS` random elements.
+pub fn benchmark_exp_const<R: PrimeCharacteristicRing + Copy, const POWER: u64, const REPS: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
+    StandardUniform: Distribution<R>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    let input: Vec<R> = (0..REPS).map(|_| rng.random()).collect();
+
+    c.bench_function(&format!("{name} exp_const<{POWER}>/{REPS}"), |b| {
+        b.iter_batched(
+            || input.clone(),
+            |mut data| {
+                for x in data.iter_mut() {
+                    *x = x.exp_const_u64::<POWER>();
+                }
+                black_box(data);
+            },
+            BatchSize::SmallInput,
+        )
+    });
+}

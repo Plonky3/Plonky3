@@ -92,7 +92,9 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX512<PMP> {
     where
         PMP: FieldParameters,
     {
-        assert!(N <= WIDTH);
+        const {
+            assert!(N <= WIDTH);
+        }
         let mut out = Self::ZERO;
         out.0[..N].copy_from_slice(&arr);
         out

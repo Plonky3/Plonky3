@@ -116,7 +116,9 @@ pub(crate) fn mul_2exp_i<const I: i32, const I_PRIME: i32>(
         throughput: 1.33 cyc/vec
         latency: 3 cyc
     */
-    assert_eq!(I + I_PRIME, 31);
+    const {
+        assert!(I + I_PRIME == 31);
+    }
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
         let input = val.to_vector();
