@@ -397,28 +397,26 @@ where
         // Unwrap the field element vector to its raw u32 representation.
         let vec_val = val.to_vector();
 
-        // Reinterpret both the state and the round constant vectors as signed integers.
-        let vec_val_s32 = aarch64::vreinterpretq_s32_u32(vec_val);
-        let rc_s32 = aarch64::vreinterpretq_s32_u32(rc);
+        // Add the pre-computed `rc = c - P`.
+        //
+        // The result is congruent to `val + c`.
+        let t = aarch64::vaddq_u32(vec_val, rc);
 
-        // Perform a standard signed 32-bit addition.
-        // The result is guaranteed to be in the range `[-P, P)`.
-        let val_plus_rc = aarch64::vaddq_s32(vec_val_s32, rc_s32);
+        // Unconditionally add P to get the true sum `val + c`,
+        //
+        // The result is now in the range `[0, 2P)`.
+        let sum = aarch64::vaddq_u32(t, PMP::PACKED_P);
 
-        // Create a mask where lanes are all-ones (-1) if the value is negative.
-        let is_negative_mask = aarch64::vcltzq_s32(val_plus_rc);
+        // Compute the other reduction candidate: `sum - P`.
+        let diff = aarch64::vsubq_u32(sum, PMP::PACKED_P);
 
-        // Use the mask to create a correction vector. This vector will contain `P` in lanes
-        // that were negative, and `0` otherwise.
-        let correction = aarch64::vandq_u32(is_negative_mask, PMP::PACKED_P);
-
-        // Add the correction to bring the value into the canonical range [0, P).
-        // - If a lane was negative, this calculates `(val + rc) + P`.
-        // - If a lane was non-negative, this calculates `(val + rc) + 0`.
-        let val_plus_rc_canonical =
-            aarch64::vaddq_u32(aarch64::vreinterpretq_u32_s32(val_plus_rc), correction);
+        // Select the minimum to get a canonical result.
+        // - If `sum < P`, `diff` underflows to a large value, so `sum` is chosen.
+        // - If `sum >= P`, `diff` is `sum - P`, the correct result.
+        let val_plus_rc_canonical = aarch64::vminq_u32(sum, diff);
 
         // Apply the power S-box `x -> x^D`.
+        //
         // The input is guaranteed to be in the canonical range `[0, P)`.
         let output = exp_small::<PMP, D>(val_plus_rc_canonical);
 
