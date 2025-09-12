@@ -437,7 +437,7 @@ fn mul<MPNeon: MontyParametersNeon>(lhs: int32x4_t, rhs: int32x4_t) -> uint32x4_
 
     unsafe {
         let mu_rhs = mulby_mu::<MPNeon>(rhs);
-        let d = mul_with_precomp::<MPNeon, TRUE>(lhs, rhs, mu_rhs);
+        let d = mul_with_precomp::<MPNeon, true>(lhs, rhs, mu_rhs);
         transmute(d)
     }
 }
@@ -449,7 +449,7 @@ fn mul<MPNeon: MontyParametersNeon>(lhs: int32x4_t, rhs: int32x4_t) -> uint32x4_
 /// # Safety
 /// Both `lhs` and `rhs` must be signed 32-bit integers in the range (-P, P).
 /// `mu_rhs` must be equal to `MPNeon::PACKED_MU * rhs mod 2^32`
-/// Outputs will be signed 32-bit integers either the range (-P, P) if CANONICAL is set to False
+/// Outputs will be signed 32-bit integers either the range (-P, P) if CANONICAL is set to false
 /// or in [0, P) if CANONICAL is set to true.
 #[inline]
 #[must_use]
@@ -484,8 +484,8 @@ fn cube<MPNeon: MontyParametersNeon>(val: int32x4_t) -> uint32x4_t {
     unsafe {
         let mu_val = mulby_mu::<MPNeon>(val);
 
-        let val_2 = mul_with_precomp::<MPNeon, FALSE>(val, val, mu_val);
-        let val_3 = mul_with_precomp::<MPNeon, TRUE>(val_2, val, mu_val);
+        let val_2 = mul_with_precomp::<MPNeon, false>(val, val, mu_val);
+        let val_3 = mul_with_precomp::<MPNeon, true>(val_2, val, mu_val);
         transmute(val_3)
     }
 }
@@ -501,11 +501,11 @@ fn exp_5<MPNeon: MontyParametersNeon>(val: int32x4_t) -> uint32x4_t {
     unsafe {
         let mu_val = mulby_mu::<MPNeon>(val_s);
 
-        let val_2 = mul_with_precomp::<MPNeon, FALSE>(val, val, mu_val);
+        let val_2 = mul_with_precomp::<MPNeon, false>(val, val, mu_val);
         let mu_val_2 = mulby_mu::<MPNeon>(val_2);
 
-        let val_4 = mul_with_precomp::<MPNeon, FALSE>(val_2, val_2, mu_val_2);
-        let val_5 = mul_with_precomp::<MPNeon, TRUE>(val_4, val, mu_val);
+        let val_4 = mul_with_precomp::<MPNeon, false>(val_2, val_2, mu_val_2);
+        let val_5 = mul_with_precomp::<MPNeon, true>(val_4, val, mu_val);
         transmute(val_5)
     }
 }
@@ -521,14 +521,14 @@ fn exp_7<MPNeon: MontyParametersNeon>(val: int32x4_t) -> uint32x4_t {
     unsafe {
         let mu_val = mulby_mu::<MPNeon>(val_s);
 
-        let val_2 = mul_with_precomp::<MPNeon, FALSE>(val, val, mu_val);
+        let val_2 = mul_with_precomp::<MPNeon, false>(val, val, mu_val);
         let mu_val_2 = mulby_mu::<MPNeon>(val_2);
 
-        let val_3 = mul_with_precomp::<MPNeon, FALSE>(val_2, val, mu_val);
+        let val_3 = mul_with_precomp::<MPNeon, false>(val_2, val, mu_val);
         let mu_val_3 = mulby_mu::<MPNeon>(val_3);
 
-        let val_4 = mul_with_precomp::<MPNeon, FALSE>(val_2, val_2, mu_val_2);
-        let val_7 = mul_with_precomp::<MPNeon, TRUE>(val_4, val_3, mu_val_3);
+        let val_4 = mul_with_precomp::<MPNeon, false>(val_2, val_2, mu_val_2);
+        let val_7 = mul_with_precomp::<MPNeon, true>(val_4, val_3, mu_val_3);
         transmute(val_7)
     }
 }
