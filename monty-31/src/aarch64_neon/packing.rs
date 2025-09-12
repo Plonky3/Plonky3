@@ -447,7 +447,7 @@ fn mul_with_precomp<MPNeon: MontyParametersNeon, const CANONICAL: bool>(
         let qp_hi = get_qp_hi::<MPNeon>(lhs, mu_rhs);
         let d = aarch64::vhsubq_s32(c_hi, qp_hi);
         if CANONICAL {
-            reduced_to_canonical(d, c_hi, qp_hi)
+            reduced_to_canonical::<MPNeon>(d, c_hi, qp_hi)
         } else {
             d
         }
