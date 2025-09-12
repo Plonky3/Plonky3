@@ -61,7 +61,7 @@ impl<PMP: PackedMontyParameters> PackedMontyField31Neon<PMP> {
     pub(crate) fn to_signed_vector(self) -> int32x4_t {
         unsafe {
             // Safety: `MontyField31` is `repr(transparent)` so it can be transmuted to `u32` furthermore
-            // the u32 is garunteed to be less than `2^31` so it can be safely reinterpreted as an `i32`. It
+            // the u32 is guaranteed to be less than `2^31` so it can be safely reinterpreted as an `i32`. It
             // follows that `[MontyField31; WIDTH]` can be transmuted to `[i32; WIDTH]`, which can be
             // transmuted to `int32x4_t`, since arrays are guaranteed to be contiguous in memory.
             // Finally `PackedMontyField31Neon` is `repr(transparent)` so it can be transmuted to
@@ -388,7 +388,9 @@ fn mul<MPNeon: MontyParametersNeon>(lhs: int32x4_t, rhs: int32x4_t) -> uint32x4_
     unsafe {
         let mu_rhs = mulby_mu::<MPNeon>(rhs);
         let d = mul_with_precomp::<MPNeon, true>(lhs, rhs, mu_rhs);
-        transmute(d)
+
+        // Safe as mul_with_precomp::<MPNeon, true> returns integers in [0, P)
+        aarch64::vreinterpretq_u32_s32(d)
     }
 }
 
@@ -475,7 +477,9 @@ fn cube<MPNeon: MontyParametersNeon>(val: int32x4_t) -> uint32x4_t {
 
         let val_2 = mul_with_precomp::<MPNeon, false>(val, val, mu_val);
         let val_3 = mul_with_precomp::<MPNeon, true>(val_2, val, mu_val);
-        transmute(val_3)
+
+        // Safe as mul_with_precomp::<MPNeon, true> returns integers in [0, P)
+        aarch64::vreinterpretq_u32_s32(val_3)
     }
 }
 
@@ -500,7 +504,9 @@ fn exp_5<MPNeon: MontyParametersNeon>(val: int32x4_t) -> uint32x4_t {
         let val_3 = mul_with_precomp::<MPNeon, false>(val_2, val, mu_val);
 
         let val_5 = mul_with_precomp::<MPNeon, true>(val_3, val_2, mu_val_2);
-        transmute(val_5)
+
+        // Safe as mul_with_precomp::<MPNeon, true> returns integers in [0, P)
+        aarch64::vreinterpretq_u32_s32(val_5)
     }
 }
 
@@ -528,7 +534,9 @@ fn exp_7<MPNeon: MontyParametersNeon>(val: int32x4_t) -> uint32x4_t {
         let val_4 = mul_with_precomp::<MPNeon, false>(val_2, val_2, mu_val_2);
 
         let val_7 = mul_with_precomp::<MPNeon, true>(val_4, val_3, mu_val_3);
-        transmute(val_7)
+
+        // Safe as mul_with_precomp::<MPNeon, true> returns integers in [0, P)
+        aarch64::vreinterpretq_u32_s32(val_7)
     }
 }
 
