@@ -4,3 +4,5 @@ flamegraph.svg
 
 # Proptest data
 proptest-regressions/
+
+*.log

@@ -15,6 +15,8 @@ members = [
     "field-testing",
     "fri",
     "goldilocks",
+    "goldilocks-monty",
+    "goldilocks-wasm-benchmark",
     "interpolation",
     "keccak",
     "keccak-air",
@@ -25,6 +27,7 @@ members = [
     "mersenne-31",
     "monolith",
     "monty-31",
+    "monty-64",
     "multilinear-util",
     "poseidon",
     "poseidon2",
@@ -67,6 +70,9 @@ tracing-subscriber = { version = "0.3.17", default-features = false, features = 
     "alloc",
 ] }
 transpose = "0.2.3"
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+web-sys = "0.3"
 
 # Local dependencies
 p3-air = { path = "air", version = "0.3.0" }
@@ -83,6 +89,7 @@ p3-field = { path = "field", version = "0.3.0" }
 p3-field-testing = { path = "field-testing", version = "0.3.0" }
 p3-fri = { path = "fri", version = "0.3.0" }
 p3-goldilocks = { path = "goldilocks", version = "0.3.0" }
+p3-goldilocks-monty = { path = "goldilocks-monty", version = "0.3.0" }
 p3-interpolation = { path = "interpolation", version = "0.3.0" }
 p3-keccak = { path = "keccak", version = "0.3.0" }
 p3-keccak-air = { path = "keccak-air", version = "0.3.0" }

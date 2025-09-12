@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>Goldilocks Field Operations Benchmark</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .benchmark-section {
+            margin-bottom: 20px;
+            padding: 20px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            border-left: 4px solid #007bff;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            margin: 5px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        .results {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #e9ecef;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+        }
+        .log {
+            background-color: #212529;
+            color: #28a745;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            max-height: 300px;
+            overflow-y: auto;
+            margin-top: 20px;
+        }
+        .description {
+            color: #666;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔥 Goldilocks Field Operations Benchmark</h1>
+        
+        <div class="benchmark-section">
+            <h2>About This Benchmark</h2>
+            <p class="description">
+                This benchmark compares the performance of two Goldilocks field implementations:
+            </p>
+            <ul>
+                <li><strong>Standard Goldilocks:</strong> Direct implementation of field operations</li>
+                <li><strong>Goldilocks-Monty:</strong> Montgomery arithmetic optimization for improved performance</li>
+            </ul>
+            <p class="description">
+                Each test performs 1,000,000 field operations (addition or multiplication) and measures the execution time for more accurate benchmarking.
+            </p>
+        </div>
+
+        <div class="benchmark-section">
+            <h2>Individual Benchmarks</h2>
+            <button id="goldilocks-mult">Goldilocks Multiplication</button>
+            <button id="goldilocks-add">Goldilocks Addition</button>
+            <button id="monty-mult">Goldilocks-Monty Multiplication</button>
+            <button id="monty-add">Goldilocks-Monty Addition</button>
+            
+            <div id="results" class="results" style="display: none;">
+                <h3>Results:</h3>
+                <div id="result-content"></div>
+            </div>
+        </div>
+
+        <div class="benchmark-section">
+            <h2>Run All Benchmarks</h2>
+            <button id="run-all">🚀 Run All Benchmarks</button>
+        </div>
+
+        <div class="log" id="console-log">
+            <div>Console output will appear here...</div>
+        </div>
+    </div>
+
+    <script type="module">
+        import init, { 
+            benchmark_goldilocks_multiplication,
+            benchmark_goldilocks_addition,
+            benchmark_goldilocks_monty_multiplication,
+            benchmark_goldilocks_monty_addition,
+            run_all_benchmarks
+        } from './pkg/goldilocks_wasm_benchmark.js';
+
+        // Override console.log to display in our log area
+        const logArea = document.getElementById('console-log');
+        const originalLog = console.log;
+        console.log = function(...args) {
+            originalLog.apply(console, args);
+            const message = args.map(arg => 
+                typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
+            ).join(' ');
+            logArea.innerHTML += '<div>' + message + '</div>';
+            logArea.scrollTop = logArea.scrollHeight;
+        };
+
+        function showResult(operation, time) {
+            const resultsDiv = document.getElementById('results');
+            const contentDiv = document.getElementById('result-content');
+            resultsDiv.style.display = 'block';
+            contentDiv.innerHTML += `<div><strong>${operation}:</strong> ${time.toFixed(3)}ms for 1000 operations</div>`;
+        }
+
+        function clearResults() {
+            document.getElementById('result-content').innerHTML = '';
+            document.getElementById('results').style.display = 'none';
+            logArea.innerHTML = '<div>Console output will appear here...</div>';
+        }
+
+        async function runWasm() {
+            try {
+                console.log('🔄 Initializing WASM module...');
+                await init();
+                console.log('✅ WASM module initialized successfully!');
+
+                // Test if functions are available
+                if (typeof benchmark_goldilocks_multiplication === 'undefined') {
+                    throw new Error('benchmark_goldilocks_multiplication is not defined');
+                }
+
+                document.getElementById('goldilocks-mult').onclick = () => {
+                    console.log('🔥 Running Goldilocks multiplication benchmark...');
+                    clearResults();
+                    const time = benchmark_goldilocks_multiplication();
+                    showResult('Goldilocks Multiplication', time);
+                };
+
+                document.getElementById('goldilocks-add').onclick = () => {
+                    console.log('🔥 Running Goldilocks addition benchmark...');
+                    clearResults();
+                    const time = benchmark_goldilocks_addition();
+                    showResult('Goldilocks Addition', time);
+                };
+
+                document.getElementById('monty-mult').onclick = () => {
+                    console.log('🔥 Running Goldilocks-Monty multiplication benchmark...');
+                    clearResults();
+                    const time = benchmark_goldilocks_monty_multiplication();
+                    showResult('Goldilocks-Monty Multiplication', time);
+                };
+
+                document.getElementById('monty-add').onclick = () => {
+                    console.log('🔥 Running Goldilocks-Monty addition benchmark...');
+                    clearResults();
+                    const time = benchmark_goldilocks_monty_addition();
+                    showResult('Goldilocks-Monty Addition', time);
+                };
+
+                document.getElementById('run-all').onclick = () => {
+                    console.log('🔥 Running all benchmarks...');
+                    clearResults();
+                    run_all_benchmarks();
+                };
+
+                // Enable all buttons
+                document.querySelectorAll('button').forEach(btn => btn.disabled = false);
+                console.log('🎯 All functions loaded successfully! Buttons are now enabled.');
+            } catch (error) {
+                // Check if it's the table.grow error specifically
+                if (error.message && error.message.includes('WebAssembly.Table.grow()')) {
+                    console.warn('⚠️  WebAssembly.Table.grow() warning:', error.message);
+                    console.warn('⚠️  This is a known browser compatibility issue, attempting to continue...');
+                    logArea.innerHTML += '<div style="color: orange;">⚠️  WebAssembly table warning (continuing anyway): ' + error.message + '</div>';
+                    
+                    // Try to continue anyway - maybe the functions still work
+                    try {
+                        // Enable buttons and see if the functions are available despite the table error
+                        if (typeof benchmark_goldilocks_multiplication !== 'undefined') {
+                            console.log('🔧 Functions appear to be available despite table warning, enabling buttons...');
+                            
+                            // Set up the same click handlers
+                            document.getElementById('goldilocks-mult').onclick = () => {
+                                try {
+                                    clearResults();
+                                    const time = benchmark_goldilocks_multiplication();
+                                    showResult('Goldilocks Multiplication', time);
+                                } catch (e) {
+                                    console.error('Function call failed:', e);
+                                    logArea.innerHTML += '<div style="color: red;">Function call failed: ' + e.message + '</div>';
+                                }
+                            };
+
+                            document.getElementById('goldilocks-add').onclick = () => {
+                                try {
+                                    clearResults();
+                                    const time = benchmark_goldilocks_addition();
+                                    showResult('Goldilocks Addition', time);
+                                } catch (e) {
+                                    console.error('Function call failed:', e);
+                                    logArea.innerHTML += '<div style="color: red;">Function call failed: ' + e.message + '</div>';
+                                }
+                            };
+
+                            document.getElementById('monty-mult').onclick = () => {
+                                try {
+                                    clearResults();
+                                    const time = benchmark_goldilocks_monty_multiplication();
+                                    showResult('Goldilocks-Monty Multiplication', time);
+                                } catch (e) {
+                                    console.error('Function call failed:', e);
+                                    logArea.innerHTML += '<div style="color: red;">Function call failed: ' + e.message + '</div>';
+                                }
+                            };
+
+                            document.getElementById('monty-add').onclick = () => {
+                                try {
+                                    clearResults();
+                                    const time = benchmark_goldilocks_monty_addition();
+                                    showResult('Goldilocks-Monty Addition', time);
+                                } catch (e) {
+                                    console.error('Function call failed:', e);
+                                    logArea.innerHTML += '<div style="color: red;">Function call failed: ' + e.message + '</div>';
+                                }
+                            };
+
+                            document.getElementById('run-all').onclick = () => {
+                                try {
+                                    clearResults();
+                                    run_all_benchmarks();
+                                } catch (e) {
+                                    console.error('Function call failed:', e);
+                                    logArea.innerHTML += '<div style="color: red;">Function call failed: ' + e.message + '</div>';
+                                }
+                            };
+                            
+                            document.querySelectorAll('button').forEach(btn => btn.disabled = false);
+                            console.log('🎯 Buttons enabled despite table warning - try clicking them!');
+                            logArea.innerHTML += '<div style="color: green;">🎯 Buttons enabled despite table warning - functions may still work!</div>';
+                        } else {
+                            throw new Error('Functions not available after table error');
+                        }
+                    } catch (fallbackError) {
+                        console.error('❌ Cannot recover from table error:', fallbackError);
+                        logArea.innerHTML += '<div style="color: red;">❌ Cannot recover from table error: ' + fallbackError.message + '</div>';
+                    }
+                } else {
+                    // Some other error
+                    console.error('❌ Failed to initialize WASM:', error);
+                    logArea.innerHTML += '<div style="color: red;">❌ WASM initialization failed: ' + error.message + '</div>';
+                }
+            }
+        }
+
+        // Disable buttons initially
+        document.querySelectorAll('button').forEach(btn => btn.disabled = true);
+        console.log('🚀 Starting WASM initialization...');
+        
+        runWasm();
+    </script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+[package]
+name = "goldilocks-wasm-benchmark"
+description = "WebAssembly benchmark for Goldilocks field operations"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[[bin]]
+name = "native-bench"
+path = "src/main.rs"
+
+[dependencies]
+p3-goldilocks.workspace = true
+p3-goldilocks-monty.workspace = true
+p3-field.workspace = true
+
+wasm-bindgen.workspace = true
+js-sys.workspace = true
+
+[dependencies.web-sys]
+version = "0.3"
+features = ["console", "Performance"]

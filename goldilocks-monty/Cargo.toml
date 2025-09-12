@@ -1,0 +1,35 @@
+[package]
+name = "p3-goldilocks-monty"
+description = "Goldilocks field implementation using Montgomery arithmetic from monty-64"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+p3-field.workspace = true
+p3-monty-64 = { path = "../monty-64" }
+p3-dft.workspace = true
+p3-mds.workspace = true
+p3-poseidon2.workspace = true
+p3-symmetric.workspace = true
+
+num-bigint.workspace = true
+rand.workspace = true
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+p3-goldilocks = { path = "../goldilocks" }
+p3-field-testing.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "bench_field"
+harness = false
+
+[[bench]]
+name = "extension"
+harness = false
