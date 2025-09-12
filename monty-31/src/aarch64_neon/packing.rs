@@ -213,7 +213,7 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31Neon<FP>
             3 => self.cube(),
             4 => self.square().square(),
             5 => {
-                let val = self.to_vector();
+                let val = self.to_signed_vector();
                 unsafe {
                     // Safety: `exp_5` returns values in canonical form when given values in canonical form.
                     let res = exp_5::<FP>(val);
@@ -222,7 +222,7 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31Neon<FP>
             }
             6 => self.square().cube(),
             7 => {
-                let val = self.to_vector();
+                let val = self.to_signed_vector();
                 unsafe {
                     // Safety: `exp_7` returns values in canonical form when given values in canonical form.
                     let res = exp_7::<FP>(val);
@@ -453,7 +453,7 @@ fn mul<MPNeon: MontyParametersNeon>(lhs: int32x4_t, rhs: int32x4_t) -> uint32x4_
 /// or in [0, P) if CANONICAL is set to true.
 #[inline]
 #[must_use]
-fn mul_with_precomp<MPNeon: MontyParametersNeon, const CANONICAL: usize>(
+fn mul_with_precomp<MPNeon: MontyParametersNeon, const CANONICAL: bool>(
     lhs: int32x4_t,
     rhs: int32x4_t,
     mu_rhs: int32x4_t,
@@ -499,7 +499,7 @@ fn cube<MPNeon: MontyParametersNeon>(val: int32x4_t) -> uint32x4_t {
 #[must_use]
 fn exp_5<MPNeon: MontyParametersNeon>(val: int32x4_t) -> uint32x4_t {
     unsafe {
-        let mu_val = mulby_mu::<MPNeon>(val_s);
+        let mu_val = mulby_mu::<MPNeon>(val);
 
         let val_2 = mul_with_precomp::<MPNeon, false>(val, val, mu_val);
         let mu_val_2 = mulby_mu::<MPNeon>(val_2);
@@ -519,7 +519,7 @@ fn exp_5<MPNeon: MontyParametersNeon>(val: int32x4_t) -> uint32x4_t {
 #[must_use]
 fn exp_7<MPNeon: MontyParametersNeon>(val: int32x4_t) -> uint32x4_t {
     unsafe {
-        let mu_val = mulby_mu::<MPNeon>(val_s);
+        let mu_val = mulby_mu::<MPNeon>(val);
 
         let val_2 = mul_with_precomp::<MPNeon, false>(val, val, mu_val);
         let mu_val_2 = mulby_mu::<MPNeon>(val_2);
