@@ -446,7 +446,7 @@ fn mul_with_precomp<MPNeon: MontyParametersNeon, const CANONICAL: bool>(
             // As underflow and MPNeon::PACKED_P are unsigned we use the unsigned version of multiply
             // and subtract. Note that on bits, the signed and unsigned versions are literally identical.
             let reduced = aarch64::vmlsq_u32(
-                aarch64::vreinterpretq_s32_u32(u_d),
+                aarch64::vreinterpretq_s32_u32(d),
                 confuse_compiler(underflow),
                 MPNeon::PACKED_P,
             );
