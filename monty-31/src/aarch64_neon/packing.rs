@@ -776,7 +776,7 @@ pub(crate) fn base_mul_packed<FP, const WIDTH: usize>(
 /// Outputs will be a unsigned 32-bit integers in canonical form [0, ..., P).
 #[inline(always)]
 #[must_use]
-pub(crate) fn exp_small<PMP, const D: u64>(val: uint32x4_t) -> uint32x4_t
+pub(crate) fn exp_small<PMP, const D: u64>(val: int32x4_t) -> uint32x4_t
 where
     PMP: PackedMontyParameters + FieldParameters,
 {

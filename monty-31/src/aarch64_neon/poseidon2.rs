@@ -384,7 +384,8 @@ fn convert_to_vec_neg_form_neon<MP: MontyParameters>(input: i32) -> uint32x4_t {
 /// Performs the fused AddRoundConstant and S-Box operation `x -> (x + c)^D`.
 ///
 /// It uses a pre-computed constant `rc` in a special negative form (`c - P`) for a fast addition.
-/// The intermediate result is fully reduced before the final exponentiation.
+/// The addition `val + rc` results in a value in `[-P, P)`, which is passed directly to the
+/// exponentiation function without an intermediate reduction, improving performance.
 ///
 /// # Safety
 /// - `val` must contain elements in canonical form `[0, P)`.
@@ -394,31 +395,27 @@ where
     PMP: PackedMontyParameters + FieldParameters,
 {
     unsafe {
-        // Unwrap the field element vector to its raw u32 representation.
-        let vec_val = val.to_vector();
+        // Convert the field element vector to its raw signed i32 representation.
+        let vec_val_s = val.to_signed_vector();
+
+        // Reinterpret the round constant vector as signed. This is safe as `rc = c - P`.
+        let rc_s = aarch64::vreinterpretq_s32_u32(rc);
 
         // Add the pre-computed `rc = c - P`.
         //
-        // The result is congruent to `val + c`.
-        let t = aarch64::vaddq_u32(vec_val, rc);
-
-        // Unconditionally add P to get the true sum `val + c`,
-        //
-        // The result is now in the range `[0, 2P)`.
-        let sum = aarch64::vaddq_u32(t, PMP::PACKED_P);
-
-        // Compute the other reduction candidate: `sum - P`.
-        let diff = aarch64::vsubq_u32(sum, PMP::PACKED_P);
-
-        // Select the minimum to get a canonical result.
-        // - If `sum < P`, `diff` underflows to a large value, so `sum` is chosen.
-        // - If `sum >= P`, `diff` is `sum - P`, the correct result.
-        let val_plus_rc_canonical = aarch64::vminq_u32(sum, diff);
+        // The result is:
+        // - congruent to `val + c`,
+        // - guaranteed to be in the range `[-P, P)`.
+        let val_plus_rc = aarch64::vaddq_s32(vec_val_s, rc_s);
 
         // Apply the power S-box `x -> x^D`.
         //
-        // The input is guaranteed to be in the canonical range `[0, P)`.
-        let output = exp_small::<PMP, D>(val_plus_rc_canonical);
+        // The `exp_small` function:
+        // - accepts inputs in `(-P, P)`,
+        // - returns a canonical result in `[0, P)`.
+        //
+        // This avoids a costly reduction step.
+        let output = exp_small::<PMP, D>(val_plus_rc);
 
         // Wrap the final canonical result in the `PackedMontyField31Neon` type.
         *val = PackedMontyField31Neon::<PMP>::from_vector(output);
