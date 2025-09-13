@@ -74,10 +74,10 @@ where
                 zip_eq(
                     &betas,
                     &proof.commit_phase_commits,
-                    FriError::InvalidProofShape,
+                    || FriError::InvalidProofShape,
                 )?,
                 &qp.commit_phase_openings,
-                FriError::InvalidProofShape,
+                || FriError::InvalidProofShape,
             )?,
             ro,
             log_max_height,
@@ -131,7 +131,7 @@ where
     for (log_folded_height, ((&beta, comm), opening)) in zip_eq(
         (params.log_blowup..log_max_height).rev(),
         steps,
-        FriError::InvalidProofShape,
+        || FriError::InvalidProofShape,
     )? {
         // If there are new polynomials to roll in at this height, do so.
         if let Some((_, ro)) = ro_iter.next_if(|(lh, _)| *lh == log_folded_height + 1) {

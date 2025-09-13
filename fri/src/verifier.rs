@@ -151,13 +151,11 @@ where
             params,
             &mut domain_index,
             zip_eq(
-                zip_eq(
-                    &betas,
-                    &proof.commit_phase_commits,
-                    FriError::InvalidProofShape,
-                )?,
+                zip_eq(&betas, &proof.commit_phase_commits, || {
+                    FriError::InvalidProofShape
+                })?,
                 commit_phase_openings,
-                FriError::InvalidProofShape,
+                || FriError::InvalidProofShape,
             )?,
             ro,
             log_global_max_height,
@@ -249,7 +247,7 @@ where
         // zip_eq ensures that we have the right number of steps.
         (log_final_height..log_global_max_height).rev(),
         fold_data_iter,
-        FriError::InvalidProofShape,
+        || FriError::InvalidProofShape,
     )? {
         // Get the index of the other sibling of the current FRI node.
         let index_sibling = *start_index ^ 1;
@@ -348,11 +346,11 @@ where
     let mut reduced_openings = BTreeMap::<usize, (Challenge, Challenge)>::new();
 
     // For each batch commitment and opening proof
-    for (batch_opening, (batch_commit, mats)) in zip_eq(
-        input_proof,
-        commitments_with_opening_points,
-        FriError::InvalidProofShape,
-    )? {
+    for (batch_opening, (batch_commit, mats)) in
+        zip_eq(input_proof, commitments_with_opening_points, || {
+            FriError::InvalidProofShape
+        })?
+    {
         // Find the height of each matrix in the batch.
         // Currently we only check domain.size() as the shift is
         // assumed to always be Val::GENERATOR.
@@ -385,11 +383,11 @@ where
             .map_err(FriError::InputError)?;
 
         // For each matrix in the commitment
-        for (mat_opening, (mat_domain, mat_points_and_values)) in zip_eq(
-            &batch_opening.opened_values,
-            mats,
-            FriError::InvalidProofShape,
-        )? {
+        for (mat_opening, (mat_domain, mat_points_and_values)) in
+            zip_eq(&batch_opening.opened_values, mats, || {
+                FriError::InvalidProofShape
+            })?
+        {
             let log_height = log2_strict_usize(mat_domain.size()) + params.log_blowup;
 
             let bits_reduced = log_global_max_height - log_height;
@@ -409,7 +407,8 @@ where
             // scale by the appropriate alpha power and add to the reduced opening for this log_height.
             for (z, ps_at_z) in mat_points_and_values {
                 let quotient = (*z - x).inverse();
-                for (&p_at_x, &p_at_z) in zip_eq(mat_opening, ps_at_z, FriError::InvalidProofShape)?
+                for (&p_at_x, &p_at_z) in
+                    zip_eq(mat_opening, ps_at_z, || FriError::InvalidProofShape)?
                 {
                     // Note we just checked batch proofs to ensure p_at_x is correct.
                     // x, z were sent by the verifier.
@@ -429,6 +428,7 @@ where
             return Err(FriError::FinalPolyMismatch);
         }
     }
+        }
 
     // Return reduced openings descending by log_height.
     Ok(reduced_openings

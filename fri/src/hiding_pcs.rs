@@ -305,13 +305,13 @@ where
         for (round, rand_round) in zip_eq(
             rounds.iter_mut(),
             opened_values_for_rand_cws,
-            FriError::InvalidProofShape,
+            || FriError::InvalidProofShape,
         )? {
             for (mat, rand_mat) in
-                zip_eq(round.1.iter_mut(), rand_round, FriError::InvalidProofShape)?
+                zip_eq(round.1.iter_mut(), rand_round, || FriError::InvalidProofShape)?
             {
                 for (point, rand_point) in
-                    zip_eq(mat.1.iter_mut(), rand_mat, FriError::InvalidProofShape)?
+                    zip_eq(mat.1.iter_mut(), rand_mat, || FriError::InvalidProofShape)?
                 {
                     point.1.extend(rand_point);
                 }

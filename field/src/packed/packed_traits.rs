@@ -66,7 +66,7 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
             assert!(align_of::<Self>() <= align_of::<Self::Value>());
         }
         assert!(
-            buf.len().is_multiple_of(Self::WIDTH),
+            buf.len() % Self::WIDTH == 0,
             "Slice length (got {}) must be a multiple of packed field width ({}).",
             buf.len(),
             Self::WIDTH
@@ -95,7 +95,7 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
             assert!(align_of::<Self>() <= align_of::<Self::Value>());
         }
         assert!(
-            buf.len().is_multiple_of(Self::WIDTH),
+            buf.len() % Self::WIDTH == 0,
             "Slice length (got {}) must be a multiple of packed field width ({}).",
             buf.len(),
             Self::WIDTH
@@ -119,7 +119,7 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
             assert!(align_of::<Self>() <= align_of::<Self::Value>());
         }
         assert!(
-            buf.len().is_multiple_of(Self::WIDTH),
+            buf.len() % Self::WIDTH == 0,
             "Slice length (got {}) must be a multiple of packed field width ({}).",
             buf.len(),
             Self::WIDTH
