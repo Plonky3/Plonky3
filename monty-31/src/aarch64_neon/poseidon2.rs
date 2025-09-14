@@ -406,7 +406,6 @@ where
         // - returns a canonical result in `[0, P)`.
         let output = exp_small::<PMP, D>(val_plus_rc);
 
-        // Wrap the final canonical result in the `PackedMontyField31Neon` type.
         *val = PackedMontyField31Neon::<PMP>::from_vector(output);
     }
 }
