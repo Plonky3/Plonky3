@@ -363,9 +363,6 @@ where
 #[inline(always)]
 fn convert_to_vec_neg_form_neon<MP: MontyParameters>(input: i32) -> uint32x4_t {
     unsafe {
-        // Perform the subtraction as a standard integer operation.
-        //
-        // This computes the "negative form" of the constant.
         let input_sub_p = input - (MP::PRIME as i32);
 
         // Broadcast (duplicate) the scalar result into all four lanes of a 128-bit NEON vector.
