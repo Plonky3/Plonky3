@@ -377,13 +377,9 @@ fn convert_to_vec_neg_form_neon<MP: MontyParameters>(input: i32) -> uint32x4_t {
 
 /// Performs the fused AddRoundConstant and S-Box operation `x -> (x + c)^D`.
 ///
-/// It uses a pre-computed constant `rc` in a special negative form (`c - P`) for a fast addition.
-/// The addition `val + rc` results in a value in `[-P, P)`, which is passed directly to the
-/// exponentiation function without an intermediate reduction, improving performance.
-///
 /// # Safety
 /// - `val` must contain elements in canonical form `[0, P)`.
-/// - `rc` must contain elements represented as `c - P`, which are in `[-P, 0]`.
+/// - `rc` must contain round constants saved in negative form, i.e. as elements in `[-P, 0)`.
 fn add_rc_and_sbox<PMP, const D: u64>(val: &mut PackedMontyField31Neon<PMP>, rc: uint32x4_t)
 where
     PMP: PackedMontyParameters + FieldParameters,
