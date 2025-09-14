@@ -395,10 +395,7 @@ where
         // Reinterpret the round constant vector as signed. This is safe as `rc = c - P`.
         let rc_s = aarch64::vreinterpretq_s32_u32(rc);
 
-        // Add the pre-computed `rc = c - P`.
-        //
-        // The result is:
-        // - congruent to `val + c`,
+        // Add the round constant. As it is saved in negative form the result is
         // - guaranteed to be in the range `[-P, P)`.
         let val_plus_rc = aarch64::vaddq_s32(vec_val_s, rc_s);
 
