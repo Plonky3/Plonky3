@@ -772,8 +772,8 @@ pub(crate) fn base_mul_packed<FP, const WIDTH: usize>(
 /// `D` must be one of 3, 5, or 7, otherwise this function will panic at compile time.
 ///
 /// # Safety
-/// Inputs must be unsigned 32-bit integers in canonical form [0, ..., P).
-/// Outputs will be a unsigned 32-bit integers in canonical form [0, ..., P).
+/// Inputs must be signed 32-bit integers in the range `[-P, P)`.
+/// Outputs will be unsigned 32-bit integers in canonical form `[0, P)`.
 #[inline(always)]
 #[must_use]
 pub(crate) fn exp_small<PMP, const D: u64>(val: int32x4_t) -> uint32x4_t

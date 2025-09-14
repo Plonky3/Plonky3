@@ -1,7 +1,7 @@
 //! Vectorized Neon implementation of Poseidon2 for MontyField31
 
 use alloc::vec::Vec;
-use core::arch::aarch64::{self, uint32x4_t};
+use core::arch::aarch64::{self, int32x4_t, uint32x4_t};
 use core::marker::PhantomData;
 use core::mem::transmute;
 
@@ -135,7 +135,7 @@ pub struct Poseidon2InternalLayerMonty31<
     /// The pre-processed round constants, packed into NEON vectors in negative form (`c - P`).
     ///
     /// This format is optimized for the vectorized permutation loop.
-    packed_internal_constants: Vec<uint32x4_t>,
+    packed_internal_constants: Vec<int32x4_t>,
     _phantom: PhantomData<ILP>,
 }
 
@@ -302,9 +302,9 @@ pub struct Poseidon2ExternalLayerMonty31<MP: MontyParameters, const WIDTH: usize
     /// The original, scalar round constants for both initial and terminal external rounds.
     pub(crate) external_constants: ExternalLayerConstants<MontyField31<MP>, WIDTH>,
     /// Pre-processed constants for the initial external rounds, packed into NEON vectors in negative form (`c - P`).
-    packed_initial_external_constants: Vec<[uint32x4_t; WIDTH]>,
+    packed_initial_external_constants: Vec<[int32x4_t; WIDTH]>,
     /// Pre-processed constants for the terminal external rounds, packed into NEON vectors in negative form (`c - P`).
-    packed_terminal_external_constants: Vec<[uint32x4_t; WIDTH]>,
+    packed_terminal_external_constants: Vec<[int32x4_t; WIDTH]>,
 }
 
 impl<FP: FieldParameters, const WIDTH: usize> ExternalLayerConstructor<MontyField31<FP>, WIDTH>
@@ -361,17 +361,12 @@ where
 ///
 /// Instead of storing a constant `c`, we pre-compute `c' = c - P` and store it as a packed vector.
 #[inline(always)]
-fn convert_to_vec_neg_form_neon<MP: MontyParameters>(input: i32) -> uint32x4_t {
+fn convert_to_vec_neg_form_neon<MP: MontyParameters>(input: i32) -> int32x4_t {
     unsafe {
         let input_sub_p = input - (MP::PRIME as i32);
 
         // Broadcast (duplicate) the scalar result into all four lanes of a 128-bit NEON vector.
-        let vec_s32 = aarch64::vdupq_n_s32(input_sub_p);
-
-        // Reinterpret the bits of the signed vector as an unsigned vector.
-        //
-        // This is a zero-cost operation that only changes the type for the Rust compiler.
-        aarch64::vreinterpretq_u32_s32(vec_s32)
+        aarch64::vdupq_n_s32(input_sub_p)
     }
 }
 
@@ -380,7 +375,7 @@ fn convert_to_vec_neg_form_neon<MP: MontyParameters>(input: i32) -> uint32x4_t {
 /// # Safety
 /// - `val` must contain elements in canonical form `[0, P)`.
 /// - `rc` must contain round constants saved in negative form, i.e. as elements in `[-P, 0)`.
-fn add_rc_and_sbox<PMP, const D: u64>(val: &mut PackedMontyField31Neon<PMP>, rc: uint32x4_t)
+fn add_rc_and_sbox<PMP, const D: u64>(val: &mut PackedMontyField31Neon<PMP>, rc: int32x4_t)
 where
     PMP: PackedMontyParameters + FieldParameters,
 {
@@ -388,12 +383,9 @@ where
         // Convert the field element vector to its raw signed i32 representation.
         let vec_val_s = val.to_signed_vector();
 
-        // Reinterpret the round constant vector as signed. This is safe as `rc = c - P`.
-        let rc_s = aarch64::vreinterpretq_s32_u32(rc);
-
         // Add the round constant. As it is saved in negative form the result is
-        // - guaranteed to be in the range `[-P, P)`.
-        let val_plus_rc = aarch64::vaddq_s32(vec_val_s, rc_s);
+        // guaranteed to be in the range `[-P, P)`.
+        let val_plus_rc = aarch64::vaddq_s32(vec_val_s, rc);
 
         // Apply the power S-box `x -> x^D`.
         //
