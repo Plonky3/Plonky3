@@ -1,13 +1,16 @@
 /// An iterator which iterates two other iterators of the same length simultaneously.
 ///
-/// Equality of the lengths of `a` abd `b` are at construction time.
+/// Equality of the lengths of `a` and `b` is checked at construction time.
 #[must_use = "iterator adaptors are lazy and do nothing unless consumed"]
 pub struct ZipEq<A, B> {
     a: A,
     b: B,
 }
 
-/// Zips two iterators but **panics** if they are not of the same length.
+/// Zips two iterators and returns `Err` if they are not of the same length.
+///
+/// Note: a panic may still occur during iteration if the `ExactSizeIterator`
+/// contract is violated by the provided iterators.
 ///
 /// Similar to `itertools::zip_eq`, but we check the lengths at construction time.
 pub fn zip_eq<A, AIter, B, BIter, Error>(
@@ -29,6 +32,28 @@ where
             b: b_iter,
         }),
         false => Err(err),
+    }
+}
+
+/// Zips two iterators but constructs the error lazily only on length mismatch.
+pub fn zip_eq_or_else<A, AIter, B, BIter, Error, F>(
+    a: A,
+    b: B,
+    err: F,
+) -> Result<ZipEq<A::IntoIter, B::IntoIter>, Error>
+where
+    A: IntoIterator<IntoIter = AIter>,
+    AIter: ExactSizeIterator,
+    B: IntoIterator<IntoIter = BIter>,
+    BIter: ExactSizeIterator,
+    F: FnOnce() -> Error,
+{
+    let a_iter = a.into_iter();
+    let b_iter = b.into_iter();
+    if a_iter.len() == b_iter.len() {
+        Ok(ZipEq { a: a_iter, b: b_iter })
+    } else {
+        Err(err())
     }
 }
 
