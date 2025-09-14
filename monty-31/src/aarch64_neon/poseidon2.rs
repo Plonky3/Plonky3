@@ -404,8 +404,6 @@ where
         // The `exp_small` function:
         // - accepts inputs in `(-P, P)`,
         // - returns a canonical result in `[0, P)`.
-        //
-        // This avoids a costly reduction step.
         let output = exp_small::<PMP, D>(val_plus_rc);
 
         // Wrap the final canonical result in the `PackedMontyField31Neon` type.
