@@ -359,10 +359,7 @@ where
 
 /// Converts a scalar constant into a packed NEON vector in "negative form".
 ///
-/// This is a pre-computation step for round constants. Instead of storing a constant `c`
-/// and performing a modular addition `(val + c) mod P` in the permutation loop, we pre-compute
-/// `c' = c - P`. This allows the round update to be a simple, non-modular signed integer
-/// addition `val + c'`, which is significantly faster.
+/// Instead of storing a constant `c`, we pre-compute `c' = c - P` and store it as a packed vector.
 #[inline(always)]
 fn convert_to_vec_neg_form_neon<MP: MontyParameters>(input: i32) -> uint32x4_t {
     unsafe {
