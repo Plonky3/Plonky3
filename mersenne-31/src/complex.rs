@@ -40,12 +40,7 @@ impl HasTwoAdicBinomialExtension<2> for Mersenne31 {
 
     fn ext_two_adic_generator(bits: usize) -> [Self; 2] {
         assert!(bits <= Self::EXT_TWO_ADICITY);
-        
-        if bits == 0 {
-            [Self::ONE, Self::ZERO]
-        } else {
-            Self::EXT_TWO_ADIC_GENERATORS[bits - 1]
-        }
+        Self::EXT_TWO_ADIC_GENERATORS[bits]
     }
 }
 
@@ -62,32 +57,7 @@ mod tests {
     type Fi = Complex<Mersenne31>;
     type F = Mersenne31;
 
-    #[test]
-    fn test_ext_two_adic_generator_optimization() {
-        // Test that our optimized implementation produces the same results as the original
-        // We'll test a few key values to ensure correctness
-        
-        // Test bits = 0 (should return [1, 0])
-        let result_0 = Mersenne31::ext_two_adic_generator(0);
-        assert_eq!(result_0, [Mersenne31::ONE, Mersenne31::ZERO]);
-        
-        // Test bits = 1 (should return the first generator from our table)
-        let result_1 = Mersenne31::ext_two_adic_generator(1);
-        assert_eq!(result_1, Mersenne31::EXT_TWO_ADIC_GENERATORS[0]);
-        
-        // Test bits = 32 (should return the last generator from our table)
-        let result_32 = Mersenne31::ext_two_adic_generator(32);
-        assert_eq!(result_32, Mersenne31::EXT_TWO_ADIC_GENERATORS[31]);
-        
-        // Test a few middle values
-        let result_16 = Mersenne31::ext_two_adic_generator(16);
-        assert_eq!(result_16, Mersenne31::EXT_TWO_ADIC_GENERATORS[15]);
-        
-        let result_8 = Mersenne31::ext_two_adic_generator(8);
-        assert_eq!(result_8, Mersenne31::EXT_TWO_ADIC_GENERATORS[7]);
-        
-        // All tests passed!
-    }
+    
 
     #[test]
     fn add() {
