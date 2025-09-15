@@ -51,7 +51,10 @@ where
     let a_iter = a.into_iter();
     let b_iter = b.into_iter();
     if a_iter.len() == b_iter.len() {
-        Ok(ZipEq { a: a_iter, b: b_iter })
+        Ok(ZipEq {
+            a: a_iter,
+            b: b_iter,
+        })
     } else {
         Err(err())
     }
