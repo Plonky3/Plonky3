@@ -769,7 +769,7 @@ pub(crate) fn base_mul_packed<FP, const WIDTH: usize>(
 
 /// Raise MontyField31 field elements to a small constant power `D`.
 ///
-/// `D` must be one of 3, 5, or 7, otherwise this function will panic at compile time.
+/// Currently, `D` must be one of 3, 5, or 7, if other powers are needed we can easily add them.
 ///
 /// # Safety
 /// Inputs must be signed 32-bit integers in the range `[-P, P)`.
