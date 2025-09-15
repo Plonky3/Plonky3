@@ -76,71 +76,38 @@ impl Mersenne31 {
 
     /// Precomputed table of two-adic extension generators for Mersenne31.
     /// Each element [i] is a generator of the 2^(i+1) subgroup in the extension field.
-    /// This allows for O(1) lookup instead of expensive exponentiation.
     pub const EXT_TWO_ADIC_GENERATORS: [[Self; 2]; 32] = [
-        // Generator for 2^1 subgroup
         [Self::new(2_147_483_646), Self::new(0)],
-        // Generator for 2^2 subgroup
         [Self::new(0), Self::new(2_147_483_646)],
-        // Generator for 2^3 subgroup
         [Self::new(32_768), Self::new(2_147_450_879)],
-        // Generator for 2^4 subgroup
         [Self::new(590_768_354), Self::new(978_592_373)],
-        // Generator for 2^5 subgroup
         [Self::new(1_179_735_656), Self::new(1_241_207_368)],
-        // Generator for 2^6 subgroup
         [Self::new(1_567_857_810), Self::new(456_695_729)],
-        // Generator for 2^7 subgroup
         [Self::new(1_774_253_895), Self::new(1_309_288_441)],
-        // Generator for 2^8 subgroup
         [Self::new(736_262_640), Self::new(1_553_669_210)],
-        // Generator for 2^9 subgroup
         [Self::new(1_819_216_575), Self::new(1_662_816_114)],
-        // Generator for 2^10 subgroup
         [Self::new(1_323_191_254), Self::new(1_936_974_060)],
-        // Generator for 2^11 subgroup
         [Self::new(605_622_498), Self::new(1_964_232_216)],
-        // Generator for 2^12 subgroup
         [Self::new(343_674_985), Self::new(501_786_993)],
-        // Generator for 2^13 subgroup
         [Self::new(1_995_316_534), Self::new(149_306_621)],
-        // Generator for 2^14 subgroup
         [Self::new(2_107_600_913), Self::new(1_378_821_388)],
-        // Generator for 2^15 subgroup
         [Self::new(541_476_169), Self::new(2_101_081_972)],
-        // Generator for 2^16 subgroup
         [Self::new(2_135_874_973), Self::new(483_411_332)],
-        // Generator for 2^17 subgroup
         [Self::new(2_097_144_245), Self::new(1_684_033_590)],
-        // Generator for 2^18 subgroup
         [Self::new(1_662_322_247), Self::new(670_236_780)],
-        // Generator for 2^19 subgroup
         [Self::new(1_172_215_635), Self::new(595_888_646)],
-        // Generator for 2^20 subgroup
         [Self::new(241_940_101), Self::new(323_856_519)],
-        // Generator for 2^21 subgroup
         [Self::new(1_957_194_259), Self::new(2_139_647_100)],
-        // Generator for 2^22 subgroup
         [Self::new(1_957_419_629), Self::new(1_541_039_442)],
-        // Generator for 2^23 subgroup
         [Self::new(1_062_045_235), Self::new(1_824_580_421)],
-        // Generator for 2^24 subgroup
         [Self::new(1_929_382_196), Self::new(1_664_698_822)],
-        // Generator for 2^25 subgroup
         [Self::new(1_889_294_251), Self::new(331_248_939)],
-        // Generator for 2^26 subgroup
         [Self::new(1_214_231_414), Self::new(1_646_302_518)],
-        // Generator for 2^27 subgroup
         [Self::new(1_765_392_370), Self::new(461_136_547)],
-        // Generator for 2^28 subgroup
         [Self::new(1_629_751_483), Self::new(66_485_474)],
-        // Generator for 2^29 subgroup
         [Self::new(1_501_355_827), Self::new(1_439_063_420)],
-        // Generator for 2^30 subgroup
         [Self::new(509_778_402), Self::new(800_467_507)],
-        // Generator for 2^31 subgroup
         [Self::new(311_014_874), Self::new(1_584_694_829)],
-        // Generator for 2^32 subgroup
         [Self::new(1_166_849_849), Self::new(1_117_296_306)],
     ];
 }
