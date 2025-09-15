@@ -402,7 +402,7 @@ fn mul<MPNeon: MontyParametersNeon>(lhs: int32x4_t, rhs: int32x4_t) -> uint32x4_
 /// Both `lhs` and `rhs` must be signed 32-bit integers in the range [-P, P].
 /// `mu_rhs` must be equal to `MPNeon::PACKED_MU * rhs mod 2^32`
 ///
-/// Output will be signed 32-bit integers either in [-P, P] if CANONICAL is set to false
+/// Output will be signed 32-bit integers either in (-P, P) if CANONICAL is set to false
 /// or in [0, P) if CANONICAL is set to true.
 #[inline]
 #[must_use]
