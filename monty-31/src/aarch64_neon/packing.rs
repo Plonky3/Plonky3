@@ -369,7 +369,7 @@ fn get_qp_hi<MPNeon: MontyParametersNeon>(lhs: int32x4_t, mu_rhs: int32x4_t) -> 
 /// Multiply MontyField31 field elements.
 ///
 /// # Safety
-/// Inputs must be signed 32-bit integers in the range (-P, P).
+/// Inputs must be signed 32-bit integers in the range [-P, P].
 /// Outputs will be a unsigned 32-bit integers in canonical form [0, ..., P).
 #[inline]
 #[must_use]
@@ -399,10 +399,10 @@ fn mul<MPNeon: MontyParametersNeon>(lhs: int32x4_t, rhs: int32x4_t) -> uint32x4_
 /// Allows us to reuse `mu_rhs`.
 ///
 /// # Safety
-/// Both `lhs` and `rhs` must be signed 32-bit integers in the range (-P, P).
+/// Both `lhs` and `rhs` must be signed 32-bit integers in the range [-P, P].
 /// `mu_rhs` must be equal to `MPNeon::PACKED_MU * rhs mod 2^32`
 ///
-/// Output will be signed 32-bit integers either in (-P, P) if CANONICAL is set to false
+/// Output will be signed 32-bit integers either in [-P, P] if CANONICAL is set to false
 /// or in [0, P) if CANONICAL is set to true.
 #[inline]
 #[must_use]
@@ -464,7 +464,7 @@ fn mul_with_precomp<MPNeon: MontyParametersNeon, const CANONICAL: bool>(
 /// Take cube of MontyField31 field elements.
 ///
 /// # Safety
-/// Inputs must be signed 32-bit integers in the range (-P, P).
+/// Inputs must be signed 32-bit integers in the range [-P, P].
 /// Outputs will be a unsigned 32-bit integers in canonical form [0, ..., P).
 #[inline]
 #[must_use]
@@ -486,7 +486,7 @@ fn cube<MPNeon: MontyParametersNeon>(val: int32x4_t) -> uint32x4_t {
 /// Take the fifth power of the MontyField31 field elements.
 ///
 /// # Safety
-/// Inputs must be signed 32-bit integers in the range (-P, P).
+/// Inputs must be signed 32-bit integers in the range [-P, P].
 /// Outputs will be a unsigned 32-bit integers in canonical form [0, ..., P).
 #[inline]
 #[must_use]
@@ -513,7 +513,7 @@ fn exp_5<MPNeon: MontyParametersNeon>(val: int32x4_t) -> uint32x4_t {
 /// Take the seventh power of the MontyField31 field elements.
 ///
 /// # Safety
-/// Inputs must be signed 32-bit integers in the range (-P, P).
+/// Inputs must be signed 32-bit integers in the range [-P, P].
 /// Outputs will be a unsigned 32-bit integers in canonical form [0, ..., P).
 #[inline]
 #[must_use]
