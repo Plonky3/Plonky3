@@ -772,7 +772,7 @@ pub(crate) fn base_mul_packed<FP, const WIDTH: usize>(
 /// Currently, `D` must be one of 3, 5, or 7, if other powers are needed we can easily add them.
 ///
 /// # Safety
-/// Inputs must be signed 32-bit integers in the range `[-P, P)`.
+/// Inputs must be signed 32-bit integers in the range `[-P, P]`.
 /// Outputs will be unsigned 32-bit integers in canonical form `[0, P)`.
 #[inline(always)]
 #[must_use]
