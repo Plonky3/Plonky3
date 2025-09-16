@@ -192,14 +192,26 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     ) -> Vec<RowMajorMatrix<Self::Val>> {
         debug_assert_eq!(evals.height(), self.size());
         debug_assert!(log2_strict_usize(num_chunks) <= self.log_size());
-        // todo less copy
-        (0..num_chunks)
-            .map(|i| {
-                evals
-                    .as_view()
-                    .vertically_strided(num_chunks, i)
-                    .to_row_major_matrix()
-            })
+        let height = evals.height();
+        let width = evals.width();
+        let rows_per_chunk = height / num_chunks;
+
+        // Preallocate exact capacities per chunk to minimize reallocations.
+        let mut values: Vec<Vec<Self::Val>> = (0..num_chunks)
+            .map(|_| Vec::with_capacity(rows_per_chunk * width))
+            .collect();
+
+        // Single pass: distribute rows to their corresponding chunk buffers.
+        for r in 0..height {
+            let chunk = r % num_chunks;
+            // Safety: 0 <= r < height == evals.height()
+            let row = unsafe { evals.row_slice_unchecked(r) };
+            values[chunk].extend_from_slice(&row);
+        }
+
+        values
+            .into_iter()
+            .map(|v| RowMajorMatrix::new(v, width))
             .collect()
     }
 
