@@ -192,7 +192,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     ) -> Vec<RowMajorMatrix<Self::Val>> {
         debug_assert_eq!(evals.height(), self.size());
         debug_assert!(log2_strict_usize(num_chunks) <= self.log_size());
-        let height = evals.height();
+        let height = self.size();
         let width = evals.width();
         let rows_per_chunk = height / num_chunks;
 
