@@ -74,8 +74,8 @@ impl Mersenne31 {
         output
     }
 
-    /// Precomputed table of two-adic extension generators for Mersenne31.
-    /// Each element [i] is a generator of the 2^i subgroup in the extension field.
+    /// Precomputed table of generators for two-adic subgroups of the degree two extension field over Mersenne31.
+    /// The `i`'th element is a generator of the subgroup of order `2^i`.
     pub const EXT_TWO_ADIC_GENERATORS: [[Self; 2]; 33] = [
         [Self::ONE, Self::ZERO],
         [Self::new(2_147_483_646), Self::new(0)],
