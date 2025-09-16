@@ -192,21 +192,26 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     ) -> Vec<RowMajorMatrix<Self::Val>> {
         debug_assert_eq!(evals.height(), self.size());
         debug_assert!(log2_strict_usize(num_chunks) <= self.log_size());
-        let height = self.size();
+        let height = evals.height();
         let width = evals.width();
         let rows_per_chunk = height / num_chunks;
 
-        // Preallocate exact capacities per chunk to minimize reallocations.
+        // Preallocate zeroed buffers per chunk; often faster for field elements.
         let mut values: Vec<Vec<Self::Val>> = (0..num_chunks)
-            .map(|_| Vec::with_capacity(rows_per_chunk * width))
+            .map(|_| Self::Val::zero_vec(rows_per_chunk * width))
             .collect();
 
-        // Single pass: distribute rows to their corresponding chunk buffers.
-        for r in 0..height {
-            let chunk = r % num_chunks;
-            // Safety: 0 <= r < height == evals.height()
-            let row = unsafe { evals.row_slice_unchecked(r) };
-            values[chunk].extend_from_slice(&row);
+        // Distribute rows without using modulo: iterate blocks of size num_chunks.
+        for i in 0..rows_per_chunk {
+            let base_row = i * num_chunks;
+            let dst_start = i * width;
+            let dst_end = dst_start + width;
+            for (chunk, dst_vec) in values.iter_mut().enumerate().take(num_chunks) {
+                let r = base_row + chunk;
+                // Safety: r < height == rows_per_chunk * num_chunks
+                let row = unsafe { evals.row_slice_unchecked(r) };
+                dst_vec[dst_start..dst_end].copy_from_slice(&row);
+            }
         }
 
         values
