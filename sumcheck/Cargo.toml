@@ -1,0 +1,19 @@
+[package]
+name = "p3-sumcheck"
+description = "An implementation of the sumcheck protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+p3-field.workspace = true
+p3-multilinear-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+p3-baby-bear.workspace = true
+proptest.workspace = true
