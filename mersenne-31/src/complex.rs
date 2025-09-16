@@ -57,8 +57,6 @@ mod tests {
     type Fi = Complex<Mersenne31>;
     type F = Mersenne31;
 
-    
-
     #[test]
     fn add() {
         // real part
