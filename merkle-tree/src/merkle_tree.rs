@@ -93,8 +93,9 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
             + Sync,
     {
         assert!(!leaves.is_empty(), "No matrices given?");
-
-        assert_eq!(P::WIDTH, PW::WIDTH, "Packing widths must match");
+        const {
+            assert!(P::WIDTH == PW::WIDTH, "Packing widths must match");
+        }
 
         let mut leaves_largest_first = leaves
             .iter()
