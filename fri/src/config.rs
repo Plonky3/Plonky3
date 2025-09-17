@@ -5,7 +5,7 @@ use p3_field::{ExtensionField, Field};
 use p3_matrix::Matrix;
 
 /// A set of parameters defining a specific instance of the FRI protocol.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct FriParameters<M> {
     pub log_blowup: usize,
     // TODO: This parameter and FRI early stopping are not yet implemented in `CirclePcs`.

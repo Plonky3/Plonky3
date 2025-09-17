@@ -45,7 +45,7 @@ pub trait StarkGenericConfig {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct StarkConfig<Pcs, Challenge, Challenger> {
     /// The PCS used to commit polynomials and prove opening proofs.
     pcs: Pcs,

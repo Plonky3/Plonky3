@@ -14,7 +14,7 @@ type PcsProof<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
     <SC as StarkGenericConfig>::Challenger,
 >>::Proof;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(bound = "")]
 pub struct Proof<SC: StarkGenericConfig> {
     pub commitments: Commitments<Com<SC>>,
@@ -23,14 +23,14 @@ pub struct Proof<SC: StarkGenericConfig> {
     pub degree_bits: usize,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Commitments<Com> {
     pub trace: Com,
     pub quotient_chunks: Com,
     pub random: Option<Com>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct OpenedValues<Challenge> {
     pub trace_local: Vec<Challenge>,
     pub trace_next: Vec<Challenge>,

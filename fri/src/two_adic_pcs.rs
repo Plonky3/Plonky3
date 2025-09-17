@@ -44,7 +44,7 @@ use crate::{FriFoldingStrategy, FriParameters, FriProof, prover};
 /// `gH` where `|H| >= 2 * deg(f)`. A value `f(z)` is opened by using a FRI
 /// proof to show that the evaluations of `(f(x) - f(z))/(x - z)` over
 /// `gH` are low degree.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
     pub(crate) dft: Dft,
     pub(crate) mmcs: InputMmcs,
