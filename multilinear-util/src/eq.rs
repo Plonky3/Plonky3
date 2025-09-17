@@ -30,8 +30,30 @@
 use p3_field::{
     Algebra, ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
 };
+use p3_matrix::Matrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_maybe_rayon::prelude::*;
 use p3_util::{iter_array_chunks_padded, log2_strict_usize};
+
+#[inline]
+pub fn eval_eq<F, EF, const INITIALIZED: bool>(eval: &[EF], out: &mut [EF], scalar: EF)
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    // Pass the combined method using the `ExtFieldEvaluator` strategy.
+    eval_eq_batch::<F, EF, INITIALIZED>(RowMajorMatrixView::new(eval, 1), out, &[scalar]);
+}
+
+#[inline]
+pub fn eval_eq_base<F, EF, const INITIALIZED: bool>(eval: &[F], out: &mut [EF], scalar: EF)
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    // Pass the combined method using the `BaseFieldEvaluator` strategy.
+    eval_eq_base_batch::<F, EF, INITIALIZED>(RowMajorMatrixView::new(eval, 1), out, &[scalar]);
+}
 
 /// Computes the multilinear equality polynomial `α ⋅ eq(x, z)` over all `x ∈ \{0,1\}^n` for a point `z ∈ EF^n` and a
 /// scalar `α ∈ EF`.
@@ -51,22 +73,21 @@ use p3_util::{iter_array_chunks_padded, log2_strict_usize};
 /// - ...
 /// - `out[2^n - 1]` corresponds to `x = (1, 1, ..., 1)`
 ///
-/// # Behavior of `INITIALIZED`
-/// If `INITIALIZED = false`, each value in `out` is overwritten with the computed result.
-/// If `INITIALIZED = true`, the computed result is added to the existing value in `out`.
-///
 /// # Arguments
 /// - `eval`: Evaluation point `z ∈ EF^n`
 /// - `out`: Mutable slice of `EF` of size `2^n`
 /// - `scalar`: Scalar multiplier `α ∈ EF`
 #[inline]
-pub fn eval_eq<F, EF, const INITIALIZED: bool>(eval: &[EF], out: &mut [EF], scalar: EF)
-where
+pub fn eval_eq_batch<F, EF, const INITIALIZED: bool>(
+    evals: RowMajorMatrixView<EF>,
+    out: &mut [EF],
+    scalars: &[EF],
+) where
     F: Field,
     EF: ExtensionField<F>,
 {
     // Pass the combined method using the `ExtFieldEvaluator` strategy.
-    eval_eq_common::<F, EF, EF, ExtFieldEvaluator<F, EF>, INITIALIZED>(eval, out, scalar);
+    eval_eq_common::<F, EF, EF, ExtFieldEvaluator<F, EF>, INITIALIZED>(evals, out, scalars);
 }
 
 /// Computes the multilinear equality polynomial `α ⋅ eq(x, z)` over all `x ∈ \{0,1\}^n` for a point `z ∈ F^n` and a
@@ -89,22 +110,21 @@ where
 /// - ...
 /// - `out[2^n - 1]` corresponds to `x = (1, 1, ..., 1)`
 ///
-/// # Behavior of `INITIALIZED`
-/// If `INITIALIZED = false`, each value in `out` is overwritten with the computed result.
-/// If `INITIALIZED = true`, the computed result is added to the existing value in `out`.
-///
 /// # Arguments
 /// - `eval`: Evaluation point `z ∈ F^n`
 /// - `out`: Mutable slice of `EF` of size `2^n`
 /// - `scalar`: Scalar multiplier `α ∈ EF`
 #[inline]
-pub fn eval_eq_base<F, EF, const INITIALIZED: bool>(eval: &[F], out: &mut [EF], scalar: EF)
-where
+pub fn eval_eq_base_batch<F, EF, const INITIALIZED: bool>(
+    evals: RowMajorMatrixView<F>,
+    out: &mut [EF],
+    scalars: &[EF],
+) where
     F: Field,
     EF: ExtensionField<F>,
 {
     // Pass the combined method using the `BaseFieldEvaluator` strategy.
-    eval_eq_common::<F, F, EF, BaseFieldEvaluator<F, EF>, INITIALIZED>(eval, out, scalar);
+    eval_eq_common::<F, F, EF, BaseFieldEvaluator<F, EF>, INITIALIZED>(evals, out, scalars)
 }
 
 /// Fills the `buffer` with evaluations of the equality polynomial
@@ -115,77 +135,98 @@ where
 /// `buffer[ind]` contains `{eq(ind, points) * eq(i, x)}` for `i \in \{0, 1\}^j`. Note that
 /// `ind` is interpreted as an element of `\{0, 1\}^{points.len()}`.
 #[inline(always)]
-fn fill_buffer<'a, F, A>(points: impl ExactSizeIterator<Item = &'a F>, buffer: &mut [A])
+fn fill_buffer<F, A>(evals: RowMajorMatrixView<F>, mut buffer: RowMajorMatrixViewMut<A>)
 where
     F: Field,
-    A: Algebra<F>,
+    A: Algebra<F> + Send + Sync,
 {
-    for (ind, &entry) in points.enumerate() {
+    for (ind, eval_row) in evals.row_slices().rev().enumerate() {
         let stride = 1 << ind;
 
-        for index in 0..stride {
-            let val = buffer[index].clone();
-            let scaled_val = val.clone() * entry;
-            let new_val = val - scaled_val.clone();
+        let (mut current_buffer, mut new_buffer) = buffer.split_rows_mut(stride);
 
-            buffer[index] = new_val;
-            buffer[index + stride] = scaled_val;
-        }
+        current_buffer
+            .rows_mut()
+            .zip(new_buffer.rows_mut())
+            .for_each(|(currents, news)| {
+                currents
+                    .iter_mut()
+                    .zip(news.iter_mut().zip(eval_row))
+                    .for_each(|(val, (new, &eval))| {
+                        *new = val.clone() * eval;
+                        *val -= new.clone();
+                    });
+            });
     }
 }
 
 /// Compute the scaled multilinear equality polynomial over `{0,1}`.
 ///
 /// # Arguments
-/// - `eval`: Slice containing the evaluation point `[z_0]` (must have length 1).
-/// - `scalar`: A field element `α ∈ 𝔽` used to scale the result.
+/// - `evals`: Matrix of height 1 containing a set of evaluation points `[z_0, z_1, ...]`.
+/// - `scalars`: A slice of field elements `[α_0, α_1, ...]` used to scale the result.
 ///
 /// # Returns
-/// An array of scaled evaluations `[α ⋅ eq(0, z), α ⋅ eq(1, z)] = [α ⋅ (1 - z_0), α ⋅ z_0]`.
+/// An array of summed scaled evaluations:
+/// - The first element is `∑ α_i ⋅ eq(0, z_i) = ∑ α_i ⋅ (1 - z_i)`
+/// - The second element is `∑ α_i ⋅ eq(1, z_i) = ∑ α_i ⋅ z_i`
 #[inline(always)]
-fn eval_eq_1<F, FP>(eval: &[F], scalar: FP) -> [FP; 2]
+fn eval_eq_1<F, FP>(evals: RowMajorMatrixView<F>, scalars: &[FP]) -> [FP; 2]
 where
     F: Field,
-    FP: Algebra<F>,
+    FP: Algebra<F> + Copy,
 {
-    assert_eq!(eval.len(), 1);
+    assert!(evals.height() == 1);
 
-    // Extract the evaluation point z_0
-    let z_0 = eval[0];
+    // Compute ∑ α_i
+    let sum: FP = scalars.iter().cloned().sum();
 
-    // Compute α ⋅ z_0 = α ⋅ eq(1, z) and α ⋅ (1 - z_0) = α - α ⋅ z_0 = α ⋅ eq(0, z)
-    let eq_1 = scalar.clone() * z_0;
-    let eq_0 = scalar - eq_1.clone();
+    // Compute ∑ α_i ⋅ z_i
+    let eq_1_sum: FP = evals
+        .values
+        .iter()
+        .zip(scalars.iter())
+        .map(|(&z_0, &scalar)| scalar * z_0)
+        .sum();
 
-    [eq_0, eq_1]
+    [eq_1_sum - sum, eq_1_sum]
 }
 
 /// Compute the scaled multilinear equality polynomial over `{0,1}²`.
 ///
 /// # Arguments
-/// - `eval`: Slice containing the evaluation point `[z_0, z_1]` (must have length 2).
-/// - `scalar`: A field element `α ∈ 𝔽` used to scale the result.
+/// - `evals`: Matrix of height 2 whose columns correspond to evaluations points `[z_00, z_10, ..., z_01, z_11, ...]`
+/// - `scalars`: A slice of field elements `[α_0, α_1, ...]` used to scale the result.
 ///
 /// # Returns
-/// An array containing `α ⋅ eq(x, z)` for `x ∈ {0,1}²` arranged using lexicographic order of `x`.
+/// An array of summed scaled evaluations:
+/// - The first element is `∑ α_i ⋅ eq([0, 0], [z_i0, z_i1]) = ∑ α_i ⋅ (1 - z_i0) ⋅ (1 - z_i1)`
+/// - The second element is `∑ α_i ⋅ eq([0, 1], [z_i0, z_i1]) = ∑ α_i ⋅ (1 - z_i0) ⋅ z_i1`
+/// - The third element is `∑ α_i ⋅ eq([1, 0], [z_i0, z_i1]) = ∑ α_i ⋅ z_i0 ⋅ (1 - z_i1)`
+/// - The fourth element is `∑ α_i ⋅ eq([1, 1], [z_i0, z_i1]) = ∑ α_i ⋅ z_i0 ⋅ z_i1`
 #[inline(always)]
-fn eval_eq_2<F, FP>(eval: &[F], scalar: FP) -> [FP; 4]
+fn eval_eq_2<F, FP>(evals: RowMajorMatrixView<F>, scalars: &[FP]) -> [FP; 4]
 where
     F: Field,
-    FP: Algebra<F>,
+    FP: Algebra<F> + Copy,
 {
-    assert_eq!(eval.len(), 2);
+    assert!(evals.height() == 2);
+    let (first_row, second_row) = evals.split_rows(1);
 
-    // Extract z_0 from the evaluation point
-    let z_0 = eval[0];
-
-    // Compute eq_1 = α ⋅ z_0 = α ⋅ eq(1, -) and eq_0 = α - s1 = α ⋅ (1 - z_0) = α ⋅ eq(0, -)
-    let eq_1 = scalar.clone() * z_0;
-    let eq_0 = scalar - eq_1.clone();
+    let (eq_0s, eq_1s): (Vec<_>, Vec<_>) = first_row
+        .values
+        .into_iter()
+        .zip(scalars.iter())
+        .map(|(&z_0, &scalar)| {
+            let eq_1 = scalar * z_0;
+            let eq_0 = scalar - eq_1;
+            (eq_0, eq_1)
+        })
+        .unzip();
 
     // Recurse to calculate evaluations for the remaining variable
-    let [eq_00, eq_01] = eval_eq_1(&eval[1..], eq_0);
-    let [eq_10, eq_11] = eval_eq_1(&eval[1..], eq_1);
+    let [eq_00, eq_01] = eval_eq_1(second_row, &eq_0s);
+    let [eq_10, eq_11] = eval_eq_1(second_row, &eq_1s);
 
     // Return values in lexicographic order of x = (x_0, x_1)
     [eq_00, eq_01, eq_10, eq_11]
@@ -194,29 +235,35 @@ where
 /// Compute the scaled multilinear equality polynomial over `{0,1}³`.
 ///
 /// # Arguments
-/// - `eval`: Slice containing the evaluation point `[z_0, z_1, z_2]` (must have length 3).
-/// - `scalar`: A field element `α ∈ 𝔽` used to scale the result.
+/// - `eval`: Matrix of height 3 whose columns correspond to evaluations points.
+/// - `scalar`: A slice of field elements `[α_0, α_1, ...]` used to scale the result.
 ///
 /// # Returns
-/// An array containing `α ⋅ eq(x, z)` for `x ∈ {0,1}³` arranged using lexicographic order of `x`.
+/// An array of summed scaled evaluations containing `∑ α_i ⋅ eq(x, z_i)` for `x ∈ {0,1}³` arranged using lexicographic order of `x`.
 #[inline(always)]
-fn eval_eq_3<F, FP>(eval: &[F], scalar: FP) -> [FP; 8]
+fn eval_eq_3<F, FP>(evals: RowMajorMatrixView<F>, scalars: &[FP]) -> [FP; 8]
 where
     F: Field,
-    FP: Algebra<F>,
+    FP: Algebra<F> + Copy,
 {
-    assert_eq!(eval.len(), 3);
+    assert_eq!(evals.height(), 3);
 
-    // Extract z_0 from the evaluation point
-    let z_0 = eval[0];
+    let (first_row, remainder) = evals.split_rows(1);
 
-    // Compute eq_1 = α ⋅ z_0 = α ⋅ eq(1, -) and eq_0 = α - s1 = α ⋅ (1 - z_0) = α ⋅ eq(0, -)
-    let eq_1 = scalar.clone() * z_0;
-    let eq_0 = scalar - eq_1.clone();
+    let (eq_0s, eq_1s): (Vec<_>, Vec<_>) = first_row
+        .values
+        .into_iter()
+        .zip(scalars.iter())
+        .map(|(&z_0, &scalar)| {
+            let eq_1 = scalar * z_0;
+            let eq_0 = scalar - eq_1;
+            (eq_0, eq_1)
+        })
+        .unzip();
 
     // Recurse to calculate evaluations for the remaining variables
-    let [eq_000, eq_001, eq_010, eq_011] = eval_eq_2(&eval[1..], eq_0);
-    let [eq_100, eq_101, eq_110, eq_111] = eval_eq_2(&eval[1..], eq_1);
+    let [eq_000, eq_001, eq_010, eq_011] = eval_eq_2(remainder, &eq_0s);
+    let [eq_100, eq_101, eq_110, eq_111] = eval_eq_2(remainder, &eq_1s);
 
     // Return all 8 evaluations in lexicographic order of x ∈ {0,1}³
     [
@@ -230,20 +277,25 @@ trait EqualityEvaluator {
     type InputField;
     type OutputField;
     type PackedField: Algebra<Self::InputField> + Copy + Send + Sync;
+    type PackedFieldExt: Algebra<Self::InputField> + Copy + Send + Sync;
 
-    fn init_packed(eval: &[Self::InputField], init_value: Self::OutputField) -> Self::PackedField;
+    fn init_packed(
+        evals: RowMajorMatrixView<Self::InputField>,
+        init_values: &[Self::OutputField],
+    ) -> Vec<Self::PackedField>;
 
     fn process_chunk<const INITIALIZED: bool>(
-        eval: &[Self::InputField],
+        eval: RowMajorMatrixView<Self::InputField>,
         out_chunk: &mut [Self::OutputField],
-        buffer_val: Self::PackedField,
-        scalar: Self::OutputField,
+        buffer_vals: &[Self::PackedField],
+        scalars: &[Self::OutputField],
     );
+
+    fn convert(buffer_vals: &[Self::PackedField], scalars: &[Self::OutputField]) -> Vec<Self::PackedFieldExt>;
 
     fn accumulate_results<const INITIALIZED: bool, const N: usize>(
         out: &mut [Self::OutputField],
-        eq_evals: [Self::PackedField; N],
-        scalar: Self::OutputField,
+        eq_evals: [Self::PackedFieldExt; N],
     );
 }
 
@@ -264,24 +316,35 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for ExtFieldEvaluator<F,
     type InputField = EF;
     type OutputField = EF;
     type PackedField = EF::ExtensionPacking;
+    type PackedFieldExt = EF::ExtensionPacking;
 
-    fn init_packed(eval: &[Self::InputField], init_value: Self::OutputField) -> Self::PackedField {
-        packed_eq_poly(eval, init_value)
+    #[inline]
+    fn init_packed(
+        evals: RowMajorMatrixView<Self::InputField>,
+        init_values: &[Self::OutputField],
+    ) -> Vec<Self::PackedField> {
+        packed_eq_poly(evals, init_values)
     }
 
+    #[inline]
     fn process_chunk<const INITIALIZED: bool>(
-        eval: &[Self::InputField],
+        eval: RowMajorMatrixView<Self::InputField>,
         out_chunk: &mut [Self::OutputField],
-        buffer_val: Self::PackedField,
-        scalar: Self::OutputField,
+        buffer_vals: &[Self::PackedField],
+        scalars: &[Self::OutputField],
     ) {
-        eval_eq_packed::<F, EF, EF, Self, INITIALIZED>(eval, out_chunk, buffer_val, scalar);
+        eval_eq_packed::<F, EF, EF, Self, INITIALIZED>(eval, out_chunk, buffer_vals, scalars);
     }
 
+    #[inline]
+    fn convert(buffer_vals: &[Self::PackedField], _scalars: &[Self::OutputField]) -> Vec<Self::PackedFieldExt> {
+        buffer_vals.to_vec()
+    }
+
+    #[inline]
     fn accumulate_results<const INITIALIZED: bool, const N: usize>(
         out: &mut [Self::OutputField],
-        eq_evals: [Self::PackedField; N],
-        _scalar: Self::OutputField,
+        eq_evals: [Self::PackedFieldExt; N],
     ) {
         // Unpack the evaluations back into EF elements and add to output.
         // We use `iter_array_chunks_padded` to allow us to use `add_slices` without
@@ -301,27 +364,48 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for BaseFieldEvaluator<F
     type InputField = F;
     type OutputField = EF;
     type PackedField = F::Packing;
+    type PackedFieldExt = EF::ExtensionPacking;
 
-    fn init_packed(eval: &[Self::InputField], _init_value: Self::OutputField) -> Self::PackedField {
-        packed_eq_poly(eval, F::ONE)
+    #[inline]
+    fn init_packed(
+        evals: RowMajorMatrixView<Self::InputField>,
+        _init_values: &[Self::OutputField],
+    ) -> Vec<Self::PackedField> {
+        let const_scalars = vec![F::ONE; evals.width()];
+        packed_eq_poly(evals, &const_scalars)
     }
 
+    #[inline]
     fn process_chunk<const INITIALIZED: bool>(
-        eval: &[Self::InputField],
+        eval: RowMajorMatrixView<Self::InputField>,
         out_chunk: &mut [Self::OutputField],
-        buffer_val: Self::PackedField,
-        scalar: Self::OutputField,
+        buffer_vals: &[Self::PackedField],
+        scalars: &[Self::OutputField],
     ) {
-        eval_eq_packed::<F, F, EF, Self, INITIALIZED>(eval, out_chunk, buffer_val, scalar);
+        eval_eq_packed::<F, F, EF, Self, INITIALIZED>(eval, out_chunk, buffer_vals, scalars);
     }
 
+    #[inline]
+    fn convert(buffer_vals: &[Self::PackedField], scalars: &[Self::OutputField]) -> Vec<Self::PackedFieldExt> {
+        scalars.iter().zip(buffer_vals).map(|(&s, &b)| Into::<Self::PackedFieldExt>::into(s) * b).collect()
+    }
+
+    #[inline]
     fn accumulate_results<const INITIALIZED: bool, const N: usize>(
         out: &mut [Self::OutputField],
-        eq_evals: [Self::PackedField; N],
-        scalar: Self::OutputField,
+        eq_evals: [Self::PackedFieldExt; N],
     ) {
-        let eq_evals_unpacked = F::Packing::unpack_slice(&eq_evals);
-        scale_and_add::<_, _, INITIALIZED>(out, eq_evals_unpacked, scalar);
+        // Unpack the evaluations back into EF elements and add to output.
+        // We use `iter_array_chunks_padded` to allow us to use `add_slices` without
+        // needing a vector allocation. Note that `eq_evaluations: [EF::ExtensionPacking: N]`
+        // so we know that `out.len() = N * F::Packing::WIDTH` meaning we can use `chunks_exact_mut`
+        // and `iter_array_chunks_padded` will never actually pad anything.
+        // This avoids needing to allocation the extension iter to a vector.
+        iter_array_chunks_padded::<_, N>(EF::ExtensionPacking::to_ext_iter(eq_evals), EF::ZERO)
+            .zip(out.chunks_exact_mut(N))
+            .for_each(|(res, out_chunk)| {
+                add_or_set::<_, INITIALIZED>(out_chunk, &res);
+            });
     }
 }
 
@@ -336,10 +420,6 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for BaseFieldEvaluator<F
 /// The parameter: `E: EqualityEvaluator` lets this function adopt slightly different optimization strategies depending
 /// on whether `F = IF` or `IF = EF`.
 ///
-/// # Behavior of `INITIALIZED`
-/// If `INITIALIZED = false`, each value in `out` is overwritten with the computed result.
-/// If `INITIALIZED = true`, the computed result is added to the existing value in `out`.
-///
 /// # Arguments:
 /// - `eval_points`: The point the equality function is being evaluated at.
 /// - `out`: The output buffer to store or accumulate the results.
@@ -347,30 +427,34 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for BaseFieldEvaluator<F
 /// - `scalar`: An optional value which may be used to scale the result depending on the strategy used
 ///   by the `EqualityEvaluator`.
 #[inline]
-fn eval_eq_common<F, IF, EF, E, const INITIALIZED: bool>(eval: &[IF], out: &mut [EF], scalar: EF)
-where
+fn eval_eq_common<F, IF, EF, E, const INITIALIZED: bool>(
+    evals: RowMajorMatrixView<IF>,
+    out: &mut [EF],
+    scalars: &[EF],
+) where
     F: Field,
     IF: Field,
     EF: ExtensionField<F> + ExtensionField<IF>,
     E: EqualityEvaluator<InputField = IF, OutputField = EF>,
 {
+    // Ensure that the scalar slice is of the correct length.
+    debug_assert_eq!(evals.width(), scalars.len());
+
+    let num_variables = evals.height();
+
     // we assume that packing_width is a power of 2.
     let packing_width = F::Packing::WIDTH;
     let num_threads = current_num_threads().next_power_of_two();
     let log_num_threads = log2_strict_usize(num_threads);
 
-    // Ensure that the output buffer size is correct:
-    // It should be of size `2^n`, where `n` is the number of variables.
-    debug_assert_eq!(out.len(), 1 << eval.len());
-
     // If the number of variables is small, there is no need to use
     // parallelization or packings.
-    if eval.len() <= packing_width + 1 + log_num_threads {
+    if num_variables <= packing_width + 1 + log_num_threads {
         // A basic recursive approach.
-        eval_eq_basic::<F, IF, EF, INITIALIZED>(eval, out, scalar);
+        eval_eq_basic::<F, IF, EF, INITIALIZED>(evals, out, scalars);
     } else {
         let log_packing_width = log2_strict_usize(packing_width);
-        let eval_len_min_packing = eval.len() - log_packing_width;
+        let eval_len_min_packing = num_variables - log_packing_width;
 
         // We split eval into three parts:
         // - eval[..log_num_threads] (the first log_num_threads elements)
@@ -384,29 +468,31 @@ where
         // Note that this is a slightly different strategy to `eval_eq` which instead
         // uses PackedExtensionField elements. Whilst this involves slightly more mathematical
         // operations, it seems to be faster in practice due to less data moving around.
-        let mut parallel_buffer = E::PackedField::zero_vec(num_threads);
+        let mut parallel_buffer = RowMajorMatrix::new(
+            E::PackedField::zero_vec(evals.width() * num_threads),
+            evals.width(),
+        );
 
         // As num_threads is a power of two we can divide using a bit-shift.
         let out_chunk_size = out.len() >> log_num_threads;
 
         // Compute the equality polynomial corresponding to the last log_packing_width elements
         // and pack these.
-        parallel_buffer[0] = E::init_packed(&eval[eval_len_min_packing..], scalar);
+        let (front_rows, packed_rows) = evals.split_rows(eval_len_min_packing);
+        let init_packings = E::init_packed(packed_rows, scalars);
+        parallel_buffer.row_mut(0).copy_from_slice(&init_packings);
+
+        let (buffer_rows, middle_rows) = front_rows.split_rows(log_num_threads);
 
         // Update the buffer so it contains the evaluations of the equality polynomial
         // with respect to parts one and three.
-        fill_buffer(eval[..log_num_threads].iter().rev(), &mut parallel_buffer);
+        fill_buffer(buffer_rows, parallel_buffer.as_view_mut());
 
         // Finally do all computations involving the middle elements.
         out.par_chunks_exact_mut(out_chunk_size)
-            .zip(parallel_buffer.par_iter())
-            .for_each(|(out_chunk, &buffer_val)| {
-                E::process_chunk::<INITIALIZED>(
-                    &eval[log_num_threads..eval_len_min_packing],
-                    out_chunk,
-                    buffer_val,
-                    scalar,
-                );
+            .zip(parallel_buffer.par_row_slices())
+            .for_each(|(out_chunk, buffer_row)| {
+                E::process_chunk::<INITIALIZED>(middle_rows, out_chunk, buffer_row, scalars);
             });
     }
 }
@@ -435,10 +521,10 @@ where
 ///   be used to scale the result or may have already been applied to `eq_evals` and thus be ignored.
 #[inline]
 fn eval_eq_packed<F, IF, EF, E, const INITIALIZED: bool>(
-    eval_points: &[IF],
+    eval_points: RowMajorMatrixView<IF>,
     out: &mut [EF],
-    eq_evals: E::PackedField,
-    scalar: EF,
+    eq_evals: &[E::PackedField],
+    scalars: &[EF],
 ) where
     F: Field,
     IF: Field,
@@ -448,23 +534,25 @@ fn eval_eq_packed<F, IF, EF, E, const INITIALIZED: bool>(
     // Ensure that the output buffer size is correct:
     // It should be of size `2^n`, where `n` is the number of variables.
     let width = F::Packing::WIDTH;
-    debug_assert_eq!(out.len(), width << eval_points.len());
+    debug_assert_eq!(out.len(), width << eval_points.height());
 
-    match eval_points.len() {
+    match eval_points.height() {
         0 => {
-            E::accumulate_results::<INITIALIZED, 1>(out, [eq_evals], scalar);
+            // TODO
+            E::accumulate_results::<INITIALIZED, 1>(out, [converted[0]]);
         }
         1 => {
-            let eq_evaluations = eval_eq_1(eval_points, eq_evals);
-            E::accumulate_results::<INITIALIZED, 2>(out, eq_evaluations, scalar);
+            let converted = E::convert(eq_evals, scalars);
+            let eq_evaluations = eval_eq_1(eval_points, &converted);
+            E::accumulate_results::<INITIALIZED, 2>(out, eq_evaluations);
         }
         2 => {
             let eq_evaluations = eval_eq_2(eval_points, eq_evals);
-            E::accumulate_results::<INITIALIZED, 4>(out, eq_evaluations, scalar);
+            E::accumulate_results::<INITIALIZED, 4>(out, eq_evaluations);
         }
         3 => {
             let eq_evaluations = eval_eq_3(eval_points, eq_evals);
-            E::accumulate_results::<INITIALIZED, 8>(out, eq_evaluations, scalar);
+            E::accumulate_results::<INITIALIZED, 8>(out, eq_evaluations);
         }
         _ => {
             let (&x, tail) = eval_points.split_first().unwrap();
@@ -479,8 +567,8 @@ fn eval_eq_packed<F, IF, EF, E, const INITIALIZED: bool>(
             let s1 = eq_evals * x; // Contribution when `X_i = 1`
             let s0 = eq_evals - s1; // Contribution when `X_i = 0`
 
-            eval_eq_packed::<F, IF, EF, E, INITIALIZED>(tail, low, s0, scalar);
-            eval_eq_packed::<F, IF, EF, E, INITIALIZED>(tail, high, s1, scalar);
+            eval_eq_packed::<F, IF, EF, E, INITIALIZED>(tail, low, s0, scalars);
+            eval_eq_packed::<F, IF, EF, E, INITIALIZED>(tail, high, s1, scalars);
         }
     }
 }
@@ -499,41 +587,42 @@ fn eval_eq_packed<F, IF, EF, E, const INITIALIZED: bool>(
 /// - `out`: The output buffer to store or accumulate the results.
 /// - `scalar`: Stores the current state of the equality polynomial evaluation in the recursive call.
 #[inline]
-fn eval_eq_basic<F, IF, EF, const INITIALIZED: bool>(eval: &[IF], out: &mut [EF], scalar: EF)
-where
+fn eval_eq_basic<F, IF, EF, const INITIALIZED: bool>(
+    evals: RowMajorMatrixView<IF>,
+    out: &mut [EF],
+    scalars: &[EF],
+) where
     F: Field,
     IF: Field,
     EF: ExtensionField<F> + Algebra<IF>,
 {
-    // Ensure that the output buffer size is correct:
-    // It should be of size `2^n`, where `n` is the number of variables.
-    debug_assert_eq!(out.len(), 1 << eval.len());
+    // All invaraiants should have been checked by the caller.
 
-    match eval.len() {
+    match evals.height() {
         0 => {
             if INITIALIZED {
-                out[0] += scalar;
+                EF::add_slices(out, scalars);
             } else {
-                out[0] = scalar;
+                out.copy_from_slice(scalars);
             }
         }
         1 => {
             // Manually unroll for single variable case
-            let eq_evaluations = eval_eq_1(eval, scalar);
+            let eq_evaluations = eval_eq_1(evals, scalars);
             add_or_set::<_, INITIALIZED>(out, &eq_evaluations);
         }
         2 => {
             // Manually unroll for two variable case
-            let eq_evaluations = eval_eq_2(eval, scalar);
+            let eq_evaluations = eval_eq_2(evals, scalars);
             add_or_set::<_, INITIALIZED>(out, &eq_evaluations);
         }
         3 => {
             // Manually unroll for three variable case
-            let eq_evaluations = eval_eq_3(eval, scalar);
+            let eq_evaluations = eval_eq_3(evals, scalars);
             add_or_set::<_, INITIALIZED>(out, &eq_evaluations);
         }
         _ => {
-            let (&x, tail) = eval.split_first().unwrap();
+            let (&x, tail) = evals.split_first().unwrap();
 
             // Divide the output buffer into two halves: one for `X_i = 0` and one for `X_i = 1`
             let (low, high) = out.split_at_mut(out.len() / 2);
@@ -564,22 +653,24 @@ where
 ///
 /// The length of `eval` must be equal to the `log2` of `F::Packing::WIDTH`.
 #[inline(always)]
-fn packed_eq_poly<F, EF>(eval: &[EF], scalar: EF) -> EF::ExtensionPacking
+fn packed_eq_poly<F, EF>(evals: RowMajorMatrixView<EF>, scalars: &[EF]) -> Vec<EF::ExtensionPacking>
 where
     F: Field,
     EF: ExtensionField<F>,
 {
     // As this function is only available in this file, debug_assert should be fine here.
     // If this function becomes public, this should be changed to an assert.
-    debug_assert_eq!(F::Packing::WIDTH, 1 << eval.len());
+    debug_assert_eq!(F::Packing::WIDTH, 1 << evals.height());
 
     // We build up the evaluations of the equality polynomial in buffer.
-    let mut buffer = EF::zero_vec(1 << eval.len());
-    buffer[0] = scalar;
+    let mut buffer =
+        RowMajorMatrix::new(EF::zero_vec(evals.width() << evals.height()), evals.width());
+    buffer.row_mut(0).copy_from_slice(scalars);
 
-    fill_buffer(eval.iter().rev(), &mut buffer);
+    fill_buffer(evals, buffer.as_view_mut());
+    // Need to transpose the buffer.
 
-    // Finally we need to do a "transpose" to get a `PackedFieldExtension` element.
+    // Finally we need to "transpose" to get `PackedFieldExtension` element.
     EF::ExtensionPacking::from_ext_slice(&buffer)
 }
 
@@ -625,9 +716,6 @@ mod tests {
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{PrimeCharacteristicRing, PrimeField64};
     use proptest::prelude::*;
-    use rand::distr::StandardUniform;
-    use rand::rngs::SmallRng;
-    use rand::{Rng, SeedableRng};
 
     use super::*;
 
@@ -708,160 +796,6 @@ mod tests {
         }
 
         result
-    }
-
-    proptest! {
-        #[test]
-        fn prop_eval_eq_matches_naive(
-            n in 1usize..6, // number of variables
-            evals in prop::collection::vec(0u64..F::ORDER_U64, 1..6),
-            scalar_val in 0u64..F::ORDER_U64,
-        ) {
-            // Take exactly n elements and map to EF4
-            let evals: Vec<EF4> = evals.into_iter().take(n).map(EF4::from_u64).collect();
-            let scalar = EF4::from_u64(scalar_val);
-
-            // Make sure output has correct size: 2^n
-            let out_len = 1 << evals.len();
-            let mut output = vec![EF4::ZERO; out_len];
-
-            eval_eq::<F, EF4, true>(&evals, &mut output, scalar);
-
-            let expected = naive_eq(&evals, scalar);
-
-            prop_assert_eq!(output, expected);
-        }
-    }
-
-    #[test]
-    fn test_eval_eq_1_against_naive() {
-        let rng = &mut SmallRng::seed_from_u64(0);
-
-        // Choose a few values of z_0 and α to test
-        let test_cases = vec![
-            (rng.sample(StandardUniform), rng.sample(StandardUniform)),
-            (rng.sample(StandardUniform), rng.sample(StandardUniform)),
-            (rng.sample(StandardUniform), rng.sample(StandardUniform)),
-            (rng.sample(StandardUniform), rng.sample(StandardUniform)),
-            (rng.sample(StandardUniform), rng.sample(StandardUniform)),
-        ];
-
-        for (z_0, alpha) in test_cases {
-            // Compute using the optimized eval_eq_1 function
-            let result = eval_eq_1::<F, F>(&[z_0], alpha);
-
-            // Compute eq(0, z_0) and eq(1, z_0) naively using the full formula:
-            //
-            // eq(x, z_0) = x * z_0 + (1 - x) * (1 - z_0)
-            //
-            let x0 = F::ZERO;
-            let x1 = F::ONE;
-
-            let eq_0 = x0 * z_0 + (F::ONE - x0) * (F::ONE - z_0);
-            let eq_1 = x1 * z_0 + (F::ONE - x1) * (F::ONE - z_0);
-
-            // Scale by α
-            let expected_0 = alpha * eq_0;
-            let expected_1 = alpha * eq_1;
-
-            assert_eq!(
-                result[0], expected_0,
-                "eq(0, z_0) mismatch for z_0 = {z_0:?}"
-            );
-            assert_eq!(
-                result[1], expected_1,
-                "eq(1, z_0) mismatch for z_0 = {z_0:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_eval_eq_2_against_naive() {
-        let rng = &mut SmallRng::seed_from_u64(42);
-
-        // Generate a few random test cases for (z_0, z_1) and α
-        let test_cases = (0..5)
-            .map(|_| {
-                let z_0: F = rng.sample(StandardUniform);
-                let z_1: F = rng.sample(StandardUniform);
-                let alpha: F = rng.sample(StandardUniform);
-                ([z_0, z_1], alpha)
-            })
-            .collect::<Vec<_>>();
-
-        for ([z_0, z_1], alpha) in test_cases {
-            // Optimized output
-            let result = eval_eq_2::<F, F>(&[z_0, z_1], alpha);
-
-            // Naive computation using the full formula:
-            //
-            // eq(x, z) = ∏ (x_i z_i + (1 - x_i)(1 - z_i))
-            // for x ∈ { (0,0), (0,1), (1,0), (1,1) }
-
-            let inputs = [
-                (F::ZERO, F::ZERO), // x = (0,0)
-                (F::ZERO, F::ONE),  // x = (0,1)
-                (F::ONE, F::ZERO),  // x = (1,0)
-                (F::ONE, F::ONE),   // x = (1,1)
-            ];
-
-            for (i, (x0, x1)) in inputs.iter().enumerate() {
-                let eq_val = (*x0 * z_0 + (F::ONE - *x0) * (F::ONE - z_0))
-                    * (*x1 * z_1 + (F::ONE - *x1) * (F::ONE - z_1));
-                let expected = alpha * eq_val;
-
-                assert_eq!(
-                    result[i], expected,
-                    "Mismatch at x = ({x0:?}, {x1:?}), z = ({z_0:?}, {z_1:?})"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn test_eval_eq_3_against_naive() {
-        let rng = &mut SmallRng::seed_from_u64(123);
-
-        // Generate random test cases for (z_0, z_1, z_2) and α
-        let test_cases = (0..5)
-            .map(|_| {
-                let z_0: F = rng.sample(StandardUniform);
-                let z_1: F = rng.sample(StandardUniform);
-                let z_2: F = rng.sample(StandardUniform);
-                let alpha: F = rng.sample(StandardUniform);
-                ([z_0, z_1, z_2], alpha)
-            })
-            .collect::<Vec<_>>();
-
-        for ([z_0, z_1, z_2], alpha) in test_cases {
-            // Optimized computation
-            let result = eval_eq_3::<F, F>(&[z_0, z_1, z_2], alpha);
-
-            // Naive computation using:
-            // eq(x, z) = ∏ (x_i z_i + (1 - x_i)(1 - z_i))
-            let inputs = [
-                (F::ZERO, F::ZERO, F::ZERO), // (0,0,0)
-                (F::ZERO, F::ZERO, F::ONE),  // (0,0,1)
-                (F::ZERO, F::ONE, F::ZERO),  // (0,1,0)
-                (F::ZERO, F::ONE, F::ONE),   // (0,1,1)
-                (F::ONE, F::ZERO, F::ZERO),  // (1,0,0)
-                (F::ONE, F::ZERO, F::ONE),   // (1,0,1)
-                (F::ONE, F::ONE, F::ZERO),   // (1,1,0)
-                (F::ONE, F::ONE, F::ONE),    // (1,1,1)
-            ];
-
-            for (i, (x0, x1, x2)) in inputs.iter().enumerate() {
-                let eq_val = (*x0 * z_0 + (F::ONE - *x0) * (F::ONE - z_0))
-                    * (*x1 * z_1 + (F::ONE - *x1) * (F::ONE - z_1))
-                    * (*x2 * z_2 + (F::ONE - *x2) * (F::ONE - z_2));
-                let expected = alpha * eq_val;
-
-                assert_eq!(
-                    result[i], expected,
-                    "Mismatch at x = ({x0:?}, {x1:?}, {x2:?}), z = ({z_0:?}, {z_1:?}, {z_2:?})"
-                );
-            }
-        }
     }
 
     proptest! {

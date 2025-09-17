@@ -345,6 +345,19 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
     }
 
     #[inline]
+    fn sub_slices(slice_1: &mut [Self], slice_2: &[Self]) {
+        // By construction, Self is repr(transparent) over [F; D].
+        // Additionally, addition is F-linear. Hence we can cast
+        // everything to F and use F's sub_slices.
+        unsafe {
+            let base_slice_1 = as_base_slice_mut(slice_1);
+            let base_slice_2 = as_base_slice(slice_2);
+
+            F::sub_slices(base_slice_1, base_slice_2);
+        }
+    }
+
+    #[inline]
     fn order() -> BigUint {
         F::order().pow(D as u32)
     }

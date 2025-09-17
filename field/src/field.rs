@@ -827,6 +827,33 @@ pub trait Field:
         }
     }
 
+    /// Subtract two slices of field elements, returning the result in the first slice.
+    ///
+    /// Makes use of packing to speed up the subtraction.
+    ///
+    /// This is optimal for cases where the two slices are small to medium length. E.g. between
+    /// `F::Packing::WIDTH` and roughly however many elements fit in a cache line.
+    ///
+    /// For larger slices, it's likely worthwhile to use parallelization before calling this.
+    /// Similarly if you need to add a large number of slices together, it's best to
+    /// break them into small chunks and call this on the smaller chunks.
+    ///
+    /// # Panics
+    /// The function will panic if the lengths of the two slices are not equal.
+    #[inline]
+    fn sub_slices(slice_1: &mut [Self], slice_2: &[Self]) {
+        let (shorts_1, suffix_1) = Self::Packing::pack_slice_with_suffix_mut(slice_1);
+        let (shorts_2, suffix_2) = Self::Packing::pack_slice_with_suffix(slice_2);
+        debug_assert_eq!(shorts_1.len(), shorts_2.len());
+        debug_assert_eq!(suffix_1.len(), suffix_2.len());
+        for (x_1, &x_2) in shorts_1.iter_mut().zip(shorts_2) {
+            *x_1 -= x_2;
+        }
+        for (x_1, &x_2) in suffix_1.iter_mut().zip(suffix_2) {
+            *x_1 -= x_2;
+        }
+    }
+
     /// The number of elements in the field.
     ///
     /// This will either be prime if the field is a PrimeField or a power of a

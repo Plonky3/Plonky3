@@ -285,7 +285,7 @@ where
     }
 }
 
-pub fn test_add_slice<F: Field>()
+pub fn test_add_and_sub_slice<F: Field>()
 where
     StandardUniform: Distribution<F>,
 {
@@ -303,6 +303,11 @@ where
         F::add_slices(&mut slice_1, &slice_2);
         for i in 0..len {
             assert_eq!(slice_1[i], slice_1_copy[i] + slice_2[i]);
+        }
+
+        F::sub_slices(&mut slice_1, &slice_2);
+        for i in 0..len {
+            assert_eq!(slice_1[i], slice_1_copy[i]);
         }
     }
 }
