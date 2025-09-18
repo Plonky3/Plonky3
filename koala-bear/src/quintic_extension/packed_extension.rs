@@ -15,11 +15,11 @@ use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 
 use super::extension::QuinticExtensionField;
-use crate::QuinticExtendable;
+use crate::KoalaBear;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
 #[repr(transparent)] // Needed to make various casts safe.
-pub struct PackedQuinticExtensionField<F: Field, PF: PackedField<Scalar = F>> {
+pub struct PackedQuinticExtensionField<PF: PackedField<Scalar = KoalaBear>> {
     #[serde(
         with = "p3_util::array_serialization",
         bound(serialize = "PF: Serialize", deserialize = "PF: Deserialize<'de>")
@@ -27,13 +27,13 @@ pub struct PackedQuinticExtensionField<F: Field, PF: PackedField<Scalar = F>> {
     pub(crate) value: [PF; 5],
 }
 
-impl<F: Field, PF: PackedField<Scalar = F>> PackedQuinticExtensionField<F, PF> {
+impl<PF: PackedField<Scalar = KoalaBear>> PackedQuinticExtensionField<PF> {
     const fn new(value: [PF; 5]) -> Self {
         Self { value }
     }
 }
 
-impl<F: Field, PF: PackedField<Scalar = F>> Default for PackedQuinticExtensionField<F, PF> {
+impl<PF: PackedField<Scalar = KoalaBear>> Default for PackedQuinticExtensionField<PF> {
     #[inline]
     fn default() -> Self {
         Self {
@@ -42,18 +42,18 @@ impl<F: Field, PF: PackedField<Scalar = F>> Default for PackedQuinticExtensionFi
     }
 }
 
-impl<F: Field, PF: PackedField<Scalar = F>> From<QuinticExtensionField<F>>
-    for PackedQuinticExtensionField<F, PF>
+impl<PF: PackedField<Scalar = KoalaBear>> From<QuinticExtensionField<KoalaBear>>
+    for PackedQuinticExtensionField<PF>
 {
     #[inline]
-    fn from(x: QuinticExtensionField<F>) -> Self {
+    fn from(x: QuinticExtensionField<KoalaBear>) -> Self {
         Self {
             value: x.value.map(Into::into),
         }
     }
 }
 
-impl<F: Field, PF: PackedField<Scalar = F>> From<PF> for PackedQuinticExtensionField<F, PF> {
+impl<PF: PackedField<Scalar = KoalaBear>> From<PF> for PackedQuinticExtensionField<PF> {
     #[inline]
     fn from(x: PF) -> Self {
         Self {
@@ -62,31 +62,28 @@ impl<F: Field, PF: PackedField<Scalar = F>> From<PF> for PackedQuinticExtensionF
     }
 }
 
-impl<F: Field, PF: PackedField<Scalar = F>> Distribution<PackedQuinticExtensionField<F, PF>>
+impl<PF: PackedField<Scalar = KoalaBear>> Distribution<PackedQuinticExtensionField<PF>>
     for StandardUniform
 where
     Self: Distribution<PF>,
 {
     #[inline]
-    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> PackedQuinticExtensionField<F, PF> {
+    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> PackedQuinticExtensionField<PF> {
         PackedQuinticExtensionField::new(array::from_fn(|_| self.sample(rng)))
     }
 }
 
-impl<F: QuinticExtendable, PF: PackedField<Scalar = F>> Algebra<QuinticExtensionField<F>>
-    for PackedQuinticExtensionField<F, PF>
+impl<PF: PackedField<Scalar = KoalaBear>> Algebra<QuinticExtensionField<KoalaBear>>
+    for PackedQuinticExtensionField<PF>
 {
 }
 
-impl<F: QuinticExtendable, PF: PackedField<Scalar = F>> Algebra<PF>
-    for PackedQuinticExtensionField<F, PF>
-{
-}
+impl<PF: PackedField<Scalar = KoalaBear>> Algebra<PF> for PackedQuinticExtensionField<PF> {}
 
-impl<F, PF> PrimeCharacteristicRing for PackedQuinticExtensionField<F, PF>
+impl<PF: PackedField<Scalar = KoalaBear>> PrimeCharacteristicRing
+    for PackedQuinticExtensionField<PF>
 where
-    F: QuinticExtendable,
-    PF: PackedField<Scalar = F>,
+    PF: PackedField<Scalar = KoalaBear>,
 {
     type PrimeSubfield = PF::PrimeSubfield;
 
@@ -130,10 +127,9 @@ where
     }
 }
 
-impl<F, PF> BasedVectorSpace<PF> for PackedQuinticExtensionField<F, PF>
+impl<PF> BasedVectorSpace<PF> for PackedQuinticExtensionField<PF>
 where
-    F: QuinticExtendable,
-    PF: PackedField<Scalar = F>,
+    PF: PackedField<Scalar = KoalaBear>,
 {
     const DIMENSION: usize = 5;
 
@@ -173,25 +169,24 @@ where
     }
 }
 
-impl<F> PackedFieldExtension<F, QuinticExtensionField<F>>
-    for PackedQuinticExtensionField<F, F::Packing>
-where
-    F: QuinticExtendable,
+impl PackedFieldExtension<KoalaBear, QuinticExtensionField<KoalaBear>>
+    for PackedQuinticExtensionField<<KoalaBear as Field>::Packing>
 {
     #[inline]
-    fn from_ext_slice(ext_slice: &[QuinticExtensionField<F>]) -> Self {
-        let width = F::Packing::WIDTH;
+    fn from_ext_slice(ext_slice: &[QuinticExtensionField<KoalaBear>]) -> Self {
+        let width = <KoalaBear as Field>::Packing::WIDTH;
         assert_eq!(ext_slice.len(), width);
 
-        let res = array::from_fn(|i| F::Packing::from_fn(|j| ext_slice[j].value[i]));
+        let res =
+            array::from_fn(|i| <KoalaBear as Field>::Packing::from_fn(|j| ext_slice[j].value[i]));
         Self::new(res)
     }
 
     #[inline]
     fn to_ext_iter(
         iter: impl IntoIterator<Item = Self>,
-    ) -> impl Iterator<Item = QuinticExtensionField<F>> {
-        let width = F::Packing::WIDTH;
+    ) -> impl Iterator<Item = QuinticExtensionField<KoalaBear>> {
+        let width = <KoalaBear as Field>::Packing::WIDTH;
         iter.into_iter().flat_map(move |x| {
             (0..width).map(move |i| {
                 let values = array::from_fn(|j| x.value[j].as_slice()[i]);
@@ -201,8 +196,8 @@ where
     }
 
     #[inline]
-    fn packed_ext_powers(base: QuinticExtensionField<F>) -> p3_field::Powers<Self> {
-        let width = F::Packing::WIDTH;
+    fn packed_ext_powers(base: QuinticExtensionField<KoalaBear>) -> p3_field::Powers<Self> {
+        let width = <KoalaBear as Field>::Packing::WIDTH;
         let powers = base.powers().take(width + 1).collect_vec();
         // Transpose first WIDTH powers
         let current = Self::from_ext_slice(&powers[..width]);
@@ -217,10 +212,9 @@ where
     }
 }
 
-impl<F, PF> Neg for PackedQuinticExtensionField<F, PF>
+impl<PF> Neg for PackedQuinticExtensionField<PF>
 where
-    F: QuinticExtendable,
-    PF: PackedField<Scalar = F>,
+    PF: PackedField<Scalar = KoalaBear>,
 {
     type Output = Self;
 
@@ -232,10 +226,9 @@ where
     }
 }
 
-impl<F, PF> Add for PackedQuinticExtensionField<F, PF>
+impl<PF> Add for PackedQuinticExtensionField<PF>
 where
-    F: QuinticExtendable,
-    PF: PackedField<Scalar = F>,
+    PF: PackedField<Scalar = KoalaBear>,
 {
     type Output = Self;
 
@@ -246,24 +239,22 @@ where
     }
 }
 
-impl<F, PF> Add<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
+impl<PF> Add<QuinticExtensionField<KoalaBear>> for PackedQuinticExtensionField<PF>
 where
-    F: QuinticExtendable,
-    PF: PackedField<Scalar = F>,
+    PF: PackedField<Scalar = KoalaBear>,
 {
     type Output = Self;
 
     #[inline]
-    fn add(self, rhs: QuinticExtensionField<F>) -> Self {
+    fn add(self, rhs: QuinticExtensionField<KoalaBear>) -> Self {
         let value = vector_add(&self.value, &rhs.value);
         Self { value }
     }
 }
 
-impl<F, PF> Add<PF> for PackedQuinticExtensionField<F, PF>
+impl<PF> Add<PF> for PackedQuinticExtensionField<PF>
 where
-    F: QuinticExtendable,
-    PF: PackedField<Scalar = F>,
+    PF: PackedField<Scalar = KoalaBear>,
 {
     type Output = Self;
 
@@ -274,10 +265,9 @@ where
     }
 }
 
-impl<F, PF> AddAssign for PackedQuinticExtensionField<F, PF>
+impl<PF> AddAssign for PackedQuinticExtensionField<PF>
 where
-    F: QuinticExtendable,
-    PF: PackedField<Scalar = F>,
+    PF: PackedField<Scalar = KoalaBear>,
 {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
@@ -287,23 +277,21 @@ where
     }
 }
 
-impl<F, PF> AddAssign<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
+impl<PF> AddAssign<QuinticExtensionField<KoalaBear>> for PackedQuinticExtensionField<PF>
 where
-    F: QuinticExtendable,
-    PF: PackedField<Scalar = F>,
+    PF: PackedField<Scalar = KoalaBear>,
 {
     #[inline]
-    fn add_assign(&mut self, rhs: QuinticExtensionField<F>) {
+    fn add_assign(&mut self, rhs: QuinticExtensionField<KoalaBear>) {
         for i in 0..5 {
             self.value[i] += rhs.value[i];
         }
     }
 }
 
-impl<F, PF> AddAssign<PF> for PackedQuinticExtensionField<F, PF>
+impl<PF> AddAssign<PF> for PackedQuinticExtensionField<PF>
 where
-    F: QuinticExtendable,
-    PF: PackedField<Scalar = F>,
+    PF: PackedField<Scalar = KoalaBear>,
 {
     #[inline]
     fn add_assign(&mut self, rhs: PF) {
@@ -311,10 +299,9 @@ where
     }
 }
 
-impl<F, PF> Sum for PackedQuinticExtensionField<F, PF>
+impl<PF> Sum for PackedQuinticExtensionField<PF>
 where
-    F: QuinticExtendable,
-    PF: PackedField<Scalar = F>,
+    PF: PackedField<Scalar = KoalaBear>,
 {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
@@ -322,10 +309,9 @@ where
     }
 }
 
-impl<F, PF> Sub for PackedQuinticExtensionField<F, PF>
+impl<PF> Sub for PackedQuinticExtensionField<PF>
 where
-    F: QuinticExtendable,
-    PF: PackedField<Scalar = F>,
+    PF: PackedField<Scalar = KoalaBear>,
 {
     type Output = Self;
 
@@ -336,24 +322,22 @@ where
     }
 }
 
-impl<F, PF> Sub<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
+impl<PF> Sub<QuinticExtensionField<KoalaBear>> for PackedQuinticExtensionField<PF>
 where
-    F: QuinticExtendable,
-    PF: PackedField<Scalar = F>,
+    PF: PackedField<Scalar = KoalaBear>,
 {
     type Output = Self;
 
     #[inline]
-    fn sub(self, rhs: QuinticExtensionField<F>) -> Self {
+    fn sub(self, rhs: QuinticExtensionField<KoalaBear>) -> Self {
         let value = vector_sub(&self.value, &rhs.value);
         Self { value }
     }
 }
 
-impl<F, PF> Sub<PF> for PackedQuinticExtensionField<F, PF>
+impl<PF> Sub<PF> for PackedQuinticExtensionField<PF>
 where
-    F: QuinticExtendable,
-    PF: PackedField<Scalar = F>,
+    PF: PackedField<Scalar = KoalaBear>,
 {
     type Output = Self;
 
@@ -365,10 +349,9 @@ where
     }
 }
 
-impl<F, PF> SubAssign for PackedQuinticExtensionField<F, PF>
+impl<PF> SubAssign for PackedQuinticExtensionField<PF>
 where
-    F: QuinticExtendable,
-    PF: PackedField<Scalar = F>,
+    PF: PackedField<Scalar = KoalaBear>,
 {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
@@ -376,21 +359,19 @@ where
     }
 }
 
-impl<F, PF> SubAssign<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
+impl<PF> SubAssign<QuinticExtensionField<KoalaBear>> for PackedQuinticExtensionField<PF>
 where
-    F: QuinticExtendable,
-    PF: PackedField<Scalar = F>,
+    PF: PackedField<Scalar = KoalaBear>,
 {
     #[inline]
-    fn sub_assign(&mut self, rhs: QuinticExtensionField<F>) {
+    fn sub_assign(&mut self, rhs: QuinticExtensionField<KoalaBear>) {
         *self = *self - rhs;
     }
 }
 
-impl<F, PF> SubAssign<PF> for PackedQuinticExtensionField<F, PF>
+impl<PF> SubAssign<PF> for PackedQuinticExtensionField<PF>
 where
-    F: QuinticExtendable,
-    PF: PackedField<Scalar = F>,
+    PF: PackedField<Scalar = KoalaBear>,
 {
     #[inline]
     fn sub_assign(&mut self, rhs: PF) {
@@ -398,10 +379,9 @@ where
     }
 }
 
-impl<F, PF> Mul for PackedQuinticExtensionField<F, PF>
+impl<PF> Mul for PackedQuinticExtensionField<PF>
 where
-    F: QuinticExtendable,
-    PF: PackedField<Scalar = F>,
+    PF: PackedField<Scalar = KoalaBear>,
 {
     type Output = Self;
 
@@ -410,20 +390,19 @@ where
         let a = self.value;
         let b = rhs.value;
         let mut res = Self::default();
-        super::extension::quintic_mul::<F, PF, PF>(&a, &b, &mut res.value);
+        super::extension::quintic_mul::<KoalaBear, PF, PF>(&a, &b, &mut res.value);
         res
     }
 }
 
-impl<F, PF> Mul<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
+impl<PF> Mul<QuinticExtensionField<KoalaBear>> for PackedQuinticExtensionField<PF>
 where
-    F: QuinticExtendable,
-    PF: PackedField<Scalar = F>,
+    PF: PackedField<Scalar = KoalaBear>,
 {
     type Output = Self;
 
     #[inline]
-    fn mul(self, rhs: QuinticExtensionField<F>) -> Self {
+    fn mul(self, rhs: QuinticExtensionField<KoalaBear>) -> Self {
         let a = self.value;
         let b = rhs.value;
         let mut res = Self::default();
@@ -433,10 +412,9 @@ where
     }
 }
 
-impl<F, PF> Mul<PF> for PackedQuinticExtensionField<F, PF>
+impl<PF> Mul<PF> for PackedQuinticExtensionField<PF>
 where
-    F: QuinticExtendable,
-    PF: PackedField<Scalar = F>,
+    PF: PackedField<Scalar = KoalaBear>,
 {
     type Output = Self;
 
@@ -448,10 +426,9 @@ where
     }
 }
 
-impl<F, PF> Product for PackedQuinticExtensionField<F, PF>
+impl<PF> Product for PackedQuinticExtensionField<PF>
 where
-    F: QuinticExtendable,
-    PF: PackedField<Scalar = F>,
+    PF: PackedField<Scalar = KoalaBear>,
 {
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
@@ -459,10 +436,9 @@ where
     }
 }
 
-impl<F, PF> MulAssign for PackedQuinticExtensionField<F, PF>
+impl<PF> MulAssign for PackedQuinticExtensionField<PF>
 where
-    F: QuinticExtendable,
-    PF: PackedField<Scalar = F>,
+    PF: PackedField<Scalar = KoalaBear>,
 {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
@@ -470,21 +446,19 @@ where
     }
 }
 
-impl<F, PF> MulAssign<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
+impl<PF> MulAssign<QuinticExtensionField<KoalaBear>> for PackedQuinticExtensionField<PF>
 where
-    F: QuinticExtendable,
-    PF: PackedField<Scalar = F>,
+    PF: PackedField<Scalar = KoalaBear>,
 {
     #[inline]
-    fn mul_assign(&mut self, rhs: QuinticExtensionField<F>) {
+    fn mul_assign(&mut self, rhs: QuinticExtensionField<KoalaBear>) {
         *self = *self * rhs;
     }
 }
 
-impl<F, PF> MulAssign<PF> for PackedQuinticExtensionField<F, PF>
+impl<PF> MulAssign<PF> for PackedQuinticExtensionField<PF>
 where
-    F: QuinticExtendable,
-    PF: PackedField<Scalar = F>,
+    PF: PackedField<Scalar = KoalaBear>,
 {
     #[inline]
     fn mul_assign(&mut self, rhs: PF) {

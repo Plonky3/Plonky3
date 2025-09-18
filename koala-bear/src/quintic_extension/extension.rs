@@ -19,7 +19,7 @@ use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
 
 use super::packed_extension::PackedQuinticExtensionField;
-use crate::QuinticExtendable;
+use crate::{KoalaBear, QuinticExtendable};
 
 /// Quintic Extension Field (degree 5), specifically designed for Koala-Bear
 /// Irreducible polynomial: X^5 + X^2 - 1
@@ -91,21 +91,21 @@ impl<F: QuinticExtendable> BasedVectorSpace<F> for QuinticExtensionField<F> {
     }
 }
 
-impl<F: QuinticExtendable> ExtensionField<F> for QuinticExtensionField<F> {
-    type ExtensionPacking = PackedQuinticExtensionField<F, F::Packing>;
+impl ExtensionField<KoalaBear> for QuinticExtensionField<KoalaBear> {
+    type ExtensionPacking = PackedQuinticExtensionField<<KoalaBear as Field>::Packing>;
 
     #[inline]
     fn is_in_basefield(&self) -> bool {
-        self.value[1..].iter().all(F::is_zero)
+        self.value[1..].iter().all(KoalaBear::is_zero)
     }
 
     #[inline]
-    fn as_base(&self) -> Option<F> {
-        <Self as ExtensionField<F>>::is_in_basefield(self).then(|| self.value[0])
+    fn as_base(&self) -> Option<KoalaBear> {
+        <Self as ExtensionField<KoalaBear>>::is_in_basefield(self).then(|| self.value[0])
     }
 }
 
-impl<F: QuinticExtendable> HasFrobenius<F> for QuinticExtensionField<F> {
+impl HasFrobenius<KoalaBear> for QuinticExtensionField<KoalaBear> {
     /// FrobeniusField automorphisms: x -> x^n, where n is the order of BaseField.
     #[inline]
     fn frobenius(&self) -> Self {
@@ -113,7 +113,7 @@ impl<F: QuinticExtendable> HasFrobenius<F> for QuinticExtensionField<F> {
         res.value[0] = self.value[0];
         for i in 0..4 {
             for j in 0..5 {
-                res.value[j] += self.value[i + 1] * F::FROBENIUS_MATRIX[i][j];
+                res.value[j] += self.value[i + 1] * KoalaBear::FROBENIUS_MATRIX[i][j];
             }
         }
 
@@ -259,10 +259,10 @@ impl<F: QuinticExtendable> RawDataSerializable for QuinticExtensionField<F> {
     }
 }
 
-impl<F: QuinticExtendable> Field for QuinticExtensionField<F> {
+impl Field for QuinticExtensionField<KoalaBear> {
     type Packing = Self;
 
-    const GENERATOR: Self = Self::new(F::EXT_GENERATOR);
+    const GENERATOR: Self = Self::new(KoalaBear::EXT_GENERATOR);
 
     fn try_inverse(&self) -> Option<Self> {
         if self.is_zero() {
@@ -281,20 +281,17 @@ impl<F: QuinticExtendable> Field for QuinticExtensionField<F> {
             let base_slice_1 = as_base_slice_mut(slice_1);
             let base_slice_2 = as_base_slice(slice_2);
 
-            F::add_slices(base_slice_1, base_slice_2);
+            KoalaBear::add_slices(base_slice_1, base_slice_2);
         }
     }
 
     #[inline]
     fn order() -> BigUint {
-        F::order().pow(5)
+        KoalaBear::order().pow(5)
     }
 }
 
-impl<F> Display for QuinticExtensionField<F>
-where
-    F: QuinticExtendable,
-{
+impl Display for QuinticExtensionField<KoalaBear> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         if self.is_zero() {
             write!(f, "0")
@@ -496,10 +493,7 @@ where
     }
 }
 
-impl<F> Div for QuinticExtensionField<F>
-where
-    F: QuinticExtendable,
-{
+impl Div for QuinticExtensionField<KoalaBear> {
     type Output = Self;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
@@ -509,10 +503,7 @@ where
     }
 }
 
-impl<F> DivAssign for QuinticExtensionField<F>
-where
-    F: QuinticExtendable,
-{
+impl DivAssign for QuinticExtensionField<KoalaBear> {
     #[inline]
     fn div_assign(&mut self, rhs: Self) {
         *self = *self / rhs;
@@ -529,12 +520,12 @@ where
     }
 }
 
-impl<F: TwoAdicField + QuinticExtendable> TwoAdicField for QuinticExtensionField<F> {
-    const TWO_ADICITY: usize = F::TWO_ADICITY;
+impl TwoAdicField for QuinticExtensionField<KoalaBear> {
+    const TWO_ADICITY: usize = KoalaBear::TWO_ADICITY;
 
     #[inline]
     fn two_adic_generator(bits: usize) -> Self {
-        F::two_adic_generator(bits).into()
+        KoalaBear::two_adic_generator(bits).into()
     }
 }
 
@@ -669,7 +660,7 @@ where
 }
 
 #[inline]
-fn quintic_inv<F: QuinticExtendable>(a: &QuinticExtensionField<F>) -> QuinticExtensionField<F> {
+fn quintic_inv(a: &QuinticExtensionField<KoalaBear>) -> QuinticExtensionField<KoalaBear> {
     // Writing 'a' for self, we need to compute: `prod_conj = a^{q^4 + q^3 + q^2 + q}`
     let a_exp_q = a.frobenius();
     let a_exp_q_plus_q_sq = (*a * a_exp_q).frobenius();
@@ -677,7 +668,7 @@ fn quintic_inv<F: QuinticExtendable>(a: &QuinticExtensionField<F>) -> QuinticExt
 
     // norm = a * prod_conj is in the base field, so only compute that
     // coefficient rather than the full product.
-    let norm = F::dot_product::<5>(
+    let norm = KoalaBear::dot_product::<5>(
         &a.value,
         &[
             prod_conj.value[0],
@@ -688,7 +679,10 @@ fn quintic_inv<F: QuinticExtendable>(a: &QuinticExtensionField<F>) -> QuinticExt
         ],
     );
 
-    debug_assert_eq!(QuinticExtensionField::<F>::from(norm), *a * prod_conj);
+    debug_assert_eq!(
+        QuinticExtensionField::<KoalaBear>::from(norm),
+        *a * prod_conj
+    );
 
     prod_conj * norm.inverse()
 }

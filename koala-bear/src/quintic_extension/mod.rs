@@ -13,8 +13,7 @@ pub(crate) mod packing;
 mod tests;
 
 pub type QuinticExtensionFieldKB = QuinticExtensionField<KoalaBear>;
-pub type PackedQuinticExtensionFieldKB =
-    PackedQuinticExtensionField<KoalaBear, <KoalaBear as Field>::Packing>;
+pub type PackedQuinticExtensionFieldKB = PackedQuinticExtensionField<<KoalaBear as Field>::Packing>;
 
 impl QuinticExtendable for KoalaBear {
     /// Correctness is ensured by `test_frobenius_matrix_quintic_koala_bear`.
