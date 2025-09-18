@@ -47,7 +47,7 @@ pub fn generate_trace_rows<F: PrimeField64>(
 
 /// `rows` will normally consist of 24 rows, with an exception for the final row.
 fn generate_trace_rows_for_perm<F: PrimeField64>(rows: &mut [KeccakCols<F>], input: [u64; 25]) {
-    let mut current_state: [[u64; 5]; 5] = unsafe { transmute(input) };
+    let mut current_state: [[u64; 5]; 5] = array::from_fn(|i| array::from_fn(|j| input[i * 5 + j]));
 
     let initial_state: [[[F; 4]; 5]; 5] =
         array::from_fn(|y| array::from_fn(|x| u64_to_16_bit_limbs(current_state[x][y])));
