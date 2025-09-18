@@ -1,6 +1,5 @@
 use crate::{KoalaBear, QuinticExtendable, QuinticExtensionFieldKB};
-use p3_field::PrimeCharacteristicRing;
-use p3_field::PrimeField64;
+use p3_field::{PrimeCharacteristicRing, PrimeField64};
 
 #[test]
 fn test_frobenius_matrix_quintic_koala_bear() {
