@@ -15,6 +15,23 @@ pub type PackedQuinticExtensionFieldKB =
     PackedQuinticExtensionField<KoalaBear, <KoalaBear as Field>::Packing>;
 
 impl QuinticExtendable for KoalaBear {
+    /// Frobenius endomorphism matrix for the quintic extension
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// #[test]
+    /// fn test_frobenius_matrix_quintic_koala_bear() {
+    ///     for i in 1..5 {
+    ///         let mut x = QuinticExtensionFieldKB::ZERO;
+    ///         x.value[i] = KoalaBear::ONE;
+    ///         let x = x.exp_u64(KoalaBear::ORDER_U64);
+    ///         for j in 0..5 {
+    ///             assert_eq!(x.value[j], <KoalaBear as QuinticExtendable>::FROBENIUS_MATRIX[i - 1][j])
+    ///         }
+    ///     }
+    /// }
+    /// ```
     const FROBENIUS_MATRIX: [[Self; 5]; 4] = [
         [
             Self::new(1576402667),

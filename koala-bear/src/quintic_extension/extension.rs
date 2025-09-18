@@ -692,17 +692,3 @@ fn quintic_inv<F: QuinticExtendable>(a: &QuinticExtensionField<F>) -> QuinticExt
 
     prod_conj * norm.inverse()
 }
-
-// fn compute_frobenius_matrix<F: QuinticExtendable>() {
-//     for i in 1..5 {
-//         let mut x = QuinticExtensionField::<F>::default();
-//         x.value[i] = F::ONE;
-//         let x = x.exp_u64(F::order().to_u64_digits()[0]);
-//         print!("\n[");
-//         for j in 0..5 {
-//             print!(" MontyField31::new({}), ", x.value[j]);
-//         }
-//         print!("], ");
-//     }
-//     std::io::Write::flush(&mut std::io::stdout()).unwrap();
-// }
