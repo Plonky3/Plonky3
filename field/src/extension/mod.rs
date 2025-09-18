@@ -78,35 +78,6 @@ pub trait BinomiallyExtendableAlgebra<F: Field, const D: usize>: Algebra<F> {
     }
 }
 
-/// Trait for algebras which support binomial extensions of the form `A[X]/(X^D - W)`
-/// with `W` in the base field `F`.
-pub trait QuinticExtendableAlgebra<F: Field>: Algebra<F> {
-    /// Multiplication in the algebra extension ring `A<X> / (X^D - W)`.
-    ///
-    /// Some algebras may want to reimplement this with faster methods.
-    fn quintic_mul(a: &[Self; 5], b: &[Self; 5], res: &mut [Self; 5]);
-
-    /// Addition of elements in the algebra extension ring `A<X> / (X^D - W)`.
-    ///
-    /// As addition has no dependence on `W` so this is equivalent
-    /// to an algorithm for adding arrays of elements of `A`.
-    ///
-    /// Some algebras may want to reimplement this with faster methods.
-    #[must_use]
-    fn quintic_add(a: &[Self; 5], b: &[Self; 5]) -> [Self; 5];
-
-    /// Subtraction of elements in the algebra extension ring `A<X> / (X^D - W)`.
-    ///
-    /// As subtraction has no dependence on `W` so this is equivalent
-    /// to an algorithm for subtracting arrays of elements of `A`.
-    ///
-    /// Some algebras may want to reimplement this with faster methods.
-    #[must_use]
-    fn quintic_sub(a: &[Self; 5], b: &[Self; 5]) -> [Self; 5];
-
-    fn quintic_base_mul(lhs: [Self; 5], rhs: Self) -> [Self; 5];
-}
-
 /// Trait for extension fields that support Frobenius automorphisms.
 ///
 /// The Frobenius automorphism is a field map `x ↦ x^n`,
