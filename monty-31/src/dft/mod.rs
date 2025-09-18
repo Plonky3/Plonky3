@@ -100,10 +100,6 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
         // returns a vector of twiddles of length log_2(fft_len) - 1.
         // let curr_max_fft_len = 2 << self.twiddles.read().len();
         let need = log2_strict_usize(fft_len);
-        if self.twiddles.read().len() + 1 >= need {
-            return;
-        }
-
         let snapshot = self.twiddles.read().clone();
         let have = snapshot.len() + 1;
         if have >= need {
@@ -115,15 +111,14 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
         let missing_inv_twiddles: Vec<Vec<MontyField31<MP>>> = missing_twiddles
             .iter()
             .map(|ts| {
-                let mut v = Vec::with_capacity(ts.len());
-                v.push(MontyField31::ONE);
-                v.extend(
-                    ts[1..]
-                        .iter()
-                        .rev()
-                        .map(|&t| MontyField31::new_monty(MP::PRIME - t.value)),
-                );
-                v
+                core::iter::once(MontyField31::ONE)
+                    .chain(
+                        ts[1..]
+                            .iter()
+                            .rev()
+                            .map(|&t| MontyField31::new_monty(MP::PRIME - t.value)),
+                    )
+                    .collect()
             })
             .collect::<Vec<_>>();
         {

@@ -39,7 +39,6 @@ pub struct Radix2DFTSmallBatch<F> {
     /// For each `i`, `twiddles[i]` contains a list of twiddles stored in
     /// bit reversed order. The final set of twiddles `twiddles[-1]` is the
     /// one element vectors `[1]` and more general `twiddles[-i]` has length `2^i`.
-    ///
     #[allow(clippy::type_complexity)]
     twiddles: Arc<RwLock<Arc<[Vec<F>]>>>,
 
