@@ -39,18 +39,8 @@ impl HasTwoAdicBinomialExtension<2> for Mersenne31 {
     const EXT_TWO_ADICITY: usize = 32;
 
     fn ext_two_adic_generator(bits: usize) -> [Self; 2] {
-        // TODO: Consider a `match` which may speed this up.
         assert!(bits <= Self::EXT_TWO_ADICITY);
-        // Generator of the whole 2^TWO_ADICITY group
-        // sage: p = 2^31 - 1
-        // sage: F = GF(p)
-        // sage: R.<x> = F[]
-        // sage: F2.<u> = F.extension(x^2 + 1)
-        // sage: g = F2.multiplicative_generator()^((p^2 - 1) / 2^32); g
-        // 1117296306*u + 1166849849
-        // sage: assert(g.multiplicative_order() == 2^32)
-        let base = Complex::<Self>::new_complex(Self::new(1_166_849_849), Self::new(1_117_296_306));
-        base.exp_power_of_2(Self::EXT_TWO_ADICITY - bits).to_array()
+        Self::EXT_TWO_ADIC_GENERATORS[bits]
     }
 }
 
