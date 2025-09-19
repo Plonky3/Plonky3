@@ -143,8 +143,13 @@ impl HasFrobenius<KoalaBear> for QuinticExtensionField<KoalaBear> {
     }
 
     #[inline]
-    fn frobenius_inv(&self) -> Self {
-        unimplemented!()
+    fn pseudo_inv(&self) -> Self {
+        // TODO Frobenius-based implementation (cf BinomialExtensionField)
+        if self.is_zero() {
+            Self::ZERO
+        } else {
+            quintic_inv(self)
+        }
     }
 }
 
