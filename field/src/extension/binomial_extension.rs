@@ -152,6 +152,8 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
 
     /// Compute the pseudo inverse of a given element making use of the Frobenius automorphism.
     ///
+    /// Returns `0` if `self == 0`, and `1/self` otherwise.
+    ///
     /// Algorithm 11.3.4 in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
     #[inline]
     fn pseudo_inv(&self) -> Self {

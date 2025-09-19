@@ -97,7 +97,9 @@ pub trait HasFrobenius<F: Field>: ExtensionField<F> {
     #[must_use]
     fn repeated_frobenius(&self, count: usize) -> Self;
 
-    /// Returns 0 if `self == 0`, and `1/self` otherwise.
+    /// Computes the pseudo inverse of the given field element.
+    ///
+    /// Returns `0` if `self == 0`, and `1/self` otherwise.
     /// In other words, returns `self^(n^D - 2)` where `D` is the extension degree.
     #[must_use]
     fn pseudo_inv(&self) -> Self;
