@@ -97,11 +97,12 @@ pub trait HasFrobenius<F: Field>: ExtensionField<F> {
     #[must_use]
     fn repeated_frobenius(&self, count: usize) -> Self;
 
-    /// Compute the inverse Frobenius map.
+    /// Computes the pseudo inverse of the given field element.
     ///
-    /// Returns the unique element `y` such that `self = y^n`.
+    /// Returns `0` if `self == 0`, and `1/self` otherwise.
+    /// In other words, returns `self^(n^D - 2)` where `D` is the extension degree.
     #[must_use]
-    fn frobenius_inv(&self) -> Self;
+    fn pseudo_inv(&self) -> Self;
 
     /// Returns the full Galois orbit of the element under Frobenius.
     ///

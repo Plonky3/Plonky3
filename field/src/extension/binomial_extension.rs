@@ -150,11 +150,13 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
         res
     }
 
-    /// Compute the inverse of a given element making use of the Frobenius automorphism.
+    /// Compute the pseudo inverse of a given element making use of the Frobenius automorphism.
+    ///
+    /// Returns `0` if `self == 0`, and `1/self` otherwise.
     ///
     /// Algorithm 11.3.4 in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
     #[inline]
-    fn frobenius_inv(&self) -> Self {
+    fn pseudo_inv(&self) -> Self {
         // Writing 'a' for self and `q` for the order of the base field, our goal is to compute `a^{-1}`.
         //
         // Note that we can write `-1 = (q^{D - 1} + ... + q) - (q^{D - 1} + ... + q + 1)`.
@@ -325,7 +327,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
             4 => quartic_inv(&self.value, &mut res.value, F::W),
             5 => res = quintic_inv(self),
             8 => octic_inv(&self.value, &mut res.value, F::W),
-            _ => res = self.frobenius_inv(),
+            _ => res = self.pseudo_inv(),
         }
 
         Some(res)
