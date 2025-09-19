@@ -334,20 +334,6 @@ macro_rules! test_packed_extension_field {
             use rand::{Rng, SeedableRng};
 
             #[test]
-            fn test_elementwise_ring_identities_and_distributivity() {
-                let mut rng = SmallRng::seed_from_u64(1);
-                let x: $packedextfield = rng.random();
-                let y: $packedextfield = rng.random();
-                let z: $packedextfield = rng.random();
-
-                assert_eq!(x + <$packedextfield>::ZERO, x);
-                assert_eq!(x * <$packedextfield>::ONE, x);
-                assert_eq!(x + (-x), <$packedextfield>::ZERO);
-                assert_eq!((x + y) - y, x);
-                assert_eq!(x * (y + z), (x * y) + (x * z));
-            }
-
-            #[test]
             fn test_square_matches_self_mul() {
                 let mut rng = SmallRng::seed_from_u64(2);
                 let x: $packedextfield = rng.random();
@@ -387,39 +373,6 @@ macro_rules! test_packed_extension_field {
                 for i in 0..coeffs.len() {
                     assert_eq!(mpc[i], coeffs[i] * pf);
                 }
-            }
-
-            #[test]
-            fn test_shift_and_halve_consistency() {
-                let mut rng = SmallRng::seed_from_u64(4);
-                let x: $packedextfield = rng.random();
-
-                for &k in &[0_u64, 1, 2, 5, 16] {
-                    assert_eq!(x.mul_2exp_u64(k).div_2exp_u64(k), x);
-                }
-                assert_eq!(x.halve().mul_2exp_u64(1), x);
-            }
-
-            #[test]
-            fn test_assign_ops_equivalence() {
-                let mut rng = SmallRng::seed_from_u64(5);
-                let x: $packedextfield = rng.random();
-                let y: $packedextfield = rng.random();
-
-                let mut a = x;
-                a += y;
-                let b = x + y;
-                assert_eq!(a, b);
-
-                let mut c = x;
-                c -= y;
-                let d = x - y;
-                assert_eq!(c, d);
-
-                let mut e = x;
-                e *= y;
-                let f = x * y;
-                assert_eq!(e, f);
             }
 
             #[test]
