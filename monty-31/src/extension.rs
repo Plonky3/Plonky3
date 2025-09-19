@@ -5,7 +5,7 @@ use p3_field::{
     PrimeCharacteristicRing, TwoAdicField, field_to_array, packed_mod_add, packed_mod_sub,
 };
 
-use crate::utils::{add, sub};
+use crate::utils::{monty_add, monty_sub};
 use crate::{
     BinomialExtensionData, FieldParameters, MontyField31, TwoAdicData, base_mul_packed,
     octic_mul_packed, quartic_mul_packed, quintic_mul_packed,
@@ -45,7 +45,7 @@ where
             let b: &[u32; WIDTH] = &*(b.as_ptr() as *const [u32; WIDTH]);
             let res: &mut [u32; WIDTH] = &mut *(res.as_mut_ptr() as *mut [u32; WIDTH]);
 
-            packed_mod_add(a, b, res, FP::PRIME, add::<FP>);
+            packed_mod_add(a, b, res, FP::PRIME, monty_add::<FP>);
         }
         res
     }
@@ -59,7 +59,7 @@ where
             let b: &[u32; WIDTH] = &*(b.as_ptr() as *const [u32; WIDTH]);
             let res: &mut [u32; WIDTH] = &mut *(res.as_mut_ptr() as *mut [u32; WIDTH]);
 
-            packed_mod_sub(a, b, res, FP::PRIME, sub::<FP>);
+            packed_mod_sub(a, b, res, FP::PRIME, monty_sub::<FP>);
         }
         res
     }
