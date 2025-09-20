@@ -3,7 +3,10 @@ use p3_maybe_rayon::prelude::*;
 use p3_symmetric::CryptographicPermutation;
 use tracing::instrument;
 
-use crate::{CanObserve, CanSampleBits, DuplexChallenger, MultiField32Challenger};
+use crate::{
+    CanObserve, CanSampleBits, CanSampleUniformBits, DuplexChallenger, MultiField32Challenger,
+    UniformSamplingField,
+};
 
 /// Trait for challengers that support proof-of-work (PoW) grinding.
 ///
@@ -40,6 +43,17 @@ pub trait GrindingChallenger:
     }
 }
 
+pub trait UniformGrindingChallenger:
+    GrindingChallenger + CanSampleUniformBits<Self::Witness>
+{
+    fn grind_uniform(&mut self, bits: usize) -> Self::Witness;
+
+    fn check_witness_uniform(&mut self, bits: usize, witness: Self::Witness) -> bool {
+        self.observe(witness);
+        self.sample_uniform_bits(bits) == 0
+    }
+}
+
 impl<F, P, const WIDTH: usize, const RATE: usize> GrindingChallenger
     for DuplexChallenger<F, P, WIDTH, RATE>
 where
@@ -62,6 +76,30 @@ where
             .find_any(|witness| self.clone().check_witness(bits, *witness))
             .expect("failed to find witness");
         assert!(self.check_witness(bits, witness));
+        witness
+    }
+}
+
+impl<F, P, const WIDTH: usize, const RATE: usize> UniformGrindingChallenger
+    for DuplexChallenger<F, P, WIDTH, RATE>
+where
+    F: UniformSamplingField + PrimeField64,
+    P: CryptographicPermutation<[F; WIDTH]>,
+{
+    #[instrument(name = "grind uniform for proof-of-work witness", skip_all)]
+    fn grind_uniform(&mut self, bits: usize) -> Self::Witness {
+        assert!(bits < (usize::BITS as usize));
+        assert!((1 << bits) < F::ORDER_U64);
+
+        let witness = (0..F::ORDER_U64)
+            .into_par_iter()
+            .map(|i| unsafe {
+                // i < F::ORDER_U64 by construction so this is safe.
+                F::from_canonical_unchecked(i)
+            })
+            .find_any(|witness| self.clone().check_witness_uniform(bits, *witness))
+            .expect("failed to find witness");
+        assert!(self.check_witness_uniform(bits, witness));
         witness
     }
 }
