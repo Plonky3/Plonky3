@@ -17,12 +17,18 @@ p3-mds.workspace = true
 p3-poseidon2.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
+p3-challenger.workspace = true
 
 itertools.workspace = true
 num-bigint.workspace = true
 paste.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
+
+[features]
+# Mersenne31 uniform sampling does not make sense with this feature!
+uniform-sampling-may-panic = ["p3-challenger/uniform-sampling-may-panic"]
+default = []
 
 [dev-dependencies]
 p3-field-testing.workspace = true
