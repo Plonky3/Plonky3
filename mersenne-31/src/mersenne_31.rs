@@ -7,19 +7,21 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use core::{array, fmt, iter};
 
 use num_bigint::BigUint;
+use p3_challenger::UniformSamplingField;
 use p3_field::exponentiation::exp_1717986917;
 use p3_field::integers::QuotientMap;
 use p3_field::op_assign_macros::{
     impl_add_assign, impl_div_methods, impl_mul_methods, impl_sub_assign,
 };
 use p3_field::{
-    Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField32, PrimeField64, RawDataSerializable, halve_u32, impl_raw_serializable_primefield32,
-    quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int,
+    halve_u32, impl_raw_serializable_primefield32, quotient_map_large_iint,
+    quotient_map_large_uint, quotient_map_small_int, Field, InjectiveMonomial, Packable,
+    PermutationMonomial, PrimeCharacteristicRing, PrimeField, PrimeField32, PrimeField64,
+    RawDataSerializable,
 };
 use p3_util::{flatten_to_base, gcd_inversion_prime_field_32};
-use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
+use rand::Rng;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -534,6 +536,47 @@ pub(crate) fn from_u62(input: u64) -> Mersenne31 {
     let input_lo = (input & ((1 << 31) - 1)) as u32;
     let input_high = (input >> 31) as u32;
     Mersenne31::new(input_lo) + Mersenne31::new(input_high)
+}
+
+impl UniformSamplingField for Mersenne31 {
+    /// Maximum number of bits we can sample at negligible (~1/field prime) probability of
+    /// triggering a panic / requiring a resample.
+    const MAX_SINGLE_SAMPLE_BITS: usize = 16;
+    /// An array storing the largest value `m_k` for each `k` in [0, 31], such that `m_k`
+    /// is a multiple of `2^k`. `m_k` is defined as:
+    ///
+    /// \( m_k = ⌊P / 2^k⌋ · 2^k \)
+    ///
+    /// This is used as a rejection sampling threshold (or panic trigger) in `sampling_uniform_bits`, when
+    /// sampling random bits from uniformly sampled field elements. As long as we sample up to the `k`
+    /// least significant bits in the range [0, m_k), we sample from exactly `m_k` elements. As
+    /// `m_k` is divisible by 2^k, each of the least significant `k` bits has exactly the same
+    /// number of zeroes and ones, leading to a uniform sampling.
+    ///
+    /// NOTE: We only include `0` to not have to deal with one-off indexing. `k` must be > 0.
+    ///
+    /// For Mersenne31 uniform sampling really only makes sense if we allow rejection sampling.
+    /// Sampling 16 bits already has a chance of 3e-5 to require a resample!
+    const SAMPLING_BITS_M: [u64; 64] = {
+        let PRIME: u64 = P as u64;
+        let mut a = [0u64; 64];
+        let mut k = 0;
+        while k < 64 {
+            let k2 = 1 << k as u64;
+            a[k] = (PRIME / k2) * k2; // floor(P / 2^k) * 2^k: largest multiple of 2^k fitting into prime
+            k += 1;
+        }
+        a
+    };
+
+    // Raise CT error if user tries to use Mersenne31 without rejection sampling
+    #[cfg(feature = "uniform-sampling-may-panic")]
+    const _FEATURE_CHECK: () = {
+        compile_error!(
+            "Mersenne31 is incompatible with the 'uniform-sampling-may-panic' feature for `sample_uniform_bits`. \
+             Remove `uniform-sampling-may-panic` from your Cargo.toml [features]."
+        );
+    };
 }
 
 #[cfg(test)]
