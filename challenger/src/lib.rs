@@ -17,7 +17,7 @@ pub use duplex_challenger::*;
 pub use grinding_challenger::*;
 pub use hash_challenger::*;
 pub use multi_field_challenger::*;
-use p3_field::{Algebra, BasedVectorSpace, Field};
+use p3_field::{Algebra, BasedVectorSpace, Field, PrimeField64};
 pub use serializing_challenger::*;
 
 /// A generic trait for absorbing elements into the transcript.
@@ -68,6 +68,17 @@ pub trait CanSampleBits<T> {
     ///
     /// Guarantees that the returned value fits within the requested bit width.
     fn sample_bits(&mut self, bits: usize) -> T;
+}
+
+pub trait CanSampleUniformBits<F> {
+    /// Sample a random `bits`-bit integer from the transcript with a guarantee of
+    /// uniformly sampled bits.
+    ///
+    /// Performance overhead depends on the field and number of bits requested.
+    /// E.g. for KoalaBear sampling up to 24 bits uniformly is essentially free.
+    fn sample_uniform_bits(&mut self, bits: usize) -> usize;
+
+    fn sample_value(&mut self, m: u64) -> F;
 }
 
 /// A high-level trait combining observation and sampling over a finite field.
@@ -170,3 +181,17 @@ where
 }
 
 impl<C, F: Field> FieldChallenger<F> for &mut C where C: FieldChallenger<F> {}
+
+impl<C, F> CanSampleUniformBits<F> for &mut C
+where
+    F: PrimeField64,
+    C: CanSampleUniformBits<F>,
+{
+    fn sample_uniform_bits(&mut self, bits: usize) -> usize {
+        (*self).sample_uniform_bits(bits)
+    }
+
+    fn sample_value(&mut self, m: u64) -> F {
+        (*self).sample_value(m)
+    }
+}

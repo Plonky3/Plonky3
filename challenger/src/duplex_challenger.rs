@@ -196,6 +196,28 @@ where
     /// sequence appears either with probability P1 = ⌊p / 2^b⌋ / p or P2 = (1 + ⌊p / 2^b⌋) / p.
     /// We have 1/2^b - 1/p ≤ P1, P2 ≤ 1/2^b + 1/p
     fn sample_bits(&mut self, bits: usize) -> usize {
+
+/// Trait for fields that support uniform bit sampling optimizations
+pub trait UniformSamplingField {
+    /// Maximum number of bits we can sample at negligible (~1/field prime) probability of
+    /// triggering a panic / requiring a resample.
+    const MAX_SINGLE_SAMPLE_BITS: usize;
+    /// An array storing the largest value `m_k` for each `k` in [0, 31], such that `m_k`
+    /// is a multiple of `2^k`. `m_k` is defined as:
+    ///
+    /// \( m_k = ⌊P / 2^k⌋ · 2^k \)
+    ///
+    /// This is used as a rejection sampling threshold (or panic trigger) in `sampling_uniform_bits`, when
+    /// sampling random bits from uniformly sampled field elements. As long as we sample up to the `k`
+    /// least significant bits in the range [0, m_k), we sample from exactly `m_k` elements. As
+    /// `m_k` is divisible by 2^k, each of the least significant `k` bits has exactly the same
+    /// number of zeroes and ones, leading to a uniform sampling.
+    const SAMPLING_BITS_M: [u64; 64];
+    /// Mini helper to raise compile time error if `uniform-sampling-may-panic` is active in the
+    /// case of Mersenne31, where resampling probability rises too quickly.
+    const _FEATURE_CHECK: () = ();
+}
+
         assert!(bits < (usize::BITS as usize));
         assert!((1 << bits) < F::ORDER_U64);
         let rand_f: F = self.sample();
