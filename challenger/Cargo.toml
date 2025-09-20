@@ -9,6 +9,10 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+uniform-sampling-may-panic = []
+default = ["uniform-sampling-may-panic"] # TODO: or not default?
+
 [dependencies]
 p3-field.workspace = true
 p3-maybe-rayon.workspace = true
