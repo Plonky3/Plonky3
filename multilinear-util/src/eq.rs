@@ -261,20 +261,17 @@ where
         //
         // Each existing row generates two new rows: one for x_j = 0, one for x_j = 1.
         for idx in 0..stride {
-            // Read current row values before modifying to avoid data races
-            let current_row_values: Vec<A> = (0..width)
-                .map(|col| buffer.values[idx * width + col].clone())
-                .collect();
-
-            // Apply the recursive equality polynomial update rule to each column:
-            // - new_row_for_x_j=0 = old_row * (1 - z_j)
-            // - new_row_for_x_j=1 = old_row * z_j
+            // Process each column (each point in the batch) for the current row `idx`.
             for col in 0..width {
-                let val = current_row_values[col].clone();
+                // Read the current value directly from the buffer.
+                let val = buffer.values[idx * width + col].clone();
                 let eval_point = eval_row[col];
+
+                // Compute the two new values for the next level of the hypercube.
                 let scaled_val = val.clone() * eval_point;
                 let new_val = val - scaled_val.clone();
 
+                // Write the results back in-place.
                 buffer.values[idx * width + col] = new_val;
                 buffer.values[(idx + stride) * width + col] = scaled_val;
             }
