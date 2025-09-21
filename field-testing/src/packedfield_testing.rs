@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::{Field, PackedField, PackedFieldPow2, PackedValue, PrimeCharacteristicRing};
+use p3_field::{BasedVectorSpace, Field, PackedField, PackedFieldPow2, PackedValue, PrimeCharacteristicRing};
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -18,18 +18,24 @@ where
 // Packed extension tests (reusable helpers)
 pub fn test_packed_ext_square_matches_self_mul<PEF>()
 where
-    PEF: PrimeCharacteristicRing + Eq,
+    PEF: PrimeCharacteristicRing + Eq + Clone,
     StandardUniform: Distribution<PEF>,
 {
     let mut rng = SmallRng::seed_from_u64(2);
     let x: PEF = rng.random();
-    assert_eq!(x.square(), x * x);
+    assert_eq!(x.square(), x.clone() * x);
 }
 
 pub fn test_packed_ext_add_sub_mul_with_pf_semantics<PEF, PF>()
 where
-    PEF: PrimeCharacteristicRing + Eq + PackedValue<Value = PF> + BasedVectorSpace<PF>,
-    PF: PrimeCharacteristicRing + Copy,
+    PEF: PrimeCharacteristicRing
+        + Eq
+        + PackedValue<Value = PF>
+        + BasedVectorSpace<PF>
+        + core::ops::Add<PF, Output = PEF>
+        + core::ops::Sub<PF, Output = PEF>
+        + core::ops::Mul<PF, Output = PEF>,
+    PF: PrimeCharacteristicRing + Copy + Eq,
     StandardUniform: Distribution<PEF>,
 {
     let mut rng = SmallRng::seed_from_u64(3);
