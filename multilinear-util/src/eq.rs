@@ -359,12 +359,7 @@ where
 
     // Compute ∑_i γ_i * z_{i,0} using a dot product
     // This gives us eq_sum(1) directly since eq(1, z) = z
-    let eq_1_sum: FP = evals
-        .values
-        .iter()
-        .zip(scalars)
-        .map(|(&z_0, &scalar)| scalar * z_0)
-        .sum();
+    let eq_1_sum: FP = dot_product(scalars.iter().copied(), evals.values.iter().copied());
 
     // Use the identity: eq(0, z_i) = 1 - z_i
     // So ∑_i γ_i * (1 - z_i) = ∑_i γ_i - ∑_i γ_i * z_i
@@ -401,12 +396,7 @@ where
     let sum: FP = packed_scalars.iter().copied().sum();
 
     // Compute ∑ᵢ γᵢ ⋅ zᵢ using dot product
-    let eq_1_sum: FP = evals
-        .values
-        .iter()
-        .zip(packed_scalars)
-        .map(|(&z_0, &scalar)| scalar * z_0)
-        .sum();
+    let eq_1_sum: FP = dot_product(packed_scalars.iter().copied(), evals.values.iter().copied());
 
     // eq(0, zᵢ) = 1 - zᵢ, so ∑ᵢ γᵢ ⋅ (1 - zᵢ) = ∑ᵢ γᵢ - ∑ᵢ γᵢ ⋅ zᵢ
     let eq_0_sum = sum - eq_1_sum;
