@@ -365,41 +365,6 @@ where
     [eq_0_sum, eq_1_sum]
 }
 
-/// Computes the batched scaled multilinear equality polynomial over `{0,1}` using packed values.
-///
-/// This is the packed version of `eval_eq_1_batch`, designed for use within the parallel
-/// evaluation framework where scalars are already packed into SIMD-friendly formats.
-///
-/// The function computes the same mathematical result as `eval_eq_1_batch` but operates
-/// on packed scalar values for improved SIMD performance.
-///
-/// # Arguments
-/// - `evals`: Matrix where each column is an evaluation point z_i (must have height = 1)
-/// - `packed_scalars`: Vector of packed scalars for SIMD processing
-///
-/// # Returns
-/// An array `[eq_sum(0), eq_sum(1)]` containing the summed evaluations for x = 0 and x = 1.
-#[inline(always)]
-fn eval_eq_1_batch_packed<F, FP>(evals: RowMajorMatrixView<F>, packed_scalars: &[FP]) -> [FP; 2]
-where
-    F: Field,
-    FP: Algebra<F> + Copy,
-{
-    debug_assert_eq!(evals.height(), 1);
-    debug_assert_eq!(evals.width(), packed_scalars.len());
-
-    // Compute ∑_i γ_i
-    let sum: FP = packed_scalars.iter().copied().sum();
-
-    // Compute ∑_i γ_i ⋅ z_i
-    let eq_1_sum: FP = dot_product(packed_scalars.iter().copied(), evals.values.iter().copied());
-
-    // eq(0, z_i) = 1 - z_i, so ∑_i γ_i ⋅ (1 - z_i) = ∑_i γ_i - ∑_i γ_i ⋅ z_i
-    let eq_0_sum = sum - eq_1_sum;
-
-    [eq_0_sum, eq_1_sum]
-}
-
 /// Compute the scaled multilinear equality polynomial over `{0,1}²`.
 ///
 /// # Arguments
@@ -490,45 +455,6 @@ where
     // Recurse to calculate evaluations for the remaining variable
     let [eq_00, eq_01] = eval_eq_1_batch(second_row, &eq_0s);
     let [eq_10, eq_11] = eval_eq_1_batch(second_row, &eq_1s);
-
-    // Return values in lexicographic order of x = (x_0, x_1)
-    [eq_00, eq_01, eq_10, eq_11]
-}
-
-/// Computes the batched scaled multilinear equality polynomial over `{0,1}^2` using packed values.
-///
-/// # Arguments
-/// - `evals`: Matrix where each column is an evaluation point z_i ∈ F^2 (must have height = 2)
-/// - `packed_scalars`: Vector of packed scalars for SIMD processing
-///
-/// # Returns
-/// An array of length 4 containing the summed evaluations in lexicographic order.
-#[inline(always)]
-fn eval_eq_2_batch_packed<F, FP>(evals: RowMajorMatrixView<F>, packed_scalars: &[FP]) -> [FP; 4]
-where
-    F: Field,
-    FP: Algebra<F> + Copy,
-{
-    debug_assert_eq!(evals.height(), 2);
-    debug_assert_eq!(evals.width(), packed_scalars.len());
-
-    let (first_row, second_row) = evals.split_rows(1);
-
-    // Split on the first variable z_0
-    let (eq_0s, eq_1s): (Vec<_>, Vec<_>) = first_row
-        .values
-        .iter()
-        .zip(packed_scalars)
-        .map(|(&z_0, &scalar)| {
-            let eq_1 = scalar * z_0;
-            let eq_0 = scalar - eq_1;
-            (eq_0, eq_1)
-        })
-        .unzip();
-
-    // Recurse to calculate evaluations for the remaining variable
-    let [eq_00, eq_01] = eval_eq_1_batch_packed(second_row, &eq_0s);
-    let [eq_10, eq_11] = eval_eq_1_batch_packed(second_row, &eq_1s);
 
     // Return values in lexicographic order of x = (x_0, x_1)
     [eq_00, eq_01, eq_10, eq_11]
@@ -634,53 +560,6 @@ where
     ]
 }
 
-/// Computes the batched scaled multilinear equality polynomial over `{0,1}^3` using packed values.
-///
-/// This is the packed version of `eval_eq_3_batch`, designed for use within the parallel
-/// evaluation framework where scalars are processed in packed SIMD format.
-///
-/// Like `eval_eq_2_batch_packed`, this function uses element-wise operations rather than
-/// vectorized operations since packed types don't necessarily implement the Field trait.
-///
-/// # Arguments
-/// - `evals`: Matrix where each column is an evaluation point z_i ∈ F^3 (must have height = 3)
-/// - `packed_scalars`: Vector of packed scalars for SIMD processing
-///
-/// # Returns
-/// An array of length 8 containing the summed evaluations in lexicographic order.
-#[inline(always)]
-fn eval_eq_3_batch_packed<F, FP>(evals: RowMajorMatrixView<F>, packed_scalars: &[FP]) -> [FP; 8]
-where
-    F: Field,
-    FP: Algebra<F> + Copy,
-{
-    debug_assert_eq!(evals.height(), 3);
-    debug_assert_eq!(evals.width(), packed_scalars.len());
-
-    let (first_row, remainder) = evals.split_rows(1);
-
-    // Split on the first variable z_0
-    let (eq_0s, eq_1s): (Vec<_>, Vec<_>) = first_row
-        .values
-        .iter()
-        .zip(packed_scalars)
-        .map(|(&z_0, &scalar)| {
-            let eq_1 = scalar * z_0;
-            let eq_0 = scalar - eq_1;
-            (eq_0, eq_1)
-        })
-        .unzip();
-
-    // Recurse to calculate evaluations for the remaining variables
-    let [eq_000, eq_001, eq_010, eq_011] = eval_eq_2_batch_packed(remainder, &eq_0s);
-    let [eq_100, eq_101, eq_110, eq_111] = eval_eq_2_batch_packed(remainder, &eq_1s);
-
-    // Return all 8 evaluations in lexicographic order of x ∈ {0,1}³
-    [
-        eq_000, eq_001, eq_010, eq_011, eq_100, eq_101, eq_110, eq_111,
-    ]
-}
-
 /// A trait which allows us to define similar but subtly different evaluation strategies depending
 /// on the incoming field types.
 trait EqualityEvaluator {
@@ -712,6 +591,12 @@ trait EqualityEvaluator {
         evals: RowMajorMatrixView<Self::InputField>,
         out_chunk: &mut [Self::OutputField],
         buffer_vals: &[Self::PackedField],
+        scalars: &[Self::OutputField],
+    );
+
+    fn accumulate_packed_batch<const INITIALIZED: bool>(
+        out: &mut [Self::OutputField],
+        final_packed_evals: &[Self::PackedField],
         scalars: &[Self::OutputField],
     );
 }
@@ -785,6 +670,19 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for ExtFieldEvaluator<F,
             scalars,
         );
     }
+
+    fn accumulate_packed_batch<const INITIALIZED: bool>(
+        out: &mut [Self::OutputField],
+        final_packed_evals: &[Self::PackedField],
+        _scalars: &[Self::OutputField],
+    ) {
+        let sum_packed = final_packed_evals
+            .iter()
+            .fold(Self::PackedField::ZERO, |acc, &x| acc + x);
+
+        let final_results_vec: Vec<EF> = Self::PackedField::to_ext_iter([sum_packed]).collect();
+        add_or_set::<_, INITIALIZED>(out, &final_results_vec);
+    }
 }
 
 impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for BaseFieldEvaluator<F, EF> {
@@ -818,8 +716,27 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for BaseFieldEvaluator<F
         evals: RowMajorMatrixView<Self::InputField>,
         _scalars: &[Self::OutputField],
     ) -> Vec<Self::PackedField> {
-        let const_scalars = vec![F::ONE; evals.width()];
-        packed_eq_poly_batch(evals, &const_scalars)
+        // For the base evaluator, the recursion starts with `1` for each point.
+        //
+        // The scalars are applied only at the very end in `accumulate_packed_batch`.
+        let ones = vec![F::ONE; evals.width()];
+
+        let height = evals.height();
+        let width = evals.width();
+        debug_assert_eq!(F::Packing::WIDTH, 1 << height);
+
+        let mut buffer = RowMajorMatrix::new(F::zero_vec((1 << height) * width), width);
+        buffer.row_mut(0).copy_from_slice(&ones);
+        fill_buffer_batch(evals, &mut buffer);
+
+        (0..width)
+            .map(|col_idx| {
+                let column: Vec<F> = (0..(1 << height))
+                    .map(|row_idx| buffer.values[row_idx * width + col_idx])
+                    .collect();
+                *F::Packing::from_slice(&column)
+            })
+            .collect::<Vec<F::Packing>>()
     }
 
     fn process_chunk_batch<const INITIALIZED: bool>(
@@ -829,6 +746,24 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for BaseFieldEvaluator<F
         scalars: &[Self::OutputField],
     ) {
         eval_eq_packed_batch::<F, F, EF, Self, INITIALIZED>(evals, out_chunk, buffer_vals, scalars);
+    }
+
+    fn accumulate_packed_batch<const INITIALIZED: bool>(
+        out: &mut [Self::OutputField],
+        final_packed_evals: &[Self::PackedField],
+        scalars: &[Self::OutputField],
+    ) {
+        let width = F::Packing::WIDTH;
+        debug_assert_eq!(out.len(), width);
+        debug_assert_eq!(final_packed_evals.len(), scalars.len());
+
+        let mut final_results = EF::zero_vec(width);
+        for (packed_eval, scalar) in final_packed_evals.iter().zip(scalars) {
+            for (lane, &base_val) in packed_eval.as_slice().iter().enumerate() {
+                final_results[lane] += *scalar * base_val;
+            }
+        }
+        add_or_set::<_, INITIALIZED>(out, &final_results);
     }
 }
 
@@ -1046,25 +981,184 @@ fn eval_eq_packed_batch<F, IF, EF, E, const INITIALIZED: bool>(
     match eval_points.height() {
         0 => {
             // Base case: sum all packed evaluations and accumulate
-            let sum_packed = eq_evals
-                .iter()
-                .fold(E::PackedField::ZERO, |acc, &x| acc + x);
-            E::accumulate_results::<INITIALIZED, 1>(out, [sum_packed], scalars[0]);
+            E::accumulate_packed_batch::<INITIALIZED>(out, eq_evals, scalars);
         }
         1 => {
-            let eq_evaluations = eval_eq_1_batch_packed(eval_points, eq_evals);
-            E::accumulate_results::<INITIALIZED, 2>(out, eq_evaluations, scalars[0]);
+            // Special case for 1 variable: unroll the recursion manually
+            let (low, high) = out.split_at_mut(out.len() / 2);
+            let (first_row, _remainder) = eval_points.split_rows(1);
+
+            // Compute evaluations for both branches in batch
+            let (eq_evals_0, eq_evals_1): (Vec<_>, Vec<_>) = first_row
+                .values
+                .iter()
+                .zip(eq_evals)
+                .map(|(&z_0, &eq_eval)| {
+                    let eq_1 = eq_eval * z_0;
+                    let eq_0 = eq_eval - eq_1;
+                    (eq_0, eq_1)
+                })
+                .unzip();
+
+            E::accumulate_packed_batch::<INITIALIZED>(low, &eq_evals_0, scalars);
+            E::accumulate_packed_batch::<INITIALIZED>(high, &eq_evals_1, scalars);
         }
         2 => {
-            let eq_evaluations = eval_eq_2_batch_packed(eval_points, eq_evals);
-            E::accumulate_results::<INITIALIZED, 4>(out, eq_evaluations, scalars[0]);
+            // Special case for 2 variables: unroll 2 levels of recursion manually
+            let quarter_len = out.len() / 4;
+            let (bottom_half, top_half) = out.split_at_mut(out.len() / 2);
+            let (q00, q01) = bottom_half.split_at_mut(quarter_len);
+            let (q10, q11) = top_half.split_at_mut(quarter_len);
+
+            let (first_row, second_row) = eval_points.split_rows(1);
+            let (second_row_single, _remainder) = second_row.split_rows(1);
+
+            // First split on z_0
+            let (eq_evals_0, eq_evals_1): (Vec<_>, Vec<_>) = first_row
+                .values
+                .iter()
+                .zip(eq_evals)
+                .map(|(&z_0, &eq_eval)| {
+                    let eq_1 = eq_eval * z_0;
+                    let eq_0 = eq_eval - eq_1;
+                    (eq_0, eq_1)
+                })
+                .unzip();
+
+            // Then split each branch on z_1
+            let (eq_evals_00, eq_evals_01): (Vec<_>, Vec<_>) = second_row_single
+                .values
+                .iter()
+                .zip(&eq_evals_0)
+                .map(|(&z_1, &eq_eval)| {
+                    let eq_1 = eq_eval * z_1;
+                    let eq_0 = eq_eval - eq_1;
+                    (eq_0, eq_1)
+                })
+                .unzip();
+
+            let (eq_evals_10, eq_evals_11): (Vec<_>, Vec<_>) = second_row_single
+                .values
+                .iter()
+                .zip(&eq_evals_1)
+                .map(|(&z_1, &eq_eval)| {
+                    let eq_1 = eq_eval * z_1;
+                    let eq_0 = eq_eval - eq_1;
+                    (eq_0, eq_1)
+                })
+                .unzip();
+
+            E::accumulate_packed_batch::<INITIALIZED>(q00, &eq_evals_00, scalars);
+            E::accumulate_packed_batch::<INITIALIZED>(q01, &eq_evals_01, scalars);
+            E::accumulate_packed_batch::<INITIALIZED>(q10, &eq_evals_10, scalars);
+            E::accumulate_packed_batch::<INITIALIZED>(q11, &eq_evals_11, scalars);
         }
         3 => {
-            let eq_evaluations = eval_eq_3_batch_packed(eval_points, eq_evals);
-            E::accumulate_results::<INITIALIZED, 8>(out, eq_evaluations, scalars[0]);
+            // Special case for 3 variables: unroll 3 levels of recursion manually
+            let eighth_len = out.len() / 8;
+            let (q0, q1) = out.split_at_mut(out.len() / 2);
+            let (q00, q01) = q0.split_at_mut(q0.len() / 2);
+            let (q10, q11) = q1.split_at_mut(q1.len() / 2);
+            let (q000, q001) = q00.split_at_mut(eighth_len);
+            let (q010, q011) = q01.split_at_mut(eighth_len);
+            let (q100, q101) = q10.split_at_mut(eighth_len);
+            let (q110, q111) = q11.split_at_mut(eighth_len);
+
+            let (first_row, remainder) = eval_points.split_rows(1);
+            let (second_row, third_row) = remainder.split_rows(1);
+            let (third_row_single, _remainder) = third_row.split_rows(1);
+
+            // First split on z_0
+            let (eq_evals_0, eq_evals_1): (Vec<_>, Vec<_>) = first_row
+                .values
+                .iter()
+                .zip(eq_evals)
+                .map(|(&z_0, &eq_eval)| {
+                    let eq_1 = eq_eval * z_0;
+                    let eq_0 = eq_eval - eq_1;
+                    (eq_0, eq_1)
+                })
+                .unzip();
+
+            // Split each branch on z_1
+            let (eq_evals_00, eq_evals_01): (Vec<_>, Vec<_>) = second_row
+                .values
+                .iter()
+                .zip(&eq_evals_0)
+                .map(|(&z_1, &eq_eval)| {
+                    let eq_1 = eq_eval * z_1;
+                    let eq_0 = eq_eval - eq_1;
+                    (eq_0, eq_1)
+                })
+                .unzip();
+
+            let (eq_evals_10, eq_evals_11): (Vec<_>, Vec<_>) = second_row
+                .values
+                .iter()
+                .zip(&eq_evals_1)
+                .map(|(&z_1, &eq_eval)| {
+                    let eq_1 = eq_eval * z_1;
+                    let eq_0 = eq_eval - eq_1;
+                    (eq_0, eq_1)
+                })
+                .unzip();
+
+            // Finally split each of the 4 branches on z_2
+            let (eq_evals_000, eq_evals_001): (Vec<_>, Vec<_>) = third_row_single
+                .values
+                .iter()
+                .zip(&eq_evals_00)
+                .map(|(&z_2, &eq_eval)| {
+                    let eq_1 = eq_eval * z_2;
+                    let eq_0 = eq_eval - eq_1;
+                    (eq_0, eq_1)
+                })
+                .unzip();
+
+            let (eq_evals_010, eq_evals_011): (Vec<_>, Vec<_>) = third_row_single
+                .values
+                .iter()
+                .zip(&eq_evals_01)
+                .map(|(&z_2, &eq_eval)| {
+                    let eq_1 = eq_eval * z_2;
+                    let eq_0 = eq_eval - eq_1;
+                    (eq_0, eq_1)
+                })
+                .unzip();
+
+            let (eq_evals_100, eq_evals_101): (Vec<_>, Vec<_>) = third_row_single
+                .values
+                .iter()
+                .zip(&eq_evals_10)
+                .map(|(&z_2, &eq_eval)| {
+                    let eq_1 = eq_eval * z_2;
+                    let eq_0 = eq_eval - eq_1;
+                    (eq_0, eq_1)
+                })
+                .unzip();
+
+            let (eq_evals_110, eq_evals_111): (Vec<_>, Vec<_>) = third_row_single
+                .values
+                .iter()
+                .zip(&eq_evals_11)
+                .map(|(&z_2, &eq_eval)| {
+                    let eq_1 = eq_eval * z_2;
+                    let eq_0 = eq_eval - eq_1;
+                    (eq_0, eq_1)
+                })
+                .unzip();
+
+            E::accumulate_packed_batch::<INITIALIZED>(q000, &eq_evals_000, scalars);
+            E::accumulate_packed_batch::<INITIALIZED>(q001, &eq_evals_001, scalars);
+            E::accumulate_packed_batch::<INITIALIZED>(q010, &eq_evals_010, scalars);
+            E::accumulate_packed_batch::<INITIALIZED>(q011, &eq_evals_011, scalars);
+            E::accumulate_packed_batch::<INITIALIZED>(q100, &eq_evals_100, scalars);
+            E::accumulate_packed_batch::<INITIALIZED>(q101, &eq_evals_101, scalars);
+            E::accumulate_packed_batch::<INITIALIZED>(q110, &eq_evals_110, scalars);
+            E::accumulate_packed_batch::<INITIALIZED>(q111, &eq_evals_111, scalars);
         }
         _ => {
-            // General recursive case
+            // General recursive case for 4+ variables
             let (low, high) = out.split_at_mut(out.len() / 2);
             let (first_row, remainder) = eval_points.split_rows(1);
 
@@ -1153,9 +1247,6 @@ where
         // The last log_packing_width elements are the ones which will be packed.
 
         // We make a buffer of PackedField elements of size `NUM_THREADS`.
-        // Note that this is a slightly different strategy to `eval_eq` which instead
-        // uses PackedExtensionField elements. Whilst this involves slightly more mathematical
-        // operations, it seems to be faster in practice due to less data moving around.
         let mut parallel_buffer = E::PackedField::zero_vec(num_threads);
 
         // As num_threads is a power of two we can divide using a bit-shift.
@@ -1470,7 +1561,7 @@ mod tests {
 
     #[test]
     fn test_eval_eq_functionality() {
-        let mut output = vec![F::ZERO; 4]; // n=2 → 2^2 = 4 elements
+        let mut output = F::zero_vec(4); // n=2 → 2^2 = 4 elements
         let eval = vec![F::from_u64(1), F::from_u64(0)]; // (X1, X2) = (1,0)
         let scalar = F::from_u64(2);
 
@@ -1514,7 +1605,7 @@ mod tests {
         let n = eval.len();
 
         // Allocate result vector of size 2^n, initialized to zero
-        let mut result = vec![EF4::ZERO; 1 << n];
+        let mut result = EF4::zero_vec(1 << n);
 
         // Iterate over each binary input `x ∈ {0,1}^n`, indexed by `i`
         for (i, out) in result.iter_mut().enumerate() {
@@ -1557,7 +1648,7 @@ mod tests {
 
             // Make sure output has correct size: 2^n
             let out_len = 1 << evals.len();
-            let mut output = vec![EF4::ZERO; out_len];
+            let mut output = EF4::zero_vec(out_len);
 
             eval_eq::<F, EF4, true>(&evals, &mut output, scalar);
 
@@ -1736,10 +1827,10 @@ mod tests {
             let num_outputs = 1 << n;
 
             // Output from eval_eq using extension field evaluation point
-            let mut output_ext = vec![EF4::ZERO; num_outputs];
+            let mut output_ext = EF4::zero_vec(num_outputs);
 
             // Output from eval_eq_base using base field evaluation point
-            let mut output_base = vec![EF4::ZERO; num_outputs];
+            let mut output_base = EF4::zero_vec(num_outputs);
 
             // Evaluate the equality polynomial using both methods
 
@@ -1770,18 +1861,18 @@ mod tests {
         let evals = RowMajorMatrixView::new(&evals_data, 3); // 2 rows (variables) × 3 columns (points)
         let scalars = vec![F::from_u64(2), F::from_u64(3), F::from_u64(5)]; // γ_0=2, γ_1=3, γ_2=5
 
-        let mut output_batch = vec![F::ZERO; 4]; // 2^2 = 4 elements
+        let mut output_batch = F::zero_vec(4); // 2^2 = 4 elements
         eval_eq_batch::<_, _, false>(evals, &scalars, &mut output_batch);
 
         // Compute expected result by evaluating individual equality polynomials and summing
-        let mut expected_output = vec![F::ZERO; 4];
+        let mut expected_output = F::zero_vec(4);
         let points = [
             vec![F::from_u64(1), F::from_u64(0)], // Point 1: (1, 0)
             vec![F::from_u64(0), F::from_u64(1)], // Point 2: (0, 1)
             vec![F::from_u64(1), F::from_u64(1)], // Point 3: (1, 1)
         ];
         for (point, &scalar) in points.iter().zip(scalars.iter()) {
-            let mut temp_output = vec![F::ZERO; 4];
+            let mut temp_output = F::zero_vec(4);
             eval_eq::<_, _, false>(point, &mut temp_output, scalar);
             F::add_slices(&mut expected_output, &temp_output);
         }
@@ -1803,17 +1894,17 @@ mod tests {
         let evals = RowMajorMatrixView::new(&evals_data, 2);
         let scalars = vec![EF4::from_u64(2), EF4::from_u64(3)];
 
-        let mut output_batch = vec![EF4::ZERO; 4];
+        let mut output_batch = EF4::zero_vec(4);
         eval_eq_base_batch::<_, _, false>(evals, &scalars, &mut output_batch);
 
         // Compare with individual evaluations
-        let mut expected_output = vec![EF4::ZERO; 4];
+        let mut expected_output = EF4::zero_vec(4);
         let points = [
             vec![F::from_u64(1), F::from_u64(0)], // Point 1: (1, 0)
             vec![F::from_u64(0), F::from_u64(1)], // Point 2: (0, 1)
         ];
         for (point, &scalar) in points.iter().zip(scalars.iter()) {
-            let mut temp_output = vec![EF4::ZERO; 4];
+            let mut temp_output = EF4::zero_vec(4);
             eval_eq_base::<_, _, false>(point, &mut temp_output, scalar);
             EF4::add_slices(&mut expected_output, &temp_output);
         }
@@ -1869,14 +1960,14 @@ mod tests {
             }
             let evals = RowMajorMatrixView::new(&evals_data, eval_points.len());
 
-            let mut output_batch = vec![EF4::ZERO; out_len];
+            let mut output_batch = EF4::zero_vec(out_len);
             eval_eq_batch::<F, EF4, false>(evals, &scalars, &mut output_batch);
 
             // Compute using individual evaluations and manual summation
-            let mut expected_output = vec![EF4::ZERO; out_len];
+            let mut expected_output = EF4::zero_vec(out_len);
             for (point, &scalar) in eval_points.iter().zip(scalars.iter()) {
                 let point_ext: Vec<EF4> = point.iter().map(|&f| EF4::from(f)).collect();
-                let mut temp_output = vec![EF4::ZERO; out_len];
+                let mut temp_output = EF4::zero_vec(out_len);
                 eval_eq::<F, EF4, false>(&point_ext, &mut temp_output, scalar);
                 EF4::add_slices(&mut expected_output, &temp_output);
             }
@@ -1888,11 +1979,10 @@ mod tests {
     #[test]
     fn test_eval_eq_parallel_path() {
         // Calculate the threshold for parallel execution:
-        // threshold = packing_width + 1 + log_num_threads
         let packing_width = <F as Field>::Packing::WIDTH;
         let num_threads = current_num_threads().next_power_of_two();
         let log_num_threads = log2_strict_usize(num_threads);
-        let threshold = packing_width + 1 + log_num_threads;
+        let threshold = packing_width.ilog2() as usize + 1 + log_num_threads;
 
         // Use variables > threshold to force parallel path
         let num_vars = threshold + 2;
@@ -1963,42 +2053,48 @@ mod tests {
         );
     }
 
-    /// Helper test to verify the threshold calculation and log current system parameters.
-    /// This helps debug and understand when parallel paths are triggered.
     #[test]
-    fn test_parallel_threshold_info() {
+    fn test_eval_eq_base_batch_parallel_path() {
+        // Calculate the threshold to guarantee the parallel path is taken.
         let packing_width = <F as Field>::Packing::WIDTH;
         let num_threads = current_num_threads().next_power_of_two();
         let log_num_threads = log2_strict_usize(num_threads);
+        let threshold = packing_width.ilog2() as usize + 1 + log_num_threads;
 
-        // Non-batched threshold
-        let non_batched_threshold = packing_width + 1 + log_num_threads;
+        // Use enough variables to exceed the threshold
+        let num_vars = threshold + 1;
+        let num_points = 3;
 
-        // Batched threshold
-        let batched_threshold = packing_width.ilog2() as usize + 1 + log_num_threads;
+        // Create random base field evaluation points and extension field scalars
+        let mut rng = SmallRng::seed_from_u64(9876);
+        let eval_points: Vec<Vec<F>> = (0..num_points)
+            .map(|_| (0..num_vars).map(|_| rng.random()).collect())
+            .collect();
 
-        println!("Packing width: {}", packing_width);
-        println!("Num threads: {}", num_threads);
-        println!("Log num threads: {}", log_num_threads);
-        println!(
-            "Non-batched parallel threshold: {} variables",
-            non_batched_threshold
-        );
-        println!(
-            "Batched parallel threshold: {} variables",
-            batched_threshold
-        );
+        let scalars: Vec<EF4> = (0..num_points).map(|_| rng.random()).collect();
 
-        // Ensure our thresholds are reasonable (not too large for testing)
-        assert!(
-            non_batched_threshold < 20,
-            "Non-batched threshold too high for testing: {}",
-            non_batched_threshold
-        );
-        assert!(
-            batched_threshold < 20,
-            "Batched threshold too high for testing: {}",
-            batched_threshold
+        // Create matrix layout: rows are variables, columns are points
+        let mut evals_data = Vec::with_capacity(num_vars * num_points);
+        for var_idx in 0..num_vars {
+            for point in &eval_points {
+                evals_data.push(point[var_idx]);
+            }
+        }
+        let evals = RowMajorMatrixView::new(&evals_data, num_points);
+        let out_len = 1 << num_vars;
+
+        // Run the parallel version
+        let mut output_parallel = EF4::zero_vec(out_len);
+        eval_eq_base_batch::<F, EF4, false>(evals, &scalars, &mut output_parallel);
+
+        // Run the sequential version for comparison
+        let mut output_basic = EF4::zero_vec(out_len);
+        eval_eq_batch_basic::<F, F, EF4, false>(evals, &scalars, &mut output_basic);
+
+        // Assert that the parallel version matches the sequential version
+        assert_eq!(
+            output_parallel, output_basic,
+            "Parallel base-field batched path should match basic batched evaluation"
         );
     }
 }
