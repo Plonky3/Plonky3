@@ -23,6 +23,28 @@
 //! W(x) = \sum_i \gamma_i ⋅ eq(x, z_i)  ,  x ∈ {0,1}^n .
 //! ```
 //!
+//! ## Batched Evaluation
+//!
+//! The batched methods (`eval_eq_batch`, `eval_eq_base_batch`) are designed to efficiently compute
+//! linear combinations of multiple equality polynomial evaluations. Instead of computing each
+//! equality polynomial individually and then summing the results, these functions leverage linearity
+//! to perform the summation within the recursive evaluation process.
+//!
+//! ### Key Performance Benefits:
+//! - **Reduced complexity**: From O(m⋅2^n) to O(2^n + m⋅n) for m evaluation points
+//! - **SIMD optimization**: Uses vectorized operations via the new `sub_slices` method
+//! - **Memory efficiency**: Single buffer allocation with batched processing
+//! - **Parallel processing**: Full utilization of multi-core systems
+//!
+//! ### Mathematical Foundation:
+//! The batched algorithm exploits the recursive structure by updating entire vectors of scalars:
+//!
+//! At each variable z_j, the scalar vector γ = (γ_0, γ_1, ..., γ_{m-1}) splits into:
+//! - γ_0 = γ ⊙ (1 - z_j) for the x_j = 0 branch
+//! - γ_1 = γ ⊙ z_j for the x_j = 1 branch
+//!
+//! Where ⊙ denotes element-wise (Hadamard) product.
+//!
 //! ## `INITIALIZED` flag
 //!
 //! Each function accepts a `const INITIALIZED: bool` flag to control how output is written:
@@ -34,6 +56,7 @@
 
 use p3_field::{
     Algebra, ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
+    dot_product,
 };
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
@@ -213,41 +236,46 @@ where
     }
 }
 
-/// Expands a row-major buffer of partial equality-polynomial evaluations across the next
-/// variable for **all columns simultaneously**.
+/// Fills the `buffer` with evaluations of the equality polynomial for multiple points simultaneously.
 ///
-/// The input `buffer` has `2^k` rows, where each column holds the partial product for a specific
-/// point after `k` variables have been processed. Given the next row of evaluation points
-/// (one for each column), this function doubles the buffer's height to `2^{k+1}` rows.
-/// It populates the new rows by applying the recursive update rule to each column independently:
+/// This is the batched version of `fill_buffer` that operates on matrices where each column
+/// represents a different evaluation point. The function expands a matrix of partial equality
+/// polynomial evaluations across multiple variables.
 ///
-/// - `new_row_for_x_k=0 = old_row * (1 - z_k)`
-/// - `new_row_for_x_k=1 = old_row * z_k`
+/// Given a buffer with `2^k` rows (where each column holds partial products for a specific point
+/// after `k` variables have been processed), this function processes the evaluation points
+/// for the remaining variables to complete the equality polynomial computation.
 ///
-/// This is used by `eval_eq_batch_common` to prepare the initial states for all parallel threads.
+/// # Arguments
+/// - `evals`: Matrix where each column is an evaluation point z_i, each row is a variable
+/// - `buffer`: Mutable matrix buffer to be filled with equality polynomial evaluations
 ///
-/// # Preconditions
-/// - `evals.height()` equals the number of variables to expand over.
-/// - `buffer.width()` must equal `evals.width()`.
+/// # Panics
+/// Panics in debug builds if `evals.width() != buffer.width()`.
 #[inline(always)]
 fn fill_buffer_batch<F, A>(evals: RowMajorMatrixView<F>, buffer: &mut RowMajorMatrix<A>)
 where
     F: Field,
     A: Algebra<F> + Send + Sync + Clone,
 {
+    // Process variables in reverse order to maintain correct bit ordering in output buffer.
+    // This follows the same recursive update rule as the single-point fill_buffer,
+    // but applies it simultaneously across all columns (evaluation points).
     for (ind, eval_row) in evals.row_slices().rev().enumerate() {
         let stride = 1 << ind;
         let width = buffer.width();
 
-        // We need to expand the buffer in-place.
-        // Process each existing row and create a new row below it.
+        // Expand the buffer in-place by doubling its height at each step.
+        // Each existing row generates two new rows: one for x_j = 0, one for x_j = 1.
         for idx in 0..stride {
-            // Read the current row values before modifying
+            // Read current row values before modifying to avoid data races
             let current_row_values: Vec<A> = (0..width)
                 .map(|col| buffer.values[idx * width + col].clone())
                 .collect();
 
-            // Update the current row and create the new row
+            // Apply the recursive equality polynomial update rule to each column:
+            // new_row_for_x_j=0 = old_row * (1 - z_j)
+            // new_row_for_x_j=1 = old_row * z_j
             for col in 0..width {
                 let val = current_row_values[col].clone();
                 let eval_point = eval_row[col];
@@ -287,17 +315,31 @@ where
     [eq_0, eq_1]
 }
 
-/// Batched base case for a single variable.
+/// Computes the batched scaled multilinear equality polynomial over `{0,1}` for multiple points.
 ///
-/// This function efficiently computes the two final evaluation sums for `n=1`:
+/// This is the batched version of `eval_eq_1` that efficiently computes the final summation
+/// for a single variable across multiple evaluation points simultaneously.
+///
+/// The equality polynomial for one variable is:
 /// ```text
-/// [ ∑ᵢ γᵢ ⋅ (1 - z_{i,0}),  ∑ᵢ γᵢ ⋅ z_{i,0} ]
+/// eq(x, z) = x * z + (1 - x) * (1 - z)
 /// ```
-/// It leverages linearity by:
-/// 1. Computing `S(1) = ∑ᵢ γᵢ ⋅ z_{i,0}` with a dot product,
-/// 2. Finding `S(0)` via a single subtraction: `S(0) = (∑ᵢ γᵢ) - S(1)`.
 ///
-/// This avoids `m` unnecessary operations compared to a naive summation.
+/// For the batched case, we compute:
+/// ```text
+/// eq_sum(0) = ∑_i scalars[i] * (1 - evals[0][i])  // when x = 0
+/// eq_sum(1) = ∑_i scalars[i] * evals[0][i]        // when x = 1
+/// ```
+///
+/// # Arguments
+/// - `evals`: Matrix where each column is an evaluation point z_i (must have height = 1)
+/// - `scalars`: Vector of scalars [γ_0, γ_1, ..., γ_{m-1}] for weighting each evaluation
+///
+/// # Returns
+/// An array `[eq_sum(0), eq_sum(1)]` containing the summed evaluations for x = 0 and x = 1.
+///
+/// # Panics
+/// Panics in debug builds if `evals.height() != 1` or `evals.width() != scalars.len()`.
 #[inline(always)]
 fn eval_eq_1_batch<F, FP>(evals: RowMajorMatrixView<F>, scalars: &[FP]) -> [FP; 2]
 where
@@ -307,10 +349,16 @@ where
     debug_assert_eq!(evals.height(), 1);
     debug_assert_eq!(evals.width(), scalars.len());
 
-    // Compute ∑ᵢ γᵢ
+    // Use linearity to avoid redundant operations.
+    //
+    // Instead of computing each term individually and summing, we leverage
+    // the mathematical relationship between eq(0,z) and eq(1,z).
+
+    // Compute the total sum of all scalars: ∑_i γ_i
     let sum: FP = scalars.iter().copied().sum();
 
-    // Compute ∑ᵢ γᵢ ⋅ zᵢ using dot product (first row contains all z₀ values)
+    // Compute ∑_i γ_i * z_{i,0} using a dot product
+    // This gives us eq_sum(1) directly since eq(1, z) = z
     let eq_1_sum: FP = evals
         .values
         .iter()
@@ -318,13 +366,28 @@ where
         .map(|(&z_0, &scalar)| scalar * z_0)
         .sum();
 
-    // eq(0, zᵢ) = 1 - zᵢ, so ∑ᵢ γᵢ ⋅ (1 - zᵢ) = ∑ᵢ γᵢ - ∑ᵢ γᵢ ⋅ zᵢ
+    // Use the identity: eq(0, z_i) = 1 - z_i
+    // So ∑_i γ_i * (1 - z_i) = ∑_i γ_i - ∑_i γ_i * z_i
+    // This saves approximately m operations compared to computing each term individually
     let eq_0_sum = sum - eq_1_sum;
 
     [eq_0_sum, eq_1_sum]
 }
 
-/// Compute the batched scaled multilinear equality polynomial over `{0,1}` using packed values.
+/// Computes the batched scaled multilinear equality polynomial over `{0,1}` using packed values.
+///
+/// This is the packed version of `eval_eq_1_batch`, designed for use within the parallel
+/// evaluation framework where scalars are already packed into SIMD-friendly formats.
+///
+/// The function computes the same mathematical result as `eval_eq_1_batch` but operates
+/// on packed scalar values for improved SIMD performance.
+///
+/// # Arguments
+/// - `evals`: Matrix where each column is an evaluation point z_i (must have height = 1)
+/// - `packed_scalars`: Vector of packed scalars for SIMD processing
+///
+/// # Returns
+/// An array `[eq_sum(0), eq_sum(1)]` containing the summed evaluations for x = 0 and x = 1.
 #[inline(always)]
 fn eval_eq_1_batch_packed<F, FP>(evals: RowMajorMatrixView<F>, packed_scalars: &[FP]) -> [FP; 2]
 where
@@ -382,18 +445,32 @@ where
     [eq_00, eq_01, eq_10, eq_11]
 }
 
-/// Compute the batched scaled multilinear equality polynomial over `{0,1}²`.
+/// Computes the batched scaled multilinear equality polynomial over `{0,1}^2` for multiple points.
 ///
-/// This is an unrolled base case for the recursive batch algorithm. It splits on the first
-/// variable (`z_0`) to create two new vectors of scalars and then calls `eval_eq_1_batch`
-/// to complete the evaluation.
+/// This is the batched version of `eval_eq_2` that efficiently handles the two-variable case
+/// across multiple evaluation points simultaneously. It serves as an unrolled base case
+/// for the recursive batch algorithm.
+///
+/// The equality polynomial for two variables is:
+/// ```text
+/// eq(x, z) = (x_0 * z_0 + (1 - x_0) * (1 - z_0)) * (x_1 * z_1 + (1 - x_1) * (1 - z_1))
+/// ```
+///
+/// For the batched case with evaluation points z_i = (z_{i,0}, z_{i,1}), we compute:
+/// ```text
+/// result[j] = ∑_i scalars[i] * eq(x_j, z_i)  for x_j ∈ {(0,0), (0,1), (1,0), (1,1)}
+/// ```
 ///
 /// # Arguments
-/// - `evals`: A matrix where each column is an evaluation point `zᵢ`. Height must be 2.
-/// - `scalars`: The vector of weights `[γ₀, γ₁, ...]`.
+/// - `evals`: Matrix where each column is an evaluation point z_i ∈ F^2 (must have height = 2)
+/// - `scalars`: Vector of scalars [γ_0, γ_1, ..., γ_{m-1}] for weighting each evaluation
 ///
 /// # Returns
-/// An array containing `∑ᵢ γᵢ ⋅ eq(x, zᵢ)` for all `x` in lexicographic order.
+/// An array of length 4 containing `∑_i scalars[i] * eq(x, z_i)` for all x ∈ {0,1}^2
+/// in lexicographic order: [eq(00), eq(01), eq(10), eq(11)].
+///
+/// # Panics
+/// Panics in debug builds if `evals.height() != 2` or `evals.width() != scalars.len()`.
 #[inline(always)]
 fn eval_eq_2_batch<F, FP>(evals: RowMajorMatrixView<F>, scalars: &[FP]) -> [FP; 4]
 where
@@ -405,9 +482,12 @@ where
 
     let (first_row, second_row) = evals.split_rows(1);
 
-    // Split on the first variable z₀.
-    //
-    // First compute all eq_1 values: scalar * z_0
+    // Split on the first variable z_0 using vectorized operations for efficiency.
+    // This leverages the recursive property: eq((x_0, x_1), (z_0, z_1)) splits into
+    // two sub-problems based on x_0, each with updated scalar weights.
+
+    // Compute eq_1s[i] = scalars[i] * z_{i,0} for all points i
+    // These are the scalar weights for the x_0 = 1 branch
     let eq_1s: Vec<_> = first_row
         .values
         .iter()
@@ -415,7 +495,9 @@ where
         .map(|(&z_0, &scalar)| scalar * z_0)
         .collect();
 
-    // Then compute eq_0 values: scalar - eq_1 using vectorized subtraction
+    // Compute eq_0s[i] = scalars[i] - eq_1s[i] using vectorized SIMD subtraction
+    // These are the scalar weights for the x_0 = 0 branch
+    // This approach leverages the new sub_slices method for efficient vectorized operations
     let mut eq_0s: Vec<_> = scalars.to_vec();
     FP::sub_slices(&mut eq_0s, &eq_1s);
 
@@ -427,7 +509,21 @@ where
     [eq_00, eq_01, eq_10, eq_11]
 }
 
-/// Compute the batched scaled multilinear equality polynomial over `{0,1}²` using packed values.
+/// Computes the batched scaled multilinear equality polynomial over `{0,1}^2` using packed values.
+///
+/// Designed for use within the parallel evaluation framework where scalars are processed
+/// in packed SIMD format for improved performance.
+///
+/// Unlike the regular batch version, this function works with packed scalars but uses
+/// element-wise operations rather than vectorized `sub_slices` since packed types
+/// don't necessarily implement the `Field` trait required for vectorized operations.
+///
+/// # Arguments
+/// - `evals`: Matrix where each column is an evaluation point z_i ∈ F^2 (must have height = 2)
+/// - `packed_scalars`: Vector of packed scalars for SIMD processing
+///
+/// # Returns
+/// An array of length 4 containing the summed evaluations in lexicographic order.
 #[inline(always)]
 fn eval_eq_2_batch_packed<F, FP>(evals: RowMajorMatrixView<F>, packed_scalars: &[FP]) -> [FP; 4]
 where
@@ -492,18 +588,32 @@ where
     ]
 }
 
-/// Compute the batched scaled multilinear equality polynomial over `{0,1}³`.
+/// Computes the batched scaled multilinear equality polynomial over `{0,1}^3` for multiple points.
 ///
-/// This is an unrolled base case for the recursive batch algorithm. It splits on the first
-/// variable (`z_0`) to create two new vectors of scalars and then calls `eval_eq_2_batch`
-/// to complete the evaluation.
+/// This is the batched version of `eval_eq_3` that efficiently handles the three-variable case
+/// across multiple evaluation points simultaneously. It serves as an unrolled base case
+/// for the recursive batch algorithm.
+///
+/// The equality polynomial for three variables is:
+/// ```text
+/// eq(x, z) = ∏_{i=0}^{2} (x_i * z_i + (1 - x_i) * (1 - z_i))
+/// ```
+///
+/// For the batched case with evaluation points z_i = (z_{i,0}, z_{i,1}, z_{i,2}), we compute:
+/// ```text
+/// result[j] = ∑_i scalars[i] * eq(x_j, z_i)  for all x_j ∈ {0,1}^3
+/// ```
 ///
 /// # Arguments
-/// - `evals`: A matrix where each column is an evaluation point `zᵢ`. Height must be 3.
-/// - `scalars`: The vector of weights `[γ₀, γ₁, ...]`.
+/// - `evals`: Matrix where each column is an evaluation point z_i ∈ F^3 (must have height = 3)
+/// - `scalars`: Vector of scalars [γ_0, γ_1, ..., γ_{m-1}] for weighting each evaluation
 ///
 /// # Returns
-/// An array of summed scaled evaluations containing `∑ᵢ γᵢ ⋅ eq(x, zᵢ)` for `x ∈ {0,1}³` in lexicographic order.
+/// An array of length 8 containing `∑_i scalars[i] * eq(x, z_i)` for all x ∈ {0,1}^3
+/// in lexicographic order: [eq(000), eq(001), eq(010), eq(011), eq(100), eq(101), eq(110), eq(111)].
+///
+/// # Panics
+/// Panics in debug builds if `evals.height() != 3` or `evals.width() != scalars.len()`.
 #[inline(always)]
 fn eval_eq_3_batch<F, FP>(evals: RowMajorMatrixView<F>, scalars: &[FP]) -> [FP; 8]
 where
@@ -515,8 +625,13 @@ where
 
     let (first_row, remainder) = evals.split_rows(1);
 
-    // Split on the first variable z₀
-    // First compute all eq_1 values: scalar * z_0
+    // Split on the first variable z_0, following the same vectorized strategy as eval_eq_2_batch.
+    //
+    // The three-variable case reduces to two two-variable sub-problems.
+
+    // Compute eq_1s[i] = scalars[i] * z_{i,0} for all points i.
+    //
+    // These become the scalar weights for the x_0 = 1 branch.
     let eq_1s: Vec<_> = first_row
         .values
         .iter()
@@ -524,7 +639,9 @@ where
         .map(|(&z_0, &scalar)| scalar * z_0)
         .collect();
 
-    // Then compute eq_0 values: scalar - eq_1 using vectorized subtraction
+    // Compute eq_0s[i] = scalars[i] - eq_1s[i] using vectorized subtraction.
+    //
+    // These become the scalar weights for the x_0 = 0 branch.
     let mut eq_0s: Vec<_> = scalars.to_vec();
     FP::sub_slices(&mut eq_0s, &eq_1s);
 
@@ -538,7 +655,20 @@ where
     ]
 }
 
-/// Compute the batched scaled multilinear equality polynomial over `{0,1}³` using packed values.
+/// Computes the batched scaled multilinear equality polynomial over `{0,1}^3` using packed values.
+///
+/// This is the packed version of `eval_eq_3_batch`, designed for use within the parallel
+/// evaluation framework where scalars are processed in packed SIMD format.
+///
+/// Like `eval_eq_2_batch_packed`, this function uses element-wise operations rather than
+/// vectorized operations since packed types don't necessarily implement the Field trait.
+///
+/// # Arguments
+/// - `evals`: Matrix where each column is an evaluation point z_i ∈ F^3 (must have height = 3)
+/// - `packed_scalars`: Vector of packed scalars for SIMD processing
+///
+/// # Returns
+/// An array of length 8 containing the summed evaluations in lexicographic order.
 #[inline(always)]
 fn eval_eq_3_batch_packed<F, FP>(evals: RowMajorMatrixView<F>, packed_scalars: &[FP]) -> [FP; 8]
 where
@@ -810,9 +940,25 @@ fn eval_eq_batch_common<F, IF, EF, E, const INITIALIZED: bool>(
 
 /// Computes the batched equality polynomial evaluations via a recursive algorithm.
 ///
-/// This function directly implements the batched recursive strategy by updating
-/// the entire vector of scalars at each step. It is used for smaller problem
-/// sizes where the overhead of parallelism and SIMD is not warranted.
+/// This function directly implements the batched recursive strategy, updating the entire
+/// vector of scalars at each recursive step. It serves as the basic implementation for
+/// smaller problem sizes where parallelism and SIMD overhead is not warranted.
+///
+/// # Mathematical Foundation
+/// For a batch of evaluation points z_0, z_1, ..., z_{m-1} ∈ IF^n and scalars
+/// γ_0, γ_1, ..., γ_{m-1}, this computes:
+/// ```text
+/// W(x) = ∑_i γ_i * eq(x, z_i) for all x ∈ {0,1}^n
+/// ```
+///
+/// # Arguments
+/// - `evals`: Matrix where each column represents one evaluation point z_i
+/// - `scalars`: Vector of scalars [γ_0, γ_1, ..., γ_{m-1}]
+/// - `out`: Output buffer of size 2^n to store the combined evaluations
+///
+/// # Behavior of `INITIALIZED`
+/// If `INITIALIZED = false`, each value in `out` is overwritten with the computed result.
+/// If `INITIALIZED = true`, the computed result is added to the existing value in `out`.
 #[inline]
 fn eval_eq_batch_basic<F, IF, EF, const INITIALIZED: bool>(
     evals: RowMajorMatrixView<IF>,
@@ -856,12 +1002,14 @@ fn eval_eq_batch_basic<F, IF, EF, const INITIALIZED: bool>(
             add_or_set::<_, INITIALIZED>(out, &eq_evaluations);
         }
         _ => {
-            // General recursive case
+            // General recursive case: split the problem in half based on the first variable.
+            // This implements the core batched recursive strategy by updating the entire
+            // vector of scalars according to the recursive equality polynomial property.
             let (low, high) = out.split_at_mut(out.len() / 2);
             let (first_row, remainder) = evals.split_rows(1);
 
-            // Split on the first variable: compute new scalars for both branches
-            // First compute all s1 values: scalar * z_0
+            // At each variable z_j, split the scalar vector γ into two new vectors:
+            // γ_1[i] = γ[i] * z_{i,j} for the x_j = 1 branch
             let scalars_1: Vec<_> = first_row
                 .values
                 .iter()
@@ -869,27 +1017,33 @@ fn eval_eq_batch_basic<F, IF, EF, const INITIALIZED: bool>(
                 .map(|(&z_0, &scalar)| scalar * z_0)
                 .collect();
 
-            // Then compute s0 values: scalar - s1 using vectorized subtraction
+            // γ_0[i] = γ[i] * (1 - z_{i,j}) for the x_j = 0 branch
+            // Use vectorized subtraction: γ_0[i] = γ[i] - γ_1[i]
             let mut scalars_0: Vec<_> = scalars.to_vec();
             EF::sub_slices(&mut scalars_0, &scalars_1);
 
-            // Recurse for both branches with the remaining rows
+            // Recurse on both branches with updated scalar vectors
             eval_eq_batch_basic::<F, IF, EF, INITIALIZED>(remainder, &scalars_0, low);
             eval_eq_batch_basic::<F, IF, EF, INITIALIZED>(remainder, &scalars_1, high);
         }
     }
 }
 
-/// Computes the batched equality polynomial evaluation via a recursive algorithm using packed values and parallelism.
+/// Computes the batched equality polynomial evaluation using packed values and parallelism.
 ///
 /// This is the batched version of `eval_eq_packed` that processes multiple evaluation points
-/// simultaneously within the parallel framework.
+/// simultaneously within each parallel thread. It operates on packed scalar values for
+/// improved SIMD performance while maintaining the recursive batched structure.
 ///
 /// # Arguments
-/// - `evals`: Matrix where each column represents one evaluation point
-/// - `out`: Mutable slice of output buffer for this chunk
-/// - `eq_evals`: Vector of packed evaluations for each evaluation point
-/// - `scalars`: Vector of scalars corresponding to each evaluation point
+/// - `eval_points`: Matrix where each column represents one evaluation point z_i
+/// - `out`: Mutable slice of output buffer for this parallel chunk
+/// - `eq_evals`: Vector of packed evaluations, one for each evaluation point
+/// - `scalars`: Vector of scalars [γ_0, γ_1, ..., γ_{m-1}] for weighting
+///
+/// # Behavior of `INITIALIZED`
+/// If `INITIALIZED = false`, each value in `out` is overwritten with the computed result.
+/// If `INITIALIZED = true`, the computed result is added to the existing value in `out`.
 #[inline]
 fn eval_eq_packed_batch<F, IF, EF, E, const INITIALIZED: bool>(
     eval_points: RowMajorMatrixView<IF>,
@@ -934,7 +1088,12 @@ fn eval_eq_packed_batch<F, IF, EF, E, const INITIALIZED: bool>(
             let (low, high) = out.split_at_mut(out.len() / 2);
             let (first_row, remainder) = eval_points.split_rows(1);
 
-            // Split on the first variable: compute new packed scalars for both branches
+            // Split on the first variable: compute new packed scalars for both branches.
+            // This implements the batched packed version of the recursive equality polynomial update.
+            // Given packed evaluations eq_evals[i] representing partial products for evaluation point i,
+            // and the current variable z_j, compute:
+            // eq_evals_0[i] = eq_evals[i] * (1 - z_{i,j})  // for x_j = 0 branch
+            // eq_evals_1[i] = eq_evals[i] * z_{i,j}        // for x_j = 1 branch
             let (eq_evals_0, eq_evals_1): (Vec<_>, Vec<_>) = first_row
                 .values
                 .iter()
@@ -1217,6 +1376,32 @@ where
 }
 
 /// Computes batched small equality polynomial evaluations and packs the results into packed vectors.
+///
+/// Handles multiple evaluation points simultaneously during the packing phase of parallel
+/// evaluation. Processes the bottom log_packing_width variables for all points in the batch
+/// and returns packed results.
+///
+/// The function builds up the evaluations of the equality polynomial in a matrix buffer
+/// where rows represent the 2^{height} possible input combinations and columns represent
+/// different evaluation points. It then transposes and packs each column into packed vectors.
+///
+/// # Mathematical Foundation
+/// For evaluation points z_i with height variables each, this computes:
+/// ```text
+/// eq(x, z_i) for all x ∈ {0,1}^{height} and all points z_i
+/// ```
+/// The results are packed into SIMD-friendly formats for efficient parallel processing.
+///
+/// # Arguments
+/// - `evals`: Matrix where each column is an evaluation point z_i (height = log_packing_width)
+/// - `scalars`: Vector of scalars [γ_0, γ_1, ..., γ_{m-1}] for weighting each point
+///
+/// # Returns
+/// A vector of packed field elements, one for each evaluation point in the batch.
+///
+/// # Panics
+/// Panics in debug builds if `F::Packing::WIDTH != 1 << evals.height()` or
+/// `evals.width() != scalars.len()`.
 #[inline(always)]
 fn packed_eq_poly_batch<F, EF>(
     evals: RowMajorMatrixView<EF>,
