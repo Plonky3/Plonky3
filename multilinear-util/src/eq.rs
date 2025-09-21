@@ -20,7 +20,7 @@
 //! a linear combination of equality tables in one pass:
 //!
 //! ```text
-//! W(x) = \sum_i \gamma_i ⋅ eq(x, z_i)  ,  x ∈ {0,1}^n .
+//! W(x) = \sum_i \γ_i ⋅ eq(x, z_i)  ,  x ∈ {0,1}^n .
 //! ```
 //!
 //! ## Batched Evaluation
@@ -131,8 +131,8 @@ where
     eval_eq_common::<F, F, EF, BaseFieldEvaluator<F, EF>, INITIALIZED>(eval, out, scalar);
 }
 
-/// Computes the batched multilinear equality polynomial `\sum_i \gamma_i ⋅ eq(x, z_i)` over all
-/// `x ∈ \{0,1\}^n` for multiple points `z_i ∈ EF^n` with weights `\gamma_i ∈ EF`.
+/// Computes the batched multilinear equality polynomial `\sum_i \γ_i ⋅ eq(x, z_i)` over all
+/// `x ∈ \{0,1\}^n` for multiple points `z_i ∈ EF^n` with weights `\γ_i ∈ EF`.
 ///
 /// This evaluates multiple equality tables simultaneously by pushing the linear combination
 /// through the recursion.
@@ -140,17 +140,17 @@ where
 /// # Mathematical statement
 /// Given:
 /// - evaluation points `z_0, z_1, ..., z_{m-1} ∈ F^n`,
-/// - weights `\gamma_0, \gamma_1, ..., \gamma_{m-1} ∈ EF`,
+/// - weights `\γ_0, \γ_1, ..., \γ_{m-1} ∈ EF`,
 /// this computes, for all `x ∈ {0,1}^n`:
 /// ```text
-/// W(x) = \sum_i \gamma_i ⋅ eq(x, z_i).
+/// W(x) = \sum_i \γ_i ⋅ eq(x, z_i).
 /// ```
 ///
 /// # Arguments
 /// - `evals`: Matrix where each column is one point `z_i`.
 ///     - height = number of variables `n`,
 ///     - width = number of points `m`
-/// - `scalars`: Weights `[ \gamma_0, \gamma_1, ..., \gamma_{m-1} ]`
+/// - `scalars`: Weights `[ \γ_0, \γ_1, ..., \γ_{m-1} ]`
 /// - `out`: Output buffer of size `2^n` storing `W(x)` in big-endian `x` order
 ///
 /// # Panics
@@ -167,8 +167,8 @@ pub fn eval_eq_batch<F, EF, const INITIALIZED: bool>(
     eval_eq_batch_common::<F, EF, EF, ExtFieldEvaluator<F, EF>, INITIALIZED>(evals, scalars, out);
 }
 
-/// Computes the batched multilinear equality polynomial `\sum_i \gamma_i ⋅ eq(x, z_i)` over all
-/// `x ∈ \{0,1\}^n` for multiple points `z_i ∈ F^n` with weights `\gamma_i ∈ EF`.
+/// Computes the batched multilinear equality polynomial `\sum_i \γ_i ⋅ eq(x, z_i)` over all
+/// `x ∈ \{0,1\}^n` for multiple points `z_i ∈ F^n` with weights `\γ_i ∈ EF`.
 ///
 /// This evaluates multiple equality tables simultaneously by pushing the linear combination
 /// through the recursion.
@@ -176,17 +176,17 @@ pub fn eval_eq_batch<F, EF, const INITIALIZED: bool>(
 /// # Mathematical statement
 /// Given:
 /// - evaluation points `z_0, z_1, ..., z_{m-1} ∈ EF^n`,
-/// - weights `\gamma_0, \gamma_1, ..., \gamma_{m-1} ∈ EF`,
+/// - weights `\γ_0, \γ_1, ..., \γ_{m-1} ∈ EF`,
 /// this computes, for all `x ∈ {0,1}^n`:
 /// ```text
-/// W(x) = \sum_i \gamma_i ⋅ eq(x, z_i).
+/// W(x) = \sum_i \γ_i ⋅ eq(x, z_i).
 /// ```
 ///
 /// # Arguments
 /// - `evals`: Matrix where each column is one point `z_i`.
 ///     - height = number of variables `n`,
 ///     - width = number of points `m`
-/// - `scalars`: Weights `[ \gamma_0, \gamma_1, ..., \gamma_{m-1} ]`
+/// - `scalars`: Weights `[ \γ_0, \γ_1, ..., \γ_{m-1} ]`
 /// - `out`: Output buffer of size `2^n` storing `W(x)` in big-endian `x` order
 ///
 /// # Panics
@@ -352,13 +352,16 @@ where
     // Compute the total sum of all scalars: ∑_i γ_i
     let sum: FP = scalars.iter().copied().sum();
 
-    // Compute ∑_i γ_i * z_{i,0} using a dot product
+    // Compute ∑_i γ_i * z_{i,0}
+    //
     // This gives us eq_sum(1) directly since eq(1, z) = z
     let eq_1_sum: FP = dot_product(scalars.iter().copied(), evals.values.iter().copied());
 
-    // Use the identity: eq(0, z_i) = 1 - z_i
-    // So ∑_i γ_i * (1 - z_i) = ∑_i γ_i - ∑_i γ_i * z_i
-    // This saves approximately m operations compared to computing each term individually
+    // Use the identity: eq(0, z_i) = 1 - z_i.
+    //
+    // So ∑_i γ_i * (1 - z_i) = ∑_i γ_i - ∑_i γ_i * z_i.
+    //
+    // This saves approximately m adds compared to computing each term individually
     let eq_0_sum = sum - eq_1_sum;
 
     [eq_0_sum, eq_1_sum]
@@ -387,13 +390,13 @@ where
     debug_assert_eq!(evals.height(), 1);
     debug_assert_eq!(evals.width(), packed_scalars.len());
 
-    // Compute ∑ᵢ γᵢ
+    // Compute ∑_i γ_i
     let sum: FP = packed_scalars.iter().copied().sum();
 
-    // Compute ∑ᵢ γᵢ ⋅ zᵢ using dot product
+    // Compute ∑_i γ_i ⋅ z_i
     let eq_1_sum: FP = dot_product(packed_scalars.iter().copied(), evals.values.iter().copied());
 
-    // eq(0, zᵢ) = 1 - zᵢ, so ∑ᵢ γᵢ ⋅ (1 - zᵢ) = ∑ᵢ γᵢ - ∑ᵢ γᵢ ⋅ zᵢ
+    // eq(0, z_i) = 1 - z_i, so ∑_i γ_i ⋅ (1 - z_i) = ∑_i γ_i - ∑_i γ_i ⋅ z_i
     let eq_0_sum = sum - eq_1_sum;
 
     [eq_0_sum, eq_1_sum]
@@ -513,7 +516,7 @@ where
 
     let (first_row, second_row) = evals.split_rows(1);
 
-    // Split on the first variable z₀
+    // Split on the first variable z_0
     let (eq_0s, eq_1s): (Vec<_>, Vec<_>) = first_row
         .values
         .iter()
@@ -658,7 +661,7 @@ where
 
     let (first_row, remainder) = evals.split_rows(1);
 
-    // Split on the first variable z₀
+    // Split on the first variable z_0
     let (eq_0s, eq_1s): (Vec<_>, Vec<_>) = first_row
         .values
         .iter()
@@ -831,8 +834,8 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for BaseFieldEvaluator<F
     }
 }
 
-/// Computes the batched multilinear equality polynomial `∑ᵢ γᵢ ⋅ eq(x, zᵢ)` over all `x ∈ \{0,1\}^n`
-/// for multiple points `zᵢ ∈ IF^n` and corresponding scalars `γᵢ ∈ EF`.
+/// Computes the batched multilinear equality polynomial `∑_i γ_i ⋅ eq(x, z_i)` over all `x ∈ \{0,1\}^n`
+/// for multiple points `z_i ∈ IF^n` and corresponding scalars `γ_i ∈ EF`.
 ///
 /// This is the core batched evaluation function that leverages the linearity of summation
 /// to efficiently compute multiple equality polynomial evaluations simultaneously.
@@ -842,8 +845,8 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for BaseFieldEvaluator<F
 /// the summation *within* the recursive evaluation.
 ///
 /// # Arguments
-/// - `evals`: Matrix where each column represents one evaluation point zᵢ.
-/// - `scalars`: Vector of scalars [γ₀, γ₁, ..., γ_{m-1}] corresponding to each evaluation point.
+/// - `evals`: Matrix where each column represents one evaluation point z_i.
+/// - `scalars`: Vector of scalars [γ_0, γ_1, ..., γ_{m-1}] corresponding to each evaluation point.
 /// - `out`: Output buffer of size `2^n` to store the combined evaluations.
 #[inline]
 fn eval_eq_batch_common<F, IF, EF, E, const INITIALIZED: bool>(
@@ -1483,8 +1486,8 @@ mod tests {
 
     /// Compute the multilinear equality polynomial over the boolean hypercube.
     ///
-    /// Given an evaluation point `z ∈ 𝔽ⁿ` and a scalar `α ∈ 𝔽`, this function returns the vector of
-    /// evaluations of the equality polynomial `eq(x, z)` over all boolean inputs `x ∈ {0,1}ⁿ`,
+    /// Given an evaluation point `z ∈ 𝔽^n` and a scalar `α ∈ 𝔽`, this function returns the vector of
+    /// evaluations of the equality polynomial `eq(x, z)` over all boolean inputs `x ∈ {0,1}^n`,
     /// scaled by the scalar.
     ///
     /// The equality polynomial is defined as:
@@ -1499,14 +1502,14 @@ mod tests {
     /// α \cdot \mathrm{eq}(x, z)
     /// \end{equation}
     ///
-    /// for all `x ∈ {0,1}ⁿ`, and returns a vector of size `2ⁿ` containing these values in lexicographic order.
+    /// for all `x ∈ {0,1}^n`, and returns a vector of size `2^n` containing these values in lexicographic order.
     ///
     /// # Arguments
-    /// - `eval`: The vector `z ∈ 𝔽ⁿ`, representing the evaluation point.
+    /// - `eval`: The vector `z ∈ 𝔽^n`, representing the evaluation point.
     /// - `scalar`: The scalar `α ∈ 𝔽` to scale the result by.
     ///
     /// # Returns
-    /// A vector `v` of length `2ⁿ`, where `v[i] = α ⋅ eq(xᵢ, z)`, and `xᵢ` is the binary vector corresponding
+    /// A vector `v` of length `2^n`, where `v[i] = α ⋅ eq(x_i, z)`, and `x_i` is the binary vector corresponding
     /// to the `i`-th index in lex order (i.e., big-endian bit decomposition of `i`).
     fn naive_eq(eval: &[EF4], scalar: EF4) -> Vec<EF4> {
         // Number of boolean variables `n` = length of evaluation point
@@ -1515,9 +1518,9 @@ mod tests {
         // Allocate result vector of size 2^n, initialized to zero
         let mut result = vec![EF4::ZERO; 1 << n];
 
-        // Iterate over each binary input `x ∈ {0,1}ⁿ`, indexed by `i`
+        // Iterate over each binary input `x ∈ {0,1}^n`, indexed by `i`
         for (i, out) in result.iter_mut().enumerate() {
-            // Convert index `i` to a binary vector `x ∈ {0,1}ⁿ` in big-endian order
+            // Convert index `i` to a binary vector `x ∈ {0,1}^n` in big-endian order
             let x: Vec<EF4> = (0..n)
                 .map(|j| {
                     let bit = (i >> (n - 1 - j)) & 1;
@@ -1526,12 +1529,12 @@ mod tests {
                 .collect();
 
             // Compute the equality polynomial:
-            // eq(x, z) = ∏_{i=0}^{n-1} (xᵢ ⋅ zᵢ + (1 - xᵢ)(1 - zᵢ))
+            // eq(x, z) = ∏_{i=0}^{n-1} (x_i ⋅ z_i + (1 - x_i)(1 - z_i))
             let eq = x
                 .iter()
                 .zip(eval.iter())
                 .map(|(xi, zi)| {
-                    // Each term: xᵢ zᵢ + (1 - xᵢ)(1 - zᵢ)
+                    // Each term: x_i z_i + (1 - x_i)(1 - z_i)
                     *xi * *zi + (EF4::ONE - *xi) * (EF4::ONE - *zi)
                 })
                 .product::<EF4>(); // Take product over all coordinates
@@ -1767,7 +1770,7 @@ mod tests {
             F::from_u64(1), // z_1 values for all points
         ];
         let evals = RowMajorMatrixView::new(&evals_data, 3); // 2 rows (variables) × 3 columns (points)
-        let scalars = vec![F::from_u64(2), F::from_u64(3), F::from_u64(5)]; // γ₀=2, γ₁=3, γ₂=5
+        let scalars = vec![F::from_u64(2), F::from_u64(3), F::from_u64(5)]; // γ_0=2, γ_1=3, γ_2=5
 
         let mut output_batch = vec![F::ZERO; 4]; // 2^2 = 4 elements
         eval_eq_batch::<_, _, false>(evals, &scalars, &mut output_batch);
