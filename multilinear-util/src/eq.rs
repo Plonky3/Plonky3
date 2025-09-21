@@ -1791,30 +1791,81 @@ mod tests {
 
     #[test]
     fn test_eval_eq_base_batch_functionality() {
-        // Test base field batch evaluation
-        // Point 1: (1, 0), Point 2: (0, 1)
+        let evals_data = vec![F::from_u64(1)]; // Single point z_0 = 1
+        let evals = RowMajorMatrixView::new(&evals_data, 1); // 1 row × 1 column
+        let scalars = vec![EF4::from_u64(5)];
+
+        let mut output_batch = vec![EF4::ZERO; 2];
+        eval_eq_base_batch::<_, _, false>(evals, &scalars, &mut output_batch);
+
+        // For 1 variable: eq((0), (1)) = 0, eq((1), (1)) = 1
+        // So we expect [0, 5]
+        let expected = vec![EF4::from_u64(0), EF4::from_u64(5)];
+
+        if output_batch != expected {
+            eprintln!("Single point test failed:");
+            eprintln!("  Output: {:?}", output_batch);
+            eprintln!("  Expected: {:?}", expected);
+        }
+        assert_eq!(output_batch, expected);
+
+        // Now test the problematic two-point case with different approach
+        // Use values that are more distinct to catch indexing errors
         let evals_data = vec![
             F::from_u64(1),
-            F::from_u64(0), // z_0 values for all points
+            F::from_u64(0), // z_0 values: [1, 0] for points 1,2
             F::from_u64(0),
-            F::from_u64(1), // z_1 values for all points
+            F::from_u64(1), // z_1 values: [0, 1] for points 1,2
         ];
-        let evals = RowMajorMatrixView::new(&evals_data, 2); // 2 rows (variables) × 2 columns (points)
-        let scalars = vec![EF4::from_u64(2), EF4::from_u64(3)];
+        let evals = RowMajorMatrixView::new(&evals_data, 2); // 2 rows × 2 columns
+        // Use more distinct scalars to make errors more obvious
+        let scalars = vec![EF4::from_u64(7), EF4::from_u64(11)];
 
         let mut output_batch = vec![EF4::ZERO; 4];
         eval_eq_base_batch::<_, _, false>(evals, &scalars, &mut output_batch);
 
-        // Compare with individual evaluations
-        let mut expected_output = vec![EF4::ZERO; 4];
-        let points = [
-            vec![F::from_u64(1), F::from_u64(0)], // Point 1: (1, 0)
-            vec![F::from_u64(0), F::from_u64(1)], // Point 2: (0, 1)
+        // Point 1: z=(1,0), scalar=7 -> contributes [0, 0, 7, 0]
+        // Point 2: z=(0,1), scalar=11 -> contributes [0, 11, 0, 0]
+        // Total: [0, 11, 7, 0]
+        let expected_output = vec![
+            EF4::from_u64(0),  // (0,0): 0 + 0 = 0
+            EF4::from_u64(11), // (0,1): 0 + 11 = 11
+            EF4::from_u64(7),  // (1,0): 7 + 0 = 7
+            EF4::from_u64(0),  // (1,1): 0 + 0 = 0
         ];
-        for (point, &scalar) in points.iter().zip(scalars.iter()) {
-            let mut temp_output = vec![EF4::ZERO; 4];
-            eval_eq_base::<_, _, false>(point, &mut temp_output, scalar);
-            EF4::add_slices(&mut expected_output, &temp_output);
+
+        // Add extensive debug information for CI failures
+        if output_batch != expected_output {
+            eprintln!("Two-point batch test failed:");
+            eprintln!("  Batch output: {:?}", output_batch);
+            eprintln!("  Expected:     {:?}", expected_output);
+            eprintln!("  Scalars:      {:?}", scalars);
+            eprintln!("  Matrix data:  {:?}", evals_data);
+
+            // Verify individual evaluations work correctly
+            let points = [
+                vec![F::from_u64(1), F::from_u64(0)], // Point 1: (1, 0)
+                vec![F::from_u64(0), F::from_u64(1)], // Point 2: (0, 1)
+            ];
+            for (i, (point, &scalar)) in points.iter().zip(scalars.iter()).enumerate() {
+                let mut temp_output = vec![EF4::ZERO; 4];
+                eval_eq_base::<_, _, false>(point, &mut temp_output, scalar);
+                eprintln!(
+                    "  Point {} {:?} scalar={:?} -> {:?}",
+                    i, point, scalar, temp_output
+                );
+            }
+
+            // Check if matrix interpretation is correct
+            eprintln!("  Matrix interpretation:");
+            eprintln!(
+                "    Point 1: z_0={:?}, z_1={:?}",
+                evals_data[0], evals_data[2]
+            );
+            eprintln!(
+                "    Point 2: z_0={:?}, z_1={:?}",
+                evals_data[1], evals_data[3]
+            );
         }
 
         assert_eq!(output_batch, expected_output);
@@ -1959,6 +2010,45 @@ mod tests {
         assert_eq!(
             output_batch_parallel, output_batch_basic,
             "Parallel batched path should match basic batched evaluation"
+        );
+    }
+
+    /// Helper test to verify the threshold calculation and log current system parameters.
+    /// This helps debug and understand when parallel paths are triggered.
+    #[test]
+    fn test_parallel_threshold_info() {
+        let packing_width = <F as Field>::Packing::WIDTH;
+        let num_threads = current_num_threads().next_power_of_two();
+        let log_num_threads = log2_strict_usize(num_threads);
+
+        // Non-batched threshold
+        let non_batched_threshold = packing_width + 1 + log_num_threads;
+
+        // Batched threshold
+        let batched_threshold = packing_width.ilog2() as usize + 1 + log_num_threads;
+
+        println!("Packing width: {}", packing_width);
+        println!("Num threads: {}", num_threads);
+        println!("Log num threads: {}", log_num_threads);
+        println!(
+            "Non-batched parallel threshold: {} variables",
+            non_batched_threshold
+        );
+        println!(
+            "Batched parallel threshold: {} variables",
+            batched_threshold
+        );
+
+        // Ensure our thresholds are reasonable (not too large for testing)
+        assert!(
+            non_batched_threshold < 20,
+            "Non-batched threshold too high for testing: {}",
+            non_batched_threshold
+        );
+        assert!(
+            batched_threshold < 20,
+            "Batched threshold too high for testing: {}",
+            batched_threshold
         );
     }
 }
