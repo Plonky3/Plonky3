@@ -140,8 +140,7 @@ where
 /// # Mathematical statement
 /// Given:
 /// - evaluation points `z_0, z_1, ..., z_{m-1} ∈ F^n`,
-/// - weights `\γ_0, \γ_1, ..., \γ_{m-1} ∈ EF`,
-/// this computes, for all `x ∈ {0,1}^n`:
+/// - weights `\γ_0, \γ_1, ..., \γ_{m-1} ∈ EF`, this computes, for all `x ∈ {0,1}^n`:
 /// ```text
 /// W(x) = \sum_i \γ_i ⋅ eq(x, z_i).
 /// ```
@@ -176,8 +175,7 @@ pub fn eval_eq_batch<F, EF, const INITIALIZED: bool>(
 /// # Mathematical statement
 /// Given:
 /// - evaluation points `z_0, z_1, ..., z_{m-1} ∈ EF^n`,
-/// - weights `\γ_0, \γ_1, ..., \γ_{m-1} ∈ EF`,
-/// this computes, for all `x ∈ {0,1}^n`:
+/// - weights `\γ_0, \γ_1, ..., \γ_{m-1} ∈ EF`, this computes, for all `x ∈ {0,1}^n`:
 /// ```text
 /// W(x) = \sum_i \γ_i ⋅ eq(x, z_i).
 /// ```
