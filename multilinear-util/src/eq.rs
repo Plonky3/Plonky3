@@ -30,12 +30,6 @@
 //! equality polynomial individually and then summing the results, these functions leverage linearity
 //! to perform the summation within the recursive evaluation process.
 //!
-//! ### Key Performance Benefits:
-//! - **Reduced complexity**: From O(m⋅2^n) to O(2^n + m⋅n) for m evaluation points
-//! - **SIMD optimization**: Uses vectorized operations via the new `sub_slices` method
-//! - **Memory efficiency**: Single buffer allocation with batched processing
-//! - **Parallel processing**: Full utilization of multi-core systems
-//!
 //! ### Mathematical Foundation:
 //! The batched algorithm exploits the recursive structure by updating entire vectors of scalars:
 //!
@@ -147,7 +141,7 @@ where
 /// Given:
 /// - evaluation points `z_0, z_1, ..., z_{m-1} ∈ F^n`,
 /// - weights `\gamma_0, \gamma_1, ..., \gamma_{m-1} ∈ EF`,
-/// this computes, for all `x ∈ {0,1}^n`,
+/// this computes, for all `x ∈ {0,1}^n`:
 /// ```text
 /// W(x) = \sum_i \gamma_i ⋅ eq(x, z_i).
 /// ```
@@ -183,7 +177,7 @@ pub fn eval_eq_batch<F, EF, const INITIALIZED: bool>(
 /// Given:
 /// - evaluation points `z_0, z_1, ..., z_{m-1} ∈ EF^n`,
 /// - weights `\gamma_0, \gamma_1, ..., \gamma_{m-1} ∈ EF`,
-/// this computes, for all `x ∈ {0,1}^n`,
+/// this computes, for all `x ∈ {0,1}^n`:
 /// ```text
 /// W(x) = \sum_i \gamma_i ⋅ eq(x, z_i).
 /// ```
@@ -238,7 +232,7 @@ where
 
 /// Fills the `buffer` with evaluations of the equality polynomial for multiple points simultaneously.
 ///
-/// This is the batched version of `fill_buffer` that operates on matrices where each column
+/// This is the batched operation that operates on matrices where each column
 /// represents a different evaluation point. The function expands a matrix of partial equality
 /// polynomial evaluations across multiple variables.
 ///
@@ -259,13 +253,14 @@ where
     A: Algebra<F> + Send + Sync + Clone,
 {
     // Process variables in reverse order to maintain correct bit ordering in output buffer.
-    // This follows the same recursive update rule as the single-point fill_buffer,
-    // but applies it simultaneously across all columns (evaluation points).
+    //
+    // We apply it simultaneously across all columns (evaluation points).
     for (ind, eval_row) in evals.row_slices().rev().enumerate() {
         let stride = 1 << ind;
         let width = buffer.width();
 
         // Expand the buffer in-place by doubling its height at each step.
+        //
         // Each existing row generates two new rows: one for x_j = 0, one for x_j = 1.
         for idx in 0..stride {
             // Read current row values before modifying to avoid data races
@@ -274,8 +269,8 @@ where
                 .collect();
 
             // Apply the recursive equality polynomial update rule to each column:
-            // new_row_for_x_j=0 = old_row * (1 - z_j)
-            // new_row_for_x_j=1 = old_row * z_j
+            // - new_row_for_x_j=0 = old_row * (1 - z_j)
+            // - new_row_for_x_j=1 = old_row * z_j
             for col in 0..width {
                 let val = current_row_values[col].clone();
                 let eval_point = eval_row[col];
@@ -485,10 +480,10 @@ where
         .map(|(&z_0, &scalar)| scalar * z_0)
         .collect();
 
-    // Compute eq_0s[i] = scalars[i] - eq_1s[i] using vectorized SIMD subtraction
+    // Compute eq_0s[i] = scalars[i] - eq_1s[i] using vectorized SIMD subtraction.
+    //
     // These are the scalar weights for the x_0 = 0 branch
-    // This approach leverages the new sub_slices method for efficient vectorized operations
-    let mut eq_0s: Vec<_> = scalars.to_vec();
+    let mut eq_0s = scalars.to_vec();
     FP::sub_slices(&mut eq_0s, &eq_1s);
 
     // Recurse to calculate evaluations for the remaining variable
@@ -500,13 +495,6 @@ where
 }
 
 /// Computes the batched scaled multilinear equality polynomial over `{0,1}^2` using packed values.
-///
-/// Designed for use within the parallel evaluation framework where scalars are processed
-/// in packed SIMD format for improved performance.
-///
-/// Unlike the regular batch version, this function works with packed scalars but uses
-/// element-wise operations rather than vectorized `sub_slices` since packed types
-/// don't necessarily implement the `Field` trait required for vectorized operations.
 ///
 /// # Arguments
 /// - `evals`: Matrix where each column is an evaluation point z_i ∈ F^2 (must have height = 2)
@@ -632,7 +620,7 @@ where
     // Compute eq_0s[i] = scalars[i] - eq_1s[i] using vectorized subtraction.
     //
     // These become the scalar weights for the x_0 = 0 branch.
-    let mut eq_0s: Vec<_> = scalars.to_vec();
+    let mut eq_0s = scalars.to_vec();
     FP::sub_slices(&mut eq_0s, &eq_1s);
 
     // Recurse to calculate evaluations for the remaining variables
@@ -1007,9 +995,10 @@ fn eval_eq_batch_basic<F, IF, EF, const INITIALIZED: bool>(
                 .map(|(&z_0, &scalar)| scalar * z_0)
                 .collect();
 
-            // γ_0[i] = γ[i] * (1 - z_{i,j}) for the x_j = 0 branch
-            // Use vectorized subtraction: γ_0[i] = γ[i] - γ_1[i]
-            let mut scalars_0: Vec<_> = scalars.to_vec();
+            // γ_0[i] = γ[i] * (1 - z_{i,j}) for the x_j = 0 branch.
+            //
+            // Use vectorized subtraction: γ_0[i] = γ[i] - γ_1[i].
+            let mut scalars_0 = scalars.to_vec();
             EF::sub_slices(&mut scalars_0, &scalars_1);
 
             // Recurse on both branches with updated scalar vectors
