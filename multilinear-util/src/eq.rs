@@ -1893,4 +1893,82 @@ mod tests {
             prop_assert_eq!(output_batch, expected_output);
         }
     }
+
+    #[test]
+    fn test_eval_eq_parallel_path() {
+        // Calculate the threshold for parallel execution:
+        // threshold = packing_width + 1 + log_num_threads
+        let packing_width = <F as Field>::Packing::WIDTH;
+        let num_threads = current_num_threads().next_power_of_two();
+        let log_num_threads = log2_strict_usize(num_threads);
+        let threshold = packing_width + 1 + log_num_threads;
+
+        // Use variables > threshold to force parallel path
+        let num_vars = threshold + 2;
+
+        // Create random evaluation point
+        let mut rng = SmallRng::seed_from_u64(12345);
+        let eval_point: Vec<EF4> = (0..num_vars).map(|_| rng.random()).collect();
+
+        let scalar = EF4::from_u64(7);
+
+        // Test parallel path
+        let mut output_parallel = EF4::zero_vec(1 << num_vars);
+        eval_eq::<F, EF4, false>(&eval_point, &mut output_parallel, scalar);
+
+        // Verify correctness by comparing against basic evaluation for a small subset
+        let mut output_basic = EF4::zero_vec(1 << num_vars);
+        eval_eq_basic::<F, EF4, EF4, false>(&eval_point, &mut output_basic, scalar);
+
+        assert_eq!(
+            output_parallel, output_basic,
+            "Parallel path should match basic evaluation"
+        );
+    }
+
+    #[test]
+    fn test_eval_eq_batch_parallel_path() {
+        // Calculate threshold for parallel execution in batched case:
+        // threshold = packing_width.ilog2() + 1 + log_num_threads
+        let packing_width = <F as Field>::Packing::WIDTH;
+        let num_threads = current_num_threads().next_power_of_two();
+        let log_num_threads = log2_strict_usize(num_threads);
+        let threshold = packing_width.ilog2() as usize + 1 + log_num_threads;
+
+        // Use variables > threshold to force parallel path
+        let num_vars = threshold + 2;
+        let num_points = 3;
+
+        // Create random evaluation points and scalars
+        let mut rng = SmallRng::seed_from_u64(54321);
+        let eval_points: Vec<Vec<F>> = (0..num_points)
+            .map(|_| (0..num_vars).map(|_| rng.random()).collect())
+            .collect();
+
+        let scalars: Vec<EF4> = (0..num_points)
+            .map(|i| EF4::from_u64(i as u64 + 1))
+            .collect();
+
+        // Create matrix layout: rows are variables, columns are evaluation points
+        let mut evals_data = Vec::with_capacity(num_vars * num_points);
+        for var_idx in 0..num_vars {
+            for point in &eval_points {
+                evals_data.push(EF4::from(point[var_idx]));
+            }
+        }
+        let evals = RowMajorMatrixView::new(&evals_data, num_points);
+
+        // Test parallel batched path
+        let mut output_batch_parallel = EF4::zero_vec(1 << num_vars);
+        eval_eq_batch::<F, EF4, false>(evals, &scalars, &mut output_batch_parallel);
+
+        // Verify correctness by comparing against basic batch evaluation
+        let mut output_batch_basic = EF4::zero_vec(1 << num_vars);
+        eval_eq_batch_basic::<F, EF4, EF4, false>(evals, &scalars, &mut output_batch_basic);
+
+        assert_eq!(
+            output_batch_parallel, output_batch_basic,
+            "Parallel batched path should match basic batched evaluation"
+        );
+    }
 }
