@@ -15,6 +15,85 @@ where
     PV::from_fn(|_| rng.random())
 }
 
+// Packed extension tests (reusable helpers)
+pub fn test_packed_ext_square_matches_self_mul<PEF>()
+where
+    PEF: PrimeCharacteristicRing + Eq,
+    StandardUniform: Distribution<PEF>,
+{
+    let mut rng = SmallRng::seed_from_u64(2);
+    let x: PEF = rng.random();
+    assert_eq!(x.square(), x * x);
+}
+
+pub fn test_packed_ext_add_sub_mul_with_pf_semantics<PEF, PF>()
+where
+    PEF: PrimeCharacteristicRing + Eq + PackedValue<Value = PF> + BasedVectorSpace<PF>,
+    PF: PrimeCharacteristicRing + Copy,
+    StandardUniform: Distribution<PEF>,
+{
+    let mut rng = SmallRng::seed_from_u64(3);
+    let x: PEF = rng.random();
+
+    let coeffs = x.as_basis_coefficients_slice();
+    let pf = coeffs[0];
+
+    let add_pf = x + pf;
+    let apc = add_pf.as_basis_coefficients_slice();
+    for i in 0..coeffs.len() {
+        if i == 0 {
+            assert_eq!(apc[i], coeffs[i] + pf);
+        } else {
+            assert_eq!(apc[i], coeffs[i]);
+        }
+    }
+
+    let sub_pf = x - pf;
+    let spc = sub_pf.as_basis_coefficients_slice();
+    for i in 0..coeffs.len() {
+        if i == 0 {
+            assert_eq!(spc[i], coeffs[i] - pf);
+        } else {
+            assert_eq!(spc[i], coeffs[i]);
+        }
+    }
+
+    let mul_pf = x * pf;
+    let mpc = mul_pf.as_basis_coefficients_slice();
+    for i in 0..coeffs.len() {
+        assert_eq!(mpc[i], coeffs[i] * pf);
+    }
+}
+
+pub fn test_packed_ext_based_vectorspace_roundtrip<PEF, PF>()
+where
+    PEF: PrimeCharacteristicRing + Eq + PackedValue<Value = PF> + BasedVectorSpace<PF>,
+    PF: PrimeCharacteristicRing + Copy,
+    StandardUniform: Distribution<PEF>,
+{
+    let mut rng = SmallRng::seed_from_u64(6);
+    let v: alloc::vec::Vec<PEF> = (0..7).map(|_| rng.random()).collect();
+
+    let mut flat = alloc::vec::Vec::new();
+    let dim = <PEF as BasedVectorSpace<PF>>::DIMENSION;
+    for e in &v {
+        flat.extend_from_slice(e.as_basis_coefficients_slice());
+    }
+
+    let rebuilt: alloc::vec::Vec<PEF> = flat
+        .chunks_exact(dim)
+        .map(|chunk| <PEF as BasedVectorSpace<PF>>::from_basis_coefficients_fn(|i| chunk[i]))
+        .collect();
+
+    assert_eq!(v, rebuilt);
+}
+
+pub fn test_zero_vec_generic<R: PrimeCharacteristicRing + Eq>() {
+    let v = R::zero_vec(7);
+    assert_eq!(v.len(), 7);
+    assert!(v.iter().all(|e| *e == R::ZERO));
+}
+
 /// Interleave arr1 and arr2 using chunks of size i.
 fn interleave<T: Copy + Default>(arr1: &[T], arr2: &[T], i: usize) -> (Vec<T>, Vec<T>) {
     let width = arr1.len();
@@ -328,74 +407,22 @@ macro_rules! test_packed_field {
 macro_rules! test_packed_extension_field {
     ($packedextfield:ty, $zeros:expr, $ones:expr) => {
         mod packed_field_tests {
-            use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
-            use rand::distr::StandardUniform;
-            use rand::rngs::SmallRng;
-            use rand::{Rng, SeedableRng};
-
-            #[test]
-            fn test_square_matches_self_mul() {
-                let mut rng = SmallRng::seed_from_u64(2);
-                let x: $packedextfield = rng.random();
-                assert_eq!(x.square(), x * x);
-            }
+            use p3_field::PrimeCharacteristicRing;
 
             #[test]
             fn test_add_sub_mul_with_pf_semantics() {
-                let mut rng = SmallRng::seed_from_u64(3);
-                let x: $packedextfield = rng.random();
-
-                let coeffs = x.as_basis_coefficients_slice();
-                let pf = coeffs[0];
-
-                let add_pf = x + pf;
-                let apc = add_pf.as_basis_coefficients_slice();
-                for i in 0..coeffs.len() {
-                    if i == 0 {
-                        assert_eq!(apc[i], coeffs[i] + pf);
-                    } else {
-                        assert_eq!(apc[i], coeffs[i]);
-                    }
-                }
-
-                let sub_pf = x - pf;
-                let spc = sub_pf.as_basis_coefficients_slice();
-                for i in 0..coeffs.len() {
-                    if i == 0 {
-                        assert_eq!(spc[i], coeffs[i] - pf);
-                    } else {
-                        assert_eq!(spc[i], coeffs[i]);
-                    }
-                }
-
-                let mul_pf = x * pf;
-                let mpc = mul_pf.as_basis_coefficients_slice();
-                for i in 0..coeffs.len() {
-                    assert_eq!(mpc[i], coeffs[i] * pf);
-                }
+                $crate::test_packed_ext_add_sub_mul_with_pf_semantics::<
+                    $packedextfield,
+                    <$packedextfield as p3_field::PackedValue>::Value,
+                >();
             }
 
             #[test]
             fn test_based_vectorspace_roundtrip() {
-                let mut rng = SmallRng::seed_from_u64(6);
-                let v: alloc::vec::Vec<$packedextfield> = (0..7).map(|_| rng.random()).collect();
-
-                let mut flat = alloc::vec::Vec::new();
-                let dim = <$packedextfield as BasedVectorSpace<_>>::DIMENSION;
-                for e in &v {
-                    flat.extend_from_slice(e.as_basis_coefficients_slice());
-                }
-
-                let rebuilt: alloc::vec::Vec<$packedextfield> = flat
-                    .chunks_exact(dim)
-                    .map(|chunk| {
-                        <$packedextfield as BasedVectorSpace<_>>::from_basis_coefficients_fn(|i| {
-                            chunk[i]
-                        })
-                    })
-                    .collect();
-
-                assert_eq!(v, rebuilt);
+                $crate::test_packed_ext_based_vectorspace_roundtrip::<
+                    $packedextfield,
+                    <$packedextfield as p3_field::PackedValue>::Value,
+                >();
             }
             #[test]
             fn test_ring_with_eq() {
@@ -404,9 +431,7 @@ macro_rules! test_packed_extension_field {
 
             #[test]
             fn test_zero_vec() {
-                let v = <$packedextfield>::zero_vec(7);
-                assert_eq!(v.len(), 7);
-                assert!(v.iter().all(|e| *e == <$packedextfield>::ZERO));
+                $crate::test_zero_vec_generic::<$packedextfield>();
             }
         }
     };
