@@ -262,10 +262,9 @@ where
         // Each existing row generates two new rows: one for x_j = 0, one for x_j = 1.
         for idx in 0..stride {
             // Process each column (each point in the batch) for the current row `idx`.
-            for col in 0..width {
+            for (col, &eval_point) in eval_row.iter().enumerate().take(width) {
                 // Read the current value directly from the buffer.
                 let val = buffer.values[idx * width + col].clone();
-                let eval_point = eval_row[col];
 
                 // Compute the two new values for the next level of the hypercube.
                 let scaled_val = val.clone() * eval_point;
