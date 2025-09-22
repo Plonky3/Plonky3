@@ -891,8 +891,10 @@ fn eval_eq_packed_batch<F, IF, EF, E, const INITIALIZED: bool>(
                 .iter()
                 .zip(eq_evals)
                 .map(|(&z_0, &eq_eval)| {
-                    let eq_1 = eq_eval * z_0; // Contribution when x_0 = 1
-                    let eq_0 = eq_eval - eq_1; // Contribution when x_0 = 0
+                    // Contribution when x_0 = 1
+                    let eq_1 = eq_eval * z_0;
+                    // Contribution when x_0 = 0
+                    let eq_0 = eq_eval - eq_1;
                     (eq_0, eq_1)
                 })
                 .unzip();
