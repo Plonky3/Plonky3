@@ -454,27 +454,7 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for BaseFieldEvaluator<F
         evals: RowMajorMatrixView<Self::InputField>,
         _scalars: &[Self::OutputField],
     ) -> Vec<Self::PackedField> {
-        // For the base evaluator, the recursion starts with `1` for each point.
-        //
-        // The scalars are applied only at the very end in `accumulate_packed_batch`.
-        let ones = vec![F::ONE; evals.width()];
-
-        let height = evals.height();
-        let width = evals.width();
-        debug_assert_eq!(F::Packing::WIDTH, 1 << height);
-
-        let mut buffer = RowMajorMatrix::new(F::zero_vec((1 << height) * width), width);
-        buffer.row_mut(0).copy_from_slice(&ones);
-        fill_buffer_batch(evals, &mut buffer);
-
-        (0..width)
-            .map(|col_idx| {
-                let column: Vec<F> = (0..(1 << height))
-                    .map(|row_idx| buffer.values[row_idx * width + col_idx])
-                    .collect();
-                *F::Packing::from_slice(&column)
-            })
-            .collect::<Vec<F::Packing>>()
+        packed_eq_poly_batch(evals, &vec![F::ONE; evals.width()])
     }
 
     fn process_chunk_batch<const INITIALIZED: bool>(
