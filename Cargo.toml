@@ -34,6 +34,7 @@ members = [
     "symmetric",
     "uni-stark",
     "util",
+    "whir",
 ]
 
 [workspace.dependencies]
@@ -58,6 +59,7 @@ serde = { version = "1.0", default-features = false }
 serde_json = "1.0.113"
 sha2 = { version = "0.10.8", default-features = false }
 sha3 = { version = "0.10.8", default-features = false }
+thiserror = "2.0"
 tiny-keccak = "2.0.2"
 tracing = { version = "0.1.37", default-features = false, features = [
     "attributes",
@@ -102,6 +104,7 @@ p3-sha256 = { path = "sha256", version = "0.3.0" }
 p3-symmetric = { path = "symmetric", version = "0.3.0" }
 p3-uni-stark = { path = "uni-stark", version = "0.3.0" }
 p3-util = { path = "util", version = "0.3.0" }
+p3-whir = { path = "whir", version = "0.3.0" }
 
 [workspace.package]
 # General description field used for the sub-crates that are currently missing a description.
