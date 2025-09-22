@@ -16,28 +16,7 @@
 //! eq((1, x), z) = z_0 ⋅ eq(x, z[1:])
 //! ```
 //!
-//! In addition to single-point evaluation, this module includes **batched** variants that compute
-//! a linear combination of equality tables in one pass:
-//!
-//! ```text
-//! W(x) = \sum_i \γ_i ⋅ eq(x, z_i)  ,  x ∈ {0,1}^n .
-//! ```
-//!
-//! ## Batched Evaluation
-//!
-//! The batched methods (`eval_eq_batch`, `eval_eq_base_batch`) are designed to efficiently compute
-//! linear combinations of multiple equality polynomial evaluations. Instead of computing each
-//! equality polynomial individually and then summing the results, these functions leverage linearity
-//! to perform the summation within the recursive evaluation process.
-//!
-//! ### Mathematical Foundation:
-//! The batched algorithm exploits the recursive structure by updating entire vectors of scalars:
-//!
-//! At each variable z_j, the scalar vector γ = (γ_0, γ_1, ..., γ_{m-1}) splits into:
-//! - γ_0 = γ ⊙ (1 - z_j) for the x_j = 0 branch
-//! - γ_1 = γ ⊙ z_j for the x_j = 1 branch
-//!
-//! Where ⊙ denotes element-wise (Hadamard) product.
+//! Which allows us to reuse the common factor `eq(x, z[1:])`.
 //!
 //! ## `INITIALIZED` flag
 //!
@@ -402,6 +381,9 @@ where
         // The last log_packing_width elements are the ones which will be packed.
 
         // We make a buffer of PackedField elements of size `NUM_THREADS`.
+        // Note that this is a slightly different strategy to `eval_eq` which instead
+        // uses PackedExtensionField elements. Whilst this involves slightly more mathematical
+        // operations, it seems to be faster in practice due to less data moving around.
         let mut parallel_buffer = E::PackedField::zero_vec(num_threads);
 
         // As num_threads is a power of two we can divide using a bit-shift.
@@ -657,7 +639,7 @@ mod tests {
 
     #[test]
     fn test_eval_eq_functionality() {
-        let mut output = F::zero_vec(4); // n=2 → 2^2 = 4 elements
+        let mut output = vec![F::ZERO; 4]; // n=2 → 2^2 = 4 elements
         let eval = vec![F::from_u64(1), F::from_u64(0)]; // (X1, X2) = (1,0)
         let scalar = F::from_u64(2);
 
@@ -671,8 +653,8 @@ mod tests {
 
     /// Compute the multilinear equality polynomial over the boolean hypercube.
     ///
-    /// Given an evaluation point `z ∈ 𝔽^n` and a scalar `α ∈ 𝔽`, this function returns the vector of
-    /// evaluations of the equality polynomial `eq(x, z)` over all boolean inputs `x ∈ {0,1}^n`,
+    /// Given an evaluation point `z ∈ 𝔽ⁿ` and a scalar `α ∈ 𝔽`, this function returns the vector of
+    /// evaluations of the equality polynomial `eq(x, z)` over all boolean inputs `x ∈ {0,1}ⁿ`,
     /// scaled by the scalar.
     ///
     /// The equality polynomial is defined as:
@@ -687,25 +669,25 @@ mod tests {
     /// α \cdot \mathrm{eq}(x, z)
     /// \end{equation}
     ///
-    /// for all `x ∈ {0,1}^n`, and returns a vector of size `2^n` containing these values in lexicographic order.
+    /// for all `x ∈ {0,1}ⁿ`, and returns a vector of size `2ⁿ` containing these values in lexicographic order.
     ///
     /// # Arguments
-    /// - `eval`: The vector `z ∈ 𝔽^n`, representing the evaluation point.
+    /// - `eval`: The vector `z ∈ 𝔽ⁿ`, representing the evaluation point.
     /// - `scalar`: The scalar `α ∈ 𝔽` to scale the result by.
     ///
     /// # Returns
-    /// A vector `v` of length `2^n`, where `v[i] = α ⋅ eq(x_i, z)`, and `x_i` is the binary vector corresponding
+    /// A vector `v` of length `2ⁿ`, where `v[i] = α ⋅ eq(xᵢ, z)`, and `xᵢ` is the binary vector corresponding
     /// to the `i`-th index in lex order (i.e., big-endian bit decomposition of `i`).
     fn naive_eq(eval: &[EF4], scalar: EF4) -> Vec<EF4> {
         // Number of boolean variables `n` = length of evaluation point
         let n = eval.len();
 
         // Allocate result vector of size 2^n, initialized to zero
-        let mut result = EF4::zero_vec(1 << n);
+        let mut result = vec![EF4::ZERO; 1 << n];
 
-        // Iterate over each binary input `x ∈ {0,1}^n`, indexed by `i`
+        // Iterate over each binary input `x ∈ {0,1}ⁿ`, indexed by `i`
         for (i, out) in result.iter_mut().enumerate() {
-            // Convert index `i` to a binary vector `x ∈ {0,1}^n` in big-endian order
+            // Convert index `i` to a binary vector `x ∈ {0,1}ⁿ` in big-endian order
             let x: Vec<EF4> = (0..n)
                 .map(|j| {
                     let bit = (i >> (n - 1 - j)) & 1;
@@ -714,12 +696,12 @@ mod tests {
                 .collect();
 
             // Compute the equality polynomial:
-            // eq(x, z) = ∏_{i=0}^{n-1} (x_i ⋅ z_i + (1 - x_i)(1 - z_i))
+            // eq(x, z) = ∏_{i=0}^{n-1} (xᵢ ⋅ zᵢ + (1 - xᵢ)(1 - zᵢ))
             let eq = x
                 .iter()
                 .zip(eval.iter())
                 .map(|(xi, zi)| {
-                    // Each term: x_i z_i + (1 - x_i)(1 - z_i)
+                    // Each term: xᵢ zᵢ + (1 - xᵢ)(1 - zᵢ)
                     *xi * *zi + (EF4::ONE - *xi) * (EF4::ONE - *zi)
                 })
                 .product::<EF4>(); // Take product over all coordinates
@@ -744,7 +726,7 @@ mod tests {
 
             // Make sure output has correct size: 2^n
             let out_len = 1 << evals.len();
-            let mut output = EF4::zero_vec(out_len);
+            let mut output = vec![EF4::ZERO; out_len];
 
             eval_eq::<F, EF4, true>(&evals, &mut output, scalar);
 
@@ -923,10 +905,10 @@ mod tests {
             let num_outputs = 1 << n;
 
             // Output from eval_eq using extension field evaluation point
-            let mut output_ext = EF4::zero_vec(num_outputs);
+            let mut output_ext = vec![EF4::ZERO; num_outputs];
 
             // Output from eval_eq_base using base field evaluation point
-            let mut output_base = EF4::zero_vec(num_outputs);
+            let mut output_base = vec![EF4::ZERO; num_outputs];
 
             // Evaluate the equality polynomial using both methods
 
