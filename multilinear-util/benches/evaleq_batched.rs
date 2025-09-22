@@ -3,7 +3,8 @@ use p3_baby_bear::BabyBear;
 use p3_field::PrimeCharacteristicRing;
 use p3_field::extension::BinomialExtensionField;
 use p3_matrix::dense::RowMajorMatrixView;
-use p3_multilinear_util::eq::{eval_eq, eval_eq_base, eval_eq_base_batch, eval_eq_batch};
+use p3_multilinear_util::eq::{eval_eq, eval_eq_base};
+use p3_multilinear_util::eq_batch::{eval_eq_base_batch, eval_eq_batch};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
