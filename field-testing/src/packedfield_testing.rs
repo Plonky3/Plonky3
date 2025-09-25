@@ -326,14 +326,33 @@ macro_rules! test_packed_field {
 
 #[macro_export]
 macro_rules! test_packed_extension_field {
-    ($packedextfield:ty, $zeros:expr, $ones:expr) => {
+    ($field:ty, $ef:ty, $pef:ty, $zeros:expr, $ones:expr) => {
         mod packed_field_tests {
             use p3_field::PrimeCharacteristicRing;
 
-            // TODO: Add more tests for packed extension fields.
+            #[test]
+            fn test_add_sub_mul_with_pf_semantics() {
+                $crate::based_vectorspace_testing::test_based_vector_space_all::<
+                    $pef,
+                    <$pef as p3_field::PackedValue>::Value,
+                >();
+            }
+
+            #[test]
+            fn test_based_vectorspace_roundtrip() {
+                $crate::test_packed_ext_based_vectorspace_roundtrip::<
+                    $pef,
+                    <$pef as p3_field::PackedValue>::Value,
+                >();
+            }
             #[test]
             fn test_ring_with_eq() {
-                $crate::test_ring_with_eq::<$packedextfield>($zeros, $ones);
+                $crate::test_ring_with_eq::<$pef>($zeros, $ones);
+            }
+
+            #[test]
+            fn test_packed_field_extension_trait() {
+                $crate::test_packed_extension::<$field, $ef>();
             }
         }
     };

@@ -60,7 +60,13 @@ mod test_quartic_extension {
     type Pef = <EF as ExtensionField<F>>::ExtensionPacking;
     const PACKED_ZEROS: [Pef; 1] = [Pef::ZERO];
     const PACKED_ONES: [Pef; 1] = [Pef::ONE];
-    test_packed_extension_field!(super::Pef, &super::PACKED_ZEROS, &super::PACKED_ONES);
+    test_packed_extension_field!(
+        super::F,
+        super::EF,
+        super::Pef,
+        &super::PACKED_ZEROS,
+        &super::PACKED_ONES
+    );
 }
 
 #[cfg(test)]
@@ -138,5 +144,11 @@ mod test_octic_extension {
     type Pef = <EF as ExtensionField<F>>::ExtensionPacking;
     const PACKED_ZEROS: [Pef; 1] = [Pef::ZERO];
     const PACKED_ONES: [Pef; 1] = [Pef::ONE];
-    test_packed_extension_field!(super::Pef, &super::PACKED_ZEROS, &super::PACKED_ONES);
+    test_packed_extension_field!(
+        super::F,
+        super::EF,
+        super::Pef,
+        &super::PACKED_ZEROS,
+        &super::PACKED_ONES
+    );
 }

@@ -4,6 +4,8 @@
 
 extern crate alloc;
 
+pub mod algebra_testing;
+pub mod based_vectorspace_testing;
 pub mod bench_func;
 pub mod dft_testing;
 pub mod extension_testing;
@@ -219,6 +221,11 @@ where
     );
 
     test_binary_ops(zeros, ones, x, y, z);
+
+    // zero_vec basic sanity
+    let zv = R::zero_vec(7);
+    assert_eq!(zv.len(), 7);
+    assert!(zv.iter().all(|e| *e == R::ZERO));
 }
 
 pub fn test_inv_div<F: Field>()
