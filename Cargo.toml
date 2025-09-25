@@ -19,6 +19,7 @@ members = [
     "keccak",
     "keccak-air",
     "koala-bear",
+    "lookup",
     "matrix",
     "maybe-rayon",
     "merkle-tree",
@@ -87,6 +88,7 @@ p3-interpolation = { path = "interpolation", version = "0.3.0" }
 p3-keccak = { path = "keccak", version = "0.3.0" }
 p3-keccak-air = { path = "keccak-air", version = "0.3.0" }
 p3-koala-bear = { path = "koala-bear", version = "0.3.0" }
+p3-lookup = { path = "lookup", version = "0.3.0" }
 p3-matrix = { path = "matrix", version = "0.3.0" }
 p3-maybe-rayon = { path = "maybe-rayon", version = "0.3.0" }
 p3-mds = { path = "mds", version = "0.3.0" }
