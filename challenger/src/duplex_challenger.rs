@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use p3_field::{BasedVectorSpace, Field, PrimeField64};
 use p3_symmetric::{CryptographicPermutation, Hash};
 
-use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
+use crate::{CanObserve, CanSample, CanSampleBits, CanSampleUniformBits, FieldChallenger};
 
 /// A generic duplex sponge challenger over a finite field, used for generating deterministic
 /// challenges from absorbed inputs.
@@ -196,11 +196,86 @@ where
     /// sequence appears either with probability P1 = ⌊p / 2^b⌋ / p or P2 = (1 + ⌊p / 2^b⌋) / p.
     /// We have 1/2^b - 1/p ≤ P1, P2 ≤ 1/2^b + 1/p
     fn sample_bits(&mut self, bits: usize) -> usize {
+
+/// Trait for fields that support uniform bit sampling optimizations
+pub trait UniformSamplingField {
+    /// Maximum number of bits we can sample at negligible (~1/field prime) probability of
+    /// triggering a panic / requiring a resample.
+    const MAX_SINGLE_SAMPLE_BITS: usize;
+    /// An array storing the largest value `m_k` for each `k` in [0, 31], such that `m_k`
+    /// is a multiple of `2^k`. `m_k` is defined as:
+    ///
+    /// \( m_k = ⌊P / 2^k⌋ · 2^k \)
+    ///
+    /// This is used as a rejection sampling threshold (or panic trigger) in `sampling_uniform_bits`, when
+    /// sampling random bits from uniformly sampled field elements. As long as we sample up to the `k`
+    /// least significant bits in the range [0, m_k), we sample from exactly `m_k` elements. As
+    /// `m_k` is divisible by 2^k, each of the least significant `k` bits has exactly the same
+    /// number of zeroes and ones, leading to a uniform sampling.
+    const SAMPLING_BITS_M: [u64; 64];
+    /// Mini helper to raise compile time error if `uniform-sampling-may-panic` is active in the
+    /// case of Mersenne31, where resampling probability rises too quickly.
+    const _FEATURE_CHECK: () = ();
+}
+
+impl<F, P, const WIDTH: usize, const RATE: usize> CanSampleUniformBits<F>
+    for DuplexChallenger<F, P, WIDTH, RATE>
+where
+    F: UniformSamplingField + PrimeField64,
+    P: CryptographicPermutation<[F; WIDTH]>,
+{
+    /// Samples bits uniformly by using rejection sampling taking into account the number of
+    /// bits actually needed. This allows to use rejection sampling even for fields where
+    /// the largest power of two is ~half the prime with barely any performance penalty
+    /// up to large number of bits to be sampled.
+    ///
+    /// E.g. for KoalaBear up to 24 bits can be sampled uniformly "for free".
+    fn sample_uniform_bits(&mut self, bits: usize) -> usize {
         assert!(bits < (usize::BITS as usize));
         assert!((1 << bits) < F::ORDER_U64);
-        let rand_f: F = self.sample();
-        let rand_usize = rand_f.as_canonical_u64() as usize;
-        rand_usize & ((1 << bits) - 1)
+        let m = F::SAMPLING_BITS_M[bits];
+
+        // See `UniformSamplingField` for details about `MAX_SINGLE_SAMPLE_BITS`
+        let result = if bits < F::MAX_SINGLE_SAMPLE_BITS {
+            let rand_f = self.sample_value(m);
+            let rand_usize = rand_f.as_canonical_u64() as usize;
+            rand_usize & ((1 << bits) - 1)
+        } else {
+            // sample two field elements and take ~half bits from first & second
+            let r1: F = self.sample_value(m);
+            let r2: F = self.sample_value(m);
+
+            // Calculate number of bits to extract from first and secondä
+            let b2 = bits / 2; // floor division
+            let b1 = bits - b2;
+
+            let r1_usize = r1.as_canonical_u64() as usize;
+            let r2_usize = r2.as_canonical_u64() as usize;
+            r1_usize & ((1 << b1) - 1) | (r2_usize & ((1 << b2) - 1) << b1)
+        };
+        result
+    }
+
+    fn sample_value(&mut self, m: u64) -> F {
+        // sample a single field element
+        let mut result: F = self.sample();
+
+        // If this feature is enabled, we accept a small chance O(1/P) that we
+        // panic in this function, namely if the sampled field element `result >= m`.
+        #[cfg(feature = "uniform-sampling-may-panic")]
+        if result.as_canonical_u64() >= m {
+            panic!(
+                "Sampled field element {} is larger or equal to {}",
+                result, m
+            );
+        } else {
+            // alternatively we simply do rejection sampling until we have a number < m
+            while result.as_canonical_u64() >= m {
+                result = self.sample();
+            }
+        }
+
+        result
     }
 }
 
