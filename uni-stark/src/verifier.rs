@@ -16,6 +16,86 @@ use tracing::instrument;
 use crate::symbolic_builder::{SymbolicAirBuilder, get_log_quotient_degree};
 use crate::{PcsError, Proof, StarkGenericConfig, Val, VerifierConstraintFolder};
 
+/// Structure to hold all challenges generated during verification.
+/// This is useful for recursion where we need to know all challenge values
+/// without executing the verifier circuit.
+#[derive(Debug, Clone)]
+pub struct VerificationChallenges<Challenge> {
+    /// The first Fiat-Shamir challenge used to combine constraint polynomials
+    pub alpha: Challenge,
+    /// The out-of-domain point to open values at
+    pub zeta: Challenge,
+    /// The next point after zeta in the trace domain
+    pub zeta_next: Challenge,
+}
+
+/// Generate all challenges that would be produced during verification
+/// without actually executing the verifier circuit.
+/// 
+/// This function is useful for recursion where we need to know all challenge values
+/// before starting the actual verification process.
+/// 
+/// # Arguments
+/// * `config` - The STARK configuration
+/// * `proof` - The proof to generate challenges for
+/// * `public_values` - The public values used in the proof
+/// 
+/// # Returns
+/// * `VerificationChallenges<SC::Challenge>` - All challenges that would be generated during verification
+#[instrument(skip_all)]
+pub fn generate_challenges<SC, A>(
+    config: &SC,
+    air: &A,
+    proof: &Proof<SC>,
+    public_values: &Vec<Val<SC>>,
+) -> VerificationChallenges<SC::Challenge>
+where
+    SC: StarkGenericConfig,
+    A: Air<SymbolicAirBuilder<Val<SC>>>,
+{
+    let Proof {
+        commitments,
+        opened_values: _,
+        opening_proof: _,
+        degree_bits,
+    } = proof;
+
+    let pcs = config.pcs();
+    let degree = 1 << degree_bits;
+    let log_quotient_degree =
+        get_log_quotient_degree::<Val<SC>, A>(air, 0, public_values.len(), config.is_zk());
+    let _quotient_degree = 1 << (log_quotient_degree + config.is_zk());
+
+    let mut challenger = config.initialise_challenger();
+    let _trace_domain = pcs.natural_domain_for_degree(degree);
+    let init_trace_domain = pcs.natural_domain_for_degree(degree >> (config.is_zk()));
+
+    // Observe the instance data (same as in verify function)
+    challenger.observe(Val::<SC>::from_usize(proof.degree_bits));
+    challenger.observe(Val::<SC>::from_usize(proof.degree_bits - config.is_zk()));
+    challenger.observe(commitments.trace.clone());
+    challenger.observe_slice(public_values);
+
+    // Generate the first Fiat-Shamir challenge (alpha)
+    let alpha = challenger.sample_algebra_element();
+    challenger.observe(commitments.quotient_chunks.clone());
+
+    // Observe the random commitment if it is present
+    if let Some(r_commit) = commitments.random.clone() {
+        challenger.observe(r_commit);
+    }
+
+    // Generate the out-of-domain point (zeta)
+    let zeta = challenger.sample_algebra_element();
+    let zeta_next = init_trace_domain.next_point(zeta).unwrap();
+
+    VerificationChallenges {
+        alpha,
+        zeta,
+        zeta_next,
+    }
+}
+
 #[instrument(skip_all)]
 pub fn verify<SC, A>(
     config: &SC,
