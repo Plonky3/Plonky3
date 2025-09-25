@@ -12,6 +12,55 @@ use p3_util::zip_eq::zip_eq;
 
 use crate::{CircleCommitPhaseProofStep, CircleFriProof};
 
+/// Structure to hold all challenges generated during Circle verification.
+/// This is useful for recursion where we need to know all challenge values
+/// without executing the verifier circuit.
+#[derive(Debug, Clone)]
+pub struct CircleVerificationChallenges<Challenge> {
+    /// The random challenges for each Circle-FRI round
+    pub betas: Vec<Challenge>,
+}
+
+/// Generate all challenges that would be produced during Circle verification
+/// without actually executing the verifier circuit.
+/// 
+/// This function is useful for recursion where we need to know all challenge values
+/// before starting the actual verification process.
+/// 
+/// # Arguments
+/// * `folding` - The Circle-FRI folding scheme used by the prover
+/// * `params` - The parameters for the specific Circle-FRI protocol instance
+/// * `proof` - The proof to generate challenges for
+/// * `challenger` - The Fiat-Shamir challenger
+/// 
+/// # Returns
+/// * `CircleVerificationChallenges<Challenge>` - All challenges that would be generated during Circle verification
+pub fn generate_circle_challenges<Folding, Val, Challenge, M, Challenger>(
+    _folding: &Folding,
+    _params: &FriParameters<M>,
+    proof: &CircleFriProof<Challenge, M, Challenger::Witness, Folding::InputProof>,
+    challenger: &mut Challenger,
+) -> CircleVerificationChallenges<Challenge>
+where
+    Val: Field,
+    Challenge: ExtensionField<Val>,
+    M: Mmcs<Challenge>,
+    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
+    Folding: FriFoldingStrategy<Val, Challenge>,
+{
+    // Generate all of the random challenges for the Circle-FRI rounds (betas)
+    let betas: Vec<Challenge> = proof
+        .commit_phase_commits
+        .iter()
+        .map(|comm| {
+            challenger.observe(comm.clone());
+            challenger.sample_algebra_element()
+        })
+        .collect();
+
+    CircleVerificationChallenges { betas }
+}
+
 pub fn verify<Folding, Val, Challenge, M, Challenger>(
     folding: &Folding,
     params: &FriParameters<M>,
