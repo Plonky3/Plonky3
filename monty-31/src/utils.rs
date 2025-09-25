@@ -60,7 +60,7 @@ pub(crate) const fn from_monty<MP: MontyParameters>(x: u32) -> u32 {
 /// the result is guaranteed to be less than `P`.
 #[inline]
 #[must_use]
-pub(crate) fn add<MP: MontyParameters>(lhs: u32, rhs: u32) -> u32 {
+pub fn monty_add<MP: MontyParameters>(lhs: u32, rhs: u32) -> u32 {
     let mut sum = lhs + rhs;
     let (corr_sum, over) = sum.overflowing_sub(MP::PRIME);
     if !over {
@@ -78,7 +78,7 @@ pub(crate) fn add<MP: MontyParameters>(lhs: u32, rhs: u32) -> u32 {
 /// the result is guaranteed to be less than `P`.
 #[inline]
 #[must_use]
-pub(crate) fn sub<MP: MontyParameters>(lhs: u32, rhs: u32) -> u32 {
+pub fn monty_sub<MP: MontyParameters>(lhs: u32, rhs: u32) -> u32 {
     let (mut diff, over) = lhs.overflowing_sub(rhs);
     let corr = if over { MP::PRIME } else { 0 };
     diff = diff.wrapping_add(corr);
