@@ -108,8 +108,20 @@ impl Bn254 {
             // This unwrap is safe due to the length check above.
             u64::from_le_bytes(bytes[start..end].try_into().unwrap())
         });
-        // Check if the value is less than the prime.
-        if value.iter().rev().cmp(BN254_PRIME.iter().rev()) == core::cmp::Ordering::Less {
+        // Check if the value is less than the prime using explicit numerical comparison.
+        // This is more readable and less error-prone than lexicographic comparison.
+        let mut is_less = false;
+        
+        for i in (0..4).rev() {
+            if value[i] < BN254_PRIME[i] {
+                is_less = true;
+                break;
+            } else if value[i] > BN254_PRIME[i] {
+                break;
+            }
+        }
+        
+        if is_less {
             Some(Self::new_monty(value))
         } else {
             None
