@@ -1,5 +1,10 @@
 use alloc::vec::Vec;
-use core::arch::aarch64::{self, int32x4_t, uint32x4_t};
+use core::arch::aarch64::{
+    self, int32x4_t, int64x2_t, uint32x4_t, uint64x2_t, vaddq_u32, vbslq_u32, vcgeq_u32,
+    vcombine_s32, vdupq_n_u32, vextq_u32, vget_low_u32, vld1q_u32, vminq_u32, vmlal_high_u32,
+    vmlal_u32, vmovn_s64, vmulq_s32, vreinterpretq_s64_u64, vreinterpretq_u32_s32, vshrq_n_s64,
+    vst1q_u32, vsubq_s64, vsubq_u32,
+};
 use core::arch::asm;
 use core::hint::unreachable_unchecked;
 use core::iter::{Product, Sum};
@@ -586,6 +591,108 @@ impl_packed_field_pow_2!(
     WIDTH
 );
 
+/// Compute the lane-wise widening product of two 128-bit vectors of `u32`.
+///
+/// Input vectors are
+///
+/// \begin{equation}
+///     v_a = [a_0, a_1, a_2, a_3], \qquad
+///     v_b = [b_0, b_1, b_2, b_3].
+/// \end{equation}
+///
+/// The result is two 64-bit vectors:
+///
+/// \begin{equation}
+///     lo = [a_0 ⋅ b_0, a_1 ⋅ b_1], \qquad
+///     hi = [a_2 ⋅ b_2, a_3 ⋅ b_3],
+/// \end{equation}
+///
+/// where each product is the exact 32×32 → 64-bit integer product (no reduction).
+#[inline(always)]
+unsafe fn vmull_wide_u32(a: uint32x4_t, b: uint32x4_t) -> (uint64x2_t, uint64x2_t) {
+    use core::arch::aarch64::{vget_low_u32, vmull_high_u32, vmull_u32};
+    unsafe {
+        // We first extract those low halves from a and b:
+        //
+        // [a_0, a_1] as u32x2
+        let a_lo = vget_low_u32(a);
+        // [b_0, b_1] as u32x2
+        let b_lo = vget_low_u32(b);
+
+        // lo = [a_0 ⋅ b_0, a_1 ⋅ b_1] as u64 lanes (exact 32×32 → 64 multiply, unsigned).
+        let lo = vmull_u32(a_lo, b_lo);
+
+        // hi = [a_2 ⋅ b_2, a_3 ⋅ b_3] as u64 lanes.
+        let hi = vmull_high_u32(a, b);
+
+        (lo, hi)
+    }
+}
+
+/// Montgomery reduction of four parallel 64-bit integers.
+///
+/// Each input lane holds an integer
+///
+/// \begin{equation}
+///     C_i < P ⋅ 2^{32}.
+/// \end{equation}
+///
+/// We return
+///
+/// \begin{equation}
+///     R_i ≡ C_i ⋅ (2^{32})^{-1} \pmod P, \qquad
+///     R_i ∈ [0,P),
+/// \end{equation}
+///
+/// i.e. we divide out one Montgomery factor \(R = 2^{32}\) and canonicalize.
+#[inline(always)]
+unsafe fn monty_reduce_64<FP, const WIDTH: usize>(sum_l: int64x2_t, sum_h: int64x2_t) -> uint32x4_t
+where
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+{
+    unsafe {
+        // Invariant: for each lane i, C_i < P ⋅ 2^{32}. This holds for our 2-term accumulations.
+        //
+        // Goal: compute d_i = (C_i − q_i⋅P) / 2^{32} with q_i ≡ C_i⋅μ (mod 2^{32}),
+        // then map d_i ∈ (−P, P] to R_i ∈ [0,P).
+
+        // Take the low 32 bits of each 64-bit lane (C mod 2^32).
+        let c_lo_l = vmovn_s64(sum_l);
+        let c_lo_h = vmovn_s64(sum_h);
+        let c_lo = vcombine_s32(c_lo_l, c_lo_h);
+
+        // Compute q ≡ C ⋅ μ (mod 2^32), with μ = −P^{-1} mod 2^32.
+        let q_i = vmulq_s32(c_lo, FP::PACKED_MU);
+        let q_u = vreinterpretq_u32_s32(q_i);
+
+        // Compute qp = q ⋅ P as exact 32×32→64 products.
+        let (qp_lo_u, qp_hi_u) = vmull_wide_u32(q_u, FP::PACKED_P);
+        let qp_lo = vreinterpretq_s64_u64(qp_lo_u);
+        let qp_hi = vreinterpretq_s64_u64(qp_hi_u);
+
+        // Subtract to get D = C − qP, guaranteed divisible by 2^32.
+        let diff_l = vsubq_s64(sum_l, qp_lo);
+        let diff_h = vsubq_s64(sum_h, qp_hi);
+
+        // Divide by 2^32 (arithmetic shift right).
+        // Each d_i now satisfies d_i ∈ (−P, P].
+        let d_l = vshrq_n_s64::<32>(diff_l);
+        let d_h = vshrq_n_s64::<32>(diff_h);
+        let d_i = vcombine_s32(vmovn_s64(d_l), vmovn_s64(d_h));
+        let d_u = vreinterpretq_u32_s32(d_i);
+
+        // Map (−P, P] → [0, P].
+        // If d < 0 add P; else keep d.
+        let d_plus_p = vaddq_u32(d_u, FP::PACKED_P);
+        let d_nonneg = vminq_u32(d_u, d_plus_p);
+
+        // If value is exactly P, wrap it to 0.
+        let sub = vsubq_u32(d_nonneg, FP::PACKED_P);
+        let mask = vcgeq_u32(d_nonneg, FP::PACKED_P);
+        vbslq_u32(mask, sub, d_nonneg)
+    }
+}
+
 /// Multiplication in a quartic binomial extension field.
 #[inline]
 pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
@@ -595,29 +702,63 @@ pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
 ) where
     FP: FieldParameters + BinomialExtensionData<WIDTH>,
 {
-    // TODO: This could be optimised further with a custom NEON implementation.
     assert_eq!(WIDTH, 4);
-    let packed_b = PackedMontyField31Neon([b[0], b[1], b[2], b[3]]);
-    let w_b = FP::mul_w(packed_b).0;
-    let w_b1 = w_b[1];
-    let w_b2 = w_b[2];
-    let w_b3 = w_b[3];
 
-    // Constant term = a0*b0 + w(a1*b3 + a2*b2 + a3*b1)
-    // Linear term = a0*b1 + a1*b0 + w(a2*b3 + a3*b2)
-    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b3)
-    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0
-    let lhs: [PackedMontyField31Neon<FP>; 4] = [a[0].into(), a[1].into(), a[2].into(), a[3].into()];
-    let rhs = [
-        PackedMontyField31Neon([b[0], b[1], b[2], b[3]]),
-        PackedMontyField31Neon([w_b3, b[0], b[1], b[2]]),
-        PackedMontyField31Neon([w_b2, w_b3, b[0], b[1]]),
-        PackedMontyField31Neon([w_b1, w_b2, w_b3, b[0]]),
-    ];
+    unsafe {
+        // Precompute w ⋅ b once.
+        let packed_b = PackedMontyField31Neon([b[0], b[1], b[2], b[3]]);
+        let w_b = FP::mul_w(packed_b).0;
 
-    let dot = PackedMontyField31Neon::dot_product(&lhs, &rhs).0;
+        // Broadcast each a_i to all lanes.
+        let a0 = vdupq_n_u32(a[0].value);
+        let a1 = vdupq_n_u32(a[1].value);
+        let a2 = vdupq_n_u32(a[2].value);
+        let a3 = vdupq_n_u32(a[3].value);
 
-    res[..].copy_from_slice(&dot);
+        // Load b and w⋅b into vectors.
+        //
+        // [b0 b1 b2 b3]
+        let b0123 = vld1q_u32(b.as_ptr() as *const u32);
+        // [w0 w1 w2 w3]
+        let wb0123 = vld1q_u32(w_b.as_ptr() as *const u32);
+
+        // Build rotated right-hand-side vectors.
+        //
+        // rhs0 = [ b0, b1, b2, b3]
+        // rhs1 = [ w3, b0, b1, b2]
+        // rhs2 = [ w2, w3, b0, b1]
+        // rhs3 = [ w1, w2, w3, b0]
+        let rhs0 = b0123;
+        let rhs1 = vextq_u32(wb0123, b0123, 3);
+        let rhs2 = vextq_u32(wb0123, b0123, 2);
+        let rhs3 = vextq_u32(wb0123, b0123, 1);
+
+        // First multiply-accumulate stream: a0⋅rhs0 + a1⋅rhs1.
+        let (mut s01_lo, mut s01_hi) = vmull_wide_u32(a0, rhs0);
+        s01_lo = vmlal_u32(s01_lo, vget_low_u32(a1), vget_low_u32(rhs1));
+        s01_hi = vmlal_high_u32(s01_hi, a1, rhs1);
+
+        // Second stream: a2⋅rhs2 + a3⋅rhs3.
+        let (mut s23_lo, mut s23_hi) = vmull_wide_u32(a2, rhs2);
+        s23_lo = vmlal_u32(s23_lo, vget_low_u32(a3), vget_low_u32(rhs3));
+        s23_hi = vmlal_high_u32(s23_hi, a3, rhs3);
+
+        // Reduce each stream with Montgomery reduction.
+        let r01 = monty_reduce_64::<FP, WIDTH>(
+            vreinterpretq_s64_u64(s01_lo),
+            vreinterpretq_s64_u64(s01_hi),
+        );
+        let r23 = monty_reduce_64::<FP, WIDTH>(
+            vreinterpretq_s64_u64(s23_lo),
+            vreinterpretq_s64_u64(s23_hi),
+        );
+
+        // Combine the two reduced sums modulo P.
+        let out = uint32x4_mod_add(r01, r23, FP::PACKED_P);
+
+        // Store the final coefficients.
+        vst1q_u32(res.as_mut_ptr() as *mut u32, out);
+    }
 }
 
 /// Multiplication in a quintic binomial extension field.
