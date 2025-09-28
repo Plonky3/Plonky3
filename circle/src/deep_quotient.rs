@@ -47,11 +47,40 @@ pub(crate) fn deep_quotient_reduce_row<F: ComplexExtendable, EF: ExtensionField<
 impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
     /// Same as `deep_quotient_reduce_row`, but reduces a whole matrix into a column, taking advantage of batch inverses.
     #[instrument(skip_all, fields(dims = %self.values.dimensions()))]
+    #[allow(dead_code)]
     pub(crate) fn deep_quotient_reduce<EF: ExtensionField<F>>(
         &self,
         alpha: EF,
         zeta: Point<EF>,
         ps_at_zeta: &[EF],
+    ) -> Vec<EF> {
+        // Compute alpha powers once here, then delegate to the variant which accepts precomputed powers.
+        let packed_alpha_powers =
+            EF::ExtensionPacking::packed_ext_powers_capped(alpha, self.values.width())
+                .collect_vec();
+        let alpha_powers =
+            EF::ExtensionPacking::to_ext_iter(packed_alpha_powers.iter().copied()).collect_vec();
+
+        self.deep_quotient_reduce_with_powers::<EF>(
+            alpha,
+            zeta,
+            ps_at_zeta,
+            &packed_alpha_powers,
+            &alpha_powers,
+        )
+    }
+
+    /// Same as `deep_quotient_reduce`, but takes precomputed powers of `alpha` to avoid recomputation.
+    /// `packed_alpha_powers` should be at least `self.values.width().div_ceil(F::Packing::WIDTH)` long.
+    /// `alpha_powers` should be at least `self.values.width()` long.
+    #[instrument(skip_all, fields(dims = %self.values.dimensions()))]
+    pub(crate) fn deep_quotient_reduce_with_powers<EF: ExtensionField<F>>(
+        &self,
+        alpha: EF,
+        zeta: Point<EF>,
+        ps_at_zeta: &[EF],
+        packed_alpha_powers: &[EF::ExtensionPacking],
+        alpha_powers: &[EF],
     ) -> Vec<EF> {
         let alpha_pow_width = alpha.exp_u64(self.values.width() as u64);
         let points = cfft_permute_slice(&self.domain.points().collect_vec());
@@ -61,18 +90,11 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
             .unzip();
         let vp_denom_invs = batch_multiplicative_inverse(&vp_denoms);
 
-        // TODO: packed_alpha_powers and alpha_powers should be passed into deep_quotient_reduce instead of being recomputed every time.
-        let packed_alpha_powers =
-            EF::ExtensionPacking::packed_ext_powers_capped(alpha, self.values.width())
-                .collect_vec();
-        let alpha_powers =
-            EF::ExtensionPacking::to_ext_iter(packed_alpha_powers.iter().copied()).collect_vec();
-
         let alpha_reduced_ps_at_zeta: EF =
             dot_product(alpha_powers.iter().copied(), ps_at_zeta.iter().copied());
 
         self.values
-            .rowwise_packed_dot_product::<EF>(&packed_alpha_powers)
+            .rowwise_packed_dot_product::<EF>(packed_alpha_powers)
             .zip(vp_nums.into_par_iter())
             .zip(vp_denom_invs.into_par_iter())
             .map(|((reduced_ps_at_x, vp_num), vp_denom_inv)| {
