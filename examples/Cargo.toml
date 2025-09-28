@@ -1,7 +1,6 @@
 [package]
 name = "p3-examples"
-# TODO: Replace this generic plonky3 description with one specific to this crate...
-description.workspace = true
+description = "Example implementations and demonstrations of Plonky3 STARK proof system components."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
