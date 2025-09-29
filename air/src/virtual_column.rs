@@ -99,10 +99,10 @@ impl<F: Field> VirtualPairCol<F> {
     /// A virtual column that always evaluates to the field element `1`.
     pub const ONE: Self = Self::constant(F::ONE);
 
-    /// Creates a virtual column that evaluates to a constant value regardless of input.
+    /// Create a virtual column whose value on every row is equal and constant.
     ///
     /// # Arguments
-    /// * `x` - The constant field element this virtual column will always return
+    /// * `x` - The constant field element.
     #[must_use]
     pub const fn constant(x: F) -> Self {
         Self {
