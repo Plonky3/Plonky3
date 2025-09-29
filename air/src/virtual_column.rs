@@ -171,14 +171,11 @@ impl<F: Field> VirtualPairCol<F> {
         Self::new_preprocessed(vec![(a_col, F::ONE), (b_col, F::NEG_ONE)], F::ZERO)
     }
 
-    /// Creates a virtual column representing the difference between two main trace columns.
+    /// Create a virtual column which is the difference between two main trace columns.
     ///
     /// # Arguments
-    /// * `a_col` - Index of the first main trace column
-    /// * `b_col` - Index of the second main trace column
-    ///
-    /// # Returns
-    /// A virtual column representing `main[a_col] - main[b_col]`
+    /// * `a_col` - Index of the minuend main trace column.
+    /// * `b_col` - Index of the subtrahend main trace column.
     #[must_use]
     pub fn diff_main(a_col: usize, b_col: usize) -> Self {
         Self::new_main(vec![(a_col, F::ONE), (b_col, F::NEG_ONE)], F::ZERO)
