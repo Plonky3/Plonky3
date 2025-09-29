@@ -1,7 +1,6 @@
 [package]
 name = "p3-matrix"
-# TODO: Replace this generic plonky3 description with one specific to this crate...
-description.workspace = true
+description = "A matrix library providing common matrix operations and traits for finite field elements."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
