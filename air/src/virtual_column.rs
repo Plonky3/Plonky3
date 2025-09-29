@@ -123,7 +123,7 @@ impl<F: Field> VirtualPairCol<F> {
         }
     }
 
-    /// Creates a virtual column representing a single preprocessed column.
+    /// Creates a virtual column equal to a preprocessed column.
     ///
     /// # Arguments
     /// * `column` - Index of the preprocessed column
