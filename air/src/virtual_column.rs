@@ -34,17 +34,14 @@ pub enum PairCol {
 }
 
 impl PairCol {
-    /// Retrieves the value from the appropriate column array based on the column type.
+    /// Retrieves the value corresponding to the appropriate column.
     ///
     /// # Arguments
-    /// * `preprocessed` - Slice containing preprocessed column values
-    /// * `main` - Slice containing main trace column values
-    ///
-    /// # Returns
-    /// The value at the column index from the appropriate array
+    /// * `preprocessed` - Slice containing preprocessed row
+    /// * `main` - Slice containing main trace row
     ///
     /// # Panics
-    /// Panics if the column index is out of bounds for the respective array.
+    /// Panics if the column index is out of bounds for the respective rows.
     pub const fn get<T: Copy>(&self, preprocessed: &[T], main: &[T]) -> T {
         match self {
             Self::Preprocessed(i) => preprocessed[*i],
