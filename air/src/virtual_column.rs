@@ -100,8 +100,6 @@ impl<F: Field> VirtualPairCol<F> {
     }
 
     /// A virtual column that always evaluates to the field element `1`.
-    ///
-    /// Useful as a multiplicative identity in constraint expressions.
     pub const ONE: Self = Self::constant(F::ONE);
 
     /// Creates a virtual column that evaluates to a constant value regardless of input.
