@@ -10,16 +10,16 @@ pub struct ZipEq<A, B> {
 /// Zips two iterators but **panics** if they are not of the same length.
 ///
 /// Similar to `itertools::zip_eq`, but we check the lengths at construction time.
-pub fn zip_eq<A, AIter, B, BIter, Error>(
+pub fn zip_eq<A, B, Error>(
     a: A,
     b: B,
     err: Error,
 ) -> Result<ZipEq<A::IntoIter, B::IntoIter>, Error>
 where
-    A: IntoIterator<IntoIter = AIter>,
-    AIter: ExactSizeIterator,
-    B: IntoIterator<IntoIter = BIter>,
-    BIter: ExactSizeIterator,
+    A: IntoIterator,
+    A::IntoIter: ExactSizeIterator,
+    B: IntoIterator,
+    B::IntoIter: ExactSizeIterator,
 {
     let a_iter = a.into_iter();
     let b_iter = b.into_iter();
