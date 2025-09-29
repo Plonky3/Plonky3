@@ -151,13 +151,10 @@ impl<F: Field> VirtualPairCol<F> {
         Self::new_main(column_weights, F::ZERO)
     }
 
-    /// Creates a virtual column that sums multiple preprocessed columns.
+    /// Create a virtual column which is the sum of preprocessed columns.
     ///
     /// # Arguments
     /// * `columns` - Vector of preprocessed column indices to sum
-    ///
-    /// # Returns
-    /// A virtual column representing `∑ preprocessed[i]` where `i` are the provided indices
     #[must_use]
     pub fn sum_preprocessed(columns: Vec<usize>) -> Self {
         let column_weights = columns.into_iter().map(|col| (col, F::ONE)).collect();
