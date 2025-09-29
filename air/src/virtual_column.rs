@@ -161,14 +161,11 @@ impl<F: Field> VirtualPairCol<F> {
         Self::new_preprocessed(column_weights, F::ZERO)
     }
 
-    /// Creates a virtual column representing the difference between two preprocessed columns.
+    /// Create a virtual column which is the difference between two preprocessed columns.
     ///
     /// # Arguments
-    /// * `a_col` - Index of the first preprocessed column
-    /// * `b_col` - Index of the second preprocessed column
-    ///
-    /// # Returns
-    /// A virtual column representing `preprocessed[a_col] - preprocessed[b_col]`
+    /// * `a_col` - Index of the minuend preprocessed column.
+    /// * `b_col` - Index of the subtrahend preprocessed column.
     #[must_use]
     pub fn diff_preprocessed(a_col: usize, b_col: usize) -> Self {
         Self::new_preprocessed(vec![(a_col, F::ONE), (b_col, F::NEG_ONE)], F::ZERO)
