@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use core::arch::aarch64::{self, int32x4_t, int64x2_t, uint32x4_t, uint64x2_t};
+use core::arch::aarch64::{self, int32x4_t, uint32x4_t, uint64x2_t};
 use core::arch::asm;
 use core::hint::unreachable_unchecked;
 use core::iter::{Product, Sum};
@@ -623,67 +623,91 @@ unsafe fn vmull_wide_u32(a: uint32x4_t, b: uint32x4_t) -> (uint64x2_t, uint64x2_
     }
 }
 
-/// Montgomery reduction of four parallel 64-bit integers.
-///
-/// Each input lane holds an integer
-///
-/// \begin{equation}
-///     C_i < P ⋅ 2^{32}.
-/// \end{equation}
-///
-/// We return
-///
-/// \begin{equation}
-///     R_i ≡ C_i ⋅ (2^{32})^{-1} \pmod P, \qquad
-///     R_i ∈ [0,P),
-/// \end{equation}
-///
-/// i.e. we divide out one Montgomery factor \(R = 2^{32}\) and canonicalize.
-#[inline(always)]
-unsafe fn monty_reduce_64<FP, const WIDTH: usize>(sum_l: int64x2_t, sum_h: int64x2_t) -> uint32x4_t
-where
-    FP: FieldParameters + BinomialExtensionData<WIDTH>,
-{
+/// Dot product of four packed columns with a single delayed reduction.
+#[inline]
+unsafe fn dot_product_4<P: MontyParametersNeon + FieldParameters>(
+    a: &[MontyField31<P>; 4],
+    cols: &[PackedMontyField31Neon<P>; 4],
+) -> uint32x4_t {
     unsafe {
-        // Invariant: for each lane i, C_i < P ⋅ 2^{32}. This holds for our 2-term accumulations.
+        // Accumulate the full 64-bit sum C = Σ a_i ⋅ cols_i.
         //
-        // Goal: compute d_i = (C_i − q_i⋅P) / 2^{32} with q_i ≡ C_i⋅μ (mod 2^{32}),
-        // then map d_i ∈ (−P, P] to R_i ∈ [0,P).
+        // Start with a_0 ⋅ cols_0 (split into low lanes 0,1 and high lanes 2,3).
+        let mut sum_l =
+            aarch64::vmull_n_u32(aarch64::vget_low_u32(cols[0].to_vector()), a[0].value);
+        let mut sum_h = aarch64::vmull_high_n_u32(cols[0].to_vector(), a[0].value);
 
-        // Take the low 32 bits of each 64-bit lane (C mod 2^32).
-        let c_lo_l = aarch64::vmovn_s64(sum_l);
-        let c_lo_h = aarch64::vmovn_s64(sum_h);
-        let c_lo = aarch64::vcombine_s32(c_lo_l, c_lo_h);
+        // Add a_1 ⋅ cols_1.
+        sum_l = aarch64::vmlal_n_u32(
+            sum_l,
+            aarch64::vget_low_u32(cols[1].to_vector()),
+            a[1].value,
+        );
+        sum_h = aarch64::vmlal_high_n_u32(sum_h, cols[1].to_vector(), a[1].value);
 
-        // Compute q ≡ C ⋅ μ (mod 2^32), with μ = −P^{-1} mod 2^32.
-        let q_i = aarch64::vmulq_s32(c_lo, FP::PACKED_MU);
-        let q_u = aarch64::vreinterpretq_u32_s32(q_i);
+        // Add a_2 ⋅ cols_2.
+        sum_l = aarch64::vmlal_n_u32(
+            sum_l,
+            aarch64::vget_low_u32(cols[2].to_vector()),
+            a[2].value,
+        );
+        sum_h = aarch64::vmlal_high_n_u32(sum_h, cols[2].to_vector(), a[2].value);
 
-        // Compute qp = q ⋅ P as exact 32×32→64 products.
-        let (qp_lo_u, qp_hi_u) = vmull_wide_u32(q_u, FP::PACKED_P);
-        let qp_lo = aarch64::vreinterpretq_s64_u64(qp_lo_u);
-        let qp_hi = aarch64::vreinterpretq_s64_u64(qp_hi_u);
+        // Add a_3 ⋅ cols_3.
+        sum_l = aarch64::vmlal_n_u32(
+            sum_l,
+            aarch64::vget_low_u32(cols[3].to_vector()),
+            a[3].value,
+        );
+        sum_h = aarch64::vmlal_high_n_u32(sum_h, cols[3].to_vector(), a[3].value);
 
-        // Subtract to get D = C − qP, guaranteed divisible by 2^32.
-        let diff_l = aarch64::vsubq_s64(sum_l, qp_lo);
-        let diff_h = aarch64::vsubq_s64(sum_h, qp_hi);
+        // Split C into 32-bit halves per lane:
+        // - c_lo = C mod 2^{32},
+        // - c_hi = C >> 32.
+        let c_lo = aarch64::vuzp1q_u32(
+            aarch64::vreinterpretq_u32_u64(sum_l),
+            aarch64::vreinterpretq_u32_u64(sum_h),
+        );
+        let c_hi = aarch64::vuzp2q_u32(
+            aarch64::vreinterpretq_u32_u64(sum_l),
+            aarch64::vreinterpretq_u32_u64(sum_h),
+        );
 
-        // Divide by 2^32 (arithmetic shift right).
-        // Each d_i now satisfies d_i ∈ (−P, P].
-        let d_l = aarch64::vshrq_n_s64::<32>(diff_l);
-        let d_h = aarch64::vshrq_n_s64::<32>(diff_h);
-        let d_i = aarch64::vcombine_s32(aarch64::vmovn_s64(d_l), aarch64::vmovn_s64(d_h));
-        let d_u = aarch64::vreinterpretq_u32_s32(d_i);
+        // Partial high-word reduction: c_hi' ∈ [0,P).
+        //
+        // Since C < 4P^2 and P < 2^{31}, we have c_hi < 2P.
+        //
+        // Map [P,2P) → [0,P) by subtracting P.
+        let c_hi_sub = aarch64::vsubq_u32(c_hi, P::PACKED_P);
+        let c_hi_prime = aarch64::vminq_u32(c_hi, c_hi_sub);
 
-        // Map (−P, P] → [0, P].
-        // If d < 0 add P; else keep d.
-        let d_plus_p = aarch64::vaddq_u32(d_u, FP::PACKED_P);
-        let d_nonneg = aarch64::vminq_u32(d_u, d_plus_p);
+        // q ≡ c_lo ⋅ μ (mod 2^{32}), with μ = −P^{-1} (mod 2^{32}).
+        let q = aarch64::vmulq_s32(aarch64::vreinterpretq_s32_u32(c_lo), P::PACKED_MU);
+        let q_u32 = aarch64::vreinterpretq_u32_s32(q);
 
-        // If value is exactly P, wrap it to 0.
-        let sub = aarch64::vsubq_u32(d_nonneg, FP::PACKED_P);
-        let mask = aarch64::vcgeq_u32(d_nonneg, FP::PACKED_P);
-        aarch64::vbslq_u32(mask, sub, d_nonneg)
+        // Compute (q⋅P)_hi = high 32 bits of q⋅P per lane (exact unsigned widening multiply).
+        let (qp_l, qp_h) = vmull_wide_u32(q_u32, P::PACKED_P);
+        let qp_hi = aarch64::vuzp2q_u32(
+            aarch64::vreinterpretq_u32_u64(qp_l),
+            aarch64::vreinterpretq_u32_u64(qp_h),
+        );
+
+        // Approximate reduced value: d ≈ c_hi' − (q⋅P)_hi.
+        //
+        // This ignores a possible borrow from the low word; the error is at most 1.
+        let d = aarch64::vsubq_s32(
+            aarch64::vreinterpretq_s32_u32(c_hi_prime),
+            aarch64::vreinterpretq_s32_u32(qp_hi),
+        );
+
+        // Canonicalize d from [-1, P) to [0, P) branchlessly.
+        let is_neg_mask = aarch64::vcltzq_s32(d);
+        let p_vec_s32 = aarch64::vreinterpretq_s32_u32(P::PACKED_P);
+        let d_plus_p = aarch64::vaddq_s32(d, p_vec_s32);
+        let out_s32 = aarch64::vbslq_s32(is_neg_mask, d_plus_p, d);
+
+        // Return lanes as canonical unsigned residues.
+        aarch64::vreinterpretq_u32_s32(out_s32)
     }
 }
 
@@ -694,72 +718,34 @@ pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
     b: &[MontyField31<FP>; WIDTH],
     res: &mut [MontyField31<FP>; WIDTH],
 ) where
-    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+    FP: FieldParameters + BinomialExtensionData<WIDTH> + MontyParametersNeon,
 {
     assert_eq!(WIDTH, 4);
 
+    // Precompute w⋅b once (base-field multiply by the binomial constant).
+    let packed_b = PackedMontyField31Neon([b[0], b[1], b[2], b[3]]);
+    let w_b = FP::mul_w(packed_b).0;
+
+    // Build the four matrix columns for the dot product layout:
+    // col0 = [b0,   b1,   b2,   b3]
+    // col1 = [w⋅b3, b0,   b1,   b2]
+    // col2 = [w⋅b2, w⋅b3, b0,   b1]
+    // col3 = [w⋅b1, w⋅b2, w⋅b3, b0]
+    let cols = [
+        PackedMontyField31Neon([b[0], b[1], b[2], b[3]]),
+        PackedMontyField31Neon([w_b[3], b[0], b[1], b[2]]),
+        PackedMontyField31Neon([w_b[2], w_b[3], b[0], b[1]]),
+        PackedMontyField31Neon([w_b[1], w_b[2], w_b[3], b[0]]),
+    ];
+
+    // Arrange A’s coefficients for the dot product.
+    let a_coeffs = [a[0], a[1], a[2], a[3]];
+
     unsafe {
-        // Precompute w ⋅ b once.
-        let packed_b = PackedMontyField31Neon([b[0], b[1], b[2], b[3]]);
-        let w_b = FP::mul_w(packed_b).0;
-
-        // Broadcast each a_i to all lanes.
-        let a0 = aarch64::vdupq_n_u32(a[0].value);
-        let a1 = aarch64::vdupq_n_u32(a[1].value);
-        let a2 = aarch64::vdupq_n_u32(a[2].value);
-        let a3 = aarch64::vdupq_n_u32(a[3].value);
-
-        // Load b and w⋅b into vectors.
-        //
-        // [b0 b1 b2 b3]
-        let b0123 = aarch64::vld1q_u32(b.as_ptr() as *const u32);
-        // [w0 w1 w2 w3]
-        let wb0123 = aarch64::vld1q_u32(w_b.as_ptr() as *const u32);
-
-        // Build rotated right-hand-side vectors.
-        //
-        // rhs0 = [ b0, b1, b2, b3]
-        // rhs1 = [ w3, b0, b1, b2]
-        // rhs2 = [ w2, w3, b0, b1]
-        // rhs3 = [ w1, w2, w3, b0]
-        let rhs0 = b0123;
-        let rhs1 = aarch64::vextq_u32(wb0123, b0123, 3);
-        let rhs2 = aarch64::vextq_u32(wb0123, b0123, 2);
-        let rhs3 = aarch64::vextq_u32(wb0123, b0123, 1);
-
-        // First multiply-accumulate stream: a0⋅rhs0 + a1⋅rhs1.
-        let (mut s01_lo, mut s01_hi) = vmull_wide_u32(a0, rhs0);
-        s01_lo = aarch64::vmlal_u32(
-            s01_lo,
-            aarch64::vget_low_u32(a1),
-            aarch64::vget_low_u32(rhs1),
-        );
-        s01_hi = aarch64::vmlal_high_u32(s01_hi, a1, rhs1);
-
-        // Second stream: a2⋅rhs2 + a3⋅rhs3.
-        let (mut s23_lo, mut s23_hi) = vmull_wide_u32(a2, rhs2);
-        s23_lo = aarch64::vmlal_u32(
-            s23_lo,
-            aarch64::vget_low_u32(a3),
-            aarch64::vget_low_u32(rhs3),
-        );
-        s23_hi = aarch64::vmlal_high_u32(s23_hi, a3, rhs3);
-
-        // Reduce each stream with Montgomery reduction.
-        let r01 = monty_reduce_64::<FP, WIDTH>(
-            aarch64::vreinterpretq_s64_u64(s01_lo),
-            aarch64::vreinterpretq_s64_u64(s01_hi),
-        );
-        let r23 = monty_reduce_64::<FP, WIDTH>(
-            aarch64::vreinterpretq_s64_u64(s23_lo),
-            aarch64::vreinterpretq_s64_u64(s23_hi),
-        );
-
-        // Combine the two reduced sums modulo P.
-        let out = uint32x4_mod_add(r01, r23, FP::PACKED_P);
-
-        // Store the final coefficients.
-        aarch64::vst1q_u32(res.as_mut_ptr() as *mut u32, out);
+        // Compute all c_j with a single-reduction dot product.
+        let dot_product = dot_product_4(&a_coeffs, &cols);
+        // Store c_0..c_3 (repr(transparent) over u32).
+        aarch64::vst1q_u32(res.as_mut_ptr() as *mut u32, dot_product);
     }
 }
 
