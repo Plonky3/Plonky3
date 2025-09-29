@@ -181,21 +181,13 @@ impl<F: Field> VirtualPairCol<F> {
         Self::new_main(vec![(a_col, F::ONE), (b_col, F::NEG_ONE)], F::ZERO)
     }
 
-    /// Evaluates the virtual column by applying the affine linear combination to the given column values.
+    /// Evaluates the virtual column at a given row by applying the affine linear combination to a pair of preprocessed and main trace rows.
     ///
-    /// This method computes `Σ(w_i * column_values[i]) + constant` where the column values
-    /// are retrieved from the appropriate arrays based on their type (preprocessed or main).
-    ///
-    /// # Type Parameters
-    /// * `Expr` - Expression type that supports field arithmetic
-    /// * `Var` - Variable type that can be converted to expressions
+    /// This computes `Σ(w_i * column_values[i]) + constant`
     ///
     /// # Arguments
-    /// * `preprocessed` - Array of preprocessed column values
-    /// * `main` - Array of main trace column values
-    ///
-    /// # Returns
-    /// The computed expression result.
+    /// * `preprocessed` - Row of preprocessed values.
+    /// * `main` - Row of main trace values.
     pub fn apply<Expr, Var>(&self, preprocessed: &[Var], main: &[Var]) -> Expr
     where
         F: Into<Expr>,
