@@ -15,9 +15,7 @@ use p3_field::{Field, PrimeCharacteristicRing};
 /// without explicitly storing them in the trace matrix, saving memory and computation.
 #[derive(Clone, Debug)]
 pub struct VirtualPairCol<F: Field> {
-    /// Linear combination coefficients: pairs of (column, weight)
-    ///
-    /// Each column is weighted by the corresponding field element in the affine combination.
+    /// Linear combination coefficients: pairs of (column, weight).
     column_weights: Vec<(PairCol, F)>,
     /// Constant term added to the linear combination.
     constant: F,
