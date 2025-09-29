@@ -141,13 +141,10 @@ impl<F: Field> VirtualPairCol<F> {
         Self::single(PairCol::Main(column))
     }
 
-    /// Creates a virtual column that sums multiple main trace columns.
+    /// Create a virtual column which is the sum of main trace columns.
     ///
     /// # Arguments
     /// * `columns` - Vector of main trace column indices to sum
-    ///
-    /// # Returns
-    /// A virtual column representing `∑ main[i]` where `i` are the provided indices
     #[must_use]
     pub fn sum_main(columns: Vec<usize>) -> Self {
         let column_weights = columns.into_iter().map(|col| (col, F::ONE)).collect();
