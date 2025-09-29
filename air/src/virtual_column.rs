@@ -6,13 +6,10 @@ use p3_field::{Field, PrimeCharacteristicRing};
 
 /// An affine linear combination of columns in a PAIR (Preprocessed AIR).
 ///
-/// This structure represents an affine function `f(x) = Σ(w_i * x_i) + c` where:
+/// This structure represents the column `V` with entries `V[j] = Σ(w_i * V_i[j]) + c` where:
 /// - `w_i` are the column weights
-/// - `x_i` are the column values (either preprocessed or main trace columns)
+/// - `V_i` are the columns (either preprocessed or main trace columns)
 /// - `c` is a constant term
-///
-/// Virtual columns are useful for creating derived values from existing trace columns
-/// without explicitly storing them in the trace matrix, saving memory and computation.
 #[derive(Clone, Debug)]
 pub struct VirtualPairCol<F: Field> {
     /// Linear combination coefficients: pairs of (column, weight).
