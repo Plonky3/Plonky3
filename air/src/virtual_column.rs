@@ -111,13 +111,10 @@ impl<F: Field> VirtualPairCol<F> {
         }
     }
 
-    /// Creates a virtual column representing a single column with weight 1.
+    /// Creates a virtual column equal to a provided column.
     ///
     /// # Arguments
-    /// * `column` - The column to represent
-    ///
-    /// # Returns
-    /// A virtual column equivalent to `1 * column + 0`
+    /// * `column` - The column to represent.
     #[must_use]
     pub fn single(column: PairCol) -> Self {
         Self {
