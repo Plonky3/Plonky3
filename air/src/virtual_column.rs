@@ -132,7 +132,7 @@ impl<F: Field> VirtualPairCol<F> {
         Self::single(PairCol::Preprocessed(column))
     }
 
-    /// Creates a virtual column representing a single main trace column.
+    /// Creates a virtual column equal to a main trace column.
     ///
     /// # Arguments
     /// * `column` - Index of the main trace column
