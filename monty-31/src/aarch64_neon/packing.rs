@@ -832,8 +832,6 @@ where
             aarch64::vmlsq_u32(aarch64::vreinterpretq_u32_s32(d), is_neg_mask, P::PACKED_P);
 
         // Safety: The result is now in canonical form [0, P).
-        //
-        // It's safe to create a `PackedMontyField31Neon` from it.
         PackedMontyField31Neon::from_vector(canonical_res)
     }
 }
