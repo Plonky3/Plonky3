@@ -46,41 +46,15 @@ pub(crate) fn deep_quotient_reduce_row<F: ComplexExtendable, EF: ExtensionField<
 
 impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
     /// Same as `deep_quotient_reduce_row`, but reduces a whole matrix into a column, taking advantage of batch inverses.
+    /// Accepts precomputed powers of `alpha` to avoid recomputation per call.
+    /// `packed_alpha_powers` should be at least `self.values.width().div_ceil(F::Packing::WIDTH)` long.
     #[instrument(skip_all, fields(dims = %self.values.dimensions()))]
-    #[allow(dead_code)]
     pub(crate) fn deep_quotient_reduce<EF: ExtensionField<F>>(
         &self,
         alpha: EF,
         zeta: Point<EF>,
         ps_at_zeta: &[EF],
-    ) -> Vec<EF> {
-        // Compute alpha powers once here, then delegate to the variant which accepts precomputed powers.
-        let packed_alpha_powers =
-            EF::ExtensionPacking::packed_ext_powers_capped(alpha, self.values.width())
-                .collect_vec();
-        let alpha_powers =
-            EF::ExtensionPacking::to_ext_iter(packed_alpha_powers.iter().copied()).collect_vec();
-
-        self.deep_quotient_reduce_with_powers::<EF>(
-            alpha,
-            zeta,
-            ps_at_zeta,
-            &packed_alpha_powers,
-            &alpha_powers,
-        )
-    }
-
-    /// Same as `deep_quotient_reduce`, but takes precomputed powers of `alpha` to avoid recomputation.
-    /// `packed_alpha_powers` should be at least `self.values.width().div_ceil(F::Packing::WIDTH)` long.
-    /// `alpha_powers` should be at least `self.values.width()` long.
-    #[instrument(skip_all, fields(dims = %self.values.dimensions()))]
-    pub(crate) fn deep_quotient_reduce_with_powers<EF: ExtensionField<F>>(
-        &self,
-        alpha: EF,
-        zeta: Point<EF>,
-        ps_at_zeta: &[EF],
         packed_alpha_powers: &[EF::ExtensionPacking],
-        alpha_powers: &[EF],
     ) -> Vec<EF> {
         let alpha_pow_width = alpha.exp_u64(self.values.width() as u64);
         let points = cfft_permute_slice(&self.domain.points().collect_vec());
@@ -90,8 +64,11 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
             .unzip();
         let vp_denom_invs = batch_multiplicative_inverse(&vp_denoms);
 
-        let alpha_reduced_ps_at_zeta: EF =
-            dot_product(alpha_powers.iter().copied(), ps_at_zeta.iter().copied());
+        // Compute alpha-reduced value at zeta without allocating an intermediate alpha_powers Vec.
+        let alpha_reduced_ps_at_zeta: EF = dot_product(
+            EF::ExtensionPacking::to_ext_iter(packed_alpha_powers.iter().copied()),
+            ps_at_zeta.iter().copied(),
+        );
 
         self.values
             .rowwise_packed_dot_product::<EF>(packed_alpha_powers)
@@ -178,7 +155,11 @@ mod tests {
         let zeta: Point<EF> = Point::from_projective_line(rng.random());
         let ps_at_zeta = evals.evaluate_at_point(zeta);
 
-        let mat_reduced = evals.deep_quotient_reduce(alpha, zeta, &ps_at_zeta);
+        let packed_alpha_powers =
+            EF::ExtensionPacking::packed_ext_powers_capped(alpha, evals.values.width())
+                .collect_vec();
+        let mat_reduced =
+            evals.deep_quotient_reduce(alpha, zeta, &ps_at_zeta, &packed_alpha_powers);
         let row_reduced = evals
             .to_natural_order()
             .rows()
@@ -208,18 +189,32 @@ mod tests {
         let zeta: Point<EF> = Point::from_projective_line(rng.random());
 
         let ps_at_zeta = evals.evaluate_at_point(zeta);
+        let packed_alpha_powers =
+            EF::ExtensionPacking::packed_ext_powers_capped(alpha, lde.values.width()).collect_vec();
         let reduced0 = CircleEvaluations::<F>::from_cfft_order(
             CircleDomain::standard(log_n + log_blowup),
-            RowMajorMatrix::new_col(lde.deep_quotient_reduce(alpha, zeta, &ps_at_zeta))
-                .flatten_to_base(),
+            RowMajorMatrix::new_col(lde.deep_quotient_reduce(
+                alpha,
+                zeta,
+                &ps_at_zeta,
+                &packed_alpha_powers,
+            ))
+            .flatten_to_base(),
         );
         assert!(reduced0.dim() <= (1 << log_n) + 1);
 
         let not_ps_at_zeta = evals.evaluate_at_point(zeta.double());
+        let packed_alpha_powers =
+            EF::ExtensionPacking::packed_ext_powers_capped(alpha, lde.values.width()).collect_vec();
         let reduced1 = CircleEvaluations::<F>::from_cfft_order(
             CircleDomain::standard(log_n + log_blowup),
-            RowMajorMatrix::new_col(lde.deep_quotient_reduce(alpha, zeta, &not_ps_at_zeta))
-                .flatten_to_base(),
+            RowMajorMatrix::new_col(lde.deep_quotient_reduce(
+                alpha,
+                zeta,
+                &not_ps_at_zeta,
+                &packed_alpha_powers,
+            ))
+            .flatten_to_base(),
         );
         assert!(reduced1.dim() > (1 << log_n) + 1);
     }
@@ -244,7 +239,10 @@ mod tests {
             let ps_at_zeta = evals.evaluate_at_point(zeta);
             let lde = evals.extrapolate(lde_domain);
             assert!(lde.dim() <= (1 << domain.log_n) + 1);
-            let mat_ros = lde.deep_quotient_reduce(alpha, zeta, &ps_at_zeta);
+            let packed_alpha_powers =
+                EF::ExtensionPacking::packed_ext_powers_capped(alpha, lde.values.width())
+                    .collect_vec();
+            let mat_ros = lde.deep_quotient_reduce(alpha, zeta, &ps_at_zeta, &packed_alpha_powers);
             for (ro, mat_ro) in izip!(&mut ros, mat_ros) {
                 *ro += alpha_offset * mat_ro;
             }
