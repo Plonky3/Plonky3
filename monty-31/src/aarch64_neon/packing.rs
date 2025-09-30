@@ -814,9 +814,6 @@ where
             aarch64::vreinterpretq_u32_u64(qp_h),
         );
 
-        // Approximate reduced value: d ≈ c_hi' − (q⋅P)_hi.
-        //
-        // This ignores a possible borrow from the low word; the error is at most 1.
         let d = aarch64::vsubq_s32(
             aarch64::vreinterpretq_s32_u32(c_hi_prime),
             aarch64::vreinterpretq_s32_u32(qp_hi),
