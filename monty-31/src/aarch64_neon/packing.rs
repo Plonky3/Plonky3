@@ -675,7 +675,7 @@ where
             (lhs[0].into() * rhs[0].into()) + (lhs[1].into() * rhs[1].into())
         }
         3 => {
-            // TODO: Implement an optimized `dot_product_2` helper.
+            // TODO: Implement an optimized `dot_product_3` helper.
             let dot2 = (lhs[0].into() * rhs[0].into()) + (lhs[1].into() * rhs[1].into());
             dot2 + (lhs[2].into() * rhs[2].into())
         }
