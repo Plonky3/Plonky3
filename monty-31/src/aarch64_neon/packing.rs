@@ -822,7 +822,7 @@ where
             aarch64::vreinterpretq_s32_u32(qp_hi),
         );
 
-        // Canonicalize d from [-1, P) to [0, P) branchlessly.
+        // Canonicalize d from (-P, P) to [0, P) branchlessly.
         //
         // The `vmlsq_u32` instruction computes `a - (b * c)`.
         // - If `d` is negative, the mask is `-1` (all 1s), so we compute `d - (-1 * P) = d + P`.
