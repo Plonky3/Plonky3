@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use core::arch::aarch64::{self, int32x4_t, uint32x4_t, uint64x2_t};
+use core::arch::aarch64::{self, int32x4_t, uint32x4_t};
 use core::arch::asm;
 use core::hint::unreachable_unchecked;
 use core::iter::{Product, Sum};
@@ -617,43 +617,6 @@ impl_packed_field_pow_2!(
     WIDTH
 );
 
-/// Compute the lane-wise widening product of two 128-bit vectors of `u32`.
-///
-/// Input vectors are
-///
-/// \begin{equation}
-///     v_a = [a_0, a_1, a_2, a_3], \qquad
-///     v_b = [b_0, b_1, b_2, b_3].
-/// \end{equation}
-///
-/// The result is two 64-bit vectors:
-///
-/// \begin{equation}
-///     lo = [a_0 ⋅ b_0, a_1 ⋅ b_1], \qquad
-///     hi = [a_2 ⋅ b_2, a_3 ⋅ b_3],
-/// \end{equation}
-///
-/// where each product is the exact 32×32 → 64-bit integer product (no reduction).
-#[inline(always)]
-unsafe fn vmull_wide_u32(a: uint32x4_t, b: uint32x4_t) -> (uint64x2_t, uint64x2_t) {
-    unsafe {
-        // We first extract those low halves from a and b:
-        //
-        // [a_0, a_1] as u32x2
-        let a_lo = aarch64::vget_low_u32(a);
-        // [b_0, b_1] as u32x2
-        let b_lo = aarch64::vget_low_u32(b);
-
-        // lo = [a_0 ⋅ b_0, a_1 ⋅ b_1] as u64 lanes (exact 32×32 → 64 multiply, unsigned).
-        let lo = aarch64::vmull_u32(a_lo, b_lo);
-
-        // hi = [a_2 ⋅ b_2, a_3 ⋅ b_3] as u64 lanes.
-        let hi = aarch64::vmull_high_u32(a, b);
-
-        (lo, hi)
-    }
-}
-
 /// A general fast dot product implementation using NEON.
 #[inline(always)]
 fn general_dot_product<P, LHS, RHS, const N: usize>(
@@ -759,32 +722,35 @@ where
     unsafe {
         // Accumulate the full 64-bit sum C = Σ lhs_i ⋅ rhs_i.
         //
-        // Start with lhs_0 ⋅ rhs_0 (split into low lanes 0,1 and high lanes 2,3).
-        let (mut sum_l, mut sum_h) = vmull_wide_u32(lhs[0].into_vec(), rhs[0].into_vec());
-
-        // Add lhs_1 ⋅ rhs_1.
-        sum_l = aarch64::vmlal_u32(
-            sum_l,
+        // Compute sum01 = (lhs[0] * rhs[0]) + (lhs[1] * rhs[1])
+        let mut sum01_l = aarch64::vmull_u32(
+            aarch64::vget_low_u32(lhs[0].into_vec()),
+            aarch64::vget_low_u32(rhs[0].into_vec()),
+        );
+        let mut sum01_h = aarch64::vmull_high_u32(lhs[0].into_vec(), rhs[0].into_vec());
+        sum01_l = aarch64::vmlal_u32(
+            sum01_l,
             aarch64::vget_low_u32(lhs[1].into_vec()),
             aarch64::vget_low_u32(rhs[1].into_vec()),
         );
-        sum_h = aarch64::vmlal_high_u32(sum_h, lhs[1].into_vec(), rhs[1].into_vec());
+        sum01_h = aarch64::vmlal_high_u32(sum01_h, lhs[1].into_vec(), rhs[1].into_vec());
 
-        // Add lhs_2 ⋅ rhs_2.
-        sum_l = aarch64::vmlal_u32(
-            sum_l,
+        // Compute sum23 = (lhs[2] * rhs[2]) + (lhs[3] * rhs[3])
+        let mut sum23_l = aarch64::vmull_u32(
             aarch64::vget_low_u32(lhs[2].into_vec()),
             aarch64::vget_low_u32(rhs[2].into_vec()),
         );
-        sum_h = aarch64::vmlal_high_u32(sum_h, lhs[2].into_vec(), rhs[2].into_vec());
-
-        // Add lhs_3 ⋅ rhs_3.
-        sum_l = aarch64::vmlal_u32(
-            sum_l,
+        let mut sum23_h = aarch64::vmull_high_u32(lhs[2].into_vec(), rhs[2].into_vec());
+        sum23_l = aarch64::vmlal_u32(
+            sum23_l,
             aarch64::vget_low_u32(lhs[3].into_vec()),
             aarch64::vget_low_u32(rhs[3].into_vec()),
         );
-        sum_h = aarch64::vmlal_high_u32(sum_h, lhs[3].into_vec(), rhs[3].into_vec());
+        sum23_h = aarch64::vmlal_high_u32(sum23_h, lhs[3].into_vec(), rhs[3].into_vec());
+
+        // Combine the partial sums
+        let sum_l = aarch64::vaddq_u64(sum01_l, sum23_l);
+        let sum_h = aarch64::vaddq_u64(sum01_h, sum23_h);
 
         // Split C into 32-bit halves per lane:
         // - c_lo = C mod 2^{32},
@@ -811,7 +777,11 @@ where
         let q_u32 = aarch64::vreinterpretq_u32_s32(q);
 
         // Compute (q⋅P)_hi = high 32 bits of q⋅P per lane (exact unsigned widening multiply).
-        let (qp_l, qp_h) = vmull_wide_u32(q_u32, P::PACKED_P);
+        let qp_l = aarch64::vmull_u32(
+            aarch64::vget_low_u32(q_u32),
+            aarch64::vget_low_u32(P::PACKED_P),
+        );
+        let qp_h = aarch64::vmull_high_u32(q_u32, P::PACKED_P);
         let qp_hi = aarch64::vuzp2q_u32(
             aarch64::vreinterpretq_u32_u64(qp_l),
             aarch64::vreinterpretq_u32_u64(qp_h),
