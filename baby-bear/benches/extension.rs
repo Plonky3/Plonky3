@@ -22,14 +22,14 @@ const L_REPS: usize = 10 * REPS;
 
 fn bench_quartic_extension(c: &mut Criterion) {
     let name = "BinomialExtensionField<BabyBear, 4>";
-    // benchmark_add_throughput::<EF4, REPS>(c, name);
-    // benchmark_add_latency::<EF4, L_REPS>(c, name);
-    // benchmark_sub_throughput::<EF4, REPS>(c, name);
-    // benchmark_sub_latency::<EF4, L_REPS>(c, name);
-    // benchmark_base_mul_throughput::<F, EF4, REPS>(c, name);
-    // benchmark_base_mul_latency::<F, EF4, L_REPS>(c, name);
-    // benchmark_square::<EF4>(c, name);
-    // benchmark_inv::<EF4>(c, name);
+    benchmark_add_throughput::<EF4, REPS>(c, name);
+    benchmark_add_latency::<EF4, L_REPS>(c, name);
+    benchmark_sub_throughput::<EF4, REPS>(c, name);
+    benchmark_sub_latency::<EF4, L_REPS>(c, name);
+    benchmark_base_mul_throughput::<F, EF4, REPS>(c, name);
+    benchmark_base_mul_latency::<F, EF4, L_REPS>(c, name);
+    benchmark_square::<EF4>(c, name);
+    benchmark_inv::<EF4>(c, name);
     benchmark_mul_throughput::<EF4, REPS>(c, name);
     benchmark_mul_latency::<EF4, L_REPS>(c, name);
 }
@@ -65,7 +65,7 @@ fn bench_octic_extension(c: &mut Criterion) {
 criterion_group!(
     bench_babybear_ef,
     bench_quartic_extension,
-    // bench_quintic_extension,
-    // bench_octic_extension
+    bench_quintic_extension,
+    bench_octic_extension
 );
 criterion_main!(bench_babybear_ef);
