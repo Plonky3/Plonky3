@@ -824,9 +824,9 @@ where
         // The `vmlsq_u32` instruction computes `a - (b * c)`.
         // - If `d` is negative, the mask is `-1` (all 1s), so we compute `d - (-1 * P) = d + P`.
         // - If `d` is non-negative, the mask is `0`, so we compute `d - (0 * P) = d`.
-        let is_neg_mask = aarch64::vcltzq_s32(d);
+        let underflow = aarch64::vcltq_s32(c_hi_prime, qp_hi);
         let canonical_res =
-            aarch64::vmlsq_u32(aarch64::vreinterpretq_u32_s32(d), is_neg_mask, P::PACKED_P);
+            aarch64::vmlsq_u32(aarch64::vreinterpretq_u32_s32(d), underflow, P::PACKED_P);
 
         // Safety: The result is now in canonical form [0, P).
         PackedMontyField31Neon::from_vector(canonical_res)
