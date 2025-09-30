@@ -640,12 +640,7 @@ mod tests {
     /// Computes the contribution to the LogUp running sum for a single row.
     ///
     /// The contribution is: `1/(α - val_read) - mult/(α - val_provided)`
-    fn compute_logup_contribution(
-        alpha: EF,
-        val_read: F,
-        val_provided: F,
-        mult: F,
-    ) -> EF {
+    fn compute_logup_contribution(alpha: EF, val_read: F, val_provided: F, mult: F) -> EF {
         (alpha - EF::from(val_read)).inverse()
             - (alpha - EF::from(val_provided)).inverse() * EF::from(mult)
     }
