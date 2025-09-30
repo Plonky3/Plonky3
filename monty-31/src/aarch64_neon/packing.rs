@@ -745,7 +745,10 @@ where
     }
 }
 
-/// Dot product of four packed columns with a single delayed reduction.
+/// Compute the elementary function `l0*r0 + l1*r1 + l2*r2 + l3*r3` given eight inputs
+/// in canonical form.
+///
+/// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 unsafe fn dot_product_4<P, LHS, RHS>(lhs: &[LHS; 4], rhs: &[RHS; 4]) -> PackedMontyField31Neon<P>
 where
