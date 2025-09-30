@@ -119,47 +119,60 @@ impl<F: Field> LogUpGadget<F> {
         BE: Into<AB::ExprEF> + Copy,
         BM: Into<AB::ExprEF> + Clone,
     {
+        // Ensure |A| and |m_A| match. This is required to form ∑ m_A/(α - a).
         assert_eq!(
             a_elements.len(),
             a_multiplicities.len(),
             "Mismatched lengths: a_elements and a_multiplicities must have same length"
         );
+        // Ensure |B| and |m_B| match. This is required to form ∑ m_B/(α - b).
         assert_eq!(
             b_elements.len(),
             b_multiplicities.len(),
             "Mismatched lengths: b_elements and b_multiplicities must have same length"
         );
 
+        // Access the permutation (aux) table. It carries the running sum column s.
         let permutation = builder.permutation();
-        let s_local = permutation.row_slice(0).unwrap()[0];
-        let s_next = permutation.row_slice(1).unwrap()[0];
+        // Read s[i] from the local row.
+        let s_local = permutation.row_slice(0).unwrap()[0].into();
+        // Read s[i+1] from the next row (or a zero-padded view on the last row).
+        let s_next = permutation.row_slice(1).unwrap()[0].into();
 
-        // Boundary constraint for first row: s[0] = ∑(a_mults / (α - a_elems)) - ∑(b_mults / (α - b_elems))
-        // This ensures the permutation trace starts with the correct initial value.
-        self.add_initial_constraint(
-            builder,
-            s_local.into(),
-            a_elements,
-            a_multiplicities,
-            b_elements,
-            b_multiplicities,
-            challenge,
+        // Anchor s[0] = 0 (not ∑ m_A/(α−a) − ∑ m_B/(α−b)).
+        //
+        // Avoids a high-degree boundary constraint.
+        // Telescoping is enforced by the last-row check (s[n−1] = 0).
+        // Simpler, and keeps aux and main traces aligned in length.
+        builder.when_first_row().assert_zero_ext(s_local.clone());
+
+        // Convert the random challenge to an expression: α.
+        let alpha: AB::ExprEF = challenge.into();
+
+        // Build A’s fraction:  ∑ m_A/(α - a)  =  a_num / a_den .
+        let (a_num, a_den) =
+            self.compute_sum_terms::<AB, AE, AM>(a_elements, a_multiplicities, &alpha);
+        // Build B’s fraction:  ∑ m_B/(α - b)  =  b_num / b_den .
+        let (b_num, b_den) =
+            self.compute_sum_terms::<AB, BE, BM>(b_elements, b_multiplicities, &alpha);
+        // Common denominator: D = a_den ⋅ b_den. This clears all divisions.
+        let common_denominator = a_den.clone() * b_den.clone();
+        // Numerator difference: N = a_num⋅b_den − b_num⋅a_den.
+        //
+        // The equality of sums holds iff N = 0 after clearing denominators.
+        let contribution_poly = a_num * b_den - b_num * a_den;
+
+        // Transition constraint on rows 0..n-2:
+        // (s[i+1] − s[i])⋅D − N = 0.
+        builder.when_transition().assert_zero_ext(
+            (s_next - s_local.clone()) * common_denominator.clone() - contribution_poly.clone(),
         );
 
-        // Boundary constraint: s[n-1] = 0. This is checked on the local value of the last row.
-        builder.when_last_row().assert_zero_ext(s_local);
-
-        // Add the transition constraint for the running sum update.
-        self.add_logup_transition_constraint(
-            builder,
-            s_local.into(),
-            s_next.into(),
-            a_elements,
-            a_multiplicities,
-            b_elements,
-            b_multiplicities,
-            challenge,
-        );
+        // Final constraint on the last row:
+        // s[n−1]⋅D + N = 0  ⇔  s[n−1] = −N/D  ⇔ total sum cancels to zero.
+        builder
+            .when_last_row()
+            .assert_zero_ext(s_local * common_denominator + contribution_poly);
     }
 
     /// Convenience method for simple lookup without explicit multiplicities.
@@ -186,105 +199,6 @@ impl<F: Field> LogUpGadget<F> {
         self.assert_lookup_with_multiplicities_internal(
             builder, a_elements, &a_ones, b_elements, &b_ones, challenge,
         );
-    }
-
-    /// Implements the initial boundary constraint for the first row.
-    ///
-    /// The initial constraint enforces:
-    /// ```text
-    /// s[0] = ∑_j(a_mults[j] / (α - a_elems[j])) - ∑_j(b_mults[j] / (α - b_elems[j]))
-    /// ```
-    ///
-    /// Since division is not allowed in polynomial constraints, we clear denominators
-    /// by multiplying through by the common denominator, yielding a polynomial constraint.
-    #[allow(clippy::too_many_arguments)]
-    fn add_initial_constraint<AB, AE, AM, BE, BM>(
-        &self,
-        builder: &mut AB,
-        s_local: AB::ExprEF,
-        a_elements: &[AE],
-        a_multiplicities: &[AM],
-        b_elements: &[BE],
-        b_multiplicities: &[BM],
-        challenge: AB::RandomVar,
-    ) where
-        AB: PermutationAirBuilder,
-        AE: Into<AB::ExprEF> + Copy,
-        AM: Into<AB::ExprEF> + Clone,
-        BE: Into<AB::ExprEF> + Copy,
-        BM: Into<AB::ExprEF> + Clone,
-    {
-        // Convert challenge to expression
-        let alpha: AB::ExprEF = challenge.into();
-
-        // Compute the sum terms for the first row
-        let (a_sum_numerator, a_common_denominator): (AB::ExprEF, AB::ExprEF) =
-            self.compute_sum_terms::<AB, AE, AM>(a_elements, a_multiplicities, &alpha);
-        let (b_sum_numerator, b_common_denominator): (AB::ExprEF, AB::ExprEF) =
-            self.compute_sum_terms::<AB, BE, BM>(b_elements, b_multiplicities, &alpha);
-
-        // The constraint is: s[0] * common_denom = a_terms * b_denom - b_terms * a_denom
-        // Where common_denom = a_common_denominator * b_common_denominator
-        let common_denominator = a_common_denominator.clone() * b_common_denominator.clone();
-
-        // Left side: s[0] * common_denominator
-        let lhs = s_local * common_denominator;
-
-        // Right side: a_numerator * b_denominator - b_numerator * a_denominator
-        let rhs = a_sum_numerator * b_common_denominator - b_sum_numerator * a_common_denominator;
-
-        // Enforce: lhs - rhs = 0 on the first row only
-        builder.when_first_row().assert_zero_ext(lhs - rhs);
-    }
-
-    /// Implements the core LogUp transition constraint.
-    ///
-    /// The transition constraint enforces the running sum update rule:
-    /// ```text
-    /// s[i+1] = s[i] + ∑_j(a_mults[j] / (α - a_elems[j])) - ∑_j(b_mults[j] / (α - b_elems[j]))
-    /// ```
-    ///
-    /// Since division is not allowed in polynomial constraints, we clear denominators
-    /// by multiplying through by the common denominator, yielding a polynomial constraint.
-    #[allow(clippy::too_many_arguments)]
-    fn add_logup_transition_constraint<AB, AE, AM, BE, BM>(
-        &self,
-        builder: &mut AB,
-        s_local: AB::ExprEF,
-        s_next: AB::ExprEF,
-        a_elements: &[AE],
-        a_multiplicities: &[AM],
-        b_elements: &[BE],
-        b_multiplicities: &[BM],
-        challenge: AB::RandomVar,
-    ) where
-        AB: PermutationAirBuilder,
-        AE: Into<AB::ExprEF> + Copy,
-        AM: Into<AB::ExprEF> + Clone,
-        BE: Into<AB::ExprEF> + Copy,
-        BM: Into<AB::ExprEF> + Clone,
-    {
-        // Convert challenge to expression
-        let alpha: AB::ExprEF = challenge.into();
-
-        // Compute the sum terms for this row
-        let (a_sum_numerator, a_common_denominator): (AB::ExprEF, AB::ExprEF) =
-            self.compute_sum_terms::<AB, AE, AM>(a_elements, a_multiplicities, &alpha);
-        let (b_sum_numerator, b_common_denominator): (AB::ExprEF, AB::ExprEF) =
-            self.compute_sum_terms::<AB, BE, BM>(b_elements, b_multiplicities, &alpha);
-
-        // The constraint is: (s_next - s_local) * common_denom = a_terms * b_denom - b_terms * a_denom
-        // Where common_denom = a_common_denominator * b_common_denominator
-        let common_denominator = a_common_denominator.clone() * b_common_denominator.clone();
-
-        // Left side: (s[i+1] - s[i]) * common_denominator
-        let lhs = (s_next - s_local) * common_denominator;
-
-        // Right side: a_numerator * b_denominator - b_numerator * a_denominator
-        let rhs = a_sum_numerator * b_common_denominator - b_sum_numerator * a_common_denominator;
-
-        // Enforce: lhs - rhs = 0 on all transition rows
-        builder.when_transition().assert_zero_ext(lhs - rhs);
     }
 
     /// Computes the numerator and common denominator for a set of fractional terms.
@@ -645,66 +559,102 @@ mod tests {
             - (alpha - EF::from(val_provided)).inverse() * EF::from(mult)
     }
 
-    /// Helper to generate a complete witness for a range check test.
-    fn generate_range_check_witness(
-        values_to_check: &[F],
-    ) -> (RowMajorMatrix<F>, RowMajorMatrix<EF>, EF) {
-        let alpha = EF::from(F::new(0x12345678));
+    /// A simple builder for constructing LogUp lookup traces with arbitrary read/provide patterns.
+    ///
+    /// This makes it easy to create complex test scenarios with non-trivial permutations
+    /// and varied multiplicities.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let trace = LookupTraceBuilder::new()
+    ///     .row(3, 1, 1)  // Read 3, Provide 1 with multiplicity 1
+    ///     .row(1, 2, 2)  // Read 1, Provide 2 with multiplicity 2
+    ///     .row(2, 3, 1)  // Read 2, Provide 3 with multiplicity 1
+    ///     .build();
+    /// ```
+    struct LookupTraceBuilder {
+        /// (read_value, provide_value, multiplicity)
+        rows: Vec<(F, F, F)>,
+        /// Random challenge for the lookup argument
+        alpha: EF,
+    }
 
-        // Create a trace where each value to check gets its own row
-        // paired with the same value from the table with multiplicity 1
-        let trace_len = values_to_check.len();
-
-        // Build main trace matrix: [value, value, 1]
-        //
-        // This means: read 'value' once, provide 'value' once
-        let mut main_flat = Vec::with_capacity(trace_len * 3);
-        for &val in values_to_check {
-            // value being read
-            main_flat.push(val);
-            // value being provided (same as read)
-            main_flat.push(val);
-            // multiplicity = 1 (provide once)
-            main_flat.push(F::ONE);
+    impl LookupTraceBuilder {
+        /// Create a new trace builder with a random challenge.
+        fn new() -> Self {
+            Self {
+                rows: Vec::new(),
+                alpha: EF::from_u32(0x12345678),
+            }
         }
 
-        // Build auxiliary running sum column `s`.
-        //
-        // s[i] = sum of contributions from rows 0 to i (inclusive)
-        // s[0] = contribution from row 0 (initial boundary constraint)
-        // s[i+1] = s[i] + contribution from row i+1 (transition constraint)
-        let mut s_col = Vec::with_capacity(trace_len);
-        let mut current_s = EF::ZERO;
-
-        for &val in values_to_check.iter() {
-            // Contribution from current row
-            let contribution = compute_logup_contribution(alpha, val, val, F::ONE);
-            current_s += contribution;
-
-            // s[i] includes the contribution from row i
-            s_col.push(current_s);
+        /// Add a row to the trace.
+        ///
+        /// # Arguments
+        /// * `read` - The value being read (always with multiplicity 1)
+        /// * `provide` - The value being provided to the lookup table
+        /// * `mult` - The multiplicity of the provided value
+        fn row(mut self, read: u32, provide: u32, mult: u32) -> Self {
+            self.rows
+                .push((F::new(read), F::new(provide), F::new(mult)));
+            self
         }
 
-        // Assemble matrices
-        let main_trace = RowMajorMatrix::new(main_flat, 3);
-        let aux_trace = RowMajorMatrix::new(s_col, 1);
+        /// Build the main and auxiliary traces.
+        ///
+        /// Returns `(main_trace, aux_trace, alpha)` where:
+        /// - `main_trace`: 3 columns [read_val, provide_val, multiplicity]
+        /// - `aux_trace`: 1 column [running_sum]
+        /// - `alpha`: The challenge used
+        fn build(self) -> (RowMajorMatrix<F>, RowMajorMatrix<EF>, EF) {
+            let n = self.rows.len();
+            assert!(n > 0, "Must have at least one row");
 
-        (main_trace, aux_trace, alpha)
+            // Build main trace
+            let mut main_flat = Vec::with_capacity(n * 3);
+            for (read_val, provide_val, mult) in &self.rows {
+                main_flat.push(*read_val);
+                main_flat.push(*provide_val);
+                main_flat.push(*mult);
+            }
+            let main_trace = RowMajorMatrix::new(main_flat, 3);
+
+            // Build auxiliary trace
+            // s[0] = 0 (initial constraint)
+            // s[i+1] = s[i] + contribution from row i (transition constraint)
+            let mut s_col = Vec::with_capacity(n);
+            let mut current_s = EF::ZERO;
+            s_col.push(current_s); // s[0] = 0
+
+            // s[i+1] = s[i] + contribution from row i
+            for (read_val, provide_val, mult) in &self.rows {
+                let contribution =
+                    compute_logup_contribution(self.alpha, *read_val, *provide_val, *mult);
+                current_s += contribution;
+                s_col.push(current_s);
+            }
+
+            // Remove the last element to keep the trace length equal to the number of rows
+            s_col.pop();
+
+            let aux_trace = RowMajorMatrix::new(s_col, 1);
+
+            (main_trace, aux_trace, self.alpha)
+        }
     }
 
     #[test]
     fn test_range_check_end_to_end_valid() {
-        // SCENARIO: All values are valid 8-bit integers.
-        let values_to_check = vec![
-            F::new(10),
-            F::new(255),
-            F::new(0),
-            F::new(42),
-            F::new(10), // a duplicate
-        ];
-
-        // Generate the witness and challenges.
-        let (main_trace, aux_trace, alpha) = generate_range_check_witness(&values_to_check);
+        // SCENARIO: Simple range check where each value reads and provides itself.
+        // Values to check: [10, 255, 0, 42, 10]
+        // Each row contributes 1/(α-val) - 1/(α-val) = 0, so final sum is 0.
+        let (main_trace, aux_trace, alpha) = LookupTraceBuilder::new()
+            .row(10, 10, 1)
+            .row(255, 255, 1)
+            .row(0, 0, 1)
+            .row(42, 42, 1)
+            .row(10, 10, 1)
+            .build();
 
         // Final value of the running sum MUST be zero for a valid lookup.
         let final_row: Vec<EF> = aux_trace
@@ -810,8 +760,11 @@ mod tests {
     #[should_panic(expected = "Extension constraint failed at row 1")]
     fn test_inconsistent_witness_fails_transition() {
         // SCENARIO: The main trace is valid, but the prover messes up the running sum calculation.
-        let values_to_check = vec![F::new(10), F::new(20), F::new(30)];
-        let (main_trace, mut aux_trace, alpha) = generate_range_check_witness(&values_to_check);
+        let (main_trace, mut aux_trace, alpha) = LookupTraceBuilder::new()
+            .row(10, 10, 1)
+            .row(20, 20, 1)
+            .row(30, 30, 1)
+            .build();
 
         // The witness is valid so far. Let's corrupt it.
         // The transition from row 1 to 2 will be s_2 = s_1 + C_1.
@@ -899,5 +852,79 @@ mod tests {
         let (num, den) = gadget.compute_sum_terms::<MockAirBuilder, F, F>(&[], &[], &alpha);
         assert_eq!(num, EF::ZERO);
         assert_eq!(den, EF::ONE);
+    }
+
+    #[test]
+    fn test_nontrivial_permutation() {
+        // SCENARIO: Complex non-trivial permutation with varied multiplicities
+        //
+        // This demonstrates a REAL-WORLD permutation scenario where:
+        // - Read column: [7, 3, 5, 3, 7, 5, 5, 5] (values in arbitrary order with duplicates)
+        // - Provide column provides the sorted unique set with correct multiplicities
+        //
+        // Multiset equality check:
+        // - Reads: {3: 2, 5: 4, 7: 2}  (8 values total)
+        // - Provides: {3: 2, 5: 4, 7: 2}  ✓
+        //
+        // ┌─────┬──────┬─────────┬──────┬────────────────────────────────────┐
+        // │ Row │ Read │ Provide │ Mult │ Contribution                       │
+        // ├─────┼──────┼─────────┼──────┼────────────────────────────────────┤
+        // │  0  │  7   │    3    │  2   │  1/(α-7) - 2/(α-3)                │
+        // │  1  │  3   │    5    │  4   │  1/(α-3) - 4/(α-5)                │
+        // │  2  │  5   │    7    │  2   │  1/(α-5) - 2/(α-7)                │
+        // │  3  │  3   │    3    │  0   │  1/(α-3) - 0 = 1/(α-3)            │
+        // │  4  │  7   │    5    │  0   │  1/(α-7) - 0 = 1/(α-7)            │
+        // │  5  │  5   │    5    │  0   │  1/(α-5) - 0 = 1/(α-5)            │
+        // │  6  │  5   │    7    │  0   │  1/(α-5) - 0 = 1/(α-5)            │
+        // │  7  │  5   │    --   │  0   │  1/(α-5) - 0 = 1/(α-5)            │
+        // └─────┴──────┴─────────┴──────┴────────────────────────────────────┘
+        //
+        // Total contributions:
+        // Reads:    [1/(α-7) + 1/(α-3) + 1/(α-5) + 1/(α-3) + 1/(α-7) + 1/(α-5) + 1/(α-5) + 1/(α-5)]
+        //         = 2/(α-7) + 2/(α-3) + 4/(α-5)
+        // Provides: [2/(α-3) + 4/(α-5) + 2/(α-7) + 0 + 0 + 0 + 0 + 0]
+        //         = 2/(α-3) + 4/(α-5) + 2/(α-7)
+        // Difference: 0
+
+        let (main_trace, aux_trace, alpha) = LookupTraceBuilder::new()
+            .row(7, 3, 2) // Read 7, provide {3, 3} to the table
+            .row(3, 5, 4) // Read 3, provide {5, 5, 5, 5} to the table (4 fives total)
+            .row(5, 7, 2) // Read 5, provide {7, 7} to the table
+            .row(3, 3, 0) // Read 3, no provides (mult=0)
+            .row(7, 5, 0) // Read 7, no provides (mult=0)
+            .row(5, 5, 0) // Read 5, no provides (mult=0)
+            .row(5, 7, 0) // Read 5, no provides (mult=0)
+            .row(5, 5, 0) // Read 5, no provides (mult=0)
+            .build();
+
+        // The test must check the FINAL constraint: s[n-1] + c[n-1] = 0
+        let s_final = aux_trace
+            .row(aux_trace.height() - 1)
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<EF>>()[0];
+        let last_row_data = main_trace
+            .row(main_trace.height() - 1)
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<F>>();
+        let last_contribution =
+            compute_logup_contribution(alpha, last_row_data[0], last_row_data[1], last_row_data[2]);
+
+        assert_eq!(
+            s_final + last_contribution,
+            EF::ZERO,
+            "Total sum (s[n-1] + c[n-1]) must be zero for a valid lookup"
+        );
+
+        // Setup AIR and verify all constraints
+        let air = RangeCheckAir { challenge: alpha };
+        let mut builder = MockAirBuilder::new(main_trace, aux_trace, vec![alpha]);
+
+        // Evaluate constraints for every row
+        for i in 0..builder.height {
+            builder.for_row(i);
+            air.eval(&mut builder);
+        }
     }
 }
