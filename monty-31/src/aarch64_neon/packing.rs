@@ -628,7 +628,7 @@ unsafe fn vmull_wide_u32(a: uint32x4_t, b: uint32x4_t) -> (uint64x2_t, uint64x2_
 unsafe fn dot_product_4<P: MontyParametersNeon + FieldParameters>(
     a: &[MontyField31<P>; 4],
     cols: &[PackedMontyField31Neon<P>; 4],
-) -> uint32x4_t {
+) -> PackedMontyField31Neon<P> {
     unsafe {
         // Accumulate the full 64-bit sum C = Σ a_i ⋅ cols_i.
         //
@@ -701,13 +701,19 @@ unsafe fn dot_product_4<P: MontyParametersNeon + FieldParameters>(
         );
 
         // Canonicalize d from [-1, P) to [0, P) branchlessly.
+        //
+        // - If d < 0, then `is_neg_mask` is all 1s (-1),
+        // - Otherwise, 0.
         let is_neg_mask = aarch64::vcltzq_s32(d);
-        let p_vec_s32 = aarch64::vreinterpretq_s32_u32(P::PACKED_P);
-        let d_plus_p = aarch64::vaddq_s32(d, p_vec_s32);
-        let out_s32 = aarch64::vbslq_s32(is_neg_mask, d_plus_p, d);
+        // `p_if_neg` will be `P` if `d` was negative, and `0` otherwise.
+        let p_if_neg = aarch64::vandq_u32(is_neg_mask, P::PACKED_P);
+        // Add the correction factor. This adds P to negative values, mapping them to [0, P).
+        let canonical_res = aarch64::vaddq_u32(aarch64::vreinterpretq_u32_s32(d), p_if_neg);
 
-        // Return lanes as canonical unsigned residues.
-        aarch64::vreinterpretq_u32_s32(out_s32)
+        // Safety: The result is now in canonical form [0, P).
+        //
+        // It's safe to create a `PackedMontyField31Neon` from it.
+        PackedMontyField31Neon::from_vector(canonical_res)
     }
 }
 
@@ -740,12 +746,11 @@ pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
     // Arrange A’s coefficients for the dot product.
     let a_coeffs = [a[0], a[1], a[2], a[3]];
 
-    unsafe {
-        // Compute all c_j with a single-reduction dot product.
-        let dot_product = dot_product_4(&a_coeffs, &cols);
-        // Store c_0..c_3 (repr(transparent) over u32).
-        aarch64::vst1q_u32(res.as_mut_ptr() as *mut u32, dot_product);
-    }
+    // Compute all c_j with a single-reduction dot product.
+    let result = unsafe { dot_product_4(&a_coeffs, &cols) };
+
+    // Store the resulting coefficients.
+    res.copy_from_slice(&result.0);
 }
 
 /// Multiplication in a quintic binomial extension field.
