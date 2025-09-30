@@ -607,35 +607,26 @@ mod tests {
         /// - `aux_trace`: 1 column [running_sum]
         /// - `alpha`: The challenge used
         fn build(self) -> (RowMajorMatrix<F>, RowMajorMatrix<EF>, EF) {
-            let n = self.rows.len();
-            assert!(n > 0, "Must have at least one row");
+            assert!(!self.rows.is_empty(), "Must have at least one row");
 
-            // Build main trace
-            let mut main_flat = Vec::with_capacity(n * 3);
-            for (read_val, provide_val, mult) in &self.rows {
-                main_flat.push(*read_val);
-                main_flat.push(*provide_val);
-                main_flat.push(*mult);
-            }
+            // Build main trace: flatten (read, provide, mult) tuples into a single vector
+            let main_flat: Vec<F> = self
+                .rows
+                .iter()
+                .flat_map(|&(read, provide, mult)| [read, provide, mult])
+                .collect();
             let main_trace = RowMajorMatrix::new(main_flat, 3);
 
-            // Build auxiliary trace
-            // s[0] = 0 (initial constraint)
-            // s[i+1] = s[i] + contribution from row i (transition constraint)
-            let mut s_col = Vec::with_capacity(n);
-            let mut current_s = EF::ZERO;
-            s_col.push(current_s); // s[0] = 0
-
-            // s[i+1] = s[i] + contribution from row i
-            for (read_val, provide_val, mult) in &self.rows {
-                let contribution =
-                    compute_logup_contribution(self.alpha, *read_val, *provide_val, *mult);
-                current_s += contribution;
-                s_col.push(current_s);
-            }
-
-            // Remove the last element to keep the trace length equal to the number of rows
-            s_col.pop();
+            // Build auxiliary trace: running sum column
+            // s[0] = 0, s[i+1] = s[i] + contribution_from_row_i
+            let mut running_sum = EF::ZERO;
+            let s_col: Vec<EF> = core::iter::once(EF::ZERO)
+                .chain(self.rows.iter().map(|&(read, provide, mult)| {
+                    running_sum += compute_logup_contribution(self.alpha, read, provide, mult);
+                    running_sum
+                }))
+                .take(self.rows.len()) // Keep trace length equal to number of rows
+                .collect();
 
             let aux_trace = RowMajorMatrix::new(s_col, 1);
 
@@ -646,6 +637,7 @@ mod tests {
     #[test]
     fn test_range_check_end_to_end_valid() {
         // SCENARIO: Simple range check where each value reads and provides itself.
+        //
         // Values to check: [10, 255, 0, 42, 10]
         // Each row contributes 1/(α-val) - 1/(α-val) = 0, so final sum is 0.
         let (main_trace, aux_trace, alpha) = LookupTraceBuilder::new()
@@ -656,14 +648,25 @@ mod tests {
             .row(10, 10, 1)
             .build();
 
-        // Final value of the running sum MUST be zero for a valid lookup.
-        let final_row: Vec<EF> = aux_trace
+        // The test must check the FINAL constraint: s[n-1] + c[n-1] = 0
+        let s_final = aux_trace
             .row(aux_trace.height() - 1)
             .unwrap()
             .into_iter()
-            .collect();
-        let final_s = final_row[0];
-        assert_eq!(final_s, EF::ZERO);
+            .collect::<Vec<EF>>()[0];
+        let last_row_data = main_trace
+            .row(main_trace.height() - 1)
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<F>>();
+        let last_contribution =
+            compute_logup_contribution(alpha, last_row_data[0], last_row_data[1], last_row_data[2]);
+
+        assert_eq!(
+            s_final + last_contribution,
+            EF::ZERO,
+            "Total sum (s[n-1] + c[n-1]) must be zero for a valid lookup"
+        );
 
         // Setup the AIR and builder.
         let air = RangeCheckAir { challenge: alpha };
