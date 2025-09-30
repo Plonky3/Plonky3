@@ -575,6 +575,11 @@ impl_packed_value!(
 
 unsafe impl<FP: FieldParameters> PackedField for PackedMontyField31Neon<FP> {
     type Scalar = MontyField31<FP>;
+
+    #[inline]
+    fn packed_linear_combination<const N: usize>(coeffs: &[Self::Scalar], vecs: &[Self]) -> Self {
+        general_dot_product::<_, N>(coeffs, vecs)
+    }
 }
 
 impl_packed_field_pow_2!(
@@ -623,43 +628,134 @@ unsafe fn vmull_wide_u32(a: uint32x4_t, b: uint32x4_t) -> (uint64x2_t, uint64x2_
     }
 }
 
+/// A general fast dot product implementation using NEON.
+#[inline(always)]
+fn general_dot_product<P, const N: usize>(
+    lhs: &[MontyField31<P>],
+    rhs: &[PackedMontyField31Neon<P>],
+) -> PackedMontyField31Neon<P>
+where
+    P: FieldParameters + MontyParametersNeon,
+{
+    assert_eq!(lhs.len(), N);
+    assert_eq!(rhs.len(), N);
+    match N {
+        0 => PackedMontyField31Neon::<P>::ZERO,
+        1 => lhs[0] * rhs[0],
+        2 => {
+            // TODO: Implement an optimized `dot_product_2` helper.
+            (rhs[0] * lhs[0]) + (rhs[1] * lhs[1])
+        }
+        3 => {
+            // TODO: Implement an optimized `dot_product_2` helper.
+            (rhs[0] * lhs[0]) + (rhs[1] * lhs[1]) + (rhs[2] * lhs[2])
+        }
+        4 => unsafe {
+            dot_product_4(
+                &[lhs[0], lhs[1], lhs[2], lhs[3]],
+                &[rhs[0], rhs[1], rhs[2], rhs[3]],
+            )
+        },
+        64 => {
+            let sum_4s: [PackedMontyField31Neon<P>; 16] = core::array::from_fn(|i| {
+                let start = i * 4;
+                unsafe {
+                    dot_product_4(
+                        &[lhs[start], lhs[start + 1], lhs[start + 2], lhs[start + 3]],
+                        &[rhs[start], rhs[start + 1], rhs[start + 2], rhs[start + 3]],
+                    )
+                }
+            });
+            PackedMontyField31Neon::<P>::sum_array::<16>(&sum_4s)
+        }
+        _ => {
+            // Initialize accumulator with the first chunk of 4.
+            let mut acc = unsafe {
+                dot_product_4(
+                    &[lhs[0], lhs[1], lhs[2], lhs[3]],
+                    &[rhs[0], rhs[1], rhs[2], rhs[3]],
+                )
+            };
+
+            // Loop over the rest of the full chunks of 4.
+            for i in (4..N).step_by(4) {
+                if i + 3 < N {
+                    acc += unsafe {
+                        dot_product_4(
+                            &[lhs[i], lhs[i + 1], lhs[i + 2], lhs[i + 3]],
+                            &[rhs[i], rhs[i + 1], rhs[i + 2], rhs[i + 3]],
+                        )
+                    };
+                }
+            }
+
+            // Handle the remainder recursively by creating new arrays and calling self.
+            match N % 4 {
+                0 => acc,
+                1 => {
+                    let rem_start = N - 1;
+                    let lhs_rem: [_; 1] = core::array::from_fn(|i| lhs[rem_start + i]);
+                    let rhs_rem: [_; 1] = core::array::from_fn(|i| rhs[rem_start + i]);
+                    acc + general_dot_product::<_, 1>(&lhs_rem, &rhs_rem)
+                }
+                2 => {
+                    let rem_start = N - 2;
+                    let lhs_rem: [_; 2] = core::array::from_fn(|i| lhs[rem_start + i]);
+                    let rhs_rem: [_; 2] = core::array::from_fn(|i| rhs[rem_start + i]);
+                    acc + general_dot_product::<_, 2>(&lhs_rem, &rhs_rem)
+                }
+                3 => {
+                    let rem_start = N - 3;
+                    let lhs_rem: [_; 3] = core::array::from_fn(|i| lhs[rem_start + i]);
+                    let rhs_rem: [_; 3] = core::array::from_fn(|i| rhs[rem_start + i]);
+                    acc + general_dot_product::<_, 3>(&lhs_rem, &rhs_rem)
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+}
+
 /// Dot product of four packed columns with a single delayed reduction.
 #[inline]
-unsafe fn dot_product_4<P: MontyParametersNeon + FieldParameters>(
-    a: &[MontyField31<P>; 4],
-    cols: &[PackedMontyField31Neon<P>; 4],
-) -> PackedMontyField31Neon<P> {
+unsafe fn dot_product_4<P>(
+    lhs: &[MontyField31<P>; 4],
+    rhs: &[PackedMontyField31Neon<P>; 4],
+) -> PackedMontyField31Neon<P>
+where
+    P: MontyParametersNeon + FieldParameters,
+{
     unsafe {
-        // Accumulate the full 64-bit sum C = Σ a_i ⋅ cols_i.
+        // Accumulate the full 64-bit sum C = Σ lhs_i ⋅ rhs_i.
         //
-        // Start with a_0 ⋅ cols_0 (split into low lanes 0,1 and high lanes 2,3).
+        // Start with lhs_0 ⋅ rhs_0 (split into low lanes 0,1 and high lanes 2,3).
         let mut sum_l =
-            aarch64::vmull_n_u32(aarch64::vget_low_u32(cols[0].to_vector()), a[0].value);
-        let mut sum_h = aarch64::vmull_high_n_u32(cols[0].to_vector(), a[0].value);
+            aarch64::vmull_n_u32(aarch64::vget_low_u32(rhs[0].to_vector()), lhs[0].value);
+        let mut sum_h = aarch64::vmull_high_n_u32(rhs[0].to_vector(), lhs[0].value);
 
-        // Add a_1 ⋅ cols_1.
+        // Add lhs_1 ⋅ rhs_1.
         sum_l = aarch64::vmlal_n_u32(
             sum_l,
-            aarch64::vget_low_u32(cols[1].to_vector()),
-            a[1].value,
+            aarch64::vget_low_u32(rhs[1].to_vector()),
+            lhs[1].value,
         );
-        sum_h = aarch64::vmlal_high_n_u32(sum_h, cols[1].to_vector(), a[1].value);
+        sum_h = aarch64::vmlal_high_n_u32(sum_h, rhs[1].to_vector(), lhs[1].value);
 
-        // Add a_2 ⋅ cols_2.
+        // Add lhs_2 ⋅ rhs_2.
         sum_l = aarch64::vmlal_n_u32(
             sum_l,
-            aarch64::vget_low_u32(cols[2].to_vector()),
-            a[2].value,
+            aarch64::vget_low_u32(rhs[2].to_vector()),
+            lhs[2].value,
         );
-        sum_h = aarch64::vmlal_high_n_u32(sum_h, cols[2].to_vector(), a[2].value);
+        sum_h = aarch64::vmlal_high_n_u32(sum_h, rhs[2].to_vector(), lhs[2].value);
 
-        // Add a_3 ⋅ cols_3.
+        // Add lhs_3 ⋅ rhs_3.
         sum_l = aarch64::vmlal_n_u32(
             sum_l,
-            aarch64::vget_low_u32(cols[3].to_vector()),
-            a[3].value,
+            aarch64::vget_low_u32(rhs[3].to_vector()),
+            lhs[3].value,
         );
-        sum_h = aarch64::vmlal_high_n_u32(sum_h, cols[3].to_vector(), a[3].value);
+        sum_h = aarch64::vmlal_high_n_u32(sum_h, rhs[3].to_vector(), lhs[3].value);
 
         // Split C into 32-bit halves per lane:
         // - c_lo = C mod 2^{32},
