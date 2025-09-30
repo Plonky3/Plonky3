@@ -34,6 +34,27 @@ pub trait MontyParametersNeon {
     const PACKED_MU: int32x4_t;
 }
 
+/// A trait to allow functions to be generic over scalar `MontyField31` and packed `PackedMontyField31Neon`.
+trait IntoVec<P: PackedMontyParameters>: Copy {
+    /// Convert the value to a NEON vector, broadcasting if it's a scalar.
+    fn into_vec(self) -> uint32x4_t;
+}
+
+impl<P: PackedMontyParameters> IntoVec<P> for PackedMontyField31Neon<P> {
+    #[inline(always)]
+    fn into_vec(self) -> uint32x4_t {
+        self.to_vector()
+    }
+}
+
+impl<P: PackedMontyParameters> IntoVec<P> for MontyField31<P> {
+    #[inline(always)]
+    fn into_vec(self) -> uint32x4_t {
+        // Broadcast the scalar value to all lanes of the vector.
+        unsafe { aarch64::vdupq_n_u32(self.value) }
+    }
+}
+
 /// Vectorized NEON implementation of `MontyField31` arithmetic.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)] // Needed to make `transmute`s safe.
@@ -194,6 +215,11 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31Neon<FP>
             // Safety: `cube` returns values in canonical form when given values in canonical form.
             Self::from_vector(res)
         }
+    }
+
+    #[inline(always)]
+    fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
+        general_dot_product::<_, _, _, N>(u, v)
     }
 
     #[inline(always)]
@@ -578,7 +604,7 @@ unsafe impl<FP: FieldParameters> PackedField for PackedMontyField31Neon<FP> {
 
     #[inline]
     fn packed_linear_combination<const N: usize>(coeffs: &[Self::Scalar], vecs: &[Self]) -> Self {
-        general_dot_product::<_, N>(coeffs, vecs)
+        general_dot_product::<_, _, _, N>(coeffs, vecs)
     }
 }
 
@@ -630,25 +656,28 @@ unsafe fn vmull_wide_u32(a: uint32x4_t, b: uint32x4_t) -> (uint64x2_t, uint64x2_
 
 /// A general fast dot product implementation using NEON.
 #[inline(always)]
-fn general_dot_product<P, const N: usize>(
-    lhs: &[MontyField31<P>],
-    rhs: &[PackedMontyField31Neon<P>],
+fn general_dot_product<P, LHS, RHS, const N: usize>(
+    lhs: &[LHS],
+    rhs: &[RHS],
 ) -> PackedMontyField31Neon<P>
 where
     P: FieldParameters + MontyParametersNeon,
+    LHS: IntoVec<P> + Into<PackedMontyField31Neon<P>>,
+    RHS: IntoVec<P> + Into<PackedMontyField31Neon<P>>,
 {
     assert_eq!(lhs.len(), N);
     assert_eq!(rhs.len(), N);
     match N {
         0 => PackedMontyField31Neon::<P>::ZERO,
-        1 => lhs[0] * rhs[0],
+        1 => lhs[0].into() * rhs[0].into(),
         2 => {
             // TODO: Implement an optimized `dot_product_2` helper.
-            (rhs[0] * lhs[0]) + (rhs[1] * lhs[1])
+            (lhs[0].into() * rhs[0].into()) + (lhs[1].into() * rhs[1].into())
         }
         3 => {
             // TODO: Implement an optimized `dot_product_2` helper.
-            (rhs[0] * lhs[0]) + (rhs[1] * lhs[1]) + (rhs[2] * lhs[2])
+            let dot2 = (lhs[0].into() * rhs[0].into()) + (lhs[1].into() * rhs[1].into());
+            dot2 + (lhs[2].into() * rhs[2].into())
         }
         4 => unsafe {
             dot_product_4(
@@ -696,19 +725,19 @@ where
                     let rem_start = N - 1;
                     let lhs_rem: [_; 1] = core::array::from_fn(|i| lhs[rem_start + i]);
                     let rhs_rem: [_; 1] = core::array::from_fn(|i| rhs[rem_start + i]);
-                    acc + general_dot_product::<_, 1>(&lhs_rem, &rhs_rem)
+                    acc + general_dot_product::<_, _, _, 1>(&lhs_rem, &rhs_rem)
                 }
                 2 => {
                     let rem_start = N - 2;
                     let lhs_rem: [_; 2] = core::array::from_fn(|i| lhs[rem_start + i]);
                     let rhs_rem: [_; 2] = core::array::from_fn(|i| rhs[rem_start + i]);
-                    acc + general_dot_product::<_, 2>(&lhs_rem, &rhs_rem)
+                    acc + general_dot_product::<_, _, _, 2>(&lhs_rem, &rhs_rem)
                 }
                 3 => {
                     let rem_start = N - 3;
                     let lhs_rem: [_; 3] = core::array::from_fn(|i| lhs[rem_start + i]);
                     let rhs_rem: [_; 3] = core::array::from_fn(|i| rhs[rem_start + i]);
-                    acc + general_dot_product::<_, 3>(&lhs_rem, &rhs_rem)
+                    acc + general_dot_product::<_, _, _, 3>(&lhs_rem, &rhs_rem)
                 }
                 _ => unreachable!(),
             }
@@ -718,44 +747,41 @@ where
 
 /// Dot product of four packed columns with a single delayed reduction.
 #[inline]
-unsafe fn dot_product_4<P>(
-    lhs: &[MontyField31<P>; 4],
-    rhs: &[PackedMontyField31Neon<P>; 4],
-) -> PackedMontyField31Neon<P>
+unsafe fn dot_product_4<P, LHS, RHS>(lhs: &[LHS; 4], rhs: &[RHS; 4]) -> PackedMontyField31Neon<P>
 where
-    P: MontyParametersNeon + FieldParameters,
+    P: FieldParameters + MontyParametersNeon,
+    LHS: IntoVec<P>,
+    RHS: IntoVec<P>,
 {
     unsafe {
         // Accumulate the full 64-bit sum C = Σ lhs_i ⋅ rhs_i.
         //
         // Start with lhs_0 ⋅ rhs_0 (split into low lanes 0,1 and high lanes 2,3).
-        let mut sum_l =
-            aarch64::vmull_n_u32(aarch64::vget_low_u32(rhs[0].to_vector()), lhs[0].value);
-        let mut sum_h = aarch64::vmull_high_n_u32(rhs[0].to_vector(), lhs[0].value);
+        let (mut sum_l, mut sum_h) = vmull_wide_u32(lhs[0].into_vec(), rhs[0].into_vec());
 
         // Add lhs_1 ⋅ rhs_1.
-        sum_l = aarch64::vmlal_n_u32(
+        sum_l = aarch64::vmlal_u32(
             sum_l,
-            aarch64::vget_low_u32(rhs[1].to_vector()),
-            lhs[1].value,
+            aarch64::vget_low_u32(lhs[1].into_vec()),
+            aarch64::vget_low_u32(rhs[1].into_vec()),
         );
-        sum_h = aarch64::vmlal_high_n_u32(sum_h, rhs[1].to_vector(), lhs[1].value);
+        sum_h = aarch64::vmlal_high_u32(sum_h, lhs[1].into_vec(), rhs[1].into_vec());
 
         // Add lhs_2 ⋅ rhs_2.
-        sum_l = aarch64::vmlal_n_u32(
+        sum_l = aarch64::vmlal_u32(
             sum_l,
-            aarch64::vget_low_u32(rhs[2].to_vector()),
-            lhs[2].value,
+            aarch64::vget_low_u32(lhs[2].into_vec()),
+            aarch64::vget_low_u32(rhs[2].into_vec()),
         );
-        sum_h = aarch64::vmlal_high_n_u32(sum_h, rhs[2].to_vector(), lhs[2].value);
+        sum_h = aarch64::vmlal_high_u32(sum_h, lhs[2].into_vec(), rhs[2].into_vec());
 
         // Add lhs_3 ⋅ rhs_3.
-        sum_l = aarch64::vmlal_n_u32(
+        sum_l = aarch64::vmlal_u32(
             sum_l,
-            aarch64::vget_low_u32(rhs[3].to_vector()),
-            lhs[3].value,
+            aarch64::vget_low_u32(lhs[3].into_vec()),
+            aarch64::vget_low_u32(rhs[3].into_vec()),
         );
-        sum_h = aarch64::vmlal_high_n_u32(sum_h, rhs[3].to_vector(), lhs[3].value);
+        sum_h = aarch64::vmlal_high_u32(sum_h, lhs[3].into_vec(), rhs[3].into_vec());
 
         // Split C into 32-bit halves per lane:
         // - c_lo = C mod 2^{32},
@@ -838,7 +864,7 @@ pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
         PackedMontyField31Neon([w_b[1], w_b[2], w_b[3], b[0]]),
     ];
 
-    // Arrange A’s coefficients for the dot product.
+    // Arrange a’s coefficients for the dot product.
     let a_coeffs = [a[0], a[1], a[2], a[3]];
 
     // Compute all c_j with a single-reduction dot product.
