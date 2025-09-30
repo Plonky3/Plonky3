@@ -212,7 +212,7 @@ impl<F: Field> LogUpGadget<F> {
         let (b_sum_numerator, b_common_denominator): (AB::ExprEF, AB::ExprEF) =
             self.compute_sum_terms::<AB, BE, BM>(b_elements, b_multiplicities, &alpha);
 
-        // The constraint is: (s_next - s_local) * common_denom = a_terms - b_terms
+        // The constraint is: (s_next - s_local) * common_denom = a_terms * b_denom - b_terms * a_denom
         // Where common_denom = a_common_denominator * b_common_denominator
         let common_denominator = a_common_denominator.clone() * b_common_denominator.clone();
 
