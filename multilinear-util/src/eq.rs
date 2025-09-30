@@ -27,6 +27,8 @@
 //!
 //! The output buffer must always be of length `2^n` for `n` variables.
 
+use core::marker::PhantomData;
+
 use p3_field::{
     Algebra, ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
 };
@@ -252,13 +254,13 @@ trait EqualityEvaluator {
 /// We stay in the base field for as long as possible to simplify instructions and
 /// reduce the amount of data transferred between cores. In particular this means we
 /// hold off on scaling by `scalar` until the very end.
-struct BaseFieldEvaluator<F, EF>(std::marker::PhantomData<(F, EF)>);
+struct BaseFieldEvaluator<F, EF>(PhantomData<(F, EF)>);
 
 /// Implementation for extension field case.
 ///
 /// We initialise with `scalar` instead of `1` as this reduces the total
 /// number of multiplications we need to do.
-struct ExtFieldEvaluator<F, EF>(std::marker::PhantomData<(F, EF)>);
+struct ExtFieldEvaluator<F, EF>(PhantomData<(F, EF)>);
 
 impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for ExtFieldEvaluator<F, EF> {
     type InputField = EF;
@@ -621,6 +623,9 @@ fn scale_and_add<F: Field, EF: ExtensionField<F>, const INITIALIZED: bool>(
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+    use alloc::vec::Vec;
+
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{PrimeCharacteristicRing, PrimeField64};
