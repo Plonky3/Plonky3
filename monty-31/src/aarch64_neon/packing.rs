@@ -702,13 +702,12 @@ unsafe fn dot_product_4<P: MontyParametersNeon + FieldParameters>(
 
         // Canonicalize d from [-1, P) to [0, P) branchlessly.
         //
-        // - If d < 0, then `is_neg_mask` is all 1s (-1),
-        // - Otherwise, 0.
+        // The `vmlsq_u32` instruction computes `a - (b * c)`.
+        // - If `d` is negative, the mask is `-1` (all 1s), so we compute `d - (-1 * P) = d + P`.
+        // - If `d` is non-negative, the mask is `0`, so we compute `d - (0 * P) = d`.
         let is_neg_mask = aarch64::vcltzq_s32(d);
-        // `p_if_neg` will be `P` if `d` was negative, and `0` otherwise.
-        let p_if_neg = aarch64::vandq_u32(is_neg_mask, P::PACKED_P);
-        // Add the correction factor. This adds P to negative values, mapping them to [0, P).
-        let canonical_res = aarch64::vaddq_u32(aarch64::vreinterpretq_u32_s32(d), p_if_neg);
+        let canonical_res =
+            aarch64::vmlsq_u32(aarch64::vreinterpretq_u32_s32(d), is_neg_mask, P::PACKED_P);
 
         // Safety: The result is now in canonical form [0, P).
         //
