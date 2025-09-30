@@ -726,11 +726,10 @@ pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
     let packed_b = PackedMontyField31Neon([b[0], b[1], b[2], b[3]]);
     let w_b = FP::mul_w(packed_b).0;
 
-    // Build the four matrix columns for the dot product layout:
-    // col0 = [b0,   b1,   b2,   b3]
-    // col1 = [w⋅b3, b0,   b1,   b2]
-    // col2 = [w⋅b2, w⋅b3, b0,   b1]
-    // col3 = [w⋅b1, w⋅b2, w⋅b3, b0]
+    // Constant term = a0*b0 + w(a1*b3 + a2*b2 + a3*b1)
+    // Linear term = a0*b1 + a1*b0 + w(a2*b3 + a3*b2)
+    // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b3)
+    // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0
     let cols = [
         PackedMontyField31Neon([b[0], b[1], b[2], b[3]]),
         PackedMontyField31Neon([w_b[3], b[0], b[1], b[2]]),
