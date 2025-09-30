@@ -856,11 +856,7 @@ mod tests {
 
     #[test]
     fn test_nontrivial_permutation() {
-        // SCENARIO: Complex non-trivial permutation with varied multiplicities
-        //
-        // This demonstrates a REAL-WORLD permutation scenario where:
-        // - Read column: [7, 3, 5, 3, 7, 5, 5, 5] (values in arbitrary order with duplicates)
-        // - Provide column provides the sorted unique set with correct multiplicities
+        // SCENARIO: Complex permutation with varied multiplicities
         //
         // Multiset equality check:
         // - Reads: {3: 2, 5: 4, 7: 2}  (8 values total)
