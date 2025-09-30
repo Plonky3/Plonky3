@@ -805,9 +805,14 @@ where
 
         // q ≡ c_lo ⋅ μ (mod 2^{32}), with μ = −P^{-1} (mod 2^{32}).
         let q = aarch64::vmulq_s32(aarch64::vreinterpretq_s32_u32(c_lo), P::PACKED_MU);
-        // Gets bits 31, ..., 62 of qp. Saturation is not an issue because `P` is not -2**31.
-        let qp_2_hi = aarch64::vqdmulhq_s32(q, aarch64::vreinterpretq_s32_u32(MPNeon::PACKED_P));
-        let qp_hi = aarch64::vshrq_n_u32::<1>(qp_2_hi);
+        let q_u32 = aarch64::vreinterpretq_u32_s32(q);
+
+        // Compute (q⋅P)_hi = high 32 bits of q⋅P per lane (exact unsigned widening multiply).
+        let (qp_l, qp_h) = vmull_wide_u32(q_u32, P::PACKED_P);
+        let qp_hi = aarch64::vuzp2q_u32(
+            aarch64::vreinterpretq_u32_u64(qp_l),
+            aarch64::vreinterpretq_u32_u64(qp_h),
+        );
 
         let d = aarch64::vsubq_s32(
             aarch64::vreinterpretq_s32_u32(c_hi_prime),
