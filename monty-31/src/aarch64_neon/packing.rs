@@ -749,20 +749,14 @@ where
         sum23_h = aarch64::vmlal_high_u32(sum23_h, lhs[3].into_vec(), rhs[3].into_vec());
 
         // Combine the partial sums
-        let sum_l = aarch64::vaddq_u64(sum01_l, sum23_l);
-        let sum_h = aarch64::vaddq_u64(sum01_h, sum23_h);
+        let sum_l = aarch64::vreinterpretq_u32_u64(aarch64::vaddq_u64(sum01_l, sum23_l));
+        let sum_h = aarch64::vreinterpretq_u32_u64(aarch64::vaddq_u64(sum01_h, sum23_h));
 
         // Split C into 32-bit halves per lane:
         // - c_lo = C mod 2^{32},
         // - c_hi = C >> 32.
-        let c_lo = aarch64::vuzp1q_u32(
-            aarch64::vreinterpretq_u32_u64(sum_l),
-            aarch64::vreinterpretq_u32_u64(sum_h),
-        );
-        let c_hi = aarch64::vuzp2q_u32(
-            aarch64::vreinterpretq_u32_u64(sum_l),
-            aarch64::vreinterpretq_u32_u64(sum_h),
-        );
+        let c_lo = aarch64::vuzp1q_u32(sum_l, sum_h);
+        let c_hi = aarch64::vuzp2q_u32(sum_l, sum_h);
 
         // Since C < 4P^2 and P < 2^{31}, we have c_hi < 2P.
         // We want to compute: c_hi' ∈ [0,P) satisfying c_hi' = c_hi mod P.
