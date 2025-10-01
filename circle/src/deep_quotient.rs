@@ -156,8 +156,11 @@ mod tests {
         let ps_at_zeta = evals.evaluate_at_point(zeta);
 
         let packed_alpha_powers =
-            EF::ExtensionPacking::packed_ext_powers_capped(alpha, evals.values.width())
-                .collect_vec();
+            <EF as ExtensionField<F>>::ExtensionPacking::packed_ext_powers_capped(
+                alpha,
+                evals.values.width(),
+            )
+            .collect_vec();
         let mat_reduced =
             evals.deep_quotient_reduce(alpha, zeta, &ps_at_zeta, &packed_alpha_powers);
         let row_reduced = evals
@@ -190,7 +193,11 @@ mod tests {
 
         let ps_at_zeta = evals.evaluate_at_point(zeta);
         let packed_alpha_powers =
-            EF::ExtensionPacking::packed_ext_powers_capped(alpha, lde.values.width()).collect_vec();
+            <EF as ExtensionField<F>>::ExtensionPacking::packed_ext_powers_capped(
+                alpha,
+                lde.values.width(),
+            )
+            .collect_vec();
         let reduced0 = CircleEvaluations::<F>::from_cfft_order(
             CircleDomain::standard(log_n + log_blowup),
             RowMajorMatrix::new_col(lde.deep_quotient_reduce(
@@ -205,7 +212,11 @@ mod tests {
 
         let not_ps_at_zeta = evals.evaluate_at_point(zeta.double());
         let packed_alpha_powers =
-            EF::ExtensionPacking::packed_ext_powers_capped(alpha, lde.values.width()).collect_vec();
+            <EF as ExtensionField<F>>::ExtensionPacking::packed_ext_powers_capped(
+                alpha,
+                lde.values.width(),
+            )
+            .collect_vec();
         let reduced1 = CircleEvaluations::<F>::from_cfft_order(
             CircleDomain::standard(log_n + log_blowup),
             RowMajorMatrix::new_col(lde.deep_quotient_reduce(
@@ -240,8 +251,11 @@ mod tests {
             let lde = evals.extrapolate(lde_domain);
             assert!(lde.dim() <= (1 << domain.log_n) + 1);
             let packed_alpha_powers =
-                EF::ExtensionPacking::packed_ext_powers_capped(alpha, lde.values.width())
-                    .collect_vec();
+                <EF as ExtensionField<F>>::ExtensionPacking::packed_ext_powers_capped(
+                    alpha,
+                    lde.values.width(),
+                )
+                .collect_vec();
             let mat_ros = lde.deep_quotient_reduce(alpha, zeta, &ps_at_zeta, &packed_alpha_powers);
             for (ro, mat_ro) in izip!(&mut ros, mat_ros) {
                 *ro += alpha_offset * mat_ro;
