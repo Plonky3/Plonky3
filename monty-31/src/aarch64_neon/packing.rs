@@ -834,7 +834,6 @@ pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
     // Compute all c_j with a single-reduction dot product.
     let result = unsafe { dot_product_4(&a_coeffs, &cols) };
 
-    // Store the resulting coefficients.
     res.copy_from_slice(&result.0);
 }
 
