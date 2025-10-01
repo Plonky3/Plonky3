@@ -17,6 +17,7 @@
 //! - `m_i, m'_j` are multiplicities (how many times each element appears)
 //! - The transformation eliminates expensive exponentiation operations
 
+use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
@@ -224,25 +225,35 @@ impl<F: Field> LogUpGadget<F> {
             return (AB::ExprEF::ZERO, AB::ExprEF::ONE);
         }
 
+        let n = elements.len();
+
         // Precompute all (α - e_i) terms
         let terms: Vec<AB::ExprEF> = elements.iter().map(|&e| alpha.clone() - e.into()).collect();
 
-        // Compute common denominator: ∏(α - e_i)
-        let common_denominator = terms.iter().cloned().reduce(|acc, x| acc * x).unwrap();
+        // Build prefix products: pref[i] = ∏_{j=0}^{i-1}(α - e_j)
+        let mut pref = Vec::with_capacity(n + 1);
+        pref.push(AB::ExprEF::ONE);
+        for t in &terms {
+            pref.push(pref.last().unwrap().clone() * t.clone());
+        }
+
+        // Build suffix products: suff[i] = ∏_{j=i}^{n-1}(α - e_j)
+        let mut suff = vec![AB::ExprEF::ONE; n + 1];
+        for i in (0..n).rev() {
+            suff[i] = suff[i + 1].clone() * terms[i].clone();
+        }
+
+        // Common denominator is the product of all terms
+        let common_denominator = pref[n].clone();
 
         // Compute numerator: ∑(m_i * ∏_{j≠i}(α - e_j))
+        //
+        // The product without i is: pref[i] * suff[i+1]
         let mut numerator = AB::ExprEF::ZERO;
-        for (i, multiplicity) in multiplicities.iter().enumerate() {
-            let mult_expr: AB::ExprEF = multiplicity.clone().into();
-
-            // Compute ∏_{j≠i}(α - e_j)
-            let mut partial_product = AB::ExprEF::ONE;
-            for (j, term) in terms.iter().enumerate() {
-                if i != j {
-                    partial_product *= term.clone();
-                }
-            }
-            numerator += mult_expr * partial_product;
+        for i in 0..n {
+            let mult_expr: AB::ExprEF = multiplicities[i].clone().into();
+            let product_without_i = pref[i].clone() * suff[i + 1].clone();
+            numerator += mult_expr * product_without_i;
         }
 
         (numerator, common_denominator)
