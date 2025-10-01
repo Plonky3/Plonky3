@@ -21,6 +21,7 @@ use p3_util::{assume, branch_hint, flatten_to_base, gcd_inner};
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
+use winter_utils::{ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable};
 
 /// The Goldilocks prime
 pub(crate) const P: u64 = 0xFFFF_FFFF_0000_0001;
@@ -117,6 +118,23 @@ impl Goldilocks {
         }
         powers_of_two
     };
+}
+
+impl Deserializable for Goldilocks {
+    fn read_from<R: ByteReader>(source: &mut R) -> Result<Self, DeserializationError> {
+        let inner = u64::read_from(source)?;
+        Ok(Self { value: inner })
+    }
+}
+
+impl Serializable for Goldilocks {
+    fn write_into<W: ByteWriter>(&self, target: &mut W) {
+        self.value.write_into(target);
+    }
+
+    fn get_size_hint(&self) -> usize {
+        8
+    }
 }
 
 impl PartialEq for Goldilocks {
