@@ -780,7 +780,7 @@ where
             aarch64::vreinterpretq_u32_u64(qp_h),
         );
 
-        let d = aarch64::vsubq_u32(c_hi_prime, qp_hi));
+        let d = aarch64::vsubq_u32(c_hi_prime, qp_hi);
 
         // Canonicalize d from (-P, P) to [0, P) branchlessly.
         //
@@ -788,8 +788,7 @@ where
         // - If `d` is negative, the mask is `-1` (all 1s), so we compute `d - (-1 * P) = d + P`.
         // - If `d` is non-negative, the mask is `0`, so we compute `d - (0 * P) = d`.
         let underflow = aarch64::vcltq_u32(c_hi_prime, qp_hi);
-        let canonical_res =
-            aarch64::vmlsq_u32(aarch64::vreinterpretq_u32_s32(d), underflow, P::PACKED_P);
+        let canonical_res = aarch64::vmlsq_u32(d, underflow, P::PACKED_P);
 
         // Safety: The result is now in canonical form [0, P).
         PackedMontyField31Neon::from_vector(canonical_res)
