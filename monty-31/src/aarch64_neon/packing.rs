@@ -764,11 +764,8 @@ where
             aarch64::vreinterpretq_u32_u64(sum_h),
         );
 
-        // Partial high-word reduction: c_hi' ∈ [0,P).
-        //
         // Since C < 4P^2 and P < 2^{31}, we have c_hi < 2P.
-        //
-        // Map [P,2P) → [0,P) by subtracting P.
+        // We want to compute: c_hi' ∈ [0,P) satisfying c_hi' = c_hi mod P.
         let c_hi_sub = aarch64::vsubq_u32(c_hi, P::PACKED_P);
         let c_hi_prime = aarch64::vminq_u32(c_hi, c_hi_sub);
 
