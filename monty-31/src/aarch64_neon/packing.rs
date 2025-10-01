@@ -780,10 +780,7 @@ where
             aarch64::vreinterpretq_u32_u64(qp_h),
         );
 
-        let d = aarch64::vsubq_s32(
-            aarch64::vreinterpretq_s32_u32(c_hi_prime),
-            aarch64::vreinterpretq_s32_u32(qp_hi),
-        );
+        let d = aarch64::vsubq_u32(c_hi_prime, qp_hi));
 
         // Canonicalize d from (-P, P) to [0, P) branchlessly.
         //
