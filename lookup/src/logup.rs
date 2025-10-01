@@ -42,9 +42,10 @@ use p3_matrix::Matrix;
 /// s[i+1] = s[i] + ∑(m_a/(α - a)) - ∑(m_b/(α - b))
 /// ```
 ///
-/// With boundary constraints:
-/// - `s[0] = ∑(m_a/(α - a)) - ∑(m_b/(α - b))` (correctly computed initial value)
-/// - `s[n-1] = 0` (all terms cancel out if lookup is valid)
+/// Constraints are defined as:
+/// - **Initial Constraint**: `s[0] = 0`
+/// - **Transition Constraint**: `s[i+1] = s[i] + contribution[i]`
+/// - **Final Constraint**: `s[n-1] + contribution[n-1] = 0`
 #[derive(Debug, Clone, Default)]
 pub struct LogUpGadget<F> {
     _phantom: PhantomData<F>,
