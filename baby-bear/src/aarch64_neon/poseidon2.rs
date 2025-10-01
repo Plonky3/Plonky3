@@ -102,8 +102,6 @@ impl InternalLayerParametersNeon<BabyBearParameters, 24> for BabyBearInternalLay
 
 #[cfg(test)]
 mod tests {
-    use alloc::format;
-
     use p3_field::PrimeCharacteristicRing;
     use p3_symmetric::Permutation;
     use proptest::prelude::*;
