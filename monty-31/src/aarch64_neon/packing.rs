@@ -721,42 +721,45 @@ where
 {
     unsafe {
         // Accumulate the full 64-bit sum C = Σ lhs_i ⋅ rhs_i.
-        //
-        // Compute sum01 = (lhs[0] * rhs[0]) + (lhs[1] * rhs[1])
-        let mut sum01_l = aarch64::vmull_u32(
+
+        // Low half (Lanes 0 & 1)
+        let mut sum_l = aarch64::vmull_u32(
             aarch64::vget_low_u32(lhs[0].into_vec()),
             aarch64::vget_low_u32(rhs[0].into_vec()),
         );
-        let mut sum01_h = aarch64::vmull_high_u32(lhs[0].into_vec(), rhs[0].into_vec());
-        sum01_l = aarch64::vmlal_u32(
-            sum01_l,
+        sum_l = aarch64::vmlal_u32(
+            sum_l,
             aarch64::vget_low_u32(lhs[1].into_vec()),
             aarch64::vget_low_u32(rhs[1].into_vec()),
         );
-        sum01_h = aarch64::vmlal_high_u32(sum01_h, lhs[1].into_vec(), rhs[1].into_vec());
-
-        // Compute sum23 = (lhs[2] * rhs[2]) + (lhs[3] * rhs[3])
-        let mut sum23_l = aarch64::vmull_u32(
+        sum_l = aarch64::vmlal_u32(
+            sum_l,
             aarch64::vget_low_u32(lhs[2].into_vec()),
             aarch64::vget_low_u32(rhs[2].into_vec()),
         );
-        let mut sum23_h = aarch64::vmull_high_u32(lhs[2].into_vec(), rhs[2].into_vec());
-        sum23_l = aarch64::vmlal_u32(
-            sum23_l,
+        sum_l = aarch64::vmlal_u32(
+            sum_l,
             aarch64::vget_low_u32(lhs[3].into_vec()),
             aarch64::vget_low_u32(rhs[3].into_vec()),
         );
-        sum23_h = aarch64::vmlal_high_u32(sum23_h, lhs[3].into_vec(), rhs[3].into_vec());
 
-        // Combine the partial sums
-        let sum_l = aarch64::vreinterpretq_u32_u64(aarch64::vaddq_u64(sum01_l, sum23_l));
-        let sum_h = aarch64::vreinterpretq_u32_u64(aarch64::vaddq_u64(sum01_h, sum23_h));
+        // High half (Lanes 2 & 3)
+        let mut sum_h = aarch64::vmull_high_u32(lhs[0].into_vec(), rhs[0].into_vec());
+        sum_h = aarch64::vmlal_high_u32(sum_h, lhs[1].into_vec(), rhs[1].into_vec());
+        sum_h = aarch64::vmlal_high_u32(sum_h, lhs[2].into_vec(), rhs[2].into_vec());
+        sum_h = aarch64::vmlal_high_u32(sum_h, lhs[3].into_vec(), rhs[3].into_vec());
 
         // Split C into 32-bit halves per lane:
         // - c_lo = C mod 2^{32},
         // - c_hi = C >> 32.
-        let c_lo = aarch64::vuzp1q_u32(sum_l, sum_h);
-        let c_hi = aarch64::vuzp2q_u32(sum_l, sum_h);
+        let c_lo = aarch64::vuzp1q_u32(
+            aarch64::vreinterpretq_u32_u64(sum_l),
+            aarch64::vreinterpretq_u32_u64(sum_h),
+        );
+        let c_hi = aarch64::vuzp2q_u32(
+            aarch64::vreinterpretq_u32_u64(sum_l),
+            aarch64::vreinterpretq_u32_u64(sum_h),
+        );
 
         // Since C < 4P^2 and P < 2^{31}, we have c_hi < 2P.
         // We want to compute: c_hi' ∈ [0,P) satisfying c_hi' = c_hi mod P.
