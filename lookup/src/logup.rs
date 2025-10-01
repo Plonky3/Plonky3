@@ -48,13 +48,29 @@ use p3_matrix::Matrix;
 /// - **Final Constraint**: `s[n-1] + contribution[n-1] = 0`
 #[derive(Debug, Clone, Default)]
 pub struct LogUpGadget<F> {
+    /// Column index in the permutation trace for this lookup's running sum
+    col: usize,
     _phantom: PhantomData<F>,
 }
 
 impl<F: Field> LogUpGadget<F> {
-    /// Creates a new LogUp gadget instance.
+    /// Creates a new LogUp gadget instance using column 0.
     pub const fn new() -> Self {
+        Self::new_with_offset(0)
+    }
+
+    /// Creates a new LogUp gadget instance using the specified column.
+    ///
+    /// Use this when multiple lookups are needed in the same AIR:
+    /// ```text
+    /// // First lookup uses column 0
+    /// let lookup1 = LogUpGadget::new();
+    /// // Second lookup uses column 1
+    /// let lookup2 = LogUpGadget::new_with_offset(1);
+    /// ```
+    pub const fn new_with_offset(col: usize) -> Self {
         Self {
+            col,
             _phantom: PhantomData,
         }
     }
@@ -136,10 +152,10 @@ impl<F: Field> LogUpGadget<F> {
 
         // Access the permutation (aux) table. It carries the running sum column s.
         let permutation = builder.permutation();
-        // Read s[i] from the local row.
-        let s_local = permutation.row_slice(0).unwrap()[0].into();
+        // Read s[i] from the local row at this gadget's column offset.
+        let s_local = permutation.row_slice(0).unwrap()[self.col].into();
         // Read s[i+1] from the next row (or a zero-padded view on the last row).
-        let s_next = permutation.row_slice(1).unwrap()[0].into();
+        let s_next = permutation.row_slice(1).unwrap()[self.col].into();
 
         // Anchor s[0] = 0 (not ∑ m_A/(α−a) − ∑ m_B/(α−b)).
         //
