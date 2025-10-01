@@ -225,6 +225,37 @@ pub trait UniformSamplingField {
     const _FEATURE_CHECK: () = ();
 }
 
+fn sample_uniform_bits_impl<T, F>(
+    obj: &mut T,
+    bits: usize,
+    sampling_bits_m: &[u64; 64],
+    sample_value: fn(&mut T, u64) -> F,
+) -> usize
+where
+    F: UniformSamplingField + PrimeField64,
+{
+    assert!(bits < (usize::BITS as usize));
+    assert!((1 << bits) < F::ORDER_U64);
+    let m = sampling_bits_m[bits]; //F::SAMPLING_BITS_M[bits];
+
+    let result = if bits < F::MAX_SINGLE_SAMPLE_BITS {
+        let rand_f = sample_value(obj, m);
+        let rand_usize = rand_f.as_canonical_u64() as usize;
+        rand_usize & ((1 << bits) - 1)
+    } else {
+        let r1: F = sample_value(obj, m);
+        let r2: F = sample_value(obj, m);
+
+        let b2 = bits / 2;
+        let b1 = bits - b2;
+
+        let r1_usize = r1.as_canonical_u64() as usize;
+        let r2_usize = r2.as_canonical_u64() as usize;
+        r1_usize & ((1 << b1) - 1) | (r2_usize & ((1 << b2) - 1) << b1)
+    };
+    result
+}
+
 impl<F, P, const WIDTH: usize, const RATE: usize> CanSampleUniformBits<F>
     for DuplexChallenger<F, P, WIDTH, RATE>
 where
@@ -238,48 +269,39 @@ where
     ///
     /// E.g. for KoalaBear up to 24 bits can be sampled uniformly "for free".
     fn sample_uniform_bits(&mut self, bits: usize) -> usize {
-        assert!(bits < (usize::BITS as usize));
-        assert!((1 << bits) < F::ORDER_U64);
-        let m = F::SAMPLING_BITS_M[bits];
+        sample_uniform_bits_impl(
+            self,
+            bits,
+            &F::SAMPLING_BITS_M,
+            DuplexChallenger::sample_value,
+        )
+    }
 
-        // See `UniformSamplingField` for details about `MAX_SINGLE_SAMPLE_BITS`
-        let result = if bits < F::MAX_SINGLE_SAMPLE_BITS {
-            let rand_f = self.sample_value(m);
-            let rand_usize = rand_f.as_canonical_u64() as usize;
-            rand_usize & ((1 << bits) - 1)
-        } else {
-            // sample two field elements and take ~half bits from first & second
-            let r1: F = self.sample_value(m);
-            let r2: F = self.sample_value(m);
+    /// Samples a field element. If the element is larger or equal to `m`, will panic.
+    fn sample_value_may_panic(&mut self, m: u64) -> F {
+        // sample a single field element
+        let result: F = self.sample();
 
-            // Calculate number of bits to extract from first and secondä
-            let b2 = bits / 2; // floor division
-            let b1 = bits - b2;
-
-            let r1_usize = r1.as_canonical_u64() as usize;
-            let r2_usize = r2.as_canonical_u64() as usize;
-            r1_usize & ((1 << b1) - 1) | (r2_usize & ((1 << b2) - 1) << b1)
-        };
+        if result.as_canonical_u64() >= m {
+            panic!(
+                "Sampled field element {} is larger or equal to {}",
+                result, m
+            );
+        }
         result
     }
 
+    /// Samples a field element. If the element is larger or equal to `m`, will resample
+    /// until a smaller element is found.
     fn sample_value(&mut self, m: u64) -> F {
         // sample a single field element
         let mut result: F = self.sample();
 
         // If this feature is enabled, we accept a small chance O(1/P) that we
         // panic in this function, namely if the sampled field element `result >= m`.
-        #[cfg(feature = "uniform-sampling-may-panic")]
-        if result.as_canonical_u64() >= m {
-            panic!(
-                "Sampled field element {} is larger or equal to {}",
-                result, m
-            );
-        } else {
-            // alternatively we simply do rejection sampling until we have a number < m
-            while result.as_canonical_u64() >= m {
-                result = self.sample();
-            }
+        // alternatively we simply do rejection sampling until we have a number < m
+        while result.as_canonical_u64() >= m {
+            result = self.sample();
         }
 
         result
