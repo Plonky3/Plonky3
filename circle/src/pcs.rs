@@ -7,7 +7,7 @@ use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs, OpenedValues, Pcs, PolynomialSpace};
 use p3_field::extension::ComplexExtendable;
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, PackedFieldExtension};
 use p3_fri::FriParameters;
 use p3_fri::verifier::FriError;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixCow};
@@ -232,6 +232,14 @@ where
                             (Challenge::ONE, vec![Challenge::ZERO; 1 << log_height])
                         });
 
+                    // Precompute alpha powers for this matrix width once.
+                    let packed_alpha_powers =
+                        Challenge::ExtensionPacking::packed_ext_powers_capped(
+                            alpha,
+                            evals.values.width(),
+                        )
+                        .collect_vec();
+
                     points_for_mat
                         .iter()
                         .zip(values.iter())
@@ -239,7 +247,12 @@ where
                             let zeta = Point::from_projective_line(zeta);
 
                             // Reduce this matrix, as a deep quotient, into one column with powers of α.
-                            let mat_ros = evals.deep_quotient_reduce(alpha, zeta, ps_at_zeta);
+                            let mat_ros = evals.deep_quotient_reduce(
+                                alpha,
+                                zeta,
+                                ps_at_zeta,
+                                &packed_alpha_powers,
+                            );
 
                             // Fold it into our running reduction, offset by alpha_offset.
                             reduced_opening_for_log_height
