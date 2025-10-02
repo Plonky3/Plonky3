@@ -161,36 +161,11 @@ where
         return Err(VerificationError::InvalidProofShape);
     }
 
-    // Observe the instance.
-    challenger.observe(Val::<SC>::from_usize(proof.degree_bits));
-    challenger.observe(Val::<SC>::from_usize(proof.degree_bits - config.is_zk()));
-    // TODO: Might be best practice to include other instance data here in the transcript, like some
-    // encoding of the AIR. This protects against transcript collisions between distinct instances.
-    // Practically speaking though, the only related known attack is from failing to include public
-    // values. It's not clear if failing to include other instance data could enable a transcript
-    // collision, since most such changes would completely change the set of satisfying witnesses.
-
-    challenger.observe(commitments.trace.clone());
-    challenger.observe_slice(public_values);
-
-    // Get the first Fiat Shamir challenge which will be used to combine all constraint polynomials
-    // into a single polynomial.
-    //
-    // Soundness Error: n/|EF| where n is the number of constraints.
-    let alpha = challenger.sample_algebra_element();
-    challenger.observe(commitments.quotient_chunks.clone());
-
-    // We've already checked that commitments.random is present if and only if ZK is enabled.
-    // Observe the random commitment if it is present.
-    if let Some(r_commit) = commitments.random.clone() {
-        challenger.observe(r_commit);
-    }
-
-    // Get an out-of-domain point to open our values at.
-    //
-    // Soundness Error: dN/|EF| where `N` is the trace length and our constraint polynomial has degree `d`.
-    let zeta = challenger.sample_algebra_element();
-    let zeta_next = init_trace_domain.next_point(zeta).unwrap();
+    // Generate all challenges using the generate_challenges function
+    let challenges = generate_challenges(config, air, proof, public_values);
+    let alpha = challenges.alpha;
+    let zeta = challenges.zeta;
+    let zeta_next = challenges.zeta_next;
 
     // We've already checked that commitments.random and opened_values.random are present if and only if ZK is enabled.
     let mut coms_to_verify = if let Some(random_commit) = &commitments.random {
