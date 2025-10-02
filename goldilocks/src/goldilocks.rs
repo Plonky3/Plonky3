@@ -21,7 +21,9 @@ use p3_util::{assume, branch_hint, flatten_to_base, gcd_inner};
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
-use winter_utils::{ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable};
+use winter_utils::{
+    ByteReader, ByteWriter, Deserializable, DeserializationError, Randomizable, Serializable,
+};
 
 /// The Goldilocks prime
 pub(crate) const P: u64 = 0xFFFF_FFFF_0000_0001;
@@ -134,6 +136,23 @@ impl Serializable for Goldilocks {
 
     fn get_size_hint(&self) -> usize {
         8
+    }
+}
+
+impl Randomizable for Goldilocks {
+    const VALUE_SIZE: usize = 8;
+
+    fn from_random_bytes(source: &[u8]) -> Option<Self> {
+        let value = match u64::from_random_bytes(source) {
+            Some(p) => p,
+            None => return None,
+        };
+
+        if value >= P {
+            None
+        } else {
+            Some(Goldilocks { value: value })
+        }
     }
 }
 
