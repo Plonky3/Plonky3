@@ -1,0 +1,21 @@
+[package]
+name = "p3-lookup"
+description = "LogUp: Logarithmic lookup arguments and multiset equality checks with multiplicities support."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+p3-air = { workspace = true }
+p3-field = { workspace = true }
+p3-matrix = { workspace = true }
+
+[dev-dependencies]
+p3-baby-bear = { workspace = true }
+p3-goldilocks = { workspace = true }
+
+[features]
+default = []
