@@ -19,6 +19,8 @@ use crate::{CircleCommitPhaseProofStep, CircleFriProof};
 pub struct CircleVerificationChallenges<Challenge> {
     /// The random challenges for each Circle-FRI round
     pub betas: Vec<Challenge>,
+    /// The query indices for each query proof
+    pub query_indices: Vec<usize>,
 }
 
 /// Generate all challenges that would be produced during Circle verification
@@ -36,8 +38,8 @@ pub struct CircleVerificationChallenges<Challenge> {
 /// # Returns
 /// * `CircleVerificationChallenges<Challenge>` - All challenges that would be generated during Circle verification
 pub fn generate_circle_challenges<Folding, Val, Challenge, M, Challenger>(
-    _folding: &Folding,
-    _params: &FriParameters<M>,
+    folding: &Folding,
+    params: &FriParameters<M>,
     proof: &CircleFriProof<Challenge, M, Challenger::Witness, Folding::InputProof>,
     challenger: &mut Challenger,
 ) -> CircleVerificationChallenges<Challenge>
@@ -58,7 +60,23 @@ where
         })
         .collect();
 
-    CircleVerificationChallenges { betas }
+    // Observe the claimed final polynomial.
+    challenger.observe_algebra_element(proof.final_poly);
+
+    // Generate query indices for each query proof
+    let log_max_height = proof.commit_phase_commits.len() + params.log_blowup;
+    let query_indices: Vec<usize> = proof
+        .query_proofs
+        .iter()
+        .map(|_| {
+            challenger.sample_bits(log_max_height + folding.extra_query_index_bits())
+        })
+        .collect();
+
+    CircleVerificationChallenges { 
+        betas, 
+        query_indices 
+    }
 }
 
 pub fn verify<Folding, Val, Challenge, M, Challenger>(
