@@ -13,6 +13,7 @@ pub use data_traits::*;
 pub use mds::*;
 pub use monty_31::*;
 pub use poseidon2::*;
+pub use utils::{monty_add, monty_sub};
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 mod aarch64_neon;
