@@ -25,6 +25,48 @@ use p3_air::{ExtensionBuilder, PermutationAirBuilder};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 
+/// A context structure that encapsulates a single lookup relationship and its associated
+/// permutation column.
+#[derive(Debug, Clone)]
+pub struct LookupContext<'a, AE, AM, BE, BM> {
+    /// Elements being read (consumed from the table)
+    a_elements: &'a [AE],
+    /// Multiplicities for elements being read
+    a_multiplicities: &'a [AM],
+    /// Elements being provided (added to the table)
+    b_elements: &'a [BE],
+    /// Multiplicities for elements being provided
+    b_multiplicities: &'a [BM],
+    /// The column index in the permutation trace for this lookup's running sum
+    column: usize,
+}
+
+impl<'a, AE, AM, BE, BM> LookupContext<'a, AE, AM, BE, BM> {
+    /// Creates a new lookup context with the specified column.
+    ///
+    /// # Arguments
+    /// * `a_elements` - Elements from the main execution trace
+    /// * `a_multiplicities` - How many times each `a_element` should appear
+    /// * `b_elements` - Elements from the lookup table
+    /// * `b_multiplicities` - How many times each `b_element` should appear
+    /// * `column` - The column index in the permutation trace for this lookup
+    pub const fn new(
+        a_elements: &'a [AE],
+        a_multiplicities: &'a [AM],
+        b_elements: &'a [BE],
+        b_multiplicities: &'a [BM],
+        column: usize,
+    ) -> Self {
+        Self {
+            a_elements,
+            a_multiplicities,
+            b_elements,
+            b_multiplicities,
+            column,
+        }
+    }
+}
+
 /// Core LogUp gadget implementing lookup arguments via logarithmic derivatives.
 ///
 /// The LogUp gadget transforms the multiplicative lookup constraint:
@@ -48,34 +90,18 @@ use p3_matrix::Matrix;
 /// - **Final Constraint**: `s[n-1] + contribution[n-1] = 0`
 #[derive(Debug, Clone, Default)]
 pub struct LogUpGadget<F> {
-    /// Column index in the permutation trace for this lookup's running sum
-    col: usize,
     _phantom: PhantomData<F>,
 }
 
 impl<F: Field> LogUpGadget<F> {
-    /// Creates a new LogUp gadget instance using column 0.
+    /// Creates a new LogUp gadget instance.
     pub const fn new() -> Self {
-        Self::new_with_offset(0)
-    }
-
-    /// Creates a new LogUp gadget instance using the specified column.
-    ///
-    /// Use this when multiple lookups are needed in the same AIR:
-    /// ```text
-    /// // First lookup uses column 0
-    /// let lookup1 = LogUpGadget::new();
-    /// // Second lookup uses column 1
-    /// let lookup2 = LogUpGadget::new_with_offset(1);
-    /// ```
-    pub const fn new_with_offset(col: usize) -> Self {
         Self {
-            col,
             _phantom: PhantomData,
         }
     }
 
-    /// Asserts lookup equality using LogUp with multiplicities support.
+    /// Internal implementation using `LookupContext`.
     ///
     /// This method enforces that elements from `a_elements` with their associated
     /// `a_multiplicities` form the same multiset as elements from `b_elements`
@@ -83,10 +109,7 @@ impl<F: Field> LogUpGadget<F> {
     ///
     /// # Arguments
     /// * `builder` - AIR builder for constraint generation
-    /// * `a_elements` - Elements from the main execution trace
-    /// * `a_multiplicities` - How many times each `a_element` should appear
-    /// * `b_elements` - Elements from the lookup table
-    /// * `b_multiplicities` - How many times each `b_element` should appear
+    /// * `context` - The lookup context containing all lookup data and column assignment
     /// * `challenge` - Random challenge `α` for the LogUp argument
     ///
     /// # Mathematical Details
@@ -96,39 +119,10 @@ impl<F: Field> LogUpGadget<F> {
     /// ```
     ///
     /// This is implemented using a running sum column that should sum to zero.
-    pub fn assert_lookup_with_multiplicities<AB, AE, AM, BE, BM>(
+    fn assert_lookup_internal<AB, AE, AM, BE, BM>(
         &self,
         builder: &mut AB,
-        a_elements: &[AE],
-        a_multiplicities: &[AM],
-        b_elements: &[BE],
-        b_multiplicities: &[BM],
-        challenge: AB::RandomVar,
-    ) where
-        AB: PermutationAirBuilder,
-        AE: Into<AB::ExprEF> + Copy,
-        AM: Into<AB::ExprEF> + Copy,
-        BE: Into<AB::ExprEF> + Copy,
-        BM: Into<AB::ExprEF> + Copy,
-    {
-        self.assert_lookup_with_multiplicities_internal(
-            builder,
-            a_elements,
-            a_multiplicities,
-            b_elements,
-            b_multiplicities,
-            challenge,
-        );
-    }
-
-    /// Internal implementation that doesn't require Copy on multiplicity expressions
-    fn assert_lookup_with_multiplicities_internal<AB, AE, AM, BE, BM>(
-        &self,
-        builder: &mut AB,
-        a_elements: &[AE],
-        a_multiplicities: &[AM],
-        b_elements: &[BE],
-        b_multiplicities: &[BM],
+        context: &LookupContext<AE, AM, BE, BM>,
         challenge: AB::RandomVar,
     ) where
         AB: PermutationAirBuilder,
@@ -139,23 +133,23 @@ impl<F: Field> LogUpGadget<F> {
     {
         // Ensure |A| and |m_A| match. This is required to form ∑ m_A/(α - a).
         assert_eq!(
-            a_elements.len(),
-            a_multiplicities.len(),
+            context.a_elements.len(),
+            context.a_multiplicities.len(),
             "Mismatched lengths: a_elements and a_multiplicities must have same length"
         );
         // Ensure |B| and |m_B| match. This is required to form ∑ m_B/(α - b).
         assert_eq!(
-            b_elements.len(),
-            b_multiplicities.len(),
+            context.b_elements.len(),
+            context.b_multiplicities.len(),
             "Mismatched lengths: b_elements and b_multiplicities must have same length"
         );
 
         // Access the permutation (aux) table. It carries the running sum column s.
         let permutation = builder.permutation();
-        // Read s[i] from the local row at this gadget's column offset.
-        let s_local = permutation.row_slice(0).unwrap()[self.col].into();
+        // Read s[i] from the local row at the specified column.
+        let s_local = permutation.row_slice(0).unwrap()[context.column].into();
         // Read s[i+1] from the next row (or a zero-padded view on the last row).
-        let s_next = permutation.row_slice(1).unwrap()[self.col].into();
+        let s_next = permutation.row_slice(1).unwrap()[context.column].into();
 
         // Anchor s[0] = 0 (not ∑ m_A/(α−a) − ∑ m_B/(α−b)).
         //
@@ -167,12 +161,18 @@ impl<F: Field> LogUpGadget<F> {
         // Convert the random challenge to an expression: α.
         let alpha: AB::ExprEF = challenge.into();
 
-        // Build A’s fraction:  ∑ m_A/(α - a)  =  a_num / a_den .
-        let (a_num, a_den) =
-            self.compute_sum_terms::<AB, AE, AM>(a_elements, a_multiplicities, &alpha);
-        // Build B’s fraction:  ∑ m_B/(α - b)  =  b_num / b_den .
-        let (b_num, b_den) =
-            self.compute_sum_terms::<AB, BE, BM>(b_elements, b_multiplicities, &alpha);
+        // Build A's fraction:  ∑ m_A/(α - a)  =  a_num / a_den .
+        let (a_num, a_den) = self.compute_sum_terms::<AB, AE, AM>(
+            context.a_elements,
+            context.a_multiplicities,
+            &alpha,
+        );
+        // Build B's fraction:  ∑ m_B/(α - b)  =  b_num / b_den .
+        let (b_num, b_den) = self.compute_sum_terms::<AB, BE, BM>(
+            context.b_elements,
+            context.b_multiplicities,
+            &alpha,
+        );
         // Common denominator: D = a_den ⋅ b_den. This clears all divisions.
         let common_denominator = a_den.clone() * b_den.clone();
         // Numerator difference: N = a_num⋅b_den − b_num⋅a_den.
@@ -193,30 +193,25 @@ impl<F: Field> LogUpGadget<F> {
             .assert_zero_ext(s_local * common_denominator + contribution_poly);
     }
 
-    /// Convenience method for simple lookup without explicit multiplicities.
+    /// Asserts lookup equality.
     ///
-    /// This is equivalent to calling `assert_lookup_with_multiplicities` where
-    /// all multiplicities are set to 1. It is recommended to use the more general
-    /// function for all lookups to ensure consistency.
-    pub fn assert_lookup<AB, AE, BE>(
-        &self,
+    /// # Arguments
+    /// * `builder` - AIR builder for constraint generation
+    /// * `context` - The lookup context containing all lookup data and column assignment
+    /// * `challenge` - Random challenge `α` for the LogUp argument
+    pub fn assert_lookup<AB, AE, AM, BE, BM>(
         builder: &mut AB,
-        a_elements: &[AE],
-        b_elements: &[BE],
+        context: &LookupContext<AE, AM, BE, BM>,
         challenge: AB::RandomVar,
     ) where
-        AB: PermutationAirBuilder,
+        AB: PermutationAirBuilder<F = F>,
         AE: Into<AB::ExprEF> + Copy,
+        AM: Into<AB::ExprEF> + Clone,
         BE: Into<AB::ExprEF> + Copy,
+        BM: Into<AB::ExprEF> + Clone,
     {
-        // Create a direct lookup by passing one-vectors as multiplicities
-        let a_ones: Vec<_> = (0..a_elements.len()).map(|_| AB::ExprEF::ONE).collect();
-        let b_ones: Vec<_> = (0..b_elements.len()).map(|_| AB::ExprEF::ONE).collect();
-
-        // Now call the generic function with proper signature matching
-        self.assert_lookup_with_multiplicities_internal(
-            builder, a_elements, &a_ones, b_elements, &b_ones, challenge,
-        );
+        let gadget = Self::new();
+        gadget.assert_lookup_internal(builder, context, challenge);
     }
 
     /// Computes the numerator and common denominator for a set of fractional terms.
@@ -296,79 +291,34 @@ impl<F: Field> LogUpGadget<F> {
 
 /// Trait extension providing LogUp functionality to any PermutationAirBuilder.
 pub trait LookupBuilder: PermutationAirBuilder {
-    /// Assert lookup with multiplicities using LogUp.
+    /// Assert lookup.
     ///
     /// # Arguments
-    /// * `a_elements` - Elements from the main trace
-    /// * `a_multiplicities` - Multiplicities for each element in A
-    /// * `b_elements` - Elements from the lookup table
-    /// * `b_multiplicities` - Multiplicities for each element in B
+    /// * `context` - The lookup context containing all lookup data and column assignment
     /// * `challenge` - Random challenge for the lookup argument
-    fn assert_lookup_with_multiplicities<AE, AM, BE, BM>(
+    fn assert_lookup<AE, AM, BE, BM>(
         &mut self,
-        a_elements: &[AE],
-        a_multiplicities: &[AM],
-        b_elements: &[BE],
-        b_multiplicities: &[BM],
+        context: &LookupContext<AE, AM, BE, BM>,
         challenge: Self::RandomVar,
     ) where
         AE: Into<Self::ExprEF> + Copy,
-        AM: Into<Self::ExprEF> + Copy,
+        AM: Into<Self::ExprEF> + Clone,
         BE: Into<Self::ExprEF> + Copy,
-        BM: Into<Self::ExprEF> + Copy;
-
-    /// Assert simple lookup without explicit multiplicities (all elements appear once).
-    ///
-    /// # Arguments
-    /// * `a_elements` - Elements from the main trace
-    /// * `b_elements` - Elements from the lookup table
-    /// * `challenge` - Random challenge for the lookup argument
-    fn assert_lookup<AE, BE>(
-        &mut self,
-        a_elements: &[AE],
-        b_elements: &[BE],
-        challenge: Self::RandomVar,
-    ) where
-        AE: Into<Self::ExprEF> + Copy,
-        BE: Into<Self::ExprEF> + Copy;
+        BM: Into<Self::ExprEF> + Clone;
 }
 
 impl<AB: PermutationAirBuilder> LookupBuilder for AB {
-    fn assert_lookup_with_multiplicities<AE, AM, BE, BM>(
+    fn assert_lookup<AE, AM, BE, BM>(
         &mut self,
-        a_elements: &[AE],
-        a_multiplicities: &[AM],
-        b_elements: &[BE],
-        b_multiplicities: &[BM],
+        context: &LookupContext<AE, AM, BE, BM>,
         challenge: Self::RandomVar,
     ) where
         AE: Into<Self::ExprEF> + Copy,
-        AM: Into<Self::ExprEF> + Copy,
+        AM: Into<Self::ExprEF> + Clone,
         BE: Into<Self::ExprEF> + Copy,
-        BM: Into<Self::ExprEF> + Copy,
+        BM: Into<Self::ExprEF> + Clone,
     {
-        let gadget = LogUpGadget::<Self::F>::new();
-        gadget.assert_lookup_with_multiplicities(
-            self,
-            a_elements,
-            a_multiplicities,
-            b_elements,
-            b_multiplicities,
-            challenge,
-        );
-    }
-
-    fn assert_lookup<AE, BE>(
-        &mut self,
-        a_elements: &[AE],
-        b_elements: &[BE],
-        challenge: Self::RandomVar,
-    ) where
-        AE: Into<Self::ExprEF> + Copy,
-        BE: Into<Self::ExprEF> + Copy,
-    {
-        let gadget = LogUpGadget::<Self::F>::new();
-        gadget.assert_lookup(self, a_elements, b_elements, challenge);
+        LogUpGadget::<Self::F>::assert_lookup(self, context, challenge);
     }
 }
 
@@ -571,7 +521,7 @@ mod tests {
             let main = builder.main();
             let main_local = main.row_slice(0).unwrap();
 
-            // Perform each lookup independently
+            // Perform each lookup independently using LookupContext
             for lookup_idx in 0..self.num_lookups {
                 let offset = lookup_idx * 3;
 
@@ -580,15 +530,23 @@ mod tests {
                 let table_val = main_local[offset + 1];
                 let mult = main_local[offset + 2];
 
-                // Each lookup uses its own column in the permutation trace
-                LogUpGadget::<F>::new_with_offset(lookup_idx).assert_lookup_with_multiplicities(
-                    builder,
-                    &[val],
-                    &[F::ONE],
-                    &[table_val],
-                    &[mult],
-                    self.challenge,
+                // Create arrays with longer lifetime for the context
+                let a_elements = [val];
+                let a_multiplicities = [F::ONE];
+                let b_elements = [table_val];
+                let b_multiplicities = [mult];
+
+                // Create a context for this lookup with its dedicated column
+                let context = LookupContext::new(
+                    &a_elements,
+                    &a_multiplicities,
+                    &b_elements,
+                    &b_multiplicities,
+                    lookup_idx, // Each lookup gets its own column
                 );
+
+                // Assert the lookup using the context
+                LogUpGadget::<F>::assert_lookup(builder, &context, self.challenge);
             }
         }
     }
