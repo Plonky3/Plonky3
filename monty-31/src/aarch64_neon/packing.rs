@@ -617,6 +617,73 @@ impl_packed_field_pow_2!(
     WIDTH
 );
 
+/// Compute the elementary function `l0*r0 + l1*r1` given four inputs
+/// in canonical form.
+///
+/// If the inputs are not in canonical form, the result is undefined.
+#[inline]
+unsafe fn dot_product_2<P, LHS, RHS>(lhs: &[LHS; 2], rhs: &[RHS; 2]) -> PackedMontyField31Neon<P>
+where
+    P: FieldParameters + MontyParametersNeon,
+    LHS: IntoVec<P>,
+    RHS: IntoVec<P>,
+{
+    unsafe {
+        // Accumulate the full 64-bit sum C = l0*r0 + l1*r1.
+
+        // Low half (Lanes 0 & 1)
+        let mut sum_l = aarch64::vmull_u32(
+            aarch64::vget_low_u32(lhs[0].into_vec()),
+            aarch64::vget_low_u32(rhs[0].into_vec()),
+        );
+        sum_l = aarch64::vmlal_u32(
+            sum_l,
+            aarch64::vget_low_u32(lhs[1].into_vec()),
+            aarch64::vget_low_u32(rhs[1].into_vec()),
+        );
+
+        // High half (Lanes 2 & 3)
+        let mut sum_h = aarch64::vmull_high_u32(lhs[0].into_vec(), rhs[0].into_vec());
+        sum_h = aarch64::vmlal_high_u32(sum_h, lhs[1].into_vec(), rhs[1].into_vec());
+
+        // Split C into 32-bit halves per lane:
+        // - c_lo = C mod 2^{32},
+        // - c_hi = C >> 32.
+        let c_lo = aarch64::vuzp1q_u32(
+            aarch64::vreinterpretq_u32_u64(sum_l),
+            aarch64::vreinterpretq_u32_u64(sum_h),
+        );
+        let c_hi = aarch64::vuzp2q_u32(
+            aarch64::vreinterpretq_u32_u64(sum_l),
+            aarch64::vreinterpretq_u32_u64(sum_h),
+        );
+
+        // q ≡ c_lo ⋅ μ (mod 2^{32}), with μ = −P^{-1} (mod 2^{32}).
+        let q = aarch64::vmulq_u32(c_lo, aarch64::vreinterpretq_u32_s32(P::PACKED_MU));
+
+        // Compute (q⋅P)_hi = high 32 bits of q⋅P per lane (exact unsigned widening multiply).
+        let qp_l = aarch64::vmull_u32(aarch64::vget_low_u32(q), aarch64::vget_low_u32(P::PACKED_P));
+        let qp_h = aarch64::vmull_high_u32(q, P::PACKED_P);
+        let qp_hi = aarch64::vuzp2q_u32(
+            aarch64::vreinterpretq_u32_u64(qp_l),
+            aarch64::vreinterpretq_u32_u64(qp_h),
+        );
+
+        let d = aarch64::vsubq_u32(c_hi, qp_hi);
+
+        // Canonicalize d from (-P, P) to [0, P) branchlessly.
+        //
+        // The `vmlsq_u32` instruction computes `a - (b * c)`.
+        // - If `d` is negative, the mask is `-1` (all 1s), so we compute `d - (-1 * P) = d + P`.
+        // - If `d` is non-negative, the mask is `0`, so we compute `d - (0 * P) = d`.
+        let underflow = aarch64::vcltq_u32(c_hi, qp_hi);
+        let canonical_res = aarch64::vmlsq_u32(d, underflow, P::PACKED_P);
+
+        // Safety: The result is now in canonical form [0, P).
+        PackedMontyField31Neon::from_vector(canonical_res)
+    }
+}
+
 /// A general fast dot product implementation using NEON.
 #[inline(always)]
 fn general_dot_product<P, LHS, RHS, const N: usize>(
@@ -633,13 +700,9 @@ where
     match N {
         0 => PackedMontyField31Neon::<P>::ZERO,
         1 => lhs[0].into() * rhs[0].into(),
-        2 => {
-            // TODO: Implement an optimized `dot_product_2` helper.
-            (lhs[0].into() * rhs[0].into()) + (lhs[1].into() * rhs[1].into())
-        }
+        2 => unsafe { dot_product_2(&[lhs[0], lhs[1]], &[rhs[0], rhs[1]]) },
         3 => {
-            // TODO: Implement an optimized `dot_product_3` helper.
-            let dot2 = (lhs[0].into() * rhs[0].into()) + (lhs[1].into() * rhs[1].into());
+            let dot2 = unsafe { dot_product_2(&[lhs[0], lhs[1]], &[rhs[0], rhs[1]]) };
             dot2 + (lhs[2].into() * rhs[2].into())
         }
         4 => unsafe {
