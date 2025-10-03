@@ -12,7 +12,7 @@ use p3_poseidon2::{
     external_terminal_permute_state,
 };
 
-use super::halve_avx512;
+use super::{halve_avx512, signed_add_avx512};
 use crate::{
     FieldParameters, MontyField31, MontyParameters, PackedMontyField31AVX512,
     PackedMontyParameters, RelativelyPrimePower, apply_func_to_even_odd, packed_exp_3,
@@ -332,7 +332,7 @@ pub trait InternalLayerParametersAVX512<PMP: PackedMontyParameters, const WIDTH:
         // Note that signed add's parameters are not interchangeable. The first parameter must be positive.
         input.as_mut()[8 + Self::NUM_POS..]
             .iter_mut()
-            .for_each(|x| *x = mm512_mod_add(sum, *x, PMP::PACKED_P));
+            .for_each(|x| *x = signed_add_avx512::<PMP>(sum, *x));
     }
 }
 
