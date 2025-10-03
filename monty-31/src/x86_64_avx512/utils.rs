@@ -1,7 +1,7 @@
 use core::arch::x86_64::{self, __m512i};
 use core::mem::transmute;
 
-use crate::{MontyParameters, PackedMontyParameters, TwoAdicData};
+use crate::{MontyParameters, MontyParametersAVX512, PackedMontyParameters, TwoAdicData};
 
 // Godbolt file showing that these all compile to the expected instructions. (Potentially plus a few memory ops):
 // https://godbolt.org/z/dvW7r1zjj
@@ -32,6 +32,43 @@ pub(crate) fn halve_avx512<MP: MontyParameters>(input: __m512i) -> __m512i {
         let t = x86_64::_mm512_srli_epi32::<1>(input);
         // This does nothing when least_bit = 1 and sets the corresponding entry to 0 when least_bit = 0
         x86_64::_mm512_mask_add_epi32(t, least_bit, t, half)
+    }
+}
+
+/// Add two vectors of Monty31 field elements with lhs in canonical form and rhs in (-P, P).
+///
+/// # Safety
+///
+/// This function is not symmetric in the inputs. The caller must ensure that inputs
+/// conform to the expected representation. Each element of lhs must lie in [0, P) and
+/// each element of rhs in (-P, P).
+#[inline(always)]
+pub(crate) unsafe fn signed_add_avx512<MPAVX512: MontyParametersAVX512>(
+    lhs: __m512i,
+    rhs: __m512i,
+) -> __m512i {
+    /*
+        Strategy mirrors the AVX2 version but uses AVX512 mask ops:
+            sum       = lhs + rhs
+            sum_corr  = sum - P (where rhs > 0), sum + P (where rhs < 0), sum (where rhs == 0)
+            result    = min_{u32}(sum, sum_corr)
+        This yields (lhs + rhs) mod P with rhs allowed in (-P, P).
+    */
+    unsafe {
+        let sum = x86_64::_mm512_add_epi32(lhs, rhs);
+
+        let sum_minus_p = x86_64::_mm512_sub_epi32(sum, MPAVX512::PACKED_P);
+        let sum_plus_p = x86_64::_mm512_add_epi32(sum, MPAVX512::PACKED_P);
+
+        let zero = x86_64::_mm512_set1_epi32(0);
+        let mask_gt0 = x86_64::_mm512_cmp_epi32_mask(rhs, zero, x86_64::_MM_CMPINT_GT);
+        let mask_lt0 = x86_64::_mm512_cmp_epi32_mask(rhs, zero, x86_64::_MM_CMPINT_LT);
+
+        // Start from sum; override lanes conditionally based on rhs sign
+        let sum_corr = x86_64::_mm512_mask_mov_epi32(sum, mask_gt0, sum_minus_p);
+        let sum_corr = x86_64::_mm512_mask_mov_epi32(sum_corr, mask_lt0, sum_plus_p);
+
+        x86_64::_mm512_min_epu32(sum, sum_corr)
     }
 }
 
