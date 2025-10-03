@@ -304,6 +304,11 @@ where
         for i in 0..len {
             assert_eq!(slice_1[i], slice_1_copy[i] + slice_2[i]);
         }
+
+        F::sub_slices(&mut slice_1, &slice_2);
+        for i in 0..len {
+            assert_eq!(slice_1[i], slice_1_copy[i]);
+        }
     }
 }
 

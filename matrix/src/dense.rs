@@ -146,7 +146,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     }
 
     /// Get an iterator over the rows of the matrix.
-    pub fn row_slices(&self) -> impl Iterator<Item = &[T]> {
+    pub fn row_slices(&self) -> impl DoubleEndedIterator<Item = &[T]> {
         self.values.borrow().chunks_exact(self.width)
     }
 

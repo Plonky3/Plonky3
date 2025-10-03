@@ -501,8 +501,11 @@ fn eval_eq_packed<F, IF, EF, E, const INITIALIZED: bool>(
 /// - `out`: The output buffer to store or accumulate the results.
 /// - `scalar`: Stores the current state of the equality polynomial evaluation in the recursive call.
 #[inline]
-fn eval_eq_basic<F, IF, EF, const INITIALIZED: bool>(eval: &[IF], out: &mut [EF], scalar: EF)
-where
+pub(crate) fn eval_eq_basic<F, IF, EF, const INITIALIZED: bool>(
+    eval: &[IF],
+    out: &mut [EF],
+    scalar: EF,
+) where
     F: Field,
     IF: Field,
     EF: ExtensionField<F> + Algebra<IF>,
