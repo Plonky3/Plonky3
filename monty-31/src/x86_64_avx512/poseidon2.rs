@@ -313,7 +313,7 @@ pub trait InternalLayerParametersAVX512<PMP: PackedMontyParameters, const WIDTH:
     /// Morally this function is computing `x -> x + sum` however there are some places where
     /// the output of `diagonal_mul` is the negative of the expected value and might lie
     /// in [0, P] instead of being in canonical form.
-    /// 
+    ///
     /// It is the job of add_sum to correct for these irregularities. Where the output is negative
     /// we compute `x -> sum - x` instead.
     #[inline(always)]
