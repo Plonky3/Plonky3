@@ -125,7 +125,7 @@ pub unsafe fn mul_neg_2exp_neg_n_avx512<
 ///
 /// The prime P must be of the form P = r * 2^j + 1 with r odd and r < 2^7.
 /// Input must be given in canonical form.
-/// Output is not in canonical form, outputs are only guaranteed to lie in (-P, P).
+/// Output may not be in canonical form but will lie in [0, P].
 #[inline(always)]
 pub unsafe fn mul_neg_2exp_neg_8_avx512<
     TAD: TwoAdicData + PackedMontyParameters,
@@ -178,7 +178,7 @@ pub unsafe fn mul_neg_2exp_neg_8_avx512<
 ///
 /// The prime P must have the form P = 2^31 - 2^N + 1.
 /// Input must be given in canonical form.
-/// Output is not in canonical form, outputs are only guaranteed to lie in (-P, P).
+/// Output may not be in canonical form but will lie in [0, P].
 #[inline(always)]
 pub unsafe fn mul_neg_2exp_neg_two_adicity_avx512<
     TAD: TwoAdicData + PackedMontyParameters,
@@ -223,6 +223,7 @@ pub unsafe fn mul_neg_2exp_neg_two_adicity_avx512<
 
         // When lo = 0, return P - hi
         // When lo > 0 return r*lo - hi
+        // As hi < r x_lo < P, the output is always in [0, P]. It is equal to P only when input x = 0.
         x86_64::_mm512_sub_epi32(lo_shft, lo_plus_hi)
     }
 }

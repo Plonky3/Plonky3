@@ -311,11 +311,16 @@ pub trait InternalLayerParametersAVX512<PMP: PackedMontyParameters, const WIDTH:
     /// If either of these does not hold, the result is undefined.
     ///
     /// Morally this function is computing `x -> x + sum` however there are some places where
-    /// the output of `diagonal_mul` is the negative of the expected value.
+    /// the output of `diagonal_mul` is the negative of the expected value and might lie
+    /// in [0, P] instead of being in canonical form.
+    ///
     /// It is the job of add_sum to correct for these irregularities. Where the output is negative
     /// we compute `x -> sum - x` instead.
     #[inline(always)]
     unsafe fn add_sum(input: &mut Self::ArrayLike, sum: __m512i) {
+        // Both mm512_mod_add and mm512_mod_sub will return correct values in [0, P) when one
+        // input is in [0, P) and the other is in [0, P].
+
         // Diagonal mul multiplied these by 1, 2, 1/2, 3, 4 so we simply need to add the sum.
         input.as_mut()[..5]
             .iter_mut()
@@ -328,8 +333,8 @@ pub trait InternalLayerParametersAVX512<PMP: PackedMontyParameters, const WIDTH:
             .iter_mut()
             .for_each(|x| *x = mm512_mod_sub(sum, *x, PMP::PACKED_P));
 
-        // Diagonal mul output a signed value in (-P, P) so we need to do a signed add.
-        // Note that signed add's parameters are not interchangeable. The first parameter must be positive.
+        // The remainder are all correctly multiplied by negative inverse powers of two so
+        // we just need to add the sum.
         input.as_mut()[8 + Self::NUM_POS..]
             .iter_mut()
             .for_each(|x| *x = mm512_mod_add(sum, *x, PMP::PACKED_P));
