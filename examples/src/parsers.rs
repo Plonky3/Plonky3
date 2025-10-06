@@ -27,6 +27,7 @@ pub enum DftOptions {
     None,
     Radix2DitParallel,
     RecursiveDft,
+    SmallBatch
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -124,6 +125,11 @@ impl ValueEnum for DftOptions {
                 "radix-2-dit-parallel",
                 2,
                 Some(vec![("radix2ditparallel", 6), ("parallel", 1)]),
+            ),
+            Self::SmallBatch => get_aliases(
+                "small-batch-dft",
+                1,
+                Some(vec![("smallbatchdft", 6), ("sb", 2)]),
             ),
             Self::None => PossibleValue::new(""),
         })

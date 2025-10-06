@@ -124,8 +124,11 @@ fn main() {
                     DftChoice::Recursive(RecursiveDft::new(trace_height << 1))
                 }
                 DftOptions::Radix2DitParallel => DftChoice::Parallel(Radix2DitParallel::default()),
+                DftOptions::SmallBatch => {
+                    DftChoice::SmallBatch(p3_dft::Radix2DFTSmallBatch::new(trace_height << 1))
+                }
                 DftOptions::None => panic!(
-                    "Please specify what dft to use. Options are recursive-dft and radix-2-dit-parallel"
+                    "Please specify what dft to use. Options are recursive-dft, radix-2-dit-parallel and small-batch-dft"
                 ),
             };
 
@@ -177,8 +180,11 @@ fn main() {
                     DftChoice::Recursive(RecursiveDft::new(trace_height << 1))
                 }
                 DftOptions::Radix2DitParallel => DftChoice::Parallel(Radix2DitParallel::default()),
+                DftOptions::SmallBatch => {
+                    DftChoice::SmallBatch(p3_dft::Radix2DFTSmallBatch::new(trace_height << 1))
+                }
                 DftOptions::None => panic!(
-                    "Please specify what dft to use. Options are recursive-dft and radix-2-dit-parallel"
+                    "Please specify what dft to use. Options are recursive-dft, radix-2-dit-parallel and small-batch-dft"
                 ),
             };
 
