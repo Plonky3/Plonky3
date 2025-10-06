@@ -104,6 +104,33 @@ where
     }
 }
 
+//macro_rules! impl_uniform_grinding {
+//    ($field:ty, $params:ty) => {
+//        impl<P, const WIDTH: usize, const RATE: usize> UniformGrindingChallenger
+//            for DuplexChallenger<$field, P, WIDTH, RATE>
+//        where
+//            P: CryptographicPermutation<[$field; WIDTH]>,
+//        {
+//            fn grind_uniform(&mut self, bits: usize) -> Self::Witness {
+//                // Implementation using $params::SAMPLING_BITS_M, etc.
+//                self.sample_uniform_bits_impl::<_, $field, { <$params>::MAX_SINGLE_SAMPLE_BITS }>(
+//                    bits,
+//                    &<$params>::SAMPLING_BITS_M,
+//                    DuplexChallenger::sample_value,
+//                )
+//                // ... rest of implementation
+//            }
+//        }
+//    };
+//}
+//
+//// Then invoke it for each field type:
+//impl_uniform_grinding!(p3_baby_bear::BabyBear, p3_baby_bear::BabyBearParameters);
+//impl_uniform_grinding!(
+//    p3_goldilocks::Goldilocks,
+//    p3_goldilocks::GoldilocksParameters
+//);
+
 impl<F, PF, P, const WIDTH: usize, const RATE: usize> GrindingChallenger
     for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
@@ -129,3 +156,27 @@ where
         witness
     }
 }
+
+//impl<F, PF, P, const WIDTH: usize, const RATE: usize> UniformGrindingChallenger
+//    for MultiField32Challenger<F, PF, P, WIDTH, RATE>
+//where
+//    F: PrimeField32,
+//    PF: PrimeField,
+//    P: CryptographicPermutation<[PF; WIDTH]>,
+//{
+//    #[instrument(name = "grind for proof-of-work witness", skip_all)]
+//    fn grind_uniform(&mut self, bits: usize) -> Self::Witness {
+//        assert!(bits < (usize::BITS as usize));
+//        assert!((1 << bits) < F::ORDER_U32);
+//        let witness = (0..F::ORDER_U32)
+//            .into_par_iter()
+//            .map(|i| unsafe {
+//                // i < F::ORDER_U32 by construction so this is safe.
+//                F::from_canonical_unchecked(i)
+//            })
+//            .find_any(|witness| self.clone().check_witness_uniform(bits, *witness))
+//            .expect("failed to find witness");
+//        assert!(self.check_witness_uniform(bits, witness));
+//        witness
+//    }
+//}

@@ -568,15 +568,6 @@ impl UniformSamplingField for Mersenne31 {
         }
         a
     };
-
-    // Raise CT error if user tries to use Mersenne31 without rejection sampling
-    #[cfg(feature = "uniform-sampling-may-panic")]
-    const _FEATURE_CHECK: () = {
-        compile_error!(
-            "Mersenne31 is incompatible with the 'uniform-sampling-may-panic' feature for `sample_uniform_bits`. \
-             Remove `uniform-sampling-may-panic` from your Cargo.toml [features]."
-        );
-    };
 }
 
 #[cfg(test)]

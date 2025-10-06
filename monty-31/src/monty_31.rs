@@ -15,13 +15,13 @@ use p3_field::op_assign_macros::{
     impl_add_assign, impl_div_methods, impl_mul_methods, impl_sub_assign,
 };
 use p3_field::{
-    Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField32, PrimeField64, RawDataSerializable, TwoAdicField,
-    impl_raw_serializable_primefield32, quotient_map_small_int,
+    impl_raw_serializable_primefield32, quotient_map_small_int, Field, InjectiveMonomial, Packable,
+    PermutationMonomial, PrimeCharacteristicRing, PrimeField, PrimeField32, PrimeField64,
+    RawDataSerializable, TwoAdicField,
 };
-use p3_util::{flatten_to_base, gcd_inversion_prime_field_32};
-use rand::Rng;
+use p3_util::{flatten_to_base, gcd_inversion_prime_field_32, log2_ceil_usize};
 use rand::distr::{Distribution, StandardUniform};
+use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::utils::{
