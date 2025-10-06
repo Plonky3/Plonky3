@@ -115,7 +115,7 @@ impl ValueEnum for ProofOptions {
 
 impl ValueEnum for DftOptions {
     fn value_variants<'a>() -> &'a [Self] {
-        &[Self::Radix2DitParallel, Self::RecursiveDft, Self::None]
+        &[Self::Radix2DitParallel, Self::RecursiveDft, Self::SmallBatch, Self::None]
     }
 
     fn to_possible_value(&self) -> Option<PossibleValue> {

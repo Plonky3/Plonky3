@@ -14,12 +14,14 @@ pub enum MaybeBitreversedMatrix<T> {
 }
 
 impl<T> From<RowMajorMatrix<T>> for MaybeBitreversedMatrix<T> {
+    #[inline(always)]
     fn from(mat: RowMajorMatrix<T>) -> Self {
         Self::No(mat)
     }
 }
 
 impl<T> From<BitReversedMatrixView<RowMajorMatrix<T>>> for MaybeBitreversedMatrix<T> {
+    #[inline(always)]
     fn from(mat: BitReversedMatrixView<RowMajorMatrix<T>>) -> Self {
         Self::Yes(mat)
     }
@@ -46,6 +48,7 @@ where
         }
     }
 
+    #[inline(always)]
     fn to_row_major_matrix(self) -> RowMajorMatrix<T>
     where
         Self: Sized,
@@ -149,6 +152,7 @@ where
 {
     type BitRev = MaybeBitreversedMatrix<T>;
 
+    #[inline(always)]
     fn bit_reverse_rows(self) -> Self::BitRev {
         match self {
             Self::Yes(inner) => inner.inner.into(),
