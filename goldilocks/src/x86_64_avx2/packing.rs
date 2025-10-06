@@ -293,7 +293,7 @@ fn sub(x: __m256i, y: __m256i) -> __m256i {
         let mask = _mm256_cmpgt_epi64(y_s, x_s); // -1 if sub will underflow (y > x) else 0.
         let wrapback_amt = _mm256_srli_epi64::<32>(mask); // -FIELD_ORDER if underflow else 0.
         let res_wrapped = _mm256_sub_epi64(x_s, y_s);
-        _mm256_sub_epi64(res_wrapped, wrapback_amt)
+        shift(_mm256_sub_epi64(res_wrapped, wrapback_amt))
     }
 }
 
@@ -304,7 +304,7 @@ fn sub(x: __m256i, y: __m256i) -> __m256i {
 fn neg(y: __m256i) -> __m256i {
     unsafe {
         let y_s = shift(y);
-        _mm256_sub_epi64(SHIFTED_FIELD_ORDER, canonicalize_s(y_s))
+        shift(_mm256_sub_epi64(SHIFTED_FIELD_ORDER, canonicalize_s(y_s)))
     }
 }
 
