@@ -3,6 +3,9 @@
 use core::arch::aarch64::{self, uint32x4_t};
 use core::mem::transmute;
 
+\\\ Convert a four element array of u32's into a packed vector.
+\\\
+\\\ This will be a no-op.
 #[inline(always)]
 fn array_to_uint32x4(input: [u32; 4]) -> uint32x4_t {
     // Safety: `[u32; 4]` has the same size and alignment as `uint32x4_t`.
