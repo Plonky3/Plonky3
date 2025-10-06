@@ -220,9 +220,6 @@ pub trait UniformSamplingField {
     /// `m_k` is divisible by 2^k, each of the least significant `k` bits has exactly the same
     /// number of zeroes and ones, leading to a uniform sampling.
     const SAMPLING_BITS_M: [u64; 64];
-    /// Mini helper to raise compile time error if `uniform-sampling-may-panic` is active in the
-    /// case of Mersenne31, where resampling probability rises too quickly.
-    const _FEATURE_CHECK: () = ();
 }
 
 fn sample_uniform_bits_impl<T, F>(
@@ -268,6 +265,9 @@ where
     /// up to large number of bits to be sampled.
     ///
     /// E.g. for KoalaBear up to 24 bits can be sampled uniformly "for free".
+    ///
+    /// This variant resamples in case of sampling a value outside the range in
+    /// which we can samplie `bits` uniform bits.
     fn sample_uniform_bits(&mut self, bits: usize) -> usize {
         sample_uniform_bits_impl(
             self,
@@ -277,11 +277,24 @@ where
         )
     }
 
+    /// This variant panics in case of sampling a value for which we would
+    /// produce non uniform bits. The probability of a panic is about 1/P
+    /// for most fields. See `UniformSamplingField` implementation for each
+    /// field for details.
+    fn sample_uniform_bits_may_panic(&mut self, bits: usize) -> usize {
+        sample_uniform_bits_impl(
+            self,
+            bits,
+            &F::SAMPLING_BITS_M,
+            DuplexChallenger::sample_value_may_panic,
+        )
+    }
+
     /// Samples a field element. If the element is larger or equal to `m`, will panic.
     fn sample_value_may_panic(&mut self, m: u64) -> F {
-        // sample a single field element
         let result: F = self.sample();
 
+        // Panic if we sampled a value too large for uniform sampling of bits
         if result.as_canonical_u64() >= m {
             panic!(
                 "Sampled field element {} is larger or equal to {}",
@@ -294,12 +307,9 @@ where
     /// Samples a field element. If the element is larger or equal to `m`, will resample
     /// until a smaller element is found.
     fn sample_value(&mut self, m: u64) -> F {
-        // sample a single field element
         let mut result: F = self.sample();
 
-        // If this feature is enabled, we accept a small chance O(1/P) that we
-        // panic in this function, namely if the sampled field element `result >= m`.
-        // alternatively we simply do rejection sampling until we have a number < m
+        // Rejection sampling until we find a value < m.
         while result.as_canonical_u64() >= m {
             result = self.sample();
         }

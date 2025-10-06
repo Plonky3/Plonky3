@@ -76,7 +76,16 @@ pub trait CanSampleUniformBits<F> {
     ///
     /// Performance overhead depends on the field and number of bits requested.
     /// E.g. for KoalaBear sampling up to 24 bits uniformly is essentially free.
+    ///
+    /// This variant resamples in case of sampling a value outside the range in
+    /// which we can samplie `bits` uniform bits.
     fn sample_uniform_bits(&mut self, bits: usize) -> usize;
+
+    /// This variant panics in case of sampling a value for which we would
+    /// produce non uniform bits. The probability of a panic is about 1/P
+    /// for most fields. See `UniformSamplingField` implementation for each
+    /// field for details.
+    fn sample_uniform_bits_may_panic(&mut self, bits: usize) -> usize;
 
     fn sample_value(&mut self, m: u64) -> F;
 
@@ -191,6 +200,10 @@ where
 {
     fn sample_uniform_bits(&mut self, bits: usize) -> usize {
         (*self).sample_uniform_bits(bits)
+    }
+
+    fn sample_uniform_bits_may_panic(&mut self, bits: usize) -> usize {
+        (*self).sample_uniform_bits_may_panic(bits)
     }
 
     fn sample_value_may_panic(&mut self, m: u64) -> F {

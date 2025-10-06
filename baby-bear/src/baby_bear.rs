@@ -1,10 +1,13 @@
-use p3_challenger::UniformSamplingField;
+use p3_challenger::{
+    CanSampleUniformBits, DuplexChallenger, UniformGrindingChallenger, UniformSamplingField,
+};
 use p3_field::exponentiation::exp_1725656503;
 use p3_field::{Algebra, PrimeCharacteristicRing};
 use p3_monty_31::{
     BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
     PackedMontyParameters, RelativelyPrimePower, TwoAdicData,
 };
+use p3_symmetric::CryptographicPermutation;
 
 /// The prime field `2^31 - 2^27 + 1`, a.k.a. the Baby Bear field.
 pub type BabyBear = MontyField31<BabyBearParameters>;
@@ -132,6 +135,20 @@ impl UniformSamplingField for BabyBearParameters {
         a
     };
 }
+
+//impl<P, const WIDTH: usize, const RATE: usize> UniformGrindingChallenger
+//    for DuplexChallenger<BabyBear, P, WIDTH, RATE>
+//where
+//    P: CryptographicPermutation<[BabyBear; WIDTH]>,
+//{
+//    fn grind_uniform(&mut self, bits: usize) -> Self::Witness {
+//        self.sample_uniform_bits_impl::<_, BabyBear, { BabyBearParameters::MAX_SINGLE_SAMPLE_BITS }>(
+//            bits,
+//            &BabyBearParameters::SAMPLING_BITS_M,
+//            DuplexChallenger::sample_value,
+//        )
+//    }
+//}
 
 #[cfg(test)]
 mod tests {
