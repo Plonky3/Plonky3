@@ -27,9 +27,10 @@ impl<T> From<BitReversedMatrixView<RowMajorMatrix<T>>> for MaybeBitreversedMatri
     }
 }
 
-// TODO: This is pretty nasty. Anyne actually using the matrix trait for
+// TODO: This is pretty nasty. Anyone actually using the matrix trait for
 // MaybeBitreversedMatrix outside of the to_row_major_matrix trait is going to have
-// a bad time. Might want to refactor this somehow.
+// a bad time. Might want to refactor this somehow. We only use to_row_major_matrix
+// from this trait in the proving loop so it's not a huge issue for now.
 impl<T> Matrix<T> for MaybeBitreversedMatrix<T>
 where
     T: Send + Sync + Clone,
