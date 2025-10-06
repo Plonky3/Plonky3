@@ -1,10 +1,10 @@
 use std::ops::Deref;
 
-use p3_dft::{Radix2DitParallel, TwoAdicSubgroupDft, Radix2DFTSmallBatch};
+use p3_dft::{Radix2DFTSmallBatch, Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::{PackedValue, TwoAdicField};
+use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversalPerm, BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::Matrix;
 use p3_monty_31::dft::RecursiveDft;
 
 #[derive(Debug)]
@@ -31,7 +31,7 @@ impl<T> From<BitReversedMatrixView<RowMajorMatrix<T>>> for MaybeBitreversedMatri
 // MaybeBitreversedMatrix outside of the to_row_major_matrix trait is going to have
 // a bad time. Might want to refactor this somehow.
 impl<T> Matrix<T> for MaybeBitreversedMatrix<T>
-where 
+where
     T: Send + Sync + Clone,
 {
     fn width(&self) -> usize {
@@ -73,9 +73,10 @@ where
         r: usize,
     ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
         match self {
-            Self::Yes(_) => { unimplemented!("Not implemented for MaybeBitreversedMatrix") },
+            Self::Yes(_) => {
+                unimplemented!("Not implemented for MaybeBitreversedMatrix")
+            }
             Self::No(inner) => unsafe { inner.row_unchecked(r) },
-            
         }
     }
 
@@ -87,16 +88,18 @@ where
     ) -> impl IntoIterator<Item = T, IntoIter = impl Iterator<Item = T> + Send + Sync> {
         match self {
             Self::Yes(inner) => unsafe { inner.row_subseq_unchecked(r, start, end) },
-            Self::No(_) => { unimplemented!("Not implemented for MaybeBitreversedMatrix")},
-            
+            Self::No(_) => {
+                unimplemented!("Not implemented for MaybeBitreversedMatrix")
+            }
         }
     }
 
     unsafe fn row_slice_unchecked(&self, r: usize) -> impl Deref<Target = [T]> {
         match self {
             Self::Yes(inner) => unsafe { inner.row_slice_unchecked(r) },
-            Self::No(_) => { unimplemented!("Not implemented for MaybeBitreversedMatrix")},
-            
+            Self::No(_) => {
+                unimplemented!("Not implemented for MaybeBitreversedMatrix")
+            }
         }
     }
 
@@ -107,7 +110,9 @@ where
         end: usize,
     ) -> impl Deref<Target = [T]> {
         match self {
-            Self::Yes(_) => { unimplemented!("Not implemented for MaybeBitreversedMatrix")},
+            Self::Yes(_) => {
+                unimplemented!("Not implemented for MaybeBitreversedMatrix")
+            }
             Self::No(inner) => unsafe { inner.row_subslice_unchecked(r, start, end) },
         }
     }
@@ -125,8 +130,9 @@ where
     {
         match self {
             Self::Yes(inner) => inner.horizontally_packed_row(r),
-            Self::No(_) => { unimplemented!("Not implemented for MaybeBitreversedMatrix")},
-            
+            Self::No(_) => {
+                unimplemented!("Not implemented for MaybeBitreversedMatrix")
+            }
         }
     }
 
@@ -139,9 +145,10 @@ where
         T: Clone + Default + 'a,
     {
         match self {
-            Self::Yes(_) => { unimplemented!("Not implemented for MaybeBitreversedMatrix")},
+            Self::Yes(_) => {
+                unimplemented!("Not implemented for MaybeBitreversedMatrix")
+            }
             Self::No(inner) => inner.padded_horizontally_packed_row(r),
-            
         }
     }
 }
@@ -168,7 +175,7 @@ where
 pub enum DftChoice<F> {
     Recursive(RecursiveDft<F>),
     Parallel(Radix2DitParallel<F>),
-    SmallBatch(Radix2DFTSmallBatch<F>)
+    SmallBatch(Radix2DFTSmallBatch<F>),
 }
 
 impl<F: Default> Default for DftChoice<F> {
