@@ -11,6 +11,7 @@ fn array_to_uint32x4(input: [u32; 4]) -> uint32x4_t {
     // Safety: `[u32; 4]` has the same size as `uint32x4_t`.
     unsafe { transmute::<[u32; 4], uint32x4_t>(input) }
 }
+
 /// Convert a packed vector into a four element array of u32's.
 ///
 /// This will be a no-op.
