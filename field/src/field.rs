@@ -509,9 +509,12 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     #[must_use]
     #[inline]
     fn flatten_to_base(vec: Vec<Self>) -> Vec<F> {
-        vec.into_iter()
-            .flat_map(|x| x.as_basis_coefficients_slice().to_vec())
-            .collect()
+        // Pre-allocate and extend slices to avoid per-element Vec allocations.
+        let mut out = Vec::with_capacity(vec.len() * Self::DIMENSION);
+        for x in vec {
+            out.extend_from_slice(x.as_basis_coefficients_slice());
+        }
+        out
     }
 
     /// Convert from a vector of `F` to a vector of `Self` by combining the basis coefficients.
