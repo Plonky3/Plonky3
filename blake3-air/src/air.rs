@@ -1,5 +1,4 @@
 use alloc::vec::Vec;
-use core::borrow::Borrow;
 
 use itertools::izip;
 use p3_air::utils::{add2, add3, pack_bits_le, xor_32_shift};
