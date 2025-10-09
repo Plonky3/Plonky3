@@ -1,5 +1,7 @@
+use core::fmt::Debug;
+
 /// A permutation in the mathematical sense.
-pub trait Permutation<T: Clone>: Clone + Sync {
+pub trait Permutation<T: Clone>: Clone + Sync + Debug {
     #[inline(always)]
     fn permute(&self, mut input: T) -> T {
         self.permute_mut(&mut input);

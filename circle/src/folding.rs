@@ -13,6 +13,7 @@ use p3_util::{log2_strict_usize, reverse_bits_len};
 use crate::domain::CircleDomain;
 use crate::{CircleInputProof, InputError};
 
+#[derive(Debug)]
 pub(crate) struct CircleFriFolding<F, InputProof, InputError>(
     pub(crate) PhantomData<(F, InputProof, InputError)>,
 );
@@ -23,7 +24,7 @@ pub(crate) type CircleFriFoldingForMmcs<Val, Challenge, InputMmcs, FriMmcs> = Ci
     InputError<<InputMmcs as Mmcs<Val>>::Error, <FriMmcs as Mmcs<Challenge>>::Error>,
 >;
 
-impl<F: ComplexExtendable, EF: ExtensionField<F>, InputProof, InputError: Debug>
+impl<F: ComplexExtendable, EF: ExtensionField<F>, InputProof: Debug, InputError: Debug>
     FriFoldingStrategy<F, EF> for CircleFriFolding<F, InputProof, InputError>
 {
     type InputProof = InputProof;

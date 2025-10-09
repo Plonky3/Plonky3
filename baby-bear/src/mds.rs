@@ -6,10 +6,11 @@
 //! work by Angus Gruen and Hamish Ivey-Law. Other sizes are from Ulrich Haböck's
 //! database.
 
+use core::fmt::Debug;
 use p3_mds::util::first_row_to_first_col;
 use p3_monty_31::{MDSUtils, MdsMatrixMontyField31};
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct MDSBabyBearData;
 
 impl MDSUtils for MDSBabyBearData {

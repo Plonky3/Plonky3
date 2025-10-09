@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
 use core::arch::x86_64::{self, __m256i};
 use core::mem::transmute;
+use core::fmt::Debug;
 
 use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_poseidon2::{
@@ -35,7 +36,7 @@ impl InternalLayerConstructor<Mersenne31> for Poseidon2InternalLayerMersenne31 {
 /// The packed constants are stored in negative form as this allows some optimizations.
 /// This means given a constant `x`, we treat it as an `i32` and
 /// pack 8 copies of `x - P` into the corresponding `__m256i` packed constant.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Poseidon2ExternalLayerMersenne31<const WIDTH: usize> {
     pub(crate) external_constants: ExternalLayerConstants<Mersenne31, WIDTH>,
     packed_initial_external_constants: Vec<[__m256i; WIDTH]>,

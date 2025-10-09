@@ -124,9 +124,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::fmt::Debug;
     use crate::Permutation;
 
-    #[derive(Clone)]
+    #[derive(Clone, Debug)]
     struct MockPermutation;
 
     impl<T, const WIDTH: usize> Permutation<[T; WIDTH]> for MockPermutation

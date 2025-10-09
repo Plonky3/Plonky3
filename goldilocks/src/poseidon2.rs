@@ -8,6 +8,7 @@
 
 //! Long term we will use more optimised internal and external linear layers.
 use alloc::vec::Vec;
+use core::fmt::Debug;
 
 use p3_field::{Algebra, InjectiveMonomial};
 use p3_poseidon2::{
@@ -184,7 +185,7 @@ impl<A: Algebra<Goldilocks> + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>>
 }
 
 /// The external layers of the Poseidon2 permutation.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Poseidon2ExternalLayerGoldilocks<const WIDTH: usize> {
     pub(crate) external_constants: ExternalLayerConstants<Goldilocks, WIDTH>,
 }
@@ -222,7 +223,7 @@ impl<A: Algebra<Goldilocks> + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>, const 
 }
 
 /// The external layers of the Poseidon2 permutation used by Horizen Labs.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Poseidon2ExternalLayerGoldilocksHL<const WIDTH: usize> {
     pub(crate) external_constants: ExternalLayerConstants<Goldilocks, WIDTH>,
 }

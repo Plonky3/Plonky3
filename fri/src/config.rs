@@ -36,8 +36,8 @@ impl<M> FriParameters<M> {
 
 /// Whereas `FriParameters` encompasses parameters the end user can set, `FriFoldingStrategy` is
 /// set by the PCS calling FRI, and abstracts over implementation details of the PCS.
-pub trait FriFoldingStrategy<F: Field, EF: ExtensionField<F>> {
-    type InputProof;
+pub trait FriFoldingStrategy<F: Field, EF: ExtensionField<F>>: Debug {
+    type InputProof: Debug;
     type InputError: Debug;
 
     /// We can ask FRI to sample extra query bits (LSB) for our own purposes.

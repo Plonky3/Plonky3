@@ -222,7 +222,7 @@ mod tests {
     type G = Goldilocks;
     type BB = BabyBear;
 
-    #[derive(Clone)]
+    #[derive(Clone, Debug)]
     struct TestPermutation {}
 
     impl<F: Clone> Permutation<[F; WIDTH]> for TestPermutation {

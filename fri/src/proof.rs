@@ -1,27 +1,28 @@
 use alloc::vec::Vec;
+use core::fmt::Debug;
 
 use p3_commit::Mmcs;
 use p3_field::Field;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(bound(
     serialize = "Witness: Serialize, InputProof: Serialize",
     deserialize = "Witness: Deserialize<'de>, InputProof: Deserialize<'de>"
 ))]
-pub struct FriProof<F: Field, M: Mmcs<F>, Witness, InputProof> {
+pub struct FriProof<F: Field, M: Mmcs<F>, Witness, InputProof: Debug> {
     pub commit_phase_commits: Vec<M::Commitment>,
     pub query_proofs: Vec<QueryProof<F, M, InputProof>>,
     pub final_poly: Vec<F>,
     pub pow_witness: Witness,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(bound(
     serialize = "InputProof: Serialize",
     deserialize = "InputProof: Deserialize<'de>",
 ))]
-pub struct QueryProof<F: Field, M: Mmcs<F>, InputProof> {
+pub struct QueryProof<F: Field, M: Mmcs<F>, InputProof: Debug> {
     pub input_proof: InputProof,
     /// For each commit phase commitment, this contains openings of a commit phase codeword at the
     /// queried location, along with an opening proof.

@@ -17,6 +17,8 @@
 
 use alloc::vec::Vec;
 
+use core::fmt::Debug;
+
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_mds::MdsPermutation;
 use p3_symmetric::Permutation;
@@ -76,7 +78,7 @@ where
 /// The 4x4 MDS matrix used by the Horizon Labs implementation of Poseidon2.
 ///
 /// This requires 10 additions and 4 doubles to compute.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct HLMDSMat4;
 
 impl<R: PrimeCharacteristicRing> Permutation<[R; 4]> for HLMDSMat4 {
@@ -90,7 +92,7 @@ impl<R: PrimeCharacteristicRing> MdsPermutation<R, 4> for HLMDSMat4 {}
 /// The fastest 4x4 MDS matrix.
 ///
 /// This requires 7 additions and 2 doubles to compute.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct MDSMat4;
 
 impl<R: PrimeCharacteristicRing> Permutation<[R; 4]> for MDSMat4 {

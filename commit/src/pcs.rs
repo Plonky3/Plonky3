@@ -35,7 +35,7 @@ where
     type EvaluationsOnDomain<'a>: Matrix<Val<Self::Domain>> + 'a;
 
     /// The opening argument.
-    type Proof: Clone + Serialize + DeserializeOwned;
+    type Proof: Clone + Serialize + DeserializeOwned + Debug;
 
     /// The type of a proof verification error.
     type Error: Debug;

@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::mem::MaybeUninit;
 use core::ops::{Div, DivAssign};
@@ -10,14 +11,14 @@ use crate::{Algebra, BasedVectorSpace, ExtensionField, Powers, PrimeCharacterist
 /// A trait to constrain types that can be packed into a packed value.
 ///
 /// The `Packable` trait allows us to specify implementations for potentially conflicting types.
-pub trait Packable: 'static + Default + Copy + Send + Sync + PartialEq + Eq {}
+pub trait Packable: 'static + Default + Copy + Send + Sync + PartialEq + Eq + Debug {}
 
 /// A trait for array-like structs made up of multiple scalar elements.
 ///
 /// # Safety
 /// - If `P` implements `PackedField` then `P` must be castable to/from `[P::Value; P::WIDTH]`
 ///   without UB.
-pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
+pub unsafe trait PackedValue: 'static + Copy + Send + Sync + Debug {
     /// The scalar type that is packed into this value.
     type Value: Packable;
 

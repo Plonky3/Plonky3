@@ -1,6 +1,7 @@
 use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::fmt::Debug;
 use core::marker::PhantomData;
 
 use itertools::{Itertools, izip};
@@ -44,7 +45,7 @@ impl<Val: Field, InputMmcs, FriMmcs> CirclePcs<Val, InputMmcs, FriMmcs> {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(bound = "")]
 pub struct CircleInputProof<
     Val: Field,
@@ -64,7 +65,7 @@ pub enum InputError<InputMmcsError, FriMmcsError> {
     InputShapeError,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(bound(
     serialize = "Witness: Serialize",
     deserialize = "Witness: Deserialize<'de>"

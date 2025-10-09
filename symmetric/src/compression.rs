@@ -78,7 +78,7 @@ mod tests {
     use super::*;
     use crate::Permutation;
 
-    #[derive(Clone)]
+    #[derive(Clone, Debug)]
     struct MockPermutation;
 
     impl<T, const WIDTH: usize> Permutation<[T; WIDTH]> for MockPermutation

@@ -4,6 +4,7 @@
 //! Converting the AVX2/AVX512 code across to Neon is on the TODO list.
 
 use alloc::vec::Vec;
+use core::fmt::Debug;
 
 use p3_poseidon2::{
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, GenericPoseidon2LinearLayers,
@@ -20,7 +21,7 @@ pub struct Poseidon2InternalLayerMersenne31 {
 }
 
 /// The external layers of the Poseidon2 permutation.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Poseidon2ExternalLayerMersenne31<const WIDTH: usize> {
     pub(crate) external_constants: ExternalLayerConstants<Mersenne31, WIDTH>,
 }

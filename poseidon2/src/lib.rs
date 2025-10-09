@@ -13,6 +13,7 @@ mod generic;
 mod internal;
 mod round_numbers;
 use alloc::vec::Vec;
+use core::fmt::Debug;
 use core::marker::PhantomData;
 
 pub use external::*;
@@ -96,7 +97,7 @@ where
     }
 }
 
-impl<F, A, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64> Permutation<[A; WIDTH]>
+impl<F, A, ExternalPerm: Debug, InternalPerm: Debug, const WIDTH: usize, const D: u64> Permutation<[A; WIDTH]>
     for Poseidon2<F, ExternalPerm, InternalPerm, WIDTH, D>
 where
     F: PrimeField + InjectiveMonomial<D>,
@@ -111,7 +112,7 @@ where
     }
 }
 
-impl<F, A, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>
+impl<F, A, ExternalPerm: Debug, InternalPerm: Debug, const WIDTH: usize, const D: u64>
     CryptographicPermutation<[A; WIDTH]> for Poseidon2<F, ExternalPerm, InternalPerm, WIDTH, D>
 where
     F: PrimeField + InjectiveMonomial<D>,

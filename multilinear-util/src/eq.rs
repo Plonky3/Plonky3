@@ -625,6 +625,7 @@ fn scale_and_add<F: Field, EF: ExtensionField<F>, const INITIALIZED: bool>(
 mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
+    use alloc::format;
 
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;

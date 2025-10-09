@@ -248,6 +248,22 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         self.coset_dft_batch(coeffs, shift)
     }
 
+    /// Compute the low-degree extension onto a coset of a larger subgroup, leveraging that
+    /// rows at and after `known_zero_suffix_start` are known to be zero in the input evaluations.
+    ///
+    /// Default implementation ignores the hint and delegates to `coset_lde_batch`.
+    /// Implementations may override to take advantage of pruned iDFT/FFT.
+    fn coset_lde_batch_with_zero_suffix(
+        &self,
+        mat: RowMajorMatrix<F>,
+        added_bits: usize,
+        shift: F,
+        known_zero_suffix_start: usize,
+    ) -> Self::Evaluations {
+        let _ = known_zero_suffix_start;
+        self.coset_lde_batch(mat, added_bits, shift)
+    }
+
     /// Compute the discrete Fourier transform (DFT) of `vec`.
     ///
     /// #### Mathematical Description

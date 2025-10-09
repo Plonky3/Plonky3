@@ -1,4 +1,5 @@
 use core::any::type_name;
+use core::fmt::Debug;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
@@ -108,10 +109,10 @@ where
     PW: PackedValue,
     H: CryptographicHasher<P::Scalar, [PW::Value; DIGEST_ELEMS]>
         + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
-        + Sync,
+        + Sync + Debug,
     C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>
         + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>
-        + Sync,
+        + Sync + Debug,
     [PW::Value; DIGEST_ELEMS]: Serialize + DeserializeOwned,
     StandardUniform: Distribution<P::Scalar>,
 {
@@ -145,10 +146,10 @@ where
     PW: PackedValue,
     H: CryptographicHasher<P::Scalar, [PW::Value; DIGEST_ELEMS]>
         + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
-        + Sync,
+        + Sync + Debug,
     C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>
         + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>
-        + Sync,
+        + Sync + Debug,
     [PW::Value; DIGEST_ELEMS]: Serialize + DeserializeOwned,
     StandardUniform: Distribution<P::Scalar>,
 {

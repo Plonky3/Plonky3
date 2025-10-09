@@ -21,6 +21,7 @@
 
 use alloc::vec::Vec;
 use core::cmp::Reverse;
+use core::fmt::Debug;
 use core::marker::PhantomData;
 
 use itertools::Itertools;
@@ -106,10 +107,12 @@ where
     PW: PackedValue,
     H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>
         + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
-        + Sync,
+        + Sync
+        + Debug,
     C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>
         + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>
-        + Sync,
+        + Sync
+        + Debug,
     PW::Value: Eq,
     [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
 {

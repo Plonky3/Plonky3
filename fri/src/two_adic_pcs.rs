@@ -49,6 +49,9 @@ pub struct TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
     pub(crate) dft: Dft,
     pub(crate) mmcs: InputMmcs,
     pub(crate) fri: FriParameters<FriMmcs>,
+    /// If set, indicates that input evaluation rows at and after this index are zero and may
+    /// be leveraged by the DFT backend for pruning during LDE.
+    pub(crate) known_zero_suffix_start: Option<usize>,
     _phantom: PhantomData<Val>,
 }
 
@@ -58,8 +61,14 @@ impl<Val, Dft, InputMmcs, FriMmcs> TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
             dft,
             mmcs,
             fri,
+            known_zero_suffix_start: None,
             _phantom: PhantomData,
         }
+    }
+
+    pub const fn with_known_zero_suffix_start(mut self, start: Option<usize>) -> Self {
+        self.known_zero_suffix_start = start;
+        self
     }
 }
 
@@ -88,12 +97,13 @@ pub type CommitmentWithOpeningPoints<Challenge, Commitment, Domain> = (
     )>,
 );
 
+#[derive(Debug)]
 pub struct TwoAdicFriFolding<InputProof, InputError>(pub PhantomData<(InputProof, InputError)>);
 
 pub type TwoAdicFriFoldingForMmcs<F, M> =
     TwoAdicFriFolding<Vec<BatchOpening<F, M>>, <M as Mmcs<F>>::Error>;
 
-impl<F: TwoAdicField, InputProof, InputError: Debug, EF: ExtensionField<F>>
+impl<F: TwoAdicField, InputProof: Debug, InputError: Debug, EF: ExtensionField<F>>
     FriFoldingStrategy<F, EF> for TwoAdicFriFolding<InputProof, InputError>
 {
     type InputProof = InputProof;
@@ -212,10 +222,13 @@ where
                 let shift = Val::GENERATOR / domain.shift();
                 // Compute the LDE with blowup factor fri.log_blowup.
                 // We bit reverse as this is required by our implementation of the FRI protocol.
-                self.dft
-                    .coset_lde_batch(evals, self.fri.log_blowup, shift)
-                    .bit_reverse_rows()
-                    .to_row_major_matrix()
+                let lde = if let Some(r) = self.known_zero_suffix_start {
+                    self.dft
+                        .coset_lde_batch_with_zero_suffix(evals, self.fri.log_blowup, shift, r)
+                } else {
+                    self.dft.coset_lde_batch(evals, self.fri.log_blowup, shift)
+                };
+                lde.bit_reverse_rows().to_row_major_matrix()
             })
             .collect();
 

@@ -105,6 +105,7 @@ mod tests {
     use p3_field::PrimeCharacteristicRing;
     use p3_symmetric::Permutation;
     use proptest::prelude::*;
+    use alloc::format;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 

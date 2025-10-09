@@ -1,4 +1,5 @@
 use core::marker::PhantomData;
+use core::fmt::Debug;
 
 use p3_mds::MdsPermutation;
 use p3_mds::karatsuba_convolution::Convolve;
@@ -8,7 +9,7 @@ use p3_symmetric::Permutation;
 use crate::{BarrettParameters, MontyField31, MontyParameters};
 
 /// A collection of circulant MDS matrices saved using their left most column.
-pub trait MDSUtils: Clone + Sync {
+pub trait MDSUtils: Clone + Sync + Debug {
     const MATRIX_CIRC_MDS_8_COL: [i64; 8];
     const MATRIX_CIRC_MDS_12_COL: [i64; 12];
     const MATRIX_CIRC_MDS_16_COL: [i64; 16];

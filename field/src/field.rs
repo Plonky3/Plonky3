@@ -764,6 +764,7 @@ pub trait Field:
     + Display
     + Serialize
     + DeserializeOwned
+    + Debug
 {
     type Packing: PackedField<Scalar = Self>;
 
