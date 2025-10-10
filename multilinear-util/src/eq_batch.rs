@@ -180,18 +180,10 @@ where
 
 /// Computes the batched scaled multilinear equality polynomial over `{0,1}` for multiple points.
 ///
-/// This is the batched version of `eval_eq_1` that efficiently computes the final summation
-/// for a single variable across multiple evaluation points simultaneously.
-///
-/// The equality polynomial for one variable is:
+/// We compute:
 /// ```text
-/// eq(x, z) = x * z + (1 - x) * (1 - z)
-/// ```
-///
-/// For the batched case, we compute:
-/// ```text
-/// eq_sum(0) = ∑_i scalars[i] * (1 - evals[0][i])  // when x = 0
-/// eq_sum(1) = ∑_i scalars[i] * evals[0][i]        // when x = 1
+/// eq_sum(0) = ∑_i scalars[i] * (1 - evals[0][i])
+/// eq_sum(1) = ∑_i scalars[i] * evals[0][i]
 /// ```
 ///
 /// # Arguments
@@ -199,10 +191,7 @@ where
 /// - `scalars`: Vector of scalars [γ_0, γ_1, ..., γ_{m-1}] for weighting each evaluation
 ///
 /// # Returns
-/// An array `[eq_sum(0), eq_sum(1)]` containing the summed evaluations for x = 0 and x = 1.
-///
-/// # Panics
-/// Panics in debug builds if `evals.height() != 1` or `evals.width() != scalars.len()`.
+/// An array `[eq_sum(0), eq_sum(1)]`.
 #[inline(always)]
 fn eval_eq_1_batch<F, FP>(evals: RowMajorMatrixView<F>, scalars: &[FP]) -> [FP; 2]
 where
