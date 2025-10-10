@@ -201,7 +201,6 @@ where
     debug_assert_eq!(evals.height(), 1);
     debug_assert_eq!(evals.width(), scalars.len());
 
-
     // Compute the total sum of all scalars: ∑_i γ_i
     let sum: FP = scalars.iter().copied().sum();
 
