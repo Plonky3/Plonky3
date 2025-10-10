@@ -201,10 +201,6 @@ where
     debug_assert_eq!(evals.height(), 1);
     debug_assert_eq!(evals.width(), scalars.len());
 
-    // Use linearity to avoid redundant operations.
-    //
-    // Instead of computing each term individually and summing, we leverage
-    // the mathematical relationship between eq(0,z) and eq(1,z).
 
     // Compute the total sum of all scalars: ∑_i γ_i
     let sum: FP = scalars.iter().copied().sum();
