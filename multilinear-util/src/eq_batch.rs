@@ -806,212 +806,83 @@ fn eval_eq_packed_batch<F, IF, EF, E, const INITIALIZED: bool>(
     EF: ExtensionField<F>,
     E: EqualityEvaluator<InputField = IF, OutputField = EF>,
 {
-    // Ensure that the output buffer size is correct:
-    // It should be of size `2^n`, where `n` is the number of variables.
-    let width = F::Packing::WIDTH;
-    debug_assert_eq!(out.len(), width << eval_points.height());
-    debug_assert_eq!(eval_points.width(), eq_evals.len());
-    debug_assert_eq!(eval_points.width(), scalars.len());
+    let num_vars = eval_points.height();
+    let num_points = eval_points.width();
+    debug_assert_eq!(out.len(), F::Packing::WIDTH << num_vars);
+
+    if num_vars > 0 {
+        // Allocate a single workspace buffer for the entire recursive process.
+        //
+        // Each level of recursion needs space for two branches of packed vectors.
+        let mut workspace = E::PackedField::zero_vec(2 * num_points * num_vars);
+        eval_eq_packed_batch_recursive::<F, IF, EF, E, INITIALIZED>(
+            eval_points,
+            out,
+            eq_evals,
+            scalars,
+            &mut workspace,
+        );
+    } else {
+        // Handle the base case directly if there is no recursion.
+        E::accumulate_packed_batch::<INITIALIZED>(out, eq_evals, scalars);
+    }
+}
+
+/// Recursive helper for batched packed evaluation that operates on a pre-allocated workspace.
+#[inline]
+fn eval_eq_packed_batch_recursive<F, IF, EF, E, const INITIALIZED: bool>(
+    eval_points: RowMajorMatrixView<IF>,
+    out: &mut [EF],
+    eq_evals: &[E::PackedField],
+    scalars: &[EF],
+    workspace: &mut [E::PackedField],
+) where
+    F: Field,
+    IF: Field,
+    EF: ExtensionField<F>,
+    E: EqualityEvaluator<InputField = IF, OutputField = EF>,
+{
+    let num_points = eval_points.width();
 
     match eval_points.height() {
         0 => {
-            // Base case: sum all packed evaluations and accumulate
+            // Base case of the recursion.
             E::accumulate_packed_batch::<INITIALIZED>(out, eq_evals, scalars);
         }
-        1 => {
-            // Special case for 1 variable: unroll the recursion manually
-            let (low, high) = out.split_at_mut(out.len() / 2);
-            let (first_row, _remainder) = eval_points.split_rows(1);
-            let num_points = eval_points.width();
-
-            // Allocate workspace for both branches
-            let mut workspace = E::PackedField::zero_vec(2 * num_points);
-            let (eq_evals_0, eq_evals_1) = workspace.split_at_mut(num_points);
-
-            // Compute evaluations for both branches in batch
-            for i in 0..num_points {
-                let z_0 = first_row.values[i];
-                let eq_eval = eq_evals[i];
-                let eq_1 = eq_eval * z_0;
-                let eq_0 = eq_eval - eq_1;
-                eq_evals_0[i] = eq_0;
-                eq_evals_1[i] = eq_1;
-            }
-
-            E::accumulate_packed_batch::<INITIALIZED>(low, eq_evals_0, scalars);
-            E::accumulate_packed_batch::<INITIALIZED>(high, eq_evals_1, scalars);
-        }
-        2 => {
-            // Special case for 2 variables: unroll 2 levels of recursion manually
-            let quarter_len = out.len() / 4;
-            let (bottom_half, top_half) = out.split_at_mut(out.len() / 2);
-            let (q00, q01) = bottom_half.split_at_mut(quarter_len);
-            let (q10, q11) = top_half.split_at_mut(quarter_len);
-
-            let (first_row, second_row) = eval_points.split_rows(1);
-            let (second_row_single, _remainder) = second_row.split_rows(1);
-            let num_points = eval_points.width();
-
-            // Allocate workspace for all branches (6 * num_points)
-            let mut workspace = E::PackedField::zero_vec(6 * num_points);
-            let (eq_evals_0, rest) = workspace.split_at_mut(num_points);
-            let (eq_evals_1, rest) = rest.split_at_mut(num_points);
-            let (eq_evals_00, rest) = rest.split_at_mut(num_points);
-            let (eq_evals_01, rest) = rest.split_at_mut(num_points);
-            let (eq_evals_10, eq_evals_11) = rest.split_at_mut(num_points);
-
-            // First split on z_0
-            for i in 0..num_points {
-                let z_0 = first_row.values[i];
-                let eq_eval = eq_evals[i];
-                let eq_1 = eq_eval * z_0;
-                let eq_0 = eq_eval - eq_1;
-                eq_evals_0[i] = eq_0;
-                eq_evals_1[i] = eq_1;
-            }
-
-            // Then split each branch on z_1
-            for i in 0..num_points {
-                let z_1 = second_row_single.values[i];
-
-                let eq_eval_0 = eq_evals_0[i];
-                let eq_01_val = eq_eval_0 * z_1;
-                let eq_00_val = eq_eval_0 - eq_01_val;
-                eq_evals_00[i] = eq_00_val;
-                eq_evals_01[i] = eq_01_val;
-
-                let eq_eval_1 = eq_evals_1[i];
-                let eq_11_val = eq_eval_1 * z_1;
-                let eq_10_val = eq_eval_1 - eq_11_val;
-                eq_evals_10[i] = eq_10_val;
-                eq_evals_11[i] = eq_11_val;
-            }
-
-            E::accumulate_packed_batch::<INITIALIZED>(q00, eq_evals_00, scalars);
-            E::accumulate_packed_batch::<INITIALIZED>(q01, eq_evals_01, scalars);
-            E::accumulate_packed_batch::<INITIALIZED>(q10, eq_evals_10, scalars);
-            E::accumulate_packed_batch::<INITIALIZED>(q11, eq_evals_11, scalars);
-        }
-        3 => {
-            // Special case for 3 variables: unroll 3 levels of recursion manually
-            let eighth_len = out.len() / 8;
-            let (q0, q1) = out.split_at_mut(out.len() / 2);
-            let (q00, q01) = q0.split_at_mut(q0.len() / 2);
-            let (q10, q11) = q1.split_at_mut(q1.len() / 2);
-            let (q000, q001) = q00.split_at_mut(eighth_len);
-            let (q010, q011) = q01.split_at_mut(eighth_len);
-            let (q100, q101) = q10.split_at_mut(eighth_len);
-            let (q110, q111) = q11.split_at_mut(eighth_len);
-
-            let (first_row, remainder) = eval_points.split_rows(1);
-            let (second_row, third_row) = remainder.split_rows(1);
-            let (third_row_single, _remainder) = third_row.split_rows(1);
-            let num_points = eval_points.width();
-
-            // Allocate workspace for all branches (14 * num_points)
-            let mut workspace = E::PackedField::zero_vec(14 * num_points);
-            let (eq_evals_0, rest) = workspace.split_at_mut(num_points);
-            let (eq_evals_1, rest) = rest.split_at_mut(num_points);
-            let (eq_evals_00, rest) = rest.split_at_mut(num_points);
-            let (eq_evals_01, rest) = rest.split_at_mut(num_points);
-            let (eq_evals_10, rest) = rest.split_at_mut(num_points);
-            let (eq_evals_11, rest) = rest.split_at_mut(num_points);
-            let (eq_evals_000, rest) = rest.split_at_mut(num_points);
-            let (eq_evals_001, rest) = rest.split_at_mut(num_points);
-            let (eq_evals_010, rest) = rest.split_at_mut(num_points);
-            let (eq_evals_011, rest) = rest.split_at_mut(num_points);
-            let (eq_evals_100, rest) = rest.split_at_mut(num_points);
-            let (eq_evals_101, rest) = rest.split_at_mut(num_points);
-            let (eq_evals_110, eq_evals_111) = rest.split_at_mut(num_points);
-
-            // First split on z_0
-            for i in 0..num_points {
-                let z_0 = first_row.values[i];
-                let eq_eval = eq_evals[i];
-                let eq_1 = eq_eval * z_0;
-                let eq_0 = eq_eval - eq_1;
-                eq_evals_0[i] = eq_0;
-                eq_evals_1[i] = eq_1;
-            }
-
-            // Split each branch on z_1
-            for i in 0..num_points {
-                let z_1 = second_row.values[i];
-
-                let eq_eval_0 = eq_evals_0[i];
-                let eq_01_val = eq_eval_0 * z_1;
-                let eq_00_val = eq_eval_0 - eq_01_val;
-                eq_evals_00[i] = eq_00_val;
-                eq_evals_01[i] = eq_01_val;
-
-                let eq_eval_1 = eq_evals_1[i];
-                let eq_11_val = eq_eval_1 * z_1;
-                let eq_10_val = eq_eval_1 - eq_11_val;
-                eq_evals_10[i] = eq_10_val;
-                eq_evals_11[i] = eq_11_val;
-            }
-
-            // Finally split each of the 4 branches on z_2
-            for i in 0..num_points {
-                let z_2 = third_row_single.values[i];
-
-                let eq_eval_00 = eq_evals_00[i];
-                let eq_001_val = eq_eval_00 * z_2;
-                let eq_000_val = eq_eval_00 - eq_001_val;
-                eq_evals_000[i] = eq_000_val;
-                eq_evals_001[i] = eq_001_val;
-
-                let eq_eval_01 = eq_evals_01[i];
-                let eq_011_val = eq_eval_01 * z_2;
-                let eq_010_val = eq_eval_01 - eq_011_val;
-                eq_evals_010[i] = eq_010_val;
-                eq_evals_011[i] = eq_011_val;
-
-                let eq_eval_10 = eq_evals_10[i];
-                let eq_101_val = eq_eval_10 * z_2;
-                let eq_100_val = eq_eval_10 - eq_101_val;
-                eq_evals_100[i] = eq_100_val;
-                eq_evals_101[i] = eq_101_val;
-
-                let eq_eval_11 = eq_evals_11[i];
-                let eq_111_val = eq_eval_11 * z_2;
-                let eq_110_val = eq_eval_11 - eq_111_val;
-                eq_evals_110[i] = eq_110_val;
-                eq_evals_111[i] = eq_111_val;
-            }
-
-            E::accumulate_packed_batch::<INITIALIZED>(q000, eq_evals_000, scalars);
-            E::accumulate_packed_batch::<INITIALIZED>(q001, eq_evals_001, scalars);
-            E::accumulate_packed_batch::<INITIALIZED>(q010, eq_evals_010, scalars);
-            E::accumulate_packed_batch::<INITIALIZED>(q011, eq_evals_011, scalars);
-            E::accumulate_packed_batch::<INITIALIZED>(q100, eq_evals_100, scalars);
-            E::accumulate_packed_batch::<INITIALIZED>(q101, eq_evals_101, scalars);
-            E::accumulate_packed_batch::<INITIALIZED>(q110, eq_evals_110, scalars);
-            E::accumulate_packed_batch::<INITIALIZED>(q111, eq_evals_111, scalars);
-        }
         _ => {
-            // General recursive case for 4+ variables
+            // General recursive case for any number of variables.
             let (low, high) = out.split_at_mut(out.len() / 2);
             let (first_row, remainder) = eval_points.split_rows(1);
-            let num_points = eval_points.width();
 
-            // Allocate workspace for both branches
-            let mut workspace = E::PackedField::zero_vec(2 * num_points);
-            let (eq_evals_0, eq_evals_1) = workspace.split_at_mut(num_points);
+            // Slice the pre-allocated workspace, do not allocate a new one.
+            let (s0_buffer, rest_workspace) = workspace.split_at_mut(num_points);
+            let (s1_buffer, next_workspace) = rest_workspace.split_at_mut(num_points);
 
-            // Compute new packed scalars for both branches in-place
+            // Compute new packed scalars for both branches.
             for i in 0..num_points {
                 let z_0 = first_row.values[i];
                 let eq_eval = eq_evals[i];
-                let eq_1 = eq_eval * z_0;
-                let eq_0 = eq_eval - eq_1;
-                eq_evals_0[i] = eq_0;
-                eq_evals_1[i] = eq_1;
+                let s1 = eq_eval * z_0;
+                let s0 = eq_eval - s1;
+                s0_buffer[i] = s0;
+                s1_buffer[i] = s1;
             }
 
-            // Recurse for both branches with the remaining rows
-            eval_eq_packed_batch::<F, IF, EF, E, INITIALIZED>(remainder, low, eq_evals_0, scalars);
-            eval_eq_packed_batch::<F, IF, EF, E, INITIALIZED>(remainder, high, eq_evals_1, scalars);
+            // Recurse, passing down the remainder of the workspace.
+            eval_eq_packed_batch_recursive::<F, IF, EF, E, INITIALIZED>(
+                remainder,
+                low,
+                s0_buffer,
+                scalars,
+                next_workspace,
+            );
+            eval_eq_packed_batch_recursive::<F, IF, EF, E, INITIALIZED>(
+                remainder,
+                high,
+                s1_buffer,
+                scalars,
+                next_workspace,
+            );
         }
     }
 }
