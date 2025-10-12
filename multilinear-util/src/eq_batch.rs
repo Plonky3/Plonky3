@@ -199,25 +199,25 @@ where
 fn eval_eq_1_batch<F, FP>(evals: RowMajorMatrixView<F>, scalars: &[FP]) -> [FP; 2]
 where
     F: Field,
-    FP: Algebra<F> + Copy,
+    FP: Algebra<F>,
 {
     debug_assert_eq!(evals.height(), 1);
     debug_assert_eq!(evals.width(), scalars.len());
 
     // Compute the total sum of all scalars: ∑_i γ_i
-    let sum: FP = scalars.iter().copied().sum();
+    let sum: FP = scalars.iter().cloned().sum();
 
     // Compute ∑_i γ_i * z_{i,0}
     //
     // This gives us eq_sum(1) directly since eq(1, z) = z
-    let eq_1_sum: FP = dot_product(scalars.iter().copied(), evals.values.iter().copied());
+    let eq_1_sum: FP = dot_product(scalars.iter().cloned(), evals.values.iter().copied());
 
     // Use the identity: eq(0, z_i) = 1 - z_i.
     //
     // So ∑_i γ_i * (1 - z_i) = ∑_i γ_i - ∑_i γ_i * z_i.
     //
     // This saves approximately m adds compared to computing each term individually
-    let eq_0_sum = sum - eq_1_sum;
+    let eq_0_sum = sum - eq_1_sum.clone();
 
     [eq_0_sum, eq_1_sum]
 }
@@ -257,7 +257,7 @@ fn eval_eq_2_batch<F, FP>(
 ) -> [FP; 4]
 where
     F: Field,
-    FP: Algebra<F> + Copy + Field,
+    FP: Algebra<F> + Field,
 {
     debug_assert_eq!(evals.height(), 2);
     debug_assert_eq!(evals.width(), scalars.len());
@@ -320,7 +320,7 @@ fn eval_eq_3_batch<F, FP>(
 ) -> [FP; 8]
 where
     F: Field,
-    FP: Algebra<F> + Copy + Field,
+    FP: Algebra<F> + Field,
 {
     debug_assert_eq!(evals.height(), 3);
     debug_assert_eq!(evals.width(), scalars.len());
