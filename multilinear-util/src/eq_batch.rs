@@ -487,17 +487,50 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for BaseFieldEvaluator<F
         final_packed_evals: &[Self::PackedField],
         scalars: &[Self::OutputField],
     ) {
-        let width = F::Packing::WIDTH;
-        debug_assert_eq!(out.len(), width);
+        debug_assert_eq!(out.len(), F::Packing::WIDTH);
         debug_assert_eq!(final_packed_evals.len(), scalars.len());
 
-        let mut final_results = EF::zero_vec(width);
-        for (packed_eval, scalar) in final_packed_evals.iter().zip(scalars) {
-            for (lane, &base_val) in packed_eval.as_slice().iter().enumerate() {
-                final_results[lane] += *scalar * base_val;
+        // Handle the empty batch case.
+        let Some((first_packed, rest_packed)) = final_packed_evals.split_first() else {
+            if !INITIALIZED {
+                out.fill(Self::OutputField::ZERO);
             }
+            return;
+        };
+        // This unwrap is safe because we've confirmed `final_packed_evals` is not empty.
+        let (first_scalar, rest_scalars) = scalars.split_first().unwrap();
+
+        // Process the first point directly into the output buffer.
+        if INITIALIZED {
+            // If the buffer is already initialized, add the scaled results.
+            out.iter_mut()
+                .zip(first_packed.as_slice())
+                .for_each(|(out_val, &base_val)| {
+                    *out_val += *first_scalar * base_val;
+                });
+        } else {
+            // Otherwise, overwrite the buffer with the scaled results.
+            out.iter_mut()
+                .zip(first_packed.as_slice())
+                .for_each(|(out_val, &base_val)| {
+                    *out_val = *first_scalar * base_val;
+                });
         }
-        add_or_set::<_, INITIALIZED>(out, &final_results);
+
+        // Accumulate the results for the rest of the points.
+        //
+        // All subsequent operations are additions.
+        // This loop is allocation-free and highly efficient.
+        rest_packed
+            .iter()
+            .zip(rest_scalars)
+            .for_each(|(packed_eval, scalar)| {
+                out.iter_mut()
+                    .zip(packed_eval.as_slice())
+                    .for_each(|(out_val, &base_val)| {
+                        *out_val += *scalar * base_val;
+                    });
+            });
     }
 }
 
