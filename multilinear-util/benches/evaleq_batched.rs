@@ -158,7 +158,7 @@ fn bench_batch_vs_single_extension(c: &mut Criterion) {
     let mut group = c.benchmark_group("batch_vs_single_extension");
 
     // Test with different variable counts to see how the overhead scales
-    let variable_counts = [5, 10, 20];
+    let variable_counts = [20];
 
     for &num_vars in &variable_counts {
         let mut rng = SmallRng::seed_from_u64(987654321);
@@ -202,7 +202,7 @@ fn bench_batch_vs_single_base(c: &mut Criterion) {
     let mut group = c.benchmark_group("batch_vs_single_base");
 
     // Test with different variable counts to see how the overhead scales
-    let variable_counts = [5, 10, 20];
+    let variable_counts = [20];
 
     for &num_vars in &variable_counts {
         let mut rng = SmallRng::seed_from_u64(987654321);
@@ -246,8 +246,8 @@ fn bench_batch_vs_single_base(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_eval_eq_batch,
-    bench_eval_eq_base_batch,
+    // bench_eval_eq_batch,
+    // bench_eval_eq_base_batch,
     bench_batch_vs_single_extension,
     bench_batch_vs_single_base
 );
