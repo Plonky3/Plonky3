@@ -348,7 +348,7 @@ where
     let [eq_000, eq_001, eq_010, eq_011] = eval_eq_2_batch(remainder, eq_0s, ws0);
     let [eq_100, eq_101, eq_110, eq_111] = eval_eq_2_batch(remainder, eq_1s, ws1);
 
-    // Return all 8 evaluations in lexicographic order of x ∈ {0,1}³
+    // Return all 8 evaluations in lexicographic order of x ∈ {0,1}^3
     [
         eq_000, eq_001, eq_010, eq_011, eq_100, eq_101, eq_110, eq_111,
     ]
