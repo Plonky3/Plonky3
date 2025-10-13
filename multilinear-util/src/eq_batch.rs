@@ -94,7 +94,7 @@ pub fn eval_eq_batch<F, EF, const INITIALIZED: bool>(
     F: Field,
     EF: ExtensionField<F>,
 {
-    eval_eq_batch_common::<F, EF, EF, ExtFieldEvaluator<F, EF>, INITIALIZED>(evals, scalars, out);
+    eval_eq_batch_common::<F, EF, EF, ExtFieldEvaluator<F, EF>, INITIALIZED>(evals, out, scalars);
 }
 
 /// Computes the batched multilinear equality polynomial `\sum_i \γ_i ⋅ eq(x, z_i)` over all
@@ -129,7 +129,7 @@ pub fn eval_eq_base_batch<F, EF, const INITIALIZED: bool>(
     F: Field,
     EF: ExtensionField<F>,
 {
-    eval_eq_batch_common::<F, F, EF, BaseFieldEvaluator<F, EF>, INITIALIZED>(evals, scalars, out);
+    eval_eq_batch_common::<F, F, EF, BaseFieldEvaluator<F, EF>, INITIALIZED>(evals, out, scalars);
 }
 
 /// Fills the `buffer` with evaluations of the equality polynomial for multiple points simultaneously.
@@ -537,8 +537,8 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for BaseFieldEvaluator<F
 #[inline]
 fn eval_eq_batch_common<F, IF, EF, E, const INITIALIZED: bool>(
     evals: RowMajorMatrixView<IF>,
-    scalars: &[EF],
     out: &mut [EF],
+    scalars: &[EF],
 ) where
     F: Field,
     IF: Field,
