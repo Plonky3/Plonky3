@@ -231,7 +231,6 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             .zip(inv_den_negshift_k.iter())
             .map(|(&z, &inv_dk)| Self::Val::ONE - z * inv_dk)
             .collect();
-        let inv_vanishing = inv_z;
 
         LagrangeSelectors {
             is_first_row,
