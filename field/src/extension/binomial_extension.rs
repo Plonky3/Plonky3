@@ -1085,7 +1085,7 @@ where
     // Linear coefficient = 2(a0 * a1 + w(a2 * a7 + a3 * a6 + a4 * a5))
     res[1] = R::dot_product(
         &[a0_2.clone(), a[2].clone(), a[3].clone(), a[4].clone()],
-        &[a[1].clone(), w_a7_2.clone(), w_a6_2.clone(), w_a5_2.clone()],
+        &[a[1].clone(), w_a7_2.clone(), w_a6_2.clone(), w_a5_2],
     );
 
     // Square coefficient = 2a0 * a2 + a1² + w(2(a3 * a7 + a4 * a6) + a5²)
@@ -1109,7 +1109,7 @@ where
     // Cube coefficient = 2(a0 * a3 + a1 * a2 + w(a4 * a7 + a5 * a6)
     res[3] = R::dot_product(
         &[a0_2.clone(), a1_2.clone(), a[4].clone(), a[5].clone()],
-        &[a[3].clone(), a[2].clone(), w_a7_2.clone(), w_a6_2.clone()],
+        &[a[3].clone(), a[2].clone(), w_a7_2.clone(), w_a6_2],
     );
 
     // Quartic coefficient = 2(a0 * a4 + a1 * a3) + a2² + w(2 * a7 * a5 + a6²)

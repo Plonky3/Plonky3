@@ -240,7 +240,7 @@ impl InternalLayerBaseParameters<BabyBearParameters, 16> for BabyBearInternalLay
         state[14] = state[14].div_2exp_u64(4);
         state[14] = sum.clone() - state[14].clone();
         state[15] = state[15].div_2exp_u64(27);
-        state[15] = sum.clone() - state[15].clone();
+        state[15] = sum - state[15].clone();
     }
 }
 
@@ -287,7 +287,7 @@ impl InternalLayerBaseParameters<BabyBearParameters, 24> for BabyBearInternalLay
         state[22] = state[22].div_2exp_u64(7);
         state[22] = sum.clone() - state[22].clone();
         state[23] = state[23].div_2exp_u64(27);
-        state[23] = sum.clone() - state[23].clone();
+        state[23] = sum - state[23].clone();
     }
 }
 
