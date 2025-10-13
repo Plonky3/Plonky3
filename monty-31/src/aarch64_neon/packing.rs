@@ -646,14 +646,8 @@ where
         let mut sum_h = aarch64::vmull_high_u32(lhs[0].into_vec(), rhs[0].into_vec());
         sum_h = aarch64::vmlal_high_u32(sum_h, lhs[1].into_vec(), rhs[1].into_vec());
 
-        // Split C into 32-bit halves per lane:
-        // - c_lo = C mod 2^{32},
-        // - c_hi = C >> 32.
+        // Split C into 32-bit low halves per lane: c_lo = C mod 2^{32}
         let c_lo = aarch64::vuzp1q_u32(
-            aarch64::vreinterpretq_u32_u64(sum_l),
-            aarch64::vreinterpretq_u32_u64(sum_h),
-        );
-        let c_hi = aarch64::vuzp2q_u32(
             aarch64::vreinterpretq_u32_u64(sum_l),
             aarch64::vreinterpretq_u32_u64(sum_h),
         );
@@ -661,22 +655,31 @@ where
         // q ≡ c_lo ⋅ μ (mod 2^{32}), with μ = −P^{-1} (mod 2^{32}).
         let q = aarch64::vmulq_u32(c_lo, aarch64::vreinterpretq_u32_s32(P::PACKED_MU));
 
-        // Compute (q⋅P)_hi = high 32 bits of q⋅P per lane (exact unsigned widening multiply).
-        let qp_l = aarch64::vmull_u32(aarch64::vget_low_u32(q), aarch64::vget_low_u32(P::PACKED_P));
-        let qp_h = aarch64::vmull_high_u32(q, P::PACKED_P);
-        let qp_hi = aarch64::vuzp2q_u32(
-            aarch64::vreinterpretq_u32_u64(qp_l),
-            aarch64::vreinterpretq_u32_u64(qp_h),
+        // Compute d = (C - q⋅P) / B using multiply-subtract-long instructions.
+        //
+        // This combines the multiplication q⋅P and subtraction C - q⋅P in one step.
+        let d_l = aarch64::vmlsl_u32(
+            sum_l,
+            aarch64::vget_low_u32(q),
+            aarch64::vget_low_u32(P::PACKED_P),
         );
+        let d_h = aarch64::vmlsl_high_u32(sum_h, q, P::PACKED_P);
 
-        let d = aarch64::vsubq_u32(c_hi, qp_hi);
+        // Extract the high 32 bits (the division by B = 2^32) from d_l and d_h.
+        let d = aarch64::vuzp2q_u32(
+            aarch64::vreinterpretq_u32_u64(d_l),
+            aarch64::vreinterpretq_u32_u64(d_h),
+        );
 
         // Canonicalize d from (-P, P) to [0, P) branchlessly.
         //
         // The `vmlsq_u32` instruction computes `a - (b * c)`.
-        // - If `d` is negative, the mask is `-1` (all 1s), so we compute `d - (-1 * P) = d + P`.
+        // - If `d` is negative (interpreted as unsigned, it's >= 2^31), the mask is `-1` (all 1s),
+        //   so we compute `d - (-1 * P) = d + P`.
         // - If `d` is non-negative, the mask is `0`, so we compute `d - (0 * P) = d`.
-        let underflow = aarch64::vcltq_u32(c_hi, qp_hi);
+        //
+        // Check if d >= 2^31 (i.e., negative when interpreted as signed).
+        let underflow = aarch64::vcgeq_u32(d, aarch64::vdupq_n_u32(1u32 << 31));
         let canonical_res = aarch64::vmlsq_u32(d, underflow, P::PACKED_P);
 
         // Safety: The result is now in canonical form [0, P).
@@ -702,8 +705,19 @@ where
         1 => lhs[0].into() * rhs[0].into(),
         2 => unsafe { dot_product_2(&[lhs[0], lhs[1]], &[rhs[0], rhs[1]]) },
         3 => {
-            let dot2 = unsafe { dot_product_2(&[lhs[0], lhs[1]], &[rhs[0], rhs[1]]) };
-            dot2 + (lhs[2].into() * rhs[2].into())
+            let lhs_packed = [
+                lhs[0].into(),
+                lhs[1].into(),
+                lhs[2].into(),
+                PackedMontyField31Neon::<P>::ZERO,
+            ];
+            let rhs_packed = [
+                rhs[0].into(),
+                rhs[1].into(),
+                rhs[2].into(),
+                PackedMontyField31Neon::<P>::ZERO,
+            ];
+            unsafe { dot_product_4(&lhs_packed, &rhs_packed) }
         }
         4 => unsafe {
             dot_product_4(
