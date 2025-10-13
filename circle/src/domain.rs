@@ -207,7 +207,7 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
 
         let z_vals: Vec<Self::Val> = pts.iter().map(|&at| self.vanishing_poly(at)).collect();
         let den_shift: Vec<Self::Val> = pts.iter().map(|&at| self.shift.v_tilde_p(at)).collect();
-        let den_negshift: Vec<Self::Val> = pts.iter().map(|&at| neg_shift.v_tilde_p(at)).collect();
+        let den_negshift_k: Vec<Self::Val> = pts.iter().map(|&at| neg_shift.v_tilde_p(at) * k).collect();
 
         // Batch inverses
         let inv_vanishing = batch_multiplicative_inverse(&z_vals);
