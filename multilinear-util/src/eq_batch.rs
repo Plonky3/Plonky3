@@ -491,46 +491,30 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for BaseFieldEvaluator<F
         debug_assert_eq!(final_packed_evals.len(), scalars.len());
 
         // Handle the empty batch case.
-        let Some((first_packed, rest_packed)) = final_packed_evals.split_first() else {
+        if scalars.is_empty() {
             if !INITIALIZED {
                 out.fill(Self::OutputField::ZERO);
             }
             return;
-        };
-        // This unwrap is safe because we've confirmed `final_packed_evals` is not empty.
-        let (first_scalar, rest_scalars) = scalars.split_first().unwrap();
-
-        // Process the first point directly into the output buffer.
-        if INITIALIZED {
-            // If the buffer is already initialized, add the scaled results.
-            out.iter_mut()
-                .zip(first_packed.as_slice())
-                .for_each(|(out_val, &base_val)| {
-                    *out_val += *first_scalar * base_val;
-                });
-        } else {
-            // Otherwise, overwrite the buffer with the scaled results.
-            out.iter_mut()
-                .zip(first_packed.as_slice())
-                .for_each(|(out_val, &base_val)| {
-                    *out_val = *first_scalar * base_val;
-                });
         }
 
-        // Accumulate the results for the rest of the points.
+        // Iterate through each lane of the packed values (from 0 to WIDTH-1).
         //
-        // All subsequent operations are additions.
-        // This loop is allocation-free and highly efficient.
-        rest_packed
-            .iter()
-            .zip(rest_scalars)
-            .for_each(|(packed_eval, scalar)| {
-                out.iter_mut()
-                    .zip(packed_eval.as_slice())
-                    .for_each(|(out_val, &base_val)| {
-                        *out_val += *scalar * base_val;
-                    });
-            });
+        // For each lane `k`, we compute the dot product across the entire batch.
+        for (k, out_val) in out.iter_mut().enumerate() {
+            // This computes: ∑_i scalars[i] * final_packed_evals[i][k]
+            let dot_product = scalars
+                .iter()
+                .zip(final_packed_evals)
+                .map(|(&scalar, packed_eval)| scalar * packed_eval.as_slice()[k])
+                .sum::<Self::OutputField>();
+
+            if INITIALIZED {
+                *out_val += dot_product;
+            } else {
+                *out_val = dot_product;
+            }
+        }
     }
 }
 
