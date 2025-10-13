@@ -79,16 +79,17 @@ use p3_util::log2_strict_usize;
 /// - `evals`: Matrix where each column is one point `z_i`.
 ///     - height = number of variables `n`,
 ///     - width = number of points `m`
-/// - `scalars`: Weights `[ \γ_0, \γ_1, ..., \γ_{m-1} ]`
 /// - `out`: Output buffer of size `2^n` storing `W(x)` in big-endian `x` order
+/// - `scalars`: Weights `[ \γ_0, \γ_1, ..., \γ_{m-1} ]`
+
 ///
 /// # Panics
 /// Panics in debug builds if `evals.width() != scalars.len()` or if the output buffer size is incorrect.
 #[inline]
 pub fn eval_eq_batch<F, EF, const INITIALIZED: bool>(
     evals: RowMajorMatrixView<EF>,
-    scalars: &[EF],
     out: &mut [EF],
+    scalars: &[EF],
 ) where
     F: Field,
     EF: ExtensionField<F>,
@@ -114,16 +115,16 @@ pub fn eval_eq_batch<F, EF, const INITIALIZED: bool>(
 /// - `evals`: Matrix where each column is one point `z_i`.
 ///     - height = number of variables `n`,
 ///     - width = number of points `m`
-/// - `scalars`: Weights `[ \γ_0, \γ_1, ..., \γ_{m-1} ]`
 /// - `out`: Output buffer of size `2^n` storing `W(x)` in big-endian `x` order
+/// - `scalars`: Weights `[ \γ_0, \γ_1, ..., \γ_{m-1} ]`
 ///
 /// # Panics
 /// Panics in debug builds if `evals.width() != scalars.len()` or if the output buffer size is incorrect.
 #[inline]
 pub fn eval_eq_base_batch<F, EF, const INITIALIZED: bool>(
     evals: RowMajorMatrixView<F>,
-    scalars: &[EF],
     out: &mut [EF],
+    scalars: &[EF],
 ) where
     F: Field,
     EF: ExtensionField<F>,
@@ -1015,7 +1016,7 @@ mod tests {
         let scalars = vec![EF4::from_u64(2), EF4::from_u64(3)];
 
         let mut output_batch = EF4::zero_vec(4);
-        eval_eq_base_batch::<_, _, false>(evals, &scalars, &mut output_batch);
+        eval_eq_base_batch::<_, _, false>(evals, &mut output_batch, &scalars);
 
         // Compare with individual evaluations
         let mut expected_output = EF4::zero_vec(4);
@@ -1081,7 +1082,7 @@ mod tests {
             let evals = RowMajorMatrixView::new(&evals_data, eval_points.len());
 
             let mut output_batch = EF4::zero_vec(out_len);
-            eval_eq_batch::<F, EF4, false>(evals, &scalars, &mut output_batch);
+            eval_eq_batch::<F, EF4, false>(evals,  &mut output_batch,&scalars,);
 
             // Compute using individual evaluations and manual summation
             let mut expected_output = EF4::zero_vec(out_len);
@@ -1161,7 +1162,7 @@ mod tests {
 
         // Test parallel batched path
         let mut output_batch_parallel = EF4::zero_vec(1 << num_vars);
-        eval_eq_batch::<F, EF4, false>(evals, &scalars, &mut output_batch_parallel);
+        eval_eq_batch::<F, EF4, false>(evals, &mut output_batch_parallel, &scalars);
 
         // Verify correctness by comparing against basic batch evaluation
         let mut output_batch_basic = EF4::zero_vec(1 << num_vars);
@@ -1205,7 +1206,7 @@ mod tests {
 
         // Run the parallel version
         let mut output_parallel = EF4::zero_vec(out_len);
-        eval_eq_base_batch::<F, EF4, false>(evals, &scalars, &mut output_parallel);
+        eval_eq_base_batch::<F, EF4, false>(evals, &mut output_parallel, &scalars);
 
         // Run the sequential version for comparison
         let mut output_basic = EF4::zero_vec(out_len);

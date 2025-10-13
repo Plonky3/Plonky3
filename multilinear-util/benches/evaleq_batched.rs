@@ -84,7 +84,7 @@ fn bench_eval_eq_batch(c: &mut Criterion) {
             BenchmarkId::new("eval_eq_batch_false", bench_name.clone()),
             &(num_vars, batch_size),
             |b, _| {
-                b.iter(|| eval_eq_batch::<F, EF4, false>(eval_points, &scalars, &mut out.clone()))
+                b.iter(|| eval_eq_batch::<F, EF4, false>(eval_points, &mut out.clone(), &scalars))
             },
         );
 
@@ -93,7 +93,7 @@ fn bench_eval_eq_batch(c: &mut Criterion) {
             BenchmarkId::new("eval_eq_batch_true", bench_name),
             &(num_vars, batch_size),
             |b, _| {
-                b.iter(|| eval_eq_batch::<F, EF4, true>(eval_points, &scalars, &mut out.clone()))
+                b.iter(|| eval_eq_batch::<F, EF4, true>(eval_points, &mut out.clone(), &scalars))
             },
         );
     }
@@ -134,7 +134,7 @@ fn bench_eval_eq_base_batch(c: &mut Criterion) {
             &(num_vars, batch_size),
             |b, _| {
                 b.iter(|| {
-                    eval_eq_base_batch::<F, EF4, false>(eval_points, &scalars, &mut out.clone())
+                    eval_eq_base_batch::<F, EF4, false>(eval_points, &mut out.clone(), &scalars)
                 })
             },
         );
@@ -145,7 +145,7 @@ fn bench_eval_eq_base_batch(c: &mut Criterion) {
             &(num_vars, batch_size),
             |b, _| {
                 b.iter(|| {
-                    eval_eq_base_batch::<F, EF4, true>(eval_points, &scalars, &mut out.clone())
+                    eval_eq_base_batch::<F, EF4, true>(eval_points, &mut out.clone(), &scalars)
                 })
             },
         );
@@ -187,8 +187,8 @@ fn bench_batch_vs_single_extension(c: &mut Criterion) {
                 b.iter(|| {
                     eval_eq_batch::<F, EF4, false>(
                         batch_eval_points,
-                        &batch_scalars,
                         &mut out.clone(),
+                        &batch_scalars,
                     )
                 })
             },
@@ -233,8 +233,8 @@ fn bench_batch_vs_single_base(c: &mut Criterion) {
                 b.iter(|| {
                     eval_eq_base_batch::<F, EF4, false>(
                         batch_eval_points,
-                        &batch_scalars,
                         &mut out.clone(),
+                        &batch_scalars,
                     )
                 })
             },
