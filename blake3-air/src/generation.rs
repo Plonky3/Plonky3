@@ -20,8 +20,9 @@ where
     I: IntoIterator<Item = [u32; 24]>,
     I::IntoIter: ExactSizeIterator,
 {
-    let inputs_vec: Vec<[u32; 24]> = inputs.into_iter().collect();
-    let num_rows = inputs_vec.len();
+    let inputs_iter = inputs.into_iter();
+    let num_rows = inputs_iter.len();
+    let inputs_vec: Vec<[u32; 24]> = inputs_iter.collect();
     assert!(
         num_rows.is_power_of_two(),
         "Callers expected to pad inputs to VECTOR_LEN times a power of two"
