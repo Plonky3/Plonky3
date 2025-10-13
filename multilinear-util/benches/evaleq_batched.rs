@@ -246,9 +246,9 @@ fn bench_batch_vs_single_base(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    // bench_eval_eq_batch,
-    // bench_eval_eq_base_batch,
-    // bench_batch_vs_single_extension,
+    bench_eval_eq_batch,
+    bench_eval_eq_base_batch,
+    bench_batch_vs_single_extension,
     bench_batch_vs_single_base
 );
 criterion_main!(benches);

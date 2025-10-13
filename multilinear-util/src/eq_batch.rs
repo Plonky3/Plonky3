@@ -81,7 +81,6 @@ use p3_util::log2_strict_usize;
 ///     - width = number of points `m`
 /// - `out`: Output buffer of size `2^n` storing `W(x)` in big-endian `x` order
 /// - `scalars`: Weights `[ \γ_0, \γ_1, ..., \γ_{m-1} ]`
-
 ///
 /// # Panics
 /// Panics in debug builds if `evals.width() != scalars.len()` or if the output buffer size is incorrect.
@@ -983,7 +982,7 @@ mod tests {
         let scalars = vec![F::from_u64(2), F::from_u64(3), F::from_u64(5)]; // γ_0=2, γ_1=3, γ_2=5
 
         let mut output_batch = F::zero_vec(4); // 2^2 = 4 elements
-        eval_eq_batch::<_, _, false>(evals, &scalars, &mut output_batch);
+        eval_eq_batch::<_, _, false>(evals, &mut output_batch, &scalars);
 
         // Compute expected result by evaluating individual equality polynomials and summing
         let mut expected_output = F::zero_vec(4);
