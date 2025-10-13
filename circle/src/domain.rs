@@ -216,6 +216,7 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         let inv_den_negshift_k = batch_multiplicative_inverse(&den_negshift_k);
 
         // Build selectors
+        // TODO: If we need to make this faster we could look into using packed fields.
         let is_first_row: Vec<Self::Val> = z_vals
             .iter()
             .zip(inv_den_shift.iter())
