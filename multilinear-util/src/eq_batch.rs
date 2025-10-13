@@ -432,18 +432,19 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for ExtFieldEvaluator<F,
             return;
         };
 
+        // Unpack the first packed evaluation.
+        let first_unpacked = Self::PackedField::to_ext_iter([*first_packed]);
+
         // Process the first packed evaluation.
         //
         // This step either writes to or adds to the output buffer, setting the initial state.
         if INITIALIZED {
             // If the buffer is already initialized, add the first result.
-            let first_unpacked = Self::PackedField::to_ext_iter([*first_packed]);
             out.iter_mut()
                 .zip(first_unpacked)
                 .for_each(|(out_val, unpacked_val)| *out_val += unpacked_val);
         } else {
             // Otherwise, write the first result directly, avoiding adding to zero.
-            let first_unpacked = Self::PackedField::to_ext_iter([*first_packed]);
             out.iter_mut()
                 .zip(first_unpacked)
                 .for_each(|(out_val, unpacked_val)| *out_val = unpacked_val);
@@ -559,7 +560,9 @@ fn eval_eq_batch_common<F, IF, EF, E, const INITIALIZED: bool>(
     let num_threads = current_num_threads().next_power_of_two();
     let log_num_threads = log2_strict_usize(num_threads);
 
-    if num_vars <= packing_width.ilog2() as usize + 1 + log_num_threads {
+    // If the number of variables is small, there is no need to use
+    // parallelization or packings.
+    if num_vars <= packing_width + 1 + log_num_threads {
         eval_eq_batch_basic::<F, IF, EF, INITIALIZED>(evals, scalars, out);
     } else {
         let log_packing_width = log2_strict_usize(packing_width);
