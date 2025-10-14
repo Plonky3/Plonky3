@@ -43,14 +43,33 @@ pub trait GrindingChallenger:
     }
 }
 
+/// Trait for challengers that support proof-of-work (PoW) grinding with
+/// guaranteed uniformly sampled bits.
 pub trait UniformGrindingChallenger:
     GrindingChallenger + CanSampleUniformBits<Self::Witness>
 {
+    /// Grinds based on *uniformly sampled bits*. This variant is allowed to do rejection
+    /// sampling if a value is sampled that would violate our uniformity requirement
+    /// (chance of about 1/P).
+    ///
+    /// Use this together with `check_witness_uniform`.
     fn grind_uniform(&mut self, bits: usize) -> Self::Witness;
+
+    /// Grinds based on *uniformly sampled bits*. This variant panics if a value is
+    /// sampled, which would violate our uniformity requirement (chance of about 1/P).
+    /// See the `UniformSamplingField` trait implemented for each field for details.
+    ///
+    /// Use this together with `check_witness_uniform_may_panic`.
+    fn grind_uniform_may_panic(&mut self, bits: usize) -> Self::Witness;
 
     fn check_witness_uniform(&mut self, bits: usize, witness: Self::Witness) -> bool {
         self.observe(witness);
         self.sample_uniform_bits(bits) == 0
+    }
+
+    fn check_witness_uniform_may_panic(&mut self, bits: usize, witness: Self::Witness) -> bool {
+        self.observe(witness);
+        self.sample_uniform_bits_may_panic(bits) == 0
     }
 }
 
@@ -102,34 +121,24 @@ where
         assert!(self.check_witness_uniform(bits, witness));
         witness
     }
-}
 
-//macro_rules! impl_uniform_grinding {
-//    ($field:ty, $params:ty) => {
-//        impl<P, const WIDTH: usize, const RATE: usize> UniformGrindingChallenger
-//            for DuplexChallenger<$field, P, WIDTH, RATE>
-//        where
-//            P: CryptographicPermutation<[$field; WIDTH]>,
-//        {
-//            fn grind_uniform(&mut self, bits: usize) -> Self::Witness {
-//                // Implementation using $params::SAMPLING_BITS_M, etc.
-//                self.sample_uniform_bits_impl::<_, $field, { <$params>::MAX_SINGLE_SAMPLE_BITS }>(
-//                    bits,
-//                    &<$params>::SAMPLING_BITS_M,
-//                    DuplexChallenger::sample_value,
-//                )
-//                // ... rest of implementation
-//            }
-//        }
-//    };
-//}
-//
-//// Then invoke it for each field type:
-//impl_uniform_grinding!(p3_baby_bear::BabyBear, p3_baby_bear::BabyBearParameters);
-//impl_uniform_grinding!(
-//    p3_goldilocks::Goldilocks,
-//    p3_goldilocks::GoldilocksParameters
-//);
+    #[instrument(name = "grind uniform may panic for proof-of-work witness", skip_all)]
+    fn grind_uniform_may_panic(&mut self, bits: usize) -> Self::Witness {
+        assert!(bits < (usize::BITS as usize));
+        assert!((1 << bits) < F::ORDER_U64);
+
+        let witness = (0..F::ORDER_U64)
+            .into_par_iter()
+            .map(|i| unsafe {
+                // i < F::ORDER_U64 by construction so this is safe.
+                F::from_canonical_unchecked(i)
+            })
+            .find_any(|witness| self.clone().check_witness_uniform_may_panic(bits, *witness))
+            .expect("failed to find witness");
+        assert!(self.check_witness_uniform_may_panic(bits, witness));
+        witness
+    }
+}
 
 impl<F, PF, P, const WIDTH: usize, const RATE: usize> GrindingChallenger
     for MultiField32Challenger<F, PF, P, WIDTH, RATE>
@@ -156,27 +165,3 @@ where
         witness
     }
 }
-
-//impl<F, PF, P, const WIDTH: usize, const RATE: usize> UniformGrindingChallenger
-//    for MultiField32Challenger<F, PF, P, WIDTH, RATE>
-//where
-//    F: PrimeField32,
-//    PF: PrimeField,
-//    P: CryptographicPermutation<[PF; WIDTH]>,
-//{
-//    #[instrument(name = "grind for proof-of-work witness", skip_all)]
-//    fn grind_uniform(&mut self, bits: usize) -> Self::Witness {
-//        assert!(bits < (usize::BITS as usize));
-//        assert!((1 << bits) < F::ORDER_U32);
-//        let witness = (0..F::ORDER_U32)
-//            .into_par_iter()
-//            .map(|i| unsafe {
-//                // i < F::ORDER_U32 by construction so this is safe.
-//                F::from_canonical_unchecked(i)
-//            })
-//            .find_any(|witness| self.clone().check_witness_uniform(bits, *witness))
-//            .expect("failed to find witness");
-//        assert!(self.check_witness_uniform(bits, witness));
-//        witness
-//    }
-//}
