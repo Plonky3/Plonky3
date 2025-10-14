@@ -216,17 +216,17 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
 
         // Build selectors
         // TODO: If we need to make this faster we could look into using packed fields.
-        let is_first_row: Vec<Self::Val> = z_vals
+        let is_first_row = z_vals
             .iter()
             .zip(inv_den_shift.iter())
             .map(|(&z, &inv_d)| z * inv_d)
             .collect();
-        let is_last_row: Vec<Self::Val> = z_vals
+        let is_last_row = z_vals
             .iter()
             .zip(inv_den_negshift_k.iter())
             .map(|(&z, &inv_dk)| z * inv_dk * k)
             .collect();
-        let is_transition: Vec<Self::Val> = z_vals
+        let is_transition = z_vals
             .iter()
             .zip(inv_den_negshift_k.iter())
             .map(|(&z, &inv_dk)| Self::Val::ONE - z * inv_dk)
