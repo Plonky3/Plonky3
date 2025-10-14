@@ -2,6 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_field::{BasedVectorSpace, Field, PrimeField64};
+use p3_monty_31::{MontyField31, MontyParameters};
 use p3_symmetric::{CryptographicPermutation, Hash};
 
 use crate::{CanObserve, CanSample, CanSampleBits, CanSampleUniformBits, FieldChallenger};
@@ -220,6 +221,17 @@ pub trait UniformSamplingField {
     /// `m_k` is divisible by 2^k, each of the least significant `k` bits has exactly the same
     /// number of zeroes and ones, leading to a uniform sampling.
     const SAMPLING_BITS_M: [u64; 64];
+}
+
+/// Provide a blanket implementation for Monty31 fields here, which forwards the
+/// implementation of the variables to the generic argument `<Field>Parameter`,
+/// for which we implement the trait (KoalaBear, BabyBear).
+impl<MP> UniformSamplingField for MontyField31<MP>
+where
+    MP: UniformSamplingField + MontyParameters,
+{
+    const MAX_SINGLE_SAMPLE_BITS: usize = MP::MAX_SINGLE_SAMPLE_BITS;
+    const SAMPLING_BITS_M: [u64; 64] = MP::SAMPLING_BITS_M;
 }
 
 fn sample_uniform_bits_impl<T, F>(
