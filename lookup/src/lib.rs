@@ -9,3 +9,4 @@
 extern crate alloc;
 
 pub mod logup;
+pub mod lookup_traits;

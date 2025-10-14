@@ -25,47 +25,49 @@ use p3_air::{ExtensionBuilder, PermutationAirBuilder};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 
-/// A context structure that encapsulates a single lookup relationship and its associated
-/// permutation column.
-#[derive(Debug, Clone)]
-pub struct LookupContext<'a, AE, AM, BE, BM> {
-    /// Elements being read (consumed from the table)
-    a_elements: &'a [AE],
-    /// Multiplicities for elements being read
-    a_multiplicities: &'a [AM],
-    /// Elements being provided (added to the table)
-    b_elements: &'a [BE],
-    /// Multiplicities for elements being provided
-    b_multiplicities: &'a [BM],
-    /// The column index in the permutation trace for this lookup's running sum
-    column: usize,
-}
+use crate::lookup_traits::{Kind, LookupContext, LookupGadget};
 
-impl<'a, AE, AM, BE, BM> LookupContext<'a, AE, AM, BE, BM> {
-    /// Creates a new lookup context with the specified column.
-    ///
-    /// # Arguments
-    /// * `a_elements` - Elements from the main execution trace
-    /// * `a_multiplicities` - How many times each `a_element` should appear
-    /// * `b_elements` - Elements from the lookup table
-    /// * `b_multiplicities` - How many times each `b_element` should appear
-    /// * `column` - The column index in the permutation trace for this lookup
-    pub const fn new(
-        a_elements: &'a [AE],
-        a_multiplicities: &'a [AM],
-        b_elements: &'a [BE],
-        b_multiplicities: &'a [BM],
-        column: usize,
-    ) -> Self {
-        Self {
-            a_elements,
-            a_multiplicities,
-            b_elements,
-            b_multiplicities,
-            column,
-        }
-    }
-}
+// /// A context structure that encapsulates a single lookup relationship and its associated
+// /// permutation column.
+// #[derive(Debug, Clone)]
+// pub struct LookupContext<'a, AE, AM, BE, BM> {
+//     /// Elements being read (consumed from the table)
+//     a_elements: &'a [AE],
+//     /// Multiplicities for elements being read
+//     a_multiplicities: &'a [AM],
+//     /// Elements being provided (added to the table)
+//     b_elements: &'a [BE],
+//     /// Multiplicities for elements being provided
+//     b_multiplicities: &'a [BM],
+//     /// The column index in the permutation trace for this lookup's running sum
+//     column: usize,
+// }
+
+// impl<'a, AE, AM, BE, BM> LookupContext<'a, AE, AM, BE, BM> {
+//     /// Creates a new lookup context with the specified column.
+//     ///
+//     /// # Arguments
+//     /// * `a_elements` - Elements from the main execution trace
+//     /// * `a_multiplicities` - How many times each `a_element` should appear
+//     /// * `b_elements` - Elements from the lookup table
+//     /// * `b_multiplicities` - How many times each `b_element` should appear
+//     /// * `column` - The column index in the permutation trace for this lookup
+//     pub const fn new(
+//         a_elements: &'a [AE],
+//         a_multiplicities: &'a [AM],
+//         b_elements: &'a [BE],
+//         b_multiplicities: &'a [BM],
+//         column: usize,
+//     ) -> Self {
+//         Self {
+//             a_elements,
+//             a_multiplicities,
+//             b_elements,
+//             b_multiplicities,
+//             column,
+//         }
+//     }
+// }
 
 /// Core LogUp gadget implementing lookup arguments via logarithmic derivatives.
 ///
@@ -94,143 +96,16 @@ pub struct LogUpGadget<F> {
 }
 
 impl<F: Field> LogUpGadget<F> {
-    /// Creates a new LogUp gadget instance.
-    pub const fn new() -> Self {
-        Self {
-            _phantom: PhantomData,
-        }
-    }
-
-    /// Internal implementation using `LookupContext`.
-    ///
-    /// This method enforces that elements from `a_elements` with their associated
-    /// `a_multiplicities` form the same multiset as elements from `b_elements`
-    /// with their `b_multiplicities`.
-    ///
-    /// # Arguments
-    /// * `builder` - AIR builder for constraint generation
-    /// * `context` - The lookup context containing all lookup data and column assignment
-    /// * `challenge` - Random challenge `α` for the LogUp argument
-    ///
-    /// # Mathematical Details
-    /// The constraint enforces:
-    /// ```text
-    /// ∑_i(a_multiplicities[i] / (α - a_elements[i])) = ∑_j(b_multiplicities[j] / (α - b_elements[j]))
-    /// ```
-    ///
-    /// This is implemented using a running sum column that should sum to zero.
-    fn assert_lookup_internal<AB, AE, AM, BE, BM>(
+    fn compute_combined_sum_terms<AB, E, M>(
         &self,
-        builder: &mut AB,
-        context: &LookupContext<AE, AM, BE, BM>,
-        challenge: AB::RandomVar,
-    ) where
-        AB: PermutationAirBuilder,
-        AE: Into<AB::ExprEF> + Copy,
-        AM: Into<AB::ExprEF> + Clone,
-        BE: Into<AB::ExprEF> + Copy,
-        BM: Into<AB::ExprEF> + Clone,
-    {
-        // Ensure |A| and |m_A| match. This is required to form ∑ m_A/(α - a).
-        assert_eq!(
-            context.a_elements.len(),
-            context.a_multiplicities.len(),
-            "Mismatched lengths: a_elements and a_multiplicities must have same length"
-        );
-        // Ensure |B| and |m_B| match. This is required to form ∑ m_B/(α - b).
-        assert_eq!(
-            context.b_elements.len(),
-            context.b_multiplicities.len(),
-            "Mismatched lengths: b_elements and b_multiplicities must have same length"
-        );
-
-        // Access the permutation (aux) table. It carries the running sum column s.
-        let permutation = builder.permutation();
-        // Read s[i] from the local row at the specified column.
-        let s_local = permutation.row_slice(0).unwrap()[context.column].into();
-        // Read s[i+1] from the next row (or a zero-padded view on the last row).
-        let s_next = permutation.row_slice(1).unwrap()[context.column].into();
-
-        // Anchor s[0] = 0 (not ∑ m_A/(α−a) − ∑ m_B/(α−b)).
-        //
-        // Avoids a high-degree boundary constraint.
-        // Telescoping is enforced by the last-row check (s[n−1] = 0).
-        // Simpler, and keeps aux and main traces aligned in length.
-        builder.when_first_row().assert_zero_ext(s_local.clone());
-
-        // Convert the random challenge to an expression: α.
-        let alpha: AB::ExprEF = challenge.into();
-
-        // Build A's fraction:  ∑ m_A/(α - a)  =  a_num / a_den .
-        let (a_num, a_den) = self.compute_sum_terms::<AB, AE, AM>(
-            context.a_elements,
-            context.a_multiplicities,
-            &alpha,
-        );
-        // Build B's fraction:  ∑ m_B/(α - b)  =  b_num / b_den .
-        let (b_num, b_den) = self.compute_sum_terms::<AB, BE, BM>(
-            context.b_elements,
-            context.b_multiplicities,
-            &alpha,
-        );
-        // Common denominator: D = a_den ⋅ b_den. This clears all divisions.
-        let common_denominator = a_den.clone() * b_den.clone();
-        // Numerator difference: N = a_num⋅b_den − b_num⋅a_den.
-        //
-        // The equality of sums holds iff N = 0 after clearing denominators.
-        let contribution_poly = a_num * b_den - b_num * a_den;
-
-        // Transition constraint on rows 0..n-2:
-        // (s[i+1] − s[i])⋅D − N = 0.
-        builder.when_transition().assert_zero_ext(
-            (s_next - s_local.clone()) * common_denominator.clone() - contribution_poly.clone(),
-        );
-
-        // Final constraint on the last row:
-        // s[n−1]⋅D + N = 0  ⇔  s[n−1] = −N/D  ⇔ total sum cancels to zero.
-        builder
-            .when_last_row()
-            .assert_zero_ext(s_local * common_denominator + contribution_poly);
-    }
-
-    /// Asserts lookup equality.
-    ///
-    /// # Arguments
-    /// * `builder` - AIR builder for constraint generation
-    /// * `context` - The lookup context containing all lookup data and column assignment
-    /// * `challenge` - Random challenge `α` for the LogUp argument
-    pub fn assert_lookup<AB, AE, AM, BE, BM>(
-        builder: &mut AB,
-        context: &LookupContext<AE, AM, BE, BM>,
-        challenge: AB::RandomVar,
-    ) where
-        AB: PermutationAirBuilder<F = F>,
-        AE: Into<AB::ExprEF> + Copy,
-        AM: Into<AB::ExprEF> + Clone,
-        BE: Into<AB::ExprEF> + Copy,
-        BM: Into<AB::ExprEF> + Clone,
-    {
-        let gadget = Self::new();
-        gadget.assert_lookup_internal(builder, context, challenge);
-    }
-
-    /// Computes the numerator and common denominator for a set of fractional terms.
-    ///
-    /// For terms of the form `∑(m_i/(α - e_i))`, this computes:
-    /// - Numerator: `∑(m_i * ∏_{j≠i}(α - e_j))`
-    /// - Common denominator: `∏_i(α - e_i)`
-    ///
-    /// This allows us to express the sum as a single fraction without division
-    /// operations in the constraint system.
-    fn compute_sum_terms<AB, E, M>(
-        &self,
-        elements: &[E],
+        elements: &[Vec<E>],
         multiplicities: &[M],
         alpha: &AB::ExprEF,
+        beta: &AB::ExprEF,
     ) -> (AB::ExprEF, AB::ExprEF)
     where
         AB: PermutationAirBuilder,
-        E: Into<AB::ExprEF> + Copy,
+        E: Into<AB::ExprEF> + Clone,
         M: Into<AB::ExprEF> + Clone,
     {
         if elements.is_empty() {
@@ -239,8 +114,19 @@ impl<F: Field> LogUpGadget<F> {
 
         let n = elements.len();
 
-        // Precompute all (α - e_i) terms
-        let terms: Vec<AB::ExprEF> = elements.iter().map(|&e| alpha.clone() - e.into()).collect();
+        // Precompute all (α - ∑e_{i, j} β^j) terms
+        let terms = elements
+            .iter()
+            .map(|elts| {
+                // Combine the elements in the tuple using beta.
+                let combined_elt = elts.iter().fold(AB::ExprEF::ZERO, |acc, elt| {
+                    elt.clone().into() + acc * beta.clone()
+                });
+
+                // Compute (α - combined_elt)
+                alpha.clone() - combined_elt
+            })
+            .collect::<Vec<_>>();
 
         // Build prefix products: pref[i] = ∏_{j=0}^{i-1}(α - e_j)
         let mut pref = Vec::with_capacity(n + 1);
@@ -271,54 +157,167 @@ impl<F: Field> LogUpGadget<F> {
         (numerator, common_denominator)
     }
 
-    /// Computes the polynomial degree of the LogUp transition constraint.
+    fn eval_update<AB, AE, AM>(
+        &self,
+        builder: &mut AB,
+        context: LookupContext<AE, AM>,
+        expected_cumulated: AB::ExprEF,
+    ) where
+        AB: PermutationAirBuilder,
+        AE: Into<AB::ExprEF> + Clone,
+        AM: Into<AB::ExprEF> + Clone,
+    {
+        let LookupContext {
+            kind: _,
+            elements,
+            multiplicities,
+            columns,
+        } = context;
+
+        assert!(
+            elements.len() == multiplicities.len(),
+            "Mismatched lengths: elements and multiplicities must have same length"
+        );
+        assert_eq!(
+            columns.len(),
+            self.num_aux_cols(),
+            "There is exactly one auxiliary column for LogUp"
+        );
+        let column = columns[0];
+
+        // Access the permutation (aux) table. It carries the running sum column s.
+        let permutation = builder.permutation();
+
+        let permutation_challenges = builder.permutation_randomness();
+
+        assert!(
+            permutation_challenges.len() >= self.num_challenges() * column,
+            "Insufficient permutation challenges"
+        );
+
+        // Challenge for the running sum.
+        let alpha = permutation_challenges[2 * column];
+        // Challenge for combining the lookup tuples.
+        let beta = permutation_challenges[2 * column + 1];
+
+        let s = permutation.row_slice(0).unwrap();
+        assert!(s.len() > column, "Permutation trace has insufficient width");
+
+        // Read s[i] from the local row at the specified column.
+        let s_local = s[column].into();
+        // Read s[i+1] from the next row (or a zero-padded view on the last row).
+        let s_next = permutation.row_slice(1).unwrap()[column].into();
+
+        // Anchor s[0] = 0 (not ∑ m_A/(α−a) − ∑ m_B/(α−b)).
+        //
+        // Avoids a high-degree boundary constraint.
+        // Telescoping is enforced by the last-row check (s[n−1] = 0).
+        // Simpler, and keeps aux and main traces aligned in length.
+        builder.when_first_row().assert_zero_ext(s_local.clone());
+
+        // Build A's fraction:  ∑ m_A/(α - a)  =  a_num / a_den .
+        let (numerator, common_denominator) = self.compute_combined_sum_terms::<AB, AE, AM>(
+            elements,
+            multiplicities,
+            &alpha.into(),
+            &beta.into(),
+        );
+
+        builder.when_transition().assert_zero_ext(
+            (s_next - s_local.clone()) * common_denominator.clone() - numerator.clone(),
+        );
+
+        let final_val = s_local * common_denominator + numerator;
+        builder
+            .when_last_row()
+            .assert_zero_ext(final_val - expected_cumulated);
+    }
+}
+
+impl<F: Field> LookupGadget<F> for LogUpGadget<F> {
+    fn num_aux_cols(&self) -> usize {
+        1
+    }
+
+    fn num_challenges(&self) -> usize {
+        2
+    }
+
+    /// # Mathematical Details
+    /// The constraint enforces:
+    /// ```text
+    /// ∑_i(a_multiplicities[i] / (α - a_elements[i])) = ∑_j(b_multiplicities[j] / (α - b_elements[j]))
+    /// ```
     ///
+    /// This is implemented using a running sum column that should sum to zero.
+    fn eval_local_lookup<AB, AE, AM>(&self, builder: &mut AB, context: LookupContext<AE, AM>)
+    where
+        AB: PermutationAirBuilder,
+        AE: Into<AB::ExprEF> + Clone,
+        AM: Into<AB::ExprEF> + Clone,
+    {
+        match context.kind {
+            Kind::Global(_) => panic!("Global lookups are not supported in local evaluation"),
+            _ => {}
+        }
+
+        self.eval_update(builder, context, AB::ExprEF::ZERO);
+    }
+
+    /// # Mathematical Details
+    /// The constraint enforces:
+    /// ```text
+    /// ∑_i(a_multiplicities[i] / (α - a_elements[i])) = ∑_j(b_multiplicities[j] / (α - b_elements[j]))
+    /// ```
+    ///
+    /// This is implemented using a running sum column that should sum to `expected_cumulated`.
+    fn eval_global_update<AB: PermutationAirBuilder, AE, AM>(
+        &self,
+        builder: &mut AB,
+        context: LookupContext<AE, AM>,
+        expected_cumulated: AB::ExprEF,
+    ) where
+        AB: PermutationAirBuilder,
+        AE: Into<AB::ExprEF> + Clone,
+        AM: Into<AB::ExprEF> + Clone,
+    {
+        self.eval_update(builder, context, expected_cumulated);
+    }
+
+    fn eval_global_final_value<AB: PermutationAirBuilder>(
+        &self,
+        builder: &mut AB,
+        all_expected_cumulative: &[AB::ExprEF],
+    ) {
+        let total = all_expected_cumulative
+            .iter()
+            .fold(AB::ExprEF::ZERO, |acc, x| acc + x.clone());
+
+        builder.assert_zero_ext(total);
+    }
+
     /// The degree depends on the number of elements in the lookup, as each element
     /// contributes a factor `(α - element)` to the constraint polynomial.
     ///
     /// # Formula
-    /// For `n_a` elements from set A and `n_b` elements from set B, the degree is:
+    /// For `n` elements, the degree is:
     /// ```text
-    /// degree = 1 + n_a + n_b
+    /// degree = 1 + n
     /// ```
     ///
     /// The `+1` accounts for the running sum column interaction.
-    pub fn constraint_degree(&self, a_elements_count: usize, b_elements_count: usize) -> usize {
-        // Running sum column contributes degree 1
-        1 + a_elements_count + b_elements_count
+    fn constraint_degree<AE, AM>(&self, context: LookupContext<AE, AM>) -> usize {
+        let n = context.elements.len();
+        1 + n
     }
 }
 
-/// Trait extension providing LogUp functionality to any PermutationAirBuilder.
-pub trait LookupBuilder: PermutationAirBuilder {
-    /// Assert lookup.
-    ///
-    /// # Arguments
-    /// * `context` - The lookup context containing all lookup data and column assignment
-    /// * `challenge` - Random challenge for the lookup argument
-    fn assert_lookup<AE, AM, BE, BM>(
-        &mut self,
-        context: &LookupContext<AE, AM, BE, BM>,
-        challenge: Self::RandomVar,
-    ) where
-        AE: Into<Self::ExprEF> + Copy,
-        AM: Into<Self::ExprEF> + Clone,
-        BE: Into<Self::ExprEF> + Copy,
-        BM: Into<Self::ExprEF> + Clone;
-}
-
-impl<AB: PermutationAirBuilder> LookupBuilder for AB {
-    fn assert_lookup<AE, AM, BE, BM>(
-        &mut self,
-        context: &LookupContext<AE, AM, BE, BM>,
-        challenge: Self::RandomVar,
-    ) where
-        AE: Into<Self::ExprEF> + Copy,
-        AM: Into<Self::ExprEF> + Clone,
-        BE: Into<Self::ExprEF> + Copy,
-        BM: Into<Self::ExprEF> + Clone,
-    {
-        LogUpGadget::<Self::F>::assert_lookup(self, context, challenge);
+impl<F: Field> LogUpGadget<F> {
+    /// Creates a new LogUp gadget instance.
+    pub const fn new() -> Self {
+        Self {
+            _phantom: PhantomData,
+        }
     }
 }
 
