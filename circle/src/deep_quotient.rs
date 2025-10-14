@@ -156,7 +156,7 @@ mod tests {
         let ps_at_zeta = evals.evaluate_at_point(zeta);
 
         let packed_alpha_powers =
-            <EF as ExtensionField<F>>::ExtensionPacking::packed_ext_powers_capped(
+            EF:ExtensionPacking::packed_ext_powers_capped(
                 alpha,
                 evals.values.width(),
             )
