@@ -1,4 +1,3 @@
-use alloc::vec::Vec;
 use core::array;
 
 use p3_air::utils::u32_to_bits_le;
@@ -10,13 +9,12 @@ use tracing::instrument;
 use crate::columns::{Blake3Cols, NUM_BLAKE3_COLS};
 use crate::constants::{IV, permute};
 use crate::{Blake3State, FullRound};
-
-// TODO: Take generic iterable
 #[instrument(name = "generate Blake3 trace", skip_all)]
 pub fn generate_trace_rows<F: PrimeField64>(
-    inputs: Vec<[u32; 24]>,
+    inputs: impl AsRef<[[u32; 24]]>,
     extra_capacity_bits: usize,
 ) -> RowMajorMatrix<F> {
+    let inputs = inputs.as_ref();
     let num_rows = inputs.len();
     assert!(
         num_rows.is_power_of_two(),
@@ -36,7 +34,7 @@ pub fn generate_trace_rows<F: PrimeField64>(
     assert_eq!(rows.len(), num_rows);
 
     rows.par_iter_mut()
-        .zip(inputs)
+        .zip(inputs.par_iter().copied())
         .enumerate()
         .for_each(|(counter, (row, input))| {
             generate_trace_rows_for_perm(row, input, counter, num_rows);
