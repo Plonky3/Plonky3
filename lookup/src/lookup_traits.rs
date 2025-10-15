@@ -1,8 +1,9 @@
-use alloc::{string::String, vec::Vec};
+use alloc::{rc::Rc, string::String, vec::Vec};
 use itertools::Itertools;
-use p3_air::{Air, PermutationAirBuilder};
+use p3_air::{Air, AirBuilderWithPublicValues, PairBuilder, PermutationAirBuilder};
 use p3_field::Field;
-use p3_uni_stark::{SymbolicAirBuilder, SymbolicExpression};
+use p3_matrix::Matrix;
+use p3_uni_stark::{Entry, SymbolicAirBuilder, SymbolicExpression};
 
 /// A trait for lookup argument.
 pub trait LookupGadget<F: Field> {
@@ -24,11 +25,9 @@ pub trait LookupGadget<F: Field> {
     /// For example, in LogUp:
     /// - this checks that the running sum is updated correctly.
     /// - it checks that the final value of the running sum is 0.
-    fn eval_local_lookup<AB, AE, AM>(&self, builder: &mut AB, context: LookupContext<AE, AM>)
+    fn eval_local_lookup<AB>(&self, builder: &mut AB, context: Lookup<AB::F>)
     where
-        AB: PermutationAirBuilder,
-        AE: Into<AB::ExprEF> + Clone,
-        AM: Into<AB::ExprEF> + Clone;
+        AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues;
 
     /// Evaluates a global lookup update based on the provided context, and the expected cumulated value.
     /// This evaluation is carried out at the AIR level. We still need to check that the permutation argument holds
@@ -37,15 +36,13 @@ pub trait LookupGadget<F: Field> {
     /// For example, in LogUp:
     /// - this checks that the running sum is updated correctly.
     /// - it checks that the local final value of the running sum is equal to the value provided by the prover.
-    fn eval_global_update<AB, AE, AM>(
+    fn eval_global_update<AB>(
         &self,
         builder: &mut AB,
-        context: LookupContext<AE, AM>,
+        context: Lookup<AB::F>,
         expected_cumulated: AB::ExprEF,
     ) where
-        AB: PermutationAirBuilder,
-        AE: Into<AB::ExprEF> + Clone,
-        AM: Into<AB::ExprEF> + Clone;
+        AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues;
 
     /// Evaluates the final cumulated value over all AIRs involved in the interaction,
     /// and checks that it is equal to the expected final value.
@@ -53,14 +50,99 @@ pub trait LookupGadget<F: Field> {
     /// For example, in LogUp:
     /// - it sums all expected cumulated values provided by each AIR within one interaction,
     /// - checks that the sum is equal to 0.
-    fn eval_global_final_value<AB: PermutationAirBuilder>(
+    fn eval_global_final_value<
+        AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+    >(
         &self,
         builder: &mut AB,
         all_expected_cumulated: &[AB::ExprEF],
     );
 
     /// Computes the polynomial degree of a lookup transition constraint.
-    fn constraint_degree<AE, AM>(&self, context: LookupContext<AE, AM>) -> usize;
+    fn constraint_degree<AB: PermutationAirBuilder>(&self, context: Lookup<AB::F>) -> usize;
+}
+
+// TODO: Add unit test.
+// TODO: Can we reuse this function from recursion?
+pub fn symbolic_to_expr<AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues>(
+    builder: &mut AB,
+    symbolic: Rc<SymbolicExpression<AB::F>>,
+) -> AB::ExprEF {
+    let turn_into_expr = |values: &Vec<AB::Var>| {
+        values
+            .iter()
+            .map(|v| AB::Expr::from(v.clone()))
+            .collect::<Vec<_>>()
+    };
+    let main = builder.main();
+    let local_values = &turn_into_expr(&main.row_slice(0).unwrap().to_vec());
+    let next_values = &turn_into_expr(&main.row_slice(1).unwrap().to_vec());
+
+    let public_values = builder
+        .public_values()
+        .iter()
+        .map(|v| AB::ExprEF::from((*v).into()))
+        .collect::<Vec<_>>();
+
+    match symbolic.as_ref() {
+        SymbolicExpression::Constant(c) => AB::ExprEF::from(AB::EF::from(*c)),
+        SymbolicExpression::Variable(v) => {
+            let get_val = |offset: usize,
+                           index: usize,
+                           local_vals: &[AB::Expr],
+                           next_vals: &[AB::Expr]| match offset {
+                0 => AB::ExprEF::from(local_vals[index].clone()),
+                1 => AB::ExprEF::from(next_vals[index].clone()),
+                _ => panic!("Cannot have expressions involving more than two rows."),
+            };
+
+            match v.entry {
+                Entry::Preprocessed { .. } => {
+                    unimplemented!()
+                }
+                Entry::Main { offset } => get_val(offset, v.index, local_values, next_values),
+                Entry::Public => public_values[v.index].clone(),
+                _ => unimplemented!(),
+            }
+        }
+        SymbolicExpression::Add {
+            x,
+            y,
+            degree_multiple: _,
+        } => {
+            let x_expr = symbolic_to_expr(builder, x.clone());
+            let y_expr = symbolic_to_expr(builder, y.clone());
+            x_expr + y_expr
+        }
+        SymbolicExpression::Mul {
+            x,
+            y,
+            degree_multiple: _,
+        } => {
+            let x_expr = symbolic_to_expr(builder, x.clone());
+            let y_expr = symbolic_to_expr(builder, y.clone());
+            x_expr * y_expr
+        }
+        SymbolicExpression::Sub {
+            x,
+            y,
+            degree_multiple: _,
+        } => {
+            let x_expr = symbolic_to_expr(builder, x.clone());
+            let y_expr = symbolic_to_expr(builder, y.clone());
+            x_expr - y_expr
+        }
+        SymbolicExpression::Neg {
+            x,
+            degree_multiple: _,
+        } => {
+            let x_expr = symbolic_to_expr(builder, x.clone());
+            -x_expr
+        }
+        SymbolicExpression::IsFirstRow => builder.is_first_row().into(),
+        SymbolicExpression::IsLastRow => builder.is_last_row().into(),
+        SymbolicExpression::IsTransition => builder.is_transition().into(),
+    }
 }
 
 /// A context structure that encapsulates a single lookup relationship and its associated
@@ -113,7 +195,7 @@ pub struct Lookup<'a, F: Field> {
     /// Elements being read (consumed from the table). Each `Vec<AE>` actually represents a tuple of elements that are bundled together to make one lookup.
     pub element_exprs: &'a [Vec<SymbolicExpression<F>>],
     /// Multiplicities for the elements.
-    pub multiplicities: Vec<SymbolicExpression<F>>,
+    pub multiplicities_exprs: Vec<SymbolicExpression<F>>,
     /// The column index in the permutation trace for this lookup's running sum
     pub columns: Vec<usize>,
 }
@@ -147,7 +229,7 @@ pub trait AirLookupHandler<F: Field>: Air<SymbolicAirBuilder<F>> {
         Lookup {
             kind,
             element_exprs: elements,
-            multiplicities: muls,
+            multiplicities_exprs: muls,
             columns: self.add_lookup_columns(),
         }
     }

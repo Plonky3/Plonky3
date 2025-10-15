@@ -21,53 +21,11 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_air::{ExtensionBuilder, PermutationAirBuilder};
+use p3_air::{AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder, PermutationAirBuilder};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 
-use crate::lookup_traits::{Kind, LookupContext, LookupGadget};
-
-// /// A context structure that encapsulates a single lookup relationship and its associated
-// /// permutation column.
-// #[derive(Debug, Clone)]
-// pub struct LookupContext<'a, AE, AM, BE, BM> {
-//     /// Elements being read (consumed from the table)
-//     a_elements: &'a [AE],
-//     /// Multiplicities for elements being read
-//     a_multiplicities: &'a [AM],
-//     /// Elements being provided (added to the table)
-//     b_elements: &'a [BE],
-//     /// Multiplicities for elements being provided
-//     b_multiplicities: &'a [BM],
-//     /// The column index in the permutation trace for this lookup's running sum
-//     column: usize,
-// }
-
-// impl<'a, AE, AM, BE, BM> LookupContext<'a, AE, AM, BE, BM> {
-//     /// Creates a new lookup context with the specified column.
-//     ///
-//     /// # Arguments
-//     /// * `a_elements` - Elements from the main execution trace
-//     /// * `a_multiplicities` - How many times each `a_element` should appear
-//     /// * `b_elements` - Elements from the lookup table
-//     /// * `b_multiplicities` - How many times each `b_element` should appear
-//     /// * `column` - The column index in the permutation trace for this lookup
-//     pub const fn new(
-//         a_elements: &'a [AE],
-//         a_multiplicities: &'a [AM],
-//         b_elements: &'a [BE],
-//         b_multiplicities: &'a [BM],
-//         column: usize,
-//     ) -> Self {
-//         Self {
-//             a_elements,
-//             a_multiplicities,
-//             b_elements,
-//             b_multiplicities,
-//             column,
-//         }
-//     }
-// }
+use crate::lookup_traits::{Kind, Lookup, LookupContext, LookupGadget, symbolic_to_expr};
 
 /// Core LogUp gadget implementing lookup arguments via logarithmic derivatives.
 ///
@@ -157,25 +115,23 @@ impl<F: Field> LogUpGadget<F> {
         (numerator, common_denominator)
     }
 
-    fn eval_update<AB, AE, AM>(
+    fn eval_update<AB>(
         &self,
         builder: &mut AB,
-        context: LookupContext<AE, AM>,
+        context: Lookup<AB::F>,
         expected_cumulated: AB::ExprEF,
     ) where
-        AB: PermutationAirBuilder,
-        AE: Into<AB::ExprEF> + Clone,
-        AM: Into<AB::ExprEF> + Clone,
+        AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
     {
-        let LookupContext {
+        let Lookup {
             kind: _,
-            elements,
-            multiplicities,
+            element_exprs,
+            multiplicities_exprs,
             columns,
         } = context;
 
         assert!(
-            elements.len() == multiplicities.len(),
+            element_exprs.len() == multiplicities_exprs.len(),
             "Mismatched lengths: elements and multiplicities must have same length"
         );
         assert_eq!(
@@ -184,6 +140,22 @@ impl<F: Field> LogUpGadget<F> {
             "There is exactly one auxiliary column for LogUp"
         );
         let column = columns[0];
+
+        // First, turn the symbolic expressions into builder expressions.
+        let elements = element_exprs
+            .iter()
+            .map(|exprs| {
+                exprs
+                    .iter()
+                    .map(|expr| symbolic_to_expr(builder, expr.clone().into()))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        let multiplicities = multiplicities_exprs
+            .iter()
+            .map(|expr| symbolic_to_expr(builder, expr.clone().into()))
+            .collect::<Vec<_>>();
 
         // Access the permutation (aux) table. It carries the running sum column s.
         let permutation = builder.permutation();
@@ -216,12 +188,13 @@ impl<F: Field> LogUpGadget<F> {
         builder.when_first_row().assert_zero_ext(s_local.clone());
 
         // Build A's fraction:  ∑ m_A/(α - a)  =  a_num / a_den .
-        let (numerator, common_denominator) = self.compute_combined_sum_terms::<AB, AE, AM>(
-            elements,
-            multiplicities,
-            &alpha.into(),
-            &beta.into(),
-        );
+        let (numerator, common_denominator): (AB::ExprEF, AB::ExprEF) = self
+            .compute_combined_sum_terms::<AB, AB::ExprEF, AB::ExprEF>(
+                &elements,
+                &multiplicities,
+                &alpha.into(),
+                &beta.into(),
+            );
 
         builder.when_transition().assert_zero_ext(
             (s_next - s_local.clone()) * common_denominator.clone() - numerator.clone(),
@@ -250,11 +223,9 @@ impl<F: Field> LookupGadget<F> for LogUpGadget<F> {
     /// ```
     ///
     /// This is implemented using a running sum column that should sum to zero.
-    fn eval_local_lookup<AB, AE, AM>(&self, builder: &mut AB, context: LookupContext<AE, AM>)
+    fn eval_local_lookup<AB>(&self, builder: &mut AB, context: Lookup<AB::F>)
     where
-        AB: PermutationAirBuilder,
-        AE: Into<AB::ExprEF> + Clone,
-        AM: Into<AB::ExprEF> + Clone,
+        AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
     {
         match context.kind {
             Kind::Global(_) => panic!("Global lookups are not supported in local evaluation"),
@@ -271,15 +242,13 @@ impl<F: Field> LookupGadget<F> for LogUpGadget<F> {
     /// ```
     ///
     /// This is implemented using a running sum column that should sum to `expected_cumulated`.
-    fn eval_global_update<AB: PermutationAirBuilder, AE, AM>(
+    fn eval_global_update<AB: PermutationAirBuilder>(
         &self,
         builder: &mut AB,
-        context: LookupContext<AE, AM>,
+        context: Lookup<AB::F>,
         expected_cumulated: AB::ExprEF,
     ) where
-        AB: PermutationAirBuilder,
-        AE: Into<AB::ExprEF> + Clone,
-        AM: Into<AB::ExprEF> + Clone,
+        AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
     {
         self.eval_update(builder, context, expected_cumulated);
     }
@@ -306,8 +275,8 @@ impl<F: Field> LookupGadget<F> for LogUpGadget<F> {
     /// ```
     ///
     /// The `+1` accounts for the running sum column interaction.
-    fn constraint_degree<AE, AM>(&self, context: LookupContext<AE, AM>) -> usize {
-        let n = context.elements.len();
+    fn constraint_degree<AB: PermutationAirBuilder>(&self, context: Lookup<AB::F>) -> usize {
+        let n = context.element_exprs.len();
         1 + n
     }
 }

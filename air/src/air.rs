@@ -167,8 +167,6 @@ pub trait AirBuilder: Sized {
     fn assert_bool<I: Into<Self::Expr>>(&mut self, x: I) {
         self.assert_zero(x.into().bool_check());
     }
-
-    // TODO: Add method to turn SymbolicExpr into Expr
 }
 
 /// Extension trait for `AirBuilder` providing access to public values.
