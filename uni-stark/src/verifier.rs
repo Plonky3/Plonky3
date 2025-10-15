@@ -102,8 +102,8 @@ where
 
     // We've already checked that commitments.random is present if and only if ZK is enabled.
     // Observe the random commitment if it is present.
-    if let Some(r_commit) = commitments.random.clone() {
-        challenger.observe(r_commit);
+    if let Some(r_commit) = &commitments.random {
+        challenger.observe(r_commit.clone());
     }
 
     // Get an out-of-domain point to open our values at.
