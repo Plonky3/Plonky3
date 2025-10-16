@@ -317,8 +317,8 @@ mod tests {
         );
 
         let mul_expr = SymbolicExpression::<BabyBear>::Mul {
-            x: Rc::new(variable_expr.clone()),
-            y: Rc::new(preprocessed_var.clone()),
+            x: Rc::new(variable_expr),
+            y: Rc::new(preprocessed_var),
             degree_multiple: 2,
         };
         assert_eq!(
@@ -383,7 +383,7 @@ mod tests {
             Entry::Main { offset: 0 },
             2,
         ));
-        let result = a.clone() + b.clone();
+        let result = a + b;
         match result {
             SymbolicExpression::Add {
                 degree_multiple,
@@ -412,7 +412,7 @@ mod tests {
             Entry::Main { offset: 0 },
             2,
         ));
-        let result = a.clone() * b.clone();
+        let result = a * b;
 
         match result {
             SymbolicExpression::Mul {

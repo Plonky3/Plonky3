@@ -315,7 +315,7 @@ mod tests {
     fn test_symbolic_air_builder_assert_zero() {
         let mut builder = SymbolicAirBuilder::<BabyBear>::new(2, 4, 3);
         let expr = SymbolicExpression::Constant(BabyBear::new(5));
-        builder.assert_zero(expr.clone());
+        builder.assert_zero(expr);
 
         let constraints = builder.constraints();
         assert_eq!(constraints.len(), 1, "One constraint should be recorded");

@@ -53,7 +53,7 @@ fn bench_field(c: &mut Criterion) {
 }
 
 fn bench_packedfield(c: &mut Criterion) {
-    let name = pretty_name::<<F as Field>::Packing>().to_string();
+    let name = pretty_name::<<F as Field>::Packing>();
     // Note that each round of throughput has 10 operations
     // So we should have 10 * more repetitions for latency tests.
     const REPS: usize = 100;
