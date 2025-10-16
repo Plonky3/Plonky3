@@ -43,7 +43,6 @@ pub(crate) fn deep_quotient_vanishing_part<F: ComplexExtendable, EF: ExtensionFi
     alpha_pow_width: EF,
 ) -> (EF, EF) {
     // Compute the vanishing polynomial v_p(zeta) = (x - zeta) * (x - zeta_bar)
-    // This gives us the real and imaginary parts of the vanishing polynomial
     let (re_v_zeta, im_v_zeta) = x.v_p(zeta);
     
     // Numerator: Re(1/v_gamma) + alpha^L * Im(1/v_gamma)
