@@ -206,7 +206,7 @@ pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
         .map(|p| p.v_n(log_lde_size - log_blowup))
         .collect_vec();
 
-    // The unique values are repeated over the rest of the domain in a specific pattern:
+    // The unique values are repeated over the rest of the domain in the pattern:
     // 0 1 2 .. n-1 n n n-1 .. 1 0 0 1 ..
     // This pattern reflects the symmetry properties of the circle domain
     let v_d = v_d_init
