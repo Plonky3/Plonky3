@@ -215,7 +215,6 @@ pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
         .copied();
 
     // Compute the squared norm <v_d, v_d> of the vanishing polynomial
-    // This formula was determined experimentally and is crucial for the orthogonality property
     let v_d_2 = F::TWO.exp_u64(log_lde_size as u64 - 1);
 
     // Convert to the correct order and take only the needed length
