@@ -49,7 +49,6 @@ pub(crate) fn deep_quotient_vanishing_part<F: ComplexExtendable, EF: ExtensionFi
     let numerator = re_v_zeta - alpha_pow_width * im_v_zeta;
     
     // Denominator: |v_gamma|^2 = Re(v_gamma)^2 + Im(v_gamma)^2
-    // This ensures the denominator is always positive (real)
     let denominator = re_v_zeta.square() + im_v_zeta.square();
     
     (numerator, denominator)
