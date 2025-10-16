@@ -762,6 +762,135 @@ fn eval_eq_packed_batch<F, IF, EF, E, const INITIALIZED: bool>(
             // Base case of the recursion.
             E::accumulate_packed_batch::<INITIALIZED>(out, eq_evals, scalars);
         }
+        1 => {
+            // Optimized base case for 1 variable
+            let first_row = eval_points;
+
+            // Compute the two packed scalar vectors for both branches
+            let (s0_buffer, s1_buffer) = workspace.split_at_mut(num_points);
+            for i in 0..num_points {
+                let z_0 = first_row.values[i];
+                let eq_eval = eq_evals[i];
+                let s1 = eq_eval * z_0;
+                let s0 = eq_eval - s1;
+                s0_buffer[i] = s0;
+                s1_buffer[i] = s1;
+            }
+
+            // Split output for the two branches
+            let (low, high) = out.split_at_mut(out.len() / 2);
+            E::accumulate_packed_batch::<INITIALIZED>(low, s0_buffer, scalars);
+            E::accumulate_packed_batch::<INITIALIZED>(high, s1_buffer, scalars);
+        }
+        2 => {
+            // Optimized base case for 2 variables
+            debug_assert!(workspace.len() >= 4 * num_points);
+            let (first_row, second_row) = eval_points.split_rows(1);
+
+            // Split workspace for all 4 leaf nodes.
+            let (s00_buffer, rest) = workspace.split_at_mut(num_points);
+            let (s01_buffer, rest) = rest.split_at_mut(num_points);
+            let (s10_buffer, s11_buffer) = rest.split_at_mut(num_points);
+
+            // Single loop to compute all 4 leaf scalars.
+            for i in 0..num_points {
+                let eq_eval = eq_evals[i];
+                let z_0 = first_row.values[i];
+                let z_1 = second_row.values[i];
+
+                // Level 1
+                let s1 = eq_eval * z_0;
+                let s0 = eq_eval - s1;
+
+                // Level 2
+                let s01 = s0 * z_1;
+                let s11 = s1 * z_1;
+                s00_buffer[i] = s0 - s01;
+                s01_buffer[i] = s01;
+                s10_buffer[i] = s1 - s11;
+                s11_buffer[i] = s11;
+            }
+
+            let quarter = out.len() / 4;
+            let (out_00, rest) = out.split_at_mut(quarter);
+            let (out_01, rest) = rest.split_at_mut(quarter);
+            let (out_10, out_11) = rest.split_at_mut(quarter);
+
+            E::accumulate_packed_batch::<INITIALIZED>(out_00, s00_buffer, scalars);
+            E::accumulate_packed_batch::<INITIALIZED>(out_01, s01_buffer, scalars);
+            E::accumulate_packed_batch::<INITIALIZED>(out_10, s10_buffer, scalars);
+            E::accumulate_packed_batch::<INITIALIZED>(out_11, s11_buffer, scalars);
+        }
+        // 3 => {
+        //     // Optimized base case for 3 variables
+        //     debug_assert!(
+        //         workspace.len() >= 8 * num_points,
+        //         "Workspace for n=3 unrolled case must be >= 8 * num_points, but was only {}",
+        //         workspace.len()
+        //     );
+
+        //     let (first_row, remainder) = eval_points.split_rows(1);
+        //     let (second_row, third_row) = remainder.split_rows(1);
+
+        //     // Split workspace for all 8 leaf nodes.
+        //     let (s000_buffer, rest) = workspace.split_at_mut(num_points);
+        //     let (s001_buffer, rest) = rest.split_at_mut(num_points);
+        //     let (s010_buffer, rest) = rest.split_at_mut(num_points);
+        //     let (s011_buffer, rest) = rest.split_at_mut(num_points);
+        //     let (s100_buffer, rest) = rest.split_at_mut(num_points);
+        //     let (s101_buffer, rest) = rest.split_at_mut(num_points);
+        //     let (s110_buffer, s111_buffer) = rest.split_at_mut(num_points);
+
+        //     // Single loop to compute all 8 leaf scalars.
+        //     for i in 0..num_points {
+        //         let eq_eval = eq_evals[i];
+        //         let z_0 = first_row.values[i];
+        //         let z_1 = second_row.values[i];
+        //         let z_2 = third_row.values[i];
+
+        //         // Level 1
+        //         let s1 = eq_eval * z_0;
+        //         let s0 = eq_eval - s1;
+
+        //         // Level 2
+        //         let s01 = s0 * z_1;
+        //         let s11 = s1 * z_1;
+        //         let s00 = s0 - s01;
+        //         let s10 = s1 - s11;
+
+        //         // Level 3 (leaf nodes)
+        //         let s001 = s00 * z_2;
+        //         let s011 = s01 * z_2;
+        //         let s101 = s10 * z_2;
+        //         let s111 = s11 * z_2;
+        //         s000_buffer[i] = s00 - s001;
+        //         s001_buffer[i] = s001;
+        //         s010_buffer[i] = s01 - s011;
+        //         s011_buffer[i] = s011;
+        //         s100_buffer[i] = s10 - s101;
+        //         s101_buffer[i] = s101;
+        //         s110_buffer[i] = s11 - s111;
+        //         s111_buffer[i] = s111;
+        //     }
+
+        //     let eighth = out.len() / 8;
+        //     let (out_000, rest) = out.split_at_mut(eighth);
+        //     let (out_001, rest) = rest.split_at_mut(eighth);
+        //     let (out_010, rest) = rest.split_at_mut(eighth);
+        //     let (out_011, rest) = rest.split_at_mut(eighth);
+        //     let (out_100, rest) = rest.split_at_mut(eighth);
+        //     let (out_101, rest) = rest.split_at_mut(eighth);
+        //     let (out_110, out_111) = rest.split_at_mut(eighth);
+
+        //     E::accumulate_packed_batch::<INITIALIZED>(out_000, s000_buffer, scalars);
+        //     E::accumulate_packed_batch::<INITIALIZED>(out_001, s001_buffer, scalars);
+        //     E::accumulate_packed_batch::<INITIALIZED>(out_010, s010_buffer, scalars);
+        //     E::accumulate_packed_batch::<INITIALIZED>(out_011, s011_buffer, scalars);
+        //     E::accumulate_packed_batch::<INITIALIZED>(out_100, s100_buffer, scalars);
+        //     E::accumulate_packed_batch::<INITIALIZED>(out_101, s101_buffer, scalars);
+        //     E::accumulate_packed_batch::<INITIALIZED>(out_110, s110_buffer, scalars);
+        //     E::accumulate_packed_batch::<INITIALIZED>(out_111, s111_buffer, scalars);
+        // }
         _ => {
             // General recursive case for any number of variables.
             let (low, high) = out.split_at_mut(out.len() / 2);
