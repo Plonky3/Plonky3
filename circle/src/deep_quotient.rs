@@ -93,7 +93,6 @@ pub(crate) fn deep_quotient_reduce_row<F: ComplexExtendable, EF: ExtensionField<
         deep_quotient_vanishing_part(x, zeta, alpha.exp_u64(ps_at_x.len() as u64));
     
     // Compute the constraint part: handles the f(x) - f(zeta) numerator
-    // We use powers of alpha to combine multiple polynomial constraints
     let constraint_part = dot_product::<EF, _, _>(
         alpha.powers(),
         izip!(ps_at_x, ps_at_zeta).map(|(&p_at_x, &p_at_zeta)| -p_at_zeta + p_at_x),
