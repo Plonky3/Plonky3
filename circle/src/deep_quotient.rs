@@ -180,16 +180,6 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
 /// of the Circle STARKs paper. It finds and removes the "error" component that is a scalar
 /// multiple of the vanishing polynomial of the original domain.
 ///
-/// # Mathematical Background
-///
-/// When we extend a polynomial from a smaller domain to a larger domain (LDE - Low Degree Extension),
-/// the result may contain components that are multiples of the vanishing polynomial of the
-/// original domain. This function:
-///
-/// 1. Finds the coefficient `lambda` such that `lde = f + lambda * v_n` where `v_n` is the
-///    vanishing polynomial of the original domain
-/// 2. Removes this component: `lde -= lambda * v_n`
-///
 /// The key insight is that `<v_n, f> = 0` for any polynomial `f` in the FFT space, so we can
 /// use this orthogonality to extract `lambda`.
 ///
