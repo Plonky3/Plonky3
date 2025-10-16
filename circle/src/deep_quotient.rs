@@ -106,21 +106,14 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
     /// Compute DEEP quotients for all rows in the matrix efficiently using batch operations.
     ///
     /// This is an optimized version of `deep_quotient_reduce_row` that processes the entire
-    /// matrix at once, taking advantage of:
-    /// - Batch multiplicative inverses (more efficient than individual inverses)
-    /// - Packed field operations for better performance
-    /// - Parallel processing of independent computations
+    /// matrix at once.
     ///
     /// # Mathematical Background
     ///
     /// For each row `i` in the matrix, this computes:
     /// ```
-    /// DEEP_quotient[i] = vanishing_part[i] * constraint_part[i]
+    /// DEEP_quotient[i] = (f(x[i]) - f(zeta)) / (x[i] - zeta)
     /// ```
-    ///
-    /// Where:
-    /// - `vanishing_part[i] = vp_num[i] / vp_denom[i]` (handles the `(x - zeta)` denominator)
-    /// - `constraint_part[i] = sum_j(alpha^j * (p_j[x_i] - p_j[zeta]))` (handles the numerator)
     ///
     /// # Parameters
     ///
