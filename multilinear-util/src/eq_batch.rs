@@ -241,7 +241,7 @@ where
 /// # Arguments
 /// - `evals`: Matrix where each column is an evaluation point z_i ∈ F^2 (must have height = 2)
 /// - `scalars`: Vector of scalars [γ_0, γ_1, ..., γ_{m-1}] for weighting each evaluation
-/// - `workspace`: Mutable workspace buffer (must have size ≥ 2 * num_points)
+/// - `workspace`: Mutable workspace buffer (must have size equal to 2 * num_points)
 ///
 /// # Returns
 /// An array of length 4 containing `∑_i scalars[i] * eq(x, z_i)` for all x ∈ {0,1}^2
