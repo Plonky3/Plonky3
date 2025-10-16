@@ -438,40 +438,29 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for ExtFieldEvaluator<F,
         final_packed_evals: &[Self::PackedField],
         _scalars: &[Self::OutputField],
     ) {
-        // Handle the empty batch case first.
-        let Some((first_packed, rest_packed)) = final_packed_evals.split_first() else {
+        // Handle the empty batch case.
+        if final_packed_evals.is_empty() {
             if !INITIALIZED {
                 out.fill(Self::OutputField::ZERO);
             }
             return;
-        };
-
-        // Unpack the first packed evaluation.
-        let first_unpacked = Self::PackedField::to_ext_iter([*first_packed]);
-
-        // Process the first packed evaluation.
-        //
-        // This step either writes to or adds to the output buffer, setting the initial state.
-        if INITIALIZED {
-            // If the buffer is already initialized, add the first result.
-            out.iter_mut()
-                .zip(first_unpacked)
-                .for_each(|(out_val, unpacked_val)| *out_val += unpacked_val);
-        } else {
-            // Otherwise, write the first result directly, avoiding adding to zero.
-            out.iter_mut()
-                .zip(first_unpacked)
-                .for_each(|(out_val, unpacked_val)| *out_val = unpacked_val);
         }
 
-        // Accumulate the rest of the packed evaluations.
-        //
-        // All subsequent operations are additions. This loop is allocation-free.
-        for &packed_eval in rest_packed {
-            let unpacked_iter = Self::PackedField::to_ext_iter([packed_eval]);
+        // Sum all packed field elements first.
+        let packed_sum: Self::PackedField = final_packed_evals.iter().copied().sum();
+
+        // Now unpack the single sum result.
+        let unpacked_iter = Self::PackedField::to_ext_iter([packed_sum]);
+
+        // Write or add the unpacked result to the output buffer.
+        if INITIALIZED {
             out.iter_mut()
                 .zip(unpacked_iter)
                 .for_each(|(out_val, unpacked_val)| *out_val += unpacked_val);
+        } else {
+            out.iter_mut()
+                .zip(unpacked_iter)
+                .for_each(|(out_val, unpacked_val)| *out_val = unpacked_val);
         }
     }
 }
