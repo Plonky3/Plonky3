@@ -1,7 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use itertools::Itertools;
 use p3_air::Air;
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
@@ -9,12 +8,13 @@ use p3_field::{BasedVectorSpace, PackedValue, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
+use p3_uni_stark::{
+    ProverConstraintFolder, SymbolicAirBuilder, get_log_quotient_degree, get_symbolic_constraints,
+};
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 
-use p3_uni_stark::{ProverConstraintFolder, SymbolicAirBuilder, get_symbolic_constraints, get_log_quotient_degree};
-
-use crate::config::{MultiStarkGenericConfig as MSGC, PackedChallenge, PackedVal, Val, Domain};
+use crate::config::{Domain, MultiStarkGenericConfig as MSGC, PackedChallenge, PackedVal, Val};
 use crate::proof::{InstanceOpenedValues, MultiCommitments, MultiOpenedValues, MultiProof};
 
 #[derive(Debug)]
@@ -32,7 +32,7 @@ pub fn prove_multi<
     #[cfg(not(debug_assertions))] A,
 >(
     config: &SC,
-    mut instances: Vec<StarkInstance<SC, A>>,
+    instances: Vec<StarkInstance<SC, A>>,
 ) -> MultiProof<SC>
 where
     SC: MSGC,
@@ -45,13 +45,10 @@ where
     let mut challenger = config.initialise_challenger();
 
     // No ZK support in initial implementation.
-    let is_zk = 0usize;
 
-    // Precompute degrees and domains per instance.
+    // Use instances in provided order.
     let degrees: Vec<usize> = instances.iter().map(|i| i.trace.height()).collect();
     let log_degrees: Vec<usize> = degrees.iter().copied().map(log2_strict_usize).collect();
-    let log_ext_degrees: Vec<usize> = log_degrees.iter().map(|&d| d + is_zk).collect();
-    let degree_bits = log_ext_degrees.clone();
 
     // Trace domains for each instance.
     let trace_domains: Vec<Domain<SC>> = degrees
@@ -60,10 +57,15 @@ where
         .collect();
     // No extended domains; we commit at the base domain.
 
-    // Observe per-instance degree bits (extended and base) for binding the instance shape.
-    for &db in &log_ext_degrees {
+    // Observe per-instance binding data: degree bits (twice), width, and number of public values.
+    for (i, inst) in instances.iter().enumerate() {
+        let db = log_degrees[i];
         challenger.observe(Val::<SC>::from_usize(db));
-        challenger.observe(Val::<SC>::from_usize(db - is_zk));
+        challenger.observe(Val::<SC>::from_usize(db));
+        let width = A::width(inst.air);
+        challenger.observe(Val::<SC>::from_usize(width));
+        let pv_len = inst.public_values.len();
+        challenger.observe(Val::<SC>::from_usize(pv_len));
     }
 
     // Commit to all traces in one multi-matrix commitment, preserving input order.
@@ -80,16 +82,11 @@ where
         challenger.observe_slice(&inst.public_values);
     }
 
-    // Compute quotient degrees and domains per instance.
-    let log_quotient_degrees: Vec<usize> = instances
-        .iter()
-        .map(|inst| get_log_quotient_degree::<Val<SC>, A>(inst.air, 0, inst.public_values.len(), 0))
-        .collect();
-
-    let quotient_degrees: Vec<usize> = log_quotient_degrees.iter().map(|&l| 1 << l).collect();
+    // Compute quotient degrees and domains per instance inline in the loop below.
 
     // Get the random alpha to fold constraints.
-    let alpha: <SC as p3_uni_stark::StarkGenericConfig>::Challenge = challenger.sample_algebra_element();
+    let alpha: <SC as p3_uni_stark::StarkGenericConfig>::Challenge =
+        challenger.sample_algebra_element();
 
     // Build per-instance quotient domains and values, and split into chunks.
     let mut quotient_chunk_domains: Vec<Domain<SC>> = Vec::new();
@@ -97,26 +94,22 @@ where
     // Track ranges so we can map openings back to instances.
     let mut quotient_chunk_ranges: Vec<(usize, usize)> = Vec::with_capacity(instances.len());
 
-    for (i, ((inst, trace_domain), &log_deg)) in
-        instances
-            .iter()
-            .zip(trace_domains.iter())
-            .zip(log_degrees.iter())
-            .enumerate()
+    for (i, ((inst, trace_domain), &log_deg)) in instances
+        .iter()
+        .zip(trace_domains.iter())
+        .zip(log_degrees.iter())
+        .enumerate()
     {
-        let log_quot_deg = get_log_quotient_degree::<Val<SC>, A>(
-            inst.air,
-            0,
-            inst.public_values.len(),
-            0,
-        );
+        let log_quot_deg =
+            get_log_quotient_degree::<Val<SC>, A>(inst.air, 0, inst.public_values.len(), 0);
         let quotient_domain = trace_domain.create_disjoint_domain(1 << (log_deg + log_quot_deg));
 
         // Count constraints to size alpha powers packing.
         let constraint_cnt = get_symbolic_constraints(inst.air, 0, inst.public_values.len()).len();
 
         // Get evaluations on quotient domain from the main commitment.
-        let trace_on_quotient_domain = pcs.get_evaluations_on_domain(&main_data, i, quotient_domain);
+        let trace_on_quotient_domain =
+            pcs.get_evaluations_on_domain(&main_data, i, quotient_domain);
 
         // Compute quotient(x) = constraints(x)/Z_H(x) over quotient_domain, as extension values.
         let q_values = quotient_values::<SC, A, _>(
@@ -179,7 +172,8 @@ where
     // Parse quotient chunk opened values and map per instance.
     let mut quotient_openings_iter = opened_values[quotient_idx].iter();
 
-    let mut per_instance: Vec<InstanceOpenedValues<SC::Challenge>> = Vec::with_capacity(instances.len());
+    let mut per_instance: Vec<InstanceOpenedValues<SC::Challenge>> =
+        Vec::with_capacity(instances.len());
     for (i, (s, e)) in quotient_chunk_ranges.iter().copied().enumerate() {
         // Trace locals
         let tv = &trace_values_for_mats[i];
@@ -189,7 +183,9 @@ where
         // Quotient chunks: for each chunk matrix, take the first point (zeta) values.
         let mut qcs = Vec::with_capacity(e - s);
         for _ in s..e {
-            let mat_vals = quotient_openings_iter.next().expect("chunk index in bounds");
+            let mat_vals = quotient_openings_iter
+                .next()
+                .expect("chunk index in bounds");
             qcs.push(mat_vals[0].clone());
         }
 

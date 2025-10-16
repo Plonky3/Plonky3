@@ -11,4 +11,3 @@ pub use config::*;
 pub use proof::*;
 pub use prover::*;
 pub use verifier::*;
-

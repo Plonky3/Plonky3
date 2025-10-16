@@ -1,7 +1,10 @@
-use p3_commit::PolynomialSpace;
+// No additional imports needed.
 
 // Re-export the uni-stark generic config and useful associated types for convenience.
-pub use p3_uni_stark::{StarkGenericConfig, Val as UniVal, Domain as UniDomain, PackedChallenge as UniPackedChallenge, PackedVal as UniPackedVal};
+pub use p3_uni_stark::{
+    Domain as UniDomain, PackedChallenge as UniPackedChallenge, PackedVal as UniPackedVal,
+    StarkGenericConfig, Val as UniVal,
+};
 
 pub type Domain<SC> = UniDomain<SC>;
 pub type Val<SC> = UniVal<SC>;

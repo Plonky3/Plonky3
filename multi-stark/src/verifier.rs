@@ -5,16 +5,16 @@ use itertools::Itertools;
 use p3_air::Air;
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{BasedVectorSpace, PrimeCharacteristicRing, Field};
+use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
-use p3_util::{zip_eq::zip_eq, log2_strict_usize};
+use p3_uni_stark::{SymbolicAirBuilder, VerifierConstraintFolder, get_log_quotient_degree};
+use p3_util::log2_strict_usize;
+use p3_util::zip_eq::zip_eq;
 use tracing::instrument;
 
-use p3_uni_stark::{SymbolicAirBuilder, VerifierConstraintFolder, get_log_quotient_degree};
-
-use crate::config::{MultiStarkGenericConfig as MSGC, Val, Domain};
-use crate::proof::{InstanceOpenedValues, MultiCommitments, MultiOpenedValues, MultiProof};
+use crate::config::{Domain, MultiStarkGenericConfig as MSGC, Val};
+use crate::proof::MultiProof;
 
 #[derive(Debug)]
 pub enum MultiVerificationError<PcsErr> {
@@ -46,14 +46,22 @@ where
     let mut challenger = config.initialise_challenger();
 
     // Sanity checks
-    if airs.len() != opened_values.instances.len() || airs.len() != public_values.len() || airs.len() != degree_bits.len() {
+    if airs.len() != opened_values.instances.len()
+        || airs.len() != public_values.len()
+        || airs.len() != degree_bits.len()
+    {
         return Err(MultiVerificationError::InvalidProofShape);
     }
 
-    // Observe per-instance degree bits (bind shape). No ZK, so base degree twice.
-    for &db in degree_bits {
+    // Observe per-instance binding data: degree bits (twice), width, and number of public values.
+    for (i, air) in airs.iter().enumerate() {
+        let db = degree_bits[i];
         challenger.observe(Val::<SC>::from_usize(db));
         challenger.observe(Val::<SC>::from_usize(db));
+        let width = A::width(air);
+        challenger.observe(Val::<SC>::from_usize(width));
+        let pv_len = public_values[i].len();
+        challenger.observe(Val::<SC>::from_usize(pv_len));
     }
 
     // Observe main commitment and public values (in instance order).
@@ -79,22 +87,20 @@ where
         .iter()
         .map(|&db| pcs.natural_domain_for_degree(1 << db))
         .collect::<Vec<_>>();
-    let trace_round: Vec<_> = (
-        trace_domains
-            .iter()
-            .zip(opened_values.instances.iter())
-            .map(|(dom, inst_vals)| {
-                let zeta_next = dom.next_point(zeta).unwrap();
-                (
-                    *dom,
-                    vec![
-                        (zeta, inst_vals.trace_local.clone()),
-                        (zeta_next, inst_vals.trace_next.clone()),
-                    ],
-                )
-            })
-            .collect::<Vec<_>>()
-    );
+    let trace_round: Vec<_> = trace_domains
+        .iter()
+        .zip(opened_values.instances.iter())
+        .map(|(dom, inst_vals)| {
+            let zeta_next = dom.next_point(zeta).unwrap();
+            (
+                *dom,
+                vec![
+                    (zeta, inst_vals.trace_local.clone()),
+                    (zeta_next, inst_vals.trace_next.clone()),
+                ],
+            )
+        })
+        .collect();
     coms_to_verify.push((commitments.main.clone(), trace_round));
 
     // Quotient chunks round: flatten per-instance chunks to match commit order.
@@ -120,19 +126,22 @@ where
         if inst_qcs.len() != domains.len() {
             return Err(MultiVerificationError::InvalidProofShape);
         }
-        for (d, vals) in zip_eq(domains.iter(), inst_qcs, MultiVerificationError::InvalidProofShape)? {
+        for (d, vals) in zip_eq(
+            domains.iter(),
+            inst_qcs,
+            MultiVerificationError::InvalidProofShape,
+        )? {
             qc_round.push((*d, vec![(zeta, vals.clone())]));
         }
     }
     coms_to_verify.push((commitments.quotient_chunks.clone(), qc_round));
 
     // Verify all openings via PCS.
-    pcs.verify(coms_to_verify, &proof.opening_proof, &mut challenger)
+    pcs.verify(coms_to_verify, opening_proof, &mut challenger)
         .map_err(MultiVerificationError::InvalidOpeningArgument)?;
 
     // Now check constraint equality per instance.
     // For each instance, recombine quotient from chunks at zeta and compare to folded constraints.
-    let mut quotient_chunk_idx = 0usize;
     for (i, air) in airs.iter().enumerate() {
         let lqd = log_quotient_degrees[i];
         let qdeg = 1 << lqd;
@@ -199,8 +208,6 @@ where
         if folded_constraints * sels.inv_vanishing != quotient {
             return Err(MultiVerificationError::OodEvaluationMismatch { index: i });
         }
-
-        quotient_chunk_idx += qdeg;
     }
 
     Ok(())
