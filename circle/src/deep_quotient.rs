@@ -145,8 +145,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         // Get all domain points in CFFT order for efficient processing
         let points = cfft_permute_slice(&self.domain.points().collect_vec());
         
-        // Compute vanishing parts for all points in parallel
-        // This gives us the (x - zeta) denominator components
+        // Compute `(x - zeta)` for all our `x` values.
         let (vp_nums, vp_denoms): (Vec<_>, Vec<_>) = points
             .into_iter()
             .map(|x| deep_quotient_vanishing_part(x, zeta, alpha_pow_width))
