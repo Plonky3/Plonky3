@@ -266,7 +266,8 @@ where
     let num_points = evals.width();
 
     // Split workspace into two buffers for the two scalar vectors
-    let (eq_0s, eq_1s) = workspace.split_at_mut(num_points);
+    let (eq_0s, remaining) = workspace.split_at_mut(num_points);
+    let eq_1s = &mut remaining[..num_points];
 
     // Compute the two scalar vectors in-place using workspace buffers
     for i in 0..num_points {
@@ -342,7 +343,8 @@ where
     }
 
     // Split the remaining workspace for the recursive calls
-    let (ws0, ws1) = next_workspace.split_at_mut(2 * num_points);
+    let (ws0, remaining) = next_workspace.split_at_mut(2 * num_points);
+    let ws1 = &mut remaining[..2 * num_points];
 
     // Recurse to calculate evaluations for the remaining variables
     let [eq_000, eq_001, eq_010, eq_011] = eval_eq_2_batch(remainder, eq_0s, ws0);
@@ -563,7 +565,11 @@ fn eval_eq_batch_common<F, IF, EF, E, const INITIALIZED: bool>(
     // If the number of variables is small, there is no need to use
     // parallelization or packings.
     if num_vars <= packing_width + 1 + log_num_threads {
-        eval_eq_batch_basic::<F, IF, EF, INITIALIZED>(evals, scalars, out);
+        // Allocate workspace once for all recursive calls
+        //
+        // The max function ensures we allocate at least 1 element to avoid empty slice issues
+        let mut workspace = EF::zero_vec((2 * evals.width() * num_vars).max(1));
+        eval_eq_batch_basic::<F, IF, EF, INITIALIZED>(evals, scalars, out, &mut workspace);
     } else {
         let log_packing_width = log2_strict_usize(packing_width);
         let eval_len_min_packing = num_vars - log_packing_width;
@@ -623,76 +629,13 @@ fn eval_eq_batch_common<F, IF, EF, E, const INITIALIZED: bool>(
 /// - `evals`: Matrix where each column represents one evaluation point z_i
 /// - `scalars`: Vector of scalars [γ_0, γ_1, ..., γ_{m-1}]
 /// - `out`: Output buffer of size 2^n to store the combined evaluations
+/// - `workspace`: Mutable workspace buffer for storing intermediate scalar values
 ///
 /// # Behavior of `INITIALIZED`
 /// If `INITIALIZED = false`, each value in `out` is overwritten with the computed result.
 /// If `INITIALIZED = true`, the computed result is added to the existing value in `out`.
 #[inline]
 fn eval_eq_batch_basic<F, IF, EF, const INITIALIZED: bool>(
-    evals: RowMajorMatrixView<IF>,
-    scalars: &[EF],
-    out: &mut [EF],
-) where
-    F: Field,
-    IF: Field,
-    EF: ExtensionField<F> + Algebra<IF>,
-{
-    if evals.width() == 0 {
-        return;
-    }
-
-    let num_vars = evals.height();
-    let num_points = evals.width();
-    debug_assert_eq!(out.len(), 1 << num_vars);
-
-    match num_vars {
-        0 => {
-            // Base case: sum all scalars
-            let sum: EF = scalars.iter().copied().sum();
-            if INITIALIZED {
-                out[0] += sum;
-            } else {
-                out[0] = sum;
-            }
-        }
-        1 => {
-            // Use optimized 1-variable batch evaluation
-            let eq_evaluations = eval_eq_1_batch(evals, scalars);
-            add_or_set::<_, INITIALIZED>(out, &eq_evaluations);
-        }
-        2 => {
-            // Use optimized 2-variable batch evaluation
-            let mut workspace = EF::zero_vec(2 * num_points);
-            let eq_evaluations = eval_eq_2_batch(evals, scalars, &mut workspace);
-            add_or_set::<_, INITIALIZED>(out, &eq_evaluations);
-        }
-        3 => {
-            // Use optimized 3-variable batch evaluation
-            let mut workspace = EF::zero_vec(6 * num_points);
-            let eq_evaluations = eval_eq_3_batch(evals, scalars, &mut workspace);
-            add_or_set::<_, INITIALIZED>(out, &eq_evaluations);
-        }
-        _ => {
-            // Allocate workspace once for all recursive calls
-            // We need 2 * num_points * num_vars space
-            let mut workspace = EF::zero_vec(2 * num_points * num_vars);
-            eval_eq_batch_recursive::<F, IF, EF, INITIALIZED>(evals, scalars, out, &mut workspace);
-        }
-    }
-}
-
-/// Recursive helper for batched equality polynomial evaluation with workspace.
-///
-/// This function implements the recursive evaluation without heap allocations at each level.
-/// The workspace is sliced and passed down through recursion to avoid repeated allocations.
-///
-/// # Arguments
-/// - `evals`: Matrix where each column represents one evaluation point z_i
-/// - `scalars`: Vector of scalars [γ_0, γ_1, ..., γ_{m-1}]
-/// - `out`: Output buffer of size 2^n to store the combined evaluations
-/// - `workspace`: Mutable workspace buffer for storing intermediate scalar values
-#[inline]
-fn eval_eq_batch_recursive<F, IF, EF, const INITIALIZED: bool>(
     evals: RowMajorMatrixView<IF>,
     scalars: &[EF],
     out: &mut [EF],
@@ -750,13 +693,13 @@ fn eval_eq_batch_recursive<F, IF, EF, const INITIALIZED: bool>(
             }
 
             // Recurse on both branches with updated scalar vectors
-            eval_eq_batch_recursive::<F, IF, EF, INITIALIZED>(
+            eval_eq_batch_basic::<F, IF, EF, INITIALIZED>(
                 remainder,
                 s0_buffer,
                 low,
                 next_workspace,
             );
-            eval_eq_batch_recursive::<F, IF, EF, INITIALIZED>(
+            eval_eq_batch_basic::<F, IF, EF, INITIALIZED>(
                 remainder,
                 s1_buffer,
                 high,
@@ -1165,7 +1108,13 @@ mod tests {
 
         // Verify correctness by comparing against basic batch evaluation
         let mut output_batch_basic = EF4::zero_vec(1 << num_vars);
-        eval_eq_batch_basic::<F, EF4, EF4, false>(evals, &scalars, &mut output_batch_basic);
+        let mut workspace = EF4::zero_vec(2 * num_points * num_vars);
+        eval_eq_batch_basic::<F, EF4, EF4, false>(
+            evals,
+            &scalars,
+            &mut output_batch_basic,
+            &mut workspace,
+        );
 
         assert_eq!(
             output_batch_parallel, output_batch_basic,
@@ -1209,7 +1158,8 @@ mod tests {
 
         // Run the sequential version for comparison
         let mut output_basic = EF4::zero_vec(out_len);
-        eval_eq_batch_basic::<F, F, EF4, false>(evals, &scalars, &mut output_basic);
+        let mut workspace = EF4::zero_vec(2 * num_points * num_vars);
+        eval_eq_batch_basic::<F, F, EF4, false>(evals, &scalars, &mut output_basic, &mut workspace);
 
         // Assert that the parallel version matches the sequential version
         assert_eq!(
