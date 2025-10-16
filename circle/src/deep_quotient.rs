@@ -19,9 +19,7 @@ use crate::{CircleEvaluations, cfft_permute_slice};
 
 /// Compute the "vanishing part" of the DEEP quotient numerator and denominator.
 ///
-/// This function computes the vanishing polynomial component of the DEEP quotient as described
-/// in Section 6, Remark 21 of the Circle STARKs paper. The vanishing part handles the
-/// constraint that polynomials should evaluate to zero on the original domain.
+/// See Section 6, Remark 21 of the Circle STARKs paper (page 30 of first edition PDF).
 ///
 /// # Mathematical Background
 ///
@@ -38,10 +36,7 @@ use crate::{CircleEvaluations, cfft_permute_slice};
 /// - `alpha_pow_width`: The challenge `alpha` raised to the power of the polynomial width
 ///
 /// # Returns
-///
-/// A tuple `(numerator, denominator)` where:
-/// - `numerator`: The vanishing part numerator
-/// - `denominator`: The vanishing part denominator (always positive)
+/// The numerator and denominator for the vanishing part.
 pub(crate) fn deep_quotient_vanishing_part<F: ComplexExtendable, EF: ExtensionField<F>>(
     x: Point<F>,
     zeta: Point<EF>,
