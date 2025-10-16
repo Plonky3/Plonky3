@@ -153,9 +153,5 @@ fn bench_eval_eq_base_batch(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    bench_eval_eq_batch,
-    bench_eval_eq_base_batch,
-);
+criterion_group!(benches, bench_eval_eq_batch, bench_eval_eq_base_batch,);
 criterion_main!(benches);
