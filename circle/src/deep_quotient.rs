@@ -1,7 +1,7 @@
 //! Deep quotient computation for Circle STARKs.
 //!
 //! This module implements the DEEP (Domain Extension for Eliminating Pretenders) quotient
-//! computation as described in the Circle STARKs paper. This allows the verifier to check 
+//! computation as described in the Circle STARKs paper. This allows the verifier to check
 //! polynomial constraints by evaluating them at random points outside the original domain.
 use alloc::vec::Vec;
 
@@ -44,13 +44,13 @@ pub(crate) fn deep_quotient_vanishing_part<F: ComplexExtendable, EF: ExtensionFi
 ) -> (EF, EF) {
     // Compute the vanishing polynomial v_p(zeta) = (x - zeta) * (x - zeta_bar)
     let (re_v_zeta, im_v_zeta) = x.v_p(zeta);
-    
+
     // Numerator: Re(1/v_gamma) + alpha^L * Im(1/v_gamma)
     let numerator = re_v_zeta - alpha_pow_width * im_v_zeta;
-    
+
     // Denominator: |v_gamma|^2 = Re(v_gamma)^2 + Im(v_gamma)^2
     let denominator = re_v_zeta.square() + im_v_zeta.square();
-    
+
     (numerator, denominator)
 }
 
@@ -91,13 +91,13 @@ pub(crate) fn deep_quotient_reduce_row<F: ComplexExtendable, EF: ExtensionField<
     // Compute the vanishing part: handles the (x - zeta) denominator
     let (vp_num, vp_denom) =
         deep_quotient_vanishing_part(x, zeta, alpha.exp_u64(ps_at_x.len() as u64));
-    
+
     // Compute the constraint part: handles the f(x) - f(zeta) numerator
     let constraint_part = dot_product::<EF, _, _>(
         alpha.powers(),
         izip!(ps_at_x, ps_at_zeta).map(|(&p_at_x, &p_at_zeta)| -p_at_zeta + p_at_x),
     );
-    
+
     // Combine vanishing part and constraint part
     (vp_num / vp_denom) * constraint_part
 }
@@ -133,16 +133,16 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
     ) -> Vec<EF> {
         // Precompute alpha^width for the vanishing part computation
         let alpha_pow_width = alpha.exp_u64(self.values.width() as u64);
-        
+
         // Get all domain points in CFFT order for efficient processing
         let points = cfft_permute_slice(&self.domain.points().collect_vec());
-        
+
         // Compute `(x - zeta)` for all our `x` values.
         let (vp_nums, vp_denoms): (Vec<_>, Vec<_>) = points
             .into_iter()
             .map(|x| deep_quotient_vanishing_part(x, zeta, alpha_pow_width))
             .unzip();
-        
+
         // Invert the deominators.
         let vp_denom_invs = batch_multiplicative_inverse(&vp_denoms);
 
@@ -197,7 +197,7 @@ pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
     log_blowup: usize,
 ) -> EF {
     let log_lde_size = log2_strict_usize(lde.len());
-    
+
     // The vanishing polynomial v_n is constant on cosets of the same size as the original domain.
     // We only need to compute the unique values, which correspond to the number of cosets.
     let v_d_init = CircleDomain::<F>::standard(log_lde_size)
