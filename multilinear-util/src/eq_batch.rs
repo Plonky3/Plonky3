@@ -1019,10 +1019,52 @@ mod tests {
     use rand::{Rng, SeedableRng};
 
     use super::*;
-    use crate::eq::{eval_eq, eval_eq_base, eval_eq_basic};
 
     type F = BabyBear;
     type EF4 = BinomialExtensionField<F, 4>;
+
+    /// Naive implementation of equality polynomial evaluation for extension field points.
+    ///
+    /// This is the core naive implementation used for testing.
+    fn eval_eq<F, EF, const INITIALIZED: bool>(eval_point: &[EF], out: &mut [EF], scalar: EF)
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+    {
+        let num_vars = eval_point.len();
+        debug_assert_eq!(out.len(), 1 << num_vars);
+
+        // Evaluate eq(x, z) for all x ∈ {0,1}^n
+        // Note: We iterate in reverse order to match the big-endian bit indexing used by the optimized version
+        for x in 0..(1 << num_vars) {
+            let mut eq_val = scalar;
+            for (i, &z_i) in eval_point.iter().enumerate().rev() {
+                let x_i = ((x >> (num_vars - 1 - i)) & 1) as u64;
+                if x_i == 1 {
+                    eq_val *= z_i;
+                } else {
+                    eq_val *= EF::ONE - z_i;
+                }
+            }
+            if INITIALIZED {
+                out[x] += eq_val;
+            } else {
+                out[x] = eq_val;
+            }
+        }
+    }
+
+    /// Naive implementation for base field points.
+    ///
+    /// Converts base field points to extension field and delegates to eval_eq.
+    fn eval_eq_base<F, EF, const INITIALIZED: bool>(eval_point: &[F], out: &mut [EF], scalar: EF)
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+    {
+        let eval_point_ext: Vec<_> = eval_point.iter().map(|&x| EF::from(x)).collect();
+        eval_eq::<F, EF, INITIALIZED>(&eval_point_ext, out, scalar);
+    }
 
     #[test]
     fn test_eval_eq_batch_functionality() {
@@ -1153,37 +1195,6 @@ mod tests {
 
             prop_assert_eq!(output_batch, expected_output);
         }
-    }
-
-    #[test]
-    fn test_eval_eq_parallel_path() {
-        // Calculate the threshold for parallel execution:
-        let packing_width = <F as Field>::Packing::WIDTH;
-        let num_threads = current_num_threads().next_power_of_two();
-        let log_num_threads = log2_strict_usize(num_threads);
-        let threshold = packing_width.ilog2() as usize + 1 + log_num_threads;
-
-        // Use variables > threshold to force parallel path
-        let num_vars = threshold + 2;
-
-        // Create random evaluation point
-        let mut rng = SmallRng::seed_from_u64(12345);
-        let eval_point: Vec<EF4> = (0..num_vars).map(|_| rng.random()).collect();
-
-        let scalar = EF4::from_u64(7);
-
-        // Test parallel path
-        let mut output_parallel = EF4::zero_vec(1 << num_vars);
-        eval_eq::<F, EF4, false>(&eval_point, &mut output_parallel, scalar);
-
-        // Verify correctness by comparing against basic evaluation for a small subset
-        let mut output_basic = EF4::zero_vec(1 << num_vars);
-        eval_eq_basic::<F, EF4, EF4, false>(&eval_point, &mut output_basic, scalar);
-
-        assert_eq!(
-            output_parallel, output_basic,
-            "Parallel path should match basic evaluation"
-        );
     }
 
     #[test]
