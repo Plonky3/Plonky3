@@ -62,9 +62,7 @@ pub(crate) fn deep_quotient_vanishing_part<F: ComplexExtendable, EF: ExtensionFi
 /// # Mathematical Background
 ///
 /// The DEEP quotient for a polynomial `f` at point `x` is:
-/// ```
-/// (f(x) - f(zeta)) / (x - zeta)
-/// ```
+/// `(f(x) - f(zeta)) / (x - zeta)`
 ///
 /// This function computes this quotient by:
 /// 1. Computing the vanishing part (handles the `(x - zeta)` denominator)
@@ -111,9 +109,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
     /// # Mathematical Background
     ///
     /// For each row `i` in the matrix, this computes:
-    /// ```
-    /// DEEP_quotient[i] = (f(x[i]) - f(zeta)) / (x[i] - zeta)
-    /// ```
+    /// `DEEP_quotient[i] = (f(x[i]) - f(zeta)) / (x[i] - zeta)`
     ///
     /// # Parameters
     ///
