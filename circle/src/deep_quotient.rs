@@ -46,7 +46,6 @@ pub(crate) fn deep_quotient_vanishing_part<F: ComplexExtendable, EF: ExtensionFi
     let (re_v_zeta, im_v_zeta) = x.v_p(zeta);
     
     // Numerator: Re(1/v_gamma) + alpha^L * Im(1/v_gamma)
-    // This combines the real and imaginary parts with the challenge scaling
     let numerator = re_v_zeta - alpha_pow_width * im_v_zeta;
     
     // Denominator: |v_gamma|^2 = Re(v_gamma)^2 + Im(v_gamma)^2
