@@ -589,7 +589,7 @@ fn eval_eq_batch_common<F, IF, EF, E, const INITIALIZED: bool>(
         let log_packing_width = log2_strict_usize(packing_width);
         let eval_len_min_packing = num_vars - log_packing_width;
 
-        // Split the variables into three parts (same strategy as eval_eq_common):
+        // Split the variables into three parts:
         // - evals[..log_num_threads] (the first log_num_threads variables)
         // - evals[log_num_threads..eval_len_min_packing] (the middle variables)
         // - evals[eval_len_min_packing..] (the last log_packing_width variables)
