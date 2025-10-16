@@ -1,14 +1,8 @@
 //! Deep quotient computation for Circle STARKs.
 //!
 //! This module implements the DEEP (Domain Extension for Eliminating Pretenders) quotient
-//! computation as described in the Circle STARKs paper. The DEEP quotient is a key component
-//! in the Circle STARK proving system that allows the verifier to check polynomial constraints
-//! by evaluating them at random points outside the original domain.
-//!
-//! The main mathematical concept is that if a polynomial `f` satisfies certain constraints
-//! on a domain `D`, then the DEEP quotient `(f - f(zeta))/(X - zeta)` should have bounded
-//! degree when evaluated at a random point `zeta` outside `D`.
-
+//! computation as described in the Circle STARKs paper. This allows the verifier to check 
+//! polynomial constraints by evaluating them at random points outside the original domain.
 use alloc::vec::Vec;
 
 use itertools::{Itertools, izip};
