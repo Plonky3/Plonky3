@@ -1036,7 +1036,7 @@ mod tests {
 
         // Evaluate eq(x, z) for all x ∈ {0,1}^n
         // Note: We iterate in reverse order to match the big-endian bit indexing used by the optimized version
-        for x in 0..(1 << num_vars) {
+        for (x, o) in out.iter_mut().enumerate().take(1 << num_vars) {
             let mut eq_val = scalar;
             for (i, &z_i) in eval_point.iter().enumerate().rev() {
                 let x_i = ((x >> (num_vars - 1 - i)) & 1) as u64;
@@ -1047,9 +1047,9 @@ mod tests {
                 }
             }
             if INITIALIZED {
-                out[x] += eq_val;
+                *o += eq_val;
             } else {
-                out[x] = eq_val;
+                *o = eq_val;
             }
         }
     }
