@@ -413,11 +413,16 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for ExtFieldEvaluator<F,
         buffer_vals: &[Self::PackedField],
         scalars: &[Self::OutputField],
     ) {
+        let num_vars = evals.height();
+        let num_points = evals.width();
+        // Allocate workspace for this parallel chunk
+        let mut workspace = Self::PackedField::zero_vec(2 * num_points * num_vars);
         eval_eq_packed_batch::<F, EF, EF, Self, INITIALIZED>(
             evals,
             out_chunk,
             buffer_vals,
             scalars,
+            &mut workspace,
         );
     }
 
@@ -482,7 +487,17 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for BaseFieldEvaluator<F
         buffer_vals: &[Self::PackedField],
         scalars: &[Self::OutputField],
     ) {
-        eval_eq_packed_batch::<F, F, EF, Self, INITIALIZED>(evals, out_chunk, buffer_vals, scalars);
+        let num_vars = evals.height();
+        let num_points = evals.width();
+        // Allocate workspace for this parallel chunk
+        let mut workspace = Self::PackedField::zero_vec(2 * num_points * num_vars);
+        eval_eq_packed_batch::<F, F, EF, Self, INITIALIZED>(
+            evals,
+            out_chunk,
+            buffer_vals,
+            scalars,
+            &mut workspace,
+        );
     }
 
     fn accumulate_packed_batch<const INITIALIZED: bool>(
@@ -720,47 +735,13 @@ fn eval_eq_batch_basic<F, IF, EF, const INITIALIZED: bool>(
 /// - `out`: Mutable slice of output buffer for this parallel chunk
 /// - `eq_evals`: Vector of packed evaluations, one for each evaluation point
 /// - `scalars`: Vector of scalars [γ_0, γ_1, ..., γ_{m-1}] for weighting
+/// - `workspace`: Mutable workspace buffer for storing intermediate packed scalar values
 ///
 /// # Behavior of `INITIALIZED`
 /// If `INITIALIZED = false`, each value in `out` is overwritten with the computed result.
 /// If `INITIALIZED = true`, the computed result is added to the existing value in `out`.
 #[inline]
 fn eval_eq_packed_batch<F, IF, EF, E, const INITIALIZED: bool>(
-    eval_points: RowMajorMatrixView<IF>,
-    out: &mut [EF],
-    eq_evals: &[E::PackedField],
-    scalars: &[EF],
-) where
-    F: Field,
-    IF: Field,
-    EF: ExtensionField<F>,
-    E: EqualityEvaluator<InputField = IF, OutputField = EF>,
-{
-    let num_vars = eval_points.height();
-    let num_points = eval_points.width();
-    debug_assert_eq!(out.len(), F::Packing::WIDTH << num_vars);
-
-    if num_vars > 0 {
-        // Allocate a single workspace buffer for the entire recursive process.
-        //
-        // Each level of recursion needs space for two branches of packed vectors.
-        let mut workspace = E::PackedField::zero_vec(2 * num_points * num_vars);
-        eval_eq_packed_batch_recursive::<F, IF, EF, E, INITIALIZED>(
-            eval_points,
-            out,
-            eq_evals,
-            scalars,
-            &mut workspace,
-        );
-    } else {
-        // Handle the base case directly if there is no recursion.
-        E::accumulate_packed_batch::<INITIALIZED>(out, eq_evals, scalars);
-    }
-}
-
-/// Recursive helper for batched packed evaluation that operates on a pre-allocated workspace.
-#[inline]
-fn eval_eq_packed_batch_recursive<F, IF, EF, E, const INITIALIZED: bool>(
     eval_points: RowMajorMatrixView<IF>,
     out: &mut [EF],
     eq_evals: &[E::PackedField],
@@ -772,9 +753,11 @@ fn eval_eq_packed_batch_recursive<F, IF, EF, E, const INITIALIZED: bool>(
     EF: ExtensionField<F>,
     E: EqualityEvaluator<InputField = IF, OutputField = EF>,
 {
+    let num_vars = eval_points.height();
     let num_points = eval_points.width();
+    debug_assert_eq!(out.len(), F::Packing::WIDTH << num_vars);
 
-    match eval_points.height() {
+    match num_vars {
         0 => {
             // Base case of the recursion.
             E::accumulate_packed_batch::<INITIALIZED>(out, eq_evals, scalars);
@@ -799,14 +782,14 @@ fn eval_eq_packed_batch_recursive<F, IF, EF, E, const INITIALIZED: bool>(
             }
 
             // Recurse, passing down the remainder of the workspace.
-            eval_eq_packed_batch_recursive::<F, IF, EF, E, INITIALIZED>(
+            eval_eq_packed_batch::<F, IF, EF, E, INITIALIZED>(
                 remainder,
                 low,
                 s0_buffer,
                 scalars,
                 next_workspace,
             );
-            eval_eq_packed_batch_recursive::<F, IF, EF, E, INITIALIZED>(
+            eval_eq_packed_batch::<F, IF, EF, E, INITIALIZED>(
                 remainder,
                 high,
                 s1_buffer,
