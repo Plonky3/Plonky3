@@ -80,8 +80,7 @@ pub(crate) fn deep_quotient_vanishing_part<F: ComplexExtendable, EF: ExtensionFi
 ///
 /// # Returns
 ///
-/// The DEEP quotient value for this row, which should have bounded degree if the
-/// polynomial constraints are satisfied.
+/// The DEEP quotient value for this row.
 pub(crate) fn deep_quotient_reduce_row<F: ComplexExtendable, EF: ExtensionField<F>>(
     alpha: EF,
     x: Point<F>,
