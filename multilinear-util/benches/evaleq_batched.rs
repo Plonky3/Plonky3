@@ -262,7 +262,7 @@ fn bench_batch_vs_single_base(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_batched_vs_multiple_unbatched(c: &mut Criterion) {
+fn bench_batched_vs_multiple_unbatched_extension(c: &mut Criterion) {
     let mut group = c.benchmark_group("batched_vs_multiple_unbatched");
 
     // Test with different batch sizes
@@ -319,12 +319,70 @@ fn bench_batched_vs_multiple_unbatched(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_batched_vs_multiple_unbatched_base(c: &mut Criterion) {
+    let mut group = c.benchmark_group("batched_vs_multiple_unbatched");
+
+    // Test with different batch sizes
+    let test_cases = [
+        (20, 4),  // 20 variables, 4 batch points
+        (20, 16), // 20 variables, 16 batch points
+    ];
+
+    for &(num_vars, batch_size) in &test_cases {
+        let (eval_points_data, scalars) = generate_base_batch_input(num_vars, batch_size);
+        let eval_points = RowMajorMatrixView::new(&eval_points_data, batch_size);
+
+        let bench_name = format!("n{}_b{}", num_vars, batch_size);
+
+        // Benchmark: single batched call
+        group.bench_with_input(
+            BenchmarkId::new("batched", &bench_name),
+            &(num_vars, batch_size),
+            |b, _| {
+                b.iter(|| {
+                    let mut out = vec![EF4::ZERO; 1 << num_vars];
+                    eval_eq_base_batch::<F, EF4, false>(eval_points, &mut out, &scalars);
+                    out
+                })
+            },
+        );
+
+        // Benchmark: multiple unbatched calls with accumulation
+        group.bench_with_input(
+            BenchmarkId::new("multiple_unbatched", &bench_name),
+            &(num_vars, batch_size),
+            |b, _| {
+                b.iter(|| {
+                    let mut out = vec![EF4::ZERO; 1 << num_vars];
+                    // First call: initialize output (INITIALIZED = false)
+                    let first_point: Vec<_> = (0..num_vars)
+                        .map(|var_idx| eval_points_data[var_idx * batch_size])
+                        .collect();
+                    eval_eq_base::<F, EF4, false>(&first_point, &mut out, scalars[0]);
+
+                    // Remaining calls: accumulate (INITIALIZED = true)
+                    for point_idx in 1..batch_size {
+                        let eval_point: Vec<_> = (0..num_vars)
+                            .map(|var_idx| eval_points_data[var_idx * batch_size + point_idx])
+                            .collect();
+                        eval_eq_base::<F, EF4, true>(&eval_point, &mut out, scalars[point_idx]);
+                    }
+                    out
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
-    // bench_eval_eq_batch,
-    // bench_eval_eq_base_batch,
+    bench_eval_eq_batch,
+    bench_eval_eq_base_batch,
     bench_batch_vs_single_extension,
     bench_batch_vs_single_base,
-    // bench_batched_vs_multiple_unbatched
+    bench_batched_vs_multiple_unbatched_extension,
+    bench_batched_vs_multiple_unbatched_base,
 );
 criterion_main!(benches);
