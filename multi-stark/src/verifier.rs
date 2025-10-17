@@ -117,10 +117,6 @@ where
 
     // Quotient chunks round: flatten per-instance chunks to match commit order.
     // Use extended domains for the outer commit domain, with size 2^(base_db + lqd + zk), and split into 2^(lqd+zk) chunks.
-    let ext_trace_domains = degree_bits
-        .iter()
-        .map(|&ext_db| pcs.natural_domain_for_degree(1 << ext_db))
-        .collect::<Vec<_>>();
     let quotient_domains: Vec<Vec<Domain<SC>>> = ext_trace_domains
         .iter()
         .zip(trace_domains.iter())
@@ -163,7 +159,6 @@ where
         // Build per-chunk Lagrange scaling factors at zeta, exactly like uni-stark.
         let ext_db = degree_bits[i];
         let base_db = ext_db - config.is_zk();
-        let trace_dom = pcs.natural_domain_for_degree(1 << base_db);
         let ext_dom = pcs.natural_domain_for_degree(1 << ext_db);
         let qdom = ext_dom.create_disjoint_domain(1 << (base_db + lqd + config.is_zk()));
         let qc_domains = qdom.split_domains(qdeg);

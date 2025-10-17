@@ -114,7 +114,7 @@ where
     // Track ranges so we can map openings back to instances.
     let mut quotient_chunk_ranges: Vec<(usize, usize)> = Vec::with_capacity(n_instances);
 
-    for (i, (&log_deg, trace_domain)) in log_degrees.iter().zip(trace_domains.iter()).enumerate() {
+    for (i, (&_log_deg, trace_domain)) in log_degrees.iter().zip(trace_domains.iter()).enumerate() {
         let log_quot_deg = log_quotient_degrees[i];
         // Disjoint domain sized by extended degree + quotient degree; use ext domain for shift.
         let quotient_domain =
@@ -166,6 +166,7 @@ where
     let zeta: SC::Challenge = challenger.sample_algebra_element();
 
     // Build opening rounds.
+    debug_assert_eq!(config.is_zk(), 0, "ZK not supported yet in multi-stark");
     let round1_points = trace_domains
         .iter()
         .map(|dom| vec![zeta, dom.next_point(zeta).unwrap()])
@@ -180,8 +181,10 @@ where
     let rounds = vec![round1, round2];
 
     let (opened_values, opening_proof) = pcs.open(rounds, &mut challenger);
-    let trace_idx = SC::Pcs::TRACE_IDX;
-    let quotient_idx = SC::Pcs::QUOTIENT_IDX;
+    debug_assert_eq!(opened_values.len(), 2, "expected [main, quotient] groups");
+    // Rely on open order: [main, quotient] since ZK is disabled.
+    let trace_idx = 0usize;
+    let quotient_idx = 1usize;
 
     // Parse trace opened values per instance.
     let trace_values_for_mats = &opened_values[trace_idx];

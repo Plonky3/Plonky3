@@ -34,7 +34,8 @@ pub struct MultiCommitments<Com> {
 pub struct InstanceOpenedValues<Challenge> {
     pub trace_local: Vec<Challenge>,
     pub trace_next: Vec<Challenge>,
-    pub quotient_chunks: Vec<Vec<Challenge>>, // one Vec<Challenge> per chunk (extension basis coeffs)
+    // one Vec<Challenge> per chunk (values for each flattened-basis column at zeta)
+    pub quotient_chunks: Vec<Vec<Challenge>>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
