@@ -4,19 +4,17 @@ use alloc::vec::Vec;
 use p3_air::Air;
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{BasedVectorSpace, PackedValue, PrimeCharacteristicRing};
+use p3_field::PrimeCharacteristicRing;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_maybe_rayon::prelude::*;
 use p3_uni_stark::{
     ProverConstraintFolder, SymbolicAirBuilder, get_log_quotient_degree, get_symbolic_constraints,
+    quotient_values,
 };
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 
-use crate::config::{
-    Domain, MultiStarkGenericConfig as MSGC, PackedChallenge, PackedVal, Val, observe_base_as_ext,
-};
+use crate::config::{Challenge, Domain, MultiStarkGenericConfig as MSGC, Val, observe_base_as_ext};
 use crate::proof::{InstanceOpenedValues, MultiCommitments, MultiOpenedValues, MultiProof};
 
 #[derive(Debug)]
@@ -27,15 +25,7 @@ pub struct StarkInstance<'a, SC: MSGC, A> {
 }
 
 #[instrument(skip_all)]
-#[allow(clippy::multiple_bound_locations)]
-pub fn prove_multi<
-    SC,
-    #[cfg(debug_assertions)] A: for<'a> Air<p3_uni_stark::DebugConstraintBuilder<'a, Val<SC>>>,
-    #[cfg(not(debug_assertions))] A,
->(
-    config: &SC,
-    instances: Vec<StarkInstance<SC, A>>,
-) -> MultiProof<SC>
+pub fn prove_multi<SC, A>(config: &SC, instances: Vec<StarkInstance<SC, A>>) -> MultiProof<SC>
 where
     SC: MSGC,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
@@ -113,8 +103,7 @@ where
     // Compute quotient degrees and domains per instance inline in the loop below.
 
     // Get the random alpha to fold constraints.
-    let alpha: <SC as p3_uni_stark::StarkGenericConfig>::Challenge =
-        challenger.sample_algebra_element();
+    let alpha: Challenge<SC> = challenger.sample_algebra_element();
 
     // Build per-instance quotient domains and values, and split into chunks.
     let mut quotient_chunk_domains: Vec<Domain<SC>> = Vec::new();
@@ -159,7 +148,7 @@ where
         quotient_chunk_ranges.push((start, end));
     }
 
-    // Commit to all quotient chunks together (single commitment like SP1).
+    // Commit to all quotient chunks together.
     let quotient_commit_inputs = quotient_chunk_domains
         .iter()
         .cloned()
@@ -171,7 +160,7 @@ where
     // ZK disabled: no randomization round.
 
     // Sample OOD point.
-    let zeta: SC::Challenge = challenger.sample_algebra_element();
+    let zeta: Challenge<SC> = challenger.sample_algebra_element();
 
     // Build opening rounds.
     let round1_points = trace_domains
@@ -206,7 +195,7 @@ where
     // Parse quotient chunk opened values and map per instance.
     let mut quotient_openings_iter = opened_values[quotient_idx].iter();
 
-    let mut per_instance: Vec<InstanceOpenedValues<SC::Challenge>> =
+    let mut per_instance: Vec<InstanceOpenedValues<Challenge<SC>>> =
         Vec::with_capacity(n_instances);
     for (i, (s, e)) in quotient_chunk_ranges.iter().copied().enumerate() {
         // Trace locals
@@ -241,98 +230,4 @@ where
         opening_proof,
         degree_bits: log_ext_degrees,
     }
-}
-
-#[instrument(name = "compute quotient polynomial (multi)", skip_all)]
-#[allow(clippy::too_many_arguments)]
-fn quotient_values<SC, A, Mat>(
-    air: &A,
-    public_values: &Vec<Val<SC>>,
-    trace_domain: Domain<SC>,
-    quotient_domain: Domain<SC>,
-    trace_on_quotient_domain: Mat,
-    alpha: <SC as p3_uni_stark::StarkGenericConfig>::Challenge,
-    constraint_count: usize,
-) -> Vec<<SC as p3_uni_stark::StarkGenericConfig>::Challenge>
-where
-    SC: MSGC,
-    A: for<'a> Air<ProverConstraintFolder<'a, SC>>,
-    Mat: Matrix<Val<SC>> + Sync,
-{
-    let quotient_size = quotient_domain.size();
-    let width = trace_on_quotient_domain.width();
-    let mut sels = trace_domain.selectors_on_coset(quotient_domain);
-
-    let qdb = log2_strict_usize(quotient_domain.size()) - log2_strict_usize(trace_domain.size());
-    let next_step = 1 << qdb;
-
-    // Quotient domain size should be a power of two; partial final pack is only possible when smaller than WIDTH.
-    debug_assert!(
-        quotient_size.is_multiple_of(PackedVal::<SC>::WIDTH)
-            || quotient_size < PackedVal::<SC>::WIDTH,
-        "Quotient domain size should be a power of two; partial final pack is only possible when smaller than WIDTH."
-    );
-
-    // Pad selector vectors to the next multiple of WIDTH to avoid out-of-bounds panics
-    // when slicing in the parallel loop below.
-    let packed_width = PackedVal::<SC>::WIDTH;
-    let pad_to = quotient_size.div_ceil(packed_width) * packed_width;
-    for _ in quotient_size..pad_to {
-        sels.is_first_row.push(Val::<SC>::default());
-        sels.is_last_row.push(Val::<SC>::default());
-        sels.is_transition.push(Val::<SC>::default());
-        sels.inv_vanishing.push(Val::<SC>::default());
-    }
-
-    let mut alpha_powers = alpha.powers().collect_n(constraint_count);
-    alpha_powers.reverse();
-    let decomposed_alpha_powers: Vec<_> = (0..SC::Challenge::DIMENSION)
-        .map(|i| {
-            alpha_powers
-                .iter()
-                .map(|x| x.as_basis_coefficients_slice()[i])
-                .collect()
-        })
-        .collect();
-
-    (0..quotient_size)
-        .into_par_iter()
-        .step_by(PackedVal::<SC>::WIDTH)
-        .flat_map_iter(|i_start| {
-            let i_range = i_start..i_start + PackedVal::<SC>::WIDTH;
-
-            let is_first_row = *PackedVal::<SC>::from_slice(&sels.is_first_row[i_range.clone()]);
-            let is_last_row = *PackedVal::<SC>::from_slice(&sels.is_last_row[i_range.clone()]);
-            let is_transition = *PackedVal::<SC>::from_slice(&sels.is_transition[i_range.clone()]);
-            let inv_vanishing = *PackedVal::<SC>::from_slice(&sels.inv_vanishing[i_range]);
-
-            let main = RowMajorMatrix::new(
-                trace_on_quotient_domain.vertically_packed_row_pair(i_start, next_step),
-                width,
-            );
-
-            let accumulator = PackedChallenge::<SC>::ZERO;
-            let mut folder = ProverConstraintFolder {
-                main: main.as_view(),
-                public_values,
-                is_first_row,
-                is_last_row,
-                is_transition,
-                alpha_powers: &alpha_powers,
-                decomposed_alpha_powers: &decomposed_alpha_powers,
-                accumulator,
-                constraint_index: 0,
-            };
-            air.eval(&mut folder);
-
-            // quotient(x) = constraints(x) / Z_H(x)
-            let quotient = folder.accumulator * inv_vanishing;
-
-            (0..core::cmp::min(quotient_size, PackedVal::<SC>::WIDTH)).map(move |idx_in_packing| {
-                SC::Challenge::from_basis_coefficients_fn(|coeff_idx| {
-                    quotient.as_basis_coefficients_slice()[coeff_idx].as_slice()[idx_in_packing]
-                })
-            })
-        })
-        .collect()
 }

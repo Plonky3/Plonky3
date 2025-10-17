@@ -13,7 +13,9 @@ use p3_util::log2_strict_usize;
 use p3_util::zip_eq::zip_eq;
 use tracing::instrument;
 
-use crate::config::{Domain, MultiStarkGenericConfig as MSGC, PcsError, Val, observe_base_as_ext};
+use crate::config::{
+    Challenge, Domain, MultiStarkGenericConfig as MSGC, PcsError, Val, observe_base_as_ext,
+};
 use crate::proof::MultiProof;
 
 #[derive(Debug)]
@@ -106,7 +108,7 @@ where
         }
 
         for chunk in &inst_vals.quotient_chunks {
-            if chunk.len() != SC::Challenge::DIMENSION {
+            if chunk.len() != Challenge::<SC>::DIMENSION {
                 return Err(MultiVerificationError::InvalidProofShape);
             }
         }
@@ -236,7 +238,7 @@ where
                                 .vanishing_poly_at_point(domain.first_point())
                                 .inverse()
                     })
-                    .product::<SC::Challenge>()
+                    .product::<Challenge<SC>>()
             })
             .collect_vec();
 
@@ -249,10 +251,10 @@ where
                 zps[ch_i]
                     * ch.iter()
                         .enumerate()
-                        .map(|(e_i, &c)| SC::Challenge::ith_basis_element(e_i).unwrap() * c)
-                        .sum::<SC::Challenge>()
+                        .map(|(e_i, &c)| Challenge::<SC>::ith_basis_element(e_i).unwrap() * c)
+                        .sum::<Challenge<SC>>()
             })
-            .sum::<SC::Challenge>();
+            .sum::<Challenge<SC>>();
 
         // Fold constraints at zeta on (local,next)
         let init_trace_domain = pcs.natural_domain_for_degree(1 << base_db);
@@ -270,7 +272,7 @@ where
             is_last_row: sels.is_last_row,
             is_transition: sels.is_transition,
             alpha,
-            accumulator: SC::Challenge::ZERO,
+            accumulator: Challenge::<SC>::ZERO,
         };
         air.eval(&mut folder);
         let folded_constraints = folder.accumulator;

@@ -70,7 +70,7 @@ pub fn observe_base_as_ext<SC: MultiStarkGenericConfig>(
     challenger: &mut SC::Challenger,
     val: Val<SC>,
 ) where
-    SC::Challenge: ExtensionField<Val<SC>>,
+    Challenge<SC>: ExtensionField<Val<SC>>,
 {
-    challenger.observe_algebra_element(SC::Challenge::from(val));
+    challenger.observe_algebra_element(Challenge::<SC>::from(val));
 }
