@@ -24,5 +24,6 @@ num-bigint.workspace = true
 paste.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
+spin.workspace = true
 tracing.workspace = true
 transpose.workspace = true
