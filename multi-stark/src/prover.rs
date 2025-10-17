@@ -49,37 +49,57 @@ where
     // Use instances in provided order.
     let degrees: Vec<usize> = instances.iter().map(|i| i.trace.height()).collect();
     let log_degrees: Vec<usize> = degrees.iter().copied().map(log2_strict_usize).collect();
+    let log_ext_degrees: Vec<usize> = log_degrees.iter().map(|&d| d + config.is_zk()).collect();
 
     // Trace domains for each instance.
     let trace_domains: Vec<Domain<SC>> = degrees
         .iter()
         .map(|&deg| pcs.natural_domain_for_degree(deg))
         .collect();
-    // No extended domains; we commit at the base domain.
+    // Extended domains (equal to base when ZK=0).
+    let ext_trace_domains: Vec<Domain<SC>> = degrees
+        .iter()
+        .map(|&deg| pcs.natural_domain_for_degree(deg * (config.is_zk() + 1)))
+        .collect();
 
-    // Observe per-instance binding data: degree bits (twice), width, and number of public values.
-    for (i, inst) in instances.iter().enumerate() {
-        let db = log_degrees[i];
-        challenger.observe(Val::<SC>::from_usize(db));
-        challenger.observe(Val::<SC>::from_usize(db));
-        let width = A::width(inst.air);
+    // Extract AIRs and public values; consume traces later without cloning.
+    let airs: Vec<&A> = instances.iter().map(|i| i.air).collect();
+    let pub_vals: Vec<Vec<Val<SC>>> = instances.iter().map(|i| i.public_values.clone()).collect();
+
+    // Precompute per-instance log quotient degrees for binding and chunking.
+    let log_quotient_degrees: Vec<usize> = airs
+        .iter()
+        .zip(pub_vals.iter())
+        .map(|(air, pv)| get_log_quotient_degree::<Val<SC>, A>(air, 0, pv.len(), config.is_zk()))
+        .collect();
+
+    // Observe per-instance binding data: (log_ext_degree, log_degree), width, num public values, num quotient chunks.
+    for i in 0..airs.len() {
+        let log_deg = log_degrees[i];
+        let log_ext_deg = log_ext_degrees[i];
+        challenger.observe(Val::<SC>::from_usize(log_ext_deg));
+        challenger.observe(Val::<SC>::from_usize(log_deg));
+        let width = A::width(airs[i]);
         challenger.observe(Val::<SC>::from_usize(width));
-        let pv_len = inst.public_values.len();
+        let pv_len = pub_vals[i].len();
         challenger.observe(Val::<SC>::from_usize(pv_len));
+        let num_chunks = 1 << (log_quotient_degrees[i] + config.is_zk());
+        challenger.observe(Val::<SC>::from_usize(num_chunks));
     }
 
     // Commit to all traces in one multi-matrix commitment, preserving input order.
+    let n_instances = airs.len();
     let main_commit_inputs = instances
-        .iter()
-        .zip(trace_domains.iter())
-        .map(|(inst, dom)| (*dom, inst.trace.clone()))
+        .into_iter()
+        .zip(ext_trace_domains.iter().cloned())
+        .map(|(inst, dom)| (dom, inst.trace))
         .collect::<Vec<_>>();
     let (main_commit, main_data) = pcs.commit(main_commit_inputs);
 
     // Observe main commitment and all public values.
     challenger.observe(main_commit.clone());
-    for inst in &instances {
-        challenger.observe_slice(&inst.public_values);
+    for pv in &pub_vals {
+        challenger.observe_slice(pv);
     }
 
     // Compute quotient degrees and domains per instance inline in the loop below.
@@ -92,20 +112,16 @@ where
     let mut quotient_chunk_domains: Vec<Domain<SC>> = Vec::new();
     let mut quotient_chunk_mats: Vec<RowMajorMatrix<Val<SC>>> = Vec::new();
     // Track ranges so we can map openings back to instances.
-    let mut quotient_chunk_ranges: Vec<(usize, usize)> = Vec::with_capacity(instances.len());
+    let mut quotient_chunk_ranges: Vec<(usize, usize)> = Vec::with_capacity(n_instances);
 
-    for (i, ((inst, trace_domain), &log_deg)) in instances
-        .iter()
-        .zip(trace_domains.iter())
-        .zip(log_degrees.iter())
-        .enumerate()
-    {
-        let log_quot_deg =
-            get_log_quotient_degree::<Val<SC>, A>(inst.air, 0, inst.public_values.len(), 0);
-        let quotient_domain = trace_domain.create_disjoint_domain(1 << (log_deg + log_quot_deg));
+    for (i, (&log_deg, trace_domain)) in log_degrees.iter().zip(trace_domains.iter()).enumerate() {
+        let log_quot_deg = log_quotient_degrees[i];
+        // Disjoint domain sized by extended degree + quotient degree; use ext domain for shift.
+        let quotient_domain =
+            ext_trace_domains[i].create_disjoint_domain(1 << (log_ext_degrees[i] + log_quot_deg));
 
         // Count constraints to size alpha powers packing.
-        let constraint_cnt = get_symbolic_constraints(inst.air, 0, inst.public_values.len()).len();
+        let constraint_cnt = get_symbolic_constraints(airs[i], 0, pub_vals[i].len()).len();
 
         // Get evaluations on quotient domain from the main commitment.
         let trace_on_quotient_domain =
@@ -113,8 +129,8 @@ where
 
         // Compute quotient(x) = constraints(x)/Z_H(x) over quotient_domain, as extension values.
         let q_values = quotient_values::<SC, A, _>(
-            inst.air,
-            &inst.public_values,
+            airs[i],
+            &pub_vals[i],
             *trace_domain,
             quotient_domain,
             trace_on_quotient_domain,
@@ -124,7 +140,7 @@ where
 
         // Flatten to base field and split into chunks.
         let q_flat = RowMajorMatrix::new_col(q_values).flatten_to_base();
-        let num_chunks = 1 << log_quot_deg;
+        let num_chunks = 1 << (log_quot_deg + config.is_zk());
         let chunk_mats = quotient_domain.split_evals(num_chunks, q_flat);
         let chunk_domains = quotient_domain.split_domains(num_chunks);
 
@@ -143,6 +159,8 @@ where
         .collect::<Vec<_>>();
     let (quotient_commit, quotient_data) = pcs.commit(quotient_commit_inputs);
     challenger.observe(quotient_commit.clone());
+
+    // ZK disabled: no randomization round.
 
     // Sample OOD point.
     let zeta: SC::Challenge = challenger.sample_algebra_element();
@@ -167,13 +185,13 @@ where
 
     // Parse trace opened values per instance.
     let trace_values_for_mats = &opened_values[trace_idx];
-    assert_eq!(trace_values_for_mats.len(), instances.len());
+    assert_eq!(trace_values_for_mats.len(), n_instances);
 
     // Parse quotient chunk opened values and map per instance.
     let mut quotient_openings_iter = opened_values[quotient_idx].iter();
 
     let mut per_instance: Vec<InstanceOpenedValues<SC::Challenge>> =
-        Vec::with_capacity(instances.len());
+        Vec::with_capacity(n_instances);
     for (i, (s, e)) in quotient_chunk_ranges.iter().copied().enumerate() {
         // Trace locals
         let tv = &trace_values_for_mats[i];
@@ -200,14 +218,12 @@ where
         commitments: MultiCommitments {
             main: main_commit,
             quotient_chunks: quotient_commit,
-            random: None,
         },
         opened_values: MultiOpenedValues {
             instances: per_instance,
-            random: None,
         },
         opening_proof,
-        degree_bits: log_degrees,
+        degree_bits: log_ext_degrees,
     }
 }
 

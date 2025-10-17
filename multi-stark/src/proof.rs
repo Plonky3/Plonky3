@@ -28,18 +28,16 @@ pub struct MultiProof<SC: MSGC> {
 pub struct MultiCommitments<Com> {
     pub main: Com,
     pub quotient_chunks: Com,
-    pub random: Option<Com>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct InstanceOpenedValues<Challenge> {
     pub trace_local: Vec<Challenge>,
     pub trace_next: Vec<Challenge>,
     pub quotient_chunks: Vec<Vec<Challenge>>, // one Vec<Challenge> per chunk (extension basis coeffs)
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct MultiOpenedValues<Challenge> {
     pub instances: Vec<InstanceOpenedValues<Challenge>>,
-    pub random: Option<Vec<Challenge>>, // opened values for the randomization poly if ZK
 }

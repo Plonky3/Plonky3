@@ -1,5 +1,3 @@
-// No additional imports needed.
-
 // Re-export the uni-stark generic config and useful associated types for convenience.
 pub use p3_uni_stark::{
     Domain as UniDomain, PackedChallenge as UniPackedChallenge, PackedVal as UniPackedVal,
@@ -19,3 +17,7 @@ pub type PcsError<SC> = <<SC as p3_uni_stark::StarkGenericConfig>::Pcs as p3_com
 // Marker trait aliasing uni-stark’s StarkGenericConfig for clarity in this crate.
 pub trait MultiStarkGenericConfig: p3_uni_stark::StarkGenericConfig {}
 impl<T: p3_uni_stark::StarkGenericConfig> MultiStarkGenericConfig for T {}
+
+// Convenience alias to reuse uni-stark's config type name if desired.
+pub type MultiConfig<Pcs, Challenge, Challenger> =
+    p3_uni_stark::StarkConfig<Pcs, Challenge, Challenger>;
