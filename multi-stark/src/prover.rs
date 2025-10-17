@@ -45,6 +45,9 @@ where
     let mut challenger = config.initialise_challenger();
 
     // No ZK support in initial implementation.
+    if config.is_zk() != 0 {
+        panic!("p3-multi-stark: ZK mode is not supported yet");
+    }
 
     // Use instances in provided order.
     let degrees: Vec<usize> = instances.iter().map(|i| i.trace.height()).collect();
@@ -73,8 +76,13 @@ where
         .map(|(air, pv)| get_log_quotient_degree::<Val<SC>, A>(air, 0, pv.len(), config.is_zk()))
         .collect();
 
+    // Observe the number of instances up front so the transcript can't be reinterpreted
+    // with a different partitioning.
+    let n_instances = airs.len();
+    challenger.observe(Val::<SC>::from_usize(n_instances));
+
     // Observe per-instance binding data: (log_ext_degree, log_degree), width, num public values, num quotient chunks.
-    for i in 0..airs.len() {
+    for i in 0..n_instances {
         let log_deg = log_degrees[i];
         let log_ext_deg = log_ext_degrees[i];
         challenger.observe(Val::<SC>::from_usize(log_ext_deg));
@@ -88,7 +96,6 @@ where
     }
 
     // Commit to all traces in one multi-matrix commitment, preserving input order.
-    let n_instances = airs.len();
     let main_commit_inputs = instances
         .into_iter()
         .zip(ext_trace_domains.iter().cloned())
@@ -166,10 +173,15 @@ where
     let zeta: SC::Challenge = challenger.sample_algebra_element();
 
     // Build opening rounds.
-    debug_assert_eq!(config.is_zk(), 0, "ZK not supported yet in multi-stark");
     let round1_points = trace_domains
         .iter()
-        .map(|dom| vec![zeta, dom.next_point(zeta).unwrap()])
+        .map(|dom| {
+            vec![
+                zeta,
+                dom.next_point(zeta)
+                    .expect("zeta should be out-of-domain for the base trace domain"),
+            ]
+        })
         .collect::<Vec<_>>();
     let round1 = (&main_data, round1_points);
     let round2_points = quotient_chunk_ranges
@@ -253,8 +265,17 @@ where
     let qdb = log2_strict_usize(quotient_domain.size()) - log2_strict_usize(trace_domain.size());
     let next_step = 1 << qdb;
 
-    // pad packed slices if needed
-    for _ in quotient_size..PackedVal::<SC>::WIDTH {
+    // Quotient domain size should be a power of two; partial final pack is only possible when smaller than WIDTH.
+    debug_assert!(
+        quotient_size % PackedVal::<SC>::WIDTH == 0 || quotient_size < PackedVal::<SC>::WIDTH,
+        "Quotient domain size should be a power of two; partial final pack is only possible when smaller than WIDTH."
+    );
+
+    // Pad selector vectors to the next multiple of WIDTH to avoid out-of-bounds panics
+    // when slicing in the parallel loop below.
+    let packed_width = PackedVal::<SC>::WIDTH;
+    let pad_to = ((quotient_size + packed_width - 1) / packed_width) * packed_width;
+    for _ in quotient_size..pad_to {
         sels.is_first_row.push(Val::<SC>::default());
         sels.is_last_row.push(Val::<SC>::default());
         sels.is_transition.push(Val::<SC>::default());

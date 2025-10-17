@@ -20,7 +20,8 @@ pub struct MultiProof<SC: MSGC> {
     pub commitments: MultiCommitments<Com<SC>>,
     pub opened_values: MultiOpenedValues<<SC as p3_uni_stark::StarkGenericConfig>::Challenge>,
     pub opening_proof: PcsProof<SC>,
-    // Per-instance log(degree) of the extended trace domain (i.e., log N + is_zk())
+    /// Per-instance log2 of the extended trace domain size.
+    /// For instance i, this stores `log2(|extended trace domain|) = log2(N_i) + is_zk()`.
     pub degree_bits: Vec<usize>,
 }
 

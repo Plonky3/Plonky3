@@ -374,3 +374,101 @@ fn different_widths_verifies() {
     let pvs = vec![mul_pis.clone(), fib_pis, mul_pis];
     verify_multi(&config, &airs, &proof, &pvs).expect("verification failed");
 }
+
+#[test]
+fn test_quotient_size_not_multiple_of_width() {
+    // This test exercises the padding fix for the case where quotient_size % WIDTH != 0.
+    // We use a moderately sized trace that, when combined with quotient degree,
+    // may produce quotient domains not evenly divisible by the packed WIDTH (typically 16 for BabyBear).
+    // The key is ensuring the parallel loop in quotient_values doesn't panic on out-of-bounds
+    // access when slicing the selector vectors.
+    let config = make_config(9999);
+
+    let fib = FibonacciAir;
+    let air_fib = DemoAir::Fib(fib);
+
+    // Use a trace size that's large enough for FRI but exercises various quotient sizes
+    let n_fib = 1 << 5; // 32 rows
+    let fib_trace = fib_trace::<Val>(0, 1, n_fib);
+    let fib_pis = vec![
+        Val::from_u64(0),
+        Val::from_u64(1),
+        Val::from_u64(fib_n(n_fib)),
+    ];
+
+    let instances = vec![StarkInstance {
+        air: &air_fib,
+        trace: fib_trace,
+        public_values: fib_pis.clone(),
+    }];
+
+    // This should not panic due to out-of-bounds access in the packed slicing
+    // (the bug would have caused a panic when quotient_size % WIDTH != 0)
+    let proof = prove_multi(&config, instances);
+    verify_multi(&config, &[air_fib], &proof, &[fib_pis]).expect("verification failed");
+}
+
+#[test]
+fn test_invalid_trace_width_rejected() {
+    // This test verifies that the verifier rejects proofs with incorrect trace width.
+    use p3_multi_stark::proof::{InstanceOpenedValues, MultiCommitments, MultiOpenedValues};
+
+    let config = make_config(55555);
+
+    let fib = FibonacciAir;
+    let air_fib = DemoAir::Fib(fib);
+    let n_fib = 1 << 4;
+    let fib_trace = fib_trace::<Val>(0, 1, n_fib);
+    let fib_pis = vec![
+        Val::from_u64(0),
+        Val::from_u64(1),
+        Val::from_u64(fib_n(n_fib)),
+    ];
+
+    let instances = vec![StarkInstance {
+        air: &air_fib,
+        trace: fib_trace,
+        public_values: fib_pis.clone(),
+    }];
+
+    // Generate a valid proof
+    let valid_proof = prove_multi(&config, instances);
+
+    // Tamper with the proof: change trace_local to have wrong width
+    let mut tampered_proof = p3_multi_stark::proof::MultiProof {
+        commitments: MultiCommitments {
+            main: valid_proof.commitments.main.clone(),
+            quotient_chunks: valid_proof.commitments.quotient_chunks.clone(),
+        },
+        opened_values: MultiOpenedValues {
+            instances: vec![InstanceOpenedValues {
+                trace_local: vec![valid_proof.opened_values.instances[0].trace_local[0]], // Wrong width: 1 instead of 2
+                trace_next: valid_proof.opened_values.instances[0].trace_next.clone(),
+                quotient_chunks: valid_proof.opened_values.instances[0]
+                    .quotient_chunks
+                    .clone(),
+            }],
+        },
+        opening_proof: valid_proof.opening_proof.clone(),
+        degree_bits: valid_proof.degree_bits.clone(),
+    };
+
+    // Verification should fail due to width mismatch
+    let res = verify_multi(&config, &[air_fib], &tampered_proof, &[fib_pis.clone()]);
+    assert!(
+        res.is_err(),
+        "Verifier should reject trace with wrong width"
+    );
+
+    // Also test wrong trace_next width
+    tampered_proof.opened_values.instances[0].trace_local =
+        valid_proof.opened_values.instances[0].trace_local.clone();
+    tampered_proof.opened_values.instances[0].trace_next =
+        vec![valid_proof.opened_values.instances[0].trace_next[0]]; // Wrong width
+
+    let res = verify_multi(&config, &[air_fib], &tampered_proof, &[fib_pis]);
+    assert!(
+        res.is_err(),
+        "Verifier should reject trace_next with wrong width"
+    );
+}

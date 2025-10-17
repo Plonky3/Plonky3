@@ -5,7 +5,7 @@ use itertools::Itertools;
 use p3_air::Air;
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
+use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use p3_uni_stark::{SymbolicAirBuilder, VerifierConstraintFolder, get_log_quotient_degree};
@@ -20,7 +20,17 @@ use crate::proof::MultiProof;
 pub enum MultiVerificationError<PcsErr> {
     InvalidProofShape,
     InvalidOpeningArgument(PcsErr),
-    OodEvaluationMismatch { index: usize },
+    OodEvaluationMismatch {
+        index: usize,
+    },
+    /// The OOD point zeta fell into a base domain, which is a completeness edge case.
+    OodPointInDomain,
+    /// The log degree is too large for the field's two-adicity.
+    InvalidLogDegree {
+        index: usize,
+        log_degree: usize,
+        log_quotient_degree: usize,
+    },
 }
 
 #[instrument(skip_all)]
@@ -33,6 +43,7 @@ pub fn verify_multi<SC, A>(
 where
     SC: MSGC,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
+    Val<SC>: TwoAdicField,
 {
     let MultiProof {
         commitments,
@@ -44,6 +55,11 @@ where
     let pcs = config.pcs();
     let mut challenger = config.initialise_challenger();
 
+    // ZK mode is not supported yet
+    if config.is_zk() != 0 {
+        panic!("p3-multi-stark: ZK mode is not supported yet");
+    }
+
     // Sanity checks
     if airs.len() != opened_values.instances.len()
         || airs.len() != public_values.len()
@@ -52,12 +68,51 @@ where
         return Err(MultiVerificationError::InvalidProofShape);
     }
 
-    // Observe per-instance binding data: (log_ext_degree, log_degree), width, num public values, num quotient chunks.
+    // Observe the number of instances up front to match the prover's transcript.
+    let n_instances = airs.len();
+    challenger.observe(Val::<SC>::from_usize(n_instances));
+
+    // Validate opened values shape per instance (critical soundness check)
     let log_quotient_degrees: Vec<usize> = airs
         .iter()
         .zip(public_values.iter())
         .map(|(air, pv)| get_log_quotient_degree::<Val<SC>, A>(air, 0, pv.len(), config.is_zk()))
         .collect();
+
+    for (i, air) in airs.iter().enumerate() {
+        let air_width = A::width(air);
+        let inst_vals = &opened_values.instances[i];
+
+        // Validate that log_degree + log_quotient_degree doesn't exceed field's two-adicity
+        let log_degree = degree_bits[i] - config.is_zk();
+        let log_quotient_degree = log_quotient_degrees[i];
+        if log_degree.saturating_add(log_quotient_degree) > Val::<SC>::TWO_ADICITY {
+            return Err(MultiVerificationError::InvalidLogDegree {
+                index: i,
+                log_degree,
+                log_quotient_degree,
+            });
+        }
+
+        // Validate trace widths match the AIR
+        if inst_vals.trace_local.len() != air_width || inst_vals.trace_next.len() != air_width {
+            return Err(MultiVerificationError::InvalidProofShape);
+        }
+
+        // Validate quotient chunks structure
+        let expected_chunks = 1 << (log_quotient_degree + config.is_zk());
+        if inst_vals.quotient_chunks.len() != expected_chunks {
+            return Err(MultiVerificationError::InvalidProofShape);
+        }
+
+        for chunk in &inst_vals.quotient_chunks {
+            if chunk.len() != SC::Challenge::DIMENSION {
+                return Err(MultiVerificationError::InvalidProofShape);
+            }
+        }
+    }
+
+    // Observe per-instance binding data: (log_ext_degree, log_degree), width, num public values, num quotient chunks.
     for (i, air) in airs.iter().enumerate() {
         let ext_db = degree_bits[i];
         let base_db = ext_db - config.is_zk();
@@ -103,16 +158,18 @@ where
         .zip(trace_domains.iter())
         .zip(opened_values.instances.iter())
         .map(|((ext_dom, base_dom), inst_vals)| {
-            let zeta_next = base_dom.next_point(zeta).unwrap();
-            (
+            let zeta_next = base_dom
+                .next_point(zeta)
+                .ok_or(MultiVerificationError::OodPointInDomain)?;
+            Ok((
                 *ext_dom,
                 vec![
                     (zeta, inst_vals.trace_local.clone()),
                     (zeta_next, inst_vals.trace_next.clone()),
                 ],
-            )
+            ))
         })
-        .collect();
+        .collect::<Result<Vec<_>, MultiVerificationError<PcsError<SC>>>>()?;
     coms_to_verify.push((commitments.main.clone(), trace_round));
 
     // Quotient chunks round: flatten per-instance chunks to match commit order.
