@@ -1,4 +1,5 @@
 use core::borrow::Borrow;
+use core::fmt::Debug;
 
 use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
@@ -203,28 +204,37 @@ impl<AB: AirBuilderWithPublicValues> Air<AB> for DemoAir {
     }
 }
 
+// --- Test Helper Functions ---
+
+/// Creates a Fibonacci instance with specified log height.
+fn create_fib_instance(log_height: usize) -> (DemoAir, RowMajorMatrix<Val>, Vec<Val>) {
+    let n = 1 << log_height;
+    let air = DemoAir::Fib(FibonacciAir);
+    let trace = fib_trace::<Val>(0, 1, n);
+    let pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(n))];
+    (air, trace, pis)
+}
+
+/// Creates a multiplication instance with specified configuration.
+fn create_mul_instance(
+    log_height: usize,
+    reps: usize,
+    step: u64,
+) -> (DemoAir, RowMajorMatrix<Val>, Vec<Val>) {
+    let n = 1 << log_height;
+    let mul = MulAir { reps, step };
+    let air = DemoAir::Mul(mul);
+    let trace = mul_trace::<Val>(n, reps, step);
+    let pis = vec![];
+    (air, trace, pis)
+}
+
 #[test]
-fn simple_two_instance_proof_verifies() {
-    // Build non-ZK PCS config
+fn test_two_instances() -> Result<(), impl Debug> {
     let config = make_config(1337);
 
-    // Prepare two instances
-    let fib = FibonacciAir;
-    let mul = MulAir::default();
-    let air_fib = DemoAir::Fib(fib);
-    let air_mul = DemoAir::Mul(mul);
-
-    let n_fib = 1 << 4; // 16
-    let fib_trace = fib_trace::<Val>(0, 1, n_fib);
-    let fib_pis = vec![
-        Val::from_u64(0),
-        Val::from_u64(1),
-        Val::from_u64(fib_n(n_fib)),
-    ];
-
-    let n_mul = 1 << 4; // 16
-    let mul_trace = mul_trace::<Val>(n_mul, mul.reps, mul.step);
-    let mul_pis: Vec<Val> = vec![];
+    let (air_fib, fib_trace, fib_pis) = create_fib_instance(4); // 16 rows
+    let (air_mul, mul_trace, mul_pis) = create_mul_instance(4, 2, 1); // 16 rows, 2 reps
 
     let instances = vec![
         StarkInstance {
@@ -243,36 +253,16 @@ fn simple_two_instance_proof_verifies() {
 
     let airs = vec![air_fib, air_mul];
     let pvs = vec![fib_pis, mul_pis];
-    verify_multi(&config, &airs, &proof, &pvs).expect("verification failed");
+    verify_multi(&config, &airs, &proof, &pvs)
 }
 
 #[test]
-fn three_instances_mixed_lengths_verifies() {
+fn test_three_instances_mixed_sizes() -> Result<(), impl Debug> {
     let config = make_config(2025);
 
-    let fib = FibonacciAir;
-    let mul = MulAir::default();
-    let air_fib16 = DemoAir::Fib(fib);
-    let air_fib8 = DemoAir::Fib(fib);
-    let air_mul8 = DemoAir::Mul(mul);
-
-    let n_fib16 = 1 << 4;
-    let n_fib8 = 1 << 3;
-    let fib16_trace = fib_trace::<Val>(0, 1, n_fib16);
-    let fib8_trace = fib_trace::<Val>(0, 1, n_fib8);
-    let fib16_pis = vec![
-        Val::from_u64(0),
-        Val::from_u64(1),
-        Val::from_u64(fib_n(n_fib16)),
-    ];
-    let fib8_pis = vec![
-        Val::from_u64(0),
-        Val::from_u64(1),
-        Val::from_u64(fib_n(n_fib8)),
-    ];
-
-    let mul8_trace = mul_trace::<Val>(1 << 3, mul.reps, mul.step);
-    let mul8_pis: Vec<Val> = vec![];
+    let (air_fib16, fib16_trace, fib16_pis) = create_fib_instance(4); // 16 rows
+    let (air_mul8, mul8_trace, mul8_pis) = create_mul_instance(3, 2, 1); // 8 rows
+    let (air_fib8, fib8_trace, fib8_pis) = create_fib_instance(3); // 8 rows
 
     let instances = vec![
         StarkInstance {
@@ -295,67 +285,48 @@ fn three_instances_mixed_lengths_verifies() {
     let proof = prove_multi(&config, instances);
     let airs = vec![air_fib16, air_mul8, air_fib8];
     let pvs = vec![fib16_pis, mul8_pis, fib8_pis];
-    verify_multi(&config, &airs, &proof, &pvs).expect("verification failed");
+    verify_multi(&config, &airs, &proof, &pvs)
 }
 
 #[test]
-fn invalid_public_values_rejected() {
+fn test_invalid_public_values_rejected() -> Result<(), Box<dyn std::error::Error>> {
     let config = make_config(7);
 
-    // Single Fibonacci instance
-    let fib = FibonacciAir;
-    let air_fib = DemoAir::Fib(fib);
-    let n_fib = 1 << 4; // 16
-    let fib_trace = fib_trace::<Val>(0, 1, n_fib);
-    let correct_x = fib_n(n_fib);
-    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(correct_x)];
+    let (air_fib, trace, fib_pis) = create_fib_instance(4); // 16 rows
+    let correct_x = fib_n(16);
+
     let instances = vec![StarkInstance {
         air: &air_fib,
-        trace: fib_trace,
-        public_values: fib_pis.clone(),
+        trace,
+        public_values: fib_pis,
     }];
     let proof = prove_multi(&config, instances);
 
-    // Wrong public value at verify => reject.
+    // Wrong public value at verify => should reject
     let wrong_pvs = vec![vec![
         Val::from_u64(0),
         Val::from_u64(1),
         Val::from_u64(correct_x + 1),
     ]];
     let res = verify_multi(&config, &[air_fib], &proof, &wrong_pvs);
-    assert!(res.is_err());
+    assert!(res.is_err(), "Should reject wrong public values");
+    Ok::<_, Box<dyn std::error::Error>>(())
 }
 
 #[test]
-fn different_widths_verifies() {
+fn test_different_widths() -> Result<(), impl Debug> {
     let config = make_config(4242);
 
-    let fib = FibonacciAir;
-    let air_fib = DemoAir::Fib(fib);
-
     // Mul with reps=2 (width=6) and reps=3 (width=9)
-    let mul2 = MulAir { reps: 2, step: 1 };
-    let mul3 = MulAir { reps: 3, step: 1 };
-    let air_mul2 = DemoAir::Mul(mul2);
-    let air_mul3 = DemoAir::Mul(mul3);
-
-    let n_fib = 1 << 3; // 8
-    let fib_trace = fib_trace::<Val>(0, 1, n_fib);
-    let fib_pis = vec![
-        Val::from_u64(0),
-        Val::from_u64(1),
-        Val::from_u64(fib_n(n_fib)),
-    ];
-
-    let mul2_trace = mul_trace::<Val>(1 << 3, mul2.reps, mul2.step);
-    let mul3_trace = mul_trace::<Val>(1 << 4, mul3.reps, mul3.step);
-    let mul_pis: Vec<Val> = vec![];
+    let (air_mul2, mul2_trace, mul2_pis) = create_mul_instance(3, 2, 1); // 8 rows, width=6
+    let (air_fib, fib_trace, fib_pis) = create_fib_instance(3); // 8 rows, width=2
+    let (air_mul3, mul3_trace, mul3_pis) = create_mul_instance(4, 3, 1); // 16 rows, width=9
 
     let instances = vec![
         StarkInstance {
             air: &air_mul2,
             trace: mul2_trace,
-            public_values: mul_pis.clone(),
+            public_values: mul2_pis.clone(),
         },
         StarkInstance {
             air: &air_fib,
@@ -365,18 +336,18 @@ fn different_widths_verifies() {
         StarkInstance {
             air: &air_mul3,
             trace: mul3_trace,
-            public_values: mul_pis.clone(),
+            public_values: mul3_pis.clone(),
         },
     ];
 
     let proof = prove_multi(&config, instances);
     let airs = vec![air_mul2, air_fib, air_mul3];
-    let pvs = vec![mul_pis.clone(), fib_pis, mul_pis];
-    verify_multi(&config, &airs, &proof, &pvs).expect("verification failed");
+    let pvs = vec![mul2_pis, fib_pis, mul3_pis];
+    verify_multi(&config, &airs, &proof, &pvs)
 }
 
 #[test]
-fn test_quotient_size_not_multiple_of_width() {
+fn test_quotient_size_not_multiple_of_width() -> Result<(), impl Debug> {
     // This test exercises the padding fix for the case where quotient_size % WIDTH != 0.
     // We use a moderately sized trace that, when combined with quotient degree,
     // may produce quotient domains not evenly divisible by the packed WIDTH (typically 16 for BabyBear).
@@ -384,17 +355,7 @@ fn test_quotient_size_not_multiple_of_width() {
     // access when slicing the selector vectors.
     let config = make_config(9999);
 
-    let fib = FibonacciAir;
-    let air_fib = DemoAir::Fib(fib);
-
-    // Use a trace size that's large enough for FRI but exercises various quotient sizes
-    let n_fib = 1 << 5; // 32 rows
-    let fib_trace = fib_trace::<Val>(0, 1, n_fib);
-    let fib_pis = vec![
-        Val::from_u64(0),
-        Val::from_u64(1),
-        Val::from_u64(fib_n(n_fib)),
-    ];
+    let (air_fib, fib_trace, fib_pis) = create_fib_instance(5); // 32 rows
 
     let instances = vec![StarkInstance {
         air: &air_fib,
@@ -405,25 +366,17 @@ fn test_quotient_size_not_multiple_of_width() {
     // This should not panic due to out-of-bounds access in the packed slicing
     // (the bug would have caused a panic when quotient_size % WIDTH != 0)
     let proof = prove_multi(&config, instances);
-    verify_multi(&config, &[air_fib], &proof, &[fib_pis]).expect("verification failed");
+    verify_multi(&config, &[air_fib], &proof, &[fib_pis])
 }
 
 #[test]
-fn test_invalid_trace_width_rejected() {
+fn test_invalid_trace_width_rejected() -> Result<(), Box<dyn std::error::Error>> {
     // This test verifies that the verifier rejects proofs with incorrect trace width.
     use p3_multi_stark::proof::{InstanceOpenedValues, MultiCommitments, MultiOpenedValues};
 
     let config = make_config(55555);
 
-    let fib = FibonacciAir;
-    let air_fib = DemoAir::Fib(fib);
-    let n_fib = 1 << 4;
-    let fib_trace = fib_trace::<Val>(0, 1, n_fib);
-    let fib_pis = vec![
-        Val::from_u64(0),
-        Val::from_u64(1),
-        Val::from_u64(fib_n(n_fib)),
-    ];
+    let (air_fib, fib_trace, fib_pis) = create_fib_instance(4); // 16 rows
 
     let instances = vec![StarkInstance {
         air: &air_fib,
@@ -471,4 +424,6 @@ fn test_invalid_trace_width_rejected() {
         res.is_err(),
         "Verifier should reject trace_next with wrong width"
     );
+
+    Ok::<_, Box<dyn std::error::Error>>(())
 }

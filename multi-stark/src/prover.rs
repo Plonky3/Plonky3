@@ -267,7 +267,8 @@ where
 
     // Quotient domain size should be a power of two; partial final pack is only possible when smaller than WIDTH.
     debug_assert!(
-        quotient_size % PackedVal::<SC>::WIDTH == 0 || quotient_size < PackedVal::<SC>::WIDTH,
+        quotient_size.is_multiple_of(PackedVal::<SC>::WIDTH)
+            || quotient_size < PackedVal::<SC>::WIDTH,
         "Quotient domain size should be a power of two; partial final pack is only possible when smaller than WIDTH."
     );
 
