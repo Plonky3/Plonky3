@@ -15,7 +15,7 @@ use p3_util::log2_strict_usize;
 use tracing::instrument;
 
 use crate::config::{
-    observe_base_as_ext, Domain, MultiStarkGenericConfig as MSGC, PackedChallenge, PackedVal, Val,
+    Domain, MultiStarkGenericConfig as MSGC, PackedChallenge, PackedVal, Val, observe_base_as_ext,
 };
 use crate::proof::{InstanceOpenedValues, MultiCommitments, MultiOpenedValues, MultiProof};
 

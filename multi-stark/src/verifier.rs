@@ -13,7 +13,7 @@ use p3_util::log2_strict_usize;
 use p3_util::zip_eq::zip_eq;
 use tracing::instrument;
 
-use crate::config::{observe_base_as_ext, Domain, MultiStarkGenericConfig as MSGC, PcsError, Val};
+use crate::config::{Domain, MultiStarkGenericConfig as MSGC, PcsError, Val, observe_base_as_ext};
 use crate::proof::MultiProof;
 
 #[derive(Debug)]

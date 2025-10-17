@@ -66,8 +66,10 @@ pub type PcsProof<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
 /// evaluation), having a challenger that only observes extension field elements significantly
 /// simplifies the recursive circuit implementation.
 #[inline]
-pub fn observe_base_as_ext<SC: MultiStarkGenericConfig>(challenger: &mut SC::Challenger, val: Val<SC>)
-where
+pub fn observe_base_as_ext<SC: MultiStarkGenericConfig>(
+    challenger: &mut SC::Challenger,
+    val: Val<SC>,
+) where
     SC::Challenge: ExtensionField<Val<SC>>,
 {
     challenger.observe_algebra_element(SC::Challenge::from(val));
