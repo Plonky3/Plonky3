@@ -4,8 +4,6 @@
 
 use p3_symmetric::{CompressionFunction, CryptographicHasher, PseudoCompressionFunction};
 use sha2::Digest;
-use sha2::digest::generic_array::GenericArray;
-use sha2::digest::typenum::U64;
 
 pub const H256_256: [u32; 8] = [
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
@@ -46,9 +44,9 @@ pub struct Sha256Compress;
 impl PseudoCompressionFunction<[u8; 32], 2> for Sha256Compress {
     fn compress(&self, input: [[u8; 32]; 2]) -> [u8; 32] {
         let mut state = H256_256;
-        // GenericArray<u8, U64> has same memory layout as [u8; 64]
-        let block: GenericArray<u8, U64> = unsafe { core::mem::transmute(input) };
-        sha2::compress256(&mut state, &[block]);
+        // [[u8; 32]; 2] has same memory layout as [u8; 64]
+        let block: &[u8; 64] = unsafe { core::mem::transmute(&input) };
+        sha2::compress256(&mut state, core::slice::from_ref(block.into()));
 
         let mut output = [0u8; 32];
         for (chunk, word) in output.chunks_exact_mut(4).zip(state) {

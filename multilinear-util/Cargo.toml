@@ -11,6 +11,7 @@ categories.workspace = true
 
 [dependencies]
 p3-field.workspace = true
+p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
 p3-util.workspace = true
 
@@ -26,5 +27,5 @@ proptest.workspace = true
 parallel = ["p3-maybe-rayon/parallel"]
 
 [[bench]]
-name = "evaleq"
+name = "evaleq_batched"
 harness = false

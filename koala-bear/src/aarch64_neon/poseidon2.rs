@@ -100,8 +100,6 @@ impl InternalLayerParametersNeon<KoalaBearParameters, 24> for KoalaBearInternalL
 
 #[cfg(test)]
 mod tests {
-    use alloc::format;
-
     use p3_field::PrimeCharacteristicRing;
     use p3_symmetric::Permutation;
     use proptest::prelude::*;

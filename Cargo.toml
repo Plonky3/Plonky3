@@ -22,6 +22,7 @@ members = [
     "lookup",
     "matrix",
     "maybe-rayon",
+    "mds",
     "merkle-tree",
     "mersenne-31",
     "monolith",
