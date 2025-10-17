@@ -13,7 +13,7 @@ use p3_util::log2_strict_usize;
 use p3_util::zip_eq::zip_eq;
 use tracing::instrument;
 
-use crate::config::{Domain, MultiStarkGenericConfig as MSGC, Val};
+use crate::config::{Domain, MultiStarkGenericConfig as MSGC, PcsError, Val};
 use crate::proof::MultiProof;
 
 #[derive(Debug)]
@@ -28,8 +28,8 @@ pub fn verify_multi<SC, A>(
     config: &SC,
     airs: &[A],
     proof: &MultiProof<SC>,
-    public_values: &Vec<Vec<Val<SC>>>,
-) -> Result<(), MultiVerificationError<<SC::Pcs as Pcs<<SC as p3_uni_stark::StarkGenericConfig>::Challenge, SC::Challenger>>::Error>>
+    public_values: &[Vec<Val<SC>>],
+) -> Result<(), MultiVerificationError<PcsError<SC>>>
 where
     SC: MSGC,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,

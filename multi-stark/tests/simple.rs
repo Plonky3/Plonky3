@@ -322,7 +322,7 @@ fn invalid_public_values_rejected() {
         Val::from_u64(1),
         Val::from_u64(correct_x + 1),
     ]];
-    let res = verify_multi(&config, &vec![air_fib], &proof, &wrong_pvs);
+    let res = verify_multi(&config, &[air_fib], &proof, &wrong_pvs);
     assert!(res.is_err());
 }
 
