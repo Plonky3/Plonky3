@@ -1,4 +1,6 @@
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, dot_product};
+use p3_matrix::dense::RowMajorMatrix;
+use p3_multilinear_util::eq_batch::eval_eq_batch;
 use p3_multilinear_util::evals::EvaluationsList;
 use p3_multilinear_util::point::MultilinearPoint;
 use tracing::instrument;
@@ -142,7 +144,7 @@ impl<F: Field> Statement<F> {
     /// # Returns
     /// - `EvaluationsList<F>`: The evaluations of the combined weight polynomial `W(X)`.
     /// - `F`: The combined expected evaluation `S`.
-    #[instrument(skip_all)]
+    #[instrument(skip_all, fields(num_constraints = self.len(), num_variables = self.num_variables()))]
     pub fn combine<Base>(&self, challenge: F) -> (EvaluationsList<F>, F)
     where
         Base: Field,
@@ -151,43 +153,51 @@ impl<F: Field> Statement<F> {
         // If there are no constraints, the combination is:
         // - The combined polynomial W(X) is identically zero (all evaluations = 0).
         // - The combined expected sum S is zero.
-        if self.points.is_empty() {
+        if self.is_empty() {
             return (
                 EvaluationsList::new(F::zero_vec(1 << self.num_variables)),
                 F::ZERO,
             );
         }
 
-        // Separate the first constraint from the rest.
-        // This allows us to treat the first one specially:
-        //   - We overwrite the buffer.
-        //   - We avoid a runtime branch in the main loop.
-        let (first_point, rest_points) = self.points.split_first().unwrap();
-        let (first_eval, rest_evals) = self.evaluations.split_first().unwrap();
+        let num_constraints = self.len();
+        let num_variables = self.num_variables();
 
-        // Initialize the combined evaluations with the first constraint's polynomial.
-        let mut combined = EvaluationsList::new_from_point(first_point, F::ONE);
+        // Precompute challenge powers γ^i for i = 0..num_constraints-1.
+        let challenges = challenge.powers().collect_n(num_constraints);
 
-        // Initialize the combined expected sum with the first term: s_1 * γ^0 = s_1.
-        let mut gamma = F::ONE;
-        let mut sum = *first_eval;
+        // Create a matrix where each column is one evaluation point.
+        //
+        // Matrix layout:
+        // - rows are variables,
+        // - columns are evaluation points.
+        let points_data = F::zero_vec(num_variables * num_constraints);
+        let mut points_matrix = RowMajorMatrix::new(points_data, num_constraints);
 
-        // Process the remaining constraints.
-        for (point, &eval) in rest_points.iter().zip(rest_evals) {
-            // Update γ to γ^i for this constraint.
-            gamma *= challenge;
+        // Parallelize the transpose operation over rows (variables).
+        //
+        // Each thread writes to its own contiguous row, which is cache-friendly.
+        points_matrix
+            .rows_mut()
+            .enumerate()
+            .for_each(|(var_idx, row_slice)| {
+                for (col_idx, point) in self.points.iter().enumerate() {
+                    row_slice[col_idx] = point[var_idx];
+                }
+            });
 
-            // Add this constraint's weighted polynomial evaluations into the buffer
-            combined.accumulate(point, gamma);
+        // Compute the batched equality polynomial evaluations.
+        // This computes W(x) = ∑_i γ^i * eq(x, z_i) for all x ∈ {0,1}^k.
+        let mut combined = F::zero_vec(1 << num_variables);
+        eval_eq_batch::<Base, F, false>(points_matrix.as_view(), &mut combined, &challenges);
 
-            // Add this constraint's contribution to the combined expected sum:
-            sum += eval * gamma;
-        }
+        // Combine expected evaluations: S = ∑_i γ^i * s_i
+        let sum = dot_product(self.evaluations.iter().copied(), challenges.into_iter());
 
         // Return:
         // - The combined polynomial W(X) in evaluation form.
         // - The combined expected sum S.
-        (combined, sum)
+        (EvaluationsList::new(combined), sum)
     }
 
     /// Combines a list of evals into a single linear combination using powers of `gamma`,
@@ -256,7 +266,7 @@ mod tests {
 
         // Expected evals: W(X) = eq_z1(X) + challenge * eq_z2(X)
         let mut expected_combined_evals_vec = EvaluationsList::new_from_point(&point1, F::ONE);
-        expected_combined_evals_vec.accumulate(&point2, challenge);
+        expected_combined_evals_vec.accumulate_batch(&[point2], &[challenge]);
 
         // Expected sum: S = s1 + challenge * s2
         let expected_combined_sum = eval1 + challenge * eval2;
