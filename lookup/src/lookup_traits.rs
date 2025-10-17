@@ -224,4 +224,4 @@ where
     fn get_lookups(&mut self) -> Vec<Lookup<AB::F>>;
 }
 
-// TODO: Create ProverLookup and VerifierLookup structures that contain the permutation columns, and implement `PermutationAirBuilder` for them.
+// TODO: Adapt prover and verifier to take lookups into account.
