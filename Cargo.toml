@@ -26,6 +26,7 @@ members = [
     "mersenne-31",
     "monolith",
     "monty-31",
+    "multi-stark",
     "multilinear-util",
     "poseidon",
     "poseidon2",
@@ -34,7 +35,6 @@ members = [
     "sha256",
     "symmetric",
     "uni-stark",
-    "multi-stark",
     "util",
 ]
 
