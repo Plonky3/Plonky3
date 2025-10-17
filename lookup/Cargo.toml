@@ -8,16 +8,16 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+default = []
+
 [dependencies]
+itertools.workspace = true
 p3-air = { workspace = true }
 p3-field = { workspace = true }
 p3-matrix = { workspace = true }
 p3-uni-stark = { workspace = true }
-itertools.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { workspace = true }
 p3-goldilocks = { workspace = true }
-
-[features]
-default = []

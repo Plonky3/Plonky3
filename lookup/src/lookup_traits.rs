@@ -1,5 +1,7 @@
-use alloc::{rc::Rc, string::String, vec::Vec};
-use itertools::Itertools;
+use alloc::rc::Rc;
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use p3_air::{Air, AirBuilderWithPublicValues, PairBuilder, PermutationAirBuilder};
 use p3_field::Field;
 use p3_matrix::Matrix;
@@ -59,7 +61,7 @@ pub trait LookupGadget<F: Field> {
     );
 
     /// Computes the polynomial degree of a lookup transition constraint.
-    fn constraint_degree<AB: PermutationAirBuilder>(&self, context: Lookup<AB::F>) -> usize;
+    fn constraint_degree(&self, context: Lookup<F>) -> usize;
 }
 
 // TODO: Add unit test.
@@ -105,37 +107,22 @@ pub fn symbolic_to_expr<AB: PermutationAirBuilder + PairBuilder + AirBuilderWith
                 _ => unimplemented!(),
             }
         }
-        SymbolicExpression::Add {
-            x,
-            y,
-            degree_multiple: _,
-        } => {
+        SymbolicExpression::Add { x, y, .. } => {
             let x_expr = symbolic_to_expr(builder, x.clone());
             let y_expr = symbolic_to_expr(builder, y.clone());
             x_expr + y_expr
         }
-        SymbolicExpression::Mul {
-            x,
-            y,
-            degree_multiple: _,
-        } => {
+        SymbolicExpression::Mul { x, y, .. } => {
             let x_expr = symbolic_to_expr(builder, x.clone());
             let y_expr = symbolic_to_expr(builder, y.clone());
             x_expr * y_expr
         }
-        SymbolicExpression::Sub {
-            x,
-            y,
-            degree_multiple: _,
-        } => {
+        SymbolicExpression::Sub { x, y, .. } => {
             let x_expr = symbolic_to_expr(builder, x.clone());
             let y_expr = symbolic_to_expr(builder, y.clone());
             x_expr - y_expr
         }
-        SymbolicExpression::Neg {
-            x,
-            degree_multiple: _,
-        } => {
+        SymbolicExpression::Neg { x, .. } => {
             let x_expr = symbolic_to_expr(builder, x.clone());
             -x_expr
         }
@@ -145,43 +132,7 @@ pub fn symbolic_to_expr<AB: PermutationAirBuilder + PairBuilder + AirBuilderWith
     }
 }
 
-/// A context structure that encapsulates a single lookup relationship and its associated
-/// permutation column.
-#[derive(Debug, Clone)]
-pub struct LookupContext<'a, AE, AM> {
-    /// Whether the lookup is local or global.
-    pub kind: Kind,
-    /// Elements being read (consumed from the table). Each `Vec<AE>` actually represents a tuple of elements that are bundled together to make one lookup.
-    pub elements: &'a [Vec<AE>],
-    /// Multiplicities for the elements.
-    pub multiplicities: &'a [AM],
-    /// The column index in the permutation trace for this lookup's running sum
-    pub columns: &'a [usize],
-}
-
-impl<'a, AE, AM> LookupContext<'a, AE, AM> {
-    /// Creates a new lookup context with the specified column.
-    ///
-    /// # Arguments
-    /// * `elements` - Elements from the either the main execution trace or a lookup table.
-    /// * `multiplicities` - How many times each `element` should appear
-    /// * `column` - The column index in the permutation trace for this lookup
-    pub const fn new(
-        kind: Kind,
-        elements: &'a [Vec<AE>],
-        multiplicities: &'a [AM],
-        columns: &'a [usize],
-    ) -> Self {
-        Self {
-            kind,
-            elements,
-            multiplicities,
-            columns,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind {
     Local,
     // The string corresponds to the interactions's name. It is used to identify all elements that are part of the same interaction.
@@ -189,42 +140,74 @@ pub enum Kind {
 }
 
 /// A structure that holds the lookup data necessary to generate a `LookupContext`. It is shared between the prover and the verifier.
-pub struct Lookup<'a, F: Field> {
+#[derive(Clone, Debug)]
+pub struct Lookup<F: Field> {
     /// Type of lookup: local or global
     pub kind: Kind,
     /// Elements being read (consumed from the table). Each `Vec<AE>` actually represents a tuple of elements that are bundled together to make one lookup.
-    pub element_exprs: &'a [Vec<SymbolicExpression<F>>],
+    pub element_exprs: Vec<Vec<SymbolicExpression<F>>>,
     /// Multiplicities for the elements.
     pub multiplicities_exprs: Vec<SymbolicExpression<F>>,
     /// The column index in the permutation trace for this lookup's running sum
     pub columns: Vec<usize>,
 }
 
-// TODO: Actually no, we need a structure which contains the lookup, but also the actual auxiliary permutation column and challenges. Maybe we don't even need the actual lookup structure here?
+impl<F: Field> Lookup<F> {
+    /// Creates a new lookup with the specified column.
+    ///
+    /// # Arguments
+    /// * `elements` - Elements from the either the main execution trace or a lookup table.
+    /// * `multiplicities` - How many times each `element` should appear
+    /// * `column` - The column index in the permutation trace for this lookup
+    pub fn new(
+        kind: Kind,
+        element_exprs: Vec<Vec<SymbolicExpression<F>>>,
+        multiplicities_exprs: Vec<SymbolicExpression<F>>,
+        columns: Vec<usize>,
+    ) -> Self {
+        Self {
+            kind,
+            element_exprs,
+            multiplicities_exprs,
+            columns,
+        }
+    }
+}
 
 pub enum Direction {
     Send,
     Receive,
 }
 
-pub trait AirLookupHandler<F: Field>: Air<SymbolicAirBuilder<F>> {
+/// A type alias for a lookup input tuple. It contains:
+/// - a vector of symbolic expressions representing the elements involved in the lookup,
+/// - a symbolic expression representing the multiplicity of the lookup,
+/// - a direction indicating whether the elements are being sent or received.
+pub type LookupInput<F> = (Vec<SymbolicExpression<F>>, SymbolicExpression<F>, Direction);
+
+pub trait AirLookupHandler<AB>: Air<AB>
+where
+    AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+    AB::Var: Copy + Into<AB::ExprEF>,
+    AB::ExprEF: From<AB::Var> + From<AB::F>,
+{
     /// Register a lookup to be used in this AIR.
+    /// This method can be used before proving or verifying, as the resulting data is shared between the prover and the verifier.
     fn register_lookup<'a>(
         &mut self,
-        direction: &[Direction],
         kind: Kind,
-        elements: &'a [Vec<SymbolicExpression<F>>],
-        multiplicities: &[SymbolicExpression<F>],
-    ) -> Lookup<'a, F> {
-        let muls = elements
+        lookup_inputs: &'a [LookupInput<AB::F>],
+    ) -> Lookup<AB::F> {
+        let (elements, muls): (Vec<_>, Vec<_>) = lookup_inputs
             .iter()
-            .zip_eq(multiplicities)
-            .zip_eq(direction)
-            .map(|((_, mult), dir)| match dir {
-                Direction::Send => mult.clone(),
-                Direction::Receive => -mult.clone(),
+            .map(|(elems, mult, dir)| {
+                let multiplicity = match dir {
+                    Direction::Send => mult.clone(),
+                    Direction::Receive => -mult.clone(),
+                };
+                (elems.clone(), multiplicity)
             })
-            .collect::<Vec<_>>();
+            .unzip();
 
         Lookup {
             kind,
@@ -238,7 +221,7 @@ pub trait AirLookupHandler<F: Field>: Air<SymbolicAirBuilder<F>> {
     fn add_lookup_columns(&mut self) -> Vec<usize>;
 
     /// Register all lookups for the current AIR and return them.
-    fn get_lookups(&mut self) -> Vec<Lookup<'_, F>>;
+    fn get_lookups(&mut self) -> Vec<Lookup<AB::F>>;
 }
 
 // TODO: Create ProverLookup and VerifierLookup structures that contain the permutation columns, and implement `PermutationAirBuilder` for them.

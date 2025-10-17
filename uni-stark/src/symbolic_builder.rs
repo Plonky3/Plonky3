@@ -75,7 +75,7 @@ pub struct SymbolicAirBuilder<F: Field> {
 }
 
 impl<F: Field> SymbolicAirBuilder<F> {
-    pub(crate) fn new(preprocessed_width: usize, width: usize, num_public_values: usize) -> Self {
+    pub fn new(preprocessed_width: usize, width: usize, num_public_values: usize) -> Self {
         let prep_values = [0, 1]
             .into_iter()
             .flat_map(|offset| {
