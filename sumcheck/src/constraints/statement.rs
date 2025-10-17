@@ -79,10 +79,8 @@ impl<F: Field> Statement<F> {
     /// Verifies that a given polynomial satisfies all constraints in the statement.
     #[must_use]
     pub fn verify(&self, poly: &EvaluationsList<F>) -> bool {
-        self.iter().all(|(point, &expected_eval)| {
-            let eval = poly.evaluate(point);
-            eval == expected_eval
-        })
+        self.iter()
+            .all(|(point, &expected_eval)| poly.evaluate(point) == expected_eval)
     }
 
     /// Concatenates another statement's constraints into this one.
