@@ -150,11 +150,13 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
         res
     }
 
-    /// Compute the inverse of a given element making use of the Frobenius automorphism.
+    /// Compute the pseudo inverse of a given element making use of the Frobenius automorphism.
+    ///
+    /// Returns `0` if `self == 0`, and `1/self` otherwise.
     ///
     /// Algorithm 11.3.4 in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
     #[inline]
-    fn frobenius_inv(&self) -> Self {
+    fn pseudo_inv(&self) -> Self {
         // Writing 'a' for self and `q` for the order of the base field, our goal is to compute `a^{-1}`.
         //
         // Note that we can write `-1 = (q^{D - 1} + ... + q) - (q^{D - 1} + ... + q + 1)`.
@@ -325,7 +327,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
             4 => quartic_inv(&self.value, &mut res.value, F::W),
             5 => res = quintic_inv(self),
             8 => octic_inv(&self.value, &mut res.value, F::W),
-            _ => res = self.frobenius_inv(),
+            _ => res = self.pseudo_inv(),
         }
 
         Some(res)
@@ -1083,7 +1085,7 @@ where
     // Linear coefficient = 2(a0 * a1 + w(a2 * a7 + a3 * a6 + a4 * a5))
     res[1] = R::dot_product(
         &[a0_2.clone(), a[2].clone(), a[3].clone(), a[4].clone()],
-        &[a[1].clone(), w_a7_2.clone(), w_a6_2.clone(), w_a5_2.clone()],
+        &[a[1].clone(), w_a7_2.clone(), w_a6_2.clone(), w_a5_2],
     );
 
     // Square coefficient = 2a0 * a2 + a1² + w(2(a3 * a7 + a4 * a6) + a5²)
@@ -1107,7 +1109,7 @@ where
     // Cube coefficient = 2(a0 * a3 + a1 * a2 + w(a4 * a7 + a5 * a6)
     res[3] = R::dot_product(
         &[a0_2.clone(), a1_2.clone(), a[4].clone(), a[5].clone()],
-        &[a[3].clone(), a[2].clone(), w_a7_2.clone(), w_a6_2.clone()],
+        &[a[3].clone(), a[2].clone(), w_a7_2.clone(), w_a6_2],
     );
 
     // Quartic coefficient = 2(a0 * a4 + a1 * a3) + a2² + w(2 * a7 * a5 + a6²)

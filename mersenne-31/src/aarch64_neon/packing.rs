@@ -151,8 +151,23 @@ impl PrimeCharacteristicRing for PackedMersenne31Neon {
         f.into()
     }
 
-    // TODO: Add a custom implementation of `halve` that uses NEON intrinsics
-    // and avoids the multiplication.
+    #[inline]
+    fn halve(&self) -> Self {
+        // Compute (val + (val & 1) * P) >> 1 per lane.
+        // This equals val * 2^{-1} mod P, staying in the 0..=P representation.
+        let val = (*self).to_vector();
+        unsafe {
+            // Safety: If this code got compiled then NEON intrinsics are available.
+            let one = aarch64::vdupq_n_u32(1);
+            // is_odd_mask = 0xFFFF_FFFF when LSB set, else 0.
+            let is_odd_mask = aarch64::vtstq_u32(val, one);
+            // Select P for odd lanes, 0 for even lanes.
+            let to_add = aarch64::vandq_u32(P, is_odd_mask);
+            // Halving add: (val + to_add) >> 1
+            let halved = aarch64::vhaddq_u32(val, to_add);
+            Self::from_vector(halved)
+        }
+    }
 
     #[inline(always)]
     fn zero_vec(len: usize) -> Vec<Self> {

@@ -188,7 +188,7 @@ mod tests {
         // Regardless of x, f(x) = c, so interpolation must always return c
         let c = F::from_u32(42); // constant polynomial
         let evals = vec![c; 8];
-        let evals_mat = RowMajorMatrix::new(evals.clone(), 1);
+        let evals_mat = RowMajorMatrix::new(evals, 1);
 
         let shift = F::GENERATOR;
         let point = F::from_u16(1337);

@@ -114,7 +114,7 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize, polynomial_lo
         // Initialize the verifier's challenger with the same permutation.
         // Observe the `polynomial_log_sizes` and `commitment` in the same order
         // as the prover.
-        let mut challenger = Challenger::new(perm.clone());
+        let mut challenger = Challenger::new(perm);
         challenger.observe_slice(&val_sizes);
         challenger.observe(commitment);
 
