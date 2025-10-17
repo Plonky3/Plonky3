@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use p3_air::{Air, AirBuilderWithPublicValues, PairBuilder, PermutationAirBuilder};
 use p3_field::Field;
 use p3_matrix::Matrix;
-use p3_uni_stark::{Entry, SymbolicAirBuilder, SymbolicExpression};
+use p3_uni_stark::{Entry, SymbolicExpression};
 
 /// A trait for lookup argument.
 pub trait LookupGadget<F: Field> {

@@ -100,7 +100,7 @@ impl<F: Field> SymbolicAirBuilder<F> {
         }
     }
 
-    pub(crate) fn constraints(self) -> Vec<SymbolicExpression<F>> {
+    pub fn constraints(self) -> Vec<SymbolicExpression<F>> {
         self.constraints
     }
 }

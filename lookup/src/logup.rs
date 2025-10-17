@@ -44,6 +44,9 @@ use crate::lookup_traits::{Kind, Lookup, LookupGadget, symbolic_to_expr};
 /// s[i+1] = s[i] + ∑(m_a/(α - a)) - ∑(m_b/(α - b))
 /// ```
 ///
+/// Note that we do not differentiate between `a` and `b` in the implementation:
+/// we simply have a list of elements with possibly negative multiplicities.
+///
 /// Constraints are defined as:
 /// - **Initial Constraint**: `s[0] = 0`
 /// - **Transition Constraint**: `s[i+1] = s[i] + contribution[i]`
@@ -757,6 +760,81 @@ mod tests {
     }
 
     #[test]
+    fn test_symbolic_to_expr() {
+        use p3_air::AirBuilder;
+        use p3_field::PrimeCharacteristicRing;
+        use p3_uni_stark::SymbolicAirBuilder;
+
+        let mut builder = SymbolicAirBuilder::<F>::new(0, 2, 0);
+
+        let main = builder.main();
+
+        let (local, next) = (main.row_slice(0).unwrap(), main.row_slice(1).unwrap());
+
+        let mul = local[0] * next[1];
+        let add = local[0] + next[1];
+        let sub = local[0] - next[1];
+        builder.when_first_row().assert_zero(mul.clone() * add);
+        builder.when_transition().assert_zero(sub - local[0]);
+        builder.when_last_row().assert_zero(mul - local[0]);
+
+        let constraints = builder.constraints();
+
+        let mut main_flat = Vec::new();
+        main_flat.extend([F::new(10), F::new(10)]);
+        main_flat.extend([F::new(256), F::new(255)]);
+        main_flat.extend([F::new(42), F::new(42)]);
+
+        let main_trace = RowMajorMatrix::new(main_flat, 2);
+
+        let perm = RowMajorMatrix::new(vec![], 0);
+        let mut builder = MockAirBuilder::new(main_trace.clone(), perm, vec![]);
+
+        for i in 0..builder.height {
+            // Define the Lagrange selectors.
+            builder.for_row(i);
+            let is_first_row = if i == 0 { EF::ONE } else { EF::ZERO };
+            let is_last_row = if i == builder.height - 1 {
+                EF::ONE
+            } else {
+                EF::ZERO
+            };
+            let is_transition = if i < builder.height - 1 {
+                EF::ONE
+            } else {
+                EF::ZERO
+            };
+
+            // Get the local and next values for row `i`.
+            let cloned_trace = main_trace.clone();
+            let local = cloned_trace.row(i).unwrap().into_iter().collect::<Vec<F>>();
+            let next = cloned_trace.row(i + 1).map_or_else(
+                || vec![F::ZERO; 2],
+                |row| row.into_iter().collect::<Vec<F>>(),
+            );
+
+            // Compute the expected constraint values at row `i`.
+            let mul = EF::from(local[0]) * EF::from(next[1]);
+            let add = EF::from(local[0]) + EF::from(next[1]);
+            let sub = EF::from(local[0]) - EF::from(next[1]);
+
+            let first_expected_val = is_first_row * (mul * add);
+            let transition_expected_val = is_transition * (sub - EF::from(local[0]));
+            let last_expected_val = is_last_row * (mul - EF::from(local[0]));
+
+            // Evaluate the constraints at row `i`.
+            let first_eval = symbolic_to_expr(&mut builder, Rc::new(constraints[0].clone()));
+            let transition_eval = symbolic_to_expr(&mut builder, Rc::new(constraints[1].clone()));
+            let last_eval = symbolic_to_expr(&mut builder, Rc::new(constraints[2].clone()));
+
+            // Assert that the evaluated constraints are correct.
+            assert_eq!(first_eval, first_expected_val);
+            assert_eq!(transition_eval, transition_expected_val);
+            assert_eq!(last_eval, last_expected_val);
+        }
+    }
+
+    #[test]
     fn test_range_check_end_to_end_valid() {
         // SCENARIO: Simple range check where each value reads and provides itself.
         //
@@ -1232,6 +1310,7 @@ mod tests {
         }
     }
 
+    fn test_global_lookups() {}
     // TODO: Add tests for:
     // - tuple lookups (multiple columns per element)
     // - global lookups (need a more complex AIR setup)
