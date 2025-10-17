@@ -274,7 +274,7 @@ where
     // Pad selector vectors to the next multiple of WIDTH to avoid out-of-bounds panics
     // when slicing in the parallel loop below.
     let packed_width = PackedVal::<SC>::WIDTH;
-    let pad_to = ((quotient_size + packed_width - 1) / packed_width) * packed_width;
+    let pad_to = quotient_size.div_ceil(packed_width) * packed_width;
     for _ in quotient_size..pad_to {
         sels.is_first_row.push(Val::<SC>::default());
         sels.is_last_row.push(Val::<SC>::default());

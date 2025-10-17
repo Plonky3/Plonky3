@@ -437,8 +437,8 @@ fn test_invalid_trace_width_rejected() {
     // Tamper with the proof: change trace_local to have wrong width
     let mut tampered_proof = p3_multi_stark::proof::MultiProof {
         commitments: MultiCommitments {
-            main: valid_proof.commitments.main.clone(),
-            quotient_chunks: valid_proof.commitments.quotient_chunks.clone(),
+            main: valid_proof.commitments.main,
+            quotient_chunks: valid_proof.commitments.quotient_chunks,
         },
         opened_values: MultiOpenedValues {
             instances: vec![InstanceOpenedValues {
