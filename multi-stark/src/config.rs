@@ -3,6 +3,7 @@
 //! This module re-uses `p3_uni_stark::StarkGenericConfig` as the underlying config trait
 //! and provides convenient type aliases for common associated types.
 
+use p3_challenger::FieldChallenger;
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{ExtensionField, Field};
 pub use p3_uni_stark::StarkGenericConfig;
@@ -51,3 +52,23 @@ pub type PcsProof<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
     <SC as StarkGenericConfig>::Challenge,
     <SC as StarkGenericConfig>::Challenger,
 >>::Proof;
+
+/// Helper to observe base field elements as extension field elements for recursion-friendly transcripts.
+///
+/// This simplifies recursive verifier circuits by using a uniform extension field challenger.
+/// Instead of observing a mix of base and extension field elements, we convert all base field
+/// observations (metadata, public values) to extension field elements before passing to the challenger.
+///
+/// # Recursion Benefits
+///
+/// In recursive proof systems, the verifier circuit needs to verify the inner proof. Since STARK
+/// verification operates entirely in the extension field (challenges, opened values, constraint
+/// evaluation), having a challenger that only observes extension field elements significantly
+/// simplifies the recursive circuit implementation.
+#[inline]
+pub fn observe_base_as_ext<SC: MultiStarkGenericConfig>(challenger: &mut SC::Challenger, val: Val<SC>)
+where
+    SC::Challenge: ExtensionField<Val<SC>>,
+{
+    challenger.observe_algebra_element(SC::Challenge::from(val));
+}

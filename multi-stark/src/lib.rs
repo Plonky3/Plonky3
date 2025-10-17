@@ -39,8 +39,8 @@ pub mod verifier;
 
 // Re-export main types and functions for convenience
 pub use config::{
-    Challenge, Commitment, Domain, MultiStarkGenericConfig, PackedChallenge, PackedVal, PcsError,
-    PcsProof, StarkGenericConfig, Val,
+    observe_base_as_ext, Challenge, Commitment, Domain, MultiStarkGenericConfig, PackedChallenge,
+    PackedVal, PcsError, PcsProof, StarkGenericConfig, Val,
 };
 pub use proof::{InstanceOpenedValues, MultiCommitments, MultiOpenedValues, MultiProof};
 pub use prover::{StarkInstance, prove_multi};

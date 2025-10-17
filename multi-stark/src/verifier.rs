@@ -13,7 +13,7 @@ use p3_util::log2_strict_usize;
 use p3_util::zip_eq::zip_eq;
 use tracing::instrument;
 
-use crate::config::{Domain, MultiStarkGenericConfig as MSGC, PcsError, Val};
+use crate::config::{observe_base_as_ext, Domain, MultiStarkGenericConfig as MSGC, PcsError, Val};
 use crate::proof::MultiProof;
 
 #[derive(Debug)]
@@ -70,7 +70,7 @@ where
 
     // Observe the number of instances up front to match the prover's transcript.
     let n_instances = airs.len();
-    challenger.observe(Val::<SC>::from_usize(n_instances));
+    observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(n_instances));
 
     // Validate opened values shape per instance (critical soundness check)
     let log_quotient_degrees: Vec<usize> = airs
@@ -116,20 +116,22 @@ where
     for (i, air) in airs.iter().enumerate() {
         let ext_db = degree_bits[i];
         let base_db = ext_db - config.is_zk();
-        challenger.observe(Val::<SC>::from_usize(ext_db));
-        challenger.observe(Val::<SC>::from_usize(base_db));
+        observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(ext_db));
+        observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(base_db));
         let width = A::width(air);
-        challenger.observe(Val::<SC>::from_usize(width));
+        observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(width));
         let pv_len = public_values[i].len();
-        challenger.observe(Val::<SC>::from_usize(pv_len));
+        observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(pv_len));
         let num_chunks = 1 << (log_quotient_degrees[i] + config.is_zk());
-        challenger.observe(Val::<SC>::from_usize(num_chunks));
+        observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(num_chunks));
     }
 
     // Observe main commitment and public values (in instance order).
     challenger.observe(commitments.main.clone());
     for pv in public_values {
-        challenger.observe_slice(pv);
+        for &val in pv {
+            observe_base_as_ext::<SC>(&mut challenger, val);
+        }
     }
 
     // Sample alpha for constraint folding

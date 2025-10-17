@@ -1,5 +1,6 @@
 use core::borrow::Borrow;
 use core::fmt::Debug;
+use core::slice::from_ref;
 
 use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
@@ -407,7 +408,7 @@ fn test_invalid_trace_width_rejected() -> Result<(), Box<dyn std::error::Error>>
     };
 
     // Verification should fail due to width mismatch
-    let res = verify_multi(&config, &[air_fib], &tampered_proof, &[fib_pis.clone()]);
+    let res = verify_multi(&config, &[air_fib], &tampered_proof, from_ref(&fib_pis));
     assert!(
         res.is_err(),
         "Verifier should reject trace with wrong width"
@@ -419,7 +420,7 @@ fn test_invalid_trace_width_rejected() -> Result<(), Box<dyn std::error::Error>>
     tampered_proof.opened_values.instances[0].trace_next =
         vec![valid_proof.opened_values.instances[0].trace_next[0]]; // Wrong width
 
-    let res = verify_multi(&config, &[air_fib], &tampered_proof, &[fib_pis]);
+    let res = verify_multi(&config, &[air_fib], &tampered_proof, from_ref(&fib_pis));
     assert!(
         res.is_err(),
         "Verifier should reject trace_next with wrong width"

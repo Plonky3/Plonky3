@@ -14,7 +14,9 @@ use p3_uni_stark::{
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 
-use crate::config::{Domain, MultiStarkGenericConfig as MSGC, PackedChallenge, PackedVal, Val};
+use crate::config::{
+    observe_base_as_ext, Domain, MultiStarkGenericConfig as MSGC, PackedChallenge, PackedVal, Val,
+};
 use crate::proof::{InstanceOpenedValues, MultiCommitments, MultiOpenedValues, MultiProof};
 
 #[derive(Debug)]
@@ -38,13 +40,10 @@ where
     SC: MSGC,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
-    // Optional constraint checks in debug.
-    // Optionally check constraints in debug builds (skipped here; uni-stark provides test coverage)
-
     let pcs = config.pcs();
     let mut challenger = config.initialise_challenger();
 
-    // No ZK support in initial implementation.
+    // TODO: No ZK support for multi-stark yet.
     if config.is_zk() != 0 {
         panic!("p3-multi-stark: ZK mode is not supported yet");
     }
@@ -79,20 +78,20 @@ where
     // Observe the number of instances up front so the transcript can't be reinterpreted
     // with a different partitioning.
     let n_instances = airs.len();
-    challenger.observe(Val::<SC>::from_usize(n_instances));
+    observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(n_instances));
 
     // Observe per-instance binding data: (log_ext_degree, log_degree), width, num public values, num quotient chunks.
     for i in 0..n_instances {
         let log_deg = log_degrees[i];
         let log_ext_deg = log_ext_degrees[i];
-        challenger.observe(Val::<SC>::from_usize(log_ext_deg));
-        challenger.observe(Val::<SC>::from_usize(log_deg));
+        observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(log_ext_deg));
+        observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(log_deg));
         let width = A::width(airs[i]);
-        challenger.observe(Val::<SC>::from_usize(width));
+        observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(width));
         let pv_len = pub_vals[i].len();
-        challenger.observe(Val::<SC>::from_usize(pv_len));
+        observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(pv_len));
         let num_chunks = 1 << (log_quotient_degrees[i] + config.is_zk());
-        challenger.observe(Val::<SC>::from_usize(num_chunks));
+        observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(num_chunks));
     }
 
     // Commit to all traces in one multi-matrix commitment, preserving input order.
@@ -106,7 +105,9 @@ where
     // Observe main commitment and all public values.
     challenger.observe(main_commit.clone());
     for pv in &pub_vals {
-        challenger.observe_slice(pv);
+        for &val in pv {
+            observe_base_as_ext::<SC>(&mut challenger, val);
+        }
     }
 
     // Compute quotient degrees and domains per instance inline in the loop below.
