@@ -216,7 +216,7 @@ where
 
         // Verify constraints at zeta using utility function.
         let init_trace_domain = pcs.natural_domain_for_degree(1 << base_db);
-        verify_constraints::<SC, A>(
+        verify_constraints::<SC, A, PcsError<SC>>(
             air,
             &opened_values.instances[i].trace_local,
             &opened_values.instances[i].trace_next,
@@ -226,7 +226,12 @@ where
             alpha,
             quotient,
         )
-        .map_err(|_| VerificationError::OodEvaluationMismatch { index: Some(i) })?;
+        .map_err(|e| match e {
+            VerificationError::OodEvaluationMismatch { .. } => {
+                VerificationError::OodEvaluationMismatch { index: Some(i) }
+            }
+            other => other,
+        })?;
     }
 
     Ok(())

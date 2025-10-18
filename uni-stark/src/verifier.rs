@@ -66,7 +66,8 @@ where
 ///
 /// This evaluates the AIR constraints at the out-of-domain point and checks
 /// that constraints(zeta) / Z_H(zeta) = quotient(zeta).
-pub fn verify_constraints<SC, A>(
+#[allow(clippy::too_many_arguments)]
+pub fn verify_constraints<SC, A, PcsErr>(
     air: &A,
     trace_local: &[SC::Challenge],
     trace_next: &[SC::Challenge],
@@ -75,7 +76,7 @@ pub fn verify_constraints<SC, A>(
     zeta: SC::Challenge,
     alpha: SC::Challenge,
     quotient: SC::Challenge,
-) -> Result<(), ()>
+) -> Result<(), VerificationError<PcsErr>>
 where
     SC: StarkGenericConfig,
     A: for<'a> Air<VerifierConstraintFolder<'a, SC>>,
@@ -101,7 +102,7 @@ where
 
     // Check that constraints(zeta) / Z_H(zeta) = quotient(zeta)
     if folded_constraints * sels.inv_vanishing != quotient {
-        return Err(());
+        return Err(VerificationError::OodEvaluationMismatch { index: None });
     }
 
     Ok(())
@@ -249,7 +250,7 @@ where
         zeta,
     );
 
-    verify_constraints::<SC, A>(
+    verify_constraints::<SC, A, PcsError<SC>>(
         air,
         &opened_values.trace_local,
         &opened_values.trace_next,
@@ -258,8 +259,7 @@ where
         zeta,
         alpha,
         quotient,
-    )
-    .map_err(|_| VerificationError::OodEvaluationMismatch { index: None })?;
+    )?;
 
     Ok(())
 }
