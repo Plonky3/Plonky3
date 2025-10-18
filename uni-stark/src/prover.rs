@@ -284,7 +284,7 @@ where
 #[instrument(name = "compute quotient polynomial", skip_all)]
 // TODO: Group some arguments to remove the `allow`?
 #[allow(clippy::too_many_arguments)]
-fn quotient_values<SC, A, Mat>(
+pub fn quotient_values<SC, A, Mat>(
     air: &A,
     public_values: &Vec<Val<SC>>,
     trace_domain: Domain<SC>,
