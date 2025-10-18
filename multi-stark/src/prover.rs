@@ -8,14 +8,14 @@ use p3_field::PrimeCharacteristicRing;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_uni_stark::{
-    ProverConstraintFolder, SymbolicAirBuilder, get_log_quotient_degree, get_symbolic_constraints,
-    quotient_values,
+    OpenedValues, ProverConstraintFolder, SymbolicAirBuilder, get_log_quotient_degree,
+    get_symbolic_constraints, quotient_values,
 };
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 
 use crate::config::{Challenge, Domain, MultiStarkGenericConfig as MSGC, Val, observe_base_as_ext};
-use crate::proof::{InstanceOpenedValues, MultiCommitments, MultiOpenedValues, MultiProof};
+use crate::proof::{MultiCommitments, MultiOpenedValues, MultiProof};
 
 #[derive(Debug)]
 pub struct StarkInstance<'a, SC: MSGC, A> {
@@ -195,8 +195,7 @@ where
     // Parse quotient chunk opened values and map per instance.
     let mut quotient_openings_iter = opened_values[quotient_idx].iter();
 
-    let mut per_instance: Vec<InstanceOpenedValues<Challenge<SC>>> =
-        Vec::with_capacity(n_instances);
+    let mut per_instance: Vec<OpenedValues<Challenge<SC>>> = Vec::with_capacity(n_instances);
     for (i, (s, e)) in quotient_chunk_ranges.iter().copied().enumerate() {
         // Trace locals
         let tv = &trace_values_for_mats[i];
@@ -212,10 +211,11 @@ where
             qcs.push(mat_vals[0].clone());
         }
 
-        per_instance.push(InstanceOpenedValues {
+        per_instance.push(OpenedValues {
             trace_local,
             trace_next,
             quotient_chunks: qcs,
+            random: None, // ZK not supported in multi-stark yet
         });
     }
 

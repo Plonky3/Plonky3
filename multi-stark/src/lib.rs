@@ -42,6 +42,7 @@ pub use config::{
     Challenge, Commitment, Domain, MultiStarkGenericConfig, PackedChallenge, PackedVal, PcsError,
     PcsProof, StarkGenericConfig, Val, observe_base_as_ext,
 };
-pub use proof::{InstanceOpenedValues, MultiCommitments, MultiOpenedValues, MultiProof};
+pub use p3_uni_stark::{OpenedValues, VerificationError};
+pub use proof::{MultiCommitments, MultiOpenedValues, MultiProof};
 pub use prover::{StarkInstance, prove_multi};
-pub use verifier::{MultiVerificationError, verify_multi};
+pub use verifier::verify_multi;

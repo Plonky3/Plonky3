@@ -1,14 +1,14 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use itertools::Itertools;
 use p3_air::Air;
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing, TwoAdicField};
-use p3_matrix::dense::RowMajorMatrixView;
-use p3_matrix::stack::VerticalPair;
-use p3_uni_stark::{SymbolicAirBuilder, VerifierConstraintFolder, get_log_quotient_degree};
+use p3_field::{BasedVectorSpace, PrimeCharacteristicRing, TwoAdicField};
+use p3_uni_stark::{
+    SymbolicAirBuilder, VerificationError, VerifierConstraintFolder, get_log_quotient_degree,
+    recompose_quotient_from_chunks, verify_constraints,
+};
 use p3_util::log2_strict_usize;
 use p3_util::zip_eq::zip_eq;
 use tracing::instrument;
@@ -18,30 +18,13 @@ use crate::config::{
 };
 use crate::proof::MultiProof;
 
-#[derive(Debug)]
-pub enum MultiVerificationError<PcsErr> {
-    InvalidProofShape,
-    InvalidOpeningArgument(PcsErr),
-    OodEvaluationMismatch {
-        index: usize,
-    },
-    /// The OOD point zeta fell into a base domain, which is a completeness edge case.
-    OodPointInDomain,
-    /// The log degree is too large for the field's two-adicity.
-    InvalidLogDegree {
-        index: usize,
-        log_degree: usize,
-        log_quotient_degree: usize,
-    },
-}
-
 #[instrument(skip_all)]
 pub fn verify_multi<SC, A>(
     config: &SC,
     airs: &[A],
     proof: &MultiProof<SC>,
     public_values: &[Vec<Val<SC>>],
-) -> Result<(), MultiVerificationError<PcsError<SC>>>
+) -> Result<(), VerificationError<PcsError<SC>>>
 where
     SC: MSGC,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
@@ -67,7 +50,7 @@ where
         || airs.len() != public_values.len()
         || airs.len() != degree_bits.len()
     {
-        return Err(MultiVerificationError::InvalidProofShape);
+        return Err(VerificationError::InvalidProofShape);
     }
 
     // Observe the number of instances up front to match the prover's transcript.
@@ -89,7 +72,7 @@ where
         let log_degree = degree_bits[i] - config.is_zk();
         let log_quotient_degree = log_quotient_degrees[i];
         if log_degree.saturating_add(log_quotient_degree) > Val::<SC>::TWO_ADICITY {
-            return Err(MultiVerificationError::InvalidLogDegree {
+            return Err(VerificationError::InvalidLogDegree {
                 index: i,
                 log_degree,
                 log_quotient_degree,
@@ -98,18 +81,18 @@ where
 
         // Validate trace widths match the AIR
         if inst_vals.trace_local.len() != air_width || inst_vals.trace_next.len() != air_width {
-            return Err(MultiVerificationError::InvalidProofShape);
+            return Err(VerificationError::InvalidProofShape);
         }
 
         // Validate quotient chunks structure
         let expected_chunks = 1 << (log_quotient_degree + config.is_zk());
         if inst_vals.quotient_chunks.len() != expected_chunks {
-            return Err(MultiVerificationError::InvalidProofShape);
+            return Err(VerificationError::InvalidProofShape);
         }
 
         for chunk in &inst_vals.quotient_chunks {
             if chunk.len() != Challenge::<SC>::DIMENSION {
-                return Err(MultiVerificationError::InvalidProofShape);
+                return Err(VerificationError::InvalidProofShape);
             }
         }
     }
@@ -164,7 +147,7 @@ where
         .map(|((ext_dom, base_dom), inst_vals)| {
             let zeta_next = base_dom
                 .next_point(zeta)
-                .ok_or(MultiVerificationError::OodPointInDomain)?;
+                .ok_or(VerificationError::OodPointInDomain)?;
             Ok((
                 *ext_dom,
                 vec![
@@ -173,7 +156,7 @@ where
                 ],
             ))
         })
-        .collect::<Result<Vec<_>, MultiVerificationError<PcsError<SC>>>>()?;
+        .collect::<Result<Vec<_>, VerificationError<PcsError<SC>>>>()?;
     coms_to_verify.push((commitments.main.clone(), trace_round));
 
     // Quotient chunks round: flatten per-instance chunks to match commit order.
@@ -195,12 +178,12 @@ where
     for (i, domains) in quotient_domains.iter().enumerate() {
         let inst_qcs = &opened_values.instances[i].quotient_chunks;
         if inst_qcs.len() != domains.len() {
-            return Err(MultiVerificationError::InvalidProofShape);
+            return Err(VerificationError::InvalidProofShape);
         }
         for (d, vals) in zip_eq(
             domains.iter(),
             inst_qcs,
-            MultiVerificationError::InvalidProofShape,
+            VerificationError::InvalidProofShape,
         )? {
             qc_round.push((*d, vec![(zeta, vals.clone())]));
         }
@@ -209,7 +192,7 @@ where
 
     // Verify all openings via PCS.
     pcs.verify(coms_to_verify, opening_proof, &mut challenger)
-        .map_err(MultiVerificationError::InvalidOpeningArgument)?;
+        .map_err(VerificationError::InvalidOpeningArgument)?;
 
     // Now check constraint equality per instance.
     // For each instance, recombine quotient from chunks at zeta and compare to folded constraints.
@@ -224,62 +207,26 @@ where
         let qdom = ext_dom.create_disjoint_domain(1 << (base_db + lqd + config.is_zk()));
         let qc_domains = qdom.split_domains(qdeg);
 
-        let zps = qc_domains
-            .iter()
-            .enumerate()
-            .map(|(ch_i, domain)| {
-                qc_domains
-                    .iter()
-                    .enumerate()
-                    .filter(|(j, _)| *j != ch_i)
-                    .map(|(_, other_domain)| {
-                        other_domain.vanishing_poly_at_point(zeta)
-                            * other_domain
-                                .vanishing_poly_at_point(domain.first_point())
-                                .inverse()
-                    })
-                    .product::<Challenge<SC>>()
-            })
-            .collect_vec();
-
-        // Recompose quotient(zeta) from chunks:
-        let quotient = opened_values.instances[i]
-            .quotient_chunks
-            .iter()
-            .enumerate()
-            .map(|(ch_i, ch)| {
-                zps[ch_i]
-                    * ch.iter()
-                        .enumerate()
-                        .map(|(e_i, &c)| Challenge::<SC>::ith_basis_element(e_i).unwrap() * c)
-                        .sum::<Challenge<SC>>()
-            })
-            .sum::<Challenge<SC>>();
-
-        // Fold constraints at zeta on (local,next)
-        let init_trace_domain = pcs.natural_domain_for_degree(1 << base_db);
-        let sels = init_trace_domain.selectors_at_point(zeta);
-
-        let main = VerticalPair::new(
-            RowMajorMatrixView::new_row(&opened_values.instances[i].trace_local),
-            RowMajorMatrixView::new_row(&opened_values.instances[i].trace_next),
+        // Recompose quotient(zeta) from chunks using utility function.
+        let quotient = recompose_quotient_from_chunks::<SC>(
+            &qc_domains,
+            &opened_values.instances[i].quotient_chunks,
+            zeta,
         );
 
-        let mut folder = p3_uni_stark::VerifierConstraintFolder {
-            main,
-            public_values: &public_values[i],
-            is_first_row: sels.is_first_row,
-            is_last_row: sels.is_last_row,
-            is_transition: sels.is_transition,
+        // Verify constraints at zeta using utility function.
+        let init_trace_domain = pcs.natural_domain_for_degree(1 << base_db);
+        verify_constraints::<SC, A>(
+            air,
+            &opened_values.instances[i].trace_local,
+            &opened_values.instances[i].trace_next,
+            &public_values[i],
+            init_trace_domain,
+            zeta,
             alpha,
-            accumulator: Challenge::<SC>::ZERO,
-        };
-        air.eval(&mut folder);
-        let folded_constraints = folder.accumulator;
-
-        if folded_constraints * sels.inv_vanishing != quotient {
-            return Err(MultiVerificationError::OodEvaluationMismatch { index: i });
-        }
+            quotient,
+        )
+        .map_err(|_| VerificationError::OodEvaluationMismatch { index: Some(i) })?;
     }
 
     Ok(())

@@ -373,7 +373,8 @@ fn test_quotient_size_not_multiple_of_width() -> Result<(), impl Debug> {
 #[test]
 fn test_invalid_trace_width_rejected() -> Result<(), Box<dyn std::error::Error>> {
     // This test verifies that the verifier rejects proofs with incorrect trace width.
-    use p3_multi_stark::proof::{InstanceOpenedValues, MultiCommitments, MultiOpenedValues};
+    use p3_multi_stark::proof::{MultiCommitments, MultiOpenedValues};
+    use p3_uni_stark::OpenedValues;
 
     let config = make_config(55555);
 
@@ -395,12 +396,13 @@ fn test_invalid_trace_width_rejected() -> Result<(), Box<dyn std::error::Error>>
             quotient_chunks: valid_proof.commitments.quotient_chunks,
         },
         opened_values: MultiOpenedValues {
-            instances: vec![InstanceOpenedValues {
+            instances: vec![OpenedValues {
                 trace_local: vec![valid_proof.opened_values.instances[0].trace_local[0]], // Wrong width: 1 instead of 2
                 trace_next: valid_proof.opened_values.instances[0].trace_next.clone(),
                 quotient_chunks: valid_proof.opened_values.instances[0]
                     .quotient_chunks
                     .clone(),
+                random: None,
             }],
         },
         opening_proof: valid_proof.opening_proof.clone(),

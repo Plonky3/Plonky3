@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 
+use p3_uni_stark::OpenedValues;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Challenge, Commitment, MultiStarkGenericConfig, PcsProof};
@@ -28,21 +29,9 @@ pub struct MultiCommitments<Com> {
     pub quotient_chunks: Com,
 }
 
-/// Opened values for a single STARK instance.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct InstanceOpenedValues<Challenge> {
-    /// Trace values at the out-of-domain point (local row).
-    pub trace_local: Vec<Challenge>,
-    /// Trace values at the next point (next row).
-    pub trace_next: Vec<Challenge>,
-    /// Quotient polynomial chunks opened at the out-of-domain point.
-    /// One `Vec<Challenge>` per chunk (values for each flattened-basis column at zeta).
-    pub quotient_chunks: Vec<Vec<Challenge>>,
-}
-
 /// Opened values for all instances in a multi-STARK proof.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MultiOpenedValues<Challenge> {
     /// Opened values for each instance, in the same order as provided to the prover.
-    pub instances: Vec<InstanceOpenedValues<Challenge>>,
+    pub instances: Vec<OpenedValues<Challenge>>,
 }
