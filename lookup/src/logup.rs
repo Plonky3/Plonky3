@@ -230,9 +230,8 @@ impl<F: Field> LookupGadget<F> for LogUpGadget<F> {
     where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
     {
-        match context.kind {
-            Kind::Global(_) => panic!("Global lookups are not supported in local evaluation"),
-            _ => {}
+        if let Kind::Global(_) = context.kind {
+            panic!("Global lookups are not supported in local evaluation")
         }
 
         self.eval_update(builder, context, AB::ExprEF::ZERO);
@@ -245,7 +244,7 @@ impl<F: Field> LookupGadget<F> for LogUpGadget<F> {
     /// ```
     ///
     /// This is implemented using a running sum column that should sum to `expected_cumulated`.
-    fn eval_global_update<AB: PermutationAirBuilder>(
+    fn eval_global_update<AB>(
         &self,
         builder: &mut AB,
         context: Lookup<AB::F>,

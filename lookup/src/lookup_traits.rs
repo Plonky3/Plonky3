@@ -193,17 +193,17 @@ where
 {
     /// Register a lookup to be used in this AIR.
     /// This method can be used before proving or verifying, as the resulting data is shared between the prover and the verifier.
-    fn register_lookup<'a>(
+    fn register_lookup(
         &mut self,
         kind: Kind,
-        lookup_inputs: &'a [LookupInput<AB::F>],
+        lookup_inputs: &[LookupInput<AB::F>],
     ) -> Lookup<AB::F> {
         let (elements, muls): (Vec<_>, Vec<_>) = lookup_inputs
             .iter()
             .map(|(elems, mult, dir)| {
                 let multiplicity = match dir {
-                    Direction::Send => mult.clone(),
-                    Direction::Receive => -mult.clone(),
+                    Direction::Send => -mult.clone(),
+                    Direction::Receive => mult.clone(),
                 };
                 (elems.clone(), multiplicity)
             })
