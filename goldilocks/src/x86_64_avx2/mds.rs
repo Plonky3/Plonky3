@@ -1,32 +1,7 @@
 //! AVX2-optimized MDS matrix implementations for Goldilocks field.
 //!
-//! This module provides vectorized implementations of MDS (Maximum Distance Separable) matrix
-//! operations using AVX2 SIMD instructions. These implementations offer significant performance
-//! improvements over scalar implementations for supported matrix sizes.
-//!
-//! # Requirements
-//!
-//! - x86_64 architecture
-//! - AVX2 instruction set support
-//! - CPU must not support AVX512F (AVX512 implementation takes precedence)
-//!
-//! # Supported Sizes
-//!
-//! - 8x8 matrices (from Plonky2)
-//! - 12x12 matrices (from Plonky2)
-//! - 16x16 matrices (from Angus Gruen and Hamish Ivey-Law)
-//! - 24x24 matrices (from Ulrich Haböck's database)
-//!
-//! # Performance
-//!
-//! These implementations use packed field arithmetic with 4-way SIMD parallelism,
-//! providing approximately 4x speedup over scalar implementations for supported operations.
-//!
-//! # Implementation Details
-//!
-//! The AVX2 implementations use `PackedGoldilocksAVX2` which packs 4 field elements
-//! into a single 256-bit vector register. Matrix operations are performed using
-//! circulant matrix multiplication optimized for vectorized arithmetic.
+//! Provides vectorized MDS operations using AVX2 SIMD instructions for 8x8, 12x12, 16x16, and 24x24 matrices.
+//! Uses 4-way SIMD parallelism for improved performance.
 
 use p3_mds::MdsPermutation;
 use p3_mds::util::apply_circulant;
