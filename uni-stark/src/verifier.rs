@@ -202,7 +202,9 @@ where
     //
     // Soundness Error: dN/|EF| where `N` is the trace length and our constraint polynomial has degree `d`.
     let zeta = challenger.sample_algebra_element();
-    let zeta_next = init_trace_domain.next_point(zeta).unwrap();
+    let zeta_next = init_trace_domain
+        .next_point(zeta)
+        .ok_or(VerificationError::NextPointUnavailable)?;
 
     // We've already checked that commitments.random and opened_values.random are present if and only if ZK is enabled.
     let mut coms_to_verify = if let Some(random_commit) = &commitments.random {
@@ -276,12 +278,6 @@ pub enum VerificationError<PcsErr> {
     },
     /// The FRI batch randomization does not correspond to the ZK setting.
     RandomizationError,
-    /// The OOD point zeta fell into a base domain, which is a completeness edge case.
-    OodPointInDomain,
-    /// The log degree is too large for the field's two-adicity.
-    InvalidLogDegree {
-        index: usize,
-        log_degree: usize,
-        log_quotient_degree: usize,
-    },
+    /// The domain does not support computing the next point algebraically.
+    NextPointUnavailable,
 }

@@ -242,7 +242,9 @@ where
     // by zero errors. This doesn't lead to a soundness issue as the verifier will just reject in those
     // cases but it is a completeness issue and contributes a completeness error of |gK| = 2N/|EF|.
     let zeta: SC::Challenge = challenger.sample_algebra_element();
-    let zeta_next = trace_domain.next_point(zeta).unwrap();
+    let zeta_next = trace_domain
+        .next_point(zeta)
+        .expect("domain should support next_point operation");
 
     let is_random = opt_r_data.is_some();
     let (opened_values, opening_proof) = info_span!("open").in_scope(|| {

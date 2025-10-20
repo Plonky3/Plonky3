@@ -1,20 +1,26 @@
 use core::borrow::Borrow;
 use core::fmt::Debug;
+use core::marker::PhantomData;
 use core::slice::from_ref;
 
 use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_challenger::DuplexChallenger;
+use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
+use p3_circle::CirclePcs;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
-use p3_fri::{TwoAdicFriPcs, create_test_fri_params};
+use p3_fri::{FriParameters, TwoAdicFriPcs, create_test_fri_params};
+use p3_keccak::Keccak256Hash;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
+use p3_mersenne_31::Mersenne31;
 use p3_multi_stark::{StarkInstance, prove_multi, verify_multi};
-use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+use p3_symmetric::{
+    CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
+};
 use p3_uni_stark::StarkConfig;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -371,7 +377,7 @@ fn test_quotient_size_not_multiple_of_width() -> Result<(), impl Debug> {
 }
 
 #[test]
-fn test_invalid_trace_width_rejected() -> Result<(), Box<dyn std::error::Error>> {
+fn test_invalid_trace_width_rejected() {
     // This test verifies that the verifier rejects proofs with incorrect trace width.
     use p3_multi_stark::proof::{MultiCommitments, MultiOpenedValues};
     use p3_uni_stark::OpenedValues;
@@ -427,6 +433,78 @@ fn test_invalid_trace_width_rejected() -> Result<(), Box<dyn std::error::Error>>
         res.is_err(),
         "Verifier should reject trace_next with wrong width"
     );
+}
 
-    Ok::<_, Box<dyn std::error::Error>>(())
+#[test]
+fn test_circle_stark_multi() -> Result<(), impl Debug> {
+    // Test multi-stark with Circle PCS (non-two-adic field)
+    type Val = Mersenne31;
+    type Challenge = BinomialExtensionField<Val, 3>;
+
+    type ByteHash = Keccak256Hash;
+    type FieldHash = SerializingHasher<ByteHash>;
+    let byte_hash = ByteHash {};
+    let field_hash = FieldHash::new(byte_hash);
+
+    type MyCompress = CompressionFunctionFromHasher<ByteHash, 2, 32>;
+    let compress = MyCompress::new(byte_hash);
+
+    type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
+    let val_mmcs = ValMmcs::new(field_hash, compress);
+
+    type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+
+    type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
+
+    let fri_params = FriParameters {
+        log_blowup: 1,
+        log_final_poly_len: 0,
+        num_queries: 40,
+        proof_of_work_bits: 8,
+        mmcs: challenge_mmcs,
+    };
+
+    type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
+    let pcs = Pcs {
+        mmcs: val_mmcs,
+        fri_params,
+        _phantom: PhantomData,
+    };
+    let challenger = Challenger::from_hasher(vec![], byte_hash);
+
+    type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
+    let config = MyConfig::new(pcs, challenger);
+
+    // Create two Fibonacci instances with different sizes
+    let air_fib1 = FibonacciAir;
+    let air_fib2 = FibonacciAir;
+
+    let fib_pis1 = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(8))]; // F_8 = 21
+    let fib_pis2 = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(4))]; // F_4 = 3
+
+    let trace1 = fib_trace::<Val>(0, 1, 8);
+    let trace2 = fib_trace::<Val>(0, 1, 4);
+
+    let instances = vec![
+        StarkInstance {
+            air: &air_fib1,
+            trace: trace1,
+            public_values: fib_pis1.clone(),
+        },
+        StarkInstance {
+            air: &air_fib2,
+            trace: trace2,
+            public_values: fib_pis2.clone(),
+        },
+    ];
+
+    // Generate multi-proof
+    let proof = prove_multi(&config, instances);
+
+    // Verify multi-proof
+    let airs = vec![air_fib1, air_fib2];
+    let public_values = vec![fib_pis1, fib_pis2];
+    verify_multi(&config, &airs, &proof, &public_values)
+        .map_err(|e| format!("Verification failed: {:?}", e))
 }

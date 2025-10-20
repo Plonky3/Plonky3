@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use p3_air::Air;
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{BasedVectorSpace, PrimeCharacteristicRing, TwoAdicField};
+use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 use p3_uni_stark::{
     SymbolicAirBuilder, VerificationError, VerifierConstraintFolder, get_log_quotient_degree,
     recompose_quotient_from_chunks, verify_constraints,
@@ -28,7 +28,6 @@ pub fn verify_multi<SC, A>(
 where
     SC: MSGC,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
-    Val<SC>: TwoAdicField,
 {
     let MultiProof {
         commitments,
@@ -68,24 +67,13 @@ where
         let air_width = A::width(air);
         let inst_vals = &opened_values.instances[i];
 
-        // Validate that log_degree + log_quotient_degree doesn't exceed field's two-adicity
-        let log_degree = degree_bits[i] - config.is_zk();
-        let log_quotient_degree = log_quotient_degrees[i];
-        if log_degree.saturating_add(log_quotient_degree) > Val::<SC>::TWO_ADICITY {
-            return Err(VerificationError::InvalidLogDegree {
-                index: i,
-                log_degree,
-                log_quotient_degree,
-            });
-        }
-
         // Validate trace widths match the AIR
         if inst_vals.trace_local.len() != air_width || inst_vals.trace_next.len() != air_width {
             return Err(VerificationError::InvalidProofShape);
         }
 
         // Validate quotient chunks structure
-        let expected_chunks = 1 << (log_quotient_degree + config.is_zk());
+        let expected_chunks = 1 << (log_quotient_degrees[i] + config.is_zk());
         if inst_vals.quotient_chunks.len() != expected_chunks {
             return Err(VerificationError::InvalidProofShape);
         }
@@ -147,7 +135,7 @@ where
         .map(|((ext_dom, base_dom), inst_vals)| {
             let zeta_next = base_dom
                 .next_point(zeta)
-                .ok_or(VerificationError::OodPointInDomain)?;
+                .ok_or(VerificationError::NextPointUnavailable)?;
             Ok((
                 *ext_dom,
                 vec![

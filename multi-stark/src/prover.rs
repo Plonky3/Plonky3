@@ -169,7 +169,7 @@ where
             vec![
                 zeta,
                 dom.next_point(zeta)
-                    .expect("zeta should be out-of-domain for the base trace domain"),
+                    .expect("domain should support next_point operation"),
             ]
         })
         .collect::<Vec<_>>();
