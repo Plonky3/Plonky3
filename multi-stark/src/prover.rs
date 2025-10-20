@@ -111,6 +111,7 @@ where
     // Track ranges so we can map openings back to instances.
     let mut quotient_chunk_ranges: Vec<(usize, usize)> = Vec::with_capacity(n_instances);
 
+    // TODO: Parallelize this loop for better performance with multiple instances.
     for (i, (&_log_deg, trace_domain)) in log_degrees.iter().zip(trace_domains.iter()).enumerate() {
         let log_quot_deg = log_quotient_degrees[i];
         // Disjoint domain sized by extended degree + quotient degree; use ext domain for shift.

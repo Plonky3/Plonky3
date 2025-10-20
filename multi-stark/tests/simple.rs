@@ -354,12 +354,8 @@ fn test_different_widths() -> Result<(), impl Debug> {
 }
 
 #[test]
-fn test_quotient_size_not_multiple_of_width() -> Result<(), impl Debug> {
-    // This test exercises the padding fix for the case where quotient_size % WIDTH != 0.
-    // We use a moderately sized trace that, when combined with quotient degree,
-    // may produce quotient domains not evenly divisible by the packed WIDTH (typically 16 for BabyBear).
-    // The key is ensuring the parallel loop in quotient_values doesn't panic on out-of-bounds
-    // access when slicing the selector vectors.
+fn test_single_instance() -> Result<(), impl Debug> {
+    // Single-instance sanity test: prove and verify a single Fibonacci instance.
     let config = make_config(9999);
 
     let (air_fib, fib_trace, fib_pis) = create_fib_instance(5); // 32 rows
@@ -370,8 +366,6 @@ fn test_quotient_size_not_multiple_of_width() -> Result<(), impl Debug> {
         public_values: fib_pis.clone(),
     }];
 
-    // This should not panic due to out-of-bounds access in the packed slicing
-    // (the bug would have caused a panic when quotient_size % WIDTH != 0)
     let proof = prove_multi(&config, instances);
     verify_multi(&config, &[air_fib], &proof, &[fib_pis])
 }
