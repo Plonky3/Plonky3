@@ -21,7 +21,7 @@ pub struct MultiProof<SC: MultiStarkGenericConfig> {
 }
 
 /// Commitments for a multi-STARK proof.
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct MultiCommitments<Com> {
     /// Commitment to all main trace matrices (one per instance).
     pub main: Com,
@@ -30,7 +30,7 @@ pub struct MultiCommitments<Com> {
 }
 
 /// Opened values for all instances in a multi-STARK proof.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct MultiOpenedValues<Challenge> {
     /// Opened values for each instance, in the same order as provided to the prover.
     pub instances: Vec<OpenedValues<Challenge>>,

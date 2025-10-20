@@ -28,6 +28,7 @@ pub fn verify_multi<SC, A>(
 where
     SC: MSGC,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
+    Challenge<SC>: BasedVectorSpace<Val<SC>>,
 {
     let MultiProof {
         commitments,
@@ -130,10 +131,9 @@ where
         .collect::<Vec<_>>();
     let trace_round: Vec<_> = ext_trace_domains
         .iter()
-        .zip(trace_domains.iter())
         .zip(opened_values.instances.iter())
-        .map(|((ext_dom, base_dom), inst_vals)| {
-            let zeta_next = base_dom
+        .map(|(ext_dom, inst_vals)| {
+            let zeta_next = ext_dom
                 .next_point(zeta)
                 .ok_or(VerificationError::NextPointUnavailable)?;
             Ok((

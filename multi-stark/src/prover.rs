@@ -164,7 +164,7 @@ where
     let zeta: Challenge<SC> = challenger.sample_algebra_element();
 
     // Build opening rounds.
-    let round1_points = trace_domains
+    let round1_points = ext_trace_domains
         .iter()
         .map(|dom| {
             vec![
@@ -184,7 +184,11 @@ where
     let rounds = vec![round1, round2];
 
     let (opened_values, opening_proof) = pcs.open(rounds, &mut challenger);
-    debug_assert_eq!(opened_values.len(), 2, "expected [main, quotient] groups");
+    assert_eq!(
+        opened_values.len(),
+        2,
+        "expected [main, quotient] opening groups from PCS"
+    );
     // Rely on open order: [main, quotient] since ZK is disabled.
     let trace_idx = 0usize;
     let quotient_idx = 1usize;
