@@ -430,6 +430,59 @@ fn test_invalid_trace_width_rejected() {
 }
 
 #[test]
+fn test_reorder_instances_rejected() {
+    // Reordering AIRs at verify should break transcript binding and be rejected.
+    let config = make_config(123);
+
+    let (air_a, tr_a, pv_a) = create_fib_instance(4);
+    let (air_b, tr_b, pv_b) = create_mul_instance(4, 2, 1);
+
+    let instances = vec![
+        StarkInstance {
+            air: &air_a,
+            trace: tr_a,
+            public_values: pv_a.clone(),
+        },
+        StarkInstance {
+            air: &air_b,
+            trace: tr_b,
+            public_values: pv_b.clone(),
+        },
+    ];
+
+    let proof = prove_multi(&config, instances);
+
+    // Swap order at verify -> should fail
+    let res = verify_multi(&config, &[air_b, air_a], &proof, &[pv_b, pv_a]);
+    assert!(res.is_err(), "Verifier should reject reordered instances");
+}
+
+#[test]
+fn test_quotient_chunk_element_len_rejected() {
+    // Truncating an element from a quotient chunk should be rejected by shape checks.
+    use core::slice::from_ref;
+
+    let config = make_config(321);
+    let (air, tr, pv) = create_fib_instance(4);
+
+    let instances = vec![StarkInstance {
+        air: &air,
+        trace: tr,
+        public_values: pv.clone(),
+    }];
+    let proof = prove_multi(&config, instances);
+
+    let mut tampered = proof;
+    tampered.opened_values.instances[0].quotient_chunks[0].pop();
+
+    let res = verify_multi(&config, &[air], &tampered, from_ref(&pv));
+    assert!(
+        res.is_err(),
+        "Verifier should reject truncated quotient chunk element"
+    );
+}
+
+#[test]
 fn test_circle_stark_multi() -> Result<(), impl Debug> {
     // Test multi-stark with Circle PCS (non-two-adic field)
     type Val = Mersenne31;
