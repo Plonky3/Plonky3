@@ -19,13 +19,12 @@
 
 use alloc::vec;
 use alloc::vec::Vec;
-use core::marker::PhantomData;
 
 use p3_air::{AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder, PermutationAirBuilder};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 
-use crate::lookup_traits::{Kind, Lookup, LookupGadget, symbolic_to_expr};
+use crate::lookup_traits::{Kind, Lookup, LookupError, LookupGadget, symbolic_to_expr};
 
 /// Core LogUp gadget implementing lookup arguments via logarithmic derivatives.
 ///
@@ -52,11 +51,9 @@ use crate::lookup_traits::{Kind, Lookup, LookupGadget, symbolic_to_expr};
 /// - **Transition Constraint**: `s[i+1] = s[i] + contribution[i]`
 /// - **Final Constraint**: `s[n-1] + contribution[n-1] = 0`
 #[derive(Debug, Clone, Default)]
-pub struct LogUpGadget<F> {
-    _phantom: PhantomData<F>,
-}
+pub struct LogUpGadget {}
 
-impl<F: Field> LogUpGadget<F> {
+impl LogUpGadget {
     pub(crate) fn compute_combined_sum_terms<AB, E, M>(
         &self,
         elements: &[Vec<E>],
@@ -203,14 +200,12 @@ impl<F: Field> LogUpGadget<F> {
             (s_next - s_local.clone()) * common_denominator.clone() - numerator.clone(),
         );
 
-        let final_val = s_local * common_denominator + numerator;
-        builder
-            .when_last_row()
-            .assert_zero_ext(final_val - expected_cumulated);
+        let final_val = (expected_cumulated.clone() - s_local) * common_denominator - numerator;
+        builder.when_last_row().assert_zero_ext(final_val);
     }
 }
 
-impl<F: Field> LookupGadget<F> for LogUpGadget<F> {
+impl LookupGadget for LogUpGadget {
     fn num_aux_cols(&self) -> usize {
         1
     }
@@ -255,16 +250,19 @@ impl<F: Field> LookupGadget<F> for LogUpGadget<F> {
         self.eval_update(builder, context, expected_cumulated);
     }
 
-    fn eval_global_final_value<AB: PermutationAirBuilder>(
+    fn verify_global_final_value<EF: Field>(
         &self,
-        builder: &mut AB,
-        all_expected_cumulative: &[AB::ExprEF],
-    ) {
+        all_expected_cumulative: &[EF],
+    ) -> Result<(), LookupError> {
         let total = all_expected_cumulative
             .iter()
-            .fold(AB::ExprEF::ZERO, |acc, x| acc + x.clone());
+            .fold(EF::ZERO, |acc, x| acc + *x);
 
-        builder.assert_zero_ext(total);
+        if total != EF::ZERO {
+            return Err(LookupError::GlobalCumulativeMismatch);
+        }
+
+        Ok(())
     }
 
     /// We need to compute the degree of the transition constraint,
@@ -280,7 +278,7 @@ impl<F: Field> LookupGadget<F> for LogUpGadget<F> {
     ///
     /// The constraint degree if then:
     /// `1 + max(deg(numerator), deg(common_denominator))`
-    fn constraint_degree(&self, context: Lookup<F>) -> usize {
+    fn constraint_degree<F: Field>(&self, context: Lookup<F>) -> usize {
         assert!(context.multiplicities_exprs.len() == context.element_exprs.len());
 
         let n = context.multiplicities_exprs.len();
@@ -312,11 +310,9 @@ impl<F: Field> LookupGadget<F> for LogUpGadget<F> {
     }
 }
 
-impl<F: Field> LogUpGadget<F> {
+impl LogUpGadget {
     /// Creates a new LogUp gadget instance.
     pub const fn new() -> Self {
-        Self {
-            _phantom: PhantomData,
-        }
+        Self {}
     }
 }

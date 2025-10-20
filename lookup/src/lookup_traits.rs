@@ -7,8 +7,13 @@ use p3_field::Field;
 use p3_matrix::Matrix;
 use p3_uni_stark::{Entry, SymbolicExpression};
 
+#[derive(Debug)]
+pub enum LookupError {
+    GlobalCumulativeMismatch,
+}
+
 /// A trait for lookup argument.
-pub trait LookupGadget<F: Field> {
+pub trait LookupGadget {
     /// Returns the number of auxiliary columns needed by this lookup protocol.
     ///
     /// For example:
@@ -52,16 +57,13 @@ pub trait LookupGadget<F: Field> {
     /// For example, in LogUp:
     /// - it sums all expected cumulated values provided by each AIR within one interaction,
     /// - checks that the sum is equal to 0.
-    fn eval_global_final_value<
-        AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
-    >(
+    fn verify_global_final_value<EF: Field>(
         &self,
-        builder: &mut AB,
-        all_expected_cumulated: &[AB::ExprEF],
-    );
+        all_expected_cumulated: &[EF],
+    ) -> Result<(), LookupError>;
 
     /// Computes the polynomial degree of a lookup transition constraint.
-    fn constraint_degree(&self, context: Lookup<F>) -> usize;
+    fn constraint_degree<F: Field>(&self, context: Lookup<F>) -> usize;
 }
 
 // TODO: Add unit test.
@@ -174,6 +176,7 @@ impl<F: Field> Lookup<F> {
     }
 }
 
+#[derive(Clone, Copy)]
 pub enum Direction {
     Send,
     Receive,
