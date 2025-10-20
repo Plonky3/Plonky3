@@ -44,7 +44,7 @@ use crate::lookup_traits::{Kind, Lookup, LookupError, LookupGadget, symbolic_to_
 /// ```
 ///
 /// Note that we do not differentiate between `a` and `b` in the implementation:
-/// we simply have a list of elements with possibly negative multiplicities.
+/// we simply have a list of `elements` with possibly negative `multiplicities`.
 ///
 /// Constraints are defined as:
 /// - **Initial Constraint**: `s[0] = 0`
@@ -119,12 +119,12 @@ impl LogUpGadget {
         &self,
         builder: &mut AB,
         context: Lookup<AB::F>,
-        expected_cumulated: AB::ExprEF,
+        opt_expected_cumulated: Option<AB::ExprEF>,
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
     {
         let Lookup {
-            kind: _,
+            kind,
             element_exprs,
             multiplicities_exprs,
             columns,
@@ -141,7 +141,7 @@ impl LogUpGadget {
         );
         let column = columns[0];
 
-        // First, turn the symbolic expressions into builder expressions.
+        // First, turn the symbolic expressions into builder expressions, for elements and multiplicities.
         let elements = element_exprs
             .iter()
             .map(|exprs| {
@@ -157,7 +157,7 @@ impl LogUpGadget {
             .map(|expr| symbolic_to_expr(builder, expr.clone().into()))
             .collect::<Vec<_>>();
 
-        // Access the permutation (aux) table. It carries the running sum column s.
+        // Access the permutation (aux) table. It carries the running sum column `s`.
         let permutation = builder.permutation();
 
         let permutation_challenges = builder.permutation_randomness();
@@ -180,11 +180,11 @@ impl LogUpGadget {
         // Read s[i+1] from the next row (or a zero-padded view on the last row).
         let s_next = permutation.row_slice(1).unwrap()[column].into();
 
-        // Anchor s[0] = 0 (not ∑ m_A/(α−a) − ∑ m_B/(α−b)).
+        // Anchor s[0] = 0 at the start.
         //
         // Avoids a high-degree boundary constraint.
-        // Telescoping is enforced by the last-row check (s[n−1] = 0).
-        // Simpler, and keeps aux and main traces aligned in length.
+        // Telescoping is enforced by the last-row check (s[n−1] + contribution[n-1] = 0).
+        // This keeps aux and main traces aligned in length.
         builder.when_first_row().assert_zero_ext(s_local.clone());
 
         // Build A's fraction:  ∑ m_A/(α - a)  =  a_num / a_den .
@@ -196,12 +196,36 @@ impl LogUpGadget {
                 &beta.into(),
             );
 
-        builder.when_transition().assert_zero_ext(
-            (s_next - s_local.clone()) * common_denominator.clone() - numerator.clone(),
-        );
+        if let Some(expected_cumulated) = opt_expected_cumulated {
+            // If there is an `expected_cumulated`, we are in a global lookup update.
+            assert!(
+                matches!(kind, Kind::Global(_)),
+                "Expected cumulated value provided for a non-global lookup"
+            );
 
-        let final_val = (expected_cumulated.clone() - s_local) * common_denominator - numerator;
-        builder.when_last_row().assert_zero_ext(final_val);
+            // Transition constraint:
+            builder.when_transition().assert_zero_ext(
+                (s_next - s_local.clone()) * common_denominator.clone() - numerator.clone(),
+            );
+
+            // Final constraint:
+            let final_val = (expected_cumulated.clone() - s_local) * common_denominator - numerator;
+            builder.when_last_row().assert_zero_ext(final_val);
+        } else {
+            // If we don't have an `expected_cumulated`, we are in a local lookup update.
+            assert!(
+                matches!(kind, Kind::Local),
+                "No expected cumulated value provided for a global lookup"
+            );
+
+            // If we are in a local lookup, the previous transition constraint doesn't have to be limited to transition rows:
+            // - we are already ensuring that the first row is 0,
+            // - at point `g^{n - 1}` (where `n` is the domain size), the next point is `g^0`, so that the constraint still holds
+            // on the last row.
+            builder.assert_zero_ext(
+                (s_next - s_local.clone()) * common_denominator.clone() - numerator.clone(),
+            );
+        }
     }
 }
 
@@ -217,8 +241,11 @@ impl LookupGadget for LogUpGadget {
     /// # Mathematical Details
     /// The constraint enforces:
     /// ```text
-    /// ∑_i(a_multiplicities[i] / (α - a_elements[i])) = ∑_j(b_multiplicities[j] / (α - b_elements[j]))
+    /// ∑_i(multiplicities[i] / (α - combined_elements[i])) = 0
     /// ```
+    ///
+    /// where `multiplicities` can be negative, and
+    /// `combined_elements[i] = ∑elements[i][j] * β^j`.
     ///
     /// This is implemented using a running sum column that should sum to zero.
     fn eval_local_lookup<AB>(&self, builder: &mut AB, context: Lookup<AB::F>)
@@ -229,14 +256,20 @@ impl LookupGadget for LogUpGadget {
             panic!("Global lookups are not supported in local evaluation")
         }
 
-        self.eval_update(builder, context, AB::ExprEF::ZERO);
+        self.eval_update(builder, context, None);
     }
 
     /// # Mathematical Details
     /// The constraint enforces:
     /// ```text
-    /// ∑_i(a_multiplicities[i] / (α - a_elements[i])) = ∑_j(b_multiplicities[j] / (α - b_elements[j]))
+    /// ∑_i(multiplicities[i] / (α - combined_elements[i])) = `expected_cumulated`
     /// ```
+    ///
+    /// where `multiplicities` can be negative, and
+    /// `combined_elements[i] = ∑elements[i][j] * β^j`.
+    ///
+    /// `expected_cumulated` is provided by the prover, and the sum of all `expected_cumulated` for this global interaction
+    /// should be 0. The latter is checked as the final step, after all AIRS have been verified.
     ///
     /// This is implemented using a running sum column that should sum to `expected_cumulated`.
     fn eval_global_update<AB>(
@@ -247,7 +280,7 @@ impl LookupGadget for LogUpGadget {
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
     {
-        self.eval_update(builder, context, expected_cumulated);
+        self.eval_update(builder, context, Some(expected_cumulated));
     }
 
     fn verify_global_final_value<EF: Field>(
@@ -276,7 +309,7 @@ impl LookupGadget for LogUpGadget {
     /// `numerator = ∑(m_i * ∏_{j≠i}(α - e_j))`, where the e_j are the combined elements.
     /// So we have to compute the max of all m_i * ∏_{j≠i}(α - e_j).
     ///
-    /// The constraint degree if then:
+    /// The constraint degree is then:
     /// `1 + max(deg(numerator), deg(common_denominator))`
     fn constraint_degree<F: Field>(&self, context: Lookup<F>) -> usize {
         assert!(context.multiplicities_exprs.len() == context.element_exprs.len());

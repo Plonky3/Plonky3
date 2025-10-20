@@ -1474,5 +1474,3 @@ fn test_global_lookup() {
         .verify_global_final_value(&[s_global_final1, s_global_final2])
         .expect("Global lookups final values should sum to 0.");
 }
-// TODO: Add tests for:
-// - global lookups (need a more complex AIR setup)
