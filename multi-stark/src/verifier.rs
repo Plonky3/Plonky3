@@ -9,12 +9,12 @@ use p3_uni_stark::{
     SymbolicAirBuilder, VerificationError, VerifierConstraintFolder, get_log_quotient_degree,
     recompose_quotient_from_chunks, verify_constraints,
 };
-use p3_util::log2_strict_usize;
 use p3_util::zip_eq::zip_eq;
 use tracing::instrument;
 
 use crate::config::{
-    Challenge, Domain, MultiStarkGenericConfig as MSGC, PcsError, Val, observe_base_as_ext,
+    Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val, observe_base_as_ext,
+    observe_instance_binding,
 };
 use crate::proof::MultiProof;
 
@@ -26,7 +26,7 @@ pub fn verify_multi<SC, A>(
     public_values: &[Vec<Val<SC>>],
 ) -> Result<(), VerificationError<PcsError<SC>>>
 where
-    SC: MSGC,
+    SC: SGC,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
     Challenge<SC>: BasedVectorSpace<Val<SC>>,
 {
@@ -45,6 +45,11 @@ where
         panic!("p3-multi-stark: ZK mode is not supported yet");
     }
 
+    // ZK mode is not supported yet
+    if config.is_zk() != 0 {
+        panic!("p3-multi-stark: ZK mode is not supported yet");
+    }
+
     // Sanity checks
     if airs.len() != opened_values.instances.len()
         || airs.len() != public_values.len()
@@ -57,55 +62,52 @@ where
     let n_instances = airs.len();
     observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(n_instances));
 
-    // Validate opened values shape per instance (critical soundness check)
-    let log_quotient_degrees: Vec<usize> = airs
+    // Validate opened values shape per instance and observe per-instance binding data.
+    // Precompute per-instance log_quotient_degrees and quotient_degrees in one pass.
+    let (log_quotient_degrees, quotient_degrees): (Vec<usize>, Vec<usize>) = airs
         .iter()
         .zip(public_values.iter())
-        .map(|(air, pv)| get_log_quotient_degree::<Val<SC>, A>(air, 0, pv.len(), config.is_zk()))
-        .collect();
+        .map(|(air, pv)| {
+            let lqd = get_log_quotient_degree::<Val<SC>, A>(air, 0, pv.len(), config.is_zk());
+            let qd = 1 << (lqd + config.is_zk());
+            (lqd, qd)
+        })
+        .unzip();
 
     for (i, air) in airs.iter().enumerate() {
         let air_width = A::width(air);
-        let inst_vals = &opened_values.instances[i];
+        let inst_opened_vals = &opened_values.instances[i];
 
         // Validate trace widths match the AIR
-        if inst_vals.trace_local.len() != air_width || inst_vals.trace_next.len() != air_width {
+        if inst_opened_vals.trace_local.len() != air_width
+            || inst_opened_vals.trace_next.len() != air_width
+        {
             return Err(VerificationError::InvalidProofShape);
         }
 
         // Validate quotient chunks structure
-        let expected_chunks = 1 << (log_quotient_degrees[i] + config.is_zk());
-        if inst_vals.quotient_chunks.len() != expected_chunks {
+        let quotient_degree = quotient_degrees[i];
+        if inst_opened_vals.quotient_chunks.len() != quotient_degree {
             return Err(VerificationError::InvalidProofShape);
         }
 
-        for chunk in &inst_vals.quotient_chunks {
+        for chunk in &inst_opened_vals.quotient_chunks {
             if chunk.len() != Challenge::<SC>::DIMENSION {
                 return Err(VerificationError::InvalidProofShape);
             }
         }
-    }
 
-    // Observe per-instance binding data: (log_ext_degree, log_degree), width, num public values, num quotient chunks.
-    for (i, air) in airs.iter().enumerate() {
+        // Observe per-instance binding data: (log_ext_degree, log_degree), width, num quotient chunks.
         let ext_db = degree_bits[i];
         let base_db = ext_db - config.is_zk();
-        observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(ext_db));
-        observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(base_db));
         let width = A::width(air);
-        observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(width));
-        let pv_len = public_values[i].len();
-        observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(pv_len));
-        let num_chunks = 1 << (log_quotient_degrees[i] + config.is_zk());
-        observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(num_chunks));
+        observe_instance_binding::<SC>(&mut challenger, ext_db, base_db, width, quotient_degree);
     }
 
     // Observe main commitment and public values (in instance order).
     challenger.observe(commitments.main.clone());
     for pv in public_values {
-        for &val in pv {
-            observe_base_as_ext::<SC>(&mut challenger, val);
-        }
+        challenger.observe_slice(pv);
     }
 
     // Sample alpha for constraint folding
@@ -121,26 +123,28 @@ where
     let mut coms_to_verify = vec![];
 
     // Trace round: per instance, open at zeta and zeta_next
-    let trace_domains = degree_bits
+    let (trace_domains, ext_trace_domains): (Vec<Domain<SC>>, Vec<Domain<SC>>) = degree_bits
         .iter()
-        .map(|&ext_db| pcs.natural_domain_for_degree(1 << (ext_db - config.is_zk())))
-        .collect::<Vec<_>>();
-    let ext_trace_domains = degree_bits
-        .iter()
-        .map(|&ext_db| pcs.natural_domain_for_degree(1 << ext_db))
-        .collect::<Vec<_>>();
+        .map(|&ext_db| {
+            let base_db = ext_db - config.is_zk();
+            (
+                pcs.natural_domain_for_degree(1 << base_db),
+                pcs.natural_domain_for_degree(1 << ext_db),
+            )
+        })
+        .unzip();
     let trace_round: Vec<_> = ext_trace_domains
         .iter()
         .zip(opened_values.instances.iter())
-        .map(|(ext_dom, inst_vals)| {
+        .map(|(ext_dom, inst_opened_vals)| {
             let zeta_next = ext_dom
                 .next_point(zeta)
                 .ok_or(VerificationError::NextPointUnavailable)?;
             Ok((
                 *ext_dom,
                 vec![
-                    (zeta, inst_vals.trace_local.clone()),
-                    (zeta_next, inst_vals.trace_next.clone()),
+                    (zeta, inst_opened_vals.trace_local.clone()),
+                    (zeta_next, inst_opened_vals.trace_next.clone()),
                 ],
             ))
         })
@@ -149,15 +153,15 @@ where
 
     // Quotient chunks round: flatten per-instance chunks to match commit order.
     // Use extended domains for the outer commit domain, with size 2^(base_db + lqd + zk), and split into 2^(lqd+zk) chunks.
-    let quotient_domains: Vec<Vec<Domain<SC>>> = ext_trace_domains
-        .iter()
-        .zip(trace_domains.iter())
-        .zip(log_quotient_degrees.iter())
-        .map(|((ext_dom, base_dom), &lqd)| {
-            let base_db = log2_strict_usize(base_dom.size());
+    let quotient_domains: Vec<Vec<Domain<SC>>> = (0..degree_bits.len())
+        .map(|i| {
+            let ext_db = degree_bits[i];
+            let base_db = ext_db - config.is_zk();
+            let lqd = log_quotient_degrees[i];
+            let quotient_degree = quotient_degrees[i];
+            let ext_dom = ext_trace_domains[i];
             let qdom = ext_dom.create_disjoint_domain(1 << (base_db + lqd + config.is_zk()));
-            let num_chunks = 1 << (lqd + config.is_zk());
-            qdom.split_domains(num_chunks)
+            qdom.split_domains(quotient_degree)
         })
         .collect();
 
@@ -185,25 +189,17 @@ where
     // Now check constraint equality per instance.
     // For each instance, recombine quotient from chunks at zeta and compare to folded constraints.
     for (i, air) in airs.iter().enumerate() {
-        let lqd = log_quotient_degrees[i];
-        let qdeg = 1 << (lqd + config.is_zk());
-
-        // Build per-chunk Lagrange scaling factors at zeta, exactly like uni-stark.
-        let ext_db = degree_bits[i];
-        let base_db = ext_db - config.is_zk();
-        let ext_dom = pcs.natural_domain_for_degree(1 << ext_db);
-        let qdom = ext_dom.create_disjoint_domain(1 << (base_db + lqd + config.is_zk()));
-        let qc_domains = qdom.split_domains(qdeg);
+        let qc_domains = &quotient_domains[i];
 
         // Recompose quotient(zeta) from chunks using utility function.
         let quotient = recompose_quotient_from_chunks::<SC>(
-            &qc_domains,
+            qc_domains,
             &opened_values.instances[i].quotient_chunks,
             zeta,
         );
 
         // Verify constraints at zeta using utility function.
-        let init_trace_domain = pcs.natural_domain_for_degree(1 << base_db);
+        let init_trace_domain = trace_domains[i];
         verify_constraints::<SC, A, PcsError<SC>>(
             air,
             &opened_values.instances[i].trace_local,

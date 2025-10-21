@@ -3,12 +3,12 @@ use alloc::vec::Vec;
 use p3_uni_stark::OpenedValues;
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Challenge, Commitment, MultiStarkGenericConfig, PcsProof};
+use crate::config::{Challenge, Commitment, PcsProof, StarkGenericConfig};
 
 /// A proof of multiple STARK instances.
 #[derive(Serialize, Deserialize)]
 #[serde(bound = "")]
-pub struct MultiProof<SC: MultiStarkGenericConfig> {
+pub struct MultiProof<SC: StarkGenericConfig> {
     /// Commitments to all trace and quotient polynomials.
     pub commitments: MultiCommitments<Commitment<SC>>,
     /// Opened values at the out-of-domain point for all instances.

@@ -1,42 +1,11 @@
-//! Configuration types for multi-STARK proofs.
-//!
-//! This module re-uses `p3_uni_stark::StarkGenericConfig` as the underlying config trait
-//! and provides convenient type aliases for common associated types.
+//! Configuration utilities for multi-STARK proofs.
 
 use p3_challenger::FieldChallenger;
-use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{ExtensionField, Field};
-pub use p3_uni_stark::StarkGenericConfig;
-
-/// Marker trait for multi-STARK configurations.
-/// This is semantically equivalent to `StarkGenericConfig` but provides clarity
-/// when used as a bound in multi-STARK functions.
-pub trait MultiStarkGenericConfig: StarkGenericConfig {}
-
-/// Blanket implementation: any `StarkGenericConfig` is a `MultiStarkGenericConfig`.
-impl<T: StarkGenericConfig> MultiStarkGenericConfig for T {}
-
-/// The PCS error type for a STARK configuration.
-pub type PcsError<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
-    <SC as StarkGenericConfig>::Challenge,
-    <SC as StarkGenericConfig>::Challenger,
->>::Error;
-
-/// The domain type for a STARK configuration.
-pub type Domain<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
-    <SC as StarkGenericConfig>::Challenge,
-    <SC as StarkGenericConfig>::Challenger,
->>::Domain;
-
-/// The base field value type.
-pub type Val<SC> = <Domain<SC> as PolynomialSpace>::Val;
-
-/// The packed base field value type.
-pub type PackedVal<SC> = <Val<SC> as Field>::Packing;
-
-/// The packed challenge (extension field) type.
-pub type PackedChallenge<SC> =
-    <<SC as StarkGenericConfig>::Challenge as ExtensionField<Val<SC>>>::ExtensionPacking;
+use p3_commit::Pcs;
+use p3_field::{ExtensionField, PrimeCharacteristicRing};
+pub use p3_uni_stark::StarkGenericConfig as SGC;
+// Re-export the canonical config and common aliases from uni-stark to avoid duplication.
+pub use p3_uni_stark::{Domain, PackedChallenge, PackedVal, PcsError, StarkGenericConfig, Val};
 
 /// The challenge (extension field) type.
 pub type Challenge<SC> = <SC as StarkGenericConfig>::Challenge;
@@ -66,11 +35,25 @@ pub type PcsProof<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
 /// evaluation), having a challenger that only observes extension field elements significantly
 /// simplifies the recursive circuit implementation.
 #[inline]
-pub fn observe_base_as_ext<SC: MultiStarkGenericConfig>(
-    challenger: &mut SC::Challenger,
-    val: Val<SC>,
-) where
+pub fn observe_base_as_ext<SC: StarkGenericConfig>(challenger: &mut SC::Challenger, val: Val<SC>)
+where
     Challenge<SC>: ExtensionField<Val<SC>>,
 {
     challenger.observe_algebra_element(Challenge::<SC>::from(val));
+}
+
+#[inline]
+pub fn observe_instance_binding<SC: SGC>(
+    ch: &mut SC::Challenger,
+    log_ext_degree: usize,
+    log_degree: usize,
+    width: usize,
+    n_quotient_chunks: usize,
+) where
+    Challenge<SC>: ExtensionField<Val<SC>>,
+{
+    observe_base_as_ext::<SC>(ch, Val::<SC>::from_usize(log_ext_degree));
+    observe_base_as_ext::<SC>(ch, Val::<SC>::from_usize(log_degree));
+    observe_base_as_ext::<SC>(ch, Val::<SC>::from_usize(width));
+    observe_base_as_ext::<SC>(ch, Val::<SC>::from_usize(n_quotient_chunks));
 }
