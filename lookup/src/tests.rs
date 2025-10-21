@@ -522,11 +522,7 @@ impl LookupTraceBuilder {
                     provide.clone(),
                     *mult,
                 );
-                let global_mult = match direction {
-                    // We multiply by -1 when receiving because `compute_logup_contribution` subtracts the `provide` term.
-                    Direction::Receive => F::ONE,
-                    Direction::Send => -F::ONE,
-                };
+                let global_mult = direction.multiplicity(*mult);
 
                 global_running_sum += compute_logup_contribution(
                     self.global_challenges.unwrap(),

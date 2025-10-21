@@ -51,9 +51,17 @@ use crate::lookup_traits::{Kind, Lookup, LookupError, LookupGadget, symbolic_to_
 /// - **Transition Constraint**: `s[i+1] = s[i] + contribution[i]`
 /// - **Final Constraint**: `s[n-1] + contribution[n-1] = 0`
 #[derive(Debug, Clone, Default)]
-pub struct LogUpGadget {}
+pub struct LogUpGadget;
 
 impl LogUpGadget {
+    /// Creates a new LogUp gadget instance.
+    pub const fn new() -> Self {
+        Self {}
+    }
+
+    /// Computes the numerator and denominator of the fraction:
+    /// `∑(m_i / (α - combined_elements[i]))`, where
+    /// `combined_elements[i] = ∑elements[i][j] * β^j
     pub(crate) fn compute_combined_sum_terms<AB, E, M>(
         &self,
         elements: &[Vec<E>],
@@ -105,16 +113,23 @@ impl LogUpGadget {
         // Compute numerator: ∑(m_i * ∏_{j≠i}(α - e_j))
         //
         // The product without i is: pref[i] * suff[i+1]
-        let mut numerator = AB::ExprEF::ZERO;
-        for i in 0..n {
-            let mult_expr: AB::ExprEF = multiplicities[i].clone().into();
-            let product_without_i = pref[i].clone() * suff[i + 1].clone();
-            numerator += mult_expr * product_without_i;
-        }
+        let numerator = (0..n).fold(AB::ExprEF::ZERO, |acc, i| {
+            acc + multiplicities[i].clone().into() * pref[i].clone() * suff[i + 1].clone()
+        });
 
         (numerator, common_denominator)
     }
 
+    /// Evaluates the transition and boundary constraints for a lookup argument.
+    ///
+    /// # Arguments:
+    /// * builder - The AIR builder to construct expressions.
+    /// * context - The lookup context containing:
+    ///     * the kind of lookup (local or global),
+    ///     * elements,
+    ///     * multiplicities,
+    ///     * and auxiliary column indices.
+    /// * opt_expected_cumulated - Optional expected cumulative value for global lookups. For local lookups, this should be `None`.
     fn eval_update<AB>(
         &self,
         builder: &mut AB,
@@ -187,8 +202,8 @@ impl LogUpGadget {
         // This keeps aux and main traces aligned in length.
         builder.when_first_row().assert_zero_ext(s_local.clone());
 
-        // Build A's fraction:  ∑ m_A/(α - a)  =  a_num / a_den .
-        let (numerator, common_denominator): (AB::ExprEF, AB::ExprEF) = self
+        // Build the fraction:  ∑ m_i/(α - combined_elements[i])  =  numerator / denominator .
+        let (numerator, common_denominator) = self
             .compute_combined_sum_terms::<AB, AB::ExprEF, AB::ExprEF>(
                 &elements,
                 &multiplicities,
@@ -287,11 +302,9 @@ impl LookupGadget for LogUpGadget {
         &self,
         all_expected_cumulative: &[EF],
     ) -> Result<(), LookupError> {
-        let total = all_expected_cumulative
-            .iter()
-            .fold(EF::ZERO, |acc, x| acc + *x);
+        let total = all_expected_cumulative.iter().cloned().sum::<EF>();
 
-        if total != EF::ZERO {
+        if !total.is_zero() {
             return Err(LookupError::GlobalCumulativeMismatch);
         }
 
@@ -319,7 +332,7 @@ impl LookupGadget for LogUpGadget {
         // Compute degrees in a single pass.
         let mut degs = Vec::with_capacity(n);
         let mut deg_sum = 0;
-        for elems in context.element_exprs.iter() {
+        for elems in &context.element_exprs {
             let deg = elems
                 .iter()
                 .map(|elt| elt.degree_multiple())
@@ -339,13 +352,6 @@ impl LookupGadget for LogUpGadget {
             .max()
             .unwrap_or(0);
 
-        core::cmp::max(deg_denom_constr, deg_num)
-    }
-}
-
-impl LogUpGadget {
-    /// Creates a new LogUp gadget instance.
-    pub const fn new() -> Self {
-        Self {}
+        deg_denom_constr.max(deg_num)
     }
 }

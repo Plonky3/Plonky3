@@ -1,14 +1,17 @@
 use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::ops::Neg;
 
 use p3_air::{Air, AirBuilderWithPublicValues, PairBuilder, PermutationAirBuilder};
 use p3_field::Field;
 use p3_matrix::Matrix;
 use p3_uni_stark::{Entry, SymbolicExpression};
 
+/// Defines errors that can occur during lookup verification.
 #[derive(Debug)]
 pub enum LookupError {
+    /// Error indicating that the global cumulative sum is incorrect.
     GlobalCumulativeMismatch,
 }
 
@@ -66,19 +69,34 @@ pub trait LookupGadget {
     fn constraint_degree<F: Field>(&self, context: Lookup<F>) -> usize;
 }
 
-/// Kind of lookup: local or global.
+/// Specifies whether a lookup is local to an AIR or part of a global interaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind {
+    /// A lookup where all entries are contained within a single AIR.
     Local,
-    // The string corresponds to the interactions's name. It is used to identify all elements that are part of the same interaction.
+    /// A lookup that spans multiple AIRs, identified by a unique interaction name.
+    ///
+    /// The interaction name is used to identify all elements that are part of the same interaction.
     Global(String),
 }
 
-/// Direction of a global lookup: sending or receiving elements.
+/// Indicates the direction of data flow in a global lookup.
 #[derive(Clone, Copy)]
 pub enum Direction {
+    /// Indicates that elements are being sent (contributed) to the lookup.
     Send,
+    /// Indicates that elements are being received (removed) from the lookup.
     Receive,
+}
+
+impl Direction {
+    /// Helper method to compute the signed multiplicity based on the direction.
+    pub fn multiplicity<T: Neg<Output = T>>(&self, mult: T) -> T {
+        match self {
+            Direction::Send => -mult,
+            Direction::Receive => mult,
+        }
+    }
 }
 
 /// A type alias for a lookup input tuple. It contains:
@@ -92,7 +110,7 @@ pub type LookupInput<F> = (Vec<SymbolicExpression<F>>, SymbolicExpression<F>, Di
 pub struct Lookup<F: Field> {
     /// Type of lookup: local or global
     pub kind: Kind,
-    /// Elements being read (consumed from the table). Each `Vec<AE>` actually represents a tuple of elements that are bundled together to make one lookup.
+    /// Elements being read (consumed from the table). Each `Vec<SymbolicExpression<F>>` actually represents a tuple of elements that are bundled together to make one lookup.
     pub element_exprs: Vec<Vec<SymbolicExpression<F>>>,
     /// Multiplicities for the elements.
     pub multiplicities_exprs: Vec<SymbolicExpression<F>>,
@@ -107,7 +125,7 @@ impl<F: Field> Lookup<F> {
     /// * `elements` - Elements from the either the main execution trace or a lookup table.
     /// * `multiplicities` - How many times each `element` should appear
     /// * `column` - The column index in the permutation trace for this lookup
-    pub fn new(
+    pub const fn new(
         kind: Kind,
         element_exprs: Vec<Vec<SymbolicExpression<F>>>,
         multiplicities_exprs: Vec<SymbolicExpression<F>>,
@@ -122,6 +140,7 @@ impl<F: Field> Lookup<F> {
     }
 }
 
+/// A trait for an AIR that handles lookup arguments.
 pub trait AirLookupHandler<AB>: Air<AB>
 where
     AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
@@ -135,21 +154,18 @@ where
         kind: Kind,
         lookup_inputs: &[LookupInput<AB::F>],
     ) -> Lookup<AB::F> {
-        let (elements, muls): (Vec<_>, Vec<_>) = lookup_inputs
+        let (element_exprs, multiplicities_exprs) = lookup_inputs
             .iter()
             .map(|(elems, mult, dir)| {
-                let multiplicity = match dir {
-                    Direction::Send => -mult.clone(),
-                    Direction::Receive => mult.clone(),
-                };
+                let multiplicity = dir.multiplicity(mult.clone());
                 (elems.clone(), multiplicity)
             })
             .unzip();
 
         Lookup {
             kind,
-            element_exprs: elements,
-            multiplicities_exprs: muls,
+            element_exprs,
+            multiplicities_exprs,
             columns: self.add_lookup_columns(),
         }
     }
@@ -166,15 +182,15 @@ pub fn symbolic_to_expr<AB: PermutationAirBuilder + PairBuilder + AirBuilderWith
     builder: &mut AB,
     symbolic: Rc<SymbolicExpression<AB::F>>,
 ) -> AB::ExprEF {
-    let turn_into_expr = |values: &Vec<AB::Var>| {
+    let turn_into_expr = |values: &[AB::Var]| {
         values
             .iter()
             .map(|v| AB::Expr::from(v.clone()))
             .collect::<Vec<_>>()
     };
     let main = builder.main();
-    let local_values = &turn_into_expr(&main.row_slice(0).unwrap().to_vec());
-    let next_values = &turn_into_expr(&main.row_slice(1).unwrap().to_vec());
+    let local_values = &turn_into_expr(&main.row_slice(0).unwrap());
+    let next_values = &turn_into_expr(&main.row_slice(1).unwrap());
 
     let public_values = builder
         .public_values()
@@ -195,9 +211,6 @@ pub fn symbolic_to_expr<AB: PermutationAirBuilder + PairBuilder + AirBuilderWith
             };
 
             match v.entry {
-                Entry::Preprocessed { .. } => {
-                    unimplemented!()
-                }
                 Entry::Main { offset } => get_val(offset, v.index, local_values, next_values),
                 Entry::Public => public_values[v.index].clone(),
                 _ => unimplemented!(),
