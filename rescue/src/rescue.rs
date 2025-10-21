@@ -74,7 +74,7 @@ where
             .collect()
     }
 
-    fn get_round_constants_rescue_prime(
+    pub fn get_round_constants_rescue_prime(
         num_rounds: usize,
         capacity: usize,
         sec_level: usize,
