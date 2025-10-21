@@ -522,7 +522,7 @@ impl LookupTraceBuilder {
                     provide.clone(),
                     *mult,
                 );
-                let global_mult = direction.multiplicity(*mult);
+                let global_mult = direction.multiplicity(F::ONE);
 
                 global_running_sum += compute_logup_contribution(
                     self.global_challenges.unwrap(),
