@@ -73,8 +73,19 @@ impl<R: PrimeCharacteristicRing> Complex<R> {
         self.value.clone()
     }
 
-    // Sometimes we want to rotate over an extension that's not necessarily ComplexExtendable,
-    // but still on the circle.
+    /// Performs complex multiplication: `self * rhs`.
+    ///
+    /// This implements the standard complex multiplication formula:
+    /// `(a + bi) * (c + di) = (ac - bd) + (ad + bc)i`
+    ///
+    /// Used in Circle STARKs and FFT operations for rotating complex numbers
+    /// over extensions that may not be ComplexExtendable.
+    ///
+    /// # Arguments
+    /// * `rhs` - The complex number to multiply with
+    ///
+    /// # Returns
+    /// The result of complex multiplication as a new complex number
     #[inline]
     pub fn rotate<Ext: Algebra<R>>(&self, rhs: &Complex<Ext>) -> Complex<Ext> {
         Complex::<Ext>::new_complex(
