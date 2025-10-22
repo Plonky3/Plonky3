@@ -12,7 +12,6 @@ use p3_util::zip_eq::zip_eq;
 
 use crate::{CircleCommitPhaseProofStep, CircleFriProof};
 
-
 pub fn verify<Folding, Val, Challenge, M, Challenger>(
     folding: &Folding,
     params: &FriParameters<M>,
