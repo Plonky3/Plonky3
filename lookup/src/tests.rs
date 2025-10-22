@@ -604,9 +604,9 @@ fn test_symbolic_to_expr() {
         let last_expected_val = is_last_row * (mul - EF::from(local[0]));
 
         // Evaluate the constraints at row `i`.
-        let first_eval = symbolic_to_expr(&mut builder, Rc::new(constraints[0].clone()));
-        let transition_eval = symbolic_to_expr(&mut builder, Rc::new(constraints[1].clone()));
-        let last_eval = symbolic_to_expr(&mut builder, Rc::new(constraints[2].clone()));
+        let first_eval = symbolic_to_expr(&mut builder, &constraints[0].clone());
+        let transition_eval = symbolic_to_expr(&mut builder, &constraints[1].clone());
+        let last_eval = symbolic_to_expr(&mut builder, &constraints[2].clone());
 
         // Assert that the evaluated constraints are correct.
         assert_eq!(first_eval, first_expected_val);

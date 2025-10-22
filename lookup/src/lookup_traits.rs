@@ -1,4 +1,3 @@
-use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::ops::Neg;
@@ -180,7 +179,7 @@ where
 /// Takes a symbolic expression and converts it into an expression in the context of the provided AirBuilder.
 pub fn symbolic_to_expr<AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues>(
     builder: &mut AB,
-    symbolic: Rc<SymbolicExpression<AB::F>>,
+    symbolic: &SymbolicExpression<AB::F>,
 ) -> AB::ExprEF {
     let turn_into_expr = |values: &[AB::Var]| {
         values
@@ -198,7 +197,7 @@ pub fn symbolic_to_expr<AB: PermutationAirBuilder + PairBuilder + AirBuilderWith
         .map(|v| AB::ExprEF::from((*v).into()))
         .collect::<Vec<_>>();
 
-    match symbolic.as_ref() {
+    match symbolic {
         SymbolicExpression::Constant(c) => AB::ExprEF::from(AB::EF::from(*c)),
         SymbolicExpression::Variable(v) => {
             let get_val = |offset: usize,
@@ -217,22 +216,22 @@ pub fn symbolic_to_expr<AB: PermutationAirBuilder + PairBuilder + AirBuilderWith
             }
         }
         SymbolicExpression::Add { x, y, .. } => {
-            let x_expr = symbolic_to_expr(builder, x.clone());
-            let y_expr = symbolic_to_expr(builder, y.clone());
+            let x_expr = symbolic_to_expr(builder, x);
+            let y_expr = symbolic_to_expr(builder, y);
             x_expr + y_expr
         }
         SymbolicExpression::Mul { x, y, .. } => {
-            let x_expr = symbolic_to_expr(builder, x.clone());
-            let y_expr = symbolic_to_expr(builder, y.clone());
+            let x_expr = symbolic_to_expr(builder, x);
+            let y_expr = symbolic_to_expr(builder, y);
             x_expr * y_expr
         }
         SymbolicExpression::Sub { x, y, .. } => {
-            let x_expr = symbolic_to_expr(builder, x.clone());
-            let y_expr = symbolic_to_expr(builder, y.clone());
+            let x_expr = symbolic_to_expr(builder, x);
+            let y_expr = symbolic_to_expr(builder, y);
             x_expr - y_expr
         }
         SymbolicExpression::Neg { x, .. } => {
-            let x_expr = symbolic_to_expr(builder, x.clone());
+            let x_expr = symbolic_to_expr(builder, x);
             -x_expr
         }
         SymbolicExpression::IsFirstRow => builder.is_first_row().into(),

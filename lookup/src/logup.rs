@@ -61,7 +61,7 @@ impl LogUpGadget {
 
     /// Computes the numerator and denominator of the fraction:
     /// `∑(m_i / (α - combined_elements[i]))`, where
-    /// `combined_elements[i] = ∑elements[i][j] * β^j
+    /// `combined_elements[i] = ∑elements[i][n-j] * β^j
     pub(crate) fn compute_combined_sum_terms<AB, E, M>(
         &self,
         elements: &[Vec<E>],
@@ -162,14 +162,14 @@ impl LogUpGadget {
             .map(|exprs| {
                 exprs
                     .iter()
-                    .map(|expr| symbolic_to_expr(builder, expr.clone().into()))
+                    .map(|expr| symbolic_to_expr(builder, expr))
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
 
         let multiplicities = multiplicities_exprs
             .iter()
-            .map(|expr| symbolic_to_expr(builder, expr.clone().into()))
+            .map(|expr| symbolic_to_expr(builder, expr))
             .collect::<Vec<_>>();
 
         // Access the permutation (aux) table. It carries the running sum column `s`.
@@ -178,7 +178,7 @@ impl LogUpGadget {
         let permutation_challenges = builder.permutation_randomness();
 
         assert!(
-            permutation_challenges.len() >= self.num_challenges() * column,
+            permutation_challenges.len() >= self.num_challenges() * (column + 1),
             "Insufficient permutation challenges"
         );
 
@@ -260,7 +260,7 @@ impl LookupGadget for LogUpGadget {
     /// ```
     ///
     /// where `multiplicities` can be negative, and
-    /// `combined_elements[i] = ∑elements[i][j] * β^j`.
+    /// `combined_elements[i] = ∑elements[i][n-j] * β^j`.
     ///
     /// This is implemented using a running sum column that should sum to zero.
     fn eval_local_lookup<AB>(&self, builder: &mut AB, context: Lookup<AB::F>)
@@ -281,7 +281,7 @@ impl LookupGadget for LogUpGadget {
     /// ```
     ///
     /// where `multiplicities` can be negative, and
-    /// `combined_elements[i] = ∑elements[i][j] * β^j`.
+    /// `combined_elements[i] = ∑elements[i][n-j] * β^j`.
     ///
     /// `expected_cumulated` is provided by the prover, and the sum of all `expected_cumulated` for this global interaction
     /// should be 0. The latter is checked as the final step, after all AIRS have been verified.
