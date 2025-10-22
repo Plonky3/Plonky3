@@ -23,7 +23,7 @@ fn bench_lde(c: &mut Criterion) {
     lde_twoadic::<BabyBear, Radix2Bowers, _>(&mut g, log_n, log_w);
 }
 
-fn lde_cfft<M: Measurement>(g: &mut BenchmarkGroup<M>, log_n: usize, log_w: usize) {
+fn lde_cfft<M: Measurement>(g: &mut BenchmarkGroup<'_, M>, log_n: usize, log_w: usize) {
     type F = Mersenne31;
     let mut rng = SmallRng::seed_from_u64(1);
     let m = RowMajorMatrix::<F>::rand(&mut rng, 1 << log_n, 1 << log_w);
@@ -45,7 +45,7 @@ fn lde_cfft<M: Measurement>(g: &mut BenchmarkGroup<M>, log_n: usize, log_w: usiz
 }
 
 fn lde_twoadic<F: TwoAdicField, Dft: TwoAdicSubgroupDft<F>, M: Measurement>(
-    g: &mut BenchmarkGroup<M>,
+    g: &mut BenchmarkGroup<'_, M>,
     log_n: usize,
     log_w: usize,
 ) where

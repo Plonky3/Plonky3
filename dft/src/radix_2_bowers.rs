@@ -79,7 +79,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
 
 /// Executes the Bowers G network. This is like a DFT, except it assumes the input is in
 /// bit-reversed order.
-fn bowers_g<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
+fn bowers_g<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<'_, F>) {
     let h = mat.height();
     let log_h = log2_strict_usize(h);
 
@@ -96,7 +96,7 @@ fn bowers_g<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
 
 /// Executes the Bowers G^T network. This is like an inverse DFT, except we skip rescaling by
 /// 1/height, and the output is bit-reversed.
-fn bowers_g_t<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
+fn bowers_g_t<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<'_, F>) {
     let h = mat.height();
     let log_h = log2_strict_usize(h);
 
@@ -112,7 +112,7 @@ fn bowers_g_t<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
 }
 
 fn butterfly_layer<F: Field, B: Butterfly<F>>(
-    mat: &mut RowMajorMatrixViewMut<F>,
+    mat: &mut RowMajorMatrixViewMut<'_, F>,
     half_block_size: usize,
     twiddles: &[B],
 ) {

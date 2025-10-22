@@ -72,7 +72,7 @@ where
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         index: usize,
-        batch_opening: BatchOpeningRef<EF, Self>,
+        batch_opening: BatchOpeningRef<'_, EF, Self>,
     ) -> Result<(), Self::Error> {
         let opened_base_values: Vec<Vec<F>> = batch_opening
             .opened_values

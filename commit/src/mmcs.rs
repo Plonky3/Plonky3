@@ -147,7 +147,7 @@ pub trait Mmcs<T: Send + Sync + Clone>: Clone {
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         index: usize,
-        batch_opening: BatchOpeningRef<T, Self>,
+        batch_opening: BatchOpeningRef<'_, T, Self>,
     ) -> Result<(), Self::Error>;
 }
 

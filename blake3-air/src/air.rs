@@ -38,7 +38,7 @@ impl Blake3Air {
     fn quarter_round_function<AB: AirBuilder>(
         &self,
         builder: &mut AB,
-        trace: &QuarterRound<<AB as AirBuilder>::Var, <AB as AirBuilder>::Expr>,
+        trace: &QuarterRound<'_, <AB as AirBuilder>::Var, <AB as AirBuilder>::Expr>,
     ) {
         // We need to pack some bits together to verify the additions.
         // First we verify a' = a + b + m_{2i} mod 2^32

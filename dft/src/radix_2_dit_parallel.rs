@@ -195,7 +195,7 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
 #[instrument(level = "debug", skip_all)]
 fn coset_dft<F: TwoAdicField + Ord>(
     dft: &Radix2DitParallel<F>,
-    mat: &mut RowMajorMatrixViewMut<F>,
+    mat: &mut RowMajorMatrixViewMut<'_, F>,
     shift: F,
 ) {
     let log_h = log2_strict_usize(mat.height());
@@ -219,8 +219,8 @@ fn coset_dft<F: TwoAdicField + Ord>(
 #[instrument(level = "debug", skip_all)]
 fn coset_dft_oop<F: TwoAdicField + Ord>(
     dft: &Radix2DitParallel<F>,
-    src: &RowMajorMatrixView<F>,
-    dst_maybe: &mut RowMajorMatrixViewMut<MaybeUninit<F>>,
+    src: &RowMajorMatrixView<'_, F>,
+    dst_maybe: &mut RowMajorMatrixViewMut<'_, MaybeUninit<F>>,
     shift: F,
 ) {
     assert_eq!(src.dimensions(), dst_maybe.dimensions());
@@ -231,7 +231,7 @@ fn coset_dft_oop<F: TwoAdicField + Ord>(
         // This is an edge case where first_half_general_oop doesn't work, as it expects there to be
         // at least one layer in the network, so we just copy instead.
         let src_maybe = unsafe {
-            transmute::<&RowMajorMatrixView<F>, &RowMajorMatrixView<MaybeUninit<F>>>(src)
+            transmute::<&RowMajorMatrixView<'_, F>, &RowMajorMatrixView<'_, MaybeUninit<F>>>(src)
         };
         dst_maybe.copy_from(src_maybe);
         return;
@@ -249,7 +249,7 @@ fn coset_dft_oop<F: TwoAdicField + Ord>(
 
     // dst is now initialized.
     let dst = unsafe {
-        transmute::<&mut RowMajorMatrixViewMut<MaybeUninit<F>>, &mut RowMajorMatrixViewMut<F>>(
+        transmute::<&mut RowMajorMatrixViewMut<'_, MaybeUninit<F>>, &mut RowMajorMatrixViewMut<'_, F>>(
             dst_maybe,
         )
     };
@@ -287,7 +287,7 @@ fn first_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F])
 /// to be baked into them.
 #[instrument(level = "debug", skip_all)]
 fn first_half_general<F: Field>(
-    mat: &mut RowMajorMatrixViewMut<F>,
+    mat: &mut RowMajorMatrixViewMut<'_, F>,
     mid: usize,
     twiddles: &[Vec<F>],
 ) {
@@ -314,8 +314,8 @@ fn first_half_general<F: Field>(
 /// Undefined behavior otherwise.
 #[instrument(level = "debug", skip_all)]
 fn first_half_general_oop<F: Field>(
-    src: &RowMajorMatrixView<F>,
-    dst_maybe: &mut RowMajorMatrixViewMut<MaybeUninit<F>>,
+    src: &RowMajorMatrixView<'_, F>,
+    dst_maybe: &mut RowMajorMatrixViewMut<'_, MaybeUninit<F>>,
     mid: usize,
     twiddles: &[Vec<F>],
 ) {
@@ -337,7 +337,7 @@ fn first_half_general_oop<F: Field>(
 
             // submat is now initialized.
             let mut dst_submat = unsafe {
-                transmute::<RowMajorMatrixViewMut<MaybeUninit<F>>, RowMajorMatrixViewMut<F>>(
+                transmute::<RowMajorMatrixViewMut<'_, MaybeUninit<F>>, RowMajorMatrixViewMut<'_, F>>(
                     dst_submat_maybe,
                 )
             };
@@ -398,7 +398,7 @@ fn second_half<F: Field>(
 /// to be baked into them.
 #[instrument(level = "debug", skip_all)]
 fn second_half_general<F: Field>(
-    mat: &mut RowMajorMatrixViewMut<F>,
+    mat: &mut RowMajorMatrixViewMut<'_, F>,
     mid: usize,
     twiddles_rev: &[Vec<F>],
 ) {
@@ -460,7 +460,7 @@ fn dit_layer<F: Field>(
 
 /// One layer of a DIT butterfly network.
 fn dit_layer_oop<F: Field>(
-    src: &RowMajorMatrixView<F>,
+    src: &RowMajorMatrixView<'_, F>,
     dst: &mut RowMajorMatrixViewMut<'_, MaybeUninit<F>>,
     layer: usize,
     twiddles: impl Iterator<Item = F> + Clone,

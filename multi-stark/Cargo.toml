@@ -38,3 +38,6 @@ rand.workspace = true
 
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
+
+[lints]
+workspace = true

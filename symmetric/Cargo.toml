@@ -17,3 +17,6 @@ serde = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]
 p3-koala-bear.workspace = true
+
+[lints]
+workspace = true
