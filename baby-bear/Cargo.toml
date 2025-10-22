@@ -9,9 +9,6 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-[lints]
-workspace = true
-
 [dependencies]
 p3-field.workspace = true
 p3-mds.workspace = true
@@ -40,3 +37,6 @@ harness = false
 [[bench]]
 name = "extension"
 harness = false
+
+[lints]
+workspace = true

@@ -9,9 +9,6 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-[lints]
-workspace = true
-
 [dependencies]
 p3-field.workspace = true
 p3-mds.workspace = true
@@ -32,3 +29,6 @@ criterion.workspace = true
 [[bench]]
 name = "rescue"
 harness = false
+
+[lints]
+workspace = true

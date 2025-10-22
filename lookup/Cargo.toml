@@ -8,9 +8,6 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-[lints]
-workspace = true
-
 [dependencies]
 itertools.workspace = true
 p3-air = { workspace = true }
@@ -25,3 +22,6 @@ p3-goldilocks = { workspace = true }
 
 [features]
 default = []
+
+[lints]
+workspace = true

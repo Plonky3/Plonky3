@@ -9,9 +9,6 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-[lints]
-workspace = true
-
 [dependencies]
 p3-challenger.workspace = true
 p3-commit.workspace = true
@@ -42,3 +39,6 @@ tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 [[bench]]
 name = "cfft"
 harness = false
+
+[lints]
+workspace = true

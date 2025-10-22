@@ -9,9 +9,6 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-[lints]
-workspace = true
-
 [dependencies]
 p3-field.workspace = true
 p3-matrix.workspace = true
@@ -31,3 +28,6 @@ p3-dft.workspace = true
 [features]
 default = ["test-utils"]
 test-utils = ["p3-challenger", "p3-dft"]
+
+[lints]
+workspace = true

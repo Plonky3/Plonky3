@@ -9,9 +9,6 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-[lints]
-workspace = true
-
 [dependencies]
 p3-field.workspace = true
 p3-symmetric.workspace = true
@@ -27,6 +24,9 @@ criterion.workspace = true
 [[bench]]
 name = "bench_keccak"
 harness = false
+
+[lints]
+workspace = true
 
 #[[bench]]
 #name = "bench_avx512"

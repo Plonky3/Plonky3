@@ -9,9 +9,6 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-[lints]
-workspace = true
-
 [dependencies]
 p3-field.workspace = true
 p3-maybe-rayon.workspace = true
@@ -38,3 +35,6 @@ harness = false
 name = "columnwise_dot_product"
 path = "benches/columnwise_dot_product.rs"
 harness = false
+
+[lints]
+workspace = true

@@ -9,9 +9,6 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-[lints]
-workspace = true
-
 [dependencies]
 p3-field.workspace = true
 
@@ -20,3 +17,6 @@ serde = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]
 p3-koala-bear.workspace = true
+
+[lints]
+workspace = true

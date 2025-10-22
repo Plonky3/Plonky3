@@ -9,9 +9,6 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-[lints]
-workspace = true
-
 [dependencies]
 p3-air.workspace = true
 p3-field.workspace = true
@@ -24,3 +21,6 @@ tracing.workspace = true
 
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
+
+[lints]
+workspace = true

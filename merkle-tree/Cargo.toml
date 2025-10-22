@@ -9,9 +9,6 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-[lints]
-workspace = true
-
 [dependencies]
 p3-commit.workspace = true
 p3-field.workspace = true
@@ -37,3 +34,6 @@ criterion.workspace = true
 [[bench]]
 name = "merkle_tree"
 harness = false
+
+[lints]
+workspace = true

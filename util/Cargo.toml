@@ -9,9 +9,6 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-[lints]
-workspace = true
-
 [dependencies]
 rayon = { workspace = true, optional = true }
 serde.workspace = true
@@ -27,3 +24,6 @@ parallel = ["rayon"]
 [[bench]]
 name = "bit_reverse"
 harness = false
+
+[lints]
+workspace = true
