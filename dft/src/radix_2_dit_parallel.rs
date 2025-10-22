@@ -9,7 +9,7 @@ use p3_field::integers::QuotientMap;
 use p3_field::{Field, Powers, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversalPerm, BitReversedMatrixView, BitReversibleMatrix};
-use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
+use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
@@ -164,7 +164,7 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         let g_big = F::two_adic_generator(log_h + added_bits);
 
         let mat_ptr = mat.values.as_mut_ptr();
-        let rest_ptr = unsafe { (mat_ptr as *mut MaybeUninit<F>).add(w * h) };
+        let rest_ptr = unsafe { mat_ptr.cast::<MaybeUninit<F>>().add(w * h) };
         let first_slice: &mut [F] = unsafe { slice::from_raw_parts_mut(mat_ptr, w * h) };
         let rest_slice: &mut [MaybeUninit<F>] =
             unsafe { slice::from_raw_parts_mut(rest_ptr, lde_elems - w * h) };
@@ -195,7 +195,7 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
 #[instrument(level = "debug", skip_all)]
 fn coset_dft<F: TwoAdicField + Ord>(
     dft: &Radix2DitParallel<F>,
-    mat: &mut RowMajorMatrixViewMut<F>,
+    mat: &mut RowMajorMatrixViewMut<'_, F>,
     shift: F,
 ) {
     let log_h = log2_strict_usize(mat.height());
@@ -219,8 +219,8 @@ fn coset_dft<F: TwoAdicField + Ord>(
 #[instrument(level = "debug", skip_all)]
 fn coset_dft_oop<F: TwoAdicField + Ord>(
     dft: &Radix2DitParallel<F>,
-    src: &RowMajorMatrixView<F>,
-    dst_maybe: &mut RowMajorMatrixViewMut<MaybeUninit<F>>,
+    src: &RowMajorMatrixView<'_, F>,
+    dst_maybe: &mut RowMajorMatrixViewMut<'_, MaybeUninit<F>>,
     shift: F,
 ) {
     assert_eq!(src.dimensions(), dst_maybe.dimensions());
@@ -231,7 +231,8 @@ fn coset_dft_oop<F: TwoAdicField + Ord>(
         // This is an edge case where first_half_general_oop doesn't work, as it expects there to be
         // at least one layer in the network, so we just copy instead.
         let src_maybe = unsafe {
-            transmute::<&RowMajorMatrixView<F>, &RowMajorMatrixView<MaybeUninit<F>>>(src)
+            &*core::ptr::from_ref::<DenseMatrix<F, &[F]>>(src)
+                .cast::<DenseMatrix<MaybeUninit<F>, &[MaybeUninit<F>]>>()
         };
         dst_maybe.copy_from(src_maybe);
         return;
@@ -249,9 +250,8 @@ fn coset_dft_oop<F: TwoAdicField + Ord>(
 
     // dst is now initialized.
     let dst = unsafe {
-        transmute::<&mut RowMajorMatrixViewMut<MaybeUninit<F>>, &mut RowMajorMatrixViewMut<F>>(
-            dst_maybe,
-        )
+        &mut *core::ptr::from_mut::<DenseMatrix<MaybeUninit<F>, &mut [MaybeUninit<F>]>>(dst_maybe)
+            .cast::<DenseMatrix<F, &mut [F]>>()
     };
 
     // For the second half, we flip the DIT, working in bit-reversed order.
@@ -275,7 +275,7 @@ fn first_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F])
                 dit_layer(
                     &mut submat,
                     layer,
-                    twiddles.iter().copied().step_by(layer_pow),
+                    &twiddles.iter().copied().step_by(layer_pow),
                     backwards,
                 );
                 backwards = !backwards;
@@ -287,7 +287,7 @@ fn first_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F])
 /// to be baked into them.
 #[instrument(level = "debug", skip_all)]
 fn first_half_general<F: Field>(
-    mat: &mut RowMajorMatrixViewMut<F>,
+    mat: &mut RowMajorMatrixViewMut<'_, F>,
     mid: usize,
     twiddles: &[Vec<F>],
 ) {
@@ -300,7 +300,7 @@ fn first_half_general<F: Field>(
                 dit_layer(
                     &mut submat,
                     layer,
-                    twiddles[layer_rev].iter().copied(),
+                    &twiddles[layer_rev].iter().copied(),
                     backwards,
                 );
                 backwards = !backwards;
@@ -314,8 +314,8 @@ fn first_half_general<F: Field>(
 /// Undefined behavior otherwise.
 #[instrument(level = "debug", skip_all)]
 fn first_half_general_oop<F: Field>(
-    src: &RowMajorMatrixView<F>,
-    dst_maybe: &mut RowMajorMatrixViewMut<MaybeUninit<F>>,
+    src: &RowMajorMatrixView<'_, F>,
+    dst_maybe: &mut RowMajorMatrixViewMut<'_, MaybeUninit<F>>,
     mid: usize,
     twiddles: &[Vec<F>],
 ) {
@@ -332,12 +332,13 @@ fn first_half_general_oop<F: Field>(
                 &src_submat,
                 &mut dst_submat_maybe,
                 0,
-                twiddles[layer_rev].iter().copied(),
+               & twiddles[layer_rev].iter().copied(),
             );
 
             // submat is now initialized.
+            #[allow(clippy::transmute_undefined_repr)]
             let mut dst_submat = unsafe {
-                transmute::<RowMajorMatrixViewMut<MaybeUninit<F>>, RowMajorMatrixViewMut<F>>(
+                transmute::<RowMajorMatrixViewMut<'_, MaybeUninit<F>>, RowMajorMatrixViewMut<'_, F>>(
                     dst_submat_maybe,
                 )
             };
@@ -349,7 +350,7 @@ fn first_half_general_oop<F: Field>(
                 dit_layer(
                     &mut dst_submat,
                     layer,
-                    twiddles[layer_rev].iter().copied(),
+                   &twiddles[layer_rev].iter().copied(),
                     backwards,
                 );
                 backwards = !backwards;
@@ -398,7 +399,7 @@ fn second_half<F: Field>(
 /// to be baked into them.
 #[instrument(level = "debug", skip_all)]
 fn second_half_general<F: Field>(
-    mat: &mut RowMajorMatrixViewMut<F>,
+    mat: &mut RowMajorMatrixViewMut<'_, F>,
     mid: usize,
     twiddles_rev: &[Vec<F>],
 ) {
@@ -426,7 +427,7 @@ fn second_half_general<F: Field>(
 fn dit_layer<F: Field>(
     submat: &mut RowMajorMatrixViewMut<'_, F>,
     layer: usize,
-    twiddles: impl Iterator<Item = F> + Clone,
+    twiddles: &(impl Iterator<Item = F> + Clone),
     backwards: bool,
 ) {
     let half_block_size = 1 << layer;
@@ -460,10 +461,10 @@ fn dit_layer<F: Field>(
 
 /// One layer of a DIT butterfly network.
 fn dit_layer_oop<F: Field>(
-    src: &RowMajorMatrixView<F>,
+    src: &RowMajorMatrixView<'_, F>,
     dst: &mut RowMajorMatrixViewMut<'_, MaybeUninit<F>>,
     layer: usize,
-    twiddles: impl Iterator<Item = F> + Clone,
+    twiddles: &(impl Iterator<Item = F> + Clone),
 ) {
     debug_assert_eq!(src.dimensions(), dst.dimensions());
     let half_block_size = 1 << layer;
@@ -512,12 +513,12 @@ fn dit_layer_rev<F: Field>(
     if backwards {
         for (block, twiddle) in blocks_and_twiddles.rev() {
             let (lo, hi) = block.split_at_mut(half_block_size * width);
-            DitButterfly(twiddle).apply_to_rows(lo, hi)
+            DitButterfly(twiddle).apply_to_rows(lo, hi);
         }
     } else {
         for (block, twiddle) in blocks_and_twiddles {
             let (lo, hi) = block.split_at_mut(half_block_size * width);
-            DitButterfly(twiddle).apply_to_rows(lo, hi)
+            DitButterfly(twiddle).apply_to_rows(lo, hi);
         }
     }
 }

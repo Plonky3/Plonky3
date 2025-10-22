@@ -369,11 +369,9 @@ where
         // If the maximum height of the batch is smaller than the global max height,
         // we need to correct the index by right shifting it.
         // If the batch is empty, we set the index to 0.
-        let reduced_index = batch_heights
-            .iter()
-            .max()
-            .map(|&h| index >> (log_global_max_height - log2_strict_usize(h)))
-            .unwrap_or(0);
+        let reduced_index = batch_heights.iter().max().map_or(0, |&h| {
+            index >> (log_global_max_height - log2_strict_usize(h))
+        });
 
         input_mmcs
             .verify_batch(

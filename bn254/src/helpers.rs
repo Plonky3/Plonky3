@@ -7,7 +7,7 @@ use crate::{BN254_MONTY_MU_64, BN254_PRIME};
 
 /// Convert a fixed-size array of u64s (little-endian) to a BigUint.
 #[inline]
-pub(crate) fn to_biguint<const N: usize>(value: [u64; N]) -> BigUint {
+pub fn to_biguint<const N: usize>(value: [u64; N]) -> BigUint {
     let bytes: Vec<u8> = value.iter().flat_map(|x| x.to_le_bytes()).collect();
     BigUint::from_bytes_le(&bytes)
 }
@@ -29,7 +29,7 @@ const fn carrying_add(lhs: u64, rhs: u64, carry: bool) -> (u64, bool) {
 
 /// Compute `lhs + rhs`, returning a bool if overflow occurred.
 #[inline]
-pub(crate) fn wrapping_add<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u64; N], bool) {
+pub fn wrapping_add<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u64; N], bool) {
     let mut carry = false;
     let mut output = [0; N];
 
@@ -57,7 +57,7 @@ const fn borrowing_sub(lhs: u64, rhs: u64, borrow: bool) -> (u64, bool) {
 
 /// Compute `lhs - rhs`, returning a bool if underflow occurred.
 #[inline]
-pub(crate) fn wrapping_sub<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u64; N], bool) {
+pub fn wrapping_sub<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u64; N], bool) {
     let mut borrow = false;
     let mut output = [0; N];
 
@@ -72,7 +72,7 @@ pub(crate) fn wrapping_sub<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u6
 ///
 /// Returns the lowest output limb and the remaining limbs in a 4-limb array.
 #[inline]
-pub(crate) fn mul_small(lhs: [u64; 4], rhs: u64) -> (u64, [u64; 4]) {
+pub fn mul_small(lhs: [u64; 4], rhs: u64) -> (u64, [u64; 4]) {
     let mut output = [0u64; 4];
     let mut acc;
 
@@ -101,7 +101,7 @@ pub(crate) fn mul_small(lhs: [u64; 4], rhs: u64) -> (u64, [u64; 4]) {
 ///
 /// Returns the lowest output limb and the remaining limbs in a 4-limb array.
 #[inline]
-pub(crate) fn mul_small_and_acc(lhs: [u64; 4], rhs: u64, add: [u64; 4]) -> (u64, [u64; 4]) {
+pub fn mul_small_and_acc(lhs: [u64; 4], rhs: u64, add: [u64; 4]) -> (u64, [u64; 4]) {
     let mut output = [0u64; 4];
     let mut acc;
 
@@ -185,7 +185,7 @@ fn interleaved_monty_reduction(acc0: u64, acc: [u64; 4]) -> [u64; 4] {
 /// The output is a 4-limb array representing the result of `lhs * rhs * 2^{-256} mod P`
 /// guaranteed to be in the range `[0, P)`.
 #[inline]
-pub(crate) fn monty_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 4] {
+pub fn monty_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 4] {
     // We need to ensure that `lhs < P` otherwise it's possible for the
     // algorithm to fail and produce a value which is too large.
     debug_assert!(lhs.iter().rev().cmp(BN254_PRIME.iter().rev()) == core::cmp::Ordering::Less);
@@ -214,7 +214,7 @@ const BN254_PRIME_U128: [u128; 2] = [
 
 /// Efficiently halve a Bn254 element.
 #[inline]
-pub(crate) fn halve_bn254(mut input: [u64; 4]) -> [u64; 4] {
+pub const fn halve_bn254(mut input: [u64; 4]) -> [u64; 4] {
     // Seems to be a little faster to convert into u128s.
     // It's essentially identical under the hood so this is
     // likely just helping the compiler generate simpler assembly somehow.
@@ -254,7 +254,7 @@ pub(crate) fn halve_bn254(mut input: [u64; 4]) -> [u64; 4] {
 /// difference to speed and the rest of the algorithm has this property so we preserve it
 /// here.
 #[inline]
-fn num_bits(limb_1: u64, limb_2: u64, limb_3: u64) -> (usize, usize) {
+const fn num_bits(limb_1: u64, limb_2: u64, limb_3: u64) -> (usize, usize) {
     // For each limb, find the number of leading zeros and subtract from 64.
     // `num_bits % 64` is equal to the `v` corresponding to the largest non-zero limb.
     let v3 = 64 - (limb_3.leading_zeros() as i64);
@@ -280,7 +280,7 @@ fn num_bits(limb_1: u64, limb_2: u64, limb_3: u64) -> (usize, usize) {
 ///
 /// `n` is given by `limb = n / 64` and `bits_mod_64 = n % 64` for convenience.
 #[inline]
-fn get_approximation(val: [u64; 4], limb: usize, bits_mod_64: usize) -> u64 {
+const fn get_approximation(val: [u64; 4], limb: usize, bits_mod_64: usize) -> u64 {
     // Assuming that our machine is 64-bits, half the word size will be 32 bits.
     // This is the largest possible value which ensures our output fits inside
     // a single word.
@@ -303,7 +303,7 @@ fn get_approximation(val: [u64; 4], limb: usize, bits_mod_64: usize) -> u64 {
 ///
 /// Sign is assumed to be either `0` or `-1`.
 #[inline]
-fn conditional_neg(a: &mut [u64; 4], sign: u64) {
+const fn conditional_neg(a: &mut [u64; 4], sign: u64) {
     let mut carry;
     (a[0], carry) = (a[0] ^ sign).overflowing_add((-(sign as i64)) as u64);
     (a[1], carry) = (a[1] ^ sign).overflowing_add(carry as u64);
@@ -394,7 +394,7 @@ fn linear_comb_monty_red(a: [u64; 4], b: [u64; 4], f: i64, g: i64) -> [u64; 4] {
 ///
 /// Used to initialise the `u` variable in the GCD based inversion algorithm.
 /// Adjusts for monty form and accumulation of powers of 2.
-pub(crate) const BN254_2_POW_1030: [u64; 4] = [
+pub const BN254_2_POW_1030: [u64; 4] = [
     0x1f7ca21e7fcb111b,
     0x61a09399fcfe8a6c,
     0x1438cc5aab55aedb,
@@ -414,7 +414,19 @@ pub(crate) const BN254_2_POW_1030: [u64; 4] = [
 /// This implementation is also impervious to side-channel attacks as an added bonus. In principal we could make
 /// the average case a little faster if we didn't care about this property but the worst case would be unchanged and
 /// potentially even slightly worse.
-pub(crate) fn gcd_inversion(input: [u64; 4]) -> [u64; 4] {
+pub fn gcd_inversion(input: [u64; 4]) -> [u64; 4] {
+    // We need 506 iterations as, in each iteration, all we can guarantee is that
+    // `len(a) + len(b)` will decrease by at least 1. Initially, `len(a) + len(b) ≤ 2 * 254 = 508` so,
+    // after 506 iterations we get `len(a) + len(b) ≤ 2`. At this point, both `a` and `b` must be `1` or `0`
+    // as neither can be `0` without the other being `1` due to the fact that `gcd(a, b) = 1`. In particular,
+    // as `b` is always odd, this means `b = 1` and so `v` stores the desired output.
+    //
+    // We split the iterations into 15 initial rounds of size 31 and a final round of size 41.
+    const ROUND_SIZE: usize = 31; // If you want to change round size, you will also need to modify the constant in get_approximation.
+    const FINAL_ROUND_SIZE: usize = 41;
+    const NUM_ROUNDS: usize = 15;
+    assert_eq!(NUM_ROUNDS * ROUND_SIZE + FINAL_ROUND_SIZE, 506);
+
     // The standard binary GCD inversion algorithm for a field `P` has
     // a single input `input` and
     // four internal variables: `a`, `u`, `b`, and `v`.
@@ -440,17 +452,6 @@ pub(crate) fn gcd_inversion(input: [u64; 4]) -> [u64; 4] {
     // Overall this means we want `u0` to equal `2^{512 - 506 + 16 * 64} = 2^{1030} mod P`.
     let (mut a, mut u, mut b, mut v) = (input, BN254_2_POW_1030, BN254_PRIME, [0, 0, 0, 0]);
 
-    // We need 506 iterations as, in each iteration, all we can guarantee is that
-    // `len(a) + len(b)` will decrease by at least 1. Initially, `len(a) + len(b) ≤ 2 * 254 = 508` so,
-    // after 506 iterations we get `len(a) + len(b) ≤ 2`. At this point, both `a` and `b` must be `1` or `0`
-    // as neither can be `0` without the other being `1` due to the fact that `gcd(a, b) = 1`. In particular,
-    // as `b` is always odd, this means `b = 1` and so `v` stores the desired output.
-    //
-    // We split the iterations into 15 initial rounds of size 31 and a final round of size 41.
-    const ROUND_SIZE: usize = 31; // If you want to change round size, you will also need to modify the constant in get_approximation.
-    const FINAL_ROUND_SIZE: usize = 41;
-    const NUM_ROUNDS: usize = 15;
-    assert_eq!(NUM_ROUNDS * ROUND_SIZE + FINAL_ROUND_SIZE, 506);
     for _ in 0..NUM_ROUNDS {
         // Find the a and b approximations for this set of inner rounds.
         // If both a and b now fit in a u64, return those. Otherwise take the bottom

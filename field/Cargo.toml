@@ -9,6 +9,10 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# TODO: Analyze the compiler failure and enable the following.
+# [lints]
+# workspace = true
+
 [dependencies]
 p3-maybe-rayon.workspace = true
 p3-util.workspace = true

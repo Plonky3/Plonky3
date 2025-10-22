@@ -114,11 +114,11 @@ impl<PMP: PackedMontyParameters> InternalLayer24<PMP> {
     /// This is a zero-cost conversion that leverages the `#[repr(C)]` layout of the struct.
     #[inline]
     #[must_use]
-    fn from_packed_field_array(vector: [PackedMontyField31Neon<PMP>; 24]) -> Self {
+    fn from_packed_field_array(vector: &[PackedMontyField31Neon<PMP>; 24]) -> Self {
         unsafe {
             // This `transmute` is safe because `InternalLayer24` is `#[repr(C)]` and so is guaranteed
             // to have the exact same memory layout as `[PackedMontyField31Neon<PMP>; 24]`.
-            transmute(vector)
+            transmute(*vector)
         }
     }
 }
@@ -192,7 +192,7 @@ where
                 //
                 // This can execute in parallel with the S-box operation on `s0`.
                 let s_hi_transmuted: &[PackedMontyField31Neon<FP>; 15] =
-                    transmute(&internal_state.s_hi);
+                    &*(&raw const internal_state.s_hi).cast::<[PackedMontyField31Neon<FP>; 15]>();
                 let sum_tail = PackedMontyField31Neon::<FP>::sum_array::<15>(s_hi_transmuted);
 
                 // Perform the diagonal multiplication on `s_hi`.
@@ -252,7 +252,7 @@ where
 
             // Convert the state array into the specialized `InternalLayer24` representation
             // for optimized processing.
-            let mut internal_state = InternalLayer24::from_packed_field_array(*state);
+            let mut internal_state = InternalLayer24::from_packed_field_array(state);
 
             self.packed_internal_constants.iter().for_each(|&rc| {
                 // Apply AddRoundConstant and the S-Box to the first state element (`s0`).
@@ -262,7 +262,7 @@ where
                 //
                 // This can execute in parallel with the S-box operation on `s0`.
                 let s_hi_transmuted: &[PackedMontyField31Neon<FP>; 23] =
-                    transmute(&internal_state.s_hi);
+                    &*(&raw const internal_state.s_hi).cast::<[PackedMontyField31Neon<FP>; 23]>();
                 let sum_tail = PackedMontyField31Neon::<FP>::sum_array::<23>(s_hi_transmuted);
 
                 // Perform the diagonal multiplication on `s_hi`.

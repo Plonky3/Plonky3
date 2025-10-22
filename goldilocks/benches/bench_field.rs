@@ -45,9 +45,10 @@ fn bench_field(c: &mut Criterion) {
             || rng.random::<F>(),
             |x| x.exp_u64(10540996611094048183),
             BatchSize::SmallInput,
-        )
+        );
     });
 }
+
 fn bench_packedfield(c: &mut Criterion) {
     let name = type_name::<<F as Field>::Packing>().to_string();
     // Note that each round of throughput has 10 operations

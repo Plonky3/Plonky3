@@ -18,7 +18,7 @@ use tracing::instrument;
 /// - `main`: The trace matrix (rows of witness values)
 /// - `public_values`: Public values provided to the builder
 #[instrument(name = "check constraints", skip_all)]
-pub(crate) fn check_constraints<F, A>(air: &A, main: &RowMajorMatrix<F>, public_values: &Vec<F>)
+pub fn check_constraints<F, A>(air: &A, main: &RowMajorMatrix<F>, public_values: &Vec<F>)
 where
     F: Field,
     A: for<'a> Air<DebugConstraintBuilder<'a, F>>,

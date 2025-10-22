@@ -119,7 +119,12 @@ fn dit_butterfly_inner(x: &mut C, y: &mut C, twiddle: C) {
     //   x = x1 + i*x2
     //   y = y1 + i*y2
     //   twiddle = w1 + i*w2
-    let unpack = |x: C| (x.to_array()[0].value as i64, x.to_array()[1].value as i64);
+    let unpack = |x: C| {
+        (
+            i64::from(x.to_array()[0].value),
+            i64::from(x.to_array()[1].value),
+        )
+    };
     let (x1, x2) = unpack(*x);
     let (y1, y2) = unpack(*y);
     let (w1, w2) = unpack(twiddle);

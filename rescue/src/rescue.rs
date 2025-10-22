@@ -43,6 +43,7 @@ where
         // together with the value log2(binomial(v + dcon, v)). These values
         // are fed into `find` which picks the first that exceed the desired
         // security level.
+        #[allow(clippy::maybe_infinite_iter)]
         let rnds = (1..)
             .scan((2, rate), |(dcon, v), r| {
                 let log2_bin = log2_binom(*v + *dcon, *v);
@@ -104,7 +105,7 @@ where
                     .collect_vec()
                     .iter()
                     .rev()
-                    .fold(0, |acc, &byte| (acc << 8) + *byte as u64);
+                    .fold(0, |acc, &byte| (acc << 8) + u64::from(*byte));
                 F::from_u64(integer)
             })
             .collect()
@@ -121,7 +122,9 @@ where
     fn permute_mut(&self, state: &mut [A; WIDTH]) {
         for round in 0..self.num_rounds {
             // S-box
-            state.iter_mut().for_each(|x| *x = x.injective_exp_n());
+            for x in state.iter_mut() {
+                *x = x.injective_exp_n();
+            }
 
             // MDS
             self.mds.permute_mut(state);
@@ -135,7 +138,9 @@ where
             }
 
             // Inverse S-box
-            state.iter_mut().for_each(|x| *x = x.injective_exp_root_n());
+            for x in state.iter_mut() {
+                *x = x.injective_exp_root_n();
+            }
 
             // MDS
             self.mds.permute_mut(state);

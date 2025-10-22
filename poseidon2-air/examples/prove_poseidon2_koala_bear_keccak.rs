@@ -40,6 +40,8 @@ type Dft = p3_dft::Radix2DitParallel<KoalaBear>;
 type Dft = p3_dft::Radix2Bowers;
 
 fn main() -> Result<(), impl Debug> {
+    const PROOFS: usize = 2;
+
     let env_filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::INFO.into())
         .from_env_lossy();
@@ -49,7 +51,6 @@ fn main() -> Result<(), impl Debug> {
         .with(ForestLayer::default())
         .init();
 
-    const PROOFS: usize = 2;
     for _ in 1..PROOFS {
         prove_and_verify()?;
     }

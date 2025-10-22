@@ -20,7 +20,7 @@ pub fn keccak_permutation(c: &mut Criterion) {
     let mut bytes: [[u64; VECTOR_LEN]; 25] = unsafe { core::mem::zeroed() };
     group.throughput(Throughput::Bytes(BYTES_PER_PERM as u64));
     group.bench_function("keccak permutation [[u64; VECTOR_LEN]; 25]", |b| {
-        b.iter(|| KeccakF.permute_mut(black_box(&mut bytes)))
+        b.iter(|| KeccakF.permute_mut(black_box(&mut bytes)));
     });
     group.finish();
 }
@@ -36,10 +36,10 @@ pub fn keccak_u64_hash(c: &mut Criterion) {
     let mut group = c.benchmark_group("keccak u64 hash");
     group.throughput(Throughput::Bytes(BYTES_PER_HASH as u64));
     group.bench_function("keccak u64 hash_slice", |b| {
-        b.iter(|| u64_hash.hash_slice(black_box(&input)))
+        b.iter(|| u64_hash.hash_slice(black_box(&input)));
     });
     group.bench_function("keccak u64 hash_iter", |b| {
-        b.iter(|| u64_hash.hash_iter(black_box(input.iter().copied())))
+        b.iter(|| u64_hash.hash_iter(black_box(input.iter().copied())));
     });
     group.finish();
 }
@@ -47,13 +47,14 @@ pub fn keccak_u64_hash(c: &mut Criterion) {
 pub fn keccak_field_32_hash(c: &mut Criterion) {
     type F = Mersenne31;
     type P = [F; VECTOR_LEN];
+    type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
+    type FieldHash = SerializingHasher<U64Hash>;
+
     const PACKED_ELEMS_PER_HASH: usize = 100;
     const BYTES_PER_HASH: usize = size_of::<P>() * PACKED_ELEMS_PER_HASH;
     let input = vec![[F::ZERO; VECTOR_LEN]; PACKED_ELEMS_PER_HASH];
 
-    type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
     let u64_hash = U64Hash::new(KeccakF {});
-    type FieldHash = SerializingHasher<U64Hash>;
     let field_hash = FieldHash::new(u64_hash);
 
     let mut group = c.benchmark_group("keccak field 32 hash");
@@ -64,7 +65,7 @@ pub fn keccak_field_32_hash(c: &mut Criterion) {
                 &field_hash,
                 black_box(&input),
             )
-        })
+        });
     });
     group.bench_function("keccak field 32 hash_iter", |b| {
         b.iter(|| {
@@ -72,7 +73,7 @@ pub fn keccak_field_32_hash(c: &mut Criterion) {
                 &field_hash,
                 black_box(input.iter().copied()),
             )
-        })
+        });
     });
     group.finish();
 }

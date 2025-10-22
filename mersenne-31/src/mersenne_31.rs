@@ -209,7 +209,7 @@ impl PrimeCharacteristicRing for Mersenne31 {
 
     #[inline]
     fn from_bool(b: bool) -> Self {
-        Self::new(b as u32)
+        Self::new(u32::from(b))
     }
 
     #[inline]
@@ -313,12 +313,12 @@ impl Field for Mersenne31 {
     }
 
     fn try_inverse(&self) -> Option<Self> {
+        // Number of bits in the Mersenne31 prime.
+        const NUM_PRIME_BITS: u32 = 31;
+
         if self.is_zero() {
             return None;
         }
-
-        // Number of bits in the Mersenne31 prime.
-        const NUM_PRIME_BITS: u32 = 31;
 
         // gcd_inversion returns the inverse multiplied by 2^60 so we need to correct for that.
         let inverse_i64 = gcd_inversion_prime_field_32::<NUM_PRIME_BITS>(self.value, P);
@@ -483,7 +483,7 @@ impl Sub for Mersenne31 {
         // If we didn't overflow we have the correct value.
         // Otherwise we have added 2**32 = 2**31 + 1 mod 2**31 - 1.
         // Hence we need to remove the most significant bit and subtract 1.
-        sub -= over as u32;
+        sub -= u32::from(over);
         Self::new(sub & Self::ORDER_U32)
     }
 }
@@ -521,7 +521,7 @@ impl Sum for Mersenne31 {
         // It assumes that iter.len() < 2^31.
 
         // This sum will not overflow so long as iter.len() < 2^33.
-        let sum = iter.map(|x| x.value as u64).sum::<u64>();
+        let sum = iter.map(|x| u64::from(x.value)).sum::<u64>();
 
         // sum is < 2^62 provided iter.len() < 2^31.
         from_u62(sum)
@@ -529,7 +529,7 @@ impl Sum for Mersenne31 {
 }
 
 #[inline(always)]
-pub(crate) fn from_u62(input: u64) -> Mersenne31 {
+pub fn from_u62(input: u64) -> Mersenne31 {
     debug_assert!(input < (1 << 62));
     let input_lo = (input & ((1 << 31) - 1)) as u32;
     let input_high = (input >> 31) as u32;

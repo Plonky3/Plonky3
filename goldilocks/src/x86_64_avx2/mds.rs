@@ -20,7 +20,7 @@ const fn convert_array<const N: usize>(arr: [i64; N]) -> [u64; N] {
 impl Permutation<[PackedGoldilocksAVX2; 8]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [PackedGoldilocksAVX2; 8]) -> [PackedGoldilocksAVX2; 8] {
         const MATRIX_CIRC_MDS_8_SML_ROW_U64: [u64; 8] = convert_array(MATRIX_CIRC_MDS_8_SML_ROW);
-        apply_circulant(&MATRIX_CIRC_MDS_8_SML_ROW_U64, input)
+        apply_circulant(&MATRIX_CIRC_MDS_8_SML_ROW_U64, &input)
     }
 
     fn permute_mut(&self, input: &mut [PackedGoldilocksAVX2; 8]) {
@@ -33,7 +33,7 @@ impl MdsPermutation<PackedGoldilocksAVX2, 8> for MdsMatrixGoldilocks {}
 impl Permutation<[PackedGoldilocksAVX2; 12]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [PackedGoldilocksAVX2; 12]) -> [PackedGoldilocksAVX2; 12] {
         const MATRIX_CIRC_MDS_12_SML_ROW_U64: [u64; 12] = convert_array(MATRIX_CIRC_MDS_12_SML_ROW);
-        apply_circulant(&MATRIX_CIRC_MDS_12_SML_ROW_U64, input)
+        apply_circulant(&MATRIX_CIRC_MDS_12_SML_ROW_U64, &input)
     }
 
     fn permute_mut(&self, input: &mut [PackedGoldilocksAVX2; 12]) {
@@ -46,7 +46,7 @@ impl MdsPermutation<PackedGoldilocksAVX2, 12> for MdsMatrixGoldilocks {}
 impl Permutation<[PackedGoldilocksAVX2; 16]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [PackedGoldilocksAVX2; 16]) -> [PackedGoldilocksAVX2; 16] {
         const MATRIX_CIRC_MDS_16_SML_ROW_U64: [u64; 16] = convert_array(MATRIX_CIRC_MDS_16_SML_ROW);
-        apply_circulant(&MATRIX_CIRC_MDS_16_SML_ROW_U64, input)
+        apply_circulant(&MATRIX_CIRC_MDS_16_SML_ROW_U64, &input)
     }
 
     fn permute_mut(&self, input: &mut [PackedGoldilocksAVX2; 16]) {
@@ -58,7 +58,7 @@ impl MdsPermutation<PackedGoldilocksAVX2, 16> for MdsMatrixGoldilocks {}
 
 impl Permutation<[PackedGoldilocksAVX2; 24]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [PackedGoldilocksAVX2; 24]) -> [PackedGoldilocksAVX2; 24] {
-        apply_circulant(&MATRIX_CIRC_MDS_24_GOLDILOCKS, input)
+        apply_circulant(&MATRIX_CIRC_MDS_24_GOLDILOCKS, &input)
     }
 
     fn permute_mut(&self, input: &mut [PackedGoldilocksAVX2; 24]) {

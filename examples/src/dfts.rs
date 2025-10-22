@@ -158,7 +158,7 @@ impl<T> BitReversibleMatrix<T> for MaybeBitreversedMatrix<T>
 where
     T: Send + Sync + Clone,
 {
-    type BitRev = MaybeBitreversedMatrix<T>;
+    type BitRev = Self;
 
     #[inline(always)]
     fn bit_reverse_rows(self) -> Self::BitRev {

@@ -141,9 +141,9 @@ mod tests {
         let shift = F::GENERATOR;
         let mut coset_lde_naive = NaiveDft.coset_lde(arr_rev, 0, shift);
         reverse_slice_index_bits(&mut coset_lde_naive);
-        coset_lde_naive
-            .iter_mut()
-            .for_each(|x| *x *= F::from_u8(N as u8));
+        for x in &mut coset_lde_naive {
+            *x *= F::from_u8(N as u8);
+        }
         IntegratedCosetMds::default().permute_mut(&mut arr);
         assert_eq!(coset_lde_naive, arr);
     }

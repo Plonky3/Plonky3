@@ -41,3 +41,6 @@ tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
 asm = ["p3-sha256/asm"]
+
+[lints]
+workspace = true

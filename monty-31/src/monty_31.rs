@@ -66,7 +66,7 @@ impl<MP: MontyParameters> MontyField31<MP> {
 
     /// Produce a u32 in range [0, P) from a field element corresponding to the true value.
     #[inline(always)]
-    pub(crate) const fn to_u32(elem: &Self) -> u32 {
+    pub(crate) const fn to_u32(elem: Self) -> u32 {
         from_monty::<MP>(elem.value)
     }
 
@@ -110,13 +110,13 @@ impl<FP: FieldParameters> MontyField31<FP> {
         powers_of_two
     };
 
-    const HALF: Self = MontyField31::new(FP::HALF_P_PLUS_1);
+    const HALF: Self = Self::new(FP::HALF_P_PLUS_1);
 }
 
 impl<FP: MontyParameters> Ord for MontyField31<FP> {
     #[inline]
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        Self::to_u32(self).cmp(&Self::to_u32(other))
+        Self::to_u32(*self).cmp(&Self::to_u32(*other))
     }
 }
 
@@ -129,13 +129,13 @@ impl<FP: MontyParameters> PartialOrd for MontyField31<FP> {
 
 impl<FP: MontyParameters> Display for MontyField31<FP> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Display::fmt(&Self::to_u32(self), f)
+        Display::fmt(&Self::to_u32(*self), f)
     }
 }
 
 impl<FP: MontyParameters> Debug for MontyField31<FP> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Debug::fmt(&Self::to_u32(self), f)
+        Debug::fmt(&Self::to_u32(*self), f)
     }
 }
 
@@ -406,12 +406,12 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
     const GENERATOR: Self = FP::MONTY_GEN;
 
     fn try_inverse(&self) -> Option<Self> {
+        // The number of bits of FP::PRIME. By the very name of MontyField31 this should always be 31.
+        const NUM_PRIME_BITS: u32 = 31;
+
         if self.is_zero() {
             return None;
         }
-
-        // The number of bits of FP::PRIME. By the very name of MontyField31 this should always be 31.
-        const NUM_PRIME_BITS: u32 = 31;
 
         // Get the inverse using a gcd algorithm.
         // We use `val` to denote the input to `gcd_inversion_prime_field_32` and `R = 2^{MONTY_BITS}`
@@ -627,7 +627,7 @@ impl<FP: FieldParameters> PrimeField32 for MontyField31<FP> {
 
     #[inline]
     fn as_canonical_u32(&self) -> u32 {
-        Self::to_u32(self)
+        Self::to_u32(*self)
     }
 
     #[inline]

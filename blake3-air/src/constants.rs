@@ -1,5 +1,5 @@
-pub const BITS_PER_LIMB: usize = 16;
-pub const U32_LIMBS: usize = 32 / BITS_PER_LIMB;
+pub(crate) const BITS_PER_LIMB: usize = 16;
+pub(crate) const U32_LIMBS: usize = 32 / BITS_PER_LIMB;
 
 // The constants from the reference implementation.
 // Saved as pairs of 16 bit integers in [lo, hi] format.

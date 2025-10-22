@@ -40,10 +40,7 @@ where
                 None => return Err(serde::de::Error::invalid_length(N, &self)),
             }
         }
-        match data.try_into() {
-            Ok(arr) => Ok(arr),
-            Err(_) => unreachable!(),
-        }
+        data.try_into().map_or_else(|_| unreachable!(), Ok)
     }
 }
 pub fn deserialize<'de, D, T, const N: usize>(deserializer: D) -> Result<[T; N], D::Error>

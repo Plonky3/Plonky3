@@ -16,18 +16,12 @@ use crate::{
 // We perform no checks to make sure the data given in BinomialExtensionData<WIDTH> is valid and
 // corresponds to an actual field extension. Ensuring that is left to the implementer.
 
-impl<const WIDTH: usize, FP> BinomiallyExtendableAlgebra<MontyField31<FP>, WIDTH>
-    for MontyField31<FP>
+impl<const WIDTH: usize, FP> BinomiallyExtendableAlgebra<Self, WIDTH> for MontyField31<FP>
 where
     FP: BinomialExtensionData<WIDTH> + FieldParameters,
 {
     #[inline(always)]
-    fn binomial_mul(
-        a: &[Self; WIDTH],
-        b: &[Self; WIDTH],
-        res: &mut [Self; WIDTH],
-        _w: MontyField31<FP>,
-    ) {
+    fn binomial_mul(a: &[Self; WIDTH], b: &[Self; WIDTH], res: &mut [Self; WIDTH], _w: Self) {
         match WIDTH {
             4 => quartic_mul_packed(a, b, res),
             5 => quintic_mul_packed(a, b, res),
@@ -41,9 +35,9 @@ where
         let mut res = [Self::ZERO; WIDTH];
         unsafe {
             // Safe as Self is repr(transparent) and stores a single u32.
-            let a: &[u32; WIDTH] = &*(a.as_ptr() as *const [u32; WIDTH]);
-            let b: &[u32; WIDTH] = &*(b.as_ptr() as *const [u32; WIDTH]);
-            let res: &mut [u32; WIDTH] = &mut *(res.as_mut_ptr() as *mut [u32; WIDTH]);
+            let a: &[u32; WIDTH] = &*a.as_ptr().cast::<[u32; WIDTH]>();
+            let b: &[u32; WIDTH] = &*b.as_ptr().cast::<[u32; WIDTH]>();
+            let res: &mut [u32; WIDTH] = &mut *res.as_mut_ptr().cast::<[u32; WIDTH]>();
 
             packed_mod_add(a, b, res, FP::PRIME, add::<FP>);
         }
@@ -55,9 +49,9 @@ where
         let mut res = [Self::ZERO; WIDTH];
         unsafe {
             // Safe as Self is repr(transparent) and stores a single u32.
-            let a: &[u32; WIDTH] = &*(a.as_ptr() as *const [u32; WIDTH]);
-            let b: &[u32; WIDTH] = &*(b.as_ptr() as *const [u32; WIDTH]);
-            let res: &mut [u32; WIDTH] = &mut *(res.as_mut_ptr() as *mut [u32; WIDTH]);
+            let a: &[u32; WIDTH] = &*a.as_ptr().cast::<[u32; WIDTH]>();
+            let b: &[u32; WIDTH] = &*b.as_ptr().cast::<[u32; WIDTH]>();
+            let res: &mut [u32; WIDTH] = &mut *res.as_mut_ptr().cast::<[u32; WIDTH]>();
 
             packed_mod_sub(a, b, res, FP::PRIME, sub::<FP>);
         }

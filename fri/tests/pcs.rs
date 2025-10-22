@@ -92,7 +92,7 @@ fn do_test_fri_pcs<Val, Challenge, Challenger, P>(
     assert_eq!(commits_and_claims_by_round.len(), num_rounds);
 
     pcs.verify(commits_and_claims_by_round, &proof, &mut v_challenger)
-        .unwrap()
+        .unwrap();
 }
 
 // Set it up so we create tests inside a module for each pcs, so we get nice error reports

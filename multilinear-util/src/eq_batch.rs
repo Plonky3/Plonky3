@@ -86,7 +86,7 @@ use p3_util::log2_strict_usize;
 /// Panics in debug builds if `evals.width() != scalars.len()` or if the output buffer size is incorrect.
 #[inline]
 pub fn eval_eq_batch<F, EF, const INITIALIZED: bool>(
-    evals: RowMajorMatrixView<EF>,
+    evals: RowMajorMatrixView<'_, EF>,
     out: &mut [EF],
     scalars: &[EF],
 ) where
@@ -121,7 +121,7 @@ pub fn eval_eq_batch<F, EF, const INITIALIZED: bool>(
 /// Panics in debug builds if `evals.width() != scalars.len()` or if the output buffer size is incorrect.
 #[inline]
 pub fn eval_eq_base_batch<F, EF, const INITIALIZED: bool>(
-    evals: RowMajorMatrixView<F>,
+    evals: RowMajorMatrixView<'_, F>,
     out: &mut [EF],
     scalars: &[EF],
 ) where
@@ -148,7 +148,7 @@ pub fn eval_eq_base_batch<F, EF, const INITIALIZED: bool>(
 /// # Panics
 /// Panics in debug builds if `evals.width() != buffer.width()`.
 #[inline(always)]
-fn fill_buffer_batch<F, A>(evals: RowMajorMatrixView<F>, buffer: &mut RowMajorMatrix<A>)
+fn fill_buffer_batch<F, A>(evals: RowMajorMatrixView<'_, F>, buffer: &mut RowMajorMatrix<A>)
 where
     F: Field,
     A: Algebra<F> + Send + Sync + Clone,
@@ -196,7 +196,7 @@ where
 /// # Returns
 /// An array `[eq_sum(0), eq_sum(1)]`.
 #[inline(always)]
-fn eval_eq_1_batch<F, FP>(evals: RowMajorMatrixView<F>, scalars: &[FP]) -> [FP; 2]
+fn eval_eq_1_batch<F, FP>(evals: RowMajorMatrixView<'_, F>, scalars: &[FP]) -> [FP; 2]
 where
     F: Field,
     FP: Algebra<F>,
@@ -251,7 +251,7 @@ where
 /// Panics in debug builds if `evals.height() != 2` or `evals.width() != scalars.len()`.
 #[inline(always)]
 fn eval_eq_2_batch<F, FP>(
-    evals: RowMajorMatrixView<F>,
+    evals: RowMajorMatrixView<'_, F>,
     scalars: &[FP],
     workspace: &mut [FP],
 ) -> [FP; 4]
@@ -315,7 +315,7 @@ where
 /// Panics in debug builds if `evals.height() != 3` or `evals.width() != scalars.len()`.
 #[inline(always)]
 fn eval_eq_3_batch<F, FP>(
-    evals: RowMajorMatrixView<F>,
+    evals: RowMajorMatrixView<'_, F>,
     scalars: &[FP],
     workspace: &mut [FP],
 ) -> [FP; 8]
@@ -364,12 +364,12 @@ trait EqualityEvaluator {
     type PackedField: Algebra<Self::InputField> + Copy + Send + Sync;
 
     fn init_packed_batch(
-        evals: RowMajorMatrixView<Self::InputField>,
+        evals: RowMajorMatrixView<'_, Self::InputField>,
         scalars: &[Self::OutputField],
     ) -> Vec<Self::PackedField>;
 
     fn process_chunk_batch<const INITIALIZED: bool>(
-        evals: RowMajorMatrixView<Self::InputField>,
+        evals: RowMajorMatrixView<'_, Self::InputField>,
         out_chunk: &mut [Self::OutputField],
         buffer_vals: &[Self::PackedField],
         scalars: &[Self::OutputField],
@@ -401,14 +401,14 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for ExtFieldEvaluator<F,
     type PackedField = EF::ExtensionPacking;
 
     fn init_packed_batch(
-        evals: RowMajorMatrixView<Self::InputField>,
+        evals: RowMajorMatrixView<'_, Self::InputField>,
         scalars: &[Self::OutputField],
     ) -> Vec<Self::PackedField> {
         packed_eq_poly_batch(evals, scalars)
     }
 
     fn process_chunk_batch<const INITIALIZED: bool>(
-        evals: RowMajorMatrixView<Self::InputField>,
+        evals: RowMajorMatrixView<'_, Self::InputField>,
         out_chunk: &mut [Self::OutputField],
         buffer_vals: &[Self::PackedField],
         scalars: &[Self::OutputField],
@@ -471,14 +471,14 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for BaseFieldEvaluator<F
     type PackedField = F::Packing;
 
     fn init_packed_batch(
-        evals: RowMajorMatrixView<Self::InputField>,
+        evals: RowMajorMatrixView<'_, Self::InputField>,
         _scalars: &[Self::OutputField],
     ) -> Vec<Self::PackedField> {
         packed_eq_poly_batch(evals, &vec![F::ONE; evals.width()])
     }
 
     fn process_chunk_batch<const INITIALIZED: bool>(
-        evals: RowMajorMatrixView<Self::InputField>,
+        evals: RowMajorMatrixView<'_, Self::InputField>,
         out_chunk: &mut [Self::OutputField],
         buffer_vals: &[Self::PackedField],
         scalars: &[Self::OutputField],
@@ -556,7 +556,7 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for BaseFieldEvaluator<F
 /// - `out`: Output buffer of size `2^n` to store the combined evaluations.
 #[inline]
 fn eval_eq_batch_common<F, IF, EF, E, const INITIALIZED: bool>(
-    evals: RowMajorMatrixView<IF>,
+    evals: RowMajorMatrixView<'_, IF>,
     out: &mut [EF],
     scalars: &[EF],
 ) where
@@ -655,7 +655,7 @@ fn eval_eq_batch_common<F, IF, EF, E, const INITIALIZED: bool>(
 /// If `INITIALIZED = true`, the computed result is added to the existing value in `out`.
 #[inline]
 fn eval_eq_batch_basic<F, IF, EF, const INITIALIZED: bool>(
-    evals: RowMajorMatrixView<IF>,
+    evals: RowMajorMatrixView<'_, IF>,
     scalars: &[EF],
     out: &mut [EF],
     workspace: &mut [EF],
@@ -746,7 +746,7 @@ fn eval_eq_batch_basic<F, IF, EF, const INITIALIZED: bool>(
 /// If `INITIALIZED = true`, the computed result is added to the existing value in `out`.
 #[inline]
 fn eval_eq_packed_batch<F, IF, EF, E, const INITIALIZED: bool>(
-    eval_points: RowMajorMatrixView<IF>,
+    eval_points: RowMajorMatrixView<'_, IF>,
     out: &mut [EF],
     eq_evals: &[E::PackedField],
     scalars: &[EF],
@@ -962,7 +962,7 @@ fn eval_eq_packed_batch<F, IF, EF, E, const INITIALIZED: bool>(
 /// `evals.width() != scalars.len()`.
 #[inline(always)]
 fn packed_eq_poly_batch<F, EF>(
-    evals: RowMajorMatrixView<EF>,
+    evals: RowMajorMatrixView<'_, EF>,
     scalars: &[EF],
 ) -> Vec<EF::ExtensionPacking>
 where

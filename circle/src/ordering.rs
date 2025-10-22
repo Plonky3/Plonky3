@@ -6,7 +6,7 @@ use p3_matrix::row_index_mapped::{RowIndexMap, RowIndexMappedView};
 use p3_util::{log2_strict_usize, reverse_bits_len};
 
 #[inline]
-pub(crate) const fn cfft_permute_index(index: usize, log_n: usize) -> usize {
+pub const fn cfft_permute_index(index: usize, log_n: usize) -> usize {
     let (index, lsb) = (index >> 1, index & 1);
     reverse_bits_len(
         if lsb == 0 {
@@ -18,14 +18,14 @@ pub(crate) const fn cfft_permute_index(index: usize, log_n: usize) -> usize {
     )
 }
 
-pub(crate) fn cfft_permute_slice<T: Clone>(xs: &[T]) -> Vec<T> {
+pub fn cfft_permute_slice<T: Clone>(xs: &[T]) -> Vec<T> {
     let log_n = log2_strict_usize(xs.len());
     (0..xs.len())
         .map(|i| xs[cfft_permute_index(i, log_n)].clone())
         .collect()
 }
 
-pub(crate) fn cfft_permute_slice_chunked_in_place<T>(xs: &mut [T], chunk_size: usize) {
+pub fn cfft_permute_slice_chunked_in_place<T>(xs: &mut [T], chunk_size: usize) {
     assert_eq!(xs.len() % chunk_size, 0);
     let n_chunks = xs.len() / chunk_size;
     let log_n = log2_strict_usize(n_chunks);
@@ -73,7 +73,7 @@ impl RowIndexMap for CfftPerm {
     }
 }
 
-pub(crate) trait CfftPermutable<T: Send + Sync + Clone>: Matrix<T> + Sized {
+pub trait CfftPermutable<T: Send + Sync + Clone>: Matrix<T> + Sized {
     fn cfft_perm_rows(self) -> CfftView<Self>;
 }
 

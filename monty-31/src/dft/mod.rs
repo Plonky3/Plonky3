@@ -75,7 +75,7 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
             let twiddles = &twiddles[roots_idx..];
 
             mat.par_chunks_exact_mut(ncols)
-                .for_each(|v| MontyField31::forward_fft(v, twiddles))
+                .for_each(|v| MontyField31::forward_fft(v, twiddles));
         }
     }
 
@@ -91,7 +91,7 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
             let twiddles = &twiddles[roots_idx..];
 
             mat.par_chunks_exact_mut(ncols)
-                .for_each(|v| MontyField31::backward_fft(v, twiddles))
+                .for_each(|v| MontyField31::backward_fft(v, twiddles));
         }
     }
 

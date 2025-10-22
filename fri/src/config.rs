@@ -100,7 +100,7 @@ pub const fn create_benchmark_fri_params<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs
 
 /// Creates a set of `FriParameters` suitable for benchmarking with zk enabled.
 /// These parameters represent typical settings used in production-like scenarios.
-pub fn create_benchmark_fri_params_zk<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> {
+pub const fn create_benchmark_fri_params_zk<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> {
     FriParameters {
         log_blowup: 2,
         log_final_poly_len: 0,

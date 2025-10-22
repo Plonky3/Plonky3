@@ -23,7 +23,7 @@ use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 
 /// The Goldilocks prime
-pub(crate) const P: u64 = 0xFFFF_FFFF_0000_0001;
+pub const P: u64 = 0xFFFF_FFFF_0000_0001;
 
 /// The prime field known as Goldilocks, defined as `F_p` where `p = 2^64 - 2^32 + 1`.
 ///
@@ -61,7 +61,7 @@ impl Goldilocks {
     /// A list of generators for the two-adic subgroups of the goldilocks field.
     ///
     /// These satisfy the properties that `TWO_ADIC_GENERATORS[0] = 1` and `TWO_ADIC_GENERATORS[i+1]^2 = TWO_ADIC_GENERATORS[i]`.
-    pub const TWO_ADIC_GENERATORS: [Goldilocks; 33] = Goldilocks::new_array([
+    pub const TWO_ADIC_GENERATORS: [Self; 33] = Self::new_array([
         0x0000000000000001,
         0xffffffff00000000,
         0x0001000000000000,
@@ -102,14 +102,14 @@ impl Goldilocks {
     /// Note that 2^{96} = -1 mod P so all powers of two can be simply
     /// derived from this list.
     const POWERS_OF_TWO: [Self; 96] = {
-        let mut powers_of_two = [Goldilocks::ONE; 96];
+        let mut powers_of_two = [Self::ONE; 96];
 
         let mut i = 1;
         while i < 64 {
-            powers_of_two[i] = Goldilocks::new(1 << i);
+            powers_of_two[i] = Self::new(1 << i);
             i += 1;
         }
-        let mut var = Goldilocks::new(1 << 63);
+        let mut var = Self::new(1 << 63);
         while i < 96 {
             var = const_add(var, var);
             powers_of_two[i] = var;
@@ -242,8 +242,8 @@ impl PrimeCharacteristicRing for Goldilocks {
             2 => {
                 // We unroll the N = 2 case as it is slightly faster and this is an important case
                 // as a major use is in extension field arithmetic and Goldilocks has a degree 2 extension.
-                let long_prod_0 = (lhs[0].value as u128) * (rhs[0].value as u128);
-                let long_prod_1 = (lhs[1].value as u128) * (rhs[1].value as u128);
+                let long_prod_0 = u128::from(lhs[0].value) * u128::from(rhs[0].value);
+                let long_prod_1 = u128::from(lhs[1].value) * u128::from(rhs[1].value);
 
                 // We know that long_prod_0, long_prod_1 < OFFSET.
                 // Thus if long_prod_0 + long_prod_1 overflows, we can just subtract OFFSET.
@@ -260,7 +260,7 @@ impl PrimeCharacteristicRing for Goldilocks {
                 let (lo_plus_hi, hi) = lhs
                     .iter()
                     .zip(rhs)
-                    .map(|(x, y)| (x.value as u128) * (y.value as u128))
+                    .map(|(x, y)| u128::from(x.value) * u128::from(y.value))
                     .fold((0_u128, 0_u64), |(acc_lo, acc_hi), val| {
                         // Split val into (hi, lo) where hi is the upper 32 bits and lo is the lower 96 bits.
                         let val_hi = (val >> 96) as u64;
@@ -269,10 +269,10 @@ impl PrimeCharacteristicRing for Goldilocks {
                         unsafe { (acc_lo.wrapping_add(val), acc_hi.unchecked_add(val_hi)) }
                     });
                 // First, remove the hi part from lo_plus_hi.
-                let lo = lo_plus_hi.wrapping_sub((hi as u128) << 96);
+                let lo = lo_plus_hi.wrapping_sub(u128::from(hi) << 96);
                 // As 2^{96} = -1 mod P, we simply need to reduce lo - hi.
                 // As N <= 2^31, lo < 2^127 and hi < 2^63 < P. Hence the equation below will not over or underflow.
-                let sum = unsafe { lo.unchecked_add(P.unchecked_sub(hi) as u128) };
+                let sum = unsafe { lo.unchecked_add(u128::from(P.unchecked_sub(hi))) };
                 reduce128(sum)
             }
         }
@@ -556,7 +556,7 @@ impl Sum for Goldilocks {
         // This is faster than iter.reduce(|x, y| x + y).unwrap_or(Self::ZERO) for iterators of length > 2.
 
         // This sum will not overflow so long as iter.len() < 2^64.
-        let sum = iter.map(|x| x.value as u128).sum::<u128>();
+        let sum = iter.map(|x| u128::from(x.value)).sum::<u128>();
         reduce128(sum)
     }
 }
@@ -564,7 +564,7 @@ impl Sum for Goldilocks {
 /// Reduces to a 64-bit value. The result might not be in canonical form; it could be in between the
 /// field order and `2^64`.
 #[inline]
-pub(crate) fn reduce128(x: u128) -> Goldilocks {
+pub fn reduce128(x: u128) -> Goldilocks {
     let (x_lo, x_hi) = split(x); // This is a no-op
     let x_hi_hi = x_hi >> 32;
     let x_hi_lo = x_hi & Goldilocks::NEG_ORDER;
@@ -636,13 +636,13 @@ unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
 ///
 /// This is much faster than the standard algorithm as we avoid most of the (more expensive) field arithmetic.
 fn gcd_inversion(input: Goldilocks) -> Goldilocks {
-    // Initialise our values to the value we want to invert and the prime.
-    let (mut a, mut b) = (input.value, P);
-
     // As the goldilocks prime is 64 bit, initially `len(a) + len(b) ≤ 2 * 64 = 128`.
     // This means we will need `126` iterations of the inner loop ensure `len(a) + len(b) ≤ 2`.
     // We split the iterations into 2 rounds of length 63.
     const ROUND_SIZE: usize = 63;
+
+    // Initialise our values to the value we want to invert and the prime.
+    let (mut a, mut b) = (input.value, P);
 
     // In theory we could make this slightly faster by replacing the first `gcd_inner` by a copy-pasted
     // version which doesn't do any computations involving g. But either the compiler works this out
@@ -663,7 +663,7 @@ fn gcd_inversion(input: Goldilocks) -> Goldilocks {
 }
 
 /// Convert from an i64 to a Goldilocks element but interpret -2^63 as 2^63.
-fn from_unusual_int(int: i64) -> Goldilocks {
+const fn from_unusual_int(int: i64) -> Goldilocks {
     if (int >= 0) || (int == i64::MIN) {
         Goldilocks::new(int as u64)
     } else {
@@ -693,10 +693,10 @@ mod tests {
         // 2^64 - 2^32 + 1 = 0
         // 2^64            = 2^32 - 1
         let f = F::new(u64::MAX);
-        assert_eq!(f.as_canonical_u64(), u32::MAX as u64 - 1);
+        assert_eq!(f.as_canonical_u64(), u64::from(u32::MAX) - 1);
 
         let f = F::from_u64(u64::MAX);
-        assert_eq!(f.as_canonical_u64(), u32::MAX as u64 - 1);
+        assert_eq!(f.as_canonical_u64(), u64::from(u32::MAX) - 1);
 
         // Generator check
         let expected_multiplicative_group_generator = F::new(7);

@@ -23,3 +23,6 @@ criterion.workspace = true
 [[bench]]
 name = "permute"
 harness = false
+
+[lints]
+workspace = true

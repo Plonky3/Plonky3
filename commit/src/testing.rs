@@ -77,9 +77,9 @@ where
                     .rows_mut()
                     .zip(domain.shift_inverse().powers())
                     .for_each(|(row, weight)| {
-                        row.iter_mut().for_each(|coeff| {
+                        for coeff in row.iter_mut() {
                             *coeff *= weight;
-                        })
+                        }
                     });
                 coeffs
             })

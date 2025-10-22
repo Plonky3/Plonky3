@@ -4,7 +4,7 @@ use crate::{FieldParameters, MontyParameters};
 /// There are no constraints on the input.
 /// The output will be a u32 in range `[0, P)`.
 #[inline]
-pub(crate) const fn to_monty<MP: MontyParameters>(x: u32) -> u32 {
+pub const fn to_monty<MP: MontyParameters>(x: u32) -> u32 {
     (((x as u64) << MP::MONTY_BITS) % MP::PRIME as u64) as u32
 }
 
@@ -12,7 +12,7 @@ pub(crate) const fn to_monty<MP: MontyParameters>(x: u32) -> u32 {
 /// There are no constraints on the input.
 /// The output will be a u32 in range `[0, P)`.
 #[inline]
-pub(crate) const fn to_monty_signed<MP: MontyParameters>(x: i32) -> u32 {
+pub const fn to_monty_signed<MP: MontyParameters>(x: i32) -> u32 {
     let red = (((x as i64) << MP::MONTY_BITS) % MP::PRIME as i64) as i32;
     if red >= 0 {
         red as u32
@@ -25,7 +25,7 @@ pub(crate) const fn to_monty_signed<MP: MontyParameters>(x: i32) -> u32 {
 /// There are no constraints on the input.
 /// The output will be a u32 in range `[0, P)`.
 #[inline]
-pub(crate) const fn to_monty_64<MP: MontyParameters>(x: u64) -> u32 {
+pub const fn to_monty_64<MP: MontyParameters>(x: u64) -> u32 {
     (((x as u128) << MP::MONTY_BITS) % MP::PRIME as u128) as u32
 }
 
@@ -33,7 +33,7 @@ pub(crate) const fn to_monty_64<MP: MontyParameters>(x: u64) -> u32 {
 /// There are no constraints on the input.
 /// The output will be a u32 in range `[0, P)`.
 #[inline]
-pub(crate) const fn to_monty_64_signed<MP: MontyParameters>(x: i64) -> u32 {
+pub const fn to_monty_64_signed<MP: MontyParameters>(x: i64) -> u32 {
     let red = (((x as i128) << MP::MONTY_BITS) % MP::PRIME as i128) as i32;
     if red >= 0 {
         red as u32
@@ -47,7 +47,7 @@ pub(crate) const fn to_monty_64_signed<MP: MontyParameters>(x: i64) -> u32 {
 /// The output will be a u32 in range `[0, P)`.
 #[inline]
 #[must_use]
-pub(crate) const fn from_monty<MP: MontyParameters>(x: u32) -> u32 {
+pub const fn from_monty<MP: MontyParameters>(x: u32) -> u32 {
     monty_reduce::<MP>(x as u64)
 }
 
@@ -60,7 +60,7 @@ pub(crate) const fn from_monty<MP: MontyParameters>(x: u32) -> u32 {
 /// the result is guaranteed to be less than `P`.
 #[inline]
 #[must_use]
-pub(crate) fn add<MP: MontyParameters>(lhs: u32, rhs: u32) -> u32 {
+pub const fn add<MP: MontyParameters>(lhs: u32, rhs: u32) -> u32 {
     let mut sum = lhs + rhs;
     let (corr_sum, over) = sum.overflowing_sub(MP::PRIME);
     if !over {
@@ -78,7 +78,7 @@ pub(crate) fn add<MP: MontyParameters>(lhs: u32, rhs: u32) -> u32 {
 /// the result is guaranteed to be less than `P`.
 #[inline]
 #[must_use]
-pub(crate) fn sub<MP: MontyParameters>(lhs: u32, rhs: u32) -> u32 {
+pub const fn sub<MP: MontyParameters>(lhs: u32, rhs: u32) -> u32 {
     let (mut diff, over) = lhs.overflowing_sub(rhs);
     let corr = if over { MP::PRIME } else { 0 };
     diff = diff.wrapping_add(corr);
@@ -89,7 +89,7 @@ pub(crate) fn sub<MP: MontyParameters>(lhs: u32, rhs: u32) -> u32 {
 /// The input must be in `[0, P)`.
 /// The output will also be in `[0, P)`.
 #[inline]
-pub(crate) const fn halve_u32<FP: FieldParameters>(input: u32) -> u32 {
+pub const fn halve_u32<FP: FieldParameters>(input: u32) -> u32 {
     let shr = input >> 1;
     let lo_bit = input & 1;
     let shr_corr = shr + FP::HALF_P_PLUS_1;
@@ -102,7 +102,7 @@ pub(crate) const fn halve_u32<FP: FieldParameters>(input: u32) -> u32 {
 /// The output will be in `[0, P)`.
 #[inline]
 #[must_use]
-pub(crate) const fn monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
+pub const fn monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
     // t = x * MONTY_MU mod MONTY
     let t = x.wrapping_mul(MP::MONTY_MU as u64) & (MP::MONTY_MASK as u64);
 
@@ -131,7 +131,7 @@ pub(crate) const fn monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
 /// This is slower than `monty_reduce` but has a larger input range.
 #[inline]
 #[must_use]
-pub(crate) const fn large_monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
+pub const fn large_monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
     // t = x * MONTY_MU mod MONTY
     let t = x.wrapping_mul(MP::MONTY_MU as u64) & (MP::MONTY_MASK as u64);
 
@@ -160,7 +160,7 @@ pub(crate) const fn large_monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
 /// Perform a monty reduction on a u128 in the range `[0, 2^96)`
 ///
 /// The input will be in `[0, P)` and be equal to `x * MONTY^{-1} mod P`.
-pub(crate) fn monty_reduce_u128<MP: MontyParameters>(x: u128) -> u32 {
+pub const fn monty_reduce_u128<MP: MontyParameters>(x: u128) -> u32 {
     // TODO: There is probably a way to do this faster than using %.
 
     // Need to find MONTY^{-1} mod P.

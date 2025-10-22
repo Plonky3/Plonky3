@@ -10,7 +10,7 @@ use crate::{PackedMontyParameters, TwoAdicData};
 /// - If `val` is even, computes `val / 2`.
 /// - If `val` is odd, computes `(val + P) / 2`.
 #[inline(always)]
-pub(crate) fn halve_neon<PMP: PackedMontyParameters>(input: uint32x4_t) -> uint32x4_t {
+pub fn halve_neon<PMP: PackedMontyParameters>(input: uint32x4_t) -> uint32x4_t {
     unsafe {
         let one = vdupq_n_u32(1);
 

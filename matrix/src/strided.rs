@@ -36,7 +36,7 @@ impl VerticallyStridedRowIndexMap {
         let full_strides = h / stride;
         let remainder = h % stride;
         let final_stride = offset < remainder;
-        let height = full_strides + final_stride as usize;
+        let height = full_strides + usize::from(final_stride);
         RowIndexMappedView {
             index_map: Self {
                 height,

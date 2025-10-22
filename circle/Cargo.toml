@@ -39,3 +39,6 @@ tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 [[bench]]
 name = "cfft"
 harness = false
+
+[lints]
+workspace = true

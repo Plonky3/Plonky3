@@ -27,7 +27,7 @@ impl<const WIDTH: usize, const NUM_ROUNDS: usize> Permutation<[Mersenne31; WIDTH
             let matrix: [u64; WIDTH] = MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH[..]
                 .try_into()
                 .unwrap();
-            apply_circulant(&matrix, input)
+            apply_circulant(&matrix, &input)
         } else {
             let mut shake = Shake128::default();
             shake.update(b"Monolith");
@@ -64,7 +64,9 @@ fn apply_cauchy_mds_matrix<F: PrimeField32, const WIDTH: usize>(
 
     let y = get_random_y_i::<WIDTH>(shake, x_mask, y_mask);
     let mut x = y;
-    x.iter_mut().for_each(|x_i| *x_i &= x_mask);
+    for x_i in &mut x {
+        *x_i &= x_mask;
+    }
 
     for (i, x_i) in x.iter().enumerate() {
         for (j, y_j) in y.iter().enumerate() {

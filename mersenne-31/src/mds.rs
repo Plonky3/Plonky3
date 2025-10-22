@@ -29,7 +29,7 @@ impl Convolve<Mersenne31, i64, i64, i64> for SmallConvolveMersenne31 {
     /// 0 <= input.value <= P < 2^31.
     #[inline(always)]
     fn read(input: Mersenne31) -> i64 {
-        input.value as i64
+        i64::from(input.value)
     }
 
     /// FIXME: Refactor the dot product
@@ -65,22 +65,22 @@ impl Convolve<Mersenne31, i64, i64, i64> for LargeConvolveMersenne31 {
     /// 0 <= input.value <= P < 2^31.
     #[inline(always)]
     fn read(input: Mersenne31) -> i64 {
-        input.value as i64
+        i64::from(input.value)
     }
 
     #[inline]
     fn parity_dot<const N: usize>(u: [i64; N], v: [i64; N]) -> i64 {
+        const LOWMASK: i128 = (1 << 42) - 1; // Gets the bits lower than 42.
+        const HIGHMASK: i128 = !LOWMASK; // Gets all bits higher than 42.
+
         // For a convolution of size N, |x|, |y| < N * 2^31, so the product
         // could be as much as N^2 * 2^62. This will overflow an i64, so
         // we first widen to i128.
 
         let mut dp = 0i128;
         for i in 0..N {
-            dp += u[i] as i128 * v[i] as i128;
+            dp += i128::from(u[i]) * i128::from(v[i]);
         }
-
-        const LOWMASK: i128 = (1 << 42) - 1; // Gets the bits lower than 42.
-        const HIGHMASK: i128 = !LOWMASK; // Gets all bits higher than 42.
 
         let low_bits = (dp & LOWMASK) as i64; // low_bits < 2**42
         let high_bits = ((dp & HIGHMASK) >> 31) as i64; // |high_bits| < 2**(n - 31)
@@ -102,6 +102,8 @@ impl Convolve<Mersenne31, i64, i64, i64> for LargeConvolveMersenne31 {
 
     #[inline]
     fn reduce(z: i64) -> Mersenne31 {
+        const MASK: i64 = (1 << 31) - 1;
+
         // After the dot product, the maximal size is N^2 * 2^62 < 2^74
         // as N = 64 is the biggest size. So, after the partial
         // reduction, the output z of parity dot satisfies |z| < 2^44
@@ -123,7 +125,6 @@ impl Convolve<Mersenne31, i64, i64, i64> for LargeConvolveMersenne31 {
         debug_assert!(z > -(1i64 << 49));
         debug_assert!(z < (1i64 << 49));
 
-        const MASK: i64 = (1 << 31) - 1;
         // Morally, our value is a i62 not a i64 as the top 3 bits are
         // guaranteed to be equal.
         let low_bits = unsafe {

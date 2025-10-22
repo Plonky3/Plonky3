@@ -27,3 +27,6 @@ criterion.workspace = true
 [[bench]]
 name = "mds"
 harness = false
+
+[lints]
+workspace = true

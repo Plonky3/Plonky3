@@ -64,7 +64,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         let par_twiddles = twiddles
             .peeking_take_while(|ts| ts.len() >= desired_num_jobs())
             .collect_vec();
-        if let Some(min_blks) = par_twiddles.last().map(|ts| ts.len()) {
+        if let Some(min_blks) = par_twiddles.last().map(alloc::vec::Vec::len) {
             let max_blk_sz = values.height() / min_blks;
             debug_span!("par_layers", log_min_blks = log2_strict_usize(min_blks)).in_scope(|| {
                 values
@@ -169,7 +169,7 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
         }
 
         let par_twiddles = twiddles.collect_vec();
-        if let Some(min_blks) = par_twiddles.first().map(|ts| ts.len()) {
+        if let Some(min_blks) = par_twiddles.first().map(alloc::vec::Vec::len) {
             let max_blk_sz = coeffs.height() / min_blks;
             debug_span!("par_layers", log_min_blks = log2_strict_usize(min_blks)).in_scope(|| {
                 coeffs
@@ -213,6 +213,7 @@ fn par_within_blk_layer<F: Field, B: Butterfly<F>>(values: &mut [F], twiddles: &
 }
 
 #[inline]
+#[allow(clippy::missing_const_for_fn)]
 fn desired_num_jobs() -> usize {
     16 * current_num_threads()
 }

@@ -73,7 +73,7 @@ where
             .map(|i| {
                 let hi = (i >> 8) as u8;
                 let lo = i as u8;
-                ((Self::s_box(hi) as u16) << 8) | Self::s_box(lo) as u16
+                (u16::from(Self::s_box(hi)) << 8) | u16::from(Self::s_box(lo))
             })
             .collect()
     }
@@ -83,7 +83,7 @@ where
             .map(|i| {
                 let hi = (i >> 8) as u8;
                 let lo: u8 = i as u8;
-                ((Self::final_s_box(hi) as u16) << 8) | Self::s_box(lo) as u16
+                (u16::from(Self::final_s_box(hi)) << 8) | u16::from(Self::s_box(lo))
             })
             .collect()
     }
@@ -154,7 +154,7 @@ where
             // get_unchecked here is safe because lookup table 2 contains 2^15 elements,
             // and el >> 16 < 2^15 (since el < Mersenne31::ORDER_U32 < 2^31)
             let high = *self.lookup2.get_unchecked((*val >> 16) as u16 as usize);
-            *val = ((high as u32) << 16) | low as u32
+            *val = (u32::from(high) << 16) | u32::from(low);
         }
 
         unsafe {

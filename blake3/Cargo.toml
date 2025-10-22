@@ -18,3 +18,6 @@ blake3.workspace = true
 [features]
 neon = ["blake3/neon"]
 parallel = ["blake3/rayon"]
+
+[lints]
+workspace = true

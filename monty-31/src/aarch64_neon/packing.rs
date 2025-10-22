@@ -871,7 +871,7 @@ where
 
 /// Multiplication in a quartic binomial extension field.
 #[inline]
-pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
+pub fn quartic_mul_packed<FP, const WIDTH: usize>(
     a: &[MontyField31<FP>; WIDTH],
     b: &[MontyField31<FP>; WIDTH],
     res: &mut [MontyField31<FP>; WIDTH],
@@ -905,7 +905,7 @@ pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
 
 /// Multiplication in a quintic binomial extension field.
 #[inline]
-pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
+pub fn quintic_mul_packed<FP, const WIDTH: usize>(
     a: &[MontyField31<FP>; WIDTH],
     b: &[MontyField31<FP>; WIDTH],
     res: &mut [MontyField31<FP>; WIDTH],
@@ -950,12 +950,12 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
 
 /// Multiplication in an octic binomial extension field.
 #[inline]
-pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
+pub fn octic_mul_packed<FP, const WIDTH: usize>(
     a: &[MontyField31<FP>; WIDTH],
     b: &[MontyField31<FP>; WIDTH],
     res: &mut [MontyField31<FP>; WIDTH],
 ) where
-    FP: FieldParameters + BinomialExtensionData<WIDTH> + FieldParameters,
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
 {
     // TODO: This could be optimised further with a custom NEON implementation.
     assert_eq!(WIDTH, 8);
@@ -1012,7 +1012,7 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
 
 /// Multiplication by a base field element in a binomial extension field.
 #[inline]
-pub(crate) fn base_mul_packed<FP, const WIDTH: usize>(
+pub fn base_mul_packed<FP, const WIDTH: usize>(
     a: [MontyField31<FP>; WIDTH],
     b: MontyField31<FP>,
     res: &mut [MontyField31<FP>; WIDTH],
@@ -1059,7 +1059,7 @@ pub(crate) fn base_mul_packed<FP, const WIDTH: usize>(
 /// Outputs will be unsigned 32-bit integers in canonical form `[0, P)`.
 #[inline(always)]
 #[must_use]
-pub(crate) fn exp_small<PMP, const D: u64>(val: int32x4_t) -> uint32x4_t
+pub fn exp_small<PMP, const D: u64>(val: int32x4_t) -> uint32x4_t
 where
     PMP: PackedMontyParameters + FieldParameters,
 {

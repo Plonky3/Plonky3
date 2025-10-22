@@ -43,3 +43,6 @@ p3-matrix.workspace = true
 
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
+
+[lints]
+workspace = true

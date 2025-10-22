@@ -39,3 +39,6 @@ criterion.workspace = true
 [[bench]]
 name = "fold_even_odd"
 harness = false
+
+[lints]
+workspace = true

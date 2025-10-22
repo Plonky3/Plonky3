@@ -246,7 +246,7 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
                         log_stride,
                         log_half_size,
                         x,
-                    )
+                    );
                 },
                 || {
                     rayon::join(
@@ -267,7 +267,7 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
                                 log_stride,
                                 log_half_size,
                                 x + half,
-                            )
+                            );
                         },
                     )
                 },

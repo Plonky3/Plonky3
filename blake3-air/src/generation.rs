@@ -83,10 +83,10 @@ fn generate_trace_rows_for_perm<F: PrimeField64>(
         [input[16], input[16 + 1], input[16 + 2], input[16 + 3]],
         [input[16 + 4], input[16 + 5], input[16 + 6], input[16 + 7]],
         [
-            (IV[0][0] as u32) + ((IV[0][1] as u32) << 16),
-            (IV[1][0] as u32) + ((IV[1][1] as u32) << 16),
-            (IV[2][0] as u32) + ((IV[2][1] as u32) << 16),
-            (IV[3][0] as u32) + ((IV[3][1] as u32) << 16),
+            u32::from(IV[0][0]) + (u32::from(IV[0][1]) << 16),
+            u32::from(IV[1][0]) + (u32::from(IV[1][1]) << 16),
+            u32::from(IV[2][0]) + (u32::from(IV[2][1]) << 16),
+            u32::from(IV[3][0]) + (u32::from(IV[3][1]) << 16),
         ],
         [
             counter as u32,
@@ -136,7 +136,7 @@ fn generate_trace_row_for_round<F: PrimeField64>(
             state[3][i],
             m_vec[2 * i],
             false,
-        )
+        );
     });
 
     // After the first four operations we need to save a copy of the state into the trace.
@@ -151,7 +151,7 @@ fn generate_trace_row_for_round<F: PrimeField64>(
             state[3][i],
             m_vec[2 * i + 1],
             true,
-        )
+        );
     });
 
     // Again we save another copy of the state.
@@ -173,7 +173,7 @@ fn generate_trace_row_for_round<F: PrimeField64>(
             state[3][(i + 3) % 4],
             m_vec[8 + 2 * i],
             false,
-        )
+        );
     });
 
     // Save a copy of the state to the trace.
@@ -193,7 +193,7 @@ fn generate_trace_row_for_round<F: PrimeField64>(
             state[3][(i + 3) % 4],
             m_vec[9 + 2 * i],
             true,
-        )
+        );
     });
 
     // Save a copy of the state to the trace.

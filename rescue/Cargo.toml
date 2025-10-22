@@ -29,3 +29,6 @@ criterion.workspace = true
 [[bench]]
 name = "rescue"
 harness = false
+
+[lints]
+workspace = true

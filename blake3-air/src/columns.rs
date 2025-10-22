@@ -69,7 +69,7 @@ pub struct FullRound<T> {
 
 /// Data needed to verify a single quarter round function.
 #[repr(C)]
-pub(crate) struct QuarterRound<'a, T, U> {
+pub struct QuarterRound<'a, T, U> {
     // The inputs to the quarter round function.
     pub a: &'a [T; U32_LIMBS],
     pub b: &'a [T; 32],

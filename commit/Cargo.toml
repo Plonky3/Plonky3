@@ -28,3 +28,6 @@ p3-dft.workspace = true
 [features]
 default = ["test-utils"]
 test-utils = ["p3-challenger", "p3-dft"]
+
+[lints]
+workspace = true
