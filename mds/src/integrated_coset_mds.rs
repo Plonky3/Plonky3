@@ -5,7 +5,7 @@ use p3_symmetric::Permutation;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
 use crate::MdsPermutation;
-use crate::butterflies::{dif_butterfly, dit_butterfly, twiddle_free_butterfly};
+use crate::butterflies::{bowers_g_layer, bowers_g_t_layer_integrated};
 
 /// Like `CosetMds`, with a few differences:
 /// - (Bit reversed, a la Bowers) DIF + DIT rather than DIT + DIF
