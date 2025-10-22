@@ -14,7 +14,99 @@ use p3_util::zip_eq::zip_eq;
 use tracing::instrument;
 
 use crate::symbolic_builder::{SymbolicAirBuilder, get_log_quotient_degree};
-use crate::{PcsError, Proof, StarkGenericConfig, Val, VerifierConstraintFolder};
+use crate::{Domain, PcsError, Proof, StarkGenericConfig, Val, VerifierConstraintFolder};
+
+/// Recomposes the quotient polynomial from its chunks evaluated at a point.
+///
+/// Given quotient chunks and their domains, this computes the Lagrange
+/// interpolation coefficients (zps) and reconstructs quotient(zeta).
+pub fn recompose_quotient_from_chunks<SC>(
+    quotient_chunks_domains: &[Domain<SC>],
+    quotient_chunks: &[Vec<SC::Challenge>],
+    zeta: SC::Challenge,
+) -> SC::Challenge
+where
+    SC: StarkGenericConfig,
+{
+    let zps = quotient_chunks_domains
+        .iter()
+        .enumerate()
+        .map(|(i, domain)| {
+            quotient_chunks_domains
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != i)
+                .map(|(_, other_domain)| {
+                    other_domain.vanishing_poly_at_point(zeta)
+                        * other_domain
+                            .vanishing_poly_at_point(domain.first_point())
+                            .inverse()
+                })
+                .product::<SC::Challenge>()
+        })
+        .collect_vec();
+
+    quotient_chunks
+        .iter()
+        .enumerate()
+        .map(|(ch_i, ch)| {
+            // We checked in valid_shape the length of "ch" is equal to
+            // <SC::Challenge as BasedVectorSpace<Val<SC>>>::DIMENSION. Hence
+            // the unwrap() will never panic.
+            zps[ch_i]
+                * ch.iter()
+                    .enumerate()
+                    .map(|(e_i, &c)| SC::Challenge::ith_basis_element(e_i).unwrap() * c)
+                    .sum::<SC::Challenge>()
+        })
+        .sum::<SC::Challenge>()
+}
+
+/// Verifies that the folded constraints match the quotient polynomial at zeta.
+///
+/// This evaluates the AIR constraints at the out-of-domain point and checks
+/// that constraints(zeta) / Z_H(zeta) = quotient(zeta).
+#[allow(clippy::too_many_arguments)]
+pub fn verify_constraints<SC, A, PcsErr>(
+    air: &A,
+    trace_local: &[SC::Challenge],
+    trace_next: &[SC::Challenge],
+    public_values: &Vec<Val<SC>>,
+    trace_domain: Domain<SC>,
+    zeta: SC::Challenge,
+    alpha: SC::Challenge,
+    quotient: SC::Challenge,
+) -> Result<(), VerificationError<PcsErr>>
+where
+    SC: StarkGenericConfig,
+    A: for<'a> Air<VerifierConstraintFolder<'a, SC>>,
+{
+    let sels = trace_domain.selectors_at_point(zeta);
+
+    let main = VerticalPair::new(
+        RowMajorMatrixView::new_row(trace_local),
+        RowMajorMatrixView::new_row(trace_next),
+    );
+
+    let mut folder = VerifierConstraintFolder {
+        main,
+        public_values,
+        is_first_row: sels.is_first_row,
+        is_last_row: sels.is_last_row,
+        is_transition: sels.is_transition,
+        alpha,
+        accumulator: SC::Challenge::ZERO,
+    };
+    air.eval(&mut folder);
+    let folded_constraints = folder.accumulator;
+
+    // Check that constraints(zeta) / Z_H(zeta) = quotient(zeta)
+    if folded_constraints * sels.inv_vanishing != quotient {
+        return Err(VerificationError::OodEvaluationMismatch { index: None });
+    }
+
+    Ok(())
+}
 
 #[instrument(skip_all)]
 pub fn verify<SC, A>(
@@ -110,7 +202,9 @@ where
     //
     // Soundness Error: dN/|EF| where `N` is the trace length and our constraint polynomial has degree `d`.
     let zeta = challenger.sample_algebra_element();
-    let zeta_next = init_trace_domain.next_point(zeta).unwrap();
+    let zeta_next = init_trace_domain
+        .next_point(zeta)
+        .ok_or(VerificationError::NextPointUnavailable)?;
 
     // We've already checked that commitments.random and opened_values.random are present if and only if ZK is enabled.
     let mut coms_to_verify = if let Some(random_commit) = &commitments.random {
@@ -152,64 +246,22 @@ where
     pcs.verify(coms_to_verify, opening_proof, &mut challenger)
         .map_err(VerificationError::InvalidOpeningArgument)?;
 
-    let zps = quotient_chunks_domains
-        .iter()
-        .enumerate()
-        .map(|(i, domain)| {
-            quotient_chunks_domains
-                .iter()
-                .enumerate()
-                .filter(|(j, _)| *j != i)
-                .map(|(_, other_domain)| {
-                    other_domain.vanishing_poly_at_point(zeta)
-                        * other_domain
-                            .vanishing_poly_at_point(domain.first_point())
-                            .inverse()
-                })
-                .product::<SC::Challenge>()
-        })
-        .collect_vec();
-
-    let quotient = opened_values
-        .quotient_chunks
-        .iter()
-        .enumerate()
-        .map(|(ch_i, ch)| {
-            // We checked in valid_shape the length of "ch" is equal to
-            // <SC::Challenge as BasedVectorSpace<Val<SC>>>::DIMENSION. Hence
-            // the unwrap() will never panic.
-            zps[ch_i]
-                * ch.iter()
-                    .enumerate()
-                    .map(|(e_i, &c)| SC::Challenge::ith_basis_element(e_i).unwrap() * c)
-                    .sum::<SC::Challenge>()
-        })
-        .sum::<SC::Challenge>();
-
-    let sels = init_trace_domain.selectors_at_point(zeta);
-
-    let main = VerticalPair::new(
-        RowMajorMatrixView::new_row(&opened_values.trace_local),
-        RowMajorMatrixView::new_row(&opened_values.trace_next),
+    let quotient = recompose_quotient_from_chunks::<SC>(
+        &quotient_chunks_domains,
+        &opened_values.quotient_chunks,
+        zeta,
     );
 
-    let mut folder = VerifierConstraintFolder {
-        main,
+    verify_constraints::<SC, A, PcsError<SC>>(
+        air,
+        &opened_values.trace_local,
+        &opened_values.trace_next,
         public_values,
-        is_first_row: sels.is_first_row,
-        is_last_row: sels.is_last_row,
-        is_transition: sels.is_transition,
+        init_trace_domain,
+        zeta,
         alpha,
-        accumulator: SC::Challenge::ZERO,
-    };
-    air.eval(&mut folder);
-    let folded_constraints = folder.accumulator;
-
-    // Finally, check that
-    //     folded_constraints(zeta) / Z_H(zeta) = quotient(zeta)
-    if folded_constraints * sels.inv_vanishing != quotient {
-        return Err(VerificationError::OodEvaluationMismatch);
-    }
+        quotient,
+    )?;
 
     Ok(())
 }
@@ -221,7 +273,11 @@ pub enum VerificationError<PcsErr> {
     InvalidOpeningArgument(PcsErr),
     /// Out-of-domain evaluation mismatch, i.e. `constraints(zeta)` did not match
     /// `quotient(zeta) Z_H(zeta)`.
-    OodEvaluationMismatch,
+    OodEvaluationMismatch {
+        index: Option<usize>,
+    },
     /// The FRI batch randomization does not correspond to the ZK setting.
     RandomizationError,
+    /// The domain does not support computing the next point algebraically.
+    NextPointUnavailable,
 }
