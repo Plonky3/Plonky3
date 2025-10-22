@@ -64,7 +64,7 @@ impl<F: Field, A: Algebra<F>, const N: usize> Permutation<[A; N]> for Integrated
 
         // Bit-reversed DIT, aka Bowers G^T
         for layer in (0..log_n).rev() {
-            bowers_g_t_layer(values, layer, &self.fft_twiddles[layer]);
+          bowers_g_t_layer_integrated(values, layer, &self.fft_twiddles[layer]);
         }
     }
 }
