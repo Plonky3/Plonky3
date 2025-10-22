@@ -213,7 +213,7 @@ fn par_within_blk_layer<F: Field, B: Butterfly<F>>(values: &mut [F], twiddles: &
 }
 
 #[inline]
-fn desired_num_jobs() -> usize {
+const fn desired_num_jobs() -> usize {
     16 * current_num_threads()
 }
 
