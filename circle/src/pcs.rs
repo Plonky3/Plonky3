@@ -187,9 +187,9 @@ where
                                 let ps_at_zeta =
                                     info_span!("compute opened values with Lagrange interpolation")
                                         .in_scope(|| evals.evaluate_at_point(zeta));
-                                ps_at_zeta
-                                    .iter()
-                                    .for_each(|&p| challenger.observe_algebra_element(p));
+                                for &p in &ps_at_zeta {
+                                    challenger.observe_algebra_element(p);
+                                }
                                 ps_at_zeta
                             })
                             .collect()
@@ -290,7 +290,7 @@ where
             .mmcs
             .get_matrices(&first_layer_data)
             .into_iter()
-            .map(|m| fold_y(bivariate_beta, m.as_view()))
+            .map(|m| fold_y(bivariate_beta, m))
             // Reverse, because FRI expects descending by height
             .rev()
             .collect();
@@ -368,9 +368,9 @@ where
         for (_, round) in &rounds {
             for (_, mat) in round {
                 for (_, point) in mat {
-                    point
-                        .iter()
-                        .for_each(|&opening| challenger.observe_algebra_element(opening));
+                    for &opening in point {
+                        challenger.observe_algebra_element(opening);
+                    }
                 }
             }
         }
@@ -415,17 +415,19 @@ where
                         .map(|&height| Dimensions { width: 0, height })
                         .collect_vec();
 
-                    let (dims, idx) = if let Some(log_batch_max_height) =
-                        batch_heights.iter().max().map(|x| log2_strict_usize(*x))
-                    {
-                        (
-                            &batch_dims[..],
-                            index >> (log_global_max_height - log_batch_max_height),
-                        )
-                    } else {
-                        // Empty batch?
-                        (&[][..], 0)
-                    };
+                    let (dims, idx) = batch_heights
+                        .iter()
+                        .max()
+                        .map(|x| log2_strict_usize(*x))
+                        .map_or_else(
+                            || (&[][..], 0),
+                            |log_batch_max_height| {
+                                (
+                                    &batch_dims[..],
+                                    index >> (log_global_max_height - log_batch_max_height),
+                                )
+                            },
+                        );
 
                     self.mmcs
                         .verify_batch(batch_commit, dims, idx, batch_opening.into())

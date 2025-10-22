@@ -26,7 +26,7 @@ use crate::helpers::{
 /// The BN254 prime represented as a little-endian array of 4-u64s.
 ///
 /// Equal to: `21888242871839275222246405745257275088548364400416034343698204186575808495617`
-pub(crate) const BN254_PRIME: [u64; 4] = [
+pub const BN254_PRIME: [u64; 4] = [
     0x43e1f593f0000001,
     0x2833e84879b97091,
     0xb85045b68181585d,
@@ -37,7 +37,7 @@ pub(crate) const BN254_PRIME: [u64; 4] = [
 // constant 2^256.
 
 /// The value P^{-1} mod 2^64 where P is the BN254 prime.
-pub(crate) const BN254_MONTY_MU_64: u64 = 0x3d1e0a6c10000001;
+pub const BN254_MONTY_MU_64: u64 = 0x3d1e0a6c10000001;
 
 /// The square of the Montgomery constant `R = 2^256 mod P` for the BN254 field.
 ///
@@ -45,7 +45,7 @@ pub(crate) const BN254_MONTY_MU_64: u64 = 0x3d1e0a6c10000001;
 /// This constant is equal to `R^2 mod P` and is useful for converting elements into Montgomery form.
 ///
 /// Equal to: `944936681149208446651664254269745548490766851729442924617792859073125903783`
-pub(crate) const BN254_MONTY_R_SQ: [u64; 4] = [
+pub const BN254_MONTY_R_SQ: [u64; 4] = [
     0x1bb8e645ae216da7,
     0x53fe3ab1e35c59e3,
     0x8c49833d53bb8085,
@@ -71,6 +71,7 @@ impl Bn254 {
     }
 
     #[inline]
+    #[allow(clippy::needless_pass_by_value)]
     pub fn from_biguint(value: BigUint) -> Option<Self> {
         let digits = value.to_u64_digits();
         let num_dig = digits.len();
@@ -238,7 +239,7 @@ impl RawDataSerializable for Bn254 {
     #[inline]
     fn into_bytes(self) -> [u8; 32] {
         // The transmute here maps from [[u8; 8]; 4] to [u8; 32] so is clearly safe.
-        unsafe { transmute(self.value.map(|x| x.to_le_bytes())) }
+        unsafe { transmute(self.value.map(u64::to_le_bytes)) }
     }
 
     #[inline]
@@ -260,7 +261,7 @@ impl RawDataSerializable for Bn254 {
         input: impl IntoIterator<Item = [Self; N]>,
     ) -> impl IntoIterator<Item = [u8; N]> {
         input.into_iter().flat_map(|vector| {
-            let bytes = vector.map(|elem| elem.into_bytes());
+            let bytes = vector.map(p3_field::RawDataSerializable::into_bytes);
             (0..Self::NUM_BYTES).map(move |i| array::from_fn(|j| bytes[j][i]))
         })
     }

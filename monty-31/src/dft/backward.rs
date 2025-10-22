@@ -142,11 +142,6 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     fn backward_iterative(packed_input: &mut [<Self as Field>::Packing], root_table: &[Vec<Self>]) {
-        assert!(packed_input.len() >= 2);
-        let packing_width = <Self as Field>::Packing::WIDTH;
-        let n = packed_input.len() * packing_width;
-        let lg_n = log2_strict_usize(n);
-
         // Start loop after doing radix 16 separately. This value is determined by the largest
         // packing width we will encounter, which is 16 at the moment for AVX512. Specifically
         // it is log_2(max{possible packing widths}) = lg(16) = 4.
@@ -154,6 +149,11 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
 
         // How many layers have we specialised after the main loop
         const NUM_SPECIALISATIONS: usize = 2;
+
+        assert!(packed_input.len() >= 2);
+        let packing_width = <Self as Field>::Packing::WIDTH;
+        let n = packed_input.len() * packing_width;
+        let lg_n = log2_strict_usize(n);
 
         // Needed to avoid overlap of the 2 specialisations at the start
         // with the radix-16 specialisation at the end of the loop
@@ -301,7 +301,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
             2 => Self::backward_2(input),
             _ => {
                 let packed_input = <Self as Field>::Packing::pack_slice_mut(input);
-                Self::backward_fft_recur(packed_input, root_table)
+                Self::backward_fft_recur(packed_input, root_table);
             }
         }
     }

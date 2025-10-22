@@ -147,7 +147,7 @@ pub trait Mmcs<T: Send + Sync + Clone>: Clone {
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         index: usize,
-        batch_opening: BatchOpeningRef<T, Self>,
+        batch_opening: BatchOpeningRef<'_, T, Self>,
     ) -> Result<(), Self::Error>;
 }
 
@@ -171,7 +171,7 @@ pub struct BatchOpening<T: Send + Sync + Clone, InputMmcs: Mmcs<T>> {
 impl<T: Send + Sync + Clone, InputMmcs: Mmcs<T>> BatchOpening<T, InputMmcs> {
     /// Creates a new batch opening proof.
     #[inline]
-    pub fn new(opened_values: Vec<Vec<T>>, opening_proof: InputMmcs::Proof) -> Self {
+    pub const fn new(opened_values: Vec<Vec<T>>, opening_proof: InputMmcs::Proof) -> Self {
         Self {
             opened_values,
             opening_proof,
@@ -201,7 +201,7 @@ pub struct BatchOpeningRef<'a, T: Send + Sync + Clone, InputMmcs: Mmcs<T>> {
 impl<'a, T: Send + Sync + Clone, InputMmcs: Mmcs<T>> BatchOpeningRef<'a, T, InputMmcs> {
     /// Creates a new batch opening proof.
     #[inline]
-    pub fn new(opened_values: &'a [Vec<T>], opening_proof: &'a InputMmcs::Proof) -> Self {
+    pub const fn new(opened_values: &'a [Vec<T>], opening_proof: &'a InputMmcs::Proof) -> Self {
         Self {
             opened_values,
             opening_proof,
@@ -210,7 +210,7 @@ impl<'a, T: Send + Sync + Clone, InputMmcs: Mmcs<T>> BatchOpeningRef<'a, T, Inpu
 
     /// Unpacks the batch opening proof into its components.
     #[inline]
-    pub fn unpack(&self) -> (&'a [Vec<T>], &'a InputMmcs::Proof) {
+    pub const fn unpack(&self) -> (&'a [Vec<T>], &'a InputMmcs::Proof) {
         (self.opened_values, self.opening_proof)
     }
 }

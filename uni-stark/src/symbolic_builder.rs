@@ -45,7 +45,7 @@ where
 {
     get_symbolic_constraints(air, preprocessed_width, num_public_values)
         .iter()
-        .map(|c| c.degree_multiple())
+        .map(super::symbolic_expression::SymbolicExpression::degree_multiple)
         .max()
         .unwrap_or(0)
 }

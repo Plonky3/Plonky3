@@ -63,7 +63,6 @@ impl LogUpGadget {
     /// `∑(m_i / (α - combined_elements[i]))`, where
     /// `combined_elements[i] = ∑elements[i][n-j] * β^j
     pub(crate) fn compute_combined_sum_terms<AB, E, M>(
-        &self,
         elements: &[Vec<E>],
         multiplicities: &[M],
         alpha: &AB::ExprEF,
@@ -203,8 +202,8 @@ impl LogUpGadget {
         builder.when_first_row().assert_zero_ext(s_local.clone());
 
         // Build the fraction:  ∑ m_i/(α - combined_elements[i])  =  numerator / denominator .
-        let (numerator, common_denominator) = self
-            .compute_combined_sum_terms::<AB, AB::ExprEF, AB::ExprEF>(
+        let (numerator, common_denominator) =
+            Self::compute_combined_sum_terms::<AB, AB::ExprEF, AB::ExprEF>(
                 &elements,
                 &multiplicities,
                 &alpha.into(),
@@ -224,7 +223,7 @@ impl LogUpGadget {
             );
 
             // Final constraint:
-            let final_val = (expected_cumulated.clone() - s_local) * common_denominator - numerator;
+            let final_val = (expected_cumulated - s_local) * common_denominator - numerator;
             builder.when_last_row().assert_zero_ext(final_val);
         } else {
             // If we don't have an `expected_cumulated`, we are in a local lookup update.
@@ -237,9 +236,7 @@ impl LogUpGadget {
             // - we are already ensuring that the first row is 0,
             // - at point `g^{n - 1}` (where `n` is the domain size), the next point is `g^0`, so that the constraint still holds
             // on the last row.
-            builder.assert_zero_ext(
-                (s_next - s_local.clone()) * common_denominator.clone() - numerator.clone(),
-            );
+            builder.assert_zero_ext((s_next - s_local) * common_denominator - numerator);
         }
     }
 }
@@ -302,7 +299,7 @@ impl LookupGadget for LogUpGadget {
         &self,
         all_expected_cumulative: &[EF],
     ) -> Result<(), LookupError> {
-        let total = all_expected_cumulative.iter().cloned().sum::<EF>();
+        let total = all_expected_cumulative.iter().copied().sum::<EF>();
 
         if !total.is_zero() {
             return Err(LookupError::GlobalCumulativeMismatch);
@@ -335,7 +332,7 @@ impl LookupGadget for LogUpGadget {
         for elems in &context.element_exprs {
             let deg = elems
                 .iter()
-                .map(|elt| elt.degree_multiple())
+                .map(p3_uni_stark::SymbolicExpression::degree_multiple)
                 .max()
                 .unwrap_or(0);
             degs.push(deg);

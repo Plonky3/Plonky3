@@ -29,7 +29,7 @@ use crate::{
 /// As p - 1 = 2×3^2×7×11×... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
 /// Currently pub(crate) as it is used in the default neon implementation. Once that is optimized
 /// this should no longer be public.
-pub(crate) const MERSENNE31_S_BOX_DEGREE: u64 = 5;
+pub const MERSENNE31_S_BOX_DEGREE: u64 = 5;
 
 /// An implementation of the Poseidon2 hash function specialised to run on the current architecture.
 ///
@@ -62,12 +62,12 @@ const POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS: [u8; 23] = [
 /// Here V is the vector [-2] + 1 << shifts. This used delayed reduction to be slightly faster.
 fn permute_mut<const N: usize>(state: &mut [Mersenne31; N], shifts: &[u8]) {
     debug_assert_eq!(shifts.len() + 1, N);
-    let part_sum: u64 = state[1..].iter().map(|x| x.value as u64).sum();
-    let full_sum = part_sum + (state[0].value as u64);
-    let s0 = part_sum + (-state[0]).value as u64;
+    let part_sum: u64 = state[1..].iter().map(|x| u64::from(x.value)).sum();
+    let full_sum = part_sum + u64::from(state[0].value);
+    let s0 = part_sum + u64::from((-state[0]).value);
     state[0] = from_u62(s0);
     for i in 1..N {
-        let si = full_sum + ((state[i].value as u64) << shifts[i - 1]);
+        let si = full_sum + (u64::from(state[i].value) << shifts[i - 1]);
         state[i] = from_u62(si);
     }
 }
@@ -79,7 +79,7 @@ impl InternalLayer<Mersenne31, 16, MERSENNE31_S_BOX_DEGREE> for Poseidon2Interna
             state,
             |x| permute_mut(x, &POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS),
             &self.internal_constants,
-        )
+        );
     }
 }
 
@@ -90,7 +90,7 @@ impl InternalLayer<Mersenne31, 24, MERSENNE31_S_BOX_DEGREE> for Poseidon2Interna
             state,
             |x| permute_mut(x, &POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS),
             &self.internal_constants,
-        )
+        );
     }
 }
 
@@ -136,7 +136,7 @@ impl GenericPoseidon2LinearLayers<16> for GenericPoseidon2LinearLayersMersenne31
             .zip(POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS)
             .skip(2)
             .for_each(|(val, diag_shift)| {
-                *val = full_sum.clone() + val.clone().mul_2exp_u64(diag_shift as u64);
+                *val = full_sum.clone() + val.clone().mul_2exp_u64(u64::from(diag_shift));
             });
     }
 }
@@ -159,7 +159,7 @@ impl GenericPoseidon2LinearLayers<24> for GenericPoseidon2LinearLayersMersenne31
             .zip(POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS)
             .skip(2)
             .for_each(|(val, diag_shift)| {
-                *val = full_sum.clone() + val.clone().mul_2exp_u64(diag_shift as u64);
+                *val = full_sum.clone() + val.clone().mul_2exp_u64(u64::from(diag_shift));
             });
     }
 }

@@ -105,7 +105,7 @@ impl<
     }
 }
 
-pub(crate) fn eval<
+pub fn eval<
     AB: AirBuilder,
     LinearLayers: GenericPoseidon2LinearLayers<WIDTH>,
     const WIDTH: usize,
@@ -133,7 +133,7 @@ pub(crate) fn eval<
         PARTIAL_ROUNDS,
     >,
 ) {
-    let mut state: [_; WIDTH] = local.inputs.clone().map(|x| x.into());
+    let mut state: [_; WIDTH] = local.inputs.clone().map(core::convert::Into::into);
 
     LinearLayers::external_linear_layer(&mut state);
 

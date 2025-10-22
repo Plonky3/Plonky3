@@ -390,8 +390,9 @@ where
                                                 inv_denoms,
                                             )
                                         });
-                                ys.iter()
-                                    .for_each(|&y| challenger.observe_algebra_element(y));
+                                for &y in &ys {
+                                    challenger.observe_algebra_element(y);
+                                }
                                 ys
                             })
                             .collect_vec()
@@ -494,7 +495,7 @@ where
                         // across the evaluation vector of `Mred(x)`. Adjust by alpha_pow_offset
                         // as needed.
                         .for_each(|((&reduced_row, ro), &inv_denom)| {
-                            *ro += alpha_pow_offset * (reduced_openings - reduced_row) * inv_denom
+                            *ro += alpha_pow_offset * (reduced_openings - reduced_row) * inv_denom;
                         });
                     num_reduced[log_height] += mat.width();
                 }
@@ -535,9 +536,9 @@ where
         for (_, round) in &commitments_with_opening_points {
             for (_, mat) in round {
                 for (_, point) in mat {
-                    point
-                        .iter()
-                        .for_each(|&opening| challenger.observe_algebra_element(opening));
+                    for &opening in point {
+                        challenger.observe_algebra_element(opening);
+                    }
                 }
             }
         }

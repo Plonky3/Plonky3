@@ -111,7 +111,7 @@ fn generate_trace_row_for_round<F: PrimeField64>(
         array::from_fn(|j| {
             let new_i = (i + 3 * j) % 5;
             let new_j = i;
-            current_state[new_i][new_j].rotate_left(R[new_i][new_j] as u32)
+            current_state[new_i][new_j].rotate_left(u32::from(R[new_i][new_j]))
         })
     });
 

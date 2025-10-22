@@ -25,13 +25,13 @@ pub fn divide_by_height<F: Field, S: DenseStorage<F> + BorrowMut<[F]>>(
 }
 
 /// Multiply each element of row `i` of `mat` by `shift**i`.
-pub(crate) fn coset_shift_cols<F: Field>(mat: &mut RowMajorMatrix<F>, shift: F) {
+pub fn coset_shift_cols<F: Field>(mat: &mut RowMajorMatrix<F>, shift: F) {
     mat.rows_mut()
         .zip(shift.powers())
         .for_each(|(row, weight)| {
-            row.iter_mut().for_each(|coeff| {
+            for coeff in row.iter_mut() {
                 *coeff *= weight;
-            })
+            }
         });
 }
 

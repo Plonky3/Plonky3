@@ -145,7 +145,7 @@ fn main() {
                     );
                     report_result(result);
                 }
-            };
+            }
         }
         FieldOptions::BabyBear => {
             type EF = BinomialExtensionField<BabyBear, 4>;
@@ -201,7 +201,7 @@ fn main() {
                     );
                     report_result(result);
                 }
-            };
+            }
         }
         FieldOptions::Mersenne31 => {
             type EF = BinomialExtensionField<Mersenne31, 3>;
@@ -236,7 +236,7 @@ fn main() {
                 _ => panic!(
                     "Currently there are no available DFT options when using Mersenne31. Please remove the --discrete_fourier_transform flag."
                 ),
-            };
+            }
 
             match args.merkle_hash {
                 MerkleHashOptions::KeccakF => {
@@ -251,7 +251,7 @@ fn main() {
                     );
                     report_result(result);
                 }
-            };
+            }
         }
     }
 }

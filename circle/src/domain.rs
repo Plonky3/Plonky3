@@ -290,7 +290,7 @@ mod tests {
         let evals = RowMajorMatrix::rand(&mut rng, n, width);
         let orig: Vec<(Point<F>, Vec<F>)> = d
             .points()
-            .zip(evals.rows().map(|r| r.collect_vec()))
+            .zip(evals.rows().map(Itertools::collect_vec))
             .collect();
         for num_chunks in [1, 2, 4, 8] {
             let mut combined = vec![];
@@ -306,7 +306,7 @@ mod tests {
                 assert_eq!(sd.size() * num_chunks, d.size());
                 assert_eq!(se.width(), evals.width());
                 assert_eq!(se.height() * num_chunks, d.size());
-                combined.extend(sd.points().zip(se.rows().map(|r| r.collect_vec())));
+                combined.extend(sd.points().zip(se.rows().map(Itertools::collect_vec)));
             }
             // Union of split domains and evals is the original domain and evals
             assert_eq!(

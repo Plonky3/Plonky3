@@ -31,6 +31,7 @@ use p3_util::relatively_prime_u64;
 ///
 /// If d is not a valid permutation of the given field or the optimal parameters for that size of prime
 /// have not been computed, an error is returned.
+#[allow(clippy::match_same_arms)]
 pub const fn poseidon2_round_numbers_128<F: PrimeField64>(
     width: usize,
     d: u64,

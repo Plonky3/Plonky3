@@ -718,7 +718,7 @@ mod tests {
             height: 3,
         };
 
-        let all_rows: Vec<Vec<u32>> = matrix.rows().map(|row| row.collect()).collect();
+        let all_rows: Vec<Vec<u32>> = matrix.rows().map(core::iter::Iterator::collect).collect();
         assert_eq!(all_rows, vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]]);
     }
 }

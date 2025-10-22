@@ -29,7 +29,7 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
-#[allow(clippy::eq_op)]
+#[allow(clippy::eq_op, clippy::cognitive_complexity)]
 pub fn test_ring_with_eq<R: PrimeCharacteristicRing + Copy + Eq>(zeros: &[R], ones: &[R])
 where
     StandardUniform: Distribution<R> + Distribution<[R; 16]>,
@@ -418,6 +418,7 @@ pub fn test_dot_product<R: PrimeCharacteristicRing + Eq + Copy>(u: &[R; 64], v: 
     assert_eq!(dot_64, R::dot_product::<64>(u, v));
 }
 
+#[allow(clippy::cognitive_complexity)]
 pub fn test_sums<R: PrimeCharacteristicRing + Eq + Copy>(u: &[R; 16]) {
     let mut sum = R::ZERO;
     assert_eq!(sum, R::sum_array::<0>(u[..0].try_into().unwrap()));
@@ -641,7 +642,7 @@ pub fn test_generator<F: Field>(multiplicative_group_factors: &[(BigUint, u32)])
 
     assert_eq!(partial_products.pop().unwrap(), F::ONE);
 
-    for elem in partial_products.into_iter() {
+    for elem in partial_products {
         assert_ne!(elem, F::ONE);
     }
 }
@@ -662,7 +663,7 @@ pub fn test_two_adic_point_collection<F: TwoAdicField>() {
         // Add `map` to avoid calling `BoundedPowers::collect()`
         #[allow(clippy::map_identity)]
         let points_expected = group.iter().map(|x| x).collect::<Vec<_>>();
-        assert_eq!(points, points_expected)
+        assert_eq!(points, points_expected);
     }
 }
 
@@ -733,7 +734,7 @@ where
 
     let expected_bytes = xs
         .into_iter()
-        .flat_map(|x| x.into_bytes())
+        .flat_map(p3_field::RawDataSerializable::into_bytes)
         .collect::<Vec<_>>();
     let expected_u32s = iter_array_chunks_padded(byte_vec.iter().copied(), 0)
         .map(u32::from_le_bytes)

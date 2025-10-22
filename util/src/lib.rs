@@ -339,7 +339,7 @@ pub const unsafe fn assume_init_ref<T>(slice: &[MaybeUninit<T>]) -> &[T] {
     // `slice` is initialized, and `MaybeUninit` is guaranteed to have the same layout as `T`.
     // The pointer obtained is valid since it refers to memory owned by `slice` which is a
     // reference and thus guaranteed to be valid for reads.
-    unsafe { &*(slice as *const [MaybeUninit<T>] as *const [T]) }
+    unsafe { &*(core::ptr::from_ref::<[MaybeUninit<T>]>(slice) as *const [T]) }
 }
 
 /// Split an iterator into small arrays and apply `func` to each.
@@ -419,7 +419,7 @@ pub fn iter_array_chunks_padded<T: Copy, const N: usize>(
 ///
 /// This panics if the size of `BaseArray` is not a multiple of the size of `Base`.
 #[inline]
-pub unsafe fn as_base_slice<Base, BaseArray>(buf: &[BaseArray]) -> &[Base] {
+pub const unsafe fn as_base_slice<Base, BaseArray>(buf: &[BaseArray]) -> &[Base] {
     const {
         assert!(align_of::<Base>() == align_of::<BaseArray>());
         assert!(size_of::<BaseArray>().is_multiple_of(size_of::<Base>()));
@@ -448,7 +448,7 @@ pub unsafe fn as_base_slice<Base, BaseArray>(buf: &[BaseArray]) -> &[Base] {
 ///
 /// This panics if the size of `BaseArray` is not a multiple of the size of `Base`.
 #[inline]
-pub unsafe fn as_base_slice_mut<Base, BaseArray>(buf: &mut [BaseArray]) -> &mut [Base] {
+pub const unsafe fn as_base_slice_mut<Base, BaseArray>(buf: &mut [BaseArray]) -> &mut [Base] {
     const {
         assert!(align_of::<Base>() == align_of::<BaseArray>());
         assert!(size_of::<BaseArray>().is_multiple_of(size_of::<Base>()));
@@ -497,7 +497,7 @@ pub unsafe fn flatten_to_base<Base, BaseArray>(vec: Vec<BaseArray>) -> Vec<Base>
     let new_cap = values.capacity() * d;
 
     // Safe as BaseArray and Base have the same alignment.
-    let ptr = values.as_mut_ptr() as *mut Base;
+    let ptr = values.as_mut_ptr().cast::<Base>();
 
     unsafe {
         // Safety:
@@ -564,7 +564,7 @@ pub unsafe fn reconstitute_from_base<Base, BaseArray: Clone>(mut vec: Vec<Base>)
         let new_cap = cap / d;
 
         // Safe as BaseArray and Base have the same alignment.
-        let ptr = values.as_mut_ptr() as *mut BaseArray;
+        let ptr = values.as_mut_ptr().cast::<BaseArray>();
 
         unsafe {
             // Safety:
@@ -627,7 +627,7 @@ pub const fn relatively_prime_u64(mut u: u64, mut v: u64) -> bool {
         // This looks inefficient for v >> u but thanks to the fact that we remove
         // trailing_zeros of v in every iteration, it ends up much more performative
         // than first glance implies.
-        v -= u
+        v -= u;
     }
     // If we made it through the loop, at no point is u or v equal to 1 and so the gcd
     // must be greater than 1.
@@ -695,7 +695,7 @@ pub fn gcd_inversion_prime_field_32<const FIELD_BITS: u32>(mut a: u32, mut b: u3
     const {
         assert!(FIELD_BITS <= 32);
     }
-    debug_assert!(((1_u64 << FIELD_BITS) - 1) >= b as u64);
+    debug_assert!(((1_u64 << FIELD_BITS) - 1) >= u64::from(b));
 
     // Initialise u, v. Note that |u|, |v| <= 2^0
     let (mut u, mut v) = (1_i64, 0_i64);
@@ -972,6 +972,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cognitive_complexity)]
     fn test_relatively_prime_u64() {
         // Zero cases (should always return false)
         assert!(!relatively_prime_u64(0, 0));

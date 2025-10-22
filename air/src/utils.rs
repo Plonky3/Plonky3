@@ -243,22 +243,22 @@ mod tests {
     fn test_pack_bits_le_various_patterns() {
         // Pattern: [1, 0, 1] as little-endian => 1 + 2*0 + 4*1 = 5
         let bits = [F::ONE, F::ZERO, F::ONE];
-        let packed = pack_bits_le::<F, _, _>(bits.iter().cloned());
+        let packed = pack_bits_le::<F, _, _>(bits.iter().copied());
         assert_eq!(packed, F::from_u8(5));
 
         // Pattern: [1, 1, 0, 1] => 1 + 2*1 + 4*0 + 8*1 = 1 + 2 + 8 = 11
         let bits = [F::ONE, F::ONE, F::ZERO, F::ONE];
-        let packed = pack_bits_le::<F, _, _>(bits.iter().cloned());
+        let packed = pack_bits_le::<F, _, _>(bits.iter().copied());
         assert_eq!(packed, F::from_u8(11));
 
         // Pattern: all zeros
         let bits = [F::ZERO; 5];
-        let packed = pack_bits_le::<F, _, _>(bits.iter().cloned());
+        let packed = pack_bits_le::<F, _, _>(bits.iter().copied());
         assert_eq!(packed, F::ZERO);
 
         // Pattern: single one at the highest place
         let bits = [F::ZERO, F::ZERO, F::ZERO, F::ZERO, F::ONE];
-        let packed = pack_bits_le::<F, _, _>(bits.iter().cloned());
+        let packed = pack_bits_le::<F, _, _>(bits.iter().copied());
         assert_eq!(packed, F::from_u8(16));
     }
 

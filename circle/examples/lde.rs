@@ -28,8 +28,8 @@ fn main() {
         .from_env_lossy();
 
     let mut args = std::env::args().skip(1);
-    let log_n = args.next().map(|s| s.parse().unwrap()).unwrap_or(16);
-    let log_w = args.next().map(|s| s.parse().unwrap()).unwrap_or(8);
+    let log_n = args.next().map_or(16, |s| s.parse().unwrap());
+    let log_w = args.next().map_or(8, |s| s.parse().unwrap());
     println!("log_n={log_n}, log_w={log_w}");
 
     let mut rng = SmallRng::seed_from_u64(1);

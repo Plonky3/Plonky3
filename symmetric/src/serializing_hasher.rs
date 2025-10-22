@@ -113,7 +113,7 @@ mod tests {
 
     impl CryptographicHasher<u8, [u8; 4]> for MockHasher {
         fn hash_iter<I: IntoIterator<Item = u8>>(&self, iter: I) -> [u8; 4] {
-            let sum: u8 = iter.into_iter().fold(0, |acc, x| acc.wrapping_add(x));
+            let sum: u8 = iter.into_iter().fold(0, u8::wrapping_add);
             // Simplest impl: set every element to the sum
             [sum; 4]
         }
@@ -136,7 +136,7 @@ mod tests {
 
     impl CryptographicHasher<u32, [u32; 4]> for MockHasher {
         fn hash_iter<I: IntoIterator<Item = u32>>(&self, iter: I) -> [u32; 4] {
-            let sum: u32 = iter.into_iter().fold(0, |acc, x| acc.wrapping_add(x));
+            let sum: u32 = iter.into_iter().fold(0, u32::wrapping_add);
             // Simplest impl: set every element to the sum
             [sum; 4]
         }
@@ -159,7 +159,7 @@ mod tests {
 
     impl CryptographicHasher<u64, [u64; 4]> for MockHasher {
         fn hash_iter<I: IntoIterator<Item = u64>>(&self, iter: I) -> [u64; 4] {
-            let sum: u64 = iter.into_iter().fold(0, |acc, x| acc.wrapping_add(x));
+            let sum: u64 = iter.into_iter().fold(0, u64::wrapping_add);
             // Simplest impl: set every element to the sum
             [sum; 4]
         }

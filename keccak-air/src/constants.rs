@@ -1,4 +1,4 @@
-pub(crate) const R: [[u8; 5]; 5] = [
+pub const R: [[u8; 5]; 5] = [
     [0, 36, 3, 41, 18],
     [1, 44, 10, 45, 2],
     [62, 6, 43, 15, 61],
@@ -156,6 +156,6 @@ const RC_BITS: [[u8; 64]; 24] = [
     ],
 ];
 
-pub(crate) const fn rc_value_bit(round: usize, bit_index: usize) -> u8 {
+pub const fn rc_value_bit(round: usize, bit_index: usize) -> u8 {
     RC_BITS[round][bit_index]
 }

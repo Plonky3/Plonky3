@@ -72,11 +72,7 @@ where
             .iter()
             .all(|qc| qc.len() == SC::Challenge::DIMENSION)
         // We've already checked that opened_values.random is present if and only if ZK is enabled.
-        && if let Some(r_comm) = &opened_values.random {
-            r_comm.len() == SC::Challenge::DIMENSION
-        } else {
-            true
-        };
+        && opened_values.random.as_ref().is_none_or(|r_comm| r_comm.len() == SC::Challenge::DIMENSION);
     if !valid_shape {
         return Err(VerificationError::InvalidProofShape);
     }

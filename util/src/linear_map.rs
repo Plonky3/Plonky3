@@ -21,14 +21,14 @@ pub struct LinearMap<K, V>(
 
 impl<K, V> Default for LinearMap<K, V> {
     fn default() -> Self {
-        Self(Default::default())
+        Self(Vec::default())
     }
 }
 
 impl<K: Eq, V> LinearMap<K, V> {
     /// Creates a new empty `LinearMap`.
     pub fn new() -> Self {
-        Default::default()
+        Self::default()
     }
 
     /// Creates a new empty `LinearMap` with a pre-allocated capacity.

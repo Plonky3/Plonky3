@@ -1,6 +1,5 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
-use core::ops::Deref;
 
 use p3_field::{ExtensionField, Field};
 use p3_matrix::extension::FlatMatrixView;
@@ -63,7 +62,7 @@ where
         self.inner
             .get_matrices(prover_data)
             .into_iter()
-            .map(|mat| mat.deref())
+            .map(|mat| &**mat)
             .collect()
     }
 
@@ -72,7 +71,7 @@ where
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         index: usize,
-        batch_opening: BatchOpeningRef<EF, Self>,
+        batch_opening: BatchOpeningRef<'_, EF, Self>,
     ) -> Result<(), Self::Error> {
         let opened_base_values: Vec<Vec<F>> = batch_opening
             .opened_values

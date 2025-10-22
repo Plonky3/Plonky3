@@ -18,7 +18,7 @@ use crate::{
 };
 
 #[instrument(skip_all)]
-#[allow(clippy::multiple_bound_locations)] // cfg not supported in where clauses?
+#[allow(clippy::multiple_bound_locations, clippy::type_repetition_in_bounds)] // cfg not supported in where clauses?
 pub fn prove<
     SC,
     #[cfg(debug_assertions)] A: for<'a> Air<crate::check_constraints::DebugConstraintBuilder<'a, Val<SC>>>,
@@ -165,7 +165,7 @@ where
         public_values,
         trace_domain,
         quotient_domain,
-        trace_on_quotient_domain,
+        &trace_on_quotient_domain,
         alpha,
         constraint_count,
     );
@@ -289,7 +289,7 @@ fn quotient_values<SC, A, Mat>(
     public_values: &Vec<Val<SC>>,
     trace_domain: Domain<SC>,
     quotient_domain: Domain<SC>,
-    trace_on_quotient_domain: Mat,
+    trace_on_quotient_domain: &Mat,
     alpha: SC::Challenge,
     constraint_count: usize,
 ) -> Vec<SC::Challenge>

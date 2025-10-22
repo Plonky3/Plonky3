@@ -356,7 +356,7 @@ mod tests {
         let result = -a;
         match result {
             SymbolicExpression::Constant(val) => {
-                assert_eq!(val, BabyBear::NEG_ONE * BabyBear::new(7))
+                assert_eq!(val, BabyBear::NEG_ONE * BabyBear::new(7));
             }
             _ => panic!("Negation did not work correctly"),
         }

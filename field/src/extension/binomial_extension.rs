@@ -257,7 +257,9 @@ impl<F: BinomiallyExtendable<D>, const D: usize> RawDataSerializable
 
     #[inline]
     fn into_bytes(self) -> impl IntoIterator<Item = u8> {
-        self.value.into_iter().flat_map(|x| x.into_bytes())
+        self.value
+            .into_iter()
+            .flat_map(RawDataSerializable::into_bytes)
     }
 
     #[inline]

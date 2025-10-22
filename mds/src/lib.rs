@@ -6,7 +6,7 @@ extern crate alloc;
 
 use p3_symmetric::Permutation;
 
-mod butterflies;
+pub mod butterflies;
 pub mod coset_mds;
 pub mod integrated_coset_mds;
 pub mod karatsuba_convolution;

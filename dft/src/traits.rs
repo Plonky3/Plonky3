@@ -9,9 +9,10 @@ use p3_matrix::util::swap_rows;
 use crate::util::{coset_shift_cols, divide_by_height};
 
 /// This trait gives an interface for computing discrete fourier transforms (DFT's) and their inverses over
-/// cosets of two-adic subgroups of a field `F`. It also contains combined methods which allow you to take the
-/// evaluation vector of a polynomial on a coset `gH` and extend it to a coset `g'K` for some possibly larger
-/// subgroup `K` and different shift `g'`.
+/// cosets of two-adic subgroups of a field `F`.
+///
+/// It also contains combined methods which allow you to take the evaluation vector of a polynomial on a coset
+/// `gH` and extend it to a coset `g'K` for some possibly larger subgroup `K` and different shift `g'`.
 ///
 /// It supports polynomials with evaluations/coefficients valued in either `F` or `A` where `A`
 /// is a vector space over `F` with specified basis. This latter case makes use of the fact that the DFT

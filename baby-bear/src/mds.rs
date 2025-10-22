@@ -61,7 +61,7 @@ mod tests {
             1348326858,
         ]);
 
-        let mds_matrix_baby_bear: MdsMatrixBabyBear = Default::default();
+        let mds_matrix_baby_bear = MdsMatrixBabyBear::default();
 
         let output = mds_matrix_baby_bear.permute(input);
 
@@ -80,7 +80,7 @@ mod tests {
             1787615541, 1696819900, 1884530130, 422386768,
         ]);
 
-        let mds_matrix_baby_bear: MdsMatrixBabyBear = Default::default();
+        let mds_matrix_baby_bear = MdsMatrixBabyBear::default();
 
         let output = mds_matrix_baby_bear.permute(input);
 
@@ -100,7 +100,7 @@ mod tests {
             1638511323, 303948902,
         ]);
 
-        let mds_matrix_baby_bear: MdsMatrixBabyBear = Default::default();
+        let mds_matrix_baby_bear = MdsMatrixBabyBear::default();
 
         let output = mds_matrix_baby_bear.permute(input);
 
@@ -122,7 +122,7 @@ mod tests {
             908584009, 817124993, 418826476,
         ]);
 
-        let mds_matrix_baby_bear: MdsMatrixBabyBear = Default::default();
+        let mds_matrix_baby_bear = MdsMatrixBabyBear::default();
 
         let output = mds_matrix_baby_bear.permute(input);
 
@@ -146,7 +146,7 @@ mod tests {
             1824512025, 1177399063, 1358745087, 444151496,
         ]);
 
-        let mds_matrix_baby_bear: MdsMatrixBabyBear = Default::default();
+        let mds_matrix_baby_bear = MdsMatrixBabyBear::default();
 
         let output = mds_matrix_baby_bear.permute(input);
 
@@ -176,7 +176,7 @@ mod tests {
             623354170,
         ]);
 
-        let mds_matrix_baby_bear: MdsMatrixBabyBear = Default::default();
+        let mds_matrix_baby_bear = MdsMatrixBabyBear::default();
 
         let output = mds_matrix_baby_bear.permute(input);
 

@@ -30,7 +30,7 @@ impl Convolve<Goldilocks, i128, i64, i128> for SmallConvolveGoldilocks {
     /// for even the smallest convolutions.
     #[inline(always)]
     fn read(input: Goldilocks) -> i128 {
-        input.value as i128
+        i128::from(input.value)
     }
 
     /// For a convolution of size N, |x| < N * 2^64 and (as per the
@@ -41,7 +41,7 @@ impl Convolve<Goldilocks, i128, i64, i128> for SmallConvolveGoldilocks {
     fn parity_dot<const N: usize>(u: [i128; N], v: [i64; N]) -> i128 {
         let mut s = 0i128;
         for i in 0..N {
-            s += u[i] * v[i] as i128;
+            s += u[i] * i128::from(v[i]);
         }
         s
     }
@@ -61,7 +61,7 @@ impl Convolve<Goldilocks, i128, i64, i128> for SmallConvolveGoldilocks {
 
 const FFT_ALGO: Radix2Bowers = Radix2Bowers;
 
-pub(crate) const MATRIX_CIRC_MDS_8_SML_ROW: [i64; 8] = [7, 1, 3, 8, 8, 3, 4, 9];
+pub const MATRIX_CIRC_MDS_8_SML_ROW: [i64; 8] = [7, 1, 3, 8, 8, 3, 4, 9];
 
 impl Permutation<[Goldilocks; 8]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 8]) -> [Goldilocks; 8] {
@@ -80,7 +80,7 @@ impl Permutation<[Goldilocks; 8]> for MdsMatrixGoldilocks {
 }
 impl MdsPermutation<Goldilocks, 8> for MdsMatrixGoldilocks {}
 
-pub(crate) const MATRIX_CIRC_MDS_12_SML_ROW: [i64; 12] = [1, 1, 2, 1, 8, 9, 10, 7, 5, 9, 4, 10];
+pub const MATRIX_CIRC_MDS_12_SML_ROW: [i64; 12] = [1, 1, 2, 1, 8, 9, 10, 7, 5, 9, 4, 10];
 
 impl Permutation<[Goldilocks; 12]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 12]) -> [Goldilocks; 12] {
@@ -99,7 +99,7 @@ impl Permutation<[Goldilocks; 12]> for MdsMatrixGoldilocks {
 }
 impl MdsPermutation<Goldilocks, 12> for MdsMatrixGoldilocks {}
 
-pub(crate) const MATRIX_CIRC_MDS_16_SML_ROW: [i64; 16] =
+pub const MATRIX_CIRC_MDS_16_SML_ROW: [i64; 16] =
     [1, 1, 51, 1, 11, 17, 2, 1, 101, 63, 15, 2, 67, 22, 13, 3];
 
 impl Permutation<[Goldilocks; 16]> for MdsMatrixGoldilocks {
@@ -120,7 +120,7 @@ impl Permutation<[Goldilocks; 16]> for MdsMatrixGoldilocks {
 impl MdsPermutation<Goldilocks, 16> for MdsMatrixGoldilocks {}
 
 #[rustfmt::skip]
-pub(crate) const MATRIX_CIRC_MDS_24_GOLDILOCKS: [u64; 24] = [
+pub const MATRIX_CIRC_MDS_24_GOLDILOCKS: [u64; 24] = [
     0x5FFFFFFFA00AAAAB, 0x24021AB75BBFE656, 0x7BE9082D73B06DF5, 0x2282863E9C3A5A62,
     0xE0071C70DFFC71C8, 0x796CB65AB42A1A63, 0xDBBBBFFADFFDDDE3, 0x23B88EE217C5C9C2,
     0x20030C309FFB6DB7, 0x23C3C64763BE1E1D, 0x0F93B7C9CC51362E, 0xC697A1094BD0850A,
@@ -131,7 +131,7 @@ pub(crate) const MATRIX_CIRC_MDS_24_GOLDILOCKS: [u64; 24] = [
 
 impl Permutation<[Goldilocks; 24]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 24]) -> [Goldilocks; 24] {
-        apply_circulant(&MATRIX_CIRC_MDS_24_GOLDILOCKS, input)
+        apply_circulant(&MATRIX_CIRC_MDS_24_GOLDILOCKS, &input)
     }
 
     fn permute_mut(&self, input: &mut [Goldilocks; 24]) {
@@ -155,7 +155,7 @@ const MATRIX_CIRC_MDS_32_GOLDILOCKS: [u64; 32] = [
 impl Permutation<[Goldilocks; 32]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 32]) -> [Goldilocks; 32] {
         const ENTRIES: [u64; 32] = first_row_to_first_col(&MATRIX_CIRC_MDS_32_GOLDILOCKS);
-        apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
+        apply_circulant_fft(&FFT_ALGO, ENTRIES, &input)
     }
 
     fn permute_mut(&self, input: &mut [Goldilocks; 32]) {
@@ -187,7 +187,7 @@ const MATRIX_CIRC_MDS_64_GOLDILOCKS: [u64; 64] = [
 impl Permutation<[Goldilocks; 64]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 64]) -> [Goldilocks; 64] {
         const ENTRIES: [u64; 64] = first_row_to_first_col(&MATRIX_CIRC_MDS_64_GOLDILOCKS);
-        apply_circulant_fft(FFT_ALGO, ENTRIES, &input)
+        apply_circulant_fft(&FFT_ALGO, ENTRIES, &input)
     }
 
     fn permute_mut(&self, input: &mut [Goldilocks; 64]) {
@@ -219,7 +219,7 @@ const MATRIX_CIRC_MDS_68_GOLDILOCKS: [u64; 68] = [
 
 impl Permutation<[Goldilocks; 68]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 68]) -> [Goldilocks; 68] {
-        apply_circulant(&MATRIX_CIRC_MDS_68_GOLDILOCKS, input)
+        apply_circulant(&MATRIX_CIRC_MDS_68_GOLDILOCKS, &input)
     }
 
     fn permute_mut(&self, input: &mut [Goldilocks; 68]) {

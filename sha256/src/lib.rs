@@ -45,7 +45,7 @@ impl PseudoCompressionFunction<[u8; 32], 2> for Sha256Compress {
     fn compress(&self, input: [[u8; 32]; 2]) -> [u8; 32] {
         let mut state = H256_256;
         // [[u8; 32]; 2] has same memory layout as [u8; 64]
-        let block: &[u8; 64] = unsafe { core::mem::transmute(&input) };
+        let block: &[u8; 64] = unsafe { &*(&raw const input).cast::<[u8; 64]>() };
         sha2::compress256(&mut state, core::slice::from_ref(block.into()));
 
         let mut output = [0u8; 32];

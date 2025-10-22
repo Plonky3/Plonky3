@@ -79,7 +79,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
 
 /// Executes the Bowers G network. This is like a DFT, except it assumes the input is in
 /// bit-reversed order.
-fn bowers_g<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
+fn bowers_g<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<'_, F>) {
     let h = mat.height();
     let log_h = log2_strict_usize(h);
 
@@ -90,13 +90,13 @@ fn bowers_g<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
     let twiddles: Vec<DifButterfly<F>> = unsafe { flatten_to_base(twiddles) };
 
     for log_half_block_size in 0..log_h {
-        butterfly_layer(mat, 1 << log_half_block_size, &twiddles)
+        butterfly_layer(mat, 1 << log_half_block_size, &twiddles);
     }
 }
 
 /// Executes the Bowers G^T network. This is like an inverse DFT, except we skip rescaling by
 /// 1/height, and the output is bit-reversed.
-fn bowers_g_t<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
+fn bowers_g_t<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<'_, F>) {
     let h = mat.height();
     let log_h = log2_strict_usize(h);
 
@@ -107,12 +107,12 @@ fn bowers_g_t<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<F>) {
     let twiddles: Vec<DitButterfly<F>> = unsafe { flatten_to_base(twiddles) };
 
     for log_half_block_size in (0..log_h).rev() {
-        butterfly_layer(mat, 1 << log_half_block_size, &twiddles)
+        butterfly_layer(mat, 1 << log_half_block_size, &twiddles);
     }
 }
 
 fn butterfly_layer<F: Field, B: Butterfly<F>>(
-    mat: &mut RowMajorMatrixViewMut<F>,
+    mat: &mut RowMajorMatrixViewMut<'_, F>,
     half_block_size: usize,
     twiddles: &[B],
 ) {
@@ -125,7 +125,7 @@ fn butterfly_layer<F: Field, B: Butterfly<F>>(
                 .zip(lo_chunks.par_rows_mut())
                 .for_each(|(hi_chunk, lo_chunk)| {
                     if block == 0 {
-                        TwiddleFreeButterfly.apply_to_rows(hi_chunk, lo_chunk)
+                        TwiddleFreeButterfly.apply_to_rows(hi_chunk, lo_chunk);
                     } else {
                         twiddles[block].apply_to_rows(hi_chunk, lo_chunk);
                     }

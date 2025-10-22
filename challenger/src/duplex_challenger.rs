@@ -227,7 +227,7 @@ mod tests {
 
     impl<F: Clone> Permutation<[F; WIDTH]> for TestPermutation {
         fn permute_mut(&self, input: &mut [F; WIDTH]) {
-            input.reverse()
+            input.reverse();
         }
     }
 

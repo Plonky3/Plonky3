@@ -3,7 +3,7 @@ use core::iter;
 use core::marker::PhantomData;
 use core::ops::Deref;
 
-use p3_field::{ExtensionField, Field};
+use p3_field::{BasedVectorSpace, ExtensionField, Field};
 
 use crate::Matrix;
 
@@ -101,7 +101,7 @@ where
             self.0
                 .row_slice_unchecked(r)
                 .iter()
-                .flat_map(|val| val.as_basis_coefficients_slice())
+                .flat_map(BasedVectorSpace::as_basis_coefficients_slice)
                 .copied()
                 .collect::<Vec<_>>()
         }
@@ -137,8 +137,8 @@ mod tests {
     use alloc::vec;
 
     use itertools::Itertools;
+    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::Complex;
-    use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
     use p3_mersenne_31::Mersenne31;
 
     use super::*;

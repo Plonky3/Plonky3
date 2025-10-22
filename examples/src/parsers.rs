@@ -52,17 +52,21 @@ fn get_aliases(
     min_unique_base_prefix: usize,
     alias: Option<Vec<(&'static str, usize)>>,
 ) -> PossibleValue {
-    match alias {
-        None => PossibleValue::new(base)
-            .aliases((min_unique_base_prefix..base.len()).map(|i| &base[..i])),
-        Some(vec) => PossibleValue::new(base).aliases(
-            (min_unique_base_prefix..base.len())
-                .map(|i| &base[..i])
-                .chain(vec.into_iter().flat_map(|(alias, min_unique)| {
-                    (min_unique..alias.len() + 1).map(|i| &alias[..i])
-                })),
-        ),
-    }
+    alias.map_or_else(
+        || {
+            PossibleValue::new(base)
+                .aliases((min_unique_base_prefix..base.len()).map(|i| &base[..i]))
+        },
+        |vec| {
+            PossibleValue::new(base).aliases(
+                (min_unique_base_prefix..base.len())
+                    .map(|i| &base[..i])
+                    .chain(vec.into_iter().flat_map(|(alias, min_unique)| {
+                        (min_unique..=alias.len()).map(|i| &alias[..i])
+                    })),
+            )
+        },
+    )
 }
 
 impl ValueEnum for FieldOptions {

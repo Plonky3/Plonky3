@@ -181,12 +181,13 @@ where
     ///   with index `(index << i) ^ 1`.
     ///
     /// Returns nothing if the verification is successful, otherwise returns an error.
+    #[allow(clippy::tuple_array_conversions)]
     fn verify_batch(
         &self,
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         mut index: usize,
-        batch_proof: BatchOpeningRef<P::Value, Self>,
+        batch_proof: BatchOpeningRef<'_, P::Value, Self>,
     ) -> Result<(), Self::Error> {
         let (opened_values, opening_proof) = batch_proof.unpack();
         // Check that the openings have the correct shape.
@@ -642,7 +643,7 @@ mod tests {
         let mats = (0..10)
             .map(|i| RowMajorMatrix::<F>::rand(&mut rng, 32, i + 1))
             .collect_vec();
-        let dims = mats.iter().map(|m| m.dimensions()).collect_vec();
+        let dims = mats.iter().map(p3_matrix::Matrix::dimensions).collect_vec();
 
         let (commit, prover_data) = mmcs.commit(mats);
         let batch_opening = mmcs.open_batch(17, &prover_data);

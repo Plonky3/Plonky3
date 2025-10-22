@@ -121,7 +121,7 @@ where
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         index: usize,
-        batch_opening: BatchOpeningRef<P::Value, Self>,
+        batch_opening: BatchOpeningRef<'_, P::Value, Self>,
     ) -> Result<(), Self::Error> {
         let (opened_values, (salts, siblings)) = batch_opening.unpack();
 
@@ -146,7 +146,7 @@ mod tests {
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_commit::Mmcs;
     use p3_field::{Field, PrimeCharacteristicRing};
-    use p3_matrix::Matrix;
+
     use p3_matrix::dense::RowMajorMatrix;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
     use rand::SeedableRng;
@@ -198,7 +198,7 @@ mod tests {
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash, compress, rng);
 
-        let dims = mats.iter().map(|m| m.dimensions()).collect_vec();
+        let dims = mats.iter().map(p3_matrix::Matrix::dimensions).collect_vec();
 
         let (commit, prover_data) = mmcs.commit(mats);
         let batch_proof = mmcs.open_batch(17, &prover_data);

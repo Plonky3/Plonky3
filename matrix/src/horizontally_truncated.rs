@@ -5,6 +5,7 @@ use crate::Matrix;
 /// A matrix wrapper that limits the number of columns visible from an inner matrix.
 ///
 /// This struct wraps another matrix and restricts access to only the first `truncated_width` columns.
+#[derive(Debug)]
 pub struct HorizontallyTruncated<T, Inner> {
     /// The underlying full matrix being wrapped.
     inner: Inner,
@@ -215,8 +216,7 @@ mod tests {
         assert_eq!(truncated.height(), 1);
 
         // Row should be empty.
-        let row: Vec<_> = truncated.row(0).unwrap().into_iter().collect();
-        assert!(row.is_empty());
+        assert!(truncated.row(0).unwrap().into_iter().next().is_none());
 
         assert!(truncated.get(0, 0).is_none()); // Width out of bounds
         assert!(truncated.get(1, 0).is_none()); // Height out of bounds

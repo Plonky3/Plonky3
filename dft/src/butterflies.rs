@@ -141,7 +141,7 @@ pub struct DifButterflyZeros<F>(pub F);
 impl<F: Field> Butterfly<F> for DifButterflyZeros<F> {
     #[inline]
     fn apply<PF: PackedField<Scalar = F>>(&self, x_1: PF, x_2: PF) -> (PF, PF) {
-        debug_assert!(x_2.as_slice().iter().all(|x| x.is_zero())); // Slightly convoluted but PF may not implement equality.
+        debug_assert!(x_2.as_slice().iter().all(p3_field::Field::is_zero)); // Slightly convoluted but PF may not implement equality.
         (x_1, x_1 * self.0)
     }
 
@@ -152,7 +152,7 @@ impl<F: Field> Butterfly<F> for DifButterflyZeros<F> {
         debug_assert_eq!(shorts_1.len(), shorts_2.len());
         debug_assert_eq!(suffix_1.len(), suffix_2.len());
         for (x_1, x_2) in shorts_1.iter().zip(shorts_2) {
-            debug_assert!(x_2.as_slice().iter().all(|x| x.is_zero())); // Slightly convoluted but PF may not implement equality.
+            debug_assert!(x_2.as_slice().iter().all(p3_field::Field::is_zero)); // Slightly convoluted but PF may not implement equality.
             *x_2 = *x_1 * self.0; // x_2 is guaranteed to be zero, so we just set it to x_1 * twiddle. 
         }
         for (x_1, x_2) in suffix_1.iter().zip(suffix_2) {
