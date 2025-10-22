@@ -71,50 +71,6 @@ impl<F: Field, A: Algebra<F>, const N: usize> Permutation<[A; N]> for Integrated
 
 impl<F: Field, A: Algebra<F>, const N: usize> MdsPermutation<A, N> for IntegratedCosetMds<F, N> {}
 
-#[inline]
-fn bowers_g_layer<F: Field, A: Algebra<F>, const N: usize>(
-    values: &mut [A; N],
-    log_half_block_size: usize,
-    twiddles: &[F],
-) {
-    let log_block_size = log_half_block_size + 1;
-    let half_block_size = 1 << log_half_block_size;
-    let num_blocks = N >> log_block_size;
-
-    // Unroll first iteration with a twiddle factor of 1.
-    for hi in 0..half_block_size {
-        let lo = hi + half_block_size;
-        twiddle_free_butterfly(values, hi, lo);
-    }
-
-    for (block, &twiddle) in (1..num_blocks).zip(&twiddles[1..]) {
-        let block_start = block << log_block_size;
-        for hi in block_start..block_start + half_block_size {
-            let lo = hi + half_block_size;
-            dif_butterfly(values, hi, lo, twiddle);
-        }
-    }
-}
-
-#[inline]
-fn bowers_g_t_layer<F: Field, A: Algebra<F>, const N: usize>(
-    values: &mut [A; N],
-    log_half_block_size: usize,
-    twiddles: &[F],
-) {
-    let log_block_size = log_half_block_size + 1;
-    let half_block_size = 1 << log_half_block_size;
-    let num_blocks = N >> log_block_size;
-
-    for (block, &twiddle) in (0..num_blocks).zip(twiddles) {
-        let block_start = block << log_block_size;
-        for hi in block_start..block_start + half_block_size {
-            let lo = hi + half_block_size;
-            dit_butterfly(values, hi, lo, twiddle);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use p3_baby_bear::BabyBear;
