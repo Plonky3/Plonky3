@@ -16,6 +16,107 @@ use crate::{
     QueryProof,
 };
 
+/// Structure to hold all challenges generated during FRI verification.
+/// Note: Generating all challenges in advance makes things easier for recursive verification
+#[derive(Debug, Clone)]
+pub struct FriVerificationChallenges<Challenge> {
+    /// The batch combination challenge
+    pub alpha: Challenge,
+    /// The random challenges for each FRI round
+    pub betas: Vec<Challenge>,
+    /// The query indices for each query proof
+    pub query_indices: Vec<usize>,
+}
+
+/// Generate all challenges that would be produced during FRI verification
+/// without actually executing the verifier circuit.
+/// 
+/// This function is useful for recursion where we need to know all challenge values
+/// before starting the actual verification process.
+/// 
+/// # Arguments
+/// * `folding` - The FRI folding scheme used by the prover
+/// * `params` - The parameters for the specific FRI protocol instance
+/// * `proof` - The proof to generate challenges for
+/// * `challenger` - The Fiat-Shamir challenger
+/// * `commitments_with_opening_points` - A vector of joint commitments to collections of matrices
+///   and openings of those matrices at a collection of points
+/// 
+/// # Returns
+/// * `FriVerificationChallenges<Challenge>` - All challenges that would be generated during FRI verification
+pub fn generate_fri_challenges<Folding, Val, Challenge, InputMmcs, FriMmcs, Challenger>(
+    folding: &Folding,
+    params: &FriParameters<FriMmcs>,
+    proof: &FriProof<Challenge, FriMmcs, Challenger::Witness, Folding::InputProof>,
+    challenger: &mut Challenger,
+    commitments_with_opening_points: &[CommitmentWithOpeningPoints<
+        Challenge,
+        InputMmcs::Commitment,
+        TwoAdicMultiplicativeCoset<Val>,
+    >],
+) -> FriVerificationChallenges<Challenge>
+where
+    Val: TwoAdicField,
+    Challenge: ExtensionField<Val>,
+    InputMmcs: Mmcs<Val>,
+    FriMmcs: Mmcs<Challenge>,
+    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<FriMmcs::Commitment>,
+    Folding: FriFoldingStrategy<
+            Val,
+            Challenge,
+            InputError = InputMmcs::Error,
+            InputProof = Vec<BatchOpening<Val, InputMmcs>>,
+        >,
+{
+    // Write all evaluations to challenger (same as in verify_fri function)
+    for (_, round) in commitments_with_opening_points {
+        for (_, mat) in round {
+            for (_, point) in mat {
+                point
+                    .iter()
+                    .for_each(|&opening| challenger.observe_algebra_element(opening));
+            }
+        }
+    }
+
+    // Generate the batch combination challenge (alpha)
+    let alpha: Challenge = challenger.sample_algebra_element();
+
+    // Generate all of the random challenges for the FRI rounds (betas)
+    let betas: Vec<Challenge> = proof
+        .commit_phase_commits
+        .iter()
+        .map(|comm| {
+            // To match with the prover (and for security purposes),
+            // we observe the commitment before sampling the challenge.
+            challenger.observe(comm.clone());
+            challenger.sample_algebra_element()
+        })
+        .collect();
+
+    // Observe all coefficients of the final polynomial.
+    proof
+        .final_poly
+        .iter()
+        .for_each(|x| challenger.observe_algebra_element(*x));
+
+    // Generate query indices for each query proof
+    let log_global_max_height = proof.commit_phase_commits.len() + params.log_blowup + params.log_final_poly_len;
+    let query_indices: Vec<usize> = proof
+        .query_proofs
+        .iter()
+        .map(|_| {
+            challenger.sample_bits(log_global_max_height + folding.extra_query_index_bits())
+        })
+        .collect();
+
+    FriVerificationChallenges { 
+        alpha, 
+        betas, 
+        query_indices 
+    }
+}
+
 #[derive(Debug)]
 pub enum FriError<CommitMmcsErr, InputError> {
     InvalidProofShape,
@@ -65,12 +166,17 @@ where
             InputProof = Vec<BatchOpening<Val, InputMmcs>>,
         >,
 {
-    // Generate the Batch combination challenge
-    // Soundness Error: `|f|/|EF|` where `|f|` is the number of different functions of the form
-    // `(f(zeta) - fi(x))/(zeta - x)` which need to be checked.
-    // Explicitly, `|f|` is `commitments_with_opening_points.flatten().flatten().len()`
-    // (i.e counting the number (point, claimed_evaluation) pairs).
-    let alpha: Challenge = challenger.sample_algebra_element();
+    // Generate all challenges using the generate_fri_challenges function
+    let challenges = generate_fri_challenges(
+        folding,
+        params,
+        proof,
+        challenger,
+        commitments_with_opening_points,
+    );
+    let alpha = challenges.alpha;
+    let betas = challenges.betas;
+    let query_indices = challenges.query_indices;
 
     // `commit_phase_commits.len()` is the number of folding steps, so the maximum polynomial degree will be
     // `commit_phase_commits.len() + self.fri.log_final_poly_len` and so, as the same blow-up is used for all
@@ -78,28 +184,10 @@ where
     let log_global_max_height =
         proof.commit_phase_commits.len() + params.log_blowup + params.log_final_poly_len;
 
-    // Generate all of the random challenges for the FRI rounds.
-    let betas: Vec<Challenge> = proof
-        .commit_phase_commits
-        .iter()
-        .map(|comm| {
-            // To match with the prover (and for security purposes),
-            // we observe the commitment before sampling the challenge.
-            challenger.observe(comm.clone());
-            challenger.sample_algebra_element()
-        })
-        .collect();
-
     // Ensure that the final polynomial has the expected degree.
     if proof.final_poly.len() != params.final_poly_len() {
         return Err(FriError::InvalidProofShape);
     }
-
-    // Observe all coefficients of the final polynomial.
-    proof
-        .final_poly
-        .iter()
-        .for_each(|x| challenger.observe_algebra_element(*x));
 
     // Ensure that we have the expected number of FRI query proofs.
     if proof.query_proofs.len() != params.num_queries {
@@ -114,14 +202,11 @@ where
     // The log of the final domain size.
     let log_final_height = params.log_blowup + params.log_final_poly_len;
 
-    for QueryProof {
+    for (QueryProof {
         input_proof,
         commit_phase_openings,
-    } in &proof.query_proofs
+    }, &index) in proof.query_proofs.iter().zip(&query_indices)
     {
-        // For each query proof, we start by generating the random index.
-        let index =
-            challenger.sample_bits(log_global_max_height + folding.extra_query_index_bits());
 
         // Next we open all polynomials `f` at the relevant index and combine them into our FRI inputs.
         let ro = open_input(
