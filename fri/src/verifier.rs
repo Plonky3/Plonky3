@@ -17,8 +17,7 @@ use crate::{
 };
 
 /// Structure to hold all challenges generated during FRI verification.
-/// This is useful for recursion where we need to know all challenge values
-/// without executing the verifier circuit.
+/// Note: Generating all challenges in advance makes things easier for recursive verification
 #[derive(Debug, Clone)]
 pub struct FriVerificationChallenges<Challenge> {
     /// The batch combination challenge
