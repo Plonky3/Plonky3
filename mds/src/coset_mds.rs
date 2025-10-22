@@ -87,58 +87,6 @@ fn bowers_g_t<F: Field, A: Algebra<F>, const N: usize>(values: &mut [A; N], twid
     }
 }
 
-/// One layer of a Bowers G network. Equivalent to `bowers_g_t_layer` except for the butterfly.
-#[inline]
-fn bowers_g_layer<F: Field, A: Algebra<F>, const N: usize>(
-    values: &mut [A; N],
-    log_half_block_size: usize,
-    twiddles: &[F],
-) {
-    let log_block_size = log_half_block_size + 1;
-    let half_block_size = 1 << log_half_block_size;
-    let num_blocks = N >> log_block_size;
-
-    // Unroll first iteration with a twiddle factor of 1.
-    for hi in 0..half_block_size {
-        let lo = hi + half_block_size;
-        twiddle_free_butterfly(values, hi, lo);
-    }
-
-    for (block, &twiddle) in (1..num_blocks).zip(&twiddles[1..]) {
-        let block_start = block << log_block_size;
-        for hi in block_start..block_start + half_block_size {
-            let lo = hi + half_block_size;
-            dif_butterfly(values, hi, lo, twiddle);
-        }
-    }
-}
-
-/// One layer of a Bowers G^T network. Equivalent to `bowers_g_layer` except for the butterfly.
-#[inline]
-fn bowers_g_t_layer<F: Field, A: Algebra<F>, const N: usize>(
-    values: &mut [A; N],
-    log_half_block_size: usize,
-    twiddles: &[F],
-) {
-    let log_block_size = log_half_block_size + 1;
-    let half_block_size = 1 << log_half_block_size;
-    let num_blocks = N >> log_block_size;
-
-    // Unroll first iteration with a twiddle factor of 1.
-    for hi in 0..half_block_size {
-        let lo = hi + half_block_size;
-        twiddle_free_butterfly(values, hi, lo);
-    }
-
-    for (block, &twiddle) in (1..num_blocks).zip(&twiddles[1..]) {
-        let block_start = block << log_block_size;
-        for hi in block_start..block_start + half_block_size {
-            let lo = hi + half_block_size;
-            dit_butterfly(values, hi, lo, twiddle);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use p3_baby_bear::BabyBear;
