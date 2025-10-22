@@ -1,8 +1,11 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, PairBuilder};
-use p3_field::Field;
+use p3_air::{
+    Air, AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder,
+    PermutationAirBuilder,
+};
+use p3_field::{Algebra, ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
@@ -148,6 +151,127 @@ impl<F: Field> AirBuilderWithPublicValues for SymbolicAirBuilder<F> {
 impl<F: Field> PairBuilder for SymbolicAirBuilder<F> {
     fn preprocessed(&self) -> Self::M {
         self.preprocessed.clone()
+    }
+}
+
+pub struct ExtensionSymbolicAirBuilder<F: Field, EF: ExtensionField<F>> {
+    base: SymbolicAirBuilder<F>,
+    permutation: RowMajorMatrix<SymbolicVariable<EF>>,
+    permutation_challenges: Vec<SymbolicVariable<EF>>,
+    extension_constraints: Vec<SymbolicExpression<EF>>,
+}
+
+impl<F: Field, EF: ExtensionField<F>> ExtensionSymbolicAirBuilder<F, EF> {
+    pub fn new(
+        preprocessed_width: usize,
+        width: usize,
+        num_public_values: usize,
+        permutation_width: usize,
+        num_permutation_challenges: usize,
+    ) -> Self {
+        let base = SymbolicAirBuilder::new(preprocessed_width, width, num_public_values);
+        let perm_values = [0, 1]
+            .into_iter()
+            .flat_map(|offset| {
+                (0..preprocessed_width)
+                    .map(move |index| SymbolicVariable::new(Entry::Preprocessed { offset }, index))
+            })
+            .collect();
+        let permutation = RowMajorMatrix::new(perm_values, permutation_width);
+        let permutation_challenges = (0..num_permutation_challenges)
+            .map(|index| SymbolicVariable::new(Entry::Public, index))
+            .collect();
+        Self {
+            base,
+            permutation,
+            extension_constraints: vec![],
+            permutation_challenges,
+        }
+    }
+
+    pub fn extension_constraints(self) -> Vec<SymbolicExpression<EF>> {
+        self.extension_constraints
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>> AirBuilder for ExtensionSymbolicAirBuilder<F, EF> {
+    type F = F;
+    type Expr = SymbolicExpression<F>;
+    type Var = SymbolicVariable<F>;
+    type M = RowMajorMatrix<Self::Var>;
+
+    fn main(&self) -> Self::M {
+        self.base.main()
+    }
+
+    fn is_first_row(&self) -> Self::Expr {
+        SymbolicExpression::IsFirstRow
+    }
+
+    fn is_last_row(&self) -> Self::Expr {
+        SymbolicExpression::IsLastRow
+    }
+
+    /// # Panics
+    /// This function panics if `size` is not `2`.
+    fn is_transition_window(&self, size: usize) -> Self::Expr {
+        if size == 2 {
+            SymbolicExpression::IsTransition
+        } else {
+            panic!("uni-stark only supports a window size of 2")
+        }
+    }
+
+    fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
+        self.base.constraints.push(x.into());
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>> AirBuilderWithPublicValues
+    for ExtensionSymbolicAirBuilder<F, EF>
+{
+    type PublicVar = SymbolicVariable<F>;
+    fn public_values(&self) -> &[Self::PublicVar] {
+        self.base.public_values()
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>> PairBuilder for ExtensionSymbolicAirBuilder<F, EF> {
+    fn preprocessed(&self) -> Self::M {
+        self.base.preprocessed()
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>> ExtensionBuilder for ExtensionSymbolicAirBuilder<F, EF>
+where
+    SymbolicExpression<EF>: Algebra<SymbolicExpression<F>>,
+{
+    type EF = EF;
+    type ExprEF = SymbolicExpression<EF>;
+    type VarEF = SymbolicVariable<EF>;
+
+    fn assert_zero_ext<I>(&mut self, x: I)
+    where
+        I: Into<Self::ExprEF>,
+    {
+        self.extension_constraints.push(x.into());
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>> PermutationAirBuilder for ExtensionSymbolicAirBuilder<F, EF>
+where
+    SymbolicExpression<EF>: Algebra<SymbolicExpression<F>>,
+{
+    type MP = RowMajorMatrix<Self::VarEF>;
+
+    type RandomVar = SymbolicVariable<EF>;
+
+    fn permutation(&self) -> Self::MP {
+        self.permutation.clone()
+    }
+
+    fn permutation_randomness(&self) -> &[Self::RandomVar] {
+        &self.permutation_challenges
     }
 }
 
