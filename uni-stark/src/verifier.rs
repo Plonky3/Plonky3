@@ -27,27 +27,47 @@ pub struct VerificationChallenges<Challenge> {
     pub zeta: Challenge,
     /// The next point after zeta in the trace domain
     pub zeta_next: Challenge,
+    /// FRI verification challenges (alpha, betas, query_indices)
+    pub fri_challenges: Option<FriVerificationChallenges<Challenge>>,
+}
+
+/// Structure to hold FRI verification challenges
+#[derive(Debug, Clone)]
+pub struct FriVerificationChallenges<Challenge> {
+    /// The batch combination challenge
+    pub alpha: Challenge,
+    /// The random challenges for each FRI round
+    pub betas: Vec<Challenge>,
+    /// The query indices for each query proof
+    pub query_indices: Vec<usize>,
 }
 
 /// Generate all challenges that would be produced during verification
 /// without actually executing the verifier circuit.
-/// 
+///
 /// This function is useful for recursion where we need to know all challenge values
 /// before starting the actual verification process.
-/// 
+///
 /// # Arguments
 /// * `config` - The STARK configuration
+/// * `air` - The AIR instance
 /// * `proof` - The proof to generate challenges for
 /// * `public_values` - The public values used in the proof
-/// 
+/// * `degree_bits` - The degree bits (precomputed)
+/// * `log_quotient_degree` - The log quotient degree (precomputed)
+/// * `trace_domain` - The trace domain (precomputed)
+///
 /// # Returns
 /// * `VerificationChallenges<SC::Challenge>` - All challenges that would be generated during verification
 #[instrument(skip_all)]
 pub fn generate_challenges<SC, A>(
     config: &SC,
-    air: &A,
+    _air: &A,
     proof: &Proof<SC>,
-    public_values: &Vec<Val<SC>>,
+    public_values: &[Val<SC>],
+    degree_bits: usize,
+    log_quotient_degree: usize,
+    _trace_domain: <SC::Pcs as p3_commit::Pcs<SC::Challenge, SC::Challenger>>::Domain,
 ) -> VerificationChallenges<SC::Challenge>
 where
     SC: StarkGenericConfig,
@@ -57,18 +77,21 @@ where
         commitments,
         opened_values: _,
         opening_proof: _,
-        degree_bits,
+        degree_bits: _,
     } = proof;
 
     let pcs = config.pcs();
     let degree = 1 << degree_bits;
-    let log_quotient_degree =
-        get_log_quotient_degree::<Val<SC>, A>(air, 0, public_values.len(), config.is_zk());
     let _quotient_degree = 1 << (log_quotient_degree + config.is_zk());
+    let init_trace_domain = pcs.natural_domain_for_degree(degree >> (config.is_zk()));
 
     let mut challenger = config.initialise_challenger();
-    let _trace_domain = pcs.natural_domain_for_degree(degree);
-    let init_trace_domain = pcs.natural_domain_for_degree(degree >> (config.is_zk()));
+
+    // TODO: Might be best practice to include other instance data here in the transcript, like some
+    // encoding of the AIR. This protects against transcript collisions between distinct instances.
+    // Practically speaking though, the only related known attack is from failing to include public
+    // values. It's not clear if failing to include other instance data could enable a transcript
+    // collision, since most such changes would completely change the set of satisfying witnesses.
 
     // Observe the instance data (same as in verify function)
     challenger.observe(Val::<SC>::from_usize(proof.degree_bits));
@@ -76,7 +99,10 @@ where
     challenger.observe(commitments.trace.clone());
     challenger.observe_slice(public_values);
 
-    // Generate the first Fiat-Shamir challenge (alpha)
+    // Get the first Fiat Shamir challenge which will be used to combine all constraint polynomials
+    // into a single polynomial.
+    //
+    // Soundness Error: n/|EF| where n is the number of constraints.
     let alpha = challenger.sample_algebra_element();
     challenger.observe(commitments.quotient_chunks.clone());
 
@@ -89,10 +115,20 @@ where
     let zeta = challenger.sample_algebra_element();
     let zeta_next = init_trace_domain.next_point(zeta).unwrap();
 
+    // Generate FRI challenges if needed
+    // For now, we'll create a simple FRI challenges structure
+    // In a real implementation, this would need to be more sophisticated
+    let fri_challenges = Some(FriVerificationChallenges {
+        alpha: challenger.sample_algebra_element(),
+        betas: vec![],         // Would be populated based on FRI rounds
+        query_indices: vec![], // Would be populated based on FRI queries
+    });
+
     VerificationChallenges {
         alpha,
         zeta,
         zeta_next,
+        fri_challenges,
     }
 }
 
@@ -101,7 +137,7 @@ pub fn verify<SC, A>(
     config: &SC,
     air: &A,
     proof: &Proof<SC>,
-    public_values: &Vec<Val<SC>>,
+    public_values: &[Val<SC>],
 ) -> Result<(), VerificationError<PcsError<SC>>>
 where
     SC: StarkGenericConfig,
@@ -121,9 +157,24 @@ where
         get_log_quotient_degree::<Val<SC>, A>(air, 0, public_values.len(), config.is_zk());
     let quotient_degree = 1 << (log_quotient_degree + config.is_zk());
 
-    let mut challenger = config.initialise_challenger();
     let trace_domain = pcs.natural_domain_for_degree(degree);
     let init_trace_domain = pcs.natural_domain_for_degree(degree >> (config.is_zk()));
+
+    // Generate all challenges using the generate_challenges function
+    let challenges = generate_challenges(
+        config,
+        air,
+        proof,
+        public_values,
+        *degree_bits,
+        log_quotient_degree,
+        trace_domain,
+    );
+    let alpha = challenges.alpha;
+    let zeta = challenges.zeta;
+    let zeta_next = challenges.zeta_next;
+
+    let mut challenger = config.initialise_challenger();
 
     let quotient_domain =
         trace_domain.create_disjoint_domain(1 << (degree_bits + log_quotient_degree));
@@ -160,12 +211,6 @@ where
     if !valid_shape {
         return Err(VerificationError::InvalidProofShape);
     }
-
-    // Generate all challenges using the generate_challenges function
-    let challenges = generate_challenges(config, air, proof, public_values);
-    let alpha = challenges.alpha;
-    let zeta = challenges.zeta;
-    let zeta_next = challenges.zeta_next;
 
     // We've already checked that commitments.random and opened_values.random are present if and only if ZK is enabled.
     let mut coms_to_verify = if let Some(random_commit) = &commitments.random {
