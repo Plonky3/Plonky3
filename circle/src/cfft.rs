@@ -213,7 +213,8 @@ fn par_within_blk_layer<F: Field, B: Butterfly<F>>(values: &mut [F], twiddles: &
 }
 
 #[inline]
-const fn desired_num_jobs() -> usize {
+#[allow(clippy::missing_const_for_fn)]
+fn desired_num_jobs() -> usize {
     16 * current_num_threads()
 }
 
