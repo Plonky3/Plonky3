@@ -25,6 +25,9 @@ criterion.workspace = true
 name = "bench_keccak"
 harness = false
 
+[lints]
+workspace = true
+
 #[[bench]]
 #name = "bench_avx512"
 #harness = false

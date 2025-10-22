@@ -35,3 +35,6 @@ harness = false
 name = "columnwise_dot_product"
 path = "benches/columnwise_dot_product.rs"
 harness = false
+
+[lints]
+workspace = true

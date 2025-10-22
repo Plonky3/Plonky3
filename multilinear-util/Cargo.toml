@@ -29,3 +29,6 @@ parallel = ["p3-maybe-rayon/parallel"]
 [[bench]]
 name = "evaleq_batched"
 harness = false
+
+[lints]
+workspace = true

@@ -34,3 +34,6 @@ criterion.workspace = true
 [[bench]]
 name = "merkle_tree"
 harness = false
+
+[lints]
+workspace = true

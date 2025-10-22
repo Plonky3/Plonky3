@@ -26,3 +26,6 @@ criterion.workspace = true
 [[bench]]
 name = "poseidon"
 harness = false
+
+[lints]
+workspace = true

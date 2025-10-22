@@ -186,7 +186,7 @@ where
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         mut index: usize,
-        batch_proof: BatchOpeningRef<P::Value, Self>,
+        batch_proof: BatchOpeningRef<'_, P::Value, Self>,
     ) -> Result<(), Self::Error> {
         let (opened_values, opening_proof) = batch_proof.unpack();
         // Check that the openings have the correct shape.

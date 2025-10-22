@@ -28,7 +28,7 @@ pub struct StarkInstance<'a, SC: SGC, A> {
 }
 
 #[instrument(skip_all)]
-pub fn prove_multi<SC, A>(config: &SC, instances: Vec<StarkInstance<SC, A>>) -> MultiProof<SC>
+pub fn prove_multi<SC, A>(config: &SC, instances: Vec<StarkInstance<'_, SC, A>>) -> MultiProof<SC>
 where
     SC: SGC,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,

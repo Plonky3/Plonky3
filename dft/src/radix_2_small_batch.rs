@@ -348,7 +348,10 @@ where
 /// - `mat`: Mutable matrix whose height is a power of two.
 /// - `twiddles`: Precomputed twiddle factors for this layer.
 #[inline]
-fn dft_layer_par<F: Field, B: Butterfly<F>>(mat: &mut RowMajorMatrixViewMut<F>, twiddles: &[B]) {
+fn dft_layer_par<F: Field, B: Butterfly<F>>(
+    mat: &mut RowMajorMatrixViewMut<'_, F>,
+    twiddles: &[B],
+) {
     debug_assert!(
         mat.height().is_multiple_of(twiddles.len()),
         "Matrix height must be divisible by the number of twiddles"
@@ -455,8 +458,8 @@ fn initial_layers<F: Field>(chunk: &mut [F], root_table: &[Vec<F>], index: usize
 /// Similar to [par_remaining_layers] followed by [par_initial_layers]
 /// with a scaling and copying operation in between.
 fn par_middle_layers<F: Field>(
-    in_mat: &mut RowMajorMatrixViewMut<F>,
-    out_mat: &mut RowMajorMatrixViewMut<F>,
+    in_mat: &mut RowMajorMatrixViewMut<'_, F>,
+    out_mat: &mut RowMajorMatrixViewMut<'_, F>,
     num_par_rows: usize,
     root_table: &[Vec<F>],
     inv_root_table: &[Vec<F>],
@@ -563,7 +566,7 @@ fn dft_layer<F: Field, B: Butterfly<F>>(vec: &mut [F], twiddles: &[B]) {
 /// - `multi_butterfly`: Multi-layer butterfly which applies the two layers in the correct order.
 #[inline]
 fn dft_layer_par_double<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>(
-    mat: &mut RowMajorMatrixViewMut<F>,
+    mat: &mut RowMajorMatrixViewMut<'_, F>,
     twiddles_small: &[B],
     twiddles_large: &[B],
     multi_butterfly: M,
@@ -616,7 +619,7 @@ fn dft_layer_par_double<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>
 /// - `multi_butterfly`: Multi-layer butterfly which applies the three layers in the correct order.
 #[inline]
 fn dft_layer_par_triple<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>(
-    mat: &mut RowMajorMatrixViewMut<F>,
+    mat: &mut RowMajorMatrixViewMut<'_, F>,
     twiddles_small: &[B],
     twiddles_med: &[B],
     twiddles_large: &[B],
@@ -668,7 +671,7 @@ fn dft_layer_par_triple<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>
 /// This function is used to correct for the fact that the total number of layers
 /// may not be a multiple of `LAYERS_PER_GROUP`.
 fn dft_layer_par_extra_layers<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>(
-    mat: &mut RowMajorMatrixViewMut<F>,
+    mat: &mut RowMajorMatrixViewMut<'_, F>,
     root_table: &[Vec<F>],
     multi_layer: M,
 ) {
@@ -747,7 +750,7 @@ type DoubleLayerBlockDecomposition<'a, F> =
 /// Performs an FFT layer on the sub-blocks using a single twiddle factor.
 #[inline]
 fn fft_double_layer_single_twiddle<F: Field, Fly: Butterfly<F>>(
-    block: &mut DoubleLayerBlockDecomposition<F>,
+    block: &mut DoubleLayerBlockDecomposition<'_, F>,
     butterfly: Fly,
 ) {
     butterfly.apply_to_rows(block.0.0, block.1.0);
@@ -760,7 +763,7 @@ fn fft_double_layer_single_twiddle<F: Field, Fly: Butterfly<F>>(
 /// be a `TwiddleFreeButterfly`, which does not require a twiddle factor.
 #[inline]
 fn fft_double_layer_double_twiddle<F: Field, Fly0: Butterfly<F>, Fly1: Butterfly<F>>(
-    block: &mut DoubleLayerBlockDecomposition<F>,
+    block: &mut DoubleLayerBlockDecomposition<'_, F>,
     fly0: Fly0,
     fly1: Fly1,
 ) {
@@ -777,7 +780,7 @@ type TripleLayerBlockDecomposition<'a, F> = (
 /// Performs an FFT layer on the sub-blocks using a single twiddle factor.
 #[inline]
 fn fft_triple_layer_single_twiddle<F: Field, Fly: Butterfly<F>>(
-    block: &mut TripleLayerBlockDecomposition<F>,
+    block: &mut TripleLayerBlockDecomposition<'_, F>,
     butterfly: Fly,
 ) {
     butterfly.apply_to_rows(block.0.0.0, block.1.0.0);
@@ -792,7 +795,7 @@ fn fft_triple_layer_single_twiddle<F: Field, Fly: Butterfly<F>>(
 /// be a `TwiddleFreeButterfly`, which does not require a twiddle factor.
 #[inline]
 fn fft_triple_layer_double_twiddle<F: Field, Fly0: Butterfly<F>, Fly1: Butterfly<F>>(
-    block: &mut TripleLayerBlockDecomposition<F>,
+    block: &mut TripleLayerBlockDecomposition<'_, F>,
     fly0: Fly0,
     fly1: Fly1,
 ) {
@@ -808,7 +811,7 @@ fn fft_triple_layer_double_twiddle<F: Field, Fly0: Butterfly<F>, Fly1: Butterfly
 /// be a `TwiddleFreeButterfly`, which does not require a twiddle factor.
 #[inline]
 fn fft_triple_layer_quad_twiddle<F: Field, Fly0: Butterfly<F>, Flies: Butterfly<F>>(
-    block: &mut TripleLayerBlockDecomposition<F>,
+    block: &mut TripleLayerBlockDecomposition<'_, F>,
     fly0: Fly0,
     butterflies: &[Flies],
 ) {
@@ -861,7 +864,7 @@ fn zip_par_iter_vec<I: IndexedParallelIterator>(
 trait MultiLayerButterfly<F: Field, B: Butterfly<F>>: Copy + Send + Sync {
     fn apply_2_layers(
         &self,
-        chunk_decomposition: DoubleLayerBlockDecomposition<F>,
+        chunk_decomposition: DoubleLayerBlockDecomposition<'_, F>,
         ind: usize,
         twiddles_small: &[B],
         twiddles_large: &[B],
@@ -869,7 +872,7 @@ trait MultiLayerButterfly<F: Field, B: Butterfly<F>>: Copy + Send + Sync {
 
     fn apply_3_layers(
         &self,
-        chunk_decomposition: TripleLayerBlockDecomposition<F>,
+        chunk_decomposition: TripleLayerBlockDecomposition<'_, F>,
         ind: usize,
         twiddles_small: &[B],
         twiddles_med: &[B],
@@ -884,7 +887,7 @@ impl<F: Field> MultiLayerButterfly<F, DitButterfly<F>> for MultiLayerDitButterfl
     #[inline]
     fn apply_2_layers(
         &self,
-        mut blk_decomp: DoubleLayerBlockDecomposition<F>,
+        mut blk_decomp: DoubleLayerBlockDecomposition<'_, F>,
         ind: usize,
         twiddles_small: &[DitButterfly<F>],
         twiddles_large: &[DitButterfly<F>],
@@ -909,7 +912,7 @@ impl<F: Field> MultiLayerButterfly<F, DitButterfly<F>> for MultiLayerDitButterfl
     #[inline]
     fn apply_3_layers(
         &self,
-        mut blk_decomp: TripleLayerBlockDecomposition<F>,
+        mut blk_decomp: TripleLayerBlockDecomposition<'_, F>,
         ind: usize,
         twiddles_small: &[DitButterfly<F>],
         twiddles_med: &[DitButterfly<F>],
@@ -946,7 +949,7 @@ impl<F: Field> MultiLayerButterfly<F, DifButterfly<F>> for MultiLayerDifButterfl
     #[inline]
     fn apply_2_layers(
         &self,
-        mut blk_decomp: DoubleLayerBlockDecomposition<F>,
+        mut blk_decomp: DoubleLayerBlockDecomposition<'_, F>,
         ind: usize,
         twiddles_small: &[DifButterfly<F>],
         twiddles_large: &[DifButterfly<F>],
@@ -971,7 +974,7 @@ impl<F: Field> MultiLayerButterfly<F, DifButterfly<F>> for MultiLayerDifButterfl
     #[inline]
     fn apply_3_layers(
         &self,
-        mut blk_decomp: TripleLayerBlockDecomposition<F>,
+        mut blk_decomp: TripleLayerBlockDecomposition<'_, F>,
         ind: usize,
         twiddles_small: &[DifButterfly<F>],
         twiddles_med: &[DifButterfly<F>],

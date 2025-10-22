@@ -26,3 +26,6 @@ asm = [
 force-soft = [
     "sha2/force-soft",
 ] # Force software implementation (default if "asm" feature is not enabled).
+
+[lints]
+workspace = true
