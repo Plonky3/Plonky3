@@ -74,7 +74,7 @@ pub(crate) fn bowers_g_layer<F: Field, A: Algebra<F>, const N: usize>(
 ///
 /// This is used in the `CosetMds` implementation.
 /// Equivalent to `bowers_g_layer` except for the butterfly type.
-/// 
+///
 /// This version skips the first block (which has twiddle factor 1) in the twiddle iteration.
 #[inline]
 pub(crate) fn bowers_g_t_layer<F: Field, A: Algebra<F>, const N: usize>(
@@ -105,7 +105,7 @@ pub(crate) fn bowers_g_t_layer<F: Field, A: Algebra<F>, const N: usize>(
 ///
 /// This is used in the `IntegratedCosetMds` implementation where twiddle factors
 /// are pre-computed for each layer and include the coset shifts.
-/// 
+///
 /// Unlike `bowers_g_t_layer`, this version applies twiddles to all blocks starting from block 0.
 #[inline]
 pub(crate) fn bowers_g_t_layer_integrated<F: Field, A: Algebra<F>, const N: usize>(
