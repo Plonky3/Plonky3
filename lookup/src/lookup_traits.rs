@@ -92,8 +92,8 @@ impl Direction {
     /// Helper method to compute the signed multiplicity based on the direction.
     pub fn multiplicity<T: Neg<Output = T>>(&self, mult: T) -> T {
         match self {
-            Direction::Send => -mult,
-            Direction::Receive => mult,
+            Self::Send => -mult,
+            Self::Receive => mult,
         }
     }
 }

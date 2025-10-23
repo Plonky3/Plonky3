@@ -127,14 +127,15 @@ mod tests {
 
         let value = Bn254::from_bytes_monty(&full_bytes);
 
-        if let Some(field_elem) = value {
-            // From bytes does not convert into Monty form.
-            // Hence we need to do that ourselves.
-            let monty_form = monty_mul(BN254_MONTY_R_SQ, field_elem.value);
-            Bn254::new_monty(monty_form)
-        } else {
-            panic!("Invalid field element")
-        }
+        value.map_or_else(
+            || panic!("Invalid field element"),
+            |field_elem| {
+                // From bytes does not convert into Monty form.
+                // Hence we need to do that ourselves.
+                let monty_form = monty_mul(BN254_MONTY_R_SQ, field_elem.value);
+                Bn254::new_monty(monty_form)
+            },
+        )
     }
 
     fn ark_ff_from_bn254(input: Bn254) -> ark_FpBN256 {

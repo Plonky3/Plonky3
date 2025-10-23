@@ -16,18 +16,12 @@ use crate::{
 // We perform no checks to make sure the data given in BinomialExtensionData<WIDTH> is valid and
 // corresponds to an actual field extension. Ensuring that is left to the implementer.
 
-impl<const WIDTH: usize, FP> BinomiallyExtendableAlgebra<MontyField31<FP>, WIDTH>
-    for MontyField31<FP>
+impl<const WIDTH: usize, FP> BinomiallyExtendableAlgebra<Self, WIDTH> for MontyField31<FP>
 where
     FP: BinomialExtensionData<WIDTH> + FieldParameters,
 {
     #[inline(always)]
-    fn binomial_mul(
-        a: &[Self; WIDTH],
-        b: &[Self; WIDTH],
-        res: &mut [Self; WIDTH],
-        _w: MontyField31<FP>,
-    ) {
+    fn binomial_mul(a: &[Self; WIDTH], b: &[Self; WIDTH], res: &mut [Self; WIDTH], _w: Self) {
         match WIDTH {
             4 => quartic_mul_packed(a, b, res),
             5 => quintic_mul_packed(a, b, res),

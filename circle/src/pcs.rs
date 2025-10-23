@@ -415,17 +415,19 @@ where
                         .map(|&height| Dimensions { width: 0, height })
                         .collect_vec();
 
-                    let (dims, idx) = if let Some(log_batch_max_height) =
-                        batch_heights.iter().max().map(|x| log2_strict_usize(*x))
-                    {
-                        (
-                            &batch_dims[..],
-                            index >> (log_global_max_height - log_batch_max_height),
-                        )
-                    } else {
-                        // Empty batch?
-                        (&[][..], 0)
-                    };
+                    let (dims, idx) = batch_heights
+                        .iter()
+                        .max()
+                        .map(|x| log2_strict_usize(*x))
+                        .map_or_else(
+                            || (&[][..], 0),
+                            |log_batch_max_height| {
+                                (
+                                    &batch_dims[..],
+                                    index >> (log_global_max_height - log_batch_max_height),
+                                )
+                            },
+                        );
 
                     self.mmcs
                         .verify_batch(batch_commit, dims, idx, batch_opening.into())

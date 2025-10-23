@@ -224,7 +224,7 @@ impl LogUpGadget {
             );
 
             // Final constraint:
-            let final_val = (expected_cumulated.clone() - s_local) * common_denominator - numerator;
+            let final_val = (expected_cumulated - s_local) * common_denominator - numerator;
             builder.when_last_row().assert_zero_ext(final_val);
         } else {
             // If we don't have an `expected_cumulated`, we are in a local lookup update.
@@ -237,9 +237,7 @@ impl LogUpGadget {
             // - we are already ensuring that the first row is 0,
             // - at point `g^{n - 1}` (where `n` is the domain size), the next point is `g^0`, so that the constraint still holds
             // on the last row.
-            builder.assert_zero_ext(
-                (s_next - s_local.clone()) * common_denominator.clone() - numerator.clone(),
-            );
+            builder.assert_zero_ext((s_next - s_local) * common_denominator - numerator);
         }
     }
 }
