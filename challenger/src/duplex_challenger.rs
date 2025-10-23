@@ -2,9 +2,10 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_field::{BasedVectorSpace, Field, PrimeField64};
+use p3_monty_31::{MontyField31, MontyParameters};
 use p3_symmetric::{CryptographicPermutation, Hash};
 
-use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
+use crate::{CanObserve, CanSample, CanSampleBits, CanSampleUniformBits, FieldChallenger};
 
 /// A generic duplex sponge challenger over a finite field, used for generating deterministic
 /// challenges from absorbed inputs.
@@ -201,6 +202,131 @@ where
         let rand_f: F = self.sample();
         let rand_usize = rand_f.as_canonical_u64() as usize;
         rand_usize & ((1 << bits) - 1)
+    }
+}
+
+/// Trait for fields that support uniform bit sampling optimizations
+pub trait UniformSamplingField {
+    /// Maximum number of bits we can sample at negligible (~1/field prime) probability of
+    /// triggering a panic / requiring a resample.
+    const MAX_SINGLE_SAMPLE_BITS: usize;
+    /// An array storing the largest value `m_k` for each `k` in [0, 31], such that `m_k`
+    /// is a multiple of `2^k`. `m_k` is defined as:
+    ///
+    /// \( m_k = ⌊P / 2^k⌋ · 2^k \)
+    ///
+    /// This is used as a rejection sampling threshold (or panic trigger) in `sampling_uniform_bits`, when
+    /// sampling random bits from uniformly sampled field elements. As long as we sample up to the `k`
+    /// least significant bits in the range [0, m_k), we sample from exactly `m_k` elements. As
+    /// `m_k` is divisible by 2^k, each of the least significant `k` bits has exactly the same
+    /// number of zeroes and ones, leading to a uniform sampling.
+    const SAMPLING_BITS_M: [u64; 64];
+}
+
+/// Provide a blanket implementation for Monty31 fields here, which forwards the
+/// implementation of the variables to the generic argument `<Field>Parameter`,
+/// for which we implement the trait (KoalaBear, BabyBear).
+impl<MP> UniformSamplingField for MontyField31<MP>
+where
+    MP: UniformSamplingField + MontyParameters,
+{
+    const MAX_SINGLE_SAMPLE_BITS: usize = MP::MAX_SINGLE_SAMPLE_BITS;
+    const SAMPLING_BITS_M: [u64; 64] = MP::SAMPLING_BITS_M;
+}
+
+fn sample_uniform_bits_impl<T, F>(
+    obj: &mut T,
+    bits: usize,
+    sampling_bits_m: &[u64; 64],
+    sample_value: fn(&mut T, u64) -> F,
+) -> usize
+where
+    F: UniformSamplingField + PrimeField64,
+{
+    assert!(bits < (usize::BITS as usize));
+    assert!((1 << bits) < F::ORDER_U64);
+    let m = sampling_bits_m[bits]; //F::SAMPLING_BITS_M[bits];
+
+    let result = if bits < F::MAX_SINGLE_SAMPLE_BITS {
+        let rand_f = sample_value(obj, m);
+        let rand_usize = rand_f.as_canonical_u64() as usize;
+        rand_usize & ((1 << bits) - 1)
+    } else {
+        let r1: F = sample_value(obj, m);
+        let r2: F = sample_value(obj, m);
+
+        let b2 = bits / 2;
+        let b1 = bits - b2;
+
+        let r1_usize = r1.as_canonical_u64() as usize;
+        let r2_usize = r2.as_canonical_u64() as usize;
+        r1_usize & ((1 << b1) - 1) | (r2_usize & ((1 << b2) - 1) << b1)
+    };
+    result
+}
+
+impl<F, P, const WIDTH: usize, const RATE: usize> CanSampleUniformBits<F>
+    for DuplexChallenger<F, P, WIDTH, RATE>
+where
+    F: UniformSamplingField + PrimeField64,
+    P: CryptographicPermutation<[F; WIDTH]>,
+{
+    /// Samples bits uniformly by using rejection sampling taking into account the number of
+    /// bits actually needed. This allows to use rejection sampling even for fields where
+    /// the largest power of two is ~half the prime with barely any performance penalty
+    /// up to large number of bits to be sampled.
+    ///
+    /// E.g. for KoalaBear up to 24 bits can be sampled uniformly "for free".
+    ///
+    /// This variant resamples in case of sampling a value outside the range in
+    /// which we can samplie `bits` uniform bits.
+    fn sample_uniform_bits(&mut self, bits: usize) -> usize {
+        sample_uniform_bits_impl(
+            self,
+            bits,
+            &F::SAMPLING_BITS_M,
+            DuplexChallenger::sample_value,
+        )
+    }
+
+    /// This variant panics in case of sampling a value for which we would
+    /// produce non uniform bits. The probability of a panic is about 1/P
+    /// for most fields. See `UniformSamplingField` implementation for each
+    /// field for details.
+    fn sample_uniform_bits_may_panic(&mut self, bits: usize) -> usize {
+        sample_uniform_bits_impl(
+            self,
+            bits,
+            &F::SAMPLING_BITS_M,
+            DuplexChallenger::sample_value_may_panic,
+        )
+    }
+
+    /// Samples a field element. If the element is larger or equal to `m`, will panic.
+    fn sample_value_may_panic(&mut self, m: u64) -> F {
+        let result: F = self.sample();
+
+        // Panic if we sampled a value too large for uniform sampling of bits
+        if result.as_canonical_u64() >= m {
+            panic!(
+                "Sampled field element {} is larger or equal to {}",
+                result, m
+            );
+        }
+        result
+    }
+
+    /// Samples a field element. If the element is larger or equal to `m`, will resample
+    /// until a smaller element is found.
+    fn sample_value(&mut self, m: u64) -> F {
+        let mut result: F = self.sample();
+
+        // Rejection sampling until we find a value < m.
+        while result.as_canonical_u64() >= m {
+            result = self.sample();
+        }
+
+        result
     }
 }
 

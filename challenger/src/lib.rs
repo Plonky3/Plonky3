@@ -17,7 +17,7 @@ pub use duplex_challenger::*;
 pub use grinding_challenger::*;
 pub use hash_challenger::*;
 pub use multi_field_challenger::*;
-use p3_field::{BasedVectorSpace, Field};
+use p3_field::{BasedVectorSpace, Field, PrimeField64};
 pub use serializing_challenger::*;
 
 /// A generic trait for absorbing elements into the transcript.
@@ -68,6 +68,28 @@ pub trait CanSampleBits<T> {
     ///
     /// Guarantees that the returned value fits within the requested bit width.
     fn sample_bits(&mut self, bits: usize) -> T;
+}
+
+pub trait CanSampleUniformBits<F> {
+    /// Sample a random `bits`-bit integer from the transcript with a guarantee of
+    /// uniformly sampled bits.
+    ///
+    /// Performance overhead depends on the field and number of bits requested.
+    /// E.g. for KoalaBear sampling up to 24 bits uniformly is essentially free.
+    ///
+    /// This variant resamples in case of sampling a value outside the range in
+    /// which we can samplie `bits` uniform bits.
+    fn sample_uniform_bits(&mut self, bits: usize) -> usize;
+
+    /// This variant panics in case of sampling a value for which we would
+    /// produce non uniform bits. The probability of a panic is about 1/P
+    /// for most fields. See `UniformSamplingField` implementation for each
+    /// field for details.
+    fn sample_uniform_bits_may_panic(&mut self, bits: usize) -> usize;
+
+    fn sample_value(&mut self, m: u64) -> F;
+
+    fn sample_value_may_panic(&mut self, m: u64) -> F;
 }
 
 /// A high-level trait combining observation and sampling over a finite field.
@@ -134,6 +156,28 @@ where
     #[inline(always)]
     fn sample_bits(&mut self, bits: usize) -> T {
         (*self).sample_bits(bits)
+    }
+}
+
+impl<C, F> CanSampleUniformBits<F> for &mut C
+where
+    F: PrimeField64,
+    C: CanSampleUniformBits<F>,
+{
+    fn sample_uniform_bits(&mut self, bits: usize) -> usize {
+        (*self).sample_uniform_bits(bits)
+    }
+
+    fn sample_uniform_bits_may_panic(&mut self, bits: usize) -> usize {
+        (*self).sample_uniform_bits_may_panic(bits)
+    }
+
+    fn sample_value_may_panic(&mut self, m: u64) -> F {
+        (*self).sample_value_may_panic(m)
+    }
+
+    fn sample_value(&mut self, m: u64) -> F {
+        (*self).sample_value(m)
     }
 }
 
