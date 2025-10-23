@@ -139,7 +139,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
             .map(|x| deep_quotient_vanishing_part(x, zeta, alpha_pow_width))
             .unzip();
 
-        // Invert the deominators.
+        // Invert the denominators.
         let vp_denom_invs = batch_multiplicative_inverse(&vp_denoms);
 
         // Precompute powers of alpha for constraint part computation
