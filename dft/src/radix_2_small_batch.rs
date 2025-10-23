@@ -52,10 +52,7 @@ impl<F: TwoAdicField> Radix2DFTSmallBatch<F> {
     ///
     /// The input `n` should be a power of two, representing the maximal FFT size you expect to handle.
     pub fn new(n: usize) -> Self {
-        let res = Self {
-            twiddles: Arc::default(),
-            inv_twiddles: Arc::default(),
-        };
+        let res = Self::default();
         res.update_twiddles(n);
         res
     }

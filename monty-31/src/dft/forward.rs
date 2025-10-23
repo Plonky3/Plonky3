@@ -37,19 +37,23 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     }
 
     pub fn get_missing_twiddles(req_lg_n: usize, cur_lg_n: usize) -> Vec<Vec<Self>> {
-        let generator = Self::two_adic_generator(req_lg_n);
-        let half_n = 1 << (req_lg_n - 1);
-        let nth_roots = generator.powers().collect_n(half_n);
+        // Get the main generator for the largest required FFT size.
+        let main_generator = Self::two_adic_generator(req_lg_n);
 
         (cur_lg_n..req_lg_n)
             .map(|level| {
-                let count = 1usize << level;
-                let stride = 1usize << (req_lg_n - level - 1);
-                let mut v = Vec::with_capacity(count);
-                for i in 0..count {
-                    v.push(nth_roots[i * stride]);
-                }
-                v
+                // For a given 'level', we're generating twiddles for a DIF pass
+                // where the number of butterflies is m = 2^level.
+                let count = 1 << level;
+
+                // The generator for this smaller FFT size is a power of the main generator.
+                //
+                // The exponent is 2^(req_lg_n - (level + 1)).
+                let sub_generator_exp = 1 << (req_lg_n - level - 1);
+                let sub_generator = main_generator.exp_u64(sub_generator_exp as u64);
+
+                // Now, we can collect the 'count' powers of this specific sub-generator.
+                sub_generator.powers().collect_n(count)
             })
             .collect()
     }

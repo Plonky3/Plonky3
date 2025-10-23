@@ -108,7 +108,7 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
 
         let missing_twiddles = MontyField31::get_missing_twiddles(need, have);
 
-        let missing_inv_twiddles: Vec<Vec<MontyField31<MP>>> = missing_twiddles
+        let missing_inv_twiddles = missing_twiddles
             .iter()
             .map(|ts| {
                 core::iter::once(MontyField31::ONE)
@@ -121,33 +121,28 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
                     .collect()
             })
             .collect::<Vec<_>>();
-        {
-            let mut w = self.twiddles.write();
-            let cur = w.len();
-            if cur < need {
-                let mut v = w.as_ref().to_vec();
-                v.extend(missing_twiddles[cur.saturating_sub(have)..].iter().cloned());
-                *w = Arc::from(v.into_boxed_slice());
+        // Helper closure to extend a table under its lock.
+        let extend_table = |lock: &RwLock<Arc<[Vec<_>]>>, missing: &[Vec<_>]| {
+            let mut w = lock.write();
+            let current_len = w.len();
+            // Double-check if an update is still needed after acquiring the write lock.
+            if (current_len + 1) < need {
+                let mut v = w.to_vec();
+                // Append only the portion needed in case another thread did a partial update.
+                let extend_from = current_len.saturating_sub(current_len);
+                v.extend_from_slice(&missing[extend_from..]);
+                *w = v.into();
             }
-        }
-        {
-            let mut w = self.inv_twiddles.write();
-            let cur = w.len();
-            if cur < need {
-                let mut v = w.as_ref().to_vec();
-                v.extend(
-                    missing_inv_twiddles[cur.saturating_sub(have)..]
-                        .iter()
-                        .cloned(),
-                );
-                *w = Arc::from(v.into_boxed_slice());
-            }
-        }
+        };
+        // Atomically update each table. This two-step process is the source of the race condition.
+        extend_table(&self.twiddles, &missing_twiddles);
+        extend_table(&self.inv_twiddles, &missing_inv_twiddles);
     }
 
     fn get_twiddles(&self) -> Arc<[Vec<MontyField31<MP>>]> {
         self.twiddles.read().clone()
     }
+
     fn get_inv_twiddles(&self) -> Arc<[Vec<MontyField31<MP>>]> {
         self.inv_twiddles.read().clone()
     }

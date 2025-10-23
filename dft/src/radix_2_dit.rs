@@ -34,26 +34,27 @@ pub struct Radix2Dit<F: TwoAdicField> {
 }
 
 impl<F: TwoAdicField> Radix2Dit<F> {
-    /// Ensure the twiddle table for size `2^log_h` is present.
-    fn update_twiddles(&self, log_h: usize) {
-        if self.twiddles.read().contains_key(&log_h) {
-            return; // fast path
+    /// Returns the twiddle factors for a DFT of size `2^log_h`.
+    /// If they haven't been computed yet, this function computes and caches them.
+    fn get_or_compute_twiddles(&self, log_h: usize) -> Arc<[F]> {
+        // Fast path: Check if the twiddles already exist with a read lock.
+        if let Some(twiddles) = self.twiddles.read().get(&log_h) {
+            return twiddles.clone();
         }
-        // Compute without holding the write lock
-        let n = 1usize << log_h;
-        let root = F::two_adic_generator(log_h);
-        let built: Arc<[F]> = Arc::from(root.powers().take(n).collect().into_boxed_slice());
-
-        // Publish (double-check)
-        let mut w = self.twiddles.write();
-        w.entry(log_h).or_insert(built);
-        // else: another thread already inserted
-    }
-
-    /// Read-only accessor; call `update_twiddles` first if you need it to exist.
-    fn get_twiddles(&self, log_h: usize) -> Option<Arc<[F]>> {
-        self.update_twiddles(log_h);
-        self.twiddles.read().get(&log_h).cloned()
+        // Slow path: The twiddles were not found. We need to compute them.
+        // Acquire a write lock to ensure only one thread computes and inserts the values.
+        let mut w_lock = self.twiddles.write();
+        // Double-check: Another thread might have computed and inserted the twiddles
+        // while we were waiting for the write lock. The `entry` API handles this
+        // check and insertion atomically.
+        w_lock
+            .entry(log_h)
+            .or_insert_with(|| {
+                let n = 1 << log_h;
+                let root = F::two_adic_generator(log_h);
+                Arc::from(root.powers().take(n).collect())
+            })
+            .clone()
     }
 }
 
@@ -65,7 +66,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit<F> {
         let log_h = log2_strict_usize(h);
 
         // Compute twiddle factors, or take memoized ones if already available.
-        let twiddles = self.get_twiddles(log_h).unwrap();
+        let twiddles = self.get_or_compute_twiddles(log_h);
 
         // DIT butterfly
         reverse_matrix_index_bits(&mut mat);
