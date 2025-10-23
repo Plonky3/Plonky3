@@ -735,7 +735,7 @@ fn test_range_check_end_to_end_invalid() {
 
     // Setup the AIR and builder
     let mut air = RangeCheckAir::new();
-    let mut builder = MockAirBuilder::new(main_trace, aux_trace.clone(), vec![alpha, beta]);
+    let mut builder = MockAirBuilder::new(main_trace, aux_trace, vec![alpha, beta]);
 
     let lookup_gadget = LogUpGadget::new();
     let lookups = <RangeCheckAir as AirLookupHandler<MockAirBuilder>>::get_lookups(&mut air);

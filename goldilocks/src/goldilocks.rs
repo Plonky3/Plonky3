@@ -61,7 +61,7 @@ impl Goldilocks {
     /// A list of generators for the two-adic subgroups of the goldilocks field.
     ///
     /// These satisfy the properties that `TWO_ADIC_GENERATORS[0] = 1` and `TWO_ADIC_GENERATORS[i+1]^2 = TWO_ADIC_GENERATORS[i]`.
-    pub const TWO_ADIC_GENERATORS: [Goldilocks; 33] = Goldilocks::new_array([
+    pub const TWO_ADIC_GENERATORS: [Self; 33] = Self::new_array([
         0x0000000000000001,
         0xffffffff00000000,
         0x0001000000000000,
@@ -102,14 +102,14 @@ impl Goldilocks {
     /// Note that 2^{96} = -1 mod P so all powers of two can be simply
     /// derived from this list.
     const POWERS_OF_TWO: [Self; 96] = {
-        let mut powers_of_two = [Goldilocks::ONE; 96];
+        let mut powers_of_two = [Self::ONE; 96];
 
         let mut i = 1;
         while i < 64 {
-            powers_of_two[i] = Goldilocks::new(1 << i);
+            powers_of_two[i] = Self::new(1 << i);
             i += 1;
         }
-        let mut var = Goldilocks::new(1 << 63);
+        let mut var = Self::new(1 << 63);
         while i < 96 {
             var = const_add(var, var);
             powers_of_two[i] = var;
@@ -663,7 +663,7 @@ fn gcd_inversion(input: Goldilocks) -> Goldilocks {
 }
 
 /// Convert from an i64 to a Goldilocks element but interpret -2^63 as 2^63.
-fn from_unusual_int(int: i64) -> Goldilocks {
+const fn from_unusual_int(int: i64) -> Goldilocks {
     if (int >= 0) || (int == i64::MIN) {
         Goldilocks::new(int as u64)
     } else {

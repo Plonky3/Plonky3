@@ -101,12 +101,10 @@ mod tests {
         let b: [char; 0] = [];
 
         // Zipping two empty iterators should succeed and produce an empty iterator.
-        let zipped = zip_eq(a, b, "mismatch").unwrap();
-
-        let result: Vec<_> = zipped.collect();
+        let mut zipped = zip_eq(a, b, "mismatch").unwrap();
 
         // The result should be an empty vector.
-        assert!(result.is_empty());
+        assert!(zipped.next().is_none());
     }
 
     #[test]

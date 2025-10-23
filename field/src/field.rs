@@ -984,7 +984,7 @@ impl<R: PrimeCharacteristicRing> Powers<R> {
     /// Returns an iterator yielding the first `n` powers.
     #[inline]
     #[must_use]
-    pub fn take(self, n: usize) -> BoundedPowers<R> {
+    pub const fn take(self, n: usize) -> BoundedPowers<R> {
         BoundedPowers { iter: self, n }
     }
 

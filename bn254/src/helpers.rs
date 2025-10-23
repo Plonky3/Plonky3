@@ -214,7 +214,7 @@ const BN254_PRIME_U128: [u128; 2] = [
 
 /// Efficiently halve a Bn254 element.
 #[inline]
-pub(crate) fn halve_bn254(mut input: [u64; 4]) -> [u64; 4] {
+pub(crate) const fn halve_bn254(mut input: [u64; 4]) -> [u64; 4] {
     // Seems to be a little faster to convert into u128s.
     // It's essentially identical under the hood so this is
     // likely just helping the compiler generate simpler assembly somehow.
@@ -254,7 +254,7 @@ pub(crate) fn halve_bn254(mut input: [u64; 4]) -> [u64; 4] {
 /// difference to speed and the rest of the algorithm has this property so we preserve it
 /// here.
 #[inline]
-fn num_bits(limb_1: u64, limb_2: u64, limb_3: u64) -> (usize, usize) {
+const fn num_bits(limb_1: u64, limb_2: u64, limb_3: u64) -> (usize, usize) {
     // For each limb, find the number of leading zeros and subtract from 64.
     // `num_bits % 64` is equal to the `v` corresponding to the largest non-zero limb.
     let v3 = 64 - (limb_3.leading_zeros() as i64);
@@ -280,7 +280,7 @@ fn num_bits(limb_1: u64, limb_2: u64, limb_3: u64) -> (usize, usize) {
 ///
 /// `n` is given by `limb = n / 64` and `bits_mod_64 = n % 64` for convenience.
 #[inline]
-fn get_approximation(val: [u64; 4], limb: usize, bits_mod_64: usize) -> u64 {
+const fn get_approximation(val: [u64; 4], limb: usize, bits_mod_64: usize) -> u64 {
     // Assuming that our machine is 64-bits, half the word size will be 32 bits.
     // This is the largest possible value which ensures our output fits inside
     // a single word.
@@ -303,7 +303,7 @@ fn get_approximation(val: [u64; 4], limb: usize, bits_mod_64: usize) -> u64 {
 ///
 /// Sign is assumed to be either `0` or `-1`.
 #[inline]
-fn conditional_neg(a: &mut [u64; 4], sign: u64) {
+const fn conditional_neg(a: &mut [u64; 4], sign: u64) {
     let mut carry;
     (a[0], carry) = (a[0] ^ sign).overflowing_add((-(sign as i64)) as u64);
     (a[1], carry) = (a[1] ^ sign).overflowing_add(carry as u64);

@@ -1,3 +1,5 @@
+#![allow(clippy::use_self)]
+
 //! Discrete Fourier Transform, in-place, decimation-in-frequency
 //!
 //! Straightforward recursive algorithm, "unrolled" up to size 256.

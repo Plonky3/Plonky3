@@ -419,7 +419,7 @@ pub fn iter_array_chunks_padded<T: Copy, const N: usize>(
 ///
 /// This panics if the size of `BaseArray` is not a multiple of the size of `Base`.
 #[inline]
-pub unsafe fn as_base_slice<Base, BaseArray>(buf: &[BaseArray]) -> &[Base] {
+pub const unsafe fn as_base_slice<Base, BaseArray>(buf: &[BaseArray]) -> &[Base] {
     const {
         assert!(align_of::<Base>() == align_of::<BaseArray>());
         assert!(size_of::<BaseArray>().is_multiple_of(size_of::<Base>()));
@@ -448,7 +448,7 @@ pub unsafe fn as_base_slice<Base, BaseArray>(buf: &[BaseArray]) -> &[Base] {
 ///
 /// This panics if the size of `BaseArray` is not a multiple of the size of `Base`.
 #[inline]
-pub unsafe fn as_base_slice_mut<Base, BaseArray>(buf: &mut [BaseArray]) -> &mut [Base] {
+pub const unsafe fn as_base_slice_mut<Base, BaseArray>(buf: &mut [BaseArray]) -> &mut [Base] {
     const {
         assert!(align_of::<Base>() == align_of::<BaseArray>());
         assert!(size_of::<BaseArray>().is_multiple_of(size_of::<Base>()));
