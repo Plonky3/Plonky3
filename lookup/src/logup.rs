@@ -22,9 +22,9 @@ use alloc::vec::Vec;
 
 use p3_air::{AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder, PermutationAirBuilder};
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_matrix::Matrix;
+use p3_matrix::{Matrix, dense::RowMajorMatrix};
 
-use crate::lookup_traits::{Kind, Lookup, LookupError, LookupGadget, symbolic_to_expr};
+use crate::lookup_traits::{Kind, Lookup, LookupData, LookupError, LookupGadget, symbolic_to_expr};
 
 /// Core LogUp gadget implementing lookup arguments via logarithmic derivatives.
 ///
@@ -353,5 +353,15 @@ impl LookupGadget for LogUpGadget {
             .unwrap_or(0);
 
         deg_denom_constr.max(deg_num)
+    }
+
+    fn generate_permutation<F: Field, EF: p3_field::ExtensionField<F>>(
+        &self,
+        main: &RowMajorMatrix<F>,
+        lookups: &[Lookup<F>],
+        lookup_data: &mut [LookupData<EF>],
+        permutation_challenges: &[EF],
+    ) -> RowMajorMatrix<EF> {
+        todo!()
     }
 }

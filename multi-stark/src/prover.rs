@@ -1,37 +1,49 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_air::Air;
+use hashbrown::HashMap;
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::PrimeCharacteristicRing;
+use p3_field::{Algebra, PrimeCharacteristicRing};
+use p3_lookup::folders::ProverConstraintFolderWithLookups;
+use p3_lookup::lookup_traits::{AirLookupHandler, Kind, Lookup, LookupData, LookupGadget};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_uni_stark::{
-    OpenedValues, ProverConstraintFolder, SymbolicAirBuilder, get_log_quotient_degree,
-    get_symbolic_constraints, quotient_values,
+    ExtensionSymbolicAirBuilder, OpenedValues, SymbolicExpression, get_symbolic_constraints,
+    quotient_values,
 };
 use p3_util::log2_strict_usize;
+
 use tracing::instrument;
 
 use crate::config::{
     Challenge, Domain, StarkGenericConfig as SGC, Val, observe_base_as_ext,
     observe_instance_binding,
 };
-use crate::proof::{MultiCommitments, MultiOpenedValues, MultiProof};
+use crate::proof::{MultiCommitments, MultiOpenedValues, MultiProof, OpenedValuesWithLookups};
+use crate::symbolic::get_log_quotient_degree;
 
 #[derive(Debug)]
 pub struct StarkInstance<'a, SC: SGC, A> {
     pub air: &'a A,
     pub trace: RowMajorMatrix<Val<SC>>,
     pub public_values: Vec<Val<SC>>,
+    pub lookups: Vec<Lookup<Val<SC>>>,
 }
 
 #[instrument(skip_all)]
-pub fn prove_multi<SC, A>(config: &SC, instances: Vec<StarkInstance<SC, A>>) -> MultiProof<SC>
+pub fn prove_multi<SC, A, LG>(
+    config: &SC,
+    instances: Vec<StarkInstance<SC, A>>,
+    lookup_gadget: &LG,
+) -> MultiProof<SC>
 where
     SC: SGC,
-    A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
+    SymbolicExpression<SC::Challenge>: Algebra<SymbolicExpression<Val<SC>>>,
+    A: AirLookupHandler<ExtensionSymbolicAirBuilder<Val<SC>, SC::Challenge>>
+        + for<'a> AirLookupHandler<ProverConstraintFolderWithLookups<'a, SC>>,
+    LG: LookupGadget,
 {
     let pcs = config.pcs();
     let mut challenger = config.initialise_challenger();
@@ -46,6 +58,24 @@ where
     let log_degrees: Vec<usize> = degrees.iter().copied().map(log2_strict_usize).collect();
     let log_ext_degrees: Vec<usize> = log_degrees.iter().map(|&d| d + config.is_zk()).collect();
 
+    // Extract lookups and create lookup data in one pass.
+    let (all_lookups, mut lookup_data): (Vec<_>, Vec<_>) = instances
+        .iter()
+        .map(|inst| {
+            let (lookups, data): (Vec<_>, Vec<_>) = (
+                inst.lookups,
+                inst.lookups
+                    .iter()
+                    .map(|lookup| LookupData {
+                        aux_idx: lookup.columns[0],
+                        expected_cumulated: SC::Challenge::ZERO,
+                    })
+                    .collect(),
+            );
+            (lookups, data)
+        })
+        .unzip();
+
     // Domains for each instance (base and extended) in one pass.
     let (trace_domains, ext_trace_domains): (Vec<Domain<SC>>, Vec<Domain<SC>>) = degrees
         .iter()
@@ -58,15 +88,24 @@ where
         .unzip();
 
     // Extract AIRs and public values; consume traces later without cloning.
-    let airs: Vec<&A> = instances.iter().map(|i| i.air).collect();
-    let pub_vals: Vec<Vec<Val<SC>>> = instances.iter().map(|i| i.public_values.clone()).collect();
+    let airs: Vec<_> = instances.iter().map(|inst| inst.air).collect();
+    let pub_vals: Vec<_> = instances.iter().map(|inst| &inst.public_values).collect();
 
     // Precompute per-instance log_quotient_degrees and quotient_degrees in one pass.
     let (log_quotient_degrees, quotient_degrees): (Vec<usize>, Vec<usize>) = airs
         .iter()
         .zip(pub_vals.iter())
-        .map(|(air, pv)| {
-            let lqd = get_log_quotient_degree::<Val<SC>, A>(air, 0, pv.len(), config.is_zk());
+        .enumerate()
+        .map(|(i, (air, pv))| {
+            let lqd = get_log_quotient_degree::<Val<SC>, SC::Challenge, A, LG>(
+                air,
+                0,
+                pv.len(),
+                &all_lookups[i],
+                &lookup_data[i],
+                config.is_zk(),
+                lookup_gadget,
+            );
             let qd = 1 << (lqd + config.is_zk());
             (lqd, qd)
         })
@@ -101,6 +140,59 @@ where
     for pv in &pub_vals {
         challenger.observe_slice(pv);
     }
+
+    // Sample the lookup challenges.
+    let mut global_perm_challenges = HashMap::new();
+    let mut challenges_per_instance = Vec::with_capacity(airs.len());
+    for contexts in &all_lookups {
+        let num_challenges = contexts.len() * lookup_gadget.num_challenges();
+        let mut instance_challenges = Vec::with_capacity(num_challenges);
+        for context in contexts {
+            let cs = match &context.kind {
+                Kind::Global(name) => {
+                    let cs = global_perm_challenges.entry(name).or_insert_with(|| {
+                        vec![
+                            challenger.sample_algebra_element::<Challenge<SC>>(),
+                            challenger.sample_algebra_element(),
+                        ]
+                    });
+                    cs.clone()
+                }
+                Kind::Local => {
+                    vec![
+                        challenger.sample_algebra_element(),
+                        challenger.sample_algebra_element(),
+                    ]
+                }
+            };
+            instance_challenges.extend(cs);
+        }
+        challenges_per_instance.push(instance_challenges);
+    }
+
+    let permutation_matrices = instances
+        .iter()
+        .enumerate()
+        .map(|(i, inst)| {
+            lookup_gadget
+                .generate_permutation(
+                    &inst.trace,
+                    &all_lookups[i],
+                    &mut lookup_data[i],
+                    &challenges_per_instance[i],
+                )
+                .flatten_to_base()
+        })
+        .collect::<Vec<_>>();
+
+    // Get the basis coefficients.
+    // Commit to all traces in one multi-matrix commitment, preserving input order.
+    let permutation_commit_inputs = permutation_matrices
+        .into_iter()
+        .zip(ext_trace_domains.iter().cloned())
+        .map(|(perm, dom)| (dom, perm))
+        .collect::<Vec<_>>();
+    let (permutation_commit, permutation_data) = pcs.commit(permutation_commit_inputs);
 
     // Compute quotient degrees and domains per instance inline in the loop below.
 
@@ -166,6 +258,7 @@ where
     let zeta: Challenge<SC> = challenger.sample_algebra_element();
 
     // Build opening rounds.
+    // TODO: Add opening round for lookup aux columns.
     let round1_points = ext_trace_domains
         .iter()
         .map(|dom| {
@@ -218,11 +311,17 @@ where
             qcs.push(mat_vals[0].clone());
         }
 
-        per_instance.push(OpenedValues {
+        let base_opened = OpenedValues {
             trace_local,
             trace_next,
             quotient_chunks: qcs,
             random: None, // ZK not supported in multi-stark yet
+        };
+
+        per_instance.push(OpenedValuesWithLookups {
+            base_opened_values: base_opened,
+            permutation_local: vec![],
+            permutation_next: vec![],
         });
     }
 
@@ -230,11 +329,13 @@ where
         commitments: MultiCommitments {
             main: main_commit,
             quotient_chunks: quotient_commit,
+            permutation: permutation_commit,
         },
         opened_values: MultiOpenedValues {
             instances: per_instance,
         },
         opening_proof,
+        global_lookup_data: lookup_data,
         degree_bits: log_ext_degrees,
     }
 }

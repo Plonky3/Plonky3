@@ -103,8 +103,8 @@ impl<F: Field> SymbolicAirBuilder<F> {
         }
     }
 
-    pub fn constraints(self) -> Vec<SymbolicExpression<F>> {
-        self.constraints
+    pub fn constraints(&self) -> Vec<SymbolicExpression<F>> {
+        self.constraints.clone()
     }
 }
 
@@ -189,8 +189,12 @@ impl<F: Field, EF: ExtensionField<F>> ExtensionSymbolicAirBuilder<F, EF> {
         }
     }
 
-    pub fn extension_constraints(self) -> Vec<SymbolicExpression<EF>> {
-        self.extension_constraints
+    pub fn extension_constraints(&self) -> Vec<SymbolicExpression<EF>> {
+        self.extension_constraints.clone()
+    }
+
+    pub fn base_constraints(&self) -> Vec<SymbolicExpression<F>> {
+        self.base.constraints().clone()
     }
 }
 

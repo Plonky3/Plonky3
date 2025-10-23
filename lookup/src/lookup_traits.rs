@@ -1,17 +1,40 @@
-use alloc::string::String;
 use alloc::vec::Vec;
+use alloc::{string::String, vec};
 use core::ops::Neg;
+use p3_matrix::dense::RowMajorMatrix;
 
-use p3_air::{Air, AirBuilderWithPublicValues, PairBuilder, PermutationAirBuilder};
-use p3_field::Field;
+use p3_air::{
+    Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, PairBuilder, PermutationAirBuilder,
+};
+use p3_field::{ExtensionField, Field};
 use p3_matrix::Matrix;
 use p3_uni_stark::{Entry, SymbolicExpression};
+use serde::{Deserialize, Serialize};
 
 /// Defines errors that can occur during lookup verification.
 #[derive(Debug)]
 pub enum LookupError {
     /// Error indicating that the global cumulative sum is incorrect.
     GlobalCumulativeMismatch,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+/// Data required for global lookup arguments in a multi-STARK proof.
+pub struct LookupData<F: Clone> {
+    // Index of the auxiliary column (if there are multiple auxiliary columns, this is the first one)
+    pub aux_idx: usize,
+    /// Expected cumulated value for a global lookup argument.
+    pub expected_cumulated: F,
+}
+
+impl<F: Field> LookupData<F> {
+    pub fn to_symbolic(&self) -> LookupData<SymbolicExpression<F>> {
+        let expected = SymbolicExpression::Constant(self.expected_cumulated.clone());
+        LookupData {
+            aux_idx: self.aux_idx,
+            expected_cumulated: expected,
+        }
+    }
 }
 
 /// A trait for lookup argument.
@@ -52,6 +75,47 @@ pub trait LookupGadget {
         expected_cumulated: AB::ExprEF,
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues;
+
+    fn eval_lookups<AB>(
+        &self,
+        builder: &mut AB,
+        contexts: &[Lookup<AB::F>],
+        // Assumed to be sorted by auxiliary_index.
+        lookup_data: &[LookupData<AB::ExprEF>],
+    ) where
+        AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+    {
+        let mut lookup_data_iter = lookup_data.iter();
+        for context in contexts.iter() {
+            match &context.kind {
+                Kind::Local => {
+                    self.eval_local_lookup(builder, context.clone());
+                }
+                Kind::Global(_) => {
+                    // Find the expected cumulated value for this context.
+                    let LookupData {
+                        aux_idx,
+                        expected_cumulated,
+                    } = lookup_data_iter
+                        .next()
+                        .expect("Expected cumulated value missing");
+
+                    if *aux_idx != context.columns[0] {
+                        panic!("Expected cumulated values not sorted by auxiliary index");
+                    }
+                    self.eval_global_update(builder, context.clone(), expected_cumulated.clone());
+                }
+            }
+        }
+    }
+
+    fn generate_permutation<F: Field, EF: ExtensionField<F>>(
+        &self,
+        main: &RowMajorMatrix<F>,
+        lookups: &[Lookup<F>],
+        lookup_data: &mut [LookupData<EF>],
+        permutation_challenges: &[EF],
+    ) -> RowMajorMatrix<EF>;
 
     /// Evaluates the final cumulated value over all AIRs involved in the interaction,
     /// and checks that it is equal to the expected final value.
@@ -143,7 +207,7 @@ impl<F: Field> Lookup<F> {
 pub trait AirLookupHandler<AB>: Air<AB>
 where
     AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
-    AB::Var: Copy + Into<AB::ExprEF>,
+    AB::Var: Copy,
     AB::ExprEF: From<AB::Var> + From<AB::F>,
 {
     /// Register a lookup to be used in this AIR.
@@ -174,6 +238,18 @@ where
 
     /// Register all lookups for the current AIR and return them.
     fn get_lookups(&mut self) -> Vec<Lookup<AB::F>>;
+
+    /// Evaluates all AIR and lookup constraints.
+    fn eval<LG: LookupGadget>(
+        &self,
+        builder: &mut AB,
+        lookups: &[Lookup<AB::F>],
+        lookup_data: &[LookupData<AB::ExprEF>],
+        lookup_gadget: &LG,
+    ) {
+        <Self as Air<AB>>::eval(self, builder);
+        lookup_gadget.eval_lookups(builder, lookups, lookup_data);
+    }
 }
 
 /// Takes a symbolic expression and converts it into an expression in the context of the provided AirBuilder.
@@ -237,5 +313,97 @@ pub fn symbolic_to_expr<AB: PermutationAirBuilder + PairBuilder + AirBuilderWith
         SymbolicExpression::IsFirstRow => builder.is_first_row().into(),
         SymbolicExpression::IsLastRow => builder.is_last_row().into(),
         SymbolicExpression::IsTransition => builder.is_transition().into(),
+    }
+}
+
+/// Wrapper around AIRs for AIRs that do not use lookups.
+pub struct AirNoLookup<AB: AirBuilder, A: Air<AB>> {
+    air: A,
+    _marker: core::marker::PhantomData<AB>,
+}
+
+impl<AB: AirBuilder + Sync, A: Air<AB>> AirNoLookup<AB, A> {
+    pub fn new(air: A) -> Self {
+        Self {
+            air,
+            _marker: core::marker::PhantomData,
+        }
+    }
+}
+
+impl<AB: AirBuilder + Sync, A: Air<AB>> BaseAir<AB::F> for AirNoLookup<AB, A> {
+    fn width(&self) -> usize {
+        self.air.width()
+    }
+}
+
+impl<AB: AirBuilder + Sync, A: Air<AB>> Air<AB> for AirNoLookup<AB, A> {
+    fn eval(&self, builder: &mut AB) {
+        self.air.eval(builder);
+    }
+}
+
+impl<AB: AirBuilderWithPublicValues + PairBuilder + PermutationAirBuilder + Sync, A: Air<AB>>
+    AirLookupHandler<AB> for AirNoLookup<AB, A>
+where
+    <AB as AirBuilder>::Var: Copy,
+    <AB as AirBuilder>::F: Field,
+    AB::ExprEF: From<AB::Var> + From<AB::F>,
+{
+    fn add_lookup_columns(&mut self) -> Vec<usize> {
+        vec![]
+    }
+
+    fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
+        vec![]
+    }
+}
+
+/// Empty lookup gadget for AIRs that do not use lookups.
+pub struct EmptyLookupGadget;
+impl LookupGadget for EmptyLookupGadget {
+    fn num_aux_cols(&self) -> usize {
+        0
+    }
+
+    fn num_challenges(&self) -> usize {
+        0
+    }
+
+    fn eval_local_lookup<AB>(&self, _builder: &mut AB, _context: Lookup<AB::F>)
+    where
+        AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+    {
+    }
+
+    fn eval_global_update<AB>(
+        &self,
+        _builder: &mut AB,
+        _context: Lookup<AB::F>,
+        _expected_cumulated: AB::ExprEF,
+    ) where
+        AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+    {
+    }
+
+    fn verify_global_final_value<EF: Field>(
+        &self,
+        _all_expected_cumulated: &[EF],
+    ) -> Result<(), LookupError> {
+        Ok(())
+    }
+
+    fn constraint_degree<F: Field>(&self, _context: Lookup<F>) -> usize {
+        0
+    }
+
+    fn generate_permutation<F: Field, EF: ExtensionField<F>>(
+        &self,
+        _main: &RowMajorMatrix<F>,
+        _lookups: &[Lookup<F>],
+        _lookup_data: &mut [LookupData<EF>],
+        _permutation_challenges: &[EF],
+    ) -> RowMajorMatrix<EF> {
+        panic!("No lookup permutation generated for EmptyLookupGadget");
     }
 }
