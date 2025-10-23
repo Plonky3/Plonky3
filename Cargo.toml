@@ -54,6 +54,7 @@ too_long_first_doc_paragraph = "allow"
 unused_peekable = "allow"
 tuple_array_conversions = "allow"
 transmute_undefined_repr = "allow"
+cognitive_complexity = "allow"
 
 [workspace.dependencies]
 bincode = { version = "2.0.0", default-features = false }
