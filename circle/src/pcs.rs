@@ -420,7 +420,9 @@ where
                         .max()
                         .map(|x| log2_strict_usize(*x))
                         .map_or_else(
-                            || (&[][..], 0),
+                            ||
+                            // Empty batch?
+                            (&[][..], 0),
                             |log_batch_max_height| {
                                 (
                                     &batch_dims[..],
