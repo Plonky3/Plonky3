@@ -71,7 +71,6 @@ pub fn generate_vectorized_trace_rows<
     RowMajorMatrix::new(vec, ncols)
 }
 
-// TODO: Take generic iterable
 #[instrument(name = "generate Poseidon2 trace", skip_all)]
 pub fn generate_trace_rows<
     F: PrimeField,
