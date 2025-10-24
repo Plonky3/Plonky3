@@ -382,18 +382,20 @@ macro_rules! test_field_dft {
 
 #[macro_export]
 macro_rules! test_field_dft_large {
-    ($mod:ident, $field:ty, $extfield:ty, $dft1:ty, $dft2:ty) => {
+    ($mod:ident, $field:ty, $extfield:ty, $dft:ty) => {
         mod $mod {
             #[test]
-            fn test_dft1_idft_algebra_consistency_large() {
-                $crate::test_dft_idft_algebra_consistency_large::<$field, $extfield, $dft1>();
+            fn test_dft_idft_algebra_consistency_large() {
+                $crate::test_dft_idft_algebra_consistency_large::<$field, $extfield, $dft>();
             }
+        }
+    };
+}
 
-            #[test]
-            fn test_dft2_idft_algebra_consistency_large() {
-                $crate::test_dft_idft_algebra_consistency_large::<$field, $extfield, $dft2>();
-            }
-
+#[macro_export]
+macro_rules! test_field_dft_consistency {
+    ($mod:ident, $field:ty, $extfield:ty, $dft1:ty, $dft2:ty) => {
+        mod $mod {
             #[test]
             fn test_large_coset_ldes_agree() {
                 $crate::test_large_coset_ldes_agree::<$field, $dft1, $dft2>();
