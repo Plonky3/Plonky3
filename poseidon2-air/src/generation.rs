@@ -81,11 +81,13 @@ pub fn generate_trace_rows<
     const SBOX_REGISTERS: usize,
     const HALF_FULL_ROUNDS: usize,
     const PARTIAL_ROUNDS: usize,
+    I: IntoIterator<Item = [F; WIDTH]>,
 >(
-    inputs: Vec<[F; WIDTH]>,
+    inputs: I,
     constants: &RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
     extra_capacity_bits: usize,
 ) -> RowMajorMatrix<F> {
+    let inputs: Vec<[F; WIDTH]> = inputs.into_iter().collect();
     let n = inputs.len();
     assert!(
         n.is_power_of_two(),
