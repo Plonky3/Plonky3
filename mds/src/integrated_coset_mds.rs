@@ -5,7 +5,7 @@ use p3_symmetric::Permutation;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
 use crate::MdsPermutation;
-use crate::butterflies::{dif_butterfly, dit_butterfly, twiddle_free_butterfly};
+use crate::butterflies::{bowers_g_layer, bowers_g_t_layer_integrated};
 
 /// Like `CosetMds`, with a few differences:
 /// - (Bit reversed, a la Bowers) DIF + DIT rather than DIT + DIF
@@ -64,56 +64,12 @@ impl<F: Field, A: Algebra<F>, const N: usize> Permutation<[A; N]> for Integrated
 
         // Bit-reversed DIT, aka Bowers G^T
         for layer in (0..log_n).rev() {
-            bowers_g_t_layer(values, layer, &self.fft_twiddles[layer]);
+            bowers_g_t_layer_integrated(values, layer, &self.fft_twiddles[layer]);
         }
     }
 }
 
 impl<F: Field, A: Algebra<F>, const N: usize> MdsPermutation<A, N> for IntegratedCosetMds<F, N> {}
-
-#[inline]
-fn bowers_g_layer<F: Field, A: Algebra<F>, const N: usize>(
-    values: &mut [A; N],
-    log_half_block_size: usize,
-    twiddles: &[F],
-) {
-    let log_block_size = log_half_block_size + 1;
-    let half_block_size = 1 << log_half_block_size;
-    let num_blocks = N >> log_block_size;
-
-    // Unroll first iteration with a twiddle factor of 1.
-    for hi in 0..half_block_size {
-        let lo = hi + half_block_size;
-        twiddle_free_butterfly(values, hi, lo);
-    }
-
-    for (block, &twiddle) in (1..num_blocks).zip(&twiddles[1..]) {
-        let block_start = block << log_block_size;
-        for hi in block_start..block_start + half_block_size {
-            let lo = hi + half_block_size;
-            dif_butterfly(values, hi, lo, twiddle);
-        }
-    }
-}
-
-#[inline]
-fn bowers_g_t_layer<F: Field, A: Algebra<F>, const N: usize>(
-    values: &mut [A; N],
-    log_half_block_size: usize,
-    twiddles: &[F],
-) {
-    let log_block_size = log_half_block_size + 1;
-    let half_block_size = 1 << log_half_block_size;
-    let num_blocks = N >> log_block_size;
-
-    for (block, &twiddle) in (0..num_blocks).zip(twiddles) {
-        let block_start = block << log_block_size;
-        for hi in block_start..block_start + half_block_size {
-            let lo = hi + half_block_size;
-            dit_butterfly(values, hi, lo, twiddle);
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
