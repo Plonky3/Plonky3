@@ -1,3 +1,27 @@
+//! Binomial extension fields implementation.
+//!
+//! This module provides efficient implementations of binomial extension fields of the form
+//! `F[X]/(X^D - W)` where `F` is a base field, `D` is the extension degree, and `W` is a
+//! non-zero constant in the base field.
+//!
+//! ## Mathematical Foundation
+//!
+//! Elements are represented as polynomials of degree less than `D`:
+//! ```text
+//! a = a₀ + a₁·X + a₂·X² + ... + a_{D-1}·X^{D-1}
+//! ```
+//!
+//! Field operations use the relation `X^D = W` to reduce higher-degree terms.
+//!
+//! ## Optimizations
+//!
+//! Specialized algorithms for common extension degrees:
+//! - **Quadratic (D=2)**: Optimized dot product operations
+//! - **Cubic (D=3)**: Karatsuba multiplication
+//! - **Quartic (D=4)**: Tower-of-extensions approach
+//! - **Quintic (D=5)**: Logarithmic Frobenius computation
+//! - **Octic (D=8)**: Quartic subfield decomposition
+
 use alloc::format;
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -22,19 +46,32 @@ use crate::{
     RawDataSerializable, TwoAdicField, field_to_array,
 };
 
+/// A binomial extension field element of degree `D` over base field `F`.
+///
+/// Represents an element of `F[X]/(X^D - W)` as coefficients `[a₀, a₁, ..., a_{D-1}]`
+/// for the polynomial `a₀ + a₁·X + a₂·X² + ... + a_{D-1}·X^{D-1}`.
+///
+/// Uses `#[repr(transparent)]` for safe transmutations with `[A; D]`.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
 #[repr(transparent)] // Needed to make various casts safe.
 #[must_use]
 pub struct BinomialExtensionField<F, const D: usize, A = F> {
+    /// Array of coefficients representing the polynomial in the extension field.
+    /// The coefficient at index `i` corresponds to the `X^i` term.
     #[serde(
         with = "p3_util::array_serialization",
         bound(serialize = "A: Serialize", deserialize = "A: Deserialize<'de>")
     )]
     pub(crate) value: [A; D],
+    /// Phantom data to maintain type information about the base field.
     _phantom: PhantomData<F>,
 }
 
 impl<F, A, const D: usize> BinomialExtensionField<F, D, A> {
+    /// Creates a new binomial extension field element from coefficients.
+    ///
+    /// # Arguments
+    /// * `value` - Array of `D` coefficients `[a₀, a₁, ..., a_{D-1}]`
     pub(crate) const fn new(value: [A; D]) -> Self {
         Self {
             value,
@@ -113,7 +150,9 @@ impl<F: BinomiallyExtendable<D>, const D: usize> ExtensionField<F>
 }
 
 impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExtensionField<F, D> {
-    /// FrobeniusField automorphisms: x -> x^n, where n is the order of BaseField.
+    /// Computes the Frobenius automorphism: x -> x^q, where q is the order of the base field.
+    ///
+    /// Uses precomputed powers of the D-th root of unity for efficiency.
     #[inline]
     fn frobenius(&self) -> Self {
         // Slightly faster than self.repeated_frobenius(1)
@@ -150,11 +189,12 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
         res
     }
 
-    /// Compute the pseudo inverse of a given element making use of the Frobenius automorphism.
+    /// Computes the multiplicative inverse using the Frobenius automorphism.
     ///
-    /// Returns `0` if `self == 0`, and `1/self` otherwise.
+    /// Implements Algorithm 11.3.4 from the Handbook of Elliptic and Hyperelliptic Curve Cryptography.
+    /// Uses the decomposition `-1 = (q^{D-1} + ... + q) - (q^{D-1} + ... + q + 1)` where q is the base field order.
     ///
-    /// Algorithm 11.3.4 in Handbook of Elliptic and Hyperelliptic Curve Cryptography.
+    /// Returns `0` if `self == 0`, otherwise returns `1/self`.
     #[inline]
     fn pseudo_inv(&self) -> Self {
         // Writing 'a' for self and `q` for the order of the base field, our goal is to compute `a^{-1}`.
@@ -314,6 +354,12 @@ impl<F: BinomiallyExtendable<D>, const D: usize> Field for BinomialExtensionFiel
 
     const GENERATOR: Self = Self::new(F::EXT_GENERATOR);
 
+    /// Computes the multiplicative inverse of this field element.
+    ///
+    /// Uses specialized algorithms for common extension degrees (D=2,3,4,5,8) for optimal performance.
+    /// Falls back to general pseudo-inverse algorithm for other degrees.
+    ///
+    /// Returns `None` if the element is zero, otherwise returns `Some(inverse)`.
     fn try_inverse(&self) -> Option<Self> {
         if self.is_zero() {
             return None;
@@ -640,7 +686,17 @@ pub(crate) fn vector_sub<
     array::from_fn(|i| a[i].clone() - b[i].clone())
 }
 
-/// Multiply two vectors representing elements in a binomial extension.
+/// Multiplies two elements in a binomial extension field.
+///
+/// Implements efficient multiplication for `F[X]/(X^D - W)` using specialized algorithms
+/// for common extension degrees (D=2,3,4,5,8). Uses the relation `X^D = W` to reduce
+/// higher-degree terms.
+///
+/// # Parameters
+/// * `a` - First element coefficients `[a₀, a₁, ..., a_{D-1}]`
+/// * `b` - Second element coefficients `[b₀, b₁, ..., b_{D-1}]`
+/// * `res` - Output array to store result coefficients
+/// * `w` - The constant `W` from the defining polynomial `X^D - W`
 #[inline]
 pub(super) fn binomial_mul<
     F: Field,
