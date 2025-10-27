@@ -199,10 +199,6 @@ mod tests {
     fn test_soundness_type_display() {
         assert_eq!(SecurityAssumption::JohnsonBound.to_string(), "JohnsonBound");
         assert_eq!(
-            SecurityAssumption::CapacityBound.to_string(),
-            "CapacityBound"
-        );
-        assert_eq!(
             SecurityAssumption::UniqueDecoding.to_string(),
             "UniqueDecoding"
         );
@@ -213,10 +209,6 @@ mod tests {
         assert_eq!(
             SecurityAssumption::from_str("JohnsonBound"),
             Ok(SecurityAssumption::JohnsonBound)
-        );
-        assert_eq!(
-            SecurityAssumption::from_str("CapacityBound"),
-            Ok(SecurityAssumption::CapacityBound)
         );
         assert_eq!(
             SecurityAssumption::from_str("UniqueDecoding"),
@@ -277,34 +269,6 @@ mod tests {
             assumption.prox_gaps_error(log_degree, log_inv_rate, field_size_bits, 2);
         let real_error_non_log =
             degree.powi(2) / (2. * (rate.sqrt() / 20.).min(1. - rate.sqrt() - delta)).powi(7);
-        let real_error = field_size_bits as f64 - real_error_non_log.log2();
-
-        assert!((computed_error - real_error).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_cb_errors() {
-        let assumption = SecurityAssumption::CapacityBound;
-
-        // Setting
-        let log_degree = 20;
-        let degree = (1 << log_degree) as f64;
-        let log_inv_rate = 2;
-        let rate = 1. / (1 << log_inv_rate) as f64;
-
-        let eta = rate / 20.;
-
-        let field_size_bits = 128;
-
-        // List size
-        let real_list_size = degree / (rate * eta);
-        let computed_list_size = assumption.list_size_bits(log_degree, log_inv_rate);
-        assert!((real_list_size.log2() - computed_list_size).abs() < 0.01);
-
-        // Prox gaps
-        let computed_error =
-            assumption.prox_gaps_error(log_degree, log_inv_rate, field_size_bits, 2);
-        let real_error_non_log = degree / (eta * rate.powi(2));
         let real_error = field_size_bits as f64 - real_error_non_log.log2();
 
         assert!((computed_error - real_error).abs() < 0.01);
