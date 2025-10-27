@@ -153,9 +153,6 @@ impl<F: Field> PairBuilder for SymbolicAirBuilder<F> {
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
-    use alloc::vec::Vec;
-
     use p3_air::BaseAir;
     use p3_baby_bear::BabyBear;
 
