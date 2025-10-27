@@ -16,11 +16,6 @@ pub enum SecurityAssumption {
     /// We refer to this configuration as JB for short.
     /// This assumes that RS have mutual correlated agreement for proximity parameter up to (1 - √ρ).
     JohnsonBound,
-
-    /// Capacity bound assumes that the distance of each oracle is within the capacity bound 1 - ρ.
-    /// We refer to this configuration as CB for short.
-    /// This requires conjecturing that RS codes are decodable up to capacity and have correlated agreement (mutual in WHIR) up to capacity.
-    CapacityBound,
 }
 
 impl SecurityAssumption {
@@ -36,14 +31,12 @@ impl SecurityAssumption {
             Self::UniqueDecoding => 0., // TODO: Maybe just panic and avoid calling it in UD?
             // Set as √ρ/20
             Self::JohnsonBound => -(0.5 * log_inv_rate as f64 + LOG2_10 + 1.),
-            // Set as ρ/20
-            Self::CapacityBound => -(log_inv_rate as f64 + LOG2_10 + 1.),
         }
     }
 
     /// Given a RS code (specified by the log of the degree and log inv of the rate), compute the list size at the specified distance δ.
     #[must_use]
-    pub const fn list_size_bits(&self, log_degree: usize, log_inv_rate: usize) -> f64 {
+    pub const fn list_size_bits(&self, _log_degree: usize, log_inv_rate: usize) -> f64 {
         let log_eta = self.log_eta(log_inv_rate);
         match self {
             // In UD the list size is 1
@@ -54,9 +47,6 @@ impl SecurityAssumption {
                 let log_inv_sqrt_rate: f64 = log_inv_rate as f64 / 2.;
                 log_inv_sqrt_rate - (1. + log_eta)
             }
-
-            // In CB we assume that RS codes are (1 - ρ - η, d/ρ*η)-list decodable (see Conjecture 5.6 in STIR).
-            Self::CapacityBound => (log_degree + log_inv_rate) as f64 - log_eta,
         }
     }
 
@@ -84,9 +74,6 @@ impl SecurityAssumption {
                 let sqrt_rho_20 = 1. + LOG2_10 + 0.5 * log_inv_rate as f64;
                 numerator + 7. * (sqrt_rho_20.min(-log_eta) - 1.)
             }
-
-            // In JB we assume the error is degree/η*ρ^2
-            Self::CapacityBound => (log_degree + 2 * log_inv_rate) as f64 - log_eta,
         };
 
         // Error is  (num_functions - 1) * error/|F|;
@@ -108,7 +95,6 @@ impl SecurityAssumption {
         let delta = match self {
             Self::UniqueDecoding => 0.5 * (1. - rate),
             Self::JohnsonBound => 1. - rate.sqrt() - eta,
-            Self::CapacityBound => 1. - rate - eta,
         };
 
         (1. - delta).log2()
@@ -187,7 +173,6 @@ impl Display for SecurityAssumption {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::JohnsonBound => "JohnsonBound",
-            Self::CapacityBound => "CapacityBound",
             Self::UniqueDecoding => "UniqueDecoding",
         })
     }
@@ -199,7 +184,6 @@ impl FromStr for SecurityAssumption {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "JohnsonBound" => Ok(Self::JohnsonBound),
-            "CapacityBound" => Ok(Self::CapacityBound),
             "UniqueDecoding" => Ok(Self::UniqueDecoding),
             _ => Err(format!("Invalid soundness specification: {s}")),
         }
