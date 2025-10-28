@@ -354,7 +354,7 @@ pub trait PrimeCharacteristicRing:
                 // initialisation of acc to Self::ZERO.
                 let mut acc = Self::sum_array::<8>(&input[..8]);
                 for i in (16..=N).step_by(8) {
-                    acc += Self::sum_array::<8>(&input[(i - 8)..i])
+                    acc += Self::sum_array::<8>(&input[(i - 8)..i]);
                 }
                 // This would be much cleaner if we could use const generic expressions but
                 // this will do for now.
@@ -994,7 +994,7 @@ impl<R: PrimeCharacteristicRing> Powers<R> {
         slice
             .iter_mut()
             .zip(self)
-            .for_each(|(out, next)| *out = next)
+            .for_each(|(out, next)| *out = next);
     }
 
     /// Wrapper for `self.take(n).collect()`.

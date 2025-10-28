@@ -627,7 +627,7 @@ pub const fn relatively_prime_u64(mut u: u64, mut v: u64) -> bool {
         // This looks inefficient for v >> u but thanks to the fact that we remove
         // trailing_zeros of v in every iteration, it ends up much more performative
         // than first glance implies.
-        v -= u
+        v -= u;
     }
     // If we made it through the loop, at no point is u or v equal to 1 and so the gcd
     // must be greater than 1.

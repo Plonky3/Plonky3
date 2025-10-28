@@ -135,7 +135,7 @@ where
 
     let mmcs = MerkleTreeMmcs::<P, PW, H, C, DIGEST_ELEMS>::new(h, c);
     group.bench_with_input(params, &leaves, |b, input| {
-        b.iter(|| mmcs.commit(input.clone()))
+        b.iter(|| mmcs.commit(input.clone()));
     });
 }
 
@@ -173,7 +173,7 @@ where
 
     let mmcs = MerkleTreeMmcs::<P, PW, H, C, DIGEST_ELEMS>::new(h, c);
     group.bench_with_input(params, &leaves, |b, input| {
-        b.iter(|| mmcs.commit(input.clone()))
+        b.iter(|| mmcs.commit(input.clone()));
     });
 }
 

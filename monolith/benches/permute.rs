@@ -21,7 +21,7 @@ where
 
     let name = format!("monolith::<Mersenne31, {WIDTH}>");
     c.bench_function(name.as_str(), |b| {
-        b.iter(|| monolith.permutation(&mut input))
+        b.iter(|| monolith.permutation(&mut input));
     });
 }
 

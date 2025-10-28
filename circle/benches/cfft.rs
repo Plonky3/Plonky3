@@ -39,7 +39,7 @@ fn lde_cfft<M: Measurement>(g: &mut BenchmarkGroup<'_, M>, log_n: usize, log_w: 
                     evals.extrapolate(CircleDomain::standard(log_n + 1))
                 },
                 criterion::BatchSize::LargeInput,
-            )
+            );
         },
     );
 }
@@ -65,7 +65,7 @@ fn lde_twoadic<F: TwoAdicField, Dft: TwoAdicSubgroupDft<F>, M: Measurement>(
                 || (dft.clone(), m.clone()),
                 |(dft, m)| dft.coset_lde_batch(m, 1, F::GENERATOR),
                 criterion::BatchSize::LargeInput,
-            )
+            );
         },
     );
 }

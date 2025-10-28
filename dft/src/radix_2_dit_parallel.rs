@@ -543,12 +543,12 @@ fn dit_layer_rev<F: Field>(
     if backwards {
         for (block, twiddle) in blocks_and_twiddles.rev() {
             let (lo, hi) = block.split_at_mut(half_block_size * width);
-            DitButterfly(twiddle).apply_to_rows(lo, hi)
+            DitButterfly(twiddle).apply_to_rows(lo, hi);
         }
     } else {
         for (block, twiddle) in blocks_and_twiddles {
             let (lo, hi) = block.split_at_mut(half_block_size * width);
-            DitButterfly(twiddle).apply_to_rows(lo, hi)
+            DitButterfly(twiddle).apply_to_rows(lo, hi);
         }
     }
 }
