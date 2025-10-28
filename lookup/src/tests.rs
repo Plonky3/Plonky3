@@ -272,12 +272,20 @@ impl RangeCheckAir {
     }
 }
 
-impl<AB> Air<AB> for RangeCheckAir
-where
-    AB: AirBuilder<F = F> + MessageBuilder<F>,
-    AB::Var: Into<SymbolicExpression<F>>,
-{
-    fn eval(&self, builder: &mut AB) {
+impl<F: Field> BaseAir<F> for RangeCheckAir {
+    fn width(&self) -> usize {
+        3 * self.num_lookups // [read, provide, mult] per lookup
+    }
+}
+
+impl Air<MockAirBuilder> for RangeCheckAir {
+    fn eval(&self, _builder: &mut MockAirBuilder) {
+        // No constraints - this AIR only defines lookup interactions
+    }
+}
+
+impl Air<InteractionCollector<F>> for RangeCheckAir {
+    fn eval(&self, builder: &mut InteractionCollector<F>) {
         let main = builder.main();
         let local = main.row_slice(0).unwrap();
 
@@ -294,12 +302,6 @@ where
             ));
             builder.send(Interaction::new(vec![table_val.into()], mult.into()));
         }
-    }
-}
-
-impl<F: Field> BaseAir<F> for RangeCheckAir {
-    fn width(&self) -> usize {
-        3 * self.num_lookups // [read, provide, mult] per lookup
     }
 }
 
@@ -1151,12 +1153,14 @@ impl<F: Field> BaseAir<F> for AddAir {
     }
 }
 
-impl<AB> Air<AB> for AddAir
-where
-    AB: AirBuilder<F = F> + MessageBuilder<F>,
-    AB::Var: Into<SymbolicExpression<F>>,
-{
-    fn eval(&self, builder: &mut AB) {
+impl Air<MockAirBuilder> for AddAir {
+    fn eval(&self, _builder: &mut MockAirBuilder) {
+        // No constraints - this AIR only defines lookup interactions
+    }
+}
+
+impl Air<InteractionCollector<F>> for AddAir {
+    fn eval(&self, builder: &mut InteractionCollector<F>) {
         let main = builder.main();
         let local = main.row_slice(0).unwrap();
 
