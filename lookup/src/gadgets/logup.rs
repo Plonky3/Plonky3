@@ -24,7 +24,7 @@ use p3_air::{AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder, Permutat
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 
-use super::InteractionGadget;
+use super::{GadgetConstraintContext, InteractionGadget};
 use crate::error::LookupError;
 use crate::interaction::{Interaction, InteractionKind, eval_symbolic};
 
@@ -125,140 +125,91 @@ impl LogUpGadget {
 }
 
 impl InteractionGadget for LogUpGadget {
-    /// Evaluates the transition and boundary constraints for a lookup argument.
-    ///
-    /// # Mathematical Details
-    /// The constraint enforces:
-    /// ```text
-    /// ∑_i(multiplicities[i] / (α - combined_elements[i])) = expected_value
-    /// ```
-    ///
-    /// where `multiplicities` can be negative, and
-    /// `combined_elements[i] = ∑elements[i][n-j] * β^j`.
-    ///
-    /// For local interactions (`is_global = false`), `expected_value = 0` and the constraint
-    /// wraps around (the last row contributes to the first).
-    ///
-    /// For global interactions (`is_global = true`), `expected_value` is provided by the prover,
-    /// and the sum of all `expected_value`s across AIRs for this global interaction should be 0.
-    /// The latter is checked as the final step after all AIRs have been verified.
-    ///
-    /// This is implemented using a running sum column that accumulates the contributions.
-    ///
-    /// # Arguments
-    /// * `builder` - The AIR builder to construct expressions
-    /// * `interactions` - The interactions containing elements and multiplicities
-    /// * `aux_column_index` - Which auxiliary column stores the running sum
-    /// * `is_global` - Whether this is a global interaction (across multiple AIRs)
-    /// * `expected_cumulative` - For global interactions, the expected cumulative value
     fn eval_constraints<AB, K>(
         &self,
         builder: &mut AB,
-        interactions: &[Interaction<AB::F, K>],
-        aux_column_index: usize,
-        is_global: bool,
-        expected_cumulative: Option<AB::ExprEF>,
+        context: GadgetConstraintContext<'_, AB::F, K, AB::ExprEF>,
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
         K: InteractionKind,
     {
-        // Validate parameters
-        if is_global {
-            assert!(
-                expected_cumulative.is_some(),
-                "Global interactions require an expected cumulative value"
-            );
-        } else {
-            assert!(
-                expected_cumulative.is_none(),
-                "Local interactions should not have an expected cumulative value"
-            );
-        }
-
-        if interactions.is_empty() {
+        if context.interactions.is_empty() {
             return;
         }
 
-        // Extract elements and multiplicities from interactions
-        let element_exprs: Vec<_> = interactions
-            .iter()
-            .map(|interaction| {
-                interaction
-                    .values
-                    .iter()
-                    .map(|expr| eval_symbolic(builder, expr).into())
-                    .collect()
-            })
-            .collect();
+        // Access permutation challenges
+        let challenges = builder.permutation_randomness();
+        let alpha_idx = 2 * context.aux_column_index;
+        let beta_idx = alpha_idx + 1;
+        if challenges.len() <= beta_idx {
+            panic!(
+                "Insufficient permutation challenges. Interaction {} requires at least {} challenges, but only {} are available.",
+                context.aux_column_index,
+                beta_idx + 1,
+                challenges.len()
+            );
+        }
+        let alpha = challenges[alpha_idx];
+        let beta = challenges[beta_idx];
 
-        let multiplicity_exprs: Vec<_> = interactions
-            .iter()
-            .map(|interaction| eval_symbolic(builder, &interaction.multiplicity).into())
-            .collect();
+        // Access running sum column
+        let perm_trace = builder.permutation();
+        let s = perm_trace.row_slice(0).unwrap();
+        let s_next_slice = perm_trace.row_slice(1).unwrap();
+        if s.len() <= context.aux_column_index {
+            panic!(
+                "Permutation trace has insufficient width. Expected at least {} columns, found {}.",
+                context.aux_column_index + 1,
+                s.len()
+            );
+        }
+        let s_local: AB::ExprEF = s[context.aux_column_index].into();
+        let s_next: AB::ExprEF = s_next_slice[context.aux_column_index].into();
 
-        // Access the permutation (auxiliary) table
-        let permutation = builder.permutation();
-        let permutation_challenges = builder.permutation_randomness();
+        // Prepare the numerator and denominator for the LogUp constraint.
+        let (numerator, denominator) = {
+            let element_exprs: Vec<Vec<AB::ExprEF>> = context
+                .interactions
+                .iter()
+                .map(|int| {
+                    int.values
+                        .iter()
+                        .map(|expr| eval_symbolic(builder, expr).into())
+                        .collect()
+                })
+                .collect();
 
-        // We need 2 challenges per auxiliary column: α and β
-        let required_challenges = 2 * (aux_column_index + 1);
-        assert!(
-            permutation_challenges.len() >= required_challenges,
-            "Insufficient permutation challenges: need {}, have {}",
-            required_challenges,
-            permutation_challenges.len()
-        );
+            let multiplicity_exprs: Vec<AB::ExprEF> = context
+                .interactions
+                .iter()
+                .map(|int| eval_symbolic(builder, &int.multiplicity).into())
+                .collect();
 
-        // Challenge for the running sum.
-        let alpha = permutation_challenges[2 * aux_column_index];
-        // Challenge for combining the lookup tuples.
-        let beta = permutation_challenges[2 * aux_column_index + 1];
-
-        // Get the running sum column
-        let s = permutation.row_slice(0).unwrap();
-        assert!(
-            s.len() > aux_column_index,
-            "Permutation trace has insufficient width"
-        );
-
-        // Read s[i] from the local row at the specified column.
-        let s_local = s[aux_column_index].into();
-        // Read s[i+1] from the next row (or a zero-padded view on the last row).
-        let s_next = permutation.row_slice(1).unwrap()[aux_column_index].into();
-
-        // Anchor s[0] = 0 at the start.
-        //
-        // Avoids a high-degree boundary constraint.
-        // Telescoping is enforced by the last-row check (s[n−1] + contribution[n-1] = 0).
-        // This keeps aux and main traces aligned in length.
-        builder.when_first_row().assert_zero_ext(s_local.clone());
-
-        // Build the fraction:  ∑ m_i/(α - combined_elements[i])  =  numerator / denominator .
-        let (numerator, common_denominator) =
-            compute_combined_sum_terms::<AB, AB::ExprEF, AB::ExprEF>(
+            compute_combined_sum_terms::<AB, _, _>(
                 &element_exprs,
                 &multiplicity_exprs,
                 &alpha.into(),
                 &beta.into(),
-            );
+            )
+        };
 
-        if is_global {
-            let expected = expected_cumulative.unwrap();
+        // Apply the core constraints based on whether it's a local or global interaction.
+        builder.when_first_row().assert_zero_ext(s_local.clone());
 
-            // Transition constraint (for non-last rows)
+        if let Some(expected) = context.expected_cumulative_sum {
+            // GLOBAL INTERACTION
+            // Transition constraint for all rows except the last.
             builder.when_transition().assert_zero_ext(
-                (s_next - s_local.clone()) * common_denominator.clone() - numerator.clone(),
+                (s_next.clone() - s_local.clone()) * denominator.clone() - numerator.clone(),
             );
 
-            // Final constraint (last row)
-            let final_val = (expected - s_local) * common_denominator - numerator;
-            builder.when_last_row().assert_zero_ext(final_val);
+            // Final constraint: The last row's contribution must lead to the expected total.
+            let final_check = (expected - s_local) * denominator - numerator;
+            builder.when_last_row().assert_zero_ext(final_check);
         } else {
-            // If we are in a local lookup, the previous transition constraint doesn't have to be limited to transition rows:
-            // - we are already ensuring that the first row is 0,
-            // - at point `g^{n - 1}` (where `n` is the domain size), the next point is `g^0`, so that the constraint still holds
-            // on the last row.
-            builder.assert_zero_ext((s_next - s_local) * common_denominator - numerator);
+            // LOCAL INTERACTION
+            // The running sum must wrap around to zero. This single constraint applies to all rows.
+            builder.assert_zero_ext((s_next - s_local) * denominator - numerator);
         }
     }
 

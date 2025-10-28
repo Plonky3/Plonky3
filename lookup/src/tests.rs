@@ -13,7 +13,7 @@ use p3_uni_stark::{SymbolicAirBuilder, SymbolicExpression};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
-use crate::gadgets::{InteractionGadget, LogUpGadget};
+use crate::gadgets::{GadgetConstraintContext, InteractionGadget, LogUpGadget};
 use crate::{Interaction, eval_symbolic};
 
 /// Base field type for the test
@@ -426,7 +426,14 @@ fn test_range_check_end_to_end_valid() {
 
     for i in 0..builder.height {
         builder.for_row(i);
-        gadget.eval_constraints(&mut builder, &interactions, 0, false, None);
+        gadget.eval_constraints(
+            &mut builder,
+            GadgetConstraintContext {
+                interactions: &interactions,
+                aux_column_index: 0,
+                expected_cumulative_sum: None,
+            },
+        );
     }
 }
 
@@ -461,7 +468,14 @@ fn test_range_check_end_to_end_invalid() {
 
     for i in 0..builder.height {
         builder.for_row(i);
-        gadget.eval_constraints(&mut builder, &interactions, 0, false, None);
+        gadget.eval_constraints(
+            &mut builder,
+            GadgetConstraintContext {
+                interactions: &interactions,
+                aux_column_index: 0,
+                expected_cumulative_sum: None,
+            },
+        );
     }
 }
 
@@ -512,7 +526,14 @@ fn test_inconsistent_witness_fails_transition() {
 
     for i in 0..builder.height {
         builder.for_row(i);
-        gadget.eval_constraints(&mut builder, &interactions, 0, false, None);
+        gadget.eval_constraints(
+            &mut builder,
+            GadgetConstraintContext {
+                interactions: &interactions,
+                aux_column_index: 0,
+                expected_cumulative_sum: None,
+            },
+        );
     }
 }
 
@@ -546,7 +567,14 @@ fn test_zero_multiplicity_is_not_counted() {
 
     for i in 0..builder.height {
         builder.for_row(i);
-        gadget.eval_constraints(&mut builder, &interactions, 0, false, None);
+        gadget.eval_constraints(
+            &mut builder,
+            GadgetConstraintContext {
+                interactions: &interactions,
+                aux_column_index: 0,
+                expected_cumulative_sum: None,
+            },
+        );
     }
 }
 
@@ -562,7 +590,14 @@ fn test_empty_lookup_is_valid() {
 
     for i in 0..builder.height {
         builder.for_row(i);
-        gadget.eval_constraints(&mut builder, &interactions, 0, false, None);
+        gadget.eval_constraints(
+            &mut builder,
+            GadgetConstraintContext {
+                interactions: &interactions,
+                aux_column_index: 0,
+                expected_cumulative_sum: None,
+            },
+        );
     }
 
     let (num, den) = crate::gadgets::logup::compute_combined_sum_terms::<MockAirBuilder, F, F>(
@@ -620,7 +655,14 @@ fn test_nontrivial_permutation() {
 
     for i in 0..builder.height {
         builder.for_row(i);
-        gadget.eval_constraints(&mut builder, &interactions, 0, false, None);
+        gadget.eval_constraints(
+            &mut builder,
+            GadgetConstraintContext {
+                interactions: &interactions,
+                aux_column_index: 0,
+                expected_cumulative_sum: None,
+            },
+        );
     }
 }
 
@@ -701,8 +743,22 @@ fn test_multiple_lookups_different_columns() {
 
     for i in 0..builder.height {
         builder.for_row(i);
-        gadget.eval_constraints(&mut builder, &lookup1_interactions, 0, false, None);
-        gadget.eval_constraints(&mut builder, &lookup2_interactions, 1, false, None);
+        gadget.eval_constraints(
+            &mut builder,
+            GadgetConstraintContext {
+                interactions: &lookup1_interactions,
+                aux_column_index: 0,
+                expected_cumulative_sum: None,
+            },
+        );
+        gadget.eval_constraints(
+            &mut builder,
+            GadgetConstraintContext {
+                interactions: &lookup2_interactions,
+                aux_column_index: 1,
+                expected_cumulative_sum: None,
+            },
+        );
     }
 }
 
@@ -779,7 +835,14 @@ fn test_tuple_lookup() {
 
     for i in 0..builder.height {
         builder.for_row(i);
-        gadget.eval_constraints(&mut builder, &interactions, 0, false, None);
+        gadget.eval_constraints(
+            &mut builder,
+            GadgetConstraintContext {
+                interactions: &interactions,
+                aux_column_index: 0,
+                expected_cumulative_sum: None,
+            },
+        );
     }
 }
 
@@ -934,23 +997,39 @@ fn test_global_lookup() {
 
     for i in 0..builder1.height {
         builder1.for_row(i);
-        gadget.eval_constraints(&mut builder1, &local_interactions, 0, false, None);
         gadget.eval_constraints(
             &mut builder1,
-            &global_interaction_receive,
-            1,
-            true,
-            Some(s_global_final1),
+            GadgetConstraintContext {
+                interactions: &local_interactions,
+                aux_column_index: 0,
+                expected_cumulative_sum: None,
+            },
+        );
+        gadget.eval_constraints(
+            &mut builder1,
+            GadgetConstraintContext {
+                interactions: &global_interaction_receive,
+                aux_column_index: 1,
+                expected_cumulative_sum: Some(s_global_final1),
+            },
         );
 
         builder2.for_row(i);
-        gadget.eval_constraints(&mut builder2, &local_interactions, 0, false, None);
         gadget.eval_constraints(
             &mut builder2,
-            &global_interaction_send,
-            1,
-            true,
-            Some(s_global_final2),
+            GadgetConstraintContext {
+                interactions: &local_interactions,
+                aux_column_index: 0,
+                expected_cumulative_sum: None,
+            },
+        );
+        gadget.eval_constraints(
+            &mut builder2,
+            GadgetConstraintContext {
+                interactions: &global_interaction_send,
+                aux_column_index: 1,
+                expected_cumulative_sum: Some(s_global_final2),
+            },
         );
     }
 

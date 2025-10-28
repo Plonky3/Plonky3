@@ -6,24 +6,32 @@ use p3_field::Field;
 use crate::error::LookupError;
 use crate::interaction::{Interaction, InteractionKind};
 
+/// A context struct that provides all necessary information for a gadget
+/// to evaluate constraints for a single group of interactions.
+#[derive(Clone)]
+pub struct GadgetConstraintContext<'a, F, K, EF>
+where
+    F: Field,
+    K: InteractionKind,
+{
+    /// The interactions to be constrained, all belonging to the same `kind`.
+    pub interactions: &'a [Interaction<F, K>],
+    /// The index of the auxiliary column in the permutation trace that this
+    /// interaction group should use for its running sum.
+    pub aux_column_index: usize,
+    /// The expected final value of the running sum.
+    /// - `None`: This is a **local** interaction. The sum is expected to be 0.
+    /// - `Some(value)`: This is a **global** interaction. The sum is expected to equal `value`.
+    pub expected_cumulative_sum: Option<EF>,
+}
+
 /// Trait for gadgets that enforce interaction constraints in STARKs.
 pub trait InteractionGadget {
-    /// Evaluates the interaction constraints for a given set of interactions.
-    ///
-    /// # Parameters
-    ///
-    /// - `builder`: The AIR builder for constraint generation
-    /// - `interactions`: The interactions to constrain
-    /// - `aux_column_index`: Index of the auxiliary column storing the intermediate state
-    /// - `is_global`: Whether this is a global interaction (across multiple AIRs)
-    /// - `expected_cumulative`: For global interactions, the expected final accumulated value
+    /// Evaluates the interaction constraints for a given context.
     fn eval_constraints<AB, K>(
         &self,
         builder: &mut AB,
-        interactions: &[Interaction<AB::F, K>],
-        aux_column_index: usize,
-        is_global: bool,
-        expected_cumulative: Option<AB::ExprEF>,
+        context: GadgetConstraintContext<'_, AB::F, K, AB::ExprEF>,
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
         K: InteractionKind;

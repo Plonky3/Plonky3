@@ -4,4 +4,4 @@ pub mod logup;
 mod traits;
 
 pub use logup::LogUpGadget;
-pub use traits::InteractionGadget;
+pub use traits::{GadgetConstraintContext, InteractionGadget};
