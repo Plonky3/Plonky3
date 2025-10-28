@@ -7,36 +7,29 @@ use p3_field::Field;
 
 use crate::interaction::{Interaction, MessageBuilder};
 
-/// A builder that collects interactions.
+/// A builder that collects interactions in insertion order.
 #[derive(Debug, Default)]
 pub struct InteractionCollector<F: Field> {
-    /// Collected send interactions
-    sends: Vec<Interaction<F>>,
-    /// Collected receive interactions
-    receives: Vec<Interaction<F>>,
+    /// Collected interactions (preserves insertion order)
+    interactions: Vec<Interaction<F>>,
 }
 
 impl<F: Field> InteractionCollector<F> {
     /// Creates a new interaction collector.
     pub const fn new() -> Self {
         Self {
-            sends: vec![],
-            receives: vec![],
+            interactions: vec![],
         }
     }
 
     /// Consumes the builder and returns the collected interactions.
-    ///
-    /// # Returns
-    ///
-    /// A tuple of `(sends, receives)` where each is a vector of interactions.
-    pub fn into_interactions(self) -> (Vec<Interaction<F>>, Vec<Interaction<F>>) {
-        (self.sends, self.receives)
+    pub fn into_interactions(self) -> Vec<Interaction<F>> {
+        self.interactions
     }
 
-    /// Returns references to the collected interactions without consuming the builder.
-    pub fn interactions(&self) -> (&[Interaction<F>], &[Interaction<F>]) {
-        (&self.sends, &self.receives)
+    /// Returns a reference to the collected interactions without consuming the builder.
+    pub fn interactions(&self) -> &[Interaction<F>] {
+        &self.interactions
     }
 }
 
@@ -44,12 +37,12 @@ impl<F: Field> MessageBuilder<F> for InteractionCollector<F> {
     fn send(&mut self, mut interaction: Interaction<F>) {
         // Make the multiplicity negative for sends
         interaction.multiplicity = -interaction.multiplicity;
-        self.sends.push(interaction);
+        self.interactions.push(interaction);
     }
 
     fn receive(&mut self, interaction: Interaction<F>) {
         // Multiplicity stays positive for receives
-        self.receives.push(interaction);
+        self.interactions.push(interaction);
     }
 }
 
@@ -79,20 +72,19 @@ mod tests {
             multiplicity: SymbolicExpression::Constant(F::ONE),
         });
 
-        let (sends, receives) = collector.into_interactions();
+        let interactions = collector.into_interactions();
 
-        assert_eq!(sends.len(), 1);
-        assert_eq!(receives.len(), 1);
+        assert_eq!(interactions.len(), 2);
 
-        // Verify that send multiplicity was negated
-        if let SymbolicExpression::Constant(m) = sends[0].multiplicity {
+        // Verify that send multiplicity was negated (first interaction)
+        if let SymbolicExpression::Constant(m) = interactions[0].multiplicity {
             assert_eq!(m, -F::TWO);
         } else {
             panic!("Expected constant multiplicity");
         }
 
-        // Verify receive multiplicity stayed positive
-        if let SymbolicExpression::Constant(m) = receives[0].multiplicity {
+        // Verify receive multiplicity stayed positive (second interaction)
+        if let SymbolicExpression::Constant(m) = interactions[1].multiplicity {
             assert_eq!(m, F::ONE);
         } else {
             panic!("Expected constant multiplicity");
@@ -103,7 +95,7 @@ mod tests {
     fn test_multiple_interactions() {
         let mut collector = InteractionCollector::<F>::new();
 
-        // Multiple sends and receives
+        // Multiple sends and receives (interleaved)
         for i in 0..5 {
             collector.send(Interaction {
                 values: vec![SymbolicExpression::Constant(F::new(i))],
@@ -116,9 +108,26 @@ mod tests {
             });
         }
 
-        let (sends, receives) = collector.interactions();
+        let interactions = collector.interactions();
 
-        assert_eq!(sends.len(), 5);
-        assert_eq!(receives.len(), 5);
+        // Should have 10 interactions total (5 sends + 5 receives, interleaved)
+        assert_eq!(interactions.len(), 10);
+
+        // Verify they alternate: send (negative), receive (positive), send, receive, ...
+        for i in 0..5 {
+            // Send should have negative multiplicity
+            if let SymbolicExpression::Constant(m) = interactions[i * 2].multiplicity {
+                assert_eq!(m, -F::ONE);
+            } else {
+                panic!("Expected constant multiplicity for send");
+            }
+
+            // Receive should have positive multiplicity
+            if let SymbolicExpression::Constant(m) = interactions[i * 2 + 1].multiplicity {
+                assert_eq!(m, F::ONE);
+            } else {
+                panic!("Expected constant multiplicity for receive");
+            }
+        }
     }
 }

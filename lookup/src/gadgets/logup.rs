@@ -199,7 +199,7 @@ impl InteractionGadget for LogUpGadget {
             // GLOBAL INTERACTION
             // Transition constraint for all rows except the last.
             builder.when_transition().assert_zero_ext(
-                (s_next.clone() - s_local.clone()) * denominator.clone() - numerator.clone(),
+                (s_next - s_local.clone()) * denominator.clone() - numerator.clone(),
             );
 
             // Final constraint: The last row's contribution must lead to the expected total.

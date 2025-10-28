@@ -14,14 +14,12 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
 use crate::gadgets::{GadgetConstraintContext, InteractionGadget, LogUpGadget};
-use crate::{Interaction, eval_symbolic};
+use crate::{Interaction, InteractionCollector, MessageBuilder, eval_symbolic};
 
 /// Base field type for the test
 type F = BabyBear;
 /// Extension field type for the test
 type EF = BinomialExtensionField<F, 4>;
-
-/// Test-specific interaction kinds
 
 fn create_symbolic_with_degree(degree: usize) -> SymbolicExpression<F> {
     use alloc::rc::Rc;
@@ -249,7 +247,7 @@ fn build_range_check_interactions(main_width: usize) -> Vec<Interaction<F>> {
     let symbolic_main = symbolic_builder.main();
     let symbolic_local = symbolic_main.row_slice(0).unwrap();
 
-    let mut interactions = Vec::new();
+    let mut collector = InteractionCollector::new();
 
     // For each lookup in the trace (every 3 columns: [read, provide, mult])
     for lookup_idx in 0..(main_width / 3) {
@@ -259,20 +257,19 @@ fn build_range_check_interactions(main_width: usize) -> Vec<Interaction<F>> {
         let mult = symbolic_local[offset + 2];
 
         // Receive interaction (read from table, positive multiplicity)
-        interactions.push(Interaction {
+        collector.receive(Interaction {
             values: vec![val.into()],
             multiplicity: SymbolicExpression::Constant(F::ONE),
         });
 
-        // Send interaction (provide to table, negative multiplicity)
-        let mult_expr: SymbolicExpression<F> = mult.into();
-        interactions.push(Interaction {
+        // Send interaction (provide to table, multiplicity will be negated automatically)
+        collector.send(Interaction {
             values: vec![table_val.into()],
-            multiplicity: -mult_expr,
+            multiplicity: mult.into(),
         });
     }
 
-    interactions
+    collector.into_interactions()
 }
 
 #[test]
@@ -800,25 +797,29 @@ fn test_tuple_lookup() {
     let symbolic_main = symbolic_builder.main();
     let symbolic_local = symbolic_main.row_slice(0).unwrap();
 
-    let mult_expr: SymbolicExpression<F> = symbolic_local[6].into();
-    let interactions = vec![
-        Interaction {
-            values: vec![
-                symbolic_local[0].into(),
-                symbolic_local[1].into(),
-                symbolic_local[2].into(),
-            ],
-            multiplicity: SymbolicExpression::Constant(F::ONE),
-        },
-        Interaction {
-            values: vec![
-                symbolic_local[3].into(),
-                symbolic_local[4].into(),
-                symbolic_local[5].into(),
-            ],
-            multiplicity: -mult_expr,
-        },
-    ];
+    let mut collector = InteractionCollector::new();
+
+    // Receive: read from table
+    collector.receive(Interaction {
+        values: vec![
+            symbolic_local[0].into(),
+            symbolic_local[1].into(),
+            symbolic_local[2].into(),
+        ],
+        multiplicity: SymbolicExpression::Constant(F::ONE),
+    });
+
+    // Send: provide to table
+    collector.send(Interaction {
+        values: vec![
+            symbolic_local[3].into(),
+            symbolic_local[4].into(),
+            symbolic_local[5].into(),
+        ],
+        multiplicity: symbolic_local[6].into(),
+    });
+
+    let interactions = collector.into_interactions();
 
     let mut builder = MockAirBuilder::new(main_trace, aux_trace, challenges.to_vec());
     let gadget = LogUpGadget;
@@ -930,26 +931,27 @@ fn test_global_lookup() {
     let symbolic_main = symbolic_builder.main();
     let symbolic_local = symbolic_main.row_slice(0).unwrap();
 
-    let mult_expr: SymbolicExpression<F> = symbolic_local[6].into();
-    let local_interactions = vec![
-        Interaction {
-            values: vec![
-                symbolic_local[0].into(),
-                symbolic_local[1].into(),
-                symbolic_local[2].into(),
-            ],
-            multiplicity: SymbolicExpression::Constant(F::ONE),
-        },
-        Interaction {
-            values: vec![
-                symbolic_local[3].into(),
-                symbolic_local[4].into(),
-                symbolic_local[5].into(),
-            ],
-            multiplicity: -mult_expr,
-        },
-    ];
+    // Build local interactions using collector
+    let mut local_collector = InteractionCollector::new();
+    local_collector.receive(Interaction {
+        values: vec![
+            symbolic_local[0].into(),
+            symbolic_local[1].into(),
+            symbolic_local[2].into(),
+        ],
+        multiplicity: SymbolicExpression::Constant(F::ONE),
+    });
+    local_collector.send(Interaction {
+        values: vec![
+            symbolic_local[3].into(),
+            symbolic_local[4].into(),
+            symbolic_local[5].into(),
+        ],
+        multiplicity: symbolic_local[6].into(),
+    });
+    let local_interactions = local_collector.into_interactions();
 
+    // Global interaction: receive
     let global_interaction_receive = vec![Interaction {
         values: vec![
             symbolic_local[3].into(),
@@ -959,14 +961,17 @@ fn test_global_lookup() {
         multiplicity: SymbolicExpression::Constant(F::ONE),
     }];
 
-    let global_interaction_send = vec![Interaction {
+    // Global interaction: send (using collector for consistency)
+    let mut global_send_collector = InteractionCollector::new();
+    global_send_collector.send(Interaction {
         values: vec![
             symbolic_local[3].into(),
             symbolic_local[4].into(),
             symbolic_local[5].into(),
         ],
-        multiplicity: -SymbolicExpression::Constant(F::ONE),
-    }];
+        multiplicity: SymbolicExpression::Constant(F::ONE),
+    });
+    let global_interaction_send = global_send_collector.into_interactions();
 
     let mut builder1 = MockAirBuilder::new(
         main_trace1,
