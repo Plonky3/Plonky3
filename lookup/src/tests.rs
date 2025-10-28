@@ -17,7 +17,7 @@ use rand::{Rng, SeedableRng};
 
 use crate::builder::InteractionCollector;
 use crate::gadgets::{GadgetConstraintContext, InteractionGadget, LogUpGadget};
-use crate::interaction::{eval_symbolic, Interaction, MessageBuilder};
+use crate::interaction::{Interaction, MessageBuilder, eval_symbolic};
 
 /// Base field type for the test
 type F = BabyBear;
@@ -49,14 +49,14 @@ fn create_dummy_interactions(
             assert_eq!(num_elements_per_tuple[i], degree_per_element[i].len());
             let values = (0..n)
                 .map(|j| create_symbolic_with_degree(degree_per_element[i][j]))
-                .collect::<Vec<_>>();
+                .collect();
             let multiplicity = create_symbolic_with_degree(degree_multiplicities[i]);
             Interaction {
                 values,
                 multiplicity,
             }
         })
-        .collect::<Vec<_>>()
+        .collect()
 }
 
 #[test]
@@ -306,11 +306,7 @@ impl<F: Field> BaseAir<F> for RangeCheckAir {
 /// Computes the contribution to the LogUp running sum for a single row.
 ///
 /// The contribution is: `∑(m_i/(α - combined_vals[i]))`
-fn compute_logup_contribution(
-    challenges: LogUpChallenges,
-    vals: Vec<F>,
-    mult: F,
-) -> EF {
+fn compute_logup_contribution(challenges: LogUpChallenges, vals: Vec<F>, mult: F) -> EF {
     let alpha = challenges.alpha;
     let beta = challenges.beta;
 
@@ -413,9 +409,7 @@ impl LookupTraceBuilder {
         let main_flat: Vec<F> = self
             .rows
             .iter()
-            .flat_map(|(read, provide, mult)| {
-                [read.clone(), provide.clone(), vec![*mult]].concat()
-            })
+            .flat_map(|(read, provide, mult)| [read.clone(), provide.clone(), vec![*mult]].concat())
             .collect();
         let main_trace = RowMajorMatrix::new(main_flat, self.width);
 
@@ -425,17 +419,11 @@ impl LookupTraceBuilder {
         let s_col: Vec<EF> = core::iter::once(EF::ZERO)
             .chain(self.rows.iter().map(|(read, provide, mult)| {
                 // Receive contribution (positive)
-                running_sum += compute_logup_contribution(
-                    self.local_challenges,
-                    read.clone(),
-                    F::ONE,
-                );
+                running_sum +=
+                    compute_logup_contribution(self.local_challenges, read.clone(), F::ONE);
                 // Send contribution (negative)
-                running_sum -= compute_logup_contribution(
-                    self.local_challenges,
-                    provide.clone(),
-                    *mult,
-                );
+                running_sum -=
+                    compute_logup_contribution(self.local_challenges, provide.clone(), *mult);
                 running_sum
             }))
             .take(self.rows.len()) // Keep trace length equal to number of rows
@@ -462,9 +450,7 @@ impl LookupTraceBuilder {
         let main_flat: Vec<F> = self
             .rows
             .iter()
-            .flat_map(|(read, provide, mult)| {
-                [read.clone(), provide.clone(), vec![*mult]].concat()
-            })
+            .flat_map(|(read, provide, mult)| [read.clone(), provide.clone(), vec![*mult]].concat())
             .collect();
         let main_trace = RowMajorMatrix::new(main_flat, self.width);
 
@@ -475,16 +461,10 @@ impl LookupTraceBuilder {
             .chain(core::iter::once(EF::ZERO))
             .chain(self.rows.iter().flat_map(|(read, provide, mult)| {
                 // Local contribution
-                local_running_sum += compute_logup_contribution(
-                    self.local_challenges,
-                    read.clone(),
-                    F::ONE,
-                );
-                local_running_sum -= compute_logup_contribution(
-                    self.local_challenges,
-                    provide.clone(),
-                    *mult,
-                );
+                local_running_sum +=
+                    compute_logup_contribution(self.local_challenges, read.clone(), F::ONE);
+                local_running_sum -=
+                    compute_logup_contribution(self.local_challenges, provide.clone(), *mult);
 
                 // Global contribution
                 let global_mult = if is_send { -F::ONE } else { F::ONE };
@@ -520,10 +500,12 @@ fn test_symbolic_to_expr() {
     let sub = SymbolicExpression::from(local[0]) - SymbolicExpression::from(next[1]);
 
     let first_constraint = SymbolicExpression::IsFirstRow * (mul.clone() * add);
-    let transition_constraint = SymbolicExpression::IsTransition * (sub - SymbolicExpression::from(local[0]));
-    let last_constraint = SymbolicExpression::IsLastRow * (mul - SymbolicExpression::from(local[0]));
+    let transition_constraint =
+        SymbolicExpression::IsTransition * (sub - SymbolicExpression::from(local[0]));
+    let last_constraint =
+        SymbolicExpression::IsLastRow * (mul - SymbolicExpression::from(local[0]));
 
-    let constraints = vec![first_constraint, transition_constraint, last_constraint];
+    let constraints = [first_constraint, transition_constraint, last_constraint];
 
     let mut main_flat = Vec::new();
     main_flat.extend([F::new(10), F::new(10)]);
@@ -627,7 +609,11 @@ fn test_range_check_end_to_end_valid() {
     let lookup_gadget = LogUpGadget::new();
 
     // Check that the interactions were created correctly.
-    assert_eq!(interactions.len(), 2, "Should have two interactions (send and receive)");
+    assert_eq!(
+        interactions.len(),
+        2,
+        "Should have two interactions (send and receive)"
+    );
 
     // Evaluate constraints for every row.
     for i in 0..builder.height {
@@ -1097,7 +1083,11 @@ fn test_multiple_lookups_different_columns() {
     let lookup_gadget = LogUpGadget::new();
 
     // Check that the interactions were created correctly.
-    assert_eq!(interactions.len(), 4, "Should have four interactions (2 sends + 2 receives)");
+    assert_eq!(
+        interactions.len(),
+        4,
+        "Should have four interactions (2 sends + 2 receives)"
+    );
 
     // Evaluate constraints for lookup 1 (column 0)
     for i in 0..builder.height {
@@ -1187,14 +1177,22 @@ where
             SymbolicExpression::Constant(F::ONE),
         ));
         builder.send(Interaction::new(
-            vec![table_inp1.clone().into(), table_inp2.clone().into(), table_sum.clone().into()],
+            vec![
+                table_inp1.clone().into(),
+                table_inp2.clone().into(),
+                table_sum.clone().into(),
+            ],
             mult.into(),
         ));
 
         // Global lookup (if enabled)
         if self.is_global_send {
             builder.send(Interaction::new(
-                vec![table_inp1.clone().into(), table_inp2.clone().into(), table_sum.clone().into()],
+                vec![
+                    table_inp1.clone().into(),
+                    table_inp2.clone().into(),
+                    table_sum.clone().into(),
+                ],
                 SymbolicExpression::Constant(F::ONE),
             ));
         }
@@ -1237,11 +1235,8 @@ fn test_tuple_lookup() {
 
     let last_contribution_receive =
         compute_logup_contribution(challenges, last_row_data[0..3].to_vec(), F::ONE);
-    let last_contribution_send = compute_logup_contribution(
-        challenges,
-        last_row_data[3..6].to_vec(),
-        last_row_data[6],
-    );
+    let last_contribution_send =
+        compute_logup_contribution(challenges, last_row_data[3..6].to_vec(), last_row_data[6]);
 
     assert_eq!(
         s_final + last_contribution_receive - last_contribution_send,
@@ -1335,11 +1330,8 @@ fn test_global_lookup() {
 
     let last_contribution_receive1 =
         compute_logup_contribution(challenges1, last_row_data[0..3].to_vec(), F::ONE);
-    let last_contribution_send1 = compute_logup_contribution(
-        challenges1,
-        last_row_data[3..6].to_vec(),
-        last_row_data[6],
-    );
+    let last_contribution_send1 =
+        compute_logup_contribution(challenges1, last_row_data[3..6].to_vec(), last_row_data[6]);
 
     assert_eq!(
         s_final1 + last_contribution_receive1 - last_contribution_send1,
