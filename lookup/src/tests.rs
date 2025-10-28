@@ -1,5 +1,4 @@
 use alloc::rc::Rc;
-use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -12,14 +11,13 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_uni_stark::{SymbolicAirBuilder, SymbolicExpression};
+use p3_uni_stark::SymbolicExpression;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
-use crate::logup::LogUpGadget;
-use crate::lookup_traits::{
-    AirLookupHandler, Direction, Kind, Lookup, LookupGadget, symbolic_to_expr,
-};
+use crate::builder::InteractionCollector;
+use crate::gadgets::{GadgetConstraintContext, InteractionGadget, LogUpGadget};
+use crate::interaction::{Interaction, InteractionDiscovery, MessageBuilder, eval_symbolic};
 
 /// Base field type for the test
 type F = BabyBear;
@@ -36,36 +34,29 @@ fn create_symbolic_with_degree(degree: usize) -> SymbolicExpression<F> {
     }
 }
 
-fn create_dummy_lookup(
+fn create_dummy_interactions(
     num_elements_per_tuple: Vec<usize>,
     degree_per_element: Vec<Vec<usize>>,
     degree_multiplicities: Vec<usize>,
-) -> Lookup<F> {
+) -> Vec<Interaction<F>> {
     assert!(num_elements_per_tuple.len() == degree_per_element.len());
     assert!(num_elements_per_tuple.len() == degree_multiplicities.len());
 
-    let element_exprs = num_elements_per_tuple
+    num_elements_per_tuple
         .iter()
         .enumerate()
         .map(|(i, &n)| {
             assert_eq!(num_elements_per_tuple[i], degree_per_element[i].len());
-            (0..n)
+            let values = (0..n)
                 .map(|j| create_symbolic_with_degree(degree_per_element[i][j]))
-                .collect::<Vec<_>>()
+                .collect();
+            let multiplicity = create_symbolic_with_degree(degree_multiplicities[i]);
+            Interaction {
+                values,
+                multiplicity,
+            }
         })
-        .collect::<Vec<_>>();
-
-    let multiplicities_exprs = degree_multiplicities
-        .iter()
-        .map(|&deg| create_symbolic_with_degree(deg))
-        .collect::<Vec<_>>();
-
-    Lookup {
-        kind: Kind::Local,
-        element_exprs,
-        multiplicities_exprs,
-        columns: vec![0],
-    }
+        .collect()
 }
 
 #[test]
@@ -77,23 +68,32 @@ fn test_constraint_degree_calculation() {
     // - each element has degree 1
     // - each multiplicity has degree 1
     // - so the total degree should be 3 (1 + (1 + 1)).
-    let lookup_deg_3 = create_dummy_lookup(vec![1, 1], vec![vec![1], vec![1]], vec![1, 1]);
-    assert_eq!(gadget.constraint_degree(lookup_deg_3), 3);
+    let lookup_deg_3 = create_dummy_interactions(vec![1, 1], vec![vec![1], vec![1]], vec![1, 1]);
+    assert_eq!(
+        InteractionGadget::constraint_degree(&gadget, &lookup_deg_3),
+        3
+    );
 
     // We have two lookup elements (each element is a single column):
     // - each element has degree 1
     // - each multiplicity has degree 3
     // - so the total degree should be 4 (3 + 1).
-    let lookup_degree_4 = create_dummy_lookup(vec![1, 1], vec![vec![1], vec![1]], vec![3, 3]);
-    assert_eq!(gadget.constraint_degree(lookup_degree_4), 4);
+    let lookup_degree_4 = create_dummy_interactions(vec![1, 1], vec![vec![1], vec![1]], vec![3, 3]);
+    assert_eq!(
+        InteractionGadget::constraint_degree(&gadget, &lookup_degree_4),
+        4
+    );
 
     // We have two lookup elements (each element is a single column):
     // - one element has degree 2
     // - one element has degree 3
     // - each multiplicity has degree 1
     // - so the total degree should be 6 (3 + 3).
-    let lookup_degree_6 = create_dummy_lookup(vec![1, 1], vec![vec![2], vec![3]], vec![1, 1]);
-    assert_eq!(gadget.constraint_degree(lookup_degree_6), 6);
+    let lookup_degree_6 = create_dummy_interactions(vec![1, 1], vec![vec![2], vec![3]], vec![1, 1]);
+    assert_eq!(
+        InteractionGadget::constraint_degree(&gadget, &lookup_degree_6),
+        6
+    );
 
     // We have two lookup elements:
     // - first element is a tuple of 5 columns
@@ -105,8 +105,12 @@ fn test_constraint_degree_calculation() {
     // - so the total degree should be 7 (5 + 2).
     let degrees1 = vec![1, 3, 0, 0, 0]; // First element of degree 3.
     let degrees2 = vec![0, 1, 0, 2, 0, 1]; // Second element of degree 2.
-    let lookup_degree_7 = create_dummy_lookup(vec![5, 6], vec![degrees1, degrees2], vec![5, 2]);
-    assert_eq!(gadget.constraint_degree(lookup_degree_7), 7);
+    let lookup_degree_7 =
+        create_dummy_interactions(vec![5, 6], vec![degrees1, degrees2], vec![5, 2]);
+    assert_eq!(
+        InteractionGadget::constraint_degree(&gadget, &lookup_degree_7),
+        7
+    );
 }
 
 /// A mock `AirBuilder` for testing purposes that simulates constraint evaluation.
@@ -245,6 +249,7 @@ impl AirBuilderWithPublicValues for MockAirBuilder {
         &[]
     }
 }
+
 /// An AIR designed to perform range checks using the `LogUpGadget`.
 ///
 /// This AIR demonstrates how to use LogUp for range checking. It supports multiple
@@ -255,37 +260,15 @@ impl AirBuilderWithPublicValues for MockAirBuilder {
 struct RangeCheckAir {
     /// Number of independent lookups (default: 1)
     num_lookups: usize,
-    /// Number of registered lookups (for AirLookupHandler)
-    cur_num_lookups: usize,
 }
 
 impl RangeCheckAir {
     fn new() -> Self {
-        Self {
-            num_lookups: 1,
-            cur_num_lookups: 0,
-        }
+        Self { num_lookups: 1 }
     }
 
     fn with_multiple_lookups(num_lookups: usize) -> Self {
-        Self {
-            num_lookups,
-            cur_num_lookups: 0,
-        }
-    }
-}
-
-impl<AB> Air<AB> for RangeCheckAir
-where
-    AB: PermutationAirBuilder<F = F, EF = EF, RandomVar = EF>
-        + PairBuilder
-        + AirBuilderWithPublicValues,
-    AB::Var: Copy + Into<AB::ExprEF>,
-    AB::ExprEF: From<AB::Var> + From<F>,
-    F: Copy + Into<AB::ExprEF>,
-{
-    fn eval(&self, _builder: &mut AB) {
-        // There are no constraints, only lookups for the range checks.
+        Self { num_lookups }
     }
 }
 
@@ -295,92 +278,56 @@ impl<F: Field> BaseAir<F> for RangeCheckAir {
     }
 }
 
-impl<AB> AirLookupHandler<AB> for RangeCheckAir
-where
-    AB: PermutationAirBuilder<F = F, EF = EF, RandomVar = EF>
-        + PairBuilder
-        + AirBuilderWithPublicValues,
-    AB::Var: Copy + Into<AB::ExprEF>,
-    AB::ExprEF: From<AB::Var> + From<F>,
-    F: Copy + Into<AB::ExprEF>,
-{
-    fn add_lookup_columns(&mut self) -> Vec<usize> {
-        let new_idx = self.cur_num_lookups;
-        self.cur_num_lookups += 1;
-
-        vec![new_idx]
+impl Air<MockAirBuilder> for RangeCheckAir {
+    fn eval(&self, _builder: &mut MockAirBuilder) {
+        // No constraints - this AIR only defines lookup interactions
     }
+}
 
-    fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
-        let symbolic_air_builder =
-            SymbolicAirBuilder::<F>::new(0, <Self as BaseAir<AB::F>>::width(self), 0);
+impl InteractionDiscovery<F> for RangeCheckAir {
+    fn discover_interactions(&self, collector: &mut InteractionCollector<F>) {
+        let main = collector.main();
+        let local = main.row_slice(0).unwrap();
 
-        let symbolic_main = symbolic_air_builder.main();
-        let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
+        for lookup_idx in 0..self.num_lookups {
+            let offset = lookup_idx * 3;
 
-        // Perform each lookup independently using LookupContext
-        (0..self.num_lookups)
-            .map(|lookup_idx| {
-                let offset = lookup_idx * 3;
+            let val = local[offset];
+            let table_val = local[offset + 1];
+            let mult = local[offset + 2];
 
-                // Extract columns for this lookup: [read, provide, mult]
-                let val = symbolic_main_local[offset];
-                let table_val = symbolic_main_local[offset + 1];
-                let mult = symbolic_main_local[offset + 2];
-
-                // Create arrays with longer lifetime for the context
-                let a_elements = vec![val.into()];
-                let a_multiplicities = SymbolicExpression::Constant(F::ONE);
-
-                let b_elements = vec![table_val.into()];
-                let b_multiplicities = mult.into();
-
-                let lookup_inputs = vec![
-                    (a_elements, a_multiplicities, Direction::Receive),
-                    (b_elements, b_multiplicities, Direction::Send),
-                ];
-
-                // Register the local lookup.
-                <Self as AirLookupHandler<AB>>::register_lookup(self, Kind::Local, &lookup_inputs)
-            })
-            .collect::<Vec<_>>()
+            collector.receive(Interaction::new(
+                vec![val.into()],
+                SymbolicExpression::Constant(F::ONE),
+            ));
+            collector.send(Interaction::new(vec![table_val.into()], mult.into()));
+        }
     }
 }
 
 /// Computes the contribution to the LogUp running sum for a single row.
 ///
-/// The contribution is: `1/(α - val_read) - mult/(α - val_provided)`
-fn compute_logup_contribution(
-    challenges: LogUpChallenges,
-    vals_read: Vec<F>,
-    vals_provided: Vec<F>,
-    mult: F,
-) -> EF {
+/// The contribution is: `∑(m_i/(α - combined_vals[i]))`
+fn compute_logup_contribution(challenges: LogUpChallenges, vals: Vec<F>, mult: F) -> EF {
     let alpha = challenges.alpha;
     let beta = challenges.beta;
-    let vals_read_len = vals_read.len();
-    let val_read = vals_read
-        .iter()
-        .fold(EF::ZERO, |acc, &v| acc * beta + EF::from(v));
 
-    let val_provided = vals_provided
-        .iter()
-        .fold(EF::ZERO, |acc, &v| acc * beta + EF::from(v));
-
-    if vals_read_len == 0 {
-        // Then we're only computing the contribution for the provided value.
-        (alpha - EF::from(val_provided)).inverse() * EF::from(mult)
-    } else {
-        (alpha - EF::from(val_read)).inverse()
-            - (alpha - EF::from(val_provided)).inverse() * EF::from(mult)
+    if vals.is_empty() {
+        return EF::ZERO;
     }
+
+    let combined_val = vals
+        .iter()
+        .fold(EF::ZERO, |acc, &v| acc * beta + EF::from(v));
+
+    (alpha - combined_val).inverse() * EF::from(mult)
 }
 
 #[derive(Copy, Clone)]
 struct LogUpChallenges {
     // Random challenge for computing `alpha - val` in LogUp
     alpha: EF,
-    // Random challenge for combining tuple elements (not used in single-column tests)
+    // Random challenge for combining tuple elements
     beta: EF,
 }
 
@@ -398,9 +345,9 @@ impl LogUpChallenges {
 /// # Example
 /// ```ignore
 /// let trace = LookupTraceBuilder::new()
-///     .row(3, 1, 1)  // Read 3, Provide 1 with multiplicity 1
-///     .row(1, 2, 2)  // Read 1, Provide 2 with multiplicity 2
-///     .row(2, 3, 1)  // Read 2, Provide 3 with multiplicity 1
+///     .row(vec![3], vec![1], 1)  // Read 3, Provide 1 with multiplicity 1
+///     .row(vec![1], vec![2], 2)  // Read 1, Provide 2 with multiplicity 2
+///     .row(vec![2], vec![3], 1)  // Read 2, Provide 3 with multiplicity 1
 ///     .build();
 /// ```
 struct LookupTraceBuilder {
@@ -438,8 +385,8 @@ impl LookupTraceBuilder {
     /// Add a row to the trace.
     ///
     /// # Arguments
-    /// * `read` - The value being read (always with multiplicity 1)
-    /// * `provide` - The value being provided to the lookup table
+    /// * `reads` - The values being read (always with multiplicity 1 each)
+    /// * `provide` - The values being provided to the lookup table
     /// * `mult` - The multiplicity of the provided value
     fn row(mut self, reads: Vec<u32>, provide: Vec<u32>, mult: u32) -> Self {
         let reads_field = reads.iter().map(|&read| F::new(read)).collect::<Vec<_>>();
@@ -453,10 +400,10 @@ impl LookupTraceBuilder {
 
     /// Build the main and auxiliary traces.
     ///
-    /// Returns `(main_trace, aux_trace, alpha)` where:
-    /// - `main_trace`: 3 columns [read_val, provide_val, multiplicity]
+    /// Returns `(main_trace, aux_trace, challenges)` where:
+    /// - `main_trace`: width columns
     /// - `aux_trace`: 1 column [running_sum]
-    /// - `alpha`: The challenge used
+    /// - `challenges`: The challenges used
     fn build(self) -> (RowMajorMatrix<F>, RowMajorMatrix<EF>, LogUpChallenges) {
         assert!(!self.rows.is_empty(), "Must have at least one row");
 
@@ -469,16 +416,16 @@ impl LookupTraceBuilder {
         let main_trace = RowMajorMatrix::new(main_flat, self.width);
 
         // Build auxiliary trace: running sum column
-        // s[0] = 0, s[i+1] = s[i] + contribution_from_row_i
+        // s[0] = 0, s[i+1] = s[i] + contribution[i]
         let mut running_sum = EF::ZERO;
         let s_col: Vec<EF> = core::iter::once(EF::ZERO)
             .chain(self.rows.iter().map(|(read, provide, mult)| {
-                running_sum += compute_logup_contribution(
-                    self.local_challenges,
-                    read.clone(),
-                    provide.clone(),
-                    *mult,
-                );
+                // Receive contribution (positive)
+                running_sum +=
+                    compute_logup_contribution(self.local_challenges, read.clone(), F::ONE);
+                // Send contribution (negative)
+                running_sum -=
+                    compute_logup_contribution(self.local_challenges, provide.clone(), *mult);
                 running_sum
             }))
             .take(self.rows.len()) // Keep trace length equal to number of rows
@@ -489,15 +436,15 @@ impl LookupTraceBuilder {
         (main_trace, aux_trace, self.local_challenges)
     }
 
-    /// Build the main and auxiliary traces.
+    /// Build the main and auxiliary traces with global lookup support.
     ///
-    /// Returns `(main_trace, aux_trace, alpha)` where:
-    /// - `main_trace`: 3 columns [read_val, provide_val, multiplicity]
-    /// - `aux_trace`: 1 column [running_sum]
-    /// - `challenges`: the challenges used
+    /// Returns `(main_trace, aux_trace, challenges)` where:
+    /// - `main_trace`: width columns
+    /// - `aux_trace`: 2 columns [local_running_sum, global_running_sum]
+    /// - `challenges`: the local challenges used
     fn build_with_global(
         self,
-        direction: Direction,
+        is_send: bool,
     ) -> (RowMajorMatrix<F>, RowMajorMatrix<EF>, LogUpChallenges) {
         assert!(!self.rows.is_empty(), "Must have at least one row");
 
@@ -509,28 +456,27 @@ impl LookupTraceBuilder {
             .collect();
         let main_trace = RowMajorMatrix::new(main_flat, self.width);
 
-        // Build auxiliary trace: running sum column
-        // s[0] = 0, s[i+1] = s[i] + contribution_from_row_i
-        let mut running_sum = EF::ZERO;
+        // Build auxiliary trace: running sum columns (local and global)
+        let mut local_running_sum = EF::ZERO;
         let mut global_running_sum = EF::ZERO;
         let s_col: Vec<EF> = core::iter::once(EF::ZERO)
             .chain(core::iter::once(EF::ZERO))
             .chain(self.rows.iter().flat_map(|(read, provide, mult)| {
-                running_sum += compute_logup_contribution(
-                    self.local_challenges,
-                    read.clone(),
-                    provide.clone(),
-                    *mult,
-                );
-                let global_mult = direction.multiplicity(F::ONE);
+                // Local contribution
+                local_running_sum +=
+                    compute_logup_contribution(self.local_challenges, read.clone(), F::ONE);
+                local_running_sum -=
+                    compute_logup_contribution(self.local_challenges, provide.clone(), *mult);
 
+                // Global contribution
+                let global_mult = if is_send { -F::ONE } else { F::ONE };
                 global_running_sum += compute_logup_contribution(
                     self.global_challenges.unwrap(),
-                    vec![],
                     provide.clone(),
                     global_mult,
                 );
-                vec![running_sum, global_running_sum]
+
+                vec![local_running_sum, global_running_sum]
             }))
             .take(2 * self.rows.len()) // 2 initial zeros + 2 values per row
             .collect();
@@ -544,22 +490,24 @@ impl LookupTraceBuilder {
 fn test_symbolic_to_expr() {
     use p3_air::AirBuilder;
     use p3_field::PrimeCharacteristicRing;
-    use p3_uni_stark::SymbolicAirBuilder;
 
-    let mut builder = SymbolicAirBuilder::<F>::new(0, 2, 0);
+    let collector = InteractionCollector::<F>::new(0, 2);
 
-    let main = builder.main();
+    let main = collector.main();
 
     let (local, next) = (main.row_slice(0).unwrap(), main.row_slice(1).unwrap());
 
-    let mul = local[0] * next[1];
-    let add = local[0] + next[1];
-    let sub = local[0] - next[1];
-    builder.when_first_row().assert_zero(mul.clone() * add);
-    builder.when_transition().assert_zero(sub - local[0]);
-    builder.when_last_row().assert_zero(mul - local[0]);
+    let mul = SymbolicExpression::from(local[0]) * SymbolicExpression::from(next[1]);
+    let add = SymbolicExpression::from(local[0]) + SymbolicExpression::from(next[1]);
+    let sub = SymbolicExpression::from(local[0]) - SymbolicExpression::from(next[1]);
 
-    let constraints = builder.constraints();
+    let first_constraint = SymbolicExpression::IsFirstRow * (mul.clone() * add);
+    let transition_constraint =
+        SymbolicExpression::IsTransition * (sub - SymbolicExpression::from(local[0]));
+    let last_constraint =
+        SymbolicExpression::IsLastRow * (mul - SymbolicExpression::from(local[0]));
+
+    let constraints = [first_constraint, transition_constraint, last_constraint];
 
     let mut main_flat = Vec::new();
     main_flat.extend([F::new(10), F::new(10)]);
@@ -574,16 +522,16 @@ fn test_symbolic_to_expr() {
     for i in 0..builder.height {
         // Define the Lagrange selectors.
         builder.for_row(i);
-        let is_first_row = if i == 0 { EF::ONE } else { EF::ZERO };
+        let is_first_row = if i == 0 { F::ONE } else { F::ZERO };
         let is_last_row = if i == builder.height - 1 {
-            EF::ONE
+            F::ONE
         } else {
-            EF::ZERO
+            F::ZERO
         };
         let is_transition = if i < builder.height - 1 {
-            EF::ONE
+            F::ONE
         } else {
-            EF::ZERO
+            F::ZERO
         };
 
         // Get the local and next values for row `i`.
@@ -595,18 +543,18 @@ fn test_symbolic_to_expr() {
         );
 
         // Compute the expected constraint values at row `i`.
-        let mul = EF::from(local[0]) * EF::from(next[1]);
-        let add = EF::from(local[0]) + EF::from(next[1]);
-        let sub = EF::from(local[0]) - EF::from(next[1]);
+        let mul = local[0] * next[1];
+        let add = local[0] + next[1];
+        let sub = local[0] - next[1];
 
         let first_expected_val = is_first_row * (mul * add);
-        let transition_expected_val = is_transition * (sub - EF::from(local[0]));
-        let last_expected_val = is_last_row * (mul - EF::from(local[0]));
+        let transition_expected_val = is_transition * (sub - local[0]);
+        let last_expected_val = is_last_row * (mul - local[0]);
 
         // Evaluate the constraints at row `i`.
-        let first_eval = symbolic_to_expr(&mut builder, &constraints[0].clone());
-        let transition_eval = symbolic_to_expr(&mut builder, &constraints[1].clone());
-        let last_eval = symbolic_to_expr(&mut builder, &constraints[2].clone());
+        let first_eval = eval_symbolic(&builder, &constraints[0].clone());
+        let transition_eval = eval_symbolic(&builder, &constraints[1].clone());
+        let last_eval = eval_symbolic(&builder, &constraints[2].clone());
 
         // Assert that the evaluated constraints are correct.
         assert_eq!(first_eval, first_expected_val);
@@ -641,47 +589,45 @@ fn test_range_check_end_to_end_valid() {
         .unwrap()
         .into_iter()
         .collect::<Vec<F>>();
-    let last_contribution = compute_logup_contribution(
-        challenges,
-        vec![last_row_data[0]],
-        vec![last_row_data[1]],
-        last_row_data[2],
-    );
+    let last_contribution_receive =
+        compute_logup_contribution(challenges, vec![last_row_data[0]], F::ONE);
+    let last_contribution_send =
+        compute_logup_contribution(challenges, vec![last_row_data[1]], last_row_data[2]);
 
     assert_eq!(
-        s_final + last_contribution,
+        s_final + last_contribution_receive - last_contribution_send,
         EF::ZERO,
         "Total sum (s[n-1] + c[n-1]) must be zero for a valid lookup"
     );
 
     // Setup the AIR and builder.
-    let mut air = RangeCheckAir::new();
+    let air = RangeCheckAir::new();
+    let mut collector = InteractionCollector::new(0, <RangeCheckAir as BaseAir<F>>::width(&air));
+    air.discover_interactions(&mut collector);
+    let interactions = collector.into_interactions();
+
     let mut builder = MockAirBuilder::new(main_trace, aux_trace, challenges.to_vec());
 
     let lookup_gadget = LogUpGadget::new();
-    let lookups = <RangeCheckAir as AirLookupHandler<MockAirBuilder>>::get_lookups(&mut air);
 
-    // Check that the lookup was created correctly.
-    assert_eq!(lookups.len(), 1, "Should have one lookup defined");
+    // Check that the interactions were created correctly.
     assert_eq!(
-        lookups[0].columns,
-        vec![0],
-        "Lookup should use the first auxiliary column"
-    );
-    assert_eq!(
-        lookups[0].element_exprs.len(),
+        interactions.len(),
         2,
-        "Lookup should have two element tuples (read and provide)"
+        "Should have two interactions (send and receive)"
     );
-    assert_eq!(lookups[0].kind, Kind::Local, "Lookup should be local");
-    assert_eq!(air.cur_num_lookups, 1, "Should have one lookup registered");
 
     // Evaluate constraints for every row.
     for i in 0..builder.height {
         builder.for_row(i);
-        lookups.iter().for_each(|lookup| {
-            lookup_gadget.eval_local_lookup(&mut builder, lookup.clone());
-        });
+        lookup_gadget.eval_constraints(
+            &mut builder,
+            GadgetConstraintContext {
+                interactions: &interactions,
+                aux_column_index: 0,
+                expected_cumulative_sum: None,
+            },
+        );
     }
 }
 
@@ -702,8 +648,6 @@ fn test_range_check_end_to_end_invalid() {
         alpha: EF::from_u32(12345678),
         beta: EF::from_u32(87654321),
     };
-    let alpha = EF::from(F::new(0x12345678));
-    let beta = EF::from(F::new(0x87654321));
 
     // Build auxiliary running sum column - this will be non-zero at the end
     let mut s_col = Vec::with_capacity(main_trace.height());
@@ -715,8 +659,9 @@ fn test_range_check_end_to_end_invalid() {
         let val_provided = vec![row[1]];
         let mult = row[2];
 
-        let contribution = compute_logup_contribution(challenges, val_read, val_provided, mult);
-        current_s += contribution;
+        let receive_contrib = compute_logup_contribution(challenges, val_read, F::ONE);
+        let send_contrib = compute_logup_contribution(challenges, val_provided, mult);
+        current_s += receive_contrib - send_contrib;
 
         // s[i] includes the contribution from row i
         s_col.push(current_s);
@@ -734,26 +679,34 @@ fn test_range_check_end_to_end_invalid() {
     assert_ne!(final_s, EF::ZERO);
 
     // Setup the AIR and builder
-    let mut air = RangeCheckAir::new();
-    let mut builder = MockAirBuilder::new(main_trace, aux_trace, vec![alpha, beta]);
+    let air = RangeCheckAir::new();
+    let mut collector = InteractionCollector::new(0, <RangeCheckAir as BaseAir<F>>::width(&air));
+    air.discover_interactions(&mut collector);
+    let interactions = collector.into_interactions();
+
+    let mut builder = MockAirBuilder::new(main_trace, aux_trace, challenges.to_vec());
 
     let lookup_gadget = LogUpGadget::new();
-    let lookups = <RangeCheckAir as AirLookupHandler<MockAirBuilder>>::get_lookups(&mut air);
 
     // Evaluate constraints.
     //
     // This should fail on the second row due to the non-zero final sum
     for i in 0..builder.height {
         builder.for_row(i);
-        lookups.iter().for_each(|lookup| {
-            lookup_gadget.eval_local_lookup(&mut builder, lookup.clone());
-        });
+        lookup_gadget.eval_constraints(
+            &mut builder,
+            GadgetConstraintContext {
+                interactions: &interactions,
+                aux_column_index: 0,
+                expected_cumulative_sum: None,
+            },
+        );
     }
 }
 
 #[test]
 fn test_compute_sum_terms_logic() {
-    let gadget = LogUpGadget::new();
+    let _gadget = LogUpGadget::new();
     let alpha = EF::from_u8(100);
     let beta = EF::from_u8(100);
 
@@ -768,7 +721,7 @@ fn test_compute_sum_terms_logic() {
     // Expected Denominator: (α - 2) * (α - 5)
     let expected_denominator = (alpha - EF::from_u8(2)) * (alpha - EF::from_u8(5));
 
-    let (num, den) = gadget.compute_combined_sum_terms::<MockAirBuilder, F, F>(
+    let (num, den) = crate::gadgets::logup::compute_combined_sum_terms::<MockAirBuilder, F, F>(
         &elements,
         &multiplicities,
         &alpha,
@@ -800,19 +753,27 @@ fn test_inconsistent_witness_fails_transition() {
     // Evaluate constraints.
     //
     // This should now fail at row 1 when checking the transition to row 2.
-    let mut air = RangeCheckAir::new();
+    let air = RangeCheckAir::new();
+    let mut collector = InteractionCollector::new(0, <RangeCheckAir as BaseAir<F>>::width(&air));
+    air.discover_interactions(&mut collector);
+    let interactions = collector.into_interactions();
+
     let mut builder = MockAirBuilder::new(main_trace, aux_trace, challenges.to_vec());
 
     // Register the lookups.
     let lookup_gadget = LogUpGadget::new();
-    let lookups = <RangeCheckAir as AirLookupHandler<MockAirBuilder>>::get_lookups(&mut air);
 
     // Evaluate the constraints.
     for i in 0..builder.height {
         builder.for_row(i);
-        lookups.iter().for_each(|lookup| {
-            lookup_gadget.eval_local_lookup(&mut builder, lookup.clone());
-        });
+        lookup_gadget.eval_constraints(
+            &mut builder,
+            GadgetConstraintContext {
+                interactions: &interactions,
+                aux_column_index: 0,
+                expected_cumulative_sum: None,
+            },
+        );
     }
 }
 
@@ -838,9 +799,9 @@ fn test_zero_multiplicity_is_not_counted() {
     let mut current_s = EF::ZERO;
     for i in 0..main_trace.height() {
         let row: Vec<F> = main_trace.row(i).unwrap().into_iter().collect();
-        let contribution =
-            compute_logup_contribution(challenges, vec![row[0]], vec![row[1]], row[2]);
-        current_s += contribution;
+        let receive_contrib = compute_logup_contribution(challenges, vec![row[0]], F::ONE);
+        let send_contrib = compute_logup_contribution(challenges, vec![row[1]], row[2]);
+        current_s += receive_contrib - send_contrib;
 
         // s[i] includes the contribution from row i
         s_col.push(current_s);
@@ -856,21 +817,29 @@ fn test_zero_multiplicity_is_not_counted() {
     assert_ne!(final_s, EF::ZERO);
 
     // Evaluate constraints
-    let mut air = RangeCheckAir::new();
+    let air = RangeCheckAir::new();
+    let mut collector = InteractionCollector::new(0, <RangeCheckAir as BaseAir<F>>::width(&air));
+    air.discover_interactions(&mut collector);
+    let interactions = collector.into_interactions();
+
     let mut builder = MockAirBuilder::new(main_trace, aux_trace, challenges.to_vec());
 
     // Register the lookups.
     let lookup_gadget = LogUpGadget::new();
-    let lookups = <RangeCheckAir as AirLookupHandler<MockAirBuilder>>::get_lookups(&mut air);
 
     // The initial boundary constraint will fail on row 0 since s[0] is incorrect.
     //
     // It will panic on the first row (row 0).
     for i in 0..builder.height {
         builder.for_row(i);
-        lookups.iter().for_each(|lookup| {
-            lookup_gadget.eval_local_lookup(&mut builder, lookup.clone());
-        });
+        lookup_gadget.eval_constraints(
+            &mut builder,
+            GadgetConstraintContext {
+                interactions: &interactions,
+                aux_column_index: 0,
+                expected_cumulative_sum: None,
+            },
+        );
     }
 }
 
@@ -880,25 +849,37 @@ fn test_empty_lookup_is_valid() {
     let main_trace = RowMajorMatrix::new(vec![], 3);
     let aux_trace = RowMajorMatrix::new(vec![], 1);
     let alpha = EF::from_u8(123);
+    let beta = EF::from_u8(111);
 
-    let mut air = RangeCheckAir::new();
-    let mut builder = MockAirBuilder::new(main_trace, aux_trace, vec![alpha]);
+    let air = RangeCheckAir::new();
+    let mut collector = InteractionCollector::new(0, <RangeCheckAir as BaseAir<F>>::width(&air));
+    air.discover_interactions(&mut collector);
+    let interactions = collector.into_interactions();
+
+    let mut builder = MockAirBuilder::new(main_trace, aux_trace, vec![alpha, beta]);
 
     let lookup_gadget = LogUpGadget::new();
-    let lookups = <RangeCheckAir as AirLookupHandler<MockAirBuilder>>::get_lookups(&mut air);
 
     // This should not panic, as there are no rows to evaluate.
     for i in 0..builder.height {
         builder.for_row(i);
-        lookups.iter().for_each(|lookup| {
-            lookup_gadget.eval_local_lookup(&mut builder, lookup.clone());
-        });
+        lookup_gadget.eval_constraints(
+            &mut builder,
+            GadgetConstraintContext {
+                interactions: &interactions,
+                aux_column_index: 0,
+                expected_cumulative_sum: None,
+            },
+        );
     }
 
     // Also test the internal logic directly
-    let gadget = LogUpGadget::new();
-    let (num, den) =
-        gadget.compute_combined_sum_terms::<MockAirBuilder, F, F>(&[], &[], &alpha, &alpha);
+    let (num, den) = crate::gadgets::logup::compute_combined_sum_terms::<MockAirBuilder, F, F>(
+        &[],
+        &[],
+        &alpha,
+        &beta,
+    );
     assert_eq!(num, EF::ZERO);
     assert_eq!(den, EF::ONE);
 }
@@ -921,7 +902,7 @@ fn test_nontrivial_permutation() {
     // │  4  │  7   │    5    │  0   │  1/(α-7) - 0 = 1/(α-7)            │
     // │  5  │  5   │    5    │  0   │  1/(α-5) - 0 = 1/(α-5)            │
     // │  6  │  5   │    7    │  0   │  1/(α-5) - 0 = 1/(α-5)            │
-    // │  7  │  5   │    --   │  0   │  1/(α-5) - 0 = 1/(α-5)            │
+    // │  7  │  5   │    5    │  0   │  1/(α-5) - 0 = 1/(α-5)            │
     // └─────┴──────┴─────────┴──────┴────────────────────────────────────┘
     //
     // Total contributions:
@@ -954,33 +935,39 @@ fn test_nontrivial_permutation() {
         .unwrap()
         .into_iter()
         .collect::<Vec<F>>();
-    let last_contribution = compute_logup_contribution(
-        challenges,
-        vec![last_row_data[0]],
-        vec![last_row_data[1]],
-        last_row_data[2],
-    );
+    let last_contribution_receive =
+        compute_logup_contribution(challenges, vec![last_row_data[0]], F::ONE);
+    let last_contribution_send =
+        compute_logup_contribution(challenges, vec![last_row_data[1]], last_row_data[2]);
 
     assert_eq!(
-        s_final + last_contribution,
+        s_final + last_contribution_receive - last_contribution_send,
         EF::ZERO,
         "Total sum (s[n-1] + c[n-1]) must be zero for a valid lookup"
     );
 
     // Setup AIR and verify all constraints
-    let mut air = RangeCheckAir::new();
+    let air = RangeCheckAir::new();
+    let mut collector = InteractionCollector::new(0, <RangeCheckAir as BaseAir<F>>::width(&air));
+    air.discover_interactions(&mut collector);
+    let interactions = collector.into_interactions();
+
     let mut builder = MockAirBuilder::new(main_trace, aux_trace, challenges.to_vec());
 
     // Register the lookups.
     let lookup_gadget = LogUpGadget::new();
-    let lookups = <RangeCheckAir as AirLookupHandler<MockAirBuilder>>::get_lookups(&mut air);
 
     // Evaluate constraints for every row
     for i in 0..builder.height {
         builder.for_row(i);
-        lookups.iter().for_each(|lookup| {
-            lookup_gadget.eval_local_lookup(&mut builder, lookup.clone());
-        });
+        lookup_gadget.eval_constraints(
+            &mut builder,
+            GadgetConstraintContext {
+                interactions: &interactions,
+                aux_column_index: 0,
+                expected_cumulative_sum: None,
+            },
+        );
     }
 }
 
@@ -1038,19 +1025,18 @@ fn test_multiple_lookups_different_columns() {
     s2_col.push(s2);
 
     // Row 1: Add contributions from row 0
-    s1 += compute_logup_contribution(first_challenges, vec![F::new(10)], vec![F::new(10)], F::ONE);
-    s2 += compute_logup_contribution(second_challenges, vec![F::new(5)], vec![F::new(5)], F::ONE);
+    s1 += compute_logup_contribution(first_challenges, vec![F::new(10)], F::ONE)
+        - compute_logup_contribution(first_challenges, vec![F::new(10)], F::ONE);
+    s2 += compute_logup_contribution(second_challenges, vec![F::new(5)], F::ONE)
+        - compute_logup_contribution(second_challenges, vec![F::new(5)], F::ONE);
     s1_col.push(s1);
     s2_col.push(s2);
 
     // Row 2: Add contributions from row 1
-    s1 += compute_logup_contribution(first_challenges, vec![F::new(20)], vec![F::new(20)], F::ONE);
-    s2 += compute_logup_contribution(
-        second_challenges,
-        vec![F::new(15)],
-        vec![F::new(15)],
-        F::ONE,
-    );
+    s1 += compute_logup_contribution(first_challenges, vec![F::new(20)], F::ONE)
+        - compute_logup_contribution(first_challenges, vec![F::new(20)], F::ONE);
+    s2 += compute_logup_contribution(second_challenges, vec![F::new(15)], F::ONE)
+        - compute_logup_contribution(second_challenges, vec![F::new(15)], F::ONE);
     s1_col.push(s1);
     s2_col.push(s2);
 
@@ -1067,28 +1053,28 @@ fn test_multiple_lookups_different_columns() {
     let s1_final = row2_data[0];
     let s2_final = row2_data[1];
 
-    let c1_final =
-        compute_logup_contribution(first_challenges, vec![F::new(30)], vec![F::new(30)], F::ONE);
-    let c2_final = compute_logup_contribution(
-        second_challenges,
-        vec![F::new(25)],
-        vec![F::new(25)],
-        F::ONE,
-    );
+    let c1_final_receive = compute_logup_contribution(first_challenges, vec![F::new(30)], F::ONE);
+    let c1_final_send = compute_logup_contribution(first_challenges, vec![F::new(30)], F::ONE);
+    let c2_final_receive = compute_logup_contribution(second_challenges, vec![F::new(25)], F::ONE);
+    let c2_final_send = compute_logup_contribution(second_challenges, vec![F::new(25)], F::ONE);
 
     assert_eq!(
-        s1_final + c1_final,
+        s1_final + c1_final_receive - c1_final_send,
         EF::ZERO,
         "Lookup 1 final sum must be zero"
     );
     assert_eq!(
-        s2_final + c2_final,
+        s2_final + c2_final_receive - c2_final_send,
         EF::ZERO,
         "Lookup 2 final sum must be zero"
     );
 
     // Setup AIR with 2 lookups and verify all constraints
-    let mut air = RangeCheckAir::with_multiple_lookups(2);
+    let air = RangeCheckAir::with_multiple_lookups(2);
+    let mut collector = InteractionCollector::new(0, <RangeCheckAir as BaseAir<F>>::width(&air));
+    air.discover_interactions(&mut collector);
+    let interactions = collector.into_interactions();
+
     let mut builder = MockAirBuilder::new(
         main_trace,
         aux_trace,
@@ -1097,54 +1083,66 @@ fn test_multiple_lookups_different_columns() {
 
     // Register lookups.
     let lookup_gadget = LogUpGadget::new();
-    let lookups = <RangeCheckAir as AirLookupHandler<MockAirBuilder>>::get_lookups(&mut air);
 
-    // Check that the lookup was created correctly.
-    assert_eq!(lookups.len(), 2, "Should have two lookups defined");
+    // Check that the interactions were created correctly.
     assert_eq!(
-        (lookups[0].columns.clone(), lookups[1].columns.clone()),
-        (vec![0], vec![1]),
-        "Lookup should use the first two auxiliary column"
+        interactions.len(),
+        4,
+        "Should have four interactions (2 sends + 2 receives)"
     );
-    assert_eq!(
-        lookups[0].element_exprs.len(),
-        2,
-        "Lookup should have two element tuples (read and provide)"
-    );
-    assert_eq!(lookups[0].kind, Kind::Local, "Lookup should be local");
-    assert_eq!(air.cur_num_lookups, 2, "Should have two lookups registered");
 
-    // Evaluate constraints for every row - both lookups should pass
+    // Evaluate constraints for lookup 1 (column 0)
     for i in 0..builder.height {
         builder.for_row(i);
-        lookups.iter().for_each(|lookup| {
-            lookup_gadget.eval_local_lookup(&mut builder, lookup.clone());
-        });
+        // First lookup uses first 2 interactions and column 0
+        lookup_gadget.eval_constraints(
+            &mut builder,
+            GadgetConstraintContext {
+                interactions: &interactions[0..2],
+                aux_column_index: 0,
+                expected_cumulative_sum: None,
+            },
+        );
+        // Second lookup uses next 2 interactions and column 1
+        lookup_gadget.eval_constraints(
+            &mut builder,
+            GadgetConstraintContext {
+                interactions: &interactions[2..4],
+                aux_column_index: 1,
+                expected_cumulative_sum: None,
+            },
+        );
     }
 }
 
-// An AIR with 6 columns as follows:
-// - 3 columns the input add operation: (inp1, inp2, sum)
+// An AIR with 7 columns as follows:
+// - 3 columns for the input add operation: (inp1, inp2, sum)
 // - 3 columns for the lookup table: (table_inp1, table_inp2, table_sum)
 // - 1 column for the multiplicity
 struct AddAir {
-    // To keep track of registered lookups
-    num_lookups: usize,
-    with_global: (bool, Direction),
+    is_global_send: bool,
+    is_global_receive: bool,
 }
 
 impl AddAir {
     fn new() -> Self {
         Self {
-            num_lookups: 0,
-            with_global: (false, Direction::Send),
+            is_global_send: false,
+            is_global_receive: false,
         }
     }
 
-    fn new_with_global(direction: Direction) -> Self {
+    fn new_with_global_send() -> Self {
         Self {
-            num_lookups: 0,
-            with_global: (true, direction),
+            is_global_send: true,
+            is_global_receive: false,
+        }
+    }
+
+    fn new_with_global_receive() -> Self {
+        Self {
+            is_global_send: false,
+            is_global_receive: true,
         }
     }
 }
@@ -1155,82 +1153,51 @@ impl<F: Field> BaseAir<F> for AddAir {
     }
 }
 
-impl<AB> Air<AB> for AddAir
-where
-    AB: PermutationAirBuilder<F = F, EF = EF, RandomVar = EF>
-        + PairBuilder
-        + AirBuilderWithPublicValues,
-    AB::Var: Copy + Into<AB::ExprEF>,
-    AB::ExprEF: From<AB::Var> + From<F>,
-    F: Copy + Into<AB::ExprEF>,
-{
-    fn eval(&self, _builder: &mut AB) {
-        // No constraints, only lookups
+impl Air<MockAirBuilder> for AddAir {
+    fn eval(&self, _builder: &mut MockAirBuilder) {
+        // No constraints - this AIR only defines lookup interactions
     }
 }
 
-impl<AB> AirLookupHandler<AB> for AddAir
-where
-    AB: PermutationAirBuilder<F = F, EF = EF, RandomVar = EF>
-        + PairBuilder
-        + AirBuilderWithPublicValues,
-    AB::Var: Copy + Into<AB::ExprEF>,
-    AB::ExprEF: From<AB::Var> + From<F>,
-    F: Copy + Into<AB::ExprEF>,
-{
-    fn add_lookup_columns(&mut self) -> Vec<usize> {
-        let new_idx = self.num_lookups;
-        self.num_lookups += 1;
+impl InteractionDiscovery<F> for AddAir {
+    fn discover_interactions(&self, collector: &mut InteractionCollector<F>) {
+        let main = collector.main();
+        let local = main.row_slice(0).unwrap();
 
-        vec![new_idx]
-    }
-
-    fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
-        let symbolic_air_builder =
-            SymbolicAirBuilder::<F>::new(0, <Self as BaseAir<AB::F>>::width(self), 0);
-
-        let symbolic_main = symbolic_air_builder.main();
-        let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
-
-        // Extract columns for thelookup entries: [inp1, inp2, sum]
-        let inp1 = symbolic_main_local[0];
-        let inp2 = symbolic_main_local[1];
-        let sum = symbolic_main_local[2];
-
-        // Form the lookup inputs.
-        let a_elements = vec![inp1.into(), inp2.into(), sum.into()];
-        let a_multiplicities = SymbolicExpression::Constant(F::ONE);
+        // Extract columns for the lookup entries: [inp1, inp2, sum]
+        let inp1 = local[0];
+        let inp2 = local[1];
+        let sum = local[2];
 
         // Extract columns for the LUT entries: [table_inp1, table_inp2, table_sum]
-        let table_inp1 = symbolic_main_local[3];
-        let table_inp2 = symbolic_main_local[4];
-        let table_sum = symbolic_main_local[5];
-        // Form the LUT entries.
-        let b_elements = vec![table_inp1.into(), table_inp2.into(), table_sum.into()];
-        let b_multiplicities = symbolic_main_local[6].into();
+        let table_inp1 = local[3];
+        let table_inp2 = local[4];
+        let table_sum = local[5];
+        let mult = local[6];
 
-        let lookup_inputs = vec![
-            (a_elements, a_multiplicities, Direction::Receive),
-            (b_elements.clone(), b_multiplicities, Direction::Send),
-        ];
+        // Local lookup: receive the input tuple, send from the table
+        collector.receive(Interaction::new(
+            vec![inp1.into(), inp2.into(), sum.into()],
+            SymbolicExpression::Constant(F::ONE),
+        ));
+        collector.send(Interaction::new(
+            vec![table_inp1.into(), table_inp2.into(), table_sum.into()],
+            mult.into(),
+        ));
 
-        let local_lookup =
-            <Self as AirLookupHandler<AB>>::register_lookup(self, Kind::Local, &lookup_inputs);
-
-        // also need is_send
-        let (is_global, direction) = self.with_global;
-        if is_global {
-            let lookup_inputs = vec![(b_elements, SymbolicExpression::Constant(F::ONE), direction)];
-            let global_lookup = <Self as AirLookupHandler<AB>>::register_lookup(
-                self,
-                Kind::Global("LUT".to_string()),
-                &lookup_inputs,
-            );
-            // Return the local and global lookups.
-            return vec![local_lookup, global_lookup];
+        // Global lookup (if enabled)
+        if self.is_global_send {
+            collector.send(Interaction::new(
+                vec![table_inp1.into(), table_inp2.into(), table_sum.into()],
+                SymbolicExpression::Constant(F::ONE),
+            ));
         }
-        // Return the local lookup.
-        vec![local_lookup]
+        if self.is_global_receive {
+            collector.receive(Interaction::new(
+                vec![table_inp1.into(), table_inp2.into(), table_sum.into()],
+                SymbolicExpression::Constant(F::ONE),
+            ));
+        }
     }
 }
 
@@ -1241,7 +1208,7 @@ fn test_tuple_lookup() {
     // Values to check: [(0, 1, 1), (0, 1, 1), (1, 1, 2), (0, 0, 0)]
     // Lookup table: [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 2)]
     let mut rng = SmallRng::seed_from_u64(1);
-    let mut air = AddAir::new();
+    let air = AddAir::new();
     let width = <AddAir as BaseAir<F>>::width(&air);
     let (main_trace, aux_trace, challenges) = LookupTraceBuilder::new_with_width(width, &mut rng)
         .row(vec![0, 1, 1], vec![0, 1, 1], 2)
@@ -1262,31 +1229,37 @@ fn test_tuple_lookup() {
         .into_iter()
         .collect::<Vec<F>>();
 
-    let last_contribution = compute_logup_contribution(
-        challenges,
-        last_row_data[0..3].to_vec(),
-        last_row_data[3..6].to_vec(),
-        last_row_data[6],
-    );
+    let last_contribution_receive =
+        compute_logup_contribution(challenges, last_row_data[0..3].to_vec(), F::ONE);
+    let last_contribution_send =
+        compute_logup_contribution(challenges, last_row_data[3..6].to_vec(), last_row_data[6]);
 
     assert_eq!(
-        s_final + last_contribution,
+        s_final + last_contribution_receive - last_contribution_send,
         EF::ZERO,
         "Total sum (s[n-1] + c[n-1]) must be zero for a valid lookup"
     );
+
+    let mut collector = InteractionCollector::new(0, <AddAir as BaseAir<F>>::width(&air));
+    air.discover_interactions(&mut collector);
+    let interactions = collector.into_interactions();
 
     let mut builder = MockAirBuilder::new(main_trace, aux_trace, challenges.to_vec());
 
     // Register the lookups.
     let lookup_gadget = LogUpGadget::new();
-    let lookups = <AddAir as AirLookupHandler<MockAirBuilder>>::get_lookups(&mut air);
 
     // Evaluate the constraints for every row.
     for i in 0..builder.height {
         builder.for_row(i);
-        lookups.iter().for_each(|lookup| {
-            lookup_gadget.eval_local_lookup(&mut builder, lookup.clone());
-        });
+        lookup_gadget.eval_constraints(
+            &mut builder,
+            GadgetConstraintContext {
+                interactions: &interactions,
+                aux_column_index: 0,
+                expected_cumulative_sum: None,
+            },
+        );
     }
 }
 
@@ -1311,7 +1284,7 @@ fn test_global_lookup() {
     };
 
     // The first AIR receives LUT values from the second air.
-    let mut air1 = AddAir::new_with_global(Direction::Receive);
+    let air1 = AddAir::new_with_global_receive();
     let width = <AddAir as BaseAir<F>>::width(&air1);
     let (main_trace1, aux_trace1, challenges1) = {
         let mut trace_builder = LookupTraceBuilder::new_with_width(width, &mut rng);
@@ -1321,11 +1294,11 @@ fn test_global_lookup() {
             .row(vec![0, 1, 1], vec![0, 1, 1], 2)
             .row(vec![1, 1, 2], vec![1, 1, 2], 1)
             .row(vec![0, 0, 0], vec![1, 0, 1], 0)
-            .build_with_global(Direction::Receive)
+            .build_with_global(false)
     };
 
     // The second AIR sends LUT values to the first air.
-    let mut air2 = AddAir::new_with_global(Direction::Send);
+    let air2 = AddAir::new_with_global_send();
     let width = <AddAir as BaseAir<F>>::width(&air2);
     let (main_trace2, aux_trace2, challenges2) = {
         let mut trace_builder = LookupTraceBuilder::new_with_width(width, &mut rng);
@@ -1335,7 +1308,7 @@ fn test_global_lookup() {
             .row(vec![0, 1, 1], vec![0, 0, 0], 1)
             .row(vec![1, 1, 2], vec![1, 0, 1], 0)
             .row(vec![0, 0, 0], vec![1, 1, 2], 1)
-            .build_with_global(Direction::Send)
+            .build_with_global(true)
     };
 
     // The test must check the FINAL constraint: s[n-1] + c[n-1] = 0
@@ -1351,15 +1324,13 @@ fn test_global_lookup() {
         .into_iter()
         .collect::<Vec<F>>();
 
-    let last_contribution1 = compute_logup_contribution(
-        challenges1,
-        last_row_data[0..3].to_vec(),
-        last_row_data[3..6].to_vec(),
-        last_row_data[6],
-    );
+    let last_contribution_receive1 =
+        compute_logup_contribution(challenges1, last_row_data[0..3].to_vec(), F::ONE);
+    let last_contribution_send1 =
+        compute_logup_contribution(challenges1, last_row_data[3..6].to_vec(), last_row_data[6]);
 
     assert_eq!(
-        s_final1 + last_contribution1,
+        s_final1 + last_contribution_receive1 - last_contribution_send1,
         EF::ZERO,
         "Total sum (s[n-1] + c[n-1]) must be zero for a valid lookup"
     );
@@ -1377,15 +1348,16 @@ fn test_global_lookup() {
         .into_iter()
         .collect::<Vec<F>>();
 
-    let last_contribution2 = compute_logup_contribution(
+    let last_contribution_receive2 =
+        compute_logup_contribution(challenges2, last_row_data2[0..3].to_vec(), F::ONE);
+    let last_contribution_send2 = compute_logup_contribution(
         challenges2,
-        last_row_data2[0..3].to_vec(),
         last_row_data2[3..6].to_vec(),
         last_row_data2[6],
     );
 
     assert_eq!(
-        s_final2 + last_contribution2,
+        s_final2 + last_contribution_receive2 - last_contribution_send2,
         EF::ZERO,
         "Total sum (s[n-1] + c[n-1]) must be zero for a valid lookup"
     );
@@ -1395,21 +1367,22 @@ fn test_global_lookup() {
     let s_global1 = last_aux_trace1[1];
     let s_global2 = last_aux_trace2[1];
 
-    let last_global_contribution1 = compute_logup_contribution(
-        global_challenges,
-        vec![],
-        last_row_data[3..6].to_vec(),
-        F::ONE,
-    );
-    let last_global_contribution2 = compute_logup_contribution(
-        global_challenges,
-        vec![],
-        last_row_data2[3..6].to_vec(),
-        -F::ONE,
-    );
+    let last_global_contribution1 =
+        compute_logup_contribution(global_challenges, last_row_data[3..6].to_vec(), F::ONE);
+    let last_global_contribution2 =
+        compute_logup_contribution(global_challenges, last_row_data2[3..6].to_vec(), -F::ONE);
 
     let s_global_final1 = s_global1 + last_global_contribution1;
     let s_global_final2 = s_global2 + last_global_contribution2;
+
+    // Discover interactions for both AIRs
+    let mut collector1 = InteractionCollector::new(0, <AddAir as BaseAir<F>>::width(&air1));
+    air1.discover_interactions(&mut collector1);
+    let interactions1 = collector1.into_interactions();
+
+    let mut collector2 = InteractionCollector::new(0, <AddAir as BaseAir<F>>::width(&air2));
+    air2.discover_interactions(&mut collector2);
+    let interactions2 = collector2.into_interactions();
 
     let mut builder1 = MockAirBuilder::new(
         main_trace1,
@@ -1424,45 +1397,53 @@ fn test_global_lookup() {
 
     // Register the lookups.
     let lookup_gadget = LogUpGadget::new();
-    let lookups1 = <AddAir as AirLookupHandler<MockAirBuilder>>::get_lookups(&mut air1);
-    let lookups2 = <AddAir as AirLookupHandler<MockAirBuilder>>::get_lookups(&mut air2);
 
     assert_eq!(
         builder1.height, builder2.height,
         "Both builders should have the same height"
     );
 
-    // Evaluate the constraints for every row``, in each table.
+    // Evaluate the constraints for every row, in each table.
     for i in 0..builder1.height {
         builder1.for_row(i);
-        lookups1.iter().for_each(|lookup| {
-            match &lookup.kind {
-                Kind::Local => lookup_gadget.eval_local_lookup(&mut builder1, lookup.clone()),
-                Kind::Global(name) => {
-                    assert_eq!(*name, "LUT".to_string(), "Global lookup name should match");
-                    lookup_gadget.eval_global_update(
-                        &mut builder1,
-                        lookup.clone(),
-                        s_global_final1,
-                    );
-                }
-            };
-        });
+        // Local lookup (first 2 interactions: receive + send)
+        lookup_gadget.eval_constraints(
+            &mut builder1,
+            GadgetConstraintContext {
+                interactions: &interactions1[0..2],
+                aux_column_index: 0,
+                expected_cumulative_sum: None,
+            },
+        );
+        // Global lookup (last interaction: receive)
+        lookup_gadget.eval_constraints(
+            &mut builder1,
+            GadgetConstraintContext {
+                interactions: &interactions1[2..3],
+                aux_column_index: 1,
+                expected_cumulative_sum: Some(s_global_final1),
+            },
+        );
 
         builder2.for_row(i);
-        lookups2.iter().for_each(|lookup| {
-            match &lookup.kind {
-                Kind::Local => lookup_gadget.eval_local_lookup(&mut builder2, lookup.clone()),
-                Kind::Global(name) => {
-                    assert_eq!(*name, "LUT".to_string(), "Global lookup name should match");
-                    lookup_gadget.eval_global_update(
-                        &mut builder2,
-                        lookup.clone(),
-                        s_global_final2,
-                    );
-                }
-            };
-        });
+        // Local lookup (first 2 interactions: receive + send)
+        lookup_gadget.eval_constraints(
+            &mut builder2,
+            GadgetConstraintContext {
+                interactions: &interactions2[0..2],
+                aux_column_index: 0,
+                expected_cumulative_sum: None,
+            },
+        );
+        // Global lookup (last interaction: send)
+        lookup_gadget.eval_constraints(
+            &mut builder2,
+            GadgetConstraintContext {
+                interactions: &interactions2[2..3],
+                aux_column_index: 1,
+                expected_cumulative_sum: Some(s_global_final2),
+            },
+        );
     }
 
     // Evaluate the global lookup between the two AIRs.
