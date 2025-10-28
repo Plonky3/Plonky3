@@ -26,7 +26,7 @@ use p3_matrix::Matrix;
 
 use super::{GadgetConstraintContext, InteractionGadget};
 use crate::error::LookupError;
-use crate::interaction::{Interaction, InteractionKind, eval_symbolic};
+use crate::interaction::{Interaction, eval_symbolic};
 
 /// Computes the numerator and denominator of the fraction:
 /// `∑(m_i / (α - combined_elements[i]))`, where
@@ -125,13 +125,12 @@ impl LogUpGadget {
 }
 
 impl InteractionGadget for LogUpGadget {
-    fn eval_constraints<AB, K>(
+    fn eval_constraints<AB>(
         &self,
         builder: &mut AB,
-        context: GadgetConstraintContext<'_, AB::F, K, AB::ExprEF>,
+        context: GadgetConstraintContext<'_, AB::F, AB::ExprEF>,
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
-        K: InteractionKind,
     {
         if context.interactions.is_empty() {
             return;
@@ -226,10 +225,7 @@ impl InteractionGadget for LogUpGadget {
     /// - Each `combined_elements[i] = ∑elements[i][n-j] * β^j`
     ///
     /// The degree is `1 + max(deg(numerator), deg(common_denominator))`.
-    fn constraint_degree<F: Field, K: InteractionKind>(
-        &self,
-        interactions: &[Interaction<F, K>],
-    ) -> usize {
+    fn constraint_degree<F: Field>(&self, interactions: &[Interaction<F>]) -> usize {
         if interactions.is_empty() {
             return 0;
         }

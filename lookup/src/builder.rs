@@ -5,18 +5,18 @@ use alloc::vec::Vec;
 
 use p3_field::Field;
 
-use crate::interaction::{Interaction, InteractionKind, MessageBuilder};
+use crate::interaction::{Interaction, MessageBuilder};
 
 /// A builder that collects interactions.
 #[derive(Debug, Default)]
-pub struct InteractionCollector<F: Field, K: InteractionKind> {
+pub struct InteractionCollector<F: Field> {
     /// Collected send interactions
-    sends: Vec<Interaction<F, K>>,
+    sends: Vec<Interaction<F>>,
     /// Collected receive interactions
-    receives: Vec<Interaction<F, K>>,
+    receives: Vec<Interaction<F>>,
 }
 
-impl<F: Field, K: InteractionKind> InteractionCollector<F, K> {
+impl<F: Field> InteractionCollector<F> {
     /// Creates a new interaction collector.
     pub const fn new() -> Self {
         Self {
@@ -30,33 +30,25 @@ impl<F: Field, K: InteractionKind> InteractionCollector<F, K> {
     /// # Returns
     ///
     /// A tuple of `(sends, receives)` where each is a vector of interactions.
-    pub fn into_interactions(self) -> (Vec<Interaction<F, K>>, Vec<Interaction<F, K>>) {
+    pub fn into_interactions(self) -> (Vec<Interaction<F>>, Vec<Interaction<F>>) {
         (self.sends, self.receives)
     }
 
     /// Returns references to the collected interactions without consuming the builder.
-    pub fn interactions(&self) -> (&[Interaction<F, K>], &[Interaction<F, K>]) {
+    pub fn interactions(&self) -> (&[Interaction<F>], &[Interaction<F>]) {
         (&self.sends, &self.receives)
     }
 }
 
-impl<F: Field, K: InteractionKind> MessageBuilder<F, K> for InteractionCollector<F, K> {
-    fn send(&mut self, mut interaction: Interaction<F, K>) {
+impl<F: Field> MessageBuilder<F> for InteractionCollector<F> {
+    fn send(&mut self, mut interaction: Interaction<F>) {
         // Make the multiplicity negative for sends
-        //
-        // send = negative contribution to LogUp sum
-        //
-        // TODO: in the future, we may want to allow users to specify
-        // the multiplicity of a send interaction.
         interaction.multiplicity = -interaction.multiplicity;
         self.sends.push(interaction);
     }
 
-    fn receive(&mut self, interaction: Interaction<F, K>) {
+    fn receive(&mut self, interaction: Interaction<F>) {
         // Multiplicity stays positive for receives
-        //
-        // TODO: in the future, we may want to allow users to specify
-        // the multiplicity of a send interaction.
         self.receives.push(interaction);
     }
 }
@@ -71,28 +63,20 @@ mod tests {
 
     type F = BabyBear;
 
-    #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-    enum TestKind {
-        Lookup1,
-        Lookup2,
-    }
-
     #[test]
     fn test_collector_basic() {
-        let mut collector = InteractionCollector::<F, TestKind>::new();
+        let mut collector = InteractionCollector::<F>::new();
 
         // Send an interaction
         collector.send(Interaction {
             values: vec![SymbolicExpression::Constant(F::ONE)],
             multiplicity: SymbolicExpression::Constant(F::TWO),
-            kind: TestKind::Lookup1,
         });
 
         // Receive an interaction
         collector.receive(Interaction {
             values: vec![SymbolicExpression::Constant(F::new(42))],
             multiplicity: SymbolicExpression::Constant(F::ONE),
-            kind: TestKind::Lookup2,
         });
 
         let (sends, receives) = collector.into_interactions();
@@ -117,20 +101,18 @@ mod tests {
 
     #[test]
     fn test_multiple_interactions() {
-        let mut collector = InteractionCollector::<F, TestKind>::new();
+        let mut collector = InteractionCollector::<F>::new();
 
         // Multiple sends and receives
         for i in 0..5 {
             collector.send(Interaction {
                 values: vec![SymbolicExpression::Constant(F::new(i))],
                 multiplicity: SymbolicExpression::Constant(F::ONE),
-                kind: TestKind::Lookup1,
             });
 
             collector.receive(Interaction {
                 values: vec![SymbolicExpression::Constant(F::new(i * 10))],
                 multiplicity: SymbolicExpression::Constant(F::ONE),
-                kind: TestKind::Lookup2,
             });
         }
 

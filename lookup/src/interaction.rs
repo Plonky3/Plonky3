@@ -1,38 +1,15 @@
 //! Inter-AIR communication via interactions.
 
 use alloc::vec::Vec;
-use core::hash::Hash;
 
 use p3_air::{AirBuilder, AirBuilderWithPublicValues, PairBuilder, PermutationAirBuilder};
 use p3_field::Field;
 use p3_matrix::Matrix;
 use p3_uni_stark::{Entry, SymbolicExpression};
 
-/// A marker trait for interaction identifiers.
-///
-/// This trait allows users to define their own taxonomy of interactions.
-///
-/// # Examples
-///
-/// ```ignore
-/// // Simple: just use integers
-/// type MyKind = u32;
-///
-/// // Complex: custom enum for a VM
-/// #[derive(Copy, Clone, Eq, PartialEq, Hash)]
-/// enum VmInteractionKind {
-///     Memory,
-///     Program,
-///     RangeCheck,
-/// }
-/// ```
-pub trait InteractionKind: 'static + Copy + Clone + Send + Sync + Eq + Hash {}
-
-impl<T: 'static + Copy + Clone + Send + Sync + Eq + Hash> InteractionKind for T {}
-
 /// A single interaction between AIRs.
 #[derive(Debug, Clone)]
-pub struct Interaction<F: Field, K: InteractionKind> {
+pub struct Interaction<F: Field> {
     /// The values in this interaction (e.g., lookup tuple elements).
     pub values: Vec<SymbolicExpression<F>>,
 
@@ -41,25 +18,17 @@ pub struct Interaction<F: Field, K: InteractionKind> {
     /// - Positive: This AIR **receives** (reads from the table)
     /// - Negative: This AIR **sends** (writes to the table)
     pub multiplicity: SymbolicExpression<F>,
-
-    /// The kind of interaction, used to group interactions together.
-    ///
-    /// All interactions with the same `kind` will be checked together
-    /// in the proving/verification process.
-    pub kind: K,
 }
 
-impl<F: Field, K: InteractionKind> Interaction<F, K> {
+impl<F: Field> Interaction<F> {
     /// Creates a new interaction.
     pub const fn new(
         values: Vec<SymbolicExpression<F>>,
         multiplicity: SymbolicExpression<F>,
-        kind: K,
     ) -> Self {
         Self {
             values,
             multiplicity,
-            kind,
         }
     }
 
@@ -72,16 +41,16 @@ impl<F: Field, K: InteractionKind> Interaction<F, K> {
 /// Extension trait for AIR builders that support interactions.
 ///
 /// Provides `send` and `receive` methods for defining inter-AIR communication.
-pub trait MessageBuilder<F: Field, K: InteractionKind> {
+pub trait MessageBuilder<F: Field> {
     /// Sends an interaction (provides data to a table).
     ///
     /// The multiplicity will be negated internally (send = negative contribution).
-    fn send(&mut self, interaction: Interaction<F, K>);
+    fn send(&mut self, interaction: Interaction<F>);
 
     /// Receives an interaction (reads data from a table).
     ///
     /// The multiplicity is used as-is (receive = positive contribution).
-    fn receive(&mut self, interaction: Interaction<F, K>);
+    fn receive(&mut self, interaction: Interaction<F>);
 }
 
 /// Evaluates a symbolic expression in the context of an AIR builder.

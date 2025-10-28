@@ -22,11 +22,6 @@ type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
 
 /// Test-specific interaction kinds
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-enum TestKind {
-    Local,
-    Global,
-}
 
 fn create_symbolic_with_degree(degree: usize) -> SymbolicExpression<F> {
     use alloc::rc::Rc;
@@ -43,7 +38,7 @@ fn create_dummy_interactions(
     num_elements_per_tuple: Vec<usize>,
     degree_per_element: Vec<Vec<usize>>,
     degree_multiplicities: Vec<usize>,
-) -> Vec<Interaction<F, TestKind>> {
+) -> Vec<Interaction<F>> {
     assert_eq!(num_elements_per_tuple.len(), degree_per_element.len());
     assert_eq!(num_elements_per_tuple.len(), degree_multiplicities.len());
 
@@ -60,7 +55,6 @@ fn create_dummy_interactions(
             Interaction {
                 values,
                 multiplicity,
-                kind: TestKind::Local,
             }
         })
         .collect()
@@ -250,7 +244,7 @@ impl LogUpChallenges {
 }
 
 /// Helper to build interactions for range check pattern
-fn build_range_check_interactions(main_width: usize) -> Vec<Interaction<F, TestKind>> {
+fn build_range_check_interactions(main_width: usize) -> Vec<Interaction<F>> {
     let symbolic_builder = SymbolicAirBuilder::<F>::new(0, main_width, 0);
     let symbolic_main = symbolic_builder.main();
     let symbolic_local = symbolic_main.row_slice(0).unwrap();
@@ -268,7 +262,6 @@ fn build_range_check_interactions(main_width: usize) -> Vec<Interaction<F, TestK
         interactions.push(Interaction {
             values: vec![val.into()],
             multiplicity: SymbolicExpression::Constant(F::ONE),
-            kind: TestKind::Local,
         });
 
         // Send interaction (provide to table, negative multiplicity)
@@ -276,7 +269,6 @@ fn build_range_check_interactions(main_width: usize) -> Vec<Interaction<F, TestK
         interactions.push(Interaction {
             values: vec![table_val.into()],
             multiplicity: -mult_expr,
-            kind: TestKind::Local,
         });
     }
 
@@ -817,7 +809,6 @@ fn test_tuple_lookup() {
                 symbolic_local[2].into(),
             ],
             multiplicity: SymbolicExpression::Constant(F::ONE),
-            kind: TestKind::Local,
         },
         Interaction {
             values: vec![
@@ -826,7 +817,6 @@ fn test_tuple_lookup() {
                 symbolic_local[5].into(),
             ],
             multiplicity: -mult_expr,
-            kind: TestKind::Local,
         },
     ];
 
@@ -949,7 +939,6 @@ fn test_global_lookup() {
                 symbolic_local[2].into(),
             ],
             multiplicity: SymbolicExpression::Constant(F::ONE),
-            kind: TestKind::Local,
         },
         Interaction {
             values: vec![
@@ -958,7 +947,6 @@ fn test_global_lookup() {
                 symbolic_local[5].into(),
             ],
             multiplicity: -mult_expr,
-            kind: TestKind::Local,
         },
     ];
 
@@ -969,7 +957,6 @@ fn test_global_lookup() {
             symbolic_local[5].into(),
         ],
         multiplicity: SymbolicExpression::Constant(F::ONE),
-        kind: TestKind::Global,
     }];
 
     let global_interaction_send = vec![Interaction {
@@ -979,7 +966,6 @@ fn test_global_lookup() {
             symbolic_local[5].into(),
         ],
         multiplicity: -SymbolicExpression::Constant(F::ONE),
-        kind: TestKind::Global,
     }];
 
     let mut builder1 = MockAirBuilder::new(
