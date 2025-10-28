@@ -61,19 +61,15 @@ where
     AB: AirBuilder + PairBuilder + AirBuilderWithPublicValues + PermutationAirBuilder,
 {
     match expr {
-        SymbolicExpression::Variable(v) => {
-            let get_val = |offset: usize, index: usize| match offset {
-                0 => builder.main().row_slice(0).unwrap()[index].clone().into(),
-                1 => builder.main().row_slice(1).unwrap()[index].clone().into(),
+        SymbolicExpression::Variable(v) => match v.entry {
+            Entry::Main { offset } => match offset {
+                0 => builder.main().row_slice(0).unwrap()[v.index].clone().into(),
+                1 => builder.main().row_slice(1).unwrap()[v.index].clone().into(),
                 _ => panic!("Cannot have expressions involving more than two rows."),
-            };
-
-            match v.entry {
-                Entry::Main { offset } => get_val(offset, v.index),
-                Entry::Public => builder.public_values()[v.index].into(),
-                _ => unimplemented!("Entry type {:?} not supported in interactions", v.entry),
-            }
-        }
+            },
+            Entry::Public => builder.public_values()[v.index].into(),
+            _ => unimplemented!("Entry type {:?} not supported in interactions", v.entry),
+        },
         SymbolicExpression::IsFirstRow => builder.is_first_row(),
         SymbolicExpression::IsLastRow => builder.is_last_row(),
         SymbolicExpression::IsTransition => builder.is_transition_window(2),
