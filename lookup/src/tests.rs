@@ -17,7 +17,7 @@ use rand::{Rng, SeedableRng};
 
 use crate::builder::InteractionCollector;
 use crate::gadgets::{GadgetConstraintContext, InteractionGadget, LogUpGadget};
-use crate::interaction::{Interaction, MessageBuilder, eval_symbolic};
+use crate::interaction::{Interaction, InteractionDiscovery, MessageBuilder, eval_symbolic};
 
 /// Base field type for the test
 type F = BabyBear;
@@ -284,9 +284,9 @@ impl Air<MockAirBuilder> for RangeCheckAir {
     }
 }
 
-impl Air<InteractionCollector<F>> for RangeCheckAir {
-    fn eval(&self, builder: &mut InteractionCollector<F>) {
-        let main = builder.main();
+impl InteractionDiscovery<F> for RangeCheckAir {
+    fn discover_interactions(&self, collector: &mut InteractionCollector<F>) {
+        let main = collector.main();
         let local = main.row_slice(0).unwrap();
 
         for lookup_idx in 0..self.num_lookups {
@@ -296,11 +296,11 @@ impl Air<InteractionCollector<F>> for RangeCheckAir {
             let table_val = local[offset + 1].clone();
             let mult = local[offset + 2].clone();
 
-            builder.receive(Interaction::new(
+            collector.receive(Interaction::new(
                 vec![val.into()],
                 SymbolicExpression::Constant(F::ONE),
             ));
-            builder.send(Interaction::new(vec![table_val.into()], mult.into()));
+            collector.send(Interaction::new(vec![table_val.into()], mult.into()));
         }
     }
 }
@@ -603,7 +603,7 @@ fn test_range_check_end_to_end_valid() {
     // Setup the AIR and builder.
     let air = RangeCheckAir::new();
     let mut collector = InteractionCollector::new(0, <RangeCheckAir as BaseAir<F>>::width(&air));
-    air.eval(&mut collector);
+    air.discover_interactions(&mut collector);
     let interactions = collector.into_interactions();
 
     let mut builder = MockAirBuilder::new(main_trace, aux_trace, challenges.to_vec());
@@ -681,7 +681,7 @@ fn test_range_check_end_to_end_invalid() {
     // Setup the AIR and builder
     let air = RangeCheckAir::new();
     let mut collector = InteractionCollector::new(0, <RangeCheckAir as BaseAir<F>>::width(&air));
-    air.eval(&mut collector);
+    air.discover_interactions(&mut collector);
     let interactions = collector.into_interactions();
 
     let mut builder = MockAirBuilder::new(main_trace, aux_trace, challenges.to_vec());
@@ -755,7 +755,7 @@ fn test_inconsistent_witness_fails_transition() {
     // This should now fail at row 1 when checking the transition to row 2.
     let air = RangeCheckAir::new();
     let mut collector = InteractionCollector::new(0, <RangeCheckAir as BaseAir<F>>::width(&air));
-    air.eval(&mut collector);
+    air.discover_interactions(&mut collector);
     let interactions = collector.into_interactions();
 
     let mut builder = MockAirBuilder::new(main_trace, aux_trace, challenges.to_vec());
@@ -819,7 +819,7 @@ fn test_zero_multiplicity_is_not_counted() {
     // Evaluate constraints
     let air = RangeCheckAir::new();
     let mut collector = InteractionCollector::new(0, <RangeCheckAir as BaseAir<F>>::width(&air));
-    air.eval(&mut collector);
+    air.discover_interactions(&mut collector);
     let interactions = collector.into_interactions();
 
     let mut builder = MockAirBuilder::new(main_trace, aux_trace, challenges.to_vec());
@@ -853,7 +853,7 @@ fn test_empty_lookup_is_valid() {
 
     let air = RangeCheckAir::new();
     let mut collector = InteractionCollector::new(0, <RangeCheckAir as BaseAir<F>>::width(&air));
-    air.eval(&mut collector);
+    air.discover_interactions(&mut collector);
     let interactions = collector.into_interactions();
 
     let mut builder = MockAirBuilder::new(main_trace, aux_trace, vec![alpha, beta]);
@@ -949,7 +949,7 @@ fn test_nontrivial_permutation() {
     // Setup AIR and verify all constraints
     let air = RangeCheckAir::new();
     let mut collector = InteractionCollector::new(0, <RangeCheckAir as BaseAir<F>>::width(&air));
-    air.eval(&mut collector);
+    air.discover_interactions(&mut collector);
     let interactions = collector.into_interactions();
 
     let mut builder = MockAirBuilder::new(main_trace, aux_trace, challenges.to_vec());
@@ -1072,7 +1072,7 @@ fn test_multiple_lookups_different_columns() {
     // Setup AIR with 2 lookups and verify all constraints
     let air = RangeCheckAir::with_multiple_lookups(2);
     let mut collector = InteractionCollector::new(0, <RangeCheckAir as BaseAir<F>>::width(&air));
-    air.eval(&mut collector);
+    air.discover_interactions(&mut collector);
     let interactions = collector.into_interactions();
 
     let mut builder = MockAirBuilder::new(
@@ -1159,9 +1159,9 @@ impl Air<MockAirBuilder> for AddAir {
     }
 }
 
-impl Air<InteractionCollector<F>> for AddAir {
-    fn eval(&self, builder: &mut InteractionCollector<F>) {
-        let main = builder.main();
+impl InteractionDiscovery<F> for AddAir {
+    fn discover_interactions(&self, collector: &mut InteractionCollector<F>) {
+        let main = collector.main();
         let local = main.row_slice(0).unwrap();
 
         // Extract columns for the lookup entries: [inp1, inp2, sum]
@@ -1176,11 +1176,11 @@ impl Air<InteractionCollector<F>> for AddAir {
         let mult = local[6].clone();
 
         // Local lookup: receive the input tuple, send from the table
-        builder.receive(Interaction::new(
+        collector.receive(Interaction::new(
             vec![inp1.into(), inp2.into(), sum.into()],
             SymbolicExpression::Constant(F::ONE),
         ));
-        builder.send(Interaction::new(
+        collector.send(Interaction::new(
             vec![
                 table_inp1.clone().into(),
                 table_inp2.clone().into(),
@@ -1191,7 +1191,7 @@ impl Air<InteractionCollector<F>> for AddAir {
 
         // Global lookup (if enabled)
         if self.is_global_send {
-            builder.send(Interaction::new(
+            collector.send(Interaction::new(
                 vec![
                     table_inp1.clone().into(),
                     table_inp2.clone().into(),
@@ -1201,7 +1201,7 @@ impl Air<InteractionCollector<F>> for AddAir {
             ));
         }
         if self.is_global_receive {
-            builder.receive(Interaction::new(
+            collector.receive(Interaction::new(
                 vec![table_inp1.into(), table_inp2.into(), table_sum.into()],
                 SymbolicExpression::Constant(F::ONE),
             ));
@@ -1249,7 +1249,7 @@ fn test_tuple_lookup() {
     );
 
     let mut collector = InteractionCollector::new(0, <AddAir as BaseAir<F>>::width(&air));
-    air.eval(&mut collector);
+    air.discover_interactions(&mut collector);
     let interactions = collector.into_interactions();
 
     let mut builder = MockAirBuilder::new(main_trace, aux_trace, challenges.to_vec());
@@ -1385,11 +1385,11 @@ fn test_global_lookup() {
 
     // Discover interactions for both AIRs
     let mut collector1 = InteractionCollector::new(0, <AddAir as BaseAir<F>>::width(&air1));
-    air1.eval(&mut collector1);
+    air1.discover_interactions(&mut collector1);
     let interactions1 = collector1.into_interactions();
 
     let mut collector2 = InteractionCollector::new(0, <AddAir as BaseAir<F>>::width(&air2));
-    air2.eval(&mut collector2);
+    air2.discover_interactions(&mut collector2);
     let interactions2 = collector2.into_interactions();
 
     let mut builder1 = MockAirBuilder::new(

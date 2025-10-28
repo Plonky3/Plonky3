@@ -7,6 +7,8 @@ use p3_field::Field;
 use p3_matrix::Matrix;
 use p3_uni_stark::{Entry, SymbolicExpression};
 
+use crate::InteractionCollector;
+
 /// A single interaction between AIRs.
 #[derive(Debug, Clone)]
 pub struct Interaction<F: Field> {
@@ -51,6 +53,34 @@ pub trait MessageBuilder<F: Field> {
     ///
     /// The multiplicity is used as-is (receive = positive contribution).
     fn receive(&mut self, interaction: Interaction<F>);
+}
+
+/// Trait for AIRs that define interactions with other AIRs.
+///
+/// This trait separates interaction discovery from constraint evaluation,
+/// keeping `Air::eval` focused purely on constraints.
+///
+/// # Example
+/// ```ignore
+/// use crate::builder::InteractionCollector;
+///
+/// impl<F: Field> InteractionDiscovery<F> for MyAir {
+///     fn discover_interactions(&self, collector: &mut InteractionCollector<F>) {
+///         let main = collector.main();
+///         let local = main.row_slice(0).unwrap();
+///
+///         // Define sends and receives
+///         collector.send(Interaction::new(...));
+///         collector.receive(Interaction::new(...));
+///     }
+/// }
+/// ```
+pub trait InteractionDiscovery<F: Field> {
+    /// Discovers and registers all interactions for this AIR.
+    ///
+    /// This method should use the collector's `send` and `receive` methods
+    /// to define all interactions that this AIR participates in.
+    fn discover_interactions(&self, collector: &mut InteractionCollector<F>);
 }
 
 /// Evaluates a symbolic expression in the context of an AIR builder.
