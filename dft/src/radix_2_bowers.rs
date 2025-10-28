@@ -90,7 +90,7 @@ fn bowers_g<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<'_, F>) {
     let twiddles: Vec<DifButterfly<F>> = unsafe { flatten_to_base(twiddles) };
 
     for log_half_block_size in 0..log_h {
-        butterfly_layer(mat, 1 << log_half_block_size, &twiddles)
+        butterfly_layer(mat, 1 << log_half_block_size, &twiddles);
     }
 }
 
@@ -107,7 +107,7 @@ fn bowers_g_t<F: TwoAdicField>(mat: &mut RowMajorMatrixViewMut<'_, F>) {
     let twiddles: Vec<DitButterfly<F>> = unsafe { flatten_to_base(twiddles) };
 
     for log_half_block_size in (0..log_h).rev() {
-        butterfly_layer(mat, 1 << log_half_block_size, &twiddles)
+        butterfly_layer(mat, 1 << log_half_block_size, &twiddles);
     }
 }
 
@@ -125,7 +125,7 @@ fn butterfly_layer<F: Field, B: Butterfly<F>>(
                 .zip(lo_chunks.par_rows_mut())
                 .for_each(|(hi_chunk, lo_chunk)| {
                     if block == 0 {
-                        TwiddleFreeButterfly.apply_to_rows(hi_chunk, lo_chunk)
+                        TwiddleFreeButterfly.apply_to_rows(hi_chunk, lo_chunk);
                     } else {
                         twiddles[block].apply_to_rows(hi_chunk, lo_chunk);
                     }

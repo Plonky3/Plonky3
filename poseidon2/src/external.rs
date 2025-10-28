@@ -82,7 +82,7 @@ pub struct HLMDSMat4;
 impl<R: PrimeCharacteristicRing> Permutation<[R; 4]> for HLMDSMat4 {
     #[inline(always)]
     fn permute_mut(&self, input: &mut [R; 4]) {
-        apply_hl_mat4(input)
+        apply_hl_mat4(input);
     }
 }
 impl<R: PrimeCharacteristicRing> MdsPermutation<R, 4> for HLMDSMat4 {}
@@ -96,7 +96,7 @@ pub struct MDSMat4;
 impl<R: PrimeCharacteristicRing> Permutation<[R; 4]> for MDSMat4 {
     #[inline(always)]
     fn permute_mut(&self, input: &mut [R; 4]) {
-        apply_mat4(input)
+        apply_mat4(input);
     }
 }
 impl<R: PrimeCharacteristicRing> MdsPermutation<R, 4> for MDSMat4 {}
@@ -332,7 +332,7 @@ pub fn external_initial_permute_state<
     mds_light_permutation(state, mat4);
     // After the initial mds_light_permutation, the remaining layers are identical
     // to the terminal permutation simply with different constants.
-    external_terminal_permute_state(state, initial_external_constants, add_rc_and_sbox, mat4)
+    external_terminal_permute_state(state, initial_external_constants, add_rc_and_sbox, mat4);
 }
 
 #[cfg(test)]

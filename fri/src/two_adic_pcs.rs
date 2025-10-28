@@ -494,7 +494,7 @@ where
                         // across the evaluation vector of `Mred(x)`. Adjust by alpha_pow_offset
                         // as needed.
                         .for_each(|((&reduced_row, ro), &inv_denom)| {
-                            *ro += alpha_pow_offset * (reduced_openings - reduced_row) * inv_denom
+                            *ro += alpha_pow_offset * (reduced_openings - reduced_row) * inv_denom;
                         });
                     num_reduced[log_height] += mat.width();
                 }

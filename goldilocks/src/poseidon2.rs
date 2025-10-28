@@ -140,7 +140,7 @@ impl<A: Algebra<Goldilocks> + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>>
             state,
             |x| matmul_internal(x, MATRIX_DIAG_8_GOLDILOCKS),
             &self.internal_constants,
-        )
+        );
     }
 }
 
@@ -153,7 +153,7 @@ impl<A: Algebra<Goldilocks> + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>>
             state,
             |x| matmul_internal(x, MATRIX_DIAG_12_GOLDILOCKS),
             &self.internal_constants,
-        )
+        );
     }
 }
 
@@ -166,7 +166,7 @@ impl<A: Algebra<Goldilocks> + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>>
             state,
             |x| matmul_internal(x, MATRIX_DIAG_16_GOLDILOCKS),
             &self.internal_constants,
-        )
+        );
     }
 }
 
@@ -179,7 +179,7 @@ impl<A: Algebra<Goldilocks> + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>>
             state,
             |x| matmul_internal(x, MATRIX_DIAG_20_GOLDILOCKS),
             &self.internal_constants,
-        )
+        );
     }
 }
 

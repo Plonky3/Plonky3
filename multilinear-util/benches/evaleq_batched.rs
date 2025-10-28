@@ -83,7 +83,7 @@ fn bench_eval_eq_batch(c: &mut Criterion) {
             BenchmarkId::new("eval_eq_batch_false", bench_name.clone()),
             &(num_vars, batch_size),
             |b, _| {
-                b.iter(|| eval_eq_batch::<F, EF4, false>(eval_points, &mut out.clone(), &scalars))
+                b.iter(|| eval_eq_batch::<F, EF4, false>(eval_points, &mut out.clone(), &scalars));
             },
         );
 
@@ -92,7 +92,7 @@ fn bench_eval_eq_batch(c: &mut Criterion) {
             BenchmarkId::new("eval_eq_batch_true", bench_name),
             &(num_vars, batch_size),
             |b, _| {
-                b.iter(|| eval_eq_batch::<F, EF4, true>(eval_points, &mut out.clone(), &scalars))
+                b.iter(|| eval_eq_batch::<F, EF4, true>(eval_points, &mut out.clone(), &scalars));
             },
         );
     }
@@ -133,8 +133,8 @@ fn bench_eval_eq_base_batch(c: &mut Criterion) {
             &(num_vars, batch_size),
             |b, _| {
                 b.iter(|| {
-                    eval_eq_base_batch::<F, EF4, false>(eval_points, &mut out.clone(), &scalars)
-                })
+                    eval_eq_base_batch::<F, EF4, false>(eval_points, &mut out.clone(), &scalars);
+                });
             },
         );
 
@@ -144,8 +144,8 @@ fn bench_eval_eq_base_batch(c: &mut Criterion) {
             &(num_vars, batch_size),
             |b, _| {
                 b.iter(|| {
-                    eval_eq_base_batch::<F, EF4, true>(eval_points, &mut out.clone(), &scalars)
-                })
+                    eval_eq_base_batch::<F, EF4, true>(eval_points, &mut out.clone(), &scalars);
+                });
             },
         );
     }
