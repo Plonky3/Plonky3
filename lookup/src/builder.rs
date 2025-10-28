@@ -10,27 +10,33 @@ use crate::interaction::{Interaction, InteractionKind, MessageBuilder};
 /// A builder that collects interactions.
 #[derive(Debug, Default)]
 pub struct InteractionCollector<F: Field, K: InteractionKind> {
-    /// All collected interactions, with multiplicities correctly signed.
-    interactions: Vec<Interaction<F, K>>,
+    /// Collected send interactions
+    sends: Vec<Interaction<F, K>>,
+    /// Collected receive interactions
+    receives: Vec<Interaction<F, K>>,
 }
 
 impl<F: Field, K: InteractionKind> InteractionCollector<F, K> {
     /// Creates a new interaction collector.
     pub const fn new() -> Self {
         Self {
-            interactions: vec![],
+            sends: vec![],
+            receives: vec![],
         }
     }
 
-    /// Consumes the builder and returns all collected interactions.
-    #[must_use]
-    pub fn into_interactions(self) -> Vec<Interaction<F, K>> {
-        self.interactions
+    /// Consumes the builder and returns the collected interactions.
+    ///
+    /// # Returns
+    ///
+    /// A tuple of `(sends, receives)` where each is a vector of interactions.
+    pub fn into_interactions(self) -> (Vec<Interaction<F, K>>, Vec<Interaction<F, K>>) {
+        (self.sends, self.receives)
     }
 
-    /// Returns a reference to the collected interactions.
-    pub fn interactions(&self) -> &[Interaction<F, K>] {
-        &self.interactions
+    /// Returns references to the collected interactions without consuming the builder.
+    pub fn interactions(&self) -> (&[Interaction<F, K>], &[Interaction<F, K>]) {
+        (&self.sends, &self.receives)
     }
 }
 
@@ -43,7 +49,7 @@ impl<F: Field, K: InteractionKind> MessageBuilder<F, K> for InteractionCollector
         // TODO: in the future, we may want to allow users to specify
         // the multiplicity of a send interaction.
         interaction.multiplicity = -interaction.multiplicity;
-        self.interactions.push(interaction);
+        self.sends.push(interaction);
     }
 
     fn receive(&mut self, interaction: Interaction<F, K>) {
@@ -51,7 +57,7 @@ impl<F: Field, K: InteractionKind> MessageBuilder<F, K> for InteractionCollector
         //
         // TODO: in the future, we may want to allow users to specify
         // the multiplicity of a send interaction.
-        self.interactions.push(interaction);
+        self.receives.push(interaction);
     }
 }
 
@@ -89,19 +95,20 @@ mod tests {
             kind: TestKind::Lookup2,
         });
 
-        let interactions = collector.into_interactions();
+        let (sends, receives) = collector.into_interactions();
 
-        assert_eq!(interactions.len(), 2);
+        assert_eq!(sends.len(), 1);
+        assert_eq!(receives.len(), 1);
 
         // Verify that send multiplicity was negated
-        if let SymbolicExpression::Constant(m) = interactions[0].multiplicity {
+        if let SymbolicExpression::Constant(m) = sends[0].multiplicity {
             assert_eq!(m, -F::TWO);
         } else {
             panic!("Expected constant multiplicity");
         }
 
         // Verify receive multiplicity stayed positive
-        if let SymbolicExpression::Constant(m) = interactions[1].multiplicity {
+        if let SymbolicExpression::Constant(m) = receives[0].multiplicity {
             assert_eq!(m, F::ONE);
         } else {
             panic!("Expected constant multiplicity");
@@ -127,8 +134,9 @@ mod tests {
             });
         }
 
-        let interactions = collector.interactions();
+        let (sends, receives) = collector.interactions();
 
-        assert_eq!(interactions.len(), 10);
+        assert_eq!(sends.len(), 5);
+        assert_eq!(receives.len(), 5);
     }
 }
