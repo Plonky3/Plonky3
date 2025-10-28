@@ -42,7 +42,7 @@ impl UniformSamplingField for KoalaBearParameters {
     /// NOTE: We only include `0` to not have to deal with one-off indexing. `k` must be > 0.
     /// Also, we don't care about k > 30 for KoalaBear.
     const SAMPLING_BITS_M: [u64; 64] = {
-        let PRIME: u64 = <KoalaBearParameters as MontyParameters>::PRIME as u64;
+        let PRIME: u64 = Self::PRIME as u64;
         let mut a = [0u64; 64];
         let mut k = 0;
         while k < 64 {
