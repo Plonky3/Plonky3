@@ -136,20 +136,6 @@ impl UniformSamplingField for BabyBearParameters {
     };
 }
 
-//impl<P, const WIDTH: usize, const RATE: usize> UniformGrindingChallenger
-//    for DuplexChallenger<BabyBear, P, WIDTH, RATE>
-//where
-//    P: CryptographicPermutation<[BabyBear; WIDTH]>,
-//{
-//    fn grind_uniform(&mut self, bits: usize) -> Self::Witness {
-//        self.sample_uniform_bits_impl::<_, BabyBear, { BabyBearParameters::MAX_SINGLE_SAMPLE_BITS }>(
-//            bits,
-//            &BabyBearParameters::SAMPLING_BITS_M,
-//            DuplexChallenger::sample_value,
-//        )
-//    }
-//}
-
 #[cfg(test)]
 mod tests {
     use core::array;
