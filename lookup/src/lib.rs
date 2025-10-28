@@ -16,7 +16,7 @@ pub mod interaction;
 pub use builder::InteractionCollector;
 pub use error::{LookupError, LookupResult};
 pub use gadgets::{InteractionGadget, LogUpGadget};
-pub use interaction::{AirBuilderWithInteractions, Interaction, InteractionKind, eval_symbolic};
+pub use interaction::{Interaction, InteractionKind, MessageBuilder, eval_symbolic};
 
 #[cfg(test)]
 mod tests;

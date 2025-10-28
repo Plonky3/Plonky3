@@ -72,19 +72,16 @@ impl<F: Field, K: InteractionKind> Interaction<F, K> {
 /// Extension trait for AIR builders that support interactions.
 ///
 /// Provides `send` and `receive` methods for defining inter-AIR communication.
-pub trait AirBuilderWithInteractions<K: InteractionKind>: AirBuilder
-where
-    Self::F: Field,
-{
+pub trait MessageBuilder<F: Field, K: InteractionKind> {
     /// Sends an interaction (provides data to a table).
     ///
     /// The multiplicity will be negated internally (send = negative contribution).
-    fn send(&mut self, interaction: Interaction<Self::F, K>);
+    fn send(&mut self, interaction: Interaction<F, K>);
 
     /// Receives an interaction (reads data from a table).
     ///
     /// The multiplicity is used as-is (receive = positive contribution).
-    fn receive(&mut self, interaction: Interaction<Self::F, K>);
+    fn receive(&mut self, interaction: Interaction<F, K>);
 }
 
 /// Evaluates a symbolic expression in the context of an AIR builder.

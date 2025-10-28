@@ -3,51 +3,25 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_air::{AirBuilder, AirBuilderWithPublicValues, PairBuilder};
 use p3_field::Field;
-use p3_matrix::dense::RowMajorMatrix;
-use p3_uni_stark::{Entry, SymbolicExpression, SymbolicVariable};
 
-use crate::interaction::{AirBuilderWithInteractions, Interaction, InteractionKind};
+use crate::interaction::{Interaction, InteractionKind, MessageBuilder};
 
-/// A builder that collects all interactions defined in an AIR's `eval` method.
+/// A builder that collects interactions.
+#[derive(Debug, Default)]
 pub struct InteractionCollector<F: Field, K: InteractionKind> {
-    /// Symbolic variables for the preprocessed trace
-    preprocessed: RowMajorMatrix<SymbolicVariable<F>>,
-    /// Symbolic variables for the main trace
-    main: RowMajorMatrix<SymbolicVariable<F>>,
     /// Collected send interactions
     sends: Vec<Interaction<F, K>>,
     /// Collected receive interactions
     receives: Vec<Interaction<F, K>>,
-    /// Public values
-    public_values: Vec<F>,
 }
 
 impl<F: Field, K: InteractionKind> InteractionCollector<F, K> {
-    /// Creates a new interaction collector with the given trace widths.
-    ///
-    /// # Arguments
-    ///
-    /// - `preprocessed_width`: Width of the preprocessed trace
-    /// - `main_width`: Width of the main trace
-    pub fn new(preprocessed_width: usize, main_width: usize) -> Self {
-        let preprocessed_width = preprocessed_width.max(1);
-
-        let prep_values = (0..preprocessed_width)
-            .map(move |column| SymbolicVariable::new(Entry::Preprocessed { offset: 0 }, column))
-            .collect();
-
-        let main_values = (0..main_width)
-            .map(move |column| SymbolicVariable::new(Entry::Main { offset: 0 }, column))
-            .collect();
-
+    /// Creates a new interaction collector.
+    pub const fn new() -> Self {
         Self {
-            preprocessed: RowMajorMatrix::new(prep_values, preprocessed_width),
-            main: RowMajorMatrix::new(main_values, main_width),
             sends: vec![],
             receives: vec![],
-            public_values: vec![F::ZERO; 0], // Empty by default
         }
     }
 
@@ -66,58 +40,23 @@ impl<F: Field, K: InteractionKind> InteractionCollector<F, K> {
     }
 }
 
-impl<F: Field, K: InteractionKind> AirBuilder for InteractionCollector<F, K> {
-    type F = F;
-    type Expr = SymbolicExpression<F>;
-    type Var = SymbolicVariable<F>;
-    type M = RowMajorMatrix<Self::Var>;
-
-    fn main(&self) -> Self::M {
-        self.main.clone()
-    }
-
-    fn is_first_row(&self) -> Self::Expr {
-        unimplemented!();
-    }
-
-    fn is_last_row(&self) -> Self::Expr {
-        unimplemented!();
-    }
-
-    fn is_transition_window(&self, _size: usize) -> Self::Expr {
-        unimplemented!();
-    }
-
-    fn assert_zero<I: Into<Self::Expr>>(&mut self, _x: I) {
-        // Do nothing - we only collect interactions, not constraints
-    }
-}
-
-impl<F: Field, K: InteractionKind> PairBuilder for InteractionCollector<F, K> {
-    fn preprocessed(&self) -> Self::M {
-        self.preprocessed.clone()
-    }
-}
-
-impl<F: Field, K: InteractionKind> AirBuilderWithPublicValues for InteractionCollector<F, K> {
-    type PublicVar = F;
-
-    fn public_values(&self) -> &[Self::PublicVar] {
-        &self.public_values
-    }
-}
-
-impl<F: Field, K: InteractionKind> AirBuilderWithInteractions<K> for InteractionCollector<F, K> {
-    fn send(&mut self, mut interaction: Interaction<Self::F, K>) {
+impl<F: Field, K: InteractionKind> MessageBuilder<F, K> for InteractionCollector<F, K> {
+    fn send(&mut self, mut interaction: Interaction<F, K>) {
         // Make the multiplicity negative for sends
         //
-        // This is the key semantic: send = negative contribution to LogUp sum
+        // send = negative contribution to LogUp sum
+        //
+        // TODO: in the future, we may want to allow users to specify
+        // the multiplicity of a send interaction.
         interaction.multiplicity = -interaction.multiplicity;
         self.sends.push(interaction);
     }
 
-    fn receive(&mut self, interaction: Interaction<Self::F, K>) {
+    fn receive(&mut self, interaction: Interaction<F, K>) {
         // Multiplicity stays positive for receives
+        //
+        // TODO: in the future, we may want to allow users to specify
+        // the multiplicity of a send interaction.
         self.receives.push(interaction);
     }
 }
@@ -126,6 +65,7 @@ impl<F: Field, K: InteractionKind> AirBuilderWithInteractions<K> for Interaction
 mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
+    use p3_uni_stark::SymbolicExpression;
 
     use super::*;
 
@@ -139,7 +79,7 @@ mod tests {
 
     #[test]
     fn test_collector_basic() {
-        let mut collector = InteractionCollector::<F, TestKind>::new(4, 8);
+        let mut collector = InteractionCollector::<F, TestKind>::new();
 
         // Send an interaction
         collector.send(Interaction {
@@ -177,7 +117,7 @@ mod tests {
 
     #[test]
     fn test_multiple_interactions() {
-        let mut collector = InteractionCollector::<F, TestKind>::new(0, 4);
+        let mut collector = InteractionCollector::<F, TestKind>::new();
 
         // Multiple sends and receives
         for i in 0..5 {
