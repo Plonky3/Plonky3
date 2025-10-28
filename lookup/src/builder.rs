@@ -3,22 +3,56 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+use p3_air::{AirBuilder, AirBuilderWithPublicValues, PairBuilder};
 use p3_field::Field;
+use p3_matrix::dense::RowMajorMatrix;
+use p3_uni_stark::{Entry, SymbolicExpression, SymbolicVariable};
 
 use crate::interaction::{Interaction, MessageBuilder};
 
 /// A builder that collects interactions in insertion order.
-#[derive(Debug, Default)]
+///
+/// This builder supports interaction discovery during AIR evaluation.
+#[derive(Debug)]
 pub struct InteractionCollector<F: Field> {
+    /// Preprocessed trace (symbolic variables)
+    preprocessed: RowMajorMatrix<SymbolicVariable<F>>,
+    /// Main trace (symbolic variables for rows 0 and 1)
+    main: RowMajorMatrix<SymbolicVariable<F>>,
     /// Collected interactions (preserves insertion order)
     interactions: Vec<Interaction<F>>,
+    /// Public values (empty for interaction collection)
+    public_values: Vec<F>,
 }
 
 impl<F: Field> InteractionCollector<F> {
-    /// Creates a new interaction collector.
-    pub const fn new() -> Self {
+    /// Creates a new interaction collector with the specified trace widths.
+    ///
+    /// # Arguments
+    /// * `preprocessed_width` - Width of the preprocessed trace (0 if no preprocessed columns)
+    /// * `main_width` - Width of the main trace
+    pub fn new(preprocessed_width: usize, main_width: usize) -> Self {
+        let preprocessed_width = preprocessed_width.max(1);
+
+        // Create symbolic variables for preprocessed trace (row 0 only)
+        let prep_values: Vec<SymbolicVariable<F>> = (0..preprocessed_width)
+            .map(|col| SymbolicVariable::new(Entry::Preprocessed { offset: 0 }, col))
+            .collect();
+
+        // Create symbolic variables for main trace (rows 0 and 1 for transitions)
+        let mut main_values: Vec<SymbolicVariable<F>> = Vec::with_capacity(main_width * 2);
+        main_values.extend(
+            (0..main_width).map(|col| SymbolicVariable::new(Entry::Main { offset: 0 }, col)),
+        );
+        main_values.extend(
+            (0..main_width).map(|col| SymbolicVariable::new(Entry::Main { offset: 1 }, col)),
+        );
+
         Self {
+            preprocessed: RowMajorMatrix::new(prep_values, preprocessed_width),
+            main: RowMajorMatrix::new(main_values, main_width),
             interactions: vec![],
+            public_values: vec![],
         }
     }
 
@@ -30,6 +64,57 @@ impl<F: Field> InteractionCollector<F> {
     /// Returns a reference to the collected interactions without consuming the builder.
     pub fn interactions(&self) -> &[Interaction<F>] {
         &self.interactions
+    }
+}
+
+impl<F: Field> Default for InteractionCollector<F> {
+    fn default() -> Self {
+        Self::new(0, 0)
+    }
+}
+
+impl<F: Field> AirBuilder for InteractionCollector<F> {
+    type F = F;
+    type Expr = SymbolicExpression<F>;
+    type Var = SymbolicVariable<F>;
+    type M = RowMajorMatrix<Self::Var>;
+
+    fn main(&self) -> Self::M {
+        self.main.clone()
+    }
+
+    fn is_first_row(&self) -> Self::Expr {
+        SymbolicExpression::IsFirstRow
+    }
+
+    fn is_last_row(&self) -> Self::Expr {
+        SymbolicExpression::IsLastRow
+    }
+
+    fn is_transition_window(&self, size: usize) -> Self::Expr {
+        assert_eq!(
+            size, 2,
+            "InteractionCollector only supports transition windows of size 2"
+        );
+        SymbolicExpression::IsTransition
+    }
+
+    fn assert_zero<I: Into<Self::Expr>>(&mut self, _x: I) {
+        // No-op for interaction collection
+    }
+}
+
+impl<F: Field> PairBuilder for InteractionCollector<F> {
+    fn preprocessed(&self) -> Self::M {
+        self.preprocessed.clone()
+    }
+}
+
+impl<F: Field> AirBuilderWithPublicValues for InteractionCollector<F> {
+    type PublicVar = F;
+
+    fn public_values(&self) -> &[Self::PublicVar] {
+        &self.public_values
     }
 }
 
@@ -58,7 +143,7 @@ mod tests {
 
     #[test]
     fn test_collector_basic() {
-        let mut collector = InteractionCollector::<F>::new();
+        let mut collector = InteractionCollector::<F>::new(0, 1);
 
         // Send an interaction
         collector.send(Interaction {
@@ -93,7 +178,7 @@ mod tests {
 
     #[test]
     fn test_multiple_interactions() {
-        let mut collector = InteractionCollector::<F>::new();
+        let mut collector = InteractionCollector::<F>::new(0, 1);
 
         // Multiple sends and receives (interleaved)
         for i in 0..5 {
