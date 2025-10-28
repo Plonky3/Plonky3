@@ -292,9 +292,9 @@ impl InteractionDiscovery<F> for RangeCheckAir {
         for lookup_idx in 0..self.num_lookups {
             let offset = lookup_idx * 3;
 
-            let val = local[offset].clone();
-            let table_val = local[offset + 1].clone();
-            let mult = local[offset + 2].clone();
+            let val = local[offset];
+            let table_val = local[offset + 1];
+            let mult = local[offset + 2];
 
             collector.receive(Interaction::new(
                 vec![val.into()],
@@ -1165,15 +1165,15 @@ impl InteractionDiscovery<F> for AddAir {
         let local = main.row_slice(0).unwrap();
 
         // Extract columns for the lookup entries: [inp1, inp2, sum]
-        let inp1 = local[0].clone();
-        let inp2 = local[1].clone();
-        let sum = local[2].clone();
+        let inp1 = local[0];
+        let inp2 = local[1];
+        let sum = local[2];
 
         // Extract columns for the LUT entries: [table_inp1, table_inp2, table_sum]
-        let table_inp1 = local[3].clone();
-        let table_inp2 = local[4].clone();
-        let table_sum = local[5].clone();
-        let mult = local[6].clone();
+        let table_inp1 = local[3];
+        let table_inp2 = local[4];
+        let table_sum = local[5];
+        let mult = local[6];
 
         // Local lookup: receive the input tuple, send from the table
         collector.receive(Interaction::new(
@@ -1181,22 +1181,14 @@ impl InteractionDiscovery<F> for AddAir {
             SymbolicExpression::Constant(F::ONE),
         ));
         collector.send(Interaction::new(
-            vec![
-                table_inp1.clone().into(),
-                table_inp2.clone().into(),
-                table_sum.clone().into(),
-            ],
+            vec![table_inp1.into(), table_inp2.into(), table_sum.into()],
             mult.into(),
         ));
 
         // Global lookup (if enabled)
         if self.is_global_send {
             collector.send(Interaction::new(
-                vec![
-                    table_inp1.clone().into(),
-                    table_inp2.clone().into(),
-                    table_sum.clone().into(),
-                ],
+                vec![table_inp1.into(), table_inp2.into(), table_sum.into()],
                 SymbolicExpression::Constant(F::ONE),
             ));
         }
