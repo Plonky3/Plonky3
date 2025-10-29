@@ -29,7 +29,7 @@ pub struct MultiCommitments<Com> {
     /// Commitment to all main trace matrices (one per instance).
     pub main: Com,
     /// Commitment to all permutation polynomials (one per instance).
-    pub permutation: Com,
+    pub permutation: Option<Com>,
     /// Commitment to all quotient polynomial chunks (across all instances).
     pub quotient_chunks: Com,
 }

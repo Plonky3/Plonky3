@@ -246,7 +246,15 @@ where
         lookup_gadget: &LG,
     ) {
         <Self as Air<AB>>::eval(self, builder);
-        lookup_gadget.eval_lookups(builder, lookups, lookup_data);
+
+        if !lookup_data.is_empty() {
+            lookup_gadget.eval_lookups(builder, lookups, lookup_data);
+        } else {
+            assert!(
+                lookups.is_empty(),
+                "Lookup data missing for AIR with lookups"
+            );
+        }
     }
 }
 

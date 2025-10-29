@@ -141,6 +141,12 @@ where
         challenger.observe_slice(pv);
     }
 
+    // Validate the shape of the lookup commitment.
+    let is_lookup = commitments.permutation.is_some();
+    if is_lookup != all_lookups.iter().any(|c| !c.is_empty()) {
+        return Err(VerificationError::InvalidProofShape);
+    }
+
     // Fetch lookups and sample their challenges.
     let mut global_perm_challenges = HashMap::new();
     let mut challenges_per_instance = Vec::with_capacity(airs.len());
@@ -170,8 +176,15 @@ where
         challenges_per_instance.push(instance_challenges);
     }
 
-    // Then, observe the permutation tables.
-    challenger.observe(commitments.permutation.clone());
+    // Then, observe the permutation tables, if any.
+    if is_lookup {
+        challenger.observe(
+            commitments
+                .permutation
+                .clone()
+                .expect("We checked that the commitment exists"),
+        );
+    }
 
     // Sample alpha for constraint folding
     let alpha = challenger.sample_algebra_element();
@@ -220,23 +233,26 @@ where
         .collect::<Result<Vec<_>, VerificationError<PcsError<SC>>>>()?;
     coms_to_verify.push((commitments.main.clone(), trace_round));
 
-    let permutation_round: Vec<_> = ext_trace_domains
-        .iter()
-        .zip(opened_values.instances.iter())
-        .map(|(ext_dom, inst_opened_vals)| {
-            let zeta_next = ext_dom
-                .next_point(zeta)
-                .ok_or(VerificationError::NextPointUnavailable)?;
-            Ok((
-                *ext_dom,
-                vec![
-                    (zeta, inst_opened_vals.permutation_local.clone()),
-                    (zeta_next, inst_opened_vals.permutation_next.clone()),
-                ],
-            ))
-        })
-        .collect::<Result<Vec<_>, VerificationError<PcsError<SC>>>>()?;
-    coms_to_verify.push((commitments.permutation.clone(), permutation_round));
+    if is_lookup {
+        let permutation_commit = commitments.permutation.clone().unwrap();
+        let permutation_round: Vec<_> = ext_trace_domains
+            .iter()
+            .zip(opened_values.instances.iter())
+            .map(|(ext_dom, inst_opened_vals)| {
+                let zeta_next = ext_dom
+                    .next_point(zeta)
+                    .ok_or(VerificationError::NextPointUnavailable)?;
+                Ok((
+                    *ext_dom,
+                    vec![
+                        (zeta, inst_opened_vals.permutation_local.clone()),
+                        (zeta_next, inst_opened_vals.permutation_next.clone()),
+                    ],
+                ))
+            })
+            .collect::<Result<Vec<_>, VerificationError<PcsError<SC>>>>()?;
+        coms_to_verify.push((permutation_commit.clone(), permutation_round));
+    }
 
     // Quotient chunks round: flatten per-instance chunks to match commit order.
     // Use extended domains for the outer commit domain, with size 2^(base_db + lqd + zk), and split into 2^(lqd+zk) chunks.
