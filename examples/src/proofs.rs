@@ -59,6 +59,7 @@ const fn get_poseidon2_mmcs<
 /// - The Proof Goal (Choice of both hash function and desired number of hashes to prove)
 /// - The DFT
 #[inline]
+#[allow(clippy::needless_pass_by_value)]
 pub fn prove_monty31_keccak<
     F: PrimeField32 + TwoAdicField,
     EF: ExtensionField<F>,
@@ -97,6 +98,7 @@ where
 /// - The Proof Goal (Choice of Hash function and number of hashes to prove)
 /// - The DFT
 #[inline]
+#[allow(clippy::needless_pass_by_value)]
 pub fn prove_monty31_poseidon2<
     F: PrimeField32 + TwoAdicField,
     EF: ExtensionField<F>,
@@ -139,6 +141,7 @@ where
 /// It currently allows the user to choose:
 /// - The Proof Goal (Choice of Hash function and number of hashes to prove)
 #[inline]
+#[allow(clippy::needless_pass_by_value)]
 pub fn prove_m31_keccak<
     PG: ExampleHashAir<
             Mersenne31,
@@ -175,6 +178,7 @@ pub fn prove_m31_keccak<
 /// It currently allows the user to choose:
 /// - The Proof Goal (Choice of Hash function and number of hashes to prove)
 #[inline]
+#[allow(clippy::needless_pass_by_value)]
 pub fn prove_m31_poseidon2<
     F: PrimeField64 + ComplexExtendable,
     EF: ExtensionField<F>,

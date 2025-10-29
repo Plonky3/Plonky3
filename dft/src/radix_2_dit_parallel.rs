@@ -306,7 +306,7 @@ fn first_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F])
                 dit_layer(
                     &mut submat,
                     layer,
-                    twiddles.iter().copied().step_by(layer_pow),
+                    &twiddles.iter().copied().step_by(layer_pow),
                     backwards,
                 );
                 backwards = !backwards;
@@ -331,7 +331,7 @@ fn first_half_general<F: Field>(
                 dit_layer(
                     &mut submat,
                     layer,
-                    twiddles[layer_rev].iter().copied(),
+                    &twiddles[layer_rev].iter().copied(),
                     backwards,
                 );
                 backwards = !backwards;
@@ -363,7 +363,7 @@ fn first_half_general_oop<F: Field>(
                 &src_submat,
                 &mut dst_submat_maybe,
                 0,
-                twiddles[layer_rev].iter().copied(),
+                &twiddles[layer_rev].iter().copied(),
             );
 
             // submat is now initialized.
@@ -380,7 +380,7 @@ fn first_half_general_oop<F: Field>(
                 dit_layer(
                     &mut dst_submat,
                     layer,
-                    twiddles[layer_rev].iter().copied(),
+                    &twiddles[layer_rev].iter().copied(),
                     backwards,
                 );
                 backwards = !backwards;
@@ -457,7 +457,7 @@ fn second_half_general<F: Field>(
 fn dit_layer<F: Field>(
     submat: &mut RowMajorMatrixViewMut<'_, F>,
     layer: usize,
-    twiddles: impl Iterator<Item = F> + Clone,
+    twiddles: &(impl Iterator<Item = F> + Clone),
     backwards: bool,
 ) {
     let half_block_size = 1 << layer;
@@ -494,7 +494,7 @@ fn dit_layer_oop<F: Field>(
     src: &RowMajorMatrixView<'_, F>,
     dst: &mut RowMajorMatrixViewMut<'_, MaybeUninit<F>>,
     layer: usize,
-    twiddles: impl Iterator<Item = F> + Clone,
+    twiddles: &(impl Iterator<Item = F> + Clone),
 ) {
     debug_assert_eq!(src.dimensions(), dst.dimensions());
     let half_block_size = 1 << layer;
