@@ -66,6 +66,6 @@ fn main() -> Result<(), impl Debug> {
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs, challenger);
 
-    let proof = prove(&config, &KeccakAir {}, trace, &vec![]);
-    verify(&config, &KeccakAir {}, &proof, &vec![])
+    let proof = prove(&config, &KeccakAir {}, trace, &[]);
+    verify(&config, &KeccakAir {}, &proof, &[])
 }
