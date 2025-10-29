@@ -635,7 +635,8 @@ fn test_range_check_end_to_end_valid() {
         .row(aux_trace.height() - 1)
         .unwrap()
         .into_iter()
-        .collect::<Vec<EF>>()[0];
+        .next()
+        .unwrap();
     let last_row_data = main_trace
         .row(main_trace.height() - 1)
         .unwrap()
