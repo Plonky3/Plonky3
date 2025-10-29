@@ -71,7 +71,7 @@ pub fn verify_constraints<SC, A, PcsErr>(
     air: &A,
     trace_local: &[SC::Challenge],
     trace_next: &[SC::Challenge],
-    public_values: &Vec<Val<SC>>,
+    public_values: &[Val<SC>],
     trace_domain: Domain<SC>,
     zeta: SC::Challenge,
     alpha: SC::Challenge,
@@ -113,7 +113,7 @@ pub fn verify<SC, A>(
     config: &SC,
     air: &A,
     proof: &Proof<SC>,
-    public_values: &Vec<Val<SC>>,
+    public_values: &[Val<SC>],
 ) -> Result<(), VerificationError<PcsError<SC>>>
 where
     SC: StarkGenericConfig,

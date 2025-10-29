@@ -1,5 +1,3 @@
-use alloc::vec::Vec;
-
 use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues};
 use p3_field::Field;
 use p3_matrix::Matrix;
@@ -18,7 +16,7 @@ use tracing::instrument;
 /// - `main`: The trace matrix (rows of witness values)
 /// - `public_values`: Public values provided to the builder
 #[instrument(name = "check constraints", skip_all)]
-pub(crate) fn check_constraints<F, A>(air: &A, main: &RowMajorMatrix<F>, public_values: &Vec<F>)
+pub(crate) fn check_constraints<F, A>(air: &A, main: &RowMajorMatrix<F>, public_values: &[F])
 where
     F: Field,
     A: for<'a> Air<DebugConstraintBuilder<'a, F>>,
@@ -193,7 +191,7 @@ mod tests {
             BabyBear::new(4), // Row 3 (last)
         ];
         let main = RowMajorMatrix::new(values, 2);
-        check_constraints(&air, &main, &vec![BabyBear::new(4); 2]);
+        check_constraints(&air, &main, &[BabyBear::new(4); 2]);
     }
 
     #[test]
@@ -212,7 +210,7 @@ mod tests {
             BabyBear::new(6), // Row 3
         ];
         let main = RowMajorMatrix::new(values, 2);
-        check_constraints(&air, &main, &vec![BabyBear::new(6); 2]);
+        check_constraints(&air, &main, &[BabyBear::new(6); 2]);
     }
 
     #[test]
@@ -232,7 +230,7 @@ mod tests {
         ];
         let main = RowMajorMatrix::new(values, 2);
         // Wrong public value on column 1
-        check_constraints(&air, &main, &vec![BabyBear::new(4), BabyBear::new(5)]);
+        check_constraints(&air, &main, &[BabyBear::new(4), BabyBear::new(5)]);
     }
 
     #[test]
@@ -246,6 +244,6 @@ mod tests {
             BabyBear::new(77), // Row 0
         ];
         let main = RowMajorMatrix::new(values, 2);
-        check_constraints(&air, &main, &vec![BabyBear::new(99), BabyBear::new(77)]);
+        check_constraints(&air, &main, &[BabyBear::new(99), BabyBear::new(77)]);
     }
 }
