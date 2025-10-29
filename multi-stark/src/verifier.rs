@@ -2,15 +2,18 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use hashbrown::HashMap;
+use p3_air::Air;
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{Algebra, BasedVectorSpace, PrimeCharacteristicRing};
+use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 use p3_lookup::folders::VerifierConstraintFolderWithLookups;
-use p3_lookup::lookup_traits::{AirLookupHandler, Kind, Lookup, LookupData, LookupGadget};
+use p3_lookup::lookup_traits::{
+    AirLookupHandler, AirNoLookup, EmptyLookupGadget, Kind, Lookup, LookupData, LookupGadget,
+};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use p3_uni_stark::{
-    ExtensionSymbolicAirBuilder, SymbolicExpression, VerificationError, VerifierConstraintFolder,
+    SymbolicAirBuilder, SymbolicExpression, VerificationError, VerifierConstraintFolder,
     recompose_quotient_from_chunks,
 };
 use p3_util::zip_eq::zip_eq;
@@ -33,8 +36,8 @@ pub fn verify_multi<SC, A, LG>(
 ) -> Result<(), VerificationError<PcsError<SC>>>
 where
     SC: SGC,
-    SymbolicExpression<SC::Challenge>: Algebra<SymbolicExpression<Val<SC>>>,
-    A: AirLookupHandler<ExtensionSymbolicAirBuilder<Val<SC>, SC::Challenge>>
+    SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
+    A: AirLookupHandler<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
         + for<'a> AirLookupHandler<VerifierConstraintFolderWithLookups<'a, SC>>,
     Challenge<SC>: BasedVectorSpace<Val<SC>>,
     LG: LookupGadget,
@@ -217,6 +220,24 @@ where
         .collect::<Result<Vec<_>, VerificationError<PcsError<SC>>>>()?;
     coms_to_verify.push((commitments.main.clone(), trace_round));
 
+    let permutation_round: Vec<_> = ext_trace_domains
+        .iter()
+        .zip(opened_values.instances.iter())
+        .map(|(ext_dom, inst_opened_vals)| {
+            let zeta_next = ext_dom
+                .next_point(zeta)
+                .ok_or(VerificationError::NextPointUnavailable)?;
+            Ok((
+                *ext_dom,
+                vec![
+                    (zeta, inst_opened_vals.permutation_local.clone()),
+                    (zeta_next, inst_opened_vals.permutation_next.clone()),
+                ],
+            ))
+        })
+        .collect::<Result<Vec<_>, VerificationError<PcsError<SC>>>>()?;
+    coms_to_verify.push((commitments.permutation.clone(), permutation_round));
+
     // Quotient chunks round: flatten per-instance chunks to match commit order.
     // Use extended domains for the outer commit domain, with size 2^(base_db + lqd + zk), and split into 2^(lqd+zk) chunks.
     let quotient_domains: Vec<Vec<Domain<SC>>> = (0..degree_bits.len())
@@ -356,4 +377,34 @@ where
     }
 
     Ok(())
+}
+
+pub fn verify_multi_no_lookups<SC, A>(
+    config: &SC,
+    airs: &[A],
+    proof: &MultiProof<SC>,
+    public_values: &[Vec<Val<SC>>],
+) -> Result<(), VerificationError<PcsError<SC>>>
+where
+    SC: SGC,
+    SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
+    A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
+        + for<'a> Air<VerifierConstraintFolderWithLookups<'a, SC>>
+        + Clone,
+    Challenge<SC>: BasedVectorSpace<Val<SC>>,
+{
+    let mut no_lookup_airs = airs
+        .iter()
+        .map(|a| AirNoLookup::new(a.clone()))
+        .collect::<Vec<_>>();
+
+    let empty_lookup_gadget = EmptyLookupGadget {};
+
+    verify_multi(
+        config,
+        &mut no_lookup_airs,
+        proof,
+        public_values,
+        &empty_lookup_gadget,
+    )
 }

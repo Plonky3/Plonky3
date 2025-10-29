@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
-use p3_field::{Algebra, ExtensionField, Field};
+use p3_field::{ExtensionField, Field};
 use p3_lookup::lookup_traits::{AirLookupHandler, Lookup, LookupData, LookupGadget};
-use p3_uni_stark::{ExtensionSymbolicAirBuilder, SymbolicExpression};
+use p3_uni_stark::{SymbolicAirBuilder, SymbolicExpression};
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
 
@@ -18,8 +18,8 @@ pub fn get_log_quotient_degree<F, EF, A, LG>(
 where
     F: Field,
     EF: ExtensionField<F>,
-    A: AirLookupHandler<ExtensionSymbolicAirBuilder<F, EF>>,
-    SymbolicExpression<EF>: Algebra<SymbolicExpression<F>>,
+    A: AirLookupHandler<SymbolicAirBuilder<F, EF>>,
+    SymbolicExpression<EF>: From<SymbolicExpression<F>>,
     LG: LookupGadget,
 {
     assert!(is_zk <= 1, "is_zk must be either 0 or 1");
@@ -52,8 +52,8 @@ pub fn get_max_constraint_degree<F, EF, A, LG>(
 where
     F: Field,
     EF: ExtensionField<F>,
-    A: AirLookupHandler<ExtensionSymbolicAirBuilder<F, EF>>,
-    SymbolicExpression<EF>: Algebra<SymbolicExpression<F>>,
+    A: AirLookupHandler<SymbolicAirBuilder<F, EF>>,
+    SymbolicExpression<EF>: From<SymbolicExpression<F>>,
     LG: LookupGadget,
 {
     let (base, extension) = get_symbolic_constraints(
@@ -85,18 +85,14 @@ pub fn get_symbolic_constraints<F, EF, A, LG>(
 where
     F: Field,
     EF: ExtensionField<F>,
-    A: AirLookupHandler<ExtensionSymbolicAirBuilder<F, EF>>,
-    SymbolicExpression<EF>: Algebra<SymbolicExpression<F>>,
+    A: AirLookupHandler<SymbolicAirBuilder<F, EF>>,
+    SymbolicExpression<EF>: From<SymbolicExpression<F>>,
     LG: LookupGadget,
 {
-    let symbolic_lookup_data = lookup_data
-        .iter()
-        .map(|ld| ld.to_symbolic())
-        .collect::<Vec<_>>();
     let num_lookups = contexts.len();
     let num_aux_cols = num_lookups * lookup_gadget.num_aux_cols();
     let num_challenges = num_lookups * lookup_gadget.num_challenges();
-    let mut builder = ExtensionSymbolicAirBuilder::new(
+    let mut builder = SymbolicAirBuilder::new(
         preprocessed_width,
         air.width(),
         num_public_values,
@@ -104,13 +100,7 @@ where
         num_challenges,
     );
     // Evaluate AIR and lookup constraints.
-    <A as AirLookupHandler<_>>::eval(
-        air,
-        &mut builder,
-        &contexts,
-        &symbolic_lookup_data,
-        lookup_gadget,
-    );
+    <A as AirLookupHandler<_>>::eval(air, &mut builder, &contexts, &lookup_data, lookup_gadget);
     let base_constraints = builder.base_constraints();
     let extension_constraints = builder.extension_constraints();
     (base_constraints, extension_constraints)

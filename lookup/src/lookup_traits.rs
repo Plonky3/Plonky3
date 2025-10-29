@@ -18,7 +18,7 @@ pub enum LookupError {
     GlobalCumulativeMismatch,
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 /// Data required for global lookup arguments in a multi-STARK proof.
 pub struct LookupData<F: Clone> {
     // Index of the auxiliary column (if there are multiple auxiliary columns, this is the first one)
@@ -72,7 +72,7 @@ pub trait LookupGadget {
         &self,
         builder: &mut AB,
         context: Lookup<AB::F>,
-        expected_cumulated: AB::ExprEF,
+        expected_cumulated: AB::EF,
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues;
 
@@ -81,7 +81,7 @@ pub trait LookupGadget {
         builder: &mut AB,
         contexts: &[Lookup<AB::F>],
         // Assumed to be sorted by auxiliary_index.
-        lookup_data: &[LookupData<AB::ExprEF>],
+        lookup_data: &[LookupData<AB::EF>],
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
     {
@@ -207,8 +207,6 @@ impl<F: Field> Lookup<F> {
 pub trait AirLookupHandler<AB>: Air<AB>
 where
     AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
-    AB::Var: Copy,
-    AB::ExprEF: From<AB::Var> + From<AB::F>,
 {
     /// Register a lookup to be used in this AIR.
     /// This method can be used before proving or verifying, as the resulting data is shared between the prover and the verifier.
@@ -244,7 +242,7 @@ where
         &self,
         builder: &mut AB,
         lookups: &[Lookup<AB::F>],
-        lookup_data: &[LookupData<AB::ExprEF>],
+        lookup_data: &[LookupData<AB::EF>],
         lookup_gadget: &LG,
     ) {
         <Self as Air<AB>>::eval(self, builder);
@@ -252,103 +250,66 @@ where
     }
 }
 
-/// Takes a symbolic expression and converts it into an expression in the context of the provided AirBuilder.
-pub fn symbolic_to_expr<AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues>(
-    builder: &mut AB,
-    symbolic: &SymbolicExpression<AB::F>,
-) -> AB::ExprEF {
-    let turn_into_expr = |values: &[AB::Var]| {
-        values
-            .iter()
-            .map(|v| AB::Expr::from(v.clone()))
-            .collect::<Vec<_>>()
-    };
-    let main = builder.main();
-    let local_values = &turn_into_expr(&main.row_slice(0).unwrap());
-    let next_values = &turn_into_expr(&main.row_slice(1).unwrap());
-
-    let public_values = builder
-        .public_values()
-        .iter()
-        .map(|v| AB::ExprEF::from((*v).into()))
-        .collect::<Vec<_>>();
-
-    match symbolic {
-        SymbolicExpression::Constant(c) => AB::ExprEF::from(AB::EF::from(*c)),
-        SymbolicExpression::Variable(v) => {
-            let get_val = |offset: usize,
-                           index: usize,
-                           local_vals: &[AB::Expr],
-                           next_vals: &[AB::Expr]| match offset {
-                0 => AB::ExprEF::from(local_vals[index].clone()),
-                1 => AB::ExprEF::from(next_vals[index].clone()),
+/// Evaluates a symbolic expression in the context of an AIR builder.
+///
+/// Converts `SymbolicExpression<F>` to the builder's expression type `AB::Expr`.
+pub fn eval_symbolic<AB>(builder: &AB, expr: &SymbolicExpression<AB::F>) -> AB::Expr
+where
+    AB: AirBuilder + PairBuilder + AirBuilderWithPublicValues + PermutationAirBuilder,
+{
+    match expr {
+        SymbolicExpression::Variable(v) => match v.entry {
+            Entry::Main { offset } => match offset {
+                0 => builder.main().row_slice(0).unwrap()[v.index].clone().into(),
+                1 => builder.main().row_slice(1).unwrap()[v.index].clone().into(),
                 _ => panic!("Cannot have expressions involving more than two rows."),
-            };
-
-            match v.entry {
-                Entry::Main { offset } => get_val(offset, v.index, local_values, next_values),
-                Entry::Public => public_values[v.index].clone(),
-                _ => unimplemented!(),
-            }
-        }
+            },
+            Entry::Public => builder.public_values()[v.index].into(),
+            _ => unimplemented!("Entry type {:?} not supported in interactions", v.entry),
+        },
+        SymbolicExpression::IsFirstRow => builder.is_first_row(),
+        SymbolicExpression::IsLastRow => builder.is_last_row(),
+        SymbolicExpression::IsTransition => builder.is_transition_window(2),
+        SymbolicExpression::Constant(c) => AB::Expr::from(*c),
         SymbolicExpression::Add { x, y, .. } => {
-            let x_expr = symbolic_to_expr(builder, x);
-            let y_expr = symbolic_to_expr(builder, y);
-            x_expr + y_expr
-        }
-        SymbolicExpression::Mul { x, y, .. } => {
-            let x_expr = symbolic_to_expr(builder, x);
-            let y_expr = symbolic_to_expr(builder, y);
-            x_expr * y_expr
+            eval_symbolic(builder, x) + eval_symbolic(builder, y)
         }
         SymbolicExpression::Sub { x, y, .. } => {
-            let x_expr = symbolic_to_expr(builder, x);
-            let y_expr = symbolic_to_expr(builder, y);
-            x_expr - y_expr
+            eval_symbolic(builder, x) - eval_symbolic(builder, y)
         }
-        SymbolicExpression::Neg { x, .. } => {
-            let x_expr = symbolic_to_expr(builder, x);
-            -x_expr
+        SymbolicExpression::Neg { x, .. } => -eval_symbolic(builder, x),
+        SymbolicExpression::Mul { x, y, .. } => {
+            eval_symbolic(builder, x) * eval_symbolic(builder, y)
         }
-        SymbolicExpression::IsFirstRow => builder.is_first_row().into(),
-        SymbolicExpression::IsLastRow => builder.is_last_row().into(),
-        SymbolicExpression::IsTransition => builder.is_transition().into(),
     }
 }
 
 /// Wrapper around AIRs for AIRs that do not use lookups.
-pub struct AirNoLookup<AB: AirBuilder, A: Air<AB>> {
+#[derive(Clone)]
+pub struct AirNoLookup<A> {
     air: A,
-    _marker: core::marker::PhantomData<AB>,
 }
 
-impl<AB: AirBuilder + Sync, A: Air<AB>> AirNoLookup<AB, A> {
+impl<A> AirNoLookup<A> {
     pub fn new(air: A) -> Self {
-        Self {
-            air,
-            _marker: core::marker::PhantomData,
-        }
+        Self { air }
     }
 }
 
-impl<AB: AirBuilder + Sync, A: Air<AB>> BaseAir<AB::F> for AirNoLookup<AB, A> {
+impl<F, A: BaseAir<F>> BaseAir<F> for AirNoLookup<A> {
     fn width(&self) -> usize {
         self.air.width()
     }
 }
 
-impl<AB: AirBuilder + Sync, A: Air<AB>> Air<AB> for AirNoLookup<AB, A> {
+impl<AB: AirBuilder, A: Air<AB>> Air<AB> for AirNoLookup<A> {
     fn eval(&self, builder: &mut AB) {
         self.air.eval(builder);
     }
 }
 
-impl<AB: AirBuilderWithPublicValues + PairBuilder + PermutationAirBuilder + Sync, A: Air<AB>>
-    AirLookupHandler<AB> for AirNoLookup<AB, A>
-where
-    <AB as AirBuilder>::Var: Copy,
-    <AB as AirBuilder>::F: Field,
-    AB::ExprEF: From<AB::Var> + From<AB::F>,
+impl<AB: AirBuilderWithPublicValues + PairBuilder + PermutationAirBuilder, A: Air<AB>>
+    AirLookupHandler<AB> for AirNoLookup<A>
 {
     fn add_lookup_columns(&mut self) -> Vec<usize> {
         vec![]
@@ -380,7 +341,7 @@ impl LookupGadget for EmptyLookupGadget {
         &self,
         _builder: &mut AB,
         _context: Lookup<AB::F>,
-        _expected_cumulated: AB::ExprEF,
+        _expected_cumulated: AB::EF,
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
     {
@@ -404,6 +365,6 @@ impl LookupGadget for EmptyLookupGadget {
         _lookup_data: &mut [LookupData<EF>],
         _permutation_challenges: &[EF],
     ) -> RowMajorMatrix<EF> {
-        panic!("No lookup permutation generated for EmptyLookupGadget");
+        RowMajorMatrix::new(vec![], 0)
     }
 }

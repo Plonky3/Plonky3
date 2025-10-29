@@ -24,7 +24,7 @@ use p3_air::{AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder, Permutat
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::{Matrix, dense::RowMajorMatrix};
 
-use crate::lookup_traits::{Kind, Lookup, LookupData, LookupError, LookupGadget, symbolic_to_expr};
+use crate::lookup_traits::{Kind, Lookup, LookupData, LookupError, LookupGadget, eval_symbolic};
 
 /// Core LogUp gadget implementing lookup arguments via logarithmic derivatives.
 ///
@@ -134,7 +134,7 @@ impl LogUpGadget {
         &self,
         builder: &mut AB,
         context: Lookup<AB::F>,
-        opt_expected_cumulated: Option<AB::ExprEF>,
+        opt_expected_cumulated: Option<AB::EF>,
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
     {
@@ -162,14 +162,14 @@ impl LogUpGadget {
             .map(|exprs| {
                 exprs
                     .iter()
-                    .map(|expr| symbolic_to_expr(builder, expr))
+                    .map(|expr| eval_symbolic(builder, expr).into())
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
 
         let multiplicities = multiplicities_exprs
             .iter()
-            .map(|expr| symbolic_to_expr(builder, expr))
+            .map(|expr| eval_symbolic(builder, expr).into())
             .collect::<Vec<_>>();
 
         // Access the permutation (aux) table. It carries the running sum column `s`.
@@ -224,7 +224,7 @@ impl LogUpGadget {
             );
 
             // Final constraint:
-            let final_val = (expected_cumulated.clone() - s_local) * common_denominator - numerator;
+            let final_val = (s_local - expected_cumulated.clone()) * common_denominator - numerator;
             builder.when_last_row().assert_zero_ext(final_val);
         } else {
             // If we don't have an `expected_cumulated`, we are in a local lookup update.
@@ -291,7 +291,7 @@ impl LookupGadget for LogUpGadget {
         &self,
         builder: &mut AB,
         context: Lookup<AB::F>,
-        expected_cumulated: AB::ExprEF,
+        expected_cumulated: AB::EF,
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
     {
