@@ -1,14 +1,16 @@
 use alloc::vec::Vec;
 use alloc::{string::String, vec};
 use core::ops::Neg;
-use p3_matrix::dense::RowMajorMatrix;
-
 use p3_air::{
-    Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, PairBuilder, PermutationAirBuilder,
+    Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, ExtensionBuilder, PairBuilder,
+    PermutationAirBuilder,
 };
-use p3_field::{ExtensionField, Field};
+use p3_field::Field;
+use p3_field::PrimeCharacteristicRing;
 use p3_matrix::Matrix;
-use p3_uni_stark::{Entry, SymbolicExpression};
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
+use p3_matrix::stack::ViewPair;
+use p3_uni_stark::{Entry, StarkGenericConfig, SymbolicExpression, Val};
 use serde::{Deserialize, Serialize};
 
 /// Defines errors that can occur during lookup verification.
@@ -109,13 +111,14 @@ pub trait LookupGadget {
         }
     }
 
-    fn generate_permutation<F: Field, EF: ExtensionField<F>>(
+    fn generate_permutation<SC: StarkGenericConfig>(
         &self,
-        main: &RowMajorMatrix<F>,
-        lookups: &[Lookup<F>],
-        lookup_data: &mut [LookupData<EF>],
-        permutation_challenges: &[EF],
-    ) -> RowMajorMatrix<EF>;
+        main: &RowMajorMatrix<Val<SC>>,
+        public_values: &[Val<SC>],
+        lookups: &[Lookup<Val<SC>>],
+        lookup_data: &mut [LookupData<SC::Challenge>],
+        permutation_challenges: &[SC::Challenge],
+    ) -> RowMajorMatrix<SC::Challenge>;
 
     /// Evaluates the final cumulated value over all AIRs involved in the interaction,
     /// and checks that it is equal to the expected final value.
@@ -258,12 +261,114 @@ where
     }
 }
 
+pub struct LookupTraceBuilder<'a, SC: StarkGenericConfig> {
+    main: ViewPair<'a, Val<SC>>,
+    public_values: &'a [Val<SC>],
+    permutation_challenges: Vec<SC::Challenge>,
+    row: usize,
+}
+
+impl<'a, SC: StarkGenericConfig> LookupTraceBuilder<'a, SC> {
+    pub fn new(
+        main: ViewPair<'a, Val<SC>>,
+        public_values: &'a [Val<SC>],
+        permutation_challenges: Vec<SC::Challenge>,
+    ) -> Self {
+        Self {
+            main,
+            public_values,
+            permutation_challenges,
+            row: 0,
+        }
+    }
+}
+
+impl<'a, SC: StarkGenericConfig> AirBuilder for LookupTraceBuilder<'a, SC> {
+    type F = Val<SC>;
+    type Expr = Val<SC>;
+    type Var = Val<SC>;
+    type M = ViewPair<'a, Val<SC>>;
+
+    #[inline]
+    fn main(&self) -> Self::M {
+        self.main
+    }
+
+    #[inline]
+    fn is_first_row(&self) -> Self::F {
+        Self::F::from_bool(self.row == 0)
+    }
+
+    #[inline]
+    fn is_last_row(&self) -> Self::F {
+        Self::F::from_bool(self.row + 1 == self.main.height())
+    }
+
+    #[inline]
+    fn is_transition_window(&self, size: usize) -> Self::F {
+        if size == 2 {
+            Self::F::from_bool(self.row + 1 < self.main.height())
+        } else {
+            panic!("uni-stark only supports a window size of 2")
+        }
+    }
+
+    #[inline]
+    fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
+        assert!(x.into() == Self::F::ZERO);
+    }
+
+    #[inline]
+    fn assert_zeros<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
+        for item in array {
+            assert!(item.into() == Self::F::ZERO);
+        }
+    }
+}
+
+impl<SC: StarkGenericConfig> AirBuilderWithPublicValues for LookupTraceBuilder<'_, SC> {
+    type PublicVar = Val<SC>;
+
+    #[inline]
+    fn public_values(&self) -> &[Self::F] {
+        self.public_values
+    }
+}
+
+impl<SC: StarkGenericConfig> PairBuilder for LookupTraceBuilder<'_, SC> {
+    fn preprocessed(&self) -> Self::M {
+        unimplemented!()
+    }
+}
+
+impl<SC: StarkGenericConfig> ExtensionBuilder for LookupTraceBuilder<'_, SC> {
+    type EF = SC::Challenge;
+    type ExprEF = SC::Challenge;
+    type VarEF = SC::Challenge;
+
+    fn assert_zero_ext<I: Into<Self::ExprEF>>(&mut self, x: I) {
+        assert!(x.into() == SC::Challenge::ZERO);
+    }
+}
+
+impl<'a, SC: StarkGenericConfig> PermutationAirBuilder for LookupTraceBuilder<'a, SC> {
+    type MP = RowMajorMatrixView<'a, SC::Challenge>;
+
+    type RandomVar = SC::Challenge;
+    fn permutation(&self) -> RowMajorMatrixView<'a, SC::Challenge> {
+        panic!("we should not be accessing the permutation matrix while building it");
+    }
+
+    fn permutation_randomness(&self) -> &[SC::Challenge] {
+        &self.permutation_challenges
+    }
+}
 /// Evaluates a symbolic expression in the context of an AIR builder.
 ///
 /// Converts `SymbolicExpression<F>` to the builder's expression type `AB::Expr`.
 pub fn eval_symbolic<AB>(builder: &AB, expr: &SymbolicExpression<AB::F>) -> AB::Expr
 where
-    AB: AirBuilder + PairBuilder + AirBuilderWithPublicValues + PermutationAirBuilder,
+    AB: PairBuilder + AirBuilderWithPublicValues + PermutationAirBuilder,
 {
     match expr {
         SymbolicExpression::Variable(v) => match v.entry {
@@ -366,13 +471,14 @@ impl LookupGadget for EmptyLookupGadget {
         0
     }
 
-    fn generate_permutation<F: Field, EF: ExtensionField<F>>(
+    fn generate_permutation<SC: StarkGenericConfig>(
         &self,
-        _main: &RowMajorMatrix<F>,
-        _lookups: &[Lookup<F>],
-        _lookup_data: &mut [LookupData<EF>],
-        _permutation_challenges: &[EF],
-    ) -> RowMajorMatrix<EF> {
+        _main: &RowMajorMatrix<Val<SC>>,
+        _public_values: &[Val<SC>],
+        _lookups: &[Lookup<Val<SC>>],
+        _lookup_data: &mut [LookupData<SC::Challenge>],
+        _permutation_challenges: &[SC::Challenge],
+    ) -> RowMajorMatrix<SC::Challenge> {
         RowMajorMatrix::new(vec![], 0)
     }
 }

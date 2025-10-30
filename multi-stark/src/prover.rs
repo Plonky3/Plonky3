@@ -185,8 +185,9 @@ where
                 permutation_commit_inputs.push((
                     ext_domain,
                     lookup_gadget
-                        .generate_permutation(
+                        .generate_permutation::<SC>(
                             &inst.trace,
+                            &inst.public_values,
                             &all_lookups[i],
                             &mut lookup_data[i],
                             &challenges_per_instance[i],
