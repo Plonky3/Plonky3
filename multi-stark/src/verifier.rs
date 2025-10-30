@@ -204,6 +204,8 @@ where
             air,
             &opened_values.instances[i].trace_local,
             &opened_values.instances[i].trace_next,
+            opened_values.instances[i].preprocessed_local.as_ref(),
+            opened_values.instances[i].preprocessed_next.as_ref(),
             &public_values[i],
             init_trace_domain,
             zeta,
