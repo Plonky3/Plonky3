@@ -71,6 +71,7 @@ impl Bn254 {
     }
 
     #[inline]
+    #[allow(clippy::needless_pass_by_value)]
     pub fn from_biguint(value: BigUint) -> Option<Self> {
         let digits = value.to_u64_digits();
         let num_dig = digits.len();

@@ -10,7 +10,7 @@ use p3_fri::{TwoAdicFriPcs, create_benchmark_fri_params};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHasher};
-use p3_uni_stark::{Proof, StarkGenericConfig, prove, verify};
+use p3_uni_stark::{PcsError, Proof, StarkGenericConfig, VerificationError, prove, verify};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 
@@ -20,6 +20,26 @@ use crate::types::{
     Poseidon2CircleStarkConfig, Poseidon2Compression, Poseidon2MerkleMmcs, Poseidon2Sponge,
     Poseidon2StarkConfig,
 };
+
+/// Result type for Keccak-based two-adic proofs
+type KeccakTwoAdicResult<F, EF, DFT> =
+    Result<(), VerificationError<PcsError<KeccakStarkConfig<F, EF, DFT>>>>;
+
+/// Result type for Poseidon2-based two-adic proofs
+type Poseidon2TwoAdicResult<F, EF, DFT, Perm16, Perm24> =
+    Result<(), VerificationError<PcsError<Poseidon2StarkConfig<F, EF, DFT, Perm16, Perm24>>>>;
+
+/// Result type for Keccak-based circle proofs with Mersenne31
+type KeccakCircleResult = Result<
+    (),
+    VerificationError<
+        PcsError<KeccakCircleStarkConfig<Mersenne31, BinomialExtensionField<Mersenne31, 3>>>,
+    >,
+>;
+
+/// Result type for Poseidon2-based circle proofs
+type Poseidon2CircleResult<F, EF, Perm16, Perm24> =
+    Result<(), VerificationError<PcsError<Poseidon2CircleStarkConfig<F, EF, Perm16, Perm24>>>>;
 
 /// Produce a MerkleTreeMmcs which uses the KeccakF permutation.
 const fn get_keccak_mmcs<F: Field>() -> KeccakMerkleMmcs<F> {
@@ -65,10 +85,10 @@ pub fn prove_monty31_keccak<
     DFT: TwoAdicSubgroupDft<F>,
     PG: ExampleHashAir<F, KeccakStarkConfig<F, EF, DFT>>,
 >(
-    proof_goal: PG,
+    proof_goal: &PG,
     dft: DFT,
     num_hashes: usize,
-) -> Result<(), impl Debug>
+) -> KeccakTwoAdicResult<F, EF, DFT>
 where
     StandardUniform: Distribution<F>,
 {
@@ -84,10 +104,10 @@ where
 
     let config = KeccakStarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, &proof_goal, trace, &vec![]);
+    let proof = prove(&config, proof_goal, trace, &vec![]);
     report_proof_size(&proof);
 
-    verify(&config, &proof_goal, &proof, &vec![])
+    verify(&config, proof_goal, &proof, &vec![])
 }
 
 /// Prove the given ProofGoal using the Poseidon2 hash function to build the merkle tree.
@@ -105,12 +125,12 @@ pub fn prove_monty31_poseidon2<
     Perm24: CryptographicPermutation<[F; 24]> + CryptographicPermutation<[F::Packing; 24]>,
     PG: ExampleHashAir<F, Poseidon2StarkConfig<F, EF, DFT, Perm16, Perm24>>,
 >(
-    proof_goal: PG,
+    proof_goal: &PG,
     dft: DFT,
     num_hashes: usize,
     perm16: Perm16,
     perm24: Perm24,
-) -> Result<(), impl Debug>
+) -> Poseidon2TwoAdicResult<F, EF, DFT, Perm16, Perm24>
 where
     StandardUniform: Distribution<F>,
 {
@@ -126,10 +146,10 @@ where
 
     let config = Poseidon2StarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, &proof_goal, trace, &vec![]);
+    let proof = prove(&config, proof_goal, trace, &vec![]);
     report_proof_size(&proof);
 
-    verify(&config, &proof_goal, &proof, &vec![])
+    verify(&config, proof_goal, &proof, &vec![])
 }
 
 /// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.
@@ -145,9 +165,9 @@ pub fn prove_m31_keccak<
             KeccakCircleStarkConfig<Mersenne31, BinomialExtensionField<Mersenne31, 3>>,
         >,
 >(
-    proof_goal: PG,
+    proof_goal: &PG,
     num_hashes: usize,
-) -> Result<(), impl Debug> {
+) -> KeccakCircleResult {
     type F = Mersenne31;
     type EF = BinomialExtensionField<Mersenne31, 3>;
 
@@ -162,10 +182,10 @@ pub fn prove_m31_keccak<
 
     let config = KeccakCircleStarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, &proof_goal, trace, &vec![]);
+    let proof = prove(&config, proof_goal, trace, &vec![]);
     report_proof_size(&proof);
 
-    verify(&config, &proof_goal, &proof, &vec![])
+    verify(&config, proof_goal, &proof, &vec![])
 }
 
 /// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.
@@ -182,11 +202,11 @@ pub fn prove_m31_poseidon2<
     Perm24: CryptographicPermutation<[F; 24]> + CryptographicPermutation<[F::Packing; 24]>,
     PG: ExampleHashAir<F, Poseidon2CircleStarkConfig<F, EF, Perm16, Perm24>>,
 >(
-    proof_goal: PG,
+    proof_goal: &PG,
     num_hashes: usize,
     perm16: Perm16,
     perm24: Perm24,
-) -> Result<(), impl Debug>
+) -> Poseidon2CircleResult<F, EF, Perm16, Perm24>
 where
     StandardUniform: Distribution<F>,
 {
@@ -202,10 +222,10 @@ where
 
     let config = Poseidon2CircleStarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, &proof_goal, trace, &vec![]);
+    let proof = prove(&config, proof_goal, trace, &vec![]);
     report_proof_size(&proof);
 
-    verify(&config, &proof_goal, &proof, &vec![])
+    verify(&config, proof_goal, &proof, &vec![])
 }
 
 /// Report the result of the proof.
