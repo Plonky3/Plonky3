@@ -291,7 +291,7 @@ impl InternalLayer<PackedMersenne31AVX2, 16, 5> for Poseidon2InternalLayerMersen
     fn permute_state(&self, state: &mut [PackedMersenne31AVX2; 16]) {
         self.packed_internal_constants
             .iter()
-            .for_each(|&rc| internal_16(state, rc))
+            .for_each(|&rc| internal_16(state, rc));
     }
 }
 
@@ -311,7 +311,7 @@ impl InternalLayer<PackedMersenne31AVX2, 24, 5> for Poseidon2InternalLayerMersen
     fn permute_state(&self, state: &mut [PackedMersenne31AVX2; 24]) {
         self.packed_internal_constants
             .iter()
-            .for_each(|&rc| internal_24(state, rc))
+            .for_each(|&rc| internal_24(state, rc));
     }
 }
 
