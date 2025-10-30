@@ -135,6 +135,7 @@ where
             *trace_domain,
             quotient_domain,
             trace_on_quotient_domain,
+            None, // multi-stark doesn't support preprocessed columns yet
             alpha,
             constraint_cnt,
         );
@@ -221,6 +222,8 @@ where
         per_instance.push(OpenedValues {
             trace_local,
             trace_next,
+            preprocessed_local: None, // multi-stark doesn't support preprocessed columns yet
+            preprocessed_next: None,
             quotient_chunks: qcs,
             random: None, // ZK not supported in multi-stark yet
         });

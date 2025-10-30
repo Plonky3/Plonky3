@@ -399,6 +399,8 @@ fn test_invalid_trace_width_rejected() {
             instances: vec![OpenedValues {
                 trace_local: vec![valid_proof.opened_values.instances[0].trace_local[0]], // Wrong width: 1 instead of 2
                 trace_next: valid_proof.opened_values.instances[0].trace_next.clone(),
+                preprocessed_local: None,
+                preprocessed_next: None,
                 quotient_chunks: valid_proof.opened_values.instances[0]
                     .quotient_chunks
                     .clone(),

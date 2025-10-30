@@ -17,6 +17,23 @@ use crate::{
     StarkGenericConfig, SymbolicAirBuilder, Val, get_log_quotient_degree, get_symbolic_constraints,
 };
 
+/// Commits the preprocessed trace if present.
+/// Returns the commitment hash and prover data (available iff preprocessed is Some).
+fn commit_preprocessed_trace<SC>(
+    preprocessed: RowMajorMatrix<Val<SC>>,
+    pcs: &SC::Pcs,
+    trace_domain: <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::Domain,
+) -> (
+    <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::Commitment,
+    <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::ProverData,
+)
+where
+    SC: StarkGenericConfig,
+{
+    debug_span!("commit to preprocessed trace")
+        .in_scope(|| pcs.commit([(trace_domain, preprocessed)]))
+}
+
 #[instrument(skip_all)]
 #[allow(clippy::multiple_bound_locations, clippy::type_repetition_in_bounds)] // cfg not supported in where clauses?
 pub fn prove<
@@ -41,8 +58,13 @@ where
     let log_degree = log2_strict_usize(degree);
     let log_ext_degree = log_degree + config.is_zk();
 
+    // Get preprocessed trace and its width for symbolic constraint evaluation
+    let preprocessed_trace = air.preprocessed_trace();
+    let preprocessed_width = preprocessed_trace.as_ref().map(|m| m.width).unwrap_or(0);
+
     // Compute the constraint polynomials as vectors of symbolic expressions.
-    let symbolic_constraints = get_symbolic_constraints(air, 0, public_values.len());
+    let symbolic_constraints =
+        get_symbolic_constraints(air, preprocessed_width, public_values.len());
 
     // Count the number of constraints that we have.
     let constraint_count = symbolic_constraints.len();
@@ -80,8 +102,13 @@ where
     // From the degree of the constraint polynomial, compute the number
     // of quotient polynomials we will split Q(x) into. This is chosen to
     // always be a power of 2.
-    let log_quotient_degree =
-        get_log_quotient_degree::<Val<SC>, A>(air, 0, public_values.len(), config.is_zk());
+    let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(
+        air,
+        preprocessed_width,
+        public_values.len(),
+        config.is_zk(),
+    );
+
     let quotient_degree = 1 << (log_quotient_degree + config.is_zk());
 
     // Initialize the PCS and the Challenger.
@@ -109,14 +136,26 @@ where
     let (trace_commit, trace_data) =
         info_span!("commit to trace data").in_scope(|| pcs.commit([(ext_trace_domain, trace)]));
 
+    let (preprocessed_commit, preprocessed_data) = match preprocessed_trace {
+        Some(preprocessed) => {
+            let (commit, data) = commit_preprocessed_trace::<SC>(preprocessed, pcs, trace_domain);
+            (Some(commit), Some(data))
+        }
+        None => (None, None),
+    };
+
     // Observe the instance.
     // degree < 2^255 so we can safely cast log_degree to a u8.
     challenger.observe(Val::<SC>::from_u8(log_ext_degree as u8));
     challenger.observe(Val::<SC>::from_u8(log_degree as u8));
+    challenger.observe(Val::<SC>::from_usize(preprocessed_width));
     // TODO: Might be best practice to include other instance data here; see verifier comment.
 
     // Observe the Merkle root of the trace commitment.
     challenger.observe(trace_commit.clone());
+    if preprocessed_width > 0 {
+        challenger.observe(preprocessed_commit.as_ref().unwrap().clone());
+    }
 
     // Observe the public input values.
     challenger.observe_slice(public_values);
@@ -155,6 +194,9 @@ where
     // This only works if the trace domain is `gH'` and the quotient domain is `gK` for some subgroup `K` contained in `H'`.
     // TODO: Make this explicit in `get_evaluations_on_domain` or otherwise fix this.
     let trace_on_quotient_domain = pcs.get_evaluations_on_domain(&trace_data, 0, quotient_domain);
+    let preprocessed_on_quotient_domain = preprocessed_data
+        .as_ref()
+        .map(|data| pcs.get_evaluations_on_domain(data, 0, quotient_domain));
 
     // Compute the quotient polynomial `Q(x)` by evaluating
     //          `C(T_1(x), ..., T_w(x), T_1(hx), ..., T_w(hx), selectors(x)) / Z_H(x)`
@@ -166,6 +208,7 @@ where
         trace_domain,
         quotient_domain,
         trace_on_quotient_domain,
+        preprocessed_on_quotient_domain,
         alpha,
         constraint_count,
     );
@@ -251,8 +294,15 @@ where
         let round0 = opt_r_data.as_ref().map(|r_data| (r_data, vec![vec![zeta]]));
         let round1 = (&trace_data, vec![vec![zeta, zeta_next]]);
         let round2 = (&quotient_data, vec![vec![zeta]; quotient_degree]); // open every chunk at zeta
+        let round3 = preprocessed_data
+            .as_ref()
+            .map(|data| (data, vec![vec![zeta, zeta_next]]));
 
-        let rounds = round0.into_iter().chain([round1, round2]).collect();
+        let rounds = round0
+            .into_iter()
+            .chain([round1, round2])
+            .chain(round3)
+            .collect();
 
         pcs.open(rounds, &mut challenger)
     });
@@ -269,9 +319,19 @@ where
     } else {
         None
     };
+    let (preprocessed_local, preprocessed_next) = if preprocessed_width > 0 {
+        (
+            Some(opened_values[SC::Pcs::PREPROCESSED_TRACE_IDX][0][0].clone()),
+            Some(opened_values[SC::Pcs::PREPROCESSED_TRACE_IDX][0][1].clone()),
+        )
+    } else {
+        (None, None)
+    };
     let opened_values = OpenedValues {
         trace_local,
         trace_next,
+        preprocessed_local,
+        preprocessed_next,
         quotient_chunks,
         random,
     };
@@ -292,6 +352,7 @@ pub fn quotient_values<SC, A, Mat>(
     trace_domain: Domain<SC>,
     quotient_domain: Domain<SC>,
     trace_on_quotient_domain: Mat,
+    preprocessed_on_quotient_domain: Option<Mat>,
     alpha: SC::Challenge,
     constraint_count: usize,
 ) -> Vec<SC::Challenge>
@@ -345,9 +406,20 @@ where
                 width,
             );
 
+            let preprocessed = preprocessed_on_quotient_domain
+                .as_ref()
+                .map(|preprocessed| {
+                    let preprocessed_width = preprocessed.width();
+                    RowMajorMatrix::new(
+                        preprocessed.vertically_packed_row_pair(i_start, next_step),
+                        preprocessed_width,
+                    )
+                });
+
             let accumulator = PackedChallenge::<SC>::ZERO;
             let mut folder = ProverConstraintFolder {
                 main: main.as_view(),
+                preprocessed: preprocessed.as_ref().map(|m| m.as_view()),
                 public_values,
                 is_first_row,
                 is_last_row,

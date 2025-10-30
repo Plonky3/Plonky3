@@ -8,7 +8,6 @@ use p3_matrix::dense::RowMajorMatrix;
 pub trait BaseAir<F>: Sync {
     /// The number of columns (a.k.a. registers) in this AIR.
     fn width(&self) -> usize;
-
     /// Return an optional preprocessed trace matrix to be included in the prover's trace.
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
         None
@@ -279,6 +278,12 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         self.inner.assert_zero(self.condition() * x.into());
+    }
+}
+
+impl<AB: PairBuilder> PairBuilder for FilteredAirBuilder<'_, AB> {
+    fn preprocessed(&self) -> Self::M {
+        self.inner.preprocessed()
     }
 }
 
