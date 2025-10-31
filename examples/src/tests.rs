@@ -58,7 +58,7 @@ fn test_end_to_end_koalabear_vectorized_poseidon2_hashes_recursive_dft_poseidon2
     let perm16 = Poseidon2KoalaBear::<16>::new_from_rng_128(&mut rng);
     let perm24 = Poseidon2KoalaBear::<24>::new_from_rng_128(&mut rng);
 
-    prove_monty31_poseidon2::<_, EF, _, _, _, _>(proof_goal, dft, TRACE_SIZE, perm16, perm24)
+    prove_monty31_poseidon2::<_, EF, _, _, _, _>(&proof_goal, dft, TRACE_SIZE, perm16, perm24)
 }
 
 #[test]
@@ -88,7 +88,7 @@ fn test_end_to_end_koalabear_poseidon2_hashes_recursive_dft_keccak_merkle_tree()
 
     let dft = DftChoice::Recursive(RecursiveDft::new(TRACE_SIZE << 1));
 
-    prove_monty31_keccak::<_, EF, _, _>(proof_goal, dft, num_hashes)
+    prove_monty31_keccak::<_, EF, _, _>(&proof_goal, dft, num_hashes)
 }
 
 #[test]
@@ -102,7 +102,7 @@ fn test_end_to_end_koalabear_keccak_hashes_parallel_dft_keccak_merkle_tree()
 
     let dft = DftChoice::Parallel(Radix2DitParallel::default());
 
-    prove_monty31_keccak::<_, EF, _, _>(proof_goal, dft, num_hashes)
+    prove_monty31_keccak::<_, EF, _, _>(&proof_goal, dft, num_hashes)
 }
 
 #[test]
@@ -133,7 +133,7 @@ fn test_end_to_end_babybear_vectorized_poseidon2_hashes_recursive_dft_poseidon2_
     let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
     let perm24 = Poseidon2BabyBear::<24>::new_from_rng_128(&mut rng);
 
-    prove_monty31_poseidon2::<_, EF, _, _, _, _>(proof_goal, dft, TRACE_SIZE, perm16, perm24)
+    prove_monty31_poseidon2::<_, EF, _, _, _, _>(&proof_goal, dft, TRACE_SIZE, perm16, perm24)
 }
 
 #[test]
@@ -164,7 +164,7 @@ fn test_end_to_end_babybear_poseidon2_hashes_parallel_dft_poseidon2_merkle_tree(
     let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
     let perm24 = Poseidon2BabyBear::<24>::new_from_rng_128(&mut rng);
 
-    prove_monty31_poseidon2::<_, EF, _, _, _, _>(proof_goal, dft, TRACE_SIZE, perm16, perm24)
+    prove_monty31_poseidon2::<_, EF, _, _, _, _>(&proof_goal, dft, TRACE_SIZE, perm16, perm24)
 }
 
 #[test]
@@ -184,7 +184,7 @@ fn test_end_to_end_babybear_blake3_hashes_parallel_dft_poseidon2_merkle_tree()
     let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
     let perm24 = Poseidon2BabyBear::<24>::new_from_rng_128(&mut rng);
 
-    prove_monty31_poseidon2::<_, EF, _, _, _, _>(proof_goal, dft, num_hashes, perm16, perm24)
+    prove_monty31_poseidon2::<_, EF, _, _, _, _>(&proof_goal, dft, num_hashes, perm16, perm24)
 }
 
 #[test]
@@ -192,7 +192,7 @@ fn test_end_to_end_mersenne_31_keccak_hashes_keccak_merkle_tree() -> Result<(), 
     let num_hashes = TRACE_SIZE / 24;
     let proof_goal = KeccakAir {};
 
-    prove_m31_keccak(proof_goal, num_hashes)
+    prove_m31_keccak(&proof_goal, num_hashes)
 }
 
 #[test]
@@ -200,7 +200,7 @@ fn test_end_to_end_mersenne31_blake3_hashes_keccak_merkle_tree() -> Result<(), i
     let num_hashes = TRACE_SIZE >> 4;
     let proof_goal = Blake3Air {};
 
-    prove_m31_keccak(proof_goal, num_hashes)
+    prove_m31_keccak(&proof_goal, num_hashes)
 }
 
 #[test]
@@ -232,7 +232,7 @@ fn test_end_to_end_mersenne31_vectorized_poseidon2_hashes_poseidon2_merkle_tree(
     let perm16 = Poseidon2Mersenne31::<16>::new_from_rng_128(&mut rng);
     let perm24 = Poseidon2Mersenne31::<24>::new_from_rng_128(&mut rng);
 
-    prove_m31_poseidon2::<_, EF, _, _, _>(proof_goal, TRACE_SIZE, perm16, perm24)
+    prove_m31_poseidon2::<_, EF, _, _, _>(&proof_goal, TRACE_SIZE, perm16, perm24)
 }
 
 #[test]
@@ -257,5 +257,5 @@ fn test_end_to_end_mersenne31_poseidon2_hashes_keccak_merkle_tree() -> Result<()
         PARTIAL_ROUNDS,
     > = Poseidon2Air::new(constants);
 
-    prove_m31_keccak(proof_goal, TRACE_SIZE)
+    prove_m31_keccak(&proof_goal, TRACE_SIZE)
 }

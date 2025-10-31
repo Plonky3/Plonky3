@@ -37,9 +37,9 @@ fn create_symbolic_with_degree(degree: usize) -> SymbolicExpression<F> {
 }
 
 fn create_dummy_lookup(
-    num_elements_per_tuple: Vec<usize>,
-    degree_per_element: Vec<Vec<usize>>,
-    degree_multiplicities: Vec<usize>,
+    num_elements_per_tuple: &[usize],
+    degree_per_element: &[Vec<usize>],
+    degree_multiplicities: &[usize],
 ) -> Lookup<F> {
     assert!(num_elements_per_tuple.len() == degree_per_element.len());
     assert!(num_elements_per_tuple.len() == degree_multiplicities.len());
@@ -77,14 +77,14 @@ fn test_constraint_degree_calculation() {
     // - each element has degree 1
     // - each multiplicity has degree 1
     // - so the total degree should be 3 (1 + (1 + 1)).
-    let lookup_deg_3 = create_dummy_lookup(vec![1, 1], vec![vec![1], vec![1]], vec![1, 1]);
+    let lookup_deg_3 = create_dummy_lookup(&[1, 1], &[vec![1], vec![1]], &[1, 1]);
     assert_eq!(gadget.constraint_degree(lookup_deg_3), 3);
 
     // We have two lookup elements (each element is a single column):
     // - each element has degree 1
     // - each multiplicity has degree 3
     // - so the total degree should be 4 (3 + 1).
-    let lookup_degree_4 = create_dummy_lookup(vec![1, 1], vec![vec![1], vec![1]], vec![3, 3]);
+    let lookup_degree_4 = create_dummy_lookup(&[1, 1], &[vec![1], vec![1]], &[3, 3]);
     assert_eq!(gadget.constraint_degree(lookup_degree_4), 4);
 
     // We have two lookup elements (each element is a single column):
@@ -92,7 +92,7 @@ fn test_constraint_degree_calculation() {
     // - one element has degree 3
     // - each multiplicity has degree 1
     // - so the total degree should be 6 (3 + 3).
-    let lookup_degree_6 = create_dummy_lookup(vec![1, 1], vec![vec![2], vec![3]], vec![1, 1]);
+    let lookup_degree_6 = create_dummy_lookup(&[1, 1], &[vec![2], vec![3]], &[1, 1]);
     assert_eq!(gadget.constraint_degree(lookup_degree_6), 6);
 
     // We have two lookup elements:
@@ -105,7 +105,7 @@ fn test_constraint_degree_calculation() {
     // - so the total degree should be 7 (5 + 2).
     let degrees1 = vec![1, 3, 0, 0, 0]; // First element of degree 3.
     let degrees2 = vec![0, 1, 0, 2, 0, 1]; // Second element of degree 2.
-    let lookup_degree_7 = create_dummy_lookup(vec![5, 6], vec![degrees1, degrees2], vec![5, 2]);
+    let lookup_degree_7 = create_dummy_lookup(&[5, 6], &[degrees1, degrees2], &[5, 2]);
     assert_eq!(gadget.constraint_degree(lookup_degree_7), 7);
 }
 
@@ -352,8 +352,8 @@ where
 /// The contribution is: `1/(α - val_read) - mult/(α - val_provided)`
 fn compute_logup_contribution(
     challenges: LogUpChallenges,
-    vals_read: Vec<F>,
-    vals_provided: Vec<F>,
+    vals_read: &[F],
+    vals_provided: &[F],
     mult: F,
 ) -> EF {
     let alpha = challenges.alpha;
@@ -441,7 +441,7 @@ impl LookupTraceBuilder {
     /// * `read` - The value being read (always with multiplicity 1)
     /// * `provide` - The value being provided to the lookup table
     /// * `mult` - The multiplicity of the provided value
-    fn row(mut self, reads: Vec<u32>, provide: Vec<u32>, mult: u32) -> Self {
+    fn row(mut self, reads: &[u32], provide: &[u32], mult: u32) -> Self {
         let reads_field = reads.iter().map(|&read| F::new(read)).collect::<Vec<_>>();
         let provides_field = provide
             .iter()
@@ -473,12 +473,8 @@ impl LookupTraceBuilder {
         let mut running_sum = EF::ZERO;
         let s_col: Vec<EF> = core::iter::once(EF::ZERO)
             .chain(self.rows.iter().map(|(read, provide, mult)| {
-                running_sum += compute_logup_contribution(
-                    self.local_challenges,
-                    read.clone(),
-                    provide.clone(),
-                    *mult,
-                );
+                running_sum +=
+                    compute_logup_contribution(self.local_challenges, read, provide, *mult);
                 running_sum
             }))
             .take(self.rows.len()) // Keep trace length equal to number of rows
@@ -516,18 +512,14 @@ impl LookupTraceBuilder {
         let s_col: Vec<EF> = core::iter::once(EF::ZERO)
             .chain(core::iter::once(EF::ZERO))
             .chain(self.rows.iter().flat_map(|(read, provide, mult)| {
-                running_sum += compute_logup_contribution(
-                    self.local_challenges,
-                    read.clone(),
-                    provide.clone(),
-                    *mult,
-                );
+                running_sum +=
+                    compute_logup_contribution(self.local_challenges, read, provide, *mult);
                 let global_mult = direction.multiplicity(F::ONE);
 
                 global_running_sum += compute_logup_contribution(
                     self.global_challenges.unwrap(),
-                    vec![],
-                    provide.clone(),
+                    &[],
+                    provide,
                     global_mult,
                 );
                 vec![running_sum, global_running_sum]
@@ -623,11 +615,11 @@ fn test_range_check_end_to_end_valid() {
     // Each row contributes 1/(α-val) - 1/(α-val) = 0, so final sum is 0.
     let mut rng = SmallRng::seed_from_u64(1);
     let (main_trace, aux_trace, challenges) = LookupTraceBuilder::new(&mut rng)
-        .row(vec![10], vec![10], 1)
-        .row(vec![255], vec![255], 1)
-        .row(vec![0], vec![0], 1)
-        .row(vec![42], vec![42], 1)
-        .row(vec![10], vec![10], 1)
+        .row(&[10], &[10], 1)
+        .row(&[255], &[255], 1)
+        .row(&[0], &[0], 1)
+        .row(&[42], &[42], 1)
+        .row(&[10], &[10], 1)
         .build();
 
     // The test must check the FINAL constraint: s[n-1] + c[n-1] = 0
@@ -643,8 +635,8 @@ fn test_range_check_end_to_end_valid() {
         .collect::<Vec<F>>();
     let last_contribution = compute_logup_contribution(
         challenges,
-        vec![last_row_data[0]],
-        vec![last_row_data[1]],
+        &[last_row_data[0]],
+        &[last_row_data[1]],
         last_row_data[2],
     );
 
@@ -715,7 +707,7 @@ fn test_range_check_end_to_end_invalid() {
         let val_provided = vec![row[1]];
         let mult = row[2];
 
-        let contribution = compute_logup_contribution(challenges, val_read, val_provided, mult);
+        let contribution = compute_logup_contribution(challenges, &val_read, &val_provided, mult);
         current_s += contribution;
 
         // s[i] includes the contribution from row i
@@ -785,9 +777,9 @@ fn test_inconsistent_witness_fails_transition() {
     // SCENARIO: The main trace is valid, but the prover messes up the running sum calculation.
     let mut rng = SmallRng::seed_from_u64(1);
     let (main_trace, mut aux_trace, challenges) = LookupTraceBuilder::new(&mut rng)
-        .row(vec![10], vec![10], 1)
-        .row(vec![20], vec![20], 1)
-        .row(vec![30], vec![30], 1)
+        .row(&[10], &[10], 1)
+        .row(&[20], &[20], 1)
+        .row(&[30], &[30], 1)
         .build();
 
     // The witness is valid so far. Let's corrupt it.
@@ -838,8 +830,7 @@ fn test_zero_multiplicity_is_not_counted() {
     let mut current_s = EF::ZERO;
     for i in 0..main_trace.height() {
         let row: Vec<F> = main_trace.row(i).unwrap().into_iter().collect();
-        let contribution =
-            compute_logup_contribution(challenges, vec![row[0]], vec![row[1]], row[2]);
+        let contribution = compute_logup_contribution(challenges, &[row[0]], &[row[1]], row[2]);
         current_s += contribution;
 
         // s[i] includes the contribution from row i
@@ -933,14 +924,14 @@ fn test_nontrivial_permutation() {
 
     let mut rng = SmallRng::seed_from_u64(1);
     let (main_trace, aux_trace, challenges) = LookupTraceBuilder::new(&mut rng)
-        .row(vec![7], vec![3], 2) // Read 7, provide {3, 3} to the table
-        .row(vec![3], vec![5], 4) // Read 3, provide {5, 5, 5, 5} to the table (4 fives total)
-        .row(vec![5], vec![7], 2) // Read 5, provide {7, 7} to the table
-        .row(vec![3], vec![3], 0) // Read 3, no provides (mult=0)
-        .row(vec![7], vec![5], 0) // Read 7, no provides (mult=0)
-        .row(vec![5], vec![5], 0) // Read 5, no provides (mult=0)
-        .row(vec![5], vec![7], 0) // Read 5, no provides (mult=0)
-        .row(vec![5], vec![5], 0) // Read 5, no provides (mult=0)
+        .row(&[7], &[3], 2) // Read 7, provide {3, 3} to the table
+        .row(&[3], &[5], 4) // Read 3, provide {5, 5, 5, 5} to the table (4 fives total)
+        .row(&[5], &[7], 2) // Read 5, provide {7, 7} to the table
+        .row(&[3], &[3], 0) // Read 3, no provides (mult=0)
+        .row(&[7], &[5], 0) // Read 7, no provides (mult=0)
+        .row(&[5], &[5], 0) // Read 5, no provides (mult=0)
+        .row(&[5], &[7], 0) // Read 5, no provides (mult=0)
+        .row(&[5], &[5], 0) // Read 5, no provides (mult=0)
         .build();
 
     // The test must check the FINAL constraint: s[n-1] + c[n-1] = 0
@@ -956,8 +947,8 @@ fn test_nontrivial_permutation() {
         .collect::<Vec<F>>();
     let last_contribution = compute_logup_contribution(
         challenges,
-        vec![last_row_data[0]],
-        vec![last_row_data[1]],
+        &[last_row_data[0]],
+        &[last_row_data[1]],
         last_row_data[2],
     );
 
@@ -1038,19 +1029,14 @@ fn test_multiple_lookups_different_columns() {
     s2_col.push(s2);
 
     // Row 1: Add contributions from row 0
-    s1 += compute_logup_contribution(first_challenges, vec![F::new(10)], vec![F::new(10)], F::ONE);
-    s2 += compute_logup_contribution(second_challenges, vec![F::new(5)], vec![F::new(5)], F::ONE);
+    s1 += compute_logup_contribution(first_challenges, &[F::new(10)], &[F::new(10)], F::ONE);
+    s2 += compute_logup_contribution(second_challenges, &[F::new(5)], &[F::new(5)], F::ONE);
     s1_col.push(s1);
     s2_col.push(s2);
 
     // Row 2: Add contributions from row 1
-    s1 += compute_logup_contribution(first_challenges, vec![F::new(20)], vec![F::new(20)], F::ONE);
-    s2 += compute_logup_contribution(
-        second_challenges,
-        vec![F::new(15)],
-        vec![F::new(15)],
-        F::ONE,
-    );
+    s1 += compute_logup_contribution(first_challenges, &[F::new(20)], &[F::new(20)], F::ONE);
+    s2 += compute_logup_contribution(second_challenges, &[F::new(15)], &[F::new(15)], F::ONE);
     s1_col.push(s1);
     s2_col.push(s2);
 
@@ -1068,13 +1054,9 @@ fn test_multiple_lookups_different_columns() {
     let s2_final = row2_data[1];
 
     let c1_final =
-        compute_logup_contribution(first_challenges, vec![F::new(30)], vec![F::new(30)], F::ONE);
-    let c2_final = compute_logup_contribution(
-        second_challenges,
-        vec![F::new(25)],
-        vec![F::new(25)],
-        F::ONE,
-    );
+        compute_logup_contribution(first_challenges, &[F::new(30)], &[F::new(30)], F::ONE);
+    let c2_final =
+        compute_logup_contribution(second_challenges, &[F::new(25)], &[F::new(25)], F::ONE);
 
     assert_eq!(
         s1_final + c1_final,
@@ -1244,10 +1226,10 @@ fn test_tuple_lookup() {
     let mut air = AddAir::new();
     let width = <AddAir as BaseAir<F>>::width(&air);
     let (main_trace, aux_trace, challenges) = LookupTraceBuilder::new_with_width(width, &mut rng)
-        .row(vec![0, 1, 1], vec![0, 1, 1], 2)
-        .row(vec![0, 1, 1], vec![0, 0, 0], 1)
-        .row(vec![1, 1, 2], vec![1, 0, 1], 0)
-        .row(vec![0, 0, 0], vec![1, 1, 2], 1)
+        .row(&[0, 1, 1], &[0, 1, 1], 2)
+        .row(&[0, 1, 1], &[0, 0, 0], 1)
+        .row(&[1, 1, 2], &[1, 0, 1], 0)
+        .row(&[0, 0, 0], &[1, 1, 2], 1)
         .build();
 
     // The test must check the FINAL constraint: s[n-1] + c[n-1] = 0
@@ -1264,8 +1246,8 @@ fn test_tuple_lookup() {
 
     let last_contribution = compute_logup_contribution(
         challenges,
-        last_row_data[0..3].to_vec(),
-        last_row_data[3..6].to_vec(),
+        &last_row_data[0..3],
+        &last_row_data[3..6],
         last_row_data[6],
     );
 
@@ -1317,10 +1299,10 @@ fn test_global_lookup() {
         let mut trace_builder = LookupTraceBuilder::new_with_width(width, &mut rng);
         trace_builder.global_challenges = Some(global_challenges);
         trace_builder
-            .row(vec![0, 1, 1], vec![0, 0, 0], 1)
-            .row(vec![0, 1, 1], vec![0, 1, 1], 2)
-            .row(vec![1, 1, 2], vec![1, 1, 2], 1)
-            .row(vec![0, 0, 0], vec![1, 0, 1], 0)
+            .row(&[0, 1, 1], &[0, 0, 0], 1)
+            .row(&[0, 1, 1], &[0, 1, 1], 2)
+            .row(&[1, 1, 2], &[1, 1, 2], 1)
+            .row(&[0, 0, 0], &[1, 0, 1], 0)
             .build_with_global(Direction::Receive)
     };
 
@@ -1331,10 +1313,10 @@ fn test_global_lookup() {
         let mut trace_builder = LookupTraceBuilder::new_with_width(width, &mut rng);
         trace_builder.global_challenges = Some(global_challenges);
         trace_builder
-            .row(vec![0, 1, 1], vec![0, 1, 1], 2)
-            .row(vec![0, 1, 1], vec![0, 0, 0], 1)
-            .row(vec![1, 1, 2], vec![1, 0, 1], 0)
-            .row(vec![0, 0, 0], vec![1, 1, 2], 1)
+            .row(&[0, 1, 1], &[0, 1, 1], 2)
+            .row(&[0, 1, 1], &[0, 0, 0], 1)
+            .row(&[1, 1, 2], &[1, 0, 1], 0)
+            .row(&[0, 0, 0], &[1, 1, 2], 1)
             .build_with_global(Direction::Send)
     };
 
@@ -1353,8 +1335,8 @@ fn test_global_lookup() {
 
     let last_contribution1 = compute_logup_contribution(
         challenges1,
-        last_row_data[0..3].to_vec(),
-        last_row_data[3..6].to_vec(),
+        &last_row_data[0..3],
+        &last_row_data[3..6],
         last_row_data[6],
     );
 
@@ -1379,8 +1361,8 @@ fn test_global_lookup() {
 
     let last_contribution2 = compute_logup_contribution(
         challenges2,
-        last_row_data2[0..3].to_vec(),
-        last_row_data2[3..6].to_vec(),
+        &last_row_data2[0..3],
+        &last_row_data2[3..6],
         last_row_data2[6],
     );
 
@@ -1395,18 +1377,10 @@ fn test_global_lookup() {
     let s_global1 = last_aux_trace1[1];
     let s_global2 = last_aux_trace2[1];
 
-    let last_global_contribution1 = compute_logup_contribution(
-        global_challenges,
-        vec![],
-        last_row_data[3..6].to_vec(),
-        F::ONE,
-    );
-    let last_global_contribution2 = compute_logup_contribution(
-        global_challenges,
-        vec![],
-        last_row_data2[3..6].to_vec(),
-        -F::ONE,
-    );
+    let last_global_contribution1 =
+        compute_logup_contribution(global_challenges, &[], &last_row_data[3..6], F::ONE);
+    let last_global_contribution2 =
+        compute_logup_contribution(global_challenges, &[], &last_row_data2[3..6], -F::ONE);
 
     let s_global_final1 = s_global1 + last_global_contribution1;
     let s_global_final2 = s_global2 + last_global_contribution2;

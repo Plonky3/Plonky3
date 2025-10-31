@@ -115,6 +115,7 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
     }
 }
 
+#[allow(clippy::needless_pass_by_value)]
 fn do_test<SC: StarkGenericConfig>(
     config: SC,
     air: MulAir,

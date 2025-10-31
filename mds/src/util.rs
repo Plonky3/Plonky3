@@ -41,16 +41,16 @@ where
 /// for all combinations of field and size.
 pub fn apply_circulant<R: PrimeCharacteristicRing, const N: usize>(
     circ_matrix: &[u64; N],
-    input: [R; N],
+    input: &[R; N],
 ) -> [R; N] {
     let mut matrix = circ_matrix.map(R::from_u64);
 
     let mut output = [R::ZERO; N];
     for out_i in output.iter_mut().take(N - 1) {
-        *out_i = R::dot_product(&matrix, &input);
+        *out_i = R::dot_product(&matrix, input);
         matrix.rotate_right(1);
     }
-    output[N - 1] = R::dot_product(&matrix, &input);
+    output[N - 1] = R::dot_product(&matrix, input);
     output
 }
 
@@ -84,7 +84,7 @@ pub const fn first_row_to_first_col<const N: usize, T: Copy>(v: &[T; N]) -> [T; 
 /// the row as an array, you can obtain the column with `first_row_to_first_col()`.
 #[inline]
 pub fn apply_circulant_fft<F: TwoAdicField, const N: usize, FFT: TwoAdicSubgroupDft<F>>(
-    fft: FFT,
+    fft: &FFT,
     column: [u64; N],
     input: &[F; N],
 ) -> [F; N] {
