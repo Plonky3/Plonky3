@@ -20,6 +20,7 @@ rand.workspace = true
 p3-baby-bear.workspace = true
 p3-goldilocks.workspace = true
 p3-mersenne-31.workspace = true
+p3-poseidon2.workspace = true
 
 criterion.workspace = true
 
