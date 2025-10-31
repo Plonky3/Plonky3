@@ -49,7 +49,7 @@ where
         self.internal_constants.iter().for_each(|&rc| {
             add_rc_and_sbox_generic(&mut state[0], rc);
             GenericPoseidon2LinearLayersMersenne31::internal_linear_layer(state);
-        })
+        });
     }
 }
 

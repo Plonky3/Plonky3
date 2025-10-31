@@ -214,7 +214,7 @@ pub trait ExtensionBuilder: AirBuilder<F: Field> {
     where
         I: Into<Self::ExprEF>,
     {
-        self.assert_eq_ext(x, Self::ExprEF::ONE)
+        self.assert_eq_ext(x, Self::ExprEF::ONE);
     }
 }
 

@@ -662,7 +662,7 @@ pub fn test_two_adic_point_collection<F: TwoAdicField>() {
         // Add `map` to avoid calling `BoundedPowers::collect()`
         #[allow(clippy::map_identity)]
         let points_expected = group.iter().map(|x| x).collect::<Vec<_>>();
-        assert_eq!(points, points_expected)
+        assert_eq!(points, points_expected);
     }
 }
 

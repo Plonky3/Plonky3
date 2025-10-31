@@ -59,7 +59,7 @@ pub fn par_scale_slice_in_place<F: Field>(slice: &mut [F], s: F) {
     note = "use `par_scale_slice_in_place` instead which will replace this method in the future"
 )]
 pub fn scale_slice_in_place<F: Field>(s: F, slice: &mut [F]) {
-    par_scale_slice_in_place(slice, s)
+    par_scale_slice_in_place(slice, s);
 }
 
 /// Adds `other`, scaled by `s`, to the mutable `slice` using packing, or `slice += other * s`.

@@ -43,7 +43,7 @@ fn bench_field(c: &mut Criterion) {
             || rng.random::<F>(),
             |x| x.exp_u64(1420470955),
             BatchSize::SmallInput,
-        )
+        );
     });
 }
 

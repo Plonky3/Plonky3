@@ -136,7 +136,7 @@ mod tests {
         assert_eq!(
             BabyBear::new_array(range_array),
             range_array.map(F::from_u32)
-        )
+        );
     }
 
     #[test]

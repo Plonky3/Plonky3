@@ -136,7 +136,7 @@ fn generate_trace_row_for_round<F: PrimeField64>(
             state[3][i],
             m_vec[2 * i],
             false,
-        )
+        );
     });
 
     // After the first four operations we need to save a copy of the state into the trace.
@@ -151,7 +151,7 @@ fn generate_trace_row_for_round<F: PrimeField64>(
             state[3][i],
             m_vec[2 * i + 1],
             true,
-        )
+        );
     });
 
     // Again we save another copy of the state.
@@ -173,7 +173,7 @@ fn generate_trace_row_for_round<F: PrimeField64>(
             state[3][(i + 3) % 4],
             m_vec[8 + 2 * i],
             false,
-        )
+        );
     });
 
     // Save a copy of the state to the trace.
@@ -193,7 +193,7 @@ fn generate_trace_row_for_round<F: PrimeField64>(
             state[3][(i + 3) % 4],
             m_vec[9 + 2 * i],
             true,
-        )
+        );
     });
 
     // Save a copy of the state to the trace.

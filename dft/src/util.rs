@@ -31,7 +31,7 @@ pub(crate) fn coset_shift_cols<F: Field>(mat: &mut RowMajorMatrix<F>, shift: F) 
         .for_each(|(row, weight)| {
             row.iter_mut().for_each(|coeff| {
                 *coeff *= weight;
-            })
+            });
         });
 }
 

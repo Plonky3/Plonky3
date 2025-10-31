@@ -19,7 +19,7 @@ where
     let x = rng.random::<F>();
     let y = rng.random::<F>();
     c.bench_function(&format!("{name} mul"), |b| {
-        b.iter(|| black_box(black_box(x) * black_box(y)))
+        b.iter(|| black_box(black_box(x) * black_box(y)));
     });
 }
 
@@ -30,7 +30,7 @@ where
     let mut rng = SmallRng::seed_from_u64(1);
     let x = rng.random::<F>();
     c.bench_function(&format!("{name} square"), |b| {
-        b.iter(|| black_box(black_box(x).square()))
+        b.iter(|| black_box(black_box(x).square()));
     });
 }
 
@@ -41,7 +41,7 @@ where
     let mut rng = SmallRng::seed_from_u64(1);
     let x = rng.random::<F>();
     c.bench_function(&format!("{name} inv"), |b| {
-        b.iter(|| black_box(black_box(x)).inverse())
+        b.iter(|| black_box(black_box(x)).inverse());
     });
 }
 
@@ -55,10 +55,10 @@ pub fn benchmark_mul_2exp<R: PrimeCharacteristicRing + Copy, const REPS: usize>(
     let mut rng = SmallRng::seed_from_u64(1);
     let mut input = Vec::new();
     for _ in 0..REPS {
-        input.push(rng.random::<R>())
+        input.push(rng.random::<R>());
     }
     c.bench_function(&format!("{name} mul_2exp_u64 {val}"), |b| {
-        b.iter(|| input.iter_mut().for_each(|i| *i = i.mul_2exp_u64(val)))
+        b.iter(|| input.iter_mut().for_each(|i| *i = i.mul_2exp_u64(val)));
     });
 }
 
@@ -69,10 +69,10 @@ where
     let mut rng = SmallRng::seed_from_u64(1);
     let mut input = Vec::new();
     for _ in 0..REPS {
-        input.push(rng.random::<F>())
+        input.push(rng.random::<F>());
     }
     c.bench_function(&format!("{name} halve. Num Reps: {REPS}"), |b| {
-        b.iter(|| input.iter_mut().for_each(|i| *i = i.halve()))
+        b.iter(|| input.iter_mut().for_each(|i| *i = i.halve()));
     });
 }
 
@@ -83,10 +83,10 @@ where
     let mut rng = SmallRng::seed_from_u64(1);
     let mut input = Vec::new();
     for _ in 0..REPS {
-        input.push(rng.random::<F>())
+        input.push(rng.random::<F>());
     }
     c.bench_function(&format!("{name} div_2exp_u64 {val}"), |b| {
-        b.iter(|| input.iter_mut().for_each(|i| *i = i.div_2exp_u64(val)))
+        b.iter(|| input.iter_mut().for_each(|i| *i = i.div_2exp_u64(val)));
     });
 }
 
@@ -104,16 +104,16 @@ pub fn benchmark_iter_sum<R: PrimeCharacteristicRing + Copy, const N: usize, con
     let mut rng = SmallRng::seed_from_u64(1);
     let mut input = Vec::new();
     for _ in 0..REPS {
-        input.push(rng.random::<[R; N]>())
+        input.push(rng.random::<[R; N]>());
     }
     c.bench_function(&format!("{name} sum/{REPS}, {N}"), |b| {
         b.iter(|| {
             let mut acc = R::ZERO;
             for row in &mut input {
-                acc += row.iter().copied().sum()
+                acc += row.iter().copied().sum();
             }
             acc
-        })
+        });
     });
 }
 
@@ -131,16 +131,16 @@ pub fn benchmark_sum_array<R: PrimeCharacteristicRing + Copy, const N: usize, co
     let mut rng = SmallRng::seed_from_u64(1);
     let mut input = Vec::new();
     for _ in 0..REPS {
-        input.push(rng.random::<[R; N]>())
+        input.push(rng.random::<[R; N]>());
     }
     c.bench_function(&format!("{name} tree sum/{REPS}, {N}"), |b| {
         b.iter(|| {
             let mut acc = R::ZERO;
             for row in &mut input {
-                acc += R::sum_array::<N>(row)
+                acc += R::sum_array::<N>(row);
             }
             acc
-        })
+        });
     });
 }
 
@@ -159,7 +159,7 @@ pub fn benchmark_dot_array<R: PrimeCharacteristicRing + Copy, const N: usize>(
     let rhs = rng.random::<[R; N]>();
 
     c.bench_function(&format!("{name} dot product/{N}"), |b| {
-        b.iter(|| black_box(R::dot_product(black_box(&lhs), black_box(&rhs))))
+        b.iter(|| black_box(R::dot_product(black_box(&lhs), black_box(&rhs))));
     });
 }
 
@@ -179,7 +179,7 @@ where
         let mut in_slice = slice_1.clone();
         b.iter(|| {
             F::add_slices(&mut in_slice, &slice_2);
-        })
+        });
     });
 }
 
@@ -195,13 +195,13 @@ pub fn benchmark_add_latency<R: PrimeCharacteristicRing + Copy, const N: usize>(
                 let mut rng = SmallRng::seed_from_u64(1);
                 let mut vec = Vec::new();
                 for _ in 0..N {
-                    vec.push(rng.random::<R>())
+                    vec.push(rng.random::<R>());
                 }
                 vec
             },
             |x| x.iter().fold(R::ZERO, |x, y| x + *y),
             BatchSize::SmallInput,
-        )
+        );
     });
 }
 
@@ -246,7 +246,7 @@ pub fn benchmark_add_throughput<R: PrimeCharacteristicRing + Copy, const N: usiz
                 (a, b, c, d, e, f, g, h, i, j)
             },
             BatchSize::SmallInput,
-        )
+        );
     });
 }
 
@@ -262,13 +262,13 @@ pub fn benchmark_sub_latency<R: PrimeCharacteristicRing + Copy, const N: usize>(
                 let mut rng = SmallRng::seed_from_u64(1);
                 let mut vec = Vec::new();
                 for _ in 0..N {
-                    vec.push(rng.random::<R>())
+                    vec.push(rng.random::<R>());
                 }
                 vec
             },
             |x| x.iter().fold(R::ZERO, |x, y| x - *y),
             BatchSize::SmallInput,
-        )
+        );
     });
 }
 
@@ -313,7 +313,7 @@ pub fn benchmark_sub_throughput<R: PrimeCharacteristicRing + Copy, const N: usiz
                 (a, b, c, d, e, f, g, h, i, j)
             },
             BatchSize::SmallInput,
-        )
+        );
     });
 }
 
@@ -329,13 +329,13 @@ pub fn benchmark_mul_latency<R: PrimeCharacteristicRing + Copy, const N: usize>(
                 let mut rng = SmallRng::seed_from_u64(1);
                 let mut vec = Vec::new();
                 for _ in 0..N {
-                    vec.push(rng.random::<R>())
+                    vec.push(rng.random::<R>());
                 }
                 vec
             },
             |x| x.iter().fold(R::ONE, |x, y| x * *y),
             BatchSize::SmallInput,
-        )
+        );
     });
 }
 
@@ -380,7 +380,7 @@ pub fn benchmark_mul_throughput<R: PrimeCharacteristicRing + Copy, const N: usiz
                 (a, b, c, d, e, f, g, h, i, j)
             },
             BatchSize::SmallInput,
-        )
+        );
     });
 }
 
@@ -396,14 +396,14 @@ pub fn benchmark_base_mul_latency<F: Field, A: Algebra<F> + Copy, const N: usize
                 let mut rng = SmallRng::seed_from_u64(1);
                 let mut vec = Vec::new();
                 for _ in 0..N {
-                    vec.push(rng.random::<F>())
+                    vec.push(rng.random::<F>());
                 }
                 let init_val = rng.random::<A>();
                 (vec, init_val)
             },
             |(x, init_val)| x.iter().fold(init_val, |x, y| x * *y),
             BatchSize::SmallInput,
-        )
+        );
     });
 }
 
@@ -464,7 +464,7 @@ pub fn benchmark_base_mul_throughput<F: Field, A: Algebra<F> + Copy, const N: us
                 (a, b, c, d, e, f, g, h, i, j)
             },
             BatchSize::SmallInput,
-        )
+        );
     });
 }
 
@@ -491,6 +491,6 @@ pub fn benchmark_exp_const<R: PrimeCharacteristicRing + Copy, const POWER: u64, 
                 black_box(data);
             },
             BatchSize::SmallInput,
-        )
+        );
     });
 }

@@ -71,7 +71,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit<F> {
         // DIT butterfly
         reverse_matrix_index_bits(&mut mat);
         for layer in 0..log_h {
-            dit_layer(&mut mat.as_view_mut(), layer, twiddles.clone());
+            dit_layer(&mut mat.as_view_mut(), layer, &twiddles);
         }
         mat
     }
@@ -87,7 +87,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit<F> {
 /// - `mat`: Mutable matrix view with height as a power of two.
 /// - `layer`: Index of the current FFT layer (starting at 0).
 /// - `twiddles`: Precomputed twiddle factors for this layer.
-fn dit_layer<F: Field>(mat: &mut RowMajorMatrixViewMut<'_, F>, layer: usize, twiddles: Arc<[F]>) {
+fn dit_layer<F: Field>(mat: &mut RowMajorMatrixViewMut<'_, F>, layer: usize, twiddles: &[F]) {
     // Get the number of rows in the matrix (must be a power of two)
     let h = mat.height();
     // Compute reversed layer index to access twiddle indices correctly
@@ -112,10 +112,10 @@ fn dit_layer<F: Field>(mat: &mut RowMajorMatrixViewMut<'_, F>, layer: usize, twi
                 .for_each(|(ind, (hi_chunk, lo_chunk))| {
                     if ind == 0 {
                         // The first pair doesn't require a twiddle factor
-                        TwiddleFreeButterfly.apply_to_rows(hi_chunk, lo_chunk)
+                        TwiddleFreeButterfly.apply_to_rows(hi_chunk, lo_chunk);
                     } else {
                         // Apply DIT butterfly using the twiddle factor at index `ind << layer_rev`
-                        DitButterfly(twiddles[ind << layer_rev]).apply_to_rows(hi_chunk, lo_chunk)
+                        DitButterfly(twiddles[ind << layer_rev]).apply_to_rows(hi_chunk, lo_chunk);
                     }
                 });
         });

@@ -22,7 +22,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for NaiveDft {
         for (res_r, point) in g.powers().take(h).enumerate() {
             for (src_r, point_power) in point.powers().take(h).enumerate() {
                 for c in 0..w {
-                    res.values[res_r * w + c] += point_power * mat.values[src_r * w + c]
+                    res.values[res_r * w + c] += point_power * mat.values[src_r * w + c];
                 }
             }
         }
@@ -82,7 +82,7 @@ mod tests {
                 ],
                 3,
             )
-        )
+        );
     }
 
     #[test]

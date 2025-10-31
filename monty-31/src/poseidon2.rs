@@ -81,7 +81,7 @@ where
             let full_sum = part_sum + state[0];
             state[0] = part_sum - state[0];
             P2P::internal_layer_mat_mul(state, full_sum);
-        })
+        });
     }
 }
 

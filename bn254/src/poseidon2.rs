@@ -65,7 +65,7 @@ fn bn254_matmul_internal(state: &mut [Bn254; 3]) {
 impl InternalLayer<Bn254, BN254_WIDTH, BN254_S_BOX_DEGREE> for Poseidon2InternalLayerBn254 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
     fn permute_state(&self, state: &mut [Bn254; BN254_WIDTH]) {
-        internal_permute_state(state, bn254_matmul_internal, &self.internal_constants)
+        internal_permute_state(state, bn254_matmul_internal, &self.internal_constants);
     }
 }
 

@@ -51,7 +51,7 @@ where
     let name = format!("rescue::<{}, {}>", type_name::<A>(), ALPHA);
     let id = BenchmarkId::new(name, WIDTH);
     c.bench_with_input(id, &input, |b, input| {
-        b.iter(|| rescue.permute(input.clone()))
+        b.iter(|| rescue.permute(input.clone()));
     });
 }
 

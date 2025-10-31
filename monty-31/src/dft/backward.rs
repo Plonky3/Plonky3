@@ -303,7 +303,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
             2 => Self::backward_2(input),
             _ => {
                 let packed_input = <Self as Field>::Packing::pack_slice_mut(input);
-                Self::backward_fft_recur(packed_input, root_table)
+                Self::backward_fft_recur(packed_input, root_table);
             }
         }
     }

@@ -214,7 +214,7 @@ fn add_rc_and_sbox<PMP: PackedMontyParameters, const D: u64>(
         let val_plus_rc = x86_64::_mm256_add_epi32(vec_val, rc);
         let output = apply_func_to_even_odd::<PMP>(val_plus_rc, exp_small::<PMP, D>);
 
-        *val = PackedMontyField31AVX2::<PMP>::from_vector(output)
+        *val = PackedMontyField31AVX2::<PMP>::from_vector(output);
     }
 }
 

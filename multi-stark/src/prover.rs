@@ -134,7 +134,7 @@ where
             &pub_vals[i],
             *trace_domain,
             quotient_domain,
-            trace_on_quotient_domain,
+            &trace_on_quotient_domain,
             alpha,
             constraint_cnt,
         );

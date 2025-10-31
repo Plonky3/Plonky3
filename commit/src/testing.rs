@@ -79,7 +79,7 @@ where
                     .for_each(|(row, weight)| {
                         row.iter_mut().for_each(|coeff| {
                             *coeff *= weight;
-                        })
+                        });
                     });
                 coeffs
             })

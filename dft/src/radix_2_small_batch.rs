@@ -677,7 +677,7 @@ fn dft_layer_par_triple<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>
                         twiddles_med,
                         twiddles_large,
                     );
-                })
+                });
             });
         });
 }

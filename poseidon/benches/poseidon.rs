@@ -52,7 +52,7 @@ where
     let name = format!("poseidon::<{}, {}>", type_name::<A>(), ALPHA);
     let id = BenchmarkId::new(name, WIDTH);
     c.bench_with_input(id, &input, |b, input| {
-        b.iter(|| poseidon.permute(input.clone()))
+        b.iter(|| poseidon.permute(input.clone()));
     });
 }
 

@@ -97,7 +97,7 @@ where
                         // All columns are added on the right hand side so, after reshaping, this has the net effect of adding `num_random_codewords` random columns on the right and interleaving the original trace with random rows.
 
                         let mut random_evaluation = add_random_cols(
-                            mat,
+                            &mat,
                             mat_width + 2 * self.num_random_codewords,
                             &mut *self.rng.borrow_mut(),
                         );
@@ -148,7 +148,7 @@ where
         let mut rng = self.rng.borrow_mut();
         let randomized_evaluations: Vec<RowMajorMatrix<Val>> = evaluations
             .into_iter()
-            .map(|mat| add_random_cols(mat, self.num_random_codewords, &mut *rng))
+            .map(|mat| add_random_cols(&mat, self.num_random_codewords, &mut *rng))
             .collect();
         // Add random values to the LDE evaluations as described in https://eprint.iacr.org/2024/1037.pdf.
         // If we have `d` chunks, let q'_i(X) = q_i(X) + v_H_i(X) * t_i(X) where t(X) is random, for 1 <= i < d.
@@ -341,7 +341,7 @@ where
 
 #[instrument(level = "debug", skip_all)]
 fn add_random_cols<Val, R>(
-    mat: RowMajorMatrix<Val>,
+    mat: &RowMajorMatrix<Val>,
     num_random_codewords: usize,
     mut rng: R,
 ) -> RowMajorMatrix<Val>
