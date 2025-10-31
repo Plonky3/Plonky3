@@ -36,7 +36,7 @@ pub struct StarkInstance<'a, SC: SGC, A> {
 #[instrument(skip_all)]
 pub fn prove_multi<SC, A, LG>(
     config: &SC,
-    instances: Vec<StarkInstance<SC, A>>,
+    instances: Vec<StarkInstance<'_, SC, A>>,
     lookup_gadget: &LG,
 ) -> MultiProof<SC>
 where
@@ -265,7 +265,7 @@ where
             &pub_vals[i],
             *trace_domain,
             quotient_domain,
-            trace_on_quotient_domain,
+            &trace_on_quotient_domain,
             permutation_on_quotient_domain,
             &all_lookups[i],
             &lookup_data[i],

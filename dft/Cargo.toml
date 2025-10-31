@@ -16,6 +16,7 @@ p3-maybe-rayon.workspace = true
 p3-util.workspace = true
 
 itertools.workspace = true
+spin.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
@@ -33,3 +34,6 @@ parallel = ["p3-maybe-rayon/parallel"]
 [[bench]]
 name = "fft"
 harness = false
+
+[lints]
+workspace = true

@@ -290,7 +290,7 @@ where
             .mmcs
             .get_matrices(&first_layer_data)
             .into_iter()
-            .map(|m| fold_y(bivariate_beta, m.as_view()))
+            .map(|m| fold_y(bivariate_beta, m))
             // Reverse, because FRI expects descending by height
             .rev()
             .collect();
@@ -415,17 +415,21 @@ where
                         .map(|&height| Dimensions { width: 0, height })
                         .collect_vec();
 
-                    let (dims, idx) = if let Some(log_batch_max_height) =
-                        batch_heights.iter().max().map(|x| log2_strict_usize(*x))
-                    {
-                        (
-                            &batch_dims[..],
-                            index >> (log_global_max_height - log_batch_max_height),
-                        )
-                    } else {
-                        // Empty batch?
-                        (&[][..], 0)
-                    };
+                    let (dims, idx) = batch_heights
+                        .iter()
+                        .max()
+                        .map(|x| log2_strict_usize(*x))
+                        .map_or_else(
+                            ||
+                            // Empty batch?
+                            (&[][..], 0),
+                            |log_batch_max_height| {
+                                (
+                                    &batch_dims[..],
+                                    index >> (log_global_max_height - log_batch_max_height),
+                                )
+                            },
+                        );
 
                     self.mmcs
                         .verify_batch(batch_commit, dims, idx, batch_opening.into())

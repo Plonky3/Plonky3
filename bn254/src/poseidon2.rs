@@ -65,7 +65,7 @@ fn bn254_matmul_internal(state: &mut [Bn254; 3]) {
 impl InternalLayer<Bn254, BN254_WIDTH, BN254_S_BOX_DEGREE> for Poseidon2InternalLayerBn254 {
     /// Perform the internal layers of the Poseidon2 permutation on the given state.
     fn permute_state(&self, state: &mut [Bn254; BN254_WIDTH]) {
-        internal_permute_state(state, bn254_matmul_internal, &self.internal_constants)
+        internal_permute_state(state, bn254_matmul_internal, &self.internal_constants);
     }
 }
 
@@ -127,14 +127,15 @@ mod tests {
 
         let value = Bn254::from_bytes_monty(&full_bytes);
 
-        if let Some(field_elem) = value {
-            // From bytes does not convert into Monty form.
-            // Hence we need to do that ourselves.
-            let monty_form = monty_mul(BN254_MONTY_R_SQ, field_elem.value);
-            Bn254::new_monty(monty_form)
-        } else {
-            panic!("Invalid field element")
-        }
+        value.map_or_else(
+            || panic!("Invalid field element"),
+            |field_elem| {
+                // From bytes does not convert into Monty form.
+                // Hence we need to do that ourselves.
+                let monty_form = monty_mul(BN254_MONTY_R_SQ, field_elem.value);
+                Bn254::new_monty(monty_form)
+            },
+        )
     }
 
     fn ark_ff_from_bn254(input: Bn254) -> ark_FpBN256 {

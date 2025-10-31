@@ -302,11 +302,10 @@ mod tests {
         };
 
         // Extract the packed and suffix iterators from row 0 (which is reversed row 1).
-        let (packed_iter, suffix_iter) = mapped_view.horizontally_packed_row::<Packed>(0);
+        let (packed_iter, mut suffix_iter) = mapped_view.horizontally_packed_row::<Packed>(0);
 
         // Collect iterators to concrete values.
         let packed: Vec<_> = packed_iter.collect();
-        let suffix: Vec<_> = suffix_iter.collect();
 
         // Check the packed row values match reversed second row.
         assert_eq!(
@@ -315,7 +314,7 @@ mod tests {
         );
 
         // Check there are no suffix leftovers.
-        assert!(suffix.is_empty());
+        assert!(suffix_iter.next().is_none());
     }
 
     #[test]

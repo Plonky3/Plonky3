@@ -1,3 +1,5 @@
+#![allow(clippy::use_self)]
+
 //! Discrete Fourier Transform, in-place, decimation-in-frequency
 //!
 //! Straightforward recursive algorithm, "unrolled" up to size 256.
@@ -32,6 +34,29 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
 
         (0..(lg_n - 1))
             .map(|i| nth_roots.iter().step_by(1 << i).copied().collect())
+            .rev()
+            .collect()
+    }
+
+    pub fn get_missing_twiddles(req_lg_n: usize, cur_lg_n: usize) -> Vec<Vec<Self>> {
+        // Get the main generator for the largest required FFT size.
+        let main_generator = Self::two_adic_generator(req_lg_n);
+
+        (cur_lg_n..req_lg_n)
+            .map(|level| {
+                // For a given 'level', we're generating twiddles for a DIF pass
+                // where the number of butterflies is m = 2^level.
+                let count = 1 << level;
+
+                // The generator for this smaller FFT size is a power of the main generator.
+                //
+                // The exponent is 2^(req_lg_n - (level + 1)).
+                let sub_generator_exp = 1 << (req_lg_n - level - 1);
+                let sub_generator = main_generator.exp_u64(sub_generator_exp as u64);
+
+                // Now, we can collect the 'count' powers of this specific sub-generator.
+                sub_generator.powers().collect_n(count)
+            })
             .collect()
     }
 }
@@ -169,6 +194,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         let packing_width = <Self as Field>::Packing::WIDTH;
         let n = packed_input.len() * packing_width;
         let lg_n = log2_strict_usize(n);
+        debug_assert_eq!(root_table.len(), lg_n - 1);
 
         // Stop loop early to do radix 16 separately. This value is determined by the largest
         // packing width we will encounter, which is 16 at the moment for AVX512. Specifically
@@ -183,15 +209,14 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
         assert!(lg_n >= LAST_LOOP_LAYER + NUM_SPECIALISATIONS);
 
         // Specialise the first NUM_SPECIALISATIONS iterations; improves performance a little.
-        forward_pass_packed(packed_input, &root_table[0]); // lg_m == lg_n - 1, s == 0
-        forward_iterative_layer_1(packed_input, &root_table[1]); // lg_m == lg_n - 2, s == 1
+        forward_pass_packed(packed_input, &root_table[lg_n - 2]); // lg_m == lg_n - 1, s == 0
+        forward_iterative_layer_1(packed_input, &root_table[lg_n - 3]); // lg_m == lg_n - 2, s == 1
 
         // loop from lg_n-2 down to 4.
         for lg_m in (LAST_LOOP_LAYER..(lg_n - NUM_SPECIALISATIONS)).rev() {
-            let s = lg_n - lg_m - 1;
             let m = 1 << lg_m;
 
-            let roots = &root_table[s];
+            let roots = &root_table[lg_m - 1];
             debug_assert_eq!(roots.len(), m);
 
             Self::forward_iterative_layer(packed_input, roots, m);
@@ -286,7 +311,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     fn forward_32(a: &mut [Self], root_table: &[Vec<Self>]) {
         assert_eq!(a.len(), 32);
 
-        Self::forward_pass(a, &root_table[0]);
+        Self::forward_pass(a, &root_table[root_table.len() - 1]);
 
         // Safe because a.len() == 32
         let (a0, a1) = unsafe { a.split_at_mut_unchecked(a.len() / 2) };
@@ -304,13 +329,13 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
             Self::forward_iterative(input, root_table);
         } else {
             assert_eq!(n, 1 << (root_table.len() + 1));
-            forward_pass_packed(input, &root_table[0]);
+            forward_pass_packed(input, &root_table[root_table.len() - 1]);
 
             // Safe because input.len() > ITERATIVE_FFT_THRESHOLD
             let (a0, a1) = unsafe { input.split_at_mut_unchecked(input.len() / 2) };
 
-            Self::forward_fft_recur(a0, &root_table[1..]);
-            Self::forward_fft_recur(a1, &root_table[1..]);
+            Self::forward_fft_recur(a0, &root_table[..root_table.len() - 1]);
+            Self::forward_fft_recur(a1, &root_table[..root_table.len() - 1]);
         }
     }
 
@@ -329,7 +354,7 @@ impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
             2 => Self::forward_2(input),
             _ => {
                 let packed_input = <Self as Field>::Packing::pack_slice_mut(input);
-                Self::forward_fft_recur(packed_input, root_table)
+                Self::forward_fft_recur(packed_input, root_table);
             }
         }
     }

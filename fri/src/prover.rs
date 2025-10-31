@@ -47,6 +47,7 @@ pub fn prove_fri<Folding, Val, Challenge, InputMmcs, FriMmcs, Challenger>(
     challenger: &mut Challenger,
     log_global_max_height: usize,
     prover_data_with_opening_points: &[ProverDataWithOpeningPoints<
+        '_,
         Challenge,
         InputMmcs::ProverData<RowMajorMatrix<Val>>,
     >],
@@ -295,6 +296,7 @@ fn open_input<Val, Challenge, InputMmcs>(
     log_global_max_height: usize,
     index: usize,
     prover_data_with_opening_points: &[ProverDataWithOpeningPoints<
+        '_,
         Challenge,
         InputMmcs::ProverData<RowMajorMatrix<Val>>,
     >],

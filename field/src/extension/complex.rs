@@ -99,7 +99,7 @@ pub trait HasComplexBinomialExtension<const D: usize>: ComplexExtendable {
     const EXT_GENERATOR: [Complex<Self>; D];
 }
 
-impl<F, const D: usize> BinomiallyExtendableAlgebra<Complex<F>, D> for Complex<F> where
+impl<F, const D: usize> BinomiallyExtendableAlgebra<Self, D> for Complex<F> where
     F: HasComplexBinomialExtension<D>
 {
 }

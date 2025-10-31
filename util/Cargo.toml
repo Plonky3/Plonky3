@@ -24,3 +24,6 @@ parallel = ["rayon"]
 [[bench]]
 name = "bit_reverse"
 harness = false
+
+[lints]
+workspace = true

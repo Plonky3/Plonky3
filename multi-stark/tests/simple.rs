@@ -411,8 +411,8 @@ enum DemoAir {
 impl<F> BaseAir<F> for DemoAir {
     fn width(&self) -> usize {
         match self {
-            DemoAir::Fib(a) => <FibonacciAir as BaseAir<F>>::width(a),
-            DemoAir::Mul(a) => <MulAir as BaseAir<F>>::width(a),
+            Self::Fib(a) => <FibonacciAir as BaseAir<F>>::width(a),
+            Self::Mul(a) => <MulAir as BaseAir<F>>::width(a),
         }
     }
 }
@@ -475,8 +475,8 @@ where
 impl<AB: PermutationAirBuilder + AirBuilderWithPublicValues> Air<AB> for DemoAir {
     fn eval(&self, b: &mut AB) {
         match self {
-            DemoAir::Fib(a) => a.eval(b),
-            DemoAir::Mul(a) => a.eval(b),
+            Self::Fib(a) => a.eval(b),
+            Self::Mul(a) => a.eval(b),
         }
     }
 }

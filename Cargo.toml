@@ -39,6 +39,27 @@ members = [
     "util",
 ]
 
+[workspace.lints]
+rust.rust_2018_idioms = { level = "deny", priority = -1 }
+rust.unused_must_use = "deny"
+rust.rust_2024_incompatible_pat = "warn"
+rustdoc.all = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+
+# Some pedantic lints
+semicolon_if_nothing_returned = "warn"
+needless_pass_by_value = "warn"
+
+redundant_pub_crate = "allow"
+too_long_first_doc_paragraph = "allow"
+unused_peekable = "allow"
+tuple_array_conversions = "allow"
+transmute_undefined_repr = "allow"
+cognitive_complexity = "allow"
+
 [workspace.dependencies]
 bincode = { version = "2.0.0", default-features = false }
 blake3 = { version = "1.5", default-features = false }
@@ -53,14 +74,15 @@ itertools = { version = "0.14.0", default-features = false, features = [
 num-bigint = { version = "0.4.3", default-features = false }
 paste = "1.0.15"
 postcard = { version = "1.0.0", default-features = false }
-proptest = "1.7"
+proptest = "1.8"
 rand = { version = "0.9.0", default-features = false, features = ["small_rng"] }
 rand_xoshiro = "0.7.0"
-rayon = "1.7.0"
+rayon = "1.11.0"
 serde = { version = "1.0", default-features = false }
 serde_json = "1.0.113"
 sha2 = { version = "0.10.8", default-features = false }
 sha3 = { version = "0.10.8", default-features = false }
+spin = "0.10.0"
 tiny-keccak = "2.0.2"
 tracing = { version = "0.1.37", default-features = false, features = [
     "attributes",

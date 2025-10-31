@@ -110,7 +110,7 @@ impl<FP: FieldParameters> MontyField31<FP> {
         powers_of_two
     };
 
-    const HALF: Self = MontyField31::new(FP::HALF_P_PLUS_1);
+    const HALF: Self = Self::new(FP::HALF_P_PLUS_1);
 }
 
 impl<FP: MontyParameters> Ord for MontyField31<FP> {

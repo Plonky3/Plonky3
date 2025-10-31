@@ -245,7 +245,7 @@ impl LogUpGadget {
             );
 
             // Final constraint:
-            let final_val = (AB::ExprEF::from(expected_cumulated.clone()) - s_local.clone())
+            let final_val = (AB::ExprEF::from(expected_cumulated) - s_local.clone())
                 * common_denominator
                 - numerator;
 
@@ -261,9 +261,7 @@ impl LogUpGadget {
             // - we are already ensuring that the first row is 0,
             // - at point `g^{n - 1}` (where `n` is the domain size), the next point is `g^0`, so that the constraint still holds
             // on the last row.
-            builder.assert_zero_ext(
-                (s_next - s_local.clone()) * common_denominator.clone() - numerator.clone(),
-            );
+            builder.assert_zero_ext((s_next - s_local) * common_denominator - numerator);
         }
     }
 }

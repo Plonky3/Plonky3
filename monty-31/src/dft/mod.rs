@@ -1,9 +1,8 @@
 //! An implementation of the FFT for `MontyField31`
 extern crate alloc;
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::cell::RefCell;
-use core::iter;
 
 use itertools::izip;
 use p3_dft::TwoAdicSubgroupDft;
@@ -12,7 +11,8 @@ use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
-use p3_util::log2_ceil_usize;
+use p3_util::{log2_ceil_usize, log2_strict_usize};
+use spin::RwLock;
 use tracing::{debug_span, instrument};
 
 mod backward;
@@ -44,20 +44,19 @@ fn coset_shift_and_scale_rows<F: Field>(
 /// decimation-in-time in the backward (inverse) direction.
 #[derive(Clone, Debug, Default)]
 pub struct RecursiveDft<F> {
-    /// Memoized twiddle factors for each length log_n.
-    ///
-    /// TODO: The use of RefCell means this can't be shared across
-    /// threads; consider using RwLock or finding a better design
-    /// instead.
-    twiddles: RefCell<Vec<Vec<F>>>,
-    inv_twiddles: RefCell<Vec<Vec<F>>>,
+    /// Forward twiddle tables
+    #[allow(clippy::type_complexity)]
+    twiddles: Arc<RwLock<Arc<[Vec<F>]>>>,
+    /// Inverse twiddle tables
+    #[allow(clippy::type_complexity)]
+    inv_twiddles: Arc<RwLock<Arc<[Vec<F>]>>>,
 }
 
 impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
     pub fn new(n: usize) -> Self {
         let res = Self {
-            twiddles: RefCell::default(),
-            inv_twiddles: RefCell::default(),
+            twiddles: Arc::default(),
+            inv_twiddles: Arc::default(),
         };
         res.update_twiddles(n);
         res
@@ -70,12 +69,11 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
         twiddles: &[Vec<MontyField31<MP>>],
     ) {
         if ncols > 1 {
-            let lg_fft_len = p3_util::log2_ceil_usize(ncols);
-            let roots_idx = (twiddles.len() + 1) - lg_fft_len;
-            let twiddles = &twiddles[roots_idx..];
+            let lg_fft_len = log2_strict_usize(ncols);
+            let twiddles = &twiddles[..(lg_fft_len - 1)];
 
             mat.par_chunks_exact_mut(ncols)
-                .for_each(|v| MontyField31::forward_fft(v, twiddles))
+                .for_each(|v| MontyField31::forward_fft(v, twiddles));
         }
     }
 
@@ -86,48 +84,67 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
         twiddles: &[Vec<MontyField31<MP>>],
     ) {
         if ncols > 1 {
-            let lg_fft_len = p3_util::log2_ceil_usize(ncols);
-            let roots_idx = (twiddles.len() + 1) - lg_fft_len;
-            let twiddles = &twiddles[roots_idx..];
+            let lg_fft_len = p3_util::log2_strict_usize(ncols);
+            let twiddles = &twiddles[..(lg_fft_len - 1)];
 
             mat.par_chunks_exact_mut(ncols)
-                .for_each(|v| MontyField31::backward_fft(v, twiddles))
+                .for_each(|v| MontyField31::backward_fft(v, twiddles));
         }
     }
 
     /// Compute twiddle factors, or take memoized ones if already available.
     #[instrument(skip_all)]
     fn update_twiddles(&self, fft_len: usize) {
-        // TODO: This recomputes the entire table from scratch if we
-        // need it to be bigger, which is wasteful.
-
         // As we don't save the twiddles for the final layer where
         // the only twiddle is 1, roots_of_unity_table(fft_len)
         // returns a vector of twiddles of length log_2(fft_len) - 1.
-        let curr_max_fft_len = 2 << self.twiddles.borrow().len();
-        if fft_len > curr_max_fft_len {
-            let new_twiddles = MontyField31::roots_of_unity_table(fft_len);
-            // We can obtain the inverse twiddles by reversing and
-            // negating the twiddles.
-            let new_inv_twiddles = new_twiddles
-                .iter()
-                .map(|ts| {
-                    // The first twiddle is still one, we reverse and negate the rest...
-                    iter::once(MontyField31::ONE)
-                        .chain(
-                            ts[1..]
-                                .iter()
-                                .rev()
-                                // A twiddle t is never zero, so negation simplifies
-                                // to P - t.
-                                .map(|&t| MontyField31::new_monty(MP::PRIME - t.value)),
-                        )
-                        .collect()
-                })
-                .collect();
-            self.twiddles.replace(new_twiddles);
-            self.inv_twiddles.replace(new_inv_twiddles);
+        // let curr_max_fft_len = 2 << self.twiddles.read().len();
+        let need = log2_strict_usize(fft_len);
+        let snapshot = self.twiddles.read().clone();
+        let have = snapshot.len() + 1;
+        if have >= need {
+            return;
         }
+
+        let missing_twiddles = MontyField31::get_missing_twiddles(need, have);
+
+        let missing_inv_twiddles = missing_twiddles
+            .iter()
+            .map(|ts| {
+                core::iter::once(MontyField31::ONE)
+                    .chain(
+                        ts[1..]
+                            .iter()
+                            .rev()
+                            .map(|&t| MontyField31::new_monty(MP::PRIME - t.value)),
+                    )
+                    .collect()
+            })
+            .collect::<Vec<_>>();
+        // Helper closure to extend a table under its lock.
+        let extend_table = |lock: &RwLock<Arc<[Vec<_>]>>, missing: &[Vec<_>]| {
+            let mut w = lock.write();
+            let current_len = w.len();
+            // Double-check if an update is still needed after acquiring the write lock.
+            if (current_len + 1) < need {
+                let mut v = w.to_vec();
+                // Append only the portion needed in case another thread did a partial update.
+                let extend_from = current_len.saturating_sub(current_len);
+                v.extend_from_slice(&missing[extend_from..]);
+                *w = v.into();
+            }
+        };
+        // Atomically update each table. This two-step process is the source of the race condition.
+        extend_table(&self.twiddles, &missing_twiddles);
+        extend_table(&self.inv_twiddles, &missing_inv_twiddles);
+    }
+
+    fn get_twiddles(&self) -> Arc<[Vec<MontyField31<MP>>]> {
+        self.twiddles.read().clone()
+    }
+
+    fn get_inv_twiddles(&self) -> Arc<[Vec<MontyField31<MP>>]> {
+        self.inv_twiddles.read().clone()
     }
 }
 
@@ -169,6 +186,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
     {
         let nrows = mat.height();
         let ncols = mat.width();
+
         if nrows <= 1 {
             return mat.bit_reverse_rows();
         }
@@ -177,7 +195,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
             .in_scope(|| RowMajorMatrix::default(nrows, ncols));
 
         self.update_twiddles(nrows);
-        let twiddles = self.twiddles.borrow();
+        let twiddles = self.get_twiddles();
 
         // transpose input
         debug_span!("pre-transpose", nrows, ncols)
@@ -211,7 +229,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
             debug_span!("initial bitrev").in_scope(|| mat.bit_reverse_rows().to_row_major_matrix());
 
         self.update_twiddles(nrows);
-        let inv_twiddles = self.inv_twiddles.borrow();
+        let inv_twiddles = self.get_inv_twiddles();
 
         // transpose input
         debug_span!("pre-transpose", nrows, ncols)
@@ -270,7 +288,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
 
         // Apply inverse DFT; result is not yet normalised.
         self.update_twiddles(result_nrows);
-        let inv_twiddles = self.inv_twiddles.borrow();
+        let inv_twiddles = self.get_inv_twiddles();
         debug_span!("inverse dft batch", n_dfts = ncols, fft_len = nrows)
             .in_scope(|| Self::decimation_in_time_dft(coeffs, nrows, &inv_twiddles));
 
@@ -285,7 +303,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         // `padded` is implicitly zero padded since it was initialised
         // to zeros when declared above.
 
-        let twiddles = self.twiddles.borrow();
+        let twiddles = self.get_twiddles();
 
         // Apply DFT
         debug_span!("dft batch", n_dfts = ncols, fft_len = result_nrows)

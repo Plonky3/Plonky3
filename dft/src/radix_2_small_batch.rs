@@ -1,7 +1,7 @@
 //! An FFT implementation optimized for small batch sizes.
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::cell::RefCell;
 use core::iter;
 
 use itertools::Itertools;
@@ -11,6 +11,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{as_base_slice, log2_strict_usize, reverse_slice_index_bits};
+use spin::RwLock;
 
 use crate::{
     Butterfly, DifButterfly, DifButterflyZeros, DitButterfly, TwiddleFreeButterfly,
@@ -38,14 +39,12 @@ pub struct Radix2DFTSmallBatch<F> {
     /// For each `i`, `twiddles[i]` contains a list of twiddles stored in
     /// bit reversed order. The final set of twiddles `twiddles[-1]` is the
     /// one element vectors `[1]` and more general `twiddles[-i]` has length `2^i`.
-    ///
-    /// TODO: The use of RefCell means this can't be shared across
-    /// threads; consider using RwLock or finding a better design
-    /// instead.
-    twiddles: RefCell<Vec<Vec<F>>>,
+    #[allow(clippy::type_complexity)]
+    twiddles: Arc<RwLock<Arc<[Vec<F>]>>>,
 
     /// Similar to `twiddles`, but stored the inverses used for the inverse fft.
-    inv_twiddles: RefCell<Vec<Vec<F>>>,
+    #[allow(clippy::type_complexity)]
+    inv_twiddles: Arc<RwLock<Arc<[Vec<F>]>>>,
 }
 
 impl<F: TwoAdicField> Radix2DFTSmallBatch<F> {
@@ -53,10 +52,7 @@ impl<F: TwoAdicField> Radix2DFTSmallBatch<F> {
     ///
     /// The input `n` should be a power of two, representing the maximal FFT size you expect to handle.
     pub fn new(n: usize) -> Self {
-        let res = Self {
-            twiddles: RefCell::default(),
-            inv_twiddles: RefCell::default(),
-        };
+        let res = Self::default();
         res.update_twiddles(n);
         res
     }
@@ -86,7 +82,7 @@ impl<F: TwoAdicField> Radix2DFTSmallBatch<F> {
         // need it to be larger, which is wasteful.
 
         // roots_of_unity_table(fft_len) returns a vector of twiddles of length log_2(fft_len).
-        let curr_max_fft_len = 1 << self.twiddles.borrow().len();
+        let curr_max_fft_len = 1 << self.twiddles.read().len();
         if fft_len > curr_max_fft_len {
             let mut new_twiddles = self.roots_of_unity_table(fft_len);
             let mut new_inv_twiddles: Vec<Vec<F>> = new_twiddles
@@ -107,8 +103,20 @@ impl<F: TwoAdicField> Radix2DFTSmallBatch<F> {
                 reverse_slice_index_bits(ts);
             });
 
-            self.twiddles.replace(new_twiddles);
-            self.inv_twiddles.replace(new_inv_twiddles);
+            {
+                let mut tw_lock = self.twiddles.write();
+                let cur_have = 1usize << tw_lock.len();
+                if fft_len > cur_have {
+                    *tw_lock = Arc::from(new_twiddles); // move in the new table
+                }
+            }
+            {
+                let mut inv_tw_lock = self.inv_twiddles.write();
+                let cur_have = 1usize << inv_tw_lock.len();
+                if fft_len > cur_have {
+                    *inv_tw_lock = Arc::from(new_inv_twiddles); // move in the new table
+                }
+            }
         }
     }
 }
@@ -125,9 +133,8 @@ where
         let log_h = log2_strict_usize(h);
 
         self.update_twiddles(h);
-        let root_table = self.twiddles.borrow();
-        let len = root_table.len();
-        let root_table = &root_table[len - log_h..];
+        let g = self.twiddles.read().clone(); // Lock is dropped immediately
+        let root_table = &g[g.len() - log_h..];
 
         // The strategy will be to do a standard round-by-round parallelization
         // until the chunk size is smaller than `num_par_rows * mat.width()` after which we
@@ -178,9 +185,12 @@ where
         let log_h = log2_strict_usize(h);
 
         self.update_twiddles(h);
-        let root_table = self.inv_twiddles.borrow();
-        let len = root_table.len();
-        let root_table = &root_table[len - log_h..];
+        let g = self.inv_twiddles.read().clone(); // Lock is dropped immediately
+        let start = g
+            .len()
+            .checked_sub(log_h)
+            .expect("log_h exceeds inv_twiddles length");
+        let root_table = &g[start..];
 
         // Find the number of rows which can roughly fit in L1 cache.
         // The strategy is the same as `dft_batch` but in reverse.
@@ -244,12 +254,18 @@ where
         let log_h = log2_strict_usize(h);
 
         self.update_twiddles(h << added_bits);
-        let root_table = self.twiddles.borrow();
-        let inv_root_table = self.inv_twiddles.borrow();
-        let len = root_table.len();
-
-        let root_table = &root_table[len - (log_h + added_bits)..];
-        let inv_root_table = &inv_root_table[len - log_h..];
+        let g = self.twiddles.read().clone(); // Lock is dropped immediately
+        let start = g
+            .len()
+            .checked_sub(log_h + added_bits)
+            .expect("log_h exceeds twiddles length");
+        let root_table = &g[start..];
+        let g = self.inv_twiddles.read().clone(); // Lock is dropped immediately
+        let start = g
+            .len()
+            .checked_sub(log_h)
+            .expect("log_h exceeds inv_twiddles length");
+        let inv_root_table = &g[start..];
         let output_height = h << added_bits;
 
         // The matrix which we will use to store the output.
@@ -348,7 +364,10 @@ where
 /// - `mat`: Mutable matrix whose height is a power of two.
 /// - `twiddles`: Precomputed twiddle factors for this layer.
 #[inline]
-fn dft_layer_par<F: Field, B: Butterfly<F>>(mat: &mut RowMajorMatrixViewMut<F>, twiddles: &[B]) {
+fn dft_layer_par<F: Field, B: Butterfly<F>>(
+    mat: &mut RowMajorMatrixViewMut<'_, F>,
+    twiddles: &[B],
+) {
     debug_assert!(
         mat.height().is_multiple_of(twiddles.len()),
         "Matrix height must be divisible by the number of twiddles"
@@ -455,8 +474,8 @@ fn initial_layers<F: Field>(chunk: &mut [F], root_table: &[Vec<F>], index: usize
 /// Similar to [par_remaining_layers] followed by [par_initial_layers]
 /// with a scaling and copying operation in between.
 fn par_middle_layers<F: Field>(
-    in_mat: &mut RowMajorMatrixViewMut<F>,
-    out_mat: &mut RowMajorMatrixViewMut<F>,
+    in_mat: &mut RowMajorMatrixViewMut<'_, F>,
+    out_mat: &mut RowMajorMatrixViewMut<'_, F>,
     num_par_rows: usize,
     root_table: &[Vec<F>],
     inv_root_table: &[Vec<F>],
@@ -563,7 +582,7 @@ fn dft_layer<F: Field, B: Butterfly<F>>(vec: &mut [F], twiddles: &[B]) {
 /// - `multi_butterfly`: Multi-layer butterfly which applies the two layers in the correct order.
 #[inline]
 fn dft_layer_par_double<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>(
-    mat: &mut RowMajorMatrixViewMut<F>,
+    mat: &mut RowMajorMatrixViewMut<'_, F>,
     twiddles_small: &[B],
     twiddles_large: &[B],
     multi_butterfly: M,
@@ -616,7 +635,7 @@ fn dft_layer_par_double<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>
 /// - `multi_butterfly`: Multi-layer butterfly which applies the three layers in the correct order.
 #[inline]
 fn dft_layer_par_triple<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>(
-    mat: &mut RowMajorMatrixViewMut<F>,
+    mat: &mut RowMajorMatrixViewMut<'_, F>,
     twiddles_small: &[B],
     twiddles_med: &[B],
     twiddles_large: &[B],
@@ -658,7 +677,7 @@ fn dft_layer_par_triple<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>
                         twiddles_med,
                         twiddles_large,
                     );
-                })
+                });
             });
         });
 }
@@ -668,7 +687,7 @@ fn dft_layer_par_triple<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>
 /// This function is used to correct for the fact that the total number of layers
 /// may not be a multiple of `LAYERS_PER_GROUP`.
 fn dft_layer_par_extra_layers<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>(
-    mat: &mut RowMajorMatrixViewMut<F>,
+    mat: &mut RowMajorMatrixViewMut<'_, F>,
     root_table: &[Vec<F>],
     multi_layer: M,
 ) {
@@ -747,7 +766,7 @@ type DoubleLayerBlockDecomposition<'a, F> =
 /// Performs an FFT layer on the sub-blocks using a single twiddle factor.
 #[inline]
 fn fft_double_layer_single_twiddle<F: Field, Fly: Butterfly<F>>(
-    block: &mut DoubleLayerBlockDecomposition<F>,
+    block: &mut DoubleLayerBlockDecomposition<'_, F>,
     butterfly: Fly,
 ) {
     butterfly.apply_to_rows(block.0.0, block.1.0);
@@ -760,7 +779,7 @@ fn fft_double_layer_single_twiddle<F: Field, Fly: Butterfly<F>>(
 /// be a `TwiddleFreeButterfly`, which does not require a twiddle factor.
 #[inline]
 fn fft_double_layer_double_twiddle<F: Field, Fly0: Butterfly<F>, Fly1: Butterfly<F>>(
-    block: &mut DoubleLayerBlockDecomposition<F>,
+    block: &mut DoubleLayerBlockDecomposition<'_, F>,
     fly0: Fly0,
     fly1: Fly1,
 ) {
@@ -777,7 +796,7 @@ type TripleLayerBlockDecomposition<'a, F> = (
 /// Performs an FFT layer on the sub-blocks using a single twiddle factor.
 #[inline]
 fn fft_triple_layer_single_twiddle<F: Field, Fly: Butterfly<F>>(
-    block: &mut TripleLayerBlockDecomposition<F>,
+    block: &mut TripleLayerBlockDecomposition<'_, F>,
     butterfly: Fly,
 ) {
     butterfly.apply_to_rows(block.0.0.0, block.1.0.0);
@@ -792,7 +811,7 @@ fn fft_triple_layer_single_twiddle<F: Field, Fly: Butterfly<F>>(
 /// be a `TwiddleFreeButterfly`, which does not require a twiddle factor.
 #[inline]
 fn fft_triple_layer_double_twiddle<F: Field, Fly0: Butterfly<F>, Fly1: Butterfly<F>>(
-    block: &mut TripleLayerBlockDecomposition<F>,
+    block: &mut TripleLayerBlockDecomposition<'_, F>,
     fly0: Fly0,
     fly1: Fly1,
 ) {
@@ -808,7 +827,7 @@ fn fft_triple_layer_double_twiddle<F: Field, Fly0: Butterfly<F>, Fly1: Butterfly
 /// be a `TwiddleFreeButterfly`, which does not require a twiddle factor.
 #[inline]
 fn fft_triple_layer_quad_twiddle<F: Field, Fly0: Butterfly<F>, Flies: Butterfly<F>>(
-    block: &mut TripleLayerBlockDecomposition<F>,
+    block: &mut TripleLayerBlockDecomposition<'_, F>,
     fly0: Fly0,
     butterflies: &[Flies],
 ) {
@@ -861,7 +880,7 @@ fn zip_par_iter_vec<I: IndexedParallelIterator>(
 trait MultiLayerButterfly<F: Field, B: Butterfly<F>>: Copy + Send + Sync {
     fn apply_2_layers(
         &self,
-        chunk_decomposition: DoubleLayerBlockDecomposition<F>,
+        chunk_decomposition: DoubleLayerBlockDecomposition<'_, F>,
         ind: usize,
         twiddles_small: &[B],
         twiddles_large: &[B],
@@ -869,7 +888,7 @@ trait MultiLayerButterfly<F: Field, B: Butterfly<F>>: Copy + Send + Sync {
 
     fn apply_3_layers(
         &self,
-        chunk_decomposition: TripleLayerBlockDecomposition<F>,
+        chunk_decomposition: TripleLayerBlockDecomposition<'_, F>,
         ind: usize,
         twiddles_small: &[B],
         twiddles_med: &[B],
@@ -884,7 +903,7 @@ impl<F: Field> MultiLayerButterfly<F, DitButterfly<F>> for MultiLayerDitButterfl
     #[inline]
     fn apply_2_layers(
         &self,
-        mut blk_decomp: DoubleLayerBlockDecomposition<F>,
+        mut blk_decomp: DoubleLayerBlockDecomposition<'_, F>,
         ind: usize,
         twiddles_small: &[DitButterfly<F>],
         twiddles_large: &[DitButterfly<F>],
@@ -909,7 +928,7 @@ impl<F: Field> MultiLayerButterfly<F, DitButterfly<F>> for MultiLayerDitButterfl
     #[inline]
     fn apply_3_layers(
         &self,
-        mut blk_decomp: TripleLayerBlockDecomposition<F>,
+        mut blk_decomp: TripleLayerBlockDecomposition<'_, F>,
         ind: usize,
         twiddles_small: &[DitButterfly<F>],
         twiddles_med: &[DitButterfly<F>],
@@ -946,7 +965,7 @@ impl<F: Field> MultiLayerButterfly<F, DifButterfly<F>> for MultiLayerDifButterfl
     #[inline]
     fn apply_2_layers(
         &self,
-        mut blk_decomp: DoubleLayerBlockDecomposition<F>,
+        mut blk_decomp: DoubleLayerBlockDecomposition<'_, F>,
         ind: usize,
         twiddles_small: &[DifButterfly<F>],
         twiddles_large: &[DifButterfly<F>],
@@ -971,7 +990,7 @@ impl<F: Field> MultiLayerButterfly<F, DifButterfly<F>> for MultiLayerDifButterfl
     #[inline]
     fn apply_3_layers(
         &self,
-        mut blk_decomp: TripleLayerBlockDecomposition<F>,
+        mut blk_decomp: TripleLayerBlockDecomposition<'_, F>,
         ind: usize,
         twiddles_small: &[DifButterfly<F>],
         twiddles_med: &[DifButterfly<F>],

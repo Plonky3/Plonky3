@@ -47,6 +47,7 @@ pub enum MerkleHashOptions {
 /// allowed strings:
 ///
 /// `koala-bear, k, ko, koa, koal, koala, koala-, koala-b, koala-be, koala-bea, koalab, koalabe, koalabea, koalabear, kb`
+#[allow(clippy::option_if_let_else)]
 fn get_aliases(
     base: &'static str,
     min_unique_base_prefix: usize,

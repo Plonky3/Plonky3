@@ -1,7 +1,7 @@
 use alloc::collections::BTreeMap;
 use alloc::slice;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::cell::RefCell;
 use core::mem::{MaybeUninit, transmute};
 
 use itertools::{Itertools, izip};
@@ -13,6 +13,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
+use spin::RwLock;
 use tracing::{debug_span, instrument};
 
 use crate::TwoAdicSubgroupDft;
@@ -28,14 +29,14 @@ use crate::butterflies::{Butterfly, DitButterfly};
 #[derive(Default, Clone, Debug)]
 pub struct Radix2DitParallel<F> {
     /// Twiddles based on roots of unity, used in the forward DFT.
-    twiddles: RefCell<BTreeMap<usize, VectorPair<F>>>,
+    twiddles: Arc<RwLock<BTreeMap<usize, Arc<VectorPair<F>>>>>,
 
     /// A map from `(log_h, shift)` to forward DFT twiddles with that coset shift baked in.
     #[allow(clippy::type_complexity)]
-    coset_twiddles: RefCell<BTreeMap<(usize, F), Vec<Vec<F>>>>,
+    coset_twiddles: Arc<RwLock<BTreeMap<(usize, F), Arc<[Vec<F>]>>>>,
 
     /// Twiddles based on inverse roots of unity, used in the inverse DFT.
-    inverse_twiddles: RefCell<BTreeMap<usize, VectorPair<F>>>,
+    inverse_twiddles: Arc<RwLock<BTreeMap<usize, Arc<VectorPair<F>>>>>,
 }
 
 /// A pair of vectors, one with twiddle factors in their natural order, the other bit-reversed.
@@ -45,58 +46,99 @@ struct VectorPair<F> {
     bitrev_twiddles: Vec<F>,
 }
 
-#[instrument(level = "debug", skip_all)]
-fn compute_twiddles<F: TwoAdicField + Ord>(log_h: usize) -> VectorPair<F> {
-    let half_h = (1 << log_h) >> 1;
-    let root = F::two_adic_generator(log_h);
-    let twiddles = root.powers().collect_n(half_h);
-    let mut bit_reversed_twiddles = twiddles.clone();
-    reverse_slice_index_bits(&mut bit_reversed_twiddles);
-    VectorPair {
-        twiddles,
-        bitrev_twiddles: bit_reversed_twiddles,
+impl<F> Radix2DitParallel<F>
+where
+    F: TwoAdicField + Ord,
+{
+    fn get_or_compute_twiddles(&self, log_h: usize) -> Arc<VectorPair<F>> {
+        // Fast path: Check for the value with a cheap read lock.
+        if let Some(pair) = self.twiddles.read().get(&log_h) {
+            return pair.clone();
+        }
+
+        // Slow path: The value doesn't exist. Acquire a write lock.
+        let mut w_lock = self.twiddles.write();
+
+        // Double-check and compute if necessary.
+        w_lock
+            .entry(log_h)
+            .or_insert_with(|| {
+                let half_h = (1 << log_h) >> 1;
+                let root = F::two_adic_generator(log_h);
+                let twiddles = root.powers().collect_n(half_h);
+                let mut bitrev_twiddles = twiddles.clone();
+                reverse_slice_index_bits(&mut bitrev_twiddles);
+
+                Arc::new(VectorPair {
+                    twiddles,
+                    bitrev_twiddles,
+                })
+            })
+            .clone()
     }
-}
 
-#[instrument(level = "debug", skip_all)]
-fn compute_coset_twiddles<F: TwoAdicField + Ord>(log_h: usize, shift: F) -> Vec<Vec<F>> {
-    // In general either div_floor or div_ceil would work, but here we prefer div_ceil because it
-    // lets us assume below that the "first half" of the network has at least one layer of
-    // butterflies, even in the case of log_h = 1.
-    let mid = log_h.div_ceil(2);
-    let h = 1 << log_h;
-    let root = F::two_adic_generator(log_h);
+    fn get_or_compute_coset_twiddles(&self, (log_h, shift): (usize, F)) -> Arc<[Vec<F>]> {
+        let key = (log_h, shift);
+        // Fast path: Try to get the value with a cheap read lock first.
+        if let Some(twiddles) = self.coset_twiddles.read().get(&key) {
+            return twiddles.clone();
+        }
+        // Slow path: The value isn't there, so we need to compute it.
+        // Acquire a write lock to ensure only one thread does the computation.
+        let mut w_lock = self.coset_twiddles.write();
+        // Double-check: Another thread might have inserted it while we waited for the lock.
+        // The `entry` API handles this check and insertion atomically.
+        w_lock
+            .entry(key)
+            .or_insert_with(|| {
+                let mid = log_h.div_ceil(2);
+                let h = 1 << log_h;
+                let root = F::two_adic_generator(log_h);
+                (0..log_h)
+                    .map(|layer| {
+                        let shift_power = shift.exp_power_of_2(layer);
+                        let powers = Powers {
+                            base: root.exp_power_of_2(layer),
+                            current: shift_power,
+                        };
+                        let mut twiddles = powers.collect_n(h >> (layer + 1));
+                        let layer_rev = log_h - 1 - layer;
+                        if layer_rev >= mid {
+                            reverse_slice_index_bits(&mut twiddles);
+                        }
+                        twiddles
+                    })
+                    .collect::<Vec<_>>()
+                    .into()
+            })
+            .clone()
+    }
 
-    (0..log_h)
-        .map(|layer| {
-            let shift_power = shift.exp_power_of_2(layer);
-            let powers = Powers {
-                base: root.exp_power_of_2(layer),
-                current: shift_power,
-            };
-            let mut twiddles = powers.collect_n(h >> (layer + 1));
-            let layer_rev = log_h - 1 - layer;
-            if layer_rev >= mid {
-                reverse_slice_index_bits(&mut twiddles);
-            }
-            twiddles
-        })
-        .collect()
-}
+    fn get_or_compute_inverse_twiddles(&self, log_h: usize) -> Arc<VectorPair<F>> {
+        // Fast path: First, check for the value using a cheap read lock.
+        if let Some(pair) = self.inverse_twiddles.read().get(&log_h) {
+            return pair.clone();
+        }
+        // Slow path: The value doesn't exist. Acquire a write lock.
+        let mut w_lock = self.inverse_twiddles.write();
+        // Double-check: Another thread might have created the entry while we waited.
+        // The `entry` API handles this check and the insertion atomically.
+        w_lock
+            .entry(log_h)
+            .or_insert_with(|| {
+                // This computation only runs if the entry is truly vacant.
+                let half_h = (1 << log_h) >> 1;
+                let root_inv = F::two_adic_generator(log_h).inverse();
+                let twiddles = root_inv.powers().collect_n(half_h);
+                let mut bitrev_twiddles = twiddles.clone();
+                reverse_slice_index_bits(&mut bitrev_twiddles);
 
-#[instrument(level = "debug", skip_all)]
-fn compute_inverse_twiddles<F: TwoAdicField + Ord>(log_h: usize) -> VectorPair<F> {
-    let half_h = (1 << log_h) >> 1;
-    let root_inv = F::two_adic_generator(log_h).inverse();
-    let twiddles = root_inv.powers().collect_n(half_h);
-    let mut bit_reversed_twiddles = twiddles.clone();
-
-    // In the middle of the coset LDE, we're in bit-reversed order.
-    reverse_slice_index_bits(&mut bit_reversed_twiddles);
-
-    VectorPair {
-        twiddles,
-        bitrev_twiddles: bit_reversed_twiddles,
+                Arc::new(VectorPair {
+                    twiddles,
+                    bitrev_twiddles,
+                })
+            })
+            .clone()
     }
 }
 
@@ -108,10 +150,7 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         let log_h = log2_strict_usize(h);
 
         // Compute twiddle factors, or take memoized ones if already available.
-        let mut twiddles_ref_mut = self.twiddles.borrow_mut();
-        let twiddles = twiddles_ref_mut
-            .entry(log_h)
-            .or_insert_with(|| compute_twiddles(log_h));
+        let twiddles = self.get_or_compute_twiddles(log_h);
 
         let mid = log_h.div_ceil(2);
 
@@ -138,10 +177,7 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         let log_h = log2_strict_usize(h);
         let mid = log_h.div_ceil(2);
 
-        let mut inverse_twiddles_ref_mut = self.inverse_twiddles.borrow_mut();
-        let inverse_twiddles = inverse_twiddles_ref_mut
-            .entry(log_h)
-            .or_insert_with(|| compute_inverse_twiddles(log_h));
+        let inverse_twiddles = self.get_or_compute_inverse_twiddles(log_h);
 
         // The first half looks like a normal DIT.
         reverse_matrix_index_bits(&mut mat);
@@ -195,32 +231,30 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
 #[instrument(level = "debug", skip_all)]
 fn coset_dft<F: TwoAdicField + Ord>(
     dft: &Radix2DitParallel<F>,
-    mat: &mut RowMajorMatrixViewMut<F>,
+    mat: &mut RowMajorMatrixViewMut<'_, F>,
     shift: F,
 ) {
     let log_h = log2_strict_usize(mat.height());
     let mid = log_h.div_ceil(2);
 
-    let mut twiddles_ref_mut = dft.coset_twiddles.borrow_mut();
-    let twiddles = twiddles_ref_mut
-        .entry((log_h, shift))
-        .or_insert_with(|| compute_coset_twiddles(log_h, shift));
+    // let twiddles = compute_factors((log_h, shift), &dft.coset_twiddles, compute_coset_twiddles);
+    let twiddles = dft.get_or_compute_coset_twiddles((log_h, shift));
 
     // The first half looks like a normal DIT.
-    first_half_general(mat, mid, twiddles);
+    first_half_general(mat, mid, &twiddles);
 
     // For the second half, we flip the DIT, working in bit-reversed order.
     reverse_matrix_index_bits(mat);
 
-    second_half_general(mat, mid, twiddles);
+    second_half_general(mat, mid, &twiddles);
 }
 
 /// Like `coset_dft`, except out-of-place.
 #[instrument(level = "debug", skip_all)]
 fn coset_dft_oop<F: TwoAdicField + Ord>(
     dft: &Radix2DitParallel<F>,
-    src: &RowMajorMatrixView<F>,
-    dst_maybe: &mut RowMajorMatrixViewMut<MaybeUninit<F>>,
+    src: &RowMajorMatrixView<'_, F>,
+    dst_maybe: &mut RowMajorMatrixViewMut<'_, MaybeUninit<F>>,
     shift: F,
 ) {
     assert_eq!(src.dimensions(), dst_maybe.dimensions());
@@ -231,7 +265,7 @@ fn coset_dft_oop<F: TwoAdicField + Ord>(
         // This is an edge case where first_half_general_oop doesn't work, as it expects there to be
         // at least one layer in the network, so we just copy instead.
         let src_maybe = unsafe {
-            transmute::<&RowMajorMatrixView<F>, &RowMajorMatrixView<MaybeUninit<F>>>(src)
+            transmute::<&RowMajorMatrixView<'_, F>, &RowMajorMatrixView<'_, MaybeUninit<F>>>(src)
         };
         dst_maybe.copy_from(src_maybe);
         return;
@@ -239,17 +273,14 @@ fn coset_dft_oop<F: TwoAdicField + Ord>(
 
     let mid = log_h.div_ceil(2);
 
-    let mut twiddles_ref_mut = dft.coset_twiddles.borrow_mut();
-    let twiddles = twiddles_ref_mut
-        .entry((log_h, shift))
-        .or_insert_with(|| compute_coset_twiddles(log_h, shift));
+    let twiddles = dft.get_or_compute_coset_twiddles((log_h, shift));
 
     // The first half looks like a normal DIT.
-    first_half_general_oop(src, dst_maybe, mid, twiddles);
+    first_half_general_oop(src, dst_maybe, mid, &twiddles);
 
     // dst is now initialized.
     let dst = unsafe {
-        transmute::<&mut RowMajorMatrixViewMut<MaybeUninit<F>>, &mut RowMajorMatrixViewMut<F>>(
+        transmute::<&mut RowMajorMatrixViewMut<'_, MaybeUninit<F>>, &mut RowMajorMatrixViewMut<'_, F>>(
             dst_maybe,
         )
     };
@@ -257,7 +288,7 @@ fn coset_dft_oop<F: TwoAdicField + Ord>(
     // For the second half, we flip the DIT, working in bit-reversed order.
     reverse_matrix_index_bits(dst);
 
-    second_half_general(dst, mid, twiddles);
+    second_half_general(dst, mid, &twiddles);
 }
 
 /// This can be used as the first half of a DIT butterfly network.
@@ -275,7 +306,7 @@ fn first_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F])
                 dit_layer(
                     &mut submat,
                     layer,
-                    twiddles.iter().copied().step_by(layer_pow),
+                    twiddles.iter().step_by(layer_pow),
                     backwards,
                 );
                 backwards = !backwards;
@@ -287,7 +318,7 @@ fn first_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F])
 /// to be baked into them.
 #[instrument(level = "debug", skip_all)]
 fn first_half_general<F: Field>(
-    mat: &mut RowMajorMatrixViewMut<F>,
+    mat: &mut RowMajorMatrixViewMut<'_, F>,
     mid: usize,
     twiddles: &[Vec<F>],
 ) {
@@ -297,12 +328,7 @@ fn first_half_general<F: Field>(
             let mut backwards = false;
             for layer in 0..mid {
                 let layer_rev = log_h - 1 - layer;
-                dit_layer(
-                    &mut submat,
-                    layer,
-                    twiddles[layer_rev].iter().copied(),
-                    backwards,
-                );
+                dit_layer(&mut submat, layer, twiddles[layer_rev].iter(), backwards);
                 backwards = !backwards;
             }
         });
@@ -314,8 +340,8 @@ fn first_half_general<F: Field>(
 /// Undefined behavior otherwise.
 #[instrument(level = "debug", skip_all)]
 fn first_half_general_oop<F: Field>(
-    src: &RowMajorMatrixView<F>,
-    dst_maybe: &mut RowMajorMatrixViewMut<MaybeUninit<F>>,
+    src: &RowMajorMatrixView<'_, F>,
+    dst_maybe: &mut RowMajorMatrixViewMut<'_, MaybeUninit<F>>,
     mid: usize,
     twiddles: &[Vec<F>],
 ) {
@@ -332,12 +358,12 @@ fn first_half_general_oop<F: Field>(
                 &src_submat,
                 &mut dst_submat_maybe,
                 0,
-                twiddles[layer_rev].iter().copied(),
+                twiddles[layer_rev].iter(),
             );
 
             // submat is now initialized.
             let mut dst_submat = unsafe {
-                transmute::<RowMajorMatrixViewMut<MaybeUninit<F>>, RowMajorMatrixViewMut<F>>(
+                transmute::<RowMajorMatrixViewMut<'_, MaybeUninit<F>>, RowMajorMatrixViewMut<'_, F>>(
                     dst_submat_maybe,
                 )
             };
@@ -349,7 +375,7 @@ fn first_half_general_oop<F: Field>(
                 dit_layer(
                     &mut dst_submat,
                     layer,
-                    twiddles[layer_rev].iter().copied(),
+                    twiddles[layer_rev].iter(),
                     backwards,
                 );
                 backwards = !backwards;
@@ -398,7 +424,7 @@ fn second_half<F: Field>(
 /// to be baked into them.
 #[instrument(level = "debug", skip_all)]
 fn second_half_general<F: Field>(
-    mat: &mut RowMajorMatrixViewMut<F>,
+    mat: &mut RowMajorMatrixViewMut<'_, F>,
     mid: usize,
     twiddles_rev: &[Vec<F>],
 ) {
@@ -423,10 +449,10 @@ fn second_half_general<F: Field>(
 }
 
 /// One layer of a DIT butterfly network.
-fn dit_layer<F: Field>(
+fn dit_layer<'a, F: Field>(
     submat: &mut RowMajorMatrixViewMut<'_, F>,
     layer: usize,
-    twiddles: impl Iterator<Item = F> + Clone,
+    twiddles: impl Iterator<Item = &'a F> + Clone,
     backwards: bool,
 ) {
     let half_block_size = 1 << layer;
@@ -434,15 +460,14 @@ fn dit_layer<F: Field>(
     let width = submat.width();
     debug_assert!(submat.height() >= block_size);
 
-    let process_block = |block: &mut [F]| {
+    let process_block = move |block: &mut [F]| {
         let (lows, highs) = block.split_at_mut(half_block_size * width);
-
         for (lo, hi, twiddle) in izip!(
             lows.chunks_mut(width),
             highs.chunks_mut(width),
             twiddles.clone()
         ) {
-            DitButterfly(twiddle).apply_to_rows(lo, hi);
+            DitButterfly(*twiddle).apply_to_rows(lo, hi);
         }
     };
 
@@ -459,11 +484,11 @@ fn dit_layer<F: Field>(
 }
 
 /// One layer of a DIT butterfly network.
-fn dit_layer_oop<F: Field>(
-    src: &RowMajorMatrixView<F>,
+fn dit_layer_oop<'a, F: Field>(
+    src: &RowMajorMatrixView<'_, F>,
     dst: &mut RowMajorMatrixViewMut<'_, MaybeUninit<F>>,
     layer: usize,
-    twiddles: impl Iterator<Item = F> + Clone,
+    twiddles: impl Iterator<Item = &'a F> + Clone,
 ) {
     debug_assert_eq!(src.dimensions(), dst.dimensions());
     let half_block_size = 1 << layer;
@@ -471,9 +496,7 @@ fn dit_layer_oop<F: Field>(
     let width = dst.width();
     debug_assert!(dst.height() >= block_size);
 
-    let src_chunks = src.values.chunks(block_size * width);
-    let dst_chunks = dst.values.chunks_mut(block_size * width);
-    for (src_block, dst_block) in src_chunks.zip(dst_chunks) {
+    let process_blocks = move |src_block: &[F], dst_block: &mut [MaybeUninit<F>]| {
         let (src_lows, src_highs) = src_block.split_at(half_block_size * width);
         let (dst_lows, dst_highs) = dst_block.split_at_mut(half_block_size * width);
 
@@ -484,8 +507,15 @@ fn dit_layer_oop<F: Field>(
             dst_highs.chunks_mut(width),
             twiddles.clone()
         ) {
-            DitButterfly(twiddle).apply_to_rows_oop(src_lo, dst_lo, src_hi, dst_hi);
+            DitButterfly(*twiddle).apply_to_rows_oop(src_lo, dst_lo, src_hi, dst_hi);
         }
+    };
+
+    let src_chunks = src.values.chunks(block_size * width);
+    let dst_chunks = dst.values.chunks_mut(block_size * width);
+
+    for (src_block, dst_block) in src_chunks.zip(dst_chunks) {
+        process_blocks(src_block, dst_block);
     }
 }
 
@@ -512,12 +542,12 @@ fn dit_layer_rev<F: Field>(
     if backwards {
         for (block, twiddle) in blocks_and_twiddles.rev() {
             let (lo, hi) = block.split_at_mut(half_block_size * width);
-            DitButterfly(twiddle).apply_to_rows(lo, hi)
+            DitButterfly(twiddle).apply_to_rows(lo, hi);
         }
     } else {
         for (block, twiddle) in blocks_and_twiddles {
             let (lo, hi) = block.split_at_mut(half_block_size * width);
-            DitButterfly(twiddle).apply_to_rows(lo, hi)
+            DitButterfly(twiddle).apply_to_rows(lo, hi);
         }
     }
 }

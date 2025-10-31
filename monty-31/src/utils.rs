@@ -60,7 +60,7 @@ pub(crate) const fn from_monty<MP: MontyParameters>(x: u32) -> u32 {
 /// the result is guaranteed to be less than `P`.
 #[inline]
 #[must_use]
-pub(crate) fn add<MP: MontyParameters>(lhs: u32, rhs: u32) -> u32 {
+pub(crate) const fn add<MP: MontyParameters>(lhs: u32, rhs: u32) -> u32 {
     let mut sum = lhs + rhs;
     let (corr_sum, over) = sum.overflowing_sub(MP::PRIME);
     if !over {
@@ -78,7 +78,7 @@ pub(crate) fn add<MP: MontyParameters>(lhs: u32, rhs: u32) -> u32 {
 /// the result is guaranteed to be less than `P`.
 #[inline]
 #[must_use]
-pub(crate) fn sub<MP: MontyParameters>(lhs: u32, rhs: u32) -> u32 {
+pub(crate) const fn sub<MP: MontyParameters>(lhs: u32, rhs: u32) -> u32 {
     let (mut diff, over) = lhs.overflowing_sub(rhs);
     let corr = if over { MP::PRIME } else { 0 };
     diff = diff.wrapping_add(corr);
@@ -160,7 +160,7 @@ pub(crate) const fn large_monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
 /// Perform a monty reduction on a u128 in the range `[0, 2^96)`
 ///
 /// The input will be in `[0, P)` and be equal to `x * MONTY^{-1} mod P`.
-pub(crate) fn monty_reduce_u128<MP: MontyParameters>(x: u128) -> u32 {
+pub(crate) const fn monty_reduce_u128<MP: MontyParameters>(x: u128) -> u32 {
     // TODO: There is probably a way to do this faster than using %.
 
     // Need to find MONTY^{-1} mod P.

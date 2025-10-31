@@ -23,3 +23,6 @@ p3-goldilocks = { workspace = true }
 
 [features]
 default = []
+
+[lints]
+workspace = true

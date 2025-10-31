@@ -1,6 +1,5 @@
 use alloc::collections::BTreeMap;
-use alloc::vec::Vec;
-use core::cell::RefCell;
+use alloc::sync::Arc;
 
 use p3_field::{Field, TwoAdicField};
 use p3_matrix::Matrix;
@@ -8,6 +7,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
+use spin::RwLock;
 
 use crate::TwoAdicSubgroupDft;
 use crate::butterflies::{Butterfly, DitButterfly, TwiddleFreeButterfly};
@@ -28,8 +28,34 @@ pub struct Radix2Dit<F: TwoAdicField> {
     /// This allows fast lookup and reuse of previously computed twiddle values
     /// (powers of a two-adic generator), which are expensive to recompute.
     ///
-    /// `RefCell` is used to enable interior mutability for caching purposes.
-    twiddles: RefCell<BTreeMap<usize, Vec<F>>>,
+    /// `RwLock` is used to enable interior mutability for caching purposes along with thread
+    /// safety.
+    twiddles: Arc<RwLock<BTreeMap<usize, Arc<[F]>>>>,
+}
+
+impl<F: TwoAdicField> Radix2Dit<F> {
+    /// Returns the twiddle factors for a DFT of size `2^log_h`.
+    /// If they haven't been computed yet, this function computes and caches them.
+    fn get_or_compute_twiddles(&self, log_h: usize) -> Arc<[F]> {
+        // Fast path: Check if the twiddles already exist with a read lock.
+        if let Some(twiddles) = self.twiddles.read().get(&log_h) {
+            return twiddles.clone();
+        }
+        // Slow path: The twiddles were not found. We need to compute them.
+        // Acquire a write lock to ensure only one thread computes and inserts the values.
+        let mut w_lock = self.twiddles.write();
+        // Double-check: Another thread might have computed and inserted the twiddles
+        // while we were waiting for the write lock. The `entry` API handles this
+        // check and insertion atomically.
+        w_lock
+            .entry(log_h)
+            .or_insert_with(|| {
+                let n = 1 << log_h;
+                let root = F::two_adic_generator(log_h);
+                Arc::from(root.powers().take(n).collect())
+            })
+            .clone()
+    }
 }
 
 impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit<F> {
@@ -40,16 +66,12 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit<F> {
         let log_h = log2_strict_usize(h);
 
         // Compute twiddle factors, or take memoized ones if already available.
-        let mut twiddles_ref_mut = self.twiddles.borrow_mut();
-        let twiddles = twiddles_ref_mut.entry(log_h).or_insert_with(|| {
-            let root = F::two_adic_generator(log_h);
-            root.powers().collect_n(1 << log_h)
-        });
+        let twiddles = self.get_or_compute_twiddles(log_h);
 
         // DIT butterfly
         reverse_matrix_index_bits(&mut mat);
         for layer in 0..log_h {
-            dit_layer(&mut mat.as_view_mut(), layer, twiddles);
+            dit_layer(&mut mat.as_view_mut(), layer, &twiddles);
         }
         mat
     }
@@ -90,10 +112,10 @@ fn dit_layer<F: Field>(mat: &mut RowMajorMatrixViewMut<'_, F>, layer: usize, twi
                 .for_each(|(ind, (hi_chunk, lo_chunk))| {
                     if ind == 0 {
                         // The first pair doesn't require a twiddle factor
-                        TwiddleFreeButterfly.apply_to_rows(hi_chunk, lo_chunk)
+                        TwiddleFreeButterfly.apply_to_rows(hi_chunk, lo_chunk);
                     } else {
                         // Apply DIT butterfly using the twiddle factor at index `ind << layer_rev`
-                        DitButterfly(twiddles[ind << layer_rev]).apply_to_rows(hi_chunk, lo_chunk)
+                        DitButterfly(twiddles[ind << layer_rev]).apply_to_rows(hi_chunk, lo_chunk);
                     }
                 });
         });

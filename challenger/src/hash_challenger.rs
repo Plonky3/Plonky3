@@ -170,7 +170,7 @@ mod tests {
         assert_eq!(
             hash_challenger.output_buffer,
             [F::from_u8(new_expected_sum)]
-        )
+        );
     }
 
     #[test]

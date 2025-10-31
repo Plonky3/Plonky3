@@ -110,8 +110,8 @@ mod tests {
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{InjectiveMonomial, PermutationMonomial, PrimeField64, TwoAdicField};
     use p3_field_testing::{
-        test_field, test_field_dft, test_field_dft_large, test_prime_field, test_prime_field_32,
-        test_prime_field_64, test_two_adic_field,
+        test_field, test_field_dft, test_field_dft_consistency, test_field_dft_large,
+        test_prime_field, test_prime_field_32, test_prime_field_64, test_two_adic_field,
     };
 
     use super::*;
@@ -136,7 +136,7 @@ mod tests {
         assert_eq!(
             BabyBear::new_array(range_array),
             range_array.map(F::from_u32)
-        )
+        );
     }
 
     #[test]
@@ -231,12 +231,32 @@ mod tests {
         super::EF,
         p3_monty_31::dft::RecursiveDft<_>
     );
-    test_field_dft_large!(
+    test_field_dft_consistency!(
         radix2_smallbatch_and_ditparallel,
         crate::BabyBear,
         super::EF,
         p3_dft::Radix2DFTSmallBatch<_>,
         p3_dft::Radix2DitParallel<_>
+    );
+    test_field_dft_large!(
+        radix2smallbatch_large,
+        crate::BabyBear,
+        super::EF,
+        p3_dft::Radix2DFTSmallBatch<_>
+    );
+
+    test_field_dft_large!(
+        parallel_large,
+        crate::BabyBear,
+        super::EF,
+        p3_dft::Radix2DitParallel<_>
+    );
+
+    test_field_dft_large!(
+        recur_dft_large,
+        crate::BabyBear,
+        super::EF,
+        p3_monty_31::dft::RecursiveDft<_>
     );
     test_prime_field!(crate::BabyBear);
     test_prime_field_64!(crate::BabyBear, &super::ZEROS, &super::ONES);

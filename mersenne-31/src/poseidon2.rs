@@ -79,7 +79,7 @@ impl InternalLayer<Mersenne31, 16, MERSENNE31_S_BOX_DEGREE> for Poseidon2Interna
             state,
             |x| permute_mut(x, &POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS),
             &self.internal_constants,
-        )
+        );
     }
 }
 
@@ -90,7 +90,7 @@ impl InternalLayer<Mersenne31, 24, MERSENNE31_S_BOX_DEGREE> for Poseidon2Interna
             state,
             |x| permute_mut(x, &POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS),
             &self.internal_constants,
-        )
+        );
     }
 }
 

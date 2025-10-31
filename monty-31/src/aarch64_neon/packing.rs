@@ -955,7 +955,7 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
     b: &[MontyField31<FP>; WIDTH],
     res: &mut [MontyField31<FP>; WIDTH],
 ) where
-    FP: FieldParameters + BinomialExtensionData<WIDTH> + FieldParameters,
+    FP: FieldParameters + BinomialExtensionData<WIDTH>,
 {
     // TODO: This could be optimised further with a custom NEON implementation.
     assert_eq!(WIDTH, 8);

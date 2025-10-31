@@ -95,7 +95,7 @@ where
 {
     #[inline(always)]
     fn observe(&mut self, value: T) {
-        (*self).observe(value)
+        (*self).observe(value);
     }
 
     #[inline(always)]
@@ -103,7 +103,7 @@ where
     where
         T: Clone,
     {
-        (*self).observe_slice(values)
+        (*self).observe_slice(values);
     }
 }
 
@@ -143,7 +143,7 @@ where
 {
     #[inline(always)]
     fn observe_algebra_element<EF: BasedVectorSpace<F>>(&mut self, ext: EF) {
-        (*self).observe_algebra_element(ext)
+        (*self).observe_algebra_element(ext);
     }
 
     #[inline(always)]

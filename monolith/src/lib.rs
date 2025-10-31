@@ -2,8 +2,6 @@
 
 #![no_std]
 
-extern crate alloc;
-
 mod monolith;
 mod monolith_mds;
 mod util;
