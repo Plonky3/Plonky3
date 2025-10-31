@@ -409,55 +409,54 @@ impl LookupGadget for LogUpGadget {
                 .zip(lookup_data.iter_mut())
                 .for_each(|(context, data)| {
                     assert!(data.aux_idx == context.columns[0]);
-                    if let Kind::Global(_) = context.kind {
-                        // Build the expected cumulative value for this global lookup.
+                    // Build the expected cumulative value for this global lookup.
 
-                        let alpha = &permutation_challenges[2 * data.aux_idx];
-                        let beta = &permutation_challenges[2 * data.aux_idx + 1];
+                    let alpha = &permutation_challenges[2 * data.aux_idx];
+                    let beta = &permutation_challenges[2 * data.aux_idx + 1];
 
-                        let elements = context
-                            .element_exprs
-                            .iter()
-                            .map(|elts| {
-                                elts.iter()
-                                    .map(|e| eval_symbolic(&mut row_builder, e))
-                                    .collect::<Vec<_>>()
-                            })
-                            .collect::<Vec<_>>();
-                        let multiplicities = context
-                            .multiplicities_exprs
-                            .iter()
-                            .map(|e| eval_symbolic(&mut row_builder, e))
-                            .collect::<Vec<Val<SC>>>();
+                    let elements = context
+                        .element_exprs
+                        .iter()
+                        .map(|elts| {
+                            elts.iter()
+                                .map(|e| eval_symbolic(&mut row_builder, e))
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>();
+                    let multiplicities = context
+                        .multiplicities_exprs
+                        .iter()
+                        .map(|e| eval_symbolic(&mut row_builder, e))
+                        .collect::<Vec<Val<SC>>>();
 
-                        // Combine the elements in the `elements` tuple using beta.
-                        let combined_elts: Vec<SC::Challenge> = self
-                            .combine_elements::<LookupTraceBuilder<SC>, Val<SC>>(
-                                &elements, alpha, beta,
-                            );
+                    // Combine the elements in the `elements` tuple using beta.
+                    let combined_elts: Vec<SC::Challenge> = self
+                        .combine_elements::<LookupTraceBuilder<SC>, Val<SC>>(
+                            &elements, alpha, beta,
+                        );
 
-                        // Sum with multiplicities.
-                        let sum = combined_elts
-                            .iter()
-                            .zip_eq(multiplicities)
-                            .map(|(e, m)| e.inverse() * SC::Challenge::from(m))
-                            .sum();
+                    // Sum with multiplicities.
+                    let sum = combined_elts
+                        .iter()
+                        .zip_eq(multiplicities.clone())
+                        .map(|(e, m)| e.inverse() * SC::Challenge::from(m))
+                        .sum();
 
-                        if i == 0 {
-                            aux_trace[data.aux_idx] = sum;
-                        } else {
-                            aux_trace[i * width + data.aux_idx] =
-                                aux_trace[(i - 1) * width + data.aux_idx] + sum;
-                        }
+                    if i == 0 {
+                        aux_trace[data.aux_idx] = sum;
+                    } else {
+                        aux_trace[i * width + data.aux_idx] =
+                            aux_trace[(i - 1) * width + data.aux_idx] + sum;
+                    }
 
-                        if i == height - 1 {
-                            // At the end of the trace, we will check that the final cumulative value is 0.
-                            data.expected_cumulated = aux_trace[i * width + data.aux_idx];
-                        }
+                    if i == height - 1 {
+                        // At the end of the trace, we will check that the final cumulative value is 0.
+                        data.expected_cumulated = aux_trace[i * width + data.aux_idx];
                     }
                 });
         }
 
-        RowMajorMatrix::new(aux_trace, width)
+        let res = RowMajorMatrix::new(aux_trace, width);
+        res
     }
 }

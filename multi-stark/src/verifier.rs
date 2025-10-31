@@ -2,6 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use hashbrown::HashMap;
+use itertools::Itertools;
 use p3_air::Air;
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
@@ -87,9 +88,9 @@ where
     // Precompute per-instance log_quotient_degrees and quotient_degrees in one pass.
     let (log_quotient_degrees, quotient_degrees): (Vec<usize>, Vec<usize>) = airs
         .iter()
-        .zip(public_values.iter())
-        .zip(all_lookups.iter())
-        .zip(global_lookup_data.iter())
+        .zip_eq(public_values.iter())
+        .zip_eq(all_lookups.iter())
+        .zip_eq(global_lookup_data.iter())
         .map(|(((air, pv), contexts), lookup_data)| {
             let lqd = get_log_quotient_degree::<Val<SC>, SC::Challenge, A, LG>(
                 air,
@@ -143,6 +144,7 @@ where
 
     // Validate the shape of the lookup commitment.
     let is_lookup = commitments.permutation.is_some();
+
     if is_lookup != all_lookups.iter().any(|c| !c.is_empty()) {
         return Err(VerificationError::InvalidProofShape);
     }
@@ -235,22 +237,26 @@ where
 
     if is_lookup {
         let permutation_commit = commitments.permutation.clone().unwrap();
-        let permutation_round: Vec<_> = ext_trace_domains
-            .iter()
-            .zip(opened_values.instances.iter())
-            .map(|(ext_dom, inst_opened_vals)| {
+        let mut permutation_round = Vec::new();
+        for (ext_dom, inst_opened_vals) in
+            ext_trace_domains.iter().zip(opened_values.instances.iter())
+        {
+            if inst_opened_vals.permutation_local.len() != inst_opened_vals.permutation_next.len() {
+                return Err(VerificationError::InvalidProofShape);
+            }
+            if !inst_opened_vals.permutation_local.is_empty() {
                 let zeta_next = ext_dom
                     .next_point(zeta)
                     .ok_or(VerificationError::NextPointUnavailable)?;
-                Ok((
+                permutation_round.push((
                     *ext_dom,
                     vec![
                         (zeta, inst_opened_vals.permutation_local.clone()),
                         (zeta_next, inst_opened_vals.permutation_next.clone()),
                     ],
-                ))
-            })
-            .collect::<Result<Vec<_>, VerificationError<PcsError<SC>>>>()?;
+                ));
+            }
+        }
         coms_to_verify.push((permutation_commit.clone(), permutation_round));
     }
 

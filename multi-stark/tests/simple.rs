@@ -3,7 +3,9 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 use core::slice::from_ref;
 
-use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, PermutationAirBuilder};
+use p3_air::{
+    Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, PairBuilder, PermutationAirBuilder,
+};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
@@ -13,19 +15,22 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
 use p3_fri::{FriParameters, TwoAdicFriPcs, create_test_fri_params};
 use p3_keccak::Keccak256Hash;
-use p3_lookup::lookup_traits::AirNoLookup;
+use p3_lookup::logup::LogUpGadget;
+use p3_lookup::lookup_traits::{AirLookupHandler, AirNoLookup, Direction, Kind, Lookup};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_mersenne_31::Mersenne31;
 use p3_multi_stark::StarkInstance;
+use p3_multi_stark::common::extract_lookups;
 use p3_multi_stark::proof::OpenedValuesWithLookups;
-use p3_multi_stark::prover::prove_multi_no_lookups;
-use p3_multi_stark::verifier::verify_multi_no_lookups;
+use p3_multi_stark::prover::{prove_multi, prove_multi_no_lookups};
+use p3_multi_stark::verifier::{verify_multi, verify_multi_no_lookups};
 use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
 };
 use p3_uni_stark::StarkConfig;
+use p3_uni_stark::{SymbolicAirBuilder, SymbolicExpression};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
@@ -147,6 +152,126 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
     }
 }
 
+#[derive(Clone, Copy)]
+struct MulAirLookups {
+    air: MulAir,
+    is_local: bool,
+    is_global: bool,
+    num_lookups: usize,
+}
+
+impl Default for MulAirLookups {
+    fn default() -> Self {
+        Self {
+            air: MulAir::default(),
+            is_local: false,
+            is_global: false,
+            num_lookups: 0,
+        }
+    }
+}
+
+impl MulAirLookups {
+    fn new(air: MulAir, is_local: bool, is_global: bool, num_lookups: usize) -> Self {
+        Self {
+            air,
+            is_local,
+            is_global,
+            num_lookups,
+        }
+    }
+}
+
+impl<F> BaseAir<F> for MulAirLookups {
+    fn width(&self) -> usize {
+        <MulAir as BaseAir<F>>::width(&self.air)
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for MulAirLookups {
+    fn eval(&self, builder: &mut AB) {
+        self.air.eval(builder)
+    }
+}
+
+impl<AB> AirLookupHandler<AB> for MulAirLookups
+where
+    AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+{
+    fn add_lookup_columns(&mut self) -> Vec<usize> {
+        let new_idx = self.num_lookups;
+        self.num_lookups += 1;
+        vec![new_idx]
+    }
+
+    fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
+        let mut lookups = Vec::new();
+
+        // Create symbolic air builder to access symbolic variables
+        let symbolic_air_builder =
+            SymbolicAirBuilder::<AB::F>::new(0, <Self as BaseAir<AB::F>>::width(self), 0, 0, 0);
+        let symbolic_main = symbolic_air_builder.main();
+        let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
+
+        // Local lookups: one for each mul input with extra column for integers 0 to height
+        if self.is_local {
+            for rep in 0..self.air.reps {
+                let base_idx = rep * 3;
+                let a = symbolic_main_local[base_idx]; // First input
+
+                // Create lookup inputs for each multiplication input
+                // We'll create a local lookup table with integers 0 to height
+                let lookup_inputs = vec![
+                    // Lookup for 'a' against a range table (0 to height)
+                    (
+                        vec![a.into()],
+                        SymbolicExpression::Constant(AB::F::ONE),
+                        Direction::Receive,
+                    ),
+                    // Provide the range values (this would be done in the trace generation)
+                    (
+                        vec![a.into()], // This represents the range values
+                        SymbolicExpression::Constant(AB::F::ONE),
+                        Direction::Send,
+                    ),
+                ];
+
+                let local_lookup = <Self as AirLookupHandler<AB>>::register_lookup(
+                    self,
+                    Kind::Local,
+                    &lookup_inputs,
+                );
+                lookups.push(local_lookup);
+            }
+        }
+
+        // Global lookups: between MulAir inputs and FibAir inputs
+        if self.is_global {
+            for rep in 0..self.air.reps {
+                let base_idx = rep * 3;
+                let a = symbolic_main_local[base_idx]; // First input
+                // let b = symbolic_main_local[base_idx + 1]; // Second input
+
+                // Global lookup between MulAir inputs and FibAir inputs
+                let lookup_inputs = vec![(
+                    vec![a.into()],
+                    SymbolicExpression::Constant(AB::F::ONE),
+                    Direction::Send, // MulAir sends data to the global lookup
+                )];
+
+                let global_lookup = <Self as AirLookupHandler<AB>>::register_lookup(
+                    self,
+                    Kind::Global("MulFib".to_string()),
+                    &lookup_inputs,
+                );
+                lookups.push(global_lookup);
+            }
+        }
+
+        lookups
+    }
+}
+
 fn mul_trace<F: Field>(rows: usize, reps: usize, _step: u64) -> RowMajorMatrix<F> {
     assert!(rows.is_power_of_two());
     let w = reps * 3;
@@ -161,6 +286,91 @@ fn mul_trace<F: Field>(rows: usize, reps: usize, _step: u64) -> RowMajorMatrix<F
         }
     }
     RowMajorMatrix::new(v, w)
+}
+
+// --- FibAirLookups structure for global lookups ---
+
+#[derive(Debug, Clone, Copy)]
+struct FibAirLookups {
+    air: FibonacciAir,
+    is_global: bool,
+    num_lookups: usize,
+}
+
+impl Default for FibAirLookups {
+    fn default() -> Self {
+        Self {
+            air: FibonacciAir,
+            is_global: false,
+            num_lookups: 0,
+        }
+    }
+}
+
+impl FibAirLookups {
+    fn new(air: FibonacciAir, is_global: bool, num_lookups: usize) -> Self {
+        Self {
+            air,
+            is_global,
+            num_lookups,
+        }
+    }
+}
+
+impl<F> BaseAir<F> for FibAirLookups {
+    fn width(&self) -> usize {
+        <FibonacciAir as BaseAir<F>>::width(&self.air)
+    }
+}
+
+impl<AB: PermutationAirBuilder + AirBuilderWithPublicValues> Air<AB> for FibAirLookups {
+    fn eval(&self, builder: &mut AB) {
+        self.air.eval(builder)
+    }
+}
+
+impl<AB> AirLookupHandler<AB> for FibAirLookups
+where
+    AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+{
+    fn add_lookup_columns(&mut self) -> Vec<usize> {
+        let new_idx = self.num_lookups;
+        self.num_lookups += 1;
+        vec![new_idx]
+    }
+
+    fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
+        let mut lookups = Vec::new();
+
+        if self.is_global {
+            // Create symbolic air builder to access symbolic variables
+            let symbolic_air_builder =
+                SymbolicAirBuilder::<AB::F>::new(0, <Self as BaseAir<AB::F>>::width(self), 0, 0, 0);
+            let symbolic_main = symbolic_air_builder.main();
+            let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
+
+            // Global lookups: between FibAir inputs and MulAir inputs
+            // FibAir has 2 columns: left and right
+            let left = symbolic_main_local[0]; // left column
+            let right = symbolic_main_local[1]; // right column
+
+            // Global lookup between FibAir inputs and MulAir inputs
+            let lookup_inputs = vec![(
+                vec![left.into(), right.into()],
+                SymbolicExpression::Constant(AB::F::ONE),
+                Direction::Receive, // FibAir receives data from the global lookup
+            )];
+
+            let global_lookup = <Self as AirLookupHandler<AB>>::register_lookup(
+                self,
+                Kind::Global("MulFib".to_string()),
+                &lookup_inputs,
+            );
+            lookups.push(global_lookup);
+        }
+
+        lookups
+    }
 }
 
 // --- Config types ---
@@ -206,6 +416,62 @@ impl<F> BaseAir<F> for DemoAir {
         }
     }
 }
+
+// Heterogeneous enum wrapper for lookup-enabled AIRs
+#[derive(Clone, Copy)]
+enum DemoAirWithLookups {
+    FibLookups(FibAirLookups),
+    MulLookups(MulAirLookups),
+}
+
+impl<F> BaseAir<F> for DemoAirWithLookups {
+    fn width(&self) -> usize {
+        match self {
+            DemoAirWithLookups::FibLookups(a) => <FibAirLookups as BaseAir<F>>::width(a),
+            DemoAirWithLookups::MulLookups(a) => <MulAirLookups as BaseAir<F>>::width(a),
+        }
+    }
+}
+
+impl<AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues> Air<AB>
+    for DemoAirWithLookups
+{
+    fn eval(&self, builder: &mut AB) {
+        match self {
+            DemoAirWithLookups::FibLookups(a) => <FibAirLookups as Air<AB>>::eval(a, builder),
+            DemoAirWithLookups::MulLookups(a) => <MulAirLookups as Air<AB>>::eval(a, builder),
+        }
+    }
+}
+
+impl<AB> AirLookupHandler<AB> for DemoAirWithLookups
+where
+    AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+    AB::Var: Copy,
+{
+    fn add_lookup_columns(&mut self) -> Vec<usize> {
+        match self {
+            DemoAirWithLookups::FibLookups(a) => {
+                <FibAirLookups as AirLookupHandler<AB>>::add_lookup_columns(a)
+            }
+            DemoAirWithLookups::MulLookups(a) => {
+                <MulAirLookups as AirLookupHandler<AB>>::add_lookup_columns(a)
+            }
+        }
+    }
+
+    fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
+        match self {
+            DemoAirWithLookups::FibLookups(a) => {
+                <FibAirLookups as AirLookupHandler<AB>>::get_lookups(a)
+            }
+            DemoAirWithLookups::MulLookups(a) => {
+                <MulAirLookups as AirLookupHandler<AB>>::get_lookups(a)
+            }
+        }
+    }
+}
+
 impl<AB: PermutationAirBuilder + AirBuilderWithPublicValues> Air<AB> for DemoAir {
     fn eval(&self, b: &mut AB) {
         match self {
@@ -216,6 +482,20 @@ impl<AB: PermutationAirBuilder + AirBuilderWithPublicValues> Air<AB> for DemoAir
 }
 
 type DemoAirNoLookup = AirNoLookup<DemoAir>;
+
+// Demo function to show MulAirLookups usage
+#[allow(dead_code)]
+fn demo_mul_air_lookups() {
+    let mul_air = MulAir { reps: 2, step: 1 };
+    let mul_air_with_local_lookups = MulAirLookups::new(mul_air, true, false, 0);
+    let mul_air_with_global_lookups = MulAirLookups::new(mul_air, false, true, 0);
+    let mul_air_with_both_lookups = MulAirLookups::new(mul_air, true, true, 0);
+
+    // These would be used in actual proving/verifying contexts
+    let _ = <MulAirLookups as BaseAir<Val>>::width(&mul_air_with_local_lookups);
+    let _ = <MulAirLookups as BaseAir<Val>>::width(&mul_air_with_global_lookups);
+    let _ = <MulAirLookups as BaseAir<Val>>::width(&mul_air_with_both_lookups);
+}
 
 // --- Test Helper Functions ---
 
@@ -616,4 +896,190 @@ fn test_circle_stark_multi() -> Result<(), impl Debug> {
     let public_values = vec![fib_pis1, fib_pis2];
     verify_multi_no_lookups(&config, &airs, &proof, &public_values)
         .map_err(|e| format!("Verification failed: {:?}", e))
+}
+
+// Tests for local and global lookup handling in multi-stark.
+
+/// Test with local lookups only using MulAirLookups
+/// This test demonstrates how to use local lookups in multi-stark proofs
+#[test]
+fn test_multi_stark_one_instance_global_only() -> Result<(), impl Debug> {
+    let config = make_config(2024);
+
+    let reps = 1;
+    // Create MulAir instance with local lookups configuration
+    let mul_air = MulAir { reps, step: 1 };
+    let mul_air_lookups = MulAirLookups::new(mul_air, false, true, 0); // global only
+
+    let mul_trace = mul_trace::<Val>(8, reps, 1);
+
+    // Use the enum wrapper for heterogeneous types
+    let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups).clone();
+
+    let mut airs = [air1];
+
+    // Get lookups from the lookup-enabled AIRs
+    let all_airs_lookups = extract_lookups::<MyConfig, _>(&mut airs);
+
+    let mul_lookups = all_airs_lookups[0].clone();
+
+    let instances = vec![StarkInstance {
+        air: &air1,
+        trace: mul_trace,
+        public_values: vec![],
+        lookups: mul_lookups,
+    }];
+
+    let lookup_gadget = LogUpGadget::new();
+    let proof = prove_multi(&config, instances, &lookup_gadget);
+
+    let mut airs = vec![air1];
+    let pvs = vec![vec![]];
+    verify_multi(&config, &mut airs, &proof, &pvs, &lookup_gadget)
+}
+
+/// Test with local lookups only using MulAirLookups
+/// This test demonstrates how to use local lookups in multi-stark proofs
+#[test]
+fn test_multi_stark_local_lookups_only() -> Result<(), impl Debug> {
+    let config = make_config(2024);
+
+    // Create MulAir instance with local lookups configuration
+    let mul_air = MulAir { reps: 2, step: 1 };
+    let mul_air_lookups = MulAirLookups::new(mul_air, true, false, 0); // local only
+    let fib_air_lookups = FibAirLookups::new(FibonacciAir, false, 0); // no lookups
+
+    let mul_trace = mul_trace::<Val>(16, 2, 1);
+    let fib_trace = fib_trace::<Val>(0, 1, 16);
+    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(16))];
+
+    // Use the enum wrapper for heterogeneous types
+    let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups).clone();
+    let air2 = DemoAirWithLookups::FibLookups(fib_air_lookups).clone();
+
+    let mut airs = [air1, air2];
+
+    // Get lookups from the lookup-enabled AIRs
+    let all_airs_lookups = extract_lookups::<MyConfig, _>(&mut airs);
+
+    let mul_lookups = all_airs_lookups[0].clone();
+    let fib_lookups = all_airs_lookups[1].clone();
+
+    let instances = vec![
+        StarkInstance {
+            air: &air1,
+            trace: mul_trace,
+            public_values: vec![],
+            lookups: mul_lookups,
+        },
+        StarkInstance {
+            air: &air2,
+            trace: fib_trace,
+            public_values: fib_pis.clone(),
+            lookups: fib_lookups,
+        },
+    ];
+
+    let lookup_gadget = LogUpGadget::new();
+    let proof = prove_multi(&config, instances, &lookup_gadget);
+
+    let mut airs = vec![air1, air2];
+    let pvs = vec![vec![], fib_pis];
+    verify_multi(&config, &mut airs, &proof, &pvs, &lookup_gadget)
+}
+
+/// Test with global lookups only using MulAirLookups and FibAirLookups  
+#[test]
+fn test_multi_stark_global_lookups_only() -> Result<(), impl Debug> {
+    let config = make_config(2025);
+
+    // Create instances with global lookups configuration
+    let mul_air = MulAir { reps: 2, step: 1 };
+    let mul_air_lookups = MulAirLookups::new(mul_air, false, true, 0); // global only
+    let fib_air_lookups = FibAirLookups::new(FibonacciAir, true, 0); // global lookups
+
+    let mul_trace = mul_trace::<Val>(16, 2, 1);
+    let fib_trace = fib_trace::<Val>(0, 1, 16);
+    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(16))];
+
+    // Use the enum wrapper for heterogeneous types
+    let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups);
+    let air2 = DemoAirWithLookups::FibLookups(fib_air_lookups);
+
+    // Get lookups from the lookup-enabled AIRs
+    let mut airs = [air1, air2];
+    let all_airs_lookups = extract_lookups::<MyConfig, _>(&mut airs);
+
+    let mul_lookups = all_airs_lookups[0].clone();
+    let fib_lookups = all_airs_lookups[1].clone();
+
+    let instances = vec![
+        StarkInstance {
+            air: &air1,
+            trace: mul_trace,
+            public_values: vec![],
+            lookups: mul_lookups,
+        },
+        StarkInstance {
+            air: &air2,
+            trace: fib_trace,
+            public_values: fib_pis.clone(),
+            lookups: fib_lookups,
+        },
+    ];
+
+    let lookup_gadget = LogUpGadget::new();
+    let proof = prove_multi(&config, instances, &lookup_gadget);
+
+    let mut airs = vec![air1, air2];
+    let pvs = vec![vec![], fib_pis];
+    verify_multi(&config, &mut airs, &proof, &pvs, &lookup_gadget)
+}
+
+/// Test with both local and global lookups using MulAirLookups and FibAirLookups
+#[test]
+fn test_multi_stark_both_lookups() -> Result<(), impl Debug> {
+    let config = make_config(2026);
+
+    // Create instances with both local and global lookups configuration
+    let mul_air = MulAir { reps: 2, step: 1 };
+    let mul_air_lookups = MulAirLookups::new(mul_air, true, true, 0); // both
+    let fib_air_lookups = FibAirLookups::new(FibonacciAir, true, 0); // global lookups
+
+    let mul_trace = mul_trace::<Val>(16, 2, 1);
+    let fib_trace = fib_trace::<Val>(0, 1, 16);
+    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(16))];
+
+    // Use the enum wrapper for heterogeneous types
+    let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups);
+    let air2 = DemoAirWithLookups::FibLookups(fib_air_lookups);
+
+    let mut airs = [air1, air2];
+    // Get lookups from the lookup-enabled AIRs
+    let all_airs_lookups = extract_lookups::<MyConfig, _>(&mut airs);
+
+    let mul_lookups = all_airs_lookups[0].clone();
+    let fib_lookups = all_airs_lookups[1].clone();
+
+    let instances = vec![
+        StarkInstance {
+            air: &air1,
+            trace: mul_trace,
+            public_values: vec![],
+            lookups: mul_lookups,
+        },
+        StarkInstance {
+            air: &air2,
+            trace: fib_trace,
+            public_values: fib_pis.clone(),
+            lookups: fib_lookups,
+        },
+    ];
+
+    let lookup_gadget = LogUpGadget::new();
+    let proof = prove_multi(&config, instances, &lookup_gadget);
+
+    let mut airs = vec![air1, air2];
+    let pvs = vec![vec![], fib_pis];
+    verify_multi(&config, &mut airs, &proof, &pvs, &lookup_gadget)
 }

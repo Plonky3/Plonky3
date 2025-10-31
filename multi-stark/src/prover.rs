@@ -67,9 +67,12 @@ where
                 inst.lookups.clone(),
                 inst.lookups
                     .iter()
-                    .map(|lookup| LookupData {
-                        aux_idx: lookup.columns[0],
-                        expected_cumulated: SC::Challenge::ZERO,
+                    .filter_map(|lookup| match lookup.kind {
+                        Kind::Global(_) => Some(LookupData {
+                            aux_idx: lookup.columns[0],
+                            expected_cumulated: SC::Challenge::ZERO,
+                        }),
+                        _ => None,
                     })
                     .collect(),
             );
@@ -199,7 +202,9 @@ where
 
     // Commit to all traces in one multi-matrix commitment, preserving input order.
     let opt_permutation_commit_and_data = if !permutation_commit_inputs.is_empty() {
-        Some(pcs.commit(permutation_commit_inputs))
+        let commitment = pcs.commit(permutation_commit_inputs);
+        challenger.observe(commitment.0.clone());
+        Some(commitment)
     } else {
         None
     };
@@ -215,6 +220,7 @@ where
     // Track ranges so we can map openings back to instances.
     let mut quotient_chunk_ranges: Vec<(usize, usize)> = Vec::with_capacity(n_instances);
 
+    let mut perm_counter = 0;
     // TODO: Parallelize this loop for better performance with multiple instances.
     for (i, trace_domain) in trace_domains.iter().enumerate() {
         let lqd = log_quotient_degrees[i];
@@ -237,12 +243,21 @@ where
         // Get evaluations on quotient domain from the main commitment.
         let trace_on_quotient_domain =
             pcs.get_evaluations_on_domain(&main_data, i, quotient_domain);
-        let permutation_on_quotient_domain =
-            if let Some((_, perm_data)) = &opt_permutation_commit_and_data {
-                Some(pcs.get_evaluations_on_domain(perm_data, i, quotient_domain))
-            } else {
+
+        let permutation_on_quotient_domain = if let Some((_, perm_data)) =
+            &opt_permutation_commit_and_data
+        {
+            if all_lookups[i].is_empty() {
                 None
-            };
+            } else {
+                let res =
+                    Some(pcs.get_evaluations_on_domain(perm_data, perm_counter, quotient_domain));
+                perm_counter += 1;
+                res
+            }
+        } else {
+            None
+        };
 
         // Compute quotient(x) = constraints(x)/Z_H(x) over quotient_domain, as extension values.
         let q_values = quotient_values::<SC, A, _>(
@@ -288,7 +303,6 @@ where
 
     let mut rounds = vec![];
     // Build opening rounds.
-    // TODO: Add opening round for lookup aux columns.
     let round1_points = ext_trace_domains
         .iter()
         .map(|dom| {
@@ -302,11 +316,26 @@ where
     let round1 = (&main_data, round1_points.clone());
     rounds.push(round1);
 
+    let round2_points = ext_trace_domains
+        .iter()
+        .enumerate()
+        .filter_map(|(i, dom)| {
+            if !all_lookups[i].is_empty() {
+                Some(vec![
+                    zeta,
+                    dom.next_point(zeta)
+                        .expect("domain should support next_point operation"),
+                ])
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
     if let Some((_, perm_data)) = &opt_permutation_commit_and_data {
-        let round2 = (perm_data, round1_points);
+        let round2 = (perm_data, round2_points);
         rounds.push(round2);
     }
-
     let round3_points = quotient_chunk_ranges
         .iter()
         .cloned()
@@ -316,17 +345,17 @@ where
     rounds.push(round3);
 
     let (opened_values, opening_proof) = pcs.open(rounds, &mut challenger);
-    assert_eq!(
-        opened_values.len(),
-        2,
-        "expected [main, quotient] opening groups from PCS"
-    );
 
     let is_lookup = opt_permutation_commit_and_data.is_some();
     // Rely on open order: [main, quotient] since ZK is disabled.
     let trace_idx = 0usize;
     let permutation_idx = 1usize;
     let quotient_idx = if is_lookup { 2usize } else { 1usize };
+    assert_eq!(
+        opened_values.len(),
+        quotient_idx + 1,
+        "expected [main, quotient] opening groups from PCS"
+    );
 
     // Parse trace opened values per instance.
     let trace_values_for_mats = &opened_values[trace_idx];
@@ -424,11 +453,13 @@ where
     Mat: Matrix<Val<SC>> + Sync,
 {
     let quotient_size = quotient_domain.size();
-    let width = trace_on_quotient_domain.width();
-    let (perm_width, perm_height) = match &opt_permutation_on_quotient_domain {
-        Some(mat) => (mat.width(), mat.height()),
-        None => (0, 0),
+    let main_width = trace_on_quotient_domain.width();
+    let perm_width = match &opt_permutation_on_quotient_domain {
+        Some(mat) => mat.width(),
+        None => 0,
     };
+
+    let ext_degree = SC::Challenge::DIMENSION;
 
     let mut sels = debug_span!("Compute Selectors")
         .in_scope(|| trace_domain.selectors_on_coset(quotient_domain));
@@ -461,6 +492,7 @@ where
         .into_par_iter()
         .step_by(PackedVal::<SC>::WIDTH)
         .flat_map_iter(|i_start| {
+            let wrap = |i| i % quotient_size;
             let i_range = i_start..i_start + PackedVal::<SC>::WIDTH;
 
             let is_first_row = *PackedVal::<SC>::from_slice(&sels.is_first_row[i_range.clone()]);
@@ -471,49 +503,37 @@ where
             // Retrieve main trace as a matrix evaluated on the quotient domain.
             let main = RowMajorMatrix::new(
                 trace_on_quotient_domain.vertically_packed_row_pair(i_start, next_step),
-                width,
+                main_width,
             );
 
             // Retrieve permutation trace as a matrix evaluated on the quotient domain.
-            let permutation = if let Some(permutation_on_quotient_domain) =
-                &opt_permutation_on_quotient_domain
-            {
-                RowMajorMatrix::new(
-                    // Local permutation evaluation.
-                    (0..perm_width)
-                        .step_by(Challenge::<SC>::DIMENSION)
-                        .map(|col_idx| {
-                            PackedChallenge::<SC>::from_basis_coefficients_fn(|coeff_idx| {
-                                PackedVal::<SC>::from_fn(|i| {
+            let permutation =
+                if let Some(permutation_on_quotient_domain) = &opt_permutation_on_quotient_domain {
+                    let perms = (0..perm_width)
+                        .step_by(ext_degree)
+                        .map(|col| {
+                            PackedChallenge::<SC>::from_basis_coefficients_fn(|i| {
+                                PackedVal::<SC>::from_fn(|offset| {
                                     permutation_on_quotient_domain
-                                        .get((i_start + i) % perm_height, col_idx + coeff_idx)
+                                        .get(wrap(i_start + offset), col + i)
                                         .unwrap()
                                 })
                             })
                         })
-                        .chain(
-                            // Next permutation evaluation.
-                            (0..perm_width)
-                                .step_by(Challenge::<SC>::DIMENSION)
-                                .map(|col_idx| {
-                                    PackedChallenge::<SC>::from_basis_coefficients_fn(|coeff_idx| {
-                                        PackedVal::<SC>::from_fn(|i| {
-                                            permutation_on_quotient_domain
-                                                .get(
-                                                    (i_start + next_step + i) % perm_height,
-                                                    col_idx + coeff_idx,
-                                                )
-                                                .unwrap()
-                                        })
-                                    })
-                                }),
-                        )
-                        .collect::<Vec<_>>(),
-                    perm_width,
-                )
-            } else {
-                RowMajorMatrix::new(vec![], 0)
-            };
+                        .chain((0..perm_width).step_by(ext_degree).map(|col| {
+                            PackedChallenge::<SC>::from_basis_coefficients_fn(|i| {
+                                PackedVal::<SC>::from_fn(|offset| {
+                                    permutation_on_quotient_domain
+                                        .get(wrap(i_start + next_step + offset), col + i)
+                                        .unwrap()
+                                })
+                            })
+                        }));
+
+                    RowMajorMatrix::new(perms.collect::<Vec<_>>(), perm_width / ext_degree)
+                } else {
+                    RowMajorMatrix::new(vec![], 0)
+                };
 
             let accumulator = PackedChallenge::<SC>::ZERO;
             let base_folder = ProverConstraintFolder {
@@ -527,10 +547,15 @@ where
                 accumulator,
                 constraint_index: 0,
             };
+            let packed_perm_challenges = permutation_challenges
+                .iter()
+                .map(|p_c| PackedChallenge::<SC>::from(*p_c))
+                .collect::<Vec<_>>();
+
             let mut folder = ProverConstraintFolderWithLookups {
                 base: base_folder,
                 permutation: permutation.as_view(),
-                permutation_challenges,
+                permutation_challenges: &packed_perm_challenges,
             };
             <A as AirLookupHandler<ProverConstraintFolderWithLookups<'_, SC>>>::eval(
                 &air,

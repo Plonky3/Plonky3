@@ -99,6 +99,7 @@ where
         num_aux_cols,
         num_challenges,
     );
+
     // Evaluate AIR and lookup constraints.
     <A as AirLookupHandler<_>>::eval(air, &mut builder, &contexts, &lookup_data, lookup_gadget);
     let base_constraints = builder.base_constraints();
