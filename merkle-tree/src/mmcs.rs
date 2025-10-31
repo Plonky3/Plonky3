@@ -21,6 +21,7 @@
 
 use alloc::vec;
 use alloc::vec::Vec;
+use core::array;
 use core::cmp::Reverse;
 use core::marker::PhantomData;
 
@@ -98,6 +99,41 @@ impl<P, PW, H, C, const DIGEST_ELEMS: usize> MerkleTreeMmcs<P, PW, H, C, DIGEST_
             _phantom: PhantomData,
         }
     }
+
+    /// Returns the digest representing empty rows (padding).
+    ///
+    /// This is distinct from hashing a zero-filled row; padding contributes
+    /// this fixed digest outside the row-concat hash, preserving the binding property.
+    #[inline]
+    fn empty_rows_digest(&self) -> [PW::Value; DIGEST_ELEMS]
+    where
+        PW: PackedValue,
+        PW::Value: Default,
+    {
+        array::from_fn(|_| PW::Value::default())
+    }
+
+    /// Hash an iterator of slices, or return the default digest if the iterator is empty.
+    ///
+    /// Used to handle padding: when no real rows contribute at a level, we use
+    /// `default_digest` rather than hashing an empty sequence.
+    #[inline]
+    fn hash_or_default<'a, I>(
+        &self,
+        iter: I,
+        default: [PW::Value; DIGEST_ELEMS],
+    ) -> [PW::Value; DIGEST_ELEMS]
+    where
+        P: PackedValue,
+        PW: PackedValue,
+        H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>,
+        I: Iterator<Item = &'a [P::Value]>,
+        P::Value: 'a,
+    {
+        let mut any = false;
+        let digest = self.hash.hash_iter_slices(iter.inspect(|_| any = true));
+        if any { digest } else { default }
+    }
 }
 
 impl<P, PW, H, C, const DIGEST_ELEMS: usize> Mmcs<P::Value>
@@ -111,7 +147,8 @@ where
     C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>
         + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>
         + Sync,
-    PW::Value: Eq,
+    P::Value: Default,
+    PW::Value: Default + Clone + Eq,
     [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
 {
     type ProverData<M> = MerkleTree<P::Value, PW::Value, M, DIGEST_ELEMS>;
@@ -135,6 +172,14 @@ where
     ///     `j == index >> (log2_ceil(max_height) - log2_ceil(M[i].height))`
     /// and `proof` is the vector of sibling Merkle tree nodes allowing the verifier to
     /// reconstruct the committed root.
+    ///
+    /// # Padding Behavior
+    ///
+    /// For out-of-range rows (where the reduced index exceeds a matrix's height),
+    /// a zero-filled vector is returned. The verifier ignores these padded rows when
+    /// hashing; they contribute to the tree structure via `default_digest` (all-zeros)
+    /// at the level where no real rows are present. This is distinct from an actual
+    /// all-zero row, which would be hashed normally.
     fn open_batch<M: Matrix<P::Value>>(
         &self,
         index: usize,
@@ -182,8 +227,19 @@ where
     /// - `opened_values`: A vector of matrix rows. Assume that the tallest matrix committed
     ///   to has height `2^n >= M_tall.height() > 2^{n - 1}` and the `j`th matrix has height
     ///   `2^m >= Mj.height() > 2^{m - 1}`. Then `j`'th value of opened values must be the row `Mj[index >> (m - n)]`.
-    /// - `proof`: A vector of sibling nodes. The `i`th element should be the node at level `i`
-    ///   with index `(index << i) ^ 1`.
+    /// - `proof`: A vector of sibling nodes. The `i`th element should be the sibling at level `i`
+    ///   with index `(index >> i) ^ 1`.
+    ///
+    /// # Padding Behavior
+    ///
+    /// Openings for out-of-range rows return a zero vector (by `Default`) but are ignored by
+    /// the verifier's hashing; only in-range rows contribute to `hash_iter_slices` at a level.
+    /// If **no** in-range rows contribute at a level, the digest is the `default_digest` (all-zeros),
+    /// which is distinct from `hash(zeros row)`. This preserves the binding property: a real
+    /// "all-zero row" is hashed normally, while padding contributes `default_digest` outside
+    /// the row-concat hash.
+    ///
+    /// Padding uses a fixed empty-rows digest, distinct from `H(zeros)`, so "absent row" ≠ "all-zero row".
     ///
     /// Returns nothing if the verification is successful, otherwise returns an error.
     fn verify_batch(
@@ -245,11 +301,13 @@ where
             None => return Err(EmptyBatch),
         };
 
-        let default_digest = [PW::Value::default(); DIGEST_ELEMS];
-        let matrix_padding = dimensions
+        let default_digest = self.empty_rows_digest();
+        let row_is_padding = dimensions
             .iter()
             .map(|dims| {
                 let log2_height = log2_ceil_usize(dims.height);
+                #[cfg(debug_assertions)]
+                debug_assert!(log2_height <= log_global_max_height);
                 let bits_reduced = log_global_max_height.saturating_sub(log2_height);
                 let reduced_index = global_index >> bits_reduced;
                 reduced_index >= dims.height
@@ -257,24 +315,14 @@ where
             .collect_vec();
 
         // Hash all matrix openings at the current height.
-        let mut slices: Vec<&[P::Value]> = Vec::new();
-        {
-            let mut take = heights_tallest_first.peeking_take_while(|(_, dims)| {
-                dims.height.next_power_of_two() == curr_height_padded
-            });
-            while let Some((i, _)) = take.next() {
-                if !matrix_padding[i] {
-                    slices.push(opened_values[i].as_slice());
-                }
-            }
-        }
-        let mut root = if slices.is_empty() {
-            default_digest
-        } else {
-            self.hash.hash_iter_slices(slices)
-        };
+        // Openings for out-of-range rows (padding) are skipped; only in-range rows contribute.
+        // If no in-range rows exist at this level, use `default_digest`.
+        let iter0 = heights_tallest_first
+            .peeking_take_while(|(_, dims)| dims.height.next_power_of_two() == curr_height_padded)
+            .filter_map(|(i, _)| (!row_is_padding[i]).then_some(opened_values[i].as_slice()));
+        let mut root = self.hash_or_default(iter0, default_digest);
 
-        for &sibling in opening_proof {
+        for sibling in opening_proof.iter().cloned() {
             // The last bit of index informs us whether the current node is on the left or right.
             let (left, right) = if index & 1 == 0 {
                 (root, sibling)
@@ -294,21 +342,13 @@ where
                 .filter(|h| h.next_power_of_two() == curr_height_padded);
             if let Some(next_height) = next_height {
                 // If there are new matrix rows, hash the rows together and then combine with the current root.
-                let mut slices: Vec<&[P::Value]> = Vec::new();
-                {
-                    let mut take = heights_tallest_first
-                        .peeking_take_while(|(_, dims)| dims.height == next_height);
-                    while let Some((i, _)) = take.next() {
-                        if !matrix_padding[i] {
-                            slices.push(opened_values[i].as_slice());
-                        }
-                    }
-                }
-                let next_height_openings_digest = if slices.is_empty() {
-                    default_digest
-                } else {
-                    self.hash.hash_iter_slices(slices)
-                };
+                // Skip padded rows (out-of-range) and use `default_digest` if no real rows exist.
+                let iter1 = heights_tallest_first
+                    .peeking_take_while(|(_, dims)| dims.height == next_height)
+                    .filter_map(|(i, _)| {
+                        (!row_is_padding[i]).then_some(opened_values[i].as_slice())
+                    });
+                let next_height_openings_digest = self.hash_or_default(iter1, default_digest);
 
                 root = self.compress.compress([root, next_height_openings_digest]);
             }
@@ -336,6 +376,7 @@ mod tests {
     use p3_symmetric::{
         CryptographicHasher, PaddingFreeSponge, PseudoCompressionFunction, TruncatedPermutation,
     };
+    use p3_util::log2_ceil_usize;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -673,8 +714,6 @@ mod tests {
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash, compress);
-
-        let mut rng = SmallRng::seed_from_u64(1);
         let mut mats = vec![RowMajorMatrix::<F>::rand(&mut rng, 1000, 8)];
         mats.push(RowMajorMatrix::<F>::rand(&mut rng, 70, 8));
         mats.push(RowMajorMatrix::<F>::rand(&mut rng, 8, 8));
@@ -695,14 +734,25 @@ mod tests {
             },
         ];
 
-        let _ = mmcs.open_batch(559, &prover_data);
-        let batch = mmcs.open_batch(560, &prover_data);
+        // Compute the boundary between valid and padded rows for the 70-row matrix programmatically.
+        // log_global_max_height = 10 (for 1000 rows, rounded up to 1024)
+        // shift = 10 - log2_ceil(70) = 10 - 7 = 3
+        // last_valid = ((70 - 1) << 3) | ((1 << 3) - 1) = (69 << 3) | 7 = 552 | 7 = 559
+        // first_padded = 70 << 3 = 560
+        let log_global = log2_ceil_usize(dims[0].height); // 10 for 1000 -> 1024
+        let h = dims[1].height; // 70
+        let shift = log_global - log2_ceil_usize(h);
+        let last_valid = ((h - 1) << shift) | ((1 << shift) - 1);
+        let first_padded = h << shift;
+
+        let _ = mmcs.open_batch(last_valid, &prover_data);
+        let batch = mmcs.open_batch(first_padded, &prover_data);
         let padded_row = &batch.opened_values[1];
         assert!(
             padded_row.iter().all(|value| value.is_zero()),
             "padded row should open as zeros"
         );
-        mmcs.verify_batch(&commit, &dims, 560, (&batch).into())
+        mmcs.verify_batch(&commit, &dims, first_padded, (&batch).into())
             .expect("padded openings should verify");
     }
 
