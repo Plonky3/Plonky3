@@ -630,6 +630,31 @@ mod tests {
         .expect("expected verification to succeed");
     }
 
+    // TODO: This test is failing because mmcs.open_batch panics when opening a matrix of size 560 at position 70.
+    #[test]
+    fn size_gaps_fails() {
+        let mut rng = SmallRng::seed_from_u64(1);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress);
+
+        let mut rng = SmallRng::seed_from_u64(1);
+        // mat with 1000 rows, 8 columns
+        let mut mats = vec![RowMajorMatrix::<F>::rand(&mut rng, 1000, 8)];
+
+        // mat with 70 rows, 8 columns
+        mats.push(RowMajorMatrix::<F>::rand(&mut rng, 70, 8));
+
+        // mat with 8 rows, 8 columns
+        mats.push(RowMajorMatrix::<F>::rand(&mut rng, 8, 8));
+
+        let (_, prover_data) = mmcs.commit(mats);
+
+        let _ = mmcs.open_batch(559, &prover_data); // This works
+        let _ = mmcs.open_batch(560, &prover_data); // This panics
+    }
+
     #[test]
     fn different_widths() {
         let mut rng = SmallRng::seed_from_u64(1);
