@@ -39,12 +39,6 @@ impl<F> SymbolicVariable<F> {
     }
 }
 
-impl<F: Field> From<SymbolicVariable<F>> for SymbolicExpression<F> {
-    fn from(value: SymbolicVariable<F>) -> Self {
-        Self::Variable(value)
-    }
-}
-
 impl<F: Field, T> Add<T> for SymbolicVariable<F>
 where
     T: Into<SymbolicExpression<F>>,

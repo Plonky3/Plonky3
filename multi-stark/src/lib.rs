@@ -32,9 +32,11 @@
 
 extern crate alloc;
 
+pub mod common;
 pub mod config;
 pub mod proof;
 pub mod prover;
+pub mod symbolic;
 pub mod verifier;
 
 // Re-export main types and functions for convenience

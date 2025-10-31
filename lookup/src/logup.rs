@@ -20,11 +20,19 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+use itertools::Itertools;
 use p3_air::{AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder, PermutationAirBuilder};
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_matrix::Matrix;
+use p3_matrix::{
+    Matrix,
+    dense::{RowMajorMatrix, RowMajorMatrixView},
+    stack::VerticalPair,
+};
+use p3_uni_stark::{StarkGenericConfig, Val};
 
-use crate::lookup_traits::{Kind, Lookup, LookupError, LookupGadget, symbolic_to_expr};
+use crate::lookup_traits::{
+    Kind, Lookup, LookupData, LookupError, LookupGadget, LookupTraceBuilder, eval_symbolic,
+};
 
 /// Core LogUp gadget implementing lookup arguments via logarithmic derivatives.
 ///
@@ -59,6 +67,30 @@ impl LogUpGadget {
         Self {}
     }
 
+    fn combine_elements<AB, E>(
+        &self,
+        elements: &[Vec<E>],
+        alpha: &AB::ExprEF,
+        beta: &AB::ExprEF,
+    ) -> Vec<AB::ExprEF>
+    where
+        AB: PermutationAirBuilder,
+        E: Into<AB::ExprEF> + Clone,
+    {
+        elements
+            .iter()
+            .map(|elts| {
+                // Combine the elements in the tuple using beta.
+                let combined_elt = elts.iter().fold(AB::ExprEF::ZERO, |acc, elt| {
+                    elt.clone().into() + acc * beta.clone()
+                });
+
+                // Compute (α - combined_elt)
+                alpha.clone() - combined_elt
+            })
+            .collect::<Vec<_>>()
+    }
+
     /// Computes the numerator and denominator of the fraction:
     /// `∑(m_i / (α - combined_elements[i]))`, where
     /// `combined_elements[i] = ∑elements[i][n-j] * β^j
@@ -81,18 +113,7 @@ impl LogUpGadget {
         let n = elements.len();
 
         // Precompute all (α - ∑e_{i, j} β^j) terms
-        let terms = elements
-            .iter()
-            .map(|elts| {
-                // Combine the elements in the tuple using beta.
-                let combined_elt = elts.iter().fold(AB::ExprEF::ZERO, |acc, elt| {
-                    elt.clone().into() + acc * beta.clone()
-                });
-
-                // Compute (α - combined_elt)
-                alpha.clone() - combined_elt
-            })
-            .collect::<Vec<_>>();
+        let terms = self.combine_elements::<AB, E>(elements, alpha, beta);
 
         // Build prefix products: pref[i] = ∏_{j=0}^{i-1}(α - e_j)
         let mut pref = Vec::with_capacity(n + 1);
@@ -162,14 +183,14 @@ impl LogUpGadget {
             .map(|exprs| {
                 exprs
                     .iter()
-                    .map(|expr| symbolic_to_expr(builder, expr))
+                    .map(|expr| eval_symbolic(builder, expr).into())
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
 
         let multiplicities = multiplicities_exprs
             .iter()
-            .map(|expr| symbolic_to_expr(builder, expr))
+            .map(|expr| eval_symbolic(builder, expr).into())
             .collect::<Vec<_>>();
 
         // Access the permutation (aux) table. It carries the running sum column `s`.
@@ -224,7 +245,10 @@ impl LogUpGadget {
             );
 
             // Final constraint:
-            let final_val = (expected_cumulated - s_local) * common_denominator - numerator;
+            let final_val = (AB::ExprEF::from(expected_cumulated) - s_local.clone())
+                * common_denominator
+                - numerator;
+
             builder.when_last_row().assert_zero_ext(final_val);
         } else {
             // If we don't have an `expected_cumulated`, we are in a local lookup update.
@@ -351,5 +375,90 @@ impl LookupGadget for LogUpGadget {
             .unwrap_or(0);
 
         deg_denom_constr.max(deg_num)
+    }
+
+    fn generate_permutation<SC: StarkGenericConfig>(
+        &self,
+        main: &RowMajorMatrix<Val<SC>>,
+        public_values: &[Val<SC>],
+        lookups: &[Lookup<Val<SC>>],
+        lookup_data: &mut [LookupData<SC::Challenge>],
+        permutation_challenges: &[SC::Challenge],
+    ) -> RowMajorMatrix<SC::Challenge> {
+        let height = main.height();
+        let width = self.num_aux_cols() * lookups.len();
+
+        let mut aux_trace = vec![SC::Challenge::ZERO; height * width];
+        for i in 0..height {
+            let local_main_row = main.row_slice(i).unwrap();
+            let next_main_row = main.row_slice((i + 1) % height).unwrap();
+
+            let main_rows = VerticalPair::new(
+                RowMajorMatrixView::new_row(&local_main_row),
+                RowMajorMatrixView::new_row(&next_main_row),
+            );
+
+            let mut row_builder: LookupTraceBuilder<'_, SC> =
+                LookupTraceBuilder::new(main_rows, public_values, permutation_challenges.to_vec());
+
+            let mut permutation_counter = 0;
+            // Build the trace and update `lookup_data` with expected cumulated values.
+            lookups.iter().for_each(|context| {
+                // Build the expected cumulative value for this global lookup.
+                let aux_idx = context.columns[0];
+                let alpha = &permutation_challenges[2 * aux_idx];
+                let beta = &permutation_challenges[2 * aux_idx + 1];
+
+                let elements = context
+                    .element_exprs
+                    .iter()
+                    .map(|elts| {
+                        elts.iter()
+                            .map(|e| eval_symbolic(&mut row_builder, e))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                let multiplicities = context
+                    .multiplicities_exprs
+                    .iter()
+                    .map(|e| eval_symbolic(&mut row_builder, e))
+                    .collect::<Vec<Val<SC>>>();
+
+                // Combine the elements in the `elements` tuple using beta.
+                let combined_elts: Vec<SC::Challenge> = self
+                    .combine_elements::<LookupTraceBuilder<'_, SC>, Val<SC>>(
+                        &elements, alpha, beta,
+                    );
+
+                // Sum with multiplicities.
+                let sum: SC::Challenge = combined_elts
+                    .iter()
+                    .zip_eq(multiplicities.clone())
+                    .map(|(e, m)| e.inverse() * SC::Challenge::from(m))
+                    .sum();
+
+                if i < height - 1 {
+                    aux_trace[(i + 1) * width + aux_idx] = aux_trace[i * width + aux_idx] + sum;
+                }
+
+                if i == height - 1 {
+                    match context.kind {
+                        Kind::Global(_) => {
+                            // For global lookups, store the expected cumulative value.
+                            lookup_data[permutation_counter].expected_cumulated =
+                                aux_trace[i * width + aux_idx] + sum;
+                            permutation_counter += 1;
+                        }
+                        Kind::Local => {}
+                    }
+                }
+            });
+            if i == height - 1 {
+                assert_eq!(permutation_counter, lookup_data.len());
+            }
+        }
+
+        let res = RowMajorMatrix::new(aux_trace, width);
+        res
     }
 }

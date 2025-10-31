@@ -3,7 +3,9 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 use core::slice::from_ref;
 
-use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir};
+use p3_air::{
+    Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, PairBuilder, PermutationAirBuilder,
+};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
@@ -13,15 +15,22 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
 use p3_fri::{FriParameters, TwoAdicFriPcs, create_test_fri_params};
 use p3_keccak::Keccak256Hash;
+use p3_lookup::logup::LogUpGadget;
+use p3_lookup::lookup_traits::{AirLookupHandler, AirNoLookup, Direction, Kind, Lookup};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_mersenne_31::Mersenne31;
-use p3_multi_stark::{StarkInstance, prove_multi, verify_multi};
+use p3_multi_stark::StarkInstance;
+use p3_multi_stark::common::extract_lookups;
+use p3_multi_stark::proof::OpenedValuesWithLookups;
+use p3_multi_stark::prover::{prove_multi, prove_multi_no_lookups};
+use p3_multi_stark::verifier::{verify_multi, verify_multi_no_lookups};
 use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
 };
 use p3_uni_stark::StarkConfig;
+use p3_uni_stark::{SymbolicAirBuilder, SymbolicExpression};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
@@ -36,7 +45,7 @@ impl<F> BaseAir<F> for FibonacciAir {
     }
 }
 
-impl<AB: AirBuilderWithPublicValues> Air<AB> for FibonacciAir {
+impl<AB: PermutationAirBuilder + AirBuilderWithPublicValues> Air<AB> for FibonacciAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
         let pis = builder.public_values();
@@ -143,6 +152,126 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
     }
 }
 
+#[derive(Clone, Copy)]
+struct MulAirLookups {
+    air: MulAir,
+    is_local: bool,
+    is_global: bool,
+    num_lookups: usize,
+}
+
+impl Default for MulAirLookups {
+    fn default() -> Self {
+        Self {
+            air: MulAir::default(),
+            is_local: false,
+            is_global: false,
+            num_lookups: 0,
+        }
+    }
+}
+
+impl MulAirLookups {
+    fn new(air: MulAir, is_local: bool, is_global: bool, num_lookups: usize) -> Self {
+        Self {
+            air,
+            is_local,
+            is_global,
+            num_lookups,
+        }
+    }
+}
+
+impl<F> BaseAir<F> for MulAirLookups {
+    fn width(&self) -> usize {
+        <MulAir as BaseAir<F>>::width(&self.air)
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for MulAirLookups {
+    fn eval(&self, builder: &mut AB) {
+        self.air.eval(builder)
+    }
+}
+
+impl<AB> AirLookupHandler<AB> for MulAirLookups
+where
+    AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+{
+    fn add_lookup_columns(&mut self) -> Vec<usize> {
+        let new_idx = self.num_lookups;
+        self.num_lookups += 1;
+        vec![new_idx]
+    }
+
+    fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
+        let mut lookups = Vec::new();
+
+        // Create symbolic air builder to access symbolic variables
+        let symbolic_air_builder =
+            SymbolicAirBuilder::<AB::F>::new(0, <Self as BaseAir<AB::F>>::width(self), 0, 0, 0);
+        let symbolic_main = symbolic_air_builder.main();
+        let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
+
+        // Local lookups: one for each mul input with extra column for integers 0 to height
+        if self.is_local {
+            for rep in 0..self.air.reps {
+                let base_idx = rep * 3;
+                let a = symbolic_main_local[base_idx]; // First input
+
+                // Create lookup inputs for each multiplication input
+                // We'll create a local lookup table with integers 0 to height
+                let lookup_inputs = vec![
+                    // Lookup for 'a' against a range table (0 to height)
+                    (
+                        vec![a.into()],
+                        SymbolicExpression::Constant(AB::F::ONE),
+                        Direction::Receive,
+                    ),
+                    // Provide the range values (this would be done in the trace generation)
+                    (
+                        vec![a.into()], // This represents the range values
+                        SymbolicExpression::Constant(AB::F::ONE),
+                        Direction::Send,
+                    ),
+                ];
+
+                let local_lookup = <Self as AirLookupHandler<AB>>::register_lookup(
+                    self,
+                    Kind::Local,
+                    &lookup_inputs,
+                );
+                lookups.push(local_lookup);
+            }
+        }
+
+        // Global lookups: between MulAir inputs and FibAir inputs
+        if self.is_global {
+            for rep in 0..self.air.reps {
+                let base_idx = rep * 3;
+                let a = symbolic_main_local[base_idx]; // First input
+                // let b = symbolic_main_local[base_idx + 1]; // Second input
+
+                // Global lookup between MulAir inputs and FibAir inputs
+                let lookup_inputs = vec![(
+                    vec![a.into()],
+                    SymbolicExpression::Constant(AB::F::ONE),
+                    Direction::Send, // MulAir sends data to the global lookup
+                )];
+
+                let global_lookup = <Self as AirLookupHandler<AB>>::register_lookup(
+                    self,
+                    Kind::Global("MulFib".to_string()),
+                    &lookup_inputs,
+                );
+                lookups.push(global_lookup);
+            }
+        }
+
+        lookups
+    }
+}
+
 fn mul_trace<F: Field>(rows: usize, reps: usize, _step: u64) -> RowMajorMatrix<F> {
     assert!(rows.is_power_of_two());
     let w = reps * 3;
@@ -157,6 +286,91 @@ fn mul_trace<F: Field>(rows: usize, reps: usize, _step: u64) -> RowMajorMatrix<F
         }
     }
     RowMajorMatrix::new(v, w)
+}
+
+// --- FibAirLookups structure for global lookups ---
+
+#[derive(Debug, Clone, Copy)]
+struct FibAirLookups {
+    air: FibonacciAir,
+    is_global: bool,
+    num_lookups: usize,
+}
+
+impl Default for FibAirLookups {
+    fn default() -> Self {
+        Self {
+            air: FibonacciAir,
+            is_global: false,
+            num_lookups: 0,
+        }
+    }
+}
+
+impl FibAirLookups {
+    fn new(air: FibonacciAir, is_global: bool, num_lookups: usize) -> Self {
+        Self {
+            air,
+            is_global,
+            num_lookups,
+        }
+    }
+}
+
+impl<F> BaseAir<F> for FibAirLookups {
+    fn width(&self) -> usize {
+        <FibonacciAir as BaseAir<F>>::width(&self.air)
+    }
+}
+
+impl<AB: PermutationAirBuilder + AirBuilderWithPublicValues> Air<AB> for FibAirLookups {
+    fn eval(&self, builder: &mut AB) {
+        self.air.eval(builder)
+    }
+}
+
+impl<AB> AirLookupHandler<AB> for FibAirLookups
+where
+    AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+{
+    fn add_lookup_columns(&mut self) -> Vec<usize> {
+        let new_idx = self.num_lookups;
+        self.num_lookups += 1;
+        vec![new_idx]
+    }
+
+    fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
+        let mut lookups = Vec::new();
+
+        if self.is_global {
+            // Create symbolic air builder to access symbolic variables
+            let symbolic_air_builder =
+                SymbolicAirBuilder::<AB::F>::new(0, <Self as BaseAir<AB::F>>::width(self), 0, 0, 0);
+            let symbolic_main = symbolic_air_builder.main();
+            let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
+
+            // Global lookups: between FibAir inputs and MulAir inputs
+            // FibAir has 2 columns: left and right
+            let left = symbolic_main_local[0]; // left column
+            let right = symbolic_main_local[1]; // right column
+
+            // Global lookup between FibAir inputs and MulAir inputs
+            let lookup_inputs = vec![(
+                vec![left.into(), right.into()],
+                SymbolicExpression::Constant(AB::F::ONE),
+                Direction::Receive, // FibAir receives data from the global lookup
+            )];
+
+            let global_lookup = <Self as AirLookupHandler<AB>>::register_lookup(
+                self,
+                Kind::Global("MulFib".to_string()),
+                &lookup_inputs,
+            );
+            lookups.push(global_lookup);
+        }
+
+        lookups
+    }
 }
 
 // --- Config types ---
@@ -202,7 +416,63 @@ impl<F> BaseAir<F> for DemoAir {
         }
     }
 }
-impl<AB: AirBuilderWithPublicValues> Air<AB> for DemoAir {
+
+// Heterogeneous enum wrapper for lookup-enabled AIRs
+#[derive(Clone, Copy)]
+enum DemoAirWithLookups {
+    FibLookups(FibAirLookups),
+    MulLookups(MulAirLookups),
+}
+
+impl<F> BaseAir<F> for DemoAirWithLookups {
+    fn width(&self) -> usize {
+        match self {
+            DemoAirWithLookups::FibLookups(a) => <FibAirLookups as BaseAir<F>>::width(a),
+            DemoAirWithLookups::MulLookups(a) => <MulAirLookups as BaseAir<F>>::width(a),
+        }
+    }
+}
+
+impl<AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues> Air<AB>
+    for DemoAirWithLookups
+{
+    fn eval(&self, builder: &mut AB) {
+        match self {
+            DemoAirWithLookups::FibLookups(a) => <FibAirLookups as Air<AB>>::eval(a, builder),
+            DemoAirWithLookups::MulLookups(a) => <MulAirLookups as Air<AB>>::eval(a, builder),
+        }
+    }
+}
+
+impl<AB> AirLookupHandler<AB> for DemoAirWithLookups
+where
+    AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+    AB::Var: Copy,
+{
+    fn add_lookup_columns(&mut self) -> Vec<usize> {
+        match self {
+            DemoAirWithLookups::FibLookups(a) => {
+                <FibAirLookups as AirLookupHandler<AB>>::add_lookup_columns(a)
+            }
+            DemoAirWithLookups::MulLookups(a) => {
+                <MulAirLookups as AirLookupHandler<AB>>::add_lookup_columns(a)
+            }
+        }
+    }
+
+    fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
+        match self {
+            DemoAirWithLookups::FibLookups(a) => {
+                <FibAirLookups as AirLookupHandler<AB>>::get_lookups(a)
+            }
+            DemoAirWithLookups::MulLookups(a) => {
+                <MulAirLookups as AirLookupHandler<AB>>::get_lookups(a)
+            }
+        }
+    }
+}
+
+impl<AB: PermutationAirBuilder + AirBuilderWithPublicValues> Air<AB> for DemoAir {
     fn eval(&self, b: &mut AB) {
         match self {
             Self::Fib(a) => a.eval(b),
@@ -211,12 +481,28 @@ impl<AB: AirBuilderWithPublicValues> Air<AB> for DemoAir {
     }
 }
 
+type DemoAirNoLookup = AirNoLookup<DemoAir>;
+
+// Demo function to show MulAirLookups usage
+#[allow(dead_code)]
+fn demo_mul_air_lookups() {
+    let mul_air = MulAir { reps: 2, step: 1 };
+    let mul_air_with_local_lookups = MulAirLookups::new(mul_air, true, false, 0);
+    let mul_air_with_global_lookups = MulAirLookups::new(mul_air, false, true, 0);
+    let mul_air_with_both_lookups = MulAirLookups::new(mul_air, true, true, 0);
+
+    // These would be used in actual proving/verifying contexts
+    let _ = <MulAirLookups as BaseAir<Val>>::width(&mul_air_with_local_lookups);
+    let _ = <MulAirLookups as BaseAir<Val>>::width(&mul_air_with_global_lookups);
+    let _ = <MulAirLookups as BaseAir<Val>>::width(&mul_air_with_both_lookups);
+}
+
 // --- Test Helper Functions ---
 
 /// Creates a Fibonacci instance with specified log height.
-fn create_fib_instance(log_height: usize) -> (DemoAir, RowMajorMatrix<Val>, Vec<Val>) {
+fn create_fib_instance(log_height: usize) -> (DemoAirNoLookup, RowMajorMatrix<Val>, Vec<Val>) {
     let n = 1 << log_height;
-    let air = DemoAir::Fib(FibonacciAir);
+    let air = DemoAirNoLookup::new(DemoAir::Fib(FibonacciAir));
     let trace = fib_trace::<Val>(0, 1, n);
     let pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(n))];
     (air, trace, pis)
@@ -227,10 +513,10 @@ fn create_mul_instance(
     log_height: usize,
     reps: usize,
     step: u64,
-) -> (DemoAir, RowMajorMatrix<Val>, Vec<Val>) {
+) -> (DemoAirNoLookup, RowMajorMatrix<Val>, Vec<Val>) {
     let n = 1 << log_height;
     let mul = MulAir { reps, step };
-    let air = DemoAir::Mul(mul);
+    let air = DemoAirNoLookup::new(DemoAir::Mul(mul));
     let trace = mul_trace::<Val>(n, reps, step);
     let pis = vec![];
     (air, trace, pis)
@@ -248,19 +534,21 @@ fn test_two_instances() -> Result<(), impl Debug> {
             air: &air_fib,
             trace: fib_trace,
             public_values: fib_pis.clone(),
+            lookups: vec![],
         },
         StarkInstance {
             air: &air_mul,
             trace: mul_trace,
             public_values: mul_pis.clone(),
+            lookups: vec![],
         },
     ];
 
-    let proof = prove_multi(&config, instances);
+    let proof = prove_multi_no_lookups(&config, instances);
 
     let airs = vec![air_fib, air_mul];
     let pvs = vec![fib_pis, mul_pis];
-    verify_multi(&config, &airs, &proof, &pvs)
+    verify_multi_no_lookups(&config, &airs, &proof, &pvs)
 }
 
 #[test]
@@ -276,23 +564,26 @@ fn test_three_instances_mixed_sizes() -> Result<(), impl Debug> {
             air: &air_fib16,
             trace: fib16_trace,
             public_values: fib16_pis.clone(),
+            lookups: vec![],
         },
         StarkInstance {
             air: &air_mul8,
             trace: mul8_trace,
             public_values: mul8_pis.clone(),
+            lookups: vec![],
         },
         StarkInstance {
             air: &air_fib8,
             trace: fib8_trace,
             public_values: fib8_pis.clone(),
+            lookups: vec![],
         },
     ];
 
-    let proof = prove_multi(&config, instances);
+    let proof = prove_multi_no_lookups(&config, instances);
     let airs = vec![air_fib16, air_mul8, air_fib8];
     let pvs = vec![fib16_pis, mul8_pis, fib8_pis];
-    verify_multi(&config, &airs, &proof, &pvs)
+    verify_multi_no_lookups(&config, &airs, &proof, &pvs)
 }
 
 #[test]
@@ -306,8 +597,9 @@ fn test_invalid_public_values_rejected() -> Result<(), Box<dyn std::error::Error
         air: &air_fib,
         trace,
         public_values: fib_pis,
+        lookups: vec![],
     }];
-    let proof = prove_multi(&config, instances);
+    let proof = prove_multi_no_lookups(&config, instances);
 
     // Wrong public value at verify => should reject
     let wrong_pvs = vec![vec![
@@ -315,7 +607,7 @@ fn test_invalid_public_values_rejected() -> Result<(), Box<dyn std::error::Error
         Val::from_u64(1),
         Val::from_u64(correct_x + 1),
     ]];
-    let res = verify_multi(&config, &[air_fib], &proof, &wrong_pvs);
+    let res = verify_multi_no_lookups(&config, &[air_fib], &proof, &wrong_pvs);
     assert!(res.is_err(), "Should reject wrong public values");
     Ok::<_, Box<dyn std::error::Error>>(())
 }
@@ -334,23 +626,26 @@ fn test_different_widths() -> Result<(), impl Debug> {
             air: &air_mul2,
             trace: mul2_trace,
             public_values: mul2_pis.clone(),
+            lookups: vec![],
         },
         StarkInstance {
             air: &air_fib,
             trace: fib_trace,
             public_values: fib_pis.clone(),
+            lookups: vec![],
         },
         StarkInstance {
             air: &air_mul3,
             trace: mul3_trace,
             public_values: mul3_pis.clone(),
+            lookups: vec![],
         },
     ];
 
-    let proof = prove_multi(&config, instances);
+    let proof = prove_multi_no_lookups(&config, instances);
     let airs = vec![air_mul2, air_fib, air_mul3];
     let pvs = vec![mul2_pis, fib_pis, mul3_pis];
-    verify_multi(&config, &airs, &proof, &pvs)
+    verify_multi_no_lookups(&config, &airs, &proof, &pvs)
 }
 
 #[test]
@@ -364,10 +659,11 @@ fn test_single_instance() -> Result<(), impl Debug> {
         air: &air_fib,
         trace: fib_trace,
         public_values: fib_pis.clone(),
+        lookups: vec![],
     }];
 
-    let proof = prove_multi(&config, instances);
-    verify_multi(&config, &[air_fib], &proof, &[fib_pis])
+    let proof = prove_multi_no_lookups(&config, instances);
+    verify_multi_no_lookups(&config, &[air_fib], &proof, &[fib_pis])
 }
 
 #[test]
@@ -384,45 +680,78 @@ fn test_invalid_trace_width_rejected() {
         air: &air_fib,
         trace: fib_trace,
         public_values: fib_pis.clone(),
+        lookups: vec![],
     }];
 
     // Generate a valid proof
-    let valid_proof = prove_multi(&config, instances);
+    let valid_proof = prove_multi_no_lookups(&config, instances);
 
     // Tamper with the proof: change trace_local to have wrong width
     let mut tampered_proof = p3_multi_stark::proof::MultiProof {
         commitments: MultiCommitments {
             main: valid_proof.commitments.main,
             quotient_chunks: valid_proof.commitments.quotient_chunks,
+            permutation: valid_proof.commitments.permutation.clone(),
         },
         opened_values: MultiOpenedValues {
-            instances: vec![OpenedValues {
-                trace_local: vec![valid_proof.opened_values.instances[0].trace_local[0]], // Wrong width: 1 instead of 2
-                trace_next: valid_proof.opened_values.instances[0].trace_next.clone(),
-                quotient_chunks: valid_proof.opened_values.instances[0]
-                    .quotient_chunks
+            instances: vec![OpenedValuesWithLookups {
+                base_opened_values: OpenedValues {
+                    trace_local: vec![
+                        valid_proof.opened_values.instances[0]
+                            .base_opened_values
+                            .trace_local[0],
+                    ], // Wrong width: 1 instead of 2
+                    trace_next: valid_proof.opened_values.instances[0]
+                        .base_opened_values
+                        .trace_next
+                        .clone(),
+                    quotient_chunks: valid_proof.opened_values.instances[0]
+                        .base_opened_values
+                        .quotient_chunks
+                        .clone(),
+                    random: None,
+                },
+                permutation_local: valid_proof.opened_values.instances[0]
+                    .permutation_local
                     .clone(),
-                random: None,
+                permutation_next: valid_proof.opened_values.instances[0]
+                    .permutation_next
+                    .clone(),
             }],
         },
         opening_proof: valid_proof.opening_proof.clone(),
+        global_lookup_data: valid_proof.global_lookup_data.clone(),
         degree_bits: valid_proof.degree_bits.clone(),
     };
 
     // Verification should fail due to width mismatch
-    let res = verify_multi(&config, &[air_fib], &tampered_proof, from_ref(&fib_pis));
+    let res = verify_multi_no_lookups(
+        &config,
+        &[air_fib.clone()],
+        &tampered_proof,
+        from_ref(&fib_pis),
+    );
     assert!(
         res.is_err(),
         "Verifier should reject trace with wrong width"
     );
 
     // Also test wrong trace_next width
-    tampered_proof.opened_values.instances[0].trace_local =
-        valid_proof.opened_values.instances[0].trace_local.clone();
-    tampered_proof.opened_values.instances[0].trace_next =
-        vec![valid_proof.opened_values.instances[0].trace_next[0]]; // Wrong width
+    tampered_proof.opened_values.instances[0]
+        .base_opened_values
+        .trace_local = valid_proof.opened_values.instances[0]
+        .base_opened_values
+        .trace_local
+        .clone();
+    tampered_proof.opened_values.instances[0]
+        .base_opened_values
+        .trace_next = vec![
+        valid_proof.opened_values.instances[0]
+            .base_opened_values
+            .trace_next[0],
+    ]; // Wrong width
 
-    let res = verify_multi(&config, &[air_fib], &tampered_proof, from_ref(&fib_pis));
+    let res = verify_multi_no_lookups(&config, &[air_fib], &tampered_proof, from_ref(&fib_pis));
     assert!(
         res.is_err(),
         "Verifier should reject trace_next with wrong width"
@@ -442,18 +771,25 @@ fn test_reorder_instances_rejected() {
             air: &air_a,
             trace: tr_a,
             public_values: pv_a.clone(),
+            lookups: vec![],
         },
         StarkInstance {
             air: &air_b,
             trace: tr_b,
             public_values: pv_b.clone(),
+            lookups: vec![],
         },
     ];
 
-    let proof = prove_multi(&config, instances);
+    let proof = prove_multi_no_lookups(&config, instances);
 
     // Swap order at verify -> should fail
-    let res = verify_multi(&config, &[air_b, air_a], &proof, &[pv_b, pv_a]);
+    let res = verify_multi_no_lookups(
+        &config,
+        &[air_b.clone(), air_a.clone()],
+        &proof,
+        &[pv_b.clone(), pv_a.clone()],
+    );
     assert!(res.is_err(), "Verifier should reject reordered instances");
 }
 
@@ -469,13 +805,17 @@ fn test_quotient_chunk_element_len_rejected() {
         air: &air,
         trace: tr,
         public_values: pv.clone(),
+        lookups: vec![],
     }];
-    let proof = prove_multi(&config, instances);
+    let proof = prove_multi_no_lookups(&config, instances);
 
     let mut tampered = proof;
-    tampered.opened_values.instances[0].quotient_chunks[0].pop();
+    tampered.opened_values.instances[0]
+        .base_opened_values
+        .quotient_chunks[0]
+        .pop();
 
-    let res = verify_multi(&config, &[air], &tampered, from_ref(&pv));
+    let res = verify_multi_no_lookups(&config, &[air], &tampered, from_ref(&pv));
     assert!(
         res.is_err(),
         "Verifier should reject truncated quotient chunk element"
@@ -524,8 +864,8 @@ fn test_circle_stark_multi() -> Result<(), impl Debug> {
     let config = MyConfig::new(pcs, challenger);
 
     // Create two Fibonacci instances with different sizes
-    let air_fib1 = FibonacciAir;
-    let air_fib2 = FibonacciAir;
+    let air_fib1 = AirNoLookup::new(FibonacciAir);
+    let air_fib2 = AirNoLookup::new(FibonacciAir);
 
     let fib_pis1 = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(8))]; // F_8 = 21
     let fib_pis2 = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(4))]; // F_4 = 3
@@ -538,20 +878,208 @@ fn test_circle_stark_multi() -> Result<(), impl Debug> {
             air: &air_fib1,
             trace: trace1,
             public_values: fib_pis1.clone(),
+            lookups: vec![],
         },
         StarkInstance {
             air: &air_fib2,
             trace: trace2,
             public_values: fib_pis2.clone(),
+            lookups: vec![],
         },
     ];
 
     // Generate multi-proof
-    let proof = prove_multi(&config, instances);
+    let proof = prove_multi_no_lookups(&config, instances);
 
     // Verify multi-proof
     let airs = vec![air_fib1, air_fib2];
     let public_values = vec![fib_pis1, fib_pis2];
-    verify_multi(&config, &airs, &proof, &public_values)
+    verify_multi_no_lookups(&config, &airs, &proof, &public_values)
         .map_err(|e| format!("Verification failed: {:?}", e))
+}
+
+// Tests for local and global lookup handling in multi-stark.
+
+/// Test with local lookups only using MulAirLookups
+/// This test demonstrates how to use local lookups in multi-stark proofs
+#[test]
+fn test_multi_stark_one_instance_global_only() -> Result<(), impl Debug> {
+    let config = make_config(2024);
+
+    let reps = 1;
+    // Create MulAir instance with local lookups configuration
+    let mul_air = MulAir { reps, step: 1 };
+    let mul_air_lookups = MulAirLookups::new(mul_air, false, true, 0); // global only
+
+    let mul_trace = mul_trace::<Val>(8, reps, 1);
+
+    // Use the enum wrapper for heterogeneous types
+    let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups).clone();
+
+    let mut airs = [air1];
+
+    // Get lookups from the lookup-enabled AIRs
+    let all_airs_lookups = extract_lookups::<MyConfig, _>(&mut airs);
+
+    let mul_lookups = all_airs_lookups[0].clone();
+
+    let instances = vec![StarkInstance {
+        air: &air1,
+        trace: mul_trace,
+        public_values: vec![],
+        lookups: mul_lookups,
+    }];
+
+    let lookup_gadget = LogUpGadget::new();
+    let proof = prove_multi(&config, instances, &lookup_gadget);
+
+    let mut airs = vec![air1];
+    let pvs = vec![vec![]];
+    verify_multi(&config, &mut airs, &proof, &pvs, &lookup_gadget)
+}
+
+/// Test with local lookups only using MulAirLookups
+/// This test demonstrates how to use local lookups in multi-stark proofs
+#[test]
+fn test_multi_stark_local_lookups_only() -> Result<(), impl Debug> {
+    let config = make_config(2024);
+
+    // Create MulAir instance with local lookups configuration
+    let mul_air = MulAir { reps: 2, step: 1 };
+    let mul_air_lookups = MulAirLookups::new(mul_air, true, false, 0); // local only
+    let fib_air_lookups = FibAirLookups::new(FibonacciAir, false, 0); // no lookups
+
+    let mul_trace = mul_trace::<Val>(16, 2, 1);
+    let fib_trace = fib_trace::<Val>(0, 1, 16);
+    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(16))];
+
+    // Use the enum wrapper for heterogeneous types
+    let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups).clone();
+    let air2 = DemoAirWithLookups::FibLookups(fib_air_lookups).clone();
+
+    let mut airs = [air1, air2];
+
+    // Get lookups from the lookup-enabled AIRs
+    let all_airs_lookups = extract_lookups::<MyConfig, _>(&mut airs);
+
+    let mul_lookups = all_airs_lookups[0].clone();
+    let fib_lookups = all_airs_lookups[1].clone();
+
+    let instances = vec![
+        StarkInstance {
+            air: &air1,
+            trace: mul_trace,
+            public_values: vec![],
+            lookups: mul_lookups,
+        },
+        StarkInstance {
+            air: &air2,
+            trace: fib_trace,
+            public_values: fib_pis.clone(),
+            lookups: fib_lookups,
+        },
+    ];
+
+    let lookup_gadget = LogUpGadget::new();
+    let proof = prove_multi(&config, instances, &lookup_gadget);
+
+    let mut airs = vec![air1, air2];
+    let pvs = vec![vec![], fib_pis];
+    verify_multi(&config, &mut airs, &proof, &pvs, &lookup_gadget)
+}
+
+/// Test with global lookups only using MulAirLookups and FibAirLookups  
+#[test]
+fn test_multi_stark_global_lookups_only() -> Result<(), impl Debug> {
+    let config = make_config(2025);
+
+    // Create instances with global lookups configuration
+    let mul_air = MulAir { reps: 2, step: 1 };
+    let mul_air_lookups = MulAirLookups::new(mul_air, false, true, 0); // global only
+    let fib_air_lookups = FibAirLookups::new(FibonacciAir, true, 0); // global lookups
+
+    let mul_trace = mul_trace::<Val>(16, 2, 1);
+    let fib_trace = fib_trace::<Val>(0, 1, 16);
+    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(16))];
+
+    // Use the enum wrapper for heterogeneous types
+    let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups);
+    let air2 = DemoAirWithLookups::FibLookups(fib_air_lookups);
+
+    // Get lookups from the lookup-enabled AIRs
+    let mut airs = [air1, air2];
+    let all_airs_lookups = extract_lookups::<MyConfig, _>(&mut airs);
+
+    let mul_lookups = all_airs_lookups[0].clone();
+    let fib_lookups = all_airs_lookups[1].clone();
+
+    let instances = vec![
+        StarkInstance {
+            air: &air1,
+            trace: mul_trace,
+            public_values: vec![],
+            lookups: mul_lookups,
+        },
+        StarkInstance {
+            air: &air2,
+            trace: fib_trace,
+            public_values: fib_pis.clone(),
+            lookups: fib_lookups,
+        },
+    ];
+
+    let lookup_gadget = LogUpGadget::new();
+    let proof = prove_multi(&config, instances, &lookup_gadget);
+
+    let mut airs = vec![air1, air2];
+    let pvs = vec![vec![], fib_pis];
+    verify_multi(&config, &mut airs, &proof, &pvs, &lookup_gadget)
+}
+
+/// Test with both local and global lookups using MulAirLookups and FibAirLookups
+#[test]
+fn test_multi_stark_both_lookups() -> Result<(), impl Debug> {
+    let config = make_config(2026);
+
+    // Create instances with both local and global lookups configuration
+    let mul_air = MulAir { reps: 2, step: 1 };
+    let mul_air_lookups = MulAirLookups::new(mul_air, true, true, 0); // both
+    let fib_air_lookups = FibAirLookups::new(FibonacciAir, true, 0); // global lookups
+
+    let mul_trace = mul_trace::<Val>(16, 2, 1);
+    let fib_trace = fib_trace::<Val>(0, 1, 16);
+    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(16))];
+
+    // Use the enum wrapper for heterogeneous types
+    let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups);
+    let air2 = DemoAirWithLookups::FibLookups(fib_air_lookups);
+
+    let mut airs = [air1, air2];
+    // Get lookups from the lookup-enabled AIRs
+    let all_airs_lookups = extract_lookups::<MyConfig, _>(&mut airs);
+
+    let mul_lookups = all_airs_lookups[0].clone();
+    let fib_lookups = all_airs_lookups[1].clone();
+
+    let instances = vec![
+        StarkInstance {
+            air: &air1,
+            trace: mul_trace,
+            public_values: vec![],
+            lookups: mul_lookups,
+        },
+        StarkInstance {
+            air: &air2,
+            trace: fib_trace,
+            public_values: fib_pis.clone(),
+            lookups: fib_lookups,
+        },
+    ];
+
+    let lookup_gadget = LogUpGadget::new();
+    let proof = prove_multi(&config, instances, &lookup_gadget);
+
+    let mut airs = vec![air1, air2];
+    let pvs = vec![vec![], fib_pis];
+    verify_multi(&config, &mut airs, &proof, &pvs, &lookup_gadget)
 }
