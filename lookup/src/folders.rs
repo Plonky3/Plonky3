@@ -10,7 +10,7 @@ use p3_uni_stark::{
 pub struct ProverConstraintFolderWithLookups<'a, SC: StarkGenericConfig> {
     pub base: ProverConstraintFolder<'a, SC>,
     pub permutation: RowMajorMatrixView<'a, PackedChallenge<SC>>,
-    pub permutation_challenges: &'a [SC::Challenge],
+    pub permutation_challenges: &'a [PackedChallenge<SC>],
 }
 
 impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookups<'a, SC> {
@@ -94,12 +94,12 @@ impl<'a, SC: StarkGenericConfig> PermutationAirBuilder
 {
     type MP = RowMajorMatrixView<'a, PackedChallenge<SC>>;
 
-    type RandomVar = SC::Challenge;
+    type RandomVar = PackedChallenge<SC>;
     fn permutation(&self) -> RowMajorMatrixView<'a, PackedChallenge<SC>> {
         self.permutation
     }
 
-    fn permutation_randomness(&self) -> &[SC::Challenge] {
+    fn permutation_randomness(&self) -> &[PackedChallenge<SC>] {
         &self.permutation_challenges
     }
 }

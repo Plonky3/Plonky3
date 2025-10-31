@@ -155,7 +155,7 @@ impl LogUpGadget {
         &self,
         builder: &mut AB,
         context: Lookup<AB::F>,
-        opt_expected_cumulated: Option<AB::EF>,
+        opt_expected_cumulated: Option<AB::ExprEF>,
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
     {
@@ -315,7 +315,7 @@ impl LookupGadget for LogUpGadget {
         &self,
         builder: &mut AB,
         context: Lookup<AB::F>,
-        expected_cumulated: AB::EF,
+        expected_cumulated: AB::ExprEF,
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
     {
@@ -403,57 +403,59 @@ impl LookupGadget for LogUpGadget {
             let mut row_builder: LookupTraceBuilder<SC> =
                 LookupTraceBuilder::new(main_rows, public_values, permutation_challenges.to_vec());
 
-            // Update the lookup data with the expected cumulative values for global lookups.
-            lookups
-                .iter()
-                .zip(lookup_data.iter_mut())
-                .for_each(|(context, data)| {
-                    assert!(data.aux_idx == context.columns[0]);
-                    // Build the expected cumulative value for this global lookup.
+            let mut permutation_counter = 0;
+            // Build the trace and update `lookup_data` with expected cumulated values.
+            lookups.iter().for_each(|context| {
+                // Build the expected cumulative value for this global lookup.
+                let aux_idx = context.columns[0];
+                let alpha = &permutation_challenges[2 * aux_idx];
+                let beta = &permutation_challenges[2 * aux_idx + 1];
 
-                    let alpha = &permutation_challenges[2 * data.aux_idx];
-                    let beta = &permutation_challenges[2 * data.aux_idx + 1];
+                let elements = context
+                    .element_exprs
+                    .iter()
+                    .map(|elts| {
+                        elts.iter()
+                            .map(|e| eval_symbolic(&mut row_builder, e))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                let multiplicities = context
+                    .multiplicities_exprs
+                    .iter()
+                    .map(|e| eval_symbolic(&mut row_builder, e))
+                    .collect::<Vec<Val<SC>>>();
 
-                    let elements = context
-                        .element_exprs
-                        .iter()
-                        .map(|elts| {
-                            elts.iter()
-                                .map(|e| eval_symbolic(&mut row_builder, e))
-                                .collect::<Vec<_>>()
-                        })
-                        .collect::<Vec<_>>();
-                    let multiplicities = context
-                        .multiplicities_exprs
-                        .iter()
-                        .map(|e| eval_symbolic(&mut row_builder, e))
-                        .collect::<Vec<Val<SC>>>();
+                // Combine the elements in the `elements` tuple using beta.
+                let combined_elts: Vec<SC::Challenge> = self
+                    .combine_elements::<LookupTraceBuilder<SC>, Val<SC>>(&elements, alpha, beta);
 
-                    // Combine the elements in the `elements` tuple using beta.
-                    let combined_elts: Vec<SC::Challenge> = self
-                        .combine_elements::<LookupTraceBuilder<SC>, Val<SC>>(
-                            &elements, alpha, beta,
-                        );
+                // Sum with multiplicities.
+                let sum: SC::Challenge = combined_elts
+                    .iter()
+                    .zip_eq(multiplicities.clone())
+                    .map(|(e, m)| e.inverse() * SC::Challenge::from(m))
+                    .sum();
 
-                    // Sum with multiplicities.
-                    let sum = combined_elts
-                        .iter()
-                        .zip_eq(multiplicities.clone())
-                        .map(|(e, m)| e.inverse() * SC::Challenge::from(m))
-                        .sum();
+                if i < height - 1 {
+                    aux_trace[(i + 1) * width + aux_idx] = aux_trace[i * width + aux_idx] + sum;
+                }
 
-                    if i == 0 {
-                        aux_trace[data.aux_idx] = sum;
-                    } else {
-                        aux_trace[i * width + data.aux_idx] =
-                            aux_trace[(i - 1) * width + data.aux_idx] + sum;
+                if i == height - 1 {
+                    match context.kind {
+                        Kind::Global(_) => {
+                            // For global lookups, store the expected cumulative value.
+                            lookup_data[permutation_counter].expected_cumulated =
+                                aux_trace[i * width + aux_idx] + sum;
+                            permutation_counter += 1;
+                        }
+                        Kind::Local => {}
                     }
-
-                    if i == height - 1 {
-                        // At the end of the trace, we will check that the final cumulative value is 0.
-                        data.expected_cumulated = aux_trace[i * width + data.aux_idx];
-                    }
-                });
+                }
+            });
+            if i == height - 1 {
+                assert_eq!(permutation_counter, lookup_data.len());
+            }
         }
 
         let res = RowMajorMatrix::new(aux_trace, width);

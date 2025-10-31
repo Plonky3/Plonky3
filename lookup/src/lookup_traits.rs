@@ -20,7 +20,7 @@ pub enum LookupError {
     GlobalCumulativeMismatch,
 }
 
-#[derive(Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 /// Data required for global lookup arguments in a multi-STARK proof.
 pub struct LookupData<F: Clone> {
     // Index of the auxiliary column (if there are multiple auxiliary columns, this is the first one)
@@ -74,7 +74,7 @@ pub trait LookupGadget {
         &self,
         builder: &mut AB,
         context: Lookup<AB::F>,
-        expected_cumulated: AB::EF,
+        expected_cumulated: AB::ExprEF,
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues;
 
@@ -105,7 +105,8 @@ pub trait LookupGadget {
                     if *aux_idx != context.columns[0] {
                         panic!("Expected cumulated values not sorted by auxiliary index");
                     }
-                    self.eval_global_update(builder, context.clone(), expected_cumulated.clone());
+                    let expr_ef_expected = AB::ExprEF::from(expected_cumulated.clone());
+                    self.eval_global_update(builder, context.clone(), expr_ef_expected);
                 }
             }
         }
@@ -250,13 +251,8 @@ where
     ) {
         <Self as Air<AB>>::eval(self, builder);
 
-        if !lookup_data.is_empty() {
+        if !lookups.is_empty() {
             lookup_gadget.eval_lookups(builder, lookups, lookup_data);
-        } else {
-            assert!(
-                lookups.is_empty(),
-                "Lookup data missing for AIR with lookups"
-            );
         }
     }
 }
@@ -454,7 +450,7 @@ impl LookupGadget for EmptyLookupGadget {
         &self,
         _builder: &mut AB,
         _context: Lookup<AB::F>,
-        _expected_cumulated: AB::EF,
+        _expected_cumulated: AB::ExprEF,
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
     {

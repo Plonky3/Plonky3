@@ -227,12 +227,12 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
             .into_iter()
             .flat_map(|offset| {
                 (0..permutation_width)
-                    .map(move |index| SymbolicVariable::new(Entry::Preprocessed { offset }, index))
+                    .map(move |index| SymbolicVariable::new(Entry::Permutation { offset }, index))
             })
             .collect();
         let permutation = RowMajorMatrix::new(perm_values, permutation_width);
         let permutation_challenges = (0..num_permutation_challenges)
-            .map(|index| SymbolicVariable::new(Entry::Public, index))
+            .map(|index| SymbolicVariable::new(Entry::Challenge, index))
             .collect();
         Self {
             preprocessed: RowMajorMatrix::new(prep_values, preprocessed_width),
