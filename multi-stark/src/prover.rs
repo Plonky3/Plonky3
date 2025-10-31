@@ -265,7 +265,7 @@ where
             &pub_vals[i],
             *trace_domain,
             quotient_domain,
-            &trace_on_quotient_domain,
+            trace_on_quotient_domain,
             permutation_on_quotient_domain,
             &all_lookups[i],
             &lookup_data[i],
@@ -580,7 +580,7 @@ where
 
 pub fn prove_multi_no_lookups<SC, A>(
     config: &SC,
-    instances: Vec<StarkInstance<SC, A>>,
+    instances: Vec<StarkInstance<'_, SC, A>>,
 ) -> MultiProof<SC>
 where
     SC: SGC,

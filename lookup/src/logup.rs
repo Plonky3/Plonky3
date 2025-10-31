@@ -398,7 +398,7 @@ impl LookupGadget for LogUpGadget {
                 RowMajorMatrixView::new_row(&next_main_row),
             );
 
-            let mut row_builder: LookupTraceBuilder<SC> =
+            let mut row_builder: LookupTraceBuilder<'_, SC> =
                 LookupTraceBuilder::new(main_rows, public_values, permutation_challenges.to_vec());
 
             let mut permutation_counter = 0;
@@ -426,7 +426,9 @@ impl LookupGadget for LogUpGadget {
 
                 // Combine the elements in the `elements` tuple using beta.
                 let combined_elts: Vec<SC::Challenge> = self
-                    .combine_elements::<LookupTraceBuilder<SC>, Val<SC>>(&elements, alpha, beta);
+                    .combine_elements::<LookupTraceBuilder<'_, SC>, Val<SC>>(
+                        &elements, alpha, beta,
+                    );
 
                 // Sum with multiplicities.
                 let sum: SC::Challenge = combined_elts
