@@ -20,8 +20,8 @@ use tracing::instrument;
 /// * `DIGEST_ELEMS` – number of `W` words in one digest.
 ///
 /// The tree is **balanced only at the digest layer**.
-/// Leaf matrices may have arbitrary heights as long as any two heights
-/// that round **up** to the same power-of-two are equal.
+/// Every leaf matrix must have a power-of-two height, though matrices may have
+/// different heights from each other.
 ///
 /// Use [`root`] to fetch the final digest once the tree is built.
 ///
@@ -32,9 +32,8 @@ pub struct MerkleTree<F, W, M, const DIGEST_ELEMS: usize> {
     /// All leaf matrices in insertion order.
     ///
     /// Each matrix contributes rows to one or more digest layers, depending on its height.
-    /// Specifically, only the tallest matrices are included in the first digest layer,
-    /// while shorter matrices are injected into higher digest layers at positions determined
-    /// by their padded heights.
+    /// Specifically, the tallest matrices populate the first digest layer, while shorter
+    /// matrices are injected into higher digest layers once the running height matches theirs.
     ///
     /// This vector is retained only for inspection or re-opening of the tree; it is not used
     /// after construction time.
@@ -67,9 +66,8 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
     /// * `c` – 2-to-1 compression function used on digests.
     /// * `leaves` – matrices to commit to. Must be non-empty.
     ///
-    /// Matrices do **not** need to have power-of-two heights. However, any two matrices
-    /// whose heights **round up** to the same power-of-two must have **equal actual height**.
-    /// This ensures proper balancing when folding digests layer-by-layer.
+    /// Every matrix must have a non-zero, power-of-two height. Matrices of different heights
+    /// are injected at the layer whose height matches theirs.
     ///
     /// All matrices are hashed row-by-row with `h`. The resulting digests are
     /// then folded upwards with `c` until a single root remains.
@@ -77,8 +75,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
     /// # Panics
     /// * If `leaves` is empty.
     /// * If the packing widths of `P` and `PW` differ.
-    /// * If two leaf heights *round up* to the same power-of-two but are not
-    ///   equal (violates balancing rule).
+    /// * If any leaf has a height that is not a non-zero power of two.
     #[instrument(name = "build merkle tree", level = "debug", skip_all,
                  fields(dimensions = alloc::format!("{:?}", leaves.iter().map(|l| l.dimensions()).collect::<Vec<_>>())))]
     pub fn new<P, PW, H, C>(h: &H, c: &C, leaves: Vec<M>) -> Self
@@ -96,21 +93,25 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
         const {
             assert!(P::WIDTH == PW::WIDTH, "Packing widths must match");
         }
+        assert!(
+            leaves
+                .iter()
+                .all(|matrix| matrix.height().is_power_of_two() && matrix.height() > 0),
+            "matrix heights must be non-zero powers of two"
+        );
 
         let mut leaves_largest_first = leaves
             .iter()
             .sorted_by_key(|l| Reverse(l.height()))
             .peekable();
 
-        // check height property
-        assert!(
+        debug_assert!(
             leaves_largest_first
                 .clone()
                 .map(|m| m.height())
                 .tuple_windows()
-                .all(|(curr, next)| curr == next
-                    || curr.next_power_of_two() != next.next_power_of_two()),
-            "matrix heights that round up to the same power of two must be equal"
+                .all(|(curr, next)| curr >= next && curr % next == 0),
+            "matrix heights should descend by factors of two"
         );
 
         let max_height = leaves_largest_first.peek().unwrap().height();
@@ -127,11 +128,11 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
             if prev_layer.len() == 1 {
                 break;
             }
-            let next_layer_len = (prev_layer.len() / 2).next_power_of_two();
+            let next_layer_len = prev_layer.len() / 2;
 
             // The matrices that get injected at this layer.
             let matrices_to_inject = leaves_largest_first
-                .peeking_take_while(|m| m.height().next_power_of_two() == next_layer_len)
+                .peeking_take_while(|m| m.height() == next_layer_len)
                 .collect_vec();
 
             let next_digests = compress_and_inject::<P, _, _, _, _, DIGEST_ELEMS>(
@@ -168,8 +169,8 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
 /// as the base (leaf-level) nodes for the rest of the Merkle tree.
 ///
 /// # Details
-/// - We always return an *even number of digests* (except when height is 1), to
-///   ensure even pairing at higher layers.
+/// - When every matrix height is a power of two, each digest layer contains exactly the
+///   expected number of elements—no padding digests are introduced.
 /// - Matrices are "vertically packed" to allow SIMD-friendly parallel hashing,
 ///   meaning rows can be processed in batches.
 /// - If the total number of rows isn't a multiple of the SIMD packing width,
@@ -200,19 +201,10 @@ where
     // Get the height of the tallest matrices (they are guaranteed to be equal).
     let max_height = tallest_matrices[0].height();
 
-    // Compute the padded height to ensure we end up with an even number of digests.
-    // **Exception:** if there's only 1 row, we keep it as 1.
-    let max_height_padded = if max_height == 1 {
-        1
-    } else {
-        max_height + max_height % 2
-    };
+    debug_assert!(max_height.is_power_of_two());
 
-    // Prepare a default digest value to fill unused slots or padding.
-    let default_digest = [PW::Value::default(); DIGEST_ELEMS];
-
-    // Allocate the digest vector with padded size, initialized to default digest.
-    let mut digests = vec![default_digest; max_height_padded];
+    // Allocate the digest vector; every entry is overwritten in the loops below.
+    let mut digests = vec![[PW::Value::default(); DIGEST_ELEMS]; max_height];
 
     // Parallel loop: process complete batches of `width` rows at a time.
     digests[0..max_height]
@@ -252,9 +244,7 @@ where
 }
 
 /// Fold one digest layer into the next and, when present, mix in rows
-/// taken from smaller matrices whose padded height equals `prev_layer.len()/2`.
-///
-/// Pads the output so its length is even unless it becomes the root.
+/// taken from smaller matrices whose height equals `prev_layer.len()/2`.
 fn compress_and_inject<P, PW, H, C, M, const DIGEST_ELEMS: usize>(
     prev_layer: &[[PW::Value; DIGEST_ELEMS]],
     matrices_to_inject: &[&M],
@@ -276,19 +266,19 @@ where
         return compress::<PW, _, DIGEST_ELEMS>(prev_layer, c);
     }
 
-    let width = PW::WIDTH;
-    let next_len = matrices_to_inject[0].height();
-    // We always want to return an even number of digests, except when it's the root.
-    let next_len_padded = if prev_layer.len() == 2 {
-        1
-    } else {
-        // Round prev_layer.len() / 2 up to the next even integer.
-        (prev_layer.len() / 2 + 1) & !1
-    };
+    debug_assert!(prev_layer.len().is_power_of_two());
 
-    let default_digest = [PW::Value::default(); DIGEST_ELEMS];
-    let mut next_digests = vec![default_digest; next_len_padded];
-    next_digests[0..next_len]
+    let width = PW::WIDTH;
+    let next_len = prev_layer.len() / 2;
+    debug_assert!(
+        matrices_to_inject
+            .iter()
+            .all(|matrix| matrix.height() == next_len),
+        "matrices injected at a layer must match that layer's length"
+    );
+
+    let mut next_digests = vec![[PW::Value::default(); DIGEST_ELEMS]; next_len];
+    next_digests
         .par_chunks_exact_mut(width)
         .enumerate()
         .for_each(|(i, digests_chunk)| {
@@ -320,16 +310,6 @@ where
         next_digests[i] = c.compress([digest, rows_digest]);
     }
 
-    // At this point, we've exceeded the height of the matrices to inject, so we continue the
-    // process above except with default_digest in place of an input digest.
-    // We only need go as far as half the length of the previous layer.
-    for i in next_len..(prev_layer.len() / 2) {
-        let left = prev_layer[2 * i];
-        let right = prev_layer[2 * i + 1];
-        let digest = c.compress([left, right]);
-        next_digests[i] = c.compress([digest, default_digest]);
-    }
-
     next_digests
 }
 
@@ -337,9 +317,6 @@ where
 ///
 /// Takes pairs of digests from `prev_layer`, feeds them to `c`,
 /// and writes the results in order.
-///
-/// Pads with the zero digest so the caller always receives an even-sized
-/// slice, except when the tree has shrunk to its single root.
 fn compress<P, C, const DIGEST_ELEMS: usize>(
     prev_layer: &[[P::Value; DIGEST_ELEMS]],
     c: &C,
@@ -350,18 +327,11 @@ where
         + PseudoCompressionFunction<[P; DIGEST_ELEMS], 2>
         + Sync,
 {
-    let width = P::WIDTH;
-    // Always return an even number of digests, except when it's the root.
-    let next_len_padded = if prev_layer.len() == 2 {
-        1
-    } else {
-        // Round prev_layer.len() / 2 up to the next even integer.
-        (prev_layer.len() / 2 + 1) & !1
-    };
-    let next_len = prev_layer.len() / 2;
+    debug_assert!(prev_layer.len().is_power_of_two());
 
-    let default_digest = [P::Value::default(); DIGEST_ELEMS];
-    let mut next_digests = vec![default_digest; next_len_padded];
+    let width = P::WIDTH;
+    let next_len = prev_layer.len() / 2;
+    let mut next_digests = vec![[P::Value::default(); DIGEST_ELEMS]; next_len];
 
     next_digests[0..next_len]
         .par_chunks_exact_mut(width)
@@ -434,18 +404,6 @@ mod tests {
     }
 
     #[test]
-    fn test_compress_odd_length() {
-        let prev_layer = [[0x05; 32], [0x06; 32], [0x07; 32]];
-        let compressor = DummyCompressionFunction;
-        let expected = vec![
-            [0x03; 32], // 0x05 ^ 0x06
-            [0x00; 32],
-        ];
-        let result = compress::<u8, DummyCompressionFunction, 32>(&prev_layer, &compressor);
-        assert_eq!(result, expected);
-    }
-
-    #[test]
     fn test_compress_random_values() {
         let mut rng = SmallRng::seed_from_u64(1);
         let prev_layer: Vec<[u8; 32]> = (0..8).map(|_| rng.random()).collect();
@@ -475,31 +433,6 @@ mod tests {
         let expected = vec![[0xFF; 32]];
         let result = compress::<u8, DummyCompressionFunction, 32>(&prev_layer, &compressor);
         assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_compress_non_power_of_two_with_padding() {
-        // The code intentionally pads to the next even length unless the output
-        // would become the root.  With `len() == 6` the output length must be 4
-        // (three real digests plus one zero digest).
-
-        let prev_layer = [
-            [0x01; 32], [0x02; 32], [0x03; 32], [0x04; 32], [0x05; 32], [0x06; 32],
-        ];
-        let compressor = DummyCompressionFunction;
-
-        let mut expected = vec![
-            [0x03; 32], // 01 ^ 02
-            [0x07; 32], // 03 ^ 04
-            [0x03; 32], // 05 ^ 06
-        ];
-        // extra padded digest filled with 0
-        expected.push([0x00; 32]);
-
-        let result = compress::<u8, DummyCompressionFunction, 32>(&prev_layer, &compressor);
-        assert_eq!(result, expected);
-        // also validate the padding branch explicitly
-        assert_eq!(result.len(), 4);
     }
 
     #[test]

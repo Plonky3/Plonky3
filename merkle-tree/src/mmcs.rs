@@ -28,7 +28,7 @@ use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs};
 use p3_field::PackedValue;
 use p3_matrix::{Dimensions, Matrix};
 use p3_symmetric::{CryptographicHasher, Hash, PseudoCompressionFunction};
-use p3_util::{log2_ceil_usize, log2_strict_usize};
+use p3_util::log2_strict_usize;
 use serde::{Deserialize, Serialize};
 
 use crate::MerkleTree;
@@ -131,7 +131,7 @@ where
     ///
     /// Returns `(openings, proof)` where `openings` is a vector whose `i`th element is
     /// the `j`th row of the ith matrix `M[i]`, with
-    ///     `j == index >> (log2_ceil(max_height) - log2_ceil(M[i].height))`
+    ///     `j == index >> (log2_strict(max_height) - log2_strict(M[i].height))`
     /// and `proof` is the vector of sibling Merkle tree nodes allowing the verifier to
     /// reconstruct the committed root.
     fn open_batch<M: Matrix<P::Value>>(
@@ -140,14 +140,16 @@ where
         prover_data: &MerkleTree<P::Value, PW::Value, M, DIGEST_ELEMS>,
     ) -> BatchOpening<P::Value, Self> {
         let max_height = self.get_max_height(prover_data);
-        let log_max_height = log2_ceil_usize(max_height);
+        debug_assert!(max_height.is_power_of_two());
+        let log_max_height = log2_strict_usize(max_height);
 
         // Get the matrix rows encountered along the path from the root to the given leaf index.
         let openings = prover_data
             .leaves
             .iter()
             .map(|matrix| {
-                let log2_height = log2_ceil_usize(matrix.height());
+                debug_assert!(matrix.height().is_power_of_two());
+                let log2_height = log2_strict_usize(matrix.height());
                 let bits_reduced = log_max_height - log2_height;
                 let reduced_index = index >> bits_reduced;
                 matrix.row(reduced_index).unwrap().into_iter().collect()
@@ -175,8 +177,8 @@ where
     /// - `dimensions`: A vector of the dimensions of the matrices committed to.
     /// - `index`: The index of a leaf in the tree.
     /// - `opened_values`: A vector of matrix rows. Assume that the tallest matrix committed
-    ///   to has height `2^n >= M_tall.height() > 2^{n - 1}` and the `j`th matrix has height
-    ///   `2^m >= Mj.height() > 2^{m - 1}`. Then `j`'th value of opened values must be the row `Mj[index >> (m - n)]`.
+    ///   to has height `2^n` and the `j`th matrix has height `2^m` with `m <= n`. Then the `j`'th
+    ///   entry in `opened_values` must be the row `Mj[index >> (n - m)]`.
     /// - `proof`: A vector of sibling nodes. The `i`th element should be the node at level `i`
     ///   with index `(index << i) ^ 1`.
     ///
@@ -207,26 +209,21 @@ where
             .sorted_by_key(|(_, dims)| Reverse(dims.height))
             .peekable();
 
-        // Matrix heights that round up to the same power of two must be equal
-        if !heights_tallest_first
+        if heights_tallest_first
             .clone()
-            .map(|(_, dims)| dims.height)
-            .tuple_windows()
-            .all(|(curr, next)| {
-                curr == next || curr.next_power_of_two() != next.next_power_of_two()
-            })
+            .any(|(_, dims)| dims.height == 0 || !dims.height.is_power_of_two())
         {
             return Err(IncompatibleHeights);
         }
 
-        // Get the initial height padded to a power of two. As heights_tallest_first is sorted,
+        // Get the initial height. As heights_tallest_first is sorted,
         // the initial height will be the maximum height.
         // Returns an error if either:
         //              1. proof.len() != log_max_height
         //              2. heights_tallest_first is empty.
-        let mut curr_height_padded = match heights_tallest_first.peek() {
+        let mut curr_height = match heights_tallest_first.peek() {
             Some((_, dims)) => {
-                let max_height = dims.height.next_power_of_two();
+                let max_height = dims.height;
                 let log_max_height = log2_strict_usize(max_height);
                 if opening_proof.len() != log_max_height {
                     return Err(WrongHeight {
@@ -242,9 +239,7 @@ where
         // Hash all matrix openings at the current height.
         let mut root = self.hash.hash_iter_slices(
             heights_tallest_first
-                .peeking_take_while(|(_, dims)| {
-                    dims.height.next_power_of_two() == curr_height_padded
-                })
+                .peeking_take_while(|(_, dims)| dims.height == curr_height)
                 .map(|(i, _)| opened_values[i].as_slice()),
         );
 
@@ -259,13 +254,13 @@ where
             // Combine the current node with the sibling node to get the parent node.
             root = self.compress.compress([left, right]);
             index >>= 1;
-            curr_height_padded >>= 1;
+            curr_height >>= 1;
 
             // Check if there are any new matrix rows to inject at the next height.
             let next_height = heights_tallest_first
                 .peek()
                 .map(|(_, dims)| dims.height)
-                .filter(|h| h.next_power_of_two() == curr_height_padded);
+                .filter(|h| *h == curr_height);
             if let Some(next_height) = next_height {
                 // If there are new matrix rows, hash the rows together and then combine with the current root.
                 let next_height_openings_digest = self.hash.hash_iter_slices(
@@ -363,84 +358,41 @@ mod tests {
     }
 
     #[test]
-    fn commit_single_2x2() {
-        let mut rng = SmallRng::seed_from_u64(1);
-        let perm = Perm::new_from_rng_128(&mut rng);
-        let hash = MyHash::new(perm.clone());
-        let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash.clone(), compress.clone());
-
-        // mat = [
-        //   0 1
-        //   2 1
-        // ]
-        let mat = RowMajorMatrix::new(vec![F::ZERO, F::ONE, F::TWO, F::ONE], 2);
-
-        let (commit, _) = mmcs.commit(vec![mat]);
-
-        let expected_result = compress.compress([
-            hash.hash_slice(&[F::ZERO, F::ONE]),
-            hash.hash_slice(&[F::TWO, F::ONE]),
-        ]);
-        assert_eq!(commit, expected_result);
-    }
-
-    #[test]
-    fn commit_single_2x3() {
-        let mut rng = SmallRng::seed_from_u64(1);
-        let perm = Perm::new_from_rng_128(&mut rng);
-        let hash = MyHash::new(perm.clone());
-        let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash.clone(), compress.clone());
-        let default_digest = [F::ZERO; 8];
-
-        // mat = [
-        //   0 1
-        //   2 1
-        //   2 2
-        // ]
-        let mat = RowMajorMatrix::new(vec![F::ZERO, F::ONE, F::TWO, F::ONE, F::TWO, F::TWO], 2);
-
-        let (commit, _) = mmcs.commit(vec![mat]);
-
-        let expected_result = compress.compress([
-            compress.compress([
-                hash.hash_slice(&[F::ZERO, F::ONE]),
-                hash.hash_slice(&[F::TWO, F::ONE]),
-            ]),
-            compress.compress([hash.hash_slice(&[F::TWO, F::TWO]), default_digest]),
-        ]);
-        assert_eq!(commit, expected_result);
-    }
-
-    #[test]
     fn commit_mixed() {
         let mut rng = SmallRng::seed_from_u64(1);
         let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash.clone(), compress.clone());
-        let default_digest = [F::ZERO; 8];
 
         // mat_1 = [
         //   0 1
         //   2 1
         //   2 2
-        //   2 1
-        //   2 2
+        //   1 0
+        //   2 0
+        //   1 1
+        //   0 2
+        //   1 2
         // ]
         let mat_1 = RowMajorMatrix::new(
             vec![
                 F::ZERO,
+                F::ONE, // row 0
+                F::TWO,
+                F::ONE, // row 1
+                F::TWO,
+                F::TWO, // row 2
                 F::ONE,
+                F::ZERO, // row 3
                 F::TWO,
+                F::ZERO, // row 4
                 F::ONE,
-                F::TWO,
-                F::TWO,
-                F::TWO,
+                F::ONE, // row 5
+                F::ZERO,
+                F::TWO, // row 6
                 F::ONE,
-                F::TWO,
-                F::TWO,
+                F::TWO, // row 7
             ],
             2,
         );
@@ -448,6 +400,7 @@ mod tests {
         //   1 2 1
         //   0 2 2
         //   1 2 1
+        //   2 1 0
         // ]
         let mat_2 = RowMajorMatrix::new(
             vec![
@@ -460,44 +413,45 @@ mod tests {
                 F::ONE,
                 F::TWO,
                 F::ONE,
+                F::TWO,
+                F::ONE,
+                F::ZERO,
             ],
             3,
         );
 
-        let (commit, prover_data) = mmcs.commit(vec![mat_1, mat_2]);
+        let (commit, prover_data) = mmcs.commit(vec![mat_1.clone(), mat_2.clone()]);
 
         let mat_1_leaf_hashes = [
             hash.hash_slice(&[F::ZERO, F::ONE]),
             hash.hash_slice(&[F::TWO, F::ONE]),
             hash.hash_slice(&[F::TWO, F::TWO]),
-            hash.hash_slice(&[F::TWO, F::ONE]),
-            hash.hash_slice(&[F::TWO, F::TWO]),
+            hash.hash_slice(&[F::ONE, F::ZERO]),
+            hash.hash_slice(&[F::TWO, F::ZERO]),
+            hash.hash_slice(&[F::ONE, F::ONE]),
+            hash.hash_slice(&[F::ZERO, F::TWO]),
+            hash.hash_slice(&[F::ONE, F::TWO]),
         ];
         let mat_2_leaf_hashes = [
             hash.hash_slice(&[F::ONE, F::TWO, F::ONE]),
             hash.hash_slice(&[F::ZERO, F::TWO, F::TWO]),
             hash.hash_slice(&[F::ONE, F::TWO, F::ONE]),
+            hash.hash_slice(&[F::TWO, F::ONE, F::ZERO]),
         ];
 
-        let expected_result = compress.compress([
-            compress.compress([
-                compress.compress([
-                    compress.compress([mat_1_leaf_hashes[0], mat_1_leaf_hashes[1]]),
-                    mat_2_leaf_hashes[0],
-                ]),
-                compress.compress([
-                    compress.compress([mat_1_leaf_hashes[2], mat_1_leaf_hashes[3]]),
-                    mat_2_leaf_hashes[1],
-                ]),
-            ]),
-            compress.compress([
-                compress.compress([
-                    compress.compress([mat_1_leaf_hashes[4], default_digest]),
-                    mat_2_leaf_hashes[2],
-                ]),
-                default_digest,
-            ]),
-        ]);
+        let mut layer_one = mat_1_leaf_hashes
+            .chunks_exact(2)
+            .map(|chunk| compress.compress([chunk[0], chunk[1]]))
+            .collect_vec();
+        for (digest, mat_digest) in layer_one.iter_mut().zip(mat_2_leaf_hashes) {
+            *digest = compress.compress([*digest, mat_digest]);
+        }
+
+        let layer_two = layer_one
+            .chunks_exact(2)
+            .map(|chunk| compress.compress([chunk[0], chunk[1]]))
+            .collect_vec();
+        let expected_result = compress.compress([layer_two[0], layer_two[1]]);
 
         assert_eq!(commit, expected_result);
 
@@ -516,8 +470,8 @@ mod tests {
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash, compress);
 
-        let input_1 = RowMajorMatrix::<F>::rand(&mut rng, 5, 8);
-        let input_2 = RowMajorMatrix::<F>::rand(&mut rng, 3, 16);
+        let input_1 = RowMajorMatrix::<F>::rand(&mut rng, 8, 8);
+        let input_2 = RowMajorMatrix::<F>::rand(&mut rng, 4, 16);
 
         let (commit_1_2, _) = mmcs.commit(vec![input_1.clone(), input_2.clone()]);
         let (commit_2_1, _) = mmcs.commit(vec![input_2, input_1]);
@@ -583,19 +537,19 @@ mod tests {
         let compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(hash, compress);
 
-        // 4 mats with 1000 rows, 8 columns
+        // 4 mats with 1024 rows, 8 columns
         let mut mats = (0..4)
-            .map(|_| RowMajorMatrix::<F>::rand(&mut rng, 1000, 8))
+            .map(|_| RowMajorMatrix::<F>::rand(&mut rng, 1024, 8))
             .collect_vec();
         let large_mat_dims = (0..4).map(|_| Dimensions {
-            height: 1000,
+            height: 1024,
             width: 8,
         });
 
-        // 5 mats with 70 rows, 8 columns
-        mats.extend((0..5).map(|_| RowMajorMatrix::<F>::rand(&mut rng, 70, 8)));
+        // 5 mats with 64 rows, 8 columns
+        mats.extend((0..5).map(|_| RowMajorMatrix::<F>::rand(&mut rng, 64, 8)));
         let medium_mat_dims = (0..5).map(|_| Dimensions {
-            height: 70,
+            height: 64,
             width: 8,
         });
 
