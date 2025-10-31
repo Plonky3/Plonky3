@@ -27,7 +27,7 @@ pub fn prove<
     config: &SC,
     air: &A,
     trace: RowMajorMatrix<Val<SC>>,
-    public_values: &Vec<Val<SC>>,
+    public_values: &[Val<SC>],
 ) -> Proof<SC>
 where
     SC: StarkGenericConfig,
@@ -288,7 +288,7 @@ where
 #[allow(clippy::too_many_arguments)]
 pub fn quotient_values<SC, A, Mat>(
     air: &A,
-    public_values: &Vec<Val<SC>>,
+    public_values: &[Val<SC>],
     trace_domain: Domain<SC>,
     quotient_domain: Domain<SC>,
     trace_on_quotient_domain: &Mat,
