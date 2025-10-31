@@ -156,8 +156,8 @@ where
     const COLS: usize = 135;
 
     let mut rng = SmallRng::seed_from_u64(1);
-    let matrix_1 = RowMajorMatrix::<P::Scalar>::rand(&mut rng, ROWS + 1, COLS);
-    let matrix_2 = RowMajorMatrix::<P::Scalar>::rand(&mut rng, ROWS / 2 + 1, COLS);
+    let matrix_1 = RowMajorMatrix::<P::Scalar>::rand(&mut rng, ROWS, COLS);
+    let matrix_2 = RowMajorMatrix::<P::Scalar>::rand(&mut rng, ROWS / 2, COLS);
     let dims = vec![matrix_1.dimensions(), matrix_2.dimensions()];
     let leaves = vec![matrix_1, matrix_2];
 
