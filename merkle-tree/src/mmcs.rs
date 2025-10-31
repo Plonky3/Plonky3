@@ -19,6 +19,7 @@
 //! get to the correct level. A proof for the values of say `M[5]` and `N[1]` consists of the siblings `H(M[4]), c23, c10`.
 //!
 
+use alloc::vec;
 use alloc::vec::Vec;
 use core::cmp::Reverse;
 use core::marker::PhantomData;
@@ -150,7 +151,11 @@ where
                 let log2_height = log2_ceil_usize(matrix.height());
                 let bits_reduced = log_max_height - log2_height;
                 let reduced_index = index >> bits_reduced;
-                matrix.row(reduced_index).unwrap().into_iter().collect()
+                if reduced_index < matrix.height() {
+                    matrix.row(reduced_index).unwrap().into_iter().collect()
+                } else {
+                    vec![P::Value::default(); matrix.width()]
+                }
             })
             .collect_vec();
 
@@ -189,6 +194,7 @@ where
         batch_proof: BatchOpeningRef<'_, P::Value, Self>,
     ) -> Result<(), Self::Error> {
         let (opened_values, opening_proof) = batch_proof.unpack();
+        let global_index = index;
         // Check that the openings have the correct shape.
         if dimensions.len() != opened_values.len() {
             return Err(WrongBatchSize);
@@ -224,7 +230,7 @@ where
         // Returns an error if either:
         //              1. proof.len() != log_max_height
         //              2. heights_tallest_first is empty.
-        let mut curr_height_padded = match heights_tallest_first.peek() {
+        let (mut curr_height_padded, log_global_max_height) = match heights_tallest_first.peek() {
             Some((_, dims)) => {
                 let max_height = dims.height.next_power_of_two();
                 let log_max_height = log2_strict_usize(max_height);
@@ -234,19 +240,39 @@ where
                         num_siblings: opening_proof.len(),
                     });
                 }
-                max_height
+                (max_height, log_max_height)
             }
             None => return Err(EmptyBatch),
         };
 
+        let default_digest = [PW::Value::default(); DIGEST_ELEMS];
+        let matrix_padding = dimensions
+            .iter()
+            .map(|dims| {
+                let log2_height = log2_ceil_usize(dims.height);
+                let bits_reduced = log_global_max_height.saturating_sub(log2_height);
+                let reduced_index = global_index >> bits_reduced;
+                reduced_index >= dims.height
+            })
+            .collect_vec();
+
         // Hash all matrix openings at the current height.
-        let mut root = self.hash.hash_iter_slices(
-            heights_tallest_first
-                .peeking_take_while(|(_, dims)| {
-                    dims.height.next_power_of_two() == curr_height_padded
-                })
-                .map(|(i, _)| opened_values[i].as_slice()),
-        );
+        let mut slices: Vec<&[P::Value]> = Vec::new();
+        {
+            let mut take = heights_tallest_first.peeking_take_while(|(_, dims)| {
+                dims.height.next_power_of_two() == curr_height_padded
+            });
+            while let Some((i, _)) = take.next() {
+                if !matrix_padding[i] {
+                    slices.push(opened_values[i].as_slice());
+                }
+            }
+        }
+        let mut root = if slices.is_empty() {
+            default_digest
+        } else {
+            self.hash.hash_iter_slices(slices)
+        };
 
         for &sibling in opening_proof {
             // The last bit of index informs us whether the current node is on the left or right.
@@ -268,11 +294,21 @@ where
                 .filter(|h| h.next_power_of_two() == curr_height_padded);
             if let Some(next_height) = next_height {
                 // If there are new matrix rows, hash the rows together and then combine with the current root.
-                let next_height_openings_digest = self.hash.hash_iter_slices(
-                    heights_tallest_first
-                        .peeking_take_while(|(_, dims)| dims.height == next_height)
-                        .map(|(i, _)| opened_values[i].as_slice()),
-                );
+                let mut slices: Vec<&[P::Value]> = Vec::new();
+                {
+                    let mut take = heights_tallest_first
+                        .peeking_take_while(|(_, dims)| dims.height == next_height);
+                    while let Some((i, _)) = take.next() {
+                        if !matrix_padding[i] {
+                            slices.push(opened_values[i].as_slice());
+                        }
+                    }
+                }
+                let next_height_openings_digest = if slices.is_empty() {
+                    default_digest
+                } else {
+                    self.hash.hash_iter_slices(slices)
+                };
 
                 root = self.compress.compress([root, next_height_openings_digest]);
             }
@@ -628,6 +664,46 @@ mod tests {
             (&batch_opening).into(),
         )
         .expect("expected verification to succeed");
+    }
+
+    #[test]
+    fn size_gaps_padding() {
+        let mut rng = SmallRng::seed_from_u64(1);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress);
+
+        let mut rng = SmallRng::seed_from_u64(1);
+        let mut mats = vec![RowMajorMatrix::<F>::rand(&mut rng, 1000, 8)];
+        mats.push(RowMajorMatrix::<F>::rand(&mut rng, 70, 8));
+        mats.push(RowMajorMatrix::<F>::rand(&mut rng, 8, 8));
+
+        let (commit, prover_data) = mmcs.commit(mats);
+        let dims = [
+            Dimensions {
+                height: 1000,
+                width: 8,
+            },
+            Dimensions {
+                height: 70,
+                width: 8,
+            },
+            Dimensions {
+                height: 8,
+                width: 8,
+            },
+        ];
+
+        let _ = mmcs.open_batch(559, &prover_data);
+        let batch = mmcs.open_batch(560, &prover_data);
+        let padded_row = &batch.opened_values[1];
+        assert!(
+            padded_row.iter().all(|value| value.is_zero()),
+            "padded row should open as zeros"
+        );
+        mmcs.verify_batch(&commit, &dims, 560, (&batch).into())
+            .expect("padded openings should verify");
     }
 
     #[test]
