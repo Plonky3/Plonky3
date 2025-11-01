@@ -78,9 +78,9 @@ where
     fn duplexing(&mut self) {
         assert!(self.input_buffer.len() <= RATE);
 
-        // Overwrite the first r elements with the inputs.
+        // Add the buffered inputs into the rate part of the state to preserve prior context.
         for (i, val) in self.input_buffer.drain(..).enumerate() {
-            self.sponge_state[i] = val;
+            self.sponge_state[i] += val;
         }
 
         // Apply the permutation.
