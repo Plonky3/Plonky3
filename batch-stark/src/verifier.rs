@@ -45,11 +45,6 @@ where
         panic!("p3-batch-stark: ZK mode is not supported yet");
     }
 
-    // ZK mode is not supported yet
-    if config.is_zk() != 0 {
-        panic!("p3-batch-stark: ZK mode is not supported yet");
-    }
-
     // Sanity checks
     if airs.len() != opened_values.instances.len()
         || airs.len() != public_values.len()
