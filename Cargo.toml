@@ -27,7 +27,7 @@ members = [
     "mersenne-31",
     "monolith",
     "monty-31",
-    "multi-stark",
+    "batch-stark",
     "multilinear-util",
     "poseidon",
     "poseidon2",

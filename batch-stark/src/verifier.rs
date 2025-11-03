@@ -16,13 +16,13 @@ use crate::config::{
     Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val, observe_base_as_ext,
     observe_instance_binding,
 };
-use crate::proof::MultiProof;
+use crate::proof::BatchProof;
 
 #[instrument(skip_all)]
-pub fn verify_multi<SC, A>(
+pub fn verify_batch<SC, A>(
     config: &SC,
     airs: &[A],
-    proof: &MultiProof<SC>,
+    proof: &BatchProof<SC>,
     public_values: &[Vec<Val<SC>>],
 ) -> Result<(), VerificationError<PcsError<SC>>>
 where
@@ -30,7 +30,7 @@ where
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
     Challenge<SC>: BasedVectorSpace<Val<SC>>,
 {
-    let MultiProof {
+    let BatchProof {
         commitments,
         opened_values,
         opening_proof,
@@ -42,12 +42,12 @@ where
 
     // ZK mode is not supported yet
     if config.is_zk() != 0 {
-        panic!("p3-multi-stark: ZK mode is not supported yet");
+        panic!("p3-batch-stark: ZK mode is not supported yet");
     }
 
     // ZK mode is not supported yet
     if config.is_zk() != 0 {
-        panic!("p3-multi-stark: ZK mode is not supported yet");
+        panic!("p3-batch-stark: ZK mode is not supported yet");
     }
 
     // Sanity checks
