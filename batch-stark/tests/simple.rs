@@ -108,7 +108,7 @@ fn fib_n(n: usize) -> u64 {
     a
 }
 
-// --- Simple product AIR and trace ---
+// --- Simple multiplication AIR and trace ---
 
 #[derive(Debug, Clone, Copy)]
 struct MulAir {
@@ -222,7 +222,7 @@ fn create_fib_instance(log_height: usize) -> (DemoAir, RowMajorMatrix<Val>, Vec<
     (air, trace, pis)
 }
 
-/// Creates a product instance with specified configuration.
+/// Creates a multiplication instance with specified configuration.
 fn create_mul_instance(
     log_height: usize,
     reps: usize,
