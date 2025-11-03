@@ -6,7 +6,7 @@ use core::ops::Mul;
 use p3_maybe_rayon::prelude::*;
 
 use crate::field::Field;
-use crate::{PackedValue, PrimeCharacteristicRing, PrimeField, PrimeField32};
+use crate::{PrimeCharacteristicRing, PrimeField, PrimeField32};
 
 /// Computes a multiplicative subgroup whose order is known in advance.
 pub fn cyclic_subgroup_known_order<F: Field>(
