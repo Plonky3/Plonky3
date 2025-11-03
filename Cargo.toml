@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "air",
     "baby-bear",
+    "batch-stark",
     "blake3",
     "blake3-air",
     "bn254",
@@ -27,7 +28,6 @@ members = [
     "mersenne-31",
     "monolith",
     "monty-31",
-    "batch-stark",
     "multilinear-util",
     "poseidon",
     "poseidon2",
