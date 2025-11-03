@@ -1,4 +1,4 @@
-//! Configuration utilities for multi-STARK proofs.
+//! Configuration utilities for batch-STARK proofs.
 
 use p3_challenger::FieldChallenger;
 use p3_commit::Pcs;
