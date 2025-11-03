@@ -150,8 +150,11 @@ fn binary_powers<F: Field>(vars: &[F], k: usize) -> Vec<Vec<F>> {
 }
 
 #[inline]
-pub fn pow_batch_base<F, EF, const INITIALIZED: bool>(vars: &[F], out: &mut [EF], scalars: &[EF])
-where
+pub fn eval_pow_batch_base<F, EF, const INITIALIZED: bool>(
+    vars: &[F],
+    out: &mut [EF],
+    scalars: &[EF],
+) where
     F: Field,
     EF: ExtensionField<F>,
 {
@@ -171,7 +174,7 @@ where
 }
 
 #[inline]
-pub fn pow_batch<F, EF, const INITIALIZED: bool>(vars: &[EF], out: &mut [EF], scalars: &[EF])
+pub fn eval_pow_batch<F, EF, const INITIALIZED: bool>(vars: &[EF], out: &mut [EF], scalars: &[EF])
 where
     F: Field,
     EF: ExtensionField<F>,
