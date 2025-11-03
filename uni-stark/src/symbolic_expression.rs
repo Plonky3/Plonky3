@@ -59,6 +59,7 @@ use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use p3_baby_bear::BabyBear;
 use p3_field::ExtensionField;
 use p3_field::extension::BinomialExtensionField;
+use p3_koala_bear::KoalaBear;
 use p3_mersenne_31::Mersenne31;
 
 use p3_field::{Algebra, Field, InjectiveMonomial, PrimeCharacteristicRing};
@@ -149,9 +150,12 @@ impl<F: Field> PrimeCharacteristicRing for SymbolicExpression<F> {
     }
 }
 
+// We need a macro to implement From<SymbolicExpression<F>> for SymbolicExpression<BinomialExtensionField<F, N>>, because we get conflict implementations if we try to do an automatic implementation.
 // Use the macro for BabyBear and 4
 impl_symbolic_expr_from_field_to_ext!(BabyBear, 4);
-// Use the macro for Mersenne31 and 4
+// Use the macro for KoalaBear and 4
+impl_symbolic_expr_from_field_to_ext!(KoalaBear, 4);
+// Use the macro for Mersenne31 and 3
 impl_symbolic_expr_from_field_to_ext!(Mersenne31, 3);
 
 impl<F: Field> Algebra<F> for SymbolicExpression<F> {}

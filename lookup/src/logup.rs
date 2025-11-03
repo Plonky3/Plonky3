@@ -28,10 +28,10 @@ use p3_matrix::{
     dense::{RowMajorMatrix, RowMajorMatrixView},
     stack::VerticalPair,
 };
-use p3_uni_stark::{StarkGenericConfig, Val};
+use p3_uni_stark::{LookupError, StarkGenericConfig, Val};
 
 use crate::lookup_traits::{
-    Kind, Lookup, LookupData, LookupError, LookupGadget, LookupTraceBuilder, eval_symbolic,
+    Kind, Lookup, LookupData, LookupGadget, LookupTraceBuilder, eval_symbolic,
 };
 
 /// Core LogUp gadget implementing lookup arguments via logarithmic derivatives.

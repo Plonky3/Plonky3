@@ -262,6 +262,13 @@ where
     Ok(())
 }
 
+/// Defines errors that can occur during lookup verification.
+#[derive(Debug)]
+pub enum LookupError {
+    /// Error indicating that the global cumulative sum is incorrect.
+    GlobalCumulativeMismatch,
+}
+
 #[derive(Debug)]
 pub enum VerificationError<PcsErr> {
     InvalidProofShape,
@@ -276,4 +283,6 @@ pub enum VerificationError<PcsErr> {
     RandomizationError,
     /// The domain does not support computing the next point algebraically.
     NextPointUnavailable,
+    /// Lookup related error
+    LookupError(LookupError),
 }

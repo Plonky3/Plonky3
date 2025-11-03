@@ -8,7 +8,7 @@ use p3_uni_stark::{
 };
 
 pub struct ProverConstraintFolderWithLookups<'a, SC: StarkGenericConfig> {
-    pub base: ProverConstraintFolder<'a, SC>,
+    pub inner: ProverConstraintFolder<'a, SC>,
     pub permutation: RowMajorMatrixView<'a, PackedChallenge<SC>>,
     pub permutation_challenges: &'a [PackedChallenge<SC>],
 }
@@ -20,17 +20,17 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookup
     type M = RowMajorMatrixView<'a, PackedVal<SC>>;
 
     fn main(&self) -> Self::M {
-        self.base.main
+        self.inner.main
     }
 
     #[inline]
     fn is_first_row(&self) -> Self::Expr {
-        self.base.is_first_row
+        self.inner.is_first_row
     }
 
     #[inline]
     fn is_last_row(&self) -> Self::Expr {
-        self.base.is_last_row
+        self.inner.is_last_row
     }
 
     /// Returns an expression indicating rows where transition constraints should be checked.
@@ -40,7 +40,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookup
     #[inline]
     fn is_transition_window(&self, size: usize) -> Self::Expr {
         if size == 2 {
-            self.base.is_transition
+            self.inner.is_transition
         } else {
             panic!("uni-stark only supports a window size of 2")
         }
@@ -48,12 +48,12 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookup
 
     #[inline]
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
-        self.base.assert_zero(x);
+        self.inner.assert_zero(x);
     }
 
     #[inline]
     fn assert_zeros<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
-        self.base.assert_zeros(array);
+        self.inner.assert_zeros(array);
     }
 }
 
@@ -64,7 +64,7 @@ impl<SC: StarkGenericConfig> AirBuilderWithPublicValues
 
     #[inline]
     fn public_values(&self) -> &[Self::F] {
-        self.base.public_values
+        self.inner.public_values
     }
 }
 
@@ -83,9 +83,9 @@ impl<SC: StarkGenericConfig> ExtensionBuilder for ProverConstraintFolderWithLook
     where
         I: Into<Self::ExprEF>,
     {
-        let apha_power = self.base.alpha_powers[self.base.constraint_index];
-        self.base.accumulator += Into::<PackedChallenge<SC>>::into(apha_power) * x.into();
-        self.base.constraint_index += 1;
+        let apha_power = self.inner.alpha_powers[self.inner.constraint_index];
+        self.inner.accumulator += Into::<PackedChallenge<SC>>::into(apha_power) * x.into();
+        self.inner.constraint_index += 1;
     }
 }
 
@@ -105,7 +105,7 @@ impl<'a, SC: StarkGenericConfig> PermutationAirBuilder
 }
 
 pub struct VerifierConstraintFolderWithLookups<'a, SC: StarkGenericConfig> {
-    pub base: VerifierConstraintFolder<'a, SC>,
+    pub inner: VerifierConstraintFolder<'a, SC>,
     pub permutation: ViewPair<'a, SC::Challenge>,
     pub permutation_challenges: &'a [SC::Challenge],
 }
@@ -117,17 +117,17 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolderWithLook
     type M = ViewPair<'a, SC::Challenge>;
 
     fn main(&self) -> Self::M {
-        self.base.main
+        self.inner.main
     }
 
     #[inline]
     fn is_first_row(&self) -> Self::Expr {
-        self.base.is_first_row
+        self.inner.is_first_row
     }
 
     #[inline]
     fn is_last_row(&self) -> Self::Expr {
-        self.base.is_last_row
+        self.inner.is_last_row
     }
 
     /// Returns an expression indicating rows where transition constraints should be checked.
@@ -137,7 +137,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolderWithLook
     #[inline]
     fn is_transition_window(&self, size: usize) -> Self::Expr {
         if size == 2 {
-            self.base.is_transition
+            self.inner.is_transition
         } else {
             panic!("uni-stark only supports a window size of 2")
         }
@@ -145,12 +145,12 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolderWithLook
 
     #[inline]
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
-        self.base.assert_zero(x);
+        self.inner.assert_zero(x);
     }
 
     #[inline]
     fn assert_zeros<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
-        self.base.assert_zeros(array);
+        self.inner.assert_zeros(array);
     }
 }
 
@@ -161,7 +161,7 @@ impl<SC: StarkGenericConfig> AirBuilderWithPublicValues
 
     #[inline]
     fn public_values(&self) -> &[Self::F] {
-        self.base.public_values
+        self.inner.public_values
     }
 }
 
@@ -180,8 +180,8 @@ impl<SC: StarkGenericConfig> ExtensionBuilder for VerifierConstraintFolderWithLo
     where
         I: Into<Self::ExprEF>,
     {
-        self.base.accumulator *= self.base.alpha;
-        self.base.accumulator += x.into();
+        self.inner.accumulator *= self.inner.alpha;
+        self.inner.accumulator += x.into();
     }
 }
 

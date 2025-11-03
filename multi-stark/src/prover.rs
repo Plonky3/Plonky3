@@ -65,10 +65,12 @@ where
         .map(|inst| {
             let (lookups, data): (Vec<_>, Vec<_>) = (
                 inst.lookups.clone(),
+                // We only get `LookupData` for global lookups, since we only need it for the expected cumulated value.
                 inst.lookups
                     .iter()
-                    .filter_map(|lookup| match lookup.kind {
-                        Kind::Global(_) => Some(LookupData {
+                    .filter_map(|lookup| match &lookup.kind {
+                        Kind::Global(name) => Some(LookupData {
+                            name: name.clone(),
                             aux_idx: lookup.columns[0],
                             expected_cumulated: SC::Challenge::ZERO,
                         }),
@@ -536,7 +538,7 @@ where
                 };
 
             let accumulator = PackedChallenge::<SC>::ZERO;
-            let base_folder = ProverConstraintFolder {
+            let inner_folder = ProverConstraintFolder {
                 main: main.as_view(),
                 public_values,
                 is_first_row,
@@ -553,7 +555,7 @@ where
                 .collect::<Vec<_>>();
 
             let mut folder = ProverConstraintFolderWithLookups {
-                base: base_folder,
+                inner: inner_folder,
                 permutation: permutation.as_view(),
                 permutation_challenges: &packed_perm_challenges,
             };
@@ -566,7 +568,7 @@ where
             );
 
             // quotient(x) = constraints(x) / Z_H(x)
-            let quotient = folder.base.accumulator * inv_vanishing;
+            let quotient = folder.inner.accumulator * inv_vanishing;
 
             // "Transpose" D packed base coefficients into WIDTH scalar extension coefficients.
             (0..core::cmp::min(quotient_size, PackedVal::<SC>::WIDTH)).map(move |idx_in_packing| {

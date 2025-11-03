@@ -19,6 +19,7 @@ p3-field.workspace = true
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
 p3-mersenne-31.workspace = true
+p3-koala-bear.workspace = true
 p3-util.workspace = true
 
 itertools.workspace = true

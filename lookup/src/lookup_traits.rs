@@ -10,20 +10,15 @@ use p3_field::PrimeCharacteristicRing;
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::ViewPair;
-use p3_uni_stark::{Entry, StarkGenericConfig, SymbolicExpression, Val};
+use p3_uni_stark::{Entry, LookupError, StarkGenericConfig, SymbolicExpression, Val};
 use serde::{Deserialize, Serialize};
-
-/// Defines errors that can occur during lookup verification.
-#[derive(Debug)]
-pub enum LookupError {
-    /// Error indicating that the global cumulative sum is incorrect.
-    GlobalCumulativeMismatch,
-}
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 /// Data required for global lookup arguments in a multi-STARK proof.
 pub struct LookupData<F: Clone> {
-    // Index of the auxiliary column (if there are multiple auxiliary columns, this is the first one)
+    /// Name of the global lookup interaction.
+    pub name: String,
+    /// Index of the auxiliary column (if there are multiple auxiliary columns, this is the first one)
     pub aux_idx: usize,
     /// Expected cumulated value for a global lookup argument.
     pub expected_cumulated: F,
@@ -33,6 +28,7 @@ impl<F: Field> LookupData<F> {
     pub fn to_symbolic(&self) -> LookupData<SymbolicExpression<F>> {
         let expected = SymbolicExpression::Constant(self.expected_cumulated.clone());
         LookupData {
+            name: self.name.clone(),
             aux_idx: self.aux_idx,
             expected_cumulated: expected,
         }
@@ -96,6 +92,7 @@ pub trait LookupGadget {
                 Kind::Global(_) => {
                     // Find the expected cumulated value for this context.
                     let LookupData {
+                        name: _,
                         aux_idx,
                         expected_cumulated,
                     } = lookup_data_iter

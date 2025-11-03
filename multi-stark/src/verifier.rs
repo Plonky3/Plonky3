@@ -6,7 +6,7 @@ use itertools::Itertools;
 use p3_air::Air;
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
+use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_lookup::folders::VerifierConstraintFolderWithLookups;
 use p3_lookup::lookup_traits::{
     AirLookupHandler, AirNoLookup, EmptyLookupGadget, Kind, Lookup, LookupData, LookupGadget,
@@ -14,8 +14,8 @@ use p3_lookup::lookup_traits::{
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use p3_uni_stark::{
-    SymbolicAirBuilder, SymbolicExpression, VerificationError, VerifierConstraintFolder,
-    recompose_quotient_from_chunks,
+    LookupError, SymbolicAirBuilder, SymbolicExpression, VerificationError,
+    VerifierConstraintFolder, recompose_quotient_from_chunks,
 };
 use p3_util::zip_eq::zip_eq;
 use tracing::instrument;
@@ -336,6 +336,24 @@ where
             other => other,
         })?;
     }
+    let mut global_sums = HashMap::new();
+    for lds in global_lookup_data {
+        for ld in lds {
+            let name = &ld.name;
+            let expected = &ld.expected_cumulated;
+            global_sums
+                .entry(name)
+                .and_modify(|s| *s += *expected)
+                .or_insert(*expected);
+        }
+    }
+    for (_, sum) in global_sums {
+        if !sum.is_zero() {
+            return Err(VerificationError::LookupError(
+                LookupError::GlobalCumulativeMismatch,
+            ));
+        }
+    }
 
     Ok(())
 }
@@ -372,7 +390,7 @@ where
         RowMajorMatrixView::new_row(trace_next),
     );
 
-    let base_folder = VerifierConstraintFolder {
+    let inner_folder = VerifierConstraintFolder {
         main,
         public_values,
         is_first_row: sels.is_first_row,
@@ -382,7 +400,7 @@ where
         accumulator: SC::Challenge::ZERO,
     };
     let mut folder = VerifierConstraintFolderWithLookups {
-        base: base_folder,
+        inner: inner_folder,
         permutation: VerticalPair::new(
             RowMajorMatrixView::new_row(permutation_local),
             RowMajorMatrixView::new_row(permutation_next),
@@ -391,7 +409,7 @@ where
     };
     // Evaluate AIR and lookup constraints.
     <A as AirLookupHandler<_>>::eval(air, &mut folder, lookups, lookup_data, lookup_gadget);
-    let folded_constraints = folder.base.accumulator;
+    let folded_constraints = folder.inner.accumulator;
 
     // Check that constraints(zeta) / Z_H(zeta) = quotient(zeta)
     if folded_constraints * sels.inv_vanishing != quotient {
