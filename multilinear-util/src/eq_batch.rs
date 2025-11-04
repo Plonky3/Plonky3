@@ -131,11 +131,11 @@ pub fn eval_eq_base_batch<F, EF, const INITIALIZED: bool>(
     eval_batch_common::<F, F, EF, EqBaseFieldEvaluator<F, EF>, INITIALIZED>(evals, out, scalars);
 }
 
-/// Computes the first k binary powers of each element in `vars` in parallel.
-/// For each var, returns [var^1, var^2, var^4, ..., var^(2^(k-1))].
+/// Computes the first k binary powers of each element in `vars`.
+/// For each `var`, returns `[var^1, var^2, var^4, ..., var^(2^(k-1))]`.
 #[inline]
 fn binary_powers<F: Field>(vars: &[F], k: usize) -> Vec<Vec<F>> {
-    vars.par_iter()
+    vars.iter()
         .cloned()
         .map(|mut var| {
             (0..k)
@@ -149,6 +149,27 @@ fn binary_powers<F: Field>(vars: &[F], k: usize) -> Vec<Vec<F>> {
         .collect::<Vec<_>>()
 }
 
+/// Computes the compressed powers polynomial `\sum_i \γ_i ⋅ powers(z_i)` over all
+///
+/// This evaluates multiple equality tables simultaneously by pushing the linear combination
+/// through the recursion.
+///
+/// # Mathematical statement
+/// Given:
+/// - evaluation points `z_0, z_1, ..., z_{m-1} ∈ F^n`,
+/// - weights `\γ_0, \γ_1, ..., \γ_{m-1} ∈ F`, this computes,
+/// ```text
+/// W(x) = \sum_i \γ_i ⋅ powers(z_i).
+/// ```
+///
+/// # Arguments
+/// - `vars`: Slice where element is one variable `z_i`.
+/// - `out`: Output buffer of size `2^n` storing `W(x)` in big-endian `x` order
+/// - `scalars`: Weights `[ \γ_0, \γ_1, ..., \γ_{m-1} ]`
+///
+/// # Panics
+/// - in debug builds if `vars.len() != scalars.len()` or if the output buffer size is incorrect.
+/// - if output length is not a power of two.
 #[inline]
 pub fn eval_pow_batch_base<F, EF, const INITIALIZED: bool>(
     vars: &[F],
@@ -158,6 +179,7 @@ pub fn eval_pow_batch_base<F, EF, const INITIALIZED: bool>(
     F: Field,
     EF: ExtensionField<F>,
 {
+    debug_assert_eq!(vars.len(), scalars.len());
     let k = log2_strict_usize(out.len());
     let flat_points = binary_powers(vars, k)
         .iter()
@@ -172,6 +194,27 @@ pub fn eval_pow_batch_base<F, EF, const INITIALIZED: bool>(
     );
 }
 
+/// Computes the compressed powers polynomial `\sum_i \γ_i ⋅ powers(z_i)` over all
+///
+/// This evaluates multiple equality tables simultaneously by pushing the linear combination
+/// through the recursion.
+///
+/// # Mathematical statement
+/// Given:
+/// - evaluation points `z_0, z_1, ..., z_{m-1} ∈ EF^n`,
+/// - weights `\γ_0, \γ_1, ..., \γ_{m-1} ∈ EF`, this computes,
+/// ```text
+/// W(x) = \sum_i \γ_i ⋅ powers(z_i).
+/// ```
+///
+/// # Arguments
+/// - `vars`: Slice where element is one variable `z_i`.
+/// - `out`: Output buffer of size `2^n` storing `W(x)` in big-endian `x` order
+/// - `scalars`: Weights `[ \γ_0, \γ_1, ..., \γ_{m-1} ]`
+///
+/// # Panics
+/// - in debug builds if `vars.len() != scalars.len()` or if the output buffer size is incorrect.
+/// - if output length is not a power of two.
 #[inline]
 pub fn eval_pow_batch<F, EF, const INITIALIZED: bool>(vars: &[EF], out: &mut [EF], scalars: &[EF])
 where
