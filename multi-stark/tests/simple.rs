@@ -22,7 +22,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_mersenne_31::Mersenne31;
 use p3_multi_stark::StarkInstance;
-use p3_multi_stark::common::extract_lookups;
+use p3_multi_stark::common::common_data;
 use p3_multi_stark::proof::OpenedValuesWithLookups;
 use p3_multi_stark::prover::{prove_multi, prove_multi_no_lookups};
 use p3_multi_stark::verifier::{verify_multi, verify_multi_no_lookups};
@@ -919,7 +919,7 @@ fn test_multi_stark_one_instance_global_only() -> Result<(), impl Debug> {
     let mut airs = [air1];
 
     // Get lookups from the lookup-enabled AIRs
-    let all_airs_lookups = extract_lookups::<MyConfig, _>(&mut airs);
+    let all_airs_lookups = common_data::<MyConfig, _>(&mut airs).lookups;
 
     let mul_lookups = all_airs_lookups[0].clone();
 
@@ -960,7 +960,7 @@ fn test_multi_stark_local_lookups_only() -> Result<(), impl Debug> {
     let mut airs = [air1, air2];
 
     // Get lookups from the lookup-enabled AIRs
-    let all_airs_lookups = extract_lookups::<MyConfig, _>(&mut airs);
+    let all_airs_lookups = common_data::<MyConfig, _>(&mut airs).lookups;
 
     let mul_lookups = all_airs_lookups[0].clone();
     let fib_lookups = all_airs_lookups[1].clone();
@@ -1008,7 +1008,7 @@ fn test_multi_stark_global_lookups_only() -> Result<(), impl Debug> {
 
     // Get lookups from the lookup-enabled AIRs
     let mut airs = [air1, air2];
-    let all_airs_lookups = extract_lookups::<MyConfig, _>(&mut airs);
+    let all_airs_lookups = common_data::<MyConfig, _>(&mut airs).lookups;
 
     let mul_lookups = all_airs_lookups[0].clone();
     let fib_lookups = all_airs_lookups[1].clone();
@@ -1056,7 +1056,7 @@ fn test_multi_stark_both_lookups() -> Result<(), impl Debug> {
 
     let mut airs = [air1, air2];
     // Get lookups from the lookup-enabled AIRs
-    let all_airs_lookups = extract_lookups::<MyConfig, _>(&mut airs);
+    let all_airs_lookups = common_data::<MyConfig, _>(&mut airs).lookups;
 
     let mul_lookups = all_airs_lookups[0].clone();
     let fib_lookups = all_airs_lookups[1].clone();

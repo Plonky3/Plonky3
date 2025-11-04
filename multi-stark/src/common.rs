@@ -11,6 +11,7 @@ use p3_lookup::lookup_traits::{AirLookupHandler, Kind, Lookup, LookupGadget};
 use p3_uni_stark::{SymbolicAirBuilder, SymbolicExpression, Val};
 
 /// Struct storing data common to both the prover and verifier.
+/// TODO: Add preprocessed commitments.
 pub struct CommonData<F: Field> {
     /// The lookups used by each STARK instance.
     pub lookups: Vec<Vec<Lookup<F>>>,
@@ -23,20 +24,20 @@ impl<F: Field> CommonData<F> {
 }
 
 /// Function to extract lookups from multiple AIRs.
-pub fn extract_lookups<SC, A>(airs: &mut [A]) -> Vec<Vec<Lookup<Val<SC>>>>
+pub fn common_data<SC, A>(airs: &mut [A]) -> CommonData<Val<SC>>
 where
     SC: SGC,
     SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
     A: AirLookupHandler<SymbolicAirBuilder<Val<SC>, SC::Challenge>>,
     Challenge<SC>: BasedVectorSpace<Val<SC>>,
 {
-    let mut all_lookups = Vec::with_capacity(airs.len());
+    let mut lookups = Vec::with_capacity(airs.len());
     for air in airs {
         let air_lookups =
             <A as AirLookupHandler<SymbolicAirBuilder<Val<SC>, SC::Challenge>>>::get_lookups(air);
-        all_lookups.push(air_lookups);
+        lookups.push(air_lookups);
     }
-    all_lookups
+    CommonData { lookups }
 }
 
 pub(crate) fn get_perm_challenges<'a, SC: SGC, LG: LookupGadget, A>(
@@ -45,28 +46,25 @@ pub(crate) fn get_perm_challenges<'a, SC: SGC, LG: LookupGadget, A>(
     airs: &[A],
     lookup_gadget: &LG,
 ) -> Vec<Vec<SC::Challenge>> {
+    let num_challenges_per_lookup = lookup_gadget.num_challenges();
     let mut global_perm_challenges = HashMap::new();
     let mut challenges_per_instance = Vec::with_capacity(airs.len());
     for contexts in all_lookups {
-        let num_challenges = contexts.len() * lookup_gadget.num_challenges();
+        let num_challenges = contexts.len() * num_challenges_per_lookup;
         let mut instance_challenges = Vec::with_capacity(num_challenges);
         for context in contexts {
             let cs = match &context.kind {
                 Kind::Global(name) => {
                     let cs = global_perm_challenges.entry(name).or_insert_with(|| {
-                        vec![
-                            challenger.sample_algebra_element::<Challenge<SC>>(),
-                            challenger.sample_algebra_element(),
-                        ]
+                        (0..num_challenges_per_lookup)
+                            .map(|_| challenger.sample_algebra_element())
+                            .collect::<Vec<SC::Challenge>>()
                     });
                     cs.clone()
                 }
-                Kind::Local => {
-                    vec![
-                        challenger.sample_algebra_element(),
-                        challenger.sample_algebra_element(),
-                    ]
-                }
+                Kind::Local => (0..num_challenges_per_lookup)
+                    .map(|_| challenger.sample_algebra_element())
+                    .collect(),
             };
             instance_challenges.extend(cs);
         }
