@@ -159,10 +159,9 @@ pub fn eval_pow_batch_base<F, EF, const INITIALIZED: bool>(
     EF: ExtensionField<F>,
 {
     let k = log2_strict_usize(out.len());
-    let flat_points = binary_powers(&vars, k)
+    let flat_points = binary_powers(vars, k)
         .iter()
-        .map(|powers| powers.iter().rev())
-        .flatten()
+        .flat_map(|powers| powers.iter().rev())
         .cloned()
         .collect::<Vec<_>>();
     let flat_points = RowMajorMatrixView::new(&flat_points, k).transpose();
@@ -180,10 +179,9 @@ where
     EF: ExtensionField<F>,
 {
     let k = log2_strict_usize(out.len());
-    let flat_points = binary_powers(&vars, k)
+    let flat_points = binary_powers(vars, k)
         .iter()
-        .map(|powers| powers.iter().rev())
-        .flatten()
+        .flat_map(|powers| powers.iter().rev())
         .cloned()
         .collect::<Vec<_>>();
     let flat_points = RowMajorMatrixView::new(&flat_points, k).transpose();
@@ -830,7 +828,6 @@ fn add_or_set<F: Field, const INITIALIZED: bool>(out: &mut [F], evaluations: &[F
 /// We stay in the base field for as long as possible to simplify instructions and
 /// reduce the amount of data transferred between cores. In particular this means we
 /// hold off on scaling by `scalar` until the very end.
-
 struct EqBaseFieldEvaluator<F, EF>(core::marker::PhantomData<(F, EF)>);
 
 /// Implementation for extension field case.
@@ -902,7 +899,7 @@ impl<F: Field, EF: ExtensionField<F>> Evaluator for EqBaseFieldEvaluator<F, EF> 
         // So ∑_i γ_i * (1 - z_i) = ∑_i γ_i - ∑_i γ_i * z_i.
         //
         // This saves approximately m adds compared to computing each term individually
-        let eq_0_sum = sum - eq_1_sum.clone();
+        let eq_0_sum = sum - eq_1_sum;
         [eq_0_sum, eq_1_sum]
     }
 
@@ -969,7 +966,7 @@ impl<F: Field, EF: ExtensionField<F>> Evaluator for EqExtFieldEvaluator<F, EF> {
         // So ∑_i γ_i * (1 - z_i) = ∑_i γ_i - ∑_i γ_i * z_i.
         //
         // This saves approximately m adds compared to computing each term individually
-        let eq_0_sum = sum - eq_1_sum.clone();
+        let eq_0_sum = sum - eq_1_sum;
         [eq_0_sum, eq_1_sum]
     }
 
@@ -1238,7 +1235,7 @@ mod tests {
                 eval_pow::<F, EF>(&mut acc0, &vars, alpha);
 
                 let mut acc1 = EF::zero_vec(1 << k);
-                pow_batch_base::<F, EF, false>(&vars, &mut acc1, &alphas);
+                eval_pow_batch_base::<F, EF, false>(&vars, &mut acc1, &alphas);
                 assert_eq!(acc0, acc1);
             }
 
@@ -1248,7 +1245,7 @@ mod tests {
                 eval_pow::<EF, EF>(&mut acc0, &vars, alpha);
 
                 let mut acc1 = EF::zero_vec(1 << k);
-                pow_batch::<F, EF, false>(&vars, &mut acc1, &alphas);
+                eval_pow_batch::<F, EF, false>(&vars, &mut acc1, &alphas);
                 assert_eq!(acc0, acc1);
             }
         }
