@@ -96,14 +96,23 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
         assert!(
             leaves
                 .iter()
-                .all(|m| m.height().is_power_of_two() && m.height() > 0),
-            "all matrix heights must be non-zero powers of two"
+                .all(|matrix| matrix.height().is_power_of_two() && matrix.height() > 0),
+            "matrix heights must be non-zero powers of two"
         );
 
         let mut leaves_largest_first = leaves
             .iter()
             .sorted_by_key(|l| Reverse(l.height()))
             .peekable();
+
+        debug_assert!(
+            leaves_largest_first
+                .clone()
+                .map(|m| m.height())
+                .tuple_windows()
+                .all(|(curr, next)| curr >= next && curr % next == 0),
+            "matrix heights should descend by factors of two"
+        );
 
         let max_height = leaves_largest_first.peek().unwrap().height();
         let tallest_matrices = leaves_largest_first
@@ -194,7 +203,7 @@ where
 
     debug_assert!(max_height.is_power_of_two());
 
-    // Allocate digest vector. All entries will be overwritten below.
+    // Allocate the digest vector; every entry is overwritten in the loops below.
     let mut digests = vec![[PW::Value::default(); DIGEST_ELEMS]; max_height];
 
     // Parallel loop: process complete batches of `width` rows at a time.
