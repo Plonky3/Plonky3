@@ -9,7 +9,7 @@ use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_lookup::folders::VerifierConstraintFolderWithLookups;
 use p3_lookup::lookup_traits::{
-    AirLookupHandler, AirNoLookup, EmptyLookupGadget, Kind, Lookup, LookupData, LookupGadget,
+    AirLookupHandler, AirNoLookup, EmptyLookupGadget, Lookup, LookupData, LookupGadget,
 };
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
@@ -20,6 +20,7 @@ use p3_uni_stark::{
 use p3_util::zip_eq::zip_eq;
 use tracing::instrument;
 
+use crate::common::get_perm_challenges;
 use crate::config::{
     Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val, observe_base_as_ext,
     observe_instance_binding,
@@ -150,33 +151,8 @@ where
     }
 
     // Fetch lookups and sample their challenges.
-    let mut global_perm_challenges = HashMap::new();
-    let mut challenges_per_instance = Vec::with_capacity(airs.len());
-    for contexts in &all_lookups {
-        let num_challenges = contexts.len() * lookup_gadget.num_challenges();
-        let mut instance_challenges = Vec::with_capacity(num_challenges);
-        for context in contexts {
-            let cs = match &context.kind {
-                Kind::Global(name) => {
-                    let cs = global_perm_challenges.entry(name).or_insert_with(|| {
-                        vec![
-                            challenger.sample_algebra_element::<Challenge<SC>>(),
-                            challenger.sample_algebra_element(),
-                        ]
-                    });
-                    cs.clone()
-                }
-                Kind::Local => {
-                    vec![
-                        challenger.sample_algebra_element(),
-                        challenger.sample_algebra_element(),
-                    ]
-                }
-            };
-            instance_challenges.extend(cs);
-        }
-        challenges_per_instance.push(instance_challenges);
-    }
+    let challenges_per_instance =
+        get_perm_challenges::<SC, LG, A>(&mut challenger, &all_lookups, airs, lookup_gadget);
 
     // Then, observe the permutation tables, if any.
     if is_lookup {
@@ -412,6 +388,9 @@ where
     let folded_constraints = folder.inner.accumulator;
 
     // Check that constraints(zeta) / Z_H(zeta) = quotient(zeta)
+    println!("folded constraints: {:?}", folded_constraints);
+    println!("inv vanishing: {:?}", sels.inv_vanishing);
+    println!("quotient: {:?}", quotient);
     if folded_constraints * sels.inv_vanishing != quotient {
         return Err(VerificationError::OodEvaluationMismatch { index: None });
     }

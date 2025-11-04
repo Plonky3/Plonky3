@@ -84,7 +84,7 @@ impl<SC: StarkGenericConfig> ExtensionBuilder for ProverConstraintFolderWithLook
         I: Into<Self::ExprEF>,
     {
         let apha_power = self.inner.alpha_powers[self.inner.constraint_index];
-        self.inner.accumulator += Into::<PackedChallenge<SC>>::into(apha_power) * x.into();
+        self.inner.accumulator += <PackedChallenge<SC>>::from(apha_power) * x.into();
         self.inner.constraint_index += 1;
     }
 }

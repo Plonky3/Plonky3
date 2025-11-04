@@ -32,6 +32,7 @@
 
 extern crate alloc;
 
+mod check_constraints;
 pub mod common;
 pub mod config;
 pub mod proof;

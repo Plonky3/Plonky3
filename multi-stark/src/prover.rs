@@ -1,10 +1,13 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+#[cfg(debug_assertions)]
+use crate::check_constraints::DebugConstraintBuilderWithLookups;
+use crate::check_constraints::check_constraints;
+use crate::common::get_perm_challenges;
 use crate::config::{Challenge, Domain, SGC, Val, observe_base_as_ext, observe_instance_binding};
 use crate::proof::{MultiCommitments, MultiOpenedValues, MultiProof, OpenedValuesWithLookups};
 use crate::symbolic::{get_log_quotient_degree, get_symbolic_constraints};
-use hashbrown::HashMap;
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::BasedVectorSpace;
@@ -14,6 +17,7 @@ use p3_lookup::folders::ProverConstraintFolderWithLookups;
 use p3_lookup::lookup_traits::{
     AirLookupHandler, EmptyLookupGadget, Kind, Lookup, LookupData, LookupGadget,
 };
+
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::IntoParallelIterator;
@@ -34,7 +38,12 @@ pub struct StarkInstance<'a, SC: SGC, A> {
 }
 
 #[instrument(skip_all)]
-pub fn prove_multi<SC, A, LG>(
+pub fn prove_multi<
+    SC,
+    #[cfg(debug_assertions)] A: for<'a> AirLookupHandler<DebugConstraintBuilderWithLookups<'a, Val<SC>, SC::Challenge>>,
+    #[cfg(not(debug_assertions))] A,
+    LG,
+>(
     config: &SC,
     instances: Vec<StarkInstance<'_, SC, A>>,
     lookup_gadget: &LG,
@@ -43,7 +52,8 @@ where
     SC: SGC,
     SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
     A: AirLookupHandler<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
-        + for<'a> AirLookupHandler<ProverConstraintFolderWithLookups<'a, SC>>,
+        + for<'a> AirLookupHandler<ProverConstraintFolderWithLookups<'a, SC>>
+        + Clone,
     LG: LookupGadget,
 {
     let pcs = config.pcs();
@@ -94,7 +104,7 @@ where
         .unzip();
 
     // Extract AIRs and public values; consume traces later without cloning.
-    let airs: Vec<_> = instances.iter().map(|inst| inst.air).collect();
+    let airs: Vec<A> = instances.iter().map(|inst| inst.air.clone()).collect();
     let pub_vals = instances
         .iter()
         .map(|inst| &inst.public_values)
@@ -131,7 +141,7 @@ where
             &mut challenger,
             log_ext_degrees[i],
             log_degrees[i],
-            A::width(airs[i]),
+            A::width(&airs[i]),
             quotient_degrees[i],
         );
     }
@@ -151,33 +161,8 @@ where
     }
 
     // Sample the lookup challenges.
-    let mut global_perm_challenges = HashMap::new();
-    let mut challenges_per_instance = Vec::with_capacity(airs.len());
-    for contexts in &all_lookups {
-        let num_challenges = contexts.len() * lookup_gadget.num_challenges();
-        let mut instance_challenges = Vec::with_capacity(num_challenges);
-        for context in contexts {
-            let cs = match &context.kind {
-                Kind::Global(name) => {
-                    let cs = global_perm_challenges.entry(name).or_insert_with(|| {
-                        vec![
-                            challenger.sample_algebra_element::<Challenge<SC>>(),
-                            challenger.sample_algebra_element(),
-                        ]
-                    });
-                    cs.clone()
-                }
-                Kind::Local => {
-                    vec![
-                        challenger.sample_algebra_element(),
-                        challenger.sample_algebra_element(),
-                    ]
-                }
-            };
-            instance_challenges.extend(cs);
-        }
-        challenges_per_instance.push(instance_challenges);
-    }
+    let challenges_per_instance =
+        get_perm_challenges::<SC, LG, A>(&mut challenger, &all_lookups, &airs, lookup_gadget);
 
     // Get permutation matrices, if any, along with their associated trace domain
     let mut permutation_commit_inputs = Vec::with_capacity(n_instances);
@@ -187,18 +172,27 @@ where
         .zip(ext_trace_domains.iter().cloned())
         .for_each(|((i, inst), ext_domain)| {
             if !all_lookups[i].is_empty() {
-                permutation_commit_inputs.push((
-                    ext_domain,
-                    lookup_gadget
-                        .generate_permutation::<SC>(
-                            &inst.trace,
-                            &inst.public_values,
-                            &all_lookups[i],
-                            &mut lookup_data[i],
-                            &challenges_per_instance[i],
-                        )
-                        .flatten_to_base(),
-                ))
+                let generated_perm = lookup_gadget.generate_permutation::<SC>(
+                    &inst.trace,
+                    &inst.public_values,
+                    &all_lookups[i],
+                    &mut lookup_data[i],
+                    &challenges_per_instance[i],
+                );
+                permutation_commit_inputs
+                    .push((ext_domain, generated_perm.clone().flatten_to_base()));
+
+                #[cfg(debug_assertions)]
+                check_constraints(
+                    inst.air,
+                    &inst.trace,
+                    &generated_perm,
+                    &challenges_per_instance[i],
+                    &inst.public_values,
+                    &all_lookups[i],
+                    &lookup_data[i],
+                    lookup_gadget,
+                );
             }
         });
 
@@ -233,7 +227,7 @@ where
 
         // Count constraints to size alpha powers packing.
         let (base_constraints, extension_constraints) = get_symbolic_constraints(
-            airs[i],
+            &airs[i],
             0,
             pub_vals[i].len(),
             &all_lookups[i],
@@ -263,7 +257,7 @@ where
 
         // Compute quotient(x) = constraints(x)/Z_H(x) over quotient_domain, as extension values.
         let q_values = quotient_values::<SC, A, _>(
-            airs[i],
+            &airs[i],
             &pub_vals[i],
             *trace_domain,
             quotient_domain,
@@ -580,7 +574,11 @@ where
         .collect()
 }
 
-pub fn prove_multi_no_lookups<SC, A>(
+pub fn prove_multi_no_lookups<
+    SC,
+    #[cfg(debug_assertions)] A: for<'a> AirLookupHandler<DebugConstraintBuilderWithLookups<'a, Val<SC>, SC::Challenge>>,
+    #[cfg(not(debug_assertions))] A,
+>(
     config: &SC,
     instances: Vec<StarkInstance<'_, SC, A>>,
 ) -> MultiProof<SC>
@@ -588,7 +586,8 @@ where
     SC: SGC,
     SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
     A: AirLookupHandler<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
-        + for<'a> AirLookupHandler<ProverConstraintFolderWithLookups<'a, SC>>,
+        + for<'a> AirLookupHandler<ProverConstraintFolderWithLookups<'a, SC>>
+        + Clone,
 {
     let dummy_lookup_gadget = EmptyLookupGadget;
     prove_multi(config, instances, &dummy_lookup_gadget)

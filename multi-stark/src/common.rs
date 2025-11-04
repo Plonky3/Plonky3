@@ -4,18 +4,20 @@
 
 use crate::{Challenge, config::SGC};
 use alloc::vec::Vec;
+use hashbrown::HashMap;
+use p3_challenger::FieldChallenger;
 use p3_field::{BasedVectorSpace, Field};
-use p3_lookup::lookup_traits::{AirLookupHandler, Lookup};
+use p3_lookup::lookup_traits::{AirLookupHandler, Kind, Lookup, LookupGadget};
 use p3_uni_stark::{SymbolicAirBuilder, SymbolicExpression, Val};
 
 /// Struct storing data common to both the prover and verifier.
 pub struct CommonData<F: Field> {
     /// The lookups used by each STARK instance.
-    pub lookups: Vec<Lookup<F>>,
+    pub lookups: Vec<Vec<Lookup<F>>>,
 }
 
 impl<F: Field> CommonData<F> {
-    pub fn new(lookups: Vec<Lookup<F>>) -> Self {
+    pub fn new(lookups: Vec<Vec<Lookup<F>>>) -> Self {
         Self { lookups }
     }
 }
@@ -35,4 +37,40 @@ where
         all_lookups.push(air_lookups);
     }
     all_lookups
+}
+
+pub(crate) fn get_perm_challenges<'a, SC: SGC, LG: LookupGadget, A>(
+    challenger: &mut SC::Challenger,
+    all_lookups: &[Vec<Lookup<Val<SC>>>],
+    airs: &[A],
+    lookup_gadget: &LG,
+) -> Vec<Vec<SC::Challenge>> {
+    let mut global_perm_challenges = HashMap::new();
+    let mut challenges_per_instance = Vec::with_capacity(airs.len());
+    for contexts in all_lookups {
+        let num_challenges = contexts.len() * lookup_gadget.num_challenges();
+        let mut instance_challenges = Vec::with_capacity(num_challenges);
+        for context in contexts {
+            let cs = match &context.kind {
+                Kind::Global(name) => {
+                    let cs = global_perm_challenges.entry(name).or_insert_with(|| {
+                        vec![
+                            challenger.sample_algebra_element::<Challenge<SC>>(),
+                            challenger.sample_algebra_element(),
+                        ]
+                    });
+                    cs.clone()
+                }
+                Kind::Local => {
+                    vec![
+                        challenger.sample_algebra_element(),
+                        challenger.sample_algebra_element(),
+                    ]
+                }
+            };
+            instance_challenges.extend(cs);
+        }
+        challenges_per_instance.push(instance_challenges);
+    }
+    challenges_per_instance
 }
