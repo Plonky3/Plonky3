@@ -745,7 +745,7 @@ fn general_dot_product<
                 );
                 unsafe {
                     // Safety: `dot_product_4` returns values in canonical form when given values in canonical form.
-                    acc += PackedMontyField31AVX2::<FP>::from_vector(res)
+                    acc += PackedMontyField31AVX2::<FP>::from_vector(res);
                 }
             }
             match N & 3 {

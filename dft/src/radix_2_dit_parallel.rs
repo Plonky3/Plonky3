@@ -306,7 +306,7 @@ fn first_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F])
                 dit_layer(
                     &mut submat,
                     layer,
-                    twiddles.iter().copied().step_by(layer_pow),
+                    twiddles.iter().step_by(layer_pow),
                     backwards,
                 );
                 backwards = !backwards;
@@ -328,12 +328,7 @@ fn first_half_general<F: Field>(
             let mut backwards = false;
             for layer in 0..mid {
                 let layer_rev = log_h - 1 - layer;
-                dit_layer(
-                    &mut submat,
-                    layer,
-                    twiddles[layer_rev].iter().copied(),
-                    backwards,
-                );
+                dit_layer(&mut submat, layer, twiddles[layer_rev].iter(), backwards);
                 backwards = !backwards;
             }
         });
@@ -363,7 +358,7 @@ fn first_half_general_oop<F: Field>(
                 &src_submat,
                 &mut dst_submat_maybe,
                 0,
-                twiddles[layer_rev].iter().copied(),
+                twiddles[layer_rev].iter(),
             );
 
             // submat is now initialized.
@@ -380,7 +375,7 @@ fn first_half_general_oop<F: Field>(
                 dit_layer(
                     &mut dst_submat,
                     layer,
-                    twiddles[layer_rev].iter().copied(),
+                    twiddles[layer_rev].iter(),
                     backwards,
                 );
                 backwards = !backwards;
@@ -454,10 +449,10 @@ fn second_half_general<F: Field>(
 }
 
 /// One layer of a DIT butterfly network.
-fn dit_layer<F: Field>(
+fn dit_layer<'a, F: Field>(
     submat: &mut RowMajorMatrixViewMut<'_, F>,
     layer: usize,
-    twiddles: impl Iterator<Item = F> + Clone,
+    twiddles: impl Iterator<Item = &'a F> + Clone,
     backwards: bool,
 ) {
     let half_block_size = 1 << layer;
@@ -465,15 +460,14 @@ fn dit_layer<F: Field>(
     let width = submat.width();
     debug_assert!(submat.height() >= block_size);
 
-    let process_block = |block: &mut [F]| {
+    let process_block = move |block: &mut [F]| {
         let (lows, highs) = block.split_at_mut(half_block_size * width);
-
         for (lo, hi, twiddle) in izip!(
             lows.chunks_mut(width),
             highs.chunks_mut(width),
             twiddles.clone()
         ) {
-            DitButterfly(twiddle).apply_to_rows(lo, hi);
+            DitButterfly(*twiddle).apply_to_rows(lo, hi);
         }
     };
 
@@ -490,11 +484,11 @@ fn dit_layer<F: Field>(
 }
 
 /// One layer of a DIT butterfly network.
-fn dit_layer_oop<F: Field>(
+fn dit_layer_oop<'a, F: Field>(
     src: &RowMajorMatrixView<'_, F>,
     dst: &mut RowMajorMatrixViewMut<'_, MaybeUninit<F>>,
     layer: usize,
-    twiddles: impl Iterator<Item = F> + Clone,
+    twiddles: impl Iterator<Item = &'a F> + Clone,
 ) {
     debug_assert_eq!(src.dimensions(), dst.dimensions());
     let half_block_size = 1 << layer;
@@ -502,9 +496,7 @@ fn dit_layer_oop<F: Field>(
     let width = dst.width();
     debug_assert!(dst.height() >= block_size);
 
-    let src_chunks = src.values.chunks(block_size * width);
-    let dst_chunks = dst.values.chunks_mut(block_size * width);
-    for (src_block, dst_block) in src_chunks.zip(dst_chunks) {
+    let process_blocks = move |src_block: &[F], dst_block: &mut [MaybeUninit<F>]| {
         let (src_lows, src_highs) = src_block.split_at(half_block_size * width);
         let (dst_lows, dst_highs) = dst_block.split_at_mut(half_block_size * width);
 
@@ -515,8 +507,15 @@ fn dit_layer_oop<F: Field>(
             dst_highs.chunks_mut(width),
             twiddles.clone()
         ) {
-            DitButterfly(twiddle).apply_to_rows_oop(src_lo, dst_lo, src_hi, dst_hi);
+            DitButterfly(*twiddle).apply_to_rows_oop(src_lo, dst_lo, src_hi, dst_hi);
         }
+    };
+
+    let src_chunks = src.values.chunks(block_size * width);
+    let dst_chunks = dst.values.chunks_mut(block_size * width);
+
+    for (src_block, dst_block) in src_chunks.zip(dst_chunks) {
+        process_blocks(src_block, dst_block);
     }
 }
 

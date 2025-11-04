@@ -165,7 +165,7 @@ where
         public_values,
         trace_domain,
         quotient_domain,
-        trace_on_quotient_domain,
+        &trace_on_quotient_domain,
         alpha,
         constraint_count,
     );
@@ -291,7 +291,7 @@ pub fn quotient_values<SC, A, Mat>(
     public_values: &Vec<Val<SC>>,
     trace_domain: Domain<SC>,
     quotient_domain: Domain<SC>,
-    trace_on_quotient_domain: Mat,
+    trace_on_quotient_domain: &Mat,
     alpha: SC::Challenge,
     constraint_count: usize,
 ) -> Vec<SC::Challenge>

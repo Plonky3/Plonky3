@@ -290,7 +290,7 @@ where
             .mmcs
             .get_matrices(&first_layer_data)
             .into_iter()
-            .map(|m| fold_y(bivariate_beta, m.as_view()))
+            .map(|m| fold_y(bivariate_beta, m))
             // Reverse, because FRI expects descending by height
             .rev()
             .collect();

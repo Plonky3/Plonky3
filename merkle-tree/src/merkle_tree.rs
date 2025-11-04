@@ -120,7 +120,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
 
         let mut digest_layers = vec![first_digest_layer::<P, _, _, _, DIGEST_ELEMS>(
             h,
-            tallest_matrices,
+            &tallest_matrices,
         )];
         loop {
             let prev_layer = digest_layers.last().unwrap().as_slice();
@@ -136,7 +136,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
 
             let next_digests = compress_and_inject::<P, _, _, _, _, DIGEST_ELEMS>(
                 prev_layer,
-                matrices_to_inject,
+                &matrices_to_inject,
                 h,
                 c,
             );
@@ -184,7 +184,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
 #[instrument(name = "first digest layer", level = "debug", skip_all)]
 fn first_digest_layer<P, PW, H, M, const DIGEST_ELEMS: usize>(
     h: &H,
-    tallest_matrices: Vec<&M>,
+    tallest_matrices: &[&M],
 ) -> Vec<[PW::Value; DIGEST_ELEMS]>
 where
     P: PackedValue,
@@ -257,7 +257,7 @@ where
 /// Pads the output so its length is even unless it becomes the root.
 fn compress_and_inject<P, PW, H, C, M, const DIGEST_ELEMS: usize>(
     prev_layer: &[[PW::Value; DIGEST_ELEMS]],
-    matrices_to_inject: Vec<&M>,
+    matrices_to_inject: &[&M],
     h: &H,
     c: &C,
 ) -> Vec<[PW::Value; DIGEST_ELEMS]>
