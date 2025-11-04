@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::MerkleTree;
 use crate::MerkleTreeError::{
-    EmptyBatch, IncompatibleHeights, RootMismatch, WrongBatchSize, WrongHeight,
+    EmptyBatch, IncompatibleHeights, IndexOutOfBounds, RootMismatch, WrongBatchSize, WrongHeight,
 };
 
 /// A Merkle Tree-based commitment scheme for multiple matrices of potentially differing heights.
@@ -81,6 +81,14 @@ pub enum MerkleTreeError {
     /// Matrix heights are incompatible; they cannot share a common binary Merkle tree.
     IncompatibleHeights,
 
+    /// The queried row index exceeds the maximum height.
+    IndexOutOfBounds {
+        /// Maximum admissible height.
+        max_height: usize,
+        /// Row index that was provided.
+        index: usize,
+    },
+
     /// The computed Merkle root does not match the provided commitment.
     RootMismatch,
 
@@ -122,34 +130,32 @@ where
         &self,
         inputs: Vec<M>,
     ) -> (Self::Commitment, Self::ProverData<M>) {
-        if let Some(max_height) = inputs.iter().map(|m| m.height()).max() {
-            if max_height > 0 {
-                let log_max_height = log2_ceil_usize(max_height);
-                // TODO: Support arbitrary-length matrices by placing their leaves at deeper points
-                // in the tree so every global index still maps to well-defined openings.
-                for matrix in &inputs {
-                    let height = matrix.height();
-                    assert!(height > 0, "matrix height 0 not supported");
-        
-                    let log_height = log2_ceil_usize(height);
-                    let bits_reduced = log_max_height - log_height;
-                    // ceil(max / 2^{bits_reduced}) without risk of shift overflow
-                    let expected_height = ((max_height - 1) >> bits_reduced) + 1;
-        
-                    assert!(
-                        height == expected_height,
-                        "matrix height {height} incompatible with tallest height {max_height}; \
+        if let Some(max_height) = inputs.iter().map(|m| m.height()).max()
+            && max_height > 0
+        {
+            let log_max_height = log2_ceil_usize(max_height);
+            // TODO: Support arbitrary-length matrices by placing their leaves at multiple levels
+            // in the tree so every global index still maps to well-defined openings.
+            for matrix in &inputs {
+                let height = matrix.height();
+                assert!(height > 0, "matrix height 0 not supported");
+
+                let log_height = log2_ceil_usize(height);
+                let bits_reduced = log_max_height - log_height;
+                // ceil(max / 2^{bits_reduced}) without risk of shift overflow
+                let expected_height = ((max_height - 1) >> bits_reduced) + 1;
+
+                assert!(
+                    height == expected_height,
+                    "matrix height {height} incompatible with tallest height {max_height}; \
                          expected ceil_div({max_height}, 2^{bits_reduced}) = {expected_height} \
                          so every global index maps to a row at depth {bits_reduced}"
-                    );
-                }
-            } else {
-                panic!("all matrices have height 0");
+                );
             }
         } else {
-            panic!("cannot commit an empty set of matrices");
+            panic!("all matrices have height 0");
         }
-        
+
         let tree = MerkleTree::new::<P, PW, H, C>(&self.hash, &self.compress, inputs);
         let root = tree.root();
         (root, tree)
@@ -168,6 +174,10 @@ where
         prover_data: &MerkleTree<P::Value, PW::Value, M, DIGEST_ELEMS>,
     ) -> BatchOpening<P::Value, Self> {
         let max_height = self.get_max_height(prover_data);
+        assert!(
+            index < max_height,
+            "index {index} out of bounds for height {max_height}"
+        );
         let log_max_height = log2_ceil_usize(max_height);
 
         // Get the matrix rows encountered along the path from the root to the given leaf index.
@@ -252,20 +262,25 @@ where
         // Returns an error if either:
         //              1. proof.len() != log_max_height
         //              2. heights_tallest_first is empty.
-        let mut curr_height_padded = match heights_tallest_first.peek() {
+        let (max_height, mut curr_height_padded) = match heights_tallest_first.peek() {
             Some((_, dims)) => {
-                let max_height = dims.height.next_power_of_two();
-                let log_max_height = log2_strict_usize(max_height);
+                let max_height = dims.height;
+                let curr_height_padded = max_height.next_power_of_two();
+                let log_max_height = log2_strict_usize(curr_height_padded);
                 if opening_proof.len() != log_max_height {
                     return Err(WrongHeight {
                         log_max_height,
                         num_siblings: opening_proof.len(),
                     });
                 }
-                max_height
+                (max_height, curr_height_padded)
             }
             None => return Err(EmptyBatch),
         };
+
+        if index >= max_height {
+            return Err(IndexOutOfBounds { max_height, index });
+        }
 
         // Hash all matrix openings at the current height.
         let mut root = self.hash.hash_iter_slices(
