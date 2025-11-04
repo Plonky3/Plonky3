@@ -122,6 +122,23 @@ where
         &self,
         inputs: Vec<M>,
     ) -> (Self::Commitment, Self::ProverData<M>) {
+        if let Some(max_height) = inputs.iter().map(|m| m.height()).max() {
+            if max_height > 0 {
+                let log_max_height = log2_ceil_usize(max_height);
+                // TODO: Support arbitrary-length matrices by placing their leaves at deeper points
+                // in the tree so every global index still maps to well-defined openings.
+                for matrix in &inputs {
+                    let height = matrix.height();
+                    let log_height = log2_ceil_usize(height);
+                    let bits_reduced = log_max_height - log_height;
+                    let expected_height = ((max_height - 1) >> bits_reduced) + 1;
+                    assert!(
+                        height == expected_height,
+                        "matrix height {height} incompatible with tallest height {max_height}; expected ceil_div({max_height}, 2^{bits_reduced}) = {expected_height}"
+                    );
+                }
+            }
+        }
         let tree = MerkleTree::new::<P, PW, H, C>(&self.hash, &self.compress, inputs);
         let root = tree.root();
         (root, tree)
@@ -592,10 +609,10 @@ mod tests {
             width: 8,
         });
 
-        // 5 mats with 70 rows, 8 columns
-        mats.extend((0..5).map(|_| RowMajorMatrix::<F>::rand(&mut rng, 70, 8)));
+        // 5 mats with 125 rows, 8 columns
+        mats.extend((0..5).map(|_| RowMajorMatrix::<F>::rand(&mut rng, 125, 8)));
         let medium_mat_dims = (0..5).map(|_| Dimensions {
-            height: 70,
+            height: 125,
             width: 8,
         });
 
@@ -613,21 +630,19 @@ mod tests {
             width: 8,
         });
 
+        let dims = large_mat_dims
+            .chain(medium_mat_dims)
+            .chain(small_mat_dims)
+            .chain(tiny_mat_dims)
+            .collect_vec();
+
         let (commit, prover_data) = mmcs.commit(mats);
 
-        // open the 6th row of each matrix and verify
-        let batch_opening = mmcs.open_batch(6, &prover_data);
-        mmcs.verify_batch(
-            &commit,
-            &large_mat_dims
-                .chain(medium_mat_dims)
-                .chain(small_mat_dims)
-                .chain(tiny_mat_dims)
-                .collect_vec(),
-            6,
-            (&batch_opening).into(),
-        )
-        .expect("expected verification to succeed");
+        for &index in &[0, 6, 124, 999] {
+            let batch_opening = mmcs.open_batch(index, &prover_data);
+            mmcs.verify_batch(&commit, &dims, index, (&batch_opening).into())
+                .expect("expected verification to succeed");
+        }
     }
 
     #[test]
@@ -648,5 +663,22 @@ mod tests {
         let batch_opening = mmcs.open_batch(17, &prover_data);
         mmcs.verify_batch(&commit, &dims, 17, (&batch_opening).into())
             .expect("expected verification to succeed");
+    }
+
+    #[test]
+    #[should_panic(expected = "matrix height 5 incompatible")]
+    fn commit_rejects_missing_leaf_coverage() {
+        let mut rng = SmallRng::seed_from_u64(9);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress);
+
+        let tallest = RowMajorMatrix::new(vec![F::ONE; 11], 1);
+        let invalid = RowMajorMatrix::new(vec![F::ONE; 5], 1);
+
+        // We expect a panic because the smaller matrix needs ceil(11 / 2) == 6 rows;
+        // height 5 would leave the global index 5 unmapped at that layer.
+        let _ = mmcs.commit(vec![tallest, invalid]);
     }
 }
