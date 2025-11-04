@@ -1216,7 +1216,7 @@ mod tests {
             *acc += pows
                 .iter()
                 .map(|pow| &pow[i])
-                .rfold(Ext::ZERO, |acc, coeff| acc * alpha + *coeff)
+                .rfold(Ext::ZERO, |acc, coeff| acc * alpha + *coeff);
         });
     }
 
