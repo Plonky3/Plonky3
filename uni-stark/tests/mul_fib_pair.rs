@@ -17,8 +17,8 @@ use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
 pub struct MulFibPairAir {
-    /// Index to tamper with in preprocessed trace (None = no tampering)
     num_rows: usize,
+    /// Index to tamper with in preprocessed trace (None = no tampering)
     tamper_index: Option<usize>,
 }
 
