@@ -51,6 +51,7 @@ nursery = { level = "warn", priority = -1 }
 
 # Some pedantic lints
 semicolon_if_nothing_returned = "warn"
+match_bool = "warn"
 
 redundant_pub_crate = "allow"
 too_long_first_doc_paragraph = "allow"
