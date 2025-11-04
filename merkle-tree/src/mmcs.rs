@@ -129,16 +129,27 @@ where
                 // in the tree so every global index still maps to well-defined openings.
                 for matrix in &inputs {
                     let height = matrix.height();
+                    assert!(height > 0, "matrix height 0 not supported");
+        
                     let log_height = log2_ceil_usize(height);
                     let bits_reduced = log_max_height - log_height;
+                    // ceil(max / 2^{bits_reduced}) without risk of shift overflow
                     let expected_height = ((max_height - 1) >> bits_reduced) + 1;
+        
                     assert!(
                         height == expected_height,
-                        "matrix height {height} incompatible with tallest height {max_height}; expected ceil_div({max_height}, 2^{bits_reduced}) = {expected_height}"
+                        "matrix height {height} incompatible with tallest height {max_height}; \
+                         expected ceil_div({max_height}, 2^{bits_reduced}) = {expected_height} \
+                         so every global index maps to a row at depth {bits_reduced}"
                     );
                 }
+            } else {
+                panic!("all matrices have height 0");
             }
+        } else {
+            panic!("cannot commit an empty set of matrices");
         }
+        
         let tree = MerkleTree::new::<P, PW, H, C>(&self.hash, &self.compress, inputs);
         let root = tree.root();
         (root, tree)
