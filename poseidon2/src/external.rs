@@ -35,10 +35,12 @@ fn apply_hl_mat4<R>(x: &mut [R; 4])
 where
     R: PrimeCharacteristicRing,
 {
-    let t0 = x[0].clone() + x[1].clone();
-    let t1 = x[2].clone() + x[3].clone();
-    let t2 = x[1].clone() + x[1].clone() + t1.clone();
-    let t3 = x[3].clone() + x[3].clone() + t0.clone();
+   let [x0, x1, x2, x3] = x.clone();
+
+    let t0 = x0.clone() + x1.clone();
+    let t1 = x2.clone() + x3.clone();
+    let t2 = x1.double() + t1.clone();
+    let t3 = x3.double() + t0.clone();
     let t4 = t1.double().double() + t3.clone();
     let t5 = t0.double().double() + t2.clone();
     let t6 = t3 + t5.clone();
@@ -61,14 +63,16 @@ fn apply_mat4<R>(x: &mut [R; 4])
 where
     R: PrimeCharacteristicRing,
 {
-    let t01 = x[0].clone() + x[1].clone();
-    let t23 = x[2].clone() + x[3].clone();
+    let [x0, x1, x2, x3] = x.clone();
+
+    let t01 = x0.clone() + x1.clone();
+    let t23 = x2.clone() + x3.clone();
     let t0123 = t01.clone() + t23.clone();
-    let t01123 = t0123.clone() + x[1].clone();
-    let t01233 = t0123 + x[3].clone();
+    let t01123 = t0123.clone() + x1;
+    let t01233 = t0123 + x3;
     // The order here is important. Need to overwrite x[0] and x[2] after x[1] and x[3].
-    x[3] = t01233.clone() + x[0].double(); // 3*x[0] + x[1] + x[2] + 2*x[3]
-    x[1] = t01123.clone() + x[2].double(); // x[0] + 2*x[1] + 3*x[2] + x[3]
+    x[3] = t01233.clone() + x0.double(); // 3*x[0] + x[1] + x[2] + 2*x[3]
+    x[1] = t01123.clone() + x2.double(); // x[0] + 2*x[1] + 3*x[2] + x[3]
     x[0] = t01123 + t01; // 2*x[0] + 3*x[1] + x[2] + x[3]
     x[2] = t01233 + t23; // x[0] + x[1] + 2*x[2] + 3*x[3]
 }
