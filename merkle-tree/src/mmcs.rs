@@ -420,7 +420,7 @@ mod tests {
             3,
         );
 
-        let (commit, prover_data) = mmcs.commit(vec![mat_1, mat_2]);
+        let (commit, prover_data) = mmcs.commit(vec![mat_1.clone(), mat_2.clone()]);
 
         let mat_1_leaf_hashes = [
             hash.hash_slice(&[F::ZERO, F::ONE]),
