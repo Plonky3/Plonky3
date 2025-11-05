@@ -896,7 +896,7 @@ mod tests {
                 rand_list.resize_with(length, || rng.random());
                 let expect = reverse_index_bits_naive(&rand_list);
 
-                let mut actual = rand_list.clone();
+                let mut actual = rand_list;
                 reverse_slice_index_bits(&mut actual);
 
                 assert_eq!(actual, expect);
