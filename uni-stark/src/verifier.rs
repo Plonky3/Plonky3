@@ -155,7 +155,7 @@ where
     }
 
     if preprocessed_width > 0 {
-        assert_eq!(is_zk, 0); // preprocessed columns not supported in zk mode
+        assert_eq!(is_zk, 0); // TODO: preprocessed columns not supported in zk mode
         let height = preprocessed.as_ref().unwrap().values.len() / preprocessed_width;
         assert_eq!(
             height,

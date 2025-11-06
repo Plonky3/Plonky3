@@ -141,7 +141,7 @@ where
             let (commit, data) =
                 commit_preprocessed_trace::<SC>(preprocessed, pcs, ext_trace_domain);
             #[cfg(debug_assertions)]
-            assert_eq!(config.is_zk(), 0); // preprocessed columns not supported in zk mode
+            assert_eq!(config.is_zk(), 0); // TODO: preprocessed columns not supported in zk mode
             (Some(commit), Some(data))
         }
         None => (None, None),
