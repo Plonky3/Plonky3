@@ -17,7 +17,7 @@ pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     /// The matrix containing rows on which the constraint polynomial is to be evaluated
     pub main: RowMajorMatrixView<'a, PackedVal<SC>>,
     /// Public inputs to the AIR
-    pub public_values: &'a Vec<Val<SC>>,
+    pub public_values: &'a [Val<SC>],
     /// Evaluations of the Selector polynomial for the first row of the trace
     pub is_first_row: PackedVal<SC>,
     /// Evaluations of the Selector polynomial for the last row of the trace
@@ -44,7 +44,7 @@ pub struct VerifierConstraintFolder<'a, SC: StarkGenericConfig> {
     /// Pair of consecutive rows from the committed polynomial evaluations
     pub main: ViewPair<'a, SC::Challenge>,
     /// Public values that are inputs to the computation
-    pub public_values: &'a Vec<Val<SC>>,
+    pub public_values: &'a [Val<SC>],
     /// Evaluations of the Selector polynomial for the first row of the trace
     pub is_first_row: SC::Challenge,
     /// Evaluations of the Selector polynomial for the last row of the trace
