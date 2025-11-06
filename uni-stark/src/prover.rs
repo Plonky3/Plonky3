@@ -138,7 +138,10 @@ where
 
     let (preprocessed_commit, preprocessed_data) = match preprocessed_trace {
         Some(preprocessed) => {
-            let (commit, data) = commit_preprocessed_trace::<SC>(preprocessed, pcs, trace_domain);
+            let (commit, data) =
+                commit_preprocessed_trace::<SC>(preprocessed, pcs, ext_trace_domain);
+            #[cfg(debug_assertions)]
+            assert_eq!(config.is_zk(), 0); // preprocessed columns not supported in zk mode
             (Some(commit), Some(data))
         }
         None => (None, None),

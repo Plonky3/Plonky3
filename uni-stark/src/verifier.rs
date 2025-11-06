@@ -126,6 +126,7 @@ fn process_preprocessed_trace<SC, A>(
     opened_values: &crate::proof::OpenedValues<SC::Challenge>,
     pcs: &SC::Pcs,
     trace_domain: <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::Domain,
+    is_zk: usize,
 ) -> Result<
     (
         usize,
@@ -154,6 +155,7 @@ where
     }
 
     if preprocessed_width > 0 {
+        assert_eq!(is_zk, 0); // preprocessed columns not supported in zk mode
         let height = preprocessed.as_ref().unwrap().values.len() / preprocessed_width;
         assert_eq!(
             height,
@@ -190,7 +192,7 @@ where
     let degree = 1 << degree_bits;
     let trace_domain = pcs.natural_domain_for_degree(degree);
     let (preprocessed_width, preprocessed_commit) =
-        process_preprocessed_trace::<SC, A>(air, opened_values, pcs, trace_domain)?;
+        process_preprocessed_trace::<SC, A>(air, opened_values, pcs, trace_domain, config.is_zk())?;
 
     let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(
         air,

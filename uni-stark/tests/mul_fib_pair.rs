@@ -16,13 +16,13 @@ use p3_uni_stark::{StarkConfig, prove, verify};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
-pub struct MulFibPairAir {
+pub struct MulFibPAir {
     num_rows: usize,
     /// Index to tamper with in preprocessed trace (None = no tampering)
     tamper_index: Option<usize>,
 }
 
-impl MulFibPairAir {
+impl MulFibPAir {
     pub fn new(num_rows: usize) -> Self {
         Self {
             num_rows,
@@ -38,7 +38,7 @@ impl MulFibPairAir {
     }
 }
 
-impl<F: PrimeField64> BaseAir<F> for MulFibPairAir {
+impl<F: PrimeField64> BaseAir<F> for MulFibPAir {
     fn width(&self) -> usize {
         NUM_COLS
     }
@@ -50,7 +50,7 @@ impl<F: PrimeField64> BaseAir<F> for MulFibPairAir {
     }
 }
 
-impl<AB: AirBuilderWithPublicValues + PairBuilder> Air<AB> for MulFibPairAir
+impl<AB: AirBuilderWithPublicValues + PairBuilder> Air<AB> for MulFibPAir
 where
     AB::F: PrimeField64,
 {
@@ -197,8 +197,8 @@ fn test_mul_fib_pair() {
     let num_rows = 1024;
     let config = setup_test_config();
     let trace = generate_trace_rows::<Val>(1, 1, num_rows);
-    let proof = prove(&config, &MulFibPairAir::new(num_rows), trace, &vec![]);
-    verify(&config, &MulFibPairAir::new(num_rows), &proof, &vec![]).expect("verification failed");
+    let proof = prove(&config, &MulFibPAir::new(num_rows), trace, &vec![]);
+    verify(&config, &MulFibPAir::new(num_rows), &proof, &vec![]).expect("verification failed");
 }
 
 #[test]
@@ -206,11 +206,11 @@ fn test_tampered_preprocessed_fails() {
     let num_rows = 1024;
     let config = setup_test_config();
     let trace = generate_trace_rows::<Val>(1, 1, num_rows);
-    let proof = prove(&config, &MulFibPairAir::new(num_rows), trace, &vec![]);
+    let proof = prove(&config, &MulFibPAir::new(num_rows), trace, &vec![]);
 
     let result = verify(
         &config,
-        &MulFibPairAir::with_tampered_preprocessed(num_rows, 3),
+        &MulFibPAir::with_tampered_preprocessed(num_rows, 3),
         &proof,
         &vec![],
     );
