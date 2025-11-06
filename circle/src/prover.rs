@@ -37,6 +37,11 @@ where
     );
 
     let log_max_height = log2_strict_usize(inputs[0].len());
+    let log_min_height = log2_strict_usize(inputs.last().unwrap().len());
+    if params.log_final_poly_len > 0 {
+        // Final_poly_degree must be less than or equal to the degree of the smallest polynomial.
+        assert!(log_min_height > params.log_final_poly_len + params.log_blowup);
+    }
 
     let commit_phase_result = commit_phase(folding, params, inputs, challenger);
 
@@ -93,7 +98,7 @@ where
     let mut commits = vec![];
     let mut data = vec![];
 
-    while folded.len() > params.blowup() {
+    while folded.len() > params.blowup() * params.final_poly_len() {
         let leaves = RowMajorMatrix::new(folded, 2);
         let (commit, prover_data) = params.mmcs.commit_matrix(leaves);
         challenger.observe(commit.clone());
@@ -111,8 +116,9 @@ where
         }
     }
 
-    // We should be left with `blowup` evaluations of a constant polynomial.
-    assert_eq!(folded.len(), params.blowup());
+    // We should be left with `blowup * final_poly_len` evaluations.
+    assert_eq!(folded.len(), params.blowup() * params.final_poly_len());
+    // For now, we only support constant final polynomials (log_final_poly_len == 0).
     let final_poly = folded[0];
     for x in folded {
         assert_eq!(x, final_poly);
