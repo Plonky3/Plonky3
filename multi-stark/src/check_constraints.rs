@@ -36,7 +36,6 @@ pub(crate) fn check_constraints<F, EF, A, LG>(
     A: for<'a> AirLookupHandler<DebugConstraintBuilderWithLookups<'a, F, EF>>,
     LG: LookupGadget,
 {
-    println!("YOOOOO");
     let height = main.height();
 
     (0..height).for_each(|row_index| {

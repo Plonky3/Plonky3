@@ -388,9 +388,6 @@ where
     let folded_constraints = folder.inner.accumulator;
 
     // Check that constraints(zeta) / Z_H(zeta) = quotient(zeta)
-    println!("folded constraints: {:?}", folded_constraints);
-    println!("inv vanishing: {:?}", sels.inv_vanishing);
-    println!("quotient: {:?}", quotient);
     if folded_constraints * sels.inv_vanishing != quotient {
         return Err(VerificationError::OodEvaluationMismatch { index: None });
     }
