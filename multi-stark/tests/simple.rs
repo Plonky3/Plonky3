@@ -122,11 +122,10 @@ fn fib_n(n: usize) -> u64 {
 #[derive(Debug, Clone, Copy)]
 struct MulAir {
     reps: usize,
-    step: u64,
 }
 impl Default for MulAir {
     fn default() -> Self {
-        Self { reps: 2, step: 1 }
+        Self { reps: 2 }
     }
 }
 impl<F> BaseAir<F> for MulAir {
@@ -134,7 +133,10 @@ impl<F> BaseAir<F> for MulAir {
         self.reps * 3
     }
 }
-impl<AB: AirBuilder> Air<AB> for MulAir {
+impl<AB: AirBuilder> Air<AB> for MulAir
+where
+    AB::Var: Debug,
+{
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
         let local = main.row_slice(0).unwrap();
@@ -145,9 +147,13 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
             let b = local[s + 1].clone();
             let c = local[s + 2].clone();
             builder.assert_eq(a.clone() * b.clone(), c);
+
             builder
                 .when_transition()
-                .assert_eq(a + AB::Expr::from_u64(self.step), next[s].clone());
+                .assert_eq(b.clone(), next[s].clone());
+            builder
+                .when_transition()
+                .assert_eq(a + b, next[s + 1].clone());
         }
     }
 }
@@ -188,7 +194,10 @@ impl<F> BaseAir<F> for MulAirLookups {
     }
 }
 
-impl<AB: AirBuilder> Air<AB> for MulAirLookups {
+impl<AB: AirBuilder> Air<AB> for MulAirLookups
+where
+    AB::Var: Debug,
+{
     fn eval(&self, builder: &mut AB) {
         self.air.eval(builder)
     }
@@ -197,6 +206,7 @@ impl<AB: AirBuilder> Air<AB> for MulAirLookups {
 impl<AB> AirLookupHandler<AB> for MulAirLookups
 where
     AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+    AB::Var: Debug,
 {
     fn add_lookup_columns(&mut self) -> Vec<usize> {
         let new_idx = self.num_lookups;
@@ -250,11 +260,11 @@ where
             for rep in 0..self.air.reps {
                 let base_idx = rep * 3;
                 let a = symbolic_main_local[base_idx]; // First input
-                // let b = symbolic_main_local[base_idx + 1]; // Second input
+                let b = symbolic_main_local[base_idx + 1]; // Second input
 
                 // Global lookup between MulAir inputs and FibAir inputs
                 let lookup_inputs = vec![(
-                    vec![a.into()],
+                    vec![a.into(), b.into()],
                     SymbolicExpression::Constant(AB::F::ONE),
                     Direction::Send, // MulAir sends data to the global lookup
                 )];
@@ -276,13 +286,19 @@ fn mul_trace<F: Field>(rows: usize, reps: usize, _step: u64) -> RowMajorMatrix<F
     assert!(rows.is_power_of_two());
     let w = reps * 3;
     let mut v = F::zero_vec(rows * w);
+
     // Keep a simple constant b and c = a*b
-    for i in 0..rows {
-        for rep in 0..reps {
+    for rep in 0..reps {
+        let mut a = F::ZERO;
+        let mut b = F::ONE;
+        for i in 0..rows {
             let idx = i * w + rep * 3;
-            v[idx] = F::from_u64(i as u64);
-            v[idx + 1] = F::from_u64(3);
+            v[idx] = a;
+            v[idx + 1] = b;
             v[idx + 2] = v[idx] * v[idx + 1];
+            let tmp = a + b;
+            a = b;
+            b = tmp;
         }
     }
     RowMajorMatrix::new(v, w)
@@ -295,6 +311,7 @@ struct FibAirLookups {
     air: FibonacciAir,
     is_global: bool,
     num_lookups: usize,
+    reps: usize,
 }
 
 impl Default for FibAirLookups {
@@ -303,16 +320,18 @@ impl Default for FibAirLookups {
             air: FibonacciAir,
             is_global: false,
             num_lookups: 0,
+            reps: 0,
         }
     }
 }
 
 impl FibAirLookups {
-    fn new(air: FibonacciAir, is_global: bool, num_lookups: usize) -> Self {
+    fn new(air: FibonacciAir, is_global: bool, num_lookups: usize, reps: Option<usize>) -> Self {
         Self {
             air,
             is_global,
             num_lookups,
+            reps: reps.unwrap_or(0),
         }
     }
 }
@@ -345,7 +364,7 @@ where
         if self.is_global {
             // Create symbolic air builder to access symbolic variables
             let symbolic_air_builder =
-                SymbolicAirBuilder::<AB::F>::new(0, <Self as BaseAir<AB::F>>::width(self), 0, 0, 0);
+                SymbolicAirBuilder::<AB::F>::new(0, <Self as BaseAir<AB::F>>::width(self), 3, 0, 0);
             let symbolic_main = symbolic_air_builder.main();
             let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
 
@@ -357,7 +376,7 @@ where
             // Global lookup between FibAir inputs and MulAir inputs
             let lookup_inputs = vec![(
                 vec![left.into(), right.into()],
-                SymbolicExpression::Constant(AB::F::ONE),
+                SymbolicExpression::Constant(AB::F::from_u64(self.reps as u64)),
                 Direction::Receive, // FibAir receives data from the global lookup
             )];
 
@@ -435,6 +454,8 @@ impl<F> BaseAir<F> for DemoAirWithLookups {
 
 impl<AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues> Air<AB>
     for DemoAirWithLookups
+where
+    AB::Var: Debug,
 {
     fn eval(&self, builder: &mut AB) {
         match self {
@@ -447,7 +468,7 @@ impl<AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues> Air<A
 impl<AB> AirLookupHandler<AB> for DemoAirWithLookups
 where
     AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
-    AB::Var: Copy,
+    AB::Var: Copy + Debug,
 {
     fn add_lookup_columns(&mut self) -> Vec<usize> {
         match self {
@@ -472,7 +493,10 @@ where
     }
 }
 
-impl<AB: PermutationAirBuilder + AirBuilderWithPublicValues> Air<AB> for DemoAir {
+impl<AB: PermutationAirBuilder + AirBuilderWithPublicValues> Air<AB> for DemoAir
+where
+    AB::Var: Debug,
+{
     fn eval(&self, b: &mut AB) {
         match self {
             Self::Fib(a) => a.eval(b),
@@ -486,7 +510,7 @@ type DemoAirNoLookup = AirNoLookup<DemoAir>;
 // Demo function to show MulAirLookups usage
 #[allow(dead_code)]
 fn demo_mul_air_lookups() {
-    let mul_air = MulAir { reps: 2, step: 1 };
+    let mul_air = MulAir { reps: 2 };
     let mul_air_with_local_lookups = MulAirLookups::new(mul_air, true, false, 0);
     let mul_air_with_global_lookups = MulAirLookups::new(mul_air, false, true, 0);
     let mul_air_with_both_lookups = MulAirLookups::new(mul_air, true, true, 0);
@@ -515,7 +539,7 @@ fn create_mul_instance(
     step: u64,
 ) -> (DemoAirNoLookup, RowMajorMatrix<Val>, Vec<Val>) {
     let n = 1 << log_height;
-    let mul = MulAir { reps, step };
+    let mul = MulAir { reps };
     let air = DemoAirNoLookup::new(DemoAir::Mul(mul));
     let trace = mul_trace::<Val>(n, reps, step);
     let pis = vec![];
@@ -908,7 +932,7 @@ fn test_multi_stark_one_instance_global_only() -> Result<(), impl Debug> {
 
     let reps = 1;
     // Create MulAir instance with local lookups configuration
-    let mul_air = MulAir { reps, step: 1 };
+    let mul_air = MulAir { reps };
     let mul_air_lookups = MulAirLookups::new(mul_air, false, true, 0); // global only
 
     let mul_trace = mul_trace::<Val>(8, reps, 1);
@@ -945,9 +969,9 @@ fn test_multi_stark_local_lookups_only() -> Result<(), impl Debug> {
     let config = make_config(2024);
 
     // Create MulAir instance with local lookups configuration
-    let mul_air = MulAir { reps: 2, step: 1 };
+    let mul_air = MulAir { reps: 2 };
     let mul_air_lookups = MulAirLookups::new(mul_air, true, false, 0); // local only
-    let fib_air_lookups = FibAirLookups::new(FibonacciAir, false, 0); // no lookups
+    let fib_air_lookups = FibAirLookups::new(FibonacciAir, false, 0, None); // no lookups
 
     let mul_trace = mul_trace::<Val>(16, 2, 1);
     let fib_trace = fib_trace::<Val>(0, 1, 16);
@@ -993,14 +1017,16 @@ fn test_multi_stark_local_lookups_only() -> Result<(), impl Debug> {
 fn test_multi_stark_global_lookups_only() -> Result<(), impl Debug> {
     let config = make_config(2025);
 
+    let reps = 2;
     // Create instances with global lookups configuration
-    let mul_air = MulAir { reps: 2, step: 1 };
+    let mul_air = MulAir { reps };
     let mul_air_lookups = MulAirLookups::new(mul_air, false, true, 0); // global only
-    let fib_air_lookups = FibAirLookups::new(FibonacciAir, true, 0); // global lookups
+    let fib_air_lookups = FibAirLookups::new(FibonacciAir, true, 0, Some(reps)); // global lookups
 
-    let mul_trace = mul_trace::<Val>(16, 2, 1);
-    let fib_trace = fib_trace::<Val>(0, 1, 16);
-    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(16))];
+    let n = 8;
+    let mul_trace = mul_trace::<Val>(n, 2, 1);
+    let fib_trace = fib_trace::<Val>(0, 1, n);
+    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(n))];
 
     // Use the enum wrapper for heterogeneous types
     let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups);
@@ -1041,10 +1067,11 @@ fn test_multi_stark_global_lookups_only() -> Result<(), impl Debug> {
 fn test_multi_stark_both_lookups() -> Result<(), impl Debug> {
     let config = make_config(2026);
 
+    let reps = 2;
     // Create instances with both local and global lookups configuration
-    let mul_air = MulAir { reps: 2, step: 1 };
+    let mul_air = MulAir { reps };
     let mul_air_lookups = MulAirLookups::new(mul_air, true, true, 0); // both
-    let fib_air_lookups = FibAirLookups::new(FibonacciAir, true, 0); // global lookups
+    let fib_air_lookups = FibAirLookups::new(FibonacciAir, true, 0, Some(reps)); // global lookups
 
     let mul_trace = mul_trace::<Val>(16, 2, 1);
     let fib_trace = fib_trace::<Val>(0, 1, 16);

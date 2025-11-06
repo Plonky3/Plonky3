@@ -350,7 +350,7 @@ where
     assert_eq!(
         opened_values.len(),
         quotient_idx + 1,
-        "expected [main, quotient] opening groups from PCS"
+        "expected [main, quotient] or [main, permutation, quotient] opening groups from PCS"
     );
 
     // Parse trace opened values per instance.
