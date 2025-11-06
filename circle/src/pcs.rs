@@ -382,7 +382,7 @@ where
 
         // +1 to account for first layer
         let log_global_max_height =
-            proof.fri_proof.commit_phase_commits.len() + self.fri_params.log_blowup + 1;
+            proof.fri_proof.commit_phase_commits.len() + self.fri_params.log_blowup + self.fri_params.log_final_poly_len + 1;
 
         let folding: CircleFriFoldingForMmcs<Val, Challenge, InputMmcs, FriMmcs> =
             CircleFriFolding(PhantomData);
