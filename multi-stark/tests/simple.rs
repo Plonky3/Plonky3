@@ -130,7 +130,7 @@ impl Default for MulAir {
 }
 impl<F> BaseAir<F> for MulAir {
     fn width(&self) -> usize {
-        self.reps * 3
+        self.reps * 3 + 1
     }
 }
 impl<AB: AirBuilder> Air<AB> for MulAir
@@ -225,10 +225,11 @@ where
 
         // Local lookups: one for each mul input with extra column for integers 0 to height
         if self.is_local {
+            let last_idx = symbolic_air_builder.main().width() - 1;
+            let lut = symbolic_main_local[last_idx]; //  Extra column that corresponds to a permutation of 'a'
             for rep in 0..self.air.reps {
                 let base_idx = rep * 3;
                 let a = symbolic_main_local[base_idx]; // First input
-
                 // Create lookup inputs for each multiplication input
                 // We'll create a local lookup table with integers 0 to height
                 let lookup_inputs = vec![
@@ -240,7 +241,7 @@ where
                     ),
                     // Provide the range values (this would be done in the trace generation)
                     (
-                        vec![a.into()], // This represents the range values
+                        vec![lut.into()], // This represents the range values
                         SymbolicExpression::Constant(AB::F::ONE),
                         Direction::Send,
                     ),
@@ -284,8 +285,10 @@ where
 
 fn mul_trace<F: Field>(rows: usize, reps: usize, _step: u64) -> RowMajorMatrix<F> {
     assert!(rows.is_power_of_two());
-    let w = reps * 3;
+    // The extra column corresponds to a permutation of the first column.
+    let w = reps * 3 + 1;
     let mut v = F::zero_vec(rows * w);
+    let last_idx = w - 1;
 
     // Keep a simple constant b and c = a*b
     for rep in 0..reps {
@@ -296,6 +299,9 @@ fn mul_trace<F: Field>(rows: usize, reps: usize, _step: u64) -> RowMajorMatrix<F
             v[idx] = a;
             v[idx + 1] = b;
             v[idx + 2] = v[idx] * v[idx + 1];
+            if i != rows - 1 {
+                v[i * w + last_idx] = b;
+            }
             let tmp = a + b;
             a = b;
             b = tmp;
@@ -927,13 +933,13 @@ fn test_circle_stark_multi() -> Result<(), impl Debug> {
 /// Test with local lookups only using MulAirLookups
 /// This test demonstrates how to use local lookups in multi-stark proofs
 #[test]
-fn test_multi_stark_one_instance_global_only() -> Result<(), impl Debug> {
+fn test_multi_stark_one_instance_local_only() -> Result<(), impl Debug> {
     let config = make_config(2024);
 
     let reps = 1;
     // Create MulAir instance with local lookups configuration
     let mul_air = MulAir { reps };
-    let mul_air_lookups = MulAirLookups::new(mul_air, false, true, 0); // global only
+    let mul_air_lookups = MulAirLookups::new(mul_air, true, false, 0); // local only
 
     let mul_trace = mul_trace::<Val>(8, reps, 1);
 
