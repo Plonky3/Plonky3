@@ -18,7 +18,7 @@ use crate::config::{
     Challenge, Domain, StarkGenericConfig as SGC, Val, observe_base_as_ext,
     observe_instance_binding,
 };
-use crate::proof::{MultiCommitments, MultiOpenedValues, MultiProof};
+use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof};
 
 #[derive(Debug)]
 pub struct StarkInstance<'a, SC: SGC, A> {
@@ -28,7 +28,7 @@ pub struct StarkInstance<'a, SC: SGC, A> {
 }
 
 #[instrument(skip_all)]
-pub fn prove_multi<SC, A>(config: &SC, instances: Vec<StarkInstance<'_, SC, A>>) -> MultiProof<SC>
+pub fn prove_batch<SC, A>(config: &SC, instances: Vec<StarkInstance<'_, SC, A>>) -> BatchProof<SC>
 where
     SC: SGC,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
@@ -36,9 +36,9 @@ where
     let pcs = config.pcs();
     let mut challenger = config.initialise_challenger();
 
-    // TODO: No ZK support for multi-stark yet.
+    // TODO: No ZK support for batch-stark yet.
     if config.is_zk() != 0 {
-        panic!("p3-multi-stark: ZK mode is not supported yet");
+        panic!("p3-batch-stark: ZK mode is not supported yet");
     }
 
     // Use instances in provided order.
@@ -88,7 +88,7 @@ where
         );
     }
 
-    // Commit to all traces in one multi-matrix commitment, preserving input order.
+    // Commit to all traces using a single batched commitment, preserving input order.
     let main_commit_inputs = instances
         .into_iter()
         .zip(ext_trace_domains.iter().cloned())
@@ -113,7 +113,7 @@ where
     // Track ranges so we can map openings back to instances.
     let mut quotient_chunk_ranges: Vec<(usize, usize)> = Vec::with_capacity(n_instances);
 
-    // TODO: Parallelize this loop for better performance with multiple instances.
+    // TODO: Parallelize this loop for better performance with many instances.
     for (i, trace_domain) in trace_domains.iter().enumerate() {
         let lqd = log_quotient_degrees[i];
         let quotient_degree = quotient_degrees[i];
@@ -134,7 +134,7 @@ where
             &pub_vals[i],
             *trace_domain,
             quotient_domain,
-            trace_on_quotient_domain,
+            &trace_on_quotient_domain,
             None, // multi-stark doesn't support preprocessed columns yet
             alpha,
             constraint_cnt,
@@ -225,16 +225,16 @@ where
             preprocessed_local: None, // multi-stark doesn't support preprocessed columns yet
             preprocessed_next: None,
             quotient_chunks: qcs,
-            random: None, // ZK not supported in multi-stark yet
+            random: None, // ZK not supported in batch-stark yet
         });
     }
 
-    MultiProof {
-        commitments: MultiCommitments {
+    BatchProof {
+        commitments: BatchCommitments {
             main: main_commit,
             quotient_chunks: quotient_commit,
         },
-        opened_values: MultiOpenedValues {
+        opened_values: BatchOpenedValues {
             instances: per_instance,
         },
         opening_proof,

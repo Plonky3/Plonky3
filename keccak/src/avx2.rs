@@ -217,7 +217,7 @@ fn rho(state: [[__m256i; 5]; 5]) -> [[__m256i; 5]; 5] {
 }
 
 #[inline(always)]
-fn pi(state: [[__m256i; 5]; 5]) -> [[__m256i; 5]; 5] {
+const fn pi(state: [[__m256i; 5]; 5]) -> [[__m256i; 5]; 5] {
     [
         [
             state[0][0],
