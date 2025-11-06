@@ -51,7 +51,7 @@ where
     }
 
     // The log of the maximum domain size.
-    let log_max_height = proof.commit_phase_commits.len() + params.log_blowup;
+    let log_max_height = proof.commit_phase_commits.len() + params.log_blowup + params.log_final_poly_len;
 
     for qp in &proof.query_proofs {
         let index = challenger.sample_bits(log_max_height + folding.extra_query_index_bits());
@@ -83,8 +83,8 @@ where
             log_max_height,
         )?;
 
-        // As we fold until the polynomial is constant, proof.final_poly should be a constant value and
-        // we do not need to do any polynomial evaluations.
+        // Verify the final polynomial. For now, we only support constant final polynomials
+        // (log_final_poly_len == 0), so we check equality directly.
         if folded_eval != proof.final_poly {
             return Err(FriError::FinalPolyMismatch);
         }
@@ -125,11 +125,12 @@ where
     let mut folded_eval = EF::ZERO;
     let mut ro_iter = reduced_openings.into_iter().peekable();
 
+    // The log of the final domain size.
+    let log_final_height = params.log_blowup + params.log_final_poly_len;
     // We start with evaluations over a domain of size (1 << log_max_height). We fold
-    // using FRI until the domain size reaches (1 << log_final_height). This is equal to 1 << log_blowup
-    // currently as we have not yet implemented early stopping.
+    // using FRI until the domain size reaches (1 << log_final_height).
     for (log_folded_height, ((&beta, comm), opening)) in zip_eq(
-        (params.log_blowup..log_max_height).rev(),
+        (log_final_height..log_max_height).rev(),
         steps,
         FriError::InvalidProofShape,
     )? {
