@@ -17,6 +17,7 @@
 //! - `m_i, m'_j` are multiplicities (how many times each element appears)
 //! - The transformation eliminates expensive exponentiation operations
 
+use alloc::collections::BTreeSet;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -156,6 +157,9 @@ impl LogUpGadget {
         builder: &mut AB,
         context: Lookup<AB::F>,
         opt_expected_cumulated: Option<AB::ExprEF>,
+        // Challenge offset for this lookup in the permutation randomness array
+        // (in units of challenges, not columns).
+        challenge_offset: usize,
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
     {
@@ -198,15 +202,17 @@ impl LogUpGadget {
 
         let permutation_challenges = builder.permutation_randomness();
 
+        // Use per-lookup offset into the challenge array, independent of aux column indices.
+        let k = challenge_offset;
         assert!(
-            permutation_challenges.len() >= self.num_challenges() * (column + 1),
+            permutation_challenges.len() >= k + self.num_challenges(),
             "Insufficient permutation challenges"
         );
 
         // Challenge for the running sum.
-        let alpha = permutation_challenges[2 * column];
+        let alpha = permutation_challenges[k + 0];
         // Challenge for combining the lookup tuples.
-        let beta = permutation_challenges[2 * column + 1];
+        let beta = permutation_challenges[k + 1];
 
         let s = permutation.row_slice(0).unwrap();
         assert!(s.len() > column, "Permutation trace has insufficient width");
@@ -293,7 +299,10 @@ impl LookupGadget for LogUpGadget {
             panic!("Global lookups are not supported in local evaluation")
         }
 
-        self.eval_update(builder, context, None);
+        // Fallback path if called directly: derive offset from aux column index.
+        // This keeps compatibility for callers that invoke eval_local_lookup per-context.
+        let column = context.columns[0];
+        self.eval_update(builder, context, None, column * self.num_challenges());
     }
 
     /// # Mathematical Details
@@ -317,7 +326,72 @@ impl LookupGadget for LogUpGadget {
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
     {
-        self.eval_update(builder, context, Some(expected_cumulated));
+        // Fallback path if called directly: derive offset from aux column index.
+        let column = context.columns[0];
+        self.eval_update(
+            builder,
+            context,
+            Some(expected_cumulated),
+            column * self.num_challenges(),
+        );
+    }
+
+    fn eval_lookups<AB>(
+        &self,
+        builder: &mut AB,
+        contexts: &[Lookup<AB::F>],
+        // Assumed to be sorted by auxiliary_index.
+        lookup_data: &[LookupData<AB::EF>],
+    ) where
+        AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+    {
+        // Validate challenge count matches number of lookups.
+        let permutation_challenges = builder.permutation_randomness();
+        debug_assert_eq!(
+            permutation_challenges.len(),
+            contexts.len() * self.num_challenges(),
+            "perm challenge count must be per-lookup"
+        );
+
+        // Enforce uniqueness of auxiliary column indices across lookups.
+        {
+            let mut seen = BTreeSet::new();
+            for ctx in contexts {
+                let a = ctx.columns[0];
+                if !seen.insert(a) {
+                    panic!("duplicate aux column index {a} across lookups");
+                }
+            }
+        }
+
+        // Thread challenges by lookup order; independent of aux column indices.
+        let mut lookup_data_iter = lookup_data.iter();
+        let mut k = 0usize; // index into permutation_randomness
+        let challenges_per_lookup = self.num_challenges();
+        for context in contexts.iter() {
+            match &context.kind {
+                Kind::Local => {
+                    self.eval_update(builder, context.clone(), None, k);
+                    k += challenges_per_lookup;
+                }
+                Kind::Global(_) => {
+                    let LookupData {
+                        name: _,
+                        aux_idx,
+                        expected_cumulated,
+                    } = lookup_data_iter
+                        .next()
+                        .expect("Expected cumulated value missing");
+
+                    if *aux_idx != context.columns[0] {
+                        panic!("Expected cumulated values not sorted by auxiliary index");
+                    }
+                    let expr_ef_expected = AB::ExprEF::from(expected_cumulated.clone());
+                    self.eval_update(builder, context.clone(), Some(expr_ef_expected), k);
+                    k += challenges_per_lookup;
+                }
+            }
+        }
     }
 
     fn verify_global_final_value<EF: Field>(
@@ -385,8 +459,32 @@ impl LookupGadget for LogUpGadget {
         lookup_data: &mut [LookupData<SC::Challenge>],
         permutation_challenges: &[SC::Challenge],
     ) -> RowMajorMatrix<SC::Challenge> {
+        // Validate challenge count matches number of lookups.
+        debug_assert_eq!(
+            permutation_challenges.len(),
+            lookups.len() * self.num_challenges(),
+            "perm challenge count must be per-lookup"
+        );
+
+        // Enforce uniqueness of auxiliary column indices across lookups.
+        {
+            let mut seen = BTreeSet::new();
+            for ctx in lookups {
+                let a = ctx.columns[0];
+                if !seen.insert(a) {
+                    panic!("duplicate aux column index {a} across lookups");
+                }
+            }
+        }
+
         let height = main.height();
-        let width = self.num_aux_cols() * lookups.len();
+        // Compute width from declared auxiliary column indices across all lookups.
+        let width = lookups
+            .iter()
+            .flat_map(|ctx| ctx.columns.iter().cloned())
+            .max()
+            .map(|m| m + 1)
+            .unwrap_or(0);
 
         let mut aux_trace = vec![SC::Challenge::ZERO; height * width];
         for i in 0..height {
@@ -402,12 +500,18 @@ impl LookupGadget for LogUpGadget {
                 LookupTraceBuilder::new(main_rows, public_values, permutation_challenges.to_vec());
 
             let mut permutation_counter = 0;
+            let challenges_per_lookup = self.num_challenges();
             // Build the trace and update `lookup_data` with expected cumulated values.
-            lookups.iter().for_each(|context| {
+            for (lookup_idx, context) in lookups.iter().enumerate() {
                 // Build the expected cumulative value for this global lookup.
                 let aux_idx = context.columns[0];
-                let alpha = &permutation_challenges[2 * aux_idx];
-                let beta = &permutation_challenges[2 * aux_idx + 1];
+                let k = challenges_per_lookup * lookup_idx;
+                assert!(
+                    permutation_challenges.len() >= k + challenges_per_lookup,
+                    "Insufficient permutation challenges"
+                );
+                let alpha = &permutation_challenges[k + 0];
+                let beta = &permutation_challenges[k + 1];
 
                 let elements = context
                     .element_exprs
@@ -452,7 +556,7 @@ impl LookupGadget for LogUpGadget {
                         Kind::Local => {}
                     }
                 }
-            });
+            }
             if i == height - 1 {
                 assert_eq!(permutation_counter, lookup_data.len());
             }
