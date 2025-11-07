@@ -10,7 +10,7 @@ use p3_lookup::lookup_traits::{
 };
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_maybe_rayon::prelude::{IntoParallelIterator, ParIterExt};
+use p3_maybe_rayon::prelude::IntoParallelIterator;
 use p3_uni_stark::{
     OpenedValues, PackedChallenge, PackedVal, ProverConstraintFolder, SymbolicAirBuilder,
     SymbolicExpression,
@@ -507,7 +507,7 @@ where
     (0..quotient_size)
         .into_par_iter()
         .step_by(PackedVal::<SC>::WIDTH)
-        .flat_map_iter(|i_start| {
+        .flat_map(|i_start| {
             let i_range = i_start..i_start + PackedVal::<SC>::WIDTH;
 
             let is_first_row = *PackedVal::<SC>::from_slice(&sels.is_first_row[i_range.clone()]);
