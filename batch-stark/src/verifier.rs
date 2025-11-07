@@ -6,7 +6,7 @@ use itertools::Itertools;
 use p3_air::Air;
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
+use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 use p3_lookup::folders::VerifierConstraintFolderWithLookups;
 use p3_lookup::lookup_traits::{
     AirLookupHandler, AirNoLookup, EmptyLookupGadget, Lookup, LookupData, LookupGadget,
@@ -34,6 +34,7 @@ pub fn verify_batch<SC, A, LG>(
     airs: &mut [A],
     proof: &BatchProof<SC>,
     public_values: &[Vec<Val<SC>>],
+    all_lookups: &[Vec<Lookup<Val<SC>>>],
     lookup_gadget: &LG,
 ) -> Result<(), VerificationError<PcsError<SC>>>
 where
@@ -72,13 +73,6 @@ where
     // Observe the number of instances up front to match the prover's transcript.
     let n_instances = airs.len();
     observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(n_instances));
-
-    let all_lookups = airs
-        .iter_mut()
-        .map(|air| {
-            <A as AirLookupHandler<VerifierConstraintFolderWithLookups<'_, SC>>>::get_lookups(air)
-        })
-        .collect::<Vec<_>>();
 
     // Validate opened values shape per instance and observe per-instance binding data.
     // Precompute per-instance log_quotient_degrees and quotient_degrees in one pass.
@@ -346,23 +340,26 @@ where
             other => other,
         })?;
     }
-    let mut global_sums = HashMap::new();
+    let mut global_cumulative = HashMap::new();
     for lds in global_lookup_data {
         for ld in lds {
             let name = &ld.name;
             let expected = &ld.expected_cumulated;
-            global_sums
+            global_cumulative
                 .entry(name)
-                .and_modify(|s| *s += *expected)
-                .or_insert(*expected);
+                .and_modify(|v: &mut Vec<_>| v.push(*expected))
+                .or_insert(vec![*expected]);
         }
     }
-    for (_, sum) in global_sums {
-        if !sum.is_zero() {
-            return Err(VerificationError::LookupError(
-                LookupError::GlobalCumulativeMismatch,
-            ));
-        }
+
+    for (name, all_expected_cumulative) in global_cumulative {
+        lookup_gadget
+            .verify_global_final_value(&all_expected_cumulative)
+            .map_err(|_| {
+                VerificationError::LookupError(LookupError::GlobalCumulativeMismatch(Some(
+                    name.clone(),
+                )))
+            })?;
     }
 
     Ok(())
@@ -455,6 +452,7 @@ where
         &mut no_lookup_airs,
         proof,
         public_values,
+        &vec![vec![]; airs.len()],
         &empty_lookup_gadget,
     )
 }

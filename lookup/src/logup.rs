@@ -327,7 +327,9 @@ impl LookupGadget for LogUpGadget {
         let total = all_expected_cumulative.iter().cloned().sum::<EF>();
 
         if !total.is_zero() {
-            return Err(LookupError::GlobalCumulativeMismatch);
+            // We set the name associated to the lookup to None because we don't have access to the actual name here.
+            // The actual name will be set in the verifier directly.
+            return Err(LookupError::GlobalCumulativeMismatch(None));
         }
 
         Ok(())
