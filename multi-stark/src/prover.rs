@@ -61,8 +61,13 @@ impl<'a, SC: SGC, A> StarkInstance<'a, SC, A> {
 #[instrument(skip_all)]
 pub fn prove_multi<
     SC,
-    #[cfg(debug_assertions)] A: for<'a> AirLookupHandler<DebugConstraintBuilderWithLookups<'a, Val<SC>, SC::Challenge>>,
-    #[cfg(not(debug_assertions))] A,
+    #[cfg(debug_assertions)] A: for<'a> AirLookupHandler<DebugConstraintBuilderWithLookups<'a, Val<SC>, SC::Challenge>>
+        + AirLookupHandler<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
+        + for<'a> AirLookupHandler<ProverConstraintFolderWithLookups<'a, SC>>
+        + Clone,
+    #[cfg(not(debug_assertions))] A: for<'a> AirLookupHandler<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
+        + for<'a> AirLookupHandler<ProverConstraintFolderWithLookups<'a, SC>>
+        + Clone,
     LG,
 >(
     config: &SC,
@@ -72,9 +77,6 @@ pub fn prove_multi<
 where
     SC: SGC,
     SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
-    A: AirLookupHandler<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
-        + for<'a> AirLookupHandler<ProverConstraintFolderWithLookups<'a, SC>>
-        + Clone,
     LG: LookupGadget,
 {
     let pcs = config.pcs();
@@ -471,9 +473,9 @@ where
 {
     let quotient_size = quotient_domain.size();
     let main_width = trace_on_quotient_domain.width();
-    let perm_width = match &opt_permutation_on_quotient_domain {
-        Some(mat) => mat.width(),
-        None => 0,
+    let (perm_width, perm_height) = match &opt_permutation_on_quotient_domain {
+        Some(mat) => (mat.width(), mat.height()),
+        None => (0, 0),
     };
 
     let ext_degree = SC::Challenge::DIMENSION;
@@ -509,7 +511,6 @@ where
         .into_par_iter()
         .step_by(PackedVal::<SC>::WIDTH)
         .flat_map_iter(|i_start| {
-            let wrap = |i| i % quotient_size;
             let i_range = i_start..i_start + PackedVal::<SC>::WIDTH;
 
             let is_first_row = *PackedVal::<SC>::from_slice(&sels.is_first_row[i_range.clone()]);
@@ -532,7 +533,7 @@ where
                             PackedChallenge::<SC>::from_basis_coefficients_fn(|i| {
                                 PackedVal::<SC>::from_fn(|offset| {
                                     permutation_on_quotient_domain
-                                        .get(wrap(i_start + offset), col + i)
+                                        .get((i_start + offset) % perm_height, col + i)
                                         .unwrap()
                                 })
                             })
@@ -541,7 +542,7 @@ where
                             PackedChallenge::<SC>::from_basis_coefficients_fn(|i| {
                                 PackedVal::<SC>::from_fn(|offset| {
                                     permutation_on_quotient_domain
-                                        .get(wrap(i_start + next_step + offset), col + i)
+                                        .get((i_start + next_step + offset) % perm_height, col + i)
                                         .unwrap()
                                 })
                             })
@@ -597,8 +598,13 @@ where
 
 pub fn prove_multi_no_lookups<
     SC,
-    #[cfg(debug_assertions)] A: for<'a> AirLookupHandler<DebugConstraintBuilderWithLookups<'a, Val<SC>, SC::Challenge>>,
-    #[cfg(not(debug_assertions))] A,
+    #[cfg(debug_assertions)] A: for<'a> AirLookupHandler<DebugConstraintBuilderWithLookups<'a, Val<SC>, SC::Challenge>>
+        + AirLookupHandler<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
+        + for<'a> AirLookupHandler<ProverConstraintFolderWithLookups<'a, SC>>
+        + Clone,
+    #[cfg(not(debug_assertions))] A: for<'a> AirLookupHandler<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
+        + for<'a> AirLookupHandler<ProverConstraintFolderWithLookups<'a, SC>>
+        + Clone,
 >(
     config: &SC,
     instances: Vec<StarkInstance<'_, SC, A>>,
@@ -606,9 +612,6 @@ pub fn prove_multi_no_lookups<
 where
     SC: SGC,
     SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
-    A: AirLookupHandler<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
-        + for<'a> AirLookupHandler<ProverConstraintFolderWithLookups<'a, SC>>
-        + Clone,
 {
     let dummy_lookup_gadget = EmptyLookupGadget;
     prove_multi(config, instances, &dummy_lookup_gadget)

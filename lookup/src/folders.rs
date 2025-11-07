@@ -100,7 +100,7 @@ impl<'a, SC: StarkGenericConfig> PermutationAirBuilder
     }
 
     fn permutation_randomness(&self) -> &[PackedChallenge<SC>] {
-        &self.permutation_challenges
+        self.permutation_challenges
     }
 }
 
@@ -197,6 +197,6 @@ impl<'a, SC: StarkGenericConfig> PermutationAirBuilder
     }
 
     fn permutation_randomness(&self) -> &[SC::Challenge] {
-        &self.permutation_challenges
+        self.permutation_challenges
     }
 }

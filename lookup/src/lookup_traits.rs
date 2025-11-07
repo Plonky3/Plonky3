@@ -26,7 +26,7 @@ pub struct LookupData<F: Clone> {
 
 impl<F: Field> LookupData<F> {
     pub fn to_symbolic(&self) -> LookupData<SymbolicExpression<F>> {
-        let expected = SymbolicExpression::Constant(self.expected_cumulated.clone());
+        let expected = SymbolicExpression::Constant(self.expected_cumulated);
         LookupData {
             name: self.name.clone(),
             aux_idx: self.aux_idx,
@@ -102,7 +102,7 @@ pub trait LookupGadget {
                     if *aux_idx != context.columns[0] {
                         panic!("Expected cumulated values not sorted by auxiliary index");
                     }
-                    let expr_ef_expected = AB::ExprEF::from(expected_cumulated.clone());
+                    let expr_ef_expected = AB::ExprEF::from(*expected_cumulated);
                     self.eval_global_update(builder, context.clone(), expr_ef_expected);
                 }
             }
@@ -262,7 +262,7 @@ pub struct LookupTraceBuilder<'a, SC: StarkGenericConfig> {
 }
 
 impl<'a, SC: StarkGenericConfig> LookupTraceBuilder<'a, SC> {
-    pub fn new(
+    pub const fn new(
         main: ViewPair<'a, Val<SC>>,
         public_values: &'a [Val<SC>],
         permutation_challenges: Vec<SC::Challenge>,
@@ -397,7 +397,7 @@ pub struct AirNoLookup<A> {
 }
 
 impl<A> AirNoLookup<A> {
-    pub fn new(air: A) -> Self {
+    pub const fn new(air: A) -> Self {
         Self { air }
     }
 }

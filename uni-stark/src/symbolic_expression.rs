@@ -126,13 +126,13 @@ impl<F: Field> Default for SymbolicExpression<F> {
 
 impl<F: Field, EF: ExtensionField<F>> From<SymbolicVariable<F>> for SymbolicExpression<EF> {
     fn from(var: SymbolicVariable<F>) -> Self {
-        SymbolicExpression::Variable(SymbolicVariable::<EF>::new(var.entry, var.index))
+        Self::Variable(SymbolicVariable::<EF>::new(var.entry, var.index))
     }
 }
 
 impl<F: Field, EF: ExtensionField<F>> From<F> for SymbolicExpression<EF> {
     fn from(var: F) -> Self {
-        SymbolicExpression::Constant(var.into())
+        Self::Constant(var.into())
     }
 }
 

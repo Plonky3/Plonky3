@@ -247,9 +247,7 @@ impl LogUpGadget {
             );
 
             // Final constraint:
-            let final_val = (AB::ExprEF::from(expected_cumulated) - s_local.clone())
-                * common_denominator
-                - numerator;
+            let final_val = (expected_cumulated - s_local) * common_denominator - numerator;
 
             builder.when_last_row().assert_zero_ext(final_val);
         } else {
@@ -419,7 +417,7 @@ impl LookupGadget for LogUpGadget {
                 RowMajorMatrixView::new_row(&next_main_row),
             );
 
-            let mut row_builder: LookupTraceBuilder<'_, SC> =
+            let row_builder: LookupTraceBuilder<'_, SC> =
                 LookupTraceBuilder::new(main_rows, public_values, permutation_challenges.to_vec());
 
             let mut permutation_counter = 0;
@@ -435,14 +433,14 @@ impl LookupGadget for LogUpGadget {
                     .iter()
                     .map(|elts| {
                         elts.iter()
-                            .map(|e| eval_symbolic(&mut row_builder, e))
+                            .map(|e| eval_symbolic(&row_builder, e))
                             .collect::<Vec<_>>()
                     })
                     .collect::<Vec<_>>();
                 let multiplicities = context
                     .multiplicities_exprs
                     .iter()
-                    .map(|e| eval_symbolic(&mut row_builder, e))
+                    .map(|e| eval_symbolic(&row_builder, e))
                     .collect::<Vec<Val<SC>>>();
 
                 // Combine the elements in the `elements` tuple using beta.
@@ -454,7 +452,7 @@ impl LookupGadget for LogUpGadget {
                 // Sum with multiplicities.
                 let sum: SC::Challenge = combined_elts
                     .iter()
-                    .zip_eq(multiplicities.clone())
+                    .zip_eq(multiplicities)
                     .map(|(e, m)| e.inverse() * SC::Challenge::from(m))
                     .sum();
 
@@ -479,7 +477,6 @@ impl LookupGadget for LogUpGadget {
             }
         }
 
-        let res = RowMajorMatrix::new(aux_trace, width);
-        res
+        RowMajorMatrix::new(aux_trace, width)
     }
 }
