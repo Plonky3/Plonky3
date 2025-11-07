@@ -119,7 +119,7 @@ jobs:
           components: rustfmt
 
       - name: Install cargo-sort
-        run: cargo install cargo-sort --locked
+        run: cargo install cargo-sort
 
       - uses: Swatinem/rust-cache@v2
         
