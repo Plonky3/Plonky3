@@ -1,4 +1,3 @@
-use alloc::format;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
@@ -86,7 +85,7 @@ where
         let bytes_per_constant = F::bits().div_ceil(8) + 1;
         let num_bytes = bytes_per_constant * num_constants;
 
-        let seed_string = format!(
+        let seed_string = alloc::format!(
             "Rescue-XLIX({},{},{},{})",
             F::ORDER_U64,
             WIDTH,
@@ -101,10 +100,8 @@ where
             .into_iter()
             .map(|chunk| {
                 let integer = chunk
-                    .collect_vec()
-                    .iter()
-                    .rev()
-                    .fold(0, |acc, &byte| (acc << 8) + *byte as u64);
+                    .enumerate()
+                    .fold(0, |acc, (i, &byte)| acc + ((byte as u64) << (8 * i)));
                 F::from_u64(integer)
             })
             .collect()
