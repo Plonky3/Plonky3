@@ -154,7 +154,7 @@ impl LogUpGadget {
     fn eval_update<AB>(
         &self,
         builder: &mut AB,
-        context: Lookup<AB::F>,
+        context: &Lookup<AB::F>,
         opt_expected_cumulated: Option<AB::ExprEF>,
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
@@ -283,7 +283,7 @@ impl LookupGadget for LogUpGadget {
     /// `combined_elements[i] = ∑elements[i][n-j] * β^j`.
     ///
     /// This is implemented using a running sum column that should sum to zero.
-    fn eval_local_lookup<AB>(&self, builder: &mut AB, context: Lookup<AB::F>)
+    fn eval_local_lookup<AB>(&self, builder: &mut AB, context: &Lookup<AB::F>)
     where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
     {
@@ -310,7 +310,7 @@ impl LookupGadget for LogUpGadget {
     fn eval_global_update<AB>(
         &self,
         builder: &mut AB,
-        context: Lookup<AB::F>,
+        context: &Lookup<AB::F>,
         expected_cumulated: AB::ExprEF,
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,

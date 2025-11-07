@@ -22,7 +22,7 @@ pub struct CommonData<F: Field> {
 }
 
 impl<F: Field> CommonData<F> {
-    pub fn new(lookups: Vec<Vec<Lookup<F>>>) -> Self {
+    pub const fn new(lookups: Vec<Vec<Lookup<F>>>) -> Self {
         Self { lookups }
     }
 }
@@ -44,7 +44,7 @@ where
     CommonData { lookups }
 }
 
-pub(crate) fn get_perm_challenges<'a, SC: SGC, LG: LookupGadget, A>(
+pub(crate) fn get_perm_challenges<SC: SGC, LG: LookupGadget, A>(
     challenger: &mut SC::Challenger,
     all_lookups: &[Vec<Lookup<Val<SC>>>],
     airs: &[A],

@@ -10,8 +10,7 @@ use p3_lookup::lookup_traits::{
 };
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_maybe_rayon::prelude::IndexedParallelIterator;
-use p3_maybe_rayon::prelude::IntoParallelIterator;
+use p3_maybe_rayon::prelude::*;
 use p3_uni_stark::{
     OpenedValues, PackedChallenge, PackedVal, ProverConstraintFolder, SymbolicAirBuilder,
     SymbolicExpression,
@@ -69,13 +68,13 @@ pub fn prove_batch<
     LG,
 >(
     config: &SC,
-    instances: Vec<StarkInstance<'_, SC, A>>,
+    instances: &[StarkInstance<'_, SC, A>],
     lookup_gadget: &LG,
 ) -> BatchProof<SC>
 where
     SC: SGC,
     SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
-    LG: LookupGadget,
+    LG: LookupGadget + Sync,
 {
     let pcs = config.pcs();
     let mut challenger = config.initialise_challenger();
@@ -178,7 +177,7 @@ where
     // Observe main commitment and all public values (as base field elements).
     challenger.observe(main_commit.clone());
     for pv in &pub_vals {
-        challenger.observe_slice(*pv);
+        challenger.observe_slice(pv);
     }
 
     // Sample the lookup challenges.
@@ -204,16 +203,21 @@ where
                     .push((ext_domain, generated_perm.clone().flatten_to_base()));
 
                 #[cfg(debug_assertions)]
-                check_constraints(
-                    inst.air,
-                    &inst.trace,
-                    &generated_perm,
-                    &challenges_per_instance[i],
-                    &inst.public_values,
-                    &all_lookups[i],
-                    &lookup_data[i],
-                    lookup_gadget,
-                );
+                {
+                    let lookup_constraints_inputs = (
+                        all_lookups[i].as_slice(),
+                        lookup_data[i].as_slice(),
+                        lookup_gadget,
+                    );
+                    check_constraints(
+                        inst.air,
+                        &inst.trace,
+                        &generated_perm,
+                        &challenges_per_instance[i],
+                        &inst.public_values,
+                        lookup_constraints_inputs,
+                    );
+                }
             }
         });
 
@@ -277,13 +281,13 @@ where
         };
 
         // Compute quotient(x) = constraints(x)/Z_H(x) over quotient_domain, as extension values.
-        let q_values = quotient_values::<SC, A, _>(
+        let q_values = quotient_values::<SC, A, _, LG>(
             &airs[i],
-            &pub_vals[i],
+            pub_vals[i],
             *trace_domain,
             quotient_domain,
-            trace_on_quotient_domain,
-            permutation_on_quotient_domain,
+            &trace_on_quotient_domain,
+            permutation_on_quotient_domain.as_ref(),
             &all_lookups[i],
             &lookup_data[i],
             lookup_gadget,
@@ -330,7 +334,7 @@ where
             ]
         })
         .collect::<Vec<_>>();
-    let round1 = (&main_data, round1_points.clone());
+    let round1 = (&main_data, round1_points);
     rounds.push(round1);
 
     let round2_points = ext_trace_domains
@@ -450,16 +454,16 @@ where
 #[instrument(name = "compute quotient polynomial", skip_all)]
 // TODO: Group some arguments to remove the `allow`?
 #[allow(clippy::too_many_arguments)]
-pub fn quotient_values<SC, A, Mat>(
+pub fn quotient_values<SC, A, Mat, LG>(
     air: &A,
     public_values: &Vec<Val<SC>>,
     trace_domain: Domain<SC>,
     quotient_domain: Domain<SC>,
-    trace_on_quotient_domain: Mat,
-    opt_permutation_on_quotient_domain: Option<Mat>,
+    trace_on_quotient_domain: &Mat,
+    opt_permutation_on_quotient_domain: Option<&Mat>,
     lookups: &[Lookup<Val<SC>>],
     lookup_data: &[LookupData<SC::Challenge>],
-    lookup_gadget: &impl LookupGadget,
+    lookup_gadget: &LG,
     permutation_challenges: &[SC::Challenge],
     alpha: SC::Challenge,
     constraint_count: usize,
@@ -468,13 +472,13 @@ where
     SC: SGC,
     A: for<'a> AirLookupHandler<ProverConstraintFolderWithLookups<'a, SC>>,
     Mat: Matrix<Val<SC>> + Sync,
+    LG: LookupGadget + Sync,
 {
     let quotient_size = quotient_domain.size();
     let main_width = trace_on_quotient_domain.width();
-    let (perm_width, perm_height) = match &opt_permutation_on_quotient_domain {
-        Some(mat) => (mat.width(), mat.height()),
-        None => (0, 0),
-    };
+    let (perm_width, perm_height) = opt_permutation_on_quotient_domain
+        .as_ref()
+        .map_or((0, 0), |mat| (mat.width(), mat.height()));
 
     let ext_degree = SC::Challenge::DIMENSION;
 
@@ -508,7 +512,7 @@ where
     (0..quotient_size)
         .into_par_iter()
         .step_by(PackedVal::<SC>::WIDTH)
-        .flat_map(|i_start| {
+        .flat_map_iter(|i_start| {
             let i_range = i_start..i_start + PackedVal::<SC>::WIDTH;
 
             let is_first_row = *PackedVal::<SC>::from_slice(&sels.is_first_row[i_range.clone()]);
@@ -523,8 +527,9 @@ where
             );
 
             // Retrieve permutation trace as a matrix evaluated on the quotient domain.
-            let permutation =
-                if let Some(permutation_on_quotient_domain) = &opt_permutation_on_quotient_domain {
+            let permutation = opt_permutation_on_quotient_domain.as_ref().map_or_else(
+                || RowMajorMatrix::new(vec![], 0),
+                |permutation_on_quotient_domain| {
                     let perms = (0..perm_width)
                         .step_by(ext_degree)
                         .map(|col| {
@@ -547,9 +552,8 @@ where
                         }));
 
                     RowMajorMatrix::new(perms.collect::<Vec<_>>(), perm_width / ext_degree)
-                } else {
-                    RowMajorMatrix::new(vec![], 0)
-                };
+                },
+            );
 
             let accumulator = PackedChallenge::<SC>::ZERO;
             let inner_folder = ProverConstraintFolder {
@@ -574,9 +578,9 @@ where
                 permutation_challenges: &packed_perm_challenges,
             };
             <A as AirLookupHandler<ProverConstraintFolderWithLookups<'_, SC>>>::eval(
-                &air,
+                air,
                 &mut folder,
-                &lookups,
+                lookups,
                 lookup_data,
                 lookup_gadget,
             );
@@ -605,7 +609,7 @@ pub fn prove_batch_no_lookups<
         + Clone,
 >(
     config: &SC,
-    instances: Vec<StarkInstance<'_, SC, A>>,
+    instances: &[StarkInstance<'_, SC, A>],
 ) -> BatchProof<SC>
 where
     SC: SGC,

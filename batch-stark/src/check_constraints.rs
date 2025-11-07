@@ -10,6 +10,8 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::{VerticalPair, ViewPair};
 use tracing::instrument;
 
+type LookupConstraintsInputs<'a, F, EF, LG> = (&'a [Lookup<F>], &'a [LookupData<EF>], &'a LG);
+
 /// Runs constraint checks using a given AIR definition and trace matrix.
 ///
 /// Iterates over every row in `main`, providing both the current and next row
@@ -21,15 +23,13 @@ use tracing::instrument;
 /// - `main`: The trace matrix (rows of witness values)
 /// - `public_values`: Public values provided to the builder
 #[instrument(name = "check constraints", skip_all)]
-pub(crate) fn check_constraints<F, EF, A, LG>(
+pub(crate) fn check_constraints<'b, F, EF, A, LG>(
     air: &A,
     main: &RowMajorMatrix<F>,
     permutation: &RowMajorMatrix<EF>,
     permutation_challenges: &[EF],
     public_values: &Vec<F>,
-    lookups: &[Lookup<F>],
-    lookup_data: &[LookupData<EF>],
-    lookup_gadget: &LG,
+    lookup_constraints_inputs: LookupConstraintsInputs<'b, F, EF, LG>,
 ) where
     F: Field,
     EF: ExtensionField<F>,
@@ -37,6 +37,8 @@ pub(crate) fn check_constraints<F, EF, A, LG>(
     LG: LookupGadget,
 {
     let height = main.height();
+
+    let (lookups, lookup_data, lookup_gadget) = lookup_constraints_inputs;
 
     (0..height).for_each(|row_index| {
         let row_index_next = (row_index + 1) % height;
@@ -71,7 +73,7 @@ pub(crate) fn check_constraints<F, EF, A, LG>(
         };
 
         <A as AirLookupHandler<DebugConstraintBuilderWithLookups<'_, F, EF>>>::eval(
-            &air,
+            air,
             &mut builder,
             lookups,
             lookup_data,

@@ -102,7 +102,7 @@ where
     );
 
     // Evaluate AIR and lookup constraints.
-    <A as AirLookupHandler<_>>::eval(air, &mut builder, &contexts, &lookup_data, lookup_gadget);
+    <A as AirLookupHandler<_>>::eval(air, &mut builder, contexts, lookup_data, lookup_gadget);
     let base_constraints = builder.base_constraints();
     let extension_constraints = builder.extension_constraints();
     (base_constraints, extension_constraints)

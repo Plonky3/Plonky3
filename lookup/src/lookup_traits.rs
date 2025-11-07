@@ -56,7 +56,7 @@ pub trait LookupGadget {
     /// For example, in LogUp:
     /// - this checks that the running sum is updated correctly.
     /// - it checks that the final value of the running sum is 0.
-    fn eval_local_lookup<AB>(&self, builder: &mut AB, context: Lookup<AB::F>)
+    fn eval_local_lookup<AB>(&self, builder: &mut AB, context: &Lookup<AB::F>)
     where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues;
 
@@ -70,7 +70,7 @@ pub trait LookupGadget {
     fn eval_global_update<AB>(
         &self,
         builder: &mut AB,
-        context: Lookup<AB::F>,
+        context: &Lookup<AB::F>,
         expected_cumulated: AB::ExprEF,
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues;
@@ -88,7 +88,7 @@ pub trait LookupGadget {
         for context in contexts.iter() {
             match &context.kind {
                 Kind::Local => {
-                    self.eval_local_lookup(builder, context.clone());
+                    self.eval_local_lookup(builder, context);
                 }
                 Kind::Global(_) => {
                     // Find the expected cumulated value for this context.
@@ -104,7 +104,7 @@ pub trait LookupGadget {
                         panic!("Expected cumulated values not sorted by auxiliary index");
                     }
                     let expr_ef_expected = AB::ExprEF::from(*expected_cumulated);
-                    self.eval_global_update(builder, context.clone(), expr_ef_expected);
+                    self.eval_global_update(builder, context, expr_ef_expected);
                 }
             }
         }
@@ -438,7 +438,7 @@ impl LookupGadget for EmptyLookupGadget {
         0
     }
 
-    fn eval_local_lookup<AB>(&self, _builder: &mut AB, _context: Lookup<AB::F>)
+    fn eval_local_lookup<AB>(&self, _builder: &mut AB, _context: &Lookup<AB::F>)
     where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
     {
@@ -447,7 +447,7 @@ impl LookupGadget for EmptyLookupGadget {
     fn eval_global_update<AB>(
         &self,
         _builder: &mut AB,
-        _context: Lookup<AB::F>,
+        _context: &Lookup<AB::F>,
         _expected_cumulated: AB::ExprEF,
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,

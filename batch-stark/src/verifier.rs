@@ -143,7 +143,7 @@ where
 
     // Fetch lookups and sample their challenges.
     let challenges_per_instance =
-        get_perm_challenges::<SC, LG, A>(&mut challenger, &all_lookups, airs, lookup_gadget);
+        get_perm_challenges::<SC, LG, A>(&mut challenger, all_lookups, airs, lookup_gadget);
 
     // Then, observe the permutation tables, if any.
     if is_lookup {
@@ -224,7 +224,7 @@ where
                 ));
             }
         }
-        coms_to_verify.push((permutation_commit.clone(), permutation_round));
+        coms_to_verify.push((permutation_commit, permutation_round));
     }
 
     // Quotient chunks round: flatten per-instance chunks to match commit order.
