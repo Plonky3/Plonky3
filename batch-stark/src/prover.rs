@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 #[cfg(debug_assertions)]
 use crate::check_constraints::DebugConstraintBuilderWithLookups;
 use crate::check_constraints::check_constraints;
-use crate::common::get_perm_challenges;
+use crate::common::{CommonData, get_perm_challenges};
 use crate::config::{Challenge, Domain, SGC, Val, observe_base_as_ext, observe_instance_binding};
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof, OpenedValuesWithLookups};
 use crate::symbolic::{get_log_quotient_degree, get_symbolic_constraints};
@@ -42,12 +42,12 @@ impl<'a, SC: SGC, A> StarkInstance<'a, SC, A> {
         airs: &'a [A],
         traces: &[RowMajorMatrix<Val<SC>>],
         public_values: &[Vec<Val<SC>>],
-        lookups: &[Vec<Lookup<Val<SC>>>],
+        common_data: &CommonData<Val<SC>>,
     ) -> Vec<Self> {
         airs.iter()
             .zip(traces.iter())
             .zip(public_values.iter())
-            .zip(lookups.iter())
+            .zip(common_data.lookups.iter())
             .map(|(((air, trace), public_values), lookups)| Self {
                 air,
                 trace: trace.clone(),

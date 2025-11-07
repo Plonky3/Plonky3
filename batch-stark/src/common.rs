@@ -12,6 +12,7 @@ use p3_uni_stark::{SymbolicAirBuilder, SymbolicExpression, Val};
 
 /// Struct storing data common to both the prover and verifier.
 /// TODO: Add preprocessed commitments.
+#[derive(Debug)]
 pub struct CommonData<F: Field> {
     /// The lookups used by each STARK instance.
     pub lookups: Vec<Vec<Lookup<F>>>,

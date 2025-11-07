@@ -948,34 +948,23 @@ fn test_batch_stark_one_instance_local_only() -> Result<(), impl Debug> {
 
     let mul_trace = mul_trace::<Val>(8, reps);
 
-    // Use the enum wrapper for heterogeneous types
-    let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups).clone();
-
-    let mut airs = [air1.clone()];
+    let mut airs = [DemoAirWithLookups::MulLookups(mul_air_lookups).clone()];
 
     // Get lookups from the lookup-enabled AIRs
-    let all_airs_lookups = common_data::<MyConfig, _>(&mut airs).lookups;
+    let common_data = common_data::<MyConfig, _>(&mut airs);
 
-    let mul_lookups = all_airs_lookups[0].clone();
-
-    let instances = vec![StarkInstance {
-        air: &airs[0],
-        trace: mul_trace,
-        public_values: vec![],
-        lookups: mul_lookups,
-    }];
+    let instances = StarkInstance::new_multiple(&airs, &[mul_trace], &[vec![]], &common_data);
 
     let lookup_gadget = LogUpGadget::new();
     let proof = prove_batch(&config, instances, &lookup_gadget);
 
-    let mut airs = vec![air1];
     let pvs = vec![vec![]];
     verify_batch(
         &config,
         &mut airs,
         &proof,
         &pvs,
-        &all_airs_lookups,
+        &common_data,
         &lookup_gadget,
     )
 }
@@ -1002,25 +991,14 @@ fn test_batch_stark_local_lookups_only() -> Result<(), impl Debug> {
     let mut airs = [air1.clone(), air2.clone()];
 
     // Get lookups from the lookup-enabled AIRs
-    let all_airs_lookups = common_data::<MyConfig, _>(&mut airs).lookups;
+    let common_data = common_data::<MyConfig, _>(&mut airs);
 
-    let mul_lookups = all_airs_lookups[0].clone();
-    let fib_lookups = all_airs_lookups[1].clone();
-
-    let instances = vec![
-        StarkInstance {
-            air: &airs[0],
-            trace: mul_trace,
-            public_values: vec![],
-            lookups: mul_lookups,
-        },
-        StarkInstance {
-            air: &airs[1],
-            trace: fib_trace,
-            public_values: fib_pis.clone(),
-            lookups: fib_lookups,
-        },
-    ];
+    let instances = StarkInstance::new_multiple(
+        &airs,
+        &[mul_trace, fib_trace],
+        &[vec![], fib_pis.clone()],
+        &common_data,
+    );
 
     let lookup_gadget = LogUpGadget::new();
     let proof = prove_batch(&config, instances, &lookup_gadget);
@@ -1032,7 +1010,7 @@ fn test_batch_stark_local_lookups_only() -> Result<(), impl Debug> {
         &mut airs,
         &proof,
         &pvs,
-        &all_airs_lookups,
+        &common_data,
         &lookup_gadget,
     )
 }
@@ -1066,25 +1044,14 @@ fn test_batch_stark_global_lookups_only() -> Result<(), impl Debug> {
 
     // Get lookups from the lookup-enabled AIRs
     let mut airs = [air1.clone(), air2.clone()];
-    let all_airs_lookups = common_data::<MyConfig, _>(&mut airs).lookups;
+    let common_data = common_data::<MyConfig, _>(&mut airs);
 
-    let mul_lookups = all_airs_lookups[0].clone();
-    let fib_lookups = all_airs_lookups[1].clone();
-
-    let instances = vec![
-        StarkInstance {
-            air: &airs[0],
-            trace: mul_trace,
-            public_values: vec![],
-            lookups: mul_lookups,
-        },
-        StarkInstance {
-            air: &air2,
-            trace: fib_trace,
-            public_values: fib_pis.clone(),
-            lookups: fib_lookups,
-        },
-    ];
+    let instances = StarkInstance::new_multiple(
+        &airs,
+        &[mul_trace, fib_trace],
+        &[vec![], fib_pis.clone()],
+        &common_data,
+    );
 
     let lookup_gadget = LogUpGadget::new();
     let proof = prove_batch(&config, instances, &lookup_gadget);
@@ -1096,7 +1063,7 @@ fn test_batch_stark_global_lookups_only() -> Result<(), impl Debug> {
         &mut airs,
         &proof,
         &pvs,
-        &all_airs_lookups,
+        &common_data,
         &lookup_gadget,
     )
 }
@@ -1128,25 +1095,14 @@ fn test_batch_stark_both_lookups() -> Result<(), impl Debug> {
 
     let mut airs = [air1.clone(), air2.clone()];
     // Get lookups from the lookup-enabled AIRs
-    let all_airs_lookups = common_data::<MyConfig, _>(&mut airs).lookups;
+    let common_data = common_data::<MyConfig, _>(&mut airs);
 
-    let mul_lookups = all_airs_lookups[0].clone();
-    let fib_lookups = all_airs_lookups[1].clone();
-
-    let instances = vec![
-        StarkInstance {
-            air: &airs[0],
-            trace: mul_trace,
-            public_values: vec![],
-            lookups: mul_lookups,
-        },
-        StarkInstance {
-            air: &airs[1],
-            trace: fib_trace,
-            public_values: fib_pis.clone(),
-            lookups: fib_lookups,
-        },
-    ];
+    let instances = StarkInstance::new_multiple(
+        &airs,
+        &[mul_trace, fib_trace],
+        &[vec![], fib_pis.clone()],
+        &common_data,
+    );
 
     let lookup_gadget = LogUpGadget::new();
     let proof = prove_batch(&config, instances, &lookup_gadget);
@@ -1158,7 +1114,7 @@ fn test_batch_stark_both_lookups() -> Result<(), impl Debug> {
         &mut airs,
         &proof,
         &pvs,
-        &all_airs_lookups,
+        &common_data,
         &lookup_gadget,
     )
 }
@@ -1197,9 +1153,9 @@ fn test_batch_stark_failed_global_lookup() {
 
     // Get lookups from the lookup-enabled AIRs
     let mut airs = [air1.clone(), air2.clone()];
-    let all_airs_lookups = common_data::<MyConfig, _>(&mut airs).lookups;
+    let common_data = common_data::<MyConfig, _>(&mut airs);
 
-    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, &all_airs_lookups);
+    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, &common_data);
 
     let lookup_gadget = LogUpGadget::new();
     let proof = prove_batch(&config, instances, &lookup_gadget);
@@ -1213,7 +1169,7 @@ fn test_batch_stark_failed_global_lookup() {
         &mut airs,
         &proof,
         &pvs,
-        &all_airs_lookups,
+        &common_data,
         &lookup_gadget,
     )
     .unwrap();
@@ -1285,8 +1241,8 @@ fn test_batch_stark_mixed_lookups() -> Result<(), impl Debug> {
         air_mul_with_local_lookups,
     ];
 
-    // Get all lookups.
-    let all_airs_lookups = common_data::<MyConfig, _>(&mut all_airs).lookups;
+    // Get all lookups
+    let common_data = common_data::<MyConfig, _>(&mut all_airs);
 
     let traces = vec![
         mul_with_lookups_trace.clone(),
@@ -1297,6 +1253,7 @@ fn test_batch_stark_mixed_lookups() -> Result<(), impl Debug> {
         mul_with_lookups_trace,
     ];
 
+    // Get all public values
     let all_pvs = vec![
         vec![],                       // mul with lookups
         fib_no_lookups_pis,           // fib no lookups
@@ -1307,7 +1264,7 @@ fn test_batch_stark_mixed_lookups() -> Result<(), impl Debug> {
     ];
 
     // Create instances - mixing lookup and non-lookup instances
-    let instances = StarkInstance::new_multiple(&all_airs, &traces, &all_pvs, &all_airs_lookups);
+    let instances = StarkInstance::new_multiple(&all_airs, &traces, &all_pvs, &common_data);
 
     let lookup_gadget = LogUpGadget::new();
     let proof = prove_batch(&config, instances, &lookup_gadget);
@@ -1318,7 +1275,7 @@ fn test_batch_stark_mixed_lookups() -> Result<(), impl Debug> {
         &mut all_airs,
         &proof,
         &all_pvs,
-        &all_airs_lookups,
+        &common_data,
         &lookup_gadget,
     )
 }

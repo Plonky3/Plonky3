@@ -20,7 +20,7 @@ use p3_uni_stark::{
 use p3_util::zip_eq::zip_eq;
 use tracing::instrument;
 
-use crate::common::get_perm_challenges;
+use crate::common::{CommonData, get_perm_challenges};
 use crate::config::{
     Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val, observe_base_as_ext,
     observe_instance_binding,
@@ -34,7 +34,7 @@ pub fn verify_batch<SC, A, LG>(
     airs: &mut [A],
     proof: &BatchProof<SC>,
     public_values: &[Vec<Val<SC>>],
-    all_lookups: &[Vec<Lookup<Val<SC>>>],
+    common_data: &CommonData<Val<SC>>,
     lookup_gadget: &LG,
 ) -> Result<(), VerificationError<PcsError<SC>>>
 where
@@ -52,6 +52,8 @@ where
         global_lookup_data,
         degree_bits,
     } = proof;
+
+    let all_lookups = &common_data.lookups;
 
     let pcs = config.pcs();
     let mut challenger = config.initialise_challenger();
@@ -447,12 +449,14 @@ where
 
     let empty_lookup_gadget = EmptyLookupGadget {};
 
+    let empty_common_data = CommonData::new(vec![vec![]; airs.len()]);
+
     verify_batch(
         config,
         &mut no_lookup_airs,
         proof,
         public_values,
-        &vec![vec![]; airs.len()],
+        &empty_common_data,
         &empty_lookup_gadget,
     )
 }
