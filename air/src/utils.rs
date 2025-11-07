@@ -2,7 +2,6 @@
 
 use core::array;
 
-use p3_field::integers::QuotientMap;
 use p3_field::{Field, PrimeCharacteristicRing};
 
 use crate::AirBuilder;
