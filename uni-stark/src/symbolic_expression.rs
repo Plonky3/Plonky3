@@ -56,13 +56,12 @@ use alloc::rc::Rc;
 use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+
 use p3_baby_bear::BabyBear;
-use p3_field::ExtensionField;
 use p3_field::extension::BinomialExtensionField;
+use p3_field::{Algebra, ExtensionField, Field, InjectiveMonomial, PrimeCharacteristicRing};
 use p3_koala_bear::KoalaBear;
 use p3_mersenne_31::Mersenne31;
-
-use p3_field::{Algebra, Field, InjectiveMonomial, PrimeCharacteristicRing};
 
 use crate::symbolic_variable::SymbolicVariable;
 

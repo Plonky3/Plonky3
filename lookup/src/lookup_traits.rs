@@ -1,12 +1,13 @@
+use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
-use alloc::{string::String, vec};
 use core::ops::Neg;
+
 use p3_air::{
     Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, ExtensionBuilder, PairBuilder,
     PermutationAirBuilder,
 };
-use p3_field::Field;
-use p3_field::PrimeCharacteristicRing;
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::ViewPair;

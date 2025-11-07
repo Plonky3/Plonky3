@@ -2,13 +2,16 @@
 //!
 //! For example, we get the lookups before calling either `prove_multi` or `verify_multi`, and we can pass the lookup data to both the prover and verifier.
 
-use crate::{Challenge, config::SGC};
 use alloc::vec::Vec;
+
 use hashbrown::HashMap;
 use p3_challenger::FieldChallenger;
 use p3_field::{BasedVectorSpace, Field};
 use p3_lookup::lookup_traits::{AirLookupHandler, Kind, Lookup, LookupGadget};
 use p3_uni_stark::{SymbolicAirBuilder, SymbolicExpression, Val};
+
+use crate::Challenge;
+use crate::config::SGC;
 
 /// Struct storing data common to both the prover and verifier.
 /// TODO: Add preprocessed commitments.

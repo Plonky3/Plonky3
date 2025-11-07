@@ -29,8 +29,7 @@ use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
 };
-use p3_uni_stark::StarkConfig;
-use p3_uni_stark::{SymbolicAirBuilder, SymbolicExpression};
+use p3_uni_stark::{StarkConfig, SymbolicAirBuilder, SymbolicExpression};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 

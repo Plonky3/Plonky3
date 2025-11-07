@@ -1,6 +1,23 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+use p3_challenger::{CanObserve, FieldChallenger};
+use p3_commit::{Pcs, PolynomialSpace};
+use p3_field::{BasedVectorSpace, PackedValue, PrimeCharacteristicRing};
+use p3_lookup::folders::ProverConstraintFolderWithLookups;
+use p3_lookup::lookup_traits::{
+    AirLookupHandler, EmptyLookupGadget, Kind, Lookup, LookupData, LookupGadget,
+};
+use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
+use p3_maybe_rayon::prelude::{IntoParallelIterator, ParIterExt};
+use p3_uni_stark::{
+    OpenedValues, PackedChallenge, PackedVal, ProverConstraintFolder, SymbolicAirBuilder,
+    SymbolicExpression,
+};
+use p3_util::log2_strict_usize;
+use tracing::{debug_span, instrument};
+
 #[cfg(debug_assertions)]
 use crate::check_constraints::DebugConstraintBuilderWithLookups;
 use crate::check_constraints::check_constraints;
@@ -8,26 +25,6 @@ use crate::common::{CommonData, get_perm_challenges};
 use crate::config::{Challenge, Domain, SGC, Val, observe_base_as_ext, observe_instance_binding};
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof, OpenedValuesWithLookups};
 use crate::symbolic::{get_log_quotient_degree, get_symbolic_constraints};
-use p3_challenger::{CanObserve, FieldChallenger};
-use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::BasedVectorSpace;
-use p3_field::PackedValue;
-use p3_field::PrimeCharacteristicRing;
-use p3_lookup::folders::ProverConstraintFolderWithLookups;
-use p3_lookup::lookup_traits::{
-    AirLookupHandler, EmptyLookupGadget, Kind, Lookup, LookupData, LookupGadget,
-};
-
-use p3_matrix::Matrix;
-use p3_matrix::dense::RowMajorMatrix;
-use p3_maybe_rayon::prelude::IntoParallelIterator;
-use p3_maybe_rayon::prelude::ParIterExt;
-use p3_uni_stark::{
-    OpenedValues, PackedChallenge, PackedVal, ProverConstraintFolder, SymbolicAirBuilder,
-    SymbolicExpression,
-};
-use p3_util::log2_strict_usize;
-use tracing::{debug_span, instrument};
 
 #[derive(Debug)]
 pub struct StarkInstance<'a, SC: SGC, A> {

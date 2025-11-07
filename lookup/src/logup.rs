@@ -25,11 +25,9 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_air::{AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder, PermutationAirBuilder};
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_matrix::{
-    Matrix,
-    dense::{RowMajorMatrix, RowMajorMatrixView},
-    stack::VerticalPair,
-};
+use p3_matrix::Matrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
+use p3_matrix::stack::VerticalPair;
 use p3_uni_stark::{LookupError, StarkGenericConfig, Val};
 
 use crate::lookup_traits::{

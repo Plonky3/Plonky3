@@ -1,7 +1,8 @@
 use p3_air::{
     AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder, PermutationAirBuilder,
 };
-use p3_matrix::{dense::RowMajorMatrixView, stack::ViewPair};
+use p3_matrix::dense::RowMajorMatrixView;
+use p3_matrix::stack::ViewPair;
 use p3_uni_stark::{
     PackedChallenge, PackedVal, ProverConstraintFolder, StarkGenericConfig, Val,
     VerifierConstraintFolder,
