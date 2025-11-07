@@ -8,7 +8,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: 1
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: -C debuginfo=0
 
 jobs:
   build_and_test:
@@ -30,32 +31,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         id: rs-stable
 
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ matrix.os }}-${{ matrix.features }}-${{ hashFiles('**/Cargo.toml') }}
+      # Smarter cache for Rust builds; avoids overfilling the runner disk.
+      - uses: Swatinem/rust-cache@v2
 
       - name: Set flags
         if: ${{ matrix.features }}
         run: |
-          echo "RUSTFLAGS=-Ctarget-feature=${{ matrix.features }}" >> "$GITHUB_ENV"
+          # Append AVX2 to existing flags so we keep -C debuginfo=0.
+          echo "RUSTFLAGS=$RUSTFLAGS -C target-feature=${{ matrix.features }}" >> "$GITHUB_ENV"
 
-      - name: Build
-        run: cargo build --verbose --all-targets
-
-      - name: Check with parallel
-        run: cargo check --verbose --all-targets --features parallel
 
       - name: Test
-        run: cargo test --verbose
+        run: cargo test
 
       - name: Test with parallel
-        run: cargo test --verbose --features parallel
+        run: cargo test --features parallel
 
   check_embedded:
     name: Build embedded
@@ -73,15 +63,7 @@ jobs:
           targets: ${{ env.target }}
         id: rs-stable
 
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ env.target }}-${{ hashFiles('**/Cargo.toml') }}
+      - uses: Swatinem/rust-cache@v2
 
       # NB: We omit, p3-field-testing, and p3-examples as they currently depend on std
       # and hence don't compile on the given target.
@@ -139,15 +121,7 @@ jobs:
       - name: Install cargo-sort
         run: cargo install cargo-sort
 
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: rust-${{ steps.rs-stable.outputs.rustc_hash }}-${{ hashFiles('**/Cargo.toml') }}
+      - uses: Swatinem/rust-cache@v2
         
       - name: Sort Cargo.toml
         run: cargo +stable sort --workspace --grouped --check

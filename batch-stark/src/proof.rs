@@ -6,14 +6,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{Challenge, Commitment, PcsProof, StarkGenericConfig};
 
-/// A proof of multiple STARK instances.
+/// A proof of batched STARK instances.
 #[derive(Serialize, Deserialize)]
 #[serde(bound = "")]
-pub struct MultiProof<SC: StarkGenericConfig> {
+pub struct BatchProof<SC: StarkGenericConfig> {
     /// Commitments to all trace and quotient polynomials.
-    pub commitments: MultiCommitments<Commitment<SC>>,
+    pub commitments: BatchCommitments<Commitment<SC>>,
     /// Opened values at the out-of-domain point for all instances.
-    pub opened_values: MultiOpenedValues<Challenge<SC>>,
+    pub opened_values: BatchOpenedValues<Challenge<SC>>,
     /// PCS opening proof for all commitments.
     pub opening_proof: PcsProof<SC>,
     /// Data necessary to verify the global lookup arguments across all instances.
@@ -23,9 +23,9 @@ pub struct MultiProof<SC: StarkGenericConfig> {
     pub degree_bits: Vec<usize>,
 }
 
-/// Commitments for a multi-STARK proof.
+/// Commitments for a batch-STARK proof.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct MultiCommitments<Com> {
+pub struct BatchCommitments<Com> {
     /// Commitment to all main trace matrices (one per instance).
     pub main: Com,
     /// Commitment to all permutation polynomials (one per instance).
@@ -40,9 +40,11 @@ pub struct OpenedValuesWithLookups<Challenge> {
     pub permutation_local: Vec<Challenge>,
     pub permutation_next: Vec<Challenge>,
 }
-/// Opened values for all instances in a multi-STARK proof.
+
+/// Opened values for all instances in a batch-STARK proof.
+
 #[derive(Debug, Serialize, Deserialize)]
-pub struct MultiOpenedValues<Challenge> {
+pub struct BatchOpenedValues<Challenge> {
     /// Opened values for each instance, in the same order as provided to the prover.
     pub instances: Vec<OpenedValuesWithLookups<Challenge>>,
 }

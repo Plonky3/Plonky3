@@ -25,14 +25,14 @@ use crate::config::{
     Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val, observe_base_as_ext,
     observe_instance_binding,
 };
-use crate::proof::MultiProof;
+use crate::proof::BatchProof;
 use crate::symbolic::get_log_quotient_degree;
 
 #[instrument(skip_all)]
-pub fn verify_multi<SC, A, LG>(
+pub fn verify_batch<SC, A, LG>(
     config: &SC,
     airs: &mut [A],
-    proof: &MultiProof<SC>,
+    proof: &BatchProof<SC>,
     public_values: &[Vec<Val<SC>>],
     lookup_gadget: &LG,
 ) -> Result<(), VerificationError<PcsError<SC>>>
@@ -44,7 +44,7 @@ where
     Challenge<SC>: BasedVectorSpace<Val<SC>>,
     LG: LookupGadget,
 {
-    let MultiProof {
+    let BatchProof {
         commitments,
         opened_values,
         opening_proof,
@@ -57,12 +57,7 @@ where
 
     // ZK mode is not supported yet
     if config.is_zk() != 0 {
-        panic!("p3-multi-stark: ZK mode is not supported yet");
-    }
-
-    // ZK mode is not supported yet
-    if config.is_zk() != 0 {
-        panic!("p3-multi-stark: ZK mode is not supported yet");
+        panic!("p3-batch-stark: ZK mode is not supported yet");
     }
 
     // Sanity checks
@@ -434,10 +429,10 @@ where
     Ok(())
 }
 
-pub fn verify_multi_no_lookups<SC, A>(
+pub fn verify_batch_no_lookups<SC, A>(
     config: &SC,
     airs: &[A],
-    proof: &MultiProof<SC>,
+    proof: &BatchProof<SC>,
     public_values: &[Vec<Val<SC>>],
 ) -> Result<(), VerificationError<PcsError<SC>>>
 where
@@ -455,7 +450,7 @@ where
 
     let empty_lookup_gadget = EmptyLookupGadget {};
 
-    verify_multi(
+    verify_batch(
         config,
         &mut no_lookup_airs,
         proof,

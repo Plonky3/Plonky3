@@ -6,7 +6,7 @@ use crate::check_constraints::DebugConstraintBuilderWithLookups;
 use crate::check_constraints::check_constraints;
 use crate::common::get_perm_challenges;
 use crate::config::{Challenge, Domain, SGC, Val, observe_base_as_ext, observe_instance_binding};
-use crate::proof::{MultiCommitments, MultiOpenedValues, MultiProof, OpenedValuesWithLookups};
+use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof, OpenedValuesWithLookups};
 use crate::symbolic::{get_log_quotient_degree, get_symbolic_constraints};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
@@ -29,7 +29,7 @@ use p3_uni_stark::{
 use p3_util::log2_strict_usize;
 use tracing::{debug_span, instrument};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct StarkInstance<'a, SC: SGC, A> {
     pub air: &'a A,
     pub trace: RowMajorMatrix<Val<SC>>,
@@ -59,7 +59,7 @@ impl<'a, SC: SGC, A> StarkInstance<'a, SC, A> {
 }
 
 #[instrument(skip_all)]
-pub fn prove_multi<
+pub fn prove_batch<
     SC,
     #[cfg(debug_assertions)] A: for<'a> AirLookupHandler<DebugConstraintBuilderWithLookups<'a, Val<SC>, SC::Challenge>>
         + AirLookupHandler<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
@@ -73,7 +73,7 @@ pub fn prove_multi<
     config: &SC,
     instances: Vec<StarkInstance<'_, SC, A>>,
     lookup_gadget: &LG,
-) -> MultiProof<SC>
+) -> BatchProof<SC>
 where
     SC: SGC,
     SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
@@ -82,9 +82,9 @@ where
     let pcs = config.pcs();
     let mut challenger = config.initialise_challenger();
 
-    // TODO: No ZK support for multi-stark yet.
+    // TODO: No ZK support for batch-stark yet.
     if config.is_zk() != 0 {
-        panic!("p3-multi-stark: ZK mode is not supported yet");
+        panic!("p3-batch-stark: ZK mode is not supported yet");
     }
 
     // Use instances in provided order.
@@ -169,7 +169,7 @@ where
         );
     }
 
-    // Commit to all traces in one multi-matrix commitment, preserving input order.
+    // Commit to all traces using a single batched commitment, preserving input order.
     let main_commit_inputs = instances
         .iter()
         .zip(ext_trace_domains.iter())
@@ -240,7 +240,7 @@ where
     let mut quotient_chunk_ranges: Vec<(usize, usize)> = Vec::with_capacity(n_instances);
 
     let mut perm_counter = 0;
-    // TODO: Parallelize this loop for better performance with multiple instances.
+    // TODO: Parallelize this loop for better performance with many instances.
     for (i, trace_domain) in trace_domains.iter().enumerate() {
         let lqd = log_quotient_degrees[i];
         let quotient_degree = quotient_degrees[i];
@@ -434,13 +434,13 @@ where
     let opt_permutation_commit = opt_permutation_commit_and_data
         .as_ref()
         .map(|(comm, _)| comm.clone());
-    MultiProof {
-        commitments: MultiCommitments {
+    BatchProof {
+        commitments: BatchCommitments {
             main: main_commit,
             quotient_chunks: quotient_commit,
             permutation: opt_permutation_commit,
         },
-        opened_values: MultiOpenedValues {
+        opened_values: BatchOpenedValues {
             instances: per_instance,
         },
         opening_proof,
@@ -596,7 +596,7 @@ where
         .collect()
 }
 
-pub fn prove_multi_no_lookups<
+pub fn prove_batch_no_lookups<
     SC,
     #[cfg(debug_assertions)] A: for<'a> AirLookupHandler<DebugConstraintBuilderWithLookups<'a, Val<SC>, SC::Challenge>>
         + AirLookupHandler<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
@@ -608,11 +608,11 @@ pub fn prove_multi_no_lookups<
 >(
     config: &SC,
     instances: Vec<StarkInstance<'_, SC, A>>,
-) -> MultiProof<SC>
+) -> BatchProof<SC>
 where
     SC: SGC,
     SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
 {
     let dummy_lookup_gadget = EmptyLookupGadget;
-    prove_multi(config, instances, &dummy_lookup_gadget)
+    prove_batch(config, instances, &dummy_lookup_gadget)
 }

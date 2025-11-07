@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "air",
     "baby-bear",
+    "batch-stark",
     "blake3",
     "blake3-air",
     "bn254",
@@ -27,7 +28,6 @@ members = [
     "mersenne-31",
     "monolith",
     "monty-31",
-    "multi-stark",
     "multilinear-util",
     "poseidon",
     "poseidon2",
@@ -51,6 +51,7 @@ nursery = { level = "warn", priority = -1 }
 
 # Some pedantic lints
 semicolon_if_nothing_returned = "warn"
+match_bool = "warn"
 needless_pass_by_value = "warn"
 
 redundant_pub_crate = "allow"

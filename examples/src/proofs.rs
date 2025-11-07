@@ -104,10 +104,10 @@ where
 
     let config = KeccakStarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, proof_goal, trace, &vec![]);
+    let proof = prove(&config, proof_goal, trace, &[]);
     report_proof_size(&proof);
 
-    verify(&config, proof_goal, &proof, &vec![])
+    verify(&config, proof_goal, &proof, &[])
 }
 
 /// Prove the given ProofGoal using the Poseidon2 hash function to build the merkle tree.
@@ -146,10 +146,10 @@ where
 
     let config = Poseidon2StarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, proof_goal, trace, &vec![]);
+    let proof = prove(&config, proof_goal, trace, &[]);
     report_proof_size(&proof);
 
-    verify(&config, proof_goal, &proof, &vec![])
+    verify(&config, proof_goal, &proof, &[])
 }
 
 /// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.
@@ -182,10 +182,10 @@ pub fn prove_m31_keccak<
 
     let config = KeccakCircleStarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, proof_goal, trace, &vec![]);
+    let proof = prove(&config, proof_goal, trace, &[]);
     report_proof_size(&proof);
 
-    verify(&config, proof_goal, &proof, &vec![])
+    verify(&config, proof_goal, &proof, &[])
 }
 
 /// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.
@@ -222,10 +222,10 @@ where
 
     let config = Poseidon2CircleStarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, proof_goal, trace, &vec![]);
+    let proof = prove(&config, proof_goal, trace, &[]);
     report_proof_size(&proof);
 
-    verify(&config, proof_goal, &proof, &vec![])
+    verify(&config, proof_goal, &proof, &[])
 }
 
 /// Report the result of the proof.

@@ -7,6 +7,11 @@ use p3_air::{
     Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, PairBuilder, PermutationAirBuilder,
 };
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+use p3_batch_stark::StarkInstance;
+use p3_batch_stark::common::common_data;
+use p3_batch_stark::proof::OpenedValuesWithLookups;
+use p3_batch_stark::prover::{prove_batch, prove_batch_no_lookups};
+use p3_batch_stark::verifier::{verify_batch, verify_batch_no_lookups};
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
 use p3_commit::ExtensionMmcs;
@@ -21,11 +26,6 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_mersenne_31::Mersenne31;
-use p3_multi_stark::StarkInstance;
-use p3_multi_stark::common::common_data;
-use p3_multi_stark::proof::OpenedValuesWithLookups;
-use p3_multi_stark::prover::{prove_multi, prove_multi_no_lookups};
-use p3_multi_stark::verifier::{verify_multi, verify_multi_no_lookups};
 use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
 };
@@ -573,11 +573,11 @@ fn test_two_instances() -> Result<(), impl Debug> {
         },
     ];
 
-    let proof = prove_multi_no_lookups(&config, instances);
+    let proof = prove_batch_no_lookups(&config, instances);
 
     let airs = vec![air_fib, air_mul];
     let pvs = vec![fib_pis, mul_pis];
-    verify_multi_no_lookups(&config, &airs, &proof, &pvs)
+    verify_batch_no_lookups(&config, &airs, &proof, &pvs)
 }
 
 #[test]
@@ -609,10 +609,10 @@ fn test_three_instances_mixed_sizes() -> Result<(), impl Debug> {
         },
     ];
 
-    let proof = prove_multi_no_lookups(&config, instances);
+    let proof = prove_batch_no_lookups(&config, instances);
     let airs = vec![air_fib16, air_mul8, air_fib8];
     let pvs = vec![fib16_pis, mul8_pis, fib8_pis];
-    verify_multi_no_lookups(&config, &airs, &proof, &pvs)
+    verify_batch_no_lookups(&config, &airs, &proof, &pvs)
 }
 
 #[test]
@@ -628,7 +628,7 @@ fn test_invalid_public_values_rejected() -> Result<(), Box<dyn std::error::Error
         public_values: fib_pis,
         lookups: vec![],
     }];
-    let proof = prove_multi_no_lookups(&config, instances);
+    let proof = prove_batch_no_lookups(&config, instances);
 
     // Wrong public value at verify => should reject
     let wrong_pvs = vec![vec![
@@ -636,7 +636,7 @@ fn test_invalid_public_values_rejected() -> Result<(), Box<dyn std::error::Error
         Val::from_u64(1),
         Val::from_u64(correct_x + 1),
     ]];
-    let res = verify_multi_no_lookups(&config, &[air_fib], &proof, &wrong_pvs);
+    let res = verify_batch_no_lookups(&config, &[air_fib], &proof, &wrong_pvs);
     assert!(res.is_err(), "Should reject wrong public values");
     Ok::<_, Box<dyn std::error::Error>>(())
 }
@@ -671,10 +671,10 @@ fn test_different_widths() -> Result<(), impl Debug> {
         },
     ];
 
-    let proof = prove_multi_no_lookups(&config, instances);
+    let proof = prove_batch_no_lookups(&config, instances);
     let airs = vec![air_mul2, air_fib, air_mul3];
     let pvs = vec![mul2_pis, fib_pis, mul3_pis];
-    verify_multi_no_lookups(&config, &airs, &proof, &pvs)
+    verify_batch_no_lookups(&config, &airs, &proof, &pvs)
 }
 
 #[test]
@@ -691,14 +691,14 @@ fn test_single_instance() -> Result<(), impl Debug> {
         lookups: vec![],
     }];
 
-    let proof = prove_multi_no_lookups(&config, instances);
-    verify_multi_no_lookups(&config, &[air_fib], &proof, &[fib_pis])
+    let proof = prove_batch_no_lookups(&config, instances);
+    verify_batch_no_lookups(&config, &[air_fib], &proof, &[fib_pis])
 }
 
 #[test]
 fn test_invalid_trace_width_rejected() {
     // This test verifies that the verifier rejects proofs with incorrect trace width.
-    use p3_multi_stark::proof::{MultiCommitments, MultiOpenedValues};
+    use p3_batch_stark::proof::{BatchCommitments, BatchOpenedValues};
     use p3_uni_stark::OpenedValues;
 
     let config = make_config(55555);
@@ -713,16 +713,16 @@ fn test_invalid_trace_width_rejected() {
     }];
 
     // Generate a valid proof
-    let valid_proof = prove_multi_no_lookups(&config, instances);
+    let valid_proof = prove_batch_no_lookups(&config, instances);
 
     // Tamper with the proof: change trace_local to have wrong width
-    let mut tampered_proof = p3_multi_stark::proof::MultiProof {
-        commitments: MultiCommitments {
+    let mut tampered_proof = p3_batch_stark::proof::BatchProof {
+        commitments: BatchCommitments {
             main: valid_proof.commitments.main,
             quotient_chunks: valid_proof.commitments.quotient_chunks,
             permutation: valid_proof.commitments.permutation.clone(),
         },
-        opened_values: MultiOpenedValues {
+        opened_values: BatchOpenedValues {
             instances: vec![OpenedValuesWithLookups {
                 base_opened_values: OpenedValues {
                     trace_local: vec![
@@ -754,7 +754,7 @@ fn test_invalid_trace_width_rejected() {
     };
 
     // Verification should fail due to width mismatch
-    let res = verify_multi_no_lookups(
+    let res = verify_batch_no_lookups(
         &config,
         &[air_fib.clone()],
         &tampered_proof,
@@ -780,7 +780,7 @@ fn test_invalid_trace_width_rejected() {
             .trace_next[0],
     ]; // Wrong width
 
-    let res = verify_multi_no_lookups(&config, &[air_fib], &tampered_proof, from_ref(&fib_pis));
+    let res = verify_batch_no_lookups(&config, &[air_fib], &tampered_proof, from_ref(&fib_pis));
     assert!(
         res.is_err(),
         "Verifier should reject trace_next with wrong width"
@@ -810,10 +810,10 @@ fn test_reorder_instances_rejected() {
         },
     ];
 
-    let proof = prove_multi_no_lookups(&config, instances);
+    let proof = prove_batch_no_lookups(&config, instances);
 
     // Swap order at verify -> should fail
-    let res = verify_multi_no_lookups(
+    let res = verify_batch_no_lookups(
         &config,
         &[air_b.clone(), air_a.clone()],
         &proof,
@@ -836,7 +836,7 @@ fn test_quotient_chunk_element_len_rejected() {
         public_values: pv.clone(),
         lookups: vec![],
     }];
-    let proof = prove_multi_no_lookups(&config, instances);
+    let proof = prove_batch_no_lookups(&config, instances);
 
     let mut tampered = proof;
     tampered.opened_values.instances[0]
@@ -844,7 +844,7 @@ fn test_quotient_chunk_element_len_rejected() {
         .quotient_chunks[0]
         .pop();
 
-    let res = verify_multi_no_lookups(&config, &[air], &tampered, from_ref(&pv));
+    let res = verify_batch_no_lookups(&config, &[air], &tampered, from_ref(&pv));
     assert!(
         res.is_err(),
         "Verifier should reject truncated quotient chunk element"
@@ -852,8 +852,8 @@ fn test_quotient_chunk_element_len_rejected() {
 }
 
 #[test]
-fn test_circle_stark_multi() -> Result<(), impl Debug> {
-    // Test multi-stark with Circle PCS (non-two-adic field)
+fn test_circle_stark_batch() -> Result<(), impl Debug> {
+    // Test batch-stark with Circle PCS (non-two-adic field)
     type Val = Mersenne31;
     type Challenge = BinomialExtensionField<Val, 3>;
 
@@ -918,12 +918,12 @@ fn test_circle_stark_multi() -> Result<(), impl Debug> {
     ];
 
     // Generate multi-proof
-    let proof = prove_multi_no_lookups(&config, instances);
+    let proof = prove_batch_no_lookups(&config, instances);
 
-    // Verify multi-proof
+    // Verify batch-proof
     let airs = vec![air_fib1, air_fib2];
     let public_values = vec![fib_pis1, fib_pis2];
-    verify_multi_no_lookups(&config, &airs, &proof, &public_values)
+    verify_batch_no_lookups(&config, &airs, &proof, &public_values)
         .map_err(|e| format!("Verification failed: {:?}", e))
 }
 
@@ -932,7 +932,7 @@ fn test_circle_stark_multi() -> Result<(), impl Debug> {
 /// Test with local lookups only using MulAirLookups
 /// This test demonstrates how to use local lookups in multi-stark proofs
 #[test]
-fn test_multi_stark_one_instance_local_only() -> Result<(), impl Debug> {
+fn test_batch_stark_one_instance_local_only() -> Result<(), impl Debug> {
     let config = make_config(2024);
 
     let reps = 1;
@@ -960,17 +960,17 @@ fn test_multi_stark_one_instance_local_only() -> Result<(), impl Debug> {
     }];
 
     let lookup_gadget = LogUpGadget::new();
-    let proof = prove_multi(&config, instances, &lookup_gadget);
+    let proof = prove_batch(&config, instances, &lookup_gadget);
 
     let mut airs = vec![air1];
     let pvs = vec![vec![]];
-    verify_multi(&config, &mut airs, &proof, &pvs, &lookup_gadget)
+    verify_batch(&config, &mut airs, &proof, &pvs, &lookup_gadget)
 }
 
 /// Test with local lookups only using MulAirLookups
 /// This test demonstrates how to use local lookups in multi-stark proofs
 #[test]
-fn test_multi_stark_local_lookups_only() -> Result<(), impl Debug> {
+fn test_batch_stark_local_lookups_only() -> Result<(), impl Debug> {
     let config = make_config(2024);
 
     // Create MulAir instance with local lookups configuration
@@ -1010,16 +1010,16 @@ fn test_multi_stark_local_lookups_only() -> Result<(), impl Debug> {
     ];
 
     let lookup_gadget = LogUpGadget::new();
-    let proof = prove_multi(&config, instances, &lookup_gadget);
+    let proof = prove_batch(&config, instances, &lookup_gadget);
 
     let mut airs = vec![air1, air2];
     let pvs = vec![vec![], fib_pis];
-    verify_multi(&config, &mut airs, &proof, &pvs, &lookup_gadget)
+    verify_batch(&config, &mut airs, &proof, &pvs, &lookup_gadget)
 }
 
 /// Test with global lookups only using MulAirLookups and FibAirLookups  
 #[test]
-fn test_multi_stark_global_lookups_only() -> Result<(), impl Debug> {
+fn test_batch_stark_global_lookups_only() -> Result<(), impl Debug> {
     let config = make_config(2025);
 
     let reps = 2;
@@ -1060,16 +1060,16 @@ fn test_multi_stark_global_lookups_only() -> Result<(), impl Debug> {
     ];
 
     let lookup_gadget = LogUpGadget::new();
-    let proof = prove_multi(&config, instances, &lookup_gadget);
+    let proof = prove_batch(&config, instances, &lookup_gadget);
 
     let mut airs = vec![air1, air2];
     let pvs = vec![vec![], fib_pis];
-    verify_multi(&config, &mut airs, &proof, &pvs, &lookup_gadget)
+    verify_batch(&config, &mut airs, &proof, &pvs, &lookup_gadget)
 }
 
 /// Test with both local and global lookups using MulAirLookups and FibAirLookups
 #[test]
-fn test_multi_stark_both_lookups() -> Result<(), impl Debug> {
+fn test_batch_stark_both_lookups() -> Result<(), impl Debug> {
     let config = make_config(2026);
 
     let reps = 2;
@@ -1109,11 +1109,11 @@ fn test_multi_stark_both_lookups() -> Result<(), impl Debug> {
     ];
 
     let lookup_gadget = LogUpGadget::new();
-    let proof = prove_multi(&config, instances, &lookup_gadget);
+    let proof = prove_batch(&config, instances, &lookup_gadget);
 
     let mut airs = vec![air1, air2];
     let pvs = vec![vec![], fib_pis];
-    verify_multi(&config, &mut airs, &proof, &pvs, &lookup_gadget)
+    verify_batch(&config, &mut airs, &proof, &pvs, &lookup_gadget)
 }
 
 /// Test mixing instances with lookups and instances without lookups
@@ -1121,7 +1121,7 @@ fn test_multi_stark_both_lookups() -> Result<(), impl Debug> {
 /// non-lookup instances, showcasing real-world scenarios where some computations
 /// require lookups while others don't.
 #[test]
-fn test_multi_stark_mixed_lookups() -> Result<(), impl Debug> {
+fn test_batch_stark_mixed_lookups() -> Result<(), impl Debug> {
     let config = make_config(2027);
 
     let reps = 2;
@@ -1205,9 +1205,9 @@ fn test_multi_stark_mixed_lookups() -> Result<(), impl Debug> {
     let instances = StarkInstance::new_multiple(&all_airs, &traces, &all_pvs, &lookups);
 
     let lookup_gadget = LogUpGadget::new();
-    let proof = prove_multi(&config, instances, &lookup_gadget);
+    let proof = prove_batch(&config, instances, &lookup_gadget);
 
     // Verify with mixed AIRs
 
-    verify_multi(&config, &mut all_airs, &proof, &all_pvs, &lookup_gadget)
+    verify_batch(&config, &mut all_airs, &proof, &all_pvs, &lookup_gadget)
 }

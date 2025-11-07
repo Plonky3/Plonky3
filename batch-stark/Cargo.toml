@@ -1,6 +1,6 @@
 [package]
-name = "p3-multi-stark"
-description = "Multi-instance STARK wrapper using p3-uni-stark with batched FRI openings."
+name = "p3-batch-stark"
+description = "Batched STARK wrapper atop p3-uni-stark that reuses FRI openings across instances."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -23,12 +23,13 @@ where
 {
     let a_iter = a.into_iter();
     let b_iter = b.into_iter();
-    match a_iter.len() == b_iter.len() {
-        true => Ok(ZipEq {
+    if a_iter.len() == b_iter.len() {
+        Ok(ZipEq {
             a: a_iter,
             b: b_iter,
-        }),
-        false => Err(err),
+        })
+    } else {
+        Err(err)
     }
 }
 
