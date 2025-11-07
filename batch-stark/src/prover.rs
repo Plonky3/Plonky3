@@ -10,6 +10,7 @@ use p3_lookup::lookup_traits::{
 };
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
+use p3_maybe_rayon::prelude::IndexedParallelIterator;
 use p3_maybe_rayon::prelude::IntoParallelIterator;
 use p3_uni_stark::{
     OpenedValues, PackedChallenge, PackedVal, ProverConstraintFolder, SymbolicAirBuilder,
