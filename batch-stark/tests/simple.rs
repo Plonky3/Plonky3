@@ -233,17 +233,21 @@ where
         let symbolic_main = symbolic_air_builder.main();
         let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
 
-        // Local lookups: one for each mul input with extra column for integers 0 to height
-        if self.is_local {
-            let last_idx = symbolic_air_builder.main().width() - 1;
-            let lut = symbolic_main_local[last_idx]; //  Extra column that corresponds to a permutation of 'a'
-            for rep in 0..self.air.reps {
+        let last_idx = symbolic_air_builder.main().width() - 1;
+        let lut = symbolic_main_local[last_idx]; //  Extra column that corresponds to a permutation of 'a'
+
+        if self.is_global {
+            assert!(self.global_names.len() == self.air.reps);
+        }
+        // We add lookups rep by rep, so that we have a mix of local and global lookups, rather than having all local first then all global.
+        for rep in 0..self.air.reps {
+            if self.is_local {
                 let base_idx = rep * 3;
                 let a = symbolic_main_local[base_idx]; // First input
                 // Create lookup inputs for each multiplication input
                 // We'll create a local lookup table with integers 0 to height
                 let lookup_inputs = vec![
-                    // Lookup for 'a' against a range table (0 to height)
+                    // Lookup for 'a' against a permuted column.
                     (
                         vec![a.into()],
                         SymbolicExpression::Constant(AB::F::ONE),
@@ -264,12 +268,9 @@ where
                 );
                 lookups.push(local_lookup);
             }
-        }
 
-        // Global lookups: between MulAir inputs and FibAir inputs
-        if self.is_global {
-            assert!(self.global_names.len() == self.air.reps);
-            for rep in 0..self.air.reps {
+            // Global lookups: between MulAir inputs and FibAir inputs
+            if self.is_global {
                 let base_idx = rep * 3;
                 let a = symbolic_main_local[base_idx]; // First input
                 let b = symbolic_main_local[base_idx + 1]; // Second input
