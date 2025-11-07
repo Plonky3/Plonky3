@@ -17,6 +17,8 @@
 //! - `m_i, m'_j` are multiplicities (how many times each element appears)
 //! - The transformation eliminates expensive exponentiation operations
 
+#[cfg(debug_assertions)]
+use alloc::collections::btree_set::BTreeSet;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -204,9 +206,9 @@ impl LogUpGadget {
         );
 
         // Challenge for the running sum.
-        let alpha = permutation_challenges[2 * column];
+        let alpha = permutation_challenges[self.num_challenges() * column];
         // Challenge for combining the lookup tuples.
-        let beta = permutation_challenges[2 * column + 1];
+        let beta = permutation_challenges[self.num_challenges() * column + 1];
 
         let s = permutation.row_slice(0).unwrap();
         assert!(s.len() > column, "Permutation trace has insufficient width");
@@ -388,6 +390,25 @@ impl LookupGadget for LogUpGadget {
         let height = main.height();
         let width = self.num_aux_cols() * lookups.len();
 
+        // Validate challenge count matches number of lookups.
+        debug_assert_eq!(
+            permutation_challenges.len(),
+            lookups.len() * self.num_challenges(),
+            "perm challenge count must be per-lookup"
+        );
+
+        // Enforce uniqueness of auxiliary column indices across lookups.
+        #[cfg(debug_assertions)]
+        {
+            let mut seen = BTreeSet::new();
+            for ctx in lookups {
+                let a = ctx.columns[0];
+                if !seen.insert(a) {
+                    panic!("duplicate aux column index {a} across lookups");
+                }
+            }
+        }
+
         let mut aux_trace = vec![SC::Challenge::ZERO; height * width];
         for i in 0..height {
             let local_main_row = main.row_slice(i).unwrap();
@@ -406,8 +427,8 @@ impl LookupGadget for LogUpGadget {
             lookups.iter().for_each(|context| {
                 // Build the expected cumulative value for this global lookup.
                 let aux_idx = context.columns[0];
-                let alpha = &permutation_challenges[2 * aux_idx];
-                let beta = &permutation_challenges[2 * aux_idx + 1];
+                let alpha = &permutation_challenges[self.num_challenges() * aux_idx];
+                let beta = &permutation_challenges[self.num_challenges() * aux_idx + 1];
 
                 let elements = context
                     .element_exprs

@@ -287,14 +287,53 @@ where
             zeta,
         );
 
+        // Recompose permutation openings from base-flattened columns into extension. field columns.
+        // The permutation commitment is a base-flattened matrix with `width = aux_width * DIMENSION`.
+        // For constraint evaluation, we need an extension field matrix with width `aux_width``.
+        let aux_width = all_lookups[i]
+            .iter()
+            .flat_map(|ctx| ctx.columns.iter().cloned())
+            .max()
+            .map(|m| m + 1)
+            .unwrap_or(0);
+
+        let recompose = |flat: &Vec<Challenge<SC>>| -> Vec<Challenge<SC>> {
+            if aux_width == 0 {
+                return vec![];
+            }
+            let ext_degree = Challenge::<SC>::DIMENSION;
+            assert!(
+                flat.len() == aux_width * ext_degree,
+                "flattened permutation opening length ({}) must equal aux_width ({}) * DIMENSION ({})",
+                flat.len(),
+                aux_width,
+                ext_degree
+            );
+            (0..aux_width)
+                .map(|col| {
+                    (0..ext_degree)
+                        .map(|j| {
+                            let coeff = flat[col * ext_degree + j];
+                            let basis = Challenge::<SC>::ith_basis_element(j)
+                                .expect("basis element exists");
+                            coeff * basis
+                        })
+                        .sum()
+                })
+                .collect()
+        };
+
+        let perm_local_ext = recompose(&opened_values.instances[i].permutation_local);
+        let perm_next_ext = recompose(&opened_values.instances[i].permutation_next);
+
         // Verify constraints at zeta using utility function.
         let init_trace_domain = trace_domains[i];
         verify_constraints_with_lookups::<SC, A, LG, PcsError<SC>>(
             air,
             &opened_values.instances[i].base_opened_values.trace_local,
             &opened_values.instances[i].base_opened_values.trace_next,
-            &opened_values.instances[i].permutation_local,
-            &opened_values.instances[i].permutation_next,
+            &perm_local_ext,
+            &perm_next_ext,
             &challenges_per_instance[i],
             &proof.global_lookup_data[i],
             &all_lookups[i],

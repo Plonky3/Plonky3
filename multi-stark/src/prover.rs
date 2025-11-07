@@ -37,6 +37,27 @@ pub struct StarkInstance<'a, SC: SGC, A> {
     pub lookups: Vec<Lookup<Val<SC>>>,
 }
 
+impl<'a, SC: SGC, A> StarkInstance<'a, SC, A> {
+    pub fn new_multiple(
+        airs: &'a [A],
+        traces: &[RowMajorMatrix<Val<SC>>],
+        public_values: &[Vec<Val<SC>>],
+        lookups: &[Vec<Lookup<Val<SC>>>],
+    ) -> Vec<Self> {
+        airs.iter()
+            .zip(traces.iter())
+            .zip(public_values.iter())
+            .zip(lookups.iter())
+            .map(|(((air, trace), public_values), lookups)| Self {
+                air,
+                trace: trace.clone(),
+                public_values: public_values.clone(),
+                lookups: lookups.clone(),
+            })
+            .collect::<Vec<_>>()
+    }
+}
+
 #[instrument(skip_all)]
 pub fn prove_multi<
     SC,
