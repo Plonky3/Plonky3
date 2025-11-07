@@ -937,7 +937,6 @@ fn test_circle_stark_batch() -> Result<(), impl Debug> {
 // Tests for local and global lookup handling in multi-stark.
 
 /// Test with local lookups only using MulAirLookups
-/// This test demonstrates how to use local lookups in multi-stark proofs
 #[test]
 fn test_batch_stark_one_instance_local_only() -> Result<(), impl Debug> {
     let config = make_config(2024);
@@ -970,8 +969,75 @@ fn test_batch_stark_one_instance_local_only() -> Result<(), impl Debug> {
     )
 }
 
+/// Test with local lookups only, which fail due to wrong permutation column.
+/// The failure occurs in `check_constraints` during proof generation, since it fails the last local constraint (the final local sum is not zero).
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "constraints had nonzero value on row 7")]
+fn test_batch_stark_one_instance_local_fails() {
+    let config = make_config(2024);
+
+    let reps = 2;
+    // Create MulAir instance with local lookups configuration
+    let mul_air = MulAir { reps };
+    let mul_air_lookups = MulAirLookups::new(mul_air, true, false, 0, vec![]); // local only
+
+    let mut mul_trace = mul_trace::<Val>(8, reps);
+
+    // Tamper with the permutation column to cause lookup failure.
+    mul_trace.values[reps * 3] = Val::from_u64(9999);
+
+    let mut airs = [DemoAirWithLookups::MulLookups(mul_air_lookups).clone()];
+
+    // Get lookups from the lookup-enabled AIRs
+    let common_data = common_data::<MyConfig, _>(&mut airs);
+
+    let instances = StarkInstance::new_multiple(&airs, &[mul_trace], &[vec![]], &common_data);
+
+    let lookup_gadget = LogUpGadget::new();
+    prove_batch(&config, instances, &lookup_gadget);
+}
+
+/// Test with local lookups only, which fail due to wrong permutation column.
+/// The verification fails, since the last local constraint fails (the final local sum is not zero).
+#[cfg(not(debug_assertions))]
+#[test]
+#[should_panic(expected = "OodEvaluationMismatch")]
+fn test_batch_stark_one_instance_local_fails() {
+    let config = make_config(2024);
+
+    let reps = 2;
+    // Create MulAir instance with local lookups configuration
+    let mul_air = MulAir { reps };
+    let mul_air_lookups = MulAirLookups::new(mul_air, true, false, 0, vec![]); // local only
+
+    let mut mul_trace = mul_trace::<Val>(8, reps);
+
+    // Tamper with the permutation column to cause lookup failure.
+    mul_trace.values[reps * 3] = Val::from_u64(9999);
+
+    let mut airs = [DemoAirWithLookups::MulLookups(mul_air_lookups).clone()];
+
+    // Get lookups from the lookup-enabled AIRs
+    let common_data = common_data::<MyConfig, _>(&mut airs);
+
+    let instances = StarkInstance::new_multiple(&airs, &[mul_trace], &[vec![]], &common_data);
+
+    let lookup_gadget = LogUpGadget::new();
+    let proof = prove_batch(&config, instances, &lookup_gadget);
+
+    verify_batch(
+        &config,
+        &mut airs,
+        &proof,
+        &[vec![]],
+        &common_data,
+        &lookup_gadget,
+    )
+    .unwrap();
+}
+
 /// Test with local lookups only using MulAirLookups
-/// This test demonstrates how to use local lookups in multi-stark proofs
 #[test]
 fn test_batch_stark_local_lookups_only() -> Result<(), impl Debug> {
     let config = make_config(2024);
