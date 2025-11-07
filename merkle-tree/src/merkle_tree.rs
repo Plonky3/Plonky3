@@ -80,7 +80,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
     /// * If two leaf heights *round up* to the same power-of-two but are not
     ///   equal (violates balancing rule).
     #[instrument(name = "build merkle tree", level = "debug", skip_all,
-                 fields(dimensions = alloc::format!("{:?}", leaves.iter().map(|l| l.dimensions()).collect::<Vec<_>>())))]
+                 fields(dimensions = ?leaves.iter().map(|l| l.dimensions()).collect::<Vec<_>>()))]
     pub fn new<P, PW, H, C>(h: &H, c: &C, leaves: Vec<M>) -> Self
     where
         P: PackedValue<Value = F>,
