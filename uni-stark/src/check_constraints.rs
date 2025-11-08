@@ -38,12 +38,18 @@ where
             RowMajorMatrixView::new_row(&*next),
         );
 
-        let preprocessed_pair = preprocessed.as_ref().map(|prep| {
-            ViewPair::new(
-                prep.row(row_index).unwrap(),
-                prep.row(row_index_next).unwrap(),
-            )
-        });
+        let (prep_local, prep_next);
+        #[allow(clippy::option_if_let_else)]
+        let preprocessed_pair = if let Some(prep) = preprocessed.as_ref() {
+            prep_local = unsafe { prep.row_slice_unchecked(row_index) };
+            prep_next = unsafe { prep.row_slice_unchecked(row_index_next) };
+            Some(ViewPair::new(
+                RowMajorMatrixView::new_row(&*prep_local),
+                RowMajorMatrixView::new_row(&*prep_next),
+            ))
+        } else {
+            None
+        };
 
         let mut builder = DebugConstraintBuilder {
             row_index,

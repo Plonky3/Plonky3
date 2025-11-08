@@ -23,14 +23,14 @@ pub struct MulFibPAir {
 }
 
 impl MulFibPAir {
-    pub fn new(num_rows: usize) -> Self {
+    pub const fn new(num_rows: usize) -> Self {
         Self {
             num_rows,
             tamper_index: None,
         }
     }
 
-    pub fn with_tampered_preprocessed(num_rows: usize, tamper_index: usize) -> Self {
+    pub const fn with_tampered_preprocessed(num_rows: usize, tamper_index: usize) -> Self {
         Self {
             num_rows,
             tamper_index: Some(tamper_index),
@@ -113,13 +113,13 @@ pub fn generate_preprocessed_trace<F: PrimeField64>(
     let (_, rows, _) = unsafe { preprocessed.values.align_to_mut::<PreprocessedRow<F>>() };
     assert_eq!(rows.len(), n);
 
-    for i in 0..n {
-        rows[i].prod_coeff = F::from_u64((i % 2) as u64);
-        rows[i].sum_coeff = F::from_u64(((i + 1) % 6) as u64);
-    }
+    rows.iter_mut().enumerate().for_each(|(i, row)| {
+        row.prod_coeff = F::from_u64((i % 2) as u64);
+        row.sum_coeff = F::from_u64(((i + 1) % 6) as u64);
+    });
 
     if let Some(idx) = tamper_index.filter(|&i| i < n) {
-        rows[idx].prod_coeff = rows[idx].prod_coeff + F::ONE;
+        rows[idx].prod_coeff += F::ONE;
     }
 
     preprocessed

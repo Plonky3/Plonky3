@@ -19,6 +19,7 @@ use crate::{
 
 /// Commits the preprocessed trace if present.
 /// Returns the commitment hash and prover data (available iff preprocessed is Some).
+#[allow(clippy::type_complexity)]
 fn commit_preprocessed_trace<SC>(
     preprocessed: RowMajorMatrix<Val<SC>>,
     pcs: &SC::Pcs,
@@ -136,16 +137,16 @@ where
     let (trace_commit, trace_data) =
         info_span!("commit to trace data").in_scope(|| pcs.commit([(ext_trace_domain, trace)]));
 
-    let (preprocessed_commit, preprocessed_data) = match preprocessed_trace {
-        Some(preprocessed) => {
+    let (preprocessed_commit, preprocessed_data) = preprocessed_trace.map_or_else(
+        || (None, None),
+        |preprocessed| {
             let (commit, data) =
                 commit_preprocessed_trace::<SC>(preprocessed, pcs, ext_trace_domain);
             #[cfg(debug_assertions)]
             assert_eq!(config.is_zk(), 0); // TODO: preprocessed columns not supported in zk mode
             (Some(commit), Some(data))
-        }
-        None => (None, None),
-    };
+        },
+    );
 
     // Observe the instance.
     // degree < 2^255 so we can safely cast log_degree to a u8.

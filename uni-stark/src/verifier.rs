@@ -121,6 +121,7 @@ where
 
 /// Validates and commits the preprocessed trace if present.
 /// Returns the preprocessed width and its commitment hash (available iff width > 0).
+#[allow(clippy::type_complexity)]
 fn process_preprocessed_trace<SC, A>(
     air: &A,
     opened_values: &crate::proof::OpenedValues<SC::Challenge>,
@@ -191,6 +192,7 @@ where
     let pcs = config.pcs();
     let degree = 1 << degree_bits;
     let trace_domain = pcs.natural_domain_for_degree(degree);
+    // TODO: allow moving preprocessed commitment to preprocess time, if known in advance
     let (preprocessed_width, preprocessed_commit) =
         process_preprocessed_trace::<SC, A>(air, opened_values, pcs, trace_domain, config.is_zk())?;
 
