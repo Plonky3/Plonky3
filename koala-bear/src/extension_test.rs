@@ -1,7 +1,5 @@
 #[cfg(test)]
 mod test_quartic_extension {
-    use alloc::format;
-
     use num_bigint::BigUint;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{BasedVectorSpace, ExtensionField, PrimeCharacteristicRing};
@@ -44,12 +42,12 @@ mod test_quartic_extension {
 
     #[test]
     fn display() {
-        assert_eq!(format!("{}", EF::ZERO), "0");
-        assert_eq!(format!("{}", EF::ONE), "1");
-        assert_eq!(format!("{}", EF::TWO), "2");
+        assert_eq!(alloc::format!("{}", EF::ZERO), "0");
+        assert_eq!(alloc::format!("{}", EF::ONE), "1");
+        assert_eq!(alloc::format!("{}", EF::TWO), "2");
 
         assert_eq!(
-            format!(
+            alloc::format!(
                 "{}",
                 EF::from_basis_coefficients_slice(&[F::TWO, F::ONE, F::ZERO, F::TWO]).unwrap()
             ),
@@ -65,8 +63,6 @@ mod test_quartic_extension {
 
 #[cfg(test)]
 mod test_octic_extension {
-    use alloc::format;
-
     use num_bigint::BigUint;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{BasedVectorSpace, ExtensionField, PrimeCharacteristicRing};
@@ -112,12 +108,12 @@ mod test_octic_extension {
 
     #[test]
     fn display() {
-        assert_eq!(format!("{}", EF::ZERO), "0");
-        assert_eq!(format!("{}", EF::ONE), "1");
-        assert_eq!(format!("{}", EF::TWO), "2");
+        assert_eq!(alloc::format!("{}", EF::ZERO), "0");
+        assert_eq!(alloc::format!("{}", EF::ONE), "1");
+        assert_eq!(alloc::format!("{}", EF::TWO), "2");
 
         assert_eq!(
-            format!(
+            alloc::format!(
                 "{}",
                 EF::from_basis_coefficients_slice(&[
                     F::TWO,
