@@ -198,7 +198,36 @@ mod tests {
         const MONTY_MU: u32 = 0x88000001;
     }
 
-    // PackedMontyParameters is just MontyParameters on non-SIMD platforms
+    // Platform-specific implementations for PackedMontyParameters
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    impl crate::aarch64_neon::packing::MontyParametersNeon for TestMontyParams {
+        const PACKED_P: core::arch::aarch64::uint32x4_t =
+            unsafe { core::mem::transmute::<[u32; 4], _>([0x78000001; 4]) };
+        const PACKED_MU: core::arch::aarch64::int32x4_t =
+            unsafe { core::mem::transmute::<[i32; 4], _>([-0x77ffffff; 4]) };
+    }
+
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        not(target_feature = "avx512f")
+    ))]
+    impl crate::x86_64_avx2::packing::MontyParametersAVX2 for TestMontyParams {
+        const PACKED_P: core::arch::x86_64::__m256i =
+            unsafe { core::mem::transmute::<[u32; 8], _>([0x78000001; 8]) };
+        const PACKED_MU: core::arch::x86_64::__m256i =
+            unsafe { core::mem::transmute::<[u32; 8], _>([0x88000001; 8]) };
+    }
+
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+    impl crate::x86_64_avx512::packing::MontyParametersAVX512 for TestMontyParams {
+        const PACKED_P: core::arch::x86_64::__m512i =
+            unsafe { core::mem::transmute::<[u32; 16], _>([0x78000001; 16]) };
+        const PACKED_MU: core::arch::x86_64::__m512i =
+            unsafe { core::mem::transmute::<[u32; 16], _>([0x88000001; 16]) };
+    }
+
+    // PackedMontyParameters implementation (works on all platforms due to conditional trait bounds)
     impl crate::PackedMontyParameters for TestMontyParams {}
 
     impl FieldParameters for TestMontyParams {
