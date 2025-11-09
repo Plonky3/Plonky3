@@ -335,11 +335,12 @@ where
 /// Once that is stabilized, this should be removed.
 #[inline(always)]
 pub const unsafe fn assume_init_ref<T>(slice: &[MaybeUninit<T>]) -> &[T] {
-    // SAFETY: casting `slice` to a `*const [T]` is safe since the caller guarantees that
+    // SAFETY: casting the element pointer to `*const T` is safe since the caller guarantees that
     // `slice` is initialized, and `MaybeUninit` is guaranteed to have the same layout as `T`.
     // The pointer obtained is valid since it refers to memory owned by `slice` which is a
     // reference and thus guaranteed to be valid for reads.
-    unsafe { &*(slice as *const [MaybeUninit<T>] as *const [T]) }
+    let ptr = slice.as_ptr().cast::<T>();
+    unsafe { core::slice::from_raw_parts(ptr, slice.len()) }
 }
 
 /// Split an iterator into small arrays and apply `func` to each.
