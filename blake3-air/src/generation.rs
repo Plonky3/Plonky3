@@ -96,19 +96,13 @@ fn generate_trace_rows_for_perm<F: PrimeField64>(
         ],
     ];
 
-    generate_trace_row_for_round(&mut row.full_rounds[0], &mut state, &m_vec); // round 1
-    permute(&mut m_vec);
-    generate_trace_row_for_round(&mut row.full_rounds[1], &mut state, &m_vec); // round 2
-    permute(&mut m_vec);
-    generate_trace_row_for_round(&mut row.full_rounds[2], &mut state, &m_vec); // round 3
-    permute(&mut m_vec);
-    generate_trace_row_for_round(&mut row.full_rounds[3], &mut state, &m_vec); // round 4
-    permute(&mut m_vec);
-    generate_trace_row_for_round(&mut row.full_rounds[4], &mut state, &m_vec); // round 5
-    permute(&mut m_vec);
-    generate_trace_row_for_round(&mut row.full_rounds[5], &mut state, &m_vec); // round 6
-    permute(&mut m_vec);
-    generate_trace_row_for_round(&mut row.full_rounds[6], &mut state, &m_vec); // round 7
+    let rounds_len = row.full_rounds.len();
+    for (round_idx, round_cols) in row.full_rounds.iter_mut().enumerate() {
+        generate_trace_row_for_round(round_cols, &mut state, &m_vec);
+        if round_idx + 1 < rounds_len {
+            permute(&mut m_vec);
+        }
+    }
 
     // After performing all the rounds, all that is left to do is to populate the final xor data.
 
