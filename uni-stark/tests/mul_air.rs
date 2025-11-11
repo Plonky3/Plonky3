@@ -127,7 +127,7 @@ where
 {
     let trace = air.random_valid_trace(log_height, true);
 
-    let proof = prove(&config, &air, trace, &vec![]);
+    let proof = prove(&config, &air, trace, &[]);
 
     let serialized_proof = postcard::to_allocvec(&proof).expect("unable to serialize proof");
     tracing::debug!("serialized_proof len: {} bytes", serialized_proof.len());
@@ -135,7 +135,7 @@ where
     let deserialized_proof =
         postcard::from_bytes(&serialized_proof).expect("unable to deserialize proof");
 
-    verify(&config, &air, &deserialized_proof, &vec![])
+    verify(&config, &air, &deserialized_proof, &[])
 }
 
 fn do_test_bb_trivial(degree: u64, log_n: usize) -> Result<(), impl Debug> {
