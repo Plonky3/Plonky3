@@ -1,5 +1,4 @@
 use alloc::rc::Rc;
-use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
@@ -116,7 +115,7 @@ where
     T: Into<Self>,
 {
     fn add_assign(&mut self, rhs: T) {
-        *self = self.clone() + rhs.into();
+        *self = core::mem::take(self) + rhs.into();
     }
 }
 
@@ -151,7 +150,7 @@ where
     T: Into<Self>,
 {
     fn sub_assign(&mut self, rhs: T) {
-        *self = self.clone() - rhs.into();
+        *self = core::mem::take(self) - rhs.into();
     }
 }
 
@@ -189,7 +188,7 @@ where
     T: Into<Self>,
 {
     fn mul_assign(&mut self, rhs: T) {
-        *self = self.clone() * rhs.into();
+        *self = core::mem::take(self) * rhs.into();
     }
 }
 
