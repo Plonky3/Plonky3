@@ -368,7 +368,7 @@ where
     let (opened_values, opening_proof) = pcs.open(rounds, &mut challenger);
 
     let is_lookup = opt_permutation_commit_and_data.is_some();
-    // Rely on open order: [main, quotient] since ZK is disabled.
+    // Rely on open order: [main, permutation (if any), quotient] since ZK is disabled.
     let trace_idx = 0usize;
     let permutation_idx = 1usize;
     let quotient_idx = if is_lookup { 2usize } else { 1usize };
@@ -423,7 +423,7 @@ where
             trace_local,
             trace_next,
             quotient_chunks: qcs,
-            random: None, // ZK not supported in multi-stark yet
+            random: None, // ZK not supported in batch-stark yet
         };
 
         per_instance.push(OpenedValuesWithLookups {
@@ -456,7 +456,7 @@ where
 #[allow(clippy::too_many_arguments)]
 pub fn quotient_values<SC, A, Mat, LG>(
     air: &A,
-    public_values: &Vec<Val<SC>>,
+    public_values: &[Val<SC>],
     trace_domain: Domain<SC>,
     quotient_domain: Domain<SC>,
     trace_on_quotient_domain: &Mat,

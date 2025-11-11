@@ -57,20 +57,22 @@ pub(crate) fn get_perm_challenges<SC: SGC, LG: LookupGadget, A>(
         let num_challenges = contexts.len() * num_challenges_per_lookup;
         let mut instance_challenges = Vec::with_capacity(num_challenges);
         for context in contexts {
-            let cs = match &context.kind {
+            match &context.kind {
                 Kind::Global(name) => {
                     let cs = global_perm_challenges.entry(name).or_insert_with(|| {
                         (0..num_challenges_per_lookup)
                             .map(|_| challenger.sample_algebra_element())
                             .collect::<Vec<SC::Challenge>>()
                     });
-                    cs.clone()
+                    instance_challenges.extend_from_slice(cs);
                 }
-                Kind::Local => (0..num_challenges_per_lookup)
-                    .map(|_| challenger.sample_algebra_element())
-                    .collect(),
+                Kind::Local => {
+                    let local_cs: Vec<SC::Challenge> = (0..num_challenges_per_lookup)
+                        .map(|_| challenger.sample_algebra_element())
+                        .collect();
+                    instance_challenges.extend(local_cs);
+                }
             };
-            instance_challenges.extend(cs);
         }
         challenges_per_instance.push(instance_challenges);
     }

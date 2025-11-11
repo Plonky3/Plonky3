@@ -108,6 +108,10 @@ pub trait LookupGadget {
                 }
             }
         }
+        assert!(
+            lookup_data_iter.next().is_none(),
+            "Too many expected cumulated values provided"
+        );
     }
 
     fn generate_permutation<SC: StarkGenericConfig>(
@@ -267,12 +271,13 @@ impl<'a, SC: StarkGenericConfig> LookupTraceBuilder<'a, SC> {
         main: ViewPair<'a, Val<SC>>,
         public_values: &'a [Val<SC>],
         permutation_challenges: Vec<SC::Challenge>,
+        row: usize,
     ) -> Self {
         Self {
             main,
             public_values,
             permutation_challenges,
-            row: 0,
+            row,
         }
     }
 }

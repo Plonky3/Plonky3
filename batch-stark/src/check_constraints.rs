@@ -1,5 +1,3 @@
-use alloc::vec::Vec;
-
 use p3_air::{
     AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder, PermutationAirBuilder,
 };
@@ -28,7 +26,7 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
     main: &RowMajorMatrix<F>,
     permutation: &RowMajorMatrix<EF>,
     permutation_challenges: &[EF],
-    public_values: &Vec<F>,
+    public_values: &[F],
     lookup_constraints_inputs: LookupConstraintsInputs<'b, F, EF, LG>,
 ) where
     F: Field,

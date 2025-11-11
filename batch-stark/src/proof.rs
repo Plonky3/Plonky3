@@ -42,7 +42,6 @@ pub struct OpenedValuesWithLookups<Challenge> {
 }
 
 /// Opened values for all instances in a batch-STARK proof.
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BatchOpenedValues<Challenge> {
     /// Opened values for each instance, in the same order as provided to the prover.

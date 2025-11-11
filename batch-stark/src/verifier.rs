@@ -288,7 +288,7 @@ where
             .map(|m| m + 1)
             .unwrap_or(0);
 
-        let recompose = |flat: &Vec<Challenge<SC>>| -> Vec<Challenge<SC>> {
+        let recompose = |flat: &[Challenge<SC>]| -> Vec<Challenge<SC>> {
             if aux_width == 0 {
                 return vec![];
             }
@@ -382,7 +382,7 @@ pub fn verify_constraints_with_lookups<SC, A, LG: LookupGadget, PcsErr>(
     lookup_data: &[LookupData<SC::Challenge>],
     lookups: &[Lookup<Val<SC>>],
     lookup_gadget: &LG,
-    public_values: &Vec<Val<SC>>,
+    public_values: &[Val<SC>],
     trace_domain: Domain<SC>,
     zeta: SC::Challenge,
     alpha: SC::Challenge,

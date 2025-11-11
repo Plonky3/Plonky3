@@ -417,8 +417,12 @@ impl LookupGadget for LogUpGadget {
                 RowMajorMatrixView::new_row(&next_main_row),
             );
 
-            let row_builder: LookupTraceBuilder<'_, SC> =
-                LookupTraceBuilder::new(main_rows, public_values, permutation_challenges.to_vec());
+            let row_builder: LookupTraceBuilder<'_, SC> = LookupTraceBuilder::new(
+                main_rows,
+                public_values,
+                permutation_challenges.to_vec(),
+                i,
+            );
 
             let mut permutation_counter = 0;
             // Build the trace and update `lookup_data` with expected cumulated values.
