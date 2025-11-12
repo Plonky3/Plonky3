@@ -212,7 +212,7 @@ where
         trace_domain,
         quotient_domain,
         &trace_on_quotient_domain,
-        preprocessed_on_quotient_domain,
+        preprocessed_on_quotient_domain.as_ref(),
         alpha,
         constraint_count,
     );
@@ -356,7 +356,7 @@ pub fn quotient_values<SC, A, Mat>(
     trace_domain: Domain<SC>,
     quotient_domain: Domain<SC>,
     trace_on_quotient_domain: &Mat,
-    preprocessed_on_quotient_domain: Option<Mat>,
+    preprocessed_on_quotient_domain: Option<&Mat>,
     alpha: SC::Challenge,
     constraint_count: usize,
 ) -> Vec<SC::Challenge>
@@ -411,7 +411,6 @@ where
             );
 
             let preprocessed = preprocessed_on_quotient_domain
-                .as_ref()
                 .map(|preprocessed| {
                     let preprocessed_width = preprocessed.width();
                     RowMajorMatrix::new(
