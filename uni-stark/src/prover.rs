@@ -410,14 +410,13 @@ where
                 width,
             );
 
-            let preprocessed = preprocessed_on_quotient_domain
-                .map(|preprocessed| {
-                    let preprocessed_width = preprocessed.width();
-                    RowMajorMatrix::new(
-                        preprocessed.vertically_packed_row_pair(i_start, next_step),
-                        preprocessed_width,
-                    )
-                });
+            let preprocessed = preprocessed_on_quotient_domain.map(|preprocessed| {
+                let preprocessed_width = preprocessed.width();
+                RowMajorMatrix::new(
+                    preprocessed.vertically_packed_row_pair(i_start, next_step),
+                    preprocessed_width,
+                )
+            });
 
             let accumulator = PackedChallenge::<SC>::ZERO;
             let mut folder = ProverConstraintFolder {
