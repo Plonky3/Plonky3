@@ -67,7 +67,7 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
             public_values,
             is_first_row: F::from_bool(row_index == 0),
             is_last_row: F::from_bool(row_index == height - 1),
-            is_transition: F::from_bool(row_index != height - 1),
+            is_transition: F::from_bool(row_index < height - 1),
         };
 
         <A as AirLookupHandler<DebugConstraintBuilderWithLookups<'_, F, EF>>>::eval(
@@ -77,7 +77,7 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
             lookup_data,
             lookup_gadget,
         );
-    })
+    });
 }
 
 /// A builder that runs constraint assertions during testing.

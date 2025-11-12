@@ -19,8 +19,7 @@ use p3_util::log2_strict_usize;
 use tracing::{debug_span, instrument};
 
 #[cfg(debug_assertions)]
-use crate::check_constraints::DebugConstraintBuilderWithLookups;
-use crate::check_constraints::check_constraints;
+use crate::check_constraints::{DebugConstraintBuilderWithLookups, check_constraints};
 use crate::common::{CommonData, get_perm_challenges};
 use crate::config::{Challenge, Domain, SGC, Val, observe_base_as_ext, observe_instance_binding};
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof, OpenedValuesWithLookups};
@@ -518,13 +517,17 @@ where
             let is_first_row = *PackedVal::<SC>::from_slice(&sels.is_first_row[i_range.clone()]);
             let is_last_row = *PackedVal::<SC>::from_slice(&sels.is_last_row[i_range.clone()]);
             let is_transition = *PackedVal::<SC>::from_slice(&sels.is_transition[i_range.clone()]);
-            let inv_vanishing = *PackedVal::<SC>::from_slice(&sels.inv_vanishing[i_range]);
+            let inv_vanishing = *PackedVal::<SC>::from_slice(&sels.inv_vanishing[i_range.clone()]);
+
+            println!("IS FIRST ROW: {:?}", is_first_row);
+            println!("is last row: {:?}", is_last_row);
 
             // Retrieve main trace as a matrix evaluated on the quotient domain.
             let main = RowMajorMatrix::new(
                 trace_on_quotient_domain.vertically_packed_row_pair(i_start, next_step),
                 main_width,
             );
+            println!("MAIN: {:?}", main);
 
             // Retrieve permutation trace as a matrix evaluated on the quotient domain.
             let permutation = opt_permutation_on_quotient_domain.as_ref().map_or_else(

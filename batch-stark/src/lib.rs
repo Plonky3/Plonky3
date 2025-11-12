@@ -28,7 +28,7 @@
 //! verify_batch(&config, &[&air1, &air2], &proof, &[pv1, pv2])?;
 //! ```
 
-#![no_std]
+// #![no_std]
 
 extern crate alloc;
 

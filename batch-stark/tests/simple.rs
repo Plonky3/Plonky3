@@ -998,7 +998,7 @@ fn test_batch_stark_one_instance_local_fails() {
     let instances = StarkInstance::new_multiple(&airs, &[mul_trace], &[vec![]], &common_data);
 
     let lookup_gadget = LogUpGadget::new();
-    let proof = prove_batch(&config, instances, &lookup_gadget);
+    let proof = prove_batch(&config, &instances, &lookup_gadget);
 
     verify_batch(
         &config,
@@ -1313,6 +1313,162 @@ fn test_batch_stark_mixed_lookups() -> Result<(), impl Debug> {
         &mut all_airs,
         &proof,
         &all_pvs,
+        &common_data,
+        &lookup_gadget,
+    )
+}
+
+// --- Single Table with Local Lookup ---
+#[derive(Debug, Clone, Copy)]
+struct SingleTableLocalLookupAir {
+    num_lookups: usize,
+}
+
+impl SingleTableLocalLookupAir {
+    fn new() -> Self {
+        Self { num_lookups: 0 }
+    }
+}
+
+impl<F> BaseAir<F> for SingleTableLocalLookupAir {
+    fn width(&self) -> usize {
+        // 2 // Two columns: sender column and lookup table column
+        4
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for SingleTableLocalLookupAir
+where
+    AB::Var: Debug,
+{
+    fn eval(&self, _builder: &mut AB) {
+        // No additional constraints needed for this simple table
+        // The column values are set in the trace generation
+    }
+}
+
+impl<AB> AirLookupHandler<AB> for SingleTableLocalLookupAir
+where
+    AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+    AB::Var: Debug,
+{
+    fn add_lookup_columns(&mut self) -> Vec<usize> {
+        let new_idx = self.num_lookups;
+        self.num_lookups += 1;
+        vec![new_idx]
+    }
+
+    fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
+        let mut lookups = Vec::new();
+        self.num_lookups = 0;
+
+        // Create symbolic air builder to access symbolic variables
+        let symbolic_air_builder =
+            SymbolicAirBuilder::<AB::F>::new(0, <Self as BaseAir<AB::F>>::width(self), 0, 0, 0);
+        let symbolic_main = symbolic_air_builder.main();
+        let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
+
+        let sender_col = symbolic_main_local[0]; // Column that sends values
+        let lookup_table_col = symbolic_main_local[1]; // Column that receives lookups
+        let mul1 = symbolic_main_local[2];
+        let mul2 = symbolic_main_local[3];
+
+        println!("mul1 {:?}, MUL2 {:?}", mul1, mul2);
+
+        // Local lookup: sender column looks up into lookup table column
+        // Sender: send is_transition * sender_col
+        // Receiver: receive lookup_table_col with multiplicity 1
+        let lookup_inputs = vec![
+            // Sender: send values from sender column with is_transition multiplicity
+            (
+                vec![sender_col.into()],
+                symbolic_air_builder.is_first_row(),
+                // mul1.into(),
+                // * SymbolicExpression::Constant(AB::F::from_u64(7)), // is_transition multiplicity
+                // SymbolicExpression::Constant(AB::F::ONE),
+                Direction::Receive,
+            ),
+            // Receiver: receive values in lookup table column with multiplicity 1
+            (
+                vec![lookup_table_col.into()],
+                // SymbolicExpression::IsLastRow * SymbolicExpression::Constant(AB::F::from_usize(7)), // multiplicity 1 at last row
+                // symbolic_air_builder.is_last_row(),
+                mul2.into(),
+                // SymbolicExpression::Constant(AB::F::from_u64(1)),
+                Direction::Send,
+            ),
+        ];
+
+        let local_lookup =
+            <Self as AirLookupHandler<AB>>::register_lookup(self, Kind::Local, &lookup_inputs);
+        lookups.push(local_lookup);
+
+        lookups
+    }
+}
+
+// Trace generation function for single table with local lookup
+fn single_table_local_lookup_trace<F: Field>(height: usize) -> RowMajorMatrix<F> {
+    assert!(height.is_power_of_two());
+    assert!(height >= 2); // Need at least some transition rows and last row
+
+    let mut v = F::zero_vec(height * 4); // 2 columns
+
+    // Column 0: Sender column
+    // Transition rows (all rows except last): value 7
+    // Column 1: Lookup table column
+    // Fill with values that include what the sender column sends
+    // Include value 7 (which sender column sends during transitions)
+    for i in 0..height - 1 {
+        v[i * 4] = F::from_u64((height - 1) as u64);
+        v[i * 4 + 1] = F::from_u64((height - 1) as u64);
+        // v[i * 2 + 1] = F::from_u64((height - 1) as u64);
+        // v[i * 2 + 1] = F::from_u64(i as u64);
+    }
+    v[2] = F::ONE;
+    v[(height - 1) * 4 + 3] = F::ONE;
+    // Last row: something different (not in lookup table) for the first column.
+    v[(height - 1) * 4] = F::from_u64((height - 1) as u64);
+    v[(height - 1) * 4 + 1] = F::from_u64((height - 1) as u64);
+    // v[(height - 1) * 2 + 1] = F::from_u64(100);
+    // v[1] = F::from_u64((height - 1) as u64);
+
+    println!("v {:?}", v);
+
+    RowMajorMatrix::new(v, 4)
+}
+
+/// Test with a single table doing local lookup between its two columns
+#[test]
+fn test_single_table_local_lookup() -> Result<(), impl Debug> {
+    let config = make_config(2029);
+
+    let height = 8; // Single table with 8 rows
+
+    // Create instance
+    let air = SingleTableLocalLookupAir::new();
+
+    let mut airs = [air];
+
+    // Get lookups from the lookup-enabled AIR
+    let common_data = common_data::<MyConfig, _>(&mut airs);
+
+    // Generate trace
+    let trace = single_table_local_lookup_trace::<Val>(height);
+
+    let traces = vec![trace];
+    let pvs = vec![vec![]]; // No public values
+
+    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, &common_data);
+
+    let lookup_gadget = LogUpGadget::new();
+    let proof = prove_batch(&config, &instances, &lookup_gadget);
+
+    verify_batch(
+        &config,
+        &mut airs,
+        &proof,
+        &pvs,
         &common_data,
         &lookup_gadget,
     )

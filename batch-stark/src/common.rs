@@ -44,6 +44,7 @@ where
     CommonData { lookups }
 }
 
+use p3_field::PrimeCharacteristicRing;
 pub(crate) fn get_perm_challenges<SC: SGC, LG: LookupGadget, A>(
     challenger: &mut SC::Challenger,
     all_lookups: &[Vec<Lookup<Val<SC>>>],
@@ -61,15 +62,15 @@ pub(crate) fn get_perm_challenges<SC: SGC, LG: LookupGadget, A>(
                 Kind::Global(name) => {
                     let cs = global_perm_challenges.entry(name).or_insert_with(|| {
                         (0..num_challenges_per_lookup)
-                            .map(|_| challenger.sample_algebra_element())
+                            .map(|_| SC::Challenge::from_usize(10))
                             .collect::<Vec<SC::Challenge>>()
                     });
                     instance_challenges.extend_from_slice(cs);
                 }
                 Kind::Local => {
                     let local_cs: Vec<SC::Challenge> = (0..num_challenges_per_lookup)
-                        .map(|_| challenger.sample_algebra_element())
-                        .collect();
+                        .map(|_| SC::Challenge::from_usize(10))
+                        .collect::<Vec<SC::Challenge>>();
                     instance_challenges.extend(local_cs);
                 }
             };

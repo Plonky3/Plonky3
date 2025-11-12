@@ -317,6 +317,8 @@ where
         let perm_local_ext = recompose(&opened_values.instances[i].permutation_local);
         let perm_next_ext = recompose(&opened_values.instances[i].permutation_next);
 
+        println!("EVALUATING INSTANCE: {:?}", i);
+
         // Verify constraints at zeta using utility function.
         let init_trace_domain = trace_domains[i];
         verify_constraints_with_lookups::<SC, A, LG, PcsError<SC>>(
@@ -393,6 +395,7 @@ where
     A: for<'a> AirLookupHandler<VerifierConstraintFolderWithLookups<'a, SC>>,
 {
     let sels = trace_domain.selectors_at_point(zeta);
+    println!("zeta {:?}", zeta);
 
     let main = VerticalPair::new(
         RowMajorMatrixView::new_row(trace_local),
@@ -424,6 +427,8 @@ where
     if folded_constraints * sels.inv_vanishing != quotient {
         return Err(VerificationError::OodEvaluationMismatch { index: None });
     }
+
+    println!("INSTANCE EVAL DONE");
 
     Ok(())
 }
