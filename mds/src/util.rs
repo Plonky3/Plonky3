@@ -43,6 +43,7 @@ pub fn apply_circulant<R: PrimeCharacteristicRing, const N: usize>(
     circ_matrix: &[u64; N],
     input: &[R; N],
 ) -> [R; N] {
+    debug_assert_ne!(N, 0);
     let mut matrix = circ_matrix.map(R::from_u64);
 
     let mut output = [R::ZERO; N];
