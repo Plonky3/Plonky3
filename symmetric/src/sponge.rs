@@ -4,6 +4,7 @@ use core::marker::PhantomData;
 use itertools::Itertools;
 use p3_field::{Field, PrimeField, PrimeField32, reduce_32};
 
+use crate::Permutation;
 use crate::hasher::CryptographicHasher;
 use crate::permutation::CryptographicPermutation;
 
@@ -54,6 +55,67 @@ where
         }
 
         state[..OUT].try_into().unwrap()
+    }
+}
+
+/// Trait for stateful sponge operations with default implementations
+pub trait StatefulSponge<T, const WIDTH: usize, const RATE: usize>
+where
+    T: Default + Copy,
+{
+    type Permutation: CryptographicPermutation<[T; WIDTH]>;
+
+    /// Get reference to the underlying permutation
+    fn permutation(&self) -> &Self::Permutation;
+
+    /// Absorb elements into sponge state with zero-padding.
+    ///
+    /// Elements are processed in chunks of RATE. Each chunk overwrites the first RATE
+    /// positions of the state, with zero-padding if the chunk is incomplete. After each
+    /// chunk (including padded chunks), the permutation is applied.
+    fn absorb<I>(&self, state: &mut [T; WIDTH], input: I)
+    where
+        I: IntoIterator<Item = T>,
+    {
+        let mut input = input.into_iter();
+        let p = self.permutation();
+
+        'outer: loop {
+            for i in 0..RATE {
+                if let Some(x) = input.next() {
+                    state[i] = x;
+                } else {
+                    if i != 0 {
+                        for j in i..RATE {
+                            state[j] = T::default();
+                        }
+                        p.permute_mut(state);
+                    }
+                    break 'outer;
+                }
+            }
+            p.permute_mut(state);
+        }
+    }
+
+    /// Squeeze output from sponge state.
+    ///
+    /// Extracts the first OUT elements from the state.
+    fn squeeze<const OUT: usize>(&self, state: &mut [T; WIDTH]) -> [T; OUT] {
+        state[..OUT].try_into().unwrap()
+    }
+}
+
+impl<P, T, const WIDTH: usize, const RATE: usize, const OUT: usize> StatefulSponge<T, WIDTH, RATE>
+    for PaddingFreeSponge<P, WIDTH, RATE, OUT>
+where
+    T: Default + Copy,
+    P: CryptographicPermutation<[T; WIDTH]>,
+{
+    type Permutation = P;
+
+    fn permutation(&self) -> &Self::Permutation {
+        &self.permutation
     }
 }
 
