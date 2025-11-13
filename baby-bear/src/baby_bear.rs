@@ -1,9 +1,13 @@
+use p3_challenger::{
+    CanSampleUniformBits, DuplexChallenger, UniformGrindingChallenger, UniformSamplingField,
+};
 use p3_field::exponentiation::exp_1725656503;
 use p3_field::{Algebra, PrimeCharacteristicRing};
 use p3_monty_31::{
     BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
     PackedMontyParameters, RelativelyPrimePower, TwoAdicData,
 };
+use p3_symmetric::CryptographicPermutation;
 
 /// The prime field `2^31 - 2^27 + 1`, a.k.a. the Baby Bear field.
 pub type BabyBear = MontyField31<BabyBearParameters>;
@@ -101,6 +105,50 @@ impl BinomialExtensionData<8> for BabyBearParameters {
         [0, 0, 0, 518392818, 0, 0, 0, 0],
     ]);
 }
+
+impl UniformSamplingField for BabyBearParameters {
+    /// Maximum number of bits we can sample at negligible (~1/field prime) probability of
+    /// triggering a panic / requiring a resample.
+    const MAX_SINGLE_SAMPLE_BITS: usize = 27;
+    /// An array storing the largest value `m_k` for each `k` in [0, 31], such that `m_k`
+    /// is a multiple of `2^k`. `m_k` is defined as:
+    ///
+    /// \( m_k = ⌊P / 2^k⌋ · 2^k \)
+    ///
+    /// This is used as a rejection sampling threshold (or panic trigger) in `sampling_uniform_bits`, when
+    /// sampling random bits from uniformly sampled field elements. As long as we sample up to the `k`
+    /// least significant bits in the range [0, m_k), we sample from exactly `m_k` elements. As
+    /// `m_k` is divisible by 2^k, each of the least significant `k` bits has exactly the same
+    /// number of zeroes and ones, leading to a uniform sampling.
+    ///
+    /// NOTE: We only include `0` to not have to deal with one-off indexing. `k` must be > 0.
+    /// Also, we don't care about k > 30 for BabyBear.
+    const SAMPLING_BITS_M: [u64; 64] = {
+        let PRIME: u64 = <BabyBearParameters as MontyParameters>::PRIME as u64;
+        let mut a = [0u64; 64];
+        let mut k = 0;
+        while k < 64 {
+            let k2 = 1 << k as u64; // 2^k
+            a[k] = (PRIME / k2) * k2; // floor(P / 2^k) * 2^k: largest multiple of 2^k fitting into prime
+            k += 1;
+        }
+        a
+    };
+}
+
+//impl<P, const WIDTH: usize, const RATE: usize> UniformGrindingChallenger
+//    for DuplexChallenger<BabyBear, P, WIDTH, RATE>
+//where
+//    P: CryptographicPermutation<[BabyBear; WIDTH]>,
+//{
+//    fn grind_uniform(&mut self, bits: usize) -> Self::Witness {
+//        self.sample_uniform_bits_impl::<_, BabyBear, { BabyBearParameters::MAX_SINGLE_SAMPLE_BITS }>(
+//            bits,
+//            &BabyBearParameters::SAMPLING_BITS_M,
+//            DuplexChallenger::sample_value,
+//        )
+//    }
+//}
 
 #[cfg(test)]
 mod tests {
