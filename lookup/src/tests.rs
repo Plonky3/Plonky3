@@ -7,15 +7,25 @@ use p3_air::{
     Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, ExtensionBuilder, PairBuilder,
     PermutationAirBuilder,
 };
-use p3_baby_bear::BabyBear;
+use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+use p3_challenger::DuplexChallenger;
+use p3_commit::ExtensionMmcs;
+use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
+use p3_fri::{TwoAdicFriPcs, create_test_fri_params};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_uni_stark::{SymbolicAirBuilder, SymbolicExpression};
+use p3_merkle_tree::MerkleTreeMmcs;
+use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+use p3_uni_stark::{
+    PackedChallenge, PackedVal, ProverConstraintFolder, StarkConfig, StarkGenericConfig,
+    SymbolicAirBuilder, SymbolicExpression,
+};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
+use crate::folders::ProverConstraintFolderWithLookups;
 use crate::logup::LogUpGadget;
 use crate::lookup_traits::{
     AirLookupHandler, Direction, Kind, Lookup, LookupGadget, eval_symbolic,
@@ -605,6 +615,125 @@ fn test_symbolic_to_expr() {
         assert_eq!(transition_expected_val, transition_eval.into());
         assert_eq!(last_expected_val, last_eval.into());
     }
+}
+
+type Val = BabyBear;
+type Challenge = BinomialExtensionField<Val, 4>;
+type Perm = Poseidon2BabyBear<16>;
+type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+type ValMmcs =
+    MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
+type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
+type Dft = Radix2DitParallel<Val>;
+type MyPcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
+type MyConfig = StarkConfig<MyPcs, Challenge, Challenger>;
+
+pub fn make_config(seed: u64) -> MyConfig {
+    let mut rng = SmallRng::seed_from_u64(seed);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    let hash = MyHash::new(perm.clone());
+    let compress = MyCompress::new(perm.clone());
+    let val_mmcs = ValMmcs::new(hash, compress);
+    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+    let dft = Dft::default();
+    let fri_params = create_test_fri_params(challenge_mmcs, 2);
+    let pcs = MyPcs::new(dft, val_mmcs, fri_params);
+    let challenger = Challenger::new(perm);
+    StarkConfig::new(pcs, challenger)
+}
+
+#[test]
+fn another_test_symbolic_to_expr_is_first_row() {
+    use p3_air::AirBuilder;
+    use p3_commit::{Pcs, PolynomialSpace};
+    use p3_field::{PackedValue, PrimeCharacteristicRing};
+    use p3_uni_stark::SymbolicAirBuilder;
+
+    let builder = SymbolicAirBuilder::<F>::new(0, 1, 0, 0, 0);
+
+    let main = builder.main();
+
+    let local = main.row_slice(0).unwrap();
+
+    let first_col = local[0].into();
+
+    // This columns agrees with `is_first_row` over the trace domain
+    let main_flat = vec![
+        F::ONE,
+        F::ZERO,
+        F::ZERO,
+        F::ZERO,
+        F::ZERO,
+        F::ZERO,
+        F::ZERO,
+        F::ZERO,
+    ];
+
+    let main_trace = RowMajorMatrix::new(main_flat, 1);
+
+    let config = make_config(2029);
+    let pcs = config.pcs();
+    let ext_trace_domain = <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(pcs, 8);
+
+    let (_, main_trace) =
+        <MyPcs as Pcs<Challenge, Challenger>>::commit(pcs, [(ext_trace_domain, main_trace)]);
+
+    let quotient_domain = ext_trace_domain.create_disjoint_domain(8);
+    println!(
+        "expected domain:  TwoAdicMultiplicativeCoset {{
+        shift: 31,
+        shift_inverse: 64944062,
+        log_size: 3,
+        }};"
+    );
+    println!("got = {:?}", quotient_domain);
+
+    let trace_on_quotient_domain = <MyPcs as Pcs<Challenge, Challenger>>::get_evaluations_on_domain(
+        pcs,
+        &main_trace,
+        0,
+        quotient_domain,
+    );
+
+    let sels = ext_trace_domain.selectors_on_coset(quotient_domain);
+
+    let is_first_row = *PackedVal::<MyConfig>::from_slice(&sels.is_first_row[0..4]);
+    let is_last_row = *PackedVal::<MyConfig>::from_slice(&sels.is_last_row[0..4]);
+    let is_transition = *PackedVal::<MyConfig>::from_slice(&sels.is_transition[0..4]);
+
+    let main = RowMajorMatrix::new(trace_on_quotient_domain.vertically_packed_row_pair(0, 1), 1);
+
+    let perm = RowMajorMatrix::new(vec![], 0);
+
+    let accumulator = PackedChallenge::<MyConfig>::ZERO;
+    let inner_folder: ProverConstraintFolder<'_, MyConfig> = ProverConstraintFolder {
+        main: main.as_view(),
+        public_values: &[],
+        is_first_row,
+        is_last_row,
+        is_transition,
+        alpha_powers: &[],
+        decomposed_alpha_powers: &[],
+        accumulator,
+        constraint_index: 0,
+    };
+    let packed_perm_challenges = vec![];
+
+    let folder: ProverConstraintFolderWithLookups<'_, _> = ProverConstraintFolderWithLookups {
+        inner: inner_folder,
+        permutation: perm.as_view(),
+        permutation_challenges: &packed_perm_challenges,
+    };
+
+    // Evaluate the constraints at row `i`.
+    let eval = eval_symbolic(&folder, &first_col);
+    let is_first_row = SymbolicExpression::IsFirstRow;
+    let expected_eval = eval_symbolic(&folder, &is_first_row);
+
+    // Assert that the evaluated constraints are correct.
+    assert_eq!(eval, expected_eval);
 }
 
 #[test]

@@ -1,6 +1,6 @@
 //! Lookup Arguments for STARKs
 
-#![no_std]
+// #![no_std]
 
 extern crate alloc;
 
