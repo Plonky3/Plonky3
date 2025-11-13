@@ -131,13 +131,15 @@ pub fn eval_eq_base_batch<F, EF, const INITIALIZED: bool>(
     eval_batch_common::<F, F, EF, EqBaseFieldEvaluator<F, EF>, INITIALIZED>(evals, out, scalars);
 }
 
-/// Computes the first k binary powers of each element in `vars`.
-/// For each `var`, returns `[var^1, var^2, var^4, ..., var^(2^(k-1))]`.
+/// Compute the first `k` squares of each element of `vars`.
+///
+/// For each `var` in `vars`, computes `[var^1, var^2, var^4, ..., var^(2^(k-1))]`.
 #[inline]
-fn binary_powers<F: Field>(vars: &[F], k: usize) -> Vec<Vec<F>> {
-    vars.iter()
+fn binary_powers<F: Field>(vars: &[F], k: usize) -> RowMajorMatrix<F> {
+    let flat_powers: Vec<F> = vars
+        .iter()
         .cloned()
-        .map(|mut var| {
+        .flat_map(|mut var| {
             (0..k)
                 .map(|_| {
                     let ret = var;
@@ -145,8 +147,11 @@ fn binary_powers<F: Field>(vars: &[F], k: usize) -> Vec<Vec<F>> {
                     ret
                 })
                 .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
         })
-        .collect::<Vec<_>>()
+        .collect::<Vec<_>>();
+    RowMajorMatrix::new(flat_powers, k).transpose()
 }
 
 /// Computes the compressed powers polynomial `\sum_i \γ_i ⋅ powers(z_i)` over all
@@ -181,14 +186,8 @@ pub fn eval_pow_batch_base<F, EF, const INITIALIZED: bool>(
 {
     debug_assert_eq!(vars.len(), scalars.len());
     let k = log2_strict_usize(out.len());
-    let flat_points = binary_powers(vars, k)
-        .iter()
-        .flat_map(|powers| powers.iter().rev())
-        .cloned()
-        .collect::<Vec<_>>();
-    let flat_points = RowMajorMatrixView::new(&flat_points, k).transpose();
     eval_batch_common::<F, F, EF, PowBaseEvaluator<F, EF>, INITIALIZED>(
-        flat_points.as_view(),
+        binary_powers(vars, k).as_view(),
         out,
         scalars,
     );
@@ -222,14 +221,8 @@ where
     EF: ExtensionField<F>,
 {
     let k = log2_strict_usize(out.len());
-    let flat_points = binary_powers(vars, k)
-        .iter()
-        .flat_map(|powers| powers.iter().rev())
-        .cloned()
-        .collect::<Vec<_>>();
-    let flat_points = RowMajorMatrixView::new(&flat_points, k).transpose();
     eval_batch_common::<F, EF, EF, PowExtEvaluator<F, EF>, INITIALIZED>(
-        flat_points.as_view(),
+        binary_powers(vars, k).as_view(),
         out,
         scalars,
     );
