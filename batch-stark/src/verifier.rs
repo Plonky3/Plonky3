@@ -401,6 +401,7 @@ where
 
     let inner_folder = VerifierConstraintFolder {
         main,
+        preprocessed: None, // multi-stark doesn't support preprocessed columns yet
         public_values,
         is_first_row: sels.is_first_row,
         is_last_row: sels.is_last_row,

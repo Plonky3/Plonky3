@@ -720,6 +720,8 @@ fn test_invalid_trace_width_rejected() {
                         .base_opened_values
                         .trace_next
                         .clone(),
+                    preprocessed_local: None,
+                    preprocessed_next: None,
                     quotient_chunks: valid_proof.opened_values.instances[0]
                         .base_opened_values
                         .quotient_chunks

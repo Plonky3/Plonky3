@@ -422,6 +422,8 @@ where
         let base_opened = OpenedValues {
             trace_local,
             trace_next,
+            preprocessed_local: None, // multi-stark doesn't support preprocessed columns yet
+            preprocessed_next: None,
             quotient_chunks: qcs,
             random: None, // TODO: ZK not supported in batch-stark yet
         };
@@ -558,6 +560,7 @@ where
             let accumulator = PackedChallenge::<SC>::ZERO;
             let inner_folder = ProverConstraintFolder {
                 main: main.as_view(),
+                preprocessed: None, // multi-stark doesn't support preprocessed columns yet
                 public_values,
                 is_first_row,
                 is_last_row,

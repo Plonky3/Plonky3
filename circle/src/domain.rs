@@ -3,8 +3,8 @@ use alloc::vec::Vec;
 
 use itertools::{Itertools, iterate};
 use p3_commit::{LagrangeSelectors, PolynomialSpace};
-use p3_field::ExtensionField;
 use p3_field::extension::ComplexExtendable;
+use p3_field::{ExtensionField, batch_multiplicative_inverse};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
@@ -197,19 +197,47 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
     chunks=2: 0 1 1 0 0 1 1 0 0 1 1 0 0 1 1 0
     chunks=4: 0 1 2 3 3 2 1 0 0 1 2 3 3 2 1 0
     */
-    // wow, really slow!
-    // todo: batch inverses
     #[instrument(skip_all, fields(log_n = %coset.log_n))]
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>> {
-        let sels = coset
-            .points()
-            .map(|p| self.selectors_at_point(p.to_projective_line().unwrap()))
-            .collect_vec();
+        let pts = coset.points().collect_vec();
+
+        // Precompute constants and per-point numerators/denominators
+        let neg_shift = -self.shift;
+        let k = neg_shift.s_p_at_p(self.log_n);
+
+        let z_vals: Vec<Self::Val> = pts.iter().map(|&at| self.vanishing_poly(at)).collect();
+        let den_shift: Vec<Self::Val> = pts.iter().map(|&at| self.shift.v_tilde_p(at)).collect();
+        let den_negshift_k: Vec<Self::Val> =
+            pts.iter().map(|&at| neg_shift.v_tilde_p(at) * k).collect();
+
+        // Batch inverses
+        let inv_vanishing = batch_multiplicative_inverse(&z_vals);
+        let inv_den_shift = batch_multiplicative_inverse(&den_shift);
+        let inv_den_negshift_k = batch_multiplicative_inverse(&den_negshift_k);
+
+        // Build selectors
+        // TODO: If we need to make this faster we could look into using packed fields.
+        let is_first_row = z_vals
+            .iter()
+            .zip(inv_den_shift.iter())
+            .map(|(&z, &inv_d)| z * inv_d)
+            .collect();
+        let is_last_row = z_vals
+            .iter()
+            .zip(inv_den_negshift_k.iter())
+            .map(|(&z, &inv_dk)| z * inv_dk * k)
+            .collect();
+        let is_transition = z_vals
+            .iter()
+            .zip(inv_den_negshift_k.iter())
+            .map(|(&z, &inv_dk)| Self::Val::ONE - z * inv_dk)
+            .collect();
+
         LagrangeSelectors {
-            is_first_row: sels.iter().map(|s| s.is_first_row).collect(),
-            is_last_row: sels.iter().map(|s| s.is_last_row).collect(),
-            is_transition: sels.iter().map(|s| s.is_transition).collect(),
-            inv_vanishing: sels.iter().map(|s| s.inv_vanishing).collect(),
+            is_first_row,
+            is_last_row,
+            is_transition,
+            inv_vanishing,
         }
     }
 }
