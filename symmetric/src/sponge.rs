@@ -101,7 +101,7 @@ where
     /// Squeeze output from sponge state.
     ///
     /// Extracts the first OUT elements from the state.
-    fn squeeze<const OUT: usize>(&self, state: &mut [T; WIDTH]) -> [T; OUT] {
+    fn squeeze<const OUT: usize>(&self, state: &[T; WIDTH]) -> [T; OUT] {
         state[..OUT].try_into().unwrap()
     }
 }

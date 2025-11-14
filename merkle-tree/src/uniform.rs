@@ -166,52 +166,8 @@ where
 
     scalar_states
         .into_iter()
-        .map(|state| sponge.squeee(state))
-        .collect();
-
-    // Refresh the packed representation so the SIMD states mirror `scalar_states`.
-    let packed_len = final_height.div_ceil(pack_width);
-    if final_height < pack_width {
-        pack_small_state::<P, WIDTH>(&scalar_states[..final_height], &mut packed_states[0]);
-    } else {
-        pack_full_states::<P, WIDTH>(
-            &scalar_states[..final_height],
-            &mut packed_states[..packed_len],
-        );
-    }
-
-    // Squeeze digests from each packed state and expand them back into scalar leaves.
-    packed_states[..packed_len]
-        .par_iter_mut()
-        .map(|state| sponge.squeeze::<DIGEST_ELEMS>(state))
-        .collect::<Vec<_>>()
-        .into_iter()
-        .flat_map(unpack_array)
-        .take(final_height)
+        .map(|state| sponge.squeeze::<DIGEST_ELEMS>(&state))
         .collect()
-}
-
-/// Pack scalar states that occupy fewer lanes than `P::WIDTH`, zero-padding the remainder.
-fn pack_small_state<P, const WIDTH: usize>(
-    scalar_slice: &[[P::Value; WIDTH]],
-    packed_state: &mut [P; WIDTH],
-) where
-    P: PackedValue,
-{
-    let lane_count = scalar_slice.len();
-    debug_assert!(
-        lane_count < P::WIDTH,
-        "pack_small_state expects fewer lanes than the packing width"
-    );
-    for col in 0..WIDTH {
-        packed_state[col] = P::from_fn(|lane| {
-            if lane < lane_count {
-                scalar_slice[lane][col]
-            } else {
-                P::Value::default()
-            }
-        });
-    }
 }
 
 /// Pack a slice of scalar states whose length is an exact multiple of the SIMD width.
@@ -308,7 +264,7 @@ mod tests {
     use alloc::vec::Vec;
     use core::array;
 
-    use p3_matrix::{dense::RowMajorMatrix, Matrix};
+    use p3_matrix::{Matrix, dense::RowMajorMatrix};
     use p3_symmetric::{CryptographicPermutation, Permutation};
 
     use super::*;
