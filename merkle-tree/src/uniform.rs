@@ -106,11 +106,11 @@ where
         let height = matrix.height();
 
         if height < P::WIDTH {
-            (0..height).for_each(|lane| {
+            for lane in 0..height {
                 let state = &mut temp_states[lane];
-                let row = matrix.row(lane).unwrap();
-                sponge.absorb(state, row);
-            });
+                let row = matrix.row(lane).expect("row must exist for narrow absorb");
+                sponge.absorb(state, row.into_iter());
+            }
             states[..height].copy_from_slice(&temp_states[..height]);
         } else {
             let scaling_factor = height / active_height;
@@ -121,7 +121,7 @@ where
                 .zip(states[..active_height].par_iter())
                 .for_each(|(chunk, state)| chunk.fill(*state));
 
-            // ADD A SIMPLE COMMENT HERE
+            // Pack the replicated scalar states into SIMD-friendly buffers.
             let packed_height = height.div_ceil(P::WIDTH);
             packed_states
                 .par_iter_mut()
@@ -133,7 +133,7 @@ where
                     });
                 });
 
-            // ADD A SIMPLE COMMENT HERE
+            // Absorb the packed rows from the matrix into the sponge states.
             (0..packed_height).into_par_iter().for_each(|packed_idx| {
                 let base_state = packed_idx * P::WIDTH;
                 sponge.absorb(
@@ -142,7 +142,7 @@ where
                 );
             });
 
-            // ADD A SIMPLE COMMENT HERE
+            // Scatter the updated SIMD states back into the canonical scalar layout.
             states
                 .par_chunks_mut(P::WIDTH)
                 .zip(packed_states.par_iter())
@@ -161,7 +161,7 @@ where
 
     states
         .into_iter()
-        .map(|state| sponge.squeeze::<DIGEST_ELEMS>(&state))
+        .map(|mut state| sponge.squeeze::<DIGEST_ELEMS>(&mut state))
         .collect()
 }
 
@@ -205,283 +205,132 @@ fn unpack_array<P: PackedValue, const N: usize>(
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
-    use core::array;
 
-    use p3_matrix::{Matrix, dense::RowMajorMatrix};
-    use p3_symmetric::{CryptographicPermutation, Permutation};
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_field::Field;
+    use p3_matrix::dense::RowMajorMatrix;
+    use p3_matrix::Matrix;
+    use p3_symmetric::{PaddingFreeSponge, StatefulSponge, TruncatedPermutation};
+    use rand::{rngs::SmallRng, SeedableRng};
 
     use super::*;
 
-    #[derive(Clone, Copy, Default)]
-    struct AdditiveSponge;
+    type F = BabyBear;
+    type Packed = <F as Field>::Packing;
 
-    impl StatefulSponge<[u64; 4], 4, 4> for AdditiveSponge {
-        type Permutation = MockPermutation;
+    const WIDTH: usize = 16;
+    const RATE: usize = 8;
+    const DIGEST: usize = 8;
+    const PACK_WIDTH: usize = <Packed as PackedValue>::WIDTH;
 
-        fn permutation(&self) -> &Self::Permutation {
-            static PERM: MockPermutation = MockPermutation;
-            &PERM
-        }
+    fn poseidon_components() -> (
+        PaddingFreeSponge<Poseidon2BabyBear<WIDTH>, WIDTH, RATE, DIGEST>,
+        TruncatedPermutation<Poseidon2BabyBear<WIDTH>, 2, DIGEST, WIDTH>,
+    ) {
+        let mut rng = SmallRng::seed_from_u64(1);
+        let permutation = Poseidon2BabyBear::<WIDTH>::new_from_rng_128(&mut rng);
+        let sponge = PaddingFreeSponge::<_, WIDTH, RATE, DIGEST>::new(permutation.clone());
+        let compressor = TruncatedPermutation::<_, 2, DIGEST, WIDTH>::new(permutation);
+        (sponge, compressor)
+    }
 
-        fn absorb<I>(&self, state: &mut [[u64; 4]; 4], input: I)
-        where
-            I: IntoIterator<Item = [u64; 4]>,
-        {
-            for word in input {
-                for lane in 0..4 {
-                    for col in 0..4 {
-                        state[lane][col] = state[lane][col].wrapping_add(word[col]);
-                    }
+    fn field_matrix(rows: usize, cols: usize, offset: u32) -> RowMajorMatrix<F> {
+        let data = (0..rows * cols)
+            .map(|i| F::new(offset + i as u32))
+            .collect::<Vec<_>>();
+        RowMajorMatrix::new(data, cols)
+    }
+
+    fn reference_uniform_leaves(
+        mut matrices: Vec<RowMajorMatrix<F>>,
+        sponge: &PaddingFreeSponge<Poseidon2BabyBear<WIDTH>, WIDTH, RATE, DIGEST>,
+    ) -> Vec<[F; DIGEST]> {
+        matrices.sort_by_key(|m| m.height());
+        assert!(!matrices.is_empty());
+
+        let final_height = matrices.last().unwrap().height();
+        let mut states = vec![[F::ZERO; WIDTH]; final_height];
+        let mut scratch = states.clone();
+        let mut active_height = matrices.first().unwrap().height();
+
+        for matrix in matrices.iter() {
+            let height = matrix.height();
+
+            if height < PACK_WIDTH {
+                for row in 0..height {
+                    let mut state = scratch[row];
+                    let row_iter = matrix.row(row).expect("row exists").into_iter();
+                    sponge.absorb(&mut state, row_iter);
+                    scratch[row] = state;
                 }
-                self.permutation().permute_mut(state);
-            }
-        }
-
-        fn squeeze<const OUT: usize>(&self, state: &mut [[u64; 4]; 4]) -> [[u64; 4]; OUT] {
-            core::array::from_fn(|i| state[i % 4])
-        }
-    }
-
-    #[derive(Clone, Copy, Default)]
-    struct MockPermutation;
-
-    impl Permutation<[[u64; 4]; 4]> for MockPermutation {
-        fn permute_mut(&self, state: &mut [[u64; 4]; 4]) {
-            for lane in state.iter_mut() {
-                lane.rotate_left(1);
-            }
-        }
-    }
-
-    impl Permutation<[u64; 4]> for MockPermutation {
-        fn permute_mut(&self, state: &mut [u64; 4]) {
-            state.rotate_left(1);
-        }
-    }
-
-    impl CryptographicPermutation<[[u64; 4]; 4]> for MockPermutation {}
-    impl CryptographicPermutation<[u64; 4]> for MockPermutation {}
-
-    impl StatefulSponge<u64, 4, 4> for AdditiveSponge {
-        type Permutation = MockPermutation;
-
-        fn permutation(&self) -> &Self::Permutation {
-            static PERM: MockPermutation = MockPermutation;
-            &PERM
-        }
-
-        fn absorb<I>(&self, state: &mut [u64; 4], input: I)
-        where
-            I: IntoIterator<Item = u64>,
-        {
-            let mut input = input.into_iter();
-            'outer: loop {
-                for col in 0..4 {
-                    if let Some(x) = input.next() {
-                        state[col] = state[col].wrapping_add(x);
-                    } else {
-                        if col != 0 {
-                            self.permutation().permute_mut(state);
-                        }
-                        break 'outer;
-                    }
+                states[..height].copy_from_slice(&scratch[..height]);
+            } else {
+                let growth = height / active_height;
+                for row in 0..height {
+                    scratch[row] = states[row / growth];
                 }
-                self.permutation().permute_mut(state);
+                for row in 0..height {
+                    let mut state = scratch[row];
+                    let row_iter = matrix.row(row).expect("row exists").into_iter();
+                    sponge.absorb(&mut state, row_iter);
+                    scratch[row] = state;
+                }
+                states[..height].copy_from_slice(&scratch[..height]);
             }
+
+            active_height = height;
         }
 
-        fn squeeze<const OUT: usize>(&self, state: &mut [u64; 4]) -> [u64; OUT] {
-            array::from_fn(|i| state[i % 4])
-        }
+        states
+            .iter_mut()
+            .map(|state| sponge.squeeze::<DIGEST>(state))
+            .collect()
     }
 
     #[test]
-    fn uniform_leaves_match_concatenated_matrix() {
-        type Packed = [u64; 4];
-        const WIDTH: usize = 4;
-        const RATE: usize = 4;
-        const DIGEST: usize = 2;
+    fn uniform_leaves_match_reference() {
+        let (sponge, _) = poseidon_components();
 
-        let sponge = AdditiveSponge;
+        let small_height = if PACK_WIDTH > 1 { PACK_WIDTH / 2 } else { 1 };
+        let large_height = PACK_WIDTH * 2;
+        assert!(small_height.is_power_of_two() && small_height > 0);
+        assert!(large_height.is_power_of_two());
 
-        let small = RowMajorMatrix::new(vec![1, 2, 3, 4], 2); // height 2, width 2
-        let large = RowMajorMatrix::new(vec![10, 20, 30, 40, 50, 60, 70, 80], 2); // height 4, width 2
+        let small = field_matrix(small_height, 3, 1);
+        let large = field_matrix(large_height, 5, 1_000);
 
-        let leaves_sorted = build_uniform_leaves::<Packed, _, _, WIDTH, RATE, DIGEST>(
-            vec![small.clone(), large.clone()],
-            &sponge,
-        );
+        let matrices = vec![small.clone(), large.clone()];
+        let leaves =
+            build_uniform_leaves::<Packed, _, _, WIDTH, RATE, DIGEST>(matrices.clone(), &sponge);
 
-        let leaves_unsorted =
-            build_uniform_leaves::<Packed, _, _, WIDTH, RATE, DIGEST>(vec![large, small], &sponge);
-
-        assert_eq!(leaves_sorted, leaves_unsorted);
-    }
-
-    #[derive(Clone, Copy, Default)]
-    struct LaneMixSponge;
-
-    impl StatefulSponge<[u64; 4], 4, 4> for LaneMixSponge {
-        type Permutation = LaneMixPermutation;
-
-        fn permutation(&self) -> &Self::Permutation {
-            static PERM: LaneMixPermutation = LaneMixPermutation;
-            &PERM
-        }
-
-        fn absorb<I>(&self, state: &mut [[u64; 4]; 4], input: I)
-        where
-            I: IntoIterator<Item = [u64; 4]>,
-        {
-            for word in input {
-                let lane_sum = word.iter().copied().fold(0u64, u64::wrapping_add);
-                for lane in 0..4 {
-                    for col in 0..4 {
-                        state[lane][col] = state[lane][col]
-                            .wrapping_add(word[col])
-                            .wrapping_add(lane_sum);
-                    }
-                }
-                self.permutation().permute_mut(state);
-            }
-        }
-
-        fn squeeze<const OUT: usize>(&self, state: &mut [[u64; 4]; 4]) -> [[u64; 4]; OUT] {
-            array::from_fn(|i| state[(i + 1) % 4])
-        }
-    }
-
-    impl StatefulSponge<u64, 4, 4> for LaneMixSponge {
-        type Permutation = LaneMixPermutation;
-
-        fn permutation(&self) -> &Self::Permutation {
-            static PERM: LaneMixPermutation = LaneMixPermutation;
-            &PERM
-        }
-
-        fn absorb<I>(&self, state: &mut [u64; 4], input: I)
-        where
-            I: IntoIterator<Item = u64>,
-        {
-            let mut input = input.into_iter();
-            'outer: loop {
-                let mut lane_sum = 0u64;
-                for col in 0..4 {
-                    if let Some(x) = input.next() {
-                        lane_sum = lane_sum.wrapping_add(x);
-                        state[col] = state[col].wrapping_add(x);
-                    } else {
-                        if col != 0 {
-                            self.permutation().permute_mut(state);
-                        }
-                        break 'outer;
-                    }
-                }
-                for col in 0..4 {
-                    state[col] = state[col].wrapping_add(lane_sum);
-                }
-                self.permutation().permute_mut(state);
-            }
-        }
-
-        fn squeeze<const OUT: usize>(&self, state: &mut [u64; 4]) -> [u64; OUT] {
-            array::from_fn(|i| state[(i + 1) % 4])
-        }
-    }
-
-    #[derive(Clone, Copy, Default)]
-    struct LaneMixPermutation;
-
-    impl Permutation<[[u64; 4]; 4]> for LaneMixPermutation {
-        fn permute_mut(&self, state: &mut [[u64; 4]; 4]) {
-            let snapshot = *state;
-            for lane in 0..4 {
-                for col in 0..4 {
-                    let neighbor = snapshot[(lane + 1) % 4][(lane + col) % 4];
-                    state[lane][col] = state[lane][col].wrapping_add(neighbor);
-                }
-            }
-            state.rotate_left(1);
-        }
-    }
-
-    impl Permutation<[u64; 4]> for LaneMixPermutation {
-        fn permute_mut(&self, state: &mut [u64; 4]) {
-            let snapshot = *state;
-            for col in 0..4 {
-                let neighbor = snapshot[(col + 1) % 4];
-                state[col] = state[col].wrapping_add(neighbor);
-            }
-            state.rotate_left(1);
-        }
-    }
-
-    impl CryptographicPermutation<[[u64; 4]; 4]> for LaneMixPermutation {}
-    impl CryptographicPermutation<[u64; 4]> for LaneMixPermutation {}
-
-    #[test]
-    fn uniform_leaves_zero_padding_matches_reference() {
-        type Packed = [u64; 4];
-        const WIDTH: usize = 4;
-        const RATE: usize = 4;
-        const DIGEST: usize = 2;
-
-        let sponge = LaneMixSponge;
-
-        // height 2 < pack width, exercises the zero-padding path
-        let matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 10, 20, 30, 40], 4);
-
-        let leaves = build_uniform_leaves::<Packed, _, _, WIDTH, RATE, DIGEST>(
-            vec![matrix.clone()],
-            &sponge,
-        );
-
-        let expected =
-            reference_zero_padded_leaves::<Packed, _, WIDTH, RATE, DIGEST>(&matrix, &sponge);
-
+        let expected = reference_uniform_leaves(matrices, &sponge);
         assert_eq!(leaves, expected);
     }
 
-    /// Reference implementation that hashes a short matrix using explicit zero padding.
-    fn reference_zero_padded_leaves<
-        P,
-        H,
-        const WIDTH: usize,
-        const RATE: usize,
-        const DIGEST_ELEMS: usize,
-    >(
-        matrix: &RowMajorMatrix<u64>,
-        sponge: &H,
-    ) -> Vec<[u64; DIGEST_ELEMS]>
-    where
-        P: PackedValue<Value = u64> + Default,
-        H: StatefulSponge<P, WIDTH, RATE>,
-    {
-        let pack_width = P::WIDTH;
-        let height = matrix.height();
-        assert!(
-            height <= pack_width,
-            "reference helper only supports a single SIMD packet",
-        );
-        let mut scalar_states = vec![[0u64; WIDTH]; height];
-        let mut working_scalar = scalar_states.clone();
+    #[test]
+    fn digest_layers_match_truncated_poseidon() {
+        let (sponge, compressor) = poseidon_components();
 
-        for lane in 0..height {
-            let mut state = working_scalar[lane];
-            let row_iter = matrix
-                .row_slice(lane)
-                .expect("row within height")
-                .iter()
-                .copied();
-            sponge.absorb(&mut state, row_iter);
-            working_scalar[lane] = state;
+        let matrix = field_matrix(PACK_WIDTH * 2, 4, 10_000);
+        let matrices = vec![matrix.clone()];
+
+        let leaves =
+            build_uniform_leaves::<Packed, _, _, WIDTH, RATE, DIGEST>(matrices.clone(), &sponge);
+        let reference = reference_uniform_leaves(matrices, &sponge);
+        assert_eq!(leaves, reference);
+
+        let mut naive_layers = vec![reference.clone()];
+        let mut current = reference;
+        while current.len() > 1 {
+            let mut next = Vec::with_capacity(current.len() / 2);
+            for pair in current.chunks_exact(2) {
+                next.push(compressor.compress([pair[0], pair[1]]));
+            }
+            naive_layers.push(next.clone());
+            current = next;
         }
 
-        scalar_states[..height].copy_from_slice(&working_scalar[..height]);
-
-        scalar_states
-            .iter_mut()
-            .map(|state| sponge.squeeze::<DIGEST_ELEMS>(state))
-            .collect()
+        let actual_layers = build_digest_layers::<Packed, _, DIGEST>(leaves, &compressor);
+        assert_eq!(actual_layers, naive_layers);
     }
 }
