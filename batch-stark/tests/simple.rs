@@ -1463,12 +1463,12 @@ fn single_table_local_lookup_trace<F: Field>(height: usize) -> RowMajorMatrix<F>
         v[i * width + 1] = if i < height - 1 {
             F::from_u64((height - i - 1) as u64)
         } else {
-            F::from_u64(11 as u64) // Last row value
+            F::from_u64(11) // Last row value
         };
         // Column 2
         if i != height - 1 {
-            v[i * width + 2] = F::from_u64(11)
-        };
+            v[i * width + 2] = F::from_u64(11);
+        }
         // Column 3: lookup table column
         v[i * width + 3] = F::from_u64((height - i - 1) as u64);
         // Multiplicity columns
