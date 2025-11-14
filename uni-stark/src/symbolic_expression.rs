@@ -1,9 +1,67 @@
-use alloc::rc::Rc;
+/// Macro to implement From<SymbolicExpression<$field>> for SymbolicExpression<BinomialExtensionField<$field, $n>>
+#[macro_export]
+macro_rules! impl_symbolic_expr_from_field_to_ext {
+    ($field:ty, $n:expr) => {
+        impl From<SymbolicExpression<$field>>
+            for SymbolicExpression<BinomialExtensionField<$field, $n>>
+        {
+            fn from(expr: SymbolicExpression<$field>) -> Self {
+                match expr {
+                    SymbolicExpression::Variable(v) => {
+                        SymbolicExpression::Variable(SymbolicVariable::new(v.entry, v.index))
+                    }
+                    SymbolicExpression::IsFirstRow => SymbolicExpression::IsFirstRow,
+                    SymbolicExpression::IsLastRow => SymbolicExpression::IsLastRow,
+                    SymbolicExpression::IsTransition => SymbolicExpression::IsTransition,
+                    SymbolicExpression::Constant(c) => {
+                        SymbolicExpression::Constant(BinomialExtensionField::<$field, $n>::from(c))
+                    }
+                    SymbolicExpression::Add {
+                        x,
+                        y,
+                        degree_multiple,
+                    } => SymbolicExpression::Add {
+                        x: alloc::sync::Arc::new(Self::from((*x).clone())),
+                        y: alloc::sync::Arc::new(Self::from((*y).clone())),
+                        degree_multiple,
+                    },
+                    SymbolicExpression::Sub {
+                        x,
+                        y,
+                        degree_multiple,
+                    } => SymbolicExpression::Sub {
+                        x: alloc::sync::Arc::new(Self::from((*x).clone())),
+                        y: alloc::sync::Arc::new(Self::from((*y).clone())),
+                        degree_multiple,
+                    },
+                    SymbolicExpression::Neg { x, degree_multiple } => SymbolicExpression::Neg {
+                        x: alloc::sync::Arc::new(Self::from((*x).clone())),
+                        degree_multiple,
+                    },
+                    SymbolicExpression::Mul {
+                        x,
+                        y,
+                        degree_multiple,
+                    } => SymbolicExpression::Mul {
+                        x: alloc::sync::Arc::new(Self::from((*x).clone())),
+                        y: alloc::sync::Arc::new(Self::from((*y).clone())),
+                        degree_multiple,
+                    },
+                }
+            }
+        }
+    };
+}
+use alloc::sync::Arc;
 use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use p3_field::{Algebra, Field, InjectiveMonomial, PrimeCharacteristicRing};
+use p3_baby_bear::BabyBear;
+use p3_field::extension::BinomialExtensionField;
+use p3_field::{Algebra, ExtensionField, Field, InjectiveMonomial, PrimeCharacteristicRing};
+use p3_koala_bear::KoalaBear;
+use p3_mersenne_31::Mersenne31;
 
 use crate::symbolic_variable::SymbolicVariable;
 
@@ -16,22 +74,22 @@ pub enum SymbolicExpression<F> {
     IsTransition,
     Constant(F),
     Add {
-        x: Rc<Self>,
-        y: Rc<Self>,
+        x: Arc<Self>,
+        y: Arc<Self>,
         degree_multiple: usize,
     },
     Sub {
-        x: Rc<Self>,
-        y: Rc<Self>,
+        x: Arc<Self>,
+        y: Arc<Self>,
         degree_multiple: usize,
     },
     Neg {
-        x: Rc<Self>,
+        x: Arc<Self>,
         degree_multiple: usize,
     },
     Mul {
-        x: Rc<Self>,
-        y: Rc<Self>,
+        x: Arc<Self>,
+        y: Arc<Self>,
         degree_multiple: usize,
     },
 }
@@ -65,9 +123,15 @@ impl<F: Field> Default for SymbolicExpression<F> {
     }
 }
 
-impl<F: Field> From<F> for SymbolicExpression<F> {
-    fn from(value: F) -> Self {
-        Self::Constant(value)
+impl<F: Field, EF: ExtensionField<F>> From<SymbolicVariable<F>> for SymbolicExpression<EF> {
+    fn from(var: SymbolicVariable<F>) -> Self {
+        Self::Variable(SymbolicVariable::<EF>::new(var.entry, var.index))
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>> From<F> for SymbolicExpression<EF> {
+    fn from(var: F) -> Self {
+        Self::Constant(var.into())
     }
 }
 
@@ -84,6 +148,14 @@ impl<F: Field> PrimeCharacteristicRing for SymbolicExpression<F> {
         F::from_prime_subfield(f).into()
     }
 }
+
+// We need a macro to implement From<SymbolicExpression<F>> for SymbolicExpression<BinomialExtensionField<F, N>>, because we get conflict implementations if we try to do an automatic implementation.
+// Use the macro for BabyBear and 4
+impl_symbolic_expr_from_field_to_ext!(BabyBear, 4);
+// Use the macro for KoalaBear and 4
+impl_symbolic_expr_from_field_to_ext!(KoalaBear, 4);
+// Use the macro for Mersenne31 and 3
+impl_symbolic_expr_from_field_to_ext!(Mersenne31, 3);
 
 impl<F: Field> Algebra<F> for SymbolicExpression<F> {}
 
@@ -104,8 +176,8 @@ where
             (Self::Constant(lhs), Self::Constant(rhs)) => Self::Constant(lhs + rhs),
             (lhs, rhs) => Self::Add {
                 degree_multiple: lhs.degree_multiple().max(rhs.degree_multiple()),
-                x: Rc::new(lhs),
-                y: Rc::new(rhs),
+                x: Arc::new(lhs),
+                y: Arc::new(rhs),
             },
         }
     }
@@ -139,8 +211,8 @@ impl<F: Field, T: Into<Self>> Sub<T> for SymbolicExpression<F> {
             (Self::Constant(lhs), Self::Constant(rhs)) => Self::Constant(lhs - rhs),
             (lhs, rhs) => Self::Sub {
                 degree_multiple: lhs.degree_multiple().max(rhs.degree_multiple()),
-                x: Rc::new(lhs),
-                y: Rc::new(rhs),
+                x: Arc::new(lhs),
+                y: Arc::new(rhs),
             },
         }
     }
@@ -163,7 +235,7 @@ impl<F: Field> Neg for SymbolicExpression<F> {
             Self::Constant(c) => Self::Constant(-c),
             expr => Self::Neg {
                 degree_multiple: expr.degree_multiple(),
-                x: Rc::new(expr),
+                x: Arc::new(expr),
             },
         }
     }
@@ -177,8 +249,8 @@ impl<F: Field, T: Into<Self>> Mul<T> for SymbolicExpression<F> {
             (Self::Constant(lhs), Self::Constant(rhs)) => Self::Constant(lhs * rhs),
             (lhs, rhs) => Self::Mul {
                 degree_multiple: lhs.degree_multiple() + rhs.degree_multiple(),
-                x: Rc::new(lhs),
-                y: Rc::new(rhs),
+                x: Arc::new(lhs),
+                y: Arc::new(rhs),
             },
         }
     }
@@ -285,8 +357,8 @@ mod tests {
         );
 
         let add_expr = SymbolicExpression::<BabyBear>::Add {
-            x: Rc::new(variable_expr.clone()),
-            y: Rc::new(preprocessed_var.clone()),
+            x: Arc::new(variable_expr.clone()),
+            y: Arc::new(preprocessed_var.clone()),
             degree_multiple: 1,
         };
         assert_eq!(
@@ -296,8 +368,8 @@ mod tests {
         );
 
         let sub_expr = SymbolicExpression::<BabyBear>::Sub {
-            x: Rc::new(variable_expr.clone()),
-            y: Rc::new(preprocessed_var.clone()),
+            x: Arc::new(variable_expr.clone()),
+            y: Arc::new(preprocessed_var.clone()),
             degree_multiple: 1,
         };
         assert_eq!(
@@ -307,7 +379,7 @@ mod tests {
         );
 
         let neg_expr = SymbolicExpression::<BabyBear>::Neg {
-            x: Rc::new(variable_expr.clone()),
+            x: Arc::new(variable_expr.clone()),
             degree_multiple: 1,
         };
         assert_eq!(
@@ -317,8 +389,8 @@ mod tests {
         );
 
         let mul_expr = SymbolicExpression::<BabyBear>::Mul {
-            x: Rc::new(variable_expr),
-            y: Rc::new(preprocessed_var),
+            x: Arc::new(variable_expr),
+            y: Arc::new(preprocessed_var),
             degree_multiple: 2,
         };
         assert_eq!(
