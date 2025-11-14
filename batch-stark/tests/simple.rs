@@ -1318,7 +1318,8 @@ fn test_batch_stark_mixed_lookups() -> Result<(), impl Debug> {
     )
 }
 
-// Single table with local lookup involving `is_first_row` selector.
+// Single table with local lookup involving the Lagrange selectors. Since the selectors are not normalized,
+// we need to add multiplicity columns and multiply them by the selectors.
 #[derive(Debug, Clone, Copy)]
 struct SingleTableLocalLookupAir {
     num_lookups: usize,
@@ -1332,7 +1333,7 @@ impl SingleTableLocalLookupAir {
 
 impl<F> BaseAir<F> for SingleTableLocalLookupAir {
     fn width(&self) -> usize {
-        3 // 3 columns: sender, lookup table, mult1
+        7 // 7 columns: 3 sender columns (1 for each selector type), lookup table, 3 multiplicty columns (1 for each selector type)
     }
 }
 
@@ -1367,17 +1368,21 @@ where
         let symbolic_main = symbolic_air_builder.main();
         let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
 
-        let sender_col = symbolic_main_local[0]; // Column that sends values
-        let lookup_table_col = symbolic_main_local[1]; // Column that receives lookups
-        let mul1 = symbolic_main_local[2];
+        let sender_col1 = symbolic_main_local[0]; // Column that sends values
+        let sender_col2 = symbolic_main_local[1]; // Column that sends values
+        let sender_col3 = symbolic_main_local[2]; // Column that sends values
+        let lookup_table_col = symbolic_main_local[3]; // Column that receives lookups
+        let mul1 = symbolic_main_local[4]; // Multiplicity column for first selector
+        let mul2 = symbolic_main_local[5]; // Multiplicity column for second selector
+        let mul3 = symbolic_main_local[6]; // Multiplicity column for third selector
 
         // Local lookup: sender column looks up into lookup table column
         // Sender: send is_transition * sender_col
         // Receiver: receive lookup_table_col with multiplicity 1
-        let lookup_inputs = vec![
+        let lookup_inputs1 = vec![
             // Sender: send values from sender column with `is_first_row` multiplicity
             (
-                vec![sender_col.into()],
+                vec![sender_col1.into()],
                 symbolic_air_builder.is_first_row(),
                 Direction::Receive,
             ),
@@ -1390,9 +1395,45 @@ where
             ),
         ];
 
-        let local_lookup =
-            <Self as AirLookupHandler<AB>>::register_lookup(self, Kind::Local, &lookup_inputs);
-        lookups.push(local_lookup);
+        let lookup_inputs2 = vec![
+            // Sender: send values from sender column with `is_last_row` multiplicity
+            (
+                vec![sender_col2.into()],
+                symbolic_air_builder.is_transition(),
+                Direction::Receive,
+            ),
+            // Receiver: receive values in lookup table column with multiplicity 1 * `is_transition` multiplicity.
+            // Note that we need to multiply by `is_transition` here because the Lagrange selectors are not normalized.
+            (
+                vec![lookup_table_col.into()],
+                symbolic_air_builder.is_transition() * mul2,
+                Direction::Send,
+            ),
+        ];
+
+        let lookup_inputs3 = vec![
+            // Sender: send values from sender column with `is_transition` multiplicity
+            (
+                vec![sender_col3.into()],
+                symbolic_air_builder.is_last_row(),
+                Direction::Receive,
+            ),
+            // Receiver: receive values in lookup table column with multiplicity 1 * `is_last_row` multiplicity.
+            // Note that we need to multiply by `is_last_row` here because the Lagrange selectors are not normalized.
+            (
+                vec![lookup_table_col.into()],
+                symbolic_air_builder.is_last_row() * mul3,
+                Direction::Send,
+            ),
+        ];
+
+        let all_lookup_inputs = vec![lookup_inputs1, lookup_inputs2, lookup_inputs3];
+
+        for lookup_inputs in all_lookup_inputs {
+            let local_lookup =
+                <Self as AirLookupHandler<AB>>::register_lookup(self, Kind::Local, &lookup_inputs);
+            lookups.push(local_lookup);
+        }
 
         lookups
     }
@@ -1403,20 +1444,38 @@ fn single_table_local_lookup_trace<F: Field>(height: usize) -> RowMajorMatrix<F>
     assert!(height.is_power_of_two());
     assert!(height >= 2); // Need at least some transition rows and last row
 
-    let mut v = F::zero_vec(height * 3); // 2 columns
-
-    // Column 0: Sender column
-    // Transition rows (all rows except last): value 7
-    // Column 1: Lookup table column: 8..1
-    // Column 2 (mult1): 1 at row 0, 0 elsewhere
+    let width = 7;
+    let mut v = F::zero_vec(height * width); // 2 columns
+    // Column 0: all rows: value height - 1
+    // Column 1: all rows except last: 7 to 1, and last value is 11
+    // Column 2: all rows are 11 except last row which is 0
+    // Column 3: Lookup table column: values 7 to 0
+    // Column 4: (mult1) 1 at row 0, 0 elsewhere
+    // Column 5: (mult1): 1 everywhere except last row, which is 0
+    // Column 6: (mult2): 1 at last row, 0 elsewhere
     for i in 0..height {
-        v[i * 3] = F::from_u64((height - 1) as u64);
-        v[i * 3 + 1] = F::from_u64((height - i - 1) as u64);
+        // Sender columns:
+        // Column 0
+        v[i * width] = F::from_u64((height - 1) as u64);
+        // Column 1
+        v[i * width + 1] = if i < height - 1 {
+            F::from_u64((height - i - 1) as u64)
+        } else {
+            F::from_u64(11 as u64) // Last row value
+        };
+        // Column 2
+        if i != height - 1 {
+            v[i * width + 2] = F::from_u64(11)
+        };
+        // Column 3: lookup table column
+        v[i * width + 3] = F::from_u64((height - i - 1) as u64);
+        // Multiplicity columns
+        v[i * width + 4] = if i == 0 { F::ONE } else { F::ZERO }; // mult1: is_first_row
+        v[i * width + 5] = if i < height - 1 { F::ONE } else { F::ZERO }; // mult2: is_transition
+        v[i * width + 6] = if i == height - 1 { F::ONE } else { F::ZERO }; // mult3: is_last_row
     }
-    v[2] = F::ONE;
 
-    println!("v = {:?}", v);
-    RowMajorMatrix::new(v, 3)
+    RowMajorMatrix::new(v, width)
 }
 
 /// Test with a single table doing local lookup between its two columns
