@@ -76,18 +76,12 @@ where
 
     matrices.sort_by_key(|m| m.height());
 
-    let pack_width = P::WIDTH;
-    debug_assert!(
-        pack_width.is_power_of_two(),
-        "packing width {} must be a power of two",
-        pack_width
-    );
+    let _: () = { assert!(P::WIDTH.is_power_of_two()) };
 
     let initial_height = matrices[0].height();
 
     // Sanity-check matrix heights once so the main loop can assume clean invariants.
-    let mut prev_height = initial_height;
-    for (idx, matrix) in matrices.iter().enumerate() {
+    for matrix in &matrices {
         let height = matrix.height();
         debug_assert!(height > 0, "matrix height must be non-zero");
         debug_assert!(
@@ -95,22 +89,14 @@ where
             "matrix height {} must be a power of two",
             height
         );
-        if idx > 0 {
-            debug_assert!(
-                height % prev_height == 0,
-                "matrix height {} must be a multiple of the previous height {}",
-                height,
-                prev_height
-            );
-        }
-        prev_height = height;
     }
+
     let final_height = matrices.last().unwrap().height();
-    let final_packed = final_height.div_ceil(pack_width);
+    let final_packed = final_height.div_ceil(P::WIDTH);
 
     let scalar_default = [P::Value::default(); WIDTH];
-    let mut scalar_states = vec![scalar_default; final_height]; // canonical per-leaf scalar states
-    let mut working_scalar = vec![scalar_default; final_height]; // scratch buffer when growing matrices
+    let mut states = vec![scalar_default; final_height]; // canonical per-leaf scalar states
+    let mut temp_states = vec![scalar_default; final_height]; // scratch buffer when growing matrices
     let mut packed_states = vec![[P::default(); WIDTH]; final_packed.max(1)]; // SIMD-aligned states
 
     let mut active_height = initial_height;
@@ -119,107 +105,64 @@ where
     for matrix in matrices.iter() {
         let height = matrix.height();
 
-        let growth = height / active_height;
-
-        // Replicate each canonical state `growth` times into the scratch buffer so we can absorb
-        // the wider matrix input.
-        working_scalar[..height]
-            .par_chunks_mut(growth)
-            .zip(scalar_states[..active_height].par_iter())
-            .for_each(|(chunk, state)| chunk.fill(*state));
-
-        let required_packed = height.div_ceil(pack_width);
-        if height < pack_width {
-            // Narrow matrices fit in a single SIMD packet; absorb lane-by-lane using scalar states.
+        if height < P::WIDTH {
             (0..height).for_each(|lane| {
-                let state = &mut working_scalar[lane];
-                let row_slice = matrix
-                    .row_slice(lane)
-                    .expect("row must exist for narrow sponge absorb");
-                let row_iter = row_slice.iter().copied();
-                sponge.absorb(state, row_iter);
+                let state = &mut temp_states[lane];
+                let row = matrix.row(lane).unwrap();
+                sponge.absorb(state, row);
             });
-            scalar_states[..height].copy_from_slice(&working_scalar[..height]);
+            states[..height].copy_from_slice(&temp_states[..height]);
         } else {
-            // Full-width matrices align with SIMD lanes; pack and absorb every chunk without padding.
-            pack_full_states::<P, WIDTH>(
-                &working_scalar[..height],
-                &mut packed_states[..required_packed],
-            );
+            let scaling_factor = height / active_height;
 
-            (0..required_packed).into_par_iter().for_each(|packed_idx| {
-                let base_state = packed_idx * pack_width;
+            // Copy `states` into `temp_slice`, repeating each entry `scaling_factor` times
+            temp_states[..height]
+                .par_chunks_mut(scaling_factor)
+                .zip(states[..active_height].par_iter())
+                .for_each(|(chunk, state)| chunk.fill(*state));
+
+            // ADD A SIMPLE COMMENT HERE
+            let packed_height = height.div_ceil(P::WIDTH);
+            packed_states
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(packed_idx, packed_state)| {
+                    let base_state = packed_idx * P::WIDTH;
+                    *packed_state = array::from_fn(|col| {
+                        P::from_fn(|lane| temp_states[base_state + lane][col])
+                    });
+                });
+
+            // ADD A SIMPLE COMMENT HERE
+            (0..packed_height).into_par_iter().for_each(|packed_idx| {
+                let base_state = packed_idx * P::WIDTH;
                 sponge.absorb(
                     &mut packed_states[packed_idx],
                     matrix.vertically_packed_row(base_state),
                 );
             });
 
-            unpack_packed_states::<P, WIDTH>(
-                &packed_states[..required_packed],
-                &mut scalar_states[..height],
-            );
+            // ADD A SIMPLE COMMENT HERE
+            states
+                .par_chunks_mut(P::WIDTH)
+                .zip(packed_states.par_iter())
+                .for_each(|(chunk, packed)| {
+                    let lane_count = chunk.len();
+                    for lane in 0..lane_count {
+                        for col in 0..WIDTH {
+                            chunk[lane][col] = packed[col].as_slice()[lane];
+                        }
+                    }
+                });
         }
 
         active_height = height;
     }
 
-    scalar_states
+    states
         .into_iter()
         .map(|state| sponge.squeeze::<DIGEST_ELEMS>(&state))
         .collect()
-}
-
-/// Pack a slice of scalar states whose length is an exact multiple of the SIMD width.
-fn pack_full_states<P, const WIDTH: usize>(
-    scalar_slice: &[[P::Value; WIDTH]],
-    packed_states: &mut [[P; WIDTH]],
-) where
-    P: PackedValue,
-{
-    let pack_width = P::WIDTH;
-    debug_assert!(
-        scalar_slice.len() == packed_states.len() * pack_width,
-        "packed slice length mismatch: {} vs {} * {}",
-        scalar_slice.len(),
-        packed_states.len(),
-        pack_width
-    );
-
-    packed_states
-        .par_iter_mut()
-        .enumerate()
-        .for_each(|(packed_idx, packed_state)| {
-            let base_state = packed_idx * pack_width;
-            *packed_state =
-                array::from_fn(|col| P::from_fn(|lane| scalar_slice[base_state + lane][col]));
-        });
-}
-
-/// Copy packed sponge states back into their scalar representation.
-///
-/// Each packed state column is expanded lane-by-lane so the scalar buffer mirrors the SIMD
-/// layout.
-fn unpack_packed_states<P, const WIDTH: usize>(
-    packed_states: &[[P; WIDTH]],
-    scalar_slice: &mut [[P::Value; WIDTH]],
-) where
-    P: PackedValue,
-{
-    let pack_width = P::WIDTH;
-
-    // Scatter each packed state back into contiguous scalar lanes in parallel.
-    scalar_slice
-        .par_chunks_mut(pack_width)
-        .zip(packed_states.par_iter())
-        .for_each(|(chunk, packed)| {
-            let lane_count = chunk.len();
-            for lane in 0..lane_count {
-                for col in 0..WIDTH {
-                    chunk[lane][col] = packed[col].as_slice()[lane];
-                }
-            }
-        });
 }
 
 /// Build all digest layers from leaf digests up to the root.
