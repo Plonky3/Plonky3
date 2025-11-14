@@ -41,7 +41,9 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
     (0..height).for_each(|row_index| {
         let row_index_next = (row_index + 1) % height;
 
-        // row_index < height so we can used unchecked indexing.
+        // Safety:
+        // - row_index < height so we can used unchecked indexing.
+        // - row_index_next < height so we can used unchecked indexing.
         let (local, next, perm_local, perm_next) = unsafe {
             (
                 main.row_slice_unchecked(row_index),
