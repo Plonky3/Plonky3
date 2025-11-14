@@ -421,6 +421,7 @@ impl LookupGadget for LogUpGadget {
                 main_rows,
                 public_values,
                 permutation_challenges.to_vec(),
+                height,
                 i,
             );
 
