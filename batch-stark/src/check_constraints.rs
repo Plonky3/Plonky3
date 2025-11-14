@@ -42,18 +42,19 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
         let row_index_next = (row_index + 1) % height;
 
         // row_index < height so we can used unchecked indexing.
-        let local = unsafe { main.row_slice_unchecked(row_index) };
-        // row_index_next < height so we can used unchecked indexing.
-        let next = unsafe { main.row_slice_unchecked(row_index_next) };
+        let (local, next, perm_local, perm_next) = unsafe {
+            (
+                main.row_slice_unchecked(row_index),
+                main.row_slice_unchecked(row_index_next),
+                permutation.row_slice_unchecked(row_index),
+                permutation.row_slice_unchecked(row_index_next),
+            )
+        };
         let main = VerticalPair::new(
             RowMajorMatrixView::new_row(&*local),
             RowMajorMatrixView::new_row(&*next),
         );
 
-        // row_index < height so we can used unchecked indexing.
-        let perm_local = unsafe { permutation.row_slice_unchecked(row_index) };
-        // row_index_next < height so we can used unchecked indexing.
-        let perm_next = unsafe { permutation.row_slice_unchecked(row_index_next) };
         let permutation = VerticalPair::new(
             RowMajorMatrixView::new_row(&*perm_local),
             RowMajorMatrixView::new_row(&*perm_next),

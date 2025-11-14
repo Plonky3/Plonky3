@@ -34,7 +34,7 @@ pub fn verify_batch<SC, A, LG>(
     airs: &mut [A],
     proof: &BatchProof<SC>,
     public_values: &[Vec<Val<SC>>],
-    common_data: &CommonData<Val<SC>>,
+    common_data: &CommonData<SC>,
     lookup_gadget: &LG,
 ) -> Result<(), VerificationError<PcsError<SC>>>
 where
@@ -143,7 +143,7 @@ where
 
     // Fetch lookups and sample their challenges.
     let challenges_per_instance =
-        get_perm_challenges::<SC, LG, A>(&mut challenger, all_lookups, airs, lookup_gadget);
+        get_perm_challenges::<SC, LG>(&mut challenger, all_lookups, lookup_gadget);
 
     // Then, observe the permutation tables, if any.
     if is_lookup {

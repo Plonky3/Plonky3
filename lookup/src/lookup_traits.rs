@@ -263,6 +263,7 @@ pub struct LookupTraceBuilder<'a, SC: StarkGenericConfig> {
     main: ViewPair<'a, Val<SC>>,
     public_values: &'a [Val<SC>],
     permutation_challenges: Vec<SC::Challenge>,
+    height: usize,
     row: usize,
 }
 
@@ -271,12 +272,14 @@ impl<'a, SC: StarkGenericConfig> LookupTraceBuilder<'a, SC> {
         main: ViewPair<'a, Val<SC>>,
         public_values: &'a [Val<SC>],
         permutation_challenges: Vec<SC::Challenge>,
+        height: usize,
         row: usize,
     ) -> Self {
         Self {
             main,
             public_values,
             permutation_challenges,
+            height,
             row,
         }
     }
@@ -300,13 +303,13 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for LookupTraceBuilder<'a, SC> {
 
     #[inline]
     fn is_last_row(&self) -> Self::F {
-        Self::F::from_bool(self.row + 1 == self.main.height())
+        Self::F::from_bool(self.row + 1 == self.height)
     }
 
     #[inline]
     fn is_transition_window(&self, size: usize) -> Self::F {
         if size == 2 {
-            Self::F::from_bool(self.row + 1 < self.main.height())
+            Self::F::from_bool(self.row + 1 < self.height)
         } else {
             panic!("uni-stark only supports a window size of 2")
         }

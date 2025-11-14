@@ -19,8 +19,7 @@ use p3_util::log2_strict_usize;
 use tracing::{debug_span, instrument};
 
 #[cfg(debug_assertions)]
-use crate::check_constraints::DebugConstraintBuilderWithLookups;
-use crate::check_constraints::check_constraints;
+use crate::check_constraints::{DebugConstraintBuilderWithLookups, check_constraints};
 use crate::common::{CommonData, get_perm_challenges};
 use crate::config::{Challenge, Domain, SGC, Val, observe_base_as_ext, observe_instance_binding};
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof, OpenedValuesWithLookups};
@@ -39,7 +38,7 @@ impl<'a, SC: SGC, A> StarkInstance<'a, SC, A> {
         airs: &'a [A],
         traces: &[RowMajorMatrix<Val<SC>>],
         public_values: &[Vec<Val<SC>>],
-        common_data: &CommonData<Val<SC>>,
+        common_data: &CommonData<SC>,
     ) -> Vec<Self> {
         airs.iter()
             .zip(traces.iter())
@@ -182,7 +181,7 @@ where
 
     // Sample the lookup challenges.
     let challenges_per_instance =
-        get_perm_challenges::<SC, LG, A>(&mut challenger, &all_lookups, &airs, lookup_gadget);
+        get_perm_challenges::<SC, LG>(&mut challenger, &all_lookups, lookup_gadget);
 
     // Get permutation matrices, if any, along with their associated trace domain
     let mut permutation_commit_inputs = Vec::with_capacity(n_instances);
@@ -369,6 +368,7 @@ where
 
     let is_lookup = opt_permutation_commit_and_data.is_some();
     // Rely on open order: [main, permutation (if any), quotient] since ZK is disabled.
+    // TODO: when Zk is supported, change to [randomization (if zk), main, permutation (if any), quotient].
     let trace_idx = 0usize;
     let permutation_idx = 1usize;
     let quotient_idx = if is_lookup { 2usize } else { 1usize };
@@ -423,7 +423,7 @@ where
             trace_local,
             trace_next,
             quotient_chunks: qcs,
-            random: None, // ZK not supported in batch-stark yet
+            random: None, // TODO: ZK not supported in batch-stark yet
         };
 
         per_instance.push(OpenedValuesWithLookups {

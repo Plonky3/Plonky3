@@ -8,7 +8,7 @@ use p3_air::{
 };
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::StarkInstance;
-use p3_batch_stark::common::common_data;
+use p3_batch_stark::common::CommonData;
 use p3_batch_stark::proof::OpenedValuesWithLookups;
 use p3_batch_stark::prover::{prove_batch, prove_batch_no_lookups};
 use p3_batch_stark::verifier::{verify_batch, verify_batch_no_lookups};
@@ -420,8 +420,8 @@ type ValMmcs =
 type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 type Dft = Radix2DitParallel<Val>;
-type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
-type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
+type MyPcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
+type MyConfig = StarkConfig<MyPcs, Challenge, Challenger>;
 
 fn make_config(seed: u64) -> MyConfig {
     let mut rng = SmallRng::seed_from_u64(seed);
@@ -432,7 +432,7 @@ fn make_config(seed: u64) -> MyConfig {
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
     let fri_params = create_test_fri_params(challenge_mmcs, 2);
-    let pcs = Pcs::new(dft, val_mmcs, fri_params);
+    let pcs = MyPcs::new(dft, val_mmcs, fri_params);
     let challenger = Challenger::new(perm);
     StarkConfig::new(pcs, challenger)
 }
@@ -925,7 +925,7 @@ fn test_batch_stark_one_instance_local_only() -> Result<(), impl Debug> {
     let mut airs = [DemoAirWithLookups::MulLookups(mul_air_lookups)];
 
     // Get lookups from the lookup-enabled AIRs
-    let common_data = common_data::<MyConfig, _>(&mut airs);
+    let common_data = CommonData::<MyConfig>::from_airs(&mut airs);
 
     let instances = StarkInstance::new_multiple(&airs, &[mul_trace], &[vec![]], &common_data);
 
@@ -964,7 +964,7 @@ fn test_batch_stark_one_instance_local_fails() {
     let mut airs = [DemoAirWithLookups::MulLookups(mul_air_lookups)];
 
     // Get lookups from the lookup-enabled AIRs
-    let common_data = common_data::<MyConfig, _>(&mut airs);
+    let common_data = CommonData::<MyConfig>::from_airs(&mut airs);
 
     let instances = StarkInstance::new_multiple(&airs, &[mul_trace], &[vec![]], &common_data);
 
@@ -998,7 +998,7 @@ fn test_batch_stark_one_instance_local_fails() {
     let instances = StarkInstance::new_multiple(&airs, &[mul_trace], &[vec![]], &common_data);
 
     let lookup_gadget = LogUpGadget::new();
-    let proof = prove_batch(&config, instances, &lookup_gadget);
+    let proof = prove_batch(&config, &instances, &lookup_gadget);
 
     verify_batch(
         &config,
@@ -1032,7 +1032,7 @@ fn test_batch_stark_local_lookups_only() -> Result<(), impl Debug> {
     let mut airs = [air1, air2];
 
     // Get lookups from the lookup-enabled AIRs
-    let common_data = common_data::<MyConfig, _>(&mut airs);
+    let common_data = CommonData::<MyConfig>::from_airs(&mut airs);
 
     let instances = StarkInstance::new_multiple(
         &airs,
@@ -1084,7 +1084,7 @@ fn test_batch_stark_global_lookups_only() -> Result<(), impl Debug> {
 
     // Get lookups from the lookup-enabled AIRs
     let mut airs = [air1, air2];
-    let common_data = common_data::<MyConfig, _>(&mut airs);
+    let common_data = CommonData::<MyConfig>::from_airs(&mut airs);
 
     let instances = StarkInstance::new_multiple(
         &airs,
@@ -1134,7 +1134,7 @@ fn test_batch_stark_both_lookups() -> Result<(), impl Debug> {
 
     let mut airs = [air1, air2];
     // Get lookups from the lookup-enabled AIRs
-    let common_data = common_data::<MyConfig, _>(&mut airs);
+    let common_data = CommonData::<MyConfig>::from_airs(&mut airs);
 
     let instances = StarkInstance::new_multiple(
         &airs,
@@ -1191,7 +1191,7 @@ fn test_batch_stark_failed_global_lookup() {
 
     // Get lookups from the lookup-enabled AIRs
     let mut airs = [air1, air2];
-    let common_data = common_data::<MyConfig, _>(&mut airs);
+    let common_data = CommonData::<MyConfig>::from_airs(&mut airs);
 
     let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, &common_data);
 
@@ -1280,7 +1280,7 @@ fn test_batch_stark_mixed_lookups() -> Result<(), impl Debug> {
     ];
 
     // Get all lookups
-    let common_data = common_data::<MyConfig, _>(&mut all_airs);
+    let common_data = CommonData::<MyConfig>::from_airs(&mut all_airs);
 
     let traces = vec![
         mul_with_lookups_trace.clone(),
@@ -1313,6 +1313,143 @@ fn test_batch_stark_mixed_lookups() -> Result<(), impl Debug> {
         &mut all_airs,
         &proof,
         &all_pvs,
+        &common_data,
+        &lookup_gadget,
+    )
+}
+
+// Single table with local lookup involving `is_first_row` selector.
+#[derive(Debug, Clone, Copy)]
+struct SingleTableLocalLookupAir {
+    num_lookups: usize,
+}
+
+impl SingleTableLocalLookupAir {
+    const fn new() -> Self {
+        Self { num_lookups: 0 }
+    }
+}
+
+impl<F> BaseAir<F> for SingleTableLocalLookupAir {
+    fn width(&self) -> usize {
+        3 // 3 columns: sender, lookup table, mult1
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for SingleTableLocalLookupAir
+where
+    AB::Var: Debug,
+{
+    fn eval(&self, _builder: &mut AB) {
+        // No additional constraints needed for this simple table
+    }
+}
+
+impl<AB> AirLookupHandler<AB> for SingleTableLocalLookupAir
+where
+    AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+    AB::Var: Debug,
+    AB::F: From<Val>,
+{
+    fn add_lookup_columns(&mut self) -> Vec<usize> {
+        let new_idx = self.num_lookups;
+        self.num_lookups += 1;
+        vec![new_idx]
+    }
+
+    fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
+        let mut lookups = Vec::new();
+        self.num_lookups = 0;
+
+        // Create symbolic air builder to access symbolic variables
+        let symbolic_air_builder =
+            SymbolicAirBuilder::<AB::F>::new(0, <Self as BaseAir<AB::F>>::width(self), 0, 0, 0);
+        let symbolic_main = symbolic_air_builder.main();
+        let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
+
+        let sender_col = symbolic_main_local[0]; // Column that sends values
+        let lookup_table_col = symbolic_main_local[1]; // Column that receives lookups
+        let mul1 = symbolic_main_local[2];
+
+        // Local lookup: sender column looks up into lookup table column
+        // Sender: send is_transition * sender_col
+        // Receiver: receive lookup_table_col with multiplicity 1
+        let lookup_inputs = vec![
+            // Sender: send values from sender column with `is_first_row` multiplicity
+            (
+                vec![sender_col.into()],
+                symbolic_air_builder.is_first_row(),
+                Direction::Receive,
+            ),
+            // Receiver: receive values in lookup table column with multiplicity 1 * `is_first_row` multiplicity.
+            // Note that we need to multiply by `is_first_row` here because the Lagrange selectors are not normalized.
+            (
+                vec![lookup_table_col.into()],
+                symbolic_air_builder.is_first_row() * mul1,
+                Direction::Send,
+            ),
+        ];
+
+        let local_lookup =
+            <Self as AirLookupHandler<AB>>::register_lookup(self, Kind::Local, &lookup_inputs);
+        lookups.push(local_lookup);
+
+        lookups
+    }
+}
+
+// Trace generation function for single table with local lookup
+fn single_table_local_lookup_trace<F: Field>(height: usize) -> RowMajorMatrix<F> {
+    assert!(height.is_power_of_two());
+    assert!(height >= 2); // Need at least some transition rows and last row
+
+    let mut v = F::zero_vec(height * 3); // 2 columns
+
+    // Column 0: Sender column
+    // Transition rows (all rows except last): value 7
+    // Column 1: Lookup table column: 8..1
+    // Column 2 (mult1): 1 at row 0, 0 elsewhere
+    for i in 0..height {
+        v[i * 3] = F::from_u64((height - 1) as u64);
+        v[i * 3 + 1] = F::from_u64((height - i - 1) as u64);
+    }
+    v[2] = F::ONE;
+
+    println!("v = {:?}", v);
+    RowMajorMatrix::new(v, 3)
+}
+
+/// Test with a single table doing local lookup between its two columns
+#[test]
+fn test_single_table_local_lookup() -> Result<(), impl Debug> {
+    let config = make_config(2029);
+
+    let height = 8; // Single table with 8 rows
+
+    // Create instance
+    let air = SingleTableLocalLookupAir::new();
+
+    let mut airs = [air];
+
+    // Get lookups from the lookup-enabled AIR
+    let common_data = CommonData::<MyConfig>::from_airs(&mut airs);
+
+    // Generate trace
+    let trace = single_table_local_lookup_trace::<Val>(height);
+
+    let traces = vec![trace];
+    let pvs = vec![vec![]]; // No public values
+
+    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, &common_data);
+
+    let lookup_gadget = LogUpGadget::new();
+    let proof = prove_batch(&config, &instances, &lookup_gadget);
+
+    verify_batch(
+        &config,
+        &mut airs,
+        &proof,
+        &pvs,
         &common_data,
         &lookup_gadget,
     )

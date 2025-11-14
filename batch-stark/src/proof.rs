@@ -34,10 +34,14 @@ pub struct BatchCommitments<Com> {
     pub quotient_chunks: Com,
 }
 
+/// Opened values for a single instance in a batch-STARK proof, including lookup-related values.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OpenedValuesWithLookups<Challenge> {
+    /// Standard opened values (trace and quotient).
     pub base_opened_values: OpenedValues<Challenge>,
+    /// Opened values for the permutation polynomials at the challenge `zeta`.
     pub permutation_local: Vec<Challenge>,
+    /// Opened values for the permutation polynomials at the next row `g * zeta`.
     pub permutation_next: Vec<Challenge>,
 }
 
