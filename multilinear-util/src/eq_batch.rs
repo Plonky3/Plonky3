@@ -1,5 +1,7 @@
 //! This module provides optimized routines for computing **batched multilinear equality polynomials**
-//! over the Boolean hypercube `{0,1}^n`.
+//! and **batched multilinear power polynomials** over the Boolean hypercube `{0,1}^n`.
+//!
+//! ## Equality Polynomial (eq)
 //!
 //! The equality polynomial `eq(x, z)` evaluates to 1 if `x == z`, and 0 otherwise.
 //! It is defined as:
@@ -18,27 +20,35 @@
 //!
 //! Which allows us to reuse the common factor `eq(x, z[1:])`.
 //!
-//! ## Batched Evaluation
+//! ## Power Polynomial (pow)
 //!
-//! The batched methods (`eval_eq_batch`, `eval_eq_base_batch`) are designed to efficiently compute
-//! linear combinations of multiple equality polynomial evaluations. Instead of computing each
-//! equality polynomial individually and then summing the results, these functions leverage linearity
-//! to perform the summation within the recursive evaluation process.
+//! The power polynomial `pow(x, z)` (where z is a single scalar, not a vector)
+//! evaluates to `z^x` where `x` is interpreted as an integer.
 //!
-//! The batched variants compute a linear combination of equality tables in one pass:
+//! Given `z` and `x = (x_0, ..., x_{n-1})`, the polynomial is:
 //!
 //! ```text
-//! W(x) = \sum_i \γ_i ⋅ eq(x, z_i)  ,  x ∈ {0,1}^n .
+//! pow(x, z) = \prod_{i=0}^{n-1} (x_i ⋅ z^{2^{n-1-i}} + (1 - x_i))
 //! ```
 //!
-//! ### Mathematical Foundation:
-//! The batched algorithm exploits the recursive structure by updating entire vectors of scalars:
+//! This evaluates to `z^{\sum_i x_i \cdot 2^{n-1-i}} = z^x`.
+//! The key relation used is:
 //!
-//! At each variable z_j, the scalar vector γ = (γ_0, γ_1, ..., γ_{m-1}) splits into:
-//! - γ_0 = γ ⊙ (1 - z_j) for the x_j = 0 branch
-//! - γ_1 = γ ⊙ z_j for the x_j = 1 branch
+//! ```text
+//! pow((0, x), z_vec) = 1 ⋅ pow(x, z_vec[1:])
+//! pow((1, x), z_vec) = z_0 ⋅ pow(x, z_vec[1:])  (where z_0 = z^{2^{n-1}})
+//! ```
 //!
-//! Where ⊙ denotes element-wise (Hadamard) product.
+//! ## Batched Evaluation
+//!
+//! The batched methods are designed to efficiently compute
+//! linear combinations of multiple polynomial evaluations.
+//!
+//! The batched variants compute a linear combination of tables in one pass:
+//!
+//! ```text
+//! W(x) = \sum_i \γ_i ⋅ P(x, z_i)  ,  x ∈ {0,1}^n .
+//! ```
 //!
 //! ## `INITIALIZED` flag
 //!
@@ -136,47 +146,42 @@ pub fn eval_eq_base_batch<F, EF, const INITIALIZED: bool>(
 /// For each `var` in `vars`, computes `[var^1, var^2, var^4, ..., var^(2^(k-1))]`.
 #[inline]
 fn binary_powers<F: Field>(vars: &[F], k: usize) -> RowMajorMatrix<F> {
-    let flat_powers: Vec<F> = vars
-        .iter()
-        .cloned()
-        .flat_map(|mut var| {
-            (0..k)
-                .map(|_| {
-                    let ret = var;
-                    var = var.square();
-                    ret
-                })
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-        })
-        .collect::<Vec<_>>();
-    RowMajorMatrix::new(flat_powers, k).transpose()
+    let mut flat_powers = F::zero_vec(vars.len() * k);
+    let n = vars.len();
+    vars.iter().enumerate().for_each(|(i, &var)| {
+        let mut cur = var;
+        (0..k).for_each(|j| {
+            // Reverse the row order to match the big-endian multilinear evaluation.
+            // We want power `2^i` to be on row `r = k - 1 - i`
+            let pos = (k - 1 - j) * n + i;
+            flat_powers[pos] = cur;
+            // Compute next power of 2
+            cur = cur.square();
+        });
+    });
+    RowMajorMatrix::new(flat_powers, n)
 }
 
-/// Computes the compressed powers polynomial `\sum_i \γ_i ⋅ powers(z_i)` over all
+/// Computes the batched multilinear power polynomial `\sum_i \γ_i ⋅ var_i^x` over all
+/// `x ∈ \{0,1\}^k` (interpreted as integer) for `var_i ∈ F`.
 ///
-/// This evaluates multiple equality tables simultaneously by pushing the linear combination
-/// through the recursion.
-///
-/// # Mathematical statement
+/// # Mathematical Statement
 /// Given:
-/// - evaluation points `z_0, z_1, ..., z_{m-1} ∈ F^n`,
-/// - weights `\γ_0, \γ_1, ..., \γ_{m-1} ∈ F`, this computes,
+/// - variables `var_0, ..., var_{m-1} ∈ F`,
+/// - weights `\γ_0, ..., \γ_{m-1} ∈ EF`,
+/// - an output length of `2^k`,
+///
+/// this computes, for all `x` from `0` to `2^k - 1`:
 /// ```text
-/// W(x) = \sum_i \γ_i ⋅ powers(z_i).
+/// W(x) = \sum_i \γ_i ⋅ var_i^x.
 /// ```
 ///
 /// # Arguments
-/// - `vars`: Slice where element is one variable `z_i`.
-/// - `out`: Output buffer of size `2^n` storing `W(x)` in big-endian `x` order
-/// - `scalars`: Weights `[ \γ_0, \γ_1, ..., \γ_{m-1} ]`
-///
-/// # Panics
-/// - in debug builds if `vars.len() != scalars.len()` or if the output buffer size is incorrect.
-/// - if output length is not a power of two.
+/// - `vars`: A slice of variables `[ var_0, ..., var_{m-1} ]`.
+/// - `out`: Output buffer of size `2^k` storing `W(x)`. `k` is the number of variables.
+/// - `scalars`: Weights `[ \γ_0, ..., \γ_{m-1} ]`.
 #[inline]
-pub fn eval_pow_batch_base<F, EF, const INITIALIZED: bool>(
+pub fn eval_pow_base_batch<F, EF, const INITIALIZED: bool>(
     vars: &[F],
     out: &mut [EF],
     scalars: &[EF],
@@ -193,27 +198,24 @@ pub fn eval_pow_batch_base<F, EF, const INITIALIZED: bool>(
     );
 }
 
-/// Computes the compressed powers polynomial `\sum_i \γ_i ⋅ powers(z_i)` over all
+/// Computes the batched multilinear power polynomial `\sum_i \γ_i ⋅ var_i^x` over all
+/// `x ∈ \{0,1\}^k` (interpreted as integer) for `var_i ∈ EF`.
 ///
-/// This evaluates multiple equality tables simultaneously by pushing the linear combination
-/// through the recursion.
-///
-/// # Mathematical statement
+/// # Mathematical Statement
 /// Given:
-/// - evaluation points `z_0, z_1, ..., z_{m-1} ∈ EF^n`,
-/// - weights `\γ_0, \γ_1, ..., \γ_{m-1} ∈ EF`, this computes,
+/// - variables `var_0, ..., var_{m-1} ∈ EF`,
+/// - weights `\γ_0, ..., \γ_{m-1} ∈ EF`,
+/// - an output length of `2^k`,
+///
+/// this computes, for all `x` from `0` to `2^k - 1`:
 /// ```text
-/// W(x) = \sum_i \γ_i ⋅ powers(z_i).
+/// W(x) = \sum_i \γ_i ⋅ var_i^x.
 /// ```
 ///
 /// # Arguments
-/// - `vars`: Slice where element is one variable `z_i`.
-/// - `out`: Output buffer of size `2^n` storing `W(x)` in big-endian `x` order
-/// - `scalars`: Weights `[ \γ_0, \γ_1, ..., \γ_{m-1} ]`
-///
-/// # Panics
-/// - in debug builds if `vars.len() != scalars.len()` or if the output buffer size is incorrect.
-/// - if output length is not a power of two.
+/// - `vars`: A slice of variables `[ var_0, ..., var_{m-1} ]`.
+/// - `out`: Output buffer of size `2^k` storing `W(x)`. `k` is the number of variables.
+/// - `scalars`: Weights `[ \γ_0, ..., \γ_{m-1} ]`.
 #[inline]
 pub fn eval_pow_batch<F, EF, const INITIALIZED: bool>(vars: &[EF], out: &mut [EF], scalars: &[EF])
 where
@@ -228,6 +230,11 @@ where
     );
 }
 
+/// Applies the `eq` (equality) polynomial recursive step.
+///
+/// This implements the relation:
+/// - `buf0 = evals * (1 - vars)` (for the x_j = 0 branch)
+/// - `buf1 = evals * vars` (for the x_j = 1 branch)
 #[inline(always)]
 fn apply_eq<F: Field, Other: Algebra<F> + Copy + Send + Sync>(
     evals: &[Other],
@@ -249,6 +256,11 @@ fn apply_eq<F: Field, Other: Algebra<F> + Copy + Send + Sync>(
         });
 }
 
+/// Applies the `pow` (power) polynomial recursive step.
+///
+/// This implements the relation:
+/// - `buf0 = evals` (for the x_j = 0 branch)
+/// - `buf1 = evals * vars` (for the x_j = 1 branch)
 #[inline(always)]
 fn apply_pow<F: Field, Other: Algebra<F> + Copy + Send + Sync>(
     evals: &[Other],
@@ -259,25 +271,25 @@ fn apply_pow<F: Field, Other: Algebra<F> + Copy + Send + Sync>(
     debug_assert_eq!(evals.len(), vars.len());
     debug_assert_eq!(evals.len(), buf0.len());
     debug_assert_eq!(evals.len(), buf1.len());
+    buf0.copy_from_slice(evals);
     evals
         .iter()
         .zip(vars.iter())
-        .zip(buf0.iter_mut().zip(buf1.iter_mut()))
-        .for_each(|((&sc, &el), (buf0, buf1))| {
-            *buf0 = sc;
-            *buf1 = sc * el;
-        });
+        .zip(buf1.iter_mut())
+        .for_each(|((&sc, &el), buf1)| *buf1 = sc * el);
 }
 
 /// A trait which allows us to define similar but subtly different evaluation strategies depending
 /// on the incoming field types.
 trait Evaluator: Sized {
+    /// The base field `F`.
     type BaseField: Field;
+    /// The field type of the evaluation points `z_i`.
     type InputField: ExtensionField<Self::BaseField, ExtensionPacking = Self::PackedField>;
+    /// The field type of the scalars `\γ_i` and the output `W(x)`.
     type OutputField: ExtensionField<Self::BaseField> + ExtensionField<Self::InputField>;
-
-    // Should be seen as alias of
-    // `<Self::InputField as ExtensionField<Self::BaseField>>::ExtensionPacking`
+    /// The packed field type corresponding to `InputField`.
+    /// This is an alias for `<Self::InputField as ExtensionField<Self::BaseField>>::ExtensionPacking`.
     type PackedField: PackedFieldExtension<Self::BaseField, Self::InputField> + Copy + Send + Sync;
 
     fn init_packed(
@@ -372,12 +384,18 @@ trait Evaluator: Sized {
 
             // Expand the buffer in-place by doubling its height at each step.
             // Each existing row generates two new rows: one for x_j = 0, one for x_j = 1.
-            for idx in 0..stride {
+            for idx in (0..stride).rev() {
+                // We read from row `idx` and write to `idx` (low) and `idx + stride` (high).
+                // We need a copy of the row `idx` *before* we overwrite it.
                 let scalars = buffer.row(idx).unwrap().into_iter().collect::<Vec<_>>();
-                let (_, rest) = buffer.values.split_at_mut(idx * width);
-                let (s0, rest) = rest.split_at_mut(width);
-                let (_, rest) = rest.split_at_mut(width * (stride - 1));
-                let (s1, _) = rest.split_at_mut(width);
+
+                // Get mutable slices to the two output rows.
+                // `low_rows` contains rows 0..idx+stride-1
+                // `high_rows` contains rows idx+stride..end
+                let (low_rows, high_rows) = buffer.values.split_at_mut((idx + stride) * width);
+                let s0 = &mut low_rows[idx * width..(idx + 1) * width];
+                let s1 = &mut high_rows[0..width];
+                // Apply the recursive step.
                 Self::apply(&scalars, eval_row, s0, s1);
             }
         }
@@ -1188,7 +1206,7 @@ impl<F: Field, EF: ExtensionField<F>> Evaluator for PowExtEvaluator<F, EF> {
 mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::{PrimeCharacteristicRing, PrimeField64};
+    use p3_field::{BasedVectorSpace, PrimeCharacteristicRing, PrimeField64};
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{Rng, SeedableRng};
@@ -1254,37 +1272,6 @@ mod tests {
                 .map(|pow| &pow[i])
                 .rfold(Ext::ZERO, |acc, coeff| acc * alpha + *coeff);
         });
-    }
-
-    #[test]
-    fn test_batch_pow() {
-        use rand::Rng;
-        let mut rng = SmallRng::seed_from_u64(54321);
-        let alpha: EF = rng.random();
-
-        let n = 10;
-        for k in 1..21 {
-            let alphas = alpha.powers().take(n).collect();
-            {
-                let vars = (0..n).map(|_| rng.random()).collect::<Vec<_>>();
-                let mut acc0 = EF::zero_vec(1 << k);
-                eval_pow::<F, EF>(&mut acc0, &vars, alpha);
-
-                let mut acc1 = EF::zero_vec(1 << k);
-                eval_pow_batch_base::<F, EF, false>(&vars, &mut acc1, &alphas);
-                assert_eq!(acc0, acc1);
-            }
-
-            {
-                let vars = (0..n).map(|_| rng.random()).collect::<Vec<_>>();
-                let mut acc0 = EF::zero_vec(1 << k);
-                eval_pow::<EF, EF>(&mut acc0, &vars, alpha);
-
-                let mut acc1 = EF::zero_vec(1 << k);
-                eval_pow_batch::<F, EF, false>(&vars, &mut acc1, &alphas);
-                assert_eq!(acc0, acc1);
-            }
-        }
     }
 
     #[test]
@@ -1520,5 +1507,95 @@ mod tests {
             output_parallel, output_basic,
             "Parallel base-field batched path should match basic batched evaluation"
         );
+    }
+
+    fn pow_batch_ref<F: Field, Ext: ExtensionField<F>>(
+        out: &mut [Ext],
+        vars: &[F],
+        scalars: &[Ext],
+    ) {
+        for (&var, &alpha) in vars.iter().zip(scalars.iter()) {
+            out.iter_mut()
+                .zip(var.powers())
+                .for_each(|(acc, el)| *acc += alpha * el);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn prop_eval_pow_batch_matches_individual_sum(
+            num_vars in 1usize..11,
+            (vars, scalars) in (1usize..11).prop_flat_map(|len| {
+                (
+                    prop::collection::vec(0u64..F::ORDER_U64, len * <EF as BasedVectorSpace<F>>::DIMENSION),
+                    prop::collection::vec(0u64..F::ORDER_U64, len * <EF as BasedVectorSpace<F>>::DIMENSION),
+                )
+            })
+        ) {
+
+            let vars = vars.iter().map(|&x| F::from_u64(x)).collect::<Vec<_>>();
+            let vars = EF::reconstitute_from_base(vars);
+
+            let scalars = scalars.iter().map(|&x| F::from_u64(x)).collect::<Vec<_>>();
+            let scalars = EF::reconstitute_from_base(scalars);
+
+            // Test with fresh output vector
+            {
+                let mut out_expected = EF::zero_vec(1 << num_vars);
+                pow_batch_ref(&mut out_expected , &vars, &scalars);
+
+                let mut out_found = vec![EF::ONE; 1 << num_vars]; // polluted output vector
+                eval_pow_batch::<F, EF, false>(&vars, &mut out_found , &scalars);
+                prop_assert_eq!(out_found, out_expected);
+            }
+
+            // Test with initialized output vector
+            {
+                let mut out_expected = vec![EF::ONE; 1 << num_vars];
+                pow_batch_ref(&mut out_expected , &vars, &scalars);
+
+                let mut out_found = vec![EF::ONE; 1 << num_vars];
+                eval_pow_batch::<F, EF, true>(&vars, &mut out_found , &scalars);
+                prop_assert_eq!(out_found, out_expected);
+            }
+        }
+
+
+        #[test]
+        fn prop_eval_pow_base_batch_matches_individual_sum(
+            num_vars in 1usize..11,
+            (vars, scalars) in (1usize..11).prop_flat_map(|len| {
+                (
+                    prop::collection::vec(0u64..F::ORDER_U64, len),
+                    prop::collection::vec(0u64..F::ORDER_U64, len * <EF as BasedVectorSpace<F>>::DIMENSION),
+                )
+            })
+        ) {
+
+            let vars = vars.iter().map(|&x| F::from_u64(x)).collect::<Vec<_>>();
+
+            let scalars = scalars.iter().map(|&x| F::from_u64(x)).collect::<Vec<_>>();
+            let scalars = EF::reconstitute_from_base(scalars);
+
+            // Test with fresh output vector
+            {
+                let mut out_expected = EF::zero_vec(1 << num_vars);
+                pow_batch_ref(&mut out_expected , &vars, &scalars);
+
+                let mut out_found = vec![EF::ONE; 1 << num_vars]; // polluted output vector
+                eval_pow_base_batch::<F, EF, false>(&vars, &mut out_found , &scalars);
+                prop_assert_eq!(out_found, out_expected);
+            }
+
+            // Test with initialized output vector
+            {
+                let mut out_expected = vec![EF::ONE; 1 << num_vars];
+                pow_batch_ref(&mut out_expected , &vars, &scalars);
+
+                let mut out_found = vec![EF::ONE; 1 << num_vars];
+                eval_pow_base_batch::<F, EF, true>(&vars, &mut out_found , &scalars);
+                prop_assert_eq!(out_found, out_expected);
+            }
+        }
     }
 }
