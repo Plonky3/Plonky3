@@ -141,27 +141,6 @@ pub fn eval_eq_base_batch<F, EF, const INITIALIZED: bool>(
     eval_batch_common::<F, F, EF, EqBaseFieldEvaluator<F, EF>, INITIALIZED>(evals, out, scalars);
 }
 
-/// Compute the first `k` squares of each element of `vars`.
-///
-/// For each `var` in `vars`, computes `[var^1, var^2, var^4, ..., var^(2^(k-1))]`.
-#[inline]
-fn binary_powers<F: Field>(vars: &[F], k: usize) -> RowMajorMatrix<F> {
-    let mut flat_powers = F::zero_vec(vars.len() * k);
-    let n = vars.len();
-    vars.iter().enumerate().for_each(|(i, &var)| {
-        let mut cur = var;
-        (0..k).for_each(|j| {
-            // Reverse the row order to match the big-endian multilinear evaluation.
-            // We want power `2^i` to be on row `r = k - 1 - i`
-            let pos = (k - 1 - j) * n + i;
-            flat_powers[pos] = cur;
-            // Compute next power of 2
-            cur = cur.square();
-        });
-    });
-    RowMajorMatrix::new(flat_powers, n)
-}
-
 /// Computes the batched multilinear power polynomial `\sum_i \γ_i ⋅ var_i^x` over all
 /// `x ∈ \{0,1\}^k` (interpreted as integer) for `var_i ∈ F`.
 ///
@@ -228,6 +207,27 @@ where
         out,
         scalars,
     );
+}
+
+/// Compute the first `k` squares of each element of `vars`.
+///
+/// For each `var` in `vars`, computes `[var^1, var^2, var^4, ..., var^(2^(k-1))]`.
+#[inline]
+fn binary_powers<F: Field>(vars: &[F], k: usize) -> RowMajorMatrix<F> {
+    let mut flat_powers = F::zero_vec(vars.len() * k);
+    let n = vars.len();
+    vars.iter().enumerate().for_each(|(i, &var)| {
+        let mut cur = var;
+        (0..k).for_each(|j| {
+            // Reverse the row order to match the big-endian multilinear evaluation.
+            // We want power `2^i` to be on row `r = k - 1 - i`
+            let pos = (k - 1 - j) * n + i;
+            flat_powers[pos] = cur;
+            // Compute next power of 2
+            cur = cur.square();
+        });
+    });
+    RowMajorMatrix::new(flat_powers, n)
 }
 
 /// Applies the `eq` (equality) polynomial recursive step.
