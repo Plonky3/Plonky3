@@ -38,7 +38,7 @@ fn generate_eq_batch_input(num_vars: usize, batch_size: usize) -> (Vec<EF4>, Vec
 /// Generates random batch inputs for pow benchmarking:
 /// - A vector of random extension field variables.
 /// - A vector of random extension field scalars, one for each batch variable.
-fn generate_pow_batch_input(num_vars: usize, batch_size: usize) -> (Vec<EF4>, Vec<EF4>) {
+fn generate_pow_batch_input(batch_size: usize) -> (Vec<EF4>, Vec<EF4>) {
     let mut rng = SmallRng::seed_from_u64(987654321);
 
     // Generate batch_size random variables
@@ -72,7 +72,7 @@ fn generate_eq_base_batch_input(num_vars: usize, batch_size: usize) -> (Vec<F>, 
 }
 
 /// Generate base field batch inputs (for eval_eq_base_batch benchmarking)
-fn generate_pow_base_batch_input(num_vars: usize, batch_size: usize) -> (Vec<F>, Vec<EF4>) {
+fn generate_pow_base_batch_input(batch_size: usize) -> (Vec<F>, Vec<EF4>) {
     let mut rng = SmallRng::seed_from_u64(987654321);
 
     // Generate batch_size random base field variables
@@ -158,7 +158,7 @@ fn bench_eval_pow_batch(c: &mut Criterion) {
     ];
 
     for &(num_vars, batch_size) in &test_cases {
-        let (vars, scalars) = generate_pow_batch_input(num_vars, batch_size);
+        let (vars, scalars) = generate_pow_batch_input(batch_size);
         let out = vec![EF4::ZERO; 1 << num_vars];
 
         let bench_name = format!("n{}_b{}", num_vars, batch_size);
@@ -259,7 +259,7 @@ fn bench_eval_pow_base_batch(c: &mut Criterion) {
     ];
 
     for &(num_vars, batch_size) in &test_cases {
-        let (vars, scalars) = generate_pow_base_batch_input(num_vars, batch_size);
+        let (vars, scalars) = generate_pow_base_batch_input(batch_size);
         let out = vec![EF4::ZERO; 1 << num_vars];
 
         let bench_name = format!("n{}_b{}", num_vars, batch_size);

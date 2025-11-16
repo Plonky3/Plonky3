@@ -1259,21 +1259,6 @@ mod tests {
         eval_eq::<F, EF, INITIALIZED>(&eval_point_ext, out, scalar);
     }
 
-    /// Naive implementation of powers polynomial evaluation for base field points.
-    fn eval_pow<F: Field, Ext: ExtensionField<F>>(out: &mut [Ext], vars: &[F], alpha: Ext) {
-        let k = log2_strict_usize(out.len());
-        let pows = vars
-            .iter()
-            .map(|var| var.powers().take(1 << k).collect())
-            .collect::<Vec<_>>();
-        out.par_iter_mut().enumerate().for_each(|(i, acc)| {
-            *acc += pows
-                .iter()
-                .map(|pow| &pow[i])
-                .rfold(Ext::ZERO, |acc, coeff| acc * alpha + *coeff);
-        });
-    }
-
     #[test]
     fn test_eval_eq_batch_functionality() {
         // Test batched evaluation with 2 variables and 3 evaluation points
@@ -1509,6 +1494,7 @@ mod tests {
         );
     }
 
+    /// Naive implementation of powers polynomial evaluation for base field points.
     fn pow_batch_ref<F: Field, Ext: ExtensionField<F>>(
         out: &mut [Ext],
         vars: &[F],
@@ -1533,13 +1519,10 @@ mod tests {
             })
         ) {
 
-            let vars = vars.iter().map(|&x| F::from_u64(x)).collect::<Vec<_>>();
-            let vars = EF::reconstitute_from_base(vars);
+            let vars = EF::reconstitute_from_base(vars.into_iter().map(F::from_u64).collect());
+            let scalars = EF::reconstitute_from_base(scalars.into_iter().map(F::from_u64).collect());
 
-            let scalars = scalars.iter().map(|&x| F::from_u64(x)).collect::<Vec<_>>();
-            let scalars = EF::reconstitute_from_base(scalars);
-
-            // Test with fresh output vector
+            // Test for overwriting output vector
             {
                 let mut out_expected = EF::zero_vec(1 << num_vars);
                 pow_batch_ref(&mut out_expected , &vars, &scalars);
@@ -1549,7 +1532,7 @@ mod tests {
                 prop_assert_eq!(out_found, out_expected);
             }
 
-            // Test with initialized output vector
+            // Test for accumulating into initialized output vector
             {
                 let mut out_expected = vec![EF::ONE; 1 << num_vars];
                 pow_batch_ref(&mut out_expected , &vars, &scalars);
@@ -1572,12 +1555,10 @@ mod tests {
             })
         ) {
 
-            let vars = vars.iter().map(|&x| F::from_u64(x)).collect::<Vec<_>>();
+            let vars = vars.into_iter().map(F::from_u64).collect::<Vec<_>>();
+            let scalars = EF::reconstitute_from_base(scalars.into_iter().map(F::from_u64).collect());
 
-            let scalars = scalars.iter().map(|&x| F::from_u64(x)).collect::<Vec<_>>();
-            let scalars = EF::reconstitute_from_base(scalars);
-
-            // Test with fresh output vector
+            // Test for overwriting output vector
             {
                 let mut out_expected = EF::zero_vec(1 << num_vars);
                 pow_batch_ref(&mut out_expected , &vars, &scalars);
@@ -1587,7 +1568,7 @@ mod tests {
                 prop_assert_eq!(out_found, out_expected);
             }
 
-            // Test with initialized output vector
+            // Test for accumulating into initialized output vector
             {
                 let mut out_expected = vec![EF::ONE; 1 << num_vars];
                 pow_batch_ref(&mut out_expected , &vars, &scalars);
