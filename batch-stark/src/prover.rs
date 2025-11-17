@@ -8,8 +8,8 @@ use p3_field::PrimeCharacteristicRing;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_uni_stark::{
-    OpenedValues, PreprocessedProverData, ProverConstraintFolder, SymbolicAirBuilder,
-    get_log_quotient_degree, get_symbolic_constraints, quotient_values,
+    OpenedValues, ProverConstraintFolder, SymbolicAirBuilder, get_log_quotient_degree,
+    get_symbolic_constraints, quotient_values,
 };
 use p3_util::log2_strict_usize;
 use tracing::instrument;
@@ -64,11 +64,6 @@ where
 
     // Extract AIRs and public values; consume traces later without cloning.
     let airs: Vec<&A> = instances.iter().map(|i| i.air).collect();
-    assert_eq!(
-        airs.len(),
-        common.preprocessed.len(),
-        "CommonData.preprocessed length must match number of instances"
-    );
     let pub_vals: Vec<Vec<Val<SC>>> = instances.iter().map(|i| i.public_values.clone()).collect();
 
     // Precompute per-instance preprocessed widths, log_quotient_degrees and quotient_degrees.
@@ -76,11 +71,13 @@ where
     let (log_quotient_degrees, quotient_degrees): (Vec<usize>, Vec<usize>) = airs
         .iter()
         .zip(pub_vals.iter())
-        .zip(common.preprocessed.iter())
-        .map(|((air, pv), pp)| {
-            let pre_w = pp
+        .enumerate()
+        .map(|(i, (air, pv))| {
+            let pre_w = common
+                .preprocessed
                 .as_ref()
-                .map_or(0, |p: &PreprocessedProverData<SC>| p.width);
+                .and_then(|g| g.instances[i].as_ref().map(|m| m.width))
+                .unwrap_or(0);
             preprocessed_widths.push(pre_w);
             let lqd = get_log_quotient_degree::<Val<SC>, A>(air, pre_w, pv.len(), config.is_zk());
             let qd = 1 << (lqd + config.is_zk());
@@ -118,13 +115,14 @@ where
         challenger.observe_slice(pv);
     }
 
-    // Observe preprocessed widths and commitments for each instance, to bind
-    // transparent preprocessed columns into the transcript.
-    for (pp, &pre_w) in common.preprocessed.iter().zip(preprocessed_widths.iter()) {
+    // Observe preprocessed widths for each instance, to bind transparent
+    // preprocessed columns into the transcript. If a global preprocessed
+    // commitment exists, observe it once.
+    for &pre_w in preprocessed_widths.iter() {
         observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(pre_w));
-        if let Some(pp) = pp {
-            challenger.observe(pp.commitment.clone());
-        }
+    }
+    if let Some(global) = &common.preprocessed {
+        challenger.observe(global.commitment.clone());
     }
 
     // Compute quotient degrees and domains per instance inline in the loop below.
@@ -155,9 +153,13 @@ where
             pcs.get_evaluations_on_domain(&main_data, i, quotient_domain);
 
         // Get preprocessed evaluations if this instance has preprocessed columns.
-        let preprocessed_on_quotient_domain = common.preprocessed[i]
+        let preprocessed_on_quotient_domain = common
+            .preprocessed
             .as_ref()
-            .map(|pp| pcs.get_evaluations_on_domain(&pp.prover_data, 0, quotient_domain));
+            .and_then(|g| g.instances[i].as_ref().map(|meta| (g, meta)))
+            .map(|(g, meta)| {
+                pcs.get_evaluations_on_domain(&g.prover_data, meta.matrix_index, quotient_domain)
+            });
 
         // Compute quotient(x) = constraints(x)/Z_H(x) over quotient_domain, as extension values.
         let q_values = quotient_values::<SC, A, _>(
@@ -197,10 +199,8 @@ where
     // Sample OOD point.
     let zeta: Challenge<SC> = challenger.sample_algebra_element();
 
-    // Build opening rounds, including optional preprocessed commitments.
-    let (opened_values, opening_proof, preprocessed_round_indices) = {
-        // Optional preprocessed rounds, one per instance that has preprocessed columns.
-        let mut preprocessed_round_indices = Vec::with_capacity(n_instances);
+    // Build opening rounds, including optional global preprocessed commitment.
+    let (opened_values, opening_proof) = {
         let mut rounds = Vec::new();
 
         // Main trace round: per instance, open at zeta and its next point.
@@ -224,27 +224,26 @@ where
             .collect::<Vec<_>>();
         rounds.push((&quotient_data, round2_points));
 
-        // Preprocessed rounds: one per instance with preprocessed columns.
-        let mut next_round_idx = 2usize; // 0 = main, 1 = quotient
-        for (i, pp) in common.preprocessed.iter().enumerate() {
-            if let Some(pp) = pp {
-                let zeta_next_i = ext_trace_domains[i]
-                    .next_point(zeta)
-                    .expect("domain should support next_point operation");
-                preprocessed_round_indices.push(Some(next_round_idx));
-                rounds.push((&pp.prover_data, vec![vec![zeta, zeta_next_i]]));
-                next_round_idx += 1;
-            } else {
-                preprocessed_round_indices.push(None);
-            }
+        // Optional global preprocessed round: one matrix per instance that
+        // has preprocessed columns.
+        if let Some(global) = &common.preprocessed {
+            let pre_points = global
+                .matrix_to_instance
+                .iter()
+                .map(|&inst_idx| {
+                    let zeta_next_i = ext_trace_domains[inst_idx]
+                        .next_point(zeta)
+                        .expect("domain should support next_point operation");
+                    vec![zeta, zeta_next_i]
+                })
+                .collect::<Vec<_>>();
+            rounds.push((&global.prover_data, pre_points));
         }
 
-        let (opened_values, opening_proof) = pcs.open(rounds, &mut challenger);
-
-        (opened_values, opening_proof, preprocessed_round_indices)
+        pcs.open(rounds, &mut challenger)
     };
 
-    // Rely on open order: [main, quotient, preprocessed_0?, preprocessed_1?, ...]
+    // Rely on open order: [main, quotient, preprocessed?]
     let trace_idx = 0usize;
     let quotient_idx = 1usize;
 
@@ -253,9 +252,16 @@ where
     assert_eq!(trace_values_for_mats.len(), n_instances);
 
     // Parse quotient chunk opened values and map per instance.
-    let mut quotient_openings_iter = opened_values[quotient_idx].iter();
-
     let mut per_instance: Vec<OpenedValues<Challenge<SC>>> = Vec::with_capacity(n_instances);
+
+    // Preprocessed openings, if a global preprocessed commitment exists.
+    let preprocessed_openings = if common.preprocessed.is_some() {
+        Some(&opened_values[2])
+    } else {
+        None
+    };
+
+    let mut quotient_openings_iter = opened_values[quotient_idx].iter();
     for (i, (s, e)) in quotient_chunk_ranges.iter().copied().enumerate() {
         // Trace locals
         let tv = &trace_values_for_mats[i];
@@ -272,22 +278,23 @@ where
         }
 
         // Preprocessed openings (if present).
-        let (preprocessed_local, preprocessed_next) =
-            preprocessed_round_indices[i].map_or((None, None), |round_idx| {
-                let round = &opened_values[round_idx];
-                assert_eq!(
-                    round.len(),
-                    1,
-                    "expected exactly one preprocessed matrix per instance"
-                );
-                let vals = &round[0];
+        let (preprocessed_local, preprocessed_next) = if let (Some(global), Some(pre_round)) =
+            (&common.preprocessed, preprocessed_openings)
+        {
+            if let Some(meta) = &global.instances[i] {
+                let vals = &pre_round[meta.matrix_index];
                 assert_eq!(
                     vals.len(),
                     2,
                     "expected two opening points (zeta, zeta_next) for preprocessed trace"
                 );
                 (Some(vals[0].clone()), Some(vals[1].clone()))
-            });
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
 
         per_instance.push(OpenedValues {
             trace_local,

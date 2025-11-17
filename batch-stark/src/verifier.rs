@@ -6,8 +6,8 @@ use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 use p3_uni_stark::{
-    PreprocessedProverData, SymbolicAirBuilder, VerificationError, VerifierConstraintFolder,
-    get_log_quotient_degree, recompose_quotient_from_chunks, verify_constraints,
+    SymbolicAirBuilder, VerificationError, VerifierConstraintFolder, get_log_quotient_degree,
+    recompose_quotient_from_chunks, verify_constraints,
 };
 use p3_util::zip_eq::zip_eq;
 use tracing::instrument;
@@ -53,7 +53,6 @@ where
     if airs.len() != opened_values.instances.len()
         || airs.len() != public_values.len()
         || airs.len() != degree_bits.len()
-        || airs.len() != common.preprocessed.len()
     {
         return Err(VerificationError::InvalidProofShape);
     }
@@ -68,11 +67,13 @@ where
     let (log_quotient_degrees, quotient_degrees): (Vec<usize>, Vec<usize>) = airs
         .iter()
         .zip(public_values.iter())
-        .zip(common.preprocessed.iter())
-        .map(|((air, pv), pp)| {
-            let pre_w = pp
+        .enumerate()
+        .map(|(i, (air, pv))| {
+            let pre_w = common
+                .preprocessed
                 .as_ref()
-                .map_or(0, |p: &PreprocessedProverData<SC>| p.width);
+                .and_then(|g| g.instances[i].as_ref().map(|m| m.width))
+                .unwrap_or(0);
             preprocessed_widths.push(pre_w);
             let lqd = get_log_quotient_degree::<Val<SC>, A>(air, pre_w, pv.len(), config.is_zk());
             let qd = 1 << (lqd + config.is_zk());
@@ -130,12 +131,13 @@ where
         challenger.observe_slice(pv);
     }
 
-    // Observe preprocessed widths and commitments for each instance.
-    for (pp, &pre_w) in common.preprocessed.iter().zip(preprocessed_widths.iter()) {
+    // Observe preprocessed widths for each instance. If a global
+    // preprocessed commitment exists, observe it once.
+    for &pre_w in preprocessed_widths.iter() {
         observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(pre_w));
-        if let Some(pp) = pp {
-            challenger.observe(pp.commitment.clone());
-        }
+    }
+    if let Some(global) = &common.preprocessed {
+        challenger.observe(global.commitment.clone());
     }
 
     // Sample alpha for constraint folding
@@ -210,16 +212,18 @@ where
     }
     coms_to_verify.push((commitments.quotient_chunks.clone(), qc_round));
 
-    // Preprocessed rounds: one commitment per instance that has preprocessed columns.
-    // Note: preprocessed_round_indices[i] maps instance i to its round index in the PCS opening
-    // (if it has preprocessed columns), or None if it doesn't.
-    for (i, pp) in common.preprocessed.iter().enumerate() {
-        if let Some(pp) = pp {
-            let pre_w = preprocessed_widths[i];
+    // Preprocessed rounds: a single global commitment with one matrix per
+    // instance that has preprocessed columns.
+    if let Some(global) = &common.preprocessed {
+        let mut pre_round = Vec::new();
+
+        for (matrix_index, &inst_idx) in global.matrix_to_instance.iter().enumerate() {
+            let pre_w = preprocessed_widths[inst_idx];
             if pre_w == 0 {
                 return Err(VerificationError::InvalidProofShape);
             }
-            let inst = &opened_values.instances[i];
+
+            let inst = &opened_values.instances[inst_idx];
             let local = inst
                 .preprocessed_local
                 .as_ref()
@@ -229,27 +233,30 @@ where
                 .as_ref()
                 .ok_or(VerificationError::InvalidProofShape)?;
 
-            // Validate that the preprocessed data's base degree matches what we expect
-            let ext_db = degree_bits[i];
+            // Validate that the preprocessed data's base degree matches what we expect.
+            let ext_db = degree_bits[inst_idx];
             let expected_base_db = ext_db - config.is_zk();
-            if pp.degree_bits != expected_base_db {
+
+            let meta = global.instances[inst_idx]
+                .as_ref()
+                .ok_or(VerificationError::InvalidProofShape)?;
+            if meta.matrix_index != matrix_index || meta.degree_bits != expected_base_db {
                 return Err(VerificationError::InvalidProofShape);
             }
 
-            let base_db = pp.degree_bits;
+            let base_db = meta.degree_bits;
             let pre_domain = pcs.natural_domain_for_degree(1 << base_db);
-            let zeta_next_i = ext_trace_domains[i]
+            let zeta_next_i = ext_trace_domains[inst_idx]
                 .next_point(zeta)
                 .ok_or(VerificationError::NextPointUnavailable)?;
 
-            coms_to_verify.push((
-                pp.commitment.clone(),
-                vec![(
-                    pre_domain,
-                    vec![(zeta, local.clone()), (zeta_next_i, next.clone())],
-                )],
+            pre_round.push((
+                pre_domain,
+                vec![(zeta, local.clone()), (zeta_next_i, next.clone())],
             ));
         }
+
+        coms_to_verify.push((global.commitment.clone(), pre_round));
     }
 
     // Verify all openings via PCS.
