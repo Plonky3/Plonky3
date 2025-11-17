@@ -16,6 +16,7 @@ p3-matrix = { workspace = true }
 p3-uni-stark = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 p3-baby-bear = { workspace = true }

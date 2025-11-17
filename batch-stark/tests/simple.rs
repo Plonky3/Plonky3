@@ -1480,7 +1480,8 @@ fn single_table_local_lookup_trace<F: Field>(height: usize) -> RowMajorMatrix<F>
     RowMajorMatrix::new(v, width)
 }
 
-/// Test with a single table doing local lookup between its two columns
+/// Test with a single table doing local lookup between its two columns.
+/// The goal of this test is to check that the use of (non-normalized) Lagrange selectors does not cause isssues.
 #[test]
 fn test_single_table_local_lookup() -> Result<(), impl Debug> {
     let config = make_config(2029);

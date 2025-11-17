@@ -2,6 +2,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Neg;
+use tracing::warn;
 
 use p3_air::{
     Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, ExtensionBuilder, PairBuilder,
@@ -182,6 +183,7 @@ pub struct Lookup<F: Field> {
     /// Elements being read (consumed from the table). Each `Vec<SymbolicExpression<F>>` actually represents a tuple of elements that are bundled together to make one lookup.
     pub element_exprs: Vec<Vec<SymbolicExpression<F>>>,
     /// Multiplicities for the elements.
+    /// Note that Lagrange selectors may not be normalized, and so cannot be used as proper filters in the multiplicities.
     pub multiplicities_exprs: Vec<SymbolicExpression<F>>,
     /// The column index in the permutation trace for this lookup's running sum
     pub columns: Vec<usize>,
@@ -382,9 +384,18 @@ where
             Entry::Public => builder.public_values()[v.index].into(),
             _ => unimplemented!("Entry type {:?} not supported in interactions", v.entry),
         },
-        SymbolicExpression::IsFirstRow => builder.is_first_row(),
-        SymbolicExpression::IsLastRow => builder.is_last_row(),
-        SymbolicExpression::IsTransition => builder.is_transition_window(2),
+        SymbolicExpression::IsFirstRow => {
+            warn!("IsFirstRow is not normalized");
+            builder.is_first_row()
+        }
+        SymbolicExpression::IsLastRow => {
+            warn!("IsLastRow is not normalized");
+            builder.is_last_row()
+        }
+        SymbolicExpression::IsTransition => {
+            warn!("IsTransition is not normalized");
+            builder.is_transition_window(2)
+        }
         SymbolicExpression::Constant(c) => AB::Expr::from(*c),
         SymbolicExpression::Add { x, y, .. } => {
             eval_symbolic(builder, x) + eval_symbolic(builder, y)
