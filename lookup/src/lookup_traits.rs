@@ -2,7 +2,6 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Neg;
-use tracing::warn;
 
 use p3_air::{
     Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, ExtensionBuilder, PairBuilder,
@@ -14,6 +13,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::ViewPair;
 use p3_uni_stark::{Entry, LookupError, StarkGenericConfig, SymbolicExpression, Val};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 /// Data required for global lookup arguments in a multi-STARK proof.
