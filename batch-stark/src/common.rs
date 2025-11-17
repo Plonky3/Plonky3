@@ -48,8 +48,7 @@ where
     /// proofs can precompute it once and reuse the resulting `CommonData`.
     pub fn from_airs_and_degrees<A>(config: &SC, airs: &[A], ext_degree_bits: &[usize]) -> Self
     where
-        A: Air<SymbolicAirBuilder<Val<SC>>>,
-        for<'a> A: Air<ProverConstraintFolder<'a, SC>>,
+        A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
     {
         assert_eq!(
             airs.len(),

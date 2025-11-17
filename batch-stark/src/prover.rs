@@ -301,7 +301,7 @@ where
 
         // Preprocessed openings (if present).
         let (preprocessed_local, preprocessed_next) =
-            if let Some(round_idx) = preprocessed_round_indices[i] {
+            preprocessed_round_indices[i].map_or((None, None), |round_idx| {
                 let round = &opened_values[round_idx];
                 assert_eq!(
                     round.len(),
@@ -314,9 +314,7 @@ where
                     "expected two opening points (zeta, zeta_next) for preprocessed trace"
                 );
                 (Some(vals[0].clone()), Some(vals[1].clone()))
-            } else {
-                (None, None)
-            };
+            });
 
         per_instance.push(OpenedValues {
             trace_local,
