@@ -81,7 +81,7 @@ where
         return None;
     }
 
-    debug_assert_eq!(
+    assert_eq!(
         preprocessed.height(),
         degree,
         "preprocessed trace height must equal trace degree"
