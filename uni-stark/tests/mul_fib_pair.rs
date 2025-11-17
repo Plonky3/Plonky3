@@ -12,7 +12,10 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use p3_uni_stark::{StarkConfig, prove, verify};
+use p3_uni_stark::{
+    PreprocessedVerifierKey, StarkConfig, prove_with_preprocessed, setup_preprocessed,
+    verify_with_preprocessed,
+};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
@@ -197,8 +200,23 @@ fn test_mul_fib_pair() {
     let num_rows = 1024;
     let config = setup_test_config();
     let trace = generate_trace_rows::<Val>(1, 1, num_rows);
-    let proof = prove(&config, &MulFibPAir::new(num_rows), trace, &[]);
-    verify(&config, &MulFibPAir::new(num_rows), &proof, &[]).expect("verification failed");
+
+    let air = MulFibPAir::new(num_rows);
+    let degree_bits = 10; // log2(1024)
+    let preprocessed = setup_preprocessed::<MyConfig, _>(&config, &air, degree_bits);
+
+    let proof = prove_with_preprocessed(&config, &air, trace, &[], preprocessed.as_ref());
+
+    let preprocessed_vk = preprocessed
+        .as_ref()
+        .map(|pp| PreprocessedVerifierKey::<MyConfig> {
+            width: pp.width,
+            degree_bits: pp.degree_bits,
+            commitment: pp.commitment.clone(),
+        });
+
+    verify_with_preprocessed(&config, &air, &proof, &[], preprocessed_vk.as_ref())
+        .expect("verification failed");
 }
 
 #[test]
@@ -206,13 +224,32 @@ fn test_tampered_preprocessed_fails() {
     let num_rows = 1024;
     let config = setup_test_config();
     let trace = generate_trace_rows::<Val>(1, 1, num_rows);
-    let proof = prove(&config, &MulFibPAir::new(num_rows), trace, &[]);
+    let air = MulFibPAir::new(num_rows);
+    let degree_bits = 10; // log2(1024)
 
-    let result = verify(
+    // Prover uses the correct AIR for preprocessed setup.
+    let preprocessed = setup_preprocessed::<MyConfig, _>(&config, &air, degree_bits);
+    let proof = prove_with_preprocessed(&config, &air, trace, &[], preprocessed.as_ref());
+
+    // Verifier uses a *tampered* AIR to derive the preprocessed commitment, which should
+    // not match the one used in the proof.
+    let tampered_air = MulFibPAir::with_tampered_preprocessed(num_rows, 3);
+    let tampered_preprocessed =
+        setup_preprocessed::<MyConfig, _>(&config, &tampered_air, degree_bits);
+    let preprocessed_vk = tampered_preprocessed
+        .as_ref()
+        .map(|pp| PreprocessedVerifierKey::<MyConfig> {
+            width: pp.width,
+            degree_bits: pp.degree_bits,
+            commitment: pp.commitment.clone(),
+        });
+
+    let result = verify_with_preprocessed(
         &config,
-        &MulFibPAir::with_tampered_preprocessed(num_rows, 3),
+        &tampered_air,
         &proof,
         &[],
+        preprocessed_vk.as_ref(),
     );
 
     assert!(

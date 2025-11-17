@@ -17,6 +17,24 @@ use crate::{
     StarkGenericConfig, SymbolicAirBuilder, Val, get_log_quotient_degree, get_symbolic_constraints,
 };
 
+/// Prover-side reusable data for preprocessed columns.
+///
+/// This allows committing to the preprocessed trace once per AIR/degree and reusing
+/// the commitment and PCS prover data across many proofs.
+pub struct PreprocessedProverData<SC: StarkGenericConfig> {
+    /// The width (number of columns) of the preprocessed trace.
+    pub width: usize,
+    /// The log2 of the degree of the domain over which the preprocessed trace is committed.
+    ///
+    /// In the current uni-stark implementation this matches `degree_bits` in `Proof`,
+    /// i.e. the (extended) trace degree.
+    pub degree_bits: usize,
+    /// PCS commitment to the preprocessed trace.
+    pub commitment: <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::Commitment,
+    /// PCS prover data for the preprocessed trace.
+    pub prover_data: <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::ProverData,
+}
+
 /// Commits the preprocessed trace if present.
 /// Returns the commitment hash and prover data (available iff preprocessed is Some).
 #[allow(clippy::type_complexity)]
@@ -35,9 +53,55 @@ where
         .in_scope(|| pcs.commit([(trace_domain, preprocessed)]))
 }
 
+/// Set up and commit the preprocessed trace for a given AIR and degree.
+///
+/// This can be called once per AIR/degree configuration to obtain reusable
+/// prover data for preprocessed columns. Returns `None` if the AIR does not
+/// define any preprocessed columns.
+pub fn setup_preprocessed<SC, A>(
+    config: &SC,
+    air: &A,
+    degree_bits: usize,
+) -> Option<PreprocessedProverData<SC>>
+where
+    SC: StarkGenericConfig,
+    A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
+{
+    // Preprocessed columns are not supported in zk mode in the current design.
+    if config.is_zk() != 0 {
+        panic!("preprocessed columns are not supported in zk mode");
+    }
+
+    let pcs = config.pcs();
+    let degree = 1 << degree_bits;
+
+    let preprocessed = air.preprocessed_trace()?;
+    let width = preprocessed.width();
+    if width == 0 {
+        return None;
+    }
+
+    debug_assert_eq!(
+        preprocessed.height(),
+        degree,
+        "preprocessed trace height must equal trace degree"
+    );
+
+    let trace_domain = pcs.natural_domain_for_degree(degree);
+    let (commitment, prover_data) =
+        commit_preprocessed_trace::<SC>(preprocessed, pcs, trace_domain);
+
+    Some(PreprocessedProverData {
+        width,
+        degree_bits,
+        commitment,
+        prover_data,
+    })
+}
+
 #[instrument(skip_all)]
 #[allow(clippy::multiple_bound_locations, clippy::type_repetition_in_bounds)] // cfg not supported in where clauses?
-pub fn prove<
+pub fn prove_with_preprocessed<
     SC,
     #[cfg(debug_assertions)] A: for<'a> Air<crate::check_constraints::DebugConstraintBuilder<'a, Val<SC>>>,
     #[cfg(not(debug_assertions))] A,
@@ -46,6 +110,7 @@ pub fn prove<
     air: &A,
     trace: RowMajorMatrix<Val<SC>>,
     public_values: &[Val<SC>],
+    preprocessed: Option<&PreprocessedProverData<SC>>,
 ) -> Proof<SC>
 where
     SC: StarkGenericConfig,
@@ -59,9 +124,38 @@ where
     let log_degree = log2_strict_usize(degree);
     let log_ext_degree = log_degree + config.is_zk();
 
-    // Get preprocessed trace and its width for symbolic constraint evaluation
-    let preprocessed_trace = air.preprocessed_trace();
-    let preprocessed_width = preprocessed_trace.as_ref().map(|m| m.width).unwrap_or(0);
+    // Get preprocessed width for symbolic constraint evaluation.
+    //
+    // - If reusable preprocessed prover data is provided, trust its width and degree_bits
+    //   (and enforce consistency).
+    // - Otherwise, if the AIR defines preprocessed columns, we treat it as an error:
+    //   callers must use `setup_preprocessed` and pass the resulting data in.
+    let preprocessed_width = if let Some(pp) = preprocessed {
+        // Preprocessed columns are currently only supported in non-ZK mode.
+        assert_eq!(
+            config.is_zk(),
+            0,
+            "preprocessed columns are not supported in zk mode"
+        );
+        assert_eq!(
+            pp.degree_bits, log_ext_degree,
+            "PreprocessedProverData degree_bits does not match trace degree_bits"
+        );
+        pp.width
+    } else {
+        if let Some(preprocessed_trace) = air.preprocessed_trace() {
+            let width = preprocessed_trace.width();
+            if width > 0 {
+                panic!(
+                    "AIR defines preprocessed columns (width = {}), \
+                     but no PreprocessedProverData was provided. \
+                     Call `setup_preprocessed` and pass it to `prove_with_preprocessed`.",
+                    width
+                );
+            }
+        }
+        0
+    };
 
     // Compute the constraint polynomials as vectors of symbolic expressions.
     let symbolic_constraints =
@@ -137,16 +231,16 @@ where
     let (trace_commit, trace_data) =
         info_span!("commit to trace data").in_scope(|| pcs.commit([(ext_trace_domain, trace)]));
 
-    let (preprocessed_commit, preprocessed_data) = preprocessed_trace.map_or_else(
-        || (None, None),
-        |preprocessed| {
-            let (commit, data) =
-                commit_preprocessed_trace::<SC>(preprocessed, pcs, ext_trace_domain);
-            #[cfg(debug_assertions)]
-            assert_eq!(config.is_zk(), 0); // TODO: preprocessed columns not supported in zk mode
-            (Some(commit), Some(data))
-        },
-    );
+    // Preprocessed commitment and prover data (if any).
+    let (preprocessed_commit, preprocessed_data_ref) = if preprocessed_width > 0 {
+        let pp = preprocessed.expect(
+            "preprocessed columns present but no PreprocessedProverData provided; \
+             call `setup_preprocessed` and pass it to `prove_with_preprocessed`",
+        );
+        (Some(pp.commitment.clone()), Some(&pp.prover_data))
+    } else {
+        (None, None)
+    };
 
     // Observe the instance.
     // degree < 2^255 so we can safely cast log_degree to a u8.
@@ -198,9 +292,8 @@ where
     // This only works if the trace domain is `gH'` and the quotient domain is `gK` for some subgroup `K` contained in `H'`.
     // TODO: Make this explicit in `get_evaluations_on_domain` or otherwise fix this.
     let trace_on_quotient_domain = pcs.get_evaluations_on_domain(&trace_data, 0, quotient_domain);
-    let preprocessed_on_quotient_domain = preprocessed_data
-        .as_ref()
-        .map(|data| pcs.get_evaluations_on_domain(data, 0, quotient_domain));
+    let preprocessed_on_quotient_domain =
+        preprocessed_data_ref.map(|data| pcs.get_evaluations_on_domain(data, 0, quotient_domain));
 
     // Compute the quotient polynomial `Q(x)` by evaluating
     //          `C(T_1(x), ..., T_w(x), T_1(hx), ..., T_w(hx), selectors(x)) / Z_H(x)`
@@ -298,9 +391,7 @@ where
         let round0 = opt_r_data.as_ref().map(|r_data| (r_data, vec![vec![zeta]]));
         let round1 = (&trace_data, vec![vec![zeta, zeta_next]]);
         let round2 = (&quotient_data, vec![vec![zeta]; quotient_degree]); // open every chunk at zeta
-        let round3 = preprocessed_data
-            .as_ref()
-            .map(|data| (data, vec![vec![zeta, zeta_next]]));
+        let round3 = preprocessed_data_ref.map(|data| (data, vec![vec![zeta, zeta_next]]));
 
         let rounds = round0
             .into_iter()
@@ -345,6 +436,25 @@ where
         opening_proof,
         degree_bits: log_ext_degree,
     }
+}
+
+#[instrument(skip_all)]
+#[allow(clippy::multiple_bound_locations, clippy::type_repetition_in_bounds)] // cfg not supported in where clauses?
+pub fn prove<
+    SC,
+    #[cfg(debug_assertions)] A: for<'a> Air<crate::check_constraints::DebugConstraintBuilder<'a, Val<SC>>>,
+    #[cfg(not(debug_assertions))] A,
+>(
+    config: &SC,
+    air: &A,
+    trace: RowMajorMatrix<Val<SC>>,
+    public_values: &[Val<SC>],
+) -> Proof<SC>
+where
+    SC: StarkGenericConfig,
+    A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
+{
+    prove_with_preprocessed::<SC, A>(config, air, trace, public_values, None)
 }
 
 #[instrument(name = "compute quotient polynomial", skip_all)]
