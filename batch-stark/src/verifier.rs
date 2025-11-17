@@ -6,12 +6,13 @@ use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 use p3_uni_stark::{
-    SymbolicAirBuilder, VerificationError, VerifierConstraintFolder, get_log_quotient_degree,
-    recompose_quotient_from_chunks, verify_constraints,
+    PreprocessedProverData, SymbolicAirBuilder, VerificationError, VerifierConstraintFolder,
+    get_log_quotient_degree, recompose_quotient_from_chunks, verify_constraints,
 };
 use p3_util::zip_eq::zip_eq;
 use tracing::instrument;
 
+use crate::common::CommonData;
 use crate::config::{
     Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val, observe_base_as_ext,
     observe_instance_binding,
@@ -27,7 +28,39 @@ pub fn verify_batch<SC, A>(
 ) -> Result<(), VerificationError<PcsError<SC>>>
 where
     SC: SGC,
-    A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
+    A: Air<SymbolicAirBuilder<Val<SC>>>
+        + for<'a> Air<VerifierConstraintFolder<'a, SC>>
+        + for<'a> Air<p3_uni_stark::ProverConstraintFolder<'a, SC>>,
+    Challenge<SC>: BasedVectorSpace<Val<SC>>,
+{
+    // Build CommonData on the fly without caching; callers that want to reuse
+    // preprocessed data can call `verify_batch_with_common` instead.
+    let BatchProof { degree_bits, .. } = proof;
+    let preprocessed = airs
+        .iter()
+        .zip(degree_bits.iter())
+        .map(|(air, &ext_db)| {
+            let base_db = ext_db - config.is_zk();
+            p3_uni_stark::setup_preprocessed::<SC, _>(config, air, base_db)
+        })
+        .collect();
+    let common = CommonData::new(preprocessed);
+    verify_batch_with_common(config, airs, proof, public_values, &common)
+}
+
+#[instrument(skip_all)]
+pub fn verify_batch_with_common<SC, A>(
+    config: &SC,
+    airs: &[A],
+    proof: &BatchProof<SC>,
+    public_values: &[Vec<Val<SC>>],
+    common: &CommonData<SC>,
+) -> Result<(), VerificationError<PcsError<SC>>>
+where
+    SC: SGC,
+    A: Air<SymbolicAirBuilder<Val<SC>>>
+        + for<'a> Air<VerifierConstraintFolder<'a, SC>>
+        + for<'a> Air<p3_uni_stark::ProverConstraintFolder<'a, SC>>,
     Challenge<SC>: BasedVectorSpace<Val<SC>>,
 {
     let BatchProof {
@@ -49,6 +82,7 @@ where
     if airs.len() != opened_values.instances.len()
         || airs.len() != public_values.len()
         || airs.len() != degree_bits.len()
+        || airs.len() != common.preprocessed.len()
     {
         return Err(VerificationError::InvalidProofShape);
     }
@@ -59,11 +93,17 @@ where
 
     // Validate opened values shape per instance and observe per-instance binding data.
     // Precompute per-instance log_quotient_degrees and quotient_degrees in one pass.
+    let mut preprocessed_widths = Vec::with_capacity(airs.len());
     let (log_quotient_degrees, quotient_degrees): (Vec<usize>, Vec<usize>) = airs
         .iter()
         .zip(public_values.iter())
-        .map(|(air, pv)| {
-            let lqd = get_log_quotient_degree::<Val<SC>, A>(air, 0, pv.len(), config.is_zk());
+        .zip(common.preprocessed.iter())
+        .map(|((air, pv), pp)| {
+            let pre_w = pp
+                .as_ref()
+                .map_or(0, |p: &PreprocessedProverData<SC>| p.width);
+            preprocessed_widths.push(pre_w);
+            let lqd = get_log_quotient_degree::<Val<SC>, A>(air, pre_w, pv.len(), config.is_zk());
             let qd = 1 << (lqd + config.is_zk());
             (lqd, qd)
         })
@@ -92,6 +132,20 @@ where
             }
         }
 
+        // Validate that any preprocessed width implied by CommonData matches the opened shapes.
+        let pre_w = preprocessed_widths[i];
+        let pre_local_len = inst_opened_vals
+            .preprocessed_local
+            .as_ref()
+            .map_or(0, |v| v.len());
+        let pre_next_len = inst_opened_vals
+            .preprocessed_next
+            .as_ref()
+            .map_or(0, |v| v.len());
+        if pre_w != pre_local_len || pre_w != pre_next_len {
+            return Err(VerificationError::InvalidProofShape);
+        }
+
         // Observe per-instance binding data: (log_ext_degree, log_degree), width, num quotient chunks.
         let ext_db = degree_bits[i];
         let base_db = ext_db - config.is_zk();
@@ -103,6 +157,14 @@ where
     challenger.observe(commitments.main.clone());
     for pv in public_values {
         challenger.observe_slice(pv);
+    }
+
+    // Observe preprocessed widths and commitments for each instance.
+    for (pp, &pre_w) in common.preprocessed.iter().zip(preprocessed_widths.iter()) {
+        observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(pre_w));
+        if let Some(pp) = pp {
+            challenger.observe(pp.commitment.clone());
+        }
     }
 
     // Sample alpha for constraint folding
@@ -176,6 +238,39 @@ where
         }
     }
     coms_to_verify.push((commitments.quotient_chunks.clone(), qc_round));
+
+    // Preprocessed rounds: one commitment per instance that has preprocessed columns.
+    for (i, pp) in common.preprocessed.iter().enumerate() {
+        if let Some(pp) = pp {
+            let pre_w = preprocessed_widths[i];
+            if pre_w == 0 {
+                return Err(VerificationError::InvalidProofShape);
+            }
+            let inst = &opened_values.instances[i];
+            let local = inst
+                .preprocessed_local
+                .as_ref()
+                .ok_or(VerificationError::InvalidProofShape)?;
+            let next = inst
+                .preprocessed_next
+                .as_ref()
+                .ok_or(VerificationError::InvalidProofShape)?;
+
+            let base_db = pp.degree_bits;
+            let pre_domain = pcs.natural_domain_for_degree(1 << base_db);
+            let zeta_next_i = ext_trace_domains[i]
+                .next_point(zeta)
+                .ok_or(VerificationError::NextPointUnavailable)?;
+
+            coms_to_verify.push((
+                pp.commitment.clone(),
+                vec![(
+                    pre_domain,
+                    vec![(zeta, local.clone()), (zeta_next_i, next.clone())],
+                )],
+            ));
+        }
+    }
 
     // Verify all openings via PCS.
     pcs.verify(coms_to_verify, opening_proof, &mut challenger)

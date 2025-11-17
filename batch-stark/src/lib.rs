@@ -32,12 +32,14 @@
 
 extern crate alloc;
 
+pub mod common;
 pub mod config;
 pub mod proof;
 pub mod prover;
 pub mod verifier;
 
 // Re-export main types and functions for convenience
+pub use common::CommonData;
 pub use config::{
     Challenge, Commitment, Domain, PackedChallenge, PackedVal, PcsError, PcsProof,
     StarkGenericConfig, Val, observe_base_as_ext,

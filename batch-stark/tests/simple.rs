@@ -5,7 +5,7 @@ use core::slice::from_ref;
 
 use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_batch_stark::{StarkInstance, prove_batch, verify_batch};
+use p3_batch_stark::{CommonData, StarkInstance, prove_batch, verify_batch};
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
 use p3_commit::ExtensionMmcs;
@@ -28,7 +28,12 @@ use rand::rngs::SmallRng;
 // --- Simple Fibonacci AIR and trace ---
 
 #[derive(Debug, Clone, Copy)]
-struct FibonacciAir;
+struct FibonacciAir {
+    /// log2 of the trace height; used to size preprocessed columns.
+    log_height: usize,
+    /// Index to tamper with in preprocessed trace (None = no tampering).
+    tamper_index: Option<usize>,
+}
 
 impl<F> BaseAir<F> for FibonacciAir {
     fn width(&self) -> usize {
@@ -194,15 +199,37 @@ enum DemoAir {
     Fib(FibonacciAir),
     Mul(MulAir),
 }
-impl<F> BaseAir<F> for DemoAir {
+impl BaseAir<BabyBear> for DemoAir {
     fn width(&self) -> usize {
         match self {
-            Self::Fib(a) => <FibonacciAir as BaseAir<F>>::width(a),
-            Self::Mul(a) => <MulAir as BaseAir<F>>::width(a),
+            Self::Fib(a) => <FibonacciAir as BaseAir<BabyBear>>::width(a),
+            Self::Mul(a) => <MulAir as BaseAir<BabyBear>>::width(a),
+        }
+    }
+
+    fn preprocessed_trace(&self) -> Option<RowMajorMatrix<BabyBear>> {
+        match self {
+            Self::Fib(a) => {
+                let n = 1 << a.log_height;
+                let mut m = RowMajorMatrix::new(BabyBear::zero_vec(n), 1);
+                for (i, v) in m.values.iter_mut().enumerate().take(n) {
+                    *v = BabyBear::from_u64(i as u64);
+                }
+                if let Some(idx) = a.tamper_index {
+                    if idx < n {
+                        m.values[idx] += BabyBear::ONE;
+                    }
+                }
+                Some(m)
+            }
+            Self::Mul(_) => None,
         }
     }
 }
-impl<AB: AirBuilderWithPublicValues> Air<AB> for DemoAir {
+impl<AB> Air<AB> for DemoAir
+where
+    AB: AirBuilderWithPublicValues<F = BabyBear>,
+{
     fn eval(&self, b: &mut AB) {
         match self {
             Self::Fib(a) => a.eval(b),
@@ -216,7 +243,10 @@ impl<AB: AirBuilderWithPublicValues> Air<AB> for DemoAir {
 /// Creates a Fibonacci instance with specified log height.
 fn create_fib_instance(log_height: usize) -> (DemoAir, RowMajorMatrix<Val>, Vec<Val>) {
     let n = 1 << log_height;
-    let air = DemoAir::Fib(FibonacciAir);
+    let air = DemoAir::Fib(FibonacciAir {
+        log_height,
+        tamper_index: None,
+    });
     let trace = fib_trace::<Val>(0, 1, n);
     let pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(n))];
     (air, trace, pis)
@@ -351,6 +381,127 @@ fn test_different_widths() -> Result<(), impl Debug> {
     let airs = vec![air_mul2, air_fib, air_mul3];
     let pvs = vec![mul2_pis, fib_pis, mul3_pis];
     verify_batch(&config, &airs, &proof, &pvs)
+}
+
+#[test]
+fn test_preprocessed_tampered_fails() -> Result<(), Box<dyn std::error::Error>> {
+    let config = make_config(9999);
+
+    // Single Fibonacci instance with 8 rows and preprocessed index column.
+    let (air, trace, fib_pis) = create_fib_instance(3);
+    let instances = vec![StarkInstance {
+        air: &air,
+        trace,
+        public_values: fib_pis.clone(),
+    }];
+
+    let proof = prove_batch(&config, instances);
+
+    // Build CommonData for the prover's (correct) AIR and degrees.
+    let degree_bits = proof.degree_bits.clone();
+    let airs_ok = vec![air];
+    let common_ok = CommonData::from_airs_and_degrees(&config, &airs_ok, &degree_bits);
+
+    // First, sanity-check that verification succeeds with matching preprocessed data.
+    let ok_res = p3_batch_stark::verifier::verify_batch_with_common(
+        &config,
+        &airs_ok,
+        &proof,
+        &[fib_pis.clone()],
+        &common_ok,
+    );
+    assert!(
+        ok_res.is_ok(),
+        "Expected verification to succeed with matching preprocessed data"
+    );
+
+    // Now tamper with the preprocessed trace by modifying the tamper_index in the AIR
+    // used to derive the preprocessed commitment for verification.
+    let air_tampered = DemoAir::Fib(FibonacciAir {
+        log_height: 3,
+        tamper_index: Some(2),
+    });
+    let airs_tampered = vec![air_tampered];
+    let common_tampered = CommonData::from_airs_and_degrees(&config, &airs_tampered, &degree_bits);
+
+    let res = p3_batch_stark::verifier::verify_batch_with_common(
+        &config,
+        &airs_ok,
+        &proof,
+        &[fib_pis],
+        &common_tampered,
+    );
+    assert!(
+        res.is_err(),
+        "Verification should fail with tampered preprocessed columns"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_preprocessed_reuse_common_multi_proofs() -> Result<(), Box<dyn std::error::Error>> {
+    let config = make_config(2026);
+
+    // Single Fibonacci instance with preprocessed index column, 8 rows.
+    let log_height = 3;
+    let n = 1 << log_height;
+    let air = DemoAir::Fib(FibonacciAir {
+        log_height,
+        tamper_index: None,
+    });
+
+    // First proof: standard Fibonacci trace and public values.
+    let trace1 = fib_trace::<Val>(0, 1, n);
+    let fib_pis1 = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(n))];
+    let instances1 = vec![StarkInstance {
+        air: &air,
+        trace: trace1,
+        public_values: fib_pis1.clone(),
+    }];
+    let proof1 = prove_batch(&config, instances1);
+
+    // Build CommonData once from the AIR and degree bits of the first proof.
+    let degree_bits = proof1.degree_bits.clone();
+    let airs = vec![air];
+    let common = CommonData::from_airs_and_degrees(&config, &airs, &degree_bits);
+
+    // Verify the first proof using the shared CommonData.
+    let res1 = p3_batch_stark::verifier::verify_batch_with_common(
+        &config,
+        &airs,
+        &proof1,
+        &[fib_pis1.clone()],
+        &common,
+    );
+    assert!(
+        res1.is_ok(),
+        "First verification with CommonData should succeed"
+    );
+
+    // Second proof: reuse the same AIR, degree, and CommonData,
+    // but regenerate the trace and public values (identical in this test).
+    let trace2 = fib_trace::<Val>(0, 1, n);
+    let fib_pis2 = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(n))];
+    let instances2 = vec![StarkInstance {
+        air: &air,
+        trace: trace2,
+        public_values: fib_pis2.clone(),
+    }];
+    let proof2 = p3_batch_stark::prover::prove_batch_with_common(&config, instances2, &common);
+
+    let res2 = p3_batch_stark::verifier::verify_batch_with_common(
+        &config,
+        &airs,
+        &proof2,
+        &[fib_pis2],
+        &common,
+    );
+    assert!(
+        res2.is_ok(),
+        "Second verification with reused CommonData should succeed"
+    );
+
+    Ok(())
 }
 
 #[test]
@@ -525,9 +676,16 @@ fn test_circle_stark_batch() -> Result<(), impl Debug> {
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs, challenger);
 
-    // Create two Fibonacci instances with different sizes
-    let air_fib1 = FibonacciAir;
-    let air_fib2 = FibonacciAir;
+    // Create two Fibonacci instances with different sizes.
+    // Here we don't use preprocessed columns (Circle PCS + plain FibonacciAir).
+    let air_fib1 = FibonacciAir {
+        log_height: 0,
+        tamper_index: None,
+    };
+    let air_fib2 = FibonacciAir {
+        log_height: 0,
+        tamper_index: None,
+    };
 
     let fib_pis1 = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(8))]; // F_8 = 21
     let fib_pis2 = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(4))]; // F_4 = 3
