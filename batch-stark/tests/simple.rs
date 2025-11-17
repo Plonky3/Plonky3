@@ -199,25 +199,25 @@ enum DemoAir {
     Fib(FibonacciAir),
     Mul(MulAir),
 }
-impl BaseAir<BabyBear> for DemoAir {
+impl<F: PrimeField64> BaseAir<F> for DemoAir {
     fn width(&self) -> usize {
         match self {
-            Self::Fib(a) => <FibonacciAir as BaseAir<BabyBear>>::width(a),
-            Self::Mul(a) => <MulAir as BaseAir<BabyBear>>::width(a),
+            Self::Fib(a) => <FibonacciAir as BaseAir<F>>::width(a),
+            Self::Mul(a) => <MulAir as BaseAir<F>>::width(a),
         }
     }
 
-    fn preprocessed_trace(&self) -> Option<RowMajorMatrix<BabyBear>> {
+    fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
         match self {
             Self::Fib(a) => {
                 let n = 1 << a.log_height;
-                let mut m = RowMajorMatrix::new(BabyBear::zero_vec(n), 1);
+                let mut m = RowMajorMatrix::new(F::zero_vec(n), 1);
                 for (i, v) in m.values.iter_mut().enumerate().take(n) {
-                    *v = BabyBear::from_u64(i as u64);
+                    *v = F::from_u64(i as u64);
                 }
                 if let Some(idx) = a.tamper_index {
                     if idx < n {
-                        m.values[idx] += BabyBear::ONE;
+                        m.values[idx] += F::ONE;
                     }
                 }
                 Some(m)
@@ -228,7 +228,8 @@ impl BaseAir<BabyBear> for DemoAir {
 }
 impl<AB> Air<AB> for DemoAir
 where
-    AB: AirBuilderWithPublicValues<F = BabyBear>,
+    AB: AirBuilderWithPublicValues,
+    AB::F: PrimeField64,
 {
     fn eval(&self, b: &mut AB) {
         match self {
