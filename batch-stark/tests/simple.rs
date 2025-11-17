@@ -220,10 +220,10 @@ impl<F: PrimeField64> BaseAir<F> for DemoAir {
                 for (i, v) in m.values.iter_mut().enumerate().take(n) {
                     *v = F::from_u64(i as u64);
                 }
-                if let Some(idx) = a.tamper_index {
-                    if idx < n {
-                        m.values[idx] += F::ONE;
-                    }
+                if let Some(idx) = a.tamper_index
+                    && idx < n
+                {
+                    m.values[idx] += F::ONE;
                 }
                 Some(m)
             }
@@ -343,7 +343,7 @@ fn test_invalid_public_values_rejected() -> Result<(), Box<dyn std::error::Error
     let instances = vec![StarkInstance {
         air: &air_fib,
         trace,
-        public_values: fib_pis.clone(),
+        public_values: fib_pis,
     }];
     let common = CommonData::from_instances(&config, &instances);
     let proof = prove_batch(&config, instances, &common);
@@ -411,7 +411,7 @@ fn test_preprocessed_tampered_fails() -> Result<(), Box<dyn std::error::Error>> 
 
     // First, sanity-check that verification succeeds with matching preprocessed data.
     let airs = vec![air];
-    let ok_res = verify_batch(&config, &airs, &proof, &[fib_pis.clone()], &common);
+    let ok_res = verify_batch(&config, &airs, &proof, from_ref(&fib_pis), &common);
     assert!(
         ok_res.is_ok(),
         "Expected verification to succeed with matching preprocessed data"
@@ -471,7 +471,7 @@ fn test_preprocessed_reuse_common_multi_proofs() -> Result<(), Box<dyn std::erro
 
     // Verify the first proof.
     let airs = vec![air];
-    let res1 = verify_batch(&config, &airs, &proof1, &[fib_pis1.clone()], &common);
+    let res1 = verify_batch(&config, &airs, &proof1, from_ref(&fib_pis1), &common);
     assert!(res1.is_ok(), "First verification should succeed");
 
     // Second proof: DIFFERENT initial values (2, 3) - demonstrates CommonData is truly reusable
