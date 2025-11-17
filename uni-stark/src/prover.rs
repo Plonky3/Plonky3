@@ -68,9 +68,11 @@ where
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
     // Preprocessed columns are not supported in zk mode in the current design.
-    if config.is_zk() != 0 {
-        panic!("preprocessed columns are not supported in zk mode");
-    }
+    assert_eq!(
+        config.is_zk(),
+        0,
+        "preprocessed columns are not supported in zk mode"
+    );
 
     let pcs = config.pcs();
     let degree = 1 << degree_bits;
@@ -130,8 +132,21 @@ where
     //   (and enforce consistency).
     // - Otherwise, if the AIR defines preprocessed columns, we treat it as an error:
     //   callers must use `setup_preprocessed` and pass the resulting data in.
-    let preprocessed_width = preprocessed.map_or_else(
-        || {
+    let preprocessed_width = match preprocessed {
+        Some(pp) => {
+            // Preprocessed columns are currently only supported in non-ZK mode.
+            assert_eq!(
+                config.is_zk(),
+                0,
+                "preprocessed columns are not supported in zk mode"
+            );
+            assert_eq!(
+                pp.degree_bits, log_ext_degree,
+                "PreprocessedProverData degree_bits does not match trace degree_bits"
+            );
+            pp.width
+        }
+        None => {
             if let Some(preprocessed_trace) = air.preprocessed_trace() {
                 let width = preprocessed_trace.width();
                 if width > 0 {
@@ -144,21 +159,8 @@ where
                 }
             }
             0
-        },
-        |pp| {
-            // Preprocessed columns are currently only supported in non-ZK mode.
-            assert_eq!(
-                config.is_zk(),
-                0,
-                "preprocessed columns are not supported in zk mode"
-            );
-            assert_eq!(
-                pp.degree_bits, log_ext_degree,
-                "PreprocessedProverData degree_bits does not match trace degree_bits"
-            );
-            pp.width
-        },
-    );
+        }
+    };
 
     // Compute the constraint polynomials as vectors of symbolic expressions.
     let symbolic_constraints =

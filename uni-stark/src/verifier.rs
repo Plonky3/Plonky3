@@ -190,7 +190,7 @@ where
     }
 
     // From here on, we have preprocessed columns.
-    assert_eq!(is_zk, 0); // preprocessed columns not supported in zk mode
+    assert_eq!(is_zk, 0, "preprocessed columns not supported in zk mode");
 
     // A verifier key is mandatory whenever preprocessed_width > 0.
     let vk = preprocessed_vk.ok_or(VerificationError::InvalidProofShape)?;
