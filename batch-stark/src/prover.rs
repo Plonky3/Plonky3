@@ -14,10 +14,7 @@ use p3_uni_stark::{
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 
-use crate::config::{
-    Challenge, Domain, StarkGenericConfig as SGC, Val, observe_base_as_ext,
-    observe_instance_binding,
-};
+use crate::config::{Challenge, Domain, StarkGenericConfig as SGC, Val, observe_instance_binding};
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof};
 
 #[derive(Debug)]
@@ -75,7 +72,7 @@ where
     // Observe the number of instances up front so the transcript can't be reinterpreted
     // with a different partitioning.
     let n_instances = airs.len();
-    observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(n_instances));
+    challenger.observe_lifted::<Challenge<SC>>(Val::<SC>::from_usize(n_instances));
 
     // Observe per-instance binding data: (log_ext_degree, log_degree), width, num quotient chunks.
     for i in 0..n_instances {

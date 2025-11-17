@@ -17,7 +17,7 @@ pub use duplex_challenger::*;
 pub use grinding_challenger::*;
 pub use hash_challenger::*;
 pub use multi_field_challenger::*;
-use p3_field::{BasedVectorSpace, Field};
+use p3_field::{BasedVectorSpace, ExtensionField, Field};
 pub use serializing_challenger::*;
 
 /// A generic trait for absorbing elements into the transcript.
@@ -87,6 +87,26 @@ pub trait FieldChallenger<F: Field>:
     fn sample_algebra_element<A: BasedVectorSpace<F>>(&mut self) -> A {
         A::from_basis_coefficients_fn(|_| self.sample())
     }
+
+    /// Observe base field elements as extension field elements for recursion-friendly transcripts.
+    ///
+    /// This simplifies recursive verifier circuits by using a uniform extension field challenger.
+    /// Instead of observing a mix of base and extension field elements, we convert all base field
+    /// observations (metadata, public values) to extension field elements before passing to the challenger.
+    ///
+    /// # Recursion Benefits
+    ///
+    /// In recursive proof systems, the verifier circuit needs to verify the inner proof. Since STARK
+    /// verification operates entirely in the extension field (challenges, opened values, constraint
+    /// evaluation), having a challenger that only observes extension field elements significantly
+    /// simplifies the recursive circuit implementation.
+    #[inline]
+    fn observe_lifted<EF>(&mut self, val: F)
+    where
+        EF: ExtensionField<F> + BasedVectorSpace<F>,
+    {
+        self.observe_algebra_element(EF::from(val));
+    }
 }
 
 impl<C, T> CanObserve<T> for &mut C
@@ -149,5 +169,13 @@ where
     #[inline(always)]
     fn sample_algebra_element<EF: BasedVectorSpace<F>>(&mut self) -> EF {
         (*self).sample_algebra_element()
+    }
+
+    #[inline(always)]
+    fn observe_lifted<EF>(&mut self, val: F)
+    where
+        EF: ExtensionField<F> + BasedVectorSpace<F>,
+    {
+        (*self).observe_lifted::<EF>(val);
     }
 }
