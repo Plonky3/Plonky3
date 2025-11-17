@@ -22,6 +22,7 @@ use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
 };
 use p3_uni_stark::StarkConfig;
+use p3_util::log2_strict_usize;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
@@ -103,8 +104,12 @@ fn fib_trace<F: PrimeField64>(a: u64, b: u64, n: usize) -> RowMajorMatrix<F> {
 }
 
 fn fib_n(n: usize) -> u64 {
-    let mut a = 0u64;
-    let mut b = 1u64;
+    fib_n_from(0, 1, n)
+}
+
+fn fib_n_from(a0: u64, b0: u64, n: usize) -> u64 {
+    let mut a = a0;
+    let mut b = b0;
     for _ in 0..n {
         let t = a + b;
         a = b;
@@ -287,11 +292,12 @@ fn test_two_instances() -> Result<(), impl Debug> {
         },
     ];
 
-    let proof = prove_batch(&config, instances);
+    let common = CommonData::from_instances(&config, &instances);
+    let proof = prove_batch(&config, instances, &common);
 
     let airs = vec![air_fib, air_mul];
     let pvs = vec![fib_pis, mul_pis];
-    verify_batch(&config, &airs, &proof, &pvs)
+    verify_batch(&config, &airs, &proof, &pvs, &common)
 }
 
 #[test]
@@ -320,10 +326,11 @@ fn test_three_instances_mixed_sizes() -> Result<(), impl Debug> {
         },
     ];
 
-    let proof = prove_batch(&config, instances);
+    let common = CommonData::from_instances(&config, &instances);
+    let proof = prove_batch(&config, instances, &common);
     let airs = vec![air_fib16, air_mul8, air_fib8];
     let pvs = vec![fib16_pis, mul8_pis, fib8_pis];
-    verify_batch(&config, &airs, &proof, &pvs)
+    verify_batch(&config, &airs, &proof, &pvs, &common)
 }
 
 #[test]
@@ -336,17 +343,19 @@ fn test_invalid_public_values_rejected() -> Result<(), Box<dyn std::error::Error
     let instances = vec![StarkInstance {
         air: &air_fib,
         trace,
-        public_values: fib_pis,
+        public_values: fib_pis.clone(),
     }];
-    let proof = prove_batch(&config, instances);
+    let common = CommonData::from_instances(&config, &instances);
+    let proof = prove_batch(&config, instances, &common);
 
     // Wrong public value at verify => should reject
+    let airs = vec![air_fib];
     let wrong_pvs = vec![vec![
         Val::from_u64(0),
         Val::from_u64(1),
         Val::from_u64(correct_x + 1),
     ]];
-    let res = verify_batch(&config, &[air_fib], &proof, &wrong_pvs);
+    let res = verify_batch(&config, &airs, &proof, &wrong_pvs, &common);
     assert!(res.is_err(), "Should reject wrong public values");
     Ok::<_, Box<dyn std::error::Error>>(())
 }
@@ -378,10 +387,11 @@ fn test_different_widths() -> Result<(), impl Debug> {
         },
     ];
 
-    let proof = prove_batch(&config, instances);
+    let common = CommonData::from_instances(&config, &instances);
+    let proof = prove_batch(&config, instances, &common);
     let airs = vec![air_mul2, air_fib, air_mul3];
     let pvs = vec![mul2_pis, fib_pis, mul3_pis];
-    verify_batch(&config, &airs, &proof, &pvs)
+    verify_batch(&config, &airs, &proof, &pvs, &common)
 }
 
 #[test]
@@ -396,21 +406,12 @@ fn test_preprocessed_tampered_fails() -> Result<(), Box<dyn std::error::Error>> 
         public_values: fib_pis.clone(),
     }];
 
-    let proof = prove_batch(&config, instances);
-
-    // Build CommonData for the prover's (correct) AIR and degrees.
-    let degree_bits = proof.degree_bits.clone();
-    let airs_ok = vec![air];
-    let common_ok = CommonData::from_airs_and_degrees(&config, &airs_ok, &degree_bits);
+    let common = CommonData::from_instances(&config, &instances);
+    let proof = prove_batch(&config, instances, &common);
 
     // First, sanity-check that verification succeeds with matching preprocessed data.
-    let ok_res = p3_batch_stark::verifier::verify_batch_with_common(
-        &config,
-        &airs_ok,
-        &proof,
-        &[fib_pis.clone()],
-        &common_ok,
-    );
+    let airs = vec![air];
+    let ok_res = verify_batch(&config, &airs, &proof, &[fib_pis.clone()], &common);
     assert!(
         ok_res.is_ok(),
         "Expected verification to succeed with matching preprocessed data"
@@ -418,19 +419,25 @@ fn test_preprocessed_tampered_fails() -> Result<(), Box<dyn std::error::Error>> 
 
     // Now tamper with the preprocessed trace by modifying the tamper_index in the AIR
     // used to derive the preprocessed commitment for verification.
+    // The proof was generated with the original AIR, but we verify with a tampered AIR
+    // that would produce different preprocessed columns.
     let air_tampered = DemoAir::Fib(FibonacciAir {
         log_height: 3,
         tamper_index: Some(2),
     });
+    // Create CommonData with tampered AIR to test verification failure
+    // Use the proof's degree_bits (which are log_degrees since ZK is not supported)
+    let degree_bits = proof.degree_bits.clone();
     let airs_tampered = vec![air_tampered];
-    let common_tampered = CommonData::from_airs_and_degrees(&config, &airs_tampered, &degree_bits);
+    let verify_common_tampered =
+        CommonData::from_airs_and_degrees(&config, &airs_tampered, &degree_bits);
 
-    let res = p3_batch_stark::verifier::verify_batch_with_common(
+    let res = verify_batch(
         &config,
-        &airs_ok,
+        &airs_tampered,
         &proof,
         &[fib_pis],
-        &common_tampered,
+        &verify_common_tampered,
     );
     assert!(
         res.is_err(),
@@ -451,7 +458,7 @@ fn test_preprocessed_reuse_common_multi_proofs() -> Result<(), Box<dyn std::erro
         tamper_index: None,
     });
 
-    // First proof: standard Fibonacci trace and public values.
+    // First proof: standard Fibonacci trace starting from (0, 1).
     let trace1 = fib_trace::<Val>(0, 1, n);
     let fib_pis1 = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(n))];
     let instances1 = vec![StarkInstance {
@@ -459,47 +466,33 @@ fn test_preprocessed_reuse_common_multi_proofs() -> Result<(), Box<dyn std::erro
         trace: trace1,
         public_values: fib_pis1.clone(),
     }];
-    let proof1 = prove_batch(&config, instances1);
+    let common = CommonData::from_instances(&config, &instances1);
+    let proof1 = prove_batch(&config, instances1, &common);
 
-    // Build CommonData once from the AIR and degree bits of the first proof.
-    let degree_bits = proof1.degree_bits.clone();
+    // Verify the first proof.
     let airs = vec![air];
-    let common = CommonData::from_airs_and_degrees(&config, &airs, &degree_bits);
+    let res1 = verify_batch(&config, &airs, &proof1, &[fib_pis1.clone()], &common);
+    assert!(res1.is_ok(), "First verification should succeed");
 
-    // Verify the first proof using the shared CommonData.
-    let res1 = p3_batch_stark::verifier::verify_batch_with_common(
-        &config,
-        &airs,
-        &proof1,
-        &[fib_pis1.clone()],
-        &common,
-    );
-    assert!(
-        res1.is_ok(),
-        "First verification with CommonData should succeed"
-    );
-
-    // Second proof: reuse the same AIR, degree, and CommonData,
-    // but regenerate the trace and public values (identical in this test).
-    let trace2 = fib_trace::<Val>(0, 1, n);
-    let fib_pis2 = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(n))];
+    // Second proof: DIFFERENT initial values (2, 3) - demonstrates CommonData is truly reusable
+    // across different traces with the same AIR and degree.
+    let trace2 = fib_trace::<Val>(2, 3, n);
+    let fib_pis2 = vec![
+        Val::from_u64(2),
+        Val::from_u64(3),
+        Val::from_u64(fib_n_from(2, 3, n)),
+    ];
     let instances2 = vec![StarkInstance {
         air: &air,
         trace: trace2,
         public_values: fib_pis2.clone(),
     }];
-    let proof2 = p3_batch_stark::prover::prove_batch_with_common(&config, instances2, &common);
+    let proof2 = prove_batch(&config, instances2, &common);
 
-    let res2 = p3_batch_stark::verifier::verify_batch_with_common(
-        &config,
-        &airs,
-        &proof2,
-        &[fib_pis2],
-        &common,
-    );
+    let res2 = verify_batch(&config, &airs, &proof2, &[fib_pis2], &common);
     assert!(
         res2.is_ok(),
-        "Second verification with reused CommonData should succeed"
+        "Second verification should succeed with different trace values"
     );
 
     Ok(())
@@ -518,8 +511,37 @@ fn test_single_instance() -> Result<(), impl Debug> {
         public_values: fib_pis.clone(),
     }];
 
-    let proof = prove_batch(&config, instances);
-    verify_batch(&config, &[air_fib], &proof, &[fib_pis])
+    let common = CommonData::from_instances(&config, &instances);
+    let proof = prove_batch(&config, instances, &common);
+    let airs = vec![air_fib];
+    verify_batch(&config, &airs, &proof, &[fib_pis], &common)
+}
+
+#[test]
+fn test_mixed_preprocessed() -> Result<(), impl Debug> {
+    let config = make_config(8888);
+
+    let (air_fib, fib_trace, fib_pis) = create_fib_instance(4); // 16 rows, has preprocessed
+    let (air_mul, mul_trace, mul_pis) = create_mul_instance(4, 2, 1); // 16 rows, no preprocessed
+
+    let instances = vec![
+        StarkInstance {
+            air: &air_fib,
+            trace: fib_trace,
+            public_values: fib_pis.clone(),
+        },
+        StarkInstance {
+            air: &air_mul,
+            trace: mul_trace,
+            public_values: mul_pis.clone(),
+        },
+    ];
+
+    let common = CommonData::from_instances(&config, &instances);
+    let proof = prove_batch(&config, instances, &common);
+    let airs = vec![air_fib, air_mul];
+    let pvs = vec![fib_pis, mul_pis];
+    verify_batch(&config, &airs, &proof, &pvs, &common)
 }
 
 #[test]
@@ -539,7 +561,8 @@ fn test_invalid_trace_width_rejected() {
     }];
 
     // Generate a valid proof
-    let valid_proof = prove_batch(&config, instances);
+    let common = CommonData::from_instances(&config, &instances);
+    let valid_proof = prove_batch(&config, instances, &common);
 
     // Tamper with the proof: change trace_local to have wrong width
     let mut tampered_proof = p3_batch_stark::proof::BatchProof {
@@ -564,7 +587,8 @@ fn test_invalid_trace_width_rejected() {
     };
 
     // Verification should fail due to width mismatch
-    let res = verify_batch(&config, &[air_fib], &tampered_proof, from_ref(&fib_pis));
+    let airs = vec![air_fib];
+    let res = verify_batch(&config, &airs, &tampered_proof, from_ref(&fib_pis), &common);
     assert!(
         res.is_err(),
         "Verifier should reject trace with wrong width"
@@ -576,7 +600,7 @@ fn test_invalid_trace_width_rejected() {
     tampered_proof.opened_values.instances[0].trace_next =
         vec![valid_proof.opened_values.instances[0].trace_next[0]]; // Wrong width
 
-    let res = verify_batch(&config, &[air_fib], &tampered_proof, from_ref(&fib_pis));
+    let res = verify_batch(&config, &airs, &tampered_proof, from_ref(&fib_pis), &common);
     assert!(
         res.is_err(),
         "Verifier should reject trace_next with wrong width"
@@ -604,10 +628,23 @@ fn test_reorder_instances_rejected() {
         },
     ];
 
-    let proof = prove_batch(&config, instances);
+    // DemoAir::Fib has preprocessed columns, so compute degrees for swapped verification
+    let degrees: Vec<usize> = instances.iter().map(|i| i.trace.height()).collect();
+    let log_degrees: Vec<usize> = degrees.iter().copied().map(log2_strict_usize).collect();
 
-    // Swap order at verify -> should fail
-    let res = verify_batch(&config, &[air_b, air_a], &proof, &[pv_b, pv_a]);
+    let common = CommonData::from_instances(&config, &instances);
+    let proof = prove_batch(&config, instances, &common);
+
+    // Swap order at verify -> should fail (create new CommonData with swapped AIRs)
+    let airs_swapped = vec![air_b, air_a];
+    let common_swapped = CommonData::from_airs_and_degrees(&config, &airs_swapped, &log_degrees);
+    let res = verify_batch(
+        &config,
+        &airs_swapped,
+        &proof,
+        &[pv_b, pv_a],
+        &common_swapped,
+    );
     assert!(res.is_err(), "Verifier should reject reordered instances");
 }
 
@@ -624,12 +661,14 @@ fn test_quotient_chunk_element_len_rejected() {
         trace: tr,
         public_values: pv.clone(),
     }];
-    let proof = prove_batch(&config, instances);
+    let common = CommonData::from_instances(&config, &instances);
+    let proof = prove_batch(&config, instances, &common);
 
     let mut tampered = proof;
     tampered.opened_values.instances[0].quotient_chunks[0].pop();
 
-    let res = verify_batch(&config, &[air], &tampered, from_ref(&pv));
+    let airs = vec![air];
+    let res = verify_batch(&config, &airs, &tampered, from_ref(&pv), &common);
     assert!(
         res.is_err(),
         "Verifier should reject truncated quotient chunk element"
@@ -708,11 +747,13 @@ fn test_circle_stark_batch() -> Result<(), impl Debug> {
     ];
 
     // Generate batch-proof
-    let proof = prove_batch(&config, instances);
+    // Plain FibonacciAir doesn't have preprocessed columns
+    let airs = vec![air_fib1, air_fib2];
+    let common = CommonData::empty(airs.len());
+    let proof = prove_batch(&config, instances, &common);
 
     // Verify batch-proof
-    let airs = vec![air_fib1, air_fib2];
     let public_values = vec![fib_pis1, fib_pis2];
-    verify_batch(&config, &airs, &proof, &public_values)
+    verify_batch(&config, &airs, &proof, &public_values, &common)
         .map_err(|e| format!("Verification failed: {:?}", e))
 }

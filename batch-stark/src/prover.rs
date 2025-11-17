@@ -29,35 +29,7 @@ pub struct StarkInstance<'a, SC: SGC, A> {
 }
 
 #[instrument(skip_all)]
-pub fn prove_batch<SC, A>(config: &SC, instances: Vec<StarkInstance<'_, SC, A>>) -> BatchProof<SC>
-where
-    SC: SGC,
-    A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
-{
-    // Build CommonData on the fly without caching; this preserves the original API.
-    // Callers that want to reuse preprocessed data across proofs can build CommonData once
-    // via `CommonData::from_airs_and_degrees` and call `prove_batch_with_common`.
-    let degrees: Vec<usize> = instances.iter().map(|i| i.trace.height()).collect();
-    let log_degrees: Vec<usize> = degrees.iter().copied().map(log2_strict_usize).collect();
-    let log_ext_degrees: Vec<usize> = log_degrees.iter().map(|&d| d + config.is_zk()).collect();
-
-    // Build CommonData on the fly without caching; callers that want to reuse preprocessed
-    // data can build it once and call `prove_batch_with_common`.
-    let preprocessed = instances
-        .iter()
-        .zip(log_ext_degrees.iter())
-        .map(|(inst, &ext_db)| {
-            let base_db = ext_db - config.is_zk();
-            p3_uni_stark::setup_preprocessed::<SC, _>(config, inst.air, base_db)
-        })
-        .collect();
-    let common = CommonData::new(preprocessed);
-
-    prove_batch_with_common(config, instances, &common)
-}
-
-#[instrument(skip_all)]
-pub fn prove_batch_with_common<SC, A>(
+pub fn prove_batch<SC, A>(
     config: &SC,
     instances: Vec<StarkInstance<'_, SC, A>>,
     common: &CommonData<SC>,
@@ -309,8 +281,9 @@ where
                     "expected exactly one preprocessed matrix per instance"
                 );
                 let vals = &round[0];
-                assert!(
-                    vals.len() == 2,
+                assert_eq!(
+                    vals.len(),
+                    2,
                     "expected two opening points (zeta, zeta_next) for preprocessed trace"
                 );
                 (Some(vals[0].clone()), Some(vals[1].clone()))

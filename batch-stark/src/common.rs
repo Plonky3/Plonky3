@@ -10,9 +10,12 @@ use alloc::vec::Vec;
 
 use p3_air::Air;
 use p3_field::BasedVectorSpace;
+use p3_matrix::Matrix;
 use p3_uni_stark::{PreprocessedProverData, ProverConstraintFolder, SymbolicAirBuilder, Val};
+use p3_util::log2_strict_usize;
 
 use crate::config::{Challenge, StarkGenericConfig as SGC};
+use crate::prover::StarkInstance;
 
 /// Struct storing data common to both the prover and verifier.
 ///
@@ -26,9 +29,13 @@ pub struct CommonData<SC: SGC> {
 }
 
 impl<SC: SGC> CommonData<SC> {
-    /// Construct a `CommonData` with only preprocessed information.
-    pub const fn new(preprocessed: Vec<Option<PreprocessedProverData<SC>>>) -> Self {
-        Self { preprocessed }
+    /// Create `CommonData` with no preprocessed columns.
+    ///
+    /// Use this when none of your AIRs have preprocessed columns.
+    pub fn empty(num_instances: usize) -> Self {
+        Self {
+            preprocessed: (0..num_instances).map(|_| None).collect(),
+        }
     }
 }
 
@@ -37,32 +44,55 @@ where
     SC: SGC,
     Challenge<SC>: BasedVectorSpace<Val<SC>>,
 {
-    /// Build `CommonData` from a list of AIRs and their extended degrees.
+    /// Build `CommonData` directly from STARK instances.
     ///
-    /// This will:
-    /// - For each instance, call `setup_preprocessed` with the base (non-ZK) trace degree
-    ///   derived from `ext_degree_bits` and `config.is_zk()`.
-    /// - Store the resulting `PreprocessedProverData` (if any) in `preprocessed`.
+    /// This automatically:
+    /// - Derives trace degrees from trace heights
+    /// - Computes extended degrees (base + ZK padding)
+    /// - Sets up preprocessed columns for AIRs that define them
+    pub fn from_instances<A>(config: &SC, instances: &[StarkInstance<'_, SC, A>]) -> Self
+    where
+        A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>> + Copy,
+    {
+        let degrees: Vec<usize> = instances.iter().map(|i| i.trace.height()).collect();
+        let log_ext_degrees: Vec<usize> = degrees
+            .iter()
+            .map(|&d| log2_strict_usize(d) + config.is_zk())
+            .collect();
+        let airs: Vec<A> = instances.iter().map(|i| *i.air).collect();
+        Self::from_airs_and_degrees(config, &airs, &log_ext_degrees)
+    }
+
+    /// Build `CommonData` from AIRs and their extended trace degree bits.
     ///
-    /// This is a convenience helper; callers that want to cache preprocessed data across
-    /// proofs can precompute it once and reuse the resulting `CommonData`.
-    pub fn from_airs_and_degrees<A>(config: &SC, airs: &[A], ext_degree_bits: &[usize]) -> Self
+    /// # Arguments
+    ///
+    /// * `trace_ext_degree_bits` - Log2 of extended trace degrees (including ZK padding)
+    ///
+    /// # Returns
+    ///
+    /// Preprocessed data for each AIR. Entries are `None` for AIRs without preprocessed columns.
+    pub fn from_airs_and_degrees<A>(
+        config: &SC,
+        airs: &[A],
+        trace_ext_degree_bits: &[usize],
+    ) -> Self
     where
         A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
     {
         assert_eq!(
             airs.len(),
-            ext_degree_bits.len(),
-            "airs and ext_degree_bits must have the same length"
+            trace_ext_degree_bits.len(),
+            "airs and trace_ext_degree_bits must have the same length"
         );
 
         let preprocessed = airs
             .iter()
-            .zip(ext_degree_bits.iter())
+            .zip(trace_ext_degree_bits.iter())
             .map(|(air, &ext_db)| {
                 let base_db = ext_db
                     .checked_sub(config.is_zk())
-                    .expect("ext_degree_bits must be >= is_zk()");
+                    .expect("trace_ext_degree_bits must be >= is_zk()");
                 p3_uni_stark::setup_preprocessed::<SC, _>(config, air, base_db)
             })
             .collect();

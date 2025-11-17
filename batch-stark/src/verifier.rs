@@ -25,35 +25,6 @@ pub fn verify_batch<SC, A>(
     airs: &[A],
     proof: &BatchProof<SC>,
     public_values: &[Vec<Val<SC>>],
-) -> Result<(), VerificationError<PcsError<SC>>>
-where
-    SC: SGC,
-    A: Air<SymbolicAirBuilder<Val<SC>>>
-        + for<'a> Air<VerifierConstraintFolder<'a, SC>>
-        + for<'a> Air<p3_uni_stark::ProverConstraintFolder<'a, SC>>,
-    Challenge<SC>: BasedVectorSpace<Val<SC>>,
-{
-    // Build CommonData on the fly without caching; callers that want to reuse
-    // preprocessed data can call `verify_batch_with_common` instead.
-    let BatchProof { degree_bits, .. } = proof;
-    let preprocessed = airs
-        .iter()
-        .zip(degree_bits.iter())
-        .map(|(air, &ext_db)| {
-            let base_db = ext_db - config.is_zk();
-            p3_uni_stark::setup_preprocessed::<SC, _>(config, air, base_db)
-        })
-        .collect();
-    let common = CommonData::new(preprocessed);
-    verify_batch_with_common(config, airs, proof, public_values, &common)
-}
-
-#[instrument(skip_all)]
-pub fn verify_batch_with_common<SC, A>(
-    config: &SC,
-    airs: &[A],
-    proof: &BatchProof<SC>,
-    public_values: &[Vec<Val<SC>>],
     common: &CommonData<SC>,
 ) -> Result<(), VerificationError<PcsError<SC>>>
 where
@@ -240,6 +211,8 @@ where
     coms_to_verify.push((commitments.quotient_chunks.clone(), qc_round));
 
     // Preprocessed rounds: one commitment per instance that has preprocessed columns.
+    // Note: preprocessed_round_indices[i] maps instance i to its round index in the PCS opening
+    // (if it has preprocessed columns), or None if it doesn't.
     for (i, pp) in common.preprocessed.iter().enumerate() {
         if let Some(pp) = pp {
             let pre_w = preprocessed_widths[i];
@@ -255,6 +228,15 @@ where
                 .preprocessed_next
                 .as_ref()
                 .ok_or(VerificationError::InvalidProofShape)?;
+
+            // Validate that the preprocessed data's base degree matches what we expect
+            let ext_db = degree_bits[i];
+            let expected_base_db = ext_db
+                .checked_sub(config.is_zk())
+                .ok_or(VerificationError::InvalidProofShape)?;
+            if pp.degree_bits != expected_base_db {
+                return Err(VerificationError::InvalidProofShape);
+            }
 
             let base_db = pp.degree_bits;
             let pre_domain = pcs.natural_domain_for_degree(1 << base_db);
