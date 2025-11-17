@@ -174,29 +174,19 @@ impl Distribution<Goldilocks> for StandardUniform {
 }
 
 impl UniformSamplingField for Goldilocks {
-    /// Maximum number of bits we can sample at negligible (~1/field prime) probability of
-    /// triggering a panic / requiring a resample.
     const MAX_SINGLE_SAMPLE_BITS: usize = 24;
-    /// An array storing the largest value `m_k` for each `k` in [0, 31], such that `m_k`
-    /// is a multiple of `2^k`. `m_k` is defined as:
-    ///
-    /// \( m_k = ⌊P / 2^k⌋ · 2^k \)
-    ///
-    /// This is used as a rejection sampling threshold (or panic trigger) in `sampling_uniform_bits`, when
-    /// sampling random bits from uniformly sampled field elements. As long as we sample up to the `k`
-    /// least significant bits in the range [0, m_k), we sample from exactly `m_k` elements. As
-    /// `m_k` is divisible by 2^k, each of the least significant `k` bits has exactly the same
-    /// number of zeroes and ones, leading to a uniform sampling.
-    ///
-    /// NOTE: We only include `0` to not have to deal with one-off indexing. `k` must be > 0.
-    /// Also, we don't care about k > 30 for KoalaBear.
     const SAMPLING_BITS_M: [u64; 64] = {
-        let PRIME: u64 = P;
+        let PRIME: u64 = P as u64;
         let mut a = [0u64; 64];
         let mut k = 0;
         while k < 64 {
-            let k2 = 1 << k as u64; // 2^k
-            a[k] = (PRIME / k2) * k2; // floor(P / 2^k) * 2^k: largest multiple of 2^k fitting into prime
+            if k == 0 {
+                a[k] = PRIME; // This value is irrelevant in practice. `bits = 0` not allowed
+            } else {
+                // Create a mask to zero out the last k bits
+                let mask = !((1u64 << k) - 1);
+                a[k] = PRIME & mask;
+            }
             k += 1;
         }
         a
