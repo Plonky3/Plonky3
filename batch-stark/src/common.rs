@@ -57,6 +57,18 @@ pub struct GlobalPreprocessed<SC: SGC> {
     pub matrix_to_instance: Vec<usize>,
 }
 
+// TODO: Local-only preprocessed
+// Some AIRs only need local preprocessed openings and never use the "next"
+// row for preprocessed columns. At the moment we always open both [zeta, zeta_next]
+// per preprocessed matrix, which is sound but wastes openings.
+//
+// To optimize this, consider:
+// - Adding `local_only: bool` to `PreprocessedInstanceMeta` (like the sp1 design).
+// - Scheduling either [zeta] or [zeta, zeta_next] per matrix in the global
+//   preprocessed opening round, depending on `local_only`.
+// - Relaxing the verifier's preprocessed "next" shape check when `local_only == true`
+//   so that instances with local-only preprocessed columns only need a single opening.
+
 /// Struct storing data common to both the prover and verifier.
 ///
 /// TODO: Add lookup metadata (e.g. `Vec<Vec<Lookup<Val<SC>>>>`).

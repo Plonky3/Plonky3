@@ -6,7 +6,7 @@ use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 use p3_uni_stark::{
-    SymbolicAirBuilder, VerificationError, VerifierConstraintFolder, get_log_quotient_degree,
+    SymbolicAirBuilder, VerificationError, VerifierConstraintFolder,
     recompose_quotient_from_chunks, verify_constraints,
 };
 use p3_util::zip_eq::zip_eq;
@@ -29,9 +29,7 @@ pub fn verify_batch<SC, A>(
 ) -> Result<(), VerificationError<PcsError<SC>>>
 where
     SC: SGC,
-    A: Air<SymbolicAirBuilder<Val<SC>>>
-        + for<'a> Air<VerifierConstraintFolder<'a, SC>>
-        + for<'a> Air<p3_uni_stark::ProverConstraintFolder<'a, SC>>,
+    A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
     Challenge<SC>: BasedVectorSpace<Val<SC>>,
 {
     let BatchProof {
@@ -62,24 +60,22 @@ where
     observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(n_instances));
 
     // Validate opened values shape per instance and observe per-instance binding data.
-    // Precompute per-instance log_quotient_degrees and quotient_degrees in one pass.
+    // Precompute per-instance preprocessed widths and quotient degrees (number of chunks).
     let mut preprocessed_widths = Vec::with_capacity(airs.len());
-    let (log_quotient_degrees, quotient_degrees): (Vec<usize>, Vec<usize>) = airs
-        .iter()
-        .zip(public_values.iter())
-        .enumerate()
-        .map(|(i, (air, pv))| {
-            let pre_w = common
-                .preprocessed
-                .as_ref()
-                .and_then(|g| g.instances[i].as_ref().map(|m| m.width))
-                .unwrap_or(0);
-            preprocessed_widths.push(pre_w);
-            let lqd = get_log_quotient_degree::<Val<SC>, A>(air, pre_w, pv.len(), config.is_zk());
-            let qd = 1 << (lqd + config.is_zk());
-            (lqd, qd)
-        })
-        .unzip();
+    let mut quotient_degrees = Vec::with_capacity(airs.len());
+
+    for (i, _air) in airs.iter().enumerate() {
+        let pre_w = common
+            .preprocessed
+            .as_ref()
+            .and_then(|g| g.instances[i].as_ref().map(|m| m.width))
+            .unwrap_or(0);
+        preprocessed_widths.push(pre_w);
+
+        // Derive quotient_degree (number of chunks) directly from the proof shape.
+        let quotient_degree = opened_values.instances[i].quotient_chunks.len();
+        quotient_degrees.push(quotient_degree);
+    }
 
     for (i, air) in airs.iter().enumerate() {
         let air_width = A::width(air);
@@ -182,15 +178,14 @@ where
     coms_to_verify.push((commitments.main.clone(), trace_round));
 
     // Quotient chunks round: flatten per-instance chunks to match commit order.
-    // Use extended domains for the outer commit domain, with size 2^(base_db + lqd + zk), and split into 2^(lqd+zk) chunks.
+    // Use extended domains for the outer commit domain, with size = base_degree * quotient_degree.
     let quotient_domains: Vec<Vec<Domain<SC>>> = (0..degree_bits.len())
         .map(|i| {
             let ext_db = degree_bits[i];
             let base_db = ext_db - config.is_zk();
-            let lqd = log_quotient_degrees[i];
             let quotient_degree = quotient_degrees[i];
             let ext_dom = ext_trace_domains[i];
-            let qdom = ext_dom.create_disjoint_domain(1 << (base_db + lqd + config.is_zk()));
+            let qdom = ext_dom.create_disjoint_domain((1 << base_db) * quotient_degree);
             qdom.split_domains(quotient_degree)
         })
         .collect();
