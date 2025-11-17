@@ -130,32 +130,35 @@ where
     //   (and enforce consistency).
     // - Otherwise, if the AIR defines preprocessed columns, we treat it as an error:
     //   callers must use `setup_preprocessed` and pass the resulting data in.
-    let preprocessed_width = if let Some(pp) = preprocessed {
-        // Preprocessed columns are currently only supported in non-ZK mode.
-        assert_eq!(
-            config.is_zk(),
-            0,
-            "preprocessed columns are not supported in zk mode"
-        );
-        assert_eq!(
-            pp.degree_bits, log_ext_degree,
-            "PreprocessedProverData degree_bits does not match trace degree_bits"
-        );
-        pp.width
-    } else {
-        if let Some(preprocessed_trace) = air.preprocessed_trace() {
-            let width = preprocessed_trace.width();
-            if width > 0 {
-                panic!(
-                    "AIR defines preprocessed columns (width = {}), \
-                     but no PreprocessedProverData was provided. \
-                     Call `setup_preprocessed` and pass it to `prove_with_preprocessed`.",
-                    width
-                );
+    let preprocessed_width = preprocessed.map_or_else(
+        || {
+            if let Some(preprocessed_trace) = air.preprocessed_trace() {
+                let width = preprocessed_trace.width();
+                if width > 0 {
+                    panic!(
+                        "AIR defines preprocessed columns (width = {}), \
+                         but no PreprocessedProverData was provided. \
+                         Call `setup_preprocessed` and pass it to `prove_with_preprocessed`.",
+                        width
+                    );
+                }
             }
-        }
-        0
-    };
+            0
+        },
+        |pp| {
+            // Preprocessed columns are currently only supported in non-ZK mode.
+            assert_eq!(
+                config.is_zk(),
+                0,
+                "preprocessed columns are not supported in zk mode"
+            );
+            assert_eq!(
+                pp.degree_bits, log_ext_degree,
+                "PreprocessedProverData degree_bits does not match trace degree_bits"
+            );
+            pp.width
+        },
+    );
 
     // Compute the constraint polynomials as vectors of symbolic expressions.
     let symbolic_constraints =

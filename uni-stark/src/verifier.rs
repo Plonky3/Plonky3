@@ -157,14 +157,15 @@ where
     // Determine expected preprocessed width.
     // - If a verifier key is provided, trust its width.
     // - Otherwise, derive width from the AIR's preprocessed trace (if any).
-    let preprocessed_width = if let Some(vk) = preprocessed_vk {
-        vk.width
-    } else {
-        air.preprocessed_trace()
-            .as_ref()
-            .map(|m| m.width)
-            .unwrap_or(0)
-    };
+    let preprocessed_width = preprocessed_vk.map_or_else(
+        || {
+            air.preprocessed_trace()
+                .as_ref()
+                .map(|m| m.width)
+                .unwrap_or(0)
+        },
+        |vk| vk.width,
+    );
 
     // Check that the proof's opened preprocessed values match the expected width.
     let preprocessed_local_len = opened_values
@@ -242,10 +243,11 @@ where
     let (preprocessed_width, preprocessed_commit) =
         process_preprocessed_trace::<SC, A>(air, opened_values, config.is_zk(), preprocessed_vk)?;
 
-    if let Some(vk) = preprocessed_vk {
-        if preprocessed_width > 0 && vk.degree_bits != *degree_bits {
-            return Err(VerificationError::InvalidProofShape);
-        }
+    if let Some(vk) = preprocessed_vk
+        && preprocessed_width > 0
+        && vk.degree_bits != *degree_bits
+    {
+        return Err(VerificationError::InvalidProofShape);
     }
 
     let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(
