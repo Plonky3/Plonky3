@@ -8,6 +8,10 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::{VerticalPair, ViewPair};
 use tracing::instrument;
 
+/// Type alias for the inputs to lookup constraint checking.
+/// - The first element is a slice of `Lookup<F>` representing (symbolically) the lookups to be performed.
+/// - The second element is a slice of `LookupData<EF>` representing the lookup data for global lookups.
+/// - The third element is a reference to the `LookupGadget` implementation.
 type LookupConstraintsInputs<'a, F, EF, LG> = (&'a [Lookup<F>], &'a [LookupData<EF>], &'a LG);
 
 /// Runs constraint checks using a given AIR definition and trace matrix.
@@ -19,7 +23,13 @@ type LookupConstraintsInputs<'a, F, EF, LG> = (&'a [Lookup<F>], &'a [LookupData<
 /// # Arguments
 /// - `air`: The AIR logic to run
 /// - `main`: The trace matrix (rows of witness values)
+/// - permutation: The permutation trace matrix (rows of permutation values)
+/// - `permutation_challenges`: The challenges used for permutation argument
 /// - `public_values`: Public values provided to the builder
+/// - lookup_constraints_inputs: Inputs necessary to check lookup constraints:
+///     - the symbolic representation of the lookups,
+///     - the lookup data for global lookups,
+///     - the lookup gadget implementation.
 #[instrument(name = "check constraints", skip_all)]
 pub(crate) fn check_constraints<'b, F, EF, A, LG>(
     air: &A,
@@ -101,7 +111,9 @@ pub struct DebugConstraintBuilderWithLookups<'a, F: Field, EF: ExtensionField<F>
     is_last_row: F,
     /// A flag indicating whether this is a transition row (not the last row).
     is_transition: F,
+    /// A view of the current and next permutation rows as a vertical pair.
     permutation: ViewPair<'a, EF>,
+    /// The challenges used for the permutation argument.
     permutation_challenges: &'a [EF],
 }
 

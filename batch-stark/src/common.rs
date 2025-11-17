@@ -18,6 +18,8 @@ use crate::config::SGC;
 #[derive(Debug)]
 pub struct CommonData<SC: SGC> {
     /// The lookups used by each STARK instance.
+    /// There is one `Vec<Lookup<Val<SC>>>` per STARK instance.
+    /// They are stored in the same order as the STARK instance inputs provided to `new`.
     pub lookups: Vec<Vec<Lookup<Val<SC>>>>,
 }
 

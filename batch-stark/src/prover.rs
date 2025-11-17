@@ -402,7 +402,7 @@ where
         let (permutation_local, permutation_next) = if !all_lookups[i].is_empty() {
             let perm_v = permutation_values_for_mats
                 .next()
-                .expect("permutation openings in bounds");
+                .expect("instance should have permutation openings");
             (perm_v[0].clone(), perm_v[1].clone())
         } else {
             (vec![], vec![])
