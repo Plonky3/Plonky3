@@ -231,9 +231,7 @@ where
 
             // Validate that the preprocessed data's base degree matches what we expect
             let ext_db = degree_bits[i];
-            let expected_base_db = ext_db
-                .checked_sub(config.is_zk())
-                .ok_or(VerificationError::InvalidProofShape)?;
+            let expected_base_db = ext_db - config.is_zk();
             if pp.degree_bits != expected_base_db {
                 return Err(VerificationError::InvalidProofShape);
             }

@@ -90,9 +90,7 @@ where
             .iter()
             .zip(trace_ext_degree_bits.iter())
             .map(|(air, &ext_db)| {
-                let base_db = ext_db
-                    .checked_sub(config.is_zk())
-                    .expect("trace_ext_degree_bits must be >= is_zk()");
+                let base_db = ext_db - config.is_zk();
                 p3_uni_stark::setup_preprocessed::<SC, _>(config, air, base_db)
             })
             .collect();
