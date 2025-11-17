@@ -212,7 +212,7 @@ fn test_mul_fib_pair() {
         .map(|pp| PreprocessedVerifierKey::<MyConfig> {
             width: pp.width,
             degree_bits: pp.degree_bits,
-            commitment: pp.commitment.clone(),
+            commitment: pp.commitment,
         });
 
     verify_with_preprocessed(&config, &air, &proof, &[], preprocessed_vk.as_ref())
@@ -241,7 +241,7 @@ fn test_tampered_preprocessed_fails() {
         .map(|pp| PreprocessedVerifierKey::<MyConfig> {
             width: pp.width,
             degree_bits: pp.degree_bits,
-            commitment: pp.commitment.clone(),
+            commitment: pp.commitment,
         });
 
     let result = verify_with_preprocessed(
