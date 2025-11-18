@@ -13,93 +13,10 @@ use p3_util::log2_strict_usize;
 use tracing::{debug_span, info_span, instrument};
 
 use crate::{
-    Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, Proof, ProverConstraintFolder,
-    StarkGenericConfig, SymbolicAirBuilder, Val, get_log_quotient_degree, get_symbolic_constraints,
+    Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, PreprocessedProverData, Proof,
+    ProverConstraintFolder, StarkGenericConfig, SymbolicAirBuilder, Val, get_log_quotient_degree,
+    get_symbolic_constraints,
 };
-
-/// Prover-side reusable data for preprocessed columns.
-///
-/// This allows committing to the preprocessed trace once per AIR/degree and reusing
-/// the commitment and PCS prover data across many proofs.
-pub struct PreprocessedProverData<SC: StarkGenericConfig> {
-    /// The width (number of columns) of the preprocessed trace.
-    pub width: usize,
-    /// The log2 of the degree of the domain over which the preprocessed trace is committed.
-    ///
-    /// In the current uni-stark implementation this matches `degree_bits` in `Proof`,
-    /// i.e. the (extended) trace degree.
-    pub degree_bits: usize,
-    /// PCS commitment to the preprocessed trace.
-    pub commitment: <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::Commitment,
-    /// PCS prover data for the preprocessed trace.
-    pub prover_data: <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::ProverData,
-}
-
-/// Commits the preprocessed trace if present.
-/// Returns the commitment hash and prover data (available iff preprocessed is Some).
-#[allow(clippy::type_complexity)]
-fn commit_preprocessed_trace<SC>(
-    preprocessed: RowMajorMatrix<Val<SC>>,
-    pcs: &SC::Pcs,
-    trace_domain: <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::Domain,
-) -> (
-    <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::Commitment,
-    <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::ProverData,
-)
-where
-    SC: StarkGenericConfig,
-{
-    debug_span!("commit to preprocessed trace")
-        .in_scope(|| pcs.commit([(trace_domain, preprocessed)]))
-}
-
-/// Set up and commit the preprocessed trace for a given AIR and degree.
-///
-/// This can be called once per AIR/degree configuration to obtain reusable
-/// prover data for preprocessed columns. Returns `None` if the AIR does not
-/// define any preprocessed columns.
-pub fn setup_preprocessed<SC, A>(
-    config: &SC,
-    air: &A,
-    degree_bits: usize,
-) -> Option<PreprocessedProverData<SC>>
-where
-    SC: StarkGenericConfig,
-    A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
-{
-    // Preprocessed columns are not supported in zk mode in the current design.
-    assert_eq!(
-        config.is_zk(),
-        0,
-        "preprocessed columns are not supported in zk mode"
-    );
-
-    let pcs = config.pcs();
-    let degree = 1 << degree_bits;
-
-    let preprocessed = air.preprocessed_trace()?;
-    let width = preprocessed.width();
-    if width == 0 {
-        return None;
-    }
-
-    assert_eq!(
-        preprocessed.height(),
-        degree,
-        "preprocessed trace height must equal trace degree"
-    );
-
-    let trace_domain = pcs.natural_domain_for_degree(degree);
-    let (commitment, prover_data) =
-        commit_preprocessed_trace::<SC>(preprocessed, pcs, trace_domain);
-
-    Some(PreprocessedProverData {
-        width,
-        degree_bits,
-        commitment,
-        prover_data,
-    })
-}
 
 #[instrument(skip_all)]
 #[allow(clippy::multiple_bound_locations, clippy::type_repetition_in_bounds)] // cfg not supported in where clauses?

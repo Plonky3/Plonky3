@@ -14,23 +14,10 @@ use p3_util::zip_eq::zip_eq;
 use tracing::instrument;
 
 use crate::symbolic_builder::{SymbolicAirBuilder, get_log_quotient_degree};
-use crate::{Domain, PcsError, Proof, StarkGenericConfig, Val, VerifierConstraintFolder};
-
-/// Verifier-side reusable data for preprocessed columns.
-///
-/// This allows committing to the preprocessed trace once per AIR/degree and reusing
-/// the commitment across many verifications.
-#[derive(Clone)]
-pub struct PreprocessedVerifierKey<SC: StarkGenericConfig> {
-    /// The width (number of columns) of the preprocessed trace.
-    pub width: usize,
-    /// The log2 of the degree of the domain over which the preprocessed trace is committed.
-    ///
-    /// This should match `degree_bits` in `Proof`, i.e. the (extended) trace degree.
-    pub degree_bits: usize,
-    /// PCS commitment to the preprocessed trace.
-    pub commitment: <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::Commitment,
-}
+use crate::{
+    Domain, PcsError, PreprocessedVerifierKey, Proof, StarkGenericConfig, Val,
+    VerifierConstraintFolder,
+};
 
 /// Recomposes the quotient polynomial from its chunks evaluated at a point.
 ///
