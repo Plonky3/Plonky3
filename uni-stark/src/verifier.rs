@@ -11,10 +11,13 @@ use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use p3_util::zip_eq::zip_eq;
-use tracing::{debug_span, instrument};
+use tracing::instrument;
 
 use crate::symbolic_builder::{SymbolicAirBuilder, get_log_quotient_degree};
-use crate::{Domain, PcsError, Proof, StarkGenericConfig, Val, VerifierConstraintFolder};
+use crate::{
+    Domain, PcsError, PreprocessedVerifierKey, Proof, StarkGenericConfig, Val,
+    VerifierConstraintFolder,
+};
 
 /// Recomposes the quotient polynomial from its chunks evaluated at a point.
 ///
@@ -125,9 +128,8 @@ where
 fn process_preprocessed_trace<SC, A>(
     air: &A,
     opened_values: &crate::proof::OpenedValues<SC::Challenge>,
-    pcs: &SC::Pcs,
-    trace_domain: <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::Domain,
     is_zk: usize,
+    preprocessed_vk: Option<&PreprocessedVerifierKey<SC>>,
 ) -> Result<
     (
         usize,
@@ -139,9 +141,15 @@ where
     SC: StarkGenericConfig,
     A: for<'a> Air<VerifierConstraintFolder<'a, SC>>,
 {
-    // If verifier asked for preprocessed trace, then proof should have it
-    let preprocessed = air.preprocessed_trace();
-    let preprocessed_width = preprocessed.as_ref().map(|m| m.width).unwrap_or(0);
+    // Determine expected preprocessed width.
+    // - If a verifier key is provided, trust its width.
+    // - Otherwise, derive width from the AIR's preprocessed trace (if any).
+    let preprocessed_width = preprocessed_vk
+        .map(|vk| vk.width)
+        .or_else(|| air.preprocessed_trace().as_ref().map(|m| m.width))
+        .unwrap_or(0);
+
+    // Check that the proof's opened preprocessed values match the expected width.
     let preprocessed_local_len = opened_values
         .preprocessed_local
         .as_ref()
@@ -155,19 +163,27 @@ where
         return Err(VerificationError::InvalidProofShape);
     }
 
-    if preprocessed_width > 0 {
-        assert_eq!(is_zk, 0); // TODO: preprocessed columns not supported in zk mode
-        let height = preprocessed.as_ref().unwrap().values.len() / preprocessed_width;
-        assert_eq!(
-            height,
-            trace_domain.size(),
-            "Verifier's preprocessed trace height must be equal to trace domain size"
-        );
-        let (preprocessed_commit, _) = debug_span!("process preprocessed trace")
-            .in_scope(|| pcs.commit([(trace_domain, preprocessed.unwrap())]));
-        Ok((preprocessed_width, Some(preprocessed_commit)))
-    } else {
-        Ok((preprocessed_width, None))
+    // Validate consistency between width, verifier key, and zk settings.
+    match (preprocessed_width, preprocessed_vk) {
+        // Case: No preprocessed columns.
+        //
+        // Valid only if no verifier key is provided.
+        (0, None) => Ok((0, None)),
+
+        // Case: Preprocessed columns exist.
+        //
+        // Valid only if VK exists, widths match, and we are NOT in zk mode.
+        (w, Some(vk)) if w == vk.width => {
+            // Preprocessed columns are currently only supported in non-zk mode.
+            assert_eq!(is_zk, 0, "preprocessed columns not supported in zk mode");
+            Ok((w, Some(vk.commitment.clone())))
+        }
+
+        // Catch-all for invalid states, such as:
+        // - Width is 0 but VK is provided.
+        // - Width > 0 but VK is missing.
+        // - Width > 0 but VK width mismatches the expected width.
+        _ => Err(VerificationError::InvalidProofShape),
     }
 }
 
@@ -177,6 +193,21 @@ pub fn verify<SC, A>(
     air: &A,
     proof: &Proof<SC>,
     public_values: &[Val<SC>],
+) -> Result<(), VerificationError<PcsError<SC>>>
+where
+    SC: StarkGenericConfig,
+    A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
+{
+    verify_with_preprocessed(config, air, proof, public_values, None)
+}
+
+#[instrument(skip_all)]
+pub fn verify_with_preprocessed<SC, A>(
+    config: &SC,
+    air: &A,
+    proof: &Proof<SC>,
+    public_values: &[Val<SC>],
+    preprocessed_vk: Option<&PreprocessedVerifierKey<SC>>,
 ) -> Result<(), VerificationError<PcsError<SC>>>
 where
     SC: StarkGenericConfig,
@@ -194,7 +225,15 @@ where
     let trace_domain = pcs.natural_domain_for_degree(degree);
     // TODO: allow moving preprocessed commitment to preprocess time, if known in advance
     let (preprocessed_width, preprocessed_commit) =
-        process_preprocessed_trace::<SC, A>(air, opened_values, pcs, trace_domain, config.is_zk())?;
+        process_preprocessed_trace::<SC, A>(air, opened_values, config.is_zk(), preprocessed_vk)?;
+
+    // Ensure the preprocessed trace and main trace have the same height.
+    if let Some(vk) = preprocessed_vk
+        && preprocessed_width > 0
+        && vk.degree_bits != *degree_bits
+    {
+        return Err(VerificationError::InvalidProofShape);
+    }
 
     let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(
         air,
