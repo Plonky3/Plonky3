@@ -17,7 +17,7 @@ pub use duplex_challenger::*;
 pub use grinding_challenger::*;
 pub use hash_challenger::*;
 pub use multi_field_challenger::*;
-use p3_field::{BasedVectorSpace, ExtensionField, Field};
+use p3_field::{Algebra, BasedVectorSpace, Field};
 pub use serializing_challenger::*;
 
 /// A generic trait for absorbing elements into the transcript.
@@ -103,7 +103,7 @@ pub trait FieldChallenger<F: Field>:
     #[inline]
     fn observe_base_as_algebra_element<EF>(&mut self, val: F)
     where
-        EF: ExtensionField<F> + BasedVectorSpace<F>,
+        EF: Algebra<F> + BasedVectorSpace<F>,
     {
         self.observe_algebra_element(EF::from(val));
     }
@@ -174,7 +174,7 @@ where
     #[inline(always)]
     fn observe_base_as_algebra_element<EF>(&mut self, val: F)
     where
-        EF: ExtensionField<F> + BasedVectorSpace<F>,
+        EF: Algebra<F> + BasedVectorSpace<F>,
     {
         (*self).observe_base_as_algebra_element::<EF>(val);
     }
