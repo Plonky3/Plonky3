@@ -217,8 +217,8 @@ fn preprocessed_mul_trace<F: Field>(rows: usize, multiplier: u64) -> RowMajorMat
     assert!(rows.is_power_of_two());
     let mut v = F::zero_vec(rows);
     // main[0] = multiplier * preprocessed[0], where preprocessed[0] = row_index
-    for i in 0..rows {
-        v[i] = F::from_u64(i as u64 * multiplier);
+    for (i, val) in v.iter_mut().enumerate() {
+        *val = F::from_u64(i as u64 * multiplier);
     }
     RowMajorMatrix::new(v, 1)
 }
