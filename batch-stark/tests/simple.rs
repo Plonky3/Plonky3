@@ -3,9 +3,9 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 use core::slice::from_ref;
 
-use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir};
+use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, PairBuilder};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_batch_stark::{CommonData, StarkInstance, prove_batch, verify_batch};
+use p3_batch_stark::{CommonData, StarkInstance, VerificationError, prove_batch, verify_batch};
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
 use p3_commit::ExtensionMmcs;
@@ -123,11 +123,10 @@ fn fib_n_from(a0: u64, b0: u64, n: usize) -> u64 {
 #[derive(Debug, Clone, Copy)]
 struct MulAir {
     reps: usize,
-    step: u64,
 }
 impl Default for MulAir {
     fn default() -> Self {
-        Self { reps: 2, step: 1 }
+        Self { reps: 2 }
     }
 }
 impl<F> BaseAir<F> for MulAir {
@@ -148,12 +147,12 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
             builder.assert_eq(a.clone() * b.clone(), c);
             builder
                 .when_transition()
-                .assert_eq(a + AB::Expr::from_u64(self.step), next[s].clone());
+                .assert_eq(a + AB::Expr::ONE, next[s].clone());
         }
     }
 }
 
-fn mul_trace<F: Field>(rows: usize, reps: usize, _step: u64) -> RowMajorMatrix<F> {
+fn mul_trace<F: Field>(rows: usize, reps: usize) -> RowMajorMatrix<F> {
     assert!(rows.is_power_of_two());
     let w = reps * 3;
     let mut v = F::zero_vec(rows * w);
@@ -167,6 +166,61 @@ fn mul_trace<F: Field>(rows: usize, reps: usize, _step: u64) -> RowMajorMatrix<F
         }
     }
     RowMajorMatrix::new(v, w)
+}
+
+// --- Preprocessed multiplication AIR and trace ---
+
+#[derive(Debug, Clone, Copy)]
+struct PreprocessedMulAir {
+    /// log2 of the trace height; used to size preprocessed columns.
+    log_height: usize,
+    /// Multiplier to use in constraint (2 for correct, 3 for incorrect test).
+    multiplier: u64,
+}
+
+impl<F: Field> BaseAir<F> for PreprocessedMulAir {
+    fn width(&self) -> usize {
+        1
+    }
+
+    fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
+        let n = 1 << self.log_height;
+        let mut m = RowMajorMatrix::new(F::zero_vec(n), 1);
+        for (i, v) in m.values.iter_mut().enumerate().take(n) {
+            *v = F::from_u64(i as u64);
+        }
+        Some(m)
+    }
+}
+
+impl<AB> Air<AB> for PreprocessedMulAir
+where
+    AB: AirBuilder + PairBuilder,
+    AB::F: Field,
+{
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let preprocessed = builder.preprocessed();
+
+        let local_main = main.row_slice(0).expect("Matrix is empty?");
+        let local_prep = preprocessed.row_slice(0).expect("Preprocessed is empty?");
+
+        // Enforce: main[0] = multiplier * preprocessed[0]
+        builder.assert_eq(
+            local_main[0].clone(),
+            local_prep[0].clone() * AB::Expr::from_u64(self.multiplier),
+        );
+    }
+}
+
+fn preprocessed_mul_trace<F: Field>(rows: usize, multiplier: u64) -> RowMajorMatrix<F> {
+    assert!(rows.is_power_of_two());
+    let mut v = F::zero_vec(rows);
+    // main[0] = multiplier * preprocessed[0], where preprocessed[0] = row_index
+    for i in 0..rows {
+        v[i] = F::from_u64(i as u64 * multiplier);
+    }
+    RowMajorMatrix::new(v, 1)
 }
 
 // --- Config types ---
@@ -203,12 +257,14 @@ fn make_config(seed: u64) -> MyConfig {
 enum DemoAir {
     Fib(FibonacciAir),
     Mul(MulAir),
+    PreprocessedMul(PreprocessedMulAir),
 }
 impl<F: PrimeField64> BaseAir<F> for DemoAir {
     fn width(&self) -> usize {
         match self {
             Self::Fib(a) => <FibonacciAir as BaseAir<F>>::width(a),
             Self::Mul(a) => <MulAir as BaseAir<F>>::width(a),
+            Self::PreprocessedMul(a) => <PreprocessedMulAir as BaseAir<F>>::width(a),
         }
     }
 
@@ -228,18 +284,20 @@ impl<F: PrimeField64> BaseAir<F> for DemoAir {
                 Some(m)
             }
             Self::Mul(_) => None,
+            Self::PreprocessedMul(a) => <PreprocessedMulAir as BaseAir<F>>::preprocessed_trace(a),
         }
     }
 }
 impl<AB> Air<AB> for DemoAir
 where
-    AB: AirBuilderWithPublicValues,
+    AB: AirBuilderWithPublicValues + PairBuilder,
     AB::F: PrimeField64,
 {
     fn eval(&self, b: &mut AB) {
         match self {
             Self::Fib(a) => a.eval(b),
             Self::Mul(a) => a.eval(b),
+            Self::PreprocessedMul(a) => a.eval(b),
         }
     }
 }
@@ -259,15 +317,26 @@ fn create_fib_instance(log_height: usize) -> (DemoAir, RowMajorMatrix<Val>, Vec<
 }
 
 /// Creates a multiplication instance with specified configuration.
-fn create_mul_instance(
+fn create_mul_instance(log_height: usize, reps: usize) -> (DemoAir, RowMajorMatrix<Val>, Vec<Val>) {
+    let n = 1 << log_height;
+    let mul = MulAir { reps };
+    let air = DemoAir::Mul(mul);
+    let trace = mul_trace::<Val>(n, reps);
+    let pis = vec![];
+    (air, trace, pis)
+}
+
+/// Creates a preprocessed multiplication instance with specified configuration.
+fn create_preprocessed_mul_instance(
     log_height: usize,
-    reps: usize,
-    step: u64,
+    multiplier: u64,
 ) -> (DemoAir, RowMajorMatrix<Val>, Vec<Val>) {
     let n = 1 << log_height;
-    let mul = MulAir { reps, step };
-    let air = DemoAir::Mul(mul);
-    let trace = mul_trace::<Val>(n, reps, step);
+    let air = DemoAir::PreprocessedMul(PreprocessedMulAir {
+        log_height,
+        multiplier,
+    });
+    let trace = preprocessed_mul_trace::<Val>(n, multiplier);
     let pis = vec![];
     (air, trace, pis)
 }
@@ -277,7 +346,7 @@ fn test_two_instances() -> Result<(), impl Debug> {
     let config = make_config(1337);
 
     let (air_fib, fib_trace, fib_pis) = create_fib_instance(4); // 16 rows
-    let (air_mul, mul_trace, mul_pis) = create_mul_instance(4, 2, 1); // 16 rows, 2 reps
+    let (air_mul, mul_trace, mul_pis) = create_mul_instance(4, 2); // 16 rows, 2 reps
 
     let instances = vec![
         StarkInstance {
@@ -305,7 +374,7 @@ fn test_three_instances_mixed_sizes() -> Result<(), impl Debug> {
     let config = make_config(2025);
 
     let (air_fib16, fib16_trace, fib16_pis) = create_fib_instance(4); // 16 rows
-    let (air_mul8, mul8_trace, mul8_pis) = create_mul_instance(3, 2, 1); // 8 rows
+    let (air_mul8, mul8_trace, mul8_pis) = create_mul_instance(3, 2); // 8 rows
     let (air_fib8, fib8_trace, fib8_pis) = create_fib_instance(3); // 8 rows
 
     let instances = vec![
@@ -365,9 +434,9 @@ fn test_different_widths() -> Result<(), impl Debug> {
     let config = make_config(4242);
 
     // Mul with reps=2 (width=6) and reps=3 (width=9)
-    let (air_mul2, mul2_trace, mul2_pis) = create_mul_instance(3, 2, 1); // 8 rows, width=6
+    let (air_mul2, mul2_trace, mul2_pis) = create_mul_instance(3, 2); // 8 rows, width=6
     let (air_fib, fib_trace, fib_pis) = create_fib_instance(3); // 8 rows, width=2
-    let (air_mul3, mul3_trace, mul3_pis) = create_mul_instance(4, 3, 1); // 16 rows, width=9
+    let (air_mul3, mul3_trace, mul3_pis) = create_mul_instance(4, 3); // 16 rows, width=9
 
     let instances = vec![
         StarkInstance {
@@ -522,7 +591,7 @@ fn test_mixed_preprocessed() -> Result<(), impl Debug> {
     let config = make_config(8888);
 
     let (air_fib, fib_trace, fib_pis) = create_fib_instance(4); // 16 rows, has preprocessed
-    let (air_mul, mul_trace, mul_pis) = create_mul_instance(4, 2, 1); // 16 rows, no preprocessed
+    let (air_mul, mul_trace, mul_pis) = create_mul_instance(4, 2); // 16 rows, no preprocessed
 
     let instances = vec![
         StarkInstance {
@@ -613,7 +682,7 @@ fn test_reorder_instances_rejected() {
     let config = make_config(123);
 
     let (air_a, tr_a, pv_a) = create_fib_instance(4);
-    let (air_b, tr_b, pv_b) = create_mul_instance(4, 2, 1);
+    let (air_b, tr_b, pv_b) = create_mul_instance(4, 2);
 
     let instances = vec![
         StarkInstance {
@@ -756,4 +825,99 @@ fn test_circle_stark_batch() -> Result<(), impl Debug> {
     let public_values = vec![fib_pis1, fib_pis2];
     verify_batch(&config, &airs, &proof, &public_values, &common)
         .map_err(|e| format!("Verification failed: {:?}", e))
+}
+
+#[test]
+fn test_preprocessed_constraint_positive() -> Result<(), impl Debug> {
+    // Test that preprocessed columns are correctly used in constraints
+    // Enforces: main[0] = 2 * preprocessed[0]
+    let config = make_config(8888);
+
+    let (air, trace, pis) = create_preprocessed_mul_instance(4, 2); // 16 rows, multiplier=2
+
+    let instances = vec![StarkInstance {
+        air: &air,
+        trace,
+        public_values: pis.clone(),
+    }];
+
+    let common = CommonData::from_instances(&config, &instances);
+    let proof = prove_batch(&config, instances, &common);
+    let airs = vec![air];
+    verify_batch(&config, &airs, &proof, &[pis], &common)
+}
+
+#[test]
+fn test_preprocessed_constraint_negative() -> Result<(), Box<dyn std::error::Error>> {
+    // Test that incorrect preprocessed constraints are caught via OOD evaluation mismatch
+    // Proof is generated with multiplier=2, but verification uses multiplier=3
+    let config = make_config(9999);
+
+    // Generate proof with multiplier=2
+    let (air_prove, trace, pis) = create_preprocessed_mul_instance(4, 2); // 16 rows, multiplier=2
+
+    let instances = vec![StarkInstance {
+        air: &air_prove,
+        trace,
+        public_values: pis.clone(),
+    }];
+
+    let common = CommonData::from_instances(&config, &instances);
+    let proof = prove_batch(&config, instances, &common);
+
+    // Verify with wrong multiplier=3 (should fail)
+    let air_verify = DemoAir::PreprocessedMul(PreprocessedMulAir {
+        log_height: 4,
+        multiplier: 3, // Wrong multiplier!
+    });
+    let airs = vec![air_verify];
+    let degree_bits = proof.degree_bits.clone();
+    let verify_common = CommonData::from_airs_and_degrees(&config, &airs, &degree_bits);
+
+    let res = verify_batch(&config, &airs, &proof, &[pis], &verify_common);
+    let err = res.expect_err(
+        "Verification should fail when preprocessed constraint multiplier doesn't match",
+    );
+    match err {
+        VerificationError::OodEvaluationMismatch { .. } => (),
+        _ => panic!("unexpected error: {err:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn test_mixed_preprocessed_constraints() -> Result<(), impl Debug> {
+    // Test batching PreprocessedMulAir (uses pp in constraints) with MulAir and FibonacciAir
+    // This exercises matrix_to_instance routing and point-scheduling with heterogeneous instances
+    // while preprocessed values actually affect constraints.
+    let config = make_config(1111);
+
+    let (air_fib, fib_trace, fib_pis) = create_fib_instance(4); // 16 rows, has pp but doesn't use in constraints
+    let (air_mul, mul_trace, mul_pis) = create_mul_instance(4, 2); // 16 rows, no pp
+    let (air_pp_mul, pp_mul_trace, pp_mul_pis) = create_preprocessed_mul_instance(4, 2); // 16 rows, uses pp in constraints
+
+    let instances = vec![
+        StarkInstance {
+            air: &air_fib,
+            trace: fib_trace,
+            public_values: fib_pis.clone(),
+        },
+        StarkInstance {
+            air: &air_mul,
+            trace: mul_trace,
+            public_values: mul_pis.clone(),
+        },
+        StarkInstance {
+            air: &air_pp_mul,
+            trace: pp_mul_trace,
+            public_values: pp_mul_pis.clone(),
+        },
+    ];
+
+    let common = CommonData::from_instances(&config, &instances);
+    let proof = prove_batch(&config, instances, &common);
+
+    let airs = vec![air_fib, air_mul, air_pp_mul];
+    let pvs = vec![fib_pis, mul_pis, pp_mul_pis];
+    verify_batch(&config, &airs, &proof, &pvs, &common)
 }
