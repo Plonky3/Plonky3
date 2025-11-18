@@ -221,7 +221,7 @@ where
         });
 
     // Commit to all traces in one multi-matrix commitment, preserving input order.
-    let opt_permutation_commit_and_data = if !permutation_commit_inputs.is_empty() {
+    let permutation_commit_and_data = if !permutation_commit_inputs.is_empty() {
         let commitment = pcs.commit(permutation_commit_inputs);
         challenger.observe(commitment.0.clone());
         Some(commitment)
@@ -265,7 +265,7 @@ where
             pcs.get_evaluations_on_domain(&main_data, i, quotient_domain);
 
         let permutation_on_quotient_domain = if let Some((_, perm_data)) =
-            &opt_permutation_commit_and_data
+            &permutation_commit_and_data
         {
             if all_lookups[i].is_empty() {
                 None
@@ -352,7 +352,7 @@ where
         })
         .collect::<Vec<_>>();
 
-    if let Some((_, perm_data)) = &opt_permutation_commit_and_data {
+    if let Some((_, perm_data)) = &permutation_commit_and_data {
         let round2 = (perm_data, round2_points);
         rounds.push(round2);
     }
@@ -366,7 +366,7 @@ where
 
     let (opened_values, opening_proof) = pcs.open(rounds, &mut challenger);
 
-    let is_lookup = opt_permutation_commit_and_data.is_some();
+    let is_lookup = permutation_commit_and_data.is_some();
     // Rely on open order: [main, permutation (if any), quotient] since ZK is disabled.
     // TODO: when Zk is supported, change to [randomization (if zk), main, permutation (if any), quotient].
     let trace_idx = 0usize;
@@ -435,14 +435,14 @@ where
         });
     }
 
-    let opt_permutation_commit = opt_permutation_commit_and_data
+    let permutation = permutation_commit_and_data
         .as_ref()
         .map(|(comm, _)| comm.clone());
     BatchProof {
         commitments: BatchCommitments {
             main: main_commit,
             quotient_chunks: quotient_commit,
-            permutation: opt_permutation_commit,
+            permutation,
         },
         opened_values: BatchOpenedValues {
             instances: per_instance,

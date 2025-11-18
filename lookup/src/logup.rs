@@ -67,6 +67,8 @@ impl LogUpGadget {
         Self {}
     }
 
+    /// Computes the combined elements for each tuple using the challenge `beta`:
+    /// `combined_elements[i] = ∑elements[i][n-j] * β^j`
     fn combine_elements<AB, E>(
         &self,
         elements: &[Vec<E>],

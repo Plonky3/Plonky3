@@ -60,7 +60,6 @@ pub(crate) fn get_perm_challenges<SC: SGC, LG: LookupGadget>(
             let num_challenges = contexts.len() * num_challenges_per_lookup;
             let mut instance_challenges = Vec::with_capacity(num_challenges);
 
-            // We should avoid a bunch of allocations here
             for context in contexts {
                 match &context.kind {
                     Kind::Global(name) => {

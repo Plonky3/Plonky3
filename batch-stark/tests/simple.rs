@@ -117,6 +117,9 @@ fn fib_n(n: usize) -> u64 {
 }
 
 // --- Simple multiplication AIR and trace ---
+// The AIR has 3 * `reps` columns:
+// - for each rep, 3 columns: `a`, `b`, `c` where we enforce `a * b = c`
+// - an extra column at the end which is a permutation of the first `a` column (used for local lookups in `MulAirLookups`)
 
 #[derive(Debug, Clone, Copy)]
 struct MulAir {
@@ -157,6 +160,16 @@ where
     }
 }
 
+// --- MulAirLookups structure for local and global lookups ---
+// This AIR is a `MulAir` that can register global lookups with `FibAirLookups`, as well as local lookups with a lookup column. Its inputs are the Fibonacci values.
+// - when `is_local` is true, this AIR creates local lookups between its first column and its last column.
+//   The latter corresponds to a permutation of the first column:
+//     - it receives the first column with multiplicity 1
+//     - it sends the last column (permuted values) with multiplicity 1
+// - when `is_global` is true, this AIR creates global lookups between its inputs and `FibAirLookups` AIR's inputs:
+//     - For each `rep`, it sends its first two columns (a,b) to the global lookup with name `global_names[rep]` and multiplicity 1
+// - `num_lookups` tracks the number of registered lookups. It is 0 when the structure is created,
+//   and increments every time a new lookup is registered.
 #[derive(Clone, Default)]
 struct MulAirLookups {
     air: MulAir,
@@ -216,7 +229,7 @@ where
 
         // Create symbolic air builder to access symbolic variables
         let symbolic_air_builder =
-            SymbolicAirBuilder::<AB::F>::new(0, <Self as BaseAir<AB::F>>::width(self), 0, 0, 0);
+            SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
         let symbolic_main = symbolic_air_builder.main();
         let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
 
@@ -248,11 +261,8 @@ where
                     ),
                 ];
 
-                let local_lookup = <Self as AirLookupHandler<AB>>::register_lookup(
-                    self,
-                    Kind::Local,
-                    &lookup_inputs,
-                );
+                let local_lookup =
+                    AirLookupHandler::<AB>::register_lookup(self, Kind::Local, &lookup_inputs);
                 lookups.push(local_lookup);
             }
 
@@ -269,7 +279,7 @@ where
                     Direction::Send, // MulAir sends data to the global lookup
                 )];
 
-                let global_lookup = <Self as AirLookupHandler<AB>>::register_lookup(
+                let global_lookup = AirLookupHandler::<AB>::register_lookup(
                     self,
                     Kind::Global(self.global_names[rep].clone()),
                     &lookup_inputs,
@@ -310,7 +320,14 @@ fn mul_trace<F: Field>(rows: usize, reps: usize) -> RowMajorMatrix<F> {
 }
 
 // --- FibAirLookups structure for global lookups ---
-
+// This AIR is a `FibonacciAir` that can register global lookups with `MulAir` AIRs.
+// - when `is_global` is true, this AIR creates global lookups between its inputs and MulAir AIR's inputs:
+//     - it receives its two columns (left,right) from the global lookup with name `name_and_mult.0`
+//       and multiplicity `name_and_mult.1`. The default for `name_and_mult` is ("MulFib", 2).
+// - `num_lookups` tracks the number of registered lookups. It is 0 when the structure is created,
+//    and increments every time a new lookup is registered.
+// - `name_and_mult` is used when `is_global` is true. If provided, it specifies the name and multiplicity of the global lookup.
+//   If not provided and `is_global` is true, a default name "MulFib" and multiplicity 2 is used.
 #[derive(Debug, Clone)]
 struct FibAirLookups {
     air: FibonacciAir,
@@ -375,7 +392,7 @@ where
         if self.is_global {
             // Create symbolic air builder to access symbolic variables
             let symbolic_air_builder =
-                SymbolicAirBuilder::<AB::F>::new(0, <Self as BaseAir<AB::F>>::width(self), 3, 0, 0);
+                SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 3, 0, 0);
             let symbolic_main = symbolic_air_builder.main();
             let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
 
@@ -396,11 +413,8 @@ where
                 Direction::Receive, // FibAir receives data from the global lookup
             )];
 
-            let global_lookup = <Self as AirLookupHandler<AB>>::register_lookup(
-                self,
-                Kind::Global(name),
-                &lookup_inputs,
-            );
+            let global_lookup =
+                AirLookupHandler::<AB>::register_lookup(self, Kind::Global(name), &lookup_inputs);
             lookups.push(global_lookup);
         }
 
@@ -453,6 +467,8 @@ impl<F> BaseAir<F> for DemoAir {
 }
 
 // Heterogeneous enum wrapper for lookup-enabled AIRs
+// `FibLookups` receives its inputs from `MulAirLookups` AIRs
+// (see `FibAirLookups` and `MulAirLookups` definitions for more details)
 #[derive(Clone)]
 enum DemoAirWithLookups {
     FibLookups(FibAirLookups),
@@ -1366,7 +1382,7 @@ where
 
         // Create symbolic air builder to access symbolic variables
         let symbolic_air_builder =
-            SymbolicAirBuilder::<AB::F>::new(0, <Self as BaseAir<AB::F>>::width(self), 0, 0, 0);
+            SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
         let symbolic_main = symbolic_air_builder.main();
         let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
 
@@ -1433,7 +1449,7 @@ where
 
         for lookup_inputs in all_lookup_inputs {
             let local_lookup =
-                <Self as AirLookupHandler<AB>>::register_lookup(self, Kind::Local, &lookup_inputs);
+                AirLookupHandler::<AB>::register_lookup(self, Kind::Local, &lookup_inputs);
             lookups.push(local_lookup);
         }
 

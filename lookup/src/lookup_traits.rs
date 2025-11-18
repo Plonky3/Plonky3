@@ -76,6 +76,11 @@ pub trait LookupGadget {
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues;
 
+    /// Evalutes the lookup constraints for all provided contexts.
+    ///
+    /// For each context:
+    /// - if it is a local lookup, evaluates it with `eval_local_lookup`.
+    /// - if it is a global lookup, evaluates it with `eval_global_update`, using the expected cumulated value from `lookup_data`.
     fn eval_lookups<AB>(
         &self,
         builder: &mut AB,
@@ -115,6 +120,7 @@ pub trait LookupGadget {
         );
     }
 
+    /// Generates the permutation matrix for the lookup argument.
     fn generate_permutation<SC: StarkGenericConfig>(
         &self,
         main: &RowMajorMatrix<Val<SC>>,
@@ -253,7 +259,7 @@ where
         lookup_data: &[LookupData<AB::EF>],
         lookup_gadget: &LG,
     ) {
-        <Self as Air<AB>>::eval(self, builder);
+        Air::<AB>::eval(self, builder);
 
         if !lookups.is_empty() {
             lookup_gadget.eval_lookups(builder, lookups, lookup_data);

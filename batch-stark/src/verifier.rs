@@ -319,21 +319,25 @@ where
 
         // Verify constraints at zeta using utility function.
         let init_trace_domain = trace_domains[i];
-        verify_constraints_with_lookups::<SC, A, LG, PcsError<SC>>(
-            air,
-            &opened_values.instances[i].base_opened_values.trace_local,
-            &opened_values.instances[i].base_opened_values.trace_next,
-            &perm_local_ext,
-            &perm_next_ext,
-            &challenges_per_instance[i],
-            &proof.global_lookup_data[i],
-            &all_lookups[i],
-            lookup_gadget,
-            &public_values[i],
-            init_trace_domain,
+        let verifier_data = VerifierData {
+            trace_local: &opened_values.instances[i].base_opened_values.trace_local,
+            trace_next: &opened_values.instances[i].base_opened_values.trace_next,
+            permutation_local: &perm_local_ext,
+            permutation_next: &perm_next_ext,
+            permutation_challenges: &challenges_per_instance[i],
+            lookup_data: &proof.global_lookup_data[i],
+            lookups: &all_lookups[i],
+            public_values: &public_values[i],
+            trace_domain: init_trace_domain,
             zeta,
             alpha,
             quotient,
+        };
+
+        verify_constraints_with_lookups::<SC, A, LG, PcsError<SC>>(
+            air,
+            &verifier_data,
+            lookup_gadget,
         )
         .map_err(|e| match e {
             VerificationError::OodEvaluationMismatch { .. } => {
@@ -343,15 +347,13 @@ where
         })?;
     }
     let mut global_cumulative = HashMap::new();
-    for lds in global_lookup_data {
-        for ld in lds {
-            let name = &ld.name;
-            let expected = &ld.expected_cumulated;
-            global_cumulative
-                .entry(name)
-                .and_modify(|v: &mut Vec<_>| v.push(*expected))
-                .or_insert(vec![*expected]);
-        }
+    for lookup_data in global_lookup_data.iter().flatten() {
+        let name = &lookup_data.name;
+        let expected = &lookup_data.expected_cumulated;
+        global_cumulative
+            .entry(name)
+            .and_modify(|v: &mut Vec<_>| v.push(*expected))
+            .or_insert(vec![*expected]);
     }
 
     for (name, all_expected_cumulative) in global_cumulative {
@@ -367,32 +369,64 @@ where
     Ok(())
 }
 
+/// Structure storing all data needed for verifying one instance's constraints at the out-of-domain point.
+pub struct VerifierData<'a, SC: SGC> {
+    // Out-of-domain point at which constraints are evaluated
+    zeta: SC::Challenge,
+    // Challenge used to fold constraints
+    alpha: SC::Challenge,
+    // Main trace evaluated at `zeta`
+    trace_local: &'a [SC::Challenge],
+    // Main trace evaluated at the following point `g * zeta`, where `g` is the subgroup generator
+    trace_next: &'a [SC::Challenge],
+    // Permutation trace evaluated at `zeta`
+    permutation_local: &'a [SC::Challenge],
+    // Permutation trace evaluated at the following point `g * zeta`, where `g` is the subgroup generator
+    permutation_next: &'a [SC::Challenge],
+    // Challenges used for the lookup argument
+    permutation_challenges: &'a [SC::Challenge],
+    // Lookup data needed for global lookup verification
+    lookup_data: &'a [LookupData<SC::Challenge>],
+    // Lookup contexts for this instance
+    lookups: &'a [Lookup<Val<SC>>],
+    // Public values for this instance
+    public_values: &'a [Val<SC>],
+    // Trace domain for this instance
+    trace_domain: Domain<SC>,
+    // Quotient polynomial evaluated at `zeta`
+    quotient: SC::Challenge,
+}
+
 /// Verifies that the folded constraints match the quotient polynomial at zeta.
 ///
 /// This evaluates the AIR constraints at the out-of-domain point and checks
 /// that constraints(zeta) / Z_H(zeta) = quotient(zeta).
 #[allow(clippy::too_many_arguments)]
-pub fn verify_constraints_with_lookups<SC, A, LG: LookupGadget, PcsErr>(
+pub fn verify_constraints_with_lookups<'a, SC, A, LG: LookupGadget, PcsErr>(
     air: &A,
-    trace_local: &[SC::Challenge],
-    trace_next: &[SC::Challenge],
-    permutation_local: &[SC::Challenge],
-    permutation_next: &[SC::Challenge],
-    permutation_challenges: &[SC::Challenge],
-    lookup_data: &[LookupData<SC::Challenge>],
-    lookups: &[Lookup<Val<SC>>],
+    verifier_data: &VerifierData<'a, SC>,
     lookup_gadget: &LG,
-    public_values: &[Val<SC>],
-    trace_domain: Domain<SC>,
-    zeta: SC::Challenge,
-    alpha: SC::Challenge,
-    quotient: SC::Challenge,
 ) -> Result<(), VerificationError<PcsErr>>
 where
     SC: SGC,
-    A: for<'a> AirLookupHandler<VerifierConstraintFolderWithLookups<'a, SC>>,
+    A: for<'b> AirLookupHandler<VerifierConstraintFolderWithLookups<'b, SC>>,
 {
-    let sels = trace_domain.selectors_at_point(zeta);
+    let VerifierData {
+        trace_local,
+        trace_next,
+        permutation_local,
+        permutation_next,
+        permutation_challenges,
+        lookup_data,
+        lookups,
+        public_values,
+        trace_domain,
+        zeta,
+        alpha,
+        quotient,
+    } = verifier_data;
+
+    let sels = trace_domain.selectors_at_point(*zeta);
 
     let main = VerticalPair::new(
         RowMajorMatrixView::new_row(trace_local),
@@ -406,7 +440,7 @@ where
         is_first_row: sels.is_first_row,
         is_last_row: sels.is_last_row,
         is_transition: sels.is_transition,
-        alpha,
+        alpha: *alpha,
         accumulator: SC::Challenge::ZERO,
     };
     let mut folder = VerifierConstraintFolderWithLookups {
@@ -422,7 +456,7 @@ where
     let folded_constraints = folder.inner.accumulator;
 
     // Check that constraints(zeta) / Z_H(zeta) = quotient(zeta)
-    if folded_constraints * sels.inv_vanishing != quotient {
+    if folded_constraints * sels.inv_vanishing != *quotient {
         return Err(VerificationError::OodEvaluationMismatch { index: None });
     }
 
