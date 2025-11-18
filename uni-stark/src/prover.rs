@@ -237,15 +237,9 @@ where
         info_span!("commit to trace data").in_scope(|| pcs.commit([(ext_trace_domain, trace)]));
 
     // Preprocessed commitment and prover data (if any).
-    let (preprocessed_commit, preprocessed_data_ref) = if preprocessed_width > 0 {
-        let pp = preprocessed.expect(
-            "preprocessed columns present but no PreprocessedProverData provided; \
-             call `setup_preprocessed` and pass it to `prove_with_preprocessed`",
-        );
-        (Some(pp.commitment.clone()), Some(&pp.prover_data))
-    } else {
-        (None, None)
-    };
+    let (preprocessed_commit, preprocessed_data_ref) = preprocessed
+        .map(|pp| (pp.commitment.clone(), &pp.prover_data))
+        .unzip();
 
     // Observe the instance.
     // degree < 2^255 so we can safely cast log_degree to a u8.

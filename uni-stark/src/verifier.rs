@@ -157,15 +157,10 @@ where
     // Determine expected preprocessed width.
     // - If a verifier key is provided, trust its width.
     // - Otherwise, derive width from the AIR's preprocessed trace (if any).
-    let preprocessed_width = preprocessed_vk.map_or_else(
-        || {
-            air.preprocessed_trace()
-                .as_ref()
-                .map(|m| m.width)
-                .unwrap_or(0)
-        },
-        |vk| vk.width,
-    );
+    let preprocessed_width = preprocessed_vk
+        .map(|vk| vk.width)
+        .or_else(|| air.preprocessed_trace().as_ref().map(|m| m.width))
+        .unwrap_or(0);
 
     // Check that the proof's opened preprocessed values match the expected width.
     let preprocessed_local_len = opened_values
@@ -181,26 +176,28 @@ where
         return Err(VerificationError::InvalidProofShape);
     }
 
-    if preprocessed_width == 0 {
-        // No preprocessed columns: we must also not have a verifier key.
-        if preprocessed_vk.is_some() {
-            return Err(VerificationError::InvalidProofShape);
+    // Validate consistency between width, verifier key, and zk settings.
+    match (preprocessed_width, preprocessed_vk) {
+        // Case: No preprocessed columns.
+        //
+        // Valid only if no verifier key is provided.
+        (0, None) => Ok((0, None)),
+
+        // Case: Preprocessed columns exist.
+        //
+        // Valid only if VK exists, widths match, and we are NOT in zk mode.
+        (w, Some(vk)) if w == vk.width => {
+            // Preprocessed columns are currently only supported in non-zk mode.
+            assert_eq!(is_zk, 0, "preprocessed columns not supported in zk mode");
+            Ok((w, Some(vk.commitment.clone())))
         }
-        return Ok((preprocessed_width, None));
+
+        // Catch-all for invalid states, such as:
+        // - Width is 0 but VK is provided.
+        // - Width > 0 but VK is missing.
+        // - Width > 0 but VK width mismatches the expected width.
+        _ => Err(VerificationError::InvalidProofShape),
     }
-
-    // From here on, we have preprocessed columns.
-    assert_eq!(is_zk, 0, "preprocessed columns not supported in zk mode");
-
-    // A verifier key is mandatory whenever preprocessed_width > 0.
-    let vk = preprocessed_vk.ok_or(VerificationError::InvalidProofShape)?;
-
-    // Width is already checked against opened values; if vk.width disagrees, treat as shape error.
-    if vk.width != preprocessed_width {
-        return Err(VerificationError::InvalidProofShape);
-    }
-
-    Ok((preprocessed_width, Some(vk.commitment.clone())))
 }
 
 #[instrument(skip_all)]
@@ -243,6 +240,7 @@ where
     let (preprocessed_width, preprocessed_commit) =
         process_preprocessed_trace::<SC, A>(air, opened_values, config.is_zk(), preprocessed_vk)?;
 
+    // Ensure the preprocessed trace and main trace have the same height.
     if let Some(vk) = preprocessed_vk
         && preprocessed_width > 0
         && vk.degree_bits != *degree_bits
