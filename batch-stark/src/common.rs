@@ -76,7 +76,7 @@ impl<SC: SGC> CommonData<SC> {
     /// Create `CommonData` with no preprocessed columns.
     ///
     /// Use this when none of your AIRs have preprocessed columns.
-    pub fn empty(_num_instances: usize) -> Self {
+    pub const fn empty(_num_instances: usize) -> Self {
         Self { preprocessed: None }
     }
 }

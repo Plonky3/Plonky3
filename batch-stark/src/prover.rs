@@ -281,7 +281,7 @@ where
         let (preprocessed_local, preprocessed_next) = if let (Some(global), Some(pre_round)) =
             (&common.preprocessed, preprocessed_openings)
         {
-            if let Some(meta) = &global.instances[i] {
+            global.instances[i].as_ref().map_or((None, None), |meta| {
                 let vals = &pre_round[meta.matrix_index];
                 assert_eq!(
                     vals.len(),
@@ -289,9 +289,7 @@ where
                     "expected two opening points (zeta, zeta_next) for preprocessed trace"
                 );
                 (Some(vals[0].clone()), Some(vals[1].clone()))
-            } else {
-                (None, None)
-            }
+            })
         } else {
             (None, None)
         };
