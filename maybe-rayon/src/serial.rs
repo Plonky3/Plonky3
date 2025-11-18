@@ -1,7 +1,6 @@
 use core::iter::{FlatMap, IntoIterator, Iterator};
 use core::marker::{Send, Sized, Sync};
 use core::ops::{Fn, FnOnce};
-use core::option::Option;
 use core::slice::{
     Chunks, ChunksExact, ChunksExactMut, ChunksMut, RChunks, RChunksExact, RChunksExactMut,
     RChunksMut, Split, SplitMut, Windows,

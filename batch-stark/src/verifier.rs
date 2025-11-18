@@ -13,8 +13,7 @@ use p3_util::zip_eq::zip_eq;
 use tracing::instrument;
 
 use crate::config::{
-    Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val, observe_base_as_ext,
-    observe_instance_binding,
+    Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val, observe_instance_binding,
 };
 use crate::proof::BatchProof;
 
@@ -55,7 +54,7 @@ where
 
     // Observe the number of instances up front to match the prover's transcript.
     let n_instances = airs.len();
-    observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(n_instances));
+    challenger.observe_base_as_algebra_element::<Challenge<SC>>(Val::<SC>::from_usize(n_instances));
 
     // Validate opened values shape per instance and observe per-instance binding data.
     // Precompute per-instance log_quotient_degrees and quotient_degrees in one pass.
