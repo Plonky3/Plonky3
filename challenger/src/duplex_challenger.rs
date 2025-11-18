@@ -234,35 +234,96 @@ where
     const SAMPLING_BITS_M: [u64; 64] = MP::SAMPLING_BITS_M;
 }
 
-fn sample_uniform_bits_impl<T, F>(
-    obj: &mut T,
-    bits: usize,
-    sampling_bits_m: &[u64; 64],
-    sample_value: fn(&mut T, u64) -> F,
-) -> usize
+// Set of different strategies we currently support for sampling
+// Implementations for each are below.
+/// A zero-sized struct representing the "resample" strategy.
+pub(super) struct ResampleOnRejection;
+/// A zero-sized struct representing the "panic" strategy.
+pub(super) struct PanicOnRejection;
+
+/// A trait that defines a strategy for handling out-of-range samples.
+pub(super) trait BitSamplingStrategy<F, P, const W: usize, const R: usize>
+where
+    F: PrimeField64,
+    P: CryptographicPermutation<[F; W]>,
+{
+    fn sample_value(challenger: &mut DuplexChallenger<F, P, W, R>, m: u64) -> F;
+}
+
+/// Implement rejection sampling
+impl<F, P, const W: usize, const R: usize> BitSamplingStrategy<F, P, W, R> for ResampleOnRejection
+where
+    F: PrimeField64,
+    P: CryptographicPermutation<[F; W]>,
+{
+    #[inline]
+    fn sample_value(challenger: &mut DuplexChallenger<F, P, W, R>, m: u64) -> F {
+        // Rejection sampling until we find a value < m.
+        let mut result: F = challenger.sample();
+        while result.as_canonical_u64() >= m {
+            result = challenger.sample();
+        }
+        result
+    }
+}
+
+/// Implement panicking on a required rejection
+impl<F, P, const W: usize, const R: usize> BitSamplingStrategy<F, P, W, R> for PanicOnRejection
+where
+    F: PrimeField64,
+    P: CryptographicPermutation<[F; W]>,
+{
+    #[inline]
+    fn sample_value(challenger: &mut DuplexChallenger<F, P, W, R>, m: u64) -> F {
+        let result: F = challenger.sample();
+        // Panic if we sampled a value too large for uniform sampling of bits.
+        if result.as_canonical_u64() >= m {
+            panic!("Sampled field element {result} is out of the uniform sampling range (< {m})");
+        }
+        result
+    }
+}
+
+impl<F, P, const WIDTH: usize, const RATE: usize> DuplexChallenger<F, P, WIDTH, RATE>
 where
     F: UniformSamplingField + PrimeField64,
+    P: CryptographicPermutation<[F; WIDTH]>,
 {
-    assert!(bits < (usize::BITS as usize));
-    assert!((1 << bits) < F::ORDER_U64);
-    let m = sampling_bits_m[bits]; //F::SAMPLING_BITS_M[bits];
+    /// Generic implementation for uniform bit sampling, parameterized by a strategy.
+    #[inline]
+    fn sample_uniform_bits_with_strategy<S>(&mut self, bits: usize, _strategy: S) -> usize
+    where
+        S: BitSamplingStrategy<F, P, WIDTH, RATE>,
+    {
+        assert!(
+            bits > 0 && bits < usize::BITS as usize,
+            "bit count must be valid"
+        );
+        assert!(
+            (1u64 << bits) < F::ORDER_U64,
+            "bit count exceeds field order"
+        );
+        let m = F::SAMPLING_BITS_M[bits];
+        if bits <= F::MAX_SINGLE_SAMPLE_BITS {
+            // Fast path: Only one sample is needed for sufficient uniformity.
+            let rand_f = S::sample_value(self, m);
+            rand_f.as_canonical_u64() as usize & ((1 << bits) - 1)
+        } else {
+            // Slow path: Sample twice to construct the required number of bits.
+            // This reduces the bias introduced by a single, larger sample.
+            let half_bits1 = bits / 2;
+            let half_bits2 = bits - half_bits1;
+            // Sample the first chunk of bits.
+            let rand1 = S::sample_value(self, F::SAMPLING_BITS_M[half_bits1]);
+            let chunk1 = rand1.as_canonical_u64() as usize & ((1 << half_bits1) - 1);
+            // Sample the second chunk of bits.
+            let rand2 = S::sample_value(self, F::SAMPLING_BITS_M[half_bits2]);
+            let chunk2 = rand2.as_canonical_u64() as usize & ((1 << half_bits2) - 1);
 
-    let result = if bits < F::MAX_SINGLE_SAMPLE_BITS {
-        let rand_f = sample_value(obj, m);
-        let rand_usize = rand_f.as_canonical_u64() as usize;
-        rand_usize & ((1 << bits) - 1)
-    } else {
-        let r1: F = sample_value(obj, m);
-        let r2: F = sample_value(obj, m);
-
-        let b2 = bits / 2;
-        let b1 = bits - b2;
-
-        let r1_usize = r1.as_canonical_u64() as usize;
-        let r2_usize = r2.as_canonical_u64() as usize;
-        r1_usize & ((1 << b1) - 1) | (r2_usize & ((1 << b2) - 1) << b1)
-    };
-    result
+            // Combine the chunks.
+            chunk1 | (chunk2 << half_bits1)
+        }
+    }
 }
 
 impl<F, P, const WIDTH: usize, const RATE: usize> CanSampleUniformBits<F>
@@ -271,62 +332,11 @@ where
     F: UniformSamplingField + PrimeField64,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
-    /// Samples bits uniformly by using rejection sampling taking into account the number of
-    /// bits actually needed. This allows to use rejection sampling even for fields where
-    /// the largest power of two is ~half the prime with barely any performance penalty
-    /// up to large number of bits to be sampled.
-    ///
-    /// E.g. for KoalaBear up to 24 bits can be sampled uniformly "for free".
-    ///
-    /// This variant resamples in case of sampling a value outside the range in
-    /// which we can samplie `bits` uniform bits.
     fn sample_uniform_bits(&mut self, bits: usize) -> usize {
-        sample_uniform_bits_impl(
-            self,
-            bits,
-            &F::SAMPLING_BITS_M,
-            DuplexChallenger::sample_value,
-        )
+        self.sample_uniform_bits_with_strategy(bits, ResampleOnRejection)
     }
-
-    /// This variant panics in case of sampling a value for which we would
-    /// produce non uniform bits. The probability of a panic is about 1/P
-    /// for most fields. See `UniformSamplingField` implementation for each
-    /// field for details.
     fn sample_uniform_bits_may_panic(&mut self, bits: usize) -> usize {
-        sample_uniform_bits_impl(
-            self,
-            bits,
-            &F::SAMPLING_BITS_M,
-            DuplexChallenger::sample_value_may_panic,
-        )
-    }
-
-    /// Samples a field element. If the element is larger or equal to `m`, will panic.
-    fn sample_value_may_panic(&mut self, m: u64) -> F {
-        let result: F = self.sample();
-
-        // Panic if we sampled a value too large for uniform sampling of bits
-        if result.as_canonical_u64() >= m {
-            panic!(
-                "Sampled field element {} is larger or equal to {}",
-                result, m
-            );
-        }
-        result
-    }
-
-    /// Samples a field element. If the element is larger or equal to `m`, will resample
-    /// until a smaller element is found.
-    fn sample_value(&mut self, m: u64) -> F {
-        let mut result: F = self.sample();
-
-        // Rejection sampling until we find a value < m.
-        while result.as_canonical_u64() >= m {
-            result = self.sample();
-        }
-
-        result
+        self.sample_uniform_bits_with_strategy(bits, PanicOnRejection)
     }
 }
 
