@@ -54,7 +54,7 @@ where
 
     // Observe the number of instances up front to match the prover's transcript.
     let n_instances = airs.len();
-    challenger.observe_base_as_ext::<Challenge<SC>>(Val::<SC>::from_usize(n_instances));
+    challenger.observe_base_as_algebra_element::<Challenge<SC>>(Val::<SC>::from_usize(n_instances));
 
     // Validate opened values shape per instance and observe per-instance binding data.
     // Precompute per-instance log_quotient_degrees and quotient_degrees in one pass.
