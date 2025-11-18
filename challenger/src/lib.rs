@@ -86,10 +86,6 @@ pub trait CanSampleUniformBits<F> {
     /// for most fields. See `UniformSamplingField` implementation for each
     /// field for details.
     fn sample_uniform_bits_may_panic(&mut self, bits: usize) -> usize;
-
-    fn sample_value(&mut self, m: u64) -> F;
-
-    fn sample_value_may_panic(&mut self, m: u64) -> F;
 }
 
 /// A high-level trait combining observation and sampling over a finite field.
@@ -204,13 +200,5 @@ where
 
     fn sample_uniform_bits_may_panic(&mut self, bits: usize) -> usize {
         (*self).sample_uniform_bits_may_panic(bits)
-    }
-
-    fn sample_value_may_panic(&mut self, m: u64) -> F {
-        (*self).sample_value_may_panic(m)
-    }
-
-    fn sample_value(&mut self, m: u64) -> F {
-        (*self).sample_value(m)
     }
 }
