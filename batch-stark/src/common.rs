@@ -93,6 +93,8 @@ where
     /// - Computes extended degrees (base + ZK padding)
     /// - Sets up preprocessed columns for AIRs that define them, committing
     ///   to them in a single global PCS commitment.
+    ///
+    /// This is a convenience function mainly used for tests.
     pub fn from_instances<A>(config: &SC, instances: &[StarkInstance<'_, SC, A>]) -> Self
     where
         A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>> + Copy,
