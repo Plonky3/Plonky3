@@ -62,11 +62,26 @@ pub trait UniformGrindingChallenger:
     /// Use this together with `check_witness_uniform_may_panic`.
     fn grind_uniform_may_panic(&mut self, bits: usize) -> Self::Witness;
 
+    /// Check whether a given `witness` satisfies the PoW condition.
+    ///
+    /// After absorbing the witness, the challenger samples `bits` random bits
+    /// *uniformly* and verifies that all bits sampled are zero. The uniform
+    /// sampling implies we do rejection sampling in about ~1/P cases.
+    ///
+    /// Returns `true` if the witness passes the PoW check, `false` otherwise.
     fn check_witness_uniform(&mut self, bits: usize, witness: Self::Witness) -> bool {
         self.observe(witness);
         self.sample_uniform_bits(bits) == 0
     }
 
+    /// Check whether a given `witness` satisfies the PoW condition.
+    ///
+    /// After absorbing the witness, the challenger samples `bits` random bits
+    /// *uniformly* and verifies that all bits sampled are zero. In about ~1/P
+    /// cases this function may panic if a sampled value lies outside a range
+    /// in which we can guarantee uniform bits.
+    ///
+    /// Returns `true` if the witness passes the PoW check, `false` otherwise.
     fn check_witness_uniform_may_panic(&mut self, bits: usize, witness: Self::Witness) -> bool {
         self.observe(witness);
         self.sample_uniform_bits_may_panic(bits) == 0
