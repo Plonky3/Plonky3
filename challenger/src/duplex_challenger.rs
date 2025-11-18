@@ -223,9 +223,9 @@ pub trait UniformSamplingField {
     const SAMPLING_BITS_M: [u64; 64];
 }
 
-/// Provide a blanket implementation for Monty31 fields here, which forwards the
-/// implementation of the variables to the generic argument `<Field>Parameter`,
-/// for which we implement the trait (KoalaBear, BabyBear).
+// Provide a blanket implementation for Monty31 fields here, which forwards the
+// implementation of the variables to the generic argument `<Field>Parameter`,
+// for which we implement the trait (KoalaBear, BabyBear).
 impl<MP> UniformSamplingField for MontyField31<MP>
 where
     MP: UniformSamplingField + MontyParameters,
