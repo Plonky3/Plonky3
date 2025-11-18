@@ -53,15 +53,6 @@ pub fn par_scale_slice_in_place<F: Field>(slice: &mut [F], s: F) {
     sfx.iter_mut().for_each(|x| *x *= s);
 }
 
-/// This function is deprecated. It is currently a wrapper for [`par_scale_slice_in_place`], which
-/// it should be replaced with if parallelization is required.
-#[deprecated(
-    note = "use `par_scale_slice_in_place` instead which will replace this method in the future"
-)]
-pub fn scale_slice_in_place<F: Field>(s: F, slice: &mut [F]) {
-    par_scale_slice_in_place(slice, s);
-}
-
 /// Adds `other`, scaled by `s`, to the mutable `slice` using packing, or `slice += other * s`.
 ///
 /// # Performance
