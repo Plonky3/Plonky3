@@ -107,35 +107,47 @@ where
 {
     #[instrument(name = "grind uniform for proof-of-work witness", skip_all)]
     fn grind_uniform(&mut self, bits: usize) -> Self::Witness {
-        assert!(bits < (usize::BITS as usize));
-        assert!((1 << bits) < F::ORDER_U64);
-
-        let witness = (0..F::ORDER_U64)
-            .into_par_iter()
-            .map(|i| unsafe {
-                // i < F::ORDER_U64 by construction so this is safe.
-                F::from_canonical_unchecked(i)
-            })
-            .find_any(|witness| self.clone().check_witness_uniform(bits, *witness))
-            .expect("failed to find witness");
-        assert!(self.check_witness_uniform(bits, witness));
-        witness
+        // Call the generic grinder with the "resample" checking logic.
+        self.grind_generic(bits, |challenger, witness| {
+            challenger.check_witness_uniform(bits, witness)
+        })
     }
-
     #[instrument(name = "grind uniform may panic for proof-of-work witness", skip_all)]
     fn grind_uniform_may_panic(&mut self, bits: usize) -> Self::Witness {
-        assert!(bits < (usize::BITS as usize));
-        assert!((1 << bits) < F::ORDER_U64);
-
+        // Call the generic grinder with the "panic" checking logic.
+        self.grind_generic(bits, |challenger, witness| {
+            challenger.check_witness_uniform_may_panic(bits, witness)
+        })
+    }
+}
+impl<F, P, const WIDTH: usize, const RATE: usize> DuplexChallenger<F, P, WIDTH, RATE>
+where
+    F: PrimeField64,
+    P: CryptographicPermutation<[F; WIDTH]>,
+{
+    /// A generic, private helper for PoW grinding, parameterized by the checking function.
+    fn grind_generic<CHECK>(&mut self, bits: usize, check_fn: CHECK) -> F
+    where
+        CHECK: Fn(&mut Self, F) -> bool + Sync + Send,
+    {
+        // Maybe check that bits is greater than 0?
+        assert!(bits < (usize::BITS as usize), "bit count must be valid");
+        assert!(
+            (1u64 << bits) < F::ORDER_U64,
+            "bit count exceeds field order"
+        );
+        // The core parallel brute-force search logic.
         let witness = (0..F::ORDER_U64)
             .into_par_iter()
             .map(|i| unsafe {
-                // i < F::ORDER_U64 by construction so this is safe.
+                // This is safe as i is always in range.
                 F::from_canonical_unchecked(i)
             })
-            .find_any(|witness| self.clone().check_witness_uniform_may_panic(bits, *witness))
-            .expect("failed to find witness");
-        assert!(self.check_witness_uniform_may_panic(bits, witness));
+            .find_any(|&witness| check_fn(&mut self.clone(), witness))
+            .expect("failed to find proof-of-work witness");
+        // Run the check one last time on the *original* challenger to update its state
+        // and confirm the witness is valid.
+        assert!(check_fn(self, witness));
         witness
     }
 }
