@@ -32,8 +32,8 @@ pub fn observe_instance_binding<SC: SGC>(
 ) where
     Challenge<SC>: ExtensionField<Val<SC>>,
 {
-    ch.observe_lifted::<Challenge<SC>>(Val::<SC>::from_usize(log_ext_degree));
-    ch.observe_lifted::<Challenge<SC>>(Val::<SC>::from_usize(log_degree));
-    ch.observe_lifted::<Challenge<SC>>(Val::<SC>::from_usize(width));
-    ch.observe_lifted::<Challenge<SC>>(Val::<SC>::from_usize(n_quotient_chunks));
+    ch.observe_base_as_ext::<Challenge<SC>>(Val::<SC>::from_usize(log_ext_degree));
+    ch.observe_base_as_ext::<Challenge<SC>>(Val::<SC>::from_usize(log_degree));
+    ch.observe_base_as_ext::<Challenge<SC>>(Val::<SC>::from_usize(width));
+    ch.observe_base_as_ext::<Challenge<SC>>(Val::<SC>::from_usize(n_quotient_chunks));
 }

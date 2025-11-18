@@ -72,7 +72,7 @@ where
     // Observe the number of instances up front so the transcript can't be reinterpreted
     // with a different partitioning.
     let n_instances = airs.len();
-    challenger.observe_lifted::<Challenge<SC>>(Val::<SC>::from_usize(n_instances));
+    challenger.observe_base_as_ext::<Challenge<SC>>(Val::<SC>::from_usize(n_instances));
 
     // Observe per-instance binding data: (log_ext_degree, log_degree), width, num quotient chunks.
     for i in 0..n_instances {

@@ -101,7 +101,7 @@ pub trait FieldChallenger<F: Field>:
     /// evaluation), having a challenger that only observes extension field elements significantly
     /// simplifies the recursive circuit implementation.
     #[inline]
-    fn observe_lifted<EF>(&mut self, val: F)
+    fn observe_base_as_ext<EF>(&mut self, val: F)
     where
         EF: ExtensionField<F> + BasedVectorSpace<F>,
     {
@@ -172,10 +172,10 @@ where
     }
 
     #[inline(always)]
-    fn observe_lifted<EF>(&mut self, val: F)
+    fn observe_base_as_ext<EF>(&mut self, val: F)
     where
         EF: ExtensionField<F> + BasedVectorSpace<F>,
     {
-        (*self).observe_lifted::<EF>(val);
+        (*self).observe_base_as_ext::<EF>(val);
     }
 }
