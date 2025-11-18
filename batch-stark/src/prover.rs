@@ -16,8 +16,7 @@ use tracing::instrument;
 
 use crate::common::CommonData;
 use crate::config::{
-    Challenge, Domain, StarkGenericConfig as SGC, Val, observe_base_as_ext,
-    observe_instance_binding,
+    Challenge, Domain, StarkGenericConfig as SGC, Val, observe_instance_binding,
 };
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof};
 
@@ -88,7 +87,7 @@ where
     // Observe the number of instances up front so the transcript can't be reinterpreted
     // with a different partitioning.
     let n_instances = airs.len();
-    observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(n_instances));
+    challenger.observe_base_as_algebra_element::<Challenge<SC>>(Val::<SC>::from_usize(n_instances));
 
     // Observe per-instance binding data: (log_ext_degree, log_degree), width, num quotient chunks.
     for i in 0..n_instances {
@@ -119,7 +118,7 @@ where
     // preprocessed columns into the transcript. If a global preprocessed
     // commitment exists, observe it once.
     for &pre_w in preprocessed_widths.iter() {
-        observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(pre_w));
+        challenger.observe_base_as_algebra_element::<Challenge<SC>>(Val::<SC>::from_usize(pre_w));
     }
     if let Some(global) = &common.preprocessed {
         challenger.observe(global.commitment.clone());

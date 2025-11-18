@@ -25,6 +25,7 @@ mod helpers {
         let expected = vec![x1 + s * y1, x2 + s * y2];
 
         assert_eq!(x, expected);
+        assert_eq!(par_x, expected);
     }
 
     #[test]

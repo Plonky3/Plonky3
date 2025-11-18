@@ -14,8 +14,7 @@ use tracing::instrument;
 
 use crate::common::CommonData;
 use crate::config::{
-    Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val, observe_base_as_ext,
-    observe_instance_binding,
+    Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val, observe_instance_binding,
 };
 use crate::proof::BatchProof;
 
@@ -57,7 +56,7 @@ where
 
     // Observe the number of instances up front to match the prover's transcript.
     let n_instances = airs.len();
-    observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(n_instances));
+    challenger.observe_base_as_algebra_element::<Challenge<SC>>(Val::<SC>::from_usize(n_instances));
 
     // Validate opened values shape per instance and observe per-instance binding data.
     // Precompute per-instance preprocessed widths and quotient degrees (number of chunks).
@@ -130,7 +129,7 @@ where
     // Observe preprocessed widths for each instance. If a global
     // preprocessed commitment exists, observe it once.
     for &pre_w in preprocessed_widths.iter() {
-        observe_base_as_ext::<SC>(&mut challenger, Val::<SC>::from_usize(pre_w));
+        challenger.observe_base_as_algebra_element::<Challenge<SC>>(Val::<SC>::from_usize(pre_w));
     }
     if let Some(global) = &common.preprocessed {
         challenger.observe(global.commitment.clone());

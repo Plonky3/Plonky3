@@ -27,7 +27,7 @@ pub mod verifier;
 pub use common::CommonData;
 pub use config::{
     Challenge, Commitment, Domain, PackedChallenge, PackedVal, PcsError, PcsProof,
-    StarkGenericConfig, Val, observe_base_as_ext,
+    StarkGenericConfig, Val,
 };
 pub use p3_uni_stark::{OpenedValues, VerificationError};
 pub use proof::{BatchCommitments, BatchOpenedValues, BatchProof};
