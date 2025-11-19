@@ -240,9 +240,9 @@ where
         pcs.open(rounds, &mut challenger)
     };
 
-    // Rely on open order: [main, quotient, preprocessed?]
-    let trace_idx = 0usize;
-    let quotient_idx = 1usize;
+    // Rely on PCS indices for opened value groups: main trace, quotient, preprocessed.
+    let trace_idx = SC::Pcs::TRACE_IDX;
+    let quotient_idx = SC::Pcs::QUOTIENT_IDX;
 
     // Parse trace opened values per instance.
     let trace_values_for_mats = &opened_values[trace_idx];
@@ -252,11 +252,10 @@ where
     let mut per_instance: Vec<OpenedValues<Challenge<SC>>> = Vec::with_capacity(n_instances);
 
     // Preprocessed openings, if a global preprocessed commitment exists.
-    let preprocessed_openings = if common.preprocessed.is_some() {
-        Some(&opened_values[2])
-    } else {
-        None
-    };
+    let preprocessed_openings = common
+        .preprocessed
+        .as_ref()
+        .map(|_| &opened_values[SC::Pcs::PREPROCESSED_TRACE_IDX]);
 
     let mut quotient_openings_iter = opened_values[quotient_idx].iter();
     for (i, (s, e)) in quotient_chunk_ranges.iter().copied().enumerate() {
