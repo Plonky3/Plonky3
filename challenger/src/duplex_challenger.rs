@@ -210,6 +210,7 @@ mod tests {
 
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
     use p3_goldilocks::Goldilocks;
     use p3_symmetric::Permutation;
 
@@ -220,6 +221,8 @@ mod tests {
     const RATE: usize = 16;
 
     type G = Goldilocks;
+    type EF2G = BinomialExtensionField<G, 2>;
+
     type BB = BabyBear;
 
     #[derive(Clone)]
@@ -470,5 +473,134 @@ mod tests {
 
         // Output buffer should match expected state from duplexing
         assert_eq!(chal.output_buffer, expected_output);
+    }
+
+    #[test]
+    fn test_observe_base_as_algebra_element_single_value() {
+        // Create a fresh challenger instance
+        let mut chal = DuplexChallenger::<G, TestPermutation, WIDTH, RATE>::new(TestPermutation {});
+
+        // Store initial buffer state to verify the conversion
+        let initial_len = chal.input_buffer.len();
+
+        // Observe a base field element as an extension field element
+        let base_val = G::from_u8(42);
+        chal.observe_base_as_algebra_element::<EF2G>(base_val);
+
+        // The base field value should be converted to an extension field element
+        //
+        // A degree-2 extension field element requires 2 base field coefficients
+        assert_eq!(chal.input_buffer.len(), initial_len + 2);
+
+        // Verify the buffer contains the correct basis coefficients
+        //
+        // First coefficient should be the original base field value
+        assert_eq!(chal.input_buffer[initial_len], G::from_u8(42));
+        // Second coefficient should be zero (since we're embedding base into extension)
+        assert_eq!(chal.input_buffer[initial_len + 1], G::ZERO);
+
+        // Output buffer should remain empty until we sample
+        assert!(chal.output_buffer.is_empty());
+    }
+
+    #[test]
+    fn test_observe_base_as_algebra_element_multiple_values() {
+        // Create a fresh challenger instance
+        let mut chal = DuplexChallenger::<G, TestPermutation, WIDTH, RATE>::new(TestPermutation {});
+
+        // Observe multiple base field values as extension field elements
+        let values = [G::from_u8(1), G::from_u8(2), G::from_u8(3)];
+
+        for val in values {
+            chal.observe_base_as_algebra_element::<EF2G>(val);
+        }
+
+        // Each base value becomes a 2-coefficient extension element
+        //
+        // So 3 base values → 6 coefficients total in the input buffer
+        assert_eq!(chal.input_buffer.len(), 6);
+
+        // Verify the buffer contains the expected interleaved pattern:
+        // [1, 0, 2, 0, 3, 0]
+        let expected = vec![
+            G::from_u8(1),
+            G::ZERO,
+            G::from_u8(2),
+            G::ZERO,
+            G::from_u8(3),
+            G::ZERO,
+        ];
+        assert_eq!(chal.input_buffer, expected);
+    }
+
+    #[test]
+    fn test_observe_base_as_algebra_element_triggers_duplexing() {
+        // Create a fresh challenger instance
+        let mut chal = DuplexChallenger::<G, TestPermutation, WIDTH, RATE>::new(TestPermutation {});
+
+        // Observe enough base values to fill exactly RATE coefficients
+        //
+        // Since each base value becomes 2 coefficients, we need RATE/2 values
+        for i in 0..(RATE / 2) {
+            chal.observe_base_as_algebra_element::<EF2G>(G::from_u8(i as u8));
+        }
+
+        // After observing RATE/2 base values, we have exactly RATE coefficients
+        // - This should trigger automatic duplexing
+        // - Input buffer should be empty after duplexing
+        assert!(chal.input_buffer.is_empty());
+
+        // Output buffer should be populated after duplexing
+        assert_eq!(chal.output_buffer.len(), RATE);
+    }
+
+    #[test]
+    fn test_observe_base_as_algebra_element_consistency_with_direct_observe() {
+        // Create two identical challengers
+        let mut chal1 =
+            DuplexChallenger::<G, TestPermutation, WIDTH, RATE>::new(TestPermutation {});
+        let mut chal2 =
+            DuplexChallenger::<G, TestPermutation, WIDTH, RATE>::new(TestPermutation {});
+
+        let base_val = G::from_u8(99);
+
+        // Method 1: Use observe_base_as_algebra_element
+        chal1.observe_base_as_algebra_element::<EF2G>(base_val);
+
+        // Method 2: Manually convert and observe via observe_algebra_element
+        let ext_val = EF2G::from(base_val);
+        chal2.observe_algebra_element(ext_val);
+
+        // Both methods should produce identical internal state
+        assert_eq!(chal1.input_buffer, chal2.input_buffer);
+        assert_eq!(chal1.output_buffer, chal2.output_buffer);
+        assert_eq!(chal1.sponge_state, chal2.sponge_state);
+    }
+
+    #[test]
+    fn test_observe_base_as_algebra_element_sampling_after_observe() {
+        // Create a fresh challenger instance
+        let mut chal = DuplexChallenger::<G, TestPermutation, WIDTH, RATE>::new(TestPermutation {});
+
+        // Observe a base value as extension element
+        chal.observe_base_as_algebra_element::<EF2G>(G::from_u8(123));
+
+        // Sample an extension field challenge
+        //
+        // This should trigger duplexing since we have buffered input
+        let challenge: EF2G = chal.sample_algebra_element();
+
+        // The challenge should be a valid extension field element
+        // Verify it has 2 coefficients and is well-formed
+        let coeffs: &[G] = challenge.as_basis_coefficients_slice();
+        assert_eq!(coeffs.len(), 2);
+
+        // Input buffer should be cleared after sampling triggers duplexing
+        assert!(chal.input_buffer.is_empty());
+
+        // Output buffer should have remaining samples
+        //
+        // We sampled 2 coefficients (for EF), so RATE - 2 should remain
+        assert_eq!(chal.output_buffer.len(), RATE - 2);
     }
 }
