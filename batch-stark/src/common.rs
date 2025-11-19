@@ -65,6 +65,9 @@ pub struct GlobalPreprocessed<SC: SGC> {
 /// Struct storing data common to both the prover and verifier.
 ///
 /// TODO: Add lookup metadata (e.g. `Vec<Vec<Lookup<Val<SC>>>>`).
+/// TODO: Optionally cache a single challenger seed for transparent
+///       preprocessed data (per-instance widths + global root), so
+///       prover and verifier don't have to recompute/rehash it each run.
 pub struct CommonData<SC: SGC> {
     /// Optional global preprocessed commitment shared by all instances.
     ///
