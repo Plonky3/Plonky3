@@ -6,12 +6,13 @@ use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 use p3_uni_stark::{
-    SymbolicAirBuilder, VerificationError, VerifierConstraintFolder, get_log_quotient_degree,
+    SymbolicAirBuilder, VerificationError, VerifierConstraintFolder,
     recompose_quotient_from_chunks, verify_constraints,
 };
 use p3_util::zip_eq::zip_eq;
 use tracing::instrument;
 
+use crate::common::CommonData;
 use crate::config::{
     Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val, observe_instance_binding,
 };
@@ -23,6 +24,7 @@ pub fn verify_batch<SC, A>(
     airs: &[A],
     proof: &BatchProof<SC>,
     public_values: &[Vec<Val<SC>>],
+    common: &CommonData<SC>,
 ) -> Result<(), VerificationError<PcsError<SC>>>
 where
     SC: SGC,
@@ -57,16 +59,22 @@ where
     challenger.observe_base_as_algebra_element::<Challenge<SC>>(Val::<SC>::from_usize(n_instances));
 
     // Validate opened values shape per instance and observe per-instance binding data.
-    // Precompute per-instance log_quotient_degrees and quotient_degrees in one pass.
-    let (log_quotient_degrees, quotient_degrees): (Vec<usize>, Vec<usize>) = airs
-        .iter()
-        .zip(public_values.iter())
-        .map(|(air, pv)| {
-            let lqd = get_log_quotient_degree::<Val<SC>, A>(air, 0, pv.len(), config.is_zk());
-            let qd = 1 << (lqd + config.is_zk());
-            (lqd, qd)
-        })
-        .unzip();
+    // Precompute per-instance preprocessed widths and quotient degrees (number of chunks).
+    let mut preprocessed_widths = Vec::with_capacity(airs.len());
+    let mut quotient_degrees = Vec::with_capacity(airs.len());
+
+    for (i, _air) in airs.iter().enumerate() {
+        let pre_w = common
+            .preprocessed
+            .as_ref()
+            .and_then(|g| g.instances[i].as_ref().map(|m| m.width))
+            .unwrap_or(0);
+        preprocessed_widths.push(pre_w);
+
+        // Derive quotient_degree (number of chunks) directly from the proof shape.
+        let quotient_degree = opened_values.instances[i].quotient_chunks.len();
+        quotient_degrees.push(quotient_degree);
+    }
 
     for (i, air) in airs.iter().enumerate() {
         let air_width = A::width(air);
@@ -91,6 +99,20 @@ where
             }
         }
 
+        // Validate that any preprocessed width implied by CommonData matches the opened shapes.
+        let pre_w = preprocessed_widths[i];
+        let pre_local_len = inst_opened_vals
+            .preprocessed_local
+            .as_ref()
+            .map_or(0, |v| v.len());
+        let pre_next_len = inst_opened_vals
+            .preprocessed_next
+            .as_ref()
+            .map_or(0, |v| v.len());
+        if pre_w != pre_local_len || pre_w != pre_next_len {
+            return Err(VerificationError::InvalidProofShape);
+        }
+
         // Observe per-instance binding data: (log_ext_degree, log_degree), width, num quotient chunks.
         let ext_db = degree_bits[i];
         let base_db = ext_db - config.is_zk();
@@ -102,6 +124,15 @@ where
     challenger.observe(commitments.main.clone());
     for pv in public_values {
         challenger.observe_slice(pv);
+    }
+
+    // Observe preprocessed widths for each instance. If a global
+    // preprocessed commitment exists, observe it once.
+    for &pre_w in preprocessed_widths.iter() {
+        challenger.observe_base_as_algebra_element::<Challenge<SC>>(Val::<SC>::from_usize(pre_w));
+    }
+    if let Some(global) = &common.preprocessed {
+        challenger.observe(global.commitment.clone());
     }
 
     // Sample alpha for constraint folding
@@ -146,15 +177,14 @@ where
     coms_to_verify.push((commitments.main.clone(), trace_round));
 
     // Quotient chunks round: flatten per-instance chunks to match commit order.
-    // Use extended domains for the outer commit domain, with size 2^(base_db + lqd + zk), and split into 2^(lqd+zk) chunks.
+    // Use extended domains for the outer commit domain, with size = base_degree * quotient_degree.
     let quotient_domains: Vec<Vec<Domain<SC>>> = (0..degree_bits.len())
         .map(|i| {
             let ext_db = degree_bits[i];
             let base_db = ext_db - config.is_zk();
-            let lqd = log_quotient_degrees[i];
             let quotient_degree = quotient_degrees[i];
             let ext_dom = ext_trace_domains[i];
-            let qdom = ext_dom.create_disjoint_domain(1 << (base_db + lqd + config.is_zk()));
+            let qdom = ext_dom.create_disjoint_domain((1 << base_db) * quotient_degree);
             qdom.split_domains(quotient_degree)
         })
         .collect();
@@ -175,6 +205,53 @@ where
         }
     }
     coms_to_verify.push((commitments.quotient_chunks.clone(), qc_round));
+
+    // Preprocessed rounds: a single global commitment with one matrix per
+    // instance that has preprocessed columns.
+    if let Some(global) = &common.preprocessed {
+        let mut pre_round = Vec::new();
+
+        for (matrix_index, &inst_idx) in global.matrix_to_instance.iter().enumerate() {
+            let pre_w = preprocessed_widths[inst_idx];
+            if pre_w == 0 {
+                return Err(VerificationError::InvalidProofShape);
+            }
+
+            let inst = &opened_values.instances[inst_idx];
+            let local = inst
+                .preprocessed_local
+                .as_ref()
+                .ok_or(VerificationError::InvalidProofShape)?;
+            let next = inst
+                .preprocessed_next
+                .as_ref()
+                .ok_or(VerificationError::InvalidProofShape)?;
+
+            // Validate that the preprocessed data's base degree matches what we expect.
+            let ext_db = degree_bits[inst_idx];
+            let expected_base_db = ext_db - config.is_zk();
+
+            let meta = global.instances[inst_idx]
+                .as_ref()
+                .ok_or(VerificationError::InvalidProofShape)?;
+            if meta.matrix_index != matrix_index || meta.degree_bits != expected_base_db {
+                return Err(VerificationError::InvalidProofShape);
+            }
+
+            let base_db = meta.degree_bits;
+            let pre_domain = pcs.natural_domain_for_degree(1 << base_db);
+            let zeta_next_i = ext_trace_domains[inst_idx]
+                .next_point(zeta)
+                .ok_or(VerificationError::NextPointUnavailable)?;
+
+            pre_round.push((
+                pre_domain,
+                vec![(zeta, local.clone()), (zeta_next_i, next.clone())],
+            ));
+        }
+
+        coms_to_verify.push((global.commitment.clone(), pre_round));
+    }
 
     // Verify all openings via PCS.
     pcs.verify(coms_to_verify, opening_proof, &mut challenger)
