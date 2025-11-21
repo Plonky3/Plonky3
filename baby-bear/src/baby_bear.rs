@@ -1,13 +1,11 @@
-use p3_challenger::{
-    CanSampleUniformBits, DuplexChallenger, UniformGrindingChallenger, UniformSamplingField,
-};
+use p3_challenger::UniformSamplingField;
+
 use p3_field::exponentiation::exp_1725656503;
 use p3_field::{Algebra, PrimeCharacteristicRing};
 use p3_monty_31::{
     BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
     PackedMontyParameters, RelativelyPrimePower, TwoAdicData,
 };
-use p3_symmetric::CryptographicPermutation;
 
 /// The prime field `2^31 - 2^27 + 1`, a.k.a. the Baby Bear field.
 pub type BabyBear = MontyField31<BabyBearParameters>;
@@ -111,16 +109,16 @@ impl UniformSamplingField for BabyBearParameters {
     // NOTE: We only include `0` to not have to deal with one-off indexing. `k` must be > 0.
     // Also, we don't care about k > 30 for BabyBear.
     const SAMPLING_BITS_M: [u64; 64] = {
-        let PRIME: u64 = Self::PRIME as u64;
+        let prime: u64 = Self::PRIME as u64;
         let mut a = [0u64; 64];
         let mut k = 0;
         while k < 64 {
             if k == 0 {
-                a[k] = PRIME; // This value is irrelevant in practice. `bits = 0` not allowed
+                a[k] = prime; // This value is irrelevant in practice. `bits = 0` not allowed
             } else {
                 // Create a mask to zero out the last k bits
                 let mask = !((1u64 << k) - 1);
-                a[k] = PRIME & mask;
+                a[k] = prime & mask;
             }
             k += 1;
         }
