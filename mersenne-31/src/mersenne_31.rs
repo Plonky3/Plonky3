@@ -543,16 +543,16 @@ impl UniformSamplingField for Mersenne31 {
     // For Mersenne31 uniform sampling really only makes sense if we allow rejection sampling.
     // Sampling 16 bits already has a chance of 3e-5 to require a resample!
     const SAMPLING_BITS_M: [u64; 64] = {
-        let PRIME: u64 = P as u64;
+        let prime: u64 = P as u64;
         let mut a = [0u64; 64];
         let mut k = 0;
         while k < 64 {
             if k == 0 {
-                a[k] = PRIME; // This value is irrelevant in practice. `bits = 0` not allowed
+                a[k] = prime; // This value is irrelevant in practice. `bits = 0` not allowed
             } else {
                 // Create a mask to zero out the last k bits
                 let mask = !((1u64 << k) - 1);
-                a[k] = PRIME & mask;
+                a[k] = prime & mask;
             }
             k += 1;
         }

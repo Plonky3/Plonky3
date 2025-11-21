@@ -176,16 +176,16 @@ impl Distribution<Goldilocks> for StandardUniform {
 impl UniformSamplingField for Goldilocks {
     const MAX_SINGLE_SAMPLE_BITS: usize = 24;
     const SAMPLING_BITS_M: [u64; 64] = {
-        let PRIME: u64 = P as u64;
+        let prime: u64 = P;
         let mut a = [0u64; 64];
         let mut k = 0;
         while k < 64 {
             if k == 0 {
-                a[k] = PRIME; // This value is irrelevant in practice. `bits = 0` not allowed
+                a[k] = prime; // This value is irrelevant in practice. `bits = 0` not allowed
             } else {
                 // Create a mask to zero out the last k bits
                 let mask = !((1u64 << k) - 1);
-                a[k] = PRIME & mask;
+                a[k] = prime & mask;
             }
             k += 1;
         }
