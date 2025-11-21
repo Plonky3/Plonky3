@@ -1,5 +1,5 @@
-use alloc::rc::Rc;
 use alloc::string::ToString;
+use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -27,8 +27,8 @@ type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
 
 fn create_symbolic_with_degree(degree: usize) -> SymbolicExpression<F> {
-    let x = Rc::new(SymbolicExpression::Constant(F::ONE));
-    let y = Rc::new(SymbolicExpression::Constant(F::TWO));
+    let x = Arc::new(SymbolicExpression::Constant(F::ONE));
+    let y = Arc::new(SymbolicExpression::Constant(F::TWO));
     SymbolicExpression::Mul {
         x,
         y,
@@ -313,7 +313,7 @@ where
 
     fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
         let symbolic_air_builder =
-            SymbolicAirBuilder::<F>::new(0, <Self as BaseAir<AB::F>>::width(self), 0);
+            SymbolicAirBuilder::<F>::new(0, <Self as BaseAir<AB::F>>::width(self), 0, 0, 0);
 
         let symbolic_main = symbolic_air_builder.main();
         let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
@@ -538,7 +538,7 @@ fn test_symbolic_to_expr() {
     use p3_field::PrimeCharacteristicRing;
     use p3_uni_stark::SymbolicAirBuilder;
 
-    let mut builder = SymbolicAirBuilder::<F>::new(0, 2, 0);
+    let mut builder = SymbolicAirBuilder::<F>::new(0, 2, 0, 0, 0);
 
     let main = builder.main();
 
@@ -551,7 +551,7 @@ fn test_symbolic_to_expr() {
     builder.when_transition().assert_zero(sub - local[0]);
     builder.when_last_row().assert_zero(mul - local[0]);
 
-    let constraints = builder.constraints();
+    let constraints = builder.base_constraints();
 
     let mut main_flat = Vec::new();
     main_flat.extend([F::new(10), F::new(10)]);
@@ -596,14 +596,14 @@ fn test_symbolic_to_expr() {
         let last_expected_val = is_last_row * (mul - EF::from(local[0]));
 
         // Evaluate the constraints at row `i`.
-        let first_eval = symbolic_to_expr(&mut builder, &constraints[0].clone());
-        let transition_eval = symbolic_to_expr(&mut builder, &constraints[1].clone());
-        let last_eval = symbolic_to_expr(&mut builder, &constraints[2].clone());
+        let first_eval = symbolic_to_expr(&builder, &constraints[0].clone());
+        let transition_eval = symbolic_to_expr(&builder, &constraints[1].clone());
+        let last_eval = symbolic_to_expr(&builder, &constraints[2].clone());
 
         // Assert that the evaluated constraints are correct.
-        assert_eq!(first_eval, first_expected_val);
-        assert_eq!(transition_eval, transition_expected_val);
-        assert_eq!(last_eval, last_expected_val);
+        assert_eq!(first_expected_val, first_eval.into());
+        assert_eq!(transition_expected_val, transition_eval.into());
+        assert_eq!(last_expected_val, last_eval.into());
     }
 }
 
@@ -1169,7 +1169,7 @@ where
 
     fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
         let symbolic_air_builder =
-            SymbolicAirBuilder::<F>::new(0, <Self as BaseAir<AB::F>>::width(self), 0);
+            SymbolicAirBuilder::<F>::new(0, <Self as BaseAir<AB::F>>::width(self), 0, 0, 0);
 
         let symbolic_main = symbolic_air_builder.main();
         let symbolic_main_local = symbolic_main.row_slice(0).unwrap();

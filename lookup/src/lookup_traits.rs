@@ -6,6 +6,7 @@ use p3_air::{Air, AirBuilderWithPublicValues, PairBuilder, PermutationAirBuilder
 use p3_field::Field;
 use p3_matrix::Matrix;
 use p3_uni_stark::{Entry, SymbolicExpression};
+use tracing::warn;
 
 /// Defines errors that can occur during lookup verification.
 #[derive(Debug)]
@@ -143,8 +144,6 @@ impl<F: Field> Lookup<F> {
 pub trait AirLookupHandler<AB>: Air<AB>
 where
     AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
-    AB::Var: Copy + Into<AB::ExprEF>,
-    AB::ExprEF: From<AB::Var> + From<AB::F>,
 {
     /// Register a lookup to be used in this AIR.
     /// This method can be used before proving or verifying, as the resulting data is shared between the prover and the verifier.
@@ -177,65 +176,42 @@ where
 }
 
 /// Takes a symbolic expression and converts it into an expression in the context of the provided AirBuilder.
-pub fn symbolic_to_expr<AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues>(
-    builder: &mut AB,
-    symbolic: &SymbolicExpression<AB::F>,
-) -> AB::ExprEF {
-    let turn_into_expr = |values: &[AB::Var]| {
-        values
-            .iter()
-            .map(|v| AB::Expr::from(v.clone()))
-            .collect::<Vec<_>>()
-    };
-    let main = builder.main();
-    let local_values = &turn_into_expr(&main.row_slice(0).unwrap());
-    let next_values = &turn_into_expr(&main.row_slice(1).unwrap());
-
-    let public_values = builder
-        .public_values()
-        .iter()
-        .map(|v| AB::ExprEF::from((*v).into()))
-        .collect::<Vec<_>>();
-
-    match symbolic {
-        SymbolicExpression::Constant(c) => AB::ExprEF::from(AB::EF::from(*c)),
-        SymbolicExpression::Variable(v) => {
-            let get_val = |offset: usize,
-                           index: usize,
-                           local_vals: &[AB::Expr],
-                           next_vals: &[AB::Expr]| match offset {
-                0 => AB::ExprEF::from(local_vals[index].clone()),
-                1 => AB::ExprEF::from(next_vals[index].clone()),
+pub fn symbolic_to_expr<AB>(builder: &AB, expr: &SymbolicExpression<AB::F>) -> AB::Expr
+where
+    AB: PairBuilder + AirBuilderWithPublicValues + PermutationAirBuilder,
+{
+    match expr {
+        SymbolicExpression::Variable(v) => match v.entry {
+            Entry::Main { offset } => match offset {
+                0 => builder.main().row_slice(0).unwrap()[v.index].clone().into(),
+                1 => builder.main().row_slice(1).unwrap()[v.index].clone().into(),
                 _ => panic!("Cannot have expressions involving more than two rows."),
-            };
-
-            match v.entry {
-                Entry::Main { offset } => get_val(offset, v.index, local_values, next_values),
-                Entry::Public => public_values[v.index].clone(),
-                _ => unimplemented!(),
-            }
+            },
+            Entry::Public => builder.public_values()[v.index].into(),
+            _ => unimplemented!("Entry type {:?} not supported in interactions", v.entry),
+        },
+        SymbolicExpression::IsFirstRow => {
+            warn!("IsFirstRow is not normalized");
+            builder.is_first_row()
         }
+        SymbolicExpression::IsLastRow => {
+            warn!("IsLastRow is not normalized");
+            builder.is_last_row()
+        }
+        SymbolicExpression::IsTransition => {
+            warn!("IsTransition is not normalized");
+            builder.is_transition_window(2)
+        }
+        SymbolicExpression::Constant(c) => AB::Expr::from(*c),
         SymbolicExpression::Add { x, y, .. } => {
-            let x_expr = symbolic_to_expr(builder, x);
-            let y_expr = symbolic_to_expr(builder, y);
-            x_expr + y_expr
-        }
-        SymbolicExpression::Mul { x, y, .. } => {
-            let x_expr = symbolic_to_expr(builder, x);
-            let y_expr = symbolic_to_expr(builder, y);
-            x_expr * y_expr
+            symbolic_to_expr(builder, x) + symbolic_to_expr(builder, y)
         }
         SymbolicExpression::Sub { x, y, .. } => {
-            let x_expr = symbolic_to_expr(builder, x);
-            let y_expr = symbolic_to_expr(builder, y);
-            x_expr - y_expr
+            symbolic_to_expr(builder, x) - symbolic_to_expr(builder, y)
         }
-        SymbolicExpression::Neg { x, .. } => {
-            let x_expr = symbolic_to_expr(builder, x);
-            -x_expr
+        SymbolicExpression::Neg { x, .. } => -symbolic_to_expr(builder, x),
+        SymbolicExpression::Mul { x, y, .. } => {
+            symbolic_to_expr(builder, x) * symbolic_to_expr(builder, y)
         }
-        SymbolicExpression::IsFirstRow => builder.is_first_row().into(),
-        SymbolicExpression::IsLastRow => builder.is_last_row().into(),
-        SymbolicExpression::IsTransition => builder.is_transition().into(),
     }
 }

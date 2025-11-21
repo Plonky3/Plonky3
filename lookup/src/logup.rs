@@ -133,7 +133,7 @@ impl LogUpGadget {
     fn eval_update<AB>(
         &self,
         builder: &mut AB,
-        context: Lookup<AB::F>,
+        context: &Lookup<AB::F>,
         opt_expected_cumulated: Option<AB::ExprEF>,
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
@@ -162,14 +162,14 @@ impl LogUpGadget {
             .map(|exprs| {
                 exprs
                     .iter()
-                    .map(|expr| symbolic_to_expr(builder, expr))
+                    .map(|expr| symbolic_to_expr(builder, expr).into())
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
 
         let multiplicities = multiplicities_exprs
             .iter()
-            .map(|expr| symbolic_to_expr(builder, expr))
+            .map(|expr| symbolic_to_expr(builder, expr).into())
             .collect::<Vec<_>>();
 
         // Access the permutation (aux) table. It carries the running sum column `s`.
@@ -269,7 +269,7 @@ impl LookupGadget for LogUpGadget {
             panic!("Global lookups are not supported in local evaluation")
         }
 
-        self.eval_update(builder, context, None);
+        self.eval_update(builder, &context, None);
     }
 
     /// # Mathematical Details
@@ -293,7 +293,7 @@ impl LookupGadget for LogUpGadget {
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
     {
-        self.eval_update(builder, context, Some(expected_cumulated));
+        self.eval_update(builder, &context, Some(expected_cumulated));
     }
 
     fn verify_global_final_value<EF: Field>(
