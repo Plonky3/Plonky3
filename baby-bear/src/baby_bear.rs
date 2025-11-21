@@ -1,5 +1,4 @@
 use p3_challenger::UniformSamplingField;
-
 use p3_field::exponentiation::exp_1725656503;
 use p3_field::{Algebra, PrimeCharacteristicRing};
 use p3_monty_31::{

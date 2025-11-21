@@ -1,8 +1,8 @@
 use core::borrow::BorrowMut;
 
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_matrix::dense::{DenseMatrix, DenseStorage, RowMajorMatrix};
 use p3_matrix::Matrix;
+use p3_matrix::dense::{DenseMatrix, DenseStorage, RowMajorMatrix};
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 

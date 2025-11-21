@@ -14,14 +14,13 @@ use p3_field::op_assign_macros::{
     impl_add_assign, impl_div_methods, impl_mul_methods, impl_sub_assign,
 };
 use p3_field::{
-    halve_u64, impl_raw_serializable_primefield64, quotient_map_large_iint,
-    quotient_map_large_uint, quotient_map_small_int, Field, InjectiveMonomial, Packable,
-    PermutationMonomial, PrimeCharacteristicRing, PrimeField, PrimeField64, RawDataSerializable,
-    TwoAdicField,
+    Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
+    PrimeField64, RawDataSerializable, TwoAdicField, halve_u64, impl_raw_serializable_primefield64,
+    quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int,
 };
 use p3_util::{assume, branch_hint, flatten_to_base, gcd_inner};
-use rand::distr::{Distribution, StandardUniform};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 
 /// The Goldilocks prime
