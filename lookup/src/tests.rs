@@ -596,14 +596,14 @@ fn test_symbolic_to_expr() {
         let last_expected_val = is_last_row * (mul - EF::from(local[0]));
 
         // Evaluate the constraints at row `i`.
-        let first_eval = symbolic_to_expr(&mut builder, &constraints[0].clone());
-        let transition_eval = symbolic_to_expr(&mut builder, &constraints[1].clone());
-        let last_eval = symbolic_to_expr(&mut builder, &constraints[2].clone());
+        let first_eval = symbolic_to_expr(&builder, &constraints[0]);
+        let transition_eval = symbolic_to_expr(&builder, &constraints[1]);
+        let last_eval = symbolic_to_expr(&builder, &constraints[2]);
 
         // Assert that the evaluated constraints are correct.
-        assert_eq!(first_eval, first_expected_val);
-        assert_eq!(transition_eval, transition_expected_val);
-        assert_eq!(last_eval, last_expected_val);
+        assert_eq!(first_expected_val, first_eval.into());
+        assert_eq!(transition_expected_val, transition_eval.into());
+        assert_eq!(last_expected_val, last_eval.into());
     }
 }
 
@@ -672,7 +672,7 @@ fn test_range_check_end_to_end_valid() {
     for i in 0..builder.height {
         builder.for_row(i);
         lookups.iter().for_each(|lookup| {
-            lookup_gadget.eval_local_lookup(&mut builder, lookup.clone());
+            lookup_gadget.eval_local_lookup(&mut builder, lookup);
         });
     }
 }
@@ -738,7 +738,7 @@ fn test_range_check_end_to_end_invalid() {
     for i in 0..builder.height {
         builder.for_row(i);
         lookups.iter().for_each(|lookup| {
-            lookup_gadget.eval_local_lookup(&mut builder, lookup.clone());
+            lookup_gadget.eval_local_lookup(&mut builder, lookup);
         });
     }
 }
@@ -803,7 +803,7 @@ fn test_inconsistent_witness_fails_transition() {
     for i in 0..builder.height {
         builder.for_row(i);
         lookups.iter().for_each(|lookup| {
-            lookup_gadget.eval_local_lookup(&mut builder, lookup.clone());
+            lookup_gadget.eval_local_lookup(&mut builder, lookup);
         });
     }
 }
@@ -860,7 +860,7 @@ fn test_zero_multiplicity_is_not_counted() {
     for i in 0..builder.height {
         builder.for_row(i);
         lookups.iter().for_each(|lookup| {
-            lookup_gadget.eval_local_lookup(&mut builder, lookup.clone());
+            lookup_gadget.eval_local_lookup(&mut builder, lookup);
         });
     }
 }
@@ -882,7 +882,7 @@ fn test_empty_lookup_is_valid() {
     for i in 0..builder.height {
         builder.for_row(i);
         lookups.iter().for_each(|lookup| {
-            lookup_gadget.eval_local_lookup(&mut builder, lookup.clone());
+            lookup_gadget.eval_local_lookup(&mut builder, lookup);
         });
     }
 
@@ -970,7 +970,7 @@ fn test_nontrivial_permutation() {
     for i in 0..builder.height {
         builder.for_row(i);
         lookups.iter().for_each(|lookup| {
-            lookup_gadget.eval_local_lookup(&mut builder, lookup.clone());
+            lookup_gadget.eval_local_lookup(&mut builder, lookup);
         });
     }
 }
@@ -1100,7 +1100,7 @@ fn test_multiple_lookups_different_columns() {
     for i in 0..builder.height {
         builder.for_row(i);
         lookups.iter().for_each(|lookup| {
-            lookup_gadget.eval_local_lookup(&mut builder, lookup.clone());
+            lookup_gadget.eval_local_lookup(&mut builder, lookup);
         });
     }
 }
@@ -1267,7 +1267,7 @@ fn test_tuple_lookup() {
     for i in 0..builder.height {
         builder.for_row(i);
         lookups.iter().for_each(|lookup| {
-            lookup_gadget.eval_local_lookup(&mut builder, lookup.clone());
+            lookup_gadget.eval_local_lookup(&mut builder, lookup);
         });
     }
 }
@@ -1411,14 +1411,10 @@ fn test_global_lookup() {
         builder1.for_row(i);
         lookups1.iter().for_each(|lookup| {
             match &lookup.kind {
-                Kind::Local => lookup_gadget.eval_local_lookup(&mut builder1, lookup.clone()),
+                Kind::Local => lookup_gadget.eval_local_lookup(&mut builder1, lookup),
                 Kind::Global(name) => {
                     assert_eq!(*name, "LUT".to_string(), "Global lookup name should match");
-                    lookup_gadget.eval_global_update(
-                        &mut builder1,
-                        lookup.clone(),
-                        s_global_final1,
-                    );
+                    lookup_gadget.eval_global_update(&mut builder1, lookup, s_global_final1);
                 }
             };
         });
@@ -1426,14 +1422,10 @@ fn test_global_lookup() {
         builder2.for_row(i);
         lookups2.iter().for_each(|lookup| {
             match &lookup.kind {
-                Kind::Local => lookup_gadget.eval_local_lookup(&mut builder2, lookup.clone()),
+                Kind::Local => lookup_gadget.eval_local_lookup(&mut builder2, lookup),
                 Kind::Global(name) => {
                     assert_eq!(*name, "LUT".to_string(), "Global lookup name should match");
-                    lookup_gadget.eval_global_update(
-                        &mut builder2,
-                        lookup.clone(),
-                        s_global_final2,
-                    );
+                    lookup_gadget.eval_global_update(&mut builder2, lookup, s_global_final2);
                 }
             };
         });
