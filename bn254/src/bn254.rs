@@ -558,7 +558,6 @@ mod tests {
         let f_r_minus_2 = F::NEG_ONE + F::NEG_ONE;
 
         // Test JSON serialization using the common testing utility
-        use p3_field_testing::test_field_json_serialization;
         test_field_json_serialization(&[f_100, f_1, f_2, f_r_minus_1, f_r_minus_2]);
     }
 
