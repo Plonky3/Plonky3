@@ -158,7 +158,6 @@ mod tests {
         assert_eq!(m2.injective_exp_n().injective_exp_root_n(), m2);
         assert_eq!(F::TWO.injective_exp_n().injective_exp_root_n(), F::TWO);
 
-        // Test JSON serialization using the common testing utility
         test_field_json_serialization(&[f, f_1, f_2, f_p_minus_1, f_p_minus_2, m1, m2]);
     }
 
