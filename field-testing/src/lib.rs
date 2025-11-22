@@ -330,7 +330,6 @@ where
 /// This function tests that:
 /// 1. Each value can be serialized and deserialized correctly
 /// 2. Double round-trip serialization is consistent
-#[cfg(feature = "serde")]
 pub fn test_field_json_serialization<F>(values: &[F])
 where
     F: Field + Serialize + DeserializeOwned + Eq,
