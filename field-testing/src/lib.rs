@@ -28,8 +28,6 @@ pub use packedfield_testing::*;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
-
-#[cfg(feature = "serde")]
 use serde::{de::DeserializeOwned, Serialize};
 
 #[allow(clippy::eq_op)]
