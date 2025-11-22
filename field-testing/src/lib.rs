@@ -28,6 +28,8 @@ pub use packedfield_testing::*;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
+
+#[cfg(feature = "serde")]
 use serde::{de::DeserializeOwned, Serialize};
 
 #[allow(clippy::eq_op)]
@@ -330,6 +332,7 @@ where
 /// This function tests that:
 /// 1. Each value can be serialized and deserialized correctly
 /// 2. Double round-trip serialization is consistent
+#[cfg(feature = "serde")]
 pub fn test_field_json_serialization<F>(values: &[F])
 where
     F: Field + Serialize + DeserializeOwned + Eq,
