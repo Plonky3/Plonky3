@@ -109,8 +109,8 @@ mod tests {
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{InjectiveMonomial, PermutationMonomial, PrimeField64, TwoAdicField};
     use p3_field_testing::{
-        test_field, test_field_dft, test_prime_field, test_prime_field_32, test_prime_field_64,
-        test_two_adic_field,
+        test_field, test_field_dft, test_field_json_serialization, test_prime_field, 
+        test_prime_field_32, test_prime_field_64, test_two_adic_field,
     };
 
     use super::*;
@@ -147,8 +147,6 @@ mod tests {
         assert_eq!(m2.injective_exp_n().injective_exp_root_n(), m2);
         assert_eq!(f_2.injective_exp_n().injective_exp_root_n(), f_2);
 
-        // Test JSON serialization using the common testing utility
-        use p3_field_testing::test_field_json_serialization;
         test_field_json_serialization(&[f, f_1, f_2, f_p_minus_1, f_p_minus_2, m1, m2]);
     }
 
