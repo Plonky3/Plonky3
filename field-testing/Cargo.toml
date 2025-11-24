@@ -19,12 +19,8 @@ criterion.workspace = true
 num-bigint.workspace = true
 rand.workspace = true
 
-serde = { workspace = true, optional = true, features = ["alloc", "derive"] }
-serde_json = { workspace = true, optional = true, features = ["alloc"] }
-
-[features]
-default = ["serde"]
-serde = ["dep:serde", "dep:serde_json"]
+serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true
