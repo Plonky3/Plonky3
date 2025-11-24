@@ -339,7 +339,7 @@ where
     for value in values {
         // Single round-trip
         let serialized = serde_json::to_string(value).expect("Failed to serialize field element");
-        let deserialized: F = 
+        let deserialized: F =
             serde_json::from_str(&serialized).expect("Failed to deserialize field element");
         assert_eq!(
             *value, deserialized,
