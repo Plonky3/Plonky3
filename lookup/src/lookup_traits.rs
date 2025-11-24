@@ -278,7 +278,7 @@ where
 pub struct LookupTraceBuilder<'a, SC: StarkGenericConfig> {
     main: ViewPair<'a, Val<SC>>,
     public_values: &'a [Val<SC>],
-    permutation_challenges: Vec<SC::Challenge>,
+    permutation_challenges: &'a [SC::Challenge],
     height: usize,
     row: usize,
 }
@@ -287,7 +287,7 @@ impl<'a, SC: StarkGenericConfig> LookupTraceBuilder<'a, SC> {
     pub const fn new(
         main: ViewPair<'a, Val<SC>>,
         public_values: &'a [Val<SC>],
-        permutation_challenges: Vec<SC::Challenge>,
+        permutation_challenges: &'a [SC::Challenge],
         height: usize,
         row: usize,
     ) -> Self {
@@ -378,7 +378,7 @@ impl<'a, SC: StarkGenericConfig> PermutationAirBuilder for LookupTraceBuilder<'a
     }
 
     fn permutation_randomness(&self) -> &[SC::Challenge] {
-        &self.permutation_challenges
+        self.permutation_challenges
     }
 }
 
