@@ -131,7 +131,7 @@ pub fn generate_trace_rows<
 }
 
 /// `rows` will normally consist of 24 rows, with an exception for the final row.
-fn generate_trace_rows_for_perm<
+pub fn generate_trace_rows_for_perm<
     F: PrimeField,
     LinearLayers: GenericPoseidon2LinearLayers<WIDTH>,
     const WIDTH: usize,
