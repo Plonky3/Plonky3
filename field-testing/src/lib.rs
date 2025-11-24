@@ -29,7 +29,7 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 #[cfg(feature = "serde")]
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
 #[allow(clippy::eq_op)]
 pub fn test_ring_with_eq<R: PrimeCharacteristicRing + Copy + Eq>(zeros: &[R], ones: &[R])
