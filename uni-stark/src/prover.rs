@@ -14,8 +14,8 @@ use tracing::{debug_span, info_span, instrument};
 
 use crate::{
     Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, PreprocessedProverData, Proof,
-    ProverConstraintFolder, StarkGenericConfig, SymbolicAirBuilder, Val, get_log_quotient_degree,
-    get_symbolic_constraints,
+    ProverConstraintFolder, StarkGenericConfig, SymbolicAirBuilder, Val,
+    get_log_num_quotient_chunks, get_symbolic_constraints,
 };
 
 #[instrument(skip_all)]
@@ -119,14 +119,14 @@ where
     // From the degree of the constraint polynomial, compute the number
     // of quotient polynomials we will split Q(x) into. This is chosen to
     // always be a power of 2.
-    let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(
+    let log_num_quotient_chunks = get_log_num_quotient_chunks::<Val<SC>, A>(
         air,
         preprocessed_width,
         public_values.len(),
         config.is_zk(),
     );
 
-    let quotient_degree = 1 << (log_quotient_degree + config.is_zk());
+    let num_quotient_chunks = 1 << (log_num_quotient_chunks + config.is_zk());
 
     // Initialize the PCS and the Challenger.
     let pcs = config.pcs();
@@ -200,7 +200,7 @@ where
     // This domain must be contained in the domain over which `trace_data` is defined.
     // Explicitly it should be equal to `gK` for some subgroup `K` contained in `H'`.
     let quotient_domain =
-        ext_trace_domain.create_disjoint_domain(1 << (log_ext_degree + log_quotient_degree));
+        ext_trace_domain.create_disjoint_domain(1 << (log_ext_degree + log_num_quotient_chunks));
 
     // Return a the subset of the extended trace `ET` corresponding to the rows giving evaluations
     // over the quotient domain.
@@ -254,7 +254,7 @@ where
     //      quotient_data contains the entire tree.
     //          - quotient_data.leaves is a pair of matrices containing the `q_i0(x)` and `q_i1(x)`.
     let (quotient_commit, quotient_data) = info_span!("commit to quotient poly chunks")
-        .in_scope(|| pcs.commit_quotient(quotient_domain, quotient_flat, quotient_degree));
+        .in_scope(|| pcs.commit_quotient(quotient_domain, quotient_flat, num_quotient_chunks));
     challenger.observe(quotient_commit.clone());
 
     // If zk is enabled, we generate random extension field values of the size of the randomized trace. If `n` is the degree of the initial trace,
@@ -306,7 +306,7 @@ where
     let (opened_values, opening_proof) = info_span!("open").in_scope(|| {
         let round0 = opt_r_data.as_ref().map(|r_data| (r_data, vec![vec![zeta]]));
         let round1 = (&trace_data, vec![vec![zeta, zeta_next]]);
-        let round2 = (&quotient_data, vec![vec![zeta]; quotient_degree]); // open every chunk at zeta
+        let round2 = (&quotient_data, vec![vec![zeta]; num_quotient_chunks]); // open every chunk at zeta
         let round3 = preprocessed_data_ref.map(|data| (data, vec![vec![zeta, zeta_next]]));
 
         let rounds = round0
@@ -373,7 +373,7 @@ where
     prove_with_preprocessed::<SC, A>(config, air, trace, public_values, None)
 }
 
-#[instrument(name = "compute quotient polynomial", skip_all)]
+#[instrument(skip_all)]
 // TODO: Group some arguments to remove the `allow`?
 #[allow(clippy::too_many_arguments)]
 pub fn quotient_values<SC, A, Mat>(
