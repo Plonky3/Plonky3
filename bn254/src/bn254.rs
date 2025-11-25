@@ -508,7 +508,7 @@ impl TwoAdicField for Bn254 {
 
 #[cfg(test)]
 mod tests {
-    use p3_field_testing::{test_field, test_prime_field};
+    use p3_field_testing::{test_field, test_field_json_serialization, test_prime_field};
 
     use super::*;
 
@@ -557,28 +557,7 @@ mod tests {
         let f_r_minus_1 = F::NEG_ONE;
         let f_r_minus_2 = F::NEG_ONE + F::NEG_ONE;
 
-        let f_serialized = serde_json::to_string(&f_100).unwrap();
-        let f_deserialized: F = serde_json::from_str(&f_serialized).unwrap();
-        assert_eq!(f_100, f_deserialized);
-
-        let f_1_serialized = serde_json::to_string(&f_1).unwrap();
-        let f_1_deserialized: F = serde_json::from_str(&f_1_serialized).unwrap();
-        let f_1_serialized_again = serde_json::to_string(&f_1_deserialized).unwrap();
-        let f_1_deserialized_again: F = serde_json::from_str(&f_1_serialized_again).unwrap();
-        assert_eq!(f_1, f_1_deserialized);
-        assert_eq!(f_1, f_1_deserialized_again);
-
-        let f_2_serialized = serde_json::to_string(&f_2).unwrap();
-        let f_2_deserialized: F = serde_json::from_str(&f_2_serialized).unwrap();
-        assert_eq!(f_2, f_2_deserialized);
-
-        let f_r_minus_1_serialized = serde_json::to_string(&f_r_minus_1).unwrap();
-        let f_r_minus_1_deserialized: F = serde_json::from_str(&f_r_minus_1_serialized).unwrap();
-        assert_eq!(f_r_minus_1, f_r_minus_1_deserialized);
-
-        let f_r_minus_2_serialized = serde_json::to_string(&f_r_minus_2).unwrap();
-        let f_r_minus_2_deserialized: F = serde_json::from_str(&f_r_minus_2_serialized).unwrap();
-        assert_eq!(f_r_minus_2, f_r_minus_2_deserialized);
+        test_field_json_serialization(&[f_100, f_1, f_2, f_r_minus_1, f_r_minus_2]);
     }
 
     const ZERO: Bn254 = Bn254::ZERO;

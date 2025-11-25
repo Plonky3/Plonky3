@@ -210,6 +210,7 @@ mod tests {
 
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
     use p3_goldilocks::Goldilocks;
     use p3_symmetric::Permutation;
 
@@ -220,6 +221,8 @@ mod tests {
     const RATE: usize = 16;
 
     type G = Goldilocks;
+    type EF2G = BinomialExtensionField<G, 2>;
+
     type BB = BabyBear;
 
     #[derive(Clone)]
@@ -470,5 +473,66 @@ mod tests {
 
         // Output buffer should match expected state from duplexing
         assert_eq!(chal.output_buffer, expected_output);
+    }
+
+    #[test]
+    fn test_observe_base_as_algebra_element_consistency_with_direct_observe() {
+        // Create two identical challengers to verify behavior equivalence
+        let mut chal1 =
+            DuplexChallenger::<G, TestPermutation, WIDTH, RATE>::new(TestPermutation {});
+        let mut chal2 =
+            DuplexChallenger::<G, TestPermutation, WIDTH, RATE>::new(TestPermutation {});
+
+        let base_val = G::from_u8(99);
+
+        // Method 1: Use the convenience method for base-to-extension observation
+        chal1.observe_base_as_algebra_element::<EF2G>(base_val);
+
+        // Method 2: Manually convert to extension field then observe
+        let ext_val = EF2G::from(base_val);
+        chal2.observe_algebra_element(ext_val);
+
+        // Both methods must produce identical internal state
+        assert_eq!(chal1.input_buffer, chal2.input_buffer);
+        assert_eq!(chal1.output_buffer, chal2.output_buffer);
+        assert_eq!(chal1.sponge_state, chal2.sponge_state);
+    }
+
+    #[test]
+    fn test_observe_base_as_algebra_element_stream_consistency() {
+        // Create two identical challengers for stream observation test
+        let mut chal1 =
+            DuplexChallenger::<G, TestPermutation, WIDTH, RATE>::new(TestPermutation {});
+        let mut chal2 =
+            DuplexChallenger::<G, TestPermutation, WIDTH, RATE>::new(TestPermutation {});
+
+        // Define a base value vector
+        let base_values: Vec<_> = (0u8..25).map(G::from_u8).collect();
+
+        // Method 1: Observe stream using convenience method
+        for &val in &base_values {
+            chal1.observe_base_as_algebra_element::<EF2G>(val);
+        }
+
+        // Method 2: Manually convert each element before observing
+        for &val in &base_values {
+            let ext_val = EF2G::from(val);
+            chal2.observe_algebra_element(ext_val);
+        }
+
+        // Verify identical state through sequential observations and duplexing.
+        assert_eq!(chal1.input_buffer, chal2.input_buffer);
+        assert_eq!(chal1.output_buffer, chal2.output_buffer);
+        assert_eq!(chal1.sponge_state, chal2.sponge_state);
+
+        // Verify sampling produces identical challenges
+        let sample1: EF2G = chal1.sample_algebra_element();
+        let sample2: EF2G = chal2.sample_algebra_element();
+        assert_eq!(sample1, sample2);
+
+        // Verify state consistency is maintained after sampling
+        assert_eq!(chal1.input_buffer, chal2.input_buffer);
+        assert_eq!(chal1.output_buffer, chal2.output_buffer);
+        assert_eq!(chal1.sponge_state, chal2.sponge_state);
     }
 }

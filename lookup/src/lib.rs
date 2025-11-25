@@ -4,6 +4,7 @@
 
 extern crate alloc;
 
+pub mod folder;
 pub mod logup;
 pub mod lookup_traits;
 #[cfg(test)]

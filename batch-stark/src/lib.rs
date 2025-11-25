@@ -17,6 +17,8 @@
 
 extern crate alloc;
 
+#[cfg(debug_assertions)]
+mod check_constraints;
 pub mod common;
 pub mod config;
 pub mod proof;
