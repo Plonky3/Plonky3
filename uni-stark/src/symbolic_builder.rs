@@ -73,7 +73,7 @@ where
 }
 
 #[instrument(
-    name = "infer base and extensionconstraint degree",
+    name = "infer base and extension constraint degree",
     skip_all,
     level = "debug"
 )]
@@ -89,7 +89,7 @@ where
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
 {
-    let (base_constraints, extension_constraints) = get_all_symbolic_constraints::<F, EF, A>(
+    let (base_constraints, extension_constraints) = get_all_symbolic_constraints(
         air,
         preprocessed_width,
         num_public_values,

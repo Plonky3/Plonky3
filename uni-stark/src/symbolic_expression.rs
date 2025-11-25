@@ -3,24 +3,23 @@ use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-// We only need the generic definitions from p3_field
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Algebra, ExtensionField, Field, InjectiveMonomial, PrimeCharacteristicRing};
 
 use crate::symbolic_variable::SymbolicVariable;
 
-/// Generic implementation for ANY field F using a BinomialExtensionField.
-/// This works for BabyBear, KoalaBear, Mersenne31, and any future field
-/// without modifying this crate.
-///
-/// Since `BinomialExtensionField<F, D>` is always a distinct type from `F`,
-/// this implementation doesn't conflict with the blanket `From<T> for T`.
 impl<F, const D: usize> From<SymbolicExpression<F>>
     for SymbolicExpression<BinomialExtensionField<F, D>>
 where
     F: Field,
     BinomialExtensionField<F, D>: ExtensionField<F>,
 {
+    /// Generic implementation for ANY field F using a BinomialExtensionField.
+    /// This works for BabyBear, KoalaBear, Mersenne31, and any future field
+    /// without modifying this crate.
+    ///
+    /// Since `BinomialExtensionField<F, D>` is always a distinct type from `F`,
+    /// this implementation doesn't conflict with the blanket `From<T> for T`.
     fn from(expr: SymbolicExpression<F>) -> Self {
         match expr {
             SymbolicExpression::Variable(v) => {
@@ -128,7 +127,7 @@ impl<F: Field> Default for SymbolicExpression<F> {
 
 impl<F: Field, EF: ExtensionField<F>> From<SymbolicVariable<F>> for SymbolicExpression<EF> {
     fn from(var: SymbolicVariable<F>) -> Self {
-        Self::Variable(SymbolicVariable::<EF>::new(var.entry, var.index))
+        Self::Variable(SymbolicVariable::new(var.entry, var.index))
     }
 }
 
