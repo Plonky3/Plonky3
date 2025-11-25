@@ -333,7 +333,7 @@ where
 /// 2. Double round-trip serialization is consistent
 pub fn test_field_json_serialization<F>(values: &[F])
 where
-    F: Field + Serialize + DeserializeOwned + Eq,
+    F: PrimeCharacteristicRing + Serialize + DeserializeOwned + Eq,
 {
     for value in values {
         // Single round-trip
