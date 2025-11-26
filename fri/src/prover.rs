@@ -86,7 +86,7 @@ where
 
     // Produce a proof of work witness before receiving any query challenges.
     // This helps to prevent grinding attacks.
-    let pow_witness = challenger.grind(params.proof_of_work_bits);
+    let pow_witness = challenger.grind(params.query_proof_of_work_bits);
 
     let query_proofs = info_span!("query phase").in_scope(|| {
         // Sample num_queries indexes to check.
@@ -122,15 +122,17 @@ where
 
     FriProof {
         commit_phase_commits: commit_phase_result.commits,
+        commit_pow_witnesses: commit_phase_result.pow_witnesses,
         query_proofs,
         final_poly: commit_phase_result.final_poly,
-        pow_witness,
+        query_pow_witness: pow_witness,
     }
 }
 
-struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
+struct CommitPhaseResult<F: Field, M: Mmcs<F>, Witness> {
     commits: Vec<M::Commitment>,
     data: Vec<M::ProverData<RowMajorMatrix<F>>>,
+    pow_witnesses: Vec<Witness>,
     final_poly: Vec<F>,
 }
 
@@ -158,18 +160,19 @@ fn commit_phase<Folding, Val, Challenge, M, Challenger>(
     params: &FriParameters<M>,
     inputs: Vec<Vec<Challenge>>,
     challenger: &mut Challenger,
-) -> CommitPhaseResult<Challenge, M>
+) -> CommitPhaseResult<Challenge, M, <Challenger as GrindingChallenger>::Witness>
 where
     Val: TwoAdicField,
     Challenge: ExtensionField<Val>,
     M: Mmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + CanObserve<M::Commitment>,
+    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
     Folding: FriFoldingStrategy<Val, Challenge>,
 {
     let mut inputs_iter = inputs.into_iter().peekable();
     let mut folded = inputs_iter.next().unwrap();
     let mut commits = vec![];
     let mut data = vec![];
+    let mut pow_witnesses = vec![];
 
     while folded.len() > params.blowup() * params.final_poly_len() {
         // As folded is in bit reversed order, it looks like:
@@ -181,6 +184,11 @@ where
         let (commit, prover_data) = params.mmcs.commit_matrix(leaves);
         challenger.observe(commit.clone());
         commits.push(commit);
+
+        // Produce a proof of work witness after observing the commitment and
+        // before the Fiat-Shamir batching challenge.
+        let pow_witness = challenger.grind(params.commit_proof_of_work_bits);
+        pow_witnesses.push(pow_witness);
 
         // Get the Fiat-Shamir challenge for this round.
         let beta: Challenge = challenger.sample_algebra_element();
@@ -218,6 +226,7 @@ where
     CommitPhaseResult {
         commits,
         data,
+        pow_witnesses,
         final_poly,
     }
 }
