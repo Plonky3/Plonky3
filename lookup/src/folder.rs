@@ -71,7 +71,9 @@ impl<SC: StarkGenericConfig> AirBuilderWithPublicValues
 
 impl<SC: StarkGenericConfig> PairBuilder for ProverConstraintFolderWithLookups<'_, SC> {
     fn preprocessed(&self) -> Self::M {
-        unimplemented!()
+        self.inner
+            .preprocessed
+            .map_or_else(|| panic!("Missing preprocessed columns"), |prep| prep)
     }
 }
 
@@ -168,7 +170,9 @@ impl<SC: StarkGenericConfig> AirBuilderWithPublicValues
 
 impl<SC: StarkGenericConfig> PairBuilder for VerifierConstraintFolderWithLookups<'_, SC> {
     fn preprocessed(&self) -> Self::M {
-        unimplemented!()
+        self.inner
+            .preprocessed
+            .map_or_else(|| panic!("Missing preprocessed columns"), |prep| prep)
     }
 }
 

@@ -131,6 +131,7 @@ pub trait LookupGadget {
     fn generate_permutation<SC: StarkGenericConfig>(
         &self,
         main: &RowMajorMatrix<Val<SC>>,
+        preprocessed: &Option<RowMajorMatrix<Val<SC>>>,
         public_values: &[Val<SC>],
         lookups: &[Lookup<Val<SC>>],
         lookup_data: &mut [LookupData<SC::Challenge>],
@@ -277,6 +278,7 @@ where
 /// A builder to generate the lookup traces, given the main trace, public values and permutation challenges.
 pub struct LookupTraceBuilder<'a, SC: StarkGenericConfig> {
     main: ViewPair<'a, Val<SC>>,
+    preprocessed: Option<ViewPair<'a, Val<SC>>>,
     public_values: &'a [Val<SC>],
     permutation_challenges: &'a [SC::Challenge],
     height: usize,
@@ -286,6 +288,7 @@ pub struct LookupTraceBuilder<'a, SC: StarkGenericConfig> {
 impl<'a, SC: StarkGenericConfig> LookupTraceBuilder<'a, SC> {
     pub const fn new(
         main: ViewPair<'a, Val<SC>>,
+        preprocessed: Option<ViewPair<'a, Val<SC>>>,
         public_values: &'a [Val<SC>],
         permutation_challenges: &'a [SC::Challenge],
         height: usize,
@@ -293,6 +296,7 @@ impl<'a, SC: StarkGenericConfig> LookupTraceBuilder<'a, SC> {
     ) -> Self {
         Self {
             main,
+            preprocessed,
             public_values,
             permutation_challenges,
             height,
@@ -355,7 +359,8 @@ impl<SC: StarkGenericConfig> AirBuilderWithPublicValues for LookupTraceBuilder<'
 
 impl<SC: StarkGenericConfig> PairBuilder for LookupTraceBuilder<'_, SC> {
     fn preprocessed(&self) -> Self::M {
-        unimplemented!()
+        self.preprocessed
+            .map_or_else(|| panic!("Missing preprocessed columns"), |prep| prep)
     }
 }
 
@@ -397,6 +402,15 @@ where
                 _ => panic!("Cannot have expressions involving more than two rows."),
             },
             Entry::Public => builder.public_values()[v.index].into(),
+            Entry::Preprocessed { offset } => match offset {
+                0 => builder.preprocessed().row_slice(0).unwrap()[v.index]
+                    .clone()
+                    .into(),
+                1 => builder.preprocessed().row_slice(1).unwrap()[v.index]
+                    .clone()
+                    .into(),
+                _ => panic!("Cannot have expressions involving more than two rows."),
+            },
             _ => unimplemented!("Entry type {:?} not supported in interactions", v.entry),
         },
         SymbolicExpression::IsFirstRow => {
@@ -440,6 +454,10 @@ impl<A> AirNoLookup<A> {
 impl<F, A: BaseAir<F>> BaseAir<F> for AirNoLookup<A> {
     fn width(&self) -> usize {
         self.air.width()
+    }
+
+    fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
+        self.air.preprocessed_trace()
     }
 }
 
@@ -502,6 +520,7 @@ impl LookupGadget for EmptyLookupGadget {
     fn generate_permutation<SC: StarkGenericConfig>(
         &self,
         _main: &RowMajorMatrix<Val<SC>>,
+        _preprocessed: &Option<RowMajorMatrix<Val<SC>>>,
         _public_values: &[Val<SC>],
         _lookups: &[Lookup<Val<SC>>],
         _lookup_data: &mut [LookupData<SC::Challenge>],

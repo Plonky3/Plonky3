@@ -35,6 +35,7 @@ type LookupConstraintsInputs<'a, F, EF, LG> = (&'a [Lookup<F>], &'a [LookupData<
 pub(crate) fn check_constraints<'b, F, EF, A, LG>(
     air: &A,
     main: &RowMajorMatrix<F>,
+    preprocessed: &Option<RowMajorMatrix<F>>,
     permutation: &RowMajorMatrix<EF>,
     permutation_challenges: &[EF],
     public_values: &[F],
@@ -55,10 +56,16 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
         // Safety:
         // - row_index < height so we can use unchecked indexing.
         // - row_index_next < height so we can use unchecked indexing.
-        let (local, next, perm_local, perm_next) = unsafe {
+        let (local, next, prep_local, prep_next, perm_local, perm_next) = unsafe {
             (
                 main.row_slice_unchecked(row_index),
                 main.row_slice_unchecked(row_index_next),
+                preprocessed
+                    .as_ref()
+                    .map(|p| p.row_slice_unchecked(row_index)),
+                preprocessed
+                    .as_ref()
+                    .map(|p| p.row_slice_unchecked(row_index_next)),
                 permutation.row_slice_unchecked(row_index),
                 permutation.row_slice_unchecked(row_index_next),
             )
@@ -68,6 +75,14 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
             RowMajorMatrixView::new_row(&*next),
         );
 
+        let preprocessed_rows_data = prep_local.as_ref().zip(prep_next.as_ref());
+        let preprocessed = preprocessed_rows_data.map(|(prep_local, prep_next)| {
+            VerticalPair::new(
+                RowMajorMatrixView::new_row(&**prep_local),
+                RowMajorMatrixView::new_row(&**prep_next),
+            )
+        });
+
         let permutation = VerticalPair::new(
             RowMajorMatrixView::new_row(&*perm_local),
             RowMajorMatrixView::new_row(&*perm_next),
@@ -76,6 +91,7 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
         let mut builder = DebugConstraintBuilderWithLookups {
             row_index,
             main,
+            preprocessed,
             permutation,
             permutation_challenges,
             public_values,
@@ -105,6 +121,8 @@ pub struct DebugConstraintBuilderWithLookups<'a, F: Field, EF: ExtensionField<F>
     row_index: usize,
     /// A view of the current and next row as a vertical pair.
     main: ViewPair<'a, F>,
+    /// A view of the current and next preprocessed row as a vertical pair.
+    preprocessed: Option<ViewPair<'a, F>>,
     /// The public values provided for constraint validation (e.g. inputs or outputs).
     public_values: &'a [F],
     /// A flag indicating whether this is the first row.
@@ -223,6 +241,7 @@ impl<'a, F: Field, EF: ExtensionField<F>> PairBuilder
     for DebugConstraintBuilderWithLookups<'a, F, EF>
 {
     fn preprocessed(&self) -> Self::M {
-        unimplemented!()
+        self.preprocessed
+            .map_or_else(|| panic!("Missing preprocessed columns"), |prep| prep)
     }
 }
