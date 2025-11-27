@@ -30,6 +30,7 @@ use p3_matrix::{Dimensions, Matrix};
 use p3_symmetric::{CryptographicHasher, Hash, PseudoCompressionFunction};
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::MerkleTree;
 use crate::MerkleTreeError::{
@@ -61,15 +62,18 @@ pub struct MerkleTreeMmcs<P, PW, H, C, const DIGEST_ELEMS: usize> {
 }
 
 /// Errors that may arise during Merkle tree commitment, opening, or verification.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum MerkleTreeError {
     /// The number of openings provided does not match the expected number.
+    #[error("wrong batch size: number of openings does not match expected")]
     WrongBatchSize,
 
     /// A matrix has a different width than expected.
+    #[error("wrong width: matrix has a different width than expected")]
     WrongWidth,
 
     /// The number of proof nodes does not match the expected tree height.
+    #[error("wrong height: expected log_max_height {log_max_height}, got {num_siblings} siblings")]
     WrongHeight {
         /// Expected log2 of the maximum matrix height.
         log_max_height: usize,
@@ -79,9 +83,11 @@ pub enum MerkleTreeError {
     },
 
     /// Matrix heights are incompatible; they cannot share a common binary Merkle tree.
+    #[error("incompatible heights: matrices cannot share a common binary Merkle tree")]
     IncompatibleHeights,
 
     /// The queried row index exceeds the maximum height.
+    #[error("index out of bounds: index {index} exceeds max height {max_height}")]
     IndexOutOfBounds {
         /// Maximum admissible height.
         max_height: usize,
@@ -90,9 +96,11 @@ pub enum MerkleTreeError {
     },
 
     /// The computed Merkle root does not match the provided commitment.
+    #[error("root mismatch: computed Merkle root does not match commitment")]
     RootMismatch,
 
     /// Attempted to open an empty batch (no committed matrices).
+    #[error("empty batch: attempted to open an empty batch with no committed matrices")]
     EmptyBatch,
 }
 

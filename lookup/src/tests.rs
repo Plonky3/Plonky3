@@ -627,7 +627,8 @@ fn test_range_check_end_to_end_valid() {
         .row(aux_trace.height() - 1)
         .unwrap()
         .into_iter()
-        .collect::<Vec<EF>>()[0];
+        .next()
+        .unwrap();
     let last_row_data = main_trace
         .row(main_trace.height() - 1)
         .unwrap()
@@ -843,7 +844,8 @@ fn test_zero_multiplicity_is_not_counted() {
         .row(main_trace.height() - 1)
         .unwrap()
         .into_iter()
-        .collect::<Vec<EF>>()[0];
+        .next()
+        .unwrap();
     assert_ne!(final_s, EF::ZERO);
 
     // Evaluate constraints
@@ -939,7 +941,8 @@ fn test_nontrivial_permutation() {
         .row(aux_trace.height() - 1)
         .unwrap()
         .into_iter()
-        .collect::<Vec<EF>>()[0];
+        .next()
+        .unwrap();
     let last_row_data = main_trace
         .row(main_trace.height() - 1)
         .unwrap()
@@ -1237,7 +1240,8 @@ fn test_tuple_lookup() {
         .row(aux_trace.height() - 1)
         .unwrap()
         .into_iter()
-        .collect::<Vec<EF>>()[0];
+        .next()
+        .unwrap();
     let last_row_data = main_trace
         .row(main_trace.height() - 1)
         .unwrap()

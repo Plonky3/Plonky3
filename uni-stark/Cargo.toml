@@ -21,6 +21,7 @@ p3-util.workspace = true
 
 itertools.workspace = true
 serde = { workspace = true, features = ["derive", "alloc"] }
+thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
