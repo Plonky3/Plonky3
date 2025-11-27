@@ -12,6 +12,7 @@ categories.workspace = true
 [dependencies]
 p3-field.workspace = true
 p3-maybe-rayon.workspace = true
+p3-monty-31.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
 
