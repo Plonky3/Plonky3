@@ -20,7 +20,7 @@ use crate::generate_trace_rows;
 pub struct KeccakAir {}
 
 impl KeccakAir {
-    pub fn generate_trace_rows<F: PrimeField64>(
+    pub fn generate_trace_rows<F: PrimeField64, I: IntoIterator<Item = [u64; 25]>>(
         &self,
         num_hashes: usize,
         extra_capacity_bits: usize,
