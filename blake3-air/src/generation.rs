@@ -11,12 +11,12 @@ use crate::columns::{Blake3Cols, NUM_BLAKE3_COLS};
 use crate::constants::{IV, permute};
 use crate::{Blake3State, FullRound};
 
-// TODO: Take generic iterable
 #[instrument(name = "generate Blake3 trace", skip_all)]
-pub fn generate_trace_rows<F: PrimeField64>(
-    inputs: Vec<[u32; 24]>,
+pub fn generate_trace_rows<F: PrimeField64, I: IntoIterator<Item = [u32; 24]>>(
+    inputs: I,
     extra_capacity_bits: usize,
 ) -> RowMajorMatrix<F> {
+    let inputs: Vec<[u32; 24]> = inputs.into_iter().collect();
     let num_rows = inputs.len();
     assert!(
         num_rows.is_power_of_two(),
