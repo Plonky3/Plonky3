@@ -68,37 +68,107 @@ where
     }
 }
 
-/// An expression over `SymbolicVariable`s.
+/// A symbolic expression tree representing AIR constraint computations.
+///
+/// This enum forms an Abstract Syntax Tree (AST) for constraint expressions.
+///
+/// Each node represents either:
+/// - A leaf value (variable, constant, selector) or
+/// - An arithmetic operation combining sub-expressions.
 #[derive(Clone, Debug)]
 pub enum SymbolicExpression<F> {
+    /// A reference to a trace column or public input.
+    ///
+    /// Wraps a [`SymbolicVariable`] that identifies which column and row offset.
     Variable(SymbolicVariable<F>),
+
+    /// Selector that is:
+    /// - 1 on the first row,
+    /// - 0 elsewhere.
+    ///
+    /// Evaluates to `L_0(x)`, the Lagrange basis polynomial for index 0.
     IsFirstRow,
+
+    /// Selector that is:
+    /// - 1 on the last row,
+    /// - 0 elsewhere.
+    ///
+    /// Evaluates to `L_{n-1}(x)`, the Lagrange basis polynomial for the last index.
     IsLastRow,
+
+    /// Selector that is:
+    /// - 1 on all rows except the last,
+    /// - 0 on the last row.
+    ///
+    /// Used for transition constraints that should not apply on the final row.
     IsTransition,
+
+    /// A constant field element.
     Constant(F),
+
+    /// Addition of two sub-expressions.
     Add {
+        /// Left operand.
         x: Arc<Self>,
+        /// Right operand.
         y: Arc<Self>,
+        /// Cached degree multiple: `max(x.degree_multiple, y.degree_multiple)`.
         degree_multiple: usize,
     },
+
+    /// Subtraction of two sub-expressions.
     Sub {
+        /// Left operand (minuend).
         x: Arc<Self>,
+        /// Right operand (subtrahend).
         y: Arc<Self>,
+        /// Cached degree multiple: `max(x.degree_multiple, y.degree_multiple)`.
         degree_multiple: usize,
     },
+
+    /// Negation of a sub-expression.
     Neg {
+        /// The expression to negate.
         x: Arc<Self>,
+        /// Cached degree multiple: same as `x.degree_multiple`.
         degree_multiple: usize,
     },
+
+    /// Multiplication of two sub-expressions.
     Mul {
+        /// Left operand.
         x: Arc<Self>,
+        /// Right operand.
         y: Arc<Self>,
+        /// Cached degree multiple: `x.degree_multiple + y.degree_multiple`.
         degree_multiple: usize,
     },
 }
 
 impl<F> SymbolicExpression<F> {
-    /// Returns the multiple of `n` (the trace length) in this expression's degree.
+    /// Returns the degree multiple of this expression.
+    ///
+    /// The degree multiple represents how many times the trace length `n`
+    /// appears in the expression's polynomial degree. This determines:
+    /// - The quotient polynomial's degree
+    /// - The required FRI blowup factor
+    ///
+    /// # Degree Rules
+    ///
+    /// Degree 0 (constants):
+    /// - `Constant`
+    /// - `IsTransition`
+    /// - `Variable` with public values or challenges
+    ///
+    /// Degree 1 (linear in trace length):
+    /// - `Variable` with trace columns (main, preprocessed, permutation)
+    /// - `IsFirstRow`
+    /// - `IsLastRow`
+    ///
+    /// Composite expressions:
+    /// - `Add`, `Sub`: max of operands
+    /// - `Neg`: same as operand
+    /// - `Mul`: sum of operands
     pub const fn degree_multiple(&self) -> usize {
         match self {
             Self::Variable(v) => v.degree_multiple(),
@@ -128,7 +198,7 @@ impl<F: Field> Default for SymbolicExpression<F> {
 
 impl<F: Field, EF: ExtensionField<F>> From<SymbolicVariable<F>> for SymbolicExpression<EF> {
     fn from(var: SymbolicVariable<F>) -> Self {
-        Self::Variable(SymbolicVariable::<EF>::new(var.entry, var.index))
+        Self::Variable(SymbolicVariable::new(var.entry, var.index))
     }
 }
 
@@ -271,6 +341,7 @@ impl<F: Field, T: Into<Self>> Product<T> for SymbolicExpression<F> {
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+    use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
 
@@ -533,5 +604,275 @@ mod tests {
             SymbolicExpression::Constant(val) => assert_eq!(val, BabyBear::new(24)),
             _ => panic!("Product did not produce correct result"),
         }
+    }
+
+    #[test]
+    fn test_default_is_zero() {
+        // Default should produce ZERO constant.
+        let expr: SymbolicExpression<BabyBear> = Default::default();
+
+        // Verify it matches the zero constant.
+        assert!(matches!(
+            expr,
+            SymbolicExpression::Constant(c) if c == BabyBear::ZERO
+        ));
+    }
+
+    #[test]
+    fn test_ring_constants() {
+        // ZERO is a Constant variant wrapping the field's zero element.
+        assert!(matches!(
+            SymbolicExpression::<BabyBear>::ZERO,
+            SymbolicExpression::Constant(c) if c == BabyBear::ZERO
+        ));
+
+        // ONE is a Constant variant wrapping the field's one element.
+        assert!(matches!(
+            SymbolicExpression::<BabyBear>::ONE,
+            SymbolicExpression::Constant(c) if c == BabyBear::ONE
+        ));
+
+        // TWO is a Constant variant wrapping the field's two element.
+        assert!(matches!(
+            SymbolicExpression::<BabyBear>::TWO,
+            SymbolicExpression::Constant(c) if c == BabyBear::TWO
+        ));
+
+        // NEG_ONE is a Constant variant wrapping the field's -1 element.
+        assert!(matches!(
+            SymbolicExpression::<BabyBear>::NEG_ONE,
+            SymbolicExpression::Constant(c) if c == BabyBear::NEG_ONE
+        ));
+    }
+
+    #[test]
+    fn test_from_symbolic_variable() {
+        // Create a main trace variable at column index 3.
+        let var = SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 0 }, 3);
+
+        // Convert to expression.
+        let expr: SymbolicExpression<BabyBear> = var.into();
+
+        // Verify the variable is preserved with correct entry and index.
+        match expr {
+            SymbolicExpression::Variable(v) => {
+                assert!(matches!(v.entry, Entry::Main { offset: 0 }));
+                assert_eq!(v.index, 3);
+            }
+            _ => panic!("Expected Variable variant"),
+        }
+    }
+
+    #[test]
+    fn test_from_field_element() {
+        // Convert a field element directly to expression.
+        let field_val = BabyBear::new(42);
+        let expr: SymbolicExpression<BabyBear> = field_val.into();
+
+        // Verify it becomes a Constant with the same value.
+        assert!(matches!(
+            expr,
+            SymbolicExpression::Constant(c) if c == field_val
+        ));
+    }
+
+    #[test]
+    fn test_from_prime_subfield() {
+        // Create expression from prime subfield element.
+        let prime_subfield_val = <BabyBear as PrimeCharacteristicRing>::PrimeSubfield::new(7);
+        let expr = SymbolicExpression::<BabyBear>::from_prime_subfield(prime_subfield_val);
+
+        // Verify it produces a constant with the converted value.
+        assert!(matches!(
+            expr,
+            SymbolicExpression::Constant(c) if c == BabyBear::new(7)
+        ));
+    }
+
+    #[test]
+    fn test_assign_operators() {
+        // Test AddAssign with constants (should simplify).
+        let mut expr = SymbolicExpression::Constant(BabyBear::new(5));
+        expr += SymbolicExpression::Constant(BabyBear::new(3));
+        assert!(matches!(
+            expr,
+            SymbolicExpression::Constant(c) if c == BabyBear::new(8)
+        ));
+
+        // Test SubAssign with constants (should simplify).
+        let mut expr = SymbolicExpression::Constant(BabyBear::new(10));
+        expr -= SymbolicExpression::Constant(BabyBear::new(4));
+        assert!(matches!(
+            expr,
+            SymbolicExpression::Constant(c) if c == BabyBear::new(6)
+        ));
+
+        // Test MulAssign with constants (should simplify).
+        let mut expr = SymbolicExpression::Constant(BabyBear::new(6));
+        expr *= SymbolicExpression::Constant(BabyBear::new(7));
+        assert!(matches!(
+            expr,
+            SymbolicExpression::Constant(c) if c == BabyBear::new(42)
+        ));
+    }
+
+    #[test]
+    fn test_subtraction_creates_sub_node() {
+        // Create two trace variables.
+        let a = SymbolicExpression::Variable::<BabyBear>(SymbolicVariable::new(
+            Entry::Main { offset: 0 },
+            0,
+        ));
+        let b = SymbolicExpression::Variable::<BabyBear>(SymbolicVariable::new(
+            Entry::Main { offset: 0 },
+            1,
+        ));
+
+        // Subtract them.
+        let result = a - b;
+
+        // Should create Sub node (not simplified).
+        match result {
+            SymbolicExpression::Sub {
+                x,
+                y,
+                degree_multiple,
+            } => {
+                // Both operands have degree 1, so max is 1.
+                assert_eq!(degree_multiple, 1);
+
+                // Verify left operand is main trace variable at index 0, offset 0.
+                assert!(matches!(
+                    x.as_ref(),
+                    SymbolicExpression::Variable(v)
+                        if v.index == 0 && matches!(v.entry, Entry::Main { offset: 0 })
+                ));
+
+                // Verify right operand is main trace variable at index 1, offset 0.
+                assert!(matches!(
+                    y.as_ref(),
+                    SymbolicExpression::Variable(v)
+                        if v.index == 1 && matches!(v.entry, Entry::Main { offset: 0 })
+                ));
+            }
+            _ => panic!("Expected Sub variant"),
+        }
+    }
+
+    #[test]
+    fn test_negation_creates_neg_node() {
+        // Create a trace variable.
+        let var = SymbolicExpression::Variable::<BabyBear>(SymbolicVariable::new(
+            Entry::Main { offset: 0 },
+            0,
+        ));
+
+        // Negate it.
+        let result = -var;
+
+        // Should create Neg node (not simplified).
+        match result {
+            SymbolicExpression::Neg { x, degree_multiple } => {
+                // Degree is preserved from operand.
+                assert_eq!(degree_multiple, 1);
+
+                // Verify operand is main trace variable at index 0, offset 0.
+                assert!(matches!(
+                    x.as_ref(),
+                    SymbolicExpression::Variable(v)
+                        if v.index == 0 && matches!(v.entry, Entry::Main { offset: 0 })
+                ));
+            }
+            _ => panic!("Expected Neg variant"),
+        }
+    }
+
+    #[test]
+    fn test_empty_sum_returns_zero() {
+        // Sum of empty iterator should be additive identity.
+        let empty: Vec<SymbolicExpression<BabyBear>> = vec![];
+        let result: SymbolicExpression<BabyBear> = empty.into_iter().sum();
+
+        assert!(matches!(
+            result,
+            SymbolicExpression::Constant(c) if c == BabyBear::ZERO
+        ));
+    }
+
+    #[test]
+    fn test_empty_product_returns_one() {
+        // Product of empty iterator should be multiplicative identity.
+        let empty: Vec<SymbolicExpression<BabyBear>> = vec![];
+        let result: SymbolicExpression<BabyBear> = empty.into_iter().product();
+
+        assert!(matches!(
+            result,
+            SymbolicExpression::Constant(c) if c == BabyBear::ONE
+        ));
+    }
+
+    #[test]
+    fn test_mixed_degree_addition() {
+        // Constant has degree 0.
+        let constant = SymbolicExpression::Constant(BabyBear::new(5));
+
+        // Variable has degree 1.
+        let var = SymbolicExpression::Variable::<BabyBear>(SymbolicVariable::new(
+            Entry::Main { offset: 0 },
+            0,
+        ));
+
+        // Add them: max(0, 1) = 1.
+        let result = constant + var;
+
+        match result {
+            SymbolicExpression::Add {
+                x,
+                y,
+                degree_multiple,
+            } => {
+                // Degree is max(0, 1) = 1.
+                assert_eq!(degree_multiple, 1);
+
+                // Verify left operand is the constant 5.
+                assert!(matches!(
+                    x.as_ref(),
+                    SymbolicExpression::Constant(c) if *c == BabyBear::new(5)
+                ));
+
+                // Verify right operand is main trace variable at index 0, offset 0.
+                assert!(matches!(
+                    y.as_ref(),
+                    SymbolicExpression::Variable(v)
+                        if v.index == 0 && matches!(v.entry, Entry::Main { offset: 0 })
+                ));
+            }
+            _ => panic!("Expected Add variant"),
+        }
+    }
+
+    #[test]
+    fn test_chained_multiplication_degree() {
+        // Create three variables, each with degree 1.
+        let a = SymbolicExpression::Variable::<BabyBear>(SymbolicVariable::new(
+            Entry::Main { offset: 0 },
+            0,
+        ));
+        let b = SymbolicExpression::Variable::<BabyBear>(SymbolicVariable::new(
+            Entry::Main { offset: 0 },
+            1,
+        ));
+        let c = SymbolicExpression::Variable::<BabyBear>(SymbolicVariable::new(
+            Entry::Main { offset: 0 },
+            2,
+        ));
+
+        // a * b has degree 1 + 1 = 2.
+        let ab = a * b;
+        assert_eq!(ab.degree_multiple(), 2);
+
+        // (a * b) * c has degree 2 + 1 = 3.
+        let abc = ab * c;
+        assert_eq!(abc.degree_multiple(), 3);
     }
 }
