@@ -40,7 +40,7 @@ where
 
     let commit_phase_result = commit_phase(folding, params, inputs, challenger);
 
-    let pow_witness = challenger.grind(params.proof_of_work_bits);
+    let pow_witness = challenger.grind(params.query_proof_of_work_bits);
 
     let query_proofs = info_span!("query phase").in_scope(|| {
         iter::repeat_with(|| {
