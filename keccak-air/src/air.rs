@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::array;
 use core::borrow::Borrow;
 
@@ -24,7 +25,7 @@ impl KeccakAir {
         extra_capacity_bits: usize,
     ) -> RowMajorMatrix<F> {
         let mut rng = SmallRng::seed_from_u64(1);
-        let inputs = (0..num_hashes).map(|_| rng.random()).collect();
+        let inputs = (0..num_hashes).map(|_| rng.random()).collect()::<Vec<_>>();;
         generate_trace_rows(inputs, extra_capacity_bits)
     }
 }
