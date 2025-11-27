@@ -71,21 +71,22 @@ pub fn generate_vectorized_trace_rows<
     RowMajorMatrix::new(vec, ncols)
 }
 
-// TODO: Take generic iterable
 #[instrument(name = "generate Poseidon2 trace", skip_all)]
 pub fn generate_trace_rows<
     F: PrimeField,
     LinearLayers: GenericPoseidon2LinearLayers<WIDTH>,
+    I: IntoIterator<Item = [F; WIDTH]>,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
     const HALF_FULL_ROUNDS: usize,
     const PARTIAL_ROUNDS: usize,
 >(
-    inputs: Vec<[F; WIDTH]>,
+    inputs: I,
     constants: &RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
     extra_capacity_bits: usize,
 ) -> RowMajorMatrix<F> {
+    let inputs: Vec<[F; WIDTH]> = inputs.into_iter().collect();
     let n = inputs.len();
     assert!(
         n.is_power_of_two(),
