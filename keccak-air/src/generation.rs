@@ -12,12 +12,12 @@ use tracing::instrument;
 use crate::columns::{KeccakCols, NUM_KECCAK_COLS};
 use crate::{NUM_ROUNDS, R, RC, U64_LIMBS};
 
-// TODO: Take generic iterable
 #[instrument(name = "generate Keccak trace", skip_all)]
-pub fn generate_trace_rows<F: PrimeField64>(
-    inputs: Vec<[u64; 25]>,
+pub fn generate_trace_rows<F: PrimeField64, I: IntoIterator<Item = [u64; 25]>>(
+    inputs: I,
     extra_capacity_bits: usize,
 ) -> RowMajorMatrix<F> {
+    let inputs: Vec<[u64; 25]> = inputs.into_iter().collect();
     let num_rows = (inputs.len() * NUM_ROUNDS).next_power_of_two();
     let trace_length = num_rows * NUM_KECCAK_COLS;
 
