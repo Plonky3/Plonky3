@@ -25,7 +25,7 @@ impl KeccakAir {
         extra_capacity_bits: usize,
     ) -> RowMajorMatrix<F> {
         let mut rng = SmallRng::seed_from_u64(1);
-        let inputs = Vec<[u64; 25]> = (0..num_hashes).map(|_| rng.random()).collect();
+        let inputs: Vec<u64> = (0..num_hashes).map(|_| rng.random()).collect();
         generate_trace_rows(inputs, extra_capacity_bits)
     }
 }
