@@ -71,6 +71,7 @@ where
     unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
         unsafe {
             // Safety: The caller must ensure that `c < self.width()` and `r < self.height()`.
+            //
             // We translate the column index by adding `column_range.start`.
             self.inner.get_unchecked(r, self.column_range.start + c)
         }
