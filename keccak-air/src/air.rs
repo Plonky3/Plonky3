@@ -12,7 +12,8 @@ use rand::{Rng, SeedableRng};
 use crate::columns::{KeccakCols, NUM_KECCAK_COLS};
 use crate::constants::rc_value_bit;
 use crate::round_flags::eval_round_flags;
-use crate::{BITS_PER_LIMB, NUM_ROUNDS, NUM_ROUNDS_MIN_1, U64_LIMBS, generate_trace_rows};
+use crate::{BITS_PER_LIMB, NUM_ROUNDS, NUM_ROUNDS_MIN_1, U64_LIMBS};
+use crate::generate_trace_rows;
 
 /// Assumes the field size is at least 16 bits.
 #[derive(Debug)]
@@ -25,7 +26,7 @@ impl KeccakAir {
         extra_capacity_bits: usize,
     ) -> RowMajorMatrix<F> {
         let mut rng = SmallRng::seed_from_u64(1);
-        let inputs: Vec<u64> = (0..num_hashes).map(|_| rng.random()).collect();
+        let inputs: Vec<[u64; 25]> = (0..num_hashes).map(|_| rng.random()).collect();
         generate_trace_rows(inputs, extra_capacity_bits)
     }
 }
