@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::borrow::Borrow;
 use core::marker::PhantomData;
 
@@ -68,10 +69,11 @@ impl<
         StandardUniform: Distribution<[F; WIDTH]>,
     {
         let mut rng = SmallRng::seed_from_u64(1);
-        let inputs = (0..num_hashes).map(|_| rng.random()).collect();
+        let inputs: Vec<[F; WIDTH]> = (0..num_hashes).map(|_| rng.random()).collect();
         generate_trace_rows::<
-            _,
+            F,
             LinearLayers,
+            _,
             WIDTH,
             SBOX_DEGREE,
             SBOX_REGISTERS,
