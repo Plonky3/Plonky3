@@ -25,7 +25,7 @@ type LookupConstraintsInputs<'a, F, EF, LG> = (&'a [Lookup<F>], &'a [LookupData<
 /// - `main`: The trace matrix (rows of witness values)
 /// - `permutation`: The permutation trace matrix (rows of permutation values)
 /// - `permutation_challenges`: The challenges used for permutation argument
-/// - `public_values`: Public values provided to the builder 1Code has comments. Press enter to view.
+/// - `public_values`: Public values provided to the builder
 /// - `lookup_constraints_inputs`: Inputs necessary to check lookup constraints:
 ///     - the symbolic representation of the lookups,
 ///     - the lookup data for global lookups,

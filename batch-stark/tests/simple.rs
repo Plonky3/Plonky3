@@ -560,7 +560,7 @@ impl<F: PrimeField64> BaseAir<F> for DemoAir {
     }
 }
 
-// Heterogeneous enum wrapper for lookup-enabled AIRs 1Code has comments. Press enter to view.
+// Heterogeneous enum wrapper for lookup-enabled AIRs
 // `FibLookups` receives its inputs from `MulAirLookups` AIRs
 // (see `FibAirLookups` and `MulAirLookups` definitions for more details)
 #[derive(Clone)]
@@ -1318,7 +1318,7 @@ fn test_mixed_preprocessed_constraints() -> Result<(), impl Debug> {
 
 // Tests for local and global lookup handling in multi-stark.
 
-/// Test with local lookups only using MulAirLookups 1Code has comments. Press enter to view.
+/// Test with local lookups only using MulAirLookups
 #[test]
 fn test_batch_stark_one_instance_local_only() -> Result<(), impl Debug> {
     let config = make_config(2024);

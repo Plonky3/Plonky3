@@ -50,7 +50,7 @@ impl<'a, SC: SGC, A> StarkInstance<'a, SC, A> {
                 public_values: public_values.clone(),
                 lookups: lookups.clone(),
             })
-            .collect::<Vec<_>>()
+            .collect()
     }
 }
 
@@ -90,10 +90,10 @@ where
     let log_ext_degrees: Vec<usize> = log_degrees.iter().map(|&d| d + config.is_zk()).collect();
 
     // Extract lookups and create lookup data in one pass.
-    let (all_lookups, mut lookup_data): (Vec<_>, Vec<_>) = instances
+    let (all_lookups, mut lookup_data): (Vec<Vec<_>>, Vec<Vec<_>>) = instances
         .iter()
         .map(|inst| {
-            let (lookups, data): (Vec<_>, Vec<_>) = (
+            (
                 inst.lookups.clone(),
                 // We only get `LookupData` for global lookups, since we only need it for the expected cumulated value.
                 inst.lookups
@@ -106,9 +106,8 @@ where
                         }),
                         _ => None,
                     })
-                    .collect(),
-            );
-            (lookups, data)
+                    .collect::<Vec<_>>(),
+            )
         })
         .unzip();
 
@@ -280,26 +279,20 @@ where
             &lookup_data[i],
             lookup_gadget,
         );
-        let constraint_cnt = base_constraints.len() + extension_constraints.len();
+        let constraint_len = base_constraints.len() + extension_constraints.len();
 
         // Get evaluations on quotient domain from the main commitment.
         let trace_on_quotient_domain =
             pcs.get_evaluations_on_domain(&main_data, i, quotient_domain);
 
-        let permutation_on_quotient_domain = if let Some((_, perm_data)) =
-            &permutation_commit_and_data
-        {
-            if all_lookups[i].is_empty() {
-                None
-            } else {
-                let res =
-                    Some(pcs.get_evaluations_on_domain(perm_data, perm_counter, quotient_domain));
+        let permutation_on_quotient_domain = permutation_commit_and_data
+            .as_ref()
+            .filter(|_| !all_lookups[i].is_empty())
+            .map(|(_, perm_data)| {
+                let evals = pcs.get_evaluations_on_domain(perm_data, perm_counter, quotient_domain);
                 perm_counter += 1;
-                res
-            }
-        } else {
-            None
-        };
+                evals
+            });
 
         // Get preprocessed evaluations if this instance has preprocessed columns.
         let preprocessed_on_quotient_domain = common
@@ -324,7 +317,7 @@ where
             &challenges_per_instance[i],
             preprocessed_on_quotient_domain.as_ref(),
             alpha,
-            constraint_cnt,
+            constraint_len,
         );
 
         // Flatten to base field and split into chunks.
@@ -394,21 +387,18 @@ where
             rounds.push((&global.prover_data, pre_points));
         }
 
-        let lookup_points = ext_trace_domains
+        let lookup_points: Vec<_> = ext_trace_domains
             .iter()
-            .enumerate()
-            .filter_map(|(i, dom)| {
-                if !all_lookups[i].is_empty() {
-                    Some(vec![
-                        zeta,
-                        dom.next_point(zeta)
-                            .expect("domain should support next_point operation"),
-                    ])
-                } else {
-                    None
-                }
+            .zip(&all_lookups)
+            .filter(|&(_, lookups)| !lookups.is_empty())
+            .map(|(dom, _)| {
+                vec![
+                    zeta,
+                    dom.next_point(zeta)
+                        .expect("domain should support next_point operation"),
+                ]
             })
-            .collect::<Vec<_>>();
+            .collect();
 
         if let Some((_, perm_data)) = &permutation_commit_and_data {
             let lookup_round = (perm_data, lookup_points);
@@ -566,13 +556,16 @@ where
     let qdb = log2_strict_usize(quotient_domain.size()) - log2_strict_usize(trace_domain.size());
     let next_step = 1 << qdb;
 
-    // We take PackedVal::<SC>::WIDTH worth of values at a time from a quotient_size slice, so we need to
-    // pad with default values in the case where quotient_size is smaller than PackedVal::<SC>::WIDTH.
-    for _ in quotient_size..PackedVal::<SC>::WIDTH {
-        sels.is_first_row.push(Val::<SC>::default());
-        sels.is_last_row.push(Val::<SC>::default());
-        sels.is_transition.push(Val::<SC>::default());
-        sels.inv_vanishing.push(Val::<SC>::default());
+    // Pad selectors with default values if the domain is smaller than the packing width.
+    let pack_width = PackedVal::<SC>::WIDTH;
+    if quotient_size < pack_width {
+        let pad_len = pack_width;
+        // Helper to resize a specific selector vector
+        let pad = |v: &mut Vec<_>| v.resize(pad_len, Val::<SC>::default());
+        pad(&mut sels.is_first_row);
+        pad(&mut sels.is_last_row);
+        pad(&mut sels.is_transition);
+        pad(&mut sels.inv_vanishing);
     }
 
     let mut alpha_powers = alpha.powers().collect_n(constraint_count);

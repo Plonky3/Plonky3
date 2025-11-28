@@ -1,3 +1,4 @@
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -346,7 +347,7 @@ where
             zeta,
         );
 
-        // Recompose permutation openings from base-flattened columns into extension. field columns.
+        // Recompose permutation openings from base-flattened columns into extension field columns.
         // The permutation commitment is a base-flattened matrix with `width = aux_width * DIMENSION`.
         // For constraint evaluation, we need an extension field matrix with width `aux_width``.
         let aux_width = all_lookups[i]
@@ -368,14 +369,18 @@ where
                 aux_width,
                 ext_degree
             );
-            (0..aux_width)
-                .map(|col| {
-                    (0..ext_degree)
-                        .map(|j| {
-                            let coeff = flat[col * ext_degree + j];
-                            let basis = Challenge::<SC>::ith_basis_element(j)
-                                .expect("basis element exists");
-                            coeff * basis
+            // Chunk the flattened coefficients into groups of size `dim`.
+            // Each chunk represents the coefficients of one extension field element.
+            flat.chunks_exact(ext_degree)
+                .map(|coeffs| {
+                    // Dot product: sum(coeff_j * basis_j)
+                    coeffs
+                        .iter()
+                        .enumerate()
+                        .map(|(j, &coeff)| {
+                            coeff
+                                * Challenge::<SC>::ith_basis_element(j)
+                                    .expect("Basis element should exist")
                         })
                         .sum()
                 })
@@ -425,14 +430,12 @@ where
         })?;
     }
 
-    let mut global_cumulative = HashMap::new();
-    for lookup_data in global_lookup_data.iter().flatten() {
-        let name = &lookup_data.name;
-        let expected = &lookup_data.expected_cumulated;
+    let mut global_cumulative = HashMap::<&String, Vec<_>>::new();
+    for data in global_lookup_data.iter().flatten() {
         global_cumulative
-            .entry(name)
-            .and_modify(|v: &mut Vec<_>| v.push(*expected))
-            .or_insert(vec![*expected]);
+            .entry(&data.name)
+            .or_default()
+            .push(data.expected_cumulated);
     }
 
     for (name, all_expected_cumulative) in global_cumulative {

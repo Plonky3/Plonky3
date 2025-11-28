@@ -75,7 +75,7 @@ pub struct CommonData<SC: SGC> {
     ///
     /// When `None`, no instance uses preprocessed columns.
     pub preprocessed: Option<GlobalPreprocessed<SC>>,
-    /// The lookups used by each STARK instance. 1Code has comments. Press enter to view.
+    /// The lookups used by each STARK instance.
     /// There is one `Vec<Lookup<Val<SC>>>` per STARK instance.
     /// They are stored in the same order as the STARK instance inputs provided to `new`.
     pub lookups: Vec<Vec<Lookup<Val<SC>>>>,
@@ -221,8 +221,7 @@ where
             })
         };
 
-        let lookups: Vec<Vec<Lookup<Val<SC>>>> =
-            airs.iter_mut().map(|air| air.get_lookups()).collect();
+        let lookups = airs.iter_mut().map(|air| air.get_lookups()).collect();
 
         Self {
             preprocessed,
@@ -250,14 +249,13 @@ pub(crate) fn get_perm_challenges<SC: SGC, LG: LookupGadget>(
                 match &context.kind {
                     Kind::Global(name) => {
                         // Get or create the global challenges.
-                        let cs: &mut Vec<SC::Challenge> =
+                        let challengess: &mut Vec<SC::Challenge> =
                             global_perm_challenges.entry(name).or_insert_with(|| {
                                 (0..num_challenges_per_lookup)
                                     .map(|_| challenger.sample_algebra_element())
                                     .collect()
                             });
-                        // Extend from the slice directly without vector cloning
-                        instance_challenges.extend(cs.iter().copied());
+                        instance_challenges.extend_from_slice(challengess);
                     }
                     Kind::Local => {
                         instance_challenges.extend(

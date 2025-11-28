@@ -11,16 +11,9 @@ use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::ViewPair;
-use p3_uni_stark::{Entry, StarkGenericConfig, SymbolicExpression, Val};
+use p3_uni_stark::{Entry, LookupError, StarkGenericConfig, SymbolicExpression, Val};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
-
-/// Defines errors that can occur during lookup verification.
-#[derive(Debug)]
-pub enum LookupError {
-    /// Error indicating that the global cumulative sum is incorrect.
-    GlobalCumulativeMismatch(Option<String>),
-}
 
 /// Data required for global lookup arguments in a multi-STARK proof.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
