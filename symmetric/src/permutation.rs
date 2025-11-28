@@ -1,5 +1,5 @@
 /// A permutation in the mathematical sense.
-pub trait Permutation<T: Clone>: Clone + Sync {
+pub trait Permutation<T>: Clone + Sync {
     #[inline(always)]
     fn permute(&self, mut input: T) -> T {
         self.permute_mut(&mut input);
@@ -11,4 +11,4 @@ pub trait Permutation<T: Clone>: Clone + Sync {
 
 /// A permutation thought to be cryptographically secure, in the sense that it is thought to be
 /// difficult to distinguish (in a nontrivial way) from a random permutation.
-pub trait CryptographicPermutation<T: Clone>: Permutation<T> {}
+pub trait CryptographicPermutation<T>: Permutation<T> {}
