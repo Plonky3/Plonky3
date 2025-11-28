@@ -189,7 +189,7 @@ pub trait ExtensionBuilder: AirBuilder<F: Field> {
     type EF: ExtensionField<Self::F>;
 
     /// Expression type over extension field elements.
-    type ExprEF: Algebra<Self::Expr> + Algebra<Self::EF>;
+    type ExprEF: From<Self::Expr> + Algebra<Self::EF>;
 
     /// Variable type over extension field elements.
     type VarEF: Into<Self::ExprEF> + Copy + Send + Sync;
@@ -296,7 +296,10 @@ impl<AB: ExtensionBuilder> ExtensionBuilder for FilteredAirBuilder<'_, AB> {
     where
         I: Into<Self::ExprEF>,
     {
-        self.inner.assert_zero_ext(x.into() * self.condition());
+        let ext_x = x.into();
+        let condition: Self::ExprEF = self.condition().into();
+
+        self.inner.assert_zero_ext(ext_x * condition);
     }
 }
 

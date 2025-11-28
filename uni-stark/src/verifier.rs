@@ -1,5 +1,6 @@
 //! See `prover.rs` for an overview of the protocol and a more detailed soundness analysis.
 
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -388,6 +389,13 @@ where
     Ok(())
 }
 
+/// Defines errors that can occur during lookup verification.
+#[derive(Debug)]
+pub enum LookupError {
+    /// Error indicating that the global cumulative sum is incorrect.
+    GlobalCumulativeMismatch(Option<String>),
+}
+
 #[derive(Debug)]
 pub enum VerificationError<PcsErr> {
     InvalidProofShape,
@@ -402,4 +410,6 @@ pub enum VerificationError<PcsErr> {
     RandomizationError,
     /// The domain does not support computing the next point algebraically.
     NextPointUnavailable,
+    /// Lookup related error
+    LookupError(LookupError),
 }

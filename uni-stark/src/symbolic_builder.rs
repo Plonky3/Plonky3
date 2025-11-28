@@ -5,7 +5,7 @@ use p3_air::{
     Air, AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder,
     PermutationAirBuilder,
 };
-use p3_field::{Algebra, ExtensionField, Field};
+use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
@@ -302,7 +302,7 @@ impl<F: Field, EF: ExtensionField<F>> PairBuilder for SymbolicAirBuilder<F, EF> 
 
 impl<F: Field, EF: ExtensionField<F>> ExtensionBuilder for SymbolicAirBuilder<F, EF>
 where
-    SymbolicExpression<EF>: Algebra<SymbolicExpression<F>>,
+    SymbolicExpression<EF>: From<SymbolicExpression<F>>,
 {
     type EF = EF;
     type ExprEF = SymbolicExpression<EF>;
@@ -318,7 +318,7 @@ where
 
 impl<F: Field, EF: ExtensionField<F>> PermutationAirBuilder for SymbolicAirBuilder<F, EF>
 where
-    SymbolicExpression<EF>: Algebra<SymbolicExpression<F>>,
+    SymbolicExpression<EF>: From<SymbolicExpression<F>>,
 {
     type MP = RowMajorMatrix<Self::VarEF>;
 
