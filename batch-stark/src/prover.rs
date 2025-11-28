@@ -156,7 +156,11 @@ where
             .as_ref()
             .and_then(|g| g.instances[i].as_ref().map(|meta| (g, meta)))
             .map(|(g, meta)| {
-                pcs.get_evaluations_on_domain(&g.prover_data, meta.matrix_index, quotient_domain)
+                pcs.get_evaluations_on_domain_no_random(
+                    &g.prover_data,
+                    meta.matrix_index,
+                    quotient_domain,
+                )
             });
 
         // Compute quotient(x) = constraints(x)/Z_H(x) over quotient_domain, as extension values.
@@ -212,7 +216,7 @@ where
                 ]
             })
             .collect::<Vec<_>>();
-        rounds.push((&main_data, round1_points));
+        rounds.push((&main_data, round1_points, true));
 
         // Quotient chunks round: one point per chunk at zeta.
         let round2_points = quotient_chunk_ranges
@@ -220,7 +224,7 @@ where
             .cloned()
             .flat_map(|(s, e)| (s..e).map(|_| vec![zeta]))
             .collect::<Vec<_>>();
-        rounds.push((&quotient_data, round2_points));
+        rounds.push((&quotient_data, round2_points, true));
 
         // Optional global preprocessed round: one matrix per instance that
         // has preprocessed columns.
@@ -235,7 +239,7 @@ where
                     vec![zeta, zeta_next_i]
                 })
                 .collect::<Vec<_>>();
-            rounds.push((&global.prover_data, pre_points));
+            rounds.push((&global.prover_data, pre_points, false));
         }
 
         pcs.open(rounds, &mut challenger)

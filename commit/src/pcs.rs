@@ -67,6 +67,13 @@ where
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
     ) -> (Self::Commitment, Self::ProverData);
 
+    fn commit_no_randomization(
+        &self,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
+    ) -> (Self::Commitment, Self::ProverData) {
+        self.commit(evaluations)
+    }
+
     /// Commit to the quotient polynomial. We first decompose the quotient polynomial into
     /// `num_chunks` many smaller polynomials each of degree `degree / num_chunks`.
     /// This can have minor performance benefits, but is not strictly necessary in the non `zk` case.
@@ -112,6 +119,20 @@ where
         domain: Self::Domain,
     ) -> Self::EvaluationsOnDomain<'a>;
 
+    /// Given prover data corresponding to a commitment to a collection of evaluation matrices,
+    /// return the evaluations of those matrices on the given domain.
+    ///
+    /// This is essentially a no-op when called with a `domain` which is a subset of the evaluation domain
+    /// on which the evaluation matrices are defined.
+    fn get_evaluations_on_domain_no_random<'a>(
+        &self,
+        prover_data: &'a Self::ProverData,
+        idx: usize,
+        domain: Self::Domain,
+    ) -> Self::EvaluationsOnDomain<'a> {
+        self.get_evaluations_on_domain(prover_data, idx, domain)
+    }
+
     /// Open a collection of polynomial commitments at a set of points. Produce the values at those points along with a proof
     /// of correctness.
     ///
@@ -141,6 +162,7 @@ where
                 // the points to open
                 Vec<Challenge>,
             >,
+            bool,
         )>,
         fiat_shamir_challenger: &mut Challenger,
     ) -> (OpenedValues<Challenge>, Self::Proof);

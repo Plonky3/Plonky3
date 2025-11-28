@@ -65,14 +65,8 @@ where
             0
         },
         |pp| {
-            // Preprocessed columns are currently only supported in non-ZK mode.
             assert_eq!(
-                config.is_zk(),
-                0,
-                "preprocessed columns are not supported in zk mode"
-            );
-            assert_eq!(
-                pp.degree_bits, log_ext_degree,
+                pp.degree_bits, log_degree,
                 "PreprocessedProverData degree_bits does not match trace degree_bits"
             );
             pp.width
@@ -208,8 +202,8 @@ where
     // This only works if the trace domain is `gH'` and the quotient domain is `gK` for some subgroup `K` contained in `H'`.
     // TODO: Make this explicit in `get_evaluations_on_domain` or otherwise fix this.
     let trace_on_quotient_domain = pcs.get_evaluations_on_domain(&trace_data, 0, quotient_domain);
-    let preprocessed_on_quotient_domain =
-        preprocessed_data_ref.map(|data| pcs.get_evaluations_on_domain(data, 0, quotient_domain));
+    let preprocessed_on_quotient_domain = preprocessed_data_ref
+        .map(|data| pcs.get_evaluations_on_domain_no_random(data, 0, quotient_domain));
 
     // Compute the quotient polynomial `Q(x)` by evaluating
     //          `C(T_1(x), ..., T_w(x), T_1(hx), ..., T_w(hx), selectors(x)) / Z_H(x)`
@@ -304,10 +298,12 @@ where
 
     let is_random = opt_r_data.is_some();
     let (opened_values, opening_proof) = info_span!("open").in_scope(|| {
-        let round0 = opt_r_data.as_ref().map(|r_data| (r_data, vec![vec![zeta]]));
-        let round1 = (&trace_data, vec![vec![zeta, zeta_next]]);
-        let round2 = (&quotient_data, vec![vec![zeta]; num_quotient_chunks]); // open every chunk at zeta
-        let round3 = preprocessed_data_ref.map(|data| (data, vec![vec![zeta, zeta_next]]));
+        let round0 = opt_r_data
+            .as_ref()
+            .map(|r_data| (r_data, vec![vec![zeta]], true));
+        let round1 = (&trace_data, vec![vec![zeta, zeta_next]], true);
+        let round2 = (&quotient_data, vec![vec![zeta]; num_quotient_chunks], true); // open every chunk at zeta
+        let round3 = preprocessed_data_ref.map(|data| (data, vec![vec![zeta, zeta_next]], false));
 
         let rounds = round0
             .into_iter()

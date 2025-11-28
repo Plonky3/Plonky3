@@ -111,6 +111,28 @@ where
         Pcs::<Challenge, Challenger>::commit(&self.inner, randomized_evaluations)
     }
 
+    fn commit_no_randomization(
+        &self,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
+    ) -> (Self::Commitment, Self::ProverData) {
+        // Pad values
+
+        let padded_evals = evaluations
+            .into_iter()
+            .map(|(domain, mat)| {
+                let mat_width = mat.width();
+                // Let `w` and `h` be the width and height of the original matrix. The padded matrix should have height `2h` and width `w`.
+                // To generate it, we add `w` zero columns to the original matrix, then reshape it by setting the width to `w`.
+                // All columns are added on the right hand side so, after reshaping, this has the net effect of adding interleaving the original trace with zero rows.
+                let mut padded_evaluation = add_zero_cols(&mat, mat_width);
+                padded_evaluation.width = mat_width;
+                (domain, padded_evaluation)
+            })
+            .collect::<Vec<_>>();
+
+        Pcs::<Challenge, Challenger>::commit(&self.inner, padded_evals)
+    }
+
     /// Commit to the quotient polynomial. We first decompose the quotient polynomial into
     /// `num_chunks` many smaller polynomials each of degree `degree / num_chunks`.
     /// These quotient polynomials are then randomized as explained in Section 4.2 of
@@ -238,6 +260,23 @@ where
         HorizontallyTruncated::new(inner_evals, inner_width - self.num_random_codewords).unwrap()
     }
 
+    fn get_evaluations_on_domain_no_random<'a>(
+        &self,
+        prover_data: &'a Self::ProverData,
+        idx: usize,
+        domain: Self::Domain,
+    ) -> Self::EvaluationsOnDomain<'a> {
+        let inner_evals = <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as Pcs<
+            Challenge,
+            Challenger,
+        >>::get_evaluations_on_domain(
+            &self.inner, prover_data, idx, domain
+        );
+        let inner_width = inner_evals.width();
+
+        HorizontallyTruncated::new(inner_evals, inner_width).unwrap()
+    }
+
     fn open(
         &self,
         // For each round,
@@ -248,24 +287,31 @@ where
                 // points to open
                 Vec<Challenge>,
             >,
+            bool,
         )>,
         challenger: &mut Challenger,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
+        let round_bools = rounds.iter().map(|(_, _, b)| b.clone()).collect::<Vec<_>>();
         let (mut inner_opened_values, inner_proof) = self.inner.open(rounds, challenger);
 
         // inner_opened_values includes opened values for the random codewords. Those should be
         // hidden from our caller, so we split them off and store them in the proof.
         let opened_values_rand = inner_opened_values
             .iter_mut()
-            .map(|opened_values_for_round| {
+            .enumerate()
+            .map(|(idx, opened_values_for_round)| {
                 opened_values_for_round
                     .iter_mut()
                     .map(|opened_values_for_mat| {
                         opened_values_for_mat
                             .iter_mut()
                             .map(|opened_values_for_point| {
-                                let split =
-                                    opened_values_for_point.len() - self.num_random_codewords;
+                                let num_random_codewords = if round_bools[idx] {
+                                    self.num_random_codewords
+                                } else {
+                                    0
+                                };
+                                let split = opened_values_for_point.len() - num_random_codewords;
                                 opened_values_for_point.drain(split..).collect()
                             })
                             .collect()
@@ -364,6 +410,28 @@ where
         .for_each(|(new_row, old_row)| {
             new_row[..old_w].copy_from_slice(old_row);
             new_row[old_w..].iter_mut().for_each(|v| *v = rng.random());
+        });
+    result
+}
+
+#[instrument(level = "debug", skip_all)]
+fn add_zero_cols<Val>(mat: &RowMajorMatrix<Val>, num_random_codewords: usize) -> RowMajorMatrix<Val>
+where
+    Val: Field,
+{
+    let old_w = mat.width();
+    let new_w = old_w + num_random_codewords;
+    let h = mat.height();
+
+    let new_values = Val::zero_vec(new_w * h);
+    let mut result = RowMajorMatrix::new(new_values, new_w);
+    // Can be parallelized by adding par_, but there are some complications with the RNG.
+    // We could just use rng(), but ideally we want to keep it generic...
+    result
+        .rows_mut()
+        .zip(mat.row_slices())
+        .for_each(|(new_row, old_row)| {
+            new_row[..old_w].copy_from_slice(old_row);
         });
     result
 }
