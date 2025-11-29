@@ -13,6 +13,7 @@ mod prover;
 mod symbolic_builder;
 mod symbolic_expression;
 mod symbolic_variable;
+mod sub_builder;
 mod verifier;
 
 pub use check_constraints::*;
@@ -24,4 +25,5 @@ pub use prover::*;
 pub use symbolic_builder::*;
 pub use symbolic_expression::*;
 pub use symbolic_variable::*;
+pub use sub_builder::*;
 pub use verifier::*;
