@@ -14,11 +14,11 @@ use crate::{PackedChallenge, PackedVal, StarkGenericConfig, Val};
 /// `C_0 + alpha C_1 + alpha^2 C_2 + ...`
 #[derive(Debug)]
 pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
-    /// The matrix containing rows on which the constraint polynomial is to be evaluated
+    /// The [`RowMajorMatrixView`] containing rows on which the constraint polynomial is evaluated.
     pub main: RowMajorMatrixView<'a, PackedVal<SC>>,
-    /// The preprocessed columns (if any)
+    /// The preprocessed columns (if any) as a [`RowMajorMatrixView`].
     pub preprocessed: Option<RowMajorMatrixView<'a, PackedVal<SC>>>,
-    /// Public inputs to the AIR
+    /// Public inputs to the [`p3_air::Air`] implementation.
     pub public_values: &'a [Val<SC>],
     /// Evaluations of the Selector polynomial for the first row of the trace
     pub is_first_row: PackedVal<SC>,
@@ -39,13 +39,13 @@ pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
 
 /// Handles constraint verification for the verifier in a STARK system.
 ///
-/// Similar to ProverConstraintFolder but operates on committed values rather than the full trace,
+/// Similar to [`ProverConstraintFolder`] but operates on committed values rather than the full trace,
 /// using a more efficient accumulation method for verification.
 #[derive(Debug)]
 pub struct VerifierConstraintFolder<'a, SC: StarkGenericConfig> {
-    /// Pair of consecutive rows from the committed polynomial evaluations
+    /// Pair of consecutive rows from the committed polynomial evaluations as a [`ViewPair`].
     pub main: ViewPair<'a, SC::Challenge>,
-    /// The preprocessed columns (if any)
+    /// The preprocessed columns (if any) as a [`ViewPair`].
     pub preprocessed: Option<ViewPair<'a, SC::Challenge>>,
     /// Public values that are inputs to the computation
     pub public_values: &'a [Val<SC>],

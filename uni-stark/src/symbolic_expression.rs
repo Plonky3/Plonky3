@@ -68,7 +68,7 @@ where
     }
 }
 
-/// An expression over `SymbolicVariable`s.
+/// An expression over [`SymbolicVariable`]s.
 #[derive(Clone, Debug)]
 pub enum SymbolicExpression<F> {
     Variable(SymbolicVariable<F>),

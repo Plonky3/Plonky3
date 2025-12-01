@@ -23,7 +23,7 @@ use crate::prover::StarkInstance;
 /// global preprocessed commitment.
 #[derive(Clone)]
 pub struct PreprocessedInstanceMeta {
-    /// Index of this instance's preprocessed matrix inside the global PCS
+    /// Index of this instance's preprocessed matrix inside the global [`Pcs`]
     /// commitment / prover data.
     pub matrix_index: usize,
     /// Width (number of columns) of the preprocessed trace.
@@ -37,14 +37,14 @@ pub struct PreprocessedInstanceMeta {
 
 /// Global preprocessed data shared by all batch-STARK instances.
 ///
-/// This batches all per-instance preprocessed traces into a single PCS
+/// This batches all per-instance preprocessed traces into a single [`Pcs`]
 /// commitment and prover data object, while keeping a mapping from instance
 /// index to matrix index and per-matrix metadata.
 pub struct GlobalPreprocessed<SC: SGC> {
-    /// Single PCS commitment to all preprocessed traces (one matrix per
+    /// Single [`Pcs`] commitment to all preprocessed traces (one matrix per
     /// instance that defines preprocessed columns).
     pub commitment: Commitment<SC>,
-    /// PCS prover data for the batched preprocessed commitment.
+    /// [`Pcs`] prover data for the batched preprocessed commitment.
     pub prover_data: <SC::Pcs as Pcs<Challenge<SC>, SC::Challenger>>::ProverData,
     /// For each STARK instance, optional metadata describing its preprocessed
     /// trace inside the global commitment.
@@ -77,9 +77,9 @@ pub struct CommonData<SC: SGC> {
 }
 
 impl<SC: SGC> CommonData<SC> {
-    /// Create `CommonData` with no preprocessed columns.
+    /// Create [`CommonData`] with no preprocessed columns.
     ///
-    /// Use this when none of your AIRs have preprocessed columns.
+    /// Use this when none of your [`p3_air::Air`] implementations have preprocessed columns.
     pub const fn empty(_num_instances: usize) -> Self {
         Self { preprocessed: None }
     }
@@ -90,13 +90,13 @@ where
     SC: SGC,
     Challenge<SC>: BasedVectorSpace<Val<SC>>,
 {
-    /// Build `CommonData` directly from STARK instances.
+    /// Build [`CommonData`] directly from STARK instances.
     ///
     /// This automatically:
     /// - Derives trace degrees from trace heights
     /// - Computes extended degrees (base + ZK padding)
-    /// - Sets up preprocessed columns for AIRs that define them, committing
-    ///   to them in a single global PCS commitment.
+    /// - Sets up preprocessed columns for [`p3_air::Air`] implementations that define them, committing
+    ///   to them in a single global [`Pcs`] commitment.
     ///
     /// This is a convenience function mainly used for tests.
     pub fn from_instances<A>(config: &SC, instances: &[StarkInstance<'_, SC, A>]) -> Self
@@ -112,7 +112,7 @@ where
         Self::from_airs_and_degrees(config, &airs, &log_ext_degrees)
     }
 
-    /// Build `CommonData` from AIRs and their extended trace degree bits.
+    /// Build [`CommonData`] from [`p3_air::Air`] implementations and their extended trace degree bits.
     ///
     /// # Arguments
     ///
@@ -121,7 +121,7 @@ where
     /// # Returns
     ///
     /// Global preprocessed data shared by all instances. The global commitment
-    /// is present only if at least one AIR defines preprocessed columns.
+    /// is present only if at least one [`p3_air::Air`] defines preprocessed columns.
     pub fn from_airs_and_degrees<A>(
         config: &SC,
         airs: &[A],

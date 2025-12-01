@@ -22,24 +22,24 @@ pub type PackedChallenge<SC> =
     <<SC as StarkGenericConfig>::Challenge as ExtensionField<Val<SC>>>::ExtensionPacking;
 
 pub trait StarkGenericConfig {
-    /// The PCS used to commit to trace polynomials.
+    /// The [`Pcs`] implementation used to commit to trace polynomials.
     type Pcs: Pcs<Self::Challenge, Self::Challenger>;
 
-    /// The field from which most random challenges are drawn.
+    /// The [`ExtensionField`] from which most random challenges are drawn.
     type Challenge: ExtensionField<Val<Self>>;
 
-    /// The challenger (Fiat-Shamir) implementation used.
+    /// The [`FieldChallenger`] (Fiat-Shamir) implementation used.
     type Challenger: FieldChallenger<Val<Self>>
         + CanObserve<<Self::Pcs as Pcs<Self::Challenge, Self::Challenger>>::Commitment>
         + CanSample<Self::Challenge>;
 
-    /// Get a reference to the PCS used by this proof configuration.
+    /// Get a reference to the [`Pcs`] used by this proof configuration.
     fn pcs(&self) -> &Self::Pcs;
 
-    /// Get an initialisation of the challenger used by this proof configuration.
+    /// Get an initialisation of the [`FieldChallenger`] used by this proof configuration.
     fn initialise_challenger(&self) -> Self::Challenger;
 
-    /// Returns 1 if the PCS is zero-knowledge, 0 otherwise.
+    /// Returns 1 if the [`Pcs`] is zero-knowledge, 0 otherwise.
     fn is_zk(&self) -> usize {
         Self::Pcs::ZK as usize
     }
@@ -47,9 +47,9 @@ pub trait StarkGenericConfig {
 
 #[derive(Debug)]
 pub struct StarkConfig<Pcs, Challenge, Challenger> {
-    /// The PCS used to commit polynomials and prove opening proofs.
+    /// The [`Pcs`] used to commit polynomials and produce opening proofs.
     pcs: Pcs,
-    /// An initialised instance of the challenger.
+    /// An initialised instance of the [`FieldChallenger`].
     challenger: Challenger,
     _phantom: PhantomData<Challenge>,
 }

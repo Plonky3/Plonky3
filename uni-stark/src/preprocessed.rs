@@ -7,25 +7,25 @@ use crate::{ProverConstraintFolder, StarkGenericConfig, SymbolicAirBuilder, Val}
 
 /// Prover-side reusable data for preprocessed columns.
 ///
-/// This allows committing to the preprocessed trace once per AIR/degree and reusing
-/// the commitment and PCS prover data across many proofs.
+/// This allows committing to the preprocessed trace once per [`Air`]/degree and reusing
+/// the commitment and [`Pcs`] prover data across many proofs.
 pub struct PreprocessedProverData<SC: StarkGenericConfig> {
     /// The width (number of columns) of the preprocessed trace.
     pub width: usize,
     /// The log2 of the degree of the domain over which the preprocessed trace is committed.
     ///
-    /// In the current uni-stark implementation this matches `degree_bits` in `Proof`,
+    /// In the current uni-stark implementation this matches `degree_bits` in [`Proof`](crate::Proof),
     /// i.e. the (extended) trace degree.
     pub degree_bits: usize,
-    /// PCS commitment to the preprocessed trace.
+    /// [`Pcs`] commitment to the preprocessed trace.
     pub commitment: <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::Commitment,
-    /// PCS prover data for the preprocessed trace.
+    /// [`Pcs`] prover data for the preprocessed trace.
     pub prover_data: <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::ProverData,
 }
 
 /// Verifier-side reusable data for preprocessed columns.
 ///
-/// This allows committing to the preprocessed trace once per AIR/degree and reusing
+/// This allows committing to the preprocessed trace once per [`Air`]/degree and reusing
 /// the commitment across many verifications.
 #[derive(Clone)]
 pub struct PreprocessedVerifierKey<SC: StarkGenericConfig> {
@@ -33,16 +33,16 @@ pub struct PreprocessedVerifierKey<SC: StarkGenericConfig> {
     pub width: usize,
     /// The log2 of the degree of the domain over which the preprocessed trace is committed.
     ///
-    /// This should match `degree_bits` in `Proof`, i.e. the (extended) trace degree.
+    /// This should match `degree_bits` in [`Proof`](crate::Proof), i.e. the (extended) trace degree.
     pub degree_bits: usize,
-    /// PCS commitment to the preprocessed trace.
+    /// [`Pcs`] commitment to the preprocessed trace.
     pub commitment: <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::Commitment,
 }
 
-/// Set up and commit the preprocessed trace for a given AIR and degree.
+/// Set up and commit the preprocessed trace for a given [`Air`] and degree.
 ///
-/// This can be called once per AIR/degree configuration to obtain reusable
-/// prover data for preprocessed columns. Returns `None` if the AIR does not
+/// This can be called once per [`Air`]/degree configuration to obtain reusable
+/// prover data for preprocessed columns. Returns `None` if the [`Air`] does not
 /// define any preprocessed columns.
 pub fn setup_preprocessed<SC, A>(
     config: &SC,

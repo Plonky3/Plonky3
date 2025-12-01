@@ -1,4 +1,4 @@
-//! See `prover.rs` for an overview of the protocol and a more detailed soundness analysis.
+//! See [`crate::prover`] for an overview of the protocol and a more detailed soundness analysis.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -67,7 +67,7 @@ where
 
 /// Verifies that the folded constraints match the quotient polynomial at zeta.
 ///
-/// This evaluates the AIR constraints at the out-of-domain point and checks
+/// This evaluates the [`Air`] constraints at the out-of-domain point and checks
 /// that constraints(zeta) / Z_H(zeta) = quotient(zeta).
 #[allow(clippy::too_many_arguments)]
 pub fn verify_constraints<SC, A, PcsErr>(

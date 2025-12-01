@@ -5,16 +5,16 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::ViewPair;
 use tracing::instrument;
 
-/// Runs constraint checks using a given AIR definition and trace matrix.
+/// Runs constraint checks using a given [`Air`] implementation and trace matrix.
 ///
 /// Iterates over every row in `main`, providing both the current and next row
-/// (with wraparound) to the AIR logic. Also injects public values into the builder
-/// for first/last row assertions.
+/// (with wraparound) to the [`Air`] logic. Also injects public values into the
+/// [`DebugConstraintBuilder`] for first/last row assertions.
 ///
 /// # Arguments
-/// - `air`: The AIR logic to run
-/// - `main`: The trace matrix (rows of witness values)
-/// - `public_values`: Public values provided to the builder
+/// - `air`: The [`Air`] logic to run.
+/// - `main`: The [`RowMajorMatrix`] containing witness rows.
+/// - `public_values`: Public values provided to the builder.
 #[instrument(name = "check constraints", skip_all)]
 pub(crate) fn check_constraints<F, A>(air: &A, main: &RowMajorMatrix<F>, public_values: &[F])
 where
@@ -66,7 +66,7 @@ where
 /// A builder that runs constraint assertions during testing.
 ///
 /// Used in conjunction with [`check_constraints`] to simulate
-/// an execution trace and verify that the AIR logic enforces all constraints.
+/// an execution trace and verify that the [`Air`] logic enforces all constraints.
 #[derive(Debug)]
 pub struct DebugConstraintBuilder<'a, F: Field> {
     /// The index of the row currently being evaluated.

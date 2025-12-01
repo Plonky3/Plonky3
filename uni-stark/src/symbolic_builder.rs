@@ -187,7 +187,7 @@ where
     (builder.base_constraints(), builder.extension_constraints())
 }
 
-/// An `AirBuilder` for evaluating constraints symbolically, and recording them for later use.
+/// An [`AirBuilder`] for evaluating constraints symbolically, and recording them for later use.
 #[derive(Debug)]
 pub struct SymbolicAirBuilder<F: Field, EF: ExtensionField<F> = F> {
     preprocessed: RowMajorMatrix<SymbolicVariable<F>>,
