@@ -73,10 +73,6 @@ impl Permutation<[Goldilocks; 8]> for MdsMatrixGoldilocks {
             SmallConvolveGoldilocks::conv8,
         )
     }
-
-    fn permute_mut(&self, input: &mut [Goldilocks; 8]) {
-        *input = self.permute(*input);
-    }
 }
 impl MdsPermutation<Goldilocks, 8> for MdsMatrixGoldilocks {}
 
@@ -91,10 +87,6 @@ impl Permutation<[Goldilocks; 12]> for MdsMatrixGoldilocks {
             MATRIX_CIRC_MDS_12_SML_COL,
             SmallConvolveGoldilocks::conv12,
         )
-    }
-
-    fn permute_mut(&self, input: &mut [Goldilocks; 12]) {
-        *input = self.permute(*input);
     }
 }
 impl MdsPermutation<Goldilocks, 12> for MdsMatrixGoldilocks {}
@@ -112,10 +104,6 @@ impl Permutation<[Goldilocks; 16]> for MdsMatrixGoldilocks {
             SmallConvolveGoldilocks::conv16,
         )
     }
-
-    fn permute_mut(&self, input: &mut [Goldilocks; 16]) {
-        *input = self.permute(*input);
-    }
 }
 impl MdsPermutation<Goldilocks, 16> for MdsMatrixGoldilocks {}
 
@@ -132,10 +120,6 @@ pub(crate) const MATRIX_CIRC_MDS_24_GOLDILOCKS: [u64; 24] = [
 impl Permutation<[Goldilocks; 24]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 24]) -> [Goldilocks; 24] {
         apply_circulant(&MATRIX_CIRC_MDS_24_GOLDILOCKS, &input)
-    }
-
-    fn permute_mut(&self, input: &mut [Goldilocks; 24]) {
-        *input = self.permute(*input);
     }
 }
 impl MdsPermutation<Goldilocks, 24> for MdsMatrixGoldilocks {}
@@ -156,10 +140,6 @@ impl Permutation<[Goldilocks; 32]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 32]) -> [Goldilocks; 32] {
         const ENTRIES: [u64; 32] = first_row_to_first_col(&MATRIX_CIRC_MDS_32_GOLDILOCKS);
         apply_circulant_fft(&FFT_ALGO, ENTRIES, &input)
-    }
-
-    fn permute_mut(&self, input: &mut [Goldilocks; 32]) {
-        *input = self.permute(*input);
     }
 }
 impl MdsPermutation<Goldilocks, 32> for MdsMatrixGoldilocks {}
@@ -189,10 +169,6 @@ impl Permutation<[Goldilocks; 64]> for MdsMatrixGoldilocks {
         const ENTRIES: [u64; 64] = first_row_to_first_col(&MATRIX_CIRC_MDS_64_GOLDILOCKS);
         apply_circulant_fft(&FFT_ALGO, ENTRIES, &input)
     }
-
-    fn permute_mut(&self, input: &mut [Goldilocks; 64]) {
-        *input = self.permute(*input);
-    }
 }
 impl MdsPermutation<Goldilocks, 64> for MdsMatrixGoldilocks {}
 
@@ -220,10 +196,6 @@ const MATRIX_CIRC_MDS_68_GOLDILOCKS: [u64; 68] = [
 impl Permutation<[Goldilocks; 68]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 68]) -> [Goldilocks; 68] {
         apply_circulant(&MATRIX_CIRC_MDS_68_GOLDILOCKS, &input)
-    }
-
-    fn permute_mut(&self, input: &mut [Goldilocks; 68]) {
-        *input = self.permute(*input);
     }
 }
 impl MdsPermutation<Goldilocks, 68> for MdsMatrixGoldilocks {}

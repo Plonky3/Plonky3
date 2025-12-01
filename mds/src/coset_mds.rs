@@ -46,11 +46,6 @@ where
 }
 
 impl<F: TwoAdicField, A: Algebra<F>, const N: usize> Permutation<[A; N]> for CosetMds<F, N> {
-    fn permute(&self, mut input: [A; N]) -> [A; N] {
-        self.permute_mut(&mut input);
-        input
-    }
-
     fn permute_mut(&self, values: &mut [A; N]) {
         // Inverse DFT, except we skip bit reversal and rescaling by 1/N.
         bowers_g_t(values, &self.ifft_twiddles);

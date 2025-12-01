@@ -6,7 +6,9 @@ pub trait Permutation<T: Clone>: Clone + Sync {
         input
     }
 
-    fn permute_mut(&self, input: &mut T);
+    fn permute_mut(&self, input: &mut T) {
+        *input = self.permute(input.clone());
+    }
 }
 
 /// A permutation thought to be cryptographically secure, in the sense that it is thought to be

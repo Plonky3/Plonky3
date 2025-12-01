@@ -49,11 +49,6 @@ impl<F: TwoAdicField, const N: usize> Default for IntegratedCosetMds<F, N> {
 }
 
 impl<F: Field, A: Algebra<F>, const N: usize> Permutation<[A; N]> for IntegratedCosetMds<F, N> {
-    fn permute(&self, mut input: [A; N]) -> [A; N] {
-        self.permute_mut(&mut input);
-        input
-    }
-
     fn permute_mut(&self, values: &mut [A; N]) {
         let log_n = log2_strict_usize(N);
 
