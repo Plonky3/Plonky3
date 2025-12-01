@@ -19,8 +19,13 @@ use p3_matrix::horizontally_truncated::HorizontallyTruncated;
 /// a few columns. `SubAirBuilder` reuses the parent builder for bookkeeping so witness generation
 /// and constraint enforcement stay in sync.
 pub struct SubAirBuilder<'a, AB: AirBuilder, SubAir: BaseAir<AB::F>, T> {
+    /// Mutable reference to the parent builder.
     inner: &'a mut AB,
+
+    /// Column range (in the parent trace) that the sub-AIR is allowed to see.
     column_range: Range<usize>,
+
+    /// Marker for the sub-AIR and witness type.
     _phantom: core::marker::PhantomData<(SubAir, T)>,
 }
 
