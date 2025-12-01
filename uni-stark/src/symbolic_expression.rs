@@ -18,7 +18,7 @@ where
     /// This works for BabyBear, KoalaBear, Mersenne31, and any future field
     /// without modifying this crate.
     ///
-    /// Since `BinomialExtensionField<F, D>` is always a distinct type from `F`,
+    /// Since [`BinomialExtensionField<F, D>`] is always a distinct type from `F`,
     /// this implementation doesn't conflict with the blanket `From<T> for T`.
     fn from(expr: SymbolicExpression<F>) -> Self {
         match expr {
