@@ -14,14 +14,14 @@ use tracing::instrument;
 #[allow(unused)]
 type LookupConstraintsInputs<'a, F, EF, LG> = (&'a [Lookup<F>], &'a [LookupData<EF>], &'a LG);
 
-/// Runs constraint checks using a given [`p3_air::Air`] implementation and trace matrix.
+/// Runs constraint checks using a given [AIR]([`p3_air::Air`]) implementation and trace matrix.
 ///
 /// Iterates over every row in `main`, providing both the current and next row
-/// (with wraparound) to the [`p3_air::Air`] logic. Also injects public values into the builder
+/// (with wraparound) to the [AIR]([`p3_air::Air`]) logic. Also injects public values into the builder
 /// for first/last row assertions.
 ///
 /// # Arguments
-/// - `air`: The [`p3_air::Air`] logic to run.
+/// - `air`: The [AIR]([`p3_air::Air`]) logic to run.
 /// - `main`: The [`RowMajorMatrix`] containing rows of witness values.
 /// - `permutation`: The permutation [`RowMajorMatrix`] (rows of permutation values).
 /// - `permutation_challenges`: The challenges used for the permutation argument.
@@ -97,7 +97,7 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
 /// A builder that runs constraint assertions during testing.
 ///
 /// Used in conjunction with [`check_constraints`] to simulate
-/// an execution trace and verify that the [`p3_air::Air`] logic enforces all constraints.
+/// an execution trace and verify that the [AIR]([`p3_air::Air`]) logic enforces all constraints.
 #[derive(Debug)]
 #[allow(unused)]
 pub struct DebugConstraintBuilderWithLookups<'a, F: Field, EF: ExtensionField<F>> {

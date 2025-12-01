@@ -18,7 +18,7 @@ pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     pub main: RowMajorMatrixView<'a, PackedVal<SC>>,
     /// The preprocessed columns (if any) as a [`RowMajorMatrixView`].
     pub preprocessed: Option<RowMajorMatrixView<'a, PackedVal<SC>>>,
-    /// Public inputs to the [`p3_air::Air`] implementation.
+    /// Public inputs to the [AIR]([`p3_air::Air`]) implementation.
     pub public_values: &'a [Val<SC>],
     /// Evaluations of the Selector polynomial for the first row of the trace
     pub is_first_row: PackedVal<SC>,

@@ -64,11 +64,10 @@ pub struct GlobalPreprocessed<SC: SGC> {
 // per preprocessed matrix, which is sound but wastes openings.
 
 /// Struct storing data common to both the prover and verifier.
-///
-/// TODO: Add lookup metadata (e.g. `Vec<Vec<Lookup<Val<SC>>>>`).
-/// TODO: Optionally cache a single challenger seed for transparent
-///       preprocessed data (per-instance widths + global root), so
-///       prover and verifier don't have to recompute/rehash it each run.
+// TODO: Add lookup metadata (e.g. `Vec<Vec<Lookup<Val<SC>>>>`).
+// TODO: Optionally cache a single challenger seed for transparent
+//       preprocessed data (per-instance widths + global root), so
+//       prover and verifier don't have to recompute/rehash it each run.
 pub struct CommonData<SC: SGC> {
     /// Optional global preprocessed commitment shared by all instances.
     ///
@@ -79,7 +78,7 @@ pub struct CommonData<SC: SGC> {
 impl<SC: SGC> CommonData<SC> {
     /// Create [`CommonData`] with no preprocessed columns.
     ///
-    /// Use this when none of your [`p3_air::Air`] implementations have preprocessed columns.
+    /// Use this when none of your [`Air`] implementations have preprocessed columns.
     pub const fn empty(_num_instances: usize) -> Self {
         Self { preprocessed: None }
     }
@@ -95,7 +94,7 @@ where
     /// This automatically:
     /// - Derives trace degrees from trace heights
     /// - Computes extended degrees (base + ZK padding)
-    /// - Sets up preprocessed columns for [`p3_air::Air`] implementations that define them, committing
+    /// - Sets up preprocessed columns for [`Air`] implementations that define them, committing
     ///   to them in a single global [`Pcs`] commitment.
     ///
     /// This is a convenience function mainly used for tests.
@@ -112,7 +111,7 @@ where
         Self::from_airs_and_degrees(config, &airs, &log_ext_degrees)
     }
 
-    /// Build [`CommonData`] from [`p3_air::Air`] implementations and their extended trace degree bits.
+    /// Build [`CommonData`] from [`Air`] implementations and their extended trace degree bits.
     ///
     /// # Arguments
     ///
@@ -121,7 +120,7 @@ where
     /// # Returns
     ///
     /// Global preprocessed data shared by all instances. The global commitment
-    /// is present only if at least one [`p3_air::Air`] defines preprocessed columns.
+    /// is present only if at least one [`Air`] defines preprocessed columns.
     pub fn from_airs_and_degrees<A>(
         config: &SC,
         airs: &[A],
