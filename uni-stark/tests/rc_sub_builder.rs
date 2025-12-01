@@ -15,13 +15,13 @@ use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_commit::testing::TrivialPcs;
 use p3_dft::Radix2DitParallel;
-use p3_field::extension::BinomialExtensionField;
 use p3_field::PrimeCharacteristicRing;
-use p3_matrix::dense::RowMajorMatrix;
+use p3_field::extension::BinomialExtensionField;
 use p3_matrix::Matrix;
-use p3_uni_stark::{prove, verify,  StarkConfig, SubAirBuilder, SymbolicAirBuilder};
-use rand::rngs::SmallRng;
+use p3_matrix::dense::RowMajorMatrix;
+use p3_uni_stark::{StarkConfig, SubAirBuilder, SymbolicAirBuilder, prove, verify};
 use rand::SeedableRng;
+use rand::rngs::SmallRng;
 
 const NUM_RANGE_BITS: usize = 4;
 const TRACE_WIDTH: usize = 2 + NUM_RANGE_BITS;
@@ -76,7 +76,8 @@ where
         // Declare the sub-AIR and evaluate it via `SubAirBuilder`
         let sub_air = RangeDecompAir;
         {
-            let mut sub_builder = SubAirBuilder::<AB, RangeDecompAir, AB::Var>::new(builder, 1..TRACE_WIDTH);
+            let mut sub_builder =
+                SubAirBuilder::<AB, RangeDecompAir, AB::Var>::new(builder, 1..TRACE_WIDTH);
             sub_air.eval(&mut sub_builder);
         }
 
@@ -98,7 +99,10 @@ where
 
 impl RangeCheckAir {
     fn generate_trace(&self, rows: usize) -> RowMajorMatrix<BabyBear> {
-        assert!(rows.is_power_of_two(), "trace height must be a power of two");
+        assert!(
+            rows.is_power_of_two(),
+            "trace height must be a power of two"
+        );
         let mut values = BabyBear::zero_vec(rows * TRACE_WIDTH);
         let mut accumulator = BabyBear::ZERO;
         for row in 0..rows {
@@ -161,4 +165,3 @@ fn prove_bb_trivial_deg4(air: &RangeCheckAir, log_n: usize) {
     let proof = prove(&config, air, trace, &[]);
     verify(&config, air, &proof, &[]).expect("verification failed");
 }
-
