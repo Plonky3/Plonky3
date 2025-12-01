@@ -190,7 +190,7 @@ impl Direction {
 /// - a direction indicating whether the elements are being sent or received.
 pub type LookupInput<F> = (Vec<SymbolicExpression<F>>, SymbolicExpression<F>, Direction);
 
-/// A structure that holds the lookup data necessary to generate a `LookupContext`. It is shared between the prover and the verifier.
+/// A structure that holds the lookup data necessary to generate lookup contexts via [`LookupTraceBuilder`]. It is shared between the prover and the verifier.
 #[derive(Clone, Debug)]
 pub struct Lookup<F: Field> {
     /// Type of lookup: local or global

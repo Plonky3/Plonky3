@@ -67,7 +67,7 @@ where
     }
 }
 
-/// A symbolic expression tree representing AIR constraint computations.
+/// A symbolic expression tree representing AIR constraint computations over [`SymbolicVariable`]s.
 ///
 /// This enum forms an Abstract Syntax Tree (AST) for constraint expressions.
 ///
