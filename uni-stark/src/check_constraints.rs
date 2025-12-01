@@ -15,7 +15,7 @@ use tracing::instrument;
 /// - `air`: The AIR logic to run
 /// - `main`: The trace matrix (rows of witness values)
 /// - `public_values`: Public values provided to the builder
-#[instrument(name = "check constraints", skip_all)]
+#[instrument(skip_all)]
 pub(crate) fn check_constraints<F, A>(air: &A, main: &RowMajorMatrix<F>, public_values: &[F])
 where
     F: Field,
