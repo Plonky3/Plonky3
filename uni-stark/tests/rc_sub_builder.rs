@@ -1,4 +1,4 @@
-//! Minimal range-check example that reuses a bit-decomposition gadget via `SubAirBuilder`.
+//! Minimal range-check example that reuses a bit-decomposition gadget via [`SubAirBuilder`].
 //!
 //! Column layout:
 //! - `c[0]`: running sum owned by the parent AIR.
