@@ -30,7 +30,9 @@ pub struct SubAirBuilder<'a, AB: AirBuilder, SubAir: BaseAir<AB::F>, T> {
 }
 
 impl<'a, AB: AirBuilder, SubAir: BaseAir<AB::F>, T> SubAirBuilder<'a, AB, SubAir, T> {
-    /// Creates a new [`SubAirBuilder`] that only exposes the specified `column_range` to the evaluated sub-air.
+    /// Create a new [`SubAirBuilder`] exposing only `column_range` to the sub-AIR.
+    ///
+    /// The range must lie entirely inside the parent trace width.
     #[must_use]
     pub const fn new(inner: &'a mut AB, column_range: Range<usize>) -> Self {
         Self {
