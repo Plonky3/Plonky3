@@ -1,8 +1,8 @@
-//! Helpers for reusing an `AirBuilder` on a restricted set of trace columns.
+//! Helpers for reusing an [`AirBuilder`] on a restricted set of trace columns.
 //!
 //! The uni-STARK builders often need to enforce constraints that refer to only a slice of the main
 //! trace. [`HorizontallyTruncated`] offers a cheap view over a subset of columns, and
-//! [`SubAirBuilder`] wires that view into any `AirBuilder` implementation so a sub-air can be
+//! [`SubAirBuilder`] wires that view into any [`AirBuilder`] implementation so a sub-air can be
 //! evaluated independently without cloning trace data.
 
 // Code inpsired from SP1 with additional modifications:
