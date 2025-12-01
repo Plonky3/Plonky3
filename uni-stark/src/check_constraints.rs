@@ -27,9 +27,9 @@ where
     (0..height).for_each(|row_index| {
         let row_index_next = (row_index + 1) % height;
 
-        // row_index < height so we can used unchecked indexing.
+        // row_index < height so we can use unchecked indexing.
         let local = unsafe { main.row_slice_unchecked(row_index) };
-        // row_index_next < height so we can used unchecked indexing.
+        // row_index_next < height so we can use unchecked indexing.
         let next = unsafe { main.row_slice_unchecked(row_index_next) };
         let main = ViewPair::new(
             RowMajorMatrixView::new_row(&*local),

@@ -21,6 +21,7 @@ use crate::prover::StarkInstance;
 
 /// Per-instance metadata for a preprocessed trace that lives inside a
 /// global preprocessed commitment.
+#[derive(Clone)]
 pub struct PreprocessedInstanceMeta {
     /// Index of this instance's preprocessed matrix inside the global PCS
     /// commitment / prover data.

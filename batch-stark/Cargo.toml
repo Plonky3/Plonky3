@@ -14,6 +14,7 @@ p3-air.workspace = true
 p3-challenger.workspace = true
 p3-commit.workspace = true
 p3-field.workspace = true
+p3-lookup.workspace = true
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
 p3-uni-stark.workspace = true

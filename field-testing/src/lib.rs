@@ -28,6 +28,8 @@ pub use packedfield_testing::*;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 #[allow(clippy::eq_op)]
 pub fn test_ring_with_eq<R: PrimeCharacteristicRing + Copy + Eq>(zeros: &[R], ones: &[R])
@@ -321,6 +323,41 @@ where
             assert_ne!(x, z);
             assert_eq!(x * z, F::ONE);
         }
+    }
+}
+
+/// Test JSON serialization and deserialization for a set of field values.
+///
+/// This function tests that:
+/// 1. Each value can be serialized and deserialized correctly
+/// 2. Double round-trip serialization is consistent
+pub fn test_field_json_serialization<F>(values: &[F])
+where
+    F: PrimeCharacteristicRing + Serialize + DeserializeOwned + Eq,
+{
+    for value in values {
+        // Single round-trip
+        let serialized = serde_json::to_string(value).expect("Failed to serialize field element");
+        let deserialized: F =
+            serde_json::from_str(&serialized).expect("Failed to deserialize field element");
+        assert_eq!(
+            *value, deserialized,
+            "Single round-trip serialization failed"
+        );
+
+        // Double round-trip to ensure consistency
+        let serialized_again = serde_json::to_string(&deserialized)
+            .expect("Failed to serialize field element (second time)");
+        let deserialized_again: F = serde_json::from_str(&serialized_again)
+            .expect("Failed to deserialize field element (second time)");
+        assert_eq!(
+            *value, deserialized_again,
+            "Double round-trip serialization failed"
+        );
+        assert_eq!(
+            deserialized, deserialized_again,
+            "Deserialized values should be equal"
+        );
     }
 }
 
