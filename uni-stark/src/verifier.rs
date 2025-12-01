@@ -1,7 +1,7 @@
 //! See [`crate::prover`] for an overview of the protocol and a more detailed soundness analysis.
 
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 
 use itertools::Itertools;
 use p3_air::Air;
@@ -11,9 +11,10 @@ use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use p3_util::zip_eq::zip_eq;
+use thiserror::Error;
 use tracing::instrument;
 
-use crate::symbolic_builder::{SymbolicAirBuilder, get_log_quotient_degree};
+use crate::symbolic_builder::{SymbolicAirBuilder, get_log_num_quotient_chunks};
 use crate::{
     Domain, PcsError, PreprocessedVerifierKey, Proof, StarkGenericConfig, Val,
     VerifierConstraintFolder,
@@ -85,6 +86,7 @@ pub fn verify_constraints<SC, A, PcsErr>(
 where
     SC: StarkGenericConfig,
     A: for<'a> Air<VerifierConstraintFolder<'a, SC>>,
+    PcsErr: core::fmt::Debug,
 {
     let sels = trace_domain.selectors_at_point(zeta);
 
@@ -235,19 +237,19 @@ where
         return Err(VerificationError::InvalidProofShape);
     }
 
-    let log_quotient_degree = get_log_quotient_degree::<Val<SC>, A>(
+    let log_num_quotient_chunks = get_log_num_quotient_chunks::<Val<SC>, A>(
         air,
         preprocessed_width,
         public_values.len(),
         config.is_zk(),
     );
-    let quotient_degree = 1 << (log_quotient_degree + config.is_zk());
+    let num_quotient_chunks = 1 << (log_num_quotient_chunks + config.is_zk());
     let mut challenger = config.initialise_challenger();
     let init_trace_domain = pcs.natural_domain_for_degree(degree >> (config.is_zk()));
 
     let quotient_domain =
-        trace_domain.create_disjoint_domain(1 << (degree_bits + log_quotient_degree));
-    let quotient_chunks_domains = quotient_domain.split_domains(quotient_degree);
+        trace_domain.create_disjoint_domain(1 << (degree_bits + log_num_quotient_chunks));
+    let quotient_chunks_domains = quotient_domain.split_domains(num_quotient_chunks);
 
     let randomized_quotient_chunks_domains = quotient_chunks_domains
         .iter()
@@ -265,7 +267,7 @@ where
     let air_width = A::width(air);
     let valid_shape = opened_values.trace_local.len() == air_width
         && opened_values.trace_next.len() == air_width
-        && opened_values.quotient_chunks.len() == quotient_degree
+        && opened_values.quotient_chunks.len() == num_quotient_chunks
         && opened_values
             .quotient_chunks
             .iter()
@@ -388,18 +390,26 @@ where
     Ok(())
 }
 
-#[derive(Debug)]
-pub enum VerificationError<PcsErr> {
+#[derive(Debug, Error)]
+pub enum VerificationError<PcsErr>
+where
+    PcsErr: core::fmt::Debug,
+{
+    #[error("invalid proof shape")]
     InvalidProofShape,
     /// An error occurred while verifying the claimed openings.
+    #[error("invalid opening argument: {0:?}")]
     InvalidOpeningArgument(PcsErr),
     /// Out-of-domain evaluation mismatch, i.e. `constraints(zeta)` did not match
     /// `quotient(zeta) Z_H(zeta)`.
-    OodEvaluationMismatch {
-        index: Option<usize>,
-    },
+    #[error("out-of-domain evaluation mismatch{}", .index.map(|i| format!(" at index {}", i)).unwrap_or_default())]
+    OodEvaluationMismatch { index: Option<usize> },
     /// The FRI batch randomization does not correspond to the ZK setting.
+    #[error("randomization error: FRI batch randomization does not match ZK setting")]
     RandomizationError,
     /// The domain does not support computing the next point algebraically.
+    #[error(
+        "next point unavailable: domain does not support computing the next point algebraically"
+    )]
     NextPointUnavailable,
 }

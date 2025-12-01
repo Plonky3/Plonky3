@@ -14,8 +14,8 @@ use crate::Entry;
 use crate::symbolic_expression::SymbolicExpression;
 use crate::symbolic_variable::SymbolicVariable;
 
-#[instrument(name = "infer log of constraint degree", skip_all)]
-pub fn get_log_quotient_degree<F, A>(
+#[instrument(skip_all)]
+pub fn get_log_num_quotient_chunks<F, A>(
     air: &A,
     preprocessed_width: usize,
     num_public_values: usize,
@@ -53,13 +53,13 @@ where
     ) + is_zk)
         .max(2);
 
-    // The quotient's actual degree is approximately (max_constraint_degree - 1) n,
-    // where subtracting 1 comes from division by the vanishing polynomial.
-    // But we pad it to a power of two so that we can efficiently decompose the quotient.
+    // We bound the degree of the quotient polynomial by constraint_degree - 1,
+    // then choose the number of quotient chunks as the smallest power of two
+    // >= (constraint_degree - 1). This function returns log2(#chunks).
     log2_ceil_usize(constraint_degree - 1)
 }
 
-#[instrument(name = "infer constraint degree", skip_all, level = "debug")]
+#[instrument(skip_all, level = "debug")]
 pub fn get_max_constraint_degree<F, A>(
     air: &A,
     preprocessed_width: usize,
@@ -73,7 +73,7 @@ where
 }
 
 #[instrument(
-    name = "infer base and extensionconstraint degree",
+    name = "infer base and extension constraint degree",
     skip_all,
     level = "debug"
 )]
@@ -89,7 +89,7 @@ where
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
 {
-    let (base_constraints, extension_constraints) = get_all_symbolic_constraints::<F, EF, A>(
+    let (base_constraints, extension_constraints) = get_all_symbolic_constraints(
         air,
         preprocessed_width,
         num_public_values,
@@ -361,27 +361,27 @@ mod tests {
     }
 
     #[test]
-    fn test_get_log_quotient_degree_no_constraints() {
+    fn test_get_log_num_quotient_chunks_no_constraints() {
         let air = MockAir {
             constraints: vec![],
             width: 4,
         };
-        let log_degree = get_log_quotient_degree(&air, 3, 2, 0);
+        let log_degree = get_log_num_quotient_chunks(&air, 3, 2, 0);
         assert_eq!(log_degree, 0);
     }
 
     #[test]
-    fn test_get_log_quotient_degree_single_constraint() {
+    fn test_get_log_num_quotient_chunks_single_constraint() {
         let air = MockAir {
             constraints: vec![SymbolicVariable::new(Entry::Main { offset: 0 }, 0)],
             width: 4,
         };
-        let log_degree = get_log_quotient_degree(&air, 3, 2, 0);
+        let log_degree = get_log_num_quotient_chunks(&air, 3, 2, 0);
         assert_eq!(log_degree, log2_ceil_usize(1));
     }
 
     #[test]
-    fn test_get_log_quotient_degree_multiple_constraints() {
+    fn test_get_log_num_quotient_chunks_multiple_constraints() {
         let air = MockAir {
             constraints: vec![
                 SymbolicVariable::new(Entry::Main { offset: 0 }, 0),
@@ -390,7 +390,7 @@ mod tests {
             ],
             width: 4,
         };
-        let log_degree = get_log_quotient_degree(&air, 3, 2, 0);
+        let log_degree = get_log_num_quotient_chunks(&air, 3, 2, 0);
         assert_eq!(log_degree, log2_ceil_usize(1));
     }
 

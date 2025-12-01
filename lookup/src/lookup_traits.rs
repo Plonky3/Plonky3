@@ -1,6 +1,6 @@
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 use core::ops::Neg;
 
 use p3_air::{
@@ -13,12 +13,14 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::ViewPair;
 use p3_uni_stark::{Entry, StarkGenericConfig, SymbolicExpression, Val};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use tracing::warn;
 
 /// Defines errors that can occur during lookup verification.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum LookupError {
     /// Error indicating that the global cumulative sum is incorrect.
+    #[error("global cumulative sum mismatch{}", .0.as_ref().map(|s| format!(": {}", s)).unwrap_or_default())]
     GlobalCumulativeMismatch(Option<String>),
 }
 
