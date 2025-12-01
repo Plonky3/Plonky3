@@ -50,7 +50,7 @@ where
         let mut recomposed = AB::Expr::ZERO;
         for (i, bit) in bits.iter().enumerate() {
             let weight = BabyBear::from_u32(1 << i);
-            recomposed = recomposed + bit.clone() * weight;
+            recomposed += bit.clone() * weight;
             builder.assert_zero(bit.clone() * (bit.clone() - AB::Expr::ONE));
         }
 
@@ -111,7 +111,7 @@ impl RangeCheckAir {
                 values[base + 2 + bit] = BabyBear::from_u32((tmp & 1) as u32);
                 tmp >>= 1;
             }
-            accumulator = accumulator + BabyBear::from_u32(raw_value as u32);
+            accumulator += BabyBear::from_u32(raw_value as u32);
         }
         RowMajorMatrix::new(values, TRACE_WIDTH)
     }
