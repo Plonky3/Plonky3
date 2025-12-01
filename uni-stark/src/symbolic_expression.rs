@@ -14,7 +14,7 @@ where
     F: Field,
     BinomialExtensionField<F, D>: ExtensionField<F>,
 {
-    /// Generic implementation for ANY field F using a BinomialExtensionField.
+    /// Generic implementation for ANY field F using a [`BinomialExtensionField`].
     /// This works for BabyBear, KoalaBear, Mersenne31, and any future field
     /// without modifying this crate.
     ///
