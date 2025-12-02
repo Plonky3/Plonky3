@@ -211,7 +211,7 @@ pub trait UniformSamplingField {
     /// triggering a panic / requiring a resample.
     const MAX_SINGLE_SAMPLE_BITS: usize;
     /// An array storing the largest value `m_k` for each `k` in [0, 31], such that `m_k`
-    /// is a multiple of `2^k`. `m_k` is defined as:
+    /// is a multiple of `2^k` and less than P. `m_k` is defined as:
     ///
     /// \( m_k = ⌊P / 2^k⌋ · 2^k \)
     ///
