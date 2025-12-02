@@ -22,10 +22,6 @@ impl Permutation<[PackedGoldilocksAVX512; 8]> for MdsMatrixGoldilocks {
         const MATRIX_CIRC_MDS_8_SML_ROW_U64: [u64; 8] = convert_array(MATRIX_CIRC_MDS_8_SML_ROW);
         apply_circulant(&MATRIX_CIRC_MDS_8_SML_ROW_U64, &input)
     }
-
-    fn permute_mut(&self, input: &mut [PackedGoldilocksAVX512; 8]) {
-        *input = self.permute(*input);
-    }
 }
 
 impl MdsPermutation<PackedGoldilocksAVX512, 8> for MdsMatrixGoldilocks {}
@@ -34,10 +30,6 @@ impl Permutation<[PackedGoldilocksAVX512; 12]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [PackedGoldilocksAVX512; 12]) -> [PackedGoldilocksAVX512; 12] {
         const MATRIX_CIRC_MDS_12_SML_ROW_U64: [u64; 12] = convert_array(MATRIX_CIRC_MDS_12_SML_ROW);
         apply_circulant(&MATRIX_CIRC_MDS_12_SML_ROW_U64, &input)
-    }
-
-    fn permute_mut(&self, input: &mut [PackedGoldilocksAVX512; 12]) {
-        *input = self.permute(*input);
     }
 }
 
@@ -48,10 +40,6 @@ impl Permutation<[PackedGoldilocksAVX512; 16]> for MdsMatrixGoldilocks {
         const MATRIX_CIRC_MDS_16_SML_ROW_U64: [u64; 16] = convert_array(MATRIX_CIRC_MDS_16_SML_ROW);
         apply_circulant(&MATRIX_CIRC_MDS_16_SML_ROW_U64, &input)
     }
-
-    fn permute_mut(&self, input: &mut [PackedGoldilocksAVX512; 16]) {
-        *input = self.permute(*input);
-    }
 }
 
 impl MdsPermutation<PackedGoldilocksAVX512, 16> for MdsMatrixGoldilocks {}
@@ -59,10 +47,6 @@ impl MdsPermutation<PackedGoldilocksAVX512, 16> for MdsMatrixGoldilocks {}
 impl Permutation<[PackedGoldilocksAVX512; 24]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [PackedGoldilocksAVX512; 24]) -> [PackedGoldilocksAVX512; 24] {
         apply_circulant(&MATRIX_CIRC_MDS_24_GOLDILOCKS, &input)
-    }
-
-    fn permute_mut(&self, input: &mut [PackedGoldilocksAVX512; 24]) {
-        *input = self.permute(*input);
     }
 }
 

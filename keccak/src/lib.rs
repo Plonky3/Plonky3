@@ -85,10 +85,6 @@ impl Permutation<[u8; 200]> for KeccakF {
             u64_limb.to_le_bytes()[i % 8]
         })
     }
-
-    fn permute_mut(&self, input: &mut [u8; 200]) {
-        *input = self.permute(*input);
-    }
 }
 
 impl CryptographicPermutation<[u8; 200]> for KeccakF {}

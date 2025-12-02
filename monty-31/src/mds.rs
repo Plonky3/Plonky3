@@ -274,10 +274,6 @@ impl<FP: MontyParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 8]>
             <SmallConvolveMontyField31 as Convolve<MontyField31<FP>, i64, i64, i64>>::conv8,
         )
     }
-
-    fn permute_mut(&self, input: &mut [MontyField31<FP>; 8]) {
-        *input = self.permute(*input);
-    }
 }
 impl<FP: MontyParameters, MU: MDSUtils> MdsPermutation<MontyField31<FP>, 8>
     for MdsMatrixMontyField31<MU>
@@ -294,10 +290,6 @@ impl<FP: MontyParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 12]>
             <SmallConvolveMontyField31 as Convolve<MontyField31<FP>, i64, i64, i64>>::conv12,
         )
     }
-
-    fn permute_mut(&self, input: &mut [MontyField31<FP>; 12]) {
-        *input = self.permute(*input);
-    }
 }
 impl<FP: MontyParameters, MU: MDSUtils> MdsPermutation<MontyField31<FP>, 12>
     for MdsMatrixMontyField31<MU>
@@ -313,10 +305,6 @@ impl<FP: MontyParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 16]>
             MU::MATRIX_CIRC_MDS_16_COL,
             <SmallConvolveMontyField31 as Convolve<MontyField31<FP>, i64, i64, i64>>::conv16,
         )
-    }
-
-    fn permute_mut(&self, input: &mut [MontyField31<FP>; 16]) {
-        *input = self.permute(*input);
     }
 }
 impl<FP: MontyParameters, MU: MDSUtils> MdsPermutation<MontyField31<FP>, 16>
@@ -335,10 +323,6 @@ where
             <LargeConvolveMontyField31 as Convolve<MontyField31<FP>, i64, i64, i64>>::conv24,
         )
     }
-
-    fn permute_mut(&self, input: &mut [MontyField31<FP>; 24]) {
-        *input = self.permute(*input);
-    }
 }
 impl<FP: BarrettParameters, MU: MDSUtils> MdsPermutation<MontyField31<FP>, 24>
     for MdsMatrixMontyField31<MU>
@@ -355,10 +339,6 @@ impl<FP: BarrettParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 32]>
             <LargeConvolveMontyField31 as Convolve<MontyField31<FP>, i64, i64, i64>>::conv32,
         )
     }
-
-    fn permute_mut(&self, input: &mut [MontyField31<FP>; 32]) {
-        *input = self.permute(*input);
-    }
 }
 impl<FP: BarrettParameters, MU: MDSUtils> MdsPermutation<MontyField31<FP>, 32>
     for MdsMatrixMontyField31<MU>
@@ -374,10 +354,6 @@ impl<FP: BarrettParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 64]>
             MU::MATRIX_CIRC_MDS_64_COL,
             <LargeConvolveMontyField31 as Convolve<MontyField31<FP>, i64, i64, i64>>::conv64,
         )
-    }
-
-    fn permute_mut(&self, input: &mut [MontyField31<FP>; 64]) {
-        *input = self.permute(*input);
     }
 }
 impl<FP: BarrettParameters, MU: MDSUtils> MdsPermutation<MontyField31<FP>, 64>

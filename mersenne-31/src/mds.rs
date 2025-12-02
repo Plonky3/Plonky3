@@ -154,10 +154,6 @@ impl Permutation<[Mersenne31; 8]> for MdsMatrixMersenne31 {
             SmallConvolveMersenne31::conv8,
         )
     }
-
-    fn permute_mut(&self, input: &mut [Mersenne31; 8]) {
-        *input = self.permute(*input);
-    }
 }
 impl MdsPermutation<Mersenne31, 8> for MdsMatrixMersenne31 {}
 
@@ -172,10 +168,6 @@ impl Permutation<[Mersenne31; 12]> for MdsMatrixMersenne31 {
             MATRIX_CIRC_MDS_12_SML_COL,
             SmallConvolveMersenne31::conv12,
         )
-    }
-
-    fn permute_mut(&self, input: &mut [Mersenne31; 12]) {
-        *input = self.permute(*input);
     }
 }
 impl MdsPermutation<Mersenne31, 12> for MdsMatrixMersenne31 {}
@@ -192,10 +184,6 @@ impl Permutation<[Mersenne31; 16]> for MdsMatrixMersenne31 {
             MATRIX_CIRC_MDS_16_SML_COL,
             SmallConvolveMersenne31::conv16,
         )
-    }
-
-    fn permute_mut(&self, input: &mut [Mersenne31; 16]) {
-        *input = self.permute(*input);
     }
 }
 impl MdsPermutation<Mersenne31, 16> for MdsMatrixMersenne31 {}
@@ -221,10 +209,6 @@ impl Permutation<[Mersenne31; 32]> for MdsMatrixMersenne31 {
             MATRIX_CIRC_MDS_32_MERSENNE31_COL,
             LargeConvolveMersenne31::conv32,
         )
-    }
-
-    fn permute_mut(&self, input: &mut [Mersenne31; 32]) {
-        *input = self.permute(*input);
     }
 }
 impl MdsPermutation<Mersenne31, 32> for MdsMatrixMersenne31 {}
@@ -258,10 +242,6 @@ impl Permutation<[Mersenne31; 64]> for MdsMatrixMersenne31 {
             MATRIX_CIRC_MDS_64_MERSENNE31_COL,
             LargeConvolveMersenne31::conv64,
         )
-    }
-
-    fn permute_mut(&self, input: &mut [Mersenne31; 64]) {
-        *input = self.permute(*input);
     }
 }
 impl MdsPermutation<Mersenne31, 64> for MdsMatrixMersenne31 {}
