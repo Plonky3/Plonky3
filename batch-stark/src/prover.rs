@@ -23,7 +23,7 @@ use crate::check_constraints::DebugConstraintBuilderWithLookups;
 use crate::common::{CommonData, get_perm_challenges};
 use crate::config::{Challenge, Domain, StarkGenericConfig as SGC, Val, observe_instance_binding};
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof, OpenedValuesWithLookups};
-use crate::symbolic::{get_log_quotient_degree, get_symbolic_constraints};
+use crate::symbolic::{get_log_num_quotient_chunks, get_symbolic_constraints};
 
 #[derive(Debug)]
 pub struct StarkInstance<'a, SC: SGC, A> {
@@ -126,9 +126,8 @@ where
     let airs: Vec<&A> = instances.iter().map(|i| i.air).collect();
     let pub_vals: Vec<Vec<Val<SC>>> = instances.iter().map(|i| i.public_values.clone()).collect();
 
-    // Precompute per-instance preprocessed widths, log_quotient_degrees and quotient_degrees.
     let mut preprocessed_widths = Vec::with_capacity(airs.len());
-    let (log_quotient_degrees, quotient_degrees): (Vec<usize>, Vec<usize>) = airs
+    let (log_num_quotient_chunks, num_quotient_chunks): (Vec<usize>, Vec<usize>) = airs
         .iter()
         .zip(pub_vals.iter())
         .enumerate()
@@ -139,7 +138,7 @@ where
                 .and_then(|g| g.instances[i].as_ref().map(|m| m.width))
                 .unwrap_or(0);
             preprocessed_widths.push(pre_w);
-            let lqd = get_log_quotient_degree::<Val<SC>, SC::Challenge, A, LG>(
+            let lq_chunks = get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LG>(
                 air,
                 pre_w,
                 pv.len(),
@@ -148,8 +147,8 @@ where
                 config.is_zk(),
                 lookup_gadget,
             );
-            let qd = 1 << (lqd + config.is_zk());
-            (lqd, qd)
+            let n_chunks = 1 << (lq_chunks + config.is_zk());
+            (lq_chunks, n_chunks)
         })
         .unzip();
 
@@ -165,7 +164,7 @@ where
             log_ext_degrees[i],
             log_degrees[i],
             A::width(airs[i]),
-            quotient_degrees[i],
+            num_quotient_chunks[i],
         );
     }
 
@@ -249,7 +248,7 @@ where
         None
     };
 
-    // Compute quotient degrees and domains per instance inline in the loop below.
+    // Compute quotient chunk counts and domains per instance inline in the loop below.
 
     // Get the random alpha to fold constraints.
     let alpha: Challenge<SC> = challenger.sample_algebra_element();
@@ -264,11 +263,12 @@ where
 
     // TODO: Parallelize this loop for better performance with many instances.
     for (i, trace_domain) in trace_domains.iter().enumerate() {
-        let lqd = log_quotient_degrees[i];
-        let quotient_degree = quotient_degrees[i];
-        // Disjoint domain sized by extended degree + quotient degree; use ext domain for shift.
+        let log_chunks = log_num_quotient_chunks[i];
+        let n_chunks = num_quotient_chunks[i];
+        // Disjoint domain of size ext_degree * num_quotient_chunks
+        // (log size = log_ext_degrees[i] + log_num_quotient_chunks[i]); use ext domain for shift.
         let quotient_domain =
-            ext_trace_domains[i].create_disjoint_domain(1 << (log_ext_degrees[i] + lqd));
+            ext_trace_domains[i].create_disjoint_domain(1 << (log_ext_degrees[i] + log_chunks));
 
         // Count constraints to size alpha powers packing.
         let (base_constraints, extension_constraints) = get_symbolic_constraints(
@@ -322,8 +322,8 @@ where
 
         // Flatten to base field and split into chunks.
         let q_flat = RowMajorMatrix::new_col(q_values).flatten_to_base();
-        let chunk_mats = quotient_domain.split_evals(quotient_degree, q_flat);
-        let chunk_domains = quotient_domain.split_domains(quotient_degree);
+        let chunk_mats = quotient_domain.split_evals(n_chunks, q_flat);
+        let chunk_domains = quotient_domain.split_domains(n_chunks);
 
         let start = quotient_chunk_domains.len();
         quotient_chunk_domains.extend(chunk_domains);

@@ -7,7 +7,7 @@ use p3_util::log2_ceil_usize;
 use tracing::instrument;
 
 #[instrument(name = "infer log of constraint degree", skip_all)]
-pub fn get_log_quotient_degree<F, EF, A, LG>(
+pub fn get_log_num_quotient_chunks<F, EF, A, LG>(
     air: &A,
     preprocessed_width: usize,
     num_public_values: usize,

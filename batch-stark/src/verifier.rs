@@ -1,6 +1,7 @@
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::fmt::Debug;
 
 use hashbrown::HashMap;
 use p3_air::Air;
@@ -75,9 +76,9 @@ where
     challenger.observe_base_as_algebra_element::<Challenge<SC>>(Val::<SC>::from_usize(n_instances));
 
     // Validate opened values shape per instance and observe per-instance binding data.
-    // Precompute per-instance preprocessed widths and quotient degrees (number of chunks).
+    // Precompute per-instance preprocessed widths and number of quotient chunks.
     let mut preprocessed_widths = Vec::with_capacity(airs.len());
-    let mut quotient_degrees = Vec::with_capacity(airs.len());
+    let mut num_quotient_chunks = Vec::with_capacity(airs.len());
 
     for (i, _air) in airs.iter().enumerate() {
         let pre_w = common
@@ -87,12 +88,12 @@ where
             .unwrap_or(0);
         preprocessed_widths.push(pre_w);
 
-        // Derive quotient_degree (number of chunks) directly from the proof shape.
-        let quotient_degree = opened_values.instances[i]
+        // Derive the number of quotient chunks directly from the proof shape.
+        let n_chunks = opened_values.instances[i]
             .base_opened_values
             .quotient_chunks
             .len();
-        quotient_degrees.push(quotient_degree);
+        num_quotient_chunks.push(n_chunks);
     }
 
     for (i, air) in airs.iter().enumerate() {
@@ -108,8 +109,8 @@ where
         }
 
         // Validate quotient chunks structure
-        let quotient_degree = quotient_degrees[i];
-        if inst_base_opened_vals.quotient_chunks.len() != quotient_degree {
+        let n_chunks = num_quotient_chunks[i];
+        if inst_base_opened_vals.quotient_chunks.len() != n_chunks {
             return Err(VerificationError::InvalidProofShape);
         }
 
@@ -137,7 +138,7 @@ where
         let ext_db = degree_bits[i];
         let base_db = ext_db - config.is_zk();
         let width = A::width(air);
-        observe_instance_binding::<SC>(&mut challenger, ext_db, base_db, width, quotient_degree);
+        observe_instance_binding::<SC>(&mut challenger, ext_db, base_db, width, n_chunks);
     }
 
     // Observe main commitment and public values (in instance order).
@@ -224,15 +225,15 @@ where
     coms_to_verify.push((commitments.main.clone(), trace_round));
 
     // Quotient chunks round: flatten per-instance chunks to match commit order.
-    // Use extended domains for the outer commit domain, with size = base_degree * quotient_degree.
+    // Use extended domains for the outer commit domain, with size = base_degree * num_quotient_chunks.
     let quotient_domains: Vec<Vec<Domain<SC>>> = (0..degree_bits.len())
         .map(|i| {
             let ext_db = degree_bits[i];
             let base_db = ext_db - config.is_zk();
-            let quotient_degree = quotient_degrees[i];
+            let n_chunks = num_quotient_chunks[i];
             let ext_dom = ext_trace_domains[i];
-            let qdom = ext_dom.create_disjoint_domain((1 << base_db) * quotient_degree);
-            qdom.split_domains(quotient_degree)
+            let qdom = ext_dom.create_disjoint_domain((1 << base_db) * n_chunks);
+            qdom.split_domains(n_chunks)
         })
         .collect();
 
@@ -488,7 +489,7 @@ pub struct VerifierData<'a, SC: SGC> {
 /// This evaluates the AIR constraints at the out-of-domain point and checks
 /// that constraints(zeta) / Z_H(zeta) = quotient(zeta).
 #[allow(clippy::too_many_arguments)]
-pub fn verify_constraints_with_lookups<'a, SC, A, LG: LookupGadget, PcsErr>(
+pub fn verify_constraints_with_lookups<'a, SC, A, LG: LookupGadget, PcsErr: Debug>(
     air: &A,
     verifier_data: &VerifierData<'a, SC>,
     lookup_gadget: &LG,
