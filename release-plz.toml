@@ -13,6 +13,10 @@ name = "p3-baby-bear"
 version_group = "plonky3"
 
 [[package]]
+name = "p3-batch-stark"
+version_group = "plonky3"
+
+[[package]]
 name = "p3-blake3"
 version_group = "plonky3"
 
@@ -77,6 +81,10 @@ name = "p3-koala-bear"
 version_group = "plonky3"
 
 [[package]]
+name = "p3-lookup"
+version_group = "plonky3"
+
+[[package]]
 name = "p3-matrix"
 version_group = "plonky3"
 
@@ -98,6 +106,10 @@ version_group = "plonky3"
 
 [[package]]
 name = "p3-monty-31"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-multilinear-util"
 version_group = "plonky3"
 
 [[package]]
