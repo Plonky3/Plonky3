@@ -362,11 +362,15 @@ where
     F: UniformSamplingField + PrimeField64,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
-    fn sample_uniform_bits(&mut self, bits: usize) -> Result<usize, ResamplingError> {
-        self.sample_uniform_bits_with_strategy::<ResampleOnRejection>(bits)
-    }
-    fn sample_uniform_bits_may_panic(&mut self, bits: usize) -> Result<usize, ResamplingError> {
-        self.sample_uniform_bits_with_strategy::<PanicOnRejection>(bits)
+    fn sample_uniform_bits<const RESAMPLE: bool>(
+        &mut self,
+        bits: usize,
+    ) -> Result<usize, ResamplingError> {
+        if RESAMPLE {
+            self.sample_uniform_bits_with_strategy::<ResampleOnRejection>(bits)
+        } else {
+            self.sample_uniform_bits_with_strategy::<PanicOnRejection>(bits)
+        }
     }
 }
 

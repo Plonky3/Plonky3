@@ -71,7 +71,7 @@ pub trait UniformGrindingChallenger:
     /// Returns `true` if the witness passes the PoW check, `false` otherwise.
     fn check_witness_uniform(&mut self, bits: usize, witness: Self::Witness) -> bool {
         self.observe(witness);
-        self.sample_uniform_bits(bits)
+        self.sample_uniform_bits::<true>(bits)
             .expect("Error impossible here due to resampling strategy")
             == 0
     }
@@ -86,7 +86,7 @@ pub trait UniformGrindingChallenger:
     /// Returns `true` if the witness passes the PoW check, `false` otherwise.
     fn check_witness_uniform_may_panic(&mut self, bits: usize, witness: Self::Witness) -> bool {
         self.observe(witness);
-        match self.sample_uniform_bits_may_panic(bits) {
+        match self.sample_uniform_bits::<false>(bits) {
             Ok(v) => v == 0,
             Err(_) => false,
         }

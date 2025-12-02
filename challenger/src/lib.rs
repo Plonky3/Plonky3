@@ -77,15 +77,17 @@ pub trait CanSampleUniformBits<F> {
     /// Performance overhead depends on the field and number of bits requested.
     /// E.g. for KoalaBear sampling up to 24 bits uniformly is essentially free.
     ///
-    /// This variant resamples in case of sampling a value outside the range in
-    /// which we can samplie `bits` uniform bits.
-    fn sample_uniform_bits(&mut self, bits: usize) -> Result<usize, ResamplingError>;
-
-    /// This variant panics in case of sampling a value for which we would
-    /// produce non uniform bits. The probability of a panic is about 1/P
-    /// for most fields. See `UniformSamplingField` implementation for each
-    /// field for details.
-    fn sample_uniform_bits_may_panic(&mut self, bits: usize) -> Result<usize, ResamplingError>;
+    /// If `REJECTION_SAMPLE` is set to true then this function will sample multiple field
+    /// elements until it finds one which will produce uniform bits.
+    /// If `REJECTION_SAMPLE` is set to false then this function will sample a single field
+    /// element and produce and error if the value would produce non-uniform bits.
+    ///
+    /// The probability of a panic or a resample is about 1/P for most fields.
+    /// See `UniformSamplingField` implementation for each field for details.
+    fn sample_uniform_bits<const RESAMPLE: bool>(
+        &mut self,
+        bits: usize,
+    ) -> Result<usize, ResamplingError>;
 }
 
 /// A high-level trait combining observation and sampling over a finite field.
@@ -194,11 +196,10 @@ where
     F: PrimeField64,
     C: CanSampleUniformBits<F>,
 {
-    fn sample_uniform_bits(&mut self, bits: usize) -> Result<usize, ResamplingError> {
-        (*self).sample_uniform_bits(bits)
-    }
-
-    fn sample_uniform_bits_may_panic(&mut self, bits: usize) -> Result<usize, ResamplingError> {
-        (*self).sample_uniform_bits_may_panic(bits)
+    fn sample_uniform_bits<const RESAMPLE: bool>(
+        &mut self,
+        bits: usize,
+    ) -> Result<usize, ResamplingError> {
+        (*self).sample_uniform_bits::<RESAMPLE>(bits)
     }
 }
