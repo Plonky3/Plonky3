@@ -1,0 +1,145 @@
+[workspace]
+changelog_config = "cliff.toml"
+pr_labels = ["release"]
+publish_timeout = "10m"
+dependencies_update = true
+
+[[package]]
+name = "p3-air"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-baby-bear"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-batch-stark"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-blake3"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-blake3-air"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-bn254"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-challenger"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-circle"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-commit"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-dft"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-examples"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-field"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-field-testing"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-fri"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-goldilocks"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-interpolation"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-keccak"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-keccak-air"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-koala-bear"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-lookup"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-matrix"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-maybe-rayon"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-mds"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-merkle-tree"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-mersenne-31"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-monty-31"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-multilinear-util"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-poseidon"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-poseidon2"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-poseidon2-air"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-rescue"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-sha256"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-symmetric"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-uni-stark"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-util"
+version_group = "plonky3"
