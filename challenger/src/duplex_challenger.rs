@@ -295,10 +295,10 @@ where
     where
         S: BitSamplingStrategy<F, P, WIDTH, RATE>,
     {
-        assert!(
-            bits > 0 && bits < usize::BITS as usize,
-            "bit count must be valid"
-        );
+        if bits == 0 {
+            return 0;
+        };
+        assert!(bits < usize::BITS as usize, "bit count must be valid");
         assert!(
             (1u64 << bits) < F::ORDER_U64,
             "bit count exceeds field order"
