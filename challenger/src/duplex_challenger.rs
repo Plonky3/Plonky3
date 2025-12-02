@@ -1,3 +1,6 @@
+use core::error::Error;
+use core::fmt::{Display, Formatter};
+
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -241,6 +244,24 @@ pub(super) struct ResampleOnRejection;
 /// A zero-sized struct representing the "panic" strategy.
 pub(super) struct PanicOnRejection;
 
+/// Custom error raised when resampling is required for uniform bits but disabled
+/// via `PanicOnRejection` strategy.
+#[derive(Debug)]
+pub struct ResamplingError {
+    /// The sampled value
+    value: u64,
+    /// The target value we need to be smaller than
+    m: u64,
+}
+
+impl Display for ResamplingError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        write!(f, "Encountered value {0}, which requires resampling for uniform bits as it not smaller than {1}. But resampling is not enabled.", self.value, self.m)
+    }
+}
+
+impl Error for ResamplingError {}
+
 /// A trait that defines a strategy for handling out-of-range samples.
 pub(super) trait BitSamplingStrategy<F, P, const W: usize, const R: usize>
 where
@@ -251,20 +272,24 @@ where
     const PANIC_ON_REJECTION: bool;
 
     #[inline]
-    fn sample_value(challenger: &mut DuplexChallenger<F, P, W, R>, m: u64) -> F {
+    fn sample_value(
+        challenger: &mut DuplexChallenger<F, P, W, R>,
+        m: u64,
+    ) -> Result<F, ResamplingError> {
         let mut result: F = challenger.sample();
         if Self::PANIC_ON_REJECTION {
             if result.as_canonical_u64() >= m {
-                panic!(
-                    "Sampled field element {result} is out of the uniform sampling range (< {m})"
-                );
+                return Err(ResamplingError {
+                    value: result.as_canonical_u64(),
+                    m,
+                });
             }
         } else {
             while result.as_canonical_u64() >= m {
                 result = challenger.sample();
             }
         }
-        result
+        Ok(result)
     }
 }
 
@@ -293,12 +318,15 @@ where
 {
     /// Generic implementation for uniform bit sampling, parameterized by a strategy.
     #[inline]
-    fn sample_uniform_bits_with_strategy<S>(&mut self, bits: usize) -> usize
+    fn sample_uniform_bits_with_strategy<S>(
+        &mut self,
+        bits: usize,
+    ) -> Result<usize, ResamplingError>
     where
         S: BitSamplingStrategy<F, P, WIDTH, RATE>,
     {
         if bits == 0 {
-            return 0;
+            return Ok(0);
         };
         assert!(bits < usize::BITS as usize, "bit count must be valid");
         assert!(
@@ -309,7 +337,7 @@ where
         if bits <= F::MAX_SINGLE_SAMPLE_BITS {
             // Fast path: Only one sample is needed for sufficient uniformity.
             let rand_f = S::sample_value(self, m);
-            rand_f.as_canonical_u64() as usize & ((1 << bits) - 1)
+            Ok(rand_f?.as_canonical_u64() as usize & ((1 << bits) - 1))
         } else {
             // Slow path: Sample twice to construct the required number of bits.
             // This reduces the bias introduced by a single, larger sample.
@@ -317,13 +345,13 @@ where
             let half_bits2 = bits - half_bits1;
             // Sample the first chunk of bits.
             let rand1 = S::sample_value(self, F::SAMPLING_BITS_M[half_bits1]);
-            let chunk1 = rand1.as_canonical_u64() as usize & ((1 << half_bits1) - 1);
+            let chunk1 = rand1?.as_canonical_u64() as usize & ((1 << half_bits1) - 1);
             // Sample the second chunk of bits.
             let rand2 = S::sample_value(self, F::SAMPLING_BITS_M[half_bits2]);
-            let chunk2 = rand2.as_canonical_u64() as usize & ((1 << half_bits2) - 1);
+            let chunk2 = rand2?.as_canonical_u64() as usize & ((1 << half_bits2) - 1);
 
             // Combine the chunks.
-            chunk1 | (chunk2 << half_bits1)
+            Ok(chunk1 | (chunk2 << half_bits1))
         }
     }
 }
@@ -334,10 +362,10 @@ where
     F: UniformSamplingField + PrimeField64,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
-    fn sample_uniform_bits(&mut self, bits: usize) -> usize {
+    fn sample_uniform_bits(&mut self, bits: usize) -> Result<usize, ResamplingError> {
         self.sample_uniform_bits_with_strategy::<ResampleOnRejection>(bits)
     }
-    fn sample_uniform_bits_may_panic(&mut self, bits: usize) -> usize {
+    fn sample_uniform_bits_may_panic(&mut self, bits: usize) -> Result<usize, ResamplingError> {
         self.sample_uniform_bits_with_strategy::<PanicOnRejection>(bits)
     }
 }
