@@ -113,7 +113,7 @@ impl UniformSamplingField for BabyBearParameters {
         let mut k = 0;
         while k < 64 {
             if k == 0 {
-                a[k] = prime; // This value is irrelevant in practice. `bits = 0` not allowed
+                a[k] = prime; // This value is irrelevant in practice. `bits = 0` returns 0 always
             } else {
                 // Create a mask to zero out the last k bits
                 let mask = !((1u64 << k) - 1);
