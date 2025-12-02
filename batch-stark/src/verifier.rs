@@ -30,7 +30,7 @@ use crate::proof::BatchProof;
 #[instrument(skip_all)]
 pub fn verify_batch<SC, A, LG>(
     config: &SC,
-    airs: &mut [A],
+    airs: &[A],
     proof: &BatchProof<SC>,
     public_values: &[Vec<Val<SC>>],
     common: &CommonData<SC>,
@@ -576,7 +576,7 @@ where
         + Clone,
     Challenge<SC>: BasedVectorSpace<Val<SC>>,
 {
-    let mut no_lookup_airs = airs
+    let no_lookup_airs = airs
         .iter()
         .map(|a| AirNoLookup::new(a.clone()))
         .collect::<Vec<_>>();
@@ -585,7 +585,7 @@ where
 
     verify_batch(
         config,
-        &mut no_lookup_airs,
+        &no_lookup_airs,
         proof,
         public_values,
         common,

@@ -1343,14 +1343,7 @@ fn test_batch_stark_one_instance_local_only() -> Result<(), impl Debug> {
     let proof = prove_batch(&config, &instances, &common_data, &lookup_gadget);
 
     let pvs = vec![vec![]];
-    verify_batch(
-        &config,
-        &mut airs,
-        &proof,
-        &pvs,
-        &common_data,
-        &lookup_gadget,
-    )
+    verify_batch(&config, &airs, &proof, &pvs, &common_data, &lookup_gadget)
 }
 
 /// Test with local lookups only, which fail due to wrong permutation column.
@@ -1416,7 +1409,7 @@ fn test_batch_stark_one_instance_local_fails() {
 
     verify_batch(
         &config,
-        &mut airs,
+        &airs,
         &proof,
         &[vec![]],
         &common_data,
@@ -1473,14 +1466,7 @@ fn test_batch_stark_local_lookups_only() -> Result<(), impl Debug> {
     let proof = prove_batch(&config, &instances, &common_data, &lookup_gadget);
 
     let pvs = vec![vec![], fib_pis];
-    verify_batch(
-        &config,
-        &mut airs,
-        &proof,
-        &pvs,
-        &common_data,
-        &lookup_gadget,
-    )
+    verify_batch(&config, &airs, &proof, &pvs, &common_data, &lookup_gadget)
 }
 
 /// Test with global lookups only using MulAirLookups and FibAirLookups  
@@ -1533,14 +1519,7 @@ fn test_batch_stark_global_lookups_only() -> Result<(), impl Debug> {
     let proof = prove_batch(&config, &instances, &common_data, &lookup_gadget);
 
     let pvs = vec![vec![], fib_pis];
-    verify_batch(
-        &config,
-        &mut airs,
-        &proof,
-        &pvs,
-        &common_data,
-        &lookup_gadget,
-    )
+    verify_batch(&config, &airs, &proof, &pvs, &common_data, &lookup_gadget)
 }
 
 /// Test with both local and global lookups using MulAirLookups and FibAirLookups
@@ -1595,14 +1574,7 @@ fn test_batch_stark_both_lookups() -> Result<(), impl Debug> {
     let proof = prove_batch(&config, &instances, &common_data, &lookup_gadget);
 
     let pvs = vec![vec![], fib_pis];
-    verify_batch(
-        &config,
-        &mut airs,
-        &proof,
-        &pvs,
-        &common_data,
-        &lookup_gadget,
-    )
+    verify_batch(&config, &airs, &proof, &pvs, &common_data, &lookup_gadget)
 }
 
 #[test]
@@ -1656,15 +1628,7 @@ fn test_batch_stark_failed_global_lookup() {
     // - MulAir sends values to "MulFib1" and "MulFib2" lookups
     // - FibAir only receives from "MulFib" lookup
     // - The global cumulative sums won't match
-    verify_batch(
-        &config,
-        &mut airs,
-        &proof,
-        &pvs,
-        &common_data,
-        &lookup_gadget,
-    )
-    .unwrap();
+    verify_batch(&config, &airs, &proof, &pvs, &common_data, &lookup_gadget).unwrap();
 }
 
 /// Test mixing instances with lookups and instances without lookups.
@@ -1783,7 +1747,7 @@ fn test_batch_stark_mixed_lookups() -> Result<(), impl Debug> {
     // Verify with mixed AIRs
     verify_batch(
         &config,
-        &mut all_airs,
+        &all_airs,
         &proof,
         &all_pvs,
         &common_data,
@@ -1980,12 +1944,5 @@ fn test_single_table_local_lookup() -> Result<(), impl Debug> {
     let lookup_gadget = LogUpGadget::new();
     let proof = prove_batch(&config, &instances, &common_data, &lookup_gadget);
 
-    verify_batch(
-        &config,
-        &mut airs,
-        &proof,
-        &pvs,
-        &common_data,
-        &lookup_gadget,
-    )
+    verify_batch(&config, &airs, &proof, &pvs, &common_data, &lookup_gadget)
 }

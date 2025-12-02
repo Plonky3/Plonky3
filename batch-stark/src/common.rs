@@ -249,13 +249,13 @@ pub(crate) fn get_perm_challenges<SC: SGC, LG: LookupGadget>(
                 match &context.kind {
                     Kind::Global(name) => {
                         // Get or create the global challenges.
-                        let challengess: &mut Vec<SC::Challenge> =
+                        let challenges: &mut Vec<SC::Challenge> =
                             global_perm_challenges.entry(name).or_insert_with(|| {
                                 (0..num_challenges_per_lookup)
                                     .map(|_| challenger.sample_algebra_element())
                                     .collect()
                             });
-                        instance_challenges.extend_from_slice(challengess);
+                        instance_challenges.extend_from_slice(challenges);
                     }
                     Kind::Local => {
                         instance_challenges.extend(
