@@ -291,7 +291,7 @@ where
 {
     /// Generic implementation for uniform bit sampling, parameterized by a strategy.
     #[inline]
-    fn sample_uniform_bits_with_strategy<S>(&mut self, bits: usize, _strategy: S) -> usize
+    fn sample_uniform_bits_with_strategy<S>(&mut self, bits: usize) -> usize
     where
         S: BitSamplingStrategy<F, P, WIDTH, RATE>,
     {
@@ -333,10 +333,10 @@ where
     P: CryptographicPermutation<[F; WIDTH]>,
 {
     fn sample_uniform_bits(&mut self, bits: usize) -> usize {
-        self.sample_uniform_bits_with_strategy(bits, ResampleOnRejection)
+        self.sample_uniform_bits_with_strategy::<ResampleOnRejection>(bits)
     }
     fn sample_uniform_bits_may_panic(&mut self, bits: usize) -> usize {
-        self.sample_uniform_bits_with_strategy(bits, PanicOnRejection)
+        self.sample_uniform_bits_with_strategy::<PanicOnRejection>(bits)
     }
 }
 
