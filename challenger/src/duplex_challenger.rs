@@ -247,7 +247,25 @@ where
     F: PrimeField64,
     P: CryptographicPermutation<[F; W]>,
 {
-    fn sample_value(challenger: &mut DuplexChallenger<F, P, W, R>, m: u64) -> F;
+    /// Whether to panic instead of resampling when a drawn value is too large.
+    const PANIC_ON_REJECTION: bool;
+
+    #[inline]
+    fn sample_value(challenger: &mut DuplexChallenger<F, P, W, R>, m: u64) -> F {
+        let mut result: F = challenger.sample();
+        if Self::PANIC_ON_REJECTION {
+            if result.as_canonical_u64() >= m {
+                panic!(
+                    "Sampled field element {result} is out of the uniform sampling range (< {m})"
+                );
+            }
+        } else {
+            while result.as_canonical_u64() >= m {
+                result = challenger.sample();
+            }
+        }
+        result
+    }
 }
 
 /// Implement rejection sampling
@@ -256,15 +274,7 @@ where
     F: PrimeField64,
     P: CryptographicPermutation<[F; W]>,
 {
-    #[inline]
-    fn sample_value(challenger: &mut DuplexChallenger<F, P, W, R>, m: u64) -> F {
-        // Rejection sampling until we find a value < m.
-        let mut result: F = challenger.sample();
-        while result.as_canonical_u64() >= m {
-            result = challenger.sample();
-        }
-        result
-    }
+    const PANIC_ON_REJECTION: bool = false;
 }
 
 /// Implement panicking on a required rejection
@@ -273,15 +283,7 @@ where
     F: PrimeField64,
     P: CryptographicPermutation<[F; W]>,
 {
-    #[inline]
-    fn sample_value(challenger: &mut DuplexChallenger<F, P, W, R>, m: u64) -> F {
-        let result: F = challenger.sample();
-        // Panic if we sampled a value too large for uniform sampling of bits.
-        if result.as_canonical_u64() >= m {
-            panic!("Sampled field element {result} is out of the uniform sampling range (< {m})");
-        }
-        result
-    }
+    const PANIC_ON_REJECTION: bool = true;
 }
 
 impl<F, P, const WIDTH: usize, const RATE: usize> DuplexChallenger<F, P, WIDTH, RATE>
