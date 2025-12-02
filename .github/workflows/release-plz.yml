@@ -5,12 +5,21 @@ on:
     types: [closed]
     branches:
       - main
+  # Allow manual re-runs if publish fails (e.g., crates.io outage)
+  workflow_dispatch:
 
 jobs:
   release-plz-release:
     name: Release-plz release
     runs-on: ubuntu-latest
-    if: ${{ github.repository_owner == 'Plonky3' && github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release') }}
+    if: >-
+      ${{
+        github.repository_owner == 'Plonky3' &&
+        (
+          github.event_name == 'workflow_dispatch' ||
+          (github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release'))
+        )
+      }}
     permissions:
       contents: write
     steps:
