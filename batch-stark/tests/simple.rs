@@ -12,11 +12,11 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
-use p3_fri::{FriParameters, TwoAdicFriPcs, create_test_fri_params};
+use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs, create_test_fri_params};
 use p3_keccak::Keccak256Hash;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_merkle_tree::MerkleTreeMmcs;
+use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
@@ -232,11 +232,23 @@ type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
 type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 type ValMmcs =
     MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
+type HidingValMmcs = MerkleTreeHidingMmcs<
+    <Val as Field>::Packing,
+    <Val as Field>::Packing,
+    MyHash,
+    MyCompress,
+    SmallRng,
+    8,
+    4,
+>;
 type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+type HidingChallengeMmcs = ExtensionMmcs<Val, Challenge, HidingValMmcs>;
 type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 type Dft = Radix2DitParallel<Val>;
 type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
+type HidingPcs = HidingFriPcs<Val, Dft, HidingValMmcs, HidingChallengeMmcs, SmallRng>;
 type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
+type MyHidingConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
 
 fn make_config(seed: u64) -> MyConfig {
     let mut rng = SmallRng::seed_from_u64(seed);
@@ -248,6 +260,20 @@ fn make_config(seed: u64) -> MyConfig {
     let dft = Dft::default();
     let fri_params = create_test_fri_params(challenge_mmcs, 2);
     let pcs = Pcs::new(dft, val_mmcs, fri_params);
+    let challenger = Challenger::new(perm);
+    StarkConfig::new(pcs, challenger)
+}
+
+fn make_config_zk(seed: u64) -> MyHidingConfig {
+    let mut rng = SmallRng::seed_from_u64(seed);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    let hash = MyHash::new(perm.clone());
+    let compress = MyCompress::new(perm.clone());
+    let val_mmcs = HidingValMmcs::new(hash, compress, rng.clone());
+    let challenge_mmcs = HidingChallengeMmcs::new(val_mmcs.clone());
+    let dft = Dft::default();
+    let fri_params = create_test_fri_params(challenge_mmcs, 2);
+    let pcs = HidingPcs::new(dft, val_mmcs, fri_params, 4, rng);
     let challenger = Challenger::new(perm);
     StarkConfig::new(pcs, challenger)
 }
@@ -344,6 +370,34 @@ fn create_preprocessed_mul_instance(
 #[test]
 fn test_two_instances() -> Result<(), impl Debug> {
     let config = make_config(1337);
+
+    let (air_fib, fib_trace, fib_pis) = create_fib_instance(4); // 16 rows
+    let (air_mul, mul_trace, mul_pis) = create_mul_instance(4, 2); // 16 rows, 2 reps
+
+    let instances = vec![
+        StarkInstance {
+            air: &air_fib,
+            trace: fib_trace,
+            public_values: fib_pis.clone(),
+        },
+        StarkInstance {
+            air: &air_mul,
+            trace: mul_trace,
+            public_values: mul_pis.clone(),
+        },
+    ];
+
+    let common = CommonData::from_instances(&config, &instances);
+    let proof = prove_batch(&config, instances, &common);
+
+    let airs = vec![air_fib, air_mul];
+    let pvs = vec![fib_pis, mul_pis];
+    verify_batch(&config, &airs, &proof, &pvs, &common)
+}
+
+#[test]
+fn test_two_instances_zk() -> Result<(), impl Debug> {
+    let config = make_config_zk(1337);
 
     let (air_fib, fib_trace, fib_pis) = create_fib_instance(4); // 16 rows
     let (air_mul, mul_trace, mul_pis) = create_mul_instance(4, 2); // 16 rows, 2 reps

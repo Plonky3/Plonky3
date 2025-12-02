@@ -66,7 +66,7 @@ where
         },
         |pp| {
             assert_eq!(
-                pp.degree_bits, log_degree,
+                pp.degree_bits, log_ext_degree,
                 "PreprocessedProverData degree_bits does not match trace degree_bits"
             );
             pp.width

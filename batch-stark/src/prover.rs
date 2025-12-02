@@ -38,11 +38,6 @@ where
     let pcs = config.pcs();
     let mut challenger = config.initialise_challenger();
 
-    // TODO: No ZK support for batch-stark yet.
-    if config.is_zk() != 0 {
-        panic!("p3-batch-stark: ZK mode is not supported yet");
-    }
-
     // Use instances in provided order.
     let degrees: Vec<usize> = instances.iter().map(|i| i.trace.height()).collect();
     let log_degrees: Vec<usize> = degrees.iter().copied().map(log2_strict_usize).collect();
@@ -180,23 +175,24 @@ where
         let chunk_mats = quotient_domain.split_evals(n_chunks, q_flat);
         let chunk_domains = quotient_domain.split_domains(n_chunks);
 
+        let evals = chunk_domains
+            .iter()
+            .zip(chunk_mats.iter())
+            .map(|(d, m)| (*d, m.clone()));
+        let ldes = pcs.get_randomized_quotient_ldes(evals, quotient_degree);
+
         let start = quotient_chunk_domains.len();
         quotient_chunk_domains.extend(chunk_domains);
-        quotient_chunk_mats.extend(chunk_mats);
+        quotient_chunk_mats.extend(ldes);
         let end = quotient_chunk_domains.len();
         quotient_chunk_ranges.push((start, end));
     }
 
     // Commit to all quotient chunks together.
-    let quotient_commit_inputs = quotient_chunk_domains
-        .iter()
-        .cloned()
-        .zip(quotient_chunk_mats.into_iter())
-        .collect::<Vec<_>>();
-    let (quotient_commit, quotient_data) = pcs.commit(quotient_commit_inputs);
+    let (quotient_commit, quotient_data) = pcs.commit_ldes(quotient_chunk_mats);
     challenger.observe(quotient_commit.clone());
 
-    // ZK disabled: no randomization round.
+    // TODO: ZK disabled: no randomization round.
 
     // Sample OOD point.
     let zeta: Challenge<SC> = challenger.sample_algebra_element();
@@ -251,7 +247,9 @@ where
 
     // Parse trace opened values per instance.
     let trace_values_for_mats = &opened_values[trace_idx];
-    assert_eq!(trace_values_for_mats.len(), n_instances);
+    if config.is_zk() != 1 {
+        assert_eq!(trace_values_for_mats.len(), n_instances);
+    }
 
     // Parse quotient chunk opened values and map per instance.
     let mut per_instance: Vec<OpenedValues<Challenge<SC>>> = Vec::with_capacity(n_instances);

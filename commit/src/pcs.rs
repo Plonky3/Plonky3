@@ -107,6 +107,17 @@ where
         )
     }
 
+    fn get_randomized_quotient_ldes(
+        &self,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
+        num_chunks: usize,
+    ) -> Vec<RowMajorMatrix<Val<Self::Domain>>>;
+
+    fn commit_ldes(
+        &self,
+        ldes: Vec<RowMajorMatrix<Val<Self::Domain>>>,
+    ) -> (Self::Commitment, Self::ProverData);
+
     /// Given prover data corresponding to a commitment to a collection of evaluation matrices,
     /// return the evaluations of those matrices on the given domain.
     ///

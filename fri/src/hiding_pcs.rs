@@ -115,8 +115,7 @@ where
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
-        // Pad values
-
+        // Pad values with zero columns instead of random columns.
         let padded_evals = evaluations
             .into_iter()
             .map(|(domain, mat)| {
@@ -240,6 +239,96 @@ where
             .collect();
 
         self.inner.mmcs.commit(ldes)
+    }
+
+    fn get_randomized_quotient_ldes(
+        &self,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
+        num_chunks: usize,
+    ) -> Vec<RowMajorMatrix<Val>> {
+        let (domains, evaluations): (Vec<_>, Vec<_>) = evaluations.into_iter().unzip();
+        let cis = get_zp_cis(&domains);
+        let last_chunk = num_chunks - 1;
+        let last_chunk_ci_inv = cis[last_chunk].inverse();
+        let mul_coeffs = (0..last_chunk)
+            .map(|i| cis[i] * last_chunk_ci_inv)
+            .collect_vec();
+
+        let mut rng = self.rng.borrow_mut();
+        let randomized_evaluations: Vec<RowMajorMatrix<Val>> = evaluations
+            .into_iter()
+            .map(|mat| add_random_cols(&mat, self.num_random_codewords, &mut *rng))
+            .collect();
+        // Add random values to the LDE evaluations as described in https://eprint.iacr.org/2024/1037.pdf.
+        // If we have `d` chunks, let q'_i(X) = q_i(X) + v_H_i(X) * t_i(X) where t(X) is random, for 1 <= i < d.
+        // q'_d(X) = q_d(X) - v_H_d(X) c_i \sum t_i(X) where c_i is a Lagrange normalization constant.
+        let h = randomized_evaluations[0].height();
+        let w = randomized_evaluations[0].width();
+        let mut all_random_values = (0..(randomized_evaluations.len() - 1) * h * w)
+            .map(|_| rng.random())
+            .chain(core::iter::repeat_n(Val::ZERO, h * w))
+            .collect::<Vec<_>>();
+
+        // Set the random values for the final chunk accordingly
+        for j in 0..last_chunk {
+            let mul_coeff = mul_coeffs[j];
+            for k in 0..h * w {
+                let t = all_random_values[j * h * w + k] * mul_coeff;
+                all_random_values[last_chunk * h * w + k] -= t;
+            }
+        }
+
+        domains
+            .into_iter()
+            .zip(randomized_evaluations)
+            .enumerate()
+            .map(|(i, (domain, evals))| {
+                assert_eq!(domain.size(), evals.height());
+                let shift = Val::GENERATOR / domain.shift();
+                let random_values = &all_random_values[i * h * w..(i + 1) * h * w];
+
+                // Commit to the bit-reversed LDE.
+                let mut lde_evals = self
+                    .inner
+                    .dft
+                    .coset_lde_batch(evals, self.inner.fri.log_blowup + 1, shift)
+                    .to_row_major_matrix();
+
+                // Evaluate `v_H(X) * r(X)` over the LDE, where:
+                // - `v_H` is the coset vanishing polynomial, here equal to (GENERATOR * X / domain.shift)^n - 1,
+                // - and `r` is a random polynomial.
+                let mut vanishing_poly_coeffs =
+                    Val::zero_vec((h * w) << (self.inner.fri.log_blowup + 1));
+                let p = shift.exp_u64(h as u64);
+                Val::GENERATOR
+                    .powers()
+                    .take(h)
+                    .enumerate()
+                    .for_each(|(i, p_i)| {
+                        for j in 0..w {
+                            let mul_coeff = p_i * random_values[i * w + j];
+                            vanishing_poly_coeffs[i * w + j] -= mul_coeff;
+                            vanishing_poly_coeffs[(h + i) * w + j] = p * mul_coeff;
+                        }
+                    });
+                let random_eval = self
+                    .inner
+                    .dft
+                    .dft_batch(DenseMatrix::new(vanishing_poly_coeffs, w))
+                    .to_row_major_matrix();
+
+                // Add the quotient chunk evaluations over the LDE to the evaluations of `v_H(X) * r(X)`.
+                for i in 0..h * w * (1 << (self.inner.fri.log_blowup + 1)) {
+                    lde_evals.values[i] += random_eval.values[i];
+                }
+
+                lde_evals.bit_reverse_rows().to_row_major_matrix()
+            })
+            .collect()
+    }
+
+    fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
+        Pcs::<Challenge, Challenger>::commit_ldes(&self.inner, ldes)
     }
 
     fn get_evaluations_on_domain<'a>(

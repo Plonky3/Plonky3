@@ -90,6 +90,18 @@ where
         )
     }
 
+    fn get_randomized_quotient_ldes(
+        &self,
+        _evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
+        _num_chunks: usize,
+    ) -> Vec<RowMajorMatrix<crate::Val<Self::Domain>>> {
+        unimplemented!("This PCS does not support randomization of LDEs");
+    }
+
+    fn commit_ldes(&self, _ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
+        unimplemented!("This PCS does not support randomization of LDEs");
+    }
+
     fn get_evaluations_on_domain<'a>(
         &self,
         prover_data: &'a Self::ProverData,

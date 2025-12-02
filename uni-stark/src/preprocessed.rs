@@ -57,6 +57,7 @@ where
 {
     let pcs = config.pcs();
     let is_zk = config.is_zk();
+    println!("is zk {:?}", is_zk);
     let init_degree = 1 << degree_bits;
     let degree = 1 << (degree_bits + is_zk);
 
@@ -77,6 +78,7 @@ where
     let (commitment, prover_data) = debug_span!("commit to preprocessed trace")
         .in_scope(|| pcs.commit_no_randomization([(trace_domain, preprocessed)]));
 
+    let degree_bits = degree_bits + is_zk;
     let prover_data = PreprocessedProverData {
         width,
         degree_bits,
@@ -85,7 +87,7 @@ where
     };
     let vk = PreprocessedVerifierKey {
         width,
-        degree_bits: degree_bits + is_zk,
+        degree_bits,
         commitment,
     };
     Some((prover_data, vk))
