@@ -224,15 +224,12 @@ where
         let mut rounds = Vec::new();
 
         let round0 = opt_r_data.as_ref().map(|r_data| {
-            let round0_points = ext_trace_domains
-                .iter()
-                .map(|_| vec![zeta])
-                .collect::<Vec<_>>();
+            let round0_points = trace_domains.iter().map(|_| vec![zeta]).collect::<Vec<_>>();
             (r_data, round0_points, true)
         });
         rounds.extend(round0);
         // Main trace round: per instance, open at zeta and its next point.
-        let round1_points = ext_trace_domains
+        let round1_points = trace_domains
             .iter()
             .map(|dom| {
                 vec![
@@ -259,7 +256,7 @@ where
                 .matrix_to_instance
                 .iter()
                 .map(|&inst_idx| {
-                    let zeta_next_i = ext_trace_domains[inst_idx]
+                    let zeta_next_i = trace_domains[inst_idx]
                         .next_point(zeta)
                         .expect("domain should support next_point operation");
                     vec![zeta, zeta_next_i]

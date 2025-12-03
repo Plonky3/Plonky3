@@ -6,7 +6,7 @@ use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 use p3_uni_stark::{
-    SymbolicAirBuilder, VerificationError, VerifierConstraintFolder,
+    SymbolicAirBuilder, VerificationError, VerifierConstraintFolder, get_log_num_quotient_chunks,
     recompose_quotient_from_chunks, verify_constraints,
 };
 use p3_util::zip_eq::zip_eq;
@@ -68,9 +68,12 @@ where
     // Validate opened values shape per instance and observe per-instance binding data.
     // Precompute per-instance preprocessed widths and number of quotient chunks.
     let mut preprocessed_widths = Vec::with_capacity(airs.len());
+    // Number of quotient chunks per instance before ZK randomization.
+    let mut log_num_quotient_chunks = Vec::with_capacity(airs.len());
+    // The total number of quotient chunks, including ZK randomization.
     let mut num_quotient_chunks = Vec::with_capacity(airs.len());
 
-    for (i, _air) in airs.iter().enumerate() {
+    for (i, air) in airs.iter().enumerate() {
         let pre_w = common
             .preprocessed
             .as_ref()
@@ -79,7 +82,12 @@ where
         preprocessed_widths.push(pre_w);
 
         // Derive the number of quotient chunks directly from the proof shape.
-        let n_chunks = opened_values.instances[i].quotient_chunks.len();
+
+        let log_num_chunks =
+            get_log_num_quotient_chunks(air, pre_w, public_values[i].len(), config.is_zk());
+        log_num_quotient_chunks.push(log_num_chunks);
+
+        let n_chunks = 1 << (log_num_chunks + config.is_zk());
         num_quotient_chunks.push(n_chunks);
     }
 
@@ -198,13 +206,14 @@ where
     let trace_round: Vec<_> = ext_trace_domains
         .iter()
         .zip(opened_values.instances.iter())
-        .map(|(ext_dom, inst_opened_vals)| {
-            let zeta_next = ext_dom
+        .enumerate()
+        .map(|(i, (dom, inst_opened_vals))| {
+            let zeta_next = trace_domains[i]
                 .next_point(zeta)
                 .ok_or(VerificationError::NextPointUnavailable)?;
 
             Ok((
-                *ext_dom,
+                *dom,
                 vec![
                     (zeta, inst_opened_vals.trace_local.clone()),
                     (zeta_next, inst_opened_vals.trace_next.clone()),
@@ -219,16 +228,26 @@ where
     let quotient_domains: Vec<Vec<Domain<SC>>> = (0..degree_bits.len())
         .map(|i| {
             let ext_db = degree_bits[i];
+            let log_num_chunks = log_num_quotient_chunks[i];
             let n_chunks = num_quotient_chunks[i];
             let ext_dom = ext_trace_domains[i];
-            let qdom = ext_dom.create_disjoint_domain((1 << ext_db) * n_chunks);
+            let qdom = ext_dom.create_disjoint_domain(1 << (ext_db + log_num_chunks));
             qdom.split_domains(n_chunks)
         })
         .collect();
 
+    let randomized_quotient_chunks_domains = quotient_domains
+        .iter()
+        .map(|doms| {
+            doms.iter()
+                .map(|dom| pcs.natural_domain_for_degree(dom.size() << (config.is_zk())))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
     // Build the per-matrix openings for the aggregated quotient commitment.
     let mut qc_round = Vec::new();
-    for (i, domains) in quotient_domains.iter().enumerate() {
+    for (i, domains) in randomized_quotient_chunks_domains.iter().enumerate() {
         let inst_qcs = &opened_values.instances[i].quotient_chunks;
         if inst_qcs.len() != domains.len() {
             return Err(VerificationError::InvalidProofShape);
@@ -274,9 +293,9 @@ where
                 return Err(VerificationError::InvalidProofShape);
             }
 
-            let base_db = meta.degree_bits;
-            let pre_domain = pcs.natural_domain_for_degree(1 << base_db);
-            let zeta_next_i = ext_trace_domains[inst_idx]
+            let meta_db = meta.degree_bits;
+            let pre_domain = pcs.natural_domain_for_degree(1 << meta_db);
+            let zeta_next_i = trace_domains[inst_idx]
                 .next_point(zeta)
                 .ok_or(VerificationError::NextPointUnavailable)?;
 

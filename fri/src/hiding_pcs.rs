@@ -437,7 +437,6 @@ where
         // Now we merge `opened_values_for_rand_cws` into the opened values in `rounds`, undoing
         // the split that we did in `open`, to get a complete set of opened values for the inner PCS
         // to check.
-
         for (round, rand_round) in zip_eq(
             rounds.iter_mut(),
             opened_values_for_rand_cws,
