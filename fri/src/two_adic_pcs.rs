@@ -423,6 +423,7 @@ where
                                                 inv_denoms,
                                             )
                                         });
+
                                 ys.iter()
                                     .for_each(|&y| challenger.observe_algebra_element(y));
                                 ys

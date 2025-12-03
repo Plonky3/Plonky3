@@ -417,7 +417,6 @@ fn test_two_instances_zk() -> Result<(), impl Debug> {
 
     let common = CommonData::from_instances(&config, &instances);
     let proof = prove_batch(&config, instances, &common);
-
     let airs = vec![air_fib, air_mul];
     let pvs = vec![fib_pis, mul_pis];
     verify_batch(&config, &airs, &proof, &pvs, &common)
@@ -692,6 +691,7 @@ fn test_invalid_trace_width_rejected() {
         commitments: BatchCommitments {
             main: valid_proof.commitments.main,
             quotient_chunks: valid_proof.commitments.quotient_chunks,
+            random: valid_proof.commitments.random,
         },
         opened_values: BatchOpenedValues {
             instances: vec![OpenedValues {

@@ -213,7 +213,7 @@ where
 
     fn get_opt_randomization_poly_commitment(
         &self,
-        _domain: Self::Domain,
+        _domain: impl IntoIterator<Item = Self::Domain>,
     ) -> Option<(Self::Commitment, Self::ProverData)> {
         None
     }

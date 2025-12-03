@@ -37,6 +37,7 @@ where
 {
     let pcs = config.pcs();
     let mut challenger = config.initialise_challenger();
+    let is_random = SC::Pcs::ZK;
 
     // Use instances in provided order.
     let degrees: Vec<usize> = instances.iter().map(|i| i.trace.height()).collect();
@@ -179,7 +180,7 @@ where
             .iter()
             .zip(chunk_mats.iter())
             .map(|(d, m)| (*d, m.clone()));
-        let ldes = pcs.get_randomized_quotient_ldes(evals, quotient_degree);
+        let ldes = pcs.get_randomized_quotient_ldes(evals, n_chunks);
 
         let start = quotient_chunk_domains.len();
         quotient_chunk_domains.extend(chunk_domains);
@@ -192,6 +193,27 @@ where
     let (quotient_commit, quotient_data) = pcs.commit_ldes(quotient_chunk_mats);
     challenger.observe(quotient_commit.clone());
 
+    // If zk is enabled, we generate random extension field values of the size of the randomized trace. If `n` is the degree of the initial trace,
+    // then the randomized trace has degree `2n`. To randomize the FRI batch polynomial, we then need an extension field random polynomial of degree `2n -1`.
+    // So we can generate a random polynomial  of degree `2n`, and provide it to `open` as is.
+    // Then the method will add `(R(X) - R(z)) / (X - z)` (which is of the desired degree `2n - 1`), to the batch of polynomials.
+    // Since we need a random polynomial defined over the extension field, and the `commit` method is over the base field,
+    // we actually need to commit to `SC::CHallenge::D` base field random polynomials.
+    // This is similar to what is done for the quotient polynomials.
+    // TODO: This approach is only statistically zk. To make it perfectly zk, `R` would have to truly be an extension field polynomial.
+    let (opt_r_commit, opt_r_data) = if SC::Pcs::ZK {
+        let (r_commit, r_data) = pcs
+            .get_opt_randomization_poly_commitment(ext_trace_domains.iter().copied())
+            .expect("ZK is enabled, so we should have randomization commitments");
+        (Some(r_commit), Some(r_data))
+    } else {
+        (None, None)
+    };
+
+    opt_r_commit.as_ref().map(|r_commit| {
+        challenger.observe(r_commit.clone());
+    });
+
     // TODO: ZK disabled: no randomization round.
 
     // Sample OOD point.
@@ -201,6 +223,14 @@ where
     let (opened_values, opening_proof) = {
         let mut rounds = Vec::new();
 
+        let round0 = opt_r_data.as_ref().map(|r_data| {
+            let round0_points = ext_trace_domains
+                .iter()
+                .map(|_| vec![zeta])
+                .collect::<Vec<_>>();
+            (r_data, round0_points, true)
+        });
+        rounds.extend(round0);
         // Main trace round: per instance, open at zeta and its next point.
         let round1_points = ext_trace_domains
             .iter()
@@ -262,6 +292,11 @@ where
 
     let mut quotient_openings_iter = opened_values[quotient_idx].iter();
     for (i, (s, e)) in quotient_chunk_ranges.iter().copied().enumerate() {
+        let random = if is_random {
+            Some(opened_values[0][i][0].clone())
+        } else {
+            None
+        };
         // Trace locals
         let tv = &trace_values_for_mats[i];
         let trace_local = tv[0].clone();
@@ -299,7 +334,7 @@ where
             preprocessed_local,
             preprocessed_next,
             quotient_chunks: qcs,
-            random: None, // ZK not supported in batch-stark yet
+            random,
         });
     }
 
@@ -307,6 +342,7 @@ where
         commitments: BatchCommitments {
             main: main_commit,
             quotient_chunks: quotient_commit,
+            random: opt_r_commit,
         },
         opened_values: BatchOpenedValues {
             instances: per_instance,

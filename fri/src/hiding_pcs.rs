@@ -437,6 +437,7 @@ where
         // Now we merge `opened_values_for_rand_cws` into the opened values in `rounds`, undoing
         // the split that we did in `open`, to get a complete set of opened values for the inner PCS
         // to check.
+
         for (round, rand_round) in zip_eq(
             rounds.iter_mut(),
             opened_values_for_rand_cws,
@@ -457,19 +458,23 @@ where
 
     fn get_opt_randomization_poly_commitment(
         &self,
-        ext_trace_domain: Self::Domain,
+        ext_trace_domains: impl IntoIterator<Item = Self::Domain>,
     ) -> Option<(Self::Commitment, Self::ProverData)> {
-        let random_vals = DenseMatrix::rand(
-            &mut *self.rng.borrow_mut(),
-            ext_trace_domain.size(),
-            self.num_random_codewords + Challenge::DIMENSION,
-        );
-        let extended_domain = <Self as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
-            self,
-            ext_trace_domain.size(),
-        );
+        let random_input_vals = ext_trace_domains
+            .into_iter()
+            .map(|domain| {
+                let m = DenseMatrix::rand(
+                    &mut *self.rng.borrow_mut(),
+                    domain.size(),
+                    self.num_random_codewords + Challenge::DIMENSION,
+                );
+
+                (domain, m)
+            })
+            .collect::<Vec<_>>();
+
         let r_commit_and_data =
-            Pcs::<Challenge, Challenger>::commit(&self.inner, [(extended_domain, random_vals)]);
+            Pcs::<Challenge, Challenger>::commit(&self.inner, random_input_vals);
         Some(r_commit_and_data)
     }
 }

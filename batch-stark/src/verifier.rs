@@ -41,17 +41,24 @@ where
     let pcs = config.pcs();
     let mut challenger = config.initialise_challenger();
 
-    // ZK mode is not supported yet
-    if config.is_zk() != 0 {
-        panic!("p3-batch-stark: ZK mode is not supported yet");
-    }
-
     // Sanity checks
     if airs.len() != opened_values.instances.len()
         || airs.len() != public_values.len()
         || airs.len() != degree_bits.len()
     {
         return Err(VerificationError::InvalidProofShape);
+    }
+
+    // Check that the random commitments are/are not present depending on the ZK setting.
+    // - If ZK is enabled, the prover should have random commitments.
+    // - If ZK is not enabled, the prover should not have random commitments.
+    if (opened_values
+        .instances
+        .iter()
+        .any(|ov| ov.random.is_some() != SC::Pcs::ZK))
+        || (commitments.random.is_some() != SC::Pcs::ZK)
+    {
+        return Err(VerificationError::RandomizationError);
     }
 
     // Observe the number of instances up front to match the prover's transcript.
@@ -99,6 +106,15 @@ where
             }
         }
 
+        // Validate random commit
+        if !inst_opened_vals
+            .random
+            .as_ref()
+            .is_none_or(|r_comm| r_comm.len() == SC::Challenge::DIMENSION)
+        {
+            return Err(VerificationError::RandomizationError);
+        }
+
         // Validate that any preprocessed width implied by CommonData matches the opened shapes.
         let pre_w = preprocessed_widths[i];
         let pre_local_len = inst_opened_vals
@@ -141,11 +157,16 @@ where
     // Observe quotient chunks commitment
     challenger.observe(commitments.quotient_chunks.clone());
 
+    // We've already checked that commitments.random is present if and only if ZK is enabled.
+    // Observe the random commitment if it is present.
+    if let Some(r_commit) = commitments.random.clone() {
+        challenger.observe(r_commit);
+    }
+
     // Sample OOD point
     let zeta = challenger.sample_algebra_element();
 
     // Build commitments_with_opening_points to verify openings.
-    let mut coms_to_verify = vec![];
 
     // Trace round: per instance, open at zeta and zeta_next
     let (trace_domains, ext_trace_domains): (Vec<Domain<SC>>, Vec<Domain<SC>>) = degree_bits
@@ -158,6 +179,22 @@ where
             )
         })
         .unzip();
+
+    let mut coms_to_verify = vec![];
+    if let Some(random_commit) = &commitments.random {
+        coms_to_verify.push((
+            random_commit.clone(),
+            ext_trace_domains
+                .iter()
+                .zip(opened_values.instances.iter())
+                .map(|(domain, inst_opened_vals)| {
+                    let random_vals = inst_opened_vals.random.as_ref().unwrap(); // Safe unwrap due to earlier checks
+                    (*domain, vec![(zeta, random_vals.clone())])
+                })
+                .collect::<Vec<_>>(),
+        ));
+    }
+
     let trace_round: Vec<_> = ext_trace_domains
         .iter()
         .zip(opened_values.instances.iter())
@@ -165,6 +202,7 @@ where
             let zeta_next = ext_dom
                 .next_point(zeta)
                 .ok_or(VerificationError::NextPointUnavailable)?;
+
             Ok((
                 *ext_dom,
                 vec![
@@ -181,10 +219,9 @@ where
     let quotient_domains: Vec<Vec<Domain<SC>>> = (0..degree_bits.len())
         .map(|i| {
             let ext_db = degree_bits[i];
-            let base_db = ext_db - config.is_zk();
             let n_chunks = num_quotient_chunks[i];
             let ext_dom = ext_trace_domains[i];
-            let qdom = ext_dom.create_disjoint_domain((1 << base_db) * n_chunks);
+            let qdom = ext_dom.create_disjoint_domain((1 << ext_db) * n_chunks);
             qdom.split_domains(n_chunks)
         })
         .collect();
@@ -229,12 +266,11 @@ where
 
             // Validate that the preprocessed data's base degree matches what we expect.
             let ext_db = degree_bits[inst_idx];
-            let expected_base_db = ext_db - config.is_zk();
 
             let meta = global.instances[inst_idx]
                 .as_ref()
                 .ok_or(VerificationError::InvalidProofShape)?;
-            if meta.matrix_index != matrix_index || meta.degree_bits != expected_base_db {
+            if meta.matrix_index != matrix_index || meta.degree_bits != ext_db {
                 return Err(VerificationError::InvalidProofShape);
             }
 

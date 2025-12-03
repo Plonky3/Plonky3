@@ -57,7 +57,7 @@ where
 {
     let pcs = config.pcs();
     let is_zk = config.is_zk();
-    println!("is zk {:?}", is_zk);
+
     let init_degree = 1 << degree_bits;
     let degree = 1 << (degree_bits + is_zk);
 

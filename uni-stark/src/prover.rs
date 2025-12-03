@@ -121,7 +121,6 @@ where
     );
 
     let num_quotient_chunks = 1 << (log_num_quotient_chunks + config.is_zk());
-
     // Initialize the PCS and the Challenger.
     let pcs = config.pcs();
     let mut challenger = config.initialise_challenger();
@@ -261,7 +260,7 @@ where
     // TODO: This approach is only statistically zk. To make it perfectly zk, `R` would have to truly be an extension field polynomial.
     let (opt_r_commit, opt_r_data) = if SC::Pcs::ZK {
         let (r_commit, r_data) = pcs
-            .get_opt_randomization_poly_commitment(ext_trace_domain)
+            .get_opt_randomization_poly_commitment(core::iter::once(ext_trace_domain))
             .expect("ZK is enabled, so we should have randomization commitments");
         (Some(r_commit), Some(r_data))
     } else {

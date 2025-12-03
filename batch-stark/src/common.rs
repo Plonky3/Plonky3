@@ -184,7 +184,7 @@ where
         let preprocessed = if domains_and_traces.is_empty() {
             None
         } else {
-            let (commitment, prover_data) = pcs.commit(domains_and_traces);
+            let (commitment, prover_data) = pcs.commit_no_randomization(domains_and_traces);
             Some(GlobalPreprocessed {
                 commitment,
                 prover_data,
