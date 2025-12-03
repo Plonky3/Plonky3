@@ -81,6 +81,15 @@ pub trait FieldChallenger<F: Field>:
         self.observe_slice(alg_elem.as_basis_coefficients_slice());
     }
 
+    /// Absorb a slice of elements from a vector space over the base field.
+    ///
+    /// Decomposes each element into its basis coefficients and absorbs them.
+    fn observe_algebra_elements<A: BasedVectorSpace<F> + Clone>(&mut self, alg_elems: &[A]) {
+        for alg_elem in alg_elems {
+            self.observe_algebra_element(alg_elem.clone());
+        }
+    }
+
     /// Sample an element of a vector space over the base field.
     ///
     /// Constructs the element by sampling basis coefficients.
@@ -164,6 +173,11 @@ where
     #[inline(always)]
     fn observe_algebra_element<EF: BasedVectorSpace<F>>(&mut self, ext: EF) {
         (*self).observe_algebra_element(ext);
+    }
+
+    #[inline(always)]
+    fn observe_algebra_elements<EF: BasedVectorSpace<F> + Clone>(&mut self, exts: &[EF]) {
+        (*self).observe_algebra_elements(exts);
     }
 
     #[inline(always)]
