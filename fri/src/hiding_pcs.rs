@@ -380,7 +380,7 @@ where
         )>,
         challenger: &mut Challenger,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
-        let round_bools = rounds.iter().map(|(_, _, b)| b.clone()).collect::<Vec<_>>();
+        let round_bools = rounds.iter().map(|(_, _, b)| *b).collect::<Vec<_>>();
         let (mut inner_opened_values, inner_proof) = self.inner.open(rounds, challenger);
 
         // inner_opened_values includes opened values for the random codewords. Those should be

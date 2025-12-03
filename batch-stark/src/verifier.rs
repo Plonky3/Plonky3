@@ -115,10 +115,10 @@ where
         }
 
         // Validate random commit
-        if !inst_opened_vals
+        if inst_opened_vals
             .random
             .as_ref()
-            .is_none_or(|r_comm| r_comm.len() == SC::Challenge::DIMENSION)
+            .is_some_and(|r_comm| r_comm.len() != SC::Challenge::DIMENSION)
         {
             return Err(VerificationError::RandomizationError);
         }

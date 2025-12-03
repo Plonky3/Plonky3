@@ -162,6 +162,7 @@ where
     ///
     /// The domains on which the evaluation vectors are defined is not part of the arguments here
     /// but should be public information known to both the prover and verifier.
+    #[allow(clippy::type_complexity)]
     fn open(
         &self,
         // For each multi-matrix commitment,

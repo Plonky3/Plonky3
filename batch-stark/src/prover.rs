@@ -210,9 +210,9 @@ where
         (None, None)
     };
 
-    opt_r_commit.as_ref().map(|r_commit| {
+    if let Some(r_commit) = &opt_r_commit {
         challenger.observe(r_commit.clone());
-    });
+    }
 
     // TODO: ZK disabled: no randomization round.
 
