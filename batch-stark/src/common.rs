@@ -7,13 +7,16 @@
 //! preprocessed columns API, but batches all preprocessed traces into a single
 //! global commitment (one matrix per instance that uses preprocessed columns).
 
+use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_air::Air;
+use hashbrown::HashMap;
+use p3_challenger::FieldChallenger;
 use p3_commit::Pcs;
 use p3_field::BasedVectorSpace;
+use p3_lookup::lookup_traits::{AirLookupHandler, Kind, Lookup, LookupGadget};
 use p3_matrix::Matrix;
-use p3_uni_stark::{ProverConstraintFolder, SymbolicAirBuilder, Val};
+use p3_uni_stark::{SymbolicAirBuilder, SymbolicExpression, Val};
 use p3_util::log2_strict_usize;
 
 use crate::config::{Challenge, Commitment, Domain, StarkGenericConfig as SGC};
@@ -64,7 +67,6 @@ pub struct GlobalPreprocessed<SC: SGC> {
 // per preprocessed matrix, which is sound but wastes openings.
 
 /// Struct storing data common to both the prover and verifier.
-// TODO: Add lookup metadata (e.g. `Vec<Vec<Lookup<Val<SC>>>>`).
 // TODO: Optionally cache a single challenger seed for transparent
 //       preprocessed data (per-instance widths + global root), so
 //       prover and verifier don't have to recompute/rehash it each run.
@@ -73,14 +75,32 @@ pub struct CommonData<SC: SGC> {
     ///
     /// When `None`, no instance uses preprocessed columns.
     pub preprocessed: Option<GlobalPreprocessed<SC>>,
+    /// The lookups used by each STARK instance.
+    /// There is one `Vec<Lookup<Val<SC>>>` per STARK instance.
+    /// They are stored in the same order as the STARK instance inputs provided to `new`.
+    pub lookups: Vec<Vec<Lookup<Val<SC>>>>,
 }
 
 impl<SC: SGC> CommonData<SC> {
-    /// Create [`CommonData`] with no preprocessed columns.
+    pub const fn new(
+        preprocessed: Option<GlobalPreprocessed<SC>>,
+        lookups: Vec<Vec<Lookup<Val<SC>>>>,
+    ) -> Self {
+        Self {
+            preprocessed,
+            lookups,
+        }
+    }
+
+    /// Create [`CommonData`] with no preprocessed columns or lookups.
     ///
-    /// Use this when none of your [`Air`] implementations have preprocessed columns.
-    pub const fn empty(_num_instances: usize) -> Self {
-        Self { preprocessed: None }
+    /// Use this when none of your [`Air`] implementations have preprocessed columns or lookups.
+    pub fn empty(num_instances: usize) -> Self {
+        let lookups = vec![Vec::new(); num_instances];
+        Self {
+            preprocessed: None,
+            lookups,
+        }
     }
 }
 
@@ -96,19 +116,21 @@ where
     /// - Computes extended degrees (base + ZK padding)
     /// - Sets up preprocessed columns for [`Air`] implementations that define them, committing
     ///   to them in a single global [`Pcs`] commitment.
+    /// - Deduces symbolic lookups from the STARKs
     ///
     /// This is a convenience function mainly used for tests.
     pub fn from_instances<A>(config: &SC, instances: &[StarkInstance<'_, SC, A>]) -> Self
     where
-        A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>> + Copy,
+        SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
+        A: AirLookupHandler<SymbolicAirBuilder<Val<SC>, SC::Challenge>> + Clone,
     {
         let degrees: Vec<usize> = instances.iter().map(|i| i.trace.height()).collect();
         let log_ext_degrees: Vec<usize> = degrees
             .iter()
             .map(|&d| log2_strict_usize(d) + config.is_zk())
             .collect();
-        let airs: Vec<A> = instances.iter().map(|i| *i.air).collect();
-        Self::from_airs_and_degrees(config, &airs, &log_ext_degrees)
+        let mut airs: Vec<A> = instances.iter().map(|i| i.air.clone()).collect();
+        Self::from_airs_and_degrees(config, &mut airs, &log_ext_degrees)
     }
 
     /// Build [`CommonData`] from [`Air`] implementations and their extended trace degree bits.
@@ -123,11 +145,12 @@ where
     /// is present only if at least one [`Air`] defines preprocessed columns.
     pub fn from_airs_and_degrees<A>(
         config: &SC,
-        airs: &[A],
+        airs: &mut [A],
         trace_ext_degree_bits: &[usize],
     ) -> Self
     where
-        A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
+        SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
+        A: AirLookupHandler<SymbolicAirBuilder<Val<SC>, SC::Challenge>>,
     {
         assert_eq!(
             airs.len(),
@@ -193,6 +216,51 @@ where
             })
         };
 
-        Self { preprocessed }
+        let lookups = airs.iter_mut().map(|air| air.get_lookups()).collect();
+
+        Self {
+            preprocessed,
+            lookups,
+        }
     }
+}
+
+pub(crate) fn get_perm_challenges<SC: SGC, LG: LookupGadget>(
+    challenger: &mut SC::Challenger,
+    all_lookups: &[Vec<Lookup<Val<SC>>>],
+    lookup_gadget: &LG,
+) -> Vec<Vec<SC::Challenge>> {
+    let num_challenges_per_lookup = lookup_gadget.num_challenges();
+    let mut global_perm_challenges = HashMap::new();
+
+    all_lookups
+        .iter()
+        .map(|contexts| {
+            // Pre-allocate for the instance's challenges.
+            let num_challenges = contexts.len() * num_challenges_per_lookup;
+            let mut instance_challenges = Vec::with_capacity(num_challenges);
+
+            for context in contexts {
+                match &context.kind {
+                    Kind::Global(name) => {
+                        // Get or create the global challenges.
+                        let challenges: &mut Vec<SC::Challenge> =
+                            global_perm_challenges.entry(name).or_insert_with(|| {
+                                (0..num_challenges_per_lookup)
+                                    .map(|_| challenger.sample_algebra_element())
+                                    .collect()
+                            });
+                        instance_challenges.extend_from_slice(challenges);
+                    }
+                    Kind::Local => {
+                        instance_challenges.extend(
+                            (0..num_challenges_per_lookup)
+                                .map(|_| challenger.sample_algebra_element::<SC::Challenge>()),
+                        );
+                    }
+                }
+            }
+            instance_challenges
+        })
+        .collect()
 }

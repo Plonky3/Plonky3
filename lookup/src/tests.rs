@@ -313,7 +313,7 @@ where
 
     fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
         let symbolic_air_builder =
-            SymbolicAirBuilder::<F>::new(0, <Self as BaseAir<AB::F>>::width(self), 0, 0, 0);
+            SymbolicAirBuilder::<F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
 
         let symbolic_main = symbolic_air_builder.main();
         let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
@@ -341,7 +341,7 @@ where
                 ];
 
                 // Register the local lookup.
-                <Self as AirLookupHandler<AB>>::register_lookup(self, Kind::Local, &lookup_inputs)
+                AirLookupHandler::<AB>::register_lookup(self, Kind::Local, &lookup_inputs)
             })
             .collect::<Vec<_>>()
     }
@@ -1172,7 +1172,7 @@ where
 
     fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
         let symbolic_air_builder =
-            SymbolicAirBuilder::<F>::new(0, <Self as BaseAir<AB::F>>::width(self), 0, 0, 0);
+            SymbolicAirBuilder::<F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
 
         let symbolic_main = symbolic_air_builder.main();
         let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
@@ -1200,13 +1200,13 @@ where
         ];
 
         let local_lookup =
-            <Self as AirLookupHandler<AB>>::register_lookup(self, Kind::Local, &lookup_inputs);
+            AirLookupHandler::<AB>::register_lookup(self, Kind::Local, &lookup_inputs);
 
         // also need is_send
         let (is_global, direction) = self.with_global;
         if is_global {
             let lookup_inputs = vec![(b_elements, SymbolicExpression::Constant(F::ONE), direction)];
-            let global_lookup = <Self as AirLookupHandler<AB>>::register_lookup(
+            let global_lookup = AirLookupHandler::<AB>::register_lookup(
                 self,
                 Kind::Global("LUT".to_string()),
                 &lookup_inputs,
