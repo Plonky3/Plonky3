@@ -67,6 +67,12 @@ where
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
     ) -> (Self::Commitment, Self::ProverData);
 
+    /// Same as `commit` but without randomization. This is used for preprocessed columns
+    /// which do not have to be randomized even when ZK is enabled. Note that the preprocessed columns still
+    /// need to be padded to the extended domain height
+    ///
+    /// Returns both the commitment which should be sent to the verifier
+    /// and the prover data which can be used to produce opening proofs.
     fn commit_no_randomization(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
