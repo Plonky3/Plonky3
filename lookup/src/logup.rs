@@ -25,10 +25,10 @@ use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::VerticalPair;
-use p3_uni_stark::{StarkGenericConfig, Val};
+use p3_uni_stark::{LookupError, StarkGenericConfig, Val};
 
 use crate::lookup_traits::{
-    Kind, Lookup, LookupData, LookupError, LookupGadget, LookupTraceBuilder, symbolic_to_expr,
+    Kind, Lookup, LookupData, LookupGadget, LookupTraceBuilder, symbolic_to_expr,
 };
 
 /// Core LogUp gadget implementing lookup arguments via logarithmic derivatives.
@@ -378,6 +378,7 @@ impl LookupGadget for LogUpGadget {
     fn generate_permutation<SC: StarkGenericConfig>(
         &self,
         main: &RowMajorMatrix<Val<SC>>,
+        preprocessed: &Option<RowMajorMatrix<Val<SC>>>,
         public_values: &[Val<SC>],
         lookups: &[Lookup<Val<SC>>],
         lookup_data: &mut [LookupData<SC::Challenge>],
@@ -420,9 +421,24 @@ impl LookupGadget for LogUpGadget {
                 RowMajorMatrixView::new_row(&local_main_row),
                 RowMajorMatrixView::new_row(&next_main_row),
             );
+            let preprocessed_rows_data = preprocessed.as_ref().map(|prep| {
+                (
+                    prep.row_slice(i).unwrap(),
+                    prep.row_slice((i + 1) % height).unwrap(),
+                )
+            });
+            let preprocessed_rows = preprocessed_rows_data.as_ref().map(
+                |(local_preprocessed_row, next_preprocessed_row)| {
+                    VerticalPair::new(
+                        RowMajorMatrixView::new_row(local_preprocessed_row),
+                        RowMajorMatrixView::new_row(next_preprocessed_row),
+                    )
+                },
+            );
 
             let row_builder: LookupTraceBuilder<'_, SC> = LookupTraceBuilder::new(
                 main_rows,
+                preprocessed_rows,
                 public_values,
                 permutation_challenges,
                 height,
@@ -471,8 +487,24 @@ impl LookupGadget for LogUpGadget {
                 RowMajorMatrixView::new_row(&next_main_row),
             );
 
+            let preprocessed_rows_data = preprocessed.as_ref().map(|prep| {
+                (
+                    prep.row_slice(i).unwrap(),
+                    prep.row_slice((i + 1) % height).unwrap(),
+                )
+            });
+            let preprocessed_rows = preprocessed_rows_data.as_ref().map(
+                |(local_preprocessed_row, next_preprocessed_row)| {
+                    VerticalPair::new(
+                        RowMajorMatrixView::new_row(local_preprocessed_row),
+                        RowMajorMatrixView::new_row(next_preprocessed_row),
+                    )
+                },
+            );
+
             let row_builder: LookupTraceBuilder<'_, SC> = LookupTraceBuilder::new(
                 main_rows,
+                preprocessed_rows,
                 public_values,
                 permutation_challenges,
                 height,

@@ -1,5 +1,6 @@
 //! See [`crate::prover`] for an overview of the protocol and a more detailed soundness analysis.
 
+use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
 
@@ -390,6 +391,13 @@ where
     Ok(())
 }
 
+/// Defines errors that can occur during lookup verification.
+#[derive(Debug)]
+pub enum LookupError {
+    /// Error indicating that the global cumulative sum is incorrect.
+    GlobalCumulativeMismatch(Option<String>),
+}
+
 #[derive(Debug, Error)]
 pub enum VerificationError<PcsErr>
 where
@@ -412,4 +420,7 @@ where
         "next point unavailable: domain does not support computing the next point algebraically"
     )]
     NextPointUnavailable,
+    /// Lookup related error
+    #[error("lookup error: {0:?}")]
+    LookupError(LookupError),
 }
