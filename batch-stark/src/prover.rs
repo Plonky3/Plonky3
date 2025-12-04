@@ -37,7 +37,6 @@ where
 {
     let pcs = config.pcs();
     let mut challenger = config.initialise_challenger();
-    let is_random = SC::Pcs::ZK;
 
     // Use instances in provided order.
     let degrees: Vec<usize> = instances.iter().map(|i| i.trace.height()).collect();
@@ -214,8 +213,6 @@ where
         challenger.observe(r_commit.clone());
     }
 
-    // TODO: ZK disabled: no randomization round.
-
     // Sample OOD point.
     let zeta: Challenge<SC> = challenger.sample_algebra_element();
 
@@ -225,7 +222,7 @@ where
 
         let round0 = opt_r_data.as_ref().map(|r_data| {
             let round0_points = trace_domains.iter().map(|_| vec![zeta]).collect::<Vec<_>>();
-            (r_data, round0_points, true)
+            (r_data, round0_points)
         });
         rounds.extend(round0);
         // Main trace round: per instance, open at zeta and its next point.
@@ -239,7 +236,7 @@ where
                 ]
             })
             .collect::<Vec<_>>();
-        rounds.push((&main_data, round1_points, true));
+        rounds.push((&main_data, round1_points));
 
         // Quotient chunks round: one point per chunk at zeta.
         let round2_points = quotient_chunk_ranges
@@ -247,7 +244,7 @@ where
             .cloned()
             .flat_map(|(s, e)| (s..e).map(|_| vec![zeta]))
             .collect::<Vec<_>>();
-        rounds.push((&quotient_data, round2_points, true));
+        rounds.push((&quotient_data, round2_points));
 
         // Optional global preprocessed round: one matrix per instance that
         // has preprocessed columns.
@@ -262,10 +259,17 @@ where
                     vec![zeta, zeta_next_i]
                 })
                 .collect::<Vec<_>>();
-            rounds.push((&global.prover_data, pre_points, false));
+            rounds.push((&global.prover_data, pre_points));
         }
 
-        pcs.open(rounds, &mut challenger)
+        pcs.open(
+            rounds,
+            &mut challenger,
+            common
+                .preprocessed
+                .as_ref()
+                .map(|_| SC::Pcs::PREPROCESSED_TRACE_IDX),
+        )
     };
 
     // Rely on PCS indices for opened value groups: main trace, quotient, preprocessed.
@@ -274,9 +278,7 @@ where
 
     // Parse trace opened values per instance.
     let trace_values_for_mats = &opened_values[trace_idx];
-    if config.is_zk() != 1 {
-        assert_eq!(trace_values_for_mats.len(), n_instances);
-    }
+    assert_eq!(trace_values_for_mats.len(), n_instances);
 
     // Parse quotient chunk opened values and map per instance.
     let mut per_instance: Vec<OpenedValues<Challenge<SC>>> = Vec::with_capacity(n_instances);
@@ -289,7 +291,7 @@ where
 
     let mut quotient_openings_iter = opened_values[quotient_idx].iter();
     for (i, (s, e)) in quotient_chunk_ranges.iter().copied().enumerate() {
-        let random = if is_random {
+        let random = if opt_r_data.is_some() {
             Some(opened_values[0][i][0].clone())
         } else {
             None

@@ -376,12 +376,12 @@ where
                 // points to open
                 Vec<Challenge>,
             >,
-            bool,
         )>,
         challenger: &mut Challenger,
+        preprocessed_idx: Option<usize>,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
-        let round_bools = rounds.iter().map(|(_, _, b)| *b).collect::<Vec<_>>();
-        let (mut inner_opened_values, inner_proof) = self.inner.open(rounds, challenger);
+        let (mut inner_opened_values, inner_proof) =
+            self.inner.open(rounds, challenger, preprocessed_idx);
 
         // inner_opened_values includes opened values for the random codewords. Those should be
         // hidden from our caller, so we split them off and store them in the proof.
@@ -395,10 +395,13 @@ where
                         opened_values_for_mat
                             .iter_mut()
                             .map(|opened_values_for_point| {
-                                let num_random_codewords = if round_bools[idx] {
-                                    self.num_random_codewords
-                                } else {
+                                let num_random_codewords = if let Some(preprocessed_idx) =
+                                    preprocessed_idx
+                                    && idx == preprocessed_idx
+                                {
                                     0
+                                } else {
+                                    self.num_random_codewords
                                 };
                                 let split = opened_values_for_point.len() - num_random_codewords;
                                 opened_values_for_point.drain(split..).collect()
@@ -507,13 +510,15 @@ where
     result
 }
 
+/// Adds `num_extra_columns` zero columns to the right of `mat`, then reshapes it by setting the width to
+/// `mat.width() + num_extra_columns`.
 #[instrument(level = "debug", skip_all)]
-fn add_zero_cols<Val>(mat: &RowMajorMatrix<Val>, num_random_codewords: usize) -> RowMajorMatrix<Val>
+fn add_zero_cols<Val>(mat: &RowMajorMatrix<Val>, num_extra_columns: usize) -> RowMajorMatrix<Val>
 where
     Val: Field,
 {
     let old_w = mat.width();
-    let new_w = old_w + num_random_codewords;
+    let new_w = old_w + num_extra_columns;
     let h = mat.height();
 
     let new_values = Val::zero_vec(new_w * h);

@@ -286,6 +286,7 @@ where
                 BatchOpeningRef::new(&[evals.clone()], &opening.opening_proof), // It's possible to remove the clone here but unnecessary as evals is tiny.
             )
             .map_err(FriError::CommitPhaseMmcsError)?;
+
         // Fold the pair of sibling nodes to get the evaluation of the parent FRI node.
         folded_eval = folding.fold_row(*start_index, log_folded_height, beta, evals.into_iter());
 

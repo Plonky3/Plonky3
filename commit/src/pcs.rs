@@ -107,12 +107,20 @@ where
         )
     }
 
+    /// When committing to quotient polynomials in batch-STARK,
+    /// it is simpler to first compute the LDE evaluations before batch-committing to them.
+    ///
+    /// This corresponds to the first step of `commit_quotient`. When `zk` is enabled,
+    /// this will additionally add randomization.
+    ///
+    /// TODO: We could only rely on this methid along with `commit_ldes` instead of `commit_quotient`, even in `uni-stark`.
     fn get_randomized_quotient_ldes(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
         num_chunks: usize,
     ) -> Vec<RowMajorMatrix<Val<Self::Domain>>>;
 
+    /// Commits to a collection of LDE evaluation matrices.
     fn commit_ldes(
         &self,
         ldes: Vec<RowMajorMatrix<Val<Self::Domain>>>,
@@ -130,11 +138,8 @@ where
         domain: Self::Domain,
     ) -> Self::EvaluationsOnDomain<'a>;
 
-    /// Given prover data corresponding to a commitment to a collection of evaluation matrices,
-    /// return the evaluations of those matrices on the given domain.
-    ///
-    /// This is essentially a no-op when called with a `domain` which is a subset of the evaluation domain
-    /// on which the evaluation matrices are defined.
+    /// This is the same as `get_evaluations_on_domain` but without randomization.
+    /// This is used for preprocessed columns which do not have to be randomized even when ZK is enabled.
     fn get_evaluations_on_domain_no_random<'a>(
         &self,
         prover_data: &'a Self::ProverData,
@@ -152,6 +157,7 @@ where
     ///     - `data`: The prover data corresponding to a multi-matrix commitment.
     ///     - `opening_points`: A vector containing, for each matrix committed to, a vector of opening points.
     /// - `fiat_shamir_challenger`: The challenger that will be used to generate the proof.
+    /// - `preprocessed_idx`: If one of the committed matrices corresponds to preprocessed columns, this is the index of that matrix.
     ///
     /// Unwrapping the arguments further, each `data` contains a vector of the committed matrices (`matrices = Vec<M>`).
     /// If the length of `matrices` is not equal to the length of `opening_points` the function will error. Otherwise, for
@@ -162,7 +168,6 @@ where
     ///
     /// The domains on which the evaluation vectors are defined is not part of the arguments here
     /// but should be public information known to both the prover and verifier.
-    #[allow(clippy::type_complexity)]
     fn open(
         &self,
         // For each multi-matrix commitment,
@@ -174,9 +179,9 @@ where
                 // the points to open
                 Vec<Challenge>,
             >,
-            bool,
         )>,
         fiat_shamir_challenger: &mut Challenger,
+        preprocessed_idx: Option<usize>,
     ) -> (OpenedValues<Challenge>, Self::Proof);
 
     /// Verify that a collection of opened values is correct.

@@ -290,9 +290,9 @@ where
                 // points to open
                 Vec<Challenge>,
             >,
-            bool,
         )>,
         challenger: &mut Challenger,
+        _preprocessed_idx: Option<usize>,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
         /*
 
@@ -335,7 +335,7 @@ where
         // We extract those matrices to be able to refer to them directly.
         let commitment_data_with_opening_pts = commitment_data_with_opening_points
             .iter()
-            .map(|(data, points, _)| (*data, points.clone()))
+            .map(|(data, points)| (*data, points.clone()))
             .collect::<Vec<_>>();
         let mats_and_points = commitment_data_with_opening_pts
             .iter()

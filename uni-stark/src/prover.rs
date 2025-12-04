@@ -121,6 +121,7 @@ where
     );
 
     let num_quotient_chunks = 1 << (log_num_quotient_chunks + config.is_zk());
+
     // Initialize the PCS and the Challenger.
     let pcs = config.pcs();
     let mut challenger = config.initialise_challenger();
@@ -297,12 +298,10 @@ where
 
     let is_random = opt_r_data.is_some();
     let (opened_values, opening_proof) = info_span!("open").in_scope(|| {
-        let round0 = opt_r_data
-            .as_ref()
-            .map(|r_data| (r_data, vec![vec![zeta]], true));
-        let round1 = (&trace_data, vec![vec![zeta, zeta_next]], true);
-        let round2 = (&quotient_data, vec![vec![zeta]; num_quotient_chunks], true); // open every chunk at zeta
-        let round3 = preprocessed_data_ref.map(|data| (data, vec![vec![zeta, zeta_next]], false));
+        let round0 = opt_r_data.as_ref().map(|r_data| (r_data, vec![vec![zeta]]));
+        let round1 = (&trace_data, vec![vec![zeta, zeta_next]]);
+        let round2 = (&quotient_data, vec![vec![zeta]; num_quotient_chunks]); // open every chunk at zeta
+        let round3 = preprocessed_data_ref.map(|data| (data, vec![vec![zeta, zeta_next]]));
 
         let rounds = round0
             .into_iter()
@@ -310,7 +309,13 @@ where
             .chain(round3)
             .collect();
 
-        pcs.open(rounds, &mut challenger)
+        pcs.open(
+            rounds,
+            &mut challenger,
+            preprocessed_data_ref
+                .as_ref()
+                .map(|_| SC::Pcs::PREPROCESSED_TRACE_IDX),
+        )
     });
     let trace_idx = SC::Pcs::TRACE_IDX;
     let quotient_idx = SC::Pcs::QUOTIENT_IDX;

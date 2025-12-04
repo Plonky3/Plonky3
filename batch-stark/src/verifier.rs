@@ -175,6 +175,7 @@ where
     let zeta = challenger.sample_algebra_element();
 
     // Build commitments_with_opening_points to verify openings.
+    let mut coms_to_verify = vec![];
 
     // Trace round: per instance, open at zeta and zeta_next
     let (trace_domains, ext_trace_domains): (Vec<Domain<SC>>, Vec<Domain<SC>>) = degree_bits
@@ -188,7 +189,6 @@ where
         })
         .unzip();
 
-    let mut coms_to_verify = vec![];
     if let Some(random_commit) = &commitments.random {
         coms_to_verify.push((
             random_commit.clone(),
@@ -196,7 +196,8 @@ where
                 .iter()
                 .zip(opened_values.instances.iter())
                 .map(|(domain, inst_opened_vals)| {
-                    let random_vals = inst_opened_vals.random.as_ref().unwrap(); // Safe unwrap due to earlier checks
+                    // We already checked that random is present for each instance when ZK is enabled.
+                    let random_vals = inst_opened_vals.random.as_ref().unwrap();
                     (*domain, vec![(zeta, random_vals.clone())])
                 })
                 .collect::<Vec<_>>(),
@@ -207,13 +208,13 @@ where
         .iter()
         .zip(opened_values.instances.iter())
         .enumerate()
-        .map(|(i, (dom, inst_opened_vals))| {
+        .map(|(i, (ext_dom, inst_opened_vals))| {
             let zeta_next = trace_domains[i]
                 .next_point(zeta)
                 .ok_or(VerificationError::NextPointUnavailable)?;
 
             Ok((
-                *dom,
+                *ext_dom,
                 vec![
                     (zeta, inst_opened_vals.trace_local.clone()),
                     (zeta_next, inst_opened_vals.trace_next.clone()),
@@ -236,6 +237,7 @@ where
         })
         .collect();
 
+    // When ZK is enabled, the size of the quotient chunks' domains doubles.
     let randomized_quotient_chunks_domains = quotient_domains
         .iter()
         .map(|doms| {

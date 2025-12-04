@@ -193,14 +193,14 @@ where
                 // points to open
                 Vec<Challenge>,
             >,
-            bool,
         )>,
         challenger: &mut Challenger,
+        _preprocessed_idx: Option<usize>,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
         // Open matrices at points
         let values: OpenedValues<Challenge> = rounds
             .iter()
-            .map(|(data, points_for_mats, _)| {
+            .map(|(data, points_for_mats)| {
                 let mats = self.mmcs.get_matrices(data);
                 debug_assert_eq!(
                     mats.len(),
@@ -252,7 +252,7 @@ where
         rounds
             .iter()
             .zip(values.iter())
-            .for_each(|((data, points_for_mats, _), values)| {
+            .for_each(|((data, points_for_mats), values)| {
                 let mats = self.mmcs.get_matrices(data);
                 izip!(mats, points_for_mats, values).for_each(|(mat, points_for_mat, values)| {
                     let log_height = log2_strict_usize(mat.height());
@@ -340,7 +340,7 @@ where
             // Open the input (big opening, lots of columns) at the full index...
             let input_openings = rounds
                 .iter()
-                .map(|(data, _, _)| {
+                .map(|(data, _)| {
                     let log_max_batch_height = log2_strict_usize(self.mmcs.get_max_height(data));
                     let reduced_index = index >> (log_max_height - log_max_batch_height);
                     self.mmcs.open_batch(reduced_index, data)
@@ -628,7 +628,7 @@ mod tests {
         let zeta: Challenge = rng.random();
 
         let mut chal = Challenger::from_hasher(vec![], byte_hash);
-        let (values, proof) = pcs.open(vec![(&data, vec![vec![zeta]], true)], &mut chal);
+        let (values, proof) = pcs.open(vec![(&data, vec![vec![zeta]])], &mut chal, None);
 
         let mut chal = Challenger::from_hasher(vec![], byte_hash);
         pcs.verify(

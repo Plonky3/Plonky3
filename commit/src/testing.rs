@@ -127,14 +127,14 @@ where
                 // points to open
                 Vec<Challenge>,
             >,
-            bool,
         )>,
         _challenger: &mut Challenger,
+        _preprocessed_idx: Option<usize>,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
         (
             rounds
                 .into_iter()
-                .map(|(coeffs_for_round, points_for_round, _)| {
+                .map(|(coeffs_for_round, points_for_round)| {
                     // ensure that each matrix corresponds to a set of opening points
                     debug_assert_eq!(coeffs_for_round.len(), points_for_round.len());
                     coeffs_for_round
