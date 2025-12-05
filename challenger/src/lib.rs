@@ -77,6 +77,7 @@ pub trait FieldChallenger<F: Field>:
     /// Absorb an element from a vector space over the base field.
     ///
     /// Decomposes the element into its basis coefficients and absorbs each.
+    #[inline(always)]
     fn observe_algebra_element<A: BasedVectorSpace<F>>(&mut self, alg_elem: A) {
         self.observe_slice(alg_elem.as_basis_coefficients_slice());
     }
@@ -84,6 +85,7 @@ pub trait FieldChallenger<F: Field>:
     /// Absorb a slice of elements from a vector space over the base field.
     ///
     /// Decomposes each element into its basis coefficients and absorbs them.
+    #[inline(always)]
     fn observe_algebra_slice<A: BasedVectorSpace<F> + Clone>(&mut self, alg_elems: &[A]) {
         for alg_elem in alg_elems {
             self.observe_algebra_element(alg_elem.clone());
@@ -93,6 +95,7 @@ pub trait FieldChallenger<F: Field>:
     /// Sample an element of a vector space over the base field.
     ///
     /// Constructs the element by sampling basis coefficients.
+    #[inline(always)]
     fn sample_algebra_element<A: BasedVectorSpace<F>>(&mut self) -> A {
         A::from_basis_coefficients_fn(|_| self.sample())
     }
@@ -109,7 +112,7 @@ pub trait FieldChallenger<F: Field>:
     /// verification operates entirely in the extension field (challenges, opened values, constraint
     /// evaluation), having a challenger that only observes extension field elements significantly
     /// simplifies the recursive circuit implementation.
-    #[inline]
+    #[inline(always)]
     fn observe_base_as_algebra_element<EF>(&mut self, val: F)
     where
         EF: Algebra<F> + BasedVectorSpace<F>,
@@ -166,30 +169,4 @@ where
     }
 }
 
-impl<C, F: Field> FieldChallenger<F> for &mut C
-where
-    C: FieldChallenger<F>,
-{
-    #[inline(always)]
-    fn observe_algebra_element<EF: BasedVectorSpace<F>>(&mut self, ext: EF) {
-        (*self).observe_algebra_element(ext);
-    }
-
-    #[inline(always)]
-    fn observe_algebra_slice<EF: BasedVectorSpace<F> + Clone>(&mut self, exts: &[EF]) {
-        (*self).observe_algebra_slice(exts);
-    }
-
-    #[inline(always)]
-    fn sample_algebra_element<EF: BasedVectorSpace<F>>(&mut self) -> EF {
-        (*self).sample_algebra_element()
-    }
-
-    #[inline(always)]
-    fn observe_base_as_algebra_element<EF>(&mut self, val: F)
-    where
-        EF: Algebra<F> + BasedVectorSpace<F>,
-    {
-        (*self).observe_base_as_algebra_element::<EF>(val);
-    }
-}
+impl<C, F: Field> FieldChallenger<F> for &mut C where C: FieldChallenger<F> {}
