@@ -47,8 +47,14 @@ pub fn generate_trace_rows<F: PrimeField64>(
 
 /// `rows` will normally consist of 24 rows, with an exception for the final row.
 fn generate_trace_rows_for_perm<F: PrimeField64>(rows: &mut [KeccakCols<F>], input: [u64; 25]) {
-    let mut current_state: [[u64; 5]; 5] = unsafe { transmute(input) };
+    // Convert flat input array to 5x5 matrix.
+    // The input uses standard Keccak indexing: input[x + 5*y] corresponds to state[x][y].
+    // After transmute, we get row-major layout: transmuted[i][j] = input[i*5 + j].
+    // To align with Keccak's state[x][y] = input[x + 5*y], we need to transpose.
+    let transmuted: [[u64; 5]; 5] = unsafe { transmute(input) };
+    let mut current_state: [[u64; 5]; 5] = array::from_fn(|x| array::from_fn(|y| transmuted[y][x]));
 
+    // initial_state is stored in y-major order for the AIR columns (preimage[y][x]).
     let initial_state: [[[F; 4]; 5]; 5] =
         array::from_fn(|y| array::from_fn(|x| u64_to_16_bit_limbs(current_state[x][y])));
 
@@ -134,4 +140,190 @@ fn generate_trace_row_for_round<F: PrimeField64>(
     current_state[0][0] ^= RC[round];
 
     row.a_prime_prime_prime_0_0_limbs = u64_to_16_bit_limbs(current_state[0][0]);
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_goldilocks::Goldilocks;
+    use p3_keccak::KeccakF;
+    use p3_symmetric::Permutation;
+
+    use super::*;
+
+    /// Helper function to extract the output state from the trace after all 24 rounds.
+    /// The output is stored in `a_prime_prime_prime` for (0,0) and `a_prime_prime` for others.
+    fn extract_output_from_trace<F: PrimeField64>(rows: &[KeccakCols<F>]) -> [u64; 25] {
+        let last_row = &rows[NUM_ROUNDS - 1];
+        let mut output = [0u64; 25];
+
+        for y in 0..5 {
+            for x in 0..5 {
+                let mut value = 0u64;
+                for limb in 0..U64_LIMBS {
+                    let limb_val = last_row.a_prime_prime_prime(y, x, limb).as_canonical_u64();
+                    value |= limb_val << (limb * 16);
+                }
+                // Standard Keccak indexing: state[x + 5*y]
+                output[x + 5 * y] = value;
+            }
+        }
+        output
+    }
+
+    /// Helper function to extract the input preimage from the trace.
+    fn extract_input_from_trace<F: PrimeField64>(rows: &[KeccakCols<F>]) -> [u64; 25] {
+        let first_row = &rows[0];
+        let mut input = [0u64; 25];
+
+        for y in 0..5 {
+            for x in 0..5 {
+                let mut value = 0u64;
+                for limb in 0..U64_LIMBS {
+                    let limb_val = first_row.preimage[y][x][limb].as_canonical_u64();
+                    value |= limb_val << (limb * 16);
+                }
+                // Standard Keccak indexing: state[x + 5*y]
+                input[x + 5 * y] = value;
+            }
+        }
+        input
+    }
+
+    #[test]
+    fn test_keccak_permutation_matches_p3_keccak() {
+        // Test with a non-trivial input state
+        let input: [u64; 25] = core::array::from_fn(|i| i as u64 * 0x0123456789ABCDEFu64);
+
+        // Compute expected output using p3-keccak (reference implementation)
+        let mut expected_output = input;
+        KeccakF.permute_mut(&mut expected_output);
+
+        // Generate trace using our implementation
+        let trace = generate_trace_rows::<Goldilocks>(vec![input], 0);
+        let (prefix, rows, suffix) = unsafe { trace.values.align_to::<KeccakCols<Goldilocks>>() };
+        assert!(prefix.is_empty());
+        assert!(suffix.is_empty());
+
+        // Verify input was stored correctly
+        let stored_input = extract_input_from_trace(&rows[..NUM_ROUNDS]);
+        assert_eq!(
+            stored_input, input,
+            "Input state should match the provided input"
+        );
+
+        // Verify output matches p3-keccak
+        let our_output = extract_output_from_trace(&rows[..NUM_ROUNDS]);
+        assert_eq!(
+            our_output, expected_output,
+            "Keccak-f output should match p3-keccak reference implementation"
+        );
+    }
+
+    #[test]
+    fn test_keccak_permutation_zero_state() {
+        // Test with all-zero state
+        let input = [0u64; 25];
+
+        let mut expected_output = input;
+        KeccakF.permute_mut(&mut expected_output);
+
+        let trace = generate_trace_rows::<Goldilocks>(vec![input], 0);
+        let (prefix, rows, suffix) = unsafe { trace.values.align_to::<KeccakCols<Goldilocks>>() };
+        assert!(prefix.is_empty());
+        assert!(suffix.is_empty());
+
+        let our_output = extract_output_from_trace(&rows[..NUM_ROUNDS]);
+        assert_eq!(
+            our_output, expected_output,
+            "Keccak-f on zero state should match p3-keccak"
+        );
+    }
+
+    #[test]
+    fn test_keccak_permutation_known_vector() {
+        // Known test vector: state with only first element set to 1
+        let mut input = [0u64; 25];
+        input[0] = 1;
+
+        let mut expected_output = input;
+        KeccakF.permute_mut(&mut expected_output);
+
+        let trace = generate_trace_rows::<Goldilocks>(vec![input], 0);
+        let (prefix, rows, suffix) = unsafe { trace.values.align_to::<KeccakCols<Goldilocks>>() };
+        assert!(prefix.is_empty());
+        assert!(suffix.is_empty());
+
+        let our_output = extract_output_from_trace(&rows[..NUM_ROUNDS]);
+        assert_eq!(
+            our_output, expected_output,
+            "Keccak-f with input[0]=1 should match p3-keccak"
+        );
+    }
+
+    #[test]
+    fn test_multiple_permutations() {
+        // Test multiple permutations in a single trace
+        let inputs: Vec<[u64; 25]> = (0..4)
+            .map(|i| core::array::from_fn(|j| (i * 25 + j) as u64))
+            .collect();
+
+        let expected_outputs: Vec<[u64; 25]> = inputs
+            .iter()
+            .map(|input| {
+                let mut output = *input;
+                KeccakF.permute_mut(&mut output);
+                output
+            })
+            .collect();
+
+        let trace = generate_trace_rows::<Goldilocks>(inputs, 0);
+        let (prefix, rows, suffix) = unsafe { trace.values.align_to::<KeccakCols<Goldilocks>>() };
+        assert!(prefix.is_empty());
+        assert!(suffix.is_empty());
+
+        for (i, expected) in expected_outputs.iter().enumerate() {
+            let start = i * NUM_ROUNDS;
+            let our_output = extract_output_from_trace(&rows[start..start + NUM_ROUNDS]);
+            assert_eq!(
+                our_output, *expected,
+                "Permutation {} should match p3-keccak",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_input_output_limb_indexing() {
+        // Verify that input_limb and output_limb functions use correct indexing
+        // This tests the column mapping for preimage and output
+
+        let input: [u64; 25] = core::array::from_fn(|i| i as u64 + 1);
+        let trace = generate_trace_rows::<Goldilocks>(vec![input], 0);
+        let (prefix, rows, suffix) = unsafe { trace.values.align_to::<KeccakCols<Goldilocks>>() };
+        assert!(prefix.is_empty());
+        assert!(suffix.is_empty());
+
+        // Check that preimage is stored in y-major order as per Keccak spec
+        let first_row = &rows[0];
+        for (i_u64, &expected_val) in input.iter().enumerate() {
+            let y = i_u64 / 5;
+            let x = i_u64 % 5;
+
+            let mut stored_value = 0u64;
+            for limb in 0..U64_LIMBS {
+                let limb_val = first_row.preimage[y][x][limb].as_canonical_u64();
+                stored_value |= limb_val << (limb * 16);
+            }
+
+            // input[i_u64] should be stored at preimage[y][x] where i_u64 = x + 5*y
+            // So input[x + 5*y] should equal preimage[y][x]
+            assert_eq!(
+                stored_value, expected_val,
+                "preimage[{}][{}] should equal input[{}]",
+                y, x, i_u64
+            );
+        }
+    }
 }
