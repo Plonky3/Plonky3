@@ -333,8 +333,10 @@ fn test_different_public_values_change_challenges() {
     );
 }
 
-/// Test that the returned challenger state can be used to continue challenge generation
-/// (important for FRI challenges in recursion scenarios).
+/// Test that the returned challenger state can be used to continue challenge generation.
+///
+/// This is important for recursion - the challenger state after STARK challenge generation
+/// can be passed to PCS/FRI for further challenge generation (alpha, betas, query indices).
 #[test]
 fn test_challenger_state_continuity() {
     let (config, _perm) = create_test_config();
@@ -346,18 +348,31 @@ fn test_challenger_state_continuity() {
     let proof = prove(&config, &FibonacciAir {}, trace, &pis);
 
     // Get the challenger state after STARK challenge generation
-    let (_challenges, mut challenger) =
+    let (stark_challenges, mut challenger) =
         generate_challenges(&config, &FibonacciAir {}, &proof, &pis, None)
             .expect("challenge generation should succeed");
 
     // The challenger should be able to continue generating challenges
-    // (as would be needed for FRI verification)
+    // This is what FRI verification would do internally
     let next_challenge: Challenge = challenger.sample_algebra_element();
 
-    // Just verify it doesn't panic and produces a non-zero value
+    // Verify challenges are valid
+    assert_ne!(
+        stark_challenges.alpha,
+        Challenge::ZERO,
+        "STARK alpha should be non-zero"
+    );
+    assert_ne!(
+        stark_challenges.zeta,
+        Challenge::ZERO,
+        "STARK zeta should be non-zero"
+    );
     assert_ne!(
         next_challenge,
         Challenge::ZERO,
         "continued challenger should produce valid challenges"
     );
+
+    // Verification should still succeed
+    verify(&config, &FibonacciAir {}, &proof, &pis).expect("verification should succeed");
 }

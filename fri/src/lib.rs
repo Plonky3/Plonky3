@@ -15,3 +15,4 @@ pub use config::*;
 pub use hiding_pcs::*;
 pub use proof::*;
 pub use two_adic_pcs::*;
+pub use verifier::{FriChallenges, FriError, generate_fri_challenges};
