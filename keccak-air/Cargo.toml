@@ -35,7 +35,6 @@ p3-sha256.workspace = true
 p3-symmetric.workspace = true
 p3-uni-stark.workspace = true
 
-tiny-keccak = { version = "2.0", features = ["keccak"] }
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 

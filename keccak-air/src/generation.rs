@@ -147,7 +147,8 @@ mod tests {
     use alloc::vec;
 
     use p3_goldilocks::Goldilocks;
-    use tiny_keccak::keccakf;
+    use p3_keccak::KeccakF;
+    use p3_symmetric::Permutation;
 
     use super::*;
 
@@ -191,13 +192,13 @@ mod tests {
     }
 
     #[test]
-    fn test_keccak_permutation_matches_tiny_keccak() {
+    fn test_keccak_permutation_matches_p3_keccak() {
         // Test with a non-trivial input state
         let input: [u64; 25] = core::array::from_fn(|i| i as u64 * 0x0123456789ABCDEFu64);
 
-        // Compute expected output using tiny-keccak (reference implementation)
+        // Compute expected output using p3-keccak (reference implementation)
         let mut expected_output = input;
-        keccakf(&mut expected_output);
+        KeccakF.permute_mut(&mut expected_output);
 
         // Generate trace using our implementation
         let trace = generate_trace_rows::<Goldilocks>(vec![input], 0);
@@ -212,11 +213,11 @@ mod tests {
             "Input state should match the provided input"
         );
 
-        // Verify output matches tiny-keccak
+        // Verify output matches p3-keccak
         let our_output = extract_output_from_trace(&rows[..NUM_ROUNDS]);
         assert_eq!(
             our_output, expected_output,
-            "Keccak-f output should match tiny-keccak reference implementation"
+            "Keccak-f output should match p3-keccak reference implementation"
         );
     }
 
@@ -226,7 +227,7 @@ mod tests {
         let input = [0u64; 25];
 
         let mut expected_output = input;
-        keccakf(&mut expected_output);
+        KeccakF.permute_mut(&mut expected_output);
 
         let trace = generate_trace_rows::<Goldilocks>(vec![input], 0);
         let (prefix, rows, suffix) = unsafe { trace.values.align_to::<KeccakCols<Goldilocks>>() };
@@ -236,7 +237,7 @@ mod tests {
         let our_output = extract_output_from_trace(&rows[..NUM_ROUNDS]);
         assert_eq!(
             our_output, expected_output,
-            "Keccak-f on zero state should match tiny-keccak"
+            "Keccak-f on zero state should match p3-keccak"
         );
     }
 
@@ -247,7 +248,7 @@ mod tests {
         input[0] = 1;
 
         let mut expected_output = input;
-        keccakf(&mut expected_output);
+        KeccakF.permute_mut(&mut expected_output);
 
         let trace = generate_trace_rows::<Goldilocks>(vec![input], 0);
         let (prefix, rows, suffix) = unsafe { trace.values.align_to::<KeccakCols<Goldilocks>>() };
@@ -257,7 +258,7 @@ mod tests {
         let our_output = extract_output_from_trace(&rows[..NUM_ROUNDS]);
         assert_eq!(
             our_output, expected_output,
-            "Keccak-f with input[0]=1 should match tiny-keccak"
+            "Keccak-f with input[0]=1 should match p3-keccak"
         );
     }
 
@@ -272,7 +273,7 @@ mod tests {
             .iter()
             .map(|input| {
                 let mut output = *input;
-                keccakf(&mut output);
+                KeccakF.permute_mut(&mut output);
                 output
             })
             .collect();
@@ -287,7 +288,7 @@ mod tests {
             let our_output = extract_output_from_trace(&rows[start..start + NUM_ROUNDS]);
             assert_eq!(
                 our_output, *expected,
-                "Permutation {} should match tiny-keccak",
+                "Permutation {} should match p3-keccak",
                 i
             );
         }
