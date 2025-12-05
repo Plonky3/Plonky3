@@ -539,7 +539,7 @@ mod tests {
     #[test]
     fn test_observe_algebra_elements_equivalence() {
         // Test that the two following paths give the same results:
-        // - `observe_algebra_elements`
+        // - `observe_algebra_slice`
         // - `observe_algebra_element` in a loop
         let mut chal1 =
             DuplexChallenger::<G, TestPermutation, WIDTH, RATE>::new(TestPermutation {});
@@ -549,8 +549,8 @@ mod tests {
         // Create a slice of extension field elements
         let ext_values: Vec<EF2G> = (0u8..10).map(|i| EF2G::from(G::from_u8(i))).collect();
 
-        // Method 1: Use observe_algebra_elements with slice
-        chal1.observe_algebra_elements(&ext_values);
+        // Method 1: Use observe_algebra_slice with slice
+        chal1.observe_algebra_slice(&ext_values);
 
         // Method 2: Call observe_algebra_element individually
         for ext_val in &ext_values {
@@ -582,7 +582,7 @@ mod tests {
 
         // Observe empty slice
         let empty: Vec<EF2G> = vec![];
-        chal1.observe_algebra_elements(&empty);
+        chal1.observe_algebra_slice(&empty);
 
         // Verify state unchanged
         assert_eq!(chal1.input_buffer, chal2.input_buffer);
@@ -603,7 +603,7 @@ mod tests {
         assert!(chal.input_buffer.is_empty());
         assert!(chal.output_buffer.is_empty());
 
-        chal.observe_algebra_elements(&ext_values);
+        chal.observe_algebra_slice(&ext_values);
 
         // After observing 8 EF2G elements (16 base field elements), duplexing should occur
         assert!(chal.input_buffer.is_empty());

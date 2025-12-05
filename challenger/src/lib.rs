@@ -176,8 +176,8 @@ where
     }
 
     #[inline(always)]
-    fn observe_algebra_elements<EF: BasedVectorSpace<F> + Clone>(&mut self, exts: &[EF]) {
-        (*self).observe_algebra_elements(exts);
+    fn observe_algebra_slice<EF: BasedVectorSpace<F> + Clone>(&mut self, exts: &[EF]) {
+        (*self).observe_algebra_slice(exts);
     }
 
     #[inline(always)]
