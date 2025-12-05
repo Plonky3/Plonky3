@@ -89,17 +89,25 @@ where
     let log_global_max_height =
         proof.commit_phase_commits.len() + params.log_blowup + params.log_final_poly_len;
 
-    // Generate all of the random challenges for the FRI rounds.
+    if proof.commit_pow_witnesses.len() != proof.commit_phase_commits.len() {
+        return Err(FriError::InvalidProofShape);
+    }
+
+    // Generate all of the random challenges for the FRI rounds, checking PoW per round.
     let betas: Vec<Challenge> = proof
         .commit_phase_commits
         .iter()
-        .map(|comm| {
-            // To match with the prover (and for security purposes),
-            // we observe the commitment before sampling the challenge.
+        .zip(&proof.commit_pow_witnesses)
+        .map(|(comm, witness)| {
+            // Observe the commitment, check the PoW witness, then sample the
+            // folding challenge.
             challenger.observe(comm.clone());
-            challenger.sample_algebra_element()
+            if !challenger.check_witness(params.commit_proof_of_work_bits, *witness) {
+                return Err(FriError::InvalidPowWitness);
+            }
+            Ok(challenger.sample_algebra_element())
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     // Ensure that the final polynomial has the expected degree.
     if proof.final_poly.len() != params.final_poly_len() {
@@ -118,7 +126,7 @@ where
     }
 
     // Check PoW.
-    if !challenger.check_witness(params.proof_of_work_bits, proof.pow_witness) {
+    if !challenger.check_witness(params.query_proof_of_work_bits, proof.query_pow_witness) {
         return Err(FriError::InvalidPowWitness);
     }
 

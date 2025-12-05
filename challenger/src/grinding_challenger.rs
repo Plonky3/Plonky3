@@ -35,6 +35,9 @@ pub trait GrindingChallenger:
     /// Returns `true` if the witness passes the PoW check, `false` otherwise.
     #[must_use]
     fn check_witness(&mut self, bits: usize, witness: Self::Witness) -> bool {
+        if bits == 0 {
+            return true;
+        }
         self.observe(witness);
         self.sample_bits(bits) == 0
     }
