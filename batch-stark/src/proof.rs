@@ -32,6 +32,8 @@ pub struct BatchCommitments<Com> {
     pub permutation: Option<Com>,
     /// Commitment to all quotient polynomial chunks (across all instances).
     pub quotient_chunks: Com,
+    /// Commitment to all randomization polynomials (one per instance, if ZK is enabled).
+    pub random: Option<Com>,
 }
 
 /// Opened values for a single instance in a batch-STARK proof, including lookup-related values.
