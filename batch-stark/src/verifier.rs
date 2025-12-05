@@ -369,14 +369,16 @@ where
     if is_lookup {
         let permutation_commit = commitments.permutation.clone().unwrap();
         let mut permutation_round = Vec::new();
-        for (ext_dom, inst_opened_vals) in
-            ext_trace_domains.iter().zip(opened_values.instances.iter())
+        for (i, (ext_dom, inst_opened_vals)) in ext_trace_domains
+            .iter()
+            .zip(opened_values.instances.iter())
+            .enumerate()
         {
             if inst_opened_vals.permutation_local.len() != inst_opened_vals.permutation_next.len() {
                 return Err(VerificationError::InvalidProofShape);
             }
             if !inst_opened_vals.permutation_local.is_empty() {
-                let zeta_next = ext_dom
+                let zeta_next = trace_domains[i]
                     .next_point(zeta)
                     .ok_or(VerificationError::NextPointUnavailable)?;
                 permutation_round.push((

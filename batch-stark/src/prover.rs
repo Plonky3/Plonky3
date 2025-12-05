@@ -411,7 +411,7 @@ where
             rounds.push((&global.prover_data, pre_points));
         }
 
-        let lookup_points: Vec<_> = ext_trace_domains
+        let lookup_points: Vec<_> = trace_domains
             .iter()
             .zip(&all_lookups)
             .filter(|&(_, lookups)| !lookups.is_empty())
