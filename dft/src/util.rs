@@ -21,7 +21,7 @@ pub fn divide_by_height<F: Field, S: DenseStorage<F> + BorrowMut<[F]>>(
     // It's also cheaper to work in the PrimeSubfield whenever possible.
     let h_inv_subfield = F::PrimeSubfield::ONE.div_2exp_u64(log_h as u64);
     let h_inv = F::from_prime_subfield(h_inv_subfield);
-    mat.scale(h_inv)
+    mat.scale(h_inv);
 }
 
 /// Multiply each element of row `i` of `mat` by `shift**i`.
