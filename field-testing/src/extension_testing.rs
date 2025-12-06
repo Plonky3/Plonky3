@@ -122,3 +122,35 @@ where
         EF::ExtensionPacking::to_ext_iter(packed_powers_capped).collect();
     assert_eq!(base_powers, unpacked_powers);
 }
+
+/// Test packing of extension field elements in batches.
+///
+/// Verifies roundtrip consistency: pack -> unpack returns the original.
+pub fn test_pack_ext_slice<F, EF>()
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    StandardUniform: Distribution<EF>,
+{
+    let mut rng = SmallRng::seed_from_u64(42);
+    let width = F::Packing::WIDTH;
+
+    // Test with various sizes (multiples of WIDTH)
+    for num_packed in [1, 2, 4, 8, 16] {
+        let num_elements = num_packed * width;
+        let original: Vec<EF> = (0..num_elements).map(|_| rng.random()).collect();
+
+        // Test packing extension field elements
+        let packed = EF::ExtensionPacking::pack_ext_slice(&original);
+        assert_eq!(packed.len(), num_packed);
+
+        // Unpack and verify roundtrip
+        let unpacked: Vec<EF> = EF::ExtensionPacking::to_ext_iter(packed.into_iter()).collect();
+        assert_eq!(unpacked.len(), num_elements);
+        assert_eq!(
+            original, unpacked,
+            "Roundtrip failed for {} elements",
+            num_elements
+        );
+    }
+}
