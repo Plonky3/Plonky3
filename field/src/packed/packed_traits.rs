@@ -334,6 +334,31 @@ pub trait PackedFieldExtension<
         })
     }
 
+    /// Pack a slice of extension field elements into packed extension field elements.
+    ///
+    /// This processes chunks of `WIDTH` elements at a time.
+    ///
+    /// We produce a vector of packed extension field elements of length `ext_slice.len() / WIDTH`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `ext_slice.len()` is not a multiple of `WIDTH`.
+    #[inline]
+    #[must_use]
+    fn pack_ext_slice(ext_slice: &[ExtField]) -> Vec<Self> {
+        let width = BaseField::Packing::WIDTH;
+        assert!(
+            ext_slice.len().is_multiple_of(width),
+            "Slice length ({}) must be a multiple of packing width ({}).",
+            ext_slice.len(),
+            width
+        );
+        ext_slice
+            .chunks_exact(width)
+            .map(Self::from_ext_slice)
+            .collect()
+    }
+
     /// Similar to `packed_powers`, construct an iterator which returns
     /// powers of `base` packed into `PackedFieldExtension` elements.
     #[must_use]

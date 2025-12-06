@@ -1109,6 +1109,11 @@ macro_rules! test_extension_field {
             fn test_packed_extension() {
                 $crate::test_packed_extension::<$field, $ef>();
             }
+
+            #[test]
+            fn test_pack_ext_slice() {
+                $crate::test_pack_ext_slice::<$field, $ef>();
+            }
         }
     };
 }
