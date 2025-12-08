@@ -66,7 +66,7 @@ fn do_test_fri_pcs<Val, Challenge, Challenger, P>(
         .map(|log_degrees| vec![vec![zeta]; log_degrees.len()])
         .collect_vec();
     let data_and_points = data_by_round.iter().zip(points_by_round).collect();
-    let (opening_by_round, proof) = pcs.open(data_and_points, &mut p_challenger);
+    let (opening_by_round, proof) = pcs.open(data_and_points, &mut p_challenger, None);
     assert_eq!(opening_by_round.len(), num_rounds);
 
     // Verify the proof.

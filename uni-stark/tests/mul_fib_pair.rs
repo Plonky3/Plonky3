@@ -7,10 +7,10 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeField64};
-use p3_fri::{TwoAdicFriPcs, create_test_fri_params};
+use p3_fri::{HidingFriPcs, TwoAdicFriPcs, create_test_fri_params};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_merkle_tree::MerkleTreeMmcs;
+use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{
     StarkConfig, prove_with_preprocessed, setup_preprocessed, verify_with_preprocessed,
@@ -174,12 +174,24 @@ type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
 type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 type ValMmcs =
     MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
+type HidingValMmcs = MerkleTreeHidingMmcs<
+    <Val as Field>::Packing,
+    <Val as Field>::Packing,
+    MyHash,
+    MyCompress,
+    SmallRng,
+    8,
+    4,
+>;
 type Challenge = BinomialExtensionField<Val, 4>;
 type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+type HidingChallengeMmcs = ExtensionMmcs<Val, Challenge, HidingValMmcs>;
 type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 type Dft = Radix2DitParallel<Val>;
 type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
+type HidingPcs = HidingFriPcs<Val, Dft, HidingValMmcs, HidingChallengeMmcs, SmallRng>;
 type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
+type MyHidingConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
 
 fn setup_test_config() -> MyConfig {
     let mut rng = SmallRng::seed_from_u64(1);
@@ -194,6 +206,19 @@ fn setup_test_config() -> MyConfig {
     MyConfig::new(pcs, challenger)
 }
 
+fn setup_zk_test_config() -> MyHidingConfig {
+    let mut rng = SmallRng::seed_from_u64(1);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    let hash = MyHash::new(perm.clone());
+    let compress = MyCompress::new(perm.clone());
+    let val_mmcs = HidingValMmcs::new(hash, compress, rng.clone());
+    let challenge_mmcs = HidingChallengeMmcs::new(val_mmcs.clone());
+    let fri_params = create_test_fri_params(challenge_mmcs, 2);
+    let pcs = HidingPcs::new(Dft::default(), val_mmcs, fri_params, 4, rng);
+    let challenger = Challenger::new(perm);
+    MyHidingConfig::new(pcs, challenger)
+}
+
 #[test]
 fn test_mul_fib_pair() {
     let num_rows = 1024;
@@ -204,6 +229,23 @@ fn test_mul_fib_pair() {
     let degree_bits = 10; // log2(1024)
     let (preprocessed_prover_data, preprocessed_vk) =
         setup_preprocessed::<MyConfig, _>(&config, &air, degree_bits).unwrap();
+
+    let proof = prove_with_preprocessed(&config, &air, trace, &[], Some(&preprocessed_prover_data));
+
+    verify_with_preprocessed(&config, &air, &proof, &[], Some(&preprocessed_vk))
+        .expect("verification failed");
+}
+
+#[test]
+fn test_mul_fib_pair_zk() {
+    let num_rows = 1024;
+    let config = setup_zk_test_config();
+    let trace = generate_trace_rows::<Val>(1, 1, num_rows);
+
+    let air = MulFibPAir::new(num_rows);
+    let degree_bits = 10; // log2(1024)
+    let (preprocessed_prover_data, preprocessed_vk) =
+        setup_preprocessed::<MyHidingConfig, _>(&config, &air, degree_bits).unwrap();
 
     let proof = prove_with_preprocessed(&config, &air, trace, &[], Some(&preprocessed_prover_data));
 
