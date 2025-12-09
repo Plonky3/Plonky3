@@ -353,7 +353,7 @@ impl<SC: StarkGenericConfig> AirBuilderWithPublicValues for LookupTraceBuilder<'
 impl<SC: StarkGenericConfig> PairBuilder for LookupTraceBuilder<'_, SC> {
     fn preprocessed(&self) -> Self::M {
         self.preprocessed
-            .map_or_else(|| panic!("Missing preprocessed columns"), |prep| prep)
+            .unwrap_or_else(|| panic!("Missing preprocessed columns"))
     }
 }
 

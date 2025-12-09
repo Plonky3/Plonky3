@@ -242,6 +242,6 @@ impl<'a, F: Field, EF: ExtensionField<F>> PairBuilder
 {
     fn preprocessed(&self) -> Self::M {
         self.preprocessed
-            .map_or_else(|| panic!("Missing preprocessed columns"), |prep| prep)
+            .unwrap_or_else(|| panic!("Missing preprocessed columns"))
     }
 }
