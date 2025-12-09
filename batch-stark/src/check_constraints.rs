@@ -18,7 +18,7 @@ type LookupConstraintsInputs<'a, F, EF, LG> = (&'a [Lookup<F>], &'a [LookupData<
 /// Runs constraint checks using a given [AIR](`p3_air::Air`) implementation and trace matrix.
 ///
 /// Iterates over every row in `main`, providing both the current and next row
-/// (with wraparound) to the [AIR]([`p3_air::Air`]) logic. Also injects public values into the builder
+/// (with wraparound) to the [AIR](`p3_air::Air`) logic. Also injects public values into the builder
 /// for first/last row assertions.
 ///
 /// # Arguments
