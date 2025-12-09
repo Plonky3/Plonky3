@@ -843,7 +843,7 @@ fn fft_triple_layer_quad_twiddle<F: Field, Fly0: Butterfly<F>, Flies: Butterfly<
 /// Approximates the size of the L1 cache by 32 KB. Used to determine the number of
 /// chunks to process in parallel.
 #[must_use]
-const fn workload_size<T: Sized>() -> usize {
+const fn workload_size<T>() -> usize {
     const L1_CACHE_SIZE: usize = 1 << 15; // 32 KB
     L1_CACHE_SIZE / size_of::<T>()
 }
@@ -854,7 +854,7 @@ const fn workload_size<T: Sized>() -> usize {
 ///
 /// Assumes that height is a power of two and always outputs a power of two.
 #[must_use]
-fn estimate_num_rows_in_l1<T: Sized>(height: usize, width: usize) -> usize {
+fn estimate_num_rows_in_l1<T>(height: usize, width: usize) -> usize {
     (workload_size::<T>() / width)
         .next_power_of_two()
         .min(height) // Ensure we don't exceed the height of the matrix.
