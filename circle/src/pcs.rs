@@ -374,7 +374,7 @@ where
         for (_, round) in &rounds {
             for (_, mat) in round {
                 for (_, point) in mat {
-                    challenger.observe_algebra_slice(&point);
+                    challenger.observe_algebra_slice(point);
                 }
             }
         }
