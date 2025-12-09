@@ -390,8 +390,7 @@ where
                                                 inv_denoms,
                                             )
                                         });
-                                ys.iter()
-                                    .for_each(|&y| challenger.observe_algebra_element(y));
+                                challenger.observe_algebra_slice(&ys);
                                 ys
                             })
                             .collect_vec()
@@ -535,9 +534,7 @@ where
         for (_, round) in &commitments_with_opening_points {
             for (_, mat) in round {
                 for (_, point) in mat {
-                    point
-                        .iter()
-                        .for_each(|&opening| challenger.observe_algebra_element(opening));
+                    challenger.observe_algebra_slice(&point);
                 }
             }
         }

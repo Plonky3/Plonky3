@@ -211,9 +211,7 @@ where
         .in_scope(|| Radix2DFTSmallBatch::default().idft_algebra(folded));
 
     // Observe all coefficients of the final polynomial.
-    for &x in &final_poly {
-        challenger.observe_algebra_element(x);
-    }
+    challenger.observe_algebra_slice(&final_poly);
 
     CommitPhaseResult {
         commits,

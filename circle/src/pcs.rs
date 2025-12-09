@@ -195,9 +195,7 @@ where
                                 let ps_at_zeta =
                                     info_span!("compute opened values with Lagrange interpolation")
                                         .in_scope(|| evals.evaluate_at_point(zeta));
-                                ps_at_zeta
-                                    .iter()
-                                    .for_each(|&p| challenger.observe_algebra_element(p));
+                                challenger.observe_algebra_slice(&ps_at_zeta);
                                 ps_at_zeta
                             })
                             .collect()
@@ -376,9 +374,7 @@ where
         for (_, round) in &rounds {
             for (_, mat) in round {
                 for (_, point) in mat {
-                    point
-                        .iter()
-                        .for_each(|&opening| challenger.observe_algebra_element(opening));
+                    challenger.observe_algebra_slice(&point);
                 }
             }
         }
