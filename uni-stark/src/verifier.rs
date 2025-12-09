@@ -21,6 +21,155 @@ use crate::{
     VerifierConstraintFolder,
 };
 
+/// All challenges generated during the STARK verification process.
+///
+/// This struct contains both the STARK-level challenges (alpha, zeta) and the
+/// FRI-level challenges that are generated during the PCS verification.
+/// It is useful for recursion, where we need to obtain all challenge values
+/// without running the full verifier circuit.
+#[derive(Clone, Debug)]
+pub struct StarkChallenges<Challenge> {
+    /// The random challenge used to combine all constraint polynomials.
+    pub alpha: Challenge,
+    /// The out-of-domain evaluation point.
+    pub zeta: Challenge,
+    /// The next point after zeta in the trace domain.
+    pub zeta_next: Challenge,
+}
+
+/// Generates all challenges needed for STARK verification without performing the actual verification.
+///
+/// This function replicates the challenge generation logic from `verify_with_preprocessed`,
+/// allowing callers to obtain all Fiat-Shamir challenges for use in recursive verification
+/// circuits without running the full verifier.
+///
+/// # Arguments
+/// * `config` - The STARK configuration
+/// * `air` - The AIR being verified
+/// * `proof` - The proof to generate challenges for
+/// * `public_values` - The public inputs
+/// * `preprocessed_vk` - Optional preprocessed verifier key
+///
+/// # Returns
+/// A tuple containing:
+/// - `StarkChallenges` with alpha, zeta, and zeta_next
+/// - The challenger state after observing all proof data and generating challenges
+///   (this can be passed to the PCS for FRI challenge generation)
+#[allow(clippy::type_complexity)]
+#[instrument(skip_all)]
+pub fn generate_challenges<SC, A>(
+    config: &SC,
+    air: &A,
+    proof: &Proof<SC>,
+    public_values: &[Val<SC>],
+    preprocessed_vk: Option<&PreprocessedVerifierKey<SC>>,
+) -> Result<(StarkChallenges<SC::Challenge>, SC::Challenger), VerificationError<PcsError<SC>>>
+where
+    SC: StarkGenericConfig,
+    A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
+{
+    let Proof {
+        commitments,
+        opened_values,
+        degree_bits,
+        ..
+    } = proof;
+
+    let pcs = config.pcs();
+    let degree = 1 << degree_bits;
+
+    // Determine expected preprocessed width.
+    let preprocessed_width = preprocessed_vk
+        .map(|vk| vk.width)
+        .or_else(|| air.preprocessed_trace().as_ref().map(|m| m.width))
+        .unwrap_or(0);
+
+    // Validate preprocessed trace consistency
+    let preprocessed_local_len = opened_values
+        .preprocessed_local
+        .as_ref()
+        .map_or(0, |v| v.len());
+    let preprocessed_next_len = opened_values
+        .preprocessed_next
+        .as_ref()
+        .map_or(0, |v| v.len());
+    if preprocessed_width != preprocessed_local_len || preprocessed_width != preprocessed_next_len {
+        return Err(VerificationError::InvalidProofShape);
+    }
+
+    // Get preprocessed commitment if present
+    let preprocessed_commit = match (preprocessed_width, preprocessed_vk) {
+        (0, None) => None,
+        (w, Some(vk)) if w == vk.width => {
+            assert_eq!(
+                config.is_zk(),
+                0,
+                "preprocessed columns not supported in zk mode"
+            );
+            Some(vk.commitment.clone())
+        }
+        _ => return Err(VerificationError::InvalidProofShape),
+    };
+
+    // Ensure the preprocessed trace and main trace have the same height.
+    if let Some(vk) = preprocessed_vk
+        && preprocessed_width > 0
+        && vk.degree_bits != *degree_bits
+    {
+        return Err(VerificationError::InvalidProofShape);
+    }
+
+    // Initialize challenger and observe instance data
+    let mut challenger = config.initialise_challenger();
+
+    // Observe the instance.
+    challenger.observe(Val::<SC>::from_usize(proof.degree_bits));
+    challenger.observe(Val::<SC>::from_usize(proof.degree_bits - config.is_zk()));
+    challenger.observe(Val::<SC>::from_usize(preprocessed_width));
+    // TODO: Might be best practice to include other instance data here in the transcript, like some
+    // encoding of the AIR. This protects against transcript collisions between distinct instances.
+    // Practically speaking though, the only related known attack is from failing to include public
+    // values. It's not clear if failing to include other instance data could enable a transcript
+    // collision, since most such changes would completely change the set of satisfying witnesses.
+    challenger.observe(commitments.trace.clone());
+    if preprocessed_width > 0 {
+        challenger.observe(preprocessed_commit.as_ref().unwrap().clone());
+    }
+    challenger.observe_slice(public_values);
+
+    // Get the first Fiat Shamir challenge which will be used to combine all constraint polynomials
+    // into a single polynomial.
+    //
+    // Soundness Error: n/|EF| where n is the number of constraints.
+    let alpha = challenger.sample_algebra_element();
+    challenger.observe(commitments.quotient_chunks.clone());
+
+    // Observe the random commitment if it is present.
+    if let Some(r_commit) = commitments.random.clone() {
+        challenger.observe(r_commit);
+    }
+
+    // Get an out-of-domain point to open our values at.
+    //
+    // Soundness Error: dN/|EF| where `N` is the trace length and our constraint polynomial has degree `d`.
+    let zeta = challenger.sample_algebra_element();
+
+    // Compute zeta_next
+    let init_trace_domain = pcs.natural_domain_for_degree(degree >> config.is_zk());
+    let zeta_next = init_trace_domain
+        .next_point(zeta)
+        .ok_or(VerificationError::NextPointUnavailable)?;
+
+    Ok((
+        StarkChallenges {
+            alpha,
+            zeta,
+            zeta_next,
+        },
+        challenger,
+    ))
+}
+
 /// Recomposes the quotient polynomial from its chunks evaluated at a point.
 ///
 /// Given quotient chunks and their domains, this computes the Lagrange
@@ -216,6 +365,16 @@ where
     SC: StarkGenericConfig,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
 {
+    // Generate all STARK-level challenges using the shared function
+    let (challenges, mut challenger) =
+        generate_challenges(config, air, proof, public_values, preprocessed_vk)?;
+
+    let StarkChallenges {
+        alpha,
+        zeta,
+        zeta_next,
+    } = challenges;
+
     let Proof {
         commitments,
         opened_values,
@@ -226,17 +385,10 @@ where
     let pcs = config.pcs();
     let degree = 1 << degree_bits;
     let trace_domain = pcs.natural_domain_for_degree(degree);
+
     // TODO: allow moving preprocessed commitment to preprocess time, if known in advance
     let (preprocessed_width, preprocessed_commit) =
         process_preprocessed_trace::<SC, A>(air, opened_values, config.is_zk(), preprocessed_vk)?;
-
-    // Ensure the preprocessed trace and main trace have the same height.
-    if let Some(vk) = preprocessed_vk
-        && preprocessed_width > 0
-        && vk.degree_bits != *degree_bits
-    {
-        return Err(VerificationError::InvalidProofShape);
-    }
 
     let log_num_quotient_chunks = get_log_num_quotient_chunks::<Val<SC>, A>(
         air,
@@ -245,8 +397,7 @@ where
         config.is_zk(),
     );
     let num_quotient_chunks = 1 << (log_num_quotient_chunks + config.is_zk());
-    let mut challenger = config.initialise_challenger();
-    let init_trace_domain = pcs.natural_domain_for_degree(degree >> (config.is_zk()));
+    let init_trace_domain = pcs.natural_domain_for_degree(degree >> config.is_zk());
 
     let quotient_domain =
         trace_domain.create_disjoint_domain(1 << (degree_bits + log_num_quotient_chunks));
@@ -254,8 +405,9 @@ where
 
     let randomized_quotient_chunks_domains = quotient_chunks_domains
         .iter()
-        .map(|domain| pcs.natural_domain_for_degree(domain.size() << (config.is_zk())))
+        .map(|domain| pcs.natural_domain_for_degree(domain.size() << config.is_zk()))
         .collect_vec();
+
     // Check that the random commitments are/are not present depending on the ZK setting.
     // - If ZK is enabled, the prover should have random commitments.
     // - If ZK is not enabled, the prover should not have random commitments.
@@ -274,46 +426,13 @@ where
             .iter()
             .all(|qc| qc.len() == SC::Challenge::DIMENSION)
         // We've already checked that opened_values.random is present if and only if ZK is enabled.
-        && opened_values.random.as_ref().is_none_or(|r_comm| r_comm.len() == SC::Challenge::DIMENSION);
+        && opened_values
+            .random
+            .as_ref()
+            .is_none_or(|r_comm| r_comm.len() == SC::Challenge::DIMENSION);
     if !valid_shape {
         return Err(VerificationError::InvalidProofShape);
     }
-
-    // Observe the instance.
-    challenger.observe(Val::<SC>::from_usize(proof.degree_bits));
-    challenger.observe(Val::<SC>::from_usize(proof.degree_bits - config.is_zk()));
-    challenger.observe(Val::<SC>::from_usize(preprocessed_width));
-    // TODO: Might be best practice to include other instance data here in the transcript, like some
-    // encoding of the AIR. This protects against transcript collisions between distinct instances.
-    // Practically speaking though, the only related known attack is from failing to include public
-    // values. It's not clear if failing to include other instance data could enable a transcript
-    // collision, since most such changes would completely change the set of satisfying witnesses.
-    challenger.observe(commitments.trace.clone());
-    if preprocessed_width > 0 {
-        challenger.observe(preprocessed_commit.as_ref().unwrap().clone());
-    }
-    challenger.observe_slice(public_values);
-
-    // Get the first Fiat Shamir challenge which will be used to combine all constraint polynomials
-    // into a single polynomial.
-    //
-    // Soundness Error: n/|EF| where n is the number of constraints.
-    let alpha = challenger.sample_algebra_element();
-    challenger.observe(commitments.quotient_chunks.clone());
-
-    // We've already checked that commitments.random is present if and only if ZK is enabled.
-    // Observe the random commitment if it is present.
-    if let Some(r_commit) = commitments.random.clone() {
-        challenger.observe(r_commit);
-    }
-
-    // Get an out-of-domain point to open our values at.
-    //
-    // Soundness Error: dN/|EF| where `N` is the trace length and our constraint polynomial has degree `d`.
-    let zeta = challenger.sample_algebra_element();
-    let zeta_next = init_trace_domain
-        .next_point(zeta)
-        .ok_or(VerificationError::NextPointUnavailable)?;
 
     // We've already checked that commitments.random and opened_values.random are present if and only if ZK is enabled.
     let mut coms_to_verify = if let Some(random_commit) = &commitments.random {
@@ -366,6 +485,7 @@ where
         ));
     }
 
+    // Verify PCS openings (this will generate and use FRI challenges internally)
     pcs.verify(coms_to_verify, opening_proof, &mut challenger)
         .map_err(VerificationError::InvalidOpeningArgument)?;
 
