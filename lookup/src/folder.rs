@@ -73,7 +73,7 @@ impl<SC: StarkGenericConfig> PairBuilder for ProverConstraintFolderWithLookups<'
     fn preprocessed(&self) -> Self::M {
         self.inner
             .preprocessed
-            .map_or_else(|| panic!("Missing preprocessed columns"), |prep| prep)
+            .unwrap_or_else(|| panic!("Missing preprocessed columns"))
     }
 }
 
@@ -172,7 +172,7 @@ impl<SC: StarkGenericConfig> PairBuilder for VerifierConstraintFolderWithLookups
     fn preprocessed(&self) -> Self::M {
         self.inner
             .preprocessed
-            .map_or_else(|| panic!("Missing preprocessed columns"), |prep| prep)
+            .unwrap_or_else(|| panic!("Missing preprocessed columns"))
     }
 }
 
