@@ -116,7 +116,6 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
 /// Used in conjunction with [`check_constraints`] to simulate
 /// an execution trace and verify that the [AIR](`p3_air::Air`) logic enforces all constraints.
 #[derive(Debug)]
-#[allow(unused)]
 pub struct DebugConstraintBuilderWithLookups<'a, F: Field, EF: ExtensionField<F>> {
     /// The index of the row currently being evaluated.
     row_index: usize,

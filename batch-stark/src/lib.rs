@@ -27,6 +27,7 @@ pub mod symbolic;
 pub mod verifier;
 
 // Re-export main types and functions for convenience
+pub use check_constraints::DebugConstraintBuilderWithLookups;
 pub use common::CommonData;
 pub use config::{
     Challenge, Commitment, Domain, PackedChallenge, PackedVal, PcsError, PcsProof,
