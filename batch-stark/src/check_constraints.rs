@@ -32,6 +32,7 @@ type LookupConstraintsInputs<'a, F, EF, LG> = (&'a [Lookup<F>], &'a [LookupData<
 ///     - the [`LookupData`] for global lookups,
 ///     - the [`LookupGadget`] implementation.
 #[instrument(name = "check constraints", skip_all)]
+#[cfg(debug_assertions)]
 #[allow(unused)]
 pub(crate) fn check_constraints<'b, F, EF, A, LG>(
     air: &A,
