@@ -1,0 +1,20 @@
+[package]
+name = "logup"
+description.workspace = true
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+p3-field = { workspace = true }
+p3-matrix = { workspace = true }
+
+[dev-dependencies]
+p3-goldilocks = { workspace = true }
+
+[lints]
+workspace = true

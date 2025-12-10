@@ -20,6 +20,7 @@ members = [
     "keccak",
     "keccak-air",
     "koala-bear",
+    "logup",
     "lookup",
     "matrix",
     "maybe-rayon",
