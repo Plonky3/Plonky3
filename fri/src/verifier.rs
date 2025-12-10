@@ -107,10 +107,7 @@ where
     }
 
     // Observe all coefficients of the final polynomial.
-    proof
-        .final_poly
-        .iter()
-        .for_each(|x| challenger.observe_algebra_element(*x));
+    challenger.observe_algebra_slice(&proof.final_poly);
 
     // Ensure that we have the expected number of FRI query proofs.
     if proof.query_proofs.len() != params.num_queries {
