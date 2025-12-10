@@ -551,19 +551,19 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
         self.values.resize(self.width * new_height, fill);
     }
 
-    /// Pad the matrix height to the next power of two by appending rows filled with `T::default()`.
+    /// Pad the matrix height to the next power of two by appending rows filled with `fill`.
     ///
     /// This is commonly used in proof systems where trace matrices must have power-of-two heights.
     ///
     /// # Behavior
     ///
-    /// - If the matrix is empty (height = 0), it is padded to have exactly one row of default values.
+    /// - If the matrix is empty (height = 0), it is padded to have exactly one row of `fill` values.
     /// - If the height is already a power of two, the matrix is unchanged.
     /// - Otherwise, the matrix is padded to the next power of two height.
-    pub fn pad_to_power_of_two_height(&mut self) {
-        // Handle empty matrix: ensure at least one row of default values.
+    pub fn pad_to_power_of_two_height(&mut self, fill: T) {
+        // Handle empty matrix: ensure at least one row of fill values.
         if self.height() == 0 {
-            self.values.resize(self.width, T::default());
+            self.values.resize(self.width, fill);
             return;
         }
 
@@ -575,8 +575,8 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
             return;
         }
 
-        // Pad with default values (zero for numeric types).
-        self.values.resize(self.width * target_height, T::default());
+        // Pad with the specified fill value.
+        self.values.resize(self.width * target_height, fill);
     }
 }
 
@@ -946,59 +946,61 @@ mod tests {
 
     #[test]
     fn test_pad_to_power_of_two_height() {
-        // Test 1: Non-power-of-two height (3 rows -> 4 rows)
+        // Test 1: Non-power-of-two height (3 rows -> 4 rows) with fill value 0.
         //
         // - Original matrix has 3 rows, which is not a power of two.
         // - After padding, it should have 4 rows (next power of two).
         let mut matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
         assert_eq!(matrix.height(), 3);
-        matrix.pad_to_power_of_two_height();
+        matrix.pad_to_power_of_two_height(0);
         assert_eq!(matrix.height(), 4);
-        // Original values preserved, new row filled with default (0).
+        // Original values preserved, new row filled with 0.
         assert_eq!(matrix.values, vec![1, 2, 3, 4, 5, 6, 0, 0]);
 
-        // Test 2: Already power-of-two height (4 rows -> 4 rows, unchanged)
+        // Test 2: Already power-of-two height (4 rows -> 4 rows, unchanged).
         //
         // Matrix height is already a power of two, so no padding occurs.
+        // Fill value is ignored when no padding is needed.
         let mut matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6, 7, 8], 2);
         assert_eq!(matrix.height(), 4);
-        matrix.pad_to_power_of_two_height();
+        matrix.pad_to_power_of_two_height(99);
         assert_eq!(matrix.height(), 4);
-        // Values unchanged.
+        // Values unchanged (fill value not used).
         assert_eq!(matrix.values, vec![1, 2, 3, 4, 5, 6, 7, 8]);
 
-        // Test 3: Single row matrix (1 row -> 1 row, unchanged)
+        // Test 3: Single row matrix (1 row -> 1 row, unchanged).
         //
         // Height of 1 is a power of two (2^0 = 1).
         let mut matrix = RowMajorMatrix::new(vec![1, 2, 3], 3);
         assert_eq!(matrix.height(), 1);
-        matrix.pad_to_power_of_two_height();
+        matrix.pad_to_power_of_two_height(42);
         assert_eq!(matrix.height(), 1);
         assert_eq!(matrix.values, vec![1, 2, 3]);
 
-        // Test 4: 5 rows -> 8 rows (next power of two)
+        // Test 4: 5 rows -> 8 rows with custom fill value (-1).
         //
-        // Demonstrates padding across a larger gap.
+        // Demonstrates padding across a larger gap with a non-zero fill value.
         let mut matrix = RowMajorMatrix::new(vec![1; 10], 2);
         assert_eq!(matrix.height(), 5);
-        matrix.pad_to_power_of_two_height();
+        matrix.pad_to_power_of_two_height(-1);
         assert_eq!(matrix.height(), 8);
-        // Original 10 values plus 6 new default values (3 new rows * 2 width).
+        // Original 10 values plus 6 fill values (3 new rows * 2 width).
         assert_eq!(matrix.values.len(), 16);
-        assert!(matrix.values[10..].iter().all(|&v| v == 0));
+        assert!(matrix.values[..10].iter().all(|&v| v == 1));
+        assert!(matrix.values[10..].iter().all(|&v| v == -1));
     }
 
     #[test]
     fn test_pad_to_power_of_two_height_empty_matrix() {
-        // Empty matrix (0 rows) should be padded to 1 row of default values.
+        // Empty matrix (0 rows) should be padded to 1 row of fill values.
         // This ensures the matrix is valid for downstream operations.
         let mut matrix: RowMajorMatrix<i32> = RowMajorMatrix::new(vec![], 3);
         assert_eq!(matrix.height(), 0);
         assert_eq!(matrix.width, 3);
-        matrix.pad_to_power_of_two_height();
-        // After padding: 1 row with 3 columns, all default (0).
+        matrix.pad_to_power_of_two_height(7);
+        // After padding: 1 row with 3 columns, all filled with 7.
         assert_eq!(matrix.height(), 1);
-        assert_eq!(matrix.values, vec![0, 0, 0]);
+        assert_eq!(matrix.values, vec![7, 7, 7]);
     }
 
     #[test]
