@@ -55,12 +55,12 @@ pub trait UniformGrindingChallenger:
     /// Use this together with `check_witness_uniform`.
     fn grind_uniform(&mut self, bits: usize) -> Self::Witness;
 
-    /// Grinds based on *uniformly sampled bits*. This variant panics if a value is
+    /// Grinds based on *uniformly sampled bits*. This variant errors if a value is
     /// sampled, which would violate our uniformity requirement (chance of about 1/P).
     /// See the `UniformSamplingField` trait implemented for each field for details.
     ///
-    /// Use this together with `check_witness_uniform_may_panic`.
-    fn grind_uniform_may_panic(&mut self, bits: usize) -> Self::Witness;
+    /// Use this together with `check_witness_uniform_may_error`.
+    fn grind_uniform_may_error(&mut self, bits: usize) -> Self::Witness;
 
     /// Check whether a given `witness` satisfies the PoW condition.
     ///
@@ -80,11 +80,11 @@ pub trait UniformGrindingChallenger:
     ///
     /// After absorbing the witness, the challenger samples `bits` random bits
     /// *uniformly* and verifies that all bits sampled are zero. In about ~1/P
-    /// cases this function may panic if a sampled value lies outside a range
+    /// cases this function may error if a sampled value lies outside a range
     /// in which we can guarantee uniform bits.
     ///
     /// Returns `true` if the witness passes the PoW check, `false` otherwise.
-    fn check_witness_uniform_may_panic(&mut self, bits: usize, witness: Self::Witness) -> bool {
+    fn check_witness_uniform_may_error(&mut self, bits: usize, witness: Self::Witness) -> bool {
         self.observe(witness);
         match self.sample_uniform_bits::<false>(bits) {
             Ok(v) => v == 0,
@@ -132,11 +132,11 @@ where
             challenger.check_witness_uniform(bits, witness)
         })
     }
-    #[instrument(name = "grind uniform may panic for proof-of-work witness", skip_all)]
-    fn grind_uniform_may_panic(&mut self, bits: usize) -> Self::Witness {
-        // Call the generic grinder with the "panic" checking logic.
+    #[instrument(name = "grind uniform may error for proof-of-work witness", skip_all)]
+    fn grind_uniform_may_error(&mut self, bits: usize) -> Self::Witness {
+        // Call the generic grinder with the "error" checking logic.
         self.grind_generic(bits, |challenger, witness| {
-            challenger.check_witness_uniform_may_panic(bits, witness)
+            challenger.check_witness_uniform_may_error(bits, witness)
         })
     }
 }

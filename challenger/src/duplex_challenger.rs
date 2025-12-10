@@ -211,15 +211,15 @@ where
 /// Trait for fields that support uniform bit sampling optimizations
 pub trait UniformSamplingField {
     /// Maximum number of bits we can sample at negligible (~1/field prime) probability of
-    /// triggering a panic / requiring a resample.
+    /// triggering an error / requiring a resample.
     const MAX_SINGLE_SAMPLE_BITS: usize;
     /// An array storing the largest value `m_k` for each `k` in [0, 31], such that `m_k`
     /// is a multiple of `2^k` and less than P. `m_k` is defined as:
     ///
     /// \( m_k = ⌊P / 2^k⌋ · 2^k \)
     ///
-    /// This is used as a rejection sampling threshold (or panic trigger) in `sampling_uniform_bits`, when
-    /// sampling random bits from uniformly sampled field elements. As long as we sample up to the `k`
+    /// This is used as a rejection sampling threshold (or error trigger), when sampling
+    /// random bits from uniformly sampled field elements. As long as we sample up to the `k`
     /// least significant bits in the range [0, m_k), we sample from exactly `m_k` elements. As
     /// `m_k` is divisible by 2^k, each of the least significant `k` bits has exactly the same
     /// number of zeroes and ones, leading to a uniform sampling.
@@ -241,11 +241,11 @@ where
 // Implementations for each are below.
 /// A zero-sized struct representing the "resample" strategy.
 pub(super) struct ResampleOnRejection;
-/// A zero-sized struct representing the "panic" strategy.
-pub(super) struct PanicOnRejection;
+/// A zero-sized struct representing the "error" strategy.
+pub(super) struct ErrorOnRejection;
 
 /// Custom error raised when resampling is required for uniform bits but disabled
-/// via `PanicOnRejection` strategy.
+/// via `ErrorOnRejection` strategy.
 #[derive(Debug)]
 pub struct ResamplingError {
     /// The sampled value
@@ -268,8 +268,8 @@ where
     F: PrimeField64,
     P: CryptographicPermutation<[F; W]>,
 {
-    /// Whether to panic instead of resampling when a drawn value is too large.
-    const PANIC_ON_REJECTION: bool;
+    /// Whether to error instead of resampling when a drawn value is too large.
+    const ERROR_ON_REJECTION: bool;
 
     #[inline]
     fn sample_value(
@@ -277,7 +277,7 @@ where
         m: u64,
     ) -> Result<F, ResamplingError> {
         let mut result: F = challenger.sample();
-        if Self::PANIC_ON_REJECTION {
+        if Self::ERROR_ON_REJECTION {
             if result.as_canonical_u64() >= m {
                 return Err(ResamplingError {
                     value: result.as_canonical_u64(),
@@ -299,16 +299,16 @@ where
     F: PrimeField64,
     P: CryptographicPermutation<[F; W]>,
 {
-    const PANIC_ON_REJECTION: bool = false;
+    const ERROR_ON_REJECTION: bool = false;
 }
 
-/// Implement panicking on a required rejection
-impl<F, P, const W: usize, const R: usize> BitSamplingStrategy<F, P, W, R> for PanicOnRejection
+/// Implement erroring on a required rejection
+impl<F, P, const W: usize, const R: usize> BitSamplingStrategy<F, P, W, R> for ErrorOnRejection
 where
     F: PrimeField64,
     P: CryptographicPermutation<[F; W]>,
 {
-    const PANIC_ON_REJECTION: bool = true;
+    const ERROR_ON_REJECTION: bool = true;
 }
 
 impl<F, P, const WIDTH: usize, const RATE: usize> DuplexChallenger<F, P, WIDTH, RATE>
@@ -369,7 +369,7 @@ where
         if RESAMPLE {
             self.sample_uniform_bits_with_strategy::<ResampleOnRejection>(bits)
         } else {
-            self.sample_uniform_bits_with_strategy::<PanicOnRejection>(bits)
+            self.sample_uniform_bits_with_strategy::<ErrorOnRejection>(bits)
         }
     }
 }
