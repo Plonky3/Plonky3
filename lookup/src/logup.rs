@@ -17,6 +17,7 @@
 //! - `m_i, m'_j` are multiplicities (how many times each element appears)
 //! - The transformation eliminates expensive exponentiation operations
 
+use alloc::format;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -529,6 +530,17 @@ impl LookupGadget for LogUpGadget {
                     .enumerate()
                     .map(|(idx, e)| {
                         let mult = symbolic_to_expr(&row_builder, e);
+                        #[cfg(debug_assertions)]
+                        {
+                            if let Ok(canonical) = format!("{:?}", mult).parse::<u64>() {
+                                if canonical == 2_130_706_432 {
+                                    debug!(
+                                        "lookup trace: problematic multiplicity {}; row {}, lookup {}, idx {}",
+                                        canonical, i, aux_idx, idx
+                                    );
+                                }
+                            }
+                        }
                         debug!(
                             "Row {}: Lookup {} multiplicity[{}] = {:?} (from expr: {:?})",
                             i, aux_idx, idx, mult, e

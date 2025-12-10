@@ -1,3 +1,4 @@
+use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -441,7 +442,25 @@ where
             warn!("IsTransition is not normalized");
             builder.is_transition_window(2)
         }
-        SymbolicExpression::Constant(c) => AB::Expr::from(*c),
+        SymbolicExpression::Constant(c) => {
+            #[cfg(debug_assertions)]
+            if let Ok(canonical) = format!("{:?}", c).parse::<u64>() {
+                debug!(
+                    "symbolic_to_expr: Reading Constant = {} (canonical u64)",
+                    canonical
+                );
+                // For MontyField31: p = 2^31 - 1 = 2147483647, so -1 = 2147483646.
+                const MONTY31_P: u64 = 2_147_483_647;
+                const MONTY31_NEG_ONE: u64 = MONTY31_P - 1;
+                if canonical == 2_130_706_432 {
+                    warn!(
+                        "symbolic_to_expr: unexpected constant value {}; expected -1 = {}",
+                        canonical, MONTY31_NEG_ONE
+                    );
+                }
+            }
+            AB::Expr::from(*c)
+        }
         SymbolicExpression::Add { x, y, .. } => {
             symbolic_to_expr(builder, x) + symbolic_to_expr(builder, y)
         }

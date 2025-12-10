@@ -195,6 +195,35 @@ impl<F: Field> Default for SymbolicExpression<F> {
     }
 }
 
+impl<F: Field> SymbolicExpression<F> {
+    /// Create a constant expression with debug logging to inspect canonical storage.
+    #[cfg(debug_assertions)]
+    #[allow(dead_code)]
+    pub fn constant_with_debug(value: F) -> Self
+    where
+        F: p3_field::PrimeField64,
+    {
+        use tracing::{debug, warn};
+
+        let canonical = value.as_canonical_u64();
+        debug!(
+            "symbolic_expression: creating Constant = {} (canonical u64)",
+            canonical
+        );
+        // For MontyField31: p = 2^31 - 1 = 2147483647, so -1 = 2147483646.
+        const MONTY31_P: u64 = 2_147_483_647;
+        const MONTY31_NEG_ONE: u64 = MONTY31_P - 1;
+        if canonical == 2_130_706_432 {
+            warn!(
+                "symbolic_expression: unexpected constant value {}; expected -1 = {}",
+                canonical, MONTY31_NEG_ONE
+            );
+        }
+
+        Self::Constant(value)
+    }
+}
+
 impl<F: Field, EF: ExtensionField<F>> From<SymbolicVariable<F>> for SymbolicExpression<EF> {
     fn from(var: SymbolicVariable<F>) -> Self {
         Self::Variable(SymbolicVariable::new(var.entry, var.index))
