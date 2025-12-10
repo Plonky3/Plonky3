@@ -534,7 +534,7 @@ where
         for (_, round) in &commitments_with_opening_points {
             for (_, mat) in round {
                 for (_, point) in mat {
-                    challenger.observe_algebra_slice(&point);
+                    challenger.observe_algebra_slice(point);
                 }
             }
         }
