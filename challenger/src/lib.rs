@@ -70,6 +70,11 @@ pub trait CanSampleBits<T> {
     fn sample_bits(&mut self, bits: usize) -> T;
 }
 
+/// Uniform bit sampling interface.
+///
+/// This trait provides a method for drawing uniformly distributed bitstrings
+/// from a Fiat–Shamir transcript. The goal is to obtain an integer supported
+/// on the range $[0, 2^{bits})$ with each value having equal probability.
 pub trait CanSampleUniformBits<F> {
     /// Sample a random `bits`-bit integer from the transcript with a guarantee of
     /// uniformly sampled bits.
