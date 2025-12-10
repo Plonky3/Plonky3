@@ -28,6 +28,7 @@ pub struct Commitments<Com> {
     pub trace: Com,
     pub quotient_chunks: Com,
     pub random: Option<Com>,
+    pub aux: Option<Com>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -38,4 +39,6 @@ pub struct OpenedValues<Challenge> {
     pub preprocessed_next: Option<Vec<Challenge>>, // may not always be necessary
     pub quotient_chunks: Vec<Vec<Challenge>>,
     pub random: Option<Vec<Challenge>>,
+    pub aux_trace_local: Option<Vec<Challenge>>,
+    pub aux_trace_next: Option<Vec<Challenge>>,
 }

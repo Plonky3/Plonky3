@@ -649,6 +649,8 @@ fn test_invalid_trace_width_rejected() {
                     .quotient_chunks
                     .clone(),
                 random: None,
+                aux_trace_local: None,
+                aux_trace_next: None,
             }],
         },
         opening_proof: valid_proof.opening_proof.clone(),

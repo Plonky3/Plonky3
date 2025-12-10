@@ -298,6 +298,8 @@ where
             preprocessed_next,
             quotient_chunks: qcs,
             random: None, // ZK not supported in batch-stark yet
+            aux_trace_local: None,
+            aux_trace_next: None,
         });
     }
 

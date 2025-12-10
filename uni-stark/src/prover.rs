@@ -150,8 +150,9 @@ where
     //      trace_commit contains the root of the tree
     //      trace_data contains the entire tree.
     //          - trace_data.leaves is the matrix containing `ET`.
-    let (trace_commit, trace_data) =
-        info_span!("commit to trace data").in_scope(|| pcs.commit([(ext_trace_domain, trace)]));
+    let trace_for_aux = trace.clone();
+    let (trace_commit, trace_data) = info_span!("commit to trace data")
+        .in_scope(|| pcs.commit([(ext_trace_domain, trace)]));
 
     // Preprocessed commitment and prover data (if any).
     let (preprocessed_commit, preprocessed_data_ref) = preprocessed
@@ -173,6 +174,21 @@ where
 
     // Observe the public input values.
     challenger.observe_slice(public_values);
+
+    // Sample randomness and optionally build/commit an auxiliary trace (e.g. LogUp).
+    let aux_randomness: Vec<SC::Challenge> = (0..config.num_aux_challenges())
+        .map(|_| challenger.sample_algebra_element())
+        .collect();
+    let (aux_trace_commit_opt, aux_trace_data_opt) = if let Some(aux_trace) =
+        config.build_aux_trace(&trace_for_aux, &aux_randomness)
+    {
+        let (aux_trace_commit, aux_trace_data) = info_span!("commit to aux trace data")
+            .in_scope(|| pcs.commit([(ext_trace_domain, aux_trace.flatten_to_base())]));
+        challenger.observe(aux_trace_commit.clone());
+        (Some(aux_trace_commit), Some(aux_trace_data))
+    } else {
+        (None, None)
+    };
 
     // Get the first Fiat Shamir challenge which will be used to combine all constraint polynomials
     // into a single polynomial.
@@ -280,6 +296,7 @@ where
         trace: trace_commit,
         quotient_chunks: quotient_commit,
         random: opt_r_commit.clone(),
+        aux: aux_trace_commit_opt.clone(),
     };
 
     if let Some(r_commit) = opt_r_commit {
@@ -308,36 +325,71 @@ where
         let round1 = (&trace_data, vec![vec![zeta, zeta_next]]);
         let round2 = (&quotient_data, vec![vec![zeta]; num_quotient_chunks]); // open every chunk at zeta
         let round3 = preprocessed_data_ref.map(|data| (data, vec![vec![zeta, zeta_next]]));
+        let round4 = aux_trace_data_opt
+            .as_ref()
+            .map(|data| (data, vec![vec![zeta, zeta_next]]));
 
         let rounds = round0
             .into_iter()
             .chain([round1, round2])
             .chain(round3)
+            .chain(round4)
             .collect();
 
         pcs.open(rounds, &mut challenger)
     });
-    let trace_idx = SC::Pcs::TRACE_IDX;
-    let quotient_idx = SC::Pcs::QUOTIENT_IDX;
+    // Track indices within the PCS opening response.
+    let mut next_idx = 0;
+    let random_idx = if is_random {
+        let idx = next_idx;
+        next_idx += 1;
+        Some(idx)
+    } else {
+        None
+    };
+    let trace_idx = {
+        let idx = next_idx;
+        next_idx += 1;
+        idx
+    };
+    let quotient_idx = {
+        let idx = next_idx;
+        next_idx += 1;
+        idx
+    };
+    let preprocessed_idx = if preprocessed_width > 0 {
+        let idx = next_idx;
+        next_idx += 1;
+        Some(idx)
+    } else {
+        None
+    };
+    let aux_idx = if aux_trace_data_opt.is_some() {
+        let idx = next_idx;
+        Some(idx)
+    } else {
+        None
+    };
+
     let trace_local = opened_values[trace_idx][0][0].clone();
     let trace_next = opened_values[trace_idx][0][1].clone();
     let quotient_chunks = opened_values[quotient_idx]
         .iter()
         .map(|v| v[0].clone())
         .collect_vec();
-    let random = if is_random {
-        Some(opened_values[0][0][0].clone())
-    } else {
-        None
-    };
-    let (preprocessed_local, preprocessed_next) = if preprocessed_width > 0 {
+    let random = random_idx.map(|idx| opened_values[idx][0][0].clone());
+    let (preprocessed_local, preprocessed_next) = preprocessed_idx.map_or((None, None), |idx| {
         (
-            Some(opened_values[SC::Pcs::PREPROCESSED_TRACE_IDX][0][0].clone()),
-            Some(opened_values[SC::Pcs::PREPROCESSED_TRACE_IDX][0][1].clone()),
+            Some(opened_values[idx][0][0].clone()),
+            Some(opened_values[idx][0][1].clone()),
         )
-    } else {
-        (None, None)
-    };
+    });
+    let (aux_trace_local, aux_trace_next) = aux_idx.map_or((None, None), |idx| {
+        (
+            Some(opened_values[idx][0][0].clone()),
+            Some(opened_values[idx][0][1].clone()),
+        )
+    });
     let opened_values = OpenedValues {
         trace_local,
         trace_next,
@@ -345,6 +397,8 @@ where
         preprocessed_next,
         quotient_chunks,
         random,
+        aux_trace_local,
+        aux_trace_next,
     };
     Proof {
         commitments,

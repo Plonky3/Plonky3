@@ -3,6 +3,7 @@ use core::marker::PhantomData;
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{ExtensionField, Field};
+use p3_matrix::dense::RowMajorMatrix;
 
 pub type PcsError<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
     <SC as StarkGenericConfig>::Challenge,
@@ -42,6 +43,22 @@ pub trait StarkGenericConfig {
     /// Returns 1 if the [`Pcs`] is zero-knowledge, 0 otherwise.
     fn is_zk(&self) -> usize {
         Self::Pcs::ZK as usize
+    }
+
+    /// Number of auxiliary random challenges used to build an auxiliary trace (default: 0 = no aux trace).
+    fn num_aux_challenges(&self) -> usize {
+        0
+    }
+
+    /// Optionally build an auxiliary trace from the main trace and the sampled auxiliary challenges.
+    ///
+    /// The default implementation returns `None`, meaning no auxiliary trace is used.
+    fn build_aux_trace(
+        &self,
+        _main: &RowMajorMatrix<Val<Self>>,
+        _aux_randomness: &[Self::Challenge],
+    ) -> Option<RowMajorMatrix<Val<Self>>> {
+        None
     }
 }
 

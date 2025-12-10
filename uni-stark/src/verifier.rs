@@ -265,6 +265,10 @@ where
     }
 
     let air_width = A::width(air);
+    let aux_width = opened_values
+        .aux_trace_local
+        .as_ref()
+        .map_or(0, |v| v.len());
     let valid_shape = opened_values.trace_local.len() == air_width
         && opened_values.trace_next.len() == air_width
         && opened_values.quotient_chunks.len() == num_quotient_chunks
@@ -272,6 +276,16 @@ where
             .quotient_chunks
             .iter()
             .all(|qc| qc.len() == SC::Challenge::DIMENSION)
+        && opened_values
+            .aux_trace_local
+            .as_ref()
+            .map_or(aux_width == 0, |v| v.len() == aux_width)
+        && opened_values
+            .aux_trace_next
+            .as_ref()
+            .map_or(aux_width == 0, |v| v.len() == aux_width)
+        && commitments.aux.is_some() == (aux_width > 0)
+        && opened_values.aux_trace_local.is_some() == opened_values.aux_trace_next.is_some()
         // We've already checked that opened_values.random is present if and only if ZK is enabled.
         && opened_values.random.as_ref().is_none_or(|r_comm| r_comm.len() == SC::Challenge::DIMENSION);
     if !valid_shape {
@@ -291,7 +305,15 @@ where
     if preprocessed_width > 0 {
         challenger.observe(preprocessed_commit.as_ref().unwrap().clone());
     }
+    if let Some(aux_commit) = commitments.aux.clone() {
+        challenger.observe(aux_commit);
+    }
     challenger.observe_slice(public_values);
+
+    // Sample auxiliary randomness to stay in sync with the prover transcript.
+    let _aux_randomness: Vec<SC::Challenge> = (0..config.num_aux_challenges())
+        .map(|_| challenger.sample_algebra_element())
+        .collect();
 
     // Get the first Fiat Shamir challenge which will be used to combine all constraint polynomials
     // into a single polynomial.
@@ -360,6 +382,28 @@ where
                 vec![
                     (zeta, opened_values.preprocessed_local.clone().unwrap()),
                     (zeta_next, opened_values.preprocessed_next.clone().unwrap()),
+                ],
+            )],
+        ));
+    }
+    if let Some(aux_commit) = commitments.aux.clone() {
+        coms_to_verify.push((
+            aux_commit,
+            vec![(
+                trace_domain,
+                vec![
+                    (
+                        zeta,
+                        opened_values.aux_trace_local.as_ref().cloned().unwrap_or_default(),
+                    ),
+                    (
+                        zeta_next,
+                        opened_values
+                            .aux_trace_next
+                            .as_ref()
+                            .cloned()
+                            .unwrap_or_default(),
+                    ),
                 ],
             )],
         ));
