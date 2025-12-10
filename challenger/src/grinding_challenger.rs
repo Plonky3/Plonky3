@@ -103,10 +103,7 @@ where
 
     #[instrument(name = "grind for proof-of-work witness", skip_all)]
     fn grind(&mut self, bits: usize) -> Self::Witness {
-        assert!(
-            bits < (usize::BITS as usize) && bits > 0,
-            "bit count must be valid"
-        );
+        assert!(bits < (usize::BITS as usize), "bit count must be valid");
         assert!((1 << bits) < F::ORDER_U64);
 
         let witness = (0..F::ORDER_U64)
@@ -154,10 +151,7 @@ where
         CHECK: Fn(&mut Self, F) -> bool + Sync + Send,
     {
         // Maybe check that bits is greater than 0?
-        assert!(
-            bits < (usize::BITS as usize) && bits > 0,
-            "bit count must be valid"
-        );
+        assert!(bits < (usize::BITS as usize), "bit count must be valid");
         assert!(
             (1u64 << bits) < F::ORDER_U64,
             "bit count exceeds field order"
