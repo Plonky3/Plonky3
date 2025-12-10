@@ -26,6 +26,7 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::VerticalPair;
 use p3_uni_stark::{LookupError, StarkGenericConfig, Val};
+use tracing::{debug, error};
 
 use crate::lookup_traits::{
     Kind, Lookup, LookupData, LookupGadget, LookupTraceBuilder, symbolic_to_expr,
@@ -322,9 +323,16 @@ impl LookupGadget for LogUpGadget {
     ) -> Result<(), LookupError> {
         let total = all_expected_cumulative.iter().cloned().sum::<EF>();
 
+        debug!(
+            "verify_global_final_value: all_expected_cumulative = {:?}, total = {:?}",
+            all_expected_cumulative, total
+        );
+
         if !total.is_zero() {
-            // We set the name associated to the lookup to None because we don't have access to the actual name here.
-            // The actual name will be set in the verifier directly.
+            error!(
+                "GlobalCumulativeMismatch: total = {:?} (expected 0), individual values: {:?}",
+                total, all_expected_cumulative
+            );
             return Err(LookupError::GlobalCumulativeMismatch(None));
         }
 
@@ -518,7 +526,15 @@ impl LookupGadget for LogUpGadget {
                 let multiplicities = context
                     .multiplicities_exprs
                     .iter()
-                    .map(|e| symbolic_to_expr(&row_builder, e))
+                    .enumerate()
+                    .map(|(idx, e)| {
+                        let mult = symbolic_to_expr(&row_builder, e);
+                        debug!(
+                            "Row {}: Lookup {} multiplicity[{}] = {:?} (from expr: {:?})",
+                            i, aux_idx, idx, mult, e
+                        );
+                        mult
+                    })
                     .collect::<Vec<Val<SC>>>();
 
                 // Consume inverses for this lookup to compute `sum(multiplicity / combined_elt)`
@@ -530,6 +546,10 @@ impl LookupGadget for LogUpGadget {
                         inv * SC::Challenge::from(*m)
                     })
                     .sum();
+                debug!(
+                    "Row {}: Lookup {} sum = {:?} (from multiplicities: {:?})",
+                    i, aux_idx, sum, multiplicities
+                );
 
                 // Update running sum
                 if i < height - 1 {
@@ -540,8 +560,12 @@ impl LookupGadget for LogUpGadget {
                 if i == height - 1 {
                     match context.kind {
                         Kind::Global(_) => {
-                            lookup_data[permutation_counter].expected_cumulated =
-                                aux_trace[i * width + aux_idx] + sum;
+                            let expected = aux_trace[i * width + aux_idx] + sum;
+                            lookup_data[permutation_counter].expected_cumulated = expected;
+                            debug!(
+                                "Row {} (last): Lookup {} expected_cumulated = {:?}",
+                                i, aux_idx, expected
+                            );
                             permutation_counter += 1;
                         }
                         Kind::Local => {}

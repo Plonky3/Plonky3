@@ -13,7 +13,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::ViewPair;
 use p3_uni_stark::{Entry, LookupError, StarkGenericConfig, SymbolicExpression, Val};
 use serde::{Deserialize, Serialize};
-use tracing::warn;
+use tracing::{debug, warn};
 
 /// Data required for global lookup arguments in a multi-STARK proof.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -279,7 +279,7 @@ pub struct LookupTraceBuilder<'a, SC: StarkGenericConfig> {
 }
 
 impl<'a, SC: StarkGenericConfig> LookupTraceBuilder<'a, SC> {
-    pub const fn new(
+    pub fn new(
         main: ViewPair<'a, Val<SC>>,
         preprocessed: Option<ViewPair<'a, Val<SC>>>,
         public_values: &'a [Val<SC>],
@@ -287,6 +287,19 @@ impl<'a, SC: StarkGenericConfig> LookupTraceBuilder<'a, SC> {
         height: usize,
         row: usize,
     ) -> Self {
+        if let Some(prep) = preprocessed {
+            if let Some(row_slice) = prep.row_slice(0) {
+                let preview_len = row_slice.len().min(10);
+                debug!(
+                    "LookupTraceBuilder::new: row {}, preprocessed width = {}, row_slice[0..{}] = {:?}",
+                    row,
+                    prep.width(),
+                    preview_len,
+                    &row_slice[..preview_len]
+                );
+            }
+        }
+
         Self {
             main,
             preprocessed,
@@ -388,24 +401,34 @@ where
     AB: PairBuilder + AirBuilderWithPublicValues + PermutationAirBuilder,
 {
     match expr {
-        SymbolicExpression::Variable(v) => match v.entry {
-            Entry::Main { offset } => match offset {
-                0 => builder.main().row_slice(0).unwrap()[v.index].clone().into(),
-                1 => builder.main().row_slice(1).unwrap()[v.index].clone().into(),
-                _ => panic!("Cannot have expressions involving more than two rows."),
-            },
-            Entry::Public => builder.public_values()[v.index].into(),
-            Entry::Preprocessed { offset } => match offset {
-                0 => builder.preprocessed().row_slice(0).unwrap()[v.index]
-                    .clone()
-                    .into(),
-                1 => builder.preprocessed().row_slice(1).unwrap()[v.index]
-                    .clone()
-                    .into(),
-                _ => panic!("Cannot have expressions involving more than two rows."),
-            },
-            _ => unimplemented!("Entry type {:?} not supported in interactions", v.entry),
-        },
+        SymbolicExpression::Variable(v) => {
+            let result = match v.entry {
+                Entry::Main { offset } => match offset {
+                    0 => builder.main().row_slice(0).unwrap()[v.index].clone().into(),
+                    1 => builder.main().row_slice(1).unwrap()[v.index].clone().into(),
+                    _ => panic!("Cannot have expressions involving more than two rows."),
+                },
+                Entry::Public => builder.public_values()[v.index].into(),
+                Entry::Preprocessed { offset } => {
+                    let value = match offset {
+                        0 => builder.preprocessed().row_slice(0).unwrap()[v.index]
+                            .clone()
+                            .into(),
+                        1 => builder.preprocessed().row_slice(1).unwrap()[v.index]
+                            .clone()
+                            .into(),
+                        _ => panic!("Cannot have expressions involving more than two rows."),
+                    };
+                    debug!(
+                        "symbolic_to_expr: Reading Entry::Preprocessed{{offset: {}}}, col {} = {:?}",
+                        offset, v.index, value
+                    );
+                    value
+                }
+                _ => unimplemented!("Entry type {:?} not supported in interactions", v.entry),
+            };
+            result
+        }
         SymbolicExpression::IsFirstRow => {
             warn!("IsFirstRow is not normalized");
             builder.is_first_row()
@@ -427,7 +450,18 @@ where
         }
         SymbolicExpression::Neg { x, .. } => -symbolic_to_expr(builder, x),
         SymbolicExpression::Mul { x, y, .. } => {
-            symbolic_to_expr(builder, x) * symbolic_to_expr(builder, y)
+            let x_val = symbolic_to_expr(builder, x);
+            let y_val = symbolic_to_expr(builder, y);
+            let x_log = x_val.clone();
+            let y_log = y_val.clone();
+            debug!(
+                "symbolic_to_expr: Mul inputs = ({:?}, {:?})",
+                &x_log,
+                &y_log
+            );
+            let result = x_val * y_val;
+            debug!("symbolic_to_expr: Mul result = {:?}", &result);
+            result
         }
     }
 }
