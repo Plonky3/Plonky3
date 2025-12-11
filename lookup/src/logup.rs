@@ -532,6 +532,35 @@ impl LookupGadget for LogUpGadget {
             lookups.iter().for_each(|context| {
                 let aux_idx = context.columns[0];
 
+                #[cfg(debug_assertions)]
+                {
+                    let element_values: Vec<Vec<Val<SC>>> = context
+                        .element_exprs
+                        .iter()
+                        .map(|exprs| {
+                            exprs
+                                .iter()
+                                .map(|expr| symbolic_to_expr(&row_builder, expr))
+                                .collect()
+                        })
+                        .collect();
+                    debug!(
+                        "Row {}: Lookup {} element values = {:?}",
+                        i, aux_idx, element_values
+                    );
+                    for (elt_idx, vals) in element_values.iter().enumerate() {
+                        for (coord_idx, v) in vals.iter().enumerate() {
+                            log_basis_coeffs(
+                                &format!(
+                                    "lookup element coeffs row {} lookup {} elt {} coord {}",
+                                    i, aux_idx, elt_idx, coord_idx
+                                ),
+                                v,
+                            );
+                        }
+                    }
+                }
+
                 // Re-calculate multiplicities only
                 let multiplicities = context
                     .multiplicities_exprs
