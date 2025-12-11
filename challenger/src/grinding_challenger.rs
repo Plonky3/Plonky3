@@ -86,10 +86,8 @@ pub trait UniformGrindingChallenger:
     /// Returns `true` if the witness passes the PoW check, `false` otherwise.
     fn check_witness_uniform_may_error(&mut self, bits: usize, witness: Self::Witness) -> bool {
         self.observe(witness);
-        match self.sample_uniform_bits::<false>(bits) {
-            Ok(v) => v == 0,
-            Err(_) => false,
-        }
+        self.sample_uniform_bits::<false>(bits)
+            .is_ok_and(|v| v == 0)
     }
 }
 

@@ -108,7 +108,7 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
             lookup_data,
             lookup_gadget,
         );
-    })
+    });
 }
 
 /// A builder that runs constraint assertions during testing.
