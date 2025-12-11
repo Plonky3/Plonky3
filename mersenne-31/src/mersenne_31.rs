@@ -539,7 +539,7 @@ pub(crate) fn from_u62(input: u64) -> Mersenne31 {
 #[cfg(test)]
 mod tests {
     use num_bigint::BigUint;
-    use p3_field::{InjectiveMonomial, PermutationMonomial, PrimeCharacteristicRing, PrimeField32};
+    use p3_field::{InjectiveMonomial, PermutationMonomial, PrimeCharacteristicRing};
     use p3_field_testing::{
         test_field, test_prime_field, test_prime_field_32, test_prime_field_64,
     };
@@ -592,10 +592,6 @@ mod tests {
     fn neg_one_is_p_minus_one() {
         let neg_one = -F::ONE;
         let expected = F::from_u32((1_u32 << 31) - 2);
-        assert_eq!(
-            neg_one,
-            expected,
-            "expected -1 to equal p-1"
-        );
+        assert_eq!(neg_one, expected, "expected -1 to equal p-1");
     }
 }

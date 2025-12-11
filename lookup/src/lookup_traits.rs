@@ -1,7 +1,6 @@
-use alloc::format;
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 use core::ops::Neg;
 
 use p3_air::{
@@ -288,17 +287,17 @@ impl<'a, SC: StarkGenericConfig> LookupTraceBuilder<'a, SC> {
         height: usize,
         row: usize,
     ) -> Self {
-        if let Some(prep) = preprocessed {
-            if let Some(row_slice) = prep.row_slice(0) {
-                let preview_len = row_slice.len().min(10);
-                debug!(
-                    "LookupTraceBuilder::new: row {}, preprocessed width = {}, row_slice[0..{}] = {:?}",
-                    row,
-                    prep.width(),
-                    preview_len,
-                    &row_slice[..preview_len]
-                );
-            }
+        if let Some(prep) = preprocessed
+            && let Some(row_slice) = prep.row_slice(0)
+        {
+            let preview_len = row_slice.len().min(10);
+            debug!(
+                "LookupTraceBuilder::new: row {}, preprocessed width = {}, row_slice[0..{}] = {:?}",
+                row,
+                prep.width(),
+                preview_len,
+                &row_slice[..preview_len]
+            );
         }
 
         Self {
@@ -459,6 +458,8 @@ where
                     );
                 }
             }
+            #[cfg(debug_assertions)]
+            debug!("symbolic_to_expr: Constant debug repr = {:?}", c);
             AB::Expr::from(*c)
         }
         SymbolicExpression::Add { x, y, .. } => {
@@ -475,8 +476,7 @@ where
             let y_log = y_val.clone();
             debug!(
                 "symbolic_to_expr: Mul inputs = ({:?}, {:?})",
-                &x_log,
-                &y_log
+                &x_log, &y_log
             );
             let result = x_val * y_val;
             debug!("symbolic_to_expr: Mul result = {:?}", &result);

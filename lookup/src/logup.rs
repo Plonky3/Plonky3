@@ -17,9 +17,8 @@
 //! - `m_i, m'_j` are multiplicities (how many times each element appears)
 //! - The transformation eliminates expensive exponentiation operations
 
-use alloc::format;
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 
 use p3_air::{AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder, PermutationAirBuilder};
 use p3_field::{Field, PrimeCharacteristicRing};

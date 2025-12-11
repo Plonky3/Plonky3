@@ -702,4 +702,3 @@ impl<FP: MontyParameters> Sum for MontyField31<FP> {
         Self::new_monty((sum % FP::PRIME as u64) as u32)
     }
 }
-
