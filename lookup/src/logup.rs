@@ -550,6 +550,16 @@ impl LookupGadget for LogUpGadget {
                                     );
                                 }
                             }
+                            let ch = SC::Challenge::from(mult);
+                            debug!(
+                                "lookup multiplicity value check: row {} lookup {} idx {} -> mult={:?}, ch={:?}, ch+1={:?}",
+                                i,
+                                aux_idx,
+                                idx,
+                                mult,
+                                ch,
+                                ch + SC::Challenge::ONE
+                            );
                         }
                         debug!(
                             "Row {}: Lookup {} multiplicity[{}] = {:?} (from expr: {:?})",
