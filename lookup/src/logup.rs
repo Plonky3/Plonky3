@@ -21,7 +21,7 @@ use alloc::vec::Vec;
 use alloc::{format, vec};
 
 use p3_air::{AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder, PermutationAirBuilder};
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::VerticalPair;
@@ -31,6 +31,16 @@ use tracing::{debug, error};
 use crate::lookup_traits::{
     Kind, Lookup, LookupData, LookupGadget, LookupTraceBuilder, symbolic_to_expr,
 };
+
+#[cfg(debug_assertions)]
+fn log_basis_coeffs<T, B>(label: &str, val: &T)
+where
+    T: BasedVectorSpace<B> + core::fmt::Debug,
+    B: PrimeCharacteristicRing + core::fmt::Debug + Clone,
+{
+    let coeffs = val.as_basis_coefficients_slice();
+    debug!("{label}: basis coeffs = {:?}", coeffs);
+}
 
 /// Core LogUp gadget implementing lookup arguments via logarithmic derivatives.
 ///
@@ -531,6 +541,7 @@ impl LookupGadget for LogUpGadget {
                         let mult = symbolic_to_expr(&row_builder, e);
                         #[cfg(debug_assertions)]
                         {
+                            log_basis_coeffs("lookup multiplicity", &mult);
                             if let Ok(canonical) = format!("{:?}", mult).parse::<u64>() {
                                 if canonical == 2_130_706_432 {
                                     debug!(

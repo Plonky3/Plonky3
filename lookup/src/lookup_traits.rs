@@ -7,13 +7,23 @@ use p3_air::{
     Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, ExtensionBuilder, PairBuilder,
     PermutationAirBuilder,
 };
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::ViewPair;
 use p3_uni_stark::{Entry, LookupError, StarkGenericConfig, SymbolicExpression, Val};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
+
+#[cfg(debug_assertions)]
+fn log_basis_coeffs<T, B>(label: &str, val: &T)
+where
+    T: BasedVectorSpace<B> + core::fmt::Debug,
+    B: PrimeCharacteristicRing + core::fmt::Debug + Clone,
+{
+    let coeffs = val.as_basis_coefficients_slice();
+    debug!("{label}: basis coeffs = {:?}", coeffs);
+}
 
 /// Data required for global lookup arguments in a multi-STARK proof.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -459,8 +469,14 @@ where
                 }
             }
             #[cfg(debug_assertions)]
-            debug!("symbolic_to_expr: Constant debug repr = {:?}", c);
-            AB::Expr::from(*c)
+            {
+                debug!("symbolic_to_expr: Constant debug repr = {:?}", c);
+                log_basis_coeffs("symbolic_to_expr: Constant", c);
+            }
+            let result = AB::Expr::from(*c);
+            #[cfg(debug_assertions)]
+            log_basis_coeffs("symbolic_to_expr: Result", &result);
+            result
         }
         SymbolicExpression::Add { x, y, .. } => {
             symbolic_to_expr(builder, x) + symbolic_to_expr(builder, y)
