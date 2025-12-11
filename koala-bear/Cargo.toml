@@ -10,6 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+p3-challenger.workspace = true
 p3-field.workspace = true
 p3-monty-31.workspace = true
 p3-poseidon2.workspace = true

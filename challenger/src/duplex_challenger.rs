@@ -1,10 +1,13 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::error::Error;
+use core::fmt::{Display, Formatter};
 
 use p3_field::{BasedVectorSpace, Field, PrimeField64};
+use p3_monty_31::{MontyField31, MontyParameters};
 use p3_symmetric::{CryptographicPermutation, Hash};
 
-use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
+use crate::{CanObserve, CanSample, CanSampleBits, CanSampleUniformBits, FieldChallenger};
 
 /// A generic duplex sponge challenger over a finite field, used for generating deterministic
 /// challenges from absorbed inputs.
@@ -201,6 +204,176 @@ where
         let rand_f: F = self.sample();
         let rand_usize = rand_f.as_canonical_u64() as usize;
         rand_usize & ((1 << bits) - 1)
+    }
+}
+
+/// Trait for fields that support uniform bit sampling optimizations
+pub trait UniformSamplingField {
+    /// Maximum number of bits we can sample at negligible (~1/field prime) probability of
+    /// triggering an error / requiring a resample.
+    const MAX_SINGLE_SAMPLE_BITS: usize;
+    /// An array storing the largest value `m_k` for each `k` in [0, 31], such that `m_k`
+    /// is a multiple of `2^k` and less than P. `m_k` is defined as:
+    ///
+    /// \( m_k = ⌊P / 2^k⌋ · 2^k \)
+    ///
+    /// This is used as a rejection sampling threshold (or error trigger), when sampling
+    /// random bits from uniformly sampled field elements. As long as we sample up to the `k`
+    /// least significant bits in the range [0, m_k), we sample from exactly `m_k` elements. As
+    /// `m_k` is divisible by 2^k, each of the least significant `k` bits has exactly the same
+    /// number of zeroes and ones, leading to a uniform sampling.
+    const SAMPLING_BITS_M: [u64; 64];
+}
+
+// Provide a blanket implementation for Monty31 fields here, which forwards the
+// implementation of the variables to the generic argument `<Field>Parameter`,
+// for which we implement the trait (KoalaBear, BabyBear).
+impl<MP> UniformSamplingField for MontyField31<MP>
+where
+    MP: UniformSamplingField + MontyParameters,
+{
+    const MAX_SINGLE_SAMPLE_BITS: usize = MP::MAX_SINGLE_SAMPLE_BITS;
+    const SAMPLING_BITS_M: [u64; 64] = MP::SAMPLING_BITS_M;
+}
+
+// Set of different strategies we currently support for sampling
+// Implementations for each are below.
+/// A zero-sized struct representing the "resample" strategy.
+pub(super) struct ResampleOnRejection;
+/// A zero-sized struct representing the "error" strategy.
+pub(super) struct ErrorOnRejection;
+
+/// Custom error raised when resampling is required for uniform bits but disabled
+/// via `ErrorOnRejection` strategy.
+#[derive(Debug)]
+pub struct ResamplingError {
+    /// The sampled value
+    value: u64,
+    /// The target value we need to be smaller than
+    m: u64,
+}
+
+impl Display for ResamplingError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "Encountered value {0}, which requires resampling for uniform bits as it not smaller than {1}. But resampling is not enabled.",
+            self.value, self.m
+        )
+    }
+}
+
+impl Error for ResamplingError {}
+
+/// A trait that defines a strategy for handling out-of-range samples.
+pub(super) trait BitSamplingStrategy<F, P, const W: usize, const R: usize>
+where
+    F: PrimeField64,
+    P: CryptographicPermutation<[F; W]>,
+{
+    /// Whether to error instead of resampling when a drawn value is too large.
+    const ERROR_ON_REJECTION: bool;
+
+    #[inline]
+    fn sample_value(
+        challenger: &mut DuplexChallenger<F, P, W, R>,
+        m: u64,
+    ) -> Result<F, ResamplingError> {
+        let mut result: F = challenger.sample();
+        if Self::ERROR_ON_REJECTION {
+            if result.as_canonical_u64() >= m {
+                return Err(ResamplingError {
+                    value: result.as_canonical_u64(),
+                    m,
+                });
+            }
+        } else {
+            while result.as_canonical_u64() >= m {
+                result = challenger.sample();
+            }
+        }
+        Ok(result)
+    }
+}
+
+/// Implement rejection sampling
+impl<F, P, const W: usize, const R: usize> BitSamplingStrategy<F, P, W, R> for ResampleOnRejection
+where
+    F: PrimeField64,
+    P: CryptographicPermutation<[F; W]>,
+{
+    const ERROR_ON_REJECTION: bool = false;
+}
+
+/// Implement erroring on a required rejection
+impl<F, P, const W: usize, const R: usize> BitSamplingStrategy<F, P, W, R> for ErrorOnRejection
+where
+    F: PrimeField64,
+    P: CryptographicPermutation<[F; W]>,
+{
+    const ERROR_ON_REJECTION: bool = true;
+}
+
+impl<F, P, const WIDTH: usize, const RATE: usize> DuplexChallenger<F, P, WIDTH, RATE>
+where
+    F: UniformSamplingField + PrimeField64,
+    P: CryptographicPermutation<[F; WIDTH]>,
+{
+    /// Generic implementation for uniform bit sampling, parameterized by a strategy.
+    #[inline]
+    fn sample_uniform_bits_with_strategy<S>(
+        &mut self,
+        bits: usize,
+    ) -> Result<usize, ResamplingError>
+    where
+        S: BitSamplingStrategy<F, P, WIDTH, RATE>,
+    {
+        if bits == 0 {
+            return Ok(0);
+        };
+        assert!(bits < usize::BITS as usize, "bit count must be valid");
+        assert!(
+            (1u64 << bits) < F::ORDER_U64,
+            "bit count exceeds field order"
+        );
+        let m = F::SAMPLING_BITS_M[bits];
+        if bits <= F::MAX_SINGLE_SAMPLE_BITS {
+            // Fast path: Only one sample is needed for sufficient uniformity.
+            let rand_f = S::sample_value(self, m);
+            Ok(rand_f?.as_canonical_u64() as usize & ((1 << bits) - 1))
+        } else {
+            // Slow path: Sample twice to construct the required number of bits.
+            // This reduces the bias introduced by a single, larger sample.
+            let half_bits1 = bits / 2;
+            let half_bits2 = bits - half_bits1;
+            // Sample the first chunk of bits.
+            let rand1 = S::sample_value(self, F::SAMPLING_BITS_M[half_bits1]);
+            let chunk1 = rand1?.as_canonical_u64() as usize & ((1 << half_bits1) - 1);
+            // Sample the second chunk of bits.
+            let rand2 = S::sample_value(self, F::SAMPLING_BITS_M[half_bits2]);
+            let chunk2 = rand2?.as_canonical_u64() as usize & ((1 << half_bits2) - 1);
+
+            // Combine the chunks.
+            Ok(chunk1 | (chunk2 << half_bits1))
+        }
+    }
+}
+
+impl<F, P, const WIDTH: usize, const RATE: usize> CanSampleUniformBits<F>
+    for DuplexChallenger<F, P, WIDTH, RATE>
+where
+    F: UniformSamplingField + PrimeField64,
+    P: CryptographicPermutation<[F; WIDTH]>,
+{
+    fn sample_uniform_bits<const RESAMPLE: bool>(
+        &mut self,
+        bits: usize,
+    ) -> Result<usize, ResamplingError> {
+        if RESAMPLE {
+            self.sample_uniform_bits_with_strategy::<ResampleOnRejection>(bits)
+        } else {
+            self.sample_uniform_bits_with_strategy::<ErrorOnRejection>(bits)
+        }
     }
 }
 

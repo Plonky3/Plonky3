@@ -7,6 +7,7 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use core::{array, fmt, iter};
 
 use num_bigint::BigUint;
+use p3_challenger::UniformSamplingField;
 use p3_field::exponentiation::exp_1717986917;
 use p3_field::integers::QuotientMap;
 use p3_field::op_assign_macros::{
@@ -534,6 +535,28 @@ pub(crate) fn from_u62(input: u64) -> Mersenne31 {
     let input_lo = (input & ((1 << 31) - 1)) as u32;
     let input_high = (input >> 31) as u32;
     Mersenne31::new(input_lo) + Mersenne31::new(input_high)
+}
+
+impl UniformSamplingField for Mersenne31 {
+    const MAX_SINGLE_SAMPLE_BITS: usize = 16;
+    // For Mersenne31 uniform sampling really only makes sense if we allow rejection sampling.
+    // Sampling 16 bits already has a chance of 3e-5 to require a resample!
+    const SAMPLING_BITS_M: [u64; 64] = {
+        let prime: u64 = P as u64;
+        let mut a = [0u64; 64];
+        let mut k = 0;
+        while k < 64 {
+            if k == 0 {
+                a[k] = prime; // This value is irrelevant in practice. `bits = 0` returns 0 always.
+            } else {
+                // Create a mask to zero out the last k bits
+                let mask = !((1u64 << k) - 1);
+                a[k] = prime & mask;
+            }
+            k += 1;
+        }
+        a
+    };
 }
 
 #[cfg(test)]
