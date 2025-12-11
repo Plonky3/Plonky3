@@ -1,8 +1,7 @@
-use core::error::Error;
-use core::fmt::{Display, Formatter};
-
 use alloc::vec;
 use alloc::vec::Vec;
+use core::error::Error;
+use core::fmt::{Display, Formatter};
 
 use p3_field::{BasedVectorSpace, Field, PrimeField64};
 use p3_monty_31::{MontyField31, MontyParameters};
@@ -256,7 +255,11 @@ pub struct ResamplingError {
 
 impl Display for ResamplingError {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        write!(f, "Encountered value {0}, which requires resampling for uniform bits as it not smaller than {1}. But resampling is not enabled.", self.value, self.m)
+        write!(
+            f,
+            "Encountered value {0}, which requires resampling for uniform bits as it not smaller than {1}. But resampling is not enabled.",
+            self.value, self.m
+        )
     }
 }
 
