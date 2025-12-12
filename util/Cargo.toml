@@ -12,9 +12,13 @@ categories.workspace = true
 [dependencies]
 rayon = { workspace = true, optional = true }
 serde.workspace = true
+transpose = "0.2"
 
 [dev-dependencies]
 criterion.workspace = true
+p3-baby-bear.workspace = true
+p3-field.workspace = true
+proptest.workspace = true
 rand.workspace = true
 serde_json.workspace = true
 
@@ -23,6 +27,10 @@ parallel = ["rayon"]
 
 [[bench]]
 name = "bit_reverse"
+harness = false
+
+[[bench]]
+name = "transpose"
 harness = false
 
 [lints]
