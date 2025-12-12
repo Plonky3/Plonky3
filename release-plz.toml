@@ -45,10 +45,6 @@ name = "p3-dft"
 version_group = "plonky3"
 
 [[package]]
-name = "p3-examples"
-version_group = "plonky3"
-
-[[package]]
 name = "p3-field"
 version_group = "plonky3"
 
