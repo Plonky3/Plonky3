@@ -188,8 +188,6 @@ pub fn mm512_mod_sub(lhs: __m512i, rhs: __m512i, p: __m512i) -> __m512i {
 ///
 /// Scalar add is assumed to be a function which implements `a + b % P` with the
 /// same specifications as above.
-///
-/// TODO: Add support for extensions of degree 2,3,6,7.
 #[inline(always)]
 pub fn packed_mod_add<const WIDTH: usize>(
     a: &[u32; WIDTH],
@@ -200,6 +198,21 @@ pub fn packed_mod_add<const WIDTH: usize>(
 ) {
     match WIDTH {
         1 => res[0] = scalar_add(a[0], b[0]),
+        2 => {
+            // For degree 2 extensions: use scalar operations
+            res[0] = scalar_add(a[0], b[0]);
+            res[1] = scalar_add(a[1], b[1]);
+        }
+        3 => {
+            // For degree 3 extensions: use __m128i, wasting 1 lane
+            let out: [u32; 4] = unsafe {
+                let a: __m128i = transmute([a[0], a[1], a[2], 0u32]);
+                let b: __m128i = transmute([b[0], b[1], b[2], 0u32]);
+                let p: __m128i = x86_64::_mm_set1_epi32(p as i32);
+                transmute(mm128_mod_add(a, b, p))
+            };
+            res[..3].copy_from_slice(&out[..3]);
+        }
         4 => {
             // Perfectly fits into a m128i vector. The compiler is good at
             // optimising this into AVX2 instructions in cases where we need to
@@ -228,6 +241,28 @@ pub fn packed_mod_add<const WIDTH: usize>(
             res[4] = scalar_add(a[4], b[4]);
 
             res[..4].copy_from_slice(&out[..4]);
+        }
+        6 => {
+            // For degree 6 extensions: use __m128i for first 4, then scalar for last 2
+            let out: [u32; 4] = unsafe {
+                let a: __m128i = transmute([a[0], a[1], a[2], a[3]]);
+                let b: __m128i = transmute([b[0], b[1], b[2], b[3]]);
+                let p: __m128i = x86_64::_mm_set1_epi32(p as i32);
+                transmute(mm128_mod_add(a, b, p))
+            };
+            res[..4].copy_from_slice(&out);
+            res[4] = scalar_add(a[4], b[4]);
+            res[5] = scalar_add(a[5], b[5]);
+        }
+        7 => {
+            // For degree 7 extensions: use __m256i, wasting 1 lane
+            let out: [u32; 8] = unsafe {
+                let a: __m256i = transmute([a[0], a[1], a[2], a[3], a[4], a[5], a[6], 0u32]);
+                let b: __m256i = transmute([b[0], b[1], b[2], b[3], b[4], b[5], b[6], 0u32]);
+                let p: __m256i = x86_64::_mm256_set1_epi32(p as i32);
+                transmute(mm256_mod_add(a, b, p))
+            };
+            res.copy_from_slice(&out[..7]);
         }
         8 => {
             // This perfectly fits into a single m256i vector.
