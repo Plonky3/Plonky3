@@ -561,21 +561,11 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
     /// - If the height is already a power of two, the matrix is unchanged.
     /// - Otherwise, the matrix is padded to the next power of two height.
     pub fn pad_to_power_of_two_height(&mut self, fill: T) {
-        // Handle empty matrix: ensure at least one row of fill values.
-        if self.height() == 0 {
-            self.values.resize(self.width, fill);
-            return;
-        }
-
         // Compute the target height as the next power of two.
         let target_height = self.height().next_power_of_two();
-
-        // If already a power of two, nothing to do.
-        if target_height == self.height() {
-            return;
-        }
-
-        // Pad with the specified fill value.
+        
+        // If target_height == height, resize will have no effect.
+        // Otherwise we pad the matrix to a power of two height by filling with the supplied value.
         self.values.resize(self.width * target_height, fill);
     }
 }
