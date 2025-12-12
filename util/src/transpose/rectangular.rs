@@ -78,6 +78,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 /// - The entire matrix fits in L1 cache (32-64KB on most CPUs)
 /// - No tile boundary calculations needed
 /// - Branch prediction works well for small loops
+#[cfg(target_arch = "aarch64")]
 const SMALL_LEN: usize = 255;
 
 /// Maximum number of elements for the single-level tiled transpose.
@@ -89,6 +90,7 @@ const SMALL_LEN: usize = 255;
 ///
 /// Beyond this threshold, we switch to recursive subdivision to ensure
 /// cache-oblivious behavior for very large matrices.
+#[cfg(target_arch = "aarch64")]
 const MEDIUM_LEN: usize = 1024 * 1024;
 
 /// Side length of a tile in elements.
@@ -97,6 +99,7 @@ const MEDIUM_LEN: usize = 1024 * 1024;
 /// - `TILE_SIZE`×`TILE_SIZE` × 4 bytes = 1KB per tile, fitting in L1 cache
 /// - `TILE_SIZE` is divisible by `BLOCK_SIZE`, allowing exactly (`TILE_SIZE`/`BLOCK_SIZE`)^2 NEON blocks per tile
 /// - Good balance between tile overhead and cache utilization
+#[cfg(target_arch = "aarch64")]
 const TILE_SIZE: usize = 16;
 
 /// Side length of the NEON-vectorized block in elements.
@@ -104,6 +107,7 @@ const TILE_SIZE: usize = 16;
 /// The fundamental unit of SIMD transpose is a `BLOCK_SIZE`×`BLOCK_SIZE` block because:
 /// - `BLOCK_SIZE` elements × 4 bytes = 16 bytes = one NEON 128-bit register
 /// - `BLOCK_SIZE`×`BLOCK_SIZE` block = `BLOCK_SIZE` registers, enabling in-register transpose
+#[cfg(target_arch = "aarch64")]
 const BLOCK_SIZE: usize = 4;
 
 /// Maximum dimension for recursive base case.
@@ -113,6 +117,7 @@ const BLOCK_SIZE: usize = 4;
 ///
 /// At this point, the sub-matrix (up to `RECURSIVE_LIMIT`×`RECURSIVE_LIMIT` elements)
 /// fits in L2 cache, so we switch to tiled transpose.
+#[cfg(target_arch = "aarch64")]
 const RECURSIVE_LIMIT: usize = 128;
 
 /// Minimum number of elements before enabling parallel processing.
@@ -124,7 +129,7 @@ const RECURSIVE_LIMIT: usize = 128;
 ///
 /// At `PARALLEL_THRESHOLD` elements, the work per thread is large enough that
 /// parallelism overhead is amortized.
-#[cfg(feature = "parallel")]
+#[cfg(all(target_arch = "aarch64", feature = "parallel"))]
 const PARALLEL_THRESHOLD: usize = 4 * 1024 * 1024;
 
 /// Transpose a matrix from row-major `input` to row-major `output`.
