@@ -206,7 +206,7 @@ pub trait PrimeCharacteristicRing:
     fn bool_check(&self) -> Self {
         // Note: We could delegate to `andn`, but to maintain backwards
         // compatible AIR definitions, we stick with `x * (x - 1)` here.
-        self.clone() * (self.clone() - Self::ONE);
+        self.clone() * (self.clone() - Self::ONE)
     }
 
     /// Exponentiation by a `u64` power.
