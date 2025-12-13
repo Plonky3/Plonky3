@@ -35,7 +35,7 @@ impl PackedMersenne31Neon {
     #[inline]
     #[must_use]
     /// Get an arch-specific vector representing the packed values.
-    fn to_vector(self) -> uint32x4_t {
+    pub(crate) fn to_vector(self) -> uint32x4_t {
         unsafe {
             // Safety: `Mersenne31` is `repr(transparent)` so it can be transmuted to `u32`. It
             // follows that `[Mersenne31; WIDTH]` can be transmuted to `[u32; WIDTH]`, which can be
@@ -52,7 +52,7 @@ impl PackedMersenne31Neon {
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid
     /// `Mersenne31`.  In particular, each element of vector must be in `0..=P` (i.e. it fits in 31
     /// bits).
-    unsafe fn from_vector(vector: uint32x4_t) -> Self {
+    pub(crate) unsafe fn from_vector(vector: uint32x4_t) -> Self {
         // Safety: It is up to the user to ensure that elements of `vector` represent valid
         // `Mersenne31` values. We must only reason about memory representations. `uint32x4_t` can
         // be transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which
@@ -291,6 +291,30 @@ unsafe impl PackedField for PackedMersenne31Neon {
     type Scalar = Mersenne31;
 }
 
+/// Compute the permutation x -> x^5 on Mersenne-31 field elements.
+///
+/// # Safety
+/// `x` must be represented as a value in `{0, ..., P}`.
+/// If the input does not conform to this representation, the result is undefined.
+/// The output will be represented as a value in `{0, ..., P}`.
+#[inline(always)]
+pub(crate) fn exp5(x: uint32x4_t) -> uint32x4_t {
+    // For Mersenne31, x^5 = x * x^4 = x * (x^2)^2
+    //
+    // We compute:
+    //   x2 = x * x
+    //   x4 = x2 * x2
+    //   x5 = x4 * x
+    //
+    // throughput: ~4 cyc/vec
+    // latency: ~30 cyc (3 dependent multiplications)
+
+    // x is guaranteed to be in [0, P]
+    let x2 = mul(x, x);
+    let x4 = mul(x2, x2);
+    mul(x4, x)
+}
+
 impl_packed_field_pow_2!(
     PackedMersenne31Neon;
     [
@@ -302,9 +326,11 @@ impl_packed_field_pow_2!(
 
 #[cfg(test)]
 mod tests {
+    use core::arch::aarch64;
+
     use p3_field_testing::test_packed_field;
 
-    use super::{Mersenne31, PackedMersenne31Neon};
+    use super::{Mersenne31, PackedMersenne31Neon, exp5};
 
     /// Zero has a redundant representation, so let's test both.
     const ZEROS: PackedMersenne31Neon = PackedMersenne31Neon(Mersenne31::new_array([
@@ -321,4 +347,34 @@ mod tests {
         &[crate::PackedMersenne31Neon::ONE],
         super::SPECIAL_VALS
     );
+
+    /// Test exp5 function with known values.
+    #[test]
+    fn test_exp5() {
+        // Test with some known values
+        let test_cases: [(u32, u32); 4] = [
+            (0, 0),   // 0^5 = 0
+            (1, 1),   // 1^5 = 1
+            (2, 32),  // 2^5 = 32
+            (3, 243), // 3^5 = 243
+        ];
+
+        unsafe {
+            let inputs: [u32; 4] = [
+                test_cases[0].0,
+                test_cases[1].0,
+                test_cases[2].0,
+                test_cases[3].0,
+            ];
+            let input_vec = aarch64::vld1q_u32(inputs.as_ptr());
+            let output_vec = exp5(input_vec);
+
+            let mut outputs = [0u32; 4];
+            aarch64::vst1q_u32(outputs.as_mut_ptr(), output_vec);
+
+            for (i, (_, expected)) in test_cases.iter().enumerate() {
+                assert_eq!(outputs[i], *expected, "exp5 failed for test case {i}");
+            }
+        }
+    }
 }
