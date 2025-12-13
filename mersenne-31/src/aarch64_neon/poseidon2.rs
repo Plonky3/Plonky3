@@ -111,7 +111,11 @@ pub(crate) fn mul_2exp_i<const I: i32, const I_PRIME: i32>(
         let lo = aarch64::vshrq_n_u32::<I_PRIME>(input);
 
         // 2. Shift low bits up and INSERT them into the accumulator.
-        // `vsli` takes the current value of `lo` and inserts bits from `input << I`.
+        //
+        // `vsli` (Vector Shift Left and Insert) shifts `input` left by I bits,
+        // then inserts the result into `lo`, preserving the low I bits of `lo`.
+        //
+        // Result: bits[30:I] = input[30-I:0], bits[I-1:0] = lo[I-1:0]
         let inserted = aarch64::vsliq_n_u32::<I>(lo, input);
 
         // 3. Clear the sign bit (which might be dirty from the shift left).
