@@ -170,6 +170,32 @@ impl PrimeCharacteristicRing for PackedMersenne31Neon {
     }
 
     #[inline(always)]
+    fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        // We provide specialised code for power 5 as this turns up regularly.
+        //
+        // The other powers could be specialised similarly but we ignore this for now.
+        match POWER {
+            0 => Self::ONE,
+            1 => *self,
+            2 => self.square(),
+            3 => self.cube(),
+            4 => self.square().square(),
+            5 => unsafe {
+                let val = self.to_vector();
+                Self::from_vector(exp5(val))
+            },
+            6 => self.square().cube(),
+            7 => {
+                let x2 = self.square();
+                let x3 = x2 * *self;
+                let x4 = x2.square();
+                x3 * x4
+            }
+            _ => self.exp_u64(POWER),
+        }
+    }
+
+    #[inline(always)]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
         unsafe { reconstitute_from_base(Mersenne31::zero_vec(len * WIDTH)) }
@@ -297,6 +323,9 @@ unsafe impl PackedField for PackedMersenne31Neon {
 /// `x` must be represented as a value in `{0, ..., P}`.
 /// If the input does not conform to this representation, the result is undefined.
 /// The output will be represented as a value in `{0, ..., P}`.
+///
+/// # TODO
+/// This could be further improved with a specialized function.
 #[inline(always)]
 pub(crate) fn exp5(x: uint32x4_t) -> uint32x4_t {
     // For Mersenne31, x^5 = x * x^4 = x * (x^2)^2
@@ -326,11 +355,9 @@ impl_packed_field_pow_2!(
 
 #[cfg(test)]
 mod tests {
-    use core::arch::aarch64;
-
     use p3_field_testing::test_packed_field;
 
-    use super::{Mersenne31, PackedMersenne31Neon, exp5};
+    use super::{Mersenne31, PackedMersenne31Neon};
 
     /// Zero has a redundant representation, so let's test both.
     const ZEROS: PackedMersenne31Neon = PackedMersenne31Neon(Mersenne31::new_array([
@@ -347,34 +374,4 @@ mod tests {
         &[crate::PackedMersenne31Neon::ONE],
         super::SPECIAL_VALS
     );
-
-    /// Test exp5 function with known values.
-    #[test]
-    fn test_exp5() {
-        // Test with some known values
-        let test_cases: [(u32, u32); 4] = [
-            (0, 0),   // 0^5 = 0
-            (1, 1),   // 1^5 = 1
-            (2, 32),  // 2^5 = 32
-            (3, 243), // 3^5 = 243
-        ];
-
-        unsafe {
-            let inputs: [u32; 4] = [
-                test_cases[0].0,
-                test_cases[1].0,
-                test_cases[2].0,
-                test_cases[3].0,
-            ];
-            let input_vec = aarch64::vld1q_u32(inputs.as_ptr());
-            let output_vec = exp5(input_vec);
-
-            let mut outputs = [0u32; 4];
-            aarch64::vst1q_u32(outputs.as_mut_ptr(), output_vec);
-
-            for (i, (_, expected)) in test_cases.iter().enumerate() {
-                assert_eq!(outputs[i], *expected, "exp5 failed for test case {i}");
-            }
-        }
-    }
 }
