@@ -185,7 +185,7 @@ pub trait PrimeCharacteristicRing:
     #[must_use]
     #[inline(always)]
     fn xor3(&self, y: &Self, z: &Self) -> Self {
-        self.xor(y).xor(z)
+        self.xor(&y.xor(z))
     }
 
     /// Computes the arithmetic generalization of `andnot`.
