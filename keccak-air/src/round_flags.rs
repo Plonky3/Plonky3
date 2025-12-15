@@ -52,7 +52,7 @@ pub(crate) fn eval_round_flags<AB: AirBuilder>(builder: &mut AB) {
     builder
         .when_transition()
         .assert_zeros::<NUM_ROUNDS, _>(array::from_fn(|i| {
-            local.step_flags[i].clone() - next.step_flags[(i + 1) % NUM_ROUNDS].clone()
+            next.step_flags[(i + 1) % NUM_ROUNDS].clone() - local.step_flags[i].clone()
         }));
 }
 
