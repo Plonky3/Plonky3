@@ -4,7 +4,11 @@
 
 extern crate alloc;
 
+mod round_numbers;
+
 use alloc::vec::Vec;
+
+pub use round_numbers::poseidon_round_numbers_128;
 
 use p3_field::{Algebra, InjectiveMonomial, PrimeField};
 use p3_mds::MdsPermutation;
