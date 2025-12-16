@@ -545,28 +545,37 @@ fn par_middle_layers<F: Field>(
 /// # Arguments
 /// - `vec`: Mutable vector whose height is a power of two.
 /// - `twiddles`: Precomputed twiddle factors for this layer.
-#[inline]
+#[inline(always)]
 fn dft_layer<F: Field, B: Butterfly<F>>(vec: &mut [F], twiddles: &[B]) {
-    debug_assert_eq!(
-        vec.len() % twiddles.len(),
-        0,
-        "Vector length must be divisible by the number of twiddles"
-    );
     let size = vec.len();
     let num_blocks = twiddles.len();
 
+    debug_assert!(num_blocks != 0);
+    debug_assert_eq!(
+        size % num_blocks,
+        0,
+        "Vector length must be divisible by the number of twiddles"
+    );
+
     let block_size = size / num_blocks;
+    debug_assert!(block_size % 2 == 0, "Each block must split evenly");
     let half_block_size = block_size / 2;
 
-    vec.chunks_exact_mut(block_size)
-        .zip(twiddles)
-        .for_each(|(block, &twiddle)| {
-            // Split each block vertically into top (hi) and bottom (lo) halves
-            let (hi_chunk, lo_chunk) = block.split_at_mut(half_block_size);
+    let base = vec.as_mut_ptr();
+
+    for i in 0..num_blocks {
+        unsafe {
+            let twiddle = twiddles.get_unchecked(i);
+
+            let block_ptr = base.add(i * block_size);
+            let hi_chunk = core::slice::from_raw_parts_mut(block_ptr, half_block_size);
+            let lo_chunk =
+                core::slice::from_raw_parts_mut(block_ptr.add(half_block_size), half_block_size);
 
             // Apply DIT butterfly
             twiddle.apply_to_rows(hi_chunk, lo_chunk);
-        });
+        }
+    }
 }
 
 /// Applies two layers of the Radix-2 FFT butterfly network making use of parallelization.
