@@ -93,10 +93,8 @@ mod tests {
 
     use crate::coset_mds::CosetMds;
 
-    #[test]
-    fn matches_naive() {
+    fn test_matches_naive<const N: usize>() {
         type F = BabyBear;
-        const N: usize = 8;
 
         let mut rng = SmallRng::seed_from_u64(1);
         let mut arr: [F; N] = rng.random();
@@ -108,5 +106,69 @@ mod tests {
             .for_each(|x| *x *= F::from_u8(N as u8));
         CosetMds::default().permute_mut(&mut arr);
         assert_eq!(coset_lde_naive, arr);
+    }
+
+    #[test]
+    fn matches_naive_n4() {
+        test_matches_naive::<4>();
+    }
+
+    #[test]
+    fn matches_naive_n8() {
+        test_matches_naive::<8>();
+    }
+
+    #[test]
+    fn matches_naive_n16() {
+        test_matches_naive::<16>();
+    }
+
+    #[test]
+    fn matches_naive_n32() {
+        test_matches_naive::<32>();
+    }
+
+    #[test]
+    fn permutation_property() {
+        type F = BabyBear;
+        const N: usize = 16;
+
+        let mut rng = SmallRng::seed_from_u64(2);
+        let original: [F; N] = rng.random();
+        let mut arr = original;
+
+        let mds = CosetMds::default();
+        mds.permute_mut(&mut arr);
+
+        // Verify that the permutation produces different output
+        assert_ne!(arr, original);
+
+        // Verify that applying twice gives a different result (not identity)
+        let mut arr_twice = arr;
+        mds.permute_mut(&mut arr_twice);
+        assert_ne!(arr_twice, original);
+        assert_ne!(arr_twice, arr);
+    }
+
+    #[test]
+    fn non_constant_output() {
+        type F = BabyBear;
+        const N: usize = 8;
+
+        let mut rng = SmallRng::seed_from_u64(3);
+        let input1: [F; N] = rng.random();
+        let mut input2: [F; N] = rng.random();
+
+        // Ensure inputs are different
+        if input1 == input2 {
+            input2[0] = input2[0] + F::ONE;
+        }
+
+        let mds = CosetMds::default();
+        let mut output1 = input1;
+        let mut output2 = input2;
+        mds.permute_mut(&mut output1);
+        mds.permute_mut(&mut output2);
+        assert_ne!(output1, output2);
     }
 }
