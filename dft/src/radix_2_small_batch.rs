@@ -558,7 +558,7 @@ fn dft_layer<F: Field, B: Butterfly<F>>(vec: &mut [F], twiddles: &[B]) {
     );
 
     let block_size = size / num_blocks;
-    debug_assert!(block_size % 2 == 0, "Each block must split evenly");
+    debug_assert!(block_size.is_multiple_of(2), "Each block must split evenly");
     let half_block_size = block_size / 2;
 
     let base = vec.as_mut_ptr();
