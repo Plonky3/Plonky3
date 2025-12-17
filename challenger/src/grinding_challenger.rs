@@ -1,4 +1,4 @@
-use p3_field::{Field, PrimeField, PrimeField32, PrimeField64};
+use p3_field::{Field, PackedValue, PrimeField, PrimeField32, PrimeField64};
 use p3_maybe_rayon::prelude::*;
 use p3_symmetric::CryptographicPermutation;
 use tracing::instrument;
@@ -98,7 +98,8 @@ impl<F, P, const WIDTH: usize, const RATE: usize> GrindingChallenger
     for DuplexChallenger<F, P, WIDTH, RATE>
 where
     F: PrimeField64,
-    P: CryptographicPermutation<[F; WIDTH]>,
+    P: CryptographicPermutation<[F; WIDTH]>
+        + CryptographicPermutation<[<F as Field>::Packing; WIDTH]>,
 {
     type Witness = F;
 
@@ -107,14 +108,48 @@ where
         assert!(bits < (usize::BITS as usize), "bit count must be valid");
         assert!((1 << bits) < F::ORDER_U64);
 
-        let witness = (0..F::ORDER_U64)
+        if bits == 0 {
+            return F::ZERO;
+        }
+
+        type Packed<F> = <F as Field>::Packing;
+        let lanes = Packed::<F>::WIDTH;
+        let num_batches = (F::ORDER_U64 as usize + lanes - 1) / lanes;
+
+        // The witness will be placed at this index in the sponge state during duplexing.
+        let witness_idx = self.input_buffer.len();
+
+        let witness = (0..num_batches)
             .into_par_iter()
-            .map(|i| unsafe {
-                // i < F::ORDER_U64 by construction so this is safe.
-                F::from_canonical_unchecked(i)
+            .find_map_any(|batch| {
+                let base = (batch * lanes) as u64;
+
+                let mut packed_state: [Packed<F>; WIDTH] =
+                    self.sponge_state.map(|x| Packed::<F>::from(x));
+                for (i, &val) in self.input_buffer.iter().enumerate() {
+                    packed_state[i] = Packed::<F>::from(val);
+                }
+                let packed_witnesses = Packed::<F>::from_fn(|lane| {
+                    let candidate = base + lane as u64;
+                    if candidate < F::ORDER_U64 {
+                        unsafe { F::from_canonical_unchecked(candidate) }
+                    } else {
+                        F::ZERO
+                    }
+                });
+                packed_state[witness_idx] = packed_witnesses;
+                self.permutation.permute_mut(&mut packed_state);
+                let samples = packed_state[RATE - 1].as_slice();
+                for (sample, witness) in samples.iter().zip(packed_witnesses.as_slice()) {
+                    let rand_usize = sample.as_canonical_u64() as usize;
+                    if (rand_usize & ((1 << bits) - 1)) == 0 {
+                        return Some(*witness);
+                    }
+                }
+                None
             })
-            .find_any(|witness| self.clone().check_witness(bits, *witness))
             .expect("failed to find witness");
+
         assert!(self.check_witness(bits, witness));
         witness
     }
@@ -124,7 +159,8 @@ impl<F, P, const WIDTH: usize, const RATE: usize> UniformGrindingChallenger
     for DuplexChallenger<F, P, WIDTH, RATE>
 where
     F: UniformSamplingField + PrimeField64,
-    P: CryptographicPermutation<[F; WIDTH]>,
+    P: CryptographicPermutation<[F; WIDTH]>
+        + CryptographicPermutation<[<F as Field>::Packing; WIDTH]>,
 {
     #[instrument(name = "grind uniform for proof-of-work witness", skip_all)]
     fn grind_uniform(&mut self, bits: usize) -> Self::Witness {

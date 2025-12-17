@@ -143,6 +143,10 @@ pub trait ParIterExt: Iterator {
     where
         P: Fn(&Self::Item) -> bool + Sync + Send;
 
+    fn find_map_any<P, R>(self, predicate: P) -> Option<R>
+    where
+        P: Fn(Self::Item) -> Option<R> + Sync + Send;
+
     fn flat_map_iter<U, F>(self, map_op: F) -> FlatMap<Self, U, F>
     where
         Self: Sized,
@@ -156,6 +160,13 @@ impl<T: Iterator> ParIterExt for T {
         P: Fn(&Self::Item) -> bool + Sync + Send,
     {
         self.find(predicate)
+    }
+
+    fn find_map_any<P, R>(mut self, predicate: P) -> Option<R>
+    where
+        P: Fn(Self::Item) -> Option<R> + Sync + Send,
+    {
+        self.find_map(predicate)
     }
 
     fn flat_map_iter<U, F>(self, map_op: F) -> FlatMap<Self, U, F>
