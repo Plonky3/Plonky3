@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-## [0.4.0] - 2025-12-12
+## [0.4.1] - 2025-12-18## [0.4.0] - 2025-12-12
 ### Merged PRs
 - Chore: add descriptions to all sub-crate manifests (#906) (Himess)
 - Replace `Copy` with `Clone` in `AirBuilder`'s `Var` (#930) (Linda Guiga)

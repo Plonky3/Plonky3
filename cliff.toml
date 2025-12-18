@@ -13,15 +13,9 @@ body = """
 {% for group, commits in commits | group_by(attribute="group") %}
     ### {{ group | upper_first }}
     {% for commit in commits %}\
-        - {% if commit.breaking %}[**breaking**] {% endif %}{{ commit.message | upper_first }} ({{ commit.author.name }})
+        - {% if commit.breaking %}[**breaking**] {% endif %}{{ commit.message | upper_first }}
     {% endfor %}\
-{% endfor %}\n\
-### Authors
-{% for author, commits in commits | group_by(attribute="author.name") %}\
-    {% if author != "dependabot[bot]" %}\
-        - {{ author }}
-    {% endif %}\
-{% endfor %}\n
+{% endfor %}
 """
 
 # remove the leading and trailing whitespace from the templates
