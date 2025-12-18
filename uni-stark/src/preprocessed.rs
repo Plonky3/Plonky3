@@ -76,7 +76,7 @@ where
 
     let trace_domain = pcs.natural_domain_for_degree(degree);
     let (commitment, prover_data) = debug_span!("commit to preprocessed trace")
-        .in_scope(|| pcs.commit_no_randomization([(trace_domain, preprocessed)]));
+        .in_scope(|| pcs.commit_preprocessing([(trace_domain, preprocessed)]));
 
     let degree_bits = degree_bits + is_zk;
     let prover_data = PreprocessedProverData {

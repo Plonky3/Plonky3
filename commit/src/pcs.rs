@@ -69,11 +69,11 @@ where
 
     /// Same as `commit` but without randomization. This is used for preprocessed columns
     /// which do not have to be randomized even when ZK is enabled. Note that the preprocessed columns still
-    /// need to be padded to the extended domain height
+    /// need to be padded to the extended domain height.
     ///
     /// Returns both the commitment which should be sent to the verifier
     /// and the prover data which can be used to produce opening proofs.
-    fn commit_no_randomization(
+    fn commit_preprocessing(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
     ) -> (Self::Commitment, Self::ProverData) {
@@ -106,11 +106,13 @@ where
             quotient_domain.split_evals(num_chunks, quotient_evaluations);
         let quotient_sub_domains = quotient_domain.split_domains(num_chunks);
 
-        self.commit(
+        let ldes = self.get_quotient_ldes(
             quotient_sub_domains
                 .into_iter()
                 .zip(quotient_sub_evaluations),
-        )
+            num_chunks,
+        );
+        self.commit_ldes(ldes)
     }
 
     /// When committing to quotient polynomials in batch-STARK,
@@ -118,9 +120,7 @@ where
     ///
     /// This corresponds to the first step of `commit_quotient`. When `zk` is enabled,
     /// this will additionally add randomization.
-    ///
-    /// TODO: We could only rely on this methid along with `commit_ldes` instead of `commit_quotient`, even in `uni-stark`.
-    fn get_randomized_quotient_ldes(
+    fn get_quotient_ldes(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
         num_chunks: usize,

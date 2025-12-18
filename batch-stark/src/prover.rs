@@ -328,7 +328,7 @@ where
             .iter()
             .zip(chunk_mats.iter())
             .map(|(d, m)| (*d, m.clone()));
-        let ldes = pcs.get_randomized_quotient_ldes(evals, n_chunks);
+        let ldes = pcs.get_quotient_ldes(evals, n_chunks);
 
         let start = quotient_chunk_domains.len();
         quotient_chunk_domains.extend(chunk_domains);
@@ -343,10 +343,10 @@ where
 
     // If zk is enabled, we generate random extension field values of the size of the randomized trace. If `n` is the degree of the initial trace,
     // then the randomized trace has degree `2n`. To randomize the FRI batch polynomial, we then need an extension field random polynomial of degree `2n -1`.
-    // So we can generate a random polynomial  of degree `2n`, and provide it to `open` as is.
+    // So we can generate a random polynomial of degree `2n`, and provide it to `open` as is.
     // Then the method will add `(R(X) - R(z)) / (X - z)` (which is of the desired degree `2n - 1`), to the batch of polynomials.
     // Since we need a random polynomial defined over the extension field, and the `commit` method is over the base field,
-    // we actually need to commit to `SC::CHallenge::D` base field random polynomials.
+    // we actually need to commit to `SC::Challenge::D` base field random polynomials.
     // This is similar to what is done for the quotient polynomials.
     // TODO: This approach is only statistically zk. To make it perfectly zk, `R` would have to truly be an extension field polynomial.
     let (opt_r_commit, opt_r_data) = if SC::Pcs::ZK {

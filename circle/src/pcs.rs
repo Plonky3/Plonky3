@@ -138,7 +138,7 @@ where
         (comm, mmcs_data)
     }
 
-    fn get_randomized_quotient_ldes(
+    fn get_quotient_ldes(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
         _num_chunks: usize,
