@@ -5,7 +5,7 @@ pub(crate) fn xor<F: PrimeField64, const N: usize>(xs: [F; N]) -> F {
     let mut acc: u64 = 0;
     for x in xs {
         debug_assert!(x.is_zero() || x.is_one());
-        acc ^= x.as_canonical_u64();
+        acc ^= x.is_one() as u64;
     }
     if acc == 0 {
         F::zero()
@@ -30,12 +30,12 @@ pub(crate) fn xor3_gen<AF: AbstractField>(x: AF, y: AF, z: AF) -> AF {
 pub(crate) fn andn<F: PrimeField64>(x: F, y: F) -> F {
     debug_assert!(x.is_zero() || x.is_one());
     debug_assert!(y.is_zero() || y.is_one());
-    let x = x.as_canonical_u64();
-    let y = y.as_canonical_u64();
-    if (!x & y) == 0 {
-        F::zero()
-    } else {
+    let x = x.is_one();
+    let y = y.is_one();
+    if !x && y {
         F::one()
+    } else {
+        F::zero()
     }
 }
 
