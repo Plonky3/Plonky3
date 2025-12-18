@@ -35,8 +35,7 @@ pub struct BinomialExtensionField<F, const D: usize, A = F> {
 }
 
 impl<F, A, const D: usize> BinomialExtensionField<F, D, A> {
-    #[inline]
-    pub const fn new(value: [A; D]) -> Self {
+    pub(crate) const fn new(value: [A; D]) -> Self {
         Self {
             value,
             _phantom: PhantomData,
@@ -53,6 +52,12 @@ impl<F: Field, A: Algebra<F>, const D: usize> Default for BinomialExtensionField
 impl<F: Field, A: Algebra<F>, const D: usize> From<A> for BinomialExtensionField<F, D, A> {
     fn from(x: A) -> Self {
         Self::new(field_to_array(x))
+    }
+}
+
+impl<F: Field, A: Algebra<F>, const D: usize> From<[A; D]> for BinomialExtensionField<F, D, A> {
+    fn from(x: [A; D]) -> Self {
+        Self::new(x)
     }
 }
 
