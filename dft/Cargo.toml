@@ -20,10 +20,10 @@ spin.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-p3-baby-bear.workspace = true
-p3-goldilocks.workspace = true
-p3-mersenne-31.workspace = true
-p3-monty-31.workspace = true
+p3-baby-bear = { path = "../baby-bear" }
+p3-goldilocks = { path = "../goldilocks" }
+p3-mersenne-31 = { path = "../mersenne-31" }
+p3-monty-31 = { path = "../monty-31" }
 
 criterion.workspace = true
 rand.workspace = true

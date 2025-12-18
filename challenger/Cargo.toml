@@ -19,8 +19,8 @@ p3-util.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-p3-baby-bear.workspace = true
-p3-goldilocks.workspace = true
+p3-baby-bear = { path = "../baby-bear" }
+p3-goldilocks = { path = "../goldilocks" }
 
 [lints]
 workspace = true

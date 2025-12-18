@@ -26,14 +26,14 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-p3-baby-bear.workspace = true
-p3-circle.workspace = true
-p3-dft.workspace = true
-p3-goldilocks.workspace = true
-p3-keccak.workspace = true
-p3-merkle-tree.workspace = true
-p3-mersenne-31.workspace = true
-p3-symmetric.workspace = true
+p3-baby-bear = { path = "../baby-bear" }
+p3-circle = { path = "../circle" }
+p3-dft = { path = "../dft" }
+p3-goldilocks = { path = "../goldilocks" }
+p3-keccak = { path = "../keccak" }
+p3-merkle-tree = { path = "../merkle-tree" }
+p3-mersenne-31 = { path = "../mersenne-31" }
+p3-symmetric = { path = "../symmetric" }
 
 criterion.workspace = true
 

@@ -21,8 +21,8 @@ tracing.workspace = true
 transpose.workspace = true
 
 [dev-dependencies]
-p3-baby-bear.workspace = true
-p3-mersenne-31.workspace = true
+p3-baby-bear = { path = "../baby-bear" }
+p3-mersenne-31 = { path = "../mersenne-31" }
 
 criterion.workspace = true
 

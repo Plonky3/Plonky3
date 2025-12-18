@@ -20,9 +20,9 @@ p3-symmetric.workspace = true
 rand.workspace = true
 
 [dev-dependencies]
-p3-dft.workspace = true
-p3-field-testing.workspace = true
-p3-util.workspace = true
+p3-dft = { path = "../dft" }
+p3-field-testing = { path = "../field-testing" }
+p3-util = { path = "../util" }
 
 criterion.workspace = true
 num-bigint.workspace = true
