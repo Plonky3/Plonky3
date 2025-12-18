@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.4.1] - 2025-12-18
+### Merged PRs
+- fix: remove undefined WIDTH const in interleave module (#1199) (Robin Salen)
+
 ## [0.4.0] - 2025-12-12
 ### Merged PRs
 - Field.rs: `Powers::packed_collect_n` (#888) (Adrian Hamelink)
@@ -44,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adrian Hamelink
 - AngusG
 - Himess
+- Robin Salen
 - Skylar Ray
 - Thomas Coratger
 - Tom Wambsgans
