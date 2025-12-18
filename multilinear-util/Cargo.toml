@@ -19,7 +19,7 @@ rand.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
-p3-baby-bear.workspace = true
+p3-baby-bear = { path = "../baby-bear" }
 
 proptest.workspace = true
 

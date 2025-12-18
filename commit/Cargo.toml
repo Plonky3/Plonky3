@@ -22,8 +22,8 @@ p3-challenger = { workspace = true, optional = true }
 p3-dft = { workspace = true, optional = true }
 
 [dev-dependencies]
-p3-challenger.workspace = true
-p3-dft.workspace = true
+p3-challenger = { path = "../challenger" }
+p3-dft = { path = "../dft" }
 
 [features]
 default = ["test-utils"]

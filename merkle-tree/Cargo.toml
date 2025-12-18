@@ -24,11 +24,11 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-p3-baby-bear.workspace = true
-p3-blake3.workspace = true
-p3-keccak.workspace = true
-p3-mds.workspace = true
-p3-rescue.workspace = true
+p3-baby-bear = { path = "../baby-bear" }
+p3-blake3 = { path = "../blake3" }
+p3-keccak = { path = "../keccak" }
+p3-mds = { path = "../mds" }
+p3-rescue = { path = "../rescue" }
 
 criterion.workspace = true
 
