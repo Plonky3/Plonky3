@@ -10,6 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+p3-challenger.workspace = true
 p3-dft.workspace = true
 p3-field.workspace = true
 p3-mds.workspace = true
@@ -23,8 +24,8 @@ rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
-p3-field-testing.workspace = true
-p3-poseidon.workspace = true
+p3-field-testing = { path = "../field-testing" }
+p3-poseidon = { path = "../poseidon" }
 
 criterion.workspace = true
 rand.workspace = true

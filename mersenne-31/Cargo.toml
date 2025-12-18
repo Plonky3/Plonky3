@@ -10,6 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+p3-challenger.workspace = true
 p3-dft.workspace = true
 p3-field.workspace = true
 p3-matrix.workspace = true
@@ -25,7 +26,7 @@ rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
-p3-field-testing.workspace = true
+p3-field-testing = { path = "../field-testing" }
 
 criterion.workspace = true
 rand_xoshiro.workspace = true

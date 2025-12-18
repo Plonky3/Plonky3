@@ -1212,7 +1212,8 @@ fn test_circle_stark_batch() -> Result<(), impl Debug> {
         log_blowup: 1,
         log_final_poly_len: 0,
         num_queries: 40,
-        proof_of_work_bits: 8,
+        commit_proof_of_work_bits: 8,
+        query_proof_of_work_bits: 8,
         mmcs: challenge_mmcs,
     };
 

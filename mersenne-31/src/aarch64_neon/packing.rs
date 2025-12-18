@@ -35,7 +35,7 @@ impl PackedMersenne31Neon {
     #[inline]
     #[must_use]
     /// Get an arch-specific vector representing the packed values.
-    fn to_vector(self) -> uint32x4_t {
+    pub(crate) fn to_vector(self) -> uint32x4_t {
         unsafe {
             // Safety: `Mersenne31` is `repr(transparent)` so it can be transmuted to `u32`. It
             // follows that `[Mersenne31; WIDTH]` can be transmuted to `[u32; WIDTH]`, which can be
@@ -52,7 +52,7 @@ impl PackedMersenne31Neon {
     /// SAFETY: The caller must ensure that each element of `vector` represents a valid
     /// `Mersenne31`.  In particular, each element of vector must be in `0..=P` (i.e. it fits in 31
     /// bits).
-    unsafe fn from_vector(vector: uint32x4_t) -> Self {
+    pub(crate) unsafe fn from_vector(vector: uint32x4_t) -> Self {
         // Safety: It is up to the user to ensure that elements of `vector` represent valid
         // `Mersenne31` values. We must only reason about memory representations. `uint32x4_t` can
         // be transmuted to `[u32; WIDTH]` (since arrays elements are contiguous in memory), which
@@ -166,6 +166,32 @@ impl PrimeCharacteristicRing for PackedMersenne31Neon {
             // Halving add: (val + to_add) >> 1
             let halved = aarch64::vhaddq_u32(val, to_add);
             Self::from_vector(halved)
+        }
+    }
+
+    #[inline(always)]
+    fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        // We provide specialised code for power 5 as this turns up regularly.
+        //
+        // The other powers could be specialised similarly but we ignore this for now.
+        match POWER {
+            0 => Self::ONE,
+            1 => *self,
+            2 => self.square(),
+            3 => self.cube(),
+            4 => self.square().square(),
+            5 => unsafe {
+                let val = self.to_vector();
+                Self::from_vector(exp5(val))
+            },
+            6 => self.square().cube(),
+            7 => {
+                let x2 = self.square();
+                let x3 = x2 * *self;
+                let x4 = x2.square();
+                x3 * x4
+            }
+            _ => self.exp_u64(POWER),
         }
     }
 
@@ -289,6 +315,33 @@ impl_packed_value!(PackedMersenne31Neon, Mersenne31, WIDTH);
 
 unsafe impl PackedField for PackedMersenne31Neon {
     type Scalar = Mersenne31;
+}
+
+/// Compute the permutation x -> x^5 on Mersenne-31 field elements.
+///
+/// # Safety
+/// `x` must be represented as a value in `{0, ..., P}`.
+/// If the input does not conform to this representation, the result is undefined.
+/// The output will be represented as a value in `{0, ..., P}`.
+///
+/// # TODO
+/// This could be further improved with a specialized function.
+#[inline(always)]
+pub(crate) fn exp5(x: uint32x4_t) -> uint32x4_t {
+    // For Mersenne31, x^5 = x * x^4 = x * (x^2)^2
+    //
+    // We compute:
+    //   x2 = x * x
+    //   x4 = x2 * x2
+    //   x5 = x4 * x
+    //
+    // throughput: ~4 cyc/vec
+    // latency: ~30 cyc (3 dependent multiplications)
+
+    // x is guaranteed to be in [0, P]
+    let x2 = mul(x, x);
+    let x4 = mul(x2, x2);
+    mul(x4, x)
 }
 
 impl_packed_field_pow_2!(

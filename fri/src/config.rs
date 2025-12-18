@@ -11,7 +11,10 @@ pub struct FriParameters<M> {
     // TODO: This parameter and FRI early stopping are not yet implemented in `CirclePcs`.
     pub log_final_poly_len: usize,
     pub num_queries: usize,
-    pub proof_of_work_bits: usize,
+    /// Number of bits for the PoW phase before sampling _each_ batching challenge.
+    pub commit_proof_of_work_bits: usize,
+    /// Number of bits for the PoW phase before sampling the queries.
+    pub query_proof_of_work_bits: usize,
     pub mmcs: M,
 }
 
@@ -30,7 +33,7 @@ impl<M> FriParameters<M> {
     /// Certain users may instead want to look at proven soundness, a more complex calculation which
     /// isn't currently supported by this crate.
     pub const fn conjectured_soundness_bits(&self) -> usize {
-        self.log_blowup * self.num_queries + self.proof_of_work_bits
+        self.log_blowup * self.num_queries + self.query_proof_of_work_bits
     }
 }
 
@@ -69,7 +72,8 @@ pub const fn create_test_fri_params<Mmcs>(
         log_blowup: 2,
         log_final_poly_len,
         num_queries: 2,
-        proof_of_work_bits: 1,
+        commit_proof_of_work_bits: 1,
+        query_proof_of_work_bits: 1,
         mmcs,
     }
 }
@@ -81,7 +85,8 @@ pub const fn create_test_fri_params_zk<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> 
         log_blowup: 2,
         log_final_poly_len: 0,
         num_queries: 2,
-        proof_of_work_bits: 1,
+        commit_proof_of_work_bits: 1,
+        query_proof_of_work_bits: 1,
         mmcs,
     }
 }
@@ -93,7 +98,8 @@ pub const fn create_benchmark_fri_params<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs
         log_blowup: 1,
         log_final_poly_len: 0,
         num_queries: 100,
-        proof_of_work_bits: 16,
+        commit_proof_of_work_bits: 0,
+        query_proof_of_work_bits: 16,
         mmcs,
     }
 }
@@ -105,7 +111,8 @@ pub const fn create_benchmark_fri_params_zk<Mmcs>(mmcs: Mmcs) -> FriParameters<M
         log_blowup: 2,
         log_final_poly_len: 0,
         num_queries: 100,
-        proof_of_work_bits: 16,
+        commit_proof_of_work_bits: 0,
+        query_proof_of_work_bits: 16,
         mmcs,
     }
 }

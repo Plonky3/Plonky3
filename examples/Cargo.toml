@@ -8,6 +8,7 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
+publish = false
 
 [dependencies]
 p3-air.workspace = true
@@ -34,12 +35,12 @@ clap.workspace = true
 rand.workspace = true
 
 [dev-dependencies]
-p3-baby-bear.workspace = true
-p3-challenger.workspace = true
-p3-commit = { workspace = true, features = ["test-utils"] }
-p3-dft.workspace = true
-p3-koala-bear.workspace = true
-p3-matrix.workspace = true
+p3-baby-bear = { path = "../baby-bear" }
+p3-challenger = { path = "../challenger" }
+p3-commit = { path = "../commit", features = ["test-utils"] }
+p3-dft = { path = "../dft" }
+p3-koala-bear = { path = "../koala-bear" }
+p3-matrix = { path = "../matrix" }
 
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
