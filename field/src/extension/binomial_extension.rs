@@ -55,6 +55,12 @@ impl<F: Field, A: Algebra<F>, const D: usize> From<A> for BinomialExtensionField
     }
 }
 
+impl<F: Field, A: Algebra<F>, const D: usize> From<[A; D]> for BinomialExtensionField<F, D, A> {
+    fn from(x: [A; D]) -> Self {
+        Self::new(x)
+    }
+}
+
 impl<F: BinomiallyExtendable<D>, const D: usize> Packable for BinomialExtensionField<F, D> {}
 
 impl<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: usize> BasedVectorSpace<A>
