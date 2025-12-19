@@ -5,7 +5,7 @@ use itertools::Itertools;
 use p3_air::Air;
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{BasedVectorSpace, PackedValue, PrimeCharacteristicRing};
+use p3_field::{BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
@@ -463,11 +463,8 @@ where
             let quotient = folder.accumulator * inv_vanishing;
 
             // "Transpose" D packed base coefficients into WIDTH scalar extension coefficients.
-            (0..core::cmp::min(quotient_size, PackedVal::<SC>::WIDTH)).map(move |idx_in_packing| {
-                SC::Challenge::from_basis_coefficients_fn(|coeff_idx| {
-                    quotient.as_basis_coefficients_slice()[coeff_idx].as_slice()[idx_in_packing]
-                })
-            })
+            (0..core::cmp::min(quotient_size, PackedVal::<SC>::WIDTH))
+                .map(move |idx_in_packing| quotient.extract(idx_in_packing))
         })
         .collect()
 }

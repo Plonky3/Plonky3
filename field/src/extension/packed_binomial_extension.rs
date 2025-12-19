@@ -208,19 +208,6 @@ where
     }
 
     #[inline]
-    fn to_ext_iter(
-        iter: impl IntoIterator<Item = Self>,
-    ) -> impl Iterator<Item = BinomialExtensionField<F, D>> {
-        let width = F::Packing::WIDTH;
-        iter.into_iter().flat_map(move |x| {
-            (0..width).map(move |i| {
-                let values = array::from_fn(|j| x.value[j].as_slice()[i]);
-                BinomialExtensionField::new(values)
-            })
-        })
-    }
-
-    #[inline]
     fn packed_ext_powers(base: BinomialExtensionField<F, D>) -> crate::Powers<Self> {
         let width = F::Packing::WIDTH;
         let powers = base.powers().take(width + 1).collect_vec();

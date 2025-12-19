@@ -10,7 +10,7 @@ use core::ops::Deref;
 
 use itertools::{Itertools, izip};
 use p3_field::{
-    BasedVectorSpace, ExtensionField, Field, PackedValue, PrimeCharacteristicRing, dot_product,
+    ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing, dot_product,
 };
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
@@ -435,9 +435,7 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
             .par_fold_reduce(
                 || EF::ExtensionPacking::zero_vec(packed_width),
                 |mut acc, (row, &scale)| {
-                    let scale = EF::ExtensionPacking::from_basis_coefficients_fn(|i| {
-                        T::Packing::from(scale.as_basis_coefficients_slice()[i])
-                    });
+                    let scale = EF::ExtensionPacking::from(scale);
                     izip!(&mut acc, row).for_each(|(l, r)| *l += scale * r);
                     acc
                 },
@@ -447,15 +445,7 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
                 },
             );
 
-        packed_result
-            .into_iter()
-            .flat_map(|p| {
-                (0..T::Packing::WIDTH).map(move |i| {
-                    EF::from_basis_coefficients_fn(|j| {
-                        p.as_basis_coefficients_slice()[j].as_slice()[i]
-                    })
-                })
-            })
+        EF::ExtensionPacking::to_ext_iter(packed_result)
             .take(self.width())
             .collect()
     }
@@ -487,14 +477,7 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
             .map(move |row_packed| {
                 let packed_sum_of_packed: EF::ExtensionPacking =
                     dot_product(vec.iter().copied(), row_packed);
-                let sum_of_packed: EF = EF::from_basis_coefficients_fn(|i| {
-                    packed_sum_of_packed.as_basis_coefficients_slice()[i]
-                        .as_slice()
-                        .iter()
-                        .copied()
-                        .sum()
-                });
-                sum_of_packed
+                EF::ExtensionPacking::to_ext_iter([packed_sum_of_packed]).sum()
             })
     }
 }
