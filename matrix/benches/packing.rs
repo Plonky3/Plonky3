@@ -9,28 +9,26 @@
 //! ## Running benchmarks
 //!
 //! ```bash
-//! # Without WIDTH=1 optimization (baseline)
-//! RUSTFLAGS="-Ctarget-cpu=native" cargo bench --bench packing -- --save-baseline original
-//!
-//! # With WIDTH=1 optimization
-//! RUSTFLAGS="-Ctarget-cpu=native" cargo bench --bench packing --features width1_opt -- --baseline original
+//! RUSTFLAGS="-Ctarget-cpu=native" cargo bench --bench packing -p p3-matrix
 //! ```
 //!
-//! ## Expected results
+//! ## Expected behavior
 //!
-//! - Goldilocks (WIDTH=1 on ARM): 30-40% improvement with width1_opt
-//! - BabyBear (WIDTH=4 on ARM NEON): No significant change (±5%)
+//! The vertical packing methods (`vertically_packed_row`, `vertically_packed_row_pair`)
+//! include an optimization for WIDTH=1 fields (e.g., Goldilocks on ARM/WASM) that
+//! avoids intermediate allocations. This optimization is transparent and has no
+//! effect on WIDTH>1 fields (e.g., BabyBear with NEON).
 
-use criterion::{
-    BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main,
-};
+use std::hint::black_box;
+
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use p3_baby_bear::BabyBear;
 use p3_field::{Field, PackedValue};
 use p3_goldilocks::Goldilocks;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use rand::rngs::SmallRng;
 use rand::SeedableRng;
+use rand::rngs::SmallRng;
 
 /// Matrix height for all benchmarks (2^16 = 65536 rows)
 const LOG_HEIGHT: usize = 16;
@@ -82,7 +80,7 @@ fn bench_vertically_packed_row_goldilocks(c: &mut Criterion) {
                             let _ = black_box(packed);
                         }
                     }
-                })
+                });
             },
         );
     }
@@ -120,7 +118,7 @@ fn bench_vertically_packed_row_babybear(c: &mut Criterion) {
                             let _ = black_box(packed);
                         }
                     }
-                })
+                });
             },
         );
     }
@@ -158,7 +156,7 @@ fn bench_vertically_packed_row_pair_goldilocks(c: &mut Criterion) {
                         let packed = matrix.vertically_packed_row_pair::<P>(r, STEP);
                         let _ = black_box(packed);
                     }
-                })
+                });
             },
         );
     }
@@ -192,7 +190,7 @@ fn bench_vertically_packed_row_pair_babybear(c: &mut Criterion) {
                         let packed = matrix.vertically_packed_row_pair::<P>(r, STEP);
                         let _ = black_box(packed);
                     }
-                })
+                });
             },
         );
     }
@@ -237,7 +235,7 @@ fn bench_horizontally_packed_row_goldilocks(c: &mut Criterion) {
                             let _ = black_box(s);
                         }
                     }
-                })
+                });
             },
         );
     }
@@ -274,7 +272,7 @@ fn bench_horizontally_packed_row_babybear(c: &mut Criterion) {
                             let _ = black_box(s);
                         }
                     }
-                })
+                });
             },
         );
     }
@@ -312,7 +310,7 @@ fn bench_padded_horizontally_packed_row_goldilocks(c: &mut Criterion) {
                             let _ = black_box(packed);
                         }
                     }
-                })
+                });
             },
         );
     }
@@ -346,7 +344,7 @@ fn bench_padded_horizontally_packed_row_babybear(c: &mut Criterion) {
                             let _ = black_box(packed);
                         }
                     }
-                })
+                });
             },
         );
     }
@@ -380,7 +378,10 @@ fn bench_single_call_overhead(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements(width as u64));
         group.bench_function(
-            BenchmarkId::new("vertically_packed_row", format!("goldilocks_w{packing_width}")),
+            BenchmarkId::new(
+                "vertically_packed_row",
+                format!("goldilocks_w{packing_width}"),
+            ),
             |b| {
                 let mut r = 0usize;
                 b.iter(|| {
@@ -388,7 +389,7 @@ fn bench_single_call_overhead(c: &mut Criterion) {
                         let _ = black_box(packed);
                     }
                     r = (r + packing_width) % height;
-                })
+                });
             },
         );
 
@@ -404,7 +405,7 @@ fn bench_single_call_overhead(c: &mut Criterion) {
                     let packed = matrix.vertically_packed_row_pair::<P>(r, height / 2);
                     let _ = black_box(packed);
                     r = (r + packing_width) % height;
-                })
+                });
             },
         );
     }
@@ -420,7 +421,10 @@ fn bench_single_call_overhead(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements(width as u64));
         group.bench_function(
-            BenchmarkId::new("vertically_packed_row", format!("babybear_w{packing_width}")),
+            BenchmarkId::new(
+                "vertically_packed_row",
+                format!("babybear_w{packing_width}"),
+            ),
             |b| {
                 let mut r = 0usize;
                 b.iter(|| {
@@ -428,7 +432,7 @@ fn bench_single_call_overhead(c: &mut Criterion) {
                         let _ = black_box(packed);
                     }
                     r = (r + packing_width) % height;
-                })
+                });
             },
         );
 
@@ -444,7 +448,7 @@ fn bench_single_call_overhead(c: &mut Criterion) {
                     let packed = matrix.vertically_packed_row_pair::<P>(r, height / 2);
                     let _ = black_box(packed);
                     r = (r + packing_width) % height;
-                })
+                });
             },
         );
     }

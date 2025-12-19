@@ -9,13 +9,6 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-[features]
-default = []
-# Optimization for WIDTH=1 packing (scalar fields like Goldilocks on ARM)
-# This specializes vertically_packed_row and vertically_packed_row_pair
-# to avoid unnecessary allocations when packing width is 1.
-width1_opt = []
-
 [dependencies]
 p3-field.workspace = true
 p3-maybe-rayon.workspace = true

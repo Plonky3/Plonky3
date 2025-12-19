@@ -6,7 +6,6 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
-use core::iter::chain;
 use core::ops::Deref;
 
 use itertools::{Itertools, izip};
@@ -378,29 +377,20 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         T: Copy,
         P: PackedValue<Value = T>,
     {
-        #[cfg(not(feature = "width1_opt"))]
-        {
+        if P::WIDTH == 1 {
+            // WIDTH=1 optimization: iterate directly over the row without allocating
+            // intermediate Vec via wrapping_row_slices.
+            Either::Left(unsafe {
+                self.row_unchecked(r % self.height())
+                    .into_iter()
+                    .map(P::broadcast)
+            })
+        } else {
             // Precompute row slices once to minimize redundant calls and improve performance.
             let rows = self.wrapping_row_slices(r, P::WIDTH);
 
             // Using precomputed rows avoids repeatedly calling `row_slice`, which is costly.
-            (0..self.width()).map(move |c| P::from_fn(|i| rows[i][c]))
-        }
-        #[cfg(feature = "width1_opt")]
-        {
-            if P::WIDTH == 1 {
-                Either::Left(unsafe {
-                    self.row_unchecked(r % self.height())
-                        .into_iter()
-                        .map(P::broadcast)
-                })
-            } else {
-                // Precompute row slices once to minimize redundant calls and improve performance.
-                let rows = self.wrapping_row_slices(r, P::WIDTH);
-
-                // Using precomputed rows avoids repeatedly calling `row_slice`, which is costly.
-                Either::Right((0..self.width()).map(move |c| P::from_fn(|i| rows[i][c])))
-            }
+            Either::Right((0..self.width()).map(move |c| P::from_fn(|i| rows[i][c])))
         }
     }
 
@@ -417,12 +407,17 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         T: Copy,
         P: PackedValue<Value = T>,
     {
-        #[cfg(not(feature = "width1_opt"))]
-        {
+        if P::WIDTH == 1 {
+            // WIDTH=1 optimization: use the optimized vertically_packed_row instead
+            // of allocating intermediate Vec via wrapping_row_slices.
+            let mut out = Vec::with_capacity(self.width() * 2);
+            out.extend(self.vertically_packed_row::<P>(r));
+            out.extend(self.vertically_packed_row::<P>(r + step));
+            out
+        } else {
             // Whilst it would appear that this can be replaced by two calls to vertically_packed_row
             // tests seem to indicate that combining them in the same function is slightly faster.
             // It's probably allowing the compiler to make some optimizations on the fly.
-
             let rows = self.wrapping_row_slices(r, P::WIDTH);
             let next_rows = self.wrapping_row_slices(r + step, P::WIDTH);
 
@@ -430,26 +425,6 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
                 .map(|c| P::from_fn(|i| rows[i][c]))
                 .chain((0..self.width()).map(|c| P::from_fn(|i| next_rows[i][c])))
                 .collect_vec()
-        }
-        #[cfg(feature = "width1_opt")]
-        {
-            if P::WIDTH == 1 {
-                let mut out = Vec::with_capacity(self.width() * 2);
-                out.extend(self.vertically_packed_row::<P>(r));
-                out.extend(self.vertically_packed_row::<P>(r + step));
-                out
-            } else {
-                // Whilst it would appear that this can be replaced by two calls to vertically_packed_row
-                // tests seem to indicate that combining ƒthem in the same function is slightly faster.
-                // It's probably allowing the compiler to make some optimizations on the fly.
-                let rows = self.wrapping_row_slices(r, P::WIDTH);
-                let next_rows = self.wrapping_row_slices(r + step, P::WIDTH);
-
-                (0..self.width())
-                    .map(|c| P::from_fn(|i| rows[i][c]))
-                    .chain((0..self.width()).map(|c| P::from_fn(|i| next_rows[i][c])))
-                    .collect_vec()
-            }
         }
     }
 
