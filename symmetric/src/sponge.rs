@@ -108,10 +108,7 @@ where
     {
         let mut state = [PF::default(); WIDTH];
         for block_chunk in &input.into_iter().chunks(RATE) {
-            for (chunk_id, chunk) in (&block_chunk.chunks(self.num_f_elms))
-                .into_iter()
-                .enumerate()
-            {
+            for (chunk_id, chunk) in block_chunk.chunks(self.num_f_elms).enumerate() {
                 state[chunk_id] = reduce_32(&chunk.collect_vec());
             }
             state = self.permutation.permute(state);
