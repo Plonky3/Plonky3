@@ -9,6 +9,13 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+default = []
+# Optimization for WIDTH=1 packing (scalar fields like Goldilocks on ARM)
+# This specializes vertically_packed_row and vertically_packed_row_pair
+# to avoid unnecessary allocations when packing width is 1.
+width1_opt = []
+
 [dependencies]
 p3-field.workspace = true
 p3-maybe-rayon.workspace = true
@@ -22,6 +29,7 @@ transpose.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
+p3-goldilocks = { path = "../goldilocks" }
 p3-mersenne-31 = { path = "../mersenne-31" }
 
 criterion.workspace = true
@@ -34,6 +42,11 @@ harness = false
 [[bench]]
 name = "columnwise_dot_product"
 path = "benches/columnwise_dot_product.rs"
+harness = false
+
+[[bench]]
+name = "packing"
+path = "benches/packing.rs"
 harness = false
 
 [lints]

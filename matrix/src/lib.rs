@@ -6,12 +6,15 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
+use core::iter;
+use core::iter::chain;
 use core::ops::Deref;
 
 use itertools::{Itertools, izip};
 use p3_field::{
     ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing, dot_product,
 };
+use p3_maybe_rayon::Either;
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
 use tracing::instrument;
@@ -228,9 +231,10 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
 
     /// Collect the elements of the rows `r` through `r + c`. If anything is larger than `self.height()`
     /// simply wrap around to the beginning of the matrix.
+    #[inline]
     fn wrapping_row_slices(&self, r: usize, c: usize) -> Vec<impl Deref<Target = [T]>> {
         unsafe {
-            // Safety: Thank to the `%`, the rows index is always less than `self.height()`.
+            // Safety: Thanks to the `%`, the rows index is always less than `self.height()`.
             (0..c)
                 .map(|i| self.row_slice_unchecked((r + i) % self.height()))
                 .collect_vec()
@@ -289,22 +293,50 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         P: PackedValue<Value = T>,
         T: Clone + 'a,
     {
-        assert!(r < self.height(), "Row index out of bounds.");
-        let num_packed = self.width() / P::WIDTH;
-        unsafe {
-            // Safety: We have already checked that `r < height()`.
-            let mut iter = self
-                .row_subseq_unchecked(r, 0, num_packed * P::WIDTH)
-                .into_iter();
+        #[cfg(not(feature = "width1_opt"))]
+        {
+            assert!(r < self.height(), "Row index out of bounds.");
+            let num_packed = self.width() / P::WIDTH;
+            unsafe {
+                // Safety: We have already checked that `r < height()`.
+                let mut iter = self
+                    .row_subseq_unchecked(r, 0, num_packed * P::WIDTH)
+                    .into_iter();
 
-            // array::from_fn is guaranteed to always call in order.
-            let packed =
-                (0..num_packed).map(move |_| P::from_fn(|_| iter.next().unwrap_unchecked()));
+                // array::from_fn is guaranteed to always call in order.
+                let packed =
+                    (0..num_packed).map(move |_| P::from_fn(|_| iter.next().unwrap_unchecked()));
 
-            let sfx = self
-                .row_subseq_unchecked(r, num_packed * P::WIDTH, self.width())
-                .into_iter();
-            (packed, sfx)
+                let sfx = self
+                    .row_subseq_unchecked(r, num_packed * P::WIDTH, self.width())
+                    .into_iter();
+                (packed, sfx)
+            }
+        }
+        #[cfg(feature = "width1_opt")]
+        {
+            assert!(r < self.height(), "Row index out of bounds.");
+            if P::WIDTH == 1 {
+                let row_iter = unsafe { self.row_unchecked(r).into_iter().map(P::broadcast) };
+                (Either::Left(row_iter), Either::Left(iter::empty()))
+            } else {
+                let num_packed = self.width() / P::WIDTH;
+                unsafe {
+                    // Safety: We have already checked that `r < height()`.
+                    let mut iter = self
+                        .row_subseq_unchecked(r, 0, num_packed * P::WIDTH)
+                        .into_iter();
+
+                    // array::from_fn is guaranteed to always call in order.
+                    let packed = (0..num_packed)
+                        .map(move |_| P::from_fn(|_| iter.next().unwrap_unchecked()));
+
+                    let sfx = self
+                        .row_subseq_unchecked(r, num_packed * P::WIDTH, self.width())
+                        .into_iter();
+                    (Either::Right(packed), Either::Right(sfx))
+                }
+            }
         }
     }
 
@@ -322,10 +354,27 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         P: PackedValue<Value = T>,
         T: Clone + Default + 'a,
     {
-        let mut row_iter = self.row(r).expect("Row index out of bounds.").into_iter();
-        let num_elems = self.width().div_ceil(P::WIDTH);
-        // array::from_fn is guaranteed to always call in order.
-        (0..num_elems).map(move |_| P::from_fn(|_| row_iter.next().unwrap_or_default()))
+        #[cfg(not(feature = "width1_opt"))]
+        {
+            let mut row_iter = self.row(r).expect("Row index out of bounds.").into_iter();
+            let num_elems = self.width().div_ceil(P::WIDTH);
+            // array::from_fn is guaranteed to always call in order.
+            (0..num_elems).map(move |_| P::from_fn(|_| row_iter.next().unwrap_or_default()))
+        }
+        #[cfg(feature = "width1_opt")]
+        {
+            let mut row_iter = self.row(r).expect("Row index out of bounds.").into_iter();
+            if P::WIDTH == 1 {
+                Either::Left(row_iter.map(P::broadcast))
+            } else {
+                let num_elems = self.width().div_ceil(P::WIDTH);
+                // array::from_fn is guaranteed to always call in order.
+                Either::Right(
+                    (0..num_elems)
+                        .map(move |_| P::from_fn(|_| row_iter.next().unwrap_or_default())),
+                )
+            }
+        }
     }
 
     /// Get a parallel iterator over all packed rows of the matrix.
@@ -369,17 +418,36 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
     /// Returns an iterator whose i'th element is packing of the i'th element of the
     /// rows r through r + P::WIDTH - 1. If we exceed the height of the matrix,
     /// wrap around and include initial rows.
-    #[inline]
+    #[inline(always)]
     fn vertically_packed_row<P>(&self, r: usize) -> impl Iterator<Item = P>
     where
         T: Copy,
         P: PackedValue<Value = T>,
     {
-        // Precompute row slices once to minimize redundant calls and improve performance.
-        let rows = self.wrapping_row_slices(r, P::WIDTH);
+        #[cfg(not(feature = "width1_opt"))]
+        {
+            // Precompute row slices once to minimize redundant calls and improve performance.
+            let rows = self.wrapping_row_slices(r, P::WIDTH);
 
-        // Using precomputed rows avoids repeatedly calling `row_slice`, which is costly.
-        (0..self.width()).map(move |c| P::from_fn(|i| rows[i][c]))
+            // Using precomputed rows avoids repeatedly calling `row_slice`, which is costly.
+            (0..self.width()).map(move |c| P::from_fn(|i| rows[i][c]))
+        }
+        #[cfg(feature = "width1_opt")]
+        {
+            if P::WIDTH == 1 {
+                Either::Left(unsafe {
+                    self.row_unchecked(r % self.height())
+                        .into_iter()
+                        .map(P::broadcast)
+                })
+            } else {
+                // Precompute row slices once to minimize redundant calls and improve performance.
+                let rows = self.wrapping_row_slices(r, P::WIDTH);
+
+                // Using precomputed rows avoids repeatedly calling `row_slice`, which is costly.
+                Either::Right((0..self.width()).map(move |c| P::from_fn(|i| rows[i][c])))
+            }
+        }
     }
 
     /// Pack together a collection of rows and "next" rows from the matrix.
@@ -395,17 +463,40 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         T: Copy,
         P: PackedValue<Value = T>,
     {
-        // Whilst it would appear that this can be replaced by two calls to vertically_packed_row
-        // tests seem to indicate that combining them in the same function is slightly faster.
-        // It's probably allowing the compiler to make some optimizations on the fly.
+        #[cfg(not(feature = "width1_opt"))]
+        {
+            // Whilst it would appear that this can be replaced by two calls to vertically_packed_row
+            // tests seem to indicate that combining them in the same function is slightly faster.
+            // It's probably allowing the compiler to make some optimizations on the fly.
 
-        let rows = self.wrapping_row_slices(r, P::WIDTH);
-        let next_rows = self.wrapping_row_slices(r + step, P::WIDTH);
+            let rows = self.wrapping_row_slices(r, P::WIDTH);
+            let next_rows = self.wrapping_row_slices(r + step, P::WIDTH);
 
-        (0..self.width())
-            .map(|c| P::from_fn(|i| rows[i][c]))
-            .chain((0..self.width()).map(|c| P::from_fn(|i| next_rows[i][c])))
-            .collect_vec()
+            (0..self.width())
+                .map(|c| P::from_fn(|i| rows[i][c]))
+                .chain((0..self.width()).map(|c| P::from_fn(|i| next_rows[i][c])))
+                .collect_vec()
+        }
+        #[cfg(feature = "width1_opt")]
+        {
+            if P::WIDTH == 1 {
+                let mut out = Vec::with_capacity(self.width() * 2);
+                out.extend(self.vertically_packed_row::<P>(r));
+                out.extend(self.vertically_packed_row::<P>(r + step));
+                out
+            } else {
+                // Whilst it would appear that this can be replaced by two calls to vertically_packed_row
+                // tests seem to indicate that combining ƒthem in the same function is slightly faster.
+                // It's probably allowing the compiler to make some optimizations on the fly.
+                let rows = self.wrapping_row_slices(r, P::WIDTH);
+                let next_rows = self.wrapping_row_slices(r + step, P::WIDTH);
+
+                (0..self.width())
+                    .map(|c| P::from_fn(|i| rows[i][c]))
+                    .chain((0..self.width()).map(|c| P::from_fn(|i| next_rows[i][c])))
+                    .collect_vec()
+            }
+        }
     }
 
     /// Returns a view over a vertically strided submatrix.
