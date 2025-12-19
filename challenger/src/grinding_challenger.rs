@@ -114,7 +114,7 @@ where
 
         type Packed<F> = <F as Field>::Packing;
         let lanes = Packed::<F>::WIDTH;
-        let num_batches = (F::ORDER_U64 as usize + lanes - 1) / lanes;
+        let num_batches = (F::ORDER_U64 as usize).div_ceil(lanes);
 
         // The witness will be placed at this index in the sponge state during duplexing.
         let witness_idx = self.input_buffer.len();
