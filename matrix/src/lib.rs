@@ -6,7 +6,6 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
-use core::iter;
 use core::iter::chain;
 use core::ops::Deref;
 
@@ -293,50 +292,22 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         P: PackedValue<Value = T>,
         T: Clone + 'a,
     {
-        #[cfg(not(feature = "width1_opt"))]
-        {
-            assert!(r < self.height(), "Row index out of bounds.");
-            let num_packed = self.width() / P::WIDTH;
-            unsafe {
-                // Safety: We have already checked that `r < height()`.
-                let mut iter = self
-                    .row_subseq_unchecked(r, 0, num_packed * P::WIDTH)
-                    .into_iter();
+        assert!(r < self.height(), "Row index out of bounds.");
+        let num_packed = self.width() / P::WIDTH;
+        unsafe {
+            // Safety: We have already checked that `r < height()`.
+            let mut iter = self
+                .row_subseq_unchecked(r, 0, num_packed * P::WIDTH)
+                .into_iter();
 
-                // array::from_fn is guaranteed to always call in order.
-                let packed =
-                    (0..num_packed).map(move |_| P::from_fn(|_| iter.next().unwrap_unchecked()));
+            // array::from_fn is guaranteed to always call in order.
+            let packed =
+                (0..num_packed).map(move |_| P::from_fn(|_| iter.next().unwrap_unchecked()));
 
-                let sfx = self
-                    .row_subseq_unchecked(r, num_packed * P::WIDTH, self.width())
-                    .into_iter();
-                (packed, sfx)
-            }
-        }
-        #[cfg(feature = "width1_opt")]
-        {
-            assert!(r < self.height(), "Row index out of bounds.");
-            if P::WIDTH == 1 {
-                let row_iter = unsafe { self.row_unchecked(r).into_iter().map(P::broadcast) };
-                (Either::Left(row_iter), Either::Left(iter::empty()))
-            } else {
-                let num_packed = self.width() / P::WIDTH;
-                unsafe {
-                    // Safety: We have already checked that `r < height()`.
-                    let mut iter = self
-                        .row_subseq_unchecked(r, 0, num_packed * P::WIDTH)
-                        .into_iter();
-
-                    // array::from_fn is guaranteed to always call in order.
-                    let packed = (0..num_packed)
-                        .map(move |_| P::from_fn(|_| iter.next().unwrap_unchecked()));
-
-                    let sfx = self
-                        .row_subseq_unchecked(r, num_packed * P::WIDTH, self.width())
-                        .into_iter();
-                    (Either::Right(packed), Either::Right(sfx))
-                }
-            }
+            let sfx = self
+                .row_subseq_unchecked(r, num_packed * P::WIDTH, self.width())
+                .into_iter();
+            (packed, sfx)
         }
     }
 
@@ -354,27 +325,10 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         P: PackedValue<Value = T>,
         T: Clone + Default + 'a,
     {
-        #[cfg(not(feature = "width1_opt"))]
-        {
-            let mut row_iter = self.row(r).expect("Row index out of bounds.").into_iter();
-            let num_elems = self.width().div_ceil(P::WIDTH);
-            // array::from_fn is guaranteed to always call in order.
-            (0..num_elems).map(move |_| P::from_fn(|_| row_iter.next().unwrap_or_default()))
-        }
-        #[cfg(feature = "width1_opt")]
-        {
-            let mut row_iter = self.row(r).expect("Row index out of bounds.").into_iter();
-            if P::WIDTH == 1 {
-                Either::Left(row_iter.map(P::broadcast))
-            } else {
-                let num_elems = self.width().div_ceil(P::WIDTH);
-                // array::from_fn is guaranteed to always call in order.
-                Either::Right(
-                    (0..num_elems)
-                        .map(move |_| P::from_fn(|_| row_iter.next().unwrap_or_default())),
-                )
-            }
-        }
+        let mut row_iter = self.row(r).expect("Row index out of bounds.").into_iter();
+        let num_elems = self.width().div_ceil(P::WIDTH);
+        // array::from_fn is guaranteed to always call in order.
+        (0..num_elems).map(move |_| P::from_fn(|_| row_iter.next().unwrap_or_default()))
     }
 
     /// Get a parallel iterator over all packed rows of the matrix.
