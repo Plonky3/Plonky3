@@ -9,7 +9,6 @@ use core::ops::Deref;
 use p3_field::{
     ExtensionField, Field, PackedValue, par_scale_slice_in_place, scale_slice_in_place_single_core,
 };
-use p3_maybe_rayon::either::Either;
 use p3_maybe_rayon::prelude::*;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
@@ -529,17 +528,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         let h = self.height();
         let w = self.width;
         let values = self.values.borrow();
-
-        if P::WIDTH == 1 {
-            // WIDTH=1 optimization: directly slice into the contiguous buffer
-            // and map P::broadcast, avoiding intermediate Vec allocations.
-            let r0 = r % h;
-            let row = &values[r0 * w..(r0 + 1) * w];
-            Either::Left(row.iter().map(|&x| P::broadcast(x)))
-        } else {
-            // For WIDTH > 1, compute indices directly.
-            Either::Right((0..w).map(move |c| P::from_fn(|i| values[((r + i) % h) * w + c])))
-        }
+        (0..w).map(move |c| P::from_fn(|i| values[((r + i) % h) * w + c]))
     }
 
     #[inline]
@@ -552,30 +541,36 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         let w = self.width;
         let values = self.values.borrow();
 
+        // Safety: All indices are valid because:
+        // - (r + i) % h < h for any i, so row index is always valid
+        // - c < w, so column index is always valid
+        // - Therefore ((r + i) % h) * w + c < h * w = values.len()
+        debug_assert!(values.len() >= h * w);
+
+        let mut out = Vec::with_capacity(w * 2);
         if P::WIDTH == 1 {
             // WIDTH=1 optimization: directly slice into the contiguous buffer
-            // and map P::broadcast, avoiding intermediate Vec allocations.
             let r0 = r % h;
-            let r1 = (r + step) % h;
-
             let row0 = &values[r0 * w..(r0 + 1) * w];
-            let row1 = &values[r1 * w..(r1 + 1) * w];
+            out.extend(row0.iter().copied().map(P::broadcast));
 
-            row0.iter()
-                .chain(row1.iter())
-                .map(|&x| P::broadcast(x))
-                .collect()
+            let r1 = (r + step) % h;
+            let row1 = &values[r1 * w..(r1 + 1) * w];
+            out.extend(row1.iter().copied().map(P::broadcast));
         } else {
-            // For WIDTH > 1, compute indices directly.
-            let mut out = Vec::with_capacity(w * 2);
+            // WIDTH > 1: push loop is faster than extend.
             for c in 0..w {
-                out.push(P::from_fn(|i| values[((r + i) % h) * w + c]));
+                out.push(P::from_fn(|i| unsafe {
+                    *values.get_unchecked(((r + i) % h) * w + c)
+                }));
             }
             for c in 0..w {
-                out.push(P::from_fn(|i| values[((r + step + i) % h) * w + c]));
+                out.push(P::from_fn(|i| unsafe {
+                    *values.get_unchecked(((r + step + i) % h) * w + c)
+                }));
             }
-            out
         }
+        out
     }
 }
 
