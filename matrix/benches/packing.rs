@@ -11,23 +11,20 @@
 //! ```bash
 //! RUSTFLAGS="-Ctarget-cpu=native" cargo bench --bench packing -p p3-matrix
 //! ```
-//!
-//! ## Expected behavior
-//!
-//! The vertical packing methods (`vertically_packed_row`, `vertically_packed_row_pair`)
-//! include an optimization for WIDTH=1 fields (e.g., Goldilocks on ARM/WASM) that
-//! avoids intermediate allocations. This optimization is transparent and has no
-//! effect on WIDTH>1 fields (e.g., BabyBear with NEON).
 
 use std::hint::black_box;
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::measurement::WallTime;
+use criterion::{
+    BenchmarkGroup, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
+};
 use p3_baby_bear::BabyBear;
 use p3_field::{Field, PackedValue};
 use p3_goldilocks::Goldilocks;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use rand::SeedableRng;
+use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 
 /// Matrix height for all benchmarks (2^16 = 65536 rows)
@@ -44,29 +41,25 @@ const WIDTHS: &[usize] = &[128, 129, 1024, 1025];
 const STEP: usize = HEIGHT / 2;
 
 // ============================================================================
-// Vertical Packing Benchmarks
+// Generic Benchmark Implementations
 // ============================================================================
 
-/// Benchmark `vertically_packed_row` for Goldilocks field.
-///
-/// On ARM without AVX, Goldilocks::Packing::WIDTH = 1 (scalar).
-/// This is where the WIDTH=1 optimization should show significant gains.
-fn bench_vertically_packed_row_goldilocks(c: &mut Criterion) {
-    let mut group = c.benchmark_group("vertically_packed_row/goldilocks");
+fn bench_vertically_packed_row_impl<F>(c: &mut Criterion, field_name: &str)
+where
+    F: Field,
+    StandardUniform: Distribution<F>,
+{
+    let mut group = c.benchmark_group(format!("vertically_packed_row/{field_name}"));
     group.sample_size(50);
 
-    type F = Goldilocks;
-    type P = <F as Field>::Packing;
-    let packing_width = P::WIDTH;
+    let packing_width = <F as Field>::Packing::WIDTH;
 
     for &width in WIDTHS {
         let mut rng = SmallRng::seed_from_u64(42);
         let matrix = RowMajorMatrix::<F>::rand(&mut rng, HEIGHT, width);
 
-        // Total packed elements produced = (height / packing_width) * width
         let num_calls = HEIGHT / packing_width;
-        let elements_per_call = width;
-        let total_elements = num_calls * elements_per_call;
+        let total_elements = num_calls * width;
         group.throughput(Throughput::Elements(total_elements as u64));
 
         group.bench_with_input(
@@ -75,9 +68,8 @@ fn bench_vertically_packed_row_goldilocks(c: &mut Criterion) {
             |b, matrix| {
                 b.iter(|| {
                     for r in (0..HEIGHT).step_by(packing_width) {
-                        // Consume the iterator to force evaluation
-                        for packed in matrix.vertically_packed_row::<P>(r) {
-                            let _ = black_box(packed);
+                        for packed in matrix.vertically_packed_row::<<F as Field>::Packing>(r) {
+                            black_box(packed);
                         }
                     }
                 });
@@ -87,25 +79,22 @@ fn bench_vertically_packed_row_goldilocks(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark `vertically_packed_row` for BabyBear field.
-///
-/// On ARM with NEON, BabyBear::Packing::WIDTH = 4.
-/// The WIDTH=1 optimization should not affect this path.
-fn bench_vertically_packed_row_babybear(c: &mut Criterion) {
-    let mut group = c.benchmark_group("vertically_packed_row/babybear");
+fn bench_vertically_packed_row_pair_impl<F>(c: &mut Criterion, field_name: &str)
+where
+    F: Field,
+    StandardUniform: Distribution<F>,
+{
+    let mut group = c.benchmark_group(format!("vertically_packed_row_pair/{field_name}"));
     group.sample_size(50);
 
-    type F = BabyBear;
-    type P = <F as Field>::Packing;
-    let packing_width = P::WIDTH;
+    let packing_width = <F as Field>::Packing::WIDTH;
 
     for &width in WIDTHS {
         let mut rng = SmallRng::seed_from_u64(42);
         let matrix = RowMajorMatrix::<F>::rand(&mut rng, HEIGHT, width);
 
         let num_calls = HEIGHT / packing_width;
-        let elements_per_call = width;
-        let total_elements = num_calls * elements_per_call;
+        let total_elements = num_calls * width * 2;
         group.throughput(Throughput::Elements(total_elements as u64));
 
         group.bench_with_input(
@@ -114,9 +103,9 @@ fn bench_vertically_packed_row_babybear(c: &mut Criterion) {
             |b, matrix| {
                 b.iter(|| {
                     for r in (0..HEIGHT).step_by(packing_width) {
-                        for packed in matrix.vertically_packed_row::<P>(r) {
-                            let _ = black_box(packed);
-                        }
+                        black_box(
+                            matrix.vertically_packed_row_pair::<<F as Field>::Packing>(r, STEP),
+                        );
                     }
                 });
             },
@@ -125,131 +114,15 @@ fn bench_vertically_packed_row_babybear(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark `vertically_packed_row_pair` for Goldilocks field.
-///
-/// This function returns a `Vec<P>` containing two packed rows.
-/// The WIDTH=1 optimization should show significant gains here.
-fn bench_vertically_packed_row_pair_goldilocks(c: &mut Criterion) {
-    let mut group = c.benchmark_group("vertically_packed_row_pair/goldilocks");
+fn bench_horizontally_packed_row_impl<F>(c: &mut Criterion, field_name: &str)
+where
+    F: Field,
+    StandardUniform: Distribution<F>,
+{
+    let mut group = c.benchmark_group(format!("horizontally_packed_row/{field_name}"));
     group.sample_size(50);
 
-    type F = Goldilocks;
-    type P = <F as Field>::Packing;
-    let packing_width = P::WIDTH;
-
-    for &width in WIDTHS {
-        let mut rng = SmallRng::seed_from_u64(42);
-        let matrix = RowMajorMatrix::<F>::rand(&mut rng, HEIGHT, width);
-
-        // Returns 2*width packed elements per call
-        let num_calls = HEIGHT / packing_width;
-        let elements_per_call = width * 2;
-        let total_elements = num_calls * elements_per_call;
-        group.throughput(Throughput::Elements(total_elements as u64));
-
-        group.bench_with_input(
-            BenchmarkId::new(format!("w{packing_width}"), format!("{width}x{HEIGHT}")),
-            &matrix,
-            |b, matrix| {
-                b.iter(|| {
-                    for r in (0..HEIGHT).step_by(packing_width) {
-                        let packed = matrix.vertically_packed_row_pair::<P>(r, STEP);
-                        let _ = black_box(packed);
-                    }
-                });
-            },
-        );
-    }
-    group.finish();
-}
-
-/// Benchmark `vertically_packed_row_pair` for BabyBear field.
-fn bench_vertically_packed_row_pair_babybear(c: &mut Criterion) {
-    let mut group = c.benchmark_group("vertically_packed_row_pair/babybear");
-    group.sample_size(50);
-
-    type F = BabyBear;
-    type P = <F as Field>::Packing;
-    let packing_width = P::WIDTH;
-
-    for &width in WIDTHS {
-        let mut rng = SmallRng::seed_from_u64(42);
-        let matrix = RowMajorMatrix::<F>::rand(&mut rng, HEIGHT, width);
-
-        let num_calls = HEIGHT / packing_width;
-        let elements_per_call = width * 2;
-        let total_elements = num_calls * elements_per_call;
-        group.throughput(Throughput::Elements(total_elements as u64));
-
-        group.bench_with_input(
-            BenchmarkId::new(format!("w{packing_width}"), format!("{width}x{HEIGHT}")),
-            &matrix,
-            |b, matrix| {
-                b.iter(|| {
-                    for r in (0..HEIGHT).step_by(packing_width) {
-                        let packed = matrix.vertically_packed_row_pair::<P>(r, STEP);
-                        let _ = black_box(packed);
-                    }
-                });
-            },
-        );
-    }
-    group.finish();
-}
-
-// ============================================================================
-// Horizontal Packing Benchmarks
-// ============================================================================
-
-/// Benchmark `horizontally_packed_row` for Goldilocks field.
-///
-/// This function packs a single row horizontally, returning packed elements
-/// plus any remainder elements that don't fit a full pack.
-fn bench_horizontally_packed_row_goldilocks(c: &mut Criterion) {
-    let mut group = c.benchmark_group("horizontally_packed_row/goldilocks");
-    group.sample_size(50);
-
-    type F = Goldilocks;
-    type P = <F as Field>::Packing;
-    let packing_width = P::WIDTH;
-
-    for &width in WIDTHS {
-        let mut rng = SmallRng::seed_from_u64(42);
-        let matrix = RowMajorMatrix::<F>::rand(&mut rng, HEIGHT, width);
-
-        // Process all rows, each row produces width elements
-        let total_elements = HEIGHT * width;
-        group.throughput(Throughput::Elements(total_elements as u64));
-
-        group.bench_with_input(
-            BenchmarkId::new(format!("w{packing_width}"), format!("{width}x{HEIGHT}")),
-            &matrix,
-            |b, matrix| {
-                b.iter(|| {
-                    for r in 0..HEIGHT {
-                        let (packed, suffix) = matrix.horizontally_packed_row::<P>(r);
-                        for p in packed {
-                            let _ = black_box(p);
-                        }
-                        for s in suffix {
-                            let _ = black_box(s);
-                        }
-                    }
-                });
-            },
-        );
-    }
-    group.finish();
-}
-
-/// Benchmark `horizontally_packed_row` for BabyBear field.
-fn bench_horizontally_packed_row_babybear(c: &mut Criterion) {
-    let mut group = c.benchmark_group("horizontally_packed_row/babybear");
-    group.sample_size(50);
-
-    type F = BabyBear;
-    type P = <F as Field>::Packing;
-    let packing_width = P::WIDTH;
+    let packing_width = <F as Field>::Packing::WIDTH;
 
     for &width in WIDTHS {
         let mut rng = SmallRng::seed_from_u64(42);
@@ -264,12 +137,13 @@ fn bench_horizontally_packed_row_babybear(c: &mut Criterion) {
             |b, matrix| {
                 b.iter(|| {
                     for r in 0..HEIGHT {
-                        let (packed, suffix) = matrix.horizontally_packed_row::<P>(r);
+                        let (packed, suffix) =
+                            matrix.horizontally_packed_row::<<F as Field>::Packing>(r);
                         for p in packed {
-                            let _ = black_box(p);
+                            black_box(p);
                         }
                         for s in suffix {
-                            let _ = black_box(s);
+                            black_box(s);
                         }
                     }
                 });
@@ -279,52 +153,15 @@ fn bench_horizontally_packed_row_babybear(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark `padded_horizontally_packed_row` for Goldilocks field.
-///
-/// Similar to horizontally_packed_row but zero-pads the last element
-/// instead of returning a separate suffix iterator.
-fn bench_padded_horizontally_packed_row_goldilocks(c: &mut Criterion) {
-    let mut group = c.benchmark_group("padded_horizontally_packed_row/goldilocks");
+fn bench_padded_horizontally_packed_row_impl<F>(c: &mut Criterion, field_name: &str)
+where
+    F: Field,
+    StandardUniform: Distribution<F>,
+{
+    let mut group = c.benchmark_group(format!("padded_horizontally_packed_row/{field_name}"));
     group.sample_size(50);
 
-    type F = Goldilocks;
-    type P = <F as Field>::Packing;
-    let packing_width = P::WIDTH;
-
-    for &width in WIDTHS {
-        let mut rng = SmallRng::seed_from_u64(42);
-        let matrix = RowMajorMatrix::<F>::rand(&mut rng, HEIGHT, width);
-
-        // Produces ceil(width / packing_width) packed elements per row
-        let packed_per_row = width.div_ceil(packing_width);
-        let total_packed = HEIGHT * packed_per_row;
-        group.throughput(Throughput::Elements(total_packed as u64));
-
-        group.bench_with_input(
-            BenchmarkId::new(format!("w{packing_width}"), format!("{width}x{HEIGHT}")),
-            &matrix,
-            |b, matrix| {
-                b.iter(|| {
-                    for r in 0..HEIGHT {
-                        for packed in matrix.padded_horizontally_packed_row::<P>(r) {
-                            let _ = black_box(packed);
-                        }
-                    }
-                });
-            },
-        );
-    }
-    group.finish();
-}
-
-/// Benchmark `padded_horizontally_packed_row` for BabyBear field.
-fn bench_padded_horizontally_packed_row_babybear(c: &mut Criterion) {
-    let mut group = c.benchmark_group("padded_horizontally_packed_row/babybear");
-    group.sample_size(50);
-
-    type F = BabyBear;
-    type P = <F as Field>::Packing;
-    let packing_width = P::WIDTH;
+    let packing_width = <F as Field>::Packing::WIDTH;
 
     for &width in WIDTHS {
         let mut rng = SmallRng::seed_from_u64(42);
@@ -340,8 +177,10 @@ fn bench_padded_horizontally_packed_row_babybear(c: &mut Criterion) {
             |b, matrix| {
                 b.iter(|| {
                     for r in 0..HEIGHT {
-                        for packed in matrix.padded_horizontally_packed_row::<P>(r) {
-                            let _ = black_box(packed);
+                        for packed in
+                            matrix.padded_horizontally_packed_row::<<F as Field>::Packing>(r)
+                        {
+                            black_box(packed);
                         }
                     }
                 });
@@ -351,124 +190,93 @@ fn bench_padded_horizontally_packed_row_babybear(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_single_call_for_field<F>(group: &mut BenchmarkGroup<'_, WallTime>, field_name: &str)
+where
+    F: Field,
+    StandardUniform: Distribution<F>,
+{
+    let width = 16;
+    let height = 1024;
+    let packing_width = <F as Field>::Packing::WIDTH;
+
+    let mut rng = SmallRng::seed_from_u64(42);
+    let matrix = RowMajorMatrix::<F>::rand(&mut rng, height, width);
+
+    group.throughput(Throughput::Elements(width as u64));
+    group.bench_function(
+        BenchmarkId::new(
+            "vertically_packed_row",
+            format!("{field_name}_w{packing_width}"),
+        ),
+        |b| {
+            let mut r = 0usize;
+            b.iter(|| {
+                for packed in matrix.vertically_packed_row::<<F as Field>::Packing>(r) {
+                    black_box(packed);
+                }
+                r = (r + packing_width) % height;
+            });
+        },
+    );
+
+    group.throughput(Throughput::Elements((width * 2) as u64));
+    group.bench_function(
+        BenchmarkId::new(
+            "vertically_packed_row_pair",
+            format!("{field_name}_w{packing_width}"),
+        ),
+        |b| {
+            let mut r = 0usize;
+            b.iter(|| {
+                black_box(
+                    matrix.vertically_packed_row_pair::<<F as Field>::Packing>(r, height / 2),
+                );
+                r = (r + packing_width) % height;
+            });
+        },
+    );
+}
+
 // ============================================================================
-// Single-Call Overhead Benchmarks
+// Entry Points
 // ============================================================================
 
-/// Benchmark single-call overhead for `vertically_packed_row`.
-///
-/// Uses a small width to minimize loop time and expose setup overhead.
-/// This is where allocation elimination should be most visible.
+fn bench_vertically_packed_row(c: &mut Criterion) {
+    bench_vertically_packed_row_impl::<Goldilocks>(c, "goldilocks");
+    bench_vertically_packed_row_impl::<BabyBear>(c, "babybear");
+}
+
+fn bench_vertically_packed_row_pair(c: &mut Criterion) {
+    bench_vertically_packed_row_pair_impl::<Goldilocks>(c, "goldilocks");
+    bench_vertically_packed_row_pair_impl::<BabyBear>(c, "babybear");
+}
+
+fn bench_horizontally_packed_row(c: &mut Criterion) {
+    bench_horizontally_packed_row_impl::<Goldilocks>(c, "goldilocks");
+    bench_horizontally_packed_row_impl::<BabyBear>(c, "babybear");
+}
+
+fn bench_padded_horizontally_packed_row(c: &mut Criterion) {
+    bench_padded_horizontally_packed_row_impl::<Goldilocks>(c, "goldilocks");
+    bench_padded_horizontally_packed_row_impl::<BabyBear>(c, "babybear");
+}
+
 fn bench_single_call_overhead(c: &mut Criterion) {
     let mut group = c.benchmark_group("single_call_overhead");
     group.sample_size(100);
 
-    // Small width to minimize loop time, exposing setup overhead
-    let width = 16;
-    let height = 1024;
-
-    // Goldilocks
-    {
-        type F = Goldilocks;
-        type P = <F as Field>::Packing;
-        let packing_width = P::WIDTH;
-
-        let mut rng = SmallRng::seed_from_u64(42);
-        let matrix = RowMajorMatrix::<F>::rand(&mut rng, height, width);
-
-        group.throughput(Throughput::Elements(width as u64));
-        group.bench_function(
-            BenchmarkId::new(
-                "vertically_packed_row",
-                format!("goldilocks_w{packing_width}"),
-            ),
-            |b| {
-                let mut r = 0usize;
-                b.iter(|| {
-                    for packed in matrix.vertically_packed_row::<P>(r) {
-                        let _ = black_box(packed);
-                    }
-                    r = (r + packing_width) % height;
-                });
-            },
-        );
-
-        group.throughput(Throughput::Elements((width * 2) as u64));
-        group.bench_function(
-            BenchmarkId::new(
-                "vertically_packed_row_pair",
-                format!("goldilocks_w{packing_width}"),
-            ),
-            |b| {
-                let mut r = 0usize;
-                b.iter(|| {
-                    let packed = matrix.vertically_packed_row_pair::<P>(r, height / 2);
-                    let _ = black_box(packed);
-                    r = (r + packing_width) % height;
-                });
-            },
-        );
-    }
-
-    // BabyBear
-    {
-        type F = BabyBear;
-        type P = <F as Field>::Packing;
-        let packing_width = P::WIDTH;
-
-        let mut rng = SmallRng::seed_from_u64(42);
-        let matrix = RowMajorMatrix::<F>::rand(&mut rng, height, width);
-
-        group.throughput(Throughput::Elements(width as u64));
-        group.bench_function(
-            BenchmarkId::new(
-                "vertically_packed_row",
-                format!("babybear_w{packing_width}"),
-            ),
-            |b| {
-                let mut r = 0usize;
-                b.iter(|| {
-                    for packed in matrix.vertically_packed_row::<P>(r) {
-                        let _ = black_box(packed);
-                    }
-                    r = (r + packing_width) % height;
-                });
-            },
-        );
-
-        group.throughput(Throughput::Elements((width * 2) as u64));
-        group.bench_function(
-            BenchmarkId::new(
-                "vertically_packed_row_pair",
-                format!("babybear_w{packing_width}"),
-            ),
-            |b| {
-                let mut r = 0usize;
-                b.iter(|| {
-                    let packed = matrix.vertically_packed_row_pair::<P>(r, height / 2);
-                    let _ = black_box(packed);
-                    r = (r + packing_width) % height;
-                });
-            },
-        );
-    }
+    bench_single_call_for_field::<Goldilocks>(&mut group, "goldilocks");
+    bench_single_call_for_field::<BabyBear>(&mut group, "babybear");
 
     group.finish();
 }
 
 criterion_group!(
     benches,
-    // Vertical packing (main optimization target)
-    bench_vertically_packed_row_goldilocks,
-    bench_vertically_packed_row_babybear,
-    bench_vertically_packed_row_pair_goldilocks,
-    bench_vertically_packed_row_pair_babybear,
-    // Horizontal packing (should be unchanged)
-    bench_horizontally_packed_row_goldilocks,
-    bench_horizontally_packed_row_babybear,
-    bench_padded_horizontally_packed_row_goldilocks,
-    bench_padded_horizontally_packed_row_babybear,
-    // Single-call overhead (exposes setup cost)
+    bench_vertically_packed_row,
+    bench_vertically_packed_row_pair,
+    bench_horizontally_packed_row,
+    bench_padded_horizontally_packed_row,
     bench_single_call_overhead,
 );
 
