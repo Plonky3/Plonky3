@@ -161,7 +161,7 @@ mod tests {
 
         // Ensure inputs are different
         if input1 == input2 {
-            input2[0] = input2[0] + F::ONE;
+            input2[0] += F::ONE;
         }
 
         let mds = CosetMds::default();
