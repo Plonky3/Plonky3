@@ -46,10 +46,8 @@
 
 use core::ops::{Add, AddAssign, Neg, ShrAssign, Sub, SubAssign};
 
-/// This trait collects the operations needed by `Convolve` below.
-///
-/// TODO: Think of a better name for this.
-pub trait RngElt:
+/// Elements of a ring supporting the arithmetic operations needed by `Convolve`.
+pub trait RingElement:
     Add<Output = Self>
     + AddAssign
     + Copy
@@ -61,8 +59,8 @@ pub trait RngElt:
 {
 }
 
-impl RngElt for i64 {}
-impl RngElt for i128 {}
+impl RingElement for i64 {}
+impl RingElement for i128 {}
 
 /// Template function to perform convolution of vectors.
 ///
@@ -90,7 +88,7 @@ impl RngElt for i128 {}
 /// with a shift, which on most architectures has better throughput
 /// and latency, and is issued on different ports (1*p06) to
 /// multiplication (1*p1).
-pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
+pub trait Convolve<F, T: RingElement, U: RingElement, V: RingElement> {
     /// Given an input element, retrieve the corresponding internal
     /// element that will be used in calculations.
     fn read(input: F) -> T;
@@ -240,9 +238,9 @@ fn conv_n_recursive<const N: usize, const HALF_N: usize, T, U, V, C, NC>(
     inner_conv: C,
     inner_negacyclic_conv: NC,
 ) where
-    T: RngElt,
-    U: RngElt,
-    V: RngElt,
+    T: RingElement,
+    U: RingElement,
+    V: RingElement,
     C: Fn([T; HALF_N], [U; HALF_N], &mut [V]),
     NC: Fn([T; HALF_N], [U; HALF_N], &mut [V]),
 {
@@ -291,9 +289,9 @@ fn negacyclic_conv_n_recursive<const N: usize, const HALF_N: usize, T, U, V, NC>
     output: &mut [V],
     inner_negacyclic_conv: NC,
 ) where
-    T: RngElt,
-    U: RngElt,
-    V: RngElt,
+    T: RingElement,
+    U: RingElement,
+    V: RingElement,
     NC: Fn([T; HALF_N], [U; HALF_N], &mut [V]),
 {
     debug_assert_eq!(2 * HALF_N, N);
