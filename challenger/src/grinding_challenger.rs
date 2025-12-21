@@ -105,52 +105,124 @@ where
 
     #[instrument(name = "grind for proof-of-work witness", skip_all)]
     fn grind(&mut self, bits: usize) -> Self::Witness {
+        // Ensure `bits` is small enough to be used in a shift.
         assert!(bits < (usize::BITS as usize), "bit count must be valid");
+
+        // Ensure the PoW target 2^bits is smaller than the field order.
+        // Otherwise, the probability analysis for grinding would break.
         assert!((1 << bits) < F::ORDER_U64);
 
+        // Trivial case: 0 bits mean no PoW is required and any witness is valid.
         if bits == 0 {
             return F::ZERO;
         }
 
-        type Packed<F> = <F as Field>::Packing;
-        let lanes = Packed::<F>::WIDTH;
+        // SIMD width: number of field elements processed in parallel.
+        // Each SIMD lane corresponds to one candidate witness.
+        let lanes = F::Packing::WIDTH;
+
+        // Total number of batches needed to cover all field elements.
+        // Each batch tests `lanes` witnesses in parallel.
         let num_batches = (F::ORDER_U64 as usize).div_ceil(lanes);
 
-        // The witness will be placed at this index in the sponge state during duplexing.
+        // Cache the field order.
+        let order = F::ORDER_U64;
+
+        // Bitmask used to check the PoW condition. eg. bits = 3 => mask = 0b111
+        // We accept a witness if (sample & mask) == 0. This verifies 'bits' trailing zeros.
+        let mask = (1usize << bits) - 1;
+
+        // In a duplex sponge, new inputs are absorbed sequentially at indices [0, 1, 2, ...].
+        // The grinding witness is therefore absorbed at the next available position.
         let witness_idx = self.input_buffer.len();
 
+        // Build the sponge state as packed field elements (SIMD vectors).
+        //
+        // The current transcript is split across:
+        // - `input_buffer`: recently observed transcript elements that have not yet been permuted
+        // - `sponge_state`: the internal sponge state after previous permutations
+        //
+        // Logically, the next permutation would act on:
+        //   [input_buffer || sponge_state]
+        //
+        // This is invariant across batches, so we compute it once.
+        let base_packed_state: [_; WIDTH] = core::array::from_fn(|i| {
+            if i < self.input_buffer.len() {
+                // Broadcast buffered transcript elements (input_buffer) to all SIMD lanes.
+                F::Packing::from(self.input_buffer[i])
+            } else {
+                // Broadcast existing sponge state (sponge_state) to all SIMD lanes.
+                F::Packing::from(self.sponge_state[i])
+            }
+        });
+
+        // Grinding is implemented via parallel brute-force search over candidate witnesses.
+        //
+        // For efficiency, the search is vectorized using SIMD:
+        // It is semantically equivalent to serially trying witnesses until the PoW condition is met.
+        //
+        // - Each SIMD lane corresponds to a distinct candidate witness
+        // - All lanes share the same transcript prefix
+        // - A single permutation evaluates multiple candidates in parallel
         let witness = (0..num_batches)
             .into_par_iter()
             .find_map_any(|batch| {
+                // Compute the starting candidate for this batch.
+                //
+                // Each batch processes `F::Packing::WIDTH` candidates:
+                //   - Batch 0 -> candidates [0, 1, ..., F::Packing::WIDTH - 1]
+                //   - Batch 1 -> candidates [F::Packing::WIDTH, ..., 2 * F::Packing::WIDTH - 1]
+                //   - Batch k -> candidates [k * F::Packing::WIDTH, ..., (k+1) * F::Packing::WIDTH - 1]
                 let base = (batch * lanes) as u64;
 
-                let mut packed_state: [Packed<F>; WIDTH] =
-                    self.sponge_state.map(|x| Packed::<F>::from(x));
-                for (i, &val) in self.input_buffer.iter().enumerate() {
-                    packed_state[i] = Packed::<F>::from(val);
-                }
-                let packed_witnesses = Packed::<F>::from_fn(|lane| {
+                // Start with a copy of the precomputed base state.
+                let mut packed_state = base_packed_state;
+
+                // Generate SIMD-packed candidate witnesses.
+                // Each lane receives a distinct field element.
+                //   [base + 0, base + 1, ..., base + F::Packing::WIDTH - 1]
+                let packed_witnesses = F::Packing::from_fn(|lane| {
                     let candidate = base + lane as u64;
-                    if candidate < F::ORDER_U64 {
+                    if candidate < order {
+                        // SAFETY: candidate < field order, so this is a valid canonical field element.
                         unsafe { F::from_canonical_unchecked(candidate) }
                     } else {
+                        // Values outside the field order can never satisfy PoW, so we replace them with zero.
                         F::ZERO
                     }
                 });
-                packed_state[witness_idx] = packed_witnesses;
-                self.permutation.permute_mut(&mut packed_state);
-                let samples = packed_state[RATE - 1].as_slice();
-                for (sample, witness) in samples.iter().zip(packed_witnesses.as_slice()) {
-                    let rand_usize = sample.as_canonical_u64() as usize;
-                    if (rand_usize & ((1 << bits) - 1)) == 0 {
-                        return Some(*witness);
-                    }
-                }
-                None
-            })
-            .expect("failed to find witness");
 
+                // Insert the candidate witnesses at the next absorption position.
+                //
+                // This simulates absorbing `transcript || witness` before the Fiat–Shamir challenge is derived.
+                packed_state[witness_idx] = packed_witnesses;
+
+                // Apply the cryptographic permutation (SIMD version)
+                //
+                // This permutes all `lanes` candidates simultaneously.
+                self.permutation.permute_mut(&mut packed_state);
+
+                // Check each lane for the PoW condition
+                //
+                // - In a duplex sponge, output is read from position [RATE-1] (last rate element).
+                // - We check if the low `bits` of each sample are all zeros.
+                //
+                // We scan SIMD lanes to find the first candidate whose output satisfies the PoW condition.
+                packed_state[RATE - 1]
+                    .as_slice()
+                    .iter()
+                    .zip(packed_witnesses.as_slice())
+                    .find(|(sample, _)| {
+                        // Accept if the low `bits` bits are all zero.
+                        (sample.as_canonical_u64() as usize & mask) == 0
+                    })
+                    .map(|(_, &witness)| witness)
+            })
+            .expect("failed to find proof-of-work witness");
+
+        // Double-check the witness using the standard verifier logic and update the challenger state.
         assert!(self.check_witness(bits, witness));
+
         witness
     }
 }
