@@ -35,11 +35,36 @@ pub struct BinomialExtensionField<F, const D: usize, A = F> {
 }
 
 impl<F, A, const D: usize> BinomialExtensionField<F, D, A> {
-    pub(crate) const fn new(value: [A; D]) -> Self {
+    /// Create an extension field element from an array of base elements.
+    ///
+    /// Any array is accepted. No reduction is required since
+    /// base elements are already valid field elements.
+    #[inline]
+    pub const fn new(value: [A; D]) -> Self {
         Self {
             value,
             _phantom: PhantomData,
         }
+    }
+}
+
+impl<F: Copy, const D: usize> BinomialExtensionField<F, D, F> {
+    /// Convert a `[[F; D]; N]` array to an array of extension field elements.
+    ///
+    /// Const version of `input.map(BinomialExtensionField::new)`.
+    ///
+    /// # Panics
+    /// Panics if `N == 0`.
+    #[inline]
+    pub const fn new_array<const N: usize>(input: [[F; D]; N]) -> [Self; N] {
+        const { assert!(N > 0) };
+        let mut output = [Self::new(input[0]); N];
+        let mut i = 1;
+        while i < N {
+            output[i] = Self::new(input[i]);
+            i += 1;
+        }
+        output
     }
 }
 
