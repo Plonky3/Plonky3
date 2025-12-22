@@ -491,7 +491,7 @@ pub(crate) const fn gcd_inversion(input: [u64; 4]) -> [u64; 4] {
     const ROUND_SIZE: usize = 31; // If you want to change round size, you will also need to modify the constant in get_approximation.
     const FINAL_ROUND_SIZE: usize = 41;
     const NUM_ROUNDS: usize = 15;
-    assert!(NUM_ROUNDS * ROUND_SIZE + FINAL_ROUND_SIZE == 506);
+    const { assert!(NUM_ROUNDS * ROUND_SIZE + FINAL_ROUND_SIZE == 506) };
 
     // use manual `while` loop to enable `const`
     let mut i = 0;
