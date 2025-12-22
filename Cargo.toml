@@ -62,7 +62,7 @@ transmute_undefined_repr = "allow"
 cognitive_complexity = "allow"
 
 [workspace.dependencies]
-bincode = { version = "2.0.0", default-features = false }
+bincode = { version = "3.0.0", default-features = false }
 blake3 = { version = "1.5", default-features = false }
 clap = { version = "4.5.23", features = ["derive"] }
 clap_derive = "4.5.18"
