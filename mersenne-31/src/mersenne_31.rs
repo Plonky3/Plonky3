@@ -37,20 +37,27 @@ pub struct Mersenne31 {
 }
 
 impl Mersenne31 {
-    /// Convert a u32 element into a Mersenne31 element.
+    /// Create a new field element from any `u32`.
+    ///
+    /// Any `u32` value is accepted and automatically reduced modulo P.
+    #[inline]
+    pub const fn new(value: u32) -> Self {
+        Self { value: value % P }
+    }
+
+    /// Create a field element from a value assumed to be < 2^31.
     ///
     /// # Safety
     /// The element must lie in the range: `[0, 2^31 - 1]`.
     #[inline]
-    pub(crate) const fn new(value: u32) -> Self {
+    pub(crate) const fn new_reduced(value: u32) -> Self {
         debug_assert!((value >> 31) == 0);
         Self { value }
     }
 
     /// Convert a u32 element into a Mersenne31 element.
     ///
-    /// # Panics
-    /// This will panic if the element does not lie in the range: `[0, 2^31 - 1]`.
+    /// Returns `None` if the element does not lie in the range: `[0, 2^31 - 1]`.
     #[inline]
     pub const fn new_checked(value: u32) -> Option<Self> {
         if (value >> 31) == 0 {
@@ -60,11 +67,9 @@ impl Mersenne31 {
         }
     }
 
-    /// Convert a constant `u32` array into a constant array of field elements.
-    /// This allows inputs to be `> 2^31`, and just reduces them `mod P`.
+    /// Convert a `[u32; N]` array to an array of field elements.
     ///
-    /// This means that this will be slower than `array.map(Mersenne31::new_checked)` but
-    /// has the advantage of being able to be used in `const` environments.
+    /// Const version of `input.map(Mersenne31::new)`.
     #[inline]
     pub const fn new_array<const N: usize>(input: [u32; N]) -> [Self; N] {
         let mut output = [Self::ZERO; N];
@@ -164,7 +169,7 @@ impl Distribution<Mersenne31> for StandardUniform {
             let next_u31 = rng.next_u32() >> 1;
             let is_canonical = next_u31 != Mersenne31::ORDER_U32;
             if is_canonical {
-                return Mersenne31::new(next_u31);
+                return Mersenne31::new_reduced(next_u31);
             }
         }
     }
@@ -182,7 +187,7 @@ impl<'a> Deserialize<'a> for Mersenne31 {
         let val = u32::deserialize(d)?;
         // Ensure that `val` satisfies our invariant. i.e. Not necessarily canonical, but must fit in 31 bits.
         if val <= P {
-            Ok(Self::new(val))
+            Ok(Self::new_reduced(val))
         } else {
             Err(D::Error::custom("Value is out of range"))
         }
@@ -210,12 +215,12 @@ impl PrimeCharacteristicRing for Mersenne31 {
 
     #[inline]
     fn from_bool(b: bool) -> Self {
-        Self::new(b as u32)
+        Self::new_reduced(b as u32)
     }
 
     #[inline]
     fn halve(&self) -> Self {
-        Self::new(halve_u32::<P>(self.value))
+        Self::new_reduced(halve_u32::<P>(self.value))
     }
 
     #[inline]
@@ -225,7 +230,7 @@ impl PrimeCharacteristicRing for Mersenne31 {
         let left = (self.value << exp) & ((1 << 31) - 1);
         let right = self.value >> (31 - exp);
         let rotated = left | right;
-        Self::new(rotated)
+        Self::new_reduced(rotated)
     }
 
     #[inline]
@@ -235,7 +240,7 @@ impl PrimeCharacteristicRing for Mersenne31 {
         let left = self.value >> exp;
         let right = (self.value << (31 - exp)) & ((1 << 31) - 1);
         let rotated = left | right;
-        Self::new(rotated)
+        Self::new_reduced(rotated)
     }
 
     #[inline]
@@ -359,7 +364,7 @@ impl QuotientMap<u32> for Mersenne31 {
         // To reduce `n` to 31 bits, we clear its MSB, then add it back in its reduced form.
         let msb = int & (1 << 31);
         let msb_reduced = msb >> 31;
-        Self::new(int ^ msb) + Self::new(msb_reduced)
+        Self::new_reduced(int ^ msb) + Self::new_reduced(msb_reduced)
     }
 
     /// Convert a given `u32` integer into an element of the `Mersenne31` field.
@@ -367,7 +372,7 @@ impl QuotientMap<u32> for Mersenne31 {
     /// Returns none if the input does not lie in the range `[0, 2^31 - 1]`.
     #[inline]
     fn from_canonical_checked(int: u32) -> Option<Self> {
-        (int < Self::ORDER_U32).then(|| Self::new(int))
+        (int < Self::ORDER_U32).then(|| Self::new_reduced(int))
     }
 
     /// Convert a given `u32` integer into an element of the `Mersenne31` field.
@@ -377,7 +382,7 @@ impl QuotientMap<u32> for Mersenne31 {
     #[inline(always)]
     unsafe fn from_canonical_unchecked(int: u32) -> Self {
         debug_assert!(int < Self::ORDER_U32);
-        Self::new(int)
+        Self::new_reduced(int)
     }
 }
 
@@ -386,9 +391,9 @@ impl QuotientMap<i32> for Mersenne31 {
     #[inline]
     fn from_int(int: i32) -> Self {
         if int >= 0 {
-            Self::new(int as u32)
+            Self::new_reduced(int as u32)
         } else if int > (-1 << 31) {
-            Self::new(Self::ORDER_U32.wrapping_add_signed(int))
+            Self::new_reduced(Self::ORDER_U32.wrapping_add_signed(int))
         } else {
             // The only other option is int = -(2^31) = -1 mod p.
             Self::NEG_ONE
@@ -403,8 +408,10 @@ impl QuotientMap<i32> for Mersenne31 {
         const TWO_EXP_30: i32 = 1 << 30;
         const NEG_TWO_EXP_30_PLUS_1: i32 = (-1 << 30) + 1;
         match int {
-            0..TWO_EXP_30 => Some(Self::new(int as u32)),
-            NEG_TWO_EXP_30_PLUS_1..0 => Some(Self::new(Self::ORDER_U32.wrapping_add_signed(int))),
+            0..TWO_EXP_30 => Some(Self::new_reduced(int as u32)),
+            NEG_TWO_EXP_30_PLUS_1..0 => {
+                Some(Self::new_reduced(Self::ORDER_U32.wrapping_add_signed(int)))
+            }
             _ => None,
         }
     }
@@ -416,9 +423,9 @@ impl QuotientMap<i32> for Mersenne31 {
     #[inline(always)]
     unsafe fn from_canonical_unchecked(int: i32) -> Self {
         if int >= 0 {
-            Self::new(int as u32)
+            Self::new_reduced(int as u32)
         } else {
-            Self::new(Self::ORDER_U32.wrapping_add_signed(int))
+            Self::new_reduced(Self::ORDER_U32.wrapping_add_signed(int))
         }
     }
 }
@@ -470,7 +477,7 @@ impl Add for Mersenne31 {
 
         // If self + rhs did not overflow, return it.
         // If self + rhs overflowed, sum_corr = self + rhs - (2**31 - 1).
-        Self::new(if over { sum_corr } else { sum_u32 })
+        Self::new_reduced(if over { sum_corr } else { sum_u32 })
     }
 }
 
@@ -485,7 +492,7 @@ impl Sub for Mersenne31 {
         // Otherwise we have added 2**32 = 2**31 + 1 mod 2**31 - 1.
         // Hence we need to remove the most significant bit and subtract 1.
         sub -= over as u32;
-        Self::new(sub & Self::ORDER_U32)
+        Self::new_reduced(sub & Self::ORDER_U32)
     }
 }
 
@@ -495,7 +502,7 @@ impl Neg for Mersenne31 {
     #[inline]
     fn neg(self) -> Self::Output {
         // Can't underflow, since self.value is 31-bits and thus can't exceed ORDER.
-        Self::new(Self::ORDER_U32 - self.value)
+        Self::new_reduced(Self::ORDER_U32 - self.value)
     }
 }
 
@@ -534,7 +541,7 @@ pub(crate) fn from_u62(input: u64) -> Mersenne31 {
     debug_assert!(input < (1 << 62));
     let input_lo = (input & ((1 << 31) - 1)) as u32;
     let input_high = (input >> 31) as u32;
-    Mersenne31::new(input_lo) + Mersenne31::new(input_high)
+    Mersenne31::new_reduced(input_lo) + Mersenne31::new_reduced(input_high)
 }
 
 impl UniformSamplingField for Mersenne31 {

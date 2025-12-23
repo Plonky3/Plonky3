@@ -38,15 +38,20 @@ pub struct Goldilocks {
 }
 
 impl Goldilocks {
-    pub(crate) const fn new(value: u64) -> Self {
+    /// Create a new field element from any `u64`.
+    ///
+    /// Any `u64` value is accepted. No reduction is performed since
+    /// Goldilocks uses a non-canonical internal representation.
+    #[inline]
+    pub const fn new(value: u64) -> Self {
         Self { value }
     }
 
-    /// Convert a constant u64 array into a constant Goldilocks array.
+    /// Convert a `[u64; N]` array to an array of field elements.
     ///
-    /// This is a const version of `.map(Goldilocks::new)`.
+    /// Const version of `input.map(Goldilocks::new)`.
     #[inline]
-    pub(crate) const fn new_array<const N: usize>(input: [u64; N]) -> [Self; N] {
+    pub const fn new_array<const N: usize>(input: [u64; N]) -> [Self; N] {
         let mut output = [Self::ZERO; N];
         let mut i = 0;
         while i < N {

@@ -61,6 +61,28 @@ pub struct Bn254 {
 }
 
 impl Bn254 {
+    /// Create a new field element from any `[u64; 4]` in little-endian limb order.
+    ///
+    /// Any value is accepted and automatically reduced modulo P.
+    #[inline]
+    pub const fn new(value: [u64; 4]) -> Self {
+        Self::new_monty(monty_mul(BN254_MONTY_R_SQ, value))
+    }
+
+    /// Convert a `[[u64; 4]; N]` array to an array of field elements.
+    ///
+    /// Const version of `input.map(Bn254::new)`.
+    #[inline]
+    pub const fn new_array<const N: usize>(input: [[u64; 4]; N]) -> [Self; N] {
+        let mut output = [Self::ZERO; N];
+        let mut i = 0;
+        while i < N {
+            output[i] = Self::new(input[i]);
+            i += 1;
+        }
+        output
+    }
+
     /// Creates a new BN254 field element from an array of 4 u64's.
     ///
     /// The array is assumed to correspond to a 254-bit integer less than P and is interpreted as

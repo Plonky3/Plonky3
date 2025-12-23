@@ -25,16 +25,21 @@ pub(crate) fn shake256_hash(seed_bytes: &[u8], num_bytes: usize) -> Vec<u8> {
 /// series. As x increases, increase the precision P until the
 /// accuracy is sufficient.
 #[must_use]
-fn pow2_no_std(x: f32, tol: f32) -> f32 {
+const fn pow2_no_std(x: f32, tol: f32) -> f32 {
     let y = x * core::f32::consts::LN_2;
     let mut t = 1.0; // ith Taylor term = (x ln(2))^i/i!
     let mut two_pow_x = t;
-    for i in 1.. {
+
+    // use manual `while` loop to enable `const`
+    let mut i = 1;
+    loop {
         t *= y / (i as f32);
         if t < tol {
             break;
         }
         two_pow_x += t;
+
+        i += 1;
     }
     two_pow_x
 }
@@ -53,7 +58,7 @@ fn pow2_no_std(x: f32, tol: f32) -> f32 {
 /// to multiple iterations (with a suitable analysis of the precision
 /// passed to pow2_no_std) before being used more widely.
 #[must_use]
-fn log2_no_std(x: u64) -> f32 {
+const fn log2_no_std(x: u64) -> f32 {
     const LOG2_E: f32 = core::f32::consts::LOG2_E;
     const POW2_TOL: f32 = 0.0001;
     // Initial estimate x0 = floor(log2(x))
@@ -78,7 +83,7 @@ fn log2_no_std(x: u64) -> f32 {
 ///               + (log2(n) - log2(k) - log2(n-k) - log2(2π))/2
 ///
 /// coming from Stirling's approximation for n!.
-pub(crate) fn log2_binom(n: u64, k: u64) -> f32 {
+pub(crate) const fn log2_binom(n: u64, k: u64) -> f32 {
     const LOG2_2PI: f32 = 2.6514961;
     let log2_n = log2_no_std(n);
     let log2_k = log2_no_std(k);
