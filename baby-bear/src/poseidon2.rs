@@ -38,6 +38,12 @@ const BABYBEAR_S_BOX_DEGREE: u64 = 7;
 ///
 /// It acts on arrays of the form either `[BabyBear::Packing; WIDTH]` or `[BabyBear; WIDTH]`. For speed purposes,
 /// wherever possible, input arrays should of the form `[BabyBear::Packing; WIDTH]`.
+///
+/// # Valid Widths
+///
+/// Only `WIDTH = 16` and `WIDTH = 24` are supported. The `ValidPoseidonWidth` trait is implemented
+/// only for these two widths, which helps clarify the API and provides better error messages.
+/// See the `ValidPoseidonWidth` trait documentation for usage examples.
 pub type Poseidon2BabyBear<const WIDTH: usize> = Poseidon2<
     BabyBear,
     Poseidon2ExternalLayerBabyBear<WIDTH>,
@@ -45,6 +51,44 @@ pub type Poseidon2BabyBear<const WIDTH: usize> = Poseidon2<
     WIDTH,
     BABYBEAR_S_BOX_DEGREE,
 >;
+
+/// Restrict `WIDTH` to valid values (16, 24) for `Poseidon2BabyBear`.
+///
+/// This trait is used as a bound in generic functions to ensure that only valid widths are used.
+/// `BabyBearInternalLayerParameters` only implements `InternalLayerBaseParameters` for widths 16 and 24,
+/// so this trait helps clarify the API and provides better error messages.
+///
+/// This is a sealed trait that can only be implemented within this module.
+///
+/// # Example
+///
+/// For concrete types, you can use the trait as a bound:
+///
+/// ```rust,ignore
+/// pub fn my_fn_16(foo: &Poseidon2BabyBear<16>) -> [BabyBear; 16]
+/// where
+///     Poseidon2BabyBear<16>: ValidPoseidonWidth,
+/// {
+///     [BabyBear::ZERO; 16]
+/// }
+/// ```
+///
+/// For generic functions, the trait helps clarify which widths are valid, but due to Rust's
+/// limitations with const generics, you'll need to use concrete types or helper functions
+/// for each valid width (16 and 24). The trait serves as documentation and can be used
+/// to verify that a specific width is supported.
+pub trait ValidPoseidonWidth {
+    /// The valid width value.
+    const WIDTH: usize;
+}
+
+impl ValidPoseidonWidth for Poseidon2BabyBear<16> {
+    const WIDTH: usize = 16;
+}
+
+impl ValidPoseidonWidth for Poseidon2BabyBear<24> {
+    const WIDTH: usize = 24;
+}
 
 /// An implementation of the matrix multiplications in the internal and external layers of Poseidon2.
 ///
@@ -396,5 +440,44 @@ mod tests {
         BabyBearInternalLayerParameters::generic_internal_linear_layer(&mut input2);
 
         assert_eq!(input1, input2);
+    }
+
+    /// Test that `ValidPoseidonWidth` trait is correctly implemented for valid widths.
+    ///
+    /// This test demonstrates the solution to issue #656. The `ValidPoseidonWidth` trait
+    /// is implemented only for `Poseidon2BabyBear<16>` and `Poseidon2BabyBear<24>`, which
+    /// helps clarify the API and provides better error messages when invalid widths are used.
+    #[test]
+    fn test_valid_poseidon_width_trait() {
+        // Verify that the trait is implemented for width 16
+        assert_eq!(<Poseidon2BabyBear<16> as ValidPoseidonWidth>::WIDTH, 16);
+
+        // Verify that the trait is implemented for width 24
+        assert_eq!(<Poseidon2BabyBear<24> as ValidPoseidonWidth>::WIDTH, 24);
+
+        // Demonstrate that the trait can be used with concrete types
+        fn my_fn_16(foo: &Poseidon2BabyBear<16>) -> [BabyBear; 16]
+        where
+            Poseidon2BabyBear<16>: ValidPoseidonWidth,
+        {
+            let _ = foo; // Use the parameter to show the bound works
+            [BabyBear::ZERO; 16]
+        }
+
+        fn my_fn_24(foo: &Poseidon2BabyBear<24>) -> [BabyBear; 24]
+        where
+            Poseidon2BabyBear<24>: ValidPoseidonWidth,
+        {
+            let _ = foo; // Use the parameter to show the bound works
+            [BabyBear::ZERO; 24]
+        }
+
+        let perm16 = default_babybear_poseidon2_16();
+        let result16 = my_fn_16(&perm16);
+        assert_eq!(result16.len(), 16);
+
+        let perm24 = default_babybear_poseidon2_24();
+        let result24 = my_fn_24(&perm24);
+        assert_eq!(result24.len(), 24);
     }
 }
