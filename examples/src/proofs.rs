@@ -242,17 +242,13 @@ pub fn report_result(result: Result<(), impl Debug>) {
 
 /// Report the size of the serialized proof.
 ///
-/// Serializes the given proof instance using bincode and prints the size in bytes.
+/// Serializes the given proof instance using postcard and prints the size in bytes.
 /// Panics if serialization fails.
 #[inline]
 pub fn report_proof_size<SC>(proof: &Proof<SC>)
 where
     SC: StarkGenericConfig,
 {
-    let config = bincode::config::standard()
-        .with_little_endian()
-        .with_fixed_int_encoding();
-    let proof_bytes =
-        bincode::serde::encode_to_vec(proof, config).expect("Failed to serialize proof");
+    let proof_bytes = postcard::to_allocvec(proof).expect("Failed to serialize proof");
     println!("Proof size: {} bytes", proof_bytes.len());
 }
