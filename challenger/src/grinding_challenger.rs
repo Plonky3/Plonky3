@@ -187,8 +187,8 @@ where
                         // SAFETY: candidate < field order, so this is a valid canonical field element.
                         unsafe { F::from_canonical_unchecked(candidate) }
                     } else {
-                        // Values outside the field order can never satisfy PoW, so we replace them with zero.
-                        F::ZERO
+                        // Values outside the field order can never satisfy PoW, so we repeat the last potential witness
+                        F::NEG_ONE
                     }
                 });
 
