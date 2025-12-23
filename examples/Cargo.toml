@@ -30,8 +30,8 @@ p3-poseidon2-air.workspace = true
 p3-symmetric.workspace = true
 p3-uni-stark.workspace = true
 
-postcard = { workspace = true, features = ["alloc"] }
 clap.workspace = true
+postcard = { workspace = true, features = ["alloc"] }
 rand.workspace = true
 
 [dev-dependencies]
