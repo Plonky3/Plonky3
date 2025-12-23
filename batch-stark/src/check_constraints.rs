@@ -12,7 +12,6 @@ use tracing::instrument;
 /// - The first element is a slice of [`Lookup`] values (generic over a field `F`) representing the symbolic lookups to be performed.
 /// - The second element is a slice of [`LookupData`] values (generic over an extension field `EF`) representing the lookup data for global lookups.
 /// - The third element is a reference to the [`LookupGadget`] implementation.
-#[allow(unused)]
 type LookupConstraintsInputs<'a, F, EF, LG> = (&'a [Lookup<F>], &'a [LookupData<EF>], &'a LG);
 
 /// Runs constraint checks using a given [AIR](`p3_air::Air`) implementation and trace matrix.
@@ -32,7 +31,6 @@ type LookupConstraintsInputs<'a, F, EF, LG> = (&'a [Lookup<F>], &'a [LookupData<
 ///     - the [`LookupData`] for global lookups,
 ///     - the [`LookupGadget`] implementation.
 #[instrument(name = "check constraints", skip_all)]
-#[allow(unused)]
 pub(crate) fn check_constraints<'b, F, EF, A, LG>(
     air: &A,
     main: &RowMajorMatrix<F>,
@@ -116,7 +114,6 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
 /// Used in conjunction with [`check_constraints`] to simulate
 /// an execution trace and verify that the [AIR](`p3_air::Air`) logic enforces all constraints.
 #[derive(Debug)]
-#[allow(unused)]
 pub struct DebugConstraintBuilderWithLookups<'a, F: Field, EF: ExtensionField<F>> {
     /// The index of the row currently being evaluated.
     row_index: usize,
