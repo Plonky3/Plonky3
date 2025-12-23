@@ -175,52 +175,23 @@ impl Blake3Air {
         m_vector: &[[AB::Expr; 2]; 16],
     ) {
         // First we mix the columns.
-
-        // The first column quarter round function involves the states in position: 0, 4, 8, 12
-        // Along with the two m_vector elements in the 0 and 1 positions.
-        let trace_column_0 =
-            self.full_round_to_column_quarter_round(input, round_data, m_vector, 0);
-        self.quarter_round_function(builder, &trace_column_0);
-
-        // The next column quarter round function involves the states in position: 1, 5, 9, 13
-        // Along with the two m_vector elements in the 2 and 3 positions.
-        let trace_column_1 =
-            self.full_round_to_column_quarter_round(input, round_data, m_vector, 1);
-        self.quarter_round_function(builder, &trace_column_1);
-
-        // The next column quarter round function involves the states in position: 2, 6, 10, 14
-        // Along with the two m_vector elements in the 4 and 5 positions.
-        let trace_column_2 =
-            self.full_round_to_column_quarter_round(input, round_data, m_vector, 2);
-        self.quarter_round_function(builder, &trace_column_2);
-
-        // The final column quarter round function involves the states in position: 3, 7, 11, 15
-        // Along with the two m_vector elements in the 6 and 7 positions.
-        let trace_column_3 =
-            self.full_round_to_column_quarter_round(input, round_data, m_vector, 3);
-        self.quarter_round_function(builder, &trace_column_3);
+        // For each column i (0..4), the quarter round function involves:
+        // - States in positions: i, i+4, i+8, i+12
+        // - m_vector elements in positions: 2*i and 2*i+1
+        for i in 0..4 {
+            let trace_column =
+                self.full_round_to_column_quarter_round(input, round_data, m_vector, i);
+            self.quarter_round_function(builder, &trace_column);
+        }
 
         // Second we mix the diagonals.
-
-        // The first diagonal quarter round function involves the states in position: 0, 5, 10, 15
-        // Along with the two m_vector elements in the 8 and 9 positions.
-        let trace_diagonal_0 = self.full_round_to_diagonal_quarter_round(round_data, m_vector, 0);
-        self.quarter_round_function(builder, &trace_diagonal_0);
-
-        // The next diagonal quarter round function involves the states in position: 1, 6, 11, 12
-        // Along with the two m_vector elements in the 10 and 11 positions.
-        let trace_diagonal_1 = self.full_round_to_diagonal_quarter_round(round_data, m_vector, 1);
-        self.quarter_round_function(builder, &trace_diagonal_1);
-
-        // The next diagonal quarter round function involves the states in position: 2, 7, 8, 13
-        // Along with the two m_vector elements in the 12 and 13 positions.
-        let trace_diagonal_2 = self.full_round_to_diagonal_quarter_round(round_data, m_vector, 2);
-        self.quarter_round_function(builder, &trace_diagonal_2);
-
-        // The final diagonal quarter round function involves the states in position: 3, 4, 9, 14
-        // Along with the two m_vector elements in the 14 and 15 positions.
-        let trace_diagonal_3 = self.full_round_to_diagonal_quarter_round(round_data, m_vector, 3);
-        self.quarter_round_function(builder, &trace_diagonal_3);
+        // For each diagonal i (0..4), the quarter round function involves:
+        // - States in positions: i, (i+1)%4, (i+2)%4, (i+3)%4 (with offsets)
+        // - m_vector elements in positions: 2*i+8 and 2*i+9
+        for i in 0..4 {
+            let trace_diagonal = self.full_round_to_diagonal_quarter_round(round_data, m_vector, i);
+            self.quarter_round_function(builder, &trace_diagonal);
+        }
     }
 }
 
@@ -259,9 +230,10 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
         // Next we ensure that the row0 and row2 for our initial state have been initialized correctly.
 
         // row0 should contain the packing of the first 4 chaining_values.
+        let initial_row0 = local.initial_row0.clone();
         local.chaining_values[0]
             .iter()
-            .zip(local.initial_row0.clone())
+            .zip(initial_row0)
             .for_each(|(bits, word)| {
                 let low_16 = pack_bits_le(bits[..BITS_PER_LIMB].iter().cloned());
                 let hi_16 = pack_bits_le(bits[BITS_PER_LIMB..].iter().cloned());
@@ -370,10 +342,11 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
         // When i = 0, 1, 2, 3 both inputs are given as 16 bit integers. Hence we need to get the individual bits
         // of one of them in order to test this.
 
+        let final_round_row2 = local.full_rounds[6].state_output.row2.clone();
         local
             .final_round_helpers
             .iter()
-            .zip(local.full_rounds[6].state_output.row2.clone())
+            .zip(final_round_row2)
             .for_each(|(bits, word)| {
                 let low_16 = pack_bits_le(bits[..BITS_PER_LIMB].iter().cloned());
                 let hi_16 = pack_bits_le(bits[BITS_PER_LIMB..].iter().cloned());
@@ -390,12 +363,12 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
 
         // Finally we check the xor by xor'ing the output with final_round_helpers, packing the bits
         // and comparing with the words in local.full_rounds[6].state_output.row0.
-
-        for (out_bits, left_words, right_bits) in izip!(
-            local.outputs[0].clone(),
-            local.full_rounds[6].state_output.row0.clone(),
-            local.final_round_helpers.clone()
-        ) {
+        let outputs_0 = local.outputs[0].clone();
+        let final_round_row0 = local.full_rounds[6].state_output.row0.clone();
+        let final_round_helpers = local.final_round_helpers.clone();
+        for (out_bits, left_words, right_bits) in
+            izip!(outputs_0, final_round_row0, final_round_helpers)
+        {
             // We can reuse xor_32_shift with a shift of 0.
             // As a = b ^ c if and only if b = a ^ c we can perform our xor on the
             // elements which we have the bits of and then check against a.
@@ -404,12 +377,12 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
 
         // When i = 4, 5, 6, 7 we already have the bits of state[i] and state[i + 8] making this easy.
         // This check also ensures that local.outputs[1] contains only boolean values.
-
-        for (out_bits, left_bits, right_bits) in izip!(
-            local.outputs[1].clone(),
-            local.full_rounds[6].state_output.row1.clone(),
-            local.full_rounds[6].state_output.row3.clone()
-        ) {
+        let outputs_1 = local.outputs[1].clone();
+        let final_round_row1 = local.full_rounds[6].state_output.row1.clone();
+        let final_round_row3 = local.full_rounds[6].state_output.row3.clone();
+        for (out_bits, left_bits, right_bits) in
+            izip!(outputs_1, final_round_row1, final_round_row3)
+        {
             for (out_bit, left_bit, right_bit) in izip!(out_bits, left_bits, right_bits) {
                 builder.assert_eq(out_bit, left_bit.into().xor(&right_bit.into()));
             }
@@ -420,12 +393,12 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
         // When i = 8, 9, 10, 11, we have the bits state[i] already as we used then in the
         // i = 0, 1, 2, 3 case. Additionally we also have the bits of chaining_value[i - 8].
         // Hence we can directly check that the output is correct.
-
-        for (out_bits, left_bits, right_bits) in izip!(
-            local.outputs[2].clone(),
-            local.chaining_values[0].clone(),
-            local.final_round_helpers.clone()
-        ) {
+        let outputs_2 = local.outputs[2].clone();
+        let chaining_values_0 = local.chaining_values[0].clone();
+        let final_round_helpers_2 = local.final_round_helpers.clone();
+        for (out_bits, left_bits, right_bits) in
+            izip!(outputs_2, chaining_values_0, final_round_helpers_2)
+        {
             for (out_bit, left_bit, right_bit) in izip!(out_bits, left_bits, right_bits) {
                 builder.assert_eq(out_bit, left_bit.into().xor(&right_bit.into()));
             }
@@ -433,12 +406,12 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
 
         // This is easy when i = 12, 13, 14, 15 as we already have the bits.
         // This check also ensures that local.outputs[3] contains only boolean values.
-
-        for (out_bits, left_bits, right_bits) in izip!(
-            local.outputs[3].clone(),
-            local.chaining_values[1].clone(),
-            local.full_rounds[6].state_output.row3.clone()
-        ) {
+        let outputs_3 = local.outputs[3].clone();
+        let chaining_values_1 = local.chaining_values[1].clone();
+        let final_round_row3_2 = local.full_rounds[6].state_output.row3.clone();
+        for (out_bits, left_bits, right_bits) in
+            izip!(outputs_3, chaining_values_1, final_round_row3_2)
+        {
             for (out_bit, left_bit, right_bit) in izip!(out_bits, left_bits, right_bits) {
                 builder.assert_eq(out_bit, left_bit.into().xor(&right_bit.into()));
             }
