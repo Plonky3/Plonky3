@@ -111,7 +111,8 @@ mod test {
             7.409391, 7.491853, 7.569856, 7.643856,
         ];
         for (&x, y) in inputs.iter().zip(expected) {
-            assert!((log2_no_std(x) - y) < TOLERANCE);
+            let diff = log2_no_std(x) - y;
+            assert!(diff.abs() < TOLERANCE);
         }
     }
 }
