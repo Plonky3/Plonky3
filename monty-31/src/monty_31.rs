@@ -43,8 +43,9 @@ pub struct MontyField31<MP: MontyParameters> {
 }
 
 impl<MP: MontyParameters> MontyField31<MP> {
-    /// The standard way to create a new element.
-    /// Note that `new` converts the input into MONTY form so should be avoided in performance critical implementations.
+    /// Create a new field element from any `u32`.
+    ///
+    /// Any `u32` value is accepted and automatically converted to Montgomery form.
     #[inline(always)]
     pub const fn new(value: u32) -> Self {
         Self {
@@ -70,8 +71,9 @@ impl<MP: MontyParameters> MontyField31<MP> {
         from_monty::<MP>(elem.value)
     }
 
-    /// Convert a constant u32 array into a constant array of field elements.
-    /// Constant version of array.map(MontyField31::new).
+    /// Convert a `[u32; N]` array to an array of field elements.
+    ///
+    /// Const version of `input.map(MontyField31::new)`.
     #[inline]
     pub const fn new_array<const N: usize>(input: [u32; N]) -> [Self; N] {
         let mut output = [Self::new_monty(0); N];

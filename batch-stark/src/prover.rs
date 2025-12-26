@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{BasedVectorSpace, PackedValue, PrimeCharacteristicRing};
+use p3_field::{BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
 use p3_lookup::folder::ProverConstraintFolderWithLookups;
 use p3_lookup::lookup_traits::{
     AirLookupHandler, EmptyLookupGadget, Kind, Lookup, LookupData, LookupGadget,
@@ -714,11 +714,8 @@ where
             let quotient = folder.inner.accumulator * inv_vanishing;
 
             // "Transpose" D packed base coefficients into WIDTH scalar extension coefficients.
-            (0..core::cmp::min(quotient_size, PackedVal::<SC>::WIDTH)).map(move |idx_in_packing| {
-                SC::Challenge::from_basis_coefficients_fn(|coeff_idx| {
-                    quotient.as_basis_coefficients_slice()[coeff_idx].as_slice()[idx_in_packing]
-                })
-            })
+            (0..core::cmp::min(quotient_size, PackedVal::<SC>::WIDTH))
+                .map(move |idx_in_packing| quotient.extract(idx_in_packing))
         })
         .collect()
 }

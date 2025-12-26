@@ -31,7 +31,10 @@ impl ComplexExtendable for Mersenne31 {
         // sage: assert(g.multiplicative_order() == 2^31)
         // sage: assert(g.norm() == 1)
         assert!(bits <= Self::CIRCLE_TWO_ADICITY);
-        let base = Complex::new_complex(Self::new(311_014_874), Self::new(1_584_694_829));
+        let base = Complex::new_complex(
+            Self::new_reduced(311_014_874),
+            Self::new_reduced(1_584_694_829),
+        );
         base.exp_power_of_2(Self::CIRCLE_TWO_ADICITY - bits)
     }
 }
