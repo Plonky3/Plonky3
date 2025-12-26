@@ -26,8 +26,8 @@ pub const fn log2_ceil_usize(n: usize) -> usize {
 }
 
 #[must_use]
-pub fn log2_ceil_u64(n: u64) -> u64 {
-    (u64::BITS - n.saturating_sub(1).leading_zeros()).into()
+pub const fn log2_ceil_u64(n: u64) -> u64 {
+    (u64::BITS - n.saturating_sub(1).leading_zeros()) as u64
 }
 
 /// Computes `log_2(n)`
@@ -36,9 +36,9 @@ pub fn log2_ceil_u64(n: u64) -> u64 {
 /// Panics if `n` is not a power of two.
 #[must_use]
 #[inline]
-pub fn log2_strict_usize(n: usize) -> usize {
+pub const fn log2_strict_usize(n: usize) -> usize {
     let res = n.trailing_zeros();
-    assert_eq!(n.wrapping_shr(res), 1, "Not a power of two: {n}");
+    assert!(n.wrapping_shr(res) == 1, "Not a power of two");
     // Tell the optimizer about the semantics of `log2_strict`. i.e. it can replace `n` with
     // `1 << res` and vice versa.
     unsafe {
@@ -200,13 +200,17 @@ fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
 }
 
 #[cfg(target_arch = "aarch64")]
-fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
+const fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
     // Aarch64 can reverse bits in one instruction, so the trivial version works best.
-    for src in 0..vals.len() {
+    // use manual `while` loop to enable `const`
+    let mut src = 0;
+    while src < vals.len() {
         let dst = src.reverse_bits().wrapping_shr(usize::BITS - lb_n as u32);
         if src < dst {
             vals.swap(src, dst);
         }
+
+        src += 1;
     }
 }
 
@@ -241,7 +245,7 @@ unsafe fn reverse_slice_index_bits_chunks<F>(
 ///
 /// Callers must ensure that `p` is true. If this is not the case, the behavior is undefined.
 #[inline(always)]
-pub unsafe fn assume(p: bool) {
+pub const unsafe fn assume(p: bool) {
     debug_assert!(p);
     if !p {
         unsafe {
@@ -646,18 +650,20 @@ pub const fn relatively_prime_u64(mut u: u64, mut v: u64) -> bool {
 /// the corresponding big-ints and the top `NUM_ROUNDS + 2` should match the top bits including
 /// zeroes if the original numbers have different sizes.
 #[inline]
-pub fn gcd_inner<const NUM_ROUNDS: usize>(a: &mut u64, b: &mut u64) -> (i64, i64, i64, i64) {
+pub const fn gcd_inner<const NUM_ROUNDS: usize>(a: &mut u64, b: &mut u64) -> (i64, i64, i64, i64) {
     // Initialise update factors.
     // At the start of round 0: -1 < f0, g0, f1, g1 <= 1
     let (mut f0, mut g0, mut f1, mut g1) = (1, 0, 0, 1);
 
     // If at the start of a round: -2^i < f0, g0, f1, g1 <= 2^i
     // Then, at the end of the round: -2^{i + 1} < f0, g0, f1, g1 <= 2^{i + 1}
-    for _ in 0..NUM_ROUNDS {
+    // use manual `while` loop to enable `const`
+    let mut round = 0;
+    while round < NUM_ROUNDS {
         if *a & 1 == 0 {
             *a >>= 1;
         } else {
-            if a < b {
+            if *a < *b {
                 core::mem::swap(a, b);
                 (f0, f1) = (f1, f0);
                 (g0, g1) = (g1, g0);
@@ -669,6 +675,8 @@ pub fn gcd_inner<const NUM_ROUNDS: usize>(a: &mut u64, b: &mut u64) -> (i64, i64
         }
         f1 <<= 1;
         g1 <<= 1;
+
+        round += 1;
     }
 
     // -2^NUM_ROUNDS < f0, g0, f1, g1 <= 2^NUM_ROUNDS
@@ -691,7 +699,7 @@ pub fn gcd_inner<const NUM_ROUNDS: usize>(a: &mut u64, b: &mut u64) -> (i64, i64
 /// It is up to the user to ensure that `b` is an odd prime with at most `FIELD_BITS` bits and
 /// `a < b`. If either of these assumptions break, the output is undefined.
 #[inline]
-pub fn gcd_inversion_prime_field_32<const FIELD_BITS: u32>(mut a: u32, mut b: u32) -> i64 {
+pub const fn gcd_inversion_prime_field_32<const FIELD_BITS: u32>(mut a: u32, mut b: u32) -> i64 {
     const {
         assert!(FIELD_BITS <= 32);
     }
@@ -705,7 +713,9 @@ pub fn gcd_inversion_prime_field_32<const FIELD_BITS: u32>(mut a: u32, mut b: u3
     // `b = v * a0 mod P`
     // `len(a) + len(b) <= 2 * len(P) <= 2 * FIELD_BITS`
 
-    for _ in 0..(2 * FIELD_BITS - 2) {
+    // use manual `while` loop to enable `const`
+    let mut i = 0;
+    while i < 2 * FIELD_BITS - 2 {
         // Assume at the start of the loop i:
         // (1) `|u|, |v| <= 2^{i}`
         // (2) `2^i * a = u * a0 mod P`
@@ -741,6 +751,8 @@ pub fn gcd_inversion_prime_field_32<const FIELD_BITS: u32>(mut a: u32, mut b: u3
         // (4) `gcd(a, b) = 1`
         // (5) `b` is odd.
         // (6) `len(a) + len(b) <= max(n - i - 1, 1)`
+
+        i += 1;
     }
 
     // After the loops, we see that:

@@ -231,10 +231,7 @@ where
             );
 
             // Unpack the resulting packed digest into individual scalar digests.
-            // Then, assign each to its slot in the current chunk.
-            for (dst, src) in digests_chunk.iter_mut().zip(unpack_array(packed_digest)) {
-                *dst = src;
-            }
+            PW::unpack_into(&packed_digest, digests_chunk);
         });
 
     // Handle leftover rows that do not form a full SIMD batch (if any).
@@ -302,9 +299,7 @@ where
                     .flat_map(|m| m.vertically_packed_row(first_row)),
             );
             packed_digest = c.compress([packed_digest, tallest_digest]);
-            for (dst, src) in digests_chunk.iter_mut().zip(unpack_array(packed_digest)) {
-                *dst = src;
-            }
+            PW::unpack_into(&packed_digest, digests_chunk);
         });
 
     // If our packing width did not divide next_len, fall back to single-threaded scalar code
@@ -371,9 +366,7 @@ where
             let left = array::from_fn(|j| P::from_fn(|k| prev_layer[2 * (first_row + k)][j]));
             let right = array::from_fn(|j| P::from_fn(|k| prev_layer[2 * (first_row + k) + 1][j]));
             let packed_digest = c.compress([left, right]);
-            for (dst, src) in digests_chunk.iter_mut().zip(unpack_array(packed_digest)) {
-                *dst = src;
-            }
+            P::unpack_into(&packed_digest, digests_chunk);
         });
 
     // If our packing width did not divide next_len, fall back to single-threaded scalar code
@@ -386,17 +379,6 @@ where
 
     // Everything has been initialized so we can safely cast.
     next_digests
-}
-
-/// Converts a packed array `[P; N]` into its underlying `P::WIDTH` scalar arrays.
-///
-/// Interprets `[P; N]` as the matrix `[[P::Value; P::WIDTH]; N]`, performs a transpose to
-/// get `[[P::Value; N] P::WIDTH]` and returns these `P::Value` arrays as an iterator.
-#[inline]
-fn unpack_array<P: PackedValue, const N: usize>(
-    packed_digest: [P; N],
-) -> impl Iterator<Item = [P::Value; N]> {
-    (0..P::WIDTH).map(move |j| packed_digest.map(|p| p.as_slice()[j]))
 }
 
 #[cfg(test)]
@@ -500,31 +482,5 @@ mod tests {
         assert_eq!(result, expected);
         // also validate the padding branch explicitly
         assert_eq!(result.len(), 4);
-    }
-
-    #[test]
-    fn test_unpack_array_basic() {
-        // Validate that `unpack_array` emits WIDTH (= 4) scalar arrays in the
-        // right order when the packed words are `[u8; 4]`.
-
-        // Two packed “words”, each four lanes wide
-        let packed: [[u8; 4]; 2] = [
-            [0, 1, 2, 3], // first word
-            [4, 5, 6, 7], // second word
-        ];
-
-        // After unpacking we expect four rows (the width),
-        // each row picking lane *j* from every packed word.
-        let rows: Vec<[u8; 2]> = unpack_array::<[u8; 4], 2>(packed).collect();
-
-        assert_eq!(
-            rows,
-            vec![
-                [0, 4], // lane-0 of both packed words
-                [1, 5], // lane-1
-                [2, 6], // lane-2
-                [3, 7], // lane-3
-            ]
-        );
     }
 }

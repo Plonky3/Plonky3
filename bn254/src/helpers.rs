@@ -5,6 +5,22 @@ use p3_util::gcd_inner;
 
 use crate::{BN254_MONTY_MU_64, BN254_PRIME};
 
+/// Const lexicographic comparison: returns true if a < b (little-endian limbs).
+#[inline]
+pub(crate) const fn const_lt(a: [u64; 4], b: [u64; 4]) -> bool {
+    // Compare from most significant limb to least significant
+    if a[3] != b[3] {
+        return a[3] < b[3];
+    }
+    if a[2] != b[2] {
+        return a[2] < b[2];
+    }
+    if a[1] != b[1] {
+        return a[1] < b[1];
+    }
+    a[0] < b[0]
+}
+
 /// Convert a fixed-size array of u64s (little-endian) to a BigUint.
 #[inline]
 pub(crate) fn to_biguint<const N: usize>(value: [u64; N]) -> BigUint {
@@ -29,12 +45,14 @@ const fn carrying_add(lhs: u64, rhs: u64, carry: bool) -> (u64, bool) {
 
 /// Compute `lhs + rhs`, returning a bool if overflow occurred.
 #[inline]
-pub(crate) fn wrapping_add<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u64; N], bool) {
+pub(crate) const fn wrapping_add(lhs: [u64; 4], rhs: [u64; 4]) -> ([u64; 4], bool) {
     let mut carry = false;
-    let mut output = [0; N];
+    let mut output = [0; 4];
 
-    for i in 0..N {
+    let mut i = 0;
+    while i < 4 {
         (output[i], carry) = carrying_add(lhs[i], rhs[i], carry);
+        i += 1;
     }
 
     (output, carry)
@@ -57,12 +75,15 @@ const fn borrowing_sub(lhs: u64, rhs: u64, borrow: bool) -> (u64, bool) {
 
 /// Compute `lhs - rhs`, returning a bool if underflow occurred.
 #[inline]
-pub(crate) fn wrapping_sub<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u64; N], bool) {
+pub(crate) const fn wrapping_sub(lhs: [u64; 4], rhs: [u64; 4]) -> ([u64; 4], bool) {
     let mut borrow = false;
-    let mut output = [0; N];
+    let mut output = [0; 4];
 
-    for i in 0..N {
+    // use manual `while` loop to enable `const`
+    let mut i = 0;
+    while i < 4 {
         (output[i], borrow) = borrowing_sub(lhs[i], rhs[i], borrow);
+        i += 1;
     }
 
     (output, borrow)
@@ -72,7 +93,7 @@ pub(crate) fn wrapping_sub<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u6
 ///
 /// Returns the lowest output limb and the remaining limbs in a 4-limb array.
 #[inline]
-pub(crate) fn mul_small(lhs: [u64; 4], rhs: u64) -> (u64, [u64; 4]) {
+pub(crate) const fn mul_small(lhs: [u64; 4], rhs: u64) -> (u64, [u64; 4]) {
     let mut output = [0u64; 4];
     let mut acc;
 
@@ -84,13 +105,17 @@ pub(crate) fn mul_small(lhs: [u64; 4], rhs: u64) -> (u64, [u64; 4]) {
     acc >>= 64;
 
     // Process the remaining limbs.
-    for i in 1..4 {
+    // use manual `while` loop to enable `const`
+    let mut i = 1;
+    while i < 4 {
         // Product of u64's < 2^128 - 2^64 so this addition will not overflow.
         acc += (lhs[i] as u128) * (rhs as u128);
         output[i - 1] = acc as u64;
 
         // acc < 2^64
         acc >>= 64;
+
+        i += 1;
     }
     output[3] = acc as u64;
 
@@ -101,7 +126,7 @@ pub(crate) fn mul_small(lhs: [u64; 4], rhs: u64) -> (u64, [u64; 4]) {
 ///
 /// Returns the lowest output limb and the remaining limbs in a 4-limb array.
 #[inline]
-pub(crate) fn mul_small_and_acc(lhs: [u64; 4], rhs: u64, add: [u64; 4]) -> (u64, [u64; 4]) {
+pub(crate) const fn mul_small_and_acc(lhs: [u64; 4], rhs: u64, add: [u64; 4]) -> (u64, [u64; 4]) {
     let mut output = [0u64; 4];
     let mut acc;
 
@@ -113,13 +138,17 @@ pub(crate) fn mul_small_and_acc(lhs: [u64; 4], rhs: u64, add: [u64; 4]) -> (u64,
     acc >>= 64;
 
     // Process the remaining limbs.
-    for i in 1..4 {
+    // use manual `while` loop to enable `const`
+    let mut i = 1;
+    while i < 4 {
         // Product of u64's < 2^128 - 2^64 so this addition will not overflow.
         acc += (lhs[i] as u128) * (rhs as u128) + (add[i] as u128);
         output[i - 1] = acc as u64;
 
         // acc < 2^64
         acc >>= 64;
+
+        i += 1;
     }
     output[3] = acc as u64;
 
@@ -165,11 +194,11 @@ pub(crate) fn mul_small_and_acc(lhs: [u64; 4], rhs: u64, add: [u64; 4]) -> (u64,
 /// The incoming number is split into 5 64-bit limbs with the
 /// first limb separated out as it will be treated differently.
 #[inline]
-fn interleaved_monty_reduction(acc0: u64, acc: [u64; 4]) -> [u64; 4] {
+const fn interleaved_monty_reduction(acc0: u64, acc: [u64; 4]) -> [u64; 4] {
     let t = acc0.wrapping_mul(BN254_MONTY_MU_64);
     let (_, u) = mul_small(BN254_PRIME, t);
 
-    let (sub, under) = wrapping_sub::<4>(acc, u);
+    let (sub, under) = wrapping_sub(acc, u);
     if under {
         let (sub_corr, _) = wrapping_add(sub, BN254_PRIME);
         sub_corr
@@ -185,10 +214,10 @@ fn interleaved_monty_reduction(acc0: u64, acc: [u64; 4]) -> [u64; 4] {
 /// The output is a 4-limb array representing the result of `lhs * rhs * 2^{-256} mod P`
 /// guaranteed to be in the range `[0, P)`.
 #[inline]
-pub(crate) fn monty_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 4] {
+pub(crate) const fn monty_mul(lhs: [u64; 4], rhs: [u64; 4]) -> [u64; 4] {
     // We need to ensure that `lhs < P` otherwise it's possible for the
     // algorithm to fail and produce a value which is too large.
-    debug_assert!(lhs.iter().rev().cmp(BN254_PRIME.iter().rev()) == core::cmp::Ordering::Less);
+    debug_assert!(const_lt(lhs, BN254_PRIME));
 
     // Our accumulator starts at 0 so we start with mul_small
     let (acc0, acc) = mul_small(lhs, rhs[0]);
@@ -317,15 +346,20 @@ const fn conditional_neg(a: &mut [u64; 4], sign: u64) {
 /// The result is a 320-bit signed integer represented as 4 64-bit limbs of positive integers
 /// and an i64 for the highest limb.
 #[inline]
-fn linear_comb_signed(a: [u64; 4], b: [u64; 4], f: i64, g: i64) -> ([u64; 4], i64) {
+const fn linear_comb_signed(a: [u64; 4], b: [u64; 4], f: i64, g: i64) -> ([u64; 4], i64) {
     let mut output = [0_u64; 4];
     let mut carry = (a[0] as i128) * (f as i128) + (b[0] as i128) * (g as i128);
     output[0] = carry as u64;
     carry >>= 64;
-    for i in 1..4 {
+
+    // use manual `while` loop to enable `const`
+    let mut i = 1;
+    while i < 4 {
         carry += (a[i] as i128) * (f as i128) + (b[i] as i128) * (g as i128);
         output[i] = carry as u64;
         carry >>= 64;
+
+        i += 1;
     }
 
     (output, carry as i64)
@@ -334,15 +368,20 @@ fn linear_comb_signed(a: [u64; 4], b: [u64; 4], f: i64, g: i64) -> ([u64; 4], i6
 /// Compute the linear combination `af + bg` where `a, b` are `256-bit` positive integers
 /// and `f, g` are `64-bit` positive integers.
 #[inline]
-fn linear_comb_unsigned(a: [u64; 4], b: [u64; 4], f: u64, g: u64) -> [u64; 5] {
+const fn linear_comb_unsigned(a: [u64; 4], b: [u64; 4], f: u64, g: u64) -> [u64; 5] {
     let mut output = [0_u64; 5];
     let mut carry = (a[0] as u128) * (f as u128) + (b[0] as u128) * (g as u128);
     output[0] = carry as u64;
     carry >>= 64;
-    for i in 1..4 {
+
+    // use manual `while` loop to enable `const`
+    let mut i = 1;
+    while i < 4 {
         carry += (a[i] as u128) * (f as u128) + (b[i] as u128) * (g as u128);
         output[i] = carry as u64;
         carry >>= 64;
+
+        i += 1;
     }
     output[4] = carry as u64;
 
@@ -355,7 +394,7 @@ fn linear_comb_unsigned(a: [u64; 4], b: [u64; 4], f: u64, g: u64) -> [u64; 5] {
 /// If the output would be negative, it is negated using 2's complement. A i64 is returned indicating
 /// if the negation was applied. The i64 is `-1` if the output was negated `0` otherwise.
 #[inline]
-fn linear_comb_div(a: [u64; 4], b: [u64; 4], f: i64, g: i64, k: usize) -> ([u64; 4], i64) {
+const fn linear_comb_div(a: [u64; 4], b: [u64; 4], f: i64, g: i64, k: usize) -> ([u64; 4], i64) {
     let (product, hi_limb) = linear_comb_signed(a, b, f, g);
 
     let mut output = [0_u64; 4];
@@ -373,7 +412,7 @@ fn linear_comb_div(a: [u64; 4], b: [u64; 4], f: i64, g: i64, k: usize) -> ([u64;
 }
 
 #[inline]
-fn linear_comb_monty_red(a: [u64; 4], b: [u64; 4], f: i64, g: i64) -> [u64; 4] {
+const fn linear_comb_monty_red(a: [u64; 4], b: [u64; 4], f: i64, g: i64) -> [u64; 4] {
     // Get the signs and absolute values of f and g
     let s_f = f >> 63;
     let s_g = g >> 63;
@@ -387,7 +426,9 @@ fn linear_comb_monty_red(a: [u64; 4], b: [u64; 4], f: i64, g: i64) -> [u64; 4] {
     let b_signed = if s_g == -1 { b_sub } else { b };
 
     let product = linear_comb_unsigned(a_signed, b_signed, abs_f, abs_g);
-    interleaved_monty_reduction(product[0], product[1..].try_into().unwrap())
+    // manually construct `acc` for `const`
+    let acc = [product[1], product[2], product[3], product[4]];
+    interleaved_monty_reduction(product[0], acc)
 }
 
 /// An adjustment factor equal to `2^{1030} mod P`
@@ -414,7 +455,7 @@ pub(crate) const BN254_2_POW_1030: [u64; 4] = [
 /// This implementation is also impervious to side-channel attacks as an added bonus. In principal we could make
 /// the average case a little faster if we didn't care about this property but the worst case would be unchanged and
 /// potentially even slightly worse.
-pub(crate) fn gcd_inversion(input: [u64; 4]) -> [u64; 4] {
+pub(crate) const fn gcd_inversion(input: [u64; 4]) -> [u64; 4] {
     // The standard binary GCD inversion algorithm for a field `P` has
     // a single input `input` and
     // four internal variables: `a`, `u`, `b`, and `v`.
@@ -450,8 +491,11 @@ pub(crate) fn gcd_inversion(input: [u64; 4]) -> [u64; 4] {
     const ROUND_SIZE: usize = 31; // If you want to change round size, you will also need to modify the constant in get_approximation.
     const FINAL_ROUND_SIZE: usize = 41;
     const NUM_ROUNDS: usize = 15;
-    assert_eq!(NUM_ROUNDS * ROUND_SIZE + FINAL_ROUND_SIZE, 506);
-    for _ in 0..NUM_ROUNDS {
+    const { assert!(NUM_ROUNDS * ROUND_SIZE + FINAL_ROUND_SIZE == 506) };
+
+    // use manual `while` loop to enable `const`
+    let mut i = 0;
+    while i < NUM_ROUNDS {
         // Find the a and b approximations for this set of inner rounds.
         // If both a and b now fit in a u64, return those. Otherwise take the bottom
         // 31 bits and the top 33 bits and assemble into a u64.
@@ -489,6 +533,8 @@ pub(crate) fn gcd_inversion(input: [u64; 4]) -> [u64; 4] {
         b = new_b;
         u = new_u;
         v = new_v;
+
+        i += 1;
     }
 
     // a and b are now guaranteed to fit in a u64 so we can just use the inner loop

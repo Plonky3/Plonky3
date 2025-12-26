@@ -62,7 +62,7 @@ impl HasTwoAdicComplexBinomialExtension<2> for Mersenne31 {
         if bits == 33 {
             [
                 Complex::ZERO,
-                Complex::new_complex(Self::new(1437746044), Self::new(946469285)),
+                Complex::new_complex(Self::new_reduced(1437746044), Self::new_reduced(946469285)),
             ]
         } else {
             [Complex::two_adic_generator(bits), Complex::ZERO]
