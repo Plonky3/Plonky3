@@ -12,7 +12,7 @@ pub fn get_log_num_quotient_chunks<F, EF, A, LG>(
     preprocessed_width: usize,
     num_public_values: usize,
     contexts: &[Lookup<F>],
-    lookup_data: &[LookupData<EF>],
+    lookup_data: &[LookupData<SymbolicExpression<EF>>],
     is_zk: usize,
     lookup_gadget: &LG,
 ) -> usize
@@ -47,7 +47,7 @@ pub fn get_max_constraint_degree<F, EF, A, LG>(
     preprocessed_width: usize,
     num_public_values: usize,
     contexts: &[Lookup<F>],
-    lookup_data: &[LookupData<EF>],
+    lookup_data: &[LookupData<SymbolicExpression<EF>>],
     lookup_gadget: &LG,
 ) -> usize
 where
@@ -80,7 +80,7 @@ pub fn get_symbolic_constraints<F, EF, A, LG>(
     preprocessed_width: usize,
     num_public_values: usize,
     contexts: &[Lookup<F>],
-    lookup_data: &[LookupData<EF>],
+    lookup_data: &[LookupData<SymbolicExpression<EF>>],
     lookup_gadget: &LG,
 ) -> (Vec<SymbolicExpression<F>>, Vec<SymbolicExpression<EF>>)
 where
@@ -106,4 +106,10 @@ where
     let base_constraints = builder.base_constraints();
     let extension_constraints = builder.extension_constraints();
     (base_constraints, extension_constraints)
+}
+
+pub fn lookup_data_to_expr<F: Clone>(
+    lookup_data: &[LookupData<F>],
+) -> Vec<LookupData<SymbolicExpression<F>>> {
+    lookup_data.iter().map(|ld| ld.clone().into()).collect()
 }
