@@ -24,6 +24,7 @@ Fields:
   - [x] NEON
 - [x] Goldilocks
   - [x] ~128 bit extension field
+- [x] BN254 (scalar field)
 
 Generalized vector commitment schemes
 - [x] generalized Merkle tree
@@ -58,6 +59,7 @@ Hashes
   - [ ] modifications to tune BLAKE3 for hashing small leaves
 - [x] Keccak-256
 - [x] Monolith
+- [x] SHA-256
 
 
 ## Benchmarks

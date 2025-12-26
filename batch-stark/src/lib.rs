@@ -1,17 +1,22 @@
 //! Batch-STARK proving and verification.
 //!
 //! ```ignore
-//! use p3_batch_stark::{prove_batch, verify_batch, CommonData, StarkInstance};
+//! use p3_batch_stark::{
+//!     prove_batch_no_lookups, verify_batch_no_lookups, CommonData, StarkInstance,
+//! };
 //!
 //! let instances = vec![
-//!     StarkInstance { air: &air1, trace: trace1, public_values: pv1 },
-//!     StarkInstance { air: &air2, trace: trace2, public_values: pv2 },
+//!     StarkInstance { air: &air1, trace: trace1, public_values: pv1, lookups: vec![] },
+//!     StarkInstance { air: &air2, trace: trace2, public_values: pv2, lookups: vec![] },
 //! ];
 //!
 //! let common = CommonData::from_instances(&config, &instances);
-//! let proof = prove_batch(&config, instances, &common);
-//! verify_batch(&config, &[air1, air2], &proof, &[pv1, pv2], &common)?;
+//! let proof = prove_batch_no_lookups(&config, &instances, &common);
+//! verify_batch_no_lookups(&config, &[air1, air2], &proof, &[pv1, pv2], &common)?;
 //! ```
+//!
+//! For advanced usage with lookups, use [`prove_batch`] and [`verify_batch`] directly
+//! with a [`LookupGadget`](p3_lookup::lookup_traits::LookupGadget) implementation.
 
 #![no_std]
 
@@ -34,5 +39,5 @@ pub use config::{
 };
 pub use p3_uni_stark::{OpenedValues, VerificationError};
 pub use proof::{BatchCommitments, BatchOpenedValues, BatchProof};
-pub use prover::{StarkInstance, prove_batch};
-pub use verifier::verify_batch;
+pub use prover::{StarkInstance, prove_batch, prove_batch_no_lookups};
+pub use verifier::{verify_batch, verify_batch_no_lookups};
