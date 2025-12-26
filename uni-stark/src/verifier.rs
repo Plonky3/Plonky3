@@ -131,7 +131,6 @@ where
 fn process_preprocessed_trace<SC, A>(
     air: &A,
     opened_values: &crate::proof::OpenedValues<SC::Challenge>,
-    is_zk: usize,
     preprocessed_vk: Option<&PreprocessedVerifierKey<SC>>,
 ) -> Result<
     (
@@ -176,11 +175,7 @@ where
         // Case: Preprocessed columns exist.
         //
         // Valid only if VK exists, widths match, and we are NOT in zk mode.
-        (w, Some(vk)) if w == vk.width => {
-            // Preprocessed columns are currently only supported in non-zk mode.
-            assert_eq!(is_zk, 0, "preprocessed columns not supported in zk mode");
-            Ok((w, Some(vk.commitment.clone())))
-        }
+        (w, Some(vk)) if w == vk.width => Ok((w, Some(vk.commitment.clone()))),
 
         // Catch-all for invalid states, such as:
         // - Width is 0 but VK is provided.
@@ -228,7 +223,7 @@ where
     let trace_domain = pcs.natural_domain_for_degree(degree);
     // TODO: allow moving preprocessed commitment to preprocess time, if known in advance
     let (preprocessed_width, preprocessed_commit) =
-        process_preprocessed_trace::<SC, A>(air, opened_values, config.is_zk(), preprocessed_vk)?;
+        process_preprocessed_trace::<SC, A>(air, opened_values, preprocessed_vk)?;
 
     // Ensure the preprocessed trace and main trace have the same height.
     if let Some(vk) = preprocessed_vk

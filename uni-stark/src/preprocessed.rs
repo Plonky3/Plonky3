@@ -1,5 +1,6 @@
 use p3_air::Air;
 use p3_commit::Pcs;
+use p3_field::Field;
 use p3_matrix::Matrix;
 use tracing::debug_span;
 
@@ -51,19 +52,17 @@ pub fn setup_preprocessed<SC, A>(
 ) -> Option<(PreprocessedProverData<SC>, PreprocessedVerifierKey<SC>)>
 where
     SC: StarkGenericConfig,
+    Val<SC>: Field,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
-    // Preprocessed columns are not supported in zk mode in the current design.
-    assert_eq!(
-        config.is_zk(),
-        0,
-        "preprocessed columns are not supported in zk mode"
-    );
-
     let pcs = config.pcs();
-    let degree = 1 << degree_bits;
+    let is_zk = config.is_zk();
+
+    let init_degree = 1 << degree_bits;
+    let degree = 1 << (degree_bits + is_zk);
 
     let preprocessed = air.preprocessed_trace()?;
+
     let width = preprocessed.width();
     if width == 0 {
         return None;
@@ -71,14 +70,15 @@ where
 
     assert_eq!(
         preprocessed.height(),
-        degree,
+        init_degree,
         "preprocessed trace height must equal trace degree"
     );
 
     let trace_domain = pcs.natural_domain_for_degree(degree);
     let (commitment, prover_data) = debug_span!("commit to preprocessed trace")
-        .in_scope(|| pcs.commit([(trace_domain, preprocessed)]));
+        .in_scope(|| pcs.commit_preprocessing([(trace_domain, preprocessed)]));
 
+    let degree_bits = degree_bits + is_zk;
     let prover_data = PreprocessedProverData {
         width,
         degree_bits,
