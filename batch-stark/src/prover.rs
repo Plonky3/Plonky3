@@ -23,7 +23,7 @@ use crate::check_constraints::DebugConstraintBuilderWithLookups;
 use crate::common::{CommonData, get_perm_challenges};
 use crate::config::{Challenge, Domain, StarkGenericConfig as SGC, Val, observe_instance_binding};
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof, OpenedValuesWithLookups};
-use crate::symbolic::{get_log_num_quotient_chunks, get_symbolic_constraints};
+use crate::symbolic::{get_log_num_quotient_chunks, get_symbolic_constraints, lookup_data_to_expr};
 
 #[derive(Debug)]
 pub struct StarkInstance<'a, SC: SGC, A> {
@@ -143,7 +143,7 @@ where
                 pre_w,
                 pv.len(),
                 &all_lookups[i],
-                &lookup_data[i],
+                &lookup_data_to_expr(&lookup_data[i]),
                 config.is_zk(),
                 lookup_gadget,
             );
@@ -276,7 +276,7 @@ where
             preprocessed_widths[i],
             pub_vals[i].len(),
             &all_lookups[i],
-            &lookup_data[i],
+            &lookup_data_to_expr(&lookup_data[i]),
             lookup_gadget,
         );
         let constraint_len = base_constraints.len() + extension_constraints.len();
@@ -661,7 +661,15 @@ where
                 air,
                 &mut folder,
                 lookups,
-                lookup_data,
+                lookup_data
+                    .iter()
+                    .map(|ld| LookupData {
+                        name: ld.name.clone(),
+                        aux_idx: ld.aux_idx,
+                        expected_cumulated: ld.expected_cumulated.into(),
+                    })
+                    .collect::<Vec<_>>()
+                    .as_slice(),
                 lookup_gadget,
             );
 
