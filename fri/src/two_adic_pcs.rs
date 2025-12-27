@@ -272,6 +272,13 @@ where
         lde.split_rows(domain.size()).0.bit_reverse_rows()
     }
 
+    /// Open a batch of matrices at a collection of points.
+    ///
+    /// Returns the opened values along with a proof.
+    ///
+    /// This function assumes that all matrices correspond to evaluations over the
+    /// coset `gH` where `g = Val::GENERATOR` and `H` is a subgroup of appropriate size depending on the
+    /// matrix.
     fn open(
         &self,
         // For each multi-matrix commitment,
@@ -285,31 +292,6 @@ where
             >,
         )>,
         challenger: &mut Challenger,
-    ) -> (OpenedValues<Challenge>, Self::Proof) {
-        self.open_with_preprocessing(commitment_data_with_opening_points, challenger, None)
-    }
-
-    /// Open a batch of matrices at a collection of points.
-    ///
-    /// Returns the opened values along with a proof.
-    ///
-    /// This function assumes that all matrices correspond to evaluations over the
-    /// coset `gH` where `g = Val::GENERATOR` and `H` is a subgroup of appropriate size depending on the
-    /// matrix.
-    fn open_with_preprocessing(
-        &self,
-        // For each multi-matrix commitment,
-        commitment_data_with_opening_points: Vec<(
-            // The matrices and auxiliary prover data
-            &Self::ProverData,
-            // for each matrix,
-            Vec<
-                // points to open
-                Vec<Challenge>,
-            >,
-        )>,
-        challenger: &mut Challenger,
-        _preprocessed_idx: Option<usize>,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
         /*
 

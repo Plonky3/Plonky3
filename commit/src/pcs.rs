@@ -155,15 +155,14 @@ where
         self.get_evaluations_on_domain(prover_data, idx, domain)
     }
 
-    /// Open a collection of polynomial commitments at a set of points, when there is no preprocessing.
-    /// Produce the values at those points along with a proof of correctness.
+    /// Open a collection of polynomial commitments at a set of points. Produce the values at those points along with a proof
+    /// of correctness.
     ///
     /// Arguments:
     /// - `commitment_data_with_opening_points`: A vector whose elements are a pair:
     ///     - `data`: The prover data corresponding to a multi-matrix commitment.
     ///     - `opening_points`: A vector containing, for each matrix committed to, a vector of opening points.
     /// - `fiat_shamir_challenger`: The challenger that will be used to generate the proof.
-    /// - `preprocessed_idx`: If one of the committed matrices corresponds to preprocessed columns, this is the index of that matrix.
     ///
     /// Unwrapping the arguments further, each `data` contains a vector of the committed matrices (`matrices = Vec<M>`).
     /// If the length of `matrices` is not equal to the length of `opening_points` the function will error. Otherwise, for
@@ -189,14 +188,16 @@ where
         fiat_shamir_challenger: &mut Challenger,
     ) -> (OpenedValues<Challenge>, Self::Proof);
 
-    /// Open a collection of polynomial commitments at a set of points. Produce the values at those points along with a proof
-    /// of correctness.
+    /// Open a collection of polynomial commitments at a set of points, when there is preprocessing data.
+    /// It is the same as `open` when `ZK` is disabled.
+    /// Produce the values at those points along with a proof of correctness.
     ///
     /// Arguments:
     /// - `commitment_data_with_opening_points`: A vector whose elements are a pair:
     ///     - `data`: The prover data corresponding to a multi-matrix commitment.
     ///     - `opening_points`: A vector containing, for each matrix committed to, a vector of opening points.
     /// - `fiat_shamir_challenger`: The challenger that will be used to generate the proof.
+    /// - `is_preprocessing`: If one of the committed matrices corresponds to preprocessed columns, this is the index of that matrix.
     ///
     /// Unwrapping the arguments further, each `data` contains a vector of the committed matrices (`matrices = Vec<M>`).
     /// If the length of `matrices` is not equal to the length of `opening_points` the function will error. Otherwise, for
@@ -220,7 +221,7 @@ where
             >,
         )>,
         fiat_shamir_challenger: &mut Challenger,
-        _preprocessed_idx: Option<usize>,
+        _is_preprocessing: bool,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
         self.open(commitment_data_with_opening_points, fiat_shamir_challenger)
     }

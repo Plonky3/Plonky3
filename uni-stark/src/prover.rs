@@ -309,13 +309,7 @@ where
             .chain(round3)
             .collect();
 
-        pcs.open_with_preprocessing(
-            rounds,
-            &mut challenger,
-            preprocessed_data_ref
-                .as_ref()
-                .map(|_| SC::Pcs::PREPROCESSED_TRACE_IDX),
-        )
+        pcs.open_with_preprocessing(rounds, &mut challenger, preprocessed_data_ref.is_some())
     });
     let trace_idx = SC::Pcs::TRACE_IDX;
     let quotient_idx = SC::Pcs::QUOTIENT_IDX;

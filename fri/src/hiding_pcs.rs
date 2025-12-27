@@ -284,7 +284,7 @@ where
         )>,
         challenger: &mut Challenger,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
-        self.open_with_preprocessing(rounds, challenger, None)
+        self.open_with_preprocessing(rounds, challenger, false)
     }
 
     fn open_with_preprocessing(
@@ -299,12 +299,11 @@ where
             >,
         )>,
         challenger: &mut Challenger,
-        preprocessed_idx: Option<usize>,
+        is_preprocessing: bool,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
         let (mut inner_opened_values, inner_proof) =
             self.inner
-                .open_with_preprocessing(rounds, challenger, preprocessed_idx);
-
+                .open_with_preprocessing(rounds, challenger, is_preprocessing);
         // inner_opened_values includes opened values for the random codewords. Those should be
         // hidden from our caller, so we split them off and store them in the proof.
         let opened_values_rand = inner_opened_values
@@ -317,14 +316,12 @@ where
                         opened_values_for_mat
                             .iter_mut()
                             .map(|opened_values_for_point| {
-                                let num_random_codewords = if let Some(preprocessed_idx) =
-                                    preprocessed_idx
-                                    && idx == preprocessed_idx
-                                {
-                                    0
-                                } else {
-                                    self.num_random_codewords
-                                };
+                                let num_random_codewords =
+                                    if is_preprocessing && idx == <Self as Pcs<Challenge, Challenger>>::PREPROCESSED_TRACE_IDX {
+                                        0
+                                    } else {
+                                        self.num_random_codewords
+                                    };
                                 let split = opened_values_for_point.len() - num_random_codewords;
                                 opened_values_for_point.drain(split..).collect()
                             })
