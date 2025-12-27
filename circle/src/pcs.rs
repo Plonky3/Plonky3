@@ -138,6 +138,32 @@ where
         (comm, mmcs_data)
     }
 
+    fn get_quotient_ldes(
+        &self,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
+        _num_chunks: usize,
+    ) -> Vec<RowMajorMatrix<Val>> {
+        evaluations
+            .into_iter()
+            .map(|(domain, evals)| {
+                assert!(
+                    domain.log_n >= 2,
+                    "CirclePcs cannot commit to a matrix with fewer than 4 rows.",
+                    // (because we bivariate fold one bit, and fri needs one more bit)
+                );
+                CircleEvaluations::from_natural_order(domain, evals)
+                    .extrapolate(CircleDomain::standard(
+                        domain.log_n + self.fri_params.log_blowup,
+                    ))
+                    .to_cfft_order()
+            })
+            .collect_vec()
+    }
+
+    fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
+        self.mmcs.commit(ldes)
+    }
+
     fn get_evaluations_on_domain<'a>(
         &self,
         data: &'a Self::ProverData,
@@ -169,6 +195,7 @@ where
             >,
         )>,
         challenger: &mut Challenger,
+        _preprocessed_idx: Option<usize>,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
         // Open matrices at points
         let values: OpenedValues<Challenge> = rounds
@@ -597,7 +624,7 @@ mod tests {
         let zeta: Challenge = rng.random();
 
         let mut chal = Challenger::from_hasher(vec![], byte_hash);
-        let (values, proof) = pcs.open(vec![(&data, vec![vec![zeta]])], &mut chal);
+        let (values, proof) = pcs.open(vec![(&data, vec![vec![zeta]])], &mut chal, None);
 
         let mut chal = Challenger::from_hasher(vec![], byte_hash);
         pcs.verify(

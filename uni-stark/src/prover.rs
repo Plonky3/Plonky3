@@ -65,12 +65,6 @@ where
             0
         },
         |pp| {
-            // Preprocessed columns are currently only supported in non-ZK mode.
-            assert_eq!(
-                config.is_zk(),
-                0,
-                "preprocessed columns are not supported in zk mode"
-            );
             assert_eq!(
                 pp.degree_bits, log_ext_degree,
                 "PreprocessedProverData degree_bits does not match trace degree_bits"
@@ -208,8 +202,8 @@ where
     // This only works if the trace domain is `gH'` and the quotient domain is `gK` for some subgroup `K` contained in `H'`.
     // TODO: Make this explicit in `get_evaluations_on_domain` or otherwise fix this.
     let trace_on_quotient_domain = pcs.get_evaluations_on_domain(&trace_data, 0, quotient_domain);
-    let preprocessed_on_quotient_domain =
-        preprocessed_data_ref.map(|data| pcs.get_evaluations_on_domain(data, 0, quotient_domain));
+    let preprocessed_on_quotient_domain = preprocessed_data_ref
+        .map(|data| pcs.get_evaluations_on_domain_no_random(data, 0, quotient_domain));
 
     // Compute the quotient polynomial `Q(x)` by evaluating
     //          `C(T_1(x), ..., T_w(x), T_1(hx), ..., T_w(hx), selectors(x)) / Z_H(x)`
@@ -259,15 +253,15 @@ where
 
     // If zk is enabled, we generate random extension field values of the size of the randomized trace. If `n` is the degree of the initial trace,
     // then the randomized trace has degree `2n`. To randomize the FRI batch polynomial, we then need an extension field random polynomial of degree `2n -1`.
-    // So we can generate a random polynomial  of degree `2n`, and provide it to `open` as is.
+    // So we can generate a random polynomial of degree `2n`, and provide it to `open` as is.
     // Then the method will add `(R(X) - R(z)) / (X - z)` (which is of the desired degree `2n - 1`), to the batch of polynomials.
     // Since we need a random polynomial defined over the extension field, and the `commit` method is over the base field,
-    // we actually need to commit to `SC::CHallenge::D` base field random polynomials.
+    // we actually need to commit to `SC::Challenge::D` base field random polynomials.
     // This is similar to what is done for the quotient polynomials.
     // TODO: This approach is only statistically zk. To make it perfectly zk, `R` would have to truly be an extension field polynomial.
     let (opt_r_commit, opt_r_data) = if SC::Pcs::ZK {
         let (r_commit, r_data) = pcs
-            .get_opt_randomization_poly_commitment(ext_trace_domain)
+            .get_opt_randomization_poly_commitment(core::iter::once(ext_trace_domain))
             .expect("ZK is enabled, so we should have randomization commitments");
         (Some(r_commit), Some(r_data))
     } else {
@@ -315,7 +309,13 @@ where
             .chain(round3)
             .collect();
 
-        pcs.open(rounds, &mut challenger)
+        pcs.open(
+            rounds,
+            &mut challenger,
+            preprocessed_data_ref
+                .as_ref()
+                .map(|_| SC::Pcs::PREPROCESSED_TRACE_IDX),
+        )
     });
     let trace_idx = SC::Pcs::TRACE_IDX;
     let quotient_idx = SC::Pcs::QUOTIENT_IDX;

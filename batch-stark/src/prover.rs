@@ -79,11 +79,6 @@ where
     let pcs = config.pcs();
     let mut challenger = config.initialise_challenger();
 
-    // TODO: No ZK support for batch-stark yet.
-    if config.is_zk() != 0 {
-        panic!("p3-batch-stark: ZK mode is not supported yet");
-    }
-
     // Use instances in provided order.
     let degrees: Vec<usize> = instances.iter().map(|i| i.trace.height()).collect();
     let log_degrees: Vec<usize> = degrees.iter().copied().map(log2_strict_usize).collect();
@@ -300,7 +295,11 @@ where
             .as_ref()
             .and_then(|g| g.instances[i].as_ref().map(|meta| (g, meta)))
             .map(|(g, meta)| {
-                pcs.get_evaluations_on_domain(&g.prover_data, meta.matrix_index, quotient_domain)
+                pcs.get_evaluations_on_domain_no_random(
+                    &g.prover_data,
+                    meta.matrix_index,
+                    quotient_domain,
+                )
             });
 
         // Compute quotient(x) = constraints(x)/Z_H(x) over quotient_domain, as extension values.
@@ -325,23 +324,43 @@ where
         let chunk_mats = quotient_domain.split_evals(n_chunks, q_flat);
         let chunk_domains = quotient_domain.split_domains(n_chunks);
 
+        let evals = chunk_domains
+            .iter()
+            .zip(chunk_mats.iter())
+            .map(|(d, m)| (*d, m.clone()));
+        let ldes = pcs.get_quotient_ldes(evals, n_chunks);
+
         let start = quotient_chunk_domains.len();
         quotient_chunk_domains.extend(chunk_domains);
-        quotient_chunk_mats.extend(chunk_mats);
+        quotient_chunk_mats.extend(ldes);
         let end = quotient_chunk_domains.len();
         quotient_chunk_ranges.push((start, end));
     }
 
     // Commit to all quotient chunks together.
-    let quotient_commit_inputs = quotient_chunk_domains
-        .iter()
-        .cloned()
-        .zip(quotient_chunk_mats.into_iter())
-        .collect::<Vec<_>>();
-    let (quotient_commit, quotient_data) = pcs.commit(quotient_commit_inputs);
+    let (quotient_commit, quotient_data) = pcs.commit_ldes(quotient_chunk_mats);
     challenger.observe(quotient_commit.clone());
 
-    // ZK disabled: no randomization round.
+    // If zk is enabled, we generate random extension field values of the size of the randomized trace. If `n` is the degree of the initial trace,
+    // then the randomized trace has degree `2n`. To randomize the FRI batch polynomial, we then need an extension field random polynomial of degree `2n -1`.
+    // So we can generate a random polynomial of degree `2n`, and provide it to `open` as is.
+    // Then the method will add `(R(X) - R(z)) / (X - z)` (which is of the desired degree `2n - 1`), to the batch of polynomials.
+    // Since we need a random polynomial defined over the extension field, and the `commit` method is over the base field,
+    // we actually need to commit to `SC::Challenge::D` base field random polynomials.
+    // This is similar to what is done for the quotient polynomials.
+    // TODO: This approach is only statistically zk. To make it perfectly zk, `R` would have to truly be an extension field polynomial.
+    let (opt_r_commit, opt_r_data) = if SC::Pcs::ZK {
+        let (r_commit, r_data) = pcs
+            .get_opt_randomization_poly_commitment(ext_trace_domains.iter().copied())
+            .expect("ZK is enabled, so we should have randomization commitments");
+        (Some(r_commit), Some(r_data))
+    } else {
+        (None, None)
+    };
+
+    if let Some(r_commit) = &opt_r_commit {
+        challenger.observe(r_commit.clone());
+    }
 
     // Sample OOD point.
     let zeta: Challenge<SC> = challenger.sample_algebra_element();
@@ -350,8 +369,13 @@ where
     let (opened_values, opening_proof) = {
         let mut rounds = Vec::new();
 
+        let round0 = opt_r_data.as_ref().map(|r_data| {
+            let round0_points = trace_domains.iter().map(|_| vec![zeta]).collect::<Vec<_>>();
+            (r_data, round0_points)
+        });
+        rounds.extend(round0);
         // Main trace round: per instance, open at zeta and its next point.
-        let round1_points = ext_trace_domains
+        let round1_points = trace_domains
             .iter()
             .map(|dom| {
                 vec![
@@ -378,7 +402,7 @@ where
                 .matrix_to_instance
                 .iter()
                 .map(|&inst_idx| {
-                    let zeta_next_i = ext_trace_domains[inst_idx]
+                    let zeta_next_i = trace_domains[inst_idx]
                         .next_point(zeta)
                         .expect("domain should support next_point operation");
                     vec![zeta, zeta_next_i]
@@ -387,7 +411,7 @@ where
             rounds.push((&global.prover_data, pre_points));
         }
 
-        let lookup_points: Vec<_> = ext_trace_domains
+        let lookup_points: Vec<_> = trace_domains
             .iter()
             .zip(&all_lookups)
             .filter(|&(_, lookups)| !lookups.is_empty())
@@ -405,7 +429,14 @@ where
             rounds.push(lookup_round);
         }
 
-        pcs.open(rounds, &mut challenger)
+        pcs.open(
+            rounds,
+            &mut challenger,
+            common
+                .preprocessed
+                .as_ref()
+                .map(|_| SC::Pcs::PREPROCESSED_TRACE_IDX),
+        )
     };
 
     // Rely on PCS indices for opened value groups: main trace, quotient, preprocessed.
@@ -442,6 +473,11 @@ where
 
     let mut quotient_openings_iter = opened_values[quotient_idx].iter();
     for (i, (s, e)) in quotient_chunk_ranges.iter().copied().enumerate() {
+        let random = if opt_r_data.is_some() {
+            Some(opened_values[0][i][0].clone())
+        } else {
+            None
+        };
         // Trace locals
         let tv = &trace_values_for_mats[i];
         let trace_local = tv[0].clone();
@@ -489,7 +525,7 @@ where
             preprocessed_local,
             preprocessed_next,
             quotient_chunks: qcs,
-            random: None, // ZK not supported in batch-stark yet
+            random,
         };
 
         per_instance.push(OpenedValuesWithLookups {
@@ -507,6 +543,7 @@ where
         commitments: BatchCommitments {
             main: main_commit,
             quotient_chunks: quotient_commit,
+            random: opt_r_commit,
             permutation,
         },
         opened_values: BatchOpenedValues {

@@ -67,6 +67,19 @@ where
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
     ) -> (Self::Commitment, Self::ProverData);
 
+    /// Same as `commit` but without randomization. This is used for preprocessed columns
+    /// which do not have to be randomized even when ZK is enabled. Note that the preprocessed columns still
+    /// need to be padded to the extended domain height.
+    ///
+    /// Returns both the commitment which should be sent to the verifier
+    /// and the prover data which can be used to produce opening proofs.
+    fn commit_preprocessing(
+        &self,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
+    ) -> (Self::Commitment, Self::ProverData) {
+        self.commit(evaluations)
+    }
+
     /// Commit to the quotient polynomial. We first decompose the quotient polynomial into
     /// `num_chunks` many smaller polynomials each of degree `degree / num_chunks`.
     /// This can have minor performance benefits, but is not strictly necessary in the non `zk` case.
@@ -93,12 +106,31 @@ where
             quotient_domain.split_evals(num_chunks, quotient_evaluations);
         let quotient_sub_domains = quotient_domain.split_domains(num_chunks);
 
-        self.commit(
+        let ldes = self.get_quotient_ldes(
             quotient_sub_domains
                 .into_iter()
                 .zip(quotient_sub_evaluations),
-        )
+            num_chunks,
+        );
+        self.commit_ldes(ldes)
     }
+
+    /// When committing to quotient polynomials in batch-STARK,
+    /// it is simpler to first compute the LDE evaluations before batch-committing to them.
+    ///
+    /// This corresponds to the first step of `commit_quotient`. When `zk` is enabled,
+    /// this will additionally add randomization.
+    fn get_quotient_ldes(
+        &self,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
+        num_chunks: usize,
+    ) -> Vec<RowMajorMatrix<Val<Self::Domain>>>;
+
+    /// Commits to a collection of LDE evaluation matrices.
+    fn commit_ldes(
+        &self,
+        ldes: Vec<RowMajorMatrix<Val<Self::Domain>>>,
+    ) -> (Self::Commitment, Self::ProverData);
 
     /// Given prover data corresponding to a commitment to a collection of evaluation matrices,
     /// return the evaluations of those matrices on the given domain.
@@ -112,6 +144,17 @@ where
         domain: Self::Domain,
     ) -> Self::EvaluationsOnDomain<'a>;
 
+    /// This is the same as `get_evaluations_on_domain` but without randomization.
+    /// This is used for preprocessed columns which do not have to be randomized even when ZK is enabled.
+    fn get_evaluations_on_domain_no_random<'a>(
+        &self,
+        prover_data: &'a Self::ProverData,
+        idx: usize,
+        domain: Self::Domain,
+    ) -> Self::EvaluationsOnDomain<'a> {
+        self.get_evaluations_on_domain(prover_data, idx, domain)
+    }
+
     /// Open a collection of polynomial commitments at a set of points. Produce the values at those points along with a proof
     /// of correctness.
     ///
@@ -120,6 +163,7 @@ where
     ///     - `data`: The prover data corresponding to a multi-matrix commitment.
     ///     - `opening_points`: A vector containing, for each matrix committed to, a vector of opening points.
     /// - `fiat_shamir_challenger`: The challenger that will be used to generate the proof.
+    /// - `preprocessed_idx`: If one of the committed matrices corresponds to preprocessed columns, this is the index of that matrix.
     ///
     /// Unwrapping the arguments further, each `data` contains a vector of the committed matrices (`matrices = Vec<M>`).
     /// If the length of `matrices` is not equal to the length of `opening_points` the function will error. Otherwise, for
@@ -143,6 +187,7 @@ where
             >,
         )>,
         fiat_shamir_challenger: &mut Challenger,
+        preprocessed_idx: Option<usize>,
     ) -> (OpenedValues<Challenge>, Self::Proof);
 
     /// Verify that a collection of opened values is correct.
@@ -180,7 +225,7 @@ where
 
     fn get_opt_randomization_poly_commitment(
         &self,
-        _domain: Self::Domain,
+        _domain: impl IntoIterator<Item = Self::Domain>,
     ) -> Option<(Self::Commitment, Self::ProverData)> {
         None
     }

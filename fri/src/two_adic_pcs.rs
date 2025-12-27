@@ -223,6 +223,34 @@ where
         self.mmcs.commit(ldes)
     }
 
+    fn get_quotient_ldes(
+        &self,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
+        _num_chunks: usize,
+    ) -> Vec<RowMajorMatrix<Val>> {
+        evaluations
+            .into_iter()
+            .map(|(domain, evals)| {
+                assert_eq!(domain.size(), evals.height());
+                // coset_lde_batch converts from evaluations over `xH` to evaluations over `shift * x * K`.
+                // Hence, letting `shift = g/x` the output will be evaluations over `gK` as desired.
+                // When `x = g`, we could just use the standard LDE but currently this doesn't seem
+                // to give a meaningful performance boost.
+                let shift = Val::GENERATOR / domain.shift();
+                // Compute the LDE with blowup factor fri.log_blowup.
+                // We bit reverse as this is required by our implementation of the FRI protocol.
+                self.dft
+                    .coset_lde_batch(evals, self.fri.log_blowup, shift)
+                    .bit_reverse_rows()
+                    .to_row_major_matrix()
+            })
+            .collect()
+    }
+
+    fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
+        self.mmcs.commit(ldes)
+    }
+
     /// Given the evaluations on a domain `gH`, return the evaluations on a different domain `g'K`.
     ///
     /// Arguments:
@@ -264,6 +292,7 @@ where
             >,
         )>,
         challenger: &mut Challenger,
+        _preprocessed_idx: Option<usize>,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
         /*
 
@@ -304,7 +333,11 @@ where
 
         // Contained in each `Self::ProverData` is a list of matrices which have been committed to.
         // We extract those matrices to be able to refer to them directly.
-        let mats_and_points = commitment_data_with_opening_points
+        let commitment_data_with_opening_pts = commitment_data_with_opening_points
+            .iter()
+            .map(|(data, points)| (*data, points.clone()))
+            .collect::<Vec<_>>();
+        let mats_and_points = commitment_data_with_opening_pts
             .iter()
             .map(|(data, points)| {
                 let mats = self
@@ -390,6 +423,7 @@ where
                                                 inv_denoms,
                                             )
                                         });
+
                                 challenger.observe_algebra_slice(&ys);
                                 ys
                             })
@@ -513,7 +547,7 @@ where
             fri_input,
             challenger,
             log_global_max_height,
-            &commitment_data_with_opening_points,
+            &commitment_data_with_opening_pts,
             &self.mmcs,
         );
 
