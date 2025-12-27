@@ -429,7 +429,7 @@ where
             rounds.push(lookup_round);
         }
 
-        pcs.open(
+        pcs.open_with_preprocessing(
             rounds,
             &mut challenger,
             common

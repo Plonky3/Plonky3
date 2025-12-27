@@ -309,7 +309,7 @@ where
             .chain(round3)
             .collect();
 
-        pcs.open(
+        pcs.open_with_preprocessing(
             rounds,
             &mut challenger,
             preprocessed_data_ref

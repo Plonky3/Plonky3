@@ -283,10 +283,27 @@ where
             >,
         )>,
         challenger: &mut Challenger,
+    ) -> (OpenedValues<Challenge>, Self::Proof) {
+        self.open_with_preprocessing(rounds, challenger, None)
+    }
+
+    fn open_with_preprocessing(
+        &self,
+        // For each round,
+        rounds: Vec<(
+            &Self::ProverData,
+            // for each matrix,
+            Vec<
+                // points to open
+                Vec<Challenge>,
+            >,
+        )>,
+        challenger: &mut Challenger,
         preprocessed_idx: Option<usize>,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
         let (mut inner_opened_values, inner_proof) =
-            self.inner.open(rounds, challenger, preprocessed_idx);
+            self.inner
+                .open_with_preprocessing(rounds, challenger, preprocessed_idx);
 
         // inner_opened_values includes opened values for the random codewords. Those should be
         // hidden from our caller, so we split them off and store them in the proof.

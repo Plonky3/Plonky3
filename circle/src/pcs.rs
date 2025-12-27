@@ -195,7 +195,6 @@ where
             >,
         )>,
         challenger: &mut Challenger,
-        _preprocessed_idx: Option<usize>,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
         // Open matrices at points
         let values: OpenedValues<Challenge> = rounds
@@ -624,7 +623,7 @@ mod tests {
         let zeta: Challenge = rng.random();
 
         let mut chal = Challenger::from_hasher(vec![], byte_hash);
-        let (values, proof) = pcs.open(vec![(&data, vec![vec![zeta]])], &mut chal, None);
+        let (values, proof) = pcs.open(vec![(&data, vec![vec![zeta]])], &mut chal);
 
         let mut chal = Challenger::from_hasher(vec![], byte_hash);
         pcs.verify(

@@ -147,7 +147,6 @@ where
             >,
         )>,
         _challenger: &mut Challenger,
-        _preprocessed_idx: Option<usize>,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
         (
             rounds

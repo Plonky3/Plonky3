@@ -155,8 +155,8 @@ where
         self.get_evaluations_on_domain(prover_data, idx, domain)
     }
 
-    /// Open a collection of polynomial commitments at a set of points. Produce the values at those points along with a proof
-    /// of correctness.
+    /// Open a collection of polynomial commitments at a set of points, when there is no preprocessing.
+    /// Produce the values at those points along with a proof of correctness.
     ///
     /// Arguments:
     /// - `commitment_data_with_opening_points`: A vector whose elements are a pair:
@@ -187,8 +187,43 @@ where
             >,
         )>,
         fiat_shamir_challenger: &mut Challenger,
-        preprocessed_idx: Option<usize>,
     ) -> (OpenedValues<Challenge>, Self::Proof);
+
+    /// Open a collection of polynomial commitments at a set of points. Produce the values at those points along with a proof
+    /// of correctness.
+    ///
+    /// Arguments:
+    /// - `commitment_data_with_opening_points`: A vector whose elements are a pair:
+    ///     - `data`: The prover data corresponding to a multi-matrix commitment.
+    ///     - `opening_points`: A vector containing, for each matrix committed to, a vector of opening points.
+    /// - `fiat_shamir_challenger`: The challenger that will be used to generate the proof.
+    ///
+    /// Unwrapping the arguments further, each `data` contains a vector of the committed matrices (`matrices = Vec<M>`).
+    /// If the length of `matrices` is not equal to the length of `opening_points` the function will error. Otherwise, for
+    /// each index `i`, the matrix `M = matrices[i]` will be opened at the points `opening_points[i]`.
+    ///
+    /// This means that each column of `M` will be interpreted as the evaluation vector of some polynomial
+    /// and we will compute the value of all of those polynomials at `opening_points[i]`.
+    ///
+    /// The domains on which the evaluation vectors are defined is not part of the arguments here
+    /// but should be public information known to both the prover and verifier.
+    fn open_with_preprocessing(
+        &self,
+        // For each multi-matrix commitment,
+        commitment_data_with_opening_points: Vec<(
+            // The matrices and auxiliary prover data
+            &Self::ProverData,
+            // for each matrix,
+            Vec<
+                // the points to open
+                Vec<Challenge>,
+            >,
+        )>,
+        fiat_shamir_challenger: &mut Challenger,
+        _preprocessed_idx: Option<usize>,
+    ) -> (OpenedValues<Challenge>, Self::Proof) {
+        self.open(commitment_data_with_opening_points, fiat_shamir_challenger)
+    }
 
     /// Verify that a collection of opened values is correct.
     ///
