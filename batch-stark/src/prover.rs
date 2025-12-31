@@ -429,14 +429,7 @@ where
             rounds.push(lookup_round);
         }
 
-        pcs.open(
-            rounds,
-            &mut challenger,
-            common
-                .preprocessed
-                .as_ref()
-                .map(|_| SC::Pcs::PREPROCESSED_TRACE_IDX),
-        )
+        pcs.open_with_preprocessing(rounds, &mut challenger, common.preprocessed.is_some())
     };
 
     // Rely on PCS indices for opened value groups: main trace, quotient, preprocessed.
