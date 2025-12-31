@@ -57,7 +57,7 @@ impl<F: Copy, const D: usize> BinomialExtensionField<F, D, F> {
     /// Panics if `N == 0`.
     #[inline]
     pub const fn new_array<const N: usize>(input: [[F; D]; N]) -> [Self; N] {
-        assert!(N > 0);
+        const { assert!(N > 0) }
         let mut output = [Self::new(input[0]); N];
         let mut i = 1;
         while i < N {
