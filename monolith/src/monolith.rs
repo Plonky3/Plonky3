@@ -37,9 +37,11 @@ where
     pub const NUM_BARS: usize = 8;
 
     pub fn new(mds: Mds) -> Self {
-        assert!(WIDTH >= 8);
-        assert!(WIDTH <= 24);
-        assert_eq!(WIDTH % 4, 0);
+        const {
+            assert!(WIDTH >= 8);
+            assert!(WIDTH <= 24);
+            assert!(WIDTH.is_multiple_of(4));
+        }
 
         let round_constants = Self::instantiate_round_constants();
         let lookup1 = Self::instantiate_lookup1();
