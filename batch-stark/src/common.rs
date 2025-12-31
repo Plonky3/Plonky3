@@ -225,7 +225,7 @@ where
     }
 }
 
-pub(crate) fn get_perm_challenges<SC: SGC, LG: LookupGadget>(
+pub fn get_perm_challenges<SC: SGC, LG: LookupGadget>(
     challenger: &mut SC::Challenger,
     all_lookups: &[Vec<Lookup<Val<SC>>>],
     lookup_gadget: &LG,

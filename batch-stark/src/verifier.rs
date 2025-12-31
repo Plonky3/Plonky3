@@ -26,7 +26,7 @@ use crate::config::{
     Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val, observe_instance_binding,
 };
 use crate::proof::BatchProof;
-use crate::symbolic::get_log_num_quotient_chunks;
+use crate::symbolic::{get_log_num_quotient_chunks, lookup_data_to_expr};
 
 #[instrument(skip_all)]
 pub fn verify_batch<SC, A, LG>(
@@ -104,7 +104,7 @@ where
             pre_w,
             public_values[i].len(),
             &all_lookups[i],
-            &global_lookup_data[i],
+            &lookup_data_to_expr(&global_lookup_data[i]),
             config.is_zk(),
             lookup_gadget,
         );

@@ -27,7 +27,9 @@ pub mod symbolic;
 pub mod verifier;
 
 // Re-export main types and functions for convenience
-pub use common::CommonData;
+#[cfg(debug_assertions)]
+pub use check_constraints::*;
+pub use common::{CommonData, get_perm_challenges};
 pub use config::{
     Challenge, Commitment, Domain, PackedChallenge, PackedVal, PcsError, PcsProof,
     StarkGenericConfig, Val,
