@@ -511,7 +511,7 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     #[inline]
     fn flatten_to_base(vec: Vec<Self>) -> Vec<F> {
         vec.into_iter()
-            .flat_map(|x| x.as_basis_coefficients_slice().to_vec())
+            .flat_map(|x| x.as_basis_coefficients_slice().iter().cloned())
             .collect()
     }
 
