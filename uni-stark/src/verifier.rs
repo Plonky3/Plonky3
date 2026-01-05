@@ -100,14 +100,7 @@ where
     // Get preprocessed commitment if present
     let preprocessed_commit = match (preprocessed_width, preprocessed_vk) {
         (0, None) => None,
-        (w, Some(vk)) if w == vk.width => {
-            assert_eq!(
-                config.is_zk(),
-                0,
-                "preprocessed columns not supported in zk mode"
-            );
-            Some(vk.commitment.clone())
-        }
+        (w, Some(vk)) if w == vk.width => Some(vk.commitment.clone()),
         _ => return Err(VerificationError::InvalidProofShape),
     };
 
