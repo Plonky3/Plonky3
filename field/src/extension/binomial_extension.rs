@@ -80,9 +80,13 @@ impl<F: Field, A: Algebra<F>, const D: usize> From<A> for BinomialExtensionField
     }
 }
 
-impl<F: Field, A: Algebra<F>, const D: usize> From<[A; D]> for BinomialExtensionField<F, D, A> {
+impl<F, A, const D: usize> From<[A; D]> for BinomialExtensionField<F, D, A> {
+    #[inline]
     fn from(x: [A; D]) -> Self {
-        Self::new(x)
+        Self {
+            value: x,
+            _phantom: PhantomData,
+        }
     }
 }
 
