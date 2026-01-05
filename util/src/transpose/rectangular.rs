@@ -792,32 +792,31 @@ unsafe fn transpose_region_tiled_4b(
     }
 }
 
-/// Transpose a complete `TILE_SIZE`×`TILE_SIZE` tile using NEON SIMD.
+/// Transpose a complete 16×16 tile using NEON SIMD.
 ///
-/// A `TILE_SIZE`×`TILE_SIZE` tile is processed as a (`TILE_SIZE`/`BLOCK_SIZE`)×(`TILE_SIZE`/`BLOCK_SIZE`)
-/// grid of `BLOCK_SIZE`×`BLOCK_SIZE` NEON blocks.
+/// A 16×16 tile is processed as a 4×4 grid of 4×4 NEON blocks.
 /// This function is fully unrolled for maximum performance.
 ///
 /// # Tile Structure
 ///
 /// ```text
-///     TILE_SIZE×TILE_SIZE Tile (TILE_SIZE^2 elements):
+///     16×16 Tile (256 elements):
 ///     ┌────────────────────────┬────────────────────────┬────────────────────────┬────────────────────────┐
 ///     │        Block           │        Block           │        Block           │        Block           │
 ///     │        (0,0)           │        (1,0)           │        (2,0)           │        (3,0)           │
-///     │ BLOCK_SIZE×BLOCK_SIZE  │ BLOCK_SIZE×BLOCK_SIZE  │ BLOCK_SIZE×BLOCK_SIZE  │ BLOCK_SIZE×BLOCK_SIZE  │
+///     │         4×4            │         4×4            │         4×4            │         4×4            │
 ///     ├────────────────────────┼────────────────────────┼────────────────────────┼────────────────────────┤
 ///     │        Block           │        Block           │        Block           │        Block           │
 ///     │        (0,1)           │        (1,1)           │        (2,1)           │        (3,1)           │
-///     │ BLOCK_SIZE×BLOCK_SIZE  │ BLOCK_SIZE×BLOCK_SIZE  │ BLOCK_SIZE×BLOCK_SIZE  │ BLOCK_SIZE×BLOCK_SIZE  │
+///     │         4×4            │         4×4            │         4×4            │         4×4            │
 ///     ├────────────────────────┼────────────────────────┼────────────────────────┼────────────────────────┤
 ///     │        Block           │        Block           │        Block           │        Block           │
 ///     │        (0,2)           │        (1,2)           │        (2,2)           │        (3,2)           │
-///     │ BLOCK_SIZE×BLOCK_SIZE  │ BLOCK_SIZE×BLOCK_SIZE  │ BLOCK_SIZE×BLOCK_SIZE  │ BLOCK_SIZE×BLOCK_SIZE  │
+///     │         4×4            │         4×4            │         4×4            │         4×4            │
 ///     ├────────────────────────┼────────────────────────┼────────────────────────┼────────────────────────┤
 ///     │        Block           │        Block           │        Block           │        Block           │
 ///     │        (0,3)           │        (1,3)           │        (2,3)           │        (3,3)           │
-///     │ BLOCK_SIZE×BLOCK_SIZE  │ BLOCK_SIZE×BLOCK_SIZE  │ BLOCK_SIZE×BLOCK_SIZE  │ BLOCK_SIZE×BLOCK_SIZE  │
+///     │         4×4            │         4×4            │         4×4            │         4×4            │
 ///     └────────────────────────┴────────────────────────┴────────────────────────┴────────────────────────┘
 /// ```
 ///
@@ -990,7 +989,7 @@ unsafe fn transpose_tile_16x16_neon(
     }
 }
 
-/// Transpose a `TILE_SIZE`×`TILE_SIZE` tile within a region (loop-based version).
+/// Transpose a 16×16 tile within a region (loop-based version).
 ///
 /// This version is used in the recursive algorithm where the slight overhead
 /// is negligible compared to the larger operation.
@@ -1008,7 +1007,7 @@ unsafe fn transpose_tile_16x16_region_neon(
     x_start: usize,
     y_start: usize,
 ) {
-    // Iterate over the (`TILE_SIZE`/`BLOCK_SIZE`)×(`TILE_SIZE`/`BLOCK_SIZE`) grid of blocks.
+    // Iterate over the 4×4 grid of 4×4 blocks (16/4 = 4 blocks per dimension).
     for by in 0..4 {
         for bx in 0..4 {
             // Compute block's top-left corner in the original matrix.
@@ -1080,16 +1079,16 @@ unsafe fn transpose_block_scalar(
     }
 }
 
-/// Transpose a `BLOCK_SIZE`×`BLOCK_SIZE` block of 32-bit elements using NEON SIMD.
+/// Transpose a 4×4 block of 32-bit elements using NEON SIMD.
 ///
 /// This is the fundamental building block of the entire transpose algorithm.
 ///
-/// It transposes a `BLOCK_SIZE`×`BLOCK_SIZE` block entirely within NEON registers
+/// It transposes a 4×4 block entirely within NEON registers
 /// using a two-stage butterfly network.
 ///
 /// # Memory Layout
 ///
-/// Input (`BLOCK_SIZE` rows, stride = `src_stride`):
+/// Input (4 rows, stride = `src_stride`):
 /// ```text
 ///     src + 0*stride:  [ a00, a01, a02, a03 ]  → q0
 ///     src + 1*stride:  [ a10, a11, a12, a13 ]  → q1
@@ -1097,7 +1096,7 @@ unsafe fn transpose_block_scalar(
 ///     src + 3*stride:  [ a30, a31, a32, a33 ]  → q3
 /// ```
 ///
-/// Output (`BLOCK_SIZE` rows, stride = `dst_stride`):
+/// Output (4 rows, stride = `dst_stride`):
 /// ```text
 ///     dst + 0*stride:  [ a00, a10, a20, a30 ]  ← r0
 ///     dst + 1*stride:  [ a01, a11, a21, a31 ]  ← r1
