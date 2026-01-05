@@ -71,6 +71,9 @@
 #[cfg(all(target_arch = "aarch64", feature = "parallel"))]
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+#[cfg(target_arch = "aarch64")]
+use core::arch::aarch64::*;
+
 /// Maximum number of elements for the simple scalar transpose.
 ///
 /// For matrices with fewer than `SMALL_LEN` elements (~1KB for 4-byte elements),
@@ -1155,8 +1158,6 @@ unsafe fn transpose_block_scalar(
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
 unsafe fn transpose_4x4_neon(src: *const u32, dst: *mut u32, src_stride: usize, dst_stride: usize) {
-    use core::arch::aarch64::*;
-
     unsafe {
         // Phase 1: Load 4 rows into NEON registers
         //
