@@ -68,11 +68,10 @@
 //! - **Medium (<`MEDIUM_LEN` elements)**: `TILE_SIZE`×`TILE_SIZE` Tiled - L2-friendly tiles
 //! - **Large (≥`MEDIUM_LEN` elements)**: Recursive + Tiled - Cache-oblivious
 
-#[cfg(all(target_arch = "aarch64", feature = "parallel"))]
-use core::sync::atomic::{AtomicUsize, Ordering};
-
 #[cfg(target_arch = "aarch64")]
 use core::arch::aarch64::*;
+#[cfg(all(target_arch = "aarch64", feature = "parallel"))]
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 /// Maximum number of elements for the simple scalar transpose.
 ///
