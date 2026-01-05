@@ -46,7 +46,7 @@ where
     }
 
     // Check PoW.
-    if !challenger.check_witness(params.proof_of_work_bits, proof.pow_witness) {
+    if !challenger.check_witness(params.query_proof_of_work_bits, proof.pow_witness) {
         return Err(FriError::InvalidPowWitness);
     }
 

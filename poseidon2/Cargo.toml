@@ -18,11 +18,11 @@ p3-util.workspace = true
 rand.workspace = true
 
 [dev-dependencies]
-p3-baby-bear.workspace = true
-p3-bn254.workspace = true
-p3-goldilocks.workspace = true
-p3-koala-bear.workspace = true
-p3-mersenne-31.workspace = true
+p3-baby-bear = { path = "../baby-bear" }
+p3-bn254 = { path = "../bn254" }
+p3-goldilocks = { path = "../goldilocks" }
+p3-koala-bear = { path = "../koala-bear" }
+p3-mersenne-31 = { path = "../mersenne-31" }
 
 criterion.workspace = true
 

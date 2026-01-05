@@ -37,6 +37,33 @@ impl<
     const SBOX_REGISTERS: usize,
     const HALF_FULL_ROUNDS: usize,
     const PARTIAL_ROUNDS: usize,
+> Clone
+    for Poseidon2Air<
+        F,
+        LinearLayers,
+        WIDTH,
+        SBOX_DEGREE,
+        SBOX_REGISTERS,
+        HALF_FULL_ROUNDS,
+        PARTIAL_ROUNDS,
+    >
+{
+    fn clone(&self) -> Self {
+        Self {
+            constants: self.constants.clone(),
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<
+    F: PrimeCharacteristicRing,
+    LinearLayers,
+    const WIDTH: usize,
+    const SBOX_DEGREE: u64,
+    const SBOX_REGISTERS: usize,
+    const HALF_FULL_ROUNDS: usize,
+    const PARTIAL_ROUNDS: usize,
 >
     Poseidon2Air<
         F,

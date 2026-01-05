@@ -197,15 +197,16 @@ pub trait PrimeCharacteristicRing:
         (Self::ONE - self.clone()) * y.clone()
     }
 
-    /// The vanishing polynomial for boolean values: `x * (1 - x)`.
+    /// The vanishing polynomial for boolean values: `x * (x - 1)`.
     ///
     /// This is a polynomial of degree `2` that evaluates to `0` if the input is `0` or `1`.
     /// If our space is a field, then this will be nonzero on all other inputs.
     #[must_use]
     #[inline(always)]
     fn bool_check(&self) -> Self {
-        // We use `x * (1 - x)` instead of `x * (x - 1)` as this lets us delegate to the `andn` function.
-        self.andn(self)
+        // Note: We could delegate to `andn`, but to maintain backwards
+        // compatible AIR definitions, we stick with `x * (x - 1)` here.
+        self.clone() * (self.clone() - Self::ONE)
     }
 
     /// Exponentiation by a `u64` power.

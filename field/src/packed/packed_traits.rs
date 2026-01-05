@@ -1,4 +1,3 @@
-use alloc::vec::Vec;
 use core::iter::{Product, Sum};
 use core::mem::MaybeUninit;
 use core::ops::{Div, DivAssign};
@@ -165,6 +164,33 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         let n = buf.len() * Self::WIDTH;
         unsafe { slice::from_raw_parts(buf_ptr, n) }
     }
+
+    /// Extract the scalar value at the given SIMD lane.
+    ///
+    /// This is equivalent to `self.as_slice()[lane]` but more explicit about the
+    /// SIMD extraction semantics.
+    #[inline]
+    #[must_use]
+    fn extract(&self, lane: usize) -> Self::Value {
+        self.as_slice()[lane]
+    }
+
+    /// Unpack `N` packed values into `WIDTH` rows of `N` scalars.
+    ///
+    /// ## Inputs
+    /// - `packed`: An array of `N` packed values.
+    /// - `rows`: A mutable slice of exactly `WIDTH` arrays to write the unpacked values.
+    ///
+    /// ## Panics
+    /// Panics if `rows.len() != WIDTH`.
+    #[inline]
+    fn unpack_into<const N: usize>(packed: &[Self; N], rows: &mut [[Self::Value; N]]) {
+        assert_eq!(rows.len(), Self::WIDTH);
+        #[allow(clippy::needless_range_loop)]
+        for lane in 0..Self::WIDTH {
+            rows[lane] = array::from_fn(|col| packed[col].extract(lane));
+        }
+    }
 }
 
 unsafe impl<T: Packable, const WIDTH: usize> PackedValue for [T; WIDTH] {
@@ -319,19 +345,24 @@ pub trait PackedFieldExtension<
     #[must_use]
     fn from_ext_slice(ext_slice: &[ExtField]) -> Self;
 
-    /// Given a iterator of packed extension field elements, convert to an iterator of
+    /// Extract the extension field element at the given SIMD lane.
+    #[inline]
+    #[must_use]
+    fn extract(&self, lane: usize) -> ExtField {
+        ExtField::from_basis_coefficients_fn(|d| {
+            self.as_basis_coefficients_slice()[d].as_slice()[lane]
+        })
+    }
+
+    /// Convert an iterator of packed extension field elements to an iterator of
     /// extension field elements.
     ///
     /// This performs the inverse transformation to `from_ext_slice`.
     #[inline]
     #[must_use]
     fn to_ext_iter(iter: impl IntoIterator<Item = Self>) -> impl Iterator<Item = ExtField> {
-        iter.into_iter().flat_map(|x| {
-            let packed_coeffs = x.as_basis_coefficients_slice();
-            (0..BaseField::Packing::WIDTH)
-                .map(|i| ExtField::from_basis_coefficients_fn(|j| packed_coeffs[j].as_slice()[i]))
-                .collect::<Vec<_>>() // PackedFieldExtension's should reimplement this to avoid this allocation.
-        })
+        iter.into_iter()
+            .flat_map(|x| (0..BaseField::Packing::WIDTH).map(move |i| x.extract(i)))
     }
 
     /// Similar to `packed_powers`, construct an iterator which returns

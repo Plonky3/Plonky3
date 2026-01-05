@@ -138,6 +138,32 @@ where
         (comm, mmcs_data)
     }
 
+    fn get_quotient_ldes(
+        &self,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
+        _num_chunks: usize,
+    ) -> Vec<RowMajorMatrix<Val>> {
+        evaluations
+            .into_iter()
+            .map(|(domain, evals)| {
+                assert!(
+                    domain.log_n >= 2,
+                    "CirclePcs cannot commit to a matrix with fewer than 4 rows.",
+                    // (because we bivariate fold one bit, and fri needs one more bit)
+                );
+                CircleEvaluations::from_natural_order(domain, evals)
+                    .extrapolate(CircleDomain::standard(
+                        domain.log_n + self.fri_params.log_blowup,
+                    ))
+                    .to_cfft_order()
+            })
+            .collect_vec()
+    }
+
+    fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
+        self.mmcs.commit(ldes)
+    }
+
     fn get_evaluations_on_domain<'a>(
         &self,
         data: &'a Self::ProverData,
@@ -195,9 +221,7 @@ where
                                 let ps_at_zeta =
                                     info_span!("compute opened values with Lagrange interpolation")
                                         .in_scope(|| evals.evaluate_at_point(zeta));
-                                ps_at_zeta
-                                    .iter()
-                                    .for_each(|&p| challenger.observe_algebra_element(p));
+                                challenger.observe_algebra_slice(&ps_at_zeta);
                                 ps_at_zeta
                             })
                             .collect()
@@ -376,9 +400,7 @@ where
         for (_, round) in &rounds {
             for (_, mat) in round {
                 for (_, point) in mat {
-                    point
-                        .iter()
-                        .for_each(|&opening| challenger.observe_algebra_element(opening));
+                    challenger.observe_algebra_slice(point);
                 }
             }
         }

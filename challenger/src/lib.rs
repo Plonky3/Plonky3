@@ -17,7 +17,7 @@ pub use duplex_challenger::*;
 pub use grinding_challenger::*;
 pub use hash_challenger::*;
 pub use multi_field_challenger::*;
-use p3_field::{Algebra, BasedVectorSpace, Field};
+use p3_field::{Algebra, BasedVectorSpace, Field, PrimeField64};
 pub use serializing_challenger::*;
 
 /// A generic trait for absorbing elements into the transcript.
@@ -70,6 +70,31 @@ pub trait CanSampleBits<T> {
     fn sample_bits(&mut self, bits: usize) -> T;
 }
 
+/// Uniform bit sampling interface.
+///
+/// This trait provides a method for drawing uniformly distributed bitstrings
+/// from a Fiat–Shamir transcript. The goal is to obtain an integer supported
+/// on the range $[0, 2^{bits})$ with each value having equal probability.
+pub trait CanSampleUniformBits<F> {
+    /// Sample a random `bits`-bit integer from the transcript with a guarantee of
+    /// uniformly sampled bits.
+    ///
+    /// Performance overhead depends on the field and number of bits requested.
+    /// E.g. for KoalaBear sampling up to 24 bits uniformly is essentially free.
+    ///
+    /// If `REJECTION_SAMPLE` is set to true then this function will sample multiple field
+    /// elements until it finds one which will produce uniform bits.
+    /// If `REJECTION_SAMPLE` is set to false then this function will sample a single field
+    /// element and produce and error if the value would produce non-uniform bits.
+    ///
+    /// The probability of a panic or a resample is about 1/P for most fields.
+    /// See `UniformSamplingField` implementation for each field for details.
+    fn sample_uniform_bits<const RESAMPLE: bool>(
+        &mut self,
+        bits: usize,
+    ) -> Result<usize, ResamplingError>;
+}
+
 /// A high-level trait combining observation and sampling over a finite field.
 pub trait FieldChallenger<F: Field>:
     CanObserve<F> + CanSample<F> + CanSampleBits<usize> + Sync
@@ -77,13 +102,25 @@ pub trait FieldChallenger<F: Field>:
     /// Absorb an element from a vector space over the base field.
     ///
     /// Decomposes the element into its basis coefficients and absorbs each.
+    #[inline(always)]
     fn observe_algebra_element<A: BasedVectorSpace<F>>(&mut self, alg_elem: A) {
         self.observe_slice(alg_elem.as_basis_coefficients_slice());
+    }
+
+    /// Absorb a slice of elements from a vector space over the base field.
+    ///
+    /// Decomposes each element into its basis coefficients and absorbs them.
+    #[inline(always)]
+    fn observe_algebra_slice<A: BasedVectorSpace<F> + Clone>(&mut self, alg_elems: &[A]) {
+        for alg_elem in alg_elems {
+            self.observe_algebra_element(alg_elem.clone());
+        }
     }
 
     /// Sample an element of a vector space over the base field.
     ///
     /// Constructs the element by sampling basis coefficients.
+    #[inline(always)]
     fn sample_algebra_element<A: BasedVectorSpace<F>>(&mut self) -> A {
         A::from_basis_coefficients_fn(|_| self.sample())
     }
@@ -100,7 +137,7 @@ pub trait FieldChallenger<F: Field>:
     /// verification operates entirely in the extension field (challenges, opened values, constraint
     /// evaluation), having a challenger that only observes extension field elements significantly
     /// simplifies the recursive circuit implementation.
-    #[inline]
+    #[inline(always)]
     fn observe_base_as_algebra_element<EF>(&mut self, val: F)
     where
         EF: Algebra<F> + BasedVectorSpace<F>,
@@ -157,25 +194,17 @@ where
     }
 }
 
-impl<C, F: Field> FieldChallenger<F> for &mut C
+impl<C, F: Field> FieldChallenger<F> for &mut C where C: FieldChallenger<F> {}
+
+impl<C, F> CanSampleUniformBits<F> for &mut C
 where
-    C: FieldChallenger<F>,
+    F: PrimeField64,
+    C: CanSampleUniformBits<F>,
 {
-    #[inline(always)]
-    fn observe_algebra_element<EF: BasedVectorSpace<F>>(&mut self, ext: EF) {
-        (*self).observe_algebra_element(ext);
-    }
-
-    #[inline(always)]
-    fn sample_algebra_element<EF: BasedVectorSpace<F>>(&mut self) -> EF {
-        (*self).sample_algebra_element()
-    }
-
-    #[inline(always)]
-    fn observe_base_as_algebra_element<EF>(&mut self, val: F)
-    where
-        EF: Algebra<F> + BasedVectorSpace<F>,
-    {
-        (*self).observe_base_as_algebra_element::<EF>(val);
+    fn sample_uniform_bits<const RESAMPLE: bool>(
+        &mut self,
+        bits: usize,
+    ) -> Result<usize, ResamplingError> {
+        (*self).sample_uniform_bits::<RESAMPLE>(bits)
     }
 }

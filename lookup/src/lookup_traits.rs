@@ -26,6 +26,19 @@ pub struct LookupData<F: Clone> {
     pub expected_cumulated: F,
 }
 
+impl<F> From<LookupData<F>> for LookupData<SymbolicExpression<F>>
+where
+    F: Clone,
+{
+    fn from(data: LookupData<F>) -> Self {
+        Self {
+            name: data.name,
+            aux_idx: data.aux_idx,
+            expected_cumulated: SymbolicExpression::Constant(data.expected_cumulated),
+        }
+    }
+}
+
 impl<F: Field> LookupData<F> {
     pub fn to_symbolic(&self) -> LookupData<SymbolicExpression<F>> {
         let expected = SymbolicExpression::Constant(self.expected_cumulated);
@@ -86,7 +99,7 @@ pub trait LookupGadget {
         builder: &mut AB,
         contexts: &[Lookup<AB::F>],
         // Assumed to be sorted by auxiliary_index.
-        lookup_data: &[LookupData<AB::EF>],
+        lookup_data: &[LookupData<AB::ExprEF>],
     ) where
         AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
     {
@@ -109,8 +122,7 @@ pub trait LookupGadget {
                     if *aux_idx != context.columns[0] {
                         panic!("Expected cumulated values not sorted by auxiliary index");
                     }
-                    let expr_ef_expected = AB::ExprEF::from(*expected_cumulated);
-                    self.eval_global_update(builder, context, expr_ef_expected);
+                    self.eval_global_update(builder, context, expected_cumulated.clone());
                 }
             }
         }
@@ -257,7 +269,7 @@ where
         &self,
         builder: &mut AB,
         lookups: &[Lookup<AB::F>],
-        lookup_data: &[LookupData<AB::EF>],
+        lookup_data: &[LookupData<AB::ExprEF>],
         lookup_gadget: &LG,
     ) {
         Air::<AB>::eval(self, builder);
@@ -353,7 +365,7 @@ impl<SC: StarkGenericConfig> AirBuilderWithPublicValues for LookupTraceBuilder<'
 impl<SC: StarkGenericConfig> PairBuilder for LookupTraceBuilder<'_, SC> {
     fn preprocessed(&self) -> Self::M {
         self.preprocessed
-            .map_or_else(|| panic!("Missing preprocessed columns"), |prep| prep)
+            .unwrap_or_else(|| panic!("Missing preprocessed columns"))
     }
 }
 

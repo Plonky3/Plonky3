@@ -1,3 +1,4 @@
+use p3_challenger::UniformSamplingField;
 use p3_field::exponentiation::exp_1420470955;
 use p3_field::{Algebra, PrimeCharacteristicRing};
 use p3_monty_31::{
@@ -21,6 +22,28 @@ impl MontyParameters for KoalaBearParameters {
 
     const MONTY_BITS: u32 = 32;
     const MONTY_MU: u32 = 0x81000001;
+}
+
+impl UniformSamplingField for KoalaBearParameters {
+    const MAX_SINGLE_SAMPLE_BITS: usize = 24;
+    // NOTE: We only include `0` to not have to deal with one-off indexing. `k` must be > 0.
+    // Also, we don't care about k > 30 for KoalaBear.
+    const SAMPLING_BITS_M: [u64; 64] = {
+        let prime: u64 = Self::PRIME as u64;
+        let mut a = [0u64; 64];
+        let mut k = 0;
+        while k < 64 {
+            if k == 0 {
+                a[k] = prime; // This value is irrelevant in practice. `bits = 0` returns 0 always.
+            } else {
+                // Create a mask to zero out the last k bits
+                let mask = !((1u64 << k) - 1);
+                a[k] = prime & mask;
+            }
+            k += 1;
+        }
+        a
+    };
 }
 
 impl PackedMontyParameters for KoalaBearParameters {}

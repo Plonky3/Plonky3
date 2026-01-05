@@ -12,7 +12,7 @@ use p3_util::log2_strict_usize;
 use p3_util::zip_eq::zip_eq;
 use serde::{Deserialize, Serialize};
 
-use crate::{OpenedValues, Pcs};
+use crate::{OpenedValues, Pcs, PolynomialSpace};
 
 /// A trivial PCS: its commitment is simply the coefficients of each poly.
 #[derive(Debug)]
@@ -88,6 +88,36 @@ where
             coeffs.clone().into_iter().map(|m| m.values).collect(),
             coeffs,
         )
+    }
+
+    fn commit_quotient(
+        &self,
+        quotient_domain: Self::Domain,
+        quotient_evaluations: RowMajorMatrix<crate::Val<Self::Domain>>,
+        num_chunks: usize,
+    ) -> (Self::Commitment, Self::ProverData) {
+        let quotient_sub_evaluations =
+            quotient_domain.split_evals(num_chunks, quotient_evaluations);
+        let quotient_sub_domains = quotient_domain.split_domains(num_chunks);
+
+        Pcs::<Challenge, Challenger>::commit(
+            self,
+            quotient_sub_domains
+                .into_iter()
+                .zip(quotient_sub_evaluations),
+        )
+    }
+
+    fn get_quotient_ldes(
+        &self,
+        _evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
+        _num_chunks: usize,
+    ) -> Vec<RowMajorMatrix<crate::Val<Self::Domain>>> {
+        unimplemented!("This PCS does not support computing of LDEs");
+    }
+
+    fn commit_ldes(&self, _ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
+        unimplemented!("This PCS does not support computing of LDEs");
     }
 
     fn get_evaluations_on_domain<'a>(

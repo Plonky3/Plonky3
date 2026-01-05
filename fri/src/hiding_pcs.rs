@@ -111,7 +111,28 @@ where
         Pcs::<Challenge, Challenger>::commit(&self.inner, randomized_evaluations)
     }
 
-    /// Commit to the quotient polynomial. We first decompose the quotient polynomial into
+    fn commit_preprocessing(
+        &self,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
+    ) -> (Self::Commitment, Self::ProverData) {
+        // Pad values with zero columns instead of random columns.
+        let padded_evals = evaluations
+            .into_iter()
+            .map(|(domain, mat)| {
+                let mat_width = mat.width();
+                // Let `w` and `h` be the width and height of the original matrix. The padded matrix should have height `2h` and width `w`.
+                // To generate it, we add `w` zero columns to the original matrix, then reshape it by setting the width to `w`.
+                // All columns are added on the right hand side so, after reshaping, this has the net effect of adding interleaving the original trace with zero rows.
+                let mut padded_evaluation = add_zero_cols(&mat, mat_width);
+                padded_evaluation.width = mat_width;
+                (domain, padded_evaluation)
+            })
+            .collect::<Vec<_>>();
+
+        Pcs::<Challenge, Challenger>::commit(&self.inner, padded_evals)
+    }
+
+    /// Get the quotient polynomial LDEs. We first decompose the quotient polynomial into
     /// `num_chunks` many smaller polynomials each of degree `degree / num_chunks`.
     /// These quotient polynomials are then randomized as explained in Section 4.2 of
     /// https://eprint.iacr.org/2024/1037.pdf .
@@ -125,19 +146,12 @@ where
     /// # Panics
     /// This function panics if `num_chunks` is either `0` or `1`. The first case makes no logical
     /// sense and in the second case, the resulting commitment would not be hiding.
-    fn commit_quotient(
+    fn get_quotient_ldes(
         &self,
-        quotient_domain: Self::Domain,
-        quotient_evaluations: RowMajorMatrix<Val>,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
         num_chunks: usize,
-    ) -> (Self::Commitment, Self::ProverData) {
-        assert!(num_chunks > 1);
-
-        // Given the evaluation vector of `Q_i(x)` over a domain, split it into evaluation vectors
-        // of `q_{i0}(x), ...` over subdomains.
-        let evaluations = quotient_domain.split_evals(num_chunks, quotient_evaluations);
-        let domains = quotient_domain.split_domains(num_chunks);
-
+    ) -> Vec<RowMajorMatrix<Val>> {
+        let (domains, evaluations): (Vec<_>, Vec<_>) = evaluations.into_iter().unzip();
         let cis = get_zp_cis(&domains);
         let last_chunk = num_chunks - 1;
         let last_chunk_ci_inv = cis[last_chunk].inverse();
@@ -169,7 +183,7 @@ where
             }
         }
 
-        let ldes: Vec<_> = domains
+        domains
             .into_iter()
             .zip(randomized_evaluations)
             .enumerate()
@@ -215,9 +229,11 @@ where
 
                 lde_evals.bit_reverse_rows().to_row_major_matrix()
             })
-            .collect();
+            .collect()
+    }
 
-        self.inner.mmcs.commit(ldes)
+    fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
+        Pcs::<Challenge, Challenger>::commit_ldes(&self.inner, ldes)
     }
 
     fn get_evaluations_on_domain<'a>(
@@ -238,6 +254,23 @@ where
         HorizontallyTruncated::new(inner_evals, inner_width - self.num_random_codewords).unwrap()
     }
 
+    fn get_evaluations_on_domain_no_random<'a>(
+        &self,
+        prover_data: &'a Self::ProverData,
+        idx: usize,
+        domain: Self::Domain,
+    ) -> Self::EvaluationsOnDomain<'a> {
+        let inner_evals = <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as Pcs<
+            Challenge,
+            Challenger,
+        >>::get_evaluations_on_domain(
+            &self.inner, prover_data, idx, domain
+        );
+        let inner_width = inner_evals.width();
+
+        HorizontallyTruncated::new(inner_evals, inner_width).unwrap()
+    }
+
     fn open(
         &self,
         // For each round,
@@ -251,21 +284,45 @@ where
         )>,
         challenger: &mut Challenger,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
-        let (mut inner_opened_values, inner_proof) = self.inner.open(rounds, challenger);
+        self.open_with_preprocessing(rounds, challenger, false)
+    }
 
+    fn open_with_preprocessing(
+        &self,
+        // For each round,
+        rounds: Vec<(
+            &Self::ProverData,
+            // for each matrix,
+            Vec<
+                // points to open
+                Vec<Challenge>,
+            >,
+        )>,
+        challenger: &mut Challenger,
+        is_preprocessing: bool,
+    ) -> (OpenedValues<Challenge>, Self::Proof) {
+        let (mut inner_opened_values, inner_proof) =
+            self.inner
+                .open_with_preprocessing(rounds, challenger, is_preprocessing);
         // inner_opened_values includes opened values for the random codewords. Those should be
         // hidden from our caller, so we split them off and store them in the proof.
         let opened_values_rand = inner_opened_values
             .iter_mut()
-            .map(|opened_values_for_round| {
+            .enumerate()
+            .map(|(idx, opened_values_for_round)| {
                 opened_values_for_round
                     .iter_mut()
                     .map(|opened_values_for_mat| {
                         opened_values_for_mat
                             .iter_mut()
                             .map(|opened_values_for_point| {
-                                let split =
-                                    opened_values_for_point.len() - self.num_random_codewords;
+                                let num_random_codewords =
+                                    if is_preprocessing && idx == <Self as Pcs<Challenge, Challenger>>::PREPROCESSED_TRACE_IDX {
+                                        0
+                                    } else {
+                                        self.num_random_codewords
+                                    };
+                                let split = opened_values_for_point.len() - num_random_codewords;
                                 opened_values_for_point.drain(split..).collect()
                             })
                             .collect()
@@ -322,19 +379,23 @@ where
 
     fn get_opt_randomization_poly_commitment(
         &self,
-        ext_trace_domain: Self::Domain,
+        ext_trace_domains: impl IntoIterator<Item = Self::Domain>,
     ) -> Option<(Self::Commitment, Self::ProverData)> {
-        let random_vals = DenseMatrix::rand(
-            &mut *self.rng.borrow_mut(),
-            ext_trace_domain.size(),
-            self.num_random_codewords + Challenge::DIMENSION,
-        );
-        let extended_domain = <Self as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
-            self,
-            ext_trace_domain.size(),
-        );
+        let random_input_vals = ext_trace_domains
+            .into_iter()
+            .map(|domain| {
+                let m = DenseMatrix::rand(
+                    &mut *self.rng.borrow_mut(),
+                    domain.size(),
+                    self.num_random_codewords + Challenge::DIMENSION,
+                );
+
+                (domain, m)
+            })
+            .collect::<Vec<_>>();
+
         let r_commit_and_data =
-            Pcs::<Challenge, Challenger>::commit(&self.inner, [(extended_domain, random_vals)]);
+            Pcs::<Challenge, Challenger>::commit(&self.inner, random_input_vals);
         Some(r_commit_and_data)
     }
 }
@@ -364,6 +425,29 @@ where
         .for_each(|(new_row, old_row)| {
             new_row[..old_w].copy_from_slice(old_row);
             new_row[old_w..].iter_mut().for_each(|v| *v = rng.random());
+        });
+    result
+}
+
+/// Adds `num_extra_columns` zero columns to the right of `mat`, then reshapes it by setting the width to
+/// `mat.width() + num_extra_columns`.
+#[instrument(level = "debug", skip_all)]
+fn add_zero_cols<Val>(mat: &RowMajorMatrix<Val>, num_extra_columns: usize) -> RowMajorMatrix<Val>
+where
+    Val: Field,
+{
+    let old_w = mat.width();
+    let new_w = old_w + num_extra_columns;
+    let h = mat.height();
+
+    let new_values = Val::zero_vec(new_w * h);
+    let mut result = RowMajorMatrix::new(new_values, new_w);
+
+    result
+        .rows_mut()
+        .zip(mat.row_slices())
+        .for_each(|(new_row, old_row)| {
+            new_row[..old_w].copy_from_slice(old_row);
         });
     result
 }

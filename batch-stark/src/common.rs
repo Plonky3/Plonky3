@@ -182,13 +182,8 @@ where
                 continue;
             }
 
-            // Preprocessed columns are not supported in zk mode in the current design.
-            assert_eq!(
-                is_zk, 0,
-                "preprocessed columns are not supported in zk mode"
-            );
-
             let degree = 1 << base_db;
+            let ext_degree = 1 << ext_db;
             assert_eq!(
                 preprocessed.height(),
                 degree,
@@ -196,7 +191,7 @@ where
                 i
             );
 
-            let domain = pcs.natural_domain_for_degree(degree);
+            let domain = pcs.natural_domain_for_degree(ext_degree);
             let matrix_index = domains_and_traces.len();
 
             domains_and_traces.push((domain, preprocessed));
@@ -205,14 +200,14 @@ where
             instances_meta.push(Some(PreprocessedInstanceMeta {
                 matrix_index,
                 width,
-                degree_bits: base_db,
+                degree_bits: ext_db,
             }));
         }
 
         let preprocessed = if domains_and_traces.is_empty() {
             None
         } else {
-            let (commitment, prover_data) = pcs.commit(domains_and_traces);
+            let (commitment, prover_data) = pcs.commit_preprocessing(domains_and_traces);
             Some(GlobalPreprocessed {
                 commitment,
                 prover_data,
@@ -230,7 +225,7 @@ where
     }
 }
 
-pub(crate) fn get_perm_challenges<SC: SGC, LG: LookupGadget>(
+pub fn get_perm_challenges<SC: SGC, LG: LookupGadget>(
     challenger: &mut SC::Challenger,
     all_lookups: &[Vec<Lookup<Val<SC>>>],
     lookup_gadget: &LG,

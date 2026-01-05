@@ -17,18 +17,18 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
-use p3_fri::{FriParameters, TwoAdicFriPcs, create_test_fri_params};
+use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs, create_test_fri_params};
 use p3_keccak::Keccak256Hash;
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::lookup_traits::{AirLookupHandler, AirNoLookup, Direction, Kind, Lookup};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_merkle_tree::MerkleTreeMmcs;
+use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
 };
-use p3_uni_stark::{StarkConfig, SymbolicAirBuilder, SymbolicExpression};
+use p3_uni_stark::{StarkConfig, StarkGenericConfig, SymbolicAirBuilder, SymbolicExpression};
 use p3_util::log2_strict_usize;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -515,11 +515,23 @@ type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
 type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 type ValMmcs =
     MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
+type HidingValMmcs = MerkleTreeHidingMmcs<
+    <Val as Field>::Packing,
+    <Val as Field>::Packing,
+    MyHash,
+    MyCompress,
+    SmallRng,
+    8,
+    4,
+>;
 type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+type HidingChallengeMmcs = ExtensionMmcs<Val, Challenge, HidingValMmcs>;
 type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 type Dft = Radix2DitParallel<Val>;
 type MyPcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
+type HidingPcs = HidingFriPcs<Val, Dft, HidingValMmcs, HidingChallengeMmcs, SmallRng>;
 type MyConfig = StarkConfig<MyPcs, Challenge, Challenger>;
+type MyHidingConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
 
 fn make_config(seed: u64) -> MyConfig {
     let mut rng = SmallRng::seed_from_u64(seed);
@@ -531,6 +543,20 @@ fn make_config(seed: u64) -> MyConfig {
     let dft = Dft::default();
     let fri_params = create_test_fri_params(challenge_mmcs, 2);
     let pcs = MyPcs::new(dft, val_mmcs, fri_params);
+    let challenger = Challenger::new(perm);
+    StarkConfig::new(pcs, challenger)
+}
+
+fn make_config_zk(seed: u64) -> MyHidingConfig {
+    let mut rng = SmallRng::seed_from_u64(seed);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    let hash = MyHash::new(perm.clone());
+    let compress = MyCompress::new(perm.clone());
+    let val_mmcs = HidingValMmcs::new(hash, compress, rng.clone());
+    let challenge_mmcs = HidingChallengeMmcs::new(val_mmcs.clone());
+    let dft = Dft::default();
+    let fri_params = create_test_fri_params(challenge_mmcs, 2);
+    let pcs = HidingPcs::new(dft, val_mmcs, fri_params, 4, rng);
     let challenger = Challenger::new(perm);
     StarkConfig::new(pcs, challenger)
 }
@@ -699,6 +725,35 @@ fn test_two_instances() -> Result<(), impl Debug> {
     let common = CommonData::from_instances(&config, &instances);
     let proof = prove_batch_no_lookups(&config, &instances, &common);
 
+    let airs = vec![air_fib, air_mul];
+    let pvs = vec![fib_pis, mul_pis];
+    verify_batch_no_lookups(&config, &airs, &proof, &pvs, &common)
+}
+
+#[test]
+fn test_two_instances_zk() -> Result<(), impl Debug> {
+    let config = make_config_zk(1337);
+
+    let (air_fib, fib_trace, fib_pis) = create_fib_instance(4); // 16 rows
+    let (air_mul, mul_trace, mul_pis) = create_mul_instance(4, 2); // 16 rows, 2 reps
+
+    let instances = vec![
+        StarkInstance {
+            air: &air_fib,
+            trace: fib_trace,
+            public_values: fib_pis.clone(),
+            lookups: vec![],
+        },
+        StarkInstance {
+            air: &air_mul,
+            trace: mul_trace,
+            public_values: mul_pis.clone(),
+            lookups: vec![],
+        },
+    ];
+
+    let common = CommonData::from_instances(&config, &instances);
+    let proof = prove_batch_no_lookups(&config, &instances, &common);
     let airs = vec![air_fib, air_mul];
     let pvs = vec![fib_pis, mul_pis];
     verify_batch_no_lookups(&config, &airs, &proof, &pvs, &common)
@@ -991,6 +1046,7 @@ fn test_invalid_trace_width_rejected() {
             main: valid_proof.commitments.main,
             quotient_chunks: valid_proof.commitments.quotient_chunks,
             permutation: valid_proof.commitments.permutation,
+            random: valid_proof.commitments.random,
         },
         opened_values: BatchOpenedValues {
             instances: vec![OpenedValuesWithLookups {
@@ -1156,7 +1212,8 @@ fn test_circle_stark_batch() -> Result<(), impl Debug> {
         log_blowup: 1,
         log_final_poly_len: 0,
         num_queries: 40,
-        proof_of_work_bits: 8,
+        commit_proof_of_work_bits: 8,
+        query_proof_of_work_bits: 8,
         mmcs: challenge_mmcs,
     };
 
@@ -1561,6 +1618,61 @@ fn test_batch_stark_both_lookups() -> Result<(), impl Debug> {
         &config,
         &mut airs,
         &[log_height, log_height],
+    );
+
+    let instances = StarkInstance::new_multiple(
+        &airs,
+        &[mul_trace, fib_trace],
+        &[vec![], fib_pis.clone()],
+        &common_data,
+    );
+
+    let lookup_gadget = LogUpGadget::new();
+    let proof = prove_batch(&config, &instances, &common_data, &lookup_gadget);
+
+    let pvs = vec![vec![], fib_pis];
+    verify_batch(&config, &airs, &proof, &pvs, &common_data, &lookup_gadget)
+}
+
+/// Test with both local and global lookups using MulAirLookups and FibAirLookups, with ZK mode activated
+#[test]
+fn test_batch_stark_both_lookups_zk() -> Result<(), impl Debug> {
+    let config = make_config_zk(2026);
+
+    let reps = 2;
+    // Create instances with both local and global lookups configuration
+    let mul_air = MulAir { reps };
+    let mul_air_lookups = MulAirLookups::new(
+        mul_air,
+        true,
+        true,
+        0,
+        vec!["MulFib".to_string(), "MulFib".to_string()],
+    ); // both
+
+    let log_height = 4;
+    let height = 1 << log_height;
+
+    let fibonacci_air = FibonacciAir {
+        log_height,
+        tamper_index: None,
+    };
+    let fib_air_lookups = FibAirLookups::new(fibonacci_air, true, 0, None); // global lookups
+
+    let mul_trace = mul_trace::<Val>(height, 2);
+    let fib_trace = fib_trace::<Val>(0, 1, height);
+    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(16))];
+
+    // Use the enum wrapper for heterogeneous types
+    let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups);
+    let air2 = DemoAirWithLookups::FibLookups(fib_air_lookups);
+
+    let mut airs = [air1, air2];
+    // Get lookups from the lookup-enabled AIRs
+    let common_data = CommonData::<MyHidingConfig>::from_airs_and_degrees(
+        &config,
+        &mut airs,
+        &[log_height + config.is_zk(), log_height + config.is_zk()],
     );
 
     let instances = StarkInstance::new_multiple(
