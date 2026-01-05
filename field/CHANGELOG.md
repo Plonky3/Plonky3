@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.4.2] - 2026-01-05
+### Merged PRs
+- Chore(field): Make `BinomialExtensionField::new` public (#1209) (Adrian Hamelink)
+- Chore(field): revert making `BinomialExtensionField::new` public and replace with `From<[A; D]>` (#1210) (Adrian Hamelink)
+- Refactor(field): Add packed field extraction helpers and FieldArray utilities (#1211) (Adrian Hamelink)
+- Refactor: add public const `new` and `new_array` for all fields (#1222) (Adrian Hamelink)
+- Feat: use compile-time asserts for const generic parameters (#1232) (Himess)
+
+### Authors
+- Adrian Hamelink
+- Himess
+
 ## [0.4.1] - 2025-12-18
 ### Merged PRs
 - fix: remove undefined WIDTH const in interleave module (#1199) (Robin Salen)

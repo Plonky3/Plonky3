@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.4.2] - 2026-01-05
+### Merged PRs
+- Refactor: add public const `new` and `new_array` for all fields (#1222) (Adrian Hamelink)
+
+### Authors
+- Adrian Hamelink
+
 ## [0.4.1] - 2025-12-18
 ### Merged PRs
 - mersenne 31: optimize Poseidon2 for aarch64 Neon (#1196) (Thomas Coratger)
