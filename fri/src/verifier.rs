@@ -73,7 +73,6 @@ where
     let log_global_max_height =
         proof.commit_phase_commits.len() + params.log_blowup + params.log_final_poly_len;
 
-
     if proof.commit_pow_witnesses.len() != proof.commit_phase_commits.len() {
         return Err(FriError::InvalidProofShape);
     }
