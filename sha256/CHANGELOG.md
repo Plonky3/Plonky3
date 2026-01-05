@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Authors
 
 ## [0.4.1] - 2025-12-18
-_No changes_
+### Authors
 
 ## [0.4.0] - 2025-12-12
 ### Merged PRs
