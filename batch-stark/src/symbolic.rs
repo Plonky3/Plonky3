@@ -1,7 +1,9 @@
 use alloc::vec::Vec;
 
 use p3_field::{ExtensionField, Field};
-use p3_lookup::lookup_traits::{AirLookupHandler, Lookup, LookupData, LookupGadget};
+use p3_lookup::lookup_traits::{
+    AirLookupHandler, Lookup, LookupData, LookupGadget, lookup_data_to_symbolic,
+};
 use p3_uni_stark::{SymbolicAirBuilder, SymbolicExpression};
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
@@ -111,5 +113,8 @@ where
 pub fn lookup_data_to_expr<F: Clone>(
     lookup_data: &[LookupData<F>],
 ) -> Vec<LookupData<SymbolicExpression<F>>> {
-    lookup_data.iter().map(|ld| ld.clone().into()).collect()
+    lookup_data
+        .iter()
+        .map(|ld| lookup_data_to_symbolic(ld.clone()))
+        .collect()
 }

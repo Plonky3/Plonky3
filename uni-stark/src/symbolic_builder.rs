@@ -2,17 +2,13 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::{
-    Air, AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder,
-    PermutationAirBuilder,
+    Air, AirBuilder, AirBuilderWithPublicValues, Entry, ExtensionBuilder, PairBuilder,
+    PermutationAirBuilder, SymbolicExpression, SymbolicVariable,
 };
 use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
-
-use crate::Entry;
-use crate::symbolic_expression::SymbolicExpression;
-use crate::symbolic_variable::SymbolicVariable;
 
 #[instrument(skip_all)]
 pub fn get_log_num_quotient_chunks<F, A>(

@@ -10,13 +10,13 @@ use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::lookup_traits::{
-    AirLookupHandler, AirNoLookup, EmptyLookupGadget, Lookup, LookupData, LookupGadget,
+    AirLookupHandler, AirNoLookup, EmptyLookupGadget, Lookup, LookupData, LookupError, LookupGadget,
 };
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use p3_uni_stark::{
-    LookupError, SymbolicAirBuilder, SymbolicExpression, VerificationError,
-    VerifierConstraintFolder, recompose_quotient_from_chunks,
+    SymbolicAirBuilder, SymbolicExpression, VerificationError, VerifierConstraintFolder,
+    recompose_quotient_from_chunks,
 };
 use p3_util::zip_eq::zip_eq;
 use tracing::instrument;

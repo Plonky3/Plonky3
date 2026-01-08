@@ -6,7 +6,7 @@ use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Algebra, ExtensionField, Field, InjectiveMonomial, PrimeCharacteristicRing};
 
-use crate::symbolic_variable::SymbolicVariable;
+use crate::symbolic::SymbolicVariable;
 
 impl<F, const D: usize> From<SymbolicExpression<F>>
     for SymbolicExpression<BinomialExtensionField<F, D>>
@@ -345,7 +345,7 @@ mod tests {
     use p3_baby_bear::BabyBear;
 
     use super::*;
-    use crate::Entry;
+    use crate::symbolic::Entry;
 
     #[test]
     fn test_symbolic_expression_degree_multiple() {

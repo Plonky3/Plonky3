@@ -226,19 +226,10 @@ impl<F> BaseAir<F> for MulAirLookups {
     }
 }
 
-impl<AB: AirBuilder> Air<AB> for MulAirLookups
+impl<AB> Air<AB> for MulAirLookups
 where
     AB::Var: Debug,
-{
-    fn eval(&self, builder: &mut AB) {
-        self.air.eval(builder);
-    }
-}
-
-impl<AB> AirLookupHandler<AB> for MulAirLookups
-where
-    AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
-    AB::Var: Debug,
+    AB: AirBuilder + PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
 {
     fn add_lookup_columns(&mut self) -> Vec<usize> {
         let new_idx = self.num_lookups;
@@ -284,8 +275,7 @@ where
                     ),
                 ];
 
-                let local_lookup =
-                    AirLookupHandler::<AB>::register_lookup(self, Kind::Local, &lookup_inputs);
+                let local_lookup = Air::<AB>::register_lookup(self, Kind::Local, &lookup_inputs);
                 lookups.push(local_lookup);
             }
 
@@ -302,7 +292,7 @@ where
                     Direction::Send, // MulAir sends data to the global lookup
                 )];
 
-                let global_lookup = AirLookupHandler::<AB>::register_lookup(
+                let global_lookup = Air::<AB>::register_lookup(
                     self,
                     Kind::Global(self.global_names[rep].clone()),
                     &lookup_inputs,
@@ -313,6 +303,17 @@ where
 
         lookups
     }
+
+    fn eval(&self, builder: &mut AB) {
+        self.air.eval(builder);
+    }
+}
+
+impl<AB> AirLookupHandler<AB> for MulAirLookups
+where
+    AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+    AB::Var: Debug,
+{
 }
 
 fn mul_trace<F: Field>(rows: usize, reps: usize) -> RowMajorMatrix<F> {
@@ -398,15 +399,8 @@ impl<F: Field> BaseAir<F> for FibAirLookups {
     }
 }
 
-impl<AB: PermutationAirBuilder + AirBuilderWithPublicValues> Air<AB> for FibAirLookups {
-    fn eval(&self, builder: &mut AB) {
-        self.air.eval(builder);
-    }
-}
-
-impl<AB> AirLookupHandler<AB> for FibAirLookups
-where
-    AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+impl<AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues> Air<AB>
+    for FibAirLookups
 {
     fn add_lookup_columns(&mut self) -> Vec<usize> {
         let new_idx = self.num_lookups;
@@ -443,12 +437,21 @@ where
             )];
 
             let global_lookup =
-                AirLookupHandler::<AB>::register_lookup(self, Kind::Global(name), &lookup_inputs);
+                Air::<AB>::register_lookup(self, Kind::Global(name), &lookup_inputs);
             lookups.push(global_lookup);
         }
 
         lookups
     }
+
+    fn eval(&self, builder: &mut AB) {
+        self.air.eval(builder);
+    }
+}
+
+impl<AB> AirLookupHandler<AB> for FibAirLookups where
+    AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues
+{
 }
 
 // --- Preprocessed multiplication AIR and trace ---
@@ -616,6 +619,20 @@ impl<AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues> Air<A
 where
     AB::Var: Debug,
 {
+    fn add_lookup_columns(&mut self) -> Vec<usize> {
+        match self {
+            Self::FibLookups(a) => <FibAirLookups as Air<AB>>::add_lookup_columns(a),
+            Self::MulLookups(a) => <MulAirLookups as Air<AB>>::add_lookup_columns(a),
+        }
+    }
+
+    fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
+        match self {
+            Self::FibLookups(a) => <FibAirLookups as Air<AB>>::get_lookups(a),
+            Self::MulLookups(a) => <MulAirLookups as Air<AB>>::get_lookups(a),
+        }
+    }
+
     fn eval(&self, builder: &mut AB) {
         match self {
             Self::FibLookups(a) => <FibAirLookups as Air<AB>>::eval(a, builder),
@@ -629,19 +646,6 @@ where
     AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
     AB::Var: Copy + Debug,
 {
-    fn add_lookup_columns(&mut self) -> Vec<usize> {
-        match self {
-            Self::FibLookups(a) => <FibAirLookups as AirLookupHandler<AB>>::add_lookup_columns(a),
-            Self::MulLookups(a) => <MulAirLookups as AirLookupHandler<AB>>::add_lookup_columns(a),
-        }
-    }
-
-    fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
-        match self {
-            Self::FibLookups(a) => <FibAirLookups as AirLookupHandler<AB>>::get_lookups(a),
-            Self::MulLookups(a) => <MulAirLookups as AirLookupHandler<AB>>::get_lookups(a),
-        }
-    }
 }
 
 impl<AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues> Air<AB> for DemoAir
@@ -1886,20 +1890,10 @@ impl<F> BaseAir<F> for SingleTableLocalLookupAir {
     }
 }
 
-impl<AB: AirBuilder> Air<AB> for SingleTableLocalLookupAir
+impl<AB> Air<AB> for SingleTableLocalLookupAir
 where
     AB::Var: Debug,
-{
-    fn eval(&self, _builder: &mut AB) {
-        // No additional constraints needed for this simple table
-    }
-}
-
-impl<AB> AirLookupHandler<AB> for SingleTableLocalLookupAir
-where
-    AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
-    AB::Var: Debug,
-    AB::F: From<Val>,
+    AB: AirBuilder + PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
 {
     fn add_lookup_columns(&mut self) -> Vec<usize> {
         let new_idx = self.num_lookups;
@@ -1979,13 +1973,24 @@ where
         let all_lookup_inputs = vec![lookup_inputs1, lookup_inputs2, lookup_inputs3];
 
         for lookup_inputs in all_lookup_inputs {
-            let local_lookup =
-                AirLookupHandler::<AB>::register_lookup(self, Kind::Local, &lookup_inputs);
+            let local_lookup = Air::<AB>::register_lookup(self, Kind::Local, &lookup_inputs);
             lookups.push(local_lookup);
         }
 
         lookups
     }
+
+    fn eval(&self, _builder: &mut AB) {
+        // No additional constraints needed for this simple table
+    }
+}
+
+impl<AB> AirLookupHandler<AB> for SingleTableLocalLookupAir
+where
+    AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+    AB::Var: Debug,
+    AB::F: From<Val>,
+{
 }
 
 // Trace generation function for single table with local lookup
