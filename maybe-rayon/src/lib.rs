@@ -74,3 +74,6 @@ pub mod prelude {
 pub mod iter {
     pub use core::iter::{repeat, repeat_n};
 }
+
+pub mod either;
+pub use either::Either;
