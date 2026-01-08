@@ -3,8 +3,7 @@ use alloc::vec;
 use p3_air::lookup::LookupEvaluator;
 /// Public re-exports of lookup types.
 pub use p3_air::lookup::{Direction, Kind, Lookup, LookupData, LookupError, LookupInput};
-use p3_air::{
-    Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, ExtensionBuilder, PairBuilder,
+use p3_air::{AirBuilder, AirBuilderWithPublicValues,  ExtensionBuilder, PairBuilder,
     PermutationAirBuilder, SymbolicExpression,
 };
 use p3_field::{Field, PrimeCharacteristicRing};
@@ -226,34 +225,6 @@ where
         SymbolicExpression::Mul { x, y, .. } => {
             symbolic_to_expr(builder, x) * symbolic_to_expr(builder, y)
         }
-    }
-}
-
-/// Wrapper around AIRs for AIRs that do not use lookups.
-#[derive(Clone)]
-pub struct AirNoLookup<A> {
-    air: A,
-}
-
-impl<A> AirNoLookup<A> {
-    pub const fn new(air: A) -> Self {
-        Self { air }
-    }
-}
-
-impl<F, A: BaseAir<F>> BaseAir<F> for AirNoLookup<A> {
-    fn width(&self) -> usize {
-        self.air.width()
-    }
-
-    fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
-        self.air.preprocessed_trace()
-    }
-}
-
-impl<AB: AirBuilder, A: Air<AB>> Air<AB> for AirNoLookup<A> {
-    fn eval(&self, builder: &mut AB) {
-        self.air.eval(builder);
     }
 }
 

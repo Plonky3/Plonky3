@@ -20,7 +20,7 @@ use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
 use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs, create_test_fri_params};
 use p3_keccak::Keccak256Hash;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::lookup_traits::{AirNoLookup, Direction, Kind, Lookup};
+use p3_lookup::lookup_traits::{Direction, Kind, Lookup};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
@@ -643,15 +643,13 @@ where
     }
 }
 
-type DemoAirNoLookup = AirNoLookup<DemoAir>;
-
 /// Creates a Fibonacci instance with specified log height.
-fn create_fib_instance(log_height: usize) -> (DemoAirNoLookup, RowMajorMatrix<Val>, Vec<Val>) {
+fn create_fib_instance(log_height: usize) -> (DemoAir, RowMajorMatrix<Val>, Vec<Val>) {
     let n = 1 << log_height;
-    let air = DemoAirNoLookup::new(DemoAir::Fib(FibonacciAir {
+    let air = DemoAir::Fib(FibonacciAir {
         log_height,
         tamper_index: None,
-    }));
+    });
     let trace = fib_trace::<Val>(0, 1, n);
     let pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(n))];
     (air, trace, pis)
@@ -661,10 +659,10 @@ fn create_fib_instance(log_height: usize) -> (DemoAirNoLookup, RowMajorMatrix<Va
 fn create_mul_instance(
     log_height: usize,
     reps: usize,
-) -> (DemoAirNoLookup, RowMajorMatrix<Val>, Vec<Val>) {
+) -> (DemoAir, RowMajorMatrix<Val>, Vec<Val>) {
     let n = 1 << log_height;
     let mul = MulAir { reps };
-    let air = DemoAirNoLookup::new(DemoAir::Mul(mul));
+    let air = DemoAir::Mul(mul);
     let trace = mul_trace::<Val>(n, reps);
     let pis = vec![];
     (air, trace, pis)
@@ -674,12 +672,12 @@ fn create_mul_instance(
 fn create_preprocessed_mul_instance(
     log_height: usize,
     multiplier: u64,
-) -> (DemoAirNoLookup, RowMajorMatrix<Val>, Vec<Val>) {
+) -> (DemoAir, RowMajorMatrix<Val>, Vec<Val>) {
     let n = 1 << log_height;
-    let air = DemoAirNoLookup::new(DemoAir::PreprocessedMul(PreprocessedMulAir {
+    let air = DemoAir::PreprocessedMul(PreprocessedMulAir {
         log_height,
         multiplier,
-    }));
+    });
     let trace = preprocessed_mul_trace::<Val>(n, multiplier);
     let pis = vec![];
     (air, trace, pis)
@@ -873,10 +871,10 @@ fn test_preprocessed_tampered_fails() -> Result<(), Box<dyn std::error::Error>> 
     // used to derive the preprocessed commitment for verification.
     // The proof was generated with the original AIR, but we verify with a tampered AIR
     // that would produce different preprocessed columns.
-    let air_tampered = DemoAirNoLookup::new(DemoAir::Fib(FibonacciAir {
+    let air_tampered = DemoAir::Fib(FibonacciAir {
         log_height: 3,
         tamper_index: Some(2),
-    }));
+    });
     // Create CommonData with tampered AIR to test verification failure
     // Use the proof's degree_bits (which are log_degrees since ZK is not supported)
     let degree_bits = proof.degree_bits.clone();
@@ -905,10 +903,10 @@ fn test_preprocessed_reuse_common_multi_proofs() -> Result<(), Box<dyn std::erro
     // Single Fibonacci instance with preprocessed index column, 8 rows.
     let log_height = 3;
     let n = 1 << log_height;
-    let air = DemoAirNoLookup::new(DemoAir::Fib(FibonacciAir {
+    let air = DemoAir::Fib(FibonacciAir {
         log_height,
         tamper_index: None,
-    }));
+    });
 
     // First proof: standard Fibonacci trace starting from (0, 1).
     let trace1 = fib_trace::<Val>(0, 1, n);
@@ -1215,14 +1213,14 @@ fn test_circle_stark_batch() -> Result<(), impl Debug> {
 
     // Create two Fibonacci instances with different sizes.
     // Here we don't use preprocessed columns (Circle PCS + plain FibonacciAir).
-    let air_fib1 = AirNoLookup::new(FibonacciAir {
+    let air_fib1 = FibonacciAir {
         log_height: 0,
         tamper_index: None,
-    });
-    let air_fib2 = AirNoLookup::new(FibonacciAir {
+    };
+    let air_fib2 = FibonacciAir {
         log_height: 0,
         tamper_index: None,
-    });
+    };
 
     let fib_pis1 = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(8))]; // F_8 = 21
     let fib_pis2 = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(4))]; // F_4 = 3
@@ -1303,7 +1301,7 @@ fn test_preprocessed_constraint_negative() -> Result<(), Box<dyn std::error::Err
         log_height: 4,
         multiplier: 3, // Wrong multiplier!
     });
-    let mut airs = vec![AirNoLookup::new(air_verify)];
+    let mut airs = vec![air_verify];
     let degree_bits = proof.degree_bits.clone();
     let verify_common = CommonData::from_airs_and_degrees(&config, &mut airs, &degree_bits);
 

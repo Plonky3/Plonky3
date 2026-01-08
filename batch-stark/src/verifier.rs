@@ -9,8 +9,7 @@ use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
-use p3_lookup::lookup_traits::{
-    AirNoLookup, EmptyLookupGadget, Lookup, LookupData, LookupError, LookupGadget,
+use p3_lookup::lookup_traits::{EmptyLookupGadget, Lookup, LookupData, LookupError, LookupGadget,
 };
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
@@ -639,16 +638,11 @@ where
         + Clone,
     Challenge<SC>: BasedVectorSpace<Val<SC>>,
 {
-    let no_lookup_airs = airs
-        .iter()
-        .map(|a| AirNoLookup::new(a.clone()))
-        .collect::<Vec<_>>();
-
     let empty_lookup_gadget = EmptyLookupGadget {};
 
     verify_batch(
         config,
-        &no_lookup_airs,
+        &airs,
         proof,
         public_values,
         common,
