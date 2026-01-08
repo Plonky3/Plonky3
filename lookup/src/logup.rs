@@ -27,6 +27,7 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::VerticalPair;
 use p3_uni_stark::{StarkGenericConfig, Val};
+use tracing::instrument;
 
 use crate::lookup_traits::{
     Kind, Lookup, LookupData, LookupGadget, LookupTraceBuilder, symbolic_to_expr,
@@ -377,6 +378,7 @@ impl LookupGadget for LogUpGadget {
         deg_denom_constr.max(deg_num)
     }
 
+    #[instrument(name = "generate lookup permutation", skip_all, level = "debug")]
     fn generate_permutation<SC: StarkGenericConfig>(
         &self,
         main: &RowMajorMatrix<Val<SC>>,
