@@ -65,27 +65,6 @@ pub trait LookupGadget: LookupEvaluator {
     fn constraint_degree<F: Field>(&self, context: Lookup<F>) -> usize;
 }
 
-/// A trait for an AIR that handles lookup arguments.
-pub trait AirLookupHandler<AB>: Air<AB>
-where
-    AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
-{
-    /// Evaluates all AIR and lookup constraints.
-    fn eval<LG: LookupGadget>(
-        &self,
-        builder: &mut AB,
-        lookups: &[Lookup<AB::F>],
-        lookup_data: &[LookupData<AB::ExprEF>],
-        lookup_gadget: &LG,
-    ) {
-        Air::<AB>::eval(self, builder);
-
-        if !lookups.is_empty() {
-            lookup_gadget.eval_lookups(builder, lookups, lookup_data);
-        }
-    }
-}
-
 /// A builder to generate the lookup traces, given the main trace, public values and permutation challenges.
 pub struct LookupTraceBuilder<'a, SC: StarkGenericConfig> {
     main: ViewPair<'a, Val<SC>>,
@@ -276,11 +255,6 @@ impl<AB: AirBuilder, A: Air<AB>> Air<AB> for AirNoLookup<A> {
     fn eval(&self, builder: &mut AB) {
         self.air.eval(builder);
     }
-}
-
-impl<AB: AirBuilderWithPublicValues + PairBuilder + PermutationAirBuilder, A: Air<AB>>
-    AirLookupHandler<AB> for AirNoLookup<A>
-{
 }
 
 /// Empty lookup gadget for AIRs that do not use lookups.

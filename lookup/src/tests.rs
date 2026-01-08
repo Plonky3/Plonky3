@@ -18,9 +18,7 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
 use crate::logup::LogUpGadget;
-use crate::lookup_traits::{
-    AirLookupHandler, Direction, Kind, Lookup, LookupGadget, symbolic_to_expr,
-};
+use crate::lookup_traits::{Direction, Kind, Lookup, LookupGadget, symbolic_to_expr};
 
 /// Base field type for the test
 type F = BabyBear;
@@ -336,17 +334,6 @@ impl<F: Field> BaseAir<F> for RangeCheckAir {
     fn width(&self) -> usize {
         3 * self.num_lookups // [read, provide, mult] per lookup
     }
-}
-
-impl<AB> AirLookupHandler<AB> for RangeCheckAir
-where
-    AB: PermutationAirBuilder<F = F, EF = EF, RandomVar = EF>
-        + PairBuilder
-        + AirBuilderWithPublicValues,
-    AB::Var: Copy + Into<AB::ExprEF>,
-    AB::ExprEF: From<AB::Var> + From<F>,
-    F: Copy + Into<AB::ExprEF>,
-{
 }
 
 /// Computes the contribution to the LogUp running sum for a single row.
@@ -1205,17 +1192,6 @@ where
     fn eval(&self, _builder: &mut AB) {
         // No constraints, only lookups
     }
-}
-
-impl<AB> AirLookupHandler<AB> for AddAir
-where
-    AB: PermutationAirBuilder<F = F, EF = EF, RandomVar = EF>
-        + PairBuilder
-        + AirBuilderWithPublicValues,
-    AB::Var: Copy + Into<AB::ExprEF>,
-    AB::ExprEF: From<AB::Var> + From<F>,
-    F: Copy + Into<AB::ExprEF>,
-{
 }
 
 #[test]

@@ -20,7 +20,7 @@ use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
 use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs, create_test_fri_params};
 use p3_keccak::Keccak256Hash;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::lookup_traits::{AirLookupHandler, AirNoLookup, Direction, Kind, Lookup};
+use p3_lookup::lookup_traits::{AirNoLookup, Direction, Kind, Lookup};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
@@ -309,13 +309,6 @@ where
     }
 }
 
-impl<AB> AirLookupHandler<AB> for MulAirLookups
-where
-    AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
-    AB::Var: Debug,
-{
-}
-
 fn mul_trace<F: Field>(rows: usize, reps: usize) -> RowMajorMatrix<F> {
     assert!(rows.is_power_of_two());
     // The extra column corresponds to a permutation of the first column.
@@ -447,11 +440,6 @@ impl<AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues> Air<A
     fn eval(&self, builder: &mut AB) {
         self.air.eval(builder);
     }
-}
-
-impl<AB> AirLookupHandler<AB> for FibAirLookups where
-    AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues
-{
 }
 
 // --- Preprocessed multiplication AIR and trace ---
@@ -639,13 +627,6 @@ where
             Self::MulLookups(a) => <MulAirLookups as Air<AB>>::eval(a, builder),
         }
     }
-}
-
-impl<AB> AirLookupHandler<AB> for DemoAirWithLookups
-where
-    AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
-    AB::Var: Copy + Debug,
-{
 }
 
 impl<AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues> Air<AB> for DemoAir
@@ -1983,14 +1964,6 @@ where
     fn eval(&self, _builder: &mut AB) {
         // No additional constraints needed for this simple table
     }
-}
-
-impl<AB> AirLookupHandler<AB> for SingleTableLocalLookupAir
-where
-    AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
-    AB::Var: Debug,
-    AB::F: From<Val>,
-{
 }
 
 // Trace generation function for single table with local lookup

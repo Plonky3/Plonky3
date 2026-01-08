@@ -10,7 +10,7 @@ use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::lookup_traits::{
-    AirLookupHandler, AirNoLookup, EmptyLookupGadget, Lookup, LookupData, LookupError, LookupGadget,
+    AirNoLookup, EmptyLookupGadget, Lookup, LookupData, LookupError, LookupGadget,
 };
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
@@ -40,8 +40,8 @@ pub fn verify_batch<SC, A, LG>(
 where
     SC: SGC,
     SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
-    A: AirLookupHandler<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
-        + for<'a> AirLookupHandler<VerifierConstraintFolderWithLookups<'a, SC>>,
+    A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
+        + for<'a> Air<VerifierConstraintFolderWithLookups<'a, SC>>,
     Challenge<SC>: BasedVectorSpace<Val<SC>>,
     LG: LookupGadget,
 {
@@ -559,7 +559,7 @@ pub fn verify_constraints_with_lookups<'a, SC, A, LG: LookupGadget, PcsErr: Debu
 ) -> Result<(), VerificationError<PcsErr>>
 where
     SC: SGC,
-    A: for<'b> AirLookupHandler<VerifierConstraintFolderWithLookups<'b, SC>>,
+    A: for<'b> Air<VerifierConstraintFolderWithLookups<'b, SC>>,
 {
     let VerifierData {
         trace_local,
@@ -613,7 +613,7 @@ where
         permutation_challenges,
     };
     // Evaluate AIR and lookup constraints.
-    <A as AirLookupHandler<_>>::eval(air, &mut folder, lookups, lookup_data, lookup_gadget);
+    <A as Air<_>>::eval_with_lookups(air, &mut folder, lookups, lookup_data, lookup_gadget);
     let folded_constraints = folder.inner.accumulator;
 
     // Check that constraints(zeta) / Z_H(zeta) = quotient(zeta)

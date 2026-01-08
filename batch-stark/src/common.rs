@@ -11,10 +11,11 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use hashbrown::HashMap;
+use p3_air::Air;
 use p3_challenger::FieldChallenger;
 use p3_commit::Pcs;
 use p3_field::BasedVectorSpace;
-use p3_lookup::lookup_traits::{AirLookupHandler, Kind, Lookup, LookupGadget};
+use p3_lookup::lookup_traits::{Kind, Lookup, LookupGadget};
 use p3_matrix::Matrix;
 use p3_uni_stark::{SymbolicAirBuilder, SymbolicExpression, Val};
 use p3_util::log2_strict_usize;
@@ -122,7 +123,7 @@ where
     pub fn from_instances<A>(config: &SC, instances: &[StarkInstance<'_, SC, A>]) -> Self
     where
         SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
-        A: AirLookupHandler<SymbolicAirBuilder<Val<SC>, SC::Challenge>> + Clone,
+        A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>> + Clone,
     {
         let degrees: Vec<usize> = instances.iter().map(|i| i.trace.height()).collect();
         let log_ext_degrees: Vec<usize> = degrees
@@ -150,7 +151,7 @@ where
     ) -> Self
     where
         SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
-        A: AirLookupHandler<SymbolicAirBuilder<Val<SC>, SC::Challenge>>,
+        A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>>,
     {
         assert_eq!(
             airs.len(),
