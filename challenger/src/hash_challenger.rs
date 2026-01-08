@@ -37,10 +37,11 @@ where
         let inputs = self.input_buffer.drain(..);
         let output = self.hasher.hash_iter(inputs);
 
-        self.output_buffer = output.to_vec();
-
-        // Chaining values.
-        self.input_buffer.extend(output.to_vec());
+        // Reuse the existing buffer and avoid allocating a second Vec.
+        self.output_buffer.clear();
+        self.output_buffer.extend(output);
+        // Chain the hash output into the transcript.
+        self.input_buffer.extend_from_slice(&self.output_buffer);
     }
 }
 
