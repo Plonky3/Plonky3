@@ -1,4 +1,4 @@
-use p3_field::{Field, PackedValue, PrimeField, PrimeField32, PrimeField64};
+use p3_field::{Field, PrimeField32, PrimeField64};
 use p3_maybe_rayon::prelude::*;
 use p3_symmetric::CryptographicPermutation;
 use tracing::instrument;
