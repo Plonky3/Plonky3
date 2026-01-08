@@ -1,3 +1,5 @@
+use alloc::vec::Vec;
+
 use p3_air::lookup::LookupEvaluator;
 /// Public re-exports of lookup types.
 pub use p3_air::lookup::{Direction, Kind, Lookup, LookupData, LookupError, LookupInput};
@@ -12,14 +14,21 @@ use p3_matrix::stack::ViewPair;
 use p3_uni_stark::{Entry, StarkGenericConfig, Val};
 use tracing::warn;
 
-/// Converts `LookupData<E>` to `LookupData<SymbolicExpression<F>>`.
-pub fn lookup_data_to_symbolic<F: Clone>(data: LookupData<F>) -> LookupData<SymbolicExpression<F>> {
-    let expected = SymbolicExpression::Constant(data.expected_cumulated);
-    LookupData {
-        name: data.name.clone(),
-        aux_idx: data.aux_idx,
-        expected_cumulated: expected,
-    }
+/// Converts `LookupData<F>` to `LookupData<SymbolicExpression<F>>`.
+pub fn lookup_data_to_expr<F: Clone>(
+    lookup_data: &[LookupData<F>],
+) -> Vec<LookupData<SymbolicExpression<F>>> {
+    lookup_data
+        .iter()
+        .map(|data| {
+            let expected = SymbolicExpression::Constant(data.expected_cumulated.clone());
+            LookupData {
+                name: data.name.clone(),
+                aux_idx: data.aux_idx,
+                expected_cumulated: expected,
+            }
+        })
+        .collect()
 }
 
 /// A trait for lookup argument.
@@ -175,7 +184,7 @@ impl<'a, SC: StarkGenericConfig> PermutationAirBuilder for LookupTraceBuilder<'a
     }
 }
 
-// /// Evaluates a symbolic expression in the context of an AIR builder.
+/// Evaluates a symbolic expression in the context of an AIR builder.
 ///
 /// Converts `SymbolicExpression<F>` to the builder's expression type `AB::Expr`.
 pub fn symbolic_to_expr<AB>(builder: &AB, expr: &SymbolicExpression<AB::F>) -> AB::Expr

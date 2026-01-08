@@ -7,7 +7,7 @@ use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
 use p3_lookup::folder::ProverConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::lookup_traits::{Kind, Lookup, LookupData, LookupGadget};
+use p3_lookup::lookup_traits::{Kind, Lookup, LookupData, LookupGadget, lookup_data_to_expr};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
@@ -23,7 +23,7 @@ use crate::check_constraints::DebugConstraintBuilderWithLookups;
 use crate::common::{CommonData, get_perm_challenges};
 use crate::config::{Challenge, Domain, StarkGenericConfig as SGC, Val, observe_instance_binding};
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof, OpenedValuesWithLookups};
-use crate::symbolic::{get_log_num_quotient_chunks, get_symbolic_constraints, lookup_data_to_expr};
+use crate::symbolic::{get_log_num_quotient_chunks, get_symbolic_constraints};
 
 #[derive(Debug)]
 pub struct StarkInstance<'a, SC: SGC, A> {
@@ -687,7 +687,7 @@ where
                 permutation: permutation.as_view(),
                 permutation_challenges: &packed_perm_challenges,
             };
-            <A as Air<ProverConstraintFolderWithLookups<'_, SC>>>::eval_with_lookups(
+            A::eval_with_lookups(
                 air,
                 &mut folder,
                 lookups,

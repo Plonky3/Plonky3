@@ -10,7 +10,9 @@ use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::lookup_traits::{Lookup, LookupData, LookupError, LookupGadget};
+use p3_lookup::lookup_traits::{
+    Lookup, LookupData, LookupError, LookupGadget, lookup_data_to_expr,
+};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use p3_uni_stark::{
@@ -25,7 +27,7 @@ use crate::config::{
     Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val, observe_instance_binding,
 };
 use crate::proof::BatchProof;
-use crate::symbolic::{get_log_num_quotient_chunks, lookup_data_to_expr};
+use crate::symbolic::get_log_num_quotient_chunks;
 
 #[instrument(skip_all)]
 pub fn verify_batch<SC, A>(
@@ -613,7 +615,7 @@ where
         permutation_challenges,
     };
     // Evaluate AIR and lookup constraints.
-    <A as Air<_>>::eval_with_lookups(air, &mut folder, lookups, lookup_data, lookup_gadget);
+    A::eval_with_lookups(air, &mut folder, lookups, lookup_data, lookup_gadget);
     let folded_constraints = folder.inner.accumulator;
 
     // Check that constraints(zeta) / Z_H(zeta) = quotient(zeta)

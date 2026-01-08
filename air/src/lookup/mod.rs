@@ -80,7 +80,7 @@ pub type LookupInput<F> = (Vec<SymbolicExpression<F>>, SymbolicExpression<F>, Di
 /// A structure that holds the lookup data necessary to generate lookup contexts
 /// via [`LookupTraceBuilder`]. It is shared between the prover and the verifier.
 #[derive(Clone, Debug)]
-pub struct Lookup<F> {
+pub struct Lookup<F: Field> {
     /// Type of lookup: local or global
     pub kind: Kind,
     /// Elements being read (consumed from the table). Each `Vec<SymbolicExpression<F>>`
@@ -94,7 +94,7 @@ pub struct Lookup<F> {
     pub columns: Vec<usize>,
 }
 
-impl<F> Lookup<F> {
+impl<F: Field> Lookup<F> {
     /// Creates a new lookup with the specified column.
     ///
     /// # Arguments
