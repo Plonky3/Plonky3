@@ -8,8 +8,6 @@ use p3_air::{
 };
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::proof::OpenedValuesWithLookups;
-use p3_batch_stark::prover::prove_batch_no_lookups;
-use p3_batch_stark::verifier::verify_batch_no_lookups;
 use p3_batch_stark::{CommonData, StarkInstance, VerificationError, prove_batch, verify_batch};
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
@@ -19,7 +17,6 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
 use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs, create_test_fri_params};
 use p3_keccak::Keccak256Hash;
-use p3_lookup::logup::LogUpGadget;
 use p3_lookup::lookup_traits::{Direction, Kind, Lookup};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
@@ -656,10 +653,7 @@ fn create_fib_instance(log_height: usize) -> (DemoAir, RowMajorMatrix<Val>, Vec<
 }
 
 /// Creates a multiplication instance with specified configuration.
-fn create_mul_instance(
-    log_height: usize,
-    reps: usize,
-) -> (DemoAir, RowMajorMatrix<Val>, Vec<Val>) {
+fn create_mul_instance(log_height: usize, reps: usize) -> (DemoAir, RowMajorMatrix<Val>, Vec<Val>) {
     let n = 1 << log_height;
     let mul = MulAir { reps };
     let air = DemoAir::Mul(mul);
@@ -706,11 +700,11 @@ fn test_two_instances() -> Result<(), impl Debug> {
     ];
 
     let common = CommonData::from_instances(&config, &instances);
-    let proof = prove_batch_no_lookups(&config, &instances, &common);
+    let proof = prove_batch(&config, &instances, &common);
 
     let airs = vec![air_fib, air_mul];
     let pvs = vec![fib_pis, mul_pis];
-    verify_batch_no_lookups(&config, &airs, &proof, &pvs, &common)
+    verify_batch(&config, &airs, &proof, &pvs, &common)
 }
 
 #[test]
@@ -736,10 +730,10 @@ fn test_two_instances_zk() -> Result<(), impl Debug> {
     ];
 
     let common = CommonData::from_instances(&config, &instances);
-    let proof = prove_batch_no_lookups(&config, &instances, &common);
+    let proof = prove_batch(&config, &instances, &common);
     let airs = vec![air_fib, air_mul];
     let pvs = vec![fib_pis, mul_pis];
-    verify_batch_no_lookups(&config, &airs, &proof, &pvs, &common)
+    verify_batch(&config, &airs, &proof, &pvs, &common)
 }
 
 #[test]
@@ -772,10 +766,10 @@ fn test_three_instances_mixed_sizes() -> Result<(), impl Debug> {
     ];
 
     let common: CommonData<MyConfig> = CommonData::from_instances(&config, &instances);
-    let proof = prove_batch_no_lookups(&config, &instances, &common);
+    let proof = prove_batch(&config, &instances, &common);
     let airs = vec![air_fib16, air_mul8, air_fib8];
     let pvs = vec![fib16_pis, mul8_pis, fib8_pis];
-    verify_batch_no_lookups(&config, &airs, &proof, &pvs, &common)
+    verify_batch(&config, &airs, &proof, &pvs, &common)
 }
 
 #[test]
@@ -792,7 +786,7 @@ fn test_invalid_public_values_rejected() -> Result<(), Box<dyn std::error::Error
         lookups: vec![],
     }];
     let common = CommonData::from_instances(&config, &instances);
-    let proof = prove_batch_no_lookups(&config, &instances, &common);
+    let proof = prove_batch(&config, &instances, &common);
 
     // Wrong public value at verify => should reject
     let airs = vec![air_fib];
@@ -801,7 +795,7 @@ fn test_invalid_public_values_rejected() -> Result<(), Box<dyn std::error::Error
         Val::from_u64(1),
         Val::from_u64(correct_x + 1),
     ]];
-    let res = verify_batch_no_lookups(&config, &airs, &proof, &wrong_pvs, &common);
+    let res = verify_batch(&config, &airs, &proof, &wrong_pvs, &common);
     assert!(res.is_err(), "Should reject wrong public values");
     Ok::<_, Box<dyn std::error::Error>>(())
 }
@@ -837,10 +831,10 @@ fn test_different_widths() -> Result<(), impl Debug> {
     ];
 
     let common = CommonData::from_instances(&config, &instances);
-    let proof = prove_batch_no_lookups(&config, &instances, &common);
+    let proof = prove_batch(&config, &instances, &common);
     let airs = vec![air_mul2, air_fib, air_mul3];
     let pvs = vec![mul2_pis, fib_pis, mul3_pis];
-    verify_batch_no_lookups(&config, &airs, &proof, &pvs, &common)
+    verify_batch(&config, &airs, &proof, &pvs, &common)
 }
 
 #[test]
@@ -857,11 +851,11 @@ fn test_preprocessed_tampered_fails() -> Result<(), Box<dyn std::error::Error>> 
     }];
 
     let common = CommonData::from_instances(&config, &instances);
-    let proof = prove_batch_no_lookups(&config, &instances, &common);
+    let proof = prove_batch(&config, &instances, &common);
 
     // First, sanity-check that verification succeeds with matching preprocessed data.
     let airs = vec![air];
-    let ok_res = verify_batch_no_lookups(&config, &airs, &proof, from_ref(&fib_pis), &common);
+    let ok_res = verify_batch(&config, &airs, &proof, from_ref(&fib_pis), &common);
     assert!(
         ok_res.is_ok(),
         "Expected verification to succeed with matching preprocessed data"
@@ -882,7 +876,7 @@ fn test_preprocessed_tampered_fails() -> Result<(), Box<dyn std::error::Error>> 
     let verify_common_tampered =
         CommonData::from_airs_and_degrees(&config, &mut airs_tampered, &degree_bits);
 
-    let res = verify_batch_no_lookups(
+    let res = verify_batch(
         &config,
         &airs_tampered,
         &proof,
@@ -918,11 +912,11 @@ fn test_preprocessed_reuse_common_multi_proofs() -> Result<(), Box<dyn std::erro
         lookups: vec![],
     }];
     let common = CommonData::from_instances(&config, &instances1);
-    let proof1 = prove_batch_no_lookups(&config, &instances1, &common);
+    let proof1 = prove_batch(&config, &instances1, &common);
 
     // Verify the first proof.
     let airs = vec![air];
-    let res1 = verify_batch_no_lookups(&config, &airs, &proof1, from_ref(&fib_pis1), &common);
+    let res1 = verify_batch(&config, &airs, &proof1, from_ref(&fib_pis1), &common);
     assert!(res1.is_ok(), "First verification should succeed");
 
     // Second proof: DIFFERENT initial values (2, 3) - demonstrates CommonData is truly reusable
@@ -939,9 +933,9 @@ fn test_preprocessed_reuse_common_multi_proofs() -> Result<(), Box<dyn std::erro
         public_values: fib_pis2.clone(),
         lookups: vec![],
     }];
-    let proof2 = prove_batch_no_lookups(&config, &instances2, &common);
+    let proof2 = prove_batch(&config, &instances2, &common);
 
-    let res2 = verify_batch_no_lookups(&config, &airs, &proof2, &[fib_pis2], &common);
+    let res2 = verify_batch(&config, &airs, &proof2, &[fib_pis2], &common);
     assert!(
         res2.is_ok(),
         "Second verification should succeed with different trace values"
@@ -965,9 +959,9 @@ fn test_single_instance() -> Result<(), impl Debug> {
     }];
 
     let common = CommonData::from_instances(&config, &instances);
-    let proof = prove_batch_no_lookups(&config, &instances, &common);
+    let proof = prove_batch(&config, &instances, &common);
     let airs = vec![air_fib];
-    verify_batch_no_lookups(&config, &airs, &proof, &[fib_pis], &common)
+    verify_batch(&config, &airs, &proof, &[fib_pis], &common)
 }
 
 #[test]
@@ -994,12 +988,12 @@ fn test_mixed_preprocessed() -> Result<(), impl Debug> {
 
     let common = CommonData::from_instances(&config, &instances);
 
-    let proof = prove_batch_no_lookups(&config, &instances, &common);
+    let proof = prove_batch(&config, &instances, &common);
 
     let airs = vec![air_fib, air_mul];
     let pvs = vec![fib_pis, mul_pis];
 
-    verify_batch_no_lookups(&config, &airs, &proof, &pvs, &common)
+    verify_batch(&config, &airs, &proof, &pvs, &common)
 }
 
 #[test]
@@ -1021,7 +1015,7 @@ fn test_invalid_trace_width_rejected() {
 
     // Generate a valid proof
     let common = CommonData::from_instances(&config, &instances);
-    let valid_proof = prove_batch_no_lookups(&config, &instances, &common);
+    let valid_proof = prove_batch(&config, &instances, &common);
 
     // Tamper with the proof: change trace_local to have wrong width
     let mut tampered_proof = p3_batch_stark::proof::BatchProof {
@@ -1066,7 +1060,7 @@ fn test_invalid_trace_width_rejected() {
 
     // Verification should fail due to width mismatch
     let airs = vec![air_fib];
-    let res = verify_batch_no_lookups(&config, &airs, &tampered_proof, from_ref(&fib_pis), &common);
+    let res = verify_batch(&config, &airs, &tampered_proof, from_ref(&fib_pis), &common);
     assert!(
         res.is_err(),
         "Verifier should reject trace with wrong width"
@@ -1087,7 +1081,7 @@ fn test_invalid_trace_width_rejected() {
             .trace_next[0],
     ]; // Wrong width
 
-    let res = verify_batch_no_lookups(&config, &airs, &tampered_proof, from_ref(&fib_pis), &common);
+    let res = verify_batch(&config, &airs, &tampered_proof, from_ref(&fib_pis), &common);
     assert!(
         res.is_err(),
         "Verifier should reject trace_next with wrong width"
@@ -1122,13 +1116,13 @@ fn test_reorder_instances_rejected() {
     let log_degrees: Vec<usize> = degrees.iter().copied().map(log2_strict_usize).collect();
 
     let common = CommonData::from_instances(&config, &instances);
-    let proof = prove_batch_no_lookups(&config, &instances, &common);
+    let proof = prove_batch(&config, &instances, &common);
 
     // Swap order at verify -> should fail (create new CommonData with swapped AIRs)
     let mut airs_swapped = vec![air_b, air_a];
     let common_swapped =
         CommonData::from_airs_and_degrees(&config, &mut airs_swapped, &log_degrees);
-    let res = verify_batch_no_lookups(
+    let res = verify_batch(
         &config,
         &airs_swapped,
         &proof,
@@ -1153,7 +1147,7 @@ fn test_quotient_chunk_element_len_rejected() {
         lookups: vec![],
     }];
     let common = CommonData::from_instances(&config, &instances);
-    let proof = prove_batch_no_lookups(&config, &instances, &common);
+    let proof = prove_batch(&config, &instances, &common);
 
     let mut tampered = proof;
     tampered.opened_values.instances[0]
@@ -1162,7 +1156,7 @@ fn test_quotient_chunk_element_len_rejected() {
         .pop();
 
     let airs = vec![air];
-    let res = verify_batch_no_lookups(&config, &airs, &tampered, from_ref(&pv), &common);
+    let res = verify_batch(&config, &airs, &tampered, from_ref(&pv), &common);
     assert!(
         res.is_err(),
         "Verifier should reject truncated quotient chunk element"
@@ -1248,11 +1242,11 @@ fn test_circle_stark_batch() -> Result<(), impl Debug> {
     // Generate batch-proof
     // Plain FibonacciAir doesn't have preprocessed columns
     let common = CommonData::empty(airs.len());
-    let proof = prove_batch_no_lookups(&config, &instances, &common);
+    let proof = prove_batch(&config, &instances, &common);
 
     // Verify batch-proof
     let public_values = vec![fib_pis1, fib_pis2];
-    verify_batch_no_lookups(&config, &airs, &proof, &public_values, &common)
+    verify_batch(&config, &airs, &proof, &public_values, &common)
         .map_err(|e| format!("Verification failed: {:?}", e))
 }
 
@@ -1272,9 +1266,9 @@ fn test_preprocessed_constraint_positive() -> Result<(), impl Debug> {
     }];
 
     let common = CommonData::from_instances(&config, &instances);
-    let proof = prove_batch_no_lookups(&config, &instances, &common);
+    let proof = prove_batch(&config, &instances, &common);
     let airs = vec![air];
-    verify_batch_no_lookups(&config, &airs, &proof, &[pis], &common)
+    verify_batch(&config, &airs, &proof, &[pis], &common)
 }
 
 #[test]
@@ -1294,7 +1288,7 @@ fn test_preprocessed_constraint_negative() -> Result<(), Box<dyn std::error::Err
     }];
 
     let common = CommonData::from_instances(&config, &instances);
-    let proof = prove_batch_no_lookups(&config, &instances, &common);
+    let proof = prove_batch(&config, &instances, &common);
 
     // Verify with wrong multiplier=3 (should fail)
     let air_verify = DemoAir::PreprocessedMul(PreprocessedMulAir {
@@ -1305,7 +1299,7 @@ fn test_preprocessed_constraint_negative() -> Result<(), Box<dyn std::error::Err
     let degree_bits = proof.degree_bits.clone();
     let verify_common = CommonData::from_airs_and_degrees(&config, &mut airs, &degree_bits);
 
-    let res = verify_batch_no_lookups(&config, &airs, &proof, &[pis], &verify_common);
+    let res = verify_batch(&config, &airs, &proof, &[pis], &verify_common);
     let err = res.expect_err(
         "Verification should fail when preprocessed constraint multiplier doesn't match",
     );
@@ -1349,11 +1343,11 @@ fn test_mixed_preprocessed_constraints() -> Result<(), impl Debug> {
     ];
 
     let common = CommonData::from_instances(&config, &instances);
-    let proof = prove_batch_no_lookups(&config, &instances, &common);
+    let proof = prove_batch(&config, &instances, &common);
 
     let airs = vec![air_fib, air_mul, air_pp_mul];
     let pvs = vec![fib_pis, mul_pis, pp_mul_pis];
-    verify_batch_no_lookups(&config, &airs, &proof, &pvs, &common)
+    verify_batch(&config, &airs, &proof, &pvs, &common)
 }
 
 // Tests for local and global lookup handling in multi-stark.
@@ -1379,11 +1373,10 @@ fn test_batch_stark_one_instance_local_only() -> Result<(), impl Debug> {
 
     let instances = StarkInstance::new_multiple(&airs, &[mul_trace], &[vec![]], &common_data);
 
-    let lookup_gadget = LogUpGadget::new();
-    let proof = prove_batch(&config, &instances, &common_data, &lookup_gadget);
+    let proof = prove_batch(&config, &instances, &common_data);
 
     let pvs = vec![vec![]];
-    verify_batch(&config, &airs, &proof, &pvs, &common_data, &lookup_gadget)
+    verify_batch(&config, &airs, &proof, &pvs, &common_data)
 }
 
 /// Test with local lookups only, which fail due to wrong permutation column.
@@ -1413,8 +1406,7 @@ fn test_batch_stark_one_instance_local_fails() {
 
     let instances = StarkInstance::new_multiple(&airs, &[mul_trace], &[vec![]], &common_data);
 
-    let lookup_gadget = LogUpGadget::new();
-    prove_batch(&config, &instances, &common_data, &lookup_gadget);
+    prove_batch(&config, &instances, &common_data);
 }
 
 /// Test with local lookups only, which fail due to wrong permutation column.
@@ -1444,18 +1436,9 @@ fn test_batch_stark_one_instance_local_fails() {
 
     let instances = StarkInstance::new_multiple(&airs, &[mul_trace], &[vec![]], &common_data);
 
-    let lookup_gadget = LogUpGadget::new();
-    let proof = prove_batch(&config, &instances, &common_data, &lookup_gadget);
+    let proof = prove_batch(&config, &instances, &common_data);
 
-    verify_batch(
-        &config,
-        &airs,
-        &proof,
-        &[vec![]],
-        &common_data,
-        &lookup_gadget,
-    )
-    .unwrap();
+    verify_batch(&config, &airs, &proof, &[vec![]], &common_data).unwrap();
 }
 
 /// Test with local lookups only using MulAirLookups
@@ -1502,11 +1485,10 @@ fn test_batch_stark_local_lookups_only() -> Result<(), impl Debug> {
         &common_data,
     );
 
-    let lookup_gadget = LogUpGadget::new();
-    let proof = prove_batch(&config, &instances, &common_data, &lookup_gadget);
+    let proof = prove_batch(&config, &instances, &common_data);
 
     let pvs = vec![vec![], fib_pis];
-    verify_batch(&config, &airs, &proof, &pvs, &common_data, &lookup_gadget)
+    verify_batch(&config, &airs, &proof, &pvs, &common_data)
 }
 
 /// Test with global lookups only using MulAirLookups and FibAirLookups  
@@ -1555,11 +1537,10 @@ fn test_batch_stark_global_lookups_only() -> Result<(), impl Debug> {
         &common_data,
     );
 
-    let lookup_gadget = LogUpGadget::new();
-    let proof = prove_batch(&config, &instances, &common_data, &lookup_gadget);
+    let proof = prove_batch(&config, &instances, &common_data);
 
     let pvs = vec![vec![], fib_pis];
-    verify_batch(&config, &airs, &proof, &pvs, &common_data, &lookup_gadget)
+    verify_batch(&config, &airs, &proof, &pvs, &common_data)
 }
 
 /// Test with both local and global lookups using MulAirLookups and FibAirLookups
@@ -1610,11 +1591,10 @@ fn test_batch_stark_both_lookups() -> Result<(), impl Debug> {
         &common_data,
     );
 
-    let lookup_gadget = LogUpGadget::new();
-    let proof = prove_batch(&config, &instances, &common_data, &lookup_gadget);
+    let proof = prove_batch(&config, &instances, &common_data);
 
     let pvs = vec![vec![], fib_pis];
-    verify_batch(&config, &airs, &proof, &pvs, &common_data, &lookup_gadget)
+    verify_batch(&config, &airs, &proof, &pvs, &common_data)
 }
 
 /// Test with both local and global lookups using MulAirLookups and FibAirLookups, with ZK mode activated
@@ -1665,11 +1645,10 @@ fn test_batch_stark_both_lookups_zk() -> Result<(), impl Debug> {
         &common_data,
     );
 
-    let lookup_gadget = LogUpGadget::new();
-    let proof = prove_batch(&config, &instances, &common_data, &lookup_gadget);
+    let proof = prove_batch(&config, &instances, &common_data);
 
     let pvs = vec![vec![], fib_pis];
-    verify_batch(&config, &airs, &proof, &pvs, &common_data, &lookup_gadget)
+    verify_batch(&config, &airs, &proof, &pvs, &common_data)
 }
 
 #[test]
@@ -1716,14 +1695,13 @@ fn test_batch_stark_failed_global_lookup() {
 
     let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, &common_data);
 
-    let lookup_gadget = LogUpGadget::new();
-    let proof = prove_batch(&config, &instances, &common_data, &lookup_gadget);
+    let proof = prove_batch(&config, &instances, &common_data);
 
     // This should panic with GlobalCumulativeMismatch because:
     // - MulAir sends values to "MulFib1" and "MulFib2" lookups
     // - FibAir only receives from "MulFib" lookup
     // - The global cumulative sums won't match
-    verify_batch(&config, &airs, &proof, &pvs, &common_data, &lookup_gadget).unwrap();
+    verify_batch(&config, &airs, &proof, &pvs, &common_data).unwrap();
 }
 
 /// Test mixing instances with lookups and instances without lookups.
@@ -1836,18 +1814,10 @@ fn test_batch_stark_mixed_lookups() -> Result<(), impl Debug> {
     // Create instances - mixing lookup and non-lookup instances
     let instances = StarkInstance::new_multiple(&all_airs, &traces, &all_pvs, &common_data);
 
-    let lookup_gadget = LogUpGadget::new();
-    let proof = prove_batch(&config, &instances, &common_data, &lookup_gadget);
+    let proof = prove_batch(&config, &instances, &common_data);
 
     // Verify with mixed AIRs
-    verify_batch(
-        &config,
-        &all_airs,
-        &proof,
-        &all_pvs,
-        &common_data,
-        &lookup_gadget,
-    )
+    verify_batch(&config, &all_airs, &proof, &all_pvs, &common_data)
 }
 
 // Single table with local lookup involving the Lagrange selectors. Since the selectors are not normalized,
@@ -2029,8 +1999,7 @@ fn test_single_table_local_lookup() -> Result<(), impl Debug> {
 
     let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, &common_data);
 
-    let lookup_gadget = LogUpGadget::new();
-    let proof = prove_batch(&config, &instances, &common_data, &lookup_gadget);
+    let proof = prove_batch(&config, &instances, &common_data);
 
-    verify_batch(&config, &airs, &proof, &pvs, &common_data, &lookup_gadget)
+    verify_batch(&config, &airs, &proof, &pvs, &common_data)
 }

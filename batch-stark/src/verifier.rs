@@ -9,8 +9,8 @@ use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
-use p3_lookup::lookup_traits::{EmptyLookupGadget, Lookup, LookupData, LookupError, LookupGadget,
-};
+use p3_lookup::logup::LogUpGadget;
+use p3_lookup::lookup_traits::{Lookup, LookupData, LookupError, LookupGadget};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use p3_uni_stark::{
@@ -28,13 +28,12 @@ use crate::proof::BatchProof;
 use crate::symbolic::{get_log_num_quotient_chunks, lookup_data_to_expr};
 
 #[instrument(skip_all)]
-pub fn verify_batch<SC, A, LG>(
+pub fn verify_batch<SC, A>(
     config: &SC,
     airs: &[A],
     proof: &BatchProof<SC>,
     public_values: &[Vec<Val<SC>>],
     common: &CommonData<SC>,
-    lookup_gadget: &LG,
 ) -> Result<(), VerificationError<PcsError<SC>>>
 where
     SC: SGC,
@@ -42,8 +41,10 @@ where
     A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
         + for<'a> Air<VerifierConstraintFolderWithLookups<'a, SC>>,
     Challenge<SC>: BasedVectorSpace<Val<SC>>,
-    LG: LookupGadget,
 {
+    // TODO: Extend if additional lookup gadgets are added.
+    let lookup_gadget = LogUpGadget::new();
+
     let BatchProof {
         commitments,
         opened_values,
@@ -98,14 +99,14 @@ where
             .unwrap_or(0);
         preprocessed_widths.push(pre_w);
 
-        let log_num_chunks = get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LG>(
+        let log_num_chunks = get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
             air,
             pre_w,
             public_values[i].len(),
             &all_lookups[i],
             &lookup_data_to_expr(&global_lookup_data[i]),
             config.is_zk(),
-            lookup_gadget,
+            &lookup_gadget,
         );
         log_num_quotient_chunks.push(log_num_chunks);
 
@@ -192,7 +193,7 @@ where
 
     // Fetch lookups and sample their challenges.
     let challenges_per_instance =
-        get_perm_challenges::<SC, LG>(&mut challenger, all_lookups, lookup_gadget);
+        get_perm_challenges::<SC, LogUpGadget>(&mut challenger, all_lookups, &lookup_gadget);
 
     // Then, observe the permutation tables, if any.
     if is_lookup {
@@ -480,10 +481,10 @@ where
             quotient,
         };
 
-        verify_constraints_with_lookups::<SC, A, LG, PcsError<SC>>(
+        verify_constraints_with_lookups::<SC, A, LogUpGadget, PcsError<SC>>(
             air,
             &verifier_data,
-            lookup_gadget,
+            &lookup_gadget,
         )
         .map_err(|e| match e {
             VerificationError::OodEvaluationMismatch { .. } => {
@@ -621,31 +622,4 @@ where
     }
 
     Ok(())
-}
-
-pub fn verify_batch_no_lookups<SC, A>(
-    config: &SC,
-    airs: &[A],
-    proof: &BatchProof<SC>,
-    public_values: &[Vec<Val<SC>>],
-    common: &CommonData<SC>,
-) -> Result<(), VerificationError<PcsError<SC>>>
-where
-    SC: SGC,
-    SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
-    A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
-        + for<'a> Air<VerifierConstraintFolderWithLookups<'a, SC>>
-        + Clone,
-    Challenge<SC>: BasedVectorSpace<Val<SC>>,
-{
-    let empty_lookup_gadget = EmptyLookupGadget {};
-
-    verify_batch(
-        config,
-        &airs,
-        proof,
-        public_values,
-        common,
-        &empty_lookup_gadget,
-    )
 }

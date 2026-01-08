@@ -1,10 +1,9 @@
-use alloc::vec;
-
 use p3_air::lookup::LookupEvaluator;
 /// Public re-exports of lookup types.
 pub use p3_air::lookup::{Direction, Kind, Lookup, LookupData, LookupError, LookupInput};
-use p3_air::{AirBuilder, AirBuilderWithPublicValues,  ExtensionBuilder, PairBuilder,
-    PermutationAirBuilder, SymbolicExpression,
+use p3_air::{
+    AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder, PermutationAirBuilder,
+    SymbolicExpression,
 };
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
@@ -225,59 +224,5 @@ where
         SymbolicExpression::Mul { x, y, .. } => {
             symbolic_to_expr(builder, x) * symbolic_to_expr(builder, y)
         }
-    }
-}
-
-/// Empty lookup gadget for AIRs that do not use lookups.
-pub struct EmptyLookupGadget;
-
-impl LookupEvaluator for EmptyLookupGadget {
-    fn eval_local_lookup<AB>(&self, _builder: &mut AB, _context: &Lookup<AB::F>)
-    where
-        AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
-    {
-    }
-
-    fn eval_global_update<AB>(
-        &self,
-        _builder: &mut AB,
-        _context: &Lookup<AB::F>,
-        _expected_cumulated: AB::ExprEF,
-    ) where
-        AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
-    {
-    }
-}
-
-impl LookupGadget for EmptyLookupGadget {
-    fn num_aux_cols(&self) -> usize {
-        0
-    }
-
-    fn num_challenges(&self) -> usize {
-        0
-    }
-
-    fn verify_global_final_value<EF: Field>(
-        &self,
-        _all_expected_cumulated: &[EF],
-    ) -> Result<(), LookupError> {
-        Ok(())
-    }
-
-    fn constraint_degree<F: Field>(&self, _context: Lookup<F>) -> usize {
-        0
-    }
-
-    fn generate_permutation<SC: StarkGenericConfig>(
-        &self,
-        _main: &RowMajorMatrix<Val<SC>>,
-        _preprocessed: &Option<RowMajorMatrix<Val<SC>>>,
-        _public_values: &[Val<SC>],
-        _lookups: &[Lookup<Val<SC>>],
-        _lookup_data: &mut [LookupData<SC::Challenge>],
-        _permutation_challenges: &[SC::Challenge],
-    ) -> RowMajorMatrix<SC::Challenge> {
-        RowMajorMatrix::new(vec![], 0)
     }
 }
