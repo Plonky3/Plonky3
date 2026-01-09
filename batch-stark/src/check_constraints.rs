@@ -1,8 +1,9 @@
 use p3_air::{
-    AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder, PermutationAirBuilder,
+    Air, AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder,
+    PermutationAirBuilder,
 };
 use p3_field::{ExtensionField, Field};
-use p3_lookup::lookup_traits::{AirLookupHandler, Lookup, LookupData, LookupGadget};
+use p3_lookup::lookup_traits::{Lookup, LookupData, LookupGadget};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::{VerticalPair, ViewPair};
@@ -44,7 +45,7 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
 ) where
     F: Field,
     EF: ExtensionField<F>,
-    A: for<'a> AirLookupHandler<DebugConstraintBuilderWithLookups<'a, F, EF>>,
+    A: for<'a> Air<DebugConstraintBuilderWithLookups<'a, F, EF>>,
     LG: LookupGadget,
 {
     let height = main.height();
@@ -101,7 +102,7 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
             is_transition: F::from_bool(row_index != height - 1),
         };
 
-        <A as AirLookupHandler<DebugConstraintBuilderWithLookups<'_, F, EF>>>::eval(
+        <A as Air<DebugConstraintBuilderWithLookups<'_, F, EF>>>::eval_with_lookups(
             air,
             &mut builder,
             lookups,
