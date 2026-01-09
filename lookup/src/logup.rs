@@ -265,6 +265,14 @@ impl LogUpGadget {
 }
 
 impl LookupEvaluator for LogUpGadget {
+    fn num_aux_cols(&self) -> usize {
+        1
+    }
+
+    fn num_challenges(&self) -> usize {
+        2
+    }
+
     /// # Mathematical Details
     /// The constraint enforces:
     /// ```text
@@ -312,13 +320,6 @@ impl LookupEvaluator for LogUpGadget {
 }
 
 impl LookupGadget for LogUpGadget {
-    fn num_aux_cols(&self) -> usize {
-        1
-    }
-
-    fn num_challenges(&self) -> usize {
-        2
-    }
     fn verify_global_final_value<EF: Field>(
         &self,
         all_expected_cumulative: &[EF],

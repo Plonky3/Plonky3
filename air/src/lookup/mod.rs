@@ -119,6 +119,19 @@ impl<F: Field> Lookup<F> {
 /// Trait for evaluating lookup constraints.
 /// This is the core interface needed by [`Air::eval_with_lookups`](crate::Air::eval_with_lookups).
 pub trait LookupEvaluator {
+    /// Returns the number of auxiliary columns needed by this lookup protocol.
+    ///
+    /// For example:
+    /// - LogUp needs 1 column (running sum)
+    fn num_aux_cols(&self) -> usize;
+
+    /// Returns the number of challenges for each lookup argument.
+    ///
+    /// For example, for LogUp, this is 2:
+    /// - one challenge for combining the lookup tuples,
+    /// - one challenge for the running sum.
+    fn num_challenges(&self) -> usize;
+
     /// Evaluates a local lookup argument based on the provided context.
     ///
     /// For example, in LogUp:

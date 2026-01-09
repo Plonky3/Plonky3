@@ -33,19 +33,6 @@ pub fn lookup_data_to_expr<F: Clone>(
 
 /// A trait for lookup argument.
 pub trait LookupGadget: LookupEvaluator {
-    /// Returns the number of auxiliary columns needed by this lookup protocol.
-    ///
-    /// For example:
-    /// - LogUp needs 1 column (running sum)
-    fn num_aux_cols(&self) -> usize;
-
-    /// Returns the number of challenges for each lookup argument.
-    ///
-    /// For example, for LogUp, this is 2:
-    /// - one challenge for combining the lookup tuples,
-    /// - one challenge for the running sum.
-    fn num_challenges(&self) -> usize;
-
     /// Generates the permutation matrix for the lookup argument.
     fn generate_permutation<SC: StarkGenericConfig>(
         &self,
