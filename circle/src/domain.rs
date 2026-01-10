@@ -173,10 +173,15 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         point: Ext,
     ) -> LagrangeSelectors<Ext> {
         let point = Point::from_projective_line(point);
+        let last_point = -self.shift;
+        // Use linear tangent selector for transitional constraints: s(x,y) = x_P * x + y_P * y - 1
+        // This has a zero at P with multiplicity 2, and no other zeros on the circle.
+        // See Circle STARKs paper, Remark 17 and Remark 22.
+        let is_transition = last_point.tangent_selector(point);
         LagrangeSelectors {
             is_first_row: self.s_p(self.shift, point),
             is_last_row: self.s_p(-self.shift, point),
-            is_transition: Ext::ONE - self.s_p_normalized(-self.shift, point),
+            is_transition,
             inv_vanishing: self.vanishing_poly(point).inverse(),
         }
     }
@@ -227,10 +232,13 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             .zip(inv_den_negshift_k.iter())
             .map(|(&z, &inv_dk)| z * inv_dk * k)
             .collect();
-        let is_transition = z_vals
+        // Use linear tangent selector for transitional constraints: s(x,y) = x_P * x + y_P * y - 1
+        // This has a zero at P with multiplicity 2, and no other zeros on the circle.
+        // See Circle STARKs paper, Remark 17 and Remark 22.
+        let last_point = neg_shift;
+        let is_transition = pts
             .iter()
-            .zip(inv_den_negshift_k.iter())
-            .map(|(&z, &inv_dk)| Self::Val::ONE - z * inv_dk)
+            .map(|&at| last_point.tangent_selector(at))
             .collect();
 
         LagrangeSelectors {
