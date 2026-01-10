@@ -104,6 +104,22 @@ impl<F: Field> Point<F> {
         let diff = -at + self;
         (EF::ONE - diff.x, -diff.y)
     }
+
+    /// Evaluate the linear tangent selector polynomial s(x,y) = x_P * x + y_P * y - 1
+    /// at point `at`, where P = self is the "last point" of the domain.
+    ///
+    /// This selector has a zero at P with multiplicity 2, and no other zeros on the circle.
+    /// Used for optimized treatment of transitional constraints in Circle STARK.
+    /// See Circle STARKs paper, Remark 17 and Remark 22.
+    pub fn tangent_selector<EF: ExtensionField<F>>(self, at: Point<EF>) -> EF {
+        let x_p = <EF as p3_field::BasedVectorSpace<F>>::from_basis_coefficients_fn(|i| {
+            if i == 0 { self.x } else { F::ZERO }
+        });
+        let y_p = <EF as p3_field::BasedVectorSpace<F>>::from_basis_coefficients_fn(|i| {
+            if i == 0 { self.y } else { F::ZERO }
+        });
+        x_p * at.x + y_p * at.y - EF::ONE
+    }
 }
 
 /// Compute (ṽ_P(x,y) * s_p)^{-1} for each element in the list.
