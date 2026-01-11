@@ -50,13 +50,13 @@ pub const fn log2_strict_usize(n: usize) -> usize {
 /// Returns `[0, ..., N - 1]`.
 #[must_use]
 pub const fn indices_arr<const N: usize>() -> [usize; N] {
-    let mut indices_arr = [0; N];
+    let mut arr = [0; N];
     let mut i = 0;
     while i < N {
-        indices_arr[i] = i;
+        arr[i] = i;
         i += 1;
     }
-    indices_arr
+    arr
 }
 
 #[inline]
