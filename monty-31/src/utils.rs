@@ -1,4 +1,4 @@
-use crate::{FieldParameters, MontyParameters};
+use crate::MontyParameters;
 
 /// Convert a u32 into MONTY form.
 /// There are no constraints on the input.
@@ -88,14 +88,6 @@ pub(crate) const fn sub<MP: MontyParameters>(lhs: u32, rhs: u32) -> u32 {
 /// Given an element `x` from a 31 bit field `F` compute `x/2`.
 /// The input must be in `[0, P)`.
 /// The output will also be in `[0, P)`.
-#[inline]
-pub(crate) const fn halve_u32<FP: FieldParameters>(input: u32) -> u32 {
-    let shr = input >> 1;
-    let lo_bit = input & 1;
-    let shr_corr = shr + FP::HALF_P_PLUS_1;
-    if lo_bit == 0 { shr } else { shr_corr }
-}
-
 /// Montgomery reduction of a value in `0..P << MONTY_BITS`.
 ///
 /// The input must be in `[0, MONTY * P)`.
