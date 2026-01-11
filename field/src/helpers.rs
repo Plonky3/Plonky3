@@ -120,7 +120,17 @@ pub const fn field_to_array<R: PrimeCharacteristicRing, const D: usize>(x: R) ->
 #[inline]
 #[must_use]
 pub const fn halve_u32<const P: u32>(x: u32) -> u32 {
-    let shift = (P + 1) >> 1;
+    halve_u32_with_shift(x, (P + 1) >> 1)
+}
+
+/// Given an element `x` from a 32-bit odd-prime field, compute `x/2` using a precomputed
+/// \((P + 1)/2\) "shift" value.
+///
+/// This is useful for callers who already have `shift = (P + 1) >> 1` available (e.g. as an
+/// associated constant), to avoid duplicating the same halving logic in multiple crates.
+#[inline]
+#[must_use]
+pub const fn halve_u32_with_shift(x: u32, shift: u32) -> u32 {
     let half = x >> 1;
     if x & 1 == 0 { half } else { half + shift }
 }
