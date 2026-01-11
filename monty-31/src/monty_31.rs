@@ -16,7 +16,7 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField32, PrimeField64, RawDataSerializable, TwoAdicField,
+    PrimeField32, PrimeField64, RawDataSerializable, TwoAdicField, halve_u32_with_shift,
     impl_raw_serializable_primefield32, quotient_map_small_int,
 };
 use p3_util::{flatten_to_base, gcd_inversion_prime_field_32};
@@ -25,7 +25,7 @@ use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::utils::{
-    add, from_monty, halve_u32, large_monty_reduce, monty_reduce, monty_reduce_u128, sub, to_monty,
+    add, from_monty, large_monty_reduce, monty_reduce, monty_reduce_u128, sub, to_monty,
     to_monty_64, to_monty_64_signed, to_monty_signed,
 };
 use crate::{FieldParameters, MontyParameters, RelativelyPrimePower, TwoAdicData};
@@ -186,7 +186,7 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
 
     #[inline]
     fn halve(&self) -> Self {
-        Self::new_monty(halve_u32::<FP>(self.value))
+        Self::new_monty(halve_u32_with_shift(self.value, FP::HALF_P_PLUS_1))
     }
 
     #[inline]
