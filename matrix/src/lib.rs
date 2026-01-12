@@ -474,20 +474,16 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
             .par_fold_reduce(
                 || EF::ExtensionPacking::zero_vec(packed_width * N),
                 |mut acc, (packed_row, scales)| {
-                    let (acc_chunks, _) = acc.as_chunks_mut::<N>();
                     // Broadcast each scalar scale to all SIMD lanes
                     let packed_scales: [EF::ExtensionPacking; N] =
                         scales.map_into_array(EF::ExtensionPacking::from);
 
                     // acc[c][j] += scales[j] · row[c] for column batch c, point j
-                    acc_chunks
-                        .iter_mut()
-                        .zip(packed_row)
-                        .for_each(|(acc_c, row_c)| {
-                            for j in 0..N {
-                                acc_c[j] += packed_scales[j] * row_c;
-                            }
-                        });
+                    for (acc_c, row_c) in acc.chunks_exact_mut(N).zip(packed_row) {
+                        for j in 0..N {
+                            acc_c[j] += packed_scales[j] * row_c;
+                        }
+                    }
                     acc
                 },
                 |mut acc_l, acc_r| {
