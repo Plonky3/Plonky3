@@ -98,7 +98,7 @@ impl<F: Field> Lookup<F> {
     /// Creates a new lookup with the specified column.
     ///
     /// # Arguments
-    /// * `elements` - Elements from the either the main execution trace or a lookup table.
+    /// * `elements` - Elements from either the main execution trace or a lookup table.
     /// * `multiplicities` - How many times each `element` should appear
     /// * `column` - The column index in the permutation trace for this lookup
     pub const fn new(
