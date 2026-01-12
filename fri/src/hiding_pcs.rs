@@ -3,7 +3,7 @@ use core::cell::RefCell;
 use core::fmt::Debug;
 
 use itertools::Itertools;
-use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
+use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{BatchOpening, Mmcs, OpenedValues, Pcs, PolynomialSpace};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
@@ -56,8 +56,7 @@ where
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
     Challenge: TwoAdicField + ExtensionField<Val>,
-    Challenger:
-        FieldChallenger<Val> + CanObserve<FriMmcs::Commitment> + GrindingChallenger<Witness = Val>,
+    Challenger: FieldChallenger<Val> + CanObserve<FriMmcs::Commitment> + Clone,
     R: Rng + Send + Sync,
 {
     type Domain = TwoAdicMultiplicativeCoset<Val>;
@@ -71,7 +70,7 @@ where
     /// The second item is the usual FRI proof.
     type Proof = (
         OpenedValues<Challenge>,
-        FriProof<Challenge, FriMmcs, Val, Vec<BatchOpening<Val, InputMmcs>>>,
+        FriProof<Challenge, FriMmcs, Challenge, Vec<BatchOpening<Val, InputMmcs>>>,
     );
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
 

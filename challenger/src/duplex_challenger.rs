@@ -1,8 +1,10 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::fmt::Debug;
 
 use p3_field::{BasedVectorSpace, Field, PrimeField64};
 use p3_symmetric::{CryptographicPermutation, Hash};
+use tracing::{debug, info};
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 
@@ -102,13 +104,14 @@ where
 impl<F, P, const WIDTH: usize, const RATE: usize> CanObserve<F>
     for DuplexChallenger<F, P, WIDTH, RATE>
 where
-    F: Copy,
+    F: Copy + Debug,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
     fn observe(&mut self, value: F) {
         // Any buffered output is now invalid.
         self.output_buffer.clear();
 
+        info!("Observing value: {:?}", value);
         self.input_buffer.push(value);
 
         if self.input_buffer.len() == RATE {
@@ -120,7 +123,7 @@ where
 impl<F, P, const N: usize, const WIDTH: usize, const RATE: usize> CanObserve<[F; N]>
     for DuplexChallenger<F, P, WIDTH, RATE>
 where
-    F: Copy,
+    F: Copy + Debug,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
     fn observe(&mut self, values: [F; N]) {
@@ -133,7 +136,7 @@ where
 impl<F, P, const N: usize, const WIDTH: usize, const RATE: usize> CanObserve<Hash<F, F, N>>
     for DuplexChallenger<F, P, WIDTH, RATE>
 where
-    F: Copy,
+    F: Copy + Debug,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
     fn observe(&mut self, values: Hash<F, F, N>) {
@@ -147,7 +150,7 @@ where
 impl<F, P, const WIDTH: usize, const RATE: usize> CanObserve<Vec<Vec<F>>>
     for DuplexChallenger<F, P, WIDTH, RATE>
 where
-    F: Copy,
+    F: Copy + Debug,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
     fn observe(&mut self, valuess: Vec<Vec<F>>) {
@@ -174,9 +177,10 @@ where
                 self.duplexing();
             }
 
-            self.output_buffer
-                .pop()
-                .expect("Output buffer should be non-empty")
+            let elem = self.output_buffer.remove(0);
+            info!("Sampled element: {:?}", elem);
+
+            elem
         })
     }
 }

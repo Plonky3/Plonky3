@@ -17,8 +17,10 @@ pub use duplex_challenger::*;
 pub use grinding_challenger::*;
 pub use hash_challenger::*;
 pub use multi_field_challenger::*;
-use p3_field::{Algebra, BasedVectorSpace, Field};
+use p3_field::{Algebra, BasedVectorSpace, Field, PrimeField32};
+use p3_maybe_rayon::prelude::ParIterExt;
 pub use serializing_challenger::*;
+use tracing::info;
 
 /// A generic trait for absorbing elements into the transcript.
 ///
@@ -78,6 +80,7 @@ pub trait FieldChallenger<F: Field>:
     ///
     /// Decomposes the element into its basis coefficients and absorbs each.
     fn observe_algebra_element<A: BasedVectorSpace<F>>(&mut self, alg_elem: A) {
+        info!("Observing extension field element:",);
         self.observe_slice(alg_elem.as_basis_coefficients_slice());
     }
 
@@ -85,6 +88,7 @@ pub trait FieldChallenger<F: Field>:
     ///
     /// Constructs the element by sampling basis coefficients.
     fn sample_algebra_element<A: BasedVectorSpace<F>>(&mut self) -> A {
+        info!("Sampling extension field element:");
         A::from_basis_coefficients_fn(|_| self.sample())
     }
 
@@ -105,7 +109,45 @@ pub trait FieldChallenger<F: Field>:
     where
         EF: Algebra<F> + BasedVectorSpace<F>,
     {
+        info!("Observing base value (as extension element): {:?}", val);
         self.observe_algebra_element(EF::from(val));
+    }
+
+    fn check_witness_algebra<A: BasedVectorSpace<F>>(&mut self, bits: usize, witness: A) -> bool {
+        self.observe_algebra_element(witness);
+        let res = self.sample_bits(bits) == 0;
+        // Sample more to correctly update the challenger.
+        for _ in 0..A::DIMENSION - 1 {
+            self.sample_bits(0);
+        }
+        res
+    }
+
+    fn grind_algebra<A: BasedVectorSpace<F>>(mut self, bits: usize) -> A
+    where
+        Self: Clone,
+    {
+        assert!(bits < (usize::BITS as usize));
+        // assert!((1 << bits) < F::ORDER_U64);
+        info!("Grinding, ignore these...");
+        let good_index = (0..1 << 32)
+            .find_any(|&i| {
+                let base_field_element = F::from_usize(i);
+                let witness = A::from_basis_coefficients_fn(|j| {
+                    if j == 0 { base_field_element } else { F::ZERO }
+                });
+                // Clone the challenger itself, not the mutable reference
+                let mut cloned_challenger = self.clone();
+                cloned_challenger.check_witness_algebra(bits, witness)
+            })
+            .expect("failed to find witness");
+
+        let base_field_element = F::from_usize(good_index);
+        let good_witness_assert =
+            A::from_basis_coefficients_fn(|j| if j == 0 { base_field_element } else { F::ZERO });
+        assert!(self.check_witness_algebra(bits, good_witness_assert));
+        info!("Grinding done, witness found.");
+        A::from_basis_coefficients_fn(|j| if j == 0 { base_field_element } else { F::ZERO })
     }
 }
 

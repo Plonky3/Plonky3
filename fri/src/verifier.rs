@@ -11,6 +11,7 @@ use p3_matrix::Dimensions;
 use p3_util::zip_eq::zip_eq;
 use p3_util::{log2_strict_usize, reverse_bits_len};
 use thiserror::Error;
+use tracing::info;
 
 use crate::{
     CommitPhaseProofStep, CommitmentWithOpeningPoints, FriFoldingStrategy, FriParameters, FriProof,
@@ -54,7 +55,7 @@ type FriOpenings<F> = Vec<(usize, F)>;
 pub fn verify_fri<Folding, Val, Challenge, InputMmcs, FriMmcs, Challenger>(
     folding: &Folding,
     params: &FriParameters<FriMmcs>,
-    proof: &FriProof<Challenge, FriMmcs, Challenger::Witness, Folding::InputProof>,
+    proof: &FriProof<Challenge, FriMmcs, Challenge, Folding::InputProof>,
     challenger: &mut Challenger,
     commitments_with_opening_points: &[CommitmentWithOpeningPoints<
         Challenge,
@@ -68,7 +69,7 @@ where
     Challenge: ExtensionField<Val>,
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<FriMmcs::Commitment>,
+    Challenger: FieldChallenger<Val> + CanObserve<FriMmcs::Commitment>,
     Folding: FriFoldingStrategy<
             Val,
             Challenge,
@@ -96,7 +97,9 @@ where
         .map(|comm| {
             // To match with the prover (and for security purposes),
             // we observe the commitment before sampling the challenge.
+            info!("Observing FRI commit phase commitment...");
             challenger.observe(comm.clone());
+            info!("FRI commit phase commitment observed!");
             challenger.sample_algebra_element()
         })
         .collect();
@@ -118,9 +121,16 @@ where
     }
 
     // Check PoW.
-    if !challenger.check_witness(params.proof_of_work_bits, proof.pow_witness) {
+    if !FieldChallenger::check_witness_algebra(
+        challenger,
+        params.proof_of_work_bits,
+        proof.pow_witness,
+    ) {
         return Err(FriError::InvalidPowWitness);
     }
+    // if !challenger.check_witness(params.proof_of_work_bits, proof.pow_witness) {
+    //     return Err(FriError::InvalidPowWitness);
+    // }
 
     // The log of the final domain size.
     let log_final_height = params.log_blowup + params.log_final_poly_len;
@@ -133,6 +143,10 @@ where
         // For each query proof, we start by generating the random index.
         let index =
             challenger.sample_bits(log_global_max_height + folding.extra_query_index_bits());
+        // Sample more to correctly update the challenger.
+        for _ in 0..Challenge::DIMENSION - 1 {
+            challenger.sample_bits(0);
+        }
 
         // Next we open all polynomials `f` at the relevant index and combine them into our FRI inputs.
         let ro = open_input(

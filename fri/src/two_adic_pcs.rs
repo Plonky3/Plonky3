@@ -170,14 +170,13 @@ where
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
     Challenge: ExtensionField<Val>,
-    Challenger:
-        FieldChallenger<Val> + CanObserve<FriMmcs::Commitment> + GrindingChallenger<Witness = Val>,
+    Challenger: FieldChallenger<Val> + CanObserve<FriMmcs::Commitment> + Clone,
 {
     type Domain = TwoAdicMultiplicativeCoset<Val>;
     type Commitment = InputMmcs::Commitment;
     type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
     type EvaluationsOnDomain<'a> = BitReversedMatrixView<RowMajorMatrixView<'a, Val>>;
-    type Proof = FriProof<Challenge, FriMmcs, Val, Vec<BatchOpening<Val, InputMmcs>>>;
+    type Proof = FriProof<Challenge, FriMmcs, Challenge, Vec<BatchOpening<Val, InputMmcs>>>;
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
     const ZK: bool = false;
 
@@ -512,7 +511,7 @@ where
             &folding,
             &self.fri,
             fri_input,
-            challenger,
+            challenger.clone(),
             log_global_max_height,
             &commitment_data_with_opening_points,
             &self.mmcs,

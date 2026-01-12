@@ -9,7 +9,7 @@ use p3_dft::{Radix2DFTSmallBatch, TwoAdicSubgroupDft};
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
-use tracing::{debug_span, info_span, instrument};
+use tracing::{debug_span, info, info_span, instrument};
 
 use crate::{
     CommitPhaseProofStep, FriFoldingStrategy, FriParameters, FriProof, ProverDataWithOpeningPoints,
@@ -44,7 +44,7 @@ pub fn prove_fri<Folding, Val, Challenge, InputMmcs, FriMmcs, Challenger>(
     folding: &Folding,
     params: &FriParameters<FriMmcs>,
     inputs: Vec<Vec<Challenge>>,
-    challenger: &mut Challenger,
+    mut challenger: Challenger,
     log_global_max_height: usize,
     prover_data_with_opening_points: &[ProverDataWithOpeningPoints<
         '_,
@@ -52,13 +52,13 @@ pub fn prove_fri<Folding, Val, Challenge, InputMmcs, FriMmcs, Challenger>(
         InputMmcs::ProverData<RowMajorMatrix<Val>>,
     >],
     input_mmcs: &InputMmcs,
-) -> FriProof<Challenge, FriMmcs, Challenger::Witness, Folding::InputProof>
+) -> FriProof<Challenge, FriMmcs, Challenge, Folding::InputProof>
 where
     Val: TwoAdicField,
     Challenge: ExtensionField<Val>,
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<FriMmcs::Commitment>,
+    Challenger: FieldChallenger<Val> + CanObserve<FriMmcs::Commitment> + Clone,
     Folding: FriFoldingStrategy<Val, Challenge, InputProof = Vec<BatchOpening<Val, InputMmcs>>>,
 {
     assert!(!inputs.is_empty());
@@ -82,11 +82,14 @@ where
     // themselves and the final polynomial.
     // Note that the challenger observes the commitments and the final polynomial inside this function so we don't
     // need to observe the output of this function here.
-    let commit_phase_result = commit_phase(folding, params, inputs, challenger);
+    let commit_phase_result = commit_phase(folding, params, inputs, &mut challenger);
 
     // Produce a proof of work witness before receiving any query challenges.
     // This helps to prevent grinding attacks.
-    let pow_witness = challenger.grind(params.proof_of_work_bits);
+    let pow_witness = FieldChallenger::grind_algebra(challenger.clone(), params.proof_of_work_bits);
+    // Do the `check_witness` steps manually (since the challenger was cloned).
+    challenger.observe_algebra_element(pow_witness);
+    challenger.sample_algebra_element::<Challenge>();
 
     let query_proofs = info_span!("query phase").in_scope(|| {
         // Sample num_queries indexes to check.
@@ -100,6 +103,10 @@ where
         // theoretical minimum.
         iter::repeat_with(|| {
             let index = challenger.sample_bits(log_max_height + folding.extra_query_index_bits());
+            // Sample more to correctly update the challenger.
+            for _ in 0..Challenge::DIMENSION - 1 {
+                challenger.sample_bits(0);
+            }
             // For each index, create a proof that the folding operations along the chain:
             // round 0: index, round 1: index >> 1, round 2: index >> 2, ... are correct.
             QueryProof {

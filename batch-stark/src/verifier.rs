@@ -10,7 +10,7 @@ use p3_uni_stark::{
     recompose_quotient_from_chunks, verify_constraints,
 };
 use p3_util::zip_eq::zip_eq;
-use tracing::instrument;
+use tracing::{info, instrument};
 
 use crate::common::CommonData;
 use crate::config::{
@@ -121,7 +121,9 @@ where
     }
 
     // Observe main commitment and public values (in instance order).
+    info!("Observing main commitment...");
     challenger.observe(commitments.main.clone());
+    info!("Main commitment observed!");
     for pv in public_values {
         challenger.observe_slice(pv);
     }
@@ -132,14 +134,18 @@ where
         challenger.observe_base_as_algebra_element::<Challenge<SC>>(Val::<SC>::from_usize(pre_w));
     }
     if let Some(global) = &common.preprocessed {
+        info!("Observing preprocessed commitment...");
         challenger.observe(global.commitment.clone());
+        info!("Preprocessed commitment observed!");
     }
 
     // Sample alpha for constraint folding
     let alpha = challenger.sample_algebra_element();
 
     // Observe quotient chunks commitment
+    info!("Observing quotient chunks commitment...");
     challenger.observe(commitments.quotient_chunks.clone());
+    info!("Quotient chunks commitment observed!");
 
     // Sample OOD point
     let zeta = challenger.sample_algebra_element();
