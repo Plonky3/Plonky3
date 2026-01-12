@@ -57,6 +57,7 @@ Hashes
 - [x] BLAKE3
   - [ ] modifications to tune BLAKE3 for hashing small leaves
 - [x] Keccak-256
+- [x] SHA-256
 - [x] Monolith
 
 
