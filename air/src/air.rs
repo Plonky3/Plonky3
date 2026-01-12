@@ -100,7 +100,7 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
     /// - `builder`: Mutable reference to an `AirBuilder` for defining constraints.
     /// - `lookups`: References to the lookups to be evaluated.
     /// - `lookup_data`: References to the lookup data to be used for evaluation.
-    /// - `lookup_gadget`: Reference to the lookup gadget to be used for evaluation.
+    /// - `lookup_evaluator`: Reference to the lookup evaluator to be used for evaluation.
     fn eval_with_lookups<LE: LookupEvaluator>(
         &self,
         builder: &mut AB,
