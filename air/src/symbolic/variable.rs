@@ -3,7 +3,7 @@ use core::ops::{Add, Mul, Sub};
 
 use p3_field::Field;
 
-use crate::symbolic_expression::SymbolicExpression;
+use crate::SymbolicExpression;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Entry {

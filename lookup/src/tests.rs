@@ -3,6 +3,7 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use p3_air::lookup::LookupEvaluator;
 use p3_air::{
     Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, ExtensionBuilder, PairBuilder,
     PermutationAirBuilder,
@@ -17,9 +18,7 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
 use crate::logup::LogUpGadget;
-use crate::lookup_traits::{
-    AirLookupHandler, Direction, Kind, Lookup, LookupGadget, symbolic_to_expr,
-};
+use crate::lookup_traits::{Direction, Kind, Lookup, LookupGadget, symbolic_to_expr};
 
 /// Base field type for the test
 type F = BabyBear;
@@ -284,26 +283,6 @@ where
     AB::ExprEF: From<AB::Var> + From<F>,
     F: Copy + Into<AB::ExprEF>,
 {
-    fn eval(&self, _builder: &mut AB) {
-        // There are no constraints, only lookups for the range checks.
-    }
-}
-
-impl<F: Field> BaseAir<F> for RangeCheckAir {
-    fn width(&self) -> usize {
-        3 * self.num_lookups // [read, provide, mult] per lookup
-    }
-}
-
-impl<AB> AirLookupHandler<AB> for RangeCheckAir
-where
-    AB: PermutationAirBuilder<F = F, EF = EF, RandomVar = EF>
-        + PairBuilder
-        + AirBuilderWithPublicValues,
-    AB::Var: Copy + Into<AB::ExprEF>,
-    AB::ExprEF: From<AB::Var> + From<F>,
-    F: Copy + Into<AB::ExprEF>,
-{
     fn add_lookup_columns(&mut self) -> Vec<usize> {
         let new_idx = self.cur_num_lookups;
         self.cur_num_lookups += 1;
@@ -341,9 +320,19 @@ where
                 ];
 
                 // Register the local lookup.
-                AirLookupHandler::<AB>::register_lookup(self, Kind::Local, &lookup_inputs)
+                Air::<AB>::register_lookup(self, Kind::Local, &lookup_inputs)
             })
             .collect::<Vec<_>>()
+    }
+
+    fn eval(&self, _builder: &mut AB) {
+        // There are no constraints, only lookups for the range checks.
+    }
+}
+
+impl<F: Field> BaseAir<F> for RangeCheckAir {
+    fn width(&self) -> usize {
+        3 * self.num_lookups // [read, provide, mult] per lookup
     }
 }
 
@@ -652,7 +641,7 @@ fn test_range_check_end_to_end_valid() {
     let mut builder = MockAirBuilder::new(main_trace, aux_trace, challenges.to_vec());
 
     let lookup_gadget = LogUpGadget::new();
-    let lookups = <RangeCheckAir as AirLookupHandler<MockAirBuilder>>::get_lookups(&mut air);
+    let lookups = <RangeCheckAir as Air<MockAirBuilder>>::get_lookups(&mut air);
 
     // Check that the lookup was created correctly.
     assert_eq!(lookups.len(), 1, "Should have one lookup defined");
@@ -731,7 +720,7 @@ fn test_range_check_end_to_end_invalid() {
     let mut builder = MockAirBuilder::new(main_trace, aux_trace, vec![alpha, beta]);
 
     let lookup_gadget = LogUpGadget::new();
-    let lookups = <RangeCheckAir as AirLookupHandler<MockAirBuilder>>::get_lookups(&mut air);
+    let lookups = <RangeCheckAir as Air<MockAirBuilder>>::get_lookups(&mut air);
 
     // Evaluate constraints.
     //
@@ -798,7 +787,7 @@ fn test_inconsistent_witness_fails_transition() {
 
     // Register the lookups.
     let lookup_gadget = LogUpGadget::new();
-    let lookups = <RangeCheckAir as AirLookupHandler<MockAirBuilder>>::get_lookups(&mut air);
+    let lookups = <RangeCheckAir as Air<MockAirBuilder>>::get_lookups(&mut air);
 
     // Evaluate the constraints.
     for i in 0..builder.height {
@@ -854,7 +843,7 @@ fn test_zero_multiplicity_is_not_counted() {
 
     // Register the lookups.
     let lookup_gadget = LogUpGadget::new();
-    let lookups = <RangeCheckAir as AirLookupHandler<MockAirBuilder>>::get_lookups(&mut air);
+    let lookups = <RangeCheckAir as Air<MockAirBuilder>>::get_lookups(&mut air);
 
     // The initial boundary constraint will fail on row 0 since s[0] is incorrect.
     //
@@ -878,7 +867,7 @@ fn test_empty_lookup_is_valid() {
     let mut builder = MockAirBuilder::new(main_trace, aux_trace, vec![alpha]);
 
     let lookup_gadget = LogUpGadget::new();
-    let lookups = <RangeCheckAir as AirLookupHandler<MockAirBuilder>>::get_lookups(&mut air);
+    let lookups = <RangeCheckAir as Air<MockAirBuilder>>::get_lookups(&mut air);
 
     // This should not panic, as there are no rows to evaluate.
     for i in 0..builder.height {
@@ -967,7 +956,7 @@ fn test_nontrivial_permutation() {
 
     // Register the lookups.
     let lookup_gadget = LogUpGadget::new();
-    let lookups = <RangeCheckAir as AirLookupHandler<MockAirBuilder>>::get_lookups(&mut air);
+    let lookups = <RangeCheckAir as Air<MockAirBuilder>>::get_lookups(&mut air);
 
     // Evaluate constraints for every row
     for i in 0..builder.height {
@@ -1082,7 +1071,7 @@ fn test_multiple_lookups_different_columns() {
 
     // Register lookups.
     let lookup_gadget = LogUpGadget::new();
-    let lookups = <RangeCheckAir as AirLookupHandler<MockAirBuilder>>::get_lookups(&mut air);
+    let lookups = <RangeCheckAir as Air<MockAirBuilder>>::get_lookups(&mut air);
 
     // Check that the lookup was created correctly.
     assert_eq!(lookups.len(), 2, "Should have two lookups defined");
@@ -1149,20 +1138,6 @@ where
     AB::ExprEF: From<AB::Var> + From<F>,
     F: Copy + Into<AB::ExprEF>,
 {
-    fn eval(&self, _builder: &mut AB) {
-        // No constraints, only lookups
-    }
-}
-
-impl<AB> AirLookupHandler<AB> for AddAir
-where
-    AB: PermutationAirBuilder<F = F, EF = EF, RandomVar = EF>
-        + PairBuilder
-        + AirBuilderWithPublicValues,
-    AB::Var: Copy + Into<AB::ExprEF>,
-    AB::ExprEF: From<AB::Var> + From<F>,
-    F: Copy + Into<AB::ExprEF>,
-{
     fn add_lookup_columns(&mut self) -> Vec<usize> {
         let new_idx = self.num_lookups;
         self.num_lookups += 1;
@@ -1199,23 +1174,23 @@ where
             (b_elements.clone(), b_multiplicities, Direction::Send),
         ];
 
-        let local_lookup =
-            AirLookupHandler::<AB>::register_lookup(self, Kind::Local, &lookup_inputs);
+        let local_lookup = Air::<AB>::register_lookup(self, Kind::Local, &lookup_inputs);
 
         // also need is_send
         let (is_global, direction) = self.with_global;
         if is_global {
             let lookup_inputs = vec![(b_elements, SymbolicExpression::Constant(F::ONE), direction)];
-            let global_lookup = AirLookupHandler::<AB>::register_lookup(
-                self,
-                Kind::Global("LUT".to_string()),
-                &lookup_inputs,
-            );
+            let global_lookup =
+                Air::<AB>::register_lookup(self, Kind::Global("LUT".to_string()), &lookup_inputs);
             // Return the local and global lookups.
             return vec![local_lookup, global_lookup];
         }
         // Return the local lookup.
         vec![local_lookup]
+    }
+
+    fn eval(&self, _builder: &mut AB) {
+        // No constraints, only lookups
     }
 }
 
@@ -1265,7 +1240,7 @@ fn test_tuple_lookup() {
 
     // Register the lookups.
     let lookup_gadget = LogUpGadget::new();
-    let lookups = <AddAir as AirLookupHandler<MockAirBuilder>>::get_lookups(&mut air);
+    let lookups = <AddAir as Air<MockAirBuilder>>::get_lookups(&mut air);
 
     // Evaluate the constraints for every row.
     for i in 0..builder.height {
@@ -1402,8 +1377,8 @@ fn test_global_lookup() {
 
     // Register the lookups.
     let lookup_gadget = LogUpGadget::new();
-    let lookups1 = <AddAir as AirLookupHandler<MockAirBuilder>>::get_lookups(&mut air1);
-    let lookups2 = <AddAir as AirLookupHandler<MockAirBuilder>>::get_lookups(&mut air2);
+    let lookups1 = <AddAir as Air<MockAirBuilder>>::get_lookups(&mut air1);
+    let lookups2 = <AddAir as Air<MockAirBuilder>>::get_lookups(&mut air2);
 
     assert_eq!(
         builder1.height, builder2.height,

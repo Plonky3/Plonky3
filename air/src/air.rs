@@ -1,8 +1,12 @@
+use alloc::vec;
+use alloc::vec::Vec;
 use core::ops::{Add, Mul, Sub};
 
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
+
+use crate::lookup::{Kind, Lookup, LookupData, LookupEvaluator, LookupInput};
 
 /// The underlying structure of an AIR.
 pub trait BaseAir<F>: Sync {
@@ -29,15 +33,89 @@ pub trait BaseAirWithPublicValues<F>: BaseAir<F> {
 /// constraint will compute a particular value or it can be applied symbolically
 /// with each constraint computing a symbolic expression.
 pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
+    /// Update the number of auxiliary columns to account for a new lookup column,
+    /// and return its index (or indices).
+    ///
+    /// Default implementation returns an empty vector, indicating no lookup columns.
+    /// Override this method for AIRs that use lookups.
+    fn add_lookup_columns(&mut self) -> Vec<usize> {
+        vec![]
+    }
+
+    /// Register all lookups for the current AIR and return them.
+    ///
+    /// Default implementation returns an empty vector, indicating no lookups.
+    /// Override this method for AIRs that use lookups.
+    fn get_lookups(&mut self) -> Vec<Lookup<AB::F>>
+    where
+        AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+    {
+        vec![]
+    }
+
+    /// Register a lookup to be used in this AIR.
+    /// This method can be used before proving or verifying, as the resulting
+    /// data is shared between the prover and the verifier.
+    fn register_lookup(&mut self, kind: Kind, lookup_inputs: &[LookupInput<AB::F>]) -> Lookup<AB::F>
+    where
+        AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+    {
+        let (element_exprs, multiplicities_exprs) = lookup_inputs
+            .iter()
+            .map(|(elems, mult, dir)| {
+                let multiplicity = dir.multiplicity(mult.clone());
+                (elems.clone(), multiplicity)
+            })
+            .unzip();
+
+        Lookup {
+            kind,
+            element_exprs,
+            multiplicities_exprs,
+            columns: self.add_lookup_columns(),
+        }
+    }
+
     /// Evaluate all AIR constraints using the provided builder.
     ///
     /// The builder provides both the trace on which the constraints
     /// are evaluated on as well as the method of accumulating the
     /// constraint evaluations.
     ///
+    /// **Note**: Users do not need to specify lookup constraints evaluation in this method,
+    /// but instead only specify the AIR constraints and rely on `eval_with_lookups` to evaluate
+    /// both AIR and lookup constraints.
+    ///
     /// # Arguments
     /// - `builder`: Mutable reference to an `AirBuilder` for defining constraints.
     fn eval(&self, builder: &mut AB);
+
+    /// Evaluate all AIR and lookup constraints using the provided builder.
+    ///
+    /// The default implementation calls `eval` and then evaluates lookups if any are provided,
+    /// using the provided lookup evaluator.
+    /// Users typically don't need to override this method unless they need a custom behavior.
+    ///
+    /// # Arguments
+    /// - `builder`: Mutable reference to an `AirBuilder` for defining constraints.
+    /// - `lookups`: References to the lookups to be evaluated.
+    /// - `lookup_data`: References to the lookup data to be used for evaluation.
+    /// - `lookup_evaluator`: Reference to the lookup evaluator to be used for evaluation.
+    fn eval_with_lookups<LE: LookupEvaluator>(
+        &self,
+        builder: &mut AB,
+        lookups: &[Lookup<AB::F>],
+        lookup_data: &[LookupData<AB::ExprEF>],
+        lookup_evaluator: &LE,
+    ) where
+        AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+    {
+        self.eval(builder);
+
+        if !lookups.is_empty() {
+            lookup_evaluator.eval_lookups(builder, lookups, lookup_data);
+        }
+    }
 }
 
 /// A builder which contains both a trace on which AIR constraints can be evaluated as well as a method of accumulating the AIR constraint evaluations.

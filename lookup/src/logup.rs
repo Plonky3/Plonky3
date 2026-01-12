@@ -20,12 +20,14 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+use p3_air::lookup::{LookupError, LookupEvaluator};
 use p3_air::{AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder, PermutationAirBuilder};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::VerticalPair;
-use p3_uni_stark::{LookupError, StarkGenericConfig, Val};
+use p3_uni_stark::{StarkGenericConfig, Val};
+use tracing::instrument;
 
 use crate::lookup_traits::{
     Kind, Lookup, LookupData, LookupGadget, LookupTraceBuilder, symbolic_to_expr,
@@ -262,7 +264,7 @@ impl LogUpGadget {
     }
 }
 
-impl LookupGadget for LogUpGadget {
+impl LookupEvaluator for LogUpGadget {
     fn num_aux_cols(&self) -> usize {
         1
     }
@@ -315,7 +317,9 @@ impl LookupGadget for LogUpGadget {
     {
         self.eval_update(builder, context, Some(expected_cumulated));
     }
+}
 
+impl LookupGadget for LogUpGadget {
     fn verify_global_final_value<EF: Field>(
         &self,
         all_expected_cumulative: &[EF],
@@ -375,6 +379,7 @@ impl LookupGadget for LogUpGadget {
         deg_denom_constr.max(deg_num)
     }
 
+    #[instrument(name = "generate lookup permutation", skip_all, level = "debug")]
     fn generate_permutation<SC: StarkGenericConfig>(
         &self,
         main: &RowMajorMatrix<Val<SC>>,
