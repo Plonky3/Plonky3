@@ -4,7 +4,7 @@ use p3_air::lookup::LookupEvaluator;
 /// Public re-exports of lookup types.
 pub use p3_air::lookup::{Direction, Kind, Lookup, LookupData, LookupError, LookupInput};
 use p3_air::{
-    AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder, PermutationAirBuilder,
+    AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PermutationAirBuilder,
     SymbolicExpression,
 };
 use p3_field::{Field, PrimeCharacteristicRing};
@@ -100,6 +100,10 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for LookupTraceBuilder<'a, SC> {
         self.main
     }
 
+    fn preprocessed(&self) -> Option<Self::M> {
+        self.preprocessed
+    }
+
     #[inline]
     fn is_first_row(&self) -> Self::Expr {
         Self::F::from_bool(self.row == 0)
@@ -141,13 +145,6 @@ impl<SC: StarkGenericConfig> AirBuilderWithPublicValues for LookupTraceBuilder<'
     }
 }
 
-impl<SC: StarkGenericConfig> PairBuilder for LookupTraceBuilder<'_, SC> {
-    fn preprocessed(&self) -> Self::M {
-        self.preprocessed
-            .unwrap_or_else(|| panic!("Missing preprocessed columns"))
-    }
-}
-
 impl<SC: StarkGenericConfig> ExtensionBuilder for LookupTraceBuilder<'_, SC> {
     type EF = SC::Challenge;
     type ExprEF = SC::Challenge;
@@ -176,7 +173,7 @@ impl<'a, SC: StarkGenericConfig> PermutationAirBuilder for LookupTraceBuilder<'a
 /// Converts `SymbolicExpression<F>` to the builder's expression type `AB::Expr`.
 pub fn symbolic_to_expr<AB>(builder: &AB, expr: &SymbolicExpression<AB::F>) -> AB::Expr
 where
-    AB: PairBuilder + AirBuilderWithPublicValues + PermutationAirBuilder,
+    AB: AirBuilderWithPublicValues + PermutationAirBuilder,
 {
     match expr {
         SymbolicExpression::Variable(v) => match v.entry {
@@ -187,10 +184,10 @@ where
             },
             Entry::Public => builder.public_values()[v.index].into(),
             Entry::Preprocessed { offset } => match offset {
-                0 => builder.preprocessed().row_slice(0).unwrap()[v.index]
+                0 => builder.preprocessed().expect("Missing preprocessed columns").row_slice(0).unwrap()[v.index]
                     .clone()
                     .into(),
-                1 => builder.preprocessed().row_slice(1).unwrap()[v.index]
+                1 => builder.preprocessed().expect("Missing preprocessed columns").row_slice(1).unwrap()[v.index]
                     .clone()
                     .into(),
                 _ => panic!("Cannot have expressions involving more than two rows."),

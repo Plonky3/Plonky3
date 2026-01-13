@@ -1,4 +1,4 @@
-use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, PairBuilder};
+use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues};
 use p3_field::Field;
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
@@ -99,6 +99,10 @@ where
         self.main
     }
 
+    fn preprocessed(&self) -> Option<Self::M> { 
+        self.preprocessed
+    }
+
     fn is_first_row(&self) -> Self::Expr {
         self.is_first_row
     }
@@ -142,13 +146,6 @@ impl<F: Field> AirBuilderWithPublicValues for DebugConstraintBuilder<'_, F> {
 
     fn public_values(&self) -> &[Self::F] {
         self.public_values
-    }
-}
-
-impl<'a, F: Field> PairBuilder for DebugConstraintBuilder<'a, F> {
-    fn preprocessed(&self) -> Self::M {
-        self.preprocessed
-            .expect("DebugConstraintBuilder requires preprocessed columns when used as PairBuilder")
     }
 }
 
