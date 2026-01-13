@@ -5,7 +5,7 @@ use core::slice::from_ref;
 
 use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, PermutationAirBuilder};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_batch_stark::proof::OpenedValuesWithLookups;
+use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
 use p3_batch_stark::{CommonData, StarkInstance, VerificationError, prove_batch, verify_batch};
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
@@ -27,6 +27,9 @@ use p3_uni_stark::{StarkConfig, StarkGenericConfig, SymbolicAirBuilder, Symbolic
 use p3_util::log2_strict_usize;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
+
+const TWO_ADIC_FIXTURE: &str = "tests/fixtures/batch_stark_two_adic_v1.postcard";
+const CIRCLE_FIXTURE: &str = "tests/fixtures/batch_stark_circle_v1.postcard";
 
 // --- Simple Fibonacci AIR and trace ---
 
@@ -531,6 +534,27 @@ fn make_config(seed: u64) -> MyConfig {
     StarkConfig::new(pcs, challenger)
 }
 
+fn make_two_adic_compat_config(seed: u64) -> MyConfig {
+    let mut rng = SmallRng::seed_from_u64(seed);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    let hash = MyHash::new(perm.clone());
+    let compress = MyCompress::new(perm.clone());
+    let val_mmcs = ValMmcs::new(hash, compress);
+    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+    let dft = Dft::default();
+    let fri_params = FriParameters {
+        log_blowup: 2,
+        log_final_poly_len: 2,
+        num_queries: 2,
+        commit_proof_of_work_bits: 1,
+        query_proof_of_work_bits: 1,
+        mmcs: challenge_mmcs,
+    };
+    let pcs = MyPcs::new(dft, val_mmcs, fri_params);
+    let challenger = Challenger::new(perm);
+    StarkConfig::new(pcs, challenger)
+}
+
 fn make_config_zk(seed: u64) -> MyHidingConfig {
     let mut rng = SmallRng::seed_from_u64(seed);
     let perm = Perm::new_from_rng_128(&mut rng);
@@ -543,6 +567,42 @@ fn make_config_zk(seed: u64) -> MyHidingConfig {
     let pcs = HidingPcs::new(dft, val_mmcs, fri_params, 4, rng);
     let challenger = Challenger::new(perm);
     StarkConfig::new(pcs, challenger)
+}
+
+type CircleVal = Mersenne31;
+type CircleChallenge = BinomialExtensionField<CircleVal, 3>;
+type CircleByteHash = Keccak256Hash;
+type CircleFieldHash = SerializingHasher<CircleByteHash>;
+type CircleCompress = CompressionFunctionFromHasher<CircleByteHash, 2, 32>;
+type CircleValMmcs = MerkleTreeMmcs<CircleVal, u8, CircleFieldHash, CircleCompress, 32>;
+type CircleChallengeMmcs = ExtensionMmcs<CircleVal, CircleChallenge, CircleValMmcs>;
+type CircleChallenger = SerializingChallenger32<CircleVal, HashChallenger<u8, CircleByteHash, 32>>;
+type CirclePcsType = CirclePcs<CircleVal, CircleValMmcs, CircleChallengeMmcs>;
+type CircleConfig = StarkConfig<CirclePcsType, CircleChallenge, CircleChallenger>;
+
+fn make_circle_config() -> CircleConfig {
+    let byte_hash = CircleByteHash {};
+    let field_hash = CircleFieldHash::new(byte_hash);
+    let compress = CircleCompress::new(byte_hash);
+    let val_mmcs = CircleValMmcs::new(field_hash, compress);
+    let challenge_mmcs = CircleChallengeMmcs::new(val_mmcs.clone());
+
+    let fri_params = FriParameters {
+        log_blowup: 1,
+        log_final_poly_len: 0,
+        num_queries: 40,
+        commit_proof_of_work_bits: 8,
+        query_proof_of_work_bits: 8,
+        mmcs: challenge_mmcs,
+    };
+
+    let pcs = CirclePcsType {
+        mmcs: val_mmcs,
+        fri_params,
+        _phantom: PhantomData,
+    };
+    let challenger = CircleChallenger::from_hasher(vec![], byte_hash);
+    CircleConfig::new(pcs, challenger)
 }
 
 // Heterogeneous enum wrapper for batching
@@ -1161,44 +1221,7 @@ fn test_quotient_chunk_element_len_rejected() {
 #[test]
 fn test_circle_stark_batch() -> Result<(), impl Debug> {
     // Test batch-stark with Circle PCS (non-two-adic field)
-    type Val = Mersenne31;
-    type Challenge = BinomialExtensionField<Val, 3>;
-
-    type ByteHash = Keccak256Hash;
-    type FieldHash = SerializingHasher<ByteHash>;
-    let byte_hash = ByteHash {};
-    let field_hash = FieldHash::new(byte_hash);
-
-    type MyCompress = CompressionFunctionFromHasher<ByteHash, 2, 32>;
-    let compress = MyCompress::new(byte_hash);
-
-    type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
-    let val_mmcs = ValMmcs::new(field_hash, compress);
-
-    type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
-    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
-
-    type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
-
-    let fri_params = FriParameters {
-        log_blowup: 1,
-        log_final_poly_len: 0,
-        num_queries: 40,
-        commit_proof_of_work_bits: 8,
-        query_proof_of_work_bits: 8,
-        mmcs: challenge_mmcs,
-    };
-
-    type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
-    let pcs = Pcs {
-        mmcs: val_mmcs,
-        fri_params,
-        _phantom: PhantomData,
-    };
-    let challenger = Challenger::from_hasher(vec![], byte_hash);
-
-    type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
-    let config = MyConfig::new(pcs, challenger);
+    let config = make_circle_config();
 
     // Create two Fibonacci instances with different sizes.
     // Here we don't use preprocessed columns (Circle PCS + plain FibonacciAir).
@@ -1211,11 +1234,19 @@ fn test_circle_stark_batch() -> Result<(), impl Debug> {
         tamper_index: None,
     };
 
-    let fib_pis1 = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(8))]; // F_8 = 21
-    let fib_pis2 = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(4))]; // F_4 = 3
+    let fib_pis1 = vec![
+        CircleVal::from_u64(0),
+        CircleVal::from_u64(1),
+        CircleVal::from_u64(fib_n(8)),
+    ]; // F_8 = 21
+    let fib_pis2 = vec![
+        CircleVal::from_u64(0),
+        CircleVal::from_u64(1),
+        CircleVal::from_u64(fib_n(4)),
+    ]; // F_4 = 3
 
-    let trace1 = fib_trace::<Val>(0, 1, 8);
-    let trace2 = fib_trace::<Val>(0, 1, 4);
+    let trace1 = fib_trace::<CircleVal>(0, 1, 8);
+    let trace2 = fib_trace::<CircleVal>(0, 1, 4);
 
     let airs = vec![air_fib1, air_fib2];
 
@@ -1243,6 +1274,163 @@ fn test_circle_stark_batch() -> Result<(), impl Debug> {
     let public_values = vec![fib_pis1, fib_pis2];
     verify_batch(&config, &airs, &proof, &public_values, &common)
         .map_err(|e| format!("Verification failed: {:?}", e))
+}
+
+type CompatCase<Config, V> = (
+    Config,
+    Vec<DemoAirWithLookups>,
+    Vec<RowMajorMatrix<V>>,
+    Vec<Vec<V>>,
+    Vec<usize>,
+);
+
+fn two_adic_compat_case() -> CompatCase<MyConfig, Val> {
+    let config = make_two_adic_compat_config(777);
+    let reps = 2;
+    let log_n = 5;
+    let n = 1 << log_n;
+
+    let mul_air = MulAir { reps };
+    let mul_air_lookups = MulAirLookups::new(
+        mul_air,
+        false,
+        true,
+        0,
+        vec!["MulFib".to_string(), "MulFib".to_string()],
+    );
+
+    let fibonacci_air = FibonacciAir {
+        log_height: log_n,
+        tamper_index: None,
+    };
+    let fib_air_lookups = FibAirLookups::new(fibonacci_air, true, 0, None);
+
+    let mul_trace = mul_trace::<Val>(n, reps);
+    let fib_trace = fib_trace::<Val>(0, 1, n);
+    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(n))];
+
+    let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups);
+    let air2 = DemoAirWithLookups::FibLookups(fib_air_lookups);
+
+    let is_zk = config.is_zk();
+    let log_degrees: Vec<usize> = vec![mul_trace.height(), fib_trace.height()]
+        .into_iter()
+        .map(|height| log2_strict_usize(height) + is_zk)
+        .collect();
+    (
+        config,
+        vec![air1, air2],
+        vec![mul_trace, fib_trace],
+        vec![vec![], fib_pis],
+        log_degrees,
+    )
+}
+
+fn circle_compat_case() -> CompatCase<CircleConfig, CircleVal> {
+    let config = make_circle_config();
+    let reps = 2;
+    let log_n = 3;
+    let n = 1 << log_n;
+
+    let mul_air = MulAir { reps };
+    let mul_air_lookups = MulAirLookups::new(
+        mul_air,
+        false,
+        true,
+        0,
+        vec!["MulFib".to_string(), "MulFib".to_string()],
+    );
+
+    let fibonacci_air = FibonacciAir {
+        log_height: log_n,
+        tamper_index: None,
+    };
+    let fib_air_lookups = FibAirLookups::new(fibonacci_air, true, 0, None);
+
+    let mul_trace = mul_trace::<CircleVal>(n, reps);
+    let fib_trace = fib_trace::<CircleVal>(0, 1, n);
+    let fib_pis = vec![
+        CircleVal::from_u64(0),
+        CircleVal::from_u64(1),
+        CircleVal::from_u64(fib_n(n)),
+    ];
+
+    let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups);
+    let air2 = DemoAirWithLookups::FibLookups(fib_air_lookups);
+
+    let is_zk = config.is_zk();
+    let log_degrees: Vec<usize> = vec![mul_trace.height(), fib_trace.height()]
+        .into_iter()
+        .map(|height| log2_strict_usize(height) + is_zk)
+        .collect();
+    (
+        config,
+        vec![air1, air2],
+        vec![mul_trace, fib_trace],
+        vec![vec![], fib_pis],
+        log_degrees,
+    )
+}
+
+fn write_fixture(path: &str, bytes: &[u8]) -> std::io::Result<()> {
+    let full_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
+    if let Some(parent) = full_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(full_path, bytes)
+}
+
+fn read_fixture(path: &str) -> std::io::Result<Vec<u8>> {
+    let full_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
+    std::fs::read(full_path)
+}
+
+#[test]
+fn verify_two_adic_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
+    let (config, mut airs, _traces, pvs, _log_degrees) = two_adic_compat_case();
+    let proof_bytes = read_fixture(TWO_ADIC_FIXTURE)
+        .expect("Missing fixture. Run: cargo test -p p3-batch-stark --test simple -- --ignored");
+    let proof: BatchProof<MyConfig> = postcard::from_bytes(&proof_bytes)?;
+    let common = CommonData::from_airs_and_degrees(&config, &mut airs, &proof.degree_bits);
+    verify_batch(&config, &airs, &proof, &pvs, &common)?;
+    Ok(())
+}
+
+#[test]
+fn verify_circle_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
+    let (config, mut airs, _traces, pvs, _log_degrees) = circle_compat_case();
+    let proof_bytes = read_fixture(CIRCLE_FIXTURE)
+        .expect("Missing fixture. Run: cargo test -p p3-batch-stark --test simple -- --ignored");
+    let proof: BatchProof<CircleConfig> = postcard::from_bytes(&proof_bytes)?;
+    let common = CommonData::from_airs_and_degrees(&config, &mut airs, &proof.degree_bits);
+    verify_batch(&config, &airs, &proof, &pvs, &common)?;
+    Ok(())
+}
+
+#[test]
+#[ignore]
+fn generate_two_adic_fixture() -> Result<(), Box<dyn std::error::Error>> {
+    // Regen: cargo test -p p3-batch-stark --test simple -- --ignored
+    let (config, mut airs, traces, pvs, log_degrees) = two_adic_compat_case();
+    let common = CommonData::from_airs_and_degrees(&config, &mut airs, &log_degrees);
+    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, &common);
+    let proof = prove_batch(&config, &instances, &common);
+    let bytes = postcard::to_allocvec(&proof)?;
+    write_fixture(TWO_ADIC_FIXTURE, &bytes)?;
+    Ok(())
+}
+
+#[test]
+#[ignore]
+fn generate_circle_fixture() -> Result<(), Box<dyn std::error::Error>> {
+    // Regen: cargo test -p p3-batch-stark --test simple -- --ignored
+    let (config, mut airs, traces, pvs, log_degrees) = circle_compat_case();
+    let common = CommonData::from_airs_and_degrees(&config, &mut airs, &log_degrees);
+    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, &common);
+    let proof = prove_batch(&config, &instances, &common);
+    let bytes = postcard::to_allocvec(&proof)?;
+    write_fixture(CIRCLE_FIXTURE, &bytes)?;
+    Ok(())
 }
 
 #[test]
