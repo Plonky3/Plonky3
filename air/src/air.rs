@@ -48,7 +48,7 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
     /// Override this method for AIRs that use lookups.
     fn get_lookups(&mut self) -> Vec<Lookup<AB::F>>
     where
-        AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+        AB: PermutationAirBuilder + AirBuilderWithPublicValues,
     {
         vec![]
     }
@@ -58,7 +58,7 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
     /// data is shared between the prover and the verifier.
     fn register_lookup(&mut self, kind: Kind, lookup_inputs: &[LookupInput<AB::F>]) -> Lookup<AB::F>
     where
-        AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+        AB: PermutationAirBuilder + AirBuilderWithPublicValues,
     {
         let (element_exprs, multiplicities_exprs) = lookup_inputs
             .iter()
@@ -108,7 +108,7 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
         lookup_data: &[LookupData<AB::ExprEF>],
         lookup_evaluator: &LE,
     ) where
-        AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+        AB: PermutationAirBuilder + AirBuilderWithPublicValues,
     {
         self.eval(builder);
 
@@ -154,6 +154,13 @@ pub trait AirBuilder: Sized {
 
     /// Return the matrix representing the main (primary) trace registers.
     fn main(&self) -> Self::M;
+
+    /// Return an optional matrix of preprocessed registers.
+    /// The default implementation returns `None`.
+    /// Override this for builders that provide preprocessed columns.
+    fn preprocessed(&self) -> Option<Self::M> {
+        None
+    }
 
     /// Expression evaluating to 1 on the first row, 0 elsewhere.
     fn is_first_row(&self) -> Self::Expr;
@@ -255,12 +262,6 @@ pub trait AirBuilderWithPublicValues: AirBuilder {
     fn public_values(&self) -> &[Self::PublicVar];
 }
 
-/// Trait for `AirBuilder` variants that include preprocessed data columns.
-pub trait PairBuilder: AirBuilder {
-    /// Return a matrix of preprocessed registers.
-    fn preprocessed(&self) -> Self::M;
-}
-
 /// Extension of `AirBuilder` for working over extension fields.
 pub trait ExtensionBuilder: AirBuilder<F: Field> {
     /// Extension field type.
@@ -342,6 +343,10 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
         self.inner.main()
     }
 
+    fn preprocessed(&self) -> Option<Self::M> {
+        self.inner.preprocessed()
+    }
+
     fn is_first_row(&self) -> Self::Expr {
         self.inner.is_first_row()
     }
@@ -356,12 +361,6 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         self.inner.assert_zero(self.condition() * x.into());
-    }
-}
-
-impl<AB: PairBuilder> PairBuilder for FilteredAirBuilder<'_, AB> {
-    fn preprocessed(&self) -> Self::M {
-        self.inner.preprocessed()
     }
 }
 

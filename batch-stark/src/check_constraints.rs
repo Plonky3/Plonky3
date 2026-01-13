@@ -1,6 +1,5 @@
 use p3_air::{
-    Air, AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder,
-    PermutationAirBuilder,
+    Air, AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PermutationAirBuilder,
 };
 use p3_field::{ExtensionField, Field};
 use p3_lookup::lookup_traits::{Lookup, LookupData, LookupGadget};
@@ -153,6 +152,10 @@ where
         self.main
     }
 
+    fn preprocessed(&self) -> Option<Self::M> {
+        self.preprocessed
+    }
+
     fn is_first_row(&self) -> Self::Expr {
         self.is_first_row
     }
@@ -236,14 +239,5 @@ impl<'a, F: Field, EF: ExtensionField<F>> PermutationAirBuilder
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
         self.permutation_challenges
-    }
-}
-
-impl<'a, F: Field, EF: ExtensionField<F>> PairBuilder
-    for DebugConstraintBuilderWithLookups<'a, F, EF>
-{
-    fn preprocessed(&self) -> Self::M {
-        self.preprocessed
-            .unwrap_or_else(|| panic!("Missing preprocessed columns"))
     }
 }

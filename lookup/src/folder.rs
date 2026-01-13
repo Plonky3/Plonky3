@@ -1,6 +1,4 @@
-use p3_air::{
-    AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PairBuilder, PermutationAirBuilder,
-};
+use p3_air::{AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PermutationAirBuilder};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::ViewPair;
 use p3_uni_stark::{
@@ -22,6 +20,10 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookup
 
     fn main(&self) -> Self::M {
         self.inner.main
+    }
+
+    fn preprocessed(&self) -> Option<Self::M> {
+        self.inner.preprocessed
     }
 
     #[inline]
@@ -66,14 +68,6 @@ impl<SC: StarkGenericConfig> AirBuilderWithPublicValues
     #[inline]
     fn public_values(&self) -> &[Self::F] {
         self.inner.public_values
-    }
-}
-
-impl<SC: StarkGenericConfig> PairBuilder for ProverConstraintFolderWithLookups<'_, SC> {
-    fn preprocessed(&self) -> Self::M {
-        self.inner
-            .preprocessed
-            .unwrap_or_else(|| panic!("Missing preprocessed columns"))
     }
 }
 
@@ -123,6 +117,10 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolderWithLook
         self.inner.main
     }
 
+    fn preprocessed(&self) -> Option<Self::M> {
+        self.inner.preprocessed
+    }
+
     #[inline]
     fn is_first_row(&self) -> Self::Expr {
         self.inner.is_first_row
@@ -165,14 +163,6 @@ impl<SC: StarkGenericConfig> AirBuilderWithPublicValues
     #[inline]
     fn public_values(&self) -> &[Self::F] {
         self.inner.public_values
-    }
-}
-
-impl<SC: StarkGenericConfig> PairBuilder for VerifierConstraintFolderWithLookups<'_, SC> {
-    fn preprocessed(&self) -> Self::M {
-        self.inner
-            .preprocessed
-            .unwrap_or_else(|| panic!("Missing preprocessed columns"))
     }
 }
 

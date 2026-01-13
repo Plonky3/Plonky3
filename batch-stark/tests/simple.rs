@@ -3,9 +3,7 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 use core::slice::from_ref;
 
-use p3_air::{
-    Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, PairBuilder, PermutationAirBuilder,
-};
+use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, PermutationAirBuilder};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::proof::OpenedValuesWithLookups;
 use p3_batch_stark::{CommonData, StarkInstance, VerificationError, prove_batch, verify_batch};
@@ -226,7 +224,7 @@ impl<F> BaseAir<F> for MulAirLookups {
 impl<AB> Air<AB> for MulAirLookups
 where
     AB::Var: Debug,
-    AB: AirBuilder + PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+    AB: AirBuilder + PermutationAirBuilder + AirBuilderWithPublicValues,
 {
     fn add_lookup_columns(&mut self) -> Vec<usize> {
         let new_idx = self.num_lookups;
@@ -389,9 +387,7 @@ impl<F: Field> BaseAir<F> for FibAirLookups {
     }
 }
 
-impl<AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues> Air<AB>
-    for FibAirLookups
-{
+impl<AB: PermutationAirBuilder + AirBuilderWithPublicValues> Air<AB> for FibAirLookups {
     fn add_lookup_columns(&mut self) -> Vec<usize> {
         let new_idx = self.num_lookups;
         self.num_lookups += 1;
@@ -466,12 +462,12 @@ impl<F: Field> BaseAir<F> for PreprocessedMulAir {
 
 impl<AB> Air<AB> for PreprocessedMulAir
 where
-    AB: AirBuilder + PairBuilder,
+    AB: AirBuilder,
     AB::F: Field,
 {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let preprocessed = builder.preprocessed();
+        let preprocessed = builder.preprocessed().expect("Preprocessed is empty?");
 
         let local_main = main.row_slice(0).expect("Matrix is empty?");
         let local_prep = preprocessed.row_slice(0).expect("Preprocessed is empty?");
@@ -599,8 +595,7 @@ impl<F: Field> BaseAir<F> for DemoAirWithLookups {
     }
 }
 
-impl<AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues> Air<AB>
-    for DemoAirWithLookups
+impl<AB: PermutationAirBuilder + AirBuilderWithPublicValues> Air<AB> for DemoAirWithLookups
 where
     AB::Var: Debug,
 {
@@ -626,7 +621,7 @@ where
     }
 }
 
-impl<AB: PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues> Air<AB> for DemoAir
+impl<AB: PermutationAirBuilder + AirBuilderWithPublicValues> Air<AB> for DemoAir
 where
     AB::Var: Debug,
     AB::F: PrimeField64,
@@ -1842,7 +1837,7 @@ impl<F> BaseAir<F> for SingleTableLocalLookupAir {
 impl<AB> Air<AB> for SingleTableLocalLookupAir
 where
     AB::Var: Debug,
-    AB: AirBuilder + PermutationAirBuilder + PairBuilder + AirBuilderWithPublicValues,
+    AB: AirBuilder + PermutationAirBuilder + AirBuilderWithPublicValues,
 {
     fn add_lookup_columns(&mut self) -> Vec<usize> {
         let new_idx = self.num_lookups;
