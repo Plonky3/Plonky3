@@ -137,6 +137,10 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
         self.main
     }
 
+    fn preprocessed(&self) -> Option<Self::M> {
+        self.preprocessed
+    }
+
     fn is_first_row(&self) -> Self::Expr {
         self.is_first_row
     }
