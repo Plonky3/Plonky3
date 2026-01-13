@@ -1,15 +1,19 @@
-use alloc::format;
 use alloc::vec::Vec;
 
-use itertools::Itertools;
-use p3_field::{Algebra, PermutationMonomial, PrimeField, PrimeField64};
+use p3_field::{Algebra, PermutationMonomial, PrimeField};
 use p3_mds::MdsPermutation;
 use p3_symmetric::{CryptographicPermutation, Permutation};
 use rand::Rng;
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 
-use crate::util::{log2_binom, shake256_hash};
+use crate::util::log2_binom;
+
+#[cfg(test)]
+use crate::util::shake256_hash;
+
+#[cfg(test)]
+use itertools::Itertools;
 
 /// The Rescue-XLIX permutation.
 #[derive(Clone, Debug)]
@@ -56,11 +60,11 @@ where
             })
             .find(|(_r, log2_bin)| 2.0 * log2_bin > sec_level as f32)
             .unwrap(); // Guaranteed to succeed for suff. large (dcon,v).
-        let rnds = rnds.0;
+        let rnds: usize = rnds.0;
 
         // The paper mandates a minimum of 5 rounds and adds a 50%
         // safety margin: ceil(1.5 * max{5, rnds})
-        (3 * rnds.max(5_usize)).div_ceil(2)
+        (3 * rnds.max(5_usize)).div_ceil(2_usize)
     }
 
     // For a general field, we provide a generic constructor for the round constants.
@@ -74,6 +78,7 @@ where
             .collect()
     }
 
+    #[cfg(test)]
     fn get_round_constants_rescue_prime(
         num_rounds: usize,
         capacity: usize,
