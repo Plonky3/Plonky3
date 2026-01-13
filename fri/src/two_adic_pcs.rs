@@ -33,7 +33,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
-use tracing::{info_span, instrument};
+use tracing::{info, info_span, instrument};
 
 use crate::verifier::{self, FriError};
 use crate::{FriFoldingStrategy, FriParameters, FriProof, prover};
@@ -532,11 +532,15 @@ where
         // Write all evaluations to challenger.
         // Need to ensure to do this in the same order as the prover.
         for (_, round) in &commitments_with_opening_points {
+            info!("New round...");
             for (_, mat) in round {
+                info!("New mat...");
                 for (_, point) in mat {
-                    point
-                        .iter()
-                        .for_each(|&opening| challenger.observe_algebra_element(opening));
+                    info!("New point...");
+                    point.iter().for_each(|&opening| {
+                        info!("Observing elem in opening...");
+                        challenger.observe_algebra_element(opening);
+                    });
                 }
             }
         }

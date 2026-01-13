@@ -148,7 +148,9 @@ where
     info!("Quotient chunks commitment observed!");
 
     // Sample OOD point
+    info!("Observing zeta...");
     let zeta = challenger.sample_algebra_element();
+    info!("Zeta observed!");
 
     // Build commitments_with_opening_points to verify openings.
     let mut coms_to_verify = vec![];

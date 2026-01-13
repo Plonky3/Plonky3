@@ -82,6 +82,7 @@ where
     // `(f(zeta) - fi(x))/(zeta - x)` which need to be checked.
     // Explicitly, `|f|` is `commitments_with_opening_points.flatten().flatten().len()`
     // (i.e counting the number (point, claimed_evaluation) pairs).
+    info!("Generating alpha...");
     let alpha: Challenge = challenger.sample_algebra_element();
 
     // `commit_phase_commits.len()` is the number of folding steps, so the maximum polynomial degree will be
@@ -141,12 +142,14 @@ where
     } in &proof.query_proofs
     {
         // For each query proof, we start by generating the random index.
+        info!("Sampling index...");
         let index =
             challenger.sample_bits(log_global_max_height + folding.extra_query_index_bits());
         // Sample more to correctly update the challenger.
         for _ in 0..Challenge::DIMENSION - 1 {
             challenger.sample_bits(0);
         }
+        info!("Index sampled: {}", index);
 
         // Next we open all polynomials `f` at the relevant index and combine them into our FRI inputs.
         let ro = open_input(
@@ -203,6 +206,7 @@ where
         for &coeff in proof.final_poly.iter().rev() {
             eval = eval * x + coeff;
         }
+        info!("Final polynomial evaluated at x = {:?} is {:?}", x, eval);
 
         if eval != folded_eval {
             return Err(FriError::FinalPolyMismatch);
