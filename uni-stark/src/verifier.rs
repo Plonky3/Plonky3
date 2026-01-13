@@ -43,6 +43,8 @@ pub struct StarkChallenges<Challenge> {
 /// allowing callers to obtain all Fiat-Shamir challenges for use in recursive verification
 /// circuits without running the full verifier.
 ///
+/// Note: Some checks are still carried out here (mostly shape verification).
+///
 /// # Arguments
 /// * `config` - The STARK configuration
 /// * `air` - The AIR being verified

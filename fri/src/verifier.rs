@@ -38,6 +38,8 @@ pub struct FriChallenges<Challenge> {
 /// allowing callers to obtain all Fiat-Shamir challenges for use in recursive verification
 /// circuits without running the full verifier.
 ///
+/// Note: This function also performs some shape verification and checks the PoW.
+///
 /// # Arguments
 /// * `folding` - The FRI folding scheme used by the prover
 /// * `params` - The parameters for the specific FRI protocol instance
