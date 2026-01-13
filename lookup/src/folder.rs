@@ -1,6 +1,4 @@
-use p3_air::{
-    AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PermutationAirBuilder,
-};
+use p3_air::{AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PermutationAirBuilder};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::ViewPair;
 use p3_uni_stark::{

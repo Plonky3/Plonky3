@@ -170,4 +170,3 @@ impl<SC: StarkGenericConfig> AirBuilderWithPublicValues for VerifierConstraintFo
         self.public_values
     }
 }
-

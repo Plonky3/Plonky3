@@ -5,8 +5,7 @@ use alloc::vec::Vec;
 
 use p3_air::lookup::LookupEvaluator;
 use p3_air::{
-    Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, ExtensionBuilder,
-    PermutationAirBuilder,
+    Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, ExtensionBuilder, PermutationAirBuilder,
 };
 use p3_baby_bear::BabyBear;
 use p3_field::extension::BinomialExtensionField;
@@ -270,8 +269,7 @@ impl RangeCheckAir {
 
 impl<AB> Air<AB> for RangeCheckAir
 where
-    AB: PermutationAirBuilder<F = F, EF = EF, RandomVar = EF>
-        + AirBuilderWithPublicValues,
+    AB: PermutationAirBuilder<F = F, EF = EF, RandomVar = EF> + AirBuilderWithPublicValues,
     AB::Var: Copy + Into<AB::ExprEF>,
     AB::ExprEF: From<AB::Var> + From<F>,
     F: Copy + Into<AB::ExprEF>,
@@ -1124,8 +1122,7 @@ impl<F: Field> BaseAir<F> for AddAir {
 
 impl<AB> Air<AB> for AddAir
 where
-    AB: PermutationAirBuilder<F = F, EF = EF, RandomVar = EF>
-        + AirBuilderWithPublicValues,
+    AB: PermutationAirBuilder<F = F, EF = EF, RandomVar = EF> + AirBuilderWithPublicValues,
     AB::Var: Copy + Into<AB::ExprEF>,
     AB::ExprEF: From<AB::Var> + From<F>,
     F: Copy + Into<AB::ExprEF>,

@@ -184,10 +184,18 @@ where
             },
             Entry::Public => builder.public_values()[v.index].into(),
             Entry::Preprocessed { offset } => match offset {
-                0 => builder.preprocessed().expect("Missing preprocessed columns").row_slice(0).unwrap()[v.index]
+                0 => builder
+                    .preprocessed()
+                    .expect("Missing preprocessed columns")
+                    .row_slice(0)
+                    .unwrap()[v.index]
                     .clone()
                     .into(),
-                1 => builder.preprocessed().expect("Missing preprocessed columns").row_slice(1).unwrap()[v.index]
+                1 => builder
+                    .preprocessed()
+                    .expect("Missing preprocessed columns")
+                    .row_slice(1)
+                    .unwrap()[v.index]
                     .clone()
                     .into(),
                 _ => panic!("Cannot have expressions involving more than two rows."),

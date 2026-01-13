@@ -99,7 +99,7 @@ where
         self.main
     }
 
-    fn preprocessed(&self) -> Option<Self::M> { 
+    fn preprocessed(&self) -> Option<Self::M> {
         self.preprocessed
     }
 

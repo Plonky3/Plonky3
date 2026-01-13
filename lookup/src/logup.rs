@@ -158,7 +158,7 @@ impl LogUpGadget {
         context: &Lookup<AB::F>,
         opt_expected_cumulated: Option<AB::ExprEF>,
     ) where
-        AB: PermutationAirBuilder +  AirBuilderWithPublicValues,
+        AB: PermutationAirBuilder + AirBuilderWithPublicValues,
     {
         let Lookup {
             kind,

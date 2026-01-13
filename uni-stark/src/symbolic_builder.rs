@@ -2,7 +2,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::{
-    Air, AirBuilder, AirBuilderWithPublicValues, Entry, ExtensionBuilder, PermutationAirBuilder, SymbolicExpression, SymbolicVariable
+    Air, AirBuilder, AirBuilderWithPublicValues, Entry, ExtensionBuilder, PermutationAirBuilder,
+    SymbolicExpression, SymbolicVariable,
 };
 use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
