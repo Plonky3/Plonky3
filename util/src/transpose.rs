@@ -64,7 +64,7 @@ unsafe fn transpose_in_place_square_small<T>(
 /// - `a` and `b` must be valid for `rows * cols` reads and writes.
 /// - The regions pointed to by `a` and `b` must be disjoint.
 /// - `width_outer_mat` must be large enough to avoid overlapping accesses during index calculations.
-pub(super) unsafe fn transpose_swap<T: Copy>(
+pub(super) unsafe fn transpose_swap<T>(
     a: *mut T,
     b: *mut T,
     width_outer_mat: usize,
