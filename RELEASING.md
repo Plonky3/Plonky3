@@ -4,7 +4,7 @@ This document describes how to create a new release of Plonky3.
 
 ## Prerequisites
 
-- Install [release-plz](https://release-plz.dev/docs/installation)
+- Install [release-plz](https://release-plz.dev/docs/usage/installation)
 - Set the `GIT_TOKEN` environment variable with a GitHub token that has permission to create PRs
 
 ## Creating a Release

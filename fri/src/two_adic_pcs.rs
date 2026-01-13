@@ -438,7 +438,7 @@ where
         // See the discussion in the doc comment of [`prove_fri`]. Essentially, the soundness error
         // for this sample is tightly tied to the soundness error of the FRI protocol.
         // Roughly speaking, at a minimum is it k/|EF| where `k` is the sum of, for each function, the number of
-        // points it needs to be opened at. This comes from the fact that we are takeing a large linear combination
+        // points it needs to be opened at. This comes from the fact that we are taking a large linear combination
         // of `(f(zeta) - f(x))/(zeta - x)` for each function `f` and all of `f`'s opening points.
         // In our setup, k is two times the trace width plus the number of quotient polynomials.
         let alpha: Challenge = challenger.sample_algebra_element();
