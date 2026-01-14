@@ -4,6 +4,10 @@
 mod serial;
 
 pub mod prelude {
+    #[cfg(not(feature = "parallel"))]
+    pub use core::iter::{
+        ExactSizeIterator as IndexedParallelIterator, Iterator as ParallelIterator,
+    };
     use core::marker::{Send, Sync};
 
     #[cfg(feature = "parallel")]
@@ -11,10 +15,6 @@ pub mod prelude {
     #[cfg(feature = "parallel")]
     pub use rayon::{current_num_threads, join};
 
-    #[cfg(not(feature = "parallel"))]
-    pub use core::iter::{
-        ExactSizeIterator as IndexedParallelIterator, Iterator as ParallelIterator,
-    };
     #[cfg(not(feature = "parallel"))]
     pub use super::serial::*;
 
@@ -51,9 +51,9 @@ pub mod prelude {
 }
 
 pub mod iter {
-    #[cfg(feature = "parallel")]
-    pub use rayon::iter::{repeat, repeat_n};
-
     #[cfg(not(feature = "parallel"))]
     pub use core::iter::{repeat, repeat_n};
+
+    #[cfg(feature = "parallel")]
+    pub use rayon::iter::{repeat, repeat_n};
 }
