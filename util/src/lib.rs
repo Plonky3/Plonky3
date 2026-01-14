@@ -422,14 +422,19 @@ pub fn iter_array_chunks_padded<T: Copy, const N: usize>(
 /// # Panics
 ///
 /// This panics if the size of `BaseArray` is not a multiple of the size of `Base`.
-#[inline]
-pub const unsafe fn as_base_slice<Base, BaseArray>(buf: &[BaseArray]) -> &[Base] {
+#[inline(always)]
+const fn base_array_ratio<Base, BaseArray>() -> usize {
     const {
         assert!(align_of::<Base>() == align_of::<BaseArray>());
         assert!(size_of::<BaseArray>().is_multiple_of(size_of::<Base>()));
     }
 
-    let d = size_of::<BaseArray>() / size_of::<Base>();
+    size_of::<BaseArray>() / size_of::<Base>()
+}
+
+#[inline]
+pub const unsafe fn as_base_slice<Base, BaseArray>(buf: &[BaseArray]) -> &[Base] {
+    let d = base_array_ratio::<Base, BaseArray>();
 
     let buf_ptr = buf.as_ptr().cast::<Base>();
     let n = buf.len() * d;
@@ -453,12 +458,7 @@ pub const unsafe fn as_base_slice<Base, BaseArray>(buf: &[BaseArray]) -> &[Base]
 /// This panics if the size of `BaseArray` is not a multiple of the size of `Base`.
 #[inline]
 pub const unsafe fn as_base_slice_mut<Base, BaseArray>(buf: &mut [BaseArray]) -> &mut [Base] {
-    const {
-        assert!(align_of::<Base>() == align_of::<BaseArray>());
-        assert!(size_of::<BaseArray>().is_multiple_of(size_of::<Base>()));
-    }
-
-    let d = size_of::<BaseArray>() / size_of::<Base>();
+    let d = base_array_ratio::<Base, BaseArray>();
 
     let buf_ptr = buf.as_mut_ptr().cast::<Base>();
     let n = buf.len() * d;
@@ -485,12 +485,7 @@ pub const unsafe fn as_base_slice_mut<Base, BaseArray>(buf: &mut [BaseArray]) ->
 /// This panics if the size of `BaseArray` is not a multiple of the size of `Base`.
 #[inline]
 pub unsafe fn flatten_to_base<Base, BaseArray>(vec: Vec<BaseArray>) -> Vec<Base> {
-    const {
-        assert!(align_of::<Base>() == align_of::<BaseArray>());
-        assert!(size_of::<BaseArray>().is_multiple_of(size_of::<Base>()));
-    }
-
-    let d = size_of::<BaseArray>() / size_of::<Base>();
+    let d = base_array_ratio::<Base, BaseArray>();
     // Prevent running `vec`'s destructor so we are in complete control
     // of the allocation.
     let mut values = ManuallyDrop::new(vec);
@@ -534,12 +529,7 @@ pub unsafe fn flatten_to_base<Base, BaseArray>(vec: Vec<BaseArray>) -> Vec<Base>
 /// This panics if the length of the vector is not a multiple of the ratio of the sizes.
 #[inline]
 pub unsafe fn reconstitute_from_base<Base, BaseArray: Clone>(mut vec: Vec<Base>) -> Vec<BaseArray> {
-    const {
-        assert!(align_of::<Base>() == align_of::<BaseArray>());
-        assert!(size_of::<BaseArray>().is_multiple_of(size_of::<Base>()));
-    }
-
-    let d = size_of::<BaseArray>() / size_of::<Base>();
+    let d = base_array_ratio::<Base, BaseArray>();
 
     assert!(
         vec.len().is_multiple_of(d),
