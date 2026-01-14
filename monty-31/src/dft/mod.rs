@@ -199,7 +199,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
 
         // transpose input
         debug_span!("pre-transpose", nrows, ncols).in_scope(|| {
-            p3_util::transpose::transpose(&mat.values, &mut scratch.values, ncols, nrows)
+            p3_util::transpose::transpose(&mat.values, &mut scratch.values, ncols, nrows);
         });
 
         debug_span!("dft batch", n_dfts = ncols, fft_len = nrows)
@@ -207,7 +207,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
 
         // transpose output
         debug_span!("post-transpose", nrows = ncols, ncols = nrows).in_scope(|| {
-            p3_util::transpose::transpose(&scratch.values, &mut mat.values, nrows, ncols)
+            p3_util::transpose::transpose(&scratch.values, &mut mat.values, nrows, ncols);
         });
 
         mat.bit_reverse_rows()
@@ -235,7 +235,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
 
         // transpose input
         debug_span!("pre-transpose", nrows, ncols).in_scope(|| {
-            p3_util::transpose::transpose(&mat.values, &mut scratch.values, ncols, nrows)
+            p3_util::transpose::transpose(&mat.values, &mut scratch.values, ncols, nrows);
         });
 
         debug_span!("idft", n_dfts = ncols, fft_len = nrows)
@@ -243,7 +243,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
 
         // transpose output
         debug_span!("post-transpose", nrows = ncols, ncols = nrows).in_scope(|| {
-            p3_util::transpose::transpose(&scratch.values, &mut mat.values, nrows, ncols)
+            p3_util::transpose::transpose(&scratch.values, &mut mat.values, nrows, ncols);
         });
 
         let log_rows = log2_ceil_usize(nrows);
