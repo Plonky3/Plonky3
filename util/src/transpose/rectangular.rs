@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(dead_code)] // TODO: remove in the future
 
 //! High-performance matrix transpose for generic `Copy` types.
 //!
