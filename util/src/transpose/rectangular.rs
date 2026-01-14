@@ -119,7 +119,7 @@ const BLOCK_SIZE: usize = 4;
 ///
 /// At this point, the sub-matrix (up to `RECURSIVE_LIMIT`×`RECURSIVE_LIMIT` elements)
 /// fits in L2 cache, so we switch to tiled transpose.
-#[cfg(any(target_arch = "aarch64", test))]
+#[cfg(target_arch = "aarch64")]
 const RECURSIVE_LIMIT: usize = 128;
 
 /// Minimum number of elements before enabling parallel processing.
