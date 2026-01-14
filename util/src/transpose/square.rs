@@ -305,6 +305,8 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
 
 #[cfg(test)]
 mod tests {
+    extern crate alloc;
+
     use alloc::vec;
     use alloc::vec::Vec;
 
