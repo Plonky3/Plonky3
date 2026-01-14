@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! High-performance matrix transpose for generic `Copy` types.
 //!
 //! This module provides an optimized **out-of-place** matrix transpose.
