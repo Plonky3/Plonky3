@@ -103,9 +103,9 @@ const TILE_SIZE: usize = 16;
 
 /// Side length of the NEON-vectorized block in elements.
 ///
-/// The fundamental unit of SIMD transpose is a `BLOCK_SIZE`×`BLOCK_SIZE` block because:
-/// - `BLOCK_SIZE` elements × 4 bytes = 16 bytes = one NEON 128-bit register
-/// - `BLOCK_SIZE`×`BLOCK_SIZE` block = `BLOCK_SIZE` registers, enabling in-register transpose
+/// The fundamental unit of SIMD transpose is a 4×4 block because:
+/// - 4 elements × 4 bytes = 16 bytes = one NEON 128-bit register
+/// - 4×4 block = 4 registers, enabling in-register transpose
 const BLOCK_SIZE: usize = 4;
 
 /// Maximum dimension for recursive base case.
