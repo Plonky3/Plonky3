@@ -198,15 +198,17 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         let twiddles = self.get_twiddles();
 
         // transpose input
-        debug_span!("pre-transpose", nrows, ncols)
-            .in_scope(|| transpose::transpose(&mat.values, &mut scratch.values, ncols, nrows));
+        debug_span!("pre-transpose", nrows, ncols).in_scope(|| {
+            p3_util::transpose::transpose(&mat.values, &mut scratch.values, ncols, nrows)
+        });
 
         debug_span!("dft batch", n_dfts = ncols, fft_len = nrows)
             .in_scope(|| Self::decimation_in_freq_dft(&mut scratch.values, nrows, &twiddles));
 
         // transpose output
-        debug_span!("post-transpose", nrows = ncols, ncols = nrows)
-            .in_scope(|| transpose::transpose(&scratch.values, &mut mat.values, nrows, ncols));
+        debug_span!("post-transpose", nrows = ncols, ncols = nrows).in_scope(|| {
+            p3_util::transpose::transpose(&scratch.values, &mut mat.values, nrows, ncols)
+        });
 
         mat.bit_reverse_rows()
     }
@@ -232,15 +234,17 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         let inv_twiddles = self.get_inv_twiddles();
 
         // transpose input
-        debug_span!("pre-transpose", nrows, ncols)
-            .in_scope(|| transpose::transpose(&mat.values, &mut scratch.values, ncols, nrows));
+        debug_span!("pre-transpose", nrows, ncols).in_scope(|| {
+            p3_util::transpose::transpose(&mat.values, &mut scratch.values, ncols, nrows)
+        });
 
         debug_span!("idft", n_dfts = ncols, fft_len = nrows)
             .in_scope(|| Self::decimation_in_time_dft(&mut scratch.values, nrows, &inv_twiddles));
 
         // transpose output
-        debug_span!("post-transpose", nrows = ncols, ncols = nrows)
-            .in_scope(|| transpose::transpose(&scratch.values, &mut mat.values, nrows, ncols));
+        debug_span!("post-transpose", nrows = ncols, ncols = nrows).in_scope(|| {
+            p3_util::transpose::transpose(&scratch.values, &mut mat.values, nrows, ncols)
+        });
 
         let log_rows = log2_ceil_usize(nrows);
         let inv_len = MontyField31::ONE.div_2exp_u64(log_rows as u64);
@@ -284,7 +288,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         let coeffs = &mut output[..input_size];
 
         debug_span!("pre-transpose", nrows, ncols)
-            .in_scope(|| transpose::transpose(&mat.values, coeffs, ncols, nrows));
+            .in_scope(|| p3_util::transpose::transpose(&mat.values, coeffs, ncols, nrows));
 
         // Apply inverse DFT; result is not yet normalised.
         self.update_twiddles(result_nrows);
@@ -311,7 +315,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
 
         // transpose output
         debug_span!("post-transpose", nrows = ncols, ncols = result_nrows)
-            .in_scope(|| transpose::transpose(&padded, &mut output, result_nrows, ncols));
+            .in_scope(|| p3_util::transpose::transpose(&padded, &mut output, result_nrows, ncols));
 
         RowMajorMatrix::new(output, ncols).bit_reverse_rows()
     }
