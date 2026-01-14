@@ -41,7 +41,7 @@ where
         self.output_buffer.clear();
         self.output_buffer.extend(output);
         // Chain the hash output into the transcript.
-        self.input_buffer.extend_from_slice(&self.output_buffer);
+        self.input_buffer.extend_from_slice(&output);
     }
 }
 
