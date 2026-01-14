@@ -2,12 +2,13 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::{
-    Air, AirBuilder, AirBuilderWithPublicValues, Entry, ExtensionBuilder, PermutationAirBuilder,
-    SymbolicExpression, SymbolicVariable,
+    Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, Entry, ExtensionBuilder,
+    PeriodicAirBuilder, PermutationAirBuilder, SymbolicExpression, SymbolicVariable,
 };
 use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_ceil_usize;
+
 use tracing::instrument;
 
 #[instrument(skip_all)]
@@ -19,7 +20,7 @@ pub fn get_log_num_quotient_chunks<F, A>(
 ) -> usize
 where
     F: Field,
-    A: Air<SymbolicAirBuilder<F>>,
+    A: BaseAir<F> + Air<SymbolicAirBuilder<F>>,
 {
     get_log_quotient_degree_extension(air, preprocessed_width, num_public_values, 0, 0, is_zk)
 }
@@ -36,7 +37,7 @@ pub fn get_log_quotient_degree_extension<F, EF, A>(
 where
     F: Field,
     EF: ExtensionField<F>,
-    A: Air<SymbolicAirBuilder<F, EF>>,
+    A: BaseAir<F> + Air<SymbolicAirBuilder<F, EF>>,
 {
     assert!(is_zk <= 1, "is_zk must be either 0 or 1");
     // We pad to at least degree 2, since a quotient argument doesn't make sense with smaller degrees.
@@ -63,7 +64,7 @@ pub fn get_max_constraint_degree<F, A>(
 ) -> usize
 where
     F: Field,
-    A: Air<SymbolicAirBuilder<F>>,
+    A: BaseAir<F> + Air<SymbolicAirBuilder<F>>,
 {
     get_max_constraint_degree_extension(air, preprocessed_width, num_public_values, 0, 0)
 }
@@ -83,7 +84,7 @@ pub fn get_max_constraint_degree_extension<F, EF, A>(
 where
     F: Field,
     EF: ExtensionField<F>,
-    A: Air<SymbolicAirBuilder<F, EF>>,
+    A: BaseAir<F> + Air<SymbolicAirBuilder<F, EF>>,
 {
     let (base_constraints, extension_constraints) = get_all_symbolic_constraints(
         air,
@@ -119,10 +120,17 @@ pub fn get_symbolic_constraints<F, A>(
 ) -> Vec<SymbolicExpression<F>>
 where
     F: Field,
-    A: Air<SymbolicAirBuilder<F>>,
+    A: BaseAir<F> + Air<SymbolicAirBuilder<F>>,
 {
-    let mut builder =
-        SymbolicAirBuilder::new(preprocessed_width, air.width(), num_public_values, 0, 0);
+    let num_periodic = air.periodic_table().len();
+    let mut builder = SymbolicAirBuilder::new_with_periodic(
+        preprocessed_width,
+        air.width(),
+        num_public_values,
+        0,
+        0,
+        num_periodic,
+    );
     air.eval(&mut builder);
     builder.base_constraints()
 }
@@ -142,14 +150,16 @@ pub fn get_symbolic_constraints_extension<F, EF, A>(
 where
     F: Field,
     EF: ExtensionField<F>,
-    A: Air<SymbolicAirBuilder<F, EF>>,
+    A: BaseAir<F> + Air<SymbolicAirBuilder<F, EF>>,
 {
-    let mut builder = SymbolicAirBuilder::new(
+    let num_periodic = air.periodic_table().len();
+    let mut builder = SymbolicAirBuilder::new_with_periodic(
         preprocessed_width,
         air.width(),
         num_public_values,
         permutation_width,
         num_permutation_challenges,
+        num_periodic,
     );
     air.eval(&mut builder);
     builder.extension_constraints()
@@ -170,14 +180,16 @@ pub fn get_all_symbolic_constraints<F, EF, A>(
 where
     F: Field,
     EF: ExtensionField<F>,
-    A: Air<SymbolicAirBuilder<F, EF>>,
+    A: BaseAir<F> + Air<SymbolicAirBuilder<F, EF>>,
 {
-    let mut builder = SymbolicAirBuilder::new(
+    let num_periodic = air.periodic_table().len();
+    let mut builder = SymbolicAirBuilder::new_with_periodic(
         preprocessed_width,
         air.width(),
         num_public_values,
         permutation_width,
         num_permutation_challenges,
+        num_periodic,
     );
     air.eval(&mut builder);
     (builder.base_constraints(), builder.extension_constraints())
@@ -189,6 +201,7 @@ pub struct SymbolicAirBuilder<F: Field, EF: ExtensionField<F> = F> {
     preprocessed: RowMajorMatrix<SymbolicVariable<F>>,
     main: RowMajorMatrix<SymbolicVariable<F>>,
     public_values: Vec<SymbolicVariable<F>>,
+    periodic_values: Vec<SymbolicVariable<F>>,
     base_constraints: Vec<SymbolicExpression<F>>,
     permutation: RowMajorMatrix<SymbolicVariable<EF>>,
     permutation_challenges: Vec<SymbolicVariable<EF>>,
@@ -202,6 +215,24 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
         num_public_values: usize,
         permutation_width: usize,
         num_permutation_challenges: usize,
+    ) -> Self {
+        Self::new_with_periodic(
+            preprocessed_width,
+            width,
+            num_public_values,
+            permutation_width,
+            num_permutation_challenges,
+            0,
+        )
+    }
+
+    pub fn new_with_periodic(
+        preprocessed_width: usize,
+        width: usize,
+        num_public_values: usize,
+        permutation_width: usize,
+        num_permutation_challenges: usize,
+        num_periodic_values: usize,
     ) -> Self {
         let prep_values = [0, 1]
             .into_iter()
@@ -219,6 +250,9 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
         let public_values = (0..num_public_values)
             .map(move |index| SymbolicVariable::new(Entry::Public, index))
             .collect();
+        let periodic_values = (0..num_periodic_values)
+            .map(move |index| SymbolicVariable::new(Entry::Periodic, index))
+            .collect();
         let perm_values = [0, 1]
             .into_iter()
             .flat_map(|offset| {
@@ -234,6 +268,7 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
             preprocessed: RowMajorMatrix::new(prep_values, preprocessed_width),
             main: RowMajorMatrix::new(main_values, width),
             public_values,
+            periodic_values,
             base_constraints: vec![],
             permutation,
             permutation_challenges,
@@ -324,6 +359,17 @@ where
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
         &self.permutation_challenges
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>> PeriodicAirBuilder for SymbolicAirBuilder<F, EF>
+where
+    SymbolicExpression<EF>: From<SymbolicExpression<F>>,
+{
+    type PeriodicVar = SymbolicVariable<F>;
+
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        &self.periodic_values
     }
 }
 

@@ -605,6 +605,7 @@ where
         is_transition: sels.is_transition,
         alpha: *alpha,
         accumulator: SC::Challenge::ZERO,
+        periodic_values: vec![], // batch-stark doesn't support periodic columns yet
     };
     let mut folder = VerifierConstraintFolderWithLookups {
         inner: inner_folder,

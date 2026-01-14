@@ -676,6 +676,7 @@ where
                 decomposed_alpha_powers: &decomposed_alpha_powers,
                 accumulator,
                 constraint_index: 0,
+                periodic_values: vec![], // batch-stark doesn't support periodic columns yet
             };
             let packed_perm_challenges = permutation_challenges
                 .iter()

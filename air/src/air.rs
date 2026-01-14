@@ -12,9 +12,21 @@ use crate::lookup::{Kind, Lookup, LookupData, LookupEvaluator, LookupInput};
 pub trait BaseAir<F>: Sync {
     /// The number of columns (a.k.a. registers) in this AIR.
     fn width(&self) -> usize;
+
     /// Return an optional preprocessed trace matrix to be included in the prover's trace.
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
         None
+    }
+
+    /// Return the periodic table data.
+    ///
+    /// Periodic columns are columns whose values repeat with a period that divides the trace
+    /// length. Each inner `Vec<F>` represents one periodic column. The length of the inner
+    /// vector is the period of that column (must be a power of 2 that divides the trace length).
+    ///
+    /// By default returns an empty table (no periodic columns).
+    fn periodic_table(&self) -> Vec<Vec<F>> {
+        vec![]
     }
 }
 
@@ -108,7 +120,7 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
         lookup_data: &[LookupData<AB::ExprEF>],
         lookup_evaluator: &LE,
     ) where
-        AB: PermutationAirBuilder + AirBuilderWithPublicValues,
+        AB: PermutationAirBuilder + AirBuilderWithPublicValues + PeriodicAirBuilder,
     {
         self.eval(builder);
 
@@ -311,6 +323,20 @@ pub trait PermutationAirBuilder: ExtensionBuilder {
     fn permutation_randomness(&self) -> &[Self::RandomVar];
 }
 
+/// Trait for builders supporting periodic columns.
+///
+/// Periodic columns are columns whose values repeat with a period dividing the trace length.
+/// They are never committed to the proof - instead, both prover and verifier compute them
+/// from the periodic table data provided by the AIR.
+pub trait PeriodicAirBuilder: AirBuilder {
+    /// Variable type for periodic column values.
+    /// For the prover, this is base field; for the verifier, this is extension field.
+    type PeriodicVar: Into<Self::Expr> + Copy;
+
+    /// Return the evaluations of periodic columns at the current row.
+    fn periodic_values(&self) -> &[Self::PeriodicVar];
+}
+
 /// A wrapper around an [`AirBuilder`] that enforces constraints only when a specified condition is met.
 ///
 /// This struct allows selectively applying constraints to certain rows or under certain conditions in the AIR,
@@ -364,6 +390,15 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
     }
 }
 
+impl<AB: AirBuilderWithPublicValues> AirBuilderWithPublicValues for FilteredAirBuilder<'_, AB> {
+    type PublicVar = AB::PublicVar;
+
+    fn public_values(&self) -> &[Self::PublicVar] {
+        self.inner.public_values()
+    }
+}
+
+
 impl<AB: ExtensionBuilder> ExtensionBuilder for FilteredAirBuilder<'_, AB> {
     type EF = AB::EF;
     type ExprEF = AB::ExprEF;
@@ -391,5 +426,13 @@ impl<AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder<'_,
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
         self.inner.permutation_randomness()
+    }
+}
+
+impl<AB: PeriodicAirBuilder> PeriodicAirBuilder for FilteredAirBuilder<'_, AB> {
+    type PeriodicVar = AB::PeriodicVar;
+
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        self.inner.periodic_values()
     }
 }

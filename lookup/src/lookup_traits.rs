@@ -4,8 +4,8 @@ use p3_air::lookup::LookupEvaluator;
 /// Public re-exports of lookup types.
 pub use p3_air::lookup::{Direction, Kind, Lookup, LookupData, LookupError, LookupInput};
 use p3_air::{
-    AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PermutationAirBuilder,
-    SymbolicExpression,
+    AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PeriodicAirBuilder,
+    PermutationAirBuilder, SymbolicExpression,
 };
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
@@ -168,12 +168,20 @@ impl<'a, SC: StarkGenericConfig> PermutationAirBuilder for LookupTraceBuilder<'a
     }
 }
 
+impl<'a, SC: StarkGenericConfig> PeriodicAirBuilder for LookupTraceBuilder<'a, SC> {
+    type PeriodicVar = Val<SC>;
+
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        &[]
+    }
+}
+
 /// Evaluates a symbolic expression in the context of an AIR builder.
 ///
 /// Converts `SymbolicExpression<F>` to the builder's expression type `AB::Expr`.
 pub fn symbolic_to_expr<AB>(builder: &AB, expr: &SymbolicExpression<AB::F>) -> AB::Expr
 where
-    AB: AirBuilderWithPublicValues + PermutationAirBuilder,
+    AB: AirBuilderWithPublicValues + PermutationAirBuilder + PeriodicAirBuilder,
 {
     match expr {
         SymbolicExpression::Variable(v) => match v.entry {
@@ -200,6 +208,7 @@ where
                     .into(),
                 _ => panic!("Cannot have expressions involving more than two rows."),
             },
+            Entry::Periodic => builder.periodic_values()[v.index].into(),
             _ => unimplemented!("Entry type {:?} not supported in interactions", v.entry),
         },
         SymbolicExpression::IsFirstRow => {

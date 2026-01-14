@@ -113,6 +113,7 @@ where
         is_transition: sels.is_transition,
         alpha,
         accumulator: SC::Challenge::ZERO,
+        periodic_values: vec![],
     };
     air.eval(&mut folder);
     let folded_constraints = folder.accumulator;

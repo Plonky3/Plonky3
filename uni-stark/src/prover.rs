@@ -450,6 +450,7 @@ where
                 decomposed_alpha_powers: &decomposed_alpha_powers,
                 accumulator,
                 constraint_index: 0,
+                periodic_values: vec![],
             };
             air.eval(&mut folder);
 
