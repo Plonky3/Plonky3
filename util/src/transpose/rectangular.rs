@@ -1,5 +1,3 @@
-#![allow(dead_code)] // TODO: remove in the future
-
 //! High-performance matrix transpose for generic `Copy` types.
 //!
 //! This module provides an optimized **out-of-place** matrix transpose.
@@ -82,6 +80,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 /// - The entire matrix fits in L1 cache (32-64KB on most CPUs)
 /// - No tile boundary calculations needed
 /// - Branch prediction works well for small loops
+#[cfg(any(target_arch = "aarch64", test))]
 const SMALL_LEN: usize = 255;
 
 /// Maximum number of elements for the single-level tiled transpose.
@@ -93,6 +92,7 @@ const SMALL_LEN: usize = 255;
 ///
 /// Beyond this threshold, we switch to recursive subdivision to ensure
 /// cache-oblivious behavior for very large matrices.
+#[cfg(any(target_arch = "aarch64", test))]
 const MEDIUM_LEN: usize = 1024 * 1024;
 
 /// Side length of a tile in elements.
@@ -101,6 +101,7 @@ const MEDIUM_LEN: usize = 1024 * 1024;
 /// - `TILE_SIZE`×`TILE_SIZE` × 4 bytes = 1KB per tile, fitting in L1 cache
 /// - `TILE_SIZE` is divisible by `BLOCK_SIZE`, allowing exactly (`TILE_SIZE`/`BLOCK_SIZE`)^2 NEON blocks per tile
 /// - Good balance between tile overhead and cache utilization
+#[cfg(any(target_arch = "aarch64", test))]
 const TILE_SIZE: usize = 16;
 
 /// Side length of the NEON-vectorized block in elements.
@@ -108,6 +109,7 @@ const TILE_SIZE: usize = 16;
 /// The fundamental unit of SIMD transpose is a 4×4 block because:
 /// - 4 elements × 4 bytes = 16 bytes = one NEON 128-bit register
 /// - 4×4 block = 4 registers, enabling in-register transpose
+#[cfg(any(target_arch = "aarch64", test))]
 const BLOCK_SIZE: usize = 4;
 
 /// Maximum dimension for recursive base case.
@@ -117,6 +119,7 @@ const BLOCK_SIZE: usize = 4;
 ///
 /// At this point, the sub-matrix (up to `RECURSIVE_LIMIT`×`RECURSIVE_LIMIT` elements)
 /// fits in L2 cache, so we switch to tiled transpose.
+#[cfg(any(target_arch = "aarch64", test))]
 const RECURSIVE_LIMIT: usize = 128;
 
 /// Minimum number of elements before enabling parallel processing.
