@@ -16,7 +16,7 @@ use p3_uni_stark::{
     SymbolicExpression,
 };
 use p3_util::log2_strict_usize;
-use tracing::{debug_span, instrument};
+use tracing::{debug_span, info_span, instrument};
 
 #[cfg(debug_assertions)]
 use crate::check_constraints::DebugConstraintBuilderWithLookups;
@@ -258,6 +258,8 @@ where
 
     // TODO: Parallelize this loop for better performance with many instances.
     for (i, trace_domain) in trace_domains.iter().enumerate() {
+        let _air_span = info_span!("compute quotient for AIR", air_idx = i).entered();
+
         let log_chunks = log_num_quotient_chunks[i];
         let n_chunks = num_quotient_chunks[i];
         // Disjoint domain of size ext_degree * num_quotient_chunks

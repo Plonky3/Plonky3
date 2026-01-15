@@ -248,7 +248,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         mat
     }
 
-    #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
+    #[instrument(skip_all, level = "debug", fields(dims = %mat.dimensions(), added_bits))]
     fn coset_lde_batch(
         &self,
         mat: RowMajorMatrix<MontyField31<MP>>,

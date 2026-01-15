@@ -33,7 +33,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
-use tracing::{info_span, instrument};
+use tracing::{debug_span, info_span, instrument};
 
 use crate::verifier::{self, FriError};
 use crate::{FriFoldingStrategy, FriParameters, FriProof, prover};
@@ -403,12 +403,12 @@ where
                             .iter()
                             .map(|&point| {
                                 let _guard =
-                                    info_span!("evaluate matrix", dims = %mat.dimensions())
+                                    debug_span!("evaluate matrix", dims = %mat.dimensions())
                                         .entered();
 
                                 // Use Barycentric interpolation to evaluate each column of the matrix at the given point.
                                 let ys =
-                                    info_span!("compute opened values with Lagrange interpolation")
+                                    debug_span!("compute opened values with Lagrange interpolation")
                                         .in_scope(|| {
                                             // Get the relevant inverse denominators for this point and use these to
                                             // interpolate to get the evaluation of each polynomial in the matrix
@@ -482,7 +482,7 @@ where
                 izip!(mats.iter(), points.iter(), openings_for_round.iter())
             {
                 let _guard =
-                    info_span!("reduce matrix quotient", dims = %mat.dimensions()).entered();
+                    debug_span!("reduce matrix quotient", dims = %mat.dimensions()).entered();
 
                 let log_height = log2_strict_usize(mat.height());
 

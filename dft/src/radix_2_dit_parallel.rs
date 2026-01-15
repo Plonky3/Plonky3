@@ -165,7 +165,7 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         mat.bit_reverse_rows()
     }
 
-    #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits = added_bits))]
+    #[instrument(skip_all, level = "debug", fields(dims = %mat.dimensions(), added_bits = added_bits))]
     fn coset_lde_batch(
         &self,
         mut mat: RowMajorMatrix<F>,
