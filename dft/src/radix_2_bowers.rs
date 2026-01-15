@@ -42,7 +42,7 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
         mat
     }
 
-    #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
+    #[instrument(skip_all, level = "debug", fields(dims = %mat.dimensions(), added_bits))]
     fn coset_lde_batch(
         &self,
         mut mat: RowMajorMatrix<F>,

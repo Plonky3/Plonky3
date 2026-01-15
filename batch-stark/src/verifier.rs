@@ -20,7 +20,7 @@ use p3_uni_stark::{
     recompose_quotient_from_chunks,
 };
 use p3_util::zip_eq::zip_eq;
-use tracing::instrument;
+use tracing::{info_span, instrument};
 
 use crate::common::{CommonData, get_perm_challenges};
 use crate::config::{
@@ -402,6 +402,8 @@ where
     // Now check constraint equality per instance.
     // For each instance, recombine quotient from chunks at zeta and compare to folded constraints.
     for (i, air) in airs.iter().enumerate() {
+        let _air_span = info_span!("verify constraints for AIR", air_idx = i).entered();
+
         let qc_domains = &quotient_domains[i];
 
         // Recompose quotient(zeta) from chunks using utility function.
