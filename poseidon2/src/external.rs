@@ -224,11 +224,10 @@ impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
         [initial, terminal]: [[[U; WIDTH]; N]; 2],
         conversion_fn: fn([U; WIDTH]) -> [T; WIDTH],
     ) -> Self
-    where
-        T: Clone,
     {
-        let initial_consts = initial.map(conversion_fn).to_vec();
-        let terminal_consts = terminal.map(conversion_fn).to_vec();
+        // Convert arrays into Vec without cloning.
+        let initial_consts: Vec<[T; WIDTH]> = initial.map(conversion_fn).into();
+        let terminal_consts: Vec<[T; WIDTH]> = terminal.map(conversion_fn).into();
         Self::new(initial_consts, terminal_consts)
     }
 
@@ -271,6 +270,29 @@ where
     /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
     fn permute_state_terminal(&self, state: &mut [R; WIDTH]);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ExternalLayerConstants;
+
+    /// Compile-time regression test: `new_from_saved_array` should not require `T: Clone`.
+    #[test]
+    fn new_from_saved_array_does_not_require_t_clone() {
+        #[derive(Debug, PartialEq, Eq)]
+        struct NonClone(u8);
+
+        fn conv([a, b]: [u8; 2]) -> [NonClone; 2] {
+            [NonClone(a), NonClone(b)]
+        }
+
+        // WIDTH = 2, N = 1
+        let _constants = ExternalLayerConstants::<NonClone, 2>::new_from_saved_array::<u8, 1>(
+            [[[[1u8, 2u8]]], [[[3u8, 4u8]]]],
+            conv,
+        );
+    }
+}
+
 
 /// Applies the terminal external rounds of the Poseidon2 permutation.
 ///
