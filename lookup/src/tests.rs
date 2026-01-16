@@ -675,8 +675,6 @@ fn test_range_check_end_to_end_invalid() {
         alpha: EF::from_u32(12345678),
         beta: EF::from_u32(87654321),
     };
-    let alpha = EF::from(F::new(0x12345678));
-    let beta = EF::from(F::new(0x87654321));
 
     // Build auxiliary running sum column - this will be non-zero at the end
     let mut s_col = Vec::with_capacity(main_trace.height());
@@ -708,7 +706,7 @@ fn test_range_check_end_to_end_invalid() {
 
     // Setup the AIR and builder
     let mut air = RangeCheckAir::new();
-    let mut builder = MockAirBuilder::new(main_trace, aux_trace, vec![alpha, beta]);
+    let mut builder = MockAirBuilder::new(main_trace, aux_trace, challenges.to_vec());
 
     let lookup_gadget = LogUpGadget::new();
     let lookups = <RangeCheckAir as Air<MockAirBuilder>>::get_lookups(&mut air);
