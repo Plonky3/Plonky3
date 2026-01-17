@@ -1,14 +1,10 @@
-use p3_air::{
-    AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PeriodicAirBuilder,
-    PermutationAirBuilder,
-};
+use p3_air::{AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PermutationAirBuilder};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::ViewPair;
 use p3_uni_stark::{
     PackedChallenge, PackedVal, ProverConstraintFolder, StarkGenericConfig, Val,
     VerifierConstraintFolder,
 };
-
 
 pub struct ProverConstraintFolderWithLookups<'a, SC: StarkGenericConfig> {
     pub inner: ProverConstraintFolder<'a, SC>,
@@ -105,14 +101,6 @@ impl<'a, SC: StarkGenericConfig> PermutationAirBuilder
     }
 }
 
-impl<SC: StarkGenericConfig> PeriodicAirBuilder for ProverConstraintFolderWithLookups<'_, SC> {
-    type PeriodicVar = PackedVal<SC>;
-
-    fn periodic_values(&self) -> &[Self::PeriodicVar] {
-        self.inner.periodic_values()
-    }
-}
-
 pub struct VerifierConstraintFolderWithLookups<'a, SC: StarkGenericConfig> {
     pub inner: VerifierConstraintFolder<'a, SC>,
     pub permutation: ViewPair<'a, SC::Challenge>,
@@ -205,13 +193,5 @@ impl<'a, SC: StarkGenericConfig> PermutationAirBuilder
 
     fn permutation_randomness(&self) -> &[SC::Challenge] {
         self.permutation_challenges
-    }
-}
-
-impl<SC: StarkGenericConfig> PeriodicAirBuilder for VerifierConstraintFolderWithLookups<'_, SC> {
-    type PeriodicVar = SC::Challenge;
-
-    fn periodic_values(&self) -> &[Self::PeriodicVar] {
-        self.inner.periodic_values()
     }
 }

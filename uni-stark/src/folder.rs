@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_air::{AirBuilder, AirBuilderWithPublicValues, PeriodicAirBuilder};
+use p3_air::{AirBuilder, AirBuilderWithPublicValues};
 use p3_field::{BasedVectorSpace, PackedField};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::ViewPair;
@@ -35,8 +35,6 @@ pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     pub accumulator: PackedChallenge<SC>,
     /// Current constraint index being processed
     pub constraint_index: usize,
-    /// Evaluations of periodic columns at the current row (base field for prover)
-    pub periodic_values: Vec<PackedVal<SC>>,
 }
 
 /// Handles constraint verification for the verifier in a STARK system.
@@ -61,8 +59,6 @@ pub struct VerifierConstraintFolder<'a, SC: StarkGenericConfig> {
     pub alpha: SC::Challenge,
     /// Running accumulator for all constraints
     pub accumulator: SC::Challenge,
-    /// Evaluations of periodic columns at the current row
-    pub periodic_values: Vec<SC::Challenge>,
 }
 
 impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
@@ -131,15 +127,6 @@ impl<SC: StarkGenericConfig> AirBuilderWithPublicValues for ProverConstraintFold
     }
 }
 
-impl<SC: StarkGenericConfig> PeriodicAirBuilder for ProverConstraintFolder<'_, SC> {
-    type PeriodicVar = PackedVal<SC>;
-
-    fn periodic_values(&self) -> &[Self::PeriodicVar] {
-        &self.periodic_values
-    }
-}
-
-
 impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC> {
     type F = Val<SC>;
     type Expr = SC::Challenge;
@@ -185,13 +172,5 @@ impl<SC: StarkGenericConfig> AirBuilderWithPublicValues for VerifierConstraintFo
 
     fn public_values(&self) -> &[Self::F] {
         self.public_values
-    }
-}
-
-impl<SC: StarkGenericConfig> PeriodicAirBuilder for VerifierConstraintFolder<'_, SC> {
-    type PeriodicVar = SC::Challenge;
-
-    fn periodic_values(&self) -> &[Self::PeriodicVar] {
-        &self.periodic_values
     }
 }

@@ -5,8 +5,7 @@ use alloc::vec::Vec;
 
 use p3_air::lookup::LookupEvaluator;
 use p3_air::{
-    Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, ExtensionBuilder, PeriodicAirBuilder,
-    PermutationAirBuilder,
+    Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, ExtensionBuilder, PermutationAirBuilder,
 };
 use p3_baby_bear::BabyBear;
 use p3_field::extension::BinomialExtensionField;
@@ -235,14 +234,6 @@ impl AirBuilderWithPublicValues for MockAirBuilder {
     type PublicVar = Self::F;
 
     fn public_values(&self) -> &[Self::PublicVar] {
-        &[]
-    }
-}
-
-impl PeriodicAirBuilder for MockAirBuilder {
-    type PeriodicVar = F;
-
-    fn periodic_values(&self) -> &[Self::PeriodicVar] {
         &[]
     }
 }

@@ -1,6 +1,5 @@
 use p3_air::{
-    Air, AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PeriodicAirBuilder,
-    PermutationAirBuilder,
+    Air, AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PermutationAirBuilder,
 };
 use p3_field::{ExtensionField, Field};
 use p3_lookup::lookup_traits::{Lookup, LookupData, LookupGadget};
@@ -240,15 +239,5 @@ impl<'a, F: Field, EF: ExtensionField<F>> PermutationAirBuilder
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
         self.permutation_challenges
-    }
-}
-
-impl<'a, F: Field, EF: ExtensionField<F>> PeriodicAirBuilder
-    for DebugConstraintBuilderWithLookups<'a, F, EF>
-{
-    type PeriodicVar = F;
-
-    fn periodic_values(&self) -> &[Self::PeriodicVar] {
-        &[]
     }
 }

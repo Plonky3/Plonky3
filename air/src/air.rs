@@ -12,22 +12,23 @@ use crate::lookup::{Kind, Lookup, LookupData, LookupEvaluator, LookupInput};
 pub trait BaseAir<F>: Sync {
     /// The number of columns (a.k.a. registers) in this AIR.
     fn width(&self) -> usize;
-
     /// Return an optional preprocessed trace matrix to be included in the prover's trace.
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
         None
     }
+}
 
+/// An extension of `BaseAir` that includes support for periodic columns.
+///
+/// Periodic columns are columns whose values repeat with a period that divides the trace
+/// length. They are never committed to the proof - instead, both prover and verifier compute
+/// them from the periodic table data provided by the AIR.
+pub trait AirWithPeriodicColumns<F>: BaseAir<F> {
     /// Return the periodic table data.
     ///
-    /// Periodic columns are columns whose values repeat with a period that divides the trace
-    /// length. Each inner `Vec<F>` represents one periodic column. The length of the inner
+    /// Each inner `Vec<F>` represents one periodic column. The length of the inner
     /// vector is the period of that column (must be a power of 2 that divides the trace length).
-    ///
-    /// By default returns an empty table (no periodic columns).
-    fn periodic_table(&self) -> Vec<Vec<F>> {
-        vec![]
-    }
+    fn periodic_columns(&self) -> Vec<Vec<F>>;
 }
 
 /// An extension of `BaseAir` that includes support for public values.
@@ -120,7 +121,7 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
         lookup_data: &[LookupData<AB::ExprEF>],
         lookup_evaluator: &LE,
     ) where
-        AB: PermutationAirBuilder + AirBuilderWithPublicValues + PeriodicAirBuilder,
+        AB: PermutationAirBuilder + AirBuilderWithPublicValues,
     {
         self.eval(builder);
 
@@ -397,7 +398,6 @@ impl<AB: AirBuilderWithPublicValues> AirBuilderWithPublicValues for FilteredAirB
         self.inner.public_values()
     }
 }
-
 
 impl<AB: ExtensionBuilder> ExtensionBuilder for FilteredAirBuilder<'_, AB> {
     type EF = AB::EF;
