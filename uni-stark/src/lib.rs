@@ -17,8 +17,8 @@ mod verifier;
 pub use check_constraints::*;
 pub use config::*;
 pub use folder::*;
-// Public re-exports from p3-air.
-pub use p3_air::symbolic::*;
+// Re-export additional types from p3-air for backward compatibility
+pub use p3_air::{Entry, SymbolicExpression, SymbolicVariable};
 pub use preprocessed::*;
 pub use proof::*;
 pub use prover::*;

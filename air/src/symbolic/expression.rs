@@ -156,13 +156,13 @@ impl<F> SymbolicExpression<F> {
     ///
     /// Degree 0 (constants):
     /// - `Constant`
-    /// - `IsTransition`
     /// - `Variable` with public values or challenges
     ///
     /// Degree 1 (linear in trace length):
     /// - `Variable` with trace columns (main, preprocessed, permutation)
     /// - `IsFirstRow`
     /// - `IsLastRow`
+    /// - `IsTransition`
     ///
     /// Composite expressions:
     /// - `Add`, `Sub`: max of operands
@@ -171,8 +171,8 @@ impl<F> SymbolicExpression<F> {
     pub const fn degree_multiple(&self) -> usize {
         match self {
             Self::Variable(v) => v.degree_multiple(),
-            Self::IsFirstRow | Self::IsLastRow => 1,
-            Self::IsTransition | Self::Constant(_) => 0,
+            Self::IsFirstRow | Self::IsLastRow | Self::IsTransition => 1,
+            Self::Constant(_) => 0,
             Self::Add {
                 degree_multiple, ..
             }
@@ -417,8 +417,8 @@ mod tests {
         let is_transition = SymbolicExpression::<BabyBear>::IsTransition;
         assert_eq!(
             is_transition.degree_multiple(),
-            0,
-            "IsTransition should have degree 0"
+            1,
+            "IsTransition should have degree 1"
         );
 
         let add_expr = SymbolicExpression::<BabyBear>::Add {
