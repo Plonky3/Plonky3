@@ -111,11 +111,19 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
     /// For each row `i` in the matrix, this computes:
     /// `DEEP_quotient[i] = (f(x[i]) - f(zeta)) / (x[i] - zeta)`
     ///
+    /// The matrix can represent either:
+    /// 1. Multiple polynomials (e.g., trace columns), where each column is a separate polynomial
+    /// 2. A single extension field polynomial split into base field components (e.g., quotient polynomial),
+    ///    where each column represents one component of the extension field decomposition
+    ///
+    /// In both cases, the function computes the DEEP quotient reduction by treating each column
+    /// as a separate polynomial and combining them with powers of alpha.
+    ///
     /// # Parameters
     ///
     /// - `alpha`: The random challenge scalar
     /// - `zeta`: The random challenge point (outside the original domain)
-    /// - `ps_at_zeta`: Polynomial evaluations at challenge point `zeta`
+    /// - `ps_at_zeta`: Polynomial evaluations at challenge point `zeta` (one per column)
     ///
     /// # Returns
     ///
@@ -127,7 +135,10 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         zeta: Point<EF>,
         ps_at_zeta: &[EF],
     ) -> Vec<EF> {
-        // Precompute alpha^width for the vanishing part computation
+        // Precompute alpha^width for the vanishing part computation.
+        // Note: width here is the number of columns in the matrix, which could be:
+        // - The number of trace columns (for trace matrices)
+        // - The extension degree (for quotient polynomials split into base field components)
         let alpha_pow_width = alpha.exp_u64(self.values.width() as u64);
 
         // Get all domain points in CFFT order for efficient processing
@@ -150,8 +161,11 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         let alpha_powers =
             EF::ExtensionPacking::to_ext_iter(packed_alpha_powers.iter().copied()).collect_vec();
 
-        // Precompute the constraint part for the challenge point
-        // This is sum_j(alpha^j * p_j[zeta]) and is the same for all rows
+        // Precompute the constraint part for the challenge point.
+        // This computes sum_j(alpha^j * p_j[zeta]) where p_j are the polynomials (columns).
+        // For quotient polynomials, this represents the extension field value of the quotient
+        // at zeta, decomposed into base field components.
+        // This is the same for all rows.
         let alpha_reduced_ps_at_zeta: EF =
             dot_product(alpha_powers.iter().copied(), ps_at_zeta.iter().copied());
 
@@ -164,6 +178,9 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
             .map(|((reduced_ps_at_x, vp_num), vp_denom_inv)| {
                 // reduced_ps_at_x = sum_j(alpha^j * p_j[x_i])
                 // So (reduced_ps_at_x - alpha_reduced_ps_at_zeta) = sum_j(alpha^j * (p_j[x_i] - p_j[zeta]))
+                // This works correctly for both:
+                // - Trace matrices: where p_j are trace columns
+                // - Quotient polynomials: where p_j are base field components of the extension field quotient
                 vp_num * vp_denom_inv * (reduced_ps_at_x - alpha_reduced_ps_at_zeta)
             })
             .collect()
@@ -247,6 +264,11 @@ mod tests {
 
     #[test]
     fn reduce_row_same_as_reduce_matrix() {
+        // This test verifies that DEEP quotient reduction works correctly for matrices
+        // representing either trace columns or quotient polynomial components.
+        // The quotient polynomial structure (including new is_transition selector terms)
+        // doesn't affect the correctness of DEEP quotient reduction, as it operates
+        // at the level of polynomial evaluations regardless of how they were computed.
         let mut rng = SmallRng::seed_from_u64(1);
         let domain = CircleDomain::standard(5);
         let evals = CircleEvaluations::from_cfft_order(
