@@ -271,6 +271,11 @@ where
                             let zeta = Point::from_projective_line(zeta);
 
                             // Reduce this matrix, as a deep quotient, into one column with powers of α.
+                            // The matrix can represent either trace columns or quotient polynomial components.
+                            // For quotient polynomials, the matrix contains base field components of the
+                            // extension field quotient polynomial Q(x) = constraints(x) / Z_H(x), where
+                            // constraints(x) may include terms with the new is_transition selector.
+                            // DEEP quotient reduction works correctly in both cases.
                             let mat_ros = evals.deep_quotient_reduce(alpha, zeta, ps_at_zeta);
 
                             // Fold it into our running reduction, offset by alpha_offset.
