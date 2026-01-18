@@ -24,7 +24,11 @@ where
     get_log_quotient_degree_extension(air, preprocessed_width, num_public_values, 0, 0, is_zk)
 }
 
-#[instrument(name = "infer log of base and extension constraint degree", skip_all, level = "debug")]
+#[instrument(
+    name = "infer log of base and extension constraint degree",
+    skip_all,
+    level = "debug"
+)]
 pub fn get_log_quotient_degree_extension<F, EF, A>(
     air: &A,
     preprocessed_width: usize,

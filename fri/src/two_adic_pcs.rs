@@ -407,21 +407,22 @@ where
                                         .entered();
 
                                 // Use Barycentric interpolation to evaluate each column of the matrix at the given point.
-                                let ys =
-                                    debug_span!("compute opened values with Lagrange interpolation")
-                                        .in_scope(|| {
-                                            // Get the relevant inverse denominators for this point and use these to
-                                            // interpolate to get the evaluation of each polynomial in the matrix
-                                            // at the desired point.
-                                            let inv_denoms = &inv_denoms.get(&point).unwrap()[..h];
-                                            interpolate_coset_with_precomputation(
-                                                &low_coset,
-                                                Val::GENERATOR,
-                                                point,
-                                                coset_h,
-                                                inv_denoms,
-                                            )
-                                        });
+                                let ys = debug_span!(
+                                    "compute opened values with Lagrange interpolation"
+                                )
+                                .in_scope(|| {
+                                    // Get the relevant inverse denominators for this point and use these to
+                                    // interpolate to get the evaluation of each polynomial in the matrix
+                                    // at the desired point.
+                                    let inv_denoms = &inv_denoms.get(&point).unwrap()[..h];
+                                    interpolate_coset_with_precomputation(
+                                        &low_coset,
+                                        Val::GENERATOR,
+                                        point,
+                                        coset_h,
+                                        inv_denoms,
+                                    )
+                                });
 
                                 challenger.observe_algebra_slice(&ys);
                                 ys
