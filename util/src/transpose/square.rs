@@ -217,12 +217,14 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
         return;
     }
 
+    // Shared derived values for both sequential and parallel paths.
+    // `log_size > BASE_CASE_LOG >= 1`, so `log_size - 1` cannot underflow.
+    let log_half_size = log_size - 1;
+    let half = 1 << log_half_size;
+    let stride = 1 << log_stride;
+
     #[cfg(feature = "parallel")]
     {
-        // Log2 of half the matrix dimension
-        let log_half_size = log_size - 1;
-        // Half the matrix size (e.g. 8 for 16×16)
-        let half = 1 << log_half_size;
         // Total number of elements in the full square matrix
         let elements = 1 << (2 * log_size);
 
@@ -231,10 +233,6 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
             let base = AtomicPtr::new(arr.as_mut_ptr());
             // Total length of the backing array
             let len = arr.len();
-            // Row stride in physical memory
-            let stride = 1 << log_stride;
-            // Size of each quadrant (half x half)
-            let dim = 1 << log_half_size;
 
             // Coordinate each quadrant via `rayon::join`:
             // - TL and BR are recursive calls
@@ -258,7 +256,7 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
                                 ptr.add((x << log_stride) + (x + half)),
                                 ptr.add(((x + half) << log_stride) + x),
                                 stride,
-                                (dim, dim),
+                                (half, half),
                             );
                         },
                         || unsafe {
@@ -277,29 +275,21 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
     }
 
     // Sequential version of above logic
-    // Log2 of the new quadrant size (we're splitting the matrix in half)
-    let log_block_size = log_size - 1;
-    // Actual size of each quadrant (i.e., half the current matrix size)
-    let block_size = 1 << log_block_size;
-    // Physical stride between rows in memory (in elements)
-    let stride = 1 << log_stride;
-    // The size of each submatrix (used as a dimension for swapping TR/BL)
-    let dim = block_size;
     // Raw pointer to the base of the array for manual offset calculations
     let ptr = arr.as_mut_ptr();
 
     unsafe {
         // Transpose TL quadrant (top-left)
-        transpose_in_place_square(arr, log_stride, log_block_size, x);
+        transpose_in_place_square(arr, log_stride, log_half_size, x);
         // Swap TR (top-right) with BL (bottom-left)
         transpose_swap(
-            ptr.add((x << log_stride) + (x + block_size)),
-            ptr.add(((x + block_size) << log_stride) + x),
+            ptr.add((x << log_stride) + (x + half)),
+            ptr.add(((x + half) << log_stride) + x),
             stride,
-            (dim, dim),
+            (half, half),
         );
         // Transpose BR quadrant (bottom-right)
-        transpose_in_place_square(arr, log_stride, log_block_size, x + block_size);
+        transpose_in_place_square(arr, log_stride, log_half_size, x + half);
     }
 }
 
