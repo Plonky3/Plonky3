@@ -575,7 +575,7 @@ impl<T: Copy + Default + Send + Sync, V: DenseStorage<T>> DenseMatrix<T, V> {
     pub fn transpose(&self) -> RowMajorMatrix<T> {
         let nelts = self.height() * self.width();
         let mut values = vec![T::default(); nelts];
-        transpose::transpose(
+        p3_util::transpose::transpose(
             self.values.borrow(),
             &mut values,
             self.width(),
@@ -591,7 +591,7 @@ impl<T: Copy + Default + Send + Sync, V: DenseStorage<T>> DenseMatrix<T, V> {
     ) {
         assert_eq!(self.height(), other.width());
         assert_eq!(other.height(), self.width());
-        transpose::transpose(
+        p3_util::transpose::transpose(
             self.values.borrow(),
             other.values.borrow_mut(),
             self.width(),

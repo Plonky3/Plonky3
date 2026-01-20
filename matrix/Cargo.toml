@@ -18,7 +18,6 @@ itertools.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 tracing.workspace = true
-transpose.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
