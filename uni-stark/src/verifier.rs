@@ -4,8 +4,8 @@ use alloc::vec::Vec;
 use alloc::{format, vec};
 
 use itertools::Itertools;
-use p3_air::Air;
 use p3_air::lookup::LookupError;
+use p3_air::{Air, SymbolicAirBuilder};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
@@ -15,7 +15,7 @@ use p3_util::zip_eq::zip_eq;
 use thiserror::Error;
 use tracing::instrument;
 
-use crate::symbolic::{SymbolicAirBuilder, get_log_num_quotient_chunks};
+use crate::symbolic::get_log_num_quotient_chunks;
 use crate::{
     Domain, PcsError, PreprocessedVerifierKey, Proof, StarkGenericConfig, Val,
     VerifierConstraintFolder,
