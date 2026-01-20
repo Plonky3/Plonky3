@@ -8,9 +8,10 @@ use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
 
-use itertools::{Itertools, izip};
+use itertools::Itertools;
 use p3_field::{
-    ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing, dot_product,
+    ExtensionField, Field, FieldArray, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
+    dot_product,
 };
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
@@ -435,17 +436,69 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
             .par_fold_reduce(
                 || EF::ExtensionPacking::zero_vec(packed_width),
                 |mut acc, (row, &scale)| {
-                    let scale = EF::ExtensionPacking::from(scale);
-                    izip!(&mut acc, row).for_each(|(l, r)| *l += scale * r);
+                    let scale: EF::ExtensionPacking = scale.into();
+                    acc.iter_mut().zip(row).for_each(|(l, r)| *l += scale * r);
                     acc
                 },
                 |mut acc_l, acc_r| {
-                    izip!(&mut acc_l, acc_r).for_each(|(l, r)| *l += r);
+                    acc_l.iter_mut().zip(&acc_r).for_each(|(l, r)| *l += *r);
                     acc_l
                 },
             );
 
         EF::ExtensionPacking::to_ext_iter(packed_result)
+            .take(self.width())
+            .collect()
+    }
+
+    /// Compute Mᵀ · [v₀, v₁, ..., vₙ₋₁] for N weight vectors simultaneously.
+    ///
+    /// Computes `result[col][j] = Σᵣ M[r, col] · vⱼ[r]` for all columns and all j ∈ [0, N).
+    ///
+    /// Batching N weight vectors reduces memory bandwidth: each matrix row is loaded once
+    /// instead of N times. Uses SIMD packing (width W) to process W columns in parallel.
+    #[instrument(level = "debug", skip_all, fields(dims = %self.dimensions()))]
+    fn columnwise_dot_product_batched<EF, const N: usize>(
+        &self,
+        vs: &[FieldArray<EF, N>],
+    ) -> Vec<FieldArray<EF, N>>
+    where
+        T: Field,
+        EF: ExtensionField<T>,
+    {
+        let packed_width = self.width().div_ceil(T::Packing::WIDTH);
+
+        let packed_results: Vec<EF::ExtensionPacking> = self
+            .par_padded_horizontally_packed_rows::<T::Packing>()
+            .zip(vs)
+            .par_fold_reduce(
+                || EF::ExtensionPacking::zero_vec(packed_width * N),
+                |mut acc, (packed_row, scales)| {
+                    // Broadcast each scalar scale to all SIMD lanes
+                    let packed_scales: [EF::ExtensionPacking; N] =
+                        scales.map_into_array(EF::ExtensionPacking::from);
+
+                    // acc[c][j] += scales[j] · row[c] for column batch c, point j
+                    for (acc_c, row_c) in acc.chunks_exact_mut(N).zip(packed_row) {
+                        for j in 0..N {
+                            acc_c[j] += packed_scales[j] * row_c;
+                        }
+                    }
+                    acc
+                },
+                |mut acc_l, acc_r| {
+                    acc_l.iter_mut().zip(&acc_r).for_each(|(lj, rj)| *lj += *rj);
+                    acc_l
+                },
+            );
+
+        // Unpack: chunk[j].lane(i) → result[c·W + i][j] for column batch c
+        packed_results
+            .chunks(N)
+            .flat_map(|chunk| {
+                (0..T::Packing::WIDTH)
+                    .map(move |lane| FieldArray::from_fn(|j| chunk[j].extract(lane)))
+            })
             .take(self.width())
             .collect()
     }
@@ -513,6 +566,36 @@ mod tests {
         }
 
         assert_eq!(m.columnwise_dot_product(&v), expected);
+    }
+
+    #[test]
+    fn test_columnwise_dot_product_batched() {
+        type F = BabyBear;
+        type EF = BinomialExtensionField<BabyBear, 4>;
+
+        let mut rng = SmallRng::seed_from_u64(1);
+        let m = RowMajorMatrix::<F>::rand(&mut rng, 1 << 8, 1 << 4);
+        let v1 = RowMajorMatrix::<EF>::rand(&mut rng, 1 << 8, 1).values;
+        let v2 = RowMajorMatrix::<EF>::rand(&mut rng, 1 << 8, 1).values;
+
+        // Compute expected via two separate calls
+        let expected1 = m.columnwise_dot_product(&v1);
+        let expected2 = m.columnwise_dot_product(&v2);
+
+        // Compute via batched call - returns Vec<[EF; 2]> where result[col] = [dot1, dot2]
+        let vs: Vec<FieldArray<EF, 2>> = v1
+            .into_iter()
+            .zip(v2)
+            .map(|(a, b)| FieldArray([a, b]))
+            .collect();
+        let results = m.columnwise_dot_product_batched::<EF, 2>(&vs);
+
+        // Extract each point's results
+        let result1: Vec<EF> = results.iter().map(|r| r[0]).collect();
+        let result2: Vec<EF> = results.iter().map(|r| r[1]).collect();
+
+        assert_eq!(result1, expected1);
+        assert_eq!(result2, expected2);
     }
 
     // Mock implementation for testing purposes
