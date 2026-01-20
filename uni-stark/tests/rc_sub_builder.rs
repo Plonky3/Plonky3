@@ -10,7 +10,7 @@
 
 use core::marker::PhantomData;
 
-use p3_air::{Air, AirBuilder, BaseAir};
+use p3_air::{Air, AirBuilder, BaseAir, SymbolicAirBuilder};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_commit::testing::TrivialPcs;
@@ -19,7 +19,7 @@ use p3_field::PrimeCharacteristicRing;
 use p3_field::extension::BinomialExtensionField;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_uni_stark::{StarkConfig, SubAirBuilder, SymbolicAirBuilder, prove, verify};
+use p3_uni_stark::{StarkConfig, SubAirBuilder, prove, verify};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
@@ -125,7 +125,7 @@ impl RangeCheckAir {
 #[test]
 fn range_checked_sub_builder() {
     let air = RangeCheckAir;
-    let mut builder = SymbolicAirBuilder::<BabyBear>::new(0, TRACE_WIDTH, 0, 0, 0);
+    let mut builder = SymbolicAirBuilder::<BabyBear>::new(0, TRACE_WIDTH, 0, 0, 0, 0);
     air.eval(&mut builder);
 
     let constraints = builder.base_constraints();

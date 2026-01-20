@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_air::Air;
+use p3_air::{Air, SymbolicAirBuilder, get_symbolic_constraints};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
@@ -14,8 +14,7 @@ use tracing::{debug_span, info_span, instrument};
 
 use crate::{
     Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, PreprocessedProverData, Proof,
-    ProverConstraintFolder, StarkGenericConfig, SymbolicAirBuilder, Val,
-    get_log_num_quotient_chunks, get_symbolic_constraints,
+    ProverConstraintFolder, StarkGenericConfig, Val, get_log_num_quotient_chunks,
 };
 
 #[instrument(skip_all)]
@@ -75,7 +74,7 @@ where
 
     // Compute the constraint polynomials as vectors of symbolic expressions.
     let symbolic_constraints =
-        get_symbolic_constraints(air, preprocessed_width, public_values.len());
+        get_symbolic_constraints(air, preprocessed_width, public_values.len(), 0);
 
     // Count the number of constraints that we have.
     let constraint_count = symbolic_constraints.len();
