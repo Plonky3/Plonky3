@@ -15,7 +15,7 @@ use p3_util::zip_eq::zip_eq;
 use thiserror::Error;
 use tracing::instrument;
 
-use crate::symbolic_builder::{SymbolicAirBuilder, get_log_num_quotient_chunks};
+use crate::symbolic::{SymbolicAirBuilder, get_log_num_quotient_chunks};
 use crate::{
     Domain, PcsError, PreprocessedVerifierKey, Proof, StarkGenericConfig, Val,
     VerifierConstraintFolder,
