@@ -37,8 +37,8 @@ where
 {
     let t0 = x[0].clone() + x[1].clone();
     let t1 = x[2].clone() + x[3].clone();
-    let t2 = x[1].clone() + x[1].clone() + t1.clone();
-    let t3 = x[3].clone() + x[3].clone() + t0.clone();
+    let t2 = x[1].double() + t1.clone();
+    let t3 = x[3].double() + t0.clone();
     let t4 = t1.double().double() + t3.clone();
     let t5 = t0.double().double() + t2.clone();
     let t6 = t3 + t5.clone();
@@ -224,11 +224,11 @@ impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
         [initial, terminal]: [[[U; WIDTH]; N]; 2],
         conversion_fn: fn([U; WIDTH]) -> [T; WIDTH],
     ) -> Self
-    where
-        T: Clone,
+
     {
-        let initial_consts = initial.map(conversion_fn).to_vec();
-        let terminal_consts = terminal.map(conversion_fn).to_vec();
+        // Convert arrays into Vec without cloning.
+        let initial_consts: Vec<[T; WIDTH]> = initial.map(conversion_fn).into();
+        let terminal_consts: Vec<[T; WIDTH]> = terminal.map(conversion_fn).into();
         Self::new(initial_consts, terminal_consts)
     }
 
@@ -270,6 +270,28 @@ where
 
     /// Perform the terminal external layers of the Poseidon2 permutation on the given state.
     fn permute_state_terminal(&self, state: &mut [R; WIDTH]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ExternalLayerConstants;
+
+    /// Compile-time regression test: `new_from_saved_array` should not require `T: Clone`.
+    #[test]
+    fn new_from_saved_array_does_not_require_t_clone() {
+        #[derive(Debug, PartialEq, Eq)]
+        struct NonClone(u8);
+
+        fn conv([a, b]: [u8; 2]) -> [NonClone; 2] {
+            [NonClone(a), NonClone(b)]
+        }
+
+        // WIDTH = 2, N = 1
+        let _constants = ExternalLayerConstants::<NonClone, 2>::new_from_saved_array::<u8, 1>(
+            [[[[1u8, 2u8]]], [[[3u8, 4u8]]]],
+            conv,
+        );
+    }
 }
 
 /// Applies the terminal external rounds of the Poseidon2 permutation.
