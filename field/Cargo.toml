@@ -10,7 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-p3-util = { path = "../util" }
+p3-util = { workspace = true }
 num-bigint = { version = "0.4.3", default-features = false }
 num-traits = { version = "0.2.18", default_features = false }
 

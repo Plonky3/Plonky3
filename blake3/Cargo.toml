@@ -10,7 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-p3-symmetric = { path = "../symmetric" }
+p3-symmetric = { workspace = true }
 blake3 = "1.5"
 
 [features]

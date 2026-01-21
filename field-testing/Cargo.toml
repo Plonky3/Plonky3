@@ -10,9 +10,9 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-p3-field = { path = "../field" }
+p3-field = { workspace = true }
 rand = { version = "0.8.5", features = ["min_const_gen"] }
 criterion = "0.5.1"
 
 [dev-dependencies]
-p3-baby-bear = { path = "../baby-bear" }
+p3-baby-bear = { workspace = true }

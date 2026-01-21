@@ -11,11 +11,11 @@ categories.workspace = true
 
 [dependencies]
 generic-array = "1.0"
-p3-field = { path = "../field" }
-p3-goldilocks = { path = "../goldilocks" }
-p3-mersenne-31 = { path = "../mersenne-31" }
-p3-mds = { path = "../mds" }
-p3-symmetric = { path = "../symmetric" }
+p3-field = { workspace = true }
+p3-goldilocks = { workspace = true }
+p3-mersenne-31 = { workspace = true }
+p3-mds = { workspace = true }
+p3-symmetric = { workspace = true }
 sha3 = "0.10"
 
 [dev-dependencies]
