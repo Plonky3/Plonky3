@@ -329,22 +329,116 @@ impl<F: Field, EF: ExtensionField<F>> PeriodicAirBuilder for SymbolicAirBuilder<
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+    use alloc::vec::Vec;
+
     use p3_baby_bear::BabyBear;
+    use p3_field::extension::BinomialExtensionField;
     use p3_matrix::Matrix;
 
     use super::*;
     use crate::{AirWithPeriodicColumns, BaseAir, PeriodicAirBuilder};
 
-    #[derive(Debug)]
+    type EF = BinomialExtensionField<BabyBear, 4>;
+
+    // ==================== Configurable Mock AIR ====================
+    //
+    // A flexible test AIR that can be configured to generate constraints
+    // with specific degree and structure. This allows testing constraint
+    // degree computation for various AIR patterns with a single implementation.
+
+    /// Which variable type to use as the base of the constraint expression.
+    /// Different variable types have different degree contributions:
+    /// - Main/Preprocessed/Periodic/Permutation: degree 1 (trace polynomials)
+    /// - Public/Challenge: degree 0 (constants from verifier's perspective)
+    #[derive(Clone, Copy, Default)]
+    enum VariableKind {
+        #[default]
+        Main,
+        Preprocessed,
+        Public,
+        Periodic,
+        Permutation, // extension field variable
+        Challenge,   // extension field variable
+    }
+
+    /// Condition wrapper for constraints.
+    #[derive(Clone, Copy, Default)]
+    enum Condition {
+        #[default]
+        None,
+        Transition,
+        FirstRow,
+        LastRow,
+    }
+
+    /// Returns the standard periodic columns: 2 columns with periods 2 and 4.
+    fn mock_periodic_columns() -> Vec<Vec<BabyBear>> {
+        vec![
+            vec![BabyBear::new(1), BabyBear::new(2)], // period 2
+            vec![
+                BabyBear::new(10),
+                BabyBear::new(20),
+                BabyBear::new(30),
+                BabyBear::new(40),
+            ], // period 4
+        ]
+    }
+
+    /// A configurable AIR for testing constraint degree computation.
+    ///
+    /// Generates a constraint of the form: `condition * variable^exponent`
+    /// The actual degree depends on:
+    /// - Variable kind (trace columns = degree 1, public/challenge = degree 0)
+    /// - Exponent (number of multiplications)
+    /// - Condition (adds degree 1 if present)
     struct MockAir {
-        constraints: Vec<SymbolicVariable<BabyBear>>,
-        width: usize,
+        /// Which variable type to exponentiate
+        variable: VariableKind,
+        /// Number of times to multiply the variable (1 = linear, 2 = quadratic)
+        exponent: usize,
+        /// Optional condition wrapper (adds degree 1)
+        condition: Condition,
+        /// Periodic columns (always initialized to standard test data)
         periodic_columns: Vec<Vec<BabyBear>>,
+    }
+
+    impl Default for MockAir {
+        fn default() -> Self {
+            Self {
+                variable: VariableKind::default(),
+                exponent: usize::default(),
+                condition: Condition::default(),
+                periodic_columns: mock_periodic_columns(),
+            }
+        }
+    }
+
+    impl MockAir {
+        /// Compute expected constraint degree based on configuration.
+        fn expected_degree(&self) -> usize {
+            // Variable degree: trace columns have degree 1, public/challenge have degree 0
+            let var_degree = match self.variable {
+                VariableKind::Main
+                | VariableKind::Preprocessed
+                | VariableKind::Periodic
+                | VariableKind::Permutation => 1,
+                VariableKind::Public | VariableKind::Challenge => 0,
+            };
+
+            let base_degree = var_degree * self.exponent;
+
+            // Condition adds degree (IsFirstRow and IsLastRow have degree 1, IsTransition has degree 0)
+            match self.condition {
+                Condition::None | Condition::Transition => base_degree,
+                Condition::FirstRow | Condition::LastRow => base_degree + 1,
+            }
+        }
     }
 
     impl BaseAir<BabyBear> for MockAir {
         fn width(&self) -> usize {
-            self.width
+            1
         }
     }
 
@@ -354,190 +448,212 @@ mod tests {
         }
     }
 
-    impl Air<SymbolicAirBuilder<BabyBear>> for MockAir {
-        fn eval(&self, builder: &mut SymbolicAirBuilder<BabyBear>) {
-            for constraint in &self.constraints {
-                builder.assert_zero(*constraint);
+    impl Air<SymbolicAirBuilder<BabyBear, EF>> for MockAir {
+        fn eval(&self, builder: &mut SymbolicAirBuilder<BabyBear, EF>) {
+            // Build the constraint expression based on variable kind
+            match self.variable {
+                VariableKind::Main => {
+                    let main = builder.main();
+                    let local = main.row_slice(0).expect("matrix has rows");
+                    let mut expr: SymbolicExpression<BabyBear> = local[0].into();
+                    for _ in 1..self.exponent {
+                        expr *= local[0];
+                    }
+                    self.assert_with_condition(builder, expr);
+                }
+                VariableKind::Preprocessed => {
+                    let prep = builder.preprocessed().expect("has preprocessed");
+                    let local = prep.row_slice(0).expect("matrix has rows");
+                    let mut expr: SymbolicExpression<BabyBear> = local[0].into();
+                    for _ in 1..self.exponent {
+                        expr *= local[0];
+                    }
+                    self.assert_with_condition(builder, expr);
+                }
+                VariableKind::Public => {
+                    let public = builder.public_values();
+                    let mut expr: SymbolicExpression<BabyBear> = public[0].into();
+                    for _ in 1..self.exponent {
+                        expr *= public[0];
+                    }
+                    self.assert_with_condition(builder, expr);
+                }
+                VariableKind::Periodic => {
+                    let periodic = builder.periodic_values();
+                    let mut expr: SymbolicExpression<BabyBear> = periodic[0].into();
+                    for _ in 1..self.exponent {
+                        expr *= periodic[0];
+                    }
+                    self.assert_with_condition(builder, expr);
+                }
+                VariableKind::Permutation => {
+                    let perm = builder.permutation();
+                    let local = perm.row_slice(0).expect("matrix has rows");
+                    let mut expr: SymbolicExpression<EF> = local[0].into();
+                    for _ in 1..self.exponent {
+                        expr *= local[0];
+                    }
+                    self.assert_ext_with_condition(builder, expr);
+                }
+                VariableKind::Challenge => {
+                    let challenges = builder.permutation_randomness();
+                    let mut expr: SymbolicExpression<EF> = challenges[0].into();
+                    for _ in 1..self.exponent {
+                        expr *= challenges[0];
+                    }
+                    self.assert_ext_with_condition(builder, expr);
+                }
             }
         }
     }
 
-    #[test]
-    fn test_get_max_constraint_degree_no_constraints() {
-        let air = MockAir {
-            constraints: vec![],
-            width: 4,
-            periodic_columns: vec![],
-        };
-        let max_degree = get_max_constraint_degree(&air, 3, 2, 0);
-        assert_eq!(
-            max_degree, 0,
-            "No constraints should result in a degree of 0"
-        );
+    impl MockAir {
+        /// Assert a base field expression with optional condition.
+        fn assert_with_condition(
+            &self,
+            builder: &mut SymbolicAirBuilder<BabyBear, EF>,
+            expr: SymbolicExpression<BabyBear>,
+        ) {
+            match self.condition {
+                Condition::None => builder.assert_zero(expr),
+                Condition::Transition => builder.when_transition().assert_zero(expr),
+                Condition::FirstRow => builder.when_first_row().assert_zero(expr),
+                Condition::LastRow => builder.when_last_row().assert_zero(expr),
+            }
+        }
+
+        /// Assert an extension field expression with optional condition.
+        fn assert_ext_with_condition(
+            &self,
+            builder: &mut SymbolicAirBuilder<BabyBear, EF>,
+            expr: SymbolicExpression<EF>,
+        ) {
+            match self.condition {
+                Condition::None => builder.assert_zero_ext(expr),
+                Condition::Transition => {
+                    let cond: SymbolicExpression<EF> = builder.is_transition().into();
+                    builder.assert_zero_ext(cond * expr);
+                }
+                Condition::FirstRow => {
+                    let cond: SymbolicExpression<EF> = builder.is_first_row().into();
+                    builder.assert_zero_ext(cond * expr);
+                }
+                Condition::LastRow => {
+                    let cond: SymbolicExpression<EF> = builder.is_last_row().into();
+                    builder.assert_zero_ext(cond * expr);
+                }
+            }
+        }
+    }
+
+    // ==================== Constraint Degree Tests ====================
+    //
+    // These tests verify that constraint degree is computed correctly for
+    // all variable types. The degree determines quotient polynomial chunking
+    // in the STARK protocol.
+
+    /// Helper to compute constraint degree for a MockAir.
+    /// Always assumes 1 of each variable type is available.
+    fn compute_degree(air: &MockAir) -> usize {
+        get_max_constraint_degree_extension::<BabyBear, EF, _>(
+            air, 1, // preprocessed_width
+            1, // num_public_values
+            1, // permutation_width
+            1, // num_challenges
+            1, // num_periodic_columns
+        )
     }
 
     #[test]
-    fn test_get_max_constraint_degree_multiple_constraints() {
-        let air = MockAir {
-            constraints: vec![
-                SymbolicVariable::new(Entry::Main { offset: 0 }, 0),
-                SymbolicVariable::new(Entry::Main { offset: 1 }, 1),
-                SymbolicVariable::new(Entry::Main { offset: 2 }, 2),
-            ],
-            width: 4,
-            periodic_columns: vec![],
-        };
-        let max_degree = get_max_constraint_degree(&air, 3, 2, 0);
-        assert_eq!(max_degree, 1, "Max constraint degree should be 1");
-    }
-
-    #[test]
-    fn test_get_symbolic_constraints() {
-        let c1 = SymbolicVariable::new(Entry::Main { offset: 0 }, 0);
-        let c2 = SymbolicVariable::new(Entry::Main { offset: 1 }, 1);
-
-        let air = MockAir {
-            constraints: vec![c1, c2],
-            width: 4,
-            periodic_columns: vec![],
-        };
-
-        let constraints = get_symbolic_constraints(&air, 3, 2, 0);
-
-        assert_eq!(constraints.len(), 2, "Should return exactly 2 constraints");
-
-        assert!(
-            constraints.iter().any(|x| matches!(x, SymbolicExpression::Variable(v) if v.index == c1.index && v.entry == c1.entry)),
-            "Expected constraint {c1:?} was not found"
-        );
-
-        assert!(
-            constraints.iter().any(|x| matches!(x, SymbolicExpression::Variable(v) if v.index == c2.index && v.entry == c2.entry)),
-            "Expected constraint {c2:?} was not found"
-        );
-    }
-
-    #[test]
-    fn test_symbolic_air_builder_initialization() {
-        let builder = SymbolicAirBuilder::<BabyBear>::new(2, 4, 3, 0, 0, 0);
-
-        let expected_main = [
-            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 0 }, 0),
-            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 0 }, 1),
-            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 0 }, 2),
-            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 0 }, 3),
-            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 1 }, 0),
-            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 1 }, 1),
-            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 1 }, 2),
-            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 1 }, 3),
+    fn test_variable_degree_by_kind() {
+        // Test cases: (variable_kind, exponent, expected_degree)
+        // Trace columns (Main, Preprocessed, Periodic, Permutation) have degree 1
+        // Constants (Public, Challenge) have degree 0
+        let cases = [
+            (VariableKind::Main, 3, 3),         // main^3 = degree 3
+            (VariableKind::Preprocessed, 2, 2), // preprocessed^2 = degree 2
+            (VariableKind::Periodic, 2, 2),     // periodic^2 = degree 2
+            (VariableKind::Permutation, 2, 2),  // permutation^2 = degree 2 (extension field)
+            (VariableKind::Public, 5, 0),       // public^5 = degree 0 (constants)
+            (VariableKind::Challenge, 3, 0),    // challenge^3 = degree 0 (constants)
         ];
 
-        let builder_main = builder.main.values;
-
-        assert_eq!(
-            builder_main.len(),
-            expected_main.len(),
-            "Main matrix should have the expected length"
-        );
-
-        for (expected, actual) in expected_main.iter().zip(builder_main.iter()) {
-            assert_eq!(expected.index, actual.index, "Index mismatch");
-            assert_eq!(expected.entry, actual.entry, "Entry mismatch");
+        for (variable, exponent, expected) in cases {
+            let air = MockAir {
+                variable,
+                exponent,
+                ..Default::default()
+            };
+            let degree = compute_degree(&air);
+            assert_eq!(degree, air.expected_degree());
+            assert_eq!(degree, expected);
         }
     }
 
     #[test]
-    fn test_symbolic_air_builder_is_first_last_row() {
-        let builder = SymbolicAirBuilder::<BabyBear>::new(2, 4, 3, 0, 0, 0);
+    fn test_condition_adds_degree() {
+        // FirstRow and LastRow add degree 1, Transition adds degree 0
+        let cases = [
+            (Condition::None, 2),       // main^2 = degree 2
+            (Condition::Transition, 2), // is_transition (0) * main^2 = degree 2
+            (Condition::FirstRow, 3),   // is_first_row (1) * main^2 = degree 3
+            (Condition::LastRow, 3),    // is_last_row (1) * main^2 = degree 3
+        ];
 
-        assert!(
-            matches!(builder.is_first_row(), SymbolicExpression::IsFirstRow),
-            "First row condition did not match"
-        );
-
-        assert!(
-            matches!(builder.is_last_row(), SymbolicExpression::IsLastRow),
-            "Last row condition did not match"
-        );
-    }
-
-    #[test]
-    fn test_symbolic_air_builder_assert_zero() {
-        let mut builder = SymbolicAirBuilder::<BabyBear>::new(2, 4, 3, 0, 0, 0);
-        let expr = SymbolicExpression::Constant(BabyBear::new(5));
-        builder.assert_zero(expr);
-
-        let constraints = builder.base_constraints();
-        assert_eq!(constraints.len(), 1, "One constraint should be recorded");
-
-        assert!(
-            constraints.iter().any(
-                |x| matches!(x, SymbolicExpression::Constant(val) if *val == BabyBear::new(5))
-            ),
-            "Constraint should match the asserted one"
-        );
-    }
-
-    #[test]
-    fn test_symbolic_air_builder_with_periodic() {
-        let num_periodic = 3;
-        let builder = SymbolicAirBuilder::<BabyBear>::new(2, 4, 3, 0, 0, num_periodic);
-
-        let periodic_values = builder.periodic_values();
-        assert_eq!(
-            periodic_values.len(),
-            num_periodic,
-            "Should have {num_periodic} periodic columns"
-        );
-
-        // Check that periodic variables have correct Entry type and indices
-        for (i, var) in periodic_values.iter().enumerate() {
-            assert_eq!(var.entry, Entry::Periodic, "Should be a Periodic entry");
-            assert_eq!(var.index, i, "Index should match position");
+        for (condition, expected) in cases {
+            let air = MockAir {
+                variable: VariableKind::Main,
+                exponent: 2,
+                condition,
+                ..Default::default()
+            };
+            let degree = compute_degree(&air);
+            assert_eq!(degree, air.expected_degree());
+            assert_eq!(degree, expected);
         }
     }
 
     #[test]
-    fn test_periodic_columns_in_constraints() {
-        // Create periodic columns for the MockAir
-        let periodic_col = vec![BabyBear::new(1), BabyBear::new(2)];
-
+    fn test_extension_field_with_condition() {
+        // Extension field variables (Permutation) with conditions
+        // Using FirstRow (degree 1) to test condition contribution
         let air = MockAir {
-            constraints: vec![],
-            width: 4,
-            periodic_columns: vec![periodic_col.clone()],
+            variable: VariableKind::Permutation,
+            exponent: 2,
+            condition: Condition::FirstRow,
+            ..Default::default()
         };
-
-        // Verify that the air returns correct periodic columns
-        let columns = air.periodic_columns();
-        assert_eq!(columns.len(), 1, "Should have 1 periodic column");
-        assert_eq!(columns[0], periodic_col, "Periodic column should match");
+        let degree = compute_degree(&air);
+        assert_eq!(degree, air.expected_degree());
+        assert_eq!(degree, 3); // is_first_row (1) * permutation^2 (2) = degree 3
     }
 
+    // ==================== AirWithPeriodicColumns Trait Tests ====================
+
     #[test]
-    fn test_periodic_columns_matrix() {
-        // Create multiple periodic columns of same length
-        let periodic_col1 = vec![BabyBear::new(1), BabyBear::new(2), BabyBear::new(3)];
-        let periodic_col2 = vec![BabyBear::new(4), BabyBear::new(5), BabyBear::new(6)];
+    fn test_periodic_columns_matrix_different_periods() {
+        // MockAir::default() has 2 columns with periods 2 and 4
+        let air = MockAir::default();
 
-        let air = MockAir {
-            constraints: vec![],
-            width: 4,
-            periodic_columns: vec![periodic_col1, periodic_col2],
-        };
+        assert_eq!(air.num_periodic_columns(), 2);
+        assert_eq!(air.get_column_period(0), Some(2));
+        assert_eq!(air.get_column_period(1), Some(4));
+        assert_eq!(air.get_max_column_period(), Some(4));
 
-        let matrix = air.periodic_columns_matrix().expect("Should have a matrix");
-        assert_eq!(matrix.height(), 3, "Matrix should have 3 rows");
-        assert_eq!(matrix.width(), 2, "Matrix should have 2 columns");
+        let matrix = air.periodic_columns_matrix().expect("should have matrix");
+        assert_eq!(matrix.height(), 4, "should extend to max period");
+        assert_eq!(matrix.width(), 2);
 
-        // Check values - row-major order: [row0_col0, row0_col1, row1_col0, row1_col1, ...]
+        // Column 0 repeats: [1, 2, 1, 2], Column 1: [10, 20, 30, 40]
         let expected = [
             BabyBear::new(1),
-            BabyBear::new(4),
+            BabyBear::new(10),
             BabyBear::new(2),
-            BabyBear::new(5),
-            BabyBear::new(3),
-            BabyBear::new(6),
+            BabyBear::new(20),
+            BabyBear::new(1),
+            BabyBear::new(30),
+            BabyBear::new(2),
+            BabyBear::new(40),
         ];
         assert_eq!(matrix.values, expected);
     }
