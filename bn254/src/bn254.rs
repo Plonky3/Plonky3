@@ -467,7 +467,7 @@ impl Neg for Bn254 {
 
     #[inline]
     fn neg(self) -> Self::Output {
-        self * Self::NEG_ONE
+        Self::ZERO - self
     }
 }
 
