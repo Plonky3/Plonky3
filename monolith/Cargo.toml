@@ -1,8 +1,13 @@
 [package]
 name = "p3-monolith"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
+description = "Implements the Monolith permutation and associated hash functions over Mersenne31 fields."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 generic-array = "1.0"

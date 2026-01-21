@@ -1,8 +1,13 @@
 [package]
 name = "p3-field"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
+description = "A modular framework for finite fields, including support for generic binomial extensions, SIMD-packed field arithmetic."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 p3-util = { path = "../util" }

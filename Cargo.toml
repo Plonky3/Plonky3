@@ -1,3 +1,12 @@
+[workspace.package]
+version = "0.2.4-succinct"
+license = "MIT OR Apache-2.0"
+edition = "2021"
+repository = "https://github.com/Plonky3/Plonky3"
+homepage = "https://github.com/Plonky3/Plonky3"
+keywords = ["cryptography", "SNARK", "PLONK", "FRI", "plonky3"]
+categories = ["cryptography::cryptocurrencies"]
+
 [workspace]
 resolver = "2"
 members = [

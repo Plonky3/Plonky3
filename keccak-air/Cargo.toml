@@ -1,8 +1,13 @@
 [package]
 name = "p3-keccak-air"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
+description = "An AIR for the Keccak-f permutation, assuming a field size between 2^16 and 2^32."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 p3-air = { path = "../air" }
