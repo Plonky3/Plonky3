@@ -1,13 +1,18 @@
 [package]
 name = "p3-matrix"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
+description = "A matrix library providing common matrix operations and traits for finite field elements."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
-p3-field = { path = "../field" }
-p3-maybe-rayon = { path = "../maybe-rayon" }
-p3-util = { path = "../util" }
+p3-field = { workspace = true }
+p3-maybe-rayon = { workspace = true }
+p3-util = { workspace = true }
 itertools = "0.12.0"
 rand = "0.8.5"
 serde = { version = "1.0", features = ["derive"] }
@@ -15,7 +20,7 @@ tracing = "0.1.37"
 
 [dev-dependencies]
 criterion = "0.5.1"
-p3-mersenne-31 = { path = "../mersenne-31" }
+p3-mersenne-31 = { workspace = true }
 
 [[bench]]
 name = "transpose_benchmark"

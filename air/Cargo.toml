@@ -1,13 +1,18 @@
 [package]
 name = "p3-air"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
+description = "Defines the Algebraic Intermediate Representation (AIR) interface and supporting utilities for STARK provers."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
-p3-field = { path = "../field" }
-p3-matrix = { path = "../matrix" }
+p3-field = { workspace = true }
+p3-matrix = { workspace = true }
 serde = { version = "1.0.204", features = ["derive","rc"] }
 
 [dev-dependencies]
-p3-matrix = { path = "../matrix" }
+p3-matrix = { workspace = true }
