@@ -29,7 +29,6 @@ pub fn cyclic_subgroup_coset_known_order<F: Field>(
 ///
 /// # Performance
 /// For large slices, use [`par_scale_slice_in_place`].
-///
 pub fn scale_slice_in_place_single_core<F: Field>(slice: &mut [F], s: F) {
     let (packed, sfx) = F::Packing::pack_slice_with_suffix_mut(slice);
     let packed_s: F::Packing = s.into();
