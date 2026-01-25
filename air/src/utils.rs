@@ -27,7 +27,7 @@ where
 ///
 /// Verifies at debug time that all inputs are boolean.
 #[inline(always)]
-pub fn checked_xor<F: Field, const N: usize>(xs: &[F]) -> F {
+pub fn checked_xor<F: Field>(xs: &[F]) -> F {
     xs.iter().fold(F::ZERO, |acc, x| {
         debug_assert!(x.is_zero() || x.is_one());
         acc.xor(x)
@@ -266,22 +266,22 @@ mod tests {
     fn test_checked_xor_multiple_cases() {
         // Input: [1, 0, 1] => XOR(1 ^ 0 ^ 1) = 0
         let bits = vec![F::ONE, F::ZERO, F::ONE];
-        let result = checked_xor::<F, 3>(&bits);
+        let result = checked_xor::<F>(&bits);
         assert_eq!(result, F::ZERO);
 
         // [1, 1, 1] => XOR = 1 ^ 1 ^ 1 = 1
         let bits = vec![F::ONE, F::ONE, F::ONE];
-        let result = checked_xor::<F, 3>(&bits);
+        let result = checked_xor::<F>(&bits);
         assert_eq!(result, F::ONE);
 
         // [0, 0, 0] => XOR = 0
         let bits = vec![F::ZERO, F::ZERO, F::ZERO];
-        let result = checked_xor::<F, 3>(&bits);
+        let result = checked_xor::<F>(&bits);
         assert_eq!(result, F::ZERO);
 
         // [1, 0, 1, 0] => XOR = 1 ^ 0 ^ 1 ^ 0 = 0
         let bits = vec![F::ONE, F::ZERO, F::ONE, F::ZERO];
-        let result = checked_xor::<F, 4>(&bits);
+        let result = checked_xor::<F>(&bits);
         assert_eq!(result, F::ZERO);
     }
 
