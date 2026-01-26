@@ -1,7 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_util::log2_ceil_u64;
 use sha3::Shake256;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 
@@ -62,8 +61,8 @@ const fn log2_no_std(x: u64) -> f32 {
     const LOG2_E: f32 = core::f32::consts::LOG2_E;
     const POW2_TOL: f32 = 0.0001;
     // Initial estimate x0 = floor(log2(x))
-    let x0 = log2_ceil_u64(x + 1) - 1;
-    let p0 = (1 << x0) as f32; // 2^x0
+    let x0 = x.ilog2();
+    let p0 = (1_u64 << x0) as f32; // 2^x0
     let x1 = x0 as f32 - LOG2_E * (1.0 - x as f32 / p0);
     // precision 20 determined by experiment
     let p1 = pow2_no_std(x1, POW2_TOL);
@@ -115,3 +114,4 @@ mod test {
         }
     }
 }
+
