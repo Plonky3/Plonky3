@@ -13,7 +13,6 @@ categories.workspace = true
 p3-field.workspace = true
 p3-mds.workspace = true
 p3-symmetric.workspace = true
-p3-util.workspace = true
 
 itertools.workspace = true
 rand.workspace = true
