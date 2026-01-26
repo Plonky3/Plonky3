@@ -48,7 +48,7 @@ impl Direction {
 
 /// Data required for global lookup arguments in a multi-STARK proof.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct LookupData<F: Clone> {
+pub struct LookupData<F> {
     /// Name of the global lookup interaction.
     pub name: String,
     /// Index of the auxiliary column (if there are multiple auxiliary columns, this is the first one)
