@@ -533,7 +533,7 @@ pub unsafe fn flatten_to_base<Base, BaseArray>(vec: Vec<BaseArray>) -> Vec<Base>
 /// This panics if the size of `BaseArray` is not a multiple of the size of `Base`.
 /// This panics if the length of the vector is not a multiple of the ratio of the sizes.
 #[inline]
-pub unsafe fn reconstitute_from_base<Base, BaseArray: Clone>(mut vec: Vec<Base>) -> Vec<BaseArray> {
+pub unsafe fn reconstitute_from_base<Base, BaseArray>(mut vec: Vec<Base>) -> Vec<BaseArray> {
     const {
         assert!(align_of::<Base>() == align_of::<BaseArray>());
         assert!(size_of::<BaseArray>().is_multiple_of(size_of::<Base>()));
