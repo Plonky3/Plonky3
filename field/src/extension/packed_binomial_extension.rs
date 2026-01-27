@@ -472,7 +472,7 @@ where
 {
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.reduce(|acc, x| acc * x).unwrap_or(Self::ZERO)
+        iter.reduce(|acc, x| acc * x).unwrap_or(Self::ONE)
     }
 }
 
