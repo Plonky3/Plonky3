@@ -123,7 +123,7 @@ where
         // Limiting the number of bits to the field size
         assert!((1 << bits) <= F::ORDER_U64 as usize);
         let rand_usize = u32::from_le_bytes(self.inner.sample_array()) as usize;
-        rand_usize & ((1 << bits) - 1)
+        crate::mask_low_bits_usize(rand_usize, bits)
     }
 }
 
@@ -241,7 +241,7 @@ where
         // Limiting the number of bits to the field size
         assert!((1 << bits) <= F::ORDER_U64 as usize);
         let rand_usize = u64::from_le_bytes(self.inner.sample_array()) as usize;
-        rand_usize & ((1 << bits) - 1)
+        crate::mask_low_bits_usize(rand_usize, bits)
     }
 }
 
