@@ -7,7 +7,9 @@ use p3_field::{BasedVectorSpace, Field, PrimeField64};
 use p3_monty_31::{MontyField31, MontyParameters};
 use p3_symmetric::{CryptographicPermutation, Hash};
 
-use crate::{CanObserve, CanSample, CanSampleBits, CanSampleUniformBits, FieldChallenger};
+use crate::{
+    CanObserve, CanSample, CanSampleBits, CanSampleUniformBits, FieldChallenger, mask_low_bits_usize,
+};
 
 /// A generic duplex sponge challenger over a finite field, used for generating deterministic
 /// challenges from absorbed inputs.
@@ -203,7 +205,7 @@ where
         assert!((1 << bits) < F::ORDER_U64);
         let rand_f: F = self.sample();
         let rand_usize = rand_f.as_canonical_u64() as usize;
-        rand_usize & ((1 << bits) - 1)
+        mask_low_bits_usize(rand_usize, bits)
     }
 }
 
@@ -340,7 +342,7 @@ where
         if bits <= F::MAX_SINGLE_SAMPLE_BITS {
             // Fast path: Only one sample is needed for sufficient uniformity.
             let rand_f = S::sample_value(self, m);
-            Ok(rand_f?.as_canonical_u64() as usize & ((1 << bits) - 1))
+            Ok(mask_low_bits_usize(rand_f?.as_canonical_u64() as usize, bits))
         } else {
             // Slow path: Sample twice to construct the required number of bits.
             // This reduces the bias introduced by a single, larger sample.
@@ -348,10 +350,10 @@ where
             let half_bits2 = bits - half_bits1;
             // Sample the first chunk of bits.
             let rand1 = S::sample_value(self, F::SAMPLING_BITS_M[half_bits1]);
-            let chunk1 = rand1?.as_canonical_u64() as usize & ((1 << half_bits1) - 1);
+            let chunk1 = mask_low_bits_usize(rand1?.as_canonical_u64() as usize, half_bits1);
             // Sample the second chunk of bits.
             let rand2 = S::sample_value(self, F::SAMPLING_BITS_M[half_bits2]);
-            let chunk2 = rand2?.as_canonical_u64() as usize & ((1 << half_bits2) - 1);
+            let chunk2 = mask_low_bits_usize(rand2?.as_canonical_u64() as usize, half_bits2);
 
             // Combine the chunks.
             Ok(chunk1 | (chunk2 << half_bits1))
@@ -542,7 +544,7 @@ mod tests {
 
         let bits = 3;
         let value = chal.sample_bits(bits);
-        let expected = G::ZERO.as_canonical_u64() as usize & ((1 << bits) - 1);
+        let expected = mask_low_bits_usize(G::ZERO.as_canonical_u64() as usize, bits);
         assert_eq!(value, expected);
     }
 
@@ -556,7 +558,7 @@ mod tests {
         // sampling bits should not panic, should return 0
         let bits = 2;
         let sample = chal.sample_bits(bits);
-        let expected = G::ZERO.as_canonical_u64() as usize & ((1 << bits) - 1);
+        let expected = mask_low_bits_usize(G::ZERO.as_canonical_u64() as usize, bits);
         assert_eq!(sample, expected);
     }
 
