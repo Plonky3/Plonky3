@@ -20,6 +20,11 @@ pub use multi_field_challenger::*;
 use p3_field::{Algebra, BasedVectorSpace, Field, PrimeField64};
 pub use serializing_challenger::*;
 
+#[inline(always)]
+pub(crate) fn mask_low_bits_usize(value: usize, bits: usize) -> usize {
+    value & ((1usize << bits) - 1)
+}
+
 /// A generic trait for absorbing elements into the transcript.
 ///
 /// Absorbed elements update the internal sponge state,
