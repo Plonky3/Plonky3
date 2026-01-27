@@ -249,8 +249,9 @@ where
     let alpha: Challenge<SC> = challenger.sample_algebra_element();
 
     // Build per-instance quotient domains and values, and split into chunks.
-    let mut quotient_chunk_domains: Vec<Domain<SC>> = Vec::new();
-    let mut quotient_chunk_mats: Vec<RowMajorMatrix<Val<SC>>> = Vec::new();
+    let total_chunks: usize = num_quotient_chunks.iter().sum();
+    let mut quotient_chunk_domains: Vec<Domain<SC>> = Vec::with_capacity(total_chunks);
+    let mut quotient_chunk_mats: Vec<RowMajorMatrix<Val<SC>>> = Vec::with_capacity(total_chunks);
     // Track ranges so we can map openings back to instances.
     let mut quotient_chunk_ranges: Vec<(usize, usize)> = Vec::with_capacity(n_instances);
 

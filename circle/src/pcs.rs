@@ -290,8 +290,9 @@ where
         // Iterate over our reduced columns and extract lambda - the multiple of the vanishing polynomial
         // which may appear in the reduced quotient due to CFFT dimension gap.
 
-        let mut lambdas = vec![];
-        let mut log_heights = vec![];
+        let num_reduced = reduced_openings.len();
+        let mut lambdas = Vec::with_capacity(num_reduced);
+        let mut log_heights = Vec::with_capacity(num_reduced);
         let first_layer_mats: Vec<RowMajorMatrix<Challenge>> = reduced_openings
             .into_iter()
             .map(|(log_height, (_, mut ro))| {

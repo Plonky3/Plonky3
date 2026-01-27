@@ -302,7 +302,8 @@ where
         .collect::<Vec<_>>();
 
     // Build the per-matrix openings for the aggregated quotient commitment.
-    let mut qc_round = Vec::new();
+    let total_qc_chunks: usize = num_quotient_chunks.iter().sum();
+    let mut qc_round = Vec::with_capacity(total_qc_chunks);
     for (i, domains) in randomized_quotient_chunks_domains.iter().enumerate() {
         let inst_qcs = &opened_values.instances[i]
             .base_opened_values
@@ -323,7 +324,7 @@ where
     // Preprocessed rounds: a single global commitment with one matrix per
     // instance that has preprocessed columns.
     if let Some(global) = &common.preprocessed {
-        let mut pre_round = Vec::new();
+        let mut pre_round = Vec::with_capacity(global.matrix_to_instance.len());
 
         for (matrix_index, &inst_idx) in global.matrix_to_instance.iter().enumerate() {
             let pre_w = preprocessed_widths[inst_idx];
@@ -370,7 +371,7 @@ where
 
     if is_lookup {
         let permutation_commit = commitments.permutation.clone().unwrap();
-        let mut permutation_round = Vec::new();
+        let mut permutation_round = Vec::with_capacity(ext_trace_domains.len());
         for (i, (ext_dom, inst_opened_vals)) in ext_trace_domains
             .iter()
             .zip(opened_values.instances.iter())

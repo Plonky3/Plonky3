@@ -1,4 +1,3 @@
-use alloc::vec;
 use alloc::vec::Vec;
 use core::iter;
 
@@ -170,9 +169,10 @@ where
 {
     let mut inputs_iter = inputs.into_iter().peekable();
     let mut folded = inputs_iter.next().unwrap();
-    let mut commits = vec![];
-    let mut data = vec![];
-    let mut pow_witnesses = vec![];
+    let num_rounds = log2_strict_usize(folded.len() / (params.blowup() * params.final_poly_len()));
+    let mut commits = Vec::with_capacity(num_rounds);
+    let mut data = Vec::with_capacity(num_rounds);
+    let mut pow_witnesses = Vec::with_capacity(num_rounds);
 
     while folded.len() > params.blowup() * params.final_poly_len() {
         // As folded is in bit reversed order, it looks like:
