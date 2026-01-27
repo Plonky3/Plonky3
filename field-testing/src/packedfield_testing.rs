@@ -328,12 +328,25 @@ macro_rules! test_packed_field {
 macro_rules! test_packed_extension_field {
     ($packedextfield:ty, $zeros:expr, $ones:expr) => {
         mod packed_field_tests {
+            use core::iter::Product;
+
             use p3_field::PrimeCharacteristicRing;
 
             // TODO: Add more tests for packed extension fields.
             #[test]
             fn test_ring_with_eq() {
                 $crate::test_ring_with_eq::<$packedextfield>($zeros, $ones);
+            }
+
+            #[test]
+            fn test_empty_product_returns_one() {
+                let empty: alloc::vec::Vec<$packedextfield> = alloc::vec![];
+                let result: $packedextfield = empty.into_iter().product();
+                assert_eq!(
+                    result,
+                    <$packedextfield>::ONE,
+                    "Product of empty iterator should return ONE, not ZERO"
+                );
             }
         }
     };
