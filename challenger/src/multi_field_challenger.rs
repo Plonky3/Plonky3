@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use p3_field::{BasedVectorSpace, Field, PrimeField, PrimeField32, reduce_32, split_32};
 use p3_symmetric::{CryptographicPermutation, Hash};
 
-use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
+use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger, mask_low_bits_usize};
 
 /// A challenger that operates natively on PF but produces challenges of F: PrimeField32.
 ///
@@ -194,6 +194,6 @@ where
         assert!((1 << bits) < F::ORDER_U32);
         let rand_f: F = self.sample();
         let rand_usize = rand_f.as_canonical_u32() as usize;
-        rand_usize & ((1 << bits) - 1)
+        mask_low_bits_usize(rand_usize, bits)
     }
 }
