@@ -12,7 +12,7 @@ use crate::util::reverse_matrix_index_bits;
 ///
 /// This trait allows interoperability between regular matrices and views
 /// that access their rows in a bit-reversed order.
-pub trait BitReversibleMatrix<T: Send + Sync + Clone>: Matrix<T> {
+pub trait BitReversibleMatrix<T>: Matrix<T> {
     /// The type returned when this matrix is viewed in bit-reversed order.
     type BitRev: BitReversibleMatrix<T>;
 
