@@ -64,7 +64,6 @@ cognitive_complexity = "allow"
 [workspace.dependencies]
 blake3 = { version = "1.5", default-features = false }
 clap = { version = "4.5.23", features = ["derive"] }
-clap_derive = "4.5.18"
 criterion = "0.8"
 hashbrown = "0.16.0"
 hex-literal = "1.0.0"
