@@ -103,8 +103,7 @@ pub(crate) const fn log2_binom(n: u64, k: u64) -> f32 {
 
 #[cfg(test)]
 mod test {
-    use super::log2_no_std;
-    use super::log2_binom;
+    use super::{log2_binom, log2_no_std};
 
     const TOLERANCE: f32 = 0.001;
 
