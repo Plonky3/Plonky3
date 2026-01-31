@@ -495,7 +495,7 @@ where
 
                 // Treating our matrix M as the evaluations of functions f_0, f_1, ...
                 // Compute the evaluations of `Mred(x) = f_0(x) + alpha*f_1(x) + ...`
-                let mat_compressed = info_span!("compress mat").in_scope(|| {
+                let mat_compressed = debug_span!("compress mat").in_scope(|| {
                     // This will be reused for all points z which M is opened at so we collect into a vector.
                     mat.rowwise_packed_dot_product::<Challenge>(&packed_alpha_powers)
                         .collect::<Vec<_>>()
