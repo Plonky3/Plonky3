@@ -20,7 +20,7 @@ use p3_uni_stark::{
     recompose_quotient_from_chunks,
 };
 use p3_util::zip_eq::zip_eq;
-use tracing::instrument;
+use tracing::{info_span, instrument};
 
 use crate::common::{CommonData, get_perm_challenges};
 use crate::config::{
@@ -101,15 +101,18 @@ where
             .unwrap_or(0);
         preprocessed_widths.push(pre_w);
 
-        let log_num_chunks = get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
-            air,
-            pre_w,
-            public_values[i].len(),
-            &all_lookups[i],
-            &lookup_data_to_expr(&global_lookup_data[i]),
-            config.is_zk(),
-            &lookup_gadget,
-        );
+        let log_num_chunks =
+            info_span!("infer log of constraint degree", air_idx = i).in_scope(|| {
+                get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
+                    air,
+                    pre_w,
+                    public_values[i].len(),
+                    &all_lookups[i],
+                    &lookup_data_to_expr(&global_lookup_data[i]),
+                    config.is_zk(),
+                    &lookup_gadget,
+                )
+            });
         log_num_quotient_chunks.push(log_num_chunks);
 
         let n_chunks = 1 << (log_num_chunks + config.is_zk());
@@ -402,6 +405,8 @@ where
     // Now check constraint equality per instance.
     // For each instance, recombine quotient from chunks at zeta and compare to folded constraints.
     for (i, air) in airs.iter().enumerate() {
+        let _air_span = info_span!("verify constraints", air_idx = i).entered();
+
         let qc_domains = &quotient_domains[i];
 
         // Recompose quotient(zeta) from chunks using utility function.

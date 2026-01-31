@@ -16,7 +16,7 @@ use p3_uni_stark::{
     SymbolicExpression,
 };
 use p3_util::log2_strict_usize;
-use tracing::{debug_span, instrument};
+use tracing::{debug_span, info_span, instrument};
 
 #[cfg(debug_assertions)]
 use crate::check_constraints::DebugConstraintBuilderWithLookups;
@@ -133,15 +133,18 @@ where
                 .and_then(|g| g.instances[i].as_ref().map(|m| m.width))
                 .unwrap_or(0);
             preprocessed_widths.push(pre_w);
-            let lq_chunks = get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
-                air,
-                pre_w,
-                pv.len(),
-                &all_lookups[i],
-                &lookup_data_to_expr(&lookup_data[i]),
-                config.is_zk(),
-                &lookup_gadget,
-            );
+            let lq_chunks =
+                info_span!("infer log of constraint degree", air_idx = i).in_scope(|| {
+                    get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
+                        air,
+                        pre_w,
+                        pv.len(),
+                        &all_lookups[i],
+                        &lookup_data_to_expr(&lookup_data[i]),
+                        config.is_zk(),
+                        &lookup_gadget,
+                    )
+                });
             let n_chunks = 1 << (lq_chunks + config.is_zk());
             (lq_chunks, n_chunks)
         })
@@ -258,6 +261,8 @@ where
 
     // TODO: Parallelize this loop for better performance with many instances.
     for (i, trace_domain) in trace_domains.iter().enumerate() {
+        let _air_span = info_span!("compute quotient", air_idx = i).entered();
+
         let log_chunks = log_num_quotient_chunks[i];
         let n_chunks = num_quotient_chunks[i];
         // Disjoint domain of size ext_degree * num_quotient_chunks

@@ -10,7 +10,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
 
-#[instrument(skip_all)]
+#[instrument(skip_all, level = "debug")]
 pub fn get_log_num_quotient_chunks<F, A>(
     air: &A,
     preprocessed_width: usize,
@@ -24,7 +24,11 @@ where
     get_log_quotient_degree_extension(air, preprocessed_width, num_public_values, 0, 0, is_zk)
 }
 
-#[instrument(name = "infer log of base and extension constraint degree", skip_all)]
+#[instrument(
+    name = "infer log of base and extension constraint degree",
+    skip_all,
+    level = "debug"
+)]
 pub fn get_log_quotient_degree_extension<F, EF, A>(
     air: &A,
     preprocessed_width: usize,

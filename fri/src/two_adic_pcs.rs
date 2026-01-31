@@ -33,7 +33,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
-use tracing::{info_span, instrument};
+use tracing::{debug_span, instrument};
 
 use crate::verifier::{self, FriError};
 use crate::{FriFoldingStrategy, FriParameters, FriProof, prover};
@@ -403,25 +403,26 @@ where
                             .iter()
                             .map(|&point| {
                                 let _guard =
-                                    info_span!("evaluate matrix", dims = %mat.dimensions())
+                                    debug_span!("evaluate matrix", dims = %mat.dimensions())
                                         .entered();
 
                                 // Use Barycentric interpolation to evaluate each column of the matrix at the given point.
-                                let ys =
-                                    info_span!("compute opened values with Lagrange interpolation")
-                                        .in_scope(|| {
-                                            // Get the relevant inverse denominators for this point and use these to
-                                            // interpolate to get the evaluation of each polynomial in the matrix
-                                            // at the desired point.
-                                            let inv_denoms = &inv_denoms.get(&point).unwrap()[..h];
-                                            interpolate_coset_with_precomputation(
-                                                &low_coset,
-                                                Val::GENERATOR,
-                                                point,
-                                                coset_h,
-                                                inv_denoms,
-                                            )
-                                        });
+                                let ys = debug_span!(
+                                    "compute opened values with Lagrange interpolation"
+                                )
+                                .in_scope(|| {
+                                    // Get the relevant inverse denominators for this point and use these to
+                                    // interpolate to get the evaluation of each polynomial in the matrix
+                                    // at the desired point.
+                                    let inv_denoms = &inv_denoms.get(&point).unwrap()[..h];
+                                    interpolate_coset_with_precomputation(
+                                        &low_coset,
+                                        Val::GENERATOR,
+                                        point,
+                                        coset_h,
+                                        inv_denoms,
+                                    )
+                                });
 
                                 challenger.observe_algebra_slice(&ys);
                                 ys
@@ -482,7 +483,7 @@ where
                 izip!(mats.iter(), points.iter(), openings_for_round.iter())
             {
                 let _guard =
-                    info_span!("reduce matrix quotient", dims = %mat.dimensions()).entered();
+                    debug_span!("reduce matrix quotient", dims = %mat.dimensions()).entered();
 
                 let log_height = log2_strict_usize(mat.height());
 
@@ -494,7 +495,7 @@ where
 
                 // Treating our matrix M as the evaluations of functions f_0, f_1, ...
                 // Compute the evaluations of `Mred(x) = f_0(x) + alpha*f_1(x) + ...`
-                let mat_compressed = info_span!("compress mat").in_scope(|| {
+                let mat_compressed = debug_span!("compress mat").in_scope(|| {
                     // This will be reused for all points z which M is opened at so we collect into a vector.
                     mat.rowwise_packed_dot_product::<Challenge>(&packed_alpha_powers)
                         .collect::<Vec<_>>()

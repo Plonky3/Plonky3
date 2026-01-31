@@ -367,7 +367,7 @@ where
     prove_with_preprocessed::<SC, A>(config, air, trace, public_values, None)
 }
 
-#[instrument(skip_all)]
+#[instrument(skip_all, level = "debug")]
 // TODO: Group some arguments to remove the `allow`?
 #[allow(clippy::too_many_arguments)]
 pub fn quotient_values<SC, A, Mat>(
