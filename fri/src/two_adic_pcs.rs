@@ -33,7 +33,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
-use tracing::{debug_span, info_span, instrument};
+use tracing::{debug_span, instrument};
 
 use crate::verifier::{self, FriError};
 use crate::{FriFoldingStrategy, FriParameters, FriProof, prover};
