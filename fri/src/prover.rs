@@ -13,7 +13,7 @@ use tracing::{debug_span, info_span, instrument};
 
 use crate::{
     CommitPhaseProofStep, FriFoldingStrategy, FriParameters, FriProof, ProverDataWithOpeningPoints,
-    QueryProof,
+    QueryProof, compute_log_arity_for_round,
 };
 
 /// Create a proof that an opening `f(zeta)` is correct by proving that the
@@ -100,8 +100,8 @@ where
         // theoretical minimum.
         iter::repeat_with(|| {
             let index = challenger.sample_bits(log_max_height + folding.extra_query_index_bits());
-            // For each index, create a proof that the folding operations along the chain:
-            // round 0: index, round 1: index >> 1, round 2: index >> 2, ... are correct.
+            // For each index, create a proof that the folding operations along the chain are correct.
+            // With variable arity, the index shifts by log_arity each round.
             QueryProof {
                 input_proof: open_input(
                     log_global_max_height,
@@ -111,6 +111,7 @@ where
                 ),
                 commit_phase_openings: answer_query(
                     params,
+                    &commit_phase_result.log_arities,
                     &commit_phase_result.data,
                     index >> folding.extra_query_index_bits(),
                 ),
@@ -132,17 +133,21 @@ where
 struct CommitPhaseResult<F: Field, M: Mmcs<F>, Witness> {
     commits: Vec<M::Commitment>,
     data: Vec<M::ProverData<RowMajorMatrix<F>>>,
+    log_arities: Vec<usize>,
     pow_witnesses: Vec<Witness>,
     final_poly: Vec<F>,
 }
 
 /// Perform the commit phase of the FRI protocol.
 ///
-/// In each round we reduce our evaluations over `H` to evaluations over `H^2` by defining
+/// In each round we reduce our evaluations over `H` to evaluations over `H^k` (where k is the arity)
+/// by folding with a random challenge. For instance, for arity 2, we have:
 /// ```text
 ///     f_{i + 1}(x^2) = (f_i(x) + f_i(-x))/2 + beta_i (f_i(x) - f_i(-x))/2x
 /// ```
-/// We then commit to the evaluation vector of `f_{i + 1}` over `H^2`.
+/// We then commit to the evaluation vector over the smaller domain, i.e. `f_{i + 1}` over `H^2` for arity 2.
+///
+/// The arity for each round is dynamically computed to ensure we always commit at each input height level.
 ///
 /// Once the degree of our polynomial falls below `final_poly_degree`, we compute the coefficients of our
 /// polynomial and return them along with all intermediate evaluations and corresponding commitments.
@@ -172,13 +177,28 @@ where
     let mut folded = inputs_iter.next().unwrap();
     let mut commits = vec![];
     let mut data = vec![];
+    let mut log_arities = vec![];
     let mut pow_witnesses = vec![];
 
+    let log_final_height = params.log_blowup + params.log_final_poly_len;
+
     while folded.len() > params.blowup() * params.final_poly_len() {
-        // As folded is in bit reversed order, it looks like:
-        //      `[f_i(h^0), f_i(h^{N/2}), f_i(h^{N/4}), f_i(h^{3N/4}), ...] = [f_i(1), f_i(-1), f_i(h^{N/4}), f_i(-h^{N/4}), ...]`
-        // so the relevant evaluations are adjacent and we can just reinterpret the vector as a matrix of width 2.
-        let leaves = RowMajorMatrix::new(folded, 2);
+        let log_current_height = log2_strict_usize(folded.len());
+        let next_input_log_height = inputs_iter.peek().map(|v| log2_strict_usize(v.len()));
+
+        //Compute the arity for this round
+        let log_arity = compute_log_arity_for_round(
+            log_current_height,
+            next_input_log_height,
+            log_final_height,
+            params.max_log_arity,
+        );
+        let arity = 1 << log_arity;
+        log_arities.push(log_arity);
+
+        // As folded is in bit reversed order, the evaluations at conjugate points are adjacent.
+        // We reinterpret the vector as a matrix of width `arity`.
+        let leaves = RowMajorMatrix::new(folded, arity);
 
         // Commit to these evaluations and observe the commitment.
         let (commit, prover_data) = params.mmcs.commit_matrix(leaves);
@@ -195,9 +215,8 @@ where
 
         // We passed ownership of `leaves` to the MMCS, so get a reference to it
         let leaves = params.mmcs.get_matrices(&prover_data).pop().unwrap();
-        // Do the folding operation:
-        //      `f_{i + 1}'(x^2) = (f_i(x) + f_i(-x))/2 + beta_i (f_i(x) - f_i(-x))/2x`
-        folded = folding.fold_matrix(beta, leaves.as_view());
+        // Do the folding operation with the computed arity
+        folded = folding.fold_matrix(beta, log_arity, leaves.as_view());
 
         data.push(prover_data);
 
@@ -206,7 +225,9 @@ where
             // Each element of `inputs_iter` is a reduced opening polynomial, which is itself a
             // random linear combination `f_{i, 0} + alpha f_{i, 1} + ...`, when we add it
             // to the current folded polynomial, we need to multiply by a random factor.
-            izip!(&mut folded, v).for_each(|(c, x)| *c += beta.square() * x);
+            // We use beta^arity as the random factor to maintain independence.
+            let beta_pow = (0..arity).fold(Challenge::ONE, |acc, _| acc * beta);
+            izip!(&mut folded, v).for_each(|(c, x)| *c += beta_pow * x);
         }
     }
 
@@ -224,32 +245,34 @@ where
     CommitPhaseResult {
         commits,
         data,
+        log_arities,
         pow_witnesses,
         final_poly,
     }
 }
 
-/// Given an `index` produce a proof that the chain of folds at `index, index >> 1, ... ` are correct.
+/// Given an `index` produce a proof that the chain of folds are correct.
 /// This is the prover's complement to the verifier's [`verify_query`] function.
 ///
 /// In addition to the output of this function, the prover must also supply the verifier with the input values
 /// (with associated opening proofs). These are produced by the `open_input` function passed into `prove_fri`.
 ///
-/// For each `i` in `[0, ..., num_folds)` this returns the value at `(index >> i) ^ 1` in round `i` along with
-/// an opening proof. The verifier can then use the values in round `i` at `index >> i` and `(index >> i) ^ 1`
-/// along with possibly an input value to compute the value at `index >> (i + 1)` in round `i + 1`.
+/// For each round `i`, this returns the sibling values (all values in the group except the queried one)
+/// along with an opening proof. The verifier can then reconstruct the full group, verify the commitment,
+/// and fold to get the value at the parent index.
 ///
-/// We repeat until we reach the final round where the verifier can check the value against the
-/// polynomial they were sent.
+/// With variable arity, the index shifts by `log_arities[i]` each round instead of always by 1
+/// (i.e. when arity is fixed to 2).
 ///
 /// Arguments:
 /// - `params`: The parameters for the specific FRI protocol instance.
+/// - `log_arities`: The log2 of the arity used for each round.
 /// - `folded_polynomial_commits`: A slice of commitments to the intermediate stage polynomials.
-/// - `start_index`: The opening index for the unfolded polynomial. For folded polynomials,
-///   we use this index right shifted by the number of folds.
+/// - `start_index`: The opening index for the unfolded polynomial.
 #[inline]
 fn answer_query<F, M>(
     config: &FriParameters<M>,
+    log_arities: &[usize],
     folded_polynomial_commits: &[M::ProverData<RowMajorMatrix<F>>],
     start_index: usize,
 ) -> Vec<CommitPhaseProofStep<F, M>>
@@ -257,29 +280,48 @@ where
     F: Field,
     M: Mmcs<F>,
 {
+    let mut current_index = start_index;
+
     folded_polynomial_commits
         .iter()
         .enumerate()
         .map(|(i, commit)| {
-            // After i folding rounds, the current index we are looking at is `index >> i`.
-            let index_i = start_index >> i;
-            let index_i_sibling = index_i ^ 1;
-            let index_pair = index_i >> 1;
+            let log_arity = log_arities[i];
+            let arity = 1 << log_arity;
 
-            // Get a proof that the pair of indices are correct.
+            // Index of this element within its group of `arity` elements
+            let index_in_group = current_index % arity;
+            // Index of the group (row in the committed matrix)
+            let group_index = current_index >> log_arity;
+
+            // Get a proof that the group of indices are correct.
             let (mut opened_rows, opening_proof) =
-                config.mmcs.open_batch(index_pair, commit).unpack();
+                config.mmcs.open_batch(group_index, commit).unpack();
 
-            // opened_rows should contain just the value at index_i and its sibling.
-            // We just need to get the sibling.
+            // opened_rows should contain just the values in this group.
             assert_eq!(opened_rows.len(), 1);
-            let opened_row = &opened_rows.pop().unwrap();
-            assert_eq!(opened_row.len(), 2, "Committed data should be in pairs");
-            let sibling_value = opened_row[index_i_sibling % 2];
+            let opened_row = opened_rows.pop().unwrap();
+            assert_eq!(
+                opened_row.len(),
+                arity,
+                "Committed data should have arity {} elements",
+                arity
+            );
 
-            // Add the sibling and the proof to the vector.
+            // Get all siblings (exclude self)
+            let sibling_values: Vec<_> = opened_row
+                .into_iter()
+                .enumerate()
+                .filter(|(j, _)| *j != index_in_group)
+                .map(|(_, v)| v)
+                .collect();
+
+            current_index = group_index;
+
+            // Add the siblings and the proof to the vector.
             CommitPhaseProofStep {
-                sibling_value,
+                log_arity: log_arity as u8,
+                sibling_values,
                 opening_proof,
             }
         })

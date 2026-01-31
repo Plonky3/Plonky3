@@ -37,14 +37,15 @@ impl<F: ComplexExtendable, EF: ExtensionField<F>, InputProof, InputError: Debug>
         &self,
         index: usize,
         log_folded_height: usize,
+        log_arity: usize,
         beta: EF,
         evals: impl Iterator<Item = EF>,
     ) -> EF {
-        fold_x_row(index, log_folded_height, beta, evals)
+        fold_x_row(index, log_folded_height, log_arity, beta, evals)
     }
 
-    fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, m: M) -> Vec<EF> {
-        fold_x(beta, &m)
+    fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, log_arity: usize, m: M) -> Vec<EF> {
+        fold_x(beta, log_arity, &m)
     }
 }
 
@@ -96,8 +97,11 @@ pub(crate) fn fold_y_row<F: ComplexExtendable, EF: ExtensionField<F>>(
 
 pub(crate) fn fold_x<F: ComplexExtendable, EF: ExtensionField<F>>(
     beta: EF,
+    log_arity: usize,
     evals: &impl Matrix<EF>,
 ) -> Vec<EF> {
+    // Currently only arity 2 is supported for Circle PCS
+    assert_eq!(log_arity, 1, "Circle PCS currently only supports arity 2");
     let log_n = log2_strict_usize(evals.width() * evals.height());
     // +1 because twiddles after the first layer come from the x coordinates of the larger domain.
     let domain = CircleDomain::standard(log_n + 1);
@@ -111,12 +115,14 @@ pub(crate) fn fold_x<F: ComplexExtendable, EF: ExtensionField<F>>(
 pub(crate) fn fold_x_row<F: ComplexExtendable, EF: ExtensionField<F>>(
     index: usize,
     log_folded_height: usize,
+    log_arity: usize,
     beta: EF,
     evals: impl Iterator<Item = EF>,
 ) -> EF {
+    // Currently only arity 2 is supported for Circle PCS
+    assert_eq!(log_arity, 1, "Circle PCS currently only supports arity 2");
     let evals = evals.collect_vec();
     assert_eq!(evals.len(), 2);
-    let log_arity = log2_strict_usize(evals.len());
 
     let t = CircleDomain::<F>::standard(log_folded_height + log_arity + 1)
         .nth_x_twiddle(reverse_bits_len(index, log_folded_height))
@@ -146,6 +152,7 @@ mod tests {
     fn fold_matrix_same_as_row() {
         let mut rng = SmallRng::seed_from_u64(1);
         let log_folded_height = 5;
+        let log_arity = 1; // arity 2
         let m = RowMajorMatrix::<EF>::rand(&mut rng, 1 << log_folded_height, 2);
         let beta: EF = rng.random();
 
@@ -155,9 +162,17 @@ mod tests {
             .collect_vec();
         assert_eq!(mat_y_folded, row_y_folded);
 
-        let mat_x_folded = fold_x::<F, EF>(beta, &m);
+        let mat_x_folded = fold_x::<F, EF>(beta, log_arity, &m);
         let row_x_folded = (0..(1 << log_folded_height))
-            .map(|i| fold_x_row::<F, EF>(i, log_folded_height, beta, m.row(i).unwrap().into_iter()))
+            .map(|i| {
+                fold_x_row::<F, EF>(
+                    i,
+                    log_folded_height,
+                    log_arity,
+                    beta,
+                    m.row(i).unwrap().into_iter(),
+                )
+            })
             .collect_vec();
         assert_eq!(mat_x_folded, row_x_folded);
     }
@@ -172,6 +187,7 @@ mod tests {
             .dim()
         };
 
+        let log_arity = 1; // arity 2
         let mut rng = SmallRng::seed_from_u64(1);
         for (log_n, log_blowup) in iproduct!(3..6, 1..4) {
             let mut values = CircleEvaluations::evaluate(
@@ -184,7 +200,7 @@ mod tests {
             values = fold_y(rng.random(), &RowMajorMatrix::new(values, 2));
             assert_eq!(vec_dim(&values), values.len() >> log_blowup);
             for _ in 0..(log_n - 1) {
-                values = fold_x(rng.random(), &RowMajorMatrix::new(values, 2));
+                values = fold_x(rng.random(), log_arity, &RowMajorMatrix::new(values, 2));
                 assert_eq!(vec_dim(&values), values.len() >> log_blowup);
             }
         }

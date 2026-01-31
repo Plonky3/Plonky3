@@ -50,8 +50,27 @@ where
         return Err(FriError::InvalidPowWitness);
     }
 
-    // The log of the maximum domain size.
-    let log_max_height = proof.commit_phase_commits.len() + params.log_blowup;
+    // Validate that all query proofs have the same number of commit phase openings
+    if !proof
+        .query_proofs
+        .iter()
+        .all(|qp| qp.commit_phase_openings.len() == proof.commit_phase_commits.len())
+    {
+        return Err(FriError::InvalidProofShape);
+    }
+
+    // With variable arity, compute log_max_height by summing all log_arities
+    let total_log_reduction: usize = proof
+        .query_proofs
+        .first()
+        .map(|qp| {
+            qp.commit_phase_openings
+                .iter()
+                .map(|o| o.log_arity as usize)
+                .sum()
+        })
+        .unwrap_or(0);
+    let log_max_height = total_log_reduction + params.log_blowup;
 
     for qp in &proof.query_proofs {
         let index = challenger.sample_bits(log_max_height + folding.extra_query_index_bits());
@@ -64,7 +83,7 @@ where
 
         // Starting at the evaluation at `index` of the initial domain,
         // perform fri folds until the domain size reaches the final domain size.
-        // Check after each fold that the pair of sibling evaluations at the current
+        // Check after each fold that the group of sibling evaluations at the current
         // node match the commitment.
         let folded_eval = verify_query(
             folding,
@@ -98,7 +117,7 @@ type CommitStep<'a, F, M> = (
         &'a F, // The challenge point beta used for the next fold of Circle-FRI evaluations.
         &'a <M as Mmcs<F>>::Commitment, // A commitment to the Circle-FRI evaluations on the current domain.
     ),
-    &'a CircleCommitPhaseProofStep<F, M>, // The sibling and opening proof for the current Circle-FRI node.
+    &'a CircleCommitPhaseProofStep<F, M>, // The siblings and opening proof for the current Circle-FRI node.
 );
 
 /// Verifies a single query chain in the Circle-FRI proof.
@@ -106,8 +125,11 @@ type CommitStep<'a, F, M> = (
 /// Given an initial `index` corresponding to a point in the initial domain
 /// and a series of `reduced_openings` corresponding to evaluations of
 /// polynomials to be added in at specific domain sizes, perform the standard
-/// sequence of Circle-FRI folds, checking at each step that the pair of sibling evaluations
+/// sequence of Circle-FRI folds, checking at each step that the group of sibling evaluations
 /// match the commitment.
+///
+/// With variable arity, each round may fold by a different factor determined by the
+/// `log_arity` field in the opening.
 fn verify_query<'a, Folding, F, EF, M>(
     folding: &Folding,
     params: &FriParameters<M>,
@@ -125,32 +147,48 @@ where
     let mut folded_eval = EF::ZERO;
     let mut ro_iter = reduced_openings.into_iter().peekable();
 
+    // Track the current log_height as we fold down
+    let mut log_current_height = log_max_height;
+
     // We start with evaluations over a domain of size (1 << log_max_height). We fold
-    // using FRI until the domain size reaches (1 << log_final_height). This is equal to 1 << log_blowup
-    // currently as we have not yet implemented early stopping.
-    for (log_folded_height, ((&beta, comm), opening)) in zip_eq(
-        (params.log_blowup..log_max_height).rev(),
-        steps,
-        FriError::InvalidProofShape,
-    )? {
+    // using FRI until the domain size reaches (1 << log_blowup).
+    for ((&beta, comm), opening) in steps {
+        let log_arity = opening.log_arity as usize;
+        let arity = 1 << log_arity;
+
+        // Validate that sibling_values has the expected length (arity - 1)
+        if opening.sibling_values.len() != arity - 1 {
+            return Err(FriError::InvalidProofShape);
+        }
+
         // If there are new polynomials to roll in at this height, do so.
-        if let Some((_, ro)) = ro_iter.next_if(|(lh, _)| *lh == log_folded_height + 1) {
+        if let Some((_, ro)) = ro_iter.next_if(|(lh, _)| *lh == log_current_height) {
             folded_eval += ro;
         }
 
-        // Get the index of the other sibling of the current fri node.
-        let index_sibling = index ^ 1;
+        // Reconstruct the full evaluation row from self + siblings
+        let index_in_group = index % arity;
+        let mut evals = vec![EF::ZERO; arity];
+        evals[index_in_group] = folded_eval;
 
-        let mut evals = vec![folded_eval; 2];
-        evals[index_sibling % 2] = opening.sibling_value;
+        let mut sibling_idx = 0;
+        for j in 0..arity {
+            if j != index_in_group {
+                evals[j] = opening.sibling_values[sibling_idx];
+                sibling_idx += 1;
+            }
+        }
+
+        // Compute the new height after folding
+        let log_folded_height = log_current_height - log_arity;
 
         let dims = &[Dimensions {
-            width: 2,
+            width: arity,
             height: 1 << log_folded_height,
         }];
 
         // Replace index with the index of the parent fri node.
-        index >>= 1;
+        index >>= log_arity;
 
         // Verify the commitment to the evaluations of the sibling nodes.
         params
@@ -159,12 +197,21 @@ where
                 comm,
                 dims,
                 index,
-                BatchOpeningRef::new(&[evals.clone()], &opening.opening_proof), // It's possible to remove the clone here but unnecessary as evals is tiny.
+                BatchOpeningRef::new(&[evals.clone()], &opening.opening_proof),
             )
             .map_err(FriError::CommitPhaseMmcsError)?;
 
-        // Fold the pair of evaluations of sibling nodes into the evaluation of the parent fri node.
-        folded_eval = folding.fold_row(index, log_folded_height, beta, evals.into_iter());
+        // Fold the group of evaluations of sibling nodes into the evaluation of the parent fri node.
+        folded_eval =
+            folding.fold_row(index, log_folded_height, log_arity, beta, evals.into_iter());
+
+        // Update current height
+        log_current_height = log_folded_height;
+    }
+
+    // Verify we reached the expected final height
+    if log_current_height != params.log_blowup {
+        return Err(FriError::InvalidProofShape);
     }
 
     // If ro_iter is not empty, we failed to fold in some polynomial evaluations.

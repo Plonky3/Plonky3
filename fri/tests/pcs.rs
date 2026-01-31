@@ -179,6 +179,29 @@ mod babybear_fri_pcs {
         let fri_params = FriParameters {
             log_blowup,
             log_final_poly_len: 0,
+            max_log_arity: 1,
+            num_queries: 10,
+            commit_proof_of_work_bits: 0,
+            query_proof_of_work_bits: 8,
+            mmcs: challenge_mmcs,
+        };
+
+        let pcs = MyPcs::new(Dft::default(), val_mmcs, fri_params);
+        (pcs, Challenger::new(perm))
+    }
+
+    fn get_pcs_high_arity(log_blowup: usize) -> (MyPcs, Challenger) {
+        let perm = Perm::new_from_rng_128(&mut seeded_rng());
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm.clone());
+
+        let val_mmcs = ValMmcs::new(hash, compress);
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+
+        let fri_params = FriParameters {
+            log_blowup,
+            log_final_poly_len: 0,
+            max_log_arity: 2,
             num_queries: 10,
             commit_proof_of_work_bits: 0,
             query_proof_of_work_bits: 8,
@@ -194,6 +217,9 @@ mod babybear_fri_pcs {
     }
     mod blowup_2 {
         make_tests_for_pcs!(super::get_pcs(2));
+    }
+    mod high_arity_blowup_1 {
+        make_tests_for_pcs!(super::get_pcs_high_arity(1));
     }
 }
 
@@ -233,6 +259,7 @@ mod m31_fri_pcs {
         let fri_params = FriParameters {
             log_blowup,
             log_final_poly_len: 0,
+            max_log_arity: 1,
             num_queries: 10,
             commit_proof_of_work_bits: 0,
             query_proof_of_work_bits: 8,

@@ -214,6 +214,7 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     let fri_params = FriParameters {
         log_blowup,
         log_final_poly_len: 3,
+        max_log_arity: 2,
         num_queries: 40,
         commit_proof_of_work_bits: 0,
         query_proof_of_work_bits: 8,
@@ -326,6 +327,7 @@ fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     let fri_params = FriParameters {
         log_blowup,
         log_final_poly_len: 0,
+        max_log_arity: 1,
         num_queries: 40,
         commit_proof_of_work_bits: 0,
         query_proof_of_work_bits: 8,

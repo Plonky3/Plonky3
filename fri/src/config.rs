@@ -10,6 +10,9 @@ pub struct FriParameters<M> {
     pub log_blowup: usize,
     // TODO: This parameter and FRI early stopping are not yet implemented in `CirclePcs`.
     pub log_final_poly_len: usize,
+    /// Maximum folding arity (log2). Defaults to 1 (binary folding).
+    /// The actual arity per round may be smaller to ensure commitments exist at each input height.
+    pub max_log_arity: usize,
     pub num_queries: usize,
     /// Number of bits for the PoW phase before sampling _each_ batching challenge.
     pub commit_proof_of_work_bits: usize,
@@ -25,6 +28,10 @@ impl<M> FriParameters<M> {
 
     pub const fn final_poly_len(&self) -> usize {
         1 << self.log_final_poly_len
+    }
+
+    pub const fn max_arity(&self) -> usize {
+        1 << self.max_log_arity
     }
 
     /// Returns the soundness bits of this FRI instance based on the
@@ -47,19 +54,57 @@ pub trait FriFoldingStrategy<F: Field, EF: ExtensionField<F>> {
     /// They will be passed to our callbacks, but ignored (shifted off) by FRI.
     fn extra_query_index_bits(&self) -> usize;
 
-    /// Fold a row, returning a single column.
-    /// Right now the input row will always be 2 columns wide,
-    /// but we may support higher folding arity in the future.
+    /// Fold a row with the specified arity, returning a single value.
+    /// The input row has `2^log_arity` elements.
     fn fold_row(
         &self,
         index: usize,
         log_height: usize,
+        log_arity: usize,
         beta: EF,
         evals: impl Iterator<Item = EF>,
     ) -> EF;
 
-    /// Same as applying fold_row to every row, possibly faster.
-    fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, m: M) -> Vec<EF>;
+    /// Fold an entire matrix with the specified arity.
+    /// The matrix has width `2^log_arity` and the result has length `matrix.height()`.
+    fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, log_arity: usize, m: M) -> Vec<EF>;
+}
+
+/// Computes the log_arity for the current round.
+///
+/// Given the current log_height, the next input's log_height (if any), the log of the
+/// final target height, and the maximum allowed log_arity, returns the actual log_arity
+/// to use for this round.
+///
+/// This ensures we always commit at each input height level and don't go past the final
+/// target height.
+#[inline]
+pub fn compute_log_arity_for_round(
+    log_current_height: usize,
+    next_input_log_height: Option<usize>,
+    log_final_height: usize,
+    max_log_arity: usize,
+) -> usize {
+    debug_assert!(
+        log_current_height > log_final_height,
+        "should only be called when above final height"
+    );
+
+    let max_fold_to_target = log_current_height - log_final_height;
+
+    let max_fold = match next_input_log_height {
+        Some(next_log_height) => {
+            debug_assert!(
+                log_current_height > next_log_height,
+                "next input height should be strictly smaller"
+            );
+            let max_fold_to_next = log_current_height - next_log_height;
+            max_fold_to_next.min(max_fold_to_target)
+        }
+        None => max_fold_to_target,
+    };
+
+    max_fold.min(max_log_arity)
 }
 
 /// Creates a minimal set of `FriParameters` for testing purposes.
@@ -71,6 +116,7 @@ pub const fn create_test_fri_params<Mmcs>(
     FriParameters {
         log_blowup: 2,
         log_final_poly_len,
+        max_log_arity: 1,
         num_queries: 2,
         commit_proof_of_work_bits: 1,
         query_proof_of_work_bits: 1,
@@ -84,6 +130,7 @@ pub const fn create_test_fri_params_zk<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> 
     FriParameters {
         log_blowup: 2,
         log_final_poly_len: 0,
+        max_log_arity: 1,
         num_queries: 2,
         commit_proof_of_work_bits: 1,
         query_proof_of_work_bits: 1,
@@ -97,6 +144,21 @@ pub const fn create_benchmark_fri_params<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs
     FriParameters {
         log_blowup: 1,
         log_final_poly_len: 0,
+        max_log_arity: 1,
+        num_queries: 100,
+        commit_proof_of_work_bits: 0,
+        query_proof_of_work_bits: 16,
+        mmcs,
+    }
+}
+
+/// Creates a set of `FriParameters` suitable for benchmarking.
+/// These parameters represent typical settings used in production-like scenarios.
+pub const fn create_benchmark_fri_params_high_arity<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> {
+    FriParameters {
+        log_blowup: 1,
+        log_final_poly_len: 0,
+        max_log_arity: 3,
         num_queries: 100,
         commit_proof_of_work_bits: 0,
         query_proof_of_work_bits: 16,
@@ -110,6 +172,7 @@ pub const fn create_benchmark_fri_params_zk<Mmcs>(mmcs: Mmcs) -> FriParameters<M
     FriParameters {
         log_blowup: 2,
         log_final_poly_len: 0,
+        max_log_arity: 1,
         num_queries: 100,
         commit_proof_of_work_bits: 0,
         query_proof_of_work_bits: 16,
