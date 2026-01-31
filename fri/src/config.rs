@@ -92,17 +92,14 @@ pub fn compute_log_arity_for_round(
 
     let max_fold_to_target = log_current_height - log_final_height;
 
-    let max_fold = match next_input_log_height {
-        Some(next_log_height) => {
-            debug_assert!(
-                log_current_height > next_log_height,
-                "next input height should be strictly smaller"
-            );
-            let max_fold_to_next = log_current_height - next_log_height;
-            max_fold_to_next.min(max_fold_to_target)
-        }
-        None => max_fold_to_target,
-    };
+    let max_fold = next_input_log_height.map_or(max_fold_to_target, |next_log_height| {
+        debug_assert!(
+            log_current_height > next_log_height,
+            "next input height should be strictly smaller"
+        );
+        let max_fold_to_next = log_current_height - next_log_height;
+        max_fold_to_next.min(max_fold_to_target)
+    });
 
     max_fold.min(max_log_arity)
 }

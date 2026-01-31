@@ -298,6 +298,7 @@ where
         evals[index_in_group] = folded_eval;
 
         let mut sibling_idx = 0;
+        #[allow(clippy::needless_range_loop)]
         for j in 0..arity {
             if j != index_in_group {
                 evals[j] = opening.sibling_values[sibling_idx];
