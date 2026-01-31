@@ -101,15 +101,18 @@ where
             .unwrap_or(0);
         preprocessed_widths.push(pre_w);
 
-        let log_num_chunks = get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
-            air,
-            pre_w,
-            public_values[i].len(),
-            &all_lookups[i],
-            &lookup_data_to_expr(&global_lookup_data[i]),
-            config.is_zk(),
-            &lookup_gadget,
-        );
+        let log_num_chunks =
+            info_span!("infer log of constraint degree for AIR", air_idx = i).in_scope(|| {
+                get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
+                    air,
+                    pre_w,
+                    public_values[i].len(),
+                    &all_lookups[i],
+                    &lookup_data_to_expr(&global_lookup_data[i]),
+                    config.is_zk(),
+                    &lookup_gadget,
+                )
+            });
         log_num_quotient_chunks.push(log_num_chunks);
 
         let n_chunks = 1 << (log_num_chunks + config.is_zk());
