@@ -41,7 +41,6 @@ where
         self.output_buffer.extend_from_slice(&output);
 
         // Chaining values.
-        self.input_buffer.clear();
         self.input_buffer.extend_from_slice(&output);
     }
 }
