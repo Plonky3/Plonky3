@@ -474,7 +474,7 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for BaseFieldEvaluator<F
         evals: RowMajorMatrixView<'_, Self::InputField>,
         _scalars: &[Self::OutputField],
     ) -> Vec<Self::PackedField> {
-        packed_eq_poly_batch(evals, &vec![F::ONE; evals.width()])
+        packed_eq_poly_batch_with_constant_scalar(evals, F::ONE)
     }
 
     fn process_chunk_batch<const INITIALIZED: bool>(
@@ -994,6 +994,41 @@ where
         })
         .collect()
 }
+
+#[inline(always)]
+fn packed_eq_poly_batch_with_constant_scalar<F, EF>(
+    evals: RowMajorMatrixView<'_, EF>,
+    scalar: EF,
+) -> Vec<EF::ExtensionPacking>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    debug_assert_eq!(F::Packing::WIDTH, 1 << evals.height());
+
+    // We build up the evaluations of the equality polynomial in buffer.
+    // Buffer is organized as: rows = 2^evals.height(), columns = num_points
+    let mut buffer = RowMajorMatrix::new(
+        EF::zero_vec((1 << evals.height()) * evals.width()),
+        evals.width(),
+    );
+
+    // Initialize first row with constant scalar.
+    buffer.row_mut(0).fill(scalar);
+
+    fill_buffer_batch(evals, &mut buffer);
+
+    // Transpose and pack each column
+    (0..evals.width())
+        .map(|col_idx| {
+            let column: Vec<EF> = (0..(1 << evals.height()))
+                .map(|row_idx| buffer.values[row_idx * buffer.width() + col_idx])
+                .collect();
+            EF::ExtensionPacking::from_ext_slice(&column)
+        })
+        .collect()
+}
+
 
 /// Adds or sets the equality polynomial evaluations in the output buffer.
 ///
