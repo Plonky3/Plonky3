@@ -221,6 +221,15 @@ where
     );
 
     test_binary_ops(zeros, ones, x, y, z);
+
+    // Test that Product of empty iterator returns ONE (the multiplicative identity)
+    let empty: [R; 0] = [];
+    let product_result: R = empty.into_iter().product();
+    assert_eq!(
+        product_result,
+        R::ONE,
+        "Product of empty iterator should return ONE, not ZERO"
+    );
 }
 
 pub fn test_inv_div<F: Field>()
