@@ -10,8 +10,8 @@ use core::ops::Deref;
 
 use itertools::Itertools;
 use p3_field::{
-    ExtensionField, Field, FieldArray, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
-    dot_product,
+    BasedVectorSpace, ExtensionField, Field, FieldArray, PackedFieldExtension, PackedValue,
+    PrimeCharacteristicRing,
 };
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
@@ -523,14 +523,30 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         // The length of a `padded_horizontally_packed_row` is `self.width().div_ceil(T::Packing::WIDTH)`.
         assert!(vec.len() >= self.width().div_ceil(T::Packing::WIDTH));
 
-        // TODO: This is a base - extension dot product and so it should
-        // be possible to speed this up using ideas in `packed_linear_combination`.
-        // TODO: Perhaps we should be packing rows vertically not horizontally.
+        // Instead of creating N intermediate ExtPacking products and summing them,
+        // we track D separate BasePacking accumulators (one per extension coefficient).
         self.par_padded_horizontally_packed_rows::<T::Packing>()
             .map(move |row_packed| {
-                let packed_sum_of_packed: EF::ExtensionPacking =
-                    dot_product(vec.iter().copied(), row_packed);
-                EF::ExtensionPacking::to_ext_iter([packed_sum_of_packed]).sum()
+                // Get the extension dimension from the first vec element's coefficients
+                let d = <EF::ExtensionPacking as BasedVectorSpace<T::Packing>>::DIMENSION;
+
+                // Initialize D accumulators for each coefficient of the extension
+                // In practice, we set D to 8, which is the maximum degree of the extension field supported.
+                let mut coeff_accs: [T::Packing; 8] = [T::Packing::ZERO; 8];
+                debug_assert!(d <= 8, "Extension degree > 8 not supported");
+
+                // Accumulate coefficient-wise: for each (v, r) pair, acc[i] += v.coefficient(i) * r
+                for (v, r) in vec.iter().zip(row_packed) {
+                    let v_coeffs = v.as_basis_coefficients_slice();
+                    for (acc, &v_coeff) in coeff_accs[..d].iter_mut().zip(v_coeffs) {
+                        *acc += v_coeff * r;
+                    }
+                }
+
+                // Construct the result ExtPacking from the accumulators and sum the coefficients.
+                let packed_result =
+                    EF::ExtensionPacking::from_basis_coefficients_fn(|i| coeff_accs[i]);
+                EF::ExtensionPacking::to_ext_iter([packed_result]).sum()
             })
     }
 }
