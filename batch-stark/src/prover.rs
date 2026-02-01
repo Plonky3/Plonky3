@@ -210,8 +210,10 @@ where
                     &mut lookup_data[i],
                     &challenges_per_instance[i],
                 );
-                permutation_commit_inputs
-                    .push((ext_domain, generated_perm.clone().flatten_to_base()));
+                #[cfg(debug_assertions)]
+                let generated_perm_for_constraints = generated_perm.clone();
+
+                permutation_commit_inputs.push((ext_domain, generated_perm.flatten_to_base()));
 
                 #[cfg(debug_assertions)]
                 {
@@ -228,7 +230,7 @@ where
                         inst.air,
                         &inst.trace,
                         &preprocessed_trace,
-                        &generated_perm,
+                        &generated_perm_for_constraints,
                         &challenges_per_instance[i],
                         &inst.public_values,
                         lookup_constraints_inputs,
