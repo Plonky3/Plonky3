@@ -12,7 +12,7 @@ const EPSILON: u64 = P.wrapping_neg(); // 2^32 - 1
 /// Multiply two Goldilocks elements using inline assembly.
 /// Returns the product reduced modulo P.
 #[inline(always)]
-pub(crate) unsafe fn mul_asm(a: u64, b: u64) -> u64 {
+unsafe fn mul_asm(a: u64, b: u64) -> u64 {
     let _lo: u64;
     let _hi: u64;
     let _t0: u64;
@@ -20,6 +20,7 @@ pub(crate) unsafe fn mul_asm(a: u64, b: u64) -> u64 {
     let _t2: u64;
     let result: u64;
 
+    // SAFETY: Inline assembly performs Goldilocks multiplication with proper reduction
     unsafe {
         asm!(
             // Compute 128-bit product: hi:lo = a * b
@@ -62,10 +63,11 @@ pub(crate) unsafe fn mul_asm(a: u64, b: u64) -> u64 {
 
 /// Add two Goldilocks elements with overflow handling using inline assembly.
 #[inline(always)]
-pub(crate) unsafe fn add_asm(a: u64, b: u64) -> u64 {
+unsafe fn add_asm(a: u64, b: u64) -> u64 {
     let result: u64;
     let _adj: u64;
 
+    // SAFETY: Inline assembly performs Goldilocks addition with overflow handling
     unsafe {
         asm!(
             "adds  {result}, {a}, {b}",
@@ -139,25 +141,6 @@ pub unsafe fn internal_round_asm<const WIDTH: usize>(
     }
 }
 
-/// Run all internal rounds with the optimized assembly implementation.
-#[inline]
-pub fn internal_permute_state_asm<const WIDTH: usize>(
-    state: &mut [Goldilocks; WIDTH],
-    diag: [Goldilocks; WIDTH],
-    internal_constants: &[Goldilocks],
-) {
-    // Convert to raw u64 arrays for assembly processing
-    let state_raw: &mut [u64; WIDTH] =
-        unsafe { &mut *(state as *mut [Goldilocks; WIDTH] as *mut [u64; WIDTH]) };
-    let diag_raw: [u64; WIDTH] = unsafe { core::mem::transmute_copy(&diag) };
-
-    for &rc in internal_constants {
-        unsafe {
-            internal_round_asm(state_raw, &diag_raw, rc.value);
-        }
-    }
-}
-
 /// Interleaved dual-lane internal round for better ILP.
 /// Processes two independent states simultaneously, interleaving operations to hide latency.
 #[inline(always)]
@@ -220,49 +203,604 @@ pub unsafe fn internal_round_dual_asm<const WIDTH: usize>(
     }
 }
 
-/// Interleaved dual-lane external round.
+/// Fully unrolled dual-lane internal round for WIDTH=12.
+/// Hand-unrolled for maximum performance on the most common width.
 #[inline(always)]
-pub unsafe fn external_round_dual_asm<const WIDTH: usize>(
-    state0: &mut [u64; WIDTH],
-    state1: &mut [u64; WIDTH],
-    rc: &[u64; WIDTH],
+pub unsafe fn internal_round_dual_asm_w12(
+    state0: &mut [u64; 12],
+    state1: &mut [u64; 12],
+    diag: &[u64; 12],
+    rc: u64,
 ) {
     unsafe {
-        // Add round constants - interleaved
-        for i in 0..WIDTH {
-            state0[i] = add_asm(state0[i], rc[i]);
-            state1[i] = add_asm(state1[i], rc[i]);
-        }
+        // Add round constant and start S-box
+        let s0_a = add_asm(state0[0], rc);
+        let s0_b = add_asm(state1[0], rc);
 
-        // S-box layer - interleaved x^2 computation
-        let mut x2_a = [0u64; WIDTH];
-        let mut x2_b = [0u64; WIDTH];
-        for i in 0..WIDTH {
-            x2_a[i] = mul_asm(state0[i], state0[i]);
-            x2_b[i] = mul_asm(state1[i], state1[i]);
-        }
+        let s0_2_a = mul_asm(s0_a, s0_a);
+        let s0_2_b = mul_asm(s0_b, s0_b);
 
-        // x^3 and x^4 - interleaved
-        let mut x3_a = [0u64; WIDTH];
-        let mut x3_b = [0u64; WIDTH];
-        let mut x4_a = [0u64; WIDTH];
-        let mut x4_b = [0u64; WIDTH];
-        for i in 0..WIDTH {
-            x3_a[i] = mul_asm(x2_a[i], state0[i]);
-            x3_b[i] = mul_asm(x2_b[i], state1[i]);
-            x4_a[i] = mul_asm(x2_a[i], x2_a[i]);
-            x4_b[i] = mul_asm(x2_b[i], x2_b[i]);
-        }
+        // Unrolled sum computation - interleaved between lanes
+        let sum1_a = add_asm(state0[1], state0[2]);
+        let sum1_b = add_asm(state1[1], state1[2]);
+        let sum2_a = add_asm(state0[3], state0[4]);
+        let sum2_b = add_asm(state1[3], state1[4]);
+        let sum3_a = add_asm(state0[5], state0[6]);
+        let sum3_b = add_asm(state1[5], state1[6]);
+        let sum4_a = add_asm(state0[7], state0[8]);
+        let sum4_b = add_asm(state1[7], state1[8]);
+        let sum5_a = add_asm(state0[9], state0[10]);
+        let sum5_b = add_asm(state1[9], state1[10]);
 
-        // x^7 - interleaved
-        for i in 0..WIDTH {
-            state0[i] = mul_asm(x3_a[i], x4_a[i]);
-            state1[i] = mul_asm(x3_b[i], x4_b[i]);
-        }
+        // Continue S-box
+        let s0_3_a = mul_asm(s0_2_a, s0_a);
+        let s0_3_b = mul_asm(s0_2_b, s0_b);
+        let s0_4_a = mul_asm(s0_2_a, s0_2_a);
+        let s0_4_b = mul_asm(s0_2_b, s0_2_b);
 
-        // MDS - sequential (MDS is mostly additions, less benefit from interleaving)
-        mds_light_permutation_asm(state0);
-        mds_light_permutation_asm(state1);
+        // Combine partial sums
+        let sum12_a = add_asm(sum1_a, sum2_a);
+        let sum12_b = add_asm(sum1_b, sum2_b);
+        let sum34_a = add_asm(sum3_a, sum4_a);
+        let sum34_b = add_asm(sum3_b, sum4_b);
+        let sum511_a = add_asm(sum5_a, state0[11]);
+        let sum511_b = add_asm(sum5_b, state1[11]);
+
+        // Diagonal multiplies - unrolled and interleaved
+        let d1_a = mul_asm(state0[1], diag[1]);
+        let d1_b = mul_asm(state1[1], diag[1]);
+        let d2_a = mul_asm(state0[2], diag[2]);
+        let d2_b = mul_asm(state1[2], diag[2]);
+        let d3_a = mul_asm(state0[3], diag[3]);
+        let d3_b = mul_asm(state1[3], diag[3]);
+        let d4_a = mul_asm(state0[4], diag[4]);
+        let d4_b = mul_asm(state1[4], diag[4]);
+        let d5_a = mul_asm(state0[5], diag[5]);
+        let d5_b = mul_asm(state1[5], diag[5]);
+        let d6_a = mul_asm(state0[6], diag[6]);
+        let d6_b = mul_asm(state1[6], diag[6]);
+
+        // More partial sum combining
+        let sum1234_a = add_asm(sum12_a, sum34_a);
+        let sum1234_b = add_asm(sum12_b, sum34_b);
+        let sum_hi_a = add_asm(sum1234_a, sum511_a);
+        let sum_hi_b = add_asm(sum1234_b, sum511_b);
+
+        // More diagonal multiplies
+        let d7_a = mul_asm(state0[7], diag[7]);
+        let d7_b = mul_asm(state1[7], diag[7]);
+        let d8_a = mul_asm(state0[8], diag[8]);
+        let d8_b = mul_asm(state1[8], diag[8]);
+        let d9_a = mul_asm(state0[9], diag[9]);
+        let d9_b = mul_asm(state1[9], diag[9]);
+        let d10_a = mul_asm(state0[10], diag[10]);
+        let d10_b = mul_asm(state1[10], diag[10]);
+        let d11_a = mul_asm(state0[11], diag[11]);
+        let d11_b = mul_asm(state1[11], diag[11]);
+
+        // Finish S-box
+        let s0_7_a = mul_asm(s0_3_a, s0_4_a);
+        let s0_7_b = mul_asm(s0_3_b, s0_4_b);
+
+        // Complete sum
+        let sum_a = add_asm(sum_hi_a, s0_7_a);
+        let sum_b = add_asm(sum_hi_b, s0_7_b);
+
+        // Compute state[0]
+        let s0_diag_a = mul_asm(s0_7_a, diag[0]);
+        let s0_diag_b = mul_asm(s0_7_b, diag[0]);
+        state0[0] = add_asm(s0_diag_a, sum_a);
+        state1[0] = add_asm(s0_diag_b, sum_b);
+
+        // Finalize all other states - unrolled
+        state0[1] = add_asm(d1_a, sum_a);
+        state1[1] = add_asm(d1_b, sum_b);
+        state0[2] = add_asm(d2_a, sum_a);
+        state1[2] = add_asm(d2_b, sum_b);
+        state0[3] = add_asm(d3_a, sum_a);
+        state1[3] = add_asm(d3_b, sum_b);
+        state0[4] = add_asm(d4_a, sum_a);
+        state1[4] = add_asm(d4_b, sum_b);
+        state0[5] = add_asm(d5_a, sum_a);
+        state1[5] = add_asm(d5_b, sum_b);
+        state0[6] = add_asm(d6_a, sum_a);
+        state1[6] = add_asm(d6_b, sum_b);
+        state0[7] = add_asm(d7_a, sum_a);
+        state1[7] = add_asm(d7_b, sum_b);
+        state0[8] = add_asm(d8_a, sum_a);
+        state1[8] = add_asm(d8_b, sum_b);
+        state0[9] = add_asm(d9_a, sum_a);
+        state1[9] = add_asm(d9_b, sum_b);
+        state0[10] = add_asm(d10_a, sum_a);
+        state1[10] = add_asm(d10_b, sum_b);
+        state0[11] = add_asm(d11_a, sum_a);
+        state1[11] = add_asm(d11_b, sum_b);
+    }
+}
+
+/// Run all internal rounds with the optimized assembly implementation.
+#[inline]
+pub fn internal_permute_state_asm<const WIDTH: usize>(
+    state: &mut [Goldilocks; WIDTH],
+    diag: [Goldilocks; WIDTH],
+    internal_constants: &[Goldilocks],
+) {
+    // Convert to raw u64 arrays for assembly processing
+    let state_raw: &mut [u64; WIDTH] =
+        unsafe { &mut *(state as *mut [Goldilocks; WIDTH] as *mut [u64; WIDTH]) };
+    let diag_raw: [u64; WIDTH] = unsafe { core::mem::transmute_copy(&diag) };
+
+    for &rc in internal_constants {
+        unsafe {
+            internal_round_asm(state_raw, &diag_raw, rc.value);
+        }
+    }
+}
+
+/// Fully unrolled internal round for WIDTH=12 (scalar version).
+#[inline(always)]
+pub unsafe fn internal_round_asm_w12(state: &mut [u64; 12], diag: &[u64; 12], rc: u64) {
+    unsafe {
+        // Add round constant and start S-box
+        let s0 = add_asm(state[0], rc);
+        let s0_2 = mul_asm(s0, s0);
+
+        // Unrolled sum computation with tree reduction
+        let sum1 = add_asm(state[1], state[2]);
+        let sum2 = add_asm(state[3], state[4]);
+        let sum3 = add_asm(state[5], state[6]);
+        let sum4 = add_asm(state[7], state[8]);
+        let sum5 = add_asm(state[9], state[10]);
+
+        let s0_3 = mul_asm(s0_2, s0);
+        let s0_4 = mul_asm(s0_2, s0_2);
+
+        let sum12 = add_asm(sum1, sum2);
+        let sum34 = add_asm(sum3, sum4);
+        let sum511 = add_asm(sum5, state[11]);
+
+        // Diagonal multiplies - fully unrolled
+        let d1 = mul_asm(state[1], diag[1]);
+        let d2 = mul_asm(state[2], diag[2]);
+        let d3 = mul_asm(state[3], diag[3]);
+        let d4 = mul_asm(state[4], diag[4]);
+        let d5 = mul_asm(state[5], diag[5]);
+        let d6 = mul_asm(state[6], diag[6]);
+
+        let sum1234 = add_asm(sum12, sum34);
+        let sum_hi = add_asm(sum1234, sum511);
+
+        let d7 = mul_asm(state[7], diag[7]);
+        let d8 = mul_asm(state[8], diag[8]);
+        let d9 = mul_asm(state[9], diag[9]);
+        let d10 = mul_asm(state[10], diag[10]);
+        let d11 = mul_asm(state[11], diag[11]);
+
+        // Finish S-box
+        let s0_7 = mul_asm(s0_3, s0_4);
+        let sum = add_asm(sum_hi, s0_7);
+
+        // Compute state[0]
+        let s0_diag = mul_asm(s0_7, diag[0]);
+        state[0] = add_asm(s0_diag, sum);
+
+        // Finalize all other states - unrolled
+        state[1] = add_asm(d1, sum);
+        state[2] = add_asm(d2, sum);
+        state[3] = add_asm(d3, sum);
+        state[4] = add_asm(d4, sum);
+        state[5] = add_asm(d5, sum);
+        state[6] = add_asm(d6, sum);
+        state[7] = add_asm(d7, sum);
+        state[8] = add_asm(d8, sum);
+        state[9] = add_asm(d9, sum);
+        state[10] = add_asm(d10, sum);
+        state[11] = add_asm(d11, sum);
+    }
+}
+
+/// Fully unrolled internal round for WIDTH=8 (scalar version).
+#[inline(always)]
+pub unsafe fn internal_round_asm_w8(state: &mut [u64; 8], diag: &[u64; 8], rc: u64) {
+    unsafe {
+        // Add round constant and start S-box
+        let s0 = add_asm(state[0], rc);
+        let s0_2 = mul_asm(s0, s0);
+
+        // Unrolled sum computation with tree reduction
+        let sum1 = add_asm(state[1], state[2]);
+        let sum2 = add_asm(state[3], state[4]);
+        let sum3 = add_asm(state[5], state[6]);
+
+        let s0_3 = mul_asm(s0_2, s0);
+        let s0_4 = mul_asm(s0_2, s0_2);
+
+        let sum12 = add_asm(sum1, sum2);
+        let sum37 = add_asm(sum3, state[7]);
+
+        // Diagonal multiplies - fully unrolled
+        let d1 = mul_asm(state[1], diag[1]);
+        let d2 = mul_asm(state[2], diag[2]);
+        let d3 = mul_asm(state[3], diag[3]);
+        let d4 = mul_asm(state[4], diag[4]);
+
+        let sum_hi = add_asm(sum12, sum37);
+
+        let d5 = mul_asm(state[5], diag[5]);
+        let d6 = mul_asm(state[6], diag[6]);
+        let d7 = mul_asm(state[7], diag[7]);
+
+        // Finish S-box
+        let s0_7 = mul_asm(s0_3, s0_4);
+        let sum = add_asm(sum_hi, s0_7);
+
+        // Compute state[0]
+        let s0_diag = mul_asm(s0_7, diag[0]);
+        state[0] = add_asm(s0_diag, sum);
+
+        // Finalize all other states - unrolled
+        state[1] = add_asm(d1, sum);
+        state[2] = add_asm(d2, sum);
+        state[3] = add_asm(d3, sum);
+        state[4] = add_asm(d4, sum);
+        state[5] = add_asm(d5, sum);
+        state[6] = add_asm(d6, sum);
+        state[7] = add_asm(d7, sum);
+    }
+}
+
+/// Fully unrolled dual-lane internal round for WIDTH=8.
+#[inline(always)]
+pub unsafe fn internal_round_dual_asm_w8(
+    state0: &mut [u64; 8],
+    state1: &mut [u64; 8],
+    diag: &[u64; 8],
+    rc: u64,
+) {
+    unsafe {
+        // Add round constant and start S-box
+        let s0_a = add_asm(state0[0], rc);
+        let s0_b = add_asm(state1[0], rc);
+
+        let s0_2_a = mul_asm(s0_a, s0_a);
+        let s0_2_b = mul_asm(s0_b, s0_b);
+
+        // Unrolled sum computation - interleaved between lanes
+        let sum1_a = add_asm(state0[1], state0[2]);
+        let sum1_b = add_asm(state1[1], state1[2]);
+        let sum2_a = add_asm(state0[3], state0[4]);
+        let sum2_b = add_asm(state1[3], state1[4]);
+        let sum3_a = add_asm(state0[5], state0[6]);
+        let sum3_b = add_asm(state1[5], state1[6]);
+
+        // Continue S-box
+        let s0_3_a = mul_asm(s0_2_a, s0_a);
+        let s0_3_b = mul_asm(s0_2_b, s0_b);
+        let s0_4_a = mul_asm(s0_2_a, s0_2_a);
+        let s0_4_b = mul_asm(s0_2_b, s0_2_b);
+
+        // Combine partial sums
+        let sum12_a = add_asm(sum1_a, sum2_a);
+        let sum12_b = add_asm(sum1_b, sum2_b);
+        let sum37_a = add_asm(sum3_a, state0[7]);
+        let sum37_b = add_asm(sum3_b, state1[7]);
+
+        // Diagonal multiplies - unrolled and interleaved
+        let d1_a = mul_asm(state0[1], diag[1]);
+        let d1_b = mul_asm(state1[1], diag[1]);
+        let d2_a = mul_asm(state0[2], diag[2]);
+        let d2_b = mul_asm(state1[2], diag[2]);
+        let d3_a = mul_asm(state0[3], diag[3]);
+        let d3_b = mul_asm(state1[3], diag[3]);
+        let d4_a = mul_asm(state0[4], diag[4]);
+        let d4_b = mul_asm(state1[4], diag[4]);
+
+        let sum_hi_a = add_asm(sum12_a, sum37_a);
+        let sum_hi_b = add_asm(sum12_b, sum37_b);
+
+        let d5_a = mul_asm(state0[5], diag[5]);
+        let d5_b = mul_asm(state1[5], diag[5]);
+        let d6_a = mul_asm(state0[6], diag[6]);
+        let d6_b = mul_asm(state1[6], diag[6]);
+        let d7_a = mul_asm(state0[7], diag[7]);
+        let d7_b = mul_asm(state1[7], diag[7]);
+
+        // Finish S-box
+        let s0_7_a = mul_asm(s0_3_a, s0_4_a);
+        let s0_7_b = mul_asm(s0_3_b, s0_4_b);
+
+        // Complete sum
+        let sum_a = add_asm(sum_hi_a, s0_7_a);
+        let sum_b = add_asm(sum_hi_b, s0_7_b);
+
+        // Compute state[0]
+        let s0_diag_a = mul_asm(s0_7_a, diag[0]);
+        let s0_diag_b = mul_asm(s0_7_b, diag[0]);
+        state0[0] = add_asm(s0_diag_a, sum_a);
+        state1[0] = add_asm(s0_diag_b, sum_b);
+
+        // Finalize all other states - unrolled
+        state0[1] = add_asm(d1_a, sum_a);
+        state1[1] = add_asm(d1_b, sum_b);
+        state0[2] = add_asm(d2_a, sum_a);
+        state1[2] = add_asm(d2_b, sum_b);
+        state0[3] = add_asm(d3_a, sum_a);
+        state1[3] = add_asm(d3_b, sum_b);
+        state0[4] = add_asm(d4_a, sum_a);
+        state1[4] = add_asm(d4_b, sum_b);
+        state0[5] = add_asm(d5_a, sum_a);
+        state1[5] = add_asm(d5_b, sum_b);
+        state0[6] = add_asm(d6_a, sum_a);
+        state1[6] = add_asm(d6_b, sum_b);
+        state0[7] = add_asm(d7_a, sum_a);
+        state1[7] = add_asm(d7_b, sum_b);
+    }
+}
+
+/// Specialized W8 internal permute using fully unrolled rounds.
+#[inline]
+pub fn internal_permute_state_asm_w8(
+    state: &mut [Goldilocks; 8],
+    diag: [Goldilocks; 8],
+    internal_constants: &[Goldilocks],
+) {
+    let state_raw: &mut [u64; 8] =
+        unsafe { &mut *(state as *mut [Goldilocks; 8] as *mut [u64; 8]) };
+    let diag_raw: [u64; 8] = unsafe { core::mem::transmute_copy(&diag) };
+
+    for &rc in internal_constants {
+        unsafe {
+            internal_round_asm_w8(state_raw, &diag_raw, rc.value);
+        }
+    }
+}
+
+/// Specialized W12 internal permute using fully unrolled rounds.
+#[inline]
+pub fn internal_permute_state_asm_w12(
+    state: &mut [Goldilocks; 12],
+    diag: [Goldilocks; 12],
+    internal_constants: &[Goldilocks],
+) {
+    let state_raw: &mut [u64; 12] =
+        unsafe { &mut *(state as *mut [Goldilocks; 12] as *mut [u64; 12]) };
+    let diag_raw: [u64; 12] = unsafe { core::mem::transmute_copy(&diag) };
+
+    for &rc in internal_constants {
+        unsafe {
+            internal_round_asm_w12(state_raw, &diag_raw, rc.value);
+        }
+    }
+}
+
+/// Fully unrolled internal round for WIDTH=16 (scalar version).
+#[inline(always)]
+pub unsafe fn internal_round_asm_w16(state: &mut [u64; 16], diag: &[u64; 16], rc: u64) {
+    unsafe {
+        // Add round constant and start S-box
+        let s0 = add_asm(state[0], rc);
+        let s0_2 = mul_asm(s0, s0);
+
+        // Unrolled sum computation with tree reduction
+        let sum1 = add_asm(state[1], state[2]);
+        let sum2 = add_asm(state[3], state[4]);
+        let sum3 = add_asm(state[5], state[6]);
+        let sum4 = add_asm(state[7], state[8]);
+        let sum5 = add_asm(state[9], state[10]);
+        let sum6 = add_asm(state[11], state[12]);
+        let sum7 = add_asm(state[13], state[14]);
+
+        let s0_3 = mul_asm(s0_2, s0);
+        let s0_4 = mul_asm(s0_2, s0_2);
+
+        let sum12 = add_asm(sum1, sum2);
+        let sum34 = add_asm(sum3, sum4);
+        let sum56 = add_asm(sum5, sum6);
+        let sum715 = add_asm(sum7, state[15]);
+
+        // Diagonal multiplies - fully unrolled (first batch)
+        let d1 = mul_asm(state[1], diag[1]);
+        let d2 = mul_asm(state[2], diag[2]);
+        let d3 = mul_asm(state[3], diag[3]);
+        let d4 = mul_asm(state[4], diag[4]);
+        let d5 = mul_asm(state[5], diag[5]);
+        let d6 = mul_asm(state[6], diag[6]);
+        let d7 = mul_asm(state[7], diag[7]);
+        let d8 = mul_asm(state[8], diag[8]);
+
+        let sum1234 = add_asm(sum12, sum34);
+        let sum56715 = add_asm(sum56, sum715);
+        let sum_hi = add_asm(sum1234, sum56715);
+
+        // Diagonal multiplies - second batch
+        let d9 = mul_asm(state[9], diag[9]);
+        let d10 = mul_asm(state[10], diag[10]);
+        let d11 = mul_asm(state[11], diag[11]);
+        let d12 = mul_asm(state[12], diag[12]);
+        let d13 = mul_asm(state[13], diag[13]);
+        let d14 = mul_asm(state[14], diag[14]);
+        let d15 = mul_asm(state[15], diag[15]);
+
+        // Finish S-box
+        let s0_7 = mul_asm(s0_3, s0_4);
+        let sum = add_asm(sum_hi, s0_7);
+
+        // Compute state[0]
+        let s0_diag = mul_asm(s0_7, diag[0]);
+        state[0] = add_asm(s0_diag, sum);
+
+        // Finalize all other states - unrolled
+        state[1] = add_asm(d1, sum);
+        state[2] = add_asm(d2, sum);
+        state[3] = add_asm(d3, sum);
+        state[4] = add_asm(d4, sum);
+        state[5] = add_asm(d5, sum);
+        state[6] = add_asm(d6, sum);
+        state[7] = add_asm(d7, sum);
+        state[8] = add_asm(d8, sum);
+        state[9] = add_asm(d9, sum);
+        state[10] = add_asm(d10, sum);
+        state[11] = add_asm(d11, sum);
+        state[12] = add_asm(d12, sum);
+        state[13] = add_asm(d13, sum);
+        state[14] = add_asm(d14, sum);
+        state[15] = add_asm(d15, sum);
+    }
+}
+
+/// Fully unrolled dual-lane internal round for WIDTH=16.
+#[inline(always)]
+pub unsafe fn internal_round_dual_asm_w16(
+    state0: &mut [u64; 16],
+    state1: &mut [u64; 16],
+    diag: &[u64; 16],
+    rc: u64,
+) {
+    unsafe {
+        // Add round constant and start S-box
+        let s0_a = add_asm(state0[0], rc);
+        let s0_b = add_asm(state1[0], rc);
+
+        let s0_2_a = mul_asm(s0_a, s0_a);
+        let s0_2_b = mul_asm(s0_b, s0_b);
+
+        // Unrolled sum computation - interleaved between lanes
+        let sum1_a = add_asm(state0[1], state0[2]);
+        let sum1_b = add_asm(state1[1], state1[2]);
+        let sum2_a = add_asm(state0[3], state0[4]);
+        let sum2_b = add_asm(state1[3], state1[4]);
+        let sum3_a = add_asm(state0[5], state0[6]);
+        let sum3_b = add_asm(state1[5], state1[6]);
+        let sum4_a = add_asm(state0[7], state0[8]);
+        let sum4_b = add_asm(state1[7], state1[8]);
+        let sum5_a = add_asm(state0[9], state0[10]);
+        let sum5_b = add_asm(state1[9], state1[10]);
+        let sum6_a = add_asm(state0[11], state0[12]);
+        let sum6_b = add_asm(state1[11], state1[12]);
+        let sum7_a = add_asm(state0[13], state0[14]);
+        let sum7_b = add_asm(state1[13], state1[14]);
+
+        // Continue S-box
+        let s0_3_a = mul_asm(s0_2_a, s0_a);
+        let s0_3_b = mul_asm(s0_2_b, s0_b);
+        let s0_4_a = mul_asm(s0_2_a, s0_2_a);
+        let s0_4_b = mul_asm(s0_2_b, s0_2_b);
+
+        // Combine partial sums
+        let sum12_a = add_asm(sum1_a, sum2_a);
+        let sum12_b = add_asm(sum1_b, sum2_b);
+        let sum34_a = add_asm(sum3_a, sum4_a);
+        let sum34_b = add_asm(sum3_b, sum4_b);
+        let sum56_a = add_asm(sum5_a, sum6_a);
+        let sum56_b = add_asm(sum5_b, sum6_b);
+        let sum715_a = add_asm(sum7_a, state0[15]);
+        let sum715_b = add_asm(sum7_b, state1[15]);
+
+        // Diagonal multiplies - first batch, interleaved
+        let d1_a = mul_asm(state0[1], diag[1]);
+        let d1_b = mul_asm(state1[1], diag[1]);
+        let d2_a = mul_asm(state0[2], diag[2]);
+        let d2_b = mul_asm(state1[2], diag[2]);
+        let d3_a = mul_asm(state0[3], diag[3]);
+        let d3_b = mul_asm(state1[3], diag[3]);
+        let d4_a = mul_asm(state0[4], diag[4]);
+        let d4_b = mul_asm(state1[4], diag[4]);
+        let d5_a = mul_asm(state0[5], diag[5]);
+        let d5_b = mul_asm(state1[5], diag[5]);
+        let d6_a = mul_asm(state0[6], diag[6]);
+        let d6_b = mul_asm(state1[6], diag[6]);
+        let d7_a = mul_asm(state0[7], diag[7]);
+        let d7_b = mul_asm(state1[7], diag[7]);
+        let d8_a = mul_asm(state0[8], diag[8]);
+        let d8_b = mul_asm(state1[8], diag[8]);
+
+        // More partial sum combining
+        let sum1234_a = add_asm(sum12_a, sum34_a);
+        let sum1234_b = add_asm(sum12_b, sum34_b);
+        let sum56715_a = add_asm(sum56_a, sum715_a);
+        let sum56715_b = add_asm(sum56_b, sum715_b);
+        let sum_hi_a = add_asm(sum1234_a, sum56715_a);
+        let sum_hi_b = add_asm(sum1234_b, sum56715_b);
+
+        // Diagonal multiplies - second batch
+        let d9_a = mul_asm(state0[9], diag[9]);
+        let d9_b = mul_asm(state1[9], diag[9]);
+        let d10_a = mul_asm(state0[10], diag[10]);
+        let d10_b = mul_asm(state1[10], diag[10]);
+        let d11_a = mul_asm(state0[11], diag[11]);
+        let d11_b = mul_asm(state1[11], diag[11]);
+        let d12_a = mul_asm(state0[12], diag[12]);
+        let d12_b = mul_asm(state1[12], diag[12]);
+        let d13_a = mul_asm(state0[13], diag[13]);
+        let d13_b = mul_asm(state1[13], diag[13]);
+        let d14_a = mul_asm(state0[14], diag[14]);
+        let d14_b = mul_asm(state1[14], diag[14]);
+        let d15_a = mul_asm(state0[15], diag[15]);
+        let d15_b = mul_asm(state1[15], diag[15]);
+
+        // Finish S-box
+        let s0_7_a = mul_asm(s0_3_a, s0_4_a);
+        let s0_7_b = mul_asm(s0_3_b, s0_4_b);
+
+        // Complete sum
+        let sum_a = add_asm(sum_hi_a, s0_7_a);
+        let sum_b = add_asm(sum_hi_b, s0_7_b);
+
+        // Compute state[0]
+        let s0_diag_a = mul_asm(s0_7_a, diag[0]);
+        let s0_diag_b = mul_asm(s0_7_b, diag[0]);
+        state0[0] = add_asm(s0_diag_a, sum_a);
+        state1[0] = add_asm(s0_diag_b, sum_b);
+
+        // Finalize all other states - unrolled
+        state0[1] = add_asm(d1_a, sum_a);
+        state1[1] = add_asm(d1_b, sum_b);
+        state0[2] = add_asm(d2_a, sum_a);
+        state1[2] = add_asm(d2_b, sum_b);
+        state0[3] = add_asm(d3_a, sum_a);
+        state1[3] = add_asm(d3_b, sum_b);
+        state0[4] = add_asm(d4_a, sum_a);
+        state1[4] = add_asm(d4_b, sum_b);
+        state0[5] = add_asm(d5_a, sum_a);
+        state1[5] = add_asm(d5_b, sum_b);
+        state0[6] = add_asm(d6_a, sum_a);
+        state1[6] = add_asm(d6_b, sum_b);
+        state0[7] = add_asm(d7_a, sum_a);
+        state1[7] = add_asm(d7_b, sum_b);
+        state0[8] = add_asm(d8_a, sum_a);
+        state1[8] = add_asm(d8_b, sum_b);
+        state0[9] = add_asm(d9_a, sum_a);
+        state1[9] = add_asm(d9_b, sum_b);
+        state0[10] = add_asm(d10_a, sum_a);
+        state1[10] = add_asm(d10_b, sum_b);
+        state0[11] = add_asm(d11_a, sum_a);
+        state1[11] = add_asm(d11_b, sum_b);
+        state0[12] = add_asm(d12_a, sum_a);
+        state1[12] = add_asm(d12_b, sum_b);
+        state0[13] = add_asm(d13_a, sum_a);
+        state1[13] = add_asm(d13_b, sum_b);
+        state0[14] = add_asm(d14_a, sum_a);
+        state1[14] = add_asm(d14_b, sum_b);
+        state0[15] = add_asm(d15_a, sum_a);
+        state1[15] = add_asm(d15_b, sum_b);
+    }
+}
+
+/// Specialized W16 internal permute using fully unrolled rounds.
+#[inline]
+pub fn internal_permute_state_asm_w16(
+    state: &mut [Goldilocks; 16],
+    diag: [Goldilocks; 16],
+    internal_constants: &[Goldilocks],
+) {
+    let state_raw: &mut [u64; 16] =
+        unsafe { &mut *(state as *mut [Goldilocks; 16] as *mut [u64; 16]) };
+    let diag_raw: [u64; 16] = unsafe { core::mem::transmute_copy(&diag) };
+
+    for &rc in internal_constants {
+        unsafe {
+            internal_round_asm_w16(state_raw, &diag_raw, rc.value);
+        }
     }
 }
 
@@ -271,6 +809,7 @@ pub unsafe fn external_round_dual_asm<const WIDTH: usize>(
 /// Double a Goldilocks element.
 #[inline(always)]
 unsafe fn double_asm(a: u64) -> u64 {
+    // SAFETY: add_asm is safe with valid Goldilocks field elements
     unsafe { add_asm(a, a) }
 }
 
@@ -360,15 +899,73 @@ pub unsafe fn external_round_asm<const WIDTH: usize>(state: &mut [u64; WIDTH], r
             state[i] = add_asm(state[i], rc[i]);
         }
 
-        // S-box layer
+        // Apply S-box (x^7) to all elements
         sbox_layer_asm(state);
 
-        // MDS layer
+        // Apply MDS light permutation
         mds_light_permutation_asm(state);
     }
 }
 
-/// Run all initial external rounds.
+/// Interleaved dual-lane S-box layer for better ILP.
+#[inline(always)]
+pub unsafe fn sbox_layer_dual_asm<const WIDTH: usize>(
+    state0: &mut [u64; WIDTH],
+    state1: &mut [u64; WIDTH],
+) {
+    unsafe {
+        // Stage 1: Compute all x^2 values for both lanes (interleaved)
+        let mut x2_a = [0u64; WIDTH];
+        let mut x2_b = [0u64; WIDTH];
+        for i in 0..WIDTH {
+            x2_a[i] = mul_asm(state0[i], state0[i]);
+            x2_b[i] = mul_asm(state1[i], state1[i]);
+        }
+
+        // Stage 2: Compute x^3 and x^4 for both lanes (interleaved)
+        let mut x3_a = [0u64; WIDTH];
+        let mut x3_b = [0u64; WIDTH];
+        let mut x4_a = [0u64; WIDTH];
+        let mut x4_b = [0u64; WIDTH];
+        for i in 0..WIDTH {
+            x3_a[i] = mul_asm(x2_a[i], state0[i]);
+            x3_b[i] = mul_asm(x2_b[i], state1[i]);
+            x4_a[i] = mul_asm(x2_a[i], x2_a[i]);
+            x4_b[i] = mul_asm(x2_b[i], x2_b[i]);
+        }
+
+        // Stage 3: Compute x^7 = x^3 * x^4 for both lanes
+        for i in 0..WIDTH {
+            state0[i] = mul_asm(x3_a[i], x4_a[i]);
+            state1[i] = mul_asm(x3_b[i], x4_b[i]);
+        }
+    }
+}
+
+/// Interleaved dual-lane external round for better ILP.
+#[inline(always)]
+pub unsafe fn external_round_dual_asm<const WIDTH: usize>(
+    state0: &mut [u64; WIDTH],
+    state1: &mut [u64; WIDTH],
+    rc: &[u64; WIDTH],
+) {
+    unsafe {
+        // Add round constants (interleaved)
+        for i in 0..WIDTH {
+            state0[i] = add_asm(state0[i], rc[i]);
+            state1[i] = add_asm(state1[i], rc[i]);
+        }
+
+        // Apply S-box (interleaved dual-lane)
+        sbox_layer_dual_asm(state0, state1);
+
+        // Apply MDS (sequential - MDS is mostly additions which are fast)
+        mds_light_permutation_asm(state0);
+        mds_light_permutation_asm(state1);
+    }
+}
+
+/// Run initial external rounds with ASM optimization.
 #[inline]
 pub fn external_initial_permute_state_asm<const WIDTH: usize>(
     state: &mut [Goldilocks; WIDTH],
@@ -377,12 +974,12 @@ pub fn external_initial_permute_state_asm<const WIDTH: usize>(
     let state_raw: &mut [u64; WIDTH] =
         unsafe { &mut *(state as *mut [Goldilocks; WIDTH] as *mut [u64; WIDTH]) };
 
-    // Initial MDS
+    // Initial MDS before rounds
     unsafe {
         mds_light_permutation_asm(state_raw);
     }
 
-    // External rounds
+    // Run initial rounds
     for rc in initial_constants {
         let rc_raw: [u64; WIDTH] = unsafe { core::mem::transmute_copy(rc) };
         unsafe {
@@ -391,7 +988,7 @@ pub fn external_initial_permute_state_asm<const WIDTH: usize>(
     }
 }
 
-/// Run all terminal external rounds.
+/// Run terminal external rounds with ASM optimization.
 #[inline]
 pub fn external_terminal_permute_state_asm<const WIDTH: usize>(
     state: &mut [Goldilocks; WIDTH],
@@ -407,3 +1004,4 @@ pub fn external_terminal_permute_state_asm<const WIDTH: usize>(
         }
     }
 }
+
