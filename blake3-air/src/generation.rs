@@ -64,9 +64,6 @@ fn generate_trace_rows_for_perm<F: PrimeField64>(
     row.counter_hi = u32_to_bits_le(counter.wrapping_shr(32) as u32);
     row.block_len = u32_to_bits_le(block_len as u32);
 
-    // We set the flags initial value to just be 0.
-    row.flags = u32_to_bits_le(0);
-
     row.initial_row0 = array::from_fn(|i| {
         [
             F::from_u16(input[16 + i] as u16),

@@ -4,7 +4,7 @@ use core::hash::{Hash, Hasher};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
-use core::{array, fmt, stringify};
+use core::{array, fmt};
 
 use num_bigint::BigUint;
 use p3_field::integers::QuotientMap;

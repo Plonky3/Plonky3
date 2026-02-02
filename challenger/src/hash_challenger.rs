@@ -37,11 +37,9 @@ where
         let inputs = self.input_buffer.drain(..);
         let output = self.hasher.hash_iter(inputs);
 
-        self.output_buffer.clear();
-        self.output_buffer.extend_from_slice(&output);
-
         // Chaining values.
         self.input_buffer.extend_from_slice(&output);
+        self.output_buffer = output.into();
     }
 }
 
@@ -65,12 +63,9 @@ where
     H: CryptographicHasher<T, [T; OUT_LEN]>,
 {
     fn observe(&mut self, values: [T; N]) {
-        if N == 0 {
-            return;
+        for value in values {
+            self.observe(value);
         }
-
-        self.output_buffer.clear();
-        self.input_buffer.extend(values);
     }
 }
 
