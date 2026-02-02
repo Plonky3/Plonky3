@@ -63,9 +63,12 @@ where
     H: CryptographicHasher<T, [T; OUT_LEN]>,
 {
     fn observe(&mut self, values: [T; N]) {
-        for value in values {
-            self.observe(value);
+        if N == 0 {
+            return;
         }
+
+        self.output_buffer.clear();
+        self.input_buffer.extend(values);
     }
 }
 
