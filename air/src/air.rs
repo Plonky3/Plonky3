@@ -454,6 +454,12 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         self.inner.assert_zero(self.condition() * x.into());
     }
+
+    fn assert_zeros<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
+        let condition = self.condition();
+        self.inner
+            .assert_zeros(array.map(|x| condition.clone() * x.into()));
+    }
 }
 
 impl<AB: AirBuilderWithPublicValues> AirBuilderWithPublicValues for FilteredAirBuilder<'_, AB> {

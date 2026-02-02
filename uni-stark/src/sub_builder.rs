@@ -72,4 +72,8 @@ impl<AB: AirBuilder, SubAir: BaseAir<AB::F>, F> AirBuilder for SubAirBuilder<'_,
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         self.inner.assert_zero(x.into());
     }
+
+    fn assert_zeros<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
+        self.inner.assert_zeros(array);
+    }
 }
