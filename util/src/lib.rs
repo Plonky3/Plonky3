@@ -19,16 +19,18 @@ pub mod linear_map;
 pub mod transpose;
 pub mod zip_eq;
 
-/// Computes `ceil(log_2(n))`.
-#[must_use]
-pub const fn log2_ceil_usize(n: usize) -> usize {
-    (usize::BITS - n.saturating_sub(1).leading_zeros()) as usize
+macro_rules! impl_log2_ceil {
+    ($name:ident, $t:ty) => {
+        /// Computes `ceil(log_2(n))`.
+        #[must_use]
+        pub const fn $name(n: $t) -> $t {
+            (<$t>::BITS - n.saturating_sub(1).leading_zeros()) as $t
+        }
+    };
 }
 
-#[must_use]
-pub const fn log2_ceil_u64(n: u64) -> u64 {
-    (u64::BITS - n.saturating_sub(1).leading_zeros()) as u64
-}
+impl_log2_ceil!(log2_ceil_usize, usize);
+impl_log2_ceil!(log2_ceil_u64, u64);
 
 /// Computes `log_2(n)`
 ///
