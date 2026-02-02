@@ -374,3 +374,30 @@ fn square(x: uint64x2_t) -> uint64x2_t {
         transmute([res_0, res_1])
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use p3_field_testing::test_packed_field;
+
+    use super::{Goldilocks, PackedGoldilocksNeon, WIDTH};
+
+    const SPECIAL_VALS: [Goldilocks; WIDTH] =
+        Goldilocks::new_array([0xFFFF_FFFF_0000_0000, 0xFFFF_FFFF_FFFF_FFFF]);
+
+    const ZEROS: PackedGoldilocksNeon = PackedGoldilocksNeon(Goldilocks::new_array([
+        0x0000_0000_0000_0000,
+        0xFFFF_FFFF_0000_0001, // = P, canonicalizes to 0
+    ]));
+
+    const ONES: PackedGoldilocksNeon = PackedGoldilocksNeon(Goldilocks::new_array([
+        0x0000_0000_0000_0001,
+        0xFFFF_FFFF_0000_0002, // = P + 1, canonicalizes to 1
+    ]));
+
+    test_packed_field!(
+        crate::PackedGoldilocksNeon,
+        &[super::ZEROS],
+        &[super::ONES],
+        crate::PackedGoldilocksNeon(super::SPECIAL_VALS)
+    );
+}

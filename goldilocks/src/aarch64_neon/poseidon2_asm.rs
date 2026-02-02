@@ -1005,3 +1005,365 @@ pub fn external_terminal_permute_state_asm<const WIDTH: usize>(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use p3_field::PrimeField64;
+    use p3_poseidon2::matmul_internal;
+
+    use super::*;
+    use crate::{
+        MATRIX_DIAG_8_GOLDILOCKS, MATRIX_DIAG_12_GOLDILOCKS, MATRIX_DIAG_16_GOLDILOCKS,
+        MATRIX_DIAG_20_GOLDILOCKS,
+    };
+
+    fn test_internal_round_matches<const WIDTH: usize>(diag: [Goldilocks; WIDTH]) {
+        let mut rng_state = 12345u64;
+        let mut next_rand = || {
+            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            rng_state
+        };
+
+        // Generate random state
+        let mut state_asm: [Goldilocks; WIDTH] =
+            core::array::from_fn(|_| Goldilocks::new(next_rand()));
+        let mut state_generic = state_asm;
+
+        // Generate random internal constants
+        let internal_constants: [Goldilocks; 22] =
+            core::array::from_fn(|_| Goldilocks::new(next_rand()));
+
+        // Run ASM version
+        internal_permute_state_asm(&mut state_asm, diag, &internal_constants);
+
+        // Run generic version - manually implement the internal permute
+        for &rc in internal_constants.iter() {
+            // Add round constant and apply S-box to state[0]
+            state_generic[0] += rc;
+            let s = state_generic[0];
+            let s2 = s * s;
+            let s3 = s2 * s;
+            let s4 = s2 * s2;
+            state_generic[0] = s3 * s4; // s^7
+
+            // Apply internal MDS: sum + diagonal multiply
+            matmul_internal(&mut state_generic, diag);
+        }
+
+        // Compare results
+        for i in 0..WIDTH {
+            assert_eq!(
+                state_asm[i].as_canonical_u64(),
+                state_generic[i].as_canonical_u64(),
+                "Mismatch at index {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_internal_round_width_8() {
+        test_internal_round_matches(MATRIX_DIAG_8_GOLDILOCKS);
+    }
+
+    #[test]
+    fn test_internal_round_width_12() {
+        test_internal_round_matches(MATRIX_DIAG_12_GOLDILOCKS);
+    }
+
+    #[test]
+    fn test_internal_round_width_16() {
+        test_internal_round_matches(MATRIX_DIAG_16_GOLDILOCKS);
+    }
+
+    #[test]
+    fn test_internal_round_width_20() {
+        test_internal_round_matches(MATRIX_DIAG_20_GOLDILOCKS);
+    }
+
+    #[test]
+    fn test_add_asm() {
+        // Test addition against the standard implementation
+        let test_cases: [(u64, u64); 8] = [
+            (0, 0),
+            (1, 1),
+            (P - 1, 1),         // Should wrap to 0
+            (P - 1, P - 1),     // Should wrap
+            (P / 2, P / 2),     // No wrap
+            (P / 2, P / 2 + 1), // Just wraps
+            (0xFFFFFFFF00000000, 0xFFFFFFFF00000000),
+            (0x123456789ABCDEF0, 0xFEDCBA9876543210),
+        ];
+
+        for (a, b) in test_cases {
+            let expected = (Goldilocks::new(a) + Goldilocks::new(b)).as_canonical_u64();
+            let result = unsafe { add_asm(a, b) };
+            let result_canonical = Goldilocks::new(result).as_canonical_u64();
+            assert_eq!(
+                result_canonical, expected,
+                "add_asm({a:#x}, {b:#x}) = {result:#x}, expected {expected:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_mul_asm() {
+        // Test multiplication against the standard implementation
+        let test_cases: [(u64, u64); 8] = [
+            (0, 0),
+            (1, 1),
+            (P - 1, P - 1),
+            (P - 1, 2), // Near-max times small
+            (2, P - 1), // Commutative check
+            (0x123456789ABCDEF0, 0xFEDCBA9876543210),
+            (0xFFFFFFFF00000000, 0xFFFFFFFF00000000),
+            (EPSILON, EPSILON), // Edge case with epsilon
+        ];
+
+        for (a, b) in test_cases {
+            let expected = (Goldilocks::new(a) * Goldilocks::new(b)).as_canonical_u64();
+            let result = unsafe { mul_asm(a, b) };
+            let result_canonical = Goldilocks::new(result).as_canonical_u64();
+            assert_eq!(
+                result_canonical, expected,
+                "mul_asm({a:#x}, {b:#x}) = {result:#x}, expected {expected:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_mul_asm_random() {
+        // Test with many random values
+        let mut rng_state = 0xDEADBEEFCAFEBABEu64;
+        let mut next_rand = || {
+            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            rng_state
+        };
+
+        for _ in 0..1000 {
+            let a = next_rand();
+            let b = next_rand();
+            let expected = (Goldilocks::new(a) * Goldilocks::new(b)).as_canonical_u64();
+            let result = unsafe { mul_asm(a, b) };
+            let result_canonical = Goldilocks::new(result).as_canonical_u64();
+            assert_eq!(
+                result_canonical, expected,
+                "mul_asm({a:#x}, {b:#x}) = {result:#x}, expected {expected:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_sbox_layer() {
+        let mut rng_state = 98765u64;
+        let mut next_rand = || {
+            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            rng_state
+        };
+
+        // Test S-box layer against generic implementation
+        let mut state_asm: [Goldilocks; 8] = core::array::from_fn(|_| Goldilocks::new(next_rand()));
+        let state_generic = state_asm;
+
+        // Convert to raw and apply ASM S-box
+        let state_raw: &mut [u64; 8] =
+            unsafe { &mut *(&mut state_asm as *mut [Goldilocks; 8] as *mut [u64; 8]) };
+        unsafe {
+            sbox_layer_asm(state_raw);
+        }
+
+        // Compute expected results
+        for i in 0..8 {
+            let x = state_generic[i];
+            let x2 = x * x;
+            let x3 = x2 * x;
+            let x4 = x2 * x2;
+            let x7 = x3 * x4;
+            assert_eq!(
+                state_asm[i].as_canonical_u64(),
+                x7.as_canonical_u64(),
+                "S-box mismatch at index {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_mds_light_permutation() {
+        use p3_poseidon2::{MDSMat4, mds_light_permutation};
+
+        let mut rng_state = 54321u64;
+        let mut next_rand = || {
+            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            rng_state
+        };
+
+        // Test MDS against generic implementation
+        let mut state_asm: [Goldilocks; 12] =
+            core::array::from_fn(|_| Goldilocks::new(next_rand()));
+        let mut state_generic = state_asm;
+
+        // Apply ASM MDS
+        let state_raw: &mut [u64; 12] =
+            unsafe { &mut *(&mut state_asm as *mut [Goldilocks; 12] as *mut [u64; 12]) };
+        unsafe {
+            mds_light_permutation_asm(state_raw);
+        }
+
+        // Apply generic MDS
+        mds_light_permutation(&mut state_generic, &MDSMat4);
+
+        // Compare results
+        for i in 0..12 {
+            assert_eq!(
+                state_asm[i].as_canonical_u64(),
+                state_generic[i].as_canonical_u64(),
+                "MDS mismatch at index {i}"
+            );
+        }
+    }
+
+    // ===================== Boundary Value Tests =====================
+    // Test edge cases that stress reduction logic and overflow handling
+
+    const P_MINUS_1: u64 = P - 1;
+    const TWO_POW_32: u64 = 0x1_0000_0000;
+
+    /// Boundary values for arithmetic tests
+    const BOUNDARY_VALS: [u64; 8] = [
+        0,
+        1,
+        P_MINUS_1,
+        EPSILON,
+        TWO_POW_32,
+        TWO_POW_32 - 1,
+        0x8000_0000_0000_0000,
+        0x123456789ABCDEF0,
+    ];
+
+    fn check_binary_op<F>(op_name: &str, asm_op: F)
+    where
+        F: Fn(u64, u64) -> u64,
+    {
+        for &a in &BOUNDARY_VALS {
+            for &b in &BOUNDARY_VALS {
+                let expected = match op_name {
+                    "add" => (Goldilocks::new(a) + Goldilocks::new(b)).as_canonical_u64(),
+                    "mul" => (Goldilocks::new(a) * Goldilocks::new(b)).as_canonical_u64(),
+                    _ => panic!("unknown op"),
+                };
+                let result = Goldilocks::new(asm_op(a, b)).as_canonical_u64();
+                assert_eq!(result, expected, "{op_name}({a:#x}, {b:#x}) mismatch");
+            }
+        }
+    }
+
+    #[test]
+    fn test_arithmetic_boundary_values() {
+        // Test add_asm and mul_asm with all boundary value combinations
+        check_binary_op("add", |a, b| unsafe { add_asm(a, b) });
+        check_binary_op("mul", |a, b| unsafe { mul_asm(a, b) });
+
+        // Verify key identities
+        assert_eq!(
+            Goldilocks::new(unsafe { mul_asm(P_MINUS_1, P_MINUS_1) }).as_canonical_u64(),
+            1,
+            "(-1)^2 should equal 1"
+        );
+    }
+
+    #[test]
+    fn test_sbox_mds_boundary_values() {
+        use p3_poseidon2::{MDSMat4, mds_light_permutation};
+
+        // Test S-box with boundary values
+        for &val in &BOUNDARY_VALS {
+            let g = Goldilocks::new(val);
+            let expected = {
+                let x2 = g * g;
+                let x4 = x2 * x2;
+                x2 * x4 * g
+            };
+
+            let mut state: [u64; 8] = [val, 1, 1, 1, 1, 1, 1, 1];
+            unsafe {
+                sbox_layer_asm(&mut state);
+            }
+
+            assert_eq!(
+                Goldilocks::new(state[0]).as_canonical_u64(),
+                expected.as_canonical_u64(),
+                "sbox({val:#x}) mismatch"
+            );
+        }
+
+        // Test MDS with mixed boundary patterns
+        let mds_vals: [u64; 4] = [0, 1, EPSILON, TWO_POW_32];
+        for &v0 in &mds_vals {
+            for &v1 in &mds_vals {
+                let mut state_generic: [Goldilocks; 8] =
+                    core::array::from_fn(|i| Goldilocks::new(if i % 2 == 0 { v0 } else { v1 }));
+                let mut state_raw: [u64; 8] =
+                    core::array::from_fn(|i| state_generic[i].as_canonical_u64());
+
+                unsafe {
+                    mds_light_permutation_asm(&mut state_raw);
+                }
+                mds_light_permutation(&mut state_generic, &MDSMat4);
+
+                for i in 0..8 {
+                    assert_eq!(
+                        Goldilocks::new(state_raw[i]).as_canonical_u64(),
+                        state_generic[i].as_canonical_u64(),
+                        "MDS v0={v0:#x} v1={v1:#x} mismatch at {i}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_internal_round_correctness() {
+        // Verify internal round formula: s0=state[0]+rc, s0_7=s0^7,
+        // sum=s0_7+sum(state[1..]), state[i]=state[i]*diag[i]+sum
+        let diag: [u64; 8] = [
+            0xc3b6c08e23ba9300,
+            0xd84b5de94a324fb6,
+            0x0d0c371c5b35b84f,
+            0x7964f570a8f648d,
+            0x5daf18bbd996604b,
+            0x6743bc47b9595257,
+            0x5528b9362c59bb70,
+            0xac45e25b7127b68b,
+        ];
+        let rc = 0x123456789ABCDEF0u64;
+
+        let mut state: [u64; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+        let orig = state;
+
+        // Compute reference
+        let s0 = Goldilocks::new(orig[0]) + Goldilocks::new(rc);
+        let s0_7 = {
+            let x2 = s0 * s0;
+            let x4 = x2 * x2;
+            x2 * x4 * s0
+        };
+        let sum_hi: Goldilocks = orig[1..].iter().map(|&x| Goldilocks::new(x)).sum();
+        let sum = sum_hi + s0_7;
+
+        let mut expected: [Goldilocks; 8] = core::array::from_fn(|i| Goldilocks::new(orig[i]));
+        expected[0] = s0_7 * Goldilocks::new(diag[0]) + sum;
+        for i in 1..8 {
+            expected[i] = Goldilocks::new(orig[i]) * Goldilocks::new(diag[i]) + sum;
+        }
+
+        unsafe {
+            internal_round_asm_w8(&mut state, &diag, rc);
+        }
+
+        for i in 0..8 {
+            assert_eq!(
+                Goldilocks::new(state[i]).as_canonical_u64(),
+                expected[i].as_canonical_u64(),
+                "internal_round mismatch at {i}"
+            );
+        }
+    }
+}
