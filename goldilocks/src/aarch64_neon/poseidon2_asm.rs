@@ -158,6 +158,114 @@ pub fn internal_permute_state_asm<const WIDTH: usize>(
     }
 }
 
+/// Interleaved dual-lane internal round for better ILP.
+/// Processes two independent states simultaneously, interleaving operations to hide latency.
+#[inline(always)]
+pub unsafe fn internal_round_dual_asm<const WIDTH: usize>(
+    state0: &mut [u64; WIDTH],
+    state1: &mut [u64; WIDTH],
+    diag: &[u64; WIDTH],
+    rc: u64,
+) {
+    unsafe {
+        // Add round constant to state[0] for both lanes
+        let s0_a = add_asm(state0[0], rc);
+        let s0_b = add_asm(state1[0], rc);
+
+        // Start S-box - compute s0^2 for both lanes (independent muls)
+        let s0_2_a = mul_asm(s0_a, s0_a);
+        let s0_2_b = mul_asm(s0_b, s0_b);
+
+        // While s0^2 is computing, sum state[1..WIDTH] for both lanes
+        let mut sum_hi_a: u64 = 0;
+        let mut sum_hi_b: u64 = 0;
+        for i in 1..WIDTH {
+            sum_hi_a = add_asm(sum_hi_a, state0[i]);
+            sum_hi_b = add_asm(sum_hi_b, state1[i]);
+        }
+
+        // Continue S-box - compute s0^3 and s0^4 for both lanes (interleaved)
+        let s0_3_a = mul_asm(s0_2_a, s0_a);
+        let s0_3_b = mul_asm(s0_2_b, s0_b);
+        let s0_4_a = mul_asm(s0_2_a, s0_2_a);
+        let s0_4_b = mul_asm(s0_2_b, s0_2_b);
+
+        // Start diagonal multiplies for both lanes (interleaved)
+        let mut diag_muls_a: [u64; WIDTH] = [0; WIDTH];
+        let mut diag_muls_b: [u64; WIDTH] = [0; WIDTH];
+        for i in 1..WIDTH {
+            diag_muls_a[i] = mul_asm(state0[i], diag[i]);
+            diag_muls_b[i] = mul_asm(state1[i], diag[i]);
+        }
+
+        // Finish S-box - compute s0^7 for both lanes
+        let s0_7_a = mul_asm(s0_3_a, s0_4_a);
+        let s0_7_b = mul_asm(s0_3_b, s0_4_b);
+
+        // Complete the sums
+        let sum_a = add_asm(sum_hi_a, s0_7_a);
+        let sum_b = add_asm(sum_hi_b, s0_7_b);
+
+        // Compute state[0] = s0^7 * diag[0] + sum for both lanes
+        let s0_diag_a = mul_asm(s0_7_a, diag[0]);
+        let s0_diag_b = mul_asm(s0_7_b, diag[0]);
+        state0[0] = add_asm(s0_diag_a, sum_a);
+        state1[0] = add_asm(s0_diag_b, sum_b);
+
+        // Finalize state[1..WIDTH] for both lanes
+        for i in 1..WIDTH {
+            state0[i] = add_asm(diag_muls_a[i], sum_a);
+            state1[i] = add_asm(diag_muls_b[i], sum_b);
+        }
+    }
+}
+
+/// Interleaved dual-lane external round.
+#[inline(always)]
+pub unsafe fn external_round_dual_asm<const WIDTH: usize>(
+    state0: &mut [u64; WIDTH],
+    state1: &mut [u64; WIDTH],
+    rc: &[u64; WIDTH],
+) {
+    unsafe {
+        // Add round constants - interleaved
+        for i in 0..WIDTH {
+            state0[i] = add_asm(state0[i], rc[i]);
+            state1[i] = add_asm(state1[i], rc[i]);
+        }
+
+        // S-box layer - interleaved x^2 computation
+        let mut x2_a = [0u64; WIDTH];
+        let mut x2_b = [0u64; WIDTH];
+        for i in 0..WIDTH {
+            x2_a[i] = mul_asm(state0[i], state0[i]);
+            x2_b[i] = mul_asm(state1[i], state1[i]);
+        }
+
+        // x^3 and x^4 - interleaved
+        let mut x3_a = [0u64; WIDTH];
+        let mut x3_b = [0u64; WIDTH];
+        let mut x4_a = [0u64; WIDTH];
+        let mut x4_b = [0u64; WIDTH];
+        for i in 0..WIDTH {
+            x3_a[i] = mul_asm(x2_a[i], state0[i]);
+            x3_b[i] = mul_asm(x2_b[i], state1[i]);
+            x4_a[i] = mul_asm(x2_a[i], x2_a[i]);
+            x4_b[i] = mul_asm(x2_b[i], x2_b[i]);
+        }
+
+        // x^7 - interleaved
+        for i in 0..WIDTH {
+            state0[i] = mul_asm(x3_a[i], x4_a[i]);
+            state1[i] = mul_asm(x3_b[i], x4_b[i]);
+        }
+
+        // MDS - sequential (MDS is mostly additions, less benefit from interleaving)
+        mds_light_permutation_asm(state0);
+        mds_light_permutation_asm(state1);
+    }
+}
+
 // External layer: S-box on all elements, then MDS. Pipelined for latency hiding.
 
 /// Double a Goldilocks element.
