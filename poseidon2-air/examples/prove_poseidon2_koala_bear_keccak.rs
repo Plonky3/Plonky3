@@ -79,7 +79,7 @@ fn prove_and_verify() -> Result<(), impl Debug> {
         MyCompress,
         4,
     >;
-    let val_mmcs = ValMmcs::new(field_hash, compress);
+    let val_mmcs = ValMmcs::new(field_hash, compress, 3);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());

@@ -5,7 +5,7 @@ use core::fmt::{Display, Formatter};
 
 use p3_field::{BasedVectorSpace, Field, PrimeField64};
 use p3_monty_31::{MontyField31, MontyParameters};
-use p3_symmetric::{CryptographicPermutation, Hash};
+use p3_symmetric::{CryptographicPermutation, Hash, MerkleCap};
 
 use crate::{CanObserve, CanSample, CanSampleBits, CanSampleUniformBits, FieldChallenger};
 
@@ -143,6 +143,32 @@ where
         for value in values {
             self.observe(value);
         }
+    }
+}
+
+impl<F, P, const N: usize, const WIDTH: usize, const RATE: usize> CanObserve<&MerkleCap<F, F, N>>
+    for DuplexChallenger<F, P, WIDTH, RATE>
+where
+    F: Copy,
+    P: CryptographicPermutation<[F; WIDTH]>,
+{
+    fn observe(&mut self, cap: &MerkleCap<F, F, N>) {
+        for digest in cap.as_slice() {
+            for value in digest {
+                self.observe(*value);
+            }
+        }
+    }
+}
+
+impl<F, P, const N: usize, const WIDTH: usize, const RATE: usize> CanObserve<MerkleCap<F, F, N>>
+    for DuplexChallenger<F, P, WIDTH, RATE>
+where
+    F: Copy,
+    P: CryptographicPermutation<[F; WIDTH]>,
+{
+    fn observe(&mut self, cap: MerkleCap<F, F, N>) {
+        self.observe(&cap);
     }
 }
 

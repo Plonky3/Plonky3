@@ -198,7 +198,7 @@ fn setup_test_config() -> MyConfig {
     let perm = Perm::new_from_rng_128(&mut rng);
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
-    let val_mmcs = ValMmcs::new(hash, compress);
+    let val_mmcs = ValMmcs::new(hash, compress, 0);
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
     let fri_params = create_test_fri_params(challenge_mmcs, 2);
     let pcs = Pcs::new(Dft::default(), val_mmcs, fri_params);
@@ -211,7 +211,7 @@ fn setup_zk_test_config() -> MyHidingConfig {
     let perm = Perm::new_from_rng_128(&mut rng);
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
-    let val_mmcs = HidingValMmcs::new(hash, compress, rng.clone());
+    let val_mmcs = HidingValMmcs::new(hash, compress, 0, rng.clone());
     let challenge_mmcs = HidingChallengeMmcs::new(val_mmcs.clone());
     let fri_params = create_test_fri_params(challenge_mmcs, 2);
     let pcs = HidingPcs::new(Dft::default(), val_mmcs, fri_params, 4, rng);

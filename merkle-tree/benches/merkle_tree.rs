@@ -106,6 +106,7 @@ fn bench_merkle_tree<P, PW, H, C, const DIGEST_ELEMS: usize>(criterion: &mut Cri
 where
     P: PackedField,
     PW: PackedValue,
+    PW::Value: Clone,
     H: CryptographicHasher<P::Scalar, [PW::Value; DIGEST_ELEMS]>
         + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
         + Sync,
@@ -133,7 +134,7 @@ where
     let mut group = criterion.benchmark_group(name);
     group.sample_size(10);
 
-    let mmcs = MerkleTreeMmcs::<P, PW, H, C, DIGEST_ELEMS>::new(h, c);
+    let mmcs = MerkleTreeMmcs::<P, PW, H, C, DIGEST_ELEMS>::new(h, c, 0);
     group.bench_with_input(params, &leaves, |b, input| {
         b.iter(|| mmcs.commit(input.clone()));
     });
@@ -143,6 +144,7 @@ fn bench_mmcs<P, PW, H, C, const DIGEST_ELEMS: usize>(criterion: &mut Criterion,
 where
     P: PackedField,
     PW: PackedValue,
+    PW::Value: Clone,
     H: CryptographicHasher<P::Scalar, [PW::Value; DIGEST_ELEMS]>
         + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
         + Sync,
@@ -171,7 +173,7 @@ where
     let mut group = criterion.benchmark_group(name);
     group.sample_size(10);
 
-    let mmcs = MerkleTreeMmcs::<P, PW, H, C, DIGEST_ELEMS>::new(h, c);
+    let mmcs = MerkleTreeMmcs::<P, PW, H, C, DIGEST_ELEMS>::new(h, c, 0);
     group.bench_with_input(params, &leaves, |b, input| {
         b.iter(|| mmcs.commit(input.clone()));
     });
