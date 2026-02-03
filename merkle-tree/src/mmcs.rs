@@ -27,21 +27,26 @@ use itertools::Itertools;
 use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs};
 use p3_field::PackedValue;
 use p3_matrix::{Dimensions, Matrix};
-use p3_symmetric::{CryptographicHasher, Hash, PseudoCompressionFunction};
+use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::MerkleTree;
 use crate::MerkleTreeError::{
-    EmptyBatch, IncompatibleHeights, IndexOutOfBounds, RootMismatch, WrongBatchSize, WrongHeight,
+    CapMismatch, EmptyBatch, IncompatibleHeights, IndexOutOfBounds, WrongBatchSize, WrongCapHeight,
+    WrongHeight,
 };
+use crate::{MerkleCap, MerkleTree};
 
 /// A Merkle Tree-based commitment scheme for multiple matrices of potentially differing heights.
 ///
 /// `MerkleTreeMmcs` generalizes a classical Merkle Tree to support committing to a list of
 /// matrices by arranging their rows into a unified binary tree. The tallest matrix defines
 /// the maximum height, and smaller matrices are integrated at appropriate depths.
+///
+/// The commitment is a [`MerkleCap`], which is the `cap_height`-th layer from the root.
+/// A `cap_height` of 0 means the commitment is just the root (a single hash).
+/// A `cap_height` of h means the commitment contains `2^h` hashes and proofs are `h` elements shorter.
 ///
 /// Type Parameters:
 /// - `P`: Packed leaf value (e.g. a field element or vector of elements)
@@ -56,6 +61,10 @@ pub struct MerkleTreeMmcs<P, PW, H, C, const DIGEST_ELEMS: usize> {
 
     /// The compression function used to hash internal tree nodes.
     compress: C,
+
+    /// The height of the Merkle cap. A cap_height of 0 uses only the root,
+    /// while a cap_height of h uses 2^h hashes from h levels below the root.
+    cap_height: usize,
 
     /// Phantom type to associate `P` and `PW` without storing values.
     _phantom: PhantomData<(P, PW)>,
@@ -73,10 +82,10 @@ pub enum MerkleTreeError {
     WrongWidth,
 
     /// The number of proof nodes does not match the expected tree height.
-    #[error("wrong height: expected log_max_height {log_max_height}, got {num_siblings} siblings")]
+    #[error("wrong height: expected {expected_proof_len} siblings, got {num_siblings}")]
     WrongHeight {
-        /// Expected log2 of the maximum matrix height.
-        log_max_height: usize,
+        /// Expected number of sibling hashes in the proof.
+        expected_proof_len: usize,
 
         /// Actual number of sibling hashes provided in the proof.
         num_siblings: usize,
@@ -95,23 +104,43 @@ pub enum MerkleTreeError {
         index: usize,
     },
 
-    /// The computed Merkle root does not match the provided commitment.
-    #[error("root mismatch: computed Merkle root does not match commitment")]
-    RootMismatch,
-
     /// Attempted to open an empty batch (no committed matrices).
     #[error("empty batch: attempted to open an empty batch with no committed matrices")]
     EmptyBatch,
+
+    /// The computed Merkle digest does not match any entry in the cap.
+    #[error("cap mismatch: computed digest does not match any entry in the Merkle cap")]
+    CapMismatch,
+
+    /// The cap height is too large for the tree.
+    #[error("cap height {cap_height} exceeds tree depth {tree_depth}")]
+    WrongCapHeight {
+        /// The configured cap height.
+        cap_height: usize,
+        /// The actual tree depth.
+        tree_depth: usize,
+    },
 }
 
 impl<P, PW, H, C, const DIGEST_ELEMS: usize> MerkleTreeMmcs<P, PW, H, C, DIGEST_ELEMS> {
     /// Create a new `MerkleTreeMmcs` with the given hash and compression functions.
-    pub const fn new(hash: H, compress: C) -> Self {
+    ///
+    /// # Arguments
+    /// * `hash` - The hash function used to hash individual matrix rows (leaf level).
+    /// * `compress` - The compression function used to hash internal tree nodes.
+    /// * `cap_height` - The height of the Merkle cap. A cap_height of 0 uses only the root,
+    ///   while a cap_height of h uses 2^h hashes from h levels below the root.
+    pub const fn new(hash: H, compress: C, cap_height: usize) -> Self {
         Self {
             hash,
             compress,
+            cap_height,
             _phantom: PhantomData,
         }
+    }
+
+    pub const fn cap_height(&self) -> usize {
+        self.cap_height
     }
 }
 
@@ -126,11 +155,11 @@ where
     C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>
         + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>
         + Sync,
-    PW::Value: Eq,
+    PW::Value: Eq + Clone,
     [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
 {
     type ProverData<M> = MerkleTree<P::Value, PW::Value, M, DIGEST_ELEMS>;
-    type Commitment = Hash<P::Value, PW::Value, DIGEST_ELEMS>;
+    type Commitment = MerkleCap<P::Value, PW::Value, DIGEST_ELEMS>;
     type Proof = Vec<[PW::Value; DIGEST_ELEMS]>;
     type Error = MerkleTreeError;
 
@@ -165,8 +194,13 @@ where
         }
 
         let tree = MerkleTree::new::<P, PW, H, C>(&self.hash, &self.compress, inputs);
-        let root = tree.root();
-        (root, tree)
+
+        // Make cap_height fit this tree (small trees during FRI folding may have fewer layers)
+        let num_layers = tree.num_layers();
+        let effective_cap_height = self.cap_height.min(num_layers.saturating_sub(1));
+
+        let cap = tree.cap(effective_cap_height);
+        (cap, tree)
     }
 
     /// Opens a batch of rows from committed matrices.
@@ -175,7 +209,7 @@ where
     /// the `j`th row of the ith matrix `M[i]`, with
     ///     `j == index >> (log2_ceil(max_height) - log2_ceil(M[i].height))`
     /// and `proof` is the vector of sibling Merkle tree nodes allowing the verifier to
-    /// reconstruct the committed root.
+    /// reconstruct the committed cap entry.
     fn open_batch<M: Matrix<P::Value>>(
         &self,
         index: usize,
@@ -188,7 +222,7 @@ where
         );
         let log_max_height = log2_ceil_usize(max_height);
 
-        // Get the matrix rows encountered along the path from the root to the given leaf index.
+        // Get the matrix rows encountered along the path from the cap to the given leaf index.
         let openings = prover_data
             .leaves
             .iter()
@@ -200,8 +234,11 @@ where
             })
             .collect_vec();
 
-        // Get all the siblings nodes corresponding to the path from the root to the given leaf index.
-        let proof = (0..log_max_height)
+        // Only include siblings up to (but not including) the cap layer.
+        let num_layers = prover_data.digest_layers.len();
+        let effective_cap_height = self.cap_height.min(num_layers.saturating_sub(1));
+        let proof_len = log_max_height - effective_cap_height;
+        let proof = (0..proof_len)
             .map(|i| prover_data.digest_layers[i][(index >> i) ^ 1])
             .collect();
 
@@ -215,9 +252,9 @@ where
         prover_data.leaves.iter().collect()
     }
 
-    /// Verifies an opened batch of rows with respect to a given commitment.
+    /// Verifies an opened batch of rows with respect to a given commitment (Merkle cap).
     ///
-    /// - `commit`: The merkle root of the tree.
+    /// - `commit`: The Merkle cap of the tree.
     /// - `dimensions`: A vector of the dimensions of the matrices committed to.
     /// - `index`: The index of a leaf in the tree.
     /// - `opened_values`: A vector of matrix rows. Assume that the tallest matrix committed
@@ -265,22 +302,34 @@ where
             return Err(IncompatibleHeights);
         }
 
+        // Derive effective cap height from the commitment size.
+        // commit.len() == 2^effective_cap_height (possibly shortened if committing to small trees).
+        let effective_cap_height = commit.height();
+
         // Get the initial height padded to a power of two. As heights_tallest_first is sorted,
         // the initial height will be the maximum height.
-        // Returns an error if either:
-        //              1. proof.len() != log_max_height
-        //              2. heights_tallest_first is empty.
         let (max_height, mut curr_height_padded) = match heights_tallest_first.peek() {
             Some((_, dims)) => {
                 let max_height = dims.height;
                 let curr_height_padded = max_height.next_power_of_two();
                 let log_max_height = log2_strict_usize(curr_height_padded);
-                if opening_proof.len() != log_max_height {
+                let expected_proof_len = log_max_height.saturating_sub(effective_cap_height);
+
+                if opening_proof.len() != expected_proof_len {
                     return Err(WrongHeight {
-                        log_max_height,
+                        expected_proof_len,
                         num_siblings: opening_proof.len(),
                     });
                 }
+
+                // Verify cap height is consistent with tree
+                if effective_cap_height > log_max_height {
+                    return Err(WrongCapHeight {
+                        cap_height: effective_cap_height,
+                        tree_depth: log_max_height,
+                    });
+                }
+
                 (max_height, curr_height_padded)
             }
             None => return Err(EmptyBatch),
@@ -291,7 +340,7 @@ where
         }
 
         // Hash all matrix openings at the current height.
-        let mut root = self.hash.hash_iter_slices(
+        let mut digest = self.hash.hash_iter_slices(
             heights_tallest_first
                 .peeking_take_while(|(_, dims)| {
                     dims.height.next_power_of_two() == curr_height_padded
@@ -302,13 +351,13 @@ where
         for &sibling in opening_proof {
             // The last bit of index informs us whether the current node is on the left or right.
             let (left, right) = if index & 1 == 0 {
-                (root, sibling)
+                (digest, sibling)
             } else {
-                (sibling, root)
+                (sibling, digest)
             };
 
             // Combine the current node with the sibling node to get the parent node.
-            root = self.compress.compress([left, right]);
+            digest = self.compress.compress([left, right]);
             index >>= 1;
             curr_height_padded >>= 1;
 
@@ -318,22 +367,26 @@ where
                 .map(|(_, dims)| dims.height)
                 .filter(|h| h.next_power_of_two() == curr_height_padded);
             if let Some(next_height) = next_height {
-                // If there are new matrix rows, hash the rows together and then combine with the current root.
+                // If there are new matrix rows, hash the rows together and then combine with the current digest.
                 let next_height_openings_digest = self.hash.hash_iter_slices(
                     heights_tallest_first
                         .peeking_take_while(|(_, dims)| dims.height == next_height)
                         .map(|(i, _)| opened_values[i].as_slice()),
                 );
 
-                root = self.compress.compress([root, next_height_openings_digest]);
+                digest = self
+                    .compress
+                    .compress([digest, next_height_openings_digest]);
             }
         }
 
-        // The computed root should equal the committed one.
-        if commit == &root {
+        // After processing the proof, `index` has been shifted by the proof length.
+        // This index now points into the cap layer.
+        let cap_index = index;
+        if cap_index < commit.len() && commit[cap_index] == digest {
             Ok(())
         } else {
-            Err(RootMismatch)
+            Err(CapMismatch)
         }
     }
 }
@@ -344,7 +397,7 @@ mod tests {
 
     use itertools::Itertools;
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-    use p3_commit::Mmcs;
+    use p3_commit::{BatchOpeningRef, Mmcs};
     use p3_field::{Field, PrimeCharacteristicRing};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_matrix::{Dimensions, Matrix};
@@ -370,7 +423,7 @@ mod tests {
         let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash.clone(), compress.clone());
+        let mmcs = MyMmcs::new(hash.clone(), compress.clone(), 0);
 
         // v = [2, 1, 2, 2, 0, 0, 1, 0]
         let v = vec![
@@ -395,7 +448,7 @@ mod tests {
                 compress.compress([hash.hash_item(v[6]), hash.hash_item(v[7])]),
             ]),
         ]);
-        assert_eq!(commit, expected_result);
+        assert_eq!(commit[0], expected_result);
     }
 
     #[test]
@@ -404,13 +457,13 @@ mod tests {
         let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash.clone(), compress);
+        let mmcs = MyMmcs::new(hash.clone(), compress, 0);
 
         let mat = RowMajorMatrix::<F>::rand(&mut rng, 1, 8);
         let (commit, _) = mmcs.commit(vec![mat.clone()]);
 
         let expected_result = hash.hash_iter(mat.vertically_packed_row(0));
-        assert_eq!(commit, expected_result);
+        assert_eq!(commit[0], expected_result);
     }
 
     #[test]
@@ -419,7 +472,7 @@ mod tests {
         let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash.clone(), compress.clone());
+        let mmcs = MyMmcs::new(hash.clone(), compress.clone(), 0);
 
         // mat = [
         //   0 1
@@ -433,7 +486,7 @@ mod tests {
             hash.hash_slice(&[F::ZERO, F::ONE]),
             hash.hash_slice(&[F::TWO, F::ONE]),
         ]);
-        assert_eq!(commit, expected_result);
+        assert_eq!(commit[0], expected_result);
     }
 
     #[test]
@@ -442,7 +495,7 @@ mod tests {
         let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash.clone(), compress.clone());
+        let mmcs = MyMmcs::new(hash.clone(), compress.clone(), 0);
         let default_digest = [F::ZERO; 8];
 
         // mat = [
@@ -461,7 +514,7 @@ mod tests {
             ]),
             compress.compress([hash.hash_slice(&[F::TWO, F::TWO]), default_digest]),
         ]);
-        assert_eq!(commit, expected_result);
+        assert_eq!(commit[0], expected_result);
     }
 
     #[test]
@@ -470,7 +523,7 @@ mod tests {
         let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash.clone(), compress.clone());
+        let mmcs = MyMmcs::new(hash.clone(), compress.clone(), 0);
         let default_digest = [F::ZERO; 8];
 
         // mat_1 = [
@@ -550,7 +603,7 @@ mod tests {
             ]),
         ]);
 
-        assert_eq!(commit, expected_result);
+        assert_eq!(commit[0], expected_result);
 
         let (opened_values, _) = mmcs.open_batch(2, &prover_data).unpack();
         assert_eq!(
@@ -565,7 +618,7 @@ mod tests {
         let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash, compress);
+        let mmcs = MyMmcs::new(hash, compress, 0);
 
         let input_1 = RowMajorMatrix::<F>::rand(&mut rng, 5, 8);
         let input_2 = RowMajorMatrix::<F>::rand(&mut rng, 3, 16);
@@ -582,7 +635,7 @@ mod tests {
         let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash, compress);
+        let mmcs = MyMmcs::new(hash, compress, 0);
 
         // attempt to commit to a mat with 8 rows and a mat with 7 rows. this should panic.
         let large_mat = RowMajorMatrix::new([1, 2, 3, 4, 5, 6, 7, 8].map(F::from_u8).to_vec(), 1);
@@ -596,7 +649,7 @@ mod tests {
         let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash, compress);
+        let mmcs = MyMmcs::new(hash, compress, 0);
 
         // 4 8x1 matrixes, 4 8x2 matrixes
         let mut mats = (0..4)
@@ -632,7 +685,7 @@ mod tests {
         let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash, compress);
+        let mmcs = MyMmcs::new(hash, compress, 0);
 
         // 4 mats with 1000 rows, 8 columns
         let mut mats = (0..4)
@@ -685,7 +738,7 @@ mod tests {
         let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash, compress);
+        let mmcs = MyMmcs::new(hash, compress, 0);
 
         // 10 mats with 32 rows where the ith mat has i + 1 cols
         let mats = (0..10)
@@ -706,7 +759,7 @@ mod tests {
         let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash, compress);
+        let mmcs = MyMmcs::new(hash, compress, 0);
 
         let tallest = RowMajorMatrix::new(vec![F::ONE; 11], 1);
         let invalid = RowMajorMatrix::new(vec![F::ONE; 5], 1);
@@ -714,5 +767,268 @@ mod tests {
         // We expect a panic because the smaller matrix needs ceil(11 / 2) == 6 rows;
         // height 5 would leave the global index 5 unmapped at that layer.
         let _ = mmcs.commit(vec![tallest, invalid]);
+    }
+
+    #[test]
+    fn cap_height_produces_shorter_proofs() {
+        let mut rng = SmallRng::seed_from_u64(2);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+
+        // Tree with 32 leaves -> log2(32) = 5 layers
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 32, 4);
+        let dims = vec![Dimensions {
+            height: 32,
+            width: 4,
+        }];
+
+        for cap_height in 0..5 {
+            let mmcs = MyMmcs::new(hash.clone(), compress.clone(), cap_height);
+            let (commit, data) = mmcs.commit(vec![mat.clone()]);
+
+            // Cap should have 2^cap_height elements
+            assert_eq!(commit.len(), 1 << cap_height);
+
+            // Proof should have (log2(32) - cap_height) = 5 - cap_height elements
+            let opening = mmcs.open_batch(17, &data);
+            assert_eq!(opening.opening_proof.len(), 5 - cap_height);
+
+            // Verification should succeed
+            mmcs.verify_batch(&commit, &dims, 17, (&opening).into())
+                .expect("verification should succeed");
+        }
+    }
+
+    #[test]
+    fn cap_verification_with_various_indices() {
+        let mut rng = SmallRng::seed_from_u64(3);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+
+        let mmcs = MyMmcs::new(hash, compress, 2); // cap_height = 2 -> 4 cap elements
+
+        // 64 rows -> 6 layers, proofs have 6 - 2 = 4 siblings
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 64, 8);
+        let dims = vec![Dimensions {
+            height: 64,
+            width: 8,
+        }];
+
+        let (commit, data) = mmcs.commit(vec![mat]);
+
+        assert_eq!(commit.len(), 4);
+
+        // Test various indices that map to different cap entries
+        for index in [0, 15, 16, 31, 32, 47, 48, 63] {
+            let opening = mmcs.open_batch(index, &data);
+            assert_eq!(opening.opening_proof.len(), 4);
+            mmcs.verify_batch(&commit, &dims, index, (&opening).into())
+                .unwrap_or_else(|_| panic!("verification at index {index} should succeed"));
+        }
+    }
+
+    #[test]
+    fn cap_tampered_proof_fails() {
+        let mut rng = SmallRng::seed_from_u64(4);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+
+        let mmcs = MyMmcs::new(hash, compress, 1);
+
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 16, 4);
+        let dims = vec![Dimensions {
+            height: 16,
+            width: 4,
+        }];
+
+        let (commit, data) = mmcs.commit(vec![mat]);
+
+        let mut opening = mmcs.open_batch(7, &data);
+        opening.opening_proof[0][0] += F::ONE;
+
+        mmcs.verify_batch(&commit, &dims, 7, (&opening).into())
+            .expect_err("tampered proof should fail verification");
+    }
+
+    #[test]
+    fn cap_with_mixed_height_matrices() {
+        let mut rng = SmallRng::seed_from_u64(5);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+
+        let mmcs = MyMmcs::new(hash, compress, 2);
+
+        // 64 rows and 8 rows (8 = 64 / 8, valid ratio)
+        let mat_large = RowMajorMatrix::<F>::rand(&mut rng, 64, 4);
+        let mat_small = RowMajorMatrix::<F>::rand(&mut rng, 8, 6);
+
+        let dims = vec![
+            Dimensions {
+                height: 64,
+                width: 4,
+            },
+            Dimensions {
+                height: 8,
+                width: 6,
+            },
+        ];
+
+        let (commit, data) = mmcs.commit(vec![mat_large, mat_small]);
+        assert_eq!(commit.len(), 4);
+
+        // Verify various indices
+        for index in [0, 7, 8, 15, 32, 63] {
+            let opening = mmcs.open_batch(index, &data);
+            mmcs.verify_batch(&commit, &dims, index, (&opening).into())
+                .unwrap_or_else(|_| panic!("verification at index {index} should succeed"));
+        }
+    }
+
+    #[test]
+    fn cap_height_shortened_for_small_trees() {
+        let mut rng = SmallRng::seed_from_u64(6);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+
+        // For 4 rows: digest_layers has [4 row hashes, 2, 1] = 3 layers.
+        // max cap_height = 3 - 1 = 2, giving 2^2 = 4 cap entries.
+        // With cap_height = 10 (too large), it should be shortened to 2.
+        let mmcs = MyMmcs::new(hash, compress, 10);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 4, 4);
+        let (cap, prover_data) = mmcs.commit(vec![mat]);
+
+        // Cap should have 4 entries (shortened to height 2)
+        assert_eq!(cap.len(), 4);
+        assert_eq!(cap.height(), 2);
+
+        // Verify that opening and verification still work
+        let (opening, proof) = mmcs.open_batch(0, &prover_data).unpack();
+        let dims = vec![Dimensions {
+            width: 4,
+            height: 4,
+        }];
+        mmcs.verify_batch(&cap, &dims, 0, BatchOpeningRef::new(&opening, &proof))
+            .unwrap();
+    }
+
+    #[test]
+    fn single_row_matrix_with_cap_height() {
+        let mut rng = SmallRng::seed_from_u64(7);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+
+        // Single-row matrix: digest_layers has [1 row hash] = 1 layer.
+        // max cap_height = 1 - 1 = 0, so any cap_height > 0 gets shortened.
+        let mmcs = MyMmcs::new(hash, compress, 5);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 1, 8);
+        let (cap, prover_data) = mmcs.commit(vec![mat]);
+
+        // Cap should have 1 entry (shortened to height 0 = root)
+        assert_eq!(cap.len(), 1);
+        assert_eq!(cap.height(), 0);
+
+        // Proof length should be 0 (we're already at the cap)
+        let (opening, proof) = mmcs.open_batch(0, &prover_data).unpack();
+        assert!(
+            proof.is_empty(),
+            "proof should be empty for single-row tree"
+        );
+
+        let dims = vec![Dimensions {
+            width: 8,
+            height: 1,
+        }];
+        mmcs.verify_batch(&cap, &dims, 0, BatchOpeningRef::new(&opening, &proof))
+            .unwrap();
+    }
+
+    #[test]
+    fn proof_length_zero_at_max_cap_height() {
+        let mut rng = SmallRng::seed_from_u64(8);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+
+        // 8 rows: digest_layers has [8, 4, 2, 1] = 4 layers, log_max_height = 3.
+        // max cap_height = 4 - 1 = 3, giving 2^3 = 8 cap entries.
+        // With cap_height = 3, proof length = 3 - 3 = 0.
+        let mmcs = MyMmcs::new(hash, compress, 3);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 8, 4);
+        let (cap, prover_data) = mmcs.commit(vec![mat]);
+
+        // Cap should have 8 entries (all leaf hashes)
+        assert_eq!(cap.len(), 8);
+        assert_eq!(cap.height(), 3);
+
+        // Proof length should be 0 since cap is at leaf level
+        for index in 0..8 {
+            let (opening, proof) = mmcs.open_batch(index, &prover_data).unpack();
+            assert!(
+                proof.is_empty(),
+                "proof should be empty when cap is at leaf level"
+            );
+
+            let dims = vec![Dimensions {
+                width: 4,
+                height: 8,
+            }];
+            mmcs.verify_batch(&cap, &dims, index, BatchOpeningRef::new(&opening, &proof))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn cap_height_exact_boundary() {
+        let mut rng = SmallRng::seed_from_u64(9);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+
+        // 16 rows: digest_layers has [16, 8, 4, 2, 1] = 5 layers, log_max_height = 4.
+        // max cap_height = 5 - 1 = 4.
+        // Test cap_height = 4 (exact boundary, no shortening).
+        let mmcs = MyMmcs::new(hash, compress, 4);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 16, 4);
+        let (cap, prover_data) = mmcs.commit(vec![mat]);
+
+        // Cap should have 16 entries
+        assert_eq!(cap.len(), 16);
+        assert_eq!(cap.height(), 4);
+
+        // Proof length should be 0
+        let (opening, proof) = mmcs.open_batch(0, &prover_data).unpack();
+        assert!(proof.is_empty());
+
+        let dims = vec![Dimensions {
+            width: 4,
+            height: 16,
+        }];
+        mmcs.verify_batch(&cap, &dims, 0, BatchOpeningRef::new(&opening, &proof))
+            .unwrap();
+
+        // Also test cap_height = 3 (one below boundary, proof_len = 1)
+        let mmcs2 = MyMmcs::new(
+            MyHash::new(Perm::new_from_rng_128(&mut rng)),
+            MyCompress::new(Perm::new_from_rng_128(&mut rng)),
+            3,
+        );
+        let mat2 = RowMajorMatrix::<F>::rand(&mut rng, 16, 4);
+        let (cap2, prover_data2) = mmcs2.commit(vec![mat2]);
+
+        assert_eq!(cap2.len(), 8);
+        assert_eq!(cap2.height(), 3);
+
+        let (opening2, proof2) = mmcs2.open_batch(0, &prover_data2).unpack();
+        assert_eq!(proof2.len(), 1, "proof should have 1 sibling");
+
+        mmcs2
+            .verify_batch(&cap2, &dims, 0, BatchOpeningRef::new(&opening2, &proof2))
+            .unwrap();
     }
 }

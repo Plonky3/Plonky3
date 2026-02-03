@@ -129,7 +129,7 @@ fn make_two_adic_config(log_final_poly_len: usize) -> MyConfig {
     let perm = Perm::new_from_rng_128(&mut rng);
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
-    let val_mmcs = ValMmcs::new(hash, compress);
+    let val_mmcs = ValMmcs::new(hash, compress, 0);
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
     let fri_params = FriParameters {
@@ -168,7 +168,7 @@ fn make_circle_config() -> CircleConfig {
     let byte_hash = CircleByteHash {};
     let field_hash = CircleFieldHash::new(byte_hash);
     let compress = CircleCompress::new(byte_hash);
-    let val_mmcs = CircleValMmcs::new(field_hash, compress);
+    let val_mmcs = CircleValMmcs::new(field_hash, compress, 0);
     let challenge_mmcs = CircleChallengeMmcs::new(val_mmcs.clone());
     let fri_params = FriParameters {
         log_blowup: 1,
@@ -252,7 +252,7 @@ fn test_zk() {
     >;
 
     let rng = SmallRng::seed_from_u64(1);
-    let val_mmcs = ValHidingMmcs::new(field_hash, compress, rng);
+    let val_mmcs = ValHidingMmcs::new(field_hash, compress, 0, rng);
 
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
@@ -336,7 +336,7 @@ fn test_incorrect_public_value() {
     let perm = Perm::new_from_rng_128(&mut rng);
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
-    let val_mmcs = ValMmcs::new(hash, compress);
+    let val_mmcs = ValMmcs::new(hash, compress, 0);
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
     let fri_params = create_test_fri_params(challenge_mmcs, 1);
