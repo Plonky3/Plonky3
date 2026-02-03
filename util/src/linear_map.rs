@@ -161,6 +161,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_index_of() {
+        let mut map = LinearMap::new();
+        assert_eq!(map.index_of(&1), None);
+
+        map.insert(1, "a");
+        map.insert(2, "b");
+
+        assert_eq!(map.index_of(&1), Some(0));
+        assert_eq!(map.index_of(&2), Some(1));
+        assert_eq!(map.index_of(&3), None);
+    }
+
+    #[test]
+    fn test_index_of_after_overwrite() {
+        let mut map = LinearMap::new();
+        map.insert(1, "a");
+        map.insert(2, "b");
+
+        // Overwriting an existing key should not change its position.
+        assert_eq!(map.insert(1, "c"), Some("a"));
+        assert_eq!(map.index_of(&1), Some(0));
+        assert_eq!(map.get(&1), Some(&"c"));
+    }
+
+    #[test]
     fn test_insert_and_get() {
         let mut map = LinearMap::new();
 
