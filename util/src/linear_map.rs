@@ -26,6 +26,11 @@ impl<K, V> Default for LinearMap<K, V> {
 }
 
 impl<K: Eq, V> LinearMap<K, V> {
+    #[inline]
+    fn index_of(&self, k: &K) -> Option<usize> {
+        self.0.iter().position(|(kk, _)| kk == k)
+    }
+
     /// Creates a new empty `LinearMap`.
     pub fn new() -> Self {
         Default::default()
@@ -42,7 +47,7 @@ impl<K: Eq, V> LinearMap<K, V> {
     ///
     /// This is an **O(n)** operation.
     pub fn get(&self, k: &K) -> Option<&V> {
-        self.0.iter().find(|(kk, _)| kk == k).map(|(_, v)| v)
+        self.index_of(k).map(|idx| &self.0[idx].1)
     }
 
     /// Gets a mutable reference to the value associated with the key, if it exists.
@@ -51,7 +56,8 @@ impl<K: Eq, V> LinearMap<K, V> {
     ///
     /// This is an **O(n)** operation.
     pub fn get_mut(&mut self, k: &K) -> Option<&mut V> {
-        self.0.iter_mut().find(|(kk, _)| kk == k).map(|(_, v)| v)
+        let idx = self.index_of(k)?;
+        Some(&mut self.0[idx].1)
     }
 
     /// Inserts a key-value pair into the map.
@@ -77,13 +83,11 @@ impl<K: Eq, V> LinearMap<K, V> {
     ///
     /// This is an **O(n)** operation due to the key search.
     pub fn get_or_insert_with(&mut self, k: K, f: impl FnOnce() -> V) -> &mut V {
-        let existing = self.0.iter().position(|(kk, _)| kk == &k);
-        if let Some(idx) = existing {
+        if let Some(idx) = self.index_of(&k) {
             &mut self.0[idx].1
         } else {
             self.0.push((k, f()));
-            let slot = self.0.last_mut().unwrap();
-            &mut slot.1
+            &mut self.0.last_mut().unwrap().1
         }
     }
 
