@@ -140,3 +140,30 @@ pub trait BinomialExtensionData<const DEG: usize>: MontyParameters + Sized {
     /// A list of generators of 2-adic subgroups not contained in the base field.
     const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike;
 }
+
+/// Data for a quintic extension using the trinomial polynomial `X^5 + X^2 - 1`.
+///
+/// This is required for fields where 5 does not divide `(P - 1)`, making simple
+/// binomial extensions `X^5 - W` impossible.
+///
+/// # Mathematical Background
+///
+/// For a prime field `F_p`, when `5 | (p-1)`, we can use binomial `X^5 - W`
+/// (see `BinomialExtensionData<5>`). When `5 ∤ (p-1)`, we use the irreducible
+/// trinomial `X^5 + X^2 - 1` with reduction identity `X^5 = 1 - X^2`.
+pub trait TrinomialQuinticData: MontyParameters + Sized {
+    /// Multiplicative generator of the extension field `F_{p^5}*`.
+    const EXT_GENERATOR: [MontyField31<Self>; 5];
+
+    /// Two-adicity of the extension field order `p^5 - 1`.
+    const EXT_TWO_ADICITY: usize;
+
+    /// Frobenius coefficients: `FROBENIUS_COEFFS[k] = X^{(k+1)*p} mod (X^5 + X^2 - 1)`.
+    const FROBENIUS_COEFFS: [[MontyField31<Self>; 5]; 4];
+
+    /// Type for storing two-adic extension generators.
+    type ArrayLike: AsRef<[[MontyField31<Self>; 5]]> + Sized;
+
+    /// Generators of 2-adic subgroups not in the base field.
+    const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike;
+}
