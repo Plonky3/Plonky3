@@ -26,6 +26,7 @@ use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::VerticalPair;
+use p3_maybe_rayon::prelude::*;
 use p3_uni_stark::{StarkGenericConfig, Val};
 use tracing::instrument;
 
@@ -412,129 +413,147 @@ impl LookupGadget for LogUpGadget {
                 }
             }
         }
+
         // 1. PRE-COMPUTE DENOMINATORS
         // We flatten all denominators from all rows/lookups into one giant vector.
         // Order: Row -> Lookup -> Element Tuple
-        let total_denominators: usize =
-            height * lookups.iter().map(|l| l.element_exprs.len()).sum::<usize>();
-        let mut all_denominators = Vec::with_capacity(total_denominators);
+        let denoms_per_row: usize = lookups.iter().map(|l| l.element_exprs.len()).sum();
 
-        for i in 0..height {
-            let local_main_row = main.row_slice(i).unwrap();
-            let next_main_row = main.row_slice((i + 1) % height).unwrap();
-            let main_rows = VerticalPair::new(
-                RowMajorMatrixView::new_row(&local_main_row),
-                RowMajorMatrixView::new_row(&next_main_row),
-            );
-            let preprocessed_rows_data = preprocessed.as_ref().map(|prep| {
-                (
-                    prep.row_slice(i).unwrap(),
-                    prep.row_slice((i + 1) % height).unwrap(),
-                )
-            });
-            let preprocessed_rows = preprocessed_rows_data.as_ref().map(
-                |(local_preprocessed_row, next_preprocessed_row)| {
-                    VerticalPair::new(
-                        RowMajorMatrixView::new_row(local_preprocessed_row),
-                        RowMajorMatrixView::new_row(next_preprocessed_row),
-                    )
-                },
-            );
-
-            let row_builder: LookupTraceBuilder<'_, SC> = LookupTraceBuilder::new(
-                main_rows,
-                preprocessed_rows,
-                public_values,
-                permutation_challenges,
-                height,
-                i,
-            );
-
-            for context in lookups {
-                let aux_idx = context.columns[0];
-                let alpha = &permutation_challenges[self.num_challenges() * aux_idx];
-                let beta = &permutation_challenges[self.num_challenges() * aux_idx + 1];
-
-                // Reconstruct elements
-                let elements = context
-                    .element_exprs
-                    .iter()
-                    .map(|elts| {
-                        elts.iter()
-                            .map(|e| symbolic_to_expr(&row_builder, e))
-                            .collect::<Vec<_>>()
-                    })
-                    .collect::<Vec<_>>();
-
-                // Compute combined element: (alpha - sum(elt * beta^j))
-                let denoms = self.combine_elements::<LookupTraceBuilder<'_, SC>, Val<SC>>(
-                    &elements, alpha, beta,
+        let all_denominators: Vec<SC::Challenge> = (0..height)
+            .into_par_iter()
+            .map(|i| {
+                let local_main_row = main.row_slice(i).unwrap();
+                let next_main_row = main.row_slice((i + 1) % height).unwrap();
+                let main_rows = VerticalPair::new(
+                    RowMajorMatrixView::new_row(&local_main_row),
+                    RowMajorMatrixView::new_row(&next_main_row),
                 );
-                all_denominators.extend(denoms);
-            }
-        }
+                let preprocessed_rows_data = preprocessed.as_ref().map(|prep| {
+                    (
+                        prep.row_slice(i).unwrap(),
+                        prep.row_slice((i + 1) % height).unwrap(),
+                    )
+                });
+                let preprocessed_rows = preprocessed_rows_data.as_ref().map(
+                    |(local_preprocessed_row, next_preprocessed_row)| {
+                        VerticalPair::new(
+                            RowMajorMatrixView::new_row(local_preprocessed_row),
+                            RowMajorMatrixView::new_row(next_preprocessed_row),
+                        )
+                    },
+                );
+
+                let row_builder: LookupTraceBuilder<'_, SC> = LookupTraceBuilder::new(
+                    main_rows,
+                    preprocessed_rows,
+                    public_values,
+                    permutation_challenges,
+                    height,
+                    i,
+                );
+
+                lookups
+                    .iter()
+                    .flat_map(|context| {
+                        let aux_idx = context.columns[0];
+                        let alpha = &permutation_challenges[self.num_challenges() * aux_idx];
+                        let beta = &permutation_challenges[self.num_challenges() * aux_idx + 1];
+
+                        let elements: Vec<Vec<Val<SC>>> = context
+                            .element_exprs
+                            .iter()
+                            .map(|elts| {
+                                elts.iter()
+                                    .map(|e| symbolic_to_expr(&row_builder, e))
+                                    .collect()
+                            })
+                            .collect();
+
+                        self.combine_elements::<LookupTraceBuilder<'_, SC>, Val<SC>>(
+                            &elements, alpha, beta,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .flatten()
+            .collect();
+
+        debug_assert_eq!(all_denominators.len(), height * denoms_per_row);
 
         // 2. BATCH INVERSION
         // This turns O(N) inversions into O(1) inversion + O(N) multiplications.
-        // Recomputing multiplicities during trace building is cheaper than recomputing inversions, or storing them beforehand (as they could possibly constitute quite a large amount of data).
+        // Recomputing multiplicities during trace building is cheaper than recomputing inversions,
+        // or storing them beforehand (as they could possibly constitute quite a large amount of data).
         let all_inverses = p3_field::batch_multiplicative_inverse(&all_denominators);
 
         // 3. BUILD TRACE
+        let row_sums: Vec<Vec<SC::Challenge>> = (0..height)
+            .into_par_iter()
+            .map(|i| {
+                let local_main_row = main.row_slice(i).unwrap();
+                let next_main_row = main.row_slice((i + 1) % height).unwrap();
+                let main_rows = VerticalPair::new(
+                    RowMajorMatrixView::new_row(&local_main_row),
+                    RowMajorMatrixView::new_row(&next_main_row),
+                );
+                let preprocessed_rows_data = preprocessed.as_ref().map(|prep| {
+                    (
+                        prep.row_slice(i).unwrap(),
+                        prep.row_slice((i + 1) % height).unwrap(),
+                    )
+                });
+                let preprocessed_rows = preprocessed_rows_data.as_ref().map(
+                    |(local_preprocessed_row, next_preprocessed_row)| {
+                        VerticalPair::new(
+                            RowMajorMatrixView::new_row(local_preprocessed_row),
+                            RowMajorMatrixView::new_row(next_preprocessed_row),
+                        )
+                    },
+                );
+
+                let row_builder: LookupTraceBuilder<'_, SC> = LookupTraceBuilder::new(
+                    main_rows,
+                    preprocessed_rows,
+                    public_values,
+                    permutation_challenges,
+                    height,
+                    i,
+                );
+
+                let inv_base = i * denoms_per_row;
+                let mut inv_offset = 0;
+
+                lookups
+                    .iter()
+                    .map(|context| {
+                        let multiplicities: Vec<Val<SC>> = context
+                            .multiplicities_exprs
+                            .iter()
+                            .map(|e| symbolic_to_expr(&row_builder, e))
+                            .collect();
+
+                        let sum: SC::Challenge = multiplicities
+                            .iter()
+                            .map(|m| {
+                                let inv = all_inverses[inv_base + inv_offset];
+                                inv_offset += 1;
+                                inv * SC::Challenge::from(*m)
+                            })
+                            .sum();
+
+                        sum
+                    })
+                    .collect()
+            })
+            .collect();
+
         let mut aux_trace = vec![SC::Challenge::ZERO; height * width];
-        let mut inv_cursor = 0;
         let mut permutation_counter = 0;
 
         for i in 0..height {
-            let local_main_row = main.row_slice(i).unwrap();
-            let next_main_row = main.row_slice((i + 1) % height).unwrap();
-            let main_rows = VerticalPair::new(
-                RowMajorMatrixView::new_row(&local_main_row),
-                RowMajorMatrixView::new_row(&next_main_row),
-            );
-
-            let preprocessed_rows_data = preprocessed.as_ref().map(|prep| {
-                (
-                    prep.row_slice(i).unwrap(),
-                    prep.row_slice((i + 1) % height).unwrap(),
-                )
-            });
-            let preprocessed_rows = preprocessed_rows_data.as_ref().map(
-                |(local_preprocessed_row, next_preprocessed_row)| {
-                    VerticalPair::new(
-                        RowMajorMatrixView::new_row(local_preprocessed_row),
-                        RowMajorMatrixView::new_row(next_preprocessed_row),
-                    )
-                },
-            );
-
-            let row_builder: LookupTraceBuilder<'_, SC> = LookupTraceBuilder::new(
-                main_rows,
-                preprocessed_rows,
-                public_values,
-                permutation_challenges,
-                height,
-                i,
-            );
-
-            lookups.iter().for_each(|context| {
+            for (lookup_idx, context) in lookups.iter().enumerate() {
                 let aux_idx = context.columns[0];
-
-                // Re-calculate multiplicities only
-                let multiplicities = context
-                    .multiplicities_exprs
-                    .iter()
-                    .map(|e| symbolic_to_expr(&row_builder, e))
-                    .collect::<Vec<Val<SC>>>();
-
-                // Consume inverses for this lookup to compute `sum(multiplicity / combined_elt)`
-                let sum: SC::Challenge = multiplicities
-                    .iter()
-                    .map(|m| {
-                        let inv = all_inverses[inv_cursor];
-                        inv_cursor += 1;
-                        inv * SC::Challenge::from(*m)
-                    })
-                    .sum();
+                let sum = row_sums[i][lookup_idx];
 
                 // Update running sum
                 if i < height - 1 {
@@ -542,26 +561,16 @@ impl LookupGadget for LogUpGadget {
                 }
 
                 // Update the expected cumulative for global lookups, at the last row.
-                if i == height - 1 {
-                    match context.kind {
-                        Kind::Global(_) => {
-                            lookup_data[permutation_counter].expected_cumulated =
-                                aux_trace[i * width + aux_idx] + sum;
-                            permutation_counter += 1;
-                        }
-                        Kind::Local => {}
-                    }
+                if i == height - 1 && matches!(context.kind, Kind::Global(_)) {
+                    lookup_data[permutation_counter].expected_cumulated =
+                        aux_trace[i * width + aux_idx] + sum;
+                    permutation_counter += 1;
                 }
-            });
-
-            // Check that we have updated all `lookup_data1` entries
-            if i == height - 1 {
-                assert_eq!(permutation_counter, lookup_data.len());
             }
         }
 
-        // Check that we have consumed all inverses, meaning that `elements` and `multiplicities` lengths matched.
-        debug_assert_eq!(inv_cursor, all_inverses.len());
+        // Check that we have updated all `lookup_data` entries.
+        debug_assert_eq!(permutation_counter, lookup_data.len());
         RowMajorMatrix::new(aux_trace, width)
     }
 }
