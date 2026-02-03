@@ -2,8 +2,6 @@
 //!
 //! Reference: https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_bn256.rs
 
-extern crate alloc;
-
 use alloc::vec::Vec;
 
 use p3_field::PrimeCharacteristicRing;

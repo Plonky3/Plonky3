@@ -67,10 +67,8 @@ where
 
         self.output_buffer.clear();
         for &pf_val in &self.sponge_state {
-            let f_vals = split_32(pf_val, self.num_f_elms);
-            for f_val in f_vals {
-                self.output_buffer.push(f_val);
-            }
+            self.output_buffer
+                .extend(split_32::<PF, F>(pf_val, self.num_f_elms));
         }
     }
 }
