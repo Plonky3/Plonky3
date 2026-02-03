@@ -56,8 +56,7 @@ impl<K: Eq, V> LinearMap<K, V> {
     ///
     /// This is an **O(n)** operation.
     pub fn get_mut(&mut self, k: &K) -> Option<&mut V> {
-        let idx = self.index_of(k)?;
-        Some(&mut self.0[idx].1)
+        self.index_of(k).map(|idx| &mut self.0[idx].1)
     }
 
     /// Inserts a key-value pair into the map.
