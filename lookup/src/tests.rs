@@ -746,6 +746,7 @@ fn test_compute_sum_terms_logic() {
         &multiplicities,
         &alpha,
         &beta,
+        None, // No type_id for this test
     );
 
     assert_eq!(num, expected_numerator);
@@ -871,7 +872,7 @@ fn test_empty_lookup_is_valid() {
     // Also test the internal logic directly
     let gadget = LogUpGadget::new();
     let (num, den) =
-        gadget.compute_combined_sum_terms::<MockAirBuilder, F, F>(&[], &[], &alpha, &alpha);
+        gadget.compute_combined_sum_terms::<MockAirBuilder, F, F>(&[], &[], &alpha, &alpha, None);
     assert_eq!(num, EF::ZERO);
     assert_eq!(den, EF::ONE);
 }
@@ -1170,7 +1171,7 @@ where
         if is_global {
             let lookup_inputs = vec![(b_elements, SymbolicExpression::Constant(F::ONE), direction)];
             let global_lookup =
-                Air::<AB>::register_lookup(self, Kind::Global("LUT".to_string()), &lookup_inputs);
+                Air::<AB>::register_lookup(self, Kind::global("LUT"), &lookup_inputs);
             // Return the local and global lookups.
             return vec![local_lookup, global_lookup];
         }
@@ -1380,8 +1381,8 @@ fn test_global_lookup() {
         lookups1.iter().for_each(|lookup| {
             match &lookup.kind {
                 Kind::Local => lookup_gadget.eval_local_lookup(&mut builder1, lookup),
-                Kind::Global(name) => {
-                    assert_eq!(*name, "LUT".to_string(), "Global lookup name should match");
+                Kind::Global { bus, .. } => {
+                    assert_eq!(bus, "LUT", "Global lookup bus name should match");
                     lookup_gadget.eval_global_update(&mut builder1, lookup, s_global_final1);
                 }
             };
@@ -1391,8 +1392,8 @@ fn test_global_lookup() {
         lookups2.iter().for_each(|lookup| {
             match &lookup.kind {
                 Kind::Local => lookup_gadget.eval_local_lookup(&mut builder2, lookup),
-                Kind::Global(name) => {
-                    assert_eq!(*name, "LUT".to_string(), "Global lookup name should match");
+                Kind::Global { bus, .. } => {
+                    assert_eq!(bus, "LUT", "Global lookup bus name should match");
                     lookup_gadget.eval_global_update(&mut builder2, lookup, s_global_final2);
                 }
             };

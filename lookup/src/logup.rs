@@ -69,11 +69,18 @@ impl LogUpGadget {
 
     /// Computes the combined elements for each tuple using the challenge `beta`:
     /// `combined_elements[i] = ∑elements[i][n-j] * β^j`
+    ///
+    /// If `type_id` is provided, it is prepended to the combination:
+    /// `combined_elements[i] = type_id + β * (∑elements[i][n-j] * β^j)`
+    ///
+    /// This allows multiple interaction types to share the same bus while
+    /// remaining distinguishable.
     fn combine_elements<AB, E>(
         &self,
         elements: &[Vec<E>],
         alpha: &AB::ExprEF,
         beta: &AB::ExprEF,
+        type_id: Option<u32>,
     ) -> Vec<AB::ExprEF>
     where
         AB: PermutationAirBuilder,
@@ -87,8 +94,20 @@ impl LogUpGadget {
                     elt.clone().into() + acc * beta.clone()
                 });
 
-                // Compute (α - combined_elt)
-                alpha.clone() - combined_elt
+                // If type_id is provided, prepend it: type_id + β * combined_elt
+                // We convert type_id to field element via: ONE * type_id (using u32 -> field conversion)
+                let final_combined = match type_id {
+                    Some(tid) => {
+                        // Convert type_id to extension field by multiplying ONE by tid
+                        let tid_ef =
+                            (0..tid).fold(AB::ExprEF::ZERO, |acc, _| acc + AB::ExprEF::ONE);
+                        tid_ef + beta.clone() * combined_elt
+                    }
+                    None => combined_elt,
+                };
+
+                // Compute (α - final_combined)
+                alpha.clone() - final_combined
             })
             .collect::<Vec<_>>()
     }
@@ -96,12 +115,15 @@ impl LogUpGadget {
     /// Computes the numerator and denominator of the fraction:
     /// `∑(m_i / (α - combined_elements[i]))`, where
     /// `combined_elements[i] = ∑elements[i][n-j] * β^j
+    ///
+    /// If `type_id` is provided, it's prepended to the combined elements.
     pub(crate) fn compute_combined_sum_terms<AB, E, M>(
         &self,
         elements: &[Vec<E>],
         multiplicities: &[M],
         alpha: &AB::ExprEF,
         beta: &AB::ExprEF,
+        type_id: Option<u32>,
     ) -> (AB::ExprEF, AB::ExprEF)
     where
         AB: PermutationAirBuilder,
@@ -115,7 +137,7 @@ impl LogUpGadget {
         let n = elements.len();
 
         // Precompute all (α - ∑e_{i, j} β^j) terms
-        let terms = self.combine_elements::<AB, E>(elements, alpha, beta);
+        let terms = self.combine_elements::<AB, E>(elements, alpha, beta, type_id);
 
         // Build prefix products: pref[i] = ∏_{j=0}^{i-1}(α - e_j)
         let mut pref = Vec::with_capacity(n + 1);
@@ -225,6 +247,12 @@ impl LogUpGadget {
         // This keeps aux and main traces aligned in length.
         builder.when_first_row().assert_zero_ext(s_local.clone());
 
+        // Extract type_id from the kind (for bus optimization)
+        let type_id = match kind {
+            Kind::Global { type_id, .. } => *type_id,
+            Kind::Local => None,
+        };
+
         // Build the fraction:  ∑ m_i/(α - combined_elements[i])  =  numerator / denominator .
         let (numerator, common_denominator) = self
             .compute_combined_sum_terms::<AB, AB::ExprEF, AB::ExprEF>(
@@ -232,12 +260,13 @@ impl LogUpGadget {
                 &multiplicities,
                 &alpha.into(),
                 &beta.into(),
+                type_id,
             );
 
         if let Some(expected_cumulated) = opt_expected_cumulated {
             // If there is an `expected_cumulated`, we are in a global lookup update.
             assert!(
-                matches!(kind, Kind::Global(_)),
+                matches!(kind, Kind::Global { .. }),
                 "Expected cumulated value provided for a non-global lookup"
             );
 
@@ -288,7 +317,7 @@ impl LookupEvaluator for LogUpGadget {
     where
         AB: PermutationAirBuilder + AirBuilderWithPublicValues,
     {
-        if let Kind::Global(_) = context.kind {
+        if let Kind::Global { .. } = context.kind {
             panic!("Global lookups are not supported in local evaluation")
         }
 
@@ -460,6 +489,12 @@ impl LookupGadget for LogUpGadget {
                         let alpha = &permutation_challenges[self.num_challenges() * aux_idx];
                         let beta = &permutation_challenges[self.num_challenges() * aux_idx + 1];
 
+                        // Extract type_id for bus optimization
+                        let type_id = match &context.kind {
+                            Kind::Global { type_id, .. } => *type_id,
+                            Kind::Local => None,
+                        };
+
                         let elements: Vec<Vec<Val<SC>>> = context
                             .element_exprs
                             .iter()
@@ -471,7 +506,7 @@ impl LookupGadget for LogUpGadget {
                             .collect();
 
                         self.combine_elements::<LookupTraceBuilder<'_, SC>, Val<SC>>(
-                            &elements, alpha, beta,
+                            &elements, alpha, beta, type_id,
                         )
                     })
                     .collect();
@@ -561,7 +596,7 @@ impl LookupGadget for LogUpGadget {
                 }
 
                 // Update expected cumulative for global lookups at the last row
-                if i == height - 1 && matches!(context.kind, Kind::Global(_)) {
+                if i == height - 1 && matches!(context.kind, Kind::Global { .. }) {
                     lookup_data[permutation_counter].expected_cumulated =
                         aux_trace[i * width + aux_idx] + sum;
                     permutation_counter += 1;

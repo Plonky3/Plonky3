@@ -243,10 +243,10 @@ pub fn get_perm_challenges<SC: SGC, LG: LookupGadget>(
 
             for context in contexts {
                 match &context.kind {
-                    Kind::Global(name) => {
-                        // Get or create the global challenges.
+                    Kind::Global { bus, .. } => {
+                        // Get or create the global challenges (shared per bus).
                         let challenges: &mut Vec<SC::Challenge> =
-                            global_perm_challenges.entry(name).or_insert_with(|| {
+                            global_perm_challenges.entry(bus).or_insert_with(|| {
                                 (0..num_challenges_per_lookup)
                                     .map(|_| challenger.sample_algebra_element())
                                     .collect()

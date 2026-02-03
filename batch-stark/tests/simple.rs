@@ -292,7 +292,7 @@ where
 
                 let global_lookup = Air::<AB>::register_lookup(
                     self,
-                    Kind::Global(self.global_names[rep].clone()),
+                    Kind::global(self.global_names[rep].clone()),
                     &lookup_inputs,
                 );
                 lookups.push(global_lookup);
@@ -426,7 +426,7 @@ impl<AB: PermutationAirBuilder + AirBuilderWithPublicValues> Air<AB> for FibAirL
             )];
 
             let global_lookup =
-                Air::<AB>::register_lookup(self, Kind::Global(name), &lookup_inputs);
+                Air::<AB>::register_lookup(self, Kind::global(name), &lookup_inputs);
             lookups.push(global_lookup);
         }
 

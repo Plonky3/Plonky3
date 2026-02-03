@@ -21,10 +21,46 @@ pub enum LookupError {
 pub enum Kind {
     /// A lookup where all entries are contained within a single AIR.
     Local,
-    /// A lookup that spans multiple AIRs, identified by a unique interaction name.
+    /// A lookup that spans multiple AIRs on a shared bus.
     ///
-    /// The interaction name is used to identify all elements that are part of the same interaction.
-    Global(String),
+    /// Multiple interaction types can share the same bus (and thus the same auxiliary column)
+    /// by using the same `bus` name but different `type_id` values.
+    Global {
+        /// Bus identifier - all interactions with the same bus share a column and challenges.
+        bus: String,
+        /// Optional type identifier to distinguish different interaction types on the same bus.
+        /// When multiple interaction types share a bus, each should have a unique type_id.
+        /// The type_id is prepended to the combined elements to prevent collisions.
+        type_id: Option<u32>,
+    },
+}
+
+impl Kind {
+    /// Creates a new global lookup kind with just a bus name (no type_id).
+    /// This is equivalent to the legacy `Kind::Global(name)` behavior.
+    pub fn global(bus: impl Into<String>) -> Self {
+        Self::Global {
+            bus: bus.into(),
+            type_id: None,
+        }
+    }
+
+    /// Creates a new global lookup kind with both bus name and type_id.
+    /// Use this when multiple interaction types share the same bus.
+    pub fn global_with_type(bus: impl Into<String>, type_id: u32) -> Self {
+        Self::Global {
+            bus: bus.into(),
+            type_id: Some(type_id),
+        }
+    }
+
+    /// Returns the bus name if this is a global lookup, None otherwise.
+    pub fn bus_name(&self) -> Option<&str> {
+        match self {
+            Self::Local => None,
+            Self::Global { bus, .. } => Some(bus),
+        }
+    }
 }
 
 /// Indicates the direction of data flow in a global lookup.
@@ -176,7 +212,7 @@ pub trait LookupEvaluator {
                 Kind::Local => {
                     self.eval_local_lookup(builder, context);
                 }
-                Kind::Global(_) => {
+                Kind::Global { .. } => {
                     // Find the expected cumulated value for this context.
                     let LookupData {
                         name: _,
