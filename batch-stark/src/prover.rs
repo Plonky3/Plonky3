@@ -38,17 +38,17 @@ pub struct StarkInstance<'a, SC: SGC, A> {
 impl<'a, SC: SGC, A> StarkInstance<'a, SC, A> {
     pub fn new_multiple(
         airs: &'a [A],
-        traces: &[RowMajorMatrix<Val<SC>>],
+        traces: Vec<RowMajorMatrix<Val<SC>>>,
         public_values: &[Vec<Val<SC>>],
         common_data: &CommonData<SC>,
     ) -> Vec<Self> {
         airs.iter()
-            .zip(traces.iter())
+            .zip(traces.into_iter())
             .zip(public_values.iter())
             .zip(common_data.lookups.iter())
             .map(|(((air, trace), public_values), lookups)| Self {
                 air,
-                trace: trace.clone(),
+                trace,
                 public_values: public_values.clone(),
                 lookups: lookups.clone(),
             })

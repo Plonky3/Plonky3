@@ -1413,7 +1413,7 @@ fn generate_two_adic_fixture() -> Result<(), Box<dyn std::error::Error>> {
     // Regen: cargo test -p p3-batch-stark --test simple -- --ignored
     let (config, mut airs, traces, pvs, log_degrees) = two_adic_compat_case();
     let common = CommonData::from_airs_and_degrees(&config, &mut airs, &log_degrees);
-    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, &common);
+    let instances = StarkInstance::new_multiple(&airs, traces, &pvs, &common);
     let proof = prove_batch(&config, &instances, &common);
     let bytes = postcard::to_allocvec(&proof)?;
     write_fixture(TWO_ADIC_FIXTURE, &bytes)?;
@@ -1426,7 +1426,7 @@ fn generate_circle_fixture() -> Result<(), Box<dyn std::error::Error>> {
     // Regen: cargo test -p p3-batch-stark --test simple -- --ignored
     let (config, mut airs, traces, pvs, log_degrees) = circle_compat_case();
     let common = CommonData::from_airs_and_degrees(&config, &mut airs, &log_degrees);
-    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, &common);
+    let instances = StarkInstance::new_multiple(&airs, traces, &pvs, &common);
     let proof = prove_batch(&config, &instances, &common);
     let bytes = postcard::to_allocvec(&proof)?;
     write_fixture(CIRCLE_FIXTURE, &bytes)?;
@@ -1554,7 +1554,7 @@ fn test_batch_stark_one_instance_local_only() -> Result<(), impl Debug> {
     let common_data =
         CommonData::<MyConfig>::from_airs_and_degrees(&config, &mut airs, &[log_height]);
 
-    let instances = StarkInstance::new_multiple(&airs, &[mul_trace], &[vec![]], &common_data);
+    let instances = StarkInstance::new_multiple(&airs, vec![mul_trace], &[vec![]], &common_data);
 
     let proof = prove_batch(&config, &instances, &common_data);
 
@@ -1587,7 +1587,7 @@ fn test_batch_stark_one_instance_local_fails() {
     let common_data =
         CommonData::<MyConfig>::from_airs_and_degrees(&config, &mut airs, &[log_height]);
 
-    let instances = StarkInstance::new_multiple(&airs, &[mul_trace], &[vec![]], &common_data);
+    let instances = StarkInstance::new_multiple(&airs, vec![mul_trace], &[vec![]], &common_data);
 
     prove_batch(&config, &instances, &common_data);
 }
@@ -1617,7 +1617,7 @@ fn test_batch_stark_one_instance_local_fails() {
     let common_data =
         CommonData::<MyConfig>::from_airs_and_degrees(&config, &mut airs, &[log_height]);
 
-    let instances = StarkInstance::new_multiple(&airs, &[mul_trace], &[vec![]], &common_data);
+    let instances = StarkInstance::new_multiple(&airs, vec![mul_trace], &[vec![]], &common_data);
 
     let proof = prove_batch(&config, &instances, &common_data);
 
@@ -1663,7 +1663,7 @@ fn test_batch_stark_local_lookups_only() -> Result<(), impl Debug> {
 
     let instances = StarkInstance::new_multiple(
         &airs,
-        &[mul_trace, fib_trace],
+        vec![mul_trace, fib_trace],
         &[vec![], fib_pis.clone()],
         &common_data,
     );
@@ -1715,7 +1715,7 @@ fn test_batch_stark_global_lookups_only() -> Result<(), impl Debug> {
 
     let instances = StarkInstance::new_multiple(
         &airs,
-        &[mul_trace, fib_trace],
+        vec![mul_trace, fib_trace],
         &[vec![], fib_pis.clone()],
         &common_data,
     );
@@ -1769,7 +1769,7 @@ fn test_batch_stark_both_lookups() -> Result<(), impl Debug> {
 
     let instances = StarkInstance::new_multiple(
         &airs,
-        &[mul_trace, fib_trace],
+        vec![mul_trace, fib_trace],
         &[vec![], fib_pis.clone()],
         &common_data,
     );
@@ -1823,7 +1823,7 @@ fn test_batch_stark_both_lookups_zk() -> Result<(), impl Debug> {
 
     let instances = StarkInstance::new_multiple(
         &airs,
-        &[mul_trace, fib_trace],
+        vec![mul_trace, fib_trace],
         &[vec![], fib_pis.clone()],
         &common_data,
     );
@@ -1876,7 +1876,7 @@ fn test_batch_stark_failed_global_lookup() {
     let common_data =
         CommonData::<MyConfig>::from_airs_and_degrees(&config, &mut airs, &[log_n, log_n]);
 
-    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, &common_data);
+    let instances = StarkInstance::new_multiple(&airs, traces, &pvs, &common_data);
 
     let proof = prove_batch(&config, &instances, &common_data);
 
@@ -1995,7 +1995,7 @@ fn test_batch_stark_mixed_lookups() -> Result<(), impl Debug> {
     ];
 
     // Create instances - mixing lookup and non-lookup instances
-    let instances = StarkInstance::new_multiple(&all_airs, &traces, &all_pvs, &common_data);
+    let instances = StarkInstance::new_multiple(&all_airs, traces, &all_pvs, &common_data);
 
     let proof = prove_batch(&config, &instances, &common_data);
 
@@ -2180,7 +2180,7 @@ fn test_single_table_local_lookup() -> Result<(), impl Debug> {
     let traces = vec![trace];
     let pvs = vec![vec![]]; // No public values
 
-    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, &common_data);
+    let instances = StarkInstance::new_multiple(&airs, traces, &pvs, &common_data);
 
     let proof = prove_batch(&config, &instances, &common_data);
 
