@@ -803,4 +803,48 @@ mod tests {
         let all_rows: Vec<Vec<u32>> = matrix.rows().map(|row| row.collect()).collect();
         assert_eq!(all_rows, vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]]);
     }
+
+    #[test]
+    fn test_rowwise_packed_dot_product() {
+        use p3_field::PackedFieldExtension;
+
+        type F = BabyBear;
+        type EF = BinomialExtensionField<BabyBear, 4>;
+        type PF = <F as p3_field::Field>::Packing;
+        type EFPacked = <EF as p3_field::ExtensionField<F>>::ExtensionPacking;
+
+        let mut rng = SmallRng::seed_from_u64(42);
+
+        // Test with various matrix dimensions to cover edge cases.
+        for (height, width) in [(32, 16), (64, 128), (128, 17), (256, 255)] {
+            let m = RowMajorMatrix::<F>::rand(&mut rng, height, width);
+            let v = RowMajorMatrix::<EF>::rand(&mut rng, width, 1).values;
+
+            // Compute expected result naively: for each row, compute dot product with v.
+            let expected: Vec<EF> = m
+                .rows()
+                .map(|row| {
+                    row.into_iter()
+                        .zip(v.iter())
+                        .map(|(r, &ve)| ve * r)
+                        .sum::<EF>()
+                })
+                .collect();
+
+            // Pack the vector for the optimized function.
+            let packed_v: Vec<EFPacked> = v
+                .chunks(<PF as PackedValue>::WIDTH)
+                .map(|chunk| {
+                    let mut padded = vec![EF::ZERO; <PF as PackedValue>::WIDTH];
+                    padded[..chunk.len()].copy_from_slice(chunk);
+                    EFPacked::from_ext_slice(&padded)
+                })
+                .collect();
+
+            // Compute using the optimized function.
+            let result: Vec<EF> = m.rowwise_packed_dot_product::<EF>(&packed_v).collect();
+
+            assert_eq!(result, expected, "Mismatch for matrix {}x{}", height, width);
+        }
+    }
 }
