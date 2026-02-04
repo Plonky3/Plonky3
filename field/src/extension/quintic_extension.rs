@@ -10,8 +10,12 @@
 //! - When `5 | (p - 1)`, we can use binomials `X^5 - W`.
 //! - When `5 ∤ (p - 1)`, every element is a 5th power, so binomials factor and we must use trinomials.
 //!
-//! The polynomial `X^5 + X^2 - 1` is irreducible over such fields and provides
-//! the required extension with the reduction identity: `X^5 = 1 - X^2`.
+//! The polynomial `X^5 + X^2 - 1` is irreducible over **KoalaBear** (`P = 2^31 - 2^24 + 1`)
+//! and provides the required extension with the reduction identity: `X^5 = 1 - X^2`.
+//!
+//! **Note**: This trinomial is NOT irreducible over all fields where `5 ∤ (p - 1)`.
+//! For example, `X = 2` is a root in `F_7`. Implementors must verify irreducibility
+//! for their specific field before using this extension.
 //!
 //! # Reduction Rules
 //!

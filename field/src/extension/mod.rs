@@ -137,9 +137,6 @@ pub trait HasTwoAdicBinomialExtension<const D: usize>: BinomiallyExtendable<D> {
 
 /// Trait for fields that support a degree-5 extension using the trinomial `X^5 + X^2 - 1`.
 ///
-/// This is required for fields where 5 does not divide `(P - 1)`, making binomial extensions
-/// `X^5 - W` impossible. The trinomial `X^5 + X^2 - 1` is irreducible over such fields.
-///
 /// # Mathematical Background
 ///
 /// For a prime field `F_p`:
@@ -148,10 +145,15 @@ pub trait HasTwoAdicBinomialExtension<const D: usize>: BinomiallyExtendable<D> {
 ///
 /// The key reduction identity is: `X^5 ≡ 1 - X^2 (mod X^5 + X^2 - 1)`
 ///
+/// **Important**: The irreducibility of `X^5 + X^2 - 1` must be verified for each specific
+/// field. This trinomial is NOT irreducible over all fields where `5 ∤ (p - 1)`.
+/// For example, `X = 2` is a root in `F_7`.
+///
 /// # Example Fields
 ///
 /// - **BabyBear** (`P = 2^31 - 2^27 + 1`): `(P-1) mod 5 = 0` → uses `BinomiallyExtendable<5>`
 /// - **KoalaBear** (`P = 2^31 - 2^24 + 1`): `(P-1) mod 5 = 2` → uses `QuinticExtendable`
+///   (irreducibility verified for this field)
 pub trait QuinticExtendable: Field + QuinticExtendableAlgebra<Self> {
     /// Frobenius coefficients for the quintic extension.
     ///
