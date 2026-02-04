@@ -31,18 +31,29 @@ pub fn lookup_data_to_expr<F: Clone>(
         .collect()
 }
 
+/// Output of permutation trace generation.
+pub struct PermutationOutput<Challenge> {
+    /// The permutation trace matrix.
+    pub trace: RowMajorMatrix<Challenge>,
+    /// Expected cumulated values for global lookups (in order of global lookups in the input).
+    pub expected_cumulated: Vec<Challenge>,
+}
+
 /// A trait for lookup argument.
 pub trait LookupGadget: LookupEvaluator {
     /// Generates the permutation matrix for the lookup argument.
+    ///
+    /// Returns the permutation trace matrix along with the expected cumulated values
+    /// for global lookups. The expected_cumulated vector contains one value per global
+    /// lookup in the order they appear in `lookups`.
     fn generate_permutation<SC: StarkGenericConfig>(
         &self,
         main: &RowMajorMatrix<Val<SC>>,
         preprocessed: &Option<RowMajorMatrix<Val<SC>>>,
         public_values: &[Val<SC>],
         lookups: &[Lookup<Val<SC>>],
-        lookup_data: &mut [LookupData<SC::Challenge>],
         permutation_challenges: &[SC::Challenge],
-    ) -> RowMajorMatrix<SC::Challenge>;
+    ) -> PermutationOutput<SC::Challenge>;
 
     /// Evaluates the final cumulated value over all AIRs involved in the interaction,
     /// and checks that it is equal to the expected final value.

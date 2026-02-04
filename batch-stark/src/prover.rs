@@ -7,7 +7,9 @@ use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
 use p3_lookup::folder::ProverConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::lookup_traits::{Kind, Lookup, LookupData, LookupGadget, lookup_data_to_expr};
+use p3_lookup::lookup_traits::{
+    Kind, Lookup, LookupData, LookupGadget, PermutationOutput, lookup_data_to_expr,
+};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
@@ -194,48 +196,71 @@ where
     let challenges_per_instance =
         get_perm_challenges::<SC, LogUpGadget>(&mut challenger, &all_lookups, &lookup_gadget);
 
-    // Get permutation matrices, if any, along with their associated trace domain
-    let mut permutation_commit_inputs = Vec::with_capacity(n_instances);
-    instances
-        .iter()
-        .enumerate()
-        .zip(ext_trace_domains.iter().cloned())
-        .for_each(|((i, inst), ext_domain)| {
-            if !all_lookups[i].is_empty() {
-                let generated_perm = lookup_gadget.generate_permutation::<SC>(
+    // Build indices of instances that have lookups (for ordering results).
+    let instances_with_lookups: Vec<usize> = (0..n_instances)
+        .filter(|&i| !all_lookups[i].is_empty())
+        .collect();
+
+    // Generate permutation traces in parallel for all instances with lookups.
+    // Each result contains: (instance_index, ext_domain, perm_output)
+    let perm_results: Vec<(usize, Domain<SC>, PermutationOutput<SC::Challenge>)> =
+        instances_with_lookups
+            .par_iter()
+            .map(|&i| {
+                let inst = &instances[i];
+                let ext_domain = ext_trace_domains[i];
+                let perm_output = lookup_gadget.generate_permutation::<SC>(
                     &inst.trace,
                     &inst.air.preprocessed_trace(),
                     &inst.public_values,
                     &all_lookups[i],
-                    &mut lookup_data[i],
                     &challenges_per_instance[i],
                 );
-                permutation_commit_inputs
-                    .push((ext_domain, generated_perm.clone().flatten_to_base()));
+                (i, ext_domain, perm_output)
+            })
+            .collect();
 
-                #[cfg(debug_assertions)]
-                {
-                    use crate::check_constraints::check_constraints;
+    // Process results sequentially: update lookup_data and build commit inputs.
+    // This maintains the correct ordering for commitment.
+    let mut permutation_commit_inputs = Vec::with_capacity(instances_with_lookups.len());
+    for (i, ext_domain, perm_output) in perm_results {
+        // Update lookup_data with expected cumulated values.
+        let mut cumulated_iter = perm_output.expected_cumulated.into_iter();
+        for ld in lookup_data[i].iter_mut() {
+            ld.expected_cumulated = cumulated_iter
+                .next()
+                .expect("mismatch between global lookups and expected_cumulated");
+        }
+        debug_assert!(
+            cumulated_iter.next().is_none(),
+            "extra expected_cumulated values"
+        );
 
-                    let preprocessed_trace = inst.air.preprocessed_trace();
+        #[cfg(debug_assertions)]
+        {
+            use crate::check_constraints::check_constraints;
 
-                    let lookup_constraints_inputs = (
-                        all_lookups[i].as_slice(),
-                        lookup_data[i].as_slice(),
-                        &lookup_gadget,
-                    );
-                    check_constraints(
-                        inst.air,
-                        &inst.trace,
-                        &preprocessed_trace,
-                        &generated_perm,
-                        &challenges_per_instance[i],
-                        &inst.public_values,
-                        lookup_constraints_inputs,
-                    );
-                }
-            }
-        });
+            let inst = &instances[i];
+            let preprocessed_trace = inst.air.preprocessed_trace();
+
+            let lookup_constraints_inputs = (
+                all_lookups[i].as_slice(),
+                lookup_data[i].as_slice(),
+                &lookup_gadget,
+            );
+            check_constraints(
+                inst.air,
+                &inst.trace,
+                &preprocessed_trace,
+                &perm_output.trace,
+                &challenges_per_instance[i],
+                &inst.public_values,
+                lookup_constraints_inputs,
+            );
+        }
+
+        permutation_commit_inputs.push((ext_domain, perm_output.trace.flatten_to_base()));
+    }
 
     // Commit to all traces in one multi-matrix commitment, preserving input order.
     let permutation_commit_and_data = if !permutation_commit_inputs.is_empty() {

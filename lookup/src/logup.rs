@@ -30,7 +30,7 @@ use p3_uni_stark::{StarkGenericConfig, Val};
 use tracing::instrument;
 
 use crate::lookup_traits::{
-    Kind, Lookup, LookupData, LookupGadget, LookupTraceBuilder, symbolic_to_expr,
+    Kind, Lookup, LookupGadget, LookupTraceBuilder, PermutationOutput, symbolic_to_expr,
 };
 
 /// Core LogUp gadget implementing lookup arguments via logarithmic derivatives.
@@ -386,11 +386,16 @@ impl LookupGadget for LogUpGadget {
         preprocessed: &Option<RowMajorMatrix<Val<SC>>>,
         public_values: &[Val<SC>],
         lookups: &[Lookup<Val<SC>>],
-        lookup_data: &mut [LookupData<SC::Challenge>],
         permutation_challenges: &[SC::Challenge],
-    ) -> RowMajorMatrix<SC::Challenge> {
+    ) -> PermutationOutput<SC::Challenge> {
         let height = main.height();
         let width = self.num_aux_cols() * lookups.len();
+
+        // Count global lookups to pre-allocate expected_cumulated vector.
+        let num_global_lookups = lookups
+            .iter()
+            .filter(|l| matches!(l.kind, Kind::Global(_)))
+            .count();
 
         // Validate challenge count matches number of lookups.
         debug_assert_eq!(
@@ -481,8 +486,8 @@ impl LookupGadget for LogUpGadget {
 
         // 3. BUILD TRACE
         let mut aux_trace = vec![SC::Challenge::ZERO; height * width];
+        let mut expected_cumulated = Vec::with_capacity(num_global_lookups);
         let mut inv_cursor = 0;
-        let mut permutation_counter = 0;
 
         for i in 0..height {
             let local_main_row = main.row_slice(i).unwrap();
@@ -541,27 +546,23 @@ impl LookupGadget for LogUpGadget {
                     aux_trace[(i + 1) * width + aux_idx] = aux_trace[i * width + aux_idx] + sum;
                 }
 
-                // Update the expected cumulative for global lookups, at the last row.
+                // Collect the expected cumulative for global lookups at the last row.
                 if i == height - 1 {
-                    match context.kind {
-                        Kind::Global(_) => {
-                            lookup_data[permutation_counter].expected_cumulated =
-                                aux_trace[i * width + aux_idx] + sum;
-                            permutation_counter += 1;
-                        }
-                        Kind::Local => {}
+                    if let Kind::Global(_) = context.kind {
+                        expected_cumulated.push(aux_trace[i * width + aux_idx] + sum);
                     }
                 }
             });
-
-            // Check that we have updated all `lookup_data1` entries
-            if i == height - 1 {
-                assert_eq!(permutation_counter, lookup_data.len());
-            }
         }
 
-        // Check that we have consumed all inverses, meaning that `elements` and `multiplicities` lengths matched.
+        // Check that we have collected the expected number of cumulated values.
+        debug_assert_eq!(expected_cumulated.len(), num_global_lookups);
+        // Check that we have consumed all inverses.
         debug_assert_eq!(inv_cursor, all_inverses.len());
-        RowMajorMatrix::new(aux_trace, width)
+
+        PermutationOutput {
+            trace: RowMajorMatrix::new(aux_trace, width),
+            expected_cumulated,
+        }
     }
 }
