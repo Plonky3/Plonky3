@@ -276,112 +276,90 @@ where
     // Get the random alpha to fold constraints.
     let alpha: Challenge<SC> = challenger.sample_algebra_element();
 
-    // Pre-compute permutation matrix index mapping.
-    let perm_matrix_indices: Vec<Option<usize>> = {
-        let mut counter = 0;
-        all_lookups
-            .iter()
-            .map(|lookups| {
-                if lookups.is_empty() {
-                    None
-                } else {
-                    let idx = counter;
-                    counter += 1;
-                    Some(idx)
-                }
-            })
-            .collect()
-    };
-
-    // Build per-instance quotient data in parallel using index-based iteration.
-    // Each entry contains: (chunk_domains, chunk_ldes)
-    let _quotient_span = info_span!("compute quotient").entered();
-    #[allow(clippy::type_complexity)]
-    let quotient_results: Vec<(Vec<Domain<SC>>, Vec<RowMajorMatrix<Val<SC>>>)> = (0..n_instances)
-        .into_par_iter()
-        .map(|i| {
-            let trace_domain = trace_domains[i];
-            let log_chunks = log_num_quotient_chunks[i];
-            let n_chunks = num_quotient_chunks[i];
-            // Disjoint domain of size ext_degree * num_quotient_chunks
-            // (log size = log_ext_degrees[i] + log_num_quotient_chunks[i]); use ext domain for shift.
-            let quotient_domain =
-                ext_trace_domains[i].create_disjoint_domain(1 << (log_ext_degrees[i] + log_chunks));
-
-            // Count constraints to size alpha powers packing.
-            let (base_constraints, extension_constraints) = get_symbolic_constraints(
-                airs[i],
-                preprocessed_widths[i],
-                pub_vals[i].len(),
-                &all_lookups[i],
-                &lookup_data_to_expr(&lookup_data[i]),
-                &lookup_gadget,
-            );
-            let constraint_len = base_constraints.len() + extension_constraints.len();
-
-            // Get evaluations on quotient domain from the main commitment.
-            let trace_on_quotient_domain =
-                pcs.get_evaluations_on_domain(&main_data, i, quotient_domain);
-
-            // Get permutation evaluations using pre-computed index mapping.
-            let permutation_on_quotient_domain = permutation_commit_and_data
-                .as_ref()
-                .zip(perm_matrix_indices[i])
-                .map(|((_, perm_data), perm_idx)| {
-                    pcs.get_evaluations_on_domain(perm_data, perm_idx, quotient_domain)
-                });
-
-            // Get preprocessed evaluations if this instance has preprocessed columns.
-            let preprocessed_on_quotient_domain = common
-                .preprocessed
-                .as_ref()
-                .and_then(|g| g.instances[i].as_ref().map(|meta| (g, meta)))
-                .map(|(g, meta)| {
-                    pcs.get_evaluations_on_domain_no_random(
-                        &g.prover_data,
-                        meta.matrix_index,
-                        quotient_domain,
-                    )
-                });
-
-            // Compute quotient(x) = constraints(x)/Z_H(x) over quotient_domain, as extension values.
-            let q_values = quotient_values::<SC, A, _, LogUpGadget>(
-                airs[i],
-                &pub_vals[i],
-                trace_domain,
-                quotient_domain,
-                &trace_on_quotient_domain,
-                permutation_on_quotient_domain.as_ref(),
-                &all_lookups[i],
-                &lookup_data[i],
-                &lookup_gadget,
-                &challenges_per_instance[i],
-                preprocessed_on_quotient_domain.as_ref(),
-                alpha,
-                constraint_len,
-            );
-
-            // Flatten to base field and split into chunks.
-            let q_flat = RowMajorMatrix::new_col(q_values).flatten_to_base();
-            let chunk_mats = quotient_domain.split_evals(n_chunks, q_flat);
-            let chunk_domains = quotient_domain.split_domains(n_chunks);
-
-            let evals = chunk_domains
-                .iter()
-                .zip(chunk_mats.iter())
-                .map(|(d, m)| (*d, m.clone()));
-            let ldes = pcs.get_quotient_ldes(evals, n_chunks);
-
-            (chunk_domains, ldes)
-        })
-        .collect();
-    _quotient_span.exit();
-
-    let mut quotient_chunk_domains: Vec<Domain<SC>> = Vec::with_capacity(n_instances);
-    let mut quotient_chunk_mats: Vec<RowMajorMatrix<Val<SC>>> = Vec::with_capacity(n_instances);
+    // Build per-instance quotient domains and values, and split into chunks.
+    let mut quotient_chunk_domains: Vec<Domain<SC>> = Vec::new();
+    let mut quotient_chunk_mats: Vec<RowMajorMatrix<Val<SC>>> = Vec::new();
+    // Track ranges so we can map openings back to instances.
     let mut quotient_chunk_ranges: Vec<(usize, usize)> = Vec::with_capacity(n_instances);
 
-    for (chunk_domains, ldes) in quotient_results {
+    let mut perm_counter = 0;
+
+    // TODO: Parallelize this loop for better performance with many instances.
+    for (i, trace_domain) in trace_domains.iter().enumerate() {
+        let _air_span = info_span!("compute quotient", air_idx = i).entered();
+
+        let log_chunks = log_num_quotient_chunks[i];
+        let n_chunks = num_quotient_chunks[i];
+        // Disjoint domain of size ext_degree * num_quotient_chunks
+        // (log size = log_ext_degrees[i] + log_num_quotient_chunks[i]); use ext domain for shift.
+        let quotient_domain =
+            ext_trace_domains[i].create_disjoint_domain(1 << (log_ext_degrees[i] + log_chunks));
+
+        // Count constraints to size alpha powers packing.
+        let (base_constraints, extension_constraints) = get_symbolic_constraints(
+            airs[i],
+            preprocessed_widths[i],
+            pub_vals[i].len(),
+            &all_lookups[i],
+            &lookup_data_to_expr(&lookup_data[i]),
+            &lookup_gadget,
+        );
+        let constraint_len = base_constraints.len() + extension_constraints.len();
+
+        // Get evaluations on quotient domain from the main commitment.
+        let trace_on_quotient_domain =
+            pcs.get_evaluations_on_domain(&main_data, i, quotient_domain);
+
+        let permutation_on_quotient_domain = permutation_commit_and_data
+            .as_ref()
+            .filter(|_| !all_lookups[i].is_empty())
+            .map(|(_, perm_data)| {
+                let evals = pcs.get_evaluations_on_domain(perm_data, perm_counter, quotient_domain);
+                perm_counter += 1;
+                evals
+            });
+
+        // Get preprocessed evaluations if this instance has preprocessed columns.
+        let preprocessed_on_quotient_domain = common
+            .preprocessed
+            .as_ref()
+            .and_then(|g| g.instances[i].as_ref().map(|meta| (g, meta)))
+            .map(|(g, meta)| {
+                pcs.get_evaluations_on_domain_no_random(
+                    &g.prover_data,
+                    meta.matrix_index,
+                    quotient_domain,
+                )
+            });
+
+        // Compute quotient(x) = constraints(x)/Z_H(x) over quotient_domain, as extension values.
+        let q_values = quotient_values::<SC, A, _, LogUpGadget>(
+            airs[i],
+            &pub_vals[i],
+            *trace_domain,
+            quotient_domain,
+            &trace_on_quotient_domain,
+            permutation_on_quotient_domain.as_ref(),
+            &all_lookups[i],
+            &lookup_data[i],
+            &lookup_gadget,
+            &challenges_per_instance[i],
+            preprocessed_on_quotient_domain.as_ref(),
+            alpha,
+            constraint_len,
+        );
+
+        // Flatten to base field and split into chunks.
+        let q_flat = RowMajorMatrix::new_col(q_values).flatten_to_base();
+        let chunk_mats = quotient_domain.split_evals(n_chunks, q_flat);
+        let chunk_domains = quotient_domain.split_domains(n_chunks);
+
+        let evals = chunk_domains
+            .iter()
+            .zip(chunk_mats.iter())
+            .map(|(d, m)| (*d, m.clone()));
+        let ldes = pcs.get_quotient_ldes(evals, n_chunks);
+
         let start = quotient_chunk_domains.len();
         quotient_chunk_domains.extend(chunk_domains);
         quotient_chunk_mats.extend(ldes);
