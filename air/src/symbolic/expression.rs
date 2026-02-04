@@ -880,4 +880,115 @@ mod tests {
         let abc = ab * c;
         assert_eq!(abc.degree_multiple(), 3);
     }
+
+    #[test]
+    fn test_add_zero_identity_folding() {
+        let var = SymbolicExpression::Variable::<BabyBear>(SymbolicVariable::new(
+            Entry::Main { offset: 0 },
+            0,
+        ));
+        let zero = SymbolicExpression::<BabyBear>::Constant(BabyBear::ZERO);
+
+        // x + 0 should return x, not create an Add node.
+        let result = var.clone() + zero.clone();
+        assert!(
+            matches!(result, SymbolicExpression::Variable(_)),
+            "x + 0 should fold to x"
+        );
+
+        // 0 + x should return x, not create an Add node.
+        let result = zero + var;
+        assert!(
+            matches!(result, SymbolicExpression::Variable(_)),
+            "0 + x should fold to x"
+        );
+    }
+
+    #[test]
+    fn test_sub_zero_identity_folding() {
+        let var = SymbolicExpression::Variable::<BabyBear>(SymbolicVariable::new(
+            Entry::Main { offset: 0 },
+            0,
+        ));
+        let zero = SymbolicExpression::<BabyBear>::Constant(BabyBear::ZERO);
+
+        // x - 0 should return x, not create a Sub node.
+        let result = var - zero;
+        assert!(
+            matches!(result, SymbolicExpression::Variable(_)),
+            "x - 0 should fold to x"
+        );
+    }
+
+    #[test]
+    fn test_mul_zero_identity_folding() {
+        let var = SymbolicExpression::Variable::<BabyBear>(SymbolicVariable::new(
+            Entry::Main { offset: 0 },
+            0,
+        ));
+        let zero = SymbolicExpression::<BabyBear>::Constant(BabyBear::ZERO);
+
+        // x * 0 should return Constant(0), not create a Mul node.
+        let result = var.clone() * zero.clone();
+        assert!(
+            matches!(result, SymbolicExpression::Constant(c) if c == BabyBear::ZERO),
+            "x * 0 should fold to 0"
+        );
+
+        // 0 * x should return Constant(0), not create a Mul node.
+        let result = zero * var;
+        assert!(
+            matches!(result, SymbolicExpression::Constant(c) if c == BabyBear::ZERO),
+            "0 * x should fold to 0"
+        );
+    }
+
+    #[test]
+    fn test_mul_one_identity_folding() {
+        let var = SymbolicExpression::Variable::<BabyBear>(SymbolicVariable::new(
+            Entry::Main { offset: 0 },
+            0,
+        ));
+        let one = SymbolicExpression::<BabyBear>::Constant(BabyBear::ONE);
+
+        // x * 1 should return x, not create a Mul node.
+        let result = var.clone() * one.clone();
+        assert!(
+            matches!(result, SymbolicExpression::Variable(_)),
+            "x * 1 should fold to x"
+        );
+
+        // 1 * x should return x, not create a Mul node.
+        let result = one * var;
+        assert!(
+            matches!(result, SymbolicExpression::Variable(_)),
+            "1 * x should fold to x"
+        );
+    }
+
+    #[test]
+    fn test_identity_folding_preserves_degree() {
+        let var = SymbolicExpression::Variable::<BabyBear>(SymbolicVariable::new(
+            Entry::Main { offset: 0 },
+            0,
+        ));
+        let zero = SymbolicExpression::<BabyBear>::Constant(BabyBear::ZERO);
+        let one = SymbolicExpression::<BabyBear>::Constant(BabyBear::ONE);
+
+        // x + 0 should preserve degree of x.
+        let result = var.clone() + zero.clone();
+        assert_eq!(result.degree_multiple(), 1);
+
+        // x - 0 should preserve degree of x.
+        let result = var.clone() - zero.clone();
+        assert_eq!(result.degree_multiple(), 1);
+
+        // x * 1 should preserve degree of x.
+        let result = var.clone() * one;
+        assert_eq!(result.degree_multiple(), 1);
+
+        // x * 0 should have degree 0 (constant).
+        let result = var * zero;
+        assert_eq!(result.degree_multiple(), 0);
+    }
 }
