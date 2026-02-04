@@ -421,7 +421,7 @@ impl LookupGadget for LogUpGadget {
 
         let all_denominators: Vec<SC::Challenge> = (0..height)
             .into_par_iter()
-            .map(|i| {
+            .flat_map(|i| {
                 let local_main_row = main.row_slice(i).unwrap();
                 let next_main_row = main.row_slice((i + 1) % height).unwrap();
                 let main_rows = VerticalPair::new(
@@ -475,7 +475,6 @@ impl LookupGadget for LogUpGadget {
                     })
                     .collect::<Vec<_>>()
             })
-            .flatten()
             .collect();
 
         debug_assert_eq!(all_denominators.len(), height * denoms_per_row);
