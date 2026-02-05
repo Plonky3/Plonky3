@@ -88,7 +88,7 @@ where
                     .row_subseq_unchecked(r, inner_start, self.0.width())
                     .into_iter()
                     .peekable(),
-                idx: start,
+                idx: start % EF::DIMENSION,
                 _phantom: PhantomData,
             }
             .take(len)
@@ -324,5 +324,21 @@ mod tests {
 
         // Iterator should now be exhausted
         assert_eq!(row_iter.next(), None);
+    }
+
+    #[test]
+    fn test_row_subseq_start_ge_dimension() {
+        let ef = |offset| EF::from_basis_coefficients_fn(|i| F::from_u8(i as u8 + offset));
+        let values = vec![ef(10), ef(20), ef(30)];
+        let matrix = RowMajorMatrix::new(values, 3);
+        let flat = FlatMatrixView::<F, EF, _>::new(matrix);
+
+        unsafe {
+            let result: Vec<_> = flat.row_subseq_unchecked(0, 2, 5).into_iter().collect();
+            assert_eq!(result, [20, 21, 30].map(F::from_u8).to_vec());
+
+            let result: Vec<_> = flat.row_subseq_unchecked(0, 3, 6).into_iter().collect();
+            assert_eq!(result, [21, 30, 31].map(F::from_u8).to_vec());
+        }
     }
 }
