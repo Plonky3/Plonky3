@@ -66,7 +66,7 @@ where
         self.permutation.permute_mut(&mut self.sponge_state);
 
         self.output_buffer.clear();
-        for &pf_val in &self.sponge_state {
+        for &pf_val in &self.sponge_state[..RATE] {
             self.output_buffer
                 .extend(split_32::<PF, F>(pf_val, self.num_f_elms));
         }
@@ -193,5 +193,82 @@ where
         let rand_f: F = self.sample();
         let rand_usize = rand_f.as_canonical_u32() as usize;
         rand_usize & ((1 << bits) - 1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_goldilocks::Goldilocks;
+    use p3_symmetric::Permutation;
+
+    use super::*;
+
+    const WIDTH: usize = 8;
+    const RATE: usize = 4;
+
+    type F = BabyBear;
+    type PF = Goldilocks;
+
+    #[derive(Clone)]
+    struct TestPermutation;
+
+    impl Permutation<[PF; WIDTH]> for TestPermutation {
+        fn permute_mut(&self, input: &mut [PF; WIDTH]) {
+            for (i, val) in input.iter_mut().enumerate() {
+                *val = PF::from_u8((i + 1) as u8);
+            }
+        }
+    }
+
+    impl CryptographicPermutation<[PF; WIDTH]> for TestPermutation {}
+
+    #[test]
+    fn test_output_buffer_excludes_capacity() {
+        let permutation = TestPermutation;
+        let mut challenger =
+            MultiField32Challenger::<F, PF, _, WIDTH, RATE>::new(permutation).unwrap();
+
+        // num_f_elms = PF::bits() / 64 = 64 / 64 = 1 for Goldilocks
+        let num_f_elms = challenger.num_f_elms;
+
+        // Trigger duplexing by sampling
+        let _: F = challenger.sample();
+
+        // Output buffer should contain RATE * num_f_elms elements, NOT WIDTH * num_f_elms
+        // This verifies we only output the rate portion, not the capacity
+        let expected_output_size = RATE * num_f_elms;
+        let incorrect_output_size = WIDTH * num_f_elms;
+
+        assert_eq!(
+            challenger.output_buffer.len(),
+            expected_output_size - 1, // -1 because we sampled one element
+            "Output buffer should be based on RATE ({}), not WIDTH ({})",
+            expected_output_size,
+            incorrect_output_size
+        );
+    }
+
+    #[test]
+    fn test_duplexing_respects_rate() {
+        let permutation = TestPermutation;
+        let mut challenger =
+            MultiField32Challenger::<F, PF, _, WIDTH, RATE>::new(permutation).unwrap();
+
+        let num_f_elms = challenger.num_f_elms;
+
+        // Fill input buffer to trigger duplexing
+        for i in 0..(num_f_elms * RATE) {
+            challenger.observe(F::from_u8(i as u8));
+        }
+
+        // After observing exactly num_f_elms * RATE elements, duplexing occurs
+        // Output buffer should have exactly RATE * num_f_elms elements
+        assert_eq!(
+            challenger.output_buffer.len(),
+            RATE * num_f_elms,
+            "After duplexing, output buffer should contain RATE * num_f_elms elements"
+        );
     }
 }
