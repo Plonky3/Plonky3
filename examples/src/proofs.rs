@@ -261,9 +261,7 @@ use p3_fri::CompressedFriProof;
 ///
 /// This creates a `CompressedFriProof` that batches Merkle proofs across queries,
 /// serializes it, and compares against the standard proof size.
-pub fn report_fri_compression_keccak<F, EF, DFT>(
-    proof: &Proof<KeccakStarkConfig<F, EF, DFT>>,
-)
+pub fn report_fri_compression_keccak<F, EF, DFT>(proof: &Proof<KeccakStarkConfig<F, EF, DFT>>)
 where
     F: PrimeField32 + TwoAdicField,
     EF: ExtensionField<F>,
@@ -279,37 +277,34 @@ where
         return;
     }
 
-    // Derive tree height from the proof depth of the first round
     let first_round_depth = fri_proof.query_proofs[0].commit_phase_openings[0]
         .opening_proof
         .len();
 
-    // Generate pseudo-random indices (simulates realistic query distribution)
-    // In a real implementation, these come from the challenger
+    // Simulated query indices (in production, these come from the challenger)
     let num_queries = fri_proof.query_proofs.len();
     let query_indices: Vec<usize> = (0..num_queries)
         .map(|i| (i.wrapping_mul(0x9e3779b9) ^ (i >> 3)) % (1 << first_round_depth))
         .collect();
 
-    // Create compressed FRI proof
     type FriMmcs<F, EF> = ExtensionMmcs<F, EF, KeccakMerkleMmcs<F>>;
     let compressed: CompressedFriProof<
         EF,
         FriMmcs<F, EF>,
-        F,  // Witness type for Keccak challenger
+        F,
         Vec<p3_commit::BatchOpening<F, KeccakMerkleMmcs<F>>>,
         u64,
         4,
     > = CompressedFriProof::from_standard_proof(fri_proof.clone(), query_indices);
 
-    // Serialize both proofs
-    let original_fri_bytes = postcard::to_allocvec(fri_proof).expect("serialize original").len();
-    let compressed_fri_bytes =
-        postcard::to_allocvec(&compressed).expect("serialize compressed").len();
-
+    let original_fri_bytes = postcard::to_allocvec(fri_proof)
+        .expect("serialize original")
+        .len();
+    let compressed_fri_bytes = postcard::to_allocvec(&compressed)
+        .expect("serialize compressed")
+        .len();
     let fri_savings = original_fri_bytes - compressed_fri_bytes;
 
-    // Total proof comparison
     let total_proof_bytes = postcard::to_allocvec(proof).expect("serialize proof").len();
     let compressed_total = total_proof_bytes - fri_savings;
 

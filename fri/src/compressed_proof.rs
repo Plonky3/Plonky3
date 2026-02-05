@@ -82,14 +82,12 @@ where
             0
         };
 
-        // Extract input proofs
         let input_proofs: Vec<InputProof> = proof
             .query_proofs
             .iter()
             .map(|qp| qp.input_proof.clone())
             .collect();
 
-        // Extract sibling values
         let sibling_values: Vec<Vec<F>> = proof
             .query_proofs
             .iter()
@@ -101,11 +99,9 @@ where
             })
             .collect();
 
-        // Create batch proofs for each commit phase round
         let mut commit_phase_batch_proofs = Vec::with_capacity(num_rounds);
 
         for round in 0..num_rounds {
-            // Collect all individual proofs for this round
             let round_proofs: Vec<Vec<[Digest; DIGEST_ELEMS]>> = proof
                 .query_proofs
                 .iter()
@@ -117,10 +113,7 @@ where
                 })
                 .collect();
 
-            // Compute the indices for this round (shifted by round number)
             let round_indices: Vec<usize> = query_indices.iter().map(|&idx| idx >> round).collect();
-
-            // Create batch proof
             let batch_proof = BatchMerkleProof::from_single_proofs(&round_proofs, &round_indices);
             commit_phase_batch_proofs.push(batch_proof);
         }
@@ -206,18 +199,13 @@ where
             return Err(ExpandError::EmptyProof);
         }
 
-        // Reconstruct individual proofs for each round
-        let mut round_proofs: Vec<Vec<Vec<[Digest; DIGEST_ELEMS]>>> = Vec::with_capacity(num_rounds);
+        let mut round_proofs: Vec<Vec<Vec<[Digest; DIGEST_ELEMS]>>> =
+            Vec::with_capacity(num_rounds);
 
         for (round, batch_proof) in self.commit_phase_batch_proofs.iter().enumerate() {
-            // Compute indices for this round
-            let round_indices: Vec<usize> = self
-                .query_indices
-                .iter()
-                .map(|&idx| idx >> round)
-                .collect();
+            let round_indices: Vec<usize> =
+                self.query_indices.iter().map(|&idx| idx >> round).collect();
 
-            // Try to expand batch proof to individual proofs
             let individual_proofs = batch_proof
                 .into_single_proofs(&round_indices)
                 .map_err(|e| ExpandError::BatchProofExpansion(format!("{:?}", e)))?;
@@ -225,7 +213,6 @@ where
             round_proofs.push(individual_proofs);
         }
 
-        // Reconstruct QueryProofs
         let query_proofs: Vec<QueryProof<F, M, InputProof>> = (0..num_queries)
             .map(|q| {
                 let commit_phase_openings: Vec<CommitPhaseProofStep<F, M>> = (0..num_rounds)

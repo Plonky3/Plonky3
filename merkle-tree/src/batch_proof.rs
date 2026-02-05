@@ -62,27 +62,22 @@ impl<Digest: Clone + Eq> BatchMerkleProof<Digest> {
 
         let mut nodes: Vec<Vec<Digest>> = Vec::with_capacity(sorted_indexes.len());
 
-        // For the first level, check if siblings are also opened
         let mut i = 0;
         while i < sorted_indexes.len() {
             if i + 1 < sorted_indexes.len()
                 && are_siblings(sorted_indexes[i], sorted_indexes[i + 1])
             {
-                // Both siblings are opened, no need to store sibling hash
                 nodes.push(vec![]);
                 nodes.push(vec![]);
                 i += 2;
             } else {
-                // Need to store the sibling
                 nodes.push(vec![sorted_proofs[i][0].clone()]);
                 i += 1;
             }
         }
 
-        // For remaining levels, track parent indices
         let mut current_indexes = sorted_indexes;
         for d in 1..depth {
-            // Compute parent indices (remove duplicates)
             let mut parent_indexes: Vec<usize> = Vec::new();
             let mut index_to_node_idx: BTreeMap<usize, usize> = BTreeMap::new();
 
@@ -94,18 +89,14 @@ impl<Digest: Clone + Eq> BatchMerkleProof<Digest> {
                 }
             }
 
-            // For each parent, check if its sibling is also a parent
             let mut j = 0;
             while j < parent_indexes.len() {
                 let parent_idx = parent_indexes[j];
                 let node_idx = *index_to_node_idx.get(&parent_idx).unwrap();
 
                 if j + 1 < parent_indexes.len() && are_siblings(parent_idx, parent_indexes[j + 1]) {
-                    // Both siblings are parents of opened indices, no extra sibling needed
                     j += 2;
                 } else {
-                    // Need to store the sibling at this level
-                    // Find which original proof this corresponds to
                     nodes[node_idx].push(sorted_proofs[node_idx][d].clone());
                     j += 1;
                 }
@@ -138,7 +129,6 @@ impl<Digest: Clone + Eq> BatchMerkleProof<Digest> {
             return Err(BatchProofError::EmptyIndexes);
         }
 
-        // Map from original index to position in input
         let index_map: BTreeMap<usize, Vec<usize>> = {
             let mut map = BTreeMap::new();
             for (pos, &idx) in indexes.iter().enumerate() {
@@ -147,7 +137,6 @@ impl<Digest: Clone + Eq> BatchMerkleProof<Digest> {
             map
         };
 
-        // Sort unique indices
         let sorted_unique_indexes: Vec<usize> = index_map.keys().copied().collect();
 
         if sorted_unique_indexes.len() != self.nodes.len() {
@@ -157,10 +146,7 @@ impl<Digest: Clone + Eq> BatchMerkleProof<Digest> {
             });
         }
 
-        // Reconstruct proofs using the batch proof structure
         let mut proofs: Vec<Vec<Digest>> = vec![vec![]; indexes.len()];
-
-        // Level 0: handle leaf siblings
         let mut proof_pointers: Vec<usize> = vec![0; sorted_unique_indexes.len()];
         let mut node_idx_to_sibling: BTreeMap<usize, Digest> = BTreeMap::new();
 
@@ -169,16 +155,12 @@ impl<Digest: Clone + Eq> BatchMerkleProof<Digest> {
             let idx = sorted_unique_indexes[i];
             let sibling_idx = idx ^ 1;
 
-            // Check if sibling is also opened
             let sibling_node_idx = sorted_unique_indexes.iter().position(|&x| x == sibling_idx);
 
             let sibling = if sibling_node_idx.is_some() {
-                // Sibling is opened - we'll get it from reconstruct later
-                // For now mark that we don't need to read from proof
                 i += 2;
                 continue;
             } else {
-                // Read sibling from proof
                 if self.nodes[i].is_empty() {
                     return Err(BatchProofError::MissingProofNode);
                 }
@@ -191,7 +173,6 @@ impl<Digest: Clone + Eq> BatchMerkleProof<Digest> {
             node_idx_to_sibling.insert(i - 1, sibling);
         }
 
-        // For each original index, construct its proof
         for (orig_pos, &orig_idx) in indexes.iter().enumerate() {
             let sorted_pos = sorted_unique_indexes
                 .iter()
@@ -204,15 +185,10 @@ impl<Digest: Clone + Eq> BatchMerkleProof<Digest> {
             for level in 0..self.depth as usize {
                 let sibling_idx = current_idx ^ 1;
 
-                // Check if sibling is in our opened set at this level
                 if level == 0 {
-                    // At leaf level, check if sibling leaf is opened
                     let sibling_pos = sorted_unique_indexes.iter().position(|&x| x == sibling_idx);
 
                     if sibling_pos.is_some() {
-                        // Sibling is opened - but for individual proofs we still need
-                        // to include something. This is handled in verification.
-                        // For reconstruction, we'd need the actual leaf value.
                         return Err(BatchProofError::CannotReconstructWithOpenedSiblings);
                     } else if let Some(&sib) = node_idx_to_sibling.get(&sorted_pos) {
                         proof.push(sib);
@@ -220,8 +196,6 @@ impl<Digest: Clone + Eq> BatchMerkleProof<Digest> {
                         return Err(BatchProofError::MissingProofNode);
                     }
                 } else {
-                    // Higher levels need different handling
-                    // This is getting complex - the batch verification approach is cleaner
                     return Err(BatchProofError::CannotReconstructWithOpenedSiblings);
                 }
 
@@ -262,7 +236,6 @@ impl<Digest: Clone + Eq> BatchMerkleProof<Digest> {
             return Err(BatchProofError::LeafCountMismatch);
         }
 
-        // Map original index to its position in sorted unique list
         let mut index_map: BTreeMap<usize, usize> = BTreeMap::new();
         let mut sorted_indexes: Vec<usize> = Vec::new();
         let mut sorted_leaf_hashes: Vec<Digest> = Vec::new();
@@ -282,7 +255,6 @@ impl<Digest: Clone + Eq> BatchMerkleProof<Digest> {
             });
         }
 
-        // Track computed values at each level
         let mut current_values: BTreeMap<usize, Digest> = BTreeMap::new();
         for (i, &idx) in sorted_indexes.iter().enumerate() {
             current_values.insert(idx, sorted_leaf_hashes[i]);
@@ -290,7 +262,6 @@ impl<Digest: Clone + Eq> BatchMerkleProof<Digest> {
 
         let mut proof_pointers = vec![0usize; sorted_indexes.len()];
 
-        // Process level by level from leaves to root
         for level in 0..self.depth as usize {
             let mut next_values: BTreeMap<usize, Digest> = BTreeMap::new();
 
@@ -308,13 +279,10 @@ impl<Digest: Clone + Eq> BatchMerkleProof<Digest> {
 
                 let current_val = *current_values.get(&idx).unwrap();
 
-                // Check if sibling is in our computed set
                 let sibling_val = if let Some(&sib_val) = current_values.get(&sibling_idx) {
-                    // Sibling is also opened/computed, skip the duplicate
                     i += 2;
                     sib_val
                 } else {
-                    // Read sibling from proof
                     let orig_node_idx = *node_map.get(&idx).ok_or(BatchProofError::InvalidProof)?;
                     let ptr = proof_pointers[orig_node_idx];
                     if ptr >= self.nodes[orig_node_idx].len() {
@@ -340,7 +308,6 @@ impl<Digest: Clone + Eq> BatchMerkleProof<Digest> {
             current_values = next_values;
         }
 
-        // Should have exactly one value left: the root
         if current_values.len() != 1 {
             return Err(BatchProofError::InvalidProof);
         }
