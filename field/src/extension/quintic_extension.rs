@@ -687,8 +687,7 @@ pub(super) fn quintic_square<R: PrimeCharacteristicRing>(a: &[R; 5], res: &mut [
     // c3 = 2*a0*a3 + 2*a1*a2
     let c3 = R::dot_product::<2>(&[a0_2.clone(), a1_2.clone()], &[a[3].clone(), a[2].clone()]);
     // c4 = 2*a0*a4 + 2*a1*a3 + a2^2
-    let c4 =
-        R::dot_product::<2>(&[a0_2.clone(), a1_2.clone()], &[a[4].clone(), a[3].clone()]) + a2_sq;
+    let c4 = R::dot_product::<2>(&[a0_2, a1_2.clone()], &[a[4].clone(), a[3].clone()]) + a2_sq;
     // c5 = 2*a1*a4 + 2*a2*a3
     let c5 = R::dot_product::<2>(&[a1_2, a2_2.clone()], &[a[4].clone(), a[3].clone()]);
     // c6 = 2*a2*a4 + a3^2
