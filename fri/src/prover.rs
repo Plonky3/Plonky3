@@ -129,6 +129,89 @@ where
     }
 }
 
+/// Same as `prove_fri` but also returns the query indices used.
+///
+/// This is useful for creating compressed proofs that batch Merkle openings
+/// across multiple queries.
+#[instrument(name = "FRI prover with indices", skip_all)]
+pub fn prove_fri_with_indices<Folding, Val, Challenge, InputMmcs, FriMmcs, Challenger>(
+    folding: &Folding,
+    params: &FriParameters<FriMmcs>,
+    inputs: Vec<Vec<Challenge>>,
+    challenger: &mut Challenger,
+    log_global_max_height: usize,
+    prover_data_with_opening_points: &[ProverDataWithOpeningPoints<
+        '_,
+        Challenge,
+        InputMmcs::ProverData<RowMajorMatrix<Val>>,
+    >],
+    input_mmcs: &InputMmcs,
+) -> (
+    FriProof<Challenge, FriMmcs, Challenger::Witness, Folding::InputProof>,
+    Vec<usize>,
+)
+where
+    Val: TwoAdicField,
+    Challenge: ExtensionField<Val>,
+    InputMmcs: Mmcs<Val>,
+    FriMmcs: Mmcs<Challenge>,
+    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<FriMmcs::Commitment>,
+    Folding: FriFoldingStrategy<Val, Challenge, InputProof = Vec<BatchOpening<Val, InputMmcs>>>,
+{
+    assert!(!inputs.is_empty());
+    assert!(
+        inputs
+            .iter()
+            .tuple_windows()
+            .all(|(l, r)| l.len() >= r.len()),
+        "Inputs are not sorted in descending order of length."
+    );
+
+    let log_max_height = log2_strict_usize(inputs[0].len());
+    let log_min_height = log2_strict_usize(inputs.last().unwrap().len());
+    if params.log_final_poly_len > 0 {
+        assert!(log_min_height > params.log_final_poly_len + params.log_blowup);
+    }
+
+    let commit_phase_result = commit_phase(folding, params, inputs, challenger);
+
+    let pow_witness = challenger.grind(params.query_proof_of_work_bits);
+
+    let (query_proofs, query_indices) = info_span!("query phase").in_scope(|| {
+        let mut indices = Vec::with_capacity(params.num_queries);
+        let proofs: Vec<_> = iter::repeat_with(|| {
+            let index = challenger.sample_bits(log_max_height + folding.extra_query_index_bits());
+            indices.push(index);
+            QueryProof {
+                input_proof: open_input(
+                    log_global_max_height,
+                    index,
+                    prover_data_with_opening_points,
+                    input_mmcs,
+                ),
+                commit_phase_openings: answer_query(
+                    params,
+                    &commit_phase_result.data,
+                    index >> folding.extra_query_index_bits(),
+                ),
+            }
+        })
+        .take(params.num_queries)
+        .collect();
+        (proofs, indices)
+    });
+
+    let proof = FriProof {
+        commit_phase_commits: commit_phase_result.commits,
+        commit_pow_witnesses: commit_phase_result.pow_witnesses,
+        query_proofs,
+        final_poly: commit_phase_result.final_poly,
+        query_pow_witness: pow_witness,
+    };
+
+    (proof, query_indices)
+}
+
 struct CommitPhaseResult<F: Field, M: Mmcs<F>, Witness> {
     commits: Vec<M::Commitment>,
     data: Vec<M::ProverData<RowMajorMatrix<F>>>,

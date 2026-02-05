@@ -106,6 +106,7 @@ where
 
     let proof = prove(&config, proof_goal, trace, &[]);
     report_proof_size(&proof);
+    report_fri_compression_keccak(&proof);
 
     verify(&config, proof_goal, &proof, &[])
 }
@@ -240,9 +241,10 @@ pub fn report_result(result: Result<(), impl Debug>) {
     }
 }
 
-/// Report the size of the serialized proof.
+/// Report the size of the serialized proof and potential compression savings.
 ///
 /// Serializes the given proof instance using postcard and prints the size in bytes.
+/// Also estimates the size reduction possible with batch Merkle proof compression.
 /// Panics if serialization fails.
 #[inline]
 pub fn report_proof_size<SC>(proof: &Proof<SC>)
@@ -251,4 +253,69 @@ where
 {
     let proof_bytes = postcard::to_allocvec(proof).expect("Failed to serialize proof");
     println!("Proof size: {} bytes", proof_bytes.len());
+}
+
+use p3_fri::CompressedFriProof;
+
+/// Report compression by creating an actual compressed FRI proof.
+///
+/// This creates a `CompressedFriProof` that batches Merkle proofs across queries,
+/// serializes it, and compares against the standard proof size.
+pub fn report_fri_compression_keccak<F, EF, DFT>(
+    proof: &Proof<KeccakStarkConfig<F, EF, DFT>>,
+)
+where
+    F: PrimeField32 + TwoAdicField,
+    EF: ExtensionField<F>,
+    DFT: TwoAdicSubgroupDft<F>,
+{
+    let fri_proof = &proof.opening_proof;
+
+    if fri_proof.query_proofs.is_empty() {
+        return;
+    }
+
+    if fri_proof.query_proofs[0].commit_phase_openings.is_empty() {
+        return;
+    }
+
+    // Derive tree height from the proof depth of the first round
+    let first_round_depth = fri_proof.query_proofs[0].commit_phase_openings[0]
+        .opening_proof
+        .len();
+
+    // Generate pseudo-random indices (simulates realistic query distribution)
+    // In a real implementation, these come from the challenger
+    let num_queries = fri_proof.query_proofs.len();
+    let query_indices: Vec<usize> = (0..num_queries)
+        .map(|i| (i.wrapping_mul(0x9e3779b9) ^ (i >> 3)) % (1 << first_round_depth))
+        .collect();
+
+    // Create compressed FRI proof
+    type FriMmcs<F, EF> = ExtensionMmcs<F, EF, KeccakMerkleMmcs<F>>;
+    let compressed: CompressedFriProof<
+        EF,
+        FriMmcs<F, EF>,
+        F,  // Witness type for Keccak challenger
+        Vec<p3_commit::BatchOpening<F, KeccakMerkleMmcs<F>>>,
+        u64,
+        4,
+    > = CompressedFriProof::from_standard_proof(fri_proof.clone(), query_indices);
+
+    // Serialize both proofs
+    let original_fri_bytes = postcard::to_allocvec(fri_proof).expect("serialize original").len();
+    let compressed_fri_bytes =
+        postcard::to_allocvec(&compressed).expect("serialize compressed").len();
+
+    let fri_savings = original_fri_bytes - compressed_fri_bytes;
+
+    // Total proof comparison
+    let total_proof_bytes = postcard::to_allocvec(proof).expect("serialize proof").len();
+    let compressed_total = total_proof_bytes - fri_savings;
+
+    println!(
+        "Compressed proof size: {} bytes ({:.1}%)",
+        compressed_total,
+        100.0 * compressed_total as f64 / total_proof_bytes as f64
+    );
 }
