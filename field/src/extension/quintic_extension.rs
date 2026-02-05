@@ -156,11 +156,13 @@ impl<F: QuinticTrinomialExtendable> HasFrobenius<F> for QuinticExtensionField<F>
         let a = &self.value;
         let fc = &F::FROBENIUS_COEFFS;
 
-        let c0 = a[0] + a[1] * fc[0][0] + a[2] * fc[1][0] + a[3] * fc[2][0] + a[4] * fc[3][0];
-        let c1 = a[1] * fc[0][1] + a[2] * fc[1][1] + a[3] * fc[2][1] + a[4] * fc[3][1];
-        let c2 = a[1] * fc[0][2] + a[2] * fc[1][2] + a[3] * fc[2][2] + a[4] * fc[3][2];
-        let c3 = a[1] * fc[0][3] + a[2] * fc[1][3] + a[3] * fc[2][3] + a[4] * fc[3][3];
-        let c4 = a[1] * fc[0][4] + a[2] * fc[1][4] + a[3] * fc[2][4] + a[4] * fc[3][4];
+        // φ(a) = a_0 + Σ_{k=1}^{4} a_k * X^{k*p} where X^{k*p} = fc[k-1]
+        let a_tail = &[a[1], a[2], a[3], a[4]];
+        let c0 = a[0] + F::dot_product::<4>(a_tail, &[fc[0][0], fc[1][0], fc[2][0], fc[3][0]]);
+        let c1 = F::dot_product::<4>(a_tail, &[fc[0][1], fc[1][1], fc[2][1], fc[3][1]]);
+        let c2 = F::dot_product::<4>(a_tail, &[fc[0][2], fc[1][2], fc[2][2], fc[3][2]]);
+        let c3 = F::dot_product::<4>(a_tail, &[fc[0][3], fc[1][3], fc[2][3], fc[3][3]]);
+        let c4 = F::dot_product::<4>(a_tail, &[fc[0][4], fc[1][4], fc[2][4], fc[3][4]]);
 
         Self::new([c0, c1, c2, c3, c4])
     }
