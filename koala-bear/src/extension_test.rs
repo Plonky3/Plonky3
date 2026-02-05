@@ -6,7 +6,7 @@ mod test_quartic_extension {
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{BasedVectorSpace, ExtensionField, PrimeCharacteristicRing};
     use p3_field_testing::{
-        test_extension_field, test_field, test_packed_extension_field,
+        test_extension_field, test_field, test_frobenius, test_packed_extension_field,
         test_two_adic_extension_field,
     };
 
@@ -41,6 +41,7 @@ mod test_quartic_extension {
     );
     test_extension_field!(super::F, super::EF);
     test_two_adic_extension_field!(super::F, super::EF);
+    test_frobenius!(super::F, super::EF);
 
     #[test]
     fn display() {
@@ -71,7 +72,7 @@ mod test_octic_extension {
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{BasedVectorSpace, ExtensionField, PrimeCharacteristicRing};
     use p3_field_testing::{
-        test_extension_field, test_field, test_packed_extension_field,
+        test_extension_field, test_field, test_frobenius, test_packed_extension_field,
         test_two_adic_extension_field,
     };
 
@@ -109,6 +110,7 @@ mod test_octic_extension {
     );
     test_extension_field!(super::F, super::EF);
     test_two_adic_extension_field!(super::F, super::EF);
+    test_frobenius!(super::F, super::EF);
 
     #[test]
     fn display() {
@@ -146,10 +148,10 @@ mod test_quintic_extension {
     use alloc::format;
 
     use num_bigint::BigUint;
-    use p3_field::extension::{HasFrobenius, QuinticExtensionField};
+    use p3_field::extension::QuinticExtensionField;
     use p3_field::{BasedVectorSpace, ExtensionField, PrimeCharacteristicRing};
     use p3_field_testing::{
-        test_extension_field, test_field, test_packed_extension_field,
+        test_extension_field, test_field, test_frobenius, test_packed_extension_field,
         test_two_adic_extension_field,
     };
 
@@ -182,6 +184,7 @@ mod test_quintic_extension {
     );
     test_extension_field!(super::F, super::EF);
     test_two_adic_extension_field!(super::F, super::EF);
+    test_frobenius!(super::F, super::EF);
 
     #[test]
     fn display() {
@@ -216,102 +219,5 @@ mod test_quintic_extension {
 
         // X^5 + X^2 should equal 1
         assert_eq!(x5 + x2, EF::ONE, "Reduction identity X^5 + X^2 = 1 failed");
-    }
-
-    /// Test that Frobenius has period 5: φ^5(a) = a for all a.
-    #[test]
-    fn test_frobenius_period() {
-        let a = EF::from_basis_coefficients_slice(&[
-            F::from_u32(100),
-            F::from_u32(200),
-            F::from_u32(300),
-            F::from_u32(400),
-            F::from_u32(500),
-        ])
-        .unwrap();
-
-        let result = a
-            .frobenius()
-            .frobenius()
-            .frobenius()
-            .frobenius()
-            .frobenius();
-        assert_eq!(result, a, "Frobenius^5 should be identity");
-
-        // Also test repeated_frobenius
-        assert_eq!(a.repeated_frobenius(5), a);
-        assert_eq!(a.repeated_frobenius(10), a);
-        assert_eq!(a.repeated_frobenius(0), a);
-    }
-
-    /// Test that Frobenius fixes base field elements: φ(a) = a for a ∈ F.
-    #[test]
-    fn test_frobenius_fixes_base_field() {
-        let base_elem = EF::from(F::from_u32(12345));
-        assert_eq!(
-            base_elem.frobenius(),
-            base_elem,
-            "Frobenius should fix base field elements"
-        );
-
-        // Test with more base field elements
-        assert_eq!(EF::ZERO.frobenius(), EF::ZERO);
-        assert_eq!(EF::ONE.frobenius(), EF::ONE);
-        assert_eq!(EF::TWO.frobenius(), EF::TWO);
-    }
-
-    /// Test that Frobenius is multiplicative: φ(a·b) = φ(a)·φ(b).
-    #[test]
-    fn test_frobenius_multiplicative() {
-        let a = EF::from_basis_coefficients_slice(&[
-            F::from_u32(10),
-            F::from_u32(20),
-            F::from_u32(30),
-            F::from_u32(40),
-            F::from_u32(50),
-        ])
-        .unwrap();
-        let b = EF::from_basis_coefficients_slice(&[
-            F::from_u32(7),
-            F::from_u32(11),
-            F::from_u32(13),
-            F::from_u32(17),
-            F::from_u32(19),
-        ])
-        .unwrap();
-
-        let ab = a * b;
-        assert_eq!(
-            ab.frobenius(),
-            a.frobenius() * b.frobenius(),
-            "Frobenius should be multiplicative"
-        );
-    }
-
-    /// Test that Frobenius is additive: φ(a+b) = φ(a)+φ(b).
-    #[test]
-    fn test_frobenius_additive() {
-        let a = EF::from_basis_coefficients_slice(&[
-            F::from_u32(10),
-            F::from_u32(20),
-            F::from_u32(30),
-            F::from_u32(40),
-            F::from_u32(50),
-        ])
-        .unwrap();
-        let b = EF::from_basis_coefficients_slice(&[
-            F::from_u32(7),
-            F::from_u32(11),
-            F::from_u32(13),
-            F::from_u32(17),
-            F::from_u32(19),
-        ])
-        .unwrap();
-
-        assert_eq!(
-            (a + b).frobenius(),
-            a.frobenius() + b.frobenius(),
-            "Frobenius should be additive"
-        );
     }
 }
