@@ -4,6 +4,7 @@
 
 extern crate alloc;
 
+mod compressed_proof;
 mod config;
 mod hiding_pcs;
 mod proof;
@@ -11,6 +12,7 @@ pub mod prover;
 mod two_adic_pcs;
 pub mod verifier;
 
+pub use compressed_proof::*;
 pub use config::*;
 pub use hiding_pcs::*;
 pub use proof::*;

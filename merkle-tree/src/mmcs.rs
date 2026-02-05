@@ -338,6 +338,203 @@ where
     }
 }
 
+/// Multiple batch openings at different indices, compressed using batch Merkle proofs.
+///
+/// This structure stores openings for multiple indices from the same commitment,
+/// using the Octopus algorithm to deduplicate shared sibling nodes across different
+/// Merkle paths.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "T: Serialize, [W; DIGEST_ELEMS]: Serialize",
+    deserialize = "T: for<'a> Deserialize<'a>, [W; DIGEST_ELEMS]: for<'a> Deserialize<'a>"
+))]
+pub struct BatchMultiOpening<T, W, const DIGEST_ELEMS: usize> {
+    /// Opened values for each index. `opened_values[i][j]` is the row from matrix `j` at index `i`.
+    pub opened_values: Vec<Vec<Vec<T>>>,
+    /// Compressed Merkle proof for all indices.
+    pub batch_proof: crate::BatchMerkleProof<[W; DIGEST_ELEMS]>,
+}
+
+impl<T: Clone, W: Clone, const DIGEST_ELEMS: usize> BatchMultiOpening<T, W, DIGEST_ELEMS> {
+    /// Returns the number of openings (indices) in this batch.
+    pub fn num_openings(&self) -> usize {
+        self.opened_values.len()
+    }
+
+    /// Returns the total number of digest elements in the proof.
+    pub fn num_proof_digests(&self) -> usize {
+        self.batch_proof.num_digests()
+    }
+}
+
+impl<P, PW, H, C, const DIGEST_ELEMS: usize> MerkleTreeMmcs<P, PW, H, C, DIGEST_ELEMS>
+where
+    P: PackedValue,
+    PW: PackedValue,
+    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>
+        + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+        + Sync,
+    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>
+        + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>
+        + Sync,
+    PW::Value: Eq + Default + Clone,
+    [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
+{
+    /// Opens multiple indices from the same commitment, returning a compressed proof.
+    ///
+    /// This is more efficient than calling `open_batch` multiple times when opening
+    /// many indices, as it deduplicates shared sibling nodes in the Merkle paths.
+    pub fn open_multi<M: Matrix<P::Value>>(
+        &self,
+        indices: &[usize],
+        prover_data: &MerkleTree<P::Value, PW::Value, M, DIGEST_ELEMS>,
+    ) -> BatchMultiOpening<P::Value, PW::Value, DIGEST_ELEMS> {
+        assert!(!indices.is_empty(), "must open at least one index");
+
+        let max_height = <Self as Mmcs<P::Value>>::get_max_height(self, prover_data);
+        let log_max_height = log2_ceil_usize(max_height);
+
+        // Collect individual openings and proofs
+        let mut all_opened_values = Vec::with_capacity(indices.len());
+        let mut all_proofs = Vec::with_capacity(indices.len());
+
+        for &index in indices {
+            assert!(
+                index < max_height,
+                "index {index} out of bounds for height {max_height}"
+            );
+
+            // Get the matrix rows
+            let openings: Vec<Vec<P::Value>> = prover_data
+                .leaves
+                .iter()
+                .map(|matrix| {
+                    let log2_height = log2_ceil_usize(matrix.height());
+                    let bits_reduced = log_max_height - log2_height;
+                    let reduced_index = index >> bits_reduced;
+                    matrix.row(reduced_index).unwrap().into_iter().collect()
+                })
+                .collect();
+
+            // Get the individual proof (sibling nodes)
+            let proof: Vec<[PW::Value; DIGEST_ELEMS]> = (0..log_max_height)
+                .map(|i| prover_data.digest_layers[i][(index >> i) ^ 1])
+                .collect();
+
+            all_opened_values.push(openings);
+            all_proofs.push(proof);
+        }
+
+        // Compress the proofs
+        let batch_proof = crate::BatchMerkleProof::from_single_proofs(&all_proofs, indices);
+
+        BatchMultiOpening {
+            opened_values: all_opened_values,
+            batch_proof,
+        }
+    }
+
+    /// Verifies a batch multi-opening against a commitment.
+    ///
+    /// # Arguments
+    /// * `commit` - The Merkle root commitment
+    /// * `dimensions` - Dimensions of the committed matrices
+    /// * `indices` - The indices that were opened (must match order used in `open_multi`)
+    /// * `batch_opening` - The compressed batch opening to verify
+    pub fn verify_multi(
+        &self,
+        commit: &Hash<P::Value, PW::Value, DIGEST_ELEMS>,
+        dimensions: &[Dimensions],
+        indices: &[usize],
+        batch_opening: &BatchMultiOpening<P::Value, PW::Value, DIGEST_ELEMS>,
+    ) -> Result<(), MerkleTreeError> {
+        if indices.len() != batch_opening.opened_values.len() {
+            return Err(WrongBatchSize);
+        }
+        if indices.is_empty() {
+            return Err(EmptyBatch);
+        }
+
+        // Compute leaf hashes for each index
+        let mut heights_tallest_first: Vec<_> = dimensions
+            .iter()
+            .enumerate()
+            .sorted_by_key(|(_, dims)| Reverse(dims.height))
+            .collect();
+
+        let max_height = heights_tallest_first
+            .first()
+            .map(|(_, dims)| dims.height)
+            .ok_or(EmptyBatch)?;
+        let max_height_padded = max_height.next_power_of_two();
+        let log_max_height = log2_strict_usize(max_height_padded);
+
+        if batch_opening.batch_proof.depth as usize != log_max_height {
+            return Err(WrongHeight {
+                log_max_height,
+                num_siblings: batch_opening.batch_proof.depth as usize,
+            });
+        }
+
+        // Compute leaf hashes for each opened index
+        let leaf_hashes: Vec<[PW::Value; DIGEST_ELEMS]> = indices
+            .iter()
+            .zip(batch_opening.opened_values.iter())
+            .map(|(&index, opened_values)| {
+                if index >= max_height {
+                    return Err(IndexOutOfBounds { max_height, index });
+                }
+                if opened_values.len() != dimensions.len() {
+                    return Err(WrongBatchSize);
+                }
+
+                // Compute the leaf hash by hashing all matrix rows at the appropriate heights
+                heights_tallest_first.sort_by_key(|(_, dims)| Reverse(dims.height));
+                let mut heights_iter = heights_tallest_first.iter().peekable();
+                let mut curr_height_padded = max_height_padded;
+
+                // Hash matrices at the tallest height
+                let mut root = self.hash.hash_iter_slices(
+                    heights_iter
+                        .peeking_take_while(|(_, dims)| {
+                            dims.height.next_power_of_two() == curr_height_padded
+                        })
+                        .map(|(i, _)| opened_values[*i].as_slice()),
+                );
+
+                // Walk up the tree, injecting shorter matrices
+                for _ in 0..log_max_height {
+                    curr_height_padded >>= 1;
+
+                    let next_height = heights_iter
+                        .peek()
+                        .map(|(_, dims)| dims.height)
+                        .filter(|h| h.next_power_of_two() == curr_height_padded);
+
+                    if let Some(next_height) = next_height {
+                        let next_height_openings_digest = self.hash.hash_iter_slices(
+                            heights_iter
+                                .peeking_take_while(|(_, dims)| dims.height == next_height)
+                                .map(|(i, _)| opened_values[*i].as_slice()),
+                        );
+                        root = self.compress.compress([root, next_height_openings_digest]);
+                    }
+                }
+
+                Ok(root)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Verify the batch proof
+        batch_opening
+            .batch_proof
+            .verify(commit.as_ref(), indices, &leaf_hashes, |input| {
+                self.compress.compress(input)
+            })
+            .map_err(|_| RootMismatch)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec;
@@ -714,5 +911,120 @@ mod tests {
         // We expect a panic because the smaller matrix needs ceil(11 / 2) == 6 rows;
         // height 5 would leave the global index 5 unmapped at that layer.
         let _ = mmcs.commit(vec![tallest, invalid]);
+    }
+
+    #[test]
+    fn batch_multi_opening_basic() {
+        let mut rng = SmallRng::seed_from_u64(42);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress);
+
+        // Create a matrix with 32 rows
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 32, 8);
+        let dims = vec![mat.dimensions()];
+
+        let (commit, prover_data) = mmcs.commit(vec![mat]);
+
+        // Open multiple indices
+        let indices = vec![3, 7, 15, 20];
+        let batch_opening = mmcs.open_multi(&indices, &prover_data);
+
+        // Verify the batch opening
+        mmcs.verify_multi(&commit, &dims, &indices, &batch_opening)
+            .expect("batch multi-opening verification should succeed");
+    }
+
+    #[test]
+    fn batch_multi_opening_compression_savings() {
+        let mut rng = SmallRng::seed_from_u64(123);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress);
+
+        // Create a matrix with 64 rows (6 levels in tree)
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 64, 4);
+        let (_, prover_data) = mmcs.commit(vec![mat]);
+
+        // Open 8 indices - some will share ancestors
+        let indices = vec![0, 1, 8, 9, 32, 33, 40, 41];
+        let batch_opening = mmcs.open_multi(&indices, &prover_data);
+
+        // Individual proofs would have 8 * 6 = 48 digests
+        let individual_total = 8 * 6;
+        let batch_total = batch_opening.num_proof_digests();
+
+        // Batch proof should be smaller due to shared siblings
+        // Indices 0,1 are siblings (save 1), 8,9 are siblings (save 1), etc.
+        // Plus they share ancestors at higher levels
+        assert!(
+            batch_total < individual_total,
+            "batch ({}) should be smaller than individual ({})",
+            batch_total,
+            individual_total
+        );
+    }
+
+    #[test]
+    fn batch_multi_opening_matches_individual() {
+        let mut rng = SmallRng::seed_from_u64(456);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress);
+
+        // Create a single matrix (simpler case - no multi-height injection)
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 16, 8);
+        let dims = vec![mat.dimensions()];
+
+        let (commit, prover_data) = mmcs.commit(vec![mat]);
+
+        let indices = vec![2, 5, 10];
+
+        // Get batch multi-opening
+        let batch_opening = mmcs.open_multi(&indices, &prover_data);
+
+        // Verify opened values match individual openings
+        for (i, &idx) in indices.iter().enumerate() {
+            let individual = mmcs.open_batch(idx, &prover_data);
+            assert_eq!(
+                batch_opening.opened_values[i], individual.opened_values,
+                "opened values at index {} should match",
+                idx
+            );
+        }
+
+        // Verify batch opening succeeds
+        mmcs.verify_multi(&commit, &dims, &indices, &batch_opening)
+            .expect("batch verification should succeed");
+    }
+
+    #[test]
+    fn batch_multi_opening_tampered_proof_fails() {
+        let mut rng = SmallRng::seed_from_u64(789);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress);
+
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 32, 8);
+        let dims = vec![mat.dimensions()];
+        let (commit, prover_data) = mmcs.commit(vec![mat]);
+
+        let indices = vec![3, 7, 15];
+        let mut batch_opening = mmcs.open_multi(&indices, &prover_data);
+
+        // Tamper with the proof
+        if !batch_opening.batch_proof.nodes.is_empty()
+            && !batch_opening.batch_proof.nodes[0].is_empty()
+        {
+            batch_opening.batch_proof.nodes[0][0][0] += F::ONE;
+        }
+
+        // Verification should fail
+        let result = mmcs.verify_multi(&commit, &dims, &indices, &batch_opening);
+        assert!(result.is_err(), "tampered proof should fail verification");
     }
 }
