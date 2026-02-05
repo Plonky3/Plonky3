@@ -619,7 +619,7 @@ impl<F: QuinticTrinomialExtendable + HasTwoAdicQuinticExtension> TwoAdicField
 /// Multiply two elements in the quintic extension field.
 #[inline]
 pub(super) fn quintic_mul<R: PrimeCharacteristicRing>(a: &[R; 5], b: &[R; 5], res: &mut [R; 5]) {
-    // TODO: This is unoptimized.
+    // TODO: This is unoptimized. See `binomial_extension.rs` for optimization ideas.
 
     // Compute raw product coefficients c_0 through c_8
     let c0 = a[0].clone() * b[0].clone();
