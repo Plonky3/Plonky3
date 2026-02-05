@@ -357,7 +357,7 @@ pub struct BatchMultiOpening<T, W, const DIGEST_ELEMS: usize> {
 
 impl<T: Clone, W: Clone, const DIGEST_ELEMS: usize> BatchMultiOpening<T, W, DIGEST_ELEMS> {
     /// Returns the number of openings (indices) in this batch.
-    pub fn num_openings(&self) -> usize {
+    pub const fn num_openings(&self) -> usize {
         self.opened_values.len()
     }
 

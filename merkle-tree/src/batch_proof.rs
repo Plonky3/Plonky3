@@ -6,6 +6,7 @@
 //! to remove duplicate internal nodes.
 
 use alloc::collections::BTreeMap;
+use alloc::collections::btree_map::Entry;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -83,8 +84,8 @@ impl<Digest: Clone + Eq> BatchMerkleProof<Digest> {
 
             for (node_idx, &idx) in current_indexes.iter().enumerate() {
                 let parent_idx = idx >> 1;
-                if !index_to_node_idx.contains_key(&parent_idx) {
-                    index_to_node_idx.insert(parent_idx, node_idx);
+                if let Entry::Vacant(e) = index_to_node_idx.entry(parent_idx) {
+                    e.insert(node_idx);
                     parent_indexes.push(parent_idx);
                 }
             }
@@ -105,7 +106,7 @@ impl<Digest: Clone + Eq> BatchMerkleProof<Digest> {
             current_indexes = parent_indexes;
         }
 
-        BatchMerkleProof {
+        Self {
             nodes,
             depth: depth as u8,
         }
@@ -241,8 +242,8 @@ impl<Digest: Clone + Eq> BatchMerkleProof<Digest> {
         let mut sorted_leaf_hashes: Vec<Digest> = Vec::new();
 
         for (pos, &idx) in indexes.iter().enumerate() {
-            if !index_map.contains_key(&idx) {
-                index_map.insert(idx, sorted_indexes.len());
+            if let Entry::Vacant(e) = index_map.entry(idx) {
+                e.insert(sorted_indexes.len());
                 sorted_indexes.push(idx);
                 sorted_leaf_hashes.push(leaf_hashes[pos]);
             }
@@ -348,7 +349,8 @@ pub enum BatchProofError {
 }
 
 /// Returns true if two indices are siblings (differ only in the last bit).
-fn are_siblings(left: usize, right: usize) -> bool {
+#[inline]
+const fn are_siblings(left: usize, right: usize) -> bool {
     left ^ right == 1
 }
 
@@ -395,7 +397,7 @@ mod tests {
     fn test_batch_proof_single_index() {
         // Single proof: index 0 in a tree of depth 3
         let proof = vec![[1u8; 4], [2u8; 4], [3u8; 4]];
-        let batch = BatchMerkleProof::from_single_proofs(&[proof.clone()], &[0]);
+        let batch = BatchMerkleProof::from_single_proofs(core::slice::from_ref(&proof), &[0]);
 
         assert_eq!(batch.depth, 3);
         assert_eq!(batch.nodes.len(), 1);
