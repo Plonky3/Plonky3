@@ -114,10 +114,6 @@ where
 {
     const EXT_TWO_ADICITY: usize = FP::EXT_TWO_ADICITY;
 
-    type ArrayLike = <FP as TrinomialQuinticData>::ArrayLike;
-    const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike =
-        <FP as TrinomialQuinticData>::TWO_ADIC_EXTENSION_GENERATORS;
-
     fn ext_two_adic_generator(bits: usize) -> [Self; 5] {
         assert!(bits <= Self::EXT_TWO_ADICITY);
         if bits <= FP::TWO_ADICITY {

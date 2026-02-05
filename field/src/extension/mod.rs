@@ -206,12 +206,6 @@ pub trait HasTwoAdicQuinticExtension: QuinticTrinomialExtendable {
     /// Two-adicity of the multiplicative group order `p^5 - 1`.
     const EXT_TWO_ADICITY: usize;
 
-    /// Type of array-like objects that can be used to store the two-adic generators.
-    type ArrayLike: AsRef<[[Self; 5]]> + Sized;
-
-    /// Additional two-adic generators for the extension field.
-    const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike;
-
     /// Returns a two-adic generator for the specified bit count.
     ///
     /// # Panics
