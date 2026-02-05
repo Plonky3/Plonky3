@@ -9,8 +9,6 @@ mod koala_bear;
 mod poseidon2;
 
 pub use koala_bear::*;
-// Re-export quintic extension field type for convenience.
-pub use p3_field::extension::QuinticExtensionField;
 pub use poseidon2::*;
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
