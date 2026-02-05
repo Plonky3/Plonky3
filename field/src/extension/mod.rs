@@ -137,23 +137,8 @@ pub trait HasTwoAdicBinomialExtension<const D: usize>: BinomiallyExtendable<D> {
 
 /// Trait for fields that support a degree-5 extension using the trinomial `X^5 + X^2 - 1`.
 ///
-/// # Mathematical Background
-///
-/// For a prime field `F_p`:
-/// - If `5 | (p - 1)`: Use [`BinomiallyExtendable<5>`] with polynomial `X^5 - W`
-/// - If `5 ∤ (p - 1)`: Use this trait with polynomial `X^5 + X^2 - 1`
-///
-/// The key reduction identity is: `X^5 ≡ 1 - X^2 (mod X^5 + X^2 - 1)`
-///
-/// **Important**: The irreducibility of `X^5 + X^2 - 1` must be verified for each specific
-/// field. This trinomial is NOT irreducible over all fields where `5 ∤ (p - 1)`.
-/// For example, `X = 2` is a root in `F_7`.
-///
-/// # Example Fields
-///
-/// - **BabyBear** (`P = 2^31 - 2^27 + 1`): `(P-1) mod 5 = 0` → uses `BinomiallyExtendable<5>`
-/// - **KoalaBear** (`P = 2^31 - 2^24 + 1`): `(P-1) mod 5 = 2` → uses `QuinticExtendable`
-///   (irreducibility verified for this field)
+/// This trait should only be implemented for fields where `X^5 + X^2 - 1` is irreducible.
+/// The implementor must verify irreducibility for their specific field.
 pub trait QuinticExtendable: Field + QuinticExtendableAlgebra<Self> {
     /// Frobenius coefficients for the quintic extension.
     ///
@@ -170,11 +155,6 @@ pub trait QuinticExtendable: Field + QuinticExtendableAlgebra<Self> {
 }
 
 /// Trait for algebras supporting quintic extension arithmetic over `A[X]/(X^5 + X^2 - 1)`.
-///
-/// The reduction identity `X^5 = 1 - X^2` yields higher power reductions:
-/// - `X^6 = X - X^3`
-/// - `X^7 = X^2 - X^4`
-/// - `X^8 = X^3 + X^2 - 1`
 ///
 /// Implementors may override the default methods with optimized versions
 /// (e.g., SIMD implementations for packed fields).
@@ -230,9 +210,6 @@ pub trait HasTwoAdicQuinticExtension: QuinticExtendable {
     type ArrayLike: AsRef<[[Self; 5]]> + Sized;
 
     /// Additional two-adic generators for the extension field.
-    ///
-    /// These generators, combined with base field generators, provide roots of unity
-    /// for all powers of 2 up to `EXT_TWO_ADICITY`.
     const TWO_ADIC_EXTENSION_GENERATORS: Self::ArrayLike;
 
     /// Returns a two-adic generator for the specified bit count.

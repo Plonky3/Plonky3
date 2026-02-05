@@ -1,29 +1,9 @@
-//! Quintic extension field implementation using the trinomial `X^5 + X^2 - 1`.
+//! Degree-5 extension field using the trinomial `X^5 + X^2 - 1`.
 //!
-//! This module provides a degree-5 extension field for base fields where 5 does not
-//! divide `(P - 1)`, making binomial extensions impossible.
+//! This extension requires that `X^5 + X^2 - 1` is irreducible over the base field.
+//! Currently used for KoalaBear where irreducibility has been verified.
 //!
-//! # Mathematical Background
-//!
-//! For a prime field `F_p`, a degree-5 extension requires an irreducible polynomial
-//! of degree 5.
-//! - When `5 | (p - 1)`, we can use binomials `X^5 - W`.
-//! - When `5 ∤ (p - 1)`, every element is a 5th power, so binomials factor and we must use trinomials.
-//!
-//! The polynomial `X^5 + X^2 - 1` is irreducible over **KoalaBear** (`P = 2^31 - 2^24 + 1`)
-//! and provides the required extension with the reduction identity: `X^5 = 1 - X^2`.
-//!
-//! **Note**: This trinomial is NOT irreducible over all fields where `5 ∤ (p - 1)`.
-//! For example, `X = 2` is a root in `F_7`. Implementors must verify irreducibility
-//! for their specific field before using this extension.
-//!
-//! # Reduction Rules
-//!
-//! From `X^5 + X^2 - 1 = 0`, we derive:
-//! - `X^5 = 1 - X^2`
-//! - `X^6 = X - X^3`
-//! - `X^7 = X^2 - X^4`
-//! - `X^8 = X^3 + X^2 - 1`
+//! Reduction identity: `X^5 = 1 - X^2`
 
 use alloc::format;
 use alloc::string::ToString;
@@ -50,10 +30,9 @@ use crate::{
     PrimeCharacteristicRing, RawDataSerializable, TwoAdicField, field_to_array,
 };
 
-/// A degree-5 extension field using the irreducible trinomial `X^5 + X^2 - 1`.
+/// A degree-5 extension field using the trinomial `X^5 + X^2 - 1`.
 ///
-/// Elements are represented as polynomials `a_0 + a_1*X + a_2*X^2 + a_3*X^3 + a_4*X^4`
-/// with coefficients stored in the array `[a_0, a_1, a_2, a_3, a_4]`.
+/// Elements are represented as `a_0 + a_1*X + a_2*X^2 + a_3*X^3 + a_4*X^4`.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
 #[repr(transparent)] // Required for safe memory layout casts.
 #[must_use]
@@ -170,19 +149,11 @@ where
 }
 
 impl<F: QuinticExtendable> HasFrobenius<F> for QuinticExtensionField<F> {
-    /// Apply the Frobenius automorphism `x → x^p`.
-    ///
-    /// Uses precomputed Frobenius coefficients for efficiency. For an element
-    /// `a = a_0 + a_1*X + a_2*X^2 + a_3*X^3 + a_4*X^4`, computes:
-    /// `φ(a) = a_0 + a_1*φ(X) + a_2*φ(X^2) + a_3*φ(X^3) + a_4*φ(X^4)`
-    ///
-    /// where `φ(X^k) = X^{k*p} mod (X^5 + X^2 - 1)` is stored in `FROBENIUS_COEFFS`.
     #[inline]
     fn frobenius(&self) -> Self {
         let a = &self.value;
         let fc = &F::FROBENIUS_COEFFS;
 
-        // φ(a) = a_0 + Σ_{k=1}^{4} a_k * fc[k-1]
         let c0 = a[0] + a[1] * fc[0][0] + a[2] * fc[1][0] + a[3] * fc[2][0] + a[4] * fc[3][0];
         let c1 = a[1] * fc[0][1] + a[2] * fc[1][1] + a[3] * fc[2][1] + a[4] * fc[3][1];
         let c2 = a[1] * fc[0][2] + a[2] * fc[1][2] + a[3] * fc[2][2] + a[4] * fc[3][2];
@@ -642,20 +613,11 @@ impl<F: QuinticExtendable + HasTwoAdicQuinticExtension> TwoAdicField for Quintic
     }
 }
 
-/// Multiply two elements in the quintic extension field (generic version).
-///
-/// Uses the reduction `X^5 = 1 - X^2` from the trinomial `X^5 + X^2 - 1`.
-///
-/// # Multiplication Formula
-///
-/// For `a = Σ a_i*X^i` and `b = Σ b_i*X^i`, with `c_k = Σ_{i+j=k} a_i*b_j`:
-/// - `r_0 = c_0 + c_5 - c_8`
-/// - `r_1 = c_1 + c_6`
-/// - `r_2 = c_2 - c_5 + c_7 + c_8`
-/// - `r_3 = c_3 - c_6 + c_8`
-/// - `r_4 = c_4 - c_7`
+/// Multiply two elements in the quintic extension field.
 #[inline]
 pub(super) fn quintic_mul<R: PrimeCharacteristicRing>(a: &[R; 5], b: &[R; 5], res: &mut [R; 5]) {
+    // TODO: This is unoptimized.
+
     // Compute raw product coefficients c_0 through c_8
     let c0 = a[0].clone() * b[0].clone();
     let c1 = a[0].clone() * b[1].clone() + a[1].clone() * b[0].clone();
@@ -689,11 +651,11 @@ pub(super) fn quintic_mul<R: PrimeCharacteristicRing>(a: &[R; 5], b: &[R; 5], re
     res[4] = c4 - c7;
 }
 
-/// Square an element in the quintic extension field (generic version).
-///
-/// Optimized squaring using symmetry: `a_i * a_j + a_j * a_i = 2 * a_i * a_j` for `i ≠ j`.
+/// Square an element in the quintic extension field.
 #[inline]
 pub(super) fn quintic_square<R: PrimeCharacteristicRing>(a: &[R; 5], res: &mut [R; 5]) {
+    // TODO: This is unoptimized. See `binomial_extension.rs` for optimization ideas.
+
     // Diagonal squares
     let a0_sq = a[0].square();
     let a1_sq = a[1].square();
