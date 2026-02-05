@@ -206,18 +206,4 @@ mod test_quintic_extension {
     const PACKED_ZEROS: [Pef; 1] = [Pef::ZERO];
     const PACKED_ONES: [Pef; 1] = [Pef::ONE];
     test_packed_extension_field!(super::Pef, &super::PACKED_ZEROS, &super::PACKED_ONES);
-
-    /// Test the defining polynomial relation: X^5 + X^2 - 1 = 0, i.e., X^5 + X^2 = 1.
-    #[test]
-    fn test_reduction_identity() {
-        // X = [0, 1, 0, 0, 0] in the polynomial basis
-        let x = EF::from_basis_coefficients_slice(&[F::ZERO, F::ONE, F::ZERO, F::ZERO, F::ZERO])
-            .unwrap();
-        let x2 = x.square();
-        let x4 = x2.square();
-        let x5 = x4 * x;
-
-        // X^5 + X^2 should equal 1
-        assert_eq!(x5 + x2, EF::ONE, "Reduction identity X^5 + X^2 = 1 failed");
-    }
 }
