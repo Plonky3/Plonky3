@@ -1,6 +1,6 @@
 use p3_field::extension::{
     BinomiallyExtendable, BinomiallyExtendableAlgebra, HasTwoAdicBinomialExtension,
-    HasTwoAdicQuinticExtension, QuinticExtendable, QuinticExtendableAlgebra,
+    HasTwoAdicQuinticExtension, QuinticExtendableAlgebra, QuinticTrinomialExtendable,
 };
 use p3_field::{
     PrimeCharacteristicRing, TwoAdicField, field_to_array, packed_mod_add, packed_mod_sub,
@@ -99,7 +99,7 @@ impl<FP> QuinticExtendableAlgebra<Self> for MontyField31<FP> where
 {
 }
 
-impl<FP> QuinticExtendable for MontyField31<FP>
+impl<FP> QuinticTrinomialExtendable for MontyField31<FP>
 where
     FP: TrinomialQuinticData + FieldParameters,
 {

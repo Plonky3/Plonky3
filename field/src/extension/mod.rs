@@ -139,7 +139,7 @@ pub trait HasTwoAdicBinomialExtension<const D: usize>: BinomiallyExtendable<D> {
 ///
 /// This trait should only be implemented for fields where `X^5 + X^2 - 1` is irreducible.
 /// The implementor must verify irreducibility for their specific field.
-pub trait QuinticExtendable: Field + QuinticExtendableAlgebra<Self> {
+pub trait QuinticTrinomialExtendable: Field + QuinticExtendableAlgebra<Self> {
     /// Frobenius coefficients for the quintic extension.
     ///
     /// `FROBENIUS_COEFFS[k]` represents `X^{(k+1)*p} mod (X^5 + X^2 - 1)` as a polynomial
@@ -202,7 +202,7 @@ pub trait QuinticExtendableAlgebra<F: Field>: Algebra<F> {
 }
 
 /// Trait for quintic extensions that support two-adic subgroup generators.
-pub trait HasTwoAdicQuinticExtension: QuinticExtendable {
+pub trait HasTwoAdicQuinticExtension: QuinticTrinomialExtendable {
     /// Two-adicity of the multiplicative group order `p^5 - 1`.
     const EXT_TWO_ADICITY: usize;
 

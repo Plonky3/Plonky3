@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::quintic_extension::{quintic_mul, quintic_square};
 use super::{QuinticExtensionField, vector_add, vector_sub};
-use crate::extension::QuinticExtendable;
+use crate::extension::QuinticTrinomialExtendable;
 use crate::{
     Algebra, BasedVectorSpace, Field, PackedField, PackedFieldExtension, PackedValue, Powers,
     PrimeCharacteristicRing, field_to_array,
@@ -81,19 +81,19 @@ where
     }
 }
 
-impl<F: QuinticExtendable, PF: PackedField<Scalar = F>> Algebra<QuinticExtensionField<F>>
+impl<F: QuinticTrinomialExtendable, PF: PackedField<Scalar = F>> Algebra<QuinticExtensionField<F>>
     for PackedQuinticExtensionField<F, PF>
 {
 }
 
-impl<F: QuinticExtendable, PF: PackedField<Scalar = F>> Algebra<PF>
+impl<F: QuinticTrinomialExtendable, PF: PackedField<Scalar = F>> Algebra<PF>
     for PackedQuinticExtensionField<F, PF>
 {
 }
 
 impl<F, PF> PrimeCharacteristicRing for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     type PrimeSubfield = PF::PrimeSubfield;
@@ -155,7 +155,7 @@ where
 
 impl<F, PF> BasedVectorSpace<PF> for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     const DIMENSION: usize = 5;
@@ -191,7 +191,7 @@ where
 // SAFETY: Memory layout is compatible with `[QuinticExtensionField<F>; WIDTH]`.
 unsafe impl<F, PF> PackedValue for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     type Value = QuinticExtensionField<F>;
@@ -240,13 +240,13 @@ where
 // SAFETY: Implements all required trait bounds.
 unsafe impl<F, PF> PackedField for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     type Scalar = QuinticExtensionField<F>;
 }
 
-impl<F: QuinticExtendable> PackedFieldExtension<F, QuinticExtensionField<F>>
+impl<F: QuinticTrinomialExtendable> PackedFieldExtension<F, QuinticExtensionField<F>>
     for PackedQuinticExtensionField<F, F::Packing>
 {
     #[inline]
@@ -278,7 +278,7 @@ impl<F: QuinticExtendable> PackedFieldExtension<F, QuinticExtensionField<F>>
 
 impl<F, PF> Neg for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     type Output = Self;
@@ -291,7 +291,7 @@ where
 
 impl<F, PF> Add for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     type Output = Self;
@@ -304,7 +304,7 @@ where
 
 impl<F, PF> Add<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     type Output = Self;
@@ -318,7 +318,7 @@ where
 
 impl<F, PF> Add<PF> for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     type Output = Self;
@@ -332,7 +332,7 @@ where
 
 impl<F, PF> AddAssign for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     #[inline]
@@ -345,7 +345,7 @@ where
 
 impl<F, PF> AddAssign<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     #[inline]
@@ -358,7 +358,7 @@ where
 
 impl<F, PF> AddAssign<PF> for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     #[inline]
@@ -369,7 +369,7 @@ where
 
 impl<F, PF> Sum for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     #[inline]
@@ -380,7 +380,7 @@ where
 
 impl<F, PF> Sub for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     type Output = Self;
@@ -393,7 +393,7 @@ where
 
 impl<F, PF> Sub<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     type Output = Self;
@@ -407,7 +407,7 @@ where
 
 impl<F, PF> Sub<PF> for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     type Output = Self;
@@ -422,7 +422,7 @@ where
 
 impl<F, PF> SubAssign for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     #[inline]
@@ -433,7 +433,7 @@ where
 
 impl<F, PF> SubAssign<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     #[inline]
@@ -444,7 +444,7 @@ where
 
 impl<F, PF> SubAssign<PF> for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     #[inline]
@@ -455,7 +455,7 @@ where
 
 impl<F, PF> Mul for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     type Output = Self;
@@ -470,7 +470,7 @@ where
 
 impl<F, PF> Mul<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     type Output = Self;
@@ -483,7 +483,7 @@ where
 
 impl<F, PF> Mul<PF> for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     type Output = Self;
@@ -498,7 +498,7 @@ where
 
 impl<F, PF> Product for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     #[inline]
@@ -509,7 +509,7 @@ where
 
 impl<F, PF> MulAssign for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     #[inline]
@@ -520,7 +520,7 @@ where
 
 impl<F, PF> MulAssign<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     #[inline]
@@ -531,7 +531,7 @@ where
 
 impl<F, PF> MulAssign<PF> for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     #[inline]
@@ -542,7 +542,7 @@ where
 
 impl<F, PF> Sum<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     #[inline]
@@ -553,7 +553,7 @@ where
 
 impl<F, PF> Product<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     #[inline]
@@ -564,7 +564,7 @@ where
 
 impl<F, PF> Div<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     type Output = Self;
@@ -578,7 +578,7 @@ where
 
 impl<F, PF> DivAssign<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
 where
-    F: QuinticExtendable,
+    F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     #[inline]
