@@ -1138,3 +1138,25 @@ macro_rules! test_two_adic_extension_field {
         }
     };
 }
+
+#[macro_export]
+macro_rules! test_frobenius {
+    ($field:ty, $ef:ty) => {
+        mod frobenius_tests {
+            #[test]
+            fn test_frobenius_fixes_base_field() {
+                $crate::test_frobenius_fixes_base_field::<$field, $ef>();
+            }
+
+            #[test]
+            fn test_frobenius_multiplicative() {
+                $crate::test_frobenius_multiplicative::<$field, $ef>();
+            }
+
+            #[test]
+            fn test_frobenius_additive() {
+                $crate::test_frobenius_additive::<$field, $ef>();
+            }
+        }
+    };
+}
