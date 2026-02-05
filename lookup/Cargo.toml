@@ -14,7 +14,6 @@ p3-air = { workspace = true }
 p3-field = { workspace = true }
 p3-matrix = { workspace = true }
 p3-uni-stark = { workspace = true }
-rand = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -22,6 +21,7 @@ tracing = { workspace = true }
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
 p3-goldilocks = { path = "../goldilocks" }
+rand = { workspace = true }
 
 [features]
 default = []
