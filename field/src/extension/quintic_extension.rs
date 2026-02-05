@@ -428,13 +428,11 @@ where
 impl<F, A> AddAssign for QuinticExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
-    A: Algebra<F>,
+    A: QuinticExtendableAlgebra<F>,
 {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
-        for i in 0..5 {
-            self.value[i] += rhs.value[i].clone();
-        }
+        self.value = A::quintic_add(&self.value, &rhs.value);
     }
 }
 
@@ -491,13 +489,11 @@ where
 impl<F, A> SubAssign for QuinticExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
-    A: Algebra<F>,
+    A: QuinticExtendableAlgebra<F>,
 {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
-        for i in 0..5 {
-            self.value[i] -= rhs.value[i].clone();
-        }
+        self.value = A::quintic_sub(&self.value, &rhs.value);
     }
 }
 
