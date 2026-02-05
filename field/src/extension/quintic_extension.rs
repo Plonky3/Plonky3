@@ -221,7 +221,7 @@ impl<F: QuinticTrinomialExtendable> QuinticExtensionField<F> {
         // For trinomial X^5 + X^2 - 1, the constant term of a*b is:
         // c_0 + c_5 - c_8 where c_k = Σ_{i+j=k} a_i*b_j
         let c0 = a[0] * b[0];
-        let c5 = a[1] * b[4] + a[2] * b[3] + a[3] * b[2] + a[4] * b[1];
+        let c5 = F::dot_product::<4>(&[a[1], a[2], a[3], a[4]], &[b[4], b[3], b[2], b[1]]);
         let c8 = a[4] * b[4];
 
         c0 + c5 - c8
