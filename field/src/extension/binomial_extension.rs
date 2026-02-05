@@ -457,13 +457,11 @@ where
 impl<F, A, const D: usize> AddAssign for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: Algebra<F>,
+    A: BinomiallyExtendableAlgebra<F, D>,
 {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
-        for i in 0..D {
-            self.value[i] += rhs.value[i].clone();
-        }
+        self.value = A::binomial_add(&self.value, &rhs.value);
     }
 }
 
@@ -521,13 +519,11 @@ where
 impl<F, A, const D: usize> SubAssign for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: Algebra<F>,
+    A: BinomiallyExtendableAlgebra<F, D>,
 {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
-        for i in 0..D {
-            self.value[i] -= rhs.value[i].clone();
-        }
+        self.value = A::binomial_sub(&self.value, &rhs.value);
     }
 }
 
