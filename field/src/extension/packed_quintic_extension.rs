@@ -13,7 +13,7 @@ use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 
 use super::quintic_extension::{quintic_mul, quintic_square};
-use super::{QuinticExtensionField, vector_add, vector_sub};
+use super::{QuinticTrinomialExtensionField, vector_add, vector_sub};
 use crate::extension::QuinticTrinomialExtendable;
 use crate::{
     Algebra, BasedVectorSpace, Field, PackedField, PackedFieldExtension, PackedValue, Powers,
@@ -27,7 +27,7 @@ use crate::{
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
 #[repr(transparent)]
 #[must_use]
-pub struct PackedQuinticExtensionField<F: Field, PF: PackedField<Scalar = F>> {
+pub struct PackedQuinticTrinomialExtensionField<F: Field, PF: PackedField<Scalar = F>> {
     #[serde(
         with = "p3_util::array_serialization",
         bound(serialize = "PF: Serialize", deserialize = "PF: Deserialize<'de>")
@@ -35,13 +35,15 @@ pub struct PackedQuinticExtensionField<F: Field, PF: PackedField<Scalar = F>> {
     pub(crate) value: [PF; 5],
 }
 
-impl<F: Field, PF: PackedField<Scalar = F>> PackedQuinticExtensionField<F, PF> {
+impl<F: Field, PF: PackedField<Scalar = F>> PackedQuinticTrinomialExtensionField<F, PF> {
     const fn new(value: [PF; 5]) -> Self {
         Self { value }
     }
 }
 
-impl<F: Field, PF: PackedField<Scalar = F>> Default for PackedQuinticExtensionField<F, PF> {
+impl<F: Field, PF: PackedField<Scalar = F>> Default
+    for PackedQuinticTrinomialExtensionField<F, PF>
+{
     #[inline]
     fn default() -> Self {
         Self {
@@ -50,18 +52,20 @@ impl<F: Field, PF: PackedField<Scalar = F>> Default for PackedQuinticExtensionFi
     }
 }
 
-impl<F: Field, PF: PackedField<Scalar = F>> From<QuinticExtensionField<F>>
-    for PackedQuinticExtensionField<F, PF>
+impl<F: Field, PF: PackedField<Scalar = F>> From<QuinticTrinomialExtensionField<F>>
+    for PackedQuinticTrinomialExtensionField<F, PF>
 {
     #[inline]
-    fn from(x: QuinticExtensionField<F>) -> Self {
+    fn from(x: QuinticTrinomialExtensionField<F>) -> Self {
         Self {
             value: x.value.map(Into::into),
         }
     }
 }
 
-impl<F: Field, PF: PackedField<Scalar = F>> From<PF> for PackedQuinticExtensionField<F, PF> {
+impl<F: Field, PF: PackedField<Scalar = F>> From<PF>
+    for PackedQuinticTrinomialExtensionField<F, PF>
+{
     #[inline]
     fn from(x: PF) -> Self {
         Self {
@@ -70,28 +74,31 @@ impl<F: Field, PF: PackedField<Scalar = F>> From<PF> for PackedQuinticExtensionF
     }
 }
 
-impl<F: Field, PF: PackedField<Scalar = F>> Distribution<PackedQuinticExtensionField<F, PF>>
-    for StandardUniform
+impl<F: Field, PF: PackedField<Scalar = F>>
+    Distribution<PackedQuinticTrinomialExtensionField<F, PF>> for StandardUniform
 where
     Self: Distribution<PF>,
 {
     #[inline]
-    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> PackedQuinticExtensionField<F, PF> {
-        PackedQuinticExtensionField::new(array::from_fn(|_| self.sample(rng)))
+    fn sample<R: rand::Rng + ?Sized>(
+        &self,
+        rng: &mut R,
+    ) -> PackedQuinticTrinomialExtensionField<F, PF> {
+        PackedQuinticTrinomialExtensionField::new(array::from_fn(|_| self.sample(rng)))
     }
 }
 
-impl<F: QuinticTrinomialExtendable, PF: PackedField<Scalar = F>> Algebra<QuinticExtensionField<F>>
-    for PackedQuinticExtensionField<F, PF>
+impl<F: QuinticTrinomialExtendable, PF: PackedField<Scalar = F>>
+    Algebra<QuinticTrinomialExtensionField<F>> for PackedQuinticTrinomialExtensionField<F, PF>
 {
 }
 
 impl<F: QuinticTrinomialExtendable, PF: PackedField<Scalar = F>> Algebra<PF>
-    for PackedQuinticExtensionField<F, PF>
+    for PackedQuinticTrinomialExtensionField<F, PF>
 {
 }
 
-impl<F, PF> PrimeCharacteristicRing for PackedQuinticExtensionField<F, PF>
+impl<F, PF> PrimeCharacteristicRing for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
@@ -153,7 +160,7 @@ where
     }
 }
 
-impl<F, PF> BasedVectorSpace<PF> for PackedQuinticExtensionField<F, PF>
+impl<F, PF> BasedVectorSpace<PF> for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
@@ -188,13 +195,13 @@ where
     }
 }
 
-// SAFETY: Memory layout is compatible with `[QuinticExtensionField<F>; WIDTH]`.
-unsafe impl<F, PF> PackedValue for PackedQuinticExtensionField<F, PF>
+// SAFETY: Memory layout is compatible with `[QuinticTrinomialExtensionField<F>; WIDTH]`.
+unsafe impl<F, PF> PackedValue for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
-    type Value = QuinticExtensionField<F>;
+    type Value = QuinticTrinomialExtensionField<F>;
 
     const WIDTH: usize = PF::WIDTH;
 
@@ -238,19 +245,19 @@ where
 }
 
 // SAFETY: Implements all required trait bounds.
-unsafe impl<F, PF> PackedField for PackedQuinticExtensionField<F, PF>
+unsafe impl<F, PF> PackedField for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
-    type Scalar = QuinticExtensionField<F>;
+    type Scalar = QuinticTrinomialExtensionField<F>;
 }
 
-impl<F: QuinticTrinomialExtendable> PackedFieldExtension<F, QuinticExtensionField<F>>
-    for PackedQuinticExtensionField<F, F::Packing>
+impl<F: QuinticTrinomialExtendable> PackedFieldExtension<F, QuinticTrinomialExtensionField<F>>
+    for PackedQuinticTrinomialExtensionField<F, F::Packing>
 {
     #[inline]
-    fn from_ext_slice(ext_slice: &[QuinticExtensionField<F>]) -> Self {
+    fn from_ext_slice(ext_slice: &[QuinticTrinomialExtensionField<F>]) -> Self {
         let width = F::Packing::WIDTH;
         assert_eq!(ext_slice.len(), width);
 
@@ -259,7 +266,7 @@ impl<F: QuinticTrinomialExtendable> PackedFieldExtension<F, QuinticExtensionFiel
     }
 
     #[inline]
-    fn packed_ext_powers(base: QuinticExtensionField<F>) -> Powers<Self> {
+    fn packed_ext_powers(base: QuinticTrinomialExtensionField<F>) -> Powers<Self> {
         use itertools::Itertools;
         let width = F::Packing::WIDTH;
         let powers = base.powers().take(width + 1).collect_vec();
@@ -276,7 +283,7 @@ impl<F: QuinticTrinomialExtendable> PackedFieldExtension<F, QuinticExtensionFiel
     }
 }
 
-impl<F, PF> Neg for PackedQuinticExtensionField<F, PF>
+impl<F, PF> Neg for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
@@ -289,7 +296,7 @@ where
     }
 }
 
-impl<F, PF> Add for PackedQuinticExtensionField<F, PF>
+impl<F, PF> Add for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
@@ -302,7 +309,7 @@ where
     }
 }
 
-impl<F, PF> Add<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
+impl<F, PF> Add<QuinticTrinomialExtensionField<F>> for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
@@ -310,13 +317,13 @@ where
     type Output = Self;
 
     #[inline]
-    fn add(self, rhs: QuinticExtensionField<F>) -> Self {
+    fn add(self, rhs: QuinticTrinomialExtensionField<F>) -> Self {
         let value = vector_add(&self.value, &rhs.value);
         Self { value }
     }
 }
 
-impl<F, PF> Add<PF> for PackedQuinticExtensionField<F, PF>
+impl<F, PF> Add<PF> for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
@@ -330,7 +337,7 @@ where
     }
 }
 
-impl<F, PF> AddAssign for PackedQuinticExtensionField<F, PF>
+impl<F, PF> AddAssign for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
@@ -343,20 +350,21 @@ where
     }
 }
 
-impl<F, PF> AddAssign<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
+impl<F, PF> AddAssign<QuinticTrinomialExtensionField<F>>
+    for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     #[inline]
-    fn add_assign(&mut self, rhs: QuinticExtensionField<F>) {
+    fn add_assign(&mut self, rhs: QuinticTrinomialExtensionField<F>) {
         for i in 0..5 {
             self.value[i] += rhs.value[i];
         }
     }
 }
 
-impl<F, PF> AddAssign<PF> for PackedQuinticExtensionField<F, PF>
+impl<F, PF> AddAssign<PF> for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
@@ -367,7 +375,7 @@ where
     }
 }
 
-impl<F, PF> Sum for PackedQuinticExtensionField<F, PF>
+impl<F, PF> Sum for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
@@ -378,7 +386,7 @@ where
     }
 }
 
-impl<F, PF> Sub for PackedQuinticExtensionField<F, PF>
+impl<F, PF> Sub for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
@@ -391,7 +399,7 @@ where
     }
 }
 
-impl<F, PF> Sub<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
+impl<F, PF> Sub<QuinticTrinomialExtensionField<F>> for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
@@ -399,13 +407,13 @@ where
     type Output = Self;
 
     #[inline]
-    fn sub(self, rhs: QuinticExtensionField<F>) -> Self {
+    fn sub(self, rhs: QuinticTrinomialExtensionField<F>) -> Self {
         let value = vector_sub(&self.value, &rhs.value);
         Self { value }
     }
 }
 
-impl<F, PF> Sub<PF> for PackedQuinticExtensionField<F, PF>
+impl<F, PF> Sub<PF> for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
@@ -420,7 +428,7 @@ where
     }
 }
 
-impl<F, PF> SubAssign for PackedQuinticExtensionField<F, PF>
+impl<F, PF> SubAssign for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
@@ -431,18 +439,19 @@ where
     }
 }
 
-impl<F, PF> SubAssign<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
+impl<F, PF> SubAssign<QuinticTrinomialExtensionField<F>>
+    for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     #[inline]
-    fn sub_assign(&mut self, rhs: QuinticExtensionField<F>) {
+    fn sub_assign(&mut self, rhs: QuinticTrinomialExtensionField<F>) {
         *self = *self - rhs;
     }
 }
 
-impl<F, PF> SubAssign<PF> for PackedQuinticExtensionField<F, PF>
+impl<F, PF> SubAssign<PF> for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
@@ -453,7 +462,7 @@ where
     }
 }
 
-impl<F, PF> Mul for PackedQuinticExtensionField<F, PF>
+impl<F, PF> Mul for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
@@ -468,7 +477,7 @@ where
     }
 }
 
-impl<F, PF> Mul<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
+impl<F, PF> Mul<QuinticTrinomialExtensionField<F>> for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
@@ -476,12 +485,12 @@ where
     type Output = Self;
 
     #[inline]
-    fn mul(self, rhs: QuinticExtensionField<F>) -> Self {
+    fn mul(self, rhs: QuinticTrinomialExtensionField<F>) -> Self {
         self * Self::from(rhs)
     }
 }
 
-impl<F, PF> Mul<PF> for PackedQuinticExtensionField<F, PF>
+impl<F, PF> Mul<PF> for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
@@ -496,7 +505,7 @@ where
     }
 }
 
-impl<F, PF> Product for PackedQuinticExtensionField<F, PF>
+impl<F, PF> Product for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
@@ -507,7 +516,7 @@ where
     }
 }
 
-impl<F, PF> MulAssign for PackedQuinticExtensionField<F, PF>
+impl<F, PF> MulAssign for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
@@ -518,18 +527,19 @@ where
     }
 }
 
-impl<F, PF> MulAssign<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
+impl<F, PF> MulAssign<QuinticTrinomialExtensionField<F>>
+    for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     #[inline]
-    fn mul_assign(&mut self, rhs: QuinticExtensionField<F>) {
+    fn mul_assign(&mut self, rhs: QuinticTrinomialExtensionField<F>) {
         *self = *self * rhs;
     }
 }
 
-impl<F, PF> MulAssign<PF> for PackedQuinticExtensionField<F, PF>
+impl<F, PF> MulAssign<PF> for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
@@ -540,29 +550,30 @@ where
     }
 }
 
-impl<F, PF> Sum<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
+impl<F, PF> Sum<QuinticTrinomialExtensionField<F>> for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     #[inline]
-    fn sum<I: Iterator<Item = QuinticExtensionField<F>>>(iter: I) -> Self {
+    fn sum<I: Iterator<Item = QuinticTrinomialExtensionField<F>>>(iter: I) -> Self {
         iter.map(Self::from).sum()
     }
 }
 
-impl<F, PF> Product<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
+impl<F, PF> Product<QuinticTrinomialExtensionField<F>>
+    for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     #[inline]
-    fn product<I: Iterator<Item = QuinticExtensionField<F>>>(iter: I) -> Self {
+    fn product<I: Iterator<Item = QuinticTrinomialExtensionField<F>>>(iter: I) -> Self {
         iter.map(Self::from).product()
     }
 }
 
-impl<F, PF> Div<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
+impl<F, PF> Div<QuinticTrinomialExtensionField<F>> for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
@@ -571,18 +582,19 @@ where
 
     #[allow(clippy::suspicious_arithmetic_impl)]
     #[inline]
-    fn div(self, rhs: QuinticExtensionField<F>) -> Self {
+    fn div(self, rhs: QuinticTrinomialExtensionField<F>) -> Self {
         self * Self::from(rhs.inverse())
     }
 }
 
-impl<F, PF> DivAssign<QuinticExtensionField<F>> for PackedQuinticExtensionField<F, PF>
+impl<F, PF> DivAssign<QuinticTrinomialExtensionField<F>>
+    for PackedQuinticTrinomialExtensionField<F, PF>
 where
     F: QuinticTrinomialExtendable,
     PF: PackedField<Scalar = F>,
 {
     #[inline]
-    fn div_assign(&mut self, rhs: QuinticExtensionField<F>) {
+    fn div_assign(&mut self, rhs: QuinticTrinomialExtensionField<F>) {
         *self = *self / rhs;
     }
 }

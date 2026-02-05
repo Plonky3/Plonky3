@@ -21,7 +21,7 @@ use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
 
-use super::packed_quintic_extension::PackedQuinticExtensionField;
+use super::packed_quintic_extension::PackedQuinticTrinomialExtensionField;
 use super::{HasFrobenius, HasTwoAdicQuinticExtension};
 use crate::extension::{QuinticExtendableAlgebra, QuinticTrinomialExtendable};
 use crate::field::Field;
@@ -36,7 +36,7 @@ use crate::{
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
 #[repr(transparent)] // Required for safe memory layout casts.
 #[must_use]
-pub struct QuinticExtensionField<F, A = F> {
+pub struct QuinticTrinomialExtensionField<F, A = F> {
     #[serde(
         with = "p3_util::array_serialization",
         bound(serialize = "A: Serialize", deserialize = "A: Deserialize<'de>")
@@ -45,7 +45,7 @@ pub struct QuinticExtensionField<F, A = F> {
     _phantom: PhantomData<F>,
 }
 
-impl<F, A> QuinticExtensionField<F, A> {
+impl<F, A> QuinticTrinomialExtensionField<F, A> {
     /// Create an extension field element from coefficient array.
     ///
     /// The coefficients represent the polynomial `value[0] + value[1]*X + ... + value[4]*X^4`.
@@ -58,7 +58,7 @@ impl<F, A> QuinticExtensionField<F, A> {
     }
 }
 
-impl<F: Copy> QuinticExtensionField<F, F> {
+impl<F: Copy> QuinticTrinomialExtensionField<F, F> {
     /// Convert a `[[F; 5]; N]` array to an array of extension field elements.
     ///
     /// # Panics
@@ -76,19 +76,19 @@ impl<F: Copy> QuinticExtensionField<F, F> {
     }
 }
 
-impl<F: Field, A: Algebra<F>> Default for QuinticExtensionField<F, A> {
+impl<F: Field, A: Algebra<F>> Default for QuinticTrinomialExtensionField<F, A> {
     fn default() -> Self {
         Self::new(array::from_fn(|_| A::ZERO))
     }
 }
 
-impl<F: Field, A: Algebra<F>> From<A> for QuinticExtensionField<F, A> {
+impl<F: Field, A: Algebra<F>> From<A> for QuinticTrinomialExtensionField<F, A> {
     fn from(x: A) -> Self {
         Self::new(field_to_array(x))
     }
 }
 
-impl<F, A> From<[A; 5]> for QuinticExtensionField<F, A> {
+impl<F, A> From<[A; 5]> for QuinticTrinomialExtensionField<F, A> {
     #[inline]
     fn from(x: [A; 5]) -> Self {
         Self {
@@ -98,10 +98,10 @@ impl<F, A> From<[A; 5]> for QuinticExtensionField<F, A> {
     }
 }
 
-impl<F: QuinticTrinomialExtendable> Packable for QuinticExtensionField<F> {}
+impl<F: QuinticTrinomialExtendable> Packable for QuinticTrinomialExtensionField<F> {}
 
 impl<F: QuinticTrinomialExtendable, A: Algebra<F>> BasedVectorSpace<A>
-    for QuinticExtensionField<F, A>
+    for QuinticTrinomialExtensionField<F, A>
 {
     const DIMENSION: usize = 5;
 
@@ -133,11 +133,11 @@ impl<F: QuinticTrinomialExtendable, A: Algebra<F>> BasedVectorSpace<A>
     }
 }
 
-impl<F: QuinticTrinomialExtendable> ExtensionField<F> for QuinticExtensionField<F>
+impl<F: QuinticTrinomialExtendable> ExtensionField<F> for QuinticTrinomialExtensionField<F>
 where
-    PackedQuinticExtensionField<F, F::Packing>: PackedFieldExtension<F, Self>,
+    PackedQuinticTrinomialExtensionField<F, F::Packing>: PackedFieldExtension<F, Self>,
 {
-    type ExtensionPacking = PackedQuinticExtensionField<F, F::Packing>;
+    type ExtensionPacking = PackedQuinticTrinomialExtensionField<F, F::Packing>;
 
     #[inline]
     fn is_in_basefield(&self) -> bool {
@@ -150,7 +150,7 @@ where
     }
 }
 
-impl<F: QuinticTrinomialExtendable> HasFrobenius<F> for QuinticExtensionField<F> {
+impl<F: QuinticTrinomialExtendable> HasFrobenius<F> for QuinticTrinomialExtensionField<F> {
     #[inline]
     fn frobenius(&self) -> Self {
         let a = &self.value;
@@ -210,7 +210,7 @@ impl<F: QuinticTrinomialExtendable> HasFrobenius<F> for QuinticExtensionField<F>
     }
 }
 
-impl<F: QuinticTrinomialExtendable> QuinticExtensionField<F> {
+impl<F: QuinticTrinomialExtendable> QuinticTrinomialExtensionField<F> {
     /// Compute the norm given pre-computed product of conjugates.
     ///
     /// The norm `Norm(a) = a * prod_conj` lies in the base field.
@@ -230,7 +230,7 @@ impl<F: QuinticTrinomialExtendable> QuinticExtensionField<F> {
     }
 }
 
-impl<F, A> PrimeCharacteristicRing for QuinticExtensionField<F, A>
+impl<F, A> PrimeCharacteristicRing for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
     A: QuinticExtendableAlgebra<F>,
@@ -276,9 +276,9 @@ where
     }
 }
 
-impl<F: QuinticTrinomialExtendable> Algebra<F> for QuinticExtensionField<F> {}
+impl<F: QuinticTrinomialExtendable> Algebra<F> for QuinticTrinomialExtensionField<F> {}
 
-impl<F: QuinticTrinomialExtendable> RawDataSerializable for QuinticExtensionField<F> {
+impl<F: QuinticTrinomialExtendable> RawDataSerializable for QuinticTrinomialExtensionField<F> {
     const NUM_BYTES: usize = F::NUM_BYTES * 5;
 
     #[inline]
@@ -335,7 +335,7 @@ impl<F: QuinticTrinomialExtendable> RawDataSerializable for QuinticExtensionFiel
     }
 }
 
-impl<F: QuinticTrinomialExtendable> Field for QuinticExtensionField<F> {
+impl<F: QuinticTrinomialExtendable> Field for QuinticTrinomialExtensionField<F> {
     type Packing = Self;
 
     const GENERATOR: Self = Self::new(F::EXT_GENERATOR);
@@ -364,7 +364,7 @@ impl<F: QuinticTrinomialExtendable> Field for QuinticExtensionField<F> {
     }
 }
 
-impl<F: QuinticTrinomialExtendable> Display for QuinticExtensionField<F> {
+impl<F: QuinticTrinomialExtendable> Display for QuinticTrinomialExtensionField<F> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         if self.is_zero() {
             write!(f, "0")
@@ -387,7 +387,7 @@ impl<F: QuinticTrinomialExtendable> Display for QuinticExtensionField<F> {
     }
 }
 
-impl<F, A> Neg for QuinticExtensionField<F, A>
+impl<F, A> Neg for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
     A: Algebra<F>,
@@ -400,7 +400,7 @@ where
     }
 }
 
-impl<F, A> Add for QuinticExtensionField<F, A>
+impl<F, A> Add for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
     A: QuinticExtendableAlgebra<F>,
@@ -413,7 +413,7 @@ where
     }
 }
 
-impl<F, A> Add<A> for QuinticExtensionField<F, A>
+impl<F, A> Add<A> for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
     A: Algebra<F>,
@@ -427,7 +427,7 @@ where
     }
 }
 
-impl<F, A> AddAssign for QuinticExtensionField<F, A>
+impl<F, A> AddAssign for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
     A: QuinticExtendableAlgebra<F>,
@@ -438,7 +438,7 @@ where
     }
 }
 
-impl<F, A> AddAssign<A> for QuinticExtensionField<F, A>
+impl<F, A> AddAssign<A> for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
     A: Algebra<F>,
@@ -449,7 +449,7 @@ where
     }
 }
 
-impl<F, A> Sum for QuinticExtensionField<F, A>
+impl<F, A> Sum for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
     A: QuinticExtendableAlgebra<F>,
@@ -460,7 +460,7 @@ where
     }
 }
 
-impl<F, A> Sub for QuinticExtensionField<F, A>
+impl<F, A> Sub for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
     A: QuinticExtendableAlgebra<F>,
@@ -473,7 +473,7 @@ where
     }
 }
 
-impl<F, A> Sub<A> for QuinticExtensionField<F, A>
+impl<F, A> Sub<A> for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
     A: Algebra<F>,
@@ -488,7 +488,7 @@ where
     }
 }
 
-impl<F, A> SubAssign for QuinticExtensionField<F, A>
+impl<F, A> SubAssign for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
     A: QuinticExtendableAlgebra<F>,
@@ -499,7 +499,7 @@ where
     }
 }
 
-impl<F, A> SubAssign<A> for QuinticExtensionField<F, A>
+impl<F, A> SubAssign<A> for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
     A: Algebra<F>,
@@ -510,7 +510,7 @@ where
     }
 }
 
-impl<F, A> Mul for QuinticExtensionField<F, A>
+impl<F, A> Mul for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
     A: QuinticExtendableAlgebra<F>,
@@ -525,7 +525,7 @@ where
     }
 }
 
-impl<F, A> Mul<A> for QuinticExtensionField<F, A>
+impl<F, A> Mul<A> for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
     A: QuinticExtendableAlgebra<F>,
@@ -538,7 +538,7 @@ where
     }
 }
 
-impl<F, A> MulAssign for QuinticExtensionField<F, A>
+impl<F, A> MulAssign for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
     A: QuinticExtendableAlgebra<F>,
@@ -549,7 +549,7 @@ where
     }
 }
 
-impl<F, A> MulAssign<A> for QuinticExtensionField<F, A>
+impl<F, A> MulAssign<A> for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
     A: QuinticExtendableAlgebra<F>,
@@ -560,7 +560,7 @@ where
     }
 }
 
-impl<F, A> Product for QuinticExtensionField<F, A>
+impl<F, A> Product for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
     A: QuinticExtendableAlgebra<F>,
@@ -571,7 +571,7 @@ where
     }
 }
 
-impl<F> Div for QuinticExtensionField<F>
+impl<F> Div for QuinticTrinomialExtensionField<F>
 where
     F: QuinticTrinomialExtendable,
 {
@@ -584,7 +584,7 @@ where
     }
 }
 
-impl<F> DivAssign for QuinticExtensionField<F>
+impl<F> DivAssign for QuinticTrinomialExtensionField<F>
 where
     F: QuinticTrinomialExtendable,
 {
@@ -594,18 +594,19 @@ where
     }
 }
 
-impl<F: QuinticTrinomialExtendable> Distribution<QuinticExtensionField<F>> for StandardUniform
+impl<F: QuinticTrinomialExtendable> Distribution<QuinticTrinomialExtensionField<F>>
+    for StandardUniform
 where
     Self: Distribution<F>,
 {
     #[inline]
-    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> QuinticExtensionField<F> {
-        QuinticExtensionField::new(array::from_fn(|_| self.sample(rng)))
+    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> QuinticTrinomialExtensionField<F> {
+        QuinticTrinomialExtensionField::new(array::from_fn(|_| self.sample(rng)))
     }
 }
 
 impl<F: QuinticTrinomialExtendable + HasTwoAdicQuinticExtension> TwoAdicField
-    for QuinticExtensionField<F>
+    for QuinticTrinomialExtensionField<F>
 {
     const TWO_ADICITY: usize = F::EXT_TWO_ADICITY;
 

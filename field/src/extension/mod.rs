@@ -14,8 +14,8 @@ use alloc::vec::Vec;
 pub use binomial_extension::*;
 pub use complex::*;
 pub use packed_binomial_extension::*;
-pub use packed_quintic_extension::PackedQuinticExtensionField;
-pub use quintic_extension::QuinticExtensionField;
+pub use packed_quintic_extension::PackedQuinticTrinomialExtensionField;
+pub use quintic_extension::QuinticTrinomialExtensionField;
 
 /// Trait for fields that support binomial extension of the form `F[X]/(X^D - W)`.
 ///

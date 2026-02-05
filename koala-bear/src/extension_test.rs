@@ -148,7 +148,7 @@ mod test_quintic_extension {
     use alloc::format;
 
     use num_bigint::BigUint;
-    use p3_field::extension::QuinticExtensionField;
+    use p3_field::extension::QuinticTrinomialExtensionField;
     use p3_field::{BasedVectorSpace, ExtensionField, PrimeCharacteristicRing};
     use p3_field_testing::{
         test_extension_field, test_field, test_frobenius, test_packed_extension_field,
@@ -158,7 +158,7 @@ mod test_quintic_extension {
     use crate::KoalaBear;
 
     type F = KoalaBear;
-    type EF = QuinticExtensionField<F>;
+    type EF = QuinticTrinomialExtensionField<F>;
 
     const ZEROS: [EF; 1] = [EF::ZERO];
     const ONES: [EF; 1] = [EF::ONE];
