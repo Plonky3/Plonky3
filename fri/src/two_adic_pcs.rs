@@ -178,35 +178,36 @@ fn lagrange_interpolate_at<F: TwoAdicField, EF: ExtensionField<F>>(
     debug_assert_eq!(xs.len(), ys.len());
     let n = xs.len();
 
-    // Compute the barycentric weights: w_i = 1 / prod_{j != i} (x_i - x_j)
-    let weights: Vec<F> = (0..n)
-        .map(|i| {
-            let mut w = F::ONE;
-            for j in 0..n {
-                if i != j {
-                    w *= xs[i] - xs[j];
-                }
-            }
-            w.inverse()
-        })
-        .collect();
-
-    // Compute L(z) = prod_i (z - x_i)
-    let mut l_z = EF::ONE;
-    for &x in xs {
-        l_z *= z - x;
+    if n == 0 {
+        return EF::ZERO;
     }
 
-    // Barycentric formula: sum_i (w_i * y_i / (z - x_i))
-    let mut result = EF::ZERO;
+    // If z equals one of the interpolation points, return early.
     for i in 0..n {
-        let diff = z - xs[i];
-        // If z equals one of the interpolation points, return the corresponding y value
-        if diff.is_zero() {
+        if (z - xs[i]).is_zero() {
             return ys[i];
         }
-        let denom_inv = diff.inverse();
-        result += ys[i] * weights[i] * denom_inv;
+    }
+
+    let log_n = log2_strict_usize(n);
+
+    // All xs lie in a coset of the 2^log_n roots of unity.
+    let coset_power = xs[0].exp_power_of_2(log_n);
+    let weight_scale = (F::from_usize(n) * coset_power).inverse();
+
+    // Compute (z - x_i)^{-1} as a batch inversion
+    let diffs: Vec<_> = xs.iter().map(|&x| z - x).collect();
+    let diff_invs = batch_multiplicative_inverse(&diffs);
+
+    // Compute L(z) = prod_i (z - x_i)
+    let l_z = diffs.iter().copied().product::<EF>();
+
+    // Barycentric formula: sum_i (w_i * y_i / (z - x_i))
+    // where w_i = 1 / prod_{j != i} (x_i - x_j) = x_i * weight_scale.
+    let mut result = EF::ZERO;
+    for ((&x, &y), &diff_inv) in xs.iter().zip(ys).zip(diff_invs.iter()) {
+        let weight = x * weight_scale;
+        result += y * weight * diff_inv;
     }
     result * l_z
 }

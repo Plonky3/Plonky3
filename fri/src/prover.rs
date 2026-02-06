@@ -226,7 +226,7 @@ where
             // random linear combination `f_{i, 0} + alpha f_{i, 1} + ...`, when we add it
             // to the current folded polynomial, we need to multiply by a random factor.
             // We use beta^arity as the random factor to maintain independence.
-            let beta_pow = (0..arity).fold(Challenge::ONE, |acc, _| acc * beta);
+            let beta_pow = beta.exp_power_of_2(log_arity);
             izip!(&mut folded, v).for_each(|(c, x)| *c += beta_pow * x);
         }
     }

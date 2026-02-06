@@ -324,7 +324,7 @@ where
                 comm,
                 dims,
                 *start_index,
-                BatchOpeningRef::new(&[evals.clone()], &opening.opening_proof),
+                BatchOpeningRef::new(&[evals.clone()], &opening.opening_proof), // It's possible to remove the clone here but unnecessary as evals is tiny.
             )
             .map_err(FriError::CommitPhaseMmcsError)?;
 
@@ -349,7 +349,7 @@ where
         //
         // We use `beta^arity` as the random factor to maintain independence.
         if let Some((_, ro)) = ro_iter.next_if(|(lh, _)| *lh == log_folded_height) {
-            let beta_pow = (0..arity).fold(EF::ONE, |acc, _| acc * beta);
+            let beta_pow = beta.exp_power_of_2(log_arity);
             folded_eval += beta_pow * ro;
         }
     }
