@@ -484,6 +484,8 @@ impl LookupGadget for LogUpGadget {
         // Recomputing multiplicities during trace building is cheaper than recomputing inversions,
         // or storing them beforehand (as they could possibly constitute quite a large amount of data).
         let all_inverses = p3_field::batch_multiplicative_inverse(&all_denominators);
+        #[cfg(debug_assertions)]
+        let mut inv_cursor = 0;
 
         // 3. BUILD TRACE
         let row_sums: Vec<Vec<SC::Challenge>> = (0..height)
@@ -531,6 +533,11 @@ impl LookupGadget for LogUpGadget {
                             .map(|e| symbolic_to_expr(&row_builder, e))
                             .collect();
 
+                        #[cfg(debug_assertions)]
+                        multiplicities.iter().for_each(|_| {
+                            inv_cursor += 1;
+                        });
+
                         let sum: SC::Challenge = multiplicities
                             .iter()
                             .map(|m| {
@@ -570,6 +577,7 @@ impl LookupGadget for LogUpGadget {
 
         // Check that we have updated all `lookup_data` entries.
         debug_assert_eq!(permutation_counter, lookup_data.len());
+        debug_assert_eq!(inv_cursor, all_inverses.len());
         RowMajorMatrix::new(aux_trace, width)
     }
 }
