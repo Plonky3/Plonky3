@@ -265,6 +265,55 @@ impl PrimeCharacteristicRing for Mersenne31 {
     }
 
     #[inline]
+    fn dot_product<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
+        // Accumulate products as u64 to avoid per-multiply reductions.
+        // For M31: each value < P < 2^31, so product < P^2 < 2^62.
+        // Sum of 4 products < 4 * (P-1)^2 = 2^64 - 2^35 + 16 < 2^64, which fits in u64.
+        match N {
+            0 => Self::ZERO,
+            1 => lhs[0] * rhs[0],
+            2 => {
+                let sum = (lhs[0].value as u64) * (rhs[0].value as u64)
+                    + (lhs[1].value as u64) * (rhs[1].value as u64);
+                Self::new_reduced(reduce_64(sum))
+            }
+            3 => {
+                let sum = (lhs[0].value as u64) * (rhs[0].value as u64)
+                    + (lhs[1].value as u64) * (rhs[1].value as u64)
+                    + (lhs[2].value as u64) * (rhs[2].value as u64);
+                Self::new_reduced(reduce_64(sum))
+            }
+            4 => {
+                let sum = (lhs[0].value as u64) * (rhs[0].value as u64)
+                    + (lhs[1].value as u64) * (rhs[1].value as u64)
+                    + (lhs[2].value as u64) * (rhs[2].value as u64)
+                    + (lhs[3].value as u64) * (rhs[3].value as u64);
+                Self::new_reduced(reduce_64(sum))
+            }
+            _ => {
+                // Process in chunks of 4 with intermediate reductions
+                let mut acc = 0u64;
+                let mut i = 0;
+                while i + 4 <= N {
+                    let chunk_sum = (lhs[i].value as u64) * (rhs[i].value as u64)
+                        + (lhs[i + 1].value as u64) * (rhs[i + 1].value as u64)
+                        + (lhs[i + 2].value as u64) * (rhs[i + 2].value as u64)
+                        + (lhs[i + 3].value as u64) * (rhs[i + 3].value as u64);
+                    // Reduce chunk_sum to ~34 bits and add to accumulator
+                    acc += partial_reduce(chunk_sum);
+                    i += 4;
+                }
+                // Handle remainder
+                while i < N {
+                    acc += (lhs[i].value as u64) * (rhs[i].value as u64);
+                    i += 1;
+                }
+                Self::new_reduced(reduce_64(acc))
+            }
+        }
+    }
+
+    #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY:
         // Due to `#[repr(transparent)]`, Mersenne31 and u32 have the same size, alignment
@@ -534,6 +583,37 @@ impl Sum for Mersenne31 {
         // sum is < 2^62 provided iter.len() < 2^31.
         from_u62(sum)
     }
+}
+
+/// Perform a partial reduction of a u64 value modulo P = 2^31 - 1.
+/// The result will be contained in [0, 2^34 - 1].
+#[inline(always)]
+pub(crate) const fn partial_reduce(val: u64) -> u64 {
+    // Refer to the full reduction process in `reduce_64`.
+    let lo = (val & (P as u64)) as u32;
+    let hi = val >> 31;
+    lo as u64 + hi
+}
+
+/// Reduce a u64 value modulo P = 2^31 - 1.
+/// Uses the identity: 2^31 ≡ 1 (mod P), so val ≡ (val & P) + (val >> 31) (mod P).
+/// Returns a value in [0, P].
+#[inline(always)]
+pub(crate) fn reduce_64(val: u64) -> u32 {
+    // First reduction: split into low 31 bits and high 33 bits
+    // For val < 2^64: hi < 2^33, lo < 2^31
+    // sum1 = lo + hi < 2^33 + 2^31 < 2^34
+    let lo = (val & (P as u64)) as u32;
+    let hi = val >> 31;
+    let sum1 = lo as u64 + hi;
+
+    // Second reduction: sum1 < 2^34
+    let lo2 = (sum1 & (P as u64)) as u32;
+    let hi2 = (sum1 >> 31) as u32; // hi2 < 2^3 = 8
+    let sum2 = lo2 + hi2; // sum2 < 2^31 + 8
+
+    // Final reduction to [0, P]
+    sum2.min(sum2.wrapping_sub(P))
 }
 
 #[inline(always)]
