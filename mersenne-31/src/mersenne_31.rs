@@ -588,7 +588,7 @@ impl Sum for Mersenne31 {
 /// Perform a partial reduction of a u64 value modulo P = 2^31 - 1.
 /// The result will be contained in [0, 2^34 - 1].
 #[inline(always)]
-pub(crate) fn partial_reduce(val: u64) -> u64 {
+pub(crate) const fn partial_reduce(val: u64) -> u64 {
     // Refer to the full reduction process in `reduce_64`.
     let lo = (val & (P as u64)) as u32;
     let hi = val >> 31;
