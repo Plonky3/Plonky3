@@ -13,6 +13,7 @@ itertools.workspace = true
 p3-air = { workspace = true }
 p3-field = { workspace = true }
 p3-matrix = { workspace = true }
+p3-maybe-rayon = { workspace = true }
 p3-uni-stark = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
@@ -25,6 +26,7 @@ rand = { workspace = true }
 
 [features]
 default = []
+parallel = ["p3-maybe-rayon/parallel"]
 
 [lints]
 workspace = true
